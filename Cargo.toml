@@ -1,4 +1,9 @@
 [workspace]
 resolver = "3"
 members = ["crates/*"]
-exclude = ["tests/unsafe/invalid_simple"]
+exclude = [
+  "tests/unsafe/fail_simple", 
+  "tests/unsafe/pass_simple", 
+  "tests/unsafe/fail_nested",
+  "tests/unsafe/pass_nested"
+]
