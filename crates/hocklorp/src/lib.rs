@@ -1,10 +1,11 @@
 //! A Rustc plugin that prints out the name of all items in a crate.
 
 #![feature(rustc_private)]
-#![feature(assert_matches)]
+#![cfg_attr(test, feature(assert_matches))]
 
 extern crate lazy_static;
 extern crate rustc_driver;
+extern crate rustc_errors;
 extern crate rustc_hir;
 extern crate rustc_interface;
 extern crate rustc_middle;
@@ -117,6 +118,7 @@ struct PrintVisitor<'tcx> {
 }
 
 impl<'tcx> Visitor<'tcx> for PrintVisitor<'tcx> {
+    #[allow(clippy::semicolon_if_nothing_returned)]
     fn visit_item(&mut self, item: &'tcx Item<'tcx>) -> Self::Result {
         let mut msg = match item.kind.ident() {
             Some(ident) => format!(
