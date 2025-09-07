@@ -225,6 +225,17 @@ mod test {
                     "align"=> "the pointer must be aligned"
                 ));
 
+        test_req_parse!(intro_prose_allowed:
+                r#"# Unsafe
+                    This function must satisfy the following invariants
+                    to avoid UB:
+                        - nn: the pointer must be non-null
+                        - align: the pointer must be aligned"#
+            => ok reqs!(
+                    "nn" => "the pointer must be non-null"
+                    "align"=> "the pointer must be aligned"
+                ));
+
         test_req_parse!(ignores_other_markers_before:
                 r#"# Usage
                     - Use this struct however you'd like, I don't mind.
@@ -398,6 +409,17 @@ mod test {
         test_just_parse!(ignores_text_before:
                 r#"filler text, blah blah blah...
                     SAFETY:
+                        - nn: the pointer must be non-null
+                        - align: the pointer must be aligned"#
+            => ok justs!(
+                    "nn" => "the pointer must be non-null"
+                    "align"=> "the pointer must be aligned"
+                ));
+
+        test_just_parse!(intro_prose_allowed:
+                r#"SAFETY:
+                    This function call will avoid UB because we have satisfied
+                    the following conditions:
                         - nn: the pointer must be non-null
                         - align: the pointer must be aligned"#
             => ok justs!(
