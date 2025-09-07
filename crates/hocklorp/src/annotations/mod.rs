@@ -1,19 +1,19 @@
 //! The utilities needed to find and parse code annotations.
 #![allow(dead_code)]
 
-use crate::parsing::{
+use crate::annotations::{
     err::{ParsingError, ParsingIssue},
-    str::requirements_from_string,
+    parsing::ParseBulletsFromString,
 };
 use rustc_middle::ty::TyCtxt;
 use rustc_public::DefId;
 use rustc_span::Span;
 
 mod err;
-mod str;
+mod parsing;
 mod types;
 
-pub use types::Requirement;
+pub use types::{Justification, Requirement};
 
 /// Tries to parse the requirments for a given [`DefId`].
 pub fn parse_requirements(
@@ -26,7 +26,7 @@ pub fn parse_requirements(
             tcx.def_span(rustc_public::rustc_internal::internal(tcx, def_id)),
         ))?;
 
-    requirements_from_string(&doc_str_val)
+    Requirement::parse_bullets_from_string(&doc_str_val)
         .map_err(|issue| issue.into_error_at(def_id, doc_str_span))
 }
 

@@ -13,7 +13,7 @@ extern crate rustc_public;
 extern crate rustc_session;
 extern crate rustc_span;
 
-mod parsing;
+mod annotations;
 
 use std::{borrow::Cow, env, process::Command};
 

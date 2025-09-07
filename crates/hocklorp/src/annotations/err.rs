@@ -47,6 +47,7 @@ impl ParsingIssue {
         dcx.struct_err(format!(
             "had an issue {self:?} when parsing FnDef {def_id:?}"
         ))
+        
     }
 
     pub(crate) fn into_error_at(self, def_id: DefId, span: Span) -> ParsingError {
