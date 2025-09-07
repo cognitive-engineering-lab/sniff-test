@@ -2,6 +2,8 @@ use rustc_errors::{Diag, DiagCtxtHandle};
 use rustc_public::DefId;
 use rustc_span::{ErrorGuaranteed, Span};
 
+use crate::annotations::types::InvalidConditionNameReason;
+
 pub struct ParsingError {
     /// The issue that caused us to fail.
     issue: ParsingIssue,
@@ -33,11 +35,10 @@ pub enum ParsingIssue {
     ///
     /// This probably should just default in an empty description but, for now, is an error.
     NoColon,
-    SpaceAfterColon,
     /// A marker was found, but it had no requirements.
     EmptyMarker,
-    /// The name of a condition was multiple words.
-    MultiWordConditionName,
+    /// The name of a condition was invalid.
+    InvalidConditionName(InvalidConditionNameReason),
     /// The bullet types found were non-matching.
     NonMatchingBullets,
 }

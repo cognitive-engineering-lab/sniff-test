@@ -140,6 +140,17 @@ mod test {
                 );
             }
         };
+        (($type: ty) $test_name: tt: $str: expr => err $expected_err: ident ($err_pat: pat)) => {
+            #[test]
+            fn $test_name() {
+                let doc_str = $str;
+                let requirements = <$type>::parse_bullets_from_string(doc_str);
+                std::assert_matches::assert_matches!(
+                    requirements,
+                    Err(crate::annotations::ParsingIssue::$expected_err($err_pat))
+                );
+            }
+        };
     }
 
     /// General utility macro for making a vector of types that can be
@@ -153,6 +164,7 @@ mod test {
     #[rustfmt::skip] // Skip formatting because it looks weird for the testing macros.
     mod requirements {
         use crate::annotations::{parsing::ParseBulletsFromString, Requirement};
+        use crate::annotations::types::InvalidConditionNameReason::*;
 
         macro_rules! test_req_parse {
             ($test_name: tt: $str: expr => ok $expected_requirements: expr) => {
@@ -160,6 +172,9 @@ mod test {
             };
             ($test_name: tt: $str: expr => err $expected_err: ident) => {
                 test_string_parse!((Requirement) $test_name: $str => err $expected_err);
+            };
+            ($test_name: tt: $str: expr => err $expected_err: ident ($expr: pat)) => {
+                test_string_parse!((Requirement) $test_name: $str => err $expected_err($expr));
             };
         }
 
@@ -338,12 +353,37 @@ mod test {
                 r#"# Unsafe
                         - nn : the pointer must be non-null
                         - align     : the pointer must be aligned"#
-            => err SpaceAfterColon);
+            => err InvalidConditionName(TrailingWhitespace));
+
+        test_req_parse!(multi_word_names_disallowed:
+                r#"# Unsafe
+                        - non null: the pointer must be non-null
+                        - aligned ptr: the pointer must be aligned"#
+            => err InvalidConditionName(MultipleWords));
+
+        test_req_parse!(kebab_case_names_allowed:
+                r#"# Unsafe
+                        - non-null: the pointer must be non-null
+                        - aligned-ptr: the pointer must be aligned"#
+            => ok reqs!(
+                    "non-null" => "the pointer must be non-null"
+                    "aligned-ptr"=> "the pointer must be aligned"
+                ));
+
+        test_req_parse!(snake_case_names_allowed:
+                r#"# Unsafe
+                        - non_null: the pointer must be non-null
+                        - aligned_ptr: the pointer must be aligned"#
+            => ok reqs!(
+                    "non_null" => "the pointer must be non-null"
+                    "aligned_ptr"=> "the pointer must be aligned"
+                ));
     }
 
     #[rustfmt::skip] // Skip formatting because it looks weird for the testing macros.
     mod justifications {
         use crate::annotations::{parsing::ParseBulletsFromString, Justification};
+        use crate::annotations::types::InvalidConditionNameReason::*;
 
         macro_rules! test_just_parse {
             ($test_name: tt: $str: expr => ok $expected_requirements: expr) => {
@@ -351,6 +391,9 @@ mod test {
             };
             ($test_name: tt: $str: expr => err $expected_err: ident) => {
                 test_string_parse!((Justification) $test_name: $str => err $expected_err);
+            };
+            ($test_name: tt: $str: expr => err $expected_err: ident ($expr: pat)) => {
+                test_string_parse!((Justification) $test_name: $str => err $expected_err($expr));
             };
         }
 
@@ -525,6 +568,30 @@ mod test {
                 r#"Safety:
                         - nn : the pointer must be non-null
                         - align     : the pointer must be aligned"#
-            => err SpaceAfterColon);
+            => err InvalidConditionName(TrailingWhitespace));
+
+        test_just_parse!(multi_word_names_disallowed:
+                r#"Safety:
+                        - non null: the pointer must be non-null
+                        - aligned ptr: the pointer must be aligned"#
+            => err InvalidConditionName(MultipleWords));
+
+        test_just_parse!(kebab_case_names_allowed:
+                r#"Safety:
+                        - non-null: the pointer must be non-null
+                        - aligned-ptr: the pointer must be aligned"#
+            => ok justs!(
+                    "non-null" => "the pointer must be non-null"
+                    "aligned-ptr"=> "the pointer must be aligned"
+                ));
+
+        test_just_parse!(snake_case_names_allowed:
+                r#"Safety:
+                        - non_null: the pointer must be non-null
+                        - aligned_ptr: the pointer must be aligned"#
+            => ok justs!(
+                    "non_null" => "the pointer must be non-null"
+                    "aligned_ptr"=> "the pointer must be aligned"
+                ));
     }
 }

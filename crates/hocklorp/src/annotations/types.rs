@@ -49,6 +49,12 @@ impl ConditionName {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum InvalidConditionNameReason {
+    TrailingWhitespace,
+    MultipleWords,
+}
+
 fn check_single_word(name: &str) -> Result<&str, ParsingIssue> {
     let invalid_whitespace = [' ', '\n', '\t'];
     // Valid requirement names shouldn't contain whitespace.
@@ -60,9 +66,13 @@ fn check_single_word(name: &str) -> Result<&str, ParsingIssue> {
             == 1
         {
             // no other words, just invalid whitespace
-            return Err(ParsingIssue::SpaceAfterColon);
+            return Err(ParsingIssue::InvalidConditionName(
+                InvalidConditionNameReason::TrailingWhitespace,
+            ));
         }
-        return Err(ParsingIssue::MultiWordConditionName);
+        return Err(ParsingIssue::InvalidConditionName(
+            InvalidConditionNameReason::MultipleWords,
+        ));
     }
     Ok(name)
 }
