@@ -4,6 +4,7 @@ use rustc_span::{ErrorGuaranteed, Span};
 
 use crate::annotations::types::InvalidConditionNameReason;
 
+#[derive(Debug, PartialEq, Eq)]
 pub struct ParsingError {
     /// The issue that caused us to fail.
     issue: ParsingIssue,

@@ -1,10 +1,7 @@
 //! The utilities needed to find and parse code annotations.
 #![allow(dead_code)]
 
-use crate::annotations::{
-    err::{ParsingError, ParsingIssue},
-    parsing::ParseBulletsFromString,
-};
+use err::{ParsingError, ParsingIssue};
 use rustc_middle::ty::TyCtxt;
 use rustc_public::DefId;
 use rustc_span::Span;
@@ -14,6 +11,7 @@ mod parsing;
 mod types;
 
 pub use types::{Justification, Requirement};
+use parsing::ParseBulletsFromString;
 
 /// Tries to parse the requirments for a given [`DefId`].
 pub fn parse_requirements(
@@ -33,16 +31,20 @@ pub fn parse_requirements(
 /// Finds the doc attribute of a given [`DefId`], returning it's value and the span where
 /// it was found if present.
 fn get_doc_str(tcx: TyCtxt<'_>, def_id: DefId) -> Option<(String, Span)> {
-    tcx.get_attr(
-        rustc_public::rustc_internal::internal(tcx, def_id),
-        rustc_span::symbol::Symbol::intern("doc"),
-    )
-    .map(|attr| {
-        (
-            attr.doc_str()
-                .expect("FIXME: honestly don't know when this can fail")
-                .to_string(),
-            attr.value_span().expect("also dont know why this can fail"),
-        )
-    })
+    let internal = rustc_public::rustc_internal::internal(tcx, def_id);
+    println!("internal is {internal:?}");
+    let all = tcx.get_all_attrs(internal);
+    println!("all is {all:?}");
+    if let Some(first) = all.first() {
+        let joined_str = all.iter().filter_map(|attr|{
+            if let rustc_hir::Attribute::Parsed(kind) = attr && let rustc_hir::attrs::AttributeKind::DocComment { style, kind, span, comment } = kind {
+                Some(comment.as_str())
+            } else {
+                None
+            }
+        }).collect::<Vec<&str>>().join("\n");
+
+        let span = first.span();
+        Some((joined_str, span))
+    } else { None }
 }

@@ -19,12 +19,14 @@ use std::{borrow::Cow, env, process::Command};
 
 use clap::Parser;
 use rustc_hir::{
-    Item,
-    intravisit::{self, Visitor},
+    intravisit::{self, Visitor}, Item
 };
 use rustc_middle::ty::TyCtxt;
 use rustc_plugin::{CrateFilter, RustcPlugin, RustcPluginArgs, Utf8Path};
+use rustc_public::{mir::Safety, CrateDef};
 use serde::{Deserialize, Serialize};
+
+use crate::annotations::parse_requirements;
 
 // This struct is the plugin provided to the rustc_plugin framework,
 // and it must be exported for use by the CLI/driver binaries.
@@ -94,14 +96,47 @@ impl rustc_driver::Callbacks for PrintAllItemsCallbacks {
         _compiler: &rustc_interface::interface::Compiler,
         tcx: TyCtxt<'_>,
     ) -> rustc_driver::Compilation {
+        let res = rustc_public::rustc_internal::run(tcx, alex_test_analysis(tcx)).unwrap();
         // We call our top-level function with access to the type context `tcx` and the CLI arguments.
-        print_all_items(tcx, self.args.take().unwrap());
+        // print_all_items(tcx, self.args.take().unwrap());
+
+        // tcx.hir_visit_all_item_likes_in_crate(&mut UnsafeTestVisitor { tcx });
 
         // Note that you should generally allow compilation to continue. If
         // your plugin is being invoked on a dependency, then you need to ensure
         // the dependency is type-checked (its .rmeta file is emitted into target/)
         // so that its dependents can read the compiler outputs.
         rustc_driver::Compilation::Continue
+    }
+}
+
+/// Just runs the doc comment parsing on all funcitons marked `unsafe` in the crate
+/// as a sanity test for my parser.
+fn alex_test_analysis(tcx: TyCtxt) -> impl FnOnce() -> () {
+    move || {
+        let items = rustc_public::all_local_items().into_iter().filter_map(|item|{
+            if let Some((def, generics)) = item.ty().kind().fn_def() {
+                if def.fn_sig().value.safety == Safety::Unsafe {
+                    return Some((def, generics.clone()));
+                }
+                
+            }
+
+            None
+        }).collect::<Vec<_>>();
+
+        for (def, _args) in items {
+            let res = match parse_requirements(tcx, def.def_id()) {
+                Err(err) => {
+                    err.emit(tcx.dcx()); 
+                    return; 
+                },
+                Ok(res) => res,
+            };
+            println!("{def:?} => {res:?}");
+        }
+
+        // println!("items are {items:?}");
     }
 }
 
