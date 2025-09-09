@@ -1,7 +1,5 @@
 use std::borrow::Borrow;
 
-use crate::annotations::err::ParsingIssue;
-
 #[derive(PartialEq, Eq, Debug)]
 /// A condition that must hold such that a given function call will not cause UB.
 pub struct Requirement {
@@ -10,14 +8,11 @@ pub struct Requirement {
 }
 
 impl Requirement {
-    pub fn try_new(
-        name: impl Borrow<str>,
-        description: impl Borrow<str>,
-    ) -> Result<Self, ParsingIssue> {
-        Ok(Requirement {
-            name: ConditionName::new(name.borrow())?,
+    pub fn new(name: ConditionName, description: impl Borrow<str>) -> Self {
+        Requirement {
+            name,
             description: description.borrow().to_owned(),
-        })
+        }
     }
 }
 
@@ -28,23 +23,20 @@ pub struct Justification {
 }
 
 impl Justification {
-    pub fn try_new(
-        name: impl Borrow<str>,
-        explanation: impl Borrow<str>,
-    ) -> Result<Self, ParsingIssue> {
-        Ok(Justification {
-            name: ConditionName::new(name.borrow())?,
+    pub fn new(name: ConditionName, explanation: impl Borrow<str>) -> Self {
+        Justification {
+            name,
             explanation: explanation.borrow().to_string(),
-        })
+        }
     }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-struct ConditionName(String);
+pub struct ConditionName(String);
 
 impl ConditionName {
     /// Construct a new requirement name, checking all invariants to ensure it is valid.
-    fn new(name: &str) -> Result<ConditionName, ParsingIssue> {
+    pub fn try_new(name: &str) -> Result<ConditionName, InvalidConditionNameReason> {
         Ok(ConditionName(check_single_word(name)?.to_string()))
     }
 }
@@ -55,24 +47,21 @@ pub enum InvalidConditionNameReason {
     MultipleWords,
 }
 
-fn check_single_word(name: &str) -> Result<&str, ParsingIssue> {
-    let invalid_whitespace = [' ', '\n', '\t'];
+pub const INVALID_WHITESPACE: [char; 3] = [' ', '\n', '\t'];
+
+fn check_single_word(name: &str) -> Result<&str, InvalidConditionNameReason> {
     // Valid requirement names shouldn't contain whitespace.
-    if name.contains(invalid_whitespace) {
+    if name.contains(INVALID_WHITESPACE) {
         if name
-            .split(invalid_whitespace)
+            .split(INVALID_WHITESPACE)
             .filter(|word| !word.is_empty())
             .count()
             == 1
         {
             // no other words, just invalid whitespace
-            return Err(ParsingIssue::InvalidConditionName(
-                InvalidConditionNameReason::TrailingWhitespace,
-            ));
+            return Err(InvalidConditionNameReason::TrailingWhitespace);
         }
-        return Err(ParsingIssue::InvalidConditionName(
-            InvalidConditionNameReason::MultipleWords,
-        ));
+        return Err(InvalidConditionNameReason::MultipleWords);
     }
     Ok(name)
 }

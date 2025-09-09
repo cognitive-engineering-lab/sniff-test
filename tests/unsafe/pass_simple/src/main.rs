@@ -1,6 +1,10 @@
-/// # Unsafe
-/// * nn: ptr should be non null
-fn foo(ptr: *const i32) -> i32 {
+
+
+/// # Usage
+/// - nonnn: non null
+/// - non-null: aligned
+///   and ready for business
+unsafe fn foo(ptr: *const i32) -> i32 {
   unsafe { *ptr }
 }
 
@@ -8,7 +12,7 @@ fn foo(ptr: *const i32) -> i32 {
 fn main() {
   let x = 1;
 
-  /// Safety:
-  /// * nn: ptr expression must be non null
-  foo(&raw const x);
+  // / Safety:
+  // / * nn: ive done some check to make sure ptr isnt null
+  unsafe { foo(&raw const x); }
 }
