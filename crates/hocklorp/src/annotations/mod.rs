@@ -1,55 +1,85 @@
 //! The utilities needed to find and parse code annotations.
 #![allow(dead_code)]
 
-use err::ParsingError;
+use std::borrow::Borrow;
+
+use rustc_hir::HirId;
 use rustc_middle::ty::TyCtxt;
-use rustc_public::DefId;
 
 mod err;
 mod parsing;
 mod types;
 
+pub use err::{ParsingError, ParsingErrorLoc};
 use parsing::ParseBulletsFromString;
 pub use types::{Justification, Requirement};
 
-/// Tries to parse the requirments for a given [`DefId`].
-pub fn parse_requirements(
-    tcx: TyCtxt<'_>,
-    def_id: DefId,
-) -> Result<Vec<Requirement>, ParsingError> {
-    let doc_str = get_doc_str(tcx, def_id).ok_or(ParsingError::NoDocString)?;
-
-    Requirement::parse_bullets_from_string(&doc_str)
+impl Annotation for Requirement {
+    type Input = rustc_span::def_id::DefId;
 }
 
-/// Finds the doc attribute of a given [`DefId`], returning it's value and the span where
-/// it was found if present.
-fn get_doc_str(tcx: TyCtxt<'_>, def_id: DefId) -> Option<String> {
-    let internal = rustc_public::rustc_internal::internal(tcx, def_id);
+impl Annotation for Justification {
+    type Input = HirId;
+}
 
-    let all_attrs = tcx.get_all_attrs(internal);
+pub trait Annotation: ParseBulletsFromString {
+    type Input: Attributeable;
 
-    let doc_strs = all_attrs
-        .iter()
-        .filter_map(|attr| {
-            if let rustc_hir::Attribute::Parsed(kind) = attr
-                && let rustc_hir::attrs::AttributeKind::DocComment {
-                    style: _,
-                    kind: _,
-                    span: _,
-                    comment,
-                } = kind
-            {
-                Some(comment.as_str())
-            } else {
-                None
-            }
-        })
-        .collect::<Vec<_>>();
+    fn parse(tcx: TyCtxt<'_>, input: impl Borrow<Self::Input>) -> Result<Vec<Self>, ParsingError> {
+        let doc_str = input
+            .borrow()
+            .get_doc_str(tcx)
+            .ok_or(ParsingError::NoDocString)?;
 
-    if doc_strs.is_empty() {
-        None
-    } else {
-        Some(doc_strs.join("\n"))
+        Self::parse_bullets_from_string(&doc_str)
+    }
+
+    fn try_parse(
+        tcx: TyCtxt<'_>,
+        input: impl Borrow<Self::Input>,
+    ) -> Option<Result<Vec<Self>, ParsingError>> {
+        match Self::parse(tcx, input) {
+            Err(ParsingError::NoDocString | ParsingError::NoMarkerPattern) => None,
+            unrecoverable => Some(unrecoverable),
+        }
+    }
+}
+
+impl Attributeable for rustc_span::def_id::DefId {
+    fn get_attrs<'tcx>(&self, tcx: TyCtxt<'tcx>) -> &'tcx [rustc_hir::Attribute] {
+        tcx.get_all_attrs(*self)
+    }
+}
+
+impl Attributeable for HirId {
+    fn get_attrs<'tcx>(&self, tcx: TyCtxt<'tcx>) -> &'tcx [rustc_hir::Attribute] {
+        tcx.hir_attrs(*self)
+    }
+}
+
+pub trait Attributeable {
+    fn get_attrs<'tcx>(&self, tcx: TyCtxt<'tcx>) -> &'tcx [rustc_hir::Attribute];
+
+    fn get_doc_str(&self, tcx: TyCtxt<'_>) -> Option<String> {
+        let all_attrs = self.get_attrs(tcx);
+
+        let doc_strs = all_attrs
+            .iter()
+            .filter_map(|attr| {
+                if let rustc_hir::Attribute::Parsed(kind) = attr
+                    && let rustc_hir::attrs::AttributeKind::DocComment { comment, .. } = kind
+                {
+                    Some(comment.as_str())
+                } else {
+                    None
+                }
+            })
+            .collect::<Vec<_>>();
+
+        if doc_strs.is_empty() {
+            None
+        } else {
+            Some(doc_strs.join("\n"))
+        }
     }
 }
