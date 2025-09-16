@@ -205,17 +205,7 @@ mod test {
                 let requirements = <$type>::parse_bullets_from_string(doc_str);
                 std::assert_matches::assert_matches!(requirements, Err($expected_err));
             }
-        }; // (($type: ty) $test_name: tt: $str: expr => err $expected_err: ident ($err_pat: pat)) => {
-           //     #[test]
-           //     fn $test_name() {
-           //         let doc_str = $str;
-           //         let requirements = <$type>::parse_bullets_from_string(doc_str);
-           //         std::assert_matches::assert_matches!(
-           //             requirements,
-           //             Err(crate::annotations::ParsingIssue::$expected_err($err_pat))
-           //         );
-           //     }
-           // };
+        };
     }
 
     /// General utility macro for making a vector of types that can be
@@ -231,6 +221,7 @@ mod test {
         use crate::annotations::{parsing::ParseBulletsFromString, Requirement};
         use crate::annotations::types::InvalidConditionNameReason;
 
+        /// Generate a test that ensures expected [`Requirement`] parsing from a given doc string.
         macro_rules! test_req_parse {
             ($test_name: tt: $str: expr => ok $expected_requirements: expr) => {
                 test_string_parse!((Requirement) $test_name: $str => ok $expected_requirements);
@@ -473,6 +464,7 @@ mod test {
         use crate::annotations::types::InvalidConditionNameReason;
         use crate::annotations::{parsing::ParseBulletsFromString, Justification};
 
+        /// Generate a test that ensures expected [`Justification`] parsing from a given doc string.
         macro_rules! test_just_parse {
             ($test_name: tt: $str: expr => ok $expected_requirements: expr) => {
                 test_string_parse!((Justification) $test_name: $str => ok $expected_requirements);

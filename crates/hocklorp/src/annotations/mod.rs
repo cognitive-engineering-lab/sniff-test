@@ -1,5 +1,4 @@
 //! The utilities needed to find and parse code annotations.
-#![allow(dead_code)]
 
 use crate::annotations::{attr::Attributeable, err::ParsingIssue};
 use parsing::ParseBulletsFromString;

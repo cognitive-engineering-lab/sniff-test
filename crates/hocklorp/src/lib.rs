@@ -86,6 +86,7 @@ impl RustcPlugin for PrintAllItemsPlugin {
     }
 }
 
+#[allow(dead_code)]
 struct PrintAllItemsCallbacks {
     args: Option<PrintAllItemsPluginArgs>,
 }
@@ -240,7 +241,12 @@ impl<'tcx> rustc_hir::intravisit::Visitor<'tcx> for FnCallVisitor<'tcx, '_> {
                             Justification::parse(self.tcx, ex)
                         },
                         // update the span if we found it from a parent,
-                        |found| found.map_err(|err| err.w_updated_span(ex.span)),
+                        |found| {
+                            found.map_err(|mut err| {
+                                err.update_span(ex.span);
+                                err
+                            })
+                        },
                     )
                 });
 
@@ -270,6 +276,7 @@ fn should_analyze_item(
 // The core of our analysis. Right now it just prints out a description of each item.
 // I recommend reading the Rustc Development Guide to better understand which compiler APIs
 // are relevant to whatever task you have.
+#[allow(dead_code)]
 fn print_all_items(tcx: TyCtxt, args: PrintAllItemsPluginArgs) {
     tcx.hir_visit_all_item_likes_in_crate(&mut PrintVisitor { args, tcx });
 }

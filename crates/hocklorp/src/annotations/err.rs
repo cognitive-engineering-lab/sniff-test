@@ -45,13 +45,8 @@ impl ParsingError<'_> {
         &self.issue
     }
 
-    pub fn w_updated_span(self, span: Span) -> Self {
-        Self {
-            issue: self.issue,
-            loc_name: self.loc_name,
-            span,
-            doc_comments: self.doc_comments,
-        }
+    pub fn update_span(&mut self, span: Span) {
+        self.span = span;
     }
 }
 
@@ -84,123 +79,194 @@ impl ParsingError<'_> {
     pub(crate) fn emit<'s, 'a: 's>(&'s self, dcx: DiagCtxtHandle<'a>) -> ErrorGuaranteed {
         self.diag(dcx).emit()
     }
-    // TODO: should clean this to shorten up later, there's a lot of shared logic and behavior
-    #[allow(clippy::too_many_lines)]
+
     pub(crate) fn diag<'s, 'a: 's>(&'s self, dcx: DiagCtxtHandle<'a>) -> Diag<'a> {
-        let loc = &self.loc_name;
-        let doc_comments = self.doc_comments;
-
-        match &self.issue {
-            ParsingIssue::InvalidConditionName {
-                reason: InvalidConditionNameReason::TrailingWhitespace,
-                chars,
-                name,
-            } => {
-                let invalid_index = name
-                    .find(super::types::INVALID_WHITESPACE)
-                    .expect("we found there to be invalid whitespace here...");
-
-                let span =
-                    span_some_comments(doc_comments, (chars.start + invalid_index)..chars.end);
-                let first = *span.first().expect("should have a first span");
-                dcx.struct_err(format!(
-                    "trailing white space found on condition name {name:?} for {loc}"
-                ))
-                .with_span(span)
-                .with_span_suggestion_verbose(
-                    first,
-                    "try removing it",
-                    "",
-                    rustc_errors::Applicability::MaybeIncorrect,
-                )
+        let base_diag = match &self.issue {
+            ParsingIssue::InvalidConditionName { reason, .. } => {
+                self.build_invalid_condition_diag(dcx, reason)
             }
-            ParsingIssue::InvalidConditionName {
-                reason: InvalidConditionNameReason::MultipleWords,
-                chars,
-                name,
-            } => {
-                let span = span_some_comments(doc_comments, chars);
-                let first = *span.first().unwrap();
-                dcx.struct_err(format!("multi-word condition name found for {loc}"))
-                    .with_span(span)
-                    .with_span_suggestion_verbose(
-                        first,
-                        "try using a kebab case name instead",
-                        name.replace(super::types::INVALID_WHITESPACE, "-"),
-                        rustc_errors::Applicability::MaybeIncorrect,
-                    )
-            }
-            ParsingIssue::EmptyMarker => {
-                let span = span_all_comments(doc_comments);
-                let first = *span.first().unwrap();
-                dcx.struct_err(format!("safety section for {loc} exists but is empty"))
-                    .with_span(span)
-                    .with_span_suggestion_verbose(
-                        first.shrink_to_hi(),
-                        "try adding preconditions",
-                        "\n/// - cond1: /* condition that must hold for UB-freedom */",
-                        rustc_errors::Applicability::HasPlaceholders,
-                    )
-            }
-            ParsingIssue::NoDocString => dcx.struct_err(format!("no doc comments found for {loc}")).with_span(self.span),
-            ParsingIssue::MultipleMarkerPatterns(marker_char_ranges) => {
-                let spans = marker_char_ranges
-                    .iter()
-                    .flat_map(|range| span_some_comments(doc_comments, range))
-                    .collect::<Vec<_>>();
-
-                dcx.struct_err(format!(
-                    "multiple marker patterns found in doc comments on {loc}"
-                ))
-                .with_span(spans)
+            ParsingIssue::EmptyMarker => self.build_empty_marker_diag(dcx),
+            ParsingIssue::NoDocString => self.build_no_doc_string_diag(dcx),
+            ParsingIssue::MultipleMarkerPatterns(marker_ranges) => {
+                self.build_multiple_markers_diag(dcx, marker_ranges)
             }
             ParsingIssue::NoColon(bullet_range, first_word_len) => {
-                let bullet_span = span_some_comments(doc_comments, bullet_range);
-                let name_span = span_some_comments(
-                    doc_comments,
-                    (bullet_range.start + first_word_len)
-                        ..(bullet_range.start + first_word_len + 1),
-                );
-                dcx.struct_err("bullet has no colon delimiter to separate out the condition name and description").with_span(bullet_span).with_span_suggestion_verbose(name_span[0], "try adding a colon after the condition name", ": ", rustc_errors::Applicability::MaybeIncorrect).with_arg("test", "hello")
+                self.build_no_colon_diag(dcx, bullet_range, *first_word_len)
             }
-            ParsingIssue::NoMarkerPattern => {
-                let span = span_all_comments(doc_comments);
-                dcx.struct_err(format!("no unsafe markers found in doc comments for {loc}"))
-                    .with_span(span)
-            }
+            ParsingIssue::NoMarkerPattern => self.build_no_marker_diag(dcx),
             ParsingIssue::NonMatchingBullets(bullet_ranges) => {
-                let mut diag = dcx.struct_err(format!(
-                    "non-matching bullet types found in doc comments on {loc}"
-                ));
-                let mut err_spans = Vec::new();
-
-                let suggested = bullet_ranges.first().unwrap().1.clone();
-                for (i, (range, _string)) in bullet_ranges.iter().enumerate() {
-                    let this_span = span_some_comments(doc_comments, range);
-
-                    // TODO: clean this yuckiness up
-                    if i != 0 {
-                        diag = diag.with_span_suggestion_verbose(
-                            *this_span.first().unwrap(),
-                            "try replacing them for consistency",
-                            &suggested[(suggested.len() - 1)..],
-                            rustc_errors::Applicability::MachineApplicable,
-                        );
-                    }
-
-                    err_spans.extend(this_span);
-                }
-                err_spans.reverse();
-                diag = diag.with_span(err_spans);
-                diag
+                self.build_non_matching_bullets_diag(dcx, bullet_ranges)
             }
-        }.with_span_label(self.span, "here")
+        };
+
+        base_diag.with_span_label(self.span, "here")
+    }
+
+    fn build_invalid_condition_diag<'a>(
+        &self,
+        dcx: DiagCtxtHandle<'a>,
+        reason: &InvalidConditionNameReason,
+    ) -> Diag<'a> {
+        match reason {
+            InvalidConditionNameReason::TrailingWhitespace => {
+                self.build_trailing_whitespace_diag(dcx)
+            }
+            InvalidConditionNameReason::MultipleWords => self.build_multiple_words_diag(dcx),
+        }
+    }
+
+    fn build_trailing_whitespace_diag<'a>(&self, dcx: DiagCtxtHandle<'a>) -> Diag<'a> {
+        if let ParsingIssue::InvalidConditionName { chars, name, .. } = &self.issue {
+            let invalid_index = name
+                .find(super::types::INVALID_WHITESPACE)
+                .expect("we found there to be invalid whitespace here...");
+
+            let span =
+                span_some_comments(self.doc_comments, (chars.start + invalid_index)..chars.end);
+            let first = *span.first().expect("should have a first span");
+
+            dcx.struct_err(format!(
+                "trailing white space found on condition name {name:?} for {}",
+                self.loc_name
+            ))
+            .with_span(span)
+            .with_span_suggestion_verbose(
+                first,
+                "try removing it",
+                "",
+                rustc_errors::Applicability::MaybeIncorrect,
+            )
+        } else {
+            unreachable!("build_trailing_whitespace_diag called with wrong issue type")
+        }
+    }
+
+    fn build_multiple_words_diag<'a>(&self, dcx: DiagCtxtHandle<'a>) -> Diag<'a> {
+        if let ParsingIssue::InvalidConditionName { chars, name, .. } = &self.issue {
+            let span = span_some_comments(self.doc_comments, chars);
+            let first = *span.first().unwrap();
+
+            dcx.struct_err(format!(
+                "multi-word condition name found for {}",
+                self.loc_name
+            ))
+            .with_span(span)
+            .with_span_suggestion_verbose(
+                first,
+                "try using a kebab case name instead",
+                name.replace(super::types::INVALID_WHITESPACE, "-"),
+                rustc_errors::Applicability::MaybeIncorrect,
+            )
+        } else {
+            unreachable!("build_multiple_words_diag called with wrong issue type")
+        }
+    }
+
+    fn build_empty_marker_diag<'a>(&self, dcx: DiagCtxtHandle<'a>) -> Diag<'a> {
+        let span = span_all_comments(self.doc_comments);
+        let first = *span.first().unwrap();
+
+        dcx.struct_err(format!(
+            "safety section for {} exists but is empty",
+            self.loc_name
+        ))
+        .with_span(span)
+        .with_span_suggestion_verbose(
+            first.shrink_to_hi(),
+            "try adding preconditions",
+            "\n/// - cond1: /* condition that must hold for UB-freedom */",
+            rustc_errors::Applicability::HasPlaceholders,
+        )
+    }
+
+    fn build_no_doc_string_diag<'a>(&self, dcx: DiagCtxtHandle<'a>) -> Diag<'a> {
+        dcx.struct_err(format!("no doc comments found for {}", self.loc_name))
+            .with_span(self.span)
+    }
+
+    fn build_multiple_markers_diag<'a>(
+        &self,
+        dcx: DiagCtxtHandle<'a>,
+        marker_char_ranges: &[Range<usize>],
+    ) -> Diag<'a> {
+        let spans = marker_char_ranges
+            .iter()
+            .flat_map(|range| span_some_comments(self.doc_comments, range))
+            .collect::<Vec<_>>();
+
+        dcx.struct_err(format!(
+            "multiple marker patterns found in doc comments on {}",
+            self.loc_name
+        ))
+        .with_span(spans)
+    }
+
+    fn build_no_colon_diag<'a>(
+        &self,
+        dcx: DiagCtxtHandle<'a>,
+        bullet_range: &Range<usize>,
+        first_word_len: usize,
+    ) -> Diag<'a> {
+        let bullet_span = span_some_comments(self.doc_comments, bullet_range);
+        let name_span = span_some_comments(
+            self.doc_comments,
+            (bullet_range.start + first_word_len)..(bullet_range.start + first_word_len + 1),
+        );
+
+        dcx.struct_err(
+            "bullet has no colon delimiter to separate out the condition name and description",
+        )
+        .with_span(bullet_span)
+        .with_span_suggestion_verbose(
+            name_span[0],
+            "try adding a colon after the condition name",
+            ": ",
+            rustc_errors::Applicability::MaybeIncorrect,
+        )
+    }
+
+    fn build_no_marker_diag<'a>(&self, dcx: DiagCtxtHandle<'a>) -> Diag<'a> {
+        dcx.struct_err(format!(
+            "no unsafe markers found in doc comments for {}",
+            self.loc_name
+        ))
+        .with_span(span_all_comments(self.doc_comments))
+    }
+
+    fn build_non_matching_bullets_diag<'a>(
+        &self,
+        dcx: DiagCtxtHandle<'a>,
+        bullet_ranges: &[(Range<usize>, String)],
+    ) -> Diag<'a> {
+        let mut diag = dcx.struct_err(format!(
+            "non-matching bullet types found in doc comments on {}",
+            self.loc_name
+        ));
+        let mut err_spans = Vec::new();
+
+        let suggested = bullet_ranges.first().unwrap().1.clone();
+        for (i, (range, _string)) in bullet_ranges.iter().enumerate() {
+            let this_span = span_some_comments(self.doc_comments, range);
+
+            if i != 0 {
+                diag = diag.with_span_suggestion_verbose(
+                    *this_span.first().unwrap(),
+                    "try replacing them for consistency",
+                    &suggested[(suggested.len() - 1)..],
+                    rustc_errors::Applicability::MachineApplicable,
+                );
+            }
+
+            err_spans.extend(this_span);
+        }
+        err_spans.reverse();
+        diag.with_span(err_spans)
     }
 }
 
+// Utilities for converting character ranges of a doc string into spans that can be
+// used to reference specific source code when displaying error messages.
 mod span {
-    //! Utilities for converting character ranges of a doc string into spans that can be
-    //! used to reference specific source code when displaying error messages.
     use rustc_hir::Attribute;
     use rustc_span::BytePos;
     use rustc_span::Span;
