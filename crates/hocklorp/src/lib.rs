@@ -19,17 +19,17 @@ use std::{borrow::Cow, collections::HashMap, env, process::Command};
 
 use clap::Parser;
 use rustc_hir::{
-    BlockCheckMode, ExprKind, HirId, Item, Node,
+    ExprKind, HirId, Item, Node,
     def_id::DefId,
     intravisit::{self, Visitor},
 };
 use rustc_middle::ty::TyCtxt;
 use rustc_plugin::{CrateFilter, RustcPlugin, RustcPluginArgs, Utf8Path};
-use rustc_public::{CrateDef, mir::Safety, rustc_internal};
+use rustc_public::CrateDef;
 use rustc_span::ErrorGuaranteed;
 use serde::{Deserialize, Serialize};
 
-use crate::annotations::{Annotation, Justification, ParsingError, ParsingErrorLoc, Requirement};
+use crate::annotations::{Annotation, Justification, ParsingError, Requirement};
 
 // This struct is the plugin provided to the rustc_plugin framework,
 // and it must be exported for use by the CLI/driver binaries.
@@ -105,7 +105,7 @@ impl rustc_driver::Callbacks for PrintAllItemsCallbacks {
             return rustc_driver::Compilation::Stop;
         };
 
-        println!("reqs are {:?}", reqs);
+        println!("reqs are {reqs:?}");
 
         let fns_to_track: &[DefId] = &reqs.keys().copied().collect::<Box<[_]>>();
 
@@ -113,7 +113,7 @@ impl rustc_driver::Callbacks for PrintAllItemsCallbacks {
             return rustc_driver::Compilation::Stop;
         };
 
-        println!("justs are {:?}", justs);
+        println!("justs are {justs:?}");
 
         // Note that you should generally allow compilation to continue. If
         // your plugin is being invoked on a dependency, then you need to ensure
@@ -128,27 +128,20 @@ type RequirementInfo = HashMap<DefId, Vec<Requirement>>;
 /// as a sanity test for my parser.
 fn requirement_pass(tcx: TyCtxt) -> impl FnOnce() -> Result<RequirementInfo, ErrorGuaranteed> {
     move || {
-        let defs = rustc_public::all_local_items()
+        rustc_public::all_local_items()
             .into_iter()
-            .filter_map(|crate_def: rustc_public::CrateItem| should_analyze_item(crate_def, tcx))
-            .collect::<Vec<_>>();
-
-        defs.into_iter()
+            // filter by items we should analyze
+            .filter_map(|crate_def| should_analyze_item(crate_def, tcx))
+            // try to analyze all `FnDef`s, but some will return `None` as they have no annotations...
             .filter_map(|def| {
                 let internal_def = rustc_public::rustc_internal::internal(tcx, def.def_id());
                 Some(
                     Requirement::try_parse(tcx, internal_def)?
                         .map(|reqs| (internal_def, reqs))
-                        .map_err(|err| {
-                            err.diag(
-                                tcx.dcx(),
-                                ParsingErrorLoc::fn_def(internal_def, tcx),
-                                tcx.get_all_attrs(internal_def),
-                            )
-                            .emit()
-                        }),
+                        .map_err(|err| err.emit(tcx.dcx())),
                 )
             })
+            // collect into a hash map
             .collect::<Result<HashMap<_, _>, ErrorGuaranteed>>()
     }
 }
@@ -160,20 +153,20 @@ fn justification_pass(
     fns_to_track: &[DefId],
 ) -> impl FnOnce() -> Result<JustificationInfo, ErrorGuaranteed> {
     move || {
-        println!("gonna visit... w/ fns to track {:?}", fns_to_track);
-        let mut visitor = AlexVisitor::new(tcx, fns_to_track);
+        println!("gonna visit... w/ fns to track {fns_to_track:?}");
+        let mut visitor = FnCallVisitor::new(tcx, fns_to_track);
         tcx.hir_visit_all_item_likes_in_crate(&mut visitor);
         visitor.finish()
     }
 }
 
-struct AlexVisitor<'tcx, 'a> {
+struct FnCallVisitor<'tcx, 'a> {
     tcx: TyCtxt<'tcx>,
     fns_to_track: &'a [DefId],
     results: HashMap<HirId, Result<Vec<Justification>, ErrorGuaranteed>>,
 }
 
-impl<'tcx, 'a> AlexVisitor<'tcx, 'a> {
+impl<'tcx, 'a> FnCallVisitor<'tcx, 'a> {
     fn new(tcx: TyCtxt<'tcx>, fns_to_track: &'a [DefId]) -> Self {
         Self {
             tcx,
@@ -182,28 +175,40 @@ impl<'tcx, 'a> AlexVisitor<'tcx, 'a> {
         }
     }
 
+    /// Checks if we should try to analyze a function call to a given `DefId`.
     fn should_analyze_fn_call_to(&self, def_id: rustc_span::def_id::DefId) -> bool {
         self.fns_to_track.contains(&def_id)
     }
 
+    /// Try to get the annotations from all parent code blocks for a given [Expr].
+    ///
+    /// This is used to ensure code like the following will work, even if
+    /// the annotation isn't on the exact HIR node of the function call.
+    /// ```
+    /// /// Safety:
+    /// /// - non-null: the ptr is non null
+    /// unsafe { foo(ptr) }
+    /// ```
     fn try_get_from_parent_blocks(
         &self,
         ex: &'tcx rustc_hir::Expr<'tcx>,
-    ) -> Option<Result<Vec<Justification>, ParsingError>> {
+    ) -> Option<Result<Vec<Justification>, ParsingError<'_>>> {
         self.tcx
             .hir_parent_iter(ex.hir_id)
-            .filter(|(_id, node)| {
+            .filter_map(|(_id, node)| {
                 if let Node::Expr(expr) = node
                     && let ExprKind::Block(..) = expr.kind
                 {
-                    true
+                    Some(expr)
                 } else {
-                    false
+                    None
                 }
             })
-            .find_map(|(id, _node)| Justification::try_parse(self.tcx, id))
+            .find_map(|expr| Justification::try_parse(self.tcx, expr))
     }
 
+    /// Consume this visitor and return the stored mapping between function call sites
+    /// and the justifications behind them.
     fn finish(self) -> Result<HashMap<HirId, Vec<Justification>>, ErrorGuaranteed> {
         self.results
             .into_iter()
@@ -212,7 +217,8 @@ impl<'tcx, 'a> AlexVisitor<'tcx, 'a> {
     }
 }
 
-impl<'tcx, 'a> rustc_hir::intravisit::Visitor<'tcx> for AlexVisitor<'tcx, 'a> {
+impl<'tcx> rustc_hir::intravisit::Visitor<'tcx> for FnCallVisitor<'tcx, '_> {
+    // Have to set this to ensure we visit the expressions INSIDE function bodies.
     type NestedFilter = rustc_middle::hir::nested_filter::OnlyBodies;
 
     fn maybe_tcx(&mut self) -> Self::MaybeTyCtxt {
@@ -220,35 +226,28 @@ impl<'tcx, 'a> rustc_hir::intravisit::Visitor<'tcx> for AlexVisitor<'tcx, 'a> {
     }
 
     fn visit_expr(&mut self, ex: &'tcx rustc_hir::Expr<'tcx>) -> Self::Result {
-        match ex.kind {
-            rustc_hir::ExprKind::Call(f, _args) => {
-                if let rustc_hir::ExprKind::Path(rustc_hir::QPath::Resolved(_self, path)) = f.kind {
-                    let def_id = path.res.def_id();
-                    println!("have call to {:?} w/ id {:?}", def_id, ex.hir_id);
+        if let rustc_hir::ExprKind::Call(f, _args) = ex.kind
+            && let rustc_hir::ExprKind::Path(rustc_hir::QPath::Resolved(_self, path)) = f.kind
+        {
+            let def_id = path.res.def_id();
 
-                    if self.should_analyze_fn_call_to(def_id) {
-                        let annotation_res = Justification::try_parse(self.maybe_tcx(), &ex.hir_id)
-                            .unwrap_or_else(|| {
-                                // try getting from parents
-                                self.try_get_from_parent_blocks(ex).unwrap_or_else(|| {
-                                    // if that fails, just return the original issue
-                                    Justification::parse(self.maybe_tcx(), &ex.hir_id)
-                                })
-                            });
+            if self.should_analyze_fn_call_to(def_id) {
+                let annotation_res = Justification::try_parse(self.tcx, ex).unwrap_or_else(|| {
+                    // try getting from parents
+                    self.try_get_from_parent_blocks(ex).map_or_else(
+                        || {
+                            // if that fails, just return the original issue
+                            Justification::parse(self.tcx, ex)
+                        },
+                        // update the span if we found it from a parent,
+                        |found| found.map_err(|err| err.w_updated_span(ex.span)),
+                    )
+                });
 
-                        let res = annotation_res.map_err(|err| {
-                            err.emit_err(
-                                self.tcx,
-                                ParsingErrorLoc::fn_call(&ex, def_id, self.tcx),
-                                ex.hir_id,
-                            )
-                        });
+                let res = annotation_res.map_err(|err| err.emit(self.tcx.dcx()));
 
-                        self.results.insert(ex.hir_id, res);
-                    }
-                }
+                self.results.insert(ex.hir_id, res);
             }
-            _ => (),
         }
 
         intravisit::walk_expr(self, ex);
@@ -257,7 +256,7 @@ impl<'tcx, 'a> rustc_hir::intravisit::Visitor<'tcx> for AlexVisitor<'tcx, 'a> {
 
 fn should_analyze_item(
     item: rustc_public::CrateItem,
-    tcx: TyCtxt,
+    _tcx: TyCtxt,
 ) -> Option<rustc_public::ty::FnDef> {
     if let Some((def, _generics)) = item.ty().kind().fn_def()
     // && def.fn_sig().value.safety == Safety::Unsafe

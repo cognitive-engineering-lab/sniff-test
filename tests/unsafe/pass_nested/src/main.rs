@@ -1,16 +1,15 @@
 /// # Unsafe
 /// * nn: ptr should be non null
-fn foo(ptr: *const i32) -> i32 {
+unsafe fn foo(ptr: *const i32) -> i32 {
     unsafe { *ptr }
 }
 
 /// # Unsafe
 /// * nn: ptr should be non null
 fn bar(ptr: *const i32) -> i32 {
-    // /// Safety:
+    /// Unsafetey:
+    /// - non-null: this is non-null bc i checked...
     unsafe {
-        // /// Usage:
-        // /// * nn: ptr expr must be on null
         foo(ptr)
     }
 }

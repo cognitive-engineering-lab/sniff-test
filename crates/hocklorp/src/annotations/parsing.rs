@@ -1,10 +1,8 @@
-//! Utilities for parsing [Requirement] values from doc strings.
+//! Utilities for parsing values from full doc strings.
 
-use std::ops::Range;
-
-use super::err::ParsingError;
-use crate::annotations::{Justification, Requirement, types::ConditionName};
+use crate::annotations::{Justification, Requirement, err::ParsingIssue, types::ConditionName};
 use regex::Regex;
+use std::ops::Range;
 
 fn subslice_offset_stable(original: &str, inner: &str) -> Option<usize> {
     let self_beg = original.as_ptr() as usize;
@@ -36,13 +34,13 @@ pub trait ParseBulletsFromString: Sized {
         bullet_pre_sep: &str,
         bullet_post_sep: &str,
         bullet_pre_chars: Range<usize>,
-    ) -> Result<Self, ParsingError>;
+    ) -> Result<Self, ParsingIssue>;
 
-    fn parse_bullets_from_string(original_comment_str: &str) -> Result<Vec<Self>, ParsingError> {
+    fn parse_bullets_from_string(original_comment_str: &str) -> Result<Vec<Self>, ParsingIssue> {
         // First, make sure we have the marker and trim everything before that.
         let comment_str = &original_comment_str[Self::section_marker_regex()
             .find(original_comment_str)
-            .ok_or(ParsingError::NoMarkerPattern)?
+            .ok_or(ParsingIssue::NoMarkerPattern)?
             .end()..];
 
         // Return an error if there are any other markers after that.
@@ -56,7 +54,7 @@ pub trait ParseBulletsFromString: Sized {
                 most_recent += next_occ.end();
                 new_str = &new_str[next_occ.end()..];
             }
-            return Err(ParsingError::MultipleMarkerPatterns(ranges));
+            return Err(ParsingIssue::MultipleMarkerPatterns(ranges));
         }
 
         // Trim everything after this section, if any.
@@ -78,13 +76,13 @@ pub trait ParseBulletsFromString: Sized {
                 let (pre, post) =
                     bullet_str
                         .split_once(Self::BULLET_SEP)
-                        .ok_or(ParsingError::NoColon(
+                        .ok_or(ParsingIssue::NoColon(
                             offset..(offset + bullet_str.len()),
                             bullet_str.find(' ').unwrap_or(bullet_str.len()),
                         ))?;
                 Self::parse_bullet(pre, post, offset..(offset + pre.len()))
             })
-            .collect::<Result<Vec<_>, ParsingError>>()
+            .collect::<Result<Vec<_>, ParsingIssue>>()
     }
 }
 
@@ -99,10 +97,10 @@ impl ParseBulletsFromString for Requirement {
         bullet_pre_sep: &str,
         bullet_post_sep: &str,
         bullet_pre_chars: Range<usize>,
-    ) -> Result<Self, ParsingError> {
+    ) -> Result<Self, ParsingIssue> {
         Ok(Requirement::new(
             ConditionName::try_new(bullet_pre_sep).map_err(|reason| {
-                ParsingError::InvalidConditionName {
+                ParsingIssue::InvalidConditionName {
                     reason,
                     chars: bullet_pre_chars,
                     name: bullet_pre_sep.to_string(),
@@ -124,10 +122,10 @@ impl ParseBulletsFromString for Justification {
         bullet_pre_sep: &str,
         bullet_post_sep: &str,
         bullet_pre_chars: Range<usize>,
-    ) -> Result<Self, ParsingError> {
+    ) -> Result<Self, ParsingIssue> {
         Ok(Justification::new(
             ConditionName::try_new(bullet_pre_sep).map_err(|reason| {
-                ParsingError::InvalidConditionName {
+                ParsingIssue::InvalidConditionName {
                     reason,
                     chars: bullet_pre_chars,
                     name: bullet_pre_sep.to_string(),
@@ -140,7 +138,7 @@ impl ParseBulletsFromString for Justification {
 
 /// Helper utilities for properly recognizing different kinds of bulleted lists.
 mod bullet {
-    use crate::annotations::{err::ParsingError, parsing::subslice_offset_stable};
+    use crate::annotations::{err::ParsingIssue, parsing::subslice_offset_stable};
     use regex::Regex;
 
     pub enum BulletKind {
@@ -150,7 +148,7 @@ mod bullet {
 
     impl BulletKind {
         /// Try to determine which bullet type is being used for a given string.
-        pub fn choose(for_string: &str, original: &str) -> Result<Self, ParsingError> {
+        pub fn choose(for_string: &str, original: &str) -> Result<Self, ParsingIssue> {
             // TODO: redo this to not only highlight the first occurance and be more extensible
             match (
                 BulletKind::Asterisk.regex_pattern().find(for_string),
@@ -158,7 +156,7 @@ mod bullet {
             ) {
                 (Some(a_pos), Some(h_pos)) => {
                     let offset = subslice_offset_stable(original, for_string).unwrap();
-                    Err(ParsingError::NonMatchingBullets(vec![
+                    Err(ParsingIssue::NonMatchingBullets(vec![
                         (
                             (a_pos.end() + offset - 1)..(a_pos.end() + offset),
                             a_pos.as_str().to_owned(),
@@ -171,7 +169,7 @@ mod bullet {
                 }
                 (Some(_a_pos), None) => Ok(BulletKind::Asterisk),
                 (None, Some(_h_pos)) => Ok(BulletKind::Hypen),
-                _ => Err(ParsingError::EmptyMarker),
+                _ => Err(ParsingIssue::EmptyMarker),
             }
         }
 
@@ -249,57 +247,57 @@ mod test {
             };
         }
 
-        use crate::annotations::err::ParsingError;
+        use crate::annotations::err::ParsingIssue;
 
         test_req_parse!(simple_no_requirements:
                 r#"# Unsafe"#
-            => err ParsingError::EmptyMarker);
+            => err ParsingIssue::EmptyMarker);
 
         test_req_parse!(simple_no_marker:
                 r#"This is a random doc comment"#
-            => err ParsingError::NoMarkerPattern);
+            => err ParsingIssue::NoMarkerPattern);
 
         test_req_parse!(multi_line_no_marker:
                 r#"This is a random doc comment.
                 It is multiple lines, but it still has no marker
                 unfortunately..."#
-            => err ParsingError::NoMarkerPattern);
+            => err ParsingIssue::NoMarkerPattern);
 
         test_req_parse!(incorrect_markers:
                 r#"# Hi!
                 # Hello!
                 # Usage
                 # Overview"#
-            => err ParsingError::NoMarkerPattern);
+            => err ParsingIssue::NoMarkerPattern);
 
         test_req_parse!(incorrect_marker_w_desc:
                 r#"# Usage
                     - nn: the pointer must be non-null
                     - align: the pointer must be aligned"#
-            => err ParsingError::NoMarkerPattern);
+            => err ParsingIssue::NoMarkerPattern);
 
         test_req_parse!(multiple_correct_markers:
                 r#"# Unsafe
                    # Unsafe"#
-            => err ParsingError::MultipleMarkerPatterns(..));
+            => err ParsingIssue::MultipleMarkerPatterns(..));
 
         test_req_parse!(multiple_correct_markers_separeted:
                 r#"# Unsafe
                     - nn: the pointer must be non-null
                     - align: the pointer must be aligned
                    # Unsafe"#
-            => err ParsingError::MultipleMarkerPatterns(..));
+            => err ParsingIssue::MultipleMarkerPatterns(..));
 
         test_req_parse!(bullet_with_no_colon:
                 r#"# Unsafe
                     - nn the pointer must be non-null"#
-            => err ParsingError::NoColon(..));
+            => err ParsingIssue::NoColon(..));
 
         test_req_parse!(multiple_bullets_with_no_colon:
                 r#"# Unsafe
                     - nn the pointer must be non-null
                     - align the pointer must be aligned"#
-            => err ParsingError::NoColon(..));
+            => err ParsingIssue::NoColon(..));
 
         test_req_parse!(simplest_use:
                 r#"# Unsafe
@@ -427,7 +425,7 @@ mod test {
                 r#"# Unsafe
                         * nn: the pointer must be non-null
                         - align: the pointer must be aligned"#
-            => err ParsingError::NonMatchingBullets(_));
+            => err ParsingIssue::NonMatchingBullets(_));
 
         test_req_parse!(spaces_after_bullet_ignored:
                 r#"# Unsafe
@@ -442,13 +440,13 @@ mod test {
                 r#"# Unsafe
                         - nn : the pointer must be non-null
                         - align     : the pointer must be aligned"#
-            => err ParsingError::InvalidConditionName {reason: InvalidConditionNameReason::TrailingWhitespace, ..});
+            => err ParsingIssue::InvalidConditionName {reason: InvalidConditionNameReason::TrailingWhitespace, ..});
 
         test_req_parse!(multi_word_names_disallowed:
                 r#"# Unsafe
                         - non null: the pointer must be non-null
                         - aligned ptr: the pointer must be aligned"#
-            => err ParsingError::InvalidConditionName {reason: InvalidConditionNameReason::MultipleWords, ..});
+            => err ParsingIssue::InvalidConditionName {reason: InvalidConditionNameReason::MultipleWords, ..});
 
         test_req_parse!(kebab_case_names_allowed:
                 r#"# Unsafe
@@ -471,7 +469,7 @@ mod test {
 
     #[rustfmt::skip] // Skip formatting because it looks weird for the testing macros.
     mod justifications {
-        use crate::annotations::err::ParsingError;
+        use crate::annotations::err::ParsingIssue;
         use crate::annotations::types::InvalidConditionNameReason;
         use crate::annotations::{parsing::ParseBulletsFromString, Justification};
 
@@ -493,53 +491,53 @@ mod test {
 
         test_just_parse!(simple_no_requirements:
                 r#"SAFETY:"#
-            => err ParsingError::EmptyMarker);
+            => err ParsingIssue::EmptyMarker);
             
         test_just_parse!(simple_no_marker:
                 r#"This is a random doc comment"#
-            => err ParsingError::NoMarkerPattern);
+            => err ParsingIssue::NoMarkerPattern);
             
         test_just_parse!(multi_line_no_marker:
                 r#"This is a random doc comment.
                 It is multiple lines, but it still has no marker
                 unfortunately..."#
-            => err ParsingError::NoMarkerPattern);
+            => err ParsingIssue::NoMarkerPattern);
             
         test_just_parse!(incorrect_markers:
                 r#"# Hi!
                 Unsafety:
                 # Usage
                 Usage:"#
-            => err ParsingError::NoMarkerPattern);
+            => err ParsingIssue::NoMarkerPattern);
             
         test_just_parse!(incorrect_marker_w_desc:
                 r#"Usage:
                     - nn: the pointer must be non-null
                     - align: the pointer must be aligned"#
-            => err ParsingError::NoMarkerPattern);
+            => err ParsingIssue::NoMarkerPattern);
 
         test_just_parse!(multiple_correct_markers:
                 r#"Safety:
                    Safety:"#
-            => err ParsingError::MultipleMarkerPatterns(..));
+            => err ParsingIssue::MultipleMarkerPatterns(..));
 
         test_just_parse!(multiple_correct_markers_separeted:
                 r#"Safety:
                     - nn: the pointer must be non-null
                     - align: the pointer must be aligned
                    Safety:"#
-            => err ParsingError::MultipleMarkerPatterns(..));
+            => err ParsingIssue::MultipleMarkerPatterns(..));
 
         test_just_parse!(bullet_with_no_colon:
                 r#"Safety:
                     - nn the pointer must be non-null"#
-            => err ParsingError::NoColon(..));
+            => err ParsingIssue::NoColon(..));
 
         test_just_parse!(multiple_bullets_with_no_colon:
                 r#"Safety:
                     - nn the pointer must be non-null
                     - align the pointer must be aligned"#
-            => err ParsingError::NoColon(..));
+            => err ParsingIssue::NoColon(..));
             
         test_just_parse!(simplest_use:
                 r#"SAFETY:
@@ -663,7 +661,7 @@ mod test {
                 r#"Safety:
                         * nn: the pointer must be non-null
                         - align: the pointer must be aligned"#
-            => err ParsingError::NonMatchingBullets(_));
+            => err ParsingIssue::NonMatchingBullets(_));
             
         test_just_parse!(spaces_after_bullet_ignored:
                 r#"Safety:
@@ -678,13 +676,13 @@ mod test {
                 r#"Safety:
                         - nn : the pointer must be non-null
                         - align     : the pointer must be aligned"#
-            => err ParsingError::InvalidConditionName {reason: InvalidConditionNameReason::TrailingWhitespace, ..});
+            => err ParsingIssue::InvalidConditionName {reason: InvalidConditionNameReason::TrailingWhitespace, ..});
 
         test_just_parse!(multi_word_names_disallowed:
                 r#"Safety:
                         - non null: the pointer must be non-null
                         - aligned ptr: the pointer must be aligned"#
-            => err ParsingError::InvalidConditionName {reason: InvalidConditionNameReason::MultipleWords, ..});
+            => err ParsingIssue::InvalidConditionName {reason: InvalidConditionNameReason::MultipleWords, ..});
 
         test_just_parse!(kebab_case_names_allowed:
                 r#"Safety:

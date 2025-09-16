@@ -1,3 +1,5 @@
+//! Core annotation types.
+
 use std::borrow::Borrow;
 
 #[derive(PartialEq, Eq, Debug)]
@@ -11,7 +13,7 @@ impl Requirement {
     pub fn new(name: ConditionName, description: impl Borrow<str>) -> Self {
         Requirement {
             name,
-            description: description.borrow().to_owned(),
+            description: description.borrow().to_string(),
         }
     }
 }
