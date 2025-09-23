@@ -19,6 +19,7 @@ impl Requirement {
 }
 
 #[derive(PartialEq, Eq, Debug)]
+/// The justification for why a given condition has been satisfied.
 pub struct Justification {
     name: ConditionName,
     explanation: String,
@@ -37,8 +38,9 @@ impl Justification {
 pub struct ConditionName(String);
 
 impl ConditionName {
-    /// Construct a new requirement name, checking all invariants to ensure it is valid.
+    /// Construct a new condition name, checking all invariants to ensure it is valid.
     pub fn try_new(name: &str) -> Result<ConditionName, InvalidConditionNameReason> {
+        // For now, just check that it's a single word with no extra white space.
         Ok(ConditionName(check_single_word(name)?.to_string()))
     }
 }
@@ -63,6 +65,7 @@ fn check_single_word(name: &str) -> Result<&str, InvalidConditionNameReason> {
             // no other words, just invalid whitespace
             return Err(InvalidConditionNameReason::TrailingWhitespace);
         }
+        // contains other words
         return Err(InvalidConditionNameReason::MultipleWords);
     }
     Ok(name)

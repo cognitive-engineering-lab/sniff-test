@@ -21,9 +21,11 @@ impl<'a> Annotation<'a> for Justification {
     type Input = rustc_hir::Expr<'a>;
 }
 
+/// A type that can be parsed from a given [`Input`](Annotation::Input) within the [`TyCtxt`].
 pub trait Annotation<'a>: ParseBulletsFromString {
     type Input: Attributeable;
 
+    /// Parse the given [`Input`](Annotation::Input).
     fn parse(tcx: TyCtxt, input: impl Borrow<Self::Input>) -> Result<Vec<Self>, ParsingError> {
         let input: &Self::Input = input.borrow();
         let doc_str: Result<String, ParsingIssue> =
@@ -34,6 +36,8 @@ pub trait Annotation<'a>: ParseBulletsFromString {
             .map_err(input.convert_err(tcx))
     }
 
+    /// Try to parse the given [`Input`](Annotation::Input), returning `None` if
+    /// there was an error, but the error was recoverable.
     fn try_parse(
         tcx: TyCtxt,
         input: impl Borrow<Self::Input>,

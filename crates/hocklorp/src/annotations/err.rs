@@ -33,6 +33,7 @@ pub enum ParsingIssue {
     NonMatchingBullets(Vec<(Range<usize>, String)>),
 }
 
+/// A full parsing error that has extra debug info (e.g. the offending [`Span`]).
 pub struct ParsingError<'a> {
     issue: ParsingIssue,
     loc_name: String,
@@ -76,10 +77,12 @@ impl ParsingIssue {
 }
 
 impl ParsingError<'_> {
+    /// Build and emit the [`Diag`] for this [`ParsingError`].
     pub(crate) fn emit<'s, 'a: 's>(&'s self, dcx: DiagCtxtHandle<'a>) -> ErrorGuaranteed {
         self.diag(dcx).emit()
     }
 
+    /// Build the [`Diag`] for a given error, but do not emit it.
     pub(crate) fn diag<'s, 'a: 's>(&'s self, dcx: DiagCtxtHandle<'a>) -> Diag<'a> {
         let base_diag = match &self.issue {
             ParsingIssue::InvalidConditionName { reason, .. } => {
@@ -359,6 +362,7 @@ mod span {
             .merge_adjacent()
     }
 
+    /// Adaptor trait to call this function as a method.
     trait Mergeable {
         fn merge_adjacent(self) -> Vec<Span>;
     }
@@ -374,7 +378,7 @@ mod span {
                     if let Some(last) = base.last_mut()
                         && last.hi() + BytePos(1) == span.lo()
                     {
-                        // Merge the line spans if theyre adjacent
+                        // Merge the line spans if they're adjacent
                         *last = last.to(*span);
                     } else {
                         base.push(*span);

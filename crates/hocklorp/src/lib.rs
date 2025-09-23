@@ -125,8 +125,8 @@ impl rustc_driver::Callbacks for PrintAllItemsCallbacks {
 }
 
 type RequirementInfo = HashMap<DefId, Vec<Requirement>>;
-/// Just runs the doc comment parsing on all funcitons marked `unsafe` in the crate
-/// as a sanity test for my parser.
+/// Parses all functions that pass the given [`should_analyze_item`] predicate,
+/// returning the [`Requirement`]s for those that have them.
 fn requirement_pass(tcx: TyCtxt) -> impl FnOnce() -> Result<RequirementInfo, ErrorGuaranteed> {
     move || {
         rustc_public::all_local_items()
@@ -149,6 +149,7 @@ fn requirement_pass(tcx: TyCtxt) -> impl FnOnce() -> Result<RequirementInfo, Err
 
 type JustificationInfo = HashMap<HirId, Vec<Justification>>;
 
+/// Records the [`Justification`]s given on all function calls to `fns_to_track`.
 fn justification_pass(
     tcx: TyCtxt,
     fns_to_track: &[DefId],
@@ -181,19 +182,23 @@ impl<'tcx, 'a> FnCallVisitor<'tcx, 'a> {
         self.fns_to_track.contains(&def_id)
     }
 
-    /// Try to get the annotations from all parent code blocks for a given [Expr].
+    /// Try to get the annotations from all parent code blocks for a given [`Expr`].
     ///
     /// This is used to ensure code like the following will work, even if
-    /// the annotation isn't on the exact HIR node of the function call.
+    /// the annotation isn't on the exact HIR node of the function call:
     /// ```
+    /// # let foo = |ptr: &i32| *ptr;
+    /// # let val = 42;
+    /// let ptr: &i32 = &val;
     /// /// Safety:
     /// /// - non-null: the ptr is non null
-    /// unsafe { foo(ptr) }
+    /// unsafe { foo(ptr); }
     /// ```
     fn try_get_from_parent_blocks(
         &self,
         ex: &'tcx rustc_hir::Expr<'tcx>,
     ) -> Option<Result<Vec<Justification>, ParsingError<'_>>> {
+        // TODO: stop looking once we reach a single code block, to ensure we don't
         self.tcx
             .hir_parent_iter(ex.hir_id)
             .filter_map(|(_id, node)| {

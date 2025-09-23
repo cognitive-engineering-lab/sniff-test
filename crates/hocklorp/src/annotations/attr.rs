@@ -25,14 +25,19 @@ impl Attributeable for rustc_hir::Expr<'_> {
 
 /// A trait for items from which you can get a list of HIR attributes from the typing context.
 pub trait Attributeable {
+    /// Get the HIR attributes for this item.
     fn get_attrs<'tcx>(&self, tcx: TyCtxt<'tcx>) -> &'tcx [rustc_hir::Attribute];
 
+    /// Returns a function that can be used to add additional context to [`ParsingIssue`]s,
+    /// turning them into full [`ParsingError`]s that can be rendered to the user.
     fn convert_err<'tcx>(&self, tcx: TyCtxt<'tcx>) -> impl Fn(ParsingIssue) -> ParsingError<'tcx>;
 
+    /// Get the full string of all doc attributes on n item concatenated together.
     fn get_doc_str(&self, tcx: TyCtxt<'_>) -> Option<String> {
         let all_attrs = self.get_attrs(tcx);
 
-        let doc_strs = all_attrs
+        // Filter for doc comments.
+        let doc_comments = all_attrs
             .iter()
             .filter_map(|attr| {
                 if let rustc_hir::Attribute::Parsed(kind) = attr
@@ -45,10 +50,11 @@ pub trait Attributeable {
             })
             .collect::<Vec<_>>();
 
-        if doc_strs.is_empty() {
+        // Return none if no doc comments were found
+        if doc_comments.is_empty() {
             None
         } else {
-            Some(doc_strs.join("\n"))
+            Some(doc_comments.join("\n"))
         }
     }
 }

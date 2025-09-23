@@ -4,6 +4,8 @@ use crate::annotations::{Justification, Requirement, err::ParsingIssue, types::C
 use regex::Regex;
 use std::ops::Range;
 
+/// Finds the offset of an `inner` subslice within `original`,
+/// returning `None` if it isn't a subslice.
 fn subslice_offset_stable(original: &str, inner: &str) -> Option<usize> {
     let self_beg = original.as_ptr() as usize;
     let inner = inner.as_ptr() as usize;
@@ -50,7 +52,6 @@ pub trait ParseBulletsFromString: Sized {
             let mut new_str = original_comment_str;
             while let Some(next_occ) = Self::section_marker_regex().find(new_str) {
                 ranges.push((next_occ.start() + most_recent)..(next_occ.end() + most_recent));
-                // ranges.push(next_occ.range());
                 most_recent += next_occ.end();
                 new_str = &new_str[next_occ.end()..];
             }
@@ -149,7 +150,7 @@ mod bullet {
     impl BulletKind {
         /// Try to determine which bullet type is being used for a given string.
         pub fn choose(for_string: &str, original: &str) -> Result<Self, ParsingIssue> {
-            // TODO: redo this to not only highlight the first occurance and be more extensible
+            // TODO: redo this to not only highlight the first occurrence and be more extensible w/ different bullets
             match (
                 BulletKind::Asterisk.regex_pattern().find(for_string),
                 BulletKind::Hypen.regex_pattern().find(for_string),
