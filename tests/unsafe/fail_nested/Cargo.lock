@@ -3,12 +3,12 @@
 version = 4
 
 [[package]]
-name = "hocklorp-attrs"
-version = "0.1.0"
-
-[[package]]
 name = "invalid_simple"
 version = "0.1.0"
 dependencies = [
- "hocklorp-attrs",
+ "sniff-test-attrs",
 ]
+
+[[package]]
+name = "sniff-test-attrs"
+version = "0.1.0"
