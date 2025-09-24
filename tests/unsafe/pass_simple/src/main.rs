@@ -6,7 +6,7 @@ unsafe fn foo(ptr: *const i32) -> i32 {
     unsafe { *ptr }
 }
 
-#[hocklorp_attrs::check_unsafe]
+#[sniff_test_attrs::check_unsafe]
 fn main() {
     let x = 1;
 

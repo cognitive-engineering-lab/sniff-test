@@ -8,8 +8,8 @@ fn bar(ptr: *const i32) -> i32 {
     foo(ptr)
 }
 
-#[hocklorp_attrs::check_unsafe]
+#[sniff_test_attrs::check_unsafe]
 fn main() {
     let x = 1;
-    bar(&raw const x)
+    bar(&raw const x);
 }

@@ -1,6 +1,10 @@
 [workspace]
 resolver = "3"
 members = ["crates/*"]
+
+# TODO: can we glob exclude these? maybe add that functionality to the upstream?
+# I could also see that not being possible due to glob rule prescedence ambiguity between this
+# and `members`, so maybe we can just include them?
 exclude = [
   "tests/unsafe/fail_simple", 
   "tests/unsafe/pass_simple", 

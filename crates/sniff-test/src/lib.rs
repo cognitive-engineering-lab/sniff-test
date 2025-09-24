@@ -54,7 +54,7 @@ impl RustcPlugin for PrintAllItemsPlugin {
     }
 
     fn driver_name(&self) -> Cow<'static, str> {
-        "print-all-items-driver".into()
+        "sniff-test-driver".into()
     }
 
     // In the CLI, we ask Clap to parse arguments and also specify a CrateFilter.
@@ -189,7 +189,7 @@ impl<'tcx, 'a> FnCallVisitor<'tcx, 'a> {
     /// ```
     /// # let foo = |ptr: &i32| *ptr;
     /// # let val = 42;
-    /// let ptr: &i32 = &val;
+    /// # let ptr: &i32 = &val;
     /// /// Safety:
     /// /// - non-null: the ptr is non null
     /// unsafe { foo(ptr); }

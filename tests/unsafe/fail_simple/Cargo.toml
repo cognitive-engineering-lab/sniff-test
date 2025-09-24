@@ -4,4 +4,4 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-hocklorp-attrs = { path = "../../../crates/hocklorp-attrs" }
+sniff-test-attrs = { path = "../../../crates/sniff-test-attrs" }
