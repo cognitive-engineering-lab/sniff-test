@@ -11,7 +11,7 @@ env:
 
 
 jobs:
-    check: 
+    check:
         runs-on: macos-latest
         steps:
           - uses: actions/checkout@v4
@@ -37,7 +37,7 @@ jobs:
         steps:
           - uses: actions/checkout@v4
           - run: cargo fmt --check
-    
+
     # I think warnings are the right level here for now,
     # can do pedantic lints separately w/ pre-commit if I'd like
     clippy:
@@ -45,4 +45,3 @@ jobs:
         steps:
           - uses: actions/checkout@v4
           - run: cargo clippy --workspace --all-targets -- -D warnings
-
