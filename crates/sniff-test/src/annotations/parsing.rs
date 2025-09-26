@@ -116,7 +116,7 @@ impl ParseBulletsFromString for Justification {
     /// Regex to match on the "Safety:" part of a comment, ignoring case and whitespace,
     /// but ensuring it is the only text on that line.
     fn section_marker_regex() -> Regex {
-        &Regex::new("(\n|^)(\\s*)(Safety|SAFETY):(\n|$)").unwrap()
+        Regex::new("(\n|^)(\\s*)(Safety|SAFETY):(\n|$)").unwrap()
     }
 
     fn parse_bullet(
