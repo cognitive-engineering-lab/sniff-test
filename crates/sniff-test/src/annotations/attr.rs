@@ -39,15 +39,7 @@ pub trait Attributeable {
         // Filter for doc comments.
         let doc_comments = all_attrs
             .iter()
-            .filter_map(|attr| {
-                if let rustc_hir::Attribute::Parsed(kind) = attr
-                    && let rustc_hir::attrs::AttributeKind::DocComment { comment, .. } = kind
-                {
-                    Some(comment.as_str())
-                } else {
-                    None
-                }
-            })
+            .filter_map(|attr| attr.doc_str().map(|a| a.as_str().to_owned()))
             .collect::<Vec<_>>();
 
         // Return none if no doc comments were found

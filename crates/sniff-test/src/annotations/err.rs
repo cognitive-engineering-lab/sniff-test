@@ -2,6 +2,7 @@
 
 use crate::annotations::err::span::{span_all_comments, span_some_comments};
 use crate::annotations::{Attributeable, types::InvalidConditionNameReason};
+use crate::utils::SniffTestDiagnostic;
 use rustc_errors::{Diag, DiagCtxtHandle};
 use rustc_hir::Attribute;
 use rustc_middle::ty::TyCtxt;
@@ -34,6 +35,7 @@ pub enum ParsingIssue {
 }
 
 /// A full parsing error that has extra debug info (e.g. the offending [`Span`]).
+#[derive(Debug)]
 pub struct ParsingError<'a> {
     issue: ParsingIssue,
     loc_name: String,
@@ -76,14 +78,8 @@ impl ParsingIssue {
     }
 }
 
-impl ParsingError<'_> {
-    /// Build and emit the [`Diag`] for this [`ParsingError`].
-    pub(crate) fn emit<'s, 'a: 's>(&'s self, dcx: DiagCtxtHandle<'a>) -> ErrorGuaranteed {
-        self.diag(dcx).emit()
-    }
-
-    /// Build the [`Diag`] for a given error, but do not emit it.
-    pub(crate) fn diag<'s, 'a: 's>(&'s self, dcx: DiagCtxtHandle<'a>) -> Diag<'a> {
+impl SniffTestDiagnostic for ParsingError<'_> {
+    fn diag<'s, 'a: 's>(&'s self, dcx: DiagCtxtHandle<'a>) -> Diag<'a> {
         let base_diag = match &self.issue {
             ParsingIssue::InvalidConditionName { reason, .. } => {
                 self.build_invalid_condition_diag(dcx, reason)
@@ -104,7 +100,9 @@ impl ParsingError<'_> {
 
         base_diag.with_span_label(self.span, "here")
     }
+}
 
+impl ParsingError<'_> {
     fn build_invalid_condition_diag<'a>(
         &self,
         dcx: DiagCtxtHandle<'a>,
@@ -295,15 +293,7 @@ mod span {
 
         let doc_comments = doc_comments
             .iter()
-            .filter_map(|attr| {
-                if let rustc_hir::Attribute::Parsed(kind) = attr
-                    && let rustc_hir::attrs::AttributeKind::DocComment { span, comment, .. } = kind
-                {
-                    Some((*span, comment.as_str()))
-                } else {
-                    None
-                }
-            })
+            .filter_map(|attr| Some((attr.span(), attr.doc_str().map(|a| a.as_str().to_owned())?)))
             .collect::<Vec<_>>();
 
         let mut final_spans = vec![];

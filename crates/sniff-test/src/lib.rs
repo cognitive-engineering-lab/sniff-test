@@ -14,8 +14,9 @@ extern crate rustc_public;
 extern crate rustc_session;
 extern crate rustc_span;
 
-mod annotations;
+pub mod annotations;
 mod reachability;
+pub mod utils;
 
 use std::{borrow::Cow, collections::HashMap, env, process::Command};
 
@@ -27,11 +28,13 @@ use rustc_hir::{
 };
 use rustc_middle::ty::TyCtxt;
 use rustc_plugin::{CrateFilter, RustcPlugin, RustcPluginArgs, Utf8Path};
-use rustc_public::CrateDef;
 use rustc_span::ErrorGuaranteed;
 use serde::{Deserialize, Serialize};
 
-use crate::annotations::{Annotation, Justification, ParsingError, Requirement};
+use crate::{
+    annotations::{Annotation, Justification, ParsingError, Requirement},
+    utils::SniffTestDiagnostic,
+};
 
 // This struct is the plugin provided to the rustc_plugin framework,
 // and it must be exported for use by the CLI/driver binaries.
@@ -102,21 +105,8 @@ impl rustc_driver::Callbacks for PrintAllItemsCallbacks {
         _compiler: &rustc_interface::interface::Compiler,
         tcx: TyCtxt<'_>,
     ) -> rustc_driver::Compilation {
-        let Ok(reqs) = rustc_public::rustc_internal::run(tcx, requirement_pass(tcx))
-            .expect("rustc public should work i hope...")
-        else {
-            return rustc_driver::Compilation::Stop;
-        };
-
-        println!("reqs are {reqs:?}");
-
-        let fns_to_track: &[DefId] = &reqs.keys().copied().collect::<Box<[_]>>();
-
-        let Ok(justs) = justification_pass(tcx, fns_to_track)() else {
-            return rustc_driver::Compilation::Stop;
-        };
-
-        println!("justs are {justs:?}");
+        rustc_public::rustc_internal::run(tcx, sniff_test_analysis(tcx))
+            .expect("rustc public should work please");
 
         // Note that you should generally allow compilation to continue. If
         // your plugin is being invoked on a dependency, then you need to ensure
@@ -126,12 +116,34 @@ impl rustc_driver::Callbacks for PrintAllItemsCallbacks {
     }
 }
 
+fn sniff_test_analysis(tcx: TyCtxt) -> impl FnOnce() {
+    move || {
+        let all_fn_defs = rustc_public::all_local_items()
+            .into_iter()
+            .filter_map(|item| match item.ty().kind().fn_def() {
+                Some((def, _other)) => Some(def),
+                _ => None,
+            })
+            .collect::<Box<[_]>>();
+        // 1. Find all 'bad' functions. Make sure they line up
+        let bad = reachability::filter_bad_functions(tcx, &all_fn_defs);
+        print!("bad {bad:?}");
+
+        // 2a. Find entry points
+        let entry_points = reachability::filter_entry_points(tcx, &all_fn_defs);
+        println!("have entry points {:?}", entry_points);
+
+        // 2b. Walk from those entry points to ensure proper labels
+    }
+}
+
 type RequirementInfo = HashMap<DefId, Vec<Requirement>>;
 /// Parses all functions that pass the given [`should_analyze_item`] predicate,
 /// returning the [`Requirement`]s for those that have them.
 fn requirement_pass(tcx: TyCtxt) -> impl FnOnce() -> Result<RequirementInfo, ErrorGuaranteed> {
     move || {
-        reachability::filter_entry_points(tcx, &rustc_public::all_local_items());
+        // let entry_points = reachability::filter_entry_points(tcx, &rustc_public::all_local_items());
+        // println!("entry points are {:?}", entry_points);
         todo!();
         // rustc_public::all_local_items()
         //     .into_iter()
