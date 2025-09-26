@@ -2,7 +2,7 @@ name: Code Quality Lints
 
 on:
   push:
-    branches: [main]
+    # branches: [main]
   pull_request:
 
 env:
@@ -14,24 +14,28 @@ jobs:
     check: 
         runs-on: macos-latest
         steps:
+          - uses: actions/checkout@v4
           - run: cargo check
 
     build:
         runs-on: macos-latest
         steps:
+          - uses: actions/checkout@v4
           - name: build in debug mode
-          - run: cargo build
+            run: cargo build
           - name: build in release mode
-          - run: cargo build --release
+            run: cargo build --release
 
     test:
         runs-on: macos-latest
         steps:
+          - uses: actions/checkout@v4
           - run: cargo test
 
     format:
         runs-on: macos-latest
         steps:
+          - uses: actions/checkout@v4
           - run: cargo fmt --check
     
     # I think warnings are the right level here for now,
@@ -39,5 +43,6 @@ jobs:
     clippy:
         runs-on: macos-latest
         steps:
+          - uses: actions/checkout@v4
           - run: cargo clippy --workspace --all-targets -- -D warnings
 
