@@ -382,6 +382,9 @@ dependencies = [
 [[package]]
 name = "sniff-test-attrs"
 version = "0.1.0"
+dependencies = [
+ "quote",
+]
 
 [[package]]
 name = "strsim"

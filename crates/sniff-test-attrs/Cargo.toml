@@ -7,3 +7,4 @@ edition = "2024"
 proc-macro = true
 
 [dependencies]
+quote = "1.0.40"

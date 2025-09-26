@@ -8,3 +8,9 @@ If you encounter an error along the lines of `dyld[43663]: Library not loaded: .
 ```shell
 export DYLD_LIBRARY_PATH="$DYLD_LIBRARY_PATH:$(rustc +nightly-2025-08-20 --print target-libdir)"
 ```
+
+
+you can run the jawn with 
+```rust
+cargo clean && RUSTFLAGS="-Zcrate-attr=feature(register_tool) -Zcrate-attr=register_tool(sniff_tool)" /Users/alexanderportland/Desktop/research/sniff-test/target/debug/cargo-sniff-test
+```

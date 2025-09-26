@@ -1,6 +1,7 @@
 //! A Rustc plugin that prints out the name of all items in a crate.
 
 #![feature(rustc_private)]
+#![feature(box_patterns)]
 #![cfg_attr(test, feature(assert_matches))]
 
 extern crate lazy_static;
@@ -14,6 +15,7 @@ extern crate rustc_session;
 extern crate rustc_span;
 
 mod annotations;
+mod reachability;
 
 use std::{borrow::Cow, collections::HashMap, env, process::Command};
 
@@ -129,21 +131,23 @@ type RequirementInfo = HashMap<DefId, Vec<Requirement>>;
 /// returning the [`Requirement`]s for those that have them.
 fn requirement_pass(tcx: TyCtxt) -> impl FnOnce() -> Result<RequirementInfo, ErrorGuaranteed> {
     move || {
-        rustc_public::all_local_items()
-            .into_iter()
-            // filter by items we should analyze
-            .filter_map(|crate_def| should_analyze_item(crate_def, tcx))
-            // try to analyze all `FnDef`s, but some will return `None` as they have no annotations...
-            .filter_map(|def| {
-                let internal_def = rustc_public::rustc_internal::internal(tcx, def.def_id());
-                Some(
-                    Requirement::try_parse(tcx, internal_def)?
-                        .map(|reqs| (internal_def, reqs))
-                        .map_err(|err| err.emit(tcx.dcx())),
-                )
-            })
-            // collect into a hash map
-            .collect::<Result<HashMap<_, _>, ErrorGuaranteed>>()
+        reachability::filter_entry_points(tcx, &rustc_public::all_local_items());
+        todo!();
+        // rustc_public::all_local_items()
+        //     .into_iter()
+        //     // filter by items we should analyze
+        //     .filter_map(|crate_def| should_analyze_item(crate_def, tcx))
+        //     // try to analyze all `FnDef`s, but some will return `None` as they have no annotations...
+        //     .filter_map(|def| {
+        //         let internal_def = rustc_public::rustc_internal::internal(tcx, def.def_id());
+        //         Some(
+        //             Requirement::try_parse(tcx, internal_def)?
+        //                 .map(|reqs| (internal_def, reqs))
+        //                 .map_err(|err| err.emit(tcx.dcx())),
+        //         )
+        //     })
+        //     // collect into a hash map
+        //     .collect::<Result<HashMap<_, _>, ErrorGuaranteed>>()
     }
 }
 
