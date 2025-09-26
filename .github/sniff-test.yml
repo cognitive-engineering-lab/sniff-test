@@ -1,0 +1,43 @@
+name: Code Quality Lints
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+env:
+    RUST_BACKTRACE: 1
+    CARGO_TERM_COLOR: always
+
+
+jobs:
+    check: 
+        runs-on: macos-latest
+        steps:
+          - run: cargo check
+
+    build:
+        runs-on: macos-latest
+        steps:
+          - name: build in debug mode
+          - run: cargo build
+          - name: build in release mode
+          - run: cargo build --release
+
+    test:
+        runs-on: macos-latest
+        steps:
+          - run: cargo test
+
+    format:
+        runs-on: macos-latest
+        steps:
+          - run: cargo fmt --check
+    
+    # I think warnings are the right level here for now,
+    # can do pedantic lints separately w/ pre-commit if I'd like
+    clippy:
+        runs-on: macos-latest
+        steps:
+          - run: cargo clippy --workspace --all-targets -- -D warnings
+
