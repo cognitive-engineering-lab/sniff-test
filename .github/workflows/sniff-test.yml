@@ -36,6 +36,9 @@ jobs:
         runs-on: macos-latest
         steps:
           - uses: actions/checkout@v4
+          - uses: actions-rust-lang/setup-rust-toolchain@v1
+            with:
+              components: rustfmt
           - run: cargo fmt --check
 
     # I think warnings are the right level here for now,
@@ -44,4 +47,7 @@ jobs:
         runs-on: macos-latest
         steps:
           - uses: actions/checkout@v4
+          - uses: actions-rust-lang/setup-rust-toolchain@v1
+            with:
+              components: clippy
           - run: cargo clippy --workspace --all-targets -- -D warnings
