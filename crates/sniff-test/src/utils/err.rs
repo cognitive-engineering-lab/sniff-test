@@ -8,7 +8,7 @@ use rustc_span::ErrorGuaranteed;
 
 pub trait SniffTestDiagnostic: Debug {
     /// Build the [`Diag`] for a given error, but do not emit it.
-    fn diag<'s, 'a: 's>(&'s self, dcx: DiagCtxtHandle<'a>) -> Diag<'_>;
+    fn diag<'s, 'a: 's>(&'s self, dcx: DiagCtxtHandle<'a>) -> Diag<'a>;
 
     /// Build and emit the [`Diag`] for this [`ParsingError`].
     fn emit<'s, 'a: 's>(&'s self, dcx: DiagCtxtHandle<'a>) -> ErrorGuaranteed {

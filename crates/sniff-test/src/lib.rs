@@ -28,6 +28,7 @@ use rustc_hir::{
 };
 use rustc_middle::ty::TyCtxt;
 use rustc_plugin::{CrateFilter, RustcPlugin, RustcPluginArgs, Utf8Path};
+use rustc_public::ty::FnDef;
 use rustc_span::ErrorGuaranteed;
 use serde::{Deserialize, Serialize};
 
@@ -116,15 +117,20 @@ impl rustc_driver::Callbacks for PrintAllItemsCallbacks {
     }
 }
 
+fn all_local_fn_defs() -> Box<[FnDef]> {
+    rustc_public::all_local_items()
+        .into_iter()
+        .filter_map(|item| match item.ty().kind().fn_def() {
+            Some((def, _other)) => Some(def),
+            _ => None,
+        })
+        .collect::<Box<[_]>>()
+}
+
 fn sniff_test_analysis(tcx: TyCtxt) -> impl FnOnce() {
     move || {
-        let all_fn_defs = rustc_public::all_local_items()
-            .into_iter()
-            .filter_map(|item| match item.ty().kind().fn_def() {
-                Some((def, _other)) => Some(def),
-                _ => None,
-            })
-            .collect::<Box<[_]>>();
+        let all_fn_defs = all_local_fn_defs();
+
         // 1. Find all 'bad' functions. Make sure they line up
         let bad = reachability::filter_bad_functions(tcx, &all_fn_defs);
         print!("bad {bad:?}");
@@ -134,6 +140,7 @@ fn sniff_test_analysis(tcx: TyCtxt) -> impl FnOnce() {
         println!("have entry points {:?}", entry_points);
 
         // 2b. Walk from those entry points to ensure proper labels
+        let res = reachability::walk_from_entry_points(&entry_points);
     }
 }
 

@@ -25,8 +25,6 @@ pub fn filter_bad_functions(
         .collect::<HashMap<_, _>>()
         .emit_all_errors(tcx)?;
 
-    println!("annotated bad is {:?}", annotated_bad.keys());
-
     let should_be_bad = items
         .iter()
         .filter_map(|fn_def| Some((fn_def, should_be_bad(tcx, *fn_def)?)));
