@@ -6,8 +6,8 @@ use crate::utils::SniffTestDiagnostic;
 use rustc_errors::{Diag, DiagCtxtHandle};
 use rustc_hir::Attribute;
 use rustc_middle::ty::TyCtxt;
+use rustc_span::Span;
 use rustc_span::def_id::DefId;
-use rustc_span::{ErrorGuaranteed, Span};
 use std::ops::Range;
 
 #[derive(PartialEq, Eq, Debug)]
@@ -44,6 +44,7 @@ pub struct ParsingError<'a> {
 }
 
 impl ParsingError<'_> {
+    #[allow(clippy::must_use_candidate)]
     pub fn issue(&self) -> &ParsingIssue {
         &self.issue
     }

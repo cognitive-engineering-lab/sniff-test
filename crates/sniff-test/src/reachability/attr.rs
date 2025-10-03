@@ -34,7 +34,7 @@ fn get_sniff_tool_attr(attrs: &[Attribute]) -> Option<SniffToolAttr> {
                 .path
                 .segments
                 .iter()
-                .map(|segment| segment.as_str())
+                .map(rustc_span::Ident::as_str)
                 .collect::<Box<[_]>>()
             {
                 box ["sniff_tool", b] => Some(b),

@@ -1,0 +1,14 @@
+[package]
+name = "tests"
+version = "0.1.0"
+edition = "2024"
+
+[lib]
+path = "lib.rs"
+
+[dependencies]
+anyhow = "1.0.100"
+insta = {version = "1.43.2", features = ["toml", "filters"]}
+lazy_static = "1.5.0"
+serde = "1.0.228"
+walkdir = "2.5.0"

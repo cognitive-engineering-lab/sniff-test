@@ -26,6 +26,7 @@ pub trait Annotation<'a>: ParseBulletsFromString {
     type Input: Attributeable;
 
     /// Parse the given [`Input`](Annotation::Input).
+    #[allow(clippy::missing_errors_doc)]
     fn parse(tcx: TyCtxt, input: impl Borrow<Self::Input>) -> Result<Vec<Self>, ParsingError> {
         let input: &Self::Input = input.borrow();
         let doc_str: Result<String, ParsingIssue> =

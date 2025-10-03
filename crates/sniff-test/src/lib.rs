@@ -137,7 +137,7 @@ fn sniff_test_analysis(tcx: TyCtxt) -> impl FnOnce() {
 
         // 2a. Find entry points
         let entry_points = reachability::filter_entry_points(tcx, &all_fn_defs);
-        println!("have entry points {:?}", entry_points);
+        println!("have entry points {entry_points:?}");
 
         // 2b. Walk from those entry points to ensure proper labels
         let res = reachability::walk_from_entry_points(&entry_points);

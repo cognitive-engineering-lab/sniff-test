@@ -7,7 +7,7 @@ use crate::utils::MultiEmittable;
 
 use rustc_middle::ty::TyCtxt;
 use rustc_public::mir::Safety;
-use rustc_public::{CrateItem, ty::FnDef};
+use rustc_public::ty::FnDef;
 use rustc_span::ErrorGuaranteed;
 
 pub fn filter_bad_functions(
@@ -33,12 +33,9 @@ pub fn filter_bad_functions(
         .filter(|(fn_def, _reason)| !annotated_bad.contains_key(fn_def))
         .collect::<Box<[_]>>();
 
-    if !bad_but_missed.is_empty() {
-        panic!(
-            "some functions should be annotated for the following reasons, but are not {:?}",
-            bad_but_missed
+    assert!(bad_but_missed.is_empty(), 
+            "some functions should be annotated for the following reasons, but are not {bad_but_missed:?}"
         );
-    }
 
     Ok(annotated_bad)
 }
@@ -55,5 +52,5 @@ fn should_be_bad(_tcx: TyCtxt, fn_def: FnDef) -> Option<ShouldBeBadReason> {
         return Some(ShouldBeBadReason::MarkedUnsafe);
     }
 
-    return None;
+    None
 }
