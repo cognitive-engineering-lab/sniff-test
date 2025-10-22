@@ -1,5 +1,5 @@
 [package]
-name = "fail_nested"
+name = "fail_not_annotated"
 version = "0.1.0"
 edition = "2024"
 

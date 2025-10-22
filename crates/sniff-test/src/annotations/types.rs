@@ -28,13 +28,15 @@ impl Requirement {
     pub fn construct<A: Borrow<str>, B: Borrow<str>>(
         iter: impl IntoIterator<Item = (A, B)>,
     ) -> Vec<Self> {
-        Vec::from_iter(iter.into_iter().map(|(name, desc)| {
-            Requirement::new(
-                ConditionName::try_new(name)
-                    .expect("construct should only be called with valid condition names"),
-                desc,
-            )
-        }))
+        iter.into_iter()
+            .map(|(name, desc)| {
+                Requirement::new(
+                    ConditionName::try_new(name)
+                        .expect("construct should only be called with valid condition names"),
+                    desc,
+                )
+            })
+            .collect()
     }
 }
 

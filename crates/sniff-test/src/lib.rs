@@ -12,6 +12,7 @@ extern crate rustc_hir;
 extern crate rustc_interface;
 extern crate rustc_middle;
 extern crate rustc_public;
+extern crate rustc_query_system;
 extern crate rustc_session;
 extern crate rustc_span;
 extern crate rustc_type_ir;
@@ -111,7 +112,11 @@ impl rustc_driver::Callbacks for PrintAllItemsCallbacks {
         _compiler: &rustc_interface::interface::Compiler,
         tcx: TyCtxt<'_>,
     ) -> rustc_driver::Compilation {
-        let res = check_properly_annotated(tcx);
+        let Ok(()) = check_properly_annotated(tcx) else {
+            return rustc_driver::Compilation::Stop;
+        };
+
+        println!("compilation successful!!");
 
         // Note that you should generally allow compilation to continue. If
         // your plugin is being invoked on a dependency, then you need to ensure
@@ -140,8 +145,8 @@ fn sniff_test_analysis(tcx: TyCtxt) -> impl FnOnce() -> anyhow::Result<()> {
         print!("bad {bad:?}");
 
         // 2a. Find entry points
-        let entry_points = reachability::filter_entry_points(tcx, &all_fn_defs);
-        println!("have entry points {entry_points:?}");
+        // let entry_points = reachability::filter_entry_points(tcx, &all_fn_defs);
+        // println!("have entry points {entry_points:?}");
 
         // 2b. Walk from those entry points to ensure proper labels
         // let res = reachability::walk_from_entry_points(tcx, &entry_points, bad).unwrap();

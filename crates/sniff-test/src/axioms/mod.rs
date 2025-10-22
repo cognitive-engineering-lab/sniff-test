@@ -10,9 +10,11 @@ use rustc_middle::{
 };
 use rustc_span::source_map::Spanned;
 
+mod panic;
 mod safety;
 
-pub use safety::{SafetyAxiom, SafetyFinder};
+pub use panic::PanicFinder;
+pub use safety::SafetyFinder;
 
 pub trait Axiom: Display {
     fn known_requirements(&self) -> Option<Vec<crate::annotations::Requirement>> {

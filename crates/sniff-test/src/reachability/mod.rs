@@ -5,5 +5,5 @@ mod err;
 mod walk;
 
 pub use bad::filter_bad_functions;
-pub use entry::filter_entry_points;
-// pub use walk::walk_from_entry_points;
+pub use entry::annotated_local_entry_points;
+pub use walk::{LocalReachable, local_reachable_from};

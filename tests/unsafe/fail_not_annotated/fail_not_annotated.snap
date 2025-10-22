@@ -1,0 +1,23 @@
+---
+source: tests/lib.rs
+---
+exit_code = 101
+stdout = ''
+stderr = '''
+error: function fail_not_annotated[801a]::foo has unsafe axioms, but is not annotated unsafe
+ --> src/main.rs:1:1
+  |
+1 | fn foo(ptr: *const i32) -> i32 {
+  | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  |
+note: raw pointer derefence here
+ --> src/main.rs:2:23
+  |
+2 |     let a = unsafe { *ptr };
+  |                       ^^^
+  = help: this axiom has known requirements:
+              1. the dereferenced pointer must be non-null
+              2. the dereferenced pointer must be aligned
+
+error: could not compile `fail_not_annotated` (bin "fail_not_annotated") due to 1 previous error
+'''

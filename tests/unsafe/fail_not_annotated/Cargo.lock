@@ -3,7 +3,7 @@
 version = 4
 
 [[package]]
-name = "fail_nested"
+name = "fail_not_annotated"
 version = "0.1.0"
 dependencies = [
  "sniff-test-attrs",
