@@ -7,7 +7,7 @@ use std::borrow::Borrow;
 
 mod attr;
 mod err;
-mod parsing;
+pub mod parsing;
 mod types;
 
 pub use err::ParsingError;

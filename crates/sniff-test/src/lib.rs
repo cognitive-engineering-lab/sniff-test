@@ -5,6 +5,7 @@
 #![cfg_attr(test, feature(assert_matches))]
 
 extern crate lazy_static;
+extern crate rustc_ast;
 extern crate rustc_driver;
 extern crate rustc_errors;
 extern crate rustc_hir;
@@ -17,6 +18,7 @@ extern crate rustc_type_ir;
 
 pub mod annotations;
 mod axioms;
+mod check;
 mod reachability;
 pub mod utils;
 
@@ -36,6 +38,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     annotations::{Annotation, Justification, ParsingError, Requirement},
+    check::check_properly_annotated,
     utils::SniffTestDiagnostic,
 };
 
@@ -108,19 +111,7 @@ impl rustc_driver::Callbacks for PrintAllItemsCallbacks {
         _compiler: &rustc_interface::interface::Compiler,
         tcx: TyCtxt<'_>,
     ) -> rustc_driver::Compilation {
-        // let res = rustc_public::rustc_internal::run(tcx, sniff_test_analysis(tcx))
-        //     .expect("rustc public should work please");
-
-        // res.unwrap();
-
-        for local_def_id in tcx.hir_body_owners() {
-            let res = axioms::find_axioms(
-                axioms::SafetyFinder,
-                tcx,
-                tcx.hir_body_owned_by(local_def_id).id(),
-            );
-            println!("res is {res:?}");
-        }
+        let res = check_properly_annotated(tcx);
 
         // Note that you should generally allow compilation to continue. If
         // your plugin is being invoked on a dependency, then you need to ensure
@@ -153,7 +144,7 @@ fn sniff_test_analysis(tcx: TyCtxt) -> impl FnOnce() -> anyhow::Result<()> {
         println!("have entry points {entry_points:?}");
 
         // 2b. Walk from those entry points to ensure proper labels
-        let res = reachability::walk_from_entry_points(tcx, &entry_points, bad).unwrap();
+        // let res = reachability::walk_from_entry_points(tcx, &entry_points, bad).unwrap();
         Ok(())
     }
 }

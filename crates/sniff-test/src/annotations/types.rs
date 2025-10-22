@@ -16,6 +16,26 @@ impl Requirement {
             description: description.borrow().to_string(),
         }
     }
+
+    pub fn name(&self) -> &str {
+        &self.name.0
+    }
+
+    pub fn description(&self) -> &str {
+        &self.description
+    }
+
+    pub fn construct<A: Borrow<str>, B: Borrow<str>>(
+        iter: impl IntoIterator<Item = (A, B)>,
+    ) -> Vec<Self> {
+        Vec::from_iter(iter.into_iter().map(|(name, desc)| {
+            Requirement::new(
+                ConditionName::try_new(name)
+                    .expect("construct should only be called with valid condition names"),
+                desc,
+            )
+        }))
+    }
 }
 
 #[derive(PartialEq, Eq, Debug)]
@@ -39,9 +59,9 @@ pub struct ConditionName(String);
 
 impl ConditionName {
     /// Construct a new condition name, checking all invariants to ensure it is valid.
-    pub fn try_new(name: &str) -> Result<ConditionName, InvalidConditionNameReason> {
+    pub fn try_new<T: Borrow<str>>(name: T) -> Result<ConditionName, InvalidConditionNameReason> {
         // For now, just check that it's a single word with no extra white space.
-        Ok(ConditionName(check_single_word(name)?.to_string()))
+        Ok(ConditionName(check_single_word(name)?))
     }
 }
 
@@ -53,7 +73,8 @@ pub enum InvalidConditionNameReason {
 
 pub const INVALID_WHITESPACE: [char; 3] = [' ', '\n', '\t'];
 
-fn check_single_word(name: &str) -> Result<&str, InvalidConditionNameReason> {
+fn check_single_word<T: Borrow<str>>(name: T) -> Result<String, InvalidConditionNameReason> {
+    let name = name.borrow();
     // Valid requirement names shouldn't contain whitespace.
     if name.contains(INVALID_WHITESPACE) {
         if name
@@ -68,5 +89,5 @@ fn check_single_word(name: &str) -> Result<&str, InvalidConditionNameReason> {
         // contains other words
         return Err(InvalidConditionNameReason::MultipleWords);
     }
-    Ok(name)
+    Ok(name.to_string())
 }

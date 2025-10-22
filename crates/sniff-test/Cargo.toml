@@ -14,3 +14,4 @@ clap = { version = "4.4", features = ["derive"] }
 serde = { version = "1", features = ["derive"] }
 regex = "1.11.2"
 anyhow = "1.0.100"
+itertools = "0.14.0"

@@ -1,3 +1,5 @@
+use std::fmt::Display;
+
 use rustc_hir::{
     BodyId,
     intravisit::{self, Visitor},
@@ -12,7 +14,11 @@ mod safety;
 
 pub use safety::{SafetyAxiom, SafetyFinder};
 
-pub trait Axiom {}
+pub trait Axiom: Display {
+    fn known_requirements(&self) -> Option<Vec<crate::annotations::Requirement>> {
+        None
+    }
+}
 
 pub trait AxiomFinder {
     type Axiom: Axiom;
@@ -55,6 +61,7 @@ impl<'tcx, T: AxiomFinder> Visitor<'tcx> for FinderWrapper<'tcx, T> {
         self.tcx
     }
 
+    #[allow(clippy::semicolon_if_nothing_returned)]
     fn visit_expr(&mut self, ex: &'tcx rustc_hir::Expr<'tcx>) -> Self::Result {
         self.axioms
             .extend(self.finder.from_expr(self.tcx, self.tychck, ex));
