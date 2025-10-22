@@ -13,8 +13,10 @@ extern crate rustc_middle;
 extern crate rustc_public;
 extern crate rustc_session;
 extern crate rustc_span;
+extern crate rustc_type_ir;
 
 pub mod annotations;
+mod axioms;
 mod reachability;
 pub mod utils;
 
@@ -106,8 +108,19 @@ impl rustc_driver::Callbacks for PrintAllItemsCallbacks {
         _compiler: &rustc_interface::interface::Compiler,
         tcx: TyCtxt<'_>,
     ) -> rustc_driver::Compilation {
-        rustc_public::rustc_internal::run(tcx, sniff_test_analysis(tcx))
-            .expect("rustc public should work please");
+        // let res = rustc_public::rustc_internal::run(tcx, sniff_test_analysis(tcx))
+        //     .expect("rustc public should work please");
+
+        // res.unwrap();
+
+        for local_def_id in tcx.hir_body_owners() {
+            let res = axioms::find_axioms(
+                axioms::SafetyFinder,
+                tcx,
+                tcx.hir_body_owned_by(local_def_id).id(),
+            );
+            println!("res is {res:?}");
+        }
 
         // Note that you should generally allow compilation to continue. If
         // your plugin is being invoked on a dependency, then you need to ensure
@@ -127,12 +140,12 @@ fn all_local_fn_defs() -> Box<[FnDef]> {
         .collect::<Box<[_]>>()
 }
 
-fn sniff_test_analysis(tcx: TyCtxt) -> impl FnOnce() {
+fn sniff_test_analysis(tcx: TyCtxt) -> impl FnOnce() -> anyhow::Result<()> {
     move || {
         let all_fn_defs = all_local_fn_defs();
 
         // 1. Find all 'bad' functions. Make sure they line up
-        let bad = reachability::filter_bad_functions(tcx, &all_fn_defs);
+        let bad = reachability::filter_bad_functions(tcx, &all_fn_defs).unwrap();
         print!("bad {bad:?}");
 
         // 2a. Find entry points
@@ -140,7 +153,8 @@ fn sniff_test_analysis(tcx: TyCtxt) -> impl FnOnce() {
         println!("have entry points {entry_points:?}");
 
         // 2b. Walk from those entry points to ensure proper labels
-        let res = reachability::walk_from_entry_points(&entry_points);
+        let res = reachability::walk_from_entry_points(tcx, &entry_points, bad).unwrap();
+        Ok(())
     }
 }
 

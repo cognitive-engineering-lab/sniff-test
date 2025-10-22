@@ -1,6 +1,7 @@
 pub mod attr;
 mod bad;
 mod entry;
+mod err;
 mod walk;
 
 pub use bad::filter_bad_functions;
