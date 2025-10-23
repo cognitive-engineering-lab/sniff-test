@@ -4,7 +4,7 @@ use rustc_span::source_map::{Spanned, respan};
 use std::fmt::Display;
 
 use super::Axiom;
-use crate::axioms::AxiomFinder;
+use crate::axioms::{AxiomFinder, AxiomaticBadness};
 
 pub struct PanicFinder;
 
@@ -13,7 +13,17 @@ pub enum PanicAxiom {
     ExplicitPanic,
 }
 
-impl Axiom for PanicAxiom {}
+impl Axiom for PanicAxiom {
+    fn axiom_kind_name() -> &'static str {
+        "panicking"
+    }
+
+    fn known_requirements(&self) -> Option<AxiomaticBadness> {
+        match self {
+            Self::ExplicitPanic => Some(AxiomaticBadness::Unconditional),
+        }
+    }
+}
 
 impl Display for PanicAxiom {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {

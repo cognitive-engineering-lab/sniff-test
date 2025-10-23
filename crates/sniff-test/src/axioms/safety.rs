@@ -3,13 +3,18 @@ use std::fmt::Display;
 use rustc_ast::UnOp;
 use rustc_hir::ExprKind;
 use rustc_middle::ty::TyCtxt;
-use rustc_query_system::dep_graph::dep_node::DepNodeParams;
 use rustc_span::source_map::{Spanned, respan};
 use rustc_type_ir::TyKind;
 
 use super::Axiom;
-use crate::{annotations, axioms::AxiomFinder};
+use crate::{
+    annotations,
+    axioms::{AxiomFinder, AxiomaticBadness},
+};
 
+/// A finder that looks for axioms that **could cause UB**.
+///
+/// Currently just looks for raw pointer dereferences.
 pub struct SafetyFinder;
 
 #[derive(Debug, Clone)]
@@ -18,12 +23,18 @@ pub enum SafetyAxiom {
 }
 
 impl Axiom for SafetyAxiom {
-    fn known_requirements(&self) -> Option<Vec<annotations::Requirement>> {
+    fn axiom_kind_name() -> &'static str {
+        "unsafe"
+    }
+
+    fn known_requirements(&self) -> Option<AxiomaticBadness> {
         match self {
-            Self::RawPtrDeref => Some(annotations::Requirement::construct([
-                ("ptr-non-null", "the dereferenced pointer must be non-null"),
-                ("ptr-aligned", "the dereferenced pointer must be aligned"),
-            ])),
+            Self::RawPtrDeref => Some(AxiomaticBadness::Conditional(
+                annotations::Requirement::construct([
+                    ("ptr-non-null", "the dereferenced pointer must be non-null"),
+                    ("ptr-aligned", "the dereferenced pointer must be aligned"),
+                ]),
+            )),
         }
     }
 }

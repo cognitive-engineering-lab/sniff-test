@@ -4,47 +4,56 @@
 
 use crate::rustc_middle::mir::visit::Visitor;
 use rustc_hir::def_id::{self as internal, DefId, LocalDefId};
-use rustc_hir::{ExprKind, Node, intravisit};
 use rustc_middle::mir::{ConstOperand, Operand, TerminatorKind};
 use rustc_middle::ty::{TyCtxt, TyKind};
-use rustc_public::ty::FnDef;
 use rustc_span::Span;
-use rustc_span::sym::c;
-use std::collections::{HashMap, HashSet};
-
-use crate::{annotations::Requirement, reachability::err::ConsistencyError};
+use std::collections::{HashMap, HashSet, VecDeque};
 
 #[derive(Debug, Clone)]
-pub struct LocalReachable {
+pub struct LocallyReachable {
+    /// The item that can be reached.
     pub reach: LocalDefId,
-    pub from: Vec<(LocalDefId, Span)>,
+    /// The path of calls between items through which you can reach this item.
+    pub through: Vec<(LocalDefId, Span)>,
+    /// The functions (not necessarily local) that this one calls to.
+    pub calls_to: HashMap<DefId, Vec<Span>>,
 }
 
-impl LocalReachable {
-    fn goes_to(&self, def_id: LocalDefId, span: Span) -> Self {
-        LocalReachable {
+impl LocallyReachable {
+    /// Say that this locally reachable item can go to another `def_id` through a call at a given `span`.
+    fn extended_to(&self, def_id: LocalDefId, span: Span) -> Self {
+        LocallyReachable {
             reach: def_id,
-            from: self
-                .from
+            through: self
+                .through
                 .iter()
                 .cloned()
                 .chain(std::iter::once((self.reach, span)))
                 .collect(),
+            calls_to: HashMap::new(),
         }
+    }
+
+    fn calls_to(&mut self, def_id: &DefId, span: Span) {
+        self.calls_to.entry(*def_id).or_default().push(span);
     }
 }
 
-pub fn local_reachable_from(
+/// Get an iterator over all locally reachable function definitions from the given `entry_points`.
+pub fn locally_reachable_from(
     tcx: TyCtxt,
     entry_points: impl IntoIterator<Item = LocalDefId>,
-) -> impl Iterator<Item = LocalReachable> {
+) -> impl Iterator<Item = LocallyReachable> {
     CallGraphVisitor::new(tcx, entry_points.into_iter()).all_local_reachable()
 }
 
 struct CallGraphVisitor<'tcx> {
     tcx: TyCtxt<'tcx>,
-    to_visit: Vec<LocalReachable>,
-    reachable: HashMap<LocalDefId, LocalReachable>,
+    /// Queue of reachable items we want to visit.
+    ///
+    /// This lets us to BFS to get the shortest path to each item.
+    to_visit: VecDeque<LocallyReachable>,
+    reachable: HashMap<LocalDefId, LocallyReachable>,
 }
 
 impl<'tcx> CallGraphVisitor<'tcx> {
@@ -52,21 +61,21 @@ impl<'tcx> CallGraphVisitor<'tcx> {
         Self {
             tcx,
             to_visit: entry_points
-                .map(|reach| LocalReachable {
+                .map(|reach| LocallyReachable {
                     reach,
-                    from: Vec::new(),
+                    through: Vec::new(),
+                    calls_to: HashMap::new(),
                 })
                 .collect(),
             reachable: HashMap::new(),
         }
     }
 
-    fn all_local_reachable(mut self) -> impl Iterator<Item = LocalReachable> {
-        while let Some(d) = self.to_visit.pop() {
+    fn all_local_reachable(mut self) -> impl Iterator<Item = LocallyReachable> {
+        while let Some(mut d) = self.to_visit.pop_front() {
             if !self.reachable.contains_key(&d.reach) {
                 let body = self.tcx.optimized_mir(d.reach);
-                println!("[!] visit body {:?}", d.reach);
-                let mut visitor = BodyVisitor(self.tcx, &mut self.to_visit, &d);
+                let mut visitor = BodyVisitor(self.tcx, &mut self.to_visit, &mut d);
                 visitor.visit_body(body);
                 self.reachable.insert(d.reach, d);
             }
@@ -77,8 +86,8 @@ impl<'tcx> CallGraphVisitor<'tcx> {
 
 struct BodyVisitor<'tcx, 'm>(
     TyCtxt<'tcx>,
-    &'m mut Vec<LocalReachable>,
-    &'m LocalReachable,
+    &'m mut VecDeque<LocallyReachable>,
+    &'m mut LocallyReachable,
 );
 
 impl<'tcx> rustc_middle::mir::visit::Visitor<'tcx> for BodyVisitor<'tcx, '_> {
@@ -87,7 +96,6 @@ impl<'tcx> rustc_middle::mir::visit::Visitor<'tcx> for BodyVisitor<'tcx, '_> {
         terminator: &rustc_middle::mir::Terminator<'tcx>,
         location: rustc_middle::mir::Location,
     ) {
-        println!("terminator {:?}", terminator);
         if let TerminatorKind::Call {
             func,
             call_source,
@@ -97,12 +105,11 @@ impl<'tcx> rustc_middle::mir::visit::Visitor<'tcx> for BodyVisitor<'tcx, '_> {
         {
             if let Operand::Constant(box co) = func {
                 if let TyKind::FnDef(def_id, _substs) = co.const_.ty().kind() {
-                    println!("call to {def_id:?}");
-
+                    self.2.calls_to(def_id, terminator.source_info.span);
                     if let Some(local_def) = def_id.as_local() {
-                        println!("and it's local!");
+                        // Doing BFS here to ensure we get the shortest path possible to all reachable items.
                         self.1
-                            .push(self.2.goes_to(local_def, terminator.source_info.span));
+                            .push_back(self.2.extended_to(local_def, terminator.source_info.span));
                     }
                 }
             }
@@ -111,58 +118,3 @@ impl<'tcx> rustc_middle::mir::visit::Visitor<'tcx> for BodyVisitor<'tcx, '_> {
         self.super_terminator(terminator, location);
     }
 }
-
-// pub fn walk_from_entry_points(
-//     tcx: TyCtxt,
-//     entry_points: &[FnDef],
-//     requirements: HashMap<FnDef, Vec<Requirement>>,
-// ) -> Result<(), ConsistencyError> {
-//     let entry_point_defs = entry_points
-//         .iter()
-//         .map(|fn_def| rustc_public::rustc_internal::internal(tcx, fn_def.0))
-//         .collect::<Vec<_>>();
-
-//     CallGraphVisitor::new(tcx, requirements).visit_from_entrypoints(&entry_point_defs)
-// }
-
-// struct CallGraphVisitor<'tcx> {
-//     tcx: TyCtxt<'tcx>,
-//     requirements: HashMap<FnDef, Vec<Requirement>>,
-// }
-
-// type CallGraphResult = ();
-// impl<'tcx> CallGraphVisitor<'tcx> {
-//     pub fn new(tcx: TyCtxt<'tcx>, requirements: HashMap<FnDef, Vec<Requirement>>) -> Self {
-//         Self { tcx, requirements }
-//     }
-
-//     pub fn visit_from_entrypoints(
-//         mut self,
-//         entry_points: &[internal::DefId],
-//     ) -> Result<CallGraphResult, ConsistencyError> {
-//         let to_visit = self
-//             .tcx
-//             .hir_crate_items(())
-//             .definitions()
-//             .filter(|a| entry_points.contains(&a.to_def_id()))
-//             .collect::<Vec<_>>();
-
-//         for i in self.tcx.hir_crate_items(()).free_items() {
-//             if entry_points.contains(&i.owner_id.to_def_id()) {
-//                 println!("going to i {i:?}");
-//             }
-//         }
-
-//         Ok(())
-//     }
-// }
-
-// impl<'tcx> rustc_hir::intravisit::Visitor<'tcx> for CallGraphVisitor<'tcx> {
-//     type NestedFilter = rustc_middle::hir::nested_filter::OnlyBodies;
-
-//     fn maybe_tcx(&mut self) -> Self::MaybeTyCtxt {
-//         self.tcx
-//     }
-
-//     fn visit_expr(&mut self, ex: &'tcx rustc_hir::Expr<'tcx>) -> Self::Result {}
-// }
