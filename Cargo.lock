@@ -469,6 +469,7 @@ dependencies = [
  "rustc_plugin",
  "rustc_utils",
  "serde",
+ "sniff-test-attrs",
 ]
 
 [[package]]
