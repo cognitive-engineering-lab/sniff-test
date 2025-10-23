@@ -6,8 +6,8 @@ use crate::utils::SniffTestDiagnostic;
 use rustc_errors::{Diag, DiagCtxtHandle};
 use rustc_hir::Attribute;
 use rustc_middle::ty::TyCtxt;
-use rustc_span::Span;
 use rustc_span::def_id::DefId;
+use rustc_span::{DUMMY_SP, Span};
 use std::ops::Range;
 
 #[derive(PartialEq, Eq, Debug)]
@@ -59,7 +59,9 @@ impl ParsingIssue {
         ParsingError {
             issue: self,
             loc_name: format!("function definition {}", tcx.def_path_debug_str(def_id)),
-            span: tcx.hir_span(tcx.local_def_id_to_hir_id(def_id.expect_local())),
+            span: def_id.as_local().map_or(DUMMY_SP, |local| {
+                tcx.hir_span(tcx.local_def_id_to_hir_id(local))
+            }),
             doc_comments: def_id.get_attrs(tcx),
         }
     }
@@ -268,7 +270,7 @@ impl ParsingError<'_> {
 
 // Utilities for converting character ranges of a doc string into spans that can be
 // used to reference specific source code when displaying error messages.
-mod span {
+pub mod span {
     use rustc_hir::Attribute;
     use rustc_span::BytePos;
     use rustc_span::Span;

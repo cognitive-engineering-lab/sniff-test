@@ -5,15 +5,32 @@ use crate::reachability::LocallyReachable;
 use std::collections::HashMap;
 
 use crate::utils::MultiEmittable;
-use rustc_hir::def_id::DefId;
+use rustc_hir::def_id::{DefId, DefPathHash};
 use rustc_middle::ty::TyCtxt;
 use rustc_public::mir::Safety;
 use rustc_public::ty::FnDef;
+use rustc_span::source_map::Spanned;
 use rustc_span::{ErrorGuaranteed, Span};
+
+// TODO: use this shit instead in all the parsing
+enum Annotations {
+    General,
+    SpecificConditions(Vec<Requirement>),
+}
+
+type BadMap = HashMap<DefPathHash, Vec<Requirement>>;
+
+fn build_bad_map(tcx: TyCtxt) -> Result<BadMap, ParsingError> {
+    // for a in tcx.hir_crate_items(()).definitions() {
+
+    // }
+
+    todo!()
+}
 
 pub struct CallsToBad {
     pub def_id: DefId,
-    pub requirements: Vec<annotations::Requirement>,
+    pub requirements: Vec<Spanned<annotations::Requirement>>,
     pub from_spans: Vec<Span>,
 }
 
@@ -38,18 +55,19 @@ fn is_call_bad<'tcx>(
 pub fn find_bad_calls<'tcx>(
     tcx: TyCtxt<'tcx>,
     locally_reachable: &LocallyReachable,
-) -> Result<Vec<CallsToBad>, ParsingError<'tcx>> {
+) -> Result<impl Iterator<Item = CallsToBad>, ParsingError<'tcx>> {
     locally_reachable
         .calls_to
         .iter()
         .filter_map(is_call_bad(tcx))
         .collect::<Result<Vec<_>, ParsingError>>()
+        .map(std::iter::IntoIterator::into_iter)
 }
 
 pub fn filter_bad_functions(
     tcx: TyCtxt,
     items: &[FnDef],
-) -> Result<HashMap<FnDef, Vec<Requirement>>, ErrorGuaranteed> {
+) -> Result<HashMap<FnDef, Vec<Spanned<Requirement>>>, ErrorGuaranteed> {
     let annotated_bad = items
         .iter()
         .filter_map(|item| {

@@ -1,14 +1,17 @@
 use itertools::Itertools;
 use rustc_errors::{Diag, DiagCtxtHandle};
+use rustc_hir::def_id::{DefId, LocalDefId};
 use rustc_middle::ty::TyCtxt;
-use rustc_span::{ErrorGuaranteed, source_map::Spanned};
+use rustc_span::{ErrorGuaranteed, source_map::Spanned, sym::todo_macro};
 
 use crate::{
-    annotations::{self, Annotation},
+    annotations::{self, Annotation, ParsingError, Requirement},
     axioms::{self, Axiom, AxiomFinder, AxiomaticBadness},
     reachability::{self, CallsToBad, LocallyReachable},
     utils::SniffTestDiagnostic,
 };
+
+mod expr;
 
 /// Checks that all local functions in the crate are properly annotated.
 pub fn check_properly_annotated(tcx: TyCtxt) -> Result<(), ErrorGuaranteed> {
@@ -26,13 +29,27 @@ pub fn check_properly_annotated(tcx: TyCtxt) -> Result<(), ErrorGuaranteed> {
     for reachable in reachable.iter().cloned() {
         let axioms = axioms::find_axioms(axioms::SafetyFinder, tcx, &reachable);
 
-        let bad_calls = reachability::find_bad_calls(tcx, &reachable)
-            .map_err(|parsing_error| parsing_error.diag(tcx.dcx()).emit())?;
+        // Parse the requirements
+        let my_requirements = annotations::Requirement::try_parse(tcx, reachable.reach.to_def_id());
+        // let find_requirements = |def_id| annotations::Requirement::parse(tcx, def_id);
+        // let find_justifications = |def_id| annotations::Justification::parse(tcx, def_id);
 
-        let annotations = annotations::Requirement::try_parse(tcx, reachable.reach.to_def_id());
+        let bad_calls = reachability::find_bad_calls(tcx, &reachable)
+            .map_err(|parsing_error| parsing_error.diag(tcx.dcx()).emit())?
+            // Take only the unjustified call sites
+            .map(only_unjustified_callsites(tcx, reachable.reach))
+            // Filter out everything that no longer has call sites
+            .filter(|calls| {
+                !calls
+                    .as_ref()
+                    .is_ok_and(|calls| calls.from_spans.is_empty())
+            })
+            .collect::<Result<Vec<_>, ErrorGuaranteed>>()?;
+
+        // let justifications = annotations::Justification::try_parse(tcx, todo!());
 
         // For now, just check that all functions with axioms have some annotations.
-        if annotations.is_none() && (!axioms.is_empty() || !bad_calls.is_empty()) {
+        if my_requirements.is_none() && (!axioms.is_empty() || !bad_calls.is_empty()) {
             res = Err(needs_annotation(
                 tcx.dcx(),
                 tcx,
@@ -43,6 +60,31 @@ pub fn check_properly_annotated(tcx: TyCtxt) -> Result<(), ErrorGuaranteed> {
     }
 
     res
+}
+
+fn only_unjustified_callsites(
+    tcx: TyCtxt,
+    in_fn: LocalDefId,
+) -> impl Fn(CallsToBad) -> Result<CallsToBad, ErrorGuaranteed> {
+    move |mut calls| {
+        let mut new_spans = Vec::new();
+        let requirements =
+            annotations::Requirement::parse(tcx, calls.def_id).map_err(|e| e.emit(tcx.dcx()))?;
+
+        for call_span in calls.from_spans {
+            let expr = expr::find_expr_for_call(tcx, calls.def_id, in_fn, call_span);
+            let justs = annotations::Justification::try_parse(tcx, expr);
+            println!("justs are {justs:?}");
+            match justs {
+                Some(Err(e)) => return Err(e.emit(tcx.dcx())),
+                Some(Ok(justs)) => annotations::check::check_consistency(&justs, &requirements)
+                    .map_err(|e| e.diag(tcx.dcx()).emit())?,
+                None => new_spans.push(call_span),
+            }
+        }
+        calls.from_spans = new_spans;
+        Ok(calls)
+    }
 }
 
 struct FunctionIssues<A: Axiom>(Vec<Spanned<A>>, Vec<CallsToBad>);
@@ -83,16 +125,13 @@ fn needs_annotation<A: Axiom>(
 }
 
 fn diag_handle_bad_call<'d>(mut diag: Diag<'d>, tcx: TyCtxt, bad_call: CallsToBad) -> Diag<'d> {
-    let (num, s) = if bad_call.from_spans.len() > 1 {
-        (format!("{} ", bad_call.from_spans.len()), "s")
-    } else {
-        (String::new(), "")
-    };
+    // let times = if bad_call.from_spans.len() > 1 {
+    //     format!("{} times ", bad_call.from_spans.len())
+    // } else {
+    //     String::new()
+    // };
     let call_to = tcx.def_path_str(bad_call.def_id);
-    diag = diag.with_span_note(
-        bad_call.from_spans,
-        format!("{num}call{s} to {call_to} here"),
-    );
+    diag = diag.with_span_note(bad_call.from_spans, format!("{call_to} is called here"));
 
     diag
 }
@@ -170,7 +209,7 @@ mod summary {
             x if x > 1 => "s",
             _ => return None,
         };
-        Some(format!("{count} call{s} to {kind} functions"))
+        Some(format!("{count} unjustified call{s} to {kind} functions"))
     }
 
     fn axiom_summary<A: Axiom>(axioms: &[Spanned<A>]) -> Option<String> {
@@ -181,6 +220,6 @@ mod summary {
             x if x > 1 => "s",
             _ => return None,
         };
-        Some(format!("{count} {kind} axiom{s}"))
+        Some(format!("{count} unjustified {kind} axiom{s}"))
     }
 }

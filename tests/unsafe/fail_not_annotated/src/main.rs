@@ -1,21 +1,17 @@
 /// # Unsafe
-/// - css: css
+/// - non-null: ptr is non-null
+/// - aligned: ptr is aligned for a i32
 fn foo(ptr: *const i32) -> i32 {
     let a = unsafe { *ptr };
     // std::mem::drop(ptr);
     a + 2
 }
 
-/// # Unsafe
-/// - css: css
-fn foo2(ptr: *const i32) -> i32 {
-    let a = unsafe { *ptr };
-    a + 2
-}
-
 fn bar(ptr: *const i32) -> i32 {
-    let a = foo(ptr);
-    foo2(ptr) + unsafe { *ptr } + foo(ptr) + a
+    /// SAFETY:
+    /// - non-null: i have checked this is non-null
+    /// - aligned: i have also checked it is aligned
+    foo(ptr)
 }
 
 #[sniff_test_attrs::check_unsafe]

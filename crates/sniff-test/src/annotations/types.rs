@@ -2,7 +2,9 @@
 
 use std::borrow::Borrow;
 
-#[derive(PartialEq, Eq, Debug)]
+use serde::{Deserialize, Serialize};
+
+#[derive(PartialEq, Eq, Debug, Serialize, Deserialize)]
 /// A condition that must hold such that a given function call will not cause UB.
 pub struct Requirement {
     name: ConditionName,
@@ -17,8 +19,8 @@ impl Requirement {
         }
     }
 
-    pub fn name(&self) -> &str {
-        &self.name.0
+    pub fn name(&self) -> &ConditionName {
+        &self.name
     }
 
     pub fn description(&self) -> &str {
@@ -54,9 +56,17 @@ impl Justification {
             explanation: explanation.borrow().to_string(),
         }
     }
+
+    pub fn name(&self) -> &ConditionName {
+        &self.name
+    }
+
+    pub fn description(&self) -> &str {
+        &self.explanation
+    }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ConditionName(String);
 
 impl ConditionName {
@@ -64,6 +74,10 @@ impl ConditionName {
     pub fn try_new<T: Borrow<str>>(name: T) -> Result<ConditionName, InvalidConditionNameReason> {
         // For now, just check that it's a single word with no extra white space.
         Ok(ConditionName(check_single_word(name)?))
+    }
+
+    pub fn as_str(&self) -> &str {
+        &self.0
     }
 }
 

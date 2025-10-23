@@ -3,9 +3,11 @@
 use crate::annotations::{attr::Attributeable, err::ParsingIssue};
 use parsing::ParseBulletsFromString;
 use rustc_middle::ty::TyCtxt;
+use rustc_span::source_map::{Spanned, respan};
 use std::borrow::Borrow;
 
 mod attr;
+pub mod check;
 mod err;
 pub mod parsing;
 mod types;
@@ -27,14 +29,28 @@ pub trait Annotation<'a>: ParseBulletsFromString {
 
     /// Parse the given [`Input`](Annotation::Input).
     #[allow(clippy::missing_errors_doc)]
-    fn parse(tcx: TyCtxt, input: impl Borrow<Self::Input>) -> Result<Vec<Self>, ParsingError> {
+    fn parse(
+        tcx: TyCtxt,
+        input: impl Borrow<Self::Input>,
+    ) -> Result<Vec<Spanned<Self>>, ParsingError> {
         let input: &Self::Input = input.borrow();
+        let attrs = input.get_attrs(tcx);
         let doc_str: Result<String, ParsingIssue> =
             input.get_doc_str(tcx).ok_or(ParsingIssue::NoDocString);
 
-        doc_str
+        println!("doc string is {doc_str:?}");
+
+        Ok(doc_str
             .and_then(|doc_str| Self::parse_bullets_from_string(&doc_str))
-            .map_err(input.convert_err(tcx))
+            .map_err(input.convert_err(tcx))?
+            .into_iter()
+            .map(|(req, range)| {
+                respan(
+                    *err::span::span_some_comments(attrs, range).first().unwrap(),
+                    req,
+                )
+            })
+            .collect())
     }
 
     /// Try to parse the given [`Input`](Annotation::Input), returning `None` if
@@ -42,7 +58,7 @@ pub trait Annotation<'a>: ParseBulletsFromString {
     fn try_parse(
         tcx: TyCtxt,
         input: impl Borrow<Self::Input>,
-    ) -> Option<Result<Vec<Self>, ParsingError>> {
+    ) -> Option<Result<Vec<Spanned<Self>>, ParsingError>> {
         let res = Self::parse(tcx, input);
 
         // If the error is recoverable, just return none instead.
