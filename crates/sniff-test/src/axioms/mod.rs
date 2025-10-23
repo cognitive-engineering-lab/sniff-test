@@ -1,10 +1,7 @@
 //! A module for detecting axiomatic program patterns
 
 use crate::{annotations, reachability::LocallyReachable};
-use rustc_hir::{
-    BodyId,
-    intravisit::{self, Visitor},
-};
+use rustc_hir::intravisit::{self, Visitor};
 use rustc_middle::{
     hir::nested_filter,
     ty::{TyCtxt, TypeckResults},
@@ -15,7 +12,6 @@ use std::fmt::Display;
 mod panic;
 mod safety;
 
-pub use panic::PanicFinder;
 pub use safety::SafetyFinder;
 
 pub enum AxiomaticBadness {
@@ -36,7 +32,7 @@ pub trait Axiom: Display {
 pub trait AxiomFinder {
     type Axiom: Axiom;
 
-    fn from_expr(
+    fn find_in_expr(
         &mut self,
         tcx: TyCtxt,
         tyck: &TypeckResults,
@@ -82,7 +78,7 @@ impl<'tcx, T: AxiomFinder> Visitor<'tcx> for FinderWrapper<'tcx, T> {
     #[allow(clippy::semicolon_if_nothing_returned)]
     fn visit_expr(&mut self, ex: &'tcx rustc_hir::Expr<'tcx>) -> Self::Result {
         self.axioms
-            .extend(self.finder.from_expr(self.tcx, self.tychck, ex));
+            .extend(self.finder.find_in_expr(self.tcx, self.tychck, ex));
 
         intravisit::walk_expr(self, ex)
     }

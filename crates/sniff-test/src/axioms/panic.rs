@@ -36,7 +36,7 @@ impl Display for PanicAxiom {
 impl AxiomFinder for PanicFinder {
     type Axiom = PanicAxiom;
 
-    fn from_expr(
+    fn find_in_expr(
         &mut self,
         tcx: TyCtxt,
         tyck: &rustc_middle::ty::TypeckResults,

@@ -21,8 +21,8 @@ pub trait MultiEmittable {
     fn emit_all_errors(self, tcx: TyCtxt) -> Self::Emitted;
 }
 
-impl<K: Eq + Hash + Debug, V: Debug, E: SniffTestDiagnostic> MultiEmittable
-    for HashMap<K, Result<V, E>>
+impl<K: Eq + Hash + Debug, V: Debug, E: SniffTestDiagnostic, S: ::std::hash::BuildHasher>
+    MultiEmittable for HashMap<K, Result<V, E>, S>
 {
     type Emitted = Result<HashMap<K, V>, ErrorGuaranteed>;
     fn emit_all_errors(self, tcx: TyCtxt) -> Self::Emitted {

@@ -50,7 +50,7 @@ impl Display for SafetyAxiom {
 impl AxiomFinder for SafetyFinder {
     type Axiom = SafetyAxiom;
 
-    fn from_expr(
+    fn find_in_expr(
         &mut self,
         _tcx: TyCtxt,
         tyck: &rustc_middle::ty::TypeckResults,

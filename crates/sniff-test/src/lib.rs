@@ -3,6 +3,14 @@
 #![feature(rustc_private)]
 #![feature(box_patterns)]
 #![cfg_attr(test, feature(assert_matches))]
+#![deny(warnings)]
+#![warn(clippy::pedantic)]
+#![allow(
+    unused,
+    clippy::must_use_candidate,
+    clippy::missing_panics_doc, // TODO: should remove this, kinda ironic for us to be using it...
+    clippy::missing_errors_doc
+)]
 
 extern crate lazy_static;
 extern crate rustc_ast;
@@ -23,25 +31,14 @@ mod check;
 mod reachability;
 pub mod utils;
 
-use std::{borrow::Cow, collections::HashMap, env, process::Command};
+use std::{borrow::Cow, env, process::Command};
 
 use clap::Parser;
-use rustc_hir::{
-    ExprKind, HirId, Item, Node,
-    def_id::DefId,
-    intravisit::{self, Visitor},
-};
 use rustc_middle::ty::TyCtxt;
 use rustc_plugin::{CrateFilter, RustcPlugin, RustcPluginArgs, Utf8Path};
-use rustc_public::ty::FnDef;
-use rustc_span::ErrorGuaranteed;
 use serde::{Deserialize, Serialize};
 
-use crate::{
-    annotations::{Annotation, Justification, ParsingError, Requirement},
-    check::check_properly_annotated,
-    utils::SniffTestDiagnostic,
-};
+use crate::check::check_properly_annotated;
 
 // This struct is the plugin provided to the rustc_plugin framework,
 // and it must be exported for use by the CLI/driver binaries.

@@ -1,8 +1,6 @@
-use std::collections::HashSet;
 
 use rustc_hir::def_id::{DefId, LocalDefId};
 use rustc_middle::ty::TyCtxt;
-use rustc_public::ty::FnDef;
 
 use crate::reachability::attr::{self, SniffToolAttr};
 
@@ -17,7 +15,6 @@ use crate::reachability::attr::{self, SniffToolAttr};
 pub fn annotated_local_entry_points(tcx: TyCtxt) -> impl Iterator<Item = LocalDefId> {
     tcx.hir_body_owners()
         .filter(move |item| is_entry_point(tcx, item.to_def_id()))
-        .map(|item| item)
 }
 
 fn is_entry_point(tcx: TyCtxt, item: DefId) -> bool {

@@ -1,6 +1,5 @@
 use itertools::Itertools;
 use rustc_errors::{Diag, DiagCtxtHandle};
-use rustc_hir::def_id::DefId;
 use rustc_middle::ty::TyCtxt;
 use rustc_span::{ErrorGuaranteed, source_map::Spanned};
 
@@ -21,7 +20,7 @@ pub fn check_properly_annotated(tcx: TyCtxt) -> Result<(), ErrorGuaranteed> {
 
     let reachable = reachability::locally_reachable_from(tcx, entry).collect::<Vec<_>>();
 
-    println!("reachable is {:?}", reachable);
+    println!("reachable is {reachable:?}");
 
     // For all reachable local function definitions, ensure their axioms align with their annotations.
     for reachable in reachable.iter().cloned() {
@@ -37,7 +36,7 @@ pub fn check_properly_annotated(tcx: TyCtxt) -> Result<(), ErrorGuaranteed> {
             res = Err(needs_annotation(
                 tcx.dcx(),
                 tcx,
-                reachable,
+                &reachable,
                 FunctionIssues(axioms, bad_calls),
             ));
         }
@@ -48,21 +47,21 @@ pub fn check_properly_annotated(tcx: TyCtxt) -> Result<(), ErrorGuaranteed> {
 
 struct FunctionIssues<A: Axiom>(Vec<Spanned<A>>, Vec<CallsToBad>);
 
-pub fn check_function<F: AxiomFinder>(
-    tcx: TyCtxt,
-    fn_def: LocallyReachable,
-) -> Result<(), FunctionIssues<F::Axiom>> {
-    // Check that this function:
-    //   a) contains no axiomatic bad things.
-    //   b) contains no calls to bad functions.
+// pub fn check_function<F: AxiomFinder>(
+//     tcx: TyCtxt,
+//     fn_def: LocallyReachable,
+// ) -> Result<(), FunctionIssues<F::Axiom>> {
+//     // Check that this function:
+//     //   a) contains no axiomatic bad things.
+//     //   b) contains no calls to bad functions.
 
-    todo!()
-}
+//     todo!()
+// }
 
 fn needs_annotation<A: Axiom>(
     dcx: DiagCtxtHandle,
     tcx: TyCtxt,
-    reachable: LocallyReachable,
+    reachable: &LocallyReachable,
     bc_of_isses: FunctionIssues<A>,
 ) -> ErrorGuaranteed {
     let def_span = tcx.def_span(reachable.reach);
@@ -87,7 +86,7 @@ fn diag_handle_bad_call<'d>(mut diag: Diag<'d>, tcx: TyCtxt, bad_call: CallsToBa
     let (num, s) = if bad_call.from_spans.len() > 1 {
         (format!("{} ", bad_call.from_spans.len()), "s")
     } else {
-        ("".to_string(), "")
+        (String::new(), "")
     };
     let call_to = tcx.def_path_str(bad_call.def_id);
     diag = diag.with_span_note(
@@ -98,6 +97,7 @@ fn diag_handle_bad_call<'d>(mut diag: Diag<'d>, tcx: TyCtxt, bad_call: CallsToBa
     diag
 }
 
+#[allow(clippy::needless_pass_by_value)]
 fn diag_handle_axiom<A: Axiom>(mut diag: Diag<'_>, axiom: Spanned<A>) -> Diag<'_> {
     diag = diag.with_span_note(axiom.span, format!("{} here", axiom.node));
     match axiom.node.known_requirements() {
@@ -123,7 +123,7 @@ fn diag_handle_axiom<A: Axiom>(mut diag: Diag<'_>, axiom: Spanned<A>) -> Diag<'_
     diag
 }
 
-fn reachability_str(fn_name: &str, tcx: TyCtxt, reachable: LocallyReachable) -> String {
+fn reachability_str(fn_name: &str, tcx: TyCtxt, reachable: &LocallyReachable) -> String {
     let reachability_str = reachable
         .through
         .iter()

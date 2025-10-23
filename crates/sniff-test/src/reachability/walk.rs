@@ -3,11 +3,11 @@
 //!
 
 use crate::rustc_middle::mir::visit::Visitor;
-use rustc_hir::def_id::{self as internal, DefId, LocalDefId};
-use rustc_middle::mir::{ConstOperand, Operand, TerminatorKind};
+use rustc_hir::def_id::{DefId, LocalDefId};
+use rustc_middle::mir::{Operand, TerminatorKind};
 use rustc_middle::ty::{TyCtxt, TyKind};
 use rustc_span::Span;
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::collections::{HashMap, VecDeque};
 
 #[derive(Debug, Clone)]
 pub struct LocallyReachable {
@@ -27,15 +27,15 @@ impl LocallyReachable {
             through: self
                 .through
                 .iter()
-                .cloned()
+                .copied()
                 .chain(std::iter::once((self.reach, span)))
                 .collect(),
             calls_to: HashMap::new(),
         }
     }
 
-    fn calls_to(&mut self, def_id: &DefId, span: Span) {
-        self.calls_to.entry(*def_id).or_default().push(span);
+    fn calls_to(&mut self, def_id: DefId, span: Span) {
+        self.calls_to.entry(def_id).or_default().push(span);
     }
 }
 
@@ -96,22 +96,15 @@ impl<'tcx> rustc_middle::mir::visit::Visitor<'tcx> for BodyVisitor<'tcx, '_> {
         terminator: &rustc_middle::mir::Terminator<'tcx>,
         location: rustc_middle::mir::Location,
     ) {
-        if let TerminatorKind::Call {
-            func,
-            call_source,
-            fn_span,
-            ..
-        } = &terminator.kind
+        if let TerminatorKind::Call { func, .. } = &terminator.kind
+            && let Operand::Constant(box co) = func
+            && let TyKind::FnDef(def_id, _substs) = co.const_.ty().kind()
         {
-            if let Operand::Constant(box co) = func {
-                if let TyKind::FnDef(def_id, _substs) = co.const_.ty().kind() {
-                    self.2.calls_to(def_id, terminator.source_info.span);
-                    if let Some(local_def) = def_id.as_local() {
-                        // Doing BFS here to ensure we get the shortest path possible to all reachable items.
-                        self.1
-                            .push_back(self.2.extended_to(local_def, terminator.source_info.span));
-                    }
-                }
+            self.2.calls_to(*def_id, terminator.source_info.span);
+            if let Some(local_def) = def_id.as_local() {
+                // Doing BFS here to ensure we get the shortest path possible to all reachable items.
+                self.1
+                    .push_back(self.2.extended_to(local_def, terminator.source_info.span));
             }
         }
 

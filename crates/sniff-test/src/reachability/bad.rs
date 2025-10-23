@@ -30,7 +30,7 @@ fn is_call_bad<'tcx>(
         Some(Ok(CallsToBad {
             def_id: *to_def_id,
             requirements,
-            from_spans: from_spans.to_vec(),
+            from_spans: from_spans.clone(),
         }))
     }
 }
