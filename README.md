@@ -9,7 +9,7 @@ cargo build # in this directory
 
 cd [PATH_TO_TEST_CRATE]
 
-cargo clean && RUSTFLAGS="-Zcrate-attr=feature(register_tool) -Zcrate-attr=register_tool(sniff_tool)" [PATH_TO_REPO]/sniff-test/target/debug/cargo-sniff-test
+cargo clean && [PATH_TO_REPO]/sniff-test/target/debug/cargo-sniff-test
 ```
 
 We need the extra `RUSTFLAGS` to register our `sniff_tool` tool to allow for our custom attributes.

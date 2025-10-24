@@ -78,6 +78,10 @@ impl RustcPlugin for PrintAllItemsPlugin {
     // Pass Cargo arguments (like --feature) from the top-level CLI to Cargo.
     fn modify_cargo(&self, cargo: &mut Command, args: &Self::Args) {
         cargo.args(&args.cargo_args);
+
+        // Register the sniff_tool
+        let existing = std::env::var("RUSTFLAGS").unwrap_or_default();
+        cargo.env("RUSTFLAGS", format!("-Zcrate-attr=feature(register_tool) -Zcrate-attr=register_tool(sniff_tool) -Aunused-doc-comments {existing}"));
     }
 
     // In the driver, we use the Rustc API to start a compiler session

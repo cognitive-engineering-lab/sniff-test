@@ -214,11 +214,6 @@ fn cargo_sniff(path: &Path) -> anyhow::Result<SniffTestOutput> {
 
     println!("path is {:?}", CARGO_SNIFF_TEST_PATH.clone().into_string());
     let mut cmd = Command::new(&*CARGO_SNIFF_TEST_PATH);
-    // register the sniff_tool tool
-    cmd.env(
-        "RUSTFLAGS",
-        "-Zcrate-attr=feature(register_tool) -Zcrate-attr=register_tool(sniff_tool)",
-    );
     cmd.env("CARGO_TERM_COLOR", "never");
     cmd.current_dir(path);
 
