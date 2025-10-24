@@ -9,6 +9,9 @@ path = "lib.rs"
 [dependencies]
 anyhow = "1.0.100"
 insta = {version = "1.43.2", features = ["toml", "filters"]}
+rustc_plugin = "=0.14.0-nightly-2025-08-20"
+sniff-test ={ path = "../crates/sniff-test"}
 lazy_static = "1.5.0"
 serde = "1.0.228"
 walkdir = "2.5.0"
+serde_json = "1.0.145"

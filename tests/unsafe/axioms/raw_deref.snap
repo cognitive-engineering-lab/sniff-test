@@ -1,0 +1,25 @@
+---
+source: tests/lib.rs
+---
+exit_code = 1
+stdout = ''
+stderr = '''
+error: function foo directly contains 1 unjustified unsafe axiom, but is not annotated unsafe
+ --> /Users/alexanderportland/Desktop/research/sniff-test/tests/unsafe/axioms/raw_deref.rs:3:1
+  |
+3 | fn foo(ptr: *const i32) -> i32 {
+  | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  |
+  = note: reachable from [main (/Users/alexanderportland/Desktop/research/sniff-test/tests/unsafe/axioms/raw_deref.rs:10:5) -> *foo*]
+note: raw pointer derefence here
+ --> /Users/alexanderportland/Desktop/research/sniff-test/tests/unsafe/axioms/raw_deref.rs:4:15
+  |
+4 |     unsafe { *ptr }
+  |               ^^^
+  = help: this axiom has known requirements:
+              1. the dereferenced pointer must be non-null
+              2. the dereferenced pointer must be aligned
+
+error: aborting due to 1 previous error
+
+'''

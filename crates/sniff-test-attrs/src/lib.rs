@@ -10,8 +10,10 @@ macro_rules! define_sniff_tool_annotation {
             let mut t = TokenStream::new();
 
             // If we're registering the sniff-test tool, add the actual attribute to check unsafe.
-            if let Ok(rust_flags) = std::env::var("RUSTFLAGS")
-                && rust_flags.contains("-Zcrate-attr=register_tool(sniff_tool)")
+            let rustflags = std::env::var("RUSTFLAGS")
+                .map(|rust_flags| rust_flags.contains("-Zcrate-attr=register_tool(sniff_tool)"))
+                .unwrap_or(false);
+            if rustflags || std::env::var("PLUGIN_ARGS").is_ok()
             {
                 t.extend(TokenStream::from(quote!(
                     #[sniff_tool::$name]

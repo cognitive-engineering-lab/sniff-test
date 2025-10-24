@@ -46,8 +46,8 @@ pub struct PrintAllItemsPlugin;
 
 // To parse CLI arguments, we use Clap for this example. But that
 // detail is up to you.
-#[derive(Parser, Serialize, Deserialize, Clone)]
-pub struct PrintAllItemsPluginArgs {
+#[derive(Parser, Serialize, Deserialize, Clone, Default)]
+pub struct SniffTestArgs {
     #[arg(short, long)]
     allcaps: bool,
 
@@ -56,7 +56,7 @@ pub struct PrintAllItemsPluginArgs {
 }
 
 impl RustcPlugin for PrintAllItemsPlugin {
-    type Args = PrintAllItemsPluginArgs;
+    type Args = SniffTestArgs;
 
     fn version(&self) -> Cow<'static, str> {
         env!("CARGO_PKG_VERSION").into()
@@ -70,7 +70,7 @@ impl RustcPlugin for PrintAllItemsPlugin {
     // If one of the CLI arguments was a specific file to analyze, then you
     // could provide a different filter.
     fn args(&self, _target_dir: &Utf8Path) -> RustcPluginArgs<Self::Args> {
-        let args = PrintAllItemsPluginArgs::parse_from(env::args().skip(1));
+        let args = SniffTestArgs::parse_from(env::args().skip(1));
         let filter = CrateFilter::AllCrates;
         RustcPluginArgs { args, filter }
     }
@@ -90,6 +90,7 @@ impl RustcPlugin for PrintAllItemsPlugin {
         let mut callbacks = PrintAllItemsCallbacks {
             args: Some(plugin_args),
         };
+
         rustc_driver::run_compiler(&compiler_args, &mut callbacks);
         Ok(())
     }
@@ -97,7 +98,7 @@ impl RustcPlugin for PrintAllItemsPlugin {
 
 #[allow(dead_code)]
 struct PrintAllItemsCallbacks {
-    args: Option<PrintAllItemsPluginArgs>,
+    args: Option<SniffTestArgs>,
 }
 
 impl rustc_driver::Callbacks for PrintAllItemsCallbacks {
