@@ -30,7 +30,10 @@ jobs:
         runs-on: macos-latest
         steps:
           - uses: actions/checkout@v4
-          - run: cargo test
+          - name: build the binaries first
+            run: cargo build
+          - name: run actual tests
+            run: cargo test
 
     format:
         runs-on: macos-latest
