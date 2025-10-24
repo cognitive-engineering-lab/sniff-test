@@ -19,11 +19,11 @@ pub fn check_properly_annotated(tcx: TyCtxt) -> Result<(), ErrorGuaranteed> {
 
     let entry = reachability::annotated_local_entry_points(tcx).collect::<Vec<_>>();
 
-    println!("entry is {entry:?}");
+    // println!("entry is {entry:?}");
 
     let reachable = reachability::locally_reachable_from(tcx, entry).collect::<Vec<_>>();
 
-    println!("reachable is {reachable:?}");
+    // println!("reachable is {reachable:?}");
 
     // For all reachable local function definitions, ensure their axioms align with their annotations.
     for reachable in reachable.iter().cloned() {
@@ -74,7 +74,7 @@ fn only_unjustified_callsites(
         for call_span in calls.from_spans {
             let expr = expr::find_expr_for_call(tcx, calls.def_id, in_fn, call_span);
             let justs = annotations::Justification::try_parse(tcx, expr);
-            println!("justs are {justs:?}");
+            // println!("justs are {justs:?}");
             match justs {
                 Some(Err(e)) => return Err(e.emit(tcx.dcx())),
                 Some(Ok(justs)) => annotations::check::check_consistency(&justs, &requirements)

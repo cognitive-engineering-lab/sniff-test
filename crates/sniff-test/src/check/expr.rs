@@ -48,15 +48,15 @@ impl<'tcx> intravisit::Visitor<'tcx> for SpanExprFinder<'tcx> {
         if let ExprKind::Call(to, from) = ex.kind
             && ex.span == self.2
         {
-            println!("call and matching spa to {to:?}");
+            // println!("call and matching spa to {to:?}");
             if let ExprKind::Path(qpath) = &to.kind {
                 let tychck = self.0.typeck(ex.hir_id.owner.def_id);
 
                 // Resolve the path to get the DefId
                 if let Some(def_id) = tychck.qpath_res(qpath, to.hir_id).opt_def_id() {
-                    println!("resolve to defid {def_id:?}");
+                    // println!("resolve to defid {def_id:?}");
                     if def_id == self.1 {
-                        println!("WHICH MATCHES!!");
+                        // println!("WHICH MATCHES!!");
                         self.3 = Some(ex);
                         return;
                     }

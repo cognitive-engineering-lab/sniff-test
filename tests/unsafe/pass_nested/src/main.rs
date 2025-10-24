@@ -2,8 +2,8 @@
 
 /// # Unsafe
 /// * nn: ptr should be non null
-unsafe fn foo(val: *const i32) -> u32 {
-    unsafe { std::deref_in_std(val) }
+unsafe fn foo(val: *const i32) -> i32 {
+    unsafe { *val }
 }
 
 #[sniff_test_attrs::check_unsafe]

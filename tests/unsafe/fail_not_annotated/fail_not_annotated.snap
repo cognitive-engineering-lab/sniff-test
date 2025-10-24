@@ -4,12 +4,24 @@ source: tests/lib.rs
 exit_code = 101
 stdout = ''
 stderr = '''
-error: function fail_not_annotated[801a]::foo has unsafe axioms, but is not annotated unsafe
+warning: unused doc comment
+  --> src/main.rs:13:5
+   |
+13 |     /// Hello
+   |     ^^^^^^^^^
+14 |     bar(&raw const x);
+   |     ----------------- rustdoc does not generate documentation for expressions
+   |
+   = help: use `//` for a plain comment
+   = note: `#[warn(unused_doc_comments)]` on by default
+
+error: function foo directly contains 1 unjustified unsafe axiom, but is not annotated unsafe
  --> src/main.rs:1:1
   |
 1 | fn foo(ptr: *const i32) -> i32 {
   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
   |
+  = note: reachable from [main (src/main.rs:14:5) -> bar (src/main.rs:7:5) -> *foo*]
 note: raw pointer derefence here
  --> src/main.rs:2:23
   |
@@ -19,5 +31,5 @@ note: raw pointer derefence here
               1. the dereferenced pointer must be non-null
               2. the dereferenced pointer must be aligned
 
-error: could not compile `fail_not_annotated` (bin "fail_not_annotated") due to 1 previous error
+error: could not compile `fail_not_annotated` (bin "fail_not_annotated") due to 1 previous error; 1 warning emitted
 '''

@@ -1,0 +1,22 @@
+---
+source: tests/lib.rs
+---
+exit_code = 0
+stdout = '''
+compilation successful!!
+'''
+stderr = '''
+warning: unused doc comment
+  --> src/main.rs:13:9
+   |
+13 | /         /// Safety:
+14 | |         /// * non-null: a pointer that comes from a reference is trivially non-null
+15 | |         /// * aligned: a pointer that comes from a reference is trivially aligned
+   | |_________________________________________________________________________________^
+16 |           foo(&raw const x);
+   |           ----------------- rustdoc does not generate documentation for expressions
+   |
+   = help: use `//` for a plain comment
+   = note: `#[warn(unused_doc_comments)]` on by default
+
+'''

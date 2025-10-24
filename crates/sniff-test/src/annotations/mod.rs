@@ -38,7 +38,7 @@ pub trait Annotation<'a>: ParseBulletsFromString {
         let doc_str: Result<String, ParsingIssue> =
             input.get_doc_str(tcx).ok_or(ParsingIssue::NoDocString);
 
-        println!("doc string is {doc_str:?}");
+        // println!("doc string is {doc_str:?}");
 
         Ok(doc_str
             .and_then(|doc_str| Self::parse_bullets_from_string(&doc_str))

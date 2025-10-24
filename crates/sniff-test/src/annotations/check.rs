@@ -10,7 +10,7 @@ pub fn check_consistency<'r>(
     justifications: &[Spanned<Justification>],
     for_requirements: &'r [Spanned<Requirement>],
 ) -> Result<(), ConsistencyIssue<'r>> {
-    println!("does {justifications:?} satisfy {for_requirements:?}??");
+    // println!("does {justifications:?} satisfy {for_requirements:?}??");
     for req in for_requirements {
         let sat = justifications
             .iter()
