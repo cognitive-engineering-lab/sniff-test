@@ -71,14 +71,14 @@ fn snapshots() -> anyhow::Result<()> {
 
         if is_cargo_project(path) {
             // Process as a cargo project
-            snapshot_cargo_dir(path)?;
+            snapshot_cargo_dir(path, &root)?;
             cargo_dirs.push(path.to_path_buf());
 
             // Mark this directory and all subdirectories as processed
             mark_descendants_as_processed(path, &mut processed_dirs);
         } else if has_rust_files(path) && !is_inside_cargo_project(path, &root) {
             // Process individual .rs files in this directory
-            snapshot_rust_files_dir(path)?;
+            snapshot_rust_files_dir(path, &root)?;
             cargo_dirs.push(path.to_path_buf());
             processed_dirs.insert(path.to_path_buf());
         }
@@ -127,7 +127,7 @@ fn is_cargo_project(path: &Path) -> bool {
     path.join("Cargo.toml").exists()
 }
 
-fn snapshot_cargo_dir(path: &Path) -> anyhow::Result<()> {
+fn snapshot_cargo_dir(path: &Path, root: &Path) -> anyhow::Result<()> {
     let name = path
         .file_name()
         .expect("directory should have name")
@@ -138,10 +138,15 @@ fn snapshot_cargo_dir(path: &Path) -> anyhow::Result<()> {
     let out_path = path.to_path_buf();
     let out = cargo_sniff(path)?;
 
+    // panic!(
+    //     "root is {}",
+    //     root.to_str().expect("should be valid unicode")
+    // );
     insta::with_settings!({
         snapshot_path => out_path,
         filters => vec![
-            (r"process didn't exit successfully: `(.*?)`", "process didn't exit successfully: [BINARY PATH ELIDED]")
+            (r"process didn't exit successfully: `(.*?)`", "process didn't exit successfully: [BINARY PATH ELIDED]"),
+            (root.to_str().expect("should be valid unicode"), "[SNIFF_TEST_DIR]")
         ],
         prepend_module_to_snapshot => false,
         omit_expression => true,
@@ -153,7 +158,7 @@ fn snapshot_cargo_dir(path: &Path) -> anyhow::Result<()> {
     Ok(())
 }
 
-fn snapshot_rust_files_dir(path: &Path) -> anyhow::Result<()> {
+fn snapshot_rust_files_dir(path: &Path, root: &Path) -> anyhow::Result<()> {
     println!("snapshotting rust files in {}", path.display());
 
     let rust_files: Vec<_> = std::fs::read_dir(path)?
@@ -166,13 +171,13 @@ fn snapshot_rust_files_dir(path: &Path) -> anyhow::Result<()> {
 
     for entry in rust_files {
         let file_path = entry.path();
-        snapshot_single_rust_file(&file_path)?;
+        snapshot_single_rust_file(&file_path, root)?;
     }
 
     Ok(())
 }
 
-fn snapshot_single_rust_file(file_path: &Path) -> anyhow::Result<()> {
+fn snapshot_single_rust_file(file_path: &Path, root: &Path) -> anyhow::Result<()> {
     println!("  snapshotting rust file {}", file_path.display());
 
     let name = file_path
@@ -187,7 +192,8 @@ fn snapshot_single_rust_file(file_path: &Path) -> anyhow::Result<()> {
     insta::with_settings!({
         snapshot_path => out_path,
         filters => vec![
-            (r"process didn't exit successfully: `(.*?)`", "process didn't exit successfully: [BINARY PATH ELIDED]")
+            (r"process didn't exit successfully: `(.*?)`", "process didn't exit successfully: [BINARY PATH ELIDED]"),
+            (root.to_str().expect("should be valid unicode"), "[SNIFF_TEST_DIR]")
         ],
         prepend_module_to_snapshot => false,
         omit_expression => true,

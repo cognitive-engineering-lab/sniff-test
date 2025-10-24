@@ -5,14 +5,14 @@ exit_code = 1
 stdout = ''
 stderr = '''
 error: function main directly contains 1 unjustified call to unsafe functions, but is not annotated unsafe
-  --> /Users/alexanderportland/Desktop/research/sniff-test/tests/unsafe/calls/unjustified_call.rs:10:1
+  --> [SNIFF_TEST_DIR]/unsafe/calls/unjustified_call.rs:10:1
    |
 10 | fn main() {
    | ^^^^^^^^^
    |
    = note: reachable from [*main*]
 note: foo is called here
-  --> /Users/alexanderportland/Desktop/research/sniff-test/tests/unsafe/calls/unjustified_call.rs:12:5
+  --> [SNIFF_TEST_DIR]/unsafe/calls/unjustified_call.rs:12:5
    |
 12 |     foo(&raw const x);
    |     ^^^^^^^^^^^^^^^^^

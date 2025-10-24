@@ -7,7 +7,7 @@ compilation successful!!
 '''
 stderr = '''
 warning: unused doc comment
-  --> /Users/alexanderportland/Desktop/research/sniff-test/tests/unsafe/calls/justified_call.rs:12:5
+  --> [SNIFF_TEST_DIR]/unsafe/calls/justified_call.rs:12:5
    |
 12 | /     /// SAFETY:
 13 | |     /// - nn: pointers from references are trivially non-null
