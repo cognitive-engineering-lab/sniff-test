@@ -219,6 +219,7 @@ fn cargo_sniff(path: &Path) -> anyhow::Result<SniffTestOutput> {
         "RUSTFLAGS",
         "-Zcrate-attr=feature(register_tool) -Zcrate-attr=register_tool(sniff_tool)",
     );
+    cmd.env("CARGO_TERM_COLOR", "never");
     cmd.current_dir(path);
 
     Ok(cmd.output()?.try_into()?)
@@ -230,6 +231,7 @@ fn rustc_sniff(file_path: &Path) -> anyhow::Result<SniffTestOutput> {
     // Env vars needed for the single invocation of the driver to work.
     cmd.env("RUSTC_PLUGIN_ALL_TARGETS", "");
     cmd.env("RUSTC_WORKSPACE_WRAPPER", "");
+    cmd.env("CARGO_TERM_COLOR", "never");
 
     // We have to serialize the default plugin args so it knows what to do.
     cmd.env(
