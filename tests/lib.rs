@@ -249,6 +249,9 @@ fn rustc_sniff(file_path: &Path) -> anyhow::Result<SniffTestOutput> {
     cmd.arg("-Zcrate-attr=feature(register_tool)")
         .arg("-Zcrate-attr=register_tool(sniff_tool)");
 
+    // TODO: should do this all the time i think
+    cmd.arg("-Zno-codegen");
+
     // Pass in compilation argument.
     cmd.arg(file_path);
 
