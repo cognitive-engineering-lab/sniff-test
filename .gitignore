@@ -3,3 +3,5 @@ review.sh
 .DS_Store
 notes.md
 .snap.new
+
+.vscode/
