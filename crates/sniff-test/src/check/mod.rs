@@ -66,37 +66,54 @@ fn load_external_requirements(
 }
 
 // Note, I don't really get and didn't fully implement the correct error handling for toml fallback.
-fn get_requirements<'tcx>(
-    tcx: TyCtxt<'tcx>,
+fn get_requirements(
+    tcx: TyCtxt,
     def_id: DefId,
     external_doc_strings: &std::collections::HashMap<String, String>,
-) -> Option<Result<Vec<Spanned<Requirement>>, ParsingError<'tcx>>> {
-    // First, try to parse from in-code annotations
+) -> Option<Vec<Spanned<Requirement>>> {
+    // First, try to parse from code annotations
     if let Some(in_code) = annotations::Requirement::try_parse(tcx, def_id) {
-        return Some(in_code);
+        match in_code {
+            Ok(reqs) => {
+                println!(
+                    "Parsed requirements from code for {}: {:?}",
+                    tcx.def_path_str(def_id),
+                    reqs
+                );
+                return Some(reqs);
+            }
+            Err(e) => {
+                e.emit(tcx.dcx());
+                return None;
+            }
+        }
     }
 
     // Next, try to parse from external doc strings
     let fn_name = tcx.def_path_str(def_id);
     if let Some(doc_str) = external_doc_strings.get(&fn_name) {
-        let parsed = match annotations::Requirement::parse_bullets_from_string(doc_str) {
-            Ok(reqs) => Ok(reqs
-                .into_iter()
-                .map(|(req, range)| respan(DUMMY_SP, req))
-                .collect()),
+        match Requirement::parse_bullets_from_string(doc_str) {
+            Ok(reqs) => {
+                let spanned_reqs = reqs
+                    .into_iter()
+                    .map(|(req, _)| respan(DUMMY_SP, req))
+                    .collect();
+                println!(
+                    "Parsed requirements from external doc string for {}: {:?}",
+                    fn_name, spanned_reqs
+                );
+                return Some(spanned_reqs);
+            }
             Err(e) => {
                 tcx.dcx()
-                    .struct_warn(format!(
-                        "Invalid external requirements for `{fn_name}`: {e:?}"
-                    ))
+                    .struct_warn(format!("Failed to parse external requirements for {fn_name} with doc string {doc_str:?}, error: {e:?}"))
                     .emit();
                 return None;
             }
-        };
-        return Some(parsed);
+        }
     }
 
-    // If neither source yielded requirements, return None
+    println!("No requirements found for {}", fn_name);
     None
 }
 
