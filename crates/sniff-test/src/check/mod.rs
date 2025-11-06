@@ -2,10 +2,14 @@ use itertools::Itertools;
 use rustc_errors::{Diag, DiagCtxtHandle};
 use rustc_hir::def_id::{DefId, LocalDefId};
 use rustc_middle::ty::TyCtxt;
-use rustc_span::{ErrorGuaranteed, source_map::Spanned, sym::todo_macro};
+use rustc_span::{
+    DUMMY_SP, ErrorGuaranteed,
+    source_map::{Spanned, respan},
+    sym::todo_macro,
+};
 
 use crate::{
-    annotations::{self, Annotation, ParsingError, Requirement},
+    annotations::{self, Annotation, ParsingError, Requirement, parsing::ParseBulletsFromString},
     axioms::{self, Axiom, AxiomFinder, AxiomaticBadness},
     reachability::{self, CallsToBad, LocallyReachable},
     utils::SniffTestDiagnostic,
@@ -61,12 +65,47 @@ fn load_external_requirements(
     }
 }
 
+// Note, I don't really get and didn't fully implement the correct error handling for toml fallback.
+fn get_requirements<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    def_id: DefId,
+    external_doc_strings: &std::collections::HashMap<String, String>,
+) -> Option<Result<Vec<Spanned<Requirement>>, ParsingError<'tcx>>> {
+    // First, try to parse from in-code annotations
+    if let Some(in_code) = annotations::Requirement::try_parse(tcx, def_id) {
+        return Some(in_code);
+    }
+
+    // Next, try to parse from external doc strings
+    let fn_name = tcx.def_path_str(def_id);
+    if let Some(doc_str) = external_doc_strings.get(&fn_name) {
+        let parsed = match annotations::Requirement::parse_bullets_from_string(doc_str) {
+            Ok(reqs) => Ok(reqs
+                .into_iter()
+                .map(|(req, range)| respan(DUMMY_SP, req))
+                .collect()),
+            Err(e) => {
+                tcx.dcx()
+                    .struct_warn(format!(
+                        "Invalid external requirements for `{fn_name}`: {e:?}"
+                    ))
+                    .emit();
+                return None;
+            }
+        };
+        return Some(parsed);
+    }
+
+    // If neither source yielded requirements, return None
+    None
+}
+
 /// Checks that all local functions in the crate are properly annotated.
 pub fn check_properly_annotated(tcx: TyCtxt) -> Result<(), ErrorGuaranteed> {
     let mut res = Ok(());
 
     // Parse TOML file into map from fully qualified name to docstring (not yet implemented)
-    let external_requirements = match load_external_requirements("sniff_test_requirements.toml") {
+    let external_doc_strings = match load_external_requirements("sniff_test_requirements.toml") {
         Ok(map) => {
             println!("Loaded external requirements: {:?}", map);
             map
@@ -100,13 +139,9 @@ pub fn check_properly_annotated(tcx: TyCtxt) -> Result<(), ErrorGuaranteed> {
     for reachable in reachable.iter().cloned() {
         let axioms = axioms::find_axioms(axioms::SafetyFinder, tcx, &reachable);
 
-        // Parse requirements in code
-        let code_requirements =
-            annotations::Requirement::try_parse(tcx, reachable.reach.to_def_id());
-
-        // Combine all requirements (not yet implemented)
-
-        let my_requirements = code_requirements;
+        // Try to parse requirements in code, if not found, try to parse from external doc strings
+        let my_requirements =
+            get_requirements(tcx, reachable.reach.to_def_id(), &external_doc_strings);
 
         // let find_requirements = |def_id| annotations::Requirement::parse(tcx, def_id);
         // let find_justifications = |def_id| annotations::Justification::parse(tcx, def_id);
