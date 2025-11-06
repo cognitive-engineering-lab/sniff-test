@@ -13,9 +13,80 @@ use crate::{
 
 mod expr;
 
+fn load_external_requirements(
+    path: &str,
+) -> Result<std::collections::HashMap<String, String>, std::io::Error> {
+    let text = std::fs::read_to_string(path)?;
+    let value: toml::Value = toml::from_str(&text).map_err(|e| {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            format!("Failed to parse TOML: {}", e),
+        )
+    })?;
+
+    // Each val should be a table with exactly one key, "requirements"
+    // Requirement's value should be a string
+    if let Some(table) = value.as_table() {
+        let mut reqs = std::collections::HashMap::new();
+        for (key, val) in table {
+            if let Some(inner_table) = val.as_table() {
+                if inner_table.len() == 1 && inner_table.contains_key("requirements") {
+                    if let Some(req_str) = inner_table["requirements"].as_str() {
+                        reqs.insert(key.clone(), req_str.to_string());
+                    } else {
+                        return Err(std::io::Error::new(
+                            std::io::ErrorKind::InvalidData,
+                            format!("Expected a string for 'requirements' in key '{}'", key),
+                        ));
+                    }
+                } else {
+                    return Err(std::io::Error::new(
+                        std::io::ErrorKind::InvalidData,
+                        format!("Expected a single key 'requirements' for key '{}'", key),
+                    ));
+                }
+            } else {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    format!("Expected a table for key '{}'", key),
+                ));
+            }
+        }
+        Ok(reqs)
+    } else {
+        Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "Expected a TOML table at the top level",
+        ))
+    }
+}
+
 /// Checks that all local functions in the crate are properly annotated.
 pub fn check_properly_annotated(tcx: TyCtxt) -> Result<(), ErrorGuaranteed> {
     let mut res = Ok(());
+
+    // Parse TOML file into map from fully qualified name to docstring (not yet implemented)
+    let external_requirements = match load_external_requirements("sniff_test_requirements.toml") {
+        Ok(map) => {
+            println!("Loaded external requirements: {:?}", map);
+            map
+        }
+        Err(e) => {
+            match e.kind() {
+                std::io::ErrorKind::NotFound => {
+                    // File not found, proceed without external requirements
+                    println!("No external requirements file found, proceeding without it.");
+                    std::collections::HashMap::new()
+                }
+                _ => {
+                    // Other errors should be reported
+                    tcx.dcx()
+                        .struct_warn(format!("Failed to load external requirements: {}", e));
+                    std::collections::HashMap::new()
+                }
+            }
+        }
+    };
 
     let entry = reachability::annotated_local_entry_points(tcx).collect::<Vec<_>>();
 
@@ -29,8 +100,14 @@ pub fn check_properly_annotated(tcx: TyCtxt) -> Result<(), ErrorGuaranteed> {
     for reachable in reachable.iter().cloned() {
         let axioms = axioms::find_axioms(axioms::SafetyFinder, tcx, &reachable);
 
-        // Parse the requirements
-        let my_requirements = annotations::Requirement::try_parse(tcx, reachable.reach.to_def_id());
+        // Parse requirements in code
+        let code_requirements =
+            annotations::Requirement::try_parse(tcx, reachable.reach.to_def_id());
+
+        // Combine all requirements (not yet implemented)
+
+        let my_requirements = code_requirements;
+
         // let find_requirements = |def_id| annotations::Requirement::parse(tcx, def_id);
         // let find_justifications = |def_id| annotations::Justification::parse(tcx, def_id);
 
