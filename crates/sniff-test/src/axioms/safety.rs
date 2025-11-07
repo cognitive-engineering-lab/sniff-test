@@ -56,7 +56,6 @@ impl AxiomFinder for SafetyFinder {
         tyck: &rustc_middle::ty::TypeckResults,
         expr: &rustc_hir::Expr,
     ) -> Vec<Spanned<Self::Axiom>> {
-        // println!("looking at {}", expr.to_debug_str(_tcx));
         if let ExprKind::Unary(UnOp::Deref, expr) = expr.kind {
             let inner_ty = tyck.expr_ty(expr);
 

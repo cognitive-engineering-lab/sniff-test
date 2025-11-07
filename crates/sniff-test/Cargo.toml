@@ -10,12 +10,13 @@ rustc_private = true
 rustc_plugin = "=0.14.3-nightly-2025-08-20"
 rustc_utils = "=0.14.3-nightly-2025-08-20"
 sniff-test-attrs ={ path = "../sniff-test-attrs" }
-env_logger = { version = "0.10", default-features = false }
+env_logger = "0.11"
 clap = { version = "4.4", features = ["derive"] }
 serde = { version = "1", features = ["derive"] }
 regex = "1.11.2"
 anyhow = "1.0.100"
 itertools = "0.14.0"
+log = "0.4.28"
 
 [build-dependencies]
 rustc_plugin = "=0.14.3-nightly-2025-08-20"

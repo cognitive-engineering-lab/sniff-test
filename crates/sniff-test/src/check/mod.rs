@@ -19,11 +19,18 @@ pub fn check_properly_annotated(tcx: TyCtxt) -> Result<(), ErrorGuaranteed> {
 
     let entry = reachability::annotated_local_entry_points(tcx).collect::<Vec<_>>();
 
-    // println!("entry is {entry:?}");
+    let entries = entry
+        .iter()
+        .map(|local| {
+            let span = tcx.optimized_mir(local.to_def_id()).span;
+            (local, span)
+        })
+        .collect::<Vec<_>>();
+    log::debug!("entry is {entries:#?}");
 
     let reachable = reachability::locally_reachable_from(tcx, entry).collect::<Vec<_>>();
 
-    // println!("reachable is {reachable:?}");
+    log::debug!("reachable is {reachable:#?}");
 
     // For all reachable local function definitions, ensure their axioms align with their annotations.
     for reachable in reachable.iter().cloned() {

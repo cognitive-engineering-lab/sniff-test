@@ -34,6 +34,7 @@ pub mod utils;
 use std::{borrow::Cow, env, process::Command};
 
 use clap::Parser;
+use rustc_hir::def_id::LOCAL_CRATE;
 use rustc_middle::ty::TyCtxt;
 use rustc_plugin::{CrateFilter, RustcPlugin, RustcPluginArgs, Utf8Path};
 use serde::{Deserialize, Serialize};
@@ -51,8 +52,50 @@ pub struct SniffTestArgs {
     #[arg(short, long)]
     allcaps: bool,
 
+    #[arg(short, long)]
+    release: bool,
+
     #[clap(last = true)]
     cargo_args: Vec<String>,
+}
+
+const TO_FILE: bool = false;
+
+fn env_logger_init_file(driver: bool) {
+    use std::fs::OpenOptions;
+    use std::io::Write;
+
+    let mut log_file_opts = OpenOptions::new();
+    log_file_opts.write(true);
+
+    if driver {
+        log_file_opts.append(true);
+    } else {
+        log_file_opts.create(true).truncate(true);
+    }
+
+    let log_file = log_file_opts
+        .open("sniff-test.log")
+        .expect("Failed to open log file");
+
+    env_logger::Builder::from_default_env()
+        .format_timestamp(None)
+        .target(env_logger::Target::Pipe(Box::new(log_file)))
+        .init()
+}
+
+fn env_logger_init_terminal() {
+    env_logger::Builder::from_default_env()
+        .format_timestamp(None)
+        .init()
+}
+
+pub fn env_logger_init(driver: bool) {
+    if TO_FILE {
+        env_logger_init_file(driver);
+    } else {
+        env_logger_init_terminal();
+    }
 }
 
 impl RustcPlugin for PrintAllItemsPlugin {
@@ -78,6 +121,13 @@ impl RustcPlugin for PrintAllItemsPlugin {
     // Pass Cargo arguments (like --feature) from the top-level CLI to Cargo.
     fn modify_cargo(&self, cargo: &mut Command, args: &Self::Args) {
         cargo.args(&args.cargo_args);
+
+        if args.release {
+            panic!(
+                "release can inline some functions, so not sure if we want to allow this yet..."
+            );
+            cargo.args(["--release"]);
+        }
 
         // Register the sniff_tool
         let existing = std::env::var("RUSTFLAGS").unwrap_or_default();
@@ -114,11 +164,14 @@ impl rustc_driver::Callbacks for PrintAllItemsCallbacks {
         _compiler: &rustc_interface::interface::Compiler,
         tcx: TyCtxt<'_>,
     ) -> rustc_driver::Compilation {
+        let crate_name = tcx.crate_name(LOCAL_CRATE);
+
+        log::debug!("checking crate {crate_name}");
         let Ok(()) = check_properly_annotated(tcx) else {
             return rustc_driver::Compilation::Stop;
         };
 
-        println!("compilation successful!!");
+        println!("compilation of {crate_name} was successful!!");
 
         // Note that you should generally allow compilation to continue. If
         // your plugin is being invoked on a dependency, then you need to ensure
