@@ -10,6 +10,7 @@ mod attr;
 pub mod check;
 mod err;
 pub mod parsing;
+pub mod toml;
 mod types;
 
 pub use err::ParsingError;
