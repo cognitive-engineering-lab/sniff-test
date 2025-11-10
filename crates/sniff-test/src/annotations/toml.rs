@@ -41,10 +41,19 @@ impl From<ParsingIssue> for TomlParseError {
 }
 
 impl TomlAnnotation {
+    /// Parses a TOML annotation file and returns a TomlAnnotation struct.
+    /// Fails on any errors, never returning partial results.
+    /// If the file does not exist, returns an empty TomlAnnotation.
     pub fn from_file<P: AsRef<std::path::Path>>(path: P) -> Result<Self, TomlParseError> {
         // Get the contents of the TOML file
-        let text = std::fs::read_to_string(path)?;
-        let value: toml::Value = toml::from_str(&text)?;
+        let text = match std::fs::read_to_string(path) {
+            Ok(t) => t,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                println!("TOML annotation file not found, proceeding without it.");
+                return Ok(TomlAnnotation::default());
+            }
+            Err(e) => return Err(TomlParseError::Io(e)),
+        };
 
         // Parse the TOML file into a map from function names to requirement strings
         // The expected schema is:
@@ -53,6 +62,7 @@ impl TomlAnnotation {
         // - Requirement 1
         // - Requirement 2
         // """
+        let value: toml::Value = toml::from_str(&text)?;
         let Some(table) = value.as_table() else {
             return Err(TomlParseError::Schema(
                 "Expected a TOML table at the top level".to_string(),
@@ -60,7 +70,6 @@ impl TomlAnnotation {
         };
         let mut function_to_requirements: HashMap<String, Vec<Spanned<Requirement>>> =
             HashMap::new();
-
         for (function_name, value) in table {
             let Some(inner_table) = value.as_table() else {
                 return Err(TomlParseError::Schema(format!(

@@ -9,7 +9,11 @@ use rustc_span::{
 };
 
 use crate::{
-    annotations::{self, Annotation, ParsingError, Requirement, parsing::ParseBulletsFromString},
+    annotations::{
+        self, Annotation, ParsingError, Requirement,
+        parsing::ParseBulletsFromString,
+        toml::{TomlAnnotation, TomlParseError},
+    },
     axioms::{self, Axiom, AxiomFinder, AxiomaticBadness},
     reachability::{self, CallsToBad, LocallyReachable},
     utils::SniffTestDiagnostic,
@@ -17,59 +21,11 @@ use crate::{
 
 mod expr;
 
-fn load_external_requirements(
-    path: &str,
-) -> Result<std::collections::HashMap<String, String>, std::io::Error> {
-    let text = std::fs::read_to_string(path)?;
-    let value: toml::Value = toml::from_str(&text).map_err(|e| {
-        std::io::Error::new(
-            std::io::ErrorKind::InvalidData,
-            format!("Failed to parse TOML: {}", e),
-        )
-    })?;
-
-    // Each val should be a table with exactly one key, "requirements"
-    // Requirement's value should be a string
-    if let Some(table) = value.as_table() {
-        let mut reqs = std::collections::HashMap::new();
-        for (key, val) in table {
-            if let Some(inner_table) = val.as_table() {
-                if inner_table.len() == 1 && inner_table.contains_key("requirements") {
-                    if let Some(req_str) = inner_table["requirements"].as_str() {
-                        reqs.insert(key.clone(), req_str.to_string());
-                    } else {
-                        return Err(std::io::Error::new(
-                            std::io::ErrorKind::InvalidData,
-                            format!("Expected a string for 'requirements' in key '{}'", key),
-                        ));
-                    }
-                } else {
-                    return Err(std::io::Error::new(
-                        std::io::ErrorKind::InvalidData,
-                        format!("Expected a single key 'requirements' for key '{}'", key),
-                    ));
-                }
-            } else {
-                return Err(std::io::Error::new(
-                    std::io::ErrorKind::InvalidData,
-                    format!("Expected a table for key '{}'", key),
-                ));
-            }
-        }
-        Ok(reqs)
-    } else {
-        Err(std::io::Error::new(
-            std::io::ErrorKind::InvalidData,
-            "Expected a TOML table at the top level",
-        ))
-    }
-}
-
 // Note, I don't really get and didn't fully implement the correct error handling for toml fallback.
 fn get_requirements(
     tcx: TyCtxt,
     def_id: DefId,
-    external_doc_strings: &std::collections::HashMap<String, String>,
+    toml_annotations: &TomlAnnotation,
 ) -> Option<Vec<Spanned<Requirement>>> {
     // First, try to parse from code annotations
     if let Some(in_code) = annotations::Requirement::try_parse(tcx, def_id) {
@@ -91,29 +47,10 @@ fn get_requirements(
 
     // Next, try to parse from external doc strings
     let fn_name = tcx.def_path_str(def_id);
-    if let Some(doc_str) = external_doc_strings.get(&fn_name) {
-        match Requirement::parse_bullets_from_string(doc_str) {
-            Ok(reqs) => {
-                let spanned_reqs = reqs
-                    .into_iter()
-                    .map(|(req, _)| respan(DUMMY_SP, req))
-                    .collect();
-                println!(
-                    "Parsed requirements from external doc string for {}: {:?}",
-                    fn_name, spanned_reqs
-                );
-                return Some(spanned_reqs);
-            }
-            Err(e) => {
-                tcx.dcx()
-                    .struct_warn(format!("Failed to parse external requirements for {fn_name} with doc string {doc_str:?}, error: {e:?}"))
-                    .emit();
-                return None;
-            }
-        }
+    if let Some(reqs) = toml_annotations.get_requirements_for_function(&fn_name) {
+        return Some(reqs.clone());
     }
 
-    println!("No requirements found for {}", fn_name);
     None
 }
 
@@ -121,26 +58,17 @@ fn get_requirements(
 pub fn check_properly_annotated(tcx: TyCtxt) -> Result<(), ErrorGuaranteed> {
     let mut res = Ok(());
 
-    // Parse TOML file into map from fully qualified name to docstring (not yet implemented)
-    let external_doc_strings = match load_external_requirements("sniff_test_requirements.toml") {
-        Ok(map) => {
-            println!("Loaded external requirements: {:?}", map);
-            map
-        }
+    // Parse TOML annotations from file
+    let toml_path = "sniff-test.toml";
+    let toml_annotations = match TomlAnnotation::from_file(toml_path) {
+        Ok(annotations) => annotations,
         Err(e) => {
-            match e.kind() {
-                std::io::ErrorKind::NotFound => {
-                    // File not found, proceed without external requirements
-                    println!("No external requirements file found, proceeding without it.");
-                    std::collections::HashMap::new()
-                }
-                _ => {
-                    // Other errors should be reported
-                    tcx.dcx()
-                        .struct_warn(format!("Failed to load external requirements: {}", e));
-                    std::collections::HashMap::new()
-                }
-            }
+            tcx.dcx()
+                .struct_warn(format!(
+                    "Failed to parse TOML annotations from {toml_path}: {e:?}"
+                ))
+                .emit();
+            TomlAnnotation::default()
         }
     };
 
@@ -157,8 +85,7 @@ pub fn check_properly_annotated(tcx: TyCtxt) -> Result<(), ErrorGuaranteed> {
         let axioms = axioms::find_axioms(axioms::SafetyFinder, tcx, &reachable);
 
         // Try to parse requirements in code, if not found, try to parse from external doc strings
-        let my_requirements =
-            get_requirements(tcx, reachable.reach.to_def_id(), &external_doc_strings);
+        let my_requirements = get_requirements(tcx, reachable.reach.to_def_id(), &toml_annotations);
 
         // let find_requirements = |def_id| annotations::Requirement::parse(tcx, def_id);
         // let find_justifications = |def_id| annotations::Justification::parse(tcx, def_id);

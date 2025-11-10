@@ -4,7 +4,7 @@ use std::borrow::Borrow;
 
 use serde::{Deserialize, Serialize};
 
-#[derive(PartialEq, Eq, Debug, Serialize, Deserialize)]
+#[derive(PartialEq, Eq, Debug, Serialize, Deserialize, Clone)]
 /// A condition that must hold such that a given function call will not cause UB.
 pub struct Requirement {
     name: ConditionName,
