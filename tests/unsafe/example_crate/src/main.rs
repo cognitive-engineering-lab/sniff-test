@@ -7,6 +7,7 @@ fn foo(ptr: *const i32) -> i32 {
     a + 2
 }
 
+/// # Safety
 fn baz(ptr: *const i32) -> i32 {
     unsafe { *ptr }
 }

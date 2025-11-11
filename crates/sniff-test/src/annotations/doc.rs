@@ -1,4 +1,4 @@
-//! Utilities for getting attributes from relevant pieces of a program.
+//! Utilities for getting attributes & doc strings from relevant pieces of a program.
 
 use std::ops::Range;
 

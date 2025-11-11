@@ -11,6 +11,7 @@ use crate::{
     utils::SniffTestDiagnostic,
 };
 
+mod err;
 mod expr;
 
 /// Checks that all local functions in the crate are properly annotated.
@@ -19,14 +20,16 @@ pub fn check_properly_annotated(tcx: TyCtxt) -> Result<(), ErrorGuaranteed> {
 
     // Debug print all our entries and where they are in the src
     // (this isn't actually needed for analysis)
-    let entries = entry
-        .iter()
-        .map(|local| {
-            let span = tcx.optimized_mir(local.to_def_id()).span;
-            (local, span)
-        })
-        .collect::<Vec<_>>();
-    log::debug!("entry is {entries:#?}");
+    {
+        let entries = entry
+            .iter()
+            .map(|local| {
+                let span = tcx.optimized_mir(local.to_def_id()).span;
+                (local, span)
+            })
+            .collect::<Vec<_>>();
+        log::debug!("entry is {entries:#?}");
+    }
 
     let reachable = reachability::locally_reachable_from(tcx, entry).collect::<Vec<_>>();
 
@@ -63,18 +66,25 @@ fn check_function_properties<P: Property>(
     log::debug!("fn {:?} has obligations {:?}", func.reach, annotation);
 
     // Find all calls that have obligations.
-    let bad_calls = reachability::find_calls_w_obligations(tcx, &func, property)
+    let unjustified_calls = reachability::find_calls_w_obligations(tcx, &func, property)
         // Filter those with only callsites that haven't been justified.
         .filter_map(only_unjustified_callsites(tcx, func.reach, property))
         .collect::<Vec<_>>();
 
     // If we have obligations, we've dismissed them
 
-    // todo!()
-    if bad_calls.is_empty() {
+    if unjustified_calls.is_empty() && axioms.is_empty() {
+        // Nothing to report, all good!
         Ok(())
     } else {
-        Err(tcx.dcx().struct_err("sniff test failed!").emit())
+        // Unjustified issues, report them!!
+        Err(err::report_errors(
+            tcx,
+            func,
+            property,
+            axioms,
+            unjustified_calls,
+        ))
     }
 }
 
@@ -111,81 +121,6 @@ fn only_unjustified_callsites<P: Property>(
     }
 }
 
-// struct FunctionIssues<A: Axiom>(Vec<Spanned<A>>, Vec<CallsToBad>);
-
-// pub fn check_function<F: AxiomFinder>(
-//     tcx: TyCtxt,
-//     fn_def: LocallyReachable,
-// ) -> Result<(), FunctionIssues<F::Axiom>> {
-//     // Check that this function:
-//     //   a) contains no axiomatic bad things.
-//     //   b) contains no calls to bad functions.
-
-//     todo!()
-// }
-
-// fn needs_annotation<A: Axiom>(
-//     dcx: DiagCtxtHandle,
-//     tcx: TyCtxt,
-//     reachable: &LocallyReachable,
-//     bc_of_isses: FunctionIssues<A>,
-// ) -> ErrorGuaranteed {
-//     let def_span = tcx.def_span(reachable.reach);
-//     let fn_name = tcx.def_path_str(reachable.reach.to_def_id());
-
-//     let mut diag = dcx.struct_span_err(def_span, summary::summary_string(&fn_name, &bc_of_isses));
-
-//     diag = diag.with_note(reachability_str(&fn_name, tcx, reachable));
-
-//     for axiom in bc_of_isses.0 {
-//         diag = diag_handle_axiom(diag, axiom);
-//     }
-
-//     for bad_call in bc_of_isses.1 {
-//         diag = diag_handle_bad_call(diag, tcx, bad_call);
-//     }
-
-//     diag.emit()
-// }
-
-// fn diag_handle_bad_call<'d>(mut diag: Diag<'d>, tcx: TyCtxt, bad_call: CallsToBad) -> Diag<'d> {
-//     // let times = if bad_call.from_spans.len() > 1 {
-//     //     format!("{} times ", bad_call.from_spans.len())
-//     // } else {
-//     //     String::new()
-//     // };
-//     let call_to = tcx.def_path_str(bad_call.def_id);
-//     diag = diag.with_span_note(bad_call.from_spans, format!("{call_to} is called here"));
-
-//     diag
-// }
-
-// #[allow(clippy::needless_pass_by_value)]
-// fn diag_handle_axiom<A: Axiom>(mut diag: Diag<'_>, axiom: Spanned<A>) -> Diag<'_> {
-//     diag = diag.with_span_note(axiom.span, format!("{} here", axiom.node));
-//     match axiom.node.known_requirements() {
-//         None => (),
-//         Some(AxiomaticBadness::Conditional(known_reqs)) => {
-//             // We know the conditional requirements, so display them
-//             let intro_string = "this axiom has known requirements:".to_string();
-
-//             let known_req_strs = known_reqs
-//                 .into_iter()
-//                 .enumerate()
-//                 .map(|(i, req)| format!("\t{}. {}", i + 1, req.description()));
-
-//             diag = diag.with_help(
-//                 std::iter::once(intro_string)
-//                     .chain(known_req_strs)
-//                     .join("\n"),
-//             );
-//         }
-//         Some(AxiomaticBadness::Unconditional) => todo!(),
-//     }
-
-//     diag
-// }
-
 fn reachability_str(fn_name: &str, tcx: TyCtxt, reachable: &LocallyReachable) -> String {
     let reachability_str = reachable
         .through
@@ -204,46 +139,3 @@ fn reachability_str(fn_name: &str, tcx: TyCtxt, reachable: &LocallyReachable) ->
 
     format!("reachable from [{reachability_str}]")
 }
-
-// mod summary {
-//     use itertools::Itertools;
-//     use rustc_span::source_map::Spanned;
-
-//     use crate::check::FunctionIssues;
-//     use crate::properties::Axiom;
-//     use crate::reachability::CallsToBad;
-
-//     pub fn summary_string<A: Axiom>(fn_name: &str, issues: &FunctionIssues<A>) -> String {
-//         let axiom_summary = axiom_summary(&issues.0);
-//         let call_summary = call_summary::<A>(&issues.1);
-//         let issue_summary = [axiom_summary, call_summary]
-//             .into_iter()
-//             .flatten()
-//             .join(" and ");
-
-//         let kind = A::axiom_kind_name();
-//         format!("function {fn_name} directly contains {issue_summary}, but is not annotated {kind}")
-//     }
-
-//     fn call_summary<A: Axiom>(calls: &[CallsToBad]) -> Option<String> {
-//         let count: usize = calls.iter().map(|call| call.from_spans.len()).sum();
-//         let kind = A::axiom_kind_name();
-//         let s = match count {
-//             1 => "",
-//             x if x > 1 => "s",
-//             _ => return None,
-//         };
-//         Some(format!("{count} unjustified call{s} to {kind} functions"))
-//     }
-
-//     fn axiom_summary<A: Axiom>(axioms: &[Spanned<A>]) -> Option<String> {
-//         let count = axioms.len();
-//         let kind = A::axiom_kind_name();
-//         let s = match count {
-//             1 => "",
-//             x if x > 1 => "s",
-//             _ => return None,
-//         };
-//         Some(format!("{count} unjustified {kind} axiom{s}"))
-//     }
-// }

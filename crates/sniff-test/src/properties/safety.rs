@@ -19,7 +19,7 @@ pub struct SafetyProperty;
 impl Property for SafetyProperty {
     type Axiom = SafetyAxiom;
     fn name() -> &'static str {
-        "safety"
+        "unsafe"
     }
 
     fn fn_def_regex(&self) -> Regex {
