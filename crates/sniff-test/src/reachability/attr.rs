@@ -8,9 +8,10 @@ use rustc_middle::ty::TyCtxt;
 use crate::properties::{self, Property};
 
 pub fn attrs_for(def_id: DefId, tcx: TyCtxt) -> Vec<SniffToolAttr> {
-    get_sniff_tool_attrs(tcx.get_all_attrs(def_id))
+    get_sniff_tool_attrs(tcx.get_all_attrs(def_id), &SniffToolAttr::try_from_string)
 }
 
+// TODO: make this all a macro
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
 pub enum SniffToolAttr {
     CheckUnsafe,
@@ -18,12 +19,23 @@ pub enum SniffToolAttr {
 }
 
 impl SniffToolAttr {
-    fn try_from_string(string: &str) -> Option<Self> {
-        println!("parsing from string {string:?}");
+    pub fn try_from_string(string: &str) -> Option<Self> {
         match string {
             "check_unsafe" => Some(Self::CheckUnsafe),
             "check_panics" => Some(Self::CheckPanics),
             _ => None,
+        }
+    }
+
+    pub fn try_from_string_pub(string: &str) -> Option<(Self, bool)> {
+        if let Some(no_suffix) = Self::try_from_string(string) {
+            Some((no_suffix, false))
+        } else if let Some(pub_suffix) = Self::try_from_string(&string[..string.len() - 4])
+            && let "_pub" = &string[string.len() - 4..]
+        {
+            Some((pub_suffix, true))
+        } else {
+            None
         }
     }
 
@@ -39,7 +51,10 @@ impl SniffToolAttr {
     }
 }
 
-pub fn get_sniff_tool_attrs(attrs: &[Attribute]) -> Vec<SniffToolAttr> {
+pub fn get_sniff_tool_attrs<Attr>(
+    attrs: &[Attribute],
+    from_str: &impl Fn(&str) -> Option<Attr>,
+) -> Vec<Attr> {
     attrs
         .iter()
         .filter_map(|attr| {
@@ -57,7 +72,7 @@ pub fn get_sniff_tool_attrs(attrs: &[Attribute]) -> Vec<SniffToolAttr> {
             // TODO: this might be hacky bc we're comparing strings...
             // No actually it seems to work fine.
             match str_segs {
-                box ["sniff_tool", b] => SniffToolAttr::try_from_string(b),
+                box ["sniff_tool", b] => from_str(b),
                 _ => None,
             }
         })

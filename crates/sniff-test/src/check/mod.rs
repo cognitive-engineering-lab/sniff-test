@@ -19,7 +19,7 @@ pub fn check_properly_annotated<P: Property>(
     tcx: TyCtxt,
     property: P,
 ) -> Result<(), ErrorGuaranteed> {
-    let entry = reachability::local_entry_points::<P>(tcx);
+    let entry = reachability::analysis_entry_points::<P>(tcx);
 
     // Debug print all our entries and where they are in the src
     // (this isn't actually needed for analysis)

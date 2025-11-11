@@ -1,4 +1,4 @@
-#![sniff_tool::check_unsafe]
+#![sniff_test_attrs::check_unsafe_pub]
 
 /// # Safety
 /// - non-null: ptr must be non-null
@@ -7,10 +7,11 @@ fn foo(ptr: *const i32) -> i32 {
     a + 2
 }
 
-fn baz(ptr: *const i32) -> i32 {
+pub fn baz(ptr: *const i32) -> i32 {
     unsafe { *ptr }
 }
 
+#[sniff_test_attrs::check_unsafe]
 fn bar(ptr: *const i32) -> i32 {
     /// SAFETY:
     /// - non-null: i checked to make sure this is nn
@@ -20,7 +21,6 @@ fn bar(ptr: *const i32) -> i32 {
     // }
 }
 
-#[sniff_test_attrs::check_unsafe]
 fn main() {
     let a = Some(3).unwrap();
     let x = 1;
