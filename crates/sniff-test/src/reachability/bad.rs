@@ -1,8 +1,10 @@
 //! Finds the 'bad' functions that should be annotated
 
-use crate::annotations::{self, Annotation, ParsingError, Requirement};
+use crate::annotations::{self, DefAnnotation, parse_fn_def};
+use crate::properties::Property;
 use crate::reachability::LocallyReachable;
 use std::collections::HashMap;
+use std::ops::Try;
 
 use crate::utils::MultiEmittable;
 use rustc_hir::def_id::{DefId, DefPathHash};
@@ -12,100 +14,39 @@ use rustc_public::ty::FnDef;
 use rustc_span::source_map::Spanned;
 use rustc_span::{ErrorGuaranteed, Span};
 
-// TODO: use this shit instead in all the parsing
-enum Annotations {
-    General,
-    SpecificConditions(Vec<Requirement>),
-}
-
-type BadMap = HashMap<DefPathHash, Vec<Requirement>>;
-
-fn build_bad_map(tcx: TyCtxt) -> Result<BadMap, ParsingError> {
-    // for a in tcx.hir_crate_items(()).definitions() {
-
-    // }
-
-    todo!()
-}
-
-pub struct CallsToBad {
-    pub def_id: DefId,
-    pub requirements: Vec<Spanned<annotations::Requirement>>,
+#[derive(Debug)]
+pub struct CallsWObligations {
+    pub call_to: DefId,
+    pub w_annotation: DefAnnotation,
     pub from_spans: Vec<Span>,
 }
 
-fn is_call_bad<'tcx>(
-    tcx: TyCtxt<'tcx>,
-) -> impl Fn((&DefId, &Vec<Span>)) -> Option<Result<CallsToBad, ParsingError<'tcx>>> {
+fn call_has_obligations<P: Property>(
+    tcx: TyCtxt,
+    property: P,
+) -> impl Fn((&DefId, &Vec<Span>)) -> Option<CallsWObligations> {
     move |(to_def_id, from_spans)| {
-        let requirements = match Requirement::try_parse(tcx, to_def_id)? {
-            Err(e) => return Some(Err(e)),
-            Ok(req) => req,
-        };
+        let annotation = parse_fn_def(tcx, *to_def_id, property)?;
 
-        // match
-        Some(Ok(CallsToBad {
-            def_id: *to_def_id,
-            requirements,
-            from_spans: from_spans.clone(),
-        }))
+        if annotation.creates_obligation() {
+            Some(CallsWObligations {
+                call_to: *to_def_id,
+                w_annotation: annotation,
+                from_spans: from_spans.clone(),
+            })
+        } else {
+            None
+        }
     }
 }
 
-pub fn find_bad_calls<'tcx>(
-    tcx: TyCtxt<'tcx>,
+pub fn find_calls_w_obligations<P: Property>(
+    tcx: TyCtxt,
     locally_reachable: &LocallyReachable,
-) -> Result<impl Iterator<Item = CallsToBad>, ParsingError<'tcx>> {
+    property: P,
+) -> impl Iterator<Item = CallsWObligations> {
     locally_reachable
         .calls_to
         .iter()
-        .filter_map(is_call_bad(tcx))
-        .collect::<Result<Vec<_>, ParsingError>>()
-        .map(std::iter::IntoIterator::into_iter)
-}
-
-pub fn filter_bad_functions(
-    tcx: TyCtxt,
-    items: &[FnDef],
-) -> Result<HashMap<FnDef, Vec<Spanned<Requirement>>>, ErrorGuaranteed> {
-    let annotated_bad = items
-        .iter()
-        .filter_map(|item| {
-            Some((
-                *item,
-                Requirement::try_parse(tcx, rustc_public::rustc_internal::internal(tcx, item.0))?,
-            ))
-        })
-        .collect::<HashMap<_, _>>()
-        .emit_all_errors(tcx)?;
-
-    let should_be_bad = items
-        .iter()
-        .filter_map(|fn_def| Some((fn_def, should_be_bad(tcx, *fn_def)?)));
-
-    let bad_but_missed = should_be_bad
-        .filter(|(fn_def, _reason)| !annotated_bad.contains_key(fn_def))
-        .collect::<Box<[_]>>();
-
-    assert!(
-        bad_but_missed.is_empty(),
-        "some functions should be annotated for the following reasons, but are not {bad_but_missed:?}"
-    );
-
-    Ok(annotated_bad)
-}
-
-#[derive(Debug)]
-pub enum ShouldBeBadReason {
-    MarkedUnsafe,
-    // SpecifiedInToml?
-}
-
-// TODO: add config from .toml file.
-fn should_be_bad(_tcx: TyCtxt, fn_def: FnDef) -> Option<ShouldBeBadReason> {
-    if fn_def.fn_sig().value.safety == Safety::Unsafe {
-        return Some(ShouldBeBadReason::MarkedUnsafe);
-    }
-
-    None
+        .filter_map(call_has_obligations(tcx, property))
 }

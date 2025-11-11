@@ -1,42 +1,35 @@
+use regex::Regex;
 use rustc_hir::ExprKind;
 use rustc_middle::ty::TyCtxt;
 use rustc_span::source_map::{Spanned, respan};
 use std::fmt::Display;
 
 use super::Axiom;
-use crate::axioms::{AxiomFinder, AxiomaticBadness};
-
-pub struct PanicFinder;
+use crate::{annotations::PropertyViolation, properties::Property};
 
 #[derive(Debug, Clone)]
 pub enum PanicAxiom {
     ExplicitPanic,
 }
 
-impl Axiom for PanicAxiom {
-    fn axiom_kind_name() -> &'static str {
+#[derive(Debug, Clone, Copy)]
+pub struct PanicProperty;
+
+impl Property for PanicProperty {
+    type Axiom = PanicAxiom;
+    fn name() -> &'static str {
         "panicking"
     }
 
-    fn known_requirements(&self) -> Option<AxiomaticBadness> {
-        match self {
-            Self::ExplicitPanic => Some(AxiomaticBadness::Unconditional),
-        }
+    fn callsite_regex(&self) -> Regex {
+        todo!()
     }
-}
 
-impl Display for PanicAxiom {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::ExplicitPanic => f.write_str("explicit panic"),
-        }
+    fn fn_def_regex(&self) -> Regex {
+        Regex::new("(\n|^)(\\s*)[#]+ (Panics|PANICS)(\n|$)").unwrap()
     }
-}
 
-impl AxiomFinder for PanicFinder {
-    type Axiom = PanicAxiom;
-
-    fn find_in_expr(
+    fn find_axioms_in_expr(
         &mut self,
         tcx: TyCtxt,
         tyck: &rustc_middle::ty::TypeckResults,
@@ -59,5 +52,26 @@ impl AxiomFinder for PanicFinder {
         }
 
         vec![]
+    }
+}
+
+impl Axiom for PanicAxiom {
+    type Property = PanicProperty;
+    fn axiom_kind_name() -> &'static str {
+        "panicking"
+    }
+
+    fn known_requirements(&self) -> Option<PropertyViolation> {
+        match self {
+            Self::ExplicitPanic => Some(PropertyViolation::Unconditional),
+        }
+    }
+}
+
+impl Display for PanicAxiom {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::ExplicitPanic => f.write_str("explicit panic"),
+        }
     }
 }

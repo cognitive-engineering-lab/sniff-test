@@ -3,15 +3,23 @@ use rustc_middle::ty::TyCtxt;
 
 use crate::reachability::attr::{self, SniffToolAttr};
 
-// pub fn filter_entry_points(tcx: TyCtxt, items: &[FnDef]) -> Vec<FnDef> {
-//     items
-//         .into_iter()
-//         .filter(|item| is_entry_point(tcx, **item))
-//         .copied()
-//         .collect::<Vec<_>>()
-// }
+pub fn local_entry_points(tcx: TyCtxt) -> impl Iterator<Item = LocalDefId> {
+    // global_annotations(tcx);
+    if false {
+        todo!()
+    } else {
+        annotated_local_entry_points(tcx)
+    }
+}
 
-pub fn annotated_local_entry_points(tcx: TyCtxt) -> impl Iterator<Item = LocalDefId> {
+pub fn global_annotations(tcx: TyCtxt) -> bool {
+    for attr in tcx.hir_krate_attrs() {
+        println!("attr is {attr:?}");
+    }
+    todo!()
+}
+
+fn annotated_local_entry_points(tcx: TyCtxt) -> impl Iterator<Item = LocalDefId> {
     tcx.hir_body_owners()
         .filter(move |item| is_entry_point(tcx, item.to_def_id()))
 }

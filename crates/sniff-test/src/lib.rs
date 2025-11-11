@@ -2,6 +2,7 @@
 
 #![feature(rustc_private)]
 #![feature(box_patterns)]
+#![feature(try_trait_v2)]
 #![cfg_attr(test, feature(assert_matches))]
 #![deny(warnings)]
 #![warn(clippy::pedantic)]
@@ -9,7 +10,8 @@
     unused,
     clippy::must_use_candidate,
     clippy::missing_panics_doc, // TODO: should remove this, kinda ironic for us to be using it...
-    clippy::missing_errors_doc
+    clippy::missing_errors_doc,
+    clippy::needless_pass_by_value,
 )]
 
 extern crate lazy_static;
@@ -26,8 +28,8 @@ extern crate rustc_span;
 extern crate rustc_type_ir;
 
 pub mod annotations;
-mod axioms;
 mod check;
+pub mod properties;
 mod reachability;
 pub mod utils;
 
@@ -81,13 +83,13 @@ fn env_logger_init_file(driver: bool) {
     env_logger::Builder::from_default_env()
         .format_timestamp(None)
         .target(env_logger::Target::Pipe(Box::new(log_file)))
-        .init()
+        .init();
 }
 
 fn env_logger_init_terminal() {
     env_logger::Builder::from_default_env()
         .format_timestamp(None)
-        .init()
+        .init();
 }
 
 pub fn env_logger_init(driver: bool) {
@@ -131,7 +133,7 @@ impl RustcPlugin for PrintAllItemsPlugin {
 
         // Register the sniff_tool
         let existing = std::env::var("RUSTFLAGS").unwrap_or_default();
-        cargo.env("RUSTFLAGS", format!("-Zcrate-attr=feature(register_tool) -Zcrate-attr=register_tool(sniff_tool) -Aunused-doc-comments {existing}"));
+        cargo.env("RUSTFLAGS", format!("-Zcrate-attr=feature(register_tool) -Zcrate-attr=register_tool(sniff_tool) -Aunused-doc-comments {existing} -Zcrate-attr=feature(custom_inner_attributes)"));
     }
 
     // In the driver, we use the Rustc API to start a compiler session

@@ -1,7 +1,9 @@
-// /// # Unsafe
-// /// - non-null: ptr must be non-null
+// #![sniff_tool::check_unsafe]
+
+/// # Safety
+/// - non-null: ptr must be non-null
 fn foo(ptr: *const i32) -> i32 {
-    let a = unsafe { *ptr };
+    let a = baz(ptr);
     a + 2
 }
 
@@ -22,11 +24,12 @@ fn bar(ptr: *const i32) -> i32 {
 fn main() {
     let a = Some(3).unwrap();
     let x = 1;
-    /// Hello
-    bar(&raw const x);
+    /// SAFETY: blah blah
+    /// more doc comments
+    unsafe {
+        foo(&raw const x);
+    }
 }
-
-// - bug to put safety comments on calls to fn without obligations
 
 // Notes from justus
 // - instance safety for some traits
