@@ -1,4 +1,4 @@
-// #![sniff_tool::check_unsafe]
+#![sniff_tool::check_unsafe]
 
 /// # Safety
 /// - non-null: ptr must be non-null
@@ -7,7 +7,6 @@ fn foo(ptr: *const i32) -> i32 {
     a + 2
 }
 
-/// # Safety
 fn baz(ptr: *const i32) -> i32 {
     unsafe { *ptr }
 }

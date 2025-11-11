@@ -15,8 +15,11 @@ mod err;
 mod expr;
 
 /// Checks that all local functions in the crate are properly annotated.
-pub fn check_properly_annotated(tcx: TyCtxt) -> Result<(), ErrorGuaranteed> {
-    let entry = reachability::local_entry_points(tcx).collect::<Vec<_>>();
+pub fn check_properly_annotated<P: Property>(
+    tcx: TyCtxt,
+    property: P,
+) -> Result<(), ErrorGuaranteed> {
+    let entry = reachability::local_entry_points::<P>(tcx);
 
     // Debug print all our entries and where they are in the src
     // (this isn't actually needed for analysis)
@@ -37,7 +40,7 @@ pub fn check_properly_annotated(tcx: TyCtxt) -> Result<(), ErrorGuaranteed> {
 
     // For all reachable local function definitions, ensure their axioms align with their annotations.
     for func in reachable {
-        check_function_properties(tcx, func, properties::SafetyProperty)?;
+        check_function_properties(tcx, func, property)?;
     }
 
     Ok(())

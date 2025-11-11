@@ -169,7 +169,7 @@ impl rustc_driver::Callbacks for PrintAllItemsCallbacks {
         let crate_name = tcx.crate_name(LOCAL_CRATE);
 
         log::debug!("checking crate {crate_name}");
-        let Ok(()) = check_properly_annotated(tcx) else {
+        let Ok(()) = check_properly_annotated(tcx, properties::SafetyProperty) else {
             return rustc_driver::Compilation::Stop;
         };
 

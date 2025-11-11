@@ -11,6 +11,7 @@ use super::Axiom;
 use crate::{
     annotations::{self, PropertyViolation},
     properties::Property,
+    reachability::attr,
 };
 
 #[derive(Debug, Clone, Copy)]

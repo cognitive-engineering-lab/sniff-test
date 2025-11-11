@@ -5,7 +5,7 @@ use rustc_span::source_map::{Spanned, respan};
 use std::fmt::Display;
 
 use super::Axiom;
-use crate::{annotations::PropertyViolation, properties::Property};
+use crate::{annotations::PropertyViolation, properties::Property, reachability::attr};
 
 #[derive(Debug, Clone)]
 pub enum PanicAxiom {

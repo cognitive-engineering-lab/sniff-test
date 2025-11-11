@@ -2,7 +2,7 @@
 
 use crate::{
     annotations::{self, PropertyViolation},
-    reachability::LocallyReachable,
+    reachability::{LocallyReachable, attr::SniffToolAttr},
 };
 use regex::Regex;
 use rustc_hir::intravisit::{self, Visitor};
@@ -19,10 +19,6 @@ mod safety;
 
 pub use panic::PanicProperty;
 pub use safety::SafetyProperty;
-
-// pub fn all_properties() -> Arc<Vec<Box<dyn Property>>> {
-//     Arc::new(vec![Box::new(SafetyProperty)])
-// }
 
 pub trait Property: Debug + 'static + Copy {
     type Axiom: Axiom;
