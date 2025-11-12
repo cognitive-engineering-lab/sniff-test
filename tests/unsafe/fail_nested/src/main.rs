@@ -1,7 +1,8 @@
 /// # Unsafe
 /// * nn: ptr should be non null
 fn foo(ptr: *const i32) -> i32 {
-    unsafe { *ptr }
+    let a = unsafe { *ptr };
+    a + 2
 }
 
 fn bar(ptr: *const i32) -> i32 {

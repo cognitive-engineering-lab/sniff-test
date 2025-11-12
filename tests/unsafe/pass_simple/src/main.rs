@@ -1,7 +1,6 @@
 /// # Unsafe
-/// - nonnn: non null
-/// - non-null: aligned
-///   and ready for business
+/// - non-null: ptr must be non-null
+/// - aligned: ptr must be aligned for an i32
 unsafe fn foo(ptr: *const i32) -> i32 {
     unsafe { *ptr }
 }
@@ -12,8 +11,8 @@ fn main() {
 
     unsafe {
         /// Safety:
-        /// * nn-nn: ive done some check to make sure ptr isnt null
-        /// * nn-n: ive done some check to make sure ptr isnt null
+        /// * non-null: a pointer that comes from a reference is trivially non-null
+        /// * aligned: a pointer that comes from a reference is trivially aligned
         foo(&raw const x);
     }
 }

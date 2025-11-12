@@ -5,3 +5,5 @@ edition = "2024"
 
 [dependencies]
 sniff-test-attrs = { path = "../../../crates/sniff-test-attrs" }
+
+[workspace]

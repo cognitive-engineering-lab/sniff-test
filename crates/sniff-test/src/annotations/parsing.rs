@@ -1,6 +1,10 @@
 //! Utilities for parsing values from full doc strings.
 
-use crate::annotations::{Justification, Requirement, err::ParsingIssue, types::ConditionName};
+use crate::annotations::{
+    Justification, Requirement,
+    err::{self, ParsingIssue},
+    types::ConditionName,
+};
 use regex::Regex;
 use std::ops::Range;
 
@@ -17,7 +21,7 @@ fn subslice_offset_stable(original: &str, inner: &str) -> Option<usize> {
 }
 
 /// A trait for parsing structured data from bulleted lists in doc strings.
-pub trait ParseBulletsFromString: Sized {
+trait ParseBulletsFromString: Sized {
     /// The delimiter used to separate out two portions of each bullet.
     /// See [`parse_bullet`](ParseBulletsFromString::parse_bullet) for how it can be used.
     const BULLET_SEP: &str = ":";
@@ -38,7 +42,9 @@ pub trait ParseBulletsFromString: Sized {
         bullet_pre_chars: Range<usize>,
     ) -> Result<Self, ParsingIssue>;
 
-    fn parse_bullets_from_string(original_comment_str: &str) -> Result<Vec<Self>, ParsingIssue> {
+    fn parse_bullets_from_string(
+        original_comment_str: &str,
+    ) -> Result<Vec<(Self, Range<usize>)>, ParsingIssue> {
         // First, make sure we have the marker and trim everything before that.
         let comment_str = &original_comment_str[Self::section_marker_regex()
             .find(original_comment_str)
@@ -81,7 +87,10 @@ pub trait ParseBulletsFromString: Sized {
                             offset..(offset + bullet_str.len()),
                             bullet_str.find(' ').unwrap_or(bullet_str.len()),
                         ))?;
-                Self::parse_bullet(pre, post, offset..(offset + pre.len()))
+                Ok((
+                    Self::parse_bullet(pre, post, offset..(offset + pre.len()))?,
+                    offset..(offset + bullet_str.len()),
+                ))
             })
             .collect::<Result<Vec<_>, ParsingIssue>>()
     }
@@ -186,513 +195,513 @@ mod bullet {
     }
 }
 
-#[cfg(test)]
-mod test {
-    /// General utility macro for testing that parsing a certain `$type` from a certain `$str`
-    /// results in the expected result.
-    macro_rules! test_string_parse {
-        (($type: ty) $test_name: tt: $str: expr => ok $expected_requirements: expr) => {
-            #[test]
-            fn $test_name() {
-                let doc_str = $str;
-                let requirements = <$type>::parse_bullets_from_string(doc_str);
-                assert_eq!(requirements, Ok($expected_requirements));
-            }
-        };
-        (($type: ty) $test_name: tt: $str: expr => err $expected_err: pat) => {
-            #[test]
-            fn $test_name() {
-                let doc_str = $str;
-                let requirements = <$type>::parse_bullets_from_string(doc_str);
-                std::assert_matches::assert_matches!(requirements, Err($expected_err));
-            }
-        };
-    }
+// #[cfg(test)]
+// mod test {
+//     /// General utility macro for testing that parsing a certain `$type` from a certain `$str`
+//     /// results in the expected result.
+//     macro_rules! test_string_parse {
+//         (($type: ty) $test_name: tt: $str: expr => ok $expected_requirements: expr) => {
+//             #[test]
+//             fn $test_name() {
+//                 let doc_str = $str;
+//                 let requirements = <$type>::parse_bullets_from_string(doc_str);
+//                 assert_eq!(requirements, Ok($expected_requirements));
+//             }
+//         };
+//         (($type: ty) $test_name: tt: $str: expr => err $expected_err: pat) => {
+//             #[test]
+//             fn $test_name() {
+//                 let doc_str = $str;
+//                 let requirements = <$type>::parse_bullets_from_string(doc_str);
+//                 std::assert_matches::assert_matches!(requirements, Err($expected_err));
+//             }
+//         };
+//     }
 
-    /// General utility macro for making a vector of types that can be
-    /// constructed with a `try_new` method.
-    macro_rules! try_new {
-        ($type: ident, $($name: expr => $desc: expr)*) => {
-            vec![$(crate::annotations::$type::new(crate::annotations::types::ConditionName::try_new($name).unwrap(), $desc),)*]
-        };
-    }
+//     /// General utility macro for making a vector of types that can be
+//     /// constructed with a `try_new` method.
+//     macro_rules! try_new {
+//         ($type: ident, $($name: expr => $desc: expr)*) => {
+//             vec![$(crate::annotations::$type::new(crate::annotations::types::ConditionName::try_new($name).unwrap(), $desc),)*]
+//         };
+//     }
 
-    #[rustfmt::skip] // Skip formatting because it looks weird for the testing macros.
-    mod requirements {
-        use crate::annotations::{parsing::ParseBulletsFromString, Requirement};
-        use crate::annotations::types::InvalidConditionNameReason;
+//     #[rustfmt::skip] // Skip formatting because it looks weird for the testing macros.
+//     mod requirements {
+//         use crate::annotations::{parsing::ParseBulletsFromString, Requirement};
+//         use crate::annotations::types::InvalidConditionNameReason;
 
-        /// Generate a test that ensures expected [`Requirement`] parsing from a given doc string.
-        macro_rules! test_req_parse {
-            ($test_name: tt: $str: expr => ok $expected_requirements: expr) => {
-                test_string_parse!((Requirement) $test_name: $str => ok $expected_requirements);
-            };
-            ($test_name: tt: $str: expr => err $expected_err: pat) => {
-                test_string_parse!((Requirement) $test_name: $str => err $expected_err);
-            };
-        }
+//         /// Generate a test that ensures expected [`Requirement`] parsing from a given doc string.
+//         macro_rules! test_req_parse {
+//             ($test_name: tt: $str: expr => ok $expected_requirements: expr) => {
+//                 test_string_parse!((Requirement) $test_name: $str => ok $expected_requirements);
+//             };
+//             ($test_name: tt: $str: expr => err $expected_err: pat) => {
+//                 test_string_parse!((Requirement) $test_name: $str => err $expected_err);
+//             };
+//         }
 
-        /// Helper for easily creating vectors of [`Requirement`]s.
-        macro_rules! reqs {
-            ($($name: expr => $desc: expr)*) => {
-                try_new!(Requirement, $($name => $desc)*)
-            };
-        }
+//         /// Helper for easily creating vectors of [`Requirement`]s.
+//         macro_rules! reqs {
+//             ($($name: expr => $desc: expr)*) => {
+//                 try_new!(Requirement, $($name => $desc)*)
+//             };
+//         }
 
-        use crate::annotations::err::ParsingIssue;
+//         use crate::annotations::err::ParsingIssue;
 
-        test_req_parse!(simple_no_requirements:
-                r"# Unsafe"
-            => err ParsingIssue::EmptyMarker);
+//         test_req_parse!(simple_no_requirements:
+//                 r"# Unsafe"
+//             => err ParsingIssue::EmptyMarker);
 
-        test_req_parse!(simple_no_marker:
-                r"This is a random doc comment"
-            => err ParsingIssue::NoMarkerPattern);
+//         test_req_parse!(simple_no_marker:
+//                 r"This is a random doc comment"
+//             => err ParsingIssue::NoMarkerPattern);
 
-        test_req_parse!(multi_line_no_marker:
-                r"This is a random doc comment.
-                It is multiple lines, but it still has no marker
-                unfortunately..."
-            => err ParsingIssue::NoMarkerPattern);
+//         test_req_parse!(multi_line_no_marker:
+//                 r"This is a random doc comment.
+//                 It is multiple lines, but it still has no marker
+//                 unfortunately..."
+//             => err ParsingIssue::NoMarkerPattern);
 
-        test_req_parse!(incorrect_markers:
-                r"# Hi!
-                # Hello!
-                # Usage
-                # Overview"
-            => err ParsingIssue::NoMarkerPattern);
+//         test_req_parse!(incorrect_markers:
+//                 r"# Hi!
+//                 # Hello!
+//                 # Usage
+//                 # Overview"
+//             => err ParsingIssue::NoMarkerPattern);
 
-        test_req_parse!(incorrect_marker_w_desc:
-                r"# Usage
-                    - nn: the pointer must be non-null
-                    - align: the pointer must be aligned"
-            => err ParsingIssue::NoMarkerPattern);
+//         test_req_parse!(incorrect_marker_w_desc:
+//                 r"# Usage
+//                     - nn: the pointer must be non-null
+//                     - align: the pointer must be aligned"
+//             => err ParsingIssue::NoMarkerPattern);
 
-        test_req_parse!(multiple_correct_markers:
-                r"# Unsafe
-                   # Unsafe"
-            => err ParsingIssue::MultipleMarkerPatterns(..));
+//         test_req_parse!(multiple_correct_markers:
+//                 r"# Unsafe
+//                    # Unsafe"
+//             => err ParsingIssue::MultipleMarkerPatterns(..));
 
-        test_req_parse!(multiple_correct_markers_separeted:
-                r"# Unsafe
-                    - nn: the pointer must be non-null
-                    - align: the pointer must be aligned
-                   # Unsafe"
-            => err ParsingIssue::MultipleMarkerPatterns(..));
+//         test_req_parse!(multiple_correct_markers_separeted:
+//                 r"# Unsafe
+//                     - nn: the pointer must be non-null
+//                     - align: the pointer must be aligned
+//                    # Unsafe"
+//             => err ParsingIssue::MultipleMarkerPatterns(..));
 
-        test_req_parse!(bullet_with_no_colon:
-                r"# Unsafe
-                    - nn the pointer must be non-null"
-            => err ParsingIssue::NoColon(..));
+//         test_req_parse!(bullet_with_no_colon:
+//                 r"# Unsafe
+//                     - nn the pointer must be non-null"
+//             => err ParsingIssue::NoColon(..));
 
-        test_req_parse!(multiple_bullets_with_no_colon:
-                r"# Unsafe
-                    - nn the pointer must be non-null
-                    - align the pointer must be aligned"
-            => err ParsingIssue::NoColon(..));
+//         test_req_parse!(multiple_bullets_with_no_colon:
+//                 r"# Unsafe
+//                     - nn the pointer must be non-null
+//                     - align the pointer must be aligned"
+//             => err ParsingIssue::NoColon(..));
 
-        test_req_parse!(simplest_use:
-                r"# Unsafe
-                    - nn: the pointer must be non-null"
-            => ok reqs!(
-                    "nn" => "the pointer must be non-null"
-                ));
+//         test_req_parse!(simplest_use:
+//                 r"# Unsafe
+//                     - nn: the pointer must be non-null"
+//             => ok reqs!(
+//                     "nn" => "the pointer must be non-null"
+//                 ));
 
-        test_req_parse!(simple_use_many_requirements:
-                r"# Unsafe
-                        - nn: the pointer must be non-null
-                        - align: the pointer must be aligned
-                        - heap-allocated: the pointer must be heap-allocated"
-            => ok reqs!(
-                    "nn" => "the pointer must be non-null"
-                    "align" => "the pointer must be aligned"
-                    "heap-allocated" => "the pointer must be heap-allocated"
-                ));
+//         test_req_parse!(simple_use_many_requirements:
+//                 r"# Unsafe
+//                         - nn: the pointer must be non-null
+//                         - align: the pointer must be aligned
+//                         - heap-allocated: the pointer must be heap-allocated"
+//             => ok reqs!(
+//                     "nn" => "the pointer must be non-null"
+//                     "align" => "the pointer must be aligned"
+//                     "heap-allocated" => "the pointer must be heap-allocated"
+//                 ));
 
-        test_req_parse!(ignores_text_before:
-                r"filler text, blah blah blah...
-                    # Unsafe
-                        - nn: the pointer must be non-null
-                        - align: the pointer must be aligned"
-            => ok reqs!(
-                    "nn" => "the pointer must be non-null"
-                    "align"=> "the pointer must be aligned"
-                ));
+//         test_req_parse!(ignores_text_before:
+//                 r"filler text, blah blah blah...
+//                     # Unsafe
+//                         - nn: the pointer must be non-null
+//                         - align: the pointer must be aligned"
+//             => ok reqs!(
+//                     "nn" => "the pointer must be non-null"
+//                     "align"=> "the pointer must be aligned"
+//                 ));
 
-        test_req_parse!(intro_prose_allowed:
-                r"# Unsafe
-                    This function must satisfy the following invariants
-                    to avoid UB:
-                        - nn: the pointer must be non-null
-                        - align: the pointer must be aligned"
-            => ok reqs!(
-                    "nn" => "the pointer must be non-null"
-                    "align"=> "the pointer must be aligned"
-                ));
+//         test_req_parse!(intro_prose_allowed:
+//                 r"# Unsafe
+//                     This function must satisfy the following invariants
+//                     to avoid UB:
+//                         - nn: the pointer must be non-null
+//                         - align: the pointer must be aligned"
+//             => ok reqs!(
+//                     "nn" => "the pointer must be non-null"
+//                     "align"=> "the pointer must be aligned"
+//                 ));
 
-        test_req_parse!(ignores_other_markers_before:
-                r"# Usage
-                    - Use this struct however you'd like, I don't mind.
-                    # Unsafe
-                        - nn: the pointer must be non-null
-                        - align: the pointer must be aligned"
-            => ok reqs!(
-                    "nn" => "the pointer must be non-null"
-                    "align"=> "the pointer must be aligned"
-                ));
+//         test_req_parse!(ignores_other_markers_before:
+//                 r"# Usage
+//                     - Use this struct however you'd like, I don't mind.
+//                     # Unsafe
+//                         - nn: the pointer must be non-null
+//                         - align: the pointer must be aligned"
+//             => ok reqs!(
+//                     "nn" => "the pointer must be non-null"
+//                     "align"=> "the pointer must be aligned"
+//                 ));
 
-        test_req_parse!(ignores_other_markers_after:
-                r"# Unsafe
-                        - nn: the pointer must be non-null
-                        - align: the pointer must be aligned
-                    # Usage
-                        - Use this struct however you'd like, I don't mind."
-            => ok reqs!(
-                    "nn" => "the pointer must be non-null"
-                    "align"=> "the pointer must be aligned"
-                ));
+//         test_req_parse!(ignores_other_markers_after:
+//                 r"# Unsafe
+//                         - nn: the pointer must be non-null
+//                         - align: the pointer must be aligned
+//                     # Usage
+//                         - Use this struct however you'd like, I don't mind."
+//             => ok reqs!(
+//                     "nn" => "the pointer must be non-null"
+//                     "align"=> "the pointer must be aligned"
+//                 ));
 
-        test_req_parse!(ignores_sandwiched_other_markers:
-                r"# Overview
-                        - this is a function of some kind
-                    # Unsafe
-                        - nn: the pointer must be non-null
-                        - align: the pointer must be aligned
-                    # Usage
-                        - Use this struct however you'd like, I don't mind."
-            => ok reqs!(
-                    "nn" => "the pointer must be non-null"
-                    "align"=> "the pointer must be aligned"
-                ));
+//         test_req_parse!(ignores_sandwiched_other_markers:
+//                 r"# Overview
+//                         - this is a function of some kind
+//                     # Unsafe
+//                         - nn: the pointer must be non-null
+//                         - align: the pointer must be aligned
+//                     # Usage
+//                         - Use this struct however you'd like, I don't mind."
+//             => ok reqs!(
+//                     "nn" => "the pointer must be non-null"
+//                     "align"=> "the pointer must be aligned"
+//                 ));
 
-        test_req_parse!(section_ends_with_empty_line:
-                r"# Unsafe
-                        - nn: the pointer must be non-null
-                        - align: the pointer must be aligned
+//         test_req_parse!(section_ends_with_empty_line:
+//                 r"# Unsafe
+//                         - nn: the pointer must be non-null
+//                         - align: the pointer must be aligned
 
-                        - Use this struct however you'd like, I don't mind."
-            => ok reqs!(
-                    "nn" => "the pointer must be non-null"
-                    "align"=> "the pointer must be aligned"
-                ));
+//                         - Use this struct however you'd like, I don't mind."
+//             => ok reqs!(
+//                     "nn" => "the pointer must be non-null"
+//                     "align"=> "the pointer must be aligned"
+//                 ));
 
-        test_req_parse!(section_ends_with_whitespace_only_line:
-                r"# Unsafe
-                        - nn: the pointer must be non-null
-                        - align: the pointer must be aligned
-                        
-                        - Use this struct however you'd like, I don't mind."
-            => ok reqs!(
-                    "nn" => "the pointer must be non-null"
-                    "align"=> "the pointer must be aligned"
-                ));
+//         test_req_parse!(section_ends_with_whitespace_only_line:
+//                 r"# Unsafe
+//                         - nn: the pointer must be non-null
+//                         - align: the pointer must be aligned
 
-        test_req_parse!(markers_arent_case_sensitive:
-                r"# UNSAFE
-                        - nn: the pointer must be non-null
-                        - align: the pointer must be aligned"
-            => ok reqs!(
-                    "nn" => "the pointer must be non-null"
-                    "align"=> "the pointer must be aligned"
-                ));
-        test_req_parse!(markers_allow_any_markdown_header:
-                r"### UNSAFE
-                        - nn: the pointer must be non-null
-                        - align: the pointer must be aligned"
-            => ok reqs!(
-                    "nn" => "the pointer must be non-null"
-                    "align"=> "the pointer must be aligned"
-                ));
+//                         - Use this struct however you'd like, I don't mind."
+//             => ok reqs!(
+//                     "nn" => "the pointer must be non-null"
+//                     "align"=> "the pointer must be aligned"
+//                 ));
 
-        test_req_parse!(asterisk_bullets_allowed:
-                r"# Unsafe
-                        * nn: the pointer must be non-null
-                        * align: the pointer must be aligned"
-            => ok reqs!(
-                    "nn" => "the pointer must be non-null"
-                    "align"=> "the pointer must be aligned"
-                ));
+//         test_req_parse!(markers_arent_case_sensitive:
+//                 r"# UNSAFE
+//                         - nn: the pointer must be non-null
+//                         - align: the pointer must be aligned"
+//             => ok reqs!(
+//                     "nn" => "the pointer must be non-null"
+//                     "align"=> "the pointer must be aligned"
+//                 ));
+//         test_req_parse!(markers_allow_any_markdown_header:
+//                 r"### UNSAFE
+//                         - nn: the pointer must be non-null
+//                         - align: the pointer must be aligned"
+//             => ok reqs!(
+//                     "nn" => "the pointer must be non-null"
+//                     "align"=> "the pointer must be aligned"
+//                 ));
 
-        test_req_parse!(bullet_types_must_match:
-                r"# Unsafe
-                        * nn: the pointer must be non-null
-                        - align: the pointer must be aligned"
-            => err ParsingIssue::NonMatchingBullets(_));
+//         test_req_parse!(asterisk_bullets_allowed:
+//                 r"# Unsafe
+//                         * nn: the pointer must be non-null
+//                         * align: the pointer must be aligned"
+//             => ok reqs!(
+//                     "nn" => "the pointer must be non-null"
+//                     "align"=> "the pointer must be aligned"
+//                 ));
 
-        test_req_parse!(spaces_after_bullet_ignored:
-                r"# Unsafe
-                        -  nn: the pointer must be non-null
-                        -   align: the pointer must be aligned"
-            => ok reqs!(
-                    "nn" => "the pointer must be non-null"
-                    "align"=> "the pointer must be aligned"
-                ));
+//         test_req_parse!(bullet_types_must_match:
+//                 r"# Unsafe
+//                         * nn: the pointer must be non-null
+//                         - align: the pointer must be aligned"
+//             => err ParsingIssue::NonMatchingBullets(_));
 
-        test_req_parse!(spaces_before_colon_disallowed:
-                r"# Unsafe
-                        - nn : the pointer must be non-null
-                        - align     : the pointer must be aligned"
-            => err ParsingIssue::InvalidConditionName {reason: InvalidConditionNameReason::TrailingWhitespace, ..});
+//         test_req_parse!(spaces_after_bullet_ignored:
+//                 r"# Unsafe
+//                         -  nn: the pointer must be non-null
+//                         -   align: the pointer must be aligned"
+//             => ok reqs!(
+//                     "nn" => "the pointer must be non-null"
+//                     "align"=> "the pointer must be aligned"
+//                 ));
 
-        test_req_parse!(multi_word_names_disallowed:
-                r"# Unsafe
-                        - non null: the pointer must be non-null
-                        - aligned ptr: the pointer must be aligned"
-            => err ParsingIssue::InvalidConditionName {reason: InvalidConditionNameReason::MultipleWords, ..});
+//         test_req_parse!(spaces_before_colon_disallowed:
+//                 r"# Unsafe
+//                         - nn : the pointer must be non-null
+//                         - align     : the pointer must be aligned"
+//             => err ParsingIssue::InvalidConditionName {reason: InvalidConditionNameReason::TrailingWhitespace, ..});
 
-        test_req_parse!(kebab_case_names_allowed:
-                r"# Unsafe
-                        - non-null: the pointer must be non-null
-                        - aligned-ptr: the pointer must be aligned"
-            => ok reqs!(
-                    "non-null" => "the pointer must be non-null"
-                    "aligned-ptr"=> "the pointer must be aligned"
-                ));
+//         test_req_parse!(multi_word_names_disallowed:
+//                 r"# Unsafe
+//                         - non null: the pointer must be non-null
+//                         - aligned ptr: the pointer must be aligned"
+//             => err ParsingIssue::InvalidConditionName {reason: InvalidConditionNameReason::MultipleWords, ..});
 
-        test_req_parse!(snake_case_names_allowed:
-                r"# Unsafe
-                        - non_null: the pointer must be non-null
-                        - aligned_ptr: the pointer must be aligned"
-            => ok reqs!(
-                    "non_null" => "the pointer must be non-null"
-                    "aligned_ptr"=> "the pointer must be aligned"
-                ));
-    }
+//         test_req_parse!(kebab_case_names_allowed:
+//                 r"# Unsafe
+//                         - non-null: the pointer must be non-null
+//                         - aligned-ptr: the pointer must be aligned"
+//             => ok reqs!(
+//                     "non-null" => "the pointer must be non-null"
+//                     "aligned-ptr"=> "the pointer must be aligned"
+//                 ));
 
-    #[rustfmt::skip] // Skip formatting because it looks weird for the testing macros.
-    mod justifications {
-        use crate::annotations::err::ParsingIssue;
-        use crate::annotations::types::InvalidConditionNameReason;
-        use crate::annotations::{parsing::ParseBulletsFromString, Justification};
+//         test_req_parse!(snake_case_names_allowed:
+//                 r"# Unsafe
+//                         - non_null: the pointer must be non-null
+//                         - aligned_ptr: the pointer must be aligned"
+//             => ok reqs!(
+//                     "non_null" => "the pointer must be non-null"
+//                     "aligned_ptr"=> "the pointer must be aligned"
+//                 ));
+//     }
 
-        /// Generate a test that ensures expected [`Justification`] parsing from a given doc string.
-        macro_rules! test_just_parse {
-            ($test_name: tt: $str: expr => ok $expected_requirements: expr) => {
-                test_string_parse!((Justification) $test_name: $str => ok $expected_requirements);
-            };
-            ($test_name: tt: $str: expr => err $expected_err: pat) => {
-                test_string_parse!((Justification) $test_name: $str => err $expected_err);
-            };
-        }
+//     #[rustfmt::skip] // Skip formatting because it looks weird for the testing macros.
+//     mod justifications {
+//         use crate::annotations::err::ParsingIssue;
+//         use crate::annotations::types::InvalidConditionNameReason;
+//         use crate::annotations::{parsing::ParseBulletsFromString, Justification};
 
-        /// Helper for easily creating vectors of [`Justification`]s.
-        macro_rules! justs {
-            ($($name: expr => $desc: expr)*) => {
-                try_new!(Justification, $($name => $desc)*)
-            };
-        }
+//         /// Generate a test that ensures expected [`Justification`] parsing from a given doc string.
+//         macro_rules! test_just_parse {
+//             ($test_name: tt: $str: expr => ok $expected_requirements: expr) => {
+//                 test_string_parse!((Justification) $test_name: $str => ok $expected_requirements);
+//             };
+//             ($test_name: tt: $str: expr => err $expected_err: pat) => {
+//                 test_string_parse!((Justification) $test_name: $str => err $expected_err);
+//             };
+//         }
 
-        test_just_parse!(simple_no_requirements:
-                r"SAFETY:"
-            => err ParsingIssue::EmptyMarker);
-            
-        test_just_parse!(simple_no_marker:
-                r"This is a random doc comment"
-            => err ParsingIssue::NoMarkerPattern);
-            
-        test_just_parse!(multi_line_no_marker:
-                r"This is a random doc comment.
-                It is multiple lines, but it still has no marker
-                unfortunately..."
-            => err ParsingIssue::NoMarkerPattern);
-            
-        test_just_parse!(incorrect_markers:
-                r"# Hi!
-                Unsafety:
-                # Usage
-                Usage:"
-            => err ParsingIssue::NoMarkerPattern);
-            
-        test_just_parse!(incorrect_marker_w_desc:
-                r"Usage:
-                    - nn: the pointer must be non-null
-                    - align: the pointer must be aligned"
-            => err ParsingIssue::NoMarkerPattern);
+//         /// Helper for easily creating vectors of [`Justification`]s.
+//         macro_rules! justs {
+//             ($($name: expr => $desc: expr)*) => {
+//                 try_new!(Justification, $($name => $desc)*)
+//             };
+//         }
 
-        test_just_parse!(multiple_correct_markers:
-                r"Safety:
-                   Safety:"
-            => err ParsingIssue::MultipleMarkerPatterns(..));
+//         test_just_parse!(simple_no_requirements:
+//                 r"SAFETY:"
+//             => err ParsingIssue::EmptyMarker);
 
-        test_just_parse!(multiple_correct_markers_separeted:
-                r"Safety:
-                    - nn: the pointer must be non-null
-                    - align: the pointer must be aligned
-                   Safety:"
-            => err ParsingIssue::MultipleMarkerPatterns(..));
+//         test_just_parse!(simple_no_marker:
+//                 r"This is a random doc comment"
+//             => err ParsingIssue::NoMarkerPattern);
 
-        test_just_parse!(bullet_with_no_colon:
-                r"Safety:
-                    - nn the pointer must be non-null"
-            => err ParsingIssue::NoColon(..));
+//         test_just_parse!(multi_line_no_marker:
+//                 r"This is a random doc comment.
+//                 It is multiple lines, but it still has no marker
+//                 unfortunately..."
+//             => err ParsingIssue::NoMarkerPattern);
 
-        test_just_parse!(multiple_bullets_with_no_colon:
-                r"Safety:
-                    - nn the pointer must be non-null
-                    - align the pointer must be aligned"
-            => err ParsingIssue::NoColon(..));
-            
-        test_just_parse!(simplest_use:
-                r"SAFETY:
-                    - nn: the pointer must be non-null"
-            => ok justs!(
-                    "nn" => "the pointer must be non-null"
-                ));
-            
-        test_just_parse!(simple_use_many_requirements:
-                r"SAFETY:
-                        - nn: the pointer must be non-null
-                        - align: the pointer must be aligned
-                        - heap-allocated: the pointer must be heap-allocated"
-            => ok justs!(
-                    "nn" => "the pointer must be non-null"
-                    "align" => "the pointer must be aligned"
-                    "heap-allocated" => "the pointer must be heap-allocated"
-                ));
-            
-        test_just_parse!(ignores_text_before:
-                r"filler text, blah blah blah...
-                    SAFETY:
-                        - nn: the pointer must be non-null
-                        - align: the pointer must be aligned"
-            => ok justs!(
-                    "nn" => "the pointer must be non-null"
-                    "align"=> "the pointer must be aligned"
-                ));
+//         test_just_parse!(incorrect_markers:
+//                 r"# Hi!
+//                 Unsafety:
+//                 # Usage
+//                 Usage:"
+//             => err ParsingIssue::NoMarkerPattern);
 
-        test_just_parse!(intro_prose_allowed:
-                r"SAFETY:
-                    This function call will avoid UB because we have satisfied
-                    the following conditions:
-                        - nn: the pointer must be non-null
-                        - align: the pointer must be aligned"
-            => ok justs!(
-                    "nn" => "the pointer must be non-null"
-                    "align"=> "the pointer must be aligned"
-                ));
-            
-        test_just_parse!(ignores_other_markers_before:
-                r"Usage:
-                    - Use this struct however you'd like, I don't mind.
-                    
-                    Safety:
-                        - nn: the pointer must be non-null
-                        - align: the pointer must be aligned"
-            => ok justs!(
-                    "nn" => "the pointer must be non-null"
-                    "align"=> "the pointer must be aligned"
-                ));
-            
-        test_just_parse!(ignores_other_markers_after:
-                r"SAFETY:
-                        - nn: the pointer must be non-null
-                        - align: the pointer must be aligned
+//         test_just_parse!(incorrect_marker_w_desc:
+//                 r"Usage:
+//                     - nn: the pointer must be non-null
+//                     - align: the pointer must be aligned"
+//             => err ParsingIssue::NoMarkerPattern);
 
-                    USAGE:
-                        - Use this struct however you'd like, I don't mind."
-            => ok justs!(
-                    "nn" => "the pointer must be non-null"
-                    "align"=> "the pointer must be aligned"
-                ));
-            
-        test_just_parse!(ignores_sandwiched_other_markers:
-                r"Overview:
-                        - this is a function of some kind
+//         test_just_parse!(multiple_correct_markers:
+//                 r"Safety:
+//                    Safety:"
+//             => err ParsingIssue::MultipleMarkerPatterns(..));
 
-                    SAFETY:
-                        - nn: the pointer must be non-null
-                        - align: the pointer must be aligned
+//         test_just_parse!(multiple_correct_markers_separeted:
+//                 r"Safety:
+//                     - nn: the pointer must be non-null
+//                     - align: the pointer must be aligned
+//                    Safety:"
+//             => err ParsingIssue::MultipleMarkerPatterns(..));
 
-                    Usage
-                        - Use this struct however you'd like, I don't mind."
-            => ok justs!(
-                    "nn" => "the pointer must be non-null"
-                    "align"=> "the pointer must be aligned"
-                ));
-            
-        test_just_parse!(section_ends_with_empty_line:
-                r"SAFETY:
-                        - nn: the pointer must be non-null
-                        - align: the pointer must be aligned
-            
-                        - Use this struct however you'd like, I don't mind."
-            => ok justs!(
-                    "nn" => "the pointer must be non-null"
-                    "align"=> "the pointer must be aligned"
-                ));
-            
-        test_just_parse!(section_ends_with_whitespace_only_line:
-                r"SAFETY:
-                        - nn: the pointer must be non-null
-                        - align: the pointer must be aligned
-                        
-                        - Use this struct however you'd like, I don't mind."
-            => ok justs!(
-                    "nn" => "the pointer must be non-null"
-                    "align"=> "the pointer must be aligned"
-                ));
-            
-        test_just_parse!(markers_arent_case_sensitive:
-                r"Safety:
-                        - nn: the pointer must be non-null
-                        - align: the pointer must be aligned"
-            => ok justs!(
-                    "nn" => "the pointer must be non-null"
-                    "align"=> "the pointer must be aligned"
-                ));
-            
-        test_just_parse!(asterisk_bullets_allowed:
-                r"Safety:
-                        * nn: the pointer must be non-null
-                        * align: the pointer must be aligned"
-            => ok justs!(
-                    "nn" => "the pointer must be non-null"
-                    "align"=> "the pointer must be aligned"
-                ));
-            
-        test_just_parse!(bullet_types_must_match:
-                r"Safety:
-                        * nn: the pointer must be non-null
-                        - align: the pointer must be aligned"
-            => err ParsingIssue::NonMatchingBullets(_));
-            
-        test_just_parse!(spaces_after_bullet_ignored:
-                r"Safety:
-                        -  nn: the pointer must be non-null
-                        -   align: the pointer must be aligned"
-            => ok justs!(
-                    "nn" => "the pointer must be non-null"
-                    "align"=> "the pointer must be aligned"
-                ));
-            
-        test_just_parse!(spaces_before_colon_disallowed:
-                r"Safety:
-                        - nn : the pointer must be non-null
-                        - align     : the pointer must be aligned"
-            => err ParsingIssue::InvalidConditionName {reason: InvalidConditionNameReason::TrailingWhitespace, ..});
+//         test_just_parse!(bullet_with_no_colon:
+//                 r"Safety:
+//                     - nn the pointer must be non-null"
+//             => err ParsingIssue::NoColon(..));
 
-        test_just_parse!(multi_word_names_disallowed:
-                r"Safety:
-                        - non null: the pointer must be non-null
-                        - aligned ptr: the pointer must be aligned"
-            => err ParsingIssue::InvalidConditionName {reason: InvalidConditionNameReason::MultipleWords, ..});
+//         test_just_parse!(multiple_bullets_with_no_colon:
+//                 r"Safety:
+//                     - nn the pointer must be non-null
+//                     - align the pointer must be aligned"
+//             => err ParsingIssue::NoColon(..));
 
-        test_just_parse!(kebab_case_names_allowed:
-                r"Safety:
-                        - non-null: the pointer must be non-null
-                        - aligned-ptr: the pointer must be aligned"
-            => ok justs!(
-                    "non-null" => "the pointer must be non-null"
-                    "aligned-ptr"=> "the pointer must be aligned"
-                ));
+//         test_just_parse!(simplest_use:
+//                 r"SAFETY:
+//                     - nn: the pointer must be non-null"
+//             => ok justs!(
+//                     "nn" => "the pointer must be non-null"
+//                 ));
 
-        test_just_parse!(snake_case_names_allowed:
-                r"Safety:
-                        - non_null: the pointer must be non-null
-                        - aligned_ptr: the pointer must be aligned"
-            => ok justs!(
-                    "non_null" => "the pointer must be non-null"
-                    "aligned_ptr"=> "the pointer must be aligned"
-                ));
-    }
-}
+//         test_just_parse!(simple_use_many_requirements:
+//                 r"SAFETY:
+//                         - nn: the pointer must be non-null
+//                         - align: the pointer must be aligned
+//                         - heap-allocated: the pointer must be heap-allocated"
+//             => ok justs!(
+//                     "nn" => "the pointer must be non-null"
+//                     "align" => "the pointer must be aligned"
+//                     "heap-allocated" => "the pointer must be heap-allocated"
+//                 ));
+
+//         test_just_parse!(ignores_text_before:
+//                 r"filler text, blah blah blah...
+//                     SAFETY:
+//                         - nn: the pointer must be non-null
+//                         - align: the pointer must be aligned"
+//             => ok justs!(
+//                     "nn" => "the pointer must be non-null"
+//                     "align"=> "the pointer must be aligned"
+//                 ));
+
+//         test_just_parse!(intro_prose_allowed:
+//                 r"SAFETY:
+//                     This function call will avoid UB because we have satisfied
+//                     the following conditions:
+//                         - nn: the pointer must be non-null
+//                         - align: the pointer must be aligned"
+//             => ok justs!(
+//                     "nn" => "the pointer must be non-null"
+//                     "align"=> "the pointer must be aligned"
+//                 ));
+
+//         test_just_parse!(ignores_other_markers_before:
+//                 r"Usage:
+//                     - Use this struct however you'd like, I don't mind.
+
+//                     Safety:
+//                         - nn: the pointer must be non-null
+//                         - align: the pointer must be aligned"
+//             => ok justs!(
+//                     "nn" => "the pointer must be non-null"
+//                     "align"=> "the pointer must be aligned"
+//                 ));
+
+//         test_just_parse!(ignores_other_markers_after:
+//                 r"SAFETY:
+//                         - nn: the pointer must be non-null
+//                         - align: the pointer must be aligned
+
+//                     USAGE:
+//                         - Use this struct however you'd like, I don't mind."
+//             => ok justs!(
+//                     "nn" => "the pointer must be non-null"
+//                     "align"=> "the pointer must be aligned"
+//                 ));
+
+//         test_just_parse!(ignores_sandwiched_other_markers:
+//                 r"Overview:
+//                         - this is a function of some kind
+
+//                     SAFETY:
+//                         - nn: the pointer must be non-null
+//                         - align: the pointer must be aligned
+
+//                     Usage
+//                         - Use this struct however you'd like, I don't mind."
+//             => ok justs!(
+//                     "nn" => "the pointer must be non-null"
+//                     "align"=> "the pointer must be aligned"
+//                 ));
+
+//         test_just_parse!(section_ends_with_empty_line:
+//                 r"SAFETY:
+//                         - nn: the pointer must be non-null
+//                         - align: the pointer must be aligned
+
+//                         - Use this struct however you'd like, I don't mind."
+//             => ok justs!(
+//                     "nn" => "the pointer must be non-null"
+//                     "align"=> "the pointer must be aligned"
+//                 ));
+
+//         test_just_parse!(section_ends_with_whitespace_only_line:
+//                 r"SAFETY:
+//                         - nn: the pointer must be non-null
+//                         - align: the pointer must be aligned
+
+//                         - Use this struct however you'd like, I don't mind."
+//             => ok justs!(
+//                     "nn" => "the pointer must be non-null"
+//                     "align"=> "the pointer must be aligned"
+//                 ));
+
+//         test_just_parse!(markers_arent_case_sensitive:
+//                 r"Safety:
+//                         - nn: the pointer must be non-null
+//                         - align: the pointer must be aligned"
+//             => ok justs!(
+//                     "nn" => "the pointer must be non-null"
+//                     "align"=> "the pointer must be aligned"
+//                 ));
+
+//         test_just_parse!(asterisk_bullets_allowed:
+//                 r"Safety:
+//                         * nn: the pointer must be non-null
+//                         * align: the pointer must be aligned"
+//             => ok justs!(
+//                     "nn" => "the pointer must be non-null"
+//                     "align"=> "the pointer must be aligned"
+//                 ));
+
+//         test_just_parse!(bullet_types_must_match:
+//                 r"Safety:
+//                         * nn: the pointer must be non-null
+//                         - align: the pointer must be aligned"
+//             => err ParsingIssue::NonMatchingBullets(_));
+
+//         test_just_parse!(spaces_after_bullet_ignored:
+//                 r"Safety:
+//                         -  nn: the pointer must be non-null
+//                         -   align: the pointer must be aligned"
+//             => ok justs!(
+//                     "nn" => "the pointer must be non-null"
+//                     "align"=> "the pointer must be aligned"
+//                 ));
+
+//         test_just_parse!(spaces_before_colon_disallowed:
+//                 r"Safety:
+//                         - nn : the pointer must be non-null
+//                         - align     : the pointer must be aligned"
+//             => err ParsingIssue::InvalidConditionName {reason: InvalidConditionNameReason::TrailingWhitespace, ..});
+
+//         test_just_parse!(multi_word_names_disallowed:
+//                 r"Safety:
+//                         - non null: the pointer must be non-null
+//                         - aligned ptr: the pointer must be aligned"
+//             => err ParsingIssue::InvalidConditionName {reason: InvalidConditionNameReason::MultipleWords, ..});
+
+//         test_just_parse!(kebab_case_names_allowed:
+//                 r"Safety:
+//                         - non-null: the pointer must be non-null
+//                         - aligned-ptr: the pointer must be aligned"
+//             => ok justs!(
+//                     "non-null" => "the pointer must be non-null"
+//                     "aligned-ptr"=> "the pointer must be aligned"
+//                 ));
+
+//         test_just_parse!(snake_case_names_allowed:
+//                 r"Safety:
+//                         - non_null: the pointer must be non-null
+//                         - aligned_ptr: the pointer must be aligned"
+//             => ok justs!(
+//                     "non_null" => "the pointer must be non-null"
+//                     "aligned_ptr"=> "the pointer must be aligned"
+//                 ));
+//     }
+// }

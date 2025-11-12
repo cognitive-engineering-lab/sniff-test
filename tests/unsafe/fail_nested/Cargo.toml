@@ -1,7 +1,9 @@
 [package]
-name = "invalid_simple"
+name = "fail_nested"
 version = "0.1.0"
 edition = "2024"
 
 [dependencies]
 sniff-test-attrs = { path = "../../../crates/sniff-test-attrs" }
+
+[workspace]

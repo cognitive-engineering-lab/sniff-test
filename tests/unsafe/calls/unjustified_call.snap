@@ -1,0 +1,22 @@
+---
+source: tests/lib.rs
+---
+exit_code = 1
+stdout = ''
+stderr = '''
+error: function main directly contains 1 unjustified call to unsafe functions, but is not annotated unsafe
+  --> [SNIFF_TEST_DIR]/unsafe/calls/unjustified_call.rs:10:1
+   |
+10 | fn main() {
+   | ^^^^^^^^^
+   |
+   = note: reachable from [*main*]
+note: foo is called here
+  --> [SNIFF_TEST_DIR]/unsafe/calls/unjustified_call.rs:12:5
+   |
+12 |     foo(&raw const x);
+   |     ^^^^^^^^^^^^^^^^^
+
+error: aborting due to 1 previous error
+
+'''

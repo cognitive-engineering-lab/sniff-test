@@ -1,0 +1,23 @@
+---
+source: tests/lib.rs
+---
+exit_code = 0
+stdout = '''
+compilation successful!!
+'''
+stderr = '''
+warning: unused doc comment
+  --> [SNIFF_TEST_DIR]/unsafe/calls/justified_call.rs:12:5
+   |
+12 | /     /// SAFETY:
+13 | |     /// - nn: pointers from references are trivially non-null
+   | |_____________________________________________________________^
+14 |       foo(&raw const x);
+   |       ----------------- rustdoc does not generate documentation for expressions
+   |
+   = help: use `//` for a plain comment
+   = note: `#[warn(unused_doc_comments)]` on by default
+
+warning: 1 warning emitted
+
+'''
