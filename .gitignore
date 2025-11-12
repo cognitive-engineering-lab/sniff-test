@@ -2,6 +2,4 @@ target
 review.sh
 .DS_Store
 notes.md
-.snap.new
-
-.vscode/
+*.snap.new

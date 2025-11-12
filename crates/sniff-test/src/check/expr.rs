@@ -12,18 +12,6 @@ use rustc_hir::{
 use rustc_middle::ty::TyCtxt;
 use rustc_span::Span;
 
-// thread_local! {
-//     static MAPPINGS: RefCell<HashMap<Span, HirId>> = Default::default();
-// }
-
-// fn find_expr_for_call(tcx: TyCtxt, call_to: DefId, call_from: Span) -> Expr {
-//     // MAPPINGS.with_borrow_mut(move |map| {
-//     //     *map.entry(call_from)
-//     //         .or_insert_with(move || find_expr_for_call_inner(tcx, call_from))
-//     // })
-//     find_expr_for_call_inner(tcx, call_to, call_from)
-// }
-
 pub fn find_expr_for_call(
     tcx: TyCtxt<'_>,
     call_to: DefId,

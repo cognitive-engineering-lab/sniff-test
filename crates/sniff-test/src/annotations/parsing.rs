@@ -21,7 +21,7 @@ fn subslice_offset_stable(original: &str, inner: &str) -> Option<usize> {
 }
 
 /// A trait for parsing structured data from bulleted lists in doc strings.
-pub trait ParseBulletsFromString: Sized {
+trait ParseBulletsFromString: Sized {
     /// The delimiter used to separate out two portions of each bullet.
     /// See [`parse_bullet`](ParseBulletsFromString::parse_bullet) for how it can be used.
     const BULLET_SEP: &str = ":";
