@@ -1,9 +1,8 @@
-pub mod attr;
-mod bad;
+pub mod attrs;
+mod calls;
 mod entry;
-mod err;
-mod walk;
+mod reach;
 
-pub use bad::{CallsWObligations, find_calls_w_obligations};
+pub use calls::{CallsWObligations, find_calls_w_obligations};
 pub use entry::analysis_entry_points;
-pub use walk::{LocallyReachable, locally_reachable_from};
+pub use reach::{LocallyReachable, locally_reachable_from};

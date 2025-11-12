@@ -1,18 +1,25 @@
-#![sniff_test_attrs::check_unsafe_pub]
+#![sniff_tool::check_unsafe_pub]
 
 /// # Safety
-/// - non-null: ptr must be non-null
+/// 
 fn foo(ptr: *const i32) -> i32 {
-    let a = baz(ptr);
-    a + 2
+    0
 }
 
+/// # Safety
+///     I've checked ptr is non-null and aligned
 pub fn baz(ptr: *const i32) -> i32 {
+    if !ptr.is_aligned() {return 0;}
+    // I've checked
     unsafe { *ptr }
 }
 
 #[sniff_test_attrs::check_unsafe]
 fn bar(ptr: *const i32) -> i32 {
+
+    unsafe {
+        baz(ptr);
+    }
     /// SAFETY:
     /// - non-null: i checked to make sure this is nn
     // if !ptr.is_null() {

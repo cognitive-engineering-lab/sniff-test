@@ -2,7 +2,7 @@
 
 use crate::{
     annotations::{self, PropertyViolation},
-    reachability::{LocallyReachable, attr::SniffToolAttr},
+    reachability::{LocallyReachable, attrs::SniffToolAttr},
 };
 use regex::Regex;
 use rustc_hir::intravisit::{self, Visitor};
@@ -20,9 +20,9 @@ mod safety;
 pub use panic::PanicProperty;
 pub use safety::SafetyProperty;
 
-pub trait Property: Debug + 'static + Copy {
+pub trait Property: Debug + Copy + 'static {
     type Axiom: Axiom;
-    fn name() -> &'static str;
+    fn property_name() -> &'static str;
 
     /// The regex marker (to be placed within function definition doc comments)
     /// which will register the function's body as having this property.
@@ -44,7 +44,9 @@ pub trait Axiom: Display + Debug {
     type Property: Property;
 
     /// The name for this kind of axiom (e.g. `I found a {name} axiom in your code`)
-    fn axiom_kind_name() -> &'static str;
+    fn property_name() -> &'static str {
+        Self::Property::property_name()
+    }
 
     /// The requirements that this axiom has, if known.
     fn known_requirements(&self) -> Option<PropertyViolation> {

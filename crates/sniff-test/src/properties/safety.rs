@@ -11,15 +11,17 @@ use super::Axiom;
 use crate::{
     annotations::{self, PropertyViolation},
     properties::Property,
-    reachability::attr,
+    reachability::attrs,
 };
 
 #[derive(Debug, Clone, Copy)]
 pub struct SafetyProperty;
 
+// TODO: add some sort of additional checks function here that lets you do additional checks
+// in this case, ensuring that all annotated unsafe functions have the unsafe keyword.
 impl Property for SafetyProperty {
     type Axiom = SafetyAxiom;
-    fn name() -> &'static str {
+    fn property_name() -> &'static str {
         "unsafe"
     }
 
@@ -57,9 +59,6 @@ pub enum SafetyAxiom {
 
 impl Axiom for SafetyAxiom {
     type Property = SafetyProperty;
-    fn axiom_kind_name() -> &'static str {
-        "unsafe"
-    }
 
     fn known_requirements(&self) -> Option<PropertyViolation> {
         todo!()
@@ -76,8 +75,9 @@ impl Axiom for SafetyAxiom {
 
 impl Display for SafetyAxiom {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::RawPtrDeref => f.write_str("raw pointer derefence"),
-        }
+        let name = match self {
+            Self::RawPtrDeref => "raw pointer derefence",
+        };
+        f.write_str(name)
     }
 }

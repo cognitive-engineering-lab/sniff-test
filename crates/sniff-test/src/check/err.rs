@@ -89,13 +89,13 @@ mod summary {
             .flatten()
             .join(" and ");
 
-        let kind = P::name();
+        let kind = P::property_name();
         format!("function {fn_name} directly contains {issue_summary}, but is not annotated {kind}")
     }
 
     fn call_summary<P: Property>(calls: &[CallsWObligations]) -> Option<String> {
         let count: usize = calls.iter().map(|call| call.from_spans.len()).sum();
-        let kind = P::name();
+        let kind = P::property_name();
         let s = match count {
             1 => "",
             x if x > 1 => "s",
@@ -108,7 +108,7 @@ mod summary {
 
     fn axiom_summary<P: Property>(axioms: &[Spanned<P::Axiom>]) -> Option<String> {
         let count = axioms.len();
-        let kind = P::name();
+        let kind = P::property_name();
         let s = match count {
             1 => "",
             x if x > 1 => "s",

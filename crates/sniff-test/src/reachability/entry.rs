@@ -5,7 +5,7 @@ use rustc_middle::ty::TyCtxt;
 
 use crate::{
     properties::Property,
-    reachability::attr::{self, SniffToolAttr},
+    reachability::attrs::{self, SniffToolAttr},
 };
 
 pub fn analysis_entry_points<P: Property>(tcx: TyCtxt) -> Vec<LocalDefId> {
@@ -30,7 +30,7 @@ pub fn analysis_entry_points<P: Property>(tcx: TyCtxt) -> Vec<LocalDefId> {
 
 fn find_global_annotation<P: Property>(tcx: TyCtxt) -> Option<GlobalAnnotation> {
     let property_annots =
-        attr::get_sniff_tool_attrs(tcx.hir_krate_attrs(), &SniffToolAttr::try_from_string_pub)
+        attrs::get_sniff_tool_attrs(tcx.hir_krate_attrs(), &SniffToolAttr::try_from_string_pub)
             .into_iter()
             .filter(|(attr, _)| SniffToolAttr::matches_property::<P>(*attr))
             .collect::<Vec<_>>();
@@ -41,7 +41,10 @@ fn find_global_annotation<P: Property>(tcx: TyCtxt) -> Option<GlobalAnnotation> 
 
     // TODO: render error here if we have conflicting annotations...
     let box [(_attr, just_check_pub)] = property_annots.into_boxed_slice() else {
-        panic!("conflicting global for the {:?} property", P::name());
+        panic!(
+            "conflicting global for the {:?} property",
+            P::property_name()
+        );
     };
     Some(GlobalAnnotation { just_check_pub })
 }
@@ -65,7 +68,7 @@ fn annotated_local_defs<P: Property>(tcx: TyCtxt) -> impl Iterator<Item = LocalD
 }
 
 fn is_entry_point<P: Property>(tcx: TyCtxt, item: DefId) -> bool {
-    attr::attrs_for(item, tcx)
+    attrs::attrs_for(item, tcx)
         .into_iter()
         .any(SniffToolAttr::matches_property::<P>)
 }

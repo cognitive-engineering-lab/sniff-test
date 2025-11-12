@@ -5,7 +5,7 @@ use rustc_span::source_map::{Spanned, respan};
 use std::fmt::Display;
 
 use super::Axiom;
-use crate::{annotations::PropertyViolation, properties::Property, reachability::attr};
+use crate::{annotations::PropertyViolation, properties::Property, reachability::attrs};
 
 #[derive(Debug, Clone)]
 pub enum PanicAxiom {
@@ -17,7 +17,7 @@ pub struct PanicProperty;
 
 impl Property for PanicProperty {
     type Axiom = PanicAxiom;
-    fn name() -> &'static str {
+    fn property_name() -> &'static str {
         "panicking"
     }
 
@@ -57,9 +57,6 @@ impl Property for PanicProperty {
 
 impl Axiom for PanicAxiom {
     type Property = PanicProperty;
-    fn axiom_kind_name() -> &'static str {
-        "panicking"
-    }
 
     fn known_requirements(&self) -> Option<PropertyViolation> {
         match self {
@@ -70,8 +67,9 @@ impl Axiom for PanicAxiom {
 
 impl Display for PanicAxiom {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::ExplicitPanic => f.write_str("explicit panic"),
-        }
+        let name = match self {
+            Self::ExplicitPanic => "explicit panic",
+        };
+        f.write_str(name)
     }
 }
