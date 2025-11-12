@@ -16,12 +16,12 @@ use rustc_span::{
     source_map::{Spanned, respan},
 };
 
-use crate::annotations::{ParsingIssue, Requirement, parsing::ParseBulletsFromString};
+use crate::annotations::DefAnnotation;
 
 /// Struct encapsulating annotations parsed from a TOML file.
 #[derive(Default)]
 pub struct TomlAnnotation {
-    function_to_requirements: HashMap<String, Vec<Spanned<Requirement>>>,
+    function_to_requirements: HashMap<String, Vec<DefAnnotation>>,
 }
 
 /// Errors that can occur when parsing TOML annotations.
@@ -30,7 +30,6 @@ pub enum TomlParseError {
     Io(std::io::Error),
     Toml(toml::de::Error),
     Schema(String),
-    Parse(ParsingIssue),
 }
 
 impl From<std::io::Error> for TomlParseError {
@@ -45,10 +44,14 @@ impl From<toml::de::Error> for TomlParseError {
     }
 }
 
-impl From<ParsingIssue> for TomlParseError {
-    fn from(err: ParsingIssue) -> Self {
-        TomlParseError::Parse(err)
-    }
+// Temporary filler function for string -> DefAnnotation conversion.
+fn temp_parse_requirement_string(requirement_str: &str) -> Vec<DefAnnotation> {
+    vec![DefAnnotation {
+        property_name: "temp_property",
+        local_violation_annotation: crate::annotations::PropertyViolation::Unconditional,
+        text: requirement_str.to_string(),
+        source: crate::annotations::AnnotationSource::TomlOverride,
+    }]
 }
 
 impl TomlAnnotation {
@@ -69,8 +72,7 @@ impl TomlAnnotation {
         };
 
         // Parse each function's requirements
-        let mut function_to_requirements: HashMap<String, Vec<Spanned<Requirement>>> =
-            HashMap::new();
+        let mut function_to_requirements: HashMap<String, Vec<DefAnnotation>> = HashMap::new();
         for (function_name, value) in table {
             let Some(inner_table) = value.as_table() else {
                 return Err(TomlParseError::Schema(format!(
@@ -88,12 +90,8 @@ impl TomlAnnotation {
                 )));
             };
 
-            let requirements = Requirement::parse_bullets_from_string(requirements_string)?;
-            let spanned_requirements: Vec<Spanned<Requirement>> = requirements
-                .into_iter()
-                .map(|(req, _range)| respan(DUMMY_SP, req))
-                .collect();
-            function_to_requirements.insert(function_name.clone(), spanned_requirements);
+            let def_annotation = temp_parse_requirement_string(requirements_string);
+            function_to_requirements.insert(function_name.clone(), def_annotation);
         }
 
         // Return the parsed annotations
@@ -106,7 +104,7 @@ impl TomlAnnotation {
     pub fn get_requirements_for_function(
         &self,
         function_name: &str,
-    ) -> Option<&Vec<Spanned<Requirement>>> {
+    ) -> Option<&Vec<DefAnnotation>> {
         self.function_to_requirements.get(function_name)
     }
 }

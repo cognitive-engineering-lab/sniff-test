@@ -11,7 +11,6 @@ use rustc_span::{
 use crate::{
     annotations::{
         self, parse_expr,
-        parsing::ParseBulletsFromString,
         toml::{TomlAnnotation, TomlParseError},
     },
     properties::{self, Axiom, FoundAxiom, Property},
@@ -21,39 +20,6 @@ use crate::{
 
 mod err;
 mod expr;
-
-// Note, I don't really get and didn't fully implement the correct error handling for toml fallback.
-fn get_requirements(
-    tcx: TyCtxt,
-    def_id: DefId,
-    toml_annotations: &TomlAnnotation,
-) -> Option<Vec<Spanned<Requirement>>> {
-    // First, try to parse from code annotations
-    if let Some(in_code) = annotations::Requirement::try_parse(tcx, def_id) {
-        match in_code {
-            Ok(reqs) => {
-                println!(
-                    "Parsed requirements from code for {}: {:?}",
-                    tcx.def_path_str(def_id),
-                    reqs
-                );
-                return Some(reqs);
-            }
-            Err(e) => {
-                e.emit(tcx.dcx());
-                return None;
-            }
-        }
-    }
-
-    // Next, try to parse from external doc strings
-    let fn_name = tcx.def_path_str(def_id);
-    if let Some(reqs) = toml_annotations.get_requirements_for_function(&fn_name) {
-        return Some(reqs.clone());
-    }
-
-    None
-}
 
 /// Checks that all local functions in the crate are properly annotated.
 pub fn check_properly_annotated<P: Property>(
