@@ -6,11 +6,10 @@ fn foo(ptr: *const i32) -> i32 {
     0
 }
 
-/// # Safety
+/// # Saety
 ///     I've checked ptr is non-null and aligned
 pub fn baz(ptr: *const i32) -> i32 {
-    if !ptr.is_aligned() {return 0;}
-    // I've checked
+    /// SAFETY: ptr is non null I've checked
     unsafe { *ptr }
 }
 

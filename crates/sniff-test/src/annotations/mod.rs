@@ -40,7 +40,7 @@ pub struct DefAnnotation {
     pub property_name: &'static str,
     /// The user's annotation for whether the given property is violated locally within this function.
     pub local_violation_annotation: PropertyViolation,
-    // TODO: add text
+    // The textual content of this annotation.
     pub text: String,
     /// Where this obligation has come from.
     pub source: AnnotationSource,

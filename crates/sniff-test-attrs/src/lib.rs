@@ -29,6 +29,6 @@ macro_rules! define_sniff_tool_annotation {
 
 define_sniff_tool_annotation!(check_unsafe);
 
-// TODO: could be useful to have a macro for checking unsafe public functions in the future,
+// TODO: could be useful to have a macro for calling sniff_tool::[..]_pub in the future,
 // but for now, not worth the effort. Turns out we'd need the sniff tool attr to be after all
 // the prelude import stuff and with just a token tree its very hard to handle that.

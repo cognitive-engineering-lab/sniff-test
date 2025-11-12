@@ -6,7 +6,7 @@ use rustc_span::{ErrorGuaranteed, source_map::Spanned, sym::todo_macro};
 
 use crate::{
     annotations::{self, parse_expr},
-    properties::{self, Axiom, Property},
+    properties::{self, Axiom, FoundAxiom, Property},
     reachability::{self, CallsWObligations, LocallyReachable},
     utils::SniffTestDiagnostic,
 };
@@ -63,7 +63,9 @@ fn check_function_properties<P: Property>(
     }
 
     // Look for all axioms within this function
-    let axioms = properties::find_axioms(tcx, &func, property);
+    let axioms = properties::find_axioms(tcx, &func, property)
+        .filter(only_unjustified_axioms(tcx, property))
+        .collect::<Vec<_>>();
 
     log::debug!("fn {:?} has axioms {:?}", func.reach, axioms);
     log::debug!("fn {:?} has obligations {:?}", func.reach, annotation);
@@ -89,6 +91,13 @@ fn check_function_properties<P: Property>(
             unjustified_calls,
         ))
     }
+}
+
+fn only_unjustified_axioms<'tcx, P: Property>(
+    tcx: TyCtxt<'tcx>,
+    property: P,
+) -> impl Fn(&FoundAxiom<'tcx, P::Axiom>) -> bool {
+    move |axiom| parse_expr(tcx, *axiom.found_in, property).is_none()
 }
 
 /// Filter a set of calls to a function for only those which are not property justified.

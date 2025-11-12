@@ -5,7 +5,11 @@ use rustc_span::source_map::{Spanned, respan};
 use std::fmt::Display;
 
 use super::Axiom;
-use crate::{annotations::PropertyViolation, properties::Property, reachability::attrs};
+use crate::{
+    annotations::PropertyViolation,
+    properties::{FoundAxiom, Property},
+    reachability::attrs,
+};
 
 #[derive(Debug, Clone)]
 pub enum PanicAxiom {
@@ -29,12 +33,12 @@ impl Property for PanicProperty {
         Regex::new("(\n|^)(\\s*)[#]+ (Panics|PANICS)(\n|$)").unwrap()
     }
 
-    fn find_axioms_in_expr(
+    fn find_axioms_in_expr<'tcx>(
         &mut self,
-        tcx: TyCtxt,
+        tcx: TyCtxt<'tcx>,
         tyck: &rustc_middle::ty::TypeckResults,
-        expr: &rustc_hir::Expr,
-    ) -> Vec<Spanned<Self::Axiom>> {
+        expr: &'tcx rustc_hir::Expr<'tcx>,
+    ) -> Vec<FoundAxiom<'tcx, Self::Axiom>> {
         if let ExprKind::Call(func, _) = expr.kind
             && let Some(def_id) = tyck.type_dependent_def_id(func.hir_id)
         {
@@ -46,8 +50,11 @@ impl Property for PanicProperty {
                 || Some(def_id) == lang_items.begin_panic_fn()
                 || Some(def_id) == lang_items.panic_impl()
             {
-                let value = respan(expr.span, PanicAxiom::ExplicitPanic);
-                return vec![value];
+                return vec![FoundAxiom {
+                    axiom: PanicAxiom::ExplicitPanic,
+                    span: expr.span,
+                    found_in: expr,
+                }];
             }
         }
 

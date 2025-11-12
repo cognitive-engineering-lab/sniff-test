@@ -32,12 +32,12 @@ pub trait Property: Debug + Copy + 'static {
     /// that indicates obligations have been discharged.
     fn callsite_regex(&self) -> Regex;
 
-    fn find_axioms_in_expr(
+    fn find_axioms_in_expr<'tcx>(
         &mut self,
-        tcx: TyCtxt,
+        tcx: TyCtxt<'tcx>,
         tyck: &TypeckResults,
-        expr: &rustc_hir::Expr,
-    ) -> Vec<Spanned<Self::Axiom>>;
+        expr: &'tcx rustc_hir::Expr,
+    ) -> Vec<FoundAxiom<'tcx, Self::Axiom>>;
 }
 
 pub trait Axiom: Display + Debug {
@@ -54,18 +54,25 @@ pub trait Axiom: Display + Debug {
     }
 }
 
+#[derive(Debug, Clone)]
+pub struct FoundAxiom<'tcx, A: Axiom> {
+    pub axiom: A,
+    pub found_in: &'tcx rustc_hir::Expr<'tcx>,
+    pub span: rustc_span::Span,
+}
+
 struct FinderWrapper<'tcx, T: Property> {
     tcx: TyCtxt<'tcx>,
     property: T,
     tychck: &'tcx TypeckResults<'tcx>,
-    axioms: Vec<Spanned<T::Axiom>>,
+    axioms: Vec<FoundAxiom<'tcx, T::Axiom>>,
 }
 
-pub fn find_axioms<T: Property>(
-    tcx: TyCtxt,
+pub fn find_axioms<'tcx, T: Property>(
+    tcx: TyCtxt<'tcx>,
     locally_reachable: &LocallyReachable,
     property: T,
-) -> Vec<Spanned<T::Axiom>> {
+) -> impl Iterator<Item = FoundAxiom<'tcx, T::Axiom>> {
     let body = tcx.hir_body_owned_by(locally_reachable.reach).id();
     let tychck = tcx.typeck_body(body);
 
@@ -78,7 +85,7 @@ pub fn find_axioms<T: Property>(
 
     finder.visit_nested_body(body);
 
-    finder.axioms
+    finder.axioms.into_iter()
 }
 
 impl<'tcx, T: Property> Visitor<'tcx> for FinderWrapper<'tcx, T> {

@@ -10,7 +10,7 @@ use rustc_type_ir::TyKind;
 use super::Axiom;
 use crate::{
     annotations::{self, PropertyViolation},
-    properties::Property,
+    properties::{FoundAxiom, Property},
     reachability::attrs,
 };
 
@@ -33,18 +33,21 @@ impl Property for SafetyProperty {
         Regex::new("(\n|^)(\\s*)(Safety|SAFETY):").unwrap()
     }
 
-    fn find_axioms_in_expr(
+    fn find_axioms_in_expr<'tcx>(
         &mut self,
-        tcx: TyCtxt,
+        tcx: TyCtxt<'tcx>,
         tyck: &rustc_middle::ty::TypeckResults,
-        expr: &rustc_hir::Expr,
-    ) -> Vec<Spanned<Self::Axiom>> {
+        expr: &'tcx rustc_hir::Expr<'tcx>,
+    ) -> Vec<FoundAxiom<'tcx, Self::Axiom>> {
         if let ExprKind::Unary(UnOp::Deref, expr) = expr.kind {
             let inner_ty = tyck.expr_ty(expr);
 
             if let TyKind::RawPtr(_ty, _mut) = inner_ty.kind() {
-                let value = respan(expr.span, SafetyAxiom::RawPtrDeref);
-                return vec![value];
+                return vec![FoundAxiom {
+                    axiom: SafetyAxiom::RawPtrDeref,
+                    span: expr.span,
+                    found_in: expr,
+                }];
             }
         }
 

@@ -1,3 +1,4 @@
+use crate::properties::FoundAxiom;
 use itertools::Itertools;
 use rustc_errors::Diag;
 use rustc_middle::ty::TyCtxt;
@@ -8,11 +9,11 @@ use crate::{
     reachability::{CallsWObligations, LocallyReachable},
 };
 
-pub fn report_errors<P: Property>(
-    tcx: TyCtxt,
+pub fn report_errors<'tcx, P: Property>(
+    tcx: TyCtxt<'tcx>,
     func: LocallyReachable,
     property: P,
-    unjustified_axioms: Vec<Spanned<P::Axiom>>,
+    unjustified_axioms: Vec<FoundAxiom<'tcx, P::Axiom>>,
     unjustified_calls: Vec<CallsWObligations>,
 ) -> ErrorGuaranteed {
     let dcx = tcx.dcx();
@@ -37,9 +38,12 @@ pub fn report_errors<P: Property>(
     diag.emit()
 }
 
-fn extend_diag_axiom<P: Property>(diag: Diag, axiom: Spanned<P::Axiom>) -> Diag {
+fn extend_diag_axiom<'tcx, P: Property>(
+    diag: Diag<'tcx>,
+    axiom: FoundAxiom<'tcx, P::Axiom>,
+) -> Diag<'tcx> {
     // TODO: add notes about the known requirements
-    diag.with_span_note(axiom.span, format!("{} here", axiom.node))
+    diag.with_span_note(axiom.span, format!("{} here", axiom.axiom))
 }
 
 fn extend_diag_calls<'tcx>(
@@ -74,12 +78,12 @@ mod summary {
     use itertools::Itertools;
     use rustc_span::source_map::Spanned;
 
-    use crate::properties::{Axiom, Property};
+    use crate::properties::{Axiom, FoundAxiom, Property};
     use crate::reachability::CallsWObligations;
 
     pub fn summary_string<P: Property>(
         fn_name: &str,
-        axioms: &[Spanned<P::Axiom>],
+        axioms: &[FoundAxiom<'_, P::Axiom>],
         calls: &[CallsWObligations],
     ) -> String {
         let axiom_summary = axiom_summary::<P>(axioms);
@@ -106,7 +110,7 @@ mod summary {
         ))
     }
 
-    fn axiom_summary<P: Property>(axioms: &[Spanned<P::Axiom>]) -> Option<String> {
+    fn axiom_summary<P: Property>(axioms: &[FoundAxiom<'_, P::Axiom>]) -> Option<String> {
         let count = axioms.len();
         let kind = P::property_name();
         let s = match count {
