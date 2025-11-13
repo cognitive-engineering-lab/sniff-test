@@ -61,7 +61,7 @@ pub struct SniffTestArgs {
     cargo_args: Vec<String>,
 }
 
-const TO_FILE: bool = false;
+const TO_FILE: bool = true;
 
 fn env_logger_init_file(driver: bool) {
     use std::fs::OpenOptions;
@@ -173,7 +173,7 @@ impl rustc_driver::Callbacks for PrintAllItemsCallbacks {
             return rustc_driver::Compilation::Stop;
         };
 
-        println!("compilation of {crate_name} was successful!!");
+        println!("the `{crate_name}` crate passes the sniff test!!");
 
         // Note that you should generally allow compilation to continue. If
         // your plugin is being invoked on a dependency, then you need to ensure

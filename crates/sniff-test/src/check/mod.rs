@@ -58,27 +58,46 @@ fn check_function_properties<P: Property>(
     // and don't need to analyze its body locally. Vitally, we'll still explore functions it calls
     // due to collecting reachability earlier.
     if let Some(annotation) = annotation {
+        log::debug!(
+            "fn {:?} has obligations {:?}, we'll trust it...",
+            func.reach,
+            annotation
+        );
         // TODO: in the future, could check to make sure this annotation doesn't create unneeded obligations.
         return Ok(());
     }
 
     // Look for all axioms within this function
-    let axioms = properties::find_axioms(tcx, &func, property)
+    let axioms = properties::find_axioms(tcx, &func, property).collect::<Vec<_>>();
+    log::debug!("fn {:?} has raw axioms {:#?}", func.reach, axioms);
+    let unjustified_axioms = axioms
+        .into_iter()
         .filter(only_unjustified_axioms(tcx, property))
         .collect::<Vec<_>>();
 
-    log::debug!("fn {:?} has axioms {:?}", func.reach, axioms);
-    log::debug!("fn {:?} has obligations {:?}", func.reach, annotation);
-
     // Find all calls that have obligations.
-    let unjustified_calls = reachability::find_calls_w_obligations(tcx, &func, property)
+    let calls = reachability::find_calls_w_obligations(tcx, &func, property).collect::<Vec<_>>();
+    log::debug!("fn {:?} has raw calls {:#?}", func.reach, calls);
+    let unjustified_calls = calls
+        .into_iter()
         // Filter those with only callsites that haven't been justified.
         .filter_map(only_unjustified_callsites(tcx, func.reach, property))
         .collect::<Vec<_>>();
 
+    log::info!(
+        "fn {:?} has unjustified axioms {:#?}",
+        func.reach,
+        unjustified_axioms
+    );
+    log::info!(
+        "fn {:?} has unjustified calls {:#?}",
+        func.reach,
+        unjustified_calls
+    );
+
     // If we have obligations, we've dismissed them
 
-    if unjustified_calls.is_empty() && axioms.is_empty() {
+    if unjustified_calls.is_empty() && unjustified_axioms.is_empty() {
         // Nothing to report, all good!
         Ok(())
     } else {
@@ -87,7 +106,7 @@ fn check_function_properties<P: Property>(
             tcx,
             func,
             property,
-            axioms,
+            unjustified_axioms,
             unjustified_calls,
         ))
     }
@@ -114,14 +133,10 @@ fn only_unjustified_callsites<P: Property>(
             let call_expr = expr::find_expr_for_call(tcx, calls.call_to, in_fn, call_span);
             let callsite_annotation = parse_expr(tcx, *call_expr, property);
 
-            println!("found justification {callsite_annotation:?}");
-
             if callsite_annotation.is_none() {
                 new_spans.push(call_span);
             }
         }
-
-        println!("found spans {new_spans:?}");
 
         // If we have no new callsites, just remove this one from the list...
         if new_spans.is_empty() {
