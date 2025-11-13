@@ -1,13 +1,3 @@
-use itertools::Itertools;
-use rustc_errors::{Diag, DiagCtxtHandle};
-use rustc_hir::def_id::{DefId, LocalDefId};
-use rustc_middle::ty::TyCtxt;
-use rustc_span::{
-    DUMMY_SP, ErrorGuaranteed,
-    source_map::{Spanned, respan},
-    sym::todo_macro,
-};
-
 use crate::{
     annotations::{
         self, parse_expr,
@@ -16,6 +6,15 @@ use crate::{
     properties::{self, Axiom, FoundAxiom, Property},
     reachability::{self, CallsWObligations, LocallyReachable},
     utils::SniffTestDiagnostic,
+};
+use itertools::Itertools;
+use rustc_errors::{Diag, DiagCtxtHandle};
+use rustc_hir::def_id::{DefId, LocalDefId};
+use rustc_middle::ty::TyCtxt;
+use rustc_span::{
+    DUMMY_SP, ErrorGuaranteed,
+    source_map::{Spanned, respan},
+    sym::todo_macro,
 };
 
 mod err;

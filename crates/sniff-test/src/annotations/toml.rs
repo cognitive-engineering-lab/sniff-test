@@ -45,9 +45,9 @@ impl From<toml::de::Error> for TomlParseError {
 }
 
 impl TomlAnnotation {
-    /// Parses a TOML annotation file and returns a TomlAnnotation struct.
+    /// Parses a TOML annotation file and returns a [`TomlAnnotation`] struct.
     /// Fails on any errors, never returning partial results.
-    /// If the file does not exist, returns an empty TomlAnnotation.
+    /// If the file does not exist, returns an empty [`TomlAnnotation`].
     /// TODO: Use real spans if possible.
     pub fn from_file<P: AsRef<std::path::Path>>(path: P) -> Result<Self, TomlParseError> {
         // Get the contents of the TOML file
@@ -93,7 +93,7 @@ impl TomlAnnotation {
 
         // Return the parsed annotations
         Ok(TomlAnnotation {
-            function_to_requirements_string: function_to_requirements_string,
+            function_to_requirements_string,
         })
     }
 
