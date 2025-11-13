@@ -135,7 +135,7 @@ fn parse_expr_src<P: Property>(doc_str: DocStr, property: P) -> Option<Expressio
 
 /// Simple check if the obligation regex is contained anywhere in the doc string, otherwise no obligations.
 fn parse_fn_def_src<P: Property>(doc_str: DocStr, property: P) -> Option<DefAnnotation> {
-    let out = property
+    property
         .fn_def_regex()
         .find(doc_str.str())
         .map(|found| DefAnnotation {
@@ -143,15 +143,7 @@ fn parse_fn_def_src<P: Property>(doc_str: DocStr, property: P) -> Option<DefAnno
             local_violation_annotation: PropertyViolation::Unconditional,
             text: doc_str.str()[found.end()..].to_string(),
             source: AnnotationSource::DocComment(doc_str.span_of_chars(found.range())),
-        });
-
-    // Prints doc string with parsed annotation for debugging
-    println!(
-        "Doc string:\n{}\nParsed annotation: {:?}",
-        doc_str.str(),
-        out
-    );
-    out
+        })
 }
 
 fn parse_fn_def_toml<P: Property>(toml_str: &str, property: P) -> Option<DefAnnotation> {
