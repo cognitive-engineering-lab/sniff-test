@@ -1,14 +1,20 @@
+use crate::{
+    annotations::{
+        self, parse_expr,
+        toml::{TomlAnnotation, TomlParseError},
+    },
+    properties::{self, Axiom, FoundAxiom, Property},
+    reachability::{self, CallsWObligations, LocallyReachable},
+    utils::SniffTestDiagnostic,
+};
 use itertools::Itertools;
 use rustc_errors::{Diag, DiagCtxtHandle};
 use rustc_hir::def_id::{DefId, LocalDefId};
 use rustc_middle::ty::TyCtxt;
-use rustc_span::{ErrorGuaranteed, source_map::Spanned, sym::todo_macro};
-
-use crate::{
-    annotations::{self, parse_expr},
-    properties::{self, Axiom, FoundAxiom, Property},
-    reachability::{self, CallsWObligations, LocallyReachable},
-    utils::SniffTestDiagnostic,
+use rustc_span::{
+    DUMMY_SP, ErrorGuaranteed,
+    source_map::{Spanned, respan},
+    sym::todo_macro,
 };
 
 mod err;
@@ -19,6 +25,20 @@ pub fn check_properly_annotated<P: Property>(
     tcx: TyCtxt,
     property: P,
 ) -> Result<(), ErrorGuaranteed> {
+    // Parse TOML annotations from file
+    let toml_path = "sniff-test.toml";
+    let toml_annotations = match TomlAnnotation::from_file(toml_path) {
+        Ok(annotations) => annotations,
+        Err(e) => {
+            tcx.dcx()
+                .struct_warn(format!(
+                    "Failed to parse TOML annotations from {toml_path}: {e:?}"
+                ))
+                .emit();
+            TomlAnnotation::default()
+        }
+    };
+
     let entry = reachability::analysis_entry_points::<P>(tcx);
 
     // Debug print all our entries and where they are in the src
@@ -40,7 +60,7 @@ pub fn check_properly_annotated<P: Property>(
 
     // For all reachable local function definitions, ensure their axioms align with their annotations.
     for func in reachable {
-        check_function_properties(tcx, func, property)?;
+        check_function_properties(tcx, &toml_annotations, func, property)?;
     }
 
     Ok(())
@@ -48,11 +68,12 @@ pub fn check_properly_annotated<P: Property>(
 
 fn check_function_properties<P: Property>(
     tcx: TyCtxt,
+    toml_annotations: &TomlAnnotation,
     func: LocallyReachable,
     property: P,
 ) -> Result<(), ErrorGuaranteed> {
     // Look for the local annotation
-    let annotation = annotations::parse_fn_def(tcx, func.reach, property);
+    let annotation = annotations::parse_fn_def(tcx, toml_annotations, func.reach, property);
 
     // If the function we're analyzing is directly annotated, we trust the user's annotation
     // and don't need to analyze its body locally. Vitally, we'll still explore functions it calls
@@ -71,10 +92,11 @@ fn check_function_properties<P: Property>(
     log::debug!("fn {:?} has obligations {:?}", func.reach, annotation);
 
     // Find all calls that have obligations.
-    let unjustified_calls = reachability::find_calls_w_obligations(tcx, &func, property)
-        // Filter those with only callsites that haven't been justified.
-        .filter_map(only_unjustified_callsites(tcx, func.reach, property))
-        .collect::<Vec<_>>();
+    let unjustified_calls =
+        reachability::find_calls_w_obligations(tcx, toml_annotations, &func, property)
+            // Filter those with only callsites that haven't been justified.
+            .filter_map(only_unjustified_callsites(tcx, func.reach, property))
+            .collect::<Vec<_>>();
 
     // If we have obligations, we've dismissed them
 

@@ -1,6 +1,6 @@
 //! Finds the 'bad' functions that should be annotated
 
-use crate::annotations::{self, DefAnnotation, parse_fn_def};
+use crate::annotations::{self, DefAnnotation, parse_fn_def, toml::TomlAnnotation};
 use crate::properties::Property;
 use crate::reachability::LocallyReachable;
 use std::collections::HashMap;
@@ -23,11 +23,11 @@ pub struct CallsWObligations {
 
 fn call_has_obligations<P: Property>(
     tcx: TyCtxt,
+    toml_annotations: &TomlAnnotation,
     property: P,
 ) -> impl Fn((&DefId, &Vec<Span>)) -> Option<CallsWObligations> {
     move |(to_def_id, from_spans)| {
-        let annotation = parse_fn_def(tcx, *to_def_id, property)?;
-
+        let annotation = parse_fn_def(tcx, toml_annotations, *to_def_id, property)?;
         if annotation.creates_obligation() {
             Some(CallsWObligations {
                 call_to: *to_def_id,
@@ -42,11 +42,12 @@ fn call_has_obligations<P: Property>(
 
 pub fn find_calls_w_obligations<P: Property>(
     tcx: TyCtxt,
+    toml_annotations: &TomlAnnotation,
     locally_reachable: &LocallyReachable,
     property: P,
 ) -> impl Iterator<Item = CallsWObligations> {
     locally_reachable
         .calls_to
         .iter()
-        .filter_map(call_has_obligations(tcx, property))
+        .filter_map(call_has_obligations(tcx, toml_annotations, property))
 }
