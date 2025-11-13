@@ -1,6 +1,9 @@
 use std::collections::{BTreeSet, HashSet};
 
-use rustc_hir::def_id::{DefId, LocalDefId};
+use rustc_hir::{
+    def::DefKind,
+    def_id::{DefId, LocalDefId},
+};
 use rustc_middle::ty::TyCtxt;
 
 use crate::{
@@ -17,10 +20,10 @@ pub fn analysis_entry_points<P: Property>(tcx: TyCtxt) -> Vec<LocalDefId> {
         if global_annotation.just_check_pub {
             // A `_pub` annotation can also be used in conjunction with other non-pub functions,
             // so we have to continue looking for annotated local defs.
-            entry_points.extend(all_pub_local_defs(tcx));
+            entry_points.extend(all_pub_local_fn_defs(tcx));
         } else {
             // This is everything we can possibly analyzing the local crate, so just return that.
-            return all_local_defs(tcx).collect();
+            return all_local_fn_defs(tcx).collect();
         }
     }
 
@@ -53,13 +56,28 @@ struct GlobalAnnotation {
     just_check_pub: bool,
 }
 
-fn all_local_defs(tcx: TyCtxt) -> impl Iterator<Item = LocalDefId> {
-    tcx.hir_body_owners()
+fn all_local_fn_defs(tcx: TyCtxt) -> impl Iterator<Item = LocalDefId> {
+    tcx.hir_body_owners().filter(is_def_analyzeable(tcx))
 }
 
-fn all_pub_local_defs(tcx: TyCtxt) -> impl Iterator<Item = LocalDefId> {
-    tcx.hir_body_owners()
-        .filter(move |owner| tcx.visibility(*owner).is_public())
+fn is_def_analyzeable(tcx: TyCtxt) -> impl Fn(&LocalDefId) -> bool {
+    move |local| {
+        let span = tcx.def_span(*local);
+        log::debug!("looking at owner {local:?} @ {span:?}");
+        match tcx.def_kind(*local) {
+            DefKind::Fn => true,
+            // For context, zerocopy has all of these, but I don't think we want to analyze them...
+            // Don't want anything to fall through the cracks though, so left as todo.
+            // TODO: should we be handling more here?? Or just be dumb like racerd
+            // DefKind::Impl { .. } | DefKind::AssocConst => false,
+            // unhandled => todo!("don't know what to do with defkind {unhandled:?} yet..."),
+            _ => false,
+        }
+    }
+}
+
+fn all_pub_local_fn_defs(tcx: TyCtxt) -> impl Iterator<Item = LocalDefId> {
+    all_local_fn_defs(tcx).filter(move |owner| tcx.visibility(*owner).is_public())
 }
 
 fn annotated_local_defs<P: Property>(tcx: TyCtxt) -> impl Iterator<Item = LocalDefId> {
