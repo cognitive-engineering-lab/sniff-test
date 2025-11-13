@@ -1,5 +1,5 @@
 ["std::thread::sleep"]
 requirements = """
-# Unsafe
-- non-blocking: Function must not be called in a routine which cannot block.
+# Safety
+* 'non-blocking': Function must not be called in a routine which cannot block.
 """
