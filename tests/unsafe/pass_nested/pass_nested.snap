@@ -3,6 +3,6 @@ source: tests/lib.rs
 ---
 exit_code = 0
 stdout = '''
-compilation successful!!
+the `pass_nested` crate passes the sniff test!!
 '''
 stderr = ''

@@ -9,8 +9,8 @@ pub fn foo(ptr: *const i32) -> i32 {
 /// # Saety
 ///     I've checked ptr is non-null and aligned
 pub fn baz(ptr: *const i32) -> i32 {
-    /// SAFETY: ptr is non null I've checked
     unsafe {
+        /// SAFETY: ptr is non null I've checked
         *ptr
     }
 }

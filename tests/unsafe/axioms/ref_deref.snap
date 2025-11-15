@@ -3,6 +3,6 @@ source: tests/lib.rs
 ---
 exit_code = 0
 stdout = '''
-compilation successful!!
+the `ref_deref` crate passes the sniff test!!
 '''
 stderr = ''

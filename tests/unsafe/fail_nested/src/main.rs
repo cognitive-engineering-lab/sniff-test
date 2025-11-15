@@ -1,4 +1,4 @@
-/// # Unsafe
+/// # Safety
 /// * nn: ptr should be non null
 fn foo(ptr: *const i32) -> i32 {
     let a = unsafe { *ptr };

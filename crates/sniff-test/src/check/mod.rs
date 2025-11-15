@@ -1,6 +1,6 @@
 use itertools::Itertools;
 use rustc_errors::{Diag, DiagCtxtHandle};
-use rustc_hir::def_id::{DefId, LocalDefId};
+use rustc_hir::def_id::{DefId, LOCAL_CRATE, LocalDefId};
 use rustc_middle::ty::TyCtxt;
 use rustc_span::{ErrorGuaranteed, source_map::Spanned, sym::todo_macro};
 
@@ -15,7 +15,7 @@ mod err;
 mod expr;
 
 /// Checks that all local functions in the crate are properly annotated.
-pub fn check_properly_annotated<P: Property>(
+pub fn check_crate_for_property<P: Property>(
     tcx: TyCtxt,
     property: P,
 ) -> Result<(), ErrorGuaranteed> {
@@ -31,22 +31,32 @@ pub fn check_properly_annotated<P: Property>(
                 (local, span)
             })
             .collect::<Vec<_>>();
-        log::debug!("entry is {entries:#?}");
+        log::info!(
+            "the {} entry functions for {} in {} are {entries:#?}",
+            entry.len(),
+            P::property_name(),
+            tcx.crate_name(LOCAL_CRATE)
+        );
     }
 
     let reachable = reachability::locally_reachable_from(tcx, entry).collect::<Vec<_>>();
 
-    log::debug!("reachable is {reachable:#?}");
+    log::info!(
+        "the {} reachable functions for {} in {} are {reachable:#?}",
+        reachable.len(),
+        P::property_name(),
+        tcx.crate_name(LOCAL_CRATE)
+    );
 
     // For all reachable local function definitions, ensure their axioms align with their annotations.
     for func in reachable {
-        check_function_properties(tcx, func, property)?;
+        check_function_for_property(tcx, func, property)?;
     }
 
     Ok(())
 }
 
-fn check_function_properties<P: Property>(
+fn check_function_for_property<P: Property>(
     tcx: TyCtxt,
     func: LocallyReachable,
     property: P,
@@ -116,7 +126,10 @@ fn only_unjustified_axioms<'tcx, P: Property>(
     tcx: TyCtxt<'tcx>,
     property: P,
 ) -> impl Fn(&FoundAxiom<'tcx, P::Axiom>) -> bool {
-    move |axiom| parse_expr(tcx, *axiom.found_in, property).is_none()
+    move |axiom| {
+        log::debug!("getting seeing if axiom {axiom:?} has justification");
+        parse_expr(tcx, axiom.found_in, property).is_none()
+    }
 }
 
 /// Filter a set of calls to a function for only those which are not property justified.
@@ -131,7 +144,7 @@ fn only_unjustified_callsites<P: Property>(
 
         for call_span in calls.from_spans {
             let call_expr = expr::find_expr_for_call(tcx, calls.call_to, in_fn, call_span);
-            let callsite_annotation = parse_expr(tcx, *call_expr, property);
+            let callsite_annotation = parse_expr(tcx, call_expr, property);
 
             if callsite_annotation.is_none() {
                 new_spans.push(call_span);

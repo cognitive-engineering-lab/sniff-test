@@ -1,4 +1,4 @@
-/// # Unsafe
+/// # Safety
 /// - non-null: ptr must be non-null
 /// - aligned: ptr must be aligned for an i32
 unsafe fn foo(ptr: *const i32) -> i32 {

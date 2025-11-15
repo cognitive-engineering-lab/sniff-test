@@ -1,6 +1,6 @@
 #![allow(unused_doc_comments)]
 
-/// # Unsafe
+/// # Safety
 /// * nn: ptr should be non null
 unsafe fn foo(val: *const i32) -> i32 {
     unsafe { *val }

@@ -18,12 +18,29 @@ pub fn find_expr_for_call(
     call_from: LocalDefId,
     call_from_span: Span,
 ) -> &Expr<'_> {
-    let mut f = SpanExprFinder(tcx, call_to, call_from_span, None);
-    f.visit_body(tcx.hir_body_owned_by(call_from));
-    f.3.expect("hello")
+    let body = tcx.hir_body_owned_by(call_from);
+    let mut f = SpanExprFinder(
+        tcx,
+        call_to,
+        call_from,
+        call_from_span,
+        None,
+        tcx.typeck_body(body.id()),
+    );
+    f.visit_body(body);
+    f.4.unwrap_or_else(|| panic!(
+        "unable to find HIR stmt that corresponds to call to {call_to:?} from {call_from_span:?} :("
+    ))
 }
 
-struct SpanExprFinder<'tcx>(TyCtxt<'tcx>, DefId, Span, Option<&'tcx Expr<'tcx>>);
+struct SpanExprFinder<'tcx>(
+    TyCtxt<'tcx>,
+    DefId,
+    LocalDefId,
+    Span,
+    Option<&'tcx Expr<'tcx>>,
+    &'tcx rustc_middle::ty::TypeckResults<'tcx>,
+);
 
 impl<'tcx> intravisit::Visitor<'tcx> for SpanExprFinder<'tcx> {
     type MaybeTyCtxt = TyCtxt<'tcx>;
@@ -33,25 +50,10 @@ impl<'tcx> intravisit::Visitor<'tcx> for SpanExprFinder<'tcx> {
     }
 
     fn visit_expr(&mut self, ex: &'tcx Expr<'tcx>) -> Self::Result {
-        if let ExprKind::Call(to, from) = ex.kind
-            && ex.span == self.2
-        {
-            // println!("call and matching spa to {to:?}");
-            if let ExprKind::Path(qpath) = &to.kind {
-                let tychck = self.0.typeck(ex.hir_id.owner.def_id);
-
-                // Resolve the path to get the DefId
-                if let Some(def_id) = tychck.qpath_res(qpath, to.hir_id).opt_def_id() {
-                    // println!("resolve to defid {def_id:?}");
-                    if def_id == self.1 {
-                        // println!("WHICH MATCHES!!");
-                        self.3 = Some(ex);
-                        return;
-                    }
-                }
-            } else {
-                todo!("should handle more complex resolution here...");
-            }
+        log::debug!("visiting expr {ex:#?}");
+        if ex.span == self.3 {
+            self.4 = Some(ex);
+            return;
         }
 
         intravisit::walk_expr(self, ex);

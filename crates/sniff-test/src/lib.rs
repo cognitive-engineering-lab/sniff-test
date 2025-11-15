@@ -41,7 +41,7 @@ use rustc_middle::ty::TyCtxt;
 use rustc_plugin::{CrateFilter, RustcPlugin, RustcPluginArgs, Utf8Path};
 use serde::{Deserialize, Serialize};
 
-use crate::check::check_properly_annotated;
+use crate::check::check_crate_for_property;
 
 // This struct is the plugin provided to the rustc_plugin framework,
 // and it must be exported for use by the CLI/driver binaries.
@@ -93,7 +93,7 @@ fn env_logger_init_terminal() {
 }
 
 pub fn env_logger_init(driver: bool) {
-    if TO_FILE {
+    if TO_FILE && !cfg!(debug_assertions) {
         env_logger_init_file(driver);
     } else {
         env_logger_init_terminal();
@@ -169,7 +169,7 @@ impl rustc_driver::Callbacks for PrintAllItemsCallbacks {
         let crate_name = tcx.crate_name(LOCAL_CRATE);
 
         log::debug!("checking crate {crate_name}");
-        let Ok(()) = check_properly_annotated(tcx, properties::SafetyProperty) else {
+        let Ok(()) = check_crate_for_property(tcx, properties::SafetyProperty) else {
             return rustc_driver::Compilation::Stop;
         };
 
