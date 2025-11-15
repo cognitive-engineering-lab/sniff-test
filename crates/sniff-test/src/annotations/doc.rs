@@ -62,6 +62,12 @@ impl Attributeable for rustc_hir::Expr<'_> {
     }
 }
 
+impl Attributeable for rustc_hir::HirId {
+    fn get_attrs<'tcx>(&self, tcx: TyCtxt<'tcx>) -> &'tcx [rustc_hir::Attribute] {
+        tcx.hir_attrs(*self)
+    }
+}
+
 impl Attributeable for rustc_hir::Block<'_> {
     fn get_attrs<'tcx>(&self, tcx: TyCtxt<'tcx>) -> &'tcx [rustc_hir::Attribute] {
         tcx.hir_attrs(tcx.parent_hir_id(self.hir_id))

@@ -80,37 +80,26 @@ pub fn parse_fn_def<P: Property>(
     parse_fn_def_src(doc_str, property)
 }
 
-fn parent_block_expr<'tcx>(
-    tcx: TyCtxt<'tcx>,
-    call_expr: rustc_hir::Expr<'tcx>,
-) -> Option<rustc_hir::Block<'tcx>> {
-    tcx.hir_parent_iter(call_expr.hir_id)
-        .find_map(|(id, node)| {
-            if let rustc_hir::Node::Block(b) = &node {
-                Some(**b)
-            } else {
-                None
-            }
-        })
-}
-
 pub fn parse_expr<'tcx, P: Property>(
     tcx: TyCtxt<'tcx>,
-    call_expr: rustc_hir::Expr<'tcx>,
+    call_expr: &'tcx rustc_hir::Expr<'tcx>,
     property: P,
 ) -> Option<ExpressionAnnotation> {
-    // 1. get the doc string directly
-    let direct_annotation =
-        get_doc_str(call_expr, tcx).and_then(|doc_str| parse_expr_src(doc_str, property));
-    if let Some(direct) = direct_annotation {
-        return Some(direct);
-    }
+    // Keep looking at parent expressions until we hit a root item or impl block.
+    // We need to cover annotations on let stmts & unsafe blocks so this is the most generalizable way to handle it.
+    let mut try_these = [(call_expr.hir_id, rustc_hir::Node::Expr(call_expr))]
+        .into_iter()
+        .chain(tcx.hir_parent_iter(call_expr.hir_id))
+        .take_while(|(_id, node)| {
+            !matches!(
+                node,
+                rustc_hir::Node::ImplItem(_) | rustc_hir::Node::Item(_)
+            )
+        });
 
-    // 1. if we don't have it directly, trying getting it from a parent block...
-    parse_expr_src(
-        get_doc_str(parent_block_expr(tcx, call_expr)?, tcx)?,
-        property,
-    )
+    try_these.find_map(|(id, node)| {
+        get_doc_str(id, tcx).and_then(|doc_str| parse_expr_src(doc_str, property))
+    })
 }
 
 fn parse_expr_src<P: Property>(doc_str: DocStr, property: P) -> Option<ExpressionAnnotation> {
