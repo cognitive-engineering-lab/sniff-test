@@ -136,14 +136,14 @@ fn only_unjustified_callsites<P: Property>(
             let call_expr = expr::find_expr_for_call(tcx, calls.call_to, in_fn, call_span);
             let callsite_annotation = parse_expr(tcx, *call_expr, property);
 
-            println!("found justification {callsite_annotation:?}");
+            // println!("found justification {callsite_annotation:?}");
 
             if callsite_annotation.is_none() {
                 new_spans.push(call_span);
             }
         }
 
-        println!("found spans {new_spans:?}");
+        // println!("found spans {new_spans:?}");
 
         // If we have no new callsites, just remove this one from the list...
         if new_spans.is_empty() {
