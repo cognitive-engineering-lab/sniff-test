@@ -16,9 +16,6 @@ note: raw pointer derefence here
   |
 2 |     let a = unsafe { *ptr };
   |                       ^^^
-  = help: this axiom has known requirements:
-              1. the dereferenced pointer must be non-null
-              2. the dereferenced pointer must be aligned
 
 error: could not compile `fail_not_annotated` (bin "fail_not_annotated") due to 1 previous error
 '''

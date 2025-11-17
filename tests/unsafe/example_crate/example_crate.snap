@@ -1,24 +1,45 @@
 ---
 source: tests/lib.rs
 ---
-exit_code = 101
-stdout = ''
+exit_code = 0
+stdout = '''
+compilation of example was successful!!
+'''
 stderr = '''
-error: function foo directly contains 1 unjustified unsafe axiom, but is not annotated unsafe
- --> src/main.rs:1:1
+warning: unused variable: `ptr`
+ --> src/main.rs:5:8
   |
-1 | fn foo(ptr: *const i32) -> i32 {
-  | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+5 | fn foo(ptr: *const i32) -> i32 {
+  |        ^^^ help: if this is intentional, prefix it with an underscore: `_ptr`
   |
-  = note: reachable from [main (src/main.rs:14:5) -> bar (src/main.rs:7:5) -> *foo*]
-note: raw pointer derefence here
- --> src/main.rs:2:23
-  |
-2 |     let a = unsafe { *ptr };
-  |                       ^^^
-  = help: this axiom has known requirements:
-              1. the dereferenced pointer must be non-null
-              2. the dereferenced pointer must be aligned
+  = note: `#[warn(unused_variables)]` on by default
 
-error: could not compile `example` (bin "example") due to 1 previous error
+warning: unnecessary `unsafe` block
+  --> src/main.rs:19:5
+   |
+19 |     unsafe {
+   |     ^^^^^^ unnecessary `unsafe` block
+   |
+   = note: `#[warn(unused_unsafe)]` on by default
+
+warning: unused variable: `a`
+  --> src/main.rs:31:9
+   |
+31 |     let a = Some(3).unwrap();
+   |         ^ help: if this is intentional, prefix it with an underscore: `_a`
+
+warning: unnecessary `unsafe` block
+  --> src/main.rs:35:5
+   |
+35 |     unsafe {
+   |     ^^^^^^ unnecessary `unsafe` block
+
+warning: function `bar` is never used
+  --> src/main.rs:17:4
+   |
+17 | fn bar(ptr: *const i32) -> i32 {
+   |    ^^^
+   |
+   = note: `#[warn(dead_code)]` on by default
+
 '''

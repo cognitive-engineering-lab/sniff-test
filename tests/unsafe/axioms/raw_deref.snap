@@ -16,9 +16,6 @@ note: raw pointer derefence here
   |
 4 |     unsafe { *ptr }
   |               ^^^
-  = help: this axiom has known requirements:
-              1. the dereferenced pointer must be non-null
-              2. the dereferenced pointer must be aligned
 
 error: aborting due to 1 previous error
 

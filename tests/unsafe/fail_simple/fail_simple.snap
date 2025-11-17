@@ -4,7 +4,7 @@ source: tests/lib.rs
 exit_code = 101
 stdout = ''
 stderr = '''
-error: function main directly contains 1 unjustified call to unsafe functions, but is not annotated unsafe
+error: function main directly contains 1 unjustified call to annotated unsafe functions, but is not annotated unsafe
   --> src/main.rs:8:1
    |
  8 | fn main() {
