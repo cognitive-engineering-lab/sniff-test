@@ -1,8 +1,0 @@
----
-source: tests/lib.rs
----
-exit_code = 0
-stdout = '''
-compilation successful!!
-'''
-stderr = ''

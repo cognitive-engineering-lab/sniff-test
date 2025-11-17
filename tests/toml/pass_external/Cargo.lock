@@ -3,13 +3,6 @@
 version = 4
 
 [[package]]
-name = "invalid_simple"
-version = "0.1.0"
-dependencies = [
- "sniff-test-attrs",
-]
-
-[[package]]
 name = "proc-macro2"
 version = "1.0.101"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -32,6 +25,13 @@ name = "sniff-test-attrs"
 version = "0.1.0"
 dependencies = [
  "quote",
+]
+
+[[package]]
+name = "toml_pass_external"
+version = "0.1.0"
+dependencies = [
+ "sniff-test-attrs",
 ]
 
 [[package]]

@@ -3,6 +3,6 @@ source: tests/lib.rs
 ---
 exit_code = 0
 stdout = '''
-compilation successful!!
+compilation of pass_nested was successful!!
 '''
 stderr = ''

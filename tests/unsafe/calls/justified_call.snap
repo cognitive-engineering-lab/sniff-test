@@ -3,7 +3,7 @@ source: tests/lib.rs
 ---
 exit_code = 0
 stdout = '''
-compilation successful!!
+compilation of justified_call was successful!!
 '''
 stderr = '''
 warning: unused doc comment

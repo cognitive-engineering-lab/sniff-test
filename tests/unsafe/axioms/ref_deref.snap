@@ -3,6 +3,6 @@ source: tests/lib.rs
 ---
 exit_code = 0
 stdout = '''
-compilation successful!!
+compilation of ref_deref was successful!!
 '''
 stderr = ''

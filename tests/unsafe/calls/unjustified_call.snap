@@ -4,7 +4,7 @@ source: tests/lib.rs
 exit_code = 1
 stdout = ''
 stderr = '''
-error: function main directly contains 1 unjustified call to unsafe functions, but is not annotated unsafe
+error: function main directly contains 1 unjustified call to annotated unsafe functions, but is not annotated unsafe
   --> [SNIFF_TEST_DIR]/unsafe/calls/unjustified_call.rs:10:1
    |
 10 | fn main() {

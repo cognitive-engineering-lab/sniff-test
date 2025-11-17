@@ -1,6 +1,6 @@
 ["foo"]
 requirements = """
-# Unsafe
+# Safety
 - non-null: ptr must be non-null
 - aligned: ptr must be aligned for an i32
 """
