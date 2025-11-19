@@ -48,8 +48,34 @@ pub fn check_crate_for_property<P: Property>(
         tcx.crate_name(LOCAL_CRATE)
     );
 
+    // Filter for functions that aren't annotated as having obligations
+    let reachable_no_obligations = reachable
+        .into_iter()
+        .filter(
+            |func| match annotations::parse_fn_def(tcx, func.reach, property) {
+                Some(annotation) => {
+                    // TODO: in the future, could check to make sure this annotation doesn't create unneeded obligations.
+                    log::debug!(
+                        "fn {:?} has obligations {:?}, we'll trust it...",
+                        func.reach,
+                        annotation
+                    );
+                    false
+                }
+                None => true,
+            },
+        )
+        .collect::<Vec<_>>();
+
+    log::info!(
+        "the {} reachable, unannotated functions we need to check for {} in {} are {reachable_no_obligations:#?}",
+        reachable_no_obligations.len(),
+        P::property_name(),
+        tcx.crate_name(LOCAL_CRATE)
+    );
+
     // For all reachable local function definitions, ensure their axioms align with their annotations.
-    for func in reachable {
+    for func in reachable_no_obligations {
         check_function_for_property(tcx, func, property)?;
     }
 
@@ -61,22 +87,6 @@ fn check_function_for_property<P: Property>(
     func: LocallyReachable,
     property: P,
 ) -> Result<(), ErrorGuaranteed> {
-    // Look for the local annotation
-    let annotation = annotations::parse_fn_def(tcx, func.reach, property);
-
-    // If the function we're analyzing is directly annotated, we trust the user's annotation
-    // and don't need to analyze its body locally. Vitally, we'll still explore functions it calls
-    // due to collecting reachability earlier.
-    if let Some(annotation) = annotation {
-        log::debug!(
-            "fn {:?} has obligations {:?}, we'll trust it...",
-            func.reach,
-            annotation
-        );
-        // TODO: in the future, could check to make sure this annotation doesn't create unneeded obligations.
-        return Ok(());
-    }
-
     // Look for all axioms within this function
     let axioms = properties::find_axioms(tcx, &func, property).collect::<Vec<_>>();
     log::debug!("fn {:?} has raw axioms {:#?}", func.reach, axioms);
