@@ -1,5 +1,10 @@
 target
-review.sh
 .DS_Store
 notes.md
+
+# Ignore our snapshots & review script
 *.snap.new
+review.sh
+
+# Ignore our log files
+sniff-test.log

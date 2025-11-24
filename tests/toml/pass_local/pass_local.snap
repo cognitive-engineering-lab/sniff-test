@@ -3,6 +3,6 @@ source: tests/lib.rs
 ---
 exit_code = 0
 stdout = '''
-compilation of toml_pass_local was successful!!
+the `toml_pass_local` crate passes the sniff test!!
 '''
 stderr = ''

@@ -3,6 +3,6 @@ source: tests/lib.rs
 ---
 exit_code = 0
 stdout = '''
-compilation of pass_simple was successful!!
+the `pass_simple` crate passes the sniff test!!
 '''
 stderr = ''

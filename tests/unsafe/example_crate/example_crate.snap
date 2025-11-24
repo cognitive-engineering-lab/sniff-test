@@ -3,41 +3,41 @@ source: tests/lib.rs
 ---
 exit_code = 0
 stdout = '''
-compilation of example was successful!!
+the `example` crate passes the sniff test!!
 '''
 stderr = '''
 warning: unused variable: `ptr`
- --> src/main.rs:5:8
+ --> src/main.rs:5:12
   |
-5 | fn foo(ptr: *const i32) -> i32 {
-  |        ^^^ help: if this is intentional, prefix it with an underscore: `_ptr`
+5 | pub fn foo(ptr: *const i32) -> i32 {
+  |            ^^^ help: if this is intentional, prefix it with an underscore: `_ptr`
   |
   = note: `#[warn(unused_variables)]` on by default
 
 warning: unnecessary `unsafe` block
-  --> src/main.rs:19:5
+  --> src/main.rs:20:5
    |
-19 |     unsafe {
+20 |     unsafe {
    |     ^^^^^^ unnecessary `unsafe` block
    |
    = note: `#[warn(unused_unsafe)]` on by default
 
 warning: unused variable: `a`
-  --> src/main.rs:31:9
+  --> src/main.rs:32:9
    |
-31 |     let a = Some(3).unwrap();
+32 |     let a = Some(3).unwrap();
    |         ^ help: if this is intentional, prefix it with an underscore: `_a`
 
 warning: unnecessary `unsafe` block
-  --> src/main.rs:35:5
+  --> src/main.rs:36:5
    |
-35 |     unsafe {
+36 |     unsafe {
    |     ^^^^^^ unnecessary `unsafe` block
 
 warning: function `bar` is never used
-  --> src/main.rs:17:4
+  --> src/main.rs:19:4
    |
-17 | fn bar(ptr: *const i32) -> i32 {
+19 | fn bar(ptr: *const i32) -> i32 {
    |    ^^^
    |
    = note: `#[warn(dead_code)]` on by default

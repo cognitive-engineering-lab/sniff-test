@@ -1,21 +1,22 @@
 #![sniff_tool::check_unsafe_pub]
 
 /// # Safety
-/// 
-fn foo(ptr: *const i32) -> i32 {
+///
+pub fn foo(ptr: *const i32) -> i32 {
     0
 }
 
 /// # Saety
 ///     I've checked ptr is non-null and aligned
 pub fn baz(ptr: *const i32) -> i32 {
-    /// SAFETY: ptr is non null I've checked
-    unsafe { *ptr }
+    unsafe {
+        /// SAFETY: ptr is non null I've checked
+        *ptr
+    }
 }
 
 #[sniff_test_attrs::check_unsafe]
 fn bar(ptr: *const i32) -> i32 {
-
     unsafe {
         baz(ptr);
     }

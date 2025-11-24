@@ -8,15 +8,15 @@ use rustc_middle::ty::TyCtxt;
 use rustc_span::Span;
 
 #[derive(Debug)]
-pub struct DocStr<'tcx>(String, &'tcx [Attribute]);
+pub struct DocStr(String, Vec<Attribute>);
 
-impl DocStr<'_> {
+impl DocStr {
     pub fn str(&self) -> &str {
         &self.0
     }
 
     pub fn span_of_chars(&self, chars: Range<usize>) -> Span {
-        super::span::span_some_comments(self.1, chars)
+        super::span::span_some_comments(&self.1, chars)
             .merge_adjacent()
             .into_iter()
             .next()
@@ -28,17 +28,19 @@ impl DocStr<'_> {
 pub fn get_doc_str<T: Attributeable>(item: T, tcx: TyCtxt) -> Option<DocStr> {
     let all_attrs = item.get_attrs(tcx);
 
-    // Filter for doc comments.
-    let doc_comments = all_attrs
+    let (doc_attrs, doc_comments) = all_attrs
         .iter()
-        .filter_map(|attr| attr.doc_str().map(|a| a.as_str().to_owned()))
-        .collect::<Vec<_>>();
+        .filter_map(|attr| {
+            attr.doc_str()
+                .map(|a| (attr.clone(), a.as_str().to_owned()))
+        })
+        .collect::<(Vec<_>, Vec<_>)>();
 
     // Return none if no doc comments were found
     if doc_comments.is_empty() {
         None
     } else {
-        Some(DocStr(doc_comments.join("\n"), all_attrs))
+        Some(DocStr(doc_comments.join("\n"), doc_attrs))
     }
 }
 
@@ -57,6 +59,12 @@ impl Attributeable for rustc_span::def_id::DefId {
 impl Attributeable for rustc_hir::Expr<'_> {
     fn get_attrs<'tcx>(&self, tcx: TyCtxt<'tcx>) -> &'tcx [rustc_hir::Attribute] {
         tcx.hir_attrs(self.hir_id)
+    }
+}
+
+impl Attributeable for rustc_hir::HirId {
+    fn get_attrs<'tcx>(&self, tcx: TyCtxt<'tcx>) -> &'tcx [rustc_hir::Attribute] {
+        tcx.hir_attrs(*self)
     }
 }
 

@@ -3,7 +3,7 @@ source: tests/lib.rs
 ---
 exit_code = 0
 stdout = '''
-compilation of justified_call was successful!!
+the `justified_call` crate passes the sniff test!!
 '''
 stderr = '''
 warning: unused doc comment

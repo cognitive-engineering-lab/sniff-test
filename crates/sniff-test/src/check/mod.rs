@@ -9,7 +9,7 @@ use crate::{
 };
 use itertools::Itertools;
 use rustc_errors::{Diag, DiagCtxtHandle};
-use rustc_hir::def_id::{DefId, LocalDefId};
+use rustc_hir::def_id::{DefId, LOCAL_CRATE, LocalDefId};
 use rustc_middle::ty::TyCtxt;
 use rustc_span::{
     DUMMY_SP, ErrorGuaranteed,
@@ -21,7 +21,7 @@ mod err;
 mod expr;
 
 /// Checks that all local functions in the crate are properly annotated.
-pub fn check_properly_annotated<P: Property>(
+pub fn check_crate_for_property<P: Property>(
     tcx: TyCtxt,
     property: P,
 ) -> Result<(), ErrorGuaranteed> {
@@ -51,56 +51,95 @@ pub fn check_properly_annotated<P: Property>(
                 (local, span)
             })
             .collect::<Vec<_>>();
-        log::debug!("entry is {entries:#?}");
+        log::info!(
+            "the {} entry functions for {} in {} are {entries:#?}",
+            entry.len(),
+            P::property_name(),
+            tcx.crate_name(LOCAL_CRATE)
+        );
     }
 
     let reachable = reachability::locally_reachable_from(tcx, entry).collect::<Vec<_>>();
 
-    log::debug!("reachable is {reachable:#?}");
+    log::info!(
+        "the {} reachable functions for {} in {} are {reachable:#?}",
+        reachable.len(),
+        P::property_name(),
+        tcx.crate_name(LOCAL_CRATE)
+    );
+
+    // Filter for functions that aren't annotated as having obligations
+    let reachable_no_obligations = reachable
+        .into_iter()
+        .filter(|func| {
+            match annotations::parse_fn_def(tcx, &toml_annotations, func.reach, property) {
+                Some(annotation) => {
+                    // TODO: in the future, could check to make sure this annotation doesn't create unneeded obligations.
+                    log::debug!(
+                        "fn {:?} has obligations {:?}, we'll trust it...",
+                        func.reach,
+                        annotation
+                    );
+                    false
+                }
+                None => true,
+            }
+        })
+        .collect::<Vec<_>>();
+
+    log::info!(
+        "the {} reachable, unannotated functions we need to check for {} in {} are {reachable_no_obligations:#?}",
+        reachable_no_obligations.len(),
+        P::property_name(),
+        tcx.crate_name(LOCAL_CRATE)
+    );
 
     // For all reachable local function definitions, ensure their axioms align with their annotations.
-    for func in reachable {
-        check_function_properties(tcx, &toml_annotations, func, property)?;
+    for func in reachable_no_obligations {
+        check_function_for_property(tcx, &toml_annotations, func, property)?;
     }
 
     Ok(())
 }
 
-fn check_function_properties<P: Property>(
+fn check_function_for_property<P: Property>(
     tcx: TyCtxt,
     toml_annotations: &TomlAnnotation,
     func: LocallyReachable,
     property: P,
 ) -> Result<(), ErrorGuaranteed> {
-    // Look for the local annotation
-    let annotation = annotations::parse_fn_def(tcx, toml_annotations, func.reach, property);
-
-    // If the function we're analyzing is directly annotated, we trust the user's annotation
-    // and don't need to analyze its body locally. Vitally, we'll still explore functions it calls
-    // due to collecting reachability earlier.
-    if let Some(annotation) = annotation {
-        // TODO: in the future, could check to make sure this annotation doesn't create unneeded obligations.
-        return Ok(());
-    }
-
     // Look for all axioms within this function
-    let axioms = properties::find_axioms(tcx, &func, property)
+    let axioms = properties::find_axioms(tcx, &func, property).collect::<Vec<_>>();
+    log::debug!("fn {:?} has raw axioms {:#?}", func.reach, axioms);
+    let unjustified_axioms = axioms
+        .into_iter()
         .filter(only_unjustified_axioms(tcx, property))
         .collect::<Vec<_>>();
 
-    log::debug!("fn {:?} has axioms {:?}", func.reach, axioms);
-    log::debug!("fn {:?} has obligations {:?}", func.reach, annotation);
-
     // Find all calls that have obligations.
-    let unjustified_calls =
-        reachability::find_calls_w_obligations(tcx, toml_annotations, &func, property)
-            // Filter those with only callsites that haven't been justified.
-            .filter_map(only_unjustified_callsites(tcx, func.reach, property))
-            .collect::<Vec<_>>();
+    let calls = reachability::find_calls_w_obligations(tcx, toml_annotations, &func, property)
+        .collect::<Vec<_>>();
+    log::debug!("fn {:?} has raw calls {:#?}", func.reach, calls);
+    let unjustified_calls = calls
+        .into_iter()
+        // Filter those with only callsites that haven't been justified.
+        .filter_map(only_unjustified_callsites(tcx, func.reach, property))
+        .collect::<Vec<_>>();
+
+    log::info!(
+        "fn {:?} has unjustified axioms {:#?}",
+        func.reach,
+        unjustified_axioms
+    );
+    log::info!(
+        "fn {:?} has unjustified calls {:#?}",
+        func.reach,
+        unjustified_calls
+    );
 
     // If we have obligations, we've dismissed them
 
-    if unjustified_calls.is_empty() && axioms.is_empty() {
+    if unjustified_calls.is_empty() && unjustified_axioms.is_empty() {
         // Nothing to report, all good!
         Ok(())
     } else {
@@ -109,7 +148,7 @@ fn check_function_properties<P: Property>(
             tcx,
             func,
             property,
-            axioms,
+            unjustified_axioms,
             unjustified_calls,
         ))
     }
@@ -119,7 +158,10 @@ fn only_unjustified_axioms<'tcx, P: Property>(
     tcx: TyCtxt<'tcx>,
     property: P,
 ) -> impl Fn(&FoundAxiom<'tcx, P::Axiom>) -> bool {
-    move |axiom| parse_expr(tcx, *axiom.found_in, property).is_none()
+    move |axiom| {
+        log::debug!("getting seeing if axiom {axiom:?} has justification");
+        parse_expr(tcx, axiom.found_in, property).is_none()
+    }
 }
 
 /// Filter a set of calls to a function for only those which are not property justified.
@@ -134,16 +176,12 @@ fn only_unjustified_callsites<P: Property>(
 
         for call_span in calls.from_spans {
             let call_expr = expr::find_expr_for_call(tcx, calls.call_to, in_fn, call_span);
-            let callsite_annotation = parse_expr(tcx, *call_expr, property);
-
-            // println!("found justification {callsite_annotation:?}");
+            let callsite_annotation = parse_expr(tcx, call_expr, property);
 
             if callsite_annotation.is_none() {
                 new_spans.push(call_span);
             }
         }
-
-        // println!("found spans {new_spans:?}");
 
         // If we have no new callsites, just remove this one from the list...
         if new_spans.is_empty() {
