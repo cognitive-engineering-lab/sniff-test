@@ -3,6 +3,6 @@ source: tests/lib.rs
 ---
 exit_code = 0
 stdout = '''
-the `pass_simple` crate passes the sniff test!!
+the `toml_pass_external` crate passes the sniff test!!
 '''
 stderr = ''

@@ -1,14 +1,20 @@
+use crate::{
+    annotations::{
+        self, parse_expr,
+        toml::{TomlAnnotation, TomlParseError},
+    },
+    properties::{self, Axiom, FoundAxiom, Property},
+    reachability::{self, CallsWObligations, LocallyReachable},
+    utils::SniffTestDiagnostic,
+};
 use itertools::Itertools;
 use rustc_errors::{Diag, DiagCtxtHandle};
 use rustc_hir::def_id::{DefId, LOCAL_CRATE, LocalDefId};
 use rustc_middle::ty::TyCtxt;
-use rustc_span::{ErrorGuaranteed, source_map::Spanned, sym::todo_macro};
-
-use crate::{
-    annotations::{self, parse_expr},
-    properties::{self, Axiom, FoundAxiom, Property},
-    reachability::{self, CallsWObligations, LocallyReachable},
-    utils::SniffTestDiagnostic,
+use rustc_span::{
+    DUMMY_SP, ErrorGuaranteed,
+    source_map::{Spanned, respan},
+    sym::todo_macro,
 };
 
 mod err;
@@ -19,6 +25,20 @@ pub fn check_crate_for_property<P: Property>(
     tcx: TyCtxt,
     property: P,
 ) -> Result<(), ErrorGuaranteed> {
+    // Parse TOML annotations from file
+    let toml_path = "sniff-test.toml";
+    let toml_annotations = match TomlAnnotation::from_file(toml_path) {
+        Ok(annotations) => annotations,
+        Err(e) => {
+            tcx.dcx()
+                .struct_warn(format!(
+                    "Failed to parse TOML annotations from {toml_path}: {e:?}"
+                ))
+                .emit();
+            TomlAnnotation::default()
+        }
+    };
+
     let entry = reachability::analysis_entry_points::<P>(tcx);
 
     // Debug print all our entries and where they are in the src
@@ -51,8 +71,8 @@ pub fn check_crate_for_property<P: Property>(
     // Filter for functions that aren't annotated as having obligations
     let reachable_no_obligations = reachable
         .into_iter()
-        .filter(
-            |func| match annotations::parse_fn_def(tcx, func.reach, property) {
+        .filter(|func| {
+            match annotations::parse_fn_def(tcx, &toml_annotations, func.reach, property) {
                 Some(annotation) => {
                     // TODO: in the future, could check to make sure this annotation doesn't create unneeded obligations.
                     log::debug!(
@@ -63,8 +83,8 @@ pub fn check_crate_for_property<P: Property>(
                     false
                 }
                 None => true,
-            },
-        )
+            }
+        })
         .collect::<Vec<_>>();
 
     log::info!(
@@ -76,7 +96,7 @@ pub fn check_crate_for_property<P: Property>(
 
     // For all reachable local function definitions, ensure their axioms align with their annotations.
     for func in reachable_no_obligations {
-        check_function_for_property(tcx, func, property)?;
+        check_function_for_property(tcx, &toml_annotations, func, property)?;
     }
 
     Ok(())
@@ -84,6 +104,7 @@ pub fn check_crate_for_property<P: Property>(
 
 fn check_function_for_property<P: Property>(
     tcx: TyCtxt,
+    toml_annotations: &TomlAnnotation,
     func: LocallyReachable,
     property: P,
 ) -> Result<(), ErrorGuaranteed> {
@@ -96,7 +117,8 @@ fn check_function_for_property<P: Property>(
         .collect::<Vec<_>>();
 
     // Find all calls that have obligations.
-    let calls = reachability::find_calls_w_obligations(tcx, &func, property).collect::<Vec<_>>();
+    let calls = reachability::find_calls_w_obligations(tcx, toml_annotations, &func, property)
+        .collect::<Vec<_>>();
     log::debug!("fn {:?} has raw calls {:#?}", func.reach, calls);
     let unjustified_calls = calls
         .into_iter()

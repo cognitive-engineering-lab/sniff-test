@@ -1,0 +1,5 @@
+["std::thread::sleep"]
+requirements = """
+# Safety
+* 'non-blocking': Function must not be called in a routine which cannot block.
+"""
