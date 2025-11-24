@@ -1,0 +1,23 @@
+---
+source: tests/lib.rs
+assertion_line: 201
+---
+exit_code = 1
+stdout = ''
+stderr = '''
+error: function main directly contains 1 unjustified call to annotated unsafe functions, but is not annotated unsafe
+ --> [SNIFF_TEST_DIR]/unsafe/placement/call_let_def.rs:6:1
+  |
+6 | fn main() {
+  | ^^^^^^^^^
+  |
+  = note: reachable from [*main*]
+note: deref is called here
+ --> [SNIFF_TEST_DIR]/unsafe/placement/call_let_def.rs:9:22
+  |
+9 |     let _ = unsafe { deref(ptr) };
+  |                      ^^^^^^^^^^
+
+error: aborting due to 1 previous error
+
+'''

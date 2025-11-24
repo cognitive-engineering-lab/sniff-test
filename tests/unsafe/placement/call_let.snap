@@ -1,0 +1,9 @@
+---
+source: tests/lib.rs
+assertion_line: 201
+---
+exit_code = 0
+stdout = '''
+the `call_let` crate passes the sniff test!!
+'''
+stderr = ''
