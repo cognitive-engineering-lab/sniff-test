@@ -1,6 +1,8 @@
 #![allow(unused_doc_comments)]
 extern crate sniff_test_attrs;
 
+// This shouldn't be allowed, but a buggy implementation could feasibly accidentally allow it.
+
 #[sniff_test_attrs::check_unsafe]
 /// SAFETY: ...
 fn main() {

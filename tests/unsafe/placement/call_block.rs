@@ -1,6 +1,9 @@
 #![allow(unused_doc_comments)]
 extern crate sniff_test_attrs;
 
+// This kind of documentation is allowed by [the clippy lint](https://rust-lang.github.io/rust-clippy/master/index.html?search=undocumented_unsafe_blocks),
+// so we should accept it too.
+
 #[sniff_test_attrs::check_unsafe]
 fn main() {
     let x = 10;
