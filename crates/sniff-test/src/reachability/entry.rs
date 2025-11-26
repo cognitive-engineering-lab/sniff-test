@@ -35,8 +35,11 @@ pub fn analysis_entry_points<P: Property>(tcx: TyCtxt) -> Vec<LocalDefId> {
 
     // Sort entry points so our analysis order is deterministic.
     let mut entry_points = entry_points.into_iter().collect::<Vec<_>>();
-    entry_points
-        .sort_by(|a, b| usize::cmp(&rustc_index::Idx::index(*a), &rustc_index::Idx::index(*b)));
+    entry_points.sort_by(|a, b| {
+        tcx.def_path_hash(a.to_def_id())
+            .0
+            .cmp(&tcx.def_path_hash(b.to_def_id()).0)
+    });
     entry_points
 }
 
