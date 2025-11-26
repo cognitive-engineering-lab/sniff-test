@@ -5,19 +5,6 @@ assertion_line: 201
 exit_code = 1
 stdout = ''
 stderr = '''
-error: function bar directly contains 1 unjustified unsafe axiom, but is not annotated unsafe
- --> [SNIFF_TEST_DIR]/unsafe/annotations/global.rs:7:1
-  |
-7 | fn bar(ptr: *const i32) -> i32 {
-  | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  |
-  = note: reachable from [*bar*]
-note: raw pointer derefence here
- --> [SNIFF_TEST_DIR]/unsafe/annotations/global.rs:8:15
-  |
-8 |     unsafe { *ptr }
-  |               ^^^
-
 error: function foo directly contains 1 unjustified unsafe axiom, but is not annotated unsafe
  --> [SNIFF_TEST_DIR]/unsafe/annotations/global.rs:3:1
   |
@@ -29,6 +16,19 @@ note: raw pointer derefence here
  --> [SNIFF_TEST_DIR]/unsafe/annotations/global.rs:4:15
   |
 4 |     unsafe { *ptr }
+  |               ^^^
+
+error: function bar directly contains 1 unjustified unsafe axiom, but is not annotated unsafe
+ --> [SNIFF_TEST_DIR]/unsafe/annotations/global.rs:7:1
+  |
+7 | fn bar(ptr: *const i32) -> i32 {
+  | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  |
+  = note: reachable from [*bar*]
+note: raw pointer derefence here
+ --> [SNIFF_TEST_DIR]/unsafe/annotations/global.rs:8:15
+  |
+8 |     unsafe { *ptr }
   |               ^^^
 
 error: aborting due to 2 previous errors

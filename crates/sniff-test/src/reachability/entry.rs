@@ -32,7 +32,12 @@ pub fn analysis_entry_points<P: Property>(tcx: TyCtxt) -> Vec<LocalDefId> {
     let local = annotated_local_defs::<P>(tcx).collect::<Vec<_>>();
     log::debug!("entry from local annotations is {local:#?}");
     entry_points.extend(local);
-    entry_points.into_iter().collect()
+
+    // Sort entry points so our analysis order is deterministic.
+    let mut entry_points = entry_points.into_iter().collect::<Vec<_>>();
+    entry_points
+        .sort_by(|a, b| usize::cmp(&rustc_index::Idx::index(*a), &rustc_index::Idx::index(*b)));
+    entry_points
 }
 
 fn find_global_annotation<P: Property>(tcx: TyCtxt) -> Option<GlobalAnnotation> {
