@@ -242,7 +242,8 @@ fn rustc_sniff(file_path: &Path) -> anyhow::Result<SniffTestOutput> {
 
     // Register the sniff_tool.
     cmd.arg("-Zcrate-attr=feature(register_tool)")
-        .arg("-Zcrate-attr=register_tool(sniff_tool)");
+        .arg("-Zcrate-attr=register_tool(sniff_tool)")
+        .arg("-Zcrate-attr=feature(custom_inner_attributes)");
 
     // TODO: should do this all the time i think
     cmd.arg("-Zno-codegen");

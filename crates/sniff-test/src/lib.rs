@@ -61,7 +61,7 @@ pub struct SniffTestArgs {
     cargo_args: Vec<String>,
 }
 
-const TO_FILE: bool = true;
+const TO_FILE: bool = false;
 
 fn env_logger_init_file(driver: bool) {
     use std::fs::OpenOptions;
@@ -122,6 +122,7 @@ impl RustcPlugin for PrintAllItemsPlugin {
 
     // Pass Cargo arguments (like --feature) from the top-level CLI to Cargo.
     fn modify_cargo(&self, cargo: &mut Command, args: &Self::Args) {
+        log::debug!("modifying cargo args");
         cargo.args(&args.cargo_args);
 
         if args.release {

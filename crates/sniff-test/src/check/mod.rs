@@ -94,12 +94,19 @@ pub fn check_crate_for_property<P: Property>(
         tcx.crate_name(LOCAL_CRATE)
     );
 
+    let mut res = Ok(());
+
     // For all reachable local function definitions, ensure their axioms align with their annotations.
     for func in reachable_no_obligations {
-        check_function_for_property(tcx, &toml_annotations, func, property)?;
+        // Continue checking functions, even if one fails to ensure we report as many errors as possible.
+        // TODO: is this actually bad? one could imagine properly documenting one function could also
+        // fix errors for where it is called.
+        if let Err(e) = check_function_for_property(tcx, &toml_annotations, func, property) {
+            res = Err(e);
+        }
     }
 
-    Ok(())
+    res
 }
 
 fn check_function_for_property<P: Property>(
