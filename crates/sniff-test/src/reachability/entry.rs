@@ -33,14 +33,8 @@ pub fn analysis_entry_points<P: Property>(tcx: TyCtxt) -> Vec<LocalDefId> {
     log::debug!("entry from local annotations is {local:#?}");
     entry_points.extend(local);
 
-    // Sort entry points so our analysis order is deterministic.
-    let mut entry_points = entry_points.into_iter().collect::<Vec<_>>();
-    entry_points.sort_by(|a, b| {
-        tcx.def_path_hash(a.to_def_id())
-            .0
-            .cmp(&tcx.def_path_hash(b.to_def_id()).0)
-    });
-    entry_points
+    // Currently sort at the reachability level, so don't have to do it here.
+    entry_points.into_iter().collect()
 }
 
 fn find_global_annotation<P: Property>(tcx: TyCtxt) -> Option<GlobalAnnotation> {

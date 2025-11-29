@@ -59,7 +59,7 @@ pub fn check_crate_for_property<P: Property>(
         );
     }
 
-    let reachable = reachability::locally_reachable_from(tcx, entry).collect::<Vec<_>>();
+    let reachable = reachability::locally_reachable_from(tcx, entry);
 
     log::info!(
         "the {} reachable functions for {} in {} are {reachable:#?}",

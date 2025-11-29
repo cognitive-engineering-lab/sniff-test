@@ -3,8 +3,6 @@
 use crate::annotations::{self, DefAnnotation, parse_fn_def, toml::TomlAnnotation};
 use crate::properties::Property;
 use crate::reachability::LocallyReachable;
-use std::collections::HashMap;
-use std::ops::Try;
 
 use crate::utils::MultiEmittable;
 use rustc_hir::def_id::{DefId, DefPathHash};
