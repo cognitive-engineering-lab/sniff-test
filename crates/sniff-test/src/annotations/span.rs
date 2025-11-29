@@ -68,6 +68,7 @@ pub fn span_some_comments(
 }
 
 /// Returns the span for all `doc_comments`.
+#[allow(unused)]
 pub fn span_all_comments(doc_comments: &[Attribute]) -> Vec<Span> {
     doc_comments
         .iter()

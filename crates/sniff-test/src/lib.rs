@@ -7,7 +7,6 @@
 #![deny(warnings)]
 #![warn(clippy::pedantic)]
 #![allow(
-    unused,
     clippy::must_use_candidate,
     clippy::missing_panics_doc, // TODO: should remove this, kinda ironic for us to be using it...
     clippy::missing_errors_doc,
@@ -65,7 +64,6 @@ const TO_FILE: bool = true;
 
 fn env_logger_init_file(driver: bool) {
     use std::fs::OpenOptions;
-    use std::io::Write;
 
     let mut log_file_opts = OpenOptions::new();
     log_file_opts.write(true);
@@ -125,10 +123,10 @@ impl RustcPlugin for PrintAllItemsPlugin {
         cargo.args(&args.cargo_args);
 
         if args.release {
+            cargo.args(["--release"]);
             panic!(
                 "release can inline some functions, so not sure if we want to allow this yet..."
             );
-            cargo.args(["--release"]);
         }
 
         // Register the sniff_tool

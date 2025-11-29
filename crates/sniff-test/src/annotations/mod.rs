@@ -1,23 +1,14 @@
 //! The utilities needed to find and parse code annotations.
 use crate::{
     annotations::{
-        doc::{Attributeable, DocStr, get_doc_str},
+        doc::{DocStr, get_doc_str},
         toml::TomlAnnotation,
     },
     properties::Property,
 };
-use regex::Regex;
-use rustc_ast::Item;
 use rustc_middle::ty::TyCtxt;
-use rustc_span::{
-    Span,
-    source_map::{Spanned, respan},
-};
-use std::{
-    any::Any,
-    ops::{FromResidual, Try},
-};
-use std::{any::TypeId, borrow::Borrow, collections::HashMap, fmt::Debug, hash::Hash};
+use rustc_span::Span;
+use std::fmt::Debug;
 
 mod doc;
 mod span;
@@ -106,7 +97,7 @@ pub fn parse_expr<'tcx, P: Property>(
             )
         });
 
-    try_these.find_map(|(id, node)| {
+    try_these.find_map(|(id, _node)| {
         get_doc_str(id, tcx).and_then(|doc_str| parse_expr_src(doc_str, property))
     })
 }
