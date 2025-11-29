@@ -11,13 +11,6 @@
 
 use std::collections::HashMap;
 
-use rustc_span::{
-    DUMMY_SP,
-    source_map::{Spanned, respan},
-};
-
-use crate::annotations::DefAnnotation;
-
 /// Struct encapsulating annotations parsed from a TOML file.
 #[derive(Default)]
 pub struct TomlAnnotation {

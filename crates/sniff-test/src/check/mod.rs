@@ -1,21 +1,11 @@
 use crate::{
-    annotations::{
-        self, parse_expr,
-        toml::{TomlAnnotation, TomlParseError},
-    },
-    properties::{self, Axiom, FoundAxiom, Property},
+    annotations::{self, parse_expr, toml::TomlAnnotation},
+    properties::{self, FoundAxiom, Property},
     reachability::{self, CallsWObligations, LocallyReachable},
-    utils::SniffTestDiagnostic,
 };
-use itertools::Itertools;
-use rustc_errors::{Diag, DiagCtxtHandle};
-use rustc_hir::def_id::{DefId, LOCAL_CRATE, LocalDefId};
+use rustc_hir::def_id::{LOCAL_CRATE, LocalDefId};
 use rustc_middle::ty::TyCtxt;
-use rustc_span::{
-    DUMMY_SP, ErrorGuaranteed,
-    source_map::{Spanned, respan},
-    sym::todo_macro,
-};
+use rustc_span::ErrorGuaranteed;
 
 mod err;
 mod expr;
@@ -172,7 +162,6 @@ fn only_unjustified_callsites<P: Property>(
 ) -> impl Fn(CallsWObligations) -> Option<CallsWObligations> {
     move |mut calls| {
         let mut new_spans = Vec::new();
-        let obligations = &calls.w_annotation;
 
         for call_span in calls.from_spans {
             let call_expr = expr::find_expr_for_call(tcx, calls.call_to, in_fn, call_span);
@@ -191,23 +180,4 @@ fn only_unjustified_callsites<P: Property>(
             Some(calls)
         }
     }
-}
-
-fn reachability_str(fn_name: &str, tcx: TyCtxt, reachable: &LocallyReachable) -> String {
-    let reachability_str = reachable
-        .through
-        .iter()
-        .map(|def| {
-            let name = tcx.def_path_str(def.0);
-            let s = tcx
-                .sess
-                .source_map()
-                .span_to_string(def.1, rustc_span::FileNameDisplayPreference::Local);
-            let colon = s.find(": ").expect("should have a colon");
-            format!("{name} ({})", &s[..colon])
-        })
-        .chain(std::iter::once(format!("*{fn_name}*")))
-        .join(" -> ");
-
-    format!("reachable from [{reachability_str}]")
 }

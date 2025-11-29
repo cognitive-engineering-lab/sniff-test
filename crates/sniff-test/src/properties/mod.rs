@@ -1,18 +1,14 @@
 //! A module for detecting axiomatic program patterns
 
-use crate::{
-    annotations::{self, PropertyViolation},
-    reachability::{LocallyReachable, attrs::SniffToolAttr},
-};
+use crate::{annotations::PropertyViolation, reachability::LocallyReachable};
 use regex::Regex;
 use rustc_hir::intravisit::{self, Visitor};
 use rustc_middle::{
     hir::nested_filter,
     ty::{TyCtxt, TypeckResults},
 };
-use rustc_span::source_map::Spanned;
 use std::fmt::Debug;
-use std::{fmt::Display, sync::Arc};
+use std::fmt::Display;
 
 mod panic;
 mod safety;

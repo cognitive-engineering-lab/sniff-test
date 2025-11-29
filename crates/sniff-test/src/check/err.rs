@@ -2,7 +2,7 @@ use crate::properties::FoundAxiom;
 use itertools::Itertools;
 use rustc_errors::Diag;
 use rustc_middle::ty::TyCtxt;
-use rustc_span::{ErrorGuaranteed, source_map::Spanned};
+use rustc_span::ErrorGuaranteed;
 
 use crate::{
     properties::Property,
@@ -12,7 +12,7 @@ use crate::{
 pub fn report_errors<'tcx, P: Property>(
     tcx: TyCtxt<'tcx>,
     func: LocallyReachable,
-    property: P,
+    _property: P,
     unjustified_axioms: Vec<FoundAxiom<'tcx, P::Axiom>>,
     unjustified_calls: Vec<CallsWObligations>,
 ) -> ErrorGuaranteed {
@@ -76,9 +76,8 @@ fn reachability_str(fn_name: &str, tcx: TyCtxt, reachable: &LocallyReachable) ->
 
 mod summary {
     use itertools::Itertools;
-    use rustc_span::source_map::Spanned;
 
-    use crate::properties::{Axiom, FoundAxiom, Property};
+    use crate::properties::{FoundAxiom, Property};
     use crate::reachability::CallsWObligations;
 
     pub fn summary_string<P: Property>(
