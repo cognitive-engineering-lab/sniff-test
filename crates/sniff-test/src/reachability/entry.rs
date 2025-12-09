@@ -74,8 +74,7 @@ fn is_def_analyzeable(tcx: TyCtxt) -> impl Fn(&LocalDefId) -> bool {
         // TODO: should we be handling more here?? Yes we should. Key exports of zerocopy
         // are Associated functions, so we should at least handle that...
         let res = match kind {
-            DefKind::Fn => true,
-            // DefKind::AssocFn => true,
+            DefKind::Fn | DefKind::AssocFn => true,
             // For context, zerocopy has all of these, but I don't think we want to analyze them...
             // Don't want anything to fall through the cracks though, so left as todo.
             // DefKind::Impl { .. } | DefKind::AssocConst => false,

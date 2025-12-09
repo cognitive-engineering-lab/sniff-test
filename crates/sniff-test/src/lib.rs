@@ -62,7 +62,7 @@ pub struct SniffTestArgs {
     cargo_args: Vec<String>,
 }
 
-const TO_FILE: bool = false;
+const TO_FILE: bool = true;
 
 fn env_logger_init_file(driver: bool) {
     use std::fs::OpenOptions;
