@@ -106,6 +106,7 @@ impl<'tcx> CallGraphVisitor<'tcx> {
     }
 }
 
+#[allow(dead_code)]
 struct BodyVisitor<'tcx, 'm>(
     TyCtxt<'tcx>,
     &'m mut VecDeque<LocallyReachable>,

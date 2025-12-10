@@ -5,41 +5,4 @@ exit_code = 0
 stdout = '''
 the `example` crate passes the sniff test!!
 '''
-stderr = '''
-warning: unused variable: `ptr`
- --> src/main.rs:5:12
-  |
-5 | pub fn foo(ptr: *const i32) -> i32 {
-  |            ^^^ help: if this is intentional, prefix it with an underscore: `_ptr`
-  |
-  = note: `#[warn(unused_variables)]` on by default
-
-warning: unnecessary `unsafe` block
-  --> src/main.rs:20:5
-   |
-20 |     unsafe {
-   |     ^^^^^^ unnecessary `unsafe` block
-   |
-   = note: `#[warn(unused_unsafe)]` on by default
-
-warning: unused variable: `a`
-  --> src/main.rs:32:9
-   |
-32 |     let a = Some(3).unwrap();
-   |         ^ help: if this is intentional, prefix it with an underscore: `_a`
-
-warning: unnecessary `unsafe` block
-  --> src/main.rs:36:5
-   |
-36 |     unsafe {
-   |     ^^^^^^ unnecessary `unsafe` block
-
-warning: function `bar` is never used
-  --> src/main.rs:19:4
-   |
-19 | fn bar(ptr: *const i32) -> i32 {
-   |    ^^^
-   |
-   = note: `#[warn(dead_code)]` on by default
-
-'''
+stderr = ''

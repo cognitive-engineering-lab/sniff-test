@@ -1,9 +1,6 @@
 //! A module for detecting axiomatic program patterns
 
-use crate::{
-    annotations::{self, PropertyViolation},
-    reachability::{LocallyReachable, attrs::SniffToolAttr},
-};
+use crate::{annotations::PropertyViolation, reachability::LocallyReachable};
 use regex::Regex;
 use rustc_hir::{
     def_id::DefId,
@@ -13,9 +10,9 @@ use rustc_middle::{
     hir::nested_filter,
     ty::{TyCtxt, TypeckResults},
 };
-use rustc_span::{ErrorGuaranteed, source_map::Spanned};
+use rustc_span::ErrorGuaranteed;
 use std::fmt::Debug;
-use std::{fmt::Display, sync::Arc};
+use std::fmt::Display;
 
 mod panic;
 mod safety;
@@ -43,7 +40,7 @@ pub trait Property: Debug + Copy + 'static {
     ) -> Vec<FoundAxiom<'tcx, Self::Axiom>>;
 
     /// An additional check to perform on all function defs that are annotated as having this property.
-    fn additional_check(&self, tcx: TyCtxt, fn_def: DefId) -> Result<(), ErrorGuaranteed> {
+    fn additional_check(&self, _tcx: TyCtxt, _fn_def: DefId) -> Result<(), ErrorGuaranteed> {
         Ok(())
     }
 }

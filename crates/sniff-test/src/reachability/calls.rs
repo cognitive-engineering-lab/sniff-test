@@ -1,21 +1,17 @@
 //! Finds the 'bad' functions that should be annotated
 
-use crate::annotations::{self, DefAnnotation, parse_fn_def, toml::TomlAnnotation};
+use crate::annotations::{DefAnnotation, parse_fn_def, toml::TomlAnnotation};
 use crate::properties::Property;
 use crate::reachability::LocallyReachable;
 
-use crate::utils::MultiEmittable;
-use rustc_hir::def_id::{DefId, DefPathHash};
+use rustc_hir::def_id::DefId;
 use rustc_middle::ty::TyCtxt;
-use rustc_public::mir::Safety;
-use rustc_public::ty::FnDef;
-use rustc_span::source_map::Spanned;
-use rustc_span::{ErrorGuaranteed, Span};
+use rustc_span::Span;
 
 #[derive(Debug)]
 pub struct CallsWObligations {
     pub call_to: DefId,
-    pub w_annotation: DefAnnotation,
+    pub _w_annotation: DefAnnotation,
     pub from_spans: Vec<Span>,
 }
 
@@ -29,7 +25,7 @@ fn call_has_obligations<P: Property>(
         if annotation.creates_obligation() {
             Some(CallsWObligations {
                 call_to: *to_def_id,
-                w_annotation: annotation,
+                _w_annotation: annotation,
                 from_spans: from_spans.clone(),
             })
         } else {

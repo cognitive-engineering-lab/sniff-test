@@ -4,14 +4,12 @@ use regex::Regex;
 use rustc_ast::UnOp;
 use rustc_hir::ExprKind;
 use rustc_middle::ty::TyCtxt;
-use rustc_span::source_map::{Spanned, respan};
 use rustc_type_ir::TyKind;
 
 use super::Axiom;
 use crate::{
-    annotations::{self, PropertyViolation},
+    annotations::PropertyViolation,
     properties::{FoundAxiom, Property},
-    reachability::attrs,
 };
 
 #[derive(Debug, Clone, Copy)]
@@ -35,7 +33,7 @@ impl Property for SafetyProperty {
 
     fn find_axioms_in_expr<'tcx>(
         &mut self,
-        tcx: TyCtxt<'tcx>,
+        _tcx: TyCtxt<'tcx>,
         tyck: &rustc_middle::ty::TypeckResults,
         expr: &'tcx rustc_hir::Expr<'tcx>,
     ) -> Vec<FoundAxiom<'tcx, Self::Axiom>> {

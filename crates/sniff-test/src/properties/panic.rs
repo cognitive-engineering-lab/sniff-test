@@ -1,14 +1,12 @@
 use regex::Regex;
 use rustc_hir::ExprKind;
 use rustc_middle::ty::TyCtxt;
-use rustc_span::source_map::{Spanned, respan};
 use std::fmt::Display;
 
 use super::Axiom;
 use crate::{
     annotations::PropertyViolation,
     properties::{FoundAxiom, Property},
-    reachability::attrs,
 };
 
 #[derive(Debug, Clone)]
