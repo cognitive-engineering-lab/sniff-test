@@ -3,7 +3,7 @@
 pub trait Hello {
     /// # Safety
     /// can be unsafe
-    fn say_hello(&self);
+    unsafe fn say_hello(&self);
 }
 
 pub struct Bar;
@@ -12,7 +12,7 @@ pub struct Foo;
 impl Hello for Bar {
     /// # Safety
     /// can be unsafe
-    fn say_hello(&self) {
+    unsafe fn say_hello(&self) {
         let x = 10;
         let ptr = &raw const x;
         println!("val is {}", unsafe { *ptr });
@@ -21,7 +21,9 @@ impl Hello for Bar {
 
 pub fn helloer<T: Hello>(t: T) {
     /// SAFETY: I checked this one is safe
-    t.say_hello();
+    unsafe {
+        t.say_hello();
+    }
 }
 
 fn main() {}

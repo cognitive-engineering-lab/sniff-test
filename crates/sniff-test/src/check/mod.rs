@@ -168,14 +168,12 @@ fn check_consistent_w_trait_requirements<P: Property>(
     property: P,
     toml_annotations: &TomlAnnotation,
 ) -> Result<(), ErrorGuaranteed> {
-    println!("checking {func:?} matches w trait {t:?}");
     let name = tcx.item_ident(func.reach);
-    println!("checking found name {name:?}");
+
     let trait_fn = tcx
         .associated_items(t)
         .find_by_ident_and_kind(tcx, name, rustc_middle::ty::AssocTag::Fn, t)
         .expect("can't resolve trait fn to original def");
-    println!("found trait fn {trait_fn:?}");
 
     let def_obligation =
         annotations::parse_fn_def(tcx, toml_annotations, trait_fn.def_id, property)

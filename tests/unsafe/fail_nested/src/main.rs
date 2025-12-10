@@ -1,12 +1,12 @@
 /// # Safety
 /// * nn: ptr should be non null
-fn foo(ptr: *const i32) -> i32 {
+unsafe fn foo(ptr: *const i32) -> i32 {
     let a = unsafe { *ptr };
     a + 2
 }
 
 fn bar(ptr: *const i32) -> i32 {
-    foo(ptr)
+    unsafe { foo(ptr) }
 }
 
 #[sniff_test_attrs::check_unsafe]

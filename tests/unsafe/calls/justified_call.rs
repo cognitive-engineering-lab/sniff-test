@@ -2,7 +2,7 @@ extern crate sniff_test_attrs;
 
 /// # Safety
 /// * nn: ptr should be non null
-fn foo(ptr: *const i32) -> i32 {
+unsafe fn foo(ptr: *const i32) -> i32 {
     unsafe { *ptr }
 }
 
@@ -11,5 +11,7 @@ fn main() {
     let x = 1;
     /// SAFETY:
     /// - nn: pointers from references are trivially non-null
-    foo(&raw const x);
+    unsafe {
+        foo(&raw const x);
+    }
 }
