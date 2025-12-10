@@ -2,11 +2,15 @@
 
 use crate::{annotations::PropertyViolation, reachability::LocallyReachable};
 use regex::Regex;
-use rustc_hir::intravisit::{self, Visitor};
+use rustc_hir::{
+    def_id::DefId,
+    intravisit::{self, Visitor},
+};
 use rustc_middle::{
     hir::nested_filter,
     ty::{TyCtxt, TypeckResults},
 };
+use rustc_span::ErrorGuaranteed;
 use std::fmt::Debug;
 use std::fmt::Display;
 
@@ -29,11 +33,16 @@ pub trait Property: Debug + Copy + 'static {
     fn callsite_regex(&self) -> Regex;
 
     fn find_axioms_in_expr<'tcx>(
-        &mut self,
+        &mut self, // TODO: why is this a mutable reference?
         tcx: TyCtxt<'tcx>,
         tyck: &TypeckResults,
         expr: &'tcx rustc_hir::Expr,
     ) -> Vec<FoundAxiom<'tcx, Self::Axiom>>;
+
+    /// An additional check to perform on all function defs that are annotated as having this property.
+    fn additional_check(&self, _tcx: TyCtxt, _fn_def: DefId) -> Result<(), ErrorGuaranteed> {
+        Ok(())
+    }
 }
 
 pub trait Axiom: Display + Debug {

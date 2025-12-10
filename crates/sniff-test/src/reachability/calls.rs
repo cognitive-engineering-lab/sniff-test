@@ -3,6 +3,7 @@
 use crate::annotations::{DefAnnotation, parse_fn_def, toml::TomlAnnotation};
 use crate::properties::Property;
 use crate::reachability::LocallyReachable;
+
 use rustc_hir::def_id::DefId;
 use rustc_middle::ty::TyCtxt;
 use rustc_span::Span;

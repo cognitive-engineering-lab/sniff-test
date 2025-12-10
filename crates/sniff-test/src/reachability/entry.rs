@@ -32,6 +32,8 @@ pub fn analysis_entry_points<P: Property>(tcx: TyCtxt) -> Vec<LocalDefId> {
     let local = annotated_local_defs::<P>(tcx).collect::<Vec<_>>();
     log::debug!("entry from local annotations is {local:#?}");
     entry_points.extend(local);
+
+    // Currently sort at the reachability level, so don't have to do it here.
     entry_points.into_iter().collect()
 }
 
@@ -72,8 +74,7 @@ fn is_def_analyzeable(tcx: TyCtxt) -> impl Fn(&LocalDefId) -> bool {
         // TODO: should we be handling more here?? Yes we should. Key exports of zerocopy
         // are Associated functions, so we should at least handle that...
         let res = match kind {
-            DefKind::Fn => true,
-            // DefKind::AssocFn => true,
+            DefKind::Fn | DefKind::AssocFn => true,
             // For context, zerocopy has all of these, but I don't think we want to analyze them...
             // Don't want anything to fall through the cracks though, so left as todo.
             // DefKind::Impl { .. } | DefKind::AssocConst => false,
@@ -90,10 +91,11 @@ fn is_def_analyzeable(tcx: TyCtxt) -> impl Fn(&LocalDefId) -> bool {
 
 fn all_pub_local_fn_defs(tcx: TyCtxt) -> impl Iterator<Item = LocalDefId> {
     all_local_fn_defs(tcx).filter(move |owner| {
-        let p = tcx.visibility(*owner).is_public();
+        let directly_public = tcx.visibility(*owner).is_public();
         let span = tcx.def_span(*owner);
-        log::debug!("found pub {p} for {owner:?} @ {span:?}");
-        p
+
+        log::debug!("found pub {directly_public} for {owner:?} @ {span:?}");
+        directly_public
     })
 }
 

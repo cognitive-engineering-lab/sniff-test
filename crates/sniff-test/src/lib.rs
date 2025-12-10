@@ -18,6 +18,7 @@ extern crate rustc_ast;
 extern crate rustc_driver;
 extern crate rustc_errors;
 extern crate rustc_hir;
+extern crate rustc_index;
 extern crate rustc_interface;
 extern crate rustc_middle;
 extern crate rustc_public;
@@ -120,6 +121,7 @@ impl RustcPlugin for PrintAllItemsPlugin {
 
     // Pass Cargo arguments (like --feature) from the top-level CLI to Cargo.
     fn modify_cargo(&self, cargo: &mut Command, args: &Self::Args) {
+        log::debug!("modifying cargo args");
         cargo.args(&args.cargo_args);
 
         if args.release {

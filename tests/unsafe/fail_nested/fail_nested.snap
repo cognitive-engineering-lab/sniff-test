@@ -12,10 +12,10 @@ error: function bar directly contains 1 unjustified call to annotated unsafe fun
   |
   = note: reachable from [main (src/main.rs:15:5) -> *bar*]
 note: foo is called here
- --> src/main.rs:9:5
+ --> src/main.rs:9:14
   |
-9 |     foo(ptr)
-  |     ^^^^^^^^
+9 |     unsafe { foo(ptr) }
+  |              ^^^^^^^^
 
 error: could not compile `fail_nested` (bin "fail_nested") due to 1 previous error
 '''

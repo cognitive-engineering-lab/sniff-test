@@ -12,8 +12,10 @@ warning: unused doc comment
 12 | /     /// SAFETY:
 13 | |     /// - nn: pointers from references are trivially non-null
    | |_____________________________________________________________^
-14 |       foo(&raw const x);
-   |       ----------------- rustdoc does not generate documentation for expressions
+14 | /     unsafe {
+15 | |         foo(&raw const x);
+16 | |     }
+   | |_____- rustdoc does not generate documentation for expressions
    |
    = help: use `//` for a plain comment
    = note: `#[warn(unused_doc_comments)]` on by default

@@ -51,6 +51,17 @@ impl Property for SafetyProperty {
 
         vec![]
     }
+
+    fn additional_check(
+        &self,
+        tcx: TyCtxt,
+        fn_def: rustc_hir::def_id::DefId, // TODO: change to fn_def
+    ) -> Result<(), rustc_span::ErrorGuaranteed> {
+        match tcx.fn_sig(fn_def).skip_binder().safety() {
+            rustc_hir::Safety::Safe => Err(tcx.dcx().struct_span_err(tcx.def_span(fn_def), format!("function {fn_def:?} is annotated as having safety preconditions, but does not use the `unsafe` keyword!")).emit()),
+            rustc_hir::Safety::Unsafe => Ok(()),
+        }
+    }
 }
 
 #[derive(Debug, Clone)]

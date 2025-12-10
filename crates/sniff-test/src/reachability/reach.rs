@@ -44,8 +44,17 @@ impl LocallyReachable {
 pub fn locally_reachable_from(
     tcx: TyCtxt,
     entry_points: impl IntoIterator<Item = LocalDefId>,
-) -> impl Iterator<Item = LocallyReachable> {
-    CallGraphVisitor::new(tcx, entry_points.into_iter()).all_local_reachable()
+) -> Vec<LocallyReachable> {
+    let mut reachable = CallGraphVisitor::new(tcx, entry_points.into_iter())
+        .all_local_reachable()
+        .collect::<Vec<_>>();
+
+    // Sort entry points so our analysis order is deterministic.
+    reachable.sort_by(|a, b| {
+        tcx.def_path_str(a.reach.to_def_id())
+            .cmp(&tcx.def_path_str(b.reach.to_def_id()))
+    });
+    reachable
 }
 
 struct CallGraphVisitor<'tcx> {

@@ -1,9 +1,9 @@
 use crate::{
-    annotations::{self, parse_expr, toml::TomlAnnotation},
+    annotations::{self, DefAnnotation, parse_expr, toml::TomlAnnotation},
     properties::{self, FoundAxiom, Property},
     reachability::{self, CallsWObligations, LocallyReachable},
 };
-use rustc_hir::def_id::{LOCAL_CRATE, LocalDefId};
+use rustc_hir::def_id::{DefId, LOCAL_CRATE, LocalDefId};
 use rustc_middle::ty::TyCtxt;
 use rustc_span::ErrorGuaranteed;
 
@@ -49,7 +49,7 @@ pub fn check_crate_for_property<P: Property>(
         );
     }
 
-    let reachable = reachability::locally_reachable_from(tcx, entry).collect::<Vec<_>>();
+    let reachable = reachability::locally_reachable_from(tcx, entry);
 
     log::info!(
         "the {} reachable functions for {} in {} are {reachable:#?}",
@@ -59,23 +59,32 @@ pub fn check_crate_for_property<P: Property>(
     );
 
     // Filter for functions that aren't annotated as having obligations
-    let reachable_no_obligations = reachable
-        .into_iter()
-        .filter(|func| {
-            match annotations::parse_fn_def(tcx, &toml_annotations, func.reach, property) {
-                Some(annotation) => {
-                    // TODO: in the future, could check to make sure this annotation doesn't create unneeded obligations.
-                    log::debug!(
-                        "fn {:?} has obligations {:?}, we'll trust it...",
-                        func.reach,
-                        annotation
-                    );
-                    false
+    let mut reachable_no_obligations = Vec::new();
+
+    for func in reachable {
+        match annotations::parse_fn_def(tcx, &toml_annotations, func.reach, property) {
+            Some(annotation) => {
+                if let Some(trait_def) = is_impl_of_trait(tcx, func.reach) {
+                    check_consistent_w_trait_requirements(
+                        tcx,
+                        &func,
+                        &annotation,
+                        trait_def,
+                        property,
+                        &toml_annotations,
+                    )?;
                 }
-                None => true,
+                property.additional_check(tcx, func.reach.to_def_id())?;
+                // TODO: in the future, could check to make sure this annotation doesn't create unneeded obligations.
+                log::debug!(
+                    "fn {:?} has obligations {:?}, we'll trust it...",
+                    func.reach,
+                    annotation
+                );
             }
-        })
-        .collect::<Vec<_>>();
+            None => reachable_no_obligations.push(func),
+        }
+    }
 
     log::info!(
         "the {} reachable, unannotated functions we need to check for {} in {} are {reachable_no_obligations:#?}",
@@ -84,12 +93,19 @@ pub fn check_crate_for_property<P: Property>(
         tcx.crate_name(LOCAL_CRATE)
     );
 
+    let mut res = Ok(());
+
     // For all reachable local function definitions, ensure their axioms align with their annotations.
     for func in reachable_no_obligations {
-        check_function_for_property(tcx, &toml_annotations, func, property)?;
+        // Continue checking functions, even if one fails to ensure we report as many errors as possible.
+        // TODO: is this actually bad? one could imagine properly documenting one function could also
+        // fix errors for where it is called.
+        if let Err(e) = check_function_for_property(tcx, &toml_annotations, func, property) {
+            res = Err(e);
+        }
     }
 
-    Ok(())
+    res
 }
 
 fn check_function_for_property<P: Property>(
@@ -141,6 +157,48 @@ fn check_function_for_property<P: Property>(
             unjustified_axioms,
             unjustified_calls,
         ))
+    }
+}
+
+fn check_consistent_w_trait_requirements<P: Property>(
+    tcx: TyCtxt,
+    func: &LocallyReachable,
+    annotation: &DefAnnotation,
+    t: DefId,
+    property: P,
+    toml_annotations: &TomlAnnotation,
+) -> Result<(), ErrorGuaranteed> {
+    let name = tcx.item_ident(func.reach);
+
+    let trait_fn = tcx
+        .associated_items(t)
+        .find_by_ident_and_kind(tcx, name, rustc_middle::ty::AssocTag::Fn, t)
+        .expect("can't resolve trait fn to original def");
+
+    let def_obligation =
+        annotations::parse_fn_def(tcx, toml_annotations, trait_fn.def_id, property)
+            .is_some_and(|def_annot| def_annot.creates_obligation());
+
+    if annotation.creates_obligation() && !def_obligation {
+        let a = tcx.dcx().struct_err(format!("function {:?} has obligations, which is inconsistent with the definition of that associated function for trait {:?}!", func.reach, t)).emit();
+        Err(a)
+    } else {
+        Ok(())
+    }
+}
+
+fn is_impl_of_trait(tcx: TyCtxt, owner: LocalDefId) -> Option<DefId> {
+    let is = tcx
+        .impl_subject(tcx.trait_impl_of_assoc(owner.to_def_id())?)
+        .skip_binder();
+
+    match is {
+        rustc_middle::ty::ImplSubject::Inherent(_) => todo!("what's an inherent?"),
+        rustc_middle::ty::ImplSubject::Trait(t) => {
+            let t = t.def_id;
+            assert_eq!(tcx.def_kind(t), rustc_hir::def::DefKind::Trait);
+            Some(t)
+        }
     }
 }
 
