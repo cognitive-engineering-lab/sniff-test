@@ -33,7 +33,7 @@ pub mod properties;
 mod reachability;
 pub mod utils;
 
-use std::{borrow::Cow, env, process::Command};
+use std::{borrow::Cow, env, process::Command, sync::Mutex};
 
 use clap::Parser;
 use rustc_hir::def_id::LOCAL_CRATE;
@@ -49,19 +49,27 @@ pub struct PrintAllItemsPlugin;
 
 // To parse CLI arguments, we use Clap for this example. But that
 // detail is up to you.
-#[derive(Parser, Serialize, Deserialize, Clone, Default)]
+#[derive(Parser, Serialize, Deserialize, Clone, Default, Debug)]
 pub struct SniffTestArgs {
+    // #[arg(short, long)]
+    // allcaps: bool,
+
+    // #[arg(short, long)]
+    // release: bool,
     #[arg(short, long)]
-    allcaps: bool,
+    /// Whether or not to check
+    check_dependencies: bool,
 
     #[arg(short, long)]
-    release: bool,
+    fine_grained: bool,
 
     #[clap(last = true)]
     cargo_args: Vec<String>,
 }
 
 const TO_FILE: bool = true;
+
+pub static ARGS: Mutex<Option<SniffTestArgs>> = Mutex::new(None);
 
 fn env_logger_init_file(driver: bool) {
     use std::fs::OpenOptions;
@@ -124,12 +132,12 @@ impl RustcPlugin for PrintAllItemsPlugin {
         log::debug!("modifying cargo args");
         cargo.args(&args.cargo_args);
 
-        if args.release {
-            cargo.args(["--release"]);
-            panic!(
-                "release can inline some functions, so not sure if we want to allow this yet..."
-            );
-        }
+        // if args.release {
+        //     cargo.args(["--release"]);
+        //     panic!(
+        //         "release can inline some functions, so not sure if we want to allow this yet..."
+        //     );
+        // }
 
         // Register the sniff_tool
         let existing = std::env::var("RUSTFLAGS").unwrap_or_default();
@@ -143,6 +151,9 @@ impl RustcPlugin for PrintAllItemsPlugin {
         compiler_args: Vec<String>,
         plugin_args: Self::Args,
     ) -> rustc_interface::interface::Result<()> {
+        // Set the args so we can access them from anywhere...
+        *ARGS.lock().unwrap() = Some(plugin_args.clone());
+
         let mut callbacks = PrintAllItemsCallbacks {
             args: Some(plugin_args),
         };
@@ -169,11 +180,12 @@ impl rustc_driver::Callbacks for PrintAllItemsCallbacks {
         let crate_name = tcx.crate_name(LOCAL_CRATE);
 
         log::debug!("checking crate {crate_name}");
-        let Ok(()) = check_crate_for_property(tcx, properties::SafetyProperty) else {
+        let Ok(stats) = check_crate_for_property(tcx, properties::SafetyProperty) else {
             return rustc_driver::Compilation::Stop;
         };
 
         println!("the `{crate_name}` crate passes the sniff test!!");
+        log::debug!("\tstats are {stats:?}");
 
         // Note that you should generally allow compilation to continue. If
         // your plugin is being invoked on a dependency, then you need to ensure

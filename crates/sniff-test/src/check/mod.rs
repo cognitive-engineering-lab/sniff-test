@@ -10,11 +10,19 @@ use rustc_span::ErrorGuaranteed;
 mod err;
 mod expr;
 
+#[derive(Debug, Default, Clone, Copy)]
+pub struct CheckStats {
+    pub entrypoints: usize,
+    pub total_fns_checked: usize,
+    pub w_obligation: usize,
+    pub w_no_obligation: usize,
+}
+
 /// Checks that all local functions in the crate are properly annotated.
 pub fn check_crate_for_property<P: Property>(
     tcx: TyCtxt,
     property: P,
-) -> Result<(), ErrorGuaranteed> {
+) -> Result<CheckStats, ErrorGuaranteed> {
     // Parse TOML annotations from file
     let toml_path = "sniff-test.toml";
     let toml_annotations = match TomlAnnotation::from_file(toml_path) {
@@ -29,6 +37,7 @@ pub fn check_crate_for_property<P: Property>(
         }
     };
 
+    let mut stats = CheckStats::default();
     let entry = reachability::analysis_entry_points::<P>(tcx);
 
     // Debug print all our entries and where they are in the src
@@ -49,6 +58,7 @@ pub fn check_crate_for_property<P: Property>(
         );
     }
 
+    stats.entrypoints = entry.len();
     let reachable = reachability::locally_reachable_from(tcx, entry);
 
     log::info!(
@@ -62,8 +72,10 @@ pub fn check_crate_for_property<P: Property>(
     let mut reachable_no_obligations = Vec::new();
 
     for func in reachable {
+        stats.total_fns_checked += 1;
         match annotations::parse_fn_def(tcx, &toml_annotations, func.reach, property) {
-            Some(annotation) => {
+            Some(annotation) if annotation.creates_obligation() => {
+                stats.w_obligation += 1;
                 if let Some(trait_def) = is_impl_of_trait(tcx, func.reach) {
                     check_consistent_w_trait_requirements(
                         tcx,
@@ -82,7 +94,10 @@ pub fn check_crate_for_property<P: Property>(
                     annotation
                 );
             }
-            None => reachable_no_obligations.push(func),
+            _ => {
+                stats.w_no_obligation += 1;
+                reachable_no_obligations.push(func);
+            }
         }
     }
 
@@ -93,7 +108,7 @@ pub fn check_crate_for_property<P: Property>(
         tcx.crate_name(LOCAL_CRATE)
     );
 
-    let mut res = Ok(());
+    let mut res = Ok(stats);
 
     // For all reachable local function definitions, ensure their axioms align with their annotations.
     for func in reachable_no_obligations {
