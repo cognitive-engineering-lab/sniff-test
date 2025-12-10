@@ -1,14 +1,12 @@
 //! The utilities needed to find and parse code annotations.
 use crate::{
-    annotations::{
-        doc::{DocStr, get_doc_str},
-        toml::TomlAnnotation,
-    },
+    annotations::{doc::get_comment_doc_str, span::Mergeable, toml::TomlAnnotation},
     properties::Property,
 };
+use rustc_hir::Attribute;
 use rustc_middle::ty::TyCtxt;
 use rustc_span::Span;
-use std::fmt::Debug;
+use std::{fmt::Debug, ops::Range};
 
 mod doc;
 mod span;
@@ -21,6 +19,28 @@ pub enum PropertyViolation {
     // Conditionally(Vec<Spanned<Requirement>>),
     /// This property will never be violated.
     Never,
+}
+
+#[derive(Debug, Clone)]
+pub enum DocStrSource {
+    DocComment(Vec<Attribute>),
+    TomlOverride,
+}
+
+impl DocStrSource {
+    #[must_use]
+    fn into_annotation_source(self, used_chars: Range<usize>) -> AnnotationSource {
+        match self {
+            Self::TomlOverride => AnnotationSource::TomlOverride,
+            Self::DocComment(attrs) => AnnotationSource::DocComment(
+                span::span_some_comments(&attrs, used_chars)
+                    .merge_adjacent()
+                    .into_iter()
+                    .next()
+                    .expect("should have a span"),
+            ),
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -41,11 +61,10 @@ pub struct DefAnnotation {
     pub source: AnnotationSource,
 }
 
-#[derive(Debug)]
 pub struct ExpressionAnnotation {
     pub property_name: &'static str,
     pub text: String,
-    pub span: Span,
+    pub span: AnnotationSource,
 }
 
 impl DefAnnotation {
@@ -62,7 +81,7 @@ impl DefAnnotation {
 /// annotated.
 pub fn parse_fn_def<P: Property>(
     tcx: TyCtxt<'_>,
-    toml_annotation: &TomlAnnotation,
+    toml_annotation: &TomlAnnotation, // TODO: this could be an arc or smth
     fn_def: impl Into<rustc_span::def_id::DefId>,
     property: P,
 ) -> Option<DefAnnotation> {
@@ -70,14 +89,21 @@ pub fn parse_fn_def<P: Property>(
     let fn_def: rustc_span::def_id::DefId = fn_def.into();
 
     // 2. Check if we have a TOML override for this function
-    if let Some(toml_str) = toml_annotation.get_requirements_string(&tcx.def_path_str(fn_def)) {
-        parse_fn_def_toml(toml_str, property)
-    } else {
-        // 3. No TOML override found, get the doc string from source code
-        let doc_str = get_doc_str(fn_def, tcx)?;
-        // 4. parse the doc string based on the property
-        parse_fn_def_src(doc_str, property)
-    }
+    let (doc_str, doc_str_src) =
+        match toml_annotation.get_requirements_string(&tcx.def_path_str(fn_def)) {
+            Some(override_str) => (override_str.to_owned(), DocStrSource::TomlOverride),
+            None => get_comment_doc_str(fn_def, tcx)?,
+        };
+
+    property
+        .fn_def_regex()
+        .find(&doc_str)
+        .map(|found| DefAnnotation {
+            property_name: P::property_name(),
+            local_violation_annotation: PropertyViolation::Unconditional,
+            text: doc_str[found.end()..].to_string(),
+            source: doc_str_src.into_annotation_source(found.range()),
+        })
 }
 
 pub fn parse_expr<'tcx, P: Property>(
@@ -97,43 +123,17 @@ pub fn parse_expr<'tcx, P: Property>(
             )
         });
 
+    // Look through the parent exprs until we find one which has a doc comment string.
     try_these.find_map(|(id, _node)| {
-        get_doc_str(id, tcx).and_then(|doc_str| parse_expr_src(doc_str, property))
+        get_comment_doc_str(id, tcx).and_then(|(doc_str, doc_str_src)| {
+            property
+                .callsite_regex()
+                .find(&doc_str)
+                .map(|found| ExpressionAnnotation {
+                    property_name: P::property_name(),
+                    text: doc_str[found.end()..].to_string(),
+                    span: doc_str_src.into_annotation_source(found.range()),
+                })
+        })
     })
-}
-
-fn parse_expr_src<P: Property>(doc_str: DocStr, property: P) -> Option<ExpressionAnnotation> {
-    property
-        .callsite_regex()
-        .find(doc_str.str())
-        .map(|found| ExpressionAnnotation {
-            property_name: P::property_name(),
-            text: doc_str.str()[found.end()..].to_string(),
-            span: doc_str.span_of_chars(found.range()),
-        })
-}
-
-/// Simple check if the obligation regex is contained anywhere in the doc string, otherwise no obligations.
-fn parse_fn_def_src<P: Property>(doc_str: DocStr, property: P) -> Option<DefAnnotation> {
-    property
-        .fn_def_regex()
-        .find(doc_str.str())
-        .map(|found| DefAnnotation {
-            property_name: P::property_name(),
-            local_violation_annotation: PropertyViolation::Unconditional,
-            text: doc_str.str()[found.end()..].to_string(),
-            source: AnnotationSource::DocComment(doc_str.span_of_chars(found.range())),
-        })
-}
-
-fn parse_fn_def_toml<P: Property>(toml_str: &str, property: P) -> Option<DefAnnotation> {
-    property
-        .fn_def_regex()
-        .find(toml_str)
-        .map(|found| DefAnnotation {
-            property_name: P::property_name(),
-            local_violation_annotation: PropertyViolation::Unconditional,
-            text: toml_str[found.end()..].to_string(),
-            source: AnnotationSource::TomlOverride,
-        })
 }

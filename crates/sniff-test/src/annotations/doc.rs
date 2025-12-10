@@ -1,31 +1,13 @@
 //! Utilities for getting attributes & doc strings from relevant pieces of a program.
 
-use std::ops::Range;
-
-use super::span::Mergeable;
-use rustc_hir::Attribute;
+use crate::annotations::DocStrSource;
 use rustc_middle::ty::TyCtxt;
-use rustc_span::Span;
-
-#[derive(Debug)]
-pub struct DocStr(String, Vec<Attribute>);
-
-impl DocStr {
-    pub fn str(&self) -> &str {
-        &self.0
-    }
-
-    pub fn span_of_chars(&self, chars: Range<usize>) -> Span {
-        super::span::span_some_comments(&self.1, chars)
-            .merge_adjacent()
-            .into_iter()
-            .next()
-            .expect("should have a span")
-    }
-}
 
 /// Get the full string of all doc attributes on n item concatenated together.
-pub fn get_doc_str<T: Attributeable>(item: T, tcx: TyCtxt) -> Option<DocStr> {
+pub fn get_comment_doc_str<T: Attributeable>(
+    item: T,
+    tcx: TyCtxt,
+) -> Option<(String, DocStrSource)> {
     let all_attrs = item.get_attrs(tcx);
 
     let (doc_attrs, doc_comments) = all_attrs
@@ -40,7 +22,7 @@ pub fn get_doc_str<T: Attributeable>(item: T, tcx: TyCtxt) -> Option<DocStr> {
     if doc_comments.is_empty() {
         None
     } else {
-        Some(DocStr(doc_comments.join("\n"), doc_attrs))
+        Some((doc_comments.join("\n"), DocStrSource::DocComment(doc_attrs)))
     }
 }
 
