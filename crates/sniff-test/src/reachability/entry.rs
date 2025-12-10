@@ -91,10 +91,11 @@ fn is_def_analyzeable(tcx: TyCtxt) -> impl Fn(&LocalDefId) -> bool {
 
 fn all_pub_local_fn_defs(tcx: TyCtxt) -> impl Iterator<Item = LocalDefId> {
     all_local_fn_defs(tcx).filter(move |owner| {
-        let p = tcx.visibility(*owner).is_public();
+        let directly_public = tcx.visibility(*owner).is_public();
         let span = tcx.def_span(*owner);
-        log::debug!("found pub {p} for {owner:?} @ {span:?}");
-        p
+
+        log::debug!("found pub {directly_public} for {owner:?} @ {span:?}");
+        directly_public
     })
 }
 

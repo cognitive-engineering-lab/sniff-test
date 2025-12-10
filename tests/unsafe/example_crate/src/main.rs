@@ -1,42 +1,30 @@
 #![sniff_tool::check_unsafe_pub]
 
-/// # Safety
-///
-pub fn foo(ptr: *const i32) -> i32 {
-    0
+pub trait Hello {
+    /// # Safety
+    /// can be unsafe
+    fn say_hello(&self);
 }
 
-/// # Saety
-///     I've checked ptr is non-null and aligned
-pub fn baz(ptr: *const i32) -> i32 {
-    unsafe {
-        /// SAFETY: ptr is non null I've checked
-        *ptr
+pub struct Bar;
+pub struct Foo;
+
+impl Hello for Bar {
+    /// # Safety
+    /// can be unsafe
+    fn say_hello(&self) {
+        let x = 10;
+        let ptr = &raw const x;
+        println!("val is {}", unsafe { *ptr });
     }
 }
 
-#[sniff_test_attrs::check_unsafe]
-fn bar(ptr: *const i32) -> i32 {
-    unsafe {
-        baz(ptr);
-    }
-    /// SAFETY:
-    /// - non-null: i checked to make sure this is nn
-    // if !ptr.is_null() {
-    foo(ptr)
-    // baz(ptr)
-    // }
+pub fn helloer<T: Hello>(t: T) {
+    /// SAFETY: i've checked this is safe
+    t.say_hello();
 }
 
-fn main() {
-    let a = Some(3).unwrap();
-    let x = 1;
-    /// SAFETY: blah blah
-    /// more doc comments
-    unsafe {
-        foo(&raw const x);
-    }
-}
+fn main() {}
 
 // Notes from justus
 // - instance safety for some traits
