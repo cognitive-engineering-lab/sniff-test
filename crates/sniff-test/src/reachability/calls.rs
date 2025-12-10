@@ -1,6 +1,7 @@
 //! Finds the 'bad' functions that should be annotated
 
-use crate::annotations::{DefAnnotation, parse_fn_def, toml::TomlAnnotation};
+use crate::annotations::Obligation;
+use crate::annotations::{parse_fn_def, toml::TomlAnnotation};
 use crate::properties::Property;
 use crate::reachability::LocallyReachable;
 
@@ -11,7 +12,7 @@ use rustc_span::Span;
 #[derive(Debug)]
 pub struct CallsWObligations {
     pub call_to: DefId,
-    pub _w_annotation: DefAnnotation,
+    pub obligation: Obligation,
     pub from_spans: Vec<Span>,
 }
 
@@ -22,15 +23,13 @@ fn call_has_obligations<P: Property>(
 ) -> impl Fn((&DefId, &Vec<Span>)) -> Option<CallsWObligations> {
     move |(to_def_id, from_spans)| {
         let annotation = parse_fn_def(tcx, toml_annotations, *to_def_id, property)?;
-        if annotation.creates_obligation() {
-            Some(CallsWObligations {
+        annotation
+            .creates_obligation()
+            .map(|obligation| CallsWObligations {
                 call_to: *to_def_id,
-                _w_annotation: annotation,
+                obligation,
                 from_spans: from_spans.clone(),
             })
-        } else {
-            None
-        }
     }
 }
 

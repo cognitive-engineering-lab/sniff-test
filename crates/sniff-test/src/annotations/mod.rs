@@ -1,11 +1,12 @@
 //! The utilities needed to find and parse code annotations.
 use crate::{
+    ARGS,
     annotations::{doc::get_comment_doc_str, span::Mergeable, toml::TomlAnnotation},
     properties::Property,
 };
 use rustc_hir::Attribute;
 use rustc_middle::ty::TyCtxt;
-use rustc_span::Span;
+use rustc_span::{ErrorGuaranteed, Span, source_map::Spanned};
 use std::{fmt::Debug, ops::Range};
 
 mod doc;
@@ -16,7 +17,7 @@ pub mod toml;
 pub enum PropertyViolation {
     /// This property will always be violated.
     Unconditional,
-    // Conditionally(Vec<Spanned<Requirement>>),
+    Conditionally(Vec<Spanned<String>>),
     /// This property will never be violated.
     Never,
 }
@@ -67,12 +68,37 @@ pub struct ExpressionAnnotation {
     pub span: AnnotationSource,
 }
 
+impl ExpressionAnnotation {
+    pub fn satisfies_obligation(&self, obligation: &Obligation) -> Result<(), ErrorGuaranteed> {
+        match obligation {
+            Obligation::ConsiderProperty => Ok(()),
+            Obligation::ConsiderConditions => todo!(),
+        }
+    }
+}
+
+#[derive(Debug, PartialEq, Eq, Clone)]
+pub enum Obligation {
+    /// Callers must consider the property generally.
+    ConsiderProperty,
+    /// Callers must specifically consider the set of conditions
+    /// under which this property will not hold.
+    ConsiderConditions,
+}
+
 impl DefAnnotation {
     /// Whether this function's annotation creates an obligation that it's callers must uphold.
-    pub fn creates_obligation(&self) -> bool {
-        match self.local_violation_annotation {
-            PropertyViolation::Unconditional => true,
-            PropertyViolation::Never => false,
+    pub fn creates_obligation(&self) -> Option<Obligation> {
+        match &self.local_violation_annotation {
+            PropertyViolation::Conditionally(_)
+                if ARGS.lock().unwrap().as_ref().unwrap().fine_grained =>
+            {
+                Some(Obligation::ConsiderConditions)
+            }
+            PropertyViolation::Unconditional | PropertyViolation::Conditionally(_) => {
+                Some(Obligation::ConsiderProperty)
+            }
+            PropertyViolation::Never => None,
         }
     }
 }

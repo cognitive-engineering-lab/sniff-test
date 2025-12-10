@@ -74,7 +74,7 @@ pub fn check_crate_for_property<P: Property>(
     for func in reachable {
         stats.total_fns_checked += 1;
         match annotations::parse_fn_def(tcx, &toml_annotations, func.reach, property) {
-            Some(annotation) if annotation.creates_obligation() => {
+            Some(annotation) if annotation.creates_obligation().is_some() => {
                 stats.w_obligation += 1;
                 if let Some(trait_def) = is_impl_of_trait(tcx, func.reach) {
                     check_consistent_w_trait_requirements(
@@ -141,11 +141,15 @@ fn check_function_for_property<P: Property>(
     let calls = reachability::find_calls_w_obligations(tcx, toml_annotations, &func, property)
         .collect::<Vec<_>>();
     log::debug!("fn {:?} has raw calls {:#?}", func.reach, calls);
-    let unjustified_calls = calls
-        .into_iter()
-        // Filter those with only callsites that haven't been justified.
-        .filter_map(only_unjustified_callsites(tcx, func.reach, property))
-        .collect::<Vec<_>>();
+    let mut unjustified_calls = Vec::new();
+    let only_unjustified = only_unjustified_callsites(tcx, func.reach, property);
+    for c in calls {
+        match only_unjustified(c) {
+            JustificationStatus::AllCallsJustified => (),
+            JustificationStatus::ImproperJustification(err) => return Err(err),
+            JustificationStatus::SomeNotJustified(remaining) => unjustified_calls.push(remaining),
+        }
+    }
 
     log::info!(
         "fn {:?} has unjustified axioms {:#?}",
@@ -192,13 +196,13 @@ fn check_consistent_w_trait_requirements<P: Property>(
 
     let def_obligation =
         annotations::parse_fn_def(tcx, toml_annotations, trait_fn.def_id, property)
-            .is_some_and(|def_annot| def_annot.creates_obligation());
+            .and_then(|def_annot| def_annot.creates_obligation());
 
-    if annotation.creates_obligation() && !def_obligation {
+    if annotation.creates_obligation() == def_obligation {
+        Ok(())
+    } else {
         let a = tcx.dcx().struct_err(format!("function {:?} has obligations, which is inconsistent with the definition of that associated function for trait {:?}!", func.reach, t)).emit();
         Err(a)
-    } else {
-        Ok(())
     }
 }
 
@@ -227,12 +231,18 @@ fn only_unjustified_axioms<'tcx, P: Property>(
     }
 }
 
+enum JustificationStatus {
+    AllCallsJustified,
+    SomeNotJustified(CallsWObligations),
+    ImproperJustification(ErrorGuaranteed),
+}
+
 /// Filter a set of calls to a function for only those which are not property justified.
 fn only_unjustified_callsites<P: Property>(
     tcx: TyCtxt,
     in_fn: LocalDefId,
     property: P,
-) -> impl Fn(CallsWObligations) -> Option<CallsWObligations> {
+) -> impl Fn(CallsWObligations) -> JustificationStatus {
     move |mut calls| {
         let mut new_spans = Vec::new();
 
@@ -240,17 +250,25 @@ fn only_unjustified_callsites<P: Property>(
             let call_expr = expr::find_expr_for_call(tcx, calls.call_to, in_fn, call_span);
             let callsite_annotation = parse_expr(tcx, call_expr, property);
 
-            if callsite_annotation.is_none() {
-                new_spans.push(call_span);
+            match callsite_annotation {
+                Some(annotation) => {
+                    if let Err(e) = annotation.satisfies_obligation(&calls.obligation) {
+                        return JustificationStatus::ImproperJustification(e);
+                    }
+                }
+                None => {
+                    // Callsite not annotated, add to list of unjustified calls
+                    new_spans.push(call_span);
+                }
             }
         }
 
         // If we have no new callsites, just remove this one from the list...
         if new_spans.is_empty() {
-            None
+            JustificationStatus::AllCallsJustified
         } else {
             calls.from_spans = new_spans;
-            Some(calls)
+            JustificationStatus::SomeNotJustified(calls)
         }
     }
 }
