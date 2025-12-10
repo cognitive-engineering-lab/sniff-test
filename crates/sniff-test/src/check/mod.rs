@@ -74,7 +74,7 @@ pub fn check_crate_for_property<P: Property>(
     for func in reachable {
         match annotations::parse_fn_def(tcx, &toml_annotations, func.reach, property) {
             Some(annotation) => {
-                if let Some(trait_def) = is_impl_of_trait(tcx, &func.reach) {
+                if let Some(trait_def) = is_impl_of_trait(tcx, func.reach) {
                     check_consistent_w_trait_requirements(
                         tcx,
                         &func,
@@ -84,6 +84,7 @@ pub fn check_crate_for_property<P: Property>(
                         &toml_annotations,
                     )?;
                 }
+                property.additional_check(tcx, func.reach.to_def_id())?;
                 // TODO: in the future, could check to make sure this annotation doesn't create unneeded obligations.
                 log::debug!(
                     "fn {:?} has obligations {:?}, we'll trust it...",
@@ -179,12 +180,12 @@ fn check_consistent_w_trait_requirements<P: Property>(
 ) -> Result<(), ErrorGuaranteed> {
     println!("checking {func:?} matches w trait {t:?}");
     let name = tcx.item_ident(func.reach);
-    println!("checking found name {:?}", name);
+    println!("checking found name {name:?}");
     let trait_fn = tcx
         .associated_items(t)
         .find_by_ident_and_kind(tcx, name, rustc_middle::ty::AssocTag::Fn, t)
         .expect("can't resolve trait fn to original def");
-    println!("found trait fn {:?}", trait_fn);
+    println!("found trait fn {trait_fn:?}");
 
     let def_obligation =
         annotations::parse_fn_def(tcx, toml_annotations, trait_fn.def_id, property)
@@ -198,7 +199,7 @@ fn check_consistent_w_trait_requirements<P: Property>(
     }
 }
 
-fn is_impl_of_trait(tcx: TyCtxt, owner: &LocalDefId) -> Option<DefId> {
+fn is_impl_of_trait(tcx: TyCtxt, owner: LocalDefId) -> Option<DefId> {
     let is = tcx
         .impl_subject(tcx.trait_impl_of_assoc(owner.to_def_id())?)
         .skip_binder();

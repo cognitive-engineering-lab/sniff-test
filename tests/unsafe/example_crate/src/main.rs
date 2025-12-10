@@ -20,7 +20,7 @@ impl Hello for Bar {
 }
 
 pub fn helloer<T: Hello>(t: T) {
-    /// SAFETY: i've checked this is safe
+    /// SAFETY: I checked this one is safe
     t.say_hello();
 }
 
