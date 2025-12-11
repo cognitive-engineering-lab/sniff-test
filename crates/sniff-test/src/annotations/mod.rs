@@ -141,6 +141,7 @@ fn similar_buzzwords() -> HashMap<&'static str, Vec<&'static str>> {
     [
         ("validity", vec!["valid"]),
         ("size", vec!["larger"]),
+        ("length", vec!["len()"]),
         ("soundness", vec!["sound"]),
         ("alignment", vec!["align"]),
         ("lifetime", vec!["outlive", "live for at least"]),

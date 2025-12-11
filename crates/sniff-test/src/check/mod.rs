@@ -10,13 +10,13 @@ use rustc_span::ErrorGuaranteed;
 mod err;
 mod expr;
 
-#[derive(Debug, Default, Clone, Copy)]
+#[derive(Debug, Default, Clone)]
 pub struct CheckStats {
     pub entrypoints: usize,
     pub total_fns_checked: usize,
-    pub calls_checked: usize,
     pub w_obligation: usize,
     pub w_no_obligation: usize,
+    pub calls_checked: usize,
 }
 
 /// Checks that all local functions in the crate are properly annotated.
@@ -109,7 +109,7 @@ pub fn check_crate_for_property<P: Property>(
         tcx.crate_name(LOCAL_CRATE)
     );
 
-    let mut res = Ok(stats);
+    let mut res = Ok(());
 
     // For all reachable local function definitions, ensure their axioms align with their annotations.
     for func in reachable_no_obligations {
@@ -123,7 +123,7 @@ pub fn check_crate_for_property<P: Property>(
         }
     }
 
-    res
+    res.map(|()| stats)
 }
 
 fn check_function_for_property<P: Property>(
@@ -144,10 +144,12 @@ fn check_function_for_property<P: Property>(
     // Find all calls that have obligations.
     let calls = reachability::find_calls_w_obligations(tcx, toml_annotations, &func, property)
         .collect::<Vec<_>>();
-    stats.calls_checked += calls
+    let call_ct = calls
         .iter()
         .map(|calls| calls.from_spans.len())
         .sum::<usize>();
+
+    stats.calls_checked += call_ct;
     log::debug!("fn {:?} has raw calls {:#?}", func.reach, calls);
     let mut unjustified_calls = Vec::new();
     let only_unjustified = only_unjustified_callsites(tcx, func.reach, property);

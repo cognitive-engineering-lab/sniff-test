@@ -188,7 +188,7 @@ impl rustc_driver::Callbacks for PrintAllItemsCallbacks {
         };
 
         println!("the `{crate_name}` crate passes the sniff test!!");
-        log::debug!("\tstats are {stats:?}");
+        log::debug!("\tstats for `{crate_name}` are {stats:?}");
 
         // Note that you should generally allow compilation to continue. If
         // your plugin is being invoked on a dependency, then you need to ensure
