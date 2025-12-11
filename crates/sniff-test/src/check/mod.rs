@@ -14,6 +14,7 @@ mod expr;
 pub struct CheckStats {
     pub entrypoints: usize,
     pub total_fns_checked: usize,
+    pub calls_checked: usize,
     pub w_obligation: usize,
     pub w_no_obligation: usize,
 }
@@ -115,7 +116,9 @@ pub fn check_crate_for_property<P: Property>(
         // Continue checking functions, even if one fails to ensure we report as many errors as possible.
         // TODO: is this actually bad? one could imagine properly documenting one function could also
         // fix errors for where it is called.
-        if let Err(e) = check_function_for_property(tcx, &toml_annotations, func, property) {
+        if let Err(e) =
+            check_function_for_property(tcx, &toml_annotations, func, property, &mut stats)
+        {
             res = Err(e);
         }
     }
@@ -128,6 +131,7 @@ fn check_function_for_property<P: Property>(
     toml_annotations: &TomlAnnotation,
     func: LocallyReachable,
     property: P,
+    stats: &mut CheckStats,
 ) -> Result<(), ErrorGuaranteed> {
     // Look for all axioms within this function
     let axioms = properties::find_axioms(tcx, &func, property).collect::<Vec<_>>();
@@ -140,6 +144,10 @@ fn check_function_for_property<P: Property>(
     // Find all calls that have obligations.
     let calls = reachability::find_calls_w_obligations(tcx, toml_annotations, &func, property)
         .collect::<Vec<_>>();
+    stats.calls_checked += calls
+        .iter()
+        .map(|calls| calls.from_spans.len())
+        .sum::<usize>();
     log::debug!("fn {:?} has raw calls {:#?}", func.reach, calls);
     let mut unjustified_calls = Vec::new();
     let only_unjustified = only_unjustified_callsites(tcx, func.reach, property);

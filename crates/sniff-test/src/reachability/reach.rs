@@ -3,7 +3,6 @@
 //!
 
 use crate::rustc_middle::mir::visit::Visitor;
-use rustc_hir::def::DefKind;
 use rustc_hir::def_id::{DefId, LocalDefId};
 use rustc_middle::mir::{Operand, TerminatorKind};
 use rustc_middle::ty::{TyCtxt, TyKind};
@@ -84,17 +83,16 @@ impl<'tcx> CallGraphVisitor<'tcx> {
     fn all_local_reachable(mut self) -> impl Iterator<Item = LocallyReachable> {
         while let Some(mut d) = self.to_visit.pop_front() {
             if !self.reachable.contains_key(&d.reach) {
-                let kind = self.tcx.def_kind(d.reach);
-                let parent_kind = self.tcx.def_kind(self.tcx.parent(d.reach.into()));
-                let is_trait_fn = kind == DefKind::AssocFn && parent_kind == DefKind::Trait;
+                // let kind = self.tcx.def_kind(d.reach);
+                // let parent_kind = self.tcx.def_kind(self.tcx.parent(d.reach.into()));
+                // let is_trait_fn = kind == DefKind::AssocFn && parent_kind == DefKind::Trait;
 
-                if is_trait_fn {
-                    // TODO: Here, we need to check all implementors of the trait and mark them as reachable!!
-                    // The core thing here is we want to be able to detect when we're calling into a trait function.
-                    log::warn!("found trait function, not doing anything with it for now... {d:?}");
+                if !self.tcx.has_typeck_results(d.reach) {
+                    log::warn!(
+                        "found function with no typeck results, not doing anything with it for now... {d:?}"
+                    );
                     continue;
                 }
-
                 let body = self.tcx.optimized_mir(d.reach);
                 // log::debug!("SUCCESS");
                 let mut visitor = BodyVisitor(self.tcx, &mut self.to_visit, &mut d);

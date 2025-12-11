@@ -122,6 +122,7 @@ impl ExpressionAnnotation {
         &self,
         conditions: &[Spanned<Condition>],
     ) -> Vec<Spanned<Condition>> {
+        let text_lower = self.text.to_lowercase();
         conditions
             .iter()
             .filter(|condition| {
@@ -129,7 +130,7 @@ impl ExpressionAnnotation {
                     ARGS.lock().unwrap().as_ref().unwrap().buzzword_checking,
                     "not sure how to check properly yet."
                 );
-                !buzzword_satisfied(&self.text, &condition.node.name)
+                !buzzword_satisfied(&text_lower, &condition.node.name)
             })
             .cloned()
             .collect::<Vec<_>>()
@@ -139,6 +140,8 @@ impl ExpressionAnnotation {
 fn similar_buzzwords() -> HashMap<&'static str, Vec<&'static str>> {
     [
         ("validity", vec!["valid"]),
+        ("size", vec!["larger"]),
+        ("soundness", vec!["sound"]),
         ("alignment", vec!["align"]),
         ("lifetime", vec!["outlive", "live for at least"]),
     ]
@@ -147,9 +150,15 @@ fn similar_buzzwords() -> HashMap<&'static str, Vec<&'static str>> {
 }
 
 fn buzzword_satisfied(justification: &str, condition_name: &str) -> bool {
-    let mut valid_names = vec![condition_name];
+    condition_name
+        .split(['&', '-'])
+        .all(|word| contains_word_or_synonym(justification, word))
+}
 
-    if let Some(similar) = similar_buzzwords().get(condition_name) {
+fn contains_word_or_synonym(justification: &str, word: &str) -> bool {
+    let mut valid_names = vec![word];
+
+    if let Some(similar) = similar_buzzwords().get(word) {
         valid_names.extend(similar);
     }
 
@@ -157,7 +166,7 @@ fn buzzword_satisfied(justification: &str, condition_name: &str) -> bool {
         .into_iter()
         .any(|buzzword| justification.contains(buzzword))
     {
-        log::warn!("{justification:?} satisfies condition {condition_name:?}");
+        log::warn!("{justification:?} satisfies condition {word:?}");
         true
     } else {
         false
