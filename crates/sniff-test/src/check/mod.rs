@@ -252,7 +252,12 @@ fn only_unjustified_callsites<P: Property>(
 
             match callsite_annotation {
                 Some(annotation) => {
-                    if let Err(e) = annotation.satisfies_obligation(&calls.obligation) {
+                    if let Err(e) = annotation.satisfies_obligation(
+                        &calls.obligation,
+                        calls.call_to,
+                        call_span,
+                        tcx,
+                    ) {
                         return JustificationStatus::ImproperJustification(e);
                     }
                 }

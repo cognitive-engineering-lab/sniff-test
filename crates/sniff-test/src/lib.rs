@@ -63,6 +63,9 @@ pub struct SniffTestArgs {
     #[arg(short, long)]
     fine_grained: bool,
 
+    #[arg(short, long)]
+    buzzword_checking: bool,
+
     #[clap(last = true)]
     cargo_args: Vec<String>,
 }

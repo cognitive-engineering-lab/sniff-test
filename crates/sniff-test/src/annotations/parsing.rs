@@ -1,10 +1,6 @@
 //! Utilities for parsing values from full doc strings.
 
-use crate::annotations::{
-    Justification, Requirement,
-    err::{self, ParsingIssue},
-    types::ConditionName,
-};
+use crate::annotations::Condition;
 use regex::Regex;
 use std::ops::Range;
 
