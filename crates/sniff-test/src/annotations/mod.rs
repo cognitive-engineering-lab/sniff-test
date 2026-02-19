@@ -122,7 +122,7 @@ impl ExpressionAnnotation {
         &self,
         conditions: &[Spanned<Condition>],
     ) -> Vec<Spanned<Condition>> {
-        let text_lower = self.text.to_lowercase();
+        let text_lower = self.text.to_lowercase().clone();
         conditions
             .iter()
             .filter(|condition| {
@@ -140,10 +140,12 @@ impl ExpressionAnnotation {
 fn similar_buzzwords() -> HashMap<&'static str, Vec<&'static str>> {
     [
         ("validity", vec!["valid"]),
+        ("Validity", vec!["Valid"]),
         ("size", vec!["larger"]),
         ("length", vec!["len()"]),
         ("soundness", vec!["sound"]),
         ("alignment", vec!["align"]),
+        ("Alignment", vec!["Align"]),
         ("lifetime", vec!["outlive", "live for at least"]),
     ]
     .into_iter()
@@ -164,12 +166,13 @@ fn contains_word_or_synonym(justification: &str, word: &str) -> bool {
     }
 
     if valid_names
-        .into_iter()
+        .iter()
         .any(|buzzword| justification.contains(buzzword))
     {
         log::warn!("{justification:?} satisfies condition {word:?}");
         true
     } else {
+        log::warn!("{justification:?} DOESNT CONTAIN ANY OF {valid_names:?}");
         false
     }
 }
