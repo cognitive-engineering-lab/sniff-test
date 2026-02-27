@@ -1,6 +1,7 @@
 //! A Rustc plugin that prints out the name of all items in a crate.
 
 #![feature(rustc_private)]
+#![feature(mpmc_channel)]
 #![feature(box_patterns)]
 #![feature(try_trait_v2)]
 #![cfg_attr(test, feature(assert_matches))]
@@ -183,12 +184,47 @@ impl rustc_driver::Callbacks for PrintAllItemsCallbacks {
         let crate_name = tcx.crate_name(LOCAL_CRATE);
 
         log::debug!("checking crate {crate_name}");
-        let Ok(stats) = check_crate_for_property(tcx, properties::SafetyProperty) else {
+        let Ok(_) = check_crate_for_property(tcx, properties::SafetyProperty) else {
+            // println!("the `{crate_name}` did smth funky!!");
             return rustc_driver::Compilation::Stop;
         };
 
         println!("the `{crate_name}` crate passes the sniff test!!");
-        log::debug!("\tstats for `{crate_name}` are {stats:?}");
+        // println!("\tstats for `{crate_name}` are {stats:?}");
+        // if crate_name.to_string() == "zerocopy" {
+        //     let server_handle = sniff_server::run_server();
+        //     println!("entering server handle loop");
+        //     while let Ok(next) = server_handle.get_request.recv() {
+        //         let response = match next {
+        //             sniff_server::Request::GetCrateName => {
+        //                 println!("handling crate name request");
+        //                 sniff_server::Response::CrateName(crate_name.to_string())
+        //             }
+        //             sniff_server::Request::DoAnalysis { property } => {
+        //                 println!("want to analyze for property {property:?}");
+        //                 let res = match property.as_str() {
+        //                     "ub-freedom" => {
+        //                         check_crate_for_property(tcx, properties::SafetyProperty)
+        //                     }
+        //                     "panic-freedom" => {
+        //                         check_crate_for_property(tcx, properties::PanicProperty)
+        //                     }
+        //                     unknown => panic!("unknown analysis type {unknown:?}"),
+        //                 };
+        //                 let Ok(stats) = res else {
+        //                     // println!("the `{crate_name}` did smth funky!!");
+        //                     return rustc_driver::Compilation::Stop;
+        //                 };
+        //                 println!("the `{crate_name}` crate passes the sniff test!!");
+        //                 println!("\tstats for `{crate_name}` are {stats:?}");
+        //                 sniff_server::Response::AnalysisResult { stats }
+        //             }
+        //         };
+        //         println!("sending response {response:?}");
+        //         server_handle.give_response.send(response).unwrap();
+        //     }
+        //     println!("done w/ server handle loop");
+        // }
 
         // Note that you should generally allow compilation to continue. If
         // your plugin is being invoked on a dependency, then you need to ensure

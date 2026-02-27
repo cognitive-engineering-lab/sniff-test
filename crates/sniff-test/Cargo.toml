@@ -10,6 +10,7 @@ rustc_private = true
 rustc_plugin = "=0.14.3-nightly-2025-08-20"
 rustc_utils = "=0.14.3-nightly-2025-08-20"
 sniff-test-attrs ={ path = "../sniff-test-attrs" }
+sniff-server = { path = "../sniff-server" }
 env_logger = "0.11"
 clap = { version = "4.4", features = ["derive"] }
 serde = { version = "1", features = ["derive"] }

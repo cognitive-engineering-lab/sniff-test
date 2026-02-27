@@ -10,14 +10,7 @@ use rustc_span::ErrorGuaranteed;
 mod err;
 mod expr;
 
-#[derive(Debug, Default, Clone)]
-pub struct CheckStats {
-    pub entrypoints: usize,
-    pub total_fns_checked: usize,
-    pub w_obligation: usize,
-    pub w_no_obligation: usize,
-    pub calls_checked: usize,
-}
+use sniff_server::CheckStats;
 
 /// Checks that all local functions in the crate are properly annotated.
 pub fn check_crate_for_property<P: Property>(
@@ -39,6 +32,7 @@ pub fn check_crate_for_property<P: Property>(
     };
 
     let mut stats = CheckStats::default();
+    let start = std::time::Instant::now();
     let entry = reachability::analysis_entry_points::<P>(tcx);
 
     // Debug print all our entries and where they are in the src
@@ -123,6 +117,7 @@ pub fn check_crate_for_property<P: Property>(
         }
     }
 
+    stats.analysis_time_ms = start.elapsed().as_millis().try_into().unwrap();
     res.map(|()| stats)
 }
 
