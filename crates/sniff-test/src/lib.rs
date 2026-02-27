@@ -70,7 +70,7 @@ pub struct SniffTestArgs {
     cargo_args: Vec<String>,
 }
 
-const TO_FILE: bool = true;
+const TO_FILE: bool = false;
 
 pub static ARGS: Mutex<Option<SniffTestArgs>> = Mutex::new(None);
 
@@ -145,6 +145,13 @@ impl RustcPlugin for PrintAllItemsPlugin {
         // Register the sniff_tool
         let existing = std::env::var("RUSTFLAGS").unwrap_or_default();
         cargo.env("RUSTFLAGS", format!("-Zcrate-attr=feature(register_tool) -Zcrate-attr=register_tool(sniff_tool) -Aunused-doc-comments {existing} -Zcrate-attr=feature(custom_inner_attributes)"));
+
+        // Point to the driver binary, not the cargo subcommand binary
+        let driver = std::env::current_exe()
+            .unwrap()
+            .with_file_name("sniff-test-driver"); // <-- driver, not cargo-sniff-test
+        cargo.env("RUSTC_WRAPPER", &driver);
+        cargo.env_remove("RUSTC_WORKSPACE_WRAPPER");
     }
 
     // In the driver, we use the Rustc API to start a compiler session
@@ -154,6 +161,23 @@ impl RustcPlugin for PrintAllItemsPlugin {
         compiler_args: Vec<String>,
         plugin_args: Self::Args,
     ) -> rustc_interface::interface::Result<()> {
+        // When used as RUSTC_WRAPPER, first arg is the path to real rustc.
+        // For probe/print invocations, just exec real rustc directly.
+
+        // // Passthrough for probe/version/print invocations
+        // let is_passthrough = compiler_args
+        //     .iter()
+        //     .any(|a| a.starts_with("--print") || a == "-vV" || a == "--version" || a == "-V");
+
+        // if is_passthrough {
+        //     use std::os::unix::process::CommandExt;
+        //     let real_rustc = std::env::args().nth(1).expect("no rustc path in argv");
+        //     let err = std::process::Command::new(real_rustc)
+        //         .args(&compiler_args)
+        //         .exec(); // replaces current process, no fork
+        //     panic!("failed to exec rustc: {err}");
+        // }
+
         // Set the args so we can access them from anywhere...
         *ARGS.lock().unwrap() = Some(plugin_args.clone());
 
@@ -182,8 +206,9 @@ impl rustc_driver::Callbacks for PrintAllItemsCallbacks {
     ) -> rustc_driver::Compilation {
         let crate_name = tcx.crate_name(LOCAL_CRATE);
 
-        log::debug!("checking crate {crate_name}");
+        println!("checking crate {crate_name}");
         let Ok(stats) = check_crate_for_property(tcx, properties::SafetyProperty) else {
+            println!("{crate_name} FAILED");
             return rustc_driver::Compilation::Stop;
         };
 
