@@ -5,9 +5,9 @@ use crate::{
 };
 use rustc_hir::def_id::{DefId, LOCAL_CRATE, LocalDefId};
 use rustc_middle::ty::TyCtxt;
-use rustc_span::ErrorGuaranteed;
+use rustc_span::Span;
 
-mod err;
+pub mod err;
 mod expr;
 
 #[derive(Debug, Default, Clone)]
@@ -21,10 +21,10 @@ pub struct CheckStats {
 
 /// Checks that all local functions in the crate are properly annotated.
 pub fn check_crate_for_property<P: Property>(
-    tcx: TyCtxt,
+    tcx: TyCtxt<'_>,
     property: P,
     is_dependency: bool,
-) -> Result<CheckStats, ErrorGuaranteed> {
+) -> Result<CheckStats, Vec<LocalError<'_, P>>> {
     // Parse TOML annotations from file
     let toml_path = "sniff-test.toml";
     let toml_annotations = match TomlAnnotation::from_file(toml_path) {
@@ -62,6 +62,7 @@ pub fn check_crate_for_property<P: Property>(
 
     stats.entrypoints = entry.len();
     let reachable = reachability::locally_reachable_from(tcx, entry);
+    let mut local_errors = Vec::new();
 
     log::info!(
         "the {} reachable functions for {} in {} are {reachable:#?}",
@@ -78,17 +79,21 @@ pub fn check_crate_for_property<P: Property>(
         match annotations::parse_fn_def(tcx, &toml_annotations, func.reach, property) {
             Some(annotation) if annotation.creates_obligation().is_some() => {
                 stats.w_obligation += 1;
-                if let Some(trait_def) = is_impl_of_trait(tcx, func.reach) {
-                    check_consistent_w_trait_requirements(
+                if let Some(trait_def) = is_impl_of_trait(tcx, func.reach)
+                    && let Err(e) = check_consistent_w_trait_requirements(
                         tcx,
                         &func,
                         &annotation,
                         trait_def,
                         property,
                         &toml_annotations,
-                    )?;
+                    )
+                {
+                    local_errors.push(e);
                 }
-                property.additional_check(tcx, func.reach.to_def_id())?;
+                if let Err(e) = property.additional_check(tcx, func.clone()) {
+                    local_errors.push(e);
+                }
                 // TODO: in the future, could check to make sure this annotation doesn't create unneeded obligations.
                 log::debug!(
                     "fn {:?} has obligations {:?}, we'll trust it...",
@@ -110,30 +115,62 @@ pub fn check_crate_for_property<P: Property>(
         tcx.crate_name(LOCAL_CRATE)
     );
 
-    let mut res = Ok(());
+    local_errors.extend(reachable_no_obligations.into_iter().filter_map(|func| {
+        check_function_for_property(tcx, &toml_annotations, func, property, &mut stats).err()
+    }));
 
-    // For all reachable local function definitions, ensure their axioms align with their annotations.
-    for func in reachable_no_obligations {
-        // Continue checking functions, even if one fails to ensure we report as many errors as possible.
-        // TODO: is this actually bad? one could imagine properly documenting one function could also
-        // fix errors for where it is called.
-        if let Err(e) =
-            check_function_for_property(tcx, &toml_annotations, func, property, &mut stats)
-        {
-            res = Err(e);
-        }
+    if !local_errors.is_empty() {
+        return Err(local_errors);
     }
 
-    res.map(|()| stats)
+    Ok(stats)
 }
 
-fn check_function_for_property<P: Property>(
-    tcx: TyCtxt,
+pub enum LocalError<'tcx, P: Property> {
+    Basic {
+        tcx: TyCtxt<'tcx>,
+        func: LocallyReachable,
+        _property: P,
+        unjustified_axioms: Vec<FoundAxiom<'tcx, P::Axiom>>,
+        unjustified_calls: Vec<CallsWObligations>,
+    },
+    Trait {
+        func_has_obligations: LocallyReachable,
+        inconsistent_w_trait: DefId,
+    },
+    CallMissedObligations {
+        func: LocallyReachable,
+        callsite_comment: String,
+        callsite_span: Span,
+        obligations: Vec<String>,
+    },
+    FnDefShouldHaveKeyword {
+        fn_def: LocallyReachable,
+        needed_keyword: &'static str,
+    },
+}
+
+impl<P: Property> LocalError<'_, P> {
+    pub fn func(&self) -> &LocallyReachable {
+        match self {
+            Self::Basic { func, .. }
+            | Self::CallMissedObligations { func, .. }
+            | Self::FnDefShouldHaveKeyword { fn_def: func, .. }
+            | Self::Trait {
+                func_has_obligations: func,
+                ..
+            } => &func,
+        }
+    }
+}
+
+fn check_function_for_property<'tcx, P: Property>(
+    tcx: TyCtxt<'tcx>,
     toml_annotations: &TomlAnnotation,
     func: LocallyReachable,
     property: P,
     stats: &mut CheckStats,
-) -> Result<(), ErrorGuaranteed> {
+) -> Result<(), LocalError<'tcx, P>> {
     // Look for all axioms within this function
     let axioms = properties::find_axioms(tcx, &func, property).collect::<Vec<_>>();
     log::debug!("fn {:?} has raw axioms {:#?}", func.reach, axioms);
@@ -153,7 +190,7 @@ fn check_function_for_property<P: Property>(
     stats.calls_checked += call_ct;
     log::debug!("fn {:?} has raw calls {:#?}", func.reach, calls);
     let mut unjustified_calls = Vec::new();
-    let only_unjustified = only_unjustified_callsites(tcx, func.reach, property);
+    let only_unjustified = only_unjustified_callsites(tcx, func.clone(), property);
     for c in calls {
         match only_unjustified(c) {
             JustificationStatus::AllCallsJustified => (),
@@ -180,24 +217,24 @@ fn check_function_for_property<P: Property>(
         Ok(())
     } else {
         // Unjustified issues, report them!!
-        Err(err::report_errors(
+        Err(LocalError::Basic {
             tcx,
             func,
-            property,
+            _property: property,
             unjustified_axioms,
             unjustified_calls,
-        ))
+        })
     }
 }
 
-fn check_consistent_w_trait_requirements<P: Property>(
-    tcx: TyCtxt,
+fn check_consistent_w_trait_requirements<'tcx, P: Property>(
+    tcx: TyCtxt<'tcx>,
     func: &LocallyReachable,
     annotation: &DefAnnotation,
     t: DefId,
     property: P,
     toml_annotations: &TomlAnnotation,
-) -> Result<(), ErrorGuaranteed> {
+) -> Result<(), LocalError<'tcx, P>> {
     let name = tcx.item_ident(func.reach);
 
     let trait_fn = tcx
@@ -212,8 +249,10 @@ fn check_consistent_w_trait_requirements<P: Property>(
     if annotation.creates_obligation() == def_obligation {
         Ok(())
     } else {
-        let a = tcx.dcx().struct_err(format!("function {:?} has obligations, which is inconsistent with the definition of that associated function for trait {:?}!", func.reach, t)).emit();
-        Err(a)
+        Err(LocalError::Trait {
+            func_has_obligations: func.clone(),
+            inconsistent_w_trait: t,
+        })
     }
 }
 
@@ -242,23 +281,23 @@ fn only_unjustified_axioms<'tcx, P: Property>(
     }
 }
 
-enum JustificationStatus {
+enum JustificationStatus<'tcx, P: Property> {
     AllCallsJustified,
     SomeNotJustified(CallsWObligations),
-    ImproperJustification(ErrorGuaranteed),
+    ImproperJustification(LocalError<'tcx, P>),
 }
 
 /// Filter a set of calls to a function for only those which are not property justified.
-fn only_unjustified_callsites<P: Property>(
-    tcx: TyCtxt,
-    in_fn: LocalDefId,
+fn only_unjustified_callsites<'tcx, P: Property>(
+    tcx: TyCtxt<'tcx>,
+    in_fn: LocallyReachable,
     property: P,
-) -> impl Fn(CallsWObligations) -> JustificationStatus {
+) -> impl Fn(CallsWObligations) -> JustificationStatus<'tcx, P> {
     move |mut calls| {
         let mut new_spans = Vec::new();
 
         for call_span in calls.from_spans {
-            let call_expr = expr::find_expr_for_call(tcx, calls.call_to, in_fn, call_span);
+            let call_expr = expr::find_expr_for_call(tcx, calls.call_to, in_fn.reach, call_span);
             let callsite_annotation = parse_expr(tcx, call_expr, property);
 
             match callsite_annotation {
@@ -267,7 +306,8 @@ fn only_unjustified_callsites<P: Property>(
                         &calls.obligation,
                         calls.call_to,
                         call_span,
-                        tcx,
+                        &in_fn,
+                        // tcx,
                     ) {
                         return JustificationStatus::ImproperJustification(e);
                     }

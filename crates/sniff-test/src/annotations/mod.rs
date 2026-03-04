@@ -2,12 +2,14 @@
 use crate::{
     ARGS,
     annotations::{doc::get_comment_doc_str, span::Mergeable, toml::TomlAnnotation},
+    check::LocalError,
     properties::Property,
+    reachability::LocallyReachable,
 };
 use regex::Regex;
 use rustc_hir::{Attribute, def_id::DefId};
 use rustc_middle::ty::TyCtxt;
-use rustc_span::{ErrorGuaranteed, Span, source_map::Spanned};
+use rustc_span::{Span, source_map::Spanned};
 use std::{collections::HashMap, fmt::Debug, ops::Range};
 
 mod doc;
@@ -80,13 +82,14 @@ pub struct ExpressionAnnotation {
 }
 
 impl ExpressionAnnotation {
-    pub fn satisfies_obligation(
+    pub fn satisfies_obligation<'tcx, P: Property>(
         &self,
         obligation: &Obligation,
         call_to: DefId,
         from_span: Span,
-        tcx: TyCtxt<'_>,
-    ) -> Result<(), ErrorGuaranteed> {
+        in_fn: &LocallyReachable,
+        // tcx: TyCtxt<'_>,
+    ) -> Result<(), LocalError<'tcx, P>> {
         match obligation {
             Obligation::ConsiderProperty => Ok(()),
             Obligation::ConsiderConditions(conditions) => {
@@ -103,16 +106,12 @@ impl ExpressionAnnotation {
                         .iter()
                         .map(|a| &a.node.name)
                         .collect::<Vec<&String>>();
-                    Err(tcx
-                        .dcx()
-                        .struct_span_err(
-                            from_span,
-                            format!(
-                                "call to {:?} w/ text {:?} didn't consider some obligations {:?}",
-                                self.text, call_to, names
-                            ),
-                        )
-                        .emit())
+                    Err(LocalError::CallMissedObligations {
+                        func: in_fn.clone(),
+                        callsite_comment: self.text.clone(),
+                        callsite_span: from_span,
+                        obligations: names.into_iter().cloned().collect(),
+                    })
                 }
             }
         }

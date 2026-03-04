@@ -1,16 +1,13 @@
 //! A module for detecting axiomatic program patterns
 
+use crate::check::LocalError;
 use crate::{annotations::PropertyViolation, reachability::LocallyReachable};
 use regex::Regex;
-use rustc_hir::{
-    def_id::DefId,
-    intravisit::{self, Visitor},
-};
+use rustc_hir::intravisit::{self, Visitor};
 use rustc_middle::{
     hir::nested_filter,
     ty::{TyCtxt, TypeckResults},
 };
-use rustc_span::ErrorGuaranteed;
 use std::fmt::Debug;
 use std::fmt::Display;
 
@@ -40,7 +37,11 @@ pub trait Property: Debug + Copy + 'static {
     ) -> Vec<FoundAxiom<'tcx, Self::Axiom>>;
 
     /// An additional check to perform on all function defs that are annotated as having this property.
-    fn additional_check(&self, _tcx: TyCtxt, _fn_def: DefId) -> Result<(), ErrorGuaranteed> {
+    fn additional_check<'tcx>(
+        &self,
+        _tcx: TyCtxt<'tcx>,
+        _fn_def: LocallyReachable,
+    ) -> Result<(), LocalError<'tcx, Self>> {
         Ok(())
     }
 }

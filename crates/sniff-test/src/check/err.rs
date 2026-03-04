@@ -1,4 +1,4 @@
-use crate::properties::FoundAxiom;
+use crate::{check::LocalError, properties::FoundAxiom};
 use itertools::Itertools;
 use rustc_errors::Diag;
 use rustc_middle::ty::TyCtxt;
@@ -11,31 +11,55 @@ use crate::{
 
 pub fn report_errors<'tcx, P: Property>(
     tcx: TyCtxt<'tcx>,
-    func: LocallyReachable,
     _property: P,
-    unjustified_axioms: Vec<FoundAxiom<'tcx, P::Axiom>>,
-    unjustified_calls: Vec<CallsWObligations>,
+    errors: Vec<LocalError<'tcx, P>>,
 ) -> ErrorGuaranteed {
+    errors.into_iter().map(|error| report_error(tcx, error)).last().expect("don't call this on empty errors")
+}
+
+fn report_error<'tcx, P: Property>(tcx: TyCtxt<'tcx>, error: LocalError<'tcx, P>) -> ErrorGuaranteed {
     let dcx = tcx.dcx();
-    let def_span = tcx.def_span(func.reach);
-    let fn_name = tcx.def_path_str(func.reach.to_def_id());
+    let def_span = tcx.def_span(error.func().reach);
+    let fn_name = tcx.def_path_str(error.func().reach.to_def_id());
 
-    let mut diag = dcx.struct_span_err(
-        def_span,
-        summary::summary_string::<P>(&fn_name, &unjustified_axioms, &unjustified_calls),
-    );
-
-    diag = diag.with_note(reachability_str(&fn_name, tcx, &func));
-
-    for axiom in unjustified_axioms {
-        diag = extend_diag_axiom::<P>(diag, axiom);
+    match error {
+        LocalError::Basic { tcx, func, _property, unjustified_axioms, unjustified_calls } => {
+            let mut diag = dcx.struct_span_err(
+                def_span,
+                summary::summary_string::<P>(&fn_name, &unjustified_axioms, &unjustified_calls),
+            );
+        
+            diag = diag.with_note(reachability_str(&fn_name, tcx, &func));
+        
+            for axiom in unjustified_axioms {
+                diag = extend_diag_axiom::<P>(diag, axiom);
+            }
+        
+            for calls in unjustified_calls {
+                diag = extend_diag_calls(diag, tcx, calls);
+            }
+        
+            diag.emit()
+        },
+        LocalError::CallMissedObligations { callsite_comment: _, callsite_span, obligations, .. } => {
+            dcx.struct_span_err(
+                callsite_span,
+                format!("call to {fn_name} here fails to consider its named obligations {obligations:?}"),
+            ).emit()
+        },
+        LocalError::FnDefShouldHaveKeyword { needed_keyword, .. } => {
+            dcx.struct_span_err(
+                def_span,
+                format!("function definition of {fn_name} here should have the {needed_keyword} keyword because of the {} property", P::property_name()),
+            ).emit()
+        },
+        LocalError::Trait { inconsistent_w_trait, .. } => {
+            dcx.struct_span_err(
+                def_span,
+                format!("implementation {fn_name} here has {} obligations that are inconsistent with those on the definition of the {} trait", tcx.def_path_debug_str(inconsistent_w_trait), P::property_name()),
+            ).with_span_note(tcx.def_span(inconsistent_w_trait), "which is defined here").emit()
+        }
     }
-
-    for calls in unjustified_calls {
-        diag = extend_diag_calls(diag, tcx, calls);
-    }
-
-    diag.emit()
 }
 
 fn extend_diag_axiom<'tcx, P: Property>(

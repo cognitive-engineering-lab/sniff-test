@@ -11,6 +11,7 @@
     clippy::missing_panics_doc, // TODO: should remove this, kinda ironic for us to be using it...
     clippy::missing_errors_doc,
     clippy::needless_pass_by_value,
+    clippy::result_large_err
 )]
 
 extern crate lazy_static;
@@ -253,11 +254,14 @@ impl rustc_driver::Callbacks for PrintAllItemsCallbacks {
         ) {
             // If we're not a dependency, or we are but we're verifying them -> run full analysis
             (false, _) | (true, DependenciesPosture::Verify) => {
-                let Ok(stats) =
-                    check_crate_for_property(tcx, properties::SafetyProperty, self.is_dependency)
-                else {
-                    println!("{crate_name} FAILED");
-                    return rustc_driver::Compilation::Stop;
+                let property = properties::SafetyProperty;
+                let stats = match check_crate_for_property(tcx, property, self.is_dependency) {
+                    Ok(stats) => stats,
+                    Err(local_err) => {
+                        crate::check::err::report_errors(tcx, property, local_err);
+                        println!("{crate_name} FAILED");
+                        return rustc_driver::Compilation::Stop;
+                    }
                 };
 
                 println!(
