@@ -2,7 +2,6 @@
 
 fn main() {
     sniff_test::env_logger_init(true);
-
     let args: Vec<String> = std::env::args().collect();
     // If there are enough args that we're trying to call the real rustc,
     // just pass through to calling the real rustc

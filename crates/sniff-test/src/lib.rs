@@ -35,7 +35,7 @@ pub mod utils;
 
 use std::{borrow::Cow, env, process::Command, sync::Mutex};
 
-use clap::Parser;
+use clap::{Parser, ValueEnum};
 use rustc_hir::def_id::LOCAL_CRATE;
 use rustc_middle::ty::TyCtxt;
 use rustc_plugin::{CrateFilter, RustcPlugin, RustcPluginArgs, Utf8Path};
@@ -49,15 +49,15 @@ pub struct PrintAllItemsPlugin;
 
 // To parse CLI arguments, we use Clap for this example. But that
 // detail is up to you.
-#[derive(Parser, Serialize, Deserialize, Clone, Default, Debug)]
+#[derive(Parser, Serialize, Deserialize, Default, Clone, Debug)]
 pub struct SniffTestArgs {
-    // #[arg(short, long)]
-    // allcaps: bool,
-
-    // #[arg(short, long)]
-    // release: bool,
+    /// How to handle this workspace's dependencies.
     #[arg(short, long)]
-    /// Whether or not to check
+    dependencies: DependenciesPosture,
+
+    #[arg(short, long)]
+    /// LEGACY ARG (i'm keeping it around to be faster, will remove later):
+    /// whether or not dependencies have to have sniff-test formatted code comments.
     check_dependencies: bool,
 
     #[arg(short, long)]
@@ -68,6 +68,25 @@ pub struct SniffTestArgs {
 
     #[clap(last = true)]
     cargo_args: Vec<String>,
+}
+
+#[derive(ValueEnum, Clone, Debug, Default, Serialize, Deserialize)]
+enum DependenciesPosture {
+    #[default]
+    /// Trust that dependencies have been properly documented with regard to the desired properties.
+    ///
+    /// *"I trust them"*
+    Trust,
+    /// Analyze the **used** public functions of all transitive dependencies, flagging potential issues
+    /// to be fixed at the boundary of the current workspace.
+    ///
+    /// *"I don't care if their code is correct, I just want to make sure how I'm using it is fine."*
+    Find,
+    /// Analyze the public functions of all transitive dependencies, ensuring that they
+    /// would pass the same analysis done on this workspace.
+    ///
+    /// *"Let's make sure their code is correct too."*
+    Verify,
 }
 
 const TO_FILE: bool = false;
@@ -125,7 +144,7 @@ impl RustcPlugin for PrintAllItemsPlugin {
     // If one of the CLI arguments was a specific file to analyze, then you
     // could provide a different filter.
     fn args(&self, _target_dir: &Utf8Path) -> RustcPluginArgs<Self::Args> {
-        let args = SniffTestArgs::parse_from(env::args().skip(1));
+        let args = SniffTestArgs::parse_from(env::args());
         let filter = CrateFilter::AllCrates;
         RustcPluginArgs { args, filter }
     }
@@ -133,6 +152,7 @@ impl RustcPlugin for PrintAllItemsPlugin {
     // Pass Cargo arguments (like --feature) from the top-level CLI to Cargo.
     fn modify_cargo(&self, cargo: &mut Command, args: &Self::Args) {
         log::debug!("modifying cargo args");
+        // println!("modifying cargo args {:?}, {:?}", args.cargo_args, cargo);
         cargo.args(&args.cargo_args);
 
         // if args.release {
@@ -182,8 +202,11 @@ impl RustcPlugin for PrintAllItemsPlugin {
         *ARGS.lock().unwrap() = Some(plugin_args.clone());
 
         let mut callbacks = PrintAllItemsCallbacks {
-            args: Some(plugin_args),
+            args: Some(plugin_args.clone()),
+            is_dependency: is_dependency(&compiler_args),
         };
+
+        // println!("plugin args {:?}", plugin_args);
 
         rustc_driver::run_compiler(&compiler_args, &mut callbacks);
         Ok(())
@@ -193,6 +216,24 @@ impl RustcPlugin for PrintAllItemsPlugin {
 #[allow(dead_code)]
 struct PrintAllItemsCallbacks {
     args: Option<SniffTestArgs>,
+    is_dependency: bool,
+}
+
+/// Checks if a given compiler invocation is for compiling something outside the current workspace.
+// TODO: right now this uses a silly hack with the args, but there's got to be a better way...
+fn is_dependency(compiler_args: &[String]) -> bool {
+    let typical_path_slot = &compiler_args[4];
+    assert!(
+        std::path::Path::new(typical_path_slot)
+            .extension()
+            .is_some_and(|ext| ext.eq_ignore_ascii_case("rs"))
+    );
+
+    typical_path_slot
+        .chars()
+        .next()
+        .map(|first| first == '/')
+        .expect("shouldn't have an empty string here")
 }
 
 impl rustc_driver::Callbacks for PrintAllItemsCallbacks {
@@ -206,14 +247,32 @@ impl rustc_driver::Callbacks for PrintAllItemsCallbacks {
     ) -> rustc_driver::Compilation {
         let crate_name = tcx.crate_name(LOCAL_CRATE);
 
-        println!("checking crate {crate_name}");
-        let Ok(stats) = check_crate_for_property(tcx, properties::SafetyProperty) else {
-            println!("{crate_name} FAILED");
-            return rustc_driver::Compilation::Stop;
-        };
+        match (
+            self.is_dependency,
+            &self.args.as_ref().unwrap().dependencies,
+        ) {
+            // If we're not a dependency, or we are but we're verifying them -> run full analysis
+            (false, _) | (true, DependenciesPosture::Verify) => {
+                let Ok(stats) =
+                    check_crate_for_property(tcx, properties::SafetyProperty, self.is_dependency)
+                else {
+                    println!("{crate_name} FAILED");
+                    return rustc_driver::Compilation::Stop;
+                };
 
-        println!("the `{crate_name}` crate passes the sniff test!!");
-        log::debug!("\tstats for `{crate_name}` are {stats:?}");
+                println!(
+                    "the {crate_name:^20} crate passes the sniff test!! \t\t(stable id {:16x?}) - {:>5}",
+                    tcx.stable_crate_id(LOCAL_CRATE).as_u64(),
+                    if self.is_dependency { "dep" } else { "local" },
+                );
+                log::debug!("\tstats for `{crate_name}` are {stats:?}");
+            }
+            (true, DependenciesPosture::Find) => {
+                // find property 'caveats'
+                todo!("do check, but don't error. just write to file for later analysis");
+            }
+            (true, DependenciesPosture::Trust) => { /* Nothing to be done! We're trusting :) */ }
+        }
 
         // Note that you should generally allow compilation to continue. If
         // your plugin is being invoked on a dependency, then you need to ensure

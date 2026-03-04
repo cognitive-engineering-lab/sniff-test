@@ -23,6 +23,7 @@ pub struct CheckStats {
 pub fn check_crate_for_property<P: Property>(
     tcx: TyCtxt,
     property: P,
+    is_dependency: bool,
 ) -> Result<CheckStats, ErrorGuaranteed> {
     // Parse TOML annotations from file
     let toml_path = "sniff-test.toml";
@@ -39,7 +40,7 @@ pub fn check_crate_for_property<P: Property>(
     };
 
     let mut stats = CheckStats::default();
-    let entry = reachability::analysis_entry_points::<P>(tcx);
+    let entry = reachability::analysis_entry_points::<P>(tcx, is_dependency);
 
     // Debug print all our entries and where they are in the src
     // (this isn't actually needed for analysis)
