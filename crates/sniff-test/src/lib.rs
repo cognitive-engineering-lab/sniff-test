@@ -204,12 +204,20 @@ struct PrintAllItemsCallbacks {
 // TODO: right now this uses a silly hack with the args, but there's got to be a better way...
 fn is_dependency(compiler_args: &[String]) -> bool {
     let typical_path_slot = &compiler_args[4];
-    assert!(
-        std::path::Path::new(typical_path_slot)
-            .extension()
-            .is_some_and(|ext| ext.eq_ignore_ascii_case("rs"))
-    );
 
+    if !std::path::Path::new(typical_path_slot)
+        .extension()
+        .is_some_and(|ext| ext.eq_ignore_ascii_case("rs"))
+    {
+        // This is very bad, but if there's not a rust file in this slot, I think you're likely not being
+        // ultimately invoked by cargo, so you can't be a dependency. I'm 110% sure I will be proven wrong about this
+        // sometime and come back here to find this issue.
+        return false;
+    }
+
+    // And this is very hacky, but library dependencies are installed in the .cargo/registry, so we can evilly
+    // use whether the path is absolute to check if the crate to be compiled is from the registry and, thus,
+    // must be a dependency.
     typical_path_slot
         .chars()
         .next()
