@@ -159,7 +159,7 @@ impl<P: Property> LocalError<'_, P> {
             | Self::Trait {
                 func_has_obligations: func,
                 ..
-            } => &func,
+            } => func,
         }
     }
 }

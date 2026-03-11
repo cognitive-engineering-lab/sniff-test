@@ -3,6 +3,6 @@ source: tests/lib.rs
 ---
 exit_code = 0
 stdout = '''
-the     call_direct      crate passes the sniff test!! 		(stable id 9964a5b9968573ac) - local
+the     call_direct      crate passes the sniff test!! 		(stable id [CRATE ID ELIDED]) - local
 '''
 stderr = ''

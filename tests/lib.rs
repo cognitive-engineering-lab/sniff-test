@@ -123,6 +123,20 @@ fn is_inside_cargo_project(path: &Path, root: &Path) -> bool {
     false
 }
 
+fn snapshot_filters(root: &Path) -> Vec<(&str, &str)> {
+    vec![
+        (
+            r"process didn't exit successfully: `(.*?)`",
+            "process didn't exit successfully: [BINARY PATH ELIDED]",
+        ),
+        (
+            root.to_str().expect("should be valid unicode"),
+            "[SNIFF_TEST_DIR]",
+        ),
+        (r"\(stable id (.*?)\)", "(stable id [CRATE ID ELIDED])"),
+    ]
+}
+
 fn has_rust_files(path: &Path) -> bool {
     std::fs::read_dir(path)
         .ok()
@@ -147,19 +161,11 @@ fn snapshot_cargo_dir(path: &Path, root: &Path) -> anyhow::Result<()> {
         .unwrap_or("[unknown name]")
         .to_owned();
 
-    let out_path = path.to_path_buf();
     let out = cargo_sniff(path)?;
 
-    // panic!(
-    //     "root is {}",
-    //     root.to_str().expect("should be valid unicode")
-    // );
     insta::with_settings!({
-        snapshot_path => out_path,
-        filters => vec![
-            (r"process didn't exit successfully: `(.*?)`", "process didn't exit successfully: [BINARY PATH ELIDED]"),
-            (root.to_str().expect("should be valid unicode"), "[SNIFF_TEST_DIR]")
-        ],
+        snapshot_path => path,
+        filters => snapshot_filters(root),
         prepend_module_to_snapshot => false,
         omit_expression => true,
     }, {
@@ -203,10 +209,7 @@ fn snapshot_single_rust_file(file_path: &Path, root: &Path) -> anyhow::Result<()
 
     insta::with_settings!({
         snapshot_path => out_path,
-        filters => vec![
-            (r"process didn't exit successfully: `(.*?)`", "process didn't exit successfully: [BINARY PATH ELIDED]"),
-            (root.to_str().expect("should be valid unicode"), "[SNIFF_TEST_DIR]")
-        ],
+        filters => snapshot_filters(root),
         prepend_module_to_snapshot => false,
         omit_expression => true,
     }, {
@@ -225,7 +228,7 @@ fn cargo_sniff(path: &Path) -> anyhow::Result<SniffTestOutput> {
 
     let first_line = std::io::BufReader::new(
         std::fs::File::open(path.join("Cargo.toml"))
-            .expect(format!("no lib.rs in {path:?}").as_str()),
+            .unwrap_or_else(|_| panic!("no lib.rs in {}", path.display())),
     )
     .lines()
     .next()

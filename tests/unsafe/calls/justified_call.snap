@@ -3,7 +3,7 @@ source: tests/lib.rs
 ---
 exit_code = 0
 stdout = '''
-the    justified_call    crate passes the sniff test!! 		(stable id 52685a6088a2d2c3) - local
+the    justified_call    crate passes the sniff test!! 		(stable id [CRATE ID ELIDED]) - local
 '''
 stderr = '''
 warning: unused doc comment

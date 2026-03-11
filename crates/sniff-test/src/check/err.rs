@@ -14,10 +14,17 @@ pub fn report_errors<'tcx, P: Property>(
     _property: P,
     errors: Vec<LocalError<'tcx, P>>,
 ) -> ErrorGuaranteed {
-    errors.into_iter().map(|error| report_error(tcx, error)).last().expect("don't call this on empty errors")
+    errors
+        .into_iter()
+        .map(|error| report_error(tcx, error))
+        .last()
+        .expect("don't call this on empty errors")
 }
 
-fn report_error<'tcx, P: Property>(tcx: TyCtxt<'tcx>, error: LocalError<'tcx, P>) -> ErrorGuaranteed {
+fn report_error<'tcx, P: Property>(
+    tcx: TyCtxt<'tcx>,
+    error: LocalError<'tcx, P>,
+) -> ErrorGuaranteed {
     let dcx = tcx.dcx();
     let def_span = tcx.def_span(error.func().reach);
     let fn_name = tcx.def_path_str(error.func().reach.to_def_id());
@@ -28,17 +35,17 @@ fn report_error<'tcx, P: Property>(tcx: TyCtxt<'tcx>, error: LocalError<'tcx, P>
                 def_span,
                 summary::summary_string::<P>(&fn_name, &unjustified_axioms, &unjustified_calls),
             );
-        
+
             diag = diag.with_note(reachability_str(&fn_name, tcx, &func));
-        
+
             for axiom in unjustified_axioms {
                 diag = extend_diag_axiom::<P>(diag, axiom);
             }
-        
+
             for calls in unjustified_calls {
                 diag = extend_diag_calls(diag, tcx, calls);
             }
-        
+
             diag.emit()
         },
         LocalError::CallMissedObligations { callsite_comment: _, callsite_span, obligations, .. } => {
