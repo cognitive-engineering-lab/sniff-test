@@ -3,6 +3,6 @@ source: tests/lib.rs
 ---
 exit_code = 0
 stdout = '''
-the `ref_deref` crate passes the sniff test!!
+the      ref_deref       crate passes the sniff test!! 		(stable id a1245a6385abd61c) - local
 '''
 stderr = ''

@@ -2,7 +2,9 @@
 source: tests/lib.rs
 ---
 exit_code = 1
-stdout = ''
+stdout = '''
+the raw_deref crate FAILED the sniff test
+'''
 stderr = '''
 error: function foo directly contains 1 unjustified unsafe axiom, but is not annotated unsafe
  --> [SNIFF_TEST_DIR]/unsafe/axioms/raw_deref.rs:3:1

@@ -3,6 +3,6 @@ source: tests/lib.rs
 ---
 exit_code = 0
 stdout = '''
-the `pass_nested` crate passes the sniff test!!
+the     pass_nested      crate passes the sniff test!! 		(stable id f6597a9937aa5a34) - local
 '''
 stderr = ''

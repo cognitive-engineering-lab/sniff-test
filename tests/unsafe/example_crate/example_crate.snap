@@ -3,6 +3,6 @@ source: tests/lib.rs
 ---
 exit_code = 0
 stdout = '''
-the `example` crate passes the sniff test!!
+the       example        crate passes the sniff test!! 		(stable id 5efe92852c3c04c6) - local
 '''
 stderr = ''

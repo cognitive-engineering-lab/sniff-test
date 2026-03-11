@@ -2,7 +2,9 @@
 source: tests/lib.rs
 ---
 exit_code = 101
-stdout = ''
+stdout = '''
+the fail_not_annotated crate FAILED the sniff test
+'''
 stderr = '''
 error: function foo directly contains 1 unjustified unsafe axiom, but is not annotated unsafe
  --> src/main.rs:1:1

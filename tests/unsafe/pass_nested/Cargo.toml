@@ -1,3 +1,4 @@
+# -d trust
 [package]
 name = "pass_nested"
 version = "0.1.0"

@@ -1,9 +1,8 @@
 ---
 source: tests/lib.rs
-assertion_line: 201
 ---
 exit_code = 0
 stdout = '''
-the `call_block` crate passes the sniff test!!
+the      call_block      crate passes the sniff test!! 		(stable id ef4725652863f9f2) - local
 '''
 stderr = ''
