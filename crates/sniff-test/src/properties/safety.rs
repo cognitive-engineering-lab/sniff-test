@@ -9,7 +9,9 @@ use rustc_type_ir::TyKind;
 use super::Axiom;
 use crate::{
     annotations::PropertyViolation,
+    check::LocalError,
     properties::{FoundAxiom, Property},
+    reachability::LocallyReachable,
 };
 
 #[derive(Debug, Clone, Copy)]
@@ -52,13 +54,16 @@ impl Property for SafetyProperty {
         vec![]
     }
 
-    fn additional_check(
+    fn additional_check<'tcx>(
         &self,
-        tcx: TyCtxt,
-        fn_def: rustc_hir::def_id::DefId, // TODO: change to fn_def
-    ) -> Result<(), rustc_span::ErrorGuaranteed> {
-        match tcx.fn_sig(fn_def).skip_binder().safety() {
-            rustc_hir::Safety::Safe => Err(tcx.dcx().struct_span_err(tcx.def_span(fn_def), format!("function {fn_def:?} is annotated as having safety preconditions, but does not use the `unsafe` keyword!")).emit()),
+        tcx: TyCtxt<'tcx>,
+        fn_def: LocallyReachable, // TODO: change to fn_def
+    ) -> Result<(), LocalError<'tcx, Self>> {
+        match tcx.fn_sig(fn_def.reach).skip_binder().safety() {
+            rustc_hir::Safety::Safe => Err(LocalError::FnDefShouldHaveKeyword {
+                fn_def,
+                needed_keyword: "unsafe",
+            }),
             rustc_hir::Safety::Unsafe => Ok(()),
         }
     }

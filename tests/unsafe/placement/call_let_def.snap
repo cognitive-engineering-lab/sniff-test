@@ -2,7 +2,9 @@
 source: tests/lib.rs
 ---
 exit_code = 1
-stdout = ''
+stdout = '''
+the call_let_def crate FAILED the sniff test
+'''
 stderr = '''
 error: function main directly contains 1 unjustified call to annotated unsafe functions, but is not annotated unsafe
   --> [SNIFF_TEST_DIR]/unsafe/placement/call_let_def.rs:8:1

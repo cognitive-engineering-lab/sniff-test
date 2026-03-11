@@ -1,3 +1,4 @@
+# -d trust
 [package]
 name = "fail_simple"
 version = "0.1.0"

@@ -11,10 +11,14 @@ use crate::{
     reachability::attrs::{self, SniffToolAttr},
 };
 
-pub fn analysis_entry_points<P: Property>(tcx: TyCtxt) -> Vec<LocalDefId> {
+pub fn analysis_entry_points<P: Property>(tcx: TyCtxt, is_dependency: bool) -> Vec<LocalDefId> {
     // TODO: should use a btree rather than a hash set here so that we'll have a consistent order
     // but local def ids aren't ord so this will likely require an upstream changes.
     let mut entry_points = HashSet::new();
+
+    if is_dependency {
+        return all_pub_local_fn_defs(tcx).collect::<Vec<_>>();
+    }
 
     if let Some(global_annotation) = find_global_annotation::<P>(tcx) {
         if global_annotation.just_check_pub {

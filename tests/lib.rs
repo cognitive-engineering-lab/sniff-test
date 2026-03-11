@@ -4,7 +4,7 @@
 use serde::Serialize;
 use std::{
     ffi::OsString,
-    io::Write,
+    io::{BufRead, Write},
     os::unix::fs::PermissionsExt,
     path::{Path, PathBuf},
     process::{Command, Output},
@@ -14,7 +14,7 @@ use walkdir::WalkDir;
 
 const CARGO_SNIFF_NAME: &str = "cargo-sniff-test";
 const SNIFF_DRIVER_NAME: &str = "sniff-test-driver";
-const BUILD_DIR: &str = "../target/debug";
+const BUILD_DIR: &str = "../target/release";
 
 static CARGO_SNIFF_TEST_PATH: LazyLock<OsString> = LazyLock::new(|| {
     let canon = Path::new(&format!("{BUILD_DIR}/{CARGO_SNIFF_NAME}")).canonicalize();
@@ -50,6 +50,18 @@ impl TryFrom<Output> for SniffTestOutput {
 
 #[test]
 fn snapshots() -> anyhow::Result<()> {
+    // rebuild sniff-test to ensure we're using an updated version
+    let build_res = Command::new("cargo")
+        .arg("build")
+        .arg("--release")
+        .current_dir("..")
+        .output()
+        .unwrap();
+    assert!(
+        build_res.status.success(),
+        "rebuilding sniff-test didn't succeed"
+    );
+
     let root = Path::new(".").canonicalize()?;
 
     println!("root is {root:?}");
@@ -111,6 +123,20 @@ fn is_inside_cargo_project(path: &Path, root: &Path) -> bool {
     false
 }
 
+fn snapshot_filters(root: &Path) -> Vec<(&str, &str)> {
+    vec![
+        (
+            r"process didn't exit successfully: `(.*?)`",
+            "process didn't exit successfully: [BINARY PATH ELIDED]",
+        ),
+        (
+            root.to_str().expect("should be valid unicode"),
+            "[SNIFF_TEST_DIR]",
+        ),
+        (r"\(stable id (.*?)\)", "(stable id [CRATE ID ELIDED])"),
+    ]
+}
+
 fn has_rust_files(path: &Path) -> bool {
     std::fs::read_dir(path)
         .ok()
@@ -135,19 +161,11 @@ fn snapshot_cargo_dir(path: &Path, root: &Path) -> anyhow::Result<()> {
         .unwrap_or("[unknown name]")
         .to_owned();
 
-    let out_path = path.to_path_buf();
     let out = cargo_sniff(path)?;
 
-    // panic!(
-    //     "root is {}",
-    //     root.to_str().expect("should be valid unicode")
-    // );
     insta::with_settings!({
-        snapshot_path => out_path,
-        filters => vec![
-            (r"process didn't exit successfully: `(.*?)`", "process didn't exit successfully: [BINARY PATH ELIDED]"),
-            (root.to_str().expect("should be valid unicode"), "[SNIFF_TEST_DIR]")
-        ],
+        snapshot_path => path,
+        filters => snapshot_filters(root),
         prepend_module_to_snapshot => false,
         omit_expression => true,
     }, {
@@ -191,10 +209,7 @@ fn snapshot_single_rust_file(file_path: &Path, root: &Path) -> anyhow::Result<()
 
     insta::with_settings!({
         snapshot_path => out_path,
-        filters => vec![
-            (r"process didn't exit successfully: `(.*?)`", "process didn't exit successfully: [BINARY PATH ELIDED]"),
-            (root.to_str().expect("should be valid unicode"), "[SNIFF_TEST_DIR]")
-        ],
+        filters => snapshot_filters(root),
         prepend_module_to_snapshot => false,
         omit_expression => true,
     }, {
@@ -206,14 +221,21 @@ fn snapshot_single_rust_file(file_path: &Path, root: &Path) -> anyhow::Result<()
 }
 
 fn cargo_sniff(path: &Path) -> anyhow::Result<SniffTestOutput> {
-    // cargo clean first
     Command::new("cargo")
         .arg("clean")
         .current_dir(path)
         .output()?;
 
-    println!("path is {:?}", CARGO_SNIFF_TEST_PATH.clone().into_string());
+    let first_line = std::io::BufReader::new(
+        std::fs::File::open(path.join("Cargo.toml"))
+            .unwrap_or_else(|_| panic!("no lib.rs in {}", path.display())),
+    )
+    .lines()
+    .next()
+    .expect("file shouldn't be empty")?;
+
     let mut cmd = Command::new(&*CARGO_SNIFF_TEST_PATH);
+    cmd.args(first_line.split(' ').skip(1)); // skip the first one, as it's the "#" or "//" to start a comment
     cmd.env("CARGO_TERM_COLOR", "never");
     cmd.current_dir(path);
 

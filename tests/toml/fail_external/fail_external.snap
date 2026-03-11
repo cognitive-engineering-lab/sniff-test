@@ -2,7 +2,9 @@
 source: tests/lib.rs
 ---
 exit_code = 101
-stdout = ''
+stdout = '''
+the toml_fail_external crate FAILED the sniff test
+'''
 stderr = '''
 error: function main directly contains 1 unjustified call to annotated unsafe functions, but is not annotated unsafe
  --> src/main.rs:5:1

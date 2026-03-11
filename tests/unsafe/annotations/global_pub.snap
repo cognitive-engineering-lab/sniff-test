@@ -1,9 +1,10 @@
 ---
 source: tests/lib.rs
-assertion_line: 201
 ---
 exit_code = 1
-stdout = ''
+stdout = '''
+the global_pub crate FAILED the sniff test
+'''
 stderr = '''
 error: function foo directly contains 1 unjustified unsafe axiom, but is not annotated unsafe
  --> [SNIFF_TEST_DIR]/unsafe/annotations/global_pub.rs:3:1

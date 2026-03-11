@@ -1,3 +1,4 @@
+# -d trust
 [package]
 name = "fail_not_annotated"
 version = "0.1.0"
