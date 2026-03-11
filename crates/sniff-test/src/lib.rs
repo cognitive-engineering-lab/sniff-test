@@ -153,7 +153,6 @@ impl RustcPlugin for PrintAllItemsPlugin {
     // Pass Cargo arguments (like --feature) from the top-level CLI to Cargo.
     fn modify_cargo(&self, cargo: &mut Command, args: &Self::Args) {
         log::debug!("modifying cargo args");
-        // println!("modifying cargo args {:?}, {:?}", args.cargo_args, cargo);
         cargo.args(&args.cargo_args);
 
         // if args.release {
@@ -182,23 +181,6 @@ impl RustcPlugin for PrintAllItemsPlugin {
         compiler_args: Vec<String>,
         plugin_args: Self::Args,
     ) -> rustc_interface::interface::Result<()> {
-        // When used as RUSTC_WRAPPER, first arg is the path to real rustc.
-        // For probe/print invocations, just exec real rustc directly.
-
-        // // Passthrough for probe/version/print invocations
-        // let is_passthrough = compiler_args
-        //     .iter()
-        //     .any(|a| a.starts_with("--print") || a == "-vV" || a == "--version" || a == "-V");
-
-        // if is_passthrough {
-        //     use std::os::unix::process::CommandExt;
-        //     let real_rustc = std::env::args().nth(1).expect("no rustc path in argv");
-        //     let err = std::process::Command::new(real_rustc)
-        //         .args(&compiler_args)
-        //         .exec(); // replaces current process, no fork
-        //     panic!("failed to exec rustc: {err}");
-        // }
-
         // Set the args so we can access them from anywhere...
         *ARGS.lock().unwrap() = Some(plugin_args.clone());
 
@@ -206,8 +188,6 @@ impl RustcPlugin for PrintAllItemsPlugin {
             args: Some(plugin_args.clone()),
             is_dependency: is_dependency(&compiler_args),
         };
-
-        // println!("plugin args {:?}", plugin_args);
 
         rustc_driver::run_compiler(&compiler_args, &mut callbacks);
         Ok(())
@@ -237,6 +217,42 @@ fn is_dependency(compiler_args: &[String]) -> bool {
         .expect("shouldn't have an empty string here")
 }
 
+// FIXME: move to check submodule
+fn analyze_crate(
+    tcx: TyCtxt,
+    crate_name: rustc_span::Symbol,
+    is_dependency: bool,
+    args: &SniffTestArgs,
+) -> rustc_driver::Compilation {
+    match (is_dependency, &args.dependencies) {
+        // If we're not a dependency, or we are but we're verifying them -> run full analysis
+        (false, _) | (true, DependenciesPosture::Verify) => {
+            let property = properties::SafetyProperty;
+            let stats = match check_crate_for_property(tcx, property, is_dependency) {
+                Ok(stats) => stats,
+                Err(local_err) => {
+                    crate::check::err::report_errors(tcx, property, local_err);
+                    println!("the {crate_name} crate FAILED the sniff test");
+                    return rustc_driver::Compilation::Stop;
+                }
+            };
+
+            println!(
+                "the {crate_name:^20} crate passes the sniff test!! \t\t(stable id {:16x?}) - {:>5}",
+                tcx.stable_crate_id(LOCAL_CRATE).as_u64(),
+                if is_dependency { "dep" } else { "local" },
+            );
+            log::debug!("\tstats for `{crate_name}` are {stats:?}");
+        }
+        (true, DependenciesPosture::Find) => {
+            // find property 'caveats'
+            todo!("do check, but don't error. just write to file for later analysis");
+        }
+        (true, DependenciesPosture::Trust) => { /* Nothing to be done! We're trusting :) */ }
+    }
+    rustc_driver::Compilation::Continue
+}
+
 impl rustc_driver::Callbacks for PrintAllItemsCallbacks {
     // At the top-level, the Rustc API uses an event-based interface for
     // accessing the compiler at different stages of compilation. In this callback,
@@ -248,40 +264,15 @@ impl rustc_driver::Callbacks for PrintAllItemsCallbacks {
     ) -> rustc_driver::Compilation {
         let crate_name = tcx.crate_name(LOCAL_CRATE);
 
-        match (
-            self.is_dependency,
-            &self.args.as_ref().unwrap().dependencies,
-        ) {
-            // If we're not a dependency, or we are but we're verifying them -> run full analysis
-            (false, _) | (true, DependenciesPosture::Verify) => {
-                let property = properties::SafetyProperty;
-                let stats = match check_crate_for_property(tcx, property, self.is_dependency) {
-                    Ok(stats) => stats,
-                    Err(local_err) => {
-                        crate::check::err::report_errors(tcx, property, local_err);
-                        println!("{crate_name} FAILED");
-                        return rustc_driver::Compilation::Stop;
-                    }
-                };
-
-                println!(
-                    "the {crate_name:^20} crate passes the sniff test!! \t\t(stable id {:16x?}) - {:>5}",
-                    tcx.stable_crate_id(LOCAL_CRATE).as_u64(),
-                    if self.is_dependency { "dep" } else { "local" },
-                );
-                log::debug!("\tstats for `{crate_name}` are {stats:?}");
-            }
-            (true, DependenciesPosture::Find) => {
-                // find property 'caveats'
-                todo!("do check, but don't error. just write to file for later analysis");
-            }
-            (true, DependenciesPosture::Trust) => { /* Nothing to be done! We're trusting :) */ }
-        }
-
         // Note that you should generally allow compilation to continue. If
         // your plugin is being invoked on a dependency, then you need to ensure
         // the dependency is type-checked (its .rmeta file is emitted into target/)
         // so that its dependents can read the compiler outputs.
-        rustc_driver::Compilation::Continue
+        analyze_crate(
+            tcx,
+            crate_name,
+            self.is_dependency,
+            self.args.as_ref().unwrap(),
+        )
     }
 }
