@@ -10,13 +10,28 @@ use rustc_span::Span;
 pub mod err;
 mod expr;
 
-#[derive(Debug, Default, Clone)]
+#[derive(Debug, Clone)]
 pub struct CheckStats {
+    #[allow(dead_code)]
+    pub property: &'static str,
     pub entrypoints: usize,
     pub total_fns_checked: usize,
     pub w_obligation: usize,
     pub w_no_obligation: usize,
     pub calls_checked: usize,
+}
+
+impl CheckStats {
+    pub fn new<P: Property>() -> Self {
+        CheckStats {
+            property: P::property_name(),
+            entrypoints: 0,
+            total_fns_checked: 0,
+            w_obligation: 0,
+            w_no_obligation: 0,
+            calls_checked: 0,
+        }
+    }
 }
 
 /// Checks that all local functions in the crate are properly annotated.
@@ -39,7 +54,7 @@ pub fn check_crate_for_property<P: Property>(
         }
     };
 
-    let mut stats = CheckStats::default();
+    let mut stats = CheckStats::new::<P>();
     let entry = reachability::analysis_entry_points::<P>(tcx, is_dependency);
 
     // Debug print all our entries and where they are in the src

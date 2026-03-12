@@ -40,9 +40,10 @@ use clap::{Parser, ValueEnum};
 use rustc_hir::def_id::LOCAL_CRATE;
 use rustc_middle::ty::TyCtxt;
 use rustc_plugin::{CrateFilter, RustcPlugin, RustcPluginArgs, Utf8Path};
+use rustc_span::ErrorGuaranteed;
 use serde::{Deserialize, Serialize};
 
-use crate::check::check_crate_for_property;
+use crate::check::{CheckStats, check_crate_for_property, err::report_errors};
 
 // This struct is the plugin provided to the rustc_plugin framework,
 // and it must be exported for use by the CLI/driver binaries.
@@ -225,6 +226,18 @@ fn is_dependency(compiler_args: &[String]) -> bool {
         .expect("shouldn't have an empty string here")
 }
 
+fn check_crate_for_all_properties(
+    tcx: TyCtxt,
+    is_dependency: bool,
+) -> Result<Vec<CheckStats>, ErrorGuaranteed> {
+    Ok(vec![
+        check_crate_for_property(tcx, properties::SafetyProperty, is_dependency)
+            .map_err(|errors| report_errors(tcx, properties::SafetyProperty, errors))?,
+        check_crate_for_property(tcx, properties::PanicProperty, is_dependency)
+            .map_err(|errors| report_errors(tcx, properties::PanicProperty, errors))?,
+    ])
+}
+
 // FIXME: move to check submodule
 fn analyze_crate(
     tcx: TyCtxt,
@@ -235,14 +248,9 @@ fn analyze_crate(
     match (is_dependency, &args.dependencies) {
         // If we're not a dependency, or we are but we're verifying them -> run full analysis
         (false, _) | (true, DependenciesPosture::Verify) => {
-            let property = properties::SafetyProperty;
-            let stats = match check_crate_for_property(tcx, property, is_dependency) {
-                Ok(stats) => stats,
-                Err(local_err) => {
-                    crate::check::err::report_errors(tcx, property, local_err);
-                    println!("the {crate_name} crate FAILED the sniff test");
-                    return rustc_driver::Compilation::Stop;
-                }
+            let Ok(stats) = check_crate_for_all_properties(tcx, is_dependency) else {
+                println!("the {crate_name} crate FAILED the sniff test");
+                return rustc_driver::Compilation::Stop;
             };
 
             println!(
