@@ -3,6 +3,7 @@
 use crate::check::LocalError;
 use crate::{annotations::PropertyViolation, reachability::LocallyReachable};
 use regex::Regex;
+use rustc_hir::ExprKind;
 use rustc_hir::intravisit::{self, Visitor};
 use rustc_middle::{
     hir::nested_filter,
@@ -106,6 +107,12 @@ impl<'tcx, T: Property> Visitor<'tcx> for FinderWrapper<'tcx, T> {
     fn visit_expr(&mut self, ex: &'tcx rustc_hir::Expr<'tcx>) -> Self::Result {
         self.axioms
             .extend(self.property.find_axioms_in_expr(self.tcx, self.tychck, ex));
+
+        // if this expr is a closure definition, skip analyzing its body,
+        // we'll do that based on the DefId of the closure itself if it was found to be reachable.
+        if let ExprKind::Closure(_) = ex.kind {
+            return ();
+        };
 
         intravisit::walk_expr(self, ex)
     }
