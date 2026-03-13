@@ -45,7 +45,8 @@ impl Property for PanicProperty {
             };
 
             let rustc_hir::QPath::Resolved(_ty, path) = &qpath else {
-                panic!();
+                // panic language items should always have a fully resolved path
+                return vec![];
             };
 
             let Some(def_id) = path.res.opt_def_id() else {

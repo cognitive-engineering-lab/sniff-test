@@ -3,6 +3,7 @@ source: tests/lib.rs
 ---
 exit_code = 0
 stdout = '''
+WARN: DefId(0:3 ~ 02_dynamic_closure[966a]::calls_f) uses the type `fn() -> i32` which is a function pointer. sniff-test's analysis currently cannot track calls through these constructs.
 WARN: unable to find def_id for call to Local(HirId(DefId(0:3 ~ 02_dynamic_closure[966a]::calls_f).2)) (to check if it is a panic)
 the  02_dynamic_closure  crate passes the sniff test!! 		(stable id [CRATE ID ELIDED]) - local
 '''

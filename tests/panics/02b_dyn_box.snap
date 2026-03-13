@@ -1,13 +1,26 @@
 ---
 source: tests/lib.rs
 ---
-exit_code = 101
+exit_code = 1
 stdout = '''
+WARN: DefId(2:3981 ~ core[4f7d]::ops::function::Fn::call) uses the type `dyn std::ops::Fn() -> i32` which is a dynamic trait object. sniff-test's analysis currently cannot track calls through these constructs.
 WARN: unable to find def_id for call to Local(HirId(DefId(0:3 ~ 02b_dyn_box[3ce0]::calls_f).2)) (to check if it is a panic)
+the 02b_dyn_box crate FAILED the sniff test
 '''
 stderr = '''
+error: function main::{closure#0} directly contains 1 unjustified panicking axiom, but is not annotated panicking
+ --> [SNIFF_TEST_DIR]/panics/02b_dyn_box.rs:3:73
+  |
+3 |     let panics: std::boxed::Box<dyn Fn() -> i32> = std::boxed::Box::new(|| panic!());
+  |                                                                         ^^
+  |
+  = note: reachable from [main ([SNIFF_TEST_DIR]/panics/02b_dyn_box.rs:3:52) -> *main::{closure#0}*]
+note: explicit panic here
+ --> [SNIFF_TEST_DIR]/panics/02b_dyn_box.rs:3:76
+  |
+3 |     let panics: std::boxed::Box<dyn Fn() -> i32> = std::boxed::Box::new(|| panic!());
+  |                                                                            ^^^^^^^^
 
-thread 'rustc' (4759144) panicked at crates/sniff-test/src/properties/panic.rs:48:17:
-explicit panic
-note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+error: aborting due to 1 previous error
+
 '''

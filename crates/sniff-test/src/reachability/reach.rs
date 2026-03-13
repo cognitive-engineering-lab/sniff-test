@@ -7,6 +7,7 @@ use rustc_hir::def_id::{DefId, LOCAL_CRATE, LocalDefId};
 use rustc_middle::mir::{Operand, TerminatorKind};
 use rustc_middle::ty::{GenericArg, GenericArgKind, TyCtxt, TyKind};
 use rustc_span::Span;
+use rustc_type_ir::TypeVisitor;
 use std::collections::{HashMap, VecDeque};
 
 #[derive(Debug, Clone)]
@@ -146,22 +147,73 @@ struct BodyVisitor<'tcx, 'm>(
     &'m mut HashMap<DefId, Vec<Span>>,
 );
 
+enum TyResult {
+    ContainsDyn,
+    ContainsFuncPointer,
+}
+
+struct ContainsTyVisitor;
+
+use crate::rustc_type_ir::TypeSuperVisitable;
+impl<'tcx> rustc_type_ir::TypeVisitor<TyCtxt<'tcx>> for ContainsTyVisitor {
+    type Result = std::ops::ControlFlow<Option<(TyResult, rustc_middle::ty::Ty<'tcx>)>>;
+    fn visit_ty(&mut self, t: <TyCtxt<'tcx> as rustc_type_ir::Interner>::Ty) -> Self::Result {
+        match t.kind() {
+            rustc_middle::ty::TyKind::FnPtr(..) => {
+                std::ops::ControlFlow::Break(Some((TyResult::ContainsFuncPointer, t)))
+            }
+            rustc_middle::ty::TyKind::Dynamic(..) => {
+                std::ops::ControlFlow::Break(Some((TyResult::ContainsDyn, t)))
+            }
+            rustc_middle::ty::TyKind::Closure(..) => {
+                // no need to check the return value / body of closures, we do that already
+                // TODO: do we?
+                std::ops::ControlFlow::Continue(())
+            }
+            _ => t.super_visit_with(self),
+        }
+    }
+}
+
+#[allow(clippy::to_string_in_format_args)]
+fn warn_if_ty_limitation(ty: rustc_middle::ty::Ty, def_id: DefId) {
+    if let std::ops::ControlFlow::Break(Some((warn_about, in_ty))) = ContainsTyVisitor.visit_ty(ty)
+    {
+        let issue = match warn_about {
+            TyResult::ContainsDyn => "dynamic trait object",
+            TyResult::ContainsFuncPointer => "function pointer",
+        };
+
+        println!(
+            "WARN: {def_id:?} uses the type `{}` which is a {issue}. sniff-test's analysis currently cannot track calls through these constructs.",
+            in_ty.to_string()
+        );
+    }
+}
+
 fn generic_closures<'c>(
+    on_fn: DefId,
     generics: &'c rustc_middle::ty::List<GenericArg<'_>>,
 ) -> impl Iterator<Item = &'c DefId> {
-    generics.iter().filter_map(|generic| {
-        if let GenericArgKind::Type(ty) = generic.kind()
-            && let TyKind::Closure(b, _c) = ty.kind()
-        // TODO: what are the closure args used for here?
-        {
-            Some(b)
-        } else {
-            None
+    let generics = generics.iter().collect::<Vec<_>>();
+    // println!("all generics is {:?}", generics);
+    // generics.pop();
+    // println!("trimmed generics is {:?}", generics);
+    generics.into_iter().filter_map(move |generic| {
+        if let GenericArgKind::Type(ty) = generic.kind() {
+            warn_if_ty_limitation(ty, on_fn);
+            if let TyKind::Closure(b, _c) = ty.kind()
+            // TODO: what are the closure args used for here?
+            {
+                return Some(b);
+            }
         }
+
+        None
     })
 }
 
-impl<'tcx> BodyVisitor<'tcx, '_> {
+impl BodyVisitor<'_, '_> {
     fn log_call_to(&mut self, def_id: DefId, span: Span) {
         self.2.calls_to(def_id, span);
         // TODO: here need to handle non-local reachable
@@ -184,9 +236,9 @@ impl<'tcx> rustc_middle::mir::visit::Visitor<'tcx> for BodyVisitor<'tcx, '_> {
     ) {
         if let TerminatorKind::Call { func, .. } = &terminator.kind
             && let Operand::Constant(box co) = func
-            && let TyKind::FnDef(def_id, _substs) = co.const_.ty().kind()
+            && let TyKind::FnDef(def_id, substs) = co.const_.ty().kind()
         {
-            let closures = generic_closures(_substs);
+            let closures = generic_closures(*def_id, substs);
             for c in closures {
                 self.log_call_to(*c, terminator.source_info.span);
             }
