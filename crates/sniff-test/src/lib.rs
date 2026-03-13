@@ -12,7 +12,7 @@
     clippy::missing_panics_doc, // TODO: should remove this, kinda ironic for us to be using it...
     clippy::missing_errors_doc,
     clippy::needless_pass_by_value,
-    clippy::result_large_err
+    incomplete_features
 )]
 
 extern crate lazy_static;
@@ -22,9 +22,11 @@ extern crate rustc_errors;
 extern crate rustc_hir;
 extern crate rustc_index;
 extern crate rustc_interface;
+extern crate rustc_macros;
 extern crate rustc_middle;
 extern crate rustc_public;
 extern crate rustc_query_system;
+extern crate rustc_serialize;
 extern crate rustc_session;
 extern crate rustc_span;
 extern crate rustc_type_ir;
@@ -41,6 +43,7 @@ use clap::{Parser, ValueEnum};
 use rustc_hir::def_id::LOCAL_CRATE;
 use rustc_middle::ty::TyCtxt;
 use rustc_plugin::{CrateFilter, RustcPlugin, RustcPluginArgs, Utf8Path};
+use rustc_serialize::{Encodable, opaque::FileEncoder};
 use rustc_span::ErrorGuaranteed;
 use serde::{Deserialize, Serialize};
 
@@ -277,6 +280,21 @@ fn analyze_crate(
         }
         (true, DependenciesPosture::Find) => {
             // find property 'caveats'
+            let Err((_callgraph, errors)) =
+                check_crate_for_property(tcx, properties::SafetyProperty, is_dependency).map_err(
+                    |(callgraph, errors)| {
+                        let errors = callgraph.add_reachability(errors).collect::<Vec<_>>();
+                        (callgraph, errors)
+                    },
+                )
+            else {
+                return rustc_driver::Compilation::Continue;
+            };
+
+            let mut fe = FileEncoder::new("out.txt").unwrap();
+            Encodable::encode(&errors, &mut fe);
+
+            println!("wrote to out.txt");
             todo!("do check, but don't error. just write to file for later analysis");
         }
         (true, DependenciesPosture::Trust) => { /* Nothing to be done! We're trusting :) */ }

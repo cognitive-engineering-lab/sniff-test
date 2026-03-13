@@ -10,6 +10,7 @@ use rustc_hir::{
     Attribute,
     def_id::{DefId, LocalDefId},
 };
+use rustc_macros::Encodable;
 use rustc_middle::ty::TyCtxt;
 use rustc_span::{Span, source_map::Spanned};
 use std::{collections::HashMap, fmt::Debug, ops::Range};
@@ -177,7 +178,7 @@ fn contains_word_or_synonym(justification: &str, word: &str) -> bool {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Encodable)]
 pub struct Condition {
     pub name: String,
     pub description: String,
@@ -191,7 +192,7 @@ impl PartialEq for Condition {
     }
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Encodable)]
 pub enum Obligation {
     /// Callers must consider the property generally.
     ConsiderProperty,

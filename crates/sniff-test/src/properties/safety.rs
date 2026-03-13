@@ -3,6 +3,7 @@ use std::fmt::Display;
 use regex::Regex;
 use rustc_ast::UnOp;
 use rustc_hir::{ExprKind, def_id::LocalDefId};
+use rustc_macros::Encodable;
 use rustc_middle::ty::TyCtxt;
 use rustc_type_ir::TyKind;
 
@@ -13,7 +14,7 @@ use crate::{
     properties::{FoundAxiom, Property},
 };
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, Encodable)]
 pub struct SafetyProperty;
 
 // TODO: add some sort of additional checks function here that lets you do additional checks
@@ -68,7 +69,7 @@ impl Property for SafetyProperty {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Encodable)]
 pub enum SafetyAxiom {
     RawPtrDeref,
 }

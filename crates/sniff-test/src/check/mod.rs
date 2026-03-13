@@ -7,6 +7,7 @@ use crate::{
 };
 use rustc_hir::def_id::{DefId, LOCAL_CRATE, LocalDefId};
 use rustc_middle::ty::TyCtxt;
+use rustc_serialize::opaque::FileEncoder;
 use rustc_span::Span;
 
 pub mod err;
@@ -155,6 +156,75 @@ pub fn check_crate_for_property<P: Property>(
     }
 
     Ok(stats)
+}
+
+impl<P: Property> ::rustc_serialize::Encodable<FileEncoder> for LocalError<P>
+where
+    P: ::rustc_serialize::Encodable<FileEncoder>,
+{
+    fn encode(&self, __encoder: &mut FileEncoder) {
+        let disc = match *self {
+            LocalError::Basic {
+                func: ref __binding_0,
+                _property: ref __binding_1,
+                unjustified_axioms: ref __binding_2,
+                unjustified_calls: ref __binding_3,
+            } => 0usize,
+            LocalError::Trait {
+                func_has_obligations: ref __binding_0,
+                inconsistent_w_trait: ref __binding_1,
+            } => 1usize,
+            LocalError::CallMissedObligations {
+                func: ref __binding_0,
+                callsite_comment: ref __binding_1,
+                callsite_span: ref __binding_2,
+                obligations: ref __binding_3,
+            } => 2usize,
+            LocalError::FnDefShouldHaveKeyword {
+                fn_def: ref __binding_0,
+                needed_keyword: __binding_1,
+            } => 3usize,
+        };
+        ::rustc_serialize::Encoder::emit_u8(__encoder, disc as u8);
+        match *self {
+            LocalError::Basic {
+                func: ref __binding_0,
+                _property: ref __binding_1,
+                unjustified_axioms: ref __binding_2,
+                unjustified_calls: ref __binding_3,
+            } => {
+                ::rustc_serialize::Encodable::<FileEncoder>::encode(__binding_0, __encoder);
+                ::rustc_serialize::Encodable::<FileEncoder>::encode(__binding_1, __encoder);
+                ::rustc_serialize::Encodable::<FileEncoder>::encode(__binding_2, __encoder);
+                ::rustc_serialize::Encodable::<FileEncoder>::encode(__binding_3, __encoder);
+            }
+            LocalError::Trait {
+                func_has_obligations: ref __binding_0,
+                inconsistent_w_trait: ref __binding_1,
+            } => {
+                ::rustc_serialize::Encodable::<FileEncoder>::encode(__binding_0, __encoder);
+                ::rustc_serialize::Encodable::<FileEncoder>::encode(__binding_1, __encoder);
+            }
+            LocalError::CallMissedObligations {
+                func: ref __binding_0,
+                callsite_comment: ref __binding_1,
+                callsite_span: ref __binding_2,
+                obligations: ref __binding_3,
+            } => {
+                ::rustc_serialize::Encodable::<FileEncoder>::encode(__binding_0, __encoder);
+                ::rustc_serialize::Encodable::<FileEncoder>::encode(__binding_1, __encoder);
+                ::rustc_serialize::Encodable::<FileEncoder>::encode(__binding_2, __encoder);
+                ::rustc_serialize::Encodable::<FileEncoder>::encode(__binding_3, __encoder);
+            }
+            LocalError::FnDefShouldHaveKeyword {
+                fn_def: ref __binding_0,
+                needed_keyword: __binding_1,
+            } => {
+                ::rustc_serialize::Encodable::<FileEncoder>::encode(__binding_0, __encoder);
+                ::rustc_serialize::Encodable::<FileEncoder>::encode(__binding_1, __encoder);
+            }
+        }
+    }
 }
 
 pub enum LocalError<P: Property> {

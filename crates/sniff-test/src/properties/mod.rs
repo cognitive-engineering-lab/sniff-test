@@ -5,10 +5,13 @@ use crate::check::LocalError;
 use regex::Regex;
 use rustc_hir::def_id::LocalDefId;
 use rustc_hir::intravisit::{self, Visitor};
+use rustc_macros::Decodable;
 use rustc_middle::{
     hir::nested_filter,
     ty::{TyCtxt, TypeckResults},
 };
+use rustc_serialize::Encodable;
+use rustc_serialize::opaque::FileEncoder;
 use std::fmt::Debug;
 use std::fmt::Display;
 
@@ -18,8 +21,8 @@ mod safety;
 pub use panic::PanicProperty;
 pub use safety::SafetyProperty;
 
-pub trait Property: Debug + Copy + 'static {
-    type Axiom: Axiom;
+pub trait Property: Debug + Copy + 'static + Encodable<FileEncoder> {
+    type Axiom: Axiom + Encodable<FileEncoder>;
     fn property_name() -> &'static str;
 
     /// The regex marker (to be placed within function definition doc comments)
@@ -64,7 +67,24 @@ pub struct FoundAxiom<'tcx, A: Axiom> {
     pub span: rustc_span::Span,
 }
 
-#[derive(Debug, Clone)]
+impl<A: Axiom> ::rustc_serialize::Encodable<FileEncoder> for UnjustifiedAxiom<A>
+where
+    A: ::rustc_serialize::Encodable<FileEncoder>,
+{
+    fn encode(&self, __encoder: &mut FileEncoder) {
+        match *self {
+            UnjustifiedAxiom {
+                axiom: ref __binding_0,
+                span: ref __binding_1,
+            } => {
+                ::rustc_serialize::Encodable::<FileEncoder>::encode(__binding_0, __encoder);
+                ::rustc_serialize::Encodable::<FileEncoder>::encode(__binding_1, __encoder);
+            }
+        }
+    }
+}
+
+#[derive(Debug, Clone, Decodable)]
 pub struct UnjustifiedAxiom<A: Axiom> {
     pub axiom: A,
     pub span: rustc_span::Span,

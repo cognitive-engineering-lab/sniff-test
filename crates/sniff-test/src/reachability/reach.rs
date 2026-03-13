@@ -8,6 +8,7 @@ use crate::rustc_middle::mir::visit::Visitor;
 use petgraph::graph::NodeIndex;
 use petgraph::visit::EdgeRef;
 use rustc_hir::def_id::{DefId, LocalDefId};
+use rustc_macros::{Decodable, Encodable};
 use rustc_middle::mir::{Operand, TerminatorKind};
 use rustc_middle::ty::{TyCtxt, TyKind};
 use rustc_span::Span;
@@ -160,9 +161,14 @@ impl CallGraph {
     }
 }
 
+#[derive(Encodable, Decodable)]
 pub struct Reachability {
     through: Vec<(DefId, Span)>,
 }
+
+// pub fn hey<T: Encodable>(t: T) {
+//     t.encode(s);
+// }
 
 impl Reachability {
     /// The reachability for an item that is directly reachable (i.e. it is itself an entrypoint)
@@ -177,6 +183,7 @@ impl Reachability {
     }
 }
 
+#[derive(Decodable, Encodable)]
 pub struct WithReachability<T>(pub T, pub Reachability);
 
 /// Get an iterator over all locally reachable function definitions from the given `entry_points`.

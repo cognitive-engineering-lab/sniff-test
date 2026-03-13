@@ -7,10 +7,11 @@ use crate::annotations::{parse_fn_def, toml::TomlAnnotation};
 use crate::properties::Property;
 
 use rustc_hir::def_id::DefId;
+use rustc_macros::Encodable;
 use rustc_middle::ty::TyCtxt;
 use rustc_span::Span;
 
-#[derive(Debug)]
+#[derive(Debug, Encodable)]
 pub struct CallsWObligations {
     pub call_to: DefId,
     pub obligation: Obligation,

@@ -1,5 +1,6 @@
 use regex::Regex;
 use rustc_hir::ExprKind;
+use rustc_macros::Encodable;
 use rustc_middle::ty::TyCtxt;
 use std::fmt::Display;
 
@@ -9,12 +10,12 @@ use crate::{
     properties::{FoundAxiom, Property},
 };
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Encodable)]
 pub enum PanicAxiom {
     ExplicitPanic,
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, Encodable)]
 pub struct PanicProperty;
 
 impl Property for PanicProperty {
