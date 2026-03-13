@@ -1,0 +1,26 @@
+---
+source: tests/lib.rs
+---
+exit_code = 1
+stdout = '''
+WARN: unable to find def_id for call to Local(HirId(DefId(0:3 ~ 03_captured_closure[3f66]::calls_f).2)) (to check if it is a panic)
+WARN: unable to find def_id for call to Local(HirId(DefId(0:5 ~ 03_captured_closure[3f66]::main).13)) (to check if it is a panic)
+the 03_captured_closure crate FAILED the sniff test
+'''
+stderr = '''
+error: function main::{closure#0} directly contains 1 unjustified panicking axiom, but is not annotated panicking
+ --> [SNIFF_TEST_DIR]/panics/03_captured_closure.rs:3:25
+  |
+3 |     let panic_closure = || panic!();
+  |                         ^^
+  |
+  = note: reachable from [main ([SNIFF_TEST_DIR]/panics/03_captured_closure.rs:5:5) -> main::{closure#1} ([SNIFF_TEST_DIR]/panics/03_captured_closure.rs:4:26) -> *main::{closure#0}*]
+note: explicit panic here
+ --> [SNIFF_TEST_DIR]/panics/03_captured_closure.rs:3:28
+  |
+3 |     let panic_closure = || panic!();
+  |                            ^^^^^^^^
+
+error: aborting due to 1 previous error
+
+'''

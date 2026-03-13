@@ -1,0 +1,13 @@
+---
+source: tests/lib.rs
+---
+exit_code = 101
+stdout = '''
+WARN: unable to find def_id for call to Local(HirId(DefId(0:3 ~ 02b_dyn_box[3ce0]::calls_f).2)) (to check if it is a panic)
+'''
+stderr = '''
+
+thread 'rustc' (4759144) panicked at crates/sniff-test/src/properties/panic.rs:48:17:
+explicit panic
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+'''

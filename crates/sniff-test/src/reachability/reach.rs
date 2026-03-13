@@ -5,7 +5,7 @@
 use crate::rustc_middle::mir::visit::Visitor;
 use rustc_hir::def_id::{DefId, LOCAL_CRATE, LocalDefId};
 use rustc_middle::mir::{Operand, TerminatorKind};
-use rustc_middle::ty::{TyCtxt, TyKind};
+use rustc_middle::ty::{GenericArg, GenericArgKind, TyCtxt, TyKind};
 use rustc_span::Span;
 use std::collections::{HashMap, VecDeque};
 
@@ -146,6 +146,36 @@ struct BodyVisitor<'tcx, 'm>(
     &'m mut HashMap<DefId, Vec<Span>>,
 );
 
+fn generic_closures<'c>(
+    generics: &'c rustc_middle::ty::List<GenericArg<'_>>,
+) -> impl Iterator<Item = &'c DefId> {
+    generics.iter().filter_map(|generic| {
+        if let GenericArgKind::Type(ty) = generic.kind()
+            && let TyKind::Closure(b, _c) = ty.kind()
+        // TODO: what are the closure args used for here?
+        {
+            Some(b)
+        } else {
+            None
+        }
+    })
+}
+
+impl<'tcx> BodyVisitor<'tcx, '_> {
+    fn log_call_to(&mut self, def_id: DefId, span: Span) {
+        self.2.calls_to(def_id, span);
+        // TODO: here need to handle non-local reachable
+        // TODO: does this not go into the monomorphized call but the generic function? <- not sure if that's the right terminology
+        if let Some(local_def) = def_id.as_local() {
+            // Doing BFS here to ensure we get the shortest path possible to all reachable items.
+            self.1.push_back(self.2.extended_to(local_def, span));
+        } else {
+            // non-local crate
+            self.3.entry(def_id).or_default().push(span);
+        }
+    }
+}
+
 impl<'tcx> rustc_middle::mir::visit::Visitor<'tcx> for BodyVisitor<'tcx, '_> {
     fn visit_terminator(
         &mut self,
@@ -156,19 +186,11 @@ impl<'tcx> rustc_middle::mir::visit::Visitor<'tcx> for BodyVisitor<'tcx, '_> {
             && let Operand::Constant(box co) = func
             && let TyKind::FnDef(def_id, _substs) = co.const_.ty().kind()
         {
-            self.2.calls_to(*def_id, terminator.source_info.span);
-            // TODO: here need to handle non-local reachable
-            if let Some(local_def) = def_id.as_local() {
-                // Doing BFS here to ensure we get the shortest path possible to all reachable items.
-                self.1
-                    .push_back(self.2.extended_to(local_def, terminator.source_info.span));
-            } else {
-                // non-local crate
-                self.3
-                    .entry(*def_id)
-                    .or_default()
-                    .push(terminator.source_info.span);
+            let closures = generic_closures(_substs);
+            for c in closures {
+                self.log_call_to(*c, terminator.source_info.span);
             }
+            self.log_call_to(*def_id, terminator.source_info.span);
         }
 
         self.super_terminator(terminator, location);

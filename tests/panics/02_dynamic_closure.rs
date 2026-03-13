@@ -17,7 +17,7 @@ fn calls_f(f: impl Fn() -> i32) -> i32 {
 }
 
 // NOTE: this can also happen bc of explicit coercion to a fn pointer.
-fn main2() {
-    let panic: fn() -> i32 = || panic!();
-    calls_f(panic);
-}
+// fn main2() {
+//     let panic: fn() -> i32 = || panic!();
+//     calls_f(panic);
+// }

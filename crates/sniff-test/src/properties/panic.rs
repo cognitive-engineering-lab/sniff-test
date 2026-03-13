@@ -34,12 +34,28 @@ impl Property for PanicProperty {
     fn find_axioms_in_expr<'tcx>(
         &mut self,
         tcx: TyCtxt<'tcx>,
-        tyck: &rustc_middle::ty::TypeckResults,
+        _tyck: &rustc_middle::ty::TypeckResults,
         expr: &'tcx rustc_hir::Expr<'tcx>,
     ) -> Vec<FoundAxiom<'tcx, Self::Axiom>> {
-        if let ExprKind::Call(func, _) = expr.kind
-            && let Some(def_id) = tyck.type_dependent_def_id(func.hir_id)
-        {
+        if let ExprKind::Call(func, _) = expr.kind {
+            // TODO: this is for sure hacky and requires more work.
+            // we've already got this in the call graph, so should probably just map up from MIR to HIR to find comments
+            let ExprKind::Path(qpath) = func.kind else {
+                panic!();
+            };
+
+            let rustc_hir::QPath::Resolved(_ty, path) = &qpath else {
+                panic!();
+            };
+
+            let Some(def_id) = path.res.opt_def_id() else {
+                println!(
+                    "WARN: unable to find def_id for call to {:?} (to check if it is a panic)",
+                    path.res
+                );
+                return vec![];
+            };
+
             let lang_items = tcx.lang_items();
 
             // Check against lang items

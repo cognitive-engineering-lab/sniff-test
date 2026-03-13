@@ -188,7 +188,12 @@ fn check_function_for_property<'tcx, P: Property>(
 ) -> Result<(), LocalError<'tcx, P>> {
     // Look for all axioms within this function
     let axioms = properties::find_axioms(tcx, &func, property).collect::<Vec<_>>();
-    log::debug!("fn {:?} has raw axioms {:#?}", func.reach, axioms);
+    log::debug!(
+        "fn {:?} has raw {} axioms {:#?}",
+        func.reach,
+        P::property_name(),
+        axioms
+    );
     let unjustified_axioms = axioms
         .into_iter()
         .filter(only_unjustified_axioms(tcx, property))
