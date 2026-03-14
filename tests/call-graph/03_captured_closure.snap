@@ -9,14 +9,14 @@ the 03_captured_closure crate FAILED the sniff test
 '''
 stderr = '''
 error: function main::{closure#0} directly contains 1 unjustified panicking axiom, but is not annotated panicking
- --> [SNIFF_TEST_DIR]/panics/03_captured_closure.rs:3:25
+ --> [SNIFF_TEST_DIR]/call-graph/03_captured_closure.rs:3:25
   |
 3 |     let panic_closure = || panic!();
   |                         ^^
   |
-  = note: reachable from [main ([SNIFF_TEST_DIR]/panics/03_captured_closure.rs:5:5) -> main::{closure#1} ([SNIFF_TEST_DIR]/panics/03_captured_closure.rs:4:26) -> *main::{closure#0}*]
+  = note: reachable from [main ([SNIFF_TEST_DIR]/call-graph/03_captured_closure.rs:5:5) -> main::{closure#1} ([SNIFF_TEST_DIR]/call-graph/03_captured_closure.rs:4:26) -> *main::{closure#0}*]
 note: explicit panic here
- --> [SNIFF_TEST_DIR]/panics/03_captured_closure.rs:3:28
+ --> [SNIFF_TEST_DIR]/call-graph/03_captured_closure.rs:3:28
   |
 3 |     let panic_closure = || panic!();
   |                            ^^^^^^^^

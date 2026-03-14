@@ -7,7 +7,7 @@ the 01_unused crate FAILED the sniff test
 '''
 stderr = '''
 warning: unused variable: `f`
-  --> [SNIFF_TEST_DIR]/panics/01_unused.rs:11:18
+  --> [SNIFF_TEST_DIR]/call-graph/01_unused.rs:11:18
    |
 11 | fn doesnt_call_f(f: impl Fn() -> i32) -> i32 {
    |                  ^ help: if this is intentional, prefix it with an underscore: `_f`
@@ -15,14 +15,14 @@ warning: unused variable: `f`
    = note: `#[warn(unused_variables)]` on by default
 
 error: function main::{closure#0} directly contains 1 unjustified panicking axiom, but is not annotated panicking
- --> [SNIFF_TEST_DIR]/panics/01_unused.rs:3:17
+ --> [SNIFF_TEST_DIR]/call-graph/01_unused.rs:3:17
   |
 3 |     let panic = || panic!();
   |                 ^^
   |
-  = note: reachable from [main ([SNIFF_TEST_DIR]/panics/01_unused.rs:4:5) -> *main::{closure#0}*]
+  = note: reachable from [main ([SNIFF_TEST_DIR]/call-graph/01_unused.rs:4:5) -> *main::{closure#0}*]
 note: explicit panic here
- --> [SNIFF_TEST_DIR]/panics/01_unused.rs:3:20
+ --> [SNIFF_TEST_DIR]/call-graph/01_unused.rs:3:20
   |
 3 |     let panic = || panic!();
   |                    ^^^^^^^^

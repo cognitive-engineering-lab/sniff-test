@@ -8,14 +8,14 @@ the 00_basic crate FAILED the sniff test
 '''
 stderr = '''
 error: function main::{closure#0} directly contains 1 unjustified panicking axiom, but is not annotated panicking
- --> [SNIFF_TEST_DIR]/panics/00_basic.rs:3:17
+ --> [SNIFF_TEST_DIR]/call-graph/00_basic.rs:3:17
   |
 3 |     let panic = || panic!();
   |                 ^^
   |
-  = note: reachable from [main ([SNIFF_TEST_DIR]/panics/00_basic.rs:4:5) -> *main::{closure#0}*]
+  = note: reachable from [main ([SNIFF_TEST_DIR]/call-graph/00_basic.rs:4:5) -> *main::{closure#0}*]
 note: explicit panic here
- --> [SNIFF_TEST_DIR]/panics/00_basic.rs:3:20
+ --> [SNIFF_TEST_DIR]/call-graph/00_basic.rs:3:20
   |
 3 |     let panic = || panic!();
   |                    ^^^^^^^^

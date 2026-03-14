@@ -9,14 +9,14 @@ the 02b_dyn_box crate FAILED the sniff test
 '''
 stderr = '''
 error: function main::{closure#0} directly contains 1 unjustified panicking axiom, but is not annotated panicking
- --> [SNIFF_TEST_DIR]/panics/02b_dyn_box.rs:3:73
+ --> [SNIFF_TEST_DIR]/call-graph/02b_dyn_box.rs:3:73
   |
 3 |     let panics: std::boxed::Box<dyn Fn() -> i32> = std::boxed::Box::new(|| panic!());
   |                                                                         ^^
   |
-  = note: reachable from [main ([SNIFF_TEST_DIR]/panics/02b_dyn_box.rs:3:52) -> *main::{closure#0}*]
+  = note: reachable from [main ([SNIFF_TEST_DIR]/call-graph/02b_dyn_box.rs:3:52) -> *main::{closure#0}*]
 note: explicit panic here
- --> [SNIFF_TEST_DIR]/panics/02b_dyn_box.rs:3:76
+ --> [SNIFF_TEST_DIR]/call-graph/02b_dyn_box.rs:3:76
   |
 3 |     let panics: std::boxed::Box<dyn Fn() -> i32> = std::boxed::Box::new(|| panic!());
   |                                                                            ^^^^^^^^
