@@ -36,12 +36,19 @@ impl CheckStats {
     }
 }
 
+use crate::reachability::CallGraph;
+
+// struct CheckResult<P: Property> {
+//     callgraph: CallGraph,
+//     result: Result<CheckStats, Vec<LocalError<'_, P>>>,
+// }
+
 /// Checks that all local functions in the crate are properly annotated.
 pub fn check_crate_for_property<P: Property>(
     tcx: TyCtxt<'_>,
     property: P,
     is_dependency: bool,
-) -> Result<CheckStats, Vec<LocalError<'_, P>>> {
+) -> Result<CheckStats, (CallGraph, Vec<LocalError<'_, P>>)> {
     // Parse TOML annotations from file
     let toml_path = "sniff-test.toml";
     let toml_annotations = match TomlAnnotation::from_file(toml_path) {
@@ -144,7 +151,7 @@ pub fn check_crate_for_property<P: Property>(
     }));
 
     if !local_errors.is_empty() {
-        return Err(local_errors);
+        return Err((callgraph, local_errors));
     }
 
     Ok(stats)

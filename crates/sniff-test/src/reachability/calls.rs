@@ -34,6 +34,7 @@ fn call_has_obligations<P: Property>(
     }
 }
 
+#[allow(clippy::implicit_hasher)]
 pub fn find_calls_w_obligations<P: Property>(
     tcx: TyCtxt,
     toml_annotations: &TomlAnnotation,

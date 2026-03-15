@@ -1,4 +1,9 @@
-use crate::{check::LocalError, properties::FoundAxiom};
+use crate::{
+    check::LocalError,
+    properties::FoundAxiom,
+    reachability::{Reachability, WithReachability},
+};
+use itertools::Itertools;
 use rustc_errors::Diag;
 use rustc_middle::ty::TyCtxt;
 use rustc_span::ErrorGuaranteed;
@@ -8,7 +13,7 @@ use crate::{properties::Property, reachability::CallsWObligations};
 pub fn report_errors<'tcx, P: Property>(
     tcx: TyCtxt<'tcx>,
     _property: P,
-    errors: Vec<LocalError<'tcx, P>>,
+    errors: impl IntoIterator<Item = WithReachability<LocalError<'tcx, P>>>,
 ) -> ErrorGuaranteed {
     errors
         .into_iter()
@@ -19,22 +24,21 @@ pub fn report_errors<'tcx, P: Property>(
 
 fn report_error<'tcx, P: Property>(
     tcx: TyCtxt<'tcx>,
-    error: LocalError<'tcx, P>,
+    WithReachability(error, reachabilty): WithReachability<LocalError<'tcx, P>>,
 ) -> ErrorGuaranteed {
     let dcx = tcx.dcx();
     let def_span = tcx.def_span(*error.func());
     let fn_name = tcx.def_path_str(*error.func());
 
     match error {
-        LocalError::Basic { tcx, func, _property, unjustified_axioms, unjustified_calls } => {
+        LocalError::Basic { tcx, func: _, _property, unjustified_axioms, unjustified_calls } => {
             let mut diag = dcx.struct_span_err(
                 def_span,
                 summary::summary_string::<P>(&fn_name, &unjustified_axioms, &unjustified_calls),
             );
 
             // TODO: fix reachability here soon...
-            let _ = func;
-            // diag = diag.with_note(reachability_str(&fn_name, tcx, &func));
+            diag = diag.with_note(reachability_str(&fn_name, tcx, &reachabilty));
 
             for axiom in unjustified_axioms {
                 diag = extend_diag_axiom::<P>(diag, axiom);
@@ -84,24 +88,24 @@ fn extend_diag_calls<'tcx>(
     diag.with_span_note(calls.from_spans, format!("{call_to} is called here"))
 }
 
-// fn reachability_str(fn_name: &str, tcx: TyCtxt, reachable: &LocallyReachable) -> String {
-//     let reachability_str = reachable
-//         .through
-//         .iter()
-//         .map(|def| {
-//             let name = tcx.def_path_str(def.0);
-//             let s = tcx
-//                 .sess
-//                 .source_map()
-//                 .span_to_string(def.1, rustc_span::FileNameDisplayPreference::Local);
-//             let colon = s.find(": ").expect("should have a colon");
-//             format!("{name} ({})", &s[..colon])
-//         })
-//         .chain(std::iter::once(format!("*{fn_name}*")))
-//         .join(" -> ");
+fn reachability_str(fn_name: &str, tcx: TyCtxt, reachable: &Reachability) -> String {
+    let reachability_str = reachable
+        .through()
+        .iter()
+        .map(|def| {
+            let name = tcx.def_path_str(def.0);
+            let s = tcx
+                .sess
+                .source_map()
+                .span_to_string(def.1, rustc_span::FileNameDisplayPreference::Local);
+            let colon = s.find(": ").expect("should have a colon");
+            format!("{name} ({})", &s[..colon])
+        })
+        .chain(std::iter::once(format!("*{fn_name}*")))
+        .join(" -> ");
 
-//     format!("reachable from [{reachability_str}]")
-// }
+    format!("reachable from [{reachability_str}]")
+}
 
 mod summary {
     use itertools::Itertools;

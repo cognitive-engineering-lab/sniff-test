@@ -1,6 +1,7 @@
 //! A Rustc plugin that prints out the name of all items in a crate.
 
 #![feature(rustc_private)]
+#![feature(iter_map_windows)]
 #![feature(box_patterns)]
 #![feature(try_trait_v2)]
 #![cfg_attr(test, feature(assert_matches))]
@@ -31,7 +32,7 @@ extern crate rustc_type_ir;
 pub mod annotations;
 mod check;
 pub mod properties;
-mod reachability;
+pub mod reachability;
 pub mod utils;
 
 use std::{borrow::Cow, env, process::Command, sync::Mutex};
@@ -231,10 +232,24 @@ fn check_crate_for_all_properties(
     is_dependency: bool,
 ) -> Result<Vec<CheckStats>, ErrorGuaranteed> {
     Ok(vec![
-        check_crate_for_property(tcx, properties::SafetyProperty, is_dependency)
-            .map_err(|errors| report_errors(tcx, properties::SafetyProperty, errors))?,
-        check_crate_for_property(tcx, properties::PanicProperty, is_dependency)
-            .map_err(|errors| report_errors(tcx, properties::PanicProperty, errors))?,
+        check_crate_for_property(tcx, properties::SafetyProperty, is_dependency).map_err(
+            |(callgraph, errors)| {
+                report_errors(
+                    tcx,
+                    properties::SafetyProperty,
+                    callgraph.add_reachability(errors),
+                )
+            },
+        )?,
+        check_crate_for_property(tcx, properties::PanicProperty, is_dependency).map_err(
+            |(callgraph, errors)| {
+                report_errors(
+                    tcx,
+                    properties::PanicProperty,
+                    callgraph.add_reachability(errors),
+                )
+            },
+        )?,
     ])
 }
 

@@ -5,4 +5,4 @@ mod reach;
 
 pub use calls::{CallsWObligations, find_calls_w_obligations};
 pub use entry::analysis_entry_points;
-pub use reach::build_callgraph;
+pub use reach::{CallGraph, Reachability, WithReachability, build_callgraph};

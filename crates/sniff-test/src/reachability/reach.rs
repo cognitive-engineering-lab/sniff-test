@@ -2,6 +2,8 @@
 //! for each function call, does it satisfy the requirements?
 //!
 
+use crate::check::LocalError;
+use crate::properties::Property;
 use crate::rustc_middle::mir::visit::Visitor;
 use petgraph::graph::NodeIndex;
 use petgraph::visit::EdgeRef;
@@ -11,20 +13,30 @@ use rustc_middle::ty::{TyCtxt, TyKind};
 use rustc_span::Span;
 use std::borrow::Borrow;
 use std::collections::{HashMap, HashSet};
+use std::hash::RandomState;
 
+#[derive(Debug)]
 pub struct CallGraph {
     data: petgraph::Graph<DefId, Span, petgraph::Directed>,
     indices: HashMap<DefId, petgraph::graph::NodeIndex>,
-    _entrypoints: HashSet<LocalDefId>,
+    // TODO: probably better to abstract this out of the call graph struct...
+    entrypoints: HashSet<LocalDefId>,
 }
 
 impl CallGraph {
     pub fn new(entry: impl IntoIterator<Item = LocalDefId>) -> Self {
-        CallGraph {
+        let mut new = CallGraph {
             data: petgraph::Graph::new(),
             indices: HashMap::new(),
-            _entrypoints: entry.into_iter().collect(),
+            entrypoints: entry.into_iter().collect(),
+        };
+
+        // Specifically insert the entrypoints as they're always reachable
+        for entry in new.entrypoints.clone() {
+            new.get_index_or_insert(entry.to_def_id());
         }
+
+        new
     }
 
     fn get_index(&self, def_id: impl Borrow<DefId>) -> Option<NodeIndex> {
@@ -39,7 +51,9 @@ impl CallGraph {
     }
 
     pub fn add_call_edge(&mut self, from: LocalDefId, to: DefId, at_span: Span) {
-        let from_i = self.get_index_or_insert(from.to_def_id());
+        let from_i = self
+            .get_index(from.to_def_id())
+            .expect("should have already encountered the function we're calling from");
         let to_i = self.get_index_or_insert(to);
 
         self.data.add_edge(from_i, to_i, at_span);
@@ -66,6 +80,71 @@ impl CallGraph {
         calls
     }
 
+    /// Gets a reachability path from entrypoints to a given def id.
+    fn reachability(&self, from: &[DefId], to: DefId) -> Reachability {
+        if from.contains(&to) {
+            return Reachability::direct();
+        }
+
+        let mut paths = from.iter().flat_map(|from| {
+            petgraph::algo::all_simple_paths::<
+                Vec<NodeIndex>,
+                &petgraph::Graph<rustc_span::def_id::DefId, rustc_span::Span>,
+                RandomState,
+            >(
+                &self.data,
+                *self
+                    .indices
+                    .get(from)
+                    .expect("should already be in the graph..."),
+                *self
+                    .indices
+                    .get(&to)
+                    .expect("should already be in the graph..."),
+                0,
+                None,
+            )
+        });
+        let first_path: Vec<NodeIndex> = paths
+            .next()
+            .unwrap_or_else(|| panic!("no path from {from:?} to {to:?} in {self:#?}"));
+        let through = first_path
+            .into_iter()
+            .map_windows(|[a, b]| {
+                let def_id = *self.data.node_weight(*a).expect("should have value");
+                let edge_i = self.data.find_edge(*a, *b).expect("should have edge");
+                let span = *self.data.edge_weight(edge_i).unwrap();
+                (def_id, span)
+            })
+            .collect::<Vec<_>>();
+        Reachability { through }
+    }
+
+    fn with_reachability_from_entry<'tcx, P: Property>(
+        &self,
+        t: LocalError<'tcx, P>,
+    ) -> WithReachability<LocalError<'tcx, P>> {
+        // Get the reachability info from any entry point to this error.
+        let reachability = self.reachability(
+            &self
+                .entrypoints
+                .iter()
+                .map(|local| local.to_def_id())
+                .collect::<Vec<_>>(),
+            t.func().to_def_id(),
+        );
+        WithReachability(t, reachability)
+    }
+
+    pub fn add_reachability<'tcx, P: Property>(
+        &self,
+        errors: impl IntoIterator<Item = LocalError<'tcx, P>>,
+    ) -> impl Iterator<Item = WithReachability<LocalError<'tcx, P>>> {
+        errors
+            .into_iter()
+            .map(|err| self.with_reachability_from_entry(err))
+    }
+
     pub fn local_reachable(&self) -> Vec<LocalDefId> {
         self.data
             .node_weights()
@@ -74,6 +153,25 @@ impl CallGraph {
             .collect()
     }
 }
+
+pub struct Reachability {
+    through: Vec<(DefId, Span)>,
+}
+
+impl Reachability {
+    /// The reachability for an item that is directly reachable (i.e. it is itself an entrypoint)
+    pub fn direct() -> Self {
+        Reachability {
+            through: Vec::new(),
+        }
+    }
+
+    pub fn through(&self) -> &[(DefId, Span)] {
+        &self.through
+    }
+}
+
+pub struct WithReachability<T>(pub T, pub Reachability);
 
 /// Get an iterator over all locally reachable function definitions from the given `entry_points`.
 pub fn build_callgraph(
