@@ -4,10 +4,12 @@ use crate::{
     annotations::{doc::get_comment_doc_str, span::Mergeable, toml::TomlAnnotation},
     check::LocalError,
     properties::Property,
-    reachability::LocallyReachable,
 };
 use regex::Regex;
-use rustc_hir::{Attribute, def_id::DefId};
+use rustc_hir::{
+    Attribute,
+    def_id::{DefId, LocalDefId},
+};
 use rustc_middle::ty::TyCtxt;
 use rustc_span::{Span, source_map::Spanned};
 use std::{collections::HashMap, fmt::Debug, ops::Range};
@@ -87,8 +89,7 @@ impl ExpressionAnnotation {
         obligation: &Obligation,
         call_to: DefId,
         from_span: Span,
-        in_fn: &LocallyReachable,
-        // tcx: TyCtxt<'_>,
+        in_fn: &LocalDefId,
     ) -> Result<(), LocalError<'tcx, P>> {
         match obligation {
             Obligation::ConsiderProperty => Ok(()),
@@ -107,7 +108,7 @@ impl ExpressionAnnotation {
                         .map(|a| &a.node.name)
                         .collect::<Vec<&String>>();
                     Err(LocalError::CallMissedObligations {
-                        func: in_fn.clone(),
+                        func: *in_fn,
                         callsite_comment: self.text.clone(),
                         callsite_span: from_span,
                         obligations: names.into_iter().cloned().collect(),

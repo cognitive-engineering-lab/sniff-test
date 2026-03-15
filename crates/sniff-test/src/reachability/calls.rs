@@ -1,9 +1,10 @@
 //! Finds the 'bad' functions that should be annotated
 
+use std::collections::HashMap;
+
 use crate::annotations::Obligation;
 use crate::annotations::{parse_fn_def, toml::TomlAnnotation};
 use crate::properties::Property;
-use crate::reachability::LocallyReachable;
 
 use rustc_hir::def_id::DefId;
 use rustc_middle::ty::TyCtxt;
@@ -36,11 +37,10 @@ fn call_has_obligations<P: Property>(
 pub fn find_calls_w_obligations<P: Property>(
     tcx: TyCtxt,
     toml_annotations: &TomlAnnotation,
-    locally_reachable: &LocallyReachable,
+    calls_to: &HashMap<DefId, Vec<Span>>,
     property: P,
 ) -> impl Iterator<Item = CallsWObligations> {
-    locally_reachable
-        .calls_to
+    calls_to
         .iter()
         .filter_map(call_has_obligations(tcx, toml_annotations, property))
 }

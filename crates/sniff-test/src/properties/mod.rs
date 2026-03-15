@@ -1,8 +1,9 @@
 //! A module for detecting axiomatic program patterns
 
+use crate::annotations::PropertyViolation;
 use crate::check::LocalError;
-use crate::{annotations::PropertyViolation, reachability::LocallyReachable};
 use regex::Regex;
+use rustc_hir::def_id::LocalDefId;
 use rustc_hir::intravisit::{self, Visitor};
 use rustc_middle::{
     hir::nested_filter,
@@ -40,7 +41,7 @@ pub trait Property: Debug + Copy + 'static {
     fn additional_check<'tcx>(
         &self,
         _tcx: TyCtxt<'tcx>,
-        _fn_def: LocallyReachable,
+        _fn_def: LocalDefId,
     ) -> Result<(), LocalError<'tcx, Self>> {
         Ok(())
     }
@@ -76,10 +77,10 @@ struct FinderWrapper<'tcx, T: Property> {
 
 pub fn find_axioms<'tcx, T: Property>(
     tcx: TyCtxt<'tcx>,
-    locally_reachable: &LocallyReachable,
+    locally_reachable: &LocalDefId,
     property: T,
 ) -> impl Iterator<Item = FoundAxiom<'tcx, T::Axiom>> {
-    let body = tcx.hir_body_owned_by(locally_reachable.reach).id();
+    let body = tcx.hir_body_owned_by(*locally_reachable).id();
     let tychck = tcx.typeck_body(body);
 
     let mut finder = FinderWrapper {

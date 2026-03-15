@@ -3,148 +3,131 @@
 //!
 
 use crate::rustc_middle::mir::visit::Visitor;
-use rustc_hir::def_id::{DefId, LOCAL_CRATE, LocalDefId};
+use petgraph::graph::NodeIndex;
+use petgraph::visit::EdgeRef;
+use rustc_hir::def_id::{DefId, LocalDefId};
 use rustc_middle::mir::{Operand, TerminatorKind};
 use rustc_middle::ty::{TyCtxt, TyKind};
 use rustc_span::Span;
-use std::collections::{HashMap, VecDeque};
+use std::borrow::Borrow;
+use std::collections::{HashMap, HashSet};
 
-#[derive(Debug, Clone)]
-pub struct LocallyReachable {
-    /// The item that can be reached.
-    pub reach: LocalDefId,
-    /// The path of calls between items through which you can reach this item.
-    pub through: Vec<(LocalDefId, Span)>,
-    /// The functions (not necessarily local) that this one calls to.
-    pub calls_to: HashMap<DefId, Vec<Span>>,
+pub struct CallGraph {
+    data: petgraph::Graph<DefId, Span, petgraph::Directed>,
+    indices: HashMap<DefId, petgraph::graph::NodeIndex>,
+    _entrypoints: HashSet<LocalDefId>,
 }
 
-impl LocallyReachable {
-    /// Say that this locally reachable item can go to another `def_id` through a call at a given `span`.
-    fn extended_to(&self, def_id: LocalDefId, span: Span) -> Self {
-        LocallyReachable {
-            reach: def_id,
-            through: self
-                .through
-                .iter()
-                .copied()
-                .chain(std::iter::once((self.reach, span)))
-                .collect(),
-            calls_to: HashMap::new(),
+impl CallGraph {
+    pub fn new(entry: impl IntoIterator<Item = LocalDefId>) -> Self {
+        CallGraph {
+            data: petgraph::Graph::new(),
+            indices: HashMap::new(),
+            _entrypoints: entry.into_iter().collect(),
         }
     }
 
-    fn calls_to(&mut self, def_id: DefId, span: Span) {
-        self.calls_to.entry(def_id).or_default().push(span);
+    fn get_index(&self, def_id: impl Borrow<DefId>) -> Option<NodeIndex> {
+        self.indices.get(def_id.borrow()).copied()
+    }
+
+    fn get_index_or_insert(&mut self, def_id: impl Borrow<DefId>) -> NodeIndex {
+        *self
+            .indices
+            .entry(*def_id.borrow())
+            .or_insert_with_key(|def_id| self.data.add_node(*def_id))
+    }
+
+    pub fn add_call_edge(&mut self, from: LocalDefId, to: DefId, at_span: Span) {
+        let from_i = self.get_index_or_insert(from.to_def_id());
+        let to_i = self.get_index_or_insert(to);
+
+        self.data.add_edge(from_i, to_i, at_span);
+    }
+
+    // returns a hashmap containing a key for each def id that is called by `from`, with the values having
+    // all callsites to that function
+    pub fn calls_from(&self, func: LocalDefId) -> HashMap<DefId, Vec<Span>> {
+        let Some(index) = self.get_index(func.to_def_id()) else {
+            panic!("should have encountered all reachable local def ids, somethings up...");
+        };
+        let edges = self
+            .data
+            .edges_directed(index, petgraph::Direction::Outgoing);
+
+        let mut calls: HashMap<DefId, Vec<Span>> = HashMap::new();
+        for edge in edges {
+            let to = self
+                .data
+                .node_weight(edge.target())
+                .expect("we just got this id from .target()");
+            calls.entry(*to).or_default().push(*edge.weight());
+        }
+        calls
+    }
+
+    pub fn local_reachable(&self) -> Vec<LocalDefId> {
+        self.data
+            .node_weights()
+            .copied()
+            .filter_map(DefId::as_local)
+            .collect()
     }
 }
 
 /// Get an iterator over all locally reachable function definitions from the given `entry_points`.
-pub fn locally_reachable_from(
+pub fn build_callgraph(
     tcx: TyCtxt,
     entry_points: impl IntoIterator<Item = LocalDefId>,
-) -> Vec<LocallyReachable> {
-    let (all_reachable, locally_reachable) =
-        CallGraphVisitor::new(tcx, entry_points.into_iter()).reachable();
-    let mut locally_reachable = locally_reachable.collect::<Vec<_>>();
-
-    let crate_name = tcx.crate_name(LOCAL_CRATE);
-    let total_calls = all_reachable.values().map(Vec::len).sum::<usize>();
-    log::warn!(
-        "{} reachable in {crate_name}, from {total_calls} calls",
-        all_reachable.len()
-    );
-
-    let unsafe_reachable = all_reachable
-        .iter()
-        .filter(|(def_id, _calls)| tcx.fn_sig(*def_id).skip_binder().safety().is_unsafe())
-        .map(|(a, b)| (a, b.len(), b))
-        .collect::<Vec<_>>();
-
-    let unsafe_calls = unsafe_reachable
-        .iter()
-        .map(|(_, count, _calls)| count)
-        .sum::<usize>();
-    log::warn!(
-        "{} unsafe reachable in {crate_name}, from {unsafe_calls} calls",
-        unsafe_reachable.len()
-    );
-    log::warn!("unsafe reachable: {unsafe_reachable:#?}");
-    // Sort entry points so our analysis order is deterministic.
-    locally_reachable.sort_by(|a, b| {
-        tcx.def_path_str(a.reach.to_def_id())
-            .cmp(&tcx.def_path_str(b.reach.to_def_id()))
-    });
-    locally_reachable
+) -> CallGraph {
+    CallGraphVisitor::new(tcx, entry_points.into_iter()).call_graph()
 }
 
 struct CallGraphVisitor<'tcx> {
     tcx: TyCtxt<'tcx>,
-    /// Queue of reachable items we want to visit.
-    ///
-    /// This lets us to BFS to get the shortest path to each item.
-    to_visit: VecDeque<LocallyReachable>,
-    locally_reachable: HashMap<LocalDefId, LocallyReachable>,
-    all_reachable: HashMap<DefId, Vec<Span>>,
+    to_visit: Vec<LocalDefId>,
+    visited: HashSet<LocalDefId>,
+    graph: CallGraph,
 }
 
 impl<'tcx> CallGraphVisitor<'tcx> {
     fn new(tcx: TyCtxt<'tcx>, entry_points: impl Iterator<Item = LocalDefId>) -> Self {
+        let entry: Vec<LocalDefId> = entry_points.collect();
         Self {
             tcx,
-            to_visit: entry_points
-                .map(|reach| LocallyReachable {
-                    reach,
-                    through: Vec::new(),
-                    calls_to: HashMap::new(),
-                })
-                .collect(),
-            locally_reachable: HashMap::new(),
-            all_reachable: HashMap::new(),
+            to_visit: entry.clone(),
+            visited: HashSet::new(),
+            graph: CallGraph::new(entry),
         }
     }
 
-    fn reachable(
-        mut self,
-    ) -> (
-        HashMap<DefId, Vec<Span>>,
-        impl Iterator<Item = LocallyReachable>,
-    ) {
-        while let Some(mut d) = self.to_visit.pop_front() {
-            if !self.locally_reachable.contains_key(&d.reach) {
-                // let kind = self.tcx.def_kind(d.reach);
-                // let parent_kind = self.tcx.def_kind(self.tcx.parent(d.reach.into()));
-                // let is_trait_fn = kind == DefKind::AssocFn && parent_kind == DefKind::Trait;
-
-                if !self.tcx.has_typeck_results(d.reach) {
+    fn call_graph(mut self) -> CallGraph {
+        while let Some(visit_next) = self.to_visit.pop() {
+            if !self.visited.contains(&visit_next) {
+                if !self.tcx.has_typeck_results(visit_next) {
                     log::warn!(
-                        "found function with no typeck results, not doing anything with it for now... {d:?}"
+                        "found function with no typeck results, not doing anything with it for now... {visit_next:?}"
                     );
                     continue;
                 }
-                let body = self.tcx.optimized_mir(d.reach);
-                // log::debug!("SUCCESS");
-                let mut visitor = BodyVisitor(
-                    self.tcx,
-                    &mut self.to_visit,
-                    &mut d,
-                    &mut self.all_reachable,
-                );
+                let body = self.tcx.optimized_mir(visit_next);
+
+                let mut visitor = BodyVisitor {
+                    call_graph_visitor: &mut self,
+                    on_def_id: visit_next,
+                };
                 visitor.visit_body(body);
-                self.locally_reachable.insert(d.reach, d);
             }
         }
-        (self.all_reachable, self.locally_reachable.into_values())
+        self.graph
     }
 }
 
 #[allow(dead_code)]
-struct BodyVisitor<'tcx, 'm>(
-    TyCtxt<'tcx>,
-    &'m mut VecDeque<LocallyReachable>,
-    &'m mut LocallyReachable,
-    &'m mut HashMap<DefId, Vec<Span>>,
-);
+struct BodyVisitor<'tcx, 'm> {
+    call_graph_visitor: &'m mut CallGraphVisitor<'tcx>,
+    on_def_id: LocalDefId,
+}
 
 impl<'tcx> rustc_middle::mir::visit::Visitor<'tcx> for BodyVisitor<'tcx, '_> {
     fn visit_terminator(
@@ -156,18 +139,15 @@ impl<'tcx> rustc_middle::mir::visit::Visitor<'tcx> for BodyVisitor<'tcx, '_> {
             && let Operand::Constant(box co) = func
             && let TyKind::FnDef(def_id, _substs) = co.const_.ty().kind()
         {
-            self.2.calls_to(*def_id, terminator.source_info.span);
-            // TODO: here need to handle non-local reachable
+            self.call_graph_visitor.graph.add_call_edge(
+                self.on_def_id,
+                *def_id,
+                terminator.source_info.span,
+            );
+
             if let Some(local_def) = def_id.as_local() {
-                // Doing BFS here to ensure we get the shortest path possible to all reachable items.
-                self.1
-                    .push_back(self.2.extended_to(local_def, terminator.source_info.span));
-            } else {
-                // non-local crate
-                self.3
-                    .entry(*def_id)
-                    .or_default()
-                    .push(terminator.source_info.span);
+                // if they're local, visit them too..
+                self.call_graph_visitor.to_visit.push(local_def);
             }
         }
 

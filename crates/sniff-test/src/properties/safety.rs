@@ -2,7 +2,7 @@ use std::fmt::Display;
 
 use regex::Regex;
 use rustc_ast::UnOp;
-use rustc_hir::ExprKind;
+use rustc_hir::{ExprKind, def_id::LocalDefId};
 use rustc_middle::ty::TyCtxt;
 use rustc_type_ir::TyKind;
 
@@ -11,7 +11,6 @@ use crate::{
     annotations::PropertyViolation,
     check::LocalError,
     properties::{FoundAxiom, Property},
-    reachability::LocallyReachable,
 };
 
 #[derive(Debug, Clone, Copy)]
@@ -57,9 +56,9 @@ impl Property for SafetyProperty {
     fn additional_check<'tcx>(
         &self,
         tcx: TyCtxt<'tcx>,
-        fn_def: LocallyReachable, // TODO: change to fn_def
+        fn_def: LocalDefId, // TODO: change to fn_def
     ) -> Result<(), LocalError<'tcx, Self>> {
-        match tcx.fn_sig(fn_def.reach).skip_binder().safety() {
+        match tcx.fn_sig(fn_def).skip_binder().safety() {
             rustc_hir::Safety::Safe => Err(LocalError::FnDefShouldHaveKeyword {
                 fn_def,
                 needed_keyword: "unsafe",
