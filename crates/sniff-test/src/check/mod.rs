@@ -86,7 +86,7 @@ pub fn check_crate_for_property<P: Property>(
 
     stats.entrypoints = entry.len();
     let callgraph = reachability::build_callgraph(tcx, entry);
-    let reachable = callgraph.local_reachable();
+    let reachable = callgraph.local_reachable(tcx);
     let mut local_errors = Vec::new();
 
     log::info!(

@@ -145,12 +145,18 @@ impl CallGraph {
             .map(|err| self.with_reachability_from_entry(err))
     }
 
-    pub fn local_reachable(&self) -> Vec<LocalDefId> {
-        self.data
+    pub fn local_reachable(&self, tcx: TyCtxt) -> Vec<LocalDefId> {
+        let mut reachable: Vec<LocalDefId> = self
+            .data
             .node_weights()
             .copied()
             .filter_map(DefId::as_local)
-            .collect()
+            .collect();
+
+        // Sort by def path string to enforce consistent order
+        reachable.sort_by_key(|local_def| tcx.def_path_debug_str(local_def.to_def_id()));
+
+        reachable
     }
 }
 
