@@ -5,6 +5,7 @@ use crate::check::LocalError;
 use regex::Regex;
 use rustc_hir::def_id::LocalDefId;
 use rustc_hir::intravisit::{self, Visitor};
+use rustc_macros::{Decodable, Encodable};
 use rustc_middle::{
     hir::nested_filter,
     ty::{TyCtxt, TypeckResults},
@@ -64,7 +65,7 @@ pub struct FoundAxiom<'tcx, A: Axiom> {
     pub span: rustc_span::Span,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Encodable, Decodable)]
 pub struct UnjustifiedAxiom {
     pub name: String,
     pub span: rustc_span::Span,

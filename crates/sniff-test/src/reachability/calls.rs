@@ -7,12 +7,15 @@ use crate::annotations::{parse_fn_def, toml::TomlAnnotation};
 use crate::properties::Property;
 
 use rustc_hir::def_id::DefId;
+use rustc_macros::{Decodable, Encodable};
 use rustc_middle::ty::TyCtxt;
 use rustc_span::Span;
 
-#[derive(Debug)]
-pub struct CallsWObligations {
-    pub call_to: DefId,
+pub type CallsWObligations = GenericCallsWObligations<DefId>;
+
+#[derive(Debug, Encodable, Decodable)]
+pub struct GenericCallsWObligations<DefIdRepr> {
+    pub call_to: DefIdRepr,
     pub obligation: Obligation,
     pub from_spans: Vec<Span>,
 }

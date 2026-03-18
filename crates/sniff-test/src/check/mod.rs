@@ -1,12 +1,14 @@
-use std::collections::HashMap;
+use std::{collections::HashMap, marker::PhantomData};
 
 use crate::{
-    annotations::{self, DefAnnotation, parse_expr, toml::TomlAnnotation},
+    annotations::{self, DefAnnotation, Obligation, parse_expr, toml::TomlAnnotation},
     properties::{self, FoundAxiom, Property, UnjustifiedAxiom},
-    reachability::{self, CallsWObligations},
+    reachability::{self, CallsWObligations, GenericCallsWObligations},
 };
-use rustc_hir::def_id::{DefId, LOCAL_CRATE, LocalDefId};
+use rustc_hir::def_id::{DefId, DefPathHash, LOCAL_CRATE, LocalDefId};
+use rustc_macros::{Decodable, Encodable};
 use rustc_middle::ty::TyCtxt;
+use rustc_session::StableCrateId;
 use rustc_span::Span;
 
 pub mod err;
@@ -157,31 +159,171 @@ pub fn check_crate_for_property<P: Property>(
     Ok(stats)
 }
 
-pub enum LocalError<P: Property> {
+#[derive(Encodable, Decodable, Debug)]
+pub struct SerializableDefId(DefPathHash, StableCrateId);
+
+impl SerializableDefId {
+    pub fn from_def_id(def_id: DefId, tcx: TyCtxt) -> Self {
+        SerializableDefId(tcx.def_path_hash(def_id), tcx.stable_crate_id(def_id.krate))
+    }
+
+    pub fn to_def_id(&self, tcx: TyCtxt) -> DefId {
+        tcx.def_path_hash_to_def_id_extern(self.0, self.1)
+    }
+}
+
+type SerializableError<P> = GenericError<SerializableDefId, P>;
+
+#[derive(Encodable, Decodable)]
+pub enum GenericError<DefIdRepr, P: Property> {
     Basic {
-        func: DefId,
-        _property: P,
+        func: DefIdRepr,
         unjustified_axioms: Vec<UnjustifiedAxiom>,
-        unjustified_calls: Vec<CallsWObligations>,
+        unjustified_calls: Vec<GenericCallsWObligations<DefIdRepr>>,
+        property: PhantomData<P>,
     },
     Trait {
-        func_has_obligations: DefId,
-        inconsistent_w_trait: DefId,
+        func_has_obligations: DefIdRepr,
+        inconsistent_w_trait: DefIdRepr,
     },
     CallMissedObligations {
-        func: DefId,
+        func: DefIdRepr,
         callsite_comment: String,
         callsite_span: Span,
         obligations: Vec<String>,
     },
     FnDefShouldHaveKeyword {
-        fn_def: DefId,
-        needed_keyword: &'static str,
+        fn_def: DefIdRepr,
+        needed_keyword: String,
     },
 }
 
+#[derive(Debug, Decodable, Encodable)]
+#[allow(dead_code)]
+pub struct SerializableCallsWObligations {
+    pub call_to: SerializableDefId,
+    pub obligation: Obligation,
+    pub from_spans: Vec<Span>,
+}
+
+impl<P: Property> SerializableError<P> {
+    pub fn into_local(self, tcx: TyCtxt) -> LocalError<P> {
+        match self {
+            Self::Basic {
+                func,
+                unjustified_axioms,
+                unjustified_calls,
+                property,
+            } => LocalError::Basic {
+                func: func.to_def_id(tcx),
+                unjustified_axioms,
+                unjustified_calls: to_local_calls(unjustified_calls, tcx),
+                property,
+            },
+            Self::Trait {
+                func_has_obligations,
+                inconsistent_w_trait,
+            } => LocalError::Trait {
+                func_has_obligations: func_has_obligations.to_def_id(tcx),
+                inconsistent_w_trait: inconsistent_w_trait.to_def_id(tcx),
+            },
+            Self::CallMissedObligations {
+                func,
+                callsite_comment,
+                callsite_span,
+                obligations,
+            } => LocalError::CallMissedObligations {
+                func: func.to_def_id(tcx),
+                callsite_comment,
+                callsite_span,
+                obligations,
+            },
+            Self::FnDefShouldHaveKeyword {
+                fn_def,
+                needed_keyword,
+            } => LocalError::FnDefShouldHaveKeyword {
+                fn_def: fn_def.to_def_id(tcx),
+                needed_keyword,
+            },
+        }
+    }
+}
+
 impl<P: Property> LocalError<P> {
-    pub fn func(&self) -> &DefId {
+    pub fn into_serializable(self, tcx: TyCtxt) -> SerializableError<P> {
+        match self {
+            Self::Basic {
+                func,
+                unjustified_axioms,
+                unjustified_calls,
+                property,
+            } => SerializableError::Basic {
+                func: SerializableDefId::from_def_id(func, tcx),
+                unjustified_axioms,
+                unjustified_calls: from_local_calls(unjustified_calls, tcx),
+                property,
+            },
+            Self::Trait {
+                func_has_obligations,
+                inconsistent_w_trait,
+            } => SerializableError::Trait {
+                func_has_obligations: SerializableDefId::from_def_id(func_has_obligations, tcx),
+                inconsistent_w_trait: SerializableDefId::from_def_id(inconsistent_w_trait, tcx),
+            },
+            Self::CallMissedObligations {
+                func,
+                callsite_comment,
+                callsite_span,
+                obligations,
+            } => SerializableError::CallMissedObligations {
+                func: SerializableDefId::from_def_id(func, tcx),
+                callsite_comment,
+                callsite_span,
+                obligations,
+            },
+            Self::FnDefShouldHaveKeyword {
+                fn_def,
+                needed_keyword,
+            } => SerializableError::FnDefShouldHaveKeyword {
+                fn_def: SerializableDefId::from_def_id(fn_def, tcx),
+                needed_keyword,
+            },
+        }
+    }
+}
+
+pub fn to_local_calls(
+    serializable: Vec<GenericCallsWObligations<SerializableDefId>>,
+    tcx: TyCtxt,
+) -> Vec<CallsWObligations> {
+    serializable
+        .into_iter()
+        .map(|serializable| CallsWObligations {
+            call_to: serializable.call_to.to_def_id(tcx),
+            obligation: serializable.obligation,
+            from_spans: serializable.from_spans,
+        })
+        .collect()
+}
+
+pub fn from_local_calls(
+    local: Vec<CallsWObligations>,
+    tcx: TyCtxt,
+) -> Vec<GenericCallsWObligations<SerializableDefId>> {
+    local
+        .into_iter()
+        .map(|local| GenericCallsWObligations {
+            call_to: SerializableDefId::from_def_id(local.call_to, tcx),
+            obligation: local.obligation,
+            from_spans: local.from_spans,
+        })
+        .collect()
+}
+
+pub type LocalError<P> = GenericError<DefId, P>;
+
+impl<DefIdRepr, P: Property> GenericError<DefIdRepr, P> {
+    pub fn func(&self) -> &DefIdRepr {
         match self {
             Self::Basic { func, .. }
             | Self::CallMissedObligations { func, .. }
@@ -242,9 +384,9 @@ fn check_function_for_property<P: Property>(
         // Unjustified issues, report them!!
         Err(LocalError::Basic {
             func: func.to_def_id(),
-            _property: property,
             unjustified_axioms,
             unjustified_calls,
+            property: PhantomData,
         })
     }
 }

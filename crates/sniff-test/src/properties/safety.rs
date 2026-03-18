@@ -61,7 +61,7 @@ impl Property for SafetyProperty {
         match tcx.fn_sig(fn_def).skip_binder().safety() {
             rustc_hir::Safety::Safe => Err(LocalError::FnDefShouldHaveKeyword {
                 fn_def: fn_def.to_def_id(),
-                needed_keyword: "unsafe",
+                needed_keyword: "unsafe".to_string(),
             }),
             rustc_hir::Safety::Unsafe => Ok(()),
         }

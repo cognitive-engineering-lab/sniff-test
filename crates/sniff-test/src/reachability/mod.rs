@@ -3,6 +3,6 @@ mod calls;
 mod entry;
 mod reach;
 
-pub use calls::{CallsWObligations, find_calls_w_obligations};
+pub use calls::{CallsWObligations, GenericCallsWObligations, find_calls_w_obligations};
 pub use entry::analysis_entry_points;
 pub use reach::{CallGraph, Reachability, WithReachability, build_callgraph};

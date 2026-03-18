@@ -31,7 +31,7 @@ fn report_error<P: Property>(
     let fn_name = tcx.def_path_str(*error.func());
 
     match error {
-        LocalError::Basic { func: _, _property, unjustified_axioms, unjustified_calls } => {
+        LocalError::Basic { func: _, unjustified_axioms, unjustified_calls, .. } => {
             let mut diag = dcx.struct_span_err(
                 def_span,
                 summary::summary_string::<P>(&fn_name, &unjustified_axioms, &unjustified_calls),
