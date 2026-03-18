@@ -147,48 +147,54 @@ struct BodyVisitor<'tcx, 'm>(
     &'m mut HashMap<DefId, Vec<Span>>,
 );
 
-enum TyResult {
-    ContainsDyn,
-    ContainsFuncPointer,
-}
-
-struct ContainsTyVisitor;
-
 use crate::rustc_type_ir::TypeSuperVisitable;
-impl<'tcx> rustc_type_ir::TypeVisitor<TyCtxt<'tcx>> for ContainsTyVisitor {
-    type Result = std::ops::ControlFlow<Option<(TyResult, rustc_middle::ty::Ty<'tcx>)>>;
-    fn visit_ty(&mut self, t: <TyCtxt<'tcx> as rustc_type_ir::Interner>::Ty) -> Self::Result {
-        match t.kind() {
-            rustc_middle::ty::TyKind::FnPtr(..) => {
-                std::ops::ControlFlow::Break(Some((TyResult::ContainsFuncPointer, t)))
-            }
-            rustc_middle::ty::TyKind::Dynamic(..) => {
-                std::ops::ControlFlow::Break(Some((TyResult::ContainsDyn, t)))
-            }
-            rustc_middle::ty::TyKind::Closure(..) => {
-                // no need to check the return value / body of closures, we do that already
-                // TODO: do we?
-                std::ops::ControlFlow::Continue(())
-            }
-            _ => t.super_visit_with(self),
-        }
-    }
-}
 
-#[allow(clippy::to_string_in_format_args)]
-fn warn_if_ty_limitation(ty: rustc_middle::ty::Ty, def_id: DefId) {
-    if let std::ops::ControlFlow::Break(Some((warn_about, in_ty))) = ContainsTyVisitor.visit_ty(ty)
-    {
-        let issue = match warn_about {
-            TyResult::ContainsDyn => "dynamic trait object",
-            TyResult::ContainsFuncPointer => "function pointer",
-        };
+#[allow(clippy::to_string_in_format_args)] // Using `to_string` here actually results in better debug output
+/// NOTE: Does not recursively visit `ty`, so expects that callers are handling that.
+fn warn_if_ty_limitation(ty: rustc_middle::ty::Ty, in_def_id: DefId) {
+    let issue = match ty.kind() {
+        rustc_type_ir::TyKind::Dynamic(..) => Some("dynamic trait object"),
+        rustc_type_ir::TyKind::FnPtr(..) => Some("function pointer"),
+        _ => None,
+    };
 
+    if let Some(issue) = issue {
         println!(
-            "WARN: {def_id:?} uses the type `{}` which is a {issue}. sniff-test's analysis currently cannot track calls through these constructs.",
-            in_ty.to_string()
+            "WARN: {in_def_id:?} uses the type `{}` which is a {issue}. sniff-test's analysis currently cannot track calls through these constructs.",
+            ty.to_string()
         );
     }
+}
+
+struct RecursiveTypeVisitor<'a, 'tcx>(&'a mut Vec<&'tcx DefId>, DefId);
+
+impl<'tcx> rustc_type_ir::TypeVisitor<TyCtxt<'tcx>> for RecursiveTypeVisitor<'_, 'tcx> {
+    type Result = std::ops::ControlFlow<()>;
+    fn visit_ty(&mut self, t: <TyCtxt<'tcx> as rustc_type_ir::Interner>::Ty) -> Self::Result {
+        warn_if_ty_limitation(t, self.1);
+
+        if let TyKind::Closure(b, _c) = t.kind()
+        // no need to check the return value / body of closures, we do that already
+        // TODO: do we?
+        // TODO: what are the closure args (_c) used for here?
+        {
+            println!("contains closure {b:?}");
+            self.0.push(b);
+        }
+
+        t.super_visit_with(self)
+    }
+}
+
+/// Recursively finds all closures contained in a type.
+/// Also warns if there are any limitations on what is currently supported with the
+/// contained types (e.g. fn pointers or dynamic dispatch).
+fn recursive_contained_closures(ty: rustc_middle::ty::Ty<'_>, in_def_id: DefId) -> Vec<&DefId> {
+    let mut closures = Vec::new();
+    println!("big ty is {}", ty.to_string());
+    println!("big ty aka {:?}", ty);
+    let _ = RecursiveTypeVisitor(&mut closures, in_def_id).visit_ty(ty);
+    closures
 }
 
 fn generic_closures<'c>(
@@ -196,20 +202,13 @@ fn generic_closures<'c>(
     generics: &'c rustc_middle::ty::List<GenericArg<'_>>,
 ) -> impl Iterator<Item = &'c DefId> {
     let generics = generics.iter().collect::<Vec<_>>();
-    // println!("all generics is {:?}", generics);
-    // generics.pop();
-    // println!("trimmed generics is {:?}", generics);
-    generics.into_iter().filter_map(move |generic| {
-        if let GenericArgKind::Type(ty) = generic.kind() {
-            warn_if_ty_limitation(ty, on_fn);
-            if let TyKind::Closure(b, _c) = ty.kind()
-            // TODO: what are the closure args used for here?
-            {
-                return Some(b);
-            }
-        }
 
-        None
+    generics.into_iter().flat_map(move |generic| {
+        if let GenericArgKind::Type(ty) = generic.kind() {
+            recursive_contained_closures(ty, on_fn)
+        } else {
+            Vec::new()
+        }
     })
 }
 
