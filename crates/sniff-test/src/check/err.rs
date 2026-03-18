@@ -1,6 +1,6 @@
 use crate::{
     check::LocalError,
-    properties::FoundAxiom,
+    properties::UnjustifiedAxiom,
     reachability::{Reachability, WithReachability},
 };
 use itertools::Itertools;
@@ -10,10 +10,10 @@ use rustc_span::ErrorGuaranteed;
 
 use crate::{properties::Property, reachability::CallsWObligations};
 
-pub fn report_errors<'tcx, P: Property>(
-    tcx: TyCtxt<'tcx>,
+pub fn report_errors<P: Property>(
+    tcx: TyCtxt,
     _property: P,
-    errors: impl IntoIterator<Item = WithReachability<LocalError<'tcx, P>>>,
+    errors: impl IntoIterator<Item = WithReachability<LocalError<P>>>,
 ) -> ErrorGuaranteed {
     errors
         .into_iter()
@@ -22,16 +22,16 @@ pub fn report_errors<'tcx, P: Property>(
         .expect("don't call this on empty errors")
 }
 
-fn report_error<'tcx, P: Property>(
-    tcx: TyCtxt<'tcx>,
-    WithReachability(error, reachabilty): WithReachability<LocalError<'tcx, P>>,
+fn report_error<P: Property>(
+    tcx: TyCtxt,
+    WithReachability(error, reachabilty): WithReachability<LocalError<P>>,
 ) -> ErrorGuaranteed {
     let dcx = tcx.dcx();
     let def_span = tcx.def_span(*error.func());
     let fn_name = tcx.def_path_str(*error.func());
 
     match error {
-        LocalError::Basic { tcx, func: _, _property, unjustified_axioms, unjustified_calls } => {
+        LocalError::Basic { func: _, _property, unjustified_axioms, unjustified_calls } => {
             let mut diag = dcx.struct_span_err(
                 def_span,
                 summary::summary_string::<P>(&fn_name, &unjustified_axioms, &unjustified_calls),
@@ -71,10 +71,7 @@ fn report_error<'tcx, P: Property>(
     }
 }
 
-fn extend_diag_axiom<'tcx, P: Property>(
-    diag: Diag<'tcx>,
-    axiom: FoundAxiom<'tcx, P::Axiom>,
-) -> Diag<'tcx> {
+fn extend_diag_axiom<P: Property>(diag: Diag, axiom: UnjustifiedAxiom<P::Axiom>) -> Diag {
     // TODO: add notes about the known requirements
     diag.with_span_note(axiom.span, format!("{} here", axiom.axiom))
 }
@@ -110,12 +107,12 @@ fn reachability_str(fn_name: &str, tcx: TyCtxt, reachable: &Reachability) -> Str
 mod summary {
     use itertools::Itertools;
 
-    use crate::properties::{FoundAxiom, Property};
+    use crate::properties::{Property, UnjustifiedAxiom};
     use crate::reachability::CallsWObligations;
 
     pub fn summary_string<P: Property>(
         fn_name: &str,
-        axioms: &[FoundAxiom<'_, P::Axiom>],
+        axioms: &[UnjustifiedAxiom<P::Axiom>],
         calls: &[CallsWObligations],
     ) -> String {
         let axiom_summary = axiom_summary::<P>(axioms);
@@ -142,7 +139,7 @@ mod summary {
         ))
     }
 
-    fn axiom_summary<P: Property>(axioms: &[FoundAxiom<'_, P::Axiom>]) -> Option<String> {
+    fn axiom_summary<P: Property>(axioms: &[UnjustifiedAxiom<P::Axiom>]) -> Option<String> {
         let count = axioms.len();
         let kind = P::property_name();
         let s = match count {

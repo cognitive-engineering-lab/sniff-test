@@ -84,13 +84,13 @@ pub struct ExpressionAnnotation {
 }
 
 impl ExpressionAnnotation {
-    pub fn satisfies_obligation<'tcx, P: Property>(
+    pub fn satisfies_obligation<P: Property>(
         &self,
         obligation: &Obligation,
         call_to: DefId,
         from_span: Span,
         in_fn: &LocalDefId,
-    ) -> Result<(), LocalError<'tcx, P>> {
+    ) -> Result<(), LocalError<P>> {
         match obligation {
             Obligation::ConsiderProperty => Ok(()),
             Obligation::ConsiderConditions(conditions) => {
@@ -108,7 +108,7 @@ impl ExpressionAnnotation {
                         .map(|a| &a.node.name)
                         .collect::<Vec<&String>>();
                     Err(LocalError::CallMissedObligations {
-                        func: *in_fn,
+                        func: in_fn.to_def_id(),
                         callsite_comment: self.text.clone(),
                         callsite_span: from_span,
                         obligations: names.into_iter().cloned().collect(),

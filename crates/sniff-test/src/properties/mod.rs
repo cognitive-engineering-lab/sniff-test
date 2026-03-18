@@ -38,11 +38,7 @@ pub trait Property: Debug + Copy + 'static {
     ) -> Vec<FoundAxiom<'tcx, Self::Axiom>>;
 
     /// An additional check to perform on all function defs that are annotated as having this property.
-    fn additional_check<'tcx>(
-        &self,
-        _tcx: TyCtxt<'tcx>,
-        _fn_def: LocalDefId,
-    ) -> Result<(), LocalError<'tcx, Self>> {
+    fn additional_check(&self, _tcx: TyCtxt, _fn_def: LocalDefId) -> Result<(), LocalError<Self>> {
         Ok(())
     }
 }
@@ -65,6 +61,12 @@ pub trait Axiom: Display + Debug {
 pub struct FoundAxiom<'tcx, A: Axiom> {
     pub axiom: A,
     pub found_in: &'tcx rustc_hir::Expr<'tcx>,
+    pub span: rustc_span::Span,
+}
+
+#[derive(Debug, Clone)]
+pub struct UnjustifiedAxiom<A: Axiom> {
+    pub axiom: A,
     pub span: rustc_span::Span,
 }
 

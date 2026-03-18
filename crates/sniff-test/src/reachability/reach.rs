@@ -120,10 +120,10 @@ impl CallGraph {
         Reachability { through }
     }
 
-    fn with_reachability_from_entry<'tcx, P: Property>(
+    fn with_reachability_from_entry<P: Property>(
         &self,
-        t: LocalError<'tcx, P>,
-    ) -> WithReachability<LocalError<'tcx, P>> {
+        t: LocalError<P>,
+    ) -> WithReachability<LocalError<P>> {
         // Get the reachability info from any entry point to this error.
         let reachability = self.reachability(
             &self
@@ -131,15 +131,15 @@ impl CallGraph {
                 .iter()
                 .map(|local| local.to_def_id())
                 .collect::<Vec<_>>(),
-            t.func().to_def_id(),
+            *t.func(),
         );
         WithReachability(t, reachability)
     }
 
-    pub fn add_reachability<'tcx, P: Property>(
+    pub fn add_reachability<P: Property>(
         &self,
-        errors: impl IntoIterator<Item = LocalError<'tcx, P>>,
-    ) -> impl Iterator<Item = WithReachability<LocalError<'tcx, P>>> {
+        errors: impl IntoIterator<Item = LocalError<P>>,
+    ) -> impl Iterator<Item = WithReachability<LocalError<P>>> {
         errors
             .into_iter()
             .map(|err| self.with_reachability_from_entry(err))

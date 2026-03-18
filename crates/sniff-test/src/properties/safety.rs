@@ -53,14 +53,14 @@ impl Property for SafetyProperty {
         vec![]
     }
 
-    fn additional_check<'tcx>(
+    fn additional_check(
         &self,
-        tcx: TyCtxt<'tcx>,
+        tcx: TyCtxt,
         fn_def: LocalDefId, // TODO: change to fn_def
-    ) -> Result<(), LocalError<'tcx, Self>> {
+    ) -> Result<(), LocalError<Self>> {
         match tcx.fn_sig(fn_def).skip_binder().safety() {
             rustc_hir::Safety::Safe => Err(LocalError::FnDefShouldHaveKeyword {
-                fn_def,
+                fn_def: fn_def.to_def_id(),
                 needed_keyword: "unsafe",
             }),
             rustc_hir::Safety::Unsafe => Ok(()),

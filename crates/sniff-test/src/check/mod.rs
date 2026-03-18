@@ -2,7 +2,7 @@ use std::collections::HashMap;
 
 use crate::{
     annotations::{self, DefAnnotation, parse_expr, toml::TomlAnnotation},
-    properties::{self, FoundAxiom, Property},
+    properties::{self, FoundAxiom, Property, UnjustifiedAxiom},
     reachability::{self, CallsWObligations},
 };
 use rustc_hir::def_id::{DefId, LOCAL_CRATE, LocalDefId};
@@ -48,7 +48,7 @@ pub fn check_crate_for_property<P: Property>(
     tcx: TyCtxt<'_>,
     property: P,
     is_dependency: bool,
-) -> Result<CheckStats, (CallGraph, Vec<LocalError<'_, P>>)> {
+) -> Result<CheckStats, (CallGraph, Vec<LocalError<P>>)> {
     // Parse TOML annotations from file
     let toml_path = "sniff-test.toml";
     let toml_annotations = match TomlAnnotation::from_file(toml_path) {
@@ -157,32 +157,31 @@ pub fn check_crate_for_property<P: Property>(
     Ok(stats)
 }
 
-pub enum LocalError<'tcx, P: Property> {
+pub enum LocalError<P: Property> {
     Basic {
-        tcx: TyCtxt<'tcx>,
-        func: LocalDefId,
+        func: DefId,
         _property: P,
-        unjustified_axioms: Vec<FoundAxiom<'tcx, P::Axiom>>,
+        unjustified_axioms: Vec<UnjustifiedAxiom<P::Axiom>>,
         unjustified_calls: Vec<CallsWObligations>,
     },
     Trait {
-        func_has_obligations: LocalDefId,
+        func_has_obligations: DefId,
         inconsistent_w_trait: DefId,
     },
     CallMissedObligations {
-        func: LocalDefId,
+        func: DefId,
         callsite_comment: String,
         callsite_span: Span,
         obligations: Vec<String>,
     },
     FnDefShouldHaveKeyword {
-        fn_def: LocalDefId,
+        fn_def: DefId,
         needed_keyword: &'static str,
     },
 }
 
-impl<P: Property> LocalError<'_, P> {
-    pub fn func(&self) -> &LocalDefId {
+impl<P: Property> LocalError<P> {
+    pub fn func(&self) -> &DefId {
         match self {
             Self::Basic { func, .. }
             | Self::CallMissedObligations { func, .. }
@@ -195,20 +194,20 @@ impl<P: Property> LocalError<'_, P> {
     }
 }
 
-fn check_function_for_property<'tcx, P: Property>(
-    tcx: TyCtxt<'tcx>,
+fn check_function_for_property<P: Property>(
+    tcx: TyCtxt,
     toml_annotations: &TomlAnnotation,
     func: LocalDefId,
     func_calls_to: &HashMap<DefId, Vec<Span>>,
     property: P,
     stats: &mut CheckStats,
-) -> Result<(), LocalError<'tcx, P>> {
+) -> Result<(), LocalError<P>> {
     // Look for all axioms within this function
     let axioms = properties::find_axioms(tcx, &func, property).collect::<Vec<_>>();
     log::debug!("fn {func:?} has raw axioms {axioms:#?}");
     let unjustified_axioms = axioms
         .into_iter()
-        .filter(only_unjustified_axioms(tcx, property))
+        .filter_map(only_unjustified_axioms(tcx, property))
         .collect::<Vec<_>>();
 
     // Find all calls that have obligations.
@@ -242,8 +241,7 @@ fn check_function_for_property<'tcx, P: Property>(
     } else {
         // Unjustified issues, report them!!
         Err(LocalError::Basic {
-            tcx,
-            func,
+            func: func.to_def_id(),
             _property: property,
             unjustified_axioms,
             unjustified_calls,
@@ -251,14 +249,14 @@ fn check_function_for_property<'tcx, P: Property>(
     }
 }
 
-fn check_consistent_w_trait_requirements<'tcx, P: Property>(
-    tcx: TyCtxt<'tcx>,
+fn check_consistent_w_trait_requirements<P: Property>(
+    tcx: TyCtxt,
     func: LocalDefId,
     annotation: &DefAnnotation,
     t: DefId,
     property: P,
     toml_annotations: &TomlAnnotation,
-) -> Result<(), LocalError<'tcx, P>> {
+) -> Result<(), LocalError<P>> {
     let name = tcx.item_ident(func);
 
     let trait_fn = tcx
@@ -274,7 +272,7 @@ fn check_consistent_w_trait_requirements<'tcx, P: Property>(
         Ok(())
     } else {
         Err(LocalError::Trait {
-            func_has_obligations: func,
+            func_has_obligations: func.to_def_id(),
             inconsistent_w_trait: t,
         })
     }
@@ -298,25 +296,32 @@ fn is_impl_of_trait(tcx: TyCtxt, owner: LocalDefId) -> Option<DefId> {
 fn only_unjustified_axioms<'tcx, P: Property>(
     tcx: TyCtxt<'tcx>,
     property: P,
-) -> impl Fn(&FoundAxiom<'tcx, P::Axiom>) -> bool {
+) -> impl Fn(FoundAxiom<'tcx, P::Axiom>) -> Option<UnjustifiedAxiom<P::Axiom>> {
     move |axiom| {
         log::debug!("getting seeing if axiom {axiom:?} has justification");
-        parse_expr(tcx, axiom.found_in, property).is_none()
+        if parse_expr(tcx, axiom.found_in, property).is_none() {
+            Some(UnjustifiedAxiom {
+                axiom: axiom.axiom,
+                span: axiom.span,
+            })
+        } else {
+            None
+        }
     }
 }
 
-enum JustificationStatus<'tcx, P: Property> {
+enum JustificationStatus<P: Property> {
     AllCallsJustified,
     SomeNotJustified(CallsWObligations),
-    ImproperJustification(LocalError<'tcx, P>),
+    ImproperJustification(LocalError<P>),
 }
 
 /// Filter a set of calls to a function for only those which are not property justified.
-fn only_unjustified_callsites<'tcx, P: Property>(
-    tcx: TyCtxt<'tcx>,
+fn only_unjustified_callsites<P: Property>(
+    tcx: TyCtxt,
     in_fn: LocalDefId,
     property: P,
-) -> impl Fn(CallsWObligations) -> JustificationStatus<'tcx, P> {
+) -> impl Fn(CallsWObligations) -> JustificationStatus<P> {
     move |mut calls| {
         let mut new_spans = Vec::new();
 
