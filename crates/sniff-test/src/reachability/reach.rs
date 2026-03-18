@@ -8,7 +8,7 @@ use crate::rustc_middle::mir::visit::Visitor;
 use petgraph::graph::NodeIndex;
 use petgraph::visit::EdgeRef;
 use rustc_hir::def_id::{DefId, LocalDefId};
-use rustc_macros::{Decodable, Encodable};
+use rustc_macros::{Decodable, Encodable, TyEncodable};
 use rustc_middle::mir::{Operand, TerminatorKind};
 use rustc_middle::ty::{TyCtxt, TyKind};
 use rustc_span::Span;
@@ -161,7 +161,7 @@ impl CallGraph {
     }
 }
 
-#[derive(Encodable, Decodable)]
+#[derive(TyEncodable, Decodable)]
 pub struct Reachability {
     through: Vec<(DefId, Span)>,
 }
@@ -183,7 +183,7 @@ impl Reachability {
     }
 }
 
-#[derive(Decodable, Encodable)]
+#[derive(Decodable, TyEncodable)]
 pub struct WithReachability<T>(pub T, pub Reachability);
 
 /// Get an iterator over all locally reachable function definitions from the given `entry_points`.
