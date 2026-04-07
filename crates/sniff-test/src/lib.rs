@@ -155,12 +155,7 @@ impl RustcPlugin for PrintAllItemsPlugin {
         log::debug!("modifying cargo args");
         cargo.args(&args.cargo_args);
 
-        // if args.release {
-        //     cargo.args(["--release"]);
-        //     panic!(
-        //         "release can inline some functions, so not sure if we want to allow this yet..."
-        //     );
-        // }
+        cargo.args(["--release"]);
 
         // Register the sniff_tool
         let existing = std::env::var("RUSTFLAGS").unwrap_or_default();
@@ -178,11 +173,26 @@ impl RustcPlugin for PrintAllItemsPlugin {
     // for the arguments given to us by rustc_plugin.
     fn run(
         self,
-        compiler_args: Vec<String>,
+        mut compiler_args: Vec<String>,
         plugin_args: Self::Args,
     ) -> rustc_interface::interface::Result<()> {
         // Set the args so we can access them from anywhere...
         *ARGS.lock().unwrap() = Some(plugin_args.clone());
+
+        // Add the rustc flags that cargo's --release adds if they're not already there...
+        let release_flags = [
+            // "opt-level=3", // except opt-level, as I don't think we want the code being optimized
+            "debug-assertions=no",
+            "overflow-checks=no",
+            "debuginfo=0",
+        ];
+
+        for flag in release_flags {
+            if !compiler_args.contains(&flag.to_string()) {
+                compiler_args.push("-C".to_string());
+                compiler_args.push(flag.to_string());
+            }
+        }
 
         let mut callbacks = PrintAllItemsCallbacks {
             args: Some(plugin_args.clone()),

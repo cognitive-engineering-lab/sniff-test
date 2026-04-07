@@ -1,0 +1,10 @@
+# -d trust
+[package]
+name = "pass_debug_issues"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+sniff-test-attrs = { path = "../../../crates/sniff-test-attrs" }
+
+[workspace]

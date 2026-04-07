@@ -1,0 +1,26 @@
+---
+source: tests/lib.rs
+assertion_line: 172
+---
+exit_code = 0
+stdout = '''
+the  pass_debug_issues   crate passes the sniff test!! 		(stable id [CRATE ID ELIDED]) - local
+'''
+stderr = '''
+warning: unused variable: `x`
+ --> src/main.rs:9:9
+  |
+9 |     let x = 1;
+  |         ^ help: if this is intentional, prefix it with an underscore: `_x`
+  |
+  = note: `#[warn(unused_variables)]` on by default
+
+warning: function `foo` is never used
+ --> src/main.rs:3:11
+  |
+3 | unsafe fn foo(ptr: *const i32) -> i32 {
+  |           ^^^
+  |
+  = note: `#[warn(dead_code)]` on by default
+
+'''
