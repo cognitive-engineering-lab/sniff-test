@@ -183,7 +183,7 @@ impl RustcPlugin for PrintAllItemsPlugin {
 
         // Add the rustc flags that cargo's --release adds if they're not already there...
         let release_flags = [
-            // "opt-level=3", // except opt-level, as I don't think we want the code being optimized
+            "opt-level=0", // except opt-level=3, as I think we want the code fully unoptimized
             "debug-assertions=no",
             "overflow-checks=no",
             "debuginfo=0",
