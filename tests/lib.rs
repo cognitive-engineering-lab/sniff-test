@@ -253,7 +253,7 @@ fn rustc_sniff(file_path: &Path) -> anyhow::Result<SniffTestOutput> {
     // We have to serialize the default plugin args so it knows what to do.
     cmd.env(
         "PLUGIN_ARGS",
-        serde_json::to_string(&sniff_test::SniffTestArgs::default())
+        serde_json::to_string(&sniff_test::SniffTestArgs::rustc_testing_default())
             .expect("default args should be serializeable"),
     );
 

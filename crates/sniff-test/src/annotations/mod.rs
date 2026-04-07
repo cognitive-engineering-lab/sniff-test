@@ -126,7 +126,7 @@ impl ExpressionAnnotation {
             .iter()
             .filter(|condition| {
                 assert!(
-                    ARGS.lock().unwrap().as_ref().unwrap().buzzword_checking,
+                    ARGS.0.lock().unwrap().as_ref().unwrap().buzzword_checking,
                     "not sure how to check properly yet."
                 );
                 !buzzword_satisfied(&text_lower, &condition.node.name)
@@ -203,14 +203,15 @@ impl DefAnnotation {
     /// Whether this function's annotation creates an obligation that it's callers must uphold.
     pub fn creates_obligation(&self) -> Option<Obligation> {
         match &self.local_violation_annotation {
-            PropertyViolation::Conditionally(conditions)
-                if ARGS.lock().unwrap().as_ref().unwrap().fine_grained =>
-            {
-                Some(Obligation::ConsiderConditions(conditions.clone()))
+            PropertyViolation::Conditionally(conditions) => {
+                if ARGS.peep().granularity.force_coarse() {
+                    // If we're forcing coarse, just create a coarse-grained obligation
+                    Some(Obligation::ConsiderProperty)
+                } else {
+                    Some(Obligation::ConsiderConditions(conditions.clone()))
+                }
             }
-            PropertyViolation::Unconditional | PropertyViolation::Conditionally(_) => {
-                Some(Obligation::ConsiderProperty)
-            }
+            PropertyViolation::Unconditional => Some(Obligation::ConsiderProperty),
             PropertyViolation::Never => None,
         }
     }
