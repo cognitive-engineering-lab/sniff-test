@@ -56,11 +56,6 @@ pub struct SniffTestArgs {
     #[arg(short, long)]
     dependencies: DependenciesPosture,
 
-    #[arg(short, long)]
-    /// TODO: LEGACY ARG (i'm keeping it around to be faster, will remove later):
-    /// whether or not dependencies have to have sniff-test formatted code comments.
-    check_dependencies: bool,
-
     #[arg(short, long, default_value = "inferred")]
     /// The granularity at which to check properties.
     ///
@@ -79,7 +74,6 @@ impl SniffTestArgs {
     pub fn rustc_testing_default() -> Self {
         Self {
             dependencies: DependenciesPosture::Trust,
-            check_dependencies: false,
             granularity: CheckingGranularity::Inferred,
             buzzword_checking: true,
             cargo_args: vec![],

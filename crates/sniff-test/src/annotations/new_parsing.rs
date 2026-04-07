@@ -25,9 +25,7 @@ pub fn violation_from_text(
 
             // If we're checking this function's crate and forcing fine-grained checking, but couldn't find
             // the fine-grained conditions, report an error.
-            if (def_id.is_local() || ARGS.peep().check_dependencies)
-                && ARGS.peep().granularity.force_fine()
-            {
+            if def_id.is_local() && ARGS.peep().granularity.force_fine() {
                 let msg = format!(
                     "couldn't determine conditional property violation for {def_id:?} from {source:?} based on text {text:?}",
                 );
@@ -44,9 +42,7 @@ pub fn violation_from_text(
         Err(err_msg) => {
             // Only show errors in the current crate and if we're fine-grained.
             // Otherwise, malformed sniff-test conditions are just interpreted as general violation.
-            if (def_id.is_local() || ARGS.peep().check_dependencies)
-                && ARGS.peep().granularity.force_fine()
-            {
+            if def_id.is_local() && ARGS.peep().granularity.force_fine() {
                 let msg = format!(
                     "malformed conditional property violation for {def_id:?} from {source:?}: {err_msg}",
                 );
