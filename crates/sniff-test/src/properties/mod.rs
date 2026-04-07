@@ -36,6 +36,9 @@ pub trait Property: Debug + Copy + 'static {
         tyck: &TypeckResults,
         expr: &'tcx rustc_hir::Expr,
     ) -> Vec<FoundAxiom<'tcx, Self::Axiom>>;
+    // TODO: why is ^this^ a Vec? conceptually feels like it could be an option,
+    // as we don't recurse into the expr, so it shouldn't be possible for there to be
+    // multiple axioms within the same first-level expr.
 
     /// An additional check to perform on all function defs that are annotated as having this property.
     fn additional_check<'tcx>(
