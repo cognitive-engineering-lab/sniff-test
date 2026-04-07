@@ -3,10 +3,6 @@ source: tests/lib.rs
 ---
 exit_code = 0
 stdout = '''
-big ty is i32
-big ty aka i32
-big ty is T
-big ty aka T/#0
 the       example        crate passes the sniff test!! 		(stable id [CRATE ID ELIDED]) - local
 '''
 stderr = ''

@@ -3,24 +3,6 @@ source: tests/lib.rs
 ---
 exit_code = 1
 stdout = '''
-big ty is {closure@[SNIFF_TEST_DIR]/panics/03_captured_closure.rs:4:23: 4:25}
-big ty aka Closure(DefId(0:7 ~ 03_captured_closure[3f66]::main::{closure#1}), [i8, Binder { value: extern "RustCall" fn(()) -> i32, bound_vars: [] }, (&'{erased} Closure(DefId(0:6 ~ 03_captured_closure[3f66]::main::{closure#0}), [i8, Binder { value: extern "RustCall" fn(()) -> i32, bound_vars: [] }, ()]),)])
-contains closure DefId(0:7 ~ 03_captured_closure[3f66]::main::{closure#1})
-WARN: DefId(0:3 ~ 03_captured_closure[3f66]::calls_f) uses the type `extern "rust-call" fn(()) -> i32` which is a function pointer. sniff-test's analysis currently cannot track calls through these constructs.
-contains closure DefId(0:6 ~ 03_captured_closure[3f66]::main::{closure#0})
-WARN: DefId(0:3 ~ 03_captured_closure[3f66]::calls_f) uses the type `extern "rust-call" fn(()) -> i32` which is a function pointer. sniff-test's analysis currently cannot track calls through these constructs.
-big ty is {closure@[SNIFF_TEST_DIR]/panics/03_captured_closure.rs:3:25: 3:27}
-big ty aka Closure(DefId(0:6 ~ 03_captured_closure[3f66]::main::{closure#0}), [i8, Binder { value: extern "RustCall" fn(()) -> i32, bound_vars: [] }, ()])
-contains closure DefId(0:6 ~ 03_captured_closure[3f66]::main::{closure#0})
-WARN: DefId(2:3981 ~ core[4f7d]::ops::function::Fn::call) uses the type `extern "rust-call" fn(()) -> i32` which is a function pointer. sniff-test's analysis currently cannot track calls through these constructs.
-big ty is ()
-big ty aka ()
-big ty is &str
-big ty aka &'{erased} str
-big ty is impl Fn() -> i32
-big ty aka impl Fn() -> i32/#0
-big ty is ()
-big ty aka ()
 WARN: unable to find def_id for call to Local(HirId(DefId(0:3 ~ 03_captured_closure[3f66]::calls_f).2)) (to check if it is a panic)
 WARN: unable to find def_id for call to Local(HirId(DefId(0:5 ~ 03_captured_closure[3f66]::main).13)) (to check if it is a panic)
 the 03_captured_closure crate FAILED the sniff test
@@ -32,7 +14,7 @@ error: function main::{closure#0} directly contains 1 unjustified panicking axio
 3 |     let panic_closure = || panic!();
   |                         ^^
   |
-  = note: reachable from [main ([SNIFF_TEST_DIR]/panics/03_captured_closure.rs:5:5) -> *main::{closure#0}*]
+  = note: reachable from [main ([SNIFF_TEST_DIR]/panics/03_captured_closure.rs:5:5) -> main::{closure#1} ([SNIFF_TEST_DIR]/panics/03_captured_closure.rs:4:26) -> *main::{closure#0}*]
 note: explicit panic here
  --> [SNIFF_TEST_DIR]/panics/03_captured_closure.rs:3:28
   |

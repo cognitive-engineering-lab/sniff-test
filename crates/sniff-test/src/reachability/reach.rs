@@ -178,11 +178,14 @@ impl<'tcx> rustc_type_ir::TypeVisitor<TyCtxt<'tcx>> for RecursiveTypeVisitor<'_,
         // TODO: do we?
         // TODO: what are the closure args (_c) used for here?
         {
-            println!("contains closure {b:?}");
             self.0.push(b);
-        }
 
-        t.super_visit_with(self)
+            // Don't continue looking at this type, as it might capture other closures and add
+            // extra edges to the call graph that are already captured elsewhere (TODO: explain concretely where)
+            std::ops::ControlFlow::Continue(())
+        } else {
+            t.super_visit_with(self)
+        }
     }
 }
 
@@ -191,8 +194,6 @@ impl<'tcx> rustc_type_ir::TypeVisitor<TyCtxt<'tcx>> for RecursiveTypeVisitor<'_,
 /// contained types (e.g. fn pointers or dynamic dispatch).
 fn recursive_contained_closures(ty: rustc_middle::ty::Ty<'_>, in_def_id: DefId) -> Vec<&DefId> {
     let mut closures = Vec::new();
-    println!("big ty is {}", ty.to_string());
-    println!("big ty aka {:?}", ty);
     let _ = RecursiveTypeVisitor(&mut closures, in_def_id).visit_ty(ty);
     closures
 }
