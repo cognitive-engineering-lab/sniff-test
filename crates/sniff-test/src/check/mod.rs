@@ -161,7 +161,7 @@ pub enum LocalError<P: Property> {
     Basic {
         func: DefId,
         _property: P,
-        unjustified_axioms: Vec<UnjustifiedAxiom<P::Axiom>>,
+        unjustified_axioms: Vec<UnjustifiedAxiom>,
         unjustified_calls: Vec<CallsWObligations>,
     },
     Trait {
@@ -296,12 +296,12 @@ fn is_impl_of_trait(tcx: TyCtxt, owner: LocalDefId) -> Option<DefId> {
 fn only_unjustified_axioms<'tcx, P: Property>(
     tcx: TyCtxt<'tcx>,
     property: P,
-) -> impl Fn(FoundAxiom<'tcx, P::Axiom>) -> Option<UnjustifiedAxiom<P::Axiom>> {
+) -> impl Fn(FoundAxiom<'tcx, P::Axiom>) -> Option<UnjustifiedAxiom> {
     move |axiom| {
         log::debug!("getting seeing if axiom {axiom:?} has justification");
         if parse_expr(tcx, axiom.found_in, property).is_none() {
             Some(UnjustifiedAxiom {
-                axiom: axiom.axiom,
+                name: axiom.axiom.to_string(),
                 span: axiom.span,
             })
         } else {

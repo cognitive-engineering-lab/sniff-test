@@ -65,8 +65,8 @@ pub struct FoundAxiom<'tcx, A: Axiom> {
 }
 
 #[derive(Debug, Clone)]
-pub struct UnjustifiedAxiom<A: Axiom> {
-    pub axiom: A,
+pub struct UnjustifiedAxiom {
+    pub name: String,
     pub span: rustc_span::Span,
 }
 

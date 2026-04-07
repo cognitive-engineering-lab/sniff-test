@@ -41,7 +41,7 @@ fn report_error<P: Property>(
             diag = diag.with_note(reachability_str(&fn_name, tcx, &reachabilty));
 
             for axiom in unjustified_axioms {
-                diag = extend_diag_axiom::<P>(diag, axiom);
+                diag = extend_diag_axiom(diag, axiom);
             }
 
             for calls in unjustified_calls {
@@ -71,9 +71,9 @@ fn report_error<P: Property>(
     }
 }
 
-fn extend_diag_axiom<P: Property>(diag: Diag, axiom: UnjustifiedAxiom<P::Axiom>) -> Diag {
+fn extend_diag_axiom(diag: Diag, axiom: UnjustifiedAxiom) -> Diag {
     // TODO: add notes about the known requirements
-    diag.with_span_note(axiom.span, format!("{} here", axiom.axiom))
+    diag.with_span_note(axiom.span, format!("{} here", axiom.name))
 }
 
 fn extend_diag_calls<'tcx>(
@@ -112,7 +112,7 @@ mod summary {
 
     pub fn summary_string<P: Property>(
         fn_name: &str,
-        axioms: &[UnjustifiedAxiom<P::Axiom>],
+        axioms: &[UnjustifiedAxiom],
         calls: &[CallsWObligations],
     ) -> String {
         let axiom_summary = axiom_summary::<P>(axioms);
@@ -139,7 +139,7 @@ mod summary {
         ))
     }
 
-    fn axiom_summary<P: Property>(axioms: &[UnjustifiedAxiom<P::Axiom>]) -> Option<String> {
+    fn axiom_summary<P: Property>(axioms: &[UnjustifiedAxiom]) -> Option<String> {
         let count = axioms.len();
         let kind = P::property_name();
         let s = match count {
