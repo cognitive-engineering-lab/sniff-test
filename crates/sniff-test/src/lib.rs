@@ -159,7 +159,9 @@ impl RustcPlugin for PrintAllItemsPlugin {
 
         // Register the sniff_tool
         let existing = std::env::var("RUSTFLAGS").unwrap_or_default();
-        cargo.env("RUSTFLAGS", format!("-Zcrate-attr=feature(register_tool) -Zcrate-attr=register_tool(sniff_tool) -Aunused-doc-comments {existing} -Zcrate-attr=feature(custom_inner_attributes)"));
+        // TODO: is disabling all optimizations overkill? it might negate the nice thing we noticed with the
+        // compiler eliding bounds checks if it knows through range analysis that one can never fail.
+        cargo.env("RUSTFLAGS", format!("-Zcrate-attr=feature(register_tool) -Zcrate-attr=register_tool(sniff_tool) -Aunused-doc-comments {existing} -Zcrate-attr=feature(custom_inner_attributes) -Zmir-opt-level=0"));
 
         // Point to the driver binary, not the cargo subcommand binary
         let driver = std::env::current_exe()
