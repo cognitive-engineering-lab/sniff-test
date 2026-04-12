@@ -5,8 +5,9 @@
 use crate::rustc_middle::mir::visit::Visitor;
 use rustc_hir::def_id::{DefId, LOCAL_CRATE, LocalDefId};
 use rustc_middle::mir::{Operand, TerminatorKind};
-use rustc_middle::ty::{TyCtxt, TyKind};
+use rustc_middle::ty::{GenericArg, GenericArgKind, TyCtxt, TyKind};
 use rustc_span::Span;
+use rustc_type_ir::TypeVisitor;
 use std::collections::{HashMap, VecDeque};
 
 #[derive(Debug, Clone)]
@@ -146,6 +147,87 @@ struct BodyVisitor<'tcx, 'm>(
     &'m mut HashMap<DefId, Vec<Span>>,
 );
 
+use crate::rustc_type_ir::TypeSuperVisitable;
+
+#[allow(clippy::to_string_in_format_args)] // Using `to_string` here actually results in better debug output
+/// NOTE: Does not recursively visit `ty`, so expects that callers are handling that.
+fn warn_if_ty_limitation(ty: rustc_middle::ty::Ty, in_def_id: DefId) {
+    let issue = match ty.kind() {
+        rustc_type_ir::TyKind::Dynamic(..) => Some("dynamic trait object"),
+        rustc_type_ir::TyKind::FnPtr(..) => Some("function pointer"),
+        _ => None,
+    };
+
+    if let Some(issue) = issue {
+        println!(
+            "WARN: {in_def_id:?} uses the type `{}` which is a {issue}. sniff-test's analysis currently cannot track calls through these constructs.",
+            ty.to_string()
+        );
+    }
+}
+
+struct RecursiveTypeVisitor<'a, 'tcx>(&'a mut Vec<&'tcx DefId>, DefId);
+
+impl<'tcx> rustc_type_ir::TypeVisitor<TyCtxt<'tcx>> for RecursiveTypeVisitor<'_, 'tcx> {
+    type Result = std::ops::ControlFlow<()>;
+    fn visit_ty(&mut self, t: <TyCtxt<'tcx> as rustc_type_ir::Interner>::Ty) -> Self::Result {
+        warn_if_ty_limitation(t, self.1);
+
+        if let TyKind::Closure(b, _c) = t.kind()
+        // no need to check the return value / body of closures, we do that already
+        // TODO: do we?
+        // TODO: what are the closure args (_c) used for here?
+        {
+            self.0.push(b);
+
+            // Don't continue looking at this type, as it might capture other closures and add
+            // extra edges to the call graph that are already captured elsewhere (TODO: explain concretely where)
+            std::ops::ControlFlow::Continue(())
+        } else {
+            t.super_visit_with(self)
+        }
+    }
+}
+
+/// Recursively finds all closures contained in a type.
+/// Also warns if there are any limitations on what is currently supported with the
+/// contained types (e.g. fn pointers or dynamic dispatch).
+fn recursive_contained_closures(ty: rustc_middle::ty::Ty<'_>, in_def_id: DefId) -> Vec<&DefId> {
+    let mut closures = Vec::new();
+    let _ = RecursiveTypeVisitor(&mut closures, in_def_id).visit_ty(ty);
+    closures
+}
+
+fn generic_closures<'c>(
+    on_fn: DefId,
+    generics: &'c rustc_middle::ty::List<GenericArg<'_>>,
+) -> impl Iterator<Item = &'c DefId> {
+    let generics = generics.iter().collect::<Vec<_>>();
+
+    generics.into_iter().flat_map(move |generic| {
+        if let GenericArgKind::Type(ty) = generic.kind() {
+            recursive_contained_closures(ty, on_fn)
+        } else {
+            Vec::new()
+        }
+    })
+}
+
+impl BodyVisitor<'_, '_> {
+    fn log_call_to(&mut self, def_id: DefId, span: Span) {
+        self.2.calls_to(def_id, span);
+        // TODO: here need to handle non-local reachable
+        // TODO: does this not go into the monomorphized call but the generic function? <- not sure if that's the right terminology
+        if let Some(local_def) = def_id.as_local() {
+            // Doing BFS here to ensure we get the shortest path possible to all reachable items.
+            self.1.push_back(self.2.extended_to(local_def, span));
+        } else {
+            // non-local crate
+            self.3.entry(def_id).or_default().push(span);
+        }
+    }
+}
+
 impl<'tcx> rustc_middle::mir::visit::Visitor<'tcx> for BodyVisitor<'tcx, '_> {
     fn visit_terminator(
         &mut self,
@@ -154,21 +236,13 @@ impl<'tcx> rustc_middle::mir::visit::Visitor<'tcx> for BodyVisitor<'tcx, '_> {
     ) {
         if let TerminatorKind::Call { func, .. } = &terminator.kind
             && let Operand::Constant(box co) = func
-            && let TyKind::FnDef(def_id, _substs) = co.const_.ty().kind()
+            && let TyKind::FnDef(def_id, substs) = co.const_.ty().kind()
         {
-            self.2.calls_to(*def_id, terminator.source_info.span);
-            // TODO: here need to handle non-local reachable
-            if let Some(local_def) = def_id.as_local() {
-                // Doing BFS here to ensure we get the shortest path possible to all reachable items.
-                self.1
-                    .push_back(self.2.extended_to(local_def, terminator.source_info.span));
-            } else {
-                // non-local crate
-                self.3
-                    .entry(*def_id)
-                    .or_default()
-                    .push(terminator.source_info.span);
+            let closures = generic_closures(*def_id, substs);
+            for c in closures {
+                self.log_call_to(*c, terminator.source_info.span);
             }
+            self.log_call_to(*def_id, terminator.source_info.span);
         }
 
         self.super_terminator(terminator, location);

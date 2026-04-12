@@ -10,8 +10,10 @@ use rustc_span::Span;
 pub mod err;
 mod expr;
 
-#[derive(Debug, Default, Clone)]
+#[derive(Debug, Clone)]
 pub struct CheckStats {
+    #[allow(dead_code)]
+    pub property: &'static str,
     pub entrypoints: usize,
     pub total_fns_checked: usize,
     pub w_obligation: usize,
@@ -20,6 +22,17 @@ pub struct CheckStats {
 }
 
 impl CheckStats {
+    pub fn new<P: Property>() -> Self {
+        CheckStats {
+            property: P::property_name(),
+            entrypoints: 0,
+            total_fns_checked: 0,
+            w_obligation: 0,
+            w_no_obligation: 0,
+            calls_checked: 0,
+        }
+    }
+
     pub fn checked_something(&self) -> bool {
         self.entrypoints != 0 || self.total_fns_checked != 0
     }
@@ -45,7 +58,7 @@ pub fn check_crate_for_property<P: Property>(
         }
     };
 
-    let mut stats = CheckStats::default();
+    let mut stats = CheckStats::new::<P>();
     let entry = reachability::analysis_entry_points::<P>(tcx, is_dependency);
 
     // Debug print all our entries and where they are in the src
@@ -179,7 +192,12 @@ fn check_function_for_property<'tcx, P: Property>(
 ) -> Result<(), LocalError<'tcx, P>> {
     // Look for all axioms within this function
     let axioms = properties::find_axioms(tcx, &func, property).collect::<Vec<_>>();
-    log::debug!("fn {:?} has raw axioms {:#?}", func.reach, axioms);
+    log::debug!(
+        "fn {:?} has raw {} axioms {:#?}",
+        func.reach,
+        P::property_name(),
+        axioms
+    );
     let unjustified_axioms = axioms
         .into_iter()
         .filter(only_unjustified_axioms(tcx, property))
