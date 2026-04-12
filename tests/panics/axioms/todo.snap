@@ -1,0 +1,33 @@
+---
+source: tests/lib.rs
+---
+exit_code = 1
+stdout = '''
+the todo crate FAILED the sniff test
+'''
+stderr = '''
+warning: unused variable: `ptr`
+ --> [SNIFF_TEST_DIR]/panics/axioms/todo.rs:3:8
+  |
+3 | fn foo(ptr: &i32) -> i32 {
+  |        ^^^ help: if this is intentional, prefix it with an underscore: `_ptr`
+  |
+  = note: `#[warn(unused_variables)]` on by default
+
+error: function foo directly contains 1 unjustified panicking axiom, but is not annotated panicking
+ --> [SNIFF_TEST_DIR]/panics/axioms/todo.rs:3:1
+  |
+3 | fn foo(ptr: &i32) -> i32 {
+  | ^^^^^^^^^^^^^^^^^^^^^^^^
+  |
+  = note: reachable from [main ([SNIFF_TEST_DIR]/panics/axioms/todo.rs:10:5) -> *foo*]
+note: explicit panic here
+ --> [SNIFF_TEST_DIR]/panics/axioms/todo.rs:4:5
+  |
+4 |     todo!()
+  |     ^^^^^^^
+  = note: this error originates in the macro `todo` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error: aborting due to 1 previous error; 1 warning emitted
+
+'''

@@ -28,6 +28,7 @@ macro_rules! define_sniff_tool_annotation {
 }
 
 define_sniff_tool_annotation!(check_unsafe);
+define_sniff_tool_annotation!(check_panics);
 
 // TODO: could be useful to have a macro for calling sniff_tool::[..]_pub in the future,
 // but for now, not worth the effort. Turns out we'd need the sniff tool attr to be after all
