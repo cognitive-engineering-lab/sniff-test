@@ -19,6 +19,12 @@ pub struct CheckStats {
     pub calls_checked: usize,
 }
 
+impl CheckStats {
+    pub fn checked_something(&self) -> bool {
+        self.entrypoints != 0 || self.total_fns_checked != 0
+    }
+}
+
 /// Checks that all local functions in the crate are properly annotated.
 pub fn check_crate_for_property<P: Property>(
     tcx: TyCtxt<'_>,

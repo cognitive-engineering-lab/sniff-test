@@ -302,6 +302,12 @@ fn analyze_crate(
                 }
             };
 
+            if !stats.checked_something() {
+                println!(
+                    "WARN: no functions annotated for sniff-test analysis in the {crate_name} crate"
+                );
+            }
+
             println!(
                 "the {crate_name:^20} crate passes the sniff test!! \t\t(stable id {:16x?}) - {:>5}",
                 tcx.stable_crate_id(LOCAL_CRATE).as_u64(),
