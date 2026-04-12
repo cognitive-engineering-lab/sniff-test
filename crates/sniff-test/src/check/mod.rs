@@ -32,6 +32,10 @@ impl CheckStats {
             calls_checked: 0,
         }
     }
+
+    pub fn checked_something(&self) -> bool {
+        self.entrypoints != 0 || self.total_fns_checked != 0
+    }
 }
 
 /// Checks that all local functions in the crate are properly annotated.

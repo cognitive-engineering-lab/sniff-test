@@ -51,30 +51,39 @@ pub struct PrintAllItemsPlugin;
 
 // To parse CLI arguments, we use Clap for this example. But that
 // detail is up to you.
-#[derive(Parser, Serialize, Deserialize, Default, Clone, Debug)]
+#[derive(Parser, Serialize, Deserialize, Clone, Debug)]
 pub struct SniffTestArgs {
     /// How to handle this workspace's dependencies.
     #[arg(short, long)]
     dependencies: DependenciesPosture,
 
-    #[arg(short, long)]
-    /// LEGACY ARG (i'm keeping it around to be faster, will remove later):
-    /// whether or not dependencies have to have sniff-test formatted code comments.
-    check_dependencies: bool,
+    #[arg(short, long, default_value = "inferred")]
+    /// The granularity at which to check properties.
+    ///
+    /// Fine-grained will enforce that a given set of obligations has been considered at each call site for each property.
+    /// Coarse-grained will simply enforce that the property has been considered at each call site.
+    granularity: CheckingGranularity,
 
-    #[arg(short, long)]
-    fine_grained: bool,
-
-    #[arg(short, long)]
+    #[arg(short, long, default_value = "true")]
     buzzword_checking: bool,
 
     #[clap(last = true)]
     cargo_args: Vec<String>,
 }
 
-#[derive(ValueEnum, Clone, Debug, Default, Serialize, Deserialize)]
+impl SniffTestArgs {
+    pub fn rustc_testing_default() -> Self {
+        Self {
+            dependencies: DependenciesPosture::Trust,
+            granularity: CheckingGranularity::Inferred,
+            buzzword_checking: true,
+            cargo_args: vec![],
+        }
+    }
+}
+
+#[derive(ValueEnum, Clone, Debug, Serialize, Deserialize)]
 enum DependenciesPosture {
-    #[default]
     /// Trust that dependencies have been properly documented with regard to the desired properties.
     ///
     /// *"I trust them"*
@@ -91,9 +100,45 @@ enum DependenciesPosture {
     Verify,
 }
 
+#[derive(ValueEnum, Clone, Debug, Serialize, Deserialize)]
+enum CheckingGranularity {
+    /// Force fine-grained checking.
+    ///
+    /// This will result in errors if function definitions don't have fine-grained, sniff-test style doc comments.
+    ForceFine,
+    /// Infer the desired granularity for each function.
+    ///
+    /// If the function's definition has fine-grained obligations in its doc comment, will use fine-grained. If not,
+    /// will use coarse-grained.
+    Inferred,
+    /// Force coarse-grained checking.
+    ///
+    /// This will ignore the named obligations of any fine-grained, sniff-test style doc comments.
+    ForceCoarse,
+}
+
+impl CheckingGranularity {
+    pub fn force_coarse(&self) -> bool {
+        matches!(self, Self::ForceCoarse)
+    }
+
+    /// Whether fine-grained
+    pub fn force_fine(&self) -> bool {
+        matches!(self, Self::ForceFine)
+    }
+}
+
 const TO_FILE: bool = false;
 
-pub static ARGS: Mutex<Option<SniffTestArgs>> = Mutex::new(None);
+pub struct ArgsWrapper(Mutex<Option<SniffTestArgs>>);
+
+impl ArgsWrapper {
+    pub fn peep(&self) -> SniffTestArgs {
+        self.0.lock().unwrap().as_ref().unwrap().clone()
+    }
+}
+
+pub static ARGS: ArgsWrapper = ArgsWrapper(Mutex::new(None));
 
 fn env_logger_init_file(driver: bool) {
     use std::fs::OpenOptions;
@@ -156,16 +201,13 @@ impl RustcPlugin for PrintAllItemsPlugin {
         log::debug!("modifying cargo args");
         cargo.args(&args.cargo_args);
 
-        // if args.release {
-        //     cargo.args(["--release"]);
-        //     panic!(
-        //         "release can inline some functions, so not sure if we want to allow this yet..."
-        //     );
-        // }
+        cargo.args(["--release"]);
 
         // Register the sniff_tool
         let existing = std::env::var("RUSTFLAGS").unwrap_or_default();
-        cargo.env("RUSTFLAGS", format!("-Zcrate-attr=feature(register_tool) -Zcrate-attr=register_tool(sniff_tool) -Aunused-doc-comments {existing} -Zcrate-attr=feature(custom_inner_attributes)"));
+        // TODO: is disabling all optimizations overkill? it might negate the nice thing we noticed with the
+        // compiler eliding bounds checks if it knows through range analysis that one can never fail.
+        cargo.env("RUSTFLAGS", format!("-Zcrate-attr=feature(register_tool) -Zcrate-attr=register_tool(sniff_tool) -Aunused-doc-comments {existing} -Zcrate-attr=feature(custom_inner_attributes) -Zmir-opt-level=0"));
 
         // Point to the driver binary, not the cargo subcommand binary
         let driver = std::env::current_exe()
@@ -179,11 +221,26 @@ impl RustcPlugin for PrintAllItemsPlugin {
     // for the arguments given to us by rustc_plugin.
     fn run(
         self,
-        compiler_args: Vec<String>,
+        mut compiler_args: Vec<String>,
         plugin_args: Self::Args,
     ) -> rustc_interface::interface::Result<()> {
         // Set the args so we can access them from anywhere...
-        *ARGS.lock().unwrap() = Some(plugin_args.clone());
+        *ARGS.0.lock().unwrap() = Some(plugin_args.clone());
+
+        // Add the rustc flags that cargo's --release adds if they're not already there...
+        let release_flags = [
+            "opt-level=0", // except opt-level=3, as I think we want the code fully unoptimized
+            "debug-assertions=no",
+            "overflow-checks=no",
+            "debuginfo=0",
+        ];
+
+        for flag in release_flags {
+            if !compiler_args.contains(&flag.to_string()) {
+                compiler_args.push("-C".to_string());
+                compiler_args.push(flag.to_string());
+            }
+        }
 
         let mut callbacks = PrintAllItemsCallbacks {
             args: Some(plugin_args.clone()),
@@ -252,6 +309,12 @@ fn analyze_crate(
                 println!("the {crate_name} crate FAILED the sniff test");
                 return rustc_driver::Compilation::Stop;
             };
+
+            if !stats.iter().any(CheckStats::checked_something) {
+                println!(
+                    "WARN: no functions annotated for sniff-test analysis in the {crate_name} crate"
+                );
+            }
 
             println!(
                 "the {crate_name:^20} crate passes the sniff test!! \t\t(stable id {:16x?}) - {:>5}",
