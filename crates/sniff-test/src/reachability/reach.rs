@@ -151,6 +151,9 @@ impl CallGraph {
             .node_weights()
             .copied()
             .filter_map(DefId::as_local)
+            .filter(|def| tcx.has_typeck_results(*def))
+            // ^^ we have to filter out def ids we don't have typecheck results for, as the code in
+            // `CallGraphVisitor::call_graph()` just warns and doesn't analyze its body while maintaining the new node
             .collect();
 
         // Sort by def path string to enforce consistent order
