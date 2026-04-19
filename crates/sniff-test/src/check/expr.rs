@@ -36,9 +36,7 @@ impl<'tcx> intravisit::Visitor<'tcx> for SpanExprFinder<'tcx> {
             return;
         }
 
-        // Currently slice indexing uses bracket span
-        // However, the expr's span is more than just the brackets
-        // Current workaround is to check if the expr span contains the target span, not just is equal
+        // Check specifically for index span
         if let ExprKind::Index(_, _, bracket_span) = ex.kind
             && bracket_span == self.1
         {
