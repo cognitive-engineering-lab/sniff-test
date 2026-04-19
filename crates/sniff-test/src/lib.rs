@@ -207,7 +207,7 @@ impl RustcPlugin for PrintAllItemsPlugin {
         let existing = std::env::var("RUSTFLAGS").unwrap_or_default();
         // TODO: is disabling all optimizations overkill? it might negate the nice thing we noticed with the
         // compiler eliding bounds checks if it knows through range analysis that one can never fail.
-        cargo.env("RUSTFLAGS", format!("-Zcrate-attr=feature(register_tool) -Zcrate-attr=register_tool(sniff_tool) -Aunused-doc-comments {existing} -Zcrate-attr=feature(custom_inner_attributes) -Zmir-opt-level=0"));
+        cargo.env("RUSTFLAGS", format!("-Zcrate-attr=feature(register_tool) -Zcrate-attr=register_tool(sniff_tool) -Aunused-doc-comments {existing} -Zcrate-attr=feature(custom_inner_attributes) -Zmir-opt-level=1"));
 
         // Point to the driver binary, not the cargo subcommand binary
         let driver = std::env::current_exe()
@@ -229,7 +229,7 @@ impl RustcPlugin for PrintAllItemsPlugin {
 
         // Add the rustc flags that cargo's --release adds if they're not already there...
         let release_flags = [
-            "opt-level=0", // except opt-level=3, as I think we want the code fully unoptimized
+            "opt-level=1", // except opt-level=3, as I think we want the code fully unoptimized
             "debug-assertions=no",
             "overflow-checks=no",
             "debuginfo=0",

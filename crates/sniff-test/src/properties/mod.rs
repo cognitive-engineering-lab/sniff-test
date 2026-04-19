@@ -34,6 +34,7 @@ pub trait Property: Debug + Copy + 'static {
         &mut self, // TODO: why is this a mutable reference?
         tcx: TyCtxt<'tcx>,
         tyck: &TypeckResults,
+        in_body: &LocallyReachable,
         expr: &'tcx rustc_hir::Expr,
     ) -> Vec<FoundAxiom<'tcx, Self::Axiom>>;
     // TODO: why is ^this^ a Vec? conceptually feels like it could be an option,
@@ -71,10 +72,11 @@ pub struct FoundAxiom<'tcx, A: Axiom> {
     pub span: rustc_span::Span,
 }
 
-struct FinderWrapper<'tcx, T: Property> {
+struct FinderWrapper<'tcx, 'l, T: Property> {
     tcx: TyCtxt<'tcx>,
     property: T,
     tychck: &'tcx TypeckResults<'tcx>,
+    for_reachable: &'l LocallyReachable,
     axioms: Vec<FoundAxiom<'tcx, T::Axiom>>,
 }
 
@@ -90,6 +92,7 @@ pub fn find_axioms<'tcx, T: Property>(
         property,
         tychck,
         tcx,
+        for_reachable: locally_reachable,
         axioms: Vec::new(),
     };
 
@@ -98,7 +101,7 @@ pub fn find_axioms<'tcx, T: Property>(
     finder.axioms.into_iter()
 }
 
-impl<'tcx, T: Property> Visitor<'tcx> for FinderWrapper<'tcx, T> {
+impl<'tcx, T: Property> Visitor<'tcx> for FinderWrapper<'tcx, '_, T> {
     type NestedFilter = nested_filter::OnlyBodies;
     type MaybeTyCtxt = TyCtxt<'tcx>;
 
@@ -108,8 +111,12 @@ impl<'tcx, T: Property> Visitor<'tcx> for FinderWrapper<'tcx, T> {
 
     #[allow(clippy::semicolon_if_nothing_returned)]
     fn visit_expr(&mut self, ex: &'tcx rustc_hir::Expr<'tcx>) -> Self::Result {
-        self.axioms
-            .extend(self.property.find_axioms_in_expr(self.tcx, self.tychck, ex));
+        self.axioms.extend(self.property.find_axioms_in_expr(
+            self.tcx,
+            self.tychck,
+            self.for_reachable,
+            ex,
+        ));
 
         // if this expr is a closure definition, skip analyzing its body,
         // we'll do that based on the DefId of the closure itself if it was found to be reachable.
