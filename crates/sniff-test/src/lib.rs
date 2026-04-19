@@ -201,7 +201,7 @@ impl RustcPlugin for PrintAllItemsPlugin {
         log::debug!("modifying cargo args");
         cargo.args(&args.cargo_args);
 
-        cargo.args(["--release"]);
+        cargo.args(["--release", "--all-features"]);
 
         // Register the sniff_tool
         let existing = std::env::var("RUSTFLAGS").unwrap_or_default();
