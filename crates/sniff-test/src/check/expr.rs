@@ -31,14 +31,9 @@ impl<'tcx> intravisit::Visitor<'tcx> for SpanExprFinder<'tcx> {
 
     fn visit_expr(&mut self, ex: &'tcx Expr<'tcx>) -> Self::Result {
         log::debug!("visiting expr {ex:#?}");
-        if ex.span == self.1 {
-            self.2 = Some(ex);
-            return;
-        }
-
         // Currently slice indexing uses bracket span
         // However, the expr's span is more than just the brackets
-        // Current workaround is to check if the expr span contains the target span
+        // Current workaround is to check if the expr span contains the target span, not just is equal
         if ex.span.contains(self.1) {
             self.2 = Some(ex);
             return;
