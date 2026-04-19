@@ -29,7 +29,7 @@ impl Property for PanicProperty {
     }
 
     fn callsite_regex(&self) -> Regex {
-        todo!()
+        Regex::new("(?i)panic").unwrap()
     }
 
     fn fn_def_regex(&self) -> Regex {
