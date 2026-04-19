@@ -37,6 +37,9 @@ impl Property for SafetyProperty {
         &mut self,
         _tcx: TyCtxt<'tcx>,
         tyck: &rustc_middle::ty::TypeckResults,
+        // TODO: either use this to make sure the axioms actually exist, or just do some axiom checking at the
+        // MIR level.
+        _for_reachable: &LocallyReachable,
         expr: &'tcx rustc_hir::Expr<'tcx>,
     ) -> Vec<FoundAxiom<'tcx, Self::Axiom>> {
         if let ExprKind::Unary(UnOp::Deref, expr) = expr.kind {

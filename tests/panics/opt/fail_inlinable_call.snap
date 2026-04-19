@@ -1,0 +1,25 @@
+---
+source: tests/lib.rs
+assertion_line: 216
+---
+exit_code = 1
+stdout = '''
+the fail_inlinable_call crate FAILED the sniff test
+'''
+stderr = '''
+error: function main directly contains 1 unjustified call to annotated panicking functions, but is not annotated panicking
+  --> [SNIFF_TEST_DIR]/panics/opt/fail_inlinable_call.rs:14:1
+   |
+14 | fn main() {
+   | ^^^^^^^^^
+   |
+   = note: reachable from [*main*]
+note: greater_than_zero is called here
+  --> [SNIFF_TEST_DIR]/panics/opt/fail_inlinable_call.rs:15:29
+   |
+15 |     println!("count is {}", greater_than_zero(10));
+   |                             ^^^^^^^^^^^^^^^^^^^^^
+
+error: aborting due to 1 previous error
+
+'''

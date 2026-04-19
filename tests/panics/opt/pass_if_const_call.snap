@@ -1,0 +1,9 @@
+---
+source: tests/lib.rs
+assertion_line: 216
+---
+exit_code = 0
+stdout = '''
+the  pass_if_const_call  crate passes the sniff test!! 		(stable id [CRATE ID ELIDED]) - local
+'''
+stderr = ''

@@ -8,6 +8,7 @@ use super::Axiom;
 use crate::{
     annotations::PropertyViolation,
     properties::{FoundAxiom, Property},
+    reachability::LocallyReachable,
 };
 
 #[derive(Debug, Clone)]
@@ -40,14 +41,27 @@ impl Property for PanicProperty {
         &mut self,
         tcx: TyCtxt<'tcx>,
         tyck: &rustc_middle::ty::TypeckResults,
+        for_reachable: &LocallyReachable,
         expr: &'tcx rustc_hir::Expr<'tcx>,
     ) -> Vec<FoundAxiom<'tcx, Self::Axiom>> {
         [
-            find_explicit_panic(tcx, expr).map(|span| FoundAxiom {
-                axiom: PanicAxiom::ExplicitPanic,
-                found_in: expr,
-                span,
-            }),
+            find_explicit_panic(tcx, expr)
+                .map(|span| FoundAxiom {
+                    axiom: PanicAxiom::ExplicitPanic,
+                    found_in: expr,
+                    span,
+                })
+                .and_then(|res| {
+                    // Only count it if our reachability determined that a call to a panic lang item
+                    // can actually happen in this function.
+                    // TODO: this is a bit of a shortcut, the real fix is to detect these base-cases at the MIR level and then
+                    // map back up, but that comes second to making the tool actually work first.
+                    if calls_panic_lang_item(tcx, for_reachable) {
+                        Some(res)
+                    } else {
+                        None
+                    }
+                }),
             find_binop(tcx, expr, rustc_ast::BinOpKind::Div).map(|span| FoundAxiom {
                 axiom: PanicAxiom::Div,
                 found_in: expr,
@@ -68,6 +82,12 @@ impl Property for PanicProperty {
         .flatten()
         .collect()
     }
+}
+
+fn calls_panic_lang_item(tcx: TyCtxt, func: &LocallyReachable) -> bool {
+    func.calls_to
+        .iter()
+        .any(|(def_id, _from_spans)| def_is_panic(tcx, *def_id))
 }
 
 fn find_binop<'tcx>(
@@ -131,18 +151,16 @@ fn find_explicit_panic<'tcx>(tcx: TyCtxt<'tcx>, expr: &'tcx rustc_hir::Expr<'tcx
         return None;
     };
 
-    let lang_items = tcx.lang_items();
-
     // Check against lang items
-    if Some(def_id) == lang_items.panic_fn()
+    def_is_panic(tcx, def_id).then_some(expr.span)
+}
+
+fn def_is_panic(tcx: TyCtxt, def_id: rustc_span::def_id::DefId) -> bool {
+    let lang_items = tcx.lang_items();
+    Some(def_id) == lang_items.panic_fn()
         || Some(def_id) == lang_items.panic_fmt()
         || Some(def_id) == lang_items.begin_panic_fn()
         || Some(def_id) == lang_items.panic_impl()
-    {
-        Some(expr.span)
-    } else {
-        None
-    }
 }
 
 impl Axiom for PanicAxiom {
