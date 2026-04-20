@@ -26,7 +26,7 @@ impl Property for SafetyProperty {
     }
 
     fn fn_def_regex(&self) -> Regex {
-        Regex::new("(\n|^)(\\s*)[#]+ (Safety|SAFETY)(\n|$)").unwrap()
+        Regex::new(r"(\n|^)(\s*)[#]+ (Safety|SAFETY)[ \t]*(\n|$)").unwrap()
     }
 
     fn callsite_regex(&self) -> Regex {

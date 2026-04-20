@@ -29,12 +29,12 @@ impl Property for PanicProperty {
         "panicking"
     }
 
-    fn callsite_regex(&self) -> Regex {
-        Regex::new("(?i)panic").unwrap()
+    fn fn_def_regex(&self) -> Regex {
+        Regex::new(r"(\n|^)(\s*)[#]+ (Panics|PANICS)[ \t]*(\n|$)").unwrap()
     }
 
-    fn fn_def_regex(&self) -> Regex {
-        Regex::new("(\n|^)(\\s*)[#]+ (Panics|PANICS)(\n|$)").unwrap()
+    fn callsite_regex(&self) -> Regex {
+        Regex::new("(\n|^)(\\s*)(Panic|PANIC):").unwrap()
     }
 
     fn find_axioms_in_expr<'tcx>(
