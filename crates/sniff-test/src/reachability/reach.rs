@@ -3,6 +3,7 @@
 //!
 
 use crate::rustc_middle::mir::visit::Visitor;
+use itertools::Itertools;
 use rustc_hir::def_id::{DefId, LOCAL_CRATE, LocalDefId};
 use rustc_middle::mir::{Operand, TerminatorKind};
 use rustc_middle::ty::{GenericArg, GenericArgKind, TyCtxt, TyKind};
@@ -17,7 +18,7 @@ pub struct LocallyReachable {
     /// The path of calls between items through which you can reach this item.
     pub through: Vec<(LocalDefId, Span)>,
     /// The functions (not necessarily local) that this one calls to.
-    pub calls_to: HashMap<DefId, Vec<Span>>,
+    calls_to: HashMap<DefId, Vec<Span>>,
 }
 
 impl LocallyReachable {
@@ -35,8 +36,24 @@ impl LocallyReachable {
         }
     }
 
-    fn calls_to(&mut self, def_id: DefId, span: Span) {
+    fn mark_as_calling(&mut self, def_id: DefId, span: Span) {
         self.calls_to.entry(def_id).or_default().push(span);
+    }
+
+    pub fn calls_to(&self, tcx: TyCtxt) -> impl Iterator<Item = (DefId, Vec<Span>)> {
+        self.calls_to
+            .clone()
+            .into_iter()
+            // Sort the calls so that their order is consistent.
+            .sorted_by(|a, b| {
+                // Try to compare their spans, as that will better mirror the user's code,
+                // fall back to using def path strings.
+                if let (Some(a_first_span), Some(b_first_span)) = (a.1.first(), b.1.first()) {
+                    a_first_span.cmp(b_first_span)
+                } else {
+                    tcx.def_path_str(a.0).cmp(&tcx.def_path_str(b.0))
+                }
+            })
     }
 }
 
@@ -215,7 +232,7 @@ fn generic_closures<'c>(
 
 impl BodyVisitor<'_, '_> {
     fn log_call_to(&mut self, def_id: DefId, span: Span) {
-        self.2.calls_to(def_id, span);
+        self.2.mark_as_calling(def_id, span);
         // TODO: here need to handle non-local reachable
         // TODO: does this not go into the monomorphized call but the generic function? <- not sure if that's the right terminology
         if let Some(local_def) = def_id.as_local() {

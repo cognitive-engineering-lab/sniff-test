@@ -85,9 +85,8 @@ impl Property for PanicProperty {
 }
 
 fn calls_panic_lang_item(tcx: TyCtxt, func: &LocallyReachable) -> bool {
-    func.calls_to
-        .iter()
-        .any(|(def_id, _from_spans)| def_is_panic(tcx, *def_id))
+    func.calls_to(tcx)
+        .any(|(def_id, _from_spans)| def_is_panic(tcx, def_id))
 }
 
 fn find_binop<'tcx>(

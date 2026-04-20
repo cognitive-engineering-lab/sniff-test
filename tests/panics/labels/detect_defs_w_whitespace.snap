@@ -7,23 +7,28 @@ stdout = '''
 the detect_defs_w_whitespace crate FAILED the sniff test
 '''
 stderr = '''
-error: function main directly contains 2 unjustified calls to annotated panicking functions, but is not annotated panicking
-  --> [SNIFF_TEST_DIR]/panics/labels/detect_defs_w_whitespace.rs:16:1
+error: function main directly contains 3 unjustified calls to annotated panicking functions, but is not annotated panicking
+  --> [SNIFF_TEST_DIR]/panics/labels/detect_defs_w_whitespace.rs:22:1
    |
-16 | fn main() {
+22 | fn main() {
    | ^^^^^^^^^
    |
    = note: reachable from [*main*]
 note: spaces_after is called here
-  --> [SNIFF_TEST_DIR]/panics/labels/detect_defs_w_whitespace.rs:17:5
+  --> [SNIFF_TEST_DIR]/panics/labels/detect_defs_w_whitespace.rs:23:5
    |
-17 |     spaces_after();
+23 |     spaces_after();
    |     ^^^^^^^^^^^^^^
 note: tabs_after is called here
-  --> [SNIFF_TEST_DIR]/panics/labels/detect_defs_w_whitespace.rs:18:5
+  --> [SNIFF_TEST_DIR]/panics/labels/detect_defs_w_whitespace.rs:24:5
    |
-18 |     tabs_after();
+24 |     tabs_after();
    |     ^^^^^^^^^^^^
+note: mix_after is called here
+  --> [SNIFF_TEST_DIR]/panics/labels/detect_defs_w_whitespace.rs:25:5
+   |
+25 |     mix_after();
+   |     ^^^^^^^^^^^
 
 error: aborting due to 1 previous error
 

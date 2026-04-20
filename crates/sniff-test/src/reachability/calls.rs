@@ -20,13 +20,13 @@ fn call_has_obligations<P: Property>(
     tcx: TyCtxt,
     toml_annotations: &TomlAnnotation,
     property: P,
-) -> impl Fn((&DefId, &Vec<Span>)) -> Option<CallsWObligations> {
+) -> impl Fn((DefId, Vec<Span>)) -> Option<CallsWObligations> {
     move |(to_def_id, from_spans)| {
-        let annotation = parse_fn_def(tcx, toml_annotations, *to_def_id, property)?;
+        let annotation = parse_fn_def(tcx, toml_annotations, to_def_id, property)?;
         annotation
             .creates_obligation()
             .map(|obligation| CallsWObligations {
-                call_to: *to_def_id,
+                call_to: to_def_id,
                 obligation,
                 from_spans: from_spans.clone(),
             })
@@ -40,7 +40,6 @@ pub fn find_calls_w_obligations<P: Property>(
     property: P,
 ) -> impl Iterator<Item = CallsWObligations> {
     locally_reachable
-        .calls_to
-        .iter()
+        .calls_to(tcx)
         .filter_map(call_has_obligations(tcx, toml_annotations, property))
 }
