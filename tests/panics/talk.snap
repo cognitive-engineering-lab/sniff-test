@@ -1,0 +1,46 @@
+---
+source: tests/lib.rs
+assertion_line: 216
+---
+exit_code = 1
+stdout = '''
+is [usize] a slice
+the talk crate FAILED the sniff test
+'''
+stderr = '''
+error: function chunk_slice directly contains 2 unjustified panicking axioms and 3 unjustified calls to annotated panicking functions, but is not annotated panicking
+  --> [SNIFF_TEST_DIR]/panics/talk.rs:13:1
+   |
+13 | pub fn chunk_slice(slice: &[usize], chunk_size: usize) -> Vec<&[usize]> {
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   |
+   = note: reachable from [*chunk_slice*]
+note: division here
+  --> [SNIFF_TEST_DIR]/panics/talk.rs:15:34
+   |
+15 |     let num_chunks = slice.len() / chunk_size;
+   |                                  ^
+note: slice index here
+  --> [SNIFF_TEST_DIR]/panics/talk.rs:22:27
+   |
+22 |         let chunk = &slice[start..(start + chunk_size)];
+   |                           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+note: std::vec::Vec::<T>::with_capacity is called here
+  --> [SNIFF_TEST_DIR]/panics/talk.rs:18:22
+   |
+18 |     let mut result = Vec::with_capacity(num_chunks);
+   |                      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+note: std::ops::Index::index is called here
+  --> [SNIFF_TEST_DIR]/panics/talk.rs:22:27
+   |
+22 |         let chunk = &slice[start..(start + chunk_size)];
+   |                           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+note: std::vec::Vec::<T, A>::push is called here
+  --> [SNIFF_TEST_DIR]/panics/talk.rs:24:9
+   |
+24 |         result.push(chunk);
+   |         ^^^^^^^^^^^^^^^^^^
+
+error: aborting due to 1 previous error
+
+'''
