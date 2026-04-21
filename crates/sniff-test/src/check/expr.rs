@@ -1,5 +1,5 @@
 use rustc_hir::{
-    Expr,
+    Expr, ExprKind,
     def_id::{DefId, LocalDefId},
     intravisit::{self, Visitor},
 };
@@ -32,6 +32,14 @@ impl<'tcx> intravisit::Visitor<'tcx> for SpanExprFinder<'tcx> {
     fn visit_expr(&mut self, ex: &'tcx Expr<'tcx>) -> Self::Result {
         log::debug!("visiting expr {ex:#?}");
         if ex.span == self.1 {
+            self.2 = Some(ex);
+            return;
+        }
+
+        // Check specifically for index span
+        if let ExprKind::Index(_, _, bracket_span) = ex.kind
+            && bracket_span == self.1
+        {
             self.2 = Some(ex);
             return;
         }

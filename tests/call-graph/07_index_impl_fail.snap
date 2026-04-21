@@ -1,0 +1,26 @@
+---
+source: tests/lib.rs
+assertion_line: 216
+---
+exit_code = 1
+stdout = '''
+is Foo a slice
+the 07_index_impl_fail crate FAILED the sniff test
+'''
+stderr = '''
+error: function main directly contains 1 unjustified call to annotated panicking functions, but is not annotated panicking
+ --> [SNIFF_TEST_DIR]/call-graph/07_index_impl_fail.rs:4:1
+  |
+4 | fn main() {
+  | ^^^^^^^^^
+  |
+  = note: reachable from [*main*]
+note: std::ops::Index::index is called here
+ --> [SNIFF_TEST_DIR]/call-graph/07_index_impl_fail.rs:6:16
+  |
+6 |     let a = foo[10];
+  |                ^^^^
+
+error: aborting due to 1 previous error
+
+'''
