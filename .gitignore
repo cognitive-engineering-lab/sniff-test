@@ -1,0 +1,11 @@
+target
+.DS_Store
+notes.md
+*.rlib
+
+# Ignore our snapshots & review script
+*.snap.new
+review.sh
+
+# Ignore our log files
+sniff-test.log

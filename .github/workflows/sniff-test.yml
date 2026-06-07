@@ -1,0 +1,56 @@
+name: Code Quality Lints
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+env:
+    RUST_BACKTRACE: 1
+    CARGO_TERM_COLOR: always
+
+
+jobs:
+    check:
+        runs-on: macos-latest
+        steps:
+          - uses: actions/checkout@v4
+          - run: cargo check
+
+    build:
+        runs-on: macos-latest
+        steps:
+          - uses: actions/checkout@v4
+          - name: build in debug mode
+            run: cargo build
+          - name: build in release mode
+            run: cargo build --release
+
+    test:
+        runs-on: macos-latest
+        steps:
+          - uses: actions/checkout@v4
+          - name: build the binaries first
+            run: cargo build
+          - name: run actual tests
+            run: cargo test
+
+    format:
+        runs-on: macos-latest
+        steps:
+          - uses: actions/checkout@v4
+          - uses: actions-rust-lang/setup-rust-toolchain@v1
+            with:
+              components: rustfmt
+          - run: cargo fmt --check
+
+    # I think warnings are the right level here for now,
+    # can do pedantic lints separately w/ pre-commit if I'd like
+    clippy:
+        runs-on: macos-latest
+        steps:
+          - uses: actions/checkout@v4
+          - uses: actions-rust-lang/setup-rust-toolchain@v1
+            with:
+              components: clippy
+          - run: cargo clippy --workspace --all-targets -- -D warnings -D clippy::pedantic

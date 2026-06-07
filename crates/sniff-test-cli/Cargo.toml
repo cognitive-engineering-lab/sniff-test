@@ -1,0 +1,14 @@
+[package]
+name = "sniff-test-cli"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+owo-colors = "4"
+reachability = { path = "../reachability" }
+rustc_plugin = "=0.15.2-nightly-2026-05-01"
+serde = { version = "1", features = ["derive"] }
+sniff-test = { path = "../sniff-test" }
+
+[package.metadata.rust-analyzer]
+rustc_private = true

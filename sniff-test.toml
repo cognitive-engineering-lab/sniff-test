@@ -1,0 +1,16 @@
+[panics]
+show-full-stack-trace = false
+ignored-namespaces = [
+    "syn", "syn::**",
+    "quote", "quote::**",
+    "proc_macro2", "proc_macro2::**",
+    "rustc*", "rustc*::**",
+]
+trusted-panic-obligation-namespaces = ["std::**", "core::**", "alloc::**"]
+panic-sink-namespaces = [
+    "core::panicking::**",
+    "std::panicking::**",
+    "std::rt::panic_fmt",
+    "core::{option,result}::unwrap_failed",
+    "std::{option,result}::unwrap_failed",
+]
