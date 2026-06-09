@@ -26,6 +26,8 @@ fn canonicalize_def_path(crate_name: &str, path: &str) -> String {
     {
         path.to_owned()
     } else if let Some(path) = path.strip_prefix('<') {
+        // Associated paths can start with the self type, so qualify that type
+        // with the current crate when rustc gives us a local-style path.
         format!("<{crate_name}::{path}")
     } else {
         format!("{crate_name}::{path}")

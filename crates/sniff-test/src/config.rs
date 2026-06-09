@@ -12,15 +12,27 @@
 use std::borrow::Cow;
 use std::fmt::{Debug, Display, Formatter};
 use std::path::{Path, PathBuf};
+use std::str::FromStr;
 
 use globset::{GlobBuilder, GlobSet, GlobSetBuilder};
-use serde::{Deserialize, de::Error as _};
+use rustc_hir::def_id::DefId;
+use rustc_middle::ty::TyCtxt;
+use serde::{Deserialize, Serialize, de::Error as _};
+
+use crate::namespace::canonical_namespace;
 
 pub const DEFAULT_MANIFEST_FILE: &str = "sniff-test.toml";
+#[rustfmt::skip]
 pub const EXAMPLE_MANIFEST: &str = r#"# sniff-test configuration.
 #
 # The default configuration leaves all policy lists empty. This example includes
 # recommended Rust panic sinks and can be edited to match your threat model.
+
+[analysis]
+# `profile` preserves Cargo/rustc's selected profile behavior.
+# `on` forces `-C overflow-checks=yes`; useful for checked release-mode audits.
+# `off` forces `-C overflow-checks=no`.
+overflow-checks = "profile"
 
 [panics]
 show-full-stack-trace = false
@@ -30,6 +42,11 @@ report-roots = "public"
 # Crates or fully-qualified functions whose internals should be treated as
 # opaque analysis boundaries. Patterns use Rust crate/path names: write
 # `proc_macro2`, not the package name `proc-macro2`.
+#
+# Use this list as the crate-local false-positive ledger too. When a reported
+# compiler assert is unreachable because this crate maintains an invariant,
+# ignore the function that introduces that assert and document the invariant
+# in a TOML comment next to the pattern.
 ignored-namespaces = [
     "syn", "syn::**",
     "quote", "quote::**",
@@ -62,6 +79,8 @@ panic-obligation-functions = [
 #[serde(deny_unknown_fields)]
 pub struct SniffTestConfig {
     #[serde(default)]
+    pub analysis: AnalysisConfig,
+    #[serde(default)]
     pub panics: PanicConfig,
 }
 
@@ -93,6 +112,69 @@ impl SniffTestConfig {
         toml::from_str(source)
     }
 }
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize, Serialize)]
+#[serde(rename_all = "kebab-case", deny_unknown_fields)]
+#[serde(default)]
+pub struct AnalysisConfig {
+    /// Whether rustc should emit integer overflow and invalid-shift checks.
+    pub overflow_checks: OverflowChecks,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum OverflowChecks {
+    /// Respect the selected Cargo/rustc profile.
+    #[default]
+    Profile,
+    /// Force `-C overflow-checks=yes`.
+    On,
+    /// Force `-C overflow-checks=no`.
+    Off,
+}
+
+impl OverflowChecks {
+    #[must_use]
+    pub fn rustc_flag(self) -> Option<&'static str> {
+        match self {
+            Self::Profile => None,
+            Self::On => Some("overflow-checks=yes"),
+            Self::Off => Some("overflow-checks=no"),
+        }
+    }
+}
+
+impl FromStr for OverflowChecks {
+    type Err = OverflowChecksParseError;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        match value {
+            "profile" => Ok(Self::Profile),
+            "on" => Ok(Self::On),
+            "off" => Ok(Self::Off),
+            other => Err(OverflowChecksParseError {
+                value: other.to_owned(),
+            }),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OverflowChecksParseError {
+    value: String,
+}
+
+impl Display for OverflowChecksParseError {
+    fn fmt(&self, formatter: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(
+            formatter,
+            "invalid overflow-checks value `{}`; expected profile, on, or off",
+            self.value
+        )
+    }
+}
+
+impl std::error::Error for OverflowChecksParseError {}
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "kebab-case", deny_unknown_fields)]
@@ -143,8 +225,33 @@ impl PanicConfig {
     }
 
     #[must_use]
+    pub fn ignores_def(&self, tcx: TyCtxt<'_>, def_id: DefId) -> bool {
+        self.ignored_def_match(tcx, def_id).is_some()
+    }
+
+    #[must_use]
+    pub fn ignored_def_match<'patterns>(
+        &'patterns self,
+        tcx: TyCtxt<'_>,
+        def_id: DefId,
+    ) -> Option<&'patterns str> {
+        let crate_name = tcx.crate_name(def_id.krate).to_string();
+        self.ignored_namespace_match(&crate_name).or_else(|| {
+            let path = canonical_namespace(tcx, def_id);
+            self.ignored_namespace_match(&path)
+        })
+    }
+
+    #[must_use]
     pub fn trusts_panic_obligation_namespace(&self, namespace: &str) -> bool {
         self.trusted_panic_obligation_namespaces.is_match(namespace)
+    }
+
+    #[must_use]
+    pub fn trusts_panic_obligation_def(&self, tcx: TyCtxt<'_>, def_id: DefId) -> bool {
+        let crate_name = tcx.crate_name(def_id.krate).to_string();
+        self.trusts_panic_obligation_namespace(&crate_name)
+            || self.trusts_panic_obligation_namespace(&canonical_namespace(tcx, def_id))
     }
 
     #[must_use]
@@ -348,7 +455,7 @@ impl std::error::Error for ConfigError {
 
 #[cfg(test)]
 mod tests {
-    use super::{PanicConfig, PathPatterns, ReportRootSet, SniffTestConfig};
+    use super::{OverflowChecks, PanicConfig, PathPatterns, ReportRootSet, SniffTestConfig};
 
     fn path_patterns(patterns: &[&str]) -> PathPatterns {
         PathPatterns::new(
@@ -371,6 +478,25 @@ mod tests {
             .expect_err("old split namespace fields should be rejected");
 
         assert!(error.to_string().contains("unknown field `ignored-crates`"));
+    }
+
+    #[test]
+    fn parses_analysis_overflow_checks() {
+        let config = r#"
+            [analysis]
+            overflow-checks = "on"
+        "#;
+
+        let parsed = SniffTestConfig::from_manifest_str(config).expect("manifest should parse");
+
+        assert_eq!(parsed.analysis.overflow_checks, OverflowChecks::On);
+    }
+
+    #[test]
+    fn defaults_analysis_to_profile_overflow_checks() {
+        let parsed = SniffTestConfig::from_manifest_str("").expect("empty manifest should parse");
+
+        assert_eq!(parsed.analysis.overflow_checks, OverflowChecks::Profile);
     }
 
     #[test]

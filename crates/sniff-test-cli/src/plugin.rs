@@ -9,7 +9,7 @@ use rustc_plugin::{CrateFilter, RustcPlugin, RustcPluginArgs, Utf8Path};
 use sniff_test::cache::default_cache_dir;
 
 use crate::args::{ColorChoice, MANIFEST_PATH_ENV, SniffTestArgs};
-use crate::{absolute_path, analyze_crate};
+use crate::{absolute_path, analyze_crate, load_config};
 
 pub struct SniffTestPlugin;
 
@@ -48,18 +48,40 @@ impl RustcPlugin for SniffTestPlugin {
             cargo.args(["-Z", "build-std=core,alloc,std"]);
         }
 
-        // Cargo replays cached rustc stderr for fresh artifacts. Include
-        // report-affecting inputs in the rustc fingerprint so output matches.
         let config_hash = args
             .manifest_path
             .as_ref()
             .and_then(|path| std::fs::read(path).ok())
             .map_or(0, |source| stable_hash(&source));
-        let fingerprint_cfg = format!(
-            "build.rustflags=[\"--cfg\", \"sniff_test_color_{}\", \"--cfg\", \"sniff_test_config_{config_hash:016x}\"]",
-            args.color.as_cargo_arg(),
-        );
-        cargo.args(["--config", &fingerprint_cfg]);
+        let config = load_config(args);
+        let overflow_checks = args
+            .overflow_checks
+            .unwrap_or(config.analysis.overflow_checks);
+        // Cargo replays cached rustc stderr for fresh artifacts. Include
+        // report-affecting inputs in the rustc fingerprint so output matches.
+        let mut rustflags = vec![
+            "--cfg".to_owned(),
+            format!("sniff_test_color_{}", args.color.as_cargo_arg()),
+            "--cfg".to_owned(),
+            format!("sniff_test_config_{config_hash:016x}"),
+        ];
+        if args.release {
+            // The checker reads optimized MIR. Release mode disables debug
+            // assertions, and these flags pin rustc's optimized MIR defaults
+            // while keeping MIR inlining out of call traces.
+            rustflags.extend(["-Z", "inline-mir=no", "-Z", "mir-opt-level=2"].map(String::from));
+        }
+        if let Some(flag) = overflow_checks.rustc_flag() {
+            rustflags.extend(["-C".to_owned(), flag.to_owned()]);
+        }
+
+        let rustflags = rustflags
+            .iter()
+            .map(|flag| format!("\"{flag}\""))
+            .collect::<Vec<_>>()
+            .join(",");
+        let rustflags_cfg = format!("build.rustflags=[{rustflags}]");
+        cargo.args(["--config", &rustflags_cfg]);
 
         if let Some(manifest_path) = &args.manifest_path {
             cargo.env(MANIFEST_PATH_ENV, manifest_path);

@@ -7,8 +7,8 @@ use crate::graph::ReachabilityEdge;
 
 /// Control-flow type used by reachability hooks.
 ///
-/// Returning [`ControlFlow::Break`] halts analysis and stores the supplied
-/// [`ReachabilityHalt`] in the graph.
+/// Returning [`ControlFlow::Break`] halts the current query and stores the
+/// supplied [`ReachabilityHalt`] in the result.
 pub type ReachabilityControl<'tcx, T = ()> = ControlFlow<ReachabilityHalt<'tcx>, T>;
 
 /// Reason reachability analysis stopped before exhausting the work queue.
@@ -23,16 +23,43 @@ pub enum ReachabilityHalt<'tcx> {
         /// Static human-readable reason for diagnostics.
         reason: &'static str,
     },
-    /// The requested root was generic and no concrete instance was provided.
-    RootRequiresConcreteInstance {
-        /// Generic local root that could not be converted to an instance.
-        root: rustc_hir::def_id::LocalDefId,
-    },
     /// The configured node limit was reached.
     NodeLimitReached {
         /// Limit configured in [`ReachabilityOptions`](crate::ReachabilityOptions).
         limit: usize,
     },
+}
+
+/// Root-specific traversal progress visible to hooks.
+///
+/// These counts describe the current query, not the shared graph arena. They
+/// are intentionally exposed as hook progress data instead of as details of
+/// [`ReachabilitySnapshot`](crate::ReachabilitySnapshot)'s internal storage.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ReachabilityQueryStats {
+    reached_nodes: usize,
+    accepted_edges: usize,
+}
+
+impl ReachabilityQueryStats {
+    pub(crate) fn new(reached_nodes: usize, accepted_edges: usize) -> Self {
+        Self {
+            reached_nodes,
+            accepted_edges,
+        }
+    }
+
+    #[must_use]
+    /// Returns the number of nodes reached by this query before the callback.
+    pub fn reached_nodes(self) -> usize {
+        self.reached_nodes
+    }
+
+    #[must_use]
+    /// Returns the number of edges accepted by this query before the callback.
+    pub fn accepted_edges(self) -> usize {
+        self.accepted_edges
+    }
 }
 
 /// Context passed to reachability hooks.
@@ -46,10 +73,8 @@ pub struct ReachabilityContext<'tcx> {
     pub current: Instance<'tcx>,
     /// Breadth-first depth of `current` from the root.
     pub depth: usize,
-    /// Number of graph edges emitted before this callback.
-    pub edge_count: usize,
-    /// Number of graph nodes emitted before this callback.
-    pub node_count: usize,
+    /// Root-specific traversal progress before this callback.
+    pub stats: ReachabilityQueryStats,
 }
 
 /// Extension points for reachability traversal.
@@ -64,9 +89,9 @@ pub trait ReachabilityHooks<'tcx> {
         ControlFlow::Continue(())
     }
 
-    /// Called before an edge is inserted into the graph.
+    /// Called before an edge is accepted into the current query result.
     ///
-    /// Halting here prevents the edge from being pushed to the final graph.
+    /// Halting here prevents the edge from being pushed to the query result.
     fn on_edge(
         &mut self,
         _cx: ReachabilityContext<'tcx>,

@@ -6,7 +6,7 @@ use std::str::FromStr;
 
 use serde::{Deserialize, Serialize};
 use sniff_test::cache::default_cache_dir;
-use sniff_test::config::DEFAULT_MANIFEST_FILE;
+use sniff_test::config::{DEFAULT_MANIFEST_FILE, OverflowChecks};
 
 pub(crate) const MANIFEST_PATH_ENV: &str = "SNIFF_TEST_MANIFEST";
 
@@ -15,6 +15,7 @@ pub struct SniffTestArgs {
     pub(crate) manifest_path: Option<PathBuf>,
     pub(crate) cache_dir: Option<PathBuf>,
     pub(crate) color: ColorChoice,
+    pub(crate) overflow_checks: Option<OverflowChecks>,
     pub(crate) build_std: bool,
     pub(crate) release: bool,
     pub(crate) cargo_args: Vec<String>,
@@ -56,6 +57,14 @@ impl SniffTestArgs {
                         eprintln!("sniff-test: invalid --color value: {error}");
                         std::process::exit(2);
                     });
+                }
+                "--overflow-checks" => {
+                    let value = required_arg(&mut args, "--overflow-checks");
+                    parsed.overflow_checks =
+                        Some(value.parse::<OverflowChecks>().unwrap_or_else(|error| {
+                            eprintln!("sniff-test: invalid --overflow-checks value: {error}");
+                            std::process::exit(2);
+                        }));
                 }
                 "--build-std" => parsed.build_std = true,
                 "--release" => parsed.release = true,
@@ -162,6 +171,8 @@ pub(crate) fn colors_enabled(choice: ColorChoice, rustc_color: Option<ColorChoic
 mod tests {
     use std::path::PathBuf;
 
+    use sniff_test::config::OverflowChecks;
+
     use super::{ColorChoice, SniffTestArgs};
 
     #[test]
@@ -175,6 +186,8 @@ mod tests {
                 "target/sniff-test",
                 "--color",
                 "always",
+                "--overflow-checks",
+                "on",
                 "--",
                 "--features",
                 "demo",
@@ -186,6 +199,7 @@ mod tests {
         assert_eq!(args.manifest_path, Some(PathBuf::from("sniff-test.toml")));
         assert_eq!(args.cache_dir, Some(PathBuf::from("target/sniff-test")));
         assert_eq!(args.color, ColorChoice::Always);
+        assert_eq!(args.overflow_checks, Some(OverflowChecks::On));
         assert_eq!(args.cargo_args, ["--features", "demo"]);
     }
 }

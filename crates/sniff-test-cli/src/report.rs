@@ -1,12 +1,12 @@
 //! Panic report rendering.
 use owo_colors::Style;
-use reachability::{ReachabilityEdge, ReachabilityGraph, ReachabilityNodeKind};
+use reachability::{ReachabilityEdge, ReachabilityEdgeId, ReachabilityGraph, ReachabilityNodeKind};
 use rustc_hir::def_id::DefId;
 use rustc_middle::ty::TyCtxt;
 use rustc_span::Pos;
 use sniff_test::cache::CachedFunctionSummary;
 use sniff_test::namespace::canonical_namespace;
-use sniff_test::panics::{PanicEvidence, PanicEvidenceKind, trace_edges_until, trigger_edge_index};
+use sniff_test::panics::{PanicEvidence, PanicEvidenceKind, trace_edges_until, trigger_edge_id};
 
 use crate::PanicFindingCounts;
 
@@ -40,15 +40,15 @@ impl PanicReport {
         graph: &ReachabilityGraph<'tcx>,
         evidence: &PanicEvidence,
     ) {
-        let trigger_edge_index = trigger_edge_index(graph, evidence);
-        let trigger_edge = &graph.edges()[trigger_edge_index];
+        let trigger_edge_id = trigger_edge_id(graph, evidence);
+        let trigger_edge = graph.edge(trigger_edge_id);
         let kind = ReportDetailKind::from_evidence(&evidence.kind);
         let detail = PanicReportDetail {
             kind,
             reason: report_evidence_kind(tcx, &evidence.kind),
             stack: self
                 .include_stack
-                .then(|| render_trace(tcx, graph, &evidence.trace.edge_indices)),
+                .then(|| render_trace(tcx, graph, &evidence.trace.edge_ids)),
         };
         self.push_detail(
             render_span(tcx, trigger_edge.span),
@@ -62,20 +62,20 @@ impl PanicReport {
         tcx: TyCtxt<'tcx>,
         graph: &ReachabilityGraph<'tcx>,
         evidence: &PanicEvidence,
-        obligation_edge_index: Option<usize>,
+        obligation_edge_id: Option<ReachabilityEdgeId>,
         documented_def_id: DefId,
         kind: ReportDetailKind,
     ) {
         let documented = canonical_namespace(tcx, documented_def_id);
-        let (span, edge) = obligation_edge_index.map_or_else(
+        let (span, edge) = obligation_edge_id.map_or_else(
             || {
                 (
                     render_span(tcx, tcx.def_span(documented_def_id)),
                     Some(String::from("report root documents panic behavior")),
                 )
             },
-            |edge_index| {
-                let edge = &graph.edges()[edge_index];
+            |edge_id| {
+                let edge = graph.edge(edge_id);
                 (
                     render_span(tcx, edge.span),
                     Some(render_edge_without_span(tcx, graph, edge)),
@@ -84,7 +84,7 @@ impl PanicReport {
         );
         let stack_edges = self
             .include_stack
-            .then(|| trace_edges_until(evidence, obligation_edge_index));
+            .then(|| trace_edges_until(evidence, obligation_edge_id));
         let detail = PanicReportDetail {
             kind,
             reason: ReportText::from_segments([
@@ -100,10 +100,10 @@ impl PanicReport {
         &mut self,
         tcx: TyCtxt<'tcx>,
         graph: &ReachabilityGraph<'tcx>,
-        edge_index: usize,
+        edge_id: ReachabilityEdgeId,
         summary: &CachedFunctionSummary,
     ) {
-        let edge = &graph.edges()[edge_index];
+        let edge = graph.edge(edge_id);
         self.push_detail(
             render_span(tcx, edge.span),
             Some(render_edge_without_span(tcx, graph, edge)),
@@ -119,11 +119,11 @@ impl PanicReport {
         &mut self,
         tcx: TyCtxt<'tcx>,
         graph: &ReachabilityGraph<'tcx>,
-        edge_index: usize,
+        edge_id: ReachabilityEdgeId,
         summary: &CachedFunctionSummary,
         kind: ReportDetailKind,
     ) {
-        let edge = &graph.edges()[edge_index];
+        let edge = graph.edge(edge_id);
         self.push_detail(
             render_span(tcx, edge.span),
             Some(render_edge_without_span(tcx, graph, edge)),
@@ -379,6 +379,7 @@ impl ReportDetailKind {
     fn from_evidence(kind: &PanicEvidenceKind) -> Self {
         match kind {
             PanicEvidenceKind::CompilerAssert => Self::CompilerAssert,
+            PanicEvidenceKind::PanicObligation { .. } => Self::PanicObligation,
             PanicEvidenceKind::PanicSink { .. } => Self::PanicInvocation,
         }
     }
@@ -478,9 +479,7 @@ pub(crate) fn emit_crate_panic_summary(
     dependency_count: usize,
     color: bool,
 ) {
-    if concrete_roots == 0
-        && generic_roots == 0
-        && counts.raw_panic_paths == 0
+    if counts.raw_panic_paths == 0
         && counts.panic_obligations == 0
         && counts.trusted_panic_obligations == 0
     {
@@ -542,6 +541,13 @@ pub(crate) fn emit_dependency_panic_summary(
     dependency_count: usize,
     color: bool,
 ) {
+    if counts.raw_panic_paths == 0
+        && counts.panic_obligations == 0
+        && counts.trusted_panic_obligations == 0
+    {
+        return;
+    }
+
     eprintln!(
         "{} {}, {}, {}, {}, {}, {}, {}",
         paint(
@@ -589,19 +595,6 @@ pub(crate) fn emit_dependency_panic_summary(
     );
 }
 
-pub(crate) fn emit_ignored_dependency_summary(crate_name: &str, pattern: &str, color: bool) {
-    eprintln!(
-        "{} {}, matched ignored-namespaces {}",
-        paint(
-            color,
-            OutputStyle::Bold,
-            &format!("sniff-test[{crate_name}]:")
-        ),
-        paint(color, OutputStyle::Warning, "ignored dependency"),
-        paint(color, OutputStyle::Info, &format!("{pattern:?}")),
-    );
-}
-
 pub(crate) fn emit_missing_report_root(crate_name: &str, root: &str, color: bool) {
     eprintln!(
         "{} {} {}",
@@ -618,17 +611,21 @@ pub(crate) fn emit_missing_report_root(crate_name: &str, root: &str, color: bool
 pub(crate) fn render_trace<'tcx>(
     tcx: TyCtxt<'tcx>,
     graph: &ReachabilityGraph<'tcx>,
-    edge_indices: &[usize],
+    edge_ids: &[ReachabilityEdgeId],
 ) -> Vec<String> {
-    edge_indices
+    edge_ids
         .iter()
-        .map(|edge_index| render_edge(tcx, graph, *edge_index))
+        .map(|edge_id| render_edge(tcx, graph, *edge_id))
         .collect()
 }
 
 fn report_evidence_kind(tcx: TyCtxt<'_>, kind: &PanicEvidenceKind) -> ReportText {
     match kind {
         PanicEvidenceKind::CompilerAssert => ReportText::plain("compiler assert"),
+        PanicEvidenceKind::PanicObligation { def_id } => ReportText::from_segments([
+            ReportTextSegment::styled(OutputStyle::Info, canonical_namespace(tcx, *def_id)),
+            ReportTextSegment::plain(" is documented panicable"),
+        ]),
         PanicEvidenceKind::PanicSink { def_id } => ReportText::from_segments([
             ReportTextSegment::plain("panic sink "),
             ReportTextSegment::styled(OutputStyle::Info, canonical_namespace(tcx, *def_id)),
@@ -686,9 +683,9 @@ fn cached_dependency_panic_reason(summary: &CachedFunctionSummary) -> ReportText
 pub(crate) fn render_edge<'tcx>(
     tcx: TyCtxt<'tcx>,
     graph: &ReachabilityGraph<'tcx>,
-    edge_index: usize,
+    edge_id: ReachabilityEdgeId,
 ) -> String {
-    let edge = &graph.edges()[edge_index];
+    let edge = graph.edge(edge_id);
     format!(
         "{}: {}",
         render_span(tcx, edge.span),
@@ -703,9 +700,9 @@ pub(crate) fn render_edge_without_span<'tcx>(
 ) -> String {
     format!(
         "{} --{}-> {}",
-        render_node(tcx, &graph.nodes()[edge.source.index()].kind),
+        render_node(tcx, &graph.node(edge.source).kind),
         edge.kind,
-        render_node(tcx, &graph.nodes()[edge.target.index()].kind)
+        render_node(tcx, &graph.node(edge.target).kind)
     )
 }
 

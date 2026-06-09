@@ -1,21 +1,25 @@
-use std::collections::{HashMap, VecDeque};
+use std::collections::{HashSet, VecDeque};
 use std::ops::ControlFlow;
 
-use rustc_hir::def_id::{CRATE_DEF_ID, DefId, LocalDefId};
+use rustc_hir::def_id::{DefId, LocalDefId};
 use rustc_middle::ty::{GenericArgs, Instance, InstanceKind, TyCtxt};
 
-use crate::body::{BodyEdge, collect_body_edges};
-use crate::graph::{ReachabilityEdge, ReachabilityGraph, ReachabilityNodeId, ReachabilityNodeKind};
+use crate::body::collect_body_edges;
+use crate::graph::{ReachabilityEdge, ReachabilityGraph, ReachabilityNodeId, ReachabilitySnapshot};
 use crate::hooks::{ReachabilityContext, ReachabilityControl, ReachabilityHalt, ReachabilityHooks};
 
 /// Starting point for reachability analysis.
 #[derive(Debug, Clone, Copy)]
 pub enum ReachabilityRoot<'tcx> {
-    /// Local non-generic HIR body.
+    /// Function definition id analyzed with identity generic arguments.
     ///
-    /// Generic local bodies cannot be analyzed through this variant because
-    /// reachability records concrete [`Instance`]s. Use [`Self::Instance`] once
-    /// the generic item has been monomorphized.
+    /// Prefer [`Self::Instance`] when concrete generic arguments are known.
+    DefId(DefId),
+    /// Local HIR body.
+    ///
+    /// Generic local bodies are analyzed with identity generic arguments.
+    /// Calls that still require trait/impl selection are recorded as indirect
+    /// boundaries instead of guessing a downstream implementation.
     LocalBody(LocalDefId),
     /// Concrete function instance.
     ///
@@ -24,21 +28,53 @@ pub enum ReachabilityRoot<'tcx> {
     Instance(Instance<'tcx>),
 }
 
-impl<'tcx> ReachabilityRoot<'tcx> {
-    fn into_instance(self, tcx: TyCtxt<'tcx>) -> Result<Instance<'tcx>, ReachabilityHalt<'tcx>> {
+impl From<DefId> for ReachabilityRoot<'_> {
+    fn from(def_id: DefId) -> Self {
+        Self::DefId(def_id)
+    }
+}
+
+impl From<LocalDefId> for ReachabilityRoot<'_> {
+    fn from(def_id: LocalDefId) -> Self {
+        Self::LocalBody(def_id)
+    }
+}
+
+impl<'tcx> From<Instance<'tcx>> for ReachabilityRoot<'tcx> {
+    fn from(instance: Instance<'tcx>) -> Self {
+        Self::Instance(instance)
+    }
+}
+
+/// Converts a query root into the function instance used for traversal.
+pub trait IntoInstance<'tcx> {
+    fn into_instance(self, tcx: TyCtxt<'tcx>) -> Instance<'tcx>;
+}
+
+impl<'tcx> IntoInstance<'tcx> for ReachabilityRoot<'tcx> {
+    fn into_instance(self, tcx: TyCtxt<'tcx>) -> Instance<'tcx> {
         match self {
-            Self::Instance(instance) => Ok(instance),
-            Self::LocalBody(def_id) => {
-                if tcx
-                    .generics_of(def_id.to_def_id())
-                    .requires_monomorphization(tcx)
-                {
-                    Err(ReachabilityHalt::RootRequiresConcreteInstance { root: def_id })
-                } else {
-                    Ok(Instance::mono(tcx, def_id.to_def_id()))
-                }
+            Self::Instance(instance) => instance,
+            Self::DefId(def_id) => {
+                Instance::new_raw(def_id, GenericArgs::identity_for_item(tcx, def_id))
             }
+            Self::LocalBody(def_id) => Instance::new_raw(
+                def_id.to_def_id(),
+                GenericArgs::identity_for_item(tcx, def_id.to_def_id()),
+            ),
         }
+    }
+}
+
+impl<'tcx> IntoInstance<'tcx> for Instance<'tcx> {
+    fn into_instance(self, _tcx: TyCtxt<'tcx>) -> Instance<'tcx> {
+        self
+    }
+}
+
+impl<'tcx> IntoInstance<'tcx> for DefId {
+    fn into_instance(self, tcx: TyCtxt<'tcx>) -> Instance<'tcx> {
+        ReachabilityRoot::from(self).into_instance(tcx)
     }
 }
 
@@ -48,13 +84,13 @@ pub struct ReachabilityOptions {
     /// Whether to enqueue reachable function instances and walk them
     /// transitively.
     ///
-    /// When false, the graph contains only the root body and its immediate
+    /// When false, the snapshot contains only the root body and its immediate
     /// outgoing edges.
     pub transitive: bool,
     /// Maximum number of function instances to visit.
     ///
     /// The limit counts visited function nodes, not compiler artifact nodes.
-    /// When reached, the graph is returned with
+    /// When reached, the snapshot is returned with
     /// [`ReachabilityHalt::NodeLimitReached`].
     pub node_limit: Option<usize>,
     /// Whether traversal may descend into non-local instances when MIR is
@@ -75,186 +111,91 @@ impl Default for ReachabilityOptions {
     }
 }
 
-#[derive(Debug, Clone, Copy)]
-struct QueueItem<'tcx> {
-    node_id: ReachabilityNodeId,
-    instance: Instance<'tcx>,
-    depth: usize,
-}
-
-/// Analyzes reachability from a local non-generic body with default options.
+/// Shared reachability index for one compiler context.
 ///
-/// # Halting
-///
-/// If `root` requires monomorphization, the returned graph is marked with
-/// [`ReachabilityHalt::RootRequiresConcreteInstance`].
-pub fn analyze_local_reachability<'tcx, H>(
+/// The index caches expanded outgoing edges per function instance and stores a
+/// shared node/edge arena. Each call to [`query`](Self::query) performs a
+/// root-specific BFS over that arena and returns a [`ReachabilitySnapshot`].
+pub struct ReachabilityIndex<'tcx> {
     tcx: TyCtxt<'tcx>,
-    root: LocalDefId,
-    hooks: &mut H,
-) -> ReachabilityGraph<'tcx>
-where
-    H: ReachabilityHooks<'tcx>,
-{
-    analyze_reachability(
-        tcx,
-        ReachabilityRoot::LocalBody(root),
-        hooks,
-        ReachabilityOptions::default(),
-    )
-}
-
-/// Analyzes reachability from a root function.
-///
-/// Traversal is breadth-first. Function instances are de-duplicated so a
-/// function appears as one node even if multiple call sites point to it. Hooks
-/// are called before descending and may stop traversal or suppress recursion
-/// into selected targets.
-///
-/// The returned graph is useful even when [`ReachabilityGraph::halt`] is set;
-/// in that case it contains the partial graph discovered before the halt.
-pub fn analyze_reachability<'tcx, H>(
-    tcx: TyCtxt<'tcx>,
-    root: ReachabilityRoot<'tcx>,
-    hooks: &mut H,
-    options: ReachabilityOptions,
-) -> ReachabilityGraph<'tcx>
-where
-    H: ReachabilityHooks<'tcx>,
-{
-    let root = match root.into_instance(tcx) {
-        Ok(root) => root,
-        Err(halt) => {
-            let fallback = Instance {
-                def: InstanceKind::Item(CRATE_DEF_ID.to_def_id()),
-                args: GenericArgs::empty(),
-            };
-            let mut graph = ReachabilityGraph::new(fallback);
-            graph.mark_halted(halt);
-            return graph;
-        }
-    };
-    let graph = ReachabilityGraph::new(root);
-    let root_node_id = graph.root();
-    let instance_nodes = HashMap::from([(root, root_node_id)]);
-    let mut builder = ReachabilityGraphBuilder {
-        tcx,
-        root,
-        graph,
-        hooks,
-        options,
-        visited: HashMap::new(),
-        instance_nodes,
-        queue: VecDeque::from([QueueItem {
-            node_id: root_node_id,
-            instance: root,
-            depth: 0,
-        }]),
-    };
-
-    if let ControlFlow::Break(halt) = builder.run() {
-        builder.graph.mark_halted(halt);
-    }
-
-    builder.graph
-}
-
-struct ReachabilityGraphBuilder<'a, 'tcx, H> {
-    tcx: TyCtxt<'tcx>,
-    root: Instance<'tcx>,
     graph: ReachabilityGraph<'tcx>,
-    hooks: &'a mut H,
-    options: ReachabilityOptions,
-    visited: HashMap<Instance<'tcx>, usize>,
-    instance_nodes: HashMap<Instance<'tcx>, ReachabilityNodeId>,
-    queue: VecDeque<QueueItem<'tcx>>,
+    expanded_instances: HashSet<Instance<'tcx>>,
 }
 
-impl<'tcx, H> ReachabilityGraphBuilder<'_, 'tcx, H>
-where
-    H: ReachabilityHooks<'tcx>,
-{
-    fn run(&mut self) -> ReachabilityControl<'tcx> {
-        while let Some(item) = self.queue.pop_front() {
-            if self.visited.contains_key(&item.instance) {
-                continue;
-            }
+impl<'tcx> ReachabilityIndex<'tcx> {
+    #[must_use]
+    pub fn new(tcx: TyCtxt<'tcx>) -> Self {
+        Self {
+            tcx,
+            graph: ReachabilityGraph::new(),
+            expanded_instances: HashSet::new(),
+        }
+    }
 
-            if let Some(limit) = self.options.node_limit
-                && self.visited.len() >= limit
-            {
-                return ControlFlow::Break(ReachabilityHalt::NodeLimitReached { limit });
-            }
+    #[must_use]
+    pub fn graph(&self) -> &ReachabilityGraph<'tcx> {
+        &self.graph
+    }
 
-            self.visited.insert(item.instance, item.depth);
+    /// Runs a root-specific reachability query over the shared graph.
+    pub fn query<R, H>(
+        &mut self,
+        root: R,
+        hooks: &mut H,
+        options: ReachabilityOptions,
+    ) -> ReachabilitySnapshot<'tcx>
+    where
+        R: IntoInstance<'tcx>,
+        H: ReachabilityHooks<'tcx>,
+    {
+        let root = root.into_instance(self.tcx);
+        let root_node_id = self.graph.node_for_instance(root);
+        let snapshot = self.graph.snapshot_for_root(root_node_id);
+        let query = ReachabilityQuery {
+            index: self,
+            root,
+            hooks,
+            options,
+            visited: HashSet::new(),
+            queue: VecDeque::from([QueueItem {
+                node_id: root_node_id,
+                instance: root,
+                depth: 0,
+            }]),
+            snapshot,
+        };
 
-            let cx = self.context(item.instance, item.depth);
-            self.hooks.on_node(cx)?;
+        query.run()
+    }
 
-            if !self.can_descend_into(item.instance) {
-                continue;
-            }
-
-            collect_body_edges(self.tcx, item.instance, |edge| self.push_edge(item, edge))?;
+    fn ensure_expanded(&mut self, instance: Instance<'tcx>) -> ReachabilityControl<'tcx> {
+        if self.expanded_instances.contains(&instance) {
+            return ControlFlow::Continue(());
         }
 
+        let source = self.graph.node_for_instance(instance);
+        let mut body_edges = Vec::new();
+        collect_body_edges(self.tcx, instance, |edge| {
+            body_edges.push(edge);
+            ControlFlow::Continue(())
+        })?;
+        for body_edge in body_edges {
+            let target = self.graph.node_for_kind(body_edge.target);
+            self.graph.push_edge(ReachabilityEdge::new(
+                source,
+                target,
+                body_edge.kind,
+                body_edge.span,
+            ));
+        }
+        self.expanded_instances.insert(instance);
         ControlFlow::Continue(())
     }
 
-    fn push_edge(
-        &mut self,
-        item: QueueItem<'tcx>,
-        edge: BodyEdge<'tcx>,
-    ) -> ReachabilityControl<'tcx> {
-        let (target_id, target_instance) = self.target_node(edge.target, item.depth + 1);
-        let edge = ReachabilityEdge::new(item.node_id, target_id, edge.kind, edge.span);
-        let cx = self.context(item.instance, item.depth);
-        self.hooks.on_edge(cx, &edge)?;
-
-        if self.options.transitive
-            && let Some(target) = target_instance
-        {
-            let should_descend = self.hooks.should_descend(cx, &edge, target)?;
-            if should_descend && !self.visited.contains_key(&target) {
-                self.queue.push_back(QueueItem {
-                    node_id: target_id,
-                    instance: target,
-                    depth: item.depth + 1,
-                });
-            }
-        }
-
-        self.graph.push_edge(edge);
-        ControlFlow::Continue(())
-    }
-
-    fn target_node(
-        &mut self,
-        target: ReachabilityNodeKind<'tcx>,
-        depth: usize,
-    ) -> (ReachabilityNodeId, Option<Instance<'tcx>>) {
-        match target {
-            ReachabilityNodeKind::Instance(instance) => {
-                let id = if let Some(id) = self.instance_nodes.get(&instance) {
-                    *id
-                } else {
-                    let id = self
-                        .graph
-                        .push_node(ReachabilityNodeKind::Instance(instance), depth);
-                    self.instance_nodes.insert(instance, id);
-                    id
-                };
-                (id, Some(instance))
-            }
-            target => (self.graph.push_node(target, depth), None),
-        }
-    }
-
-    fn can_descend_into(&self, instance: Instance<'tcx>) -> bool {
+    fn can_descend_into(&self, options: ReachabilityOptions, instance: Instance<'tcx>) -> bool {
         match instance.def {
             InstanceKind::Item(def_id) => {
-                (self.options.analyze_external || def_id.is_local())
-                    && self.item_mir_available(def_id)
+                (options.analyze_external || def_id.is_local()) && self.item_mir_available(def_id)
             }
             InstanceKind::Intrinsic(..) | InstanceKind::Virtual(..) => false,
             InstanceKind::VTableShim(..)
@@ -269,27 +210,112 @@ where
             | InstanceKind::FnPtrAddrShim(..)
             | InstanceKind::AsyncDropGlueCtorShim(..)
             | InstanceKind::AsyncDropGlue(..) => {
-                self.options.analyze_external || instance.def_id().is_local()
+                options.analyze_external || instance.def_id().is_local()
             }
         }
     }
 
     fn item_mir_available(&self, def_id: DefId) -> bool {
         if let Some(local) = def_id.as_local() {
-            self.tcx.has_typeck_results(local)
+            self.tcx.has_typeck_results(local) && self.tcx.hir_maybe_body_owned_by(local).is_some()
         } else {
             self.tcx.is_mir_available(def_id)
         }
     }
+}
+
+#[derive(Debug, Clone, Copy)]
+struct QueueItem<'tcx> {
+    node_id: ReachabilityNodeId,
+    instance: Instance<'tcx>,
+    depth: usize,
+}
+
+struct ReachabilityQuery<'a, 'tcx, H> {
+    index: &'a mut ReachabilityIndex<'tcx>,
+    root: Instance<'tcx>,
+    hooks: &'a mut H,
+    options: ReachabilityOptions,
+    visited: HashSet<Instance<'tcx>>,
+    queue: VecDeque<QueueItem<'tcx>>,
+    snapshot: ReachabilitySnapshot<'tcx>,
+}
+
+impl<'tcx, H> ReachabilityQuery<'_, 'tcx, H>
+where
+    H: ReachabilityHooks<'tcx>,
+{
+    fn run(mut self) -> ReachabilitySnapshot<'tcx> {
+        if let ControlFlow::Break(halt) = self.traverse() {
+            self.snapshot.mark_halted(halt);
+        }
+
+        self.snapshot
+    }
+
+    fn traverse(&mut self) -> ReachabilityControl<'tcx> {
+        while let Some(item) = self.queue.pop_front() {
+            if self.visited.contains(&item.instance) {
+                continue;
+            }
+
+            if let Some(limit) = self.options.node_limit
+                && self.visited.len() >= limit
+            {
+                return ControlFlow::Break(ReachabilityHalt::NodeLimitReached { limit });
+            }
+
+            self.visited.insert(item.instance);
+
+            let cx = self.context(item.instance, item.depth);
+            self.hooks.on_node(cx)?;
+
+            if !self.index.can_descend_into(self.options, item.instance) {
+                continue;
+            }
+
+            self.index.ensure_expanded(item.instance)?;
+            self.visit_outgoing_edges(item)?;
+        }
+
+        ControlFlow::Continue(())
+    }
+
+    fn visit_outgoing_edges(&mut self, item: QueueItem<'tcx>) -> ReachabilityControl<'tcx> {
+        let outgoing = self.index.graph.outgoing_edges(item.node_id).to_vec();
+
+        for edge_id in outgoing {
+            let edge = self.index.graph.edge(edge_id).clone();
+            let cx = self.context(item.instance, item.depth);
+            self.hooks.on_edge(cx, &edge)?;
+
+            let first_reach = self
+                .snapshot
+                .record_edge(edge_id, edge.target, item.depth + 1);
+            if self.options.transitive
+                && let Some(target) = self.index.graph.node_instance(edge.target)
+            {
+                let should_descend = self.hooks.should_descend(cx, &edge, target)?;
+                if should_descend && first_reach && !self.visited.contains(&target) {
+                    self.queue.push_back(QueueItem {
+                        node_id: edge.target,
+                        instance: target,
+                        depth: item.depth + 1,
+                    });
+                }
+            }
+        }
+
+        ControlFlow::Continue(())
+    }
 
     fn context(&self, current: Instance<'tcx>, depth: usize) -> ReachabilityContext<'tcx> {
         ReachabilityContext {
-            tcx: self.tcx,
+            tcx: self.index.tcx,
             root: self.root,
             current,
             depth,
-            edge_count: self.graph.edges().len(),
-            node_count: self.graph.nodes().len(),
+            stats: self.snapshot.stats(),
         }
     }
 }

@@ -10,8 +10,8 @@ use std::path::PathBuf;
 use std::process::Command;
 
 use reachability::{
-    NoopReachabilityHooks, ReachabilityGraph, ReachabilityNodeKind, ReachabilityOptions,
-    ReachabilityRoot, analyze_reachability,
+    NoopReachabilityHooks, ReachabilityGraph, ReachabilityIndex, ReachabilityNodeKind,
+    ReachabilityOptions, ReachabilityRoot,
 };
 use rustc_driver::{Callbacks, Compilation};
 use rustc_hir::def_id::LocalDefId;
@@ -164,6 +164,36 @@ pub fn chunk_slice(slice: &[usize], chunk_size: usize) -> Vec<&[usize]> {
     assert_contains(&report.compiler_asserts, "DivisionByZero");
 }
 
+#[test]
+fn generic_roots_report_compiler_asserts() {
+    let report = analyze_source(
+        r"
+pub fn generic_index<T>(values: &[T], index: usize) -> &T {
+    &values[index]
+}
+",
+        "generic_index",
+    );
+
+    assert!(report.raw_panic_paths > 0, "{report:#?}");
+    assert_contains(&report.compiler_asserts, "BoundsCheck");
+}
+
+#[test]
+fn generic_roots_report_panic_obligations() {
+    let report = analyze_source(
+        r"
+pub fn generic_split_at<T>(values: &[T], index: usize) -> &[T] {
+    values.split_at(index).0
+}
+",
+        "generic_split_at",
+    );
+
+    assert_eq!(report.raw_panic_paths, 0, "{report:#?}");
+    assert_contains(&report.panic_obligations, "split_at");
+}
+
 #[derive(Debug, Default)]
 struct PanicReport {
     raw_panic_paths: usize,
@@ -211,8 +241,8 @@ impl Callbacks for PanicCallbacks {
     fn after_analysis(&mut self, _compiler: &interface::Compiler, tcx: TyCtxt<'_>) -> Compilation {
         let root = find_local_body(tcx, &self.root_suffix);
         let mut hooks = NoopReachabilityHooks;
-        let graph = analyze_reachability(
-            tcx,
+        let mut index = ReachabilityIndex::new(tcx);
+        let result = index.query(
             ReachabilityRoot::LocalBody(root),
             &mut hooks,
             ReachabilityOptions {
@@ -221,7 +251,8 @@ impl Callbacks for PanicCallbacks {
                 ..ReachabilityOptions::default()
             },
         );
-        let analysis = analyze_panic_evidence(tcx, &graph, &self.config);
+        let graph = index.graph();
+        let analysis = analyze_panic_evidence(tcx, graph, &result, &self.config);
         let mut report = PanicReport::default();
 
         for evidence in &analysis.evidence {
@@ -238,8 +269,9 @@ impl Callbacks for PanicCallbacks {
                 PanicEvidenceKind::CompilerAssert => {
                     report
                         .compiler_asserts
-                        .push(compiler_assert_message(&graph, evidence.edge_index));
+                        .push(compiler_assert_message(graph, evidence.edge_id));
                 }
+                PanicEvidenceKind::PanicObligation { .. } => {}
                 PanicEvidenceKind::PanicSink { .. } => report
                     .panic_sinks
                     .push(describe_panic_evidence_kind(tcx, &evidence.kind)),
@@ -251,9 +283,12 @@ impl Callbacks for PanicCallbacks {
     }
 }
 
-fn compiler_assert_message(graph: &ReachabilityGraph<'_>, edge_index: usize) -> String {
-    let edge = &graph.edges()[edge_index];
-    match &graph.nodes()[edge.target.index()].kind {
+fn compiler_assert_message(
+    graph: &ReachabilityGraph<'_>,
+    edge_id: reachability::ReachabilityEdgeId,
+) -> String {
+    let edge = graph.edge(edge_id);
+    match &graph.node(edge.target).kind {
         ReachabilityNodeKind::CompilerAssert { message } => format!("{message:?}"),
         node => panic!("expected compiler assert target, got {node:?}"),
     }

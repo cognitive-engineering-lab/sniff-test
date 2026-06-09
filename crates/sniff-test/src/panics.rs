@@ -9,8 +9,8 @@
 //!   obligations, can stop propagation depending on caller trust policy.
 
 use reachability::{
-    ReachabilityEdge, ReachabilityEdgeKind, ReachabilityGraph, ReachabilityNodeId,
-    ReachabilityNodeKind,
+    ReachabilityEdgeId, ReachabilityEdgeKind, ReachabilityGraph, ReachabilityNodeKind,
+    ReachabilitySnapshot, ReachedEdge, ReachedNode,
 };
 use rustc_hir::Attribute;
 use rustc_hir::attrs::{AttributeKind, HasAttrs};
@@ -28,7 +28,7 @@ pub struct PanicAnalysis {
 #[derive(Debug, Clone)]
 pub struct PanicEvidence {
     /// Edge that directly triggered this evidence before report-local adjustment.
-    pub edge_index: usize,
+    pub edge_id: ReachabilityEdgeId,
     /// Reachability path from the root to the triggering edge.
     pub trace: PanicTrace,
     /// Raw reason found in MIR/reachability data.
@@ -37,29 +37,31 @@ pub struct PanicEvidence {
     pub decision: PanicPathDecision,
 }
 
-/// Edge-index trace through a reachability graph.
+/// Edge-id trace through a reachability graph.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PanicTrace {
-    pub edge_indices: Vec<usize>,
+    pub edge_ids: Vec<ReachabilityEdgeId>,
 }
 
 /// Raw panic evidence found in the graph.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Copy)]
 pub enum PanicEvidenceKind {
     /// Compiler-generated MIR assert, such as bounds, overflow, or invalid shift checks.
     CompilerAssert,
+    /// Direct call to a function documented or configured as panicable.
+    PanicObligation { def_id: DefId },
     /// Direct call to a configured panic sink.
     PanicSink { def_id: DefId },
 }
 
 /// Propagation decision for one panic evidence path.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PanicPathDecision {
     /// No documented/configured obligation stopped this path.
     RawPanic,
     /// The path reached a function boundary that documents or declares panic behavior.
     PanicObligation {
-        edge_index: Option<usize>,
+        edge_id: Option<ReachabilityEdgeId>,
         def_id: DefId,
     },
 }
@@ -68,29 +70,41 @@ pub enum PanicPathDecision {
 pub fn analyze_panic_evidence<'tcx>(
     tcx: TyCtxt<'tcx>,
     graph: &ReachabilityGraph<'tcx>,
+    result: &ReachabilitySnapshot<'tcx>,
     config: &PanicConfig,
 ) -> PanicAnalysis {
-    let predecessor_edges = predecessor_edges(graph);
-    let evidence = graph
+    let view = graph.view(result);
+    let root = view.root();
+    let evidence = view
         .edges()
-        .iter()
-        .enumerate()
-        .filter_map(|(edge_index, edge)| {
-            let kind = classify_edge(tcx, graph, edge, config)?;
+        .filter_map(|edge| {
+            let edge_id = edge.id();
+            let kind = classify_edge(tcx, edge, config)?;
             let trace = PanicTrace {
-                edge_indices: trace_to_edge_indices_with_predecessors(
-                    graph,
-                    &predecessor_edges,
-                    edge_index,
-                ),
+                edge_ids: trace_to_edge_ids(edge),
             };
             if trace_crosses_ignored_namespace(tcx, graph, &trace, config) {
                 return None;
             }
-            let decision = classify_panic_path(tcx, graph, &trace, config);
+            let decision = match kind {
+                PanicEvidenceKind::PanicObligation { def_id } => {
+                    let path_decision = classify_panic_path(tcx, graph, root, &trace, config);
+                    if matches!(path_decision, PanicPathDecision::RawPanic) {
+                        PanicPathDecision::PanicObligation {
+                            edge_id: Some(edge_id),
+                            def_id,
+                        }
+                    } else {
+                        path_decision
+                    }
+                }
+                PanicEvidenceKind::CompilerAssert | PanicEvidenceKind::PanicSink { .. } => {
+                    classify_panic_path(tcx, graph, root, &trace, config)
+                }
+            };
 
             Some(PanicEvidence {
-                edge_index,
+                edge_id,
                 trace,
                 kind,
                 decision,
@@ -101,22 +115,25 @@ pub fn analyze_panic_evidence<'tcx>(
     PanicAnalysis { evidence }
 }
 
-/// Returns the evidence trace up to and including `edge_index`.
+/// Returns the evidence trace up to and including `edge_id`.
 #[must_use]
-pub fn trace_edges_until(evidence: &PanicEvidence, edge_index: Option<usize>) -> Vec<usize> {
-    let Some(edge_index) = edge_index else {
+pub fn trace_edges_until(
+    evidence: &PanicEvidence,
+    edge_id: Option<ReachabilityEdgeId>,
+) -> Vec<ReachabilityEdgeId> {
+    let Some(edge_id) = edge_id else {
         return Vec::new();
     };
     let Some(position) = evidence
         .trace
-        .edge_indices
+        .edge_ids
         .iter()
-        .position(|trace_edge_index| *trace_edge_index == edge_index)
+        .position(|trace_edge_id| *trace_edge_id == edge_id)
     else {
-        return evidence.trace.edge_indices.clone();
+        return evidence.trace.edge_ids.clone();
     };
 
-    evidence.trace.edge_indices[..=position].to_vec()
+    evidence.trace.edge_ids[..=position].to_vec()
 }
 
 /// Chooses the edge to show as the local trigger for an evidence path.
@@ -124,27 +141,31 @@ pub fn trace_edges_until(evidence: &PanicEvidence, edge_index: Option<usize>) ->
 /// Reports prefer the last edge whose source is local, because dependency
 /// internals can otherwise hide the current-crate call site that matters most.
 #[must_use]
-pub fn trigger_edge_index(graph: &ReachabilityGraph<'_>, evidence: &PanicEvidence) -> usize {
+pub fn trigger_edge_id(
+    graph: &ReachabilityGraph<'_>,
+    evidence: &PanicEvidence,
+) -> ReachabilityEdgeId {
     evidence
         .trace
-        .edge_indices
+        .edge_ids
         .iter()
         .copied()
         .rev()
-        .find(|edge_index| {
+        .find(|edge_id| {
             matches!(
-                &graph.nodes()[graph.edges()[*edge_index].source.index()].kind,
+                graph.node(graph.edge(*edge_id).source).kind,
                 ReachabilityNodeKind::Instance(instance) if instance.def_id().is_local()
             )
         })
-        .unwrap_or(evidence.edge_index)
+        .unwrap_or(evidence.edge_id)
 }
 
-/// Returns the graph trace up to and including `edge_index`.
+/// Returns the graph trace up to and including `edge`.
 #[must_use]
-pub fn trace_to_edge_indices(graph: &ReachabilityGraph<'_>, edge_index: usize) -> Vec<usize> {
-    let predecessor_edges = predecessor_edges(graph);
-    trace_to_edge_indices_with_predecessors(graph, &predecessor_edges, edge_index)
+pub fn trace_to_edge_ids(edge: ReachedEdge<'_, '_>) -> Vec<ReachabilityEdgeId> {
+    let mut edge_ids = trace_to_node(edge.source());
+    edge_ids.push(edge.id());
+    edge_ids
 }
 
 /// Stable plain-text description for cached evidence reasons.
@@ -152,6 +173,9 @@ pub fn trace_to_edge_indices(graph: &ReachabilityGraph<'_>, edge_index: usize) -
 pub fn describe_panic_evidence_kind(tcx: TyCtxt<'_>, kind: &PanicEvidenceKind) -> String {
     match kind {
         PanicEvidenceKind::CompilerAssert => String::from("compiler assert"),
+        PanicEvidenceKind::PanicObligation { def_id } => {
+            format!("panic obligation {}", canonical_namespace(tcx, *def_id))
+        }
         PanicEvidenceKind::PanicSink { def_id } => {
             format!("panic sink {}", canonical_namespace(tcx, *def_id))
         }
@@ -161,21 +185,23 @@ pub fn describe_panic_evidence_kind(tcx: TyCtxt<'_>, kind: &PanicEvidenceKind) -
 fn classify_panic_path<'tcx>(
     tcx: TyCtxt<'tcx>,
     graph: &ReachabilityGraph<'tcx>,
+    root: ReachedNode<'_, 'tcx>,
     trace: &PanicTrace,
     config: &PanicConfig,
 ) -> PanicPathDecision {
-    if let Some(def_id) = panic_obligation_instance_node(tcx, graph, graph.root(), config) {
+    if let Some(def_id) = panic_obligation_node_kind(tcx, root.kind(), config) {
         return PanicPathDecision::PanicObligation {
-            edge_index: None,
+            edge_id: None,
             def_id,
         };
     }
 
-    for edge_index in &trace.edge_indices {
-        let edge = &graph.edges()[*edge_index];
-        if let Some(def_id) = panic_obligation_instance_node(tcx, graph, edge.target, config) {
+    for edge_id in &trace.edge_ids {
+        let edge = graph.edge(*edge_id);
+        let target = &graph.node(edge.target).kind;
+        if let Some(def_id) = panic_obligation_node_kind(tcx, target, config) {
             return PanicPathDecision::PanicObligation {
-                edge_index: Some(*edge_index),
+                edge_id: Some(*edge_id),
                 def_id,
             };
         }
@@ -184,19 +210,16 @@ fn classify_panic_path<'tcx>(
     PanicPathDecision::RawPanic
 }
 
-fn panic_obligation_instance_node<'tcx>(
+fn panic_obligation_node_kind<'tcx>(
     tcx: TyCtxt<'tcx>,
-    graph: &ReachabilityGraph<'tcx>,
-    node: ReachabilityNodeId,
+    node: &ReachabilityNodeKind<'tcx>,
     config: &PanicConfig,
 ) -> Option<DefId> {
-    match &graph.nodes()[node.index()].kind {
+    match node {
         ReachabilityNodeKind::Instance(instance) => {
             let def_id = instance.def_id();
-            let crate_name = tcx.crate_name(def_id.krate).to_string();
             let path = canonical_namespace(tcx, def_id);
-            (!config.ignores_namespace(&crate_name)
-                && !config.ignores_namespace(&path)
+            (!config.ignores_def(tcx, def_id)
                 && (has_panic_docs(tcx, def_id) || config.marks_panic_obligation_function(&path)))
             .then_some(def_id)
         }
@@ -243,49 +266,15 @@ fn line_has_panic_heading(line: &str) -> bool {
     )
 }
 
-fn predecessor_edges(graph: &ReachabilityGraph<'_>) -> Vec<Option<usize>> {
-    let mut reached = vec![false; graph.nodes().len()];
-    let mut predecessors = vec![None; graph.nodes().len()];
-    reached[graph.root().index()] = true;
-
-    for (edge_index, edge) in graph.edges().iter().enumerate() {
-        let source_index = edge.source.index();
-        let target_index = edge.target.index();
-        if reached[source_index] && !reached[target_index] {
-            reached[target_index] = true;
-            predecessors[target_index] = Some(edge_index);
-        }
+fn trace_to_node(mut node: ReachedNode<'_, '_>) -> Vec<ReachabilityEdgeId> {
+    let mut edge_ids = Vec::new();
+    while let Some(edge) = node.predecessor_edge() {
+        let edge_id = edge.id();
+        edge_ids.push(edge_id);
+        node = edge.source();
     }
-
-    predecessors
-}
-
-fn trace_to_edge_indices_with_predecessors(
-    graph: &ReachabilityGraph<'_>,
-    predecessor_edges: &[Option<usize>],
-    edge_index: usize,
-) -> Vec<usize> {
-    let mut edge_indices =
-        trace_to_node(graph, predecessor_edges, graph.edges()[edge_index].source);
-    edge_indices.push(edge_index);
-    edge_indices
-}
-
-fn trace_to_node(
-    graph: &ReachabilityGraph<'_>,
-    predecessor_edges: &[Option<usize>],
-    mut node: ReachabilityNodeId,
-) -> Vec<usize> {
-    let mut edge_indices = Vec::new();
-    while node != graph.root() {
-        let Some(edge_index) = predecessor_edges[node.index()] else {
-            break;
-        };
-        edge_indices.push(edge_index);
-        node = graph.edges()[edge_index].source;
-    }
-    edge_indices.reverse();
-    edge_indices
+    edge_ids.reverse();
+    edge_ids
 }
 
 fn trace_crosses_ignored_namespace<'tcx>(
@@ -294,25 +283,24 @@ fn trace_crosses_ignored_namespace<'tcx>(
     trace: &PanicTrace,
     config: &PanicConfig,
 ) -> bool {
-    trace.edge_indices.iter().any(|edge_index| {
-        let edge = &graph.edges()[*edge_index];
-        node_is_ignored_namespace(tcx, graph, edge.source, config)
-            || node_is_ignored_namespace(tcx, graph, edge.target, config)
+    trace.edge_ids.iter().any(|edge_id| {
+        let edge = graph.edge(*edge_id);
+        let source = &graph.node(edge.source).kind;
+        let target = &graph.node(edge.target).kind;
+        node_kind_is_ignored_namespace(tcx, source, config)
+            || node_kind_is_ignored_namespace(tcx, target, config)
     })
 }
 
-fn node_is_ignored_namespace<'tcx>(
+fn node_kind_is_ignored_namespace<'tcx>(
     tcx: TyCtxt<'tcx>,
-    graph: &ReachabilityGraph<'tcx>,
-    node: ReachabilityNodeId,
+    node: &ReachabilityNodeKind<'tcx>,
     config: &PanicConfig,
 ) -> bool {
-    match &graph.nodes()[node.index()].kind {
+    match node {
         ReachabilityNodeKind::Instance(instance) => {
             let def_id = instance.def_id();
-            let crate_name = tcx.crate_name(def_id.krate).to_string();
-            let path = canonical_namespace(tcx, def_id);
-            config.ignores_namespace(&crate_name) || config.ignores_namespace(&path)
+            config.ignores_def(tcx, def_id)
         }
         ReachabilityNodeKind::CompilerAssert { .. }
         | ReachabilityNodeKind::IndirectCall { .. }
@@ -322,26 +310,31 @@ fn node_is_ignored_namespace<'tcx>(
 
 fn classify_edge<'tcx>(
     tcx: TyCtxt<'tcx>,
-    graph: &ReachabilityGraph<'tcx>,
-    edge: &ReachabilityEdge,
+    edge: ReachedEdge<'_, 'tcx>,
     config: &PanicConfig,
 ) -> Option<PanicEvidenceKind> {
-    let target = &graph.nodes()[edge.target.index()].kind;
+    let target = edge.target().kind();
     match target {
         ReachabilityNodeKind::CompilerAssert { .. } => Some(PanicEvidenceKind::CompilerAssert),
         ReachabilityNodeKind::Instance(instance)
             if matches!(
-                edge.kind,
+                edge.kind(),
                 ReachabilityEdgeKind::DirectCall | ReachabilityEdgeKind::TailCall
             ) =>
         {
             let def_id = instance.def_id();
-            let crate_name = tcx.crate_name(def_id.krate).to_string();
+            if config.ignores_def(tcx, def_id) {
+                return None;
+            }
+
             let path = canonical_namespace(tcx, def_id);
-            (!config.ignores_namespace(&crate_name)
-                && !config.ignores_namespace(&path)
-                && config.marks_panic_sink_namespace(&path))
-            .then_some(PanicEvidenceKind::PanicSink { def_id })
+            if has_panic_docs(tcx, def_id) || config.marks_panic_obligation_function(&path) {
+                return Some(PanicEvidenceKind::PanicObligation { def_id });
+            }
+
+            config
+                .marks_panic_sink_namespace(&path)
+                .then_some(PanicEvidenceKind::PanicSink { def_id })
         }
         ReachabilityNodeKind::Instance(_)
         | ReachabilityNodeKind::IndirectCall { .. }

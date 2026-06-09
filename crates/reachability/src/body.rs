@@ -16,7 +16,8 @@ use rustc_middle::mir::{
 use rustc_middle::ty::adjustment::PointerCoercion;
 use rustc_middle::ty::vtable::VtblEntry;
 use rustc_middle::ty::{
-    self, EarlyBinder, GenericArgs, Instance, Ty, TyCtxt, TyKind, TypeFoldable,
+    self, EarlyBinder, GenericArgs, GenericArgsRef, Instance, Ty, TyCtxt, TyKind, TypeFoldable,
+    TypeVisitableExt,
 };
 use rustc_span::Span;
 
@@ -79,7 +80,9 @@ where
             return ControlFlow::Continue(());
         };
 
-        let hir_body = self.tcx.hir_body_owned_by(caller);
+        let Some(hir_body) = self.tcx.hir_maybe_body_owned_by(caller) else {
+            return ControlFlow::Continue(());
+        };
         let mut visitor = HirDefinitionCollector {
             graph: self,
             caller,
@@ -97,11 +100,18 @@ where
     where
         T: TypeFoldable<TyCtxt<'tcx>>,
     {
-        self.caller.instantiate_mir_and_normalize_erasing_regions(
-            self.tcx,
-            ty::TypingEnv::fully_monomorphized(),
-            EarlyBinder::bind(value),
-        )
+        let value = EarlyBinder::bind(value);
+        if self.caller.args.has_param() {
+            value
+                .instantiate(self.tcx, self.caller.args)
+                .skip_norm_wip()
+        } else {
+            self.caller.instantiate_mir_and_normalize_erasing_regions(
+                self.tcx,
+                ty::TypingEnv::fully_monomorphized(),
+                value,
+            )
+        }
     }
 
     fn emit_edge(
@@ -152,14 +162,10 @@ where
         let callee_ty = self.monomorphize(func.ty(&self.body.local_decls, self.tcx));
 
         if let TyKind::FnDef(def_id, args) = *callee_ty.kind() {
-            if let Some(instance) =
-                Instance::try_resolve(self.tcx, ty::TypingEnv::fully_monomorphized(), def_id, args)
-                    .ok()
-                    .flatten()
-            {
+            if let Some(instance) = self.resolve_callable_instance(def_id, args) {
                 self.emit_instance(instance, kind, span)
             } else {
-                self.emit_indirect(callee_ty, kind, span)
+                self.emit_indirect(callee_ty, ReachabilityEdgeKind::IndirectCall, span)
             }
         } else {
             self.emit_indirect(callee_ty, ReachabilityEdgeKind::IndirectCall, span)
@@ -175,30 +181,19 @@ where
         match ty.kind() {
             TyKind::FnDef(def_id, args) => {
                 let instance = match kind {
-                    ReachabilityEdgeKind::FnPointerReify => Instance::resolve_for_fn_ptr(
-                        self.tcx,
-                        ty::TypingEnv::fully_monomorphized(),
-                        *def_id,
-                        args,
-                    )
-                    .or_else(|| {
-                        Instance::try_resolve(
-                            self.tcx,
-                            ty::TypingEnv::fully_monomorphized(),
-                            *def_id,
-                            args,
-                        )
-                        .ok()
-                        .flatten()
-                    }),
-                    _ => Instance::try_resolve(
-                        self.tcx,
-                        ty::TypingEnv::fully_monomorphized(),
-                        *def_id,
-                        args,
-                    )
-                    .ok()
-                    .flatten(),
+                    ReachabilityEdgeKind::FnPointerReify => {
+                        if args.has_param() {
+                            self.resolve_callable_instance(*def_id, args)
+                        } else {
+                            Instance::resolve_for_fn_ptr(
+                                self.tcx,
+                                ty::TypingEnv::fully_monomorphized(),
+                                *def_id,
+                                args,
+                            )
+                        }
+                    }
+                    _ => self.resolve_callable_instance(*def_id, args),
                 };
                 if let Some(instance) = instance {
                     self.emit_instance(instance, kind, span)
@@ -212,6 +207,24 @@ where
                 self.emit_instance(instance, kind, span)
             }
             _ => ControlFlow::Continue(()),
+        }
+    }
+
+    fn resolve_callable_instance(
+        &self,
+        def_id: rustc_hir::def_id::DefId,
+        args: GenericArgsRef<'tcx>,
+    ) -> Option<Instance<'tcx>> {
+        if args.has_param() {
+            if self.tcx.trait_of_assoc(def_id).is_some() {
+                None
+            } else {
+                Some(Instance::new_raw(def_id, args))
+            }
+        } else {
+            Instance::try_resolve(self.tcx, ty::TypingEnv::fully_monomorphized(), def_id, args)
+                .ok()
+                .flatten()
         }
     }
 
@@ -302,6 +315,9 @@ where
             let trait_ref = self
                 .tcx
                 .instantiate_bound_regions_with_erased(principal.with_self_ty(self.tcx, impl_ty));
+            if trait_ref.has_param() {
+                continue;
+            }
 
             for entry in self.tcx.vtable_entries(trait_ref) {
                 if let VtblEntry::Method(instance) = entry {
@@ -372,6 +388,15 @@ where
     fn take_halt(&mut self) -> Option<ReachabilityHalt<'tcx>> {
         self.graph.take_halt()
     }
+
+    fn const_body_args(&self, def_id: rustc_hir::def_id::DefId) -> GenericArgsRef<'tcx> {
+        let args = GenericArgs::identity_for_item(self.graph.tcx, def_id);
+        if args.len() <= self.graph.caller.args.len() {
+            self.graph.monomorphize(args)
+        } else {
+            args
+        }
+    }
 }
 
 impl<'tcx, F> intravisit::Visitor<'tcx> for HirDefinitionCollector<'_, '_, 'tcx, F>
@@ -408,9 +433,7 @@ where
         }
 
         let def_id = c.def_id.to_def_id();
-        let args = self
-            .graph
-            .monomorphize(GenericArgs::identity_for_item(self.graph.tcx, def_id));
+        let args = self.const_body_args(def_id);
         let instance = Instance::new_raw(def_id, args);
         let _ = self
             .graph
@@ -423,9 +446,7 @@ where
         }
 
         let def_id = c.def_id.to_def_id();
-        let args = self
-            .graph
-            .monomorphize(GenericArgs::identity_for_item(self.graph.tcx, def_id));
+        let args = self.const_body_args(def_id);
         let span = self.graph.tcx.hir_body(c.body).value.span;
         let instance = Instance::new_raw(def_id, args);
         let _ = self

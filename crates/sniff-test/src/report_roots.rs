@@ -2,7 +2,7 @@
 //!
 //! Report roots are not the whole reachability graph. They are the starting
 //! functions sniff-test analyzes when deciding which panic paths to report.
-//! Generic roots are recorded but not expanded until a concrete instance exists.
+//! Generic roots are analyzed structurally with identity generic arguments.
 
 use std::collections::HashSet;
 
@@ -127,5 +127,9 @@ fn public_local_fn_defs(tcx: TyCtxt<'_>) -> impl Iterator<Item = LocalDefId> + '
 
 fn analyzable_local_fn_defs(tcx: TyCtxt<'_>) -> impl Iterator<Item = LocalDefId> + '_ {
     tcx.hir_body_owners()
-        .filter(move |local| matches!(tcx.def_kind(*local), DefKind::Fn | DefKind::AssocFn))
+        .filter(move |local| match tcx.def_kind(*local) {
+            DefKind::Fn => true,
+            DefKind::AssocFn => tcx.trait_of_assoc(local.to_def_id()).is_none(),
+            _ => false,
+        })
 }
