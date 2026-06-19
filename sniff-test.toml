@@ -10,6 +10,7 @@ trusted-panic-obligation-namespaces = ["std::**", "core::**", "alloc::**"]
 panic-sink-namespaces = [
     "core::panicking::**",
     "std::panicking::**",
+    "core::std::rt::panic_fmt",
     "std::rt::panic_fmt",
     "core::{option,result}::unwrap_failed",
     "std::{option,result}::unwrap_failed",

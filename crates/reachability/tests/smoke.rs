@@ -271,7 +271,7 @@ fn render_graph<'tcx>(
 fn render_node<'tcx>(tcx: TyCtxt<'tcx>, node: &ReachabilityNodeKind<'tcx>) -> String {
     match node {
         ReachabilityNodeKind::Instance(instance) => render_instance(tcx, *instance),
-        ReachabilityNodeKind::CompilerAssert { message } => format!("assert {message:?}"),
+        ReachabilityNodeKind::CompilerAssert { message, .. } => format!("assert {message:?}"),
         ReachabilityNodeKind::IndirectCall { callee_ty } => format!("indirect {callee_ty:?}"),
         ReachabilityNodeKind::DynObjectCast {
             source_ty,

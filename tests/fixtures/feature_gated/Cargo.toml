@@ -1,0 +1,9 @@
+[package]
+name = "feature-gated"
+version = "0.1.0"
+edition = "2024"
+
+[features]
+dangerous = []
+
+[workspace]

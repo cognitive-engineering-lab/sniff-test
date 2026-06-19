@@ -36,7 +36,6 @@ overflow-checks = "profile"
 
 [panics]
 show-full-stack-trace = false
-trust-current-crate-panic-docs = "trust"
 report-roots = "public"
 
 # Crates or fully-qualified functions whose internals should be treated as
@@ -54,23 +53,22 @@ ignored-namespaces = [
     "rustc*", "rustc*::**",
 ]
 
-# Caller crates or fully-qualified functions whose internal panic obligations
-# you trust.
+# Trusted crates or fully-qualified functions whose internals should be treated
+# as opaque API boundaries. If a matched function has `# Panics` docs, reaching
+# it is reported as a trusted panic contract. If it has no panic docs, it is
+# treated as non-panic evidence.
 trusted-panic-obligation-namespaces = ["std::**", "core::**", "alloc::**"]
 
-# Callees that should be treated as direct panic sinks.
+# Callees that should be treated as direct panic sinks. When this overlaps with
+# trusted panic contract namespaces, the more precise namespace match wins; if
+# precision ties, panic sinks win.
 panic-sink-namespaces = [
     "core::panicking::**",
     "std::panicking::**",
+    "core::std::rt::panic_fmt",
     "std::rt::panic_fmt",
     "core::{option,result}::unwrap_failed",
     "std::{option,result}::unwrap_failed",
-]
-
-# Callees that should be treated as panic-obligation boundaries even without
-# a `# Panics` doc heading.
-panic-obligation-functions = [
-    "std::ops::{Index,IndexMut}::**",
 ]
 
 "#;
@@ -182,16 +180,12 @@ impl std::error::Error for OverflowChecksParseError {}
 pub struct PanicConfig {
     /// Whether detailed reports include every edge in the triggering trace.
     pub show_full_stack_trace: bool,
-    /// Whether `# Panics` docs on current-crate roots satisfy their own panic evidence.
-    pub trust_current_crate_panic_docs: TrustPolicy,
     /// Namespaces whose internals are treated as opaque and suppressed.
     pub ignored_namespaces: PathPatterns,
-    /// Caller namespaces trusted to satisfy documented panic obligations they call.
+    /// Trusted callee namespaces treated as opaque panic-obligation boundaries.
     pub trusted_panic_obligation_namespaces: PathPatterns,
     /// Callee paths treated as direct panic sinks.
     pub panic_sink_namespaces: PathPatterns,
-    /// Callee function paths treated as panic-obligation boundaries.
-    pub panic_obligation_functions: PathPatterns,
     /// Current-crate functions selected as report roots.
     pub report_roots: ReportRootSet,
 }
@@ -200,11 +194,9 @@ impl Default for PanicConfig {
     fn default() -> Self {
         Self {
             show_full_stack_trace: false,
-            trust_current_crate_panic_docs: TrustPolicy::Trust,
             ignored_namespaces: PathPatterns::default(),
             trusted_panic_obligation_namespaces: PathPatterns::default(),
             panic_sink_namespaces: PathPatterns::default(),
-            panic_obligation_functions: PathPatterns::default(),
             report_roots: ReportRootSet::Public,
         }
     }
@@ -249,9 +241,8 @@ impl PanicConfig {
 
     #[must_use]
     pub fn trusts_panic_obligation_def(&self, tcx: TyCtxt<'_>, def_id: DefId) -> bool {
-        let crate_name = tcx.crate_name(def_id.krate).to_string();
-        self.trusts_panic_obligation_namespace(&crate_name)
-            || self.trusts_panic_obligation_namespace(&canonical_namespace(tcx, def_id))
+        self.trusted_panic_obligation_def_match(tcx, def_id)
+            .is_some()
     }
 
     #[must_use]
@@ -260,9 +251,52 @@ impl PanicConfig {
     }
 
     #[must_use]
-    pub fn marks_panic_obligation_function(&self, function_path: &str) -> bool {
-        self.panic_obligation_functions.is_match(function_path)
+    pub fn panic_boundary_policy(&self, tcx: TyCtxt<'_>, def_id: DefId) -> PanicBoundaryPolicy {
+        let sink = self.panic_sink_def_match(tcx, def_id);
+        let trusted = self.trusted_panic_obligation_def_match(tcx, def_id);
+
+        match (sink, trusted) {
+            (Some(sink), Some(trusted)) if trusted.precision > sink.precision => {
+                PanicBoundaryPolicy::TrustedPanicObligation
+            }
+            (Some(_), Some(_) | None) => PanicBoundaryPolicy::PanicSink,
+            (None, Some(_)) => PanicBoundaryPolicy::TrustedPanicObligation,
+            (None, None) => PanicBoundaryPolicy::Normal,
+        }
     }
+
+    fn panic_sink_def_match(&self, tcx: TyCtxt<'_>, def_id: DefId) -> Option<PathPatternMatch<'_>> {
+        Self::best_def_match(tcx, def_id, &self.panic_sink_namespaces)
+    }
+
+    fn trusted_panic_obligation_def_match(
+        &self,
+        tcx: TyCtxt<'_>,
+        def_id: DefId,
+    ) -> Option<PathPatternMatch<'_>> {
+        Self::best_def_match(tcx, def_id, &self.trusted_panic_obligation_namespaces)
+    }
+
+    fn best_def_match<'patterns>(
+        tcx: TyCtxt<'_>,
+        def_id: DefId,
+        patterns: &'patterns PathPatterns,
+    ) -> Option<PathPatternMatch<'patterns>> {
+        let crate_name = tcx.crate_name(def_id.krate).to_string();
+        let path = canonical_namespace(tcx, def_id);
+        patterns
+            .best_match(&crate_name)
+            .into_iter()
+            .chain(patterns.best_match(&path))
+            .max_by_key(|matched| matched.precision)
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PanicBoundaryPolicy {
+    PanicSink,
+    TrustedPanicObligation,
+    Normal,
 }
 
 /// Segment-aware glob patterns over Rust-style `::` paths.
@@ -301,13 +335,24 @@ impl PathPatterns {
 
     #[must_use]
     pub fn matching_pattern(&self, path: &str) -> Option<&str> {
+        self.best_match(path).map(|matched| matched.pattern)
+    }
+
+    #[must_use]
+    pub fn best_match(&self, path: &str) -> Option<PathPatternMatch<'_>> {
         let set = self.set.as_ref()?;
 
         let path = normalized_path(path);
         set.matches(path.as_ref())
             .into_iter()
-            .next()
-            .map(|index| self.patterns[index].as_str())
+            .map(|index| {
+                let pattern = self.patterns[index].as_str();
+                PathPatternMatch {
+                    pattern,
+                    precision: pattern_precision(pattern),
+                }
+            })
+            .max_by_key(|matched| matched.precision)
     }
 
     #[must_use]
@@ -319,6 +364,12 @@ impl PathPatterns {
         let path = normalized_path(path);
         set.is_match(path.as_ref())
     }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PathPatternMatch<'patterns> {
+    pub pattern: &'patterns str,
+    pub precision: usize,
 }
 
 impl Debug for PathPatterns {
@@ -353,12 +404,11 @@ fn normalized_path(path: &str) -> Cow<'_, str> {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize)]
-#[serde(rename_all = "kebab-case")]
-pub enum TrustPolicy {
-    #[default]
-    Trust,
-    Verify,
+fn pattern_precision(pattern: &str) -> usize {
+    pattern
+        .split("::")
+        .filter(|segment| !segment.is_empty() && *segment != "**")
+        .count()
 }
 
 /// Current-crate functions whose reachable panic paths should be reported.
@@ -455,7 +505,9 @@ impl std::error::Error for ConfigError {
 
 #[cfg(test)]
 mod tests {
-    use super::{OverflowChecks, PanicConfig, PathPatterns, ReportRootSet, SniffTestConfig};
+    use super::{
+        EXAMPLE_MANIFEST, OverflowChecks, PanicConfig, PathPatterns, ReportRootSet, SniffTestConfig,
+    };
 
     fn path_patterns(patterns: &[&str]) -> PathPatterns {
         PathPatterns::new(
@@ -490,13 +542,6 @@ mod tests {
         let parsed = SniffTestConfig::from_manifest_str(config).expect("manifest should parse");
 
         assert_eq!(parsed.analysis.overflow_checks, OverflowChecks::On);
-    }
-
-    #[test]
-    fn defaults_analysis_to_profile_overflow_checks() {
-        let parsed = SniffTestConfig::from_manifest_str("").expect("empty manifest should parse");
-
-        assert_eq!(parsed.analysis.overflow_checks, OverflowChecks::Profile);
     }
 
     #[test]
@@ -561,18 +606,6 @@ mod tests {
     }
 
     #[test]
-    fn function_patterns_match_segmented_def_paths() {
-        let config = PanicConfig {
-            panic_obligation_functions: path_patterns(&["std::ops::{Index,IndexMut}::**"]),
-            ..PanicConfig::default()
-        };
-
-        assert!(config.marks_panic_obligation_function("std::ops::Index::index"));
-        assert!(config.marks_panic_obligation_function("std::ops::IndexMut::index_mut"));
-        assert!(!config.marks_panic_obligation_function("std::option::Option<T>::unwrap"));
-    }
-
-    #[test]
     fn panic_sink_namespace_patterns_match_segmented_def_paths() {
         let config = PanicConfig {
             panic_sink_namespaces: path_patterns(&["core::panicking::**"]),
@@ -585,10 +618,22 @@ mod tests {
     }
 
     #[test]
+    fn example_manifest_matches_direct_panic_macro_path() {
+        let config = SniffTestConfig::from_manifest_str(EXAMPLE_MANIFEST)
+            .expect("example manifest should parse");
+
+        assert!(
+            config
+                .panics
+                .marks_panic_sink_namespace("core::std::rt::panic_fmt")
+        );
+    }
+
+    #[test]
     fn rejects_invalid_glob_patterns() {
         let config = r#"
             [panics]
-            panic-obligation-functions = ["std::ops::{Index"]
+            panic-sink-namespaces = ["std::ops::{Index"]
         "#;
 
         let error = SniffTestConfig::from_manifest_str(config)

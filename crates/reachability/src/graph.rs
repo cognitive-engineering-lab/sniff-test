@@ -461,7 +461,10 @@ pub enum ReachabilityNodeKind<'tcx> {
     ///
     /// This includes checks such as overflow, bounds, division by zero, and
     /// invalid shifts. The exact reason is kept as rustc's [`AssertMessage`].
-    CompilerAssert { message: Box<AssertMessage<'tcx>> },
+    CompilerAssert {
+        message: Box<AssertMessage<'tcx>>,
+        locals: Vec<CompilerAssertLocal>,
+    },
     /// Call-like operation whose concrete callee could not be resolved.
     ///
     /// This is used for function pointers and other callable values that do not
@@ -475,6 +478,20 @@ pub enum ReachabilityNodeKind<'tcx> {
         source_ty: Ty<'tcx>,
         target_ty: Ty<'tcx>,
     },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CompilerAssertLocal {
+    pub index: usize,
+    pub name: Option<String>,
+    pub role: CompilerAssertLocalRole,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CompilerAssertLocalRole {
+    ReturnPointer,
+    Argument,
+    Temporary,
 }
 
 /// Directed edge between two reachability nodes.

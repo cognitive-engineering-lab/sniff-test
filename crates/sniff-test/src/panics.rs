@@ -5,8 +5,9 @@
 //!
 //! - compiler assert nodes are direct panic evidence;
 //! - calls to configured panic sink namespaces are direct panic evidence;
-//! - calls through functions documented with `# Panics`, or configured as panic
-//!   obligations, can stop propagation depending on caller trust policy.
+//! - calls through functions documented with `# Panics` are panic obligations;
+//! - calls into trusted panic-obligation namespaces are opaque boundaries that
+//!   report obligations only when the reached function has panic docs.
 
 use reachability::{
     ReachabilityEdgeId, ReachabilityEdgeKind, ReachabilityGraph, ReachabilityNodeKind,
@@ -17,8 +18,9 @@ use rustc_hir::attrs::{AttributeKind, HasAttrs};
 use rustc_hir::def_id::DefId;
 use rustc_middle::ty::TyCtxt;
 
-use crate::config::PanicConfig;
+use crate::config::{PanicBoundaryPolicy, PanicConfig};
 use crate::namespace::canonical_namespace;
+use crate::source_markers::span_has_safe_marker;
 
 #[derive(Debug, Clone)]
 pub struct PanicAnalysis {
@@ -83,6 +85,9 @@ pub fn analyze_panic_evidence<'tcx>(
             let trace = PanicTrace {
                 edge_ids: trace_to_edge_ids(edge),
             };
+            if trace_crosses_safe_marker(tcx, graph, &trace) {
+                return None;
+            }
             if trace_crosses_ignored_namespace(tcx, graph, &trace, config) {
                 return None;
             }
@@ -218,9 +223,9 @@ fn panic_obligation_node_kind<'tcx>(
     match node {
         ReachabilityNodeKind::Instance(instance) => {
             let def_id = instance.def_id();
-            let path = canonical_namespace(tcx, def_id);
             (!config.ignores_def(tcx, def_id)
-                && (has_panic_docs(tcx, def_id) || config.marks_panic_obligation_function(&path)))
+                && config.panic_boundary_policy(tcx, def_id) != PanicBoundaryPolicy::PanicSink
+                && has_panic_docs(tcx, def_id))
             .then_some(def_id)
         }
         ReachabilityNodeKind::CompilerAssert { .. }
@@ -292,6 +297,17 @@ fn trace_crosses_ignored_namespace<'tcx>(
     })
 }
 
+fn trace_crosses_safe_marker<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    graph: &ReachabilityGraph<'tcx>,
+    trace: &PanicTrace,
+) -> bool {
+    trace
+        .edge_ids
+        .iter()
+        .any(|edge_id| span_has_safe_marker(tcx, graph.edge(*edge_id).span))
+}
+
 fn node_kind_is_ignored_namespace<'tcx>(
     tcx: TyCtxt<'tcx>,
     node: &ReachabilityNodeKind<'tcx>,
@@ -313,6 +329,10 @@ fn classify_edge<'tcx>(
     edge: ReachedEdge<'_, 'tcx>,
     config: &PanicConfig,
 ) -> Option<PanicEvidenceKind> {
+    if span_has_safe_marker(tcx, edge.span()) {
+        return None;
+    }
+
     let target = edge.target().kind();
     match target {
         ReachabilityNodeKind::CompilerAssert { .. } => Some(PanicEvidenceKind::CompilerAssert),
@@ -327,14 +347,13 @@ fn classify_edge<'tcx>(
                 return None;
             }
 
-            let path = canonical_namespace(tcx, def_id);
-            if has_panic_docs(tcx, def_id) || config.marks_panic_obligation_function(&path) {
-                return Some(PanicEvidenceKind::PanicObligation { def_id });
+            match config.panic_boundary_policy(tcx, def_id) {
+                PanicBoundaryPolicy::PanicSink => Some(PanicEvidenceKind::PanicSink { def_id }),
+                PanicBoundaryPolicy::TrustedPanicObligation | PanicBoundaryPolicy::Normal => {
+                    has_panic_docs(tcx, def_id)
+                        .then_some(PanicEvidenceKind::PanicObligation { def_id })
+                }
             }
-
-            config
-                .marks_panic_sink_namespace(&path)
-                .then_some(PanicEvidenceKind::PanicSink { def_id })
         }
         ReachabilityNodeKind::Instance(_)
         | ReachabilityNodeKind::IndirectCall { .. }

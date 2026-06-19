@@ -5,13 +5,15 @@
 //! are easier to discover from HIR, so this module scans both views before the
 //! graph builder turns collected facts into graph nodes and edges.
 
+use std::collections::HashMap;
 use std::ops::ControlFlow;
 
 use rustc_hir::{ExprKind, def_id::LocalDefId, intravisit};
 use rustc_middle::hir::nested_filter;
 use rustc_middle::mir::AssertMessage;
 use rustc_middle::mir::{
-    AggregateKind, Body, CastKind, Operand, Rvalue, StatementKind, TerminatorKind,
+    AggregateKind, Body, CastKind, LocalKind, Operand, Rvalue, StatementKind, TerminatorKind,
+    VarDebugInfoContents,
 };
 use rustc_middle::ty::adjustment::PointerCoercion;
 use rustc_middle::ty::vtable::VtblEntry;
@@ -21,7 +23,9 @@ use rustc_middle::ty::{
 };
 use rustc_span::Span;
 
-use crate::graph::{ReachabilityEdgeKind, ReachabilityNodeKind};
+use crate::graph::{
+    CompilerAssertLocal, CompilerAssertLocalRole, ReachabilityEdgeKind, ReachabilityNodeKind,
+};
 use crate::hooks::{ReachabilityControl, ReachabilityHalt};
 
 pub(crate) fn collect_body_edges<'tcx>(
@@ -234,10 +238,44 @@ where
         span: Span,
     ) -> ReachabilityControl<'tcx> {
         self.emit_edge(
-            ReachabilityNodeKind::CompilerAssert { message },
+            ReachabilityNodeKind::CompilerAssert {
+                message,
+                locals: self.compiler_assert_locals(),
+            },
             ReachabilityEdgeKind::Assert,
             span,
         )
+    }
+
+    fn compiler_assert_locals(&self) -> Vec<CompilerAssertLocal> {
+        let mut source_names = HashMap::<usize, String>::new();
+        for debug_info in &self.body.var_debug_info {
+            let VarDebugInfoContents::Place(place) = debug_info.value else {
+                continue;
+            };
+            if !place.projection.is_empty() {
+                continue;
+            }
+            source_names
+                .entry(place.local.index())
+                .or_insert_with(|| debug_info.name.to_string());
+        }
+
+        self.body
+            .local_decls
+            .iter_enumerated()
+            .map(|(local, _)| CompilerAssertLocal {
+                index: local.index(),
+                name: source_names
+                    .remove(&local.index())
+                    .filter(|name| !name.is_empty()),
+                role: match self.body.local_kind(local) {
+                    LocalKind::ReturnPointer => CompilerAssertLocalRole::ReturnPointer,
+                    LocalKind::Arg => CompilerAssertLocalRole::Argument,
+                    LocalKind::Temp => CompilerAssertLocalRole::Temporary,
+                },
+            })
+            .collect()
     }
 
     fn visit_assignment(&mut self, rvalue: &Rvalue<'tcx>, span: Span) -> ReachabilityControl<'tcx> {

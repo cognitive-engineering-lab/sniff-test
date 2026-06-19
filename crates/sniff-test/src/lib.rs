@@ -1,9 +1,7 @@
 //! High-level sniff-test policy and checking behavior.
 //!
-//! This crate owns the reusable parts of sniff-test: configuration, panic
-//! evidence classification, report-root selection, and the on-disk analysis
-//! cache. The `sniff-test-cli` crate is expected to provide rustc/Cargo
-//! plumbing and terminal rendering.
+//! This crate owns sniff-test's panic policy, rustc/Cargo integration,
+//! reporting, and on-disk analysis cache.
 //!
 //! The cache stores semantic facts, such as "compiler assert" or "panic
 //! invocation", rather than pre-rendered text with ANSI styling. That keeps
@@ -14,13 +12,20 @@
 #![deny(warnings)]
 #![warn(clippy::pedantic)]
 
+extern crate rustc_driver;
+extern crate rustc_errors;
 extern crate rustc_hir;
+extern crate rustc_interface;
 extern crate rustc_middle;
 extern crate rustc_span;
 
 pub mod cache;
+mod cli;
 pub mod config;
 pub mod dependency_cache;
 pub mod namespace;
 pub mod panics;
 pub mod report_roots;
+pub mod source_markers;
+
+pub use cli::{SniffTestArgs, cargo_frontend, driver_main};

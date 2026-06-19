@@ -91,6 +91,8 @@ pub struct CachedFunctionSummary {
     pub path: String,
     pub is_generic: bool,
     pub has_panic_docs: bool,
+    #[serde(default)]
+    pub root_span: Option<CachedSourceSpan>,
     pub raw_panic_paths: usize,
     pub panic_obligations: usize,
     pub trusted_panic_obligations: usize,
@@ -114,10 +116,34 @@ impl CachedFunctionSummary {
 pub struct CachedFinding {
     pub kind: CachedFindingKind,
     pub span: String,
+    #[serde(default)]
+    pub source_span: Option<CachedSourceSpan>,
+    #[serde(default)]
+    pub diagnostic_spans: Vec<CachedDiagnosticSpan>,
     pub edge_index: Option<usize>,
     pub trace: Vec<usize>,
     pub reason: String,
     pub target: Option<CachedFindingTarget>,
+}
+
+/// Structured source range for later diagnostic rendering.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub struct CachedSourceSpan {
+    pub file: String,
+    pub line_start: usize,
+    pub column_start: usize,
+    pub line_end: usize,
+    pub column_end: usize,
+}
+
+/// One labeled source range that can be rendered as a diagnostic span.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub struct CachedDiagnosticSpan {
+    pub span: CachedSourceSpan,
+    pub is_primary: bool,
+    pub label: Option<String>,
 }
 
 /// Semantic category for cached evidence.
@@ -195,6 +221,8 @@ pub struct CachedReachabilityEdge {
     pub target: usize,
     pub kind: CachedReachabilityEdgeKind,
     pub span: String,
+    #[serde(default)]
+    pub source_span: Option<CachedSourceSpan>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

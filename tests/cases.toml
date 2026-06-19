@@ -1,0 +1,59 @@
+[[case]]
+name = "panic_axioms"
+fixture = "panic_axioms"
+exit_code = 1
+
+[[case]]
+name = "generic_roots"
+fixture = "generic_roots"
+exit_code = 1
+
+[[case]]
+name = "direct_panic"
+fixture = "direct_panic"
+exit_code = 1
+
+[[case]]
+name = "trait_default_method"
+fixture = "trait_default_method"
+exit_code = 1
+
+[[case]]
+name = "documented_obligation"
+fixture = "documented_obligation"
+exit_code = 1
+
+[[case]]
+name = "release_pruning"
+fixture = "release_pruning"
+exit_code = 1
+
+[[case]]
+name = "feature_gated"
+fixture = "feature_gated"
+args = ["--", "--features", "dangerous"]
+exit_code = 1
+
+[[case]]
+name = "suppression"
+fixture = "suppression"
+
+[[case]]
+name = "dependency_obligation"
+fixture = "dependency_obligation"
+crate_dir = "app"
+
+[[case]]
+name = "dependency_obligation_relative_cache"
+fixture = "dependency_obligation"
+crate_dir = "app"
+args = ["--cache-dir", ".sniff-cache"]
+
+[[case]]
+name = "safe_markers"
+fixture = "safe_markers"
+exit_code = 1
+
+[[case]]
+name = "trusted_boundaries"
+fixture = "trusted_boundaries"

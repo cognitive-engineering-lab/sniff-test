@@ -288,6 +288,9 @@ where
             let edge = self.index.graph.edge(edge_id).clone();
             let cx = self.context(item.instance, item.depth);
             self.hooks.on_edge(cx, &edge)?;
+            if !self.hooks.should_record_edge(cx, &edge)? {
+                continue;
+            }
 
             let first_reach = self
                 .snapshot

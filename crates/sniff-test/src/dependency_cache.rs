@@ -207,6 +207,7 @@ mod tests {
             path: path.to_owned(),
             is_generic: false,
             has_panic_docs: false,
+            root_span: None,
             raw_panic_paths: 1,
             panic_obligations: 0,
             trusted_panic_obligations: 0,

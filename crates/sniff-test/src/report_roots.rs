@@ -127,9 +127,5 @@ fn public_local_fn_defs(tcx: TyCtxt<'_>) -> impl Iterator<Item = LocalDefId> + '
 
 fn analyzable_local_fn_defs(tcx: TyCtxt<'_>) -> impl Iterator<Item = LocalDefId> + '_ {
     tcx.hir_body_owners()
-        .filter(move |local| match tcx.def_kind(*local) {
-            DefKind::Fn => true,
-            DefKind::AssocFn => tcx.trait_of_assoc(local.to_def_id()).is_none(),
-            _ => false,
-        })
+        .filter(move |local| matches!(tcx.def_kind(*local), DefKind::Fn | DefKind::AssocFn))
 }

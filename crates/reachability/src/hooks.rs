@@ -100,6 +100,20 @@ pub trait ReachabilityHooks<'tcx> {
         ControlFlow::Continue(())
     }
 
+    /// Decides whether to accept an edge into the current query result.
+    ///
+    /// Returning `false` skips this edge for the current root without halting
+    /// analysis. This is useful for source-local suppressions where a specific
+    /// call or compiler assertion has been inspected and should not affect
+    /// reachability from that root.
+    fn should_record_edge(
+        &mut self,
+        _cx: ReachabilityContext<'tcx>,
+        _edge: &ReachabilityEdge,
+    ) -> ReachabilityControl<'tcx, bool> {
+        ControlFlow::Continue(true)
+    }
+
     /// Decides whether to recursively analyze a target function instance.
     ///
     /// This callback only runs for edges whose target is a concrete

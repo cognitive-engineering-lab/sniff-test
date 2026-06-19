@@ -2,6 +2,7 @@ target
 .DS_Store
 notes.md
 *.rlib
+tests/fixtures/**/Cargo.lock
 
 # Ignore our snapshots & review script
 *.snap.new

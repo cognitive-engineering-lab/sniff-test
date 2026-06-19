@@ -1,0 +1,3 @@
+[panics]
+# invariant: callers check index < values.len() before invoking this helper.
+ignored-namespaces = ["suppression::unchecked_index"]
