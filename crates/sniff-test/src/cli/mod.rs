@@ -20,6 +20,10 @@ use crate::panics::{
     describe_panic_evidence_kind, trace_edges_until, trace_to_edge_ids, trigger_edge_id,
 };
 use crate::report_roots::{ReportRoot, ReportRootSelection, select_panic_report_roots};
+use crate::safety::{
+    SafetyAnalysis, SafetyFinding, SafetyRequirement, UnsafeCallee, analyze_safety,
+    unsafe_callee_name,
+};
 use reachability::{
     ReachabilityContext, ReachabilityControl, ReachabilityEdge, ReachabilityEdgeId,
     ReachabilityEdgeKind, ReachabilityGraph, ReachabilityHooks, ReachabilityIndex,
@@ -233,6 +237,14 @@ pub(crate) fn analyze_crate(tcx: TyCtxt<'_>, args: &SniffTestArgs, compiler_args
         &dependency_cache,
         diagnostics,
     );
+    let safety_analysis = if output_scope == CrateOutputScope::Workspace {
+        analyze_safety(tcx)
+    } else {
+        SafetyAnalysis::default()
+    };
+    if diagnostics.emit {
+        emit_safety_diagnostics(tcx, &safety_analysis);
+    }
 
     let analysis = AnalysisArtifact::new(
         tcx,
@@ -240,6 +252,7 @@ pub(crate) fn analyze_crate(tcx: TyCtxt<'_>, args: &SniffTestArgs, compiler_args
         output_scope,
         &dependency_cache,
         root_analysis,
+        safety_analysis,
     );
     write_analysis_cache(args, &analysis.cache);
     emit_analysis_artifact(&analysis.report, args, invocation.color);
@@ -262,6 +275,7 @@ impl AnalysisArtifact {
         scope: CrateOutputScope,
         dependency_cache: &DependencyAnalysisCache,
         root_analysis: RootAnalysis,
+        safety_analysis: SafetyAnalysis,
     ) -> Self {
         let dependencies = dependency_cache.resolved_dependencies();
         let artifact = artifact_info(tcx, invocation);
@@ -284,6 +298,7 @@ impl AnalysisArtifact {
             generic_roots: root_analysis.generic_roots,
             counts: root_analysis.counts,
             roots: root_analysis.roots,
+            safety: SafetyArtifactReport::from_analysis(tcx, safety_analysis),
         };
         let cache = CachedArtifactAnalysis::new(
             tool_version,
@@ -333,6 +348,8 @@ pub(crate) struct AnalysisArtifactReport {
     generic_roots: usize,
     counts: PanicFindingCounts,
     roots: Vec<PanicRootReport>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    safety: Option<SafetyArtifactReport>,
 }
 
 struct RootAnalysis {
@@ -571,6 +588,136 @@ impl PanicFindingCounts {
             ReportDetailKind::PanicObligation => self.panic_obligations += 1,
             ReportDetailKind::TrustedPanicObligation => self.trusted_panic_obligations += 1,
         }
+    }
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "kebab-case")]
+struct SafetyArtifactReport {
+    counts: SafetyFindingCounts,
+    findings: Vec<SafetyFindingReport>,
+}
+
+impl SafetyArtifactReport {
+    fn from_analysis(tcx: TyCtxt<'_>, analysis: SafetyAnalysis) -> Option<Self> {
+        let mut report = Self {
+            counts: SafetyFindingCounts::default(),
+            findings: Vec::new(),
+        };
+
+        for finding in analysis.findings {
+            report.counts.increment(&finding);
+            report
+                .findings
+                .push(SafetyFindingReport::from_finding(tcx, finding));
+        }
+
+        (!report.findings.is_empty()).then_some(report)
+    }
+}
+
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "kebab-case")]
+struct SafetyFindingCounts {
+    missing_safety_docs: usize,
+    unsafe_calls_missing_justification: usize,
+    unsafe_calls_missing_requirements: usize,
+}
+
+impl SafetyFindingCounts {
+    fn increment(&mut self, finding: &SafetyFinding) {
+        match finding {
+            SafetyFinding::MissingSafetyDocs { .. } => self.missing_safety_docs += 1,
+            SafetyFinding::UnsafeCallMissingJustification { .. } => {
+                self.unsafe_calls_missing_justification += 1;
+            }
+            SafetyFinding::UnsafeCallMissingRequirements { .. } => {
+                self.unsafe_calls_missing_requirements += 1;
+            }
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "kebab-case")]
+struct SafetyFindingReport {
+    kind: SafetyFindingKindReport,
+    span: String,
+    function: String,
+    target: Option<String>,
+    reason: String,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    missing_requirements: Vec<String>,
+}
+
+impl SafetyFindingReport {
+    fn from_finding(tcx: TyCtxt<'_>, finding: SafetyFinding) -> Self {
+        match finding {
+            SafetyFinding::MissingSafetyDocs { def_id, span } => {
+                let function = canonical_namespace(tcx, def_id);
+                Self {
+                    kind: SafetyFindingKindReport::MissingSafetyDocs,
+                    span: render_span(tcx, span),
+                    function: function.clone(),
+                    target: None,
+                    reason: format!("public unsafe function `{function}` is missing # Safety docs"),
+                    missing_requirements: Vec::new(),
+                }
+            }
+            SafetyFinding::UnsafeCallMissingJustification {
+                caller,
+                callee,
+                span,
+            } => {
+                let target = unsafe_callee_name(tcx, callee);
+                Self {
+                    kind: SafetyFindingKindReport::UnsafeCallMissingJustification,
+                    span: render_span(tcx, span),
+                    function: canonical_namespace(tcx, caller),
+                    target: Some(target.clone()),
+                    reason: format!("unsafe call to `{target}` has no `// SAFETY:` justification"),
+                    missing_requirements: Vec::new(),
+                }
+            }
+            SafetyFinding::UnsafeCallMissingRequirements {
+                caller,
+                callee,
+                span,
+                missing_requirements,
+            } => {
+                let target = unsafe_callee_name(tcx, callee);
+                let missing_requirements = missing_requirements
+                    .iter()
+                    .map(render_safety_requirement)
+                    .collect();
+                Self {
+                    kind: SafetyFindingKindReport::UnsafeCallMissingRequirements,
+                    span: render_span(tcx, span),
+                    function: canonical_namespace(tcx, caller),
+                    target: Some(target.clone()),
+                    reason: format!(
+                        "unsafe call to `{target}` does not satisfy all # Safety requirements"
+                    ),
+                    missing_requirements,
+                }
+            }
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "kebab-case")]
+enum SafetyFindingKindReport {
+    MissingSafetyDocs,
+    UnsafeCallMissingJustification,
+    UnsafeCallMissingRequirements,
+}
+
+fn render_safety_requirement(requirement: &SafetyRequirement) -> String {
+    if requirement.condition.is_empty() {
+        requirement.name.clone()
+    } else {
+        format!("{}: {}", requirement.name, requirement.condition)
     }
 }
 
@@ -1275,6 +1422,83 @@ fn emit_cached_dependency_raw_panic_diagnostic<'tcx>(
     add_trace_notes(&mut diag, tcx, graph, &[edge_id], include_stack);
     diag.help("guard the call, document the panic with `# Panics`, or add `// PANIC:` if a local invariant proves it cannot panic");
     let _ = diag.emit();
+}
+
+fn emit_safety_diagnostics(tcx: TyCtxt<'_>, analysis: &SafetyAnalysis) {
+    for finding in &analysis.findings {
+        match finding {
+            SafetyFinding::MissingSafetyDocs { def_id, span } => {
+                let function = canonical_namespace(tcx, *def_id);
+                let mut diag = tcx.dcx().struct_span_warn(
+                    *span,
+                    format!("public unsafe function `{function}` is missing `# Safety` docs"),
+                );
+                diag.help("document the caller obligations under a `# Safety` section");
+                diag.emit();
+            }
+            SafetyFinding::UnsafeCallMissingJustification {
+                caller,
+                callee,
+                span,
+            } => {
+                let caller = canonical_namespace(tcx, *caller);
+                let target = unsafe_callee_name(tcx, *callee);
+                let mut diag = tcx.dcx().struct_span_warn(
+                    *span,
+                    format!(
+                        "unsafe call to `{target}` in `{caller}` is missing a `// SAFETY:` justification"
+                    ),
+                );
+                add_safety_callee_note(&mut diag, tcx, *callee);
+                diag.help("add a `// SAFETY:` comment above the unsafe block or call site");
+                diag.emit();
+            }
+            SafetyFinding::UnsafeCallMissingRequirements {
+                caller,
+                callee,
+                span,
+                missing_requirements,
+            } => {
+                let caller = canonical_namespace(tcx, *caller);
+                let target = unsafe_callee_name(tcx, *callee);
+                let mut diag = tcx.dcx().struct_span_warn(
+                    *span,
+                    format!(
+                        "unsafe call to `{target}` in `{caller}` does not satisfy all `# Safety` requirements"
+                    ),
+                );
+                add_safety_callee_note(&mut diag, tcx, *callee);
+                for requirement in missing_requirements {
+                    diag.note(format!(
+                        "missing safety requirement `{}`",
+                        render_safety_requirement(requirement)
+                    ));
+                }
+                diag.help(
+                    "add named bullets under the applicable `// SAFETY:` comment for each missing requirement",
+                );
+                diag.emit();
+            }
+        }
+    }
+}
+
+fn add_safety_callee_note<G: EmissionGuarantee>(
+    diag: &mut Diag<'_, G>,
+    tcx: TyCtxt<'_>,
+    callee: UnsafeCallee,
+) {
+    if let UnsafeCallee::Def(def_id) = callee
+        && crate::safety::has_safety_docs(tcx, def_id)
+    {
+        diag.span_note(
+            tcx.def_span(def_id),
+            format!(
+                "`{}` documents `# Safety` here",
+                canonical_namespace(tcx, def_id)
+            ),
+        );
+    }
 }
 
 fn add_trace_notes<'tcx, G: EmissionGuarantee>(

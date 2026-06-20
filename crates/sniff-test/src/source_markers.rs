@@ -4,12 +4,16 @@ use rustc_middle::ty::TyCtxt;
 use rustc_span::{SourceFile, Span};
 
 const PANIC_MARKER: &str = "PANIC:";
+const SAFETY_MARKER: &str = "SAFETY:";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct PanicSatisfaction {
+pub struct MarkerSatisfaction {
     pub requirement: Option<String>,
     pub reason: String,
 }
+
+pub type PanicSatisfaction = MarkerSatisfaction;
+pub type SafetySatisfaction = MarkerSatisfaction;
 
 #[must_use]
 pub fn span_has_panic_marker(tcx: TyCtxt<'_>, span: Span) -> bool {
@@ -18,14 +22,29 @@ pub fn span_has_panic_marker(tcx: TyCtxt<'_>, span: Span) -> bool {
 
 #[must_use]
 pub fn span_panic_satisfactions(tcx: TyCtxt<'_>, span: Span) -> Vec<PanicSatisfaction> {
+    span_satisfactions(tcx, span, PANIC_MARKER)
+}
+
+#[must_use]
+pub fn span_has_safety_marker(tcx: TyCtxt<'_>, span: Span) -> bool {
+    !span_safety_satisfactions(tcx, span).is_empty()
+}
+
+#[must_use]
+pub fn span_safety_satisfactions(tcx: TyCtxt<'_>, span: Span) -> Vec<SafetySatisfaction> {
+    span_satisfactions(tcx, span, SAFETY_MARKER)
+}
+
+fn span_satisfactions(tcx: TyCtxt<'_>, span: Span, marker: &str) -> Vec<MarkerSatisfaction> {
     let span = span.source_callsite();
     let location = tcx.sess.source_map().lookup_char_pos(span.lo());
     let line_index = location.line.saturating_sub(1);
 
-    let mut satisfactions = source_line_panic_satisfactions(&location.file, line_index);
-    satisfactions.extend(preceding_comment_block_panic_satisfactions(
+    let mut satisfactions = source_line_satisfactions(&location.file, line_index, marker);
+    satisfactions.extend(preceding_comment_block_satisfactions(
         &location.file,
         line_index,
+        marker,
     ));
     satisfactions
 }
@@ -37,9 +56,23 @@ pub fn line_has_panic_marker(line: &str) -> bool {
 
 #[must_use]
 pub fn line_panic_satisfaction(line: &str) -> Option<PanicSatisfaction> {
+    line_satisfaction(line, PANIC_MARKER)
+}
+
+#[must_use]
+pub fn line_has_safety_marker(line: &str) -> bool {
+    line_safety_satisfaction(line).is_some()
+}
+
+#[must_use]
+pub fn line_safety_satisfaction(line: &str) -> Option<SafetySatisfaction> {
+    line_satisfaction(line, SAFETY_MARKER)
+}
+
+fn line_satisfaction(line: &str, marker: &str) -> Option<MarkerSatisfaction> {
     comment_body(line)
-        .and_then(|body| body.strip_prefix(PANIC_MARKER))
-        .map(parse_panic_marker)
+        .and_then(|body| body.strip_prefix(marker))
+        .map(parse_marker)
         .filter(has_justification)
 }
 
@@ -63,7 +96,7 @@ pub fn normalize_requirement_name(name: &str) -> String {
     normalized
 }
 
-fn parse_panic_marker_body(body: &str) -> (Option<String>, &str) {
+fn parse_marker_body(body: &str) -> (Option<String>, &str) {
     let Some((name, reason)) = body.split_once(':') else {
         return (None, body);
     };
@@ -75,10 +108,10 @@ fn parse_panic_marker_body(body: &str) -> (Option<String>, &str) {
     }
 }
 
-fn parse_panic_marker(body: &str) -> PanicSatisfaction {
+fn parse_marker(body: &str) -> MarkerSatisfaction {
     let body = body.trim();
-    let (requirement, reason) = parse_panic_marker_body(body);
-    PanicSatisfaction {
+    let (requirement, reason) = parse_marker_body(body);
+    MarkerSatisfaction {
         requirement,
         reason: reason.to_owned(),
     }
@@ -88,9 +121,10 @@ fn looks_like_requirement_name(name: &str) -> bool {
     !normalize_requirement_name(name).is_empty()
 }
 
-fn preceding_comment_block_panic_satisfactions(
+fn preceding_comment_block_satisfactions(
     file: &SourceFile,
     line_index: usize,
+    marker: &str,
 ) -> Vec<PanicSatisfaction> {
     let mut block = Vec::new();
     let mut current = line_index;
@@ -107,12 +141,16 @@ fn preceding_comment_block_panic_satisfactions(
     }
 
     block.reverse();
-    comment_block_panic_satisfactions(&block)
+    comment_block_satisfactions(&block, marker)
 }
 
-fn source_line_panic_satisfactions(file: &SourceFile, line_index: usize) -> Vec<PanicSatisfaction> {
+fn source_line_satisfactions(
+    file: &SourceFile,
+    line_index: usize,
+    marker: &str,
+) -> Vec<PanicSatisfaction> {
     file.get_line(line_index)
-        .and_then(|line| line_panic_satisfaction(line.as_ref()))
+        .and_then(|line| line_satisfaction(line.as_ref(), marker))
         .into_iter()
         .collect()
 }
@@ -126,26 +164,26 @@ fn comment_body(line: &str) -> Option<&str> {
     (!comment.starts_with('/') && !comment.starts_with('!')).then(|| comment.trim_start())
 }
 
-fn comment_block_panic_satisfactions(lines: &[String]) -> Vec<PanicSatisfaction> {
-    let mut satisfactions: Vec<PanicSatisfaction> = Vec::new();
+fn comment_block_satisfactions(lines: &[String], marker: &str) -> Vec<MarkerSatisfaction> {
+    let mut satisfactions: Vec<MarkerSatisfaction> = Vec::new();
     let mut pending_header_reason: Option<String> = None;
-    let mut in_panic_block = false;
+    let mut in_marker_block = false;
 
     for line in lines {
         let Some(body) = comment_body(line) else {
             continue;
         };
-        if let Some(marker_body) = body.strip_prefix(PANIC_MARKER) {
+        if let Some(marker_body) = body.strip_prefix(marker) {
             flush_pending_header(&mut satisfactions, &mut pending_header_reason);
-            in_panic_block = true;
-            let marker = parse_panic_marker(marker_body);
-            if marker.requirement.is_none() && marker.reason.is_empty() {
+            in_marker_block = true;
+            let parsed = parse_marker(marker_body);
+            if parsed.requirement.is_none() && parsed.reason.is_empty() {
                 pending_header_reason = Some(String::new());
             } else {
-                satisfactions.push(marker);
+                satisfactions.push(parsed);
             }
-        } else if in_panic_block {
-            if let Some(satisfaction) = parse_panic_satisfaction_bullet(body) {
+        } else if in_marker_block {
+            if let Some(satisfaction) = parse_satisfaction_bullet(body) {
                 pending_header_reason = None;
                 satisfactions.push(satisfaction);
             } else if let Some(reason) = pending_header_reason.as_mut() {
@@ -163,11 +201,11 @@ fn comment_block_panic_satisfactions(lines: &[String]) -> Vec<PanicSatisfaction>
 }
 
 fn flush_pending_header(
-    satisfactions: &mut Vec<PanicSatisfaction>,
+    satisfactions: &mut Vec<MarkerSatisfaction>,
     pending_header_reason: &mut Option<String>,
 ) {
     if let Some(reason) = pending_header_reason.take() {
-        satisfactions.push(PanicSatisfaction {
+        satisfactions.push(MarkerSatisfaction {
             requirement: None,
             reason,
         });
@@ -184,18 +222,18 @@ fn append_reason_line(reason: &mut String, line: &str) {
     reason.push_str(line);
 }
 
-fn has_justification(satisfaction: &PanicSatisfaction) -> bool {
+fn has_justification(satisfaction: &MarkerSatisfaction) -> bool {
     !satisfaction.reason.trim().is_empty()
 }
 
-fn parse_panic_satisfaction_bullet(line: &str) -> Option<PanicSatisfaction> {
+fn parse_satisfaction_bullet(line: &str) -> Option<MarkerSatisfaction> {
     let line = line.trim_start();
     let body = line
         .strip_prefix("- ")
         .or_else(|| line.strip_prefix("* "))
         .or_else(|| line.strip_prefix("+ "))?;
-    let (name, reason) = parse_panic_marker_body(body);
-    name.map(|requirement| PanicSatisfaction {
+    let (name, reason) = parse_marker_body(body);
+    name.map(|requirement| MarkerSatisfaction {
         requirement: Some(requirement),
         reason: reason.to_owned(),
     })
@@ -204,8 +242,8 @@ fn parse_panic_satisfaction_bullet(line: &str) -> Option<PanicSatisfaction> {
 #[cfg(test)]
 mod tests {
     use super::{
-        PanicSatisfaction, line_has_panic_marker, line_panic_satisfaction,
-        normalize_requirement_name,
+        PanicSatisfaction, line_has_panic_marker, line_has_safety_marker, line_panic_satisfaction,
+        line_safety_satisfaction, normalize_requirement_name,
     };
 
     #[test]
@@ -236,7 +274,7 @@ mod tests {
         ];
 
         assert_eq!(
-            super::comment_block_panic_satisfactions(&lines),
+            comment_block_satisfactions_for_panic(&lines),
             [
                 PanicSatisfaction {
                     requirement: Some(String::from("nonzero")),
@@ -267,7 +305,7 @@ mod tests {
         ];
 
         assert_eq!(
-            super::comment_block_panic_satisfactions(&lines),
+            comment_block_satisfactions_for_panic(&lines),
             [
                 PanicSatisfaction {
                     requirement: Some(String::from("something[var_1]")),
@@ -295,7 +333,7 @@ mod tests {
         ];
 
         assert_eq!(
-            super::comment_block_panic_satisfactions(&lines),
+            comment_block_satisfactions_for_panic(&lines),
             [PanicSatisfaction {
                 requirement: None,
                 reason: String::from("caller checked the local invariant."),
@@ -307,7 +345,7 @@ mod tests {
     fn empty_panic_marker_alone_does_not_suppress() {
         let lines = [String::from("    // PANIC:")];
 
-        assert_eq!(super::comment_block_panic_satisfactions(&lines), []);
+        assert_eq!(comment_block_satisfactions_for_panic(&lines), []);
     }
 
     #[test]
@@ -317,7 +355,7 @@ mod tests {
             String::from("    // - nonzero: checked above."),
         ];
 
-        assert_eq!(super::comment_block_panic_satisfactions(&lines), []);
+        assert_eq!(comment_block_satisfactions_for_panic(&lines), []);
     }
 
     #[test]
@@ -327,7 +365,7 @@ mod tests {
             String::from("    // - nonzero:"),
         ];
 
-        assert_eq!(super::comment_block_panic_satisfactions(&lines), []);
+        assert_eq!(comment_block_satisfactions_for_panic(&lines), []);
     }
 
     #[test]
@@ -344,6 +382,22 @@ mod tests {
         assert!(!line_has_panic_marker("// SAFE: old marker spelling"));
         assert!(!line_has_panic_marker("// PANIC:"));
         assert!(!line_has_panic_marker("// PANIC: nonzero:"));
+    }
+
+    #[test]
+    fn safety_marker_uses_same_comment_syntax() {
+        assert!(line_has_safety_marker(
+            "// SAFETY: pointer came from NonNull"
+        ));
+        assert_eq!(
+            line_safety_satisfaction("// SAFETY: initialized: written above"),
+            Some(PanicSatisfaction {
+                requirement: Some(String::from("initialized")),
+                reason: String::from("written above"),
+            })
+        );
+        assert!(!line_has_safety_marker("// PANIC: not safety"));
+        assert!(!line_has_safety_marker("// SAFETY:"));
     }
 
     #[test]
@@ -400,5 +454,9 @@ mod tests {
         }
 
         false
+    }
+
+    fn comment_block_satisfactions_for_panic(lines: &[String]) -> Vec<PanicSatisfaction> {
+        super::comment_block_satisfactions(lines, super::PANIC_MARKER)
     }
 }

@@ -59,5 +59,9 @@ name = "panic_requirements"
 fixture = "panic_requirements"
 
 [[case]]
+name = "safety_requirements"
+fixture = "safety_requirements"
+
+[[case]]
 name = "trusted_boundaries"
 fixture = "trusted_boundaries"

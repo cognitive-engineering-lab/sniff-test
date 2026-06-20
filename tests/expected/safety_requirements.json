@@ -1,0 +1,69 @@
+[
+  {
+    "artifact": {
+      "artifact-id": "[ARTIFACT_ID]",
+      "crate-name": "safety_requirements",
+      "crate-types": [
+        "lib"
+      ],
+      "extra-filename": "[EXTRA_FILENAME]",
+      "manifest-path": "[FIXTURE]/Cargo.toml",
+      "metadata": "[METADATA]",
+      "package-name": "safety-requirements",
+      "package-version": "0.1.0",
+      "target": null
+    },
+    "concrete-roots": 0,
+    "counts": {
+      "panic-obligations": 0,
+      "raw-panic-paths": 0,
+      "trusted-panic-obligations": 0
+    },
+    "dependencies": [],
+    "dependency-cache": {
+      "hits": 0,
+      "total": 0
+    },
+    "format-version": 1,
+    "generic-roots": 0,
+    "missing-roots": [],
+    "reason": "sniff-test-artifact",
+    "roots": [],
+    "rustc-version": "[RUSTC_VERSION]",
+    "safety": {
+      "counts": {
+        "missing-safety-docs": 1,
+        "unsafe-calls-missing-justification": 1,
+        "unsafe-calls-missing-requirements": 1
+      },
+      "findings": [
+        {
+          "function": "safety_requirements::undocumented_public",
+          "kind": "missing-safety-docs",
+          "reason": "public unsafe function `safety_requirements::undocumented_public` is missing # Safety docs",
+          "span": "src/lib.rs:18:1: 18:57",
+          "target": null
+        },
+        {
+          "function": "safety_requirements::missing_requirement",
+          "kind": "unsafe-call-missing-requirements",
+          "missing-requirements": [
+            "initialized: pointer must reference initialized memory."
+          ],
+          "reason": "unsafe call to `safety_requirements::read_byte` does not satisfy all # Safety requirements",
+          "span": "src/lib.rs:43:14: 43:37",
+          "target": "safety_requirements::read_byte"
+        },
+        {
+          "function": "safety_requirements::missing_justification",
+          "kind": "unsafe-call-missing-justification",
+          "reason": "unsafe call to `safety_requirements::private_unsafe_no_docs` has no `// SAFETY:` justification",
+          "span": "src/lib.rs:47:14: 47:38",
+          "target": "safety_requirements::private_unsafe_no_docs"
+        }
+      ]
+    },
+    "scope": "workspace",
+    "tool-version": "0.1.0"
+  }
+]
