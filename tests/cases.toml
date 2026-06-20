@@ -14,6 +14,12 @@ fixture = "direct_panic"
 exit_code = 1
 
 [[case]]
+name = "direct_driver_panic"
+fixture = "direct_driver_panic"
+driver = "direct"
+crate_name = "direct_driver_panic"
+
+[[case]]
 name = "trait_default_method"
 fixture = "trait_default_method"
 exit_code = 1
@@ -61,6 +67,11 @@ fixture = "panic_requirements"
 [[case]]
 name = "safety_requirements"
 fixture = "safety_requirements"
+
+[[case]]
+name = "marker_placement"
+fixture = "marker_placement"
+exit_code = 1
 
 [[case]]
 name = "trusted_boundaries"

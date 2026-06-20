@@ -1,19 +1,23 @@
+---
+source: crates/sniff-test/tests/json_fixtures.rs
+expression: messages
+---
 [
   {
     "artifact": {
       "artifact-id": "[ARTIFACT_ID]",
-      "crate-name": "trait_default_method",
+      "crate-name": "feature_gated",
       "crate-types": [
         "lib"
       ],
       "extra-filename": "[EXTRA_FILENAME]",
       "manifest-path": "[FIXTURE]/Cargo.toml",
       "metadata": "[METADATA]",
-      "package-name": "trait-default-method",
+      "package-name": "feature-gated",
       "package-version": "0.1.0",
       "target": null
     },
-    "concrete-roots": 0,
+    "concrete-roots": 1,
     "counts": {
       "panic-obligations": 0,
       "raw-panic-paths": 1,
@@ -25,7 +29,7 @@
       "total": 0
     },
     "format-version": 1,
-    "generic-roots": 1,
+    "generic-roots": 0,
     "missing-roots": [],
     "reason": "sniff-test-artifact",
     "roots": [
@@ -37,20 +41,20 @@
         },
         "findings": [
           {
-            "edge": "trait_default_method::TraitDefaultMethod::default_panic --direct-call-> core::std::rt::panic_fmt",
+            "edge": "feature_gated::feature_root --direct-call-> core::panicking::panic",
             "kind": "panic-invocation",
-            "reason": "panic sink core::std::rt::panic_fmt",
-            "span": "[SYSROOT]/lib/rustlib/src/rust/library/core/src/panic.rs:62:9: 62:73",
-            "target": "core::std::rt::panic_fmt",
+            "reason": "panic sink core::panicking::panic",
+            "span": "src/lib.rs:3:5: 3:18",
+            "target": "core::panicking::panic",
             "trace": [
-              "[SYSROOT]/lib/rustlib/src/rust/library/core/src/panic.rs:62:9: 62:73: trait_default_method::TraitDefaultMethod::default_panic --direct-call-> core::std::rt::panic_fmt"
+              "src/lib.rs:3:5: 3:18: feature_gated::feature_root --direct-call-> core::panicking::panic"
             ]
           }
         ],
         "has-panic-docs": false,
-        "root": "trait_default_method::TraitDefaultMethod::default_panic",
-        "root-declaration": "src/lib.rs:2:5",
-        "root-kind": "generic"
+        "root": "feature_gated::feature_root",
+        "root-declaration": "src/lib.rs:2:1",
+        "root-kind": "concrete"
       }
     ],
     "rustc-version": "[RUSTC_VERSION]",

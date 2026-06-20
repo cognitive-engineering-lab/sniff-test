@@ -5,6 +5,7 @@ use rustc_span::{SourceFile, Span};
 
 const PANIC_MARKER: &str = "PANIC:";
 const SAFETY_MARKER: &str = "SAFETY:";
+const MARKERS: [&str; 2] = [PANIC_MARKER, SAFETY_MARKER];
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MarkerSatisfaction {
@@ -182,6 +183,9 @@ fn comment_block_satisfactions(lines: &[String], marker: &str) -> Vec<MarkerSati
             } else {
                 satisfactions.push(parsed);
             }
+        } else if body_starts_with_different_marker(body, marker) {
+            flush_pending_header(&mut satisfactions, &mut pending_header_reason);
+            in_marker_block = false;
         } else if in_marker_block {
             if let Some(satisfaction) = parse_satisfaction_bullet(body) {
                 pending_header_reason = None;
@@ -198,6 +202,12 @@ fn comment_block_satisfactions(lines: &[String], marker: &str) -> Vec<MarkerSati
     satisfactions.retain(has_justification);
 
     satisfactions
+}
+
+fn body_starts_with_different_marker(body: &str, marker: &str) -> bool {
+    MARKERS
+        .iter()
+        .any(|known_marker| *known_marker != marker && body.starts_with(known_marker))
 }
 
 fn flush_pending_header(
@@ -373,7 +383,7 @@ mod tests {
         assert!(!line_has_panic_marker("let label = \"PANIC:\";"));
         assert!(!line_has_panic_marker("let _ = f(); // PANIC: inspected"));
         assert!(!line_has_panic_marker(
-            "/// PANIC: doc comments are for `# Panics` API docs"
+            "/// PANIC: doc comments are not call-site markers"
         ));
         assert!(!line_has_panic_marker(
             "// SAFETY: not the sniff-test marker"
@@ -398,6 +408,29 @@ mod tests {
         );
         assert!(!line_has_safety_marker("// PANIC: not safety"));
         assert!(!line_has_safety_marker("// SAFETY:"));
+        assert!(!line_has_safety_marker(
+            "/// SAFETY: doc comments are not call-site markers"
+        ));
+    }
+
+    #[test]
+    fn different_marker_header_stops_current_marker_block() {
+        let lines = [
+            String::from("    // PANIC:"),
+            String::from("    // SAFETY: pointer came from NonNull."),
+            String::from("    // This should not become panic evidence."),
+        ];
+
+        assert_eq!(comment_block_satisfactions_for_panic(&lines), []);
+        assert_eq!(
+            super::comment_block_satisfactions(&lines, super::SAFETY_MARKER),
+            [PanicSatisfaction {
+                requirement: None,
+                reason: String::from(
+                    "pointer came from NonNull.\nThis should not become panic evidence."
+                ),
+            }]
+        );
     }
 
     #[test]

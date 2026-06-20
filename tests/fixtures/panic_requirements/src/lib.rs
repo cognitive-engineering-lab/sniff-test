@@ -43,3 +43,21 @@ pub fn empty_requirement(total: usize, denominator: usize) -> usize {
     // - audited: this call site is covered by the API audit.
     documented_ratio(total, denominator)
 }
+
+pub fn safety_marker_does_not_satisfy_panic(total: usize, denominator: usize) -> usize {
+    // PANIC:
+    // SAFETY: this justifies unsafe code, not panic behavior.
+    // - nonzero: this must not satisfy the panic contract.
+    // - bounded[total]: this must not satisfy the panic contract.
+    // - audited: this must not satisfy the panic contract.
+    documented_ratio(total, denominator)
+}
+
+pub fn safety_marker_stops_partial_panic_block(total: usize, denominator: usize) -> usize {
+    // PANIC:
+    // - nonzero: caller checked the denominator.
+    // SAFETY: this starts a different marker block.
+    // - bounded[total]: this must not satisfy the panic contract.
+    // - audited: this must not satisfy the panic contract.
+    documented_ratio(total, denominator)
+}

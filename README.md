@@ -149,11 +149,18 @@ just check
 JSON fixture checks are:
 
 ```sh
-python3 scripts/check-json-fixtures.py
+cargo test -p sniff-test --test json_fixtures
 ```
 
-It runs the fixture crates listed in `tests/cases.toml`, normalizes JSON output,
-and compares it with `tests/expected/*.json`.
+They run the fixture crates listed in `tests/cases.toml`, normalize JSON output,
+and compare it with `insta` snapshots under `tests/snapshots/`.
+
+To update and review snapshot changes with `cargo-insta`:
+
+```sh
+cargo insta test -p sniff-test --test json_fixtures
+cargo insta review
+```
 
 CLI smoke checks are:
 

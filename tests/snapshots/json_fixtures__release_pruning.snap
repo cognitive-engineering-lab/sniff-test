@@ -1,15 +1,19 @@
+---
+source: crates/sniff-test/tests/json_fixtures.rs
+expression: messages
+---
 [
   {
     "artifact": {
       "artifact-id": "[ARTIFACT_ID]",
-      "crate-name": "feature_gated",
+      "crate-name": "release_pruning",
       "crate-types": [
         "lib"
       ],
       "extra-filename": "[EXTRA_FILENAME]",
       "manifest-path": "[FIXTURE]/Cargo.toml",
       "metadata": "[METADATA]",
-      "package-name": "feature-gated",
+      "package-name": "release-pruning",
       "package-version": "0.1.0",
       "target": null
     },
@@ -37,19 +41,19 @@
         },
         "findings": [
           {
-            "edge": "feature_gated::feature_root --direct-call-> core::panicking::panic",
+            "edge": "release_pruning::checked_in_release --direct-call-> core::panicking::panic",
             "kind": "panic-invocation",
             "reason": "panic sink core::panicking::panic",
-            "span": "src/lib.rs:3:5: 3:18",
+            "span": "src/lib.rs:6:5: 6:18",
             "target": "core::panicking::panic",
             "trace": [
-              "src/lib.rs:3:5: 3:18: feature_gated::feature_root --direct-call-> core::panicking::panic"
+              "src/lib.rs:6:5: 6:18: release_pruning::checked_in_release --direct-call-> core::panicking::panic"
             ]
           }
         ],
         "has-panic-docs": false,
-        "root": "feature_gated::feature_root",
-        "root-declaration": "src/lib.rs:2:1",
+        "root": "release_pruning::checked_in_release",
+        "root-declaration": "src/lib.rs:5:1",
         "root-kind": "concrete"
       }
     ],

@@ -1,3 +1,7 @@
+---
+source: crates/sniff-test/tests/json_fixtures.rs
+expression: messages
+---
 [
   {
     "artifact": {

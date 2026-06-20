@@ -1,16 +1,20 @@
+---
+source: crates/sniff-test/tests/json_fixtures.rs
+expression: messages
+---
 [
   {
     "artifact": {
       "artifact-id": "[ARTIFACT_ID]",
-      "crate-name": "direct_panic",
+      "crate-name": "direct_driver_panic",
       "crate-types": [
         "lib"
       ],
       "extra-filename": "[EXTRA_FILENAME]",
-      "manifest-path": "[FIXTURE]/Cargo.toml",
+      "manifest-path": null,
       "metadata": "[METADATA]",
-      "package-name": "direct-panic",
-      "package-version": "0.1.0",
+      "package-name": null,
+      "package-version": null,
       "target": null
     },
     "concrete-roots": 1,
@@ -37,19 +41,19 @@
         },
         "findings": [
           {
-            "edge": "direct_panic --direct-call-> core::std::rt::panic_fmt",
+            "edge": "direct_driver_panic --direct-call-> core::std::rt::panic_fmt",
             "kind": "panic-invocation",
             "reason": "panic sink core::std::rt::panic_fmt",
             "span": "[SYSROOT]/lib/rustlib/src/rust/library/core/src/panic.rs:62:9: 62:73",
             "target": "core::std::rt::panic_fmt",
             "trace": [
-              "[SYSROOT]/lib/rustlib/src/rust/library/core/src/panic.rs:62:9: 62:73: direct_panic --direct-call-> core::std::rt::panic_fmt"
+              "[SYSROOT]/lib/rustlib/src/rust/library/core/src/panic.rs:62:9: 62:73: direct_driver_panic --direct-call-> core::std::rt::panic_fmt"
             ]
           }
         ],
         "has-panic-docs": false,
-        "root": "direct_panic",
-        "root-declaration": "src/lib.rs:1:1",
+        "root": "direct_driver_panic",
+        "root-declaration": "[FIXTURE]/src/lib.rs:1:1",
         "root-kind": "concrete"
       }
     ],

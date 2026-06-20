@@ -1,0 +1,85 @@
+---
+source: crates/sniff-test/tests/json_fixtures.rs
+expression: messages
+---
+[
+  {
+    "artifact": {
+      "artifact-id": "[ARTIFACT_ID]",
+      "crate-name": "documented_obligation",
+      "crate-types": [
+        "lib"
+      ],
+      "extra-filename": "[EXTRA_FILENAME]",
+      "manifest-path": "[FIXTURE]/Cargo.toml",
+      "metadata": "[METADATA]",
+      "package-name": "documented-obligation",
+      "package-version": "0.1.0",
+      "target": null
+    },
+    "concrete-roots": 2,
+    "counts": {
+      "panic-obligations": 1,
+      "raw-panic-paths": 1,
+      "trusted-panic-obligations": 0
+    },
+    "dependencies": [],
+    "dependency-cache": {
+      "hits": 0,
+      "total": 0
+    },
+    "format-version": 1,
+    "generic-roots": 0,
+    "missing-roots": [],
+    "reason": "sniff-test-artifact",
+    "roots": [
+      {
+        "counts": {
+          "panic-obligations": 1,
+          "raw-panic-paths": 0,
+          "trusted-panic-obligations": 0
+        },
+        "findings": [
+          {
+            "edge": "report root documents panic behavior",
+            "kind": "panic-obligation",
+            "reason": "documented_obligation::documented_contract has a documented # Panics contract",
+            "span": "src/lib.rs:3:1: 3:39",
+            "target": "documented_obligation::documented_contract",
+            "trace": []
+          }
+        ],
+        "has-panic-docs": true,
+        "root": "documented_obligation::documented_contract",
+        "root-declaration": "src/lib.rs:3:1",
+        "root-kind": "concrete"
+      },
+      {
+        "counts": {
+          "panic-obligations": 0,
+          "raw-panic-paths": 1,
+          "trusted-panic-obligations": 0
+        },
+        "findings": [
+          {
+            "edge": "documented_obligation::undocumented_bug --direct-call-> core::std::rt::panic_fmt",
+            "kind": "panic-invocation",
+            "reason": "panic sink core::std::rt::panic_fmt",
+            "span": "[SYSROOT]/lib/rustlib/src/rust/library/core/src/panic.rs:62:9: 62:73",
+            "target": "core::std::rt::panic_fmt",
+            "trace": [
+              "[SYSROOT]/lib/rustlib/src/rust/library/core/src/panic.rs:62:9: 62:73: documented_obligation::undocumented_bug --direct-call-> core::std::rt::panic_fmt"
+            ]
+          }
+        ],
+        "has-panic-docs": false,
+        "root": "documented_obligation::undocumented_bug",
+        "root-declaration": "src/lib.rs:7:1",
+        "root-kind": "concrete"
+      }
+    ],
+    "rustc-version": "[RUSTC_VERSION]",
+    "scope": "workspace",
+    "tool-version": "0.1.0"
+  }
+]

@@ -56,25 +56,20 @@ pub(crate) fn modify_cargo(cargo: &mut Command, args: &SniffTestArgs) {
         "--cfg".to_owned(),
         format!("sniff_test_tool_{}", env!("SNIFF_TEST_SOURCE_STAMP")),
     ];
-    if let Some(flag) = inline_mir.rustc_flag() {
-        // MIR inlining can hide call edges that are useful in panic traces.
-        rustflags.extend(["-Z".to_owned(), flag.to_owned()]);
-    }
     if args.release {
         // The checker reads optimized MIR. Release mode disables debug
         // assertions, and this pins rustc's optimized MIR default.
         rustflags.extend(["-Z", "mir-opt-level=2"].map(String::from));
     }
+    for flag in inline_mir.rustc_flags() {
+        // Keep this after `mir-opt-level` so explicit inlining policy wins.
+        rustflags.extend(["-Z".to_owned(), (*flag).to_owned()]);
+    }
     if let Some(flag) = overflow_checks.rustc_flag() {
         rustflags.extend(["-C".to_owned(), flag.to_owned()]);
     }
 
-    let rustflags = rustflags
-        .iter()
-        .map(|flag| format!("\"{flag}\""))
-        .collect::<Vec<_>>()
-        .join(",");
-    let rustflags_cfg = format!("build.rustflags=[{rustflags}]");
+    let rustflags_cfg = rustflags_cargo_config(&rustflags);
     cargo.args(["--config", &rustflags_cfg]);
 
     if let Some(manifest_path) = &args.manifest_path {
@@ -247,6 +242,18 @@ fn stable_hash(source: &[u8]) -> u64 {
     })
 }
 
+fn rustflags_cargo_config(rustflags: &[String]) -> String {
+    let rustflags = rustflags
+        .iter()
+        .map(|flag| format!("\"{flag}\""))
+        .collect::<Vec<_>>()
+        .join(",");
+    // Target-specific rustflags take priority over `build.rustflags` in Cargo.
+    // Use an always-true cfg target so sniff-test flags are merged with any
+    // existing target rustflags configured by the user.
+    format!("target.'cfg(all())'.rustflags=[{rustflags}]")
+}
+
 fn sanitize_component(value: &str) -> String {
     let sanitized = value
         .chars()
@@ -329,5 +336,18 @@ impl Callbacks for SniffTestCallbacks {
     fn after_analysis(&mut self, _compiler: &interface::Compiler, tcx: TyCtxt<'_>) -> Compilation {
         analyze_crate(tcx, &self.args, &self.compiler_args);
         Compilation::Continue
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::rustflags_cargo_config;
+
+    #[test]
+    fn rustflags_config_uses_target_cfg_so_it_merges_with_target_rustflags() {
+        assert_eq!(
+            rustflags_cargo_config(&["--cfg".to_owned(), "sniff_test_tool_abc".to_owned()]),
+            "target.'cfg(all())'.rustflags=[\"--cfg\",\"sniff_test_tool_abc\"]"
+        );
     }
 }

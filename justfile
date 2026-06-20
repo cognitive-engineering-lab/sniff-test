@@ -5,7 +5,7 @@ unit:
     cargo test -q --workspace
 
 json-fixtures:
-    python3 scripts/check-json-fixtures.py
+    cargo test -q -p sniff-test --test json_fixtures
 
 cli-smoke:
     python3 scripts/check-cli-smoke.py

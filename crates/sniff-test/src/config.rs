@@ -35,7 +35,8 @@ pub const EXAMPLE_MANIFEST: &str = r#"# sniff-test configuration.
 overflow-checks = "profile"
 
 # MIR inlining can hide call edges that are useful in panic traces.
-# `off` forces `-Z inline-mir=no`; `on` forces `-Z inline-mir=yes`.
+# `off` forces `-Z inline-mir=no` and disables MIR inline passes;
+# `on` forces `-Z inline-mir=yes`.
 inline-mir = "off"
 
 [panics]
@@ -187,18 +188,24 @@ pub enum MirInlining {
     Profile,
     /// Force `-Z inline-mir=yes`.
     On,
-    /// Force `-Z inline-mir=no`.
+    /// Force `-Z inline-mir=no` and disable MIR inline passes.
     #[default]
     Off,
 }
 
 impl MirInlining {
     #[must_use]
-    pub fn rustc_flag(self) -> Option<&'static str> {
+    pub fn rustc_flags(self) -> &'static [&'static str] {
         match self {
-            Self::Profile => None,
-            Self::On => Some("inline-mir=yes"),
-            Self::Off => Some("inline-mir=no"),
+            Self::Profile => &[],
+            Self::On => &["inline-mir=yes"],
+            Self::Off => &[
+                "inline-mir=no",
+                "inline-mir-threshold=0",
+                "inline-mir-forwarder-threshold=0",
+                "inline-mir-hint-threshold=0",
+                "mir-enable-passes=-Inline,-ForceInline",
+            ],
         }
     }
 }
@@ -611,6 +618,20 @@ mod tests {
     #[test]
     fn default_analysis_disables_mir_inlining_for_trace_stability() {
         assert_eq!(AnalysisConfig::default().inline_mir, MirInlining::Off);
+    }
+
+    #[test]
+    fn mir_inlining_off_disables_mir_inline_passes() {
+        assert_eq!(
+            MirInlining::Off.rustc_flags(),
+            [
+                "inline-mir=no",
+                "inline-mir-threshold=0",
+                "inline-mir-forwarder-threshold=0",
+                "inline-mir-hint-threshold=0",
+                "mir-enable-passes=-Inline,-ForceInline",
+            ]
+        );
     }
 
     #[test]
