@@ -15,7 +15,7 @@
     },
     "concrete-roots": 0,
     "counts": {
-      "panic-obligations": 2,
+      "panic-obligations": 1,
       "raw-panic-paths": 1,
       "trusted-panic-obligations": 0
     },
@@ -54,21 +54,11 @@
       },
       {
         "counts": {
-          "panic-obligations": 2,
+          "panic-obligations": 1,
           "raw-panic-paths": 0,
           "trusted-panic-obligations": 0
         },
         "findings": [
-          {
-            "edge": "generic_roots::generic_split_at --direct-call-> core::slice::<impl [T]>::split_at",
-            "kind": "panic-obligation",
-            "reason": "core::slice::<impl [T]>::split_at has a documented # Panics contract",
-            "span": "src/lib.rs:6:5: 6:27",
-            "target": "core::slice::<impl [T]>::split_at",
-            "trace": [
-              "src/lib.rs:6:5: 6:27: generic_roots::generic_split_at --direct-call-> core::slice::<impl [T]>::split_at"
-            ]
-          },
           {
             "edge": "generic_roots::generic_split_at --direct-call-> core::slice::<impl [T]>::split_at",
             "kind": "panic-obligation",

@@ -34,6 +34,10 @@ pub const EXAMPLE_MANIFEST: &str = r#"# sniff-test configuration.
 # `off` forces `-C overflow-checks=no`.
 overflow-checks = "profile"
 
+# MIR inlining can hide call edges that are useful in panic traces.
+# `off` forces `-Z inline-mir=no`; `on` forces `-Z inline-mir=yes`.
+inline-mir = "off"
+
 [panics]
 show-full-stack-trace = false
 report-roots = "public"
@@ -117,6 +121,8 @@ impl SniffTestConfig {
 pub struct AnalysisConfig {
     /// Whether rustc should emit integer overflow and invalid-shift checks.
     pub overflow_checks: OverflowChecks,
+    /// Whether rustc should perform MIR inlining before analysis.
+    pub inline_mir: MirInlining,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize, Serialize)]
@@ -173,6 +179,61 @@ impl Display for OverflowChecksParseError {
 }
 
 impl std::error::Error for OverflowChecksParseError {}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum MirInlining {
+    /// Respect rustc's selected behavior.
+    Profile,
+    /// Force `-Z inline-mir=yes`.
+    On,
+    /// Force `-Z inline-mir=no`.
+    #[default]
+    Off,
+}
+
+impl MirInlining {
+    #[must_use]
+    pub fn rustc_flag(self) -> Option<&'static str> {
+        match self {
+            Self::Profile => None,
+            Self::On => Some("inline-mir=yes"),
+            Self::Off => Some("inline-mir=no"),
+        }
+    }
+}
+
+impl FromStr for MirInlining {
+    type Err = MirInliningParseError;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        match value {
+            "profile" => Ok(Self::Profile),
+            "on" => Ok(Self::On),
+            "off" => Ok(Self::Off),
+            other => Err(MirInliningParseError {
+                value: other.to_owned(),
+            }),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MirInliningParseError {
+    value: String,
+}
+
+impl Display for MirInliningParseError {
+    fn fmt(&self, formatter: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(
+            formatter,
+            "invalid inline-mir value `{}`; expected profile, on, or off",
+            self.value
+        )
+    }
+}
+
+impl std::error::Error for MirInliningParseError {}
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "kebab-case", deny_unknown_fields)]
@@ -506,7 +567,8 @@ impl std::error::Error for ConfigError {
 #[cfg(test)]
 mod tests {
     use super::{
-        EXAMPLE_MANIFEST, OverflowChecks, PanicConfig, PathPatterns, ReportRootSet, SniffTestConfig,
+        AnalysisConfig, EXAMPLE_MANIFEST, MirInlining, OverflowChecks, PanicConfig, PathPatterns,
+        ReportRootSet, SniffTestConfig,
     };
 
     fn path_patterns(patterns: &[&str]) -> PathPatterns {
@@ -537,11 +599,18 @@ mod tests {
         let config = r#"
             [analysis]
             overflow-checks = "on"
+            inline-mir = "profile"
         "#;
 
         let parsed = SniffTestConfig::from_manifest_str(config).expect("manifest should parse");
 
         assert_eq!(parsed.analysis.overflow_checks, OverflowChecks::On);
+        assert_eq!(parsed.analysis.inline_mir, MirInlining::Profile);
+    }
+
+    #[test]
+    fn default_analysis_disables_mir_inlining_for_trace_stability() {
+        assert_eq!(AnalysisConfig::default().inline_mir, MirInlining::Off);
     }
 
     #[test]

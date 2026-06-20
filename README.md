@@ -38,6 +38,17 @@ Arguments after `--` are passed to the wrapped `cargo check` command:
 cargo sniff-test --release -- --features dangerous -p my-crate
 ```
 
+Common `sniff-test.toml` analysis knobs:
+
+```toml
+[analysis]
+overflow-checks = "profile" # profile | on | off
+inline-mir = "off"          # profile | on | off
+```
+
+`inline-mir = "off"` passes `-Z inline-mir=no`, which keeps panic traces closer
+to the source call structure.
+
 `cargo sniff-test` exits with status `1` when a final workspace crate has
 undocumented panic paths. Documented panic contracts and dependency-only raw
 findings are reported, but do not by themselves fail the frontend command.
@@ -56,20 +67,53 @@ diagnostics stay on stderr. Each sniff-test message has
 
 ## Source Markers
 
-Use `// SAFE: ...` in the contiguous standalone comment block immediately above
+Use `// PANIC: ...` in the contiguous standalone comment block immediately above
 a call or compiler-checked expression when that specific site has been inspected
 and the panic precondition is satisfied by a local invariant:
 
 ```rust
 pub fn ratio(total: usize, denominator: usize) -> usize {
-    // SAFE: caller guarantees denominator is nonzero.
+    // PANIC: caller guarantees denominator is nonzero.
     // The public constructor enforces that invariant.
     total / denominator
 }
 ```
 
-Marked edges are skipped for panic reachability. On function calls, this also
-prevents sniff-test from descending into the callee through that call site.
+For callees with named `# Panics` requirements, satisfy each requirement by
+name:
+
+```rust
+/// # Panics
+///
+/// Panics when any listed requirement is violated.
+///
+/// Requirements:
+///
+/// - nonzero: denominator must not be zero.
+/// - bounded[total]: total must be bounded by the caller.
+pub fn ratio(total: usize, denominator: usize) -> usize {
+    total / denominator
+}
+
+pub fn checked_ratio(total: usize, denominator: usize) -> usize {
+    // PANIC:
+    // The caller validates the panic contract before this call.
+    // Requirements:
+    // - nonzero: caller checked the denominator.
+    // - bounded[total]: caller checked the total bound.
+    ratio(total, denominator)
+}
+```
+
+The accepted requirement bullet format is `- name: condition`; rustdoc
+conditions may be empty when the name is enough, but call-site satisfaction
+bullets must include justification text. Names are matched case-insensitively,
+with punctuation and whitespace treated as separators, so `bounded[total]` and
+`bounded total` match. Prose and labels such as `Requirements:` are allowed
+before the first bullet. Plain comment lines following a requirement bullet in
+the same contiguous block are kept as explanation context. Use `/// # Panics`
+for public API panic contracts; `// PANIC:` is only for local call-site
+justifications.
 
 ## Direct Driver
 

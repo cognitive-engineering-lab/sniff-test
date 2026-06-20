@@ -55,5 +55,9 @@ fixture = "safe_markers"
 exit_code = 1
 
 [[case]]
+name = "panic_requirements"
+fixture = "panic_requirements"
+
+[[case]]
 name = "trusted_boundaries"
 fixture = "trusted_boundaries"

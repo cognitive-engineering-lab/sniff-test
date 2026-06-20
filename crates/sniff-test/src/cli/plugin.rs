@@ -45,6 +45,7 @@ pub(crate) fn modify_cargo(cargo: &mut Command, args: &SniffTestArgs) {
     let overflow_checks = args
         .overflow_checks
         .unwrap_or(config.analysis.overflow_checks);
+    let inline_mir = config.analysis.inline_mir;
     // Cargo replays cached rustc stderr/stdout for fresh artifacts. Include
     // report-affecting inputs in the rustc fingerprint so output matches.
     let mut rustflags = vec![
@@ -55,11 +56,14 @@ pub(crate) fn modify_cargo(cargo: &mut Command, args: &SniffTestArgs) {
         "--cfg".to_owned(),
         format!("sniff_test_tool_{}", env!("SNIFF_TEST_SOURCE_STAMP")),
     ];
+    if let Some(flag) = inline_mir.rustc_flag() {
+        // MIR inlining can hide call edges that are useful in panic traces.
+        rustflags.extend(["-Z".to_owned(), flag.to_owned()]);
+    }
     if args.release {
         // The checker reads optimized MIR. Release mode disables debug
-        // assertions, and these flags pin rustc's optimized MIR defaults while
-        // keeping MIR inlining out of call traces.
-        rustflags.extend(["-Z", "inline-mir=no", "-Z", "mir-opt-level=2"].map(String::from));
+        // assertions, and this pins rustc's optimized MIR default.
+        rustflags.extend(["-Z", "mir-opt-level=2"].map(String::from));
     }
     if let Some(flag) = overflow_checks.rustc_flag() {
         rustflags.extend(["-C".to_owned(), flag.to_owned()]);

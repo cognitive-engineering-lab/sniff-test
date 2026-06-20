@@ -1,3 +1,7 @@
+[analysis]
+overflow-checks = "profile"
+inline-mir = "off"
+
 [panics]
 show-full-stack-trace = false
 ignored-namespaces = [

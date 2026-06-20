@@ -1,5 +1,5 @@
 pub fn safe_ratio(total: usize, denominator: usize) -> usize {
-    // SAFE: caller guarantees denominator is nonzero.
+    // PANIC: caller guarantees denominator is nonzero.
     // This invariant is enforced by the public constructor.
     total / denominator
 }
@@ -9,7 +9,7 @@ pub fn unsafe_ratio(total: usize, denominator: usize) -> usize {
 }
 
 pub fn safe_call(flag: bool) {
-    // SAFE: caller guarantees the helper precondition.
+    // PANIC: caller guarantees the helper precondition.
     helper(flag);
 }
 

@@ -20,7 +20,6 @@ use crate::panics::{
     describe_panic_evidence_kind, trace_edges_until, trace_to_edge_ids, trigger_edge_id,
 };
 use crate::report_roots::{ReportRoot, ReportRootSelection, select_panic_report_roots};
-use crate::source_markers::span_has_safe_marker;
 use reachability::{
     ReachabilityContext, ReachabilityControl, ReachabilityEdge, ReachabilityEdgeId,
     ReachabilityEdgeKind, ReachabilityGraph, ReachabilityHooks, ReachabilityIndex,
@@ -189,14 +188,6 @@ struct PanicReachabilityHooks<'config> {
 }
 
 impl<'tcx> ReachabilityHooks<'tcx> for PanicReachabilityHooks<'_> {
-    fn should_record_edge(
-        &mut self,
-        cx: ReachabilityContext<'tcx>,
-        edge: &ReachabilityEdge,
-    ) -> ReachabilityControl<'tcx, bool> {
-        ControlFlow::Continue(!span_has_safe_marker(cx.tcx, edge.span))
-    }
-
     fn should_descend(
         &mut self,
         cx: ReachabilityContext<'tcx>,
@@ -1183,7 +1174,7 @@ fn emit_raw_panic_diagnostic<'tcx>(
         include_stack,
     );
     diag.help(
-        "add a guard, document the panic with `# Panics`, or add `// SAFE:` if a local invariant proves it cannot panic",
+        "add a guard, document the panic with `# Panics`, or add `// PANIC:` if a local invariant proves it cannot panic",
     );
     let _ = diag.emit();
 }
@@ -1282,7 +1273,7 @@ fn emit_cached_dependency_raw_panic_diagnostic<'tcx>(
     );
     diag.note(cached_dependency_panic_reason(summary));
     add_trace_notes(&mut diag, tcx, graph, &[edge_id], include_stack);
-    diag.help("guard the call, document the panic with `# Panics`, or add `// SAFE:` if a local invariant proves it cannot panic");
+    diag.help("guard the call, document the panic with `# Panics`, or add `// PANIC:` if a local invariant proves it cannot panic");
     let _ = diag.emit();
 }
 

@@ -33,11 +33,16 @@ def main() -> int:
         action="store_true",
         help="update expected JSON outputs instead of comparing",
     )
+    parser.add_argument(
+        "cases",
+        nargs="*",
+        help="case names to run; defaults to all cases",
+    )
     args = parser.parse_args()
 
     binary = build_cargo_sniff_test()
     sysroot = rustc_sysroot()
-    cases = load_cases()
+    cases = select_cases(load_cases(), args.cases)
     failures = []
 
     for case in cases:
@@ -97,6 +102,17 @@ def rustc_sysroot() -> str:
 def load_cases() -> list[dict]:
     data = tomllib.loads(CASES_PATH.read_text())
     return data["case"]
+
+
+def select_cases(cases: list[dict], names: list[str]) -> list[dict]:
+    if not names:
+        return cases
+
+    by_name = {case["name"]: case for case in cases}
+    unknown = sorted(set(names) - set(by_name))
+    if unknown:
+        raise RuntimeError(f"unknown case(s): {', '.join(unknown)}")
+    return [by_name[name] for name in names]
 
 
 def run_case(binary: Path, sysroot: str, case: dict) -> list[dict]:

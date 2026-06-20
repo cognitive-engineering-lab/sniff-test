@@ -1,0 +1,14 @@
+[panics]
+report-roots = [
+    "panic_requirements::satisfied",
+    "panic_requirements::unnamed_marker",
+    "panic_requirements::bullet_without_marker",
+    "panic_requirements::empty_marker",
+    "panic_requirements::empty_requirement",
+]
+panic-sink-namespaces = [
+    "core::panicking::**",
+    "std::panicking::**",
+    "core::std::rt::panic_fmt",
+    "std::rt::panic_fmt",
+]

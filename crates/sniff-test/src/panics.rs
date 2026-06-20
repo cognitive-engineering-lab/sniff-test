@@ -9,9 +9,11 @@
 //! - calls into trusted panic-obligation namespaces are opaque boundaries that
 //!   report obligations only when the reached function has panic docs.
 
+use std::collections::HashSet;
+
 use reachability::{
-    ReachabilityEdgeId, ReachabilityEdgeKind, ReachabilityGraph, ReachabilityNodeKind,
-    ReachabilitySnapshot, ReachedEdge, ReachedNode,
+    ReachabilityEdge, ReachabilityEdgeId, ReachabilityEdgeKind, ReachabilityGraph,
+    ReachabilityNodeKind, ReachabilitySnapshot, ReachedEdge, ReachedNode,
 };
 use rustc_hir::Attribute;
 use rustc_hir::attrs::{AttributeKind, HasAttrs};
@@ -20,7 +22,9 @@ use rustc_middle::ty::TyCtxt;
 
 use crate::config::{PanicBoundaryPolicy, PanicConfig};
 use crate::namespace::canonical_namespace;
-use crate::source_markers::span_has_safe_marker;
+use crate::source_markers::{
+    PanicSatisfaction, normalize_requirement_name, span_panic_satisfactions,
+};
 
 #[derive(Debug, Clone)]
 pub struct PanicAnalysis {
@@ -43,6 +47,12 @@ pub struct PanicEvidence {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PanicTrace {
     pub edge_ids: Vec<ReachabilityEdgeId>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PanicRequirement {
+    pub name: String,
+    pub condition: String,
 }
 
 /// Raw panic evidence found in the graph.
@@ -77,6 +87,7 @@ pub fn analyze_panic_evidence<'tcx>(
 ) -> PanicAnalysis {
     let view = graph.view(result);
     let root = view.root();
+    let mut seen_panic_obligations = HashSet::new();
     let evidence = view
         .edges()
         .filter_map(|edge| {
@@ -85,7 +96,7 @@ pub fn analyze_panic_evidence<'tcx>(
             let trace = PanicTrace {
                 edge_ids: trace_to_edge_ids(edge),
             };
-            if trace_crosses_safe_marker(tcx, graph, &trace) {
+            if trace_crosses_satisfied_panic_marker(tcx, graph, &trace) {
                 return None;
             }
             if trace_crosses_ignored_namespace(tcx, graph, &trace, config) {
@@ -107,6 +118,11 @@ pub fn analyze_panic_evidence<'tcx>(
                     classify_panic_path(tcx, graph, root, &trace, config)
                 }
             };
+            if let PanicPathDecision::PanicObligation { edge_id, def_id } = decision
+                && !seen_panic_obligations.insert((edge_id, def_id))
+            {
+                return None;
+            }
 
             Some(PanicEvidence {
                 edge_id,
@@ -236,10 +252,12 @@ fn panic_obligation_node_kind<'tcx>(
 
 #[must_use]
 pub fn has_panic_docs(tcx: TyCtxt<'_>, def_id: DefId) -> bool {
-    HasAttrs::get_attrs(def_id, &tcx)
-        .iter()
-        .filter_map(doc_comment)
-        .any(doc_has_panic_heading)
+    panic_doc_summary(tcx, def_id).has_panic_docs
+}
+
+#[must_use]
+pub fn panic_requirements(tcx: TyCtxt<'_>, def_id: DefId) -> Vec<PanicRequirement> {
+    panic_doc_summary(tcx, def_id).requirements
 }
 
 fn doc_comment(attr: &Attribute) -> Option<&str> {
@@ -249,22 +267,73 @@ fn doc_comment(attr: &Attribute) -> Option<&str> {
     }
 }
 
-fn doc_has_panic_heading(doc: &str) -> bool {
-    doc.lines().any(line_has_panic_heading)
+#[derive(Debug, Default)]
+struct PanicDocSummary {
+    has_panic_docs: bool,
+    requirements: Vec<PanicRequirement>,
 }
 
+fn panic_doc_summary(tcx: TyCtxt<'_>, def_id: DefId) -> PanicDocSummary {
+    parse_panic_doc_lines(
+        HasAttrs::get_attrs(def_id, &tcx)
+            .iter()
+            .filter_map(doc_comment)
+            .flat_map(str::lines),
+    )
+}
+
+fn parse_panic_doc_lines<'a>(lines: impl IntoIterator<Item = &'a str>) -> PanicDocSummary {
+    let mut summary = PanicDocSummary::default();
+    let mut in_panics_section = false;
+
+    for line in lines {
+        if let Some(heading) = markdown_heading_text(line) {
+            in_panics_section = line_has_panic_heading_text(heading);
+            summary.has_panic_docs |= in_panics_section;
+            continue;
+        }
+
+        if in_panics_section && let Some(requirement) = parse_panic_requirement_bullet(line) {
+            summary.requirements.push(requirement);
+        }
+    }
+
+    summary
+}
+
+fn parse_panic_requirement_bullet(line: &str) -> Option<PanicRequirement> {
+    let line = line.trim_start();
+    let body = line
+        .strip_prefix("- ")
+        .or_else(|| line.strip_prefix("* "))
+        .or_else(|| line.strip_prefix("+ "))?;
+    let (name, condition) = body.split_once(':')?;
+    let name = name.trim();
+    let condition = condition.trim();
+
+    (!normalize_requirement_name(name).is_empty()).then(|| PanicRequirement {
+        name: name.to_owned(),
+        condition: condition.to_owned(),
+    })
+}
+
+#[cfg(test)]
 fn line_has_panic_heading(line: &str) -> bool {
-    let Some(rest) = line.trim_start().strip_prefix('#') else {
-        return false;
-    };
+    markdown_heading_text(line).is_some_and(line_has_panic_heading_text)
+}
+
+fn markdown_heading_text(line: &str) -> Option<&str> {
+    let rest = line.trim_start().strip_prefix('#')?;
     let rest = rest.trim_start_matches('#');
     if !rest.starts_with(char::is_whitespace) {
-        return false;
+        return None;
     }
 
     let heading = rest.trim();
-    let heading = heading.trim_end_matches([':', '-']).trim();
+    Some(heading.trim_end_matches([':', '-']).trim())
+}
 
+fn line_has_panic_heading_text(heading: &str) -> bool {
     matches!(
         heading.to_ascii_lowercase().as_str(),
         "panic" | "panics" | "panic(s)"
@@ -297,15 +366,16 @@ fn trace_crosses_ignored_namespace<'tcx>(
     })
 }
 
-fn trace_crosses_safe_marker<'tcx>(
+fn trace_crosses_satisfied_panic_marker<'tcx>(
     tcx: TyCtxt<'tcx>,
     graph: &ReachabilityGraph<'tcx>,
     trace: &PanicTrace,
 ) -> bool {
-    trace
-        .edge_ids
-        .iter()
-        .any(|edge_id| span_has_safe_marker(tcx, graph.edge(*edge_id).span))
+    trace.edge_ids.iter().any(|edge_id| {
+        let edge = graph.edge(*edge_id);
+        let target = &graph.node(edge.target).kind;
+        edge_panic_marker_suppresses(tcx, edge, target)
+    })
 }
 
 fn node_kind_is_ignored_namespace<'tcx>(
@@ -329,11 +399,11 @@ fn classify_edge<'tcx>(
     edge: ReachedEdge<'_, 'tcx>,
     config: &PanicConfig,
 ) -> Option<PanicEvidenceKind> {
-    if span_has_safe_marker(tcx, edge.span()) {
+    let target = edge.target().kind();
+    if edge_panic_marker_suppresses(tcx, edge.edge(), target) {
         return None;
     }
 
-    let target = edge.target().kind();
     match target {
         ReachabilityNodeKind::CompilerAssert { .. } => Some(PanicEvidenceKind::CompilerAssert),
         ReachabilityNodeKind::Instance(instance)
@@ -361,9 +431,50 @@ fn classify_edge<'tcx>(
     }
 }
 
+fn edge_panic_marker_suppresses<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    edge: &ReachabilityEdge,
+    target: &ReachabilityNodeKind<'tcx>,
+) -> bool {
+    let satisfactions = span_panic_satisfactions(tcx, edge.span);
+    if satisfactions.is_empty() {
+        return false;
+    }
+
+    match target {
+        ReachabilityNodeKind::Instance(instance) => {
+            let requirements = panic_requirements(tcx, instance.def_id());
+            requirements.is_empty() || panic_requirements_satisfied(&requirements, &satisfactions)
+        }
+        ReachabilityNodeKind::CompilerAssert { .. }
+        | ReachabilityNodeKind::IndirectCall { .. }
+        | ReachabilityNodeKind::DynObjectCast { .. } => true,
+    }
+}
+
+fn panic_requirements_satisfied(
+    requirements: &[PanicRequirement],
+    satisfactions: &[PanicSatisfaction],
+) -> bool {
+    let satisfied_requirements = satisfactions
+        .iter()
+        .filter(|satisfaction| !satisfaction.reason.trim().is_empty())
+        .filter_map(|satisfaction| satisfaction.requirement.as_deref())
+        .map(normalize_requirement_name)
+        .collect::<HashSet<_>>();
+
+    requirements.iter().all(|requirement| {
+        satisfied_requirements.contains(&normalize_requirement_name(&requirement.name))
+    })
+}
+
 #[cfg(test)]
 mod tests {
-    use super::line_has_panic_heading;
+    use super::{
+        PanicRequirement, line_has_panic_heading, panic_requirements_satisfied,
+        parse_panic_doc_lines,
+    };
+    use crate::source_markers::PanicSatisfaction;
 
     #[test]
     fn panic_doc_headings_match_supported_styles() {
@@ -379,5 +490,98 @@ mod tests {
         assert!(!line_has_panic_heading("#Panics"));
         assert!(!line_has_panic_heading("# Panics in rare cases"));
         assert!(!line_has_panic_heading("# Safety"));
+    }
+
+    #[test]
+    fn panic_doc_requirements_are_named_bullets_under_panics() {
+        let summary = parse_panic_doc_lines([
+            "# Panics",
+            "",
+            "Panics when the caller violates any listed requirement.",
+            "",
+            "Requirements:",
+            "",
+            "- nonzero: denominator must not be zero",
+            "* index in bounds: index must be within the slice",
+            "- something[var_1]:",
+            "# Safety",
+            "- ignored: this is outside the panic section",
+        ]);
+
+        assert!(summary.has_panic_docs);
+        assert_eq!(
+            summary.requirements,
+            [
+                PanicRequirement {
+                    name: String::from("nonzero"),
+                    condition: String::from("denominator must not be zero"),
+                },
+                PanicRequirement {
+                    name: String::from("index in bounds"),
+                    condition: String::from("index must be within the slice"),
+                },
+                PanicRequirement {
+                    name: String::from("something[var_1]"),
+                    condition: String::new(),
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn all_named_requirements_must_be_satisfied() {
+        let requirements = [
+            PanicRequirement {
+                name: String::from("index_in_bounds"),
+                condition: String::from("index must be valid"),
+            },
+            PanicRequirement {
+                name: String::from("nonzero"),
+                condition: String::from("denominator must be nonzero"),
+            },
+            PanicRequirement {
+                name: String::from("something[var_1]"),
+                condition: String::new(),
+            },
+        ];
+        let partial = [PanicSatisfaction {
+            requirement: Some(String::from("index in bounds")),
+            reason: String::from("checked"),
+        }];
+        let complete_with_empty_reason = [
+            PanicSatisfaction {
+                requirement: Some(String::from("index in bounds")),
+                reason: String::from("checked"),
+            },
+            PanicSatisfaction {
+                requirement: Some(String::from("nonzero")),
+                reason: String::new(),
+            },
+            PanicSatisfaction {
+                requirement: Some(String::from("something var_1")),
+                reason: String::from("checked"),
+            },
+        ];
+        let complete = [
+            PanicSatisfaction {
+                requirement: Some(String::from("index in bounds")),
+                reason: String::from("checked"),
+            },
+            PanicSatisfaction {
+                requirement: Some(String::from("nonzero")),
+                reason: String::from("checked"),
+            },
+            PanicSatisfaction {
+                requirement: Some(String::from("something var_1")),
+                reason: String::from("checked"),
+            },
+        ];
+
+        assert!(!panic_requirements_satisfied(&requirements, &partial));
+        assert!(!panic_requirements_satisfied(
+            &requirements,
+            &complete_with_empty_reason
+        ));
+        assert!(panic_requirements_satisfied(&requirements, &complete));
     }
 }
