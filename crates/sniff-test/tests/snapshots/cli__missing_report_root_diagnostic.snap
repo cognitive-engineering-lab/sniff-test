@@ -1,0 +1,33 @@
+---
+source: crates/sniff-test/tests/cli.rs
+expression: snapshot
+---
+exit: 1
+stdout:
+<empty>
+stderr:
+    Checking report-roots v0.1.0 ([FIXTURE])
+error: function `report_roots::private_panic` has an undocumented panic path
+  --> src/lib.rs:11:1
+   |
+11 | fn private_panic() {
+   | ^^^^^^^^^^^^^^^^^^
+   |
+note: panic may happen here: panic sink `core::std::rt::panic_fmt`
+  --> src/lib.rs:12:5
+   |
+12 |     panic!("private root");
+   |     ^^^^^^^^^^^^^^^^^^^^^^
+   = help: add a guard, document the panic with `# Panics`, or add `// PANIC:` if a local invariant proves it cannot panic
+
+warning: configured report root was not found
+ --> [FIXTURE]/explicit.toml:4:5
+  |
+4 |     "report_roots::missing_root",
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  |
+  = note: configured under `[panics].report-roots`
+  = help: remove it or update it to a function in the current crate
+
+warning: `report-roots` (lib) generated 1 warning
+error: could not compile `report-roots` (lib) due to 1 previous error; 1 warning emitted

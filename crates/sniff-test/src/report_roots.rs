@@ -5,6 +5,7 @@
 //! Generic roots are analyzed structurally with identity generic arguments.
 
 use std::collections::HashSet;
+use std::ops::Range;
 
 use rustc_hir::def::DefKind;
 use rustc_hir::def_id::{LOCAL_CRATE, LocalDefId};
@@ -18,7 +19,15 @@ pub struct ReportRootSelection<'tcx> {
     /// Concrete or generic functions selected for analysis/reporting.
     pub roots: Vec<ReportRoot<'tcx>>,
     /// Explicitly configured function paths that were not found in this crate.
-    pub missing_roots: Vec<String>,
+    pub missing_roots: Vec<MissingReportRoot>,
+}
+
+#[derive(Debug, Clone)]
+pub struct MissingReportRoot {
+    /// Fully qualified function path from `[panics].report-roots`.
+    pub path: String,
+    /// Byte range of the TOML string value in the sniff-test manifest.
+    pub source_span: Range<usize>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -66,10 +75,13 @@ pub fn select_panic_report_roots<'tcx>(
         ReportRootSet::Explicit(configured_roots) => {
             let mut missing_roots = Vec::new();
             for configured_root in configured_roots {
-                if let Some(local) = find_local_fn_by_path(tcx, configured_root) {
+                if let Some(local) = find_local_fn_by_path(tcx, configured_root.path()) {
                     roots.insert(local);
                 } else {
-                    missing_roots.push(configured_root.clone());
+                    missing_roots.push(MissingReportRoot {
+                        path: configured_root.path().to_owned(),
+                        source_span: configured_root.source_span(),
+                    });
                 }
             }
 
@@ -84,7 +96,7 @@ fn sorted_selection<'tcx>(
     tcx: TyCtxt<'tcx>,
     config: &PanicConfig,
     roots: HashSet<LocalDefId>,
-    missing_roots: Vec<String>,
+    missing_roots: Vec<MissingReportRoot>,
 ) -> ReportRootSelection<'tcx> {
     let mut roots = roots
         .into_iter()

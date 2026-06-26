@@ -11,6 +11,7 @@
 
 use std::borrow::Cow;
 use std::fmt::{Debug, Display, Formatter};
+use std::ops::Range;
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
 
@@ -19,6 +20,7 @@ use reachability::DynDispatchVTableEdges as ReachabilityDynDispatchVTableEdges;
 use rustc_hir::def_id::DefId;
 use rustc_middle::ty::TyCtxt;
 use serde::{Deserialize, Serialize, de::Error as _};
+use toml::Spanned;
 
 use crate::namespace::canonical_namespace;
 
@@ -514,7 +516,47 @@ pub enum ReportRootSet {
     /// Report from every local function.
     All,
     /// Report from these fully qualified current-crate function paths.
-    Explicit(Vec<String>),
+    Explicit(Vec<ReportRootPath>),
+}
+
+#[derive(Debug, Clone)]
+pub struct ReportRootPath {
+    path: String,
+    source_span: Range<usize>,
+}
+
+impl ReportRootPath {
+    #[must_use]
+    pub fn path(&self) -> &str {
+        &self.path
+    }
+
+    #[must_use]
+    pub fn source_span(&self) -> Range<usize> {
+        self.source_span.clone()
+    }
+}
+
+impl PartialEq for ReportRootPath {
+    fn eq(&self, other: &Self) -> bool {
+        self.path == other.path
+    }
+}
+
+impl Eq for ReportRootPath {}
+
+impl<'de> Deserialize<'de> for ReportRootPath {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let spanned = Spanned::<String>::deserialize(deserializer)?;
+        let source_span = spanned.span();
+        Ok(Self {
+            path: spanned.into_inner(),
+            source_span,
+        })
+    }
 }
 
 impl<'de> Deserialize<'de> for ReportRootSet {
@@ -545,7 +587,7 @@ impl<'de> Deserialize<'de> for ReportRootSet {
                 A: serde::de::SeqAccess<'de>,
             {
                 let mut paths = Vec::new();
-                while let Some(path) = seq.next_element::<String>()? {
+                while let Some(path) = seq.next_element::<ReportRootPath>()? {
                     paths.push(path);
                 }
                 Ok(ReportRootSet::Explicit(paths))
@@ -799,9 +841,12 @@ mod tests {
         let parsed_explicit =
             SniffTestConfig::from_manifest_str(explicit).expect("manifest should parse");
         assert_eq!(parsed_all.panics.report_roots, ReportRootSet::All);
-        assert_eq!(
-            parsed_explicit.panics.report_roots,
-            ReportRootSet::Explicit(vec![String::from("test::a"), String::from("test::b")])
-        );
+        let ReportRootSet::Explicit(paths) = parsed_explicit.panics.report_roots else {
+            panic!("explicit report roots should parse as explicit paths");
+        };
+        assert_eq!(paths[0].path(), "test::a");
+        assert_eq!(paths[1].path(), "test::b");
+        assert_eq!(&explicit[paths[0].source_span()], "\"test::a\"");
+        assert_eq!(&explicit[paths[1].source_span()], "\"test::b\"");
     }
 }

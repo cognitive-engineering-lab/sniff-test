@@ -1,6 +1,5 @@
 //! Arg parsing for the cargo frontend cli
 use std::fmt;
-use std::io::IsTerminal;
 use std::path::PathBuf;
 use std::str::FromStr;
 
@@ -296,18 +295,4 @@ fn frontend_only_driver_arg(flag: &str) -> SniffTestArgParseError {
     SniffTestArgParseError::new(format!(
         "{flag} is a cargo-sniff-test frontend option, not a direct driver option; {hint}"
     ))
-}
-
-pub(crate) fn colors_enabled(choice: ColorChoice, rustc_color: Option<ColorChoice>) -> bool {
-    match choice {
-        ColorChoice::Always => true,
-        ColorChoice::Never => false,
-        ColorChoice::Auto => match rustc_color.unwrap_or(ColorChoice::Auto) {
-            ColorChoice::Always => true,
-            ColorChoice::Never => false,
-            ColorChoice::Auto => {
-                std::env::var_os("NO_COLOR").is_none() && std::io::stderr().is_terminal()
-            }
-        },
-    }
 }

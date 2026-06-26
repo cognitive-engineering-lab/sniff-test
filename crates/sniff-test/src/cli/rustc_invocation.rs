@@ -1,11 +1,8 @@
 use std::path::PathBuf;
 
-use super::args::ColorChoice;
-
 #[derive(Debug, Default)]
 pub(crate) struct RustcInvocation {
     pub(crate) crate_types: Vec<String>,
-    pub(crate) color: Option<ColorChoice>,
     pub(crate) metadata: Option<String>,
     pub(crate) extra_filename: Option<String>,
     pub(crate) target: Option<String>,
@@ -37,12 +34,7 @@ impl RustcInvocation {
                     }
                 }
                 "--color" => {
-                    if let Some(value) = args.next() {
-                        parsed.color = Some(value.parse::<ColorChoice>().unwrap_or_else(|error| {
-                            eprintln!("sniff-test: invalid rustc --color value: {error}");
-                            std::process::exit(2);
-                        }));
-                    }
+                    args.next();
                 }
                 "-C" => {
                     if let Some(value) = args.next() {
@@ -58,11 +50,6 @@ impl RustcInvocation {
                         if let Some(extern_arg) = ExternCrateArg::parse(value) {
                             parsed.externs.push(extern_arg);
                         }
-                    } else if let Some(value) = arg.strip_prefix("--color=") {
-                        parsed.color = Some(value.parse::<ColorChoice>().unwrap_or_else(|error| {
-                            eprintln!("sniff-test: invalid rustc --color value: {error}");
-                            std::process::exit(2);
-                        }));
                     } else if let Some(value) = arg.strip_prefix("-C") {
                         parsed.parse_codegen_option(value);
                     }

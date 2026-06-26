@@ -1,6 +1,9 @@
+use std::path::Path;
+
 use crate::cache::CachedFunctionSummary;
 use crate::namespace::canonical_namespace;
 use crate::panics::{PanicEvidence, PanicEvidenceKind, trace_edges_until, trigger_edge_id};
+use crate::report_roots::MissingReportRoot;
 use crate::safety::{
     SafetyAnalysis, SafetyFinding, UnsafeCallee, render_safety_requirement, unsafe_callee_name,
 };
@@ -8,6 +11,7 @@ use reachability::{ReachabilityEdgeId, ReachabilityGraph, ReachabilityNodeKind};
 use rustc_errors::{Diag, EmissionGuarantee};
 use rustc_hir::def_id::DefId;
 use rustc_middle::ty::TyCtxt;
+use rustc_span::{BytePos, Span};
 
 use super::report::{
     cached_dependency_panic_reason, render_assert_message, render_edge_without_span, render_node,
@@ -210,6 +214,40 @@ pub(super) fn emit_safety_diagnostics(tcx: TyCtxt<'_>, analysis: &SafetyAnalysis
     }
 }
 
+pub(super) fn emit_missing_report_root_diagnostics(
+    tcx: TyCtxt<'_>,
+    manifest_path: &Path,
+    roots: &[MissingReportRoot],
+) {
+    let source_file = tcx.sess.source_map().load_file(manifest_path).ok();
+    for root in roots {
+        let mut diag = if let Some(span) = source_file
+            .as_ref()
+            .and_then(|file| config_span(file.start_pos, root.source_span.clone()))
+        {
+            tcx.dcx()
+                .struct_span_warn(span, "configured report root was not found")
+        } else {
+            tcx.dcx().struct_warn(format!(
+                "configured report root was not found: `{}`",
+                root.path
+            ))
+        };
+        diag.note("configured under `[panics].report-roots`");
+        diag.help("remove it or update it to a function in the current crate");
+        diag.emit();
+    }
+}
+
+fn config_span(file_start: BytePos, source_span: std::ops::Range<usize>) -> Option<Span> {
+    let start = u32::try_from(source_span.start).ok()?;
+    let end = u32::try_from(source_span.end).ok()?;
+    Some(Span::with_root_ctxt(
+        file_start + BytePos(start),
+        file_start + BytePos(end),
+    ))
+}
+
 fn add_safety_callee_note<G: EmissionGuarantee>(
     diag: &mut Diag<'_, G>,
     tcx: TyCtxt<'_>,
@@ -299,5 +337,19 @@ fn render_trace_endpoint<'tcx>(tcx: TyCtxt<'tcx>, node: &ReachabilityNodeKind<'t
         rendered
     } else {
         format!("`{rendered}`")
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::config_span;
+    use rustc_span::BytePos;
+
+    #[test]
+    fn converts_config_byte_range_to_source_span() {
+        let span = config_span(BytePos(10), 3..8).expect("span should fit in u32");
+
+        assert_eq!(span.lo(), BytePos(13));
+        assert_eq!(span.hi(), BytePos(18));
     }
 }

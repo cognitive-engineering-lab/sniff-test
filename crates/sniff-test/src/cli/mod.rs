@@ -13,7 +13,9 @@ use crate::config::{AnalysisConfig, PanicBoundaryPolicy, PanicConfig, SniffTestC
 use crate::dependency_cache::{DependencyAnalysisCache, DependencyInput};
 use crate::namespace::canonical_namespace;
 use crate::panics::{PanicAnalysis, PanicPathDecision, analyze_panic_evidence};
-use crate::report_roots::{ReportRoot, ReportRootSelection, select_panic_report_roots};
+use crate::report_roots::{
+    MissingReportRoot, ReportRoot, ReportRootSelection, select_panic_report_roots,
+};
 use crate::safety::{SafetyAnalysis, analyze_safety};
 use reachability::{
     ReachabilityContext, ReachabilityControl, ReachabilityEdge, ReachabilityEdgeKind,
@@ -35,20 +37,18 @@ mod safety_report;
 pub use self::args::SniffTestArgs;
 pub use self::plugin::driver_main;
 
-use self::args::colors_enabled;
 use self::cache_encode::{cached_boundary_findings, function_summary};
 use self::diagnostics::{
     PanicContractDiagnostic, PanicDiagnosticOptions, emit_cached_dependency_contract_diagnostic,
-    emit_cached_dependency_raw_panic_diagnostic, emit_panic_contract_diagnostic,
-    emit_raw_panic_diagnostic, emit_safety_diagnostics,
+    emit_cached_dependency_raw_panic_diagnostic, emit_missing_report_root_diagnostics,
+    emit_panic_contract_diagnostic, emit_raw_panic_diagnostic, emit_safety_diagnostics,
 };
 use self::plugin::{
     RAW_PANIC_STATUS_ENV, RUSTC_VERSION_ENV, SNIFF_TEST_ARGS_ENV, current_rustc_version,
     frontend_args, modify_cargo, rustc_version, rustc_version_dir_component,
 };
 use self::report::{
-    PanicRootKind, PanicRootReport, ReportDetailKind, emit_missing_report_root, render_node,
-    render_span_start,
+    PanicRootKind, PanicRootReport, ReportDetailKind, render_node, render_span_start,
 };
 use self::rustc_invocation::RustcInvocation;
 use self::safety_report::SafetyArtifactReport;
@@ -242,6 +242,11 @@ pub(crate) fn analyze_crate(tcx: TyCtxt<'_>, args: &SniffTestArgs, compiler_args
     };
     if diagnostics.emit {
         emit_safety_diagnostics(tcx, &safety_analysis);
+        emit_missing_report_root_diagnostics(
+            tcx,
+            &args.manifest_path(),
+            &root_analysis.missing_roots,
+        );
     }
 
     let analysis = AnalysisArtifact::new(
@@ -253,7 +258,7 @@ pub(crate) fn analyze_crate(tcx: TyCtxt<'_>, args: &SniffTestArgs, compiler_args
         safety_analysis,
     );
     write_analysis_cache(args, &analysis.cache);
-    emit_analysis_artifact(&analysis.report, args, invocation.color);
+    emit_analysis_artifact(&analysis.report, args);
     if analysis.report.scope == CrateOutputScope::Workspace
         && analysis.report.counts.raw_panic_paths > 0
     {
@@ -291,7 +296,11 @@ impl AnalysisArtifact {
                 total: dependency_cache.dependency_count(),
             },
             dependencies: dependencies.clone(),
-            missing_roots: root_analysis.missing_roots,
+            missing_roots: root_analysis
+                .missing_roots
+                .iter()
+                .map(|root| root.path.clone())
+                .collect(),
             concrete_roots: root_analysis.concrete_roots,
             generic_roots: root_analysis.generic_roots,
             counts: root_analysis.counts,
@@ -310,23 +319,9 @@ impl AnalysisArtifact {
     }
 }
 
-fn emit_analysis_artifact(
-    report: &AnalysisArtifactReport,
-    args: &SniffTestArgs,
-    rustc_color: Option<args::ColorChoice>,
-) {
+fn emit_analysis_artifact(report: &AnalysisArtifactReport, args: &SniffTestArgs) {
     if args.message_format == args::MessageFormat::Json {
         emit_json_analysis_artifact_report(report);
-    } else {
-        emit_human_analysis_artifact_report(report, colors_enabled(args.color, rustc_color));
-    }
-}
-
-fn emit_human_analysis_artifact_report(report: &AnalysisArtifactReport, color: bool) {
-    if report.scope == CrateOutputScope::Workspace {
-        for missing_root in &report.missing_roots {
-            emit_missing_report_root(&report.artifact.crate_name, missing_root, color);
-        }
     }
 }
 
@@ -351,7 +346,7 @@ pub(crate) struct AnalysisArtifactReport {
 }
 
 struct RootAnalysis {
-    missing_roots: Vec<String>,
+    missing_roots: Vec<MissingReportRoot>,
     concrete_roots: usize,
     generic_roots: usize,
     counts: PanicFindingCounts,

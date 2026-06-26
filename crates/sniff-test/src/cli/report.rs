@@ -2,7 +2,6 @@
 use crate::cache::CachedFunctionSummary;
 use crate::namespace::canonical_namespace;
 use crate::panics::{PanicEvidence, PanicEvidenceKind, trace_edges_until, trigger_edge_id};
-use owo_colors::Style;
 use reachability::{
     CompilerAssertLocal, CompilerAssertLocalRole, ReachabilityEdge, ReachabilityEdgeId,
     ReachabilityGraph, ReachabilityNodeKind,
@@ -179,47 +178,9 @@ impl ReportDetailKind {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum OutputStyle {
-    Bold,
-    Warning,
-    Info,
-}
-
-impl OutputStyle {
-    fn style(self) -> Style {
-        match self {
-            Self::Bold => Style::new().bold(),
-            Self::Warning => Style::new().yellow(),
-            Self::Info => Style::new().cyan(),
-        }
-    }
-}
-
-fn paint(color: bool, style: OutputStyle, text: &str) -> String {
-    if color {
-        style.style().style(text).to_string()
-    } else {
-        text.to_owned()
-    }
-}
-
 fn count_text(count: usize, singular: &str, plural: &str) -> String {
     let label = if count == 1 { singular } else { plural };
     format!("{count} {label}")
-}
-
-pub(crate) fn emit_missing_report_root(crate_name: &str, root: &str, color: bool) {
-    eprintln!(
-        "{} {} {}",
-        paint(
-            color,
-            OutputStyle::Bold,
-            &format!("sniff-test[{crate_name}]:")
-        ),
-        paint(color, OutputStyle::Warning, "missing report root"),
-        paint(color, OutputStyle::Info, root),
-    );
 }
 
 pub(crate) fn render_trace<'tcx>(

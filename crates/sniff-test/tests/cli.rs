@@ -56,6 +56,11 @@ cli_cases! {
             .args(&["--", "--manifest-path", "{fixture}/Cargo.toml"])
             .exit_code(1);
     }
+    "report_roots" => {
+        missing_report_root_diagnostic => Case::new("missing report root diagnostic")
+            .args(&["--manifest", "explicit.toml"])
+            .exit_code(1);
+    }
 }
 
 impl Case {
