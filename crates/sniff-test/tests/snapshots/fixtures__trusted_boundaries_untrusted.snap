@@ -1,0 +1,89 @@
+---
+source: crates/sniff-test/tests/fixtures.rs
+assertion_line: 67
+expression: messages
+---
+[
+  {
+    "artifact": {
+      "artifact-id": "[ARTIFACT_ID]",
+      "crate-name": "trusted_boundaries",
+      "crate-types": [
+        "lib"
+      ],
+      "extra-filename": "[EXTRA_FILENAME]",
+      "manifest-path": "[FIXTURE]/Cargo.toml",
+      "metadata": "[METADATA]",
+      "package-name": "trusted-boundaries",
+      "package-version": "0.1.0",
+      "target": null
+    },
+    "concrete-roots": 2,
+    "counts": {
+      "panic-obligations": 1,
+      "raw-panic-paths": 1,
+      "trusted-panic-obligations": 0
+    },
+    "dependencies": [],
+    "dependency-cache": {
+      "hits": 0,
+      "total": 0
+    },
+    "format-version": 1,
+    "generic-roots": 0,
+    "missing-roots": [],
+    "reason": "sniff-test-artifact",
+    "roots": [
+      {
+        "counts": {
+          "panic-obligations": 1,
+          "raw-panic-paths": 0,
+          "trusted-panic-obligations": 0
+        },
+        "findings": [
+          {
+            "edge": "trusted_boundaries::trusted_with_docs --direct-call-> trusted_boundaries::trusted_doc_helper",
+            "kind": "panic-obligation",
+            "reason": "trusted_boundaries::trusted_doc_helper has a documented # Panics contract",
+            "span": "src/lib.rs:6:5: 6:29",
+            "target": "trusted_boundaries::trusted_doc_helper",
+            "trace": [
+              "src/lib.rs:6:5: 6:29: trusted_boundaries::trusted_with_docs --direct-call-> trusted_boundaries::trusted_doc_helper"
+            ]
+          }
+        ],
+        "has-panic-docs": false,
+        "root": "trusted_boundaries::trusted_with_docs",
+        "root-declaration": "src/lib.rs:5:1",
+        "root-kind": "concrete"
+      },
+      {
+        "counts": {
+          "panic-obligations": 0,
+          "raw-panic-paths": 1,
+          "trusted-panic-obligations": 0
+        },
+        "findings": [
+          {
+            "edge": "trusted_boundaries::trusted_helper --direct-call-> core::panicking::panic",
+            "kind": "panic-invocation",
+            "reason": "panic sink core::panicking::panic",
+            "span": "src/lib.rs:10:5: 10:18",
+            "target": "core::panicking::panic",
+            "trace": [
+              "src/lib.rs:2:5: 2:25: trusted_boundaries::trusted_without_docs --direct-call-> trusted_boundaries::trusted_helper",
+              "src/lib.rs:10:5: 10:18: trusted_boundaries::trusted_helper --direct-call-> core::panicking::panic"
+            ]
+          }
+        ],
+        "has-panic-docs": false,
+        "root": "trusted_boundaries::trusted_without_docs",
+        "root-declaration": "src/lib.rs:1:1",
+        "root-kind": "concrete"
+      }
+    ],
+    "rustc-version": "[RUSTC_VERSION]",
+    "scope": "workspace",
+    "tool-version": "0.1.0"
+  }
+]

@@ -1,0 +1,231 @@
+---
+source: crates/sniff-test/tests/fixtures.rs
+expression: messages
+---
+[
+  {
+    "artifact": {
+      "artifact-id": "[ARTIFACT_ID]",
+      "crate-name": "safety_requirements",
+      "crate-types": [
+        "lib"
+      ],
+      "extra-filename": "[EXTRA_FILENAME]",
+      "manifest-path": null,
+      "metadata": "[METADATA]",
+      "package-name": null,
+      "package-version": null,
+      "target": null
+    },
+    "concrete-roots": 5,
+    "counts": {
+      "panic-obligations": 0,
+      "raw-panic-paths": 6,
+      "trusted-panic-obligations": 0
+    },
+    "dependencies": [],
+    "dependency-cache": {
+      "hits": 0,
+      "total": 0
+    },
+    "format-version": 1,
+    "generic-roots": 0,
+    "missing-roots": [],
+    "reason": "sniff-test-artifact",
+    "roots": [
+      {
+        "counts": {
+          "panic-obligations": 0,
+          "raw-panic-paths": 2,
+          "trusted-panic-obligations": 0
+        },
+        "findings": [
+          {
+            "edge": "safety_requirements::read_byte --assert-> compiler assert null pointer dereference",
+            "kind": "compiler-assert",
+            "reason": "compiler assert",
+            "span": "[FIXTURE]/src/lib.rs:15:14: 15:18",
+            "target": "compiler assert null pointer dereference",
+            "trace": [
+              "[FIXTURE]/src/lib.rs:62:20: 62:43: safety_requirements::block_scope_covers_multiple_calls --direct-call-> safety_requirements::read_byte",
+              "[FIXTURE]/src/lib.rs:15:14: 15:18: safety_requirements::read_byte --assert-> compiler assert null pointer dereference"
+            ]
+          },
+          {
+            "edge": "safety_requirements::write_byte --assert-> compiler assert null pointer dereference",
+            "kind": "compiler-assert",
+            "reason": "compiler assert",
+            "span": "[FIXTURE]/src/lib.rs:30:14: 30:26",
+            "target": "compiler assert null pointer dereference",
+            "trace": [
+              "[FIXTURE]/src/lib.rs:63:9: 63:57: safety_requirements::block_scope_covers_multiple_calls --direct-call-> safety_requirements::write_byte",
+              "[FIXTURE]/src/lib.rs:30:14: 30:26: safety_requirements::write_byte --assert-> compiler assert null pointer dereference"
+            ]
+          }
+        ],
+        "has-panic-docs": false,
+        "root": "safety_requirements::block_scope_covers_multiple_calls",
+        "root-declaration": "[FIXTURE]/src/lib.rs:52:1",
+        "root-kind": "concrete"
+      },
+      {
+        "counts": {
+          "panic-obligations": 0,
+          "raw-panic-paths": 1,
+          "trusted-panic-obligations": 0
+        },
+        "findings": [
+          {
+            "edge": "safety_requirements::read_byte --assert-> compiler assert null pointer dereference",
+            "kind": "compiler-assert",
+            "reason": "compiler assert",
+            "span": "[FIXTURE]/src/lib.rs:15:14: 15:18",
+            "target": "compiler assert null pointer dereference",
+            "trace": [
+              "[FIXTURE]/src/lib.rs:75:14: 75:37: safety_requirements::missing_requirement --direct-call-> safety_requirements::read_byte",
+              "[FIXTURE]/src/lib.rs:15:14: 15:18: safety_requirements::read_byte --assert-> compiler assert null pointer dereference"
+            ]
+          }
+        ],
+        "has-panic-docs": false,
+        "root": "safety_requirements::missing_requirement",
+        "root-declaration": "[FIXTURE]/src/lib.rs:69:1",
+        "root-kind": "concrete"
+      },
+      {
+        "counts": {
+          "panic-obligations": 0,
+          "raw-panic-paths": 1,
+          "trusted-panic-obligations": 0
+        },
+        "findings": [
+          {
+            "edge": "safety_requirements::read_byte --assert-> compiler assert null pointer dereference",
+            "kind": "compiler-assert",
+            "reason": "compiler assert",
+            "span": "[FIXTURE]/src/lib.rs:15:14: 15:18",
+            "target": "compiler assert null pointer dereference",
+            "trace": [
+              "[FIXTURE]/src/lib.rs:15:14: 15:18: safety_requirements::read_byte --assert-> compiler assert null pointer dereference"
+            ]
+          }
+        ],
+        "has-panic-docs": false,
+        "root": "safety_requirements::read_byte",
+        "root-declaration": "[FIXTURE]/src/lib.rs:11:1",
+        "root-kind": "concrete"
+      },
+      {
+        "counts": {
+          "panic-obligations": 0,
+          "raw-panic-paths": 1,
+          "trusted-panic-obligations": 0
+        },
+        "findings": [
+          {
+            "edge": "safety_requirements::read_byte --assert-> compiler assert null pointer dereference",
+            "kind": "compiler-assert",
+            "reason": "compiler assert",
+            "span": "[FIXTURE]/src/lib.rs:15:14: 15:18",
+            "target": "compiler assert null pointer dereference",
+            "trace": [
+              "[FIXTURE]/src/lib.rs:48:9: 48:32: safety_requirements::satisfied_by_block_and_call --direct-call-> safety_requirements::read_byte",
+              "[FIXTURE]/src/lib.rs:15:14: 15:18: safety_requirements::read_byte --assert-> compiler assert null pointer dereference"
+            ]
+          }
+        ],
+        "has-panic-docs": false,
+        "root": "safety_requirements::satisfied_by_block_and_call",
+        "root-declaration": "[FIXTURE]/src/lib.rs:39:1",
+        "root-kind": "concrete"
+      },
+      {
+        "counts": {
+          "panic-obligations": 0,
+          "raw-panic-paths": 1,
+          "trusted-panic-obligations": 0
+        },
+        "findings": [
+          {
+            "edge": "safety_requirements::write_byte --assert-> compiler assert null pointer dereference",
+            "kind": "compiler-assert",
+            "reason": "compiler assert",
+            "span": "[FIXTURE]/src/lib.rs:30:14: 30:26",
+            "target": "compiler assert null pointer dereference",
+            "trace": [
+              "[FIXTURE]/src/lib.rs:30:14: 30:26: safety_requirements::write_byte --assert-> compiler assert null pointer dereference"
+            ]
+          }
+        ],
+        "has-panic-docs": false,
+        "root": "safety_requirements::write_byte",
+        "root-declaration": "[FIXTURE]/src/lib.rs:26:1",
+        "root-kind": "concrete"
+      }
+    ],
+    "rustc-version": "[RUSTC_VERSION]",
+    "safety": {
+      "counts": {
+        "missing-safety-docs": 1,
+        "unsafe-calls-missing-justification": 2,
+        "unsafe-calls-missing-requirements": 3
+      },
+      "findings": [
+        {
+          "function": "safety_requirements::undocumented_public",
+          "kind": "missing-safety-docs",
+          "reason": "public unsafe function `safety_requirements::undocumented_public` is missing # Safety docs",
+          "span": "[FIXTURE]/src/lib.rs:33:1: 33:57",
+          "target": null
+        },
+        {
+          "function": "safety_requirements::missing_requirement",
+          "kind": "unsafe-call-missing-requirements",
+          "missing-requirements": [
+            "initialized: pointer must reference initialized memory."
+          ],
+          "reason": "unsafe call to `safety_requirements::read_byte` does not satisfy all # Safety requirements",
+          "span": "[FIXTURE]/src/lib.rs:75:14: 75:37",
+          "target": "safety_requirements::read_byte"
+        },
+        {
+          "function": "safety_requirements::safety_marker_boundary_missing_requirements",
+          "kind": "unsafe-call-missing-requirements",
+          "missing-requirements": [
+            "valid_ptr: pointer must be non-null.",
+            "initialized: pointer must reference initialized memory."
+          ],
+          "reason": "unsafe call to `safety_requirements::read_byte` does not satisfy all # Safety requirements",
+          "span": "[FIXTURE]/src/lib.rs:86:14: 86:37",
+          "target": "safety_requirements::read_byte"
+        },
+        {
+          "function": "safety_requirements::missing_justification",
+          "kind": "unsafe-call-missing-justification",
+          "reason": "unsafe call to `safety_requirements::private_unsafe_no_docs` has no `// SAFETY:` justification",
+          "span": "[FIXTURE]/src/lib.rs:90:14: 90:38",
+          "target": "safety_requirements::private_unsafe_no_docs"
+        },
+        {
+          "function": "safety_requirements::unsafe_fn_pointer_missing_justification",
+          "kind": "unsafe-call-missing-justification",
+          "reason": "unsafe call to `unsafe function pointer` has no `// SAFETY:` justification",
+          "span": "[FIXTURE]/src/lib.rs:103:14: 103:24",
+          "target": "unsafe function pointer"
+        },
+        {
+          "function": "safety_requirements::generic_unsafe_trait_method_missing",
+          "kind": "unsafe-call-missing-requirements",
+          "missing-requirements": [
+            "valid_ptr: pointer must be non-null."
+          ],
+          "reason": "unsafe call to `safety_requirements::UnsafeGreeter::greet` does not satisfy all # Safety requirements",
+          "span": "[FIXTURE]/src/lib.rs:139:14: 139:32",
+          "target": "safety_requirements::UnsafeGreeter::greet"
+        }
+      ]
+    },
+    "scope": "workspace",
+    "tool-version": "0.1.0"
+  }
+]

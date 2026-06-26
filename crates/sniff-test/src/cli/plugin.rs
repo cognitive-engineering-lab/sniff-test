@@ -298,7 +298,8 @@ fn print_driver_help() {
 Usage:\n    sniff-test-driver [RUSTC-ARGS] -- [SNIFF-TEST-ARGS]\n\n\
 SNIFF-TEST-ARGS:\n    --manifest PATH\n    --cache-dir DIR\n    --color auto|always|never\n    --message-format human|json\n\n\
 Cargo frontend options such as --release, --build-std, and --overflow-checks\n\
-belong to `cargo sniff-test`; pass equivalent rustc flags before `--` in direct mode.\n\n\
+belong to `cargo sniff-test`; pass equivalent rustc flags before `--` in direct mode.\n\
+Direct mode follows rustc exit status; use cargo sniff-test for fail-on-panic policy.\n\n\
 This binary is normally invoked by `cargo sniff-test` as a RUSTC_WRAPPER."
     );
 }

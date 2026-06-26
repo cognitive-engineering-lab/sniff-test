@@ -122,6 +122,10 @@ pub enum DynDispatchVTableEdges {
     /// Record concrete vtable methods at the object unsizing cast.
     CastSites,
     /// Record concrete vtable methods at dynamic dispatch call sites.
+    ///
+    /// This is a body-local, trait-keyed approximation. If one body casts
+    /// multiple concrete values to the same dyn trait, each dyn call to that
+    /// trait may be connected to every concrete impl observed in the body.
     CallSites,
 }
 

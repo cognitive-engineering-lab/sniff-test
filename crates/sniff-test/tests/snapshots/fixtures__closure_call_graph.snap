@@ -1,0 +1,216 @@
+---
+source: crates/sniff-test/tests/fixtures.rs
+assertion_line: 67
+expression: messages
+---
+[
+  {
+    "artifact": {
+      "artifact-id": "[ARTIFACT_ID]",
+      "crate-name": "closure_call_graph",
+      "crate-types": [
+        "lib"
+      ],
+      "extra-filename": "[EXTRA_FILENAME]",
+      "manifest-path": "[FIXTURE]/Cargo.toml",
+      "metadata": "[METADATA]",
+      "package-name": "closure-call-graph",
+      "package-version": "0.1.0",
+      "target": null
+    },
+    "concrete-roots": 7,
+    "counts": {
+      "panic-obligations": 0,
+      "raw-panic-paths": 7,
+      "trusted-panic-obligations": 0
+    },
+    "dependencies": [],
+    "dependency-cache": {
+      "hits": 0,
+      "total": 0
+    },
+    "format-version": 1,
+    "generic-roots": 0,
+    "missing-roots": [],
+    "reason": "sniff-test-artifact",
+    "roots": [
+      {
+        "counts": {
+          "panic-obligations": 0,
+          "raw-panic-paths": 1,
+          "trusted-panic-obligations": 0
+        },
+        "findings": [
+          {
+            "edge": "closure_call_graph::basic_closure_panics::{closure#0} --direct-call-> core::std::rt::panic_fmt",
+            "kind": "panic-invocation",
+            "reason": "panic sink core::std::rt::panic_fmt",
+            "span": "[SYSROOT]/lib/rustlib/src/rust/library/core/src/panic.rs:62:9: 62:73",
+            "target": "core::std::rt::panic_fmt",
+            "trace": [
+              "src/lib.rs:2:17: 2:44: closure_call_graph::basic_closure_panics --closure-definition-> core::std::ops::FnOnce::call_once",
+              "[SYSROOT]/lib/rustlib/src/rust/library/core/src/ops/function.rs:250:5: 250:71: core::std::ops::FnOnce::call_once --direct-call-> closure_call_graph::basic_closure_panics::{closure#0}",
+              "[SYSROOT]/lib/rustlib/src/rust/library/core/src/panic.rs:62:9: 62:73: closure_call_graph::basic_closure_panics::{closure#0} --direct-call-> core::std::rt::panic_fmt"
+            ]
+          }
+        ],
+        "has-panic-docs": false,
+        "root": "closure_call_graph::basic_closure_panics",
+        "root-declaration": "src/lib.rs:1:1",
+        "root-kind": "concrete"
+      },
+      {
+        "counts": {
+          "panic-obligations": 0,
+          "raw-panic-paths": 1,
+          "trusted-panic-obligations": 0
+        },
+        "findings": [
+          {
+            "edge": "closure_call_graph::boxed_captured_closure_panics::{closure#0} --direct-call-> core::std::rt::panic_fmt",
+            "kind": "panic-invocation",
+            "reason": "panic sink core::std::rt::panic_fmt",
+            "span": "[SYSROOT]/lib/rustlib/src/rust/library/core/src/panic.rs:62:9: 62:73",
+            "target": "core::std::rt::panic_fmt",
+            "trace": [
+              "src/lib.rs:30:25: 30:60: closure_call_graph::boxed_captured_closure_panics --closure-definition-> core::std::ops::FnOnce::call_once",
+              "[SYSROOT]/lib/rustlib/src/rust/library/core/src/ops/function.rs:250:5: 250:71: core::std::ops::FnOnce::call_once --direct-call-> closure_call_graph::boxed_captured_closure_panics::{closure#0}",
+              "[SYSROOT]/lib/rustlib/src/rust/library/core/src/panic.rs:62:9: 62:73: closure_call_graph::boxed_captured_closure_panics::{closure#0} --direct-call-> core::std::rt::panic_fmt"
+            ]
+          }
+        ],
+        "has-panic-docs": false,
+        "root": "closure_call_graph::boxed_captured_closure_panics",
+        "root-declaration": "src/lib.rs:29:1",
+        "root-kind": "concrete"
+      },
+      {
+        "counts": {
+          "panic-obligations": 0,
+          "raw-panic-paths": 1,
+          "trusted-panic-obligations": 0
+        },
+        "findings": [
+          {
+            "edge": "closure_call_graph::captured_closure_panics::{closure#0} --direct-call-> core::std::rt::panic_fmt",
+            "kind": "panic-invocation",
+            "reason": "panic sink core::std::rt::panic_fmt",
+            "span": "[SYSROOT]/lib/rustlib/src/rust/library/core/src/panic.rs:62:9: 62:73",
+            "target": "core::std::rt::panic_fmt",
+            "trace": [
+              "src/lib.rs:24:25: 24:54: closure_call_graph::captured_closure_panics --closure-definition-> core::std::ops::FnOnce::call_once",
+              "[SYSROOT]/lib/rustlib/src/rust/library/core/src/ops/function.rs:250:5: 250:71: core::std::ops::FnOnce::call_once --direct-call-> closure_call_graph::captured_closure_panics::{closure#0}",
+              "[SYSROOT]/lib/rustlib/src/rust/library/core/src/panic.rs:62:9: 62:73: closure_call_graph::captured_closure_panics::{closure#0} --direct-call-> core::std::rt::panic_fmt"
+            ]
+          }
+        ],
+        "has-panic-docs": false,
+        "root": "closure_call_graph::captured_closure_panics",
+        "root-declaration": "src/lib.rs:23:1",
+        "root-kind": "concrete"
+      },
+      {
+        "counts": {
+          "panic-obligations": 0,
+          "raw-panic-paths": 1,
+          "trusted-panic-obligations": 0
+        },
+        "findings": [
+          {
+            "edge": "closure_call_graph::dyn_box_closure_boundary::{closure#0} --direct-call-> core::std::rt::panic_fmt",
+            "kind": "panic-invocation",
+            "reason": "panic sink core::std::rt::panic_fmt",
+            "span": "[SYSROOT]/lib/rustlib/src/rust/library/core/src/panic.rs:62:9: 62:73",
+            "target": "core::std::rt::panic_fmt",
+            "trace": [
+              "src/lib.rs:19:40: 19:80: closure_call_graph::dyn_box_closure_boundary --vtable-entry-> closure_call_graph::dyn_box_closure_boundary::{closure#0}",
+              "[SYSROOT]/lib/rustlib/src/rust/library/core/src/panic.rs:62:9: 62:73: closure_call_graph::dyn_box_closure_boundary::{closure#0} --direct-call-> core::std::rt::panic_fmt"
+            ]
+          }
+        ],
+        "has-panic-docs": false,
+        "root": "closure_call_graph::dyn_box_closure_boundary",
+        "root-declaration": "src/lib.rs:18:1",
+        "root-kind": "concrete"
+      },
+      {
+        "counts": {
+          "panic-obligations": 0,
+          "raw-panic-paths": 1,
+          "trusted-panic-obligations": 0
+        },
+        "findings": [
+          {
+            "edge": "closure_call_graph::fn_pointer_closure_boundary::{closure#0} --direct-call-> core::std::rt::panic_fmt",
+            "kind": "panic-invocation",
+            "reason": "panic sink core::std::rt::panic_fmt",
+            "span": "[SYSROOT]/lib/rustlib/src/rust/library/core/src/panic.rs:62:9: 62:73",
+            "target": "core::std::rt::panic_fmt",
+            "trace": [
+              "src/lib.rs:12:17: 12:54: closure_call_graph::fn_pointer_closure_boundary --closure-definition-> core::std::ops::FnOnce::call_once",
+              "[SYSROOT]/lib/rustlib/src/rust/library/core/src/ops/function.rs:250:5: 250:71: core::std::ops::FnOnce::call_once --direct-call-> closure_call_graph::fn_pointer_closure_boundary::{closure#0}",
+              "[SYSROOT]/lib/rustlib/src/rust/library/core/src/panic.rs:62:9: 62:73: closure_call_graph::fn_pointer_closure_boundary::{closure#0} --direct-call-> core::std::rt::panic_fmt"
+            ]
+          }
+        ],
+        "has-panic-docs": false,
+        "root": "closure_call_graph::fn_pointer_closure_boundary",
+        "root-declaration": "src/lib.rs:11:1",
+        "root-kind": "concrete"
+      },
+      {
+        "counts": {
+          "panic-obligations": 0,
+          "raw-panic-paths": 1,
+          "trusted-panic-obligations": 0
+        },
+        "findings": [
+          {
+            "edge": "closure_call_graph::unused_closure_argument::{closure#0} --direct-call-> core::std::rt::panic_fmt",
+            "kind": "panic-invocation",
+            "reason": "panic sink core::std::rt::panic_fmt",
+            "span": "[SYSROOT]/lib/rustlib/src/rust/library/core/src/panic.rs:62:9: 62:73",
+            "target": "core::std::rt::panic_fmt",
+            "trace": [
+              "src/lib.rs:7:17: 7:44: closure_call_graph::unused_closure_argument --closure-definition-> core::std::ops::FnOnce::call_once",
+              "[SYSROOT]/lib/rustlib/src/rust/library/core/src/ops/function.rs:250:5: 250:71: core::std::ops::FnOnce::call_once --direct-call-> closure_call_graph::unused_closure_argument::{closure#0}",
+              "[SYSROOT]/lib/rustlib/src/rust/library/core/src/panic.rs:62:9: 62:73: closure_call_graph::unused_closure_argument::{closure#0} --direct-call-> core::std::rt::panic_fmt"
+            ]
+          }
+        ],
+        "has-panic-docs": false,
+        "root": "closure_call_graph::unused_closure_argument",
+        "root-declaration": "src/lib.rs:6:1",
+        "root-kind": "concrete"
+      },
+      {
+        "counts": {
+          "panic-obligations": 0,
+          "raw-panic-paths": 1,
+          "trusted-panic-obligations": 0
+        },
+        "findings": [
+          {
+            "edge": "closure_call_graph::unused_closure_definition::{closure#0} --direct-call-> core::std::rt::panic_fmt",
+            "kind": "panic-invocation",
+            "reason": "panic sink core::std::rt::panic_fmt",
+            "span": "[SYSROOT]/lib/rustlib/src/rust/library/core/src/panic.rs:62:9: 62:73",
+            "target": "core::std::rt::panic_fmt",
+            "trace": [
+              "src/lib.rs:36:20: 36:58: closure_call_graph::unused_closure_definition --closure-definition-> core::std::ops::FnOnce::call_once",
+              "[SYSROOT]/lib/rustlib/src/rust/library/core/src/ops/function.rs:250:5: 250:71: core::std::ops::FnOnce::call_once --direct-call-> closure_call_graph::unused_closure_definition::{closure#0}",
+              "[SYSROOT]/lib/rustlib/src/rust/library/core/src/panic.rs:62:9: 62:73: closure_call_graph::unused_closure_definition::{closure#0} --direct-call-> core::std::rt::panic_fmt"
+            ]
+          }
+        ],
+        "has-panic-docs": false,
+        "root": "closure_call_graph::unused_closure_definition",
+        "root-declaration": "src/lib.rs:35:1",
+        "root-kind": "concrete"
+      }
+    ],
+    "rustc-version": "[RUSTC_VERSION]",
+    "scope": "workspace",
+    "tool-version": "0.1.0"
+  }
+]

@@ -1,0 +1,64 @@
+---
+source: crates/sniff-test/tests/fixtures.rs
+expression: messages
+---
+[
+  {
+    "artifact": {
+      "artifact-id": "[ARTIFACT_ID]",
+      "crate-name": "suppression",
+      "crate-types": [
+        "lib"
+      ],
+      "extra-filename": "[EXTRA_FILENAME]",
+      "manifest-path": null,
+      "metadata": "[METADATA]",
+      "package-name": null,
+      "package-version": null,
+      "target": null
+    },
+    "concrete-roots": 1,
+    "counts": {
+      "panic-obligations": 0,
+      "raw-panic-paths": 1,
+      "trusted-panic-obligations": 0
+    },
+    "dependencies": [],
+    "dependency-cache": {
+      "hits": 0,
+      "total": 0
+    },
+    "format-version": 1,
+    "generic-roots": 0,
+    "missing-roots": [],
+    "reason": "sniff-test-artifact",
+    "roots": [
+      {
+        "counts": {
+          "panic-obligations": 0,
+          "raw-panic-paths": 1,
+          "trusted-panic-obligations": 0
+        },
+        "findings": [
+          {
+            "edge": "suppression::unchecked_index --assert-> compiler assert index out of bounds: index `index` (_2, argument 2) may exceed length `_3` (temporary)",
+            "kind": "compiler-assert",
+            "reason": "compiler assert",
+            "span": "[FIXTURE]/src/lib.rs:2:5: 2:18",
+            "target": "compiler assert index out of bounds: index `index` (_2, argument 2) may exceed length `_3` (temporary)",
+            "trace": [
+              "[FIXTURE]/src/lib.rs:2:5: 2:18: suppression::unchecked_index --assert-> compiler assert index out of bounds: index `index` (_2, argument 2) may exceed length `_3` (temporary)"
+            ]
+          }
+        ],
+        "has-panic-docs": false,
+        "root": "suppression::unchecked_index",
+        "root-declaration": "[FIXTURE]/src/lib.rs:1:1",
+        "root-kind": "concrete"
+      }
+    ],
+    "rustc-version": "[RUSTC_VERSION]",
+    "scope": "workspace",
+    "tool-version": "0.1.0"
+  }
+]

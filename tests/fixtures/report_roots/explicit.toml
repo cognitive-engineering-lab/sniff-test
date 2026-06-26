@@ -1,0 +1,11 @@
+[panics]
+report-roots = [
+    "report_roots::private_panic",
+    "report_roots::missing_root",
+]
+panic-sink-namespaces = [
+    "core::panicking::**",
+    "std::panicking::**",
+    "core::std::rt::panic_fmt",
+    "std::rt::panic_fmt",
+]

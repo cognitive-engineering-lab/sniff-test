@@ -1,0 +1,25 @@
+---
+source: crates/sniff-test/tests/cli.rs
+expression: snapshot
+---
+exit: 0
+stdout:
+<empty>
+stderr:
+    Checking dependency-obligation v0.1.0 ([FIXTURE]/dep)
+    Checking dependency-app v0.1.0 ([FIXTURE]/app)
+warning: function `dependency_app::call_dependency` reaches a documented panic contract
+ --> src/lib.rs:2:5
+  |
+2 |     dependency_obligation::documented(flag);
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  |
+note: `dependency_obligation::documented` documents `# Panics` here
+ --> [FIXTURE]/dep/src/lib.rs:3:1
+  |
+3 | pub fn documented(flag: bool) {
+  | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  = help: ensure this precondition locally or document it on your public API with `# Panics`
+
+warning: `dependency-app` (lib) generated 1 warning
+    Finished `release` profile [optimized] target(s) in [TIME]

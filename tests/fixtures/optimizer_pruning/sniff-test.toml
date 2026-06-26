@@ -1,0 +1,18 @@
+[analysis]
+inline-mir = "off"
+
+[panics]
+report-roots = [
+    "optimizer_pruning::const_false_axiom",
+    "optimizer_pruning::const_false_call",
+    "optimizer_pruning::literal_false_axiom",
+    "optimizer_pruning::literal_false_call",
+    "optimizer_pruning::documented_inlinable_call",
+    "optimizer_pruning::documented_inline_always_call",
+]
+panic-sink-namespaces = [
+    "core::panicking::**",
+    "std::panicking::**",
+    "core::std::rt::panic_fmt",
+    "std::rt::panic_fmt",
+]

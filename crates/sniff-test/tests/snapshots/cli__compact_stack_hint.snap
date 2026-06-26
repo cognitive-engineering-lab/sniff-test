@@ -1,0 +1,38 @@
+---
+source: crates/sniff-test/tests/cli.rs
+expression: snapshot
+---
+exit: 1
+stdout:
+<empty>
+stderr:
+    Checking safe-markers v0.1.0 ([FIXTURE])
+error: function `safe_markers::unsafe_call` has an undocumented panic path
+  --> src/lib.rs:16:1
+   |
+16 | pub fn unsafe_call(flag: bool) {
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   |
+note: panic may happen here: panic sink `core::panicking::panic`
+  --> src/lib.rs:21:5
+   |
+21 |     assert!(flag);
+   |     ^^^^^^^^^^^^^
+   = note: reachable from `safe_markers::unsafe_call` to `core::panicking::panic`
+   = note: set `show-full-stack-trace = true` under `[panics]` in sniff-test.toml to show every reachability step
+   = help: add a guard, document the panic with `# Panics`, or add `// PANIC:` if a local invariant proves it cannot panic
+
+error: function `safe_markers::unsafe_ratio` has an undocumented panic path
+ --> src/lib.rs:7:1
+  |
+7 | pub fn unsafe_ratio(total: usize, denominator: usize) -> usize {
+  | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  |
+note: panic may happen here: compiler assertion: attempt to divide `total` (_1, argument 1) by zero
+ --> src/lib.rs:8:5
+  |
+8 |     total / denominator
+  |     ^^^^^^^^^^^^^^^^^^^
+  = help: add a guard, document the panic with `# Panics`, or add `// PANIC:` if a local invariant proves it cannot panic
+
+error: could not compile `safe-markers` (lib) due to 2 previous errors

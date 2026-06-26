@@ -1,0 +1,62 @@
+---
+source: crates/sniff-test/tests/cli.rs
+expression: snapshot
+---
+exit: 1
+stdout:
+<empty>
+stderr:
+    Checking panic-axioms v0.1.0 ([FIXTURE])
+error: function `panic_axioms::division` has an undocumented panic path
+ --> src/lib.rs:1:1
+  |
+1 | pub fn division(total_size: usize, block_count: usize) -> usize {
+  | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  |
+note: panic may happen here: compiler assertion: attempt to divide `total_size` (_1, argument 1) by zero
+ --> src/lib.rs:2:5
+  |
+2 |     total_size / block_count
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^
+  = help: add a guard, document the panic with `# Panics`, or add `// PANIC:` if a local invariant proves it cannot panic
+
+error: function `panic_axioms::indexed` has an undocumented panic path
+  --> src/lib.rs:9:1
+   |
+ 9 | pub fn indexed(values: &[usize], index: usize) -> usize {
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   |
+note: panic may happen here: compiler assertion: index out of bounds: index `index` (_2, argument 2) may exceed length `_3` (temporary)
+  --> src/lib.rs:10:5
+   |
+10 |     values[index]
+   |     ^^^^^^^^^^^^^
+   = help: add a guard, document the panic with `# Panics`, or add `// PANIC:` if a local invariant proves it cannot panic
+
+error: function `panic_axioms::remainder` has an undocumented panic path
+ --> src/lib.rs:5:1
+  |
+5 | pub fn remainder(total_size: usize, block_size: usize) -> usize {
+  | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  |
+note: panic may happen here: compiler assertion: attempt to calculate the remainder of `total_size` (_1, argument 1) with a zero divisor
+ --> src/lib.rs:6:5
+  |
+6 |     total_size % block_size
+  |     ^^^^^^^^^^^^^^^^^^^^^^^
+  = help: add a guard, document the panic with `# Panics`, or add `// PANIC:` if a local invariant proves it cannot panic
+
+error: function `panic_axioms::todo_macro` has an undocumented panic path
+  --> src/lib.rs:13:1
+   |
+13 | pub fn todo_macro() {
+   | ^^^^^^^^^^^^^^^^^^^
+   |
+note: panic may happen here: panic sink `core::std::rt::panic_fmt`
+  --> src/lib.rs:14:5
+   |
+14 |     todo!("not implemented")
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^
+   = help: add a guard, document the panic with `# Panics`, or add `// PANIC:` if a local invariant proves it cannot panic
+
+error: could not compile `panic-axioms` (lib) due to 4 previous errors

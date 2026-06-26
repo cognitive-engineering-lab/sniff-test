@@ -44,10 +44,17 @@ Common `sniff-test.toml` analysis knobs:
 [analysis]
 overflow-checks = "profile" # profile | on | off
 inline-mir = "off"          # profile | on | off
+dyn-dispatch-vtable-edges = "cast-sites" # cast-sites | call-sites
 ```
 
 `inline-mir = "off"` passes `-Z inline-mir=no`, which keeps panic traces closer
 to the source call structure.
+
+`dyn-dispatch-vtable-edges = "call-sites"` reports concrete dynamic-dispatch
+vtable methods at the call span instead of the object-cast span. This is a
+body-local, trait-keyed approximation: if one function casts multiple concrete
+values to the same dyn trait, every dyn call to that trait in the function may
+be connected to every concrete impl observed in that function.
 
 `cargo sniff-test` exits with status `1` when a final workspace crate has
 undocumented panic paths. Documented panic contracts and dependency-only raw
@@ -138,6 +145,10 @@ profile/codegen flags before the driver separator instead:
 sniff-test-driver rustc src/lib.rs -C overflow-checks=on -- --message-format json
 ```
 
+Direct driver mode follows rustc-driver exit semantics: it returns success when
+rustc succeeds, even if sniff-test emits panic findings. Use the Cargo frontend
+for final workspace aggregation and fail-on-undocumented-panic behavior.
+
 ## Checks
 
 Run the local verification suite with:
@@ -146,28 +157,45 @@ Run the local verification suite with:
 just check
 ```
 
-JSON fixture checks are:
+Fixture checks are:
 
 ```sh
-cargo test -p sniff-test --test json_fixtures
+just fixtures
 ```
 
-They run the fixture crates listed in `tests/cases.toml`, normalize JSON output,
-and compare it with `insta` snapshots under `tests/snapshots/`.
+The Rust test target defines one macro-generated test per fixture case. Cases
+are grouped first by input domain, such as dyn dispatch, panic axioms,
+dependencies, markers, or safety requirements. Each case then names the
+sniff-test behavior under test, such as raw panic reporting, documented
+obligations, trusted boundaries, or marker satisfaction. Each test copies its
+fixture crate, normalizes JSON output, and compares it with cargo-insta
+snapshots.
+
+To run one fixture case:
+
+```sh
+just fixture panic_axioms
+```
 
 To update and review snapshot changes with `cargo-insta`:
 
 ```sh
-cargo insta test -p sniff-test --test json_fixtures
-cargo insta review
+just fixtures-review
+just fixtures-accept
 ```
 
-CLI smoke checks are:
+CLI diagnostic snapshots are:
 
 ```sh
-python3 scripts/check-cli-smoke.py
+just cli
 ```
 
-They check stable fragments of rustc-style output, including compact traces,
-full-stack traces, dependency warning footers, Cargo argument forwarding, and
-the absence of old summary lines.
+They snapshot normalized rustc-style output, including compact traces,
+full-stack traces, dependency warning footers, SAFETY diagnostics, Cargo
+argument forwarding, and the absence of old summary lines.
+
+Run all snapshot tests with stale-snapshot rejection via:
+
+```sh
+just snapshots
+```

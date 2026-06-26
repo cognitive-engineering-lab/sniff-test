@@ -1,0 +1,88 @@
+---
+source: crates/sniff-test/tests/fixtures.rs
+assertion_line: 67
+expression: messages
+---
+[
+  {
+    "artifact": {
+      "artifact-id": "[ARTIFACT_ID]",
+      "crate-name": "optimizer_pruning",
+      "crate-types": [
+        "lib"
+      ],
+      "extra-filename": "[EXTRA_FILENAME]",
+      "manifest-path": "[FIXTURE]/Cargo.toml",
+      "metadata": "[METADATA]",
+      "package-name": "optimizer-pruning",
+      "package-version": "0.1.0",
+      "target": null
+    },
+    "concrete-roots": 2,
+    "counts": {
+      "panic-obligations": 2,
+      "raw-panic-paths": 0,
+      "trusted-panic-obligations": 0
+    },
+    "dependencies": [],
+    "dependency-cache": {
+      "hits": 0,
+      "total": 0
+    },
+    "format-version": 1,
+    "generic-roots": 0,
+    "missing-roots": [],
+    "reason": "sniff-test-artifact",
+    "roots": [
+      {
+        "counts": {
+          "panic-obligations": 1,
+          "raw-panic-paths": 0,
+          "trusted-panic-obligations": 0
+        },
+        "findings": [
+          {
+            "edge": "optimizer_pruning::documented_inlinable_call --direct-call-> optimizer_pruning::greater_than_zero",
+            "kind": "panic-obligation",
+            "reason": "optimizer_pruning::greater_than_zero has a documented # Panics contract",
+            "span": "src/lib.rs:26:5: 26:26",
+            "target": "optimizer_pruning::greater_than_zero",
+            "trace": [
+              "src/lib.rs:26:5: 26:26: optimizer_pruning::documented_inlinable_call --direct-call-> optimizer_pruning::greater_than_zero"
+            ]
+          }
+        ],
+        "has-panic-docs": false,
+        "root": "optimizer_pruning::documented_inlinable_call",
+        "root-declaration": "src/lib.rs:25:1",
+        "root-kind": "concrete"
+      },
+      {
+        "counts": {
+          "panic-obligations": 1,
+          "raw-panic-paths": 0,
+          "trusted-panic-obligations": 0
+        },
+        "findings": [
+          {
+            "edge": "optimizer_pruning::documented_inline_always_call --direct-call-> optimizer_pruning::greater_than_zero_inline",
+            "kind": "panic-obligation",
+            "reason": "optimizer_pruning::greater_than_zero_inline has a documented # Panics contract",
+            "span": "src/lib.rs:30:5: 30:33",
+            "target": "optimizer_pruning::greater_than_zero_inline",
+            "trace": [
+              "src/lib.rs:30:5: 30:33: optimizer_pruning::documented_inline_always_call --direct-call-> optimizer_pruning::greater_than_zero_inline"
+            ]
+          }
+        ],
+        "has-panic-docs": false,
+        "root": "optimizer_pruning::documented_inline_always_call",
+        "root-declaration": "src/lib.rs:29:1",
+        "root-kind": "concrete"
+      }
+    ],
+    "rustc-version": "[RUSTC_VERSION]",
+    "scope": "workspace",
+    "tool-version": "0.1.0"
+  }
+]

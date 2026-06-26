@@ -102,3 +102,39 @@ pub fn unsafe_fn_pointer_missing_justification() {
 
     unsafe { function() }
 }
+
+pub trait UnsafeGreeter {
+    /// # Safety
+    ///
+    /// Requirements:
+    ///
+    /// - valid_ptr: pointer must be non-null.
+    unsafe fn greet(&self, ptr: *const u8);
+}
+
+pub struct Greeter;
+
+impl UnsafeGreeter for Greeter {
+    /// # Safety
+    ///
+    /// Requirements:
+    ///
+    /// - valid_ptr: pointer must be non-null.
+    unsafe fn greet(&self, _ptr: *const u8) {}
+}
+
+pub fn generic_unsafe_trait_method_satisfied<T: UnsafeGreeter>(greeter: T) {
+    let byte = 7;
+    let ptr = &raw const byte;
+
+    // SAFETY:
+    // - valid_ptr: pointer was created from a live reference.
+    unsafe { greeter.greet(ptr) }
+}
+
+pub fn generic_unsafe_trait_method_missing<T: UnsafeGreeter>(greeter: T) {
+    let byte = 7;
+    let ptr = &raw const byte;
+
+    unsafe { greeter.greet(ptr) }
+}

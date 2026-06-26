@@ -1,0 +1,64 @@
+---
+source: crates/sniff-test/tests/fixtures.rs
+expression: messages
+---
+[
+  {
+    "artifact": {
+      "artifact-id": "[ARTIFACT_ID]",
+      "crate-name": "trait_default_method",
+      "crate-types": [
+        "lib"
+      ],
+      "extra-filename": "[EXTRA_FILENAME]",
+      "manifest-path": null,
+      "metadata": "[METADATA]",
+      "package-name": null,
+      "package-version": null,
+      "target": null
+    },
+    "concrete-roots": 0,
+    "counts": {
+      "panic-obligations": 0,
+      "raw-panic-paths": 1,
+      "trusted-panic-obligations": 0
+    },
+    "dependencies": [],
+    "dependency-cache": {
+      "hits": 0,
+      "total": 0
+    },
+    "format-version": 1,
+    "generic-roots": 1,
+    "missing-roots": [],
+    "reason": "sniff-test-artifact",
+    "roots": [
+      {
+        "counts": {
+          "panic-obligations": 0,
+          "raw-panic-paths": 1,
+          "trusted-panic-obligations": 0
+        },
+        "findings": [
+          {
+            "edge": "trait_default_method::TraitDefaultMethod::default_panic --direct-call-> core::std::rt::panic_fmt",
+            "kind": "panic-invocation",
+            "reason": "panic sink core::std::rt::panic_fmt",
+            "span": "[SYSROOT]/lib/rustlib/src/rust/library/core/src/panic.rs:62:9: 62:73",
+            "target": "core::std::rt::panic_fmt",
+            "trace": [
+              "[SYSROOT]/lib/rustlib/src/rust/library/core/src/panic.rs:62:9: 62:73: trait_default_method::TraitDefaultMethod::default_panic --direct-call-> core::std::rt::panic_fmt"
+            ]
+          }
+        ],
+        "has-panic-docs": false,
+        "root": "trait_default_method::TraitDefaultMethod::default_panic",
+        "root-declaration": "[FIXTURE]/src/lib.rs:2:5",
+        "root-kind": "generic"
+      }
+    ],
+    "rustc-version": "[RUSTC_VERSION]",
+    "scope": "workspace",
+    "tool-version": "0.1.0"
+  }
+]

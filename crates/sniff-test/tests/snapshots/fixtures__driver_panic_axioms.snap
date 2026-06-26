@@ -1,0 +1,133 @@
+---
+source: crates/sniff-test/tests/fixtures.rs
+expression: messages
+---
+[
+  {
+    "artifact": {
+      "artifact-id": "[ARTIFACT_ID]",
+      "crate-name": "panic_axioms",
+      "crate-types": [
+        "lib"
+      ],
+      "extra-filename": "[EXTRA_FILENAME]",
+      "manifest-path": null,
+      "metadata": "[METADATA]",
+      "package-name": null,
+      "package-version": null,
+      "target": null
+    },
+    "concrete-roots": 4,
+    "counts": {
+      "panic-obligations": 0,
+      "raw-panic-paths": 4,
+      "trusted-panic-obligations": 0
+    },
+    "dependencies": [],
+    "dependency-cache": {
+      "hits": 0,
+      "total": 0
+    },
+    "format-version": 1,
+    "generic-roots": 0,
+    "missing-roots": [],
+    "reason": "sniff-test-artifact",
+    "roots": [
+      {
+        "counts": {
+          "panic-obligations": 0,
+          "raw-panic-paths": 1,
+          "trusted-panic-obligations": 0
+        },
+        "findings": [
+          {
+            "edge": "panic_axioms::division --assert-> compiler assert attempt to divide `total_size` (_1, argument 1) by zero",
+            "kind": "compiler-assert",
+            "reason": "compiler assert",
+            "span": "[FIXTURE]/src/lib.rs:2:5: 2:29",
+            "target": "compiler assert attempt to divide `total_size` (_1, argument 1) by zero",
+            "trace": [
+              "[FIXTURE]/src/lib.rs:2:5: 2:29: panic_axioms::division --assert-> compiler assert attempt to divide `total_size` (_1, argument 1) by zero"
+            ]
+          }
+        ],
+        "has-panic-docs": false,
+        "root": "panic_axioms::division",
+        "root-declaration": "[FIXTURE]/src/lib.rs:1:1",
+        "root-kind": "concrete"
+      },
+      {
+        "counts": {
+          "panic-obligations": 0,
+          "raw-panic-paths": 1,
+          "trusted-panic-obligations": 0
+        },
+        "findings": [
+          {
+            "edge": "panic_axioms::indexed --assert-> compiler assert index out of bounds: index `index` (_2, argument 2) may exceed length `_3` (temporary)",
+            "kind": "compiler-assert",
+            "reason": "compiler assert",
+            "span": "[FIXTURE]/src/lib.rs:10:5: 10:18",
+            "target": "compiler assert index out of bounds: index `index` (_2, argument 2) may exceed length `_3` (temporary)",
+            "trace": [
+              "[FIXTURE]/src/lib.rs:10:5: 10:18: panic_axioms::indexed --assert-> compiler assert index out of bounds: index `index` (_2, argument 2) may exceed length `_3` (temporary)"
+            ]
+          }
+        ],
+        "has-panic-docs": false,
+        "root": "panic_axioms::indexed",
+        "root-declaration": "[FIXTURE]/src/lib.rs:9:1",
+        "root-kind": "concrete"
+      },
+      {
+        "counts": {
+          "panic-obligations": 0,
+          "raw-panic-paths": 1,
+          "trusted-panic-obligations": 0
+        },
+        "findings": [
+          {
+            "edge": "panic_axioms::remainder --assert-> compiler assert attempt to calculate the remainder of `total_size` (_1, argument 1) with a zero divisor",
+            "kind": "compiler-assert",
+            "reason": "compiler assert",
+            "span": "[FIXTURE]/src/lib.rs:6:5: 6:28",
+            "target": "compiler assert attempt to calculate the remainder of `total_size` (_1, argument 1) with a zero divisor",
+            "trace": [
+              "[FIXTURE]/src/lib.rs:6:5: 6:28: panic_axioms::remainder --assert-> compiler assert attempt to calculate the remainder of `total_size` (_1, argument 1) with a zero divisor"
+            ]
+          }
+        ],
+        "has-panic-docs": false,
+        "root": "panic_axioms::remainder",
+        "root-declaration": "[FIXTURE]/src/lib.rs:5:1",
+        "root-kind": "concrete"
+      },
+      {
+        "counts": {
+          "panic-obligations": 0,
+          "raw-panic-paths": 1,
+          "trusted-panic-obligations": 0
+        },
+        "findings": [
+          {
+            "edge": "panic_axioms::todo_macro --direct-call-> core::std::rt::panic_fmt",
+            "kind": "panic-invocation",
+            "reason": "panic sink core::std::rt::panic_fmt",
+            "span": "[SYSROOT]/lib/rustlib/src/rust/library/core/src/panic.rs:62:9: 62:73",
+            "target": "core::std::rt::panic_fmt",
+            "trace": [
+              "[SYSROOT]/lib/rustlib/src/rust/library/core/src/panic.rs:62:9: 62:73: panic_axioms::todo_macro --direct-call-> core::std::rt::panic_fmt"
+            ]
+          }
+        ],
+        "has-panic-docs": false,
+        "root": "panic_axioms::todo_macro",
+        "root-declaration": "[FIXTURE]/src/lib.rs:13:1",
+        "root-kind": "concrete"
+      }
+    ],
+    "rustc-version": "[RUSTC_VERSION]",
+    "scope": "workspace",
+    "tool-version": "0.1.0"
+  }
+]

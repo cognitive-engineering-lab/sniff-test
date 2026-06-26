@@ -114,6 +114,21 @@ pub fn mixed_dyn_traits() {
     safe_obj.safe_work();
 }
 
+pub struct OtherFoo;
+
+impl Worker for OtherFoo {
+    fn work(&self) {}
+}
+
+pub fn mixed_same_dyn_trait() {
+    let panicking = Foo;
+    let _panicking_obj: &dyn Worker = &panicking;
+
+    let safe = OtherFoo;
+    let safe_obj: &dyn Worker = &safe;
+    safe_obj.work();
+}
+
 pub fn generic_const<const N: usize, T: Copy + Default>() -> [T; N] {
     let _ = const { N };
     [T::default(); N]
@@ -318,6 +333,39 @@ fn call_site_vtable_edges_are_filtered_to_the_called_trait() {
     assert!(
         !output.contains("DynDispatchVTableEntry -> <PanickingFoo as PanickingWorker>::panic_work")
     );
+}
+
+#[test]
+fn call_site_vtable_edges_are_trait_wide_within_a_body() {
+    let project = TempProject::new(DEMO_SOURCE);
+    let sysroot = rustc_sysroot();
+    let mut callbacks = DumpCallbacks {
+        root_suffix: String::from("mixed_same_dyn_trait"),
+        dyn_dispatch_vtable_edges: DynDispatchVTableEdges::CallSites,
+        ..DumpCallbacks::default()
+    };
+    let args = vec![
+        String::from("rustc"),
+        String::from("--crate-name"),
+        String::from("demo"),
+        String::from("--crate-type"),
+        String::from("lib"),
+        String::from("--edition"),
+        String::from("2024"),
+        String::from("--sysroot"),
+        sysroot,
+        String::from("-Awarnings"),
+        project.source.display().to_string(),
+    ];
+
+    rustc_driver::run_compiler(&args, &mut callbacks);
+
+    let output = callbacks.output.expect("compiler callback did not run");
+    println!("{output}");
+
+    assert!(output.contains("root mixed_same_dyn_trait"));
+    assert!(output.contains("DynDispatchVTableEntry -> <Foo as Worker>::work"));
+    assert!(output.contains("DynDispatchVTableEntry -> <OtherFoo as Worker>::work"));
 }
 
 #[test]
