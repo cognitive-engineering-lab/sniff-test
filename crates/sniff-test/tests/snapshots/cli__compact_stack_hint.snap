@@ -19,7 +19,7 @@ note: panic may happen here: panic sink `core::panicking::panic`
 21 |     assert!(flag);
    |     ^^^^^^^^^^^^^
    = note: reachable from `safe_markers::unsafe_call` to `core::panicking::panic`
-   = note: set `show-full-stack-trace = true` under `[panics]` in sniff-test.toml to show every reachability step
+   = note: set `show-full-stack-trace = true` under `[analysis]` in sniff-test.toml to show every reachability step
    = help: add a guard, document the panic with `# Panics`, or add `// PANIC:` if a local invariant proves it cannot panic
 
 error: function `safe_markers::unsafe_ratio` has an undocumented panic path

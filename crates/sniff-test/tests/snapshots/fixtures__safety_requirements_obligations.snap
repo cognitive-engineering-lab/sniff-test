@@ -1,0 +1,70 @@
+---
+source: crates/sniff-test/tests/fixtures.rs
+expression: messages
+---
+[
+  {
+    "artifact": {
+      "artifact-id": "[ARTIFACT_ID]",
+      "crate-name": "safety_requirements",
+      "crate-types": [
+        "lib"
+      ],
+      "extra-filename": "[EXTRA_FILENAME]",
+      "manifest-path": "[FIXTURE]/Cargo.toml",
+      "metadata": "[METADATA]",
+      "package-name": "safety-requirements",
+      "package-version": "0.1.0",
+      "target": null
+    },
+    "concrete-roots": 0,
+    "counts": {
+      "panic-obligations": 0,
+      "raw-panic-paths": 0,
+      "trusted-panic-obligations": 0
+    },
+    "dependencies": [],
+    "dependency-cache": {
+      "hits": 0,
+      "total": 0
+    },
+    "format-version": 1,
+    "generic-roots": 0,
+    "missing-roots": [],
+    "reason": "sniff-test-artifact",
+    "roots": [],
+    "rustc-version": "[RUSTC_VERSION]",
+    "safety": {
+      "counts": {
+        "missing-safety-docs": 0,
+        "safety-obligations-missing-justification": 1,
+        "safety-obligations-missing-requirements": 1,
+        "unsafe-calls-missing-justification": 0,
+        "unsafe-calls-missing-requirements": 0
+      },
+      "findings": [
+        {
+          "function": "safety_requirements::configured_safety_obligation_missing_requirement",
+          "kind": "safety-obligation-missing-requirements",
+          "level": "warn",
+          "missing-requirements": [
+            "valid_ptr: pointer must be non-null."
+          ],
+          "reason": "safety-obligation call to `safety_requirements::safe_documented_contract` does not satisfy all # Safety requirements",
+          "span": "src/lib.rs:164:5: 164:34",
+          "target": "safety_requirements::safe_documented_contract"
+        },
+        {
+          "function": "safety_requirements::configured_safety_obligation_missing_justification",
+          "kind": "safety-obligation-missing-justification",
+          "level": "warn",
+          "reason": "safety-obligation call to `safety_requirements::safe_undocumented_contract` has no `// SAFETY:` justification",
+          "span": "src/lib.rs:168:5: 168:33",
+          "target": "safety_requirements::safe_undocumented_contract"
+        }
+      ]
+    },
+    "scope": "workspace",
+    "tool-version": "0.1.0"
+  }
+]

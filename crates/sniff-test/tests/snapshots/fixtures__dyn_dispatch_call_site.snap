@@ -1,6 +1,5 @@
 ---
 source: crates/sniff-test/tests/fixtures.rs
-assertion_line: 67
 expression: messages
 ---
 [
@@ -44,6 +43,7 @@ expression: messages
           {
             "edge": "<dyn_dispatch_call_site::Panicker as Runner>::run --direct-call-> core::std::rt::panic_fmt",
             "kind": "panic-invocation",
+            "level": "deny",
             "reason": "panic sink core::std::rt::panic_fmt",
             "span": "[SYSROOT]/lib/rustlib/src/rust/library/core/src/panic.rs:62:9: 62:73",
             "target": "core::std::rt::panic_fmt",

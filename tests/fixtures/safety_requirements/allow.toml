@@ -1,0 +1,7 @@
+[analysis]
+report-roots = "all"
+
+[safety.lints]
+missing-safety-docs = "allow"
+unsafe-call-missing-justification = "allow"
+unsafe-call-missing-requirements = "allow"

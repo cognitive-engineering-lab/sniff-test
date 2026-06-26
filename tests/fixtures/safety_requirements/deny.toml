@@ -1,0 +1,5 @@
+[analysis]
+report-roots = "all"
+
+[safety.lints]
+unsafe-call-missing-requirements = "deny"

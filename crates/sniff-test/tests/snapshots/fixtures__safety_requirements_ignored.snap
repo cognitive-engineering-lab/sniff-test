@@ -36,52 +36,13 @@ expression: messages
     "rustc-version": "[RUSTC_VERSION]",
     "safety": {
       "counts": {
-        "missing-safety-docs": 1,
+        "missing-safety-docs": 0,
         "safety-obligations-missing-justification": 0,
         "safety-obligations-missing-requirements": 0,
-        "unsafe-calls-missing-justification": 2,
-        "unsafe-calls-missing-requirements": 3
+        "unsafe-calls-missing-justification": 1,
+        "unsafe-calls-missing-requirements": 1
       },
       "findings": [
-        {
-          "function": "safety_requirements::undocumented_public",
-          "kind": "missing-safety-docs",
-          "level": "warn",
-          "reason": "public unsafe function `safety_requirements::undocumented_public` is missing # Safety docs",
-          "span": "src/lib.rs:33:1: 33:57",
-          "target": null
-        },
-        {
-          "function": "safety_requirements::missing_requirement",
-          "kind": "unsafe-call-missing-requirements",
-          "level": "warn",
-          "missing-requirements": [
-            "initialized: pointer must reference initialized memory."
-          ],
-          "reason": "unsafe call to `safety_requirements::read_byte` does not satisfy all # Safety requirements",
-          "span": "src/lib.rs:75:14: 75:37",
-          "target": "safety_requirements::read_byte"
-        },
-        {
-          "function": "safety_requirements::safety_marker_boundary_missing_requirements",
-          "kind": "unsafe-call-missing-requirements",
-          "level": "warn",
-          "missing-requirements": [
-            "valid_ptr: pointer must be non-null.",
-            "initialized: pointer must reference initialized memory."
-          ],
-          "reason": "unsafe call to `safety_requirements::read_byte` does not satisfy all # Safety requirements",
-          "span": "src/lib.rs:86:14: 86:37",
-          "target": "safety_requirements::read_byte"
-        },
-        {
-          "function": "safety_requirements::missing_justification",
-          "kind": "unsafe-call-missing-justification",
-          "level": "warn",
-          "reason": "unsafe call to `safety_requirements::private_unsafe_no_docs` has no `// SAFETY:` justification",
-          "span": "src/lib.rs:90:14: 90:38",
-          "target": "safety_requirements::private_unsafe_no_docs"
-        },
         {
           "function": "safety_requirements::unsafe_fn_pointer_missing_justification",
           "kind": "unsafe-call-missing-justification",

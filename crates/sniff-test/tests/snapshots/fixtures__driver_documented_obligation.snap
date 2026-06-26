@@ -43,6 +43,7 @@ expression: messages
           {
             "edge": "report root documents panic behavior",
             "kind": "panic-obligation",
+            "level": "warn",
             "reason": "documented_obligation::documented_contract has a documented # Panics contract",
             "span": "[FIXTURE]/src/lib.rs:3:1: 3:39",
             "target": "documented_obligation::documented_contract",
@@ -64,6 +65,7 @@ expression: messages
           {
             "edge": "documented_obligation::undocumented_bug --direct-call-> core::std::rt::panic_fmt",
             "kind": "panic-invocation",
+            "level": "deny",
             "reason": "panic sink core::std::rt::panic_fmt",
             "span": "[SYSROOT]/lib/rustlib/src/rust/library/core/src/panic.rs:62:9: 62:73",
             "target": "core::std::rt::panic_fmt",

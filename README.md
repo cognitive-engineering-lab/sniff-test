@@ -42,9 +42,27 @@ Common `sniff-test.toml` analysis knobs:
 
 ```toml
 [analysis]
+show-full-stack-trace = false
+report-roots = "public"     # public | all | ["crate::path"]
 overflow-checks = "profile" # profile | on | off
 inline-mir = "off"          # profile | on | off
 dyn-dispatch-vtable-edges = "cast-sites" # cast-sites | call-sites
+
+[panics.lints]
+undocumented-panic-path = "deny"
+documented-panic-contract = "warn"
+trusted-panic-contract = "warn"
+
+[safety]
+ignored-namespaces = []
+safety-obligation-namespaces = []
+
+[safety.lints]
+missing-safety-docs = "warn"
+unsafe-call-missing-justification = "warn"
+unsafe-call-missing-requirements = "warn"
+safety-obligation-missing-justification = "warn"
+safety-obligation-missing-requirements = "warn"
 ```
 
 `inline-mir = "off"` passes `-Z inline-mir=no`, which keeps panic traces closer
@@ -56,9 +74,14 @@ body-local, trait-keyed approximation: if one function casts multiple concrete
 values to the same dyn trait, every dyn call to that trait in the function may
 be connected to every concrete impl observed in that function.
 
-`cargo sniff-test` exits with status `1` when a final workspace crate has
-undocumented panic paths. Documented panic contracts and dependency-only raw
-findings are reported, but do not by themselves fail the frontend command.
+`cargo sniff-test` exits with status `1` when a final workspace crate has a
+finding whose configured lint level is `deny`. `allow` suppresses a finding from
+human diagnostics and JSON output; `warn` reports it without failing the run.
+
+Use `[safety].safety-obligation-namespaces` for safe functions that still carry
+caller obligations. Calls to matching functions must have a nearby `// SAFETY:`
+justification, and named bullets under a callee `# Safety` section must be
+satisfied by matching named bullets at the call site.
 
 ## JSON Output
 

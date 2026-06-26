@@ -43,6 +43,7 @@ expression: messages
           {
             "edge": "safety_requirements::read_byte --assert-> compiler assert null pointer dereference",
             "kind": "compiler-assert",
+            "level": "deny",
             "reason": "compiler assert",
             "span": "[FIXTURE]/src/lib.rs:15:14: 15:18",
             "target": "compiler assert null pointer dereference",
@@ -54,6 +55,7 @@ expression: messages
           {
             "edge": "safety_requirements::write_byte --assert-> compiler assert null pointer dereference",
             "kind": "compiler-assert",
+            "level": "deny",
             "reason": "compiler assert",
             "span": "[FIXTURE]/src/lib.rs:30:14: 30:26",
             "target": "compiler assert null pointer dereference",
@@ -78,6 +80,7 @@ expression: messages
           {
             "edge": "safety_requirements::read_byte --assert-> compiler assert null pointer dereference",
             "kind": "compiler-assert",
+            "level": "deny",
             "reason": "compiler assert",
             "span": "[FIXTURE]/src/lib.rs:15:14: 15:18",
             "target": "compiler assert null pointer dereference",
@@ -102,6 +105,7 @@ expression: messages
           {
             "edge": "safety_requirements::read_byte --assert-> compiler assert null pointer dereference",
             "kind": "compiler-assert",
+            "level": "deny",
             "reason": "compiler assert",
             "span": "[FIXTURE]/src/lib.rs:15:14: 15:18",
             "target": "compiler assert null pointer dereference",
@@ -125,6 +129,7 @@ expression: messages
           {
             "edge": "safety_requirements::read_byte --assert-> compiler assert null pointer dereference",
             "kind": "compiler-assert",
+            "level": "deny",
             "reason": "compiler assert",
             "span": "[FIXTURE]/src/lib.rs:15:14: 15:18",
             "target": "compiler assert null pointer dereference",
@@ -149,6 +154,7 @@ expression: messages
           {
             "edge": "safety_requirements::write_byte --assert-> compiler assert null pointer dereference",
             "kind": "compiler-assert",
+            "level": "deny",
             "reason": "compiler assert",
             "span": "[FIXTURE]/src/lib.rs:30:14: 30:26",
             "target": "compiler assert null pointer dereference",
@@ -167,6 +173,8 @@ expression: messages
     "safety": {
       "counts": {
         "missing-safety-docs": 1,
+        "safety-obligations-missing-justification": 0,
+        "safety-obligations-missing-requirements": 0,
         "unsafe-calls-missing-justification": 2,
         "unsafe-calls-missing-requirements": 3
       },
@@ -174,6 +182,7 @@ expression: messages
         {
           "function": "safety_requirements::undocumented_public",
           "kind": "missing-safety-docs",
+          "level": "warn",
           "reason": "public unsafe function `safety_requirements::undocumented_public` is missing # Safety docs",
           "span": "[FIXTURE]/src/lib.rs:33:1: 33:57",
           "target": null
@@ -181,6 +190,7 @@ expression: messages
         {
           "function": "safety_requirements::missing_requirement",
           "kind": "unsafe-call-missing-requirements",
+          "level": "warn",
           "missing-requirements": [
             "initialized: pointer must reference initialized memory."
           ],
@@ -191,6 +201,7 @@ expression: messages
         {
           "function": "safety_requirements::safety_marker_boundary_missing_requirements",
           "kind": "unsafe-call-missing-requirements",
+          "level": "warn",
           "missing-requirements": [
             "valid_ptr: pointer must be non-null.",
             "initialized: pointer must reference initialized memory."
@@ -202,6 +213,7 @@ expression: messages
         {
           "function": "safety_requirements::missing_justification",
           "kind": "unsafe-call-missing-justification",
+          "level": "warn",
           "reason": "unsafe call to `safety_requirements::private_unsafe_no_docs` has no `// SAFETY:` justification",
           "span": "[FIXTURE]/src/lib.rs:90:14: 90:38",
           "target": "safety_requirements::private_unsafe_no_docs"
@@ -209,6 +221,7 @@ expression: messages
         {
           "function": "safety_requirements::unsafe_fn_pointer_missing_justification",
           "kind": "unsafe-call-missing-justification",
+          "level": "warn",
           "reason": "unsafe call to `unsafe function pointer` has no `// SAFETY:` justification",
           "span": "[FIXTURE]/src/lib.rs:103:14: 103:24",
           "target": "unsafe function pointer"
@@ -216,6 +229,7 @@ expression: messages
         {
           "function": "safety_requirements::generic_unsafe_trait_method_missing",
           "kind": "unsafe-call-missing-requirements",
+          "level": "warn",
           "missing-requirements": [
             "valid_ptr: pointer must be non-null."
           ],

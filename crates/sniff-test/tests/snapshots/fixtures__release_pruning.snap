@@ -43,6 +43,7 @@ expression: messages
           {
             "edge": "release_pruning::checked_in_release --direct-call-> core::panicking::panic",
             "kind": "panic-invocation",
+            "level": "deny",
             "reason": "panic sink core::panicking::panic",
             "span": "src/lib.rs:6:5: 6:18",
             "target": "core::panicking::panic",

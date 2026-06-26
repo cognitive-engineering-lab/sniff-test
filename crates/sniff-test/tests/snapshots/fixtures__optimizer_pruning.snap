@@ -1,6 +1,5 @@
 ---
 source: crates/sniff-test/tests/fixtures.rs
-assertion_line: 67
 expression: messages
 ---
 [
@@ -44,6 +43,7 @@ expression: messages
           {
             "edge": "optimizer_pruning::documented_inlinable_call --direct-call-> optimizer_pruning::greater_than_zero",
             "kind": "panic-obligation",
+            "level": "warn",
             "reason": "optimizer_pruning::greater_than_zero has a documented # Panics contract",
             "span": "src/lib.rs:26:5: 26:26",
             "target": "optimizer_pruning::greater_than_zero",
@@ -67,6 +67,7 @@ expression: messages
           {
             "edge": "optimizer_pruning::documented_inline_always_call --direct-call-> optimizer_pruning::greater_than_zero_inline",
             "kind": "panic-obligation",
+            "level": "warn",
             "reason": "optimizer_pruning::greater_than_zero_inline has a documented # Panics contract",
             "span": "src/lib.rs:30:5: 30:33",
             "target": "optimizer_pruning::greater_than_zero_inline",

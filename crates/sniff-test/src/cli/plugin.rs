@@ -14,7 +14,7 @@ use super::{absolute_path, analyze_crate, load_config};
 pub(crate) const DRIVER_NAME: &str = "sniff-test-driver";
 pub(crate) const RUSTC_VERSION_ENV: &str = "SNIFF_TEST_RUSTC_VERSION";
 pub(crate) const SNIFF_TEST_ARGS_ENV: &str = "SNIFF_TEST_ARGS";
-pub(crate) const RAW_PANIC_STATUS_ENV: &str = "SNIFF_TEST_RAW_PANIC_STATUS";
+pub(crate) const DENIED_FINDING_STATUS_ENV: &str = "SNIFF_TEST_DENIED_FINDING_STATUS";
 
 pub(crate) fn frontend_args(mut args: SniffTestArgs, target_dir: &Path) -> SniffTestArgs {
     if args.cache_dir.is_none() {

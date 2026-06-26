@@ -26,7 +26,7 @@ warning: configured report root was not found
 4 |     "report_roots::missing_root",
   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
   |
-  = note: configured under `[panics].report-roots`
+  = note: configured under `[analysis].report-roots`
   = help: remove it or update it to a function in the current crate
 
 warning: `report-roots` (lib) generated 1 warning

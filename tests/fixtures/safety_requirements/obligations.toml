@@ -1,0 +1,13 @@
+[analysis]
+report-roots = "all"
+
+[safety]
+safety-obligation-namespaces = [
+    "safety_requirements::safe_documented_contract",
+    "safety_requirements::safe_undocumented_contract",
+]
+
+[safety.lints]
+missing-safety-docs = "allow"
+unsafe-call-missing-justification = "allow"
+unsafe-call-missing-requirements = "allow"

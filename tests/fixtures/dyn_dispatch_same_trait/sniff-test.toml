@@ -1,8 +1,8 @@
 [analysis]
 dyn-dispatch-vtable-edges = "call-sites"
+report-roots = ["dyn_dispatch_same_trait::entry"]
 
 [panics]
-report-roots = ["dyn_dispatch_same_trait::entry"]
 panic-sink-namespaces = [
     "core::panicking::**",
     "std::panicking::**",

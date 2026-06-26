@@ -1,10 +1,12 @@
-[panics]
+[analysis]
 report-roots = [
     "panic_axioms::division",
     "panic_axioms::remainder",
     "panic_axioms::indexed",
     "panic_axioms::todo_macro",
 ]
+
+[panics]
 panic-sink-namespaces = [
     "core::panicking::**",
     "std::panicking::**",

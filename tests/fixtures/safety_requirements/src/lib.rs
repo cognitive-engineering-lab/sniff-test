@@ -138,3 +138,32 @@ pub fn generic_unsafe_trait_method_missing<T: UnsafeGreeter>(greeter: T) {
 
     unsafe { greeter.greet(ptr) }
 }
+
+/// # Safety
+///
+/// Requirements:
+///
+/// - valid_ptr: pointer must be non-null.
+pub fn safe_documented_contract(_ptr: *const u8) {}
+
+pub fn safe_undocumented_contract() {}
+
+pub fn configured_safety_obligation_satisfied() {
+    let byte = 7;
+    let ptr = &raw const byte;
+
+    // SAFETY:
+    // - valid_ptr: pointer was created from a live reference.
+    safe_documented_contract(ptr);
+}
+
+pub fn configured_safety_obligation_missing_requirement() {
+    let byte = 7;
+    let ptr = &raw const byte;
+
+    safe_documented_contract(ptr);
+}
+
+pub fn configured_safety_obligation_missing_justification() {
+    safe_undocumented_contract();
+}

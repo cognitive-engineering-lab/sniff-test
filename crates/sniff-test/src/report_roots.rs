@@ -11,7 +11,7 @@ use rustc_hir::def::DefKind;
 use rustc_hir::def_id::{LOCAL_CRATE, LocalDefId};
 use rustc_middle::ty::{Instance, TyCtxt};
 
-use crate::config::{PanicConfig, ReportRootSet};
+use crate::config::{AnalysisConfig, PanicConfig, ReportRootSet};
 use crate::namespace::canonical_namespace;
 
 #[derive(Debug, Clone)]
@@ -24,7 +24,7 @@ pub struct ReportRootSelection<'tcx> {
 
 #[derive(Debug, Clone)]
 pub struct MissingReportRoot {
-    /// Fully qualified function path from `[panics].report-roots`.
+    /// Fully qualified function path from `[analysis].report-roots`.
     pub path: String,
     /// Byte range of the TOML string value in the sniff-test manifest.
     pub source_span: Range<usize>,
@@ -51,12 +51,13 @@ impl ReportRoot<'_> {
 }
 
 #[must_use]
-pub fn select_panic_report_roots<'tcx>(
+pub fn select_report_roots<'tcx>(
     tcx: TyCtxt<'tcx>,
-    config: &PanicConfig,
+    analysis_config: &AnalysisConfig,
+    panic_config: &PanicConfig,
 ) -> ReportRootSelection<'tcx> {
     let crate_name = tcx.crate_name(LOCAL_CRATE).to_string();
-    if config.ignores_namespace(&crate_name) {
+    if panic_config.ignores_namespace(&crate_name) {
         return ReportRootSelection {
             roots: Vec::new(),
             missing_roots: Vec::new(),
@@ -65,7 +66,7 @@ pub fn select_panic_report_roots<'tcx>(
 
     let mut roots = HashSet::new();
 
-    match &config.report_roots {
+    match &analysis_config.report_roots {
         ReportRootSet::Public => {
             roots.extend(public_local_fn_defs(tcx));
         }
@@ -85,11 +86,11 @@ pub fn select_panic_report_roots<'tcx>(
                 }
             }
 
-            return sorted_selection(tcx, config, roots, missing_roots);
+            return sorted_selection(tcx, panic_config, roots, missing_roots);
         }
     }
 
-    sorted_selection(tcx, config, roots, Vec::new())
+    sorted_selection(tcx, panic_config, roots, Vec::new())
 }
 
 fn sorted_selection<'tcx>(

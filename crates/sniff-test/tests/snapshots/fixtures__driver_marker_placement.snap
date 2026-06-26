@@ -43,6 +43,7 @@ expression: messages
           {
             "edge": "marker_placement::panic_comment_on_function_def_bad --assert-> compiler assert attempt to divide `total` (_1, argument 1) by zero",
             "kind": "compiler-assert",
+            "level": "deny",
             "reason": "compiler assert",
             "span": "[FIXTURE]/src/lib.rs:27:5: 27:24",
             "target": "compiler assert attempt to divide `total` (_1, argument 1) by zero",
@@ -66,6 +67,7 @@ expression: messages
           {
             "edge": "marker_placement::read_byte --assert-> compiler assert null pointer dereference",
             "kind": "compiler-assert",
+            "level": "deny",
             "reason": "compiler assert",
             "span": "[FIXTURE]/src/lib.rs:11:14: 11:18",
             "target": "compiler assert null pointer dereference",
@@ -90,6 +92,7 @@ expression: messages
           {
             "edge": "marker_placement::read_byte --assert-> compiler assert null pointer dereference",
             "kind": "compiler-assert",
+            "level": "deny",
             "reason": "compiler assert",
             "span": "[FIXTURE]/src/lib.rs:11:14: 11:18",
             "target": "compiler assert null pointer dereference",
@@ -114,6 +117,7 @@ expression: messages
           {
             "edge": "marker_placement::read_byte --assert-> compiler assert null pointer dereference",
             "kind": "compiler-assert",
+            "level": "deny",
             "reason": "compiler assert",
             "span": "[FIXTURE]/src/lib.rs:11:14: 11:18",
             "target": "compiler assert null pointer dereference",
@@ -133,6 +137,8 @@ expression: messages
     "safety": {
       "counts": {
         "missing-safety-docs": 0,
+        "safety-obligations-missing-justification": 0,
+        "safety-obligations-missing-requirements": 0,
         "unsafe-calls-missing-justification": 0,
         "unsafe-calls-missing-requirements": 1
       },
@@ -140,6 +146,7 @@ expression: messages
         {
           "function": "marker_placement::safety_comment_on_function_def_bad",
           "kind": "unsafe-call-missing-requirements",
+          "level": "warn",
           "missing-requirements": [
             "valid_ptr: pointer must be non-null.",
             "initialized: pointer must reference initialized memory."

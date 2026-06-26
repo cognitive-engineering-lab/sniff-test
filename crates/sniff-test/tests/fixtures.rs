@@ -135,7 +135,11 @@ fixture_cases! {
     }
     "documented_obligation" => {
         documented_obligation => Case::cargo("documented panic obligation").exit_code(1);
+        documented_obligation_allowed => Case::cargo("allowed documented panic obligation")
+            .args(&["--manifest", "allow.toml"]);
         driver_documented_obligation => Case::direct("documented panic obligation");
+        driver_documented_obligation_allowed => Case::direct("allowed documented panic obligation")
+            .manifest("allow.toml");
     }
     "release_pruning" => {
         release_pruning => Case::cargo("release profile pruning").exit_code(1);
@@ -173,6 +177,15 @@ fixture_cases! {
     }
     "safety_requirements" => {
         safety_requirements => Case::cargo("safety requirement satisfaction");
+        safety_requirements_allowed => Case::cargo("allowed safety findings")
+            .args(&["--manifest", "allow.toml"]);
+        safety_requirements_denied => Case::cargo("denied safety finding")
+            .args(&["--manifest", "deny.toml"])
+            .exit_code(1);
+        safety_requirements_ignored => Case::cargo("ignored safety namespaces")
+            .args(&["--manifest", "ignore.toml"]);
+        safety_requirements_obligations => Case::cargo("configured safety obligations")
+            .args(&["--manifest", "obligations.toml"]);
         driver_safety_requirements => Case::direct("safety requirement satisfaction");
     }
     "marker_placement" => {

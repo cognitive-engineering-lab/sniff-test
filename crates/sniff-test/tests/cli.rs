@@ -41,13 +41,15 @@ cli_cases! {
         compact_stack_hint => Case::new("compact stack hint").exit_code(1);
         full_stack_trace => Case::new("full stack trace")
             .exit_code(1)
-            .config_append("\nshow-full-stack-trace = true\n");
+            .config_append("\n[analysis]\nshow-full-stack-trace = true\n");
     }
     "dependency_obligation" => {
         dependency_warning_footer => Case::new("dependency warning footer").crate_dir("app");
     }
     "safety_requirements" => {
         safety_diagnostics => Case::new("safety diagnostics");
+        safety_obligation_diagnostics => Case::new("safety obligation diagnostics")
+            .args(&["--manifest", "obligations.toml"]);
     }
     "panic_axioms" => {
         compiler_assert_diagnostics => Case::new("compiler assert diagnostics").exit_code(1);

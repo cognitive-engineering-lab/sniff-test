@@ -1,5 +1,7 @@
-[panics]
+[analysis]
 report-roots = "all"
+
+[panics]
 panic-sink-namespaces = [
     "core::panicking::**",
     "std::panicking::**",

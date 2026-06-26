@@ -43,6 +43,7 @@ expression: messages
           {
             "edge": "safe_markers::helper --direct-call-> core::panicking::panic",
             "kind": "panic-invocation",
+            "level": "deny",
             "reason": "panic sink core::panicking::panic",
             "span": "src/lib.rs:21:5: 21:18",
             "target": "core::panicking::panic",
@@ -67,6 +68,7 @@ expression: messages
           {
             "edge": "safe_markers::unsafe_ratio --assert-> compiler assert attempt to divide `total` (_1, argument 1) by zero",
             "kind": "compiler-assert",
+            "level": "deny",
             "reason": "compiler assert",
             "span": "src/lib.rs:8:5: 8:24",
             "target": "compiler assert attempt to divide `total` (_1, argument 1) by zero",

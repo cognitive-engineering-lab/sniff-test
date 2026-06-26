@@ -1,0 +1,9 @@
+[analysis]
+report-roots = "all"
+
+[safety]
+ignored-namespaces = [
+    "safety_requirements::undocumented_public",
+    "safety_requirements::read_byte",
+    "safety_requirements::missing_justification",
+]

@@ -1,2 +1,2 @@
-[panics]
+[analysis]
 report-roots = "all"

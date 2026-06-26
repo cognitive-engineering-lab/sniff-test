@@ -32,6 +32,9 @@ pub const EXAMPLE_MANIFEST: &str = r#"# sniff-test configuration.
 # recommended Rust panic sinks and can be edited to match your threat model.
 
 [analysis]
+show-full-stack-trace = false
+report-roots = "public"
+
 # `profile` preserves Cargo/rustc's selected profile behavior.
 # `on` forces `-C overflow-checks=yes`; useful for checked release-mode audits.
 # `off` forces `-C overflow-checks=no`.
@@ -47,9 +50,6 @@ inline-mir = "off"
 dyn-dispatch-vtable-edges = "cast-sites"
 
 [panics]
-show-full-stack-trace = false
-report-roots = "public"
-
 # Crates or fully-qualified functions whose internals should be treated as
 # opaque analysis boundaries. Patterns use Rust crate/path names: write
 # `proc_macro2`, not the package name `proc-macro2`.
@@ -83,6 +83,36 @@ panic-sink-namespaces = [
     "std::{option,result}::unwrap_failed",
 ]
 
+[panics.lints]
+# `deny` emits an error and makes `cargo sniff-test` fail.
+# `warn` emits a warning without failing the run.
+# `allow` suppresses the finding from diagnostics and JSON reports.
+undocumented-panic-path = "deny"
+documented-panic-contract = "warn"
+trusted-panic-contract = "allow"
+
+[safety]
+# Namespaces whose unsafe docs/call-site findings should be suppressed.
+# Matching a caller suppresses unsafe-call findings inside it; matching a callee
+# suppresses requirements for calls to that callee.
+ignored-namespaces = []
+
+# Safe functions that should be treated as safety obligations at call sites.
+# If a matched function documents `# Safety` requirements, callers must satisfy
+# them with `// SAFETY:` requirement bullets. Otherwise callers must still add a
+# generic `// SAFETY:` justification.
+safety-obligation-namespaces = []
+
+[safety.lints]
+# `deny` emits an error and makes `cargo sniff-test` fail.
+# `warn` emits a warning without failing the run.
+# `allow` suppresses the finding from diagnostics and JSON reports.
+missing-safety-docs = "warn"
+unsafe-call-missing-justification = "warn"
+unsafe-call-missing-requirements = "warn"
+safety-obligation-missing-justification = "warn"
+safety-obligation-missing-requirements = "warn"
+
 "#;
 
 #[derive(Debug, Default, Clone, PartialEq, Eq, Deserialize)]
@@ -92,6 +122,8 @@ pub struct SniffTestConfig {
     pub analysis: AnalysisConfig,
     #[serde(default)]
     pub panics: PanicConfig,
+    #[serde(default)]
+    pub safety: SafetyConfig,
 }
 
 impl SniffTestConfig {
@@ -123,16 +155,32 @@ impl SniffTestConfig {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "kebab-case", deny_unknown_fields)]
 #[serde(default)]
 pub struct AnalysisConfig {
+    /// Whether detailed reports include every edge in the triggering trace.
+    pub show_full_stack_trace: bool,
+    /// Current-crate functions selected as report roots.
+    pub report_roots: ReportRootSet,
     /// Whether rustc should emit integer overflow and invalid-shift checks.
     pub overflow_checks: OverflowChecks,
     /// Whether rustc should perform MIR inlining before analysis.
     pub inline_mir: MirInlining,
     /// Where concrete vtable methods introduced by dyn casts should appear.
     pub dyn_dispatch_vtable_edges: DynDispatchVTableEdges,
+}
+
+impl Default for AnalysisConfig {
+    fn default() -> Self {
+        Self {
+            show_full_stack_trace: false,
+            report_roots: ReportRootSet::Public,
+            overflow_checks: OverflowChecks::Profile,
+            inline_mir: MirInlining::Off,
+            dyn_dispatch_vtable_edges: DynDispatchVTableEdges::CastSites,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize, Serialize)]
@@ -270,30 +318,77 @@ impl From<DynDispatchVTableEdges> for ReachabilityDynDispatchVTableEdges {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[derive(Debug, Default, Clone, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "kebab-case", deny_unknown_fields)]
 #[serde(default)]
 pub struct PanicConfig {
-    /// Whether detailed reports include every edge in the triggering trace.
-    pub show_full_stack_trace: bool,
+    /// User-facing severity for panic finding classes.
+    pub lints: PanicLintConfig,
     /// Namespaces whose internals are treated as opaque and suppressed.
     pub ignored_namespaces: PathPatterns,
     /// Trusted callee namespaces treated as opaque panic-obligation boundaries.
     pub trusted_panic_obligation_namespaces: PathPatterns,
     /// Callee paths treated as direct panic sinks.
     pub panic_sink_namespaces: PathPatterns,
-    /// Current-crate functions selected as report roots.
-    pub report_roots: ReportRootSet,
 }
 
-impl Default for PanicConfig {
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "kebab-case", deny_unknown_fields)]
+#[serde(default)]
+pub struct PanicLintConfig {
+    pub undocumented_panic_path: LintLevel,
+    pub documented_panic_contract: LintLevel,
+    pub trusted_panic_contract: LintLevel,
+}
+
+impl Default for PanicLintConfig {
     fn default() -> Self {
         Self {
-            show_full_stack_trace: false,
-            ignored_namespaces: PathPatterns::default(),
-            trusted_panic_obligation_namespaces: PathPatterns::default(),
-            panic_sink_namespaces: PathPatterns::default(),
-            report_roots: ReportRootSet::Public,
+            undocumented_panic_path: LintLevel::Deny,
+            documented_panic_contract: LintLevel::Warn,
+            trusted_panic_contract: LintLevel::Warn,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum LintLevel {
+    Allow,
+    Warn,
+    Deny,
+}
+
+#[derive(Debug, Default, Clone, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "kebab-case", deny_unknown_fields)]
+#[serde(default)]
+pub struct SafetyConfig {
+    /// Namespaces whose safety findings should be suppressed.
+    pub ignored_namespaces: PathPatterns,
+    /// Safe functions that should be treated as safety obligations at call sites.
+    pub safety_obligation_namespaces: PathPatterns,
+    pub lints: SafetyLintConfig,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "kebab-case", deny_unknown_fields)]
+#[serde(default)]
+pub struct SafetyLintConfig {
+    pub missing_safety_docs: LintLevel,
+    pub unsafe_call_missing_justification: LintLevel,
+    pub unsafe_call_missing_requirements: LintLevel,
+    pub safety_obligation_missing_justification: LintLevel,
+    pub safety_obligation_missing_requirements: LintLevel,
+}
+
+impl Default for SafetyLintConfig {
+    fn default() -> Self {
+        Self {
+            missing_safety_docs: LintLevel::Warn,
+            unsafe_call_missing_justification: LintLevel::Warn,
+            unsafe_call_missing_requirements: LintLevel::Warn,
+            safety_obligation_missing_justification: LintLevel::Warn,
+            safety_obligation_missing_requirements: LintLevel::Warn,
         }
     }
 }
@@ -385,6 +480,52 @@ impl PanicConfig {
             .into_iter()
             .chain(patterns.best_match(&path))
             .max_by_key(|matched| matched.precision)
+    }
+}
+
+impl SafetyConfig {
+    #[must_use]
+    pub fn ignored_namespace_match<'patterns>(
+        &'patterns self,
+        namespace: &str,
+    ) -> Option<&'patterns str> {
+        self.ignored_namespaces.matching_pattern(namespace)
+    }
+
+    #[must_use]
+    pub fn ignores_def(&self, tcx: TyCtxt<'_>, def_id: DefId) -> bool {
+        self.ignored_def_match(tcx, def_id).is_some()
+    }
+
+    #[must_use]
+    pub fn ignored_def_match<'patterns>(
+        &'patterns self,
+        tcx: TyCtxt<'_>,
+        def_id: DefId,
+    ) -> Option<&'patterns str> {
+        let crate_name = tcx.crate_name(def_id.krate).to_string();
+        self.ignored_namespace_match(&crate_name).or_else(|| {
+            let path = canonical_namespace(tcx, def_id);
+            self.ignored_namespace_match(&path)
+        })
+    }
+
+    #[must_use]
+    pub fn marks_safety_obligation_namespace(&self, namespace: &str) -> bool {
+        self.safety_obligation_namespaces.is_match(namespace)
+    }
+
+    #[must_use]
+    pub fn marks_safety_obligation_def(&self, tcx: TyCtxt<'_>, def_id: DefId) -> bool {
+        self.safety_obligation_def_match(tcx, def_id).is_some()
+    }
+
+    fn safety_obligation_def_match(
+        &self,
+        tcx: TyCtxt<'_>,
+        def_id: DefId,
+    ) -> Option<PathPatternMatch<'_>> {
+        PanicConfig::best_def_match(tcx, def_id, &self.safety_obligation_namespaces)
     }
 }
 
@@ -642,8 +783,8 @@ impl std::error::Error for ConfigError {
 #[cfg(test)]
 mod tests {
     use super::{
-        AnalysisConfig, DynDispatchVTableEdges, EXAMPLE_MANIFEST, MirInlining, OverflowChecks,
-        PanicConfig, PathPatterns, ReportRootSet, SniffTestConfig,
+        AnalysisConfig, DynDispatchVTableEdges, EXAMPLE_MANIFEST, LintLevel, MirInlining,
+        OverflowChecks, PanicConfig, PathPatterns, ReportRootSet, SafetyConfig, SniffTestConfig,
     };
 
     fn path_patterns(patterns: &[&str]) -> PathPatterns {
@@ -673,6 +814,8 @@ mod tests {
     fn parses_analysis_overflow_checks() {
         let config = r#"
             [analysis]
+            show-full-stack-trace = true
+            report-roots = "all"
             overflow-checks = "on"
             inline-mir = "profile"
             dyn-dispatch-vtable-edges = "call-sites"
@@ -680,6 +823,8 @@ mod tests {
 
         let parsed = SniffTestConfig::from_manifest_str(config).expect("manifest should parse");
 
+        assert!(parsed.analysis.show_full_stack_trace);
+        assert_eq!(parsed.analysis.report_roots, ReportRootSet::All);
         assert_eq!(parsed.analysis.overflow_checks, OverflowChecks::On);
         assert_eq!(parsed.analysis.inline_mir, MirInlining::Profile);
         assert_eq!(
@@ -694,6 +839,120 @@ mod tests {
         assert_eq!(
             AnalysisConfig::default().dyn_dispatch_vtable_edges,
             DynDispatchVTableEdges::CastSites
+        );
+    }
+
+    #[test]
+    fn default_panic_lints_keep_documented_contracts_visible() {
+        let lints = PanicConfig::default().lints;
+
+        assert_eq!(lints.undocumented_panic_path, LintLevel::Deny);
+        assert_eq!(lints.documented_panic_contract, LintLevel::Warn);
+        assert_eq!(lints.trusted_panic_contract, LintLevel::Warn);
+    }
+
+    #[test]
+    fn default_safety_lints_keep_findings_visible_without_failing() {
+        let lints = SafetyConfig::default().lints;
+
+        assert_eq!(lints.missing_safety_docs, LintLevel::Warn);
+        assert_eq!(lints.unsafe_call_missing_justification, LintLevel::Warn);
+        assert_eq!(lints.unsafe_call_missing_requirements, LintLevel::Warn);
+        assert_eq!(
+            lints.safety_obligation_missing_justification,
+            LintLevel::Warn
+        );
+        assert_eq!(
+            lints.safety_obligation_missing_requirements,
+            LintLevel::Warn
+        );
+    }
+
+    #[test]
+    fn parses_panic_lint_levels() {
+        let config = r#"
+            [panics.lints]
+            undocumented-panic-path = "warn"
+            documented-panic-contract = "allow"
+            trusted-panic-contract = "deny"
+        "#;
+
+        let parsed = SniffTestConfig::from_manifest_str(config).expect("manifest should parse");
+
+        assert_eq!(parsed.panics.lints.undocumented_panic_path, LintLevel::Warn);
+        assert_eq!(
+            parsed.panics.lints.documented_panic_contract,
+            LintLevel::Allow
+        );
+        assert_eq!(parsed.panics.lints.trusted_panic_contract, LintLevel::Deny);
+    }
+
+    #[test]
+    fn parses_safety_lint_levels() {
+        let config = r#"
+            [safety]
+            ignored-namespaces = ["bindgen::**", "my_crate::ffi"]
+            safety-obligation-namespaces = ["ffi::safe_contract", "ffi::safe_method"]
+
+            [safety.lints]
+            missing-safety-docs = "allow"
+            unsafe-call-missing-justification = "warn"
+            unsafe-call-missing-requirements = "deny"
+            safety-obligation-missing-justification = "allow"
+            safety-obligation-missing-requirements = "deny"
+        "#;
+
+        let parsed = SniffTestConfig::from_manifest_str(config).expect("manifest should parse");
+
+        assert!(
+            parsed
+                .safety
+                .ignored_namespace_match("bindgen::root::unsafe_fn")
+                .is_some()
+        );
+        assert!(
+            parsed
+                .safety
+                .ignored_namespace_match("my_crate::ffi")
+                .is_some()
+        );
+        assert!(
+            parsed
+                .safety
+                .ignored_namespace_match("my_crate::safe")
+                .is_none()
+        );
+        assert!(
+            parsed
+                .safety
+                .marks_safety_obligation_namespace("ffi::safe_contract")
+        );
+        assert!(
+            parsed
+                .safety
+                .marks_safety_obligation_namespace("ffi::safe_method")
+        );
+        assert!(
+            !parsed
+                .safety
+                .marks_safety_obligation_namespace("ffi::plain_safe")
+        );
+        assert_eq!(parsed.safety.lints.missing_safety_docs, LintLevel::Allow);
+        assert_eq!(
+            parsed.safety.lints.unsafe_call_missing_justification,
+            LintLevel::Warn
+        );
+        assert_eq!(
+            parsed.safety.lints.unsafe_call_missing_requirements,
+            LintLevel::Deny
+        );
+        assert_eq!(
+            parsed.safety.lints.safety_obligation_missing_justification,
+            LintLevel::Allow
+        );
+        assert_eq!(
+            parsed.safety.lints.safety_obligation_missing_requirements,
+            LintLevel::Deny
         );
     }
 
@@ -829,19 +1088,19 @@ mod tests {
     #[test]
     fn parses_report_roots() {
         let all = r#"
-            [panics]
+            [analysis]
             report-roots = "all"
         "#;
         let explicit = r#"
-            [panics]
+            [analysis]
             report-roots = ["test::a", "test::b"]
         "#;
 
         let parsed_all = SniffTestConfig::from_manifest_str(all).expect("manifest should parse");
         let parsed_explicit =
             SniffTestConfig::from_manifest_str(explicit).expect("manifest should parse");
-        assert_eq!(parsed_all.panics.report_roots, ReportRootSet::All);
-        let ReportRootSet::Explicit(paths) = parsed_explicit.panics.report_roots else {
+        assert_eq!(parsed_all.analysis.report_roots, ReportRootSet::All);
+        let ReportRootSet::Explicit(paths) = parsed_explicit.analysis.report_roots else {
             panic!("explicit report roots should parse as explicit paths");
         };
         assert_eq!(paths[0].path(), "test::a");

@@ -1,6 +1,5 @@
 ---
 source: crates/sniff-test/tests/fixtures.rs
-assertion_line: 67
 expression: messages
 ---
 [
@@ -44,6 +43,7 @@ expression: messages
           {
             "edge": "suppression::unchecked_index --assert-> compiler assert index out of bounds: index `index` (_2, argument 2) may exceed length `_3` (temporary)",
             "kind": "compiler-assert",
+            "level": "deny",
             "reason": "compiler assert",
             "span": "src/lib.rs:2:5: 2:18",
             "target": "compiler assert index out of bounds: index `index` (_2, argument 2) may exceed length `_3` (temporary)",

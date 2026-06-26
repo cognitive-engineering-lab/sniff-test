@@ -1,5 +1,5 @@
 [analysis]
-report-roots = ["custom_index_impl::custom_index_panics"]
+report-roots = ["documented_obligation::documented_contract"]
 
 [panics]
 panic-sink-namespaces = [
@@ -8,3 +8,6 @@ panic-sink-namespaces = [
     "core::std::rt::panic_fmt",
     "std::rt::panic_fmt",
 ]
+
+[panics.lints]
+documented-panic-contract = "allow"

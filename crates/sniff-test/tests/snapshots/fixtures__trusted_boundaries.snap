@@ -43,6 +43,7 @@ expression: messages
           {
             "edge": "trusted_boundaries::trusted_with_docs --direct-call-> trusted_boundaries::trusted_doc_helper",
             "kind": "trusted-panic-obligation",
+            "level": "warn",
             "reason": "trusted_boundaries::trusted_doc_helper has a documented # Panics contract",
             "span": "src/lib.rs:6:5: 6:29",
             "target": "trusted_boundaries::trusted_doc_helper",

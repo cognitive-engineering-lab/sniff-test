@@ -9,12 +9,14 @@ use crate::cache::{
     CachedArtifactAnalysis, CachedArtifactInfo, CachedDependencyRef, CachedFunctionSummary,
     artifact_id, write_artifact_analysis,
 };
-use crate::config::{AnalysisConfig, PanicBoundaryPolicy, PanicConfig, SniffTestConfig};
+use crate::config::{
+    AnalysisConfig, LintLevel, PanicBoundaryPolicy, PanicConfig, SafetyLintConfig, SniffTestConfig,
+};
 use crate::dependency_cache::{DependencyAnalysisCache, DependencyInput};
 use crate::namespace::canonical_namespace;
-use crate::panics::{PanicAnalysis, PanicPathDecision, analyze_panic_evidence};
+use crate::panics::{PanicAnalysis, PanicEvidence, PanicPathDecision, analyze_panic_evidence};
 use crate::report_roots::{
-    MissingReportRoot, ReportRoot, ReportRootSelection, select_panic_report_roots,
+    MissingReportRoot, ReportRoot, ReportRootSelection, select_report_roots,
 };
 use crate::safety::{SafetyAnalysis, analyze_safety};
 use reachability::{
@@ -39,16 +41,18 @@ pub use self::plugin::driver_main;
 
 use self::cache_encode::{cached_boundary_findings, function_summary};
 use self::diagnostics::{
-    PanicContractDiagnostic, PanicDiagnosticOptions, emit_cached_dependency_contract_diagnostic,
-    emit_cached_dependency_raw_panic_diagnostic, emit_missing_report_root_diagnostics,
-    emit_panic_contract_diagnostic, emit_raw_panic_diagnostic, emit_safety_diagnostics,
+    CachedDependencyContractDiagnostic, PanicContractDiagnostic, PanicDiagnosticOptions,
+    emit_cached_dependency_contract_diagnostic, emit_cached_dependency_raw_panic_diagnostic,
+    emit_missing_report_root_diagnostics, emit_panic_contract_diagnostic,
+    emit_raw_panic_diagnostic, emit_safety_diagnostics,
 };
 use self::plugin::{
-    RAW_PANIC_STATUS_ENV, RUSTC_VERSION_ENV, SNIFF_TEST_ARGS_ENV, current_rustc_version,
+    DENIED_FINDING_STATUS_ENV, RUSTC_VERSION_ENV, SNIFF_TEST_ARGS_ENV, current_rustc_version,
     frontend_args, modify_cargo, rustc_version, rustc_version_dir_component,
 };
 use self::report::{
-    PanicRootKind, PanicRootReport, ReportDetailKind, render_node, render_span_start,
+    PanicObligationReport, PanicRootKind, PanicRootReport, ReportDetailKind, render_node,
+    render_span_start,
 };
 use self::rustc_invocation::RustcInvocation;
 use self::safety_report::SafetyArtifactReport;
@@ -80,13 +84,13 @@ pub fn cargo_frontend() -> ExitCode {
         rustc_version_dir_component(&rustc_version)
     ));
     let args = frontend_args(parsed_args, target_dir.as_std_path());
-    let raw_panic_status = args.cache_dir().join("workspace-raw-panic");
-    if let Err(error) = std::fs::remove_file(&raw_panic_status)
+    let denied_finding_status = args.cache_dir().join("workspace-denied-findings");
+    if let Err(error) = std::fs::remove_file(&denied_finding_status)
         && error.kind() != std::io::ErrorKind::NotFound
     {
         eprintln!(
             "sniff-test: failed to clear {}: {error}",
-            raw_panic_status.display()
+            denied_finding_status.display()
         );
         return ExitCode::FAILURE;
     }
@@ -97,7 +101,7 @@ pub fn cargo_frontend() -> ExitCode {
         cargo.arg("-vv");
     }
     cargo.env(RUSTC_VERSION_ENV, &rustc_version);
-    cargo.env(RAW_PANIC_STATUS_ENV, &raw_panic_status);
+    cargo.env(DENIED_FINDING_STATUS_ENV, &denied_finding_status);
     cargo.env(
         SNIFF_TEST_ARGS_ENV,
         serde_json::to_string(&args).unwrap_or_else(|error| {
@@ -109,14 +113,14 @@ pub fn cargo_frontend() -> ExitCode {
 
     match cargo.status() {
         Ok(status) if status.success() => {
-            if raw_panic_status.exists() {
+            if denied_finding_status.exists() {
                 ExitCode::FAILURE
             } else {
                 ExitCode::SUCCESS
             }
         }
         Ok(status) => {
-            if raw_panic_status.exists() {
+            if denied_finding_status.exists() {
                 ExitCode::FAILURE
             } else {
                 match status.code() {
@@ -221,27 +225,28 @@ pub(crate) fn analyze_crate(tcx: TyCtxt<'_>, args: &SniffTestArgs, compiler_args
         &config.panics,
     );
 
-    let selection = select_panic_report_roots(tcx, &config.panics);
+    let selection = select_report_roots(tcx, &config.analysis, &config.panics);
     let diagnostics = PanicDiagnosticOptions {
         emit: args.message_format == args::MessageFormat::Human
             && output_scope == CrateOutputScope::Workspace,
-        include_stack: config.panics.show_full_stack_trace,
+        include_stack: config.analysis.show_full_stack_trace,
     };
     let root_analysis = analyze_report_roots(
         tcx,
         selection,
-        config.analysis,
+        &config.analysis,
         &config.panics,
         &dependency_cache,
         diagnostics,
     );
     let safety_analysis = if output_scope == CrateOutputScope::Workspace {
-        analyze_safety(tcx)
+        analyze_safety(tcx, &config.safety)
     } else {
         SafetyAnalysis::default()
     };
+    let has_denied_safety_findings = safety_analysis.has_denied_findings(config.safety.lints);
     if diagnostics.emit {
-        emit_safety_diagnostics(tcx, &safety_analysis);
+        emit_safety_diagnostics(tcx, &safety_analysis, config.safety.lints);
         emit_missing_report_root_diagnostics(
             tcx,
             &args.manifest_path(),
@@ -256,13 +261,18 @@ pub(crate) fn analyze_crate(tcx: TyCtxt<'_>, args: &SniffTestArgs, compiler_args
         &dependency_cache,
         root_analysis,
         safety_analysis,
+        config.safety.lints,
     );
     write_analysis_cache(args, &analysis.cache);
     emit_analysis_artifact(&analysis.report, args);
+    let has_denied_panic_findings = analysis
+        .report
+        .counts
+        .has_denied_findings(config.panics.lints);
     if analysis.report.scope == CrateOutputScope::Workspace
-        && analysis.report.counts.raw_panic_paths > 0
+        && (has_denied_panic_findings || has_denied_safety_findings)
     {
-        record_workspace_raw_panic();
+        record_workspace_denied_finding();
     }
 }
 
@@ -279,6 +289,7 @@ impl AnalysisArtifact {
         dependency_cache: &DependencyAnalysisCache,
         root_analysis: RootAnalysis,
         safety_analysis: SafetyAnalysis,
+        safety_lints: SafetyLintConfig,
     ) -> Self {
         let dependencies = dependency_cache.resolved_dependencies();
         let artifact = artifact_info(tcx, invocation);
@@ -305,7 +316,7 @@ impl AnalysisArtifact {
             generic_roots: root_analysis.generic_roots,
             counts: root_analysis.counts,
             roots: root_analysis.roots,
-            safety: SafetyArtifactReport::from_analysis(tcx, safety_analysis),
+            safety: SafetyArtifactReport::from_analysis(tcx, safety_analysis, safety_lints),
         };
         let cache = CachedArtifactAnalysis::new(
             tool_version,
@@ -357,7 +368,7 @@ struct RootAnalysis {
 fn analyze_report_roots<'tcx>(
     tcx: TyCtxt<'tcx>,
     selection: ReportRootSelection<'tcx>,
-    analysis_config: AnalysisConfig,
+    analysis_config: &AnalysisConfig,
     config: &PanicConfig,
     dependency_cache: &DependencyAnalysisCache,
     diagnostics: PanicDiagnosticOptions,
@@ -408,22 +419,22 @@ fn analyze_report_roots<'tcx>(
     analysis
 }
 
-fn record_workspace_raw_panic() {
-    let Some(path) = std::env::var_os(RAW_PANIC_STATUS_ENV).map(PathBuf::from) else {
+fn record_workspace_denied_finding() {
+    let Some(path) = std::env::var_os(DENIED_FINDING_STATUS_ENV).map(PathBuf::from) else {
         return;
     };
     if let Some(parent) = path.parent()
         && let Err(error) = std::fs::create_dir_all(parent)
     {
         eprintln!(
-            "sniff-test: failed to create raw panic status directory {}: {error}",
+            "sniff-test: failed to create denied finding status directory {}: {error}",
             parent.display()
         );
         std::process::exit(1);
     }
-    if let Err(error) = std::fs::write(&path, "raw-panic-paths\n") {
+    if let Err(error) = std::fs::write(&path, "denied-findings\n") {
         eprintln!(
-            "sniff-test: failed to write raw panic status {}: {error}",
+            "sniff-test: failed to write denied finding status {}: {error}",
             path.display()
         );
         std::process::exit(1);
@@ -499,7 +510,7 @@ fn analyze_root<'tcx>(
     tcx: TyCtxt<'tcx>,
     reachability: &mut ReachabilityIndex<'tcx>,
     root: AnalysisRoot<'tcx>,
-    analysis_config: AnalysisConfig,
+    analysis_config: &AnalysisConfig,
     config: &PanicConfig,
     dependency_cache: &DependencyAnalysisCache,
     diagnostics: PanicDiagnosticOptions,
@@ -549,7 +560,7 @@ fn analyze_root<'tcx>(
 }
 
 fn reachability_options(
-    analysis_config: AnalysisConfig,
+    analysis_config: &AnalysisConfig,
     analyze_external: bool,
 ) -> ReachabilityOptions {
     ReachabilityOptions {
@@ -583,6 +594,13 @@ impl PanicFindingCounts {
             ReportDetailKind::PanicObligation => self.panic_obligations += 1,
             ReportDetailKind::TrustedPanicObligation => self.trusted_panic_obligations += 1,
         }
+    }
+
+    fn has_denied_findings(self, lints: crate::config::PanicLintConfig) -> bool {
+        (self.raw_panic_paths > 0 && lints.undocumented_panic_path == LintLevel::Deny)
+            || (self.panic_obligations > 0 && lints.documented_panic_contract == LintLevel::Deny)
+            || (self.trusted_panic_obligations > 0
+                && lints.trusted_panic_contract == LintLevel::Deny)
     }
 }
 
@@ -636,68 +654,18 @@ fn collect_panic_findings<'tcx>(
     for evidence in &analysis.evidence {
         match evidence.decision {
             PanicPathDecision::RawPanic => {
-                counts.raw_panic_paths += 1;
-                report.push_panic_evidence(tcx, graph, evidence);
-                if collection.diagnostics.emit {
-                    emit_raw_panic_diagnostic(
-                        tcx,
-                        graph,
-                        evidence,
-                        collection.root_def_id,
-                        collection.diagnostics.include_stack,
-                    );
-                }
+                emit_raw_panic_finding(tcx, graph, evidence, &collection, &mut counts, &mut report);
             }
             PanicPathDecision::PanicObligation { edge_id, def_id } => {
-                if is_trusted_panic_obligation(tcx, def_id, collection.config) {
-                    counts.trusted_panic_obligations += 1;
-                    report.push_panic_obligation(
-                        tcx,
-                        graph,
-                        evidence,
-                        edge_id,
-                        def_id,
-                        ReportDetailKind::TrustedPanicObligation,
-                    );
-                    if collection.diagnostics.emit {
-                        emit_panic_contract_diagnostic(
-                            tcx,
-                            graph,
-                            evidence,
-                            PanicContractDiagnostic {
-                                obligation_edge_id: edge_id,
-                                documented_def_id: def_id,
-                                root_def_id: collection.root_def_id,
-                                trusted: true,
-                                include_stack: collection.diagnostics.include_stack,
-                            },
-                        );
-                    }
-                } else {
-                    counts.panic_obligations += 1;
-                    report.push_panic_obligation(
-                        tcx,
-                        graph,
-                        evidence,
-                        edge_id,
-                        def_id,
-                        ReportDetailKind::PanicObligation,
-                    );
-                    if collection.diagnostics.emit {
-                        emit_panic_contract_diagnostic(
-                            tcx,
-                            graph,
-                            evidence,
-                            PanicContractDiagnostic {
-                                obligation_edge_id: edge_id,
-                                documented_def_id: def_id,
-                                root_def_id: collection.root_def_id,
-                                trusted: false,
-                                include_stack: collection.diagnostics.include_stack,
-                            },
-                        );
-                    }
-                }
+                emit_panic_obligation_finding(
+                    tcx,
+                    graph,
+                    evidence,
+                    PanicObligationFinding { edge_id, def_id },
+                    &collection,
+                    &mut counts,
+                    &mut report,
+                );
             }
         }
     }
@@ -705,6 +673,93 @@ fn collect_panic_findings<'tcx>(
     emit_cached_dependency_findings(tcx, graph, view, &collection, &mut counts, &mut report);
 
     (counts, report)
+}
+
+fn emit_raw_panic_finding<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    graph: &ReachabilityGraph<'tcx>,
+    evidence: &PanicEvidence,
+    collection: &PanicFindingCollection<'_>,
+    counts: &mut PanicFindingCounts,
+    report: &mut PanicRootReport,
+) {
+    let kind = ReportDetailKind::from_evidence(&evidence.kind);
+    let level = kind.lint_level(collection.config.lints);
+    if level == LintLevel::Allow {
+        return;
+    }
+
+    counts.raw_panic_paths += 1;
+    report.push_panic_evidence(tcx, graph, evidence, level);
+    if collection.diagnostics.emit {
+        emit_raw_panic_diagnostic(
+            tcx,
+            graph,
+            evidence,
+            collection.root_def_id,
+            level,
+            collection.diagnostics.include_stack,
+        );
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+struct PanicObligationFinding {
+    edge_id: Option<reachability::ReachabilityEdgeId>,
+    def_id: DefId,
+}
+
+fn emit_panic_obligation_finding<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    graph: &ReachabilityGraph<'tcx>,
+    evidence: &PanicEvidence,
+    finding: PanicObligationFinding,
+    collection: &PanicFindingCollection<'_>,
+    counts: &mut PanicFindingCounts,
+    report: &mut PanicRootReport,
+) {
+    let trusted = is_trusted_panic_obligation(tcx, finding.def_id, collection.config);
+    let kind = if trusted {
+        ReportDetailKind::TrustedPanicObligation
+    } else {
+        ReportDetailKind::PanicObligation
+    };
+    let level = kind.lint_level(collection.config.lints);
+    if level == LintLevel::Allow {
+        return;
+    }
+
+    if trusted {
+        counts.trusted_panic_obligations += 1;
+    } else {
+        counts.panic_obligations += 1;
+    }
+    report.push_panic_obligation(
+        tcx,
+        graph,
+        evidence,
+        PanicObligationReport {
+            obligation_edge_id: finding.edge_id,
+            documented_def_id: finding.def_id,
+            kind,
+            level,
+        },
+    );
+    if collection.diagnostics.emit {
+        emit_panic_contract_diagnostic(
+            tcx,
+            graph,
+            evidence,
+            PanicContractDiagnostic {
+                obligation_edge_id: finding.edge_id,
+                documented_def_id: finding.def_id,
+                root_def_id: collection.root_def_id,
+                trusted,
+                level,
+                include_stack: collection.diagnostics.include_stack,
+            },
+        );
+    }
 }
 
 fn root_declaration_span(tcx: TyCtxt<'_>, root: &ReachabilityNodeKind<'_>) -> Option<String> {
@@ -778,50 +833,26 @@ fn emit_cached_dependency_findings<'tcx>(
         }
 
         if summary.panic_obligations > 0 || summary.trusted_panic_obligations > 0 {
-            if is_trusted_panic_obligation(tcx, instance.def_id(), collection.config) {
-                counts.trusted_panic_obligations += 1;
-                report.push_cached_dependency_obligation(
-                    tcx,
-                    graph,
-                    edge.id(),
+            emit_cached_dependency_obligation_finding(
+                tcx,
+                graph,
+                CachedDependencyFinding {
+                    edge_id: edge.id(),
+                    def_id: instance.def_id(),
                     summary,
-                    ReportDetailKind::TrustedPanicObligation,
-                );
-                if collection.diagnostics.emit {
-                    emit_cached_dependency_contract_diagnostic(
-                        tcx,
-                        graph,
-                        edge.id(),
-                        summary,
-                        collection.root_def_id,
-                        true,
-                        collection.diagnostics.include_stack,
-                    );
-                }
-            } else {
-                counts.panic_obligations += 1;
-                report.push_cached_dependency_obligation(
-                    tcx,
-                    graph,
-                    edge.id(),
-                    summary,
-                    ReportDetailKind::PanicObligation,
-                );
-                if collection.diagnostics.emit {
-                    emit_cached_dependency_contract_diagnostic(
-                        tcx,
-                        graph,
-                        edge.id(),
-                        summary,
-                        collection.root_def_id,
-                        false,
-                        collection.diagnostics.include_stack,
-                    );
-                }
-            }
+                },
+                collection,
+                counts,
+                report,
+            );
         } else if summary.raw_panic_paths > 0 {
+            let kind = ReportDetailKind::CachedDependencyPanic;
+            let level = kind.lint_level(collection.config.lints);
+            if level == LintLevel::Allow {
+                continue;
+            }
             counts.raw_panic_paths += 1;
-            report.push_cached_dependency_panic(tcx, graph, edge.id(), summary);
+            report.push_cached_dependency_panic(tcx, graph, edge.id(), summary, level);
             if collection.diagnostics.emit {
                 emit_cached_dependency_raw_panic_diagnostic(
                     tcx,
@@ -829,10 +860,66 @@ fn emit_cached_dependency_findings<'tcx>(
                     edge.id(),
                     summary,
                     collection.root_def_id,
+                    level,
                     collection.diagnostics.include_stack,
                 );
             }
         }
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+struct CachedDependencyFinding<'summary> {
+    edge_id: reachability::ReachabilityEdgeId,
+    def_id: DefId,
+    summary: &'summary CachedFunctionSummary,
+}
+
+fn emit_cached_dependency_obligation_finding<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    graph: &ReachabilityGraph<'tcx>,
+    finding: CachedDependencyFinding<'_>,
+    collection: &PanicFindingCollection<'_>,
+    counts: &mut PanicFindingCounts,
+    report: &mut PanicRootReport,
+) {
+    let trusted = is_trusted_panic_obligation(tcx, finding.def_id, collection.config);
+    let kind = if trusted {
+        ReportDetailKind::TrustedPanicObligation
+    } else {
+        ReportDetailKind::PanicObligation
+    };
+    let level = kind.lint_level(collection.config.lints);
+    if level == LintLevel::Allow {
+        return;
+    }
+
+    if trusted {
+        counts.trusted_panic_obligations += 1;
+    } else {
+        counts.panic_obligations += 1;
+    }
+    report.push_cached_dependency_obligation(
+        tcx,
+        graph,
+        finding.edge_id,
+        finding.summary,
+        kind,
+        level,
+    );
+    if collection.diagnostics.emit {
+        emit_cached_dependency_contract_diagnostic(
+            tcx,
+            graph,
+            finding.summary,
+            CachedDependencyContractDiagnostic {
+                edge_id: finding.edge_id,
+                root_def_id: collection.root_def_id,
+                trusted,
+                level,
+                include_stack: collection.diagnostics.include_stack,
+            },
+        );
     }
 }
 

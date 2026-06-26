@@ -1,9 +1,8 @@
 //! Safety documentation and call-site justification analysis.
 //!
-//! This pass intentionally starts with unsafe function calls. It checks that
-//! public unsafe functions document a `# Safety` contract and that unsafe calls
-//! have a nearby `// SAFETY:` justification satisfying any named requirements
-//! listed by the callee.
+//! This pass checks that public unsafe functions document a `# Safety`
+//! contract and that safety-obligation call sites have nearby `// SAFETY:`
+//! justifications satisfying any named requirements listed by the callee.
 
 use std::collections::HashSet;
 
@@ -13,6 +12,7 @@ use rustc_hir::{BlockCheckMode, Expr, ExprKind, UnsafeSource, intravisit};
 use rustc_middle::ty::{self, TyCtxt, TypeckResults};
 use rustc_span::Span;
 
+use crate::config::{LintLevel, SafetyConfig, SafetyLintConfig};
 use crate::contracts::{
     ContractDocSummary, ContractKind, ContractRequirement, contract_doc_summary,
     normalize_requirement_name,
@@ -31,23 +31,46 @@ pub enum SafetyFinding {
         def_id: DefId,
         span: Span,
     },
-    UnsafeCallMissingJustification {
+    CallMissingJustification {
         caller: DefId,
-        callee: UnsafeCallee,
+        callee: SafetyCallee,
+        call_kind: SafetyCallKind,
         span: Span,
     },
-    UnsafeCallMissingRequirements {
+    CallMissingRequirements {
         caller: DefId,
-        callee: UnsafeCallee,
+        callee: SafetyCallee,
+        call_kind: SafetyCallKind,
         span: Span,
         missing_requirements: Vec<SafetyRequirement>,
     },
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SafetyFindingKind {
+    MissingSafetyDocs,
+    UnsafeCallMissingJustification,
+    UnsafeCallMissingRequirements,
+    SafetyObligationMissingJustification,
+    SafetyObligationMissingRequirements,
+}
+
 #[derive(Debug, Clone, Copy)]
-pub enum UnsafeCallee {
+pub enum SafetyCallee {
     Def(DefId),
     FunctionPointer,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SafetyCallKind {
+    Unsafe,
+    ConfiguredObligation,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct SafetyCall {
+    callee: SafetyCallee,
+    kind: SafetyCallKind,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -70,21 +93,66 @@ impl SafetyAnalysis {
     pub fn is_empty(&self) -> bool {
         self.findings.is_empty()
     }
+
+    #[must_use]
+    pub fn has_denied_findings(&self, lints: SafetyLintConfig) -> bool {
+        self.findings
+            .iter()
+            .any(|finding| finding.kind().lint_level(lints) == LintLevel::Deny)
+    }
+}
+
+impl SafetyFinding {
+    #[must_use]
+    pub fn kind(&self) -> SafetyFindingKind {
+        match self {
+            Self::MissingSafetyDocs { .. } => SafetyFindingKind::MissingSafetyDocs,
+            Self::CallMissingJustification { call_kind, .. } => match call_kind {
+                SafetyCallKind::Unsafe => SafetyFindingKind::UnsafeCallMissingJustification,
+                SafetyCallKind::ConfiguredObligation => {
+                    SafetyFindingKind::SafetyObligationMissingJustification
+                }
+            },
+            Self::CallMissingRequirements { call_kind, .. } => match call_kind {
+                SafetyCallKind::Unsafe => SafetyFindingKind::UnsafeCallMissingRequirements,
+                SafetyCallKind::ConfiguredObligation => {
+                    SafetyFindingKind::SafetyObligationMissingRequirements
+                }
+            },
+        }
+    }
+}
+
+impl SafetyFindingKind {
+    #[must_use]
+    pub fn lint_level(self, lints: SafetyLintConfig) -> LintLevel {
+        match self {
+            Self::MissingSafetyDocs => lints.missing_safety_docs,
+            Self::UnsafeCallMissingJustification => lints.unsafe_call_missing_justification,
+            Self::UnsafeCallMissingRequirements => lints.unsafe_call_missing_requirements,
+            Self::SafetyObligationMissingJustification => {
+                lints.safety_obligation_missing_justification
+            }
+            Self::SafetyObligationMissingRequirements => {
+                lints.safety_obligation_missing_requirements
+            }
+        }
+    }
 }
 
 #[must_use]
-pub fn analyze_safety(tcx: TyCtxt<'_>) -> SafetyAnalysis {
+pub fn analyze_safety(tcx: TyCtxt<'_>, config: &SafetyConfig) -> SafetyAnalysis {
     let mut analysis = SafetyAnalysis::default();
 
     for owner in tcx.hir_body_owners() {
         if matches!(tcx.def_kind(owner), DefKind::Fn | DefKind::AssocFn) {
-            collect_missing_safety_docs(tcx, owner, &mut analysis);
+            collect_missing_safety_docs(tcx, owner, config, &mut analysis);
         }
         if matches!(
             tcx.def_kind(owner),
             DefKind::Fn | DefKind::AssocFn | DefKind::Closure
         ) {
-            collect_unsafe_call_findings(tcx, owner, &mut analysis);
+            collect_safety_call_findings(tcx, owner, config, &mut analysis);
         }
     }
 
@@ -102,16 +170,32 @@ pub fn safety_requirements(tcx: TyCtxt<'_>, def_id: DefId) -> Vec<SafetyRequirem
 }
 
 #[must_use]
-pub fn unsafe_callee_name(tcx: TyCtxt<'_>, callee: UnsafeCallee) -> String {
+pub fn safety_callee_name(tcx: TyCtxt<'_>, callee: SafetyCallee) -> String {
     match callee {
-        UnsafeCallee::Def(def_id) => canonical_namespace(tcx, def_id),
-        UnsafeCallee::FunctionPointer => String::from("unsafe function pointer"),
+        SafetyCallee::Def(def_id) => canonical_namespace(tcx, def_id),
+        SafetyCallee::FunctionPointer => String::from("unsafe function pointer"),
     }
 }
 
-fn collect_missing_safety_docs(tcx: TyCtxt<'_>, owner: LocalDefId, analysis: &mut SafetyAnalysis) {
+#[must_use]
+pub fn safety_call_label(kind: SafetyCallKind) -> &'static str {
+    match kind {
+        SafetyCallKind::Unsafe => "unsafe call",
+        SafetyCallKind::ConfiguredObligation => "safety-obligation call",
+    }
+}
+
+fn collect_missing_safety_docs(
+    tcx: TyCtxt<'_>,
+    owner: LocalDefId,
+    config: &SafetyConfig,
+    analysis: &mut SafetyAnalysis,
+) {
     let def_id = owner.to_def_id();
-    if !tcx.visibility(owner).is_public() || !fn_def_is_unsafe(tcx, def_id) {
+    if !tcx.visibility(owner).is_public()
+        || !fn_def_is_unsafe(tcx, def_id)
+        || config.ignores_def(tcx, def_id)
+    {
         return;
     }
 
@@ -123,14 +207,24 @@ fn collect_missing_safety_docs(tcx: TyCtxt<'_>, owner: LocalDefId, analysis: &mu
     }
 }
 
-fn collect_unsafe_call_findings(tcx: TyCtxt<'_>, owner: LocalDefId, analysis: &mut SafetyAnalysis) {
+fn collect_safety_call_findings(
+    tcx: TyCtxt<'_>,
+    owner: LocalDefId,
+    config: &SafetyConfig,
+    analysis: &mut SafetyAnalysis,
+) {
+    if config.ignores_def(tcx, owner.to_def_id()) {
+        return;
+    }
+
     let Some(body) = tcx.hir_maybe_body_owned_by(owner) else {
         return;
     };
     let typeck = tcx.typeck(owner);
-    let mut visitor = UnsafeCallVisitor {
+    let mut visitor = SafetyCallVisitor {
         tcx,
         owner,
+        config,
         typeck,
         safety_scopes: Vec::new(),
         findings: Vec::new(),
@@ -140,15 +234,16 @@ fn collect_unsafe_call_findings(tcx: TyCtxt<'_>, owner: LocalDefId, analysis: &m
     analysis.findings.extend(visitor.findings);
 }
 
-struct UnsafeCallVisitor<'tcx> {
+struct SafetyCallVisitor<'config, 'tcx> {
     tcx: TyCtxt<'tcx>,
     owner: LocalDefId,
+    config: &'config SafetyConfig,
     typeck: &'tcx TypeckResults<'tcx>,
     safety_scopes: Vec<Vec<SafetySatisfaction>>,
     findings: Vec<SafetyFinding>,
 }
 
-impl<'tcx> UnsafeCallVisitor<'tcx> {
+impl<'tcx> SafetyCallVisitor<'_, 'tcx> {
     fn visit_user_unsafe_block(
         &mut self,
         expr: &'tcx Expr<'tcx>,
@@ -162,60 +257,81 @@ impl<'tcx> UnsafeCallVisitor<'tcx> {
             .expect("unsafe block scope should be present");
     }
 
-    fn inspect_unsafe_call(&mut self, expr: &'tcx Expr<'tcx>) {
-        let Some(callee) = self.unsafe_callee(expr) else {
+    fn inspect_safety_call(&mut self, expr: &'tcx Expr<'tcx>) {
+        let Some(call) = self.safety_call(expr) else {
             return;
         };
+        if self.ignores_callee(call.callee) {
+            return;
+        }
         let satisfactions = self.applicable_satisfactions(expr.span);
 
-        if let UnsafeCallee::Def(def_id) = callee {
+        if let SafetyCallee::Def(def_id) = call.callee {
             let requirements = safety_requirements(self.tcx, def_id);
             if !requirements.is_empty() {
                 let missing = missing_safety_requirements(&requirements, &satisfactions);
                 if !missing.is_empty() {
-                    self.findings
-                        .push(SafetyFinding::UnsafeCallMissingRequirements {
-                            caller: self.owner.to_def_id(),
-                            callee,
-                            span: expr.span,
-                            missing_requirements: missing,
-                        });
+                    self.findings.push(SafetyFinding::CallMissingRequirements {
+                        caller: self.owner.to_def_id(),
+                        callee: call.callee,
+                        call_kind: call.kind,
+                        span: expr.span,
+                        missing_requirements: missing,
+                    });
                 }
                 return;
             }
         }
 
         if satisfactions.is_empty() {
-            self.findings
-                .push(SafetyFinding::UnsafeCallMissingJustification {
-                    caller: self.owner.to_def_id(),
-                    callee,
-                    span: expr.span,
-                });
+            self.findings.push(SafetyFinding::CallMissingJustification {
+                caller: self.owner.to_def_id(),
+                callee: call.callee,
+                call_kind: call.kind,
+                span: expr.span,
+            });
         }
     }
 
-    fn unsafe_callee(&self, expr: &'tcx Expr<'tcx>) -> Option<UnsafeCallee> {
+    fn ignores_callee(&self, callee: SafetyCallee) -> bool {
+        matches!(callee, SafetyCallee::Def(def_id) if self.config.ignores_def(self.tcx, def_id))
+    }
+
+    fn safety_call(&self, expr: &'tcx Expr<'tcx>) -> Option<SafetyCall> {
         match expr.kind {
-            ExprKind::Call(callee, _) => self.unsafe_callee_from_call_target(callee),
+            ExprKind::Call(callee, _) => self.safety_call_from_call_target(callee),
             ExprKind::MethodCall(..) => self
                 .typeck
                 .type_dependent_def_id(expr.hir_id)
-                .filter(|def_id| fn_def_is_unsafe(self.tcx, *def_id))
-                .map(UnsafeCallee::Def),
+                .and_then(|def_id| self.safety_call_from_def(def_id)),
             _ => None,
         }
     }
 
-    fn unsafe_callee_from_call_target(&self, callee: &'tcx Expr<'tcx>) -> Option<UnsafeCallee> {
+    fn safety_call_from_call_target(&self, callee: &'tcx Expr<'tcx>) -> Option<SafetyCall> {
         match self.typeck.expr_ty_adjusted(callee).kind() {
-            ty::FnDef(def_id, _) if fn_def_is_unsafe(self.tcx, *def_id) => {
-                Some(UnsafeCallee::Def(*def_id))
-            }
-            ty::FnPtr(_, header) if header.safety().is_unsafe() => {
-                Some(UnsafeCallee::FunctionPointer)
-            }
+            ty::FnDef(def_id, _) => self.safety_call_from_def(*def_id),
+            ty::FnPtr(_, header) if header.safety().is_unsafe() => Some(SafetyCall {
+                callee: SafetyCallee::FunctionPointer,
+                kind: SafetyCallKind::Unsafe,
+            }),
             _ => None,
+        }
+    }
+
+    fn safety_call_from_def(&self, def_id: DefId) -> Option<SafetyCall> {
+        if fn_def_is_unsafe(self.tcx, def_id) {
+            Some(SafetyCall {
+                callee: SafetyCallee::Def(def_id),
+                kind: SafetyCallKind::Unsafe,
+            })
+        } else if self.config.marks_safety_obligation_def(self.tcx, def_id) {
+            Some(SafetyCall {
+                callee: SafetyCallee::Def(def_id),
+                kind: SafetyCallKind::ConfiguredObligation,
+            })
+        } else {
+            None
         }
     }
 
@@ -228,7 +344,7 @@ impl<'tcx> UnsafeCallVisitor<'tcx> {
     }
 }
 
-impl<'tcx> intravisit::Visitor<'tcx> for UnsafeCallVisitor<'tcx> {
+impl<'tcx> intravisit::Visitor<'tcx> for SafetyCallVisitor<'_, 'tcx> {
     fn visit_expr(&mut self, expr: &'tcx Expr<'tcx>) -> Self::Result {
         match expr.kind {
             ExprKind::Closure(_) => {}
@@ -241,7 +357,7 @@ impl<'tcx> intravisit::Visitor<'tcx> for UnsafeCallVisitor<'tcx> {
                 self.visit_user_unsafe_block(expr, block);
             }
             _ => {
-                self.inspect_unsafe_call(expr);
+                self.inspect_safety_call(expr);
                 intravisit::walk_expr(self, expr);
             }
         }

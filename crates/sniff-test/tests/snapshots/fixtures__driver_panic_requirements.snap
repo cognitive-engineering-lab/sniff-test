@@ -43,6 +43,7 @@ expression: messages
           {
             "edge": "panic_requirements::bullet_without_marker --direct-call-> panic_requirements::documented_ratio",
             "kind": "panic-obligation",
+            "level": "warn",
             "reason": "panic_requirements::documented_ratio has a documented # Panics contract",
             "span": "[FIXTURE]/src/lib.rs:31:5: 31:41",
             "target": "panic_requirements::documented_ratio",
@@ -66,6 +67,7 @@ expression: messages
           {
             "edge": "panic_requirements::empty_marker --direct-call-> panic_requirements::documented_ratio",
             "kind": "panic-obligation",
+            "level": "warn",
             "reason": "panic_requirements::documented_ratio has a documented # Panics contract",
             "span": "[FIXTURE]/src/lib.rs:36:5: 36:41",
             "target": "panic_requirements::documented_ratio",
@@ -89,6 +91,7 @@ expression: messages
           {
             "edge": "panic_requirements::empty_requirement --direct-call-> panic_requirements::documented_ratio",
             "kind": "panic-obligation",
+            "level": "warn",
             "reason": "panic_requirements::documented_ratio has a documented # Panics contract",
             "span": "[FIXTURE]/src/lib.rs:44:5: 44:41",
             "target": "panic_requirements::documented_ratio",
@@ -112,6 +115,7 @@ expression: messages
           {
             "edge": "panic_requirements::safety_marker_does_not_satisfy_panic --direct-call-> panic_requirements::documented_ratio",
             "kind": "panic-obligation",
+            "level": "warn",
             "reason": "panic_requirements::documented_ratio has a documented # Panics contract",
             "span": "[FIXTURE]/src/lib.rs:53:5: 53:41",
             "target": "panic_requirements::documented_ratio",
@@ -135,6 +139,7 @@ expression: messages
           {
             "edge": "panic_requirements::safety_marker_stops_partial_panic_block --direct-call-> panic_requirements::documented_ratio",
             "kind": "panic-obligation",
+            "level": "warn",
             "reason": "panic_requirements::documented_ratio has a documented # Panics contract",
             "span": "[FIXTURE]/src/lib.rs:62:5: 62:41",
             "target": "panic_requirements::documented_ratio",
@@ -158,6 +163,7 @@ expression: messages
           {
             "edge": "panic_requirements::unnamed_marker --direct-call-> panic_requirements::documented_ratio",
             "kind": "panic-obligation",
+            "level": "warn",
             "reason": "panic_requirements::documented_ratio has a documented # Panics contract",
             "span": "[FIXTURE]/src/lib.rs:26:5: 26:41",
             "target": "panic_requirements::documented_ratio",

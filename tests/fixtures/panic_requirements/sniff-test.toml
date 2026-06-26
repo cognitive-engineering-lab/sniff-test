@@ -1,7 +1,5 @@
 [analysis]
 inline-mir = "off"
-
-[panics]
 report-roots = [
     "panic_requirements::satisfied",
     "panic_requirements::unnamed_marker",
@@ -11,6 +9,8 @@ report-roots = [
     "panic_requirements::safety_marker_does_not_satisfy_panic",
     "panic_requirements::safety_marker_stops_partial_panic_block",
 ]
+
+[panics]
 panic-sink-namespaces = [
     "core::panicking::**",
     "std::panicking::**",

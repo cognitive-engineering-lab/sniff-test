@@ -1,6 +1,5 @@
 ---
 source: crates/sniff-test/tests/fixtures.rs
-assertion_line: 67
 expression: messages
 ---
 [
@@ -44,6 +43,7 @@ expression: messages
           {
             "edge": "closure_call_graph::basic_closure_panics::{closure#0} --direct-call-> core::std::rt::panic_fmt",
             "kind": "panic-invocation",
+            "level": "deny",
             "reason": "panic sink core::std::rt::panic_fmt",
             "span": "[SYSROOT]/lib/rustlib/src/rust/library/core/src/panic.rs:62:9: 62:73",
             "target": "core::std::rt::panic_fmt",
@@ -69,6 +69,7 @@ expression: messages
           {
             "edge": "closure_call_graph::boxed_captured_closure_panics::{closure#0} --direct-call-> core::std::rt::panic_fmt",
             "kind": "panic-invocation",
+            "level": "deny",
             "reason": "panic sink core::std::rt::panic_fmt",
             "span": "[SYSROOT]/lib/rustlib/src/rust/library/core/src/panic.rs:62:9: 62:73",
             "target": "core::std::rt::panic_fmt",
@@ -94,6 +95,7 @@ expression: messages
           {
             "edge": "closure_call_graph::captured_closure_panics::{closure#0} --direct-call-> core::std::rt::panic_fmt",
             "kind": "panic-invocation",
+            "level": "deny",
             "reason": "panic sink core::std::rt::panic_fmt",
             "span": "[SYSROOT]/lib/rustlib/src/rust/library/core/src/panic.rs:62:9: 62:73",
             "target": "core::std::rt::panic_fmt",
@@ -119,6 +121,7 @@ expression: messages
           {
             "edge": "closure_call_graph::dyn_box_closure_boundary::{closure#0} --direct-call-> core::std::rt::panic_fmt",
             "kind": "panic-invocation",
+            "level": "deny",
             "reason": "panic sink core::std::rt::panic_fmt",
             "span": "[SYSROOT]/lib/rustlib/src/rust/library/core/src/panic.rs:62:9: 62:73",
             "target": "core::std::rt::panic_fmt",
@@ -143,6 +146,7 @@ expression: messages
           {
             "edge": "closure_call_graph::fn_pointer_closure_boundary::{closure#0} --direct-call-> core::std::rt::panic_fmt",
             "kind": "panic-invocation",
+            "level": "deny",
             "reason": "panic sink core::std::rt::panic_fmt",
             "span": "[SYSROOT]/lib/rustlib/src/rust/library/core/src/panic.rs:62:9: 62:73",
             "target": "core::std::rt::panic_fmt",
@@ -168,6 +172,7 @@ expression: messages
           {
             "edge": "closure_call_graph::unused_closure_argument::{closure#0} --direct-call-> core::std::rt::panic_fmt",
             "kind": "panic-invocation",
+            "level": "deny",
             "reason": "panic sink core::std::rt::panic_fmt",
             "span": "[SYSROOT]/lib/rustlib/src/rust/library/core/src/panic.rs:62:9: 62:73",
             "target": "core::std::rt::panic_fmt",
@@ -193,6 +198,7 @@ expression: messages
           {
             "edge": "closure_call_graph::unused_closure_definition::{closure#0} --direct-call-> core::std::rt::panic_fmt",
             "kind": "panic-invocation",
+            "level": "deny",
             "reason": "panic sink core::std::rt::panic_fmt",
             "span": "[SYSROOT]/lib/rustlib/src/rust/library/core/src/panic.rs:62:9: 62:73",
             "target": "core::std::rt::panic_fmt",

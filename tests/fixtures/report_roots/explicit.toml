@@ -1,8 +1,10 @@
-[panics]
+[analysis]
 report-roots = [
     "report_roots::private_panic",
     "report_roots::missing_root",
 ]
+
+[panics]
 panic-sink-namespaces = [
     "core::panicking::**",
     "std::panicking::**",
