@@ -38,7 +38,9 @@ mod body;
 mod graph;
 mod hooks;
 
-pub use analysis::{IntoInstance, ReachabilityIndex, ReachabilityOptions, ReachabilityRoot};
+pub use analysis::{
+    DynDispatchVTableEdges, IntoInstance, ReachabilityIndex, ReachabilityOptions, ReachabilityRoot,
+};
 pub use graph::{
     CompilerAssertLocal, CompilerAssertLocalRole, ReachabilityEdge, ReachabilityEdgeId,
     ReachabilityEdgeKind, ReachabilityGraph, ReachabilityNode, ReachabilityNodeId,

@@ -10,8 +10,8 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use reachability::{
-    NoopReachabilityHooks, ReachabilityGraph, ReachabilityIndex, ReachabilityNodeKind,
-    ReachabilityOptions, ReachabilityRoot, ReachabilitySnapshot,
+    DynDispatchVTableEdges, NoopReachabilityHooks, ReachabilityGraph, ReachabilityIndex,
+    ReachabilityNodeKind, ReachabilityOptions, ReachabilityRoot, ReachabilitySnapshot,
 };
 use rustc_driver::{Callbacks, Compilation};
 use rustc_hir::def_id::LocalDefId;
@@ -27,6 +27,40 @@ pub struct Foo;
 
 impl Worker for Foo {
     fn work(&self) {
+        leaf();
+    }
+}
+
+pub trait Inspector {
+    fn inspect<T: ?Sized>(&self, value: &T);
+}
+
+impl Inspector for Foo {
+    fn inspect<T: ?Sized>(&self, _value: &T) {
+        leaf();
+    }
+}
+
+pub trait PanickingWorker {
+    fn panic_work(&self);
+}
+
+pub struct PanickingFoo;
+
+impl PanickingWorker for PanickingFoo {
+    fn panic_work(&self) {
+        leaf();
+    }
+}
+
+pub trait SafeWorker {
+    fn safe_work(&self);
+}
+
+pub struct SafeFoo;
+
+impl SafeWorker for SafeFoo {
+    fn safe_work(&self) {
         leaf();
     }
 }
@@ -52,7 +86,8 @@ pub fn entry(flag: bool, value: usize) {
     fp();
 
     let foo = Foo;
-    let _obj: &dyn Worker = &foo;
+    let obj: &dyn Worker = &foo;
+    obj.work();
 
     let _ = Some(value).map(|x| x + 1);
     let _ = value + 1;
@@ -62,6 +97,21 @@ pub fn entry(flag: bool, value: usize) {
 
 pub fn generic_dyn<T: std::fmt::Debug>(value: &T) {
     let _obj: &dyn std::fmt::Debug = value;
+}
+
+pub fn generic_dyn_argument() {
+    let foo = Foo;
+    let obj: &dyn Worker = &foo;
+    foo.inspect(obj);
+}
+
+pub fn mixed_dyn_traits() {
+    let panicking = PanickingFoo;
+    let _panicking_obj: &dyn PanickingWorker = &panicking;
+
+    let safe = SafeFoo;
+    let safe_obj: &dyn SafeWorker = &safe;
+    safe_obj.safe_work();
 }
 
 pub fn generic_const<const N: usize, T: Copy + Default>() -> [T; N] {
@@ -102,7 +152,40 @@ fn smoke_test_renders_reachability_graph_for_temp_crate() {
     assert!(output.contains("FnPointerReify -> helper"));
     assert!(output.contains("DynObjectCast -> dyn-cast"));
     assert!(output.contains("VTableEntry -> <Foo as Worker>::work"));
+    assert!(!output.contains("DynDispatchVTableEntry -> <Foo as Worker>::work"));
     assert!(output.contains("Assert -> assert"));
+}
+
+#[test]
+fn dyn_dispatch_vtable_edges_can_be_attributed_to_call_sites() {
+    let project = TempProject::new(DEMO_SOURCE);
+    let sysroot = rustc_sysroot();
+    let mut callbacks = DumpCallbacks {
+        dyn_dispatch_vtable_edges: DynDispatchVTableEdges::CallSites,
+        ..DumpCallbacks::default()
+    };
+    let args = vec![
+        String::from("rustc"),
+        String::from("--crate-name"),
+        String::from("demo"),
+        String::from("--crate-type"),
+        String::from("lib"),
+        String::from("--edition"),
+        String::from("2024"),
+        String::from("--sysroot"),
+        sysroot,
+        String::from("-Awarnings"),
+        project.source.display().to_string(),
+    ];
+
+    rustc_driver::run_compiler(&args, &mut callbacks);
+
+    let output = callbacks.output.expect("compiler callback did not run");
+    println!("{output}");
+
+    assert!(output.contains("edge entry --DynObjectCast -> dyn-cast"));
+    assert!(!output.contains("edge entry --VTableEntry -> <Foo as Worker>::work"));
+    assert!(output.contains("edge entry --DynDispatchVTableEntry -> <Foo as Worker>::work"));
 }
 
 #[test]
@@ -111,7 +194,7 @@ fn generic_trait_bound_calls_are_indirect_boundaries() {
     let sysroot = rustc_sysroot();
     let mut callbacks = DumpCallbacks {
         root_suffix: String::from("generic"),
-        output: None,
+        ..DumpCallbacks::default()
     };
     let args = vec![
         String::from("rustc"),
@@ -143,7 +226,7 @@ fn generic_dyn_casts_do_not_resolve_vtable_entries() {
     let sysroot = rustc_sysroot();
     let mut callbacks = DumpCallbacks {
         root_suffix: String::from("generic_dyn"),
-        output: None,
+        ..DumpCallbacks::default()
     };
     let args = vec![
         String::from("rustc"),
@@ -170,12 +253,80 @@ fn generic_dyn_casts_do_not_resolve_vtable_entries() {
 }
 
 #[test]
+fn dyn_type_arguments_do_not_imply_dynamic_dispatch() {
+    let project = TempProject::new(DEMO_SOURCE);
+    let sysroot = rustc_sysroot();
+    let mut callbacks = DumpCallbacks {
+        root_suffix: String::from("generic_dyn_argument"),
+        dyn_dispatch_vtable_edges: DynDispatchVTableEdges::CallSites,
+        ..DumpCallbacks::default()
+    };
+    let args = vec![
+        String::from("rustc"),
+        String::from("--crate-name"),
+        String::from("demo"),
+        String::from("--crate-type"),
+        String::from("lib"),
+        String::from("--edition"),
+        String::from("2024"),
+        String::from("--sysroot"),
+        sysroot,
+        String::from("-Awarnings"),
+        project.source.display().to_string(),
+    ];
+
+    rustc_driver::run_compiler(&args, &mut callbacks);
+
+    let output = callbacks.output.expect("compiler callback did not run");
+    println!("{output}");
+
+    assert!(output.contains("root generic_dyn_argument"));
+    assert!(output.contains("edge generic_dyn_argument --DynObjectCast -> dyn-cast"));
+    assert!(!output.contains("DynDispatchVTableEntry ->"));
+}
+
+#[test]
+fn call_site_vtable_edges_are_filtered_to_the_called_trait() {
+    let project = TempProject::new(DEMO_SOURCE);
+    let sysroot = rustc_sysroot();
+    let mut callbacks = DumpCallbacks {
+        root_suffix: String::from("mixed_dyn_traits"),
+        dyn_dispatch_vtable_edges: DynDispatchVTableEdges::CallSites,
+        ..DumpCallbacks::default()
+    };
+    let args = vec![
+        String::from("rustc"),
+        String::from("--crate-name"),
+        String::from("demo"),
+        String::from("--crate-type"),
+        String::from("lib"),
+        String::from("--edition"),
+        String::from("2024"),
+        String::from("--sysroot"),
+        sysroot,
+        String::from("-Awarnings"),
+        project.source.display().to_string(),
+    ];
+
+    rustc_driver::run_compiler(&args, &mut callbacks);
+
+    let output = callbacks.output.expect("compiler callback did not run");
+    println!("{output}");
+
+    assert!(output.contains("root mixed_dyn_traits"));
+    assert!(output.contains("DynDispatchVTableEntry -> <SafeFoo as SafeWorker>::safe_work"));
+    assert!(
+        !output.contains("DynDispatchVTableEntry -> <PanickingFoo as PanickingWorker>::panic_work")
+    );
+}
+
+#[test]
 fn generic_const_bodies_do_not_instantiate_with_parent_args() {
     let project = TempProject::new(DEMO_SOURCE);
     let sysroot = rustc_sysroot();
     let mut callbacks = DumpCallbacks {
         root_suffix: String::from("generic_const"),
-        output: None,
+        ..DumpCallbacks::default()
     };
     let args = vec![
         String::from("rustc"),
@@ -202,6 +353,7 @@ fn generic_const_bodies_do_not_instantiate_with_parent_args() {
 
 struct DumpCallbacks {
     root_suffix: String,
+    dyn_dispatch_vtable_edges: DynDispatchVTableEdges,
     output: Option<String>,
 }
 
@@ -209,6 +361,7 @@ impl Default for DumpCallbacks {
     fn default() -> Self {
         Self {
             root_suffix: String::from("entry"),
+            dyn_dispatch_vtable_edges: DynDispatchVTableEdges::CastSites,
             output: None,
         }
     }
@@ -224,6 +377,7 @@ impl Callbacks for DumpCallbacks {
             &mut hooks,
             ReachabilityOptions {
                 node_limit: Some(96),
+                dyn_dispatch_vtable_edges: self.dyn_dispatch_vtable_edges,
                 ..ReachabilityOptions::default()
             },
         );

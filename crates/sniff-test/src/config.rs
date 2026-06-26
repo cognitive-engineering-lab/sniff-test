@@ -15,6 +15,7 @@ use std::path::{Path, PathBuf};
 use std::str::FromStr;
 
 use globset::{GlobBuilder, GlobSet, GlobSetBuilder};
+use reachability::DynDispatchVTableEdges as ReachabilityDynDispatchVTableEdges;
 use rustc_hir::def_id::DefId;
 use rustc_middle::ty::TyCtxt;
 use serde::{Deserialize, Serialize, de::Error as _};
@@ -38,6 +39,10 @@ overflow-checks = "profile"
 # `off` forces `-Z inline-mir=no` and disables MIR inline passes;
 # `on` forces `-Z inline-mir=yes`.
 inline-mir = "off"
+
+# Dynamic dispatch vtable edges can be attributed to `cast-sites` where the
+# dyn object is created, or `call-sites` where it is used.
+dyn-dispatch-vtable-edges = "cast-sites"
 
 [panics]
 show-full-stack-trace = false
@@ -124,6 +129,8 @@ pub struct AnalysisConfig {
     pub overflow_checks: OverflowChecks,
     /// Whether rustc should perform MIR inlining before analysis.
     pub inline_mir: MirInlining,
+    /// Where concrete vtable methods introduced by dyn casts should appear.
+    pub dyn_dispatch_vtable_edges: DynDispatchVTableEdges,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize, Serialize)]
@@ -241,6 +248,25 @@ impl Display for MirInliningParseError {
 }
 
 impl std::error::Error for MirInliningParseError {}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum DynDispatchVTableEdges {
+    /// Preserve legacy behavior: attribute concrete vtable methods to object casts.
+    #[default]
+    CastSites,
+    /// Attribute concrete vtable methods to dynamic dispatch call sites.
+    CallSites,
+}
+
+impl From<DynDispatchVTableEdges> for ReachabilityDynDispatchVTableEdges {
+    fn from(value: DynDispatchVTableEdges) -> Self {
+        match value {
+            DynDispatchVTableEdges::CastSites => Self::CastSites,
+            DynDispatchVTableEdges::CallSites => Self::CallSites,
+        }
+    }
+}
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "kebab-case", deny_unknown_fields)]
@@ -574,8 +600,8 @@ impl std::error::Error for ConfigError {
 #[cfg(test)]
 mod tests {
     use super::{
-        AnalysisConfig, EXAMPLE_MANIFEST, MirInlining, OverflowChecks, PanicConfig, PathPatterns,
-        ReportRootSet, SniffTestConfig,
+        AnalysisConfig, DynDispatchVTableEdges, EXAMPLE_MANIFEST, MirInlining, OverflowChecks,
+        PanicConfig, PathPatterns, ReportRootSet, SniffTestConfig,
     };
 
     fn path_patterns(patterns: &[&str]) -> PathPatterns {
@@ -607,17 +633,43 @@ mod tests {
             [analysis]
             overflow-checks = "on"
             inline-mir = "profile"
+            dyn-dispatch-vtable-edges = "call-sites"
         "#;
 
         let parsed = SniffTestConfig::from_manifest_str(config).expect("manifest should parse");
 
         assert_eq!(parsed.analysis.overflow_checks, OverflowChecks::On);
         assert_eq!(parsed.analysis.inline_mir, MirInlining::Profile);
+        assert_eq!(
+            parsed.analysis.dyn_dispatch_vtable_edges,
+            DynDispatchVTableEdges::CallSites
+        );
     }
 
     #[test]
     fn default_analysis_disables_mir_inlining_for_trace_stability() {
         assert_eq!(AnalysisConfig::default().inline_mir, MirInlining::Off);
+        assert_eq!(
+            AnalysisConfig::default().dyn_dispatch_vtable_edges,
+            DynDispatchVTableEdges::CastSites
+        );
+    }
+
+    #[test]
+    fn rejects_ambiguous_dyn_dispatch_both_mode() {
+        let config = r#"
+            [analysis]
+            dyn-dispatch-vtable-edges = "both"
+        "#;
+
+        let error =
+            SniffTestConfig::from_manifest_str(config).expect_err("manifest should be rejected");
+
+        assert!(
+            error
+                .to_string()
+                .contains("unknown variant `both`, expected `cast-sites` or `call-sites`")
+        );
     }
 
     #[test]

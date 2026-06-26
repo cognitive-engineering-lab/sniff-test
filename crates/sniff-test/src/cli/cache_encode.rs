@@ -335,6 +335,9 @@ fn cached_reachability_edge_kind(kind: ReachabilityEdgeKind) -> CachedReachabili
         ReachabilityEdgeKind::ClosureDefinition => CachedReachabilityEdgeKind::ClosureDefinition,
         ReachabilityEdgeKind::DynObjectCast => CachedReachabilityEdgeKind::DynObjectCast,
         ReachabilityEdgeKind::VTableEntry => CachedReachabilityEdgeKind::VTableEntry,
+        ReachabilityEdgeKind::DynDispatchVTableEntry => {
+            CachedReachabilityEdgeKind::DynDispatchVTableEntry
+        }
         ReachabilityEdgeKind::ConstBody => CachedReachabilityEdgeKind::ConstBody,
         ReachabilityEdgeKind::Assert => CachedReachabilityEdgeKind::Assert,
         ReachabilityEdgeKind::IndirectCall => CachedReachabilityEdgeKind::IndirectCall,

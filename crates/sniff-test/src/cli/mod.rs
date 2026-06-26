@@ -9,7 +9,7 @@ use crate::cache::{
     CachedArtifactAnalysis, CachedArtifactInfo, CachedDependencyRef, CachedFunctionSummary,
     artifact_id, write_artifact_analysis,
 };
-use crate::config::{PanicBoundaryPolicy, PanicConfig, SniffTestConfig};
+use crate::config::{AnalysisConfig, PanicBoundaryPolicy, PanicConfig, SniffTestConfig};
 use crate::dependency_cache::{DependencyAnalysisCache, DependencyInput};
 use crate::namespace::canonical_namespace;
 use crate::panics::{PanicAnalysis, PanicPathDecision, analyze_panic_evidence};
@@ -230,6 +230,7 @@ pub(crate) fn analyze_crate(tcx: TyCtxt<'_>, args: &SniffTestArgs, compiler_args
     let root_analysis = analyze_report_roots(
         tcx,
         selection,
+        config.analysis,
         &config.panics,
         &dependency_cache,
         diagnostics,
@@ -361,6 +362,7 @@ struct RootAnalysis {
 fn analyze_report_roots<'tcx>(
     tcx: TyCtxt<'tcx>,
     selection: ReportRootSelection<'tcx>,
+    analysis_config: AnalysisConfig,
     config: &PanicConfig,
     dependency_cache: &DependencyAnalysisCache,
     diagnostics: PanicDiagnosticOptions,
@@ -392,6 +394,7 @@ fn analyze_report_roots<'tcx>(
             tcx,
             &mut reachability,
             root,
+            analysis_config,
             config,
             dependency_cache,
             diagnostics,
@@ -501,6 +504,7 @@ fn analyze_root<'tcx>(
     tcx: TyCtxt<'tcx>,
     reachability: &mut ReachabilityIndex<'tcx>,
     root: AnalysisRoot<'tcx>,
+    analysis_config: AnalysisConfig,
     config: &PanicConfig,
     dependency_cache: &DependencyAnalysisCache,
     diagnostics: PanicDiagnosticOptions,
@@ -509,10 +513,7 @@ fn analyze_root<'tcx>(
     let result = reachability.query(
         root.root,
         &mut hooks,
-        ReachabilityOptions {
-            node_limit: Some(REACHABILITY_NODE_LIMIT),
-            ..ReachabilityOptions::default()
-        },
+        reachability_options(analysis_config, true),
     );
     let graph = reachability.graph();
     let analysis = analyze_panic_evidence(tcx, graph, &result, config);
@@ -534,11 +535,7 @@ fn analyze_root<'tcx>(
     let boundary_result = reachability.query(
         root.root,
         &mut boundary_hooks,
-        ReachabilityOptions {
-            node_limit: Some(REACHABILITY_NODE_LIMIT),
-            analyze_external: false,
-            ..ReachabilityOptions::default()
-        },
+        reachability_options(analysis_config, false),
     );
     let graph = reachability.graph();
     let boundary_analysis = analyze_panic_evidence(tcx, graph, &boundary_result, config);
@@ -554,6 +551,18 @@ fn analyze_root<'tcx>(
     );
 
     (findings, summary, report)
+}
+
+fn reachability_options(
+    analysis_config: AnalysisConfig,
+    analyze_external: bool,
+) -> ReachabilityOptions {
+    ReachabilityOptions {
+        node_limit: Some(REACHABILITY_NODE_LIMIT),
+        analyze_external,
+        dyn_dispatch_vtable_edges: analysis_config.dyn_dispatch_vtable_edges.into(),
+        ..ReachabilityOptions::default()
+    }
 }
 
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize)]

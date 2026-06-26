@@ -235,6 +235,7 @@ pub enum CachedReachabilityEdgeKind {
     ClosureDefinition,
     DynObjectCast,
     VTableEntry,
+    DynDispatchVTableEntry,
     ConstBody,
     Assert,
     IndirectCall,

@@ -25,6 +25,11 @@ fixture = "trait_default_method"
 exit_code = 1
 
 [[case]]
+name = "dyn_dispatch_call_site"
+fixture = "dyn_dispatch_call_site"
+exit_code = 1
+
+[[case]]
 name = "documented_obligation"
 fixture = "documented_obligation"
 exit_code = 1

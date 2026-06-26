@@ -472,7 +472,8 @@ pub enum ReachabilityNodeKind<'tcx> {
     IndirectCall { callee_ty: Ty<'tcx> },
     /// Dynamic object unsizing operation.
     ///
-    /// The analyzer also emits [`VTableEntry`](ReachabilityEdgeKind::VTableEntry)
+    /// The analyzer can also emit [`VTableEntry`](ReachabilityEdgeKind::VTableEntry)
+    /// and [`DynDispatchVTableEntry`](ReachabilityEdgeKind::DynDispatchVTableEntry)
     /// edges for methods made available by the object vtable.
     DynObjectCast {
         source_ty: Ty<'tcx>,
@@ -549,6 +550,9 @@ pub enum ReachabilityEdgeKind {
     DynObjectCast,
     /// Method entry reachable through a dynamic object vtable.
     VTableEntry,
+    /// Method entry reachable through a dynamic dispatch call after a dynamic
+    /// object vtable was introduced in the same body.
+    DynDispatchVTableEntry,
     /// Anonymous or inline const body referenced by the current body.
     ConstBody,
     /// Compiler-generated MIR assertion.
@@ -567,6 +571,7 @@ impl fmt::Display for ReachabilityEdgeKind {
             Self::ClosureDefinition => "closure-definition",
             Self::DynObjectCast => "dyn-object-cast",
             Self::VTableEntry => "vtable-entry",
+            Self::DynDispatchVTableEntry => "dyn-dispatch-vtable-entry",
             Self::ConstBody => "const-body",
             Self::Assert => "assert",
             Self::IndirectCall => "indirect-call",

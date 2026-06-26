@@ -99,6 +99,9 @@ pub struct ReachabilityOptions {
     /// Edges to external functions can still be recorded when this is false;
     /// they are just not recursively expanded.
     pub analyze_external: bool,
+    /// Where concrete vtable method edges introduced by dynamic object casts
+    /// should be recorded.
+    pub dyn_dispatch_vtable_edges: DynDispatchVTableEdges,
 }
 
 impl Default for ReachabilityOptions {
@@ -107,8 +110,19 @@ impl Default for ReachabilityOptions {
             transitive: true,
             node_limit: None,
             analyze_external: true,
+            dyn_dispatch_vtable_edges: DynDispatchVTableEdges::CastSites,
         }
     }
+}
+
+/// Source locations used for concrete vtable methods introduced by dynamic
+/// object casts.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DynDispatchVTableEdges {
+    /// Record concrete vtable methods at the object unsizing cast.
+    CastSites,
+    /// Record concrete vtable methods at dynamic dispatch call sites.
+    CallSites,
 }
 
 /// Shared reachability index for one compiler context.
@@ -286,6 +300,10 @@ where
 
         for edge_id in outgoing {
             let edge = self.index.graph.edge(edge_id).clone();
+            if !self.edge_matches_options(&edge) {
+                continue;
+            }
+
             let cx = self.context(item.instance, item.depth);
             self.hooks.on_edge(cx, &edge)?;
             if !self.hooks.should_record_edge(cx, &edge)? {
@@ -310,6 +328,28 @@ where
         }
 
         ControlFlow::Continue(())
+    }
+
+    fn edge_matches_options(&self, edge: &ReachabilityEdge) -> bool {
+        match edge.kind {
+            crate::graph::ReachabilityEdgeKind::VTableEntry => matches!(
+                self.options.dyn_dispatch_vtable_edges,
+                DynDispatchVTableEdges::CastSites
+            ),
+            crate::graph::ReachabilityEdgeKind::DynDispatchVTableEntry => matches!(
+                self.options.dyn_dispatch_vtable_edges,
+                DynDispatchVTableEdges::CallSites
+            ),
+            crate::graph::ReachabilityEdgeKind::DirectCall
+            | crate::graph::ReachabilityEdgeKind::TailCall
+            | crate::graph::ReachabilityEdgeKind::FnPointerReify
+            | crate::graph::ReachabilityEdgeKind::ClosureFnPointerReify
+            | crate::graph::ReachabilityEdgeKind::ClosureDefinition
+            | crate::graph::ReachabilityEdgeKind::DynObjectCast
+            | crate::graph::ReachabilityEdgeKind::ConstBody
+            | crate::graph::ReachabilityEdgeKind::Assert
+            | crate::graph::ReachabilityEdgeKind::IndirectCall => true,
+        }
     }
 
     fn context(&self, current: Instance<'tcx>, depth: usize) -> ReachabilityContext<'tcx> {

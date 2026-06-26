@@ -8,7 +8,11 @@
 use std::collections::HashMap;
 use std::ops::ControlFlow;
 
-use rustc_hir::{ExprKind, def_id::LocalDefId, intravisit};
+use rustc_hir::{
+    ExprKind,
+    def_id::{DefId, LocalDefId},
+    intravisit,
+};
 use rustc_middle::hir::nested_filter;
 use rustc_middle::mir::AssertMessage;
 use rustc_middle::mir::{
@@ -40,8 +44,10 @@ pub(crate) fn collect_body_edges<'tcx>(
         body,
         emit: &mut emit,
         halt: None,
+        dyn_vtable_entries: Vec::new(),
     };
 
+    visitor.collect_dyn_vtable_entries();
     visitor.visit_hir_definitions()?;
     rustc_middle::mir::visit::Visitor::visit_body(&mut visitor, body);
 
@@ -73,6 +79,13 @@ where
     body: &'tcx Body<'tcx>,
     emit: &'a mut F,
     halt: Option<ReachabilityHalt<'tcx>>,
+    dyn_vtable_entries: Vec<DynVTableEntry<'tcx>>,
+}
+
+#[derive(Clone, Copy)]
+struct DynVTableEntry<'tcx> {
+    trait_def_id: DefId,
+    instance: Instance<'tcx>,
 }
 
 impl<'tcx, F> BodyEdgeCollector<'_, 'tcx, F>
@@ -164,16 +177,23 @@ where
         span: Span,
     ) -> ReachabilityControl<'tcx> {
         let callee_ty = self.monomorphize(func.ty(&self.body.local_decls, self.tcx));
+        let dyn_dispatch_trait = self.dyn_dispatch_trait(callee_ty);
 
         if let TyKind::FnDef(def_id, args) = *callee_ty.kind() {
             if let Some(instance) = self.resolve_callable_instance(def_id, args) {
-                self.emit_instance(instance, kind, span)
+                self.emit_instance(instance, kind, span)?;
             } else {
-                self.emit_indirect(callee_ty, ReachabilityEdgeKind::IndirectCall, span)
+                self.emit_indirect(callee_ty, ReachabilityEdgeKind::IndirectCall, span)?;
             }
         } else {
-            self.emit_indirect(callee_ty, ReachabilityEdgeKind::IndirectCall, span)
+            self.emit_indirect(callee_ty, ReachabilityEdgeKind::IndirectCall, span)?;
         }
+
+        if let Some(trait_def_id) = dyn_dispatch_trait {
+            self.emit_dyn_dispatch_vtable_entries(trait_def_id, span)?;
+        }
+
+        ControlFlow::Continue(())
     }
 
     fn emit_callable_ty(
@@ -336,6 +356,114 @@ where
         )
     }
 
+    fn collect_dyn_vtable_entries(&mut self) {
+        let mut dyn_object_casts = Vec::new();
+
+        for block in self.body.basic_blocks.iter() {
+            for statement in &block.statements {
+                if let StatementKind::Assign(assignment) = &statement.kind {
+                    let (_, rvalue) = &**assignment;
+                    if let Some(cast) = self.dyn_object_cast_types(rvalue) {
+                        dyn_object_casts.push(cast);
+                    }
+                }
+            }
+        }
+
+        for (source_ty, target_ty) in dyn_object_casts {
+            self.record_dyn_vtable_entries(source_ty, target_ty);
+        }
+    }
+
+    fn dyn_object_cast_types(&self, rvalue: &Rvalue<'tcx>) -> Option<(Ty<'tcx>, Ty<'tcx>)> {
+        if let Rvalue::Cast(
+            CastKind::PointerCoercion(PointerCoercion::Unsize, _),
+            operand,
+            target_ty,
+        ) = rvalue
+        {
+            let source_ty = self.monomorphize(operand.ty(&self.body.local_decls, self.tcx));
+            let target_ty = self.monomorphize(*target_ty);
+            Some((source_ty, target_ty))
+        } else {
+            None
+        }
+    }
+
+    fn record_dyn_vtable_entries(&mut self, source_ty: Ty<'tcx>, target_ty: Ty<'tcx>) {
+        for (impl_ty, trait_ty) in dyn_trait_tails(source_ty, target_ty) {
+            let TyKind::Dynamic(predicates, _) = trait_ty.kind() else {
+                continue;
+            };
+            let Some(principal) = predicates.principal() else {
+                continue;
+            };
+
+            let trait_def_id = principal.def_id();
+            let trait_ref = self
+                .tcx
+                .instantiate_bound_regions_with_erased(principal.with_self_ty(self.tcx, impl_ty));
+            if trait_ref.has_param() {
+                continue;
+            }
+
+            for entry in self.tcx.vtable_entries(trait_ref) {
+                if let VtblEntry::Method(instance) = entry {
+                    self.record_dyn_vtable_entry(trait_def_id, *instance);
+                }
+            }
+        }
+    }
+
+    fn record_dyn_vtable_entry(&mut self, trait_def_id: DefId, instance: Instance<'tcx>) {
+        if !self
+            .dyn_vtable_entries
+            .iter()
+            .any(|entry| entry.trait_def_id == trait_def_id && entry.instance == instance)
+        {
+            self.dyn_vtable_entries.push(DynVTableEntry {
+                trait_def_id,
+                instance,
+            });
+        }
+    }
+
+    fn emit_dyn_dispatch_vtable_entries(
+        &mut self,
+        trait_def_id: DefId,
+        span: Span,
+    ) -> ReachabilityControl<'tcx> {
+        for index in 0..self.dyn_vtable_entries.len() {
+            let entry = self.dyn_vtable_entries[index];
+            if entry.trait_def_id != trait_def_id {
+                continue;
+            }
+            self.emit_instance(
+                entry.instance,
+                ReachabilityEdgeKind::DynDispatchVTableEntry,
+                span,
+            )?;
+        }
+
+        ControlFlow::Continue(())
+    }
+
+    fn dyn_dispatch_trait(&self, callee_ty: Ty<'tcx>) -> Option<DefId> {
+        if self.dyn_vtable_entries.is_empty() {
+            return None;
+        }
+
+        let TyKind::FnDef(def_id, args) = *callee_ty.kind() else {
+            return None;
+        };
+
+        if self_arg_contains_dyn(args) {
+            self.tcx.trait_of_assoc(def_id)
+        } else {
+            None
+        }
+    }
+
     fn emit_vtable_entries(
         &mut self,
         source_ty: Ty<'tcx>,
@@ -369,6 +497,45 @@ where
 
     fn take_halt(&mut self) -> Option<ReachabilityHalt<'tcx>> {
         self.halt.take()
+    }
+}
+
+fn generic_args_contain_dyn(args: GenericArgsRef<'_>) -> bool {
+    args.iter().any(|arg| {
+        if let ty::GenericArgKind::Type(ty) = arg.kind() {
+            ty_contains_dyn(ty)
+        } else {
+            false
+        }
+    })
+}
+
+fn self_arg_contains_dyn(args: GenericArgsRef<'_>) -> bool {
+    args.iter().next().is_some_and(|arg| {
+        if let ty::GenericArgKind::Type(ty) = arg.kind() {
+            ty_contains_dyn(ty)
+        } else {
+            false
+        }
+    })
+}
+
+fn ty_contains_dyn(ty: Ty<'_>) -> bool {
+    match ty.kind() {
+        TyKind::Dynamic(..) => true,
+        TyKind::Ref(_, inner, _)
+        | TyKind::RawPtr(inner, _)
+        | TyKind::Array(inner, _)
+        | TyKind::Slice(inner) => ty_contains_dyn(*inner),
+        TyKind::Tuple(types) => types.iter().any(ty_contains_dyn),
+        TyKind::Adt(_, args)
+        | TyKind::FnDef(_, args)
+        | TyKind::Closure(_, args)
+        | TyKind::CoroutineClosure(_, args)
+        | TyKind::Coroutine(_, args)
+        | TyKind::CoroutineWitness(_, args)
+        | TyKind::Alias(ty::AliasTy { args, .. }) => generic_args_contain_dyn(args),
+        _ => false,
     }
 }
 
