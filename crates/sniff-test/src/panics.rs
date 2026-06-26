@@ -15,16 +15,16 @@ use reachability::{
     ReachabilityEdge, ReachabilityEdgeId, ReachabilityEdgeKind, ReachabilityGraph,
     ReachabilityNodeKind, ReachabilitySnapshot, ReachedEdge, ReachedNode,
 };
-use rustc_hir::Attribute;
-use rustc_hir::attrs::{AttributeKind, HasAttrs};
 use rustc_hir::def_id::DefId;
 use rustc_middle::ty::TyCtxt;
 
 use crate::config::{PanicBoundaryPolicy, PanicConfig};
-use crate::namespace::canonical_namespace;
-use crate::source_markers::{
-    PanicSatisfaction, normalize_requirement_name, span_panic_satisfactions,
+use crate::contracts::{
+    ContractDocSummary, ContractKind, ContractRequirement, contract_doc_summary,
+    normalize_requirement_name,
 };
+use crate::namespace::canonical_namespace;
+use crate::source_markers::{PanicSatisfaction, span_panic_satisfactions};
 
 #[derive(Debug, Clone)]
 pub struct PanicAnalysis {
@@ -53,6 +53,15 @@ pub struct PanicTrace {
 pub struct PanicRequirement {
     pub name: String,
     pub condition: String,
+}
+
+impl From<ContractRequirement> for PanicRequirement {
+    fn from(requirement: ContractRequirement) -> Self {
+        Self {
+            name: requirement.name,
+            condition: requirement.condition,
+        }
+    }
 }
 
 /// Raw panic evidence found in the graph.
@@ -252,7 +261,7 @@ fn panic_obligation_node_kind<'tcx>(
 
 #[must_use]
 pub fn has_panic_docs(tcx: TyCtxt<'_>, def_id: DefId) -> bool {
-    panic_doc_summary(tcx, def_id).has_panic_docs
+    panic_doc_summary(tcx, def_id).has_docs
 }
 
 #[must_use]
@@ -260,84 +269,37 @@ pub fn panic_requirements(tcx: TyCtxt<'_>, def_id: DefId) -> Vec<PanicRequiremen
     panic_doc_summary(tcx, def_id).requirements
 }
 
-fn doc_comment(attr: &Attribute) -> Option<&str> {
-    match attr {
-        Attribute::Parsed(AttributeKind::DocComment { comment, .. }) => Some(comment.as_str()),
-        Attribute::Parsed(_) | Attribute::Unparsed(_) => None,
-    }
-}
-
 #[derive(Debug, Default)]
 struct PanicDocSummary {
-    has_panic_docs: bool,
+    has_docs: bool,
     requirements: Vec<PanicRequirement>,
 }
 
-fn panic_doc_summary(tcx: TyCtxt<'_>, def_id: DefId) -> PanicDocSummary {
-    parse_panic_doc_lines(
-        HasAttrs::get_attrs(def_id, &tcx)
-            .iter()
-            .filter_map(doc_comment)
-            .flat_map(str::lines),
-    )
-}
-
-fn parse_panic_doc_lines<'a>(lines: impl IntoIterator<Item = &'a str>) -> PanicDocSummary {
-    let mut summary = PanicDocSummary::default();
-    let mut in_panics_section = false;
-
-    for line in lines {
-        if let Some(heading) = markdown_heading_text(line) {
-            in_panics_section = line_has_panic_heading_text(heading);
-            summary.has_panic_docs |= in_panics_section;
-            continue;
-        }
-
-        if in_panics_section && let Some(requirement) = parse_panic_requirement_bullet(line) {
-            summary.requirements.push(requirement);
+impl From<ContractDocSummary> for PanicDocSummary {
+    fn from(summary: ContractDocSummary) -> Self {
+        Self {
+            has_docs: summary.has_docs,
+            requirements: summary
+                .requirements
+                .into_iter()
+                .map(PanicRequirement::from)
+                .collect(),
         }
     }
-
-    summary
 }
 
-fn parse_panic_requirement_bullet(line: &str) -> Option<PanicRequirement> {
-    let line = line.trim_start();
-    let body = line
-        .strip_prefix("- ")
-        .or_else(|| line.strip_prefix("* "))
-        .or_else(|| line.strip_prefix("+ "))?;
-    let (name, condition) = body.split_once(':')?;
-    let name = name.trim();
-    let condition = condition.trim();
-
-    (!normalize_requirement_name(name).is_empty()).then(|| PanicRequirement {
-        name: name.to_owned(),
-        condition: condition.to_owned(),
-    })
+fn panic_doc_summary(tcx: TyCtxt<'_>, def_id: DefId) -> PanicDocSummary {
+    contract_doc_summary(tcx, def_id, ContractKind::Panic).into()
 }
 
 #[cfg(test)]
 fn line_has_panic_heading(line: &str) -> bool {
-    markdown_heading_text(line).is_some_and(line_has_panic_heading_text)
+    crate::contracts::line_has_contract_heading(line, ContractKind::Panic)
 }
 
-fn markdown_heading_text(line: &str) -> Option<&str> {
-    let rest = line.trim_start().strip_prefix('#')?;
-    let rest = rest.trim_start_matches('#');
-    if !rest.starts_with(char::is_whitespace) {
-        return None;
-    }
-
-    let heading = rest.trim();
-    Some(heading.trim_end_matches([':', '-']).trim())
-}
-
-fn line_has_panic_heading_text(heading: &str) -> bool {
-    matches!(
-        heading.to_ascii_lowercase().as_str(),
-        "panic" | "panics" | "panic(s)"
-    )
+#[cfg(test)]
+fn parse_panic_doc_lines<'a>(lines: impl IntoIterator<Item = &'a str>) -> PanicDocSummary {
+    crate::contracts::parse_contract_doc_lines(lines, ContractKind::Panic).into()
 }
 
 fn trace_to_node(mut node: ReachedNode<'_, '_>) -> Vec<ReachabilityEdgeId> {
@@ -508,7 +470,7 @@ mod tests {
             "- ignored: this is outside the panic section",
         ]);
 
-        assert!(summary.has_panic_docs);
+        assert!(summary.has_docs);
         assert_eq!(
             summary.requirements,
             [

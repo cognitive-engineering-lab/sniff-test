@@ -22,6 +22,7 @@ extern crate rustc_span;
 pub mod cache;
 mod cli;
 pub mod config;
+mod contracts;
 pub mod dependency_cache;
 pub mod namespace;
 pub mod panics;

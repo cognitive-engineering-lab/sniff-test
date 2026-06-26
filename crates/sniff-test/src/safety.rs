@@ -7,17 +7,18 @@
 
 use std::collections::HashSet;
 
-use rustc_hir::attrs::{AttributeKind, HasAttrs};
 use rustc_hir::def::DefKind;
 use rustc_hir::def_id::{DefId, LocalDefId};
-use rustc_hir::{Attribute, BlockCheckMode, Expr, ExprKind, UnsafeSource, intravisit};
+use rustc_hir::{BlockCheckMode, Expr, ExprKind, UnsafeSource, intravisit};
 use rustc_middle::ty::{self, TyCtxt, TypeckResults};
 use rustc_span::Span;
 
-use crate::namespace::canonical_namespace;
-use crate::source_markers::{
-    SafetySatisfaction, normalize_requirement_name, span_safety_satisfactions,
+use crate::contracts::{
+    ContractDocSummary, ContractKind, ContractRequirement, contract_doc_summary,
+    normalize_requirement_name,
 };
+use crate::namespace::canonical_namespace;
+use crate::source_markers::{SafetySatisfaction, span_safety_satisfactions};
 
 #[derive(Debug, Default)]
 pub struct SafetyAnalysis {
@@ -55,6 +56,15 @@ pub struct SafetyRequirement {
     pub condition: String,
 }
 
+impl From<ContractRequirement> for SafetyRequirement {
+    fn from(requirement: ContractRequirement) -> Self {
+        Self {
+            name: requirement.name,
+            condition: requirement.condition,
+        }
+    }
+}
+
 impl SafetyAnalysis {
     #[must_use]
     pub fn is_empty(&self) -> bool {
@@ -83,7 +93,7 @@ pub fn analyze_safety(tcx: TyCtxt<'_>) -> SafetyAnalysis {
 
 #[must_use]
 pub fn has_safety_docs(tcx: TyCtxt<'_>, def_id: DefId) -> bool {
-    safety_doc_summary(tcx, def_id).has_safety_docs
+    safety_doc_summary(tcx, def_id).has_docs
 }
 
 #[must_use]
@@ -248,81 +258,45 @@ fn fn_def_is_unsafe(tcx: TyCtxt<'_>, def_id: DefId) -> bool {
             .is_unsafe()
 }
 
-fn doc_comment(attr: &Attribute) -> Option<&str> {
-    match attr {
-        Attribute::Parsed(AttributeKind::DocComment { comment, .. }) => Some(comment.as_str()),
-        Attribute::Parsed(_) | Attribute::Unparsed(_) => None,
-    }
-}
-
 #[derive(Debug, Default)]
 struct SafetyDocSummary {
-    has_safety_docs: bool,
+    has_docs: bool,
     requirements: Vec<SafetyRequirement>,
 }
 
+impl From<ContractDocSummary> for SafetyDocSummary {
+    fn from(summary: ContractDocSummary) -> Self {
+        Self {
+            has_docs: summary.has_docs,
+            requirements: summary
+                .requirements
+                .into_iter()
+                .map(SafetyRequirement::from)
+                .collect(),
+        }
+    }
+}
+
 fn safety_doc_summary(tcx: TyCtxt<'_>, def_id: DefId) -> SafetyDocSummary {
-    parse_safety_doc_lines(
-        HasAttrs::get_attrs(def_id, &tcx)
-            .iter()
-            .filter_map(doc_comment)
-            .flat_map(str::lines),
-    )
-}
-
-fn parse_safety_doc_lines<'a>(lines: impl IntoIterator<Item = &'a str>) -> SafetyDocSummary {
-    let mut summary = SafetyDocSummary::default();
-    let mut in_safety_section = false;
-
-    for line in lines {
-        if let Some(heading) = markdown_heading_text(line) {
-            in_safety_section = line_has_safety_heading_text(heading);
-            summary.has_safety_docs |= in_safety_section;
-            continue;
-        }
-
-        if in_safety_section && let Some(requirement) = parse_safety_requirement_bullet(line) {
-            summary.requirements.push(requirement);
-        }
-    }
-
-    summary
-}
-
-fn parse_safety_requirement_bullet(line: &str) -> Option<SafetyRequirement> {
-    let line = line.trim_start();
-    let body = line
-        .strip_prefix("- ")
-        .or_else(|| line.strip_prefix("* "))
-        .or_else(|| line.strip_prefix("+ "))?;
-    let (name, condition) = body.split_once(':')?;
-    let name = name.trim();
-    let condition = condition.trim();
-
-    (!normalize_requirement_name(name).is_empty()).then(|| SafetyRequirement {
-        name: name.to_owned(),
-        condition: condition.to_owned(),
-    })
-}
-
-fn markdown_heading_text(line: &str) -> Option<&str> {
-    let rest = line.trim_start().strip_prefix('#')?;
-    let rest = rest.trim_start_matches('#');
-    if !rest.starts_with(char::is_whitespace) {
-        return None;
-    }
-
-    let heading = rest.trim();
-    Some(heading.trim_end_matches([':', '-']).trim())
+    contract_doc_summary(tcx, def_id, ContractKind::Safety).into()
 }
 
 #[cfg(test)]
 fn line_has_safety_heading(line: &str) -> bool {
-    markdown_heading_text(line).is_some_and(line_has_safety_heading_text)
+    crate::contracts::line_has_contract_heading(line, ContractKind::Safety)
 }
 
-fn line_has_safety_heading_text(heading: &str) -> bool {
-    heading.eq_ignore_ascii_case("safety")
+#[cfg(test)]
+fn parse_safety_doc_lines<'a>(lines: impl IntoIterator<Item = &'a str>) -> SafetyDocSummary {
+    crate::contracts::parse_contract_doc_lines(lines, ContractKind::Safety).into()
+}
+
+pub(crate) fn render_safety_requirement(requirement: &SafetyRequirement) -> String {
+    if requirement.condition.is_empty() {
+        requirement.name.clone()
+    } else {
+        format!("{}: {}", requirement.name, requirement.condition)
+    }
 }
 
 fn missing_safety_requirements(
@@ -384,7 +358,7 @@ mod tests {
             "- ignored: this is outside the safety section",
         ]);
 
-        assert!(summary.has_safety_docs);
+        assert!(summary.has_docs);
         assert_eq!(
             summary.requirements,
             [
