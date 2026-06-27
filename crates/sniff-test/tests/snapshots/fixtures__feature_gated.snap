@@ -41,14 +41,15 @@ expression: messages
         },
         "findings": [
           {
-            "edge": "feature_gated::feature_root --direct-call-> core::panicking::panic",
+            "edge": "feature_gated::feature_root --macro-expansion-> macro core::std::assert",
             "kind": "panic-invocation",
             "level": "deny",
             "reason": "panic sink core::panicking::panic",
             "span": "src/lib.rs:3:5: 3:18",
             "target": "core::panicking::panic",
             "trace": [
-              "src/lib.rs:3:5: 3:18: feature_gated::feature_root --direct-call-> core::panicking::panic"
+              "src/lib.rs:3:5: 3:18: feature_gated::feature_root --macro-expansion-> macro core::std::assert",
+              "src/lib.rs:3:5: 3:18: macro core::std::assert --direct-call-> core::panicking::panic"
             ]
           }
         ],

@@ -254,6 +254,7 @@ fn panic_obligation_node_kind<'tcx>(
             .then_some(def_id)
         }
         ReachabilityNodeKind::CompilerAssert { .. }
+        | ReachabilityNodeKind::MacroExpansion { .. }
         | ReachabilityNodeKind::IndirectCall { .. }
         | ReachabilityNodeKind::DynObjectCast { .. } => None,
     }
@@ -350,6 +351,7 @@ fn node_kind_is_ignored_namespace<'tcx>(
             let def_id = instance.def_id();
             config.ignores_def(tcx, def_id)
         }
+        ReachabilityNodeKind::MacroExpansion { def_id } => config.ignores_def(tcx, *def_id),
         ReachabilityNodeKind::CompilerAssert { .. }
         | ReachabilityNodeKind::IndirectCall { .. }
         | ReachabilityNodeKind::DynObjectCast { .. } => false,
@@ -388,6 +390,7 @@ fn classify_edge<'tcx>(
             }
         }
         ReachabilityNodeKind::Instance(_)
+        | ReachabilityNodeKind::MacroExpansion { .. }
         | ReachabilityNodeKind::IndirectCall { .. }
         | ReachabilityNodeKind::DynObjectCast { .. } => None,
     }
@@ -408,7 +411,8 @@ fn edge_panic_marker_suppresses<'tcx>(
             let requirements = panic_requirements(tcx, instance.def_id());
             requirements.is_empty() || panic_requirements_satisfied(&requirements, &satisfactions)
         }
-        ReachabilityNodeKind::CompilerAssert { .. }
+        ReachabilityNodeKind::MacroExpansion { .. }
+        | ReachabilityNodeKind::CompilerAssert { .. }
         | ReachabilityNodeKind::IndirectCall { .. }
         | ReachabilityNodeKind::DynObjectCast { .. } => true,
     }

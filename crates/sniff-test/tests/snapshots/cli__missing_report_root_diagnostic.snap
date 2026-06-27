@@ -18,6 +18,8 @@ note: panic may happen here: panic sink `core::std::rt::panic_fmt`
    |
 12 |     panic!("private root");
    |     ^^^^^^^^^^^^^^^^^^^^^^
+   = note: reachable from `report_roots::private_panic` to `core::std::rt::panic_fmt`
+   = note: set `show-full-stack-trace = true` under `[analysis]` in sniff-test.toml to show every reachability step
    = help: add a guard, document the panic with `# Panics`, or add `// PANIC:` if a local invariant proves it cannot panic
 
 warning: configured report root was not found

@@ -41,14 +41,15 @@ expression: messages
         },
         "findings": [
           {
-            "edge": "release_pruning::checked_in_release --direct-call-> core::panicking::panic",
+            "edge": "release_pruning::checked_in_release --macro-expansion-> macro core::std::assert",
             "kind": "panic-invocation",
             "level": "deny",
             "reason": "panic sink core::panicking::panic",
             "span": "src/lib.rs:6:5: 6:18",
             "target": "core::panicking::panic",
             "trace": [
-              "src/lib.rs:6:5: 6:18: release_pruning::checked_in_release --direct-call-> core::panicking::panic"
+              "src/lib.rs:6:5: 6:18: release_pruning::checked_in_release --macro-expansion-> macro core::std::assert",
+              "src/lib.rs:6:5: 6:18: macro core::std::assert --direct-call-> core::panicking::panic"
             ]
           }
         ],

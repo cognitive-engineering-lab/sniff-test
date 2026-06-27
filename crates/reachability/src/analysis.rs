@@ -3,9 +3,14 @@ use std::ops::ControlFlow;
 
 use rustc_hir::def_id::{DefId, LocalDefId};
 use rustc_middle::ty::{GenericArgs, Instance, InstanceKind, TyCtxt};
+use rustc_span::Span;
 
+use crate::body::BodyEdge;
 use crate::body::collect_body_edges;
-use crate::graph::{ReachabilityEdge, ReachabilityGraph, ReachabilityNodeId, ReachabilitySnapshot};
+use crate::graph::{
+    ReachabilityEdge, ReachabilityEdgeKind, ReachabilityGraph, ReachabilityNodeId,
+    ReachabilityNodeKind, ReachabilitySnapshot,
+};
 use crate::hooks::{ReachabilityContext, ReachabilityControl, ReachabilityHalt, ReachabilityHooks};
 
 /// Starting point for reachability analysis.
@@ -174,10 +179,11 @@ impl<'tcx> ReachabilityIndex<'tcx> {
             root,
             hooks,
             options,
-            visited: HashSet::new(),
+            visited_instances: HashSet::new(),
+            visited_bridge_nodes: HashSet::new(),
             queue: VecDeque::from([QueueItem {
                 node_id: root_node_id,
-                instance: root,
+                current_instance: root,
                 depth: 0,
             }]),
             snapshot,
@@ -198,16 +204,36 @@ impl<'tcx> ReachabilityIndex<'tcx> {
             ControlFlow::Continue(())
         })?;
         for body_edge in body_edges {
-            let target = self.graph.node_for_kind(body_edge.target);
-            self.graph.push_edge(ReachabilityEdge::new(
-                source,
-                target,
-                body_edge.kind,
-                body_edge.span,
-            ));
+            self.push_body_edge(source, body_edge);
         }
         self.expanded_instances.insert(instance);
         ControlFlow::Continue(())
+    }
+
+    fn push_body_edge(&mut self, source: ReachabilityNodeId, body_edge: BodyEdge<'tcx>) {
+        let mut current = source;
+        for frame in macro_expansion_frames(body_edge.span) {
+            let macro_node = self
+                .graph
+                .node_for_kind(ReachabilityNodeKind::MacroExpansion {
+                    def_id: frame.def_id,
+                });
+            self.graph.push_edge(ReachabilityEdge::new(
+                current,
+                macro_node,
+                ReachabilityEdgeKind::MacroExpansion,
+                frame.call_site,
+            ));
+            current = macro_node;
+        }
+
+        let target = self.graph.node_for_kind(body_edge.target);
+        self.graph.push_edge(ReachabilityEdge::new(
+            current,
+            target,
+            body_edge.kind,
+            body_edge.span,
+        ));
     }
 
     fn can_descend_into(&self, options: ReachabilityOptions, instance: Instance<'tcx>) -> bool {
@@ -245,7 +271,7 @@ impl<'tcx> ReachabilityIndex<'tcx> {
 #[derive(Debug, Clone, Copy)]
 struct QueueItem<'tcx> {
     node_id: ReachabilityNodeId,
-    instance: Instance<'tcx>,
+    current_instance: Instance<'tcx>,
     depth: usize,
 }
 
@@ -254,7 +280,8 @@ struct ReachabilityQuery<'a, 'tcx, H> {
     root: Instance<'tcx>,
     hooks: &'a mut H,
     options: ReachabilityOptions,
-    visited: HashSet<Instance<'tcx>>,
+    visited_instances: HashSet<Instance<'tcx>>,
+    visited_bridge_nodes: HashSet<ReachabilityNodeId>,
     queue: VecDeque<QueueItem<'tcx>>,
     snapshot: ReachabilitySnapshot<'tcx>,
 }
@@ -273,26 +300,31 @@ where
 
     fn traverse(&mut self) -> ReachabilityControl<'tcx> {
         while let Some(item) = self.queue.pop_front() {
-            if self.visited.contains(&item.instance) {
+            if let Some(instance) = self.index.graph.node_instance(item.node_id) {
+                if self.visited_instances.contains(&instance) {
+                    continue;
+                }
+
+                if let Some(limit) = self.options.node_limit
+                    && self.visited_instances.len() >= limit
+                {
+                    return ControlFlow::Break(ReachabilityHalt::NodeLimitReached { limit });
+                }
+
+                self.visited_instances.insert(instance);
+
+                let cx = self.context(instance, item.depth);
+                self.hooks.on_node(cx)?;
+
+                if !self.index.can_descend_into(self.options, instance) {
+                    continue;
+                }
+
+                self.index.ensure_expanded(instance)?;
+            } else if !self.visited_bridge_nodes.insert(item.node_id) {
                 continue;
             }
 
-            if let Some(limit) = self.options.node_limit
-                && self.visited.len() >= limit
-            {
-                return ControlFlow::Break(ReachabilityHalt::NodeLimitReached { limit });
-            }
-
-            self.visited.insert(item.instance);
-
-            let cx = self.context(item.instance, item.depth);
-            self.hooks.on_node(cx)?;
-
-            if !self.index.can_descend_into(self.options, item.instance) {
-                continue;
-            }
-
-            self.index.ensure_expanded(item.instance)?;
             self.visit_outgoing_edges(item)?;
         }
 
@@ -308,7 +340,7 @@ where
                 continue;
             }
 
-            let cx = self.context(item.instance, item.depth);
+            let cx = self.context(item.current_instance, item.depth);
             self.hooks.on_edge(cx, &edge)?;
             if !self.hooks.should_record_edge(cx, &edge)? {
                 continue;
@@ -317,14 +349,20 @@ where
             let first_reach = self
                 .snapshot
                 .record_edge(edge_id, edge.target, item.depth + 1);
-            if self.options.transitive
-                && let Some(target) = self.index.graph.node_instance(edge.target)
-            {
-                let should_descend = self.hooks.should_descend(cx, &edge, target)?;
-                if should_descend && first_reach && !self.visited.contains(&target) {
+            if self.options.transitive {
+                if let Some(target) = self.index.graph.node_instance(edge.target) {
+                    let should_descend = self.hooks.should_descend(cx, &edge, target)?;
+                    if should_descend && first_reach && !self.visited_instances.contains(&target) {
+                        self.queue.push_back(QueueItem {
+                            node_id: edge.target,
+                            current_instance: target,
+                            depth: item.depth + 1,
+                        });
+                    }
+                } else if first_reach {
                     self.queue.push_back(QueueItem {
                         node_id: edge.target,
-                        instance: target,
+                        current_instance: item.current_instance,
                         depth: item.depth + 1,
                     });
                 }
@@ -351,6 +389,7 @@ where
             | crate::graph::ReachabilityEdgeKind::ClosureDefinition
             | crate::graph::ReachabilityEdgeKind::DynObjectCast
             | crate::graph::ReachabilityEdgeKind::ConstBody
+            | crate::graph::ReachabilityEdgeKind::MacroExpansion
             | crate::graph::ReachabilityEdgeKind::Assert
             | crate::graph::ReachabilityEdgeKind::IndirectCall => true,
         }
@@ -365,4 +404,27 @@ where
             stats: self.snapshot.stats(),
         }
     }
+}
+
+#[derive(Clone, Copy)]
+struct MacroExpansionFrame {
+    def_id: DefId,
+    call_site: Span,
+}
+
+fn macro_expansion_frames(span: Span) -> Vec<MacroExpansionFrame> {
+    let mut frames = span
+        .macro_backtrace()
+        .filter_map(|expansion| {
+            expansion.macro_def_id.map(|def_id| MacroExpansionFrame {
+                def_id,
+                call_site: expansion.call_site,
+            })
+        })
+        .collect::<Vec<_>>();
+    frames.reverse();
+    frames.dedup_by(|left, right| {
+        left.def_id == right.def_id && left.call_site.source_equal(right.call_site)
+    });
+    frames
 }

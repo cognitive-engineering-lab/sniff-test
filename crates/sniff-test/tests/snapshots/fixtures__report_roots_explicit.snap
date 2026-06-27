@@ -43,14 +43,16 @@ expression: messages
         },
         "findings": [
           {
-            "edge": "report_roots::private_panic --direct-call-> core::std::rt::panic_fmt",
+            "edge": "report_roots::private_panic --macro-expansion-> macro std::panic",
             "kind": "panic-invocation",
             "level": "deny",
             "reason": "panic sink core::std::rt::panic_fmt",
-            "span": "[SYSROOT]/lib/rustlib/src/rust/library/core/src/panic.rs:62:9: 62:73",
+            "span": "src/lib.rs:12:5: 12:27",
             "target": "core::std::rt::panic_fmt",
             "trace": [
-              "[SYSROOT]/lib/rustlib/src/rust/library/core/src/panic.rs:62:9: 62:73: report_roots::private_panic --direct-call-> core::std::rt::panic_fmt"
+              "src/lib.rs:12:5: 12:27: report_roots::private_panic --macro-expansion-> macro std::panic",
+              "src/lib.rs:12:5: 12:27: macro std::panic --macro-expansion-> macro core::std::panic::panic_2021",
+              "[SYSROOT]/lib/rustlib/src/rust/library/core/src/panic.rs:62:9: 62:73: macro core::std::panic::panic_2021 --direct-call-> core::std::rt::panic_fmt"
             ]
           }
         ],

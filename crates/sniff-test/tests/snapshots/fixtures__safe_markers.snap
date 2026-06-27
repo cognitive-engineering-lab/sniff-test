@@ -41,7 +41,7 @@ expression: messages
         },
         "findings": [
           {
-            "edge": "safe_markers::helper --direct-call-> core::panicking::panic",
+            "edge": "safe_markers::helper --macro-expansion-> macro core::std::assert",
             "kind": "panic-invocation",
             "level": "deny",
             "reason": "panic sink core::panicking::panic",
@@ -49,7 +49,8 @@ expression: messages
             "target": "core::panicking::panic",
             "trace": [
               "src/lib.rs:17:5: 17:17: safe_markers::unsafe_call --direct-call-> safe_markers::helper",
-              "src/lib.rs:21:5: 21:18: safe_markers::helper --direct-call-> core::panicking::panic"
+              "src/lib.rs:21:5: 21:18: safe_markers::helper --macro-expansion-> macro core::std::assert",
+              "src/lib.rs:21:5: 21:18: macro core::std::assert --direct-call-> core::panicking::panic"
             ]
           }
         ],

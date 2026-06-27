@@ -41,15 +41,17 @@ expression: messages
         },
         "findings": [
           {
-            "edge": "<custom_index_impl::Foo as std::ops::Index<usize>>::index --direct-call-> core::std::rt::panic_fmt",
+            "edge": "<custom_index_impl::Foo as std::ops::Index<usize>>::index --macro-expansion-> macro std::panic",
             "kind": "panic-invocation",
             "level": "deny",
             "reason": "panic sink core::std::rt::panic_fmt",
-            "span": "[SYSROOT]/lib/rustlib/src/rust/library/core/src/panic.rs:62:9: 62:73",
+            "span": "src/lib.rs:14:9: 14:36",
             "target": "core::std::rt::panic_fmt",
             "trace": [
               "src/lib.rs:5:16: 5:20: custom_index_impl::custom_index_panics --direct-call-> <custom_index_impl::Foo as std::ops::Index<usize>>::index",
-              "[SYSROOT]/lib/rustlib/src/rust/library/core/src/panic.rs:62:9: 62:73: <custom_index_impl::Foo as std::ops::Index<usize>>::index --direct-call-> core::std::rt::panic_fmt"
+              "src/lib.rs:14:9: 14:36: <custom_index_impl::Foo as std::ops::Index<usize>>::index --macro-expansion-> macro std::panic",
+              "src/lib.rs:14:9: 14:36: macro std::panic --macro-expansion-> macro core::std::panic::panic_2021",
+              "[SYSROOT]/lib/rustlib/src/rust/library/core/src/panic.rs:62:9: 62:73: macro core::std::panic::panic_2021 --direct-call-> core::std::rt::panic_fmt"
             ]
           }
         ],

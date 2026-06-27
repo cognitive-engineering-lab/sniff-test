@@ -65,7 +65,7 @@ expression: messages
         },
         "findings": [
           {
-            "edge": "trusted_boundaries::trusted_helper --direct-call-> core::panicking::panic",
+            "edge": "trusted_boundaries::trusted_helper --macro-expansion-> macro core::std::assert",
             "kind": "panic-invocation",
             "level": "deny",
             "reason": "panic sink core::panicking::panic",
@@ -73,7 +73,8 @@ expression: messages
             "target": "core::panicking::panic",
             "trace": [
               "[FIXTURE]/src/lib.rs:2:5: 2:25: trusted_boundaries::trusted_without_docs --direct-call-> trusted_boundaries::trusted_helper",
-              "[FIXTURE]/src/lib.rs:10:5: 10:18: trusted_boundaries::trusted_helper --direct-call-> core::panicking::panic"
+              "[FIXTURE]/src/lib.rs:10:5: 10:18: trusted_boundaries::trusted_helper --macro-expansion-> macro core::std::assert",
+              "[FIXTURE]/src/lib.rs:10:5: 10:18: macro core::std::assert --direct-call-> core::panicking::panic"
             ]
           }
         ],

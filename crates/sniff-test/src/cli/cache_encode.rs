@@ -309,6 +309,13 @@ fn cached_reachability_node_kind<'tcx>(
                 message: render_assert_message(message, locals),
             }
         }
+        ReachabilityNodeKind::MacroExpansion { def_id } => {
+            CachedReachabilityNodeKind::MacroExpansion {
+                path: canonical_namespace(tcx, *def_id),
+                crate_name: tcx.crate_name(def_id.krate).to_string(),
+                is_local: def_id.is_local(),
+            }
+        }
         ReachabilityNodeKind::IndirectCall { callee_ty } => {
             CachedReachabilityNodeKind::IndirectCall {
                 callee_ty: format!("{callee_ty:?}"),
@@ -338,6 +345,7 @@ fn cached_reachability_edge_kind(kind: ReachabilityEdgeKind) -> CachedReachabili
         ReachabilityEdgeKind::DynDispatchVTableEntry => {
             CachedReachabilityEdgeKind::DynDispatchVTableEntry
         }
+        ReachabilityEdgeKind::MacroExpansion => CachedReachabilityEdgeKind::MacroExpansion,
         ReachabilityEdgeKind::ConstBody => CachedReachabilityEdgeKind::ConstBody,
         ReachabilityEdgeKind::Assert => CachedReachabilityEdgeKind::Assert,
         ReachabilityEdgeKind::IndirectCall => CachedReachabilityEdgeKind::IndirectCall,

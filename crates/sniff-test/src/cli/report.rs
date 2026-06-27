@@ -329,6 +329,9 @@ pub(crate) fn render_node<'tcx>(tcx: TyCtxt<'tcx>, node: &ReachabilityNodeKind<'
         ReachabilityNodeKind::CompilerAssert { message, locals } => {
             format!("compiler assert {}", render_assert_message(message, locals))
         }
+        ReachabilityNodeKind::MacroExpansion { def_id } => {
+            format!("macro {}", canonical_namespace(tcx, *def_id))
+        }
         ReachabilityNodeKind::IndirectCall { callee_ty } => format!("indirect call {callee_ty:?}"),
         ReachabilityNodeKind::DynObjectCast {
             source_ty,

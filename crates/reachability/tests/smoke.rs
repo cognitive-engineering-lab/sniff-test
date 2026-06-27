@@ -474,6 +474,9 @@ fn render_node<'tcx>(tcx: TyCtxt<'tcx>, node: &ReachabilityNodeKind<'tcx>) -> St
     match node {
         ReachabilityNodeKind::Instance(instance) => render_instance(tcx, *instance),
         ReachabilityNodeKind::CompilerAssert { message, .. } => format!("assert {message:?}"),
+        ReachabilityNodeKind::MacroExpansion { def_id } => {
+            format!("macro {}", tcx.def_path_str(*def_id))
+        }
         ReachabilityNodeKind::IndirectCall { callee_ty } => format!("indirect {callee_ty:?}"),
         ReachabilityNodeKind::DynObjectCast {
             source_ty,

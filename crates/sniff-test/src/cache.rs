@@ -13,9 +13,9 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
-pub const CACHE_FORMAT_VERSION: u32 = 1;
+pub const CACHE_FORMAT_VERSION: u32 = 2;
 pub const CACHE_DIR_NAME: &str = "sniff-test-cache";
-pub const CACHE_VERSION_DIR: &str = "v1";
+pub const CACHE_VERSION_DIR: &str = "v2";
 
 /// Cached analysis for one exact rustc output artifact.
 ///
@@ -205,6 +205,11 @@ pub enum CachedReachabilityNodeKind {
     CompilerAssert {
         message: String,
     },
+    MacroExpansion {
+        path: String,
+        crate_name: String,
+        is_local: bool,
+    },
     IndirectCall {
         callee_ty: String,
     },
@@ -236,6 +241,7 @@ pub enum CachedReachabilityEdgeKind {
     DynObjectCast,
     VTableEntry,
     DynDispatchVTableEntry,
+    MacroExpansion,
     ConstBody,
     Assert,
     IndirectCall,
@@ -441,13 +447,13 @@ mod tests {
             artifact_cache_path(&root, "sniff_test-29f0")
                 .display()
                 .to_string(),
-            "/target/plugin-nightly/sniff-test-cache/v1/artifacts/sniff_test-29f0.json"
+            "/target/plugin-nightly/sniff-test-cache/v2/artifacts/sniff_test-29f0.json"
         );
         assert_eq!(
             crate_cache_path(&root, "sniff-test", "sniff_test-29f0")
                 .display()
                 .to_string(),
-            "/target/plugin-nightly/sniff-test-cache/v1/crates/sniff-test/sniff_test-29f0.json"
+            "/target/plugin-nightly/sniff-test-cache/v2/crates/sniff-test/sniff_test-29f0.json"
         );
     }
 }

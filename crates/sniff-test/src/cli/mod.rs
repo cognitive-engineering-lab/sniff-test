@@ -768,6 +768,7 @@ fn root_declaration_span(tcx: TyCtxt<'_>, root: &ReachabilityNodeKind<'_>) -> Op
             Some(render_span_start(tcx, tcx.def_span(instance.def_id())))
         }
         ReachabilityNodeKind::CompilerAssert { .. }
+        | ReachabilityNodeKind::MacroExpansion { .. }
         | ReachabilityNodeKind::IndirectCall { .. }
         | ReachabilityNodeKind::DynObjectCast { .. } => None,
     }

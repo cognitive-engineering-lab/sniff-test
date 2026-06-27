@@ -6,7 +6,7 @@ expression: messages
   {
     "artifact": {
       "artifact-id": "[ARTIFACT_ID]",
-      "crate-name": "report_roots",
+      "crate-name": "macro_expansion",
       "crate-types": [
         "lib"
       ],
@@ -41,22 +41,21 @@ expression: messages
         },
         "findings": [
           {
-            "edge": "report_roots::private_panic --macro-expansion-> macro std::panic",
+            "edge": "macro_expansion::direct_assert --macro-expansion-> macro core::std::assert",
             "kind": "panic-invocation",
             "level": "deny",
-            "reason": "panic sink core::std::rt::panic_fmt",
-            "span": "[FIXTURE]/src/lib.rs:12:5: 12:27",
-            "target": "core::std::rt::panic_fmt",
+            "reason": "panic sink core::panicking::panic",
+            "span": "[FIXTURE]/src/lib.rs:27:5: 27:18",
+            "target": "core::panicking::panic",
             "trace": [
-              "[FIXTURE]/src/lib.rs:12:5: 12:27: report_roots::private_panic --macro-expansion-> macro std::panic",
-              "[FIXTURE]/src/lib.rs:12:5: 12:27: macro std::panic --macro-expansion-> macro core::std::panic::panic_2021",
-              "[SYSROOT]/lib/rustlib/src/rust/library/core/src/panic.rs:62:9: 62:73: macro core::std::panic::panic_2021 --direct-call-> core::std::rt::panic_fmt"
+              "[FIXTURE]/src/lib.rs:27:5: 27:18: macro_expansion::direct_assert --macro-expansion-> macro core::std::assert",
+              "[FIXTURE]/src/lib.rs:27:5: 27:18: macro core::std::assert --direct-call-> core::panicking::panic"
             ]
           }
         ],
         "has-panic-docs": false,
-        "root": "report_roots::private_panic",
-        "root-declaration": "[FIXTURE]/src/lib.rs:11:1",
+        "root": "macro_expansion::direct_assert",
+        "root-declaration": "[FIXTURE]/src/lib.rs:26:1",
         "root-kind": "concrete"
       },
       {
@@ -67,22 +66,22 @@ expression: messages
         },
         "findings": [
           {
-            "edge": "report_roots::public_panic --macro-expansion-> macro std::panic",
+            "edge": "macro_expansion::direct_macro --macro-expansion-> macro macro_expansion::const_assert",
             "kind": "panic-invocation",
             "level": "deny",
-            "reason": "panic sink core::std::rt::panic_fmt",
-            "span": "[FIXTURE]/src/lib.rs:4:5: 4:26",
-            "target": "core::std::rt::panic_fmt",
+            "reason": "panic sink core::panicking::panic",
+            "span": "[FIXTURE]/src/lib.rs:23:5: 23:24",
+            "target": "core::panicking::panic",
             "trace": [
-              "[FIXTURE]/src/lib.rs:4:5: 4:26: report_roots::public_panic --macro-expansion-> macro std::panic",
-              "[FIXTURE]/src/lib.rs:4:5: 4:26: macro std::panic --macro-expansion-> macro core::std::panic::panic_2021",
-              "[SYSROOT]/lib/rustlib/src/rust/library/core/src/panic.rs:62:9: 62:73: macro core::std::panic::panic_2021 --direct-call-> core::std::rt::panic_fmt"
+              "[FIXTURE]/src/lib.rs:23:5: 23:24: macro_expansion::direct_macro --macro-expansion-> macro macro_expansion::const_assert",
+              "[FIXTURE]/src/lib.rs:3:9: 3:28: macro macro_expansion::const_assert --macro-expansion-> macro core::std::assert",
+              "[FIXTURE]/src/lib.rs:3:9: 3:28: macro core::std::assert --direct-call-> core::panicking::panic"
             ]
           }
         ],
         "has-panic-docs": false,
-        "root": "report_roots::public_panic",
-        "root-declaration": "[FIXTURE]/src/lib.rs:3:1",
+        "root": "macro_expansion::direct_macro",
+        "root-declaration": "[FIXTURE]/src/lib.rs:22:1",
         "root-kind": "concrete"
       }
     ],

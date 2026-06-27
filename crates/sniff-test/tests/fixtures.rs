@@ -192,6 +192,15 @@ fixture_cases! {
         marker_placement => Case::cargo("marker placement").exit_code(1);
         driver_marker_placement => Case::direct("marker placement");
     }
+    "macro_expansion" => {
+        macro_expansion => Case::cargo("macro expansion trace").exit_code(1);
+        macro_expansion_static_assert_ignored => Case::cargo("ignored macro expansion")
+            .args(&["--manifest", "ignore-static.toml"])
+            .exit_code(1);
+        driver_macro_expansion => Case::direct("macro expansion trace");
+        driver_macro_expansion_static_assert_ignored => Case::direct("ignored macro expansion")
+            .manifest("ignore-static.toml");
+    }
     "trusted_boundaries" => {
         trusted_boundaries => Case::cargo("trusted boundary");
         trusted_boundaries_untrusted => Case::cargo("untrusted boundary")

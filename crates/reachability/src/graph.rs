@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 use std::fmt;
 
+use rustc_hir::def_id::DefId;
 use rustc_middle::mir::AssertMessage;
 use rustc_middle::ty::{Instance, Ty};
 use rustc_span::Span;
@@ -96,7 +97,8 @@ impl<'tcx> ReachabilityGraph<'tcx> {
             ReachabilityNodeKind::Instance(instance) => Some(instance),
             ReachabilityNodeKind::CompilerAssert { .. }
             | ReachabilityNodeKind::IndirectCall { .. }
-            | ReachabilityNodeKind::DynObjectCast { .. } => None,
+            | ReachabilityNodeKind::DynObjectCast { .. }
+            | ReachabilityNodeKind::MacroExpansion { .. } => None,
         }
     }
 
@@ -248,7 +250,8 @@ impl<'view, 'tcx> ReachedNode<'view, 'tcx> {
             ReachabilityNodeKind::Instance(instance) => Some(*instance),
             ReachabilityNodeKind::CompilerAssert { .. }
             | ReachabilityNodeKind::IndirectCall { .. }
-            | ReachabilityNodeKind::DynObjectCast { .. } => None,
+            | ReachabilityNodeKind::DynObjectCast { .. }
+            | ReachabilityNodeKind::MacroExpansion { .. } => None,
         }
     }
 
@@ -465,6 +468,12 @@ pub enum ReachabilityNodeKind<'tcx> {
         message: Box<AssertMessage<'tcx>>,
         locals: Vec<CompilerAssertLocal>,
     },
+    /// Macro expansion frame that produced the source span for another edge.
+    ///
+    /// These nodes are intentionally not deduplicated by macro `DefId`.
+    /// Expansion frames are path-specific bridge nodes; sharing them globally
+    /// would merge unrelated outgoing edges from different macro call sites.
+    MacroExpansion { def_id: DefId },
     /// Call-like operation whose concrete callee could not be resolved.
     ///
     /// This is used for function pointers and other callable values that do not
@@ -553,6 +562,8 @@ pub enum ReachabilityEdgeKind {
     /// Method entry reachable through a dynamic dispatch call after a dynamic
     /// object vtable was introduced in the same body.
     DynDispatchVTableEntry,
+    /// Macro expansion frame responsible for the next graph edge.
+    MacroExpansion,
     /// Anonymous or inline const body referenced by the current body.
     ConstBody,
     /// Compiler-generated MIR assertion.
@@ -572,6 +583,7 @@ impl fmt::Display for ReachabilityEdgeKind {
             Self::DynObjectCast => "dyn-object-cast",
             Self::VTableEntry => "vtable-entry",
             Self::DynDispatchVTableEntry => "dyn-dispatch-vtable-entry",
+            Self::MacroExpansion => "macro-expansion",
             Self::ConstBody => "const-body",
             Self::Assert => "assert",
             Self::IndirectCall => "indirect-call",

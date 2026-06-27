@@ -23,7 +23,12 @@ note: reachable step 0: safe_markers::unsafe_call --direct-call-> safe_markers::
    |
 17 |     helper(flag);
    |     ^^^^^^^^^^^^
-note: reachable step 1: safe_markers::helper --direct-call-> core::panicking::panic
+note: reachable step 1: safe_markers::helper --macro-expansion-> macro core::std::assert
+  --> src/lib.rs:21:5
+   |
+21 |     assert!(flag);
+   |     ^^^^^^^^^^^^^
+note: reachable step 2: macro core::std::assert --direct-call-> core::panicking::panic
   --> src/lib.rs:21:5
    |
 21 |     assert!(flag);

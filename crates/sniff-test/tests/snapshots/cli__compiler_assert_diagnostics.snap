@@ -57,6 +57,8 @@ note: panic may happen here: panic sink `core::std::rt::panic_fmt`
    |
 14 |     todo!("not implemented")
    |     ^^^^^^^^^^^^^^^^^^^^^^^^
+   = note: reachable from `panic_axioms::todo_macro` to `core::std::rt::panic_fmt`
+   = note: set `show-full-stack-trace = true` under `[analysis]` in sniff-test.toml to show every reachability step
    = help: add a guard, document the panic with `# Panics`, or add `// PANIC:` if a local invariant proves it cannot panic
 
 error: could not compile `panic-axioms` (lib) due to 4 previous errors

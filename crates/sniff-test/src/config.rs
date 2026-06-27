@@ -50,7 +50,7 @@ inline-mir = "off"
 dyn-dispatch-vtable-edges = "cast-sites"
 
 [panics]
-# Crates or fully-qualified functions whose internals should be treated as
+# Crates, fully-qualified functions, or macro expansion paths whose internals should be treated as
 # opaque analysis boundaries. Patterns use Rust crate/path names: write
 # `proc_macro2`, not the package name `proc-macro2`.
 #
