@@ -4,6 +4,10 @@ pub fn documented_contract(flag: bool) {
     assert!(flag);
 }
 
+pub fn reaches_documented_contract(flag: bool) {
+    documented_contract(flag);
+}
+
 pub fn undocumented_bug() {
     panic!("not documented");
 }

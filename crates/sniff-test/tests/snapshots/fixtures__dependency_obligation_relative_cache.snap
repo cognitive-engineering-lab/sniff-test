@@ -88,11 +88,11 @@ expression: messages
       "package-version": "0.1.0",
       "target": null
     },
-    "concrete-roots": 1,
+    "concrete-roots": 0,
     "counts": {
       "analysis-incomplete": 0,
       "indirect-call-boundaries": 0,
-      "panic-obligations": 1,
+      "panic-obligations": 0,
       "raw-panic-paths": 0,
       "trusted-panic-obligations": 0
     },
@@ -106,32 +106,7 @@ expression: messages
     "generic-roots": 0,
     "missing-roots": [],
     "reason": "sniff-test-artifact",
-    "roots": [
-      {
-        "counts": {
-          "analysis-incomplete": 0,
-          "indirect-call-boundaries": 0,
-          "panic-obligations": 1,
-          "raw-panic-paths": 0,
-          "trusted-panic-obligations": 0
-        },
-        "findings": [
-          {
-            "edge": "report root documents panic behavior",
-            "kind": "panic-obligation",
-            "level": "warn",
-            "reason": "dependency_obligation::documented has a documented # Panics contract",
-            "span": "[FIXTURE]/dep/src/lib.rs:3:1: 3:30",
-            "target": "dependency_obligation::documented",
-            "trace": []
-          }
-        ],
-        "has-panic-docs": true,
-        "root": "dependency_obligation::documented",
-        "root-declaration": "[FIXTURE]/dep/src/lib.rs:3:1",
-        "root-kind": "concrete"
-      }
-    ],
+    "roots": [],
     "rustc-version": "[RUSTC_VERSION]",
     "scope": "dependency",
     "tool-version": "0.1.0"

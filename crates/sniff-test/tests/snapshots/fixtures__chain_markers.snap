@@ -17,11 +17,11 @@ expression: messages
       "package-version": "0.1.0",
       "target": null
     },
-    "concrete-roots": 2,
+    "concrete-roots": 1,
     "counts": {
       "analysis-incomplete": 0,
       "indirect-call-boundaries": 0,
-      "panic-obligations": 2,
+      "panic-obligations": 1,
       "raw-panic-paths": 0,
       "trusted-panic-obligations": 0
     },
@@ -36,30 +36,6 @@ expression: messages
     "missing-roots": [],
     "reason": "sniff-test-artifact",
     "roots": [
-      {
-        "counts": {
-          "analysis-incomplete": 0,
-          "indirect-call-boundaries": 0,
-          "panic-obligations": 1,
-          "raw-panic-paths": 0,
-          "trusted-panic-obligations": 0
-        },
-        "findings": [
-          {
-            "edge": "report root documents panic behavior",
-            "kind": "panic-obligation",
-            "level": "warn",
-            "reason": "chain_markers::Widget::risky has a documented # Panics contract",
-            "span": "src/lib.rs:7:5: 7:32",
-            "target": "chain_markers::Widget::risky",
-            "trace": []
-          }
-        ],
-        "has-panic-docs": true,
-        "root": "chain_markers::Widget::risky",
-        "root-declaration": "src/lib.rs:7:5",
-        "root-kind": "concrete"
-      },
       {
         "counts": {
           "analysis-incomplete": 0,

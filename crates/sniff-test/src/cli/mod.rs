@@ -981,12 +981,22 @@ fn collect_panic_findings<'tcx>(
                     );
                 }
             }
-            PanicPathDecision::PanicObligation { edge_id, def_id } => {
+            PanicPathDecision::PanicObligation { edge_id: None, .. } => {
+                // The root's own `# Panics` docs explain its internal panic
+                // evidence; callers are checked at the edge where they invoke it.
+            }
+            PanicPathDecision::PanicObligation {
+                edge_id: Some(edge_id),
+                def_id,
+            } => {
                 emit_panic_obligation_finding(
                     tcx,
                     graph,
                     evidence,
-                    PanicObligationFinding { edge_id, def_id },
+                    PanicObligationFinding {
+                        edge_id: Some(edge_id),
+                        def_id,
+                    },
                     &collection,
                     &mut counts,
                     &mut report,
