@@ -50,9 +50,9 @@ overflow-checks = "profile"
 # `on` forces `-Z inline-mir=yes`.
 inline-mir = "off"
 
-# Dynamic dispatch vtable edges can be attributed to `cast-sites` where the
-# dyn object is created, or `call-sites` where it is used.
-dyn-dispatch-vtable-edges = "cast-sites"
+# Concrete callable edges can be attributed to `erasure-sites` where a callable
+# becomes indirect, or `call-sites` where it is used.
+callable-edge-attribution = "erasure-sites"
 
 # Instance budget per reachability query. Traversals that halt at the limit
 # are reported through the `analysis-incomplete` lint instead of passing
@@ -190,8 +190,10 @@ pub struct AnalysisConfig {
     pub overflow_checks: OverflowChecks,
     /// Whether rustc should perform MIR inlining before analysis.
     pub inline_mir: MirInlining,
-    /// Where concrete vtable methods introduced by dyn casts should appear.
-    pub dyn_dispatch_vtable_edges: DynDispatchVTableEdges,
+    /// Where concrete callable targets should appear once erased behind dyn
+    /// dispatch or function pointers.
+    #[serde(alias = "dyn-dispatch-vtable-edges")]
+    pub callable_edge_attribution: CallableEdgeAttribution,
     /// Instance budget per reachability query; halting at the limit is
     /// surfaced through the `analysis-incomplete` lint.
     pub node_limit: usize,
@@ -204,7 +206,7 @@ impl Default for AnalysisConfig {
             report_roots: ReportRootSet::Public,
             overflow_checks: OverflowChecks::Profile,
             inline_mir: MirInlining::Off,
-            dyn_dispatch_vtable_edges: DynDispatchVTableEdges::CastSites,
+            callable_edge_attribution: CallableEdgeAttribution::ErasureSites,
             node_limit: 4096,
         }
     }
@@ -296,19 +298,22 @@ impl MirInlining {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize, Serialize)]
 #[serde(rename_all = "kebab-case")]
-pub enum DynDispatchVTableEdges {
-    /// Preserve legacy behavior: attribute concrete vtable methods to object casts.
+pub enum CallableEdgeAttribution {
+    /// Preserve legacy behavior: attribute concrete targets where callables
+    /// are erased into dyn objects or function pointers.
+    #[serde(rename = "erasure-sites", alias = "cast-sites")]
     #[default]
-    CastSites,
-    /// Attribute concrete vtable methods to dynamic dispatch call sites.
+    ErasureSites,
+    /// Attribute concrete dyn-dispatch methods to dynamic call sites; function
+    /// pointer calls remain opaque boundaries unless value-flow resolves them.
     CallSites,
 }
 
-impl From<DynDispatchVTableEdges> for ReachabilityDynDispatchVTableEdges {
-    fn from(value: DynDispatchVTableEdges) -> Self {
+impl From<CallableEdgeAttribution> for ReachabilityDynDispatchVTableEdges {
+    fn from(value: CallableEdgeAttribution) -> Self {
         match value {
-            DynDispatchVTableEdges::CastSites => Self::CastSites,
-            DynDispatchVTableEdges::CallSites => Self::CallSites,
+            CallableEdgeAttribution::ErasureSites => Self::CastSites,
+            CallableEdgeAttribution::CallSites => Self::CallSites,
         }
     }
 }
@@ -816,7 +821,7 @@ impl std::error::Error for ConfigError {
 #[cfg(test)]
 mod tests {
     use super::{
-        AnalysisConfig, DynDispatchVTableEdges, EXAMPLE_MANIFEST, LintLevel, MirInlining,
+        AnalysisConfig, CallableEdgeAttribution, EXAMPLE_MANIFEST, LintLevel, MirInlining,
         OverflowChecks, PanicConfig, PathPatterns, ReportRootSet, SafetyConfig, SniffTestConfig,
     };
 
@@ -851,7 +856,7 @@ mod tests {
             report-roots = "all"
             overflow-checks = "on"
             inline-mir = "profile"
-            dyn-dispatch-vtable-edges = "call-sites"
+            callable-edge-attribution = "call-sites"
         "#;
 
         let parsed = SniffTestConfig::from_manifest_str(config).expect("manifest should parse");
@@ -861,8 +866,23 @@ mod tests {
         assert_eq!(parsed.analysis.overflow_checks, OverflowChecks::On);
         assert_eq!(parsed.analysis.inline_mir, MirInlining::Profile);
         assert_eq!(
-            parsed.analysis.dyn_dispatch_vtable_edges,
-            DynDispatchVTableEdges::CallSites
+            parsed.analysis.callable_edge_attribution,
+            CallableEdgeAttribution::CallSites
+        );
+    }
+
+    #[test]
+    fn parses_legacy_dyn_dispatch_vtable_edges_alias() {
+        let config = r#"
+            [analysis]
+            dyn-dispatch-vtable-edges = "cast-sites"
+        "#;
+
+        let parsed = SniffTestConfig::from_manifest_str(config).expect("manifest should parse");
+
+        assert_eq!(
+            parsed.analysis.callable_edge_attribution,
+            CallableEdgeAttribution::ErasureSites
         );
     }
 
@@ -870,8 +890,8 @@ mod tests {
     fn default_analysis_disables_mir_inlining_for_trace_stability() {
         assert_eq!(AnalysisConfig::default().inline_mir, MirInlining::Off);
         assert_eq!(
-            AnalysisConfig::default().dyn_dispatch_vtable_edges,
-            DynDispatchVTableEdges::CastSites
+            AnalysisConfig::default().callable_edge_attribution,
+            CallableEdgeAttribution::ErasureSites
         );
     }
 
@@ -990,20 +1010,19 @@ mod tests {
     }
 
     #[test]
-    fn rejects_ambiguous_dyn_dispatch_both_mode() {
+    fn rejects_ambiguous_callable_edge_attribution_both_mode() {
         let config = r#"
             [analysis]
-            dyn-dispatch-vtable-edges = "both"
+            callable-edge-attribution = "both"
         "#;
 
         let error =
             SniffTestConfig::from_manifest_str(config).expect_err("manifest should be rejected");
 
-        assert!(
-            error
-                .to_string()
-                .contains("unknown variant `both`, expected `cast-sites` or `call-sites`")
-        );
+        let message = error.to_string();
+        assert!(message.contains("unknown variant `both`"));
+        assert!(message.contains("erasure-sites"));
+        assert!(message.contains("call-sites"));
     }
 
     #[test]

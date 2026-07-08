@@ -571,13 +571,13 @@ pub enum ReachabilityEdgeKind {
     FnPointerReify,
     /// Closure coerced to a function pointer.
     ///
-    /// This is not a runtime call. It records that the closure's call shim is
-    /// made reachable by the coercion.
+    /// This is not a runtime call. It records that the closure value escaped as
+    /// a callable pointer.
     ClosureFnPointerReify,
-    /// Closure value created in HIR or MIR.
+    /// Closure value construction, if an analysis chooses to record it.
     ///
-    /// Closure construction makes the closure body relevant even before the
-    /// closure is called directly.
+    /// This is not a runtime call; constructing a closure value does not by
+    /// itself make the closure body executable.
     ClosureDefinition,
     /// Dynamic object unsizing, such as `&T` to `&dyn Trait`.
     DynObjectCast,

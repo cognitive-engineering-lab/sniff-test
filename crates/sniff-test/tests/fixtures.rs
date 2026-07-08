@@ -108,7 +108,13 @@ fixture_cases! {
     }
     "closure_call_graph" => {
         closure_call_graph => Case::cargo("call graph edges").exit_code(1);
+        closure_call_graph_call_sites => Case::cargo("call graph edges with callable call-site attribution")
+            .args(&["--manifest", "call-sites.toml"])
+            .exit_code(1);
         driver_closure_call_graph => Case::direct("call graph edges");
+        driver_closure_call_graph_call_sites =>
+            Case::direct("call graph edges with callable call-site attribution")
+                .manifest("call-sites.toml");
     }
     "custom_index_impl" => {
         custom_index_impl => Case::cargo("custom index dispatch").exit_code(1);

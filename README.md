@@ -46,7 +46,7 @@ show-full-stack-trace = false
 report-roots = "public"     # public | all | ["crate::path"]
 overflow-checks = "profile" # profile | on | off
 inline-mir = "off"          # profile | on | off
-dyn-dispatch-vtable-edges = "cast-sites" # cast-sites | call-sites
+callable-edge-attribution = "erasure-sites" # erasure-sites | call-sites
 
 [panics.lints]
 undocumented-panic-path = "deny"
@@ -68,11 +68,15 @@ safety-obligation-missing-requirements = "warn"
 `inline-mir = "off"` passes `-Z inline-mir=no`, which keeps panic traces closer
 to the source call structure.
 
-`dyn-dispatch-vtable-edges = "call-sites"` reports concrete dynamic-dispatch
-vtable methods at the call span instead of the object-cast span. This is a
-body-local, trait-keyed approximation: if one function casts multiple concrete
-values to the same dyn trait, every dyn call to that trait in the function may
-be connected to every concrete impl observed in that function.
+`callable-edge-attribution = "erasure-sites"` reports concrete callable targets
+where a function item, closure, or concrete type is erased into an indirect
+callable such as a `fn` pointer or `dyn Trait`. `call-sites` reports concrete
+dynamic-dispatch vtable methods at the call span instead of the object-cast
+span; function pointer calls remain opaque boundaries unless value-flow can
+prove the target. Dynamic call-site attribution is a body-local, trait-keyed
+approximation: if one function casts multiple concrete values to the same dyn
+trait, every dyn call to that trait in the function may be connected to every
+concrete impl observed in that function.
 
 `cargo sniff-test` exits with status `1` when a final workspace crate has a
 finding whose configured lint level is `deny`. `allow` suppresses a finding from

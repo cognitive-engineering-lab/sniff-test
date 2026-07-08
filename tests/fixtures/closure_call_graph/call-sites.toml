@@ -1,0 +1,22 @@
+[analysis]
+inline-mir = "off"
+callable-edge-attribution = "call-sites"
+report-roots = [
+    "closure_call_graph::basic_closure_panics",
+    "closure_call_graph::unused_closure_argument",
+    "closure_call_graph::fn_pointer_closure_boundary",
+    "closure_call_graph::dyn_box_closure_boundary",
+    "closure_call_graph::captured_closure_panics",
+    "closure_call_graph::boxed_captured_closure_panics",
+    "closure_call_graph::unused_closure_definition",
+]
+
+[panics]
+# This fixture is about closure reachability, not allocator internals from Box::new.
+trusted-panic-obligation-namespaces = ["alloc::**"]
+panic-sink-namespaces = [
+    "core::panicking::**",
+    "std::panicking::**",
+    "core::std::rt::panic_fmt",
+    "std::rt::panic_fmt",
+]

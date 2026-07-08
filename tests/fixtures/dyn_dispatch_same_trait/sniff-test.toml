@@ -1,5 +1,5 @@
 [analysis]
-dyn-dispatch-vtable-edges = "call-sites"
+callable-edge-attribution = "call-sites"
 report-roots = ["dyn_dispatch_same_trait::entry"]
 
 [panics]

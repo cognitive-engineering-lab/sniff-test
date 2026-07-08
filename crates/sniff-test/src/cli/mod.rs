@@ -11,7 +11,8 @@ use crate::cache::{
     write_artifact_analysis, write_unit_outcome,
 };
 use crate::config::{
-    AnalysisConfig, LintLevel, PanicBoundaryPolicy, PanicConfig, SafetyLintConfig, SniffTestConfig,
+    AnalysisConfig, CallableEdgeAttribution, LintLevel, PanicBoundaryPolicy, PanicConfig,
+    SafetyLintConfig, SniffTestConfig,
 };
 use crate::dependency_cache::{DependencyAnalysisCache, DependencyInput};
 use crate::namespace::stable_def_path_hash;
@@ -373,15 +374,24 @@ pub(crate) fn absolute_path(path: PathBuf) -> PathBuf {
 
 struct PanicReachabilityHooks<'config> {
     config: &'config PanicConfig,
+    descend_reified_callables: bool,
 }
 
 impl<'tcx> ReachabilityHooks<'tcx> for PanicReachabilityHooks<'_> {
     fn should_descend(
         &mut self,
         cx: ReachabilityContext<'tcx>,
-        _edge: &ReachabilityEdge,
+        edge: &ReachabilityEdge,
         target: Instance<'tcx>,
     ) -> ReachabilityControl<'tcx, bool> {
+        if matches!(
+            edge.kind,
+            ReachabilityEdgeKind::FnPointerReify | ReachabilityEdgeKind::ClosureFnPointerReify
+        ) && !self.descend_reified_callables
+        {
+            return ControlFlow::Continue(false);
+        }
+
         let def_id = target.def_id();
         let should_descend = !self.config.ignores_def(cx.tcx, def_id)
             && self.config.panic_boundary_policy(cx.tcx, def_id) == PanicBoundaryPolicy::Normal;
@@ -769,7 +779,12 @@ fn analyze_root<'tcx>(
     dependency_cache: &DependencyAnalysisCache,
     diagnostics: PanicDiagnosticOptions,
 ) -> (PanicFindingCounts, CachedFunctionSummary, PanicRootReport) {
-    let mut hooks = PanicReachabilityHooks { config };
+    let descend_reified_callables =
+        analysis_config.callable_edge_attribution == CallableEdgeAttribution::ErasureSites;
+    let mut hooks = PanicReachabilityHooks {
+        config,
+        descend_reified_callables,
+    };
     let result = reachability.query(
         root.root,
         &mut hooks,
@@ -797,7 +812,10 @@ fn analyze_root<'tcx>(
     // re-traverses the in-memory graph cheaply, while deriving boundary
     // findings from the transitive snapshot would change the serialized
     // cache graphs and their trace semantics.
-    let mut boundary_hooks = PanicReachabilityHooks { config };
+    let mut boundary_hooks = PanicReachabilityHooks {
+        config,
+        descend_reified_callables,
+    };
     let boundary_result = reachability.query(
         root.root,
         &mut boundary_hooks,
@@ -860,7 +878,7 @@ fn reachability_options(
     ReachabilityOptions {
         node_limit: Some(analysis_config.node_limit),
         analyze_external,
-        dyn_dispatch_vtable_edges: analysis_config.dyn_dispatch_vtable_edges.into(),
+        dyn_dispatch_vtable_edges: analysis_config.callable_edge_attribution.into(),
     }
 }
 

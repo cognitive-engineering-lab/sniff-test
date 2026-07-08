@@ -1,23 +1,18 @@
 //! MIR/HIR edge collection for one concrete function body.
 //!
 //! Most reachability facts come from MIR statements and terminators. A few
-//! definitions, such as closure expressions and inline/anonymous const bodies,
-//! are easier to discover from HIR, so this module scans both views before the
-//! graph builder turns collected facts into graph nodes and edges.
+//! definitions, such as inline/anonymous const bodies, are easier to discover
+//! from HIR, so this module scans both views before the graph builder turns
+//! collected facts into graph nodes and edges.
 
 use std::collections::HashMap;
 use std::ops::ControlFlow;
 
-use rustc_hir::{
-    ExprKind,
-    def_id::{DefId, LocalDefId},
-    intravisit,
-};
+use rustc_hir::{def_id::DefId, intravisit};
 use rustc_middle::hir::nested_filter;
 use rustc_middle::mir::AssertMessage;
 use rustc_middle::mir::{
-    AggregateKind, Body, CastKind, LocalKind, Operand, Rvalue, StatementKind, TerminatorKind,
-    VarDebugInfoContents,
+    Body, CastKind, LocalKind, Operand, Rvalue, StatementKind, TerminatorKind, VarDebugInfoContents,
 };
 use rustc_middle::ty::adjustment::PointerCoercion;
 use rustc_middle::ty::vtable::VtblEntry;
@@ -99,10 +94,7 @@ where
         let Some(hir_body) = self.tcx.hir_maybe_body_owned_by(caller) else {
             return ControlFlow::Continue(());
         };
-        let mut visitor = HirDefinitionCollector {
-            graph: self,
-            caller,
-        };
+        let mut visitor = HirDefinitionCollector { graph: self };
         intravisit::Visitor::visit_body(&mut visitor, hir_body);
 
         if let Some(halt) = visitor.take_halt() {
@@ -329,16 +321,6 @@ where
                 let target_ty = self.monomorphize(*target_ty);
                 self.emit_dyn_object_cast(source_ty, target_ty, span)?;
                 self.emit_vtable_entries(source_ty, target_ty, span)
-            }
-            Rvalue::Aggregate(kind, _) => {
-                if let AggregateKind::Closure(def_id, args) = **kind {
-                    let args = self.monomorphize(args);
-                    let instance =
-                        Instance::resolve_closure(self.tcx, def_id, args, ty::ClosureKind::FnOnce);
-                    self.emit_instance(instance, ReachabilityEdgeKind::ClosureDefinition, span)
-                } else {
-                    ControlFlow::Continue(())
-                }
             }
             _ => ControlFlow::Continue(()),
         }
@@ -591,7 +573,6 @@ where
     F: FnMut(BodyEdge<'tcx>) -> ReachabilityControl<'tcx>,
 {
     graph: &'a mut BodyEdgeCollector<'b, 'tcx, F>,
-    caller: LocalDefId,
 }
 
 impl<'tcx, F> HirDefinitionCollector<'_, '_, 'tcx, F>
@@ -625,15 +606,6 @@ where
 
     fn visit_expr(&mut self, expr: &'tcx rustc_hir::Expr<'tcx>) -> Self::Result {
         if self.graph.halt.is_some() {
-            return;
-        }
-
-        if let ExprKind::Closure(_) = expr.kind {
-            let ty = self.graph.tcx.typeck(self.caller).expr_ty(expr);
-            let ty = self.graph.monomorphize(ty);
-            let _ =
-                self.graph
-                    .emit_callable_ty(ty, ReachabilityEdgeKind::ClosureDefinition, expr.span);
             return;
         }
 
