@@ -1,0 +1,87 @@
+---
+source: crates/sniff-test/tests/cli.rs
+expression: snapshot
+---
+exit: 1
+stdout:
+<empty>
+stderr:
+    Checking dependency-identity v0.1.0 ([FIXTURE]/dep)
+    Checking dependency-identity-app v0.1.0 ([FIXTURE]/app)
+error: function `dependency_identity_app::run_reexported` reaches cached undocumented panic evidence from a dependency
+  --> src/lib.rs:11:1
+   |
+11 | pub fn run_reexported(flag: bool) {
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   |
+   = note: dependency_identity::internal::run has cached panic evidence: 1 undocumented panic path
+note: cached dependency panic evidence was recorded here: panic sink core::std::rt::panic_fmt
+  --> [FIXTURE]/dep/src/lib.rs:25:9
+   |
+25 |         assert!(flag, "run expected a set flag");
+   |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: guard this path, or add `// PANIC:` here if a local invariant proves it cannot panic
+  --> src/lib.rs:12:5
+   |
+12 |     dependency_identity::run(flag);
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   = help: add a guard, document the panic with `# Panics`, or add `// PANIC:` if a local invariant proves it cannot panic
+
+error: function `dependency_identity_app::sniff_buffer` reaches cached undocumented panic evidence from a dependency
+  --> src/lib.rs:7:1
+   |
+ 7 | pub fn sniff_buffer(buffer: &Vec<u8>, flag: bool) {
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   |
+   = note: <dependency_identity::std::vec::Vec<u8> as Sniffer>::sniff has cached panic evidence: 1 undocumented panic path
+note: cached dependency panic evidence was recorded here: panic sink core::std::rt::panic_fmt
+  --> [FIXTURE]/dep/src/lib.rs:19:9
+   |
+19 |         assert!(flag, "buffer expected a set flag");
+   |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: guard this path, or add `// PANIC:` here if a local invariant proves it cannot panic
+  --> src/lib.rs:8:5
+   |
+ 8 |     buffer.sniff(flag);
+   |     ^^^^^^^^^^^^^^^^^^
+   = help: add a guard, document the panic with `# Panics`, or add `// PANIC:` if a local invariant proves it cannot panic
+
+error: function `dependency_identity_app::sniff_dyn` reaches cached undocumented panic evidence from a dependency
+  --> src/lib.rs:15:1
+   |
+15 | pub fn sniff_dyn(flag: bool) {
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   |
+   = note: <dependency_identity::Widget as Sniffer>::sniff has cached panic evidence: 1 undocumented panic path
+note: cached dependency panic evidence was recorded here: panic sink core::std::rt::panic_fmt
+  --> [FIXTURE]/dep/src/lib.rs:13:9
+   |
+13 |         assert!(flag, "widget expected a set flag");
+   |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: guard this path, or add `// PANIC:` here if a local invariant proves it cannot panic
+  --> src/lib.rs:16:33
+   |
+16 |     let sniffer: &dyn Sniffer = &Widget;
+   |                                 ^^^^^^^
+   = help: add a guard, document the panic with `# Panics`, or add `// PANIC:` if a local invariant proves it cannot panic
+
+error: function `dependency_identity_app::sniff_widget` reaches cached undocumented panic evidence from a dependency
+  --> src/lib.rs:3:1
+   |
+ 3 | pub fn sniff_widget(flag: bool) {
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   |
+   = note: <dependency_identity::Widget as Sniffer>::sniff has cached panic evidence: 1 undocumented panic path
+note: cached dependency panic evidence was recorded here: panic sink core::std::rt::panic_fmt
+  --> [FIXTURE]/dep/src/lib.rs:13:9
+   |
+13 |         assert!(flag, "widget expected a set flag");
+   |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: guard this path, or add `// PANIC:` here if a local invariant proves it cannot panic
+  --> src/lib.rs:4:5
+   |
+ 4 |     Widget.sniff(flag);
+   |     ^^^^^^^^^^^^^^^^^^
+   = help: add a guard, document the panic with `# Panics`, or add `// PANIC:` if a local invariant proves it cannot panic
+
+error: could not compile `dependency-identity-app` (lib) due to 4 previous errors

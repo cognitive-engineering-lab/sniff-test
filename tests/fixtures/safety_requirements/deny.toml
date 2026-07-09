@@ -1,5 +1,8 @@
 [analysis]
 report-roots = "all"
 
+[panics.lints]
+indirect-call-boundary = "allow"
+
 [safety.lints]
-unsafe-call-missing-requirements = "deny"
+missing-requirements = "deny"

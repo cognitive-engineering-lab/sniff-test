@@ -39,17 +39,14 @@ expression: messages
     "rustc-version": "[RUSTC_VERSION]",
     "safety": {
       "counts": {
-        "missing-safety-docs": 0,
-        "safety-obligations-missing-justification": 0,
-        "safety-obligations-missing-requirements": 0,
-        "unsafe-calls-missing-justification": 2,
-        "unsafe-calls-missing-requirements": 0,
-        "unsafe-ops-missing-justification": 0
+        "missing-docs": 0,
+        "missing-justification": 2,
+        "missing-requirements": 0
       },
       "findings": [
         {
           "function": "unsafe_const_init::UNJUSTIFIED_STATIC",
-          "kind": "unsafe-call-missing-justification",
+          "kind": "missing-justification",
           "level": "warn",
           "reason": "unsafe call to `unsafe_const_init::seeded` has no `// SAFETY:` justification",
           "span": "src/lib.rs:5:47: 5:55",
@@ -57,7 +54,7 @@ expression: messages
         },
         {
           "function": "unsafe_const_init::UNJUSTIFIED_CONST",
-          "kind": "unsafe-call-missing-justification",
+          "kind": "missing-justification",
           "level": "warn",
           "reason": "unsafe call to `unsafe_const_init::seeded` has no `// SAFETY:` justification",
           "span": "src/lib.rs:11:45: 11:53",

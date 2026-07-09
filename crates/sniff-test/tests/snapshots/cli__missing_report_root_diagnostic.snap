@@ -6,7 +6,6 @@ exit: 1
 stdout:
 <empty>
 stderr:
-sniff-test: using config [FIXTURE]/explicit.toml
     Checking report-roots v0.1.0 ([FIXTURE])
 error: function `report_roots::private_panic` has an undocumented panic path
   --> src/lib.rs:11:1

@@ -1,13 +1,24 @@
 [analysis]
 report-roots = "all"
 
+[panics.lints]
+indirect-call-boundary = "allow"
+
 [safety]
+ignored-namespaces = [
+    "safety_requirements::missing_requirement",
+    "safety_requirements::safety_marker_boundary_missing_requirements",
+    "safety_requirements::missing_justification",
+    "safety_requirements::unsafe_fn_pointer_missing_justification",
+    "safety_requirements::generic_unsafe_trait_method_missing",
+]
+
 safety-obligation-namespaces = [
     "safety_requirements::safe_documented_contract",
     "safety_requirements::safe_undocumented_contract",
 ]
 
 [safety.lints]
-missing-safety-docs = "allow"
-unsafe-call-missing-justification = "allow"
-unsafe-call-missing-requirements = "allow"
+missing-docs = "allow"
+missing-justification = "warn"
+missing-requirements = "warn"

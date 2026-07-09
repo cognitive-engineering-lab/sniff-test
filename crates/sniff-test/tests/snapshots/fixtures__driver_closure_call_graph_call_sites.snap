@@ -17,12 +17,12 @@ expression: messages
       "package-version": null,
       "target": null
     },
-    "concrete-roots": 4,
+    "concrete-roots": 5,
     "counts": {
       "analysis-incomplete": 0,
-      "indirect-call-boundaries": 1,
+      "indirect-call-boundaries": 0,
       "panic-obligations": 0,
-      "raw-panic-paths": 3,
+      "raw-panic-paths": 5,
       "trusted-panic-obligations": 0
     },
     "dependencies": [],
@@ -131,23 +131,56 @@ expression: messages
       {
         "counts": {
           "analysis-incomplete": 0,
-          "indirect-call-boundaries": 1,
+          "indirect-call-boundaries": 0,
           "panic-obligations": 0,
-          "raw-panic-paths": 0,
+          "raw-panic-paths": 1,
           "trusted-panic-obligations": 0
         },
         "findings": [
           {
-            "edge": "closure_call_graph::calls_fn --direct-call-> core::std::ops::Fn::call",
-            "kind": "indirect-call-boundary",
-            "level": "warn",
-            "reason": "indirect call through an opaque callable cannot be verified",
-            "span": "[FIXTURE]/src/lib.rs:40:5: 40:15",
-            "target": null,
+            "edge": "closure_call_graph::dyn_box_closure_boundary::{closure#0} --macro-expansion-> macro std::panic",
+            "kind": "panic-invocation",
+            "level": "deny",
+            "reason": "panic sink core::std::rt::panic_fmt",
+            "span": "[FIXTURE]/src/lib.rs:19:52: 19:79",
+            "target": "core::std::rt::panic_fmt",
+            "trace": [
+              "[FIXTURE]/src/lib.rs:20:5: 20:26: closure_call_graph::dyn_box_closure_boundary --direct-call-> closure_call_graph::calls_dyn_box",
+              "[FIXTURE]/src/lib.rs:48:5: 48:15: closure_call_graph::calls_dyn_box --dyn-dispatch-vtable-entry-> closure_call_graph::dyn_box_closure_boundary::{closure#0}",
+              "[FIXTURE]/src/lib.rs:19:52: 19:79: closure_call_graph::dyn_box_closure_boundary::{closure#0} --macro-expansion-> macro std::panic",
+              "[FIXTURE]/src/lib.rs:19:52: 19:79: macro std::panic --macro-expansion-> macro core::std::panic::panic_2021",
+              "[SYSROOT]/lib/rustlib/src/rust/library/core/src/panic.rs:62:9: 62:73: macro core::std::panic::panic_2021 --direct-call-> core::std::rt::panic_fmt"
+            ]
+          }
+        ],
+        "has-panic-docs": false,
+        "root": "closure_call_graph::dyn_box_closure_boundary",
+        "root-declaration": "[FIXTURE]/src/lib.rs:18:1",
+        "root-kind": "concrete"
+      },
+      {
+        "counts": {
+          "analysis-incomplete": 0,
+          "indirect-call-boundaries": 0,
+          "panic-obligations": 0,
+          "raw-panic-paths": 1,
+          "trusted-panic-obligations": 0
+        },
+        "findings": [
+          {
+            "edge": "closure_call_graph::fn_pointer_closure_boundary::{closure#0} --macro-expansion-> macro std::panic",
+            "kind": "panic-invocation",
+            "level": "deny",
+            "reason": "panic sink core::std::rt::panic_fmt",
+            "span": "[FIXTURE]/src/lib.rs:12:20: 12:54",
+            "target": "core::std::rt::panic_fmt",
             "trace": [
               "[FIXTURE]/src/lib.rs:15:5: 15:26: closure_call_graph::fn_pointer_closure_boundary --direct-call-> closure_call_graph::calls_fn",
-              "[FIXTURE]/src/lib.rs:40:5: 40:15: closure_call_graph::calls_fn --direct-call-> core::std::ops::Fn::call",
-              "[SYSROOT]/lib/rustlib/src/rust/library/core/src/ops/function.rs:79:5: 79:67: core::std::ops::Fn::call --indirect-call-> indirect call Binder { value: fn() -> i32, bound_vars: [] }"
+              "[FIXTURE]/src/lib.rs:40:5: 40:15: closure_call_graph::calls_fn --fn-pointer-call-target-> core::std::ops::FnOnce::call_once",
+              "[SYSROOT]/lib/rustlib/src/rust/library/core/src/ops/function.rs:250:5: 250:71: core::std::ops::FnOnce::call_once --direct-call-> closure_call_graph::fn_pointer_closure_boundary::{closure#0}",
+              "[FIXTURE]/src/lib.rs:12:20: 12:54: closure_call_graph::fn_pointer_closure_boundary::{closure#0} --macro-expansion-> macro std::panic",
+              "[FIXTURE]/src/lib.rs:12:20: 12:54: macro std::panic --macro-expansion-> macro core::std::panic::panic_2021",
+              "[SYSROOT]/lib/rustlib/src/rust/library/core/src/panic.rs:62:9: 62:73: macro core::std::panic::panic_2021 --direct-call-> core::std::rt::panic_fmt"
             ]
           }
         ],

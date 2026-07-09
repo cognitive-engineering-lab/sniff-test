@@ -41,6 +41,19 @@ cli_cases! {
     "dependency_obligation" => {
         dependency_warning_footer => Case::new("dependency warning footer").crate_dir("app");
     }
+    "dependency_identity" => {
+        cached_dependency_raw_panic_diagnostics => Case::new("cached dependency raw panic diagnostics")
+            .crate_dir("app")
+            .exit_code(1);
+    }
+    "closure_call_graph" => {
+        closure_call_graph_diagnostics => Case::new("closure diagnostics")
+            .args(&["--manifest", "basic.toml"])
+            .exit_code(1);
+    }
+    "indirect_calls" => {
+        indirect_call_boundary_diagnostics => Case::new("indirect call boundary diagnostics");
+    }
     "safety_requirements" => {
         safety_diagnostics => Case::new("safety diagnostics");
         safety_obligation_diagnostics => Case::new("safety obligation diagnostics")
@@ -63,6 +76,15 @@ cli_cases! {
         missing_report_root_diagnostic => Case::new("missing report root diagnostic")
             .args(&["--manifest", "explicit.toml"])
             .exit_code(1);
+    }
+    "ambiguous_markers" => {
+        clean_explicit_report_roots_do_not_warn => Case::new("clean explicit report roots");
+        ambiguous_marker_diagnostics => Case::new("ambiguous marker diagnostics")
+            .args(&["--manifest", "strict.toml"])
+            .exit_code(1);
+    }
+    "ambiguous_safety" => {
+        ambiguous_safety_diagnostics => Case::new("ambiguous safety diagnostics").exit_code(1);
     }
 }
 
@@ -267,6 +289,10 @@ fn snapshot_section(text: &str, fixture_root: &Path, sysroot: &str) -> String {
     }
 
     let normalized = normalize_output(text, fixture_root, sysroot);
+    if normalized.is_empty() {
+        return String::from("<empty>\n");
+    }
+
     let mut section = String::new();
     for line in normalized.lines() {
         writeln!(&mut section, "{line}").unwrap();
@@ -277,6 +303,7 @@ fn snapshot_section(text: &str, fixture_root: &Path, sysroot: &str) -> String {
 fn normalize_output(text: &str, fixture_root: &Path, sysroot: &str) -> String {
     text.lines()
         .map(|line| normalize_line(line, fixture_root, sysroot))
+        .filter(|line| !is_volatile_cargo_status(line))
         .collect::<Vec<_>>()
         .join("\n")
 }
@@ -296,4 +323,11 @@ fn normalize_line(line: &str, fixture_root: &Path, sysroot: &str) -> String {
     }
 
     line
+}
+
+fn is_volatile_cargo_status(line: &str) -> bool {
+    let line = line.trim_start();
+    line.starts_with("Locking ")
+        && line.contains(" package")
+        && line.contains(" compatible version")
 }

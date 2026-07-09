@@ -1,0 +1,40 @@
+---
+source: crates/sniff-test/tests/cli.rs
+expression: snapshot
+---
+exit: 1
+stdout:
+<empty>
+stderr:
+    Checking ambiguous-markers v0.1.0 ([FIXTURE])
+error: function `ambiguous_markers::duplicate_name_marker` reaches an ambiguous `# Panics` requirement name
+  --> src/lib.rs:21:1
+   |
+21 | /// - nonzero: denominator must not be zero.
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `nonzero: denominator must not be zero.` normalizes to `nonzero`
+22 | /// - nonzero: total must be bounded by the caller.
+   | --------------------------------------------------- `nonzero: total must be bounded by the caller.` normalizes to `nonzero`
+   |
+   = note: `ambiguous_markers::duplicate_name_ratio` has multiple `# Panics` requirements that normalize to `nonzero`
+   = help: give each requirement a unique name, or set `ambiguous-obligations = "allow"` under `[analysis.lints]`
+
+error: function `ambiguous_markers::shared_block_marker` has an ambiguous `// PANIC:` marker
+  --> src/lib.rs:9:1
+   |
+ 9 | /     // PANIC: all denominators in this guarded block are nonzero.
+10 | |     {
+   | |_^
+   |
+note: this obligation also resolves to the same marker: ambiguous_markers::shared_block_marker --direct-call-> ambiguous_markers::ratio
+  --> src/lib.rs:11:21
+   |
+11 |         let first = ratio(a, denominator);
+   |                     ^^^^^^^^^^^^^^^^^^^^^
+note: this obligation also resolves to the same marker: ambiguous_markers::shared_block_marker --direct-call-> ambiguous_markers::ratio
+  --> src/lib.rs:12:22
+   |
+12 |         let second = ratio(b, denominator);
+   |                      ^^^^^^^^^^^^^^^^^^^^^
+   = help: move the marker directly above one obligation, split it into separate markers, or set `ambiguous-obligations = "allow"` under `[analysis.lints]`
+
+error: could not compile `ambiguous-markers` (lib) due to 2 previous errors

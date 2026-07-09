@@ -17,12 +17,12 @@ expression: messages
       "package-version": null,
       "target": null
     },
-    "concrete-roots": 4,
+    "concrete-roots": 1,
     "counts": {
       "analysis-incomplete": 0,
       "indirect-call-boundaries": 0,
       "panic-obligations": 0,
-      "raw-panic-paths": 4,
+      "raw-panic-paths": 1,
       "trusted-panic-obligations": 0
     },
     "dependencies": [],
@@ -61,103 +61,19 @@ expression: messages
         "root": "marker_placement::panic_comment_on_function_def_bad",
         "root-declaration": "[FIXTURE]/src/lib.rs:26:1",
         "root-kind": "concrete"
-      },
-      {
-        "counts": {
-          "analysis-incomplete": 0,
-          "indirect-call-boundaries": 0,
-          "panic-obligations": 0,
-          "raw-panic-paths": 1,
-          "trusted-panic-obligations": 0
-        },
-        "findings": [
-          {
-            "edge": "marker_placement::read_byte --assert-> compiler assert null pointer dereference",
-            "kind": "compiler-assert",
-            "level": "deny",
-            "reason": "compiler assert",
-            "span": "[FIXTURE]/src/lib.rs:11:14: 11:18",
-            "target": "compiler assert null pointer dereference",
-            "trace": [
-              "[FIXTURE]/src/lib.rs:38:9: 38:23: marker_placement::safety_comment_before_block_ok --direct-call-> marker_placement::read_byte",
-              "[FIXTURE]/src/lib.rs:11:14: 11:18: marker_placement::read_byte --assert-> compiler assert null pointer dereference"
-            ]
-          }
-        ],
-        "has-panic-docs": false,
-        "root": "marker_placement::safety_comment_before_block_ok",
-        "root-declaration": "[FIXTURE]/src/lib.rs:30:1",
-        "root-kind": "concrete"
-      },
-      {
-        "counts": {
-          "analysis-incomplete": 0,
-          "indirect-call-boundaries": 0,
-          "panic-obligations": 0,
-          "raw-panic-paths": 1,
-          "trusted-panic-obligations": 0
-        },
-        "findings": [
-          {
-            "edge": "marker_placement::read_byte --assert-> compiler assert null pointer dereference",
-            "kind": "compiler-assert",
-            "level": "deny",
-            "reason": "compiler assert",
-            "span": "[FIXTURE]/src/lib.rs:11:14: 11:18",
-            "target": "compiler assert null pointer dereference",
-            "trace": [
-              "[FIXTURE]/src/lib.rs:49:26: 49:40: marker_placement::safety_comment_before_let_ok --direct-call-> marker_placement::read_byte",
-              "[FIXTURE]/src/lib.rs:11:14: 11:18: marker_placement::read_byte --assert-> compiler assert null pointer dereference"
-            ]
-          }
-        ],
-        "has-panic-docs": false,
-        "root": "marker_placement::safety_comment_before_let_ok",
-        "root-declaration": "[FIXTURE]/src/lib.rs:42:1",
-        "root-kind": "concrete"
-      },
-      {
-        "counts": {
-          "analysis-incomplete": 0,
-          "indirect-call-boundaries": 0,
-          "panic-obligations": 0,
-          "raw-panic-paths": 1,
-          "trusted-panic-obligations": 0
-        },
-        "findings": [
-          {
-            "edge": "marker_placement::read_byte --assert-> compiler assert null pointer dereference",
-            "kind": "compiler-assert",
-            "level": "deny",
-            "reason": "compiler assert",
-            "span": "[FIXTURE]/src/lib.rs:11:14: 11:18",
-            "target": "compiler assert null pointer dereference",
-            "trace": [
-              "[FIXTURE]/src/lib.rs:58:14: 58:28: marker_placement::safety_comment_on_function_def_bad --direct-call-> marker_placement::read_byte",
-              "[FIXTURE]/src/lib.rs:11:14: 11:18: marker_placement::read_byte --assert-> compiler assert null pointer dereference"
-            ]
-          }
-        ],
-        "has-panic-docs": false,
-        "root": "marker_placement::safety_comment_on_function_def_bad",
-        "root-declaration": "[FIXTURE]/src/lib.rs:54:1",
-        "root-kind": "concrete"
       }
     ],
     "rustc-version": "[RUSTC_VERSION]",
     "safety": {
       "counts": {
-        "missing-safety-docs": 0,
-        "safety-obligations-missing-justification": 0,
-        "safety-obligations-missing-requirements": 0,
-        "unsafe-calls-missing-justification": 0,
-        "unsafe-calls-missing-requirements": 1,
-        "unsafe-ops-missing-justification": 0
+        "missing-docs": 0,
+        "missing-justification": 0,
+        "missing-requirements": 1
       },
       "findings": [
         {
           "function": "marker_placement::safety_comment_on_function_def_bad",
-          "kind": "unsafe-call-missing-requirements",
+          "kind": "missing-requirements",
           "level": "warn",
           "missing-requirements": [
             "valid_ptr: pointer must be non-null.",

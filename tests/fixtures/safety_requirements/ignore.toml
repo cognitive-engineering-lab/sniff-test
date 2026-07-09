@@ -1,6 +1,9 @@
 [analysis]
 report-roots = "all"
 
+[panics.lints]
+indirect-call-boundary = "allow"
+
 [safety]
 ignored-namespaces = [
     "safety_requirements::undocumented_public",

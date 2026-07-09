@@ -6,60 +6,7 @@ exit: 0
 stdout:
 <empty>
 stderr:
-sniff-test: using config [FIXTURE]/obligations.toml
     Checking safety-requirements v0.1.0 ([FIXTURE])
-warning: function `safety_requirements::generic_unsafe_trait_method_missing` reaches an unverifiable indirect call
-   --> src/lib.rs:135:1
-    |
-135 | pub fn generic_unsafe_trait_method_missing<T: UnsafeGreeter>(greeter: T) {
-    | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-    |
-note: panic may happen here: indirect call to undocumented trait method `safety_requirements::UnsafeGreeter::greet`
-   --> src/lib.rs:139:14
-    |
-139 |     unsafe { greeter.greet(ptr) }
-    |              ^^^^^^^^^^^^^^^^^^
-    = help: add a guard, document the panic with `# Panics`, or add `// PANIC:` if a local invariant proves it cannot panic
-
-warning: function `safety_requirements::generic_unsafe_trait_method_satisfied` reaches an unverifiable indirect call
-   --> src/lib.rs:126:1
-    |
-126 | pub fn generic_unsafe_trait_method_satisfied<T: UnsafeGreeter>(greeter: T) {
-    | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-    |
-note: panic may happen here: indirect call to undocumented trait method `safety_requirements::UnsafeGreeter::greet`
-   --> src/lib.rs:132:14
-    |
-132 |     unsafe { greeter.greet(ptr) }
-    |              ^^^^^^^^^^^^^^^^^^
-    = help: add a guard, document the panic with `# Panics`, or add `// PANIC:` if a local invariant proves it cannot panic
-
-warning: function `safety_requirements::unsafe_fn_pointer_missing_justification` reaches an unverifiable indirect call
-   --> src/lib.rs:100:1
-    |
-100 | pub fn unsafe_fn_pointer_missing_justification() {
-    | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-    |
-note: panic may happen here: indirect call through an opaque callable
-   --> src/lib.rs:103:14
-    |
-103 |     unsafe { function() }
-    |              ^^^^^^^^^^
-    = help: add a guard, document the panic with `# Panics`, or add `// PANIC:` if a local invariant proves it cannot panic
-
-warning: function `safety_requirements::unsafe_fn_pointer_with_justification` reaches an unverifiable indirect call
-  --> src/lib.rs:93:1
-   |
-93 | pub fn unsafe_fn_pointer_with_justification() {
-   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-   |
-note: panic may happen here: indirect call through an opaque callable
-  --> src/lib.rs:97:14
-   |
-97 |     unsafe { function() }
-   |              ^^^^^^^^^^
-   = help: add a guard, document the panic with `# Panics`, or add `// PANIC:` if a local invariant proves it cannot panic
-
 warning: safety-obligation call to `safety_requirements::safe_documented_contract` in `safety_requirements::configured_safety_obligation_missing_requirement` does not satisfy all `# Safety` requirements
    --> src/lib.rs:164:5
     |
@@ -82,5 +29,5 @@ warning: safety-obligation call to `safety_requirements::safe_undocumented_contr
     |
     = help: add a `// SAFETY:` comment above the unsafe block or call site
 
-warning: `safety-requirements` (lib) generated 6 warnings
+warning: `safety-requirements` (lib) generated 2 warnings
     Finished `release` profile [optimized] target(s) in [TIME]

@@ -20,7 +20,7 @@ expression: messages
     "concrete-roots": 5,
     "counts": {
       "analysis-incomplete": 0,
-      "indirect-call-boundaries": 1,
+      "indirect-call-boundaries": 0,
       "panic-obligations": 0,
       "raw-panic-paths": 5,
       "trusted-panic-obligations": 0
@@ -160,25 +160,12 @@ expression: messages
       {
         "counts": {
           "analysis-incomplete": 0,
-          "indirect-call-boundaries": 1,
+          "indirect-call-boundaries": 0,
           "panic-obligations": 0,
           "raw-panic-paths": 1,
           "trusted-panic-obligations": 0
         },
         "findings": [
-          {
-            "edge": "closure_call_graph::calls_fn --direct-call-> core::std::ops::Fn::call",
-            "kind": "indirect-call-boundary",
-            "level": "warn",
-            "reason": "indirect call through an opaque callable cannot be verified",
-            "span": "[FIXTURE]/src/lib.rs:40:5: 40:15",
-            "target": null,
-            "trace": [
-              "[FIXTURE]/src/lib.rs:15:5: 15:26: closure_call_graph::fn_pointer_closure_boundary --direct-call-> closure_call_graph::calls_fn",
-              "[FIXTURE]/src/lib.rs:40:5: 40:15: closure_call_graph::calls_fn --direct-call-> core::std::ops::Fn::call",
-              "[SYSROOT]/lib/rustlib/src/rust/library/core/src/ops/function.rs:79:5: 79:67: core::std::ops::Fn::call --indirect-call-> indirect call Binder { value: fn() -> i32, bound_vars: [] }"
-            ]
-          },
           {
             "edge": "closure_call_graph::fn_pointer_closure_boundary::{closure#0} --macro-expansion-> macro std::panic",
             "kind": "panic-invocation",

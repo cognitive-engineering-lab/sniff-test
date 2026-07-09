@@ -10,4 +10,4 @@ panic-sink-namespaces = [
 ]
 
 [panics.lints]
-documented-panic-contract = "allow"
+documented-contract = "allow"

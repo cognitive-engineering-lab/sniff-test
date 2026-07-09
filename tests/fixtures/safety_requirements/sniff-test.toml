@@ -1,2 +1,5 @@
 [analysis]
 report-roots = "all"
+
+[panics.lints]
+indirect-call-boundary = "allow"

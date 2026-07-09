@@ -1,6 +1,11 @@
 [analysis]
-report-roots = ["ambiguous_markers::shared_block_marker"]
-ambiguous-obligation-markers = "warn"
+report-roots = [
+    "ambiguous_markers::shared_block_marker",
+    "ambiguous_markers::duplicate_name_marker",
+]
+
+[analysis.lints]
+ambiguous-obligations = "warn"
 
 [panics]
 panic-sink-namespaces = [
@@ -9,4 +14,3 @@ panic-sink-namespaces = [
     "core::std::rt::panic_fmt",
     "std::rt::panic_fmt",
 ]
-

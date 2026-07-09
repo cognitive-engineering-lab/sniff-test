@@ -66,17 +66,14 @@ expression: messages
     "rustc-version": "[RUSTC_VERSION]",
     "safety": {
       "counts": {
-        "missing-safety-docs": 0,
-        "safety-obligations-missing-justification": 0,
-        "safety-obligations-missing-requirements": 0,
-        "unsafe-calls-missing-justification": 0,
-        "unsafe-calls-missing-requirements": 1,
-        "unsafe-ops-missing-justification": 0
+        "missing-docs": 0,
+        "missing-justification": 0,
+        "missing-requirements": 1
       },
       "findings": [
         {
           "function": "marker_placement::safety_comment_on_function_def_bad",
-          "kind": "unsafe-call-missing-requirements",
+          "kind": "missing-requirements",
           "level": "warn",
           "missing-requirements": [
             "valid_ptr: pointer must be non-null.",

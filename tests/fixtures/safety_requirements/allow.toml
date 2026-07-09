@@ -1,7 +1,10 @@
 [analysis]
 report-roots = "all"
 
+[panics.lints]
+indirect-call-boundary = "allow"
+
 [safety.lints]
-missing-safety-docs = "allow"
-unsafe-call-missing-justification = "allow"
-unsafe-call-missing-requirements = "allow"
+missing-docs = "allow"
+missing-justification = "allow"
+missing-requirements = "allow"

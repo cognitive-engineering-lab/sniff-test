@@ -1,6 +1,11 @@
 [analysis]
-report-roots = ["ambiguous_markers::shared_block_marker"]
-ambiguous-obligation-markers = "allow"
+report-roots = [
+    "ambiguous_markers::shared_block_marker",
+    "ambiguous_markers::duplicate_name_marker",
+]
+
+[analysis.lints]
+ambiguous-obligations = "allow"
 
 [panics]
 panic-sink-namespaces = [

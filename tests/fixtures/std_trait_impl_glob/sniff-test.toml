@@ -11,4 +11,4 @@ panic-sink-namespaces = [
 ]
 
 [panics.lints]
-trusted-panic-contract = "warn"
+trusted-contract = "warn"

@@ -1,0 +1,21 @@
+---
+source: crates/sniff-test/tests/cli.rs
+expression: snapshot
+---
+exit: 1
+stdout:
+<empty>
+stderr:
+    Checking ambiguous-safety v0.1.0 ([FIXTURE])
+error: `ambiguous_safety::read_duplicate` has an ambiguous `# Safety` requirement name
+ --> src/lib.rs:7:1
+  |
+7 | /// - valid_ptr: pointer must be non-null.
+  | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `valid_ptr: pointer must be non-null.` normalizes to `valid ptr`
+8 | /// - valid_ptr: pointer must reference initialized memory.
+  | ----------------------------------------------------------- `valid_ptr: pointer must reference initialized memory.` normalizes to `valid ptr`
+  |
+  = note: multiple `# Safety` requirements normalize to `valid ptr`
+  = help: give each requirement a unique name, or set `ambiguous-obligations = "allow"` under `[analysis.lints]`
+
+error: could not compile `ambiguous-safety` (lib) due to 1 previous error

@@ -6,14 +6,14 @@ expression: messages
   {
     "artifact": {
       "artifact-id": "[ARTIFACT_ID]",
-      "crate-name": "unsafe_closure_inherit",
+      "crate-name": "ambiguous_safety",
       "crate-types": [
         "lib"
       ],
       "extra-filename": "[EXTRA_FILENAME]",
       "manifest-path": "[FIXTURE]/Cargo.toml",
       "metadata": "[METADATA]",
-      "package-name": "unsafe-closure-inherit",
+      "package-name": "ambiguous-safety",
       "package-version": "0.1.0",
       "target": null
     },
@@ -39,18 +39,23 @@ expression: messages
     "rustc-version": "[RUSTC_VERSION]",
     "safety": {
       "counts": {
+        "ambiguous-obligation-names": 1,
         "missing-docs": 0,
-        "missing-justification": 1,
+        "missing-justification": 0,
         "missing-requirements": 0
       },
       "findings": [
         {
-          "function": "unsafe_closure_inherit::unjustified_closure::{closure#0}",
-          "kind": "missing-justification",
+          "function": "ambiguous_safety::read_duplicate",
+          "kind": "ambiguous-obligation-name",
           "level": "warn",
-          "reason": "unsafe call to `unsafe_closure_inherit::dangerous` has no `// SAFETY:` justification",
-          "span": "src/lib.rs:12:13: 12:24",
-          "target": "unsafe_closure_inherit::dangerous"
+          "reason": "`ambiguous_safety::read_duplicate` has multiple # Safety requirements named `valid ptr`",
+          "requirements": [
+            "valid_ptr: pointer must be non-null.",
+            "valid_ptr: pointer must reference initialized memory."
+          ],
+          "span": "src/lib.rs:7:1: 7:43",
+          "target": null
         }
       ]
     },

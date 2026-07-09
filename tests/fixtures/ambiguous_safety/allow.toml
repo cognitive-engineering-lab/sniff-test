@@ -1,0 +1,5 @@
+[analysis]
+report-roots = "all"
+
+[analysis.lints]
+ambiguous-obligations = "allow"

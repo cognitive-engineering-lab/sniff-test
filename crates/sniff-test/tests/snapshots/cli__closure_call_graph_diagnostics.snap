@@ -1,0 +1,30 @@
+---
+source: crates/sniff-test/tests/cli.rs
+expression: snapshot
+---
+exit: 1
+stdout:
+<empty>
+stderr:
+    Checking closure-call-graph v0.1.0 ([FIXTURE])
+error: function `closure_call_graph::basic_closure_panics` has an undocumented panic path
+ --> src/lib.rs:1:1
+  |
+1 | pub fn basic_closure_panics() {
+  | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  |
+note: panic may happen here: panic sink `core::std::rt::panic_fmt`
+ --> src/lib.rs:2:20
+  |
+2 |     let panic = || panic!("called closure");
+  |                    ^^^^^^^^^^^^^^^^^^^^^^^^
+  = note: reachable from `closure_call_graph::basic_closure_panics` to `core::std::rt::panic_fmt`
+  = note: set `show-full-stack-trace = true` under `[analysis]` in sniff-test.toml to show every reachability step
+help: guard this path, or add `// PANIC:` here if a local invariant proves it cannot panic
+ --> src/lib.rs:3:5
+  |
+3 |     calls_fn(panic);
+  |     ^^^^^^^^^^^^^^^
+  = help: add a guard, document the panic with `# Panics`, or add `// PANIC:` if a local invariant proves it cannot panic
+
+error: could not compile `closure-call-graph` (lib) due to 1 previous error

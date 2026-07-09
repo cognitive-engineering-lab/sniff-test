@@ -39,17 +39,14 @@ expression: messages
     "rustc-version": "[RUSTC_VERSION]",
     "safety": {
       "counts": {
-        "missing-safety-docs": 0,
-        "safety-obligations-missing-justification": 0,
-        "safety-obligations-missing-requirements": 0,
-        "unsafe-calls-missing-justification": 0,
-        "unsafe-calls-missing-requirements": 0,
-        "unsafe-ops-missing-justification": 5
+        "missing-docs": 0,
+        "missing-justification": 5,
+        "missing-requirements": 0
       },
       "findings": [
         {
           "function": "unsafe_ops::deref_unjustified",
-          "kind": "unsafe-op-missing-justification",
+          "kind": "missing-justification",
           "level": "warn",
           "reason": "unsafe operation (raw pointer dereference) has no `// SAFETY:` justification",
           "span": "src/lib.rs:18:14: 18:18",
@@ -57,7 +54,7 @@ expression: messages
         },
         {
           "function": "unsafe_ops::mutable_static_unjustified",
-          "kind": "unsafe-op-missing-justification",
+          "kind": "missing-justification",
           "level": "warn",
           "reason": "unsafe operation (mutable static access) has no `// SAFETY:` justification",
           "span": "src/lib.rs:27:14: 27:21",
@@ -65,7 +62,7 @@ expression: messages
         },
         {
           "function": "unsafe_ops::extern_static_unjustified",
-          "kind": "unsafe-op-missing-justification",
+          "kind": "missing-justification",
           "level": "warn",
           "reason": "unsafe operation (extern static access) has no `// SAFETY:` justification",
           "span": "src/lib.rs:36:14: 36:22",
@@ -73,7 +70,7 @@ expression: messages
         },
         {
           "function": "unsafe_ops::union_read_unjustified",
-          "kind": "unsafe-op-missing-justification",
+          "kind": "missing-justification",
           "level": "warn",
           "reason": "unsafe operation (union field access) has no `// SAFETY:` justification",
           "span": "src/lib.rs:40:14: 40:23",
@@ -81,7 +78,7 @@ expression: messages
         },
         {
           "function": "unsafe_ops::asm_unjustified",
-          "kind": "unsafe-op-missing-justification",
+          "kind": "missing-justification",
           "level": "warn",
           "reason": "unsafe operation (inline assembly) has no `// SAFETY:` justification",
           "span": "src/lib.rs:49:9: 49:20",

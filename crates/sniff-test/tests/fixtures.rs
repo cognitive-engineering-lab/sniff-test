@@ -235,6 +235,15 @@ fixture_cases! {
         driver_ambiguous_markers_strict => Case::direct("ambiguous marker default error policy")
             .manifest("strict.toml");
     }
+    "ambiguous_safety" => {
+        ambiguous_safety_allow => Case::cargo("ambiguous safety allow policy")
+            .args(&["--manifest", "allow.toml"]);
+        ambiguous_safety_warn => Case::cargo("ambiguous safety warn policy")
+            .args(&["--manifest", "warn.toml"]);
+        ambiguous_safety_strict => Case::cargo("ambiguous safety default error policy")
+            .exit_code(1);
+        driver_ambiguous_safety_strict => Case::direct("ambiguous safety default error policy");
+    }
     "safety_requirements" => {
         safety_requirements => Case::cargo("safety requirement satisfaction");
         safety_requirements_allowed => Case::cargo("allowed safety findings")

@@ -1,7 +1,7 @@
 [analysis]
+inline-mir = "off"
 report-roots = [
-    "ambiguous_markers::shared_block_marker",
-    "ambiguous_markers::duplicate_name_marker",
+    "closure_call_graph::basic_closure_panics",
 ]
 
 [panics]
