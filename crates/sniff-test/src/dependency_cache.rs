@@ -2,15 +2,15 @@
 //!
 //! This module loads cache files for the `--extern` artifacts rustc passed to
 //! the current compilation. It indexes panic-reachable functions by artifact id
-//! and function path, then only permits crate-name lookup when that crate name
+//! and def path hash, then only permits crate-name lookup when that crate name
 //! resolves to exactly one artifact.
 
 use std::collections::{HashMap, hash_map::Entry};
 use std::path::{Path, PathBuf};
 
 use crate::cache::{
-    CachedArtifactAnalysis, CachedDependencyRef, CachedFunctionSummary, artifact_cache_path,
-    artifact_id_from_extern_path, read_artifact_analysis,
+    CacheExpectations, CachedArtifactAnalysis, CachedDependencyRef, CachedFunctionSummary,
+    artifact_cache_path, artifact_id_from_extern_path, read_artifact_analysis,
 };
 use crate::config::PanicConfig;
 
@@ -39,6 +39,7 @@ impl DependencyAnalysisCache {
         cache_dir: &Path,
         externs: impl IntoIterator<Item = DependencyInput>,
         config: &PanicConfig,
+        expected: &CacheExpectations<'_>,
     ) -> Self {
         let mut dependencies = Vec::new();
         let mut crate_artifacts = HashMap::new();
@@ -56,9 +57,20 @@ impl DependencyAnalysisCache {
             let exact_cache_path = artifact_id
                 .as_deref()
                 .map(|id| artifact_cache_path(cache_dir, id));
-            let analysis = exact_cache_path
-                .as_deref()
-                .and_then(|path| read_artifact_analysis(path).ok());
+            let mut load_error = None;
+            let analysis = exact_cache_path.as_deref().and_then(|path| {
+                match read_artifact_analysis(path, expected) {
+                    Ok(analysis) => Some(analysis),
+                    Err(error) => {
+                        // A missing file is the routine miss for crates that
+                        // were never analyzed, such as sysroot crates.
+                        if !error.is_missing_file() {
+                            load_error = Some(error.to_string());
+                        }
+                        None
+                    }
+                }
+            });
 
             if let Some(analysis) = &analysis {
                 if config.ignores_namespace(&analysis.artifact.crate_name) {
@@ -85,7 +97,7 @@ impl DependencyAnalysisCache {
                         functions.insert(
                             FunctionCacheKey {
                                 artifact_id: analysis_artifact_id.clone(),
-                                path: function.path.clone(),
+                                def_path_hash: function.def_path_hash.clone(),
                             },
                             function.clone(),
                         );
@@ -99,6 +111,7 @@ impl DependencyAnalysisCache {
                 artifact_id,
                 exact_cache_path,
                 analysis,
+                load_error,
             });
         }
 
@@ -110,12 +123,44 @@ impl DependencyAnalysisCache {
     }
 
     #[must_use]
-    pub fn function(&self, crate_name: &str, path: &str) -> Option<&CachedFunctionSummary> {
+    pub fn function(
+        &self,
+        crate_name: &str,
+        def_path_hash: &str,
+    ) -> Option<&CachedFunctionSummary> {
         let artifact_id = self.unique_artifact_id(crate_name)?;
         self.functions.get(&FunctionCacheKey {
             artifact_id: artifact_id.to_owned(),
-            path: path.to_owned(),
+            def_path_hash: def_path_hash.to_owned(),
         })
+    }
+
+    /// Extern names whose cache files exist but could not be used, with the
+    /// reason. Missing files are not failures.
+    pub fn load_failures(&self) -> impl Iterator<Item = (&str, &str)> {
+        self.dependencies.iter().filter_map(|dependency| {
+            let error = dependency.load_error.as_deref()?;
+            Some((dependency.extern_name.as_str(), error))
+        })
+    }
+
+    #[must_use]
+    pub fn failed_count(&self) -> usize {
+        self.load_failures().count()
+    }
+
+    /// Crate names that resolved to more than one cached artifact; their
+    /// evidence is disabled because lookups cannot pick a version.
+    #[must_use]
+    pub fn ambiguous_crate_names(&self) -> Vec<&str> {
+        let mut names = self
+            .crate_artifacts
+            .iter()
+            .filter(|(_, index)| matches!(index, CrateArtifactIndex::Ambiguous))
+            .map(|(name, _)| name.as_str())
+            .collect::<Vec<_>>();
+        names.sort_unstable();
+        names
     }
 
     #[must_use]
@@ -161,7 +206,7 @@ impl DependencyAnalysisCache {
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 struct FunctionCacheKey {
     artifact_id: String,
-    path: String,
+    def_path_hash: String,
 }
 
 #[derive(Debug)]
@@ -177,6 +222,7 @@ struct ResolvedDependency {
     artifact_id: Option<String>,
     exact_cache_path: Option<PathBuf>,
     analysis: Option<CachedArtifactAnalysis>,
+    load_error: Option<String>,
 }
 
 #[cfg(test)]
@@ -194,16 +240,22 @@ mod tests {
         cache.functions.insert(
             FunctionCacheKey {
                 artifact_id: String::from("serde-a"),
-                path: String::from("serde::from_str"),
+                def_path_hash: String::from("00000000000000010000000000000002"),
             },
             function_summary("serde::from_str"),
         );
 
-        assert!(cache.function("serde", "serde::from_str").is_none());
+        assert!(
+            cache
+                .function("serde", "00000000000000010000000000000002")
+                .is_none()
+        );
+        assert_eq!(cache.ambiguous_crate_names(), ["serde"]);
     }
 
     fn function_summary(path: &str) -> CachedFunctionSummary {
         CachedFunctionSummary {
+            def_path_hash: String::from("00000000000000010000000000000002"),
             path: path.to_owned(),
             is_generic: false,
             has_panic_docs: false,

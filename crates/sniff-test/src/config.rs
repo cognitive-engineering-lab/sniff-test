@@ -6,8 +6,13 @@
 //!
 //! Path patterns treat `::` as a separator. For example, `std` matches only
 //! the crate namespace root, `std::*` matches one segment under `std`, and
-//! `std::**` matches recursively. Use Rust crate names in patterns, such as
-//! `proc_macro2`, not package names like `proc-macro2`.
+//! `std::**` matches `std` and everything beneath it. Definitions are matched
+//! against every session-independent namespace form they have (crate root,
+//! definition-site path, and impl self-type path — see
+//! [`crate::namespace::namespace_candidates`]), so `alloc::**` also covers
+//! trait-impl methods such as `<Vec<T> as Index<usize>>::index`. Use Rust
+//! crate names in patterns, such as `proc_macro2`, not package names like
+//! `proc-macro2`.
 
 use std::borrow::Cow;
 use std::fmt::{Debug, Display, Formatter};
@@ -22,7 +27,7 @@ use rustc_middle::ty::TyCtxt;
 use serde::{Deserialize, Serialize, de::Error as _};
 use toml::Spanned;
 
-use crate::namespace::canonical_namespace;
+use crate::namespace::namespace_candidates;
 
 pub const DEFAULT_MANIFEST_FILE: &str = "sniff-test.toml";
 #[rustfmt::skip]
@@ -69,6 +74,10 @@ ignored-namespaces = [
 # as opaque API boundaries. If a matched function has `# Panics` docs, reaching
 # it is reported as a trusted panic contract. If it has no panic docs, it is
 # treated as non-panic evidence.
+#
+# Patterns match a definition's crate root, definition-site path, and impl
+# self-type path, so `alloc::**` also covers trait-impl methods such as
+# `<Vec<T> as Index<usize>>::index`, and `x::**` includes `x` itself.
 trusted-panic-obligation-namespaces = ["std::**", "core::**", "alloc::**"]
 
 # Callees that should be treated as direct panic sinks. When this overlaps with
@@ -418,11 +427,10 @@ impl PanicConfig {
         tcx: TyCtxt<'_>,
         def_id: DefId,
     ) -> Option<&'patterns str> {
-        let crate_name = tcx.crate_name(def_id.krate).to_string();
-        self.ignored_namespace_match(&crate_name).or_else(|| {
-            let path = canonical_namespace(tcx, def_id);
-            self.ignored_namespace_match(&path)
-        })
+        let candidates = namespace_candidates(tcx, def_id);
+        candidates
+            .iter()
+            .find_map(|candidate| self.ignored_namespace_match(candidate))
     }
 
     #[must_use]
@@ -473,12 +481,10 @@ impl PanicConfig {
         def_id: DefId,
         patterns: &'patterns PathPatterns,
     ) -> Option<PathPatternMatch<'patterns>> {
-        let crate_name = tcx.crate_name(def_id.krate).to_string();
-        let path = canonical_namespace(tcx, def_id);
-        patterns
-            .best_match(&crate_name)
-            .into_iter()
-            .chain(patterns.best_match(&path))
+        let candidates = namespace_candidates(tcx, def_id);
+        candidates
+            .iter()
+            .filter_map(|candidate| patterns.best_match(candidate))
             .max_by_key(|matched| matched.precision)
     }
 }
@@ -503,11 +509,10 @@ impl SafetyConfig {
         tcx: TyCtxt<'_>,
         def_id: DefId,
     ) -> Option<&'patterns str> {
-        let crate_name = tcx.crate_name(def_id.krate).to_string();
-        self.ignored_namespace_match(&crate_name).or_else(|| {
-            let path = canonical_namespace(tcx, def_id);
-            self.ignored_namespace_match(&path)
-        })
+        let candidates = namespace_candidates(tcx, def_id);
+        candidates
+            .iter()
+            .find_map(|candidate| self.ignored_namespace_match(candidate))
     }
 
     #[must_use]
@@ -540,11 +545,17 @@ pub enum PanicBoundaryPolicy {
 #[derive(Clone, Default)]
 pub struct PathPatterns {
     patterns: Vec<String>,
+    /// Compiled glob index back to the configured pattern it came from.
+    /// Recursive patterns compile to two globs (see [`PathPatterns::new`]).
+    glob_pattern_indices: Vec<usize>,
     set: Option<GlobSet>,
 }
 
 impl PathPatterns {
     /// Compiles path patterns.
+    ///
+    /// A recursive pattern `x::**` also matches the namespace root `x` itself,
+    /// so trusting or ignoring a crate does not require listing both forms.
     ///
     /// # Errors
     ///
@@ -553,21 +564,39 @@ impl PathPatterns {
         if patterns.is_empty() {
             return Ok(Self {
                 patterns,
+                glob_pattern_indices: Vec::new(),
                 set: None,
             });
         }
 
         let mut set = GlobSetBuilder::new();
-        for pattern in &patterns {
+        let mut glob_pattern_indices = Vec::new();
+        for (index, pattern) in patterns.iter().enumerate() {
             set.add(
                 GlobBuilder::new(normalized_path(pattern).as_ref())
                     .literal_separator(true)
                     .build()?,
             );
+            glob_pattern_indices.push(index);
+
+            if let Some(root) = pattern.strip_suffix("::**")
+                && !root.is_empty()
+            {
+                set.add(
+                    GlobBuilder::new(normalized_path(root).as_ref())
+                        .literal_separator(true)
+                        .build()?,
+                );
+                glob_pattern_indices.push(index);
+            }
         }
 
         let set = Some(set.build()?);
-        Ok(Self { patterns, set })
+        Ok(Self {
+            patterns,
+            glob_pattern_indices,
+            set,
+        })
     }
 
     #[must_use]
@@ -583,7 +612,7 @@ impl PathPatterns {
         set.matches(path.as_ref())
             .into_iter()
             .map(|index| {
-                let pattern = self.patterns[index].as_str();
+                let pattern = self.patterns[self.glob_pattern_indices[index]].as_str();
                 PathPatternMatch {
                     pattern,
                     precision: pattern_precision(pattern),
@@ -1006,8 +1035,10 @@ mod tests {
         assert!(!config.trusts_panic_obligation_namespace("std::io::Error::new"));
         assert!(config.trusts_panic_obligation_namespace("std::io"));
         assert!(config.trusts_panic_obligation_namespace("alloc::vec::Vec::push"));
+        // Recursive patterns include the namespace root itself.
+        assert!(config.trusts_panic_obligation_namespace("alloc"));
         assert!(config.trusts_panic_obligation_namespace("rustc_middle::ty::TyCtxt"));
-        assert!(!config.trusts_panic_obligation_namespace("rustc_middle"));
+        assert!(config.trusts_panic_obligation_namespace("rustc_middle"));
         assert!(config.trusts_panic_obligation_namespace("smallvec"));
         assert!(config.trusts_panic_obligation_namespace("serde_json"));
         assert!(

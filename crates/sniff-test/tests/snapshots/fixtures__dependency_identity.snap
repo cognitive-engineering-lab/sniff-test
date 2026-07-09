@@ -1,0 +1,235 @@
+---
+source: crates/sniff-test/tests/fixtures.rs
+expression: messages
+---
+[
+  {
+    "artifact": {
+      "artifact-id": "[ARTIFACT_ID]",
+      "crate-name": "dependency_identity",
+      "crate-types": [
+        "lib"
+      ],
+      "extra-filename": "[EXTRA_FILENAME]",
+      "manifest-path": "[FIXTURE]/dep/Cargo.toml",
+      "metadata": "[METADATA]",
+      "package-name": "dependency-identity",
+      "package-version": "0.1.0",
+      "target": null
+    },
+    "concrete-roots": 3,
+    "counts": {
+      "panic-obligations": 0,
+      "raw-panic-paths": 3,
+      "trusted-panic-obligations": 0
+    },
+    "dependencies": [],
+    "dependency-cache": {
+      "failed": 0,
+      "hits": 0,
+      "total": 0
+    },
+    "format-version": 1,
+    "generic-roots": 0,
+    "missing-roots": [],
+    "reason": "sniff-test-artifact",
+    "roots": [
+      {
+        "counts": {
+          "panic-obligations": 0,
+          "raw-panic-paths": 1,
+          "trusted-panic-obligations": 0
+        },
+        "findings": [
+          {
+            "edge": "<dependency_identity::Widget as Sniffer>::sniff --macro-expansion-> macro core::std::assert",
+            "kind": "panic-invocation",
+            "level": "deny",
+            "reason": "panic sink core::std::rt::panic_fmt",
+            "span": "[FIXTURE]/dep/src/lib.rs:13:9: 13:52",
+            "target": "core::std::rt::panic_fmt",
+            "trace": [
+              "[FIXTURE]/dep/src/lib.rs:13:9: 13:52: <dependency_identity::Widget as Sniffer>::sniff --macro-expansion-> macro core::std::assert",
+              "[FIXTURE]/dep/src/lib.rs:13:9: 13:52: macro core::std::assert --macro-expansion-> macro core::std::panic::panic_2021",
+              "[SYSROOT]/lib/rustlib/src/rust/library/core/src/panic.rs:62:9: 62:73: macro core::std::panic::panic_2021 --direct-call-> core::std::rt::panic_fmt"
+            ]
+          }
+        ],
+        "has-panic-docs": false,
+        "root": "<dependency_identity::Widget as Sniffer>::sniff",
+        "root-declaration": "[FIXTURE]/dep/src/lib.rs:12:5",
+        "root-kind": "concrete"
+      },
+      {
+        "counts": {
+          "panic-obligations": 0,
+          "raw-panic-paths": 1,
+          "trusted-panic-obligations": 0
+        },
+        "findings": [
+          {
+            "edge": "<dependency_identity::std::vec::Vec<u8> as Sniffer>::sniff --macro-expansion-> macro core::std::assert",
+            "kind": "panic-invocation",
+            "level": "deny",
+            "reason": "panic sink core::std::rt::panic_fmt",
+            "span": "[FIXTURE]/dep/src/lib.rs:19:9: 19:52",
+            "target": "core::std::rt::panic_fmt",
+            "trace": [
+              "[FIXTURE]/dep/src/lib.rs:19:9: 19:52: <dependency_identity::std::vec::Vec<u8> as Sniffer>::sniff --macro-expansion-> macro core::std::assert",
+              "[FIXTURE]/dep/src/lib.rs:19:9: 19:52: macro core::std::assert --macro-expansion-> macro core::std::panic::panic_2021",
+              "[SYSROOT]/lib/rustlib/src/rust/library/core/src/panic.rs:62:9: 62:73: macro core::std::panic::panic_2021 --direct-call-> core::std::rt::panic_fmt"
+            ]
+          }
+        ],
+        "has-panic-docs": false,
+        "root": "<dependency_identity::std::vec::Vec<u8> as Sniffer>::sniff",
+        "root-declaration": "[FIXTURE]/dep/src/lib.rs:18:5",
+        "root-kind": "concrete"
+      },
+      {
+        "counts": {
+          "panic-obligations": 0,
+          "raw-panic-paths": 1,
+          "trusted-panic-obligations": 0
+        },
+        "findings": [
+          {
+            "edge": "dependency_identity::internal::run --macro-expansion-> macro core::std::assert",
+            "kind": "panic-invocation",
+            "level": "deny",
+            "reason": "panic sink core::std::rt::panic_fmt",
+            "span": "[FIXTURE]/dep/src/lib.rs:25:9: 25:49",
+            "target": "core::std::rt::panic_fmt",
+            "trace": [
+              "[FIXTURE]/dep/src/lib.rs:25:9: 25:49: dependency_identity::internal::run --macro-expansion-> macro core::std::assert",
+              "[FIXTURE]/dep/src/lib.rs:25:9: 25:49: macro core::std::assert --macro-expansion-> macro core::std::panic::panic_2021",
+              "[SYSROOT]/lib/rustlib/src/rust/library/core/src/panic.rs:62:9: 62:73: macro core::std::panic::panic_2021 --direct-call-> core::std::rt::panic_fmt"
+            ]
+          }
+        ],
+        "has-panic-docs": false,
+        "root": "dependency_identity::internal::run",
+        "root-declaration": "[FIXTURE]/dep/src/lib.rs:24:5",
+        "root-kind": "concrete"
+      }
+    ],
+    "rustc-version": "[RUSTC_VERSION]",
+    "scope": "dependency",
+    "tool-version": "0.1.0"
+  },
+  {
+    "artifact": {
+      "artifact-id": "[ARTIFACT_ID]",
+      "crate-name": "dependency_identity_app",
+      "crate-types": [
+        "lib"
+      ],
+      "extra-filename": "[EXTRA_FILENAME]",
+      "manifest-path": "[FIXTURE]/app/Cargo.toml",
+      "metadata": "[METADATA]",
+      "package-name": "dependency-identity-app",
+      "package-version": "0.1.0",
+      "target": null
+    },
+    "concrete-roots": 3,
+    "counts": {
+      "panic-obligations": 0,
+      "raw-panic-paths": 3,
+      "trusted-panic-obligations": 0
+    },
+    "dependencies": [
+      {
+        "artifact-id": "[ARTIFACT_ID]",
+        "artifact-path": "[ARTIFACT_PATH]",
+        "exact-cache-path": "[EXACT_CACHE_PATH]",
+        "extern-name": "dependency_identity"
+      }
+    ],
+    "dependency-cache": {
+      "failed": 0,
+      "hits": 1,
+      "total": 1
+    },
+    "format-version": 1,
+    "generic-roots": 0,
+    "missing-roots": [],
+    "reason": "sniff-test-artifact",
+    "roots": [
+      {
+        "counts": {
+          "panic-obligations": 0,
+          "raw-panic-paths": 1,
+          "trusted-panic-obligations": 0
+        },
+        "findings": [
+          {
+            "edge": "dependency_identity_app::run_reexported --direct-call-> dependency_identity::run",
+            "kind": "cached-dependency-panic",
+            "level": "deny",
+            "reason": "dependency_identity::internal::run has cached panic evidence: 1 undocumented panic path",
+            "span": "src/lib.rs:12:5: 12:35",
+            "target": "dependency_identity::internal::run",
+            "trace": [
+              "src/lib.rs:12:5: 12:35: dependency_identity_app::run_reexported --direct-call-> dependency_identity::run"
+            ]
+          }
+        ],
+        "has-panic-docs": false,
+        "root": "dependency_identity_app::run_reexported",
+        "root-declaration": "src/lib.rs:11:1",
+        "root-kind": "concrete"
+      },
+      {
+        "counts": {
+          "panic-obligations": 0,
+          "raw-panic-paths": 1,
+          "trusted-panic-obligations": 0
+        },
+        "findings": [
+          {
+            "edge": "dependency_identity_app::sniff_buffer --direct-call-> <dependency_identity::std::vec::Vec<u8> as dependency_identity::Sniffer>::sniff",
+            "kind": "cached-dependency-panic",
+            "level": "deny",
+            "reason": "<dependency_identity::std::vec::Vec<u8> as Sniffer>::sniff has cached panic evidence: 1 undocumented panic path",
+            "span": "src/lib.rs:8:5: 8:23",
+            "target": "<dependency_identity::std::vec::Vec<u8> as Sniffer>::sniff",
+            "trace": [
+              "src/lib.rs:8:5: 8:23: dependency_identity_app::sniff_buffer --direct-call-> <dependency_identity::std::vec::Vec<u8> as dependency_identity::Sniffer>::sniff"
+            ]
+          }
+        ],
+        "has-panic-docs": false,
+        "root": "dependency_identity_app::sniff_buffer",
+        "root-declaration": "src/lib.rs:7:1",
+        "root-kind": "concrete"
+      },
+      {
+        "counts": {
+          "panic-obligations": 0,
+          "raw-panic-paths": 1,
+          "trusted-panic-obligations": 0
+        },
+        "findings": [
+          {
+            "edge": "dependency_identity_app::sniff_widget --direct-call-> <dependency_identity::Widget as dependency_identity::Sniffer>::sniff",
+            "kind": "cached-dependency-panic",
+            "level": "deny",
+            "reason": "<dependency_identity::Widget as Sniffer>::sniff has cached panic evidence: 1 undocumented panic path",
+            "span": "src/lib.rs:4:5: 4:23",
+            "target": "<dependency_identity::Widget as Sniffer>::sniff",
+            "trace": [
+              "src/lib.rs:4:5: 4:23: dependency_identity_app::sniff_widget --direct-call-> <dependency_identity::Widget as dependency_identity::Sniffer>::sniff"
+            ]
+          }
+        ],
+        "has-panic-docs": false,
+        "root": "dependency_identity_app::sniff_widget",
+        "root-declaration": "src/lib.rs:3:1",
+        "root-kind": "concrete"
+      }
+    ],
+    "rustc-version": "[RUSTC_VERSION]",
+    "scope": "workspace",
+    "tool-version": "0.1.0"
+  }
+]

@@ -1,6 +1,5 @@
 ---
 source: crates/sniff-test/tests/fixtures.rs
-assertion_line: 67
 expression: messages
 ---
 [
@@ -26,6 +25,7 @@ expression: messages
     },
     "dependencies": [],
     "dependency-cache": {
+      "failed": 0,
       "hits": 0,
       "total": 0
     },

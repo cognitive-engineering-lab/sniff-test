@@ -1,12 +1,94 @@
 //! Canonical Rust namespace rendering for config and cache matching.
 //!
-//! Configuration patterns are matched against two related namespace forms:
-//! the crate root, such as `serde`, and fully-qualified item paths, such as
-//! `serde::de::from_str`. Rust crate names use underscores, not package-name
-//! hyphens, so users should write `proc_macro2`, not `proc-macro2`.
+//! Configuration patterns are matched against the session-independent
+//! [`NamespaceCandidates`] forms of a definition: the crate root, such as
+//! `serde`, the definition-site path, such as `serde::de::from_str`, and for
+//! impl items the self-type path, such as `alloc::vec::Vec::index`. Rust crate
+//! names use underscores, not package-name hyphens, so users should write
+//! `proc_macro2`, not `proc-macro2`.
+//!
+//! Cache identity uses [`stable_def_path_hash`] instead of rendered paths:
+//! pretty-printed paths differ between the defining crate's session and a
+//! consumer's session (trait qualification, re-exports), while def path hashes
+//! are read from crate metadata and agree by construction.
 
+use rustc_hir::def::DefKind;
 use rustc_hir::def_id::DefId;
 use rustc_middle::ty::TyCtxt;
+
+/// Session-independent identity for a definition, as a 32-hex-digit string of
+/// the stable crate id followed by the local def path hash.
+#[must_use]
+pub fn stable_def_path_hash(tcx: TyCtxt<'_>, def_id: DefId) -> String {
+    let hash = tcx.def_path_hash(def_id);
+    format!(
+        "{:016x}{:016x}",
+        hash.stable_crate_id().as_u64(),
+        hash.local_hash().as_u64()
+    )
+}
+
+/// Session-independent namespace forms a definition can be matched against.
+#[derive(Debug, Clone)]
+pub struct NamespaceCandidates {
+    /// The defining crate root, such as `alloc`.
+    pub crate_name: String,
+    /// The definition-site path, such as `alloc::vec::{impl#5}::index`.
+    pub def_site: String,
+    /// The self-type path for impl items, such as `alloc::vec::Vec::index`.
+    ///
+    /// Only present when the self type is an ADT of the defining crate, so an
+    /// `impl MyTrait for Vec<u8>` in a user crate never matches `alloc::**`.
+    pub self_type: Option<String>,
+    /// The legacy pretty-printed form kept for pattern back-compat.
+    pub display: String,
+}
+
+impl NamespaceCandidates {
+    pub fn iter(&self) -> impl Iterator<Item = &str> {
+        [
+            Some(self.crate_name.as_str()),
+            Some(self.def_site.as_str()),
+            self.self_type.as_deref(),
+            Some(self.display.as_str()),
+        ]
+        .into_iter()
+        .flatten()
+    }
+}
+
+#[must_use]
+pub fn namespace_candidates(tcx: TyCtxt<'_>, def_id: DefId) -> NamespaceCandidates {
+    let crate_name = tcx.crate_name(def_id.krate).to_string();
+    let def_site = format!(
+        "{crate_name}{}",
+        tcx.def_path(def_id).to_string_no_crate_verbose()
+    );
+    NamespaceCandidates {
+        self_type: impl_self_type_path(tcx, def_id, &crate_name),
+        display: canonical_namespace(tcx, def_id),
+        crate_name,
+        def_site,
+    }
+}
+
+fn impl_self_type_path(tcx: TyCtxt<'_>, def_id: DefId, crate_name: &str) -> Option<String> {
+    let parent = tcx.opt_parent(def_id)?;
+    if !matches!(tcx.def_kind(parent), DefKind::Impl { .. }) {
+        return None;
+    }
+    let adt = tcx
+        .type_of(parent)
+        .instantiate_identity()
+        .skip_normalization()
+        .ty_adt_def()
+        .filter(|adt| adt.did().krate == def_id.krate)?;
+    Some(format!(
+        "{crate_name}{}::{}",
+        tcx.def_path(adt.did()).to_string_no_crate_verbose(),
+        tcx.item_name(def_id)
+    ))
+}
 
 #[must_use]
 pub fn canonical_namespace(tcx: TyCtxt<'_>, def_id: DefId) -> String {

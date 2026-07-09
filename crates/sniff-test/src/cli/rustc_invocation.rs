@@ -77,10 +77,43 @@ pub(crate) struct ExternCrateArg {
 
 impl ExternCrateArg {
     fn parse(value: &str) -> Option<Self> {
-        let (name, path) = value.split_once('=')?;
-        Some(Self {
+        let (name, path) = match value.split_once('=') {
+            Some((name, path)) => (name, (!path.is_empty()).then(|| PathBuf::from(path))),
+            // Cargo passes pathless externs such as `--extern proc_macro`.
+            None => (value, None),
+        };
+        // Cargo can glue modifiers onto the name, such as `noprelude:std`
+        // under -Zbuild-std or `priv:` under -Zpublic-dependency.
+        let name = name.rsplit_once(':').map_or(name, |(_, name)| name);
+        (!name.is_empty()).then(|| Self {
             name: name.to_owned(),
-            path: (!path.is_empty()).then(|| PathBuf::from(path)),
+            path,
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::ExternCrateArg;
+
+    #[test]
+    fn extern_args_keep_pathless_externs_and_strip_modifiers() {
+        let parsed = ExternCrateArg::parse("serde=/deps/libserde-1234.rmeta").expect("parses");
+        assert_eq!(parsed.name, "serde");
+        assert_eq!(
+            parsed.path.as_deref(),
+            Some("/deps/libserde-1234.rmeta".as_ref())
+        );
+
+        let pathless = ExternCrateArg::parse("proc_macro").expect("parses");
+        assert_eq!(pathless.name, "proc_macro");
+        assert_eq!(pathless.path, None);
+
+        let modified =
+            ExternCrateArg::parse("noprelude:std=/deps/libstd-1234.rmeta").expect("parses");
+        assert_eq!(modified.name, "std");
+
+        assert!(ExternCrateArg::parse("").is_none());
+        assert!(ExternCrateArg::parse("=path-without-name").is_none());
     }
 }

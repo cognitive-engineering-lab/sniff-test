@@ -167,6 +167,15 @@ fixture_cases! {
             .crate_dir("app")
             .args(&["--cache-dir", ".sniff-cache"]);
     }
+    "dependency_identity" => {
+        dependency_identity => Case::cargo("dependency cache identity across sessions")
+            .crate_dir("app")
+            .exit_code(1);
+    }
+    "std_trait_impl_glob" => {
+        std_trait_impl_glob => Case::cargo("trait-impl methods match trusted globs");
+        driver_std_trait_impl_glob => Case::direct("trait-impl methods match trusted globs");
+    }
     "safe_markers" => {
         safe_markers => Case::cargo("panic marker satisfaction").exit_code(1);
         driver_safe_markers => Case::direct("panic marker satisfaction");

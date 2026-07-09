@@ -101,7 +101,7 @@ fn sorted_selection<'tcx>(
 ) -> ReportRootSelection<'tcx> {
     let mut roots = roots
         .into_iter()
-        .filter(|local| !config.ignores_namespace(&canonical_namespace(tcx, local.to_def_id())))
+        .filter(|local| !config.ignores_def(tcx, local.to_def_id()))
         .map(|local| report_root(tcx, local))
         .collect::<Vec<_>>();
 

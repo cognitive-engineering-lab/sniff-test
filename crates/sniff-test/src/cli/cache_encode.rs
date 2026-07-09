@@ -4,7 +4,7 @@ use crate::cache::{
     CachedReachabilityGraph, CachedReachabilityNode, CachedReachabilityNodeKind, CachedSourceSpan,
 };
 use crate::config::PanicConfig;
-use crate::namespace::canonical_namespace;
+use crate::namespace::{canonical_namespace, stable_def_path_hash};
 use crate::panics::{
     PanicAnalysis, PanicEvidence, PanicEvidenceKind, PanicPathDecision,
     describe_panic_evidence_kind, trace_edges_until, trace_to_edge_ids, trigger_edge_id,
@@ -29,6 +29,7 @@ pub(super) fn function_summary<'tcx>(
     findings: Vec<CachedFinding>,
 ) -> CachedFunctionSummary {
     CachedFunctionSummary {
+        def_path_hash: stable_def_path_hash(tcx, def_id),
         path: canonical_namespace(tcx, def_id),
         is_generic,
         has_panic_docs: crate::panics::has_panic_docs(tcx, def_id),
@@ -236,6 +237,7 @@ fn cached_reachability_graph<'tcx>(
         edges: view
             .edges()
             .map(|edge| CachedReachabilityEdge {
+                id: edge.id().index(),
                 source: edge.source().id().index(),
                 target: edge.target().id().index(),
                 kind: cached_reachability_edge_kind(edge.kind()),

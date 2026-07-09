@@ -6,14 +6,14 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, ExitCode};
 
 use crate::cache::{
-    CachedArtifactAnalysis, CachedArtifactInfo, CachedDependencyRef, CachedFunctionSummary,
-    artifact_id, write_artifact_analysis,
+    CacheExpectations, CachedArtifactAnalysis, CachedArtifactInfo, CachedDependencyRef,
+    CachedFunctionSummary, artifact_id, write_artifact_analysis,
 };
 use crate::config::{
     AnalysisConfig, LintLevel, PanicBoundaryPolicy, PanicConfig, SafetyLintConfig, SniffTestConfig,
 };
 use crate::dependency_cache::{DependencyAnalysisCache, DependencyInput};
-use crate::namespace::canonical_namespace;
+use crate::namespace::stable_def_path_hash;
 use crate::panics::{PanicAnalysis, PanicEvidence, PanicPathDecision, analyze_panic_evidence};
 use crate::report_roots::{
     MissingReportRoot, ReportRoot, ReportRootSelection, select_report_roots,
@@ -216,6 +216,7 @@ pub(crate) fn analyze_crate(tcx: TyCtxt<'_>, args: &SniffTestArgs, compiler_args
         return;
     }
 
+    let rustc_version = rustc_version();
     let dependency_cache = DependencyAnalysisCache::load(
         &args.cache_dir(),
         invocation.externs.iter().map(|extern_arg| DependencyInput {
@@ -223,7 +224,22 @@ pub(crate) fn analyze_crate(tcx: TyCtxt<'_>, args: &SniffTestArgs, compiler_args
             path: extern_arg.path.clone(),
         }),
         &config.panics,
+        &CacheExpectations {
+            tool_version: env!("CARGO_PKG_VERSION"),
+            rustc_version: &rustc_version,
+        },
     );
+    for (extern_name, error) in dependency_cache.load_failures() {
+        eprintln!(
+            "sniff-test: warning: ignoring cached analysis for dependency `{extern_name}`: {error}"
+        );
+    }
+    for ambiguous in dependency_cache.ambiguous_crate_names() {
+        eprintln!(
+            "sniff-test: warning: multiple compiled artifacts are named `{ambiguous}`; \
+             cached panic evidence for that crate is disabled"
+        );
+    }
 
     let selection = select_report_roots(tcx, &config.analysis, &config.panics);
     let diagnostics = PanicDiagnosticOptions {
@@ -305,6 +321,7 @@ impl AnalysisArtifact {
             dependency_cache: DependencyCacheReport {
                 hits: dependency_cache.hit_count(),
                 total: dependency_cache.dependency_count(),
+                failed: dependency_cache.failed_count(),
             },
             dependencies: dependencies.clone(),
             missing_roots: root_analysis
@@ -489,6 +506,9 @@ const REPORT_FORMAT_VERSION: u32 = 1;
 struct DependencyCacheReport {
     hits: usize,
     total: usize,
+    /// Cache files that exist but were unreadable or version-mismatched,
+    /// distinguishing corruption from dependencies never analyzed.
+    failed: usize,
 }
 
 fn emit_json_analysis_artifact_report(report: &AnalysisArtifactReport) {
@@ -813,7 +833,6 @@ fn emit_cached_dependency_findings<'tcx>(
         }
 
         let def_id = instance.def_id();
-        let path = canonical_namespace(tcx, def_id);
         if collection.config.ignores_def(tcx, def_id) {
             continue;
         }
@@ -824,7 +843,7 @@ fn emit_cached_dependency_findings<'tcx>(
         let dependency_crate_name = tcx.crate_name(def_id.krate).to_string();
         let Some(summary) = collection
             .dependency_cache
-            .function(&dependency_crate_name, &path)
+            .function(&dependency_crate_name, &stable_def_path_hash(tcx, def_id))
         else {
             continue;
         };

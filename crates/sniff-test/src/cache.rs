@@ -13,14 +13,16 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
-pub const CACHE_FORMAT_VERSION: u32 = 2;
+pub const CACHE_FORMAT_VERSION: u32 = 3;
 pub const CACHE_DIR_NAME: &str = "sniff-test-cache";
-pub const CACHE_VERSION_DIR: &str = "v2";
+pub const CACHE_VERSION_DIR: &str = "v3";
 
 /// Cached analysis for one exact rustc output artifact.
 ///
-/// `functions` is keyed by fully qualified function path for direct lookup
-/// once the consuming crate has resolved which artifact it called into.
+/// `functions` is keyed by [`CachedFunctionSummary::def_path_hash`] for direct
+/// lookup once the consuming crate has resolved which artifact it called into.
+/// Pretty-printed paths are not identity: they render differently in the
+/// defining crate's session and a consumer's session.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub struct CachedArtifactAnalysis {
@@ -43,7 +45,7 @@ impl CachedArtifactAnalysis {
     ) -> Self {
         let functions = functions
             .into_iter()
-            .map(|function| (function.path.clone(), function))
+            .map(|function| (function.def_path_hash.clone(), function))
             .collect();
         Self {
             format_version: CACHE_FORMAT_VERSION,
@@ -88,6 +90,9 @@ pub struct CachedDependencyRef {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub struct CachedFunctionSummary {
+    /// Session-independent identity (see `namespace::stable_def_path_hash`).
+    pub def_path_hash: String,
+    /// Display form as rendered by the defining crate's session.
     pub path: String,
     pub is_generic: bool,
     pub has_panic_docs: bool,
@@ -120,7 +125,11 @@ pub struct CachedFinding {
     pub source_span: Option<CachedSourceSpan>,
     #[serde(default)]
     pub diagnostic_spans: Vec<CachedDiagnosticSpan>,
+    /// Arena edge id of the triggering edge; resolves against
+    /// [`CachedReachabilityEdge::id`] in this summary's `graph`.
     pub edge_index: Option<usize>,
+    /// Arena edge ids from the root to the finding, same id space as
+    /// `edge_index`.
     pub trace: Vec<usize>,
     pub reason: String,
     pub target: Option<CachedFindingTarget>,
@@ -222,6 +231,10 @@ pub enum CachedReachabilityNodeKind {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub struct CachedReachabilityEdge {
+    /// Arena edge id, the id space [`CachedFinding::edge_index`] and
+    /// [`CachedFinding::trace`] refer to. Edges are serialized as the
+    /// snapshot's subsequence of the arena, so positions do not equal ids.
+    pub id: usize,
     pub source: usize,
     pub target: usize,
     pub kind: CachedReachabilityEdgeKind,
@@ -247,6 +260,19 @@ pub enum CachedReachabilityEdgeKind {
     IndirectCall,
 }
 
+/// Session identity a cache file must match to be consumed as current
+/// evidence.
+///
+/// Artifact ids alone cannot guarantee this: cargo hashes only the release
+/// channel into `extra-filename`, so ids collide across nightlies, and they
+/// never encode the sniff-test version at all. That is harmless under the
+/// default cache dir (already rustc-scoped) but not with `--cache-dir`.
+#[derive(Debug, Clone, Copy)]
+pub struct CacheExpectations<'a> {
+    pub tool_version: &'a str,
+    pub rustc_version: &'a str,
+}
+
 #[derive(Debug)]
 pub enum CacheError {
     Io {
@@ -261,6 +287,24 @@ pub enum CacheError {
         path: PathBuf,
         version: u32,
     },
+    Version {
+        path: PathBuf,
+        field: &'static str,
+        found: String,
+        expected: String,
+    },
+}
+
+impl CacheError {
+    /// True for the routine miss of a dependency that simply has no cache
+    /// file, such as sysroot crates.
+    #[must_use]
+    pub fn is_missing_file(&self) -> bool {
+        matches!(
+            self,
+            Self::Io { source, .. } if source.kind() == std::io::ErrorKind::NotFound
+        )
+    }
 }
 
 impl Display for CacheError {
@@ -277,6 +321,16 @@ impl Display for CacheError {
                 "unsupported cache format {version} in {}",
                 path.display()
             ),
+            Self::Version {
+                path,
+                field,
+                found,
+                expected,
+            } => write!(
+                f,
+                "stale cache {}: written by {field} {found}, current is {expected}",
+                path.display()
+            ),
         }
     }
 }
@@ -286,7 +340,7 @@ impl std::error::Error for CacheError {
         match self {
             Self::Io { source, .. } => Some(source),
             Self::Json { source, .. } => Some(source),
-            Self::Format { .. } => None,
+            Self::Format { .. } | Self::Version { .. } => None,
         }
     }
 }
@@ -320,9 +374,13 @@ pub fn write_artifact_analysis(
 ///
 /// # Errors
 ///
-/// Returns an error when the file cannot be read, the JSON cannot be parsed, or
-/// the cache format version is unsupported.
-pub fn read_artifact_analysis(path: &Path) -> Result<CachedArtifactAnalysis, CacheError> {
+/// Returns an error when the file cannot be read, the JSON cannot be parsed,
+/// the cache format version is unsupported, or the file was written by a
+/// different sniff-test or rustc version than `expected`.
+pub fn read_artifact_analysis(
+    path: &Path,
+    expected: &CacheExpectations<'_>,
+) -> Result<CachedArtifactAnalysis, CacheError> {
     let source = std::fs::read_to_string(path).map_err(|source| CacheError::Io {
         path: path.to_owned(),
         source,
@@ -333,14 +391,26 @@ pub fn read_artifact_analysis(path: &Path) -> Result<CachedArtifactAnalysis, Cac
             source,
         }
     })?;
-    if analysis.format_version == CACHE_FORMAT_VERSION {
-        Ok(analysis)
-    } else {
-        Err(CacheError::Format {
+    if analysis.format_version != CACHE_FORMAT_VERSION {
+        return Err(CacheError::Format {
             path: path.to_owned(),
             version: analysis.format_version,
-        })
+        });
     }
+    for (field, found, expected) in [
+        ("sniff-test", &analysis.tool_version, expected.tool_version),
+        ("rustc", &analysis.rustc_version, expected.rustc_version),
+    ] {
+        if found != expected {
+            return Err(CacheError::Version {
+                path: path.to_owned(),
+                field,
+                found: found.clone(),
+                expected: expected.to_owned(),
+            });
+        }
+    }
+    Ok(analysis)
 }
 
 #[must_use]
@@ -418,7 +488,9 @@ fn sanitize_path_component(value: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
+        CacheError, CacheExpectations, CachedArtifactAnalysis, CachedArtifactInfo,
         artifact_cache_path, artifact_id_from_extern_path, crate_cache_path, default_cache_dir,
+        read_artifact_analysis, write_atomic,
     };
 
     #[test]
@@ -447,13 +519,74 @@ mod tests {
             artifact_cache_path(&root, "sniff_test-29f0")
                 .display()
                 .to_string(),
-            "/target/plugin-nightly/sniff-test-cache/v2/artifacts/sniff_test-29f0.json"
+            "/target/plugin-nightly/sniff-test-cache/v3/artifacts/sniff_test-29f0.json"
         );
         assert_eq!(
             crate_cache_path(&root, "sniff-test", "sniff_test-29f0")
                 .display()
                 .to_string(),
-            "/target/plugin-nightly/sniff-test-cache/v2/crates/sniff-test/sniff_test-29f0.json"
+            "/target/plugin-nightly/sniff-test-cache/v3/crates/sniff-test/sniff_test-29f0.json"
         );
+    }
+
+    #[test]
+    fn cache_reads_reject_other_tool_rustc_and_format_versions() {
+        let current = CacheExpectations {
+            tool_version: "0.1.0",
+            rustc_version: "rustc 1.97.0-nightly",
+        };
+        let dir = tempfile::tempdir().expect("temp dir");
+        let path = dir.path().join("artifact.json");
+        let write = |analysis: &CachedArtifactAnalysis| {
+            write_atomic(&path, &serde_json::to_string(analysis).expect("serialize"))
+                .expect("write cache file");
+        };
+
+        let good = analysis("0.1.0", "rustc 1.97.0-nightly");
+        write(&good);
+        assert_eq!(read_artifact_analysis(&path, &current).expect("read"), good);
+
+        write(&analysis("0.0.9", "rustc 1.97.0-nightly"));
+        assert!(matches!(
+            read_artifact_analysis(&path, &current),
+            Err(CacheError::Version {
+                field: "sniff-test",
+                ..
+            })
+        ));
+
+        write(&analysis("0.1.0", "rustc 1.96.0-nightly"));
+        assert!(matches!(
+            read_artifact_analysis(&path, &current),
+            Err(CacheError::Version { field: "rustc", .. })
+        ));
+
+        let mut old_format = analysis("0.1.0", "rustc 1.97.0-nightly");
+        old_format.format_version = 2;
+        write(&old_format);
+        assert!(matches!(
+            read_artifact_analysis(&path, &current),
+            Err(CacheError::Format { version: 2, .. })
+        ));
+    }
+
+    fn analysis(tool_version: &str, rustc_version: &str) -> CachedArtifactAnalysis {
+        CachedArtifactAnalysis::new(
+            tool_version,
+            rustc_version,
+            CachedArtifactInfo {
+                artifact_id: String::from("dep-1234"),
+                crate_name: String::from("dep"),
+                crate_types: Vec::new(),
+                package_name: None,
+                package_version: None,
+                manifest_path: None,
+                target: None,
+                metadata: None,
+                extra_filename: None,
+            },
+            Vec::new(),
+            Vec::new(),
+        )
     }
 }

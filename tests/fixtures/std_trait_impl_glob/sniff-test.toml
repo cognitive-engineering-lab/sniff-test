@@ -1,0 +1,14 @@
+# Trait-impl methods such as `<Vec<T> as Index<usize>>::index` must match the
+# recommended trusted globs the same way inherent methods like `Vec::push` do.
+
+[panics]
+trusted-panic-obligation-namespaces = ["std::**", "core::**", "alloc::**"]
+panic-sink-namespaces = [
+    "core::panicking::**",
+    "std::panicking::**",
+    "core::std::rt::panic_fmt",
+    "std::rt::panic_fmt",
+]
+
+[panics.lints]
+trusted-panic-contract = "warn"

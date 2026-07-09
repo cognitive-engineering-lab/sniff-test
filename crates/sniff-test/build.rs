@@ -4,7 +4,17 @@ use std::{env, ffi::OsString, fs, process::Command};
 
 fn main() {
     println!("cargo::rerun-if-env-changed=RUSTC");
-    emit_source_stamp("SNIFF_TEST_SOURCE_STAMP", &["build.rs", "src"]);
+    // The stamp must cover every crate that decides analysis results: it feeds
+    // the `sniff_test_tool_*` cfg that makes cargo fingerprints tool-sensitive.
+    emit_source_stamp(
+        "SNIFF_TEST_SOURCE_STAMP",
+        &[
+            "build.rs",
+            "src",
+            "../reachability/build.rs",
+            "../reachability/src",
+        ],
+    );
 
     let rustc = env::var_os("RUSTC").unwrap_or_else(|| OsString::from("rustc"));
     let output = Command::new(&rustc)
