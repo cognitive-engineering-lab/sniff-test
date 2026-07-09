@@ -16,6 +16,7 @@ use crate::hooks::{ReachabilityHalt, ReachabilityQueryStats};
 pub struct ReachabilityGraph<'tcx> {
     nodes: Vec<ReachabilityNode<'tcx>>,
     edges: Vec<ReachabilityEdge>,
+    edge_callables: Vec<Option<CallableEdgeInfo<'tcx>>>,
     outgoing: Vec<Vec<ReachabilityEdgeId>>,
     instance_nodes: HashMap<Instance<'tcx>, ReachabilityNodeId>,
 }
@@ -25,6 +26,7 @@ impl<'tcx> ReachabilityGraph<'tcx> {
         Self {
             nodes: Vec::new(),
             edges: Vec::new(),
+            edge_callables: Vec::new(),
             outgoing: Vec::new(),
             instance_nodes: HashMap::new(),
         }
@@ -85,6 +87,12 @@ impl<'tcx> ReachabilityGraph<'tcx> {
     }
 
     #[must_use]
+    /// Returns erased-callable metadata attached to an edge, if any.
+    pub fn edge_callable(&self, edge: ReachabilityEdgeId) -> Option<CallableEdgeInfo<'tcx>> {
+        self.edge_callables[edge.index()]
+    }
+
+    #[must_use]
     /// Returns outgoing edge ids for `node`.
     pub fn outgoing_edges(&self, node: ReachabilityNodeId) -> &[ReachabilityEdgeId] {
         &self.outgoing[node.index()]
@@ -125,9 +133,18 @@ impl<'tcx> ReachabilityGraph<'tcx> {
     }
 
     pub(crate) fn push_edge(&mut self, edge: ReachabilityEdge) -> ReachabilityEdgeId {
+        self.push_edge_with_callable(edge, None)
+    }
+
+    pub(crate) fn push_edge_with_callable(
+        &mut self,
+        edge: ReachabilityEdge,
+        callable: Option<CallableEdgeInfo<'tcx>>,
+    ) -> ReachabilityEdgeId {
         let id = ReachabilityEdgeId(self.edges.len());
         self.outgoing[edge.source.index()].push(id);
         self.edges.push(edge);
+        self.edge_callables.push(callable);
         id
     }
 
@@ -519,6 +536,15 @@ pub enum CompilerAssertLocalRole {
     Temporary,
 }
 
+/// Type key for callables erased into an indirect representation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum CallableEdgeInfo<'tcx> {
+    /// Function item or closure coerced to, or called through, a function pointer.
+    FnPointer { fn_ptr_ty: Ty<'tcx> },
+    /// Concrete vtable target introduced by, or call through, a dyn trait.
+    DynDispatch { trait_def_id: DefId },
+}
+
 /// Directed edge between two reachability nodes.
 #[derive(Clone)]
 pub struct ReachabilityEdge {
@@ -579,6 +605,8 @@ pub enum ReachabilityEdgeKind {
     /// This is not a runtime call; constructing a closure value does not by
     /// itself make the closure body executable.
     ClosureDefinition,
+    /// Concrete callable target reached from a function-pointer call site.
+    FnPointerCallTarget,
     /// Dynamic object unsizing, such as `&T` to `&dyn Trait`.
     DynObjectCast,
     /// Method entry reachable through a dynamic object vtable.
@@ -604,6 +632,7 @@ impl fmt::Display for ReachabilityEdgeKind {
             Self::FnPointerReify => "fn-pointer-reify",
             Self::ClosureFnPointerReify => "closure-fn-pointer-reify",
             Self::ClosureDefinition => "closure-definition",
+            Self::FnPointerCallTarget => "fn-pointer-call-target",
             Self::DynObjectCast => "dyn-object-cast",
             Self::VTableEntry => "vtable-entry",
             Self::DynDispatchVTableEntry => "dyn-dispatch-vtable-entry",

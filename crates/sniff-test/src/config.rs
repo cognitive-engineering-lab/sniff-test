@@ -21,7 +21,10 @@ use std::path::{Path, PathBuf};
 use std::str::FromStr;
 
 use globset::{GlobBuilder, GlobSet, GlobSetBuilder};
-use reachability::DynDispatchVTableEdges as ReachabilityDynDispatchVTableEdges;
+use reachability::{
+    DynDispatchVTableEdges as ReachabilityDynDispatchVTableEdges,
+    FnPointerEdges as ReachabilityFnPointerEdges,
+};
 use rustc_hir::def_id::DefId;
 use rustc_middle::ty::TyCtxt;
 use serde::{Deserialize, Serialize, de::Error as _};
@@ -54,15 +57,17 @@ inline-mir = "off"
 # becomes indirect, or `call-sites` where it is used.
 callable-edge-attribution = "erasure-sites"
 
-# Shared local proof markers default to failing closed when one marker would
-# justify multiple panic obligations. Use `warn` while auditing, or `allow` to
-# accept shared proofs.
-ambiguous-obligation-markers = "error"
-
-# Instance budget per reachability query. Traversals that halt at the limit
-# are reported through the `analysis-incomplete` lint instead of passing
-# silently.
+# Ambiguous obligation names and shared proof markers default to failing closed.
+# Configure ambiguous-obligations under `[analysis.lints]`.
+#
+# Instance budget per reachability query. Traversals that halt at the limit are
+# reported through the `analysis-incomplete` lint instead of passing silently.
 node-limit = 4096
+
+[analysis.lints]
+analysis-incomplete = "deny"
+# Use `warn` while auditing, or `allow` to accept squashed obligations.
+ambiguous-obligations = "deny"
 
 [panics]
 # Crates, fully-qualified functions, or macro expansion paths whose internals should be treated as
@@ -106,15 +111,12 @@ panic-sink-namespaces = [
 # `deny` emits an error and makes `cargo sniff-test` fail.
 # `warn` emits a warning without failing the run.
 # `allow` suppresses the finding from diagnostics and JSON reports.
-undocumented-panic-path = "deny"
-documented-panic-contract = "warn"
-trusted-panic-contract = "allow"
+missing-docs = "deny"
+documented-contract = "warn"
+trusted-contract = "warn"
 # Calls whose target cannot be resolved or verified: undocumented trait
 # methods behind generic bounds, and opaque callables like function pointers.
 indirect-call-boundary = "warn"
-# Reachability traversals that halted at `[analysis].node-limit` before the
-# call graph was exhausted. A truncated proof is no proof, so this denies.
-analysis-incomplete = "deny"
 
 [safety]
 # Namespaces whose unsafe docs/call-site findings should be suppressed.
@@ -132,14 +134,9 @@ safety-obligation-namespaces = []
 # `deny` emits an error and makes `cargo sniff-test` fail.
 # `warn` emits a warning without failing the run.
 # `allow` suppresses the finding from diagnostics and JSON reports.
-missing-safety-docs = "warn"
-unsafe-call-missing-justification = "warn"
-unsafe-call-missing-requirements = "warn"
-# Non-call unsafe operations: raw pointer dereferences, union field accesses,
-# mutable/extern static accesses, inline assembly, and friends.
-unsafe-op-missing-justification = "warn"
-safety-obligation-missing-justification = "warn"
-safety-obligation-missing-requirements = "warn"
+missing-docs = "warn"
+missing-justification = "warn"
+missing-requirements = "warn"
 
 "#;
 
@@ -199,8 +196,8 @@ pub struct AnalysisConfig {
     /// dispatch or function pointers.
     #[serde(alias = "dyn-dispatch-vtable-edges")]
     pub callable_edge_attribution: CallableEdgeAttribution,
-    /// Whether one marker block may justify multiple panic obligations.
-    pub ambiguous_obligation_markers: AmbiguousObligationMarkers,
+    /// User-facing severity for analyzer-wide finding classes.
+    pub lints: AnalysisLintConfig,
     /// Instance budget per reachability query; halting at the limit is
     /// surfaced through the `analysis-incomplete` lint.
     pub node_limit: usize,
@@ -214,8 +211,26 @@ impl Default for AnalysisConfig {
             overflow_checks: OverflowChecks::Profile,
             inline_mir: MirInlining::Off,
             callable_edge_attribution: CallableEdgeAttribution::ErasureSites,
-            ambiguous_obligation_markers: AmbiguousObligationMarkers::Error,
+            lints: AnalysisLintConfig::default(),
             node_limit: 4096,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "kebab-case", deny_unknown_fields)]
+#[serde(default)]
+pub struct AnalysisLintConfig {
+    pub ambiguous_obligations: LintLevel,
+    pub analysis_incomplete: LintLevel,
+}
+
+impl Default for AnalysisLintConfig {
+    fn default() -> Self {
+        Self {
+            ambiguous_obligations: LintLevel::Deny,
+            // A truncated traversal proves nothing about the missing region.
+            analysis_incomplete: LintLevel::Deny,
         }
     }
 }
@@ -312,8 +327,8 @@ pub enum CallableEdgeAttribution {
     #[serde(rename = "erasure-sites", alias = "cast-sites")]
     #[default]
     ErasureSites,
-    /// Attribute concrete dyn-dispatch methods to dynamic call sites; function
-    /// pointer calls remain opaque boundaries unless value-flow resolves them.
+    /// Attribute concrete dyn-dispatch methods and function-pointer targets to
+    /// dynamic call sites.
     CallSites,
 }
 
@@ -326,19 +341,13 @@ impl From<CallableEdgeAttribution> for ReachabilityDynDispatchVTableEdges {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize, Serialize)]
-#[serde(rename_all = "kebab-case")]
-pub enum AmbiguousObligationMarkers {
-    /// Treat a proof marker shared by multiple obligations as ambiguous. The
-    /// marker binds to none of them and emits `ambiguous-obligation-marker`
-    /// as an error.
-    #[default]
-    Error,
-    /// Accept shared proof markers, but emit `ambiguous-obligation-marker` as
-    /// a warning so callers can migrate toward `error`.
-    Warn,
-    /// Accept shared proof markers without reporting them.
-    Allow,
+impl From<CallableEdgeAttribution> for ReachabilityFnPointerEdges {
+    fn from(value: CallableEdgeAttribution) -> Self {
+        match value {
+            CallableEdgeAttribution::ErasureSites => Self::ReifySites,
+            CallableEdgeAttribution::CallSites => Self::CallSites,
+        }
+    }
 }
 
 #[derive(Debug, Default, Clone, PartialEq, Eq, Deserialize)]
@@ -359,22 +368,19 @@ pub struct PanicConfig {
 #[serde(rename_all = "kebab-case", deny_unknown_fields)]
 #[serde(default)]
 pub struct PanicLintConfig {
-    pub undocumented_panic_path: LintLevel,
-    pub documented_panic_contract: LintLevel,
-    pub trusted_panic_contract: LintLevel,
+    pub missing_docs: LintLevel,
+    pub documented_contract: LintLevel,
+    pub trusted_contract: LintLevel,
     pub indirect_call_boundary: LintLevel,
-    pub analysis_incomplete: LintLevel,
 }
 
 impl Default for PanicLintConfig {
     fn default() -> Self {
         Self {
-            undocumented_panic_path: LintLevel::Deny,
-            documented_panic_contract: LintLevel::Warn,
-            trusted_panic_contract: LintLevel::Warn,
+            missing_docs: LintLevel::Deny,
+            documented_contract: LintLevel::Warn,
+            trusted_contract: LintLevel::Warn,
             indirect_call_boundary: LintLevel::Warn,
-            // A truncated traversal proves nothing about the missing region.
-            analysis_incomplete: LintLevel::Deny,
         }
     }
 }
@@ -385,6 +391,18 @@ pub enum LintLevel {
     Allow,
     Warn,
     Deny,
+}
+
+impl LintLevel {
+    #[must_use]
+    pub fn is_deny(self) -> bool {
+        self == Self::Deny
+    }
+
+    #[must_use]
+    pub fn is_allow(self) -> bool {
+        self == Self::Allow
+    }
 }
 
 #[derive(Debug, Default, Clone, PartialEq, Eq, Deserialize)]
@@ -402,23 +420,17 @@ pub struct SafetyConfig {
 #[serde(rename_all = "kebab-case", deny_unknown_fields)]
 #[serde(default)]
 pub struct SafetyLintConfig {
-    pub missing_safety_docs: LintLevel,
-    pub unsafe_call_missing_justification: LintLevel,
-    pub unsafe_call_missing_requirements: LintLevel,
-    pub unsafe_op_missing_justification: LintLevel,
-    pub safety_obligation_missing_justification: LintLevel,
-    pub safety_obligation_missing_requirements: LintLevel,
+    pub missing_docs: LintLevel,
+    pub missing_justification: LintLevel,
+    pub missing_requirements: LintLevel,
 }
 
 impl Default for SafetyLintConfig {
     fn default() -> Self {
         Self {
-            missing_safety_docs: LintLevel::Warn,
-            unsafe_call_missing_justification: LintLevel::Warn,
-            unsafe_call_missing_requirements: LintLevel::Warn,
-            unsafe_op_missing_justification: LintLevel::Warn,
-            safety_obligation_missing_justification: LintLevel::Warn,
-            safety_obligation_missing_requirements: LintLevel::Warn,
+            missing_docs: LintLevel::Warn,
+            missing_justification: LintLevel::Warn,
+            missing_requirements: LintLevel::Warn,
         }
     }
 }
@@ -716,8 +728,21 @@ impl ReportRootSet {
         match self {
             Self::Public => String::from("\"public\""),
             Self::All => String::from("\"all\""),
-            Self::Explicit(roots) => format!("{} explicit path(s)", roots.len()),
+            Self::Explicit(roots) => match roots.len() {
+                1 => String::from("1 explicit path"),
+                count => format!("{count} explicit paths"),
+            },
         }
+    }
+
+    #[must_use]
+    pub fn source_span(&self) -> Option<Range<usize>> {
+        let Self::Explicit(roots) = self else {
+            return None;
+        };
+        let start = roots.first()?.source_span.start;
+        let end = roots.last()?.source_span.end;
+        Some(start..end)
     }
 }
 
@@ -844,9 +869,8 @@ impl std::error::Error for ConfigError {
 #[cfg(test)]
 mod tests {
     use super::{
-        AmbiguousObligationMarkers, AnalysisConfig, CallableEdgeAttribution, EXAMPLE_MANIFEST,
-        LintLevel, MirInlining, OverflowChecks, PanicConfig, PathPatterns, ReportRootSet,
-        SafetyConfig, SniffTestConfig,
+        AnalysisConfig, CallableEdgeAttribution, EXAMPLE_MANIFEST, LintLevel, MirInlining,
+        OverflowChecks, PanicConfig, PathPatterns, ReportRootSet, SafetyConfig, SniffTestConfig,
     };
 
     fn path_patterns(patterns: &[&str]) -> PathPatterns {
@@ -881,7 +905,6 @@ mod tests {
             overflow-checks = "on"
             inline-mir = "profile"
             callable-edge-attribution = "call-sites"
-            ambiguous-obligation-markers = "warn"
         "#;
 
         let parsed = SniffTestConfig::from_manifest_str(config).expect("manifest should parse");
@@ -894,24 +917,56 @@ mod tests {
             parsed.analysis.callable_edge_attribution,
             CallableEdgeAttribution::CallSites
         );
-        assert_eq!(
-            parsed.analysis.ambiguous_obligation_markers,
-            AmbiguousObligationMarkers::Warn
-        );
     }
 
     #[test]
-    fn parses_ambiguous_obligation_marker_allow_policy() {
+    fn parses_analysis_lint_levels() {
         let config = r#"
-            [analysis]
-            ambiguous-obligation-markers = "allow"
+            [analysis.lints]
+            analysis-incomplete = "warn"
+            ambiguous-obligations = "allow"
         "#;
 
         let parsed = SniffTestConfig::from_manifest_str(config).expect("manifest should parse");
 
+        assert_eq!(parsed.analysis.lints.analysis_incomplete, LintLevel::Warn);
         assert_eq!(
-            parsed.analysis.ambiguous_obligation_markers,
-            AmbiguousObligationMarkers::Allow
+            parsed.analysis.lints.ambiguous_obligations,
+            LintLevel::Allow
+        );
+    }
+
+    #[test]
+    fn rejects_old_ambiguous_obligations_location() {
+        let config = r#"
+            [analysis]
+            ambiguous-obligations = "warn"
+        "#;
+
+        let error = SniffTestConfig::from_manifest_str(config)
+            .expect_err("analysis lints should live under [analysis.lints]");
+
+        assert!(
+            error
+                .to_string()
+                .contains("unknown field `ambiguous-obligations`")
+        );
+    }
+
+    #[test]
+    fn rejects_old_ambiguous_obligation_marker_policy() {
+        let config = r#"
+            [analysis]
+            ambiguous-obligation-markers = "warn"
+        "#;
+
+        let error = SniffTestConfig::from_manifest_str(config)
+            .expect_err("old marker-specific ambiguity policy should be rejected");
+
+        assert!(
+            error
+                .to_string()
+                .contains("unknown field `ambiguous-obligation-markers`")
         );
     }
 
@@ -938,8 +993,12 @@ mod tests {
             CallableEdgeAttribution::ErasureSites
         );
         assert_eq!(
-            AnalysisConfig::default().ambiguous_obligation_markers,
-            AmbiguousObligationMarkers::Error
+            AnalysisConfig::default().lints.ambiguous_obligations,
+            LintLevel::Deny
+        );
+        assert_eq!(
+            AnalysisConfig::default().lints.analysis_incomplete,
+            LintLevel::Deny
         );
     }
 
@@ -947,45 +1006,34 @@ mod tests {
     fn default_panic_lints_keep_documented_contracts_visible() {
         let lints = PanicConfig::default().lints;
 
-        assert_eq!(lints.undocumented_panic_path, LintLevel::Deny);
-        assert_eq!(lints.documented_panic_contract, LintLevel::Warn);
-        assert_eq!(lints.trusted_panic_contract, LintLevel::Warn);
+        assert_eq!(lints.missing_docs, LintLevel::Deny);
+        assert_eq!(lints.documented_contract, LintLevel::Warn);
+        assert_eq!(lints.trusted_contract, LintLevel::Warn);
     }
 
     #[test]
     fn default_safety_lints_keep_findings_visible_without_failing() {
         let lints = SafetyConfig::default().lints;
 
-        assert_eq!(lints.missing_safety_docs, LintLevel::Warn);
-        assert_eq!(lints.unsafe_call_missing_justification, LintLevel::Warn);
-        assert_eq!(lints.unsafe_call_missing_requirements, LintLevel::Warn);
-        assert_eq!(
-            lints.safety_obligation_missing_justification,
-            LintLevel::Warn
-        );
-        assert_eq!(
-            lints.safety_obligation_missing_requirements,
-            LintLevel::Warn
-        );
+        assert_eq!(lints.missing_docs, LintLevel::Warn);
+        assert_eq!(lints.missing_justification, LintLevel::Warn);
+        assert_eq!(lints.missing_requirements, LintLevel::Warn);
     }
 
     #[test]
     fn parses_panic_lint_levels() {
         let config = r#"
             [panics.lints]
-            undocumented-panic-path = "warn"
-            documented-panic-contract = "allow"
-            trusted-panic-contract = "deny"
+            missing-docs = "warn"
+            documented-contract = "allow"
+            trusted-contract = "deny"
         "#;
 
         let parsed = SniffTestConfig::from_manifest_str(config).expect("manifest should parse");
 
-        assert_eq!(parsed.panics.lints.undocumented_panic_path, LintLevel::Warn);
-        assert_eq!(
-            parsed.panics.lints.documented_panic_contract,
-            LintLevel::Allow
-        );
-        assert_eq!(parsed.panics.lints.trusted_panic_contract, LintLevel::Deny);
+        assert_eq!(parsed.panics.lints.missing_docs, LintLevel::Warn);
+        assert_eq!(parsed.panics.lints.documented_contract, LintLevel::Allow);
+        assert_eq!(parsed.panics.lints.trusted_contract, LintLevel::Deny);
     }
 
     #[test]
@@ -996,11 +1044,9 @@ mod tests {
             safety-obligation-namespaces = ["ffi::safe_contract", "ffi::safe_method"]
 
             [safety.lints]
-            missing-safety-docs = "allow"
-            unsafe-call-missing-justification = "warn"
-            unsafe-call-missing-requirements = "deny"
-            safety-obligation-missing-justification = "allow"
-            safety-obligation-missing-requirements = "deny"
+            missing-docs = "allow"
+            missing-justification = "warn"
+            missing-requirements = "deny"
         "#;
 
         let parsed = SniffTestConfig::from_manifest_str(config).expect("manifest should parse");
@@ -1038,23 +1084,9 @@ mod tests {
                 .safety
                 .marks_safety_obligation_namespace("ffi::plain_safe")
         );
-        assert_eq!(parsed.safety.lints.missing_safety_docs, LintLevel::Allow);
-        assert_eq!(
-            parsed.safety.lints.unsafe_call_missing_justification,
-            LintLevel::Warn
-        );
-        assert_eq!(
-            parsed.safety.lints.unsafe_call_missing_requirements,
-            LintLevel::Deny
-        );
-        assert_eq!(
-            parsed.safety.lints.safety_obligation_missing_justification,
-            LintLevel::Allow
-        );
-        assert_eq!(
-            parsed.safety.lints.safety_obligation_missing_requirements,
-            LintLevel::Deny
-        );
+        assert_eq!(parsed.safety.lints.missing_docs, LintLevel::Allow);
+        assert_eq!(parsed.safety.lints.missing_justification, LintLevel::Warn);
+        assert_eq!(parsed.safety.lints.missing_requirements, LintLevel::Deny);
     }
 
     #[test]

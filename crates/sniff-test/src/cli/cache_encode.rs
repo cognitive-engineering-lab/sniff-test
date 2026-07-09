@@ -350,6 +350,9 @@ fn cached_reachability_edge_kind(kind: ReachabilityEdgeKind) -> CachedReachabili
             CachedReachabilityEdgeKind::ClosureFnPointerReify
         }
         ReachabilityEdgeKind::ClosureDefinition => CachedReachabilityEdgeKind::ClosureDefinition,
+        ReachabilityEdgeKind::FnPointerCallTarget => {
+            CachedReachabilityEdgeKind::FnPointerCallTarget
+        }
         ReachabilityEdgeKind::DynObjectCast => CachedReachabilityEdgeKind::DynObjectCast,
         ReachabilityEdgeKind::VTableEntry => CachedReachabilityEdgeKind::VTableEntry,
         ReachabilityEdgeKind::DynDispatchVTableEntry => {

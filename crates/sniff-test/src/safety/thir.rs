@@ -33,15 +33,16 @@ use rustc_span::Span;
 
 use super::{
     SafetyAnalysis, SafetyCall, SafetyCallKind, SafetyCallee, SafetyFinding, SafetyOpKind,
-    missing_safety_requirements, safety_requirements,
+    missing_safety_requirements, safety_doc_summary,
 };
-use crate::config::SafetyConfig;
+use crate::config::{LintLevel, SafetyConfig};
 use crate::source_markers::{SafetySatisfaction, span_safety_satisfactions};
 
 pub(super) fn collect_body_findings(
     tcx: TyCtxt<'_>,
     owner: LocalDefId,
     config: &SafetyConfig,
+    ambiguous_obligations: LintLevel,
     analysis: &mut SafetyAnalysis,
 ) {
     let Ok((thir, root)) = tcx.thir_body(owner) else {
@@ -54,6 +55,7 @@ pub(super) fn collect_body_findings(
         thir: &thir,
         owner,
         config,
+        ambiguous_obligations,
         body_target_features: &tcx.body_codegen_attrs(owner.to_def_id()).target_features,
         typing_env: ty::TypingEnv::non_body_analysis(tcx, owner),
         assignment_info: None,
@@ -61,7 +63,7 @@ pub(super) fn collect_body_findings(
         inside_adt: false,
         builtin_unsafe_depth: 0,
         safety_scopes: &mut safety_scopes,
-        findings: &mut analysis.findings,
+        analysis,
     };
     // Params can contain unsafe patterns, such as union destructuring
     // (check_unsafety.rs:1191).
@@ -80,6 +82,7 @@ struct UnsafeOpVisitor<'a, 'tcx> {
     /// inside closure bodies.
     owner: LocalDefId,
     config: &'a SafetyConfig,
+    ambiguous_obligations: LintLevel,
     body_target_features: &'tcx [TargetFeature],
     typing_env: ty::TypingEnv<'tcx>,
     /// Type of the assignment LHS while visiting it; a write-only union field
@@ -94,7 +97,7 @@ struct UnsafeOpVisitor<'a, 'tcx> {
     /// `// SAFETY:` satisfactions of the enclosing user unsafe blocks. Shared
     /// with inner bodies so closures inherit enclosing scopes lexically.
     safety_scopes: &'a mut Vec<Vec<SafetySatisfaction>>,
-    findings: &'a mut Vec<SafetyFinding>,
+    analysis: &'a mut SafetyAnalysis,
 }
 
 impl<'a, 'tcx> UnsafeOpVisitor<'a, 'tcx> {
@@ -103,11 +106,13 @@ impl<'a, 'tcx> UnsafeOpVisitor<'a, 'tcx> {
             return;
         }
         if self.applicable_satisfactions(span).is_empty() {
-            self.findings.push(SafetyFinding::OpMissingJustification {
-                caller: self.owner.to_def_id(),
-                op,
-                span,
-            });
+            self.analysis
+                .findings
+                .push(SafetyFinding::OpMissingJustification {
+                    caller: self.owner.to_def_id(),
+                    op,
+                    span,
+                });
         }
     }
 
@@ -121,29 +126,48 @@ impl<'a, 'tcx> UnsafeOpVisitor<'a, 'tcx> {
         let satisfactions = self.applicable_satisfactions(span);
 
         if let SafetyCallee::Def(def_id) = call.callee {
-            let requirements = safety_requirements(self.tcx, def_id);
-            if !requirements.is_empty() {
-                let missing = missing_safety_requirements(&requirements, &satisfactions);
+            self.analysis.push_ambiguous_requirement_names(
+                self.tcx,
+                def_id,
+                self.ambiguous_obligations,
+            );
+            let summary = safety_doc_summary(self.tcx, def_id);
+            if !summary.requirements.is_empty() {
+                if self.ambiguous_obligations.is_deny()
+                    && !summary.ambiguous_requirements.is_empty()
+                {
+                    return;
+                }
+                let missing = missing_safety_requirements(
+                    &summary.requirements,
+                    &summary.ambiguous_requirements,
+                    &satisfactions,
+                    self.ambiguous_obligations,
+                );
                 if !missing.is_empty() {
-                    self.findings.push(SafetyFinding::CallMissingRequirements {
-                        caller: self.owner.to_def_id(),
-                        callee: call.callee,
-                        call_kind: call.kind,
-                        span,
-                        missing_requirements: missing,
-                    });
+                    self.analysis
+                        .findings
+                        .push(SafetyFinding::CallMissingRequirements {
+                            caller: self.owner.to_def_id(),
+                            callee: call.callee,
+                            call_kind: call.kind,
+                            span,
+                            missing_requirements: missing,
+                        });
                 }
                 return;
             }
         }
 
         if satisfactions.is_empty() {
-            self.findings.push(SafetyFinding::CallMissingJustification {
-                caller: self.owner.to_def_id(),
-                callee: call.callee,
-                call_kind: call.kind,
-                span,
-            });
+            self.analysis
+                .findings
+                .push(SafetyFinding::CallMissingJustification {
+                    caller: self.owner.to_def_id(),
+                    callee: call.callee,
+                    call_kind: call.kind,
+                    span,
+                });
         }
     }
 
@@ -180,6 +204,7 @@ impl<'a, 'tcx> UnsafeOpVisitor<'a, 'tcx> {
             thir: &inner_thir,
             owner: def,
             config: self.config,
+            ambiguous_obligations: self.ambiguous_obligations,
             body_target_features: self.body_target_features,
             typing_env: self.typing_env,
             assignment_info: self.assignment_info,
@@ -187,7 +212,7 @@ impl<'a, 'tcx> UnsafeOpVisitor<'a, 'tcx> {
             inside_adt: false,
             builtin_unsafe_depth: self.builtin_unsafe_depth,
             safety_scopes: &mut *self.safety_scopes,
-            findings: &mut *self.findings,
+            analysis: &mut *self.analysis,
         };
         for param in &inner_thir.params {
             if let Some(pat) = param.pat.as_deref() {

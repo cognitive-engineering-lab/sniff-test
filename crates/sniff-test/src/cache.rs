@@ -341,6 +341,7 @@ pub enum CachedReachabilityEdgeKind {
     FnPointerReify,
     ClosureFnPointerReify,
     ClosureDefinition,
+    FnPointerCallTarget,
     DynObjectCast,
     VTableEntry,
     DynDispatchVTableEntry,

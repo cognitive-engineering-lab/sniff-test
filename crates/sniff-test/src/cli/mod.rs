@@ -44,8 +44,9 @@ pub use self::plugin::driver_main;
 use self::cache_encode::{cached_boundary_findings, function_summary};
 use self::diagnostics::{
     CachedDependencyContractDiagnostic, PanicContractDiagnostic, PanicDiagnosticOptions,
-    emit_ambiguous_obligation_marker_diagnostic, emit_analysis_incomplete_diagnostic,
-    emit_cached_dependency_contract_diagnostic, emit_cached_dependency_raw_panic_diagnostic,
+    emit_ambiguous_obligation_marker_diagnostic, emit_ambiguous_obligation_name_diagnostic,
+    emit_analysis_incomplete_diagnostic, emit_cached_dependency_contract_diagnostic,
+    emit_cached_dependency_raw_panic_diagnostic, emit_empty_report_roots_diagnostic,
     emit_indirect_boundary_diagnostic, emit_missing_report_root_diagnostics,
     emit_panic_contract_diagnostic, emit_raw_panic_diagnostic, emit_safety_diagnostics,
 };
@@ -179,11 +180,7 @@ pub fn cargo_frontend() -> ExitCode {
 /// The empty default policy is intentional; discovery only ensures the same
 /// command finds the same config from any directory of the workspace.
 fn discover_manifest(mut args: SniffTestArgs, workspace_root: &Path) -> SniffTestArgs {
-    if let Some(path) = &args.manifest_path {
-        eprintln!(
-            "sniff-test: using config {}",
-            absolute_path(path.clone()).display()
-        );
+    if args.manifest_path.is_some() {
         return args;
     }
 
@@ -195,7 +192,6 @@ fn discover_manifest(mut args: SniffTestArgs, workspace_root: &Path) -> SniffTes
     loop {
         let candidate = dir.join(crate::config::DEFAULT_MANIFEST_FILE);
         if candidate.is_file() {
-            eprintln!("sniff-test: using config {}", candidate.display());
             args.manifest_path = Some(candidate);
             return args;
         }
@@ -447,6 +443,7 @@ pub(crate) fn analyze_crate(tcx: TyCtxt<'_>, args: &SniffTestArgs, compiler_args
     }
 
     let selection = select_report_roots(tcx, &config.analysis, &config.panics);
+    let selection_has_roots = !selection.roots.is_empty();
     let diagnostics = PanicDiagnosticOptions {
         emit: args.message_format == args::MessageFormat::Human
             && output_scope == CrateOutputScope::Workspace,
@@ -460,26 +457,36 @@ pub(crate) fn analyze_crate(tcx: TyCtxt<'_>, args: &SniffTestArgs, compiler_args
         &dependency_cache,
         diagnostics,
     );
-    if diagnostics.emit
-        && root_analysis.concrete_roots == 0
-        && root_analysis.generic_roots == 0
-        && root_analysis.missing_roots.is_empty()
-    {
+    if diagnostics.emit && !selection_has_roots && root_analysis.missing_roots.is_empty() {
         // An empty selection exits clean; without this note that reads as
         // "verified panic-free" when nothing was analyzed at all.
-        tcx.dcx().warn(format!(
-            "report-roots = {} matched no functions in `{crate_name}`; nothing was analyzed",
-            config.analysis.report_roots.description(),
-        ));
+        emit_empty_report_roots_diagnostic(
+            tcx,
+            &args.manifest_path(),
+            &config.analysis.report_roots,
+            &crate_name,
+        );
     }
     let safety_analysis = if output_scope == CrateOutputScope::Workspace {
-        analyze_safety(tcx, &config.safety)
+        analyze_safety(
+            tcx,
+            &config.safety,
+            config.analysis.lints.ambiguous_obligations,
+        )
     } else {
         SafetyAnalysis::default()
     };
-    let has_denied_safety_findings = safety_analysis.has_denied_findings(config.safety.lints);
+    let has_denied_safety_findings = safety_analysis.has_denied_findings(
+        config.safety.lints,
+        config.analysis.lints.ambiguous_obligations,
+    );
     if diagnostics.emit {
-        emit_safety_diagnostics(tcx, &safety_analysis, config.safety.lints);
+        emit_safety_diagnostics(
+            tcx,
+            &safety_analysis,
+            config.safety.lints,
+            config.analysis.lints.ambiguous_obligations,
+        );
         emit_missing_report_root_diagnostics(
             tcx,
             &args.manifest_path(),
@@ -495,12 +502,13 @@ pub(crate) fn analyze_crate(tcx: TyCtxt<'_>, args: &SniffTestArgs, compiler_args
         root_analysis,
         safety_analysis,
         config.safety.lints,
+        config.analysis.lints.ambiguous_obligations,
     );
     write_analysis_cache(args, &analysis.cache);
-    let has_denied_panic_findings = analysis.report.counts.has_denied_findings(
-        config.panics.lints,
-        config.analysis.ambiguous_obligation_markers,
-    );
+    let has_denied_panic_findings = analysis
+        .report
+        .counts
+        .has_denied_findings(config.panics.lints, config.analysis.lints);
     emit_report_and_outcome(
         args,
         &analysis.report,
@@ -562,6 +570,7 @@ impl AnalysisArtifact {
         root_analysis: RootAnalysis,
         safety_analysis: SafetyAnalysis,
         safety_lints: SafetyLintConfig,
+        ambiguous_obligations: LintLevel,
     ) -> Self {
         let dependencies = dependency_cache.resolved_dependencies();
         let artifact = artifact_info(tcx, invocation);
@@ -589,7 +598,12 @@ impl AnalysisArtifact {
             generic_roots: root_analysis.generic_roots,
             counts: root_analysis.counts,
             roots: root_analysis.roots,
-            safety: SafetyArtifactReport::from_analysis(tcx, safety_analysis, safety_lints),
+            safety: SafetyArtifactReport::from_analysis(
+                tcx,
+                safety_analysis,
+                safety_lints,
+                ambiguous_obligations,
+            ),
         };
         let cache = CachedArtifactAnalysis::new(
             tool_version,
@@ -796,7 +810,7 @@ fn analyze_root<'tcx>(
         graph,
         &result,
         config,
-        analysis_config.ambiguous_obligation_markers,
+        analysis_config.lints.ambiguous_obligations,
     );
     let (mut findings, mut report) = collect_panic_findings(
         tcx,
@@ -833,7 +847,7 @@ fn analyze_root<'tcx>(
         graph,
         &boundary_result,
         config,
-        analysis_config.ambiguous_obligation_markers,
+        analysis_config.lints.ambiguous_obligations,
     );
     let cached_findings =
         cached_boundary_findings(tcx, graph, &boundary_result, &boundary_analysis, config);
@@ -843,7 +857,7 @@ fn analyze_root<'tcx>(
             tcx,
             root.def_id,
             analysis_config.node_limit,
-            config,
+            analysis_config.lints.analysis_incomplete,
             diagnostics,
             &mut findings,
             &mut report,
@@ -866,12 +880,11 @@ fn emit_analysis_incomplete_finding(
     tcx: TyCtxt<'_>,
     root_def_id: DefId,
     node_limit: usize,
-    config: &PanicConfig,
+    level: LintLevel,
     diagnostics: PanicDiagnosticOptions,
     counts: &mut PanicFindingCounts,
     report: &mut PanicRootReport,
 ) {
-    let level = ReportDetailKind::AnalysisIncomplete.lint_level(config.lints);
     if level == LintLevel::Allow {
         return;
     }
@@ -891,6 +904,7 @@ fn reachability_options(
         node_limit: Some(analysis_config.node_limit),
         analyze_external,
         dyn_dispatch_vtable_edges: analysis_config.callable_edge_attribution.into(),
+        fn_pointer_edges: analysis_config.callable_edge_attribution.into(),
     }
 }
 
@@ -903,6 +917,8 @@ pub(crate) struct PanicFindingCounts {
     pub(crate) indirect_call_boundaries: usize,
     #[serde(skip_serializing_if = "usize_is_zero")]
     pub(crate) ambiguous_obligation_markers: usize,
+    #[serde(skip_serializing_if = "usize_is_zero")]
+    pub(crate) ambiguous_obligation_names: usize,
     pub(crate) analysis_incomplete: usize,
 }
 
@@ -917,6 +933,7 @@ impl PanicFindingCounts {
         self.trusted_panic_obligations += other.trusted_panic_obligations;
         self.indirect_call_boundaries += other.indirect_call_boundaries;
         self.ambiguous_obligation_markers += other.ambiguous_obligation_markers;
+        self.ambiguous_obligation_names += other.ambiguous_obligation_names;
         self.analysis_incomplete += other.analysis_incomplete;
     }
 
@@ -931,6 +948,9 @@ impl PanicFindingCounts {
             ReportDetailKind::AmbiguousObligationMarker => {
                 self.ambiguous_obligation_markers += 1;
             }
+            ReportDetailKind::AmbiguousObligationName => {
+                self.ambiguous_obligation_names += 1;
+            }
             ReportDetailKind::AnalysisIncomplete => self.analysis_incomplete += 1,
         }
     }
@@ -938,17 +958,19 @@ impl PanicFindingCounts {
     fn has_denied_findings(
         self,
         lints: crate::config::PanicLintConfig,
-        ambiguous_markers: crate::config::AmbiguousObligationMarkers,
+        analysis_lints: crate::config::AnalysisLintConfig,
     ) -> bool {
-        (self.raw_panic_paths > 0 && lints.undocumented_panic_path == LintLevel::Deny)
-            || (self.panic_obligations > 0 && lints.documented_panic_contract == LintLevel::Deny)
-            || (self.trusted_panic_obligations > 0
-                && lints.trusted_panic_contract == LintLevel::Deny)
+        (self.raw_panic_paths > 0 && lints.missing_docs == LintLevel::Deny)
+            || (self.panic_obligations > 0 && lints.documented_contract == LintLevel::Deny)
+            || (self.trusted_panic_obligations > 0 && lints.trusted_contract == LintLevel::Deny)
             || (self.indirect_call_boundaries > 0
                 && lints.indirect_call_boundary == LintLevel::Deny)
             || (self.ambiguous_obligation_markers > 0
-                && ambiguous_markers == crate::config::AmbiguousObligationMarkers::Error)
-            || (self.analysis_incomplete > 0 && lints.analysis_incomplete == LintLevel::Deny)
+                && analysis_lints.ambiguous_obligations == LintLevel::Deny)
+            || (self.ambiguous_obligation_names > 0
+                && analysis_lints.ambiguous_obligations == LintLevel::Deny)
+            || (self.analysis_incomplete > 0
+                && analysis_lints.analysis_incomplete == LintLevel::Deny)
     }
 }
 
@@ -1059,6 +1081,7 @@ fn collect_panic_findings<'tcx>(
         &mut counts,
         &mut report,
     );
+    emit_ambiguous_obligation_name_findings(tcx, analysis, &collection, &mut counts, &mut report);
 
     emit_cached_dependency_findings(tcx, graph, view, &collection, &mut counts, &mut report);
 
@@ -1083,6 +1106,27 @@ fn emit_ambiguous_obligation_marker_findings<'tcx>(
                 marker,
                 collection.root_def_id,
                 marker.level,
+            );
+        }
+    }
+}
+
+fn emit_ambiguous_obligation_name_findings(
+    tcx: TyCtxt<'_>,
+    analysis: &PanicAnalysis,
+    collection: &PanicFindingCollection<'_>,
+    counts: &mut PanicFindingCounts,
+    report: &mut PanicRootReport,
+) {
+    for name in &analysis.ambiguous_names {
+        counts.ambiguous_obligation_names += 1;
+        report.push_ambiguous_obligation_name(tcx, name, name.level);
+        if collection.diagnostics.emit {
+            emit_ambiguous_obligation_name_diagnostic(
+                tcx,
+                name,
+                collection.root_def_id,
+                name.level,
             );
         }
     }

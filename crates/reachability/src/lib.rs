@@ -39,12 +39,14 @@ mod graph;
 mod hooks;
 
 pub use analysis::{
-    DynDispatchVTableEdges, IntoInstance, ReachabilityIndex, ReachabilityOptions, ReachabilityRoot,
+    DynDispatchVTableEdges, FnPointerEdges, IntoInstance, ReachabilityIndex, ReachabilityOptions,
+    ReachabilityRoot,
 };
 pub use graph::{
-    CompilerAssertLocal, CompilerAssertLocalRole, ReachabilityEdge, ReachabilityEdgeId,
-    ReachabilityEdgeKind, ReachabilityGraph, ReachabilityNode, ReachabilityNodeId,
-    ReachabilityNodeKind, ReachabilitySnapshot, ReachabilityView, ReachedEdge, ReachedNode,
+    CallableEdgeInfo, CompilerAssertLocal, CompilerAssertLocalRole, ReachabilityEdge,
+    ReachabilityEdgeId, ReachabilityEdgeKind, ReachabilityGraph, ReachabilityNode,
+    ReachabilityNodeId, ReachabilityNodeKind, ReachabilitySnapshot, ReachabilityView, ReachedEdge,
+    ReachedNode,
 };
 pub use hooks::{
     NoopReachabilityHooks, ReachabilityContext, ReachabilityControl, ReachabilityHalt,

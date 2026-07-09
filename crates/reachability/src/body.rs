@@ -23,7 +23,8 @@ use rustc_middle::ty::{
 use rustc_span::Span;
 
 use crate::graph::{
-    CompilerAssertLocal, CompilerAssertLocalRole, ReachabilityEdgeKind, ReachabilityNodeKind,
+    CallableEdgeInfo, CompilerAssertLocal, CompilerAssertLocalRole, ReachabilityEdgeKind,
+    ReachabilityNodeKind,
 };
 use crate::hooks::{ReachabilityControl, ReachabilityHalt};
 
@@ -60,6 +61,7 @@ pub(crate) struct BodyEdge<'tcx> {
     pub span: Span,
     /// Callee-segment span for edges emitted while handling a call terminator.
     pub callee_span: Option<Span>,
+    pub callable: Option<CallableEdgeInfo<'tcx>>,
 }
 
 struct BodyEdgeCollector<'a, 'tcx, F>
@@ -127,6 +129,7 @@ where
         target: ReachabilityNodeKind<'tcx>,
         kind: ReachabilityEdgeKind,
         span: Span,
+        callable: Option<CallableEdgeInfo<'tcx>>,
     ) -> ReachabilityControl<'tcx> {
         if let Some(halt) = &self.halt {
             return ControlFlow::Break(halt.clone());
@@ -137,6 +140,7 @@ where
             kind,
             span,
             callee_span: self.callee_span,
+            callable,
         };
 
         match (self.emit)(edge) {
@@ -154,16 +158,37 @@ where
         kind: ReachabilityEdgeKind,
         span: Span,
     ) -> ReachabilityControl<'tcx> {
-        self.emit_edge(ReachabilityNodeKind::Instance(instance), kind, span)
+        self.emit_instance_with_callable(instance, kind, span, None)
     }
 
-    fn emit_indirect(
+    fn emit_instance_with_callable(
+        &mut self,
+        instance: Instance<'tcx>,
+        kind: ReachabilityEdgeKind,
+        span: Span,
+        callable: Option<CallableEdgeInfo<'tcx>>,
+    ) -> ReachabilityControl<'tcx> {
+        self.emit_edge(
+            ReachabilityNodeKind::Instance(instance),
+            kind,
+            span,
+            callable,
+        )
+    }
+
+    fn emit_indirect_with_callable(
         &mut self,
         callee_ty: Ty<'tcx>,
         kind: ReachabilityEdgeKind,
         span: Span,
+        callable: Option<CallableEdgeInfo<'tcx>>,
     ) -> ReachabilityControl<'tcx> {
-        self.emit_edge(ReachabilityNodeKind::IndirectCall { callee_ty }, kind, span)
+        self.emit_edge(
+            ReachabilityNodeKind::IndirectCall { callee_ty },
+            kind,
+            span,
+            callable,
+        )
     }
 
     fn emit_call_operand(
@@ -174,15 +199,26 @@ where
     ) -> ReachabilityControl<'tcx> {
         let callee_ty = self.monomorphize(func.ty(&self.body.local_decls, self.tcx));
         let dyn_dispatch_trait = self.dyn_dispatch_trait(callee_ty);
+        let callable = self.callable_call_info(callee_ty);
 
         if let TyKind::FnDef(def_id, args) = *callee_ty.kind() {
             if let Some(instance) = self.resolve_callable_instance(def_id, args) {
-                self.emit_instance(instance, kind, span)?;
+                self.emit_instance_with_callable(instance, kind, span, callable)?;
             } else {
-                self.emit_indirect(callee_ty, ReachabilityEdgeKind::IndirectCall, span)?;
+                self.emit_indirect_with_callable(
+                    callee_ty,
+                    ReachabilityEdgeKind::IndirectCall,
+                    span,
+                    callable,
+                )?;
             }
         } else {
-            self.emit_indirect(callee_ty, ReachabilityEdgeKind::IndirectCall, span)?;
+            self.emit_indirect_with_callable(
+                callee_ty,
+                ReachabilityEdgeKind::IndirectCall,
+                span,
+                callable,
+            )?;
         }
 
         if let Some(trait_def_id) = dyn_dispatch_trait {
@@ -195,9 +231,11 @@ where
     fn emit_callable_ty(
         &mut self,
         ty: Ty<'tcx>,
+        fn_ptr_ty: Option<Ty<'tcx>>,
         kind: ReachabilityEdgeKind,
         span: Span,
     ) -> ReachabilityControl<'tcx> {
+        let callable = fn_ptr_ty.map(|fn_ptr_ty| CallableEdgeInfo::FnPointer { fn_ptr_ty });
         match ty.kind() {
             TyKind::FnDef(def_id, args) => {
                 let instance = match kind {
@@ -216,15 +254,15 @@ where
                     _ => self.resolve_callable_instance(*def_id, args),
                 };
                 if let Some(instance) = instance {
-                    self.emit_instance(instance, kind, span)
+                    self.emit_instance_with_callable(instance, kind, span, callable)
                 } else {
-                    self.emit_indirect(ty, kind, span)
+                    self.emit_indirect_with_callable(ty, kind, span, callable)
                 }
             }
             TyKind::Closure(def_id, args) => {
                 let instance =
                     Instance::resolve_closure(self.tcx, *def_id, args, ty::ClosureKind::FnOnce);
-                self.emit_instance(instance, kind, span)
+                self.emit_instance_with_callable(instance, kind, span, callable)
             }
             _ => ControlFlow::Continue(()),
         }
@@ -260,6 +298,7 @@ where
             },
             ReachabilityEdgeKind::Assert,
             span,
+            None,
         )
     }
 
@@ -299,18 +338,30 @@ where
             Rvalue::Cast(
                 CastKind::PointerCoercion(PointerCoercion::ReifyFnPointer(_), _),
                 operand,
-                _,
+                target_ty,
             ) => {
                 let ty = self.monomorphize(operand.ty(&self.body.local_decls, self.tcx));
-                self.emit_callable_ty(ty, ReachabilityEdgeKind::FnPointerReify, span)
+                let target_ty = self.monomorphize(*target_ty);
+                self.emit_callable_ty(
+                    ty,
+                    Some(target_ty),
+                    ReachabilityEdgeKind::FnPointerReify,
+                    span,
+                )
             }
             Rvalue::Cast(
                 CastKind::PointerCoercion(PointerCoercion::ClosureFnPointer(_), _),
                 operand,
-                _,
+                target_ty,
             ) => {
                 let ty = self.monomorphize(operand.ty(&self.body.local_decls, self.tcx));
-                self.emit_callable_ty(ty, ReachabilityEdgeKind::ClosureFnPointerReify, span)
+                let target_ty = self.monomorphize(*target_ty);
+                self.emit_callable_ty(
+                    ty,
+                    Some(target_ty),
+                    ReachabilityEdgeKind::ClosureFnPointerReify,
+                    span,
+                )
             }
             Rvalue::Cast(
                 CastKind::PointerCoercion(PointerCoercion::Unsize, _),
@@ -339,6 +390,7 @@ where
             },
             ReachabilityEdgeKind::DynObjectCast,
             span,
+            None,
         )
     }
 
@@ -423,10 +475,6 @@ where
     }
 
     fn dyn_dispatch_trait(&self, callee_ty: Ty<'tcx>) -> Option<DefId> {
-        if self.dyn_vtable_entries.is_empty() {
-            return None;
-        }
-
         let TyKind::FnDef(def_id, args) = *callee_ty.kind() else {
             return None;
         };
@@ -438,6 +486,26 @@ where
         }
     }
 
+    fn callable_call_info(&self, callee_ty: Ty<'tcx>) -> Option<CallableEdgeInfo<'tcx>> {
+        match *callee_ty.kind() {
+            TyKind::FnPtr(..) => Some(CallableEdgeInfo::FnPointer {
+                fn_ptr_ty: callee_ty,
+            }),
+            TyKind::FnDef(def_id, args) => {
+                let trait_def_id = self.tcx.trait_of_assoc(def_id)?;
+                let self_ty = self_arg_ty(args)?;
+                if matches!(self_ty.kind(), TyKind::FnPtr(..)) {
+                    Some(CallableEdgeInfo::FnPointer { fn_ptr_ty: self_ty })
+                } else if ty_contains_dyn(self_ty) {
+                    Some(CallableEdgeInfo::DynDispatch { trait_def_id })
+                } else {
+                    None
+                }
+            }
+            _ => None,
+        }
+    }
+
     fn emit_vtable_entries(
         &mut self,
         source_ty: Ty<'tcx>,
@@ -445,8 +513,13 @@ where
         span: Span,
     ) -> ReachabilityControl<'tcx> {
         let tcx = self.tcx;
-        for_each_dyn_vtable_method(tcx, source_ty, target_ty, |_, instance| {
-            self.emit_instance(instance, ReachabilityEdgeKind::VTableEntry, span)
+        for_each_dyn_vtable_method(tcx, source_ty, target_ty, |trait_def_id, instance| {
+            self.emit_instance_with_callable(
+                instance,
+                ReachabilityEdgeKind::VTableEntry,
+                span,
+                Some(CallableEdgeInfo::DynDispatch { trait_def_id }),
+            )
         })
     }
 
@@ -466,11 +539,15 @@ fn generic_args_contain_dyn(args: GenericArgsRef<'_>) -> bool {
 }
 
 fn self_arg_contains_dyn(args: GenericArgsRef<'_>) -> bool {
-    args.iter().next().is_some_and(|arg| {
+    self_arg_ty(args).is_some_and(ty_contains_dyn)
+}
+
+fn self_arg_ty<'tcx>(args: GenericArgsRef<'tcx>) -> Option<Ty<'tcx>> {
+    args.iter().next().and_then(|arg| {
         if let ty::GenericArgKind::Type(ty) = arg.kind() {
-            ty_contains_dyn(ty)
+            Some(ty)
         } else {
-            false
+            None
         }
     })
 }

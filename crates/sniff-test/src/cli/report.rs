@@ -3,7 +3,8 @@ use crate::cache::CachedFunctionSummary;
 use crate::config::{LintLevel, PanicLintConfig};
 use crate::namespace::canonical_namespace;
 use crate::panics::{
-    AmbiguousPanicMarker, PanicEvidence, PanicEvidenceKind, trace_edges_until, trigger_edge_id,
+    AmbiguousPanicMarker, AmbiguousPanicRequirementName, PanicEvidence, PanicEvidenceKind,
+    trace_edges_until, trigger_edge_id,
 };
 use reachability::{
     CompilerAssertLocal, CompilerAssertLocalRole, ReachabilityEdge, ReachabilityEdgeId,
@@ -196,6 +197,32 @@ impl PanicRootReport {
         });
     }
 
+    pub(crate) fn push_ambiguous_obligation_name(
+        &mut self,
+        tcx: TyCtxt<'_>,
+        name: &AmbiguousPanicRequirementName,
+        level: LintLevel,
+    ) {
+        let target = canonical_namespace(tcx, name.def_id);
+        let span = name
+            .requirements
+            .first()
+            .map_or_else(|| tcx.def_span(name.def_id), |requirement| requirement.span);
+        self.push_finding(PanicFindingReport {
+            kind: ReportDetailKind::AmbiguousObligationName,
+            level,
+            span: render_span(tcx, span),
+            edge: None,
+            reason: format!(
+                "`{target}` has {} # Panics requirements named `{}`",
+                name.requirements.len(),
+                name.normalized_name
+            ),
+            target: Some(target),
+            trace: Vec::new(),
+        });
+    }
+
     fn push_finding(&mut self, finding: PanicFindingReport) {
         self.counts.increment(finding.kind);
         self.findings.push(finding);
@@ -231,6 +258,7 @@ pub(crate) enum ReportDetailKind {
     TrustedPanicObligation,
     IndirectCallBoundary,
     AmbiguousObligationMarker,
+    AmbiguousObligationName,
     AnalysisIncomplete,
 }
 
@@ -247,15 +275,20 @@ impl ReportDetailKind {
     pub(crate) fn lint_level(self, lints: PanicLintConfig) -> LintLevel {
         match self {
             Self::CompilerAssert | Self::PanicInvocation | Self::CachedDependencyPanic => {
-                lints.undocumented_panic_path
+                lints.missing_docs
             }
-            Self::PanicObligation => lints.documented_panic_contract,
-            Self::TrustedPanicObligation => lints.trusted_panic_contract,
+            Self::PanicObligation => lints.documented_contract,
+            Self::TrustedPanicObligation => lints.trusted_contract,
             Self::IndirectCallBoundary => lints.indirect_call_boundary,
             Self::AmbiguousObligationMarker => {
                 unreachable!("ambiguous marker level comes from `[analysis]` policy")
             }
-            Self::AnalysisIncomplete => lints.analysis_incomplete,
+            Self::AmbiguousObligationName => {
+                unreachable!("ambiguous obligation-name level comes from `[analysis]` policy")
+            }
+            Self::AnalysisIncomplete => {
+                unreachable!("analysis-incomplete level comes from `[analysis.lints]`")
+            }
         }
     }
 }

@@ -8,6 +8,8 @@
 
 mod thir;
 
+use std::collections::HashSet;
+
 use rustc_hir::def::DefKind;
 use rustc_hir::def_id::{DefId, LocalDefId};
 use rustc_middle::ty::TyCtxt;
@@ -15,8 +17,8 @@ use rustc_span::Span;
 
 use crate::config::{LintLevel, SafetyConfig, SafetyLintConfig};
 use crate::contracts::{
-    ContractDocSummary, ContractKind, ContractRequirement, contract_doc_summary,
-    normalize_requirement_name, satisfied_requirement_names,
+    AmbiguousContractRequirements, ContractDocSummary, ContractKind, ContractRequirement,
+    contract_doc_summary, normalize_requirement_name, satisfied_requirement_names,
 };
 use crate::namespace::canonical_namespace;
 use crate::source_markers::SafetySatisfaction;
@@ -24,6 +26,7 @@ use crate::source_markers::SafetySatisfaction;
 #[derive(Debug, Default)]
 pub struct SafetyAnalysis {
     pub findings: Vec<SafetyFinding>,
+    ambiguous_requirement_names: HashSet<(DefId, String)>,
 }
 
 #[derive(Debug, Clone)]
@@ -50,6 +53,11 @@ pub enum SafetyFinding {
         op: SafetyOpKind,
         span: Span,
     },
+    AmbiguousObligationName {
+        def_id: DefId,
+        normalized_name: String,
+        requirements: Vec<SafetyRequirement>,
+    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -60,6 +68,7 @@ pub enum SafetyFindingKind {
     UnsafeOpMissingJustification,
     SafetyObligationMissingJustification,
     SafetyObligationMissingRequirements,
+    AmbiguousObligationName,
 }
 
 /// Non-call operations that require `unsafe`, mirroring the non-call variants
@@ -122,6 +131,13 @@ struct SafetyCall {
 pub struct SafetyRequirement {
     pub name: String,
     pub condition: String,
+    pub span: Span,
+}
+
+#[derive(Debug, Clone)]
+pub struct AmbiguousSafetyRequirements {
+    pub normalized_name: String,
+    pub requirements: Vec<SafetyRequirement>,
 }
 
 impl From<ContractRequirement> for SafetyRequirement {
@@ -129,6 +145,20 @@ impl From<ContractRequirement> for SafetyRequirement {
         Self {
             name: requirement.name,
             condition: requirement.condition,
+            span: requirement.span,
+        }
+    }
+}
+
+impl From<AmbiguousContractRequirements> for AmbiguousSafetyRequirements {
+    fn from(requirements: AmbiguousContractRequirements) -> Self {
+        Self {
+            normalized_name: requirements.normalized_name,
+            requirements: requirements
+                .requirements
+                .into_iter()
+                .map(SafetyRequirement::from)
+                .collect(),
         }
     }
 }
@@ -140,10 +170,39 @@ impl SafetyAnalysis {
     }
 
     #[must_use]
-    pub fn has_denied_findings(&self, lints: SafetyLintConfig) -> bool {
-        self.findings
-            .iter()
-            .any(|finding| finding.kind().lint_level(lints) == LintLevel::Deny)
+    pub fn has_denied_findings(
+        &self,
+        lints: SafetyLintConfig,
+        ambiguous_obligations: LintLevel,
+    ) -> bool {
+        self.findings.iter().any(|finding| {
+            finding.kind().lint_level(lints, ambiguous_obligations) == LintLevel::Deny
+        })
+    }
+
+    fn push_ambiguous_requirement_names(
+        &mut self,
+        tcx: TyCtxt<'_>,
+        def_id: DefId,
+        ambiguous_obligations: LintLevel,
+    ) {
+        if ambiguous_obligations.is_allow() {
+            return;
+        }
+
+        for ambiguous in safety_doc_summary(tcx, def_id).ambiguous_requirements {
+            if !self
+                .ambiguous_requirement_names
+                .insert((def_id, ambiguous.normalized_name.clone()))
+            {
+                continue;
+            }
+            self.findings.push(SafetyFinding::AmbiguousObligationName {
+                def_id,
+                normalized_name: ambiguous.normalized_name,
+                requirements: ambiguous.requirements,
+            });
+        }
     }
 }
 
@@ -165,35 +224,42 @@ impl SafetyFinding {
                 }
             },
             Self::OpMissingJustification { .. } => SafetyFindingKind::UnsafeOpMissingJustification,
+            Self::AmbiguousObligationName { .. } => SafetyFindingKind::AmbiguousObligationName,
         }
     }
 }
 
 impl SafetyFindingKind {
     #[must_use]
-    pub fn lint_level(self, lints: SafetyLintConfig) -> LintLevel {
+    pub fn lint_level(
+        self,
+        lints: SafetyLintConfig,
+        ambiguous_obligations: LintLevel,
+    ) -> LintLevel {
         match self {
-            Self::MissingSafetyDocs => lints.missing_safety_docs,
-            Self::UnsafeCallMissingJustification => lints.unsafe_call_missing_justification,
-            Self::UnsafeCallMissingRequirements => lints.unsafe_call_missing_requirements,
-            Self::UnsafeOpMissingJustification => lints.unsafe_op_missing_justification,
-            Self::SafetyObligationMissingJustification => {
-                lints.safety_obligation_missing_justification
+            Self::MissingSafetyDocs => lints.missing_docs,
+            Self::UnsafeCallMissingJustification
+            | Self::UnsafeOpMissingJustification
+            | Self::SafetyObligationMissingJustification => lints.missing_justification,
+            Self::UnsafeCallMissingRequirements | Self::SafetyObligationMissingRequirements => {
+                lints.missing_requirements
             }
-            Self::SafetyObligationMissingRequirements => {
-                lints.safety_obligation_missing_requirements
-            }
+            Self::AmbiguousObligationName => ambiguous_obligations,
         }
     }
 }
 
 #[must_use]
-pub fn analyze_safety(tcx: TyCtxt<'_>, config: &SafetyConfig) -> SafetyAnalysis {
+pub fn analyze_safety(
+    tcx: TyCtxt<'_>,
+    config: &SafetyConfig,
+    ambiguous_obligations: LintLevel,
+) -> SafetyAnalysis {
     let mut analysis = SafetyAnalysis::default();
 
     for owner in tcx.hir_body_owners() {
         if matches!(tcx.def_kind(owner), DefKind::Fn | DefKind::AssocFn) {
-            collect_missing_safety_docs(tcx, owner, config, &mut analysis);
+            collect_missing_safety_docs(tcx, owner, config, ambiguous_obligations, &mut analysis);
         }
         // Closures and inline consts are visited with their enclosing body so
         // justification scopes flow into them lexically; every other body
@@ -201,7 +267,7 @@ pub fn analyze_safety(tcx: TyCtxt<'_>, config: &SafetyConfig) -> SafetyAnalysis 
         if tcx.is_typeck_child(owner.to_def_id()) || config.ignores_def(tcx, owner.to_def_id()) {
             continue;
         }
-        thir::collect_body_findings(tcx, owner, config, &mut analysis);
+        thir::collect_body_findings(tcx, owner, config, ambiguous_obligations, &mut analysis);
     }
 
     analysis
@@ -237,6 +303,7 @@ fn collect_missing_safety_docs(
     tcx: TyCtxt<'_>,
     owner: LocalDefId,
     config: &SafetyConfig,
+    ambiguous_obligations: LintLevel,
     analysis: &mut SafetyAnalysis,
 ) {
     let def_id = owner.to_def_id();
@@ -255,10 +322,13 @@ fn collect_missing_safety_docs(
             def_id,
             span: tcx.def_span(def_id),
         });
+    } else {
+        analysis.push_ambiguous_requirement_names(tcx, def_id, ambiguous_obligations);
     }
 }
 
-fn fn_def_is_unsafe(tcx: TyCtxt<'_>, def_id: DefId) -> bool {
+#[must_use]
+pub fn fn_def_is_unsafe(tcx: TyCtxt<'_>, def_id: DefId) -> bool {
     matches!(tcx.def_kind(def_id), DefKind::Fn | DefKind::AssocFn)
         && tcx
             .fn_sig(def_id)
@@ -269,9 +339,10 @@ fn fn_def_is_unsafe(tcx: TyCtxt<'_>, def_id: DefId) -> bool {
 }
 
 #[derive(Debug, Default)]
-struct SafetyDocSummary {
-    has_docs: bool,
-    requirements: Vec<SafetyRequirement>,
+pub(super) struct SafetyDocSummary {
+    pub(super) has_docs: bool,
+    pub(super) requirements: Vec<SafetyRequirement>,
+    pub(super) ambiguous_requirements: Vec<AmbiguousSafetyRequirements>,
 }
 
 impl From<ContractDocSummary> for SafetyDocSummary {
@@ -283,11 +354,16 @@ impl From<ContractDocSummary> for SafetyDocSummary {
                 .into_iter()
                 .map(SafetyRequirement::from)
                 .collect(),
+            ambiguous_requirements: summary
+                .ambiguous_requirements
+                .into_iter()
+                .map(AmbiguousSafetyRequirements::from)
+                .collect(),
         }
     }
 }
 
-fn safety_doc_summary(tcx: TyCtxt<'_>, def_id: DefId) -> SafetyDocSummary {
+pub(super) fn safety_doc_summary(tcx: TyCtxt<'_>, def_id: DefId) -> SafetyDocSummary {
     contract_doc_summary(tcx, def_id, ContractKind::Safety).into()
 }
 
@@ -311,18 +387,31 @@ pub(crate) fn render_safety_requirement(requirement: &SafetyRequirement) -> Stri
 
 fn missing_safety_requirements(
     requirements: &[SafetyRequirement],
+    ambiguous_requirements: &[AmbiguousSafetyRequirements],
     satisfactions: &[SafetySatisfaction],
+    ambiguous_obligations: LintLevel,
 ) -> Vec<SafetyRequirement> {
     let satisfied_requirements = satisfied_requirement_names(
         satisfactions
             .iter()
             .map(|satisfaction| (satisfaction.requirement.as_deref(), &*satisfaction.reason)),
     );
+    let ambiguous_names = ambiguous_obligations
+        .is_deny()
+        .then(|| {
+            ambiguous_requirements
+                .iter()
+                .map(|ambiguous| ambiguous.normalized_name.as_str())
+                .collect::<HashSet<_>>()
+        })
+        .unwrap_or_default();
 
     requirements
         .iter()
         .filter(|requirement| {
-            !satisfied_requirements.contains(&normalize_requirement_name(&requirement.name))
+            let normalized_name = normalize_requirement_name(&requirement.name);
+            ambiguous_names.contains(normalized_name.as_str())
+                || !satisfied_requirements.contains(&normalized_name)
         })
         .cloned()
         .collect()
@@ -334,7 +423,9 @@ mod tests {
         SafetyRequirement, line_has_safety_heading, missing_safety_requirements,
         parse_safety_doc_lines,
     };
+    use crate::config::LintLevel;
     use crate::source_markers::SafetySatisfaction;
+    use rustc_span::DUMMY_SP;
 
     #[test]
     fn safety_doc_headings_match_supported_styles() {
@@ -374,14 +465,17 @@ mod tests {
                 SafetyRequirement {
                     name: String::from("valid_ptr"),
                     condition: String::from("pointer must be non-null"),
+                    span: DUMMY_SP,
                 },
                 SafetyRequirement {
                     name: String::from("initialized"),
                     condition: String::from("pointer must reference initialized memory"),
+                    span: DUMMY_SP,
                 },
                 SafetyRequirement {
                     name: String::from("aligned"),
                     condition: String::new(),
+                    span: DUMMY_SP,
                 },
             ]
         );
@@ -393,10 +487,12 @@ mod tests {
             SafetyRequirement {
                 name: String::from("valid_ptr"),
                 condition: String::from("pointer must be non-null"),
+                span: DUMMY_SP,
             },
             SafetyRequirement {
                 name: String::from("initialized"),
                 condition: String::from("pointer must be initialized"),
+                span: DUMMY_SP,
             },
         ];
         let satisfactions = [SafetySatisfaction {
@@ -405,11 +501,45 @@ mod tests {
         }];
 
         assert_eq!(
-            missing_safety_requirements(&requirements, &satisfactions),
+            missing_safety_requirements(&requirements, &[], &satisfactions, LintLevel::Deny),
             [SafetyRequirement {
                 name: String::from("initialized"),
                 condition: String::from("pointer must be initialized"),
+                span: DUMMY_SP,
             }]
+        );
+    }
+
+    #[test]
+    fn ambiguous_safety_requirement_names_are_missing_in_strict_mode() {
+        let requirements = [
+            SafetyRequirement {
+                name: String::from("valid_ptr"),
+                condition: String::from("pointer must be non-null"),
+                span: DUMMY_SP,
+            },
+            SafetyRequirement {
+                name: String::from("valid ptr"),
+                condition: String::from("pointer must be initialized"),
+                span: DUMMY_SP,
+            },
+        ];
+        let ambiguous = [super::AmbiguousSafetyRequirements {
+            normalized_name: String::from("valid ptr"),
+            requirements: requirements.to_vec(),
+        }];
+        let satisfactions = [SafetySatisfaction {
+            requirement: Some(String::from("valid_ptr")),
+            reason: String::from("checked"),
+        }];
+
+        assert_eq!(
+            missing_safety_requirements(&requirements, &ambiguous, &satisfactions, LintLevel::Deny),
+            requirements
+        );
+        assert!(
+            missing_safety_requirements(&requirements, &ambiguous, &satisfactions, LintLevel::Warn)
+                .is_empty()
         );
     }
 }

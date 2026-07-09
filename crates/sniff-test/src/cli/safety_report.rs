@@ -1,8 +1,8 @@
 use crate::config::{LintLevel, SafetyLintConfig};
 use crate::namespace::canonical_namespace;
 use crate::safety::{
-    SafetyAnalysis, SafetyCallKind, SafetyFinding, SafetyFindingKind, render_safety_requirement,
-    safety_call_label, safety_callee_name, safety_op_label,
+    SafetyAnalysis, SafetyFinding, SafetyFindingKind, render_safety_requirement, safety_call_label,
+    safety_callee_name, safety_op_label,
 };
 use rustc_middle::ty::TyCtxt;
 use serde::Serialize;
@@ -21,6 +21,7 @@ impl SafetyArtifactReport {
         tcx: TyCtxt<'_>,
         analysis: SafetyAnalysis,
         lints: SafetyLintConfig,
+        ambiguous_obligations: LintLevel,
     ) -> Option<Self> {
         let mut report = Self {
             counts: SafetyFindingCounts::default(),
@@ -28,7 +29,7 @@ impl SafetyArtifactReport {
         };
 
         for finding in analysis.findings {
-            let level = finding.kind().lint_level(lints);
+            let level = finding.kind().lint_level(lints, ambiguous_obligations);
             if level == LintLevel::Allow {
                 continue;
             }
@@ -45,33 +46,31 @@ impl SafetyArtifactReport {
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "kebab-case")]
 struct SafetyFindingCounts {
-    missing_safety_docs: usize,
-    unsafe_calls_missing_justification: usize,
-    unsafe_calls_missing_requirements: usize,
-    unsafe_ops_missing_justification: usize,
-    safety_obligations_missing_justification: usize,
-    safety_obligations_missing_requirements: usize,
+    missing_docs: usize,
+    missing_justification: usize,
+    missing_requirements: usize,
+    #[serde(skip_serializing_if = "usize_is_zero")]
+    ambiguous_obligation_names: usize,
+}
+
+fn usize_is_zero(value: &usize) -> bool {
+    *value == 0
 }
 
 impl SafetyFindingCounts {
     fn increment(&mut self, kind: SafetyFindingKind) {
         match kind {
-            SafetyFindingKind::MissingSafetyDocs => self.missing_safety_docs += 1,
-            SafetyFindingKind::UnsafeCallMissingJustification => {
-                self.unsafe_calls_missing_justification += 1;
+            SafetyFindingKind::MissingSafetyDocs => self.missing_docs += 1,
+            SafetyFindingKind::UnsafeCallMissingJustification
+            | SafetyFindingKind::UnsafeOpMissingJustification
+            | SafetyFindingKind::SafetyObligationMissingJustification => {
+                self.missing_justification += 1;
             }
-            SafetyFindingKind::UnsafeCallMissingRequirements => {
-                self.unsafe_calls_missing_requirements += 1;
+            SafetyFindingKind::UnsafeCallMissingRequirements
+            | SafetyFindingKind::SafetyObligationMissingRequirements => {
+                self.missing_requirements += 1;
             }
-            SafetyFindingKind::UnsafeOpMissingJustification => {
-                self.unsafe_ops_missing_justification += 1;
-            }
-            SafetyFindingKind::SafetyObligationMissingJustification => {
-                self.safety_obligations_missing_justification += 1;
-            }
-            SafetyFindingKind::SafetyObligationMissingRequirements => {
-                self.safety_obligations_missing_requirements += 1;
-            }
+            SafetyFindingKind::AmbiguousObligationName => self.ambiguous_obligation_names += 1,
         }
     }
 }
@@ -87,6 +86,8 @@ struct SafetyFindingReport {
     reason: String,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     missing_requirements: Vec<String>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    requirements: Vec<String>,
 }
 
 impl SafetyFindingReport {
@@ -95,13 +96,14 @@ impl SafetyFindingReport {
             SafetyFinding::MissingSafetyDocs { def_id, span } => {
                 let function = canonical_namespace(tcx, def_id);
                 Self {
-                    kind: SafetyFindingKindReport::MissingSafetyDocs,
+                    kind: SafetyFindingKindReport::MissingDocs,
                     level,
                     span: render_span(tcx, span),
                     function: function.clone(),
                     target: None,
                     reason: format!("public unsafe function `{function}` is missing # Safety docs"),
                     missing_requirements: Vec::new(),
+                    requirements: Vec::new(),
                 }
             }
             SafetyFinding::CallMissingJustification {
@@ -111,16 +113,16 @@ impl SafetyFindingReport {
                 span,
             } => {
                 let target = safety_callee_name(tcx, callee);
-                let kind = safety_finding_report_kind(call_kind, false);
                 let call = safety_call_label(call_kind);
                 Self {
-                    kind,
+                    kind: SafetyFindingKindReport::MissingJustification,
                     level,
                     span: render_span(tcx, span),
                     function: canonical_namespace(tcx, caller),
                     target: Some(target.clone()),
                     reason: format!("{call} to `{target}` has no `// SAFETY:` justification"),
                     missing_requirements: Vec::new(),
+                    requirements: Vec::new(),
                 }
             }
             SafetyFinding::CallMissingRequirements {
@@ -131,14 +133,13 @@ impl SafetyFindingReport {
                 missing_requirements,
             } => {
                 let target = safety_callee_name(tcx, callee);
-                let kind = safety_finding_report_kind(call_kind, true);
                 let call = safety_call_label(call_kind);
                 let missing_requirements = missing_requirements
                     .iter()
                     .map(render_safety_requirement)
                     .collect();
                 Self {
-                    kind,
+                    kind: SafetyFindingKindReport::MissingRequirements,
                     level,
                     span: render_span(tcx, span),
                     function: canonical_namespace(tcx, caller),
@@ -147,12 +148,13 @@ impl SafetyFindingReport {
                         "{call} to `{target}` does not satisfy all # Safety requirements"
                     ),
                     missing_requirements,
+                    requirements: Vec::new(),
                 }
             }
             SafetyFinding::OpMissingJustification { caller, op, span } => {
                 let operation = safety_op_label(op);
                 Self {
-                    kind: SafetyFindingKindReport::UnsafeOpMissingJustification,
+                    kind: SafetyFindingKindReport::MissingJustification,
                     level,
                     span: render_span(tcx, span),
                     function: canonical_namespace(tcx, caller),
@@ -161,6 +163,30 @@ impl SafetyFindingReport {
                         "unsafe operation ({operation}) has no `// SAFETY:` justification"
                     ),
                     missing_requirements: Vec::new(),
+                    requirements: Vec::new(),
+                }
+            }
+            SafetyFinding::AmbiguousObligationName {
+                def_id,
+                normalized_name,
+                requirements,
+            } => {
+                let function = canonical_namespace(tcx, def_id);
+                let span = requirements
+                    .first()
+                    .map_or_else(|| tcx.def_span(def_id), |requirement| requirement.span);
+                let requirements = requirements.iter().map(render_safety_requirement).collect();
+                Self {
+                    kind: SafetyFindingKindReport::AmbiguousObligationName,
+                    level,
+                    span: render_span(tcx, span),
+                    function: function.clone(),
+                    target: None,
+                    reason: format!(
+                        "`{function}` has multiple # Safety requirements named `{normalized_name}`"
+                    ),
+                    missing_requirements: Vec::new(),
+                    requirements,
                 }
             }
         }
@@ -170,26 +196,8 @@ impl SafetyFindingReport {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "kebab-case")]
 enum SafetyFindingKindReport {
-    MissingSafetyDocs,
-    UnsafeCallMissingJustification,
-    UnsafeCallMissingRequirements,
-    UnsafeOpMissingJustification,
-    SafetyObligationMissingJustification,
-    SafetyObligationMissingRequirements,
-}
-
-fn safety_finding_report_kind(
-    call_kind: SafetyCallKind,
-    missing_requirements: bool,
-) -> SafetyFindingKindReport {
-    match (call_kind, missing_requirements) {
-        (SafetyCallKind::Unsafe, false) => SafetyFindingKindReport::UnsafeCallMissingJustification,
-        (SafetyCallKind::Unsafe, true) => SafetyFindingKindReport::UnsafeCallMissingRequirements,
-        (SafetyCallKind::ConfiguredObligation, false) => {
-            SafetyFindingKindReport::SafetyObligationMissingJustification
-        }
-        (SafetyCallKind::ConfiguredObligation, true) => {
-            SafetyFindingKindReport::SafetyObligationMissingRequirements
-        }
-    }
+    MissingDocs,
+    MissingJustification,
+    MissingRequirements,
+    AmbiguousObligationName,
 }

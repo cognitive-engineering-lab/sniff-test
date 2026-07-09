@@ -6,6 +6,7 @@
 use rustc_hir::attrs::{AttributeKind, HasAttrs};
 use rustc_hir::{Attribute, def_id::DefId};
 use rustc_middle::ty::TyCtxt;
+use rustc_span::{DUMMY_SP, Span};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(crate) enum ContractKind {
@@ -17,12 +18,20 @@ pub(crate) enum ContractKind {
 pub(crate) struct ContractRequirement {
     pub(crate) name: String,
     pub(crate) condition: String,
+    pub(crate) span: Span,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct AmbiguousContractRequirements {
+    pub(crate) normalized_name: String,
+    pub(crate) requirements: Vec<ContractRequirement>,
 }
 
 #[derive(Debug, Clone, Default)]
 pub(crate) struct ContractDocSummary {
     pub(crate) has_docs: bool,
     pub(crate) requirements: Vec<ContractRequirement>,
+    pub(crate) ambiguous_requirements: Vec<AmbiguousContractRequirements>,
 }
 
 // One rustc session per process and single-threaded analysis, so DefId-keyed
@@ -48,7 +57,14 @@ pub(crate) fn contract_doc_summary(
                     HasAttrs::get_attrs(def_id, &tcx)
                         .iter()
                         .filter_map(doc_comment)
-                        .flat_map(str::lines),
+                        .flat_map(|(comment, span)| {
+                            let lines = comment
+                                .as_str()
+                                .lines()
+                                .map(move |line| (line.to_owned(), span))
+                                .collect::<Vec<_>>();
+                            lines.into_iter()
+                        }),
                     kind,
                 )
             })
@@ -57,23 +73,23 @@ pub(crate) fn contract_doc_summary(
 }
 
 #[must_use]
-pub(crate) fn parse_contract_doc_lines<'a>(
-    lines: impl IntoIterator<Item = &'a str>,
+pub(crate) fn parse_contract_doc_lines(
+    lines: impl IntoIterator<Item = impl Into<ContractDocLine>>,
     kind: ContractKind,
 ) -> ContractDocSummary {
     let mut summary = ContractDocSummary::default();
     let mut in_contract_section = false;
-    let mut fence: Option<&str> = None;
+    let mut fence: Option<String> = None;
 
-    for line in lines {
+    for line in lines.into_iter().map(Into::into) {
         // Lines inside fenced code blocks are example text, not structure: a
         // literal `# Panics` there is not a contract heading, and hidden
         // doctest lines like `# use foo;` must not close a real section.
-        if let Some(marker) = code_fence_marker(line) {
+        if let Some(marker) = code_fence_marker(&line.line) {
             match fence {
-                Some(open) if marker.starts_with(open) => fence = None,
+                Some(ref open) if marker.starts_with(open) => fence = None,
                 Some(_) => {}
-                None => fence = Some(marker),
+                None => fence = Some(marker.to_owned()),
             }
             continue;
         }
@@ -81,7 +97,7 @@ pub(crate) fn parse_contract_doc_lines<'a>(
             continue;
         }
 
-        if let Some(heading) = markdown_heading_text(line) {
+        if let Some(heading) = markdown_heading_text(&line.line) {
             in_contract_section = kind.matches_heading(heading);
             summary.has_docs |= in_contract_section;
             continue;
@@ -92,7 +108,28 @@ pub(crate) fn parse_contract_doc_lines<'a>(
         }
     }
 
+    summary.ambiguous_requirements = ambiguous_requirements(&summary.requirements);
     summary
+}
+
+pub(crate) struct ContractDocLine {
+    line: String,
+    span: Span,
+}
+
+impl From<&str> for ContractDocLine {
+    fn from(line: &str) -> Self {
+        Self {
+            line: line.to_owned(),
+            span: DUMMY_SP,
+        }
+    }
+}
+
+impl From<(String, Span)> for ContractDocLine {
+    fn from((line, span): (String, Span)) -> Self {
+        Self { line, span }
+    }
 }
 
 /// The backtick or tilde run opening or closing a fenced code block, ignoring
@@ -129,6 +166,30 @@ pub(crate) fn satisfied_requirement_names<'a>(
         .collect()
 }
 
+fn ambiguous_requirements(
+    requirements: &[ContractRequirement],
+) -> Vec<AmbiguousContractRequirements> {
+    let mut groups: Vec<AmbiguousContractRequirements> = Vec::new();
+    let mut indexes = std::collections::HashMap::new();
+
+    for requirement in requirements {
+        let normalized_name = normalize_requirement_name(&requirement.name);
+        let index = *indexes.entry(normalized_name.clone()).or_insert_with(|| {
+            groups.push(AmbiguousContractRequirements {
+                normalized_name,
+                requirements: Vec::new(),
+            });
+            groups.len() - 1
+        });
+        groups[index].requirements.push(requirement.clone());
+    }
+
+    groups
+        .into_iter()
+        .filter(|group| group.requirements.len() > 1)
+        .collect()
+}
+
 #[must_use]
 pub(crate) fn normalize_requirement_name(name: &str) -> String {
     let mut normalized = String::new();
@@ -149,19 +210,21 @@ pub(crate) fn normalize_requirement_name(name: &str) -> String {
     normalized
 }
 
-fn doc_comment(attr: &Attribute) -> Option<&str> {
+fn doc_comment(attr: &Attribute) -> Option<(rustc_span::Symbol, Span)> {
     match attr {
-        Attribute::Parsed(AttributeKind::DocComment { comment, .. }) => Some(comment.as_str()),
+        Attribute::Parsed(AttributeKind::DocComment { comment, span, .. }) => {
+            Some((*comment, *span))
+        }
         Attribute::Parsed(_) | Attribute::Unparsed(_) => None,
     }
 }
 
-fn parse_requirement_bullet(line: &str) -> Option<ContractRequirement> {
-    let line = line.trim_start();
-    let body = line
+fn parse_requirement_bullet(line: ContractDocLine) -> Option<ContractRequirement> {
+    let text = line.line.trim_start();
+    let body = text
         .strip_prefix("- ")
-        .or_else(|| line.strip_prefix("* "))
-        .or_else(|| line.strip_prefix("+ "))?;
+        .or_else(|| text.strip_prefix("* "))
+        .or_else(|| text.strip_prefix("+ "))?;
     let (name, condition) = body.split_once(':')?;
     let name = name.trim();
     let condition = condition.trim();
@@ -169,6 +232,7 @@ fn parse_requirement_bullet(line: &str) -> Option<ContractRequirement> {
     (!normalize_requirement_name(name).is_empty()).then(|| ContractRequirement {
         name: name.to_owned(),
         condition: condition.to_owned(),
+        span: line.span,
     })
 }
 
@@ -254,5 +318,25 @@ mod tests {
             ContractKind::Panic,
         );
         assert!(!nested.has_docs);
+    }
+
+    #[test]
+    fn duplicate_requirement_names_are_ambiguous_after_normalization() {
+        let summary = parse_contract_doc_lines(
+            [
+                "# Panics",
+                "- valid_ptr: pointer must be non-null",
+                "- valid ptr: pointer must be initialized",
+                "- other: independent requirement",
+            ],
+            ContractKind::Panic,
+        );
+
+        assert_eq!(summary.ambiguous_requirements.len(), 1);
+        assert_eq!(
+            summary.ambiguous_requirements[0].normalized_name,
+            "valid ptr"
+        );
+        assert_eq!(summary.ambiguous_requirements[0].requirements.len(), 2);
     }
 }

@@ -1,15 +1,15 @@
-use std::collections::{HashSet, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::ops::ControlFlow;
 
 use rustc_hir::def_id::{DefId, LocalDefId};
-use rustc_middle::ty::{GenericArgs, Instance, InstanceKind, TyCtxt};
+use rustc_middle::ty::{GenericArgs, Instance, InstanceKind, Ty, TyCtxt};
 use rustc_span::Span;
 
 use crate::body::BodyEdge;
 use crate::body::collect_body_edges;
 use crate::graph::{
-    ReachabilityEdge, ReachabilityEdgeKind, ReachabilityGraph, ReachabilityNodeId,
-    ReachabilityNodeKind, ReachabilitySnapshot,
+    CallableEdgeInfo, ReachabilityEdge, ReachabilityEdgeId, ReachabilityEdgeKind,
+    ReachabilityGraph, ReachabilityNodeId, ReachabilityNodeKind, ReachabilitySnapshot,
 };
 use crate::hooks::{ReachabilityContext, ReachabilityControl, ReachabilityHalt, ReachabilityHooks};
 
@@ -82,6 +82,9 @@ pub struct ReachabilityOptions {
     /// Where concrete vtable method edges introduced by dynamic object casts
     /// should be recorded.
     pub dyn_dispatch_vtable_edges: DynDispatchVTableEdges,
+    /// Where concrete function-pointer targets introduced by reification
+    /// should be recorded.
+    pub fn_pointer_edges: FnPointerEdges,
 }
 
 impl Default for ReachabilityOptions {
@@ -90,6 +93,7 @@ impl Default for ReachabilityOptions {
             node_limit: None,
             analyze_external: true,
             dyn_dispatch_vtable_edges: DynDispatchVTableEdges::CastSites,
+            fn_pointer_edges: FnPointerEdges::ReifySites,
         }
     }
 }
@@ -102,9 +106,23 @@ pub enum DynDispatchVTableEdges {
     CastSites,
     /// Record concrete vtable methods at dynamic dispatch call sites.
     ///
-    /// This is a body-local, trait-keyed approximation. If one body casts
-    /// multiple concrete values to the same dyn trait, each dyn call to that
-    /// trait may be connected to every concrete impl observed in the body.
+    /// This is a query-local, trait-keyed approximation. If a query reaches
+    /// multiple concrete values cast to the same dyn trait, each dyn call to
+    /// that trait may be connected to every observed concrete impl.
+    CallSites,
+}
+
+/// Source locations used for concrete function-pointer targets introduced by
+/// function item or closure reification.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FnPointerEdges {
+    /// Record concrete callables at the reification site.
+    ReifySites,
+    /// Record concrete callables at function-pointer call sites.
+    ///
+    /// This is a query-local, function-pointer-type-keyed approximation. If a
+    /// query reaches multiple reifications to the same function-pointer type,
+    /// each matching call site may be connected to every observed target.
     CallSites,
 }
 
@@ -155,6 +173,10 @@ impl<'tcx> ReachabilityIndex<'tcx> {
             options,
             visited_instances: HashSet::new(),
             visited_bridge_nodes: HashSet::new(),
+            fn_pointer_targets: HashMap::new(),
+            dyn_dispatch_targets: HashMap::new(),
+            pending_fn_pointer_calls: HashMap::new(),
+            pending_dyn_dispatch_calls: HashMap::new(),
             queue: VecDeque::from([QueueItem {
                 node_id: root_node_id,
                 current_instance: root,
@@ -204,14 +226,17 @@ impl<'tcx> ReachabilityIndex<'tcx> {
         }
 
         let target = self.graph.node_for_kind(body_edge.target);
-        self.graph.push_edge(ReachabilityEdge::new(
-            current,
-            target,
-            source,
-            body_edge.kind,
-            body_edge.span,
-            body_edge.callee_span,
-        ));
+        self.graph.push_edge_with_callable(
+            ReachabilityEdge::new(
+                current,
+                target,
+                source,
+                body_edge.kind,
+                body_edge.span,
+                body_edge.callee_span,
+            ),
+            body_edge.callable,
+        );
     }
 
     fn can_descend_into(&self, options: ReachabilityOptions, instance: Instance<'tcx>) -> bool {
@@ -260,8 +285,18 @@ struct ReachabilityQuery<'a, 'tcx, H> {
     options: ReachabilityOptions,
     visited_instances: HashSet<Instance<'tcx>>,
     visited_bridge_nodes: HashSet<ReachabilityNodeId>,
+    fn_pointer_targets: HashMap<Ty<'tcx>, Vec<Instance<'tcx>>>,
+    dyn_dispatch_targets: HashMap<DefId, Vec<Instance<'tcx>>>,
+    pending_fn_pointer_calls: HashMap<Ty<'tcx>, Vec<PendingCallableCallSite<'tcx>>>,
+    pending_dyn_dispatch_calls: HashMap<DefId, Vec<PendingCallableCallSite<'tcx>>>,
     queue: VecDeque<QueueItem<'tcx>>,
     snapshot: ReachabilitySnapshot<'tcx>,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct PendingCallableCallSite<'tcx> {
+    item: QueueItem<'tcx>,
+    edge_id: ReachabilityEdgeId,
 }
 
 impl<'tcx, H> ReachabilityQuery<'_, 'tcx, H>
@@ -313,43 +348,253 @@ where
         let outgoing = self.index.graph.outgoing_edges(item.node_id).to_vec();
 
         for edge_id in outgoing {
-            let edge = self.index.graph.edge(edge_id).clone();
-            if !self.edge_matches_options(&edge) {
+            self.register_erased_callable_target(edge_id)?;
+            let edge = self.index.graph.edge(edge_id);
+            if !self.edge_matches_options(edge) {
                 continue;
             }
 
-            let cx = self.context(item.current_instance, item.depth);
-            self.hooks.on_edge(cx, &edge)?;
-            if !self.hooks.should_record_edge(cx, &edge)? {
-                continue;
-            }
-
-            let first_reach = self
-                .snapshot
-                .record_edge(edge_id, edge.target, item.depth + 1);
-            if let Some(target) = self.index.graph.node_instance(edge.target) {
-                let should_descend = self.hooks.should_descend(cx, &edge, target)?;
-                if should_descend && first_reach && !self.visited_instances.contains(&target) {
-                    self.queue.push_back(QueueItem {
-                        node_id: edge.target,
-                        current_instance: target,
-                        depth: item.depth + 1,
-                    });
-                }
-            } else if first_reach {
-                self.queue.push_back(QueueItem {
-                    node_id: edge.target,
-                    current_instance: item.current_instance,
-                    depth: item.depth + 1,
-                });
+            if self.accept_edge(item, edge_id)? {
+                self.register_callable_call_site(item, edge_id)?;
             }
         }
 
         ControlFlow::Continue(())
     }
 
+    fn accept_edge(
+        &mut self,
+        item: QueueItem<'tcx>,
+        edge_id: ReachabilityEdgeId,
+    ) -> ReachabilityControl<'tcx, bool> {
+        let edge = self.index.graph.edge(edge_id).clone();
+        let cx = self.context(item.current_instance, item.depth);
+        self.hooks.on_edge(cx, &edge)?;
+        if !self.hooks.should_record_edge(cx, &edge)? {
+            return ControlFlow::Continue(false);
+        }
+
+        let first_reach = self
+            .snapshot
+            .record_edge(edge_id, edge.target, item.depth + 1);
+        if let Some(target) = self.index.graph.node_instance(edge.target) {
+            let should_descend = self.hooks.should_descend(cx, &edge, target)?;
+            if should_descend && first_reach && !self.visited_instances.contains(&target) {
+                self.queue.push_back(QueueItem {
+                    node_id: edge.target,
+                    current_instance: target,
+                    depth: item.depth + 1,
+                });
+            }
+        } else if first_reach {
+            self.queue.push_back(QueueItem {
+                node_id: edge.target,
+                current_instance: item.current_instance,
+                depth: item.depth + 1,
+            });
+        }
+
+        ControlFlow::Continue(true)
+    }
+
+    fn register_erased_callable_target(
+        &mut self,
+        edge_id: ReachabilityEdgeId,
+    ) -> ReachabilityControl<'tcx> {
+        let edge = self.index.graph.edge(edge_id);
+        match (edge.kind, self.index.graph.edge_callable(edge_id)) {
+            (
+                ReachabilityEdgeKind::FnPointerReify | ReachabilityEdgeKind::ClosureFnPointerReify,
+                Some(CallableEdgeInfo::FnPointer { fn_ptr_ty }),
+            ) if matches!(self.options.fn_pointer_edges, FnPointerEdges::CallSites) => {
+                let Some(target) = self.index.graph.node_instance(edge.target) else {
+                    return ControlFlow::Continue(());
+                };
+                if insert_unique(
+                    self.fn_pointer_targets.entry(fn_ptr_ty).or_default(),
+                    target,
+                ) {
+                    let pending = self
+                        .pending_fn_pointer_calls
+                        .get(&fn_ptr_ty)
+                        .cloned()
+                        .unwrap_or_default();
+                    for call_site in pending {
+                        self.accept_callable_target_edge(
+                            call_site.item,
+                            call_site.edge_id,
+                            target,
+                            ReachabilityEdgeKind::FnPointerCallTarget,
+                        )?;
+                    }
+                }
+            }
+            (
+                ReachabilityEdgeKind::VTableEntry,
+                Some(CallableEdgeInfo::DynDispatch { trait_def_id }),
+            ) if matches!(
+                self.options.dyn_dispatch_vtable_edges,
+                DynDispatchVTableEdges::CallSites
+            ) =>
+            {
+                let Some(target) = self.index.graph.node_instance(edge.target) else {
+                    return ControlFlow::Continue(());
+                };
+                if insert_unique(
+                    self.dyn_dispatch_targets.entry(trait_def_id).or_default(),
+                    target,
+                ) {
+                    let pending = self
+                        .pending_dyn_dispatch_calls
+                        .get(&trait_def_id)
+                        .cloned()
+                        .unwrap_or_default();
+                    for call_site in pending {
+                        self.accept_callable_target_edge(
+                            call_site.item,
+                            call_site.edge_id,
+                            target,
+                            ReachabilityEdgeKind::DynDispatchVTableEntry,
+                        )?;
+                    }
+                }
+            }
+            _ => {}
+        }
+
+        ControlFlow::Continue(())
+    }
+
+    fn register_callable_call_site(
+        &mut self,
+        item: QueueItem<'tcx>,
+        edge_id: ReachabilityEdgeId,
+    ) -> ReachabilityControl<'tcx> {
+        if !matches!(
+            self.index.graph.edge(edge_id).kind,
+            ReachabilityEdgeKind::DirectCall
+                | ReachabilityEdgeKind::TailCall
+                | ReachabilityEdgeKind::IndirectCall
+        ) {
+            return ControlFlow::Continue(());
+        }
+
+        match self.index.graph.edge_callable(edge_id) {
+            Some(CallableEdgeInfo::FnPointer { fn_ptr_ty })
+                if matches!(self.options.fn_pointer_edges, FnPointerEdges::CallSites) =>
+            {
+                let call_site = PendingCallableCallSite { item, edge_id };
+                self.pending_fn_pointer_calls
+                    .entry(fn_ptr_ty)
+                    .or_default()
+                    .push(call_site);
+                let targets = self
+                    .fn_pointer_targets
+                    .get(&fn_ptr_ty)
+                    .cloned()
+                    .unwrap_or_default();
+                for target in targets {
+                    self.accept_callable_target_edge(
+                        item,
+                        edge_id,
+                        target,
+                        ReachabilityEdgeKind::FnPointerCallTarget,
+                    )?;
+                }
+            }
+            Some(CallableEdgeInfo::DynDispatch { trait_def_id })
+                if matches!(
+                    self.options.dyn_dispatch_vtable_edges,
+                    DynDispatchVTableEdges::CallSites
+                ) =>
+            {
+                let call_site = PendingCallableCallSite { item, edge_id };
+                self.pending_dyn_dispatch_calls
+                    .entry(trait_def_id)
+                    .or_default()
+                    .push(call_site);
+                let targets = self
+                    .dyn_dispatch_targets
+                    .get(&trait_def_id)
+                    .cloned()
+                    .unwrap_or_default();
+                for target in targets {
+                    self.accept_callable_target_edge(
+                        item,
+                        edge_id,
+                        target,
+                        ReachabilityEdgeKind::DynDispatchVTableEntry,
+                    )?;
+                }
+            }
+            _ => {}
+        }
+
+        ControlFlow::Continue(())
+    }
+
+    fn accept_callable_target_edge(
+        &mut self,
+        item: QueueItem<'tcx>,
+        call_edge_id: ReachabilityEdgeId,
+        target: Instance<'tcx>,
+        kind: ReachabilityEdgeKind,
+    ) -> ReachabilityControl<'tcx> {
+        let call_edge = self.index.graph.edge(call_edge_id).clone();
+        let callable = self.index.graph.edge_callable(call_edge_id);
+        let target_id = self.index.graph.node_for_instance(target);
+        let edge_id = self.callable_target_edge_id(&call_edge, target_id, kind, callable);
+        self.accept_edge(item, edge_id)?;
+        ControlFlow::Continue(())
+    }
+
+    fn callable_target_edge_id(
+        &mut self,
+        call_edge: &ReachabilityEdge,
+        target: ReachabilityNodeId,
+        kind: ReachabilityEdgeKind,
+        callable: Option<CallableEdgeInfo<'tcx>>,
+    ) -> ReachabilityEdgeId {
+        if let Some(edge_id) = self
+            .index
+            .graph
+            .outgoing_edges(call_edge.source)
+            .iter()
+            .copied()
+            .find(|edge_id| {
+                let edge = self.index.graph.edge(*edge_id);
+                edge.target == target
+                    && edge.kind == kind
+                    && edge.span.source_equal(call_edge.span)
+                    && optional_span_source_equal(edge.callee_span, call_edge.callee_span)
+                    && self.index.graph.edge_callable(*edge_id) == callable
+            })
+        {
+            return edge_id;
+        }
+
+        self.index.graph.push_edge_with_callable(
+            ReachabilityEdge::new(
+                call_edge.source,
+                target,
+                call_edge.origin,
+                kind,
+                call_edge.span,
+                call_edge.callee_span,
+            ),
+            callable,
+        )
+    }
+
     fn edge_matches_options(&self, edge: &ReachabilityEdge) -> bool {
         match edge.kind {
+            crate::graph::ReachabilityEdgeKind::FnPointerReify
+            | crate::graph::ReachabilityEdgeKind::ClosureFnPointerReify => {
+                matches!(self.options.fn_pointer_edges, FnPointerEdges::ReifySites)
+            }
+            crate::graph::ReachabilityEdgeKind::FnPointerCallTarget => {
+                matches!(self.options.fn_pointer_edges, FnPointerEdges::CallSites)
+            }
             crate::graph::ReachabilityEdgeKind::VTableEntry => matches!(
                 self.options.dyn_dispatch_vtable_edges,
                 DynDispatchVTableEdges::CastSites
@@ -360,8 +605,6 @@ where
             ),
             crate::graph::ReachabilityEdgeKind::DirectCall
             | crate::graph::ReachabilityEdgeKind::TailCall
-            | crate::graph::ReachabilityEdgeKind::FnPointerReify
-            | crate::graph::ReachabilityEdgeKind::ClosureFnPointerReify
             | crate::graph::ReachabilityEdgeKind::ClosureDefinition
             | crate::graph::ReachabilityEdgeKind::DynObjectCast
             | crate::graph::ReachabilityEdgeKind::ConstBody
@@ -379,6 +622,23 @@ where
             depth,
             stats: self.snapshot.stats(),
         }
+    }
+}
+
+fn insert_unique<T: PartialEq>(values: &mut Vec<T>, value: T) -> bool {
+    if values.contains(&value) {
+        false
+    } else {
+        values.push(value);
+        true
+    }
+}
+
+fn optional_span_source_equal(left: Option<Span>, right: Option<Span>) -> bool {
+    match (left, right) {
+        (Some(left), Some(right)) => left.source_equal(right),
+        (None, None) => true,
+        _ => false,
     }
 }
 
