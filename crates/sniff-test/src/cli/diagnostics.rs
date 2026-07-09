@@ -63,8 +63,7 @@ pub(super) fn emit_analysis_incomplete_diagnostic(
         "analysis of `{root}` is incomplete: reachability halted at the \
          {node_limit}-instance node limit"
     );
-    let help =
-        "raise `node-limit` under `[analysis]` in sniff-test.toml, or shrink the traversal by \
+    let help = "raise `node-limit` under `[analysis]` in sniff-test.toml, or shrink the traversal by \
          trusting or ignoring namespaces";
     match level {
         LintLevel::Allow => {}
@@ -512,25 +511,35 @@ pub(super) fn emit_safety_diagnostics(
                 }
             }
             SafetyFinding::OpMissingJustification { caller, op, span } => {
-                let caller = canonical_namespace(tcx, *caller);
-                let operation = safety_op_label(*op);
-                let message = format!(
-                    "unsafe operation ({operation}) in `{caller}` is missing a `// SAFETY:` justification"
-                );
-                match level {
-                    LintLevel::Allow => {}
-                    LintLevel::Warn => {
-                        let mut diag = tcx.dcx().struct_span_warn(*span, message);
-                        diag.help("add a `// SAFETY:` comment above the unsafe block or operation");
-                        diag.emit();
-                    }
-                    LintLevel::Deny => {
-                        let mut diag = tcx.dcx().struct_span_err(*span, message);
-                        diag.help("add a `// SAFETY:` comment above the unsafe block or operation");
-                        let _ = diag.emit();
-                    }
-                }
+                emit_safety_op_diagnostic(tcx, *caller, *op, *span, level);
             }
+        }
+    }
+}
+
+fn emit_safety_op_diagnostic(
+    tcx: TyCtxt<'_>,
+    caller: DefId,
+    op: crate::safety::SafetyOpKind,
+    span: Span,
+    level: LintLevel,
+) {
+    let caller = canonical_namespace(tcx, caller);
+    let operation = safety_op_label(op);
+    let message = format!(
+        "unsafe operation ({operation}) in `{caller}` is missing a `// SAFETY:` justification"
+    );
+    match level {
+        LintLevel::Allow => {}
+        LintLevel::Warn => {
+            let mut diag = tcx.dcx().struct_span_warn(span, message);
+            diag.help("add a `// SAFETY:` comment above the unsafe block or operation");
+            diag.emit();
+        }
+        LintLevel::Deny => {
+            let mut diag = tcx.dcx().struct_span_err(span, message);
+            diag.help("add a `// SAFETY:` comment above the unsafe block or operation");
+            let _ = diag.emit();
         }
     }
 }
@@ -572,12 +581,11 @@ pub(super) fn emit_missing_report_root_diagnostics(
         };
         let mut diag = if let Some(span) = source_file
             .as_ref()
-            .and_then(|file| config_span(file.start_pos, root.source_span.clone()))
+            .and_then(|file| config_span(file, root.source_span.clone()))
         {
             tcx.dcx().struct_span_warn(span, message)
         } else {
-            tcx.dcx()
-                .struct_warn(format!("{message}: `{}`", root.path))
+            tcx.dcx().struct_warn(format!("{message}: `{}`", root.path))
         };
         diag.note("configured under `[analysis].report-roots`");
         diag.help(help);
@@ -585,13 +593,28 @@ pub(super) fn emit_missing_report_root_diagnostics(
     }
 }
 
-fn config_span(file_start: BytePos, source_span: std::ops::Range<usize>) -> Option<Span> {
-    let start = u32::try_from(source_span.start).ok()?;
-    let end = u32::try_from(source_span.end).ok()?;
+fn config_span(file: &rustc_span::SourceFile, source_span: std::ops::Range<usize>) -> Option<Span> {
+    let start = normalized_offset(file, source_span.start)?;
+    let end = normalized_offset(file, source_span.end)?;
     Some(Span::with_root_ctxt(
-        file_start + BytePos(start),
-        file_start + BytePos(end),
+        file.start_pos + BytePos(start),
+        file.start_pos + BytePos(end),
     ))
+}
+
+/// Maps a byte offset in the on-disk manifest to the offset in rustc's
+/// normalized source, which strips a UTF-8 BOM and the CR bytes of CRLF
+/// pairs. TOML spans are raw-file offsets, so they drift on CRLF manifests
+/// without this adjustment.
+fn normalized_offset(file: &rustc_span::SourceFile, original: usize) -> Option<u32> {
+    let original = u32::try_from(original).ok()?;
+    let diff = file
+        .normalized_pos
+        .iter()
+        .take_while(|entry| entry.pos.0 + entry.diff <= original)
+        .last()
+        .map_or(0, |entry| entry.diff);
+    Some(original - diff)
 }
 
 fn add_safety_callee_note<G: EmissionGuarantee>(
@@ -699,14 +722,51 @@ fn render_trace_endpoint<'tcx>(tcx: TyCtxt<'tcx>, node: &ReachabilityNodeKind<'t
 
 #[cfg(test)]
 mod tests {
+    use rustc_span::source_map::{FilePathMapping, SourceMap};
+    use rustc_span::{BytePos, FileName};
+
     use super::config_span;
-    use rustc_span::BytePos;
+
+    fn with_source_file(source: &str, check: impl FnOnce(&rustc_span::SourceFile)) {
+        rustc_span::create_default_session_globals_then(|| {
+            let source_map = SourceMap::new(FilePathMapping::empty());
+            let file = source_map.new_source_file(
+                FileName::Custom(String::from("sniff-test.toml")),
+                source.to_owned(),
+            );
+            check(&file);
+        });
+    }
 
     #[test]
     fn converts_config_byte_range_to_source_span() {
-        let span = config_span(BytePos(10), 3..8).expect("span should fit in u32");
+        with_source_file("key = \"value\"\n", |file| {
+            let span = config_span(file, 6..13).expect("span should fit in u32");
 
-        assert_eq!(span.lo(), BytePos(13));
-        assert_eq!(span.hi(), BytePos(18));
+            assert_eq!(span.lo(), file.start_pos + BytePos(6));
+            assert_eq!(span.hi(), file.start_pos + BytePos(13));
+        });
+    }
+
+    #[test]
+    fn crlf_manifest_offsets_account_for_stripped_carriage_returns() {
+        // Raw file: `a = 1\r\nkey = "value"\r\n`; toml reports raw offsets,
+        // rustc's normalized source has the CR bytes removed.
+        with_source_file("a = 1\r\nkey = \"value\"\r\n", |file| {
+            let span = config_span(file, 13..20).expect("span should fit in u32");
+
+            assert_eq!(span.lo(), file.start_pos + BytePos(12));
+            assert_eq!(span.hi(), file.start_pos + BytePos(19));
+        });
+    }
+
+    #[test]
+    fn bom_prefixed_manifest_offsets_account_for_stripped_bom() {
+        with_source_file("\u{feff}key = \"value\"\n", |file| {
+            let span = config_span(file, 9..16).expect("span should fit in u32");
+
+            assert_eq!(span.lo(), file.start_pos + BytePos(6));
+            assert_eq!(span.hi(), file.start_pos + BytePos(13));
+        });
     }
 }

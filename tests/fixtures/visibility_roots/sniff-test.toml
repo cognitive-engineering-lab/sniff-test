@@ -1,0 +1,10 @@
+# report-roots = "public" selects effective visibility: a `pub fn` in a
+# private module is not part of the public API unless re-exported.
+
+[panics]
+panic-sink-namespaces = [
+    "core::panicking::**",
+    "std::panicking::**",
+    "core::std::rt::panic_fmt",
+    "std::rt::panic_fmt",
+]

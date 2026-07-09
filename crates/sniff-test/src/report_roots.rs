@@ -158,7 +158,11 @@ fn find_local_fn_by_path(tcx: TyCtxt<'_>, path: &str) -> Option<LocalDefId> {
 }
 
 fn public_local_fn_defs(tcx: TyCtxt<'_>) -> impl Iterator<Item = LocalDefId> + '_ {
-    analyzable_local_fn_defs(tcx).filter(move |local| tcx.visibility(*local).is_public())
+    // Effective visibility, not declared: a `pub fn` in a private module is
+    // not part of the public API unless something re-exports it, and
+    // re-exports count (`is_exported`, not `is_directly_public`).
+    analyzable_local_fn_defs(tcx)
+        .filter(move |local| tcx.effective_visibilities(()).is_exported(*local))
 }
 
 fn analyzable_local_fn_defs(tcx: TyCtxt<'_>) -> impl Iterator<Item = LocalDefId> + '_ {

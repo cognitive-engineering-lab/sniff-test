@@ -14,7 +14,6 @@ use super::{absolute_path, analyze_crate, load_config};
 pub(crate) const DRIVER_NAME: &str = "sniff-test-driver";
 pub(crate) const RUSTC_VERSION_ENV: &str = "SNIFF_TEST_RUSTC_VERSION";
 pub(crate) const SNIFF_TEST_ARGS_ENV: &str = "SNIFF_TEST_ARGS";
-pub(crate) const DENIED_FINDING_STATUS_ENV: &str = "SNIFF_TEST_DENIED_FINDING_STATUS";
 
 pub(crate) fn frontend_args(mut args: SniffTestArgs, target_dir: &Path) -> SniffTestArgs {
     if args.cache_dir.is_none() {
@@ -69,8 +68,17 @@ pub(crate) fn modify_cargo(cargo: &mut Command, args: &SniffTestArgs) {
         rustflags.extend(["-C".to_owned(), flag.to_owned()]);
     }
 
-    let rustflags_cfg = rustflags_cargo_config(&rustflags);
-    cargo.args(["--config", &rustflags_cfg]);
+    // Cargo's rustflags sources are mutually exclusive, checked in order:
+    // CARGO_ENCODED_RUSTFLAGS, RUSTFLAGS, target.*.rustflags, build.rustflags.
+    // Owning the highest-precedence channel and folding the user's flags into
+    // it is the only way the analysis flags are guaranteed to apply; injecting
+    // a lower-precedence source is silently ignored whenever the user has
+    // RUSTFLAGS exported. Cargo fingerprints the flag content regardless of
+    // source, so the sniff_test_* cfg cache-busting keeps working.
+    cargo.env(
+        "CARGO_ENCODED_RUSTFLAGS",
+        compose_encoded_rustflags(&rustflags),
+    );
 
     if let Some(manifest_path) = &args.manifest_path {
         cargo.env(MANIFEST_PATH_ENV, manifest_path);
@@ -104,13 +112,14 @@ pub fn driver_main() -> ExitCode {
             return ExitCode::SUCCESS;
         }
 
-        let args = match args_from_env() {
+        let mut args = match args_from_env() {
             Ok(args) => args,
             Err(error) => {
                 eprintln!("{error}");
                 return ExitCode::FAILURE;
             }
         };
+        args.under_cargo = true;
         return run_driver(&compiler_args, args);
     }
 
@@ -199,8 +208,12 @@ fn run_driver(compiler_args: &[String], args: SniffTestArgs) -> ExitCode {
         args,
         compiler_args: compiler_args.clone(),
     };
-    rustc_driver::run_compiler(&compiler_args, &mut callbacks);
-    ExitCode::SUCCESS
+    // Fatal compile errors unwind with `FatalErrorMarker`; catching them here
+    // turns that into rustc's ordinary exit status, matching the direct-mode
+    // help text.
+    rustc_driver::catch_with_exit_code(|| {
+        rustc_driver::run_compiler(&compiler_args, &mut callbacks);
+    })
 }
 
 fn has_no_steal_thir(compiler_args: &[String]) -> bool {
@@ -258,16 +271,63 @@ fn stable_hash(source: &[u8]) -> u64 {
     })
 }
 
-fn rustflags_cargo_config(rustflags: &[String]) -> String {
-    let rustflags = rustflags
-        .iter()
-        .map(|flag| format!("\"{flag}\""))
+fn compose_encoded_rustflags(tool_flags: &[String]) -> String {
+    encode_rustflags(user_rustflags(), tool_flags)
+}
+
+fn encode_rustflags(user_flags: Vec<String>, tool_flags: &[String]) -> String {
+    user_flags
+        .into_iter()
+        .chain(tool_flags.iter().cloned())
         .collect::<Vec<_>>()
-        .join(",");
-    // Target-specific rustflags take priority over `build.rustflags` in Cargo.
-    // Use an always-true cfg target so sniff-test flags are merged with any
-    // existing target rustflags configured by the user.
-    format!("target.'cfg(all())'.rustflags=[{rustflags}]")
+        .join("\u{1f}")
+}
+
+/// The rustflags the user's build would otherwise see: the env vars cargo
+/// consults first, else `build.rustflags` from config files (best effort via
+/// `cargo config get`). Config-file `target.*.rustflags` entries are not
+/// recovered and stay masked for the analysis build.
+fn user_rustflags() -> Vec<String> {
+    if let Ok(encoded) = std::env::var("CARGO_ENCODED_RUSTFLAGS") {
+        if encoded.is_empty() {
+            return Vec::new();
+        }
+        return encoded.split('\u{1f}').map(str::to_owned).collect();
+    }
+    if let Ok(plain) = std::env::var("RUSTFLAGS") {
+        return plain.split_whitespace().map(str::to_owned).collect();
+    }
+    config_build_rustflags().unwrap_or_default()
+}
+
+fn config_build_rustflags() -> Option<Vec<String>> {
+    let output = Command::new("cargo")
+        .args([
+            "config",
+            "get",
+            "--format",
+            "json-value",
+            "build.rustflags",
+            "-Zunstable-options",
+        ])
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        // Routinely fails when the key is unset; nothing to fold in.
+        return None;
+    }
+    match serde_json::from_slice::<serde_json::Value>(&output.stdout).ok()? {
+        serde_json::Value::Array(values) => Some(
+            values
+                .into_iter()
+                .filter_map(|value| value.as_str().map(str::to_owned))
+                .collect(),
+        ),
+        serde_json::Value::String(flags) => {
+            Some(flags.split_whitespace().map(str::to_owned).collect())
+        }
+        _ => None,
+    }
 }
 
 fn sanitize_component(value: &str) -> String {
@@ -358,13 +418,20 @@ impl Callbacks for SniffTestCallbacks {
 
 #[cfg(test)]
 mod tests {
-    use super::rustflags_cargo_config;
+    use super::encode_rustflags;
 
     #[test]
-    fn rustflags_config_uses_target_cfg_so_it_merges_with_target_rustflags() {
+    fn tool_rustflags_append_to_user_flags_in_encoded_form() {
         assert_eq!(
-            rustflags_cargo_config(&["--cfg".to_owned(), "sniff_test_tool_abc".to_owned()]),
-            "target.'cfg(all())'.rustflags=[\"--cfg\",\"sniff_test_tool_abc\"]"
+            encode_rustflags(
+                vec![String::from("--cfg"), String::from("user_flag")],
+                &[String::from("--cfg"), String::from("sniff_test_tool_abc")],
+            ),
+            "--cfg\u{1f}user_flag\u{1f}--cfg\u{1f}sniff_test_tool_abc"
+        );
+        assert_eq!(
+            encode_rustflags(Vec::new(), &[String::from("-Zno-steal-thir")]),
+            "-Zno-steal-thir"
         );
     }
 }

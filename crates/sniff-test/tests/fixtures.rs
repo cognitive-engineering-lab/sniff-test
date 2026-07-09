@@ -202,6 +202,13 @@ fixture_cases! {
         chain_markers => Case::cargo("markers anchor to chain links");
         driver_chain_markers => Case::direct("markers anchor to chain links");
     }
+    "visibility_roots" => {
+        visibility_roots => Case::cargo("effective visibility selects roots").exit_code(1);
+        driver_visibility_roots => Case::direct("effective visibility selects roots");
+    }
+    "vendored_dep" => {
+        vendored_dep => Case::cargo("vendored path deps are not workspace code");
+    }
     "safe_markers" => {
         safe_markers => Case::cargo("panic marker satisfaction").exit_code(1);
         driver_safe_markers => Case::direct("panic marker satisfaction");
@@ -274,6 +281,89 @@ fn run_named_case(name: &'static str, fixture_name: &'static str, case: Case) {
     let sysroot = rustc_sysroot();
     let messages = run_case(&repo, &binaries, &sysroot, name, fixture_name, &case);
     insta::assert_json_snapshot!(name, messages);
+}
+
+/// Runs a cargo case twice against one fixture copy. The second run is fully
+/// fresh — cargo never re-invokes the driver — and must reproduce the first
+/// run's exit code and messages from persisted unit outcomes.
+fn run_named_rerun_case(name: &'static str, fixture_name: &'static str, case: &Case) {
+    let _guard = CASE_LOCK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let repo = repo_root();
+    let binaries = Binaries::from_cargo();
+    let sysroot = rustc_sysroot();
+
+    let fixture = repo.join("tests/fixtures").join(fixture_name);
+    assert!(
+        fixture.exists(),
+        "{} ({}/{}): missing fixture {}",
+        name,
+        fixture_name,
+        case.behavior,
+        fixture.display()
+    );
+    let temp = tempfile::Builder::new()
+        .prefix(&format!("sniff-test-{name}-"))
+        .tempdir()
+        .unwrap_or_else(|error| panic!("{name}: failed to create temp dir: {error}"));
+    let root = temp.path().join(fixture_name);
+    copy_dir_all(&fixture, &root)
+        .unwrap_or_else(|error| panic!("{name}: failed to copy fixture: {error}"));
+
+    let first = run_cargo_case(&binaries.cargo, &root, name, case);
+    let second = run_cargo_case(&binaries.cargo, &root, name, case);
+    for (run, output) in [("first", &first), ("second", &second)] {
+        assert_eq!(
+            output.status.code(),
+            Some(case.exit_code),
+            "{} ({}/{}): {run} run exited {:?}, expected {}\nstdout:\n{}\nstderr:\n{}",
+            name,
+            fixture_name,
+            case.behavior,
+            output.status.code(),
+            case.exit_code,
+            output.stdout,
+            output.stderr
+        );
+    }
+
+    let first_messages = parse_messages(&first, &root, &sysroot, name, fixture_name, case);
+    let second_messages = parse_messages(&second, &root, &sysroot, name, fixture_name, case);
+    assert_eq!(
+        first_messages, second_messages,
+        "{name}: a fresh rerun must reproduce the first run's messages"
+    );
+    insta::assert_json_snapshot!(name, second_messages);
+}
+
+#[test]
+fn panic_axioms_rerun() {
+    run_named_rerun_case(
+        "panic_axioms_rerun",
+        "panic_axioms",
+        &Case::cargo("rerun keeps denied panic verdicts").exit_code(1),
+    );
+}
+
+#[test]
+fn safety_requirements_denied_rerun() {
+    run_named_rerun_case(
+        "safety_requirements_denied_rerun",
+        "safety_requirements",
+        &Case::cargo("rerun keeps denied safety verdicts")
+            .args(&["--manifest", "deny.toml"])
+            .exit_code(1),
+    );
+}
+
+#[test]
+fn panic_requirements_rerun() {
+    run_named_rerun_case(
+        "panic_requirements_rerun",
+        "panic_requirements",
+        &Case::cargo("rerun re-emits clean reports"),
+    );
 }
 
 impl Binaries {
@@ -356,6 +446,17 @@ fn run_case(
         output.stderr
     );
 
+    parse_messages(&output, &root, sysroot, name, fixture_name, case)
+}
+
+fn parse_messages(
+    output: &CommandOutput,
+    root: &Path,
+    sysroot: &str,
+    name: &str,
+    fixture_name: &str,
+    case: &Case,
+) -> Vec<Value> {
     let mut messages = output
         .stdout
         .lines()
@@ -367,7 +468,7 @@ fn run_case(
                     name, fixture_name, case.behavior
                 )
             });
-            normalize_json(&mut value, &root, sysroot.trim());
+            normalize_json(&mut value, root, sysroot.trim());
             value
         })
         .collect::<Vec<_>>();

@@ -15,6 +15,7 @@ struct Case {
     working_dir: Option<&'static str>,
     config_append: &'static str,
     args: &'static [&'static str],
+    envs: &'static [(&'static str, &'static str)],
 }
 
 struct CommandOutput {
@@ -57,12 +58,65 @@ cli_cases! {
             .working_dir("..")
             .args(&["--", "--manifest-path", "{fixture}/Cargo.toml"])
             .exit_code(1);
+        config_found_from_subdirectory => Case::new("config discovered from a subdirectory")
+            .working_dir("src")
+            .exit_code(1);
+        rustflags_env_does_not_disable_analysis => Case::new("user RUSTFLAGS coexist")
+            .envs(&[("RUSTFLAGS", "--cfg sniff_test_cli_user_flag")])
+            .exit_code(1);
     }
     "report_roots" => {
         missing_report_root_diagnostic => Case::new("missing report root diagnostic")
             .args(&["--manifest", "explicit.toml"])
             .exit_code(1);
     }
+}
+
+/// A compile error through the driver must exit with rustc's ordinary status,
+/// not a 101 panic exit.
+#[test]
+fn direct_driver_compile_error_follows_rustc_exit_status() {
+    let _guard = CASE_LOCK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let temp = tempfile::Builder::new()
+        .prefix("sniff-test-cli-compile-error-")
+        .tempdir()
+        .expect("temp dir");
+    let source = temp.path().join("broken.rs");
+    fs::write(&source, "pub fn broken() -> u32 { \"text\" }\n").expect("write source");
+
+    let driver = PathBuf::from(env!("CARGO_BIN_EXE_sniff-test-driver"));
+    let mut command = Command::new(&driver);
+    clean_cargo_package_env(&mut command);
+    let output = command
+        .args([
+            "--crate-name",
+            "broken",
+            "--crate-type",
+            "lib",
+            "--edition",
+            "2024",
+        ])
+        .arg(&source)
+        .args(["--sysroot", rustc_sysroot().trim(), "-Zno-codegen", "--"])
+        .args(["--message-format", "json", "--color", "never"])
+        .current_dir(temp.path())
+        .output()
+        .expect("run driver");
+
+    let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
+    assert_eq!(
+        output.status.code(),
+        Some(1),
+        "driver exited {:?}\nstderr:\n{stderr}",
+        output.status.code()
+    );
+    assert!(stderr.contains("E0308"), "stderr:\n{stderr}");
+    assert!(
+        !stderr.contains("internal compiler error"),
+        "stderr:\n{stderr}"
+    );
 }
 
 impl Case {
@@ -74,6 +128,7 @@ impl Case {
             working_dir: None,
             config_append: "",
             args: &[],
+            envs: &[],
         }
     }
 
@@ -99,6 +154,11 @@ impl Case {
 
     const fn args(mut self, args: &'static [&'static str]) -> Self {
         self.args = args;
+        self
+    }
+
+    const fn envs(mut self, envs: &'static [(&'static str, &'static str)]) -> Self {
+        self.envs = envs;
         self
     }
 }
@@ -204,6 +264,9 @@ fn run_cargo_sniff_test(
 ) -> CommandOutput {
     let mut command = Command::new(binary);
     clean_cargo_package_env(&mut command);
+    for (key, value) in case.envs {
+        command.env(key, value);
+    }
     let output = command
         .args(["--color", "never", "--release"])
         .args(expand_args(case.args, fixture_root))
@@ -280,6 +343,11 @@ fn normalize_line(line: &str, fixture_root: &Path, sysroot: &str) -> String {
     let mut line = line
         .replace(&fixture_root.display().to_string(), "[FIXTURE]")
         .replace(sysroot, "[SYSROOT]");
+    // Cases running from the temp dir itself leak its per-run name, such as
+    // the config-discovery notice.
+    if let Some(parent) = fixture_root.parent() {
+        line = line.replace(&parent.display().to_string(), "[TEMP]");
+    }
 
     if let Some((prefix, _time)) = line.split_once(" target(s) in ") {
         line = format!("{prefix} target(s) in [TIME]");

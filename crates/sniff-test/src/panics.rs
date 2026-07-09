@@ -380,12 +380,10 @@ fn node_kind_is_ignored_namespace<'tcx>(
         }
         ReachabilityNodeKind::MacroExpansion { def_id } => config.ignores_def(tcx, *def_id),
         ReachabilityNodeKind::IndirectCall { callee_ty } => {
-            indirect_callee_def_id(*callee_ty)
-                .is_some_and(|def_id| config.ignores_def(tcx, def_id))
+            indirect_callee_def_id(*callee_ty).is_some_and(|def_id| config.ignores_def(tcx, def_id))
         }
-        ReachabilityNodeKind::CompilerAssert { .. } | ReachabilityNodeKind::DynObjectCast { .. } => {
-            false
-        }
+        ReachabilityNodeKind::CompilerAssert { .. }
+        | ReachabilityNodeKind::DynObjectCast { .. } => false,
     }
 }
 
@@ -443,9 +441,8 @@ fn classify_edge<'tcx>(
                 }),
             }
         }
-        ReachabilityNodeKind::MacroExpansion { .. } | ReachabilityNodeKind::DynObjectCast { .. } => {
-            None
-        }
+        ReachabilityNodeKind::MacroExpansion { .. }
+        | ReachabilityNodeKind::DynObjectCast { .. } => None,
     }
 }
 

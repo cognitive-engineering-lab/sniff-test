@@ -6,6 +6,7 @@ exit: 0
 stdout:
 <empty>
 stderr:
+sniff-test: using config [FIXTURE]/app/sniff-test.toml
     Checking dependency-obligation v0.1.0 ([FIXTURE]/dep)
     Checking dependency-app v0.1.0 ([FIXTURE]/app)
 warning: function `dependency_app::call_dependency` reaches a documented panic contract

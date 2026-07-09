@@ -6,6 +6,7 @@ exit: 0
 stdout:
 <empty>
 stderr:
+sniff-test: using config [FIXTURE]/sniff-test.toml
     Checking safety-requirements v0.1.0 ([FIXTURE])
 warning: function `safety_requirements::generic_unsafe_trait_method_missing` reaches an unverifiable indirect call
    --> src/lib.rs:135:1

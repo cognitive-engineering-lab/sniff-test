@@ -65,7 +65,7 @@ pub enum SafetyFindingKind {
 }
 
 /// Non-call operations that require `unsafe`, mirroring the non-call variants
-/// of rustc's `UnsafeOpKind` (rustc_mir_build/src/check_unsafety.rs).
+/// of rustc's `UnsafeOpKind` (`rustc_mir_build/src/check_unsafety.rs`).
 ///
 /// The variant set is pinned to the toolchain in rust-toolchain.toml; diff it
 /// against rustc's enum on toolchain bumps. The `unsafe_ops*` fixtures cover
@@ -93,9 +93,7 @@ pub fn safety_op_label(op: SafetyOpKind) -> &'static str {
         SafetyOpKind::UseOfExternStatic => "extern static access",
         SafetyOpKind::AccessToUnionField => "union field access",
         SafetyOpKind::UseOfUnsafeField => "unsafe field access",
-        SafetyOpKind::InitializingLayoutConstrainedType => {
-            "layout-constrained type initialization"
-        }
+        SafetyOpKind::InitializingLayoutConstrainedType => "layout-constrained type initialization",
         SafetyOpKind::InitializingTypeWithUnsafeField => "unsafe field initialization",
         SafetyOpKind::MutationOfLayoutConstrainedField => "layout-constrained field mutation",
         SafetyOpKind::BorrowOfLayoutConstrainedField => "layout-constrained field borrow",
@@ -244,7 +242,10 @@ fn collect_missing_safety_docs(
     analysis: &mut SafetyAnalysis,
 ) {
     let def_id = owner.to_def_id();
-    if !tcx.visibility(owner).is_public()
+    // Effective visibility, not declared: only functions callers outside the
+    // crate can actually reach — directly or through re-exports — owe them
+    // `# Safety` docs.
+    if !tcx.effective_visibilities(()).is_exported(owner)
         || !fn_def_is_unsafe(tcx, def_id)
         || config.ignores_def(tcx, def_id)
     {

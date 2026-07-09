@@ -6,6 +6,7 @@ exit: 1
 stdout:
 <empty>
 stderr:
+sniff-test: no sniff-test.toml found between [TEMP] and [FIXTURE]; running with the empty default policy
     Checking panic-axioms v0.1.0 ([FIXTURE])
 error: function `panic_axioms::division` has an undocumented panic path
  --> src/lib.rs:1:1

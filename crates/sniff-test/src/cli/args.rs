@@ -19,6 +19,15 @@ pub struct SniffTestArgs {
     pub(crate) build_std: bool,
     pub(crate) release: bool,
     pub(crate) cargo_args: Vec<String>,
+    /// Workspace member manifests from `cargo metadata`, plumbed to the
+    /// driver so crate scope uses real membership instead of path prefixes.
+    /// Empty in direct driver mode.
+    #[serde(default)]
+    pub(crate) workspace_manifests: Vec<PathBuf>,
+    /// True when the driver runs as cargo's `RUSTC_WRAPPER`; set by the
+    /// driver itself, never carried through the environment.
+    #[serde(skip)]
+    pub(crate) under_cargo: bool,
 }
 
 impl SniffTestArgs {

@@ -7,7 +7,8 @@ use std::process::{Command, ExitCode};
 
 use crate::cache::{
     CacheExpectations, CachedArtifactAnalysis, CachedArtifactInfo, CachedDependencyRef,
-    CachedFunctionSummary, artifact_id, write_artifact_analysis,
+    CachedFunctionSummary, OUTCOME_FORMAT_VERSION, UnitOutcome, artifact_id, read_unit_outcome,
+    write_artifact_analysis, write_unit_outcome,
 };
 use crate::config::{
     AnalysisConfig, LintLevel, PanicBoundaryPolicy, PanicConfig, SafetyLintConfig, SniffTestConfig,
@@ -48,8 +49,8 @@ use self::diagnostics::{
     emit_raw_panic_diagnostic, emit_safety_diagnostics,
 };
 use self::plugin::{
-    DENIED_FINDING_STATUS_ENV, RUSTC_VERSION_ENV, SNIFF_TEST_ARGS_ENV, current_rustc_version,
-    frontend_args, modify_cargo, rustc_version, rustc_version_dir_component,
+    RUSTC_VERSION_ENV, SNIFF_TEST_ARGS_ENV, current_rustc_version, frontend_args, modify_cargo,
+    rustc_version, rustc_version_dir_component,
 };
 use self::report::{
     PanicObligationReport, PanicRootKind, PanicRootReport, ReportDetailKind, render_node,
@@ -57,7 +58,6 @@ use self::report::{
 };
 use self::rustc_invocation::RustcInvocation;
 use self::safety_report::SafetyArtifactReport;
-
 
 #[must_use]
 pub fn cargo_frontend() -> ExitCode {
@@ -71,6 +71,18 @@ pub fn cargo_frontend() -> ExitCode {
     }
 
     let parsed_args = SniffTestArgs::parse_from_env();
+    if parsed_args
+        .cargo_args
+        .iter()
+        .any(|arg| arg == "--message-format" || arg.starts_with("--message-format="))
+    {
+        // The frontend owns cargo's message format: it reads the JSON stream
+        // to learn the build plan.
+        eprintln!(
+            "sniff-test: pass --message-format to sniff-test itself, before any `--` separator"
+        );
+        return ExitCode::FAILURE;
+    }
     let metadata = match metadata_command(&parsed_args).exec() {
         Ok(metadata) => metadata,
         Err(error) => {
@@ -78,30 +90,29 @@ pub fn cargo_frontend() -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
+    let parsed_args = discover_manifest(parsed_args, metadata.workspace_root.as_std_path());
     let rustc_version = current_rustc_version();
     let target_dir = metadata.target_directory.join(format!(
         "sniff-test-{}",
         rustc_version_dir_component(&rustc_version)
     ));
-    let args = frontend_args(parsed_args, target_dir.as_std_path());
-    let denied_finding_status = args.cache_dir().join("workspace-denied-findings");
-    if let Err(error) = std::fs::remove_file(&denied_finding_status)
-        && error.kind() != std::io::ErrorKind::NotFound
-    {
-        eprintln!(
-            "sniff-test: failed to clear {}: {error}",
-            denied_finding_status.display()
-        );
-        return ExitCode::FAILURE;
-    }
+    let mut args = frontend_args(parsed_args, target_dir.as_std_path());
+    args.workspace_manifests = metadata
+        .packages
+        .iter()
+        .map(|package| absolute_path(package.manifest_path.clone().into_std_path_buf()))
+        .collect();
 
     let mut cargo = Command::new("cargo");
     cargo.args(["check", "--target-dir"]).arg(&target_dir);
+    // json-render-diagnostics keeps rustc diagnostics on stderr exactly as in
+    // human mode while cargo's own messages arrive as JSON on stdout, which
+    // is how the frontend learns the build plan, fresh units included.
+    cargo.args(["--message-format", "json-render-diagnostics"]);
     if std::env::var_os("CARGO_VERBOSE").is_some() {
         cargo.arg("-vv");
     }
     cargo.env(RUSTC_VERSION_ENV, &rustc_version);
-    cargo.env(DENIED_FINDING_STATUS_ENV, &denied_finding_status);
     cargo.env(
         SNIFF_TEST_ARGS_ENV,
         serde_json::to_string(&args).unwrap_or_else(|error| {
@@ -110,17 +121,42 @@ pub fn cargo_frontend() -> ExitCode {
         }),
     );
     modify_cargo(&mut cargo, &args);
+    cargo.stdout(std::process::Stdio::piped());
 
-    match cargo.status() {
+    let mut child = match cargo.spawn() {
+        Ok(child) => child,
+        Err(error) => {
+            eprintln!("sniff-test: failed to run Cargo: {error}");
+            return ExitCode::FAILURE;
+        }
+    };
+    let Some(stdout) = child.stdout.take() else {
+        eprintln!("sniff-test: failed to capture Cargo output");
+        let _ = child.kill();
+        return ExitCode::FAILURE;
+    };
+    let mut plan = Vec::new();
+    let mut planned = HashSet::new();
+    let mut streamed = HashSet::new();
+    for line in std::io::BufRead::lines(std::io::BufReader::new(stdout)) {
+        let Ok(line) = line else {
+            break;
+        };
+        process_cargo_message(&line, &args, &mut plan, &mut planned, &mut streamed);
+    }
+    let status = child.wait();
+
+    let denied = consume_unit_outcomes(&args, &plan, &streamed);
+    match status {
         Ok(status) if status.success() => {
-            if denied_finding_status.exists() {
+            if denied {
                 ExitCode::FAILURE
             } else {
                 ExitCode::SUCCESS
             }
         }
         Ok(status) => {
-            if denied_finding_status.exists() {
+            if denied {
                 ExitCode::FAILURE
             } else {
                 match status.code() {
@@ -130,10 +166,157 @@ pub fn cargo_frontend() -> ExitCode {
             }
         }
         Err(error) => {
-            eprintln!("sniff-test: failed to run Cargo: {error}");
+            eprintln!("sniff-test: failed to wait for Cargo: {error}");
             ExitCode::FAILURE
         }
     }
+}
+
+/// Resolves the sniff-test manifest by searching upward from the invocation
+/// directory to the cargo workspace root when `--manifest` was not passed.
+///
+/// The empty default policy is intentional; discovery only ensures the same
+/// command finds the same config from any directory of the workspace.
+fn discover_manifest(mut args: SniffTestArgs, workspace_root: &Path) -> SniffTestArgs {
+    if let Some(path) = &args.manifest_path {
+        eprintln!(
+            "sniff-test: using config {}",
+            absolute_path(path.clone()).display()
+        );
+        return args;
+    }
+
+    let cwd = std::env::current_dir().unwrap_or_else(|error| {
+        eprintln!("sniff-test: failed to read current directory: {error}");
+        std::process::exit(2);
+    });
+    let mut dir = cwd.as_path();
+    loop {
+        let candidate = dir.join(crate::config::DEFAULT_MANIFEST_FILE);
+        if candidate.is_file() {
+            eprintln!("sniff-test: using config {}", candidate.display());
+            args.manifest_path = Some(candidate);
+            return args;
+        }
+        if dir == workspace_root || !dir.starts_with(workspace_root) {
+            break;
+        }
+        match dir.parent() {
+            Some(parent) => dir = parent,
+            None => break,
+        }
+    }
+
+    eprintln!(
+        "sniff-test: no {} found between {} and {}; running with the empty default policy",
+        crate::config::DEFAULT_MANIFEST_FILE,
+        cwd.display(),
+        workspace_root.display(),
+    );
+    args
+}
+
+fn process_cargo_message(
+    line: &str,
+    args: &SniffTestArgs,
+    plan: &mut Vec<String>,
+    planned: &mut HashSet<String>,
+    streamed: &mut HashSet<String>,
+) {
+    let Ok(message) = serde_json::from_str::<serde_json::Value>(line) else {
+        return;
+    };
+    match message.get("reason").and_then(serde_json::Value::as_str) {
+        Some("compiler-artifact") => {
+            if let Some(id) = compiler_artifact_id(&message)
+                && planned.insert(id.clone())
+            {
+                plan.push(id);
+            }
+        }
+        // The driver announces every unit it analyzed, including units whose
+        // deny findings failed the compile and thus never produce a
+        // compiler-artifact message.
+        Some("sniff-test-outcome") => {
+            if let Some(id) = message
+                .get("artifact-id")
+                .and_then(serde_json::Value::as_str)
+                && planned.insert(id.to_owned())
+            {
+                plan.push(id.to_owned());
+            }
+        }
+        Some("sniff-test-artifact") => {
+            // Driver output passing through cargo: forward it verbatim so the
+            // streaming UX is unchanged, and remember the unit so its stored
+            // report is not printed twice.
+            if args.message_format == args::MessageFormat::Json {
+                println!("{line}");
+            }
+            if let Some(id) = message
+                .get("artifact")
+                .and_then(|artifact| artifact.get("artifact-id"))
+                .and_then(serde_json::Value::as_str)
+            {
+                streamed.insert(id.to_owned());
+            }
+        }
+        _ => {}
+    }
+}
+
+fn compiler_artifact_id(message: &serde_json::Value) -> Option<String> {
+    let filenames = message.get("filenames")?.as_array()?;
+    let mut fallback = None;
+    for name in filenames.iter().filter_map(serde_json::Value::as_str) {
+        let path = Path::new(name);
+        let Some(id) = crate::cache::artifact_id_from_extern_path(path) else {
+            continue;
+        };
+        // The hashed artifacts live in deps/; other entries are unhashed
+        // copies whose stems are not artifact ids.
+        if path
+            .parent()
+            .and_then(Path::file_name)
+            .is_some_and(|dir| dir == "deps")
+        {
+            return Some(id);
+        }
+        fallback.get_or_insert(id);
+    }
+    fallback
+}
+
+/// Unions the persisted verdicts of every unit in this run's build plan and
+/// re-prints stored reports for fresh units the driver never ran for.
+fn consume_unit_outcomes(
+    args: &SniffTestArgs,
+    plan: &[String],
+    streamed: &HashSet<String>,
+) -> bool {
+    let mut denied = false;
+    for artifact_id in plan {
+        match read_unit_outcome(&args.cache_dir(), artifact_id, env!("CARGO_PKG_VERSION")) {
+            Ok(outcome) => {
+                denied |= outcome.has_denied_findings;
+                if args.message_format == args::MessageFormat::Json
+                    && !streamed.contains(artifact_id)
+                    && let Some(report_json) = &outcome.report_json
+                {
+                    println!("{report_json}");
+                }
+            }
+            // Missing outcomes stay clean: the rebuild invariant means a unit
+            // without one was never analyzed as part of this configuration.
+            Err(error) if error.is_missing_file() => {}
+            Err(error) => {
+                eprintln!(
+                    "sniff-test: warning: ignoring unit outcome for `{artifact_id}`: {error}"
+                );
+            }
+        }
+    }
+    denied
 }
 
 fn metadata_command(args: &SniffTestArgs) -> cargo_metadata::MetadataCommand {
@@ -210,9 +393,21 @@ pub(crate) fn analyze_crate(tcx: TyCtxt<'_>, args: &SniffTestArgs, compiler_args
     let config = load_config(args);
     let invocation = RustcInvocation::parse(compiler_args);
     let crate_name = tcx.crate_name(LOCAL_CRATE).to_string();
-    let output_scope = CrateOutputScope::current(args);
+    let output_scope = CrateOutputScope::current(args, &invocation);
 
     if config.panics.ignored_namespace_match(&crate_name).is_some() {
+        // A config change that newly ignores this crate must not leave a
+        // stale denied verdict behind.
+        write_unit_outcome_file(
+            args,
+            &UnitOutcome {
+                format_version: OUTCOME_FORMAT_VERSION,
+                tool_version: env!("CARGO_PKG_VERSION").to_owned(),
+                artifact_id: artifact_id(&crate_name, invocation.extra_filename.as_deref()),
+                has_denied_findings: false,
+                report_json: None,
+            },
+        );
         return;
     }
 
@@ -292,15 +487,54 @@ pub(crate) fn analyze_crate(tcx: TyCtxt<'_>, args: &SniffTestArgs, compiler_args
         config.safety.lints,
     );
     write_analysis_cache(args, &analysis.cache);
-    emit_analysis_artifact(&analysis.report, args);
     let has_denied_panic_findings = analysis
         .report
         .counts
         .has_denied_findings(config.panics.lints);
-    if analysis.report.scope == CrateOutputScope::Workspace
-        && (has_denied_panic_findings || has_denied_safety_findings)
+    emit_report_and_outcome(
+        args,
+        &analysis.report,
+        analysis.report.scope == CrateOutputScope::Workspace
+            && (has_denied_panic_findings || has_denied_safety_findings),
+    );
+}
+
+fn emit_report_and_outcome(
+    args: &SniffTestArgs,
+    report: &AnalysisArtifactReport,
+    has_denied_findings: bool,
+) {
+    let report_json = render_json_analysis_artifact_report(report);
+    if args.message_format == args::MessageFormat::Json
+        && let Some(report_json) = &report_json
     {
-        record_workspace_denied_finding();
+        println!("{report_json}");
+    }
+    write_unit_outcome_file(
+        args,
+        &UnitOutcome {
+            format_version: OUTCOME_FORMAT_VERSION,
+            tool_version: env!("CARGO_PKG_VERSION").to_owned(),
+            artifact_id: report.artifact.artifact_id.clone(),
+            has_denied_findings,
+            report_json,
+        },
+    );
+}
+
+fn write_unit_outcome_file(args: &SniffTestArgs, outcome: &UnitOutcome) {
+    if let Err(error) = write_unit_outcome(&args.cache_dir(), outcome) {
+        eprintln!("sniff-test: failed to write unit outcome: {error}");
+    }
+    // Deny findings fail this unit's compilation, so cargo never announces it
+    // with a compiler-artifact message. This line puts the unit in the
+    // frontend's build plan regardless; the frontend swallows it, users never
+    // see it.
+    if args.under_cargo {
+        println!(
+            r#"{{"reason":"sniff-test-outcome","artifact-id":{}}}"#,
+            serde_json::json!(outcome.artifact_id)
+        );
     }
 }
 
@@ -356,12 +590,6 @@ impl AnalysisArtifact {
         );
 
         Self { report, cache }
-    }
-}
-
-fn emit_analysis_artifact(report: &AnalysisArtifactReport, args: &SniffTestArgs) {
-    if args.message_format == args::MessageFormat::Json {
-        emit_json_analysis_artifact_report(report);
     }
 }
 
@@ -448,28 +676,6 @@ fn analyze_report_roots<'tcx>(
     analysis
 }
 
-fn record_workspace_denied_finding() {
-    let Some(path) = std::env::var_os(DENIED_FINDING_STATUS_ENV).map(PathBuf::from) else {
-        return;
-    };
-    if let Some(parent) = path.parent()
-        && let Err(error) = std::fs::create_dir_all(parent)
-    {
-        eprintln!(
-            "sniff-test: failed to create denied finding status directory {}: {error}",
-            parent.display()
-        );
-        std::process::exit(1);
-    }
-    if let Err(error) = std::fs::write(&path, "denied-findings\n") {
-        eprintln!(
-            "sniff-test: failed to write denied finding status {}: {error}",
-            path.display()
-        );
-        std::process::exit(1);
-    }
-}
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "kebab-case")]
 pub(crate) enum CrateOutputScope {
@@ -479,12 +685,23 @@ pub(crate) enum CrateOutputScope {
 
 impl CrateOutputScope {
     #[must_use]
-    fn current(args: &SniffTestArgs) -> Self {
-        let config_path = absolute_path(args.manifest_path());
+    fn current(args: &SniffTestArgs, invocation: &RustcInvocation) -> Self {
+        // Build scripts and proc macros never ship as target code; workspace
+        // deny gating and diagnostics would fail builds over their normal
+        // panic-on-error idiom.
+        if std::env::var("CARGO_CRATE_NAME").is_ok_and(|name| name.starts_with("build_script_"))
+            || invocation
+                .crate_types
+                .iter()
+                .any(|crate_type| crate_type == "proc-macro")
+        {
+            return Self::Dependency;
+        }
+
         let cargo_manifest =
             std::env::var_os("CARGO_MANIFEST_PATH").map(|path| absolute_path(PathBuf::from(path)));
         Self::from_manifest_paths(
-            &config_path,
+            &args.workspace_manifests,
             cargo_manifest.as_deref(),
             std::env::var_os("CARGO_PRIMARY_PACKAGE").is_some(),
         )
@@ -492,17 +709,20 @@ impl CrateOutputScope {
 
     #[must_use]
     fn from_manifest_paths(
-        config_path: &Path,
+        workspace_manifests: &[PathBuf],
         cargo_manifest: Option<&Path>,
         primary_package: bool,
     ) -> Self {
-        let is_workspace_crate = cargo_manifest
-            .and_then(|manifest| {
-                config_path
-                    .parent()
-                    .map(|config_root| manifest.starts_with(config_root))
-            })
-            .unwrap_or(primary_package);
+        // Membership comes from `cargo metadata`, plumbed by the frontend;
+        // path prefixes would demote out-of-dir members and promote vendored
+        // crates. Direct driver mode has no member list and falls back to
+        // CARGO_PRIMARY_PACKAGE.
+        let is_workspace_crate = match cargo_manifest {
+            Some(manifest) if !workspace_manifests.is_empty() => {
+                workspace_manifests.iter().any(|member| member == manifest)
+            }
+            _ => primary_package,
+        };
         if is_workspace_crate {
             Self::Workspace
         } else {
@@ -523,12 +743,14 @@ struct DependencyCacheReport {
     failed: usize,
 }
 
-fn emit_json_analysis_artifact_report(report: &AnalysisArtifactReport) {
-    let json = serde_json::to_string(report).unwrap_or_else(|error| {
-        eprintln!("sniff-test: failed to encode JSON report: {error}");
-        std::process::exit(1);
-    });
-    println!("{json}");
+fn render_json_analysis_artifact_report(report: &AnalysisArtifactReport) -> Option<String> {
+    match serde_json::to_string(report) {
+        Ok(json) => Some(json),
+        Err(error) => {
+            eprintln!("sniff-test: failed to encode JSON report: {error}");
+            None
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -580,8 +802,7 @@ fn analyze_root<'tcx>(
     let boundary_analysis = analyze_panic_evidence(tcx, graph, &boundary_result, config);
     let cached_findings =
         cached_boundary_findings(tcx, graph, &boundary_result, &boundary_analysis, config);
-    let analysis_complete =
-        transitive_complete && graph.view(&boundary_result).halt().is_none();
+    let analysis_complete = transitive_complete && graph.view(&boundary_result).halt().is_none();
     if !analysis_complete {
         emit_analysis_incomplete_finding(
             tcx,
@@ -1068,15 +1289,21 @@ fn load_config(args: &SniffTestArgs) -> SniffTestConfig {
 
 #[cfg(test)]
 mod tests {
-    use std::path::Path;
+    use std::path::{Path, PathBuf};
 
     use super::{CrateOutputScope, metadata_cargo_args};
 
     #[test]
     fn output_scope_classifies_workspace_dependency_and_fallback_crates() {
+        let members = [
+            PathBuf::from("/repo/crates/sniff-test/Cargo.toml"),
+            // Members can live outside the config directory.
+            PathBuf::from("/shared/utils/Cargo.toml"),
+        ];
+
         assert_eq!(
             CrateOutputScope::from_manifest_paths(
-                Path::new("/repo/sniff-test.toml"),
+                &members,
                 Some(Path::new("/repo/crates/sniff-test/Cargo.toml")),
                 false,
             ),
@@ -1084,7 +1311,24 @@ mod tests {
         );
         assert_eq!(
             CrateOutputScope::from_manifest_paths(
-                Path::new("/repo/sniff-test.toml"),
+                &members,
+                Some(Path::new("/shared/utils/Cargo.toml")),
+                false,
+            ),
+            CrateOutputScope::Workspace
+        );
+        // Vendored crates under the repo root are not members.
+        assert_eq!(
+            CrateOutputScope::from_manifest_paths(
+                &members,
+                Some(Path::new("/repo/vendor/foo/Cargo.toml")),
+                false,
+            ),
+            CrateOutputScope::Dependency
+        );
+        assert_eq!(
+            CrateOutputScope::from_manifest_paths(
+                &members,
                 Some(Path::new(
                     "/home/user/.cargo/registry/src/index.crates.io/hashbrown/Cargo.toml",
                 )),
@@ -1092,12 +1336,17 @@ mod tests {
             ),
             CrateOutputScope::Dependency
         );
+        // Direct driver mode: no member list, fall back to primary-package.
         assert_eq!(
-            CrateOutputScope::from_manifest_paths(Path::new("/repo/sniff-test.toml"), None, true),
+            CrateOutputScope::from_manifest_paths(&[], None, true),
             CrateOutputScope::Workspace
         );
         assert_eq!(
-            CrateOutputScope::from_manifest_paths(Path::new("/repo/sniff-test.toml"), None, false),
+            CrateOutputScope::from_manifest_paths(
+                &[],
+                Some(Path::new("/repo/crates/sniff-test/Cargo.toml")),
+                false,
+            ),
             CrateOutputScope::Dependency
         );
     }

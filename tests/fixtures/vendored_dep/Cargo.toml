@@ -1,0 +1,10 @@
+[package]
+name = "vendored-app"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+vendored = { path = "vendor/vendored" }
+
+[workspace]
+exclude = ["vendor"]

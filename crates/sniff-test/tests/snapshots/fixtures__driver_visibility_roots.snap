@@ -1,0 +1,101 @@
+---
+source: crates/sniff-test/tests/fixtures.rs
+expression: messages
+---
+[
+  {
+    "artifact": {
+      "artifact-id": "[ARTIFACT_ID]",
+      "crate-name": "visibility_roots",
+      "crate-types": [
+        "lib"
+      ],
+      "extra-filename": "[EXTRA_FILENAME]",
+      "manifest-path": null,
+      "metadata": "[METADATA]",
+      "package-name": null,
+      "package-version": null,
+      "target": null
+    },
+    "concrete-roots": 2,
+    "counts": {
+      "analysis-incomplete": 0,
+      "indirect-call-boundaries": 0,
+      "panic-obligations": 0,
+      "raw-panic-paths": 2,
+      "trusted-panic-obligations": 0
+    },
+    "dependencies": [],
+    "dependency-cache": {
+      "failed": 0,
+      "hits": 0,
+      "total": 0
+    },
+    "format-version": 1,
+    "generic-roots": 0,
+    "missing-roots": [],
+    "reason": "sniff-test-artifact",
+    "roots": [
+      {
+        "counts": {
+          "analysis-incomplete": 0,
+          "indirect-call-boundaries": 0,
+          "panic-obligations": 0,
+          "raw-panic-paths": 1,
+          "trusted-panic-obligations": 0
+        },
+        "findings": [
+          {
+            "edge": "visibility_roots::imp::exported --macro-expansion-> macro core::std::assert",
+            "kind": "panic-invocation",
+            "level": "deny",
+            "reason": "panic sink core::std::rt::panic_fmt",
+            "span": "[FIXTURE]/src/lib.rs:7:9: 7:53",
+            "target": "core::std::rt::panic_fmt",
+            "trace": [
+              "[FIXTURE]/src/lib.rs:7:9: 7:53: visibility_roots::imp::exported --macro-expansion-> macro core::std::assert",
+              "[FIXTURE]/src/lib.rs:7:9: 7:53: macro core::std::assert --macro-expansion-> macro core::std::panic::panic_2021",
+              "[SYSROOT]/lib/rustlib/src/rust/library/core/src/panic.rs:62:9: 62:73: macro core::std::panic::panic_2021 --direct-call-> core::std::rt::panic_fmt"
+            ]
+          }
+        ],
+        "has-panic-docs": false,
+        "root": "visibility_roots::imp::exported",
+        "root-declaration": "[FIXTURE]/src/lib.rs:6:5",
+        "root-kind": "concrete"
+      },
+      {
+        "counts": {
+          "analysis-incomplete": 0,
+          "indirect-call-boundaries": 0,
+          "panic-obligations": 0,
+          "raw-panic-paths": 1,
+          "trusted-panic-obligations": 0
+        },
+        "findings": [
+          {
+            "edge": "visibility_roots::imp::hidden --macro-expansion-> macro core::std::assert",
+            "kind": "panic-invocation",
+            "level": "deny",
+            "reason": "panic sink core::std::rt::panic_fmt",
+            "span": "[FIXTURE]/src/lib.rs:3:9: 3:51",
+            "target": "core::std::rt::panic_fmt",
+            "trace": [
+              "[FIXTURE]/src/lib.rs:14:5: 14:22: visibility_roots::public_entry --direct-call-> visibility_roots::imp::hidden",
+              "[FIXTURE]/src/lib.rs:3:9: 3:51: visibility_roots::imp::hidden --macro-expansion-> macro core::std::assert",
+              "[FIXTURE]/src/lib.rs:3:9: 3:51: macro core::std::assert --macro-expansion-> macro core::std::panic::panic_2021",
+              "[SYSROOT]/lib/rustlib/src/rust/library/core/src/panic.rs:62:9: 62:73: macro core::std::panic::panic_2021 --direct-call-> core::std::rt::panic_fmt"
+            ]
+          }
+        ],
+        "has-panic-docs": false,
+        "root": "visibility_roots::public_entry",
+        "root-declaration": "[FIXTURE]/src/lib.rs:13:1",
+        "root-kind": "concrete"
+      }
+    ],
+    "rustc-version": "[RUSTC_VERSION]",
+    "scope": "workspace",
+    "tool-version": "0.1.0"
+  }
+]

@@ -1,0 +1,139 @@
+---
+source: crates/sniff-test/tests/fixtures.rs
+expression: messages
+---
+[
+  {
+    "artifact": {
+      "artifact-id": "[ARTIFACT_ID]",
+      "crate-name": "vendored",
+      "crate-types": [
+        "lib"
+      ],
+      "extra-filename": "[EXTRA_FILENAME]",
+      "manifest-path": "[FIXTURE]/vendor/vendored/Cargo.toml",
+      "metadata": "[METADATA]",
+      "package-name": "vendored",
+      "package-version": "0.1.0",
+      "target": null
+    },
+    "concrete-roots": 1,
+    "counts": {
+      "analysis-incomplete": 0,
+      "indirect-call-boundaries": 0,
+      "panic-obligations": 1,
+      "raw-panic-paths": 0,
+      "trusted-panic-obligations": 0
+    },
+    "dependencies": [],
+    "dependency-cache": {
+      "failed": 0,
+      "hits": 0,
+      "total": 0
+    },
+    "format-version": 1,
+    "generic-roots": 0,
+    "missing-roots": [],
+    "reason": "sniff-test-artifact",
+    "roots": [
+      {
+        "counts": {
+          "analysis-incomplete": 0,
+          "indirect-call-boundaries": 0,
+          "panic-obligations": 1,
+          "raw-panic-paths": 0,
+          "trusted-panic-obligations": 0
+        },
+        "findings": [
+          {
+            "edge": "report root documents panic behavior",
+            "kind": "panic-obligation",
+            "level": "warn",
+            "reason": "vendored::checked has a documented # Panics contract",
+            "span": "vendor/vendored/src/lib.rs:4:1: 4:27",
+            "target": "vendored::checked",
+            "trace": []
+          }
+        ],
+        "has-panic-docs": true,
+        "root": "vendored::checked",
+        "root-declaration": "vendor/vendored/src/lib.rs:4:1",
+        "root-kind": "concrete"
+      }
+    ],
+    "rustc-version": "[RUSTC_VERSION]",
+    "scope": "dependency",
+    "tool-version": "0.1.0"
+  },
+  {
+    "artifact": {
+      "artifact-id": "[ARTIFACT_ID]",
+      "crate-name": "vendored_app",
+      "crate-types": [
+        "lib"
+      ],
+      "extra-filename": "[EXTRA_FILENAME]",
+      "manifest-path": "[FIXTURE]/Cargo.toml",
+      "metadata": "[METADATA]",
+      "package-name": "vendored-app",
+      "package-version": "0.1.0",
+      "target": null
+    },
+    "concrete-roots": 1,
+    "counts": {
+      "analysis-incomplete": 0,
+      "indirect-call-boundaries": 0,
+      "panic-obligations": 1,
+      "raw-panic-paths": 0,
+      "trusted-panic-obligations": 0
+    },
+    "dependencies": [
+      {
+        "artifact-id": "[ARTIFACT_ID]",
+        "artifact-path": "[ARTIFACT_PATH]",
+        "exact-cache-path": "[EXACT_CACHE_PATH]",
+        "extern-name": "vendored"
+      }
+    ],
+    "dependency-cache": {
+      "failed": 0,
+      "hits": 1,
+      "total": 1
+    },
+    "format-version": 1,
+    "generic-roots": 0,
+    "missing-roots": [],
+    "reason": "sniff-test-artifact",
+    "roots": [
+      {
+        "counts": {
+          "analysis-incomplete": 0,
+          "indirect-call-boundaries": 0,
+          "panic-obligations": 1,
+          "raw-panic-paths": 0,
+          "trusted-panic-obligations": 0
+        },
+        "findings": [
+          {
+            "edge": "vendored_app::use_vendored --direct-call-> vendored::checked",
+            "kind": "panic-obligation",
+            "level": "warn",
+            "reason": "vendored::checked has a documented # Panics contract",
+            "span": "src/lib.rs:2:5: 2:28",
+            "target": "vendored::checked",
+            "trace": [
+              "src/lib.rs:2:5: 2:28: vendored_app::use_vendored --direct-call-> vendored::checked"
+            ]
+          }
+        ],
+        "has-panic-docs": false,
+        "root": "vendored_app::use_vendored",
+        "root-declaration": "src/lib.rs:1:1",
+        "root-kind": "concrete"
+      }
+    ],
+    "rustc-version": "[RUSTC_VERSION]",
+    "scope": "workspace",
+    "tool-version": "0.1.0"
+  }
+]

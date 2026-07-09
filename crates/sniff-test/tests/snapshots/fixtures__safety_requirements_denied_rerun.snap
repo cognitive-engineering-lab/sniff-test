@@ -1,0 +1,218 @@
+---
+source: crates/sniff-test/tests/fixtures.rs
+expression: second_messages
+---
+[
+  {
+    "artifact": {
+      "artifact-id": "[ARTIFACT_ID]",
+      "crate-name": "safety_requirements",
+      "crate-types": [
+        "lib"
+      ],
+      "extra-filename": "[EXTRA_FILENAME]",
+      "manifest-path": "[FIXTURE]/Cargo.toml",
+      "metadata": "[METADATA]",
+      "package-name": "safety-requirements",
+      "package-version": "0.1.0",
+      "target": null
+    },
+    "concrete-roots": 2,
+    "counts": {
+      "analysis-incomplete": 0,
+      "indirect-call-boundaries": 4,
+      "panic-obligations": 0,
+      "raw-panic-paths": 0,
+      "trusted-panic-obligations": 0
+    },
+    "dependencies": [],
+    "dependency-cache": {
+      "failed": 0,
+      "hits": 0,
+      "total": 0
+    },
+    "format-version": 1,
+    "generic-roots": 2,
+    "missing-roots": [],
+    "reason": "sniff-test-artifact",
+    "roots": [
+      {
+        "counts": {
+          "analysis-incomplete": 0,
+          "indirect-call-boundaries": 1,
+          "panic-obligations": 0,
+          "raw-panic-paths": 0,
+          "trusted-panic-obligations": 0
+        },
+        "findings": [
+          {
+            "edge": "safety_requirements::generic_unsafe_trait_method_missing --indirect-call-> indirect call FnDef(DefId(0:16 ~ safety_requirements[2175]::UnsafeGreeter::greet), [T/#0])",
+            "kind": "indirect-call-boundary",
+            "level": "warn",
+            "reason": "indirect call to undocumented trait method safety_requirements::UnsafeGreeter::greet cannot be verified",
+            "span": "src/lib.rs:139:14: 139:32",
+            "target": "safety_requirements::UnsafeGreeter::greet",
+            "trace": [
+              "src/lib.rs:139:14: 139:32: safety_requirements::generic_unsafe_trait_method_missing --indirect-call-> indirect call FnDef(DefId(0:16 ~ safety_requirements[2175]::UnsafeGreeter::greet), [T/#0])"
+            ]
+          }
+        ],
+        "has-panic-docs": false,
+        "root": "safety_requirements::generic_unsafe_trait_method_missing",
+        "root-declaration": "src/lib.rs:135:1",
+        "root-kind": "generic"
+      },
+      {
+        "counts": {
+          "analysis-incomplete": 0,
+          "indirect-call-boundaries": 1,
+          "panic-obligations": 0,
+          "raw-panic-paths": 0,
+          "trusted-panic-obligations": 0
+        },
+        "findings": [
+          {
+            "edge": "safety_requirements::generic_unsafe_trait_method_satisfied --indirect-call-> indirect call FnDef(DefId(0:16 ~ safety_requirements[2175]::UnsafeGreeter::greet), [T/#0])",
+            "kind": "indirect-call-boundary",
+            "level": "warn",
+            "reason": "indirect call to undocumented trait method safety_requirements::UnsafeGreeter::greet cannot be verified",
+            "span": "src/lib.rs:132:14: 132:32",
+            "target": "safety_requirements::UnsafeGreeter::greet",
+            "trace": [
+              "src/lib.rs:132:14: 132:32: safety_requirements::generic_unsafe_trait_method_satisfied --indirect-call-> indirect call FnDef(DefId(0:16 ~ safety_requirements[2175]::UnsafeGreeter::greet), [T/#0])"
+            ]
+          }
+        ],
+        "has-panic-docs": false,
+        "root": "safety_requirements::generic_unsafe_trait_method_satisfied",
+        "root-declaration": "src/lib.rs:126:1",
+        "root-kind": "generic"
+      },
+      {
+        "counts": {
+          "analysis-incomplete": 0,
+          "indirect-call-boundaries": 1,
+          "panic-obligations": 0,
+          "raw-panic-paths": 0,
+          "trusted-panic-obligations": 0
+        },
+        "findings": [
+          {
+            "edge": "safety_requirements::unsafe_fn_pointer_missing_justification --indirect-call-> indirect call Binder { value: unsafe fn(), bound_vars: [] }",
+            "kind": "indirect-call-boundary",
+            "level": "warn",
+            "reason": "indirect call through an opaque callable cannot be verified",
+            "span": "src/lib.rs:103:14: 103:24",
+            "target": null,
+            "trace": [
+              "src/lib.rs:103:14: 103:24: safety_requirements::unsafe_fn_pointer_missing_justification --indirect-call-> indirect call Binder { value: unsafe fn(), bound_vars: [] }"
+            ]
+          }
+        ],
+        "has-panic-docs": false,
+        "root": "safety_requirements::unsafe_fn_pointer_missing_justification",
+        "root-declaration": "src/lib.rs:100:1",
+        "root-kind": "concrete"
+      },
+      {
+        "counts": {
+          "analysis-incomplete": 0,
+          "indirect-call-boundaries": 1,
+          "panic-obligations": 0,
+          "raw-panic-paths": 0,
+          "trusted-panic-obligations": 0
+        },
+        "findings": [
+          {
+            "edge": "safety_requirements::unsafe_fn_pointer_with_justification --indirect-call-> indirect call Binder { value: unsafe fn(), bound_vars: [] }",
+            "kind": "indirect-call-boundary",
+            "level": "warn",
+            "reason": "indirect call through an opaque callable cannot be verified",
+            "span": "src/lib.rs:97:14: 97:24",
+            "target": null,
+            "trace": [
+              "src/lib.rs:97:14: 97:24: safety_requirements::unsafe_fn_pointer_with_justification --indirect-call-> indirect call Binder { value: unsafe fn(), bound_vars: [] }"
+            ]
+          }
+        ],
+        "has-panic-docs": false,
+        "root": "safety_requirements::unsafe_fn_pointer_with_justification",
+        "root-declaration": "src/lib.rs:93:1",
+        "root-kind": "concrete"
+      }
+    ],
+    "rustc-version": "[RUSTC_VERSION]",
+    "safety": {
+      "counts": {
+        "missing-safety-docs": 1,
+        "safety-obligations-missing-justification": 0,
+        "safety-obligations-missing-requirements": 0,
+        "unsafe-calls-missing-justification": 2,
+        "unsafe-calls-missing-requirements": 3,
+        "unsafe-ops-missing-justification": 0
+      },
+      "findings": [
+        {
+          "function": "safety_requirements::undocumented_public",
+          "kind": "missing-safety-docs",
+          "level": "warn",
+          "reason": "public unsafe function `safety_requirements::undocumented_public` is missing # Safety docs",
+          "span": "src/lib.rs:33:1: 33:57",
+          "target": null
+        },
+        {
+          "function": "safety_requirements::missing_requirement",
+          "kind": "unsafe-call-missing-requirements",
+          "level": "deny",
+          "missing-requirements": [
+            "initialized: pointer must reference initialized memory."
+          ],
+          "reason": "unsafe call to `safety_requirements::read_byte` does not satisfy all # Safety requirements",
+          "span": "src/lib.rs:75:14: 75:37",
+          "target": "safety_requirements::read_byte"
+        },
+        {
+          "function": "safety_requirements::safety_marker_boundary_missing_requirements",
+          "kind": "unsafe-call-missing-requirements",
+          "level": "deny",
+          "missing-requirements": [
+            "valid_ptr: pointer must be non-null.",
+            "initialized: pointer must reference initialized memory."
+          ],
+          "reason": "unsafe call to `safety_requirements::read_byte` does not satisfy all # Safety requirements",
+          "span": "src/lib.rs:86:14: 86:37",
+          "target": "safety_requirements::read_byte"
+        },
+        {
+          "function": "safety_requirements::missing_justification",
+          "kind": "unsafe-call-missing-justification",
+          "level": "warn",
+          "reason": "unsafe call to `safety_requirements::private_unsafe_no_docs` has no `// SAFETY:` justification",
+          "span": "src/lib.rs:90:14: 90:38",
+          "target": "safety_requirements::private_unsafe_no_docs"
+        },
+        {
+          "function": "safety_requirements::unsafe_fn_pointer_missing_justification",
+          "kind": "unsafe-call-missing-justification",
+          "level": "warn",
+          "reason": "unsafe call to `unsafe function pointer` has no `// SAFETY:` justification",
+          "span": "src/lib.rs:103:14: 103:24",
+          "target": "unsafe function pointer"
+        },
+        {
+          "function": "safety_requirements::generic_unsafe_trait_method_missing",
+          "kind": "unsafe-call-missing-requirements",
+          "level": "deny",
+          "missing-requirements": [
+            "valid_ptr: pointer must be non-null."
+          ],
+          "reason": "unsafe call to `safety_requirements::UnsafeGreeter::greet` does not satisfy all # Safety requirements",
+          "span": "src/lib.rs:139:14: 139:32",
+          "target": "safety_requirements::UnsafeGreeter::greet"
+        }
+      ]
+    },
+    "scope": "workspace",
+    "tool-version": "0.1.0"
+  }
+]

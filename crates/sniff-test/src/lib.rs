@@ -12,6 +12,7 @@
 #![deny(warnings)]
 #![warn(clippy::pedantic)]
 
+extern crate rustc_abi;
 extern crate rustc_ast;
 extern crate rustc_data_structures;
 extern crate rustc_driver;
