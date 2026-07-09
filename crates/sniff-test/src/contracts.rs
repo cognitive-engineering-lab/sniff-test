@@ -7,7 +7,7 @@ use rustc_hir::attrs::{AttributeKind, HasAttrs};
 use rustc_hir::{Attribute, def_id::DefId};
 use rustc_middle::ty::TyCtxt;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(crate) enum ContractKind {
     Panic,
     Safety,
@@ -19,10 +19,19 @@ pub(crate) struct ContractRequirement {
     pub(crate) condition: String,
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug, Clone, Default)]
 pub(crate) struct ContractDocSummary {
     pub(crate) has_docs: bool,
     pub(crate) requirements: Vec<ContractRequirement>,
+}
+
+// One rustc session per process and single-threaded analysis, so DefId-keyed
+// caching is sound. Doc attributes are re-read and re-parsed for every edge
+// classification without this.
+thread_local! {
+    static SUMMARY_CACHE: std::cell::RefCell<
+        std::collections::HashMap<(DefId, ContractKind), ContractDocSummary>,
+    > = std::cell::RefCell::new(std::collections::HashMap::new());
 }
 
 #[must_use]
@@ -31,13 +40,20 @@ pub(crate) fn contract_doc_summary(
     def_id: DefId,
     kind: ContractKind,
 ) -> ContractDocSummary {
-    parse_contract_doc_lines(
-        HasAttrs::get_attrs(def_id, &tcx)
-            .iter()
-            .filter_map(doc_comment)
-            .flat_map(str::lines),
-        kind,
-    )
+    SUMMARY_CACHE.with_borrow_mut(|cache| {
+        cache
+            .entry((def_id, kind))
+            .or_insert_with(|| {
+                parse_contract_doc_lines(
+                    HasAttrs::get_attrs(def_id, &tcx)
+                        .iter()
+                        .filter_map(doc_comment)
+                        .flat_map(str::lines),
+                    kind,
+                )
+            })
+            .clone()
+    })
 }
 
 #[must_use]
@@ -98,6 +114,19 @@ fn code_fence_marker(line: &str) -> Option<&str> {
 #[must_use]
 pub(crate) fn line_has_contract_heading(line: &str, kind: ContractKind) -> bool {
     markdown_heading_text(line).is_some_and(|heading| kind.matches_heading(heading))
+}
+
+/// Normalized names of requirements satisfied by marker bullets with
+/// non-empty reasons; shared by the panic and safety requirement checks.
+pub(crate) fn satisfied_requirement_names<'a>(
+    satisfactions: impl IntoIterator<Item = (Option<&'a str>, &'a str)>,
+) -> std::collections::HashSet<String> {
+    satisfactions
+        .into_iter()
+        .filter(|(_, reason)| !reason.trim().is_empty())
+        .filter_map(|(requirement, _)| requirement)
+        .map(normalize_requirement_name)
+        .collect()
 }
 
 #[must_use]

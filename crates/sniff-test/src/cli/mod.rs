@@ -792,6 +792,11 @@ fn analyze_root<'tcx>(
     );
     let transitive_complete = graph.view(&result).halt().is_none();
 
+    // A second, boundary-only query per root is deliberate: body expansion is
+    // memoized across queries and policy/marker verdicts are cached, so this
+    // re-traverses the in-memory graph cheaply, while deriving boundary
+    // findings from the transitive snapshot would change the serialized
+    // cache graphs and their trace semantics.
     let mut boundary_hooks = PanicReachabilityHooks { config };
     let boundary_result = reachability.query(
         root.root,
@@ -856,7 +861,6 @@ fn reachability_options(
         node_limit: Some(analysis_config.node_limit),
         analyze_external,
         dyn_dispatch_vtable_edges: analysis_config.dyn_dispatch_vtable_edges.into(),
-        ..ReachabilityOptions::default()
     }
 }
 

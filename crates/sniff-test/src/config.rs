@@ -294,38 +294,6 @@ impl MirInlining {
     }
 }
 
-impl FromStr for MirInlining {
-    type Err = MirInliningParseError;
-
-    fn from_str(value: &str) -> Result<Self, Self::Err> {
-        match value {
-            "profile" => Ok(Self::Profile),
-            "on" => Ok(Self::On),
-            "off" => Ok(Self::Off),
-            other => Err(MirInliningParseError {
-                value: other.to_owned(),
-            }),
-        }
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct MirInliningParseError {
-    value: String,
-}
-
-impl Display for MirInliningParseError {
-    fn fmt(&self, formatter: &mut Formatter<'_>) -> std::fmt::Result {
-        write!(
-            formatter,
-            "invalid inline-mir value `{}`; expected profile, on, or off",
-            self.value
-        )
-    }
-}
-
-impl std::error::Error for MirInliningParseError {}
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize, Serialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum DynDispatchVTableEdges {

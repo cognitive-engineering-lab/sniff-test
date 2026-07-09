@@ -395,28 +395,11 @@ where
     }
 
     fn record_dyn_vtable_entries(&mut self, source_ty: Ty<'tcx>, target_ty: Ty<'tcx>) {
-        for (impl_ty, trait_ty) in dyn_trait_tails(source_ty, target_ty) {
-            let TyKind::Dynamic(predicates, _) = trait_ty.kind() else {
-                continue;
-            };
-            let Some(principal) = predicates.principal() else {
-                continue;
-            };
-
-            let trait_def_id = principal.def_id();
-            let trait_ref = self
-                .tcx
-                .instantiate_bound_regions_with_erased(principal.with_self_ty(self.tcx, impl_ty));
-            if trait_ref.has_param() {
-                continue;
-            }
-
-            for entry in self.tcx.vtable_entries(trait_ref) {
-                if let VtblEntry::Method(instance) = entry {
-                    self.record_dyn_vtable_entry(trait_def_id, *instance);
-                }
-            }
-        }
+        let tcx = self.tcx;
+        let _ = for_each_dyn_vtable_method(tcx, source_ty, target_ty, |trait_def_id, instance| {
+            self.record_dyn_vtable_entry(trait_def_id, instance);
+            ControlFlow::Continue(())
+        });
     }
 
     fn record_dyn_vtable_entry(&mut self, trait_def_id: DefId, instance: Instance<'tcx>) {
@@ -439,7 +422,12 @@ where
     ) -> ReachabilityControl<'tcx> {
         for index in 0..self.dyn_vtable_entries.len() {
             let entry = self.dyn_vtable_entries[index];
-            if entry.trait_def_id != trait_def_id {
+            // Entries are recorded under the cast's principal trait, but a
+            // dyn object's vtable also carries its supertraits' methods, so a
+            // supertrait-method call must match subtrait entries too.
+            if !rustc_middle::ty::elaborate::supertrait_def_ids(self.tcx, entry.trait_def_id)
+                .any(|super_def_id| super_def_id == trait_def_id)
+            {
                 continue;
             }
             self.emit_instance(
@@ -474,29 +462,10 @@ where
         target_ty: Ty<'tcx>,
         span: Span,
     ) -> ReachabilityControl<'tcx> {
-        for (impl_ty, trait_ty) in dyn_trait_tails(source_ty, target_ty) {
-            let TyKind::Dynamic(predicates, _) = trait_ty.kind() else {
-                continue;
-            };
-            let Some(principal) = predicates.principal() else {
-                continue;
-            };
-
-            let trait_ref = self
-                .tcx
-                .instantiate_bound_regions_with_erased(principal.with_self_ty(self.tcx, impl_ty));
-            if trait_ref.has_param() {
-                continue;
-            }
-
-            for entry in self.tcx.vtable_entries(trait_ref) {
-                if let VtblEntry::Method(instance) = entry {
-                    self.emit_instance(*instance, ReachabilityEdgeKind::VTableEntry, span)?;
-                }
-            }
-        }
-
-        ControlFlow::Continue(())
+        let tcx = self.tcx;
+        for_each_dyn_vtable_method(tcx, source_ty, target_ty, |_, instance| {
+            self.emit_instance(instance, ReachabilityEdgeKind::VTableEntry, span)
+        })
     }
 
     fn take_halt(&mut self) -> Option<ReachabilityHalt<'tcx>> {
@@ -541,6 +510,41 @@ fn ty_contains_dyn(ty: Ty<'_>) -> bool {
         | TyKind::Alias(ty::AliasTy { args, .. }) => generic_args_contain_dyn(args),
         _ => false,
     }
+}
+
+/// Visits the resolved vtable methods a `source_ty` to `target_ty` unsizing
+/// introduces, with the principal trait's def id. This single pipeline backs
+/// both dyn-dispatch attribution modes, so cast-site and call-site edges
+/// cannot drift apart.
+fn for_each_dyn_vtable_method<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    source_ty: Ty<'tcx>,
+    target_ty: Ty<'tcx>,
+    mut visit: impl FnMut(DefId, Instance<'tcx>) -> ReachabilityControl<'tcx>,
+) -> ReachabilityControl<'tcx> {
+    for (impl_ty, trait_ty) in dyn_trait_tails(source_ty, target_ty) {
+        let TyKind::Dynamic(predicates, _) = trait_ty.kind() else {
+            continue;
+        };
+        let Some(principal) = predicates.principal() else {
+            continue;
+        };
+
+        let trait_def_id = principal.def_id();
+        let trait_ref =
+            tcx.instantiate_bound_regions_with_erased(principal.with_self_ty(tcx, impl_ty));
+        if trait_ref.has_param() {
+            continue;
+        }
+
+        for entry in tcx.vtable_entries(trait_ref) {
+            if let VtblEntry::Method(instance) = entry {
+                visit(trait_def_id, *instance)?;
+            }
+        }
+    }
+
+    ControlFlow::Continue(())
 }
 
 fn dyn_trait_tails<'tcx>(source_ty: Ty<'tcx>, target_ty: Ty<'tcx>) -> Vec<(Ty<'tcx>, Ty<'tcx>)> {

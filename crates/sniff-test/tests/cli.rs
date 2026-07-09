@@ -1,11 +1,11 @@
+mod common;
+
 use std::fmt::Write as _;
 use std::fs;
-use std::io;
 use std::path::{Path, PathBuf};
-use std::process::{Command, ExitStatus};
-use std::sync::{LazyLock, Mutex};
+use std::process::Command;
 
-static CASE_LOCK: LazyLock<Mutex<()>> = LazyLock::new(|| Mutex::new(()));
+use common::{CommandOutput, clean_cargo_package_env, copy_dir_all, repo_root, rustc_sysroot};
 
 #[derive(Clone, Copy, Debug)]
 struct Case {
@@ -16,12 +16,6 @@ struct Case {
     config_append: &'static str,
     args: &'static [&'static str],
     envs: &'static [(&'static str, &'static str)],
-}
-
-struct CommandOutput {
-    status: ExitStatus,
-    stdout: String,
-    stderr: String,
 }
 
 macro_rules! cli_cases {
@@ -76,9 +70,6 @@ cli_cases! {
 /// not a 101 panic exit.
 #[test]
 fn direct_driver_compile_error_follows_rustc_exit_status() {
-    let _guard = CASE_LOCK
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner);
     let temp = tempfile::Builder::new()
         .prefix("sniff-test-cli-compile-error-")
         .tempdir()
@@ -164,10 +155,6 @@ impl Case {
 }
 
 fn run_named_case(name: &'static str, fixture_name: &'static str, case: Case) {
-    let _guard = CASE_LOCK
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner);
-
     let repo = repo_root();
     let sysroot = rustc_sysroot();
     let binary = PathBuf::from(env!("CARGO_BIN_EXE_cargo-sniff-test"));
@@ -188,33 +175,6 @@ fn run_named_case(name: &'static str, fixture_name: &'static str, case: Case) {
 
     let snapshot = render_snapshot(&output, &fixture_root, sysroot.trim());
     insta::assert_snapshot!(name, snapshot);
-}
-
-fn repo_root() -> PathBuf {
-    let manifest_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
-    manifest_dir
-        .parent()
-        .and_then(Path::parent)
-        .expect("sniff-test crate should live under crates/sniff-test")
-        .to_path_buf()
-}
-
-fn rustc_sysroot() -> String {
-    let rustc = std::env::var_os("RUSTC").map_or_else(|| PathBuf::from("rustc"), PathBuf::from);
-    let output = Command::new(&rustc)
-        .args(["--print", "sysroot"])
-        .output()
-        .unwrap_or_else(|error| {
-            panic!("failed to run {} --print sysroot: {error}", rustc.display())
-        });
-
-    assert!(
-        output.status.success(),
-        "{}",
-        command_failure(&rustc.display().to_string(), &output)
-    );
-
-    String::from_utf8(output.stdout).expect("rustc sysroot output should be utf-8")
 }
 
 fn run_case(
@@ -286,24 +246,6 @@ fn expand_args(args: &[&str], fixture_root: &Path) -> Vec<String> {
         .collect()
 }
 
-fn clean_cargo_package_env(command: &mut Command) {
-    command
-        .env_remove("CARGO_MANIFEST_PATH")
-        .env_remove("CARGO_PRIMARY_PACKAGE")
-        .env_remove("CARGO_PKG_NAME")
-        .env_remove("CARGO_PKG_VERSION");
-}
-
-impl CommandOutput {
-    fn from_output(output: std::process::Output) -> Self {
-        Self {
-            status: output.status,
-            stdout: String::from_utf8(output.stdout).expect("stdout should be utf-8"),
-            stderr: String::from_utf8(output.stderr).expect("stderr should be utf-8"),
-        }
-    }
-}
-
 fn render_snapshot(output: &CommandOutput, fixture_root: &Path, sysroot: &str) -> String {
     let mut rendered = String::new();
     writeln!(
@@ -354,28 +296,4 @@ fn normalize_line(line: &str, fixture_root: &Path, sysroot: &str) -> String {
     }
 
     line
-}
-
-fn copy_dir_all(source: &Path, destination: &Path) -> io::Result<()> {
-    fs::create_dir_all(destination)?;
-    for entry in fs::read_dir(source)? {
-        let entry = entry?;
-        let kind = entry.file_type()?;
-        let source_path = entry.path();
-        let destination_path = destination.join(entry.file_name());
-        if kind.is_dir() {
-            copy_dir_all(&source_path, &destination_path)?;
-        } else {
-            fs::copy(source_path, destination_path)?;
-        }
-    }
-    Ok(())
-}
-
-fn command_failure(command: &str, output: &std::process::Output) -> String {
-    format!(
-        "command failed: {command}\nstdout:\n{}\nstderr:\n{}",
-        String::from_utf8_lossy(&output.stdout),
-        String::from_utf8_lossy(&output.stderr)
-    )
 }

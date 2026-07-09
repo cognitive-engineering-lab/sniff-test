@@ -3,7 +3,7 @@
 use rustc_middle::ty::TyCtxt;
 use rustc_span::{SourceFile, Span};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 enum MarkerKind {
     Panic,
     Safety,
@@ -82,6 +82,16 @@ pub fn span_safety_satisfactions(tcx: TyCtxt<'_>, span: Span) -> Vec<SafetySatis
         .collect()
 }
 
+// One rustc session per process and single-threaded analysis; source files
+// keep disjoint start offsets within a session's source map, so the file
+// start plus line index identifies a marker lookup. Every edge of every
+// per-root traversal re-scans its lines without this.
+thread_local! {
+    static LINE_CACHE: std::cell::RefCell<
+        std::collections::HashMap<(u32, usize, MarkerKind), Vec<MarkerSatisfaction>>,
+    > = std::cell::RefCell::new(std::collections::HashMap::new());
+}
+
 fn span_satisfactions(tcx: TyCtxt<'_>, span: Span, kind: MarkerKind) -> Vec<MarkerSatisfaction> {
     let span = span.source_callsite();
     // A dummy span would resolve to byte 0 — line 1 of an arbitrary file —
@@ -92,13 +102,20 @@ fn span_satisfactions(tcx: TyCtxt<'_>, span: Span, kind: MarkerKind) -> Vec<Mark
     let location = tcx.sess.source_map().lookup_char_pos(span.lo());
     let line_index = location.line.saturating_sub(1);
 
-    let mut satisfactions = source_line_satisfactions(&location.file, line_index, kind);
-    satisfactions.extend(preceding_comment_block_satisfactions(
-        &location.file,
-        line_index,
-        kind,
-    ));
-    satisfactions
+    LINE_CACHE.with_borrow_mut(|cache| {
+        cache
+            .entry((location.file.start_pos.0, line_index, kind))
+            .or_insert_with(|| {
+                let mut satisfactions = source_line_satisfactions(&location.file, line_index, kind);
+                satisfactions.extend(preceding_comment_block_satisfactions(
+                    &location.file,
+                    line_index,
+                    kind,
+                ));
+                satisfactions
+            })
+            .clone()
+    })
 }
 
 #[must_use]

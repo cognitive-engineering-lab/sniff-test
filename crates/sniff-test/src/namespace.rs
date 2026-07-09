@@ -12,9 +12,22 @@
 //! consumer's session (trait qualification, re-exports), while def path hashes
 //! are read from crate metadata and agree by construction.
 
+use std::cell::RefCell;
+use std::collections::HashMap;
+
 use rustc_hir::def::DefKind;
 use rustc_hir::def_id::DefId;
 use rustc_middle::ty::TyCtxt;
+
+// The driver runs one rustc session per process and the analysis is
+// single-threaded, so `DefId`-keyed caches stay valid for the process
+// lifetime. Rendering def paths is a hot cost: policy checks run per edge of
+// every per-root traversal, and `def_path_str` re-pretty-prints each time.
+thread_local! {
+    static NAMESPACE_CACHE: RefCell<HashMap<DefId, String>> = RefCell::new(HashMap::new());
+    static CANDIDATES_CACHE: RefCell<HashMap<DefId, NamespaceCandidates>> =
+        RefCell::new(HashMap::new());
+}
 
 /// Session-independent identity for a definition, as a 32-hex-digit string of
 /// the stable crate id followed by the local def path hash.
@@ -59,17 +72,24 @@ impl NamespaceCandidates {
 
 #[must_use]
 pub fn namespace_candidates(tcx: TyCtxt<'_>, def_id: DefId) -> NamespaceCandidates {
-    let crate_name = tcx.crate_name(def_id.krate).to_string();
-    let def_site = format!(
-        "{crate_name}{}",
-        tcx.def_path(def_id).to_string_no_crate_verbose()
-    );
-    NamespaceCandidates {
-        self_type: impl_self_type_path(tcx, def_id, &crate_name),
-        display: canonical_namespace(tcx, def_id),
-        crate_name,
-        def_site,
-    }
+    CANDIDATES_CACHE.with_borrow_mut(|cache| {
+        cache
+            .entry(def_id)
+            .or_insert_with(|| {
+                let crate_name = tcx.crate_name(def_id.krate).to_string();
+                let def_site = format!(
+                    "{crate_name}{}",
+                    tcx.def_path(def_id).to_string_no_crate_verbose()
+                );
+                NamespaceCandidates {
+                    self_type: impl_self_type_path(tcx, def_id, &crate_name),
+                    display: canonical_namespace(tcx, def_id),
+                    crate_name,
+                    def_site,
+                }
+            })
+            .clone()
+    })
 }
 
 fn impl_self_type_path(tcx: TyCtxt<'_>, def_id: DefId, crate_name: &str) -> Option<String> {
@@ -83,17 +103,27 @@ fn impl_self_type_path(tcx: TyCtxt<'_>, def_id: DefId, crate_name: &str) -> Opti
         .skip_normalization()
         .ty_adt_def()
         .filter(|adt| adt.did().krate == def_id.krate)?;
+    // Nameless defs (anonymous consts, closures) can be owned directly by an
+    // impl; `item_name` ICEs on them.
+    let name = tcx.opt_item_name(def_id)?;
     Some(format!(
         "{crate_name}{}::{}",
         tcx.def_path(adt.did()).to_string_no_crate_verbose(),
-        tcx.item_name(def_id)
+        name
     ))
 }
 
 #[must_use]
 pub fn canonical_namespace(tcx: TyCtxt<'_>, def_id: DefId) -> String {
-    let crate_name = tcx.crate_name(def_id.krate).to_string();
-    canonicalize_def_path(&crate_name, &tcx.def_path_str(def_id))
+    NAMESPACE_CACHE.with_borrow_mut(|cache| {
+        cache
+            .entry(def_id)
+            .or_insert_with(|| {
+                let crate_name = tcx.crate_name(def_id.krate).to_string();
+                canonicalize_def_path(&crate_name, &tcx.def_path_str(def_id))
+            })
+            .clone()
+    })
 }
 
 fn canonicalize_def_path(crate_name: &str, path: &str) -> String {

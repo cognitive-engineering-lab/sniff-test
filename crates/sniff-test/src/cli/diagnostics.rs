@@ -52,6 +52,52 @@ struct PanicContractNotes<'a> {
     include_stack: bool,
 }
 
+/// The diagnostic surface findings decorate, bridging the two `Diag`
+/// emission-guarantee types (warn vs deny) behind one emission skeleton.
+trait LintDiag {
+    fn note(&mut self, note: String);
+    fn span_note(&mut self, span: Span, note: String);
+    fn help(&mut self, help: &'static str);
+}
+
+impl<G: EmissionGuarantee> LintDiag for Diag<'_, G> {
+    fn note(&mut self, note: String) {
+        Diag::note(self, note);
+    }
+
+    fn span_note(&mut self, span: Span, note: String) {
+        Diag::span_note(self, span, note);
+    }
+
+    fn help(&mut self, help: &'static str) {
+        Diag::help(self, help);
+    }
+}
+
+/// Emits one finding at its lint level; `decorate` adds the notes and help
+/// shared by both levels.
+fn emit_lint_diagnostic(
+    tcx: TyCtxt<'_>,
+    level: LintLevel,
+    span: Span,
+    message: String,
+    decorate: impl FnOnce(&mut dyn LintDiag),
+) {
+    match level {
+        LintLevel::Allow => {}
+        LintLevel::Warn => {
+            let mut diag = tcx.dcx().struct_span_warn(span, message);
+            decorate(&mut diag);
+            diag.emit();
+        }
+        LintLevel::Deny => {
+            let mut diag = tcx.dcx().struct_span_err(span, message);
+            decorate(&mut diag);
+            let _ = diag.emit();
+        }
+    }
+}
+
 pub(super) fn emit_analysis_incomplete_diagnostic(
     tcx: TyCtxt<'_>,
     root_def_id: DefId,
@@ -63,25 +109,12 @@ pub(super) fn emit_analysis_incomplete_diagnostic(
         "analysis of `{root}` is incomplete: reachability halted at the \
          {node_limit}-instance node limit"
     );
-    let help = "raise `node-limit` under `[analysis]` in sniff-test.toml, or shrink the traversal by \
-         trusting or ignoring namespaces";
-    match level {
-        LintLevel::Allow => {}
-        LintLevel::Warn => {
-            let mut diag = tcx
-                .dcx()
-                .struct_span_warn(tcx.def_span(root_def_id), message);
-            diag.help(help);
-            diag.emit();
-        }
-        LintLevel::Deny => {
-            let mut diag = tcx
-                .dcx()
-                .struct_span_err(tcx.def_span(root_def_id), message);
-            diag.help(help);
-            let _ = diag.emit();
-        }
-    }
+    emit_lint_diagnostic(tcx, level, tcx.def_span(root_def_id), message, |diag| {
+        diag.help(
+            "raise `node-limit` under `[analysis]` in sniff-test.toml, or shrink the traversal \
+             by trusting or ignoring namespaces",
+        );
+    });
 }
 
 pub(super) fn emit_indirect_boundary_diagnostic<'tcx>(
@@ -92,44 +125,13 @@ pub(super) fn emit_indirect_boundary_diagnostic<'tcx>(
     level: LintLevel,
     include_stack: bool,
 ) {
-    if level == LintLevel::Allow {
-        return;
-    }
     let root = canonical_namespace(tcx, root_def_id);
     let trigger_edge_id = trigger_edge_id(graph, evidence);
     let trigger_edge = graph.edge(trigger_edge_id);
     let message = format!("function `{root}` reaches an unverifiable indirect call");
-    match level {
-        LintLevel::Allow => {}
-        LintLevel::Warn => {
-            let mut diag = tcx
-                .dcx()
-                .struct_span_warn(tcx.def_span(root_def_id), message);
-            decorate_raw_panic_diagnostic(
-                &mut diag,
-                tcx,
-                graph,
-                evidence,
-                trigger_edge.span,
-                include_stack,
-            );
-            diag.emit();
-        }
-        LintLevel::Deny => {
-            let mut diag = tcx
-                .dcx()
-                .struct_span_err(tcx.def_span(root_def_id), message);
-            decorate_raw_panic_diagnostic(
-                &mut diag,
-                tcx,
-                graph,
-                evidence,
-                trigger_edge.span,
-                include_stack,
-            );
-            let _ = diag.emit();
-        }
-    }
+    emit_lint_diagnostic(tcx, level, tcx.def_span(root_def_id), message, |diag| {
+        decorate_raw_panic_diagnostic(diag, tcx, graph, evidence, trigger_edge.span, include_stack);
+    });
 }
 
 pub(super) fn emit_raw_panic_diagnostic<'tcx>(
@@ -140,48 +142,17 @@ pub(super) fn emit_raw_panic_diagnostic<'tcx>(
     level: LintLevel,
     include_stack: bool,
 ) {
-    if level == LintLevel::Allow {
-        return;
-    }
     let root = canonical_namespace(tcx, root_def_id);
     let trigger_edge_id = trigger_edge_id(graph, evidence);
     let trigger_edge = graph.edge(trigger_edge_id);
     let message = format!("function `{root}` has an undocumented panic path");
-    match level {
-        LintLevel::Allow => {}
-        LintLevel::Warn => {
-            let mut diag = tcx
-                .dcx()
-                .struct_span_warn(tcx.def_span(root_def_id), message);
-            decorate_raw_panic_diagnostic(
-                &mut diag,
-                tcx,
-                graph,
-                evidence,
-                trigger_edge.span,
-                include_stack,
-            );
-            diag.emit();
-        }
-        LintLevel::Deny => {
-            let mut diag = tcx
-                .dcx()
-                .struct_span_err(tcx.def_span(root_def_id), message);
-            decorate_raw_panic_diagnostic(
-                &mut diag,
-                tcx,
-                graph,
-                evidence,
-                trigger_edge.span,
-                include_stack,
-            );
-            let _ = diag.emit();
-        }
-    }
+    emit_lint_diagnostic(tcx, level, tcx.def_span(root_def_id), message, |diag| {
+        decorate_raw_panic_diagnostic(diag, tcx, graph, evidence, trigger_edge.span, include_stack);
+    });
 }
 
-fn decorate_raw_panic_diagnostic<'tcx, G: EmissionGuarantee>(
-    diag: &mut Diag<'_, G>,
+fn decorate_raw_panic_diagnostic<'tcx>(
+    diag: &mut dyn LintDiag,
     tcx: TyCtxt<'tcx>,
     graph: &ReachabilityGraph<'tcx>,
     evidence: &PanicEvidence,
@@ -201,8 +172,8 @@ fn decorate_raw_panic_diagnostic<'tcx, G: EmissionGuarantee>(
     );
 }
 
-fn decorate_panic_contract_diagnostic<'tcx, G: EmissionGuarantee>(
-    diag: &mut Diag<'_, G>,
+fn decorate_panic_contract_diagnostic<'tcx>(
+    diag: &mut dyn LintDiag,
     tcx: TyCtxt<'tcx>,
     graph: &ReachabilityGraph<'tcx>,
     evidence: &PanicEvidence,
@@ -222,8 +193,8 @@ fn decorate_panic_contract_diagnostic<'tcx, G: EmissionGuarantee>(
     diag.help("ensure this precondition locally or document it on your public API with `# Panics`");
 }
 
-fn decorate_cached_dependency_contract_diagnostic<'tcx, G: EmissionGuarantee>(
-    diag: &mut Diag<'_, G>,
+fn decorate_cached_dependency_contract_diagnostic<'tcx>(
+    diag: &mut dyn LintDiag,
     tcx: TyCtxt<'tcx>,
     graph: &ReachabilityGraph<'tcx>,
     edge_id: ReachabilityEdgeId,
@@ -236,8 +207,8 @@ fn decorate_cached_dependency_contract_diagnostic<'tcx, G: EmissionGuarantee>(
     diag.help("ensure this precondition locally or document it on your public API with `# Panics`");
 }
 
-fn decorate_cached_dependency_raw_panic_diagnostic<'tcx, G: EmissionGuarantee>(
-    diag: &mut Diag<'_, G>,
+fn decorate_cached_dependency_raw_panic_diagnostic<'tcx>(
+    diag: &mut dyn LintDiag,
     tcx: TyCtxt<'tcx>,
     graph: &ReachabilityGraph<'tcx>,
     edge_id: ReachabilityEdgeId,
@@ -278,41 +249,20 @@ pub(super) fn emit_panic_contract_diagnostic<'tcx>(
         |edge_id| graph.edge(edge_id).span,
     );
     let message = format!("function `{root}` reaches a {contract}");
-    match level {
-        LintLevel::Allow => {}
-        LintLevel::Warn => {
-            let mut diag = tcx.dcx().struct_span_warn(primary_span, message);
-            decorate_panic_contract_diagnostic(
-                &mut diag,
-                tcx,
-                graph,
-                evidence,
-                PanicContractNotes {
-                    obligation_edge_id,
-                    documented_def_id,
-                    documented: &documented,
-                    include_stack,
-                },
-            );
-            diag.emit();
-        }
-        LintLevel::Deny => {
-            let mut diag = tcx.dcx().struct_span_err(primary_span, message);
-            decorate_panic_contract_diagnostic(
-                &mut diag,
-                tcx,
-                graph,
-                evidence,
-                PanicContractNotes {
-                    obligation_edge_id,
-                    documented_def_id,
-                    documented: &documented,
-                    include_stack,
-                },
-            );
-            let _ = diag.emit();
-        }
-    }
+    emit_lint_diagnostic(tcx, level, primary_span, message, |diag| {
+        decorate_panic_contract_diagnostic(
+            diag,
+            tcx,
+            graph,
+            evidence,
+            PanicContractNotes {
+                obligation_edge_id,
+                documented_def_id,
+                documented: &documented,
+                include_stack,
+            },
+        );
+    });
 }
 
 pub(super) fn emit_cached_dependency_contract_diagnostic<'tcx>(
@@ -339,35 +289,17 @@ pub(super) fn emit_cached_dependency_contract_diagnostic<'tcx>(
     };
     let edge = graph.edge(edge_id);
     let message = format!("function `{root}` reaches a cached dependency {contract}");
-    match level {
-        LintLevel::Allow => {}
-        LintLevel::Warn => {
-            let mut diag = tcx.dcx().struct_span_warn(edge.span, message);
-            decorate_cached_dependency_contract_diagnostic(
-                &mut diag,
-                tcx,
-                graph,
-                edge_id,
-                summary,
-                contract,
-                include_stack,
-            );
-            diag.emit();
-        }
-        LintLevel::Deny => {
-            let mut diag = tcx.dcx().struct_span_err(edge.span, message);
-            decorate_cached_dependency_contract_diagnostic(
-                &mut diag,
-                tcx,
-                graph,
-                edge_id,
-                summary,
-                contract,
-                include_stack,
-            );
-            let _ = diag.emit();
-        }
-    }
+    emit_lint_diagnostic(tcx, level, edge.span, message, |diag| {
+        decorate_cached_dependency_contract_diagnostic(
+            diag,
+            tcx,
+            graph,
+            edge_id,
+            summary,
+            contract,
+            include_stack,
+        );
+    });
 }
 
 pub(super) fn emit_cached_dependency_raw_panic_diagnostic<'tcx>(
@@ -386,33 +318,16 @@ pub(super) fn emit_cached_dependency_raw_panic_diagnostic<'tcx>(
     let edge = graph.edge(edge_id);
     let message =
         format!("function `{root}` reaches cached undocumented panic evidence from a dependency");
-    match level {
-        LintLevel::Allow => {}
-        LintLevel::Warn => {
-            let mut diag = tcx.dcx().struct_span_warn(edge.span, message);
-            decorate_cached_dependency_raw_panic_diagnostic(
-                &mut diag,
-                tcx,
-                graph,
-                edge_id,
-                summary,
-                include_stack,
-            );
-            diag.emit();
-        }
-        LintLevel::Deny => {
-            let mut diag = tcx.dcx().struct_span_err(edge.span, message);
-            decorate_cached_dependency_raw_panic_diagnostic(
-                &mut diag,
-                tcx,
-                graph,
-                edge_id,
-                summary,
-                include_stack,
-            );
-            let _ = diag.emit();
-        }
-    }
+    emit_lint_diagnostic(tcx, level, edge.span, message, |diag| {
+        decorate_cached_dependency_raw_panic_diagnostic(
+            diag,
+            tcx,
+            graph,
+            edge_id,
+            summary,
+            include_stack,
+        );
+    });
 }
 
 pub(super) fn emit_safety_diagnostics(
@@ -431,19 +346,9 @@ pub(super) fn emit_safety_diagnostics(
                 let function = canonical_namespace(tcx, *def_id);
                 let message =
                     format!("public unsafe function `{function}` is missing `# Safety` docs");
-                match level {
-                    LintLevel::Allow => {}
-                    LintLevel::Warn => {
-                        let mut diag = tcx.dcx().struct_span_warn(*span, message);
-                        diag.help("document the caller obligations under a `# Safety` section");
-                        diag.emit();
-                    }
-                    LintLevel::Deny => {
-                        let mut diag = tcx.dcx().struct_span_err(*span, message);
-                        diag.help("document the caller obligations under a `# Safety` section");
-                        let _ = diag.emit();
-                    }
-                }
+                emit_lint_diagnostic(tcx, level, *span, message, |diag| {
+                    diag.help("document the caller obligations under a `# Safety` section");
+                });
             }
             SafetyFinding::CallMissingJustification {
                 caller,
@@ -457,21 +362,10 @@ pub(super) fn emit_safety_diagnostics(
                 let message = format!(
                     "{call} to `{target}` in `{caller}` is missing a `// SAFETY:` justification"
                 );
-                match level {
-                    LintLevel::Allow => {}
-                    LintLevel::Warn => {
-                        let mut diag = tcx.dcx().struct_span_warn(*span, message);
-                        add_safety_callee_note(&mut diag, tcx, *callee);
-                        diag.help("add a `// SAFETY:` comment above the unsafe block or call site");
-                        diag.emit();
-                    }
-                    LintLevel::Deny => {
-                        let mut diag = tcx.dcx().struct_span_err(*span, message);
-                        add_safety_callee_note(&mut diag, tcx, *callee);
-                        diag.help("add a `// SAFETY:` comment above the unsafe block or call site");
-                        let _ = diag.emit();
-                    }
-                }
+                emit_lint_diagnostic(tcx, level, *span, message, |diag| {
+                    add_safety_callee_note(diag, tcx, *callee);
+                    diag.help("add a `// SAFETY:` comment above the unsafe block or call site");
+                });
             }
             SafetyFinding::CallMissingRequirements {
                 caller,
@@ -486,66 +380,26 @@ pub(super) fn emit_safety_diagnostics(
                 let message = format!(
                     "{call} to `{target}` in `{caller}` does not satisfy all `# Safety` requirements"
                 );
-                match level {
-                    LintLevel::Allow => {}
-                    LintLevel::Warn => {
-                        let mut diag = tcx.dcx().struct_span_warn(*span, message);
-                        add_missing_safety_requirement_notes(
-                            &mut diag,
-                            tcx,
-                            *callee,
-                            missing_requirements,
-                        );
-                        diag.emit();
-                    }
-                    LintLevel::Deny => {
-                        let mut diag = tcx.dcx().struct_span_err(*span, message);
-                        add_missing_safety_requirement_notes(
-                            &mut diag,
-                            tcx,
-                            *callee,
-                            missing_requirements,
-                        );
-                        let _ = diag.emit();
-                    }
-                }
+                emit_lint_diagnostic(tcx, level, *span, message, |diag| {
+                    add_missing_safety_requirement_notes(diag, tcx, *callee, missing_requirements);
+                });
             }
             SafetyFinding::OpMissingJustification { caller, op, span } => {
-                emit_safety_op_diagnostic(tcx, *caller, *op, *span, level);
+                let caller = canonical_namespace(tcx, *caller);
+                let operation = safety_op_label(*op);
+                let message = format!(
+                    "unsafe operation ({operation}) in `{caller}` is missing a `// SAFETY:` justification"
+                );
+                emit_lint_diagnostic(tcx, level, *span, message, |diag| {
+                    diag.help("add a `// SAFETY:` comment above the unsafe block or operation");
+                });
             }
         }
     }
 }
 
-fn emit_safety_op_diagnostic(
-    tcx: TyCtxt<'_>,
-    caller: DefId,
-    op: crate::safety::SafetyOpKind,
-    span: Span,
-    level: LintLevel,
-) {
-    let caller = canonical_namespace(tcx, caller);
-    let operation = safety_op_label(op);
-    let message = format!(
-        "unsafe operation ({operation}) in `{caller}` is missing a `// SAFETY:` justification"
-    );
-    match level {
-        LintLevel::Allow => {}
-        LintLevel::Warn => {
-            let mut diag = tcx.dcx().struct_span_warn(span, message);
-            diag.help("add a `// SAFETY:` comment above the unsafe block or operation");
-            diag.emit();
-        }
-        LintLevel::Deny => {
-            let mut diag = tcx.dcx().struct_span_err(span, message);
-            diag.help("add a `// SAFETY:` comment above the unsafe block or operation");
-            let _ = diag.emit();
-        }
-    }
-}
-
-fn add_missing_safety_requirement_notes<G: EmissionGuarantee>(
-    diag: &mut Diag<'_, G>,
+fn add_missing_safety_requirement_notes(
+    diag: &mut dyn LintDiag,
     tcx: TyCtxt<'_>,
     callee: SafetyCallee,
     missing_requirements: &[crate::safety::SafetyRequirement],
@@ -617,11 +471,7 @@ fn normalized_offset(file: &rustc_span::SourceFile, original: usize) -> Option<u
     Some(original - diff)
 }
 
-fn add_safety_callee_note<G: EmissionGuarantee>(
-    diag: &mut Diag<'_, G>,
-    tcx: TyCtxt<'_>,
-    callee: SafetyCallee,
-) {
+fn add_safety_callee_note(diag: &mut dyn LintDiag, tcx: TyCtxt<'_>, callee: SafetyCallee) {
     if let SafetyCallee::Def(def_id) = callee
         && crate::safety::has_safety_docs(tcx, def_id)
     {
@@ -635,8 +485,8 @@ fn add_safety_callee_note<G: EmissionGuarantee>(
     }
 }
 
-fn add_trace_notes<'tcx, G: EmissionGuarantee>(
-    diag: &mut Diag<'_, G>,
+fn add_trace_notes<'tcx>(
+    diag: &mut dyn LintDiag,
     tcx: TyCtxt<'tcx>,
     graph: &ReachabilityGraph<'tcx>,
     edge_ids: &[ReachabilityEdgeId],
@@ -665,9 +515,9 @@ fn add_trace_notes<'tcx, G: EmissionGuarantee>(
             render_trace_endpoint(tcx, &graph.node(first.source).kind),
             render_trace_endpoint(tcx, &graph.node(last.target).kind)
         ));
-        diag.note(
+        diag.note(String::from(
             "set `show-full-stack-trace = true` under `[analysis]` in sniff-test.toml to show every reachability step",
-        );
+        ));
     }
 }
 

@@ -22,7 +22,7 @@ use rustc_span::Span;
 use crate::config::{PanicBoundaryPolicy, PanicConfig};
 use crate::contracts::{
     ContractDocSummary, ContractKind, ContractRequirement, contract_doc_summary,
-    normalize_requirement_name,
+    normalize_requirement_name, satisfied_requirement_names,
 };
 use crate::namespace::canonical_namespace;
 use crate::source_markers::{PanicSatisfaction, span_panic_satisfactions};
@@ -512,12 +512,11 @@ fn panic_requirements_satisfied(
     requirements: &[PanicRequirement],
     satisfactions: &[PanicSatisfaction],
 ) -> bool {
-    let satisfied_requirements = satisfactions
-        .iter()
-        .filter(|satisfaction| !satisfaction.reason.trim().is_empty())
-        .filter_map(|satisfaction| satisfaction.requirement.as_deref())
-        .map(normalize_requirement_name)
-        .collect::<HashSet<_>>();
+    let satisfied_requirements = satisfied_requirement_names(
+        satisfactions
+            .iter()
+            .map(|satisfaction| (satisfaction.requirement.as_deref(), &*satisfaction.reason)),
+    );
 
     requirements.iter().all(|requirement| {
         satisfied_requirements.contains(&normalize_requirement_name(&requirement.name))

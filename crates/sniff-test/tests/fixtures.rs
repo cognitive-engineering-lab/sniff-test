@@ -1,12 +1,11 @@
-use std::fs;
-use std::io;
+mod common;
+
 use std::path::{Path, PathBuf};
-use std::process::{Command, ExitStatus};
-use std::sync::{LazyLock, Mutex};
+use std::process::Command;
 
 use serde_json::Value;
 
-static CASE_LOCK: LazyLock<Mutex<()>> = LazyLock::new(|| Mutex::new(()));
+use common::{CommandOutput, clean_cargo_package_env, copy_dir_all, repo_root, rustc_sysroot};
 
 #[derive(Clone, Copy, Debug)]
 struct Case {
@@ -81,12 +80,6 @@ struct Binaries {
     driver: PathBuf,
 }
 
-struct CommandOutput {
-    status: ExitStatus,
-    stdout: String,
-    stderr: String,
-}
-
 macro_rules! fixture_cases {
     ($($fixture:literal => { $($case:ident => $spec:expr;)+ })+) => {
         $(
@@ -132,6 +125,12 @@ fixture_cases! {
     "dyn_dispatch_same_trait" => {
         dyn_dispatch_same_trait => Case::cargo("dyn dispatch same-trait approximation").exit_code(1);
         driver_dyn_dispatch_same_trait => Case::direct("dyn dispatch same-trait approximation");
+    }
+    "supertrait_dyn_dispatch" => {
+        supertrait_dyn_dispatch => Case::cargo("supertrait methods match dyn vtable entries")
+            .exit_code(1);
+        driver_supertrait_dyn_dispatch =>
+            Case::direct("supertrait methods match dyn vtable entries");
     }
     "documented_obligation" => {
         documented_obligation => Case::cargo("documented panic obligation").exit_code(1);
@@ -273,9 +272,6 @@ fixture_cases! {
 }
 
 fn run_named_case(name: &'static str, fixture_name: &'static str, case: Case) {
-    let _guard = CASE_LOCK
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner);
     let repo = repo_root();
     let binaries = Binaries::from_cargo();
     let sysroot = rustc_sysroot();
@@ -287,9 +283,6 @@ fn run_named_case(name: &'static str, fixture_name: &'static str, case: Case) {
 /// fresh — cargo never re-invokes the driver — and must reproduce the first
 /// run's exit code and messages from persisted unit outcomes.
 fn run_named_rerun_case(name: &'static str, fixture_name: &'static str, case: &Case) {
-    let _guard = CASE_LOCK
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner);
     let repo = repo_root();
     let binaries = Binaries::from_cargo();
     let sysroot = rustc_sysroot();
@@ -375,33 +368,6 @@ impl Binaries {
     }
 }
 
-fn repo_root() -> PathBuf {
-    let manifest_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
-    manifest_dir
-        .parent()
-        .and_then(Path::parent)
-        .expect("sniff-test crate should live under crates/sniff-test")
-        .to_path_buf()
-}
-
-fn rustc_sysroot() -> String {
-    let rustc = std::env::var_os("RUSTC").map_or_else(|| PathBuf::from("rustc"), PathBuf::from);
-    let output = Command::new(&rustc)
-        .args(["--print", "sysroot"])
-        .output()
-        .unwrap_or_else(|error| {
-            panic!("failed to run {} --print sysroot: {error}", rustc.display())
-        });
-
-    assert!(
-        output.status.success(),
-        "{}",
-        command_failure(&rustc.display().to_string(), &output)
-    );
-
-    String::from_utf8(output.stdout).expect("rustc sysroot output should be utf-8")
-}
-
 fn run_case(
     repo: &Path,
     binaries: &Binaries,
@@ -480,6 +446,7 @@ fn parse_messages(
         case.behavior
     );
 
+    // Ordering is not the contract here; Cargo/rustc can interleave reports.
     messages.sort_by_key(message_sort_key);
     messages
 }
@@ -523,6 +490,7 @@ fn run_direct_driver_case(
         .arg(manifest)
         .args(["--message-format", "json", "--color", "never"])
         .args(case.args)
+        // Cargo would normally set this; direct-driver cases need it for scope.
         .env("CARGO_PRIMARY_PACKAGE", "1")
         .current_dir(root)
         .output()
@@ -530,25 +498,8 @@ fn run_direct_driver_case(
     CommandOutput::from_output(output)
 }
 
-fn clean_cargo_package_env(command: &mut Command) {
-    command
-        .env_remove("CARGO_MANIFEST_PATH")
-        .env_remove("CARGO_PRIMARY_PACKAGE")
-        .env_remove("CARGO_PKG_NAME")
-        .env_remove("CARGO_PKG_VERSION");
-}
-
-impl CommandOutput {
-    fn from_output(output: std::process::Output) -> Self {
-        Self {
-            status: output.status,
-            stdout: String::from_utf8(output.stdout).expect("stdout should be utf-8"),
-            stderr: String::from_utf8(output.stderr).expect("stderr should be utf-8"),
-        }
-    }
-}
-
 fn normalize_json(value: &mut Value, fixture_root: &Path, sysroot: &str) {
+    // Keep snapshots about report content, not run-local paths or fingerprints.
     match value {
         Value::Object(map) => {
             for (key, value) in map {
@@ -601,28 +552,4 @@ fn json_string(value: &Value, key: &str) -> String {
         .and_then(Value::as_str)
         .unwrap_or_default()
         .to_owned()
-}
-
-fn copy_dir_all(source: &Path, destination: &Path) -> io::Result<()> {
-    fs::create_dir_all(destination)?;
-    for entry in fs::read_dir(source)? {
-        let entry = entry?;
-        let kind = entry.file_type()?;
-        let source_path = entry.path();
-        let destination_path = destination.join(entry.file_name());
-        if kind.is_dir() {
-            copy_dir_all(&source_path, &destination_path)?;
-        } else {
-            fs::copy(source_path, destination_path)?;
-        }
-    }
-    Ok(())
-}
-
-fn command_failure(command: &str, output: &std::process::Output) -> String {
-    format!(
-        "command failed: {command}\nstdout:\n{}\nstderr:\n{}",
-        String::from_utf8_lossy(&output.stdout),
-        String::from_utf8_lossy(&output.stderr)
-    )
 }

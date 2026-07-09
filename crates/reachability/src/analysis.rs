@@ -16,10 +16,6 @@ use crate::hooks::{ReachabilityContext, ReachabilityControl, ReachabilityHalt, R
 /// Starting point for reachability analysis.
 #[derive(Debug, Clone, Copy)]
 pub enum ReachabilityRoot<'tcx> {
-    /// Function definition id analyzed with identity generic arguments.
-    ///
-    /// Prefer [`Self::Instance`] when concrete generic arguments are known.
-    DefId(DefId),
     /// Local HIR body.
     ///
     /// Generic local bodies are analyzed with identity generic arguments.
@@ -31,12 +27,6 @@ pub enum ReachabilityRoot<'tcx> {
     /// This is the preferred root when analyzing monomorphized code, including
     /// generic functions after rustc has selected concrete type arguments.
     Instance(Instance<'tcx>),
-}
-
-impl From<DefId> for ReachabilityRoot<'_> {
-    fn from(def_id: DefId) -> Self {
-        Self::DefId(def_id)
-    }
 }
 
 impl From<LocalDefId> for ReachabilityRoot<'_> {
@@ -60,9 +50,6 @@ impl<'tcx> IntoInstance<'tcx> for ReachabilityRoot<'tcx> {
     fn into_instance(self, tcx: TyCtxt<'tcx>) -> Instance<'tcx> {
         match self {
             Self::Instance(instance) => instance,
-            Self::DefId(def_id) => {
-                Instance::new_raw(def_id, GenericArgs::identity_for_item(tcx, def_id))
-            }
             Self::LocalBody(def_id) => Instance::new_raw(
                 def_id.to_def_id(),
                 GenericArgs::identity_for_item(tcx, def_id.to_def_id()),
@@ -77,21 +64,9 @@ impl<'tcx> IntoInstance<'tcx> for Instance<'tcx> {
     }
 }
 
-impl<'tcx> IntoInstance<'tcx> for DefId {
-    fn into_instance(self, tcx: TyCtxt<'tcx>) -> Instance<'tcx> {
-        ReachabilityRoot::from(self).into_instance(tcx)
-    }
-}
-
 /// Options controlling graph traversal.
 #[derive(Debug, Clone, Copy)]
 pub struct ReachabilityOptions {
-    /// Whether to enqueue reachable function instances and walk them
-    /// transitively.
-    ///
-    /// When false, the snapshot contains only the root body and its immediate
-    /// outgoing edges.
-    pub transitive: bool,
     /// Maximum number of function instances to visit.
     ///
     /// The limit counts visited function nodes, not compiler artifact nodes.
@@ -112,7 +87,6 @@ pub struct ReachabilityOptions {
 impl Default for ReachabilityOptions {
     fn default() -> Self {
         Self {
-            transitive: true,
             node_limit: None,
             analyze_external: true,
             dyn_dispatch_vtable_edges: DynDispatchVTableEdges::CastSites,
@@ -353,23 +327,21 @@ where
             let first_reach = self
                 .snapshot
                 .record_edge(edge_id, edge.target, item.depth + 1);
-            if self.options.transitive {
-                if let Some(target) = self.index.graph.node_instance(edge.target) {
-                    let should_descend = self.hooks.should_descend(cx, &edge, target)?;
-                    if should_descend && first_reach && !self.visited_instances.contains(&target) {
-                        self.queue.push_back(QueueItem {
-                            node_id: edge.target,
-                            current_instance: target,
-                            depth: item.depth + 1,
-                        });
-                    }
-                } else if first_reach {
+            if let Some(target) = self.index.graph.node_instance(edge.target) {
+                let should_descend = self.hooks.should_descend(cx, &edge, target)?;
+                if should_descend && first_reach && !self.visited_instances.contains(&target) {
                     self.queue.push_back(QueueItem {
                         node_id: edge.target,
-                        current_instance: item.current_instance,
+                        current_instance: target,
                         depth: item.depth + 1,
                     });
                 }
+            } else if first_reach {
+                self.queue.push_back(QueueItem {
+                    node_id: edge.target,
+                    current_instance: item.current_instance,
+                    depth: item.depth + 1,
+                });
             }
         }
 
