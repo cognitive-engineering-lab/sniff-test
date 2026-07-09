@@ -35,6 +35,17 @@ panic analysis and caching, but their unsafe blocks are never audited. The
 original's `DependenciesPosture::Verify` offered this; restoring it is a
 pending feature decision.
 
+### Safety precondition asserts are not panic evidence
+
+Compiler checks for null pointer dereference, misaligned pointer dereference,
+and invalid enum construction inside an unsafe function with `# Safety` docs
+are treated as safety-contract evidence, not as `# Panics` evidence. The call
+site must satisfy the safety contract through `// SAFETY:` markers; once that
+obligation is handled, panic analysis should not also require callers to
+document the callee's internal UB guard as a panic. Other compiler assertions
+inside the same unsafe function — bounds checks, overflow, division by zero,
+and explicit panic sinks — remain panic evidence.
+
 ### Per-function TOML requirement overrides were dropped
 
 The original could attach named requirements to external undocumented
@@ -72,14 +83,26 @@ default, and truncated cached summaries are marked `analysis-complete: false`
 and treated as raw panic evidence by consumers — but the region beyond the
 halt is simply unknown.
 
-### Marker suppression is line-anchored
+### Callable call-site attribution is type-keyed
 
-`// PANIC:`/`// SAFETY:` markers attach to source lines: the callee segment's
-line and, for single-line statements, the statement line
-(`edge_marker_satisfactions` in `crates/sniff-test/src/panics.rs`). Unusual
-formatting — a call split across lines in ways rustfmt does not produce — can
-anchor a marker to a different link than the author intended. Named
-requirement bullets are matched by name and are format-insensitive.
+With `callable-edge-attribution = "call-sites"`, function pointers and dyn
+dispatch are resolved conservatively from erased types reached in the same
+query. If one reached closure or function item reifies to `fn() -> i32`, every
+reached `fn() -> i32` call site may connect to that target; similarly, every dyn
+call to a trait may connect to every reached concrete vtable entry for that
+trait. This avoids false negatives from simple erasure flows, but it is not
+precise value-flow analysis and can over-report.
+
+### Marker suppression is source-anchored
+
+`// PANIC:`/`// SAFETY:` markers attach to source spans: the callee segment's
+line, the statement line for single-line statements, and for panic markers the
+nearest enclosing block when no call-local marker exists. Unusual formatting —
+a call split across lines in ways rustfmt does not produce — can anchor a marker
+to a different link than the author intended. Named requirement bullets are
+matched by normalized name and are format-insensitive, but duplicate names in
+one contract are ambiguous under the default `ambiguous-obligations = "deny"`
+policy.
 
 ## Latent hazards (not reachable through the shipped tool)
 

@@ -48,21 +48,24 @@ overflow-checks = "profile" # profile | on | off
 inline-mir = "off"          # profile | on | off
 callable-edge-attribution = "erasure-sites" # erasure-sites | call-sites
 
+[analysis.lints]
+analysis-incomplete = "deny"
+ambiguous-obligations = "deny" # deny | warn | allow
+
 [panics.lints]
-undocumented-panic-path = "deny"
-documented-panic-contract = "warn"
-trusted-panic-contract = "warn"
+missing-docs = "deny"
+documented-contract = "warn"
+trusted-contract = "warn"
+indirect-call-boundary = "warn"
 
 [safety]
 ignored-namespaces = []
 safety-obligation-namespaces = []
 
 [safety.lints]
-missing-safety-docs = "warn"
-unsafe-call-missing-justification = "warn"
-unsafe-call-missing-requirements = "warn"
-safety-obligation-missing-justification = "warn"
-safety-obligation-missing-requirements = "warn"
+missing-docs = "warn"
+missing-justification = "warn"
+missing-requirements = "warn"
 ```
 
 `inline-mir = "off"` passes `-Z inline-mir=no`, which keeps panic traces closer
@@ -71,12 +74,17 @@ to the source call structure.
 `callable-edge-attribution = "erasure-sites"` reports concrete callable targets
 where a function item, closure, or concrete type is erased into an indirect
 callable such as a `fn` pointer or `dyn Trait`. `call-sites` reports concrete
-dynamic-dispatch vtable methods at the call span instead of the object-cast
-span; function pointer calls remain opaque boundaries unless value-flow can
-prove the target. Dynamic call-site attribution is a body-local, trait-keyed
-approximation: if one function casts multiple concrete values to the same dyn
-trait, every dyn call to that trait in the function may be connected to every
-concrete impl observed in that function.
+function-pointer targets and dynamic-dispatch vtable methods at the call span
+instead of the erasure span. Call-site attribution is query-local and keyed by
+erased callable type: if a traversal sees multiple function-pointer
+reifications with the same `fn` pointer type, or multiple concrete values cast
+to the same dyn trait, each matching call site may connect to every observed
+target.
+
+`ambiguous-obligations = "deny"` rejects proof squashing when one local marker
+would justify multiple panic obligation sites, or when one `# Panics`/`# Safety`
+contract contains duplicate requirement names after normalization. `warn` accepts
+the squash but reports it; `allow` accepts it silently.
 
 `cargo sniff-test` exits with status `1` when a final workspace crate has a
 finding whose configured lint level is `deny`. `allow` suppresses a finding from
@@ -143,11 +151,18 @@ The accepted requirement bullet format is `- name: condition`; rustdoc
 conditions may be empty when the name is enough, but call-site satisfaction
 bullets must include justification text. Names are matched case-insensitively,
 with punctuation and whitespace treated as separators, so `bounded[total]` and
-`bounded total` match. Prose and labels such as `Requirements:` are allowed
-before the first bullet. Plain comment lines following a requirement bullet in
-the same contiguous block are kept as explanation context. Use `/// # Panics`
-for public API panic contracts; `// PANIC:` is only for local call-site
-justifications.
+`bounded total` match. Duplicate names inside one contract are ambiguous under
+the default `ambiguous-obligations = "deny"` policy: a single marker bullet
+cannot prove two distinct requirements with the same normalized name. Prose and
+labels such as `Requirements:` are allowed before the first bullet. Plain
+comment lines following a requirement bullet in the same contiguous block are
+kept as explanation context. Use `/// # Panics` for public API panic contracts;
+`// PANIC:` is only for local call-site justifications.
+
+`// PANIC:` can also sit immediately above an enclosing block. In strict mode,
+one marker block that resolves to multiple panic obligation sites is ambiguous
+and binds to none of them. In `warn` or `allow` mode, the marker is applied
+independently to each site; each callee still checks its own named requirements.
 
 ## Direct Driver
 
