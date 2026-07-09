@@ -26,10 +26,31 @@ struct MarkerSatisfaction {
     pub reason: String,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct MarkerBlockKey {
+    pub file_start: u32,
+    pub start_line: usize,
+    pub end_line: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct LocatedMarkerBlock {
+    pub key: MarkerBlockKey,
+    pub span: Span,
+    pub satisfactions: Vec<MarkerSatisfaction>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PanicSatisfaction {
     pub requirement: Option<String>,
     pub reason: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PanicMarkerBlock {
+    pub key: MarkerBlockKey,
+    pub span: Span,
+    pub satisfactions: Vec<PanicSatisfaction>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -70,6 +91,15 @@ pub fn span_panic_satisfactions(tcx: TyCtxt<'_>, span: Span) -> Vec<PanicSatisfa
 }
 
 #[must_use]
+pub fn span_panic_marker_block(tcx: TyCtxt<'_>, span: Span) -> Option<PanicMarkerBlock> {
+    span_marker_block(tcx, span, MarkerKind::Panic).map(|block| PanicMarkerBlock {
+        key: block.key,
+        span: block.span,
+        satisfactions: block.satisfactions.into_iter().map(Into::into).collect(),
+    })
+}
+
+#[must_use]
 pub fn span_has_safety_marker(tcx: TyCtxt<'_>, span: Span) -> bool {
     !span_safety_satisfactions(tcx, span).is_empty()
 }
@@ -89,6 +119,10 @@ pub fn span_safety_satisfactions(tcx: TyCtxt<'_>, span: Span) -> Vec<SafetySatis
 thread_local! {
     static LINE_CACHE: std::cell::RefCell<
         std::collections::HashMap<(u32, usize, MarkerKind), Vec<MarkerSatisfaction>>,
+    > = std::cell::RefCell::new(std::collections::HashMap::new());
+
+    static MARKER_BLOCK_CACHE: std::cell::RefCell<
+        std::collections::HashMap<(u32, usize, MarkerKind), Option<LocatedMarkerBlock>>,
     > = std::cell::RefCell::new(std::collections::HashMap::new());
 }
 
@@ -114,6 +148,22 @@ fn span_satisfactions(tcx: TyCtxt<'_>, span: Span, kind: MarkerKind) -> Vec<Mark
                 ));
                 satisfactions
             })
+            .clone()
+    })
+}
+
+fn span_marker_block(tcx: TyCtxt<'_>, span: Span, kind: MarkerKind) -> Option<LocatedMarkerBlock> {
+    let span = span.source_callsite();
+    if span.is_dummy() {
+        return None;
+    }
+    let location = tcx.sess.source_map().lookup_char_pos(span.lo());
+    let line_index = location.line.saturating_sub(1);
+
+    MARKER_BLOCK_CACHE.with_borrow_mut(|cache| {
+        cache
+            .entry((location.file.start_pos.0, line_index, kind))
+            .or_insert_with(|| preceding_marker_block(&location.file, line_index, kind))
             .clone()
     })
 }
@@ -180,6 +230,40 @@ fn preceding_comment_block_satisfactions(
     line_index: usize,
     kind: MarkerKind,
 ) -> Vec<MarkerSatisfaction> {
+    preceding_comment_block(file, line_index)
+        .map(|block| comment_block_satisfactions(&block.lines, kind))
+        .unwrap_or_default()
+}
+
+fn preceding_marker_block(
+    file: &SourceFile,
+    line_index: usize,
+    kind: MarkerKind,
+) -> Option<LocatedMarkerBlock> {
+    let block = preceding_comment_block(file, line_index)?;
+    let satisfactions = comment_block_satisfactions(&block.lines, kind);
+    if satisfactions.is_empty() {
+        return None;
+    }
+
+    Some(LocatedMarkerBlock {
+        key: MarkerBlockKey {
+            file_start: file.start_pos.0,
+            start_line: block.start_line,
+            end_line: block.end_line,
+        },
+        span: comment_block_span(file, block.start_line, block.end_line),
+        satisfactions,
+    })
+}
+
+struct CommentBlock {
+    start_line: usize,
+    end_line: usize,
+    lines: Vec<String>,
+}
+
+fn preceding_comment_block(file: &SourceFile, line_index: usize) -> Option<CommentBlock> {
     let mut block = Vec::new();
     let mut current = line_index;
     while let Some(previous) = current.checked_sub(1) {
@@ -194,8 +278,22 @@ fn preceding_comment_block_satisfactions(
         current = previous;
     }
 
+    if block.is_empty() {
+        return None;
+    }
+
     block.reverse();
-    comment_block_satisfactions(&block, kind)
+    Some(CommentBlock {
+        start_line: current,
+        end_line: line_index - 1,
+        lines: block,
+    })
+}
+
+fn comment_block_span(file: &SourceFile, start_line: usize, end_line: usize) -> Span {
+    let lo = file.line_bounds(start_line).start;
+    let hi = file.line_bounds(end_line).end;
+    Span::with_root_ctxt(lo, hi)
 }
 
 fn source_line_satisfactions(

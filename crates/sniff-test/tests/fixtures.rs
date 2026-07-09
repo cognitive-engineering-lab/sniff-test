@@ -222,6 +222,19 @@ fixture_cases! {
         panic_requirements => Case::cargo("panic requirement satisfaction");
         driver_panic_requirements => Case::direct("panic requirement satisfaction");
     }
+    "ambiguous_markers" => {
+        ambiguous_markers => Case::cargo("ambiguous marker allow policy");
+        ambiguous_markers_warn => Case::cargo("ambiguous marker warn policy")
+            .args(&["--manifest", "warn.toml"]);
+        ambiguous_markers_strict => Case::cargo("ambiguous marker default error policy")
+            .args(&["--manifest", "strict.toml"])
+            .exit_code(1);
+        driver_ambiguous_markers => Case::direct("ambiguous marker allow policy");
+        driver_ambiguous_markers_warn => Case::direct("ambiguous marker warn policy")
+            .manifest("warn.toml");
+        driver_ambiguous_markers_strict => Case::direct("ambiguous marker default error policy")
+            .manifest("strict.toml");
+    }
     "safety_requirements" => {
         safety_requirements => Case::cargo("safety requirement satisfaction");
         safety_requirements_allowed => Case::cargo("allowed safety findings")

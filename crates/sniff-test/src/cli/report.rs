@@ -2,7 +2,9 @@
 use crate::cache::CachedFunctionSummary;
 use crate::config::{LintLevel, PanicLintConfig};
 use crate::namespace::canonical_namespace;
-use crate::panics::{PanicEvidence, PanicEvidenceKind, trace_edges_until, trigger_edge_id};
+use crate::panics::{
+    AmbiguousPanicMarker, PanicEvidence, PanicEvidenceKind, trace_edges_until, trigger_edge_id,
+};
 use reachability::{
     CompilerAssertLocal, CompilerAssertLocalRole, ReachabilityEdge, ReachabilityEdgeId,
     ReachabilityGraph, ReachabilityNodeKind,
@@ -173,6 +175,27 @@ impl PanicRootReport {
         });
     }
 
+    pub(crate) fn push_ambiguous_obligation_marker<'tcx>(
+        &mut self,
+        tcx: TyCtxt<'tcx>,
+        graph: &ReachabilityGraph<'tcx>,
+        marker: &AmbiguousPanicMarker,
+        level: LintLevel,
+    ) {
+        self.push_finding(PanicFindingReport {
+            kind: ReportDetailKind::AmbiguousObligationMarker,
+            level,
+            span: render_span(tcx, marker.marker_span),
+            edge: None,
+            reason: format!(
+                "one `// PANIC:` marker applies to {} panic obligation sites",
+                marker.edge_ids.len()
+            ),
+            target: None,
+            trace: render_trace(tcx, graph, &marker.edge_ids),
+        });
+    }
+
     fn push_finding(&mut self, finding: PanicFindingReport) {
         self.counts.increment(finding.kind);
         self.findings.push(finding);
@@ -207,6 +230,7 @@ pub(crate) enum ReportDetailKind {
     PanicObligation,
     TrustedPanicObligation,
     IndirectCallBoundary,
+    AmbiguousObligationMarker,
     AnalysisIncomplete,
 }
 
@@ -228,6 +252,9 @@ impl ReportDetailKind {
             Self::PanicObligation => lints.documented_panic_contract,
             Self::TrustedPanicObligation => lints.trusted_panic_contract,
             Self::IndirectCallBoundary => lints.indirect_call_boundary,
+            Self::AmbiguousObligationMarker => {
+                unreachable!("ambiguous marker level comes from `[analysis]` policy")
+            }
             Self::AnalysisIncomplete => lints.analysis_incomplete,
         }
     }

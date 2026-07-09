@@ -54,6 +54,11 @@ inline-mir = "off"
 # becomes indirect, or `call-sites` where it is used.
 callable-edge-attribution = "erasure-sites"
 
+# Shared local proof markers default to failing closed when one marker would
+# justify multiple panic obligations. Use `warn` while auditing, or `allow` to
+# accept shared proofs.
+ambiguous-obligation-markers = "error"
+
 # Instance budget per reachability query. Traversals that halt at the limit
 # are reported through the `analysis-incomplete` lint instead of passing
 # silently.
@@ -194,6 +199,8 @@ pub struct AnalysisConfig {
     /// dispatch or function pointers.
     #[serde(alias = "dyn-dispatch-vtable-edges")]
     pub callable_edge_attribution: CallableEdgeAttribution,
+    /// Whether one marker block may justify multiple panic obligations.
+    pub ambiguous_obligation_markers: AmbiguousObligationMarkers,
     /// Instance budget per reachability query; halting at the limit is
     /// surfaced through the `analysis-incomplete` lint.
     pub node_limit: usize,
@@ -207,6 +214,7 @@ impl Default for AnalysisConfig {
             overflow_checks: OverflowChecks::Profile,
             inline_mir: MirInlining::Off,
             callable_edge_attribution: CallableEdgeAttribution::ErasureSites,
+            ambiguous_obligation_markers: AmbiguousObligationMarkers::Error,
             node_limit: 4096,
         }
     }
@@ -316,6 +324,21 @@ impl From<CallableEdgeAttribution> for ReachabilityDynDispatchVTableEdges {
             CallableEdgeAttribution::CallSites => Self::CallSites,
         }
     }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum AmbiguousObligationMarkers {
+    /// Treat a proof marker shared by multiple obligations as ambiguous. The
+    /// marker binds to none of them and emits `ambiguous-obligation-marker`
+    /// as an error.
+    #[default]
+    Error,
+    /// Accept shared proof markers, but emit `ambiguous-obligation-marker` as
+    /// a warning so callers can migrate toward `error`.
+    Warn,
+    /// Accept shared proof markers without reporting them.
+    Allow,
 }
 
 #[derive(Debug, Default, Clone, PartialEq, Eq, Deserialize)]
@@ -821,8 +844,9 @@ impl std::error::Error for ConfigError {
 #[cfg(test)]
 mod tests {
     use super::{
-        AnalysisConfig, CallableEdgeAttribution, EXAMPLE_MANIFEST, LintLevel, MirInlining,
-        OverflowChecks, PanicConfig, PathPatterns, ReportRootSet, SafetyConfig, SniffTestConfig,
+        AmbiguousObligationMarkers, AnalysisConfig, CallableEdgeAttribution, EXAMPLE_MANIFEST,
+        LintLevel, MirInlining, OverflowChecks, PanicConfig, PathPatterns, ReportRootSet,
+        SafetyConfig, SniffTestConfig,
     };
 
     fn path_patterns(patterns: &[&str]) -> PathPatterns {
@@ -857,6 +881,7 @@ mod tests {
             overflow-checks = "on"
             inline-mir = "profile"
             callable-edge-attribution = "call-sites"
+            ambiguous-obligation-markers = "warn"
         "#;
 
         let parsed = SniffTestConfig::from_manifest_str(config).expect("manifest should parse");
@@ -868,6 +893,25 @@ mod tests {
         assert_eq!(
             parsed.analysis.callable_edge_attribution,
             CallableEdgeAttribution::CallSites
+        );
+        assert_eq!(
+            parsed.analysis.ambiguous_obligation_markers,
+            AmbiguousObligationMarkers::Warn
+        );
+    }
+
+    #[test]
+    fn parses_ambiguous_obligation_marker_allow_policy() {
+        let config = r#"
+            [analysis]
+            ambiguous-obligation-markers = "allow"
+        "#;
+
+        let parsed = SniffTestConfig::from_manifest_str(config).expect("manifest should parse");
+
+        assert_eq!(
+            parsed.analysis.ambiguous_obligation_markers,
+            AmbiguousObligationMarkers::Allow
         );
     }
 
@@ -892,6 +936,10 @@ mod tests {
         assert_eq!(
             AnalysisConfig::default().callable_edge_attribution,
             CallableEdgeAttribution::ErasureSites
+        );
+        assert_eq!(
+            AnalysisConfig::default().ambiguous_obligation_markers,
+            AmbiguousObligationMarkers::Error
         );
     }
 

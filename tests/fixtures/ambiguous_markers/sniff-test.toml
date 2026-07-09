@@ -1,0 +1,11 @@
+[analysis]
+report-roots = ["ambiguous_markers::shared_block_marker"]
+ambiguous-obligation-markers = "allow"
+
+[panics]
+panic-sink-namespaces = [
+    "core::panicking::**",
+    "std::panicking::**",
+    "core::std::rt::panic_fmt",
+    "std::rt::panic_fmt",
+]

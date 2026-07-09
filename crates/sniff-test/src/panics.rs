@@ -9,27 +9,32 @@
 //! - calls into trusted panic-obligation namespaces are opaque boundaries that
 //!   report obligations only when the reached function has panic docs.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 use reachability::{
     ReachabilityEdge, ReachabilityEdgeId, ReachabilityGraph, ReachabilityNodeKind,
     ReachabilitySnapshot, ReachedEdge, ReachedNode,
 };
-use rustc_hir::def_id::DefId;
+use rustc_hir::def_id::{DefId, LocalDefId};
+use rustc_middle::thir::visit::{self, Visitor};
+use rustc_middle::thir::{Block, Thir};
 use rustc_middle::ty::{self, Ty, TyCtxt};
 use rustc_span::Span;
 
-use crate::config::{PanicBoundaryPolicy, PanicConfig};
+use crate::config::{AmbiguousObligationMarkers, LintLevel, PanicBoundaryPolicy, PanicConfig};
 use crate::contracts::{
     ContractDocSummary, ContractKind, ContractRequirement, contract_doc_summary,
     normalize_requirement_name, satisfied_requirement_names,
 };
 use crate::namespace::canonical_namespace;
-use crate::source_markers::{PanicSatisfaction, span_panic_satisfactions};
+use crate::source_markers::{
+    MarkerBlockKey, PanicMarkerBlock, PanicSatisfaction, span_panic_marker_block,
+};
 
 #[derive(Debug, Clone)]
 pub struct PanicAnalysis {
     pub evidence: Vec<PanicEvidence>,
+    pub ambiguous_markers: Vec<AmbiguousPanicMarker>,
 }
 
 #[derive(Debug, Clone)]
@@ -48,6 +53,13 @@ pub struct PanicEvidence {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PanicTrace {
     pub edge_ids: Vec<ReachabilityEdgeId>,
+}
+
+#[derive(Debug, Clone)]
+pub struct AmbiguousPanicMarker {
+    pub marker_span: Span,
+    pub edge_ids: Vec<ReachabilityEdgeId>,
+    pub level: LintLevel,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -98,19 +110,21 @@ pub fn analyze_panic_evidence<'tcx>(
     graph: &ReachabilityGraph<'tcx>,
     result: &ReachabilitySnapshot<'tcx>,
     config: &PanicConfig,
+    ambiguous_markers: AmbiguousObligationMarkers,
 ) -> PanicAnalysis {
     let view = graph.view(result);
     let root = view.root();
+    let marker_resolution = resolve_panic_markers(tcx, graph, result, config, ambiguous_markers);
     let mut seen_panic_obligations = HashSet::new();
     let evidence = view
         .edges()
         .filter_map(|edge| {
             let edge_id = edge.id();
-            let kind = classify_edge(tcx, edge, config)?;
+            let kind = classify_edge(tcx, edge, config, &marker_resolution)?;
             let trace = PanicTrace {
                 edge_ids: trace_to_edge_ids(edge),
             };
-            if trace_crosses_satisfied_panic_marker(tcx, graph, &trace) {
+            if trace_crosses_satisfied_panic_marker(tcx, graph, &trace, &marker_resolution) {
                 return None;
             }
             if trace_crosses_ignored_namespace(tcx, graph, &trace, config) {
@@ -149,7 +163,10 @@ pub fn analyze_panic_evidence<'tcx>(
         })
         .collect();
 
-    PanicAnalysis { evidence }
+    PanicAnalysis {
+        evidence,
+        ambiguous_markers: marker_resolution.ambiguous_markers,
+    }
 }
 
 /// Returns the evidence trace up to and including `edge_id`.
@@ -360,11 +377,12 @@ fn trace_crosses_satisfied_panic_marker<'tcx>(
     tcx: TyCtxt<'tcx>,
     graph: &ReachabilityGraph<'tcx>,
     trace: &PanicTrace,
+    marker_resolution: &PanicMarkerResolution,
 ) -> bool {
     trace.edge_ids.iter().any(|edge_id| {
         let edge = graph.edge(*edge_id);
         let target = &graph.node(edge.target).kind;
-        edge_panic_marker_suppresses(tcx, edge, target)
+        edge_panic_marker_suppresses(tcx, *edge_id, target, marker_resolution)
     })
 }
 
@@ -391,12 +409,22 @@ fn classify_edge<'tcx>(
     tcx: TyCtxt<'tcx>,
     edge: ReachedEdge<'_, 'tcx>,
     config: &PanicConfig,
+    marker_resolution: &PanicMarkerResolution,
 ) -> Option<PanicEvidenceKind> {
     let target = edge.target().kind();
-    if edge_panic_marker_suppresses(tcx, edge.edge(), target) {
+    if edge_panic_marker_suppresses(tcx, edge.id(), target, marker_resolution) {
         return None;
     }
 
+    classify_edge_without_marker(tcx, edge, config)
+}
+
+fn classify_edge_without_marker<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    edge: ReachedEdge<'_, 'tcx>,
+    config: &PanicConfig,
+) -> Option<PanicEvidenceKind> {
+    let target = edge.target().kind();
     match target {
         ReachabilityNodeKind::CompilerAssert { .. } => Some(PanicEvidenceKind::CompilerAssert),
         // Every edge kind into an instance — direct and tail calls, vtable
@@ -448,14 +476,26 @@ fn classify_edge<'tcx>(
 
 fn edge_panic_marker_suppresses<'tcx>(
     tcx: TyCtxt<'tcx>,
-    edge: &ReachabilityEdge,
+    edge_id: ReachabilityEdgeId,
     target: &ReachabilityNodeKind<'tcx>,
+    marker_resolution: &PanicMarkerResolution,
 ) -> bool {
-    let satisfactions = edge_marker_satisfactions(tcx, edge);
-    if satisfactions.is_empty() {
+    if marker_resolution.ambiguous_edges.contains(&edge_id) {
         return false;
     }
 
+    let Some(candidate) = marker_resolution.candidates.get(&edge_id) else {
+        return false;
+    };
+
+    marker_satisfies_target(tcx, &candidate.satisfactions, target)
+}
+
+fn marker_satisfies_target<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    satisfactions: &[PanicSatisfaction],
+    target: &ReachabilityNodeKind<'tcx>,
+) -> bool {
     let contract_def_id = match target {
         ReachabilityNodeKind::Instance(instance) => instance.def_id(),
         ReachabilityNodeKind::IndirectCall { callee_ty } => {
@@ -472,30 +512,238 @@ fn edge_panic_marker_suppresses<'tcx>(
     requirements.is_empty() || panic_requirements_satisfied(&requirements, &satisfactions)
 }
 
-/// Markers that justify a call edge.
-///
-/// Markers adjacent to the callee segment always apply, so a `// PANIC:`
-/// between the links of a multi-line method chain justifies exactly its link.
-/// Statement-level markers apply in full on single-line statements; on
-/// multi-line chains an unnamed blanket marker above the statement cannot
-/// single out one link, so only named satisfactions carry across lines.
-fn edge_marker_satisfactions(tcx: TyCtxt<'_>, edge: &ReachabilityEdge) -> Vec<PanicSatisfaction> {
-    let statement = span_panic_satisfactions(tcx, edge.span);
-    let Some(callee_span) = edge.callee_span else {
-        return statement;
+#[derive(Debug, Default)]
+struct PanicMarkerResolution {
+    candidates: HashMap<ReachabilityEdgeId, PanicMarkerCandidate>,
+    ambiguous_edges: HashSet<ReachabilityEdgeId>,
+    ambiguous_markers: Vec<AmbiguousPanicMarker>,
+}
+
+#[derive(Debug, Clone)]
+struct PanicMarkerCandidate {
+    key: MarkerBlockKey,
+    marker_span: Span,
+    satisfactions: Vec<PanicSatisfaction>,
+}
+
+impl From<PanicMarkerBlock> for PanicMarkerCandidate {
+    fn from(block: PanicMarkerBlock) -> Self {
+        Self {
+            key: block.key,
+            marker_span: block.span,
+            satisfactions: block.satisfactions,
+        }
+    }
+}
+
+#[derive(Debug)]
+struct MarkerUse {
+    marker_span: Span,
+    edge_ids: HashSet<ReachabilityEdgeId>,
+}
+
+fn resolve_panic_markers<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    graph: &ReachabilityGraph<'tcx>,
+    result: &ReachabilitySnapshot<'tcx>,
+    config: &PanicConfig,
+    policy: AmbiguousObligationMarkers,
+) -> PanicMarkerResolution {
+    let view = graph.view(result);
+    let candidates = view
+        .edges()
+        .filter_map(|edge| {
+            edge_marker_candidate(tcx, graph, edge.edge()).map(|candidate| (edge.id(), candidate))
+        })
+        .collect::<HashMap<_, _>>();
+
+    if policy == AmbiguousObligationMarkers::Allow
+        || panic_obligation_node_kind(tcx, view.root().kind(), config).is_some()
+    {
+        return PanicMarkerResolution {
+            candidates,
+            ..PanicMarkerResolution::default()
+        };
+    }
+    let ambiguous_level = match policy {
+        AmbiguousObligationMarkers::Error => LintLevel::Deny,
+        AmbiguousObligationMarkers::Warn => LintLevel::Warn,
+        AmbiguousObligationMarkers::Allow => unreachable!("allow returned before ambiguity scan"),
     };
-    if spans_start_on_same_line(tcx, edge.span, callee_span) {
-        return statement;
+
+    let mut marker_uses: HashMap<MarkerBlockKey, MarkerUse> = HashMap::new();
+    for edge in view.edges() {
+        if classify_edge_without_marker(tcx, edge, config).is_none() {
+            continue;
+        }
+        let trace = PanicTrace {
+            edge_ids: trace_to_edge_ids(edge),
+        };
+        if trace_crosses_ignored_namespace(tcx, graph, &trace, config) {
+            continue;
+        }
+
+        if let Some((edge_id, candidate)) = trace.edge_ids.iter().find_map(|edge_id| {
+            let Some(candidate) = candidates.get(edge_id) else {
+                return None;
+            };
+            let edge = graph.edge(*edge_id);
+            let target = &graph.node(edge.target).kind;
+            if !marker_satisfies_target(tcx, &candidate.satisfactions, target) {
+                return None;
+            }
+            Some((*edge_id, candidate))
+        }) {
+            marker_uses
+                .entry(candidate.key)
+                .or_insert_with(|| MarkerUse {
+                    marker_span: candidate.marker_span,
+                    edge_ids: HashSet::new(),
+                })
+                .edge_ids
+                .insert(edge_id);
+        }
     }
 
-    span_panic_satisfactions(tcx, callee_span)
-        .into_iter()
-        .chain(
-            statement
+    let mut ambiguous_edges = HashSet::new();
+    let mut ambiguous_markers = marker_uses
+        .into_values()
+        .filter_map(|marker_use| {
+            if marker_use.edge_ids.len() <= 1 {
+                return None;
+            }
+            let mut edge_ids = marker_use.edge_ids.into_iter().collect::<Vec<_>>();
+            edge_ids.sort_by_key(|edge_id| edge_id.index());
+            if policy == AmbiguousObligationMarkers::Error {
+                ambiguous_edges.extend(edge_ids.iter().copied());
+            }
+            Some(AmbiguousPanicMarker {
+                marker_span: marker_use.marker_span,
+                edge_ids,
+                level: ambiguous_level,
+            })
+        })
+        .collect::<Vec<_>>();
+    ambiguous_markers.sort_by_key(|marker| {
+        let span = marker.marker_span.source_callsite();
+        (span.lo().0, span.hi().0)
+    });
+
+    PanicMarkerResolution {
+        candidates,
+        ambiguous_edges,
+        ambiguous_markers,
+    }
+}
+
+/// Marker block that justifies an edge.
+///
+/// A marker directly above a callee segment wins, so a `// PANIC:` between
+/// links of a multi-line method chain justifies only that link. The historical
+/// chain rule is preserved: an unnamed marker above the whole multi-line
+/// statement cannot select one link, although named requirement bullets still
+/// apply. Only when no call-local marker is found do enclosing block markers
+/// become candidates.
+fn edge_marker_candidate(
+    tcx: TyCtxt<'_>,
+    graph: &ReachabilityGraph<'_>,
+    edge: &ReachabilityEdge,
+) -> Option<PanicMarkerCandidate> {
+    let statement = span_panic_marker_block(tcx, edge.span);
+    if let Some(callee_span) = edge.callee_span
+        && !spans_start_on_same_line(tcx, edge.span, callee_span)
+    {
+        if let Some(callee) = span_panic_marker_block(tcx, callee_span) {
+            return Some(callee.into());
+        }
+        if let Some(statement) = statement {
+            let satisfactions = statement
+                .satisfactions
                 .into_iter()
-                .filter(|satisfaction| satisfaction.requirement.is_some()),
-        )
-        .collect()
+                .filter(|satisfaction| satisfaction.requirement.is_some())
+                .collect::<Vec<_>>();
+            return (!satisfactions.is_empty()).then_some(PanicMarkerCandidate {
+                key: statement.key,
+                marker_span: statement.span,
+                satisfactions,
+            });
+        }
+
+        return enclosing_block_marker_candidate(tcx, graph, edge);
+    }
+
+    statement
+        .map(Into::into)
+        .or_else(|| enclosing_block_marker_candidate(tcx, graph, edge))
+}
+
+fn enclosing_block_marker_candidate(
+    tcx: TyCtxt<'_>,
+    graph: &ReachabilityGraph<'_>,
+    edge: &ReachabilityEdge,
+) -> Option<PanicMarkerCandidate> {
+    let owner = match &graph.node(edge.origin).kind {
+        ReachabilityNodeKind::Instance(instance) => instance.def_id().as_local()?,
+        ReachabilityNodeKind::CompilerAssert { .. }
+        | ReachabilityNodeKind::MacroExpansion { .. }
+        | ReachabilityNodeKind::IndirectCall { .. }
+        | ReachabilityNodeKind::DynObjectCast { .. } => return None,
+    };
+
+    enclosing_block_spans(tcx, owner, edge.span)
+        .into_iter()
+        .find_map(|span| span_panic_marker_block(tcx, span).map(Into::into))
+}
+
+fn enclosing_block_spans(tcx: TyCtxt<'_>, owner: LocalDefId, target: Span) -> Vec<Span> {
+    let Ok((thir, root)) = tcx.thir_body(owner) else {
+        return Vec::new();
+    };
+    let thir = thir.borrow();
+    let mut visitor = EnclosingBlockVisitor {
+        thir: &thir,
+        target,
+        block_depth: 0,
+        spans: Vec::new(),
+    };
+    visitor.visit_expr(&thir[root]);
+    visitor.spans.sort_by_key(|span| {
+        let span = span.source_callsite();
+        (span.hi().0.saturating_sub(span.lo().0), span.lo().0)
+    });
+    visitor.spans.dedup_by_key(|span| {
+        let span = span.source_callsite();
+        (span.lo(), span.hi())
+    });
+    visitor.spans
+}
+
+struct EnclosingBlockVisitor<'a, 'tcx> {
+    thir: &'a Thir<'tcx>,
+    target: Span,
+    block_depth: usize,
+    spans: Vec<Span>,
+}
+
+impl<'a, 'tcx> Visitor<'a, 'tcx> for EnclosingBlockVisitor<'a, 'tcx> {
+    fn thir(&self) -> &'a Thir<'tcx> {
+        self.thir
+    }
+
+    fn visit_block(&mut self, block: &'a Block) {
+        if self.block_depth > 0 && span_contains(block.span, self.target) {
+            self.spans.push(block.span);
+        }
+        self.block_depth += 1;
+        visit::walk_block(self, block);
+        self.block_depth -= 1;
+    }
+}
+
+fn span_contains(outer: Span, inner: Span) -> bool {
+    let outer = outer.source_callsite();
+    let inner = inner.source_callsite();
+    !outer.is_dummy() && !inner.is_dummy() && outer.lo() <= inner.lo() && inner.hi() <= outer.hi()
 }
 
 fn spans_start_on_same_line(tcx: TyCtxt<'_>, left: Span, right: Span) -> bool {

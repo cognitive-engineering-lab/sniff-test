@@ -3,7 +3,9 @@ use std::path::Path;
 use crate::cache::CachedFunctionSummary;
 use crate::config::{LintLevel, SafetyLintConfig};
 use crate::namespace::canonical_namespace;
-use crate::panics::{PanicEvidence, PanicEvidenceKind, trace_edges_until, trigger_edge_id};
+use crate::panics::{
+    AmbiguousPanicMarker, PanicEvidence, PanicEvidenceKind, trace_edges_until, trigger_edge_id,
+};
 use crate::report_roots::{MissingReportRoot, MissingRootReason};
 use crate::safety::{
     SafetyAnalysis, SafetyCallee, SafetyFinding, render_safety_requirement, safety_call_label,
@@ -113,6 +115,32 @@ pub(super) fn emit_analysis_incomplete_diagnostic(
         diag.help(
             "raise `node-limit` under `[analysis]` in sniff-test.toml, or shrink the traversal \
              by trusting or ignoring namespaces",
+        );
+    });
+}
+
+pub(super) fn emit_ambiguous_obligation_marker_diagnostic<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    graph: &ReachabilityGraph<'tcx>,
+    marker: &AmbiguousPanicMarker,
+    root_def_id: DefId,
+    level: LintLevel,
+) {
+    let root = canonical_namespace(tcx, root_def_id);
+    let message = format!("function `{root}` has an ambiguous `// PANIC:` marker");
+    emit_lint_diagnostic(tcx, level, marker.marker_span, message, |diag| {
+        for edge_id in &marker.edge_ids {
+            let edge = graph.edge(*edge_id);
+            diag.span_note(
+                edge.span,
+                format!(
+                    "this obligation also resolves to the same marker: {}",
+                    render_edge_without_span(tcx, graph, edge)
+                ),
+            );
+        }
+        diag.help(
+            "move the marker directly above one obligation, split it into separate markers, or set `ambiguous-obligation-markers = \"allow\"` under `[analysis]`",
         );
     });
 }

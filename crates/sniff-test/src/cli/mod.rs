@@ -44,10 +44,10 @@ pub use self::plugin::driver_main;
 use self::cache_encode::{cached_boundary_findings, function_summary};
 use self::diagnostics::{
     CachedDependencyContractDiagnostic, PanicContractDiagnostic, PanicDiagnosticOptions,
-    emit_analysis_incomplete_diagnostic, emit_cached_dependency_contract_diagnostic,
-    emit_cached_dependency_raw_panic_diagnostic, emit_indirect_boundary_diagnostic,
-    emit_missing_report_root_diagnostics, emit_panic_contract_diagnostic,
-    emit_raw_panic_diagnostic, emit_safety_diagnostics,
+    emit_ambiguous_obligation_marker_diagnostic, emit_analysis_incomplete_diagnostic,
+    emit_cached_dependency_contract_diagnostic, emit_cached_dependency_raw_panic_diagnostic,
+    emit_indirect_boundary_diagnostic, emit_missing_report_root_diagnostics,
+    emit_panic_contract_diagnostic, emit_raw_panic_diagnostic, emit_safety_diagnostics,
 };
 use self::plugin::{
     RUSTC_VERSION_ENV, SNIFF_TEST_ARGS_ENV, current_rustc_version, frontend_args, modify_cargo,
@@ -497,10 +497,10 @@ pub(crate) fn analyze_crate(tcx: TyCtxt<'_>, args: &SniffTestArgs, compiler_args
         config.safety.lints,
     );
     write_analysis_cache(args, &analysis.cache);
-    let has_denied_panic_findings = analysis
-        .report
-        .counts
-        .has_denied_findings(config.panics.lints);
+    let has_denied_panic_findings = analysis.report.counts.has_denied_findings(
+        config.panics.lints,
+        config.analysis.ambiguous_obligation_markers,
+    );
     emit_report_and_outcome(
         args,
         &analysis.report,
@@ -791,7 +791,13 @@ fn analyze_root<'tcx>(
         reachability_options(analysis_config, true),
     );
     let graph = reachability.graph();
-    let analysis = analyze_panic_evidence(tcx, graph, &result, config);
+    let analysis = analyze_panic_evidence(
+        tcx,
+        graph,
+        &result,
+        config,
+        analysis_config.ambiguous_obligation_markers,
+    );
     let (mut findings, mut report) = collect_panic_findings(
         tcx,
         graph,
@@ -822,7 +828,13 @@ fn analyze_root<'tcx>(
         reachability_options(analysis_config, false),
     );
     let graph = reachability.graph();
-    let boundary_analysis = analyze_panic_evidence(tcx, graph, &boundary_result, config);
+    let boundary_analysis = analyze_panic_evidence(
+        tcx,
+        graph,
+        &boundary_result,
+        config,
+        analysis_config.ambiguous_obligation_markers,
+    );
     let cached_findings =
         cached_boundary_findings(tcx, graph, &boundary_result, &boundary_analysis, config);
     let analysis_complete = transitive_complete && graph.view(&boundary_result).halt().is_none();
@@ -889,7 +901,13 @@ pub(crate) struct PanicFindingCounts {
     pub(crate) panic_obligations: usize,
     pub(crate) trusted_panic_obligations: usize,
     pub(crate) indirect_call_boundaries: usize,
+    #[serde(skip_serializing_if = "usize_is_zero")]
+    pub(crate) ambiguous_obligation_markers: usize,
     pub(crate) analysis_incomplete: usize,
+}
+
+fn usize_is_zero(value: &usize) -> bool {
+    *value == 0
 }
 
 impl PanicFindingCounts {
@@ -898,6 +916,7 @@ impl PanicFindingCounts {
         self.panic_obligations += other.panic_obligations;
         self.trusted_panic_obligations += other.trusted_panic_obligations;
         self.indirect_call_boundaries += other.indirect_call_boundaries;
+        self.ambiguous_obligation_markers += other.ambiguous_obligation_markers;
         self.analysis_incomplete += other.analysis_incomplete;
     }
 
@@ -909,17 +928,26 @@ impl PanicFindingCounts {
             ReportDetailKind::PanicObligation => self.panic_obligations += 1,
             ReportDetailKind::TrustedPanicObligation => self.trusted_panic_obligations += 1,
             ReportDetailKind::IndirectCallBoundary => self.indirect_call_boundaries += 1,
+            ReportDetailKind::AmbiguousObligationMarker => {
+                self.ambiguous_obligation_markers += 1;
+            }
             ReportDetailKind::AnalysisIncomplete => self.analysis_incomplete += 1,
         }
     }
 
-    fn has_denied_findings(self, lints: crate::config::PanicLintConfig) -> bool {
+    fn has_denied_findings(
+        self,
+        lints: crate::config::PanicLintConfig,
+        ambiguous_markers: crate::config::AmbiguousObligationMarkers,
+    ) -> bool {
         (self.raw_panic_paths > 0 && lints.undocumented_panic_path == LintLevel::Deny)
             || (self.panic_obligations > 0 && lints.documented_panic_contract == LintLevel::Deny)
             || (self.trusted_panic_obligations > 0
                 && lints.trusted_panic_contract == LintLevel::Deny)
             || (self.indirect_call_boundaries > 0
                 && lints.indirect_call_boundary == LintLevel::Deny)
+            || (self.ambiguous_obligation_markers > 0
+                && ambiguous_markers == crate::config::AmbiguousObligationMarkers::Error)
             || (self.analysis_incomplete > 0 && lints.analysis_incomplete == LintLevel::Deny)
     }
 }
@@ -1023,9 +1051,41 @@ fn collect_panic_findings<'tcx>(
         }
     }
 
+    emit_ambiguous_obligation_marker_findings(
+        tcx,
+        graph,
+        analysis,
+        &collection,
+        &mut counts,
+        &mut report,
+    );
+
     emit_cached_dependency_findings(tcx, graph, view, &collection, &mut counts, &mut report);
 
     (counts, report)
+}
+
+fn emit_ambiguous_obligation_marker_findings<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    graph: &ReachabilityGraph<'tcx>,
+    analysis: &PanicAnalysis,
+    collection: &PanicFindingCollection<'_>,
+    counts: &mut PanicFindingCounts,
+    report: &mut PanicRootReport,
+) {
+    for marker in &analysis.ambiguous_markers {
+        counts.ambiguous_obligation_markers += 1;
+        report.push_ambiguous_obligation_marker(tcx, graph, marker, marker.level);
+        if collection.diagnostics.emit {
+            emit_ambiguous_obligation_marker_diagnostic(
+                tcx,
+                graph,
+                marker,
+                collection.root_def_id,
+                marker.level,
+            );
+        }
+    }
 }
 
 fn emit_raw_panic_finding<'tcx>(
