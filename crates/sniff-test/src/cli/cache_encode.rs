@@ -24,6 +24,7 @@ pub(super) fn function_summary<'tcx>(
     tcx: TyCtxt<'tcx>,
     def_id: DefId,
     is_generic: bool,
+    analysis_complete: bool,
     counts: PanicFindingCounts,
     graph: Option<(&ReachabilityGraph<'tcx>, &ReachabilitySnapshot<'tcx>)>,
     findings: Vec<CachedFinding>,
@@ -32,6 +33,7 @@ pub(super) fn function_summary<'tcx>(
         def_path_hash: stable_def_path_hash(tcx, def_id),
         path: canonical_namespace(tcx, def_id),
         is_generic,
+        analysis_complete,
         has_panic_docs: crate::panics::has_panic_docs(tcx, def_id),
         root_span: cached_source_span(tcx, tcx.def_span(def_id)),
         raw_panic_paths: counts.raw_panic_paths,
@@ -75,6 +77,9 @@ fn cached_panic_finding<'tcx>(
                     PanicEvidenceKind::CompilerAssert => CachedFindingKind::CompilerAssert,
                     PanicEvidenceKind::PanicObligation { .. } => CachedFindingKind::PanicObligation,
                     PanicEvidenceKind::PanicSink { .. } => CachedFindingKind::PanicInvocation,
+                    PanicEvidenceKind::IndirectBoundary { .. } => {
+                        CachedFindingKind::IndirectCallBoundary
+                    }
                 },
                 span: render_span(tcx, edge.span),
                 source_span: cached_source_span(tcx, edge.span),
@@ -165,7 +170,9 @@ fn cached_crate_boundary_findings<'tcx>(
 ) -> Vec<CachedFinding> {
     view.edges()
         .filter_map(|edge| {
-            let source = edge.source().instance()?.def_id();
+            // The origin skips macro-expansion bridge nodes, so calls made
+            // through macros still attribute to the calling instance.
+            let source = edge.origin().instance()?.def_id();
             let target = edge.target().instance()?.def_id();
             if !source.is_local() || target.is_local() {
                 return None;
@@ -293,6 +300,7 @@ fn cached_finding_span_label(kind: &PanicEvidenceKind) -> &'static str {
         PanicEvidenceKind::CompilerAssert => "compiler assertion",
         PanicEvidenceKind::PanicObligation { .. } => "documented panic contract",
         PanicEvidenceKind::PanicSink { .. } => "panic sink",
+        PanicEvidenceKind::IndirectBoundary { .. } => "indirect call boundary",
     }
 }
 

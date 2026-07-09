@@ -1,15 +1,18 @@
-//! Safety documentation and call-site justification analysis.
+//! Safety documentation and justification analysis.
 //!
 //! This pass checks that public unsafe functions document a `# Safety`
-//! contract and that safety-obligation call sites have nearby `// SAFETY:`
-//! justifications satisfying any named requirements listed by the callee.
+//! contract and that unsafe operations — calls and non-call operations alike —
+//! have nearby `// SAFETY:` justifications satisfying any named requirements
+//! listed by the callee. Operation detection lives in the [`thir`] submodule,
+//! modeled on rustc's own unsafety checker.
+
+mod thir;
 
 use std::collections::HashSet;
 
 use rustc_hir::def::DefKind;
 use rustc_hir::def_id::{DefId, LocalDefId};
-use rustc_hir::{BlockCheckMode, Expr, ExprKind, UnsafeSource, intravisit};
-use rustc_middle::ty::{self, TyCtxt, TypeckResults};
+use rustc_middle::ty::TyCtxt;
 use rustc_span::Span;
 
 use crate::config::{LintLevel, SafetyConfig, SafetyLintConfig};
@@ -18,7 +21,7 @@ use crate::contracts::{
     normalize_requirement_name,
 };
 use crate::namespace::canonical_namespace;
-use crate::source_markers::{SafetySatisfaction, span_safety_satisfactions};
+use crate::source_markers::SafetySatisfaction;
 
 #[derive(Debug, Default)]
 pub struct SafetyAnalysis {
@@ -44,6 +47,11 @@ pub enum SafetyFinding {
         span: Span,
         missing_requirements: Vec<SafetyRequirement>,
     },
+    OpMissingJustification {
+        caller: DefId,
+        op: SafetyOpKind,
+        span: Span,
+    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -51,8 +59,49 @@ pub enum SafetyFindingKind {
     MissingSafetyDocs,
     UnsafeCallMissingJustification,
     UnsafeCallMissingRequirements,
+    UnsafeOpMissingJustification,
     SafetyObligationMissingJustification,
     SafetyObligationMissingRequirements,
+}
+
+/// Non-call operations that require `unsafe`, mirroring the non-call variants
+/// of rustc's `UnsafeOpKind` (rustc_mir_build/src/check_unsafety.rs).
+///
+/// The variant set is pinned to the toolchain in rust-toolchain.toml; diff it
+/// against rustc's enum on toolchain bumps. The `unsafe_ops*` fixtures cover
+/// one operation per variant as a behavioral canary.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SafetyOpKind {
+    DerefRawPointer,
+    UseOfMutableStatic,
+    UseOfExternStatic,
+    AccessToUnionField,
+    UseOfUnsafeField,
+    InitializingLayoutConstrainedType,
+    InitializingTypeWithUnsafeField,
+    MutationOfLayoutConstrainedField,
+    BorrowOfLayoutConstrainedField,
+    InlineAssembly,
+    UnsafeBinderCast,
+}
+
+#[must_use]
+pub fn safety_op_label(op: SafetyOpKind) -> &'static str {
+    match op {
+        SafetyOpKind::DerefRawPointer => "raw pointer dereference",
+        SafetyOpKind::UseOfMutableStatic => "mutable static access",
+        SafetyOpKind::UseOfExternStatic => "extern static access",
+        SafetyOpKind::AccessToUnionField => "union field access",
+        SafetyOpKind::UseOfUnsafeField => "unsafe field access",
+        SafetyOpKind::InitializingLayoutConstrainedType => {
+            "layout-constrained type initialization"
+        }
+        SafetyOpKind::InitializingTypeWithUnsafeField => "unsafe field initialization",
+        SafetyOpKind::MutationOfLayoutConstrainedField => "layout-constrained field mutation",
+        SafetyOpKind::BorrowOfLayoutConstrainedField => "layout-constrained field borrow",
+        SafetyOpKind::InlineAssembly => "inline assembly",
+        SafetyOpKind::UnsafeBinderCast => "unsafe binder cast",
+    }
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -119,6 +168,7 @@ impl SafetyFinding {
                     SafetyFindingKind::SafetyObligationMissingRequirements
                 }
             },
+            Self::OpMissingJustification { .. } => SafetyFindingKind::UnsafeOpMissingJustification,
         }
     }
 }
@@ -130,6 +180,7 @@ impl SafetyFindingKind {
             Self::MissingSafetyDocs => lints.missing_safety_docs,
             Self::UnsafeCallMissingJustification => lints.unsafe_call_missing_justification,
             Self::UnsafeCallMissingRequirements => lints.unsafe_call_missing_requirements,
+            Self::UnsafeOpMissingJustification => lints.unsafe_op_missing_justification,
             Self::SafetyObligationMissingJustification => {
                 lints.safety_obligation_missing_justification
             }
@@ -148,12 +199,13 @@ pub fn analyze_safety(tcx: TyCtxt<'_>, config: &SafetyConfig) -> SafetyAnalysis 
         if matches!(tcx.def_kind(owner), DefKind::Fn | DefKind::AssocFn) {
             collect_missing_safety_docs(tcx, owner, config, &mut analysis);
         }
-        if matches!(
-            tcx.def_kind(owner),
-            DefKind::Fn | DefKind::AssocFn | DefKind::Closure
-        ) {
-            collect_safety_call_findings(tcx, owner, config, &mut analysis);
+        // Closures and inline consts are visited with their enclosing body so
+        // justification scopes flow into them lexically; every other body
+        // owner — including const and static initializers — starts here.
+        if tcx.is_typeck_child(owner.to_def_id()) || config.ignores_def(tcx, owner.to_def_id()) {
+            continue;
         }
+        thir::collect_body_findings(tcx, owner, config, &mut analysis);
     }
 
     analysis
@@ -204,163 +256,6 @@ fn collect_missing_safety_docs(
             def_id,
             span: tcx.def_span(def_id),
         });
-    }
-}
-
-fn collect_safety_call_findings(
-    tcx: TyCtxt<'_>,
-    owner: LocalDefId,
-    config: &SafetyConfig,
-    analysis: &mut SafetyAnalysis,
-) {
-    if config.ignores_def(tcx, owner.to_def_id()) {
-        return;
-    }
-
-    let Some(body) = tcx.hir_maybe_body_owned_by(owner) else {
-        return;
-    };
-    let typeck = tcx.typeck(owner);
-    let mut visitor = SafetyCallVisitor {
-        tcx,
-        owner,
-        config,
-        typeck,
-        safety_scopes: Vec::new(),
-        findings: Vec::new(),
-    };
-
-    intravisit::Visitor::visit_body(&mut visitor, body);
-    analysis.findings.extend(visitor.findings);
-}
-
-struct SafetyCallVisitor<'config, 'tcx> {
-    tcx: TyCtxt<'tcx>,
-    owner: LocalDefId,
-    config: &'config SafetyConfig,
-    typeck: &'tcx TypeckResults<'tcx>,
-    safety_scopes: Vec<Vec<SafetySatisfaction>>,
-    findings: Vec<SafetyFinding>,
-}
-
-impl<'tcx> SafetyCallVisitor<'_, 'tcx> {
-    fn visit_user_unsafe_block(
-        &mut self,
-        expr: &'tcx Expr<'tcx>,
-        block: &'tcx rustc_hir::Block<'tcx>,
-    ) {
-        let satisfactions = span_safety_satisfactions(self.tcx, expr.span);
-        self.safety_scopes.push(satisfactions);
-        intravisit::walk_block(self, block);
-        self.safety_scopes
-            .pop()
-            .expect("unsafe block scope should be present");
-    }
-
-    fn inspect_safety_call(&mut self, expr: &'tcx Expr<'tcx>) {
-        let Some(call) = self.safety_call(expr) else {
-            return;
-        };
-        if self.ignores_callee(call.callee) {
-            return;
-        }
-        let satisfactions = self.applicable_satisfactions(expr.span);
-
-        if let SafetyCallee::Def(def_id) = call.callee {
-            let requirements = safety_requirements(self.tcx, def_id);
-            if !requirements.is_empty() {
-                let missing = missing_safety_requirements(&requirements, &satisfactions);
-                if !missing.is_empty() {
-                    self.findings.push(SafetyFinding::CallMissingRequirements {
-                        caller: self.owner.to_def_id(),
-                        callee: call.callee,
-                        call_kind: call.kind,
-                        span: expr.span,
-                        missing_requirements: missing,
-                    });
-                }
-                return;
-            }
-        }
-
-        if satisfactions.is_empty() {
-            self.findings.push(SafetyFinding::CallMissingJustification {
-                caller: self.owner.to_def_id(),
-                callee: call.callee,
-                call_kind: call.kind,
-                span: expr.span,
-            });
-        }
-    }
-
-    fn ignores_callee(&self, callee: SafetyCallee) -> bool {
-        matches!(callee, SafetyCallee::Def(def_id) if self.config.ignores_def(self.tcx, def_id))
-    }
-
-    fn safety_call(&self, expr: &'tcx Expr<'tcx>) -> Option<SafetyCall> {
-        match expr.kind {
-            ExprKind::Call(callee, _) => self.safety_call_from_call_target(callee),
-            ExprKind::MethodCall(..) => self
-                .typeck
-                .type_dependent_def_id(expr.hir_id)
-                .and_then(|def_id| self.safety_call_from_def(def_id)),
-            _ => None,
-        }
-    }
-
-    fn safety_call_from_call_target(&self, callee: &'tcx Expr<'tcx>) -> Option<SafetyCall> {
-        match self.typeck.expr_ty_adjusted(callee).kind() {
-            ty::FnDef(def_id, _) => self.safety_call_from_def(*def_id),
-            ty::FnPtr(_, header) if header.safety().is_unsafe() => Some(SafetyCall {
-                callee: SafetyCallee::FunctionPointer,
-                kind: SafetyCallKind::Unsafe,
-            }),
-            _ => None,
-        }
-    }
-
-    fn safety_call_from_def(&self, def_id: DefId) -> Option<SafetyCall> {
-        if fn_def_is_unsafe(self.tcx, def_id) {
-            Some(SafetyCall {
-                callee: SafetyCallee::Def(def_id),
-                kind: SafetyCallKind::Unsafe,
-            })
-        } else if self.config.marks_safety_obligation_def(self.tcx, def_id) {
-            Some(SafetyCall {
-                callee: SafetyCallee::Def(def_id),
-                kind: SafetyCallKind::ConfiguredObligation,
-            })
-        } else {
-            None
-        }
-    }
-
-    fn applicable_satisfactions(&self, span: Span) -> Vec<SafetySatisfaction> {
-        self.safety_scopes
-            .iter()
-            .flat_map(|scope| scope.iter().cloned())
-            .chain(span_safety_satisfactions(self.tcx, span))
-            .collect()
-    }
-}
-
-impl<'tcx> intravisit::Visitor<'tcx> for SafetyCallVisitor<'_, 'tcx> {
-    fn visit_expr(&mut self, expr: &'tcx Expr<'tcx>) -> Self::Result {
-        match expr.kind {
-            ExprKind::Closure(_) => {}
-            ExprKind::Block(block, _)
-                if matches!(
-                    block.rules,
-                    BlockCheckMode::UnsafeBlock(UnsafeSource::UserProvided)
-                ) =>
-            {
-                self.visit_user_unsafe_block(expr, block);
-            }
-            _ => {
-                self.inspect_safety_call(expr);
-                intravisit::walk_expr(self, expr);
-            }
-        }
     }
 }
 

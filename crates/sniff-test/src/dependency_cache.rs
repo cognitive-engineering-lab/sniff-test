@@ -93,7 +93,11 @@ impl DependencyAnalysisCache {
                 }
 
                 for function in analysis.functions.values() {
-                    if function.is_panic_reachable() && !config.ignores_namespace(&function.path) {
+                    // Incomplete summaries stay loaded even with clean counts:
+                    // their evidence under-approximates.
+                    if (function.is_panic_reachable() || !function.analysis_complete)
+                        && !config.ignores_namespace(&function.path)
+                    {
                         functions.insert(
                             FunctionCacheKey {
                                 artifact_id: analysis_artifact_id.clone(),
@@ -258,6 +262,7 @@ mod tests {
             def_path_hash: String::from("00000000000000010000000000000002"),
             path: path.to_owned(),
             is_generic: false,
+            analysis_complete: true,
             has_panic_docs: false,
             root_span: None,
             raw_panic_paths: 1,

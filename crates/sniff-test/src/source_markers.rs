@@ -84,6 +84,11 @@ pub fn span_safety_satisfactions(tcx: TyCtxt<'_>, span: Span) -> Vec<SafetySatis
 
 fn span_satisfactions(tcx: TyCtxt<'_>, span: Span, kind: MarkerKind) -> Vec<MarkerSatisfaction> {
     let span = span.source_callsite();
+    // A dummy span would resolve to byte 0 — line 1 of an arbitrary file —
+    // where a stray marker could suppress every dummy-span edge crate-wide.
+    if span.is_dummy() {
+        return Vec::new();
+    }
     let location = tcx.sess.source_map().lookup_char_pos(span.lo());
     let line_index = location.line.saturating_sub(1);
 

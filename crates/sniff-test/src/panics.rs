@@ -12,11 +12,12 @@
 use std::collections::HashSet;
 
 use reachability::{
-    ReachabilityEdge, ReachabilityEdgeId, ReachabilityEdgeKind, ReachabilityGraph,
-    ReachabilityNodeKind, ReachabilitySnapshot, ReachedEdge, ReachedNode,
+    ReachabilityEdge, ReachabilityEdgeId, ReachabilityGraph, ReachabilityNodeKind,
+    ReachabilitySnapshot, ReachedEdge, ReachedNode,
 };
 use rustc_hir::def_id::DefId;
-use rustc_middle::ty::TyCtxt;
+use rustc_middle::ty::{self, Ty, TyCtxt};
+use rustc_span::Span;
 
 use crate::config::{PanicBoundaryPolicy, PanicConfig};
 use crate::contracts::{
@@ -73,6 +74,10 @@ pub enum PanicEvidenceKind {
     PanicObligation { def_id: DefId },
     /// Direct call to a configured panic sink.
     PanicSink { def_id: DefId },
+    /// Call whose target cannot be resolved or verified: an undocumented
+    /// trait method behind a generic bound (`def_id` is the trait method), or
+    /// an opaque callable such as a function pointer (`def_id` is `None`).
+    IndirectBoundary { def_id: Option<DefId> },
 }
 
 /// Propagation decision for one panic evidence path.
@@ -123,7 +128,9 @@ pub fn analyze_panic_evidence<'tcx>(
                         path_decision
                     }
                 }
-                PanicEvidenceKind::CompilerAssert | PanicEvidenceKind::PanicSink { .. } => {
+                PanicEvidenceKind::CompilerAssert
+                | PanicEvidenceKind::PanicSink { .. }
+                | PanicEvidenceKind::IndirectBoundary { .. } => {
                     classify_panic_path(tcx, graph, root, &trace, config)
                 }
             };
@@ -209,6 +216,27 @@ pub fn describe_panic_evidence_kind(tcx: TyCtxt<'_>, kind: &PanicEvidenceKind) -
         PanicEvidenceKind::PanicSink { def_id } => {
             format!("panic sink {}", canonical_namespace(tcx, *def_id))
         }
+        PanicEvidenceKind::IndirectBoundary {
+            def_id: Some(def_id),
+        } => {
+            format!(
+                "indirect call boundary {}",
+                canonical_namespace(tcx, *def_id)
+            )
+        }
+        PanicEvidenceKind::IndirectBoundary { def_id: None } => {
+            String::from("indirect call boundary")
+        }
+    }
+}
+
+/// Contract definition embedded in an indirect-call target: the trait method
+/// for unresolved trait-assoc calls; `None` for opaque callables such as
+/// function pointers.
+fn indirect_callee_def_id(callee_ty: Ty<'_>) -> Option<DefId> {
+    match callee_ty.kind() {
+        ty::FnDef(def_id, _) => Some(*def_id),
+        _ => None,
     }
 }
 
@@ -245,19 +273,18 @@ fn panic_obligation_node_kind<'tcx>(
     node: &ReachabilityNodeKind<'tcx>,
     config: &PanicConfig,
 ) -> Option<DefId> {
-    match node {
-        ReachabilityNodeKind::Instance(instance) => {
-            let def_id = instance.def_id();
-            (!config.ignores_def(tcx, def_id)
-                && config.panic_boundary_policy(tcx, def_id) != PanicBoundaryPolicy::PanicSink
-                && has_panic_docs(tcx, def_id))
-            .then_some(def_id)
-        }
+    let def_id = match node {
+        ReachabilityNodeKind::Instance(instance) => instance.def_id(),
+        // The trait method's docs stand in for whichever impl runs.
+        ReachabilityNodeKind::IndirectCall { callee_ty } => indirect_callee_def_id(*callee_ty)?,
         ReachabilityNodeKind::CompilerAssert { .. }
         | ReachabilityNodeKind::MacroExpansion { .. }
-        | ReachabilityNodeKind::IndirectCall { .. }
-        | ReachabilityNodeKind::DynObjectCast { .. } => None,
-    }
+        | ReachabilityNodeKind::DynObjectCast { .. } => return None,
+    };
+    (!config.ignores_def(tcx, def_id)
+        && config.panic_boundary_policy(tcx, def_id) != PanicBoundaryPolicy::PanicSink
+        && has_panic_docs(tcx, def_id))
+    .then_some(def_id)
 }
 
 #[must_use]
@@ -352,9 +379,13 @@ fn node_kind_is_ignored_namespace<'tcx>(
             config.ignores_def(tcx, def_id)
         }
         ReachabilityNodeKind::MacroExpansion { def_id } => config.ignores_def(tcx, *def_id),
-        ReachabilityNodeKind::CompilerAssert { .. }
-        | ReachabilityNodeKind::IndirectCall { .. }
-        | ReachabilityNodeKind::DynObjectCast { .. } => false,
+        ReachabilityNodeKind::IndirectCall { callee_ty } => {
+            indirect_callee_def_id(*callee_ty)
+                .is_some_and(|def_id| config.ignores_def(tcx, def_id))
+        }
+        ReachabilityNodeKind::CompilerAssert { .. } | ReachabilityNodeKind::DynObjectCast { .. } => {
+            false
+        }
     }
 }
 
@@ -370,12 +401,11 @@ fn classify_edge<'tcx>(
 
     match target {
         ReachabilityNodeKind::CompilerAssert { .. } => Some(PanicEvidenceKind::CompilerAssert),
-        ReachabilityNodeKind::Instance(instance)
-            if matches!(
-                edge.kind(),
-                ReachabilityEdgeKind::DirectCall | ReachabilityEdgeKind::TailCall
-            ) =>
-        {
+        // Every edge kind into an instance — direct and tail calls, vtable
+        // entries, closure definitions, pointer reifications, const bodies —
+        // carries the same obligation a direct call does; macro-expansion
+        // edges never target instances.
+        ReachabilityNodeKind::Instance(instance) => {
             let def_id = instance.def_id();
             if config.ignores_def(tcx, def_id) {
                 return None;
@@ -389,10 +419,33 @@ fn classify_edge<'tcx>(
                 }
             }
         }
-        ReachabilityNodeKind::Instance(_)
-        | ReachabilityNodeKind::MacroExpansion { .. }
-        | ReachabilityNodeKind::IndirectCall { .. }
-        | ReachabilityNodeKind::DynObjectCast { .. } => None,
+        ReachabilityNodeKind::IndirectCall { callee_ty } => {
+            let Some(def_id) = indirect_callee_def_id(*callee_ty) else {
+                // Opaque callable: nothing to descend into or consult.
+                return Some(PanicEvidenceKind::IndirectBoundary { def_id: None });
+            };
+            if config.ignores_def(tcx, def_id) {
+                return None;
+            }
+
+            match config.panic_boundary_policy(tcx, def_id) {
+                PanicBoundaryPolicy::PanicSink => Some(PanicEvidenceKind::PanicSink { def_id }),
+                PanicBoundaryPolicy::TrustedPanicObligation => has_panic_docs(tcx, def_id)
+                    .then_some(PanicEvidenceKind::PanicObligation { def_id }),
+                PanicBoundaryPolicy::Normal => Some(if has_panic_docs(tcx, def_id) {
+                    PanicEvidenceKind::PanicObligation { def_id }
+                } else {
+                    // The trait method is undocumented and the running impl is
+                    // unknowable: surface the boundary instead of staying silent.
+                    PanicEvidenceKind::IndirectBoundary {
+                        def_id: Some(def_id),
+                    }
+                }),
+            }
+        }
+        ReachabilityNodeKind::MacroExpansion { .. } | ReachabilityNodeKind::DynObjectCast { .. } => {
+            None
+        }
     }
 }
 
@@ -401,21 +454,61 @@ fn edge_panic_marker_suppresses<'tcx>(
     edge: &ReachabilityEdge,
     target: &ReachabilityNodeKind<'tcx>,
 ) -> bool {
-    let satisfactions = span_panic_satisfactions(tcx, edge.span);
+    let satisfactions = edge_marker_satisfactions(tcx, edge);
     if satisfactions.is_empty() {
         return false;
     }
 
-    match target {
-        ReachabilityNodeKind::Instance(instance) => {
-            let requirements = panic_requirements(tcx, instance.def_id());
-            requirements.is_empty() || panic_requirements_satisfied(&requirements, &satisfactions)
+    let contract_def_id = match target {
+        ReachabilityNodeKind::Instance(instance) => instance.def_id(),
+        ReachabilityNodeKind::IndirectCall { callee_ty } => {
+            match indirect_callee_def_id(*callee_ty) {
+                Some(def_id) => def_id,
+                None => return true,
+            }
         }
         ReachabilityNodeKind::MacroExpansion { .. }
         | ReachabilityNodeKind::CompilerAssert { .. }
-        | ReachabilityNodeKind::IndirectCall { .. }
-        | ReachabilityNodeKind::DynObjectCast { .. } => true,
+        | ReachabilityNodeKind::DynObjectCast { .. } => return true,
+    };
+    let requirements = panic_requirements(tcx, contract_def_id);
+    requirements.is_empty() || panic_requirements_satisfied(&requirements, &satisfactions)
+}
+
+/// Markers that justify a call edge.
+///
+/// Markers adjacent to the callee segment always apply, so a `// PANIC:`
+/// between the links of a multi-line method chain justifies exactly its link.
+/// Statement-level markers apply in full on single-line statements; on
+/// multi-line chains an unnamed blanket marker above the statement cannot
+/// single out one link, so only named satisfactions carry across lines.
+fn edge_marker_satisfactions(tcx: TyCtxt<'_>, edge: &ReachabilityEdge) -> Vec<PanicSatisfaction> {
+    let statement = span_panic_satisfactions(tcx, edge.span);
+    let Some(callee_span) = edge.callee_span else {
+        return statement;
+    };
+    if spans_start_on_same_line(tcx, edge.span, callee_span) {
+        return statement;
     }
+
+    span_panic_satisfactions(tcx, callee_span)
+        .into_iter()
+        .chain(
+            statement
+                .into_iter()
+                .filter(|satisfaction| satisfaction.requirement.is_some()),
+        )
+        .collect()
+}
+
+fn spans_start_on_same_line(tcx: TyCtxt<'_>, left: Span, right: Span) -> bool {
+    let left = left.source_callsite();
+    let right = right.source_callsite();
+    if left.is_dummy() || right.is_dummy() {
+        return true;
+    }
+    let source_map = tcx.sess.source_map();
+    source_map.lookup_char_pos(left.lo()).line == source_map.lookup_char_pos(right.lo()).line
 }
 
 fn panic_requirements_satisfied(

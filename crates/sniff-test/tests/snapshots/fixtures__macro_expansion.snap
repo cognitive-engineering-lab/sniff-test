@@ -19,6 +19,8 @@ expression: messages
     },
     "concrete-roots": 3,
     "counts": {
+      "analysis-incomplete": 0,
+      "indirect-call-boundaries": 0,
       "panic-obligations": 0,
       "raw-panic-paths": 3,
       "trusted-panic-obligations": 0
@@ -36,6 +38,8 @@ expression: messages
     "roots": [
       {
         "counts": {
+          "analysis-incomplete": 0,
+          "indirect-call-boundaries": 0,
           "panic-obligations": 0,
           "raw-panic-paths": 1,
           "trusted-panic-obligations": 0
@@ -61,6 +65,8 @@ expression: messages
       },
       {
         "counts": {
+          "analysis-incomplete": 0,
+          "indirect-call-boundaries": 0,
           "panic-obligations": 0,
           "raw-panic-paths": 1,
           "trusted-panic-obligations": 0
@@ -87,6 +93,8 @@ expression: messages
       },
       {
         "counts": {
+          "analysis-incomplete": 0,
+          "indirect-call-boundaries": 0,
           "panic-obligations": 0,
           "raw-panic-paths": 1,
           "trusted-panic-obligations": 0

@@ -95,6 +95,11 @@ pub struct CachedFunctionSummary {
     /// Display form as rendered by the defining crate's session.
     pub path: String,
     pub is_generic: bool,
+    /// False when a reachability query halted at the node limit; the counts
+    /// below then under-approximate and consumers must not treat this summary
+    /// as exhaustive.
+    #[serde(default = "default_analysis_complete")]
+    pub analysis_complete: bool,
     pub has_panic_docs: bool,
     #[serde(default)]
     pub root_span: Option<CachedSourceSpan>,
@@ -103,6 +108,10 @@ pub struct CachedFunctionSummary {
     pub trusted_panic_obligations: usize,
     pub graph: Option<CachedReachabilityGraph>,
     pub findings: Vec<CachedFinding>,
+}
+
+fn default_analysis_complete() -> bool {
+    true
 }
 
 impl CachedFunctionSummary {
@@ -166,6 +175,7 @@ pub enum CachedFindingKind {
     PanicObligation,
     TrustedPanicObligation,
     CrateBoundary,
+    IndirectCallBoundary,
 }
 
 /// Cached target of a finding.

@@ -1,0 +1,94 @@
+---
+source: crates/sniff-test/tests/fixtures.rs
+expression: messages
+---
+[
+  {
+    "artifact": {
+      "artifact-id": "[ARTIFACT_ID]",
+      "crate-name": "chain_markers",
+      "crate-types": [
+        "lib"
+      ],
+      "extra-filename": "[EXTRA_FILENAME]",
+      "manifest-path": "[FIXTURE]/Cargo.toml",
+      "metadata": "[METADATA]",
+      "package-name": "chain-markers",
+      "package-version": "0.1.0",
+      "target": null
+    },
+    "concrete-roots": 2,
+    "counts": {
+      "analysis-incomplete": 0,
+      "indirect-call-boundaries": 0,
+      "panic-obligations": 2,
+      "raw-panic-paths": 0,
+      "trusted-panic-obligations": 0
+    },
+    "dependencies": [],
+    "dependency-cache": {
+      "failed": 0,
+      "hits": 0,
+      "total": 0
+    },
+    "format-version": 1,
+    "generic-roots": 0,
+    "missing-roots": [],
+    "reason": "sniff-test-artifact",
+    "roots": [
+      {
+        "counts": {
+          "analysis-incomplete": 0,
+          "indirect-call-boundaries": 0,
+          "panic-obligations": 1,
+          "raw-panic-paths": 0,
+          "trusted-panic-obligations": 0
+        },
+        "findings": [
+          {
+            "edge": "report root documents panic behavior",
+            "kind": "panic-obligation",
+            "level": "warn",
+            "reason": "chain_markers::Widget::risky has a documented # Panics contract",
+            "span": "src/lib.rs:7:5: 7:32",
+            "target": "chain_markers::Widget::risky",
+            "trace": []
+          }
+        ],
+        "has-panic-docs": true,
+        "root": "chain_markers::Widget::risky",
+        "root-declaration": "src/lib.rs:7:5",
+        "root-kind": "concrete"
+      },
+      {
+        "counts": {
+          "analysis-incomplete": 0,
+          "indirect-call-boundaries": 0,
+          "panic-obligations": 1,
+          "raw-panic-paths": 0,
+          "trusted-panic-obligations": 0
+        },
+        "findings": [
+          {
+            "edge": "chain_markers::blanket_marker_above_chain --direct-call-> chain_markers::Widget::risky",
+            "kind": "panic-obligation",
+            "level": "warn",
+            "reason": "chain_markers::Widget::risky has a documented # Panics contract",
+            "span": "src/lib.rs:26:5: 28:17",
+            "target": "chain_markers::Widget::risky",
+            "trace": [
+              "src/lib.rs:26:5: 28:17: chain_markers::blanket_marker_above_chain --direct-call-> chain_markers::Widget::risky"
+            ]
+          }
+        ],
+        "has-panic-docs": false,
+        "root": "chain_markers::blanket_marker_above_chain",
+        "root-declaration": "src/lib.rs:24:1",
+        "root-kind": "concrete"
+      }
+    ],
+    "rustc-version": "[RUSTC_VERSION]",
+    "scope": "workspace",
+    "tool-version": "0.1.0"
+  }
+]

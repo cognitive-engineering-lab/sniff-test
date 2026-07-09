@@ -176,6 +176,32 @@ fixture_cases! {
         std_trait_impl_glob => Case::cargo("trait-impl methods match trusted globs");
         driver_std_trait_impl_glob => Case::direct("trait-impl methods match trusted globs");
     }
+    "unsafe_ops" => {
+        unsafe_ops => Case::cargo("non-call unsafe operations need justification");
+        driver_unsafe_ops => Case::direct("non-call unsafe operations need justification");
+    }
+    "unsafe_closure_inherit" => {
+        unsafe_closure_inherit => Case::cargo("closures inherit unsafe block justifications");
+        driver_unsafe_closure_inherit =>
+            Case::direct("closures inherit unsafe block justifications");
+    }
+    "unsafe_const_init" => {
+        unsafe_const_init => Case::cargo("const and static initializers are analyzed");
+        driver_unsafe_const_init => Case::direct("const and static initializers are analyzed");
+    }
+    "node_limit" => {
+        node_limit => Case::cargo("halted traversals fail loudly").exit_code(1);
+        driver_node_limit => Case::direct("halted traversals fail loudly");
+    }
+    "indirect_calls" => {
+        indirect_calls => Case::cargo("indirect calls surface obligations or boundaries");
+        driver_indirect_calls =>
+            Case::direct("indirect calls surface obligations or boundaries");
+    }
+    "chain_markers" => {
+        chain_markers => Case::cargo("markers anchor to chain links");
+        driver_chain_markers => Case::direct("markers anchor to chain links");
+    }
     "safe_markers" => {
         safe_markers => Case::cargo("panic marker satisfaction").exit_code(1);
         driver_safe_markers => Case::direct("panic marker satisfaction");

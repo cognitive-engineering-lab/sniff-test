@@ -42,7 +42,8 @@ pub use self::plugin::driver_main;
 use self::cache_encode::{cached_boundary_findings, function_summary};
 use self::diagnostics::{
     CachedDependencyContractDiagnostic, PanicContractDiagnostic, PanicDiagnosticOptions,
-    emit_cached_dependency_contract_diagnostic, emit_cached_dependency_raw_panic_diagnostic,
+    emit_analysis_incomplete_diagnostic, emit_cached_dependency_contract_diagnostic,
+    emit_cached_dependency_raw_panic_diagnostic, emit_indirect_boundary_diagnostic,
     emit_missing_report_root_diagnostics, emit_panic_contract_diagnostic,
     emit_raw_panic_diagnostic, emit_safety_diagnostics,
 };
@@ -57,7 +58,6 @@ use self::report::{
 use self::rustc_invocation::RustcInvocation;
 use self::safety_report::SafetyArtifactReport;
 
-const REACHABILITY_NODE_LIMIT: usize = 4096;
 
 #[must_use]
 pub fn cargo_frontend() -> ExitCode {
@@ -255,6 +255,18 @@ pub(crate) fn analyze_crate(tcx: TyCtxt<'_>, args: &SniffTestArgs, compiler_args
         &dependency_cache,
         diagnostics,
     );
+    if diagnostics.emit
+        && root_analysis.concrete_roots == 0
+        && root_analysis.generic_roots == 0
+        && root_analysis.missing_roots.is_empty()
+    {
+        // An empty selection exits clean; without this note that reads as
+        // "verified panic-free" when nothing was analyzed at all.
+        tcx.dcx().warn(format!(
+            "report-roots = {} matched no functions in `{crate_name}`; nothing was analyzed",
+            config.analysis.report_roots.description(),
+        ));
+    }
     let safety_analysis = if output_scope == CrateOutputScope::Workspace {
         analyze_safety(tcx, &config.safety)
     } else {
@@ -543,7 +555,7 @@ fn analyze_root<'tcx>(
     );
     let graph = reachability.graph();
     let analysis = analyze_panic_evidence(tcx, graph, &result, config);
-    let (findings, report) = collect_panic_findings(
+    let (mut findings, mut report) = collect_panic_findings(
         tcx,
         graph,
         &result,
@@ -556,6 +568,7 @@ fn analyze_root<'tcx>(
             diagnostics,
         },
     );
+    let transitive_complete = graph.view(&result).halt().is_none();
 
     let mut boundary_hooks = PanicReachabilityHooks { config };
     let boundary_result = reachability.query(
@@ -567,10 +580,24 @@ fn analyze_root<'tcx>(
     let boundary_analysis = analyze_panic_evidence(tcx, graph, &boundary_result, config);
     let cached_findings =
         cached_boundary_findings(tcx, graph, &boundary_result, &boundary_analysis, config);
+    let analysis_complete =
+        transitive_complete && graph.view(&boundary_result).halt().is_none();
+    if !analysis_complete {
+        emit_analysis_incomplete_finding(
+            tcx,
+            root.def_id,
+            analysis_config.node_limit,
+            config,
+            diagnostics,
+            &mut findings,
+            &mut report,
+        );
+    }
     let summary = function_summary(
         tcx,
         root.def_id,
         root.kind == PanicRootKind::Generic,
+        analysis_complete,
         findings,
         Some((graph, &boundary_result)),
         cached_findings,
@@ -579,12 +606,33 @@ fn analyze_root<'tcx>(
     (findings, summary, report)
 }
 
+fn emit_analysis_incomplete_finding(
+    tcx: TyCtxt<'_>,
+    root_def_id: DefId,
+    node_limit: usize,
+    config: &PanicConfig,
+    diagnostics: PanicDiagnosticOptions,
+    counts: &mut PanicFindingCounts,
+    report: &mut PanicRootReport,
+) {
+    let level = ReportDetailKind::AnalysisIncomplete.lint_level(config.lints);
+    if level == LintLevel::Allow {
+        return;
+    }
+
+    counts.analysis_incomplete += 1;
+    report.push_analysis_incomplete(tcx, root_def_id, node_limit, level);
+    if diagnostics.emit {
+        emit_analysis_incomplete_diagnostic(tcx, root_def_id, node_limit, level);
+    }
+}
+
 fn reachability_options(
     analysis_config: &AnalysisConfig,
     analyze_external: bool,
 ) -> ReachabilityOptions {
     ReachabilityOptions {
-        node_limit: Some(REACHABILITY_NODE_LIMIT),
+        node_limit: Some(analysis_config.node_limit),
         analyze_external,
         dyn_dispatch_vtable_edges: analysis_config.dyn_dispatch_vtable_edges.into(),
         ..ReachabilityOptions::default()
@@ -597,6 +645,8 @@ pub(crate) struct PanicFindingCounts {
     pub(crate) raw_panic_paths: usize,
     pub(crate) panic_obligations: usize,
     pub(crate) trusted_panic_obligations: usize,
+    pub(crate) indirect_call_boundaries: usize,
+    pub(crate) analysis_incomplete: usize,
 }
 
 impl PanicFindingCounts {
@@ -604,6 +654,8 @@ impl PanicFindingCounts {
         self.raw_panic_paths += other.raw_panic_paths;
         self.panic_obligations += other.panic_obligations;
         self.trusted_panic_obligations += other.trusted_panic_obligations;
+        self.indirect_call_boundaries += other.indirect_call_boundaries;
+        self.analysis_incomplete += other.analysis_incomplete;
     }
 
     pub(crate) fn increment(&mut self, kind: ReportDetailKind) {
@@ -613,6 +665,8 @@ impl PanicFindingCounts {
             | ReportDetailKind::CachedDependencyPanic => self.raw_panic_paths += 1,
             ReportDetailKind::PanicObligation => self.panic_obligations += 1,
             ReportDetailKind::TrustedPanicObligation => self.trusted_panic_obligations += 1,
+            ReportDetailKind::IndirectCallBoundary => self.indirect_call_boundaries += 1,
+            ReportDetailKind::AnalysisIncomplete => self.analysis_incomplete += 1,
         }
     }
 
@@ -621,6 +675,9 @@ impl PanicFindingCounts {
             || (self.panic_obligations > 0 && lints.documented_panic_contract == LintLevel::Deny)
             || (self.trusted_panic_obligations > 0
                 && lints.trusted_panic_contract == LintLevel::Deny)
+            || (self.indirect_call_boundaries > 0
+                && lints.indirect_call_boundary == LintLevel::Deny)
+            || (self.analysis_incomplete > 0 && lints.analysis_incomplete == LintLevel::Deny)
     }
 }
 
@@ -674,7 +731,30 @@ fn collect_panic_findings<'tcx>(
     for evidence in &analysis.evidence {
         match evidence.decision {
             PanicPathDecision::RawPanic => {
-                emit_raw_panic_finding(tcx, graph, evidence, &collection, &mut counts, &mut report);
+                // Unverifiable boundaries get their own lint: they are not
+                // proof of a panic, only of a blind spot.
+                if matches!(
+                    evidence.kind,
+                    crate::panics::PanicEvidenceKind::IndirectBoundary { .. }
+                ) {
+                    emit_indirect_boundary_finding(
+                        tcx,
+                        graph,
+                        evidence,
+                        &collection,
+                        &mut counts,
+                        &mut report,
+                    );
+                } else {
+                    emit_raw_panic_finding(
+                        tcx,
+                        graph,
+                        evidence,
+                        &collection,
+                        &mut counts,
+                        &mut report,
+                    );
+                }
             }
             PanicPathDecision::PanicObligation { edge_id, def_id } => {
                 emit_panic_obligation_finding(
@@ -713,6 +793,33 @@ fn emit_raw_panic_finding<'tcx>(
     report.push_panic_evidence(tcx, graph, evidence, level);
     if collection.diagnostics.emit {
         emit_raw_panic_diagnostic(
+            tcx,
+            graph,
+            evidence,
+            collection.root_def_id,
+            level,
+            collection.diagnostics.include_stack,
+        );
+    }
+}
+
+fn emit_indirect_boundary_finding<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    graph: &ReachabilityGraph<'tcx>,
+    evidence: &PanicEvidence,
+    collection: &PanicFindingCollection<'_>,
+    counts: &mut PanicFindingCounts,
+    report: &mut PanicRootReport,
+) {
+    let level = ReportDetailKind::IndirectCallBoundary.lint_level(collection.config.lints);
+    if level == LintLevel::Allow {
+        return;
+    }
+
+    counts.indirect_call_boundaries += 1;
+    report.push_panic_evidence(tcx, graph, evidence, level);
+    if collection.diagnostics.emit {
+        emit_indirect_boundary_diagnostic(
             tcx,
             graph,
             evidence,
@@ -817,10 +924,12 @@ fn emit_cached_dependency_findings<'tcx>(
         .collect::<HashSet<_>>();
 
     for edge in view.edges() {
-        if !matches!(
-            edge.kind(),
-            ReachabilityEdgeKind::DirectCall | ReachabilityEdgeKind::TailCall
-        ) || expanded_sources.contains(&edge.target().id().index())
+        // Any edge into a non-expanded, non-local instance — direct calls,
+        // vtable entries, closure definitions, pointer reifications — carries
+        // the same obligation a direct call does; macro-expansion edges are
+        // bridge hops, not calls.
+        if edge.kind() == ReachabilityEdgeKind::MacroExpansion
+            || expanded_sources.contains(&edge.target().id().index())
         {
             continue;
         }
@@ -852,6 +961,8 @@ fn emit_cached_dependency_findings<'tcx>(
             continue;
         }
 
+        // A truncated dependency summary with clean counts proves nothing:
+        // treat it as raw panic evidence rather than silence.
         if summary.panic_obligations > 0 || summary.trusted_panic_obligations > 0 {
             emit_cached_dependency_obligation_finding(
                 tcx,
@@ -865,7 +976,7 @@ fn emit_cached_dependency_findings<'tcx>(
                 counts,
                 report,
             );
-        } else if summary.raw_panic_paths > 0 {
+        } else if summary.raw_panic_paths > 0 || !summary.analysis_complete {
             let kind = ReportDetailKind::CachedDependencyPanic;
             let level = kind.lint_level(collection.config.lints);
             if level == LintLevel::Allow {

@@ -186,12 +186,28 @@ fn direct_args(
 }
 
 fn run_driver(compiler_args: &[String], args: SniffTestArgs) -> ExitCode {
+    let mut compiler_args = compiler_args.to_owned();
+    // The safety analysis reads THIR in `after_analysis`, after MIR building
+    // would normally have stolen it. Appending here covers cargo mode, direct
+    // mode, and user-RUSTFLAGS scenarios alike; the flag is UNTRACKED, so it
+    // never perturbs cargo fingerprints. Cost: THIR stays allocated for the
+    // whole compilation of each unit.
+    if !has_no_steal_thir(&compiler_args) {
+        compiler_args.push(String::from("-Zno-steal-thir"));
+    }
     let mut callbacks = SniffTestCallbacks {
         args,
-        compiler_args: compiler_args.to_owned(),
+        compiler_args: compiler_args.clone(),
     };
-    rustc_driver::run_compiler(compiler_args, &mut callbacks);
+    rustc_driver::run_compiler(&compiler_args, &mut callbacks);
     ExitCode::SUCCESS
+}
+
+fn has_no_steal_thir(compiler_args: &[String]) -> bool {
+    compiler_args.iter().any(|arg| arg == "-Zno-steal-thir")
+        || compiler_args
+            .windows(2)
+            .any(|pair| pair[0] == "-Z" && pair[1] == "no-steal-thir")
 }
 
 pub(crate) fn driver_path() -> std::path::PathBuf {

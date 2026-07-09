@@ -2,7 +2,7 @@ use crate::config::{LintLevel, SafetyLintConfig};
 use crate::namespace::canonical_namespace;
 use crate::safety::{
     SafetyAnalysis, SafetyCallKind, SafetyFinding, SafetyFindingKind, render_safety_requirement,
-    safety_call_label, safety_callee_name,
+    safety_call_label, safety_callee_name, safety_op_label,
 };
 use rustc_middle::ty::TyCtxt;
 use serde::Serialize;
@@ -48,6 +48,7 @@ struct SafetyFindingCounts {
     missing_safety_docs: usize,
     unsafe_calls_missing_justification: usize,
     unsafe_calls_missing_requirements: usize,
+    unsafe_ops_missing_justification: usize,
     safety_obligations_missing_justification: usize,
     safety_obligations_missing_requirements: usize,
 }
@@ -61,6 +62,9 @@ impl SafetyFindingCounts {
             }
             SafetyFindingKind::UnsafeCallMissingRequirements => {
                 self.unsafe_calls_missing_requirements += 1;
+            }
+            SafetyFindingKind::UnsafeOpMissingJustification => {
+                self.unsafe_ops_missing_justification += 1;
             }
             SafetyFindingKind::SafetyObligationMissingJustification => {
                 self.safety_obligations_missing_justification += 1;
@@ -145,6 +149,20 @@ impl SafetyFindingReport {
                     missing_requirements,
                 }
             }
+            SafetyFinding::OpMissingJustification { caller, op, span } => {
+                let operation = safety_op_label(op);
+                Self {
+                    kind: SafetyFindingKindReport::UnsafeOpMissingJustification,
+                    level,
+                    span: render_span(tcx, span),
+                    function: canonical_namespace(tcx, caller),
+                    target: None,
+                    reason: format!(
+                        "unsafe operation ({operation}) has no `// SAFETY:` justification"
+                    ),
+                    missing_requirements: Vec::new(),
+                }
+            }
         }
     }
 }
@@ -155,6 +173,7 @@ enum SafetyFindingKindReport {
     MissingSafetyDocs,
     UnsafeCallMissingJustification,
     UnsafeCallMissingRequirements,
+    UnsafeOpMissingJustification,
     SafetyObligationMissingJustification,
     SafetyObligationMissingRequirements,
 }

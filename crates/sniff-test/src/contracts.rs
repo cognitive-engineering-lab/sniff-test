@@ -47,8 +47,24 @@ pub(crate) fn parse_contract_doc_lines<'a>(
 ) -> ContractDocSummary {
     let mut summary = ContractDocSummary::default();
     let mut in_contract_section = false;
+    let mut fence: Option<&str> = None;
 
     for line in lines {
+        // Lines inside fenced code blocks are example text, not structure: a
+        // literal `# Panics` there is not a contract heading, and hidden
+        // doctest lines like `# use foo;` must not close a real section.
+        if let Some(marker) = code_fence_marker(line) {
+            match fence {
+                Some(open) if marker.starts_with(open) => fence = None,
+                Some(_) => {}
+                None => fence = Some(marker),
+            }
+            continue;
+        }
+        if fence.is_some() {
+            continue;
+        }
+
         if let Some(heading) = markdown_heading_text(line) {
             in_contract_section = kind.matches_heading(heading);
             summary.has_docs |= in_contract_section;
@@ -61,6 +77,21 @@ pub(crate) fn parse_contract_doc_lines<'a>(
     }
 
     summary
+}
+
+/// The backtick or tilde run opening or closing a fenced code block, ignoring
+/// any info string. Closing fences must be at least as long as the opener,
+/// which `starts_with` on the returned marker checks.
+fn code_fence_marker(line: &str) -> Option<&str> {
+    let line = line.trim_start();
+    let len = if line.starts_with("```") {
+        line.len() - line.trim_start_matches('`').len()
+    } else if line.starts_with("~~~") {
+        line.len() - line.trim_start_matches('~').len()
+    } else {
+        return None;
+    };
+    Some(&line[..len])
 }
 
 #[cfg(test)]
@@ -132,5 +163,67 @@ impl ContractKind {
             ),
             Self::Safety => heading.eq_ignore_ascii_case("safety"),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{ContractKind, parse_contract_doc_lines};
+
+    #[test]
+    fn contract_headings_inside_code_fences_are_example_text() {
+        let summary = parse_contract_doc_lines(
+            [
+                "Shows how to document panics:",
+                "```text",
+                "# Panics",
+                "- flag: must be set",
+                "```",
+            ],
+            ContractKind::Panic,
+        );
+
+        assert!(!summary.has_docs);
+        assert!(summary.requirements.is_empty());
+    }
+
+    #[test]
+    fn hidden_doctest_lines_do_not_close_contract_sections() {
+        let summary = parse_contract_doc_lines(
+            [
+                "# Safety",
+                "",
+                "```",
+                "# use std::ptr;",
+                "# fn main() {",
+                "let value = 1;",
+                "# }",
+                "```",
+                "",
+                "- valid_ptr: pointer must be non-null",
+            ],
+            ContractKind::Safety,
+        );
+
+        assert!(summary.has_docs);
+        assert_eq!(summary.requirements.len(), 1);
+        assert_eq!(summary.requirements[0].name, "valid_ptr");
+    }
+
+    #[test]
+    fn tilde_fences_and_longer_closers_are_respected() {
+        let summary = parse_contract_doc_lines(
+            ["~~~", "# Panics", "~~~", "# Panics", "- flag: must be set"],
+            ContractKind::Panic,
+        );
+
+        assert!(summary.has_docs);
+        assert_eq!(summary.requirements.len(), 1);
+
+        let nested = parse_contract_doc_lines(
+            ["````", "```", "# Panics", "```", "````", "# Safety"],
+            ContractKind::Panic,
+        );
+        assert!(!nested.has_docs);
     }
 }

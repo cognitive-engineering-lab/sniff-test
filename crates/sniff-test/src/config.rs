@@ -54,6 +54,11 @@ inline-mir = "off"
 # dyn object is created, or `call-sites` where it is used.
 dyn-dispatch-vtable-edges = "cast-sites"
 
+# Instance budget per reachability query. Traversals that halt at the limit
+# are reported through the `analysis-incomplete` lint instead of passing
+# silently.
+node-limit = 4096
+
 [panics]
 # Crates, fully-qualified functions, or macro expansion paths whose internals should be treated as
 # opaque analysis boundaries. Patterns use Rust crate/path names: write
@@ -99,6 +104,12 @@ panic-sink-namespaces = [
 undocumented-panic-path = "deny"
 documented-panic-contract = "warn"
 trusted-panic-contract = "allow"
+# Calls whose target cannot be resolved or verified: undocumented trait
+# methods behind generic bounds, and opaque callables like function pointers.
+indirect-call-boundary = "warn"
+# Reachability traversals that halted at `[analysis].node-limit` before the
+# call graph was exhausted. A truncated proof is no proof, so this denies.
+analysis-incomplete = "deny"
 
 [safety]
 # Namespaces whose unsafe docs/call-site findings should be suppressed.
@@ -119,6 +130,9 @@ safety-obligation-namespaces = []
 missing-safety-docs = "warn"
 unsafe-call-missing-justification = "warn"
 unsafe-call-missing-requirements = "warn"
+# Non-call unsafe operations: raw pointer dereferences, union field accesses,
+# mutable/extern static accesses, inline assembly, and friends.
+unsafe-op-missing-justification = "warn"
 safety-obligation-missing-justification = "warn"
 safety-obligation-missing-requirements = "warn"
 
@@ -178,6 +192,9 @@ pub struct AnalysisConfig {
     pub inline_mir: MirInlining,
     /// Where concrete vtable methods introduced by dyn casts should appear.
     pub dyn_dispatch_vtable_edges: DynDispatchVTableEdges,
+    /// Instance budget per reachability query; halting at the limit is
+    /// surfaced through the `analysis-incomplete` lint.
+    pub node_limit: usize,
 }
 
 impl Default for AnalysisConfig {
@@ -188,6 +205,7 @@ impl Default for AnalysisConfig {
             overflow_checks: OverflowChecks::Profile,
             inline_mir: MirInlining::Off,
             dyn_dispatch_vtable_edges: DynDispatchVTableEdges::CastSites,
+            node_limit: 4096,
         }
     }
 }
@@ -348,6 +366,8 @@ pub struct PanicLintConfig {
     pub undocumented_panic_path: LintLevel,
     pub documented_panic_contract: LintLevel,
     pub trusted_panic_contract: LintLevel,
+    pub indirect_call_boundary: LintLevel,
+    pub analysis_incomplete: LintLevel,
 }
 
 impl Default for PanicLintConfig {
@@ -356,6 +376,9 @@ impl Default for PanicLintConfig {
             undocumented_panic_path: LintLevel::Deny,
             documented_panic_contract: LintLevel::Warn,
             trusted_panic_contract: LintLevel::Warn,
+            indirect_call_boundary: LintLevel::Warn,
+            // A truncated traversal proves nothing about the missing region.
+            analysis_incomplete: LintLevel::Deny,
         }
     }
 }
@@ -386,6 +409,7 @@ pub struct SafetyLintConfig {
     pub missing_safety_docs: LintLevel,
     pub unsafe_call_missing_justification: LintLevel,
     pub unsafe_call_missing_requirements: LintLevel,
+    pub unsafe_op_missing_justification: LintLevel,
     pub safety_obligation_missing_justification: LintLevel,
     pub safety_obligation_missing_requirements: LintLevel,
 }
@@ -396,6 +420,7 @@ impl Default for SafetyLintConfig {
             missing_safety_docs: LintLevel::Warn,
             unsafe_call_missing_justification: LintLevel::Warn,
             unsafe_call_missing_requirements: LintLevel::Warn,
+            unsafe_op_missing_justification: LintLevel::Warn,
             safety_obligation_missing_justification: LintLevel::Warn,
             safety_obligation_missing_requirements: LintLevel::Warn,
         }
@@ -687,6 +712,17 @@ pub enum ReportRootSet {
     All,
     /// Report from these fully qualified current-crate function paths.
     Explicit(Vec<ReportRootPath>),
+}
+
+impl ReportRootSet {
+    #[must_use]
+    pub fn description(&self) -> String {
+        match self {
+            Self::Public => String::from("\"public\""),
+            Self::All => String::from("\"all\""),
+            Self::Explicit(roots) => format!("{} explicit path(s)", roots.len()),
+        }
+    }
 }
 
 #[derive(Debug, Clone)]

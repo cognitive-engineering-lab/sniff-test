@@ -1,0 +1,5 @@
+# Non-call unsafe operations must demand `// SAFETY:` justifications the same
+# way unsafe calls do.
+
+[analysis]
+report-roots = "all"

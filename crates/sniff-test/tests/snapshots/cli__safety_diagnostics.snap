@@ -7,6 +7,58 @@ stdout:
 <empty>
 stderr:
     Checking safety-requirements v0.1.0 ([FIXTURE])
+warning: function `safety_requirements::generic_unsafe_trait_method_missing` reaches an unverifiable indirect call
+   --> src/lib.rs:135:1
+    |
+135 | pub fn generic_unsafe_trait_method_missing<T: UnsafeGreeter>(greeter: T) {
+    | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+note: panic may happen here: indirect call to undocumented trait method `safety_requirements::UnsafeGreeter::greet`
+   --> src/lib.rs:139:14
+    |
+139 |     unsafe { greeter.greet(ptr) }
+    |              ^^^^^^^^^^^^^^^^^^
+    = help: add a guard, document the panic with `# Panics`, or add `// PANIC:` if a local invariant proves it cannot panic
+
+warning: function `safety_requirements::generic_unsafe_trait_method_satisfied` reaches an unverifiable indirect call
+   --> src/lib.rs:126:1
+    |
+126 | pub fn generic_unsafe_trait_method_satisfied<T: UnsafeGreeter>(greeter: T) {
+    | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+note: panic may happen here: indirect call to undocumented trait method `safety_requirements::UnsafeGreeter::greet`
+   --> src/lib.rs:132:14
+    |
+132 |     unsafe { greeter.greet(ptr) }
+    |              ^^^^^^^^^^^^^^^^^^
+    = help: add a guard, document the panic with `# Panics`, or add `// PANIC:` if a local invariant proves it cannot panic
+
+warning: function `safety_requirements::unsafe_fn_pointer_missing_justification` reaches an unverifiable indirect call
+   --> src/lib.rs:100:1
+    |
+100 | pub fn unsafe_fn_pointer_missing_justification() {
+    | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+note: panic may happen here: indirect call through an opaque callable
+   --> src/lib.rs:103:14
+    |
+103 |     unsafe { function() }
+    |              ^^^^^^^^^^
+    = help: add a guard, document the panic with `# Panics`, or add `// PANIC:` if a local invariant proves it cannot panic
+
+warning: function `safety_requirements::unsafe_fn_pointer_with_justification` reaches an unverifiable indirect call
+  --> src/lib.rs:93:1
+   |
+93 | pub fn unsafe_fn_pointer_with_justification() {
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   |
+note: panic may happen here: indirect call through an opaque callable
+  --> src/lib.rs:97:14
+   |
+97 |     unsafe { function() }
+   |              ^^^^^^^^^^
+   = help: add a guard, document the panic with `# Panics`, or add `// PANIC:` if a local invariant proves it cannot panic
+
 warning: public unsafe function `safety_requirements::undocumented_public` is missing `# Safety` docs
   --> src/lib.rs:33:1
    |
@@ -74,5 +126,5 @@ note: `safety_requirements::UnsafeGreeter::greet` documents `# Safety` here
     = note: missing safety requirement `valid_ptr: pointer must be non-null.`
     = help: add named bullets under the applicable `// SAFETY:` comment for each missing requirement
 
-warning: `safety-requirements` (lib) generated 6 warnings
+warning: `safety-requirements` (lib) generated 10 warnings
     Finished `release` profile [optimized] target(s) in [TIME]

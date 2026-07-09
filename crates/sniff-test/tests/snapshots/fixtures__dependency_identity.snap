@@ -19,6 +19,8 @@ expression: messages
     },
     "concrete-roots": 3,
     "counts": {
+      "analysis-incomplete": 0,
+      "indirect-call-boundaries": 0,
       "panic-obligations": 0,
       "raw-panic-paths": 3,
       "trusted-panic-obligations": 0
@@ -36,6 +38,8 @@ expression: messages
     "roots": [
       {
         "counts": {
+          "analysis-incomplete": 0,
+          "indirect-call-boundaries": 0,
           "panic-obligations": 0,
           "raw-panic-paths": 1,
           "trusted-panic-obligations": 0
@@ -62,6 +66,8 @@ expression: messages
       },
       {
         "counts": {
+          "analysis-incomplete": 0,
+          "indirect-call-boundaries": 0,
           "panic-obligations": 0,
           "raw-panic-paths": 1,
           "trusted-panic-obligations": 0
@@ -88,6 +94,8 @@ expression: messages
       },
       {
         "counts": {
+          "analysis-incomplete": 0,
+          "indirect-call-boundaries": 0,
           "panic-obligations": 0,
           "raw-panic-paths": 1,
           "trusted-panic-obligations": 0
@@ -131,10 +139,12 @@ expression: messages
       "package-version": "0.1.0",
       "target": null
     },
-    "concrete-roots": 3,
+    "concrete-roots": 4,
     "counts": {
+      "analysis-incomplete": 0,
+      "indirect-call-boundaries": 0,
       "panic-obligations": 0,
-      "raw-panic-paths": 3,
+      "raw-panic-paths": 4,
       "trusted-panic-obligations": 0
     },
     "dependencies": [
@@ -157,6 +167,8 @@ expression: messages
     "roots": [
       {
         "counts": {
+          "analysis-incomplete": 0,
+          "indirect-call-boundaries": 0,
           "panic-obligations": 0,
           "raw-panic-paths": 1,
           "trusted-panic-obligations": 0
@@ -181,6 +193,8 @@ expression: messages
       },
       {
         "counts": {
+          "analysis-incomplete": 0,
+          "indirect-call-boundaries": 0,
           "panic-obligations": 0,
           "raw-panic-paths": 1,
           "trusted-panic-obligations": 0
@@ -205,6 +219,34 @@ expression: messages
       },
       {
         "counts": {
+          "analysis-incomplete": 0,
+          "indirect-call-boundaries": 0,
+          "panic-obligations": 0,
+          "raw-panic-paths": 1,
+          "trusted-panic-obligations": 0
+        },
+        "findings": [
+          {
+            "edge": "dependency_identity_app::sniff_dyn --vtable-entry-> <dependency_identity::Widget as dependency_identity::Sniffer>::sniff",
+            "kind": "cached-dependency-panic",
+            "level": "deny",
+            "reason": "<dependency_identity::Widget as Sniffer>::sniff has cached panic evidence: 1 undocumented panic path",
+            "span": "src/lib.rs:16:33: 16:40",
+            "target": "<dependency_identity::Widget as Sniffer>::sniff",
+            "trace": [
+              "src/lib.rs:16:33: 16:40: dependency_identity_app::sniff_dyn --vtable-entry-> <dependency_identity::Widget as dependency_identity::Sniffer>::sniff"
+            ]
+          }
+        ],
+        "has-panic-docs": false,
+        "root": "dependency_identity_app::sniff_dyn",
+        "root-declaration": "src/lib.rs:15:1",
+        "root-kind": "concrete"
+      },
+      {
+        "counts": {
+          "analysis-incomplete": 0,
+          "indirect-call-boundaries": 0,
           "panic-obligations": 0,
           "raw-panic-paths": 1,
           "trusted-panic-obligations": 0

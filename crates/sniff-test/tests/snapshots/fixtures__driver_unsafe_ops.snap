@@ -1,0 +1,281 @@
+---
+source: crates/sniff-test/tests/fixtures.rs
+expression: messages
+---
+[
+  {
+    "artifact": {
+      "artifact-id": "[ARTIFACT_ID]",
+      "crate-name": "unsafe_ops",
+      "crate-types": [
+        "lib"
+      ],
+      "extra-filename": "[EXTRA_FILENAME]",
+      "manifest-path": null,
+      "metadata": "[METADATA]",
+      "package-name": null,
+      "package-version": null,
+      "target": null
+    },
+    "concrete-roots": 5,
+    "counts": {
+      "analysis-incomplete": 0,
+      "indirect-call-boundaries": 0,
+      "panic-obligations": 0,
+      "raw-panic-paths": 10,
+      "trusted-panic-obligations": 0
+    },
+    "dependencies": [],
+    "dependency-cache": {
+      "failed": 0,
+      "hits": 0,
+      "total": 0
+    },
+    "format-version": 1,
+    "generic-roots": 0,
+    "missing-roots": [],
+    "reason": "sniff-test-artifact",
+    "roots": [
+      {
+        "counts": {
+          "analysis-incomplete": 0,
+          "indirect-call-boundaries": 0,
+          "panic-obligations": 0,
+          "raw-panic-paths": 2,
+          "trusted-panic-obligations": 0
+        },
+        "findings": [
+          {
+            "edge": "unsafe_ops::deref_justified --assert-> compiler assert misaligned pointer dereference: required alignment <u32 as std::mem::SizedTypeProperties>::ALIGN, found address `_3` (temporary)",
+            "kind": "compiler-assert",
+            "level": "deny",
+            "reason": "compiler assert",
+            "span": "[FIXTURE]/src/lib.rs:23:14: 23:18",
+            "target": "compiler assert misaligned pointer dereference: required alignment <u32 as std::mem::SizedTypeProperties>::ALIGN, found address `_3` (temporary)",
+            "trace": [
+              "[FIXTURE]/src/lib.rs:23:14: 23:18: unsafe_ops::deref_justified --assert-> compiler assert misaligned pointer dereference: required alignment <u32 as std::mem::SizedTypeProperties>::ALIGN, found address `_3` (temporary)"
+            ]
+          },
+          {
+            "edge": "unsafe_ops::deref_justified --assert-> compiler assert null pointer dereference",
+            "kind": "compiler-assert",
+            "level": "deny",
+            "reason": "compiler assert",
+            "span": "[FIXTURE]/src/lib.rs:23:14: 23:18",
+            "target": "compiler assert null pointer dereference",
+            "trace": [
+              "[FIXTURE]/src/lib.rs:23:14: 23:18: unsafe_ops::deref_justified --assert-> compiler assert null pointer dereference"
+            ]
+          }
+        ],
+        "has-panic-docs": false,
+        "root": "unsafe_ops::deref_justified",
+        "root-declaration": "[FIXTURE]/src/lib.rs:21:1",
+        "root-kind": "concrete"
+      },
+      {
+        "counts": {
+          "analysis-incomplete": 0,
+          "indirect-call-boundaries": 0,
+          "panic-obligations": 0,
+          "raw-panic-paths": 2,
+          "trusted-panic-obligations": 0
+        },
+        "findings": [
+          {
+            "edge": "unsafe_ops::deref_unjustified --assert-> compiler assert misaligned pointer dereference: required alignment <u32 as std::mem::SizedTypeProperties>::ALIGN, found address `_3` (temporary)",
+            "kind": "compiler-assert",
+            "level": "deny",
+            "reason": "compiler assert",
+            "span": "[FIXTURE]/src/lib.rs:18:14: 18:18",
+            "target": "compiler assert misaligned pointer dereference: required alignment <u32 as std::mem::SizedTypeProperties>::ALIGN, found address `_3` (temporary)",
+            "trace": [
+              "[FIXTURE]/src/lib.rs:18:14: 18:18: unsafe_ops::deref_unjustified --assert-> compiler assert misaligned pointer dereference: required alignment <u32 as std::mem::SizedTypeProperties>::ALIGN, found address `_3` (temporary)"
+            ]
+          },
+          {
+            "edge": "unsafe_ops::deref_unjustified --assert-> compiler assert null pointer dereference",
+            "kind": "compiler-assert",
+            "level": "deny",
+            "reason": "compiler assert",
+            "span": "[FIXTURE]/src/lib.rs:18:14: 18:18",
+            "target": "compiler assert null pointer dereference",
+            "trace": [
+              "[FIXTURE]/src/lib.rs:18:14: 18:18: unsafe_ops::deref_unjustified --assert-> compiler assert null pointer dereference"
+            ]
+          }
+        ],
+        "has-panic-docs": false,
+        "root": "unsafe_ops::deref_unjustified",
+        "root-declaration": "[FIXTURE]/src/lib.rs:17:1",
+        "root-kind": "concrete"
+      },
+      {
+        "counts": {
+          "analysis-incomplete": 0,
+          "indirect-call-boundaries": 0,
+          "panic-obligations": 0,
+          "raw-panic-paths": 2,
+          "trusted-panic-obligations": 0
+        },
+        "findings": [
+          {
+            "edge": "unsafe_ops::extern_static_unjustified --assert-> compiler assert misaligned pointer dereference: required alignment <u32 as std::mem::SizedTypeProperties>::ALIGN, found address `_3` (temporary)",
+            "kind": "compiler-assert",
+            "level": "deny",
+            "reason": "compiler assert",
+            "span": "[FIXTURE]/src/lib.rs:36:14: 36:22",
+            "target": "compiler assert misaligned pointer dereference: required alignment <u32 as std::mem::SizedTypeProperties>::ALIGN, found address `_3` (temporary)",
+            "trace": [
+              "[FIXTURE]/src/lib.rs:36:14: 36:22: unsafe_ops::extern_static_unjustified --assert-> compiler assert misaligned pointer dereference: required alignment <u32 as std::mem::SizedTypeProperties>::ALIGN, found address `_3` (temporary)"
+            ]
+          },
+          {
+            "edge": "unsafe_ops::extern_static_unjustified --assert-> compiler assert null pointer dereference",
+            "kind": "compiler-assert",
+            "level": "deny",
+            "reason": "compiler assert",
+            "span": "[FIXTURE]/src/lib.rs:36:14: 36:22",
+            "target": "compiler assert null pointer dereference",
+            "trace": [
+              "[FIXTURE]/src/lib.rs:36:14: 36:22: unsafe_ops::extern_static_unjustified --assert-> compiler assert null pointer dereference"
+            ]
+          }
+        ],
+        "has-panic-docs": false,
+        "root": "unsafe_ops::extern_static_unjustified",
+        "root-declaration": "[FIXTURE]/src/lib.rs:35:1",
+        "root-kind": "concrete"
+      },
+      {
+        "counts": {
+          "analysis-incomplete": 0,
+          "indirect-call-boundaries": 0,
+          "panic-obligations": 0,
+          "raw-panic-paths": 2,
+          "trusted-panic-obligations": 0
+        },
+        "findings": [
+          {
+            "edge": "unsafe_ops::mutable_static_justified --assert-> compiler assert misaligned pointer dereference: required alignment <u32 as std::mem::SizedTypeProperties>::ALIGN, found address `_3` (temporary)",
+            "kind": "compiler-assert",
+            "level": "deny",
+            "reason": "compiler assert",
+            "span": "[FIXTURE]/src/lib.rs:32:14: 32:21",
+            "target": "compiler assert misaligned pointer dereference: required alignment <u32 as std::mem::SizedTypeProperties>::ALIGN, found address `_3` (temporary)",
+            "trace": [
+              "[FIXTURE]/src/lib.rs:32:14: 32:21: unsafe_ops::mutable_static_justified --assert-> compiler assert misaligned pointer dereference: required alignment <u32 as std::mem::SizedTypeProperties>::ALIGN, found address `_3` (temporary)"
+            ]
+          },
+          {
+            "edge": "unsafe_ops::mutable_static_justified --assert-> compiler assert null pointer dereference",
+            "kind": "compiler-assert",
+            "level": "deny",
+            "reason": "compiler assert",
+            "span": "[FIXTURE]/src/lib.rs:32:14: 32:21",
+            "target": "compiler assert null pointer dereference",
+            "trace": [
+              "[FIXTURE]/src/lib.rs:32:14: 32:21: unsafe_ops::mutable_static_justified --assert-> compiler assert null pointer dereference"
+            ]
+          }
+        ],
+        "has-panic-docs": false,
+        "root": "unsafe_ops::mutable_static_justified",
+        "root-declaration": "[FIXTURE]/src/lib.rs:30:1",
+        "root-kind": "concrete"
+      },
+      {
+        "counts": {
+          "analysis-incomplete": 0,
+          "indirect-call-boundaries": 0,
+          "panic-obligations": 0,
+          "raw-panic-paths": 2,
+          "trusted-panic-obligations": 0
+        },
+        "findings": [
+          {
+            "edge": "unsafe_ops::mutable_static_unjustified --assert-> compiler assert misaligned pointer dereference: required alignment <u32 as std::mem::SizedTypeProperties>::ALIGN, found address `_3` (temporary)",
+            "kind": "compiler-assert",
+            "level": "deny",
+            "reason": "compiler assert",
+            "span": "[FIXTURE]/src/lib.rs:27:14: 27:21",
+            "target": "compiler assert misaligned pointer dereference: required alignment <u32 as std::mem::SizedTypeProperties>::ALIGN, found address `_3` (temporary)",
+            "trace": [
+              "[FIXTURE]/src/lib.rs:27:14: 27:21: unsafe_ops::mutable_static_unjustified --assert-> compiler assert misaligned pointer dereference: required alignment <u32 as std::mem::SizedTypeProperties>::ALIGN, found address `_3` (temporary)"
+            ]
+          },
+          {
+            "edge": "unsafe_ops::mutable_static_unjustified --assert-> compiler assert null pointer dereference",
+            "kind": "compiler-assert",
+            "level": "deny",
+            "reason": "compiler assert",
+            "span": "[FIXTURE]/src/lib.rs:27:14: 27:21",
+            "target": "compiler assert null pointer dereference",
+            "trace": [
+              "[FIXTURE]/src/lib.rs:27:14: 27:21: unsafe_ops::mutable_static_unjustified --assert-> compiler assert null pointer dereference"
+            ]
+          }
+        ],
+        "has-panic-docs": false,
+        "root": "unsafe_ops::mutable_static_unjustified",
+        "root-declaration": "[FIXTURE]/src/lib.rs:26:1",
+        "root-kind": "concrete"
+      }
+    ],
+    "rustc-version": "[RUSTC_VERSION]",
+    "safety": {
+      "counts": {
+        "missing-safety-docs": 0,
+        "safety-obligations-missing-justification": 0,
+        "safety-obligations-missing-requirements": 0,
+        "unsafe-calls-missing-justification": 0,
+        "unsafe-calls-missing-requirements": 0,
+        "unsafe-ops-missing-justification": 5
+      },
+      "findings": [
+        {
+          "function": "unsafe_ops::deref_unjustified",
+          "kind": "unsafe-op-missing-justification",
+          "level": "warn",
+          "reason": "unsafe operation (raw pointer dereference) has no `// SAFETY:` justification",
+          "span": "[FIXTURE]/src/lib.rs:18:14: 18:18",
+          "target": null
+        },
+        {
+          "function": "unsafe_ops::mutable_static_unjustified",
+          "kind": "unsafe-op-missing-justification",
+          "level": "warn",
+          "reason": "unsafe operation (mutable static access) has no `// SAFETY:` justification",
+          "span": "[FIXTURE]/src/lib.rs:27:14: 27:21",
+          "target": null
+        },
+        {
+          "function": "unsafe_ops::extern_static_unjustified",
+          "kind": "unsafe-op-missing-justification",
+          "level": "warn",
+          "reason": "unsafe operation (extern static access) has no `// SAFETY:` justification",
+          "span": "[FIXTURE]/src/lib.rs:36:14: 36:22",
+          "target": null
+        },
+        {
+          "function": "unsafe_ops::union_read_unjustified",
+          "kind": "unsafe-op-missing-justification",
+          "level": "warn",
+          "reason": "unsafe operation (union field access) has no `// SAFETY:` justification",
+          "span": "[FIXTURE]/src/lib.rs:40:14: 40:23",
+          "target": null
+        },
+        {
+          "function": "unsafe_ops::asm_unjustified",
+          "kind": "unsafe-op-missing-justification",
+          "level": "warn",
+          "reason": "unsafe operation (inline assembly) has no `// SAFETY:` justification",
+          "span": "[FIXTURE]/src/lib.rs:49:9: 49:20",
+          "target": null
+        }
+      ]
+    },
+    "scope": "workspace",
+    "tool-version": "0.1.0"
+  }
+]

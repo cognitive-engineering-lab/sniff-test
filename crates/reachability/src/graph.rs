@@ -322,6 +322,13 @@ impl<'view, 'tcx> ReachedEdge<'view, 'tcx> {
     }
 
     #[must_use]
+    /// Returns the instance node whose body expansion produced this edge,
+    /// skipping any macro-expansion bridge nodes in between.
+    pub fn origin(self) -> ReachedNode<'view, 'tcx> {
+        self.reached_node(self.edge().origin)
+    }
+
+    #[must_use]
     /// Returns the reason this edge exists.
     pub fn kind(self) -> ReachabilityEdgeKind {
         self.edge().kind
@@ -331,6 +338,14 @@ impl<'view, 'tcx> ReachedEdge<'view, 'tcx> {
     /// Returns the source span responsible for this edge.
     pub fn span(self) -> Span {
         self.edge().span
+    }
+
+    #[must_use]
+    /// Returns the callee-segment span for call edges — `foo` in `x.foo(a)` —
+    /// which can sit on a different line than the statement span in
+    /// multi-line method chains.
+    pub fn callee_span(self) -> Option<Span> {
+        self.edge().callee_span
     }
 }
 
@@ -511,24 +526,33 @@ pub struct ReachabilityEdge {
     pub source: ReachabilityNodeId,
     /// Target node reached by the edge.
     pub target: ReachabilityNodeId,
+    /// Instance node whose body expansion produced the edge. Differs from
+    /// `source` only for edges routed through macro-expansion bridge nodes.
+    pub origin: ReachabilityNodeId,
     /// Reason this edge exists.
     pub kind: ReachabilityEdgeKind,
     /// Source span responsible for the edge.
     pub span: Span,
+    /// Span of the callee segment for call edges — `foo` in `x.foo(a)`.
+    pub callee_span: Option<Span>,
 }
 
 impl ReachabilityEdge {
     pub(crate) fn new(
         source: ReachabilityNodeId,
         target: ReachabilityNodeId,
+        origin: ReachabilityNodeId,
         kind: ReachabilityEdgeKind,
         span: Span,
+        callee_span: Option<Span>,
     ) -> Self {
         Self {
             source,
             target,
+            origin,
             kind,
             span,
+            callee_span,
         }
     }
 }
@@ -619,8 +643,10 @@ mod tests {
         let edge = graph.push_edge(ReachabilityEdge::new(
             root_node,
             child,
+            root_node,
             ReachabilityEdgeKind::ConstBody,
             DUMMY_SP,
+            None,
         ));
         let mut snapshot = graph.snapshot_for_root(root_node);
         snapshot.record_edge(edge, child, 1);

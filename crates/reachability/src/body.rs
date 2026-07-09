@@ -45,6 +45,7 @@ pub(crate) fn collect_body_edges<'tcx>(
         emit: &mut emit,
         halt: None,
         dyn_vtable_entries: Vec::new(),
+        callee_span: None,
     };
 
     visitor.collect_dyn_vtable_entries();
@@ -62,12 +63,8 @@ pub(crate) struct BodyEdge<'tcx> {
     pub target: ReachabilityNodeKind<'tcx>,
     pub kind: ReachabilityEdgeKind,
     pub span: Span,
-}
-
-impl<'tcx> BodyEdge<'tcx> {
-    fn new(target: ReachabilityNodeKind<'tcx>, kind: ReachabilityEdgeKind, span: Span) -> Self {
-        Self { target, kind, span }
-    }
+    /// Callee-segment span for edges emitted while handling a call terminator.
+    pub callee_span: Option<Span>,
 }
 
 struct BodyEdgeCollector<'a, 'tcx, F>
@@ -80,6 +77,8 @@ where
     emit: &'a mut F,
     halt: Option<ReachabilityHalt<'tcx>>,
     dyn_vtable_entries: Vec<DynVTableEntry<'tcx>>,
+    /// Callee-segment span of the call terminator currently being handled.
+    callee_span: Option<Span>,
 }
 
 #[derive(Clone, Copy)]
@@ -141,7 +140,12 @@ where
             return ControlFlow::Break(halt.clone());
         }
 
-        let edge = BodyEdge::new(target, kind, span);
+        let edge = BodyEdge {
+            target,
+            kind,
+            span,
+            callee_span: self.callee_span,
+        };
 
         match (self.emit)(edge) {
             ControlFlow::Continue(()) => ControlFlow::Continue(()),
@@ -691,19 +695,23 @@ where
         }
 
         match &terminator.kind {
-            TerminatorKind::Call { func, .. } => {
+            TerminatorKind::Call { func, fn_span, .. } => {
+                self.callee_span = Some(*fn_span);
                 let _ = self.emit_call_operand(
                     func,
                     ReachabilityEdgeKind::DirectCall,
                     terminator.source_info.span,
                 );
+                self.callee_span = None;
             }
-            TerminatorKind::TailCall { func, .. } => {
+            TerminatorKind::TailCall { func, fn_span, .. } => {
+                self.callee_span = Some(*fn_span);
                 let _ = self.emit_call_operand(
                     func,
                     ReachabilityEdgeKind::TailCall,
                     terminator.source_info.span,
                 );
+                self.callee_span = None;
             }
             TerminatorKind::Assert { msg, .. } => {
                 let _ = self.emit_assert(msg.clone(), terminator.source_info.span);

@@ -221,8 +221,10 @@ impl<'tcx> ReachabilityIndex<'tcx> {
             self.graph.push_edge(ReachabilityEdge::new(
                 current,
                 macro_node,
+                source,
                 ReachabilityEdgeKind::MacroExpansion,
                 frame.call_site,
+                None,
             ));
             current = macro_node;
         }
@@ -231,8 +233,10 @@ impl<'tcx> ReachabilityIndex<'tcx> {
         self.graph.push_edge(ReachabilityEdge::new(
             current,
             target,
+            source,
             body_edge.kind,
             body_edge.span,
+            body_edge.callee_span,
         ));
     }
 

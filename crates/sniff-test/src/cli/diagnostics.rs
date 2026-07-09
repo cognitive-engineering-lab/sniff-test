@@ -4,10 +4,10 @@ use crate::cache::CachedFunctionSummary;
 use crate::config::{LintLevel, SafetyLintConfig};
 use crate::namespace::canonical_namespace;
 use crate::panics::{PanicEvidence, PanicEvidenceKind, trace_edges_until, trigger_edge_id};
-use crate::report_roots::MissingReportRoot;
+use crate::report_roots::{MissingReportRoot, MissingRootReason};
 use crate::safety::{
     SafetyAnalysis, SafetyCallee, SafetyFinding, render_safety_requirement, safety_call_label,
-    safety_callee_name,
+    safety_callee_name, safety_op_label,
 };
 use reachability::{ReachabilityEdgeId, ReachabilityGraph, ReachabilityNodeKind};
 use rustc_errors::{Diag, EmissionGuarantee};
@@ -50,6 +50,87 @@ struct PanicContractNotes<'a> {
     documented_def_id: DefId,
     documented: &'a str,
     include_stack: bool,
+}
+
+pub(super) fn emit_analysis_incomplete_diagnostic(
+    tcx: TyCtxt<'_>,
+    root_def_id: DefId,
+    node_limit: usize,
+    level: LintLevel,
+) {
+    let root = canonical_namespace(tcx, root_def_id);
+    let message = format!(
+        "analysis of `{root}` is incomplete: reachability halted at the \
+         {node_limit}-instance node limit"
+    );
+    let help =
+        "raise `node-limit` under `[analysis]` in sniff-test.toml, or shrink the traversal by \
+         trusting or ignoring namespaces";
+    match level {
+        LintLevel::Allow => {}
+        LintLevel::Warn => {
+            let mut diag = tcx
+                .dcx()
+                .struct_span_warn(tcx.def_span(root_def_id), message);
+            diag.help(help);
+            diag.emit();
+        }
+        LintLevel::Deny => {
+            let mut diag = tcx
+                .dcx()
+                .struct_span_err(tcx.def_span(root_def_id), message);
+            diag.help(help);
+            let _ = diag.emit();
+        }
+    }
+}
+
+pub(super) fn emit_indirect_boundary_diagnostic<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    graph: &ReachabilityGraph<'tcx>,
+    evidence: &PanicEvidence,
+    root_def_id: DefId,
+    level: LintLevel,
+    include_stack: bool,
+) {
+    if level == LintLevel::Allow {
+        return;
+    }
+    let root = canonical_namespace(tcx, root_def_id);
+    let trigger_edge_id = trigger_edge_id(graph, evidence);
+    let trigger_edge = graph.edge(trigger_edge_id);
+    let message = format!("function `{root}` reaches an unverifiable indirect call");
+    match level {
+        LintLevel::Allow => {}
+        LintLevel::Warn => {
+            let mut diag = tcx
+                .dcx()
+                .struct_span_warn(tcx.def_span(root_def_id), message);
+            decorate_raw_panic_diagnostic(
+                &mut diag,
+                tcx,
+                graph,
+                evidence,
+                trigger_edge.span,
+                include_stack,
+            );
+            diag.emit();
+        }
+        LintLevel::Deny => {
+            let mut diag = tcx
+                .dcx()
+                .struct_span_err(tcx.def_span(root_def_id), message);
+            decorate_raw_panic_diagnostic(
+                &mut diag,
+                tcx,
+                graph,
+                evidence,
+                trigger_edge.span,
+                include_stack,
+            );
+            let _ = diag.emit();
+        }
+    }
 }
 
 pub(super) fn emit_raw_panic_diagnostic<'tcx>(
@@ -430,6 +511,26 @@ pub(super) fn emit_safety_diagnostics(
                     }
                 }
             }
+            SafetyFinding::OpMissingJustification { caller, op, span } => {
+                let caller = canonical_namespace(tcx, *caller);
+                let operation = safety_op_label(*op);
+                let message = format!(
+                    "unsafe operation ({operation}) in `{caller}` is missing a `// SAFETY:` justification"
+                );
+                match level {
+                    LintLevel::Allow => {}
+                    LintLevel::Warn => {
+                        let mut diag = tcx.dcx().struct_span_warn(*span, message);
+                        diag.help("add a `// SAFETY:` comment above the unsafe block or operation");
+                        diag.emit();
+                    }
+                    LintLevel::Deny => {
+                        let mut diag = tcx.dcx().struct_span_err(*span, message);
+                        diag.help("add a `// SAFETY:` comment above the unsafe block or operation");
+                        let _ = diag.emit();
+                    }
+                }
+            }
         }
     }
 }
@@ -459,20 +560,27 @@ pub(super) fn emit_missing_report_root_diagnostics(
 ) {
     let source_file = tcx.sess.source_map().load_file(manifest_path).ok();
     for root in roots {
+        let (message, help) = match root.reason {
+            MissingRootReason::NotFound => (
+                "configured report root was not found",
+                "remove it or update it to a function in the current crate",
+            ),
+            MissingRootReason::Ignored => (
+                "configured report root is excluded by `[panics].ignored-namespaces`",
+                "remove the root or the ignore pattern covering it",
+            ),
+        };
         let mut diag = if let Some(span) = source_file
             .as_ref()
             .and_then(|file| config_span(file.start_pos, root.source_span.clone()))
         {
-            tcx.dcx()
-                .struct_span_warn(span, "configured report root was not found")
+            tcx.dcx().struct_span_warn(span, message)
         } else {
-            tcx.dcx().struct_warn(format!(
-                "configured report root was not found: `{}`",
-                root.path
-            ))
+            tcx.dcx()
+                .struct_warn(format!("{message}: `{}`", root.path))
         };
         diag.note("configured under `[analysis].report-roots`");
-        diag.help("remove it or update it to a function in the current crate");
+        diag.help(help);
         diag.emit();
     }
 }
@@ -565,6 +673,17 @@ fn panic_trigger_note<'tcx>(
                 "documented panic contract `{}`",
                 canonical_namespace(tcx, def_id)
             )
+        }
+        PanicEvidenceKind::IndirectBoundary {
+            def_id: Some(def_id),
+        } => {
+            format!(
+                "indirect call to undocumented trait method `{}`",
+                canonical_namespace(tcx, def_id)
+            )
+        }
+        PanicEvidenceKind::IndirectBoundary { def_id: None } => {
+            String::from("indirect call through an opaque callable")
         }
     }
 }

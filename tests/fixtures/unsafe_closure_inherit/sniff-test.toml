@@ -1,0 +1,5 @@
+# Closures lexically inherit the enclosing unsafe block, so its `// SAFETY:`
+# justification must flow into closure bodies.
+
+[analysis]
+report-roots = "all"

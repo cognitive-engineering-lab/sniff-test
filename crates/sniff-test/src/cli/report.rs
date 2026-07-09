@@ -152,6 +152,27 @@ impl PanicRootReport {
         });
     }
 
+    pub(crate) fn push_analysis_incomplete(
+        &mut self,
+        tcx: TyCtxt<'_>,
+        root_def_id: rustc_hir::def_id::DefId,
+        node_limit: usize,
+        level: LintLevel,
+    ) {
+        self.push_finding(PanicFindingReport {
+            kind: ReportDetailKind::AnalysisIncomplete,
+            level,
+            span: render_span(tcx, tcx.def_span(root_def_id)),
+            edge: None,
+            reason: format!(
+                "reachability analysis halted at the {node_limit}-instance node limit \
+                 before the call graph was exhausted"
+            ),
+            target: None,
+            trace: Vec::new(),
+        });
+    }
+
     fn push_finding(&mut self, finding: PanicFindingReport) {
         self.counts.increment(finding.kind);
         self.findings.push(finding);
@@ -185,6 +206,8 @@ pub(crate) enum ReportDetailKind {
     CachedDependencyPanic,
     PanicObligation,
     TrustedPanicObligation,
+    IndirectCallBoundary,
+    AnalysisIncomplete,
 }
 
 impl ReportDetailKind {
@@ -193,6 +216,7 @@ impl ReportDetailKind {
             PanicEvidenceKind::CompilerAssert => Self::CompilerAssert,
             PanicEvidenceKind::PanicObligation { .. } => Self::PanicObligation,
             PanicEvidenceKind::PanicSink { .. } => Self::PanicInvocation,
+            PanicEvidenceKind::IndirectBoundary { .. } => Self::IndirectCallBoundary,
         }
     }
 
@@ -203,6 +227,8 @@ impl ReportDetailKind {
             }
             Self::PanicObligation => lints.documented_panic_contract,
             Self::TrustedPanicObligation => lints.trusted_panic_contract,
+            Self::IndirectCallBoundary => lints.indirect_call_boundary,
+            Self::AnalysisIncomplete => lints.analysis_incomplete,
         }
     }
 }
@@ -241,6 +267,19 @@ fn report_evidence_kind<'tcx>(
             let target = canonical_namespace(tcx, *def_id);
             (format!("panic sink {target}"), Some(target))
         }
+        PanicEvidenceKind::IndirectBoundary {
+            def_id: Some(def_id),
+        } => {
+            let target = canonical_namespace(tcx, *def_id);
+            (
+                format!("indirect call to undocumented trait method {target} cannot be verified"),
+                Some(target),
+            )
+        }
+        PanicEvidenceKind::IndirectBoundary { def_id: None } => (
+            String::from("indirect call through an opaque callable cannot be verified"),
+            None,
+        ),
     }
 }
 

@@ -28,6 +28,16 @@ pub struct MissingReportRoot {
     pub path: String,
     /// Byte range of the TOML string value in the sniff-test manifest.
     pub source_span: Range<usize>,
+    pub reason: MissingRootReason,
+}
+
+/// Why a configured report root produced no analysis.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MissingRootReason {
+    /// No function with that path exists in the current crate.
+    NotFound,
+    /// The function exists but matches `[panics].ignored-namespaces`.
+    Ignored,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -76,13 +86,26 @@ pub fn select_report_roots<'tcx>(
         ReportRootSet::Explicit(configured_roots) => {
             let mut missing_roots = Vec::new();
             for configured_root in configured_roots {
-                if let Some(local) = find_local_fn_by_path(tcx, configured_root.path()) {
-                    roots.insert(local);
-                } else {
-                    missing_roots.push(MissingReportRoot {
-                        path: configured_root.path().to_owned(),
-                        source_span: configured_root.source_span(),
-                    });
+                match find_local_fn_by_path(tcx, configured_root.path()) {
+                    // An explicitly configured root silently swallowed by the
+                    // ignore list would look analyzed while nothing ran.
+                    Some(local) if panic_config.ignores_def(tcx, local.to_def_id()) => {
+                        missing_roots.push(MissingReportRoot {
+                            path: configured_root.path().to_owned(),
+                            source_span: configured_root.source_span(),
+                            reason: MissingRootReason::Ignored,
+                        });
+                    }
+                    Some(local) => {
+                        roots.insert(local);
+                    }
+                    None => {
+                        missing_roots.push(MissingReportRoot {
+                            path: configured_root.path().to_owned(),
+                            source_span: configured_root.source_span(),
+                            reason: MissingRootReason::NotFound,
+                        });
+                    }
                 }
             }
 
