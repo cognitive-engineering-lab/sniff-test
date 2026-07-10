@@ -542,7 +542,7 @@ fn self_arg_contains_dyn(args: GenericArgsRef<'_>) -> bool {
     self_arg_ty(args).is_some_and(ty_contains_dyn)
 }
 
-fn self_arg_ty<'tcx>(args: GenericArgsRef<'tcx>) -> Option<Ty<'tcx>> {
+fn self_arg_ty(args: GenericArgsRef<'_>) -> Option<Ty<'_>> {
     args.iter().next().and_then(|arg| {
         if let ty::GenericArgKind::Type(ty) = arg.kind() {
             Some(ty)
