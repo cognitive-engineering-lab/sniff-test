@@ -52,6 +52,9 @@ callable-edge-attribution = "erasure-sites" # erasure-sites | call-sites
 analysis-incomplete = "deny"
 ambiguous-obligations = "deny" # deny | warn | allow
 
+[documentation]
+override-files = [] # TOML files relative to sniff-test.toml
+
 [panics.lints]
 missing-docs = "deny"
 documented-contract = "warn"
@@ -94,6 +97,22 @@ Use `[safety].safety-obligation-namespaces` for safe functions that still carry
 caller obligations. Calls to matching functions must have a nearby `// SAFETY:`
 justification, and named bullets under a callee `# Safety` section must be
 satisfied by matching named bullets at the call site.
+
+Use `[documentation].override-files` while auditing generated or third-party
+APIs whose contracts are known but not written in source yet. Override files are
+TOML files keyed by Rust namespace globs; the value replaces that function's
+rustdoc markdown for both panic and safety contract parsing. The markdown is
+parsed as CommonMark, so normal headings, setext headings, inline code, and
+formatted list text work as expected.
+
+```toml
+[overrides]
+"zerocopy::Layout::for_type" = """
+# Panics
+
+- representable: layout size must fit in `usize`.
+"""
+```
 
 ## JSON Output
 

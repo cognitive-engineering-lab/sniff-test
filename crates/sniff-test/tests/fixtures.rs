@@ -146,6 +146,10 @@ fixture_cases! {
         driver_documented_obligation_allowed => Case::direct("allowed documented panic obligation")
             .manifest("allow.toml");
     }
+    "contract_overrides" => {
+        contract_overrides => Case::cargo("documentation overrides");
+        driver_contract_overrides => Case::direct("documentation overrides");
+    }
     "release_pruning" => {
         release_pruning => Case::cargo("release profile pruning").exit_code(1);
     }

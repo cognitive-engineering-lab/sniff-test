@@ -1,0 +1,26 @@
+[analysis]
+report-roots = [
+    "contract_overrides::panic_override_missing_marker",
+    "contract_overrides::panic_override_satisfied",
+    "contract_overrides::safety_override_missing_requirement",
+    "contract_overrides::safety_override_satisfied",
+]
+
+[documentation]
+override-files = ["override.toml"]
+
+[panics]
+panic-sink-namespaces = [
+    "core::panicking::**",
+    "std::panicking::**",
+    "core::std::rt::panic_fmt",
+    "std::rt::panic_fmt",
+]
+
+[panics.lints]
+documented-contract = "warn"
+
+[safety.lints]
+missing-docs = "deny"
+missing-justification = "warn"
+missing-requirements = "warn"

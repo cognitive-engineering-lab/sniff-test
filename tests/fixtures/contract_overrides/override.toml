@@ -1,0 +1,13 @@
+[overrides]
+"contract_overrides::panic_contract" = """
+# Panics
+
+- flag: `flag` must be true.
+"""
+
+"contract_overrides::synthetic_read" = """
+# Safety
+
+- valid_ptr: pointer must be non-null.
+- initialized: pointer must reference initialized memory.
+"""

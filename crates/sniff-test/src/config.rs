@@ -15,6 +15,7 @@
 //! `proc-macro2`.
 
 use std::borrow::Cow;
+use std::collections::BTreeMap;
 use std::fmt::{Debug, Display, Formatter};
 use std::ops::Range;
 use std::path::{Path, PathBuf};
@@ -68,6 +69,19 @@ node-limit = 4096
 analysis-incomplete = "deny"
 # Use `warn` while auditing, or `allow` to accept squashed obligations.
 ambiguous-obligations = "deny"
+
+[documentation]
+# Synthetic rustdoc markdown by namespace glob, loaded from TOML files relative
+# to this manifest. Useful while auditing external or generated APIs whose
+# contracts are known but not written in source yet.
+#
+# File format:
+# [overrides]
+# "crate::path::function" = """
+# # Panics
+# - requirement: condition
+# """
+override-files = []
 
 [panics]
 # Crates, fully-qualified functions, or macro expansion paths whose internals should be treated as
@@ -146,6 +160,8 @@ pub struct SniffTestConfig {
     #[serde(default)]
     pub analysis: AnalysisConfig,
     #[serde(default)]
+    pub documentation: DocumentationConfig,
+    #[serde(default)]
     pub panics: PanicConfig,
     #[serde(default)]
     pub safety: SafetyConfig,
@@ -164,10 +180,13 @@ impl SniffTestConfig {
             path: path.to_owned(),
             source,
         })?;
-        Self::from_manifest_str(&source).map_err(|source| ConfigError::Parse {
+        let mut config = Self::from_manifest_str(&source).map_err(|source| ConfigError::Parse {
             path: path.to_owned(),
             source,
-        })
+        })?;
+        let base_dir = path.parent().unwrap_or_else(|| Path::new("."));
+        config.load_documentation_overrides(base_dir)?;
+        Ok(config)
     }
 
     /// Parses a sniff-test manifest from a string.
@@ -176,7 +195,20 @@ impl SniffTestConfig {
     ///
     /// Returns an error when the manifest contains unsupported syntax.
     pub fn from_manifest_str(source: &str) -> Result<Self, toml::de::Error> {
-        toml::from_str(source)
+        let mut config: Self = toml::from_str(source)?;
+        config.install_documentation_overrides();
+        Ok(config)
+    }
+
+    fn load_documentation_overrides(&mut self, base_dir: &Path) -> Result<(), ConfigError> {
+        self.documentation.load_overrides(base_dir)?;
+        self.install_documentation_overrides();
+        Ok(())
+    }
+
+    fn install_documentation_overrides(&mut self) {
+        self.panics.documentation_overrides = self.documentation.overrides.clone();
+        self.safety.documentation_overrides = self.documentation.overrides.clone();
     }
 }
 
@@ -201,6 +233,157 @@ pub struct AnalysisConfig {
     /// Instance budget per reachability query; halting at the limit is
     /// surfaced through the `analysis-incomplete` lint.
     pub node_limit: usize,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "kebab-case", deny_unknown_fields)]
+#[serde(default)]
+pub struct DocumentationConfig {
+    /// TOML files containing synthetic rustdoc markdown by namespace glob.
+    pub override_files: Vec<PathBuf>,
+    #[serde(skip)]
+    pub overrides: ContractDocOverrides,
+    #[serde(skip)]
+    resolved_override_files: Vec<PathBuf>,
+}
+
+impl DocumentationConfig {
+    #[must_use]
+    pub fn resolved_override_files(&self) -> &[PathBuf] {
+        &self.resolved_override_files
+    }
+
+    fn load_overrides(&mut self, base_dir: &Path) -> Result<(), ConfigError> {
+        let mut entries = Vec::new();
+        let mut resolved_files = Vec::new();
+        for path in &self.override_files {
+            let path = if path.is_absolute() {
+                path.clone()
+            } else {
+                base_dir.join(path)
+            };
+            let source =
+                std::fs::read_to_string(&path).map_err(|source| ConfigError::OverrideIo {
+                    path: path.clone(),
+                    source,
+                })?;
+            let override_file =
+                toml::from_str::<ContractDocOverrideFile>(&source).map_err(|source| {
+                    ConfigError::OverrideParse {
+                        path: path.clone(),
+                        source,
+                    }
+                })?;
+            let file_entries = override_file
+                .overrides
+                .into_iter()
+                .map(|(pattern, markdown)| (pattern, normalize_override_markdown(&markdown)))
+                .collect::<Vec<_>>();
+            ContractDocOverrides::new(file_entries.clone()).map_err(|source| {
+                ConfigError::OverrideGlob {
+                    path: path.clone(),
+                    source,
+                }
+            })?;
+            entries.extend(file_entries);
+            resolved_files.push(path);
+        }
+
+        self.overrides =
+            ContractDocOverrides::new(entries).expect("override globs were validated per file");
+        self.resolved_override_files = resolved_files;
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ContractDocOverrideFile {
+    overrides: BTreeMap<String, String>,
+}
+
+fn normalize_override_markdown(markdown: &str) -> String {
+    let lines = markdown.lines().collect::<Vec<_>>();
+    let first_nonblank = lines
+        .iter()
+        .position(|line| !line.trim().is_empty())
+        .unwrap_or(0);
+    let last_nonblank = lines
+        .iter()
+        .rposition(|line| !line.trim().is_empty())
+        .unwrap_or(first_nonblank);
+    let lines = &lines[first_nonblank..=last_nonblank];
+    let indent = lines
+        .iter()
+        .filter(|line| !line.trim().is_empty())
+        .map(|line| line.len() - line.trim_start().len())
+        .min()
+        .unwrap_or(0);
+    lines
+        .iter()
+        .map(|line| line.get(indent..).unwrap_or(""))
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+/// Synthetic rustdoc markdown matched by Rust namespace glob.
+#[derive(Clone, Default, PartialEq, Eq)]
+pub struct ContractDocOverrides {
+    entries: Vec<ContractDocOverride>,
+    patterns: PathPatterns,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ContractDocOverride {
+    pattern: String,
+    markdown: String,
+}
+
+impl ContractDocOverrides {
+    /// Compiles documentation overrides.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if any configured glob pattern is invalid.
+    pub fn new(entries: Vec<(String, String)>) -> Result<Self, globset::Error> {
+        let patterns =
+            PathPatterns::new(entries.iter().map(|(pattern, _)| pattern.clone()).collect())?;
+        Ok(Self {
+            entries: entries
+                .into_iter()
+                .map(|(pattern, markdown)| ContractDocOverride { pattern, markdown })
+                .collect(),
+            patterns,
+        })
+    }
+
+    #[must_use]
+    pub fn markdown_for_namespace(&self, namespace: &str) -> Option<&str> {
+        let matched = self.patterns.best_match(namespace)?;
+        self.entries
+            .iter()
+            .find(|entry| entry.pattern == matched.pattern)
+            .map(|entry| entry.markdown.as_str())
+    }
+
+    #[must_use]
+    pub fn markdown_for_def(&self, tcx: TyCtxt<'_>, def_id: DefId) -> Option<&str> {
+        let candidates = namespace_candidates(tcx, def_id);
+        let matched = candidates
+            .iter()
+            .filter_map(|candidate| self.patterns.best_match(candidate))
+            .max_by_key(|matched| matched.precision)?;
+        self.entries
+            .iter()
+            .find(|entry| entry.pattern == matched.pattern)
+            .map(|entry| entry.markdown.as_str())
+    }
+}
+
+impl Debug for ContractDocOverrides {
+    fn fmt(&self, formatter: &mut Formatter<'_>) -> std::fmt::Result {
+        self.entries.fmt(formatter)
+    }
 }
 
 impl Default for AnalysisConfig {
@@ -362,6 +545,8 @@ pub struct PanicConfig {
     pub trusted_panic_obligation_namespaces: PathPatterns,
     /// Callee paths treated as direct panic sinks.
     pub panic_sink_namespaces: PathPatterns,
+    #[serde(skip)]
+    pub documentation_overrides: ContractDocOverrides,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
@@ -414,6 +599,8 @@ pub struct SafetyConfig {
     /// Safe functions that should be treated as safety obligations at call sites.
     pub safety_obligation_namespaces: PathPatterns,
     pub lints: SafetyLintConfig,
+    #[serde(skip)]
+    pub documentation_overrides: ContractDocOverrides,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
@@ -842,6 +1029,18 @@ pub enum ConfigError {
         path: PathBuf,
         source: toml::de::Error,
     },
+    OverrideIo {
+        path: PathBuf,
+        source: std::io::Error,
+    },
+    OverrideParse {
+        path: PathBuf,
+        source: toml::de::Error,
+    },
+    OverrideGlob {
+        path: PathBuf,
+        source: globset::Error,
+    },
 }
 
 impl Display for ConfigError {
@@ -853,6 +1052,27 @@ impl Display for ConfigError {
             Self::Parse { path, source } => {
                 write!(f, "failed to parse {}: {source}", path.display())
             }
+            Self::OverrideIo { path, source } => {
+                write!(
+                    f,
+                    "failed to read documentation override file {}: {source}",
+                    path.display()
+                )
+            }
+            Self::OverrideParse { path, source } => {
+                write!(
+                    f,
+                    "failed to parse documentation override file {}: {source}",
+                    path.display()
+                )
+            }
+            Self::OverrideGlob { path, source } => {
+                write!(
+                    f,
+                    "failed to compile documentation override globs in {}: {source}",
+                    path.display()
+                )
+            }
         }
     }
 }
@@ -862,15 +1082,21 @@ impl std::error::Error for ConfigError {
         match self {
             Self::Io { source, .. } => Some(source),
             Self::Parse { source, .. } => Some(source),
+            Self::OverrideIo { source, .. } => Some(source),
+            Self::OverrideParse { source, .. } => Some(source),
+            Self::OverrideGlob { source, .. } => Some(source),
         }
     }
 }
 
 #[cfg(test)]
 mod tests {
+    use std::path::PathBuf;
+
     use super::{
-        AnalysisConfig, CallableEdgeAttribution, EXAMPLE_MANIFEST, LintLevel, MirInlining,
-        OverflowChecks, PanicConfig, PathPatterns, ReportRootSet, SafetyConfig, SniffTestConfig,
+        AnalysisConfig, CallableEdgeAttribution, ContractDocOverrides, EXAMPLE_MANIFEST, LintLevel,
+        MirInlining, OverflowChecks, PanicConfig, PathPatterns, ReportRootSet, SafetyConfig,
+        SniffTestConfig,
     };
 
     fn path_patterns(patterns: &[&str]) -> PathPatterns {
@@ -1241,5 +1467,87 @@ mod tests {
         assert_eq!(paths[1].path(), "test::b");
         assert_eq!(&explicit[paths[0].source_span()], "\"test::a\"");
         assert_eq!(&explicit[paths[1].source_span()], "\"test::b\"");
+    }
+
+    #[test]
+    fn parses_documentation_override_files() {
+        let config = r#"
+            [documentation]
+            override-files = ["override.toml", "audit/zerocopy.toml"]
+        "#;
+
+        let parsed = SniffTestConfig::from_manifest_str(config).expect("manifest should parse");
+
+        assert_eq!(
+            parsed.documentation.override_files,
+            [
+                PathBuf::from("override.toml"),
+                PathBuf::from("audit/zerocopy.toml")
+            ]
+        );
+    }
+
+    #[test]
+    fn documentation_overrides_use_most_specific_namespace_glob() {
+        let overrides = ContractDocOverrides::new(vec![
+            ("zerocopy::**".to_owned(), "# Safety\n".to_owned()),
+            (
+                "zerocopy::Layout::for_type".to_owned(),
+                "# Panics\n".to_owned(),
+            ),
+        ])
+        .expect("override globs should compile");
+
+        assert_eq!(
+            overrides.markdown_for_namespace("zerocopy::Layout::for_type"),
+            Some("# Panics\n")
+        );
+        assert_eq!(
+            overrides.markdown_for_namespace("zerocopy::FromBytes"),
+            Some("# Safety\n")
+        );
+    }
+
+    #[test]
+    fn manifest_loads_documentation_overrides_relative_to_itself() {
+        let dir = tempfile::tempdir().expect("tempdir should be created");
+        let manifest_path = dir.path().join("sniff-test.toml");
+        let override_path = dir.path().join("override.toml");
+        std::fs::write(
+            &manifest_path,
+            r#"
+                [documentation]
+                override-files = ["override.toml"]
+            "#,
+        )
+        .expect("manifest should be written");
+        std::fs::write(
+            &override_path,
+            r#"
+                [overrides]
+                "zerocopy::Layout::for_type" = """
+                # Panics
+
+                - nonzero: layout size must be representable.
+                """
+            "#,
+        )
+        .expect("override file should be written");
+
+        let parsed =
+            SniffTestConfig::from_manifest_path(&manifest_path).expect("manifest should load");
+
+        assert_eq!(
+            parsed.documentation.resolved_override_files(),
+            [override_path.clone()]
+        );
+        assert_eq!(
+            parsed
+                .documentation
+                .overrides
+                .markdown_for_namespace("zerocopy::Layout::for_type")
+                .map(str::trim),
+            Some("# Panics\n\n- nonzero: layout size must be representable.")
+        );
     }
 }

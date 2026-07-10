@@ -485,6 +485,7 @@ pub(crate) fn analyze_crate(tcx: TyCtxt<'_>, args: &SniffTestArgs, compiler_args
             tcx,
             &safety_analysis,
             config.safety.lints,
+            &config.safety.documentation_overrides,
             config.analysis.lints.ambiguous_obligations,
         );
         emit_missing_report_root_diagnostics(
@@ -869,6 +870,7 @@ fn analyze_root<'tcx>(
         root.kind == PanicRootKind::Generic,
         analysis_complete,
         findings,
+        config,
         Some((graph, &boundary_result)),
         cached_findings,
     );
@@ -1018,7 +1020,7 @@ fn collect_panic_findings<'tcx>(
         render_node(tcx, root_node.kind()),
         collection.root_kind,
         root_declaration_span(tcx, root_node.kind()),
-        crate::panics::has_panic_docs(tcx, collection.root_def_id),
+        crate::panics::has_panic_docs(tcx, collection.root_def_id, collection.config),
     );
 
     for evidence in &analysis.evidence {

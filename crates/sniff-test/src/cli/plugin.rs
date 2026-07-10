@@ -1,8 +1,9 @@
 use std::ffi::{OsStr, OsString};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::{Command, ExitCode};
 
 use crate::cache::default_cache_dir;
+use crate::config::SniffTestConfig;
 use rustc_driver::{Callbacks, Compilation};
 use rustc_interface::interface;
 use rustc_middle::ty::TyCtxt;
@@ -35,12 +36,8 @@ pub(crate) fn modify_cargo(cargo: &mut Command, args: &SniffTestArgs) {
         cargo.args(["-Z", "build-std=core,alloc,std"]);
     }
 
-    let config_hash = args
-        .manifest_path
-        .as_ref()
-        .and_then(|path| std::fs::read(path).ok())
-        .map_or(0, |source| stable_hash(&source));
     let config = load_config(args);
+    let config_hash = config_hash(args, &config);
     let overflow_checks = args
         .overflow_checks
         .unwrap_or(config.analysis.overflow_checks);
@@ -271,6 +268,52 @@ fn stable_hash(source: &[u8]) -> u64 {
     })
 }
 
+fn config_hash(args: &SniffTestArgs, config: &SniffTestConfig) -> u64 {
+    let mut source = Vec::new();
+    for path in tracked_config_files_from_config(args, config) {
+        let Ok(contents) = std::fs::read(&path) else {
+            continue;
+        };
+        source.extend_from_slice(path.as_os_str().as_encoded_bytes());
+        source.push(0);
+        source.extend_from_slice(&contents);
+        source.push(0);
+    }
+    if source.is_empty() {
+        0
+    } else {
+        stable_hash(&source)
+    }
+}
+
+fn tracked_config_files(args: &SniffTestArgs) -> Vec<PathBuf> {
+    let manifest_path = args.manifest_path();
+    if !manifest_path.exists() {
+        return Vec::new();
+    }
+    let config = load_config(args);
+    tracked_config_files_from_config(args, &config)
+}
+
+fn tracked_config_files_from_config(
+    args: &SniffTestArgs,
+    config: &SniffTestConfig,
+) -> Vec<PathBuf> {
+    let manifest_path = args.manifest_path();
+    if !manifest_path.exists() {
+        return Vec::new();
+    }
+    let mut files = vec![manifest_path];
+    files.extend(
+        config
+            .documentation
+            .resolved_override_files()
+            .iter()
+            .cloned(),
+    );
+    files
+}
+
 fn compose_encoded_rustflags(tool_flags: &[String]) -> String {
     encode_rustflags(user_rustflags(), tool_flags)
 }
@@ -392,20 +435,17 @@ struct SniffTestCallbacks {
 impl Callbacks for SniffTestCallbacks {
     fn config(&mut self, config: &mut interface::Config) {
         let encoded_args = std::env::var(SNIFF_TEST_ARGS_ENV).ok();
-        let manifest_path = self
-            .args
-            .manifest_path
-            .as_ref()
-            .map(|path| path.display().to_string());
+        let config_files = tracked_config_files(&self.args)
+            .into_iter()
+            .map(|path| path.display().to_string())
+            .collect::<Vec<_>>();
         config.track_state = Some(Box::new(move |sess| {
             sess.env_depinfo.borrow_mut().insert((
                 Symbol::intern(SNIFF_TEST_ARGS_ENV),
                 encoded_args.as_deref().map(Symbol::intern),
             ));
-            if let Some(manifest_path) = &manifest_path {
-                sess.file_depinfo
-                    .borrow_mut()
-                    .insert(Symbol::intern(manifest_path));
+            for path in &config_files {
+                sess.file_depinfo.borrow_mut().insert(Symbol::intern(path));
             }
         }));
     }
@@ -418,7 +458,12 @@ impl Callbacks for SniffTestCallbacks {
 
 #[cfg(test)]
 mod tests {
-    use super::encode_rustflags;
+    use std::path::PathBuf;
+
+    use crate::config::SniffTestConfig;
+
+    use super::{config_hash, encode_rustflags, tracked_config_files_from_config};
+    use crate::cli::SniffTestArgs;
 
     #[test]
     fn tool_rustflags_append_to_user_flags_in_encoded_form() {
@@ -433,5 +478,51 @@ mod tests {
             encode_rustflags(Vec::new(), &[String::from("-Zno-steal-thir")]),
             "-Zno-steal-thir"
         );
+    }
+
+    #[test]
+    fn config_hash_includes_documentation_override_files() {
+        let dir = tempfile::tempdir().expect("tempdir should be created");
+        let manifest = dir.path().join("sniff-test.toml");
+        let override_file = dir.path().join("override.toml");
+        std::fs::write(
+            &manifest,
+            r#"
+                [documentation]
+                override-files = ["override.toml"]
+            "#,
+        )
+        .expect("manifest should be written");
+        std::fs::write(
+            &override_file,
+            r##"
+                [overrides]
+                "crate::f" = "# Panics\n"
+            "##,
+        )
+        .expect("override should be written");
+
+        let args = SniffTestArgs {
+            manifest_path: Some(PathBuf::from(&manifest)),
+            ..SniffTestArgs::default()
+        };
+        let config = SniffTestConfig::from_manifest_path(&manifest).expect("config should load");
+
+        assert_eq!(
+            tracked_config_files_from_config(&args, &config),
+            [manifest.clone(), override_file.clone()]
+        );
+        let before = config_hash(&args, &config);
+
+        std::fs::write(
+            &override_file,
+            r##"
+                [overrides]
+                "crate::f" = "# Safety\n"
+            "##,
+        )
+        .expect("override should be updated");
+
+        assert_ne!(before, config_hash(&args, &config));
     }
 }

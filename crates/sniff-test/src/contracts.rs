@@ -8,6 +8,8 @@ use rustc_hir::{Attribute, def_id::DefId};
 use rustc_middle::ty::TyCtxt;
 use rustc_span::{DUMMY_SP, Span};
 
+use crate::config::ContractDocOverrides;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(crate) enum ContractKind {
     Panic,
@@ -48,7 +50,12 @@ pub(crate) fn contract_doc_summary(
     tcx: TyCtxt<'_>,
     def_id: DefId,
     kind: ContractKind,
+    overrides: &ContractDocOverrides,
 ) -> ContractDocSummary {
+    if let Some(markdown) = overrides.markdown_for_def(tcx, def_id) {
+        return parse_contract_doc_markdown(markdown, tcx.def_span(def_id), kind);
+    }
+
     SUMMARY_CACHE.with_borrow_mut(|cache| {
         cache
             .entry((def_id, kind))
@@ -77,39 +84,101 @@ pub(crate) fn parse_contract_doc_lines(
     lines: impl IntoIterator<Item = impl Into<ContractDocLine>>,
     kind: ContractKind,
 ) -> ContractDocSummary {
+    let lines = lines.into_iter().map(Into::into).collect::<Vec<_>>();
+    let mut markdown = String::new();
+    let mut line_spans = Vec::new();
+    for line in lines {
+        let start = markdown.len();
+        markdown.push_str(&line.line);
+        let end = markdown.len();
+        line_spans.push((start..end, line.span));
+        markdown.push('\n');
+    }
+
+    parse_contract_doc_markdown_with_spans(&markdown, &line_spans, kind)
+}
+
+fn parse_contract_doc_markdown(
+    markdown: &str,
+    span: Span,
+    kind: ContractKind,
+) -> ContractDocSummary {
+    parse_contract_doc_markdown_with_spans(markdown, &[(0..markdown.len(), span)], kind)
+}
+
+fn parse_contract_doc_markdown_with_spans(
+    markdown: &str,
+    line_spans: &[(std::ops::Range<usize>, Span)],
+    kind: ContractKind,
+) -> ContractDocSummary {
+    use pulldown_cmark::{Event, Parser, Tag, TagEnd};
+
     let mut summary = ContractDocSummary::default();
     let mut in_contract_section = false;
-    let mut fence: Option<String> = None;
+    let mut heading = None::<String>;
+    let mut item = None::<MarkdownItem>;
+    let mut list_depth = 0usize;
 
-    for line in lines.into_iter().map(Into::into) {
-        // Lines inside fenced code blocks are example text, not structure: a
-        // literal `# Panics` there is not a contract heading, and hidden
-        // doctest lines like `# use foo;` must not close a real section.
-        if let Some(marker) = code_fence_marker(&line.line) {
-            match fence {
-                Some(ref open) if marker.starts_with(open) => fence = None,
-                Some(_) => {}
-                None => fence = Some(marker.to_owned()),
+    for (event, range) in Parser::new(markdown).into_offset_iter() {
+        match event {
+            Event::Start(Tag::Heading { .. }) => heading = Some(String::new()),
+            Event::End(TagEnd::Heading(_)) => {
+                if let Some(heading) = heading.take() {
+                    in_contract_section = kind.matches_heading(markdown_heading_text(&heading));
+                    summary.has_docs |= in_contract_section;
+                }
             }
-            continue;
-        }
-        if fence.is_some() {
-            continue;
-        }
-
-        if let Some(heading) = markdown_heading_text(&line.line) {
-            in_contract_section = kind.matches_heading(heading);
-            summary.has_docs |= in_contract_section;
-            continue;
-        }
-
-        if in_contract_section && let Some(requirement) = parse_requirement_bullet(line) {
-            summary.requirements.push(requirement);
+            Event::Start(Tag::List(_)) if in_contract_section => {
+                list_depth += 1;
+            }
+            Event::End(TagEnd::List(_)) if in_contract_section => {
+                list_depth = list_depth.saturating_sub(1);
+            }
+            Event::Start(Tag::Item) if in_contract_section && list_depth == 1 => {
+                item = Some(MarkdownItem {
+                    text: String::new(),
+                    span: span_for_offset(line_spans, range.start),
+                });
+            }
+            Event::Start(Tag::Item) if in_contract_section && list_depth > 1 => {
+                if let Some(item) = &mut item {
+                    item.text.push(' ');
+                }
+            }
+            Event::End(TagEnd::Item) if in_contract_section && list_depth == 1 => {
+                if let Some(item) = item.take()
+                    && let Some(requirement) = parse_requirement_text(item)
+                {
+                    summary.requirements.push(requirement);
+                }
+            }
+            Event::Text(text) | Event::Code(text) => {
+                if let Some(heading) = &mut heading {
+                    heading.push_str(&text);
+                }
+                if let Some(item) = &mut item {
+                    item.text.push_str(&text);
+                }
+            }
+            Event::SoftBreak | Event::HardBreak => {
+                if let Some(heading) = &mut heading {
+                    heading.push(' ');
+                }
+                if let Some(item) = &mut item {
+                    item.text.push(' ');
+                }
+            }
+            _ => {}
         }
     }
 
     summary.ambiguous_requirements = ambiguous_requirements(&summary.requirements);
     summary
+}
+
+struct MarkdownItem {
+    text: String,
+    span: Span,
 }
 
 pub(crate) struct ContractDocLine {
@@ -132,25 +201,28 @@ impl From<(String, Span)> for ContractDocLine {
     }
 }
 
-/// The backtick or tilde run opening or closing a fenced code block, ignoring
-/// any info string. Closing fences must be at least as long as the opener,
-/// which `starts_with` on the returned marker checks.
-fn code_fence_marker(line: &str) -> Option<&str> {
-    let line = line.trim_start();
-    let len = if line.starts_with("```") {
-        line.len() - line.trim_start_matches('`').len()
-    } else if line.starts_with("~~~") {
-        line.len() - line.trim_start_matches('~').len()
-    } else {
-        return None;
-    };
-    Some(&line[..len])
-}
-
 #[cfg(test)]
 #[must_use]
 pub(crate) fn line_has_contract_heading(line: &str, kind: ContractKind) -> bool {
-    markdown_heading_text(line).is_some_and(|heading| kind.matches_heading(heading))
+    let mut heading = None::<String>;
+    for event in pulldown_cmark::Parser::new(line) {
+        match event {
+            pulldown_cmark::Event::Start(pulldown_cmark::Tag::Heading { .. }) => {
+                heading = Some(String::new());
+            }
+            pulldown_cmark::Event::End(pulldown_cmark::TagEnd::Heading(_)) => {
+                return heading
+                    .is_some_and(|heading| kind.matches_heading(markdown_heading_text(&heading)));
+            }
+            pulldown_cmark::Event::Text(text) | pulldown_cmark::Event::Code(text) => {
+                if let Some(heading) = &mut heading {
+                    heading.push_str(&text);
+                }
+            }
+            _ => {}
+        }
+    }
+    false
 }
 
 /// Normalized names of requirements satisfied by marker bullets with
@@ -219,32 +291,27 @@ fn doc_comment(attr: &Attribute) -> Option<(rustc_span::Symbol, Span)> {
     }
 }
 
-fn parse_requirement_bullet(line: ContractDocLine) -> Option<ContractRequirement> {
-    let text = line.line.trim_start();
-    let body = text
-        .strip_prefix("- ")
-        .or_else(|| text.strip_prefix("* "))
-        .or_else(|| text.strip_prefix("+ "))?;
-    let (name, condition) = body.split_once(':')?;
+fn parse_requirement_text(item: MarkdownItem) -> Option<ContractRequirement> {
+    let (name, condition) = item.text.split_once(':')?;
     let name = name.trim();
     let condition = condition.trim();
 
     (!normalize_requirement_name(name).is_empty()).then(|| ContractRequirement {
         name: name.to_owned(),
         condition: condition.to_owned(),
-        span: line.span,
+        span: item.span,
     })
 }
 
-fn markdown_heading_text(line: &str) -> Option<&str> {
-    let rest = line.trim_start().strip_prefix('#')?;
-    let rest = rest.trim_start_matches('#');
-    if !rest.starts_with(char::is_whitespace) {
-        return None;
-    }
+fn markdown_heading_text(heading: &str) -> &str {
+    heading.trim().trim_end_matches([':', '-']).trim()
+}
 
-    let heading = rest.trim();
-    Some(heading.trim_end_matches([':', '-']).trim())
+fn span_for_offset(line_spans: &[(std::ops::Range<usize>, Span)], offset: usize) -> Span {
+    line_spans
+        .iter()
+        .find(|(range, _)| range.contains(&offset))
+        .map_or(DUMMY_SP, |(_, span)| *span)
 }
 
 impl ContractKind {
@@ -262,6 +329,62 @@ impl ContractKind {
 #[cfg(test)]
 mod tests {
     use super::{ContractKind, parse_contract_doc_lines};
+
+    #[test]
+    fn commonmark_setext_contract_headings_are_recognized() {
+        let summary = parse_contract_doc_lines(
+            [
+                "Panics",
+                "------",
+                "",
+                "- nonzero: denominator must not be zero",
+            ],
+            ContractKind::Panic,
+        );
+
+        assert!(summary.has_docs);
+        assert_eq!(summary.requirements.len(), 1);
+        assert_eq!(summary.requirements[0].name, "nonzero");
+    }
+
+    #[test]
+    fn commonmark_inline_formatting_is_not_part_of_requirement_names() {
+        let summary = parse_contract_doc_lines(
+            [
+                "# Safety",
+                "",
+                "- `valid_ptr`: pointer must be non-null",
+                "- **initialized**: pointer must reference initialized memory",
+            ],
+            ContractKind::Safety,
+        );
+
+        assert_eq!(summary.requirements.len(), 2);
+        assert_eq!(summary.requirements[0].name, "valid_ptr");
+        assert_eq!(summary.requirements[1].name, "initialized");
+    }
+
+    #[test]
+    fn commonmark_nested_bullets_remain_part_of_parent_requirement() {
+        let summary = parse_contract_doc_lines(
+            [
+                "# Safety",
+                "",
+                "- not-null[data]: `data` must be non-null and aligned. This means:",
+                "",
+                "    - The memory range must be contained within one allocation.",
+                "    - `data` must be non-null even for zero-length slices.",
+                "",
+                "- valid[data]: `data` must point to initialized values.",
+            ],
+            ContractKind::Safety,
+        );
+
+        assert_eq!(summary.requirements.len(), 2);
+        assert_eq!(summary.requirements[0].name, "not-null[data]");
+        assert!(summary.requirements[0].condition.contains("one allocation"));
+        assert_eq!(summary.requirements[1].name, "valid[data]");
+    }
 
     #[test]
     fn contract_headings_inside_code_fences_are_example_text() {

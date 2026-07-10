@@ -26,6 +26,7 @@ pub(super) fn function_summary<'tcx>(
     is_generic: bool,
     analysis_complete: bool,
     counts: PanicFindingCounts,
+    config: &PanicConfig,
     graph: Option<(&ReachabilityGraph<'tcx>, &ReachabilitySnapshot<'tcx>)>,
     findings: Vec<CachedFinding>,
 ) -> CachedFunctionSummary {
@@ -34,7 +35,7 @@ pub(super) fn function_summary<'tcx>(
         path: canonical_namespace(tcx, def_id),
         is_generic,
         analysis_complete,
-        has_panic_docs: crate::panics::has_panic_docs(tcx, def_id),
+        has_panic_docs: crate::panics::has_panic_docs(tcx, def_id, config),
         root_span: cached_source_span(tcx, tcx.def_span(def_id)),
         raw_panic_paths: counts.raw_panic_paths,
         panic_obligations: counts.panic_obligations,

@@ -1,7 +1,7 @@
 use std::path::Path;
 
 use crate::cache::{CachedFinding, CachedFindingKind, CachedFunctionSummary, CachedSourceSpan};
-use crate::config::{LintLevel, ReportRootSet, SafetyLintConfig};
+use crate::config::{ContractDocOverrides, LintLevel, ReportRootSet, SafetyLintConfig};
 use crate::namespace::canonical_namespace;
 use crate::panics::{
     AmbiguousPanicMarker, AmbiguousPanicRequirementName, PanicEvidence, PanicEvidenceKind,
@@ -567,6 +567,7 @@ pub(super) fn emit_safety_diagnostics(
     tcx: TyCtxt<'_>,
     analysis: &SafetyAnalysis,
     lints: SafetyLintConfig,
+    overrides: &ContractDocOverrides,
     ambiguous_obligations: LintLevel,
 ) {
     for finding in &analysis.findings {
@@ -597,7 +598,7 @@ pub(super) fn emit_safety_diagnostics(
                     "{call} to `{target}` in `{caller}` is missing a `// SAFETY:` justification"
                 );
                 emit_lint_diagnostic(tcx, level, *span, message, |diag| {
-                    add_safety_callee_note(diag, tcx, *callee);
+                    add_safety_callee_note(diag, tcx, *callee, overrides);
                     diag.help("add a `// SAFETY:` comment above the unsafe block or call site");
                 });
             }
@@ -615,7 +616,13 @@ pub(super) fn emit_safety_diagnostics(
                     "{call} to `{target}` in `{caller}` does not satisfy all `# Safety` requirements"
                 );
                 emit_lint_diagnostic(tcx, level, *span, message, |diag| {
-                    add_missing_safety_requirement_notes(diag, tcx, *callee, missing_requirements);
+                    add_missing_safety_requirement_notes(
+                        diag,
+                        tcx,
+                        *callee,
+                        overrides,
+                        missing_requirements,
+                    );
                 });
             }
             SafetyFinding::OpMissingJustification { caller, op, span } => {
@@ -664,9 +671,10 @@ fn add_missing_safety_requirement_notes(
     diag: &mut dyn LintDiag,
     tcx: TyCtxt<'_>,
     callee: SafetyCallee,
+    overrides: &ContractDocOverrides,
     missing_requirements: &[crate::safety::SafetyRequirement],
 ) {
-    add_safety_callee_note(diag, tcx, callee);
+    add_safety_callee_note(diag, tcx, callee, overrides);
     for requirement in missing_requirements {
         diag.note(format!(
             "missing safety requirement `{}`",
@@ -759,9 +767,14 @@ fn normalized_offset(file: &rustc_span::SourceFile, original: usize) -> Option<u
     Some(original - diff)
 }
 
-fn add_safety_callee_note(diag: &mut dyn LintDiag, tcx: TyCtxt<'_>, callee: SafetyCallee) {
+fn add_safety_callee_note(
+    diag: &mut dyn LintDiag,
+    tcx: TyCtxt<'_>,
+    callee: SafetyCallee,
+    overrides: &ContractDocOverrides,
+) {
     if let SafetyCallee::Def(def_id) = callee
-        && crate::safety::has_safety_docs(tcx, def_id)
+        && crate::safety::has_safety_docs(tcx, def_id, overrides)
     {
         diag.span_note(
             tcx.def_span(def_id),

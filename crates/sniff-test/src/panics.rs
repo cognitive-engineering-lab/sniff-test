@@ -166,7 +166,8 @@ pub fn analyze_panic_evidence<'tcx>(
             if trace_crosses_ambiguous_panic_marker(&trace, &marker_resolution) {
                 return None;
             }
-            if trace_crosses_satisfied_panic_marker(tcx, graph, &trace, &marker_resolution) {
+            if trace_crosses_satisfied_panic_marker(tcx, graph, &trace, config, &marker_resolution)
+            {
                 return None;
             }
             if trace_crosses_ignored_namespace(tcx, graph, &trace, config) {
@@ -191,7 +192,12 @@ pub fn analyze_panic_evidence<'tcx>(
                 }
             };
             if let PanicPathDecision::PanicObligation { def_id, .. } = decision
-                && panic_obligation_has_ambiguous_requirements(tcx, def_id, ambiguous_obligations)
+                && panic_obligation_has_ambiguous_requirements(
+                    tcx,
+                    def_id,
+                    config,
+                    ambiguous_obligations,
+                )
             {
                 return None;
             }
@@ -384,10 +390,11 @@ fn classify_panic_path<'tcx>(
 fn panic_obligation_has_ambiguous_requirements(
     tcx: TyCtxt<'_>,
     def_id: DefId,
+    config: &PanicConfig,
     ambiguous_obligations: LintLevel,
 ) -> bool {
     ambiguous_obligations.is_deny()
-        && !panic_doc_summary(tcx, def_id)
+        && !panic_doc_summary(tcx, def_id, config)
             .ambiguous_requirements
             .is_empty()
 }
@@ -407,18 +414,22 @@ fn panic_obligation_node_kind<'tcx>(
     };
     (!config.ignores_def(tcx, def_id)
         && config.panic_boundary_policy(tcx, def_id) != PanicBoundaryPolicy::PanicSink
-        && has_panic_docs(tcx, def_id))
+        && has_panic_docs(tcx, def_id, config))
     .then_some(def_id)
 }
 
 #[must_use]
-pub fn has_panic_docs(tcx: TyCtxt<'_>, def_id: DefId) -> bool {
-    panic_doc_summary(tcx, def_id).has_docs
+pub fn has_panic_docs(tcx: TyCtxt<'_>, def_id: DefId, config: &PanicConfig) -> bool {
+    panic_doc_summary(tcx, def_id, config).has_docs
 }
 
 #[must_use]
-pub fn panic_requirements(tcx: TyCtxt<'_>, def_id: DefId) -> Vec<PanicRequirement> {
-    panic_doc_summary(tcx, def_id).requirements
+pub fn panic_requirements(
+    tcx: TyCtxt<'_>,
+    def_id: DefId,
+    config: &PanicConfig,
+) -> Vec<PanicRequirement> {
+    panic_doc_summary(tcx, def_id, config).requirements
 }
 
 #[derive(Debug, Default)]
@@ -446,8 +457,14 @@ impl From<ContractDocSummary> for PanicDocSummary {
     }
 }
 
-fn panic_doc_summary(tcx: TyCtxt<'_>, def_id: DefId) -> PanicDocSummary {
-    contract_doc_summary(tcx, def_id, ContractKind::Panic).into()
+fn panic_doc_summary(tcx: TyCtxt<'_>, def_id: DefId, config: &PanicConfig) -> PanicDocSummary {
+    contract_doc_summary(
+        tcx,
+        def_id,
+        ContractKind::Panic,
+        &config.documentation_overrides,
+    )
+    .into()
 }
 
 fn collect_ambiguous_panic_requirement_names<'tcx>(
@@ -466,7 +483,14 @@ fn collect_ambiguous_panic_requirement_names<'tcx>(
     let mut seen = HashSet::new();
     let mut ambiguous_names = Vec::new();
     if let Some(def_id) = panic_obligation_node_kind(tcx, view.root().kind(), config) {
-        push_ambiguous_panic_requirement_names(tcx, def_id, level, &mut seen, &mut ambiguous_names);
+        push_ambiguous_panic_requirement_names(
+            tcx,
+            def_id,
+            config,
+            level,
+            &mut seen,
+            &mut ambiguous_names,
+        );
     }
 
     for edge in view.edges() {
@@ -481,6 +505,7 @@ fn collect_ambiguous_panic_requirement_names<'tcx>(
             push_ambiguous_panic_requirement_names(
                 tcx,
                 def_id,
+                config,
                 level,
                 &mut seen,
                 &mut ambiguous_names,
@@ -498,11 +523,12 @@ fn collect_ambiguous_panic_requirement_names<'tcx>(
 fn push_ambiguous_panic_requirement_names(
     tcx: TyCtxt<'_>,
     def_id: DefId,
+    config: &PanicConfig,
     level: LintLevel,
     seen: &mut HashSet<(DefId, String)>,
     ambiguous_names: &mut Vec<AmbiguousPanicRequirementName>,
 ) {
-    for ambiguous in panic_doc_summary(tcx, def_id).ambiguous_requirements {
+    for ambiguous in panic_doc_summary(tcx, def_id, config).ambiguous_requirements {
         if !seen.insert((def_id, ambiguous.normalized_name.clone())) {
             continue;
         }
@@ -555,12 +581,13 @@ fn trace_crosses_satisfied_panic_marker<'tcx>(
     tcx: TyCtxt<'tcx>,
     graph: &ReachabilityGraph<'tcx>,
     trace: &PanicTrace,
+    config: &PanicConfig,
     marker_resolution: &PanicMarkerResolution,
 ) -> bool {
     trace.edge_ids.iter().any(|edge_id| {
         let edge = graph.edge(*edge_id);
         let target = &graph.node(edge.target).kind;
-        edge_panic_marker_suppresses(tcx, *edge_id, target, marker_resolution)
+        edge_panic_marker_suppresses(tcx, *edge_id, target, config, marker_resolution)
     })
 }
 
@@ -600,7 +627,7 @@ fn classify_edge<'tcx>(
     marker_resolution: &PanicMarkerResolution,
 ) -> Option<PanicEvidenceKind> {
     let target = edge.target().kind();
-    if edge_panic_marker_suppresses(tcx, edge.id(), target, marker_resolution) {
+    if edge_panic_marker_suppresses(tcx, edge.id(), target, config, marker_resolution) {
         return None;
     }
 
@@ -615,7 +642,7 @@ fn classify_edge_without_marker<'tcx>(
     let target = edge.target().kind();
     match target {
         ReachabilityNodeKind::CompilerAssert { message, .. } => {
-            if compiler_assert_is_safety_precondition(tcx, edge, message) {
+            if compiler_assert_is_safety_precondition(tcx, edge, message, config) {
                 return None;
             }
             Some(PanicEvidenceKind::CompilerAssert)
@@ -633,7 +660,7 @@ fn classify_edge_without_marker<'tcx>(
             match config.panic_boundary_policy(tcx, def_id) {
                 PanicBoundaryPolicy::PanicSink => Some(PanicEvidenceKind::PanicSink { def_id }),
                 PanicBoundaryPolicy::TrustedPanicObligation | PanicBoundaryPolicy::Normal => {
-                    has_panic_docs(tcx, def_id)
+                    has_panic_docs(tcx, def_id, config)
                         .then_some(PanicEvidenceKind::PanicObligation { def_id })
                 }
             }
@@ -649,9 +676,9 @@ fn classify_edge_without_marker<'tcx>(
 
             match config.panic_boundary_policy(tcx, def_id) {
                 PanicBoundaryPolicy::PanicSink => Some(PanicEvidenceKind::PanicSink { def_id }),
-                PanicBoundaryPolicy::TrustedPanicObligation => has_panic_docs(tcx, def_id)
+                PanicBoundaryPolicy::TrustedPanicObligation => has_panic_docs(tcx, def_id, config)
                     .then_some(PanicEvidenceKind::PanicObligation { def_id }),
-                PanicBoundaryPolicy::Normal => Some(if has_panic_docs(tcx, def_id) {
+                PanicBoundaryPolicy::Normal => Some(if has_panic_docs(tcx, def_id, config) {
                     PanicEvidenceKind::PanicObligation { def_id }
                 } else {
                     // The trait method is undocumented and the running impl is
@@ -671,6 +698,7 @@ fn compiler_assert_is_safety_precondition<'tcx>(
     tcx: TyCtxt<'tcx>,
     edge: ReachedEdge<'_, 'tcx>,
     message: &AssertKind<rustc_middle::mir::Operand<'tcx>>,
+    config: &PanicConfig,
 ) -> bool {
     if !matches!(
         message,
@@ -685,13 +713,15 @@ fn compiler_assert_is_safety_precondition<'tcx>(
         return false;
     };
     let def_id = instance.def_id();
-    crate::safety::fn_def_is_unsafe(tcx, def_id) && crate::safety::has_safety_docs(tcx, def_id)
+    crate::safety::fn_def_is_unsafe(tcx, def_id)
+        && crate::safety::has_safety_docs(tcx, def_id, &config.documentation_overrides)
 }
 
 fn edge_panic_marker_suppresses<'tcx>(
     tcx: TyCtxt<'tcx>,
     edge_id: ReachabilityEdgeId,
     target: &ReachabilityNodeKind<'tcx>,
+    config: &PanicConfig,
     marker_resolution: &PanicMarkerResolution,
 ) -> bool {
     if marker_resolution.ambiguous_edges.contains(&edge_id) {
@@ -706,6 +736,7 @@ fn edge_panic_marker_suppresses<'tcx>(
         tcx,
         &candidate.satisfactions,
         target,
+        config,
         marker_resolution.policy,
     )
 }
@@ -714,6 +745,7 @@ fn marker_satisfies_target<'tcx>(
     tcx: TyCtxt<'tcx>,
     satisfactions: &[PanicSatisfaction],
     target: &ReachabilityNodeKind<'tcx>,
+    config: &PanicConfig,
     policy: LintLevel,
 ) -> bool {
     let contract_def_id = match target {
@@ -728,7 +760,7 @@ fn marker_satisfies_target<'tcx>(
         | ReachabilityNodeKind::CompilerAssert { .. }
         | ReachabilityNodeKind::DynObjectCast { .. } => return true,
     };
-    let summary = panic_doc_summary(tcx, contract_def_id);
+    let summary = panic_doc_summary(tcx, contract_def_id, config);
     if policy.is_deny() && !summary.ambiguous_requirements.is_empty() {
         return false;
     }
@@ -821,7 +853,7 @@ fn resolve_panic_markers<'tcx>(
             };
             let edge = graph.edge(*edge_id);
             let target = &graph.node(edge.target).kind;
-            if !marker_satisfies_target(tcx, &candidate.satisfactions, target, policy) {
+            if !marker_satisfies_target(tcx, &candidate.satisfactions, target, config, policy) {
                 return None;
             }
             Some((*edge_id, candidate))
@@ -1017,7 +1049,7 @@ mod tests {
     #[test]
     fn panic_doc_headings_match_supported_styles() {
         assert!(line_has_panic_heading("# Panics"));
-        assert!(line_has_panic_heading("    ## Panics   "));
+        assert!(line_has_panic_heading("   ## Panics   "));
         assert!(line_has_panic_heading("### PANICS"));
         assert!(line_has_panic_heading("#### Panic(s)"));
     }

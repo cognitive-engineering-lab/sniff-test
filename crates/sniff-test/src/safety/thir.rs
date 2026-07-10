@@ -129,9 +129,11 @@ impl<'a, 'tcx> UnsafeOpVisitor<'a, 'tcx> {
             self.analysis.push_ambiguous_requirement_names(
                 self.tcx,
                 def_id,
+                &self.config.documentation_overrides,
                 self.ambiguous_obligations,
             );
-            let summary = safety_doc_summary(self.tcx, def_id);
+            let summary =
+                safety_doc_summary(self.tcx, def_id, &self.config.documentation_overrides);
             if !summary.requirements.is_empty() {
                 if self.ambiguous_obligations.is_deny()
                     && !summary.ambiguous_requirements.is_empty()

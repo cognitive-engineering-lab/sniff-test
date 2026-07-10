@@ -15,7 +15,7 @@ use rustc_hir::def_id::{DefId, LocalDefId};
 use rustc_middle::ty::TyCtxt;
 use rustc_span::Span;
 
-use crate::config::{LintLevel, SafetyConfig, SafetyLintConfig};
+use crate::config::{ContractDocOverrides, LintLevel, SafetyConfig, SafetyLintConfig};
 use crate::contracts::{
     AmbiguousContractRequirements, ContractDocSummary, ContractKind, ContractRequirement,
     contract_doc_summary, normalize_requirement_name, satisfied_requirement_names,
@@ -184,13 +184,14 @@ impl SafetyAnalysis {
         &mut self,
         tcx: TyCtxt<'_>,
         def_id: DefId,
+        overrides: &ContractDocOverrides,
         ambiguous_obligations: LintLevel,
     ) {
         if ambiguous_obligations.is_allow() {
             return;
         }
 
-        for ambiguous in safety_doc_summary(tcx, def_id).ambiguous_requirements {
+        for ambiguous in safety_doc_summary(tcx, def_id, overrides).ambiguous_requirements {
             if !self
                 .ambiguous_requirement_names
                 .insert((def_id, ambiguous.normalized_name.clone()))
@@ -274,13 +275,17 @@ pub fn analyze_safety(
 }
 
 #[must_use]
-pub fn has_safety_docs(tcx: TyCtxt<'_>, def_id: DefId) -> bool {
-    safety_doc_summary(tcx, def_id).has_docs
+pub fn has_safety_docs(tcx: TyCtxt<'_>, def_id: DefId, overrides: &ContractDocOverrides) -> bool {
+    safety_doc_summary(tcx, def_id, overrides).has_docs
 }
 
 #[must_use]
-pub fn safety_requirements(tcx: TyCtxt<'_>, def_id: DefId) -> Vec<SafetyRequirement> {
-    safety_doc_summary(tcx, def_id).requirements
+pub fn safety_requirements(
+    tcx: TyCtxt<'_>,
+    def_id: DefId,
+    overrides: &ContractDocOverrides,
+) -> Vec<SafetyRequirement> {
+    safety_doc_summary(tcx, def_id, overrides).requirements
 }
 
 #[must_use]
@@ -317,13 +322,18 @@ fn collect_missing_safety_docs(
         return;
     }
 
-    if !has_safety_docs(tcx, def_id) {
+    if !has_safety_docs(tcx, def_id, &config.documentation_overrides) {
         analysis.findings.push(SafetyFinding::MissingSafetyDocs {
             def_id,
             span: tcx.def_span(def_id),
         });
     } else {
-        analysis.push_ambiguous_requirement_names(tcx, def_id, ambiguous_obligations);
+        analysis.push_ambiguous_requirement_names(
+            tcx,
+            def_id,
+            &config.documentation_overrides,
+            ambiguous_obligations,
+        );
     }
 }
 
@@ -363,8 +373,12 @@ impl From<ContractDocSummary> for SafetyDocSummary {
     }
 }
 
-pub(super) fn safety_doc_summary(tcx: TyCtxt<'_>, def_id: DefId) -> SafetyDocSummary {
-    contract_doc_summary(tcx, def_id, ContractKind::Safety).into()
+pub(super) fn safety_doc_summary(
+    tcx: TyCtxt<'_>,
+    def_id: DefId,
+    overrides: &ContractDocOverrides,
+) -> SafetyDocSummary {
+    contract_doc_summary(tcx, def_id, ContractKind::Safety, overrides).into()
 }
 
 #[cfg(test)]
@@ -430,7 +444,7 @@ mod tests {
     #[test]
     fn safety_doc_headings_match_supported_styles() {
         assert!(line_has_safety_heading("# Safety"));
-        assert!(line_has_safety_heading("    ## SAFETY   "));
+        assert!(line_has_safety_heading("   ## SAFETY   "));
         assert!(line_has_safety_heading("### Safety:"));
     }
 
