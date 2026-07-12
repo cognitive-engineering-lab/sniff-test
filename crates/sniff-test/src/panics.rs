@@ -822,7 +822,8 @@ fn resolve_panic_markers<'tcx>(
     let candidates = view
         .edges()
         .filter_map(|edge| {
-            edge_marker_candidate(tcx, graph, edge.edge()).map(|candidate| (edge.id(), candidate))
+            edge_marker_candidate(tcx, graph, edge.edge(), config)
+                .map(|candidate| (edge.id(), candidate))
         })
         .collect::<HashMap<_, _>>();
 
@@ -913,12 +914,13 @@ fn edge_marker_candidate(
     tcx: TyCtxt<'_>,
     graph: &ReachabilityGraph<'_>,
     edge: &ReachabilityEdge,
+    config: &PanicConfig,
 ) -> Option<PanicMarkerCandidate> {
-    let statement = span_panic_marker_block(tcx, edge.span);
+    let statement = span_panic_marker_block(tcx, edge.span, config.marker_probing);
     if let Some(callee_span) = edge.callee_span
         && !spans_start_on_same_line(tcx, edge.span, callee_span)
     {
-        if let Some(callee) = span_panic_marker_block(tcx, callee_span) {
+        if let Some(callee) = span_panic_marker_block(tcx, callee_span, config.marker_probing) {
             return Some(callee.into());
         }
         if let Some(statement) = statement {
@@ -934,18 +936,19 @@ fn edge_marker_candidate(
             });
         }
 
-        return enclosing_block_marker_candidate(tcx, graph, edge);
+        return enclosing_block_marker_candidate(tcx, graph, edge, config);
     }
 
     statement
         .map(Into::into)
-        .or_else(|| enclosing_block_marker_candidate(tcx, graph, edge))
+        .or_else(|| enclosing_block_marker_candidate(tcx, graph, edge, config))
 }
 
 fn enclosing_block_marker_candidate(
     tcx: TyCtxt<'_>,
     graph: &ReachabilityGraph<'_>,
     edge: &ReachabilityEdge,
+    config: &PanicConfig,
 ) -> Option<PanicMarkerCandidate> {
     let owner = match &graph.node(edge.origin).kind {
         ReachabilityNodeKind::Instance(instance) => instance.def_id().as_local()?,
@@ -957,7 +960,7 @@ fn enclosing_block_marker_candidate(
 
     enclosing_block_spans(tcx, owner, edge.span)
         .into_iter()
-        .find_map(|span| span_panic_marker_block(tcx, span).map(Into::into))
+        .find_map(|span| span_panic_marker_block(tcx, span, config.marker_probing).map(Into::into))
 }
 
 fn enclosing_block_spans(tcx: TyCtxt<'_>, owner: LocalDefId, target: Span) -> Vec<Span> {

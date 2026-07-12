@@ -181,7 +181,11 @@ impl<'a, 'tcx> UnsafeOpVisitor<'a, 'tcx> {
         self.safety_scopes
             .iter()
             .flat_map(|scope| scope.iter().cloned())
-            .chain(span_safety_satisfactions(self.tcx, span))
+            .chain(span_safety_satisfactions(
+                self.tcx,
+                span,
+                self.config.marker_probing,
+            ))
             .collect()
     }
 
@@ -448,8 +452,11 @@ impl<'a, 'tcx> Visitor<'a, 'tcx> for UnsafeOpVisitor<'a, 'tcx> {
             }
             BlockSafety::ExplicitUnsafe(hir_id) => {
                 let span = self.unsafe_block_span(hir_id, block.span);
-                self.safety_scopes
-                    .push(span_safety_satisfactions(self.tcx, span));
+                self.safety_scopes.push(span_safety_satisfactions(
+                    self.tcx,
+                    span,
+                    self.config.marker_probing,
+                ));
                 visit::walk_block(self, block);
                 self.safety_scopes
                     .pop()

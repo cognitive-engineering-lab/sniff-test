@@ -3,6 +3,8 @@
 use rustc_middle::ty::TyCtxt;
 use rustc_span::{SourceFile, Span};
 
+use crate::config::MarkerProbing;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 enum MarkerKind {
     Panic,
@@ -78,21 +80,29 @@ impl From<MarkerSatisfaction> for SafetySatisfaction {
 }
 
 #[must_use]
-pub fn span_has_panic_marker(tcx: TyCtxt<'_>, span: Span) -> bool {
-    !span_panic_satisfactions(tcx, span).is_empty()
+pub fn span_has_panic_marker(tcx: TyCtxt<'_>, span: Span, probing: MarkerProbing) -> bool {
+    !span_panic_satisfactions(tcx, span, probing).is_empty()
 }
 
 #[must_use]
-pub fn span_panic_satisfactions(tcx: TyCtxt<'_>, span: Span) -> Vec<PanicSatisfaction> {
-    span_satisfactions(tcx, span, MarkerKind::Panic)
+pub fn span_panic_satisfactions(
+    tcx: TyCtxt<'_>,
+    span: Span,
+    probing: MarkerProbing,
+) -> Vec<PanicSatisfaction> {
+    span_satisfactions(tcx, span, MarkerKind::Panic, probing)
         .into_iter()
         .map(Into::into)
         .collect()
 }
 
 #[must_use]
-pub fn span_panic_marker_block(tcx: TyCtxt<'_>, span: Span) -> Option<PanicMarkerBlock> {
-    span_marker_block(tcx, span, MarkerKind::Panic).map(|block| PanicMarkerBlock {
+pub fn span_panic_marker_block(
+    tcx: TyCtxt<'_>,
+    span: Span,
+    probing: MarkerProbing,
+) -> Option<PanicMarkerBlock> {
+    span_marker_block(tcx, span, MarkerKind::Panic, probing).map(|block| PanicMarkerBlock {
         key: block.key,
         span: block.span,
         satisfactions: block.satisfactions.into_iter().map(Into::into).collect(),
@@ -100,13 +110,17 @@ pub fn span_panic_marker_block(tcx: TyCtxt<'_>, span: Span) -> Option<PanicMarke
 }
 
 #[must_use]
-pub fn span_has_safety_marker(tcx: TyCtxt<'_>, span: Span) -> bool {
-    !span_safety_satisfactions(tcx, span).is_empty()
+pub fn span_has_safety_marker(tcx: TyCtxt<'_>, span: Span, probing: MarkerProbing) -> bool {
+    !span_safety_satisfactions(tcx, span, probing).is_empty()
 }
 
 #[must_use]
-pub fn span_safety_satisfactions(tcx: TyCtxt<'_>, span: Span) -> Vec<SafetySatisfaction> {
-    span_satisfactions(tcx, span, MarkerKind::Safety)
+pub fn span_safety_satisfactions(
+    tcx: TyCtxt<'_>,
+    span: Span,
+    probing: MarkerProbing,
+) -> Vec<SafetySatisfaction> {
+    span_satisfactions(tcx, span, MarkerKind::Safety, probing)
         .into_iter()
         .map(Into::into)
         .collect()
@@ -126,13 +140,66 @@ thread_local! {
     > = std::cell::RefCell::new(std::collections::HashMap::new());
 }
 
-fn span_satisfactions(tcx: TyCtxt<'_>, span: Span, kind: MarkerKind) -> Vec<MarkerSatisfaction> {
-    let span = span.source_callsite();
+fn span_satisfactions(
+    tcx: TyCtxt<'_>,
+    span: Span,
+    kind: MarkerKind,
+    probing: MarkerProbing,
+) -> Vec<MarkerSatisfaction> {
+    marker_probe_spans(span, probing)
+        .into_iter()
+        .find_map(|span| {
+            let satisfactions = span_line_satisfactions(tcx, span, kind);
+            (!satisfactions.is_empty()).then_some(satisfactions)
+        })
+        .unwrap_or_default()
+}
+
+fn span_marker_block(
+    tcx: TyCtxt<'_>,
+    span: Span,
+    kind: MarkerKind,
+    probing: MarkerProbing,
+) -> Option<LocatedMarkerBlock> {
+    marker_probe_spans(span, probing)
+        .into_iter()
+        .find_map(|span| span_marker_block_at(tcx, span, kind))
+}
+
+fn marker_probe_spans(span: Span, probing: MarkerProbing) -> Vec<Span> {
+    let mut spans = Vec::new();
+    match probing {
+        MarkerProbing::SourceCallsite => {
+            push_unique_probe_span(&mut spans, span.source_callsite());
+        }
+        MarkerProbing::MacroDefinitionFirst => {
+            // For macro-expanded code, prefer markers in the macro body that
+            // produced the operation, then walk callsites outward before the
+            // usual fallback.
+            push_unique_probe_span(&mut spans, span);
+            for expansion in span.macro_backtrace() {
+                push_unique_probe_span(&mut spans, expansion.call_site);
+            }
+            push_unique_probe_span(&mut spans, span.source_callsite());
+        }
+    }
+    spans
+}
+
+fn push_unique_probe_span(spans: &mut Vec<Span>, span: Span) {
     // A dummy span would resolve to byte 0 — line 1 of an arbitrary file —
     // where a stray marker could suppress every dummy-span edge crate-wide.
-    if span.is_dummy() {
-        return Vec::new();
+    if span.is_dummy() || spans.iter().any(|existing| existing.source_equal(span)) {
+        return;
     }
+    spans.push(span);
+}
+
+fn span_line_satisfactions(
+    tcx: TyCtxt<'_>,
+    span: Span,
+    kind: MarkerKind,
+) -> Vec<MarkerSatisfaction> {
     let location = tcx.sess.source_map().lookup_char_pos(span.lo());
     let line_index = location.line.saturating_sub(1);
 
@@ -152,11 +219,11 @@ fn span_satisfactions(tcx: TyCtxt<'_>, span: Span, kind: MarkerKind) -> Vec<Mark
     })
 }
 
-fn span_marker_block(tcx: TyCtxt<'_>, span: Span, kind: MarkerKind) -> Option<LocatedMarkerBlock> {
-    let span = span.source_callsite();
-    if span.is_dummy() {
-        return None;
-    }
+fn span_marker_block_at(
+    tcx: TyCtxt<'_>,
+    span: Span,
+    kind: MarkerKind,
+) -> Option<LocatedMarkerBlock> {
     let location = tcx.sess.source_map().lookup_char_pos(span.lo());
     let line_index = location.line.saturating_sub(1);
 

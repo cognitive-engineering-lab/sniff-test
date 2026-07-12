@@ -26,3 +26,14 @@ pub fn direct_macro(flag: bool) {
 pub fn direct_assert(flag: bool) {
     assert!(flag);
 }
+
+macro_rules! justified_const_assert {
+    ($condition:expr) => {
+        // PANIC: macro caller guarantees the macro precondition.
+        assert!($condition);
+    };
+}
+
+pub fn macro_internal_marker(flag: bool) {
+    justified_const_assert!(flag);
+}

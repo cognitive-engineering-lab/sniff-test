@@ -47,6 +47,7 @@ report-roots = "public"     # public | all | ["crate::path"]
 overflow-checks = "profile" # profile | on | off
 inline-mir = "off"          # profile | on | off
 callable-edge-attribution = "erasure-sites" # erasure-sites | call-sites
+marker-probing = "macro-definition-first" # macro-definition-first | source-callsite
 
 [analysis.lints]
 analysis-incomplete = "deny"
@@ -88,6 +89,11 @@ target.
 would justify multiple panic obligation sites, or when one `# Panics`/`# Safety`
 contract contains duplicate requirement names after normalization. `warn` accepts
 the squash but reports it; `allow` accepts it silently.
+
+`marker-probing = "macro-definition-first"` lets `// PANIC:` and `// SAFETY:`
+markers inside macro definitions satisfy operations produced by that macro,
+then falls back through macro callsites to the outer source callsite.
+`source-callsite` keeps lookup at the final user callsite only.
 
 `cargo sniff-test` exits with status `1` when a final workspace crate has a
 finding whose configured lint level is `deny`. `allow` suppresses a finding from

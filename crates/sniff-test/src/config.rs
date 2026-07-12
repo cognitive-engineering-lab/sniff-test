@@ -58,6 +58,11 @@ inline-mir = "off"
 # becomes indirect, or `call-sites` where it is used.
 callable-edge-attribution = "erasure-sites"
 
+# Marker lookup checks comments in macro definitions before walking outward to
+# macro callsites and the final source callsite. Use `source-callsite` for the
+# older callsite-only behavior.
+marker-probing = "macro-definition-first"
+
 # Ambiguous obligation names and shared proof markers default to failing closed.
 # Configure ambiguous-obligations under `[analysis.lints]`.
 #
@@ -196,19 +201,21 @@ impl SniffTestConfig {
     /// Returns an error when the manifest contains unsupported syntax.
     pub fn from_manifest_str(source: &str) -> Result<Self, toml::de::Error> {
         let mut config: Self = toml::from_str(source)?;
-        config.install_documentation_overrides();
+        config.install_runtime_options();
         Ok(config)
     }
 
     fn load_documentation_overrides(&mut self, base_dir: &Path) -> Result<(), ConfigError> {
         self.documentation.load_overrides(base_dir)?;
-        self.install_documentation_overrides();
+        self.install_runtime_options();
         Ok(())
     }
 
-    fn install_documentation_overrides(&mut self) {
+    fn install_runtime_options(&mut self) {
         self.panics.documentation_overrides = self.documentation.overrides.clone();
         self.safety.documentation_overrides = self.documentation.overrides.clone();
+        self.panics.marker_probing = self.analysis.marker_probing;
+        self.safety.marker_probing = self.analysis.marker_probing;
     }
 }
 
@@ -228,6 +235,9 @@ pub struct AnalysisConfig {
     /// dispatch or function pointers.
     #[serde(alias = "dyn-dispatch-vtable-edges")]
     pub callable_edge_attribution: CallableEdgeAttribution,
+    /// How `// PANIC:` and `// SAFETY:` comments are found for spans produced
+    /// by macro expansion.
+    pub marker_probing: MarkerProbing,
     /// User-facing severity for analyzer-wide finding classes.
     pub lints: AnalysisLintConfig,
     /// Instance budget per reachability query; halting at the limit is
@@ -394,10 +404,22 @@ impl Default for AnalysisConfig {
             overflow_checks: OverflowChecks::Profile,
             inline_mir: MirInlining::Off,
             callable_edge_attribution: CallableEdgeAttribution::ErasureSites,
+            marker_probing: MarkerProbing::MacroDefinitionFirst,
             lints: AnalysisLintConfig::default(),
             node_limit: 4096,
         }
     }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum MarkerProbing {
+    /// Probe the final user callsite only. This is the historical behavior.
+    SourceCallsite,
+    /// Probe macro definition spans first, then macro callsites outward, then
+    /// the final user callsite.
+    #[default]
+    MacroDefinitionFirst,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
@@ -547,6 +569,8 @@ pub struct PanicConfig {
     pub panic_sink_namespaces: PathPatterns,
     #[serde(skip)]
     pub documentation_overrides: ContractDocOverrides,
+    #[serde(skip)]
+    pub marker_probing: MarkerProbing,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
@@ -601,6 +625,8 @@ pub struct SafetyConfig {
     pub lints: SafetyLintConfig,
     #[serde(skip)]
     pub documentation_overrides: ContractDocOverrides,
+    #[serde(skip)]
+    pub marker_probing: MarkerProbing,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
@@ -1095,8 +1121,8 @@ mod tests {
 
     use super::{
         AnalysisConfig, CallableEdgeAttribution, ContractDocOverrides, EXAMPLE_MANIFEST, LintLevel,
-        MirInlining, OverflowChecks, PanicConfig, PathPatterns, ReportRootSet, SafetyConfig,
-        SniffTestConfig,
+        MarkerProbing, MirInlining, OverflowChecks, PanicConfig, PathPatterns, ReportRootSet,
+        SafetyConfig, SniffTestConfig,
     };
 
     fn path_patterns(patterns: &[&str]) -> PathPatterns {
@@ -1131,6 +1157,7 @@ mod tests {
             overflow-checks = "on"
             inline-mir = "profile"
             callable-edge-attribution = "call-sites"
+            marker-probing = "source-callsite"
         "#;
 
         let parsed = SniffTestConfig::from_manifest_str(config).expect("manifest should parse");
@@ -1143,6 +1170,12 @@ mod tests {
             parsed.analysis.callable_edge_attribution,
             CallableEdgeAttribution::CallSites
         );
+        assert_eq!(
+            parsed.analysis.marker_probing,
+            MarkerProbing::SourceCallsite
+        );
+        assert_eq!(parsed.panics.marker_probing, MarkerProbing::SourceCallsite);
+        assert_eq!(parsed.safety.marker_probing, MarkerProbing::SourceCallsite);
     }
 
     #[test]
@@ -1217,6 +1250,10 @@ mod tests {
         assert_eq!(
             AnalysisConfig::default().callable_edge_attribution,
             CallableEdgeAttribution::ErasureSites
+        );
+        assert_eq!(
+            AnalysisConfig::default().marker_probing,
+            MarkerProbing::MacroDefinitionFirst
         );
         assert_eq!(
             AnalysisConfig::default().lints.ambiguous_obligations,

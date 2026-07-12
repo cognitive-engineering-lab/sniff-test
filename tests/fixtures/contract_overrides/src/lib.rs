@@ -39,3 +39,19 @@ pub fn safety_override_satisfied() -> u8 {
     // - initialized: `byte` was initialized above.
     unsafe { synthetic_read(ptr.as_ptr()) }
 }
+
+macro_rules! read_synthetic {
+    ($ptr:expr) => {{
+        // SAFETY:
+        // - valid_ptr: macro caller passes a NonNull-derived pointer.
+        // - initialized: macro caller keeps the pointee initialized.
+        unsafe { synthetic_read($ptr) }
+    }};
+}
+
+pub fn safety_override_macro_internal_marker() -> u8 {
+    let byte = 7;
+    let ptr = NonNull::from(&byte);
+
+    read_synthetic!(ptr.as_ptr())
+}
