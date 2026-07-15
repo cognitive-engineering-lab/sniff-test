@@ -39,8 +39,8 @@ pending feature decision.
 
 Compiler checks for null pointer dereference, misaligned pointer dereference,
 and invalid enum construction inside an unsafe function with `# Safety` docs
-are treated as safety-contract evidence, not as `# Panics` evidence. The call
-site must satisfy the safety contract through `// SAFETY:` markers; once that
+are treated as safety-requirement evidence, not as `# Panics` evidence. The call
+site must justify the safety requirements through `// SAFETY:` markers; once that
 obligation is handled, panic analysis should not also require callers to
 document the callee's internal UB guard as a panic. Other compiler assertions
 inside the same unsafe function — bounds checks, overflow, division by zero,
@@ -101,7 +101,7 @@ nearest enclosing block when no call-local marker exists. Unusual formatting —
 a call split across lines in ways rustfmt does not produce — can anchor a marker
 to a different link than the author intended. Named requirement bullets are
 matched by normalized name and are format-insensitive, but duplicate names in
-one contract are ambiguous under the default `ambiguous-obligations = "deny"`
+one documentation section are ambiguous under the default `ambiguous-obligations = "deny"`
 policy.
 
 ## Latent hazards (not reachable through the shipped tool)

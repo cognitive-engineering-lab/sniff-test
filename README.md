@@ -2,7 +2,7 @@
 
 `sniff-test` runs panic reachability analysis through Cargo. It wraps
 `cargo check`, records panic evidence from rustc MIR, and reports undocumented
-panic paths, documented panic contracts, and trusted panic-contract boundaries.
+panic paths, documented panic behavior, and trusted panic boundaries.
 
 ## Cargo Frontend
 
@@ -58,8 +58,8 @@ override-files = [] # TOML files relative to sniff-test.toml
 
 [panics.lints]
 missing-docs = "deny"
-documented-contract = "warn"
-trusted-contract = "warn"
+documented-panic = "warn"
+trusted-panic = "warn"
 indirect-call-boundary = "warn"
 
 [safety]
@@ -87,7 +87,7 @@ target.
 
 `ambiguous-obligations = "deny"` rejects proof squashing when one local marker
 would justify multiple panic obligation sites, or when one `# Panics`/`# Safety`
-contract contains duplicate requirement names after normalization. `warn` accepts
+section contains duplicate requirement names after normalization. `warn` accepts
 the squash but reports it; `allow` accepts it silently.
 
 `marker-probing = "macro-definition-first"` lets `// PANIC:` and `// SAFETY:`
@@ -105,9 +105,9 @@ justification, and named bullets under a callee `# Safety` section must be
 satisfied by matching named bullets at the call site.
 
 Use `[documentation].override-files` while auditing generated or third-party
-APIs whose contracts are known but not written in source yet. Override files are
+APIs whose documented behavior is known but not written in source yet. Override files are
 TOML files keyed by Rust namespace globs; the value replaces that function's
-rustdoc markdown for both panic and safety contract parsing. The markdown is
+rustdoc markdown for both panic and safety documentation parsing. The markdown is
 parsed as CommonMark, so normal headings, setext headings, inline code, and
 formatted list text work as expected.
 
@@ -164,7 +164,7 @@ pub fn ratio(total: usize, denominator: usize) -> usize {
 
 pub fn checked_ratio(total: usize, denominator: usize) -> usize {
     // PANIC:
-    // The caller validates the panic contract before this call.
+    // The caller validates the documented panic conditions before this call.
     // Requirements:
     // - nonzero: caller checked the denominator.
     // - bounded[total]: caller checked the total bound.
@@ -176,12 +176,12 @@ The accepted requirement bullet format is `- name: condition`; rustdoc
 conditions may be empty when the name is enough, but call-site satisfaction
 bullets must include justification text. Names are matched case-insensitively,
 with punctuation and whitespace treated as separators, so `bounded[total]` and
-`bounded total` match. Duplicate names inside one contract are ambiguous under
+`bounded total` match. Duplicate names inside one documentation section are ambiguous under
 the default `ambiguous-obligations = "deny"` policy: a single marker bullet
 cannot prove two distinct requirements with the same normalized name. Prose and
 labels such as `Requirements:` are allowed before the first bullet. Plain
 comment lines following a requirement bullet in the same contiguous block are
-kept as explanation context. Use `/// # Panics` for public API panic contracts;
+kept as explanation context. Use `/// # Panics` to document public API panic behavior;
 `// PANIC:` is only for local call-site justifications.
 
 `// PANIC:` can also sit immediately above an enclosing block. In strict mode,

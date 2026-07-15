@@ -314,14 +314,14 @@ fn decorate_panic_contract_diagnostic<'tcx>(
     if let Some(edge_id) = notes.obligation_edge_id {
         diag.span_help(
             graph.edge(edge_id).span,
-            "add `// PANIC:` directly above this call if a local invariant satisfies the callee contract",
+            "add `// PANIC:` directly above this call explaining why its documented panic conditions cannot occur",
         );
     }
     diag.span_help(
         tcx.def_span(notes.root_def_id),
-        "document the caller's propagated contract with `/// # Panics` here",
+        "document when this function may panic with `/// # Panics` here",
     );
-    diag.help("ensure this precondition in the caller, satisfy the callee contract with `// PANIC:`, or document the caller's propagated contract with `# Panics`");
+    diag.help("ensure the callee's panic conditions cannot occur, justify that with `// PANIC:`, or document when the caller may panic with `# Panics`");
 }
 
 fn render_panic_requirement(requirement: &crate::panics::PanicRequirement) -> String {
@@ -339,20 +339,23 @@ fn decorate_cached_dependency_contract_diagnostic<'tcx>(
     edge_id: ReachabilityEdgeId,
     root_def_id: DefId,
     summary: &CachedFunctionSummary,
-    contract: &str,
+    panic_kind: &str,
     include_stack: bool,
 ) {
-    diag.note(format!("`{}` has cached {contract} evidence", summary.path));
+    diag.note(format!(
+        "`{}` has cached {panic_kind} evidence",
+        summary.path
+    ));
     add_trace_notes(diag, tcx, graph, &[edge_id], include_stack);
     diag.span_help(
         graph.edge(edge_id).span,
-        "add `// PANIC:` directly above this call if a local invariant satisfies the dependency contract",
+        "add `// PANIC:` directly above this call explaining why the dependency's documented panic conditions cannot occur",
     );
     diag.span_help(
         tcx.def_span(root_def_id),
-        "document the caller's propagated contract with `/// # Panics` here",
+        "document when this function may panic with `/// # Panics` here",
     );
-    diag.help("ensure this precondition in the caller, satisfy the callee contract with `// PANIC:`, or document the caller's propagated contract with `# Panics`");
+    diag.help("ensure the dependency's panic conditions cannot occur, justify that with `// PANIC:`, or document when the caller may panic with `# Panics`");
 }
 
 fn decorate_cached_dependency_raw_panic_diagnostic<'tcx>(
@@ -471,16 +474,16 @@ pub(super) fn emit_panic_contract_diagnostic<'tcx>(
     }
     let root = canonical_namespace(tcx, root_def_id);
     let documented = canonical_namespace(tcx, documented_def_id);
-    let contract = if trusted {
-        "trusted panic contract"
+    let panic_kind = if trusted {
+        "trusted panic"
     } else {
-        "documented panic contract"
+        "documented panic"
     };
     let primary_span = obligation_edge_id.map_or_else(
         || tcx.def_span(root_def_id),
         |edge_id| graph.edge(edge_id).span,
     );
-    let message = format!("function `{root}` reaches a {contract}");
+    let message = format!("function `{root}` may panic through a {panic_kind}");
     emit_lint_diagnostic(tcx, level, primary_span, message, |diag| {
         decorate_panic_contract_diagnostic(
             diag,
@@ -515,13 +518,13 @@ pub(super) fn emit_cached_dependency_contract_diagnostic<'tcx>(
         return;
     }
     let root = canonical_namespace(tcx, root_def_id);
-    let contract = if trusted {
-        "trusted panic contract"
+    let panic_kind = if trusted {
+        "trusted panic"
     } else {
-        "documented panic contract"
+        "documented panic"
     };
     let edge = graph.edge(edge_id);
-    let message = format!("function `{root}` reaches a cached dependency {contract}");
+    let message = format!("function `{root}` may panic through a cached dependency {panic_kind}");
     emit_lint_diagnostic(tcx, level, edge.span, message, |diag| {
         decorate_cached_dependency_contract_diagnostic(
             diag,
@@ -530,7 +533,7 @@ pub(super) fn emit_cached_dependency_contract_diagnostic<'tcx>(
             edge_id,
             root_def_id,
             summary,
-            contract,
+            panic_kind,
             include_stack,
         );
     });
@@ -844,7 +847,7 @@ fn panic_trigger_note<'tcx>(
         }
         PanicEvidenceKind::PanicObligation { def_id } => {
             format!(
-                "documented panic contract `{}`",
+                "documented panic behavior of `{}`",
                 canonical_namespace(tcx, def_id)
             )
         }

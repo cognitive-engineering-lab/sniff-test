@@ -20,10 +20,10 @@ expression: messages
     "concrete-roots": 0,
     "counts": {
       "analysis-incomplete": 0,
+      "documented-panics": 0,
       "indirect-call-boundaries": 0,
-      "panic-obligations": 0,
       "raw-panic-paths": 0,
-      "trusted-panic-obligations": 0
+      "trusted-panics": 0
     },
     "dependencies": [],
     "dependency-cache": {
@@ -31,7 +31,7 @@ expression: messages
       "hits": 0,
       "total": 0
     },
-    "format-version": 1,
+    "format-version": 2,
     "generic-roots": 0,
     "missing-roots": [],
     "reason": "sniff-test-artifact",
@@ -57,10 +57,10 @@ expression: messages
     "concrete-roots": 1,
     "counts": {
       "analysis-incomplete": 0,
+      "documented-panics": 1,
       "indirect-call-boundaries": 0,
-      "panic-obligations": 1,
       "raw-panic-paths": 0,
-      "trusted-panic-obligations": 0
+      "trusted-panics": 0
     },
     "dependencies": [
       {
@@ -75,7 +75,7 @@ expression: messages
       "hits": 1,
       "total": 1
     },
-    "format-version": 1,
+    "format-version": 2,
     "generic-roots": 0,
     "missing-roots": [],
     "reason": "sniff-test-artifact",
@@ -83,17 +83,17 @@ expression: messages
       {
         "counts": {
           "analysis-incomplete": 0,
+          "documented-panics": 1,
           "indirect-call-boundaries": 0,
-          "panic-obligations": 1,
           "raw-panic-paths": 0,
-          "trusted-panic-obligations": 0
+          "trusted-panics": 0
         },
         "findings": [
           {
             "edge": "vendored_app::use_vendored --direct-call-> vendored::checked",
-            "kind": "panic-obligation",
+            "kind": "documented-panic",
             "level": "warn",
-            "reason": "vendored::checked has a documented # Panics contract",
+            "reason": "vendored::checked documents when it may panic under # Panics",
             "span": "src/lib.rs:2:5: 2:28",
             "target": "vendored::checked",
             "trace": [

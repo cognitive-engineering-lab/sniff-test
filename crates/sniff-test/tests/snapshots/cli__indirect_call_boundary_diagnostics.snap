@@ -7,7 +7,7 @@ stdout:
 <empty>
 stderr:
     Checking indirect-calls v0.1.0 ([FIXTURE])
-warning: function `indirect_calls::call_documented` reaches a documented panic contract
+warning: function `indirect_calls::call_documented` may panic through a documented panic
   --> src/lib.rs:11:5
    |
 11 |     value.documented(flag);
@@ -18,17 +18,17 @@ note: the reached callee `indirect_calls::Risky::documented` documents `# Panics
    |
  5 |     fn documented(&self, flag: bool);
    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-help: add `// PANIC:` directly above this call if a local invariant satisfies the callee contract
+help: add `// PANIC:` directly above this call explaining why its documented panic conditions cannot occur
   --> src/lib.rs:11:5
    |
 11 |     value.documented(flag);
    |     ^^^^^^^^^^^^^^^^^^^^^^
-help: document the caller's propagated contract with `/// # Panics` here
+help: document when this function may panic with `/// # Panics` here
   --> src/lib.rs:10:1
    |
 10 | pub fn call_documented<T: Risky>(value: &T, flag: bool) {
    | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-   = help: ensure this precondition in the caller, satisfy the callee contract with `// PANIC:`, or document the caller's propagated contract with `# Panics`
+   = help: ensure the callee's panic conditions cannot occur, justify that with `// PANIC:`, or document when the caller may panic with `# Panics`
 
 warning: function `indirect_calls::call_pointer` reaches an unverifiable indirect call
   --> src/lib.rs:18:1

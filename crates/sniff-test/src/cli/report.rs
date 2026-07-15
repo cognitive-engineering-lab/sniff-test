@@ -104,7 +104,7 @@ impl PanicRootReport {
             level: obligation.level,
             span,
             edge,
-            reason: documented_panic_contract_reason(&documented),
+            reason: documented_panic_reason(&documented),
             target: Some(documented),
             trace: render_trace(
                 tcx,
@@ -254,8 +254,8 @@ pub(crate) enum ReportDetailKind {
     CompilerAssert,
     PanicInvocation,
     CachedDependencyPanic,
-    PanicObligation,
-    TrustedPanicObligation,
+    DocumentedPanic,
+    TrustedPanic,
     IndirectCallBoundary,
     AmbiguousObligationMarker,
     AmbiguousObligationName,
@@ -266,7 +266,7 @@ impl ReportDetailKind {
     pub(crate) fn from_evidence(kind: &PanicEvidenceKind) -> Self {
         match kind {
             PanicEvidenceKind::CompilerAssert => Self::CompilerAssert,
-            PanicEvidenceKind::PanicObligation { .. } => Self::PanicObligation,
+            PanicEvidenceKind::PanicObligation { .. } => Self::DocumentedPanic,
             PanicEvidenceKind::PanicSink { .. } => Self::PanicInvocation,
             PanicEvidenceKind::IndirectBoundary { .. } => Self::IndirectCallBoundary,
         }
@@ -277,8 +277,8 @@ impl ReportDetailKind {
             Self::CompilerAssert | Self::PanicInvocation | Self::CachedDependencyPanic => {
                 lints.missing_docs
             }
-            Self::PanicObligation => lints.documented_contract,
-            Self::TrustedPanicObligation => lints.trusted_contract,
+            Self::DocumentedPanic => lints.documented_panic,
+            Self::TrustedPanic => lints.trusted_panic,
             Self::IndirectCallBoundary => lints.indirect_call_boundary,
             Self::AmbiguousObligationMarker => {
                 unreachable!("ambiguous marker level comes from `[analysis]` policy")
@@ -321,7 +321,7 @@ fn report_evidence_kind<'tcx>(
         }
         PanicEvidenceKind::PanicObligation { def_id } => {
             let target = canonical_namespace(tcx, *def_id);
-            (documented_panic_contract_reason(&target), Some(target))
+            (documented_panic_reason(&target), Some(target))
         }
         PanicEvidenceKind::PanicSink { def_id } => {
             let target = canonical_namespace(tcx, *def_id);
@@ -355,13 +355,13 @@ pub(crate) fn cached_dependency_panic_reason(summary: &CachedFunctionSummary) ->
         ),
         (
             summary.panic_obligations,
-            "documented panic contract",
-            "documented panic contracts",
+            "documented panic",
+            "documented panics",
         ),
         (
             summary.trusted_panic_obligations,
-            "trusted panic contract",
-            "trusted panic contracts",
+            "trusted panic",
+            "trusted panics",
         ),
     ] {
         if count == 0 {
@@ -381,19 +381,19 @@ pub(crate) fn cached_dependency_panic_reason(summary: &CachedFunctionSummary) ->
     reason
 }
 
-fn documented_panic_contract_reason(path: &str) -> String {
-    format!("{path} has a documented # Panics contract")
+fn documented_panic_reason(path: &str) -> String {
+    format!("{path} documents when it may panic under # Panics")
 }
 
 fn cached_dependency_contract_reason(
     summary: &CachedFunctionSummary,
     kind: ReportDetailKind,
 ) -> String {
-    let contract = match kind {
-        ReportDetailKind::TrustedPanicObligation => "trusted panic contract",
-        _ => "documented panic contract",
+    let panic_kind = match kind {
+        ReportDetailKind::TrustedPanic => "trusted panic",
+        _ => "documented panic",
     };
-    format!("{} has cached {contract} evidence", summary.path)
+    format!("{} has cached {panic_kind} evidence", summary.path)
 }
 
 pub(crate) fn render_edge<'tcx>(

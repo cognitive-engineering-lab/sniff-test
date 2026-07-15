@@ -41,7 +41,7 @@ ambiguous-obligations = "deny"
 [documentation]
 # Synthetic rustdoc markdown by namespace glob, loaded from TOML files relative
 # to this manifest. Useful while auditing external or generated APIs whose
-# contracts are known but not written in source yet.
+# documented behavior is known but not written in source yet.
 #
 # File format:
 # [overrides]
@@ -69,7 +69,7 @@ ignored-namespaces = [
 
 # Trusted crates or fully-qualified functions whose internals should be treated
 # as opaque API boundaries. If a matched function has `# Panics` docs, reaching
-# it is reported as a trusted panic contract. If it has no panic docs, it is
+# it is reported as a trusted panic. If it has no panic docs, it is
 # treated as non-panic evidence.
 #
 # Patterns match a definition's crate root, definition-site path, and impl
@@ -78,7 +78,7 @@ ignored-namespaces = [
 trusted-panic-obligation-namespaces = ["std::**", "core::**", "alloc::**"]
 
 # Callees that should be treated as direct panic sinks. When this overlaps with
-# trusted panic contract namespaces, the more precise namespace match wins; if
+# trusted panic namespaces, the more precise namespace match wins; if
 # precision ties, panic sinks win.
 panic-sink-namespaces = [
     "core::panicking::**",
@@ -94,8 +94,8 @@ panic-sink-namespaces = [
 # `warn` emits a warning without failing the run.
 # `allow` suppresses the finding from diagnostics and JSON reports.
 missing-docs = "deny"
-documented-contract = "warn"
-trusted-contract = "warn"
+documented-panic = "warn"
+trusted-panic = "warn"
 # Calls whose target cannot be resolved or verified: undocumented trait
 # methods behind generic bounds, and opaque callables like function pointers.
 indirect-call-boundary = "warn"

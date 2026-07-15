@@ -8,7 +8,7 @@ stdout:
 stderr:
     Checking dependency-obligation v0.1.0 ([FIXTURE]/dep)
     Checking dependency-app v0.1.0 ([FIXTURE]/app)
-warning: function `dependency_app::call_dependency` reaches a documented panic contract
+warning: function `dependency_app::call_dependency` may panic through a documented panic
  --> src/lib.rs:2:5
   |
 2 |     dependency_obligation::documented(flag);
@@ -19,17 +19,17 @@ note: the reached callee `dependency_obligation::documented` documents `# Panics
   |
 3 | pub fn documented(flag: bool) {
   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-help: add `// PANIC:` directly above this call if a local invariant satisfies the callee contract
+help: add `// PANIC:` directly above this call explaining why its documented panic conditions cannot occur
  --> src/lib.rs:2:5
   |
 2 |     dependency_obligation::documented(flag);
   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-help: document the caller's propagated contract with `/// # Panics` here
+help: document when this function may panic with `/// # Panics` here
  --> src/lib.rs:1:1
   |
 1 | pub fn call_dependency(flag: bool) {
   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  = help: ensure this precondition in the caller, satisfy the callee contract with `// PANIC:`, or document the caller's propagated contract with `# Panics`
+  = help: ensure the callee's panic conditions cannot occur, justify that with `// PANIC:`, or document when the caller may panic with `# Panics`
 
 warning: `dependency-app` (lib) generated 1 warning
     Finished `release` profile [optimized] target(s) in [TIME]

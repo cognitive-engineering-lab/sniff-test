@@ -455,8 +455,10 @@ pub struct PanicConfig {
 #[serde(default)]
 pub struct PanicLintConfig {
     pub missing_docs: LintLevel,
-    pub documented_contract: LintLevel,
-    pub trusted_contract: LintLevel,
+    #[serde(alias = "documented-contract")]
+    pub documented_panic: LintLevel,
+    #[serde(alias = "trusted-contract")]
+    pub trusted_panic: LintLevel,
     pub indirect_call_boundary: LintLevel,
 }
 
@@ -464,8 +466,8 @@ impl Default for PanicLintConfig {
     fn default() -> Self {
         Self {
             missing_docs: LintLevel::Deny,
-            documented_contract: LintLevel::Warn,
-            trusted_contract: LintLevel::Warn,
+            documented_panic: LintLevel::Warn,
+            trusted_panic: LintLevel::Warn,
             indirect_call_boundary: LintLevel::Warn,
         }
     }
@@ -1143,12 +1145,12 @@ mod tests {
     }
 
     #[test]
-    fn default_panic_lints_keep_documented_contracts_visible() {
+    fn default_panic_lints_keep_documented_panics_visible() {
         let lints = PanicConfig::default().lints;
 
         assert_eq!(lints.missing_docs, LintLevel::Deny);
-        assert_eq!(lints.documented_contract, LintLevel::Warn);
-        assert_eq!(lints.trusted_contract, LintLevel::Warn);
+        assert_eq!(lints.documented_panic, LintLevel::Warn);
+        assert_eq!(lints.trusted_panic, LintLevel::Warn);
     }
 
     #[test]
@@ -1165,15 +1167,29 @@ mod tests {
         let config = r#"
             [panics.lints]
             missing-docs = "warn"
+            documented-panic = "allow"
+            trusted-panic = "deny"
+        "#;
+
+        let parsed = SniffTestConfig::from_manifest_str(config).expect("manifest should parse");
+
+        assert_eq!(parsed.panics.lints.missing_docs, LintLevel::Warn);
+        assert_eq!(parsed.panics.lints.documented_panic, LintLevel::Allow);
+        assert_eq!(parsed.panics.lints.trusted_panic, LintLevel::Deny);
+    }
+
+    #[test]
+    fn accepts_legacy_panic_contract_lint_names() {
+        let config = r#"
+            [panics.lints]
             documented-contract = "allow"
             trusted-contract = "deny"
         "#;
 
         let parsed = SniffTestConfig::from_manifest_str(config).expect("manifest should parse");
 
-        assert_eq!(parsed.panics.lints.missing_docs, LintLevel::Warn);
-        assert_eq!(parsed.panics.lints.documented_contract, LintLevel::Allow);
-        assert_eq!(parsed.panics.lints.trusted_contract, LintLevel::Deny);
+        assert_eq!(parsed.panics.lints.documented_panic, LintLevel::Allow);
+        assert_eq!(parsed.panics.lints.trusted_panic, LintLevel::Deny);
     }
 
     #[test]

@@ -756,7 +756,7 @@ impl CrateOutputScope {
     }
 }
 
-const REPORT_FORMAT_VERSION: u32 = 1;
+const REPORT_FORMAT_VERSION: u32 = 2;
 
 #[derive(Debug, Clone, Copy, Serialize)]
 #[serde(rename_all = "kebab-case")]
@@ -914,8 +914,8 @@ fn reachability_options(
 #[serde(rename_all = "kebab-case")]
 pub(crate) struct PanicFindingCounts {
     pub(crate) raw_panic_paths: usize,
-    pub(crate) panic_obligations: usize,
-    pub(crate) trusted_panic_obligations: usize,
+    pub(crate) documented_panics: usize,
+    pub(crate) trusted_panics: usize,
     pub(crate) indirect_call_boundaries: usize,
     #[serde(skip_serializing_if = "usize_is_zero")]
     pub(crate) ambiguous_obligation_markers: usize,
@@ -931,8 +931,8 @@ fn usize_is_zero(value: &usize) -> bool {
 impl PanicFindingCounts {
     fn add(&mut self, other: Self) {
         self.raw_panic_paths += other.raw_panic_paths;
-        self.panic_obligations += other.panic_obligations;
-        self.trusted_panic_obligations += other.trusted_panic_obligations;
+        self.documented_panics += other.documented_panics;
+        self.trusted_panics += other.trusted_panics;
         self.indirect_call_boundaries += other.indirect_call_boundaries;
         self.ambiguous_obligation_markers += other.ambiguous_obligation_markers;
         self.ambiguous_obligation_names += other.ambiguous_obligation_names;
@@ -944,8 +944,8 @@ impl PanicFindingCounts {
             ReportDetailKind::CompilerAssert
             | ReportDetailKind::PanicInvocation
             | ReportDetailKind::CachedDependencyPanic => self.raw_panic_paths += 1,
-            ReportDetailKind::PanicObligation => self.panic_obligations += 1,
-            ReportDetailKind::TrustedPanicObligation => self.trusted_panic_obligations += 1,
+            ReportDetailKind::DocumentedPanic => self.documented_panics += 1,
+            ReportDetailKind::TrustedPanic => self.trusted_panics += 1,
             ReportDetailKind::IndirectCallBoundary => self.indirect_call_boundaries += 1,
             ReportDetailKind::AmbiguousObligationMarker => {
                 self.ambiguous_obligation_markers += 1;
@@ -963,8 +963,8 @@ impl PanicFindingCounts {
         analysis_lints: crate::config::AnalysisLintConfig,
     ) -> bool {
         (self.raw_panic_paths > 0 && lints.missing_docs == LintLevel::Deny)
-            || (self.panic_obligations > 0 && lints.documented_contract == LintLevel::Deny)
-            || (self.trusted_panic_obligations > 0 && lints.trusted_contract == LintLevel::Deny)
+            || (self.documented_panics > 0 && lints.documented_panic == LintLevel::Deny)
+            || (self.trusted_panics > 0 && lints.trusted_panic == LintLevel::Deny)
             || (self.indirect_call_boundaries > 0
                 && lints.indirect_call_boundary == LintLevel::Deny)
             || (self.ambiguous_obligation_markers > 0
@@ -1206,9 +1206,9 @@ fn emit_panic_obligation_finding<'tcx>(
 ) {
     let trusted = is_trusted_panic_obligation(tcx, finding.def_id, collection.config);
     let kind = if trusted {
-        ReportDetailKind::TrustedPanicObligation
+        ReportDetailKind::TrustedPanic
     } else {
-        ReportDetailKind::PanicObligation
+        ReportDetailKind::DocumentedPanic
     };
     let level = kind.lint_level(collection.config.lints);
     if level == LintLevel::Allow {
@@ -1216,9 +1216,9 @@ fn emit_panic_obligation_finding<'tcx>(
     }
 
     if trusted {
-        counts.trusted_panic_obligations += 1;
+        counts.trusted_panics += 1;
     } else {
-        counts.panic_obligations += 1;
+        counts.documented_panics += 1;
     }
     report.push_panic_obligation(
         tcx,
@@ -1375,9 +1375,9 @@ fn emit_cached_dependency_obligation_finding<'tcx>(
 ) {
     let trusted = is_trusted_panic_obligation(tcx, finding.def_id, collection.config);
     let kind = if trusted {
-        ReportDetailKind::TrustedPanicObligation
+        ReportDetailKind::TrustedPanic
     } else {
-        ReportDetailKind::PanicObligation
+        ReportDetailKind::DocumentedPanic
     };
     let level = kind.lint_level(collection.config.lints);
     if level == LintLevel::Allow {
@@ -1385,9 +1385,9 @@ fn emit_cached_dependency_obligation_finding<'tcx>(
     }
 
     if trusted {
-        counts.trusted_panic_obligations += 1;
+        counts.trusted_panics += 1;
     } else {
-        counts.panic_obligations += 1;
+        counts.documented_panics += 1;
     }
     report.push_cached_dependency_obligation(
         tcx,

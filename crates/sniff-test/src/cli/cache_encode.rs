@@ -38,8 +38,8 @@ pub(super) fn function_summary<'tcx>(
         has_panic_docs: crate::panics::has_panic_docs(tcx, def_id, config),
         root_span: cached_source_span(tcx, tcx.def_span(def_id)),
         raw_panic_paths: counts.raw_panic_paths,
-        panic_obligations: counts.panic_obligations,
-        trusted_panic_obligations: counts.trusted_panic_obligations,
+        panic_obligations: counts.documented_panics,
+        trusted_panic_obligations: counts.trusted_panics,
         graph: graph.map(|(graph, result)| cached_reachability_graph(tcx, graph, result)),
         findings,
     }
@@ -108,7 +108,7 @@ fn cached_panic_finding<'tcx>(
                     (
                         render_span(tcx, span),
                         cached_source_span(tcx, span),
-                        cached_primary_span(tcx, span, Some("documented # Panics contract")),
+                        cached_primary_span(tcx, span, Some("documented # Panics behavior")),
                         CachedFindingTarget::Function {
                             path: canonical_namespace(tcx, def_id),
                             crate_name: tcx.crate_name(def_id.krate).to_string(),
@@ -124,7 +124,7 @@ fn cached_panic_finding<'tcx>(
                         cached_primary_span(
                             tcx,
                             edge.span,
-                            Some("call reaches documented panic contract"),
+                            Some("call reaches documented panic behavior"),
                         ),
                         cached_finding_target(tcx, graph, edge.target),
                     )
@@ -135,7 +135,7 @@ fn cached_panic_finding<'tcx>(
                     tcx,
                     tcx.def_span(def_id),
                     false,
-                    Some("documented # Panics contract"),
+                    Some("documented # Panics behavior"),
                 )
             {
                 diagnostic_spans.push(span);
@@ -155,7 +155,7 @@ fn cached_panic_finding<'tcx>(
                     .map(|edge_id| edge_id.index())
                     .collect(),
                 reason: format!(
-                    "{} has a documented # Panics contract",
+                    "{} documents when it may panic under # Panics",
                     canonical_namespace(tcx, def_id)
                 ),
                 target: Some(target),
@@ -299,7 +299,7 @@ fn cached_diagnostic_span(
 fn cached_finding_span_label(kind: &PanicEvidenceKind) -> &'static str {
     match kind {
         PanicEvidenceKind::CompilerAssert => "compiler assertion",
-        PanicEvidenceKind::PanicObligation { .. } => "documented panic contract",
+        PanicEvidenceKind::PanicObligation { .. } => "documented panic",
         PanicEvidenceKind::PanicSink { .. } => "panic sink",
         PanicEvidenceKind::IndirectBoundary { .. } => "indirect call boundary",
     }

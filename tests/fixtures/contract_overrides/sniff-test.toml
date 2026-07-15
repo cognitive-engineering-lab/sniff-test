@@ -18,7 +18,7 @@ panic-sink-namespaces = [
 ]
 
 [panics.lints]
-documented-contract = "warn"
+documented-panic = "warn"
 
 [safety.lints]
 missing-docs = "deny"

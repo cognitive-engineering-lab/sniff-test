@@ -20,10 +20,10 @@ expression: messages
     "concrete-roots": 0,
     "counts": {
       "analysis-incomplete": 0,
+      "documented-panics": 1,
       "indirect-call-boundaries": 0,
-      "panic-obligations": 1,
       "raw-panic-paths": 1,
-      "trusted-panic-obligations": 0
+      "trusted-panics": 0
     },
     "dependencies": [],
     "dependency-cache": {
@@ -31,7 +31,7 @@ expression: messages
       "hits": 0,
       "total": 0
     },
-    "format-version": 1,
+    "format-version": 2,
     "generic-roots": 2,
     "missing-roots": [],
     "reason": "sniff-test-artifact",
@@ -39,10 +39,10 @@ expression: messages
       {
         "counts": {
           "analysis-incomplete": 0,
+          "documented-panics": 0,
           "indirect-call-boundaries": 0,
-          "panic-obligations": 0,
           "raw-panic-paths": 1,
-          "trusted-panic-obligations": 0
+          "trusted-panics": 0
         },
         "findings": [
           {
@@ -65,17 +65,17 @@ expression: messages
       {
         "counts": {
           "analysis-incomplete": 0,
+          "documented-panics": 1,
           "indirect-call-boundaries": 0,
-          "panic-obligations": 1,
           "raw-panic-paths": 0,
-          "trusted-panic-obligations": 0
+          "trusted-panics": 0
         },
         "findings": [
           {
             "edge": "generic_roots::generic_split_at --direct-call-> core::slice::<impl [T]>::split_at",
-            "kind": "panic-obligation",
+            "kind": "documented-panic",
             "level": "warn",
-            "reason": "core::slice::<impl [T]>::split_at has a documented # Panics contract",
+            "reason": "core::slice::<impl [T]>::split_at documents when it may panic under # Panics",
             "span": "[FIXTURE]/src/lib.rs:6:5: 6:27",
             "target": "core::slice::<impl [T]>::split_at",
             "trace": [

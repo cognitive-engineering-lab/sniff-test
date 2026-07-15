@@ -20,10 +20,10 @@ expression: messages
     "concrete-roots": 1,
     "counts": {
       "analysis-incomplete": 0,
+      "documented-panics": 0,
       "indirect-call-boundaries": 0,
-      "panic-obligations": 0,
       "raw-panic-paths": 0,
-      "trusted-panic-obligations": 1
+      "trusted-panics": 1
     },
     "dependencies": [],
     "dependency-cache": {
@@ -31,7 +31,7 @@ expression: messages
       "hits": 0,
       "total": 0
     },
-    "format-version": 1,
+    "format-version": 2,
     "generic-roots": 0,
     "missing-roots": [],
     "reason": "sniff-test-artifact",
@@ -39,17 +39,17 @@ expression: messages
       {
         "counts": {
           "analysis-incomplete": 0,
+          "documented-panics": 0,
           "indirect-call-boundaries": 0,
-          "panic-obligations": 0,
           "raw-panic-paths": 0,
-          "trusted-panic-obligations": 1
+          "trusted-panics": 1
         },
         "findings": [
           {
             "edge": "std_trait_impl_glob::put --direct-call-> alloc::std::vec::Vec::<T, A>::push",
-            "kind": "trusted-panic-obligation",
+            "kind": "trusted-panic",
             "level": "warn",
-            "reason": "alloc::std::vec::Vec::<T, A>::push has a documented # Panics contract",
+            "reason": "alloc::std::vec::Vec::<T, A>::push documents when it may panic under # Panics",
             "span": "src/lib.rs:9:5: 9:23",
             "target": "alloc::std::vec::Vec::<T, A>::push",
             "trace": [
