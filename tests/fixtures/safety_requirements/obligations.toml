@@ -19,6 +19,9 @@ safety-obligation-namespaces = [
 ]
 
 [safety.lints]
-missing-docs = "allow"
-missing-justification = "warn"
-missing-requirements = "warn"
+missing-safety-docs = "allow"
+unsafe-call-missing-justification = "warn"
+unsafe-call-missing-requirements = "warn"
+unsafe-op-missing-justification = "warn"
+safety-obligation-missing-justification = "warn"
+safety-obligation-missing-requirements = "warn"

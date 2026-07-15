@@ -28,7 +28,7 @@ use reachability::{
 };
 use rustc_hir::def_id::DefId;
 use rustc_middle::ty::TyCtxt;
-use serde::{Deserialize, Deserializer, Serialize, de::Error as _};
+use serde::{Deserialize, Serialize, de::Error as _};
 use toml::Spanned;
 
 use crate::namespace::namespace_candidates;
@@ -110,7 +110,6 @@ pub struct AnalysisConfig {
     pub inline_mir: MirInlining,
     /// Where concrete callable targets should appear once erased behind dyn
     /// dispatch or function pointers.
-    #[serde(alias = "dyn-dispatch-vtable-edges")]
     pub callable_edge_attribution: CallableEdgeAttribution,
     /// How `// PANIC:` and `// SAFETY:` comments are found for spans produced
     /// by macro expansion.
@@ -299,8 +298,8 @@ pub enum MarkerProbing {
     MacroDefinitionFirst,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "kebab-case")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "kebab-case", deny_unknown_fields, default)]
 pub struct AnalysisLintConfig {
     pub ambiguous_panic_marker: LintLevel,
     pub ambiguous_panic_requirement: LintLevel,
@@ -323,53 +322,6 @@ impl Default for AnalysisLintConfig {
             missing_report_root: LintLevel::Warn,
             ignored_report_root: LintLevel::Warn,
         }
-    }
-}
-
-#[derive(Deserialize)]
-#[serde(rename_all = "kebab-case", deny_unknown_fields)]
-struct RawAnalysisLintConfig {
-    ambiguous_obligations: Option<LintLevel>,
-    ambiguous_panic_marker: Option<LintLevel>,
-    ambiguous_panic_requirement: Option<LintLevel>,
-    ambiguous_safety_requirement: Option<LintLevel>,
-    analysis_incomplete: Option<LintLevel>,
-    empty_report_roots: Option<LintLevel>,
-    missing_report_root: Option<LintLevel>,
-    ignored_report_root: Option<LintLevel>,
-}
-
-impl<'de> Deserialize<'de> for AnalysisLintConfig {
-    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        let raw = RawAnalysisLintConfig::deserialize(deserializer)?;
-        let defaults = Self::default();
-        let ambiguous = raw.ambiguous_obligations;
-        Ok(Self {
-            ambiguous_panic_marker: raw
-                .ambiguous_panic_marker
-                .or(ambiguous)
-                .unwrap_or(defaults.ambiguous_panic_marker),
-            ambiguous_panic_requirement: raw
-                .ambiguous_panic_requirement
-                .or(ambiguous)
-                .unwrap_or(defaults.ambiguous_panic_requirement),
-            ambiguous_safety_requirement: raw
-                .ambiguous_safety_requirement
-                .or(ambiguous)
-                .unwrap_or(defaults.ambiguous_safety_requirement),
-            analysis_incomplete: raw
-                .analysis_incomplete
-                .unwrap_or(defaults.analysis_incomplete),
-            empty_report_roots: raw
-                .empty_report_roots
-                .unwrap_or(defaults.empty_report_roots),
-            missing_report_root: raw
-                .missing_report_root
-                .unwrap_or(defaults.missing_report_root),
-            ignored_report_root: raw
-                .ignored_report_root
-                .unwrap_or(defaults.ignored_report_root),
-        })
     }
 }
 
@@ -460,9 +412,8 @@ impl MirInlining {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize, Serialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum CallableEdgeAttribution {
-    /// Preserve legacy behavior: attribute concrete targets where callables
-    /// are erased into dyn objects or function pointers.
-    #[serde(rename = "erasure-sites", alias = "cast-sites")]
+    /// Attribute concrete targets where callables are erased into dyn objects
+    /// or function pointers.
     #[default]
     ErasureSites,
     /// Attribute concrete dyn-dispatch methods and function-pointer targets to
@@ -506,8 +457,8 @@ pub struct PanicConfig {
     pub marker_probing: MarkerProbing,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "kebab-case")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "kebab-case", deny_unknown_fields, default)]
 pub struct PanicLintConfig {
     pub compiler_assert: LintLevel,
     pub panic_invocation: LintLevel,
@@ -527,47 +478,6 @@ impl Default for PanicLintConfig {
             trusted_panic: LintLevel::Warn,
             indirect_call_boundary: LintLevel::Warn,
         }
-    }
-}
-
-#[derive(Deserialize)]
-#[serde(rename_all = "kebab-case", deny_unknown_fields)]
-struct RawPanicLintConfig {
-    missing_docs: Option<LintLevel>,
-    compiler_assert: Option<LintLevel>,
-    panic_invocation: Option<LintLevel>,
-    cached_dependency_panic: Option<LintLevel>,
-    #[serde(alias = "documented-contract")]
-    documented_panic: Option<LintLevel>,
-    #[serde(alias = "trusted-contract")]
-    trusted_panic: Option<LintLevel>,
-    indirect_call_boundary: Option<LintLevel>,
-}
-
-impl<'de> Deserialize<'de> for PanicLintConfig {
-    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        let raw = RawPanicLintConfig::deserialize(deserializer)?;
-        let defaults = Self::default();
-        let missing_docs = raw.missing_docs;
-        Ok(Self {
-            compiler_assert: raw
-                .compiler_assert
-                .or(missing_docs)
-                .unwrap_or(defaults.compiler_assert),
-            panic_invocation: raw
-                .panic_invocation
-                .or(missing_docs)
-                .unwrap_or(defaults.panic_invocation),
-            cached_dependency_panic: raw
-                .cached_dependency_panic
-                .or(missing_docs)
-                .unwrap_or(defaults.cached_dependency_panic),
-            documented_panic: raw.documented_panic.unwrap_or(defaults.documented_panic),
-            trusted_panic: raw.trusted_panic.unwrap_or(defaults.trusted_panic),
-            indirect_call_boundary: raw
-                .indirect_call_boundary
-                .unwrap_or(defaults.indirect_call_boundary),
-        })
     }
 }
 
@@ -606,8 +516,8 @@ pub struct SafetyConfig {
     pub marker_probing: MarkerProbing,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "kebab-case")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "kebab-case", deny_unknown_fields, default)]
 pub struct SafetyLintConfig {
     pub missing_safety_docs: LintLevel,
     pub unsafe_call_missing_justification: LintLevel,
@@ -627,53 +537,6 @@ impl Default for SafetyLintConfig {
             safety_obligation_missing_justification: LintLevel::Warn,
             safety_obligation_missing_requirements: LintLevel::Warn,
         }
-    }
-}
-
-#[derive(Deserialize)]
-#[serde(rename_all = "kebab-case", deny_unknown_fields)]
-struct RawSafetyLintConfig {
-    missing_docs: Option<LintLevel>,
-    missing_safety_docs: Option<LintLevel>,
-    missing_justification: Option<LintLevel>,
-    missing_requirements: Option<LintLevel>,
-    unsafe_call_missing_justification: Option<LintLevel>,
-    unsafe_call_missing_requirements: Option<LintLevel>,
-    unsafe_op_missing_justification: Option<LintLevel>,
-    safety_obligation_missing_justification: Option<LintLevel>,
-    safety_obligation_missing_requirements: Option<LintLevel>,
-}
-
-impl<'de> Deserialize<'de> for SafetyLintConfig {
-    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        let raw = RawSafetyLintConfig::deserialize(deserializer)?;
-        let defaults = Self::default();
-        Ok(Self {
-            missing_safety_docs: raw
-                .missing_safety_docs
-                .or(raw.missing_docs)
-                .unwrap_or(defaults.missing_safety_docs),
-            unsafe_call_missing_justification: raw
-                .unsafe_call_missing_justification
-                .or(raw.missing_justification)
-                .unwrap_or(defaults.unsafe_call_missing_justification),
-            unsafe_call_missing_requirements: raw
-                .unsafe_call_missing_requirements
-                .or(raw.missing_requirements)
-                .unwrap_or(defaults.unsafe_call_missing_requirements),
-            unsafe_op_missing_justification: raw
-                .unsafe_op_missing_justification
-                .or(raw.missing_justification)
-                .unwrap_or(defaults.unsafe_op_missing_justification),
-            safety_obligation_missing_justification: raw
-                .safety_obligation_missing_justification
-                .or(raw.missing_justification)
-                .unwrap_or(defaults.safety_obligation_missing_justification),
-            safety_obligation_missing_requirements: raw
-                .safety_obligation_missing_requirements
-                .or(raw.missing_requirements)
-                .unwrap_or(defaults.safety_obligation_missing_requirements),
-        })
     }
 }
 
@@ -1241,63 +1104,76 @@ mod tests {
     }
 
     #[test]
-    fn legacy_ambiguous_obligations_sets_all_ambiguity_levels() {
-        let config = r#"
-            [analysis.lints]
-            ambiguous-obligations = "allow"
-        "#;
+    fn rejects_config_compatibility_shims() {
+        let manifests = [
+            (
+                "[analysis.lints]\nambiguous-obligations = \"allow\"",
+                "ambiguous-obligations",
+            ),
+            (
+                "[analysis]\ndyn-dispatch-vtable-edges = \"cast-sites\"",
+                "dyn-dispatch-vtable-edges",
+            ),
+            (
+                "[analysis]\ncallable-edge-attribution = \"cast-sites\"",
+                "cast-sites",
+            ),
+            ("[panics.lints]\nmissing-docs = \"allow\"", "missing-docs"),
+            (
+                "[panics.lints]\ndocumented-contract = \"allow\"",
+                "documented-contract",
+            ),
+            (
+                "[panics.lints]\ntrusted-contract = \"allow\"",
+                "trusted-contract",
+            ),
+            ("[safety.lints]\nmissing-docs = \"allow\"", "missing-docs"),
+            (
+                "[safety.lints]\nmissing-justification = \"allow\"",
+                "missing-justification",
+            ),
+            (
+                "[safety.lints]\nmissing-requirements = \"allow\"",
+                "missing-requirements",
+            ),
+        ];
 
-        let parsed = SniffTestConfig::from_manifest_str(config).expect("manifest should parse");
-
-        assert_eq!(
-            parsed.analysis.lints.ambiguous_panic_marker,
-            LintLevel::Allow
-        );
-        assert_eq!(
-            parsed.analysis.lints.ambiguous_panic_requirement,
-            LintLevel::Allow
-        );
-        assert_eq!(
-            parsed.analysis.lints.ambiguous_safety_requirement,
-            LintLevel::Allow
-        );
+        for (manifest, removed_name) in manifests {
+            let error = SniffTestConfig::from_manifest_str(manifest)
+                .expect_err("removed config spelling should be rejected");
+            assert!(
+                error.to_string().contains(removed_name),
+                "error should identify {removed_name}: {error}"
+            );
+        }
     }
 
     #[test]
-    fn specific_lint_levels_override_legacy_group_levels() {
+    fn partial_lint_tables_use_direct_field_defaults() {
         let config = r#"
             [analysis.lints]
-            ambiguous-obligations = "allow"
-            ambiguous-panic-marker = "deny"
+            empty-report-roots = "deny"
 
             [panics.lints]
-            missing-docs = "allow"
-            panic-invocation = "warn"
+            panic-invocation = "allow"
 
             [safety.lints]
-            missing-justification = "allow"
-            unsafe-op-missing-justification = "deny"
+            missing-safety-docs = "deny"
         "#;
 
         let parsed = SniffTestConfig::from_manifest_str(config).expect("manifest should parse");
 
+        assert_eq!(parsed.analysis.lints.empty_report_roots, LintLevel::Deny);
         assert_eq!(
             parsed.analysis.lints.ambiguous_panic_marker,
             LintLevel::Deny
         );
-        assert_eq!(
-            parsed.analysis.lints.ambiguous_panic_requirement,
-            LintLevel::Allow
-        );
-        assert_eq!(parsed.panics.lints.compiler_assert, LintLevel::Allow);
-        assert_eq!(parsed.panics.lints.panic_invocation, LintLevel::Warn);
+        assert_eq!(parsed.panics.lints.panic_invocation, LintLevel::Allow);
+        assert_eq!(parsed.panics.lints.compiler_assert, LintLevel::Deny);
+        assert_eq!(parsed.safety.lints.missing_safety_docs, LintLevel::Deny);
         assert_eq!(
             parsed.safety.lints.unsafe_call_missing_justification,
-            LintLevel::Allow
-        );
-        assert_eq!(
-            parsed.safety.lints.unsafe_op_missing_justification,
-            LintLevel::Deny
+            LintLevel::Warn
         );
     }
 
@@ -1332,21 +1208,6 @@ mod tests {
             error
                 .to_string()
                 .contains("unknown field `ambiguous-obligation-markers`")
-        );
-    }
-
-    #[test]
-    fn parses_legacy_dyn_dispatch_vtable_edges_alias() {
-        let config = r#"
-            [analysis]
-            dyn-dispatch-vtable-edges = "cast-sites"
-        "#;
-
-        let parsed = SniffTestConfig::from_manifest_str(config).expect("manifest should parse");
-
-        assert_eq!(
-            parsed.analysis.callable_edge_attribution,
-            CallableEdgeAttribution::ErasureSites
         );
     }
 
@@ -1424,27 +1285,6 @@ mod tests {
     }
 
     #[test]
-    fn accepts_legacy_panic_contract_lint_names() {
-        let config = r#"
-            [panics.lints]
-            missing-docs = "allow"
-            documented-contract = "allow"
-            trusted-contract = "deny"
-        "#;
-
-        let parsed = SniffTestConfig::from_manifest_str(config).expect("manifest should parse");
-
-        assert_eq!(parsed.panics.lints.compiler_assert, LintLevel::Allow);
-        assert_eq!(parsed.panics.lints.panic_invocation, LintLevel::Allow);
-        assert_eq!(
-            parsed.panics.lints.cached_dependency_panic,
-            LintLevel::Allow
-        );
-        assert_eq!(parsed.panics.lints.documented_panic, LintLevel::Allow);
-        assert_eq!(parsed.panics.lints.trusted_panic, LintLevel::Deny);
-    }
-
-    #[test]
     fn parses_safety_lint_levels() {
         let config = r#"
             [safety]
@@ -1514,32 +1354,6 @@ mod tests {
         );
         assert_eq!(
             parsed.safety.lints.safety_obligation_missing_requirements,
-            LintLevel::Deny
-        );
-    }
-
-    #[test]
-    fn legacy_safety_lints_set_all_matching_finding_levels() {
-        let config = r#"
-            [safety.lints]
-            missing-docs = "deny"
-            missing-justification = "allow"
-            missing-requirements = "deny"
-        "#;
-
-        let parsed = SniffTestConfig::from_manifest_str(config).expect("manifest should parse");
-        let lints = parsed.safety.lints;
-
-        assert_eq!(lints.missing_safety_docs, LintLevel::Deny);
-        assert_eq!(lints.unsafe_call_missing_justification, LintLevel::Allow);
-        assert_eq!(lints.unsafe_op_missing_justification, LintLevel::Allow);
-        assert_eq!(
-            lints.safety_obligation_missing_justification,
-            LintLevel::Allow
-        );
-        assert_eq!(lints.unsafe_call_missing_requirements, LintLevel::Deny);
-        assert_eq!(
-            lints.safety_obligation_missing_requirements,
             LintLevel::Deny
         );
     }

@@ -5,4 +5,5 @@ report-roots = "all"
 indirect-call-boundary = "allow"
 
 [safety.lints]
-missing-requirements = "deny"
+unsafe-call-missing-requirements = "deny"
+safety-obligation-missing-requirements = "deny"
