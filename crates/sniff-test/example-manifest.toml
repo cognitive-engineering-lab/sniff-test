@@ -1,0 +1,121 @@
+# sniff-test configuration.
+#
+# The default configuration leaves all policy lists empty. This example includes
+# recommended Rust panic sinks and can be edited to match your threat model.
+
+[analysis]
+show-full-stack-trace = false
+report-roots = "public"
+
+# `profile` preserves Cargo/rustc's selected profile behavior.
+# `on` forces `-C overflow-checks=yes`; useful for checked release-mode audits.
+# `off` forces `-C overflow-checks=no`.
+overflow-checks = "profile"
+
+# MIR inlining can hide call edges that are useful in panic traces.
+# `off` forces `-Z inline-mir=no` and disables MIR inline passes;
+# `on` forces `-Z inline-mir=yes`.
+inline-mir = "off"
+
+# Concrete callable edges can be attributed to `erasure-sites` where a callable
+# becomes indirect, or `call-sites` where it is used.
+callable-edge-attribution = "erasure-sites"
+
+# Marker lookup checks comments in macro definitions before walking outward to
+# macro callsites and the final source callsite. Use `source-callsite` for the
+# older callsite-only behavior.
+marker-probing = "macro-definition-first"
+
+# Ambiguous obligation names and shared proof markers default to failing closed.
+# Configure ambiguous-obligations under `[analysis.lints]`.
+#
+# Instance budget per reachability query. Traversals that halt at the limit are
+# reported through the `analysis-incomplete` lint instead of passing silently.
+node-limit = 4096
+
+[analysis.lints]
+analysis-incomplete = "deny"
+# Use `warn` while auditing, or `allow` to accept squashed obligations.
+ambiguous-obligations = "deny"
+
+[documentation]
+# Synthetic rustdoc markdown by namespace glob, loaded from TOML files relative
+# to this manifest. Useful while auditing external or generated APIs whose
+# contracts are known but not written in source yet.
+#
+# File format:
+# [overrides]
+# "crate::path::function" = """
+# # Panics
+# - requirement: condition
+# """
+override-files = []
+
+[panics]
+# Crates, fully-qualified functions, or macro expansion paths whose internals should be treated as
+# opaque analysis boundaries. Patterns use Rust crate/path names: write
+# `proc_macro2`, not the package name `proc-macro2`.
+#
+# Use this list as the crate-local false-positive ledger too. When a reported
+# compiler assert is unreachable because this crate maintains an invariant,
+# ignore the function that introduces that assert and document the invariant
+# in a TOML comment next to the pattern.
+ignored-namespaces = [
+    "syn", "syn::**",
+    "quote", "quote::**",
+    "proc_macro2", "proc_macro2::**",
+    "rustc*", "rustc*::**",
+]
+
+# Trusted crates or fully-qualified functions whose internals should be treated
+# as opaque API boundaries. If a matched function has `# Panics` docs, reaching
+# it is reported as a trusted panic contract. If it has no panic docs, it is
+# treated as non-panic evidence.
+#
+# Patterns match a definition's crate root, definition-site path, and impl
+# self-type path, so `alloc::**` also covers trait-impl methods such as
+# `<Vec<T> as Index<usize>>::index`, and `x::**` includes `x` itself.
+trusted-panic-obligation-namespaces = ["std::**", "core::**", "alloc::**"]
+
+# Callees that should be treated as direct panic sinks. When this overlaps with
+# trusted panic contract namespaces, the more precise namespace match wins; if
+# precision ties, panic sinks win.
+panic-sink-namespaces = [
+    "core::panicking::**",
+    "std::panicking::**",
+    "core::std::rt::panic_fmt",
+    "std::rt::panic_fmt",
+    "core::{option,result}::unwrap_failed",
+    "std::{option,result}::unwrap_failed",
+]
+
+[panics.lints]
+# `deny` emits an error and makes `cargo sniff-test` fail.
+# `warn` emits a warning without failing the run.
+# `allow` suppresses the finding from diagnostics and JSON reports.
+missing-docs = "deny"
+documented-contract = "warn"
+trusted-contract = "warn"
+# Calls whose target cannot be resolved or verified: undocumented trait
+# methods behind generic bounds, and opaque callables like function pointers.
+indirect-call-boundary = "warn"
+
+[safety]
+# Namespaces whose unsafe docs/call-site findings should be suppressed.
+# Matching a caller suppresses unsafe-call findings inside it; matching a callee
+# suppresses requirements for calls to that callee.
+ignored-namespaces = []
+
+# Safe functions that should be treated as safety obligations at call sites.
+# If a matched function documents `# Safety` requirements, callers must satisfy
+# them with `// SAFETY:` requirement bullets. Otherwise callers must still add a
+# generic `// SAFETY:` justification.
+safety-obligation-namespaces = []
+
+[safety.lints]
+# `deny` emits an error and makes `cargo sniff-test` fail.
+# `warn` emits a warning without failing the run.
+# `allow` suppresses the finding from diagnostics and JSON reports.
+missing-docs = "warn"
+missing-justification = "warn"
+missing-requirements = "warn"
