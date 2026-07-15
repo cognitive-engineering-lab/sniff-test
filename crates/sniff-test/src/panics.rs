@@ -9,6 +9,10 @@
 //! - calls into trusted panic-obligation namespaces are opaque boundaries that
 //!   report obligations only when the reached function has panic docs.
 
+// WC: my high-level comment on this module is that it should be aggressively unified with the safety module.
+// We should be analyzing the two things in a basically identical way, modulo the specific names ("SAFETY", "PANIC").
+// Unifying this functionality will be a key step towards allowing user specification of additional effects.
+
 use std::collections::{HashMap, HashSet};
 
 use reachability::{

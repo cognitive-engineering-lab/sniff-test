@@ -74,7 +74,8 @@ impl MissingRootReason {
 pub enum ReportRoot<'tcx> {
     /// Monomorphic function that can be analyzed immediately.
     Concrete {
-        local: LocalDefId,
+        // WC: the LocalDefId should be retrievable from the Instance, why do we store it separately?
+        local: LocalDefId,        
         instance: Instance<'tcx>,
     },
     /// Generic function that requires monomorphization before reachability analysis.
@@ -106,6 +107,10 @@ pub fn select_report_roots<'tcx>(
 
     let mut roots = HashSet::new();
 
+    // WC: style nit, I would rewrite this as:
+    //      let missing_roots = match .. { .. };
+    //      sorted_selection(tcx, panic_config, roots, missing_roots)
+    // Rather than have two separate sorted_selection calls.
     match &analysis_config.report_roots {
         ReportRootSet::Public => {
             roots.extend(public_local_fn_defs(tcx));
@@ -154,10 +159,12 @@ fn sorted_selection<'tcx>(
 ) -> ReportRootSelection<'tcx> {
     let mut roots = roots
         .into_iter()
+        // WC: this is mixing concerns. I would 
         .filter(|local| !config.ignores_def(tcx, local.to_def_id()))
         .map(|local| report_root(tcx, local))
         .collect::<Vec<_>>();
-
+        
+    // WC: you prob want sort_by_cached_key
     roots.sort_by(|left, right| {
         canonical_namespace(tcx, left.local_def_id().to_def_id())
             .cmp(&canonical_namespace(tcx, right.local_def_id().to_def_id()))

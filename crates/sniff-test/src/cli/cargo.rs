@@ -12,6 +12,8 @@ use super::plugin::{
     rustc_version_dir_component,
 };
 
+// WC: Why aren't we using Clap for argument parsing?
+
 #[must_use]
 pub fn cargo_frontend() -> ExitCode {
     if std::env::args()
@@ -29,6 +31,16 @@ pub fn cargo_frontend() -> ExitCode {
         .iter()
         .any(|arg| arg == "--message-format" || arg.starts_with("--message-format="))
     {
+        /* WC: it would be more idiomatic for this function to use something like anyhow::Error 
+           and have the caller turn that into an ExitCode. Then you can use anyhow's beautiful
+           error handling functionality, like:
+
+           let has_message_format = parsed_args
+                .cargo_args
+                .iter()
+                .any(|arg| arg == "--message-format" || arg.starts_with("--message-format="));
+            ensure!(has_message_format, "sniff-test: pass --message-format to sniff-test itself, before any `--` separator");
+        */
         eprintln!(
             "sniff-test: pass --message-format to sniff-test itself, before any `--` separator"
         );
@@ -284,6 +296,7 @@ pub(crate) fn metadata_cargo_args(cargo_args: &[String]) -> Vec<String> {
     metadata_args
 }
 
+// WC: you're looking for PathBuf::canonicalize.
 pub(crate) fn absolute_path(path: PathBuf) -> PathBuf {
     if path.is_absolute() {
         path

@@ -7,6 +7,8 @@ pub(crate) struct RustcInvocation {
     pub(crate) externs: Vec<ExternCrateArg>,
 }
 
+// WC: why are we doing this? Isn't all this information available somewhere 
+// in the compiler Session or TyCtxt?
 impl RustcInvocation {
     pub(crate) fn parse(args: &[String]) -> Self {
         let mut parsed = Self::default();

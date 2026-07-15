@@ -1,5 +1,7 @@
 name: Code Quality Lints
 
+# WC: don't filter this to branches: [main] while we're testing, otherwise CI won't run!
+# This is important bc the tests aren't working for me...
 on:
   push:
     branches: [main]

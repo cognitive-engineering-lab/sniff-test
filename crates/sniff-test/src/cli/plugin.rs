@@ -440,6 +440,8 @@ impl Callbacks for SniffTestCallbacks {
             .into_iter()
             .map(|path| path.display().to_string())
             .collect::<Vec<_>>();
+
+        // WC: would be good to have a comment here explaining why we need to track the config files in this depinfo object.
         config.track_state = Some(Box::new(move |sess| {
             sess.env_depinfo.borrow_mut().insert((
                 Symbol::intern(SNIFF_TEST_ARGS_ENV),

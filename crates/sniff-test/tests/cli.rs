@@ -216,6 +216,13 @@ fn run_named_case(name: &'static str, fixture_name: &'static str, case: Case) {
     );
 
     let snapshot = render_snapshot(&output, &fixture_root, sysroot.trim());
+    // WC: these cases are all failing because the stderr is platorm-specific. I'm getting diffs that look like:    
+    // -    Checking ambiguous-safety v0.1.0 ([FIXTURE])
+    // +    Checking ambiguous-safety v0.1.0 (/private[FIXTURE])
+    //
+    // WC: also, I'm getting non-determinism from "Blocking waiting for file lock on package cache".
+    //     We should make sure these individiaul calls are not sharing a target dir so I don't have to run with
+    //     --test-threads 1 :-)
     insta::assert_snapshot!(name, snapshot);
 }
 
