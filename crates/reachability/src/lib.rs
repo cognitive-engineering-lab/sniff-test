@@ -24,6 +24,14 @@
 //! observe nodes/edges, stop traversal, or prevent descending into selected
 //! callees.
 
+// WC: since this code was take in large part from Ferrocene, it's VERY important that
+// (a) We explicitly credit them here, with a link to their codebase
+// (b) We indicate what it different between this code and their code
+// (c) We respect the terms of their license.
+
+// WC: JQ, can you tell me what (if anything) is different about this crate than Ferrocene's?
+// Or is it basically a directly adaptation into a standalone crate?
+
 #![feature(rustc_private)]
 #![deny(warnings)]
 #![warn(clippy::pedantic)]

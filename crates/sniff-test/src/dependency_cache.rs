@@ -21,6 +21,11 @@ pub struct DependencyInput {
     pub path: Option<PathBuf>,
 }
 
+// WC: naming nit, I think it's weird to characterize this data structure as a "cache".
+// To me, a cache is something you fetch from if available, and recompute on-the-fly otherwise.
+// But we can't access key information about dependencies once we leave those sessions,
+// so I might call it a "store" rather than a "cache".
+
 /// Loaded dependency cache for one rustc invocation.
 ///
 /// The cache deliberately fails closed for ambiguous crate names. If two loaded

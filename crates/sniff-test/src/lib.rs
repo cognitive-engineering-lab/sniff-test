@@ -9,7 +9,7 @@
 //! policies.
 
 #![feature(rustc_private)]
-#![deny(warnings)]
+// #![deny(warnings)]
 #![warn(clippy::pedantic)]
 
 extern crate rustc_abi;

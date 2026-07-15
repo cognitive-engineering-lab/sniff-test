@@ -90,9 +90,12 @@ pub(crate) fn analyze_crate(tcx: TyCtxt<'_>, args: &SniffTestArgs, compiler_args
         return;
     }
 
+    // WC: Why are we dynamically loading the rustc_version? It *must* be exactly the rustc version used to build
+    // the compiler plugin.
     let rustc_version = rustc_version();
     let dependency_cache = DependencyAnalysisCache::load(
         &args.cache_dir(),
+        // WC: style nit, seems cleaner to push this `.iter().map(...)` logic into `DependencyAnalysisCache::load`.
         invocation.externs.iter().map(|extern_arg| DependencyInput {
             name: extern_arg.name.clone(),
             path: extern_arg.path.clone(),
@@ -115,10 +118,13 @@ pub(crate) fn analyze_crate(tcx: TyCtxt<'_>, args: &SniffTestArgs, compiler_args
         );
     }
 
+    // WC: style nit, I would just pass &config and let this function project its sub-configs as needed.
     let selection = select_report_roots(tcx, &config.analysis, &config.panics);
     let selection_has_roots = !selection.roots.is_empty();
     let emit_diagnostics = args.message_format == args::MessageFormat::Human
         && output_scope == CrateOutputScope::Workspace;
+    // WC: feels like there's a missing AnalysisDriver object or smth which encapsulates a lot of these fields.
+    // It's a code smell that you call five functions in a row with a ton of overlap in arguments.
     let root_analysis = analyze_report_roots(
         tcx,
         selection,
@@ -128,6 +134,8 @@ pub(crate) fn analyze_crate(tcx: TyCtxt<'_>, args: &SniffTestArgs, compiler_args
         config.analysis.show_full_stack_trace,
     );
     let empty_report_roots = !selection_has_roots && root_analysis.missing_roots.is_empty();
+
+    // WC: I'm confused why the safety analysis exists in such a separate place from the panic analysis.           
     let safety_analysis = if output_scope == CrateOutputScope::Workspace {
         analyze_safety(tcx, &config.safety)
     } else {
@@ -197,6 +205,7 @@ fn write_unit_outcome_file(args: &SniffTestArgs, outcome: &UnitOutcome) {
     // frontend's build plan regardless; the frontend swallows it, users never
     // see it.
     if args.under_cargo {
+        // WC: why not serde_json::json!({"reason": "sniff-test-outcome", ...})?
         println!(
             r#"{{"reason":"sniff-test-outcome","artifact-id":{}}}"#,
             serde_json::json!(outcome.artifact_id)
@@ -274,9 +283,15 @@ fn analyze_report_roots<'tcx>(
     };
     let mut reachability = ReachabilityIndex::new(tcx);
 
+    // WC: we should architect for parallelism. Obvious place to start is that
+    // this should be a rayon par_iter loop. We'll need to think carefully about
+    // architecting the ReachabilityIndex to limit contention and avoid deadlock.
     for root in selection.roots {
         let root = match root {
             ReportRoot::Concrete { instance, .. } => AnalysisRoot {
+                // WC: ReachabilityRoot has basically the same information as ReportRoot, 
+                // no need for two separate structs. Also PanicRootKind is derived 1:1
+                // from ReportRoot, do we need that separate struct?
                 root: ReachabilityRoot::Instance(instance),
                 def_id: instance.def_id(),
                 kind: PanicRootKind::Concrete,
@@ -306,6 +321,9 @@ fn analyze_report_roots<'tcx>(
 impl CrateOutputScope {
     #[must_use]
     fn current(args: &SniffTestArgs, invocation: &RustcInvocation) -> Self {
+        // WC: the comment below is a good example of Claudish that's kind of nonsensical. It probably made sense
+        // to Claude during the drafting of this code, but I have no idea what it means out of context.        
+
         // Build scripts and proc macros never ship as target code; workspace
         // deny gating and diagnostics would fail builds over their normal
         // panic-on-error idiom.
@@ -394,6 +412,9 @@ fn analyze_root<'tcx>(
         },
     );
     let transitive_complete = graph.view(&result).halt().is_none();
+
+    // WC: I don't understand at all what the code below is doing, like why a second panic analysis
+    // is necessary. (Comment below is also written in Claudish so I can't understand it...)
 
     // A second, boundary-only query per root is deliberate: body expansion is
     // memoized across queries and policy/marker verdicts are cached, so this
@@ -751,6 +772,7 @@ fn push_cached_dependency_obligation_finding<'tcx>(
 pub(crate) fn load_config(args: &SniffTestArgs) -> SniffTestConfig {
     let path = args.manifest_path();
     if path.exists() {
+        // WC: same comment as in the CLI. We should use proper error handling w/ anyhow rather than eprintln and exit.
         SniffTestConfig::from_manifest_path(path).unwrap_or_else(|error| {
             eprintln!("sniff-test: {error}");
             std::process::exit(2);

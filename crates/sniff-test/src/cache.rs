@@ -38,6 +38,11 @@ pub struct UnitOutcome {
     pub report_json: Option<String>,
 }
 
+// WC: as a style note, I would expect `write_unit_outcome` to be a method `UnitOutcome::write`.
+// If the name is exactly of the form "verb_object", (i.e., it is obviously performing one action
+// onto a clear receiver object) then it should idiomatically be "Object::verb". You don't ALWAYS
+// have to do this (that's Java OOP disease), but sometimes it's clear.
+
 /// Writes a unit outcome under the cache directory.
 ///
 /// # Errors
