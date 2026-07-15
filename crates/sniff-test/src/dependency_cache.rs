@@ -231,7 +231,7 @@ struct ResolvedDependency {
 
 #[cfg(test)]
 mod tests {
-    use crate::cache::CachedFunctionSummary;
+    use crate::cache::{CachedFunctionSummary, CachedTraceArena};
 
     use super::{CrateArtifactIndex, DependencyAnalysisCache, FunctionCacheKey};
 
@@ -268,7 +268,10 @@ mod tests {
             raw_panic_paths: 1,
             panic_obligations: 0,
             trusted_panic_obligations: 0,
-            graph: None,
+            trace_arena: CachedTraceArena {
+                nodes: Vec::new(),
+                frames: Vec::new(),
+            },
             findings: Vec::new(),
         }
     }

@@ -895,9 +895,8 @@ fn analyze_root<'tcx>(
 
     // A second, boundary-only query per root is deliberate: body expansion is
     // memoized across queries and policy/marker verdicts are cached, so this
-    // re-traverses the in-memory graph cheaply, while deriving boundary
-    // findings from the transitive snapshot would change the serialized
-    // cache graphs and their trace semantics.
+    // re-traverses the in-memory graph cheaply while keeping cached boundary
+    // traces scoped to the same traversal that produced their findings.
     let mut boundary_hooks = PanicReachabilityHooks {
         config,
         descend_reified_callables,
@@ -916,7 +915,7 @@ fn analyze_root<'tcx>(
         analysis_config.lints.ambiguous_panic_marker,
         analysis_config.lints.ambiguous_panic_requirement,
     );
-    let cached_findings =
+    let (cached_findings, trace_arena) =
         cached_boundary_findings(tcx, graph, &boundary_result, &boundary_analysis, config);
     let analysis_complete = transitive_complete && graph.view(&boundary_result).halt().is_none();
     if !analysis_complete {
@@ -936,7 +935,7 @@ fn analyze_root<'tcx>(
         analysis_complete,
         &report.findings,
         config,
-        Some((graph, &boundary_result)),
+        trace_arena,
         cached_findings,
     );
 
