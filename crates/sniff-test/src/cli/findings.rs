@@ -5,9 +5,9 @@ use std::path::Path;
 use crate::config::{ContractDocOverrides, LintLevel, ReportRootSet, SniffTestConfig};
 use crate::namespace::canonical_namespace;
 use crate::panics::PanicEvidenceKind;
-use crate::report_roots::{MissingReportRoot, MissingRootReason, ReportRootFindingKind};
+use crate::report_roots::{MissingReportRoot, MissingRootReason};
 use crate::safety::{
-    SafetyAnalysis, SafetyFinding, SafetyFindingKind, render_safety_requirement, safety_call_label,
+    SafetyAnalysis, SafetyCallKind, SafetyFinding, render_safety_requirement, safety_call_label,
     safety_callee_name, safety_op_label,
 };
 use rustc_middle::ty::TyCtxt;
@@ -157,36 +157,6 @@ impl FindingKind {
     }
 }
 
-impl From<ReportRootFindingKind> for FindingKind {
-    fn from(kind: ReportRootFindingKind) -> Self {
-        match kind {
-            ReportRootFindingKind::EmptyReportRoots => Self::EmptyReportRoots,
-            ReportRootFindingKind::MissingReportRoot => Self::MissingReportRoot,
-            ReportRootFindingKind::IgnoredReportRoot => Self::IgnoredReportRoot,
-        }
-    }
-}
-
-impl From<SafetyFindingKind> for FindingKind {
-    fn from(kind: SafetyFindingKind) -> Self {
-        match kind {
-            SafetyFindingKind::MissingSafetyDocs => Self::MissingSafetyDocs,
-            SafetyFindingKind::UnsafeCallMissingJustification => {
-                Self::UnsafeCallMissingJustification
-            }
-            SafetyFindingKind::UnsafeCallMissingRequirements => Self::UnsafeCallMissingRequirements,
-            SafetyFindingKind::UnsafeOpMissingJustification => Self::UnsafeOpMissingJustification,
-            SafetyFindingKind::SafetyObligationMissingJustification => {
-                Self::SafetyObligationMissingJustification
-            }
-            SafetyFindingKind::SafetyObligationMissingRequirements => {
-                Self::SafetyObligationMissingRequirements
-            }
-            SafetyFindingKind::AmbiguousSafetyRequirement => Self::AmbiguousSafetyRequirement,
-        }
-    }
-}
-
 pub(crate) fn collect_report_root_findings(
     tcx: TyCtxt<'_>,
     manifest_path: &Path,
@@ -197,11 +167,10 @@ pub(crate) fn collect_report_root_findings(
 ) -> Vec<Finding> {
     let mut findings = Vec::new();
     if empty_report_roots {
-        let kind = ReportRootFindingKind::EmptyReportRoots;
         let diagnostic =
             empty_report_roots_diagnostic(tcx, manifest_path, report_roots, crate_name);
         findings.push(Finding {
-            kind: kind.into(),
+            kind: FindingKind::EmptyReportRoots,
             root: None,
             root_kind: None,
             function: None,
@@ -217,26 +186,26 @@ pub(crate) fn collect_report_root_findings(
             diagnostic,
         });
     }
-    findings.extend(missing_roots.iter().map(|root| {
-        let kind = root.reason.finding_kind();
-        Finding {
-            kind: kind.into(),
-            root: None,
-            root_kind: None,
-            function: None,
-            target: Some(root.path.clone()),
-            span: None,
-            reason: match root.reason {
-                MissingRootReason::NotFound => String::from("configured report root was not found"),
-                MissingRootReason::Ignored => String::from(
-                    "configured report root is excluded by `[panics].ignored-namespaces`",
-                ),
-            },
-            trace: Vec::new(),
-            missing_requirements: Vec::new(),
-            requirements: Vec::new(),
-            diagnostic: missing_report_root_diagnostic(tcx, manifest_path, root),
-        }
+    findings.extend(missing_roots.iter().map(|root| Finding {
+        kind: match root.reason {
+            MissingRootReason::NotFound => FindingKind::MissingReportRoot,
+            MissingRootReason::Ignored => FindingKind::IgnoredReportRoot,
+        },
+        root: None,
+        root_kind: None,
+        function: None,
+        target: Some(root.path.clone()),
+        span: None,
+        reason: match root.reason {
+            MissingRootReason::NotFound => String::from("configured report root was not found"),
+            MissingRootReason::Ignored => {
+                String::from("configured report root is excluded by `[panics].ignored-namespaces`")
+            }
+        },
+        trace: Vec::new(),
+        missing_requirements: Vec::new(),
+        requirements: Vec::new(),
+        diagnostic: missing_report_root_diagnostic(tcx, manifest_path, root),
     }));
     findings
 }
@@ -258,13 +227,12 @@ fn safety_finding_report(
     finding: SafetyFinding,
     overrides: &ContractDocOverrides,
 ) -> Finding {
-    let kind = finding.kind();
     let diagnostic = safety_finding_diagnostic(tcx, &finding, overrides);
     match finding {
         SafetyFinding::MissingSafetyDocs { def_id, span } => {
             let function = canonical_namespace(tcx, def_id);
             Finding {
-                kind: kind.into(),
+                kind: FindingKind::MissingSafetyDocs,
                 root: None,
                 root_kind: None,
                 function: Some(function.clone()),
@@ -286,7 +254,12 @@ fn safety_finding_report(
             let target = safety_callee_name(tcx, callee);
             let call = safety_call_label(call_kind);
             Finding {
-                kind: kind.into(),
+                kind: match call_kind {
+                    SafetyCallKind::Unsafe => FindingKind::UnsafeCallMissingJustification,
+                    SafetyCallKind::ConfiguredObligation => {
+                        FindingKind::SafetyObligationMissingJustification
+                    }
+                },
                 root: None,
                 root_kind: None,
                 function: Some(canonical_namespace(tcx, caller)),
@@ -313,7 +286,12 @@ fn safety_finding_report(
                 .map(render_safety_requirement)
                 .collect();
             Finding {
-                kind: kind.into(),
+                kind: match call_kind {
+                    SafetyCallKind::Unsafe => FindingKind::UnsafeCallMissingRequirements,
+                    SafetyCallKind::ConfiguredObligation => {
+                        FindingKind::SafetyObligationMissingRequirements
+                    }
+                },
                 root: None,
                 root_kind: None,
                 function: Some(canonical_namespace(tcx, caller)),
@@ -329,7 +307,7 @@ fn safety_finding_report(
         SafetyFinding::OpMissingJustification { caller, op, span } => {
             let operation = safety_op_label(op);
             Finding {
-                kind: kind.into(),
+                kind: FindingKind::UnsafeOpMissingJustification,
                 root: None,
                 root_kind: None,
                 function: Some(canonical_namespace(tcx, caller)),
@@ -353,7 +331,7 @@ fn safety_finding_report(
                 .map_or_else(|| tcx.def_span(def_id), |requirement| requirement.span);
             let requirements = requirements.iter().map(render_safety_requirement).collect();
             Finding {
-                kind: kind.into(),
+                kind: FindingKind::AmbiguousSafetyRequirement,
                 root: None,
                 root_kind: None,
                 function: Some(function.clone()),

@@ -14,7 +14,6 @@ use rustc_hir::def::DefKind;
 use rustc_hir::def_id::{DefId, LocalDefId};
 use rustc_middle::ty::TyCtxt;
 use rustc_span::Span;
-use serde::Serialize;
 
 use crate::config::{ContractDocOverrides, SafetyConfig};
 use crate::contracts::{
@@ -59,18 +58,6 @@ pub enum SafetyFinding {
         normalized_name: String,
         requirements: Vec<SafetyRequirement>,
     },
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "kebab-case")]
-pub enum SafetyFindingKind {
-    MissingSafetyDocs,
-    UnsafeCallMissingJustification,
-    UnsafeCallMissingRequirements,
-    UnsafeOpMissingJustification,
-    SafetyObligationMissingJustification,
-    SafetyObligationMissingRequirements,
-    AmbiguousSafetyRequirement,
 }
 
 /// Non-call operations that require `unsafe`, mirroring the non-call variants
@@ -189,29 +176,6 @@ impl SafetyAnalysis {
                 normalized_name: ambiguous.normalized_name,
                 requirements: ambiguous.requirements,
             });
-        }
-    }
-}
-
-impl SafetyFinding {
-    #[must_use]
-    pub fn kind(&self) -> SafetyFindingKind {
-        match self {
-            Self::MissingSafetyDocs { .. } => SafetyFindingKind::MissingSafetyDocs,
-            Self::CallMissingJustification { call_kind, .. } => match call_kind {
-                SafetyCallKind::Unsafe => SafetyFindingKind::UnsafeCallMissingJustification,
-                SafetyCallKind::ConfiguredObligation => {
-                    SafetyFindingKind::SafetyObligationMissingJustification
-                }
-            },
-            Self::CallMissingRequirements { call_kind, .. } => match call_kind {
-                SafetyCallKind::Unsafe => SafetyFindingKind::UnsafeCallMissingRequirements,
-                SafetyCallKind::ConfiguredObligation => {
-                    SafetyFindingKind::SafetyObligationMissingRequirements
-                }
-            },
-            Self::OpMissingJustification { .. } => SafetyFindingKind::UnsafeOpMissingJustification,
-            Self::AmbiguousObligationName { .. } => SafetyFindingKind::AmbiguousSafetyRequirement,
         }
     }
 }
