@@ -19,35 +19,17 @@ expression: messages
       "target": null
     },
     "concrete-roots": 3,
-    "counts": {
-      "analysis-incomplete": 0,
-      "cached-dependency-panics": 0,
-      "compiler-asserts": 0,
-      "documented-panics": 0,
-      "indirect-call-boundaries": 0,
-      "panic-invocations": 3,
-      "trusted-panics": 0
-    },
     "dependencies": [],
     "dependency-cache": {
       "failed": 0,
       "hits": 0,
       "total": 0
     },
-    "format-version": 2,
+    "format-version": 3,
     "generic-roots": 0,
     "reason": "sniff-test-artifact",
     "roots": [
       {
-        "counts": {
-          "analysis-incomplete": 0,
-          "cached-dependency-panics": 0,
-          "compiler-asserts": 0,
-          "documented-panics": 0,
-          "indirect-call-boundaries": 0,
-          "panic-invocations": 1,
-          "trusted-panics": 0
-        },
         "findings": [
           {
             "edge": "<dependency_identity::Widget as Sniffer>::sniff --macro-expansion-> macro core::std::assert",
@@ -69,15 +51,6 @@ expression: messages
         "root-kind": "concrete"
       },
       {
-        "counts": {
-          "analysis-incomplete": 0,
-          "cached-dependency-panics": 0,
-          "compiler-asserts": 0,
-          "documented-panics": 0,
-          "indirect-call-boundaries": 0,
-          "panic-invocations": 1,
-          "trusted-panics": 0
-        },
         "findings": [
           {
             "edge": "<dependency_identity::std::vec::Vec<u8> as Sniffer>::sniff --macro-expansion-> macro core::std::assert",
@@ -99,15 +72,6 @@ expression: messages
         "root-kind": "concrete"
       },
       {
-        "counts": {
-          "analysis-incomplete": 0,
-          "cached-dependency-panics": 0,
-          "compiler-asserts": 0,
-          "documented-panics": 0,
-          "indirect-call-boundaries": 0,
-          "panic-invocations": 1,
-          "trusted-panics": 0
-        },
         "findings": [
           {
             "edge": "dependency_identity::internal::run --macro-expansion-> macro core::std::assert",
@@ -149,15 +113,6 @@ expression: messages
       "target": null
     },
     "concrete-roots": 4,
-    "counts": {
-      "analysis-incomplete": 0,
-      "cached-dependency-panics": 4,
-      "compiler-asserts": 0,
-      "documented-panics": 0,
-      "indirect-call-boundaries": 0,
-      "panic-invocations": 0,
-      "trusted-panics": 0
-    },
     "dependencies": [
       {
         "artifact-id": "[ARTIFACT_ID]",
@@ -171,20 +126,11 @@ expression: messages
       "hits": 1,
       "total": 1
     },
-    "format-version": 2,
+    "format-version": 3,
     "generic-roots": 0,
     "reason": "sniff-test-artifact",
     "roots": [
       {
-        "counts": {
-          "analysis-incomplete": 0,
-          "cached-dependency-panics": 1,
-          "compiler-asserts": 0,
-          "documented-panics": 0,
-          "indirect-call-boundaries": 0,
-          "panic-invocations": 0,
-          "trusted-panics": 0
-        },
         "findings": [
           {
             "edge": "dependency_identity_app::run_reexported --direct-call-> dependency_identity::run",
@@ -204,15 +150,6 @@ expression: messages
         "root-kind": "concrete"
       },
       {
-        "counts": {
-          "analysis-incomplete": 0,
-          "cached-dependency-panics": 1,
-          "compiler-asserts": 0,
-          "documented-panics": 0,
-          "indirect-call-boundaries": 0,
-          "panic-invocations": 0,
-          "trusted-panics": 0
-        },
         "findings": [
           {
             "edge": "dependency_identity_app::sniff_buffer --direct-call-> <dependency_identity::std::vec::Vec<u8> as dependency_identity::Sniffer>::sniff",
@@ -232,15 +169,6 @@ expression: messages
         "root-kind": "concrete"
       },
       {
-        "counts": {
-          "analysis-incomplete": 0,
-          "cached-dependency-panics": 1,
-          "compiler-asserts": 0,
-          "documented-panics": 0,
-          "indirect-call-boundaries": 0,
-          "panic-invocations": 0,
-          "trusted-panics": 0
-        },
         "findings": [
           {
             "edge": "dependency_identity_app::sniff_dyn --vtable-entry-> <dependency_identity::Widget as dependency_identity::Sniffer>::sniff",
@@ -260,15 +188,6 @@ expression: messages
         "root-kind": "concrete"
       },
       {
-        "counts": {
-          "analysis-incomplete": 0,
-          "cached-dependency-panics": 1,
-          "compiler-asserts": 0,
-          "documented-panics": 0,
-          "indirect-call-boundaries": 0,
-          "panic-invocations": 0,
-          "trusted-panics": 0
-        },
         "findings": [
           {
             "edge": "dependency_identity_app::sniff_widget --direct-call-> <dependency_identity::Widget as dependency_identity::Sniffer>::sniff",

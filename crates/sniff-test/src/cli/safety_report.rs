@@ -7,12 +7,11 @@ use crate::safety::{
 use rustc_middle::ty::TyCtxt;
 use serde::Serialize;
 
-use super::{report::render_span, usize_is_zero};
+use super::report::render_span;
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "kebab-case")]
 pub(super) struct SafetyArtifactReport {
-    counts: SafetyFindingCounts,
     findings: Vec<SafetyFindingReport>,
 }
 
@@ -24,7 +23,6 @@ impl SafetyArtifactReport {
         ambiguous_obligations: LintLevel,
     ) -> Option<Self> {
         let mut report = Self {
-            counts: SafetyFindingCounts::default(),
             findings: Vec::new(),
         };
 
@@ -33,7 +31,6 @@ impl SafetyArtifactReport {
             if level == LintLevel::Allow {
                 continue;
             }
-            report.counts.increment(finding.kind());
             report
                 .findings
                 .push(SafetyFindingReport::from_finding(tcx, finding, level));
@@ -41,44 +38,11 @@ impl SafetyArtifactReport {
 
         (!report.findings.is_empty()).then_some(report)
     }
-}
 
-#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "kebab-case")]
-struct SafetyFindingCounts {
-    missing_safety_docs: usize,
-    unsafe_call_missing_justification: usize,
-    unsafe_call_missing_requirements: usize,
-    unsafe_op_missing_justification: usize,
-    safety_obligation_missing_justification: usize,
-    safety_obligation_missing_requirements: usize,
-    #[serde(skip_serializing_if = "usize_is_zero")]
-    ambiguous_safety_requirements: usize,
-}
-
-impl SafetyFindingCounts {
-    fn increment(&mut self, kind: SafetyFindingKind) {
-        match kind {
-            SafetyFindingKind::MissingSafetyDocs => self.missing_safety_docs += 1,
-            SafetyFindingKind::UnsafeCallMissingJustification => {
-                self.unsafe_call_missing_justification += 1;
-            }
-            SafetyFindingKind::UnsafeCallMissingRequirements => {
-                self.unsafe_call_missing_requirements += 1;
-            }
-            SafetyFindingKind::UnsafeOpMissingJustification => {
-                self.unsafe_op_missing_justification += 1;
-            }
-            SafetyFindingKind::SafetyObligationMissingJustification => {
-                self.safety_obligation_missing_justification += 1;
-            }
-            SafetyFindingKind::SafetyObligationMissingRequirements => {
-                self.safety_obligation_missing_requirements += 1;
-            }
-            SafetyFindingKind::AmbiguousSafetyRequirement => {
-                self.ambiguous_safety_requirements += 1;
-            }
-        }
+    pub(super) fn has_denied_findings(&self) -> bool {
+        self.findings
+            .iter()
+            .any(|finding| finding.level == LintLevel::Deny)
     }
 }
 

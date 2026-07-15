@@ -19,35 +19,17 @@ expression: messages
       "target": null
     },
     "concrete-roots": 1,
-    "counts": {
-      "analysis-incomplete": 0,
-      "cached-dependency-panics": 0,
-      "compiler-asserts": 0,
-      "documented-panics": 1,
-      "indirect-call-boundaries": 2,
-      "panic-invocations": 0,
-      "trusted-panics": 0
-    },
     "dependencies": [],
     "dependency-cache": {
       "failed": 0,
       "hits": 0,
       "total": 0
     },
-    "format-version": 2,
+    "format-version": 3,
     "generic-roots": 2,
     "reason": "sniff-test-artifact",
     "roots": [
       {
-        "counts": {
-          "analysis-incomplete": 0,
-          "cached-dependency-panics": 0,
-          "compiler-asserts": 0,
-          "documented-panics": 1,
-          "indirect-call-boundaries": 0,
-          "panic-invocations": 0,
-          "trusted-panics": 0
-        },
         "findings": [
           {
             "edge": "indirect_calls::call_documented --indirect-call-> indirect call FnDef(DefId(0:4 ~ indirect_calls[8a0a]::Risky::documented), [T/#0])",
@@ -67,15 +49,6 @@ expression: messages
         "root-kind": "generic"
       },
       {
-        "counts": {
-          "analysis-incomplete": 0,
-          "cached-dependency-panics": 0,
-          "compiler-asserts": 0,
-          "documented-panics": 0,
-          "indirect-call-boundaries": 1,
-          "panic-invocations": 0,
-          "trusted-panics": 0
-        },
         "findings": [
           {
             "edge": "indirect_calls::call_pointer --indirect-call-> indirect call Binder { value: fn(bool), bound_vars: [] }",
@@ -95,15 +68,6 @@ expression: messages
         "root-kind": "concrete"
       },
       {
-        "counts": {
-          "analysis-incomplete": 0,
-          "cached-dependency-panics": 0,
-          "compiler-asserts": 0,
-          "documented-panics": 0,
-          "indirect-call-boundaries": 1,
-          "panic-invocations": 0,
-          "trusted-panics": 0
-        },
         "findings": [
           {
             "edge": "indirect_calls::call_undocumented --indirect-call-> indirect call FnDef(DefId(0:5 ~ indirect_calls[8a0a]::Risky::undocumented), [T/#0])",

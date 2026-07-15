@@ -19,35 +19,17 @@ expression: messages
       "target": null
     },
     "concrete-roots": 5,
-    "counts": {
-      "analysis-incomplete": 0,
-      "cached-dependency-panics": 0,
-      "compiler-asserts": 0,
-      "documented-panics": 0,
-      "indirect-call-boundaries": 0,
-      "panic-invocations": 5,
-      "trusted-panics": 0
-    },
     "dependencies": [],
     "dependency-cache": {
       "failed": 0,
       "hits": 0,
       "total": 0
     },
-    "format-version": 2,
+    "format-version": 3,
     "generic-roots": 0,
     "reason": "sniff-test-artifact",
     "roots": [
       {
-        "counts": {
-          "analysis-incomplete": 0,
-          "cached-dependency-panics": 0,
-          "compiler-asserts": 0,
-          "documented-panics": 0,
-          "indirect-call-boundaries": 0,
-          "panic-invocations": 1,
-          "trusted-panics": 0
-        },
         "findings": [
           {
             "edge": "closure_call_graph::basic_closure_panics::{closure#0} --macro-expansion-> macro std::panic",
@@ -71,15 +53,6 @@ expression: messages
         "root-kind": "concrete"
       },
       {
-        "counts": {
-          "analysis-incomplete": 0,
-          "cached-dependency-panics": 0,
-          "compiler-asserts": 0,
-          "documented-panics": 0,
-          "indirect-call-boundaries": 0,
-          "panic-invocations": 1,
-          "trusted-panics": 0
-        },
         "findings": [
           {
             "edge": "closure_call_graph::boxed_captured_closure_panics::{closure#0} --macro-expansion-> macro std::panic",
@@ -104,15 +77,6 @@ expression: messages
         "root-kind": "concrete"
       },
       {
-        "counts": {
-          "analysis-incomplete": 0,
-          "cached-dependency-panics": 0,
-          "compiler-asserts": 0,
-          "documented-panics": 0,
-          "indirect-call-boundaries": 0,
-          "panic-invocations": 1,
-          "trusted-panics": 0
-        },
         "findings": [
           {
             "edge": "closure_call_graph::captured_closure_panics::{closure#0} --macro-expansion-> macro std::panic",
@@ -137,15 +101,6 @@ expression: messages
         "root-kind": "concrete"
       },
       {
-        "counts": {
-          "analysis-incomplete": 0,
-          "cached-dependency-panics": 0,
-          "compiler-asserts": 0,
-          "documented-panics": 0,
-          "indirect-call-boundaries": 0,
-          "panic-invocations": 1,
-          "trusted-panics": 0
-        },
         "findings": [
           {
             "edge": "closure_call_graph::dyn_box_closure_boundary::{closure#0} --macro-expansion-> macro std::panic",
@@ -169,15 +124,6 @@ expression: messages
         "root-kind": "concrete"
       },
       {
-        "counts": {
-          "analysis-incomplete": 0,
-          "cached-dependency-panics": 0,
-          "compiler-asserts": 0,
-          "documented-panics": 0,
-          "indirect-call-boundaries": 0,
-          "panic-invocations": 1,
-          "trusted-panics": 0
-        },
         "findings": [
           {
             "edge": "closure_call_graph::fn_pointer_closure_boundary::{closure#0} --macro-expansion-> macro std::panic",

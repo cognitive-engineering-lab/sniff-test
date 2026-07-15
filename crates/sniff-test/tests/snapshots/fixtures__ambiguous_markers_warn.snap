@@ -19,38 +19,17 @@ expression: messages
       "target": null
     },
     "concrete-roots": 2,
-    "counts": {
-      "ambiguous-panic-markers": 1,
-      "ambiguous-panic-requirements": 1,
-      "analysis-incomplete": 0,
-      "cached-dependency-panics": 0,
-      "compiler-asserts": 0,
-      "documented-panics": 0,
-      "indirect-call-boundaries": 0,
-      "panic-invocations": 0,
-      "trusted-panics": 0
-    },
     "dependencies": [],
     "dependency-cache": {
       "failed": 0,
       "hits": 0,
       "total": 0
     },
-    "format-version": 2,
+    "format-version": 3,
     "generic-roots": 0,
     "reason": "sniff-test-artifact",
     "roots": [
       {
-        "counts": {
-          "ambiguous-panic-requirements": 1,
-          "analysis-incomplete": 0,
-          "cached-dependency-panics": 0,
-          "compiler-asserts": 0,
-          "documented-panics": 0,
-          "indirect-call-boundaries": 0,
-          "panic-invocations": 0,
-          "trusted-panics": 0
-        },
         "findings": [
           {
             "edge": null,
@@ -68,16 +47,6 @@ expression: messages
         "root-kind": "concrete"
       },
       {
-        "counts": {
-          "ambiguous-panic-markers": 1,
-          "analysis-incomplete": 0,
-          "cached-dependency-panics": 0,
-          "compiler-asserts": 0,
-          "documented-panics": 0,
-          "indirect-call-boundaries": 0,
-          "panic-invocations": 0,
-          "trusted-panics": 0
-        },
         "findings": [
           {
             "edge": null,

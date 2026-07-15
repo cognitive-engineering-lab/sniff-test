@@ -19,35 +19,17 @@ expression: messages
       "target": null
     },
     "concrete-roots": 0,
-    "counts": {
-      "analysis-incomplete": 0,
-      "cached-dependency-panics": 0,
-      "compiler-asserts": 0,
-      "documented-panics": 0,
-      "indirect-call-boundaries": 0,
-      "panic-invocations": 1,
-      "trusted-panics": 0
-    },
     "dependencies": [],
     "dependency-cache": {
       "failed": 0,
       "hits": 0,
       "total": 0
     },
-    "format-version": 2,
+    "format-version": 3,
     "generic-roots": 1,
     "reason": "sniff-test-artifact",
     "roots": [
       {
-        "counts": {
-          "analysis-incomplete": 0,
-          "cached-dependency-panics": 0,
-          "compiler-asserts": 0,
-          "documented-panics": 0,
-          "indirect-call-boundaries": 0,
-          "panic-invocations": 1,
-          "trusted-panics": 0
-        },
         "findings": [
           {
             "edge": "trait_default_method::TraitDefaultMethod::default_panic --macro-expansion-> macro std::panic",

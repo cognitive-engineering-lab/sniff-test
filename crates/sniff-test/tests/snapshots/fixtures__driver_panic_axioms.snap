@@ -19,35 +19,17 @@ expression: messages
       "target": null
     },
     "concrete-roots": 4,
-    "counts": {
-      "analysis-incomplete": 0,
-      "cached-dependency-panics": 0,
-      "compiler-asserts": 3,
-      "documented-panics": 0,
-      "indirect-call-boundaries": 0,
-      "panic-invocations": 1,
-      "trusted-panics": 0
-    },
     "dependencies": [],
     "dependency-cache": {
       "failed": 0,
       "hits": 0,
       "total": 0
     },
-    "format-version": 2,
+    "format-version": 3,
     "generic-roots": 0,
     "reason": "sniff-test-artifact",
     "roots": [
       {
-        "counts": {
-          "analysis-incomplete": 0,
-          "cached-dependency-panics": 0,
-          "compiler-asserts": 1,
-          "documented-panics": 0,
-          "indirect-call-boundaries": 0,
-          "panic-invocations": 0,
-          "trusted-panics": 0
-        },
         "findings": [
           {
             "edge": "panic_axioms::division --assert-> compiler assert attempt to divide `total_size` (_1, argument 1) by zero",
@@ -67,15 +49,6 @@ expression: messages
         "root-kind": "concrete"
       },
       {
-        "counts": {
-          "analysis-incomplete": 0,
-          "cached-dependency-panics": 0,
-          "compiler-asserts": 1,
-          "documented-panics": 0,
-          "indirect-call-boundaries": 0,
-          "panic-invocations": 0,
-          "trusted-panics": 0
-        },
         "findings": [
           {
             "edge": "panic_axioms::indexed --assert-> compiler assert index out of bounds: index `index` (_2, argument 2) may exceed length `_3` (temporary)",
@@ -95,15 +68,6 @@ expression: messages
         "root-kind": "concrete"
       },
       {
-        "counts": {
-          "analysis-incomplete": 0,
-          "cached-dependency-panics": 0,
-          "compiler-asserts": 1,
-          "documented-panics": 0,
-          "indirect-call-boundaries": 0,
-          "panic-invocations": 0,
-          "trusted-panics": 0
-        },
         "findings": [
           {
             "edge": "panic_axioms::remainder --assert-> compiler assert attempt to calculate the remainder of `total_size` (_1, argument 1) with a zero divisor",
@@ -123,15 +87,6 @@ expression: messages
         "root-kind": "concrete"
       },
       {
-        "counts": {
-          "analysis-incomplete": 0,
-          "cached-dependency-panics": 0,
-          "compiler-asserts": 0,
-          "documented-panics": 0,
-          "indirect-call-boundaries": 0,
-          "panic-invocations": 1,
-          "trusted-panics": 0
-        },
         "findings": [
           {
             "edge": "panic_axioms::todo_macro --macro-expansion-> macro core::std::todo",

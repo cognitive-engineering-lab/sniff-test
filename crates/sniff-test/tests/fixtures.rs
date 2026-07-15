@@ -472,6 +472,7 @@ fn parse_messages(
                 )
             });
             normalize_json(&mut value, root, sysroot.trim());
+            assert_no_report_counts(&value);
             value
         })
         .collect::<Vec<_>>();
@@ -486,6 +487,26 @@ fn parse_messages(
     // Ordering is not the contract here; Cargo/rustc can interleave reports.
     messages.sort_by_key(message_sort_key);
     messages
+}
+
+fn assert_no_report_counts(value: &Value) {
+    match value {
+        Value::Object(map) => {
+            assert!(
+                !map.contains_key("counts"),
+                "report findings are the source of truth; duplicated `counts` are not allowed"
+            );
+            for value in map.values() {
+                assert_no_report_counts(value);
+            }
+        }
+        Value::Array(values) => {
+            for value in values {
+                assert_no_report_counts(value);
+            }
+        }
+        Value::Null | Value::Bool(_) | Value::Number(_) | Value::String(_) => {}
+    }
 }
 
 fn run_cargo_case(binary: &Path, root: &Path, name: &str, case: &Case) -> CommandOutput {

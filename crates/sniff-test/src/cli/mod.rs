@@ -479,10 +479,6 @@ pub(crate) fn analyze_crate(tcx: TyCtxt<'_>, args: &SniffTestArgs, compiler_args
     } else {
         SafetyAnalysis::default()
     };
-    let has_denied_safety_findings = safety_analysis.has_denied_findings(
-        config.safety.lints,
-        config.analysis.lints.ambiguous_safety_requirement,
-    );
     if diagnostics.emit {
         emit_safety_diagnostics(
             tcx,
@@ -506,10 +502,6 @@ pub(crate) fn analyze_crate(tcx: TyCtxt<'_>, args: &SniffTestArgs, compiler_args
         &config.analysis.report_roots,
         &crate_name,
     );
-    let has_denied_analysis_findings = analysis_findings
-        .iter()
-        .any(|finding| finding.level == LintLevel::Deny);
-
     let analysis = AnalysisArtifact::new(
         tcx,
         &invocation,
@@ -522,17 +514,11 @@ pub(crate) fn analyze_crate(tcx: TyCtxt<'_>, args: &SniffTestArgs, compiler_args
         analysis_findings,
     );
     write_analysis_cache(args, &analysis.cache);
-    let has_denied_panic_findings = analysis
-        .report
-        .counts
-        .has_denied_findings(config.panics.lints, config.analysis.lints);
     emit_report_and_outcome(
         args,
         &analysis.report,
         analysis.report.scope == CrateOutputScope::Workspace
-            && (has_denied_panic_findings
-                || has_denied_safety_findings
-                || has_denied_analysis_findings),
+            && analysis.report.has_denied_findings(),
     );
 }
 
@@ -663,7 +649,6 @@ impl AnalysisArtifact {
             analysis_findings,
             concrete_roots: root_analysis.concrete_roots,
             generic_roots: root_analysis.generic_roots,
-            counts: root_analysis.counts,
             roots: root_analysis.roots,
             safety: SafetyArtifactReport::from_analysis(
                 tcx,
@@ -698,17 +683,32 @@ pub(crate) struct AnalysisArtifactReport {
     analysis_findings: Vec<AnalysisFindingReport>,
     concrete_roots: usize,
     generic_roots: usize,
-    counts: PanicFindingCounts,
     roots: Vec<PanicRootReport>,
     #[serde(skip_serializing_if = "Option::is_none")]
     safety: Option<SafetyArtifactReport>,
+}
+
+impl AnalysisArtifactReport {
+    fn has_denied_findings(&self) -> bool {
+        self.analysis_findings
+            .iter()
+            .any(|finding| finding.level == LintLevel::Deny)
+            || self
+                .roots
+                .iter()
+                .flat_map(|root| &root.findings)
+                .any(|finding| finding.level == LintLevel::Deny)
+            || self
+                .safety
+                .as_ref()
+                .is_some_and(SafetyArtifactReport::has_denied_findings)
+    }
 }
 
 struct RootAnalysis {
     missing_roots: Vec<MissingReportRoot>,
     concrete_roots: usize,
     generic_roots: usize,
-    counts: PanicFindingCounts,
     function_summaries: Vec<CachedFunctionSummary>,
     roots: Vec<PanicRootReport>,
 }
@@ -725,7 +725,6 @@ fn analyze_report_roots<'tcx>(
         missing_roots: selection.missing_roots,
         concrete_roots: 0,
         generic_roots: 0,
-        counts: PanicFindingCounts::default(),
         function_summaries: Vec::new(),
         roots: Vec::new(),
     };
@@ -744,7 +743,7 @@ fn analyze_report_roots<'tcx>(
                 kind: PanicRootKind::Generic,
             },
         };
-        let (findings, summary, report) = analyze_root(
+        let (summary, report) = analyze_root(
             tcx,
             &mut reachability,
             root,
@@ -753,7 +752,6 @@ fn analyze_report_roots<'tcx>(
             dependency_cache,
             diagnostics,
         );
-        analysis.counts.add(findings);
         analysis.function_summaries.push(summary);
         if !report.findings.is_empty() {
             match report.root_kind {
@@ -822,7 +820,7 @@ impl CrateOutputScope {
     }
 }
 
-const REPORT_FORMAT_VERSION: u32 = 2;
+const REPORT_FORMAT_VERSION: u32 = 3;
 
 #[derive(Debug, Clone, Copy, Serialize)]
 #[serde(rename_all = "kebab-case")]
@@ -859,7 +857,7 @@ fn analyze_root<'tcx>(
     config: &PanicConfig,
     dependency_cache: &DependencyAnalysisCache,
     diagnostics: PanicDiagnosticOptions,
-) -> (PanicFindingCounts, CachedFunctionSummary, PanicRootReport) {
+) -> (CachedFunctionSummary, PanicRootReport) {
     let descend_reified_callables =
         analysis_config.callable_edge_attribution == CallableEdgeAttribution::ErasureSites;
     let mut hooks = PanicReachabilityHooks {
@@ -880,7 +878,7 @@ fn analyze_root<'tcx>(
         analysis_config.lints.ambiguous_panic_marker,
         analysis_config.lints.ambiguous_panic_requirement,
     );
-    let (mut findings, mut report) = collect_panic_findings(
+    let mut report = collect_panic_findings(
         tcx,
         graph,
         &result,
@@ -928,7 +926,6 @@ fn analyze_root<'tcx>(
             analysis_config.node_limit,
             analysis_config.lints.analysis_incomplete,
             diagnostics,
-            &mut findings,
             &mut report,
         );
     }
@@ -937,13 +934,13 @@ fn analyze_root<'tcx>(
         root.def_id,
         root.kind == PanicRootKind::Generic,
         analysis_complete,
-        findings,
+        &report.findings,
         config,
         Some((graph, &boundary_result)),
         cached_findings,
     );
 
-    (findings, summary, report)
+    (summary, report)
 }
 
 fn emit_analysis_incomplete_finding(
@@ -952,14 +949,12 @@ fn emit_analysis_incomplete_finding(
     node_limit: usize,
     level: LintLevel,
     diagnostics: PanicDiagnosticOptions,
-    counts: &mut PanicFindingCounts,
     report: &mut PanicRootReport,
 ) {
     if level == LintLevel::Allow {
         return;
     }
 
-    counts.analysis_incomplete += 1;
     report.push_analysis_incomplete(tcx, root_def_id, node_limit, level);
     if diagnostics.emit {
         emit_analysis_incomplete_diagnostic(tcx, root_def_id, node_limit, level);
@@ -975,79 +970,6 @@ fn reachability_options(
         analyze_external,
         dyn_dispatch_vtable_edges: analysis_config.callable_edge_attribution.into(),
         fn_pointer_edges: analysis_config.callable_edge_attribution.into(),
-    }
-}
-
-#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "kebab-case")]
-pub(crate) struct PanicFindingCounts {
-    pub(crate) compiler_asserts: usize,
-    pub(crate) panic_invocations: usize,
-    pub(crate) cached_dependency_panics: usize,
-    pub(crate) documented_panics: usize,
-    pub(crate) trusted_panics: usize,
-    pub(crate) indirect_call_boundaries: usize,
-    #[serde(skip_serializing_if = "usize_is_zero")]
-    pub(crate) ambiguous_panic_markers: usize,
-    #[serde(skip_serializing_if = "usize_is_zero")]
-    pub(crate) ambiguous_panic_requirements: usize,
-    pub(crate) analysis_incomplete: usize,
-}
-
-fn usize_is_zero(value: &usize) -> bool {
-    *value == 0
-}
-
-impl PanicFindingCounts {
-    fn add(&mut self, other: Self) {
-        self.compiler_asserts += other.compiler_asserts;
-        self.panic_invocations += other.panic_invocations;
-        self.cached_dependency_panics += other.cached_dependency_panics;
-        self.documented_panics += other.documented_panics;
-        self.trusted_panics += other.trusted_panics;
-        self.indirect_call_boundaries += other.indirect_call_boundaries;
-        self.ambiguous_panic_markers += other.ambiguous_panic_markers;
-        self.ambiguous_panic_requirements += other.ambiguous_panic_requirements;
-        self.analysis_incomplete += other.analysis_incomplete;
-    }
-
-    pub(crate) fn increment(&mut self, kind: ReportDetailKind) {
-        match kind {
-            ReportDetailKind::CompilerAssert => self.compiler_asserts += 1,
-            ReportDetailKind::PanicInvocation => self.panic_invocations += 1,
-            ReportDetailKind::CachedDependencyPanic => self.cached_dependency_panics += 1,
-            ReportDetailKind::DocumentedPanic => self.documented_panics += 1,
-            ReportDetailKind::TrustedPanic => self.trusted_panics += 1,
-            ReportDetailKind::IndirectCallBoundary => self.indirect_call_boundaries += 1,
-            ReportDetailKind::AmbiguousPanicMarker => {
-                self.ambiguous_panic_markers += 1;
-            }
-            ReportDetailKind::AmbiguousPanicRequirement => {
-                self.ambiguous_panic_requirements += 1;
-            }
-            ReportDetailKind::AnalysisIncomplete => self.analysis_incomplete += 1,
-        }
-    }
-
-    fn has_denied_findings(
-        self,
-        lints: crate::config::PanicLintConfig,
-        analysis_lints: crate::config::AnalysisLintConfig,
-    ) -> bool {
-        (self.compiler_asserts > 0 && lints.compiler_assert == LintLevel::Deny)
-            || (self.panic_invocations > 0 && lints.panic_invocation == LintLevel::Deny)
-            || (self.cached_dependency_panics > 0
-                && lints.cached_dependency_panic == LintLevel::Deny)
-            || (self.documented_panics > 0 && lints.documented_panic == LintLevel::Deny)
-            || (self.trusted_panics > 0 && lints.trusted_panic == LintLevel::Deny)
-            || (self.indirect_call_boundaries > 0
-                && lints.indirect_call_boundary == LintLevel::Deny)
-            || (self.ambiguous_panic_markers > 0
-                && analysis_lints.ambiguous_panic_marker == LintLevel::Deny)
-            || (self.ambiguous_panic_requirements > 0
-                && analysis_lints.ambiguous_panic_requirement == LintLevel::Deny)
-            || (self.analysis_incomplete > 0
-                && analysis_lints.analysis_incomplete == LintLevel::Deny)
     }
 }
 
@@ -1087,8 +1009,7 @@ fn collect_panic_findings<'tcx>(
     result: &ReachabilitySnapshot<'tcx>,
     analysis: &PanicAnalysis,
     collection: PanicFindingCollection<'_>,
-) -> (PanicFindingCounts, PanicRootReport) {
-    let mut counts = PanicFindingCounts::default();
+) -> PanicRootReport {
     let view = graph.view(result);
     let root_node = view.root();
     let mut report = PanicRootReport::new(
@@ -1107,23 +1028,9 @@ fn collect_panic_findings<'tcx>(
                     evidence.kind,
                     crate::panics::PanicEvidenceKind::IndirectBoundary { .. }
                 ) {
-                    emit_indirect_boundary_finding(
-                        tcx,
-                        graph,
-                        evidence,
-                        &collection,
-                        &mut counts,
-                        &mut report,
-                    );
+                    emit_indirect_boundary_finding(tcx, graph, evidence, &collection, &mut report);
                 } else {
-                    emit_raw_panic_finding(
-                        tcx,
-                        graph,
-                        evidence,
-                        &collection,
-                        &mut counts,
-                        &mut report,
-                    );
+                    emit_raw_panic_finding(tcx, graph, evidence, &collection, &mut report);
                 }
             }
             PanicPathDecision::PanicObligation { edge_id: None, .. } => {
@@ -1143,26 +1050,18 @@ fn collect_panic_findings<'tcx>(
                         def_id,
                     },
                     &collection,
-                    &mut counts,
                     &mut report,
                 );
             }
         }
     }
 
-    emit_ambiguous_obligation_marker_findings(
-        tcx,
-        graph,
-        analysis,
-        &collection,
-        &mut counts,
-        &mut report,
-    );
-    emit_ambiguous_obligation_name_findings(tcx, analysis, &collection, &mut counts, &mut report);
+    emit_ambiguous_obligation_marker_findings(tcx, graph, analysis, &collection, &mut report);
+    emit_ambiguous_obligation_name_findings(tcx, analysis, &collection, &mut report);
 
-    emit_cached_dependency_findings(tcx, graph, view, &collection, &mut counts, &mut report);
+    emit_cached_dependency_findings(tcx, graph, view, &collection, &mut report);
 
-    (counts, report)
+    report
 }
 
 fn emit_ambiguous_obligation_marker_findings<'tcx>(
@@ -1170,11 +1069,9 @@ fn emit_ambiguous_obligation_marker_findings<'tcx>(
     graph: &ReachabilityGraph<'tcx>,
     analysis: &PanicAnalysis,
     collection: &PanicFindingCollection<'_>,
-    counts: &mut PanicFindingCounts,
     report: &mut PanicRootReport,
 ) {
     for marker in &analysis.ambiguous_markers {
-        counts.ambiguous_panic_markers += 1;
         report.push_ambiguous_obligation_marker(tcx, graph, marker, marker.level);
         if collection.diagnostics.emit {
             emit_ambiguous_obligation_marker_diagnostic(
@@ -1192,11 +1089,9 @@ fn emit_ambiguous_obligation_name_findings(
     tcx: TyCtxt<'_>,
     analysis: &PanicAnalysis,
     collection: &PanicFindingCollection<'_>,
-    counts: &mut PanicFindingCounts,
     report: &mut PanicRootReport,
 ) {
     for name in &analysis.ambiguous_names {
-        counts.ambiguous_panic_requirements += 1;
         report.push_ambiguous_obligation_name(tcx, name, name.level);
         if collection.diagnostics.emit {
             emit_ambiguous_obligation_name_diagnostic(
@@ -1214,7 +1109,6 @@ fn emit_raw_panic_finding<'tcx>(
     graph: &ReachabilityGraph<'tcx>,
     evidence: &PanicEvidence,
     collection: &PanicFindingCollection<'_>,
-    counts: &mut PanicFindingCounts,
     report: &mut PanicRootReport,
 ) {
     let kind = ReportDetailKind::from_evidence(&evidence.kind);
@@ -1223,7 +1117,6 @@ fn emit_raw_panic_finding<'tcx>(
         return;
     }
 
-    counts.increment(kind);
     report.push_panic_evidence(tcx, graph, evidence, level);
     if collection.diagnostics.emit {
         emit_raw_panic_diagnostic(
@@ -1242,7 +1135,6 @@ fn emit_indirect_boundary_finding<'tcx>(
     graph: &ReachabilityGraph<'tcx>,
     evidence: &PanicEvidence,
     collection: &PanicFindingCollection<'_>,
-    counts: &mut PanicFindingCounts,
     report: &mut PanicRootReport,
 ) {
     let level = ReportDetailKind::IndirectCallBoundary.lint_level(collection.config.lints);
@@ -1250,7 +1142,6 @@ fn emit_indirect_boundary_finding<'tcx>(
         return;
     }
 
-    counts.indirect_call_boundaries += 1;
     report.push_panic_evidence(tcx, graph, evidence, level);
     if collection.diagnostics.emit {
         emit_indirect_boundary_diagnostic(
@@ -1276,7 +1167,6 @@ fn emit_panic_obligation_finding<'tcx>(
     evidence: &PanicEvidence,
     finding: PanicObligationFinding,
     collection: &PanicFindingCollection<'_>,
-    counts: &mut PanicFindingCounts,
     report: &mut PanicRootReport,
 ) {
     let trusted = is_trusted_panic_obligation(tcx, finding.def_id, collection.config);
@@ -1290,11 +1180,6 @@ fn emit_panic_obligation_finding<'tcx>(
         return;
     }
 
-    if trusted {
-        counts.trusted_panics += 1;
-    } else {
-        counts.documented_panics += 1;
-    }
     report.push_panic_obligation(
         tcx,
         graph,
@@ -1349,7 +1234,6 @@ fn emit_cached_dependency_findings<'tcx>(
     graph: &ReachabilityGraph<'tcx>,
     view: ReachabilityView<'_, 'tcx>,
     collection: &PanicFindingCollection<'_>,
-    counts: &mut PanicFindingCounts,
     report: &mut PanicRootReport,
 ) {
     let expanded_sources = view
@@ -1407,7 +1291,6 @@ fn emit_cached_dependency_findings<'tcx>(
                     summary,
                 },
                 collection,
-                counts,
                 report,
             );
         } else if summary.raw_panic_paths > 0 || !summary.analysis_complete {
@@ -1416,7 +1299,6 @@ fn emit_cached_dependency_findings<'tcx>(
             if level == LintLevel::Allow {
                 continue;
             }
-            counts.increment(kind);
             report.push_cached_dependency_panic(tcx, graph, edge.id(), summary, level);
             if collection.diagnostics.emit {
                 emit_cached_dependency_raw_panic_diagnostic(
@@ -1445,7 +1327,6 @@ fn emit_cached_dependency_obligation_finding<'tcx>(
     graph: &ReachabilityGraph<'tcx>,
     finding: CachedDependencyFinding<'_>,
     collection: &PanicFindingCollection<'_>,
-    counts: &mut PanicFindingCounts,
     report: &mut PanicRootReport,
 ) {
     let trusted = is_trusted_panic_obligation(tcx, finding.def_id, collection.config);
@@ -1459,11 +1340,6 @@ fn emit_cached_dependency_obligation_finding<'tcx>(
         return;
     }
 
-    if trusted {
-        counts.trusted_panics += 1;
-    } else {
-        counts.documented_panics += 1;
-    }
     report.push_cached_dependency_obligation(
         tcx,
         graph,

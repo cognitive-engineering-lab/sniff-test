@@ -19,35 +19,17 @@ expression: second_messages
       "target": null
     },
     "concrete-roots": 6,
-    "counts": {
-      "analysis-incomplete": 0,
-      "cached-dependency-panics": 0,
-      "compiler-asserts": 0,
-      "documented-panics": 6,
-      "indirect-call-boundaries": 0,
-      "panic-invocations": 0,
-      "trusted-panics": 0
-    },
     "dependencies": [],
     "dependency-cache": {
       "failed": 0,
       "hits": 0,
       "total": 0
     },
-    "format-version": 2,
+    "format-version": 3,
     "generic-roots": 0,
     "reason": "sniff-test-artifact",
     "roots": [
       {
-        "counts": {
-          "analysis-incomplete": 0,
-          "cached-dependency-panics": 0,
-          "compiler-asserts": 0,
-          "documented-panics": 1,
-          "indirect-call-boundaries": 0,
-          "panic-invocations": 0,
-          "trusted-panics": 0
-        },
         "findings": [
           {
             "edge": "panic_requirements::bullet_without_marker --direct-call-> panic_requirements::documented_ratio",
@@ -67,15 +49,6 @@ expression: second_messages
         "root-kind": "concrete"
       },
       {
-        "counts": {
-          "analysis-incomplete": 0,
-          "cached-dependency-panics": 0,
-          "compiler-asserts": 0,
-          "documented-panics": 1,
-          "indirect-call-boundaries": 0,
-          "panic-invocations": 0,
-          "trusted-panics": 0
-        },
         "findings": [
           {
             "edge": "panic_requirements::empty_marker --direct-call-> panic_requirements::documented_ratio",
@@ -95,15 +68,6 @@ expression: second_messages
         "root-kind": "concrete"
       },
       {
-        "counts": {
-          "analysis-incomplete": 0,
-          "cached-dependency-panics": 0,
-          "compiler-asserts": 0,
-          "documented-panics": 1,
-          "indirect-call-boundaries": 0,
-          "panic-invocations": 0,
-          "trusted-panics": 0
-        },
         "findings": [
           {
             "edge": "panic_requirements::empty_requirement --direct-call-> panic_requirements::documented_ratio",
@@ -123,15 +87,6 @@ expression: second_messages
         "root-kind": "concrete"
       },
       {
-        "counts": {
-          "analysis-incomplete": 0,
-          "cached-dependency-panics": 0,
-          "compiler-asserts": 0,
-          "documented-panics": 1,
-          "indirect-call-boundaries": 0,
-          "panic-invocations": 0,
-          "trusted-panics": 0
-        },
         "findings": [
           {
             "edge": "panic_requirements::safety_marker_does_not_satisfy_panic --direct-call-> panic_requirements::documented_ratio",
@@ -151,15 +106,6 @@ expression: second_messages
         "root-kind": "concrete"
       },
       {
-        "counts": {
-          "analysis-incomplete": 0,
-          "cached-dependency-panics": 0,
-          "compiler-asserts": 0,
-          "documented-panics": 1,
-          "indirect-call-boundaries": 0,
-          "panic-invocations": 0,
-          "trusted-panics": 0
-        },
         "findings": [
           {
             "edge": "panic_requirements::safety_marker_stops_partial_panic_block --direct-call-> panic_requirements::documented_ratio",
@@ -179,15 +125,6 @@ expression: second_messages
         "root-kind": "concrete"
       },
       {
-        "counts": {
-          "analysis-incomplete": 0,
-          "cached-dependency-panics": 0,
-          "compiler-asserts": 0,
-          "documented-panics": 1,
-          "indirect-call-boundaries": 0,
-          "panic-invocations": 0,
-          "trusted-panics": 0
-        },
         "findings": [
           {
             "edge": "panic_requirements::unnamed_marker --direct-call-> panic_requirements::documented_ratio",

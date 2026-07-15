@@ -16,8 +16,6 @@ use rustc_middle::ty::TyCtxt;
 use rustc_span::Pos;
 use serde::Serialize;
 
-use super::PanicFindingCounts;
-
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "kebab-case")]
 pub(crate) struct PanicRootReport {
@@ -25,7 +23,6 @@ pub(crate) struct PanicRootReport {
     pub(crate) root_kind: PanicRootKind,
     pub(crate) root_declaration: Option<String>,
     pub(crate) has_panic_docs: bool,
-    pub(crate) counts: PanicFindingCounts,
     pub(crate) findings: Vec<PanicFindingReport>,
 }
 
@@ -49,7 +46,6 @@ impl PanicRootReport {
             root_kind,
             root_declaration,
             has_panic_docs,
-            counts: PanicFindingCounts::default(),
             findings: Vec::new(),
         }
     }
@@ -224,7 +220,6 @@ impl PanicRootReport {
     }
 
     fn push_finding(&mut self, finding: PanicFindingReport) {
-        self.counts.increment(finding.kind);
         self.findings.push(finding);
     }
 }

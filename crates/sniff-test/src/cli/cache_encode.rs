@@ -17,19 +17,39 @@ use rustc_hir::def_id::DefId;
 use rustc_middle::ty::TyCtxt;
 use rustc_span::Pos;
 
-use super::PanicFindingCounts;
-use super::report::{render_assert_message, render_node, render_span};
+use super::report::{
+    PanicFindingReport, ReportDetailKind, render_assert_message, render_node, render_span,
+};
 
 pub(super) fn function_summary<'tcx>(
     tcx: TyCtxt<'tcx>,
     def_id: DefId,
     is_generic: bool,
     analysis_complete: bool,
-    counts: PanicFindingCounts,
+    report_findings: &[PanicFindingReport],
     config: &PanicConfig,
     graph: Option<(&ReachabilityGraph<'tcx>, &ReachabilitySnapshot<'tcx>)>,
     findings: Vec<CachedFinding>,
 ) -> CachedFunctionSummary {
+    let raw_panic_paths = report_findings
+        .iter()
+        .filter(|finding| {
+            matches!(
+                finding.kind,
+                ReportDetailKind::CompilerAssert
+                    | ReportDetailKind::PanicInvocation
+                    | ReportDetailKind::CachedDependencyPanic
+            )
+        })
+        .count();
+    let panic_obligations = report_findings
+        .iter()
+        .filter(|finding| finding.kind == ReportDetailKind::DocumentedPanic)
+        .count();
+    let trusted_panic_obligations = report_findings
+        .iter()
+        .filter(|finding| finding.kind == ReportDetailKind::TrustedPanic)
+        .count();
     CachedFunctionSummary {
         def_path_hash: stable_def_path_hash(tcx, def_id),
         path: canonical_namespace(tcx, def_id),
@@ -37,11 +57,9 @@ pub(super) fn function_summary<'tcx>(
         analysis_complete,
         has_panic_docs: crate::panics::has_panic_docs(tcx, def_id, config),
         root_span: cached_source_span(tcx, tcx.def_span(def_id)),
-        raw_panic_paths: counts.compiler_asserts
-            + counts.panic_invocations
-            + counts.cached_dependency_panics,
-        panic_obligations: counts.documented_panics,
-        trusted_panic_obligations: counts.trusted_panics,
+        raw_panic_paths,
+        panic_obligations,
+        trusted_panic_obligations,
         graph: graph.map(|(graph, result)| cached_reachability_graph(tcx, graph, result)),
         findings,
     }

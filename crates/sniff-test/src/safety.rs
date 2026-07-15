@@ -171,17 +171,6 @@ impl SafetyAnalysis {
         self.findings.is_empty()
     }
 
-    #[must_use]
-    pub fn has_denied_findings(
-        &self,
-        lints: SafetyLintConfig,
-        ambiguous_obligations: LintLevel,
-    ) -> bool {
-        self.findings.iter().any(|finding| {
-            finding.kind().lint_level(lints, ambiguous_obligations) == LintLevel::Deny
-        })
-    }
-
     fn push_ambiguous_requirement_names(
         &mut self,
         tcx: TyCtxt<'_>,
