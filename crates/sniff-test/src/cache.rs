@@ -4,9 +4,8 @@
 //! Cargo can compile multiple versions or feature combinations of the same crate
 //! name in one build, and those artifacts must not share panic evidence.
 //!
-//! The schema intentionally stores structured findings and only the trace data
-//! they reference. Terminal concerns such as colors are applied later by the
-//! reporter.
+//! The schema intentionally stores structured findings and graph data. Terminal
+//! concerns such as colors are applied later by the reporter.
 
 use std::collections::BTreeMap;
 use std::fmt::{Display, Formatter};
@@ -14,9 +13,9 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
-pub const CACHE_FORMAT_VERSION: u32 = 4;
+pub const CACHE_FORMAT_VERSION: u32 = 3;
 pub const CACHE_DIR_NAME: &str = "sniff-test-cache";
-pub const CACHE_VERSION_DIR: &str = "v4";
+pub const CACHE_VERSION_DIR: &str = "v3";
 pub const OUTCOME_FORMAT_VERSION: u32 = 1;
 
 /// Per-unit verdict persisted with artifact lifetime.
@@ -187,7 +186,7 @@ pub struct CachedFunctionSummary {
     pub raw_panic_paths: usize,
     pub panic_obligations: usize,
     pub trusted_panic_obligations: usize,
-    pub trace_arena: CachedTraceArena,
+    pub graph: Option<CachedReachabilityGraph>,
     pub findings: Vec<CachedFinding>,
 }
 
@@ -215,8 +214,11 @@ pub struct CachedFinding {
     pub source_span: Option<CachedSourceSpan>,
     #[serde(default)]
     pub diagnostic_spans: Vec<CachedDiagnosticSpan>,
-    /// Ordered frame indices from the root to the finding. Each index resolves
-    /// against this summary's [`CachedTraceArena::frames`].
+    /// Arena edge id of the triggering edge; resolves against
+    /// [`CachedReachabilityEdge::id`] in this summary's `graph`.
+    pub edge_index: Option<usize>,
+    /// Arena edge ids from the root to the finding, same id space as
+    /// `edge_index`.
     pub trace: Vec<usize>,
     pub reason: String,
     pub target: Option<CachedFindingTarget>,
@@ -266,31 +268,46 @@ pub enum CachedFindingTarget {
         is_local: bool,
     },
     Node {
+        node_index: usize,
         label: String,
     },
 }
 
-/// The trace nodes and frames referenced by one function summary's findings.
+/// Reachability graph captured in cache form.
 ///
-/// Indices are local to the summary. Unreferenced reachability data is omitted.
+/// The graph is per function summary for now. This duplicates some nodes across
+/// roots, but keeps call trace rendering straightforward.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
-pub struct CachedTraceArena {
-    pub nodes: Vec<CachedTraceNode>,
-    pub frames: Vec<CachedTraceFrame>,
+pub struct CachedReachabilityGraph {
+    pub root: usize,
+    pub nodes: Vec<CachedReachabilityNode>,
+    pub edges: Vec<CachedReachabilityEdge>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub struct CachedReachabilityNode {
+    pub id: usize,
+    pub depth: usize,
+    pub kind: CachedReachabilityNodeKind,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case", tag = "kind")]
-pub enum CachedTraceNode {
-    Function {
+pub enum CachedReachabilityNodeKind {
+    Instance {
         path: String,
+        crate_name: String,
+        is_local: bool,
     },
     CompilerAssert {
         message: String,
     },
-    Macro {
+    MacroExpansion {
         path: String,
+        crate_name: String,
+        is_local: bool,
     },
     IndirectCall {
         callee_ty: String,
@@ -303,10 +320,14 @@ pub enum CachedTraceNode {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
-pub struct CachedTraceFrame {
-    pub from: usize,
-    pub to: usize,
-    pub kind: CachedTraceFrameKind,
+pub struct CachedReachabilityEdge {
+    /// Arena edge id, the id space [`CachedFinding::edge_index`] and
+    /// [`CachedFinding::trace`] refer to. Edges are serialized as the
+    /// snapshot's subsequence of the arena, so positions do not equal ids.
+    pub id: usize,
+    pub source: usize,
+    pub target: usize,
+    pub kind: CachedReachabilityEdgeKind,
     pub span: String,
     #[serde(default)]
     pub source_span: Option<CachedSourceSpan>,
@@ -314,7 +335,7 @@ pub struct CachedTraceFrame {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
-pub enum CachedTraceFrameKind {
+pub enum CachedReachabilityEdgeKind {
     DirectCall,
     TailCall,
     FnPointerReify,
@@ -558,10 +579,9 @@ fn sanitize_path_component(value: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        CacheError, CacheExpectations, CachedArtifactAnalysis, CachedArtifactInfo, CachedFinding,
-        CachedFindingKind, CachedFunctionSummary, CachedTraceArena, CachedTraceFrame,
-        CachedTraceFrameKind, CachedTraceNode, artifact_cache_path, artifact_id_from_extern_path,
-        crate_cache_path, default_cache_dir, read_artifact_analysis, write_atomic,
+        CacheError, CacheExpectations, CachedArtifactAnalysis, CachedArtifactInfo,
+        artifact_cache_path, artifact_id_from_extern_path, crate_cache_path, default_cache_dir,
+        read_artifact_analysis, write_atomic,
     };
 
     #[test]
@@ -590,13 +610,13 @@ mod tests {
             artifact_cache_path(&root, "sniff_test-29f0")
                 .display()
                 .to_string(),
-            "/target/plugin-nightly/sniff-test-cache/v4/artifacts/sniff_test-29f0.json"
+            "/target/plugin-nightly/sniff-test-cache/v3/artifacts/sniff_test-29f0.json"
         );
         assert_eq!(
             crate_cache_path(&root, "sniff-test", "sniff_test-29f0")
                 .display()
                 .to_string(),
-            "/target/plugin-nightly/sniff-test-cache/v4/crates/sniff-test/sniff_test-29f0.json"
+            "/target/plugin-nightly/sniff-test-cache/v3/crates/sniff-test/sniff_test-29f0.json"
         );
     }
 
@@ -633,68 +653,12 @@ mod tests {
         ));
 
         let mut old_format = analysis("0.1.0", "rustc 1.97.0-nightly");
-        old_format.format_version = 3;
+        old_format.format_version = 2;
         write(&old_format);
         assert!(matches!(
             read_artifact_analysis(&path, &current),
-            Err(CacheError::Format { version: 3, .. })
+            Err(CacheError::Format { version: 2, .. })
         ));
-    }
-
-    #[test]
-    fn function_summaries_store_compact_trace_arenas_instead_of_graphs() {
-        let summary = CachedFunctionSummary {
-            def_path_hash: String::from("00000000000000010000000000000002"),
-            path: String::from("dep::run"),
-            is_generic: false,
-            analysis_complete: true,
-            has_panic_docs: false,
-            root_span: None,
-            raw_panic_paths: 1,
-            panic_obligations: 0,
-            trusted_panic_obligations: 0,
-            trace_arena: CachedTraceArena {
-                nodes: vec![
-                    CachedTraceNode::Function {
-                        path: String::from("dep::run"),
-                    },
-                    CachedTraceNode::Function {
-                        path: String::from("core::panicking::panic"),
-                    },
-                ],
-                frames: vec![CachedTraceFrame {
-                    from: 0,
-                    to: 1,
-                    kind: CachedTraceFrameKind::DirectCall,
-                    span: String::from("src/lib.rs:2:5"),
-                    source_span: None,
-                }],
-            },
-            findings: vec![CachedFinding {
-                kind: CachedFindingKind::PanicInvocation,
-                span: String::from("src/lib.rs:2:5"),
-                source_span: None,
-                diagnostic_spans: Vec::new(),
-                trace: vec![0],
-                reason: String::from("panic invocation"),
-                target: None,
-            }],
-        };
-
-        let json = serde_json::to_value(summary).expect("serialize function summary");
-        let object = json.as_object().expect("function summary object");
-        assert!(object.contains_key("trace-arena"));
-        assert!(!object.contains_key("graph"));
-        let arena = object["trace-arena"]
-            .as_object()
-            .expect("trace arena object");
-        assert_eq!(arena["nodes"].as_array().expect("trace nodes").len(), 2);
-        assert_eq!(arena["frames"][0]["from"], 0);
-        assert_eq!(arena["frames"][0]["to"], 1);
-        assert_eq!(arena["frames"][0]["kind"], "direct-call");
-        let finding = object["findings"][0].as_object().expect("finding object");
-        assert!(!finding.contains_key("edge-index"));
-        assert_eq!(finding["trace"], serde_json::json!([0]));
     }
 
     fn analysis(tool_version: &str, rustc_version: &str) -> CachedArtifactAnalysis {

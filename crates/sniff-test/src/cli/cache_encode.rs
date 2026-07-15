@@ -1,9 +1,7 @@
-use std::collections::{BTreeMap, BTreeSet};
-
 use crate::cache::{
     CachedDiagnosticSpan, CachedFinding, CachedFindingKind, CachedFindingTarget,
-    CachedFunctionSummary, CachedSourceSpan, CachedTraceArena, CachedTraceFrame,
-    CachedTraceFrameKind, CachedTraceNode,
+    CachedFunctionSummary, CachedReachabilityEdge, CachedReachabilityEdgeKind,
+    CachedReachabilityGraph, CachedReachabilityNode, CachedReachabilityNodeKind, CachedSourceSpan,
 };
 use crate::config::PanicConfig;
 use crate::namespace::{canonical_namespace, stable_def_path_hash};
@@ -12,8 +10,8 @@ use crate::panics::{
     describe_panic_evidence_kind, trace_edges_until, trace_to_edge_ids, trigger_edge_id,
 };
 use reachability::{
-    ReachabilityEdgeKind, ReachabilityGraph, ReachabilityNodeKind, ReachabilitySnapshot,
-    ReachabilityView,
+    ReachabilityEdgeId, ReachabilityEdgeKind, ReachabilityGraph, ReachabilityNodeKind,
+    ReachabilitySnapshot, ReachabilityView,
 };
 use rustc_hir::def_id::DefId;
 use rustc_middle::ty::TyCtxt;
@@ -23,14 +21,14 @@ use super::report::{
     PanicFindingReport, ReportDetailKind, render_assert_message, render_node, render_span,
 };
 
-pub(super) fn function_summary(
-    tcx: TyCtxt<'_>,
+pub(super) fn function_summary<'tcx>(
+    tcx: TyCtxt<'tcx>,
     def_id: DefId,
     is_generic: bool,
     analysis_complete: bool,
     report_findings: &[PanicFindingReport],
     config: &PanicConfig,
-    trace_arena: CachedTraceArena,
+    graph: Option<(&ReachabilityGraph<'tcx>, &ReachabilitySnapshot<'tcx>)>,
     findings: Vec<CachedFinding>,
 ) -> CachedFunctionSummary {
     let raw_panic_paths = report_findings
@@ -62,7 +60,7 @@ pub(super) fn function_summary(
         raw_panic_paths,
         panic_obligations,
         trusted_panic_obligations,
-        trace_arena,
+        graph: graph.map(|(graph, result)| cached_reachability_graph(tcx, graph, result)),
         findings,
     }
 }
@@ -73,7 +71,7 @@ pub(super) fn cached_boundary_findings<'tcx>(
     result: &ReachabilitySnapshot<'tcx>,
     analysis: &PanicAnalysis,
     config: &PanicConfig,
-) -> (Vec<CachedFinding>, CachedTraceArena) {
+) -> Vec<CachedFinding> {
     let view = graph.view(result);
     let mut findings = analysis
         .evidence
@@ -82,8 +80,7 @@ pub(super) fn cached_boundary_findings<'tcx>(
         .collect::<Vec<_>>();
 
     findings.extend(cached_crate_boundary_findings(tcx, view, config));
-    let trace_arena = cached_trace_arena(tcx, graph, result, &mut findings);
-    (findings, trace_arena)
+    findings
 }
 
 fn cached_panic_finding<'tcx>(
@@ -112,6 +109,7 @@ fn cached_panic_finding<'tcx>(
                     edge.span,
                     Some(cached_finding_span_label(&evidence.kind)),
                 ),
+                edge_index: Some(edge_id.index()),
                 trace: evidence
                     .trace
                     .edge_ids
@@ -171,6 +169,7 @@ fn cached_panic_finding<'tcx>(
                 span,
                 source_span,
                 diagnostic_spans,
+                edge_index: edge_id.map(ReachabilityEdgeId::index),
                 trace: trace_edges_until(evidence, edge_id)
                     .iter()
                     .map(|edge_id| edge_id.index())
@@ -213,6 +212,7 @@ fn cached_crate_boundary_findings<'tcx>(
                     edge.span(),
                     Some("crate boundary call"),
                 ),
+                edge_index: Some(edge.id().index()),
                 trace: trace_to_edge_ids(edge)
                     .iter()
                     .map(|edge_id| edge_id.index())
@@ -240,68 +240,40 @@ fn cached_finding_target<'tcx>(
             is_local: instance.def_id().is_local(),
         },
         kind => CachedFindingTarget::Node {
+            node_index: node.index(),
             label: render_node(tcx, kind),
         },
     }
 }
 
-fn cached_trace_arena<'tcx>(
+fn cached_reachability_graph<'tcx>(
     tcx: TyCtxt<'tcx>,
     graph: &ReachabilityGraph<'tcx>,
     result: &ReachabilitySnapshot<'tcx>,
-    findings: &mut [CachedFinding],
-) -> CachedTraceArena {
-    let referenced_edges = findings
-        .iter()
-        .flat_map(|finding| finding.trace.iter().copied())
-        .collect::<BTreeSet<_>>();
-    let mut node_indices = BTreeMap::new();
-    let mut frame_indices = BTreeMap::new();
-    let mut nodes = Vec::new();
-    let mut frames = Vec::new();
-
-    for edge in graph
-        .view(result)
-        .edges()
-        .filter(|edge| referenced_edges.contains(&edge.id().index()))
-    {
-        let from = cached_trace_node_index(
-            tcx,
-            edge.source().id().index(),
-            edge.source().kind(),
-            &mut node_indices,
-            &mut nodes,
-        );
-        let to = cached_trace_node_index(
-            tcx,
-            edge.target().id().index(),
-            edge.target().kind(),
-            &mut node_indices,
-            &mut nodes,
-        );
-        frame_indices.insert(edge.id().index(), frames.len());
-        frames.push(CachedTraceFrame {
-            from,
-            to,
-            kind: cached_trace_frame_kind(edge.kind()),
-            span: render_span(tcx, edge.span()),
-            source_span: cached_source_span(tcx, edge.span()),
-        });
-    }
-
-    for finding in findings {
-        finding.trace = finding
-            .trace
-            .iter()
-            .map(|edge| {
-                *frame_indices
-                    .get(edge)
-                    .expect("finding trace edge must belong to its reachability snapshot")
+) -> CachedReachabilityGraph {
+    let view = graph.view(result);
+    CachedReachabilityGraph {
+        root: view.root().id().index(),
+        nodes: view
+            .nodes()
+            .map(|node| CachedReachabilityNode {
+                id: node.id().index(),
+                depth: node.depth(),
+                kind: cached_reachability_node_kind(tcx, node.kind()),
             })
-            .collect();
+            .collect(),
+        edges: view
+            .edges()
+            .map(|edge| CachedReachabilityEdge {
+                id: edge.id().index(),
+                source: edge.source().id().index(),
+                target: edge.target().id().index(),
+                kind: cached_reachability_edge_kind(edge.kind()),
+                span: render_span(tcx, edge.span()),
+                source_span: cached_source_span(tcx, edge.span()),
+            })
+            .collect(),
     }
-
-    CachedTraceArena { nodes, frames }
 }
 
 fn cached_source_span(tcx: TyCtxt<'_>, span: rustc_span::Span) -> Option<CachedSourceSpan> {
@@ -353,68 +325,63 @@ fn cached_finding_span_label(kind: &PanicEvidenceKind) -> &'static str {
     }
 }
 
-fn cached_trace_node_index<'tcx>(
-    tcx: TyCtxt<'tcx>,
-    graph_index: usize,
-    kind: &ReachabilityNodeKind<'tcx>,
-    indices: &mut BTreeMap<usize, usize>,
-    nodes: &mut Vec<CachedTraceNode>,
-) -> usize {
-    if let Some(index) = indices.get(&graph_index) {
-        return *index;
-    }
-
-    let index = nodes.len();
-    nodes.push(cached_trace_node(tcx, kind));
-    indices.insert(graph_index, index);
-    index
-}
-
-fn cached_trace_node<'tcx>(
+fn cached_reachability_node_kind<'tcx>(
     tcx: TyCtxt<'tcx>,
     node: &ReachabilityNodeKind<'tcx>,
-) -> CachedTraceNode {
+) -> CachedReachabilityNodeKind {
     match node {
-        ReachabilityNodeKind::Instance(instance) => CachedTraceNode::Function {
+        ReachabilityNodeKind::Instance(instance) => CachedReachabilityNodeKind::Instance {
             path: canonical_namespace(tcx, instance.def_id()),
+            crate_name: tcx.crate_name(instance.def_id().krate).to_string(),
+            is_local: instance.def_id().is_local(),
         },
         ReachabilityNodeKind::CompilerAssert { message, locals } => {
-            CachedTraceNode::CompilerAssert {
+            CachedReachabilityNodeKind::CompilerAssert {
                 message: render_assert_message(message, locals),
             }
         }
-        ReachabilityNodeKind::MacroExpansion { def_id } => CachedTraceNode::Macro {
-            path: canonical_namespace(tcx, *def_id),
-        },
-        ReachabilityNodeKind::IndirectCall { callee_ty } => CachedTraceNode::IndirectCall {
-            callee_ty: format!("{callee_ty:?}"),
-        },
+        ReachabilityNodeKind::MacroExpansion { def_id } => {
+            CachedReachabilityNodeKind::MacroExpansion {
+                path: canonical_namespace(tcx, *def_id),
+                crate_name: tcx.crate_name(def_id.krate).to_string(),
+                is_local: def_id.is_local(),
+            }
+        }
+        ReachabilityNodeKind::IndirectCall { callee_ty } => {
+            CachedReachabilityNodeKind::IndirectCall {
+                callee_ty: format!("{callee_ty:?}"),
+            }
+        }
         ReachabilityNodeKind::DynObjectCast {
             source_ty,
             target_ty,
-        } => CachedTraceNode::DynObjectCast {
+        } => CachedReachabilityNodeKind::DynObjectCast {
             source_ty: format!("{source_ty:?}"),
             target_ty: format!("{target_ty:?}"),
         },
     }
 }
 
-fn cached_trace_frame_kind(kind: ReachabilityEdgeKind) -> CachedTraceFrameKind {
+fn cached_reachability_edge_kind(kind: ReachabilityEdgeKind) -> CachedReachabilityEdgeKind {
     match kind {
-        ReachabilityEdgeKind::DirectCall => CachedTraceFrameKind::DirectCall,
-        ReachabilityEdgeKind::TailCall => CachedTraceFrameKind::TailCall,
-        ReachabilityEdgeKind::FnPointerReify => CachedTraceFrameKind::FnPointerReify,
-        ReachabilityEdgeKind::ClosureFnPointerReify => CachedTraceFrameKind::ClosureFnPointerReify,
-        ReachabilityEdgeKind::ClosureDefinition => CachedTraceFrameKind::ClosureDefinition,
-        ReachabilityEdgeKind::FnPointerCallTarget => CachedTraceFrameKind::FnPointerCallTarget,
-        ReachabilityEdgeKind::DynObjectCast => CachedTraceFrameKind::DynObjectCast,
-        ReachabilityEdgeKind::VTableEntry => CachedTraceFrameKind::VTableEntry,
-        ReachabilityEdgeKind::DynDispatchVTableEntry => {
-            CachedTraceFrameKind::DynDispatchVTableEntry
+        ReachabilityEdgeKind::DirectCall => CachedReachabilityEdgeKind::DirectCall,
+        ReachabilityEdgeKind::TailCall => CachedReachabilityEdgeKind::TailCall,
+        ReachabilityEdgeKind::FnPointerReify => CachedReachabilityEdgeKind::FnPointerReify,
+        ReachabilityEdgeKind::ClosureFnPointerReify => {
+            CachedReachabilityEdgeKind::ClosureFnPointerReify
         }
-        ReachabilityEdgeKind::MacroExpansion => CachedTraceFrameKind::MacroExpansion,
-        ReachabilityEdgeKind::ConstBody => CachedTraceFrameKind::ConstBody,
-        ReachabilityEdgeKind::Assert => CachedTraceFrameKind::Assert,
-        ReachabilityEdgeKind::IndirectCall => CachedTraceFrameKind::IndirectCall,
+        ReachabilityEdgeKind::ClosureDefinition => CachedReachabilityEdgeKind::ClosureDefinition,
+        ReachabilityEdgeKind::FnPointerCallTarget => {
+            CachedReachabilityEdgeKind::FnPointerCallTarget
+        }
+        ReachabilityEdgeKind::DynObjectCast => CachedReachabilityEdgeKind::DynObjectCast,
+        ReachabilityEdgeKind::VTableEntry => CachedReachabilityEdgeKind::VTableEntry,
+        ReachabilityEdgeKind::DynDispatchVTableEntry => {
+            CachedReachabilityEdgeKind::DynDispatchVTableEntry
+        }
+        ReachabilityEdgeKind::MacroExpansion => CachedReachabilityEdgeKind::MacroExpansion,
+        ReachabilityEdgeKind::ConstBody => CachedReachabilityEdgeKind::ConstBody,
+        ReachabilityEdgeKind::Assert => CachedReachabilityEdgeKind::Assert,
+        ReachabilityEdgeKind::IndirectCall => CachedReachabilityEdgeKind::IndirectCall,
     }
 }
