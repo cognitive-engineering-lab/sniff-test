@@ -36,8 +36,8 @@ use super::findings::{
 };
 use super::plugin::rustc_version;
 use super::report::{
-    AnalysisArtifactReport, CrateOutputScope, PanicObligationReport, PanicRootReport,
-    REPORT_FORMAT_VERSION, render_json_analysis_artifact_report, render_node,
+    AnalysisArtifactReport, CrateOutputScope, PanicRootReport, REPORT_FORMAT_VERSION,
+    render_json_analysis_artifact_report, render_node,
 };
 use super::rustc_invocation::RustcInvocation;
 
@@ -499,10 +499,8 @@ fn collect_panic_findings<'tcx>(
                     tcx,
                     graph,
                     evidence,
-                    PanicObligationFinding {
-                        edge_id: Some(edge_id),
-                        def_id,
-                    },
+                    Some(edge_id),
+                    def_id,
                     &collection,
                     &mut report,
                 );
@@ -539,36 +537,22 @@ fn collect_ambiguous_obligation_name_findings(
     }
 }
 
-#[derive(Debug, Clone, Copy)]
-struct PanicObligationFinding {
-    edge_id: Option<reachability::ReachabilityEdgeId>,
-    def_id: DefId,
-}
-
 fn push_panic_obligation_finding<'tcx>(
     tcx: TyCtxt<'tcx>,
     graph: &ReachabilityGraph<'tcx>,
     evidence: &PanicEvidence,
-    finding: PanicObligationFinding,
+    edge_id: Option<reachability::ReachabilityEdgeId>,
+    def_id: DefId,
     collection: &PanicFindingCollection<'_>,
     report: &mut PanicRootReport,
 ) {
-    let trusted = is_trusted_panic_obligation(tcx, finding.def_id, collection.config);
+    let trusted = is_trusted_panic_obligation(tcx, def_id, collection.config);
     let kind = if trusted {
         FindingKind::TrustedPanic
     } else {
         FindingKind::DocumentedPanic
     };
-    report.push_panic_obligation(
-        tcx,
-        graph,
-        evidence,
-        PanicObligationReport {
-            obligation_edge_id: finding.edge_id,
-            documented_def_id: finding.def_id,
-            kind,
-        },
-    );
+    report.push_panic_obligation(tcx, graph, evidence, edge_id, def_id, kind);
 }
 
 pub(super) fn is_trusted_panic_obligation(

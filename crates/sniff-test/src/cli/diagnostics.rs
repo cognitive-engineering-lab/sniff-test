@@ -41,15 +41,6 @@ pub(super) struct CachedDependencyContractDiagnostic {
     pub(super) include_stack: bool,
 }
 
-#[derive(Debug, Clone, Copy)]
-struct PanicContractNotes<'a> {
-    obligation_edge_id: Option<ReachabilityEdgeId>,
-    documented_def_id: DefId,
-    root_def_id: DefId,
-    documented: &'a str,
-    include_stack: bool,
-}
-
 /// The diagnostic surface findings decorate, bridging the two `Diag`
 /// emission-guarantee types (warn vs deny) behind one emission skeleton.
 trait LintDiag {
@@ -357,30 +348,31 @@ fn decorate_panic_contract_diagnostic<'tcx>(
     tcx: TyCtxt<'tcx>,
     graph: &ReachabilityGraph<'tcx>,
     evidence: &PanicEvidence,
-    notes: PanicContractNotes<'_>,
+    diagnostic: &PanicContractDiagnostic,
+    documented: &str,
 ) {
     diag.span_note(
-        tcx.def_span(notes.documented_def_id),
+        tcx.def_span(diagnostic.documented_def_id),
         format!(
             "the reached callee `{}` documents `# Panics` here",
-            notes.documented
+            documented
         ),
     );
     add_trace_notes(
         diag,
         tcx,
         graph,
-        &trace_edges_until(evidence, notes.obligation_edge_id),
-        notes.include_stack,
+        &trace_edges_until(evidence, diagnostic.obligation_edge_id),
+        diagnostic.include_stack,
     );
-    if let Some(edge_id) = notes.obligation_edge_id {
+    if let Some(edge_id) = diagnostic.obligation_edge_id {
         diag.span_help(
             graph.edge(edge_id).span,
             "add `// PANIC:` directly above this call explaining why its documented panic conditions cannot occur",
         );
     }
     diag.span_help(
-        tcx.def_span(notes.root_def_id),
+        tcx.def_span(diagnostic.root_def_id),
         "document when this function may panic with `/// # Panics` here",
     );
     diag.help("ensure the callee's panic conditions cannot occur, justify that with `// PANIC:`, or document when the caller may panic with `# Panics`");
@@ -559,39 +551,20 @@ pub(super) fn panic_contract_diagnostic<'tcx>(
     evidence: &PanicEvidence,
     diagnostic: PanicContractDiagnostic,
 ) -> FindingDiagnostic {
-    let PanicContractDiagnostic {
-        obligation_edge_id,
-        documented_def_id,
-        root_def_id,
-        trusted,
-        include_stack,
-    } = diagnostic;
-    let root = canonical_namespace(tcx, root_def_id);
-    let documented = canonical_namespace(tcx, documented_def_id);
-    let panic_kind = if trusted {
+    let root = canonical_namespace(tcx, diagnostic.root_def_id);
+    let documented = canonical_namespace(tcx, diagnostic.documented_def_id);
+    let panic_kind = if diagnostic.trusted {
         "trusted panic"
     } else {
         "documented panic"
     };
-    let primary_span = obligation_edge_id.map_or_else(
-        || tcx.def_span(root_def_id),
+    let primary_span = diagnostic.obligation_edge_id.map_or_else(
+        || tcx.def_span(diagnostic.root_def_id),
         |edge_id| graph.edge(edge_id).span,
     );
     let message = format!("function `{root}` may panic through a {panic_kind}");
     finding_diagnostic(Some(primary_span), message, |diag| {
-        decorate_panic_contract_diagnostic(
-            diag,
-            tcx,
-            graph,
-            evidence,
-            PanicContractNotes {
-                obligation_edge_id,
-                documented_def_id,
-                root_def_id,
-                documented: &documented,
-                include_stack,
-            },
-        );
+        decorate_panic_contract_diagnostic(diag, tcx, graph, evidence, &diagnostic, &documented);
     })
 }
 

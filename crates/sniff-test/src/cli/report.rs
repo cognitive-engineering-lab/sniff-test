@@ -75,13 +75,6 @@ pub(crate) struct PanicRootReport {
     pub(crate) findings: Vec<Finding>,
 }
 
-#[derive(Debug, Clone, Copy)]
-pub(crate) struct PanicObligationReport {
-    pub(crate) obligation_edge_id: Option<ReachabilityEdgeId>,
-    pub(crate) documented_def_id: DefId,
-    pub(crate) kind: FindingKind,
-}
-
 impl PanicRootReport {
     pub(crate) fn new(
         root: String,
@@ -114,17 +107,10 @@ impl PanicRootReport {
             raw_panic_diagnostic(tcx, graph, evidence, self.root_def_id, self.include_stack)
         };
         self.push_finding(Finding {
-            kind,
-            root: None,
-            root_kind: None,
-            function: None,
             target,
             span: Some(render_span(tcx, trigger_edge.span)),
-            reason,
             trace: render_trace(tcx, graph, &evidence.trace.edge_ids),
-            missing_requirements: Vec::new(),
-            requirements: Vec::new(),
-            diagnostic,
+            ..Finding::new(kind, reason, diagnostic)
         });
     }
 
@@ -133,11 +119,13 @@ impl PanicRootReport {
         tcx: TyCtxt<'tcx>,
         graph: &ReachabilityGraph<'tcx>,
         evidence: &PanicEvidence,
-        obligation: PanicObligationReport,
+        obligation_edge_id: Option<ReachabilityEdgeId>,
+        documented_def_id: DefId,
+        kind: FindingKind,
     ) {
-        let documented = canonical_namespace(tcx, obligation.documented_def_id);
-        let span = obligation.obligation_edge_id.map_or_else(
-            || render_span(tcx, tcx.def_span(obligation.documented_def_id)),
+        let documented = canonical_namespace(tcx, documented_def_id);
+        let span = obligation_edge_id.map_or_else(
+            || render_span(tcx, tcx.def_span(documented_def_id)),
             |edge_id| {
                 let edge = graph.edge(edge_id);
                 render_span(tcx, edge.span)
@@ -148,29 +136,18 @@ impl PanicRootReport {
             graph,
             evidence,
             PanicContractDiagnostic {
-                obligation_edge_id: obligation.obligation_edge_id,
-                documented_def_id: obligation.documented_def_id,
+                obligation_edge_id,
+                documented_def_id,
                 root_def_id: self.root_def_id,
-                trusted: obligation.kind == FindingKind::TrustedPanic,
+                trusted: kind == FindingKind::TrustedPanic,
                 include_stack: self.include_stack,
             },
         );
         self.push_finding(Finding {
-            kind: obligation.kind,
-            root: None,
-            root_kind: None,
-            function: None,
             target: Some(documented.clone()),
             span: Some(span),
-            reason: documented_panic_reason(&documented),
-            trace: render_trace(
-                tcx,
-                graph,
-                &trace_edges_until(evidence, obligation.obligation_edge_id),
-            ),
-            missing_requirements: Vec::new(),
-            requirements: Vec::new(),
-            diagnostic,
+            trace: render_trace(tcx, graph, &trace_edges_until(evidence, obligation_edge_id)),
+            ..Finding::new(kind, documented_panic_reason(&documented), diagnostic)
         });
     }
 
@@ -198,17 +175,14 @@ impl PanicRootReport {
             trace.extend(render_cached_trace(summary, finding));
         }
         self.push_finding(Finding {
-            kind: FindingKind::CachedDependencyPanic,
-            root: None,
-            root_kind: None,
-            function: None,
             target: Some(summary.path.clone()),
             span: Some(render_span(tcx, edge.span)),
-            reason: cached_dependency_panic_reason(summary),
             trace,
-            missing_requirements: Vec::new(),
-            requirements: Vec::new(),
-            diagnostic,
+            ..Finding::new(
+                FindingKind::CachedDependencyPanic,
+                cached_dependency_panic_reason(summary),
+                diagnostic,
+            )
         });
     }
 
@@ -240,17 +214,14 @@ impl PanicRootReport {
             trace.extend(render_cached_trace(summary, finding));
         }
         self.push_finding(Finding {
-            kind,
-            root: None,
-            root_kind: None,
-            function: None,
             target: Some(summary.path.clone()),
             span: Some(render_span(tcx, edge.span)),
-            reason: cached_dependency_contract_reason(summary, kind),
             trace,
-            missing_requirements: Vec::new(),
-            requirements: Vec::new(),
-            diagnostic,
+            ..Finding::new(
+                kind,
+                cached_dependency_contract_reason(summary, kind),
+                diagnostic,
+            )
         });
     }
 
@@ -262,20 +233,15 @@ impl PanicRootReport {
     ) {
         let diagnostic = analysis_incomplete_diagnostic(tcx, root_def_id, node_limit);
         self.push_finding(Finding {
-            kind: FindingKind::AnalysisIncomplete,
-            root: None,
-            root_kind: None,
-            function: None,
-            target: None,
             span: Some(render_span(tcx, tcx.def_span(root_def_id))),
-            reason: format!(
-                "reachability analysis halted at the {node_limit}-instance node limit \
-                 before the call graph was exhausted"
-            ),
-            trace: Vec::new(),
-            missing_requirements: Vec::new(),
-            requirements: Vec::new(),
-            diagnostic,
+            ..Finding::new(
+                FindingKind::AnalysisIncomplete,
+                format!(
+                    "reachability analysis halted at the {node_limit}-instance node limit \
+                     before the call graph was exhausted"
+                ),
+                diagnostic,
+            )
         });
     }
 
@@ -288,20 +254,16 @@ impl PanicRootReport {
         let diagnostic =
             ambiguous_obligation_marker_diagnostic(tcx, graph, marker, self.root_def_id);
         self.push_finding(Finding {
-            kind: FindingKind::AmbiguousPanicMarker,
-            root: None,
-            root_kind: None,
-            function: None,
-            target: None,
             span: Some(render_span(tcx, marker.marker_span)),
-            reason: format!(
-                "one `// PANIC:` marker applies to {} panic obligation sites",
-                marker.edge_ids.len()
-            ),
             trace: render_trace(tcx, graph, &marker.edge_ids),
-            missing_requirements: Vec::new(),
-            requirements: Vec::new(),
-            diagnostic,
+            ..Finding::new(
+                FindingKind::AmbiguousPanicMarker,
+                format!(
+                    "one `// PANIC:` marker applies to {} panic obligation sites",
+                    marker.edge_ids.len()
+                ),
+                diagnostic,
+            )
         });
     }
 
@@ -317,21 +279,17 @@ impl PanicRootReport {
             .map_or_else(|| tcx.def_span(name.def_id), |requirement| requirement.span);
         let diagnostic = ambiguous_obligation_name_diagnostic(tcx, name, self.root_def_id);
         self.push_finding(Finding {
-            kind: FindingKind::AmbiguousPanicRequirement,
-            root: None,
-            root_kind: None,
-            function: None,
             target: Some(target.clone()),
             span: Some(render_span(tcx, span)),
-            reason: format!(
-                "`{target}` has {} # Panics requirements named `{}`",
-                name.requirements.len(),
-                name.normalized_name
-            ),
-            trace: Vec::new(),
-            missing_requirements: Vec::new(),
-            requirements: Vec::new(),
-            diagnostic,
+            ..Finding::new(
+                FindingKind::AmbiguousPanicRequirement,
+                format!(
+                    "`{target}` has {} # Panics requirements named `{}`",
+                    name.requirements.len(),
+                    name.normalized_name
+                ),
+                diagnostic,
+            )
         });
     }
 
@@ -672,23 +630,15 @@ mod tests {
             dependencies: Vec::new(),
             findings: vec![ResolvedFinding {
                 level: LintLevel::Warn,
-                finding: Finding {
-                    kind: FindingKind::EmptyReportRoots,
-                    root: None,
-                    root_kind: None,
-                    function: None,
-                    target: None,
-                    span: None,
-                    reason: String::from("no roots"),
-                    trace: Vec::new(),
-                    missing_requirements: Vec::new(),
-                    requirements: Vec::new(),
-                    diagnostic: FindingDiagnostic {
+                finding: Finding::new(
+                    FindingKind::EmptyReportRoots,
+                    String::from("no roots"),
+                    FindingDiagnostic {
                         span: None,
                         message: String::from("no roots"),
                         messages: Vec::new(),
                     },
-                },
+                ),
             }],
         };
 

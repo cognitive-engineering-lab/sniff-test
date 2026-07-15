@@ -51,6 +51,24 @@ pub(crate) struct Finding {
     pub(crate) diagnostic: FindingDiagnostic,
 }
 
+impl Finding {
+    pub(crate) fn new(kind: FindingKind, reason: String, diagnostic: FindingDiagnostic) -> Self {
+        Self {
+            kind,
+            root: None,
+            root_kind: None,
+            function: None,
+            target: None,
+            span: None,
+            reason,
+            trace: Vec::new(),
+            missing_requirements: Vec::new(),
+            requirements: Vec::new(),
+            diagnostic,
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "kebab-case")]
 pub(crate) struct ResolvedFinding {
@@ -169,43 +187,34 @@ pub(crate) fn collect_report_root_findings(
     if empty_report_roots {
         let diagnostic =
             empty_report_roots_diagnostic(tcx, manifest_path, report_roots, crate_name);
-        findings.push(Finding {
-            kind: FindingKind::EmptyReportRoots,
-            root: None,
-            root_kind: None,
-            function: None,
-            target: None,
-            span: None,
-            reason: format!(
+        findings.push(Finding::new(
+            FindingKind::EmptyReportRoots,
+            format!(
                 "`[analysis].report-roots = {}` selected no functions in `{crate_name}`",
                 report_roots.description()
             ),
-            trace: Vec::new(),
-            missing_requirements: Vec::new(),
-            requirements: Vec::new(),
             diagnostic,
-        });
+        ));
     }
-    findings.extend(missing_roots.iter().map(|root| Finding {
-        kind: match root.reason {
+    findings.extend(missing_roots.iter().map(|root| {
+        let kind = match root.reason {
             MissingRootReason::NotFound => FindingKind::MissingReportRoot,
             MissingRootReason::Ignored => FindingKind::IgnoredReportRoot,
-        },
-        root: None,
-        root_kind: None,
-        function: None,
-        target: Some(root.path.clone()),
-        span: None,
-        reason: match root.reason {
+        };
+        let reason = match root.reason {
             MissingRootReason::NotFound => String::from("configured report root was not found"),
             MissingRootReason::Ignored => {
                 String::from("configured report root is excluded by `[panics].ignored-namespaces`")
             }
-        },
-        trace: Vec::new(),
-        missing_requirements: Vec::new(),
-        requirements: Vec::new(),
-        diagnostic: missing_report_root_diagnostic(tcx, manifest_path, root),
+        };
+        Finding {
+            target: Some(root.path.clone()),
+            ..Finding::new(
+                kind,
+                reason,
+                missing_report_root_diagnostic(tcx, manifest_path, root),
+            )
+        }
     }));
     findings
 }
@@ -232,17 +241,13 @@ fn safety_finding_report(
         SafetyFinding::MissingSafetyDocs { def_id, span } => {
             let function = canonical_namespace(tcx, def_id);
             Finding {
-                kind: FindingKind::MissingSafetyDocs,
-                root: None,
-                root_kind: None,
                 function: Some(function.clone()),
-                target: None,
                 span: Some(render_span(tcx, span)),
-                reason: format!("public unsafe function `{function}` is missing # Safety docs"),
-                trace: Vec::new(),
-                missing_requirements: Vec::new(),
-                requirements: Vec::new(),
-                diagnostic,
+                ..Finding::new(
+                    FindingKind::MissingSafetyDocs,
+                    format!("public unsafe function `{function}` is missing # Safety docs"),
+                    diagnostic,
+                )
             }
         }
         SafetyFinding::CallMissingJustification {
@@ -253,23 +258,21 @@ fn safety_finding_report(
         } => {
             let target = safety_callee_name(tcx, callee);
             let call = safety_call_label(call_kind);
+            let kind = match call_kind {
+                SafetyCallKind::Unsafe => FindingKind::UnsafeCallMissingJustification,
+                SafetyCallKind::ConfiguredObligation => {
+                    FindingKind::SafetyObligationMissingJustification
+                }
+            };
             Finding {
-                kind: match call_kind {
-                    SafetyCallKind::Unsafe => FindingKind::UnsafeCallMissingJustification,
-                    SafetyCallKind::ConfiguredObligation => {
-                        FindingKind::SafetyObligationMissingJustification
-                    }
-                },
-                root: None,
-                root_kind: None,
                 function: Some(canonical_namespace(tcx, caller)),
                 target: Some(target.clone()),
                 span: Some(render_span(tcx, span)),
-                reason: format!("{call} to `{target}` has no `// SAFETY:` justification"),
-                trace: Vec::new(),
-                missing_requirements: Vec::new(),
-                requirements: Vec::new(),
-                diagnostic,
+                ..Finding::new(
+                    kind,
+                    format!("{call} to `{target}` has no `// SAFETY:` justification"),
+                    diagnostic,
+                )
             }
         }
         SafetyFinding::CallMissingRequirements {
@@ -285,39 +288,34 @@ fn safety_finding_report(
                 .iter()
                 .map(render_safety_requirement)
                 .collect();
+            let kind = match call_kind {
+                SafetyCallKind::Unsafe => FindingKind::UnsafeCallMissingRequirements,
+                SafetyCallKind::ConfiguredObligation => {
+                    FindingKind::SafetyObligationMissingRequirements
+                }
+            };
             Finding {
-                kind: match call_kind {
-                    SafetyCallKind::Unsafe => FindingKind::UnsafeCallMissingRequirements,
-                    SafetyCallKind::ConfiguredObligation => {
-                        FindingKind::SafetyObligationMissingRequirements
-                    }
-                },
-                root: None,
-                root_kind: None,
                 function: Some(canonical_namespace(tcx, caller)),
                 target: Some(target.clone()),
                 span: Some(render_span(tcx, span)),
-                reason: format!("{call} to `{target}` does not satisfy all # Safety requirements"),
-                trace: Vec::new(),
                 missing_requirements,
-                requirements: Vec::new(),
-                diagnostic,
+                ..Finding::new(
+                    kind,
+                    format!("{call} to `{target}` does not satisfy all # Safety requirements"),
+                    diagnostic,
+                )
             }
         }
         SafetyFinding::OpMissingJustification { caller, op, span } => {
             let operation = safety_op_label(op);
             Finding {
-                kind: FindingKind::UnsafeOpMissingJustification,
-                root: None,
-                root_kind: None,
                 function: Some(canonical_namespace(tcx, caller)),
-                target: None,
                 span: Some(render_span(tcx, span)),
-                reason: format!("unsafe operation ({operation}) has no `// SAFETY:` justification"),
-                trace: Vec::new(),
-                missing_requirements: Vec::new(),
-                requirements: Vec::new(),
-                diagnostic,
+                ..Finding::new(
+                    FindingKind::UnsafeOpMissingJustification,
+                    format!("unsafe operation ({operation}) has no `// SAFETY:` justification"),
+                    diagnostic,
+                )
             }
         }
         SafetyFinding::AmbiguousObligationName {
@@ -331,19 +329,16 @@ fn safety_finding_report(
                 .map_or_else(|| tcx.def_span(def_id), |requirement| requirement.span);
             let requirements = requirements.iter().map(render_safety_requirement).collect();
             Finding {
-                kind: FindingKind::AmbiguousSafetyRequirement,
-                root: None,
-                root_kind: None,
                 function: Some(function.clone()),
-                target: None,
                 span: Some(render_span(tcx, span)),
-                reason: format!(
-                    "`{function}` has multiple # Safety requirements named `{normalized_name}`"
-                ),
-                trace: Vec::new(),
-                missing_requirements: Vec::new(),
                 requirements,
-                diagnostic,
+                ..Finding::new(
+                    FindingKind::AmbiguousSafetyRequirement,
+                    format!(
+                        "`{function}` has multiple # Safety requirements named `{normalized_name}`"
+                    ),
+                    diagnostic,
+                )
             }
         }
     }
@@ -354,23 +349,15 @@ mod tests {
     use crate::config::{LintLevel, SniffTestConfig};
 
     fn finding(kind: FindingKind) -> Finding {
-        Finding {
+        Finding::new(
             kind,
-            root: None,
-            root_kind: None,
-            function: None,
-            target: None,
-            span: None,
-            reason: String::from("test finding"),
-            trace: Vec::new(),
-            missing_requirements: Vec::new(),
-            requirements: Vec::new(),
-            diagnostic: FindingDiagnostic {
+            String::from("test finding"),
+            FindingDiagnostic {
                 span: None,
                 message: String::from("test finding"),
                 messages: Vec::new(),
             },
-        }
+        )
     }
 
     #[test]
