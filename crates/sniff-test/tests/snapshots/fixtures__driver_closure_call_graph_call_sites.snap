@@ -4,7 +4,6 @@ expression: messages
 ---
 [
   {
-    "analysis-findings": [],
     "artifact": {
       "artifact-id": "[ARTIFACT_ID]",
       "crate-name": "closure_call_graph",
@@ -18,136 +17,94 @@ expression: messages
       "package-version": null,
       "target": null
     },
-    "concrete-roots": 5,
     "dependencies": [],
-    "dependency-cache": {
-      "failed": 0,
-      "hits": 0,
-      "total": 0
-    },
-    "format-version": 3,
-    "generic-roots": 0,
-    "reason": "sniff-test-artifact",
-    "roots": [
+    "findings": [
       {
-        "findings": [
-          {
-            "edge": "closure_call_graph::basic_closure_panics::{closure#0} --macro-expansion-> macro std::panic",
-            "kind": "panic-invocation",
-            "level": "deny",
-            "reason": "panic sink core::std::rt::panic_fmt",
-            "span": "[FIXTURE]/src/lib.rs:2:20: 2:44",
-            "target": "core::std::rt::panic_fmt",
-            "trace": [
-              "[FIXTURE]/src/lib.rs:3:5: 3:20: closure_call_graph::basic_closure_panics --direct-call-> closure_call_graph::calls_fn",
-              "[FIXTURE]/src/lib.rs:40:5: 40:15: closure_call_graph::calls_fn --direct-call-> closure_call_graph::basic_closure_panics::{closure#0}",
-              "[FIXTURE]/src/lib.rs:2:20: 2:44: closure_call_graph::basic_closure_panics::{closure#0} --macro-expansion-> macro std::panic",
-              "[FIXTURE]/src/lib.rs:2:20: 2:44: macro std::panic --macro-expansion-> macro core::std::panic::panic_2021",
-              "[SYSROOT]/lib/rustlib/src/rust/library/core/src/panic.rs:62:9: 62:73: macro core::std::panic::panic_2021 --direct-call-> core::std::rt::panic_fmt"
-            ]
-          }
-        ],
-        "has-panic-docs": false,
+        "kind": "panic-invocation",
+        "level": "deny",
+        "reason": "panic sink core::std::rt::panic_fmt",
         "root": "closure_call_graph::basic_closure_panics",
-        "root-declaration": "[FIXTURE]/src/lib.rs:1:1",
-        "root-kind": "concrete"
+        "root-kind": "concrete",
+        "span": "[FIXTURE]/src/lib.rs:2:20: 2:44",
+        "target": "core::std::rt::panic_fmt",
+        "trace": [
+          "[FIXTURE]/src/lib.rs:3:5: 3:20: closure_call_graph::basic_closure_panics --direct-call-> closure_call_graph::calls_fn",
+          "[FIXTURE]/src/lib.rs:40:5: 40:15: closure_call_graph::calls_fn --direct-call-> closure_call_graph::basic_closure_panics::{closure#0}",
+          "[FIXTURE]/src/lib.rs:2:20: 2:44: closure_call_graph::basic_closure_panics::{closure#0} --macro-expansion-> macro std::panic",
+          "[FIXTURE]/src/lib.rs:2:20: 2:44: macro std::panic --macro-expansion-> macro core::std::panic::panic_2021",
+          "[SYSROOT]/lib/rustlib/src/rust/library/core/src/panic.rs:62:9: 62:73: macro core::std::panic::panic_2021 --direct-call-> core::std::rt::panic_fmt"
+        ]
       },
       {
-        "findings": [
-          {
-            "edge": "closure_call_graph::boxed_captured_closure_panics::{closure#0} --macro-expansion-> macro std::panic",
-            "kind": "panic-invocation",
-            "level": "deny",
-            "reason": "panic sink core::std::rt::panic_fmt",
-            "span": "[FIXTURE]/src/lib.rs:30:28: 30:60",
-            "target": "core::std::rt::panic_fmt",
-            "trace": [
-              "[FIXTURE]/src/lib.rs:32:5: 32:42: closure_call_graph::boxed_captured_closure_panics --direct-call-> closure_call_graph::calls_deref_fn",
-              "[FIXTURE]/src/lib.rs:52:5: 52:15: closure_call_graph::calls_deref_fn --direct-call-> closure_call_graph::boxed_captured_closure_panics::{closure#1}",
-              "[FIXTURE]/src/lib.rs:31:26: 31:41: closure_call_graph::boxed_captured_closure_panics::{closure#1} --direct-call-> closure_call_graph::boxed_captured_closure_panics::{closure#0}",
-              "[FIXTURE]/src/lib.rs:30:28: 30:60: closure_call_graph::boxed_captured_closure_panics::{closure#0} --macro-expansion-> macro std::panic",
-              "[FIXTURE]/src/lib.rs:30:28: 30:60: macro std::panic --macro-expansion-> macro core::std::panic::panic_2021",
-              "[SYSROOT]/lib/rustlib/src/rust/library/core/src/panic.rs:62:9: 62:73: macro core::std::panic::panic_2021 --direct-call-> core::std::rt::panic_fmt"
-            ]
-          }
-        ],
-        "has-panic-docs": false,
+        "kind": "panic-invocation",
+        "level": "deny",
+        "reason": "panic sink core::std::rt::panic_fmt",
         "root": "closure_call_graph::boxed_captured_closure_panics",
-        "root-declaration": "[FIXTURE]/src/lib.rs:29:1",
-        "root-kind": "concrete"
+        "root-kind": "concrete",
+        "span": "[FIXTURE]/src/lib.rs:30:28: 30:60",
+        "target": "core::std::rt::panic_fmt",
+        "trace": [
+          "[FIXTURE]/src/lib.rs:32:5: 32:42: closure_call_graph::boxed_captured_closure_panics --direct-call-> closure_call_graph::calls_deref_fn",
+          "[FIXTURE]/src/lib.rs:52:5: 52:15: closure_call_graph::calls_deref_fn --direct-call-> closure_call_graph::boxed_captured_closure_panics::{closure#1}",
+          "[FIXTURE]/src/lib.rs:31:26: 31:41: closure_call_graph::boxed_captured_closure_panics::{closure#1} --direct-call-> closure_call_graph::boxed_captured_closure_panics::{closure#0}",
+          "[FIXTURE]/src/lib.rs:30:28: 30:60: closure_call_graph::boxed_captured_closure_panics::{closure#0} --macro-expansion-> macro std::panic",
+          "[FIXTURE]/src/lib.rs:30:28: 30:60: macro std::panic --macro-expansion-> macro core::std::panic::panic_2021",
+          "[SYSROOT]/lib/rustlib/src/rust/library/core/src/panic.rs:62:9: 62:73: macro core::std::panic::panic_2021 --direct-call-> core::std::rt::panic_fmt"
+        ]
       },
       {
-        "findings": [
-          {
-            "edge": "closure_call_graph::captured_closure_panics::{closure#0} --macro-expansion-> macro std::panic",
-            "kind": "panic-invocation",
-            "level": "deny",
-            "reason": "panic sink core::std::rt::panic_fmt",
-            "span": "[FIXTURE]/src/lib.rs:24:28: 24:54",
-            "target": "core::std::rt::panic_fmt",
-            "trace": [
-              "[FIXTURE]/src/lib.rs:26:5: 26:26: closure_call_graph::captured_closure_panics --direct-call-> closure_call_graph::calls_fn",
-              "[FIXTURE]/src/lib.rs:40:5: 40:15: closure_call_graph::calls_fn --direct-call-> closure_call_graph::captured_closure_panics::{closure#1}",
-              "[FIXTURE]/src/lib.rs:25:26: 25:41: closure_call_graph::captured_closure_panics::{closure#1} --direct-call-> closure_call_graph::captured_closure_panics::{closure#0}",
-              "[FIXTURE]/src/lib.rs:24:28: 24:54: closure_call_graph::captured_closure_panics::{closure#0} --macro-expansion-> macro std::panic",
-              "[FIXTURE]/src/lib.rs:24:28: 24:54: macro std::panic --macro-expansion-> macro core::std::panic::panic_2021",
-              "[SYSROOT]/lib/rustlib/src/rust/library/core/src/panic.rs:62:9: 62:73: macro core::std::panic::panic_2021 --direct-call-> core::std::rt::panic_fmt"
-            ]
-          }
-        ],
-        "has-panic-docs": false,
+        "kind": "panic-invocation",
+        "level": "deny",
+        "reason": "panic sink core::std::rt::panic_fmt",
         "root": "closure_call_graph::captured_closure_panics",
-        "root-declaration": "[FIXTURE]/src/lib.rs:23:1",
-        "root-kind": "concrete"
+        "root-kind": "concrete",
+        "span": "[FIXTURE]/src/lib.rs:24:28: 24:54",
+        "target": "core::std::rt::panic_fmt",
+        "trace": [
+          "[FIXTURE]/src/lib.rs:26:5: 26:26: closure_call_graph::captured_closure_panics --direct-call-> closure_call_graph::calls_fn",
+          "[FIXTURE]/src/lib.rs:40:5: 40:15: closure_call_graph::calls_fn --direct-call-> closure_call_graph::captured_closure_panics::{closure#1}",
+          "[FIXTURE]/src/lib.rs:25:26: 25:41: closure_call_graph::captured_closure_panics::{closure#1} --direct-call-> closure_call_graph::captured_closure_panics::{closure#0}",
+          "[FIXTURE]/src/lib.rs:24:28: 24:54: closure_call_graph::captured_closure_panics::{closure#0} --macro-expansion-> macro std::panic",
+          "[FIXTURE]/src/lib.rs:24:28: 24:54: macro std::panic --macro-expansion-> macro core::std::panic::panic_2021",
+          "[SYSROOT]/lib/rustlib/src/rust/library/core/src/panic.rs:62:9: 62:73: macro core::std::panic::panic_2021 --direct-call-> core::std::rt::panic_fmt"
+        ]
       },
       {
-        "findings": [
-          {
-            "edge": "closure_call_graph::dyn_box_closure_boundary::{closure#0} --macro-expansion-> macro std::panic",
-            "kind": "panic-invocation",
-            "level": "deny",
-            "reason": "panic sink core::std::rt::panic_fmt",
-            "span": "[FIXTURE]/src/lib.rs:19:52: 19:79",
-            "target": "core::std::rt::panic_fmt",
-            "trace": [
-              "[FIXTURE]/src/lib.rs:20:5: 20:26: closure_call_graph::dyn_box_closure_boundary --direct-call-> closure_call_graph::calls_dyn_box",
-              "[FIXTURE]/src/lib.rs:48:5: 48:15: closure_call_graph::calls_dyn_box --dyn-dispatch-vtable-entry-> closure_call_graph::dyn_box_closure_boundary::{closure#0}",
-              "[FIXTURE]/src/lib.rs:19:52: 19:79: closure_call_graph::dyn_box_closure_boundary::{closure#0} --macro-expansion-> macro std::panic",
-              "[FIXTURE]/src/lib.rs:19:52: 19:79: macro std::panic --macro-expansion-> macro core::std::panic::panic_2021",
-              "[SYSROOT]/lib/rustlib/src/rust/library/core/src/panic.rs:62:9: 62:73: macro core::std::panic::panic_2021 --direct-call-> core::std::rt::panic_fmt"
-            ]
-          }
-        ],
-        "has-panic-docs": false,
+        "kind": "panic-invocation",
+        "level": "deny",
+        "reason": "panic sink core::std::rt::panic_fmt",
         "root": "closure_call_graph::dyn_box_closure_boundary",
-        "root-declaration": "[FIXTURE]/src/lib.rs:18:1",
-        "root-kind": "concrete"
+        "root-kind": "concrete",
+        "span": "[FIXTURE]/src/lib.rs:19:52: 19:79",
+        "target": "core::std::rt::panic_fmt",
+        "trace": [
+          "[FIXTURE]/src/lib.rs:20:5: 20:26: closure_call_graph::dyn_box_closure_boundary --direct-call-> closure_call_graph::calls_dyn_box",
+          "[FIXTURE]/src/lib.rs:48:5: 48:15: closure_call_graph::calls_dyn_box --dyn-dispatch-vtable-entry-> closure_call_graph::dyn_box_closure_boundary::{closure#0}",
+          "[FIXTURE]/src/lib.rs:19:52: 19:79: closure_call_graph::dyn_box_closure_boundary::{closure#0} --macro-expansion-> macro std::panic",
+          "[FIXTURE]/src/lib.rs:19:52: 19:79: macro std::panic --macro-expansion-> macro core::std::panic::panic_2021",
+          "[SYSROOT]/lib/rustlib/src/rust/library/core/src/panic.rs:62:9: 62:73: macro core::std::panic::panic_2021 --direct-call-> core::std::rt::panic_fmt"
+        ]
       },
       {
-        "findings": [
-          {
-            "edge": "closure_call_graph::fn_pointer_closure_boundary::{closure#0} --macro-expansion-> macro std::panic",
-            "kind": "panic-invocation",
-            "level": "deny",
-            "reason": "panic sink core::std::rt::panic_fmt",
-            "span": "[FIXTURE]/src/lib.rs:12:20: 12:54",
-            "target": "core::std::rt::panic_fmt",
-            "trace": [
-              "[FIXTURE]/src/lib.rs:15:5: 15:26: closure_call_graph::fn_pointer_closure_boundary --direct-call-> closure_call_graph::calls_fn",
-              "[FIXTURE]/src/lib.rs:40:5: 40:15: closure_call_graph::calls_fn --fn-pointer-call-target-> core::std::ops::FnOnce::call_once",
-              "[SYSROOT]/lib/rustlib/src/rust/library/core/src/ops/function.rs:250:5: 250:71: core::std::ops::FnOnce::call_once --direct-call-> closure_call_graph::fn_pointer_closure_boundary::{closure#0}",
-              "[FIXTURE]/src/lib.rs:12:20: 12:54: closure_call_graph::fn_pointer_closure_boundary::{closure#0} --macro-expansion-> macro std::panic",
-              "[FIXTURE]/src/lib.rs:12:20: 12:54: macro std::panic --macro-expansion-> macro core::std::panic::panic_2021",
-              "[SYSROOT]/lib/rustlib/src/rust/library/core/src/panic.rs:62:9: 62:73: macro core::std::panic::panic_2021 --direct-call-> core::std::rt::panic_fmt"
-            ]
-          }
-        ],
-        "has-panic-docs": false,
+        "kind": "panic-invocation",
+        "level": "deny",
+        "reason": "panic sink core::std::rt::panic_fmt",
         "root": "closure_call_graph::fn_pointer_closure_boundary",
-        "root-declaration": "[FIXTURE]/src/lib.rs:11:1",
-        "root-kind": "concrete"
+        "root-kind": "concrete",
+        "span": "[FIXTURE]/src/lib.rs:12:20: 12:54",
+        "target": "core::std::rt::panic_fmt",
+        "trace": [
+          "[FIXTURE]/src/lib.rs:15:5: 15:26: closure_call_graph::fn_pointer_closure_boundary --direct-call-> closure_call_graph::calls_fn",
+          "[FIXTURE]/src/lib.rs:40:5: 40:15: closure_call_graph::calls_fn --fn-pointer-call-target-> core::std::ops::FnOnce::call_once",
+          "[SYSROOT]/lib/rustlib/src/rust/library/core/src/ops/function.rs:250:5: 250:71: core::std::ops::FnOnce::call_once --direct-call-> closure_call_graph::fn_pointer_closure_boundary::{closure#0}",
+          "[FIXTURE]/src/lib.rs:12:20: 12:54: closure_call_graph::fn_pointer_closure_boundary::{closure#0} --macro-expansion-> macro std::panic",
+          "[FIXTURE]/src/lib.rs:12:20: 12:54: macro std::panic --macro-expansion-> macro core::std::panic::panic_2021",
+          "[SYSROOT]/lib/rustlib/src/rust/library/core/src/panic.rs:62:9: 62:73: macro core::std::panic::panic_2021 --direct-call-> core::std::rt::panic_fmt"
+        ]
       }
     ],
+    "format-version": 4,
+    "reason": "sniff-test-artifact",
     "rustc-version": "[RUSTC_VERSION]",
     "scope": "workspace",
     "tool-version": "0.1.0"

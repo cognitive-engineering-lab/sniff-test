@@ -4,7 +4,6 @@ expression: messages
 ---
 [
   {
-    "analysis-findings": [],
     "artifact": {
       "artifact-id": "[ARTIFACT_ID]",
       "crate-name": "safety_requirements",
@@ -18,41 +17,31 @@ expression: messages
       "package-version": "0.1.0",
       "target": null
     },
-    "concrete-roots": 0,
     "dependencies": [],
-    "dependency-cache": {
-      "failed": 0,
-      "hits": 0,
-      "total": 0
-    },
-    "format-version": 3,
-    "generic-roots": 0,
+    "findings": [
+      {
+        "function": "safety_requirements::unsafe_fn_pointer_missing_justification",
+        "kind": "unsafe-call-missing-justification",
+        "level": "warn",
+        "reason": "unsafe call to `unsafe function pointer` has no `// SAFETY:` justification",
+        "span": "src/lib.rs:103:14: 103:24",
+        "target": "unsafe function pointer"
+      },
+      {
+        "function": "safety_requirements::generic_unsafe_trait_method_missing",
+        "kind": "unsafe-call-missing-requirements",
+        "level": "warn",
+        "missing-requirements": [
+          "valid_ptr: pointer must be non-null."
+        ],
+        "reason": "unsafe call to `safety_requirements::UnsafeGreeter::greet` does not satisfy all # Safety requirements",
+        "span": "src/lib.rs:139:14: 139:32",
+        "target": "safety_requirements::UnsafeGreeter::greet"
+      }
+    ],
+    "format-version": 4,
     "reason": "sniff-test-artifact",
-    "roots": [],
     "rustc-version": "[RUSTC_VERSION]",
-    "safety": {
-      "findings": [
-        {
-          "function": "safety_requirements::unsafe_fn_pointer_missing_justification",
-          "kind": "unsafe-call-missing-justification",
-          "level": "warn",
-          "reason": "unsafe call to `unsafe function pointer` has no `// SAFETY:` justification",
-          "span": "src/lib.rs:103:14: 103:24",
-          "target": "unsafe function pointer"
-        },
-        {
-          "function": "safety_requirements::generic_unsafe_trait_method_missing",
-          "kind": "unsafe-call-missing-requirements",
-          "level": "warn",
-          "missing-requirements": [
-            "valid_ptr: pointer must be non-null."
-          ],
-          "reason": "unsafe call to `safety_requirements::UnsafeGreeter::greet` does not satisfy all # Safety requirements",
-          "span": "src/lib.rs:139:14: 139:32",
-          "target": "safety_requirements::UnsafeGreeter::greet"
-        }
-      ]
-    },
     "scope": "workspace",
     "tool-version": "0.1.0"
   }

@@ -4,7 +4,6 @@ expression: messages
 ---
 [
   {
-    "analysis-findings": [],
     "artifact": {
       "artifact-id": "[ARTIFACT_ID]",
       "crate-name": "dyn_dispatch_same_trait",
@@ -18,40 +17,26 @@ expression: messages
       "package-version": "0.1.0",
       "target": null
     },
-    "concrete-roots": 1,
     "dependencies": [],
-    "dependency-cache": {
-      "failed": 0,
-      "hits": 0,
-      "total": 0
-    },
-    "format-version": 3,
-    "generic-roots": 0,
-    "reason": "sniff-test-artifact",
-    "roots": [
+    "findings": [
       {
-        "findings": [
-          {
-            "edge": "<dyn_dispatch_same_trait::Panicker as Runner>::run --macro-expansion-> macro std::panic",
-            "kind": "panic-invocation",
-            "level": "deny",
-            "reason": "panic sink core::std::rt::panic_fmt",
-            "span": "src/lib.rs:9:9: 9:41",
-            "target": "core::std::rt::panic_fmt",
-            "trace": [
-              "src/lib.rs:25:5: 25:17: dyn_dispatch_same_trait::entry --dyn-dispatch-vtable-entry-> <dyn_dispatch_same_trait::Panicker as Runner>::run",
-              "src/lib.rs:9:9: 9:41: <dyn_dispatch_same_trait::Panicker as Runner>::run --macro-expansion-> macro std::panic",
-              "src/lib.rs:9:9: 9:41: macro std::panic --macro-expansion-> macro core::std::panic::panic_2021",
-              "[SYSROOT]/lib/rustlib/src/rust/library/core/src/panic.rs:62:9: 62:73: macro core::std::panic::panic_2021 --direct-call-> core::std::rt::panic_fmt"
-            ]
-          }
-        ],
-        "has-panic-docs": false,
+        "kind": "panic-invocation",
+        "level": "deny",
+        "reason": "panic sink core::std::rt::panic_fmt",
         "root": "dyn_dispatch_same_trait::entry",
-        "root-declaration": "src/lib.rs:19:1",
-        "root-kind": "concrete"
+        "root-kind": "concrete",
+        "span": "src/lib.rs:9:9: 9:41",
+        "target": "core::std::rt::panic_fmt",
+        "trace": [
+          "src/lib.rs:25:5: 25:17: dyn_dispatch_same_trait::entry --dyn-dispatch-vtable-entry-> <dyn_dispatch_same_trait::Panicker as Runner>::run",
+          "src/lib.rs:9:9: 9:41: <dyn_dispatch_same_trait::Panicker as Runner>::run --macro-expansion-> macro std::panic",
+          "src/lib.rs:9:9: 9:41: macro std::panic --macro-expansion-> macro core::std::panic::panic_2021",
+          "[SYSROOT]/lib/rustlib/src/rust/library/core/src/panic.rs:62:9: 62:73: macro core::std::panic::panic_2021 --direct-call-> core::std::rt::panic_fmt"
+        ]
       }
     ],
+    "format-version": 4,
+    "reason": "sniff-test-artifact",
     "rustc-version": "[RUSTC_VERSION]",
     "scope": "workspace",
     "tool-version": "0.1.0"

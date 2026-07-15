@@ -4,7 +4,6 @@ expression: messages
 ---
 [
   {
-    "analysis-findings": [],
     "artifact": {
       "artifact-id": "[ARTIFACT_ID]",
       "crate-name": "macro_expansion",
@@ -18,102 +17,67 @@ expression: messages
       "package-version": "0.1.0",
       "target": null
     },
-    "concrete-roots": 4,
     "dependencies": [],
-    "dependency-cache": {
-      "failed": 0,
-      "hits": 0,
-      "total": 0
-    },
-    "format-version": 3,
-    "generic-roots": 0,
-    "reason": "sniff-test-artifact",
-    "roots": [
+    "findings": [
       {
-        "findings": [
-          {
-            "edge": "macro_expansion::direct_assert --macro-expansion-> macro core::std::assert",
-            "kind": "panic-invocation",
-            "level": "deny",
-            "reason": "panic sink core::panicking::panic",
-            "span": "src/lib.rs:27:5: 27:18",
-            "target": "core::panicking::panic",
-            "trace": [
-              "src/lib.rs:27:5: 27:18: macro_expansion::direct_assert --macro-expansion-> macro core::std::assert",
-              "src/lib.rs:27:5: 27:18: macro core::std::assert --direct-call-> core::panicking::panic"
-            ]
-          }
-        ],
-        "has-panic-docs": false,
+        "kind": "panic-invocation",
+        "level": "deny",
+        "reason": "panic sink core::panicking::panic",
         "root": "macro_expansion::direct_assert",
-        "root-declaration": "src/lib.rs:26:1",
-        "root-kind": "concrete"
+        "root-kind": "concrete",
+        "span": "src/lib.rs:27:5: 27:18",
+        "target": "core::panicking::panic",
+        "trace": [
+          "src/lib.rs:27:5: 27:18: macro_expansion::direct_assert --macro-expansion-> macro core::std::assert",
+          "src/lib.rs:27:5: 27:18: macro core::std::assert --direct-call-> core::panicking::panic"
+        ]
       },
       {
-        "findings": [
-          {
-            "edge": "macro_expansion::direct_macro --macro-expansion-> macro macro_expansion::const_assert",
-            "kind": "panic-invocation",
-            "level": "deny",
-            "reason": "panic sink core::panicking::panic",
-            "span": "src/lib.rs:23:5: 23:24",
-            "target": "core::panicking::panic",
-            "trace": [
-              "src/lib.rs:23:5: 23:24: macro_expansion::direct_macro --macro-expansion-> macro macro_expansion::const_assert",
-              "src/lib.rs:3:9: 3:28: macro macro_expansion::const_assert --macro-expansion-> macro core::std::assert",
-              "src/lib.rs:3:9: 3:28: macro core::std::assert --direct-call-> core::panicking::panic"
-            ]
-          }
-        ],
-        "has-panic-docs": false,
+        "kind": "panic-invocation",
+        "level": "deny",
+        "reason": "panic sink core::panicking::panic",
         "root": "macro_expansion::direct_macro",
-        "root-declaration": "src/lib.rs:22:1",
-        "root-kind": "concrete"
+        "root-kind": "concrete",
+        "span": "src/lib.rs:23:5: 23:24",
+        "target": "core::panicking::panic",
+        "trace": [
+          "src/lib.rs:23:5: 23:24: macro_expansion::direct_macro --macro-expansion-> macro macro_expansion::const_assert",
+          "src/lib.rs:3:9: 3:28: macro macro_expansion::const_assert --macro-expansion-> macro core::std::assert",
+          "src/lib.rs:3:9: 3:28: macro core::std::assert --direct-call-> core::panicking::panic"
+        ]
       },
       {
-        "findings": [
-          {
-            "edge": "macro_expansion::macro_internal_marker --macro-expansion-> macro macro_expansion::justified_const_assert",
-            "kind": "panic-invocation",
-            "level": "deny",
-            "reason": "panic sink core::panicking::panic",
-            "span": "src/lib.rs:38:5: 38:34",
-            "target": "core::panicking::panic",
-            "trace": [
-              "src/lib.rs:38:5: 38:34: macro_expansion::macro_internal_marker --macro-expansion-> macro macro_expansion::justified_const_assert",
-              "src/lib.rs:33:9: 33:28: macro macro_expansion::justified_const_assert --macro-expansion-> macro core::std::assert",
-              "src/lib.rs:33:9: 33:28: macro core::std::assert --direct-call-> core::panicking::panic"
-            ]
-          }
-        ],
-        "has-panic-docs": false,
+        "kind": "panic-invocation",
+        "level": "deny",
+        "reason": "panic sink core::panicking::panic",
         "root": "macro_expansion::macro_internal_marker",
-        "root-declaration": "src/lib.rs:37:1",
-        "root-kind": "concrete"
+        "root-kind": "concrete",
+        "span": "src/lib.rs:38:5: 38:34",
+        "target": "core::panicking::panic",
+        "trace": [
+          "src/lib.rs:38:5: 38:34: macro_expansion::macro_internal_marker --macro-expansion-> macro macro_expansion::justified_const_assert",
+          "src/lib.rs:33:9: 33:28: macro macro_expansion::justified_const_assert --macro-expansion-> macro core::std::assert",
+          "src/lib.rs:33:9: 33:28: macro core::std::assert --direct-call-> core::panicking::panic"
+        ]
       },
       {
-        "findings": [
-          {
-            "edge": "macro_expansion::macro_wrapped --macro-expansion-> macro macro_expansion::static_assert",
-            "kind": "panic-invocation",
-            "level": "deny",
-            "reason": "panic sink core::panicking::panic",
-            "span": "src/lib.rs:14:5: 14:25",
-            "target": "core::panicking::panic",
-            "trace": [
-              "src/lib.rs:14:5: 14:25: macro_expansion::macro_wrapped --macro-expansion-> macro macro_expansion::static_assert",
-              "src/lib.rs:9:9: 9:34: macro macro_expansion::static_assert --macro-expansion-> macro macro_expansion::const_assert",
-              "src/lib.rs:3:9: 3:28: macro macro_expansion::const_assert --macro-expansion-> macro core::std::assert",
-              "src/lib.rs:3:9: 3:28: macro core::std::assert --direct-call-> core::panicking::panic"
-            ]
-          }
-        ],
-        "has-panic-docs": false,
+        "kind": "panic-invocation",
+        "level": "deny",
+        "reason": "panic sink core::panicking::panic",
         "root": "macro_expansion::macro_wrapped",
-        "root-declaration": "src/lib.rs:13:1",
-        "root-kind": "concrete"
+        "root-kind": "concrete",
+        "span": "src/lib.rs:14:5: 14:25",
+        "target": "core::panicking::panic",
+        "trace": [
+          "src/lib.rs:14:5: 14:25: macro_expansion::macro_wrapped --macro-expansion-> macro macro_expansion::static_assert",
+          "src/lib.rs:9:9: 9:34: macro macro_expansion::static_assert --macro-expansion-> macro macro_expansion::const_assert",
+          "src/lib.rs:3:9: 3:28: macro macro_expansion::const_assert --macro-expansion-> macro core::std::assert",
+          "src/lib.rs:3:9: 3:28: macro core::std::assert --direct-call-> core::panicking::panic"
+        ]
       }
     ],
+    "format-version": 4,
+    "reason": "sniff-test-artifact",
     "rustc-version": "[RUSTC_VERSION]",
     "scope": "workspace",
     "tool-version": "0.1.0"

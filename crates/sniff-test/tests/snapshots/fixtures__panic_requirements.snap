@@ -4,7 +4,6 @@ expression: messages
 ---
 [
   {
-    "analysis-findings": [],
     "artifact": {
       "artifact-id": "[ARTIFACT_ID]",
       "crate-name": "panic_requirements",
@@ -18,132 +17,83 @@ expression: messages
       "package-version": "0.1.0",
       "target": null
     },
-    "concrete-roots": 6,
     "dependencies": [],
-    "dependency-cache": {
-      "failed": 0,
-      "hits": 0,
-      "total": 0
-    },
-    "format-version": 3,
-    "generic-roots": 0,
-    "reason": "sniff-test-artifact",
-    "roots": [
+    "findings": [
       {
-        "findings": [
-          {
-            "edge": "panic_requirements::bullet_without_marker --direct-call-> panic_requirements::documented_ratio",
-            "kind": "documented-panic",
-            "level": "warn",
-            "reason": "panic_requirements::documented_ratio documents when it may panic under # Panics",
-            "span": "src/lib.rs:31:5: 31:41",
-            "target": "panic_requirements::documented_ratio",
-            "trace": [
-              "src/lib.rs:31:5: 31:41: panic_requirements::bullet_without_marker --direct-call-> panic_requirements::documented_ratio"
-            ]
-          }
-        ],
-        "has-panic-docs": false,
+        "kind": "documented-panic",
+        "level": "warn",
+        "reason": "panic_requirements::documented_ratio documents when it may panic under # Panics",
         "root": "panic_requirements::bullet_without_marker",
-        "root-declaration": "src/lib.rs:29:1",
-        "root-kind": "concrete"
+        "root-kind": "concrete",
+        "span": "src/lib.rs:31:5: 31:41",
+        "target": "panic_requirements::documented_ratio",
+        "trace": [
+          "src/lib.rs:31:5: 31:41: panic_requirements::bullet_without_marker --direct-call-> panic_requirements::documented_ratio"
+        ]
       },
       {
-        "findings": [
-          {
-            "edge": "panic_requirements::empty_marker --direct-call-> panic_requirements::documented_ratio",
-            "kind": "documented-panic",
-            "level": "warn",
-            "reason": "panic_requirements::documented_ratio documents when it may panic under # Panics",
-            "span": "src/lib.rs:36:5: 36:41",
-            "target": "panic_requirements::documented_ratio",
-            "trace": [
-              "src/lib.rs:36:5: 36:41: panic_requirements::empty_marker --direct-call-> panic_requirements::documented_ratio"
-            ]
-          }
-        ],
-        "has-panic-docs": false,
+        "kind": "documented-panic",
+        "level": "warn",
+        "reason": "panic_requirements::documented_ratio documents when it may panic under # Panics",
         "root": "panic_requirements::empty_marker",
-        "root-declaration": "src/lib.rs:34:1",
-        "root-kind": "concrete"
+        "root-kind": "concrete",
+        "span": "src/lib.rs:36:5: 36:41",
+        "target": "panic_requirements::documented_ratio",
+        "trace": [
+          "src/lib.rs:36:5: 36:41: panic_requirements::empty_marker --direct-call-> panic_requirements::documented_ratio"
+        ]
       },
       {
-        "findings": [
-          {
-            "edge": "panic_requirements::empty_requirement --direct-call-> panic_requirements::documented_ratio",
-            "kind": "documented-panic",
-            "level": "warn",
-            "reason": "panic_requirements::documented_ratio documents when it may panic under # Panics",
-            "span": "src/lib.rs:44:5: 44:41",
-            "target": "panic_requirements::documented_ratio",
-            "trace": [
-              "src/lib.rs:44:5: 44:41: panic_requirements::empty_requirement --direct-call-> panic_requirements::documented_ratio"
-            ]
-          }
-        ],
-        "has-panic-docs": false,
+        "kind": "documented-panic",
+        "level": "warn",
+        "reason": "panic_requirements::documented_ratio documents when it may panic under # Panics",
         "root": "panic_requirements::empty_requirement",
-        "root-declaration": "src/lib.rs:39:1",
-        "root-kind": "concrete"
+        "root-kind": "concrete",
+        "span": "src/lib.rs:44:5: 44:41",
+        "target": "panic_requirements::documented_ratio",
+        "trace": [
+          "src/lib.rs:44:5: 44:41: panic_requirements::empty_requirement --direct-call-> panic_requirements::documented_ratio"
+        ]
       },
       {
-        "findings": [
-          {
-            "edge": "panic_requirements::safety_marker_does_not_satisfy_panic --direct-call-> panic_requirements::documented_ratio",
-            "kind": "documented-panic",
-            "level": "warn",
-            "reason": "panic_requirements::documented_ratio documents when it may panic under # Panics",
-            "span": "src/lib.rs:53:5: 53:41",
-            "target": "panic_requirements::documented_ratio",
-            "trace": [
-              "src/lib.rs:53:5: 53:41: panic_requirements::safety_marker_does_not_satisfy_panic --direct-call-> panic_requirements::documented_ratio"
-            ]
-          }
-        ],
-        "has-panic-docs": false,
+        "kind": "documented-panic",
+        "level": "warn",
+        "reason": "panic_requirements::documented_ratio documents when it may panic under # Panics",
         "root": "panic_requirements::safety_marker_does_not_satisfy_panic",
-        "root-declaration": "src/lib.rs:47:1",
-        "root-kind": "concrete"
+        "root-kind": "concrete",
+        "span": "src/lib.rs:53:5: 53:41",
+        "target": "panic_requirements::documented_ratio",
+        "trace": [
+          "src/lib.rs:53:5: 53:41: panic_requirements::safety_marker_does_not_satisfy_panic --direct-call-> panic_requirements::documented_ratio"
+        ]
       },
       {
-        "findings": [
-          {
-            "edge": "panic_requirements::safety_marker_stops_partial_panic_block --direct-call-> panic_requirements::documented_ratio",
-            "kind": "documented-panic",
-            "level": "warn",
-            "reason": "panic_requirements::documented_ratio documents when it may panic under # Panics",
-            "span": "src/lib.rs:62:5: 62:41",
-            "target": "panic_requirements::documented_ratio",
-            "trace": [
-              "src/lib.rs:62:5: 62:41: panic_requirements::safety_marker_stops_partial_panic_block --direct-call-> panic_requirements::documented_ratio"
-            ]
-          }
-        ],
-        "has-panic-docs": false,
+        "kind": "documented-panic",
+        "level": "warn",
+        "reason": "panic_requirements::documented_ratio documents when it may panic under # Panics",
         "root": "panic_requirements::safety_marker_stops_partial_panic_block",
-        "root-declaration": "src/lib.rs:56:1",
-        "root-kind": "concrete"
+        "root-kind": "concrete",
+        "span": "src/lib.rs:62:5: 62:41",
+        "target": "panic_requirements::documented_ratio",
+        "trace": [
+          "src/lib.rs:62:5: 62:41: panic_requirements::safety_marker_stops_partial_panic_block --direct-call-> panic_requirements::documented_ratio"
+        ]
       },
       {
-        "findings": [
-          {
-            "edge": "panic_requirements::unnamed_marker --direct-call-> panic_requirements::documented_ratio",
-            "kind": "documented-panic",
-            "level": "warn",
-            "reason": "panic_requirements::documented_ratio documents when it may panic under # Panics",
-            "span": "src/lib.rs:26:5: 26:41",
-            "target": "panic_requirements::documented_ratio",
-            "trace": [
-              "src/lib.rs:26:5: 26:41: panic_requirements::unnamed_marker --direct-call-> panic_requirements::documented_ratio"
-            ]
-          }
-        ],
-        "has-panic-docs": false,
+        "kind": "documented-panic",
+        "level": "warn",
+        "reason": "panic_requirements::documented_ratio documents when it may panic under # Panics",
         "root": "panic_requirements::unnamed_marker",
-        "root-declaration": "src/lib.rs:24:1",
-        "root-kind": "concrete"
+        "root-kind": "concrete",
+        "span": "src/lib.rs:26:5: 26:41",
+        "target": "panic_requirements::documented_ratio",
+        "trace": [
+          "src/lib.rs:26:5: 26:41: panic_requirements::unnamed_marker --direct-call-> panic_requirements::documented_ratio"
+        ]
       }
     ],
+    "format-version": 4,
+    "reason": "sniff-test-artifact",
     "rustc-version": "[RUSTC_VERSION]",
     "scope": "workspace",
     "tool-version": "0.1.0"

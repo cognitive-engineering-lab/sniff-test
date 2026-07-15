@@ -4,7 +4,6 @@ expression: messages
 ---
 [
   {
-    "analysis-findings": [],
     "artifact": {
       "artifact-id": "[ARTIFACT_ID]",
       "crate-name": "safety_requirements",
@@ -18,80 +17,69 @@ expression: messages
       "package-version": null,
       "target": null
     },
-    "concrete-roots": 0,
     "dependencies": [],
-    "dependency-cache": {
-      "failed": 0,
-      "hits": 0,
-      "total": 0
-    },
-    "format-version": 3,
-    "generic-roots": 0,
+    "findings": [
+      {
+        "function": "safety_requirements::undocumented_public",
+        "kind": "missing-safety-docs",
+        "level": "warn",
+        "reason": "public unsafe function `safety_requirements::undocumented_public` is missing # Safety docs",
+        "span": "[FIXTURE]/src/lib.rs:33:1: 33:57"
+      },
+      {
+        "function": "safety_requirements::missing_requirement",
+        "kind": "unsafe-call-missing-requirements",
+        "level": "warn",
+        "missing-requirements": [
+          "initialized: pointer must reference initialized memory."
+        ],
+        "reason": "unsafe call to `safety_requirements::read_byte` does not satisfy all # Safety requirements",
+        "span": "[FIXTURE]/src/lib.rs:75:14: 75:37",
+        "target": "safety_requirements::read_byte"
+      },
+      {
+        "function": "safety_requirements::safety_marker_boundary_missing_requirements",
+        "kind": "unsafe-call-missing-requirements",
+        "level": "warn",
+        "missing-requirements": [
+          "valid_ptr: pointer must be non-null.",
+          "initialized: pointer must reference initialized memory."
+        ],
+        "reason": "unsafe call to `safety_requirements::read_byte` does not satisfy all # Safety requirements",
+        "span": "[FIXTURE]/src/lib.rs:86:14: 86:37",
+        "target": "safety_requirements::read_byte"
+      },
+      {
+        "function": "safety_requirements::missing_justification",
+        "kind": "unsafe-call-missing-justification",
+        "level": "warn",
+        "reason": "unsafe call to `safety_requirements::private_unsafe_no_docs` has no `// SAFETY:` justification",
+        "span": "[FIXTURE]/src/lib.rs:90:14: 90:38",
+        "target": "safety_requirements::private_unsafe_no_docs"
+      },
+      {
+        "function": "safety_requirements::unsafe_fn_pointer_missing_justification",
+        "kind": "unsafe-call-missing-justification",
+        "level": "warn",
+        "reason": "unsafe call to `unsafe function pointer` has no `// SAFETY:` justification",
+        "span": "[FIXTURE]/src/lib.rs:103:14: 103:24",
+        "target": "unsafe function pointer"
+      },
+      {
+        "function": "safety_requirements::generic_unsafe_trait_method_missing",
+        "kind": "unsafe-call-missing-requirements",
+        "level": "warn",
+        "missing-requirements": [
+          "valid_ptr: pointer must be non-null."
+        ],
+        "reason": "unsafe call to `safety_requirements::UnsafeGreeter::greet` does not satisfy all # Safety requirements",
+        "span": "[FIXTURE]/src/lib.rs:139:14: 139:32",
+        "target": "safety_requirements::UnsafeGreeter::greet"
+      }
+    ],
+    "format-version": 4,
     "reason": "sniff-test-artifact",
-    "roots": [],
     "rustc-version": "[RUSTC_VERSION]",
-    "safety": {
-      "findings": [
-        {
-          "function": "safety_requirements::undocumented_public",
-          "kind": "missing-safety-docs",
-          "level": "warn",
-          "reason": "public unsafe function `safety_requirements::undocumented_public` is missing # Safety docs",
-          "span": "[FIXTURE]/src/lib.rs:33:1: 33:57",
-          "target": null
-        },
-        {
-          "function": "safety_requirements::missing_requirement",
-          "kind": "unsafe-call-missing-requirements",
-          "level": "warn",
-          "missing-requirements": [
-            "initialized: pointer must reference initialized memory."
-          ],
-          "reason": "unsafe call to `safety_requirements::read_byte` does not satisfy all # Safety requirements",
-          "span": "[FIXTURE]/src/lib.rs:75:14: 75:37",
-          "target": "safety_requirements::read_byte"
-        },
-        {
-          "function": "safety_requirements::safety_marker_boundary_missing_requirements",
-          "kind": "unsafe-call-missing-requirements",
-          "level": "warn",
-          "missing-requirements": [
-            "valid_ptr: pointer must be non-null.",
-            "initialized: pointer must reference initialized memory."
-          ],
-          "reason": "unsafe call to `safety_requirements::read_byte` does not satisfy all # Safety requirements",
-          "span": "[FIXTURE]/src/lib.rs:86:14: 86:37",
-          "target": "safety_requirements::read_byte"
-        },
-        {
-          "function": "safety_requirements::missing_justification",
-          "kind": "unsafe-call-missing-justification",
-          "level": "warn",
-          "reason": "unsafe call to `safety_requirements::private_unsafe_no_docs` has no `// SAFETY:` justification",
-          "span": "[FIXTURE]/src/lib.rs:90:14: 90:38",
-          "target": "safety_requirements::private_unsafe_no_docs"
-        },
-        {
-          "function": "safety_requirements::unsafe_fn_pointer_missing_justification",
-          "kind": "unsafe-call-missing-justification",
-          "level": "warn",
-          "reason": "unsafe call to `unsafe function pointer` has no `// SAFETY:` justification",
-          "span": "[FIXTURE]/src/lib.rs:103:14: 103:24",
-          "target": "unsafe function pointer"
-        },
-        {
-          "function": "safety_requirements::generic_unsafe_trait_method_missing",
-          "kind": "unsafe-call-missing-requirements",
-          "level": "warn",
-          "missing-requirements": [
-            "valid_ptr: pointer must be non-null."
-          ],
-          "reason": "unsafe call to `safety_requirements::UnsafeGreeter::greet` does not satisfy all # Safety requirements",
-          "span": "[FIXTURE]/src/lib.rs:139:14: 139:32",
-          "target": "safety_requirements::UnsafeGreeter::greet"
-        }
-      ]
-    },
     "scope": "workspace",
     "tool-version": "0.1.0"
   }

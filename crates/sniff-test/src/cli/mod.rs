@@ -24,8 +24,8 @@ use crate::report_roots::{
 use crate::safety::{SafetyAnalysis, analyze_safety};
 use reachability::{
     ReachabilityContext, ReachabilityControl, ReachabilityEdge, ReachabilityEdgeKind,
-    ReachabilityGraph, ReachabilityHooks, ReachabilityIndex, ReachabilityNodeKind,
-    ReachabilityOptions, ReachabilityRoot, ReachabilitySnapshot, ReachabilityView,
+    ReachabilityGraph, ReachabilityHooks, ReachabilityIndex, ReachabilityOptions, ReachabilityRoot,
+    ReachabilitySnapshot, ReachabilityView,
 };
 use rustc_hir::def_id::{DefId, LOCAL_CRATE};
 use rustc_middle::ty::{Instance, TyCtxt};
@@ -56,11 +56,10 @@ use self::plugin::{
     rustc_version, rustc_version_dir_component,
 };
 use self::report::{
-    PanicObligationReport, PanicRootKind, PanicRootReport, ReportDetailKind, render_node,
-    render_span_start,
+    FindingKind, FindingReport, PanicObligationReport, PanicRootKind, PanicRootReport, render_node,
 };
 use self::rustc_invocation::RustcInvocation;
-use self::safety_report::SafetyArtifactReport;
+use self::safety_report::safety_finding_reports;
 
 #[must_use]
 pub fn cargo_frontend() -> ExitCode {
@@ -561,52 +560,56 @@ fn write_unit_outcome_file(args: &SniffTestArgs, outcome: &UnitOutcome) {
     }
 }
 
-#[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "kebab-case")]
-struct AnalysisFindingReport {
-    kind: ReportRootFindingKind,
-    level: LintLevel,
-    reason: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    target: Option<String>,
-}
-
 fn report_root_finding_reports(
     empty_report_roots: bool,
     missing_roots: &[MissingReportRoot],
     lints: AnalysisLintConfig,
     report_roots: &ReportRootSet,
     crate_name: &str,
-) -> Vec<AnalysisFindingReport> {
+) -> Vec<FindingReport> {
     let mut findings = Vec::new();
     if empty_report_roots {
         let kind = ReportRootFindingKind::EmptyReportRoots;
         let level = kind.lint_level(lints);
         if level != LintLevel::Allow {
-            findings.push(AnalysisFindingReport {
-                kind,
+            findings.push(FindingReport {
+                kind: kind.into(),
                 level,
+                root: None,
+                root_kind: None,
+                function: None,
+                target: None,
+                span: None,
                 reason: format!(
                     "`[analysis].report-roots = {}` selected no functions in `{crate_name}`",
                     report_roots.description()
                 ),
-                target: None,
+                trace: Vec::new(),
+                missing_requirements: Vec::new(),
+                requirements: Vec::new(),
             });
         }
     }
     findings.extend(missing_roots.iter().filter_map(|root| {
         let kind = root.reason.finding_kind();
         let level = kind.lint_level(lints);
-        (level != LintLevel::Allow).then(|| AnalysisFindingReport {
-            kind,
+        (level != LintLevel::Allow).then(|| FindingReport {
+            kind: kind.into(),
             level,
+            root: None,
+            root_kind: None,
+            function: None,
+            target: Some(root.path.clone()),
+            span: None,
             reason: match root.reason {
                 MissingRootReason::NotFound => String::from("configured report root was not found"),
                 MissingRootReason::Ignored => String::from(
                     "configured report root is excluded by `[panics].ignored-namespaces`",
                 ),
             },
-            target: Some(root.path.clone()),
+            trace: Vec::new(),
+            missing_requirements: Vec::new(),
+            requirements: Vec::new(),
         })
     }));
     findings
@@ -627,12 +630,19 @@ impl AnalysisArtifact {
         safety_analysis: SafetyAnalysis,
         safety_lints: SafetyLintConfig,
         ambiguous_safety_requirement: LintLevel,
-        analysis_findings: Vec<AnalysisFindingReport>,
+        mut findings: Vec<FindingReport>,
     ) -> Self {
         let dependencies = dependency_cache.resolved_dependencies();
         let artifact = artifact_info(tcx, invocation);
         let tool_version = env!("CARGO_PKG_VERSION").to_owned();
         let rustc_version = rustc_version();
+        findings.extend(root_analysis.findings);
+        findings.extend(safety_finding_reports(
+            tcx,
+            safety_analysis,
+            safety_lints,
+            ambiguous_safety_requirement,
+        ));
         let report = AnalysisArtifactReport {
             reason: String::from("sniff-test-artifact"),
             format_version: REPORT_FORMAT_VERSION,
@@ -640,22 +650,8 @@ impl AnalysisArtifact {
             rustc_version: rustc_version.clone(),
             artifact: artifact.clone(),
             scope,
-            dependency_cache: DependencyCacheReport {
-                hits: dependency_cache.hit_count(),
-                total: dependency_cache.dependency_count(),
-                failed: dependency_cache.failed_count(),
-            },
             dependencies: dependencies.clone(),
-            analysis_findings,
-            concrete_roots: root_analysis.concrete_roots,
-            generic_roots: root_analysis.generic_roots,
-            roots: root_analysis.roots,
-            safety: SafetyArtifactReport::from_analysis(
-                tcx,
-                safety_analysis,
-                safety_lints,
-                ambiguous_safety_requirement,
-            ),
+            findings,
         };
         let cache = CachedArtifactAnalysis::new(
             tool_version,
@@ -678,39 +674,22 @@ pub(crate) struct AnalysisArtifactReport {
     rustc_version: String,
     artifact: CachedArtifactInfo,
     scope: CrateOutputScope,
-    dependency_cache: DependencyCacheReport,
     dependencies: Vec<CachedDependencyRef>,
-    analysis_findings: Vec<AnalysisFindingReport>,
-    concrete_roots: usize,
-    generic_roots: usize,
-    roots: Vec<PanicRootReport>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    safety: Option<SafetyArtifactReport>,
+    findings: Vec<FindingReport>,
 }
 
 impl AnalysisArtifactReport {
     fn has_denied_findings(&self) -> bool {
-        self.analysis_findings
+        self.findings
             .iter()
             .any(|finding| finding.level == LintLevel::Deny)
-            || self
-                .roots
-                .iter()
-                .flat_map(|root| &root.findings)
-                .any(|finding| finding.level == LintLevel::Deny)
-            || self
-                .safety
-                .as_ref()
-                .is_some_and(SafetyArtifactReport::has_denied_findings)
     }
 }
 
 struct RootAnalysis {
     missing_roots: Vec<MissingReportRoot>,
-    concrete_roots: usize,
-    generic_roots: usize,
     function_summaries: Vec<CachedFunctionSummary>,
-    roots: Vec<PanicRootReport>,
+    findings: Vec<FindingReport>,
 }
 
 fn analyze_report_roots<'tcx>(
@@ -723,10 +702,8 @@ fn analyze_report_roots<'tcx>(
 ) -> RootAnalysis {
     let mut analysis = RootAnalysis {
         missing_roots: selection.missing_roots,
-        concrete_roots: 0,
-        generic_roots: 0,
         function_summaries: Vec::new(),
-        roots: Vec::new(),
+        findings: Vec::new(),
     };
     let mut reachability = ReachabilityIndex::new(tcx);
 
@@ -753,13 +730,7 @@ fn analyze_report_roots<'tcx>(
             diagnostics,
         );
         analysis.function_summaries.push(summary);
-        if !report.findings.is_empty() {
-            match report.root_kind {
-                PanicRootKind::Concrete => analysis.concrete_roots += 1,
-                PanicRootKind::Generic => analysis.generic_roots += 1,
-            }
-            analysis.roots.push(report);
-        }
+        analysis.findings.extend(report.findings);
     }
 
     analysis
@@ -820,17 +791,7 @@ impl CrateOutputScope {
     }
 }
 
-const REPORT_FORMAT_VERSION: u32 = 3;
-
-#[derive(Debug, Clone, Copy, Serialize)]
-#[serde(rename_all = "kebab-case")]
-struct DependencyCacheReport {
-    hits: usize,
-    total: usize,
-    /// Cache files that exist but were unreadable or version-mismatched,
-    /// distinguishing corruption from dependencies never analyzed.
-    failed: usize,
-}
+const REPORT_FORMAT_VERSION: u32 = 4;
 
 fn render_json_analysis_artifact_report(report: &AnalysisArtifactReport) -> Option<String> {
     match serde_json::to_string(report) {
@@ -1012,12 +973,7 @@ fn collect_panic_findings<'tcx>(
 ) -> PanicRootReport {
     let view = graph.view(result);
     let root_node = view.root();
-    let mut report = PanicRootReport::new(
-        render_node(tcx, root_node.kind()),
-        collection.root_kind,
-        root_declaration_span(tcx, root_node.kind()),
-        crate::panics::has_panic_docs(tcx, collection.root_def_id, collection.config),
-    );
+    let mut report = PanicRootReport::new(render_node(tcx, root_node.kind()), collection.root_kind);
 
     for evidence in &analysis.evidence {
         match evidence.decision {
@@ -1111,7 +1067,7 @@ fn emit_raw_panic_finding<'tcx>(
     collection: &PanicFindingCollection<'_>,
     report: &mut PanicRootReport,
 ) {
-    let kind = ReportDetailKind::from_evidence(&evidence.kind);
+    let kind = FindingKind::from_evidence(&evidence.kind);
     let level = kind.lint_level(collection.config.lints);
     if level == LintLevel::Allow {
         return;
@@ -1137,7 +1093,7 @@ fn emit_indirect_boundary_finding<'tcx>(
     collection: &PanicFindingCollection<'_>,
     report: &mut PanicRootReport,
 ) {
-    let level = ReportDetailKind::IndirectCallBoundary.lint_level(collection.config.lints);
+    let level = FindingKind::IndirectCallBoundary.lint_level(collection.config.lints);
     if level == LintLevel::Allow {
         return;
     }
@@ -1171,9 +1127,9 @@ fn emit_panic_obligation_finding<'tcx>(
 ) {
     let trusted = is_trusted_panic_obligation(tcx, finding.def_id, collection.config);
     let kind = if trusted {
-        ReportDetailKind::TrustedPanic
+        FindingKind::TrustedPanic
     } else {
-        ReportDetailKind::DocumentedPanic
+        FindingKind::DocumentedPanic
     };
     let level = kind.lint_level(collection.config.lints);
     if level == LintLevel::Allow {
@@ -1205,18 +1161,6 @@ fn emit_panic_obligation_finding<'tcx>(
                 include_stack: collection.diagnostics.include_stack,
             },
         );
-    }
-}
-
-fn root_declaration_span(tcx: TyCtxt<'_>, root: &ReachabilityNodeKind<'_>) -> Option<String> {
-    match root {
-        ReachabilityNodeKind::Instance(instance) => {
-            Some(render_span_start(tcx, tcx.def_span(instance.def_id())))
-        }
-        ReachabilityNodeKind::CompilerAssert { .. }
-        | ReachabilityNodeKind::MacroExpansion { .. }
-        | ReachabilityNodeKind::IndirectCall { .. }
-        | ReachabilityNodeKind::DynObjectCast { .. } => None,
     }
 }
 
@@ -1294,7 +1238,7 @@ fn emit_cached_dependency_findings<'tcx>(
                 report,
             );
         } else if summary.raw_panic_paths > 0 || !summary.analysis_complete {
-            let kind = ReportDetailKind::CachedDependencyPanic;
+            let kind = FindingKind::CachedDependencyPanic;
             let level = kind.lint_level(collection.config.lints);
             if level == LintLevel::Allow {
                 continue;
@@ -1331,9 +1275,9 @@ fn emit_cached_dependency_obligation_finding<'tcx>(
 ) {
     let trusted = is_trusted_panic_obligation(tcx, finding.def_id, collection.config);
     let kind = if trusted {
-        ReportDetailKind::TrustedPanic
+        FindingKind::TrustedPanic
     } else {
-        ReportDetailKind::DocumentedPanic
+        FindingKind::DocumentedPanic
     };
     let level = kind.lint_level(collection.config.lints);
     if level == LintLevel::Allow {
@@ -1380,7 +1324,63 @@ fn load_config(args: &SniffTestArgs) -> SniffTestConfig {
 mod tests {
     use std::path::{Path, PathBuf};
 
-    use super::{CrateOutputScope, metadata_cargo_args};
+    use super::report::{FindingKind, FindingReport};
+    use super::{
+        AnalysisArtifactReport, CrateOutputScope, REPORT_FORMAT_VERSION, metadata_cargo_args,
+    };
+    use crate::cache::CachedArtifactInfo;
+    use crate::config::LintLevel;
+
+    #[test]
+    fn public_report_has_one_flat_findings_array() {
+        let report = AnalysisArtifactReport {
+            reason: String::from("sniff-test-artifact"),
+            format_version: REPORT_FORMAT_VERSION,
+            tool_version: String::from("0.1.0"),
+            rustc_version: String::from("rustc test"),
+            artifact: CachedArtifactInfo {
+                artifact_id: String::from("demo-1234"),
+                crate_name: String::from("demo"),
+                crate_types: vec![String::from("lib")],
+                package_name: None,
+                package_version: None,
+                manifest_path: None,
+                target: None,
+                metadata: None,
+                extra_filename: None,
+            },
+            scope: CrateOutputScope::Workspace,
+            dependencies: Vec::new(),
+            findings: vec![FindingReport {
+                kind: FindingKind::EmptyReportRoots,
+                level: LintLevel::Warn,
+                root: None,
+                root_kind: None,
+                function: None,
+                target: None,
+                span: None,
+                reason: String::from("no roots"),
+                trace: Vec::new(),
+                missing_requirements: Vec::new(),
+                requirements: Vec::new(),
+            }],
+        };
+
+        let json = serde_json::to_value(report).expect("serialize report");
+        let object = json.as_object().expect("report object");
+        assert_eq!(object["format-version"], 4);
+        assert_eq!(object["findings"].as_array().expect("findings").len(), 1);
+        for removed in [
+            "analysis-findings",
+            "roots",
+            "safety",
+            "concrete-roots",
+            "generic-roots",
+            "dependency-cache",
+        ] {
+            assert!(!object.contains_key(removed), "removed field {removed}");
+        }
+    }
 
     #[test]
     fn output_scope_classifies_workspace_dependency_and_fallback_crates() {

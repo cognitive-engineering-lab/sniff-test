@@ -4,7 +4,6 @@ expression: messages
 ---
 [
   {
-    "analysis-findings": [],
     "artifact": {
       "artifact-id": "[ARTIFACT_ID]",
       "crate-name": "trait_default_method",
@@ -18,39 +17,25 @@ expression: messages
       "package-version": "0.1.0",
       "target": null
     },
-    "concrete-roots": 0,
     "dependencies": [],
-    "dependency-cache": {
-      "failed": 0,
-      "hits": 0,
-      "total": 0
-    },
-    "format-version": 3,
-    "generic-roots": 1,
-    "reason": "sniff-test-artifact",
-    "roots": [
+    "findings": [
       {
-        "findings": [
-          {
-            "edge": "trait_default_method::TraitDefaultMethod::default_panic --macro-expansion-> macro std::panic",
-            "kind": "panic-invocation",
-            "level": "deny",
-            "reason": "panic sink core::std::rt::panic_fmt",
-            "span": "src/lib.rs:3:9: 3:45",
-            "target": "core::std::rt::panic_fmt",
-            "trace": [
-              "src/lib.rs:3:9: 3:45: trait_default_method::TraitDefaultMethod::default_panic --macro-expansion-> macro std::panic",
-              "src/lib.rs:3:9: 3:45: macro std::panic --macro-expansion-> macro core::std::panic::panic_2021",
-              "[SYSROOT]/lib/rustlib/src/rust/library/core/src/panic.rs:62:9: 62:73: macro core::std::panic::panic_2021 --direct-call-> core::std::rt::panic_fmt"
-            ]
-          }
-        ],
-        "has-panic-docs": false,
+        "kind": "panic-invocation",
+        "level": "deny",
+        "reason": "panic sink core::std::rt::panic_fmt",
         "root": "trait_default_method::TraitDefaultMethod::default_panic",
-        "root-declaration": "src/lib.rs:2:5",
-        "root-kind": "generic"
+        "root-kind": "generic",
+        "span": "src/lib.rs:3:9: 3:45",
+        "target": "core::std::rt::panic_fmt",
+        "trace": [
+          "src/lib.rs:3:9: 3:45: trait_default_method::TraitDefaultMethod::default_panic --macro-expansion-> macro std::panic",
+          "src/lib.rs:3:9: 3:45: macro std::panic --macro-expansion-> macro core::std::panic::panic_2021",
+          "[SYSROOT]/lib/rustlib/src/rust/library/core/src/panic.rs:62:9: 62:73: macro core::std::panic::panic_2021 --direct-call-> core::std::rt::panic_fmt"
+        ]
       }
     ],
+    "format-version": 4,
+    "reason": "sniff-test-artifact",
     "rustc-version": "[RUSTC_VERSION]",
     "scope": "workspace",
     "tool-version": "0.1.0"

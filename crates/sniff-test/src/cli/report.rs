@@ -6,6 +6,8 @@ use crate::panics::{
     AmbiguousPanicMarker, AmbiguousPanicRequirementName, PanicEvidence, PanicEvidenceKind,
     trace_edges_until, trigger_edge_id,
 };
+use crate::report_roots::ReportRootFindingKind;
+use crate::safety::SafetyFindingKind;
 use reachability::{
     CompilerAssertLocal, CompilerAssertLocalRole, ReachabilityEdge, ReachabilityEdgeId,
     ReachabilityGraph, ReachabilityNodeKind,
@@ -13,39 +15,28 @@ use reachability::{
 use rustc_hir::def_id::DefId;
 use rustc_middle::mir::{AssertKind, BinOp, Operand, Place};
 use rustc_middle::ty::TyCtxt;
-use rustc_span::Pos;
 use serde::Serialize;
 
-#[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "kebab-case")]
+#[derive(Debug, Clone)]
 pub(crate) struct PanicRootReport {
     pub(crate) root: String,
     pub(crate) root_kind: PanicRootKind,
-    pub(crate) root_declaration: Option<String>,
-    pub(crate) has_panic_docs: bool,
-    pub(crate) findings: Vec<PanicFindingReport>,
+    pub(crate) findings: Vec<FindingReport>,
 }
 
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct PanicObligationReport {
     pub(crate) obligation_edge_id: Option<ReachabilityEdgeId>,
     pub(crate) documented_def_id: DefId,
-    pub(crate) kind: ReportDetailKind,
+    pub(crate) kind: FindingKind,
     pub(crate) level: LintLevel,
 }
 
 impl PanicRootReport {
-    pub(crate) fn new(
-        root: String,
-        root_kind: PanicRootKind,
-        root_declaration: Option<String>,
-        has_panic_docs: bool,
-    ) -> Self {
+    pub(crate) fn new(root: String, root_kind: PanicRootKind) -> Self {
         Self {
             root,
             root_kind,
-            root_declaration,
-            has_panic_docs,
             findings: Vec::new(),
         }
     }
@@ -59,16 +50,20 @@ impl PanicRootReport {
     ) {
         let trigger_edge_id = trigger_edge_id(graph, evidence);
         let trigger_edge = graph.edge(trigger_edge_id);
-        let kind = ReportDetailKind::from_evidence(&evidence.kind);
+        let kind = FindingKind::from_evidence(&evidence.kind);
         let (reason, target) = report_evidence_kind(tcx, graph, evidence);
-        self.push_finding(PanicFindingReport {
+        self.push_finding(FindingReport {
             kind,
             level,
-            span: render_span(tcx, trigger_edge.span),
-            edge: Some(render_edge_without_span(tcx, graph, trigger_edge)),
-            reason,
+            root: None,
+            root_kind: None,
+            function: None,
             target,
+            span: Some(render_span(tcx, trigger_edge.span)),
+            reason,
             trace: render_trace(tcx, graph, &evidence.trace.edge_ids),
+            missing_requirements: Vec::new(),
+            requirements: Vec::new(),
         });
     }
 
@@ -80,33 +75,29 @@ impl PanicRootReport {
         obligation: PanicObligationReport,
     ) {
         let documented = canonical_namespace(tcx, obligation.documented_def_id);
-        let (span, edge) = obligation.obligation_edge_id.map_or_else(
-            || {
-                (
-                    render_span(tcx, tcx.def_span(obligation.documented_def_id)),
-                    Some(String::from("report root documents panic behavior")),
-                )
-            },
+        let span = obligation.obligation_edge_id.map_or_else(
+            || render_span(tcx, tcx.def_span(obligation.documented_def_id)),
             |edge_id| {
                 let edge = graph.edge(edge_id);
-                (
-                    render_span(tcx, edge.span),
-                    Some(render_edge_without_span(tcx, graph, edge)),
-                )
+                render_span(tcx, edge.span)
             },
         );
-        self.push_finding(PanicFindingReport {
+        self.push_finding(FindingReport {
             kind: obligation.kind,
             level: obligation.level,
-            span,
-            edge,
+            root: None,
+            root_kind: None,
+            function: None,
+            target: Some(documented.clone()),
+            span: Some(span),
             reason: documented_panic_reason(&documented),
-            target: Some(documented),
             trace: render_trace(
                 tcx,
                 graph,
                 &trace_edges_until(evidence, obligation.obligation_edge_id),
             ),
+            missing_requirements: Vec::new(),
+            requirements: Vec::new(),
         });
     }
 
@@ -119,14 +110,18 @@ impl PanicRootReport {
         level: LintLevel,
     ) {
         let edge = graph.edge(edge_id);
-        self.push_finding(PanicFindingReport {
-            kind: ReportDetailKind::CachedDependencyPanic,
+        self.push_finding(FindingReport {
+            kind: FindingKind::CachedDependencyPanic,
             level,
-            span: render_span(tcx, edge.span),
-            edge: Some(render_edge_without_span(tcx, graph, edge)),
-            reason: cached_dependency_panic_reason(summary),
+            root: None,
+            root_kind: None,
+            function: None,
             target: Some(summary.path.clone()),
+            span: Some(render_span(tcx, edge.span)),
+            reason: cached_dependency_panic_reason(summary),
             trace: vec![render_edge(tcx, graph, edge_id)],
+            missing_requirements: Vec::new(),
+            requirements: Vec::new(),
         });
     }
 
@@ -136,18 +131,22 @@ impl PanicRootReport {
         graph: &ReachabilityGraph<'tcx>,
         edge_id: ReachabilityEdgeId,
         summary: &CachedFunctionSummary,
-        kind: ReportDetailKind,
+        kind: FindingKind,
         level: LintLevel,
     ) {
         let edge = graph.edge(edge_id);
-        self.push_finding(PanicFindingReport {
+        self.push_finding(FindingReport {
             kind,
             level,
-            span: render_span(tcx, edge.span),
-            edge: Some(render_edge_without_span(tcx, graph, edge)),
-            reason: cached_dependency_contract_reason(summary, kind),
+            root: None,
+            root_kind: None,
+            function: None,
             target: Some(summary.path.clone()),
+            span: Some(render_span(tcx, edge.span)),
+            reason: cached_dependency_contract_reason(summary, kind),
             trace: vec![render_edge(tcx, graph, edge_id)],
+            missing_requirements: Vec::new(),
+            requirements: Vec::new(),
         });
     }
 
@@ -158,17 +157,21 @@ impl PanicRootReport {
         node_limit: usize,
         level: LintLevel,
     ) {
-        self.push_finding(PanicFindingReport {
-            kind: ReportDetailKind::AnalysisIncomplete,
+        self.push_finding(FindingReport {
+            kind: FindingKind::AnalysisIncomplete,
             level,
-            span: render_span(tcx, tcx.def_span(root_def_id)),
-            edge: None,
+            root: None,
+            root_kind: None,
+            function: None,
+            target: None,
+            span: Some(render_span(tcx, tcx.def_span(root_def_id))),
             reason: format!(
                 "reachability analysis halted at the {node_limit}-instance node limit \
                  before the call graph was exhausted"
             ),
-            target: None,
             trace: Vec::new(),
+            missing_requirements: Vec::new(),
+            requirements: Vec::new(),
         });
     }
 
@@ -179,17 +182,21 @@ impl PanicRootReport {
         marker: &AmbiguousPanicMarker,
         level: LintLevel,
     ) {
-        self.push_finding(PanicFindingReport {
-            kind: ReportDetailKind::AmbiguousPanicMarker,
+        self.push_finding(FindingReport {
+            kind: FindingKind::AmbiguousPanicMarker,
             level,
-            span: render_span(tcx, marker.marker_span),
-            edge: None,
+            root: None,
+            root_kind: None,
+            function: None,
+            target: None,
+            span: Some(render_span(tcx, marker.marker_span)),
             reason: format!(
                 "one `// PANIC:` marker applies to {} panic obligation sites",
                 marker.edge_ids.len()
             ),
-            target: None,
             trace: render_trace(tcx, graph, &marker.edge_ids),
+            missing_requirements: Vec::new(),
+            requirements: Vec::new(),
         });
     }
 
@@ -204,22 +211,28 @@ impl PanicRootReport {
             .requirements
             .first()
             .map_or_else(|| tcx.def_span(name.def_id), |requirement| requirement.span);
-        self.push_finding(PanicFindingReport {
-            kind: ReportDetailKind::AmbiguousPanicRequirement,
+        self.push_finding(FindingReport {
+            kind: FindingKind::AmbiguousPanicRequirement,
             level,
-            span: render_span(tcx, span),
-            edge: None,
+            root: None,
+            root_kind: None,
+            function: None,
+            target: Some(target.clone()),
+            span: Some(render_span(tcx, span)),
             reason: format!(
                 "`{target}` has {} # Panics requirements named `{}`",
                 name.requirements.len(),
                 name.normalized_name
             ),
-            target: Some(target),
             trace: Vec::new(),
+            missing_requirements: Vec::new(),
+            requirements: Vec::new(),
         });
     }
 
-    fn push_finding(&mut self, finding: PanicFindingReport) {
+    fn push_finding(&mut self, mut finding: FindingReport) {
+        finding.root = Some(self.root.clone());
+        finding.root_kind = Some(self.root_kind);
         self.findings.push(finding);
     }
 }
@@ -233,19 +246,31 @@ pub(crate) enum PanicRootKind {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "kebab-case")]
-pub(crate) struct PanicFindingReport {
-    pub(crate) kind: ReportDetailKind,
+pub(crate) struct FindingReport {
+    pub(crate) kind: FindingKind,
     pub(crate) level: LintLevel,
-    pub(crate) span: String,
-    pub(crate) edge: Option<String>,
-    pub(crate) reason: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) root: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) root_kind: Option<PanicRootKind>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) function: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) target: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) span: Option<String>,
+    pub(crate) reason: String,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
     pub(crate) trace: Vec<String>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub(crate) missing_requirements: Vec<String>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub(crate) requirements: Vec<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "kebab-case")]
-pub(crate) enum ReportDetailKind {
+pub(crate) enum FindingKind {
     CompilerAssert,
     PanicInvocation,
     CachedDependencyPanic,
@@ -255,9 +280,19 @@ pub(crate) enum ReportDetailKind {
     AmbiguousPanicMarker,
     AmbiguousPanicRequirement,
     AnalysisIncomplete,
+    EmptyReportRoots,
+    MissingReportRoot,
+    IgnoredReportRoot,
+    MissingSafetyDocs,
+    UnsafeCallMissingJustification,
+    UnsafeCallMissingRequirements,
+    UnsafeOpMissingJustification,
+    SafetyObligationMissingJustification,
+    SafetyObligationMissingRequirements,
+    AmbiguousSafetyRequirement,
 }
 
-impl ReportDetailKind {
+impl FindingKind {
     pub(crate) fn from_evidence(kind: &PanicEvidenceKind) -> Self {
         match kind {
             PanicEvidenceKind::CompilerAssert => Self::CompilerAssert,
@@ -284,6 +319,48 @@ impl ReportDetailKind {
             Self::AnalysisIncomplete => {
                 unreachable!("analysis-incomplete level comes from `[analysis.lints]`")
             }
+            Self::EmptyReportRoots
+            | Self::MissingReportRoot
+            | Self::IgnoredReportRoot
+            | Self::MissingSafetyDocs
+            | Self::UnsafeCallMissingJustification
+            | Self::UnsafeCallMissingRequirements
+            | Self::UnsafeOpMissingJustification
+            | Self::SafetyObligationMissingJustification
+            | Self::SafetyObligationMissingRequirements
+            | Self::AmbiguousSafetyRequirement => {
+                unreachable!("non-panic finding level comes from its own policy")
+            }
+        }
+    }
+}
+
+impl From<ReportRootFindingKind> for FindingKind {
+    fn from(kind: ReportRootFindingKind) -> Self {
+        match kind {
+            ReportRootFindingKind::EmptyReportRoots => Self::EmptyReportRoots,
+            ReportRootFindingKind::MissingReportRoot => Self::MissingReportRoot,
+            ReportRootFindingKind::IgnoredReportRoot => Self::IgnoredReportRoot,
+        }
+    }
+}
+
+impl From<SafetyFindingKind> for FindingKind {
+    fn from(kind: SafetyFindingKind) -> Self {
+        match kind {
+            SafetyFindingKind::MissingSafetyDocs => Self::MissingSafetyDocs,
+            SafetyFindingKind::UnsafeCallMissingJustification => {
+                Self::UnsafeCallMissingJustification
+            }
+            SafetyFindingKind::UnsafeCallMissingRequirements => Self::UnsafeCallMissingRequirements,
+            SafetyFindingKind::UnsafeOpMissingJustification => Self::UnsafeOpMissingJustification,
+            SafetyFindingKind::SafetyObligationMissingJustification => {
+                Self::SafetyObligationMissingJustification
+            }
+            SafetyFindingKind::SafetyObligationMissingRequirements => {
+                Self::SafetyObligationMissingRequirements
+            }
+            SafetyFindingKind::AmbiguousSafetyRequirement => Self::AmbiguousSafetyRequirement,
         }
     }
 }
@@ -380,12 +457,9 @@ fn documented_panic_reason(path: &str) -> String {
     format!("{path} documents when it may panic under # Panics")
 }
 
-fn cached_dependency_contract_reason(
-    summary: &CachedFunctionSummary,
-    kind: ReportDetailKind,
-) -> String {
+fn cached_dependency_contract_reason(summary: &CachedFunctionSummary, kind: FindingKind) -> String {
     let panic_kind = match kind {
-        ReportDetailKind::TrustedPanic => "trusted panic",
+        FindingKind::TrustedPanic => "trusted panic",
         _ => "documented panic",
     };
     format!("{} has cached {panic_kind} evidence", summary.path)
@@ -536,14 +610,4 @@ fn render_assert_local_role(local: &CompilerAssertLocal) -> String {
 
 pub(crate) fn render_span(tcx: TyCtxt<'_>, span: rustc_span::Span) -> String {
     tcx.sess.source_map().span_to_diagnostic_string(span)
-}
-
-pub(crate) fn render_span_start(tcx: TyCtxt<'_>, span: rustc_span::Span) -> String {
-    let location = tcx.sess.source_map().lookup_char_pos(span.lo());
-    format!(
-        "{}:{}:{}",
-        location.file.name.prefer_local_unconditionally(),
-        location.line,
-        location.col.to_usize() + 1
-    )
 }

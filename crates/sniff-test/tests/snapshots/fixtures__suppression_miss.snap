@@ -4,7 +4,6 @@ expression: messages
 ---
 [
   {
-    "analysis-findings": [],
     "artifact": {
       "artifact-id": "[ARTIFACT_ID]",
       "crate-name": "suppression",
@@ -18,37 +17,23 @@ expression: messages
       "package-version": "0.1.0",
       "target": null
     },
-    "concrete-roots": 1,
     "dependencies": [],
-    "dependency-cache": {
-      "failed": 0,
-      "hits": 0,
-      "total": 0
-    },
-    "format-version": 3,
-    "generic-roots": 0,
-    "reason": "sniff-test-artifact",
-    "roots": [
+    "findings": [
       {
-        "findings": [
-          {
-            "edge": "suppression::unchecked_index --assert-> compiler assert index out of bounds: index `index` (_2, argument 2) may exceed length `_3` (temporary)",
-            "kind": "compiler-assert",
-            "level": "deny",
-            "reason": "compiler assert",
-            "span": "src/lib.rs:2:5: 2:18",
-            "target": "compiler assert index out of bounds: index `index` (_2, argument 2) may exceed length `_3` (temporary)",
-            "trace": [
-              "src/lib.rs:2:5: 2:18: suppression::unchecked_index --assert-> compiler assert index out of bounds: index `index` (_2, argument 2) may exceed length `_3` (temporary)"
-            ]
-          }
-        ],
-        "has-panic-docs": false,
+        "kind": "compiler-assert",
+        "level": "deny",
+        "reason": "compiler assert",
         "root": "suppression::unchecked_index",
-        "root-declaration": "src/lib.rs:1:1",
-        "root-kind": "concrete"
+        "root-kind": "concrete",
+        "span": "src/lib.rs:2:5: 2:18",
+        "target": "compiler assert index out of bounds: index `index` (_2, argument 2) may exceed length `_3` (temporary)",
+        "trace": [
+          "src/lib.rs:2:5: 2:18: suppression::unchecked_index --assert-> compiler assert index out of bounds: index `index` (_2, argument 2) may exceed length `_3` (temporary)"
+        ]
       }
     ],
+    "format-version": 4,
+    "reason": "sniff-test-artifact",
     "rustc-version": "[RUSTC_VERSION]",
     "scope": "workspace",
     "tool-version": "0.1.0"

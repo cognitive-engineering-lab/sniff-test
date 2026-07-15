@@ -4,7 +4,6 @@ expression: messages
 ---
 [
   {
-    "analysis-findings": [],
     "artifact": {
       "artifact-id": "[ARTIFACT_ID]",
       "crate-name": "documented_obligation",
@@ -18,58 +17,37 @@ expression: messages
       "package-version": "0.1.0",
       "target": null
     },
-    "concrete-roots": 2,
     "dependencies": [],
-    "dependency-cache": {
-      "failed": 0,
-      "hits": 0,
-      "total": 0
-    },
-    "format-version": 3,
-    "generic-roots": 0,
-    "reason": "sniff-test-artifact",
-    "roots": [
+    "findings": [
       {
-        "findings": [
-          {
-            "edge": "documented_obligation::reaches_documented_contract --direct-call-> documented_obligation::documented_contract",
-            "kind": "documented-panic",
-            "level": "warn",
-            "reason": "documented_obligation::documented_contract documents when it may panic under # Panics",
-            "span": "src/lib.rs:8:5: 8:30",
-            "target": "documented_obligation::documented_contract",
-            "trace": [
-              "src/lib.rs:8:5: 8:30: documented_obligation::reaches_documented_contract --direct-call-> documented_obligation::documented_contract"
-            ]
-          }
-        ],
-        "has-panic-docs": false,
+        "kind": "documented-panic",
+        "level": "warn",
+        "reason": "documented_obligation::documented_contract documents when it may panic under # Panics",
         "root": "documented_obligation::reaches_documented_contract",
-        "root-declaration": "src/lib.rs:7:1",
-        "root-kind": "concrete"
+        "root-kind": "concrete",
+        "span": "src/lib.rs:8:5: 8:30",
+        "target": "documented_obligation::documented_contract",
+        "trace": [
+          "src/lib.rs:8:5: 8:30: documented_obligation::reaches_documented_contract --direct-call-> documented_obligation::documented_contract"
+        ]
       },
       {
-        "findings": [
-          {
-            "edge": "documented_obligation::undocumented_bug --macro-expansion-> macro std::panic",
-            "kind": "panic-invocation",
-            "level": "deny",
-            "reason": "panic sink core::std::rt::panic_fmt",
-            "span": "src/lib.rs:12:5: 12:29",
-            "target": "core::std::rt::panic_fmt",
-            "trace": [
-              "src/lib.rs:12:5: 12:29: documented_obligation::undocumented_bug --macro-expansion-> macro std::panic",
-              "src/lib.rs:12:5: 12:29: macro std::panic --macro-expansion-> macro core::std::panic::panic_2021",
-              "[SYSROOT]/lib/rustlib/src/rust/library/core/src/panic.rs:62:9: 62:73: macro core::std::panic::panic_2021 --direct-call-> core::std::rt::panic_fmt"
-            ]
-          }
-        ],
-        "has-panic-docs": false,
+        "kind": "panic-invocation",
+        "level": "deny",
+        "reason": "panic sink core::std::rt::panic_fmt",
         "root": "documented_obligation::undocumented_bug",
-        "root-declaration": "src/lib.rs:11:1",
-        "root-kind": "concrete"
+        "root-kind": "concrete",
+        "span": "src/lib.rs:12:5: 12:29",
+        "target": "core::std::rt::panic_fmt",
+        "trace": [
+          "src/lib.rs:12:5: 12:29: documented_obligation::undocumented_bug --macro-expansion-> macro std::panic",
+          "src/lib.rs:12:5: 12:29: macro std::panic --macro-expansion-> macro core::std::panic::panic_2021",
+          "[SYSROOT]/lib/rustlib/src/rust/library/core/src/panic.rs:62:9: 62:73: macro core::std::panic::panic_2021 --direct-call-> core::std::rt::panic_fmt"
+        ]
       }
     ],
+    "format-version": 4,
+    "reason": "sniff-test-artifact",
     "rustc-version": "[RUSTC_VERSION]",
     "scope": "workspace",
     "tool-version": "0.1.0"

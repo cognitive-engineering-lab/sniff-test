@@ -4,7 +4,6 @@ expression: messages
 ---
 [
   {
-    "analysis-findings": [],
     "artifact": {
       "artifact-id": "[ARTIFACT_ID]",
       "crate-name": "ambiguous_safety",
@@ -18,34 +17,23 @@ expression: messages
       "package-version": "0.1.0",
       "target": null
     },
-    "concrete-roots": 0,
     "dependencies": [],
-    "dependency-cache": {
-      "failed": 0,
-      "hits": 0,
-      "total": 0
-    },
-    "format-version": 3,
-    "generic-roots": 0,
+    "findings": [
+      {
+        "function": "ambiguous_safety::read_duplicate",
+        "kind": "ambiguous-safety-requirement",
+        "level": "deny",
+        "reason": "`ambiguous_safety::read_duplicate` has multiple # Safety requirements named `valid ptr`",
+        "requirements": [
+          "valid_ptr: pointer must be non-null.",
+          "valid_ptr: pointer must reference initialized memory."
+        ],
+        "span": "src/lib.rs:7:1: 7:43"
+      }
+    ],
+    "format-version": 4,
     "reason": "sniff-test-artifact",
-    "roots": [],
     "rustc-version": "[RUSTC_VERSION]",
-    "safety": {
-      "findings": [
-        {
-          "function": "ambiguous_safety::read_duplicate",
-          "kind": "ambiguous-safety-requirement",
-          "level": "deny",
-          "reason": "`ambiguous_safety::read_duplicate` has multiple # Safety requirements named `valid ptr`",
-          "requirements": [
-            "valid_ptr: pointer must be non-null.",
-            "valid_ptr: pointer must reference initialized memory."
-          ],
-          "span": "src/lib.rs:7:1: 7:43",
-          "target": null
-        }
-      ]
-    },
     "scope": "workspace",
     "tool-version": "0.1.0"
   }

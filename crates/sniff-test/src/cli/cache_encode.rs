@@ -17,16 +17,14 @@ use rustc_hir::def_id::DefId;
 use rustc_middle::ty::TyCtxt;
 use rustc_span::Pos;
 
-use super::report::{
-    PanicFindingReport, ReportDetailKind, render_assert_message, render_node, render_span,
-};
+use super::report::{FindingKind, FindingReport, render_assert_message, render_node, render_span};
 
 pub(super) fn function_summary<'tcx>(
     tcx: TyCtxt<'tcx>,
     def_id: DefId,
     is_generic: bool,
     analysis_complete: bool,
-    report_findings: &[PanicFindingReport],
+    report_findings: &[FindingReport],
     config: &PanicConfig,
     graph: Option<(&ReachabilityGraph<'tcx>, &ReachabilitySnapshot<'tcx>)>,
     findings: Vec<CachedFinding>,
@@ -36,19 +34,19 @@ pub(super) fn function_summary<'tcx>(
         .filter(|finding| {
             matches!(
                 finding.kind,
-                ReportDetailKind::CompilerAssert
-                    | ReportDetailKind::PanicInvocation
-                    | ReportDetailKind::CachedDependencyPanic
+                FindingKind::CompilerAssert
+                    | FindingKind::PanicInvocation
+                    | FindingKind::CachedDependencyPanic
             )
         })
         .count();
     let panic_obligations = report_findings
         .iter()
-        .filter(|finding| finding.kind == ReportDetailKind::DocumentedPanic)
+        .filter(|finding| finding.kind == FindingKind::DocumentedPanic)
         .count();
     let trusted_panic_obligations = report_findings
         .iter()
-        .filter(|finding| finding.kind == ReportDetailKind::TrustedPanic)
+        .filter(|finding| finding.kind == FindingKind::TrustedPanic)
         .count();
     CachedFunctionSummary {
         def_path_hash: stable_def_path_hash(tcx, def_id),
