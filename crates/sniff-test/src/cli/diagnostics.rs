@@ -18,16 +18,11 @@ use rustc_hir::def_id::DefId;
 use rustc_middle::ty::TyCtxt;
 use rustc_span::{BytePos, SourceFile, Span};
 
+use super::findings::{DiagnosticMessage, FindingDiagnostic};
 use super::report::{
-    DiagnosticMessage, FindingDiagnostic, cached_dependency_panic_reason, render_assert_message,
-    render_cached_trace, render_edge_without_span, render_node,
+    cached_dependency_panic_reason, render_assert_message, render_cached_trace,
+    render_edge_without_span, render_node,
 };
-
-#[derive(Debug, Clone, Copy)]
-pub(super) struct PanicDiagnosticOptions {
-    pub(super) emit: bool,
-    pub(super) include_stack: bool,
-}
 
 #[derive(Debug, Clone, Copy)]
 pub(super) struct PanicContractDiagnostic {

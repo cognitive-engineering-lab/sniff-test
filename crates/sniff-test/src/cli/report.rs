@@ -1,15 +1,13 @@
-//! Panic report rendering.
+//! JSON serialization and panic report rendering.
 use crate::cache::{
-    CachedFinding, CachedFunctionSummary, CachedReachabilityEdgeKind, CachedReachabilityNodeKind,
+    CachedArtifactInfo, CachedDependencyRef, CachedFinding, CachedFunctionSummary,
+    CachedReachabilityEdgeKind, CachedReachabilityNodeKind,
 };
-use crate::config::{LintLevel, SniffTestConfig};
 use crate::namespace::canonical_namespace;
 use crate::panics::{
     AmbiguousPanicMarker, AmbiguousPanicRequirementName, PanicEvidence, PanicEvidenceKind,
     trace_edges_until, trigger_edge_id,
 };
-use crate::report_roots::ReportRootFindingKind;
-use crate::safety::SafetyFindingKind;
 use reachability::{
     CompilerAssertLocal, CompilerAssertLocalRole, ReachabilityEdge, ReachabilityEdgeId,
     ReachabilityGraph, ReachabilityNodeKind,
@@ -17,7 +15,6 @@ use reachability::{
 use rustc_hir::def_id::DefId;
 use rustc_middle::mir::{AssertKind, BinOp, Operand, Place};
 use rustc_middle::ty::TyCtxt;
-use rustc_span::Span;
 use serde::Serialize;
 
 use super::diagnostics::{
@@ -27,6 +24,47 @@ use super::diagnostics::{
     cached_dependency_raw_panic_diagnostic, indirect_boundary_diagnostic,
     panic_contract_diagnostic, raw_panic_diagnostic,
 };
+use super::findings::{Finding, FindingKind, PanicRootKind, ResolvedFinding};
+
+pub(crate) const REPORT_FORMAT_VERSION: u32 = 5;
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub(crate) struct AnalysisArtifactReport {
+    pub(crate) reason: String,
+    pub(crate) format_version: u32,
+    pub(crate) tool_version: String,
+    pub(crate) rustc_version: String,
+    pub(crate) artifact: CachedArtifactInfo,
+    pub(crate) scope: CrateOutputScope,
+    pub(crate) dependencies: Vec<CachedDependencyRef>,
+    pub(crate) findings: Vec<ResolvedFinding>,
+}
+
+impl AnalysisArtifactReport {
+    pub(crate) fn has_denied_findings(&self) -> bool {
+        self.findings.iter().any(|finding| finding.level.is_deny())
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub(crate) enum CrateOutputScope {
+    Workspace,
+    Dependency,
+}
+
+pub(crate) fn render_json_analysis_artifact_report(
+    report: &AnalysisArtifactReport,
+) -> Option<String> {
+    match serde_json::to_string(report) {
+        Ok(json) => Some(json),
+        Err(error) => {
+            eprintln!("sniff-test: failed to encode JSON report: {error}");
+            None
+        }
+    }
+}
 
 #[derive(Debug, Clone)]
 pub(crate) struct PanicRootReport {
@@ -301,174 +339,6 @@ impl PanicRootReport {
         finding.root = Some(self.root.clone());
         finding.root_kind = Some(self.root_kind);
         self.findings.push(finding);
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "kebab-case")]
-pub(crate) enum PanicRootKind {
-    Concrete,
-    Generic,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "kebab-case")]
-pub(crate) struct Finding {
-    pub(crate) kind: FindingKind,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub(crate) root: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub(crate) root_kind: Option<PanicRootKind>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub(crate) function: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub(crate) target: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub(crate) span: Option<String>,
-    pub(crate) reason: String,
-    #[serde(skip_serializing_if = "Vec::is_empty")]
-    pub(crate) trace: Vec<String>,
-    #[serde(skip_serializing_if = "Vec::is_empty")]
-    pub(crate) missing_requirements: Vec<String>,
-    #[serde(skip_serializing_if = "Vec::is_empty")]
-    pub(crate) requirements: Vec<String>,
-    #[serde(skip)]
-    pub(crate) diagnostic: FindingDiagnostic,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "kebab-case")]
-pub(crate) struct ResolvedFinding {
-    pub(crate) level: LintLevel,
-    #[serde(flatten)]
-    pub(crate) finding: Finding,
-}
-
-pub(crate) fn resolve_findings(
-    findings: Vec<Finding>,
-    config: &SniffTestConfig,
-) -> Vec<ResolvedFinding> {
-    findings
-        .into_iter()
-        .filter_map(|finding| {
-            let level = finding.kind.lint_level(config);
-            (!level.is_allow()).then_some(ResolvedFinding { level, finding })
-        })
-        .collect()
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct FindingDiagnostic {
-    pub(crate) span: Option<Span>,
-    pub(crate) message: String,
-    pub(crate) messages: Vec<DiagnosticMessage>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) enum DiagnosticMessage {
-    Note(String),
-    SpanNote(Span, String),
-    SpanLabel(Span, String),
-    SpanHelp(Span, &'static str),
-    Help(&'static str),
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "kebab-case")]
-pub(crate) enum FindingKind {
-    CompilerAssert,
-    PanicInvocation,
-    CachedDependencyPanic,
-    DocumentedPanic,
-    TrustedPanic,
-    IndirectCallBoundary,
-    AmbiguousPanicMarker,
-    AmbiguousPanicRequirement,
-    AnalysisIncomplete,
-    EmptyReportRoots,
-    MissingReportRoot,
-    IgnoredReportRoot,
-    MissingSafetyDocs,
-    UnsafeCallMissingJustification,
-    UnsafeCallMissingRequirements,
-    UnsafeOpMissingJustification,
-    SafetyObligationMissingJustification,
-    SafetyObligationMissingRequirements,
-    AmbiguousSafetyRequirement,
-}
-
-impl FindingKind {
-    pub(crate) fn from_evidence(kind: &PanicEvidenceKind) -> Self {
-        match kind {
-            PanicEvidenceKind::CompilerAssert => Self::CompilerAssert,
-            PanicEvidenceKind::PanicObligation { .. } => Self::DocumentedPanic,
-            PanicEvidenceKind::PanicSink { .. } => Self::PanicInvocation,
-            PanicEvidenceKind::IndirectBoundary { .. } => Self::IndirectCallBoundary,
-        }
-    }
-
-    pub(crate) fn lint_level(self, config: &SniffTestConfig) -> LintLevel {
-        match self {
-            Self::CompilerAssert => config.panics.lints.compiler_assert,
-            Self::PanicInvocation => config.panics.lints.panic_invocation,
-            Self::CachedDependencyPanic => config.panics.lints.cached_dependency_panic,
-            Self::DocumentedPanic => config.panics.lints.documented_panic,
-            Self::TrustedPanic => config.panics.lints.trusted_panic,
-            Self::IndirectCallBoundary => config.panics.lints.indirect_call_boundary,
-            Self::AmbiguousPanicMarker => config.analysis.lints.ambiguous_panic_marker,
-            Self::AmbiguousPanicRequirement => config.analysis.lints.ambiguous_panic_requirement,
-            Self::AnalysisIncomplete => config.analysis.lints.analysis_incomplete,
-            Self::EmptyReportRoots => config.analysis.lints.empty_report_roots,
-            Self::MissingReportRoot => config.analysis.lints.missing_report_root,
-            Self::IgnoredReportRoot => config.analysis.lints.ignored_report_root,
-            Self::MissingSafetyDocs => config.safety.lints.missing_safety_docs,
-            Self::UnsafeCallMissingJustification => {
-                config.safety.lints.unsafe_call_missing_justification
-            }
-            Self::UnsafeCallMissingRequirements => {
-                config.safety.lints.unsafe_call_missing_requirements
-            }
-            Self::UnsafeOpMissingJustification => {
-                config.safety.lints.unsafe_op_missing_justification
-            }
-            Self::SafetyObligationMissingJustification => {
-                config.safety.lints.safety_obligation_missing_justification
-            }
-            Self::SafetyObligationMissingRequirements => {
-                config.safety.lints.safety_obligation_missing_requirements
-            }
-            Self::AmbiguousSafetyRequirement => config.analysis.lints.ambiguous_safety_requirement,
-        }
-    }
-}
-
-impl From<ReportRootFindingKind> for FindingKind {
-    fn from(kind: ReportRootFindingKind) -> Self {
-        match kind {
-            ReportRootFindingKind::EmptyReportRoots => Self::EmptyReportRoots,
-            ReportRootFindingKind::MissingReportRoot => Self::MissingReportRoot,
-            ReportRootFindingKind::IgnoredReportRoot => Self::IgnoredReportRoot,
-        }
-    }
-}
-
-impl From<SafetyFindingKind> for FindingKind {
-    fn from(kind: SafetyFindingKind) -> Self {
-        match kind {
-            SafetyFindingKind::MissingSafetyDocs => Self::MissingSafetyDocs,
-            SafetyFindingKind::UnsafeCallMissingJustification => {
-                Self::UnsafeCallMissingJustification
-            }
-            SafetyFindingKind::UnsafeCallMissingRequirements => Self::UnsafeCallMissingRequirements,
-            SafetyFindingKind::UnsafeOpMissingJustification => Self::UnsafeOpMissingJustification,
-            SafetyFindingKind::SafetyObligationMissingJustification => {
-                Self::SafetyObligationMissingJustification
-            }
-            SafetyFindingKind::SafetyObligationMissingRequirements => {
-                Self::SafetyObligationMissingRequirements
-            }
-            SafetyFindingKind::AmbiguousSafetyRequirement => Self::AmbiguousSafetyRequirement,
-        }
     }
 }
 
@@ -782,49 +652,59 @@ pub(crate) fn render_span(tcx: TyCtxt<'_>, span: rustc_span::Span) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{Finding, FindingDiagnostic, FindingKind, resolve_findings};
-    use crate::config::{LintLevel, SniffTestConfig};
-
-    fn finding(kind: FindingKind) -> Finding {
-        Finding {
-            kind,
-            root: None,
-            root_kind: None,
-            function: None,
-            target: None,
-            span: None,
-            reason: String::from("test finding"),
-            trace: Vec::new(),
-            missing_requirements: Vec::new(),
-            requirements: Vec::new(),
-            diagnostic: FindingDiagnostic {
-                span: None,
-                message: String::from("test finding"),
-                messages: Vec::new(),
-            },
-        }
-    }
+    use super::{AnalysisArtifactReport, CrateOutputScope, REPORT_FORMAT_VERSION};
+    use crate::cache::CachedArtifactInfo;
+    use crate::cli::findings::{Finding, FindingDiagnostic, FindingKind, ResolvedFinding};
+    use crate::config::LintLevel;
 
     #[test]
-    fn resolves_policy_and_filters_allowed_findings_once() {
-        let mut config = SniffTestConfig::default();
-        config.panics.lints.panic_invocation = LintLevel::Allow;
-        config.safety.lints.missing_safety_docs = LintLevel::Warn;
-        config.analysis.lints.empty_report_roots = LintLevel::Deny;
+    fn public_report_has_one_flat_findings_array() {
+        let report = AnalysisArtifactReport {
+            reason: String::from("sniff-test-artifact"),
+            format_version: REPORT_FORMAT_VERSION,
+            tool_version: String::from("0.1.0"),
+            rustc_version: String::from("rustc test"),
+            artifact: CachedArtifactInfo {
+                artifact_id: String::from("demo-1234"),
+                crate_name: String::from("demo"),
+            },
+            scope: CrateOutputScope::Workspace,
+            dependencies: Vec::new(),
+            findings: vec![ResolvedFinding {
+                level: LintLevel::Warn,
+                finding: Finding {
+                    kind: FindingKind::EmptyReportRoots,
+                    root: None,
+                    root_kind: None,
+                    function: None,
+                    target: None,
+                    span: None,
+                    reason: String::from("no roots"),
+                    trace: Vec::new(),
+                    missing_requirements: Vec::new(),
+                    requirements: Vec::new(),
+                    diagnostic: FindingDiagnostic {
+                        span: None,
+                        message: String::from("no roots"),
+                        messages: Vec::new(),
+                    },
+                },
+            }],
+        };
 
-        let resolved = resolve_findings(
-            vec![
-                finding(FindingKind::PanicInvocation),
-                finding(FindingKind::MissingSafetyDocs),
-                finding(FindingKind::EmptyReportRoots),
-            ],
-            &config,
-        );
-
-        assert_eq!(resolved.len(), 2);
-        assert_eq!(resolved[0].finding.kind, FindingKind::MissingSafetyDocs);
-        assert_eq!(resolved[0].level, LintLevel::Warn);
-        assert_eq!(resolved[1].finding.kind, FindingKind::EmptyReportRoots);
-        assert_eq!(resolved[1].level, LintLevel::Deny);
+        let json = serde_json::to_value(report).expect("serialize report");
+        let object = json.as_object().expect("report object");
+        assert_eq!(object["format-version"], 5);
+        assert_eq!(object["findings"].as_array().expect("findings").len(), 1);
+        for removed in [
+            "analysis-findings",
+            "roots",
+            "safety",
+            "concrete-roots",
+            "generic-roots",
+            "dependency-cache",
+        ] {
+            assert!(!object.contains_key(removed), "removed field {removed}");
+        }
     }
 }

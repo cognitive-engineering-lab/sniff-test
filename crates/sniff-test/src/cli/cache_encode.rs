@@ -17,7 +17,8 @@ use rustc_hir::def_id::DefId;
 use rustc_middle::ty::TyCtxt;
 use rustc_span::Pos;
 
-use super::report::{Finding, FindingKind, render_assert_message, render_node, render_span};
+use super::findings::{Finding, FindingKind};
+use super::report::{render_assert_message, render_node, render_span};
 
 pub(super) fn function_summary<'tcx>(
     tcx: TyCtxt<'tcx>,
@@ -119,7 +120,7 @@ fn cached_panic_finding<'tcx>(
             }
         }
         PanicPathDecision::PanicObligation { edge_id, def_id } => {
-            let trusted = super::is_trusted_panic_obligation(tcx, def_id, config);
+            let trusted = super::driver::is_trusted_panic_obligation(tcx, def_id, config);
             let (span, source_span, mut diagnostic_spans, target) = edge_id.map_or_else(
                 || {
                     let span = tcx.def_span(def_id);

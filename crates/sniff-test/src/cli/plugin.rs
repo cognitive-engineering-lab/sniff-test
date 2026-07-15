@@ -10,7 +10,8 @@ use rustc_middle::ty::TyCtxt;
 use rustc_span::symbol::Symbol;
 
 use super::args::{ColorChoice, MANIFEST_PATH_ENV, SniffTestArgParseError, SniffTestArgs};
-use super::{absolute_path, analyze_crate, load_config};
+use super::cargo::absolute_path;
+use super::driver::{analyze_crate, load_config};
 
 pub(crate) const DRIVER_NAME: &str = "sniff-test-driver";
 pub(crate) const RUSTC_VERSION_ENV: &str = "SNIFF_TEST_RUSTC_VERSION";
