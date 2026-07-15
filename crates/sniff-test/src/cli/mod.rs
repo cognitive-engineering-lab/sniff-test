@@ -11,8 +11,8 @@ use crate::cache::{
     write_artifact_analysis, write_unit_outcome,
 };
 use crate::config::{
-    AnalysisConfig, AnalysisLintConfig, CallableEdgeAttribution, LintLevel, PanicBoundaryPolicy,
-    PanicConfig, ReportRootSet, SafetyLintConfig, SniffTestConfig,
+    AnalysisConfig, CallableEdgeAttribution, PanicBoundaryPolicy, PanicConfig, ReportRootSet,
+    SniffTestConfig,
 };
 use crate::dependency_cache::{DependencyAnalysisCache, DependencyInput};
 use crate::namespace::stable_def_path_hash;
@@ -44,19 +44,16 @@ pub use self::plugin::driver_main;
 
 use self::cache_encode::{cached_boundary_findings, function_summary};
 use self::diagnostics::{
-    CachedDependencyContractDiagnostic, PanicContractDiagnostic, PanicDiagnosticOptions,
-    emit_ambiguous_obligation_marker_diagnostic, emit_ambiguous_obligation_name_diagnostic,
-    emit_analysis_incomplete_diagnostic, emit_cached_dependency_contract_diagnostic,
-    emit_cached_dependency_raw_panic_diagnostic, emit_empty_report_roots_diagnostic,
-    emit_indirect_boundary_diagnostic, emit_missing_report_root_diagnostics,
-    emit_panic_contract_diagnostic, emit_raw_panic_diagnostic, emit_safety_diagnostics,
+    PanicDiagnosticOptions, emit_finding_diagnostic, empty_report_roots_diagnostic,
+    missing_report_root_diagnostic,
 };
 use self::plugin::{
     RUSTC_VERSION_ENV, SNIFF_TEST_ARGS_ENV, current_rustc_version, frontend_args, modify_cargo,
     rustc_version, rustc_version_dir_component,
 };
 use self::report::{
-    FindingKind, FindingReport, PanicObligationReport, PanicRootKind, PanicRootReport, render_node,
+    Finding, FindingKind, PanicObligationReport, PanicRootKind, PanicRootReport, ResolvedFinding,
+    render_node, resolve_findings,
 };
 use self::rustc_invocation::RustcInvocation;
 use self::safety_report::safety_finding_reports;
@@ -458,46 +455,16 @@ pub(crate) fn analyze_crate(tcx: TyCtxt<'_>, args: &SniffTestArgs, compiler_args
         diagnostics,
     );
     let empty_report_roots = !selection_has_roots && root_analysis.missing_roots.is_empty();
-    if diagnostics.emit && empty_report_roots {
-        // An empty selection exits clean; without this note that reads as
-        // "verified panic-free" when nothing was analyzed at all.
-        emit_empty_report_roots_diagnostic(
-            tcx,
-            &args.manifest_path(),
-            &config.analysis.report_roots,
-            &crate_name,
-            config.analysis.lints.empty_report_roots,
-        );
-    }
     let safety_analysis = if output_scope == CrateOutputScope::Workspace {
-        analyze_safety(
-            tcx,
-            &config.safety,
-            config.analysis.lints.ambiguous_safety_requirement,
-        )
+        analyze_safety(tcx, &config.safety)
     } else {
         SafetyAnalysis::default()
     };
-    if diagnostics.emit {
-        emit_safety_diagnostics(
-            tcx,
-            &safety_analysis,
-            config.safety.lints,
-            &config.safety.documentation_overrides,
-            config.analysis.lints.ambiguous_safety_requirement,
-        );
-        emit_missing_report_root_diagnostics(
-            tcx,
-            &args.manifest_path(),
-            &root_analysis.missing_roots,
-            config.analysis.lints,
-        );
-    }
-
     let analysis_findings = report_root_finding_reports(
+        tcx,
+        &args.manifest_path(),
         empty_report_roots,
         &root_analysis.missing_roots,
-        config.analysis.lints,
         &config.analysis.report_roots,
         &crate_name,
     );
@@ -506,12 +473,16 @@ pub(crate) fn analyze_crate(tcx: TyCtxt<'_>, args: &SniffTestArgs, compiler_args
         &invocation,
         output_scope,
         &dependency_cache,
+        &config,
         root_analysis,
         safety_analysis,
-        config.safety.lints,
-        config.analysis.lints.ambiguous_safety_requirement,
         analysis_findings,
     );
+    if diagnostics.emit {
+        for finding in &analysis.report.findings {
+            emit_finding_diagnostic(tcx, finding.level, &finding.finding.diagnostic);
+        }
+    }
     write_analysis_cache(args, &analysis.cache);
     emit_report_and_outcome(
         args,
@@ -561,41 +532,39 @@ fn write_unit_outcome_file(args: &SniffTestArgs, outcome: &UnitOutcome) {
 }
 
 fn report_root_finding_reports(
+    tcx: TyCtxt<'_>,
+    manifest_path: &Path,
     empty_report_roots: bool,
     missing_roots: &[MissingReportRoot],
-    lints: AnalysisLintConfig,
     report_roots: &ReportRootSet,
     crate_name: &str,
-) -> Vec<FindingReport> {
+) -> Vec<Finding> {
     let mut findings = Vec::new();
     if empty_report_roots {
         let kind = ReportRootFindingKind::EmptyReportRoots;
-        let level = kind.lint_level(lints);
-        if level != LintLevel::Allow {
-            findings.push(FindingReport {
-                kind: kind.into(),
-                level,
-                root: None,
-                root_kind: None,
-                function: None,
-                target: None,
-                span: None,
-                reason: format!(
-                    "`[analysis].report-roots = {}` selected no functions in `{crate_name}`",
-                    report_roots.description()
-                ),
-                trace: Vec::new(),
-                missing_requirements: Vec::new(),
-                requirements: Vec::new(),
-            });
-        }
-    }
-    findings.extend(missing_roots.iter().filter_map(|root| {
-        let kind = root.reason.finding_kind();
-        let level = kind.lint_level(lints);
-        (level != LintLevel::Allow).then(|| FindingReport {
+        let diagnostic =
+            empty_report_roots_diagnostic(tcx, manifest_path, report_roots, crate_name);
+        findings.push(Finding {
             kind: kind.into(),
-            level,
+            root: None,
+            root_kind: None,
+            function: None,
+            target: None,
+            span: None,
+            reason: format!(
+                "`[analysis].report-roots = {}` selected no functions in `{crate_name}`",
+                report_roots.description()
+            ),
+            trace: Vec::new(),
+            missing_requirements: Vec::new(),
+            requirements: Vec::new(),
+            diagnostic,
+        });
+    }
+    findings.extend(missing_roots.iter().map(|root| {
+        let kind = root.reason.finding_kind();
+        Finding {
+            kind: kind.into(),
             root: None,
             root_kind: None,
             function: None,
@@ -610,7 +579,8 @@ fn report_root_finding_reports(
             trace: Vec::new(),
             missing_requirements: Vec::new(),
             requirements: Vec::new(),
-        })
+            diagnostic: missing_report_root_diagnostic(tcx, manifest_path, root),
+        }
     }));
     findings
 }
@@ -626,11 +596,10 @@ impl AnalysisArtifact {
         invocation: &RustcInvocation,
         scope: CrateOutputScope,
         dependency_cache: &DependencyAnalysisCache,
+        config: &SniffTestConfig,
         root_analysis: RootAnalysis,
         safety_analysis: SafetyAnalysis,
-        safety_lints: SafetyLintConfig,
-        ambiguous_safety_requirement: LintLevel,
-        mut findings: Vec<FindingReport>,
+        mut findings: Vec<Finding>,
     ) -> Self {
         let dependencies = dependency_cache.resolved_dependencies();
         let artifact = artifact_info(tcx, invocation);
@@ -640,9 +609,9 @@ impl AnalysisArtifact {
         findings.extend(safety_finding_reports(
             tcx,
             safety_analysis,
-            safety_lints,
-            ambiguous_safety_requirement,
+            &config.safety.documentation_overrides,
         ));
+        let findings = resolve_findings(findings, config);
         let report = AnalysisArtifactReport {
             reason: String::from("sniff-test-artifact"),
             format_version: REPORT_FORMAT_VERSION,
@@ -675,21 +644,19 @@ pub(crate) struct AnalysisArtifactReport {
     artifact: CachedArtifactInfo,
     scope: CrateOutputScope,
     dependencies: Vec<CachedDependencyRef>,
-    findings: Vec<FindingReport>,
+    findings: Vec<ResolvedFinding>,
 }
 
 impl AnalysisArtifactReport {
     fn has_denied_findings(&self) -> bool {
-        self.findings
-            .iter()
-            .any(|finding| finding.level == LintLevel::Deny)
+        self.findings.iter().any(|finding| finding.level.is_deny())
     }
 }
 
 struct RootAnalysis {
     missing_roots: Vec<MissingReportRoot>,
     function_summaries: Vec<CachedFunctionSummary>,
-    findings: Vec<FindingReport>,
+    findings: Vec<Finding>,
 }
 
 fn analyze_report_roots<'tcx>(
@@ -831,14 +798,7 @@ fn analyze_root<'tcx>(
         reachability_options(analysis_config, true),
     );
     let graph = reachability.graph();
-    let analysis = analyze_panic_evidence(
-        tcx,
-        graph,
-        &result,
-        config,
-        analysis_config.lints.ambiguous_panic_marker,
-        analysis_config.lints.ambiguous_panic_requirement,
-    );
+    let analysis = analyze_panic_evidence(tcx, graph, &result, config);
     let mut report = collect_panic_findings(
         tcx,
         graph,
@@ -869,26 +829,12 @@ fn analyze_root<'tcx>(
         reachability_options(analysis_config, false),
     );
     let graph = reachability.graph();
-    let boundary_analysis = analyze_panic_evidence(
-        tcx,
-        graph,
-        &boundary_result,
-        config,
-        analysis_config.lints.ambiguous_panic_marker,
-        analysis_config.lints.ambiguous_panic_requirement,
-    );
+    let boundary_analysis = analyze_panic_evidence(tcx, graph, &boundary_result, config);
     let cached_findings =
         cached_boundary_findings(tcx, graph, &boundary_result, &boundary_analysis, config);
     let analysis_complete = transitive_complete && graph.view(&boundary_result).halt().is_none();
     if !analysis_complete {
-        emit_analysis_incomplete_finding(
-            tcx,
-            root.def_id,
-            analysis_config.node_limit,
-            analysis_config.lints.analysis_incomplete,
-            diagnostics,
-            &mut report,
-        );
+        emit_analysis_incomplete_finding(tcx, root.def_id, analysis_config.node_limit, &mut report);
     }
     let summary = function_summary(
         tcx,
@@ -908,18 +854,9 @@ fn emit_analysis_incomplete_finding(
     tcx: TyCtxt<'_>,
     root_def_id: DefId,
     node_limit: usize,
-    level: LintLevel,
-    diagnostics: PanicDiagnosticOptions,
     report: &mut PanicRootReport,
 ) {
-    if level == LintLevel::Allow {
-        return;
-    }
-
-    report.push_analysis_incomplete(tcx, root_def_id, node_limit, level);
-    if diagnostics.emit {
-        emit_analysis_incomplete_diagnostic(tcx, root_def_id, node_limit, level);
-    }
+    report.push_analysis_incomplete(tcx, root_def_id, node_limit);
 }
 
 fn reachability_options(
@@ -973,7 +910,12 @@ fn collect_panic_findings<'tcx>(
 ) -> PanicRootReport {
     let view = graph.view(result);
     let root_node = view.root();
-    let mut report = PanicRootReport::new(render_node(tcx, root_node.kind()), collection.root_kind);
+    let mut report = PanicRootReport::new(
+        render_node(tcx, root_node.kind()),
+        collection.root_kind,
+        collection.root_def_id,
+        collection.diagnostics.include_stack,
+    );
 
     for evidence in &analysis.evidence {
         match evidence.decision {
@@ -984,9 +926,9 @@ fn collect_panic_findings<'tcx>(
                     evidence.kind,
                     crate::panics::PanicEvidenceKind::IndirectBoundary { .. }
                 ) {
-                    emit_indirect_boundary_finding(tcx, graph, evidence, &collection, &mut report);
+                    emit_indirect_boundary_finding(tcx, graph, evidence, &mut report);
                 } else {
-                    emit_raw_panic_finding(tcx, graph, evidence, &collection, &mut report);
+                    emit_raw_panic_finding(tcx, graph, evidence, &mut report);
                 }
             }
             PanicPathDecision::PanicObligation { edge_id: None, .. } => {
@@ -1012,8 +954,8 @@ fn collect_panic_findings<'tcx>(
         }
     }
 
-    emit_ambiguous_obligation_marker_findings(tcx, graph, analysis, &collection, &mut report);
-    emit_ambiguous_obligation_name_findings(tcx, analysis, &collection, &mut report);
+    emit_ambiguous_obligation_marker_findings(tcx, graph, analysis, &mut report);
+    emit_ambiguous_obligation_name_findings(tcx, analysis, &mut report);
 
     emit_cached_dependency_findings(tcx, graph, view, &collection, &mut report);
 
@@ -1024,39 +966,20 @@ fn emit_ambiguous_obligation_marker_findings<'tcx>(
     tcx: TyCtxt<'tcx>,
     graph: &ReachabilityGraph<'tcx>,
     analysis: &PanicAnalysis,
-    collection: &PanicFindingCollection<'_>,
     report: &mut PanicRootReport,
 ) {
     for marker in &analysis.ambiguous_markers {
-        report.push_ambiguous_obligation_marker(tcx, graph, marker, marker.level);
-        if collection.diagnostics.emit {
-            emit_ambiguous_obligation_marker_diagnostic(
-                tcx,
-                graph,
-                marker,
-                collection.root_def_id,
-                marker.level,
-            );
-        }
+        report.push_ambiguous_obligation_marker(tcx, graph, marker);
     }
 }
 
 fn emit_ambiguous_obligation_name_findings(
     tcx: TyCtxt<'_>,
     analysis: &PanicAnalysis,
-    collection: &PanicFindingCollection<'_>,
     report: &mut PanicRootReport,
 ) {
     for name in &analysis.ambiguous_names {
-        report.push_ambiguous_obligation_name(tcx, name, name.level);
-        if collection.diagnostics.emit {
-            emit_ambiguous_obligation_name_diagnostic(
-                tcx,
-                name,
-                collection.root_def_id,
-                name.level,
-            );
-        }
+        report.push_ambiguous_obligation_name(tcx, name);
     }
 }
 
@@ -1064,51 +987,18 @@ fn emit_raw_panic_finding<'tcx>(
     tcx: TyCtxt<'tcx>,
     graph: &ReachabilityGraph<'tcx>,
     evidence: &PanicEvidence,
-    collection: &PanicFindingCollection<'_>,
     report: &mut PanicRootReport,
 ) {
-    let kind = FindingKind::from_evidence(&evidence.kind);
-    let level = kind.lint_level(collection.config.lints);
-    if level == LintLevel::Allow {
-        return;
-    }
-
-    report.push_panic_evidence(tcx, graph, evidence, level);
-    if collection.diagnostics.emit {
-        emit_raw_panic_diagnostic(
-            tcx,
-            graph,
-            evidence,
-            collection.root_def_id,
-            level,
-            collection.diagnostics.include_stack,
-        );
-    }
+    report.push_panic_evidence(tcx, graph, evidence);
 }
 
 fn emit_indirect_boundary_finding<'tcx>(
     tcx: TyCtxt<'tcx>,
     graph: &ReachabilityGraph<'tcx>,
     evidence: &PanicEvidence,
-    collection: &PanicFindingCollection<'_>,
     report: &mut PanicRootReport,
 ) {
-    let level = FindingKind::IndirectCallBoundary.lint_level(collection.config.lints);
-    if level == LintLevel::Allow {
-        return;
-    }
-
-    report.push_panic_evidence(tcx, graph, evidence, level);
-    if collection.diagnostics.emit {
-        emit_indirect_boundary_diagnostic(
-            tcx,
-            graph,
-            evidence,
-            collection.root_def_id,
-            level,
-            collection.diagnostics.include_stack,
-        );
-    }
+    report.push_panic_evidence(tcx, graph, evidence);
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -1131,11 +1021,6 @@ fn emit_panic_obligation_finding<'tcx>(
     } else {
         FindingKind::DocumentedPanic
     };
-    let level = kind.lint_level(collection.config.lints);
-    if level == LintLevel::Allow {
-        return;
-    }
-
     report.push_panic_obligation(
         tcx,
         graph,
@@ -1144,24 +1029,8 @@ fn emit_panic_obligation_finding<'tcx>(
             obligation_edge_id: finding.edge_id,
             documented_def_id: finding.def_id,
             kind,
-            level,
         },
     );
-    if collection.diagnostics.emit {
-        emit_panic_contract_diagnostic(
-            tcx,
-            graph,
-            evidence,
-            PanicContractDiagnostic {
-                obligation_edge_id: finding.edge_id,
-                documented_def_id: finding.def_id,
-                root_def_id: collection.root_def_id,
-                trusted,
-                level,
-                include_stack: collection.diagnostics.include_stack,
-            },
-        );
-    }
 }
 
 pub(super) fn is_trusted_panic_obligation(
@@ -1223,37 +1092,86 @@ fn emit_cached_dependency_findings<'tcx>(
             continue;
         }
 
+        let local_trace = crate::panics::trace_to_edge_ids(edge);
+
         // A truncated dependency summary with clean counts proves nothing:
         // treat it as raw panic evidence rather than silence.
         if summary.panic_obligations > 0 || summary.trusted_panic_obligations > 0 {
-            emit_cached_dependency_obligation_finding(
-                tcx,
-                graph,
-                CachedDependencyFinding {
-                    edge_id: edge.id(),
-                    def_id: instance.def_id(),
-                    summary,
-                },
-                collection,
-                report,
-            );
-        } else if summary.raw_panic_paths > 0 || !summary.analysis_complete {
-            let kind = FindingKind::CachedDependencyPanic;
-            let level = kind.lint_level(collection.config.lints);
-            if level == LintLevel::Allow {
-                continue;
+            let cached_findings = summary
+                .findings
+                .iter()
+                .filter(|finding| {
+                    matches!(
+                        finding.kind,
+                        crate::cache::CachedFindingKind::PanicObligation
+                            | crate::cache::CachedFindingKind::TrustedPanicObligation
+                    )
+                })
+                .collect::<Vec<_>>();
+            if cached_findings.is_empty() {
+                emit_cached_dependency_obligation_finding(
+                    tcx,
+                    graph,
+                    CachedDependencyFinding {
+                        edge_id: edge.id(),
+                        local_trace: &local_trace,
+                        def_id: instance.def_id(),
+                        summary,
+                        cached_finding: None,
+                    },
+                    collection,
+                    report,
+                );
+            } else {
+                for cached_finding in cached_findings {
+                    emit_cached_dependency_obligation_finding(
+                        tcx,
+                        graph,
+                        CachedDependencyFinding {
+                            edge_id: edge.id(),
+                            local_trace: &local_trace,
+                            def_id: instance.def_id(),
+                            summary,
+                            cached_finding: Some(cached_finding),
+                        },
+                        collection,
+                        report,
+                    );
+                }
             }
-            report.push_cached_dependency_panic(tcx, graph, edge.id(), summary, level);
-            if collection.diagnostics.emit {
-                emit_cached_dependency_raw_panic_diagnostic(
+        } else if summary.raw_panic_paths > 0 || !summary.analysis_complete {
+            let cached_findings = summary
+                .findings
+                .iter()
+                .filter(|finding| {
+                    matches!(
+                        finding.kind,
+                        crate::cache::CachedFindingKind::CompilerAssert
+                            | crate::cache::CachedFindingKind::PanicInvocation
+                            | crate::cache::CachedFindingKind::IndirectCallBoundary
+                    )
+                })
+                .collect::<Vec<_>>();
+            if cached_findings.is_empty() {
+                report.push_cached_dependency_panic(
                     tcx,
                     graph,
                     edge.id(),
+                    &local_trace,
                     summary,
-                    collection.root_def_id,
-                    level,
-                    collection.diagnostics.include_stack,
+                    None,
                 );
+            } else {
+                for cached_finding in cached_findings {
+                    report.push_cached_dependency_panic(
+                        tcx,
+                        graph,
+                        edge.id(),
+                        &local_trace,
+                        summary,
+                        Some(cached_finding),
+                    );
+                }
             }
         }
     }
@@ -1262,8 +1180,10 @@ fn emit_cached_dependency_findings<'tcx>(
 #[derive(Debug, Clone, Copy)]
 struct CachedDependencyFinding<'summary> {
     edge_id: reachability::ReachabilityEdgeId,
+    local_trace: &'summary [reachability::ReachabilityEdgeId],
     def_id: DefId,
     summary: &'summary CachedFunctionSummary,
+    cached_finding: Option<&'summary crate::cache::CachedFinding>,
 }
 
 fn emit_cached_dependency_obligation_finding<'tcx>(
@@ -1279,33 +1199,15 @@ fn emit_cached_dependency_obligation_finding<'tcx>(
     } else {
         FindingKind::DocumentedPanic
     };
-    let level = kind.lint_level(collection.config.lints);
-    if level == LintLevel::Allow {
-        return;
-    }
-
     report.push_cached_dependency_obligation(
         tcx,
         graph,
         finding.edge_id,
+        finding.local_trace,
         finding.summary,
+        finding.cached_finding,
         kind,
-        level,
     );
-    if collection.diagnostics.emit {
-        emit_cached_dependency_contract_diagnostic(
-            tcx,
-            graph,
-            finding.summary,
-            CachedDependencyContractDiagnostic {
-                edge_id: finding.edge_id,
-                root_def_id: collection.root_def_id,
-                trusted,
-                level,
-                include_stack: collection.diagnostics.include_stack,
-            },
-        );
-    }
 }
 
 fn load_config(args: &SniffTestArgs) -> SniffTestConfig {
@@ -1324,7 +1226,7 @@ fn load_config(args: &SniffTestArgs) -> SniffTestConfig {
 mod tests {
     use std::path::{Path, PathBuf};
 
-    use super::report::{FindingKind, FindingReport};
+    use super::report::{Finding, FindingDiagnostic, FindingKind, ResolvedFinding};
     use super::{
         AnalysisArtifactReport, CrateOutputScope, REPORT_FORMAT_VERSION, metadata_cargo_args,
     };
@@ -1351,18 +1253,25 @@ mod tests {
             },
             scope: CrateOutputScope::Workspace,
             dependencies: Vec::new(),
-            findings: vec![FindingReport {
-                kind: FindingKind::EmptyReportRoots,
+            findings: vec![ResolvedFinding {
                 level: LintLevel::Warn,
-                root: None,
-                root_kind: None,
-                function: None,
-                target: None,
-                span: None,
-                reason: String::from("no roots"),
-                trace: Vec::new(),
-                missing_requirements: Vec::new(),
-                requirements: Vec::new(),
+                finding: Finding {
+                    kind: FindingKind::EmptyReportRoots,
+                    root: None,
+                    root_kind: None,
+                    function: None,
+                    target: None,
+                    span: None,
+                    reason: String::from("no roots"),
+                    trace: Vec::new(),
+                    missing_requirements: Vec::new(),
+                    requirements: Vec::new(),
+                    diagnostic: FindingDiagnostic {
+                        span: None,
+                        message: String::from("no roots"),
+                        messages: Vec::new(),
+                    },
+                },
             }],
         };
 

@@ -22,7 +22,7 @@ use rustc_middle::thir::{Block, Thir};
 use rustc_middle::ty::{self, Ty, TyCtxt};
 use rustc_span::Span;
 
-use crate::config::{LintLevel, PanicBoundaryPolicy, PanicConfig};
+use crate::config::{PanicBoundaryPolicy, PanicConfig};
 use crate::contracts::{
     AmbiguousContractRequirements, ContractDocSummary, ContractKind, ContractRequirement,
     contract_doc_summary, normalize_requirement_name, satisfied_requirement_names,
@@ -61,7 +61,6 @@ pub struct PanicTrace {
 pub struct AmbiguousPanicMarker {
     pub marker_span: Span,
     pub edge_ids: Vec<ReachabilityEdgeId>,
-    pub level: LintLevel,
 }
 
 #[derive(Debug, Clone)]
@@ -69,7 +68,6 @@ pub struct AmbiguousPanicRequirementName {
     pub def_id: DefId,
     pub normalized_name: String,
     pub requirements: Vec<PanicRequirement>,
-    pub level: LintLevel,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -141,20 +139,11 @@ pub fn analyze_panic_evidence<'tcx>(
     graph: &ReachabilityGraph<'tcx>,
     result: &ReachabilitySnapshot<'tcx>,
     config: &PanicConfig,
-    ambiguous_marker_level: LintLevel,
-    ambiguous_requirement_level: LintLevel,
 ) -> PanicAnalysis {
     let view = graph.view(result);
     let root = view.root();
-    let marker_resolution =
-        resolve_panic_markers(tcx, graph, result, config, ambiguous_marker_level);
-    let ambiguous_names = collect_ambiguous_panic_requirement_names(
-        tcx,
-        graph,
-        result,
-        config,
-        ambiguous_requirement_level,
-    );
+    let marker_resolution = resolve_panic_markers(tcx, graph, result, config);
+    let ambiguous_names = collect_ambiguous_panic_requirement_names(tcx, graph, result, config);
     let mut seen_panic_obligations = HashSet::new();
     let mut evidence = view
         .edges()
@@ -164,9 +153,6 @@ pub fn analyze_panic_evidence<'tcx>(
             let trace = PanicTrace {
                 edge_ids: trace_to_edge_ids(edge),
             };
-            if trace_crosses_ambiguous_panic_marker(&trace, &marker_resolution) {
-                return None;
-            }
             if trace_crosses_satisfied_panic_marker(tcx, graph, &trace, config, &marker_resolution)
             {
                 return None;
@@ -192,16 +178,6 @@ pub fn analyze_panic_evidence<'tcx>(
                     classify_panic_path(tcx, graph, root, &trace, config)
                 }
             };
-            if let PanicPathDecision::PanicObligation { def_id, .. } = decision
-                && panic_obligation_has_ambiguous_requirements(
-                    tcx,
-                    def_id,
-                    config,
-                    ambiguous_requirement_level,
-                )
-            {
-                return None;
-            }
             if let PanicPathDecision::PanicObligation { edge_id, def_id } = decision
                 && !seen_panic_obligations.insert((edge_id, def_id))
             {
@@ -388,18 +364,6 @@ fn classify_panic_path<'tcx>(
     PanicPathDecision::RawPanic
 }
 
-fn panic_obligation_has_ambiguous_requirements(
-    tcx: TyCtxt<'_>,
-    def_id: DefId,
-    config: &PanicConfig,
-    ambiguous_obligations: LintLevel,
-) -> bool {
-    ambiguous_obligations.is_deny()
-        && !panic_doc_summary(tcx, def_id, config)
-            .ambiguous_requirements
-            .is_empty()
-}
-
 fn panic_obligation_node_kind<'tcx>(
     tcx: TyCtxt<'tcx>,
     node: &ReachabilityNodeKind<'tcx>,
@@ -473,13 +437,7 @@ fn collect_ambiguous_panic_requirement_names<'tcx>(
     graph: &ReachabilityGraph<'tcx>,
     result: &ReachabilitySnapshot<'tcx>,
     config: &PanicConfig,
-    policy: LintLevel,
 ) -> Vec<AmbiguousPanicRequirementName> {
-    if policy.is_allow() {
-        return Vec::new();
-    }
-    let level = policy;
-
     let view = graph.view(result);
     let mut seen = HashSet::new();
     let mut ambiguous_names = Vec::new();
@@ -488,7 +446,6 @@ fn collect_ambiguous_panic_requirement_names<'tcx>(
             tcx,
             def_id,
             config,
-            level,
             &mut seen,
             &mut ambiguous_names,
         );
@@ -507,7 +464,6 @@ fn collect_ambiguous_panic_requirement_names<'tcx>(
                 tcx,
                 def_id,
                 config,
-                level,
                 &mut seen,
                 &mut ambiguous_names,
             );
@@ -525,7 +481,6 @@ fn push_ambiguous_panic_requirement_names(
     tcx: TyCtxt<'_>,
     def_id: DefId,
     config: &PanicConfig,
-    level: LintLevel,
     seen: &mut HashSet<(DefId, String)>,
     ambiguous_names: &mut Vec<AmbiguousPanicRequirementName>,
 ) {
@@ -537,7 +492,6 @@ fn push_ambiguous_panic_requirement_names(
             def_id,
             normalized_name: ambiguous.normalized_name,
             requirements: ambiguous.requirements,
-            level,
         });
     }
 }
@@ -590,16 +544,6 @@ fn trace_crosses_satisfied_panic_marker<'tcx>(
         let target = &graph.node(edge.target).kind;
         edge_panic_marker_suppresses(tcx, *edge_id, target, config, marker_resolution)
     })
-}
-
-fn trace_crosses_ambiguous_panic_marker(
-    trace: &PanicTrace,
-    marker_resolution: &PanicMarkerResolution,
-) -> bool {
-    trace
-        .edge_ids
-        .iter()
-        .any(|edge_id| marker_resolution.ambiguous_edges.contains(edge_id))
 }
 
 fn node_kind_is_ignored_namespace<'tcx>(
@@ -725,21 +669,11 @@ fn edge_panic_marker_suppresses<'tcx>(
     config: &PanicConfig,
     marker_resolution: &PanicMarkerResolution,
 ) -> bool {
-    if marker_resolution.ambiguous_edges.contains(&edge_id) {
-        return false;
-    }
-
     let Some(candidate) = marker_resolution.candidates.get(&edge_id) else {
         return false;
     };
 
-    marker_satisfies_target(
-        tcx,
-        &candidate.satisfactions,
-        target,
-        config,
-        marker_resolution.policy,
-    )
+    marker_satisfies_target(tcx, &candidate.satisfactions, target, config)
 }
 
 fn marker_satisfies_target<'tcx>(
@@ -747,7 +681,6 @@ fn marker_satisfies_target<'tcx>(
     satisfactions: &[PanicSatisfaction],
     target: &ReachabilityNodeKind<'tcx>,
     config: &PanicConfig,
-    policy: LintLevel,
 ) -> bool {
     let contract_def_id = match target {
         ReachabilityNodeKind::Instance(instance) => instance.def_id(),
@@ -762,10 +695,6 @@ fn marker_satisfies_target<'tcx>(
         | ReachabilityNodeKind::DynObjectCast { .. } => return true,
     };
     let summary = panic_doc_summary(tcx, contract_def_id, config);
-    if policy.is_deny() && !summary.ambiguous_requirements.is_empty() {
-        return false;
-    }
-
     summary.requirements.is_empty()
         || panic_requirements_satisfied(&summary.requirements, satisfactions)
 }
@@ -773,20 +702,7 @@ fn marker_satisfies_target<'tcx>(
 #[derive(Debug)]
 struct PanicMarkerResolution {
     candidates: HashMap<ReachabilityEdgeId, PanicMarkerCandidate>,
-    ambiguous_edges: HashSet<ReachabilityEdgeId>,
     ambiguous_markers: Vec<AmbiguousPanicMarker>,
-    policy: LintLevel,
-}
-
-impl Default for PanicMarkerResolution {
-    fn default() -> Self {
-        Self {
-            candidates: HashMap::new(),
-            ambiguous_edges: HashSet::new(),
-            ambiguous_markers: Vec::new(),
-            policy: LintLevel::Deny,
-        }
-    }
 }
 
 #[derive(Debug, Clone)]
@@ -817,7 +733,6 @@ fn resolve_panic_markers<'tcx>(
     graph: &ReachabilityGraph<'tcx>,
     result: &ReachabilitySnapshot<'tcx>,
     config: &PanicConfig,
-    policy: LintLevel,
 ) -> PanicMarkerResolution {
     let view = graph.view(result);
     let candidates = view
@@ -828,14 +743,12 @@ fn resolve_panic_markers<'tcx>(
         })
         .collect::<HashMap<_, _>>();
 
-    if policy.is_allow() || panic_obligation_node_kind(tcx, view.root().kind(), config).is_some() {
+    if panic_obligation_node_kind(tcx, view.root().kind(), config).is_some() {
         return PanicMarkerResolution {
             candidates,
-            policy,
-            ..PanicMarkerResolution::default()
+            ambiguous_markers: Vec::new(),
         };
     }
-    let ambiguous_level = policy;
 
     let mut marker_uses: HashMap<MarkerBlockKey, MarkerUse> = HashMap::new();
     for edge in view.edges() {
@@ -855,7 +768,7 @@ fn resolve_panic_markers<'tcx>(
             };
             let edge = graph.edge(*edge_id);
             let target = &graph.node(edge.target).kind;
-            if !marker_satisfies_target(tcx, &candidate.satisfactions, target, config, policy) {
+            if !marker_satisfies_target(tcx, &candidate.satisfactions, target, config) {
                 return None;
             }
             Some((*edge_id, candidate))
@@ -871,7 +784,6 @@ fn resolve_panic_markers<'tcx>(
         }
     }
 
-    let mut ambiguous_edges = HashSet::new();
     let mut ambiguous_markers = marker_uses
         .into_values()
         .filter_map(|marker_use| {
@@ -880,13 +792,9 @@ fn resolve_panic_markers<'tcx>(
             }
             let mut edge_ids = marker_use.edge_ids.into_iter().collect::<Vec<_>>();
             edge_ids.sort_by_key(|edge_id| edge_id.index());
-            if policy.is_deny() {
-                ambiguous_edges.extend(edge_ids.iter().copied());
-            }
             Some(AmbiguousPanicMarker {
                 marker_span: marker_use.marker_span,
                 edge_ids,
-                level: ambiguous_level,
             })
         })
         .collect::<Vec<_>>();
@@ -897,9 +805,7 @@ fn resolve_panic_markers<'tcx>(
 
     PanicMarkerResolution {
         candidates,
-        ambiguous_edges,
         ambiguous_markers,
-        policy,
     }
 }
 
@@ -1046,7 +952,6 @@ mod tests {
         PanicRequirement, line_has_panic_heading, panic_requirements_satisfied,
         parse_panic_doc_lines,
     };
-    use crate::config::LintLevel;
     use crate::source_markers::PanicSatisfaction;
     use rustc_span::DUMMY_SP;
 
@@ -1176,6 +1081,5 @@ mod tests {
         assert_eq!(summary.ambiguous_requirements.len(), 1);
         assert_eq!(summary.ambiguous_requirements[0].normalized_name, "nonzero");
         assert_eq!(summary.ambiguous_requirements[0].requirements.len(), 2);
-        assert!(LintLevel::Deny.is_deny());
     }
 }

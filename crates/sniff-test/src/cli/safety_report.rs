@@ -1,4 +1,4 @@
-use crate::config::{LintLevel, SafetyLintConfig};
+use crate::config::ContractDocOverrides;
 use crate::namespace::canonical_namespace;
 use crate::safety::{
     SafetyAnalysis, SafetyFinding, render_safety_requirement, safety_call_label,
@@ -6,36 +6,33 @@ use crate::safety::{
 };
 use rustc_middle::ty::TyCtxt;
 
-use super::report::{FindingReport, render_span};
+use super::diagnostics::safety_finding_diagnostic;
+use super::report::{Finding, render_span};
 
 pub(super) fn safety_finding_reports(
     tcx: TyCtxt<'_>,
     analysis: SafetyAnalysis,
-    lints: SafetyLintConfig,
-    ambiguous_obligations: LintLevel,
-) -> Vec<FindingReport> {
+    overrides: &ContractDocOverrides,
+) -> Vec<Finding> {
     analysis
         .findings
         .into_iter()
-        .filter_map(|finding| {
-            let level = finding.kind().lint_level(lints, ambiguous_obligations);
-            (level != LintLevel::Allow).then(|| safety_finding_report(tcx, finding, level))
-        })
+        .map(|finding| safety_finding_report(tcx, finding, overrides))
         .collect()
 }
 
 fn safety_finding_report(
     tcx: TyCtxt<'_>,
     finding: SafetyFinding,
-    level: LintLevel,
-) -> FindingReport {
+    overrides: &ContractDocOverrides,
+) -> Finding {
     let kind = finding.kind();
+    let diagnostic = safety_finding_diagnostic(tcx, &finding, overrides);
     match finding {
         SafetyFinding::MissingSafetyDocs { def_id, span } => {
             let function = canonical_namespace(tcx, def_id);
-            FindingReport {
+            Finding {
                 kind: kind.into(),
-                level,
                 root: None,
                 root_kind: None,
                 function: Some(function.clone()),
@@ -45,6 +42,7 @@ fn safety_finding_report(
                 trace: Vec::new(),
                 missing_requirements: Vec::new(),
                 requirements: Vec::new(),
+                diagnostic,
             }
         }
         SafetyFinding::CallMissingJustification {
@@ -55,9 +53,8 @@ fn safety_finding_report(
         } => {
             let target = safety_callee_name(tcx, callee);
             let call = safety_call_label(call_kind);
-            FindingReport {
+            Finding {
                 kind: kind.into(),
-                level,
                 root: None,
                 root_kind: None,
                 function: Some(canonical_namespace(tcx, caller)),
@@ -67,6 +64,7 @@ fn safety_finding_report(
                 trace: Vec::new(),
                 missing_requirements: Vec::new(),
                 requirements: Vec::new(),
+                diagnostic,
             }
         }
         SafetyFinding::CallMissingRequirements {
@@ -82,9 +80,8 @@ fn safety_finding_report(
                 .iter()
                 .map(render_safety_requirement)
                 .collect();
-            FindingReport {
+            Finding {
                 kind: kind.into(),
-                level,
                 root: None,
                 root_kind: None,
                 function: Some(canonical_namespace(tcx, caller)),
@@ -94,13 +91,13 @@ fn safety_finding_report(
                 trace: Vec::new(),
                 missing_requirements,
                 requirements: Vec::new(),
+                diagnostic,
             }
         }
         SafetyFinding::OpMissingJustification { caller, op, span } => {
             let operation = safety_op_label(op);
-            FindingReport {
+            Finding {
                 kind: kind.into(),
-                level,
                 root: None,
                 root_kind: None,
                 function: Some(canonical_namespace(tcx, caller)),
@@ -110,6 +107,7 @@ fn safety_finding_report(
                 trace: Vec::new(),
                 missing_requirements: Vec::new(),
                 requirements: Vec::new(),
+                diagnostic,
             }
         }
         SafetyFinding::AmbiguousObligationName {
@@ -122,9 +120,8 @@ fn safety_finding_report(
                 .first()
                 .map_or_else(|| tcx.def_span(def_id), |requirement| requirement.span);
             let requirements = requirements.iter().map(render_safety_requirement).collect();
-            FindingReport {
+            Finding {
                 kind: kind.into(),
-                level,
                 root: None,
                 root_kind: None,
                 function: Some(function.clone()),
@@ -136,6 +133,7 @@ fn safety_finding_report(
                 trace: Vec::new(),
                 missing_requirements: Vec::new(),
                 requirements,
+                diagnostic,
             }
         }
     }

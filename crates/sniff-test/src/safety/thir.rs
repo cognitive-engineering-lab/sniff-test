@@ -35,14 +35,13 @@ use super::{
     SafetyAnalysis, SafetyCall, SafetyCallKind, SafetyCallee, SafetyFinding, SafetyOpKind,
     missing_safety_requirements, safety_doc_summary,
 };
-use crate::config::{LintLevel, SafetyConfig};
+use crate::config::SafetyConfig;
 use crate::source_markers::{SafetySatisfaction, span_safety_satisfactions};
 
 pub(super) fn collect_body_findings(
     tcx: TyCtxt<'_>,
     owner: LocalDefId,
     config: &SafetyConfig,
-    ambiguous_obligations: LintLevel,
     analysis: &mut SafetyAnalysis,
 ) {
     let Ok((thir, root)) = tcx.thir_body(owner) else {
@@ -55,7 +54,6 @@ pub(super) fn collect_body_findings(
         thir: &thir,
         owner,
         config,
-        ambiguous_obligations,
         body_target_features: &tcx.body_codegen_attrs(owner.to_def_id()).target_features,
         typing_env: ty::TypingEnv::non_body_analysis(tcx, owner),
         assignment_info: None,
@@ -82,7 +80,6 @@ struct UnsafeOpVisitor<'a, 'tcx> {
     /// inside closure bodies.
     owner: LocalDefId,
     config: &'a SafetyConfig,
-    ambiguous_obligations: LintLevel,
     body_target_features: &'tcx [TargetFeature],
     typing_env: ty::TypingEnv<'tcx>,
     /// Type of the assignment LHS while visiting it; a write-only union field
@@ -130,22 +127,11 @@ impl<'a, 'tcx> UnsafeOpVisitor<'a, 'tcx> {
                 self.tcx,
                 def_id,
                 &self.config.documentation_overrides,
-                self.ambiguous_obligations,
             );
             let summary =
                 safety_doc_summary(self.tcx, def_id, &self.config.documentation_overrides);
             if !summary.requirements.is_empty() {
-                if self.ambiguous_obligations.is_deny()
-                    && !summary.ambiguous_requirements.is_empty()
-                {
-                    return;
-                }
-                let missing = missing_safety_requirements(
-                    &summary.requirements,
-                    &summary.ambiguous_requirements,
-                    &satisfactions,
-                    self.ambiguous_obligations,
-                );
+                let missing = missing_safety_requirements(&summary.requirements, &satisfactions);
                 if !missing.is_empty() {
                     self.analysis
                         .findings
@@ -210,7 +196,6 @@ impl<'a, 'tcx> UnsafeOpVisitor<'a, 'tcx> {
             thir: &inner_thir,
             owner: def,
             config: self.config,
-            ambiguous_obligations: self.ambiguous_obligations,
             body_target_features: self.body_target_features,
             typing_env: self.typing_env,
             assignment_info: self.assignment_info,

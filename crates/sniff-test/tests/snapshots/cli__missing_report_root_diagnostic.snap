@@ -7,6 +7,15 @@ stdout:
 <empty>
 stderr:
     Checking report-roots v0.1.0 ([FIXTURE])
+warning: configured report root was not found
+ --> [FIXTURE]/explicit.toml:4:5
+  |
+4 |     "report_roots::missing_root",
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  |
+  = note: configured under `[analysis].report-roots`
+  = help: remove it or update it to a function in the current crate
+
 error: function `report_roots::private_panic` has an undocumented panic path
   --> src/lib.rs:11:1
    |
@@ -21,15 +30,6 @@ note: panic may happen here: panic sink `core::std::rt::panic_fmt`
    = note: reachable from `report_roots::private_panic` to `core::std::rt::panic_fmt`
    = note: set `show-full-stack-trace = true` under `[analysis]` in sniff-test.toml to show every reachability step
    = help: add a guard, document the panic with `# Panics`, or add `// PANIC:` if a local invariant proves it cannot panic
-
-warning: configured report root was not found
- --> [FIXTURE]/explicit.toml:4:5
-  |
-4 |     "report_roots::missing_root",
-  |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  |
-  = note: configured under `[analysis].report-roots`
-  = help: remove it or update it to a function in the current crate
 
 warning: `report-roots` (lib) generated 1 warning
 error: could not compile `report-roots` (lib) due to 1 previous error; 1 warning emitted

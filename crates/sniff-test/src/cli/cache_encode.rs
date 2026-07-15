@@ -17,14 +17,14 @@ use rustc_hir::def_id::DefId;
 use rustc_middle::ty::TyCtxt;
 use rustc_span::Pos;
 
-use super::report::{FindingKind, FindingReport, render_assert_message, render_node, render_span};
+use super::report::{Finding, FindingKind, render_assert_message, render_node, render_span};
 
 pub(super) fn function_summary<'tcx>(
     tcx: TyCtxt<'tcx>,
     def_id: DefId,
     is_generic: bool,
     analysis_complete: bool,
-    report_findings: &[FindingReport],
+    report_findings: &[Finding],
     config: &PanicConfig,
     graph: Option<(&ReachabilityGraph<'tcx>, &ReachabilitySnapshot<'tcx>)>,
     findings: Vec<CachedFinding>,

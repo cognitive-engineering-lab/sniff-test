@@ -16,7 +16,7 @@ use rustc_middle::ty::TyCtxt;
 use rustc_span::Span;
 use serde::Serialize;
 
-use crate::config::{ContractDocOverrides, LintLevel, SafetyConfig, SafetyLintConfig};
+use crate::config::{ContractDocOverrides, SafetyConfig};
 use crate::contracts::{
     AmbiguousContractRequirements, ContractDocSummary, ContractKind, ContractRequirement,
     contract_doc_summary, normalize_requirement_name, satisfied_requirement_names,
@@ -176,12 +176,7 @@ impl SafetyAnalysis {
         tcx: TyCtxt<'_>,
         def_id: DefId,
         overrides: &ContractDocOverrides,
-        ambiguous_obligations: LintLevel,
     ) {
-        if ambiguous_obligations.is_allow() {
-            return;
-        }
-
         for ambiguous in safety_doc_summary(tcx, def_id, overrides).ambiguous_requirements {
             if !self
                 .ambiguous_requirement_names
@@ -221,40 +216,13 @@ impl SafetyFinding {
     }
 }
 
-impl SafetyFindingKind {
-    #[must_use]
-    pub fn lint_level(
-        self,
-        lints: SafetyLintConfig,
-        ambiguous_obligations: LintLevel,
-    ) -> LintLevel {
-        match self {
-            Self::MissingSafetyDocs => lints.missing_safety_docs,
-            Self::UnsafeCallMissingJustification => lints.unsafe_call_missing_justification,
-            Self::UnsafeCallMissingRequirements => lints.unsafe_call_missing_requirements,
-            Self::UnsafeOpMissingJustification => lints.unsafe_op_missing_justification,
-            Self::SafetyObligationMissingJustification => {
-                lints.safety_obligation_missing_justification
-            }
-            Self::SafetyObligationMissingRequirements => {
-                lints.safety_obligation_missing_requirements
-            }
-            Self::AmbiguousSafetyRequirement => ambiguous_obligations,
-        }
-    }
-}
-
 #[must_use]
-pub fn analyze_safety(
-    tcx: TyCtxt<'_>,
-    config: &SafetyConfig,
-    ambiguous_obligations: LintLevel,
-) -> SafetyAnalysis {
+pub fn analyze_safety(tcx: TyCtxt<'_>, config: &SafetyConfig) -> SafetyAnalysis {
     let mut analysis = SafetyAnalysis::default();
 
     for owner in tcx.hir_body_owners() {
         if matches!(tcx.def_kind(owner), DefKind::Fn | DefKind::AssocFn) {
-            collect_missing_safety_docs(tcx, owner, config, ambiguous_obligations, &mut analysis);
+            collect_missing_safety_docs(tcx, owner, config, &mut analysis);
         }
         // Closures and inline consts are visited with their enclosing body so
         // justification scopes flow into them lexically; every other body
@@ -262,7 +230,7 @@ pub fn analyze_safety(
         if tcx.is_typeck_child(owner.to_def_id()) || config.ignores_def(tcx, owner.to_def_id()) {
             continue;
         }
-        thir::collect_body_findings(tcx, owner, config, ambiguous_obligations, &mut analysis);
+        thir::collect_body_findings(tcx, owner, config, &mut analysis);
     }
 
     analysis
@@ -302,7 +270,6 @@ fn collect_missing_safety_docs(
     tcx: TyCtxt<'_>,
     owner: LocalDefId,
     config: &SafetyConfig,
-    ambiguous_obligations: LintLevel,
     analysis: &mut SafetyAnalysis,
 ) {
     let def_id = owner.to_def_id();
@@ -322,12 +289,7 @@ fn collect_missing_safety_docs(
             span: tcx.def_span(def_id),
         });
     } else {
-        analysis.push_ambiguous_requirement_names(
-            tcx,
-            def_id,
-            &config.documentation_overrides,
-            ambiguous_obligations,
-        );
+        analysis.push_ambiguous_requirement_names(tcx, def_id, &config.documentation_overrides);
     }
 }
 
@@ -395,31 +357,18 @@ pub(crate) fn render_safety_requirement(requirement: &SafetyRequirement) -> Stri
 
 fn missing_safety_requirements(
     requirements: &[SafetyRequirement],
-    ambiguous_requirements: &[AmbiguousSafetyRequirements],
     satisfactions: &[SafetySatisfaction],
-    ambiguous_obligations: LintLevel,
 ) -> Vec<SafetyRequirement> {
     let satisfied_requirements = satisfied_requirement_names(
         satisfactions
             .iter()
             .map(|satisfaction| (satisfaction.requirement.as_deref(), &*satisfaction.reason)),
     );
-    let ambiguous_names = ambiguous_obligations
-        .is_deny()
-        .then(|| {
-            ambiguous_requirements
-                .iter()
-                .map(|ambiguous| ambiguous.normalized_name.as_str())
-                .collect::<HashSet<_>>()
-        })
-        .unwrap_or_default();
-
     requirements
         .iter()
         .filter(|requirement| {
             let normalized_name = normalize_requirement_name(&requirement.name);
-            ambiguous_names.contains(normalized_name.as_str())
-                || !satisfied_requirements.contains(&normalized_name)
+            !satisfied_requirements.contains(&normalized_name)
         })
         .cloned()
         .collect()
@@ -431,7 +380,6 @@ mod tests {
         SafetyRequirement, line_has_safety_heading, missing_safety_requirements,
         parse_safety_doc_lines,
     };
-    use crate::config::LintLevel;
     use crate::source_markers::SafetySatisfaction;
     use rustc_span::DUMMY_SP;
 
@@ -509,7 +457,7 @@ mod tests {
         }];
 
         assert_eq!(
-            missing_safety_requirements(&requirements, &[], &satisfactions, LintLevel::Deny),
+            missing_safety_requirements(&requirements, &satisfactions),
             [SafetyRequirement {
                 name: String::from("initialized"),
                 condition: String::from("pointer must be initialized"),
@@ -519,7 +467,7 @@ mod tests {
     }
 
     #[test]
-    fn ambiguous_safety_requirement_names_are_missing_in_strict_mode() {
+    fn ambiguous_safety_requirement_names_do_not_change_requirement_matching() {
         let requirements = [
             SafetyRequirement {
                 name: String::from("valid_ptr"),
@@ -532,22 +480,11 @@ mod tests {
                 span: DUMMY_SP,
             },
         ];
-        let ambiguous = [super::AmbiguousSafetyRequirements {
-            normalized_name: String::from("valid ptr"),
-            requirements: requirements.to_vec(),
-        }];
         let satisfactions = [SafetySatisfaction {
             requirement: Some(String::from("valid_ptr")),
             reason: String::from("checked"),
         }];
 
-        assert_eq!(
-            missing_safety_requirements(&requirements, &ambiguous, &satisfactions, LintLevel::Deny),
-            requirements
-        );
-        assert!(
-            missing_safety_requirements(&requirements, &ambiguous, &satisfactions, LintLevel::Warn)
-                .is_empty()
-        );
+        assert!(missing_safety_requirements(&requirements, &satisfactions).is_empty());
     }
 }
