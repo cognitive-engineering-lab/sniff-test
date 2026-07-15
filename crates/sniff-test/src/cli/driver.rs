@@ -619,62 +619,62 @@ fn collect_cached_dependency_findings<'tcx>(
         // A truncated dependency summary with clean counts proves nothing:
         // treat it as raw panic evidence rather than silence.
         if summary.panic_obligations > 0 || summary.trusted_panic_obligations > 0 {
-            let cached_findings = summary
-                .findings
-                .iter()
-                .filter(|finding| {
-                    matches!(
-                        finding.kind,
-                        crate::cache::CachedFindingKind::PanicObligation
-                            | crate::cache::CachedFindingKind::TrustedPanicObligation
-                    )
-                })
-                .collect::<Vec<_>>();
-            if cached_findings.is_empty() {
-                push_cached_dependency_obligation_finding(
+            let kind = if is_trusted_panic_obligation(tcx, def_id, collection.config) {
+                FindingKind::TrustedPanic
+            } else {
+                FindingKind::DocumentedPanic
+            };
+            let mut emitted = false;
+            for cached_finding in summary.findings.iter().filter(|finding| {
+                matches!(
+                    finding.kind,
+                    crate::cache::CachedFindingKind::PanicObligation
+                        | crate::cache::CachedFindingKind::TrustedPanicObligation
+                )
+            }) {
+                emitted = true;
+                report.push_cached_dependency_obligation(
                     tcx,
                     graph,
-                    CachedDependencyFinding {
-                        edge_id: edge.id(),
-                        local_trace: &local_trace,
-                        def_id: instance.def_id(),
-                        summary,
-                        cached_finding: None,
-                    },
-                    collection,
-                    report,
+                    edge.id(),
+                    &local_trace,
+                    summary,
+                    Some(cached_finding),
+                    kind,
                 );
-            } else {
-                for cached_finding in cached_findings {
-                    push_cached_dependency_obligation_finding(
-                        tcx,
-                        graph,
-                        CachedDependencyFinding {
-                            edge_id: edge.id(),
-                            local_trace: &local_trace,
-                            def_id: instance.def_id(),
-                            summary,
-                            cached_finding: Some(cached_finding),
-                        },
-                        collection,
-                        report,
-                    );
-                }
+            }
+            if !emitted {
+                report.push_cached_dependency_obligation(
+                    tcx,
+                    graph,
+                    edge.id(),
+                    &local_trace,
+                    summary,
+                    None,
+                    kind,
+                );
             }
         } else if summary.raw_panic_paths > 0 || !summary.analysis_complete {
-            let cached_findings = summary
-                .findings
-                .iter()
-                .filter(|finding| {
-                    matches!(
-                        finding.kind,
-                        crate::cache::CachedFindingKind::CompilerAssert
-                            | crate::cache::CachedFindingKind::PanicInvocation
-                            | crate::cache::CachedFindingKind::IndirectCallBoundary
-                    )
-                })
-                .collect::<Vec<_>>();
-            if cached_findings.is_empty() {
+            let mut emitted = false;
+            for cached_finding in summary.findings.iter().filter(|finding| {
+                matches!(
+                    finding.kind,
+                    crate::cache::CachedFindingKind::CompilerAssert
+                        | crate::cache::CachedFindingKind::PanicInvocation
+                        | crate::cache::CachedFindingKind::IndirectCallBoundary
+                )
+            }) {
+                emitted = true;
+                report.push_cached_dependency_panic(
+                    tcx,
+                    graph,
+                    edge.id(),
+                    &local_trace,
+                    summary,
+                    Some(cached_finding),
+                );
+            }
+            if !emitted {
                 report.push_cached_dependency_panic(
                     tcx,
                     graph,
@@ -683,53 +683,9 @@ fn collect_cached_dependency_findings<'tcx>(
                     summary,
                     None,
                 );
-            } else {
-                for cached_finding in cached_findings {
-                    report.push_cached_dependency_panic(
-                        tcx,
-                        graph,
-                        edge.id(),
-                        &local_trace,
-                        summary,
-                        Some(cached_finding),
-                    );
-                }
             }
         }
     }
-}
-
-#[derive(Debug, Clone, Copy)]
-struct CachedDependencyFinding<'summary> {
-    edge_id: reachability::ReachabilityEdgeId,
-    local_trace: &'summary [reachability::ReachabilityEdgeId],
-    def_id: DefId,
-    summary: &'summary CachedFunctionSummary,
-    cached_finding: Option<&'summary crate::cache::CachedFinding>,
-}
-
-fn push_cached_dependency_obligation_finding<'tcx>(
-    tcx: TyCtxt<'tcx>,
-    graph: &ReachabilityGraph<'tcx>,
-    finding: CachedDependencyFinding<'_>,
-    collection: &PanicFindingCollection<'_>,
-    report: &mut PanicRootReport,
-) {
-    let trusted = is_trusted_panic_obligation(tcx, finding.def_id, collection.config);
-    let kind = if trusted {
-        FindingKind::TrustedPanic
-    } else {
-        FindingKind::DocumentedPanic
-    };
-    report.push_cached_dependency_obligation(
-        tcx,
-        graph,
-        finding.edge_id,
-        finding.local_trace,
-        finding.summary,
-        finding.cached_finding,
-        kind,
-    );
 }
 
 pub(crate) fn load_config(args: &SniffTestArgs) -> SniffTestConfig {
