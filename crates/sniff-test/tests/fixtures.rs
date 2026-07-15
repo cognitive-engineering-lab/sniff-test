@@ -584,15 +584,7 @@ fn normalize_json(value: &mut Value, fixture_root: &Path, sysroot: &str) {
 }
 
 fn volatile_key(key: &str) -> bool {
-    matches!(
-        key,
-        "artifact-id"
-            | "artifact-path"
-            | "exact-cache-path"
-            | "rustc-version"
-            | "metadata"
-            | "extra-filename"
-    )
+    matches!(key, "artifact-id" | "rustc-version")
 }
 
 fn message_sort_key(message: &Value) -> (String, String, String) {

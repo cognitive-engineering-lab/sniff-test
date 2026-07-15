@@ -6,16 +6,7 @@ expression: messages
   {
     "artifact": {
       "artifact-id": "[ARTIFACT_ID]",
-      "crate-name": "trait_default_method",
-      "crate-types": [
-        "lib"
-      ],
-      "extra-filename": "[EXTRA_FILENAME]",
-      "manifest-path": null,
-      "metadata": "[METADATA]",
-      "package-name": null,
-      "package-version": null,
-      "target": null
+      "crate-name": "trait_default_method"
     },
     "dependencies": [],
     "findings": [
@@ -34,7 +25,7 @@ expression: messages
         ]
       }
     ],
-    "format-version": 4,
+    "format-version": 5,
     "reason": "sniff-test-artifact",
     "rustc-version": "[RUSTC_VERSION]",
     "scope": "workspace",

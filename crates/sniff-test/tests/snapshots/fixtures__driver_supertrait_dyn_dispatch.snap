@@ -6,16 +6,7 @@ expression: messages
   {
     "artifact": {
       "artifact-id": "[ARTIFACT_ID]",
-      "crate-name": "supertrait_dyn_dispatch",
-      "crate-types": [
-        "lib"
-      ],
-      "extra-filename": "[EXTRA_FILENAME]",
-      "manifest-path": null,
-      "metadata": "[METADATA]",
-      "package-name": null,
-      "package-version": null,
-      "target": null
+      "crate-name": "supertrait_dyn_dispatch"
     },
     "dependencies": [],
     "findings": [
@@ -49,7 +40,7 @@ expression: messages
         ]
       }
     ],
-    "format-version": 4,
+    "format-version": 5,
     "reason": "sniff-test-artifact",
     "rustc-version": "[RUSTC_VERSION]",
     "scope": "workspace",

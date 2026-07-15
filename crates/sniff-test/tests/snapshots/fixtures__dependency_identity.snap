@@ -6,16 +6,7 @@ expression: messages
   {
     "artifact": {
       "artifact-id": "[ARTIFACT_ID]",
-      "crate-name": "dependency_identity",
-      "crate-types": [
-        "lib"
-      ],
-      "extra-filename": "[EXTRA_FILENAME]",
-      "manifest-path": "[FIXTURE]/dep/Cargo.toml",
-      "metadata": "[METADATA]",
-      "package-name": "dependency-identity",
-      "package-version": "0.1.0",
-      "target": null
+      "crate-name": "dependency_identity"
     },
     "dependencies": [],
     "findings": [
@@ -62,7 +53,7 @@ expression: messages
         ]
       }
     ],
-    "format-version": 4,
+    "format-version": 5,
     "reason": "sniff-test-artifact",
     "rustc-version": "[RUSTC_VERSION]",
     "scope": "dependency",
@@ -71,22 +62,11 @@ expression: messages
   {
     "artifact": {
       "artifact-id": "[ARTIFACT_ID]",
-      "crate-name": "dependency_identity_app",
-      "crate-types": [
-        "lib"
-      ],
-      "extra-filename": "[EXTRA_FILENAME]",
-      "manifest-path": "[FIXTURE]/app/Cargo.toml",
-      "metadata": "[METADATA]",
-      "package-name": "dependency-identity-app",
-      "package-version": "0.1.0",
-      "target": null
+      "crate-name": "dependency_identity_app"
     },
     "dependencies": [
       {
         "artifact-id": "[ARTIFACT_ID]",
-        "artifact-path": "[ARTIFACT_PATH]",
-        "exact-cache-path": "[EXACT_CACHE_PATH]",
         "extern-name": "dependency_identity"
       }
     ],
@@ -152,7 +132,7 @@ expression: messages
         ]
       }
     ],
-    "format-version": 4,
+    "format-version": 5,
     "reason": "sniff-test-artifact",
     "rustc-version": "[RUSTC_VERSION]",
     "scope": "workspace",

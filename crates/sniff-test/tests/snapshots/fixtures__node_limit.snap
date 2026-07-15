@@ -6,16 +6,7 @@ expression: messages
   {
     "artifact": {
       "artifact-id": "[ARTIFACT_ID]",
-      "crate-name": "node_limit",
-      "crate-types": [
-        "lib"
-      ],
-      "extra-filename": "[EXTRA_FILENAME]",
-      "manifest-path": "[FIXTURE]/Cargo.toml",
-      "metadata": "[METADATA]",
-      "package-name": "node-limit",
-      "package-version": "0.1.0",
-      "target": null
+      "crate-name": "node_limit"
     },
     "dependencies": [],
     "findings": [
@@ -28,7 +19,7 @@ expression: messages
         "span": "src/lib.rs:24:1: 24:30"
       }
     ],
-    "format-version": 4,
+    "format-version": 5,
     "reason": "sniff-test-artifact",
     "rustc-version": "[RUSTC_VERSION]",
     "scope": "workspace",

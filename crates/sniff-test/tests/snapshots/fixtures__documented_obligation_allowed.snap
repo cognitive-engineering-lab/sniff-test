@@ -6,20 +6,11 @@ expression: messages
   {
     "artifact": {
       "artifact-id": "[ARTIFACT_ID]",
-      "crate-name": "documented_obligation",
-      "crate-types": [
-        "lib"
-      ],
-      "extra-filename": "[EXTRA_FILENAME]",
-      "manifest-path": "[FIXTURE]/Cargo.toml",
-      "metadata": "[METADATA]",
-      "package-name": "documented-obligation",
-      "package-version": "0.1.0",
-      "target": null
+      "crate-name": "documented_obligation"
     },
     "dependencies": [],
     "findings": [],
-    "format-version": 4,
+    "format-version": 5,
     "reason": "sniff-test-artifact",
     "rustc-version": "[RUSTC_VERSION]",
     "scope": "workspace",

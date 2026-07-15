@@ -3,9 +3,7 @@ use std::path::PathBuf;
 #[derive(Debug, Default)]
 pub(crate) struct RustcInvocation {
     pub(crate) crate_types: Vec<String>,
-    pub(crate) metadata: Option<String>,
     pub(crate) extra_filename: Option<String>,
-    pub(crate) target: Option<String>,
     pub(crate) externs: Vec<ExternCrateArg>,
 }
 
@@ -22,9 +20,7 @@ impl RustcInvocation {
                     }
                 }
                 "--target" => {
-                    if let Some(value) = args.next() {
-                        parsed.target = Some(value.clone());
-                    }
+                    args.next();
                 }
                 "--extern" => {
                     if let Some(value) = args.next()
@@ -44,8 +40,6 @@ impl RustcInvocation {
                 _ => {
                     if let Some(value) = arg.strip_prefix("--crate-type=") {
                         parsed.crate_types.push(value.to_owned());
-                    } else if let Some(value) = arg.strip_prefix("--target=") {
-                        parsed.target = Some(value.to_owned());
                     } else if let Some(value) = arg.strip_prefix("--extern=") {
                         if let Some(extern_arg) = ExternCrateArg::parse(value) {
                             parsed.externs.push(extern_arg);
@@ -61,9 +55,7 @@ impl RustcInvocation {
     }
 
     fn parse_codegen_option(&mut self, value: &str) {
-        if let Some(value) = value.strip_prefix("metadata=") {
-            self.metadata = Some(value.to_owned());
-        } else if let Some(value) = value.strip_prefix("extra-filename=") {
+        if let Some(value) = value.strip_prefix("extra-filename=") {
             self.extra_filename = Some(value.to_owned());
         }
     }

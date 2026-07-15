@@ -758,7 +758,7 @@ impl CrateOutputScope {
     }
 }
 
-const REPORT_FORMAT_VERSION: u32 = 4;
+const REPORT_FORMAT_VERSION: u32 = 5;
 
 fn render_json_analysis_artifact_report(report: &AnalysisArtifactReport) -> Option<String> {
     match serde_json::to_string(report) {
@@ -882,13 +882,6 @@ fn artifact_info(tcx: TyCtxt<'_>, invocation: &RustcInvocation) -> CachedArtifac
     CachedArtifactInfo {
         artifact_id: artifact_id(&crate_name, invocation.extra_filename.as_deref()),
         crate_name,
-        crate_types: invocation.crate_types.clone(),
-        package_name: std::env::var("CARGO_PKG_NAME").ok(),
-        package_version: std::env::var("CARGO_PKG_VERSION").ok(),
-        manifest_path: std::env::var("CARGO_MANIFEST_PATH").ok(),
-        target: invocation.target.clone(),
-        metadata: invocation.metadata.clone(),
-        extra_filename: invocation.extra_filename.clone(),
     }
 }
 
@@ -1243,13 +1236,6 @@ mod tests {
             artifact: CachedArtifactInfo {
                 artifact_id: String::from("demo-1234"),
                 crate_name: String::from("demo"),
-                crate_types: vec![String::from("lib")],
-                package_name: None,
-                package_version: None,
-                manifest_path: None,
-                target: None,
-                metadata: None,
-                extra_filename: None,
             },
             scope: CrateOutputScope::Workspace,
             dependencies: Vec::new(),
@@ -1277,7 +1263,7 @@ mod tests {
 
         let json = serde_json::to_value(report).expect("serialize report");
         let object = json.as_object().expect("report object");
-        assert_eq!(object["format-version"], 4);
+        assert_eq!(object["format-version"], 5);
         assert_eq!(object["findings"].as_array().expect("findings").len(), 1);
         for removed in [
             "analysis-findings",

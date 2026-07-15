@@ -6,16 +6,7 @@ expression: messages
   {
     "artifact": {
       "artifact-id": "[ARTIFACT_ID]",
-      "crate-name": "dyn_dispatch_same_trait",
-      "crate-types": [
-        "lib"
-      ],
-      "extra-filename": "[EXTRA_FILENAME]",
-      "manifest-path": "[FIXTURE]/Cargo.toml",
-      "metadata": "[METADATA]",
-      "package-name": "dyn-dispatch-same-trait",
-      "package-version": "0.1.0",
-      "target": null
+      "crate-name": "dyn_dispatch_same_trait"
     },
     "dependencies": [],
     "findings": [
@@ -35,7 +26,7 @@ expression: messages
         ]
       }
     ],
-    "format-version": 4,
+    "format-version": 5,
     "reason": "sniff-test-artifact",
     "rustc-version": "[RUSTC_VERSION]",
     "scope": "workspace",

@@ -6,16 +6,7 @@ expression: messages
   {
     "artifact": {
       "artifact-id": "[ARTIFACT_ID]",
-      "crate-name": "unsafe_const_init",
-      "crate-types": [
-        "lib"
-      ],
-      "extra-filename": "[EXTRA_FILENAME]",
-      "manifest-path": null,
-      "metadata": "[METADATA]",
-      "package-name": null,
-      "package-version": null,
-      "target": null
+      "crate-name": "unsafe_const_init"
     },
     "dependencies": [],
     "findings": [
@@ -36,7 +27,7 @@ expression: messages
         "target": "unsafe_const_init::seeded"
       }
     ],
-    "format-version": 4,
+    "format-version": 5,
     "reason": "sniff-test-artifact",
     "rustc-version": "[RUSTC_VERSION]",
     "scope": "workspace",

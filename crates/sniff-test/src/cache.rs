@@ -13,9 +13,9 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
-pub const CACHE_FORMAT_VERSION: u32 = 3;
+pub const CACHE_FORMAT_VERSION: u32 = 4;
 pub const CACHE_DIR_NAME: &str = "sniff-test-cache";
-pub const CACHE_VERSION_DIR: &str = "v3";
+pub const CACHE_VERSION_DIR: &str = "v4";
 pub const OUTCOME_FORMAT_VERSION: u32 = 1;
 
 /// Per-unit verdict persisted with artifact lifetime.
@@ -144,13 +144,6 @@ impl CachedArtifactAnalysis {
 pub struct CachedArtifactInfo {
     pub artifact_id: String,
     pub crate_name: String,
-    pub crate_types: Vec<String>,
-    pub package_name: Option<String>,
-    pub package_version: Option<String>,
-    pub manifest_path: Option<String>,
-    pub target: Option<String>,
-    pub metadata: Option<String>,
-    pub extra_filename: Option<String>,
 }
 
 /// A dependency artifact observed while analyzing this artifact.
@@ -161,9 +154,7 @@ pub struct CachedArtifactInfo {
 #[serde(rename_all = "kebab-case")]
 pub struct CachedDependencyRef {
     pub extern_name: String,
-    pub artifact_path: Option<String>,
-    pub artifact_id: Option<String>,
-    pub exact_cache_path: Option<String>,
+    pub artifact_id: String,
 }
 
 /// Cached panic reachability facts for one analyzed report root.
@@ -610,13 +601,13 @@ mod tests {
             artifact_cache_path(&root, "sniff_test-29f0")
                 .display()
                 .to_string(),
-            "/target/plugin-nightly/sniff-test-cache/v3/artifacts/sniff_test-29f0.json"
+            "/target/plugin-nightly/sniff-test-cache/v4/artifacts/sniff_test-29f0.json"
         );
         assert_eq!(
             crate_cache_path(&root, "sniff-test", "sniff_test-29f0")
                 .display()
                 .to_string(),
-            "/target/plugin-nightly/sniff-test-cache/v3/crates/sniff-test/sniff_test-29f0.json"
+            "/target/plugin-nightly/sniff-test-cache/v4/crates/sniff-test/sniff_test-29f0.json"
         );
     }
 
@@ -653,11 +644,11 @@ mod tests {
         ));
 
         let mut old_format = analysis("0.1.0", "rustc 1.97.0-nightly");
-        old_format.format_version = 2;
+        old_format.format_version = 3;
         write(&old_format);
         assert!(matches!(
             read_artifact_analysis(&path, &current),
-            Err(CacheError::Format { version: 2, .. })
+            Err(CacheError::Format { version: 3, .. })
         ));
     }
 
@@ -668,13 +659,6 @@ mod tests {
             CachedArtifactInfo {
                 artifact_id: String::from("dep-1234"),
                 crate_name: String::from("dep"),
-                crate_types: Vec::new(),
-                package_name: None,
-                package_version: None,
-                manifest_path: None,
-                target: None,
-                metadata: None,
-                extra_filename: None,
             },
             Vec::new(),
             Vec::new(),

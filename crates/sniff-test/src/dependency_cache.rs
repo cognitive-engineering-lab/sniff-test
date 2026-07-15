@@ -9,8 +9,8 @@ use std::collections::{HashMap, hash_map::Entry};
 use std::path::{Path, PathBuf};
 
 use crate::cache::{
-    CacheExpectations, CachedArtifactAnalysis, CachedDependencyRef, CachedFunctionSummary,
-    artifact_cache_path, artifact_id_from_extern_path, read_artifact_analysis,
+    CacheExpectations, CachedDependencyRef, CachedFunctionSummary, artifact_cache_path,
+    artifact_id_from_extern_path, read_artifact_analysis,
 };
 use crate::config::PanicConfig;
 
@@ -111,10 +111,7 @@ impl DependencyAnalysisCache {
 
             dependencies.push(ResolvedDependency {
                 extern_name: extern_arg.name,
-                artifact_path: extern_arg.path,
                 artifact_id,
-                exact_cache_path,
-                analysis,
                 load_error,
             });
         }
@@ -148,11 +145,6 @@ impl DependencyAnalysisCache {
         })
     }
 
-    #[must_use]
-    pub fn failed_count(&self) -> usize {
-        self.load_failures().count()
-    }
-
     /// Crate names that resolved to more than one cached artifact; their
     /// evidence is disabled because lookups cannot pick a version.
     #[must_use]
@@ -168,33 +160,14 @@ impl DependencyAnalysisCache {
     }
 
     #[must_use]
-    pub fn dependency_count(&self) -> usize {
-        self.dependencies.len()
-    }
-
-    #[must_use]
-    pub fn hit_count(&self) -> usize {
-        self.dependencies
-            .iter()
-            .filter(|dependency| dependency.analysis.is_some())
-            .count()
-    }
-
-    #[must_use]
     pub fn resolved_dependencies(&self) -> Vec<CachedDependencyRef> {
         self.dependencies
             .iter()
-            .map(|dependency| CachedDependencyRef {
-                extern_name: dependency.extern_name.clone(),
-                artifact_path: dependency
-                    .artifact_path
-                    .as_ref()
-                    .map(|path| path.display().to_string()),
-                artifact_id: dependency.artifact_id.clone(),
-                exact_cache_path: dependency
-                    .exact_cache_path
-                    .as_ref()
-                    .map(|path| path.display().to_string()),
+            .filter_map(|dependency| {
+                Some(CachedDependencyRef {
+                    extern_name: dependency.extern_name.clone(),
+                    artifact_id: dependency.artifact_id.clone()?,
+                })
             })
             .collect()
     }
@@ -222,10 +195,7 @@ enum CrateArtifactIndex {
 #[derive(Debug)]
 struct ResolvedDependency {
     extern_name: String,
-    artifact_path: Option<PathBuf>,
     artifact_id: Option<String>,
-    exact_cache_path: Option<PathBuf>,
-    analysis: Option<CachedArtifactAnalysis>,
     load_error: Option<String>,
 }
 
