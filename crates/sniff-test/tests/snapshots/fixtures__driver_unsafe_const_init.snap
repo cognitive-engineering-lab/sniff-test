@@ -4,6 +4,7 @@ expression: messages
 ---
 [
   {
+    "analysis-findings": [],
     "artifact": {
       "artifact-id": "[ARTIFACT_ID]",
       "crate-name": "unsafe_const_init",
@@ -20,9 +21,11 @@ expression: messages
     "concrete-roots": 0,
     "counts": {
       "analysis-incomplete": 0,
+      "cached-dependency-panics": 0,
+      "compiler-asserts": 0,
       "documented-panics": 0,
       "indirect-call-boundaries": 0,
-      "raw-panic-paths": 0,
+      "panic-invocations": 0,
       "trusted-panics": 0
     },
     "dependencies": [],
@@ -33,20 +36,22 @@ expression: messages
     },
     "format-version": 2,
     "generic-roots": 0,
-    "missing-roots": [],
     "reason": "sniff-test-artifact",
     "roots": [],
     "rustc-version": "[RUSTC_VERSION]",
     "safety": {
       "counts": {
-        "missing-docs": 0,
-        "missing-justification": 2,
-        "missing-requirements": 0
+        "missing-safety-docs": 0,
+        "safety-obligation-missing-justification": 0,
+        "safety-obligation-missing-requirements": 0,
+        "unsafe-call-missing-justification": 2,
+        "unsafe-call-missing-requirements": 0,
+        "unsafe-op-missing-justification": 0
       },
       "findings": [
         {
           "function": "unsafe_const_init::UNJUSTIFIED_STATIC",
-          "kind": "missing-justification",
+          "kind": "unsafe-call-missing-justification",
           "level": "warn",
           "reason": "unsafe call to `unsafe_const_init::seeded` has no `// SAFETY:` justification",
           "span": "[FIXTURE]/src/lib.rs:5:47: 5:55",
@@ -54,7 +59,7 @@ expression: messages
         },
         {
           "function": "unsafe_const_init::UNJUSTIFIED_CONST",
-          "kind": "missing-justification",
+          "kind": "unsafe-call-missing-justification",
           "level": "warn",
           "reason": "unsafe call to `unsafe_const_init::seeded` has no `// SAFETY:` justification",
           "span": "[FIXTURE]/src/lib.rs:11:45: 11:53",

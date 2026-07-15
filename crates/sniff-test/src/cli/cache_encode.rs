@@ -37,7 +37,9 @@ pub(super) fn function_summary<'tcx>(
         analysis_complete,
         has_panic_docs: crate::panics::has_panic_docs(tcx, def_id, config),
         root_span: cached_source_span(tcx, tcx.def_span(def_id)),
-        raw_panic_paths: counts.raw_panic_paths,
+        raw_panic_paths: counts.compiler_asserts
+            + counts.panic_invocations
+            + counts.cached_dependency_panics,
         panic_obligations: counts.documented_panics,
         trusted_panic_obligations: counts.trusted_panics,
         graph: graph.map(|(graph, result)| cached_reachability_graph(tcx, graph, result)),

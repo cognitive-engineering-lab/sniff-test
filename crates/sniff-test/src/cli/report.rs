@@ -184,7 +184,7 @@ impl PanicRootReport {
         level: LintLevel,
     ) {
         self.push_finding(PanicFindingReport {
-            kind: ReportDetailKind::AmbiguousObligationMarker,
+            kind: ReportDetailKind::AmbiguousPanicMarker,
             level,
             span: render_span(tcx, marker.marker_span),
             edge: None,
@@ -209,7 +209,7 @@ impl PanicRootReport {
             .first()
             .map_or_else(|| tcx.def_span(name.def_id), |requirement| requirement.span);
         self.push_finding(PanicFindingReport {
-            kind: ReportDetailKind::AmbiguousObligationName,
+            kind: ReportDetailKind::AmbiguousPanicRequirement,
             level,
             span: render_span(tcx, span),
             edge: None,
@@ -257,8 +257,8 @@ pub(crate) enum ReportDetailKind {
     DocumentedPanic,
     TrustedPanic,
     IndirectCallBoundary,
-    AmbiguousObligationMarker,
-    AmbiguousObligationName,
+    AmbiguousPanicMarker,
+    AmbiguousPanicRequirement,
     AnalysisIncomplete,
 }
 
@@ -274,16 +274,16 @@ impl ReportDetailKind {
 
     pub(crate) fn lint_level(self, lints: PanicLintConfig) -> LintLevel {
         match self {
-            Self::CompilerAssert | Self::PanicInvocation | Self::CachedDependencyPanic => {
-                lints.missing_docs
-            }
+            Self::CompilerAssert => lints.compiler_assert,
+            Self::PanicInvocation => lints.panic_invocation,
+            Self::CachedDependencyPanic => lints.cached_dependency_panic,
             Self::DocumentedPanic => lints.documented_panic,
             Self::TrustedPanic => lints.trusted_panic,
             Self::IndirectCallBoundary => lints.indirect_call_boundary,
-            Self::AmbiguousObligationMarker => {
+            Self::AmbiguousPanicMarker => {
                 unreachable!("ambiguous marker level comes from `[analysis]` policy")
             }
-            Self::AmbiguousObligationName => {
+            Self::AmbiguousPanicRequirement => {
                 unreachable!("ambiguous obligation-name level comes from `[analysis]` policy")
             }
             Self::AnalysisIncomplete => {

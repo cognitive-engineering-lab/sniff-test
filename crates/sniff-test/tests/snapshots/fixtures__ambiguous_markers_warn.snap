@@ -4,6 +4,7 @@ expression: messages
 ---
 [
   {
+    "analysis-findings": [],
     "artifact": {
       "artifact-id": "[ARTIFACT_ID]",
       "crate-name": "ambiguous_markers",
@@ -19,12 +20,14 @@ expression: messages
     },
     "concrete-roots": 2,
     "counts": {
-      "ambiguous-obligation-markers": 1,
-      "ambiguous-obligation-names": 1,
+      "ambiguous-panic-markers": 1,
+      "ambiguous-panic-requirements": 1,
       "analysis-incomplete": 0,
+      "cached-dependency-panics": 0,
+      "compiler-asserts": 0,
       "documented-panics": 0,
       "indirect-call-boundaries": 0,
-      "raw-panic-paths": 0,
+      "panic-invocations": 0,
       "trusted-panics": 0
     },
     "dependencies": [],
@@ -35,22 +38,23 @@ expression: messages
     },
     "format-version": 2,
     "generic-roots": 0,
-    "missing-roots": [],
     "reason": "sniff-test-artifact",
     "roots": [
       {
         "counts": {
-          "ambiguous-obligation-names": 1,
+          "ambiguous-panic-requirements": 1,
           "analysis-incomplete": 0,
+          "cached-dependency-panics": 0,
+          "compiler-asserts": 0,
           "documented-panics": 0,
           "indirect-call-boundaries": 0,
-          "raw-panic-paths": 0,
+          "panic-invocations": 0,
           "trusted-panics": 0
         },
         "findings": [
           {
             "edge": null,
-            "kind": "ambiguous-obligation-name",
+            "kind": "ambiguous-panic-requirement",
             "level": "warn",
             "reason": "`ambiguous_markers::duplicate_name_ratio` has 2 # Panics requirements named `nonzero`",
             "span": "src/lib.rs:21:1: 21:45",
@@ -65,17 +69,19 @@ expression: messages
       },
       {
         "counts": {
-          "ambiguous-obligation-markers": 1,
+          "ambiguous-panic-markers": 1,
           "analysis-incomplete": 0,
+          "cached-dependency-panics": 0,
+          "compiler-asserts": 0,
           "documented-panics": 0,
           "indirect-call-boundaries": 0,
-          "raw-panic-paths": 0,
+          "panic-invocations": 0,
           "trusted-panics": 0
         },
         "findings": [
           {
             "edge": null,
-            "kind": "ambiguous-obligation-marker",
+            "kind": "ambiguous-panic-marker",
             "level": "warn",
             "reason": "one `// PANIC:` marker applies to 2 panic obligation sites",
             "span": "src/lib.rs:9:1: 10:1",

@@ -51,13 +51,20 @@ marker-probing = "macro-definition-first" # macro-definition-first | source-call
 
 [analysis.lints]
 analysis-incomplete = "deny"
-ambiguous-obligations = "deny" # deny | warn | allow
+ambiguous-panic-marker = "deny" # deny | warn | allow
+ambiguous-panic-requirement = "deny"
+ambiguous-safety-requirement = "deny"
+empty-report-roots = "warn"
+missing-report-root = "warn"
+ignored-report-root = "warn"
 
 [documentation]
 override-files = [] # TOML files relative to sniff-test.toml
 
 [panics.lints]
-missing-docs = "deny"
+compiler-assert = "deny"
+panic-invocation = "deny"
+cached-dependency-panic = "deny"
 documented-panic = "warn"
 trusted-panic = "warn"
 indirect-call-boundary = "warn"
@@ -67,9 +74,12 @@ ignored-namespaces = []
 safety-obligation-namespaces = []
 
 [safety.lints]
-missing-docs = "warn"
-missing-justification = "warn"
-missing-requirements = "warn"
+missing-safety-docs = "warn"
+unsafe-call-missing-justification = "warn"
+unsafe-call-missing-requirements = "warn"
+unsafe-op-missing-justification = "warn"
+safety-obligation-missing-justification = "warn"
+safety-obligation-missing-requirements = "warn"
 ```
 
 `inline-mir = "off"` passes `-Z inline-mir=no`, which keeps panic traces closer
@@ -85,10 +95,10 @@ reifications with the same `fn` pointer type, or multiple concrete values cast
 to the same dyn trait, each matching call site may connect to every observed
 target.
 
-`ambiguous-obligations = "deny"` rejects proof squashing when one local marker
-would justify multiple panic obligation sites, or when one `# Panics`/`# Safety`
-section contains duplicate requirement names after normalization. `warn` accepts
-the squash but reports it; `allow` accepts it silently.
+The three `ambiguous-*-*` lints independently control shared panic markers,
+duplicate normalized `# Panics` requirement names, and duplicate normalized
+`# Safety` requirement names. `warn` accepts the ambiguity but reports it;
+`allow` accepts it silently.
 
 `marker-probing = "macro-definition-first"` lets `// PANIC:` and `// SAFETY:`
 markers inside macro definitions satisfy operations produced by that macro,
@@ -177,7 +187,8 @@ conditions may be empty when the name is enough, but call-site satisfaction
 bullets must include justification text. Names are matched case-insensitively,
 with punctuation and whitespace treated as separators, so `bounded[total]` and
 `bounded total` match. Duplicate names inside one documentation section are ambiguous under
-the default `ambiguous-obligations = "deny"` policy: a single marker bullet
+the matching `ambiguous-panic-requirement = "deny"` or
+`ambiguous-safety-requirement = "deny"` policy: a single marker bullet
 cannot prove two distinct requirements with the same normalized name. Prose and
 labels such as `Requirements:` are allowed before the first bullet. Plain
 comment lines following a requirement bullet in the same contiguous block are

@@ -141,18 +141,19 @@ pub fn analyze_panic_evidence<'tcx>(
     graph: &ReachabilityGraph<'tcx>,
     result: &ReachabilitySnapshot<'tcx>,
     config: &PanicConfig,
-    ambiguous_obligations: LintLevel,
+    ambiguous_marker_level: LintLevel,
+    ambiguous_requirement_level: LintLevel,
 ) -> PanicAnalysis {
     let view = graph.view(result);
     let root = view.root();
     let marker_resolution =
-        resolve_panic_markers(tcx, graph, result, config, ambiguous_obligations);
+        resolve_panic_markers(tcx, graph, result, config, ambiguous_marker_level);
     let ambiguous_names = collect_ambiguous_panic_requirement_names(
         tcx,
         graph,
         result,
         config,
-        ambiguous_obligations,
+        ambiguous_requirement_level,
     );
     let mut seen_panic_obligations = HashSet::new();
     let mut evidence = view
@@ -196,7 +197,7 @@ pub fn analyze_panic_evidence<'tcx>(
                     tcx,
                     def_id,
                     config,
-                    ambiguous_obligations,
+                    ambiguous_requirement_level,
                 )
             {
                 return None;

@@ -11,8 +11,9 @@ use rustc_hir::def::DefKind;
 use rustc_hir::def_id::{LOCAL_CRATE, LocalDefId};
 use rustc_middle::ty::{Instance, TyCtxt};
 
-use crate::config::{AnalysisConfig, PanicConfig, ReportRootSet};
+use crate::config::{AnalysisConfig, AnalysisLintConfig, LintLevel, PanicConfig, ReportRootSet};
 use crate::namespace::canonical_namespace;
+use serde::Serialize;
 
 #[derive(Debug, Clone)]
 pub struct ReportRootSelection<'tcx> {
@@ -38,6 +39,35 @@ pub enum MissingRootReason {
     NotFound,
     /// The function exists but matches `[panics].ignored-namespaces`.
     Ignored,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum ReportRootFindingKind {
+    EmptyReportRoots,
+    MissingReportRoot,
+    IgnoredReportRoot,
+}
+
+impl ReportRootFindingKind {
+    #[must_use]
+    pub fn lint_level(self, lints: AnalysisLintConfig) -> LintLevel {
+        match self {
+            Self::EmptyReportRoots => lints.empty_report_roots,
+            Self::MissingReportRoot => lints.missing_report_root,
+            Self::IgnoredReportRoot => lints.ignored_report_root,
+        }
+    }
+}
+
+impl MissingRootReason {
+    #[must_use]
+    pub fn finding_kind(self) -> ReportRootFindingKind {
+        match self {
+            Self::NotFound => ReportRootFindingKind::MissingReportRoot,
+            Self::Ignored => ReportRootFindingKind::IgnoredReportRoot,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy)]

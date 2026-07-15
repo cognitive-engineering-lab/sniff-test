@@ -1,7 +1,9 @@
 use std::path::Path;
 
 use crate::cache::{CachedFinding, CachedFindingKind, CachedFunctionSummary, CachedSourceSpan};
-use crate::config::{ContractDocOverrides, LintLevel, ReportRootSet, SafetyLintConfig};
+use crate::config::{
+    AnalysisLintConfig, ContractDocOverrides, LintLevel, ReportRootSet, SafetyLintConfig,
+};
 use crate::namespace::canonical_namespace;
 use crate::panics::{
     AmbiguousPanicMarker, AmbiguousPanicRequirementName, PanicEvidence, PanicEvidenceKind,
@@ -97,15 +99,35 @@ fn emit_lint_diagnostic(
     message: String,
     decorate: impl FnOnce(&mut dyn LintDiag),
 ) {
-    match level {
-        LintLevel::Allow => {}
-        LintLevel::Warn => {
+    emit_lint_diagnostic_at(tcx, level, Some(span), message, decorate);
+}
+
+fn emit_lint_diagnostic_at(
+    tcx: TyCtxt<'_>,
+    level: LintLevel,
+    span: Option<Span>,
+    message: String,
+    decorate: impl FnOnce(&mut dyn LintDiag),
+) {
+    match (level, span) {
+        (LintLevel::Allow, _) => {}
+        (LintLevel::Warn, Some(span)) => {
             let mut diag = tcx.dcx().struct_span_warn(span, message);
             decorate(&mut diag);
             diag.emit();
         }
-        LintLevel::Deny => {
+        (LintLevel::Warn, None) => {
+            let mut diag = tcx.dcx().struct_warn(message);
+            decorate(&mut diag);
+            diag.emit();
+        }
+        (LintLevel::Deny, Some(span)) => {
             let mut diag = tcx.dcx().struct_span_err(span, message);
+            decorate(&mut diag);
+            let _ = diag.emit();
+        }
+        (LintLevel::Deny, None) => {
+            let mut diag = tcx.dcx().struct_err(message);
             decorate(&mut diag);
             let _ = diag.emit();
         }
@@ -152,7 +174,7 @@ pub(super) fn emit_ambiguous_obligation_marker_diagnostic<'tcx>(
             );
         }
         diag.help(
-            "move the marker directly above one obligation, split it into separate markers, or set `ambiguous-obligations = \"allow\"` under `[analysis.lints]`",
+            "move the marker directly above one obligation, split it into separate markers, or set `ambiguous-panic-marker = \"allow\"` under `[analysis.lints]`",
         );
     });
 }
@@ -186,7 +208,7 @@ pub(super) fn emit_ambiguous_obligation_name_diagnostic(
             );
         }
         diag.help(
-            "give each requirement a unique name, or set `ambiguous-obligations = \"allow\"` under `[analysis.lints]`",
+            "give each requirement a unique name, or set `ambiguous-panic-requirement = \"allow\"` under `[analysis.lints]`",
         );
     });
 }
@@ -662,7 +684,7 @@ pub(super) fn emit_safety_diagnostics(
                         );
                     }
                     diag.help(
-                        "give each requirement a unique name, or set `ambiguous-obligations = \"allow\"` under `[analysis.lints]`",
+                        "give each requirement a unique name, or set `ambiguous-safety-requirement = \"allow\"` under `[analysis.lints]`",
                     );
                 });
             }
@@ -694,6 +716,7 @@ pub(super) fn emit_empty_report_roots_diagnostic(
     manifest_path: &Path,
     report_roots: &ReportRootSet,
     crate_name: &str,
+    level: LintLevel,
 ) {
     let message = format!(
         "`[analysis].report-roots = {}` selected no functions in `{crate_name}`; no panic roots were analyzed",
@@ -706,22 +729,23 @@ pub(super) fn emit_empty_report_roots_diagnostic(
             .and_then(|file| config_span(file, source_span))
     });
 
-    let mut diag = if let Some(span) = span {
-        tcx.dcx().struct_span_warn(span, message)
-    } else {
-        tcx.dcx().struct_warn(message)
-    };
-    diag.help("update `[analysis].report-roots` to include functions in the current crate");
-    diag.emit();
+    emit_lint_diagnostic_at(tcx, level, span, message, |diag| {
+        diag.help("update `[analysis].report-roots` to include functions in the current crate");
+    });
 }
 
 pub(super) fn emit_missing_report_root_diagnostics(
     tcx: TyCtxt<'_>,
     manifest_path: &Path,
     roots: &[MissingReportRoot],
+    lints: AnalysisLintConfig,
 ) {
     let source_file = tcx.sess.source_map().load_file(manifest_path).ok();
     for root in roots {
+        let level = root.reason.finding_kind().lint_level(lints);
+        if level == LintLevel::Allow {
+            continue;
+        }
         let (message, help) = match root.reason {
             MissingRootReason::NotFound => (
                 "configured report root was not found",
@@ -732,17 +756,18 @@ pub(super) fn emit_missing_report_root_diagnostics(
                 "remove the root or the ignore pattern covering it",
             ),
         };
-        let mut diag = if let Some(span) = source_file
+        let span = source_file
             .as_ref()
-            .and_then(|file| config_span(file, root.source_span.clone()))
-        {
-            tcx.dcx().struct_span_warn(span, message)
+            .and_then(|file| config_span(file, root.source_span.clone()));
+        let message = if span.is_some() {
+            String::from(message)
         } else {
-            tcx.dcx().struct_warn(format!("{message}: `{}`", root.path))
+            format!("{message}: `{}`", root.path)
         };
-        diag.note("configured under `[analysis].report-roots`");
-        diag.help(help);
-        diag.emit();
+        emit_lint_diagnostic_at(tcx, level, span, message, |diag| {
+            diag.note(String::from("configured under `[analysis].report-roots`"));
+            diag.help(help);
+        });
     }
 }
 

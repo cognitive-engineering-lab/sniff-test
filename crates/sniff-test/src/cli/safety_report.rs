@@ -7,7 +7,7 @@ use crate::safety::{
 use rustc_middle::ty::TyCtxt;
 use serde::Serialize;
 
-use super::report::render_span;
+use super::{report::render_span, usize_is_zero};
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "kebab-case")]
@@ -46,31 +46,38 @@ impl SafetyArtifactReport {
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "kebab-case")]
 struct SafetyFindingCounts {
-    missing_docs: usize,
-    missing_justification: usize,
-    missing_requirements: usize,
+    missing_safety_docs: usize,
+    unsafe_call_missing_justification: usize,
+    unsafe_call_missing_requirements: usize,
+    unsafe_op_missing_justification: usize,
+    safety_obligation_missing_justification: usize,
+    safety_obligation_missing_requirements: usize,
     #[serde(skip_serializing_if = "usize_is_zero")]
-    ambiguous_obligation_names: usize,
-}
-
-fn usize_is_zero(value: &usize) -> bool {
-    *value == 0
+    ambiguous_safety_requirements: usize,
 }
 
 impl SafetyFindingCounts {
     fn increment(&mut self, kind: SafetyFindingKind) {
         match kind {
-            SafetyFindingKind::MissingSafetyDocs => self.missing_docs += 1,
-            SafetyFindingKind::UnsafeCallMissingJustification
-            | SafetyFindingKind::UnsafeOpMissingJustification
-            | SafetyFindingKind::SafetyObligationMissingJustification => {
-                self.missing_justification += 1;
+            SafetyFindingKind::MissingSafetyDocs => self.missing_safety_docs += 1,
+            SafetyFindingKind::UnsafeCallMissingJustification => {
+                self.unsafe_call_missing_justification += 1;
             }
-            SafetyFindingKind::UnsafeCallMissingRequirements
-            | SafetyFindingKind::SafetyObligationMissingRequirements => {
-                self.missing_requirements += 1;
+            SafetyFindingKind::UnsafeCallMissingRequirements => {
+                self.unsafe_call_missing_requirements += 1;
             }
-            SafetyFindingKind::AmbiguousObligationName => self.ambiguous_obligation_names += 1,
+            SafetyFindingKind::UnsafeOpMissingJustification => {
+                self.unsafe_op_missing_justification += 1;
+            }
+            SafetyFindingKind::SafetyObligationMissingJustification => {
+                self.safety_obligation_missing_justification += 1;
+            }
+            SafetyFindingKind::SafetyObligationMissingRequirements => {
+                self.safety_obligation_missing_requirements += 1;
+            }
+            SafetyFindingKind::AmbiguousSafetyRequirement => {
+                self.ambiguous_safety_requirements += 1;
+            }
         }
     }
 }
@@ -78,7 +85,7 @@ impl SafetyFindingCounts {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "kebab-case")]
 struct SafetyFindingReport {
-    kind: SafetyFindingKindReport,
+    kind: SafetyFindingKind,
     level: LintLevel,
     span: String,
     function: String,
@@ -92,11 +99,12 @@ struct SafetyFindingReport {
 
 impl SafetyFindingReport {
     fn from_finding(tcx: TyCtxt<'_>, finding: SafetyFinding, level: LintLevel) -> Self {
+        let kind = finding.kind();
         match finding {
             SafetyFinding::MissingSafetyDocs { def_id, span } => {
                 let function = canonical_namespace(tcx, def_id);
                 Self {
-                    kind: SafetyFindingKindReport::MissingDocs,
+                    kind,
                     level,
                     span: render_span(tcx, span),
                     function: function.clone(),
@@ -115,7 +123,7 @@ impl SafetyFindingReport {
                 let target = safety_callee_name(tcx, callee);
                 let call = safety_call_label(call_kind);
                 Self {
-                    kind: SafetyFindingKindReport::MissingJustification,
+                    kind,
                     level,
                     span: render_span(tcx, span),
                     function: canonical_namespace(tcx, caller),
@@ -139,7 +147,7 @@ impl SafetyFindingReport {
                     .map(render_safety_requirement)
                     .collect();
                 Self {
-                    kind: SafetyFindingKindReport::MissingRequirements,
+                    kind,
                     level,
                     span: render_span(tcx, span),
                     function: canonical_namespace(tcx, caller),
@@ -154,7 +162,7 @@ impl SafetyFindingReport {
             SafetyFinding::OpMissingJustification { caller, op, span } => {
                 let operation = safety_op_label(op);
                 Self {
-                    kind: SafetyFindingKindReport::MissingJustification,
+                    kind,
                     level,
                     span: render_span(tcx, span),
                     function: canonical_namespace(tcx, caller),
@@ -177,7 +185,7 @@ impl SafetyFindingReport {
                     .map_or_else(|| tcx.def_span(def_id), |requirement| requirement.span);
                 let requirements = requirements.iter().map(render_safety_requirement).collect();
                 Self {
-                    kind: SafetyFindingKindReport::AmbiguousObligationName,
+                    kind,
                     level,
                     span: render_span(tcx, span),
                     function: function.clone(),
@@ -191,13 +199,4 @@ impl SafetyFindingReport {
             }
         }
     }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "kebab-case")]
-enum SafetyFindingKindReport {
-    MissingDocs,
-    MissingJustification,
-    MissingRequirements,
-    AmbiguousObligationName,
 }

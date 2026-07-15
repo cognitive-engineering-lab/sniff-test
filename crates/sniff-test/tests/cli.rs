@@ -32,6 +32,10 @@ macro_rules! cli_cases {
 }
 
 cli_cases! {
+    "direct_panic" => {
+        panic_invocation_can_be_allowed => Case::new("panic invocation allow policy")
+            .config_append("\n[panics.lints]\npanic-invocation = \"allow\"\n");
+    }
     "safe_markers" => {
         compact_stack_hint => Case::new("compact stack hint").exit_code(1);
         full_stack_trace => Case::new("full stack trace")
@@ -75,6 +79,22 @@ cli_cases! {
     "report_roots" => {
         missing_report_root_diagnostic => Case::new("missing report root diagnostic")
             .args(&["--manifest", "explicit.toml"])
+            .exit_code(1);
+        missing_report_root_can_be_allowed => Case::new("missing report root allow policy")
+            .args(&["--manifest", "allow-missing.toml"]);
+        missing_report_root_can_be_denied => Case::new("missing report root deny policy")
+            .args(&["--manifest", "deny-missing.toml"])
+            .exit_code(1);
+        ignored_report_root_can_be_denied => Case::new("ignored report root deny policy")
+            .args(&["--manifest", "deny-ignored.toml"])
+            .exit_code(1);
+        empty_report_roots_can_be_denied => Case::new("empty report roots deny policy")
+            .args(&["--manifest", "deny-empty.toml"])
+            .exit_code(1);
+    }
+    "unsafe_ops" => {
+        unsafe_op_missing_justification_can_be_denied => Case::new("unsafe operation deny policy")
+            .config_append("\n[safety.lints]\nunsafe-op-missing-justification = \"deny\"\n")
             .exit_code(1);
     }
     "ambiguous_markers" => {

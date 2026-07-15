@@ -1,0 +1,10 @@
+---
+source: crates/sniff-test/tests/cli.rs
+expression: snapshot
+---
+exit: 0
+stdout:
+<empty>
+stderr:
+    Checking direct-panic v0.1.0 ([FIXTURE])
+    Finished `release` profile [optimized] target(s) in [TIME]

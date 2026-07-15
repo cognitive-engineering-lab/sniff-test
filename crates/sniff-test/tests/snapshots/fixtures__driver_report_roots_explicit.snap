@@ -4,6 +4,14 @@ expression: messages
 ---
 [
   {
+    "analysis-findings": [
+      {
+        "kind": "missing-report-root",
+        "level": "warn",
+        "reason": "configured report root was not found",
+        "target": "report_roots::missing_root"
+      }
+    ],
     "artifact": {
       "artifact-id": "[ARTIFACT_ID]",
       "crate-name": "report_roots",
@@ -20,9 +28,11 @@ expression: messages
     "concrete-roots": 1,
     "counts": {
       "analysis-incomplete": 0,
+      "cached-dependency-panics": 0,
+      "compiler-asserts": 0,
       "documented-panics": 0,
       "indirect-call-boundaries": 0,
-      "raw-panic-paths": 1,
+      "panic-invocations": 1,
       "trusted-panics": 0
     },
     "dependencies": [],
@@ -33,17 +43,16 @@ expression: messages
     },
     "format-version": 2,
     "generic-roots": 0,
-    "missing-roots": [
-      "report_roots::missing_root"
-    ],
     "reason": "sniff-test-artifact",
     "roots": [
       {
         "counts": {
           "analysis-incomplete": 0,
+          "cached-dependency-panics": 0,
+          "compiler-asserts": 0,
           "documented-panics": 0,
           "indirect-call-boundaries": 0,
-          "raw-panic-paths": 1,
+          "panic-invocations": 1,
           "trusted-panics": 0
         },
         "findings": [

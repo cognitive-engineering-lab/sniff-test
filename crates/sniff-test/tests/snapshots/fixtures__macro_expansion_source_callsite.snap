@@ -4,6 +4,7 @@ expression: messages
 ---
 [
   {
+    "analysis-findings": [],
     "artifact": {
       "artifact-id": "[ARTIFACT_ID]",
       "crate-name": "macro_expansion",
@@ -20,9 +21,11 @@ expression: messages
     "concrete-roots": 4,
     "counts": {
       "analysis-incomplete": 0,
+      "cached-dependency-panics": 0,
+      "compiler-asserts": 0,
       "documented-panics": 0,
       "indirect-call-boundaries": 0,
-      "raw-panic-paths": 4,
+      "panic-invocations": 4,
       "trusted-panics": 0
     },
     "dependencies": [],
@@ -33,15 +36,16 @@ expression: messages
     },
     "format-version": 2,
     "generic-roots": 0,
-    "missing-roots": [],
     "reason": "sniff-test-artifact",
     "roots": [
       {
         "counts": {
           "analysis-incomplete": 0,
+          "cached-dependency-panics": 0,
+          "compiler-asserts": 0,
           "documented-panics": 0,
           "indirect-call-boundaries": 0,
-          "raw-panic-paths": 1,
+          "panic-invocations": 1,
           "trusted-panics": 0
         },
         "findings": [
@@ -66,9 +70,11 @@ expression: messages
       {
         "counts": {
           "analysis-incomplete": 0,
+          "cached-dependency-panics": 0,
+          "compiler-asserts": 0,
           "documented-panics": 0,
           "indirect-call-boundaries": 0,
-          "raw-panic-paths": 1,
+          "panic-invocations": 1,
           "trusted-panics": 0
         },
         "findings": [
@@ -94,9 +100,11 @@ expression: messages
       {
         "counts": {
           "analysis-incomplete": 0,
+          "cached-dependency-panics": 0,
+          "compiler-asserts": 0,
           "documented-panics": 0,
           "indirect-call-boundaries": 0,
-          "raw-panic-paths": 1,
+          "panic-invocations": 1,
           "trusted-panics": 0
         },
         "findings": [
@@ -122,9 +130,11 @@ expression: messages
       {
         "counts": {
           "analysis-incomplete": 0,
+          "cached-dependency-panics": 0,
+          "compiler-asserts": 0,
           "documented-panics": 0,
           "indirect-call-boundaries": 0,
-          "raw-panic-paths": 1,
+          "panic-invocations": 1,
           "trusted-panics": 0
         },
         "findings": [

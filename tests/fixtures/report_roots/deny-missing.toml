@@ -1,0 +1,5 @@
+[analysis]
+report-roots = ["report_roots::missing_root"]
+
+[analysis.lints]
+missing-report-root = "deny"

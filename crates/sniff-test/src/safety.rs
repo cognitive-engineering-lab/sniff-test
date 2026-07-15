@@ -14,6 +14,7 @@ use rustc_hir::def::DefKind;
 use rustc_hir::def_id::{DefId, LocalDefId};
 use rustc_middle::ty::TyCtxt;
 use rustc_span::Span;
+use serde::Serialize;
 
 use crate::config::{ContractDocOverrides, LintLevel, SafetyConfig, SafetyLintConfig};
 use crate::contracts::{
@@ -60,7 +61,8 @@ pub enum SafetyFinding {
     },
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "kebab-case")]
 pub enum SafetyFindingKind {
     MissingSafetyDocs,
     UnsafeCallMissingJustification,
@@ -68,7 +70,7 @@ pub enum SafetyFindingKind {
     UnsafeOpMissingJustification,
     SafetyObligationMissingJustification,
     SafetyObligationMissingRequirements,
-    AmbiguousObligationName,
+    AmbiguousSafetyRequirement,
 }
 
 /// Non-call operations that require `unsafe`, mirroring the non-call variants
@@ -225,7 +227,7 @@ impl SafetyFinding {
                 }
             },
             Self::OpMissingJustification { .. } => SafetyFindingKind::UnsafeOpMissingJustification,
-            Self::AmbiguousObligationName { .. } => SafetyFindingKind::AmbiguousObligationName,
+            Self::AmbiguousObligationName { .. } => SafetyFindingKind::AmbiguousSafetyRequirement,
         }
     }
 }
@@ -238,14 +240,17 @@ impl SafetyFindingKind {
         ambiguous_obligations: LintLevel,
     ) -> LintLevel {
         match self {
-            Self::MissingSafetyDocs => lints.missing_docs,
-            Self::UnsafeCallMissingJustification
-            | Self::UnsafeOpMissingJustification
-            | Self::SafetyObligationMissingJustification => lints.missing_justification,
-            Self::UnsafeCallMissingRequirements | Self::SafetyObligationMissingRequirements => {
-                lints.missing_requirements
+            Self::MissingSafetyDocs => lints.missing_safety_docs,
+            Self::UnsafeCallMissingJustification => lints.unsafe_call_missing_justification,
+            Self::UnsafeCallMissingRequirements => lints.unsafe_call_missing_requirements,
+            Self::UnsafeOpMissingJustification => lints.unsafe_op_missing_justification,
+            Self::SafetyObligationMissingJustification => {
+                lints.safety_obligation_missing_justification
             }
-            Self::AmbiguousObligationName => ambiguous_obligations,
+            Self::SafetyObligationMissingRequirements => {
+                lints.safety_obligation_missing_requirements
+            }
+            Self::AmbiguousSafetyRequirement => ambiguous_obligations,
         }
     }
 }

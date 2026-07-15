@@ -1,0 +1,19 @@
+---
+source: crates/sniff-test/tests/cli.rs
+expression: snapshot
+---
+exit: 1
+stdout:
+<empty>
+stderr:
+    Checking report-roots v0.1.0 ([FIXTURE])
+error: configured report root is excluded by `[panics].ignored-namespaces`
+ --> [FIXTURE]/deny-ignored.toml:2:17
+  |
+2 | report-roots = ["report_roots::private_safe"]
+  |                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  |
+  = note: configured under `[analysis].report-roots`
+  = help: remove the root or the ignore pattern covering it
+
+error: could not compile `report-roots` (lib) due to 1 previous error

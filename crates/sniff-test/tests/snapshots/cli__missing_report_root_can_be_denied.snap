@@ -1,0 +1,19 @@
+---
+source: crates/sniff-test/tests/cli.rs
+expression: snapshot
+---
+exit: 1
+stdout:
+<empty>
+stderr:
+    Checking report-roots v0.1.0 ([FIXTURE])
+error: configured report root was not found
+ --> [FIXTURE]/deny-missing.toml:2:17
+  |
+2 | report-roots = ["report_roots::missing_root"]
+  |                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  |
+  = note: configured under `[analysis].report-roots`
+  = help: remove it or update it to a function in the current crate
+
+error: could not compile `report-roots` (lib) due to 1 previous error

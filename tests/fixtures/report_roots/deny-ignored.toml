@@ -1,0 +1,8 @@
+[analysis]
+report-roots = ["report_roots::private_safe"]
+
+[analysis.lints]
+ignored-report-root = "deny"
+
+[panics]
+ignored-namespaces = ["report_roots::private_safe"]

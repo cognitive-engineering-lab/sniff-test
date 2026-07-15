@@ -4,6 +4,7 @@ expression: messages
 ---
 [
   {
+    "analysis-findings": [],
     "artifact": {
       "artifact-id": "[ARTIFACT_ID]",
       "crate-name": "safety_requirements",
@@ -20,9 +21,11 @@ expression: messages
     "concrete-roots": 0,
     "counts": {
       "analysis-incomplete": 0,
+      "cached-dependency-panics": 0,
+      "compiler-asserts": 0,
       "documented-panics": 0,
       "indirect-call-boundaries": 0,
-      "raw-panic-paths": 0,
+      "panic-invocations": 0,
       "trusted-panics": 0
     },
     "dependencies": [],
@@ -33,20 +36,22 @@ expression: messages
     },
     "format-version": 2,
     "generic-roots": 0,
-    "missing-roots": [],
     "reason": "sniff-test-artifact",
     "roots": [],
     "rustc-version": "[RUSTC_VERSION]",
     "safety": {
       "counts": {
-        "missing-docs": 1,
-        "missing-justification": 2,
-        "missing-requirements": 3
+        "missing-safety-docs": 1,
+        "safety-obligation-missing-justification": 0,
+        "safety-obligation-missing-requirements": 0,
+        "unsafe-call-missing-justification": 2,
+        "unsafe-call-missing-requirements": 3,
+        "unsafe-op-missing-justification": 0
       },
       "findings": [
         {
           "function": "safety_requirements::undocumented_public",
-          "kind": "missing-docs",
+          "kind": "missing-safety-docs",
           "level": "warn",
           "reason": "public unsafe function `safety_requirements::undocumented_public` is missing # Safety docs",
           "span": "src/lib.rs:33:1: 33:57",
@@ -54,7 +59,7 @@ expression: messages
         },
         {
           "function": "safety_requirements::missing_requirement",
-          "kind": "missing-requirements",
+          "kind": "unsafe-call-missing-requirements",
           "level": "warn",
           "missing-requirements": [
             "initialized: pointer must reference initialized memory."
@@ -65,7 +70,7 @@ expression: messages
         },
         {
           "function": "safety_requirements::safety_marker_boundary_missing_requirements",
-          "kind": "missing-requirements",
+          "kind": "unsafe-call-missing-requirements",
           "level": "warn",
           "missing-requirements": [
             "valid_ptr: pointer must be non-null.",
@@ -77,7 +82,7 @@ expression: messages
         },
         {
           "function": "safety_requirements::missing_justification",
-          "kind": "missing-justification",
+          "kind": "unsafe-call-missing-justification",
           "level": "warn",
           "reason": "unsafe call to `safety_requirements::private_unsafe_no_docs` has no `// SAFETY:` justification",
           "span": "src/lib.rs:90:14: 90:38",
@@ -85,7 +90,7 @@ expression: messages
         },
         {
           "function": "safety_requirements::unsafe_fn_pointer_missing_justification",
-          "kind": "missing-justification",
+          "kind": "unsafe-call-missing-justification",
           "level": "warn",
           "reason": "unsafe call to `unsafe function pointer` has no `// SAFETY:` justification",
           "span": "src/lib.rs:103:14: 103:24",
@@ -93,7 +98,7 @@ expression: messages
         },
         {
           "function": "safety_requirements::generic_unsafe_trait_method_missing",
-          "kind": "missing-requirements",
+          "kind": "unsafe-call-missing-requirements",
           "level": "warn",
           "missing-requirements": [
             "valid_ptr: pointer must be non-null."

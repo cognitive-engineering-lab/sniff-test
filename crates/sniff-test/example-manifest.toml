@@ -26,8 +26,7 @@ callable-edge-attribution = "erasure-sites"
 # older callsite-only behavior.
 marker-probing = "macro-definition-first"
 
-# Ambiguous obligation names and shared proof markers default to failing closed.
-# Configure ambiguous-obligations under `[analysis.lints]`.
+# Ambiguous requirement names and shared proof markers default to failing closed.
 #
 # Instance budget per reachability query. Traversals that halt at the limit are
 # reported through the `analysis-incomplete` lint instead of passing silently.
@@ -35,8 +34,14 @@ node-limit = 4096
 
 [analysis.lints]
 analysis-incomplete = "deny"
-# Use `warn` while auditing, or `allow` to accept squashed obligations.
-ambiguous-obligations = "deny"
+# Use `warn` while auditing, or `allow` to accept squashed evidence.
+ambiguous-panic-marker = "deny"
+ambiguous-panic-requirement = "deny"
+ambiguous-safety-requirement = "deny"
+# Report-root selection problems warn by default.
+empty-report-roots = "warn"
+missing-report-root = "warn"
+ignored-report-root = "warn"
 
 [documentation]
 # Synthetic rustdoc markdown by namespace glob, loaded from TOML files relative
@@ -93,7 +98,9 @@ panic-sink-namespaces = [
 # `deny` emits an error and makes `cargo sniff-test` fail.
 # `warn` emits a warning without failing the run.
 # `allow` suppresses the finding from diagnostics and JSON reports.
-missing-docs = "deny"
+compiler-assert = "deny"
+panic-invocation = "deny"
+cached-dependency-panic = "deny"
 documented-panic = "warn"
 trusted-panic = "warn"
 # Calls whose target cannot be resolved or verified: undocumented trait
@@ -116,6 +123,9 @@ safety-obligation-namespaces = []
 # `deny` emits an error and makes `cargo sniff-test` fail.
 # `warn` emits a warning without failing the run.
 # `allow` suppresses the finding from diagnostics and JSON reports.
-missing-docs = "warn"
-missing-justification = "warn"
-missing-requirements = "warn"
+missing-safety-docs = "warn"
+unsafe-call-missing-justification = "warn"
+unsafe-call-missing-requirements = "warn"
+unsafe-op-missing-justification = "warn"
+safety-obligation-missing-justification = "warn"
+safety-obligation-missing-requirements = "warn"
