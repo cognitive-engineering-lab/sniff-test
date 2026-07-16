@@ -353,10 +353,7 @@ fn decorate_panic_contract_diagnostic<'tcx>(
 ) {
     diag.span_note(
         tcx.def_span(diagnostic.documented_def_id),
-        format!(
-            "the reached callee `{}` documents `# Panics` here",
-            documented
-        ),
+        format!("the reached callee `{documented}` documents `# Panics` here"),
     );
     add_trace_notes(
         diag,
@@ -390,30 +387,28 @@ fn decorate_cached_dependency_contract_diagnostic<'tcx>(
     diag: &mut dyn LintDiag,
     tcx: TyCtxt<'tcx>,
     graph: &ReachabilityGraph<'tcx>,
-    edge_id: ReachabilityEdgeId,
-    root_def_id: DefId,
     summary: &CachedFunctionSummary,
     panic_kind: &str,
     local_trace: &[ReachabilityEdgeId],
-    include_stack: bool,
+    diagnostic: &CachedDependencyContractDiagnostic,
 ) {
     diag.note(format!(
         "`{}` has cached {panic_kind} evidence",
         summary.path
     ));
-    add_trace_notes(diag, tcx, graph, local_trace, include_stack);
-    add_cached_trace_notes(diag, summary, include_stack, |kind| {
+    add_trace_notes(diag, tcx, graph, local_trace, diagnostic.include_stack);
+    add_cached_trace_notes(diag, summary, diagnostic.include_stack, |kind| {
         matches!(
             kind,
             CachedFindingKind::PanicObligation | CachedFindingKind::TrustedPanicObligation
         )
     });
     diag.span_help(
-        graph.edge(edge_id).span,
+        graph.edge(diagnostic.edge_id).span,
         "add `// PANIC:` directly above this call explaining why the dependency's documented panic conditions cannot occur",
     );
     diag.span_help(
-        tcx.def_span(root_def_id),
+        tcx.def_span(diagnostic.root_def_id),
         "document when this function may panic with `/// # Panics` here",
     );
     diag.help("ensure the dependency's panic conditions cannot occur, justify that with `// PANIC:`, or document when the caller may panic with `# Panics`");
@@ -579,7 +574,7 @@ pub(super) fn cached_dependency_contract_diagnostic<'tcx>(
         edge_id,
         root_def_id,
         trusted,
-        include_stack,
+        ..
     } = diagnostic;
     let root = canonical_namespace(tcx, root_def_id);
     let panic_kind = if trusted {
@@ -594,12 +589,10 @@ pub(super) fn cached_dependency_contract_diagnostic<'tcx>(
             diag,
             tcx,
             graph,
-            edge_id,
-            root_def_id,
             summary,
             panic_kind,
             local_trace,
-            include_stack,
+            &diagnostic,
         );
     })
 }

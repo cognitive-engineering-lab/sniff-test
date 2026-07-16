@@ -1,10 +1,10 @@
 use crate::cache::{
     CachedDiagnosticSpan, CachedFinding, CachedFindingKind, CachedFindingTarget,
-    CachedFunctionSummary, CachedReachabilityEdge, CachedReachabilityEdgeKind,
-    CachedReachabilityGraph, CachedReachabilityNode, CachedReachabilityNodeKind, CachedSourceSpan,
+    CachedReachabilityEdge, CachedReachabilityEdgeKind, CachedReachabilityGraph,
+    CachedReachabilityNode, CachedReachabilityNodeKind, CachedSourceSpan,
 };
 use crate::config::PanicConfig;
-use crate::namespace::{canonical_namespace, stable_def_path_hash};
+use crate::namespace::canonical_namespace;
 use crate::panics::{
     PanicAnalysis, PanicEvidence, PanicEvidenceKind, PanicPathDecision,
     describe_panic_evidence_kind, trace_edges_until, trace_to_edge_ids, trigger_edge_id,
@@ -13,56 +13,10 @@ use reachability::{
     ReachabilityEdgeId, ReachabilityEdgeKind, ReachabilityGraph, ReachabilityNodeKind,
     ReachabilitySnapshot, ReachabilityView,
 };
-use rustc_hir::def_id::DefId;
 use rustc_middle::ty::TyCtxt;
 use rustc_span::Pos;
 
-use super::findings::{Finding, FindingKind};
 use super::report::{render_assert_message, render_node, render_span};
-
-pub(super) fn function_summary<'tcx>(
-    tcx: TyCtxt<'tcx>,
-    def_id: DefId,
-    is_generic: bool,
-    analysis_complete: bool,
-    report_findings: &[Finding],
-    config: &PanicConfig,
-    graph: Option<(&ReachabilityGraph<'tcx>, &ReachabilitySnapshot<'tcx>)>,
-    findings: Vec<CachedFinding>,
-) -> CachedFunctionSummary {
-    let raw_panic_paths = report_findings
-        .iter()
-        .filter(|finding| {
-            matches!(
-                finding.kind,
-                FindingKind::CompilerAssert
-                    | FindingKind::PanicInvocation
-                    | FindingKind::CachedDependencyPanic
-            )
-        })
-        .count();
-    let panic_obligations = report_findings
-        .iter()
-        .filter(|finding| finding.kind == FindingKind::DocumentedPanic)
-        .count();
-    let trusted_panic_obligations = report_findings
-        .iter()
-        .filter(|finding| finding.kind == FindingKind::TrustedPanic)
-        .count();
-    CachedFunctionSummary {
-        def_path_hash: stable_def_path_hash(tcx, def_id),
-        path: canonical_namespace(tcx, def_id),
-        is_generic,
-        analysis_complete,
-        has_panic_docs: crate::panics::has_panic_docs(tcx, def_id, config),
-        root_span: cached_source_span(tcx, tcx.def_span(def_id)),
-        raw_panic_paths,
-        panic_obligations,
-        trusted_panic_obligations,
-        graph: graph.map(|(graph, result)| cached_reachability_graph(tcx, graph, result)),
-        findings,
-    }
-}
 
 pub(super) fn cached_boundary_findings<'tcx>(
     tcx: TyCtxt<'tcx>,
@@ -245,7 +199,7 @@ fn cached_finding_target<'tcx>(
     }
 }
 
-fn cached_reachability_graph<'tcx>(
+pub(super) fn cached_reachability_graph<'tcx>(
     tcx: TyCtxt<'tcx>,
     graph: &ReachabilityGraph<'tcx>,
     result: &ReachabilitySnapshot<'tcx>,
@@ -275,7 +229,10 @@ fn cached_reachability_graph<'tcx>(
     }
 }
 
-fn cached_source_span(tcx: TyCtxt<'_>, span: rustc_span::Span) -> Option<CachedSourceSpan> {
+pub(super) fn cached_source_span(
+    tcx: TyCtxt<'_>,
+    span: rustc_span::Span,
+) -> Option<CachedSourceSpan> {
     if span.is_dummy() {
         return None;
     }

@@ -231,6 +231,10 @@ pub(crate) fn collect_safety_findings(
         .collect()
 }
 
+#[allow(
+    clippy::too_many_lines,
+    reason = "keeping all finding variants together makes their output mapping easier to compare"
+)]
 fn safety_finding_report(
     tcx: TyCtxt<'_>,
     finding: SafetyFinding,

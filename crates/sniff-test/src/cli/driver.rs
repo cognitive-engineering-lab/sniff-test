@@ -12,7 +12,7 @@ use crate::config::{
     AnalysisConfig, CallableEdgeAttribution, PanicBoundaryPolicy, PanicConfig, SniffTestConfig,
 };
 use crate::dependency_cache::{DependencyAnalysisCache, DependencyInput};
-use crate::namespace::stable_def_path_hash;
+use crate::namespace::{canonical_namespace, stable_def_path_hash};
 use crate::panics::{PanicAnalysis, PanicEvidence, PanicPathDecision, analyze_panic_evidence};
 use crate::report_roots::{
     MissingReportRoot, ReportRoot, ReportRootSelection, select_report_roots,
@@ -27,7 +27,9 @@ use rustc_hir::def_id::{DefId, LOCAL_CRATE};
 use rustc_middle::ty::{Instance, TyCtxt};
 
 use super::args::{self, SniffTestArgs};
-use super::cache_encode::{cached_boundary_findings, function_summary};
+use super::cache_encode::{
+    cached_boundary_findings, cached_reachability_graph, cached_source_span,
+};
 use super::cargo::absolute_path;
 use super::diagnostics::emit_finding_diagnostic;
 use super::findings::{
@@ -210,6 +212,10 @@ struct AnalysisArtifact {
 }
 
 impl AnalysisArtifact {
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "the constructor assembles independent analysis outputs without hiding them"
+    )]
     fn new(
         tcx: TyCtxt<'_>,
         invocation: &RustcInvocation,
@@ -417,16 +423,41 @@ fn analyze_root<'tcx>(
     if !analysis_complete {
         report.push_analysis_incomplete(tcx, root.def_id, analysis_config.node_limit);
     }
-    let summary = function_summary(
-        tcx,
-        root.def_id,
-        root.kind == PanicRootKind::Generic,
+    let raw_panic_paths = report
+        .findings
+        .iter()
+        .filter(|finding| {
+            matches!(
+                finding.kind,
+                FindingKind::CompilerAssert
+                    | FindingKind::PanicInvocation
+                    | FindingKind::CachedDependencyPanic
+            )
+        })
+        .count();
+    let panic_obligations = report
+        .findings
+        .iter()
+        .filter(|finding| finding.kind == FindingKind::DocumentedPanic)
+        .count();
+    let trusted_panic_obligations = report
+        .findings
+        .iter()
+        .filter(|finding| finding.kind == FindingKind::TrustedPanic)
+        .count();
+    let summary = CachedFunctionSummary {
+        def_path_hash: stable_def_path_hash(tcx, root.def_id),
+        path: canonical_namespace(tcx, root.def_id),
+        is_generic: root.kind == PanicRootKind::Generic,
         analysis_complete,
-        &report.findings,
-        config,
-        Some((graph, &boundary_result)),
-        cached_findings,
-    );
+        has_panic_docs: crate::panics::has_panic_docs(tcx, root.def_id, config),
+        root_span: cached_source_span(tcx, tcx.def_span(root.def_id)),
+        raw_panic_paths,
+        panic_obligations,
+        trusted_panic_obligations,
+        graph: Some(cached_reachability_graph(tcx, graph, &boundary_result)),
+        findings: cached_findings,
+    };
 
     (summary, report)
 }
@@ -595,10 +626,9 @@ fn collect_cached_dependency_findings<'tcx>(
         }
 
         let def_id = instance.def_id();
-        if collection.config.ignores_def(tcx, def_id) {
-            continue;
-        }
-        if collection.config.panic_boundary_policy(tcx, def_id) != PanicBoundaryPolicy::Normal {
+        if collection.config.ignores_def(tcx, def_id)
+            || collection.config.panic_boundary_policy(tcx, def_id) != PanicBoundaryPolicy::Normal
+        {
             continue;
         }
 
@@ -606,13 +636,10 @@ fn collect_cached_dependency_findings<'tcx>(
         let Some(summary) = collection
             .dependency_cache
             .function(&dependency_crate_name, &stable_def_path_hash(tcx, def_id))
+            .filter(|summary| !summary.has_panic_docs)
         else {
             continue;
         };
-
-        if summary.has_panic_docs {
-            continue;
-        }
 
         let local_trace = crate::panics::trace_to_edge_ids(edge);
 

@@ -147,7 +147,7 @@ fn parse_contract_doc_markdown_with_spans(
             }
             Event::End(TagEnd::Item) if in_contract_section && list_depth == 1 => {
                 if let Some(item) = item.take()
-                    && let Some(requirement) = parse_requirement_text(item)
+                    && let Some(requirement) = parse_requirement_text(&item)
                 {
                     summary.requirements.push(requirement);
                 }
@@ -291,7 +291,7 @@ fn doc_comment(attr: &Attribute) -> Option<(rustc_span::Symbol, Span)> {
     }
 }
 
-fn parse_requirement_text(item: MarkdownItem) -> Option<ContractRequirement> {
+fn parse_requirement_text(item: &MarkdownItem) -> Option<ContractRequirement> {
     let (name, condition) = item.text.split_once(':')?;
     let name = name.trim();
     let condition = condition.trim();

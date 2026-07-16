@@ -19,7 +19,7 @@ impl RustcInvocation {
                         parsed.crate_types.push(value.clone());
                     }
                 }
-                "--target" => {
+                "--target" | "--color" => {
                     args.next();
                 }
                 "--extern" => {
@@ -28,9 +28,6 @@ impl RustcInvocation {
                     {
                         parsed.externs.push(extern_arg);
                     }
-                }
-                "--color" => {
-                    args.next();
                 }
                 "-C" => {
                     if let Some(value) = args.next() {

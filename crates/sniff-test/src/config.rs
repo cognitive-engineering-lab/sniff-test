@@ -998,10 +998,8 @@ impl Display for ConfigError {
 impl std::error::Error for ConfigError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
-            Self::Io { source, .. } => Some(source),
-            Self::Parse { source, .. } => Some(source),
-            Self::OverrideIo { source, .. } => Some(source),
-            Self::OverrideParse { source, .. } => Some(source),
+            Self::Io { source, .. } | Self::OverrideIo { source, .. } => Some(source),
+            Self::Parse { source, .. } | Self::OverrideParse { source, .. } => Some(source),
             Self::OverrideGlob { source, .. } => Some(source),
         }
     }
@@ -1582,7 +1580,7 @@ mod tests {
 
         assert_eq!(
             parsed.documentation.resolved_override_files(),
-            [override_path.clone()]
+            std::slice::from_ref(&override_path)
         );
         assert_eq!(
             parsed

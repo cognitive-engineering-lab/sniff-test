@@ -247,13 +247,13 @@ fn collect_missing_safety_docs(
         return;
     }
 
-    if !has_safety_docs(tcx, def_id, &config.documentation_overrides) {
+    if has_safety_docs(tcx, def_id, &config.documentation_overrides) {
+        analysis.push_ambiguous_requirement_names(tcx, def_id, &config.documentation_overrides);
+    } else {
         analysis.findings.push(SafetyFinding::MissingSafetyDocs {
             def_id,
             span: tcx.def_span(def_id),
         });
-    } else {
-        analysis.push_ambiguous_requirement_names(tcx, def_id, &config.documentation_overrides);
     }
 }
 

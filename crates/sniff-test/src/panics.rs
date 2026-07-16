@@ -201,8 +201,8 @@ pub fn analyze_panic_evidence<'tcx>(
     }
 }
 
-fn suppress_resolved_callable_indirect_boundaries<'tcx>(
-    graph: &ReachabilityGraph<'tcx>,
+fn suppress_resolved_callable_indirect_boundaries(
+    graph: &ReachabilityGraph<'_>,
     evidence: &mut Vec<PanicEvidence>,
 ) {
     let resolved_callable_keys = evidence
@@ -763,9 +763,7 @@ fn resolve_panic_markers<'tcx>(
         }
 
         if let Some((edge_id, candidate)) = trace.edge_ids.iter().find_map(|edge_id| {
-            let Some(candidate) = candidates.get(edge_id) else {
-                return None;
-            };
+            let candidate = candidates.get(edge_id)?;
             let edge = graph.edge(*edge_id);
             let target = &graph.node(edge.target).kind;
             if !marker_satisfies_target(tcx, &candidate.satisfactions, target, config) {

@@ -186,6 +186,10 @@ impl PanicRootReport {
         });
     }
 
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "the report entry combines independent trace, cache, and policy inputs"
+    )]
     pub(crate) fn push_cached_dependency_obligation<'tcx>(
         &mut self,
         tcx: TyCtxt<'tcx>,
