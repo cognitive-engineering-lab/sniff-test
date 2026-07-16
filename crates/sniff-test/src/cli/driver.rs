@@ -30,7 +30,6 @@ use super::args::{self, SniffTestArgs};
 use super::cache_encode::{
     cached_boundary_findings, cached_reachability_graph, cached_source_span,
 };
-use super::cargo::absolute_path;
 use super::diagnostics::emit_finding_diagnostic;
 use super::findings::{
     Finding, FindingKind, PanicRootKind, collect_report_root_findings, collect_safety_findings,
@@ -324,8 +323,16 @@ impl CrateOutputScope {
             return Self::Dependency;
         }
 
-        let cargo_manifest =
-            std::env::var_os("CARGO_MANIFEST_PATH").map(|path| absolute_path(PathBuf::from(path)));
+        let cargo_manifest = std::env::var_os("CARGO_MANIFEST_PATH").map(|path| {
+            let path = PathBuf::from(path);
+            path.canonicalize().unwrap_or_else(|error| {
+                eprintln!(
+                    "sniff-test: failed to canonicalize Cargo manifest {}: {error}",
+                    path.display()
+                );
+                std::process::exit(2);
+            })
+        });
         Self::from_manifest_paths(
             &args.workspace_manifests,
             cargo_manifest.as_deref(),

@@ -10,7 +10,6 @@ use rustc_middle::ty::TyCtxt;
 use rustc_span::symbol::Symbol;
 
 use super::args::{ColorChoice, MANIFEST_PATH_ENV, SniffTestArgParseError, SniffTestArgs};
-use super::cargo::absolute_path;
 use super::driver::{analyze_crate, load_config};
 
 pub(crate) const DRIVER_NAME: &str = "sniff-test-driver";
@@ -21,8 +20,18 @@ pub(crate) fn frontend_args(mut args: SniffTestArgs, target_dir: &Path) -> Sniff
     if args.cache_dir.is_none() {
         args.cache_dir = Some(default_cache_dir(target_dir));
     }
-    args.cache_dir = Some(absolute_path(args.cache_dir()));
-    args.manifest_path = Some(absolute_path(args.manifest_path()));
+    args.cache_dir = Some(
+        std::path::absolute(args.cache_dir()).unwrap_or_else(|error| {
+            eprintln!("sniff-test: failed to make cache directory absolute: {error}");
+            std::process::exit(2);
+        }),
+    );
+    args.manifest_path = Some(
+        std::path::absolute(args.manifest_path()).unwrap_or_else(|error| {
+            eprintln!("sniff-test: failed to make manifest path absolute: {error}");
+            std::process::exit(2);
+        }),
+    );
     args
 }
 
@@ -187,8 +196,18 @@ fn direct_args(
     if args.manifest_path.is_none() {
         args.manifest_path = std::env::var_os(MANIFEST_PATH_ENV).map(std::path::PathBuf::from);
     }
-    args.manifest_path = Some(absolute_path(args.manifest_path()));
-    args.cache_dir = Some(absolute_path(args.cache_dir()));
+    args.manifest_path = Some(
+        std::path::absolute(args.manifest_path()).unwrap_or_else(|error| {
+            eprintln!("sniff-test: failed to make manifest path absolute: {error}");
+            std::process::exit(2);
+        }),
+    );
+    args.cache_dir = Some(
+        std::path::absolute(args.cache_dir()).unwrap_or_else(|error| {
+            eprintln!("sniff-test: failed to make cache directory absolute: {error}");
+            std::process::exit(2);
+        }),
+    );
     Ok(args)
 }
 

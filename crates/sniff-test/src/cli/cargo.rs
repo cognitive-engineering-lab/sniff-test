@@ -1,7 +1,7 @@
 //! Cargo execution, message processing, build-plan tracking, and outcome replay.
 
 use std::collections::HashSet;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::process::{Command, ExitCode};
 
 use crate::cache::{artifact_id_from_extern_path, read_unit_outcome};
@@ -13,6 +13,10 @@ use super::plugin::{
 };
 
 #[must_use]
+#[allow(
+    clippy::too_many_lines,
+    reason = "the frontend is one linear command-execution flow"
+)]
 pub fn cargo_frontend() -> ExitCode {
     if std::env::args()
         .skip(1)
@@ -51,7 +55,18 @@ pub fn cargo_frontend() -> ExitCode {
     args.workspace_manifests = metadata
         .packages
         .iter()
-        .map(|package| absolute_path(package.manifest_path.clone().into_std_path_buf()))
+        .map(|package| {
+            package
+                .manifest_path
+                .canonicalize()
+                .unwrap_or_else(|error| {
+                    eprintln!(
+                        "sniff-test: failed to canonicalize workspace manifest {}: {error}",
+                        package.manifest_path
+                    );
+                    std::process::exit(2);
+                })
+        })
         .collect();
 
     let mut cargo = Command::new("cargo");
@@ -282,19 +297,6 @@ pub(crate) fn metadata_cargo_args(cargo_args: &[String]) -> Vec<String> {
     }
 
     metadata_args
-}
-
-pub(crate) fn absolute_path(path: PathBuf) -> PathBuf {
-    if path.is_absolute() {
-        path
-    } else {
-        std::env::current_dir()
-            .unwrap_or_else(|error| {
-                eprintln!("sniff-test: failed to read current directory: {error}");
-                std::process::exit(2);
-            })
-            .join(path)
-    }
 }
 
 #[cfg(test)]
