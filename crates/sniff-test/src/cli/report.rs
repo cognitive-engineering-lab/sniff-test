@@ -8,6 +8,7 @@ use crate::panics::{
     AmbiguousPanicMarker, AmbiguousPanicRequirementName, PanicEvidence, PanicEvidenceKind,
     trace_edges_until, trigger_edge_id,
 };
+use crate::report_roots::ReportRootKind;
 use reachability::{
     CompilerAssertLocal, CompilerAssertLocalRole, ReachabilityEdge, ReachabilityEdgeId,
     ReachabilityGraph, ReachabilityNodeKind,
@@ -24,7 +25,7 @@ use super::diagnostics::{
     cached_dependency_raw_panic_diagnostic, indirect_boundary_diagnostic,
     panic_contract_diagnostic, raw_panic_diagnostic,
 };
-use super::findings::{Finding, FindingKind, PanicRootKind, ResolvedFinding};
+use super::findings::{Finding, FindingKind, ResolvedFinding};
 
 pub(crate) const REPORT_FORMAT_VERSION: u32 = 5;
 
@@ -57,7 +58,7 @@ pub(crate) enum CrateOutputScope {
 #[derive(Debug, Clone)]
 pub(crate) struct PanicRootReport {
     pub(crate) root: String,
-    pub(crate) root_kind: PanicRootKind,
+    pub(crate) root_kind: ReportRootKind,
     root_def_id: DefId,
     include_stack: bool,
     pub(crate) findings: Vec<Finding>,
@@ -66,7 +67,7 @@ pub(crate) struct PanicRootReport {
 impl PanicRootReport {
     pub(crate) fn new(
         root: String,
-        root_kind: PanicRootKind,
+        root_kind: ReportRootKind,
         root_def_id: DefId,
         include_stack: bool,
     ) -> Self {

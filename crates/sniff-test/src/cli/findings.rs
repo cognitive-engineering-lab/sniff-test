@@ -5,7 +5,7 @@ use std::path::Path;
 use crate::config::{ContractDocOverrides, LintLevel, ReportRootSet, SniffTestConfig};
 use crate::namespace::canonical_namespace;
 use crate::panics::PanicEvidenceKind;
-use crate::report_roots::{MissingReportRoot, MissingRootReason};
+use crate::report_roots::{MissingReportRoot, MissingRootReason, ReportRootKind};
 use crate::safety::{
     SafetyAnalysis, SafetyCallKind, SafetyFinding, render_safety_requirement, safety_call_label,
     safety_callee_name, safety_op_label,
@@ -19,13 +19,6 @@ use super::diagnostics::{
 };
 use super::report::render_span;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "kebab-case")]
-pub(crate) enum PanicRootKind {
-    Concrete,
-    Generic,
-}
-
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "kebab-case")]
 pub(crate) struct Finding {
@@ -33,7 +26,7 @@ pub(crate) struct Finding {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) root: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub(crate) root_kind: Option<PanicRootKind>,
+    pub(crate) root_kind: Option<ReportRootKind>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) function: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]

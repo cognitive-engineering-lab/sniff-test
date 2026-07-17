@@ -7,9 +7,11 @@
 use std::collections::HashSet;
 use std::ops::Range;
 
+use reachability::ReachabilityRoot;
 use rustc_hir::def::DefKind;
-use rustc_hir::def_id::{LOCAL_CRATE, LocalDefId};
+use rustc_hir::def_id::{DefId, LOCAL_CRATE, LocalDefId};
 use rustc_middle::ty::{Instance, TyCtxt};
+use serde::Serialize;
 
 use crate::config::{AnalysisConfig, PanicConfig, ReportRootSet};
 use crate::namespace::canonical_namespace;
@@ -47,17 +49,45 @@ pub enum ReportRoot<'tcx> {
         local: LocalDefId,
         instance: Instance<'tcx>,
     },
-    /// Generic function that requires monomorphization before reachability analysis.
+    /// Generic function analyzed structurally with identity generic arguments.
     Generic { local: LocalDefId },
 }
 
-impl ReportRoot<'_> {
+impl<'tcx> ReportRoot<'tcx> {
     #[must_use]
     pub fn local_def_id(self) -> LocalDefId {
         match self {
             Self::Concrete { local, .. } | Self::Generic { local } => local,
         }
     }
+
+    #[must_use]
+    pub fn def_id(self) -> DefId {
+        self.local_def_id().to_def_id()
+    }
+
+    #[must_use]
+    pub fn reachability_root(self) -> ReachabilityRoot<'tcx> {
+        match self {
+            Self::Concrete { instance, .. } => ReachabilityRoot::Instance(instance),
+            Self::Generic { local } => ReachabilityRoot::LocalBody(local),
+        }
+    }
+
+    #[must_use]
+    pub fn kind(self) -> ReportRootKind {
+        match self {
+            Self::Concrete { .. } => ReportRootKind::Concrete,
+            Self::Generic { .. } => ReportRootKind::Generic,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum ReportRootKind {
+    Concrete,
+    Generic,
 }
 
 #[must_use]

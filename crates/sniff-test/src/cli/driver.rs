@@ -16,13 +16,13 @@ use crate::dependency_cache::DependencyAnalysisCache;
 use crate::namespace::{canonical_namespace, stable_def_path_hash};
 use crate::panics::{PanicAnalysis, PanicEvidence, PanicPathDecision, analyze_panic_evidence};
 use crate::report_roots::{
-    MissingReportRoot, ReportRoot, ReportRootSelection, select_report_roots,
+    MissingReportRoot, ReportRoot, ReportRootKind, ReportRootSelection, select_report_roots,
 };
 use crate::safety::{SafetyAnalysis, analyze_safety};
 use anyhow::Context;
 use reachability::{
     ReachabilityContext, ReachabilityControl, ReachabilityEdge, ReachabilityEdgeKind,
-    ReachabilityGraph, ReachabilityHooks, ReachabilityIndex, ReachabilityOptions, ReachabilityRoot,
+    ReachabilityGraph, ReachabilityHooks, ReachabilityIndex, ReachabilityOptions,
     ReachabilitySnapshot, ReachabilityView,
 };
 use rustc_hir::def_id::{DefId, LOCAL_CRATE};
@@ -34,8 +34,7 @@ use super::cache_encode::{
 };
 use super::diagnostics::emit_finding_diagnostic;
 use super::findings::{
-    Finding, FindingKind, PanicRootKind, collect_report_root_findings, collect_safety_findings,
-    resolve_findings,
+    Finding, FindingKind, collect_report_root_findings, collect_safety_findings, resolve_findings,
 };
 use super::plugin::rustc_version;
 use super::report::{
@@ -308,18 +307,6 @@ fn analyze_report_roots<'tcx>(
     let mut reachability = ReachabilityIndex::new(tcx);
 
     for root in selection.roots {
-        let root = match root {
-            ReportRoot::Concrete { instance, .. } => AnalysisRoot {
-                root: ReachabilityRoot::Instance(instance),
-                def_id: instance.def_id(),
-                kind: PanicRootKind::Concrete,
-            },
-            ReportRoot::Generic { local } => AnalysisRoot {
-                root: ReachabilityRoot::LocalBody(local),
-                def_id: local.to_def_id(),
-                kind: PanicRootKind::Generic,
-            },
-        };
         let (summary, report) = analyze_root(
             tcx,
             &mut reachability,
@@ -392,22 +379,17 @@ impl CrateOutputScope {
     }
 }
 
-#[derive(Debug, Clone, Copy)]
-struct AnalysisRoot<'tcx> {
-    root: ReachabilityRoot<'tcx>,
-    def_id: DefId,
-    kind: PanicRootKind,
-}
-
 fn analyze_root<'tcx>(
     tcx: TyCtxt<'tcx>,
     reachability: &mut ReachabilityIndex<'tcx>,
-    root: AnalysisRoot<'tcx>,
+    root: ReportRoot<'tcx>,
     analysis_config: &AnalysisConfig,
     config: &PanicConfig,
     dependency_cache: &DependencyAnalysisCache,
     include_stack: bool,
 ) -> (CachedFunctionSummary, PanicRootReport) {
+    let root_def_id = root.def_id();
+    let root_kind = root.kind();
     let descend_reified_callables =
         analysis_config.callable_edge_attribution == CallableEdgeAttribution::ErasureSites;
     let mut hooks = PanicReachabilityHooks {
@@ -415,7 +397,7 @@ fn analyze_root<'tcx>(
         descend_reified_callables,
     };
     let result = reachability.query(
-        root.root,
+        root.reachability_root(),
         &mut hooks,
         reachability_options(analysis_config, true),
     );
@@ -427,8 +409,8 @@ fn analyze_root<'tcx>(
         &result,
         &analysis,
         PanicFindingCollection {
-            root_kind: root.kind,
-            root_def_id: root.def_id,
+            root_kind,
+            root_def_id,
             config,
             dependency_cache,
             include_stack,
@@ -446,7 +428,7 @@ fn analyze_root<'tcx>(
         descend_reified_callables,
     };
     let boundary_result = reachability.query(
-        root.root,
+        root.reachability_root(),
         &mut boundary_hooks,
         reachability_options(analysis_config, false),
     );
@@ -456,7 +438,7 @@ fn analyze_root<'tcx>(
         cached_boundary_findings(tcx, graph, &boundary_result, &boundary_analysis, config);
     let analysis_complete = transitive_complete && graph.view(&boundary_result).halt().is_none();
     if !analysis_complete {
-        report.push_analysis_incomplete(tcx, root.def_id, analysis_config.node_limit);
+        report.push_analysis_incomplete(tcx, root_def_id, analysis_config.node_limit);
     }
     let raw_panic_paths = report
         .findings
@@ -481,12 +463,12 @@ fn analyze_root<'tcx>(
         .filter(|finding| finding.kind == FindingKind::TrustedPanic)
         .count();
     let summary = CachedFunctionSummary {
-        def_path_hash: stable_def_path_hash(tcx, root.def_id),
-        path: canonical_namespace(tcx, root.def_id),
-        is_generic: root.kind == PanicRootKind::Generic,
+        def_path_hash: stable_def_path_hash(tcx, root_def_id),
+        path: canonical_namespace(tcx, root_def_id),
+        is_generic: root_kind == ReportRootKind::Generic,
         analysis_complete,
-        has_panic_docs: crate::panics::has_panic_docs(tcx, root.def_id, config),
-        root_span: cached_source_span(tcx, tcx.def_span(root.def_id)),
+        has_panic_docs: crate::panics::has_panic_docs(tcx, root_def_id, config),
+        root_span: cached_source_span(tcx, tcx.def_span(root_def_id)),
         raw_panic_paths,
         panic_obligations,
         trusted_panic_obligations,
@@ -519,7 +501,7 @@ fn artifact_info(tcx: TyCtxt<'_>, invocation: &RustcInvocation) -> CachedArtifac
 
 #[derive(Clone, Copy)]
 struct PanicFindingCollection<'config> {
-    root_kind: PanicRootKind,
+    root_kind: ReportRootKind,
     root_def_id: DefId,
     config: &'config PanicConfig,
     dependency_cache: &'config DependencyAnalysisCache,
