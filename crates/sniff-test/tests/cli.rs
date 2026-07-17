@@ -178,6 +178,28 @@ fn init_subcommand_writes_example_manifest() {
 }
 
 #[test]
+fn init_subcommand_reports_error_chain() {
+    let temp = tempfile::tempdir().expect("temp dir");
+    let manifest = temp.path().join("missing-parent/sniff-test.toml");
+    let binary = PathBuf::from(env!("CARGO_BIN_EXE_cargo-sniff-test"));
+    let output = Command::new(binary)
+        .args(["init", "--manifest"])
+        .arg(&manifest)
+        .output()
+        .expect("run init");
+
+    assert_eq!(output.status.code(), Some(1));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.starts_with(&format!(
+            "error: failed to write `{}`\n\nCaused by:\n    ",
+            manifest.display()
+        )),
+        "stderr: {stderr}"
+    );
+}
+
+#[test]
 fn cargo_subcommand_token_is_accepted() {
     let binary = PathBuf::from(env!("CARGO_BIN_EXE_cargo-sniff-test"));
     let output = Command::new(binary)
@@ -190,6 +212,75 @@ fn cargo_subcommand_token_is_accepted() {
         String::from_utf8_lossy(&output.stdout).contains("Usage: cargo sniff-test"),
         "stdout: {}",
         String::from_utf8_lossy(&output.stdout)
+    );
+}
+
+#[test]
+fn cargo_frontend_rejects_explicit_missing_manifest() {
+    let temp = tempfile::tempdir().expect("temp dir");
+    let manifest = temp.path().join("missing-sniff-test.toml");
+    let binary = PathBuf::from(env!("CARGO_BIN_EXE_cargo-sniff-test"));
+    let mut command = Command::new(binary);
+    clean_cargo_package_env(&mut command);
+    let output = command
+        .args(["--manifest"])
+        .arg(&manifest)
+        .current_dir(repo_root().join("tests/fixtures/direct_panic"))
+        .output()
+        .expect("run cargo frontend");
+
+    assert_eq!(output.status.code(), Some(1));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert_eq!(
+        stderr,
+        format!(
+            "error: manifest path `{}` does not exist\n",
+            manifest.display()
+        )
+    );
+}
+
+#[test]
+fn direct_driver_rejects_explicit_missing_manifest() {
+    let temp = tempfile::tempdir().expect("temp dir");
+    let manifest = temp.path().join("missing-sniff-test.toml");
+    let binary = PathBuf::from(env!("CARGO_BIN_EXE_sniff-test-driver"));
+    let output = Command::new(binary)
+        .args(["--manifest"])
+        .arg(&manifest)
+        .args(["--", "--version"])
+        .output()
+        .expect("run direct driver");
+
+    assert_eq!(output.status.code(), Some(1));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert_eq!(
+        stderr,
+        format!(
+            "error: manifest path `{}` does not exist\n",
+            manifest.display()
+        )
+    );
+}
+
+#[test]
+fn direct_driver_rejects_manifest_directory() {
+    let temp = tempfile::tempdir().expect("temp dir");
+    let binary = PathBuf::from(env!("CARGO_BIN_EXE_sniff-test-driver"));
+    let output = Command::new(binary)
+        .args(["--manifest"])
+        .arg(temp.path())
+        .args(["--", "--version"])
+        .output()
+        .expect("run direct driver");
+
+    assert_eq!(output.status.code(), Some(1));
+    assert_eq!(
+        String::from_utf8_lossy(&output.stderr),
+        format!(
+            "error: manifest path `{}` is a directory but expected a file\n",
+            temp.path().display()
+        )
     );
 }
 

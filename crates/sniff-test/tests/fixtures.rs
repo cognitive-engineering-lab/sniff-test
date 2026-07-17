@@ -17,7 +17,7 @@ struct Case {
     crate_type: &'static str,
     edition: &'static str,
     source: &'static str,
-    manifest: &'static str,
+    manifest: Option<&'static str>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -38,7 +38,7 @@ impl Case {
             crate_type: "lib",
             edition: "2024",
             source: "src/lib.rs",
-            manifest: "sniff-test.toml",
+            manifest: None,
         }
     }
 
@@ -70,7 +70,7 @@ impl Case {
 
     #[must_use]
     const fn manifest(mut self, manifest: &'static str) -> Self {
-        self.manifest = manifest;
+        self.manifest = Some(manifest);
         self
     }
 }
@@ -531,16 +531,16 @@ fn run_direct_driver_case(
     case: &Case,
 ) -> CommandOutput {
     let source = root.join(case.source);
-    let manifest = root.join(case.manifest);
     let crate_name = fixture_name.replace('-', "_");
     let crate_type = case.crate_type;
     let edition = case.edition;
 
     let mut command = Command::new(binary);
     clean_cargo_package_env(&mut command);
+    if let Some(manifest) = case.manifest {
+        command.args(["--manifest"]).arg(root.join(manifest));
+    }
     let output = command
-        .args(["--manifest"])
-        .arg(manifest)
         .args(["--message-format", "json", "--color", "never"])
         .args(case.args)
         .arg("--")

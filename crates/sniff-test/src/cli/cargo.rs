@@ -6,25 +6,32 @@ use std::process::{Command, ExitCode};
 
 use crate::cache::{artifact_id_from_extern_path, read_unit_outcome};
 use crate::config::EXAMPLE_MANIFEST;
+use anyhow::{Context, Result, anyhow, bail};
 
 use super::args::{self, FrontendAction, FrontendCli, InitCliArgs, SniffTestArgs};
 use super::plugin::{
     RUSTC_VERSION_ENV, SNIFF_TEST_ARGS_ENV, current_rustc_version, frontend_args, modify_cargo,
-    rustc_version_dir_component,
+    rustc_version_dir_component, validate_manifest,
 };
 
 #[must_use]
-#[allow(
-    clippy::too_many_lines,
-    reason = "the frontend is one linear command-execution flow"
-)]
 pub fn cargo_frontend() -> ExitCode {
+    match try_cargo_frontend() {
+        Ok(exit_code) => exit_code,
+        Err(error) => {
+            super::display_error(&error);
+            ExitCode::FAILURE
+        }
+    }
+}
+
+fn try_cargo_frontend() -> Result<ExitCode> {
     let cli = match FrontendCli::try_parse_env() {
         Ok(cli) => cli,
         Err(error) => {
             let exit_code = error.exit_code();
             let _ = error.print();
-            return ExitCode::from(u8::try_from(exit_code).unwrap_or(2));
+            return Ok(ExitCode::from(u8::try_from(exit_code).unwrap_or(2)));
         }
     };
     let mut parsed_args = match cli.into_action() {
@@ -35,6 +42,9 @@ pub fn cargo_frontend() -> ExitCode {
         parsed_args.manifest_path =
             std::env::var_os(args::MANIFEST_PATH_ENV).map(std::path::PathBuf::from);
     }
+    if let Some(path) = &parsed_args.manifest_path {
+        validate_manifest(path)?;
+    }
     if parsed_args
         .cargo_args
         .iter()
@@ -43,38 +53,30 @@ pub fn cargo_frontend() -> ExitCode {
         eprintln!(
             "sniff-test: pass --message-format to sniff-test itself, before any `--` separator"
         );
-        return ExitCode::FAILURE;
+        return Ok(ExitCode::FAILURE);
     }
-    let metadata = match metadata_command(&parsed_args).exec() {
-        Ok(metadata) => metadata,
-        Err(error) => {
-            eprintln!("sniff-test: failed to read Cargo metadata: {error}");
-            return ExitCode::FAILURE;
-        }
-    };
-    let parsed_args = discover_manifest(parsed_args, metadata.workspace_root.as_std_path());
+    let metadata = metadata_command(&parsed_args)
+        .exec()
+        .context("failed to read Cargo metadata")?;
+    let parsed_args = discover_manifest(parsed_args, metadata.workspace_root.as_std_path())?;
     let rustc_version = current_rustc_version();
     let target_dir = metadata.target_directory.join(format!(
         "sniff-test-{}",
         rustc_version_dir_component(&rustc_version)
     ));
-    let mut args = frontend_args(parsed_args, target_dir.as_std_path());
+    let mut args = frontend_args(parsed_args, target_dir.as_std_path())?;
     args.workspace_manifests = metadata
         .packages
         .iter()
-        .map(|package| {
-            package
-                .manifest_path
-                .canonicalize()
-                .unwrap_or_else(|error| {
-                    eprintln!(
-                        "sniff-test: failed to canonicalize workspace manifest {}: {error}",
-                        package.manifest_path
-                    );
-                    std::process::exit(2);
-                })
+        .map(|package| -> Result<_> {
+            package.manifest_path.canonicalize().with_context(|| {
+                format!(
+                    "failed to canonicalize workspace manifest {}",
+                    package.manifest_path
+                )
+            })
         })
-        .collect();
+        .collect::<Result<_>>()?;
 
     let mut cargo = Command::new("cargo");
     cargo.args(["check", "--target-dir"]).arg(&target_dir);
@@ -85,25 +87,15 @@ pub fn cargo_frontend() -> ExitCode {
     cargo.env(RUSTC_VERSION_ENV, &rustc_version);
     cargo.env(
         SNIFF_TEST_ARGS_ENV,
-        serde_json::to_string(&args).unwrap_or_else(|error| {
-            eprintln!("sniff-test: failed to encode driver arguments: {error}");
-            std::process::exit(2);
-        }),
+        serde_json::to_string(&args).context("failed to encode driver arguments")?,
     );
-    modify_cargo(&mut cargo, &args);
+    modify_cargo(&mut cargo, &args)?;
     cargo.stdout(std::process::Stdio::piped());
 
-    let mut child = match cargo.spawn() {
-        Ok(child) => child,
-        Err(error) => {
-            eprintln!("sniff-test: failed to run Cargo: {error}");
-            return ExitCode::FAILURE;
-        }
-    };
+    let mut child = cargo.spawn().context("failed to run Cargo")?;
     let Some(stdout) = child.stdout.take() else {
-        eprintln!("sniff-test: failed to capture Cargo output");
         let _ = child.kill();
-        return ExitCode::FAILURE;
+        return Err(anyhow!("failed to capture Cargo output"));
     };
     let mut plan = Vec::new();
     let mut planned = HashSet::new();
@@ -115,69 +107,51 @@ pub fn cargo_frontend() -> ExitCode {
         process_cargo_message(&line, &args, &mut plan, &mut planned, &mut streamed);
     }
     let status = child.wait();
-
     let denied = consume_unit_outcomes(&args, &plan, &streamed);
-    match status {
-        Ok(status) if status.success() => {
-            if denied {
-                ExitCode::FAILURE
-            } else {
-                ExitCode::SUCCESS
-            }
-        }
-        Ok(status) => {
-            if denied {
-                ExitCode::FAILURE
-            } else {
-                match status.code() {
-                    Some(code) => ExitCode::from(u8::try_from(code).unwrap_or(1)),
-                    None => ExitCode::FAILURE,
-                }
-            }
-        }
-        Err(error) => {
-            eprintln!("sniff-test: failed to wait for Cargo: {error}");
+    let status = status.context("failed to wait for Cargo")?;
+    Ok(if status.success() {
+        if denied {
             ExitCode::FAILURE
+        } else {
+            ExitCode::SUCCESS
         }
-    }
+    } else if denied {
+        ExitCode::FAILURE
+    } else {
+        match status.code() {
+            Some(code) => ExitCode::from(u8::try_from(code).unwrap_or(1)),
+            None => ExitCode::FAILURE,
+        }
+    })
 }
 
-fn run_init(args: &InitCliArgs) -> ExitCode {
+fn run_init(args: &InitCliArgs) -> Result<ExitCode> {
     if args.manifest.exists() && !args.force {
-        eprintln!(
-            "sniff-test: {} already exists; pass --force to overwrite it",
+        bail!(
+            "{} already exists; pass --force to overwrite it",
             args.manifest.display()
         );
-        return ExitCode::FAILURE;
     }
 
-    if let Err(error) = std::fs::write(&args.manifest, EXAMPLE_MANIFEST) {
-        eprintln!(
-            "sniff-test: failed to write {}: {error}",
-            args.manifest.display()
-        );
-        return ExitCode::FAILURE;
-    }
+    std::fs::write(&args.manifest, EXAMPLE_MANIFEST)
+        .with_context(|| format!("failed to write `{}`", args.manifest.display()))?;
 
     println!("sniff-test: wrote {}", args.manifest.display());
-    ExitCode::SUCCESS
+    Ok(ExitCode::SUCCESS)
 }
 
-fn discover_manifest(mut args: SniffTestArgs, workspace_root: &Path) -> SniffTestArgs {
+fn discover_manifest(mut args: SniffTestArgs, workspace_root: &Path) -> Result<SniffTestArgs> {
     if args.manifest_path.is_some() {
-        return args;
+        return Ok(args);
     }
 
-    let cwd = std::env::current_dir().unwrap_or_else(|error| {
-        eprintln!("sniff-test: failed to read current directory: {error}");
-        std::process::exit(2);
-    });
+    let cwd = std::env::current_dir().context("failed to read current directory")?;
     let mut dir = cwd.as_path();
     loop {
         let candidate = dir.join(crate::config::DEFAULT_MANIFEST_FILE);
         if candidate.is_file() {
             args.manifest_path = Some(candidate);
-            return args;
+            return Ok(args);
         }
         if dir == workspace_root || !dir.starts_with(workspace_root) {
             break;
@@ -194,7 +168,7 @@ fn discover_manifest(mut args: SniffTestArgs, workspace_root: &Path) -> SniffTes
         cwd.display(),
         workspace_root.display(),
     );
-    args
+    Ok(args)
 }
 
 fn process_cargo_message(

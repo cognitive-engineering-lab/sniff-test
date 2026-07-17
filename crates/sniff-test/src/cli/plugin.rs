@@ -4,6 +4,7 @@ use std::process::{Command, ExitCode};
 
 use crate::cache::default_cache_dir;
 use crate::config::SniffTestConfig;
+use anyhow::{Context, Result, bail};
 use rustc_driver::{Callbacks, Compilation};
 use rustc_interface::interface;
 use rustc_middle::ty::TyCtxt;
@@ -16,27 +17,35 @@ pub(crate) const DRIVER_NAME: &str = "sniff-test-driver";
 pub(crate) const RUSTC_VERSION_ENV: &str = "SNIFF_TEST_RUSTC_VERSION";
 pub(crate) const SNIFF_TEST_ARGS_ENV: &str = "SNIFF_TEST_ARGS";
 
-pub(crate) fn frontend_args(mut args: SniffTestArgs, target_dir: &Path) -> SniffTestArgs {
+pub(crate) fn validate_manifest(path: &Path) -> Result<()> {
+    if !path.exists() {
+        bail!("manifest path `{}` does not exist", path.display());
+    }
+    if path.is_dir() {
+        bail!(
+            "manifest path `{}` is a directory but expected a file",
+            path.display()
+        );
+    }
+    Ok(())
+}
+
+pub(crate) fn frontend_args(mut args: SniffTestArgs, target_dir: &Path) -> Result<SniffTestArgs> {
     if args.cache_dir.is_none() {
         args.cache_dir = Some(default_cache_dir(target_dir));
     }
     args.cache_dir = Some(
-        std::path::absolute(args.cache_dir()).unwrap_or_else(|error| {
-            eprintln!("sniff-test: failed to make cache directory absolute: {error}");
-            std::process::exit(2);
-        }),
+        std::path::absolute(args.cache_dir()).context("failed to make cache directory absolute")?,
     );
     args.manifest_path = Some(
-        std::path::absolute(args.manifest_path()).unwrap_or_else(|error| {
-            eprintln!("sniff-test: failed to make manifest path absolute: {error}");
-            std::process::exit(2);
-        }),
+        std::path::absolute(args.manifest_path())
+            .context("failed to make manifest path absolute")?,
     );
-    args
+    Ok(args)
 }
 
-pub(crate) fn modify_cargo(cargo: &mut Command, args: &SniffTestArgs) {
-    let driver = driver_path();
+pub(crate) fn modify_cargo(cargo: &mut Command, args: &SniffTestArgs) -> Result<()> {
+    let driver = driver_path()?;
 
     if args.release {
         cargo.arg("--release");
@@ -106,27 +115,33 @@ pub(crate) fn modify_cargo(cargo: &mut Command, args: &SniffTestArgs) {
     // RUSTC_WORKSPACE_WRAPPER so dependency artifacts are analyzed and cached.
     cargo.env("RUSTC_WRAPPER", driver);
     cargo.env_remove("RUSTC_WORKSPACE_WRAPPER");
+    Ok(())
 }
 
+#[must_use]
 pub fn driver_main() -> ExitCode {
+    match try_driver_main() {
+        Ok(exit_code) => exit_code,
+        Err(error) => {
+            super::display_error(&error);
+            ExitCode::FAILURE
+        }
+    }
+}
+
+fn try_driver_main() -> Result<ExitCode> {
     let original_args = std::env::args().collect::<Vec<_>>();
     if second_arg_is_rustc(&original_args) {
         let mut compiler_args = original_args;
         strip_rustc_wrapper_arg(&mut compiler_args);
         if is_info_query(&compiler_args) {
             rustc_driver::run_compiler(&compiler_args, &mut DefaultCallbacks);
-            return ExitCode::SUCCESS;
+            return Ok(ExitCode::SUCCESS);
         }
 
-        let mut args = match args_from_env() {
-            Ok(args) => args,
-            Err(error) => {
-                eprintln!("{error}");
-                return ExitCode::FAILURE;
-            }
-        };
+        let mut args = args_from_env()?;
         args.under_cargo = true;
-        return run_driver(&compiler_args, args);
+        return Ok(run_driver(&compiler_args, args));
     }
 
     let binary = original_args[0].clone();
@@ -135,17 +150,17 @@ pub fn driver_main() -> ExitCode {
         Err(error) => {
             let exit_code = error.exit_code();
             let _ = error.print();
-            return ExitCode::from(u8::try_from(exit_code).unwrap_or(2));
+            return Ok(ExitCode::from(u8::try_from(exit_code).unwrap_or(2)));
         }
     };
     let (compiler_args, args) = driver.into_parts(binary);
-    let args = direct_args(args);
+    let args = direct_args(args)?;
     if is_info_query(&compiler_args) {
         rustc_driver::run_compiler(&compiler_args, &mut DefaultCallbacks);
-        return ExitCode::SUCCESS;
+        return Ok(ExitCode::SUCCESS);
     }
 
-    run_driver(&compiler_args, args)
+    Ok(run_driver(&compiler_args, args))
 }
 
 fn second_arg_is_rustc(args: &[String]) -> bool {
@@ -158,34 +173,27 @@ fn strip_rustc_wrapper_arg(args: &mut Vec<String>) {
     }
 }
 
-fn args_from_env() -> Result<SniffTestArgs, String> {
-    match std::env::var(SNIFF_TEST_ARGS_ENV) {
-        Ok(source) => serde_json::from_str::<SniffTestArgs>(&source).map_err(|error| {
-            format!("sniff-test: failed to decode {SNIFF_TEST_ARGS_ENV}: {error}")
-        }),
-        Err(error) => Err(format!(
-            "sniff-test: missing {SNIFF_TEST_ARGS_ENV}: {error}"
-        )),
-    }
+fn args_from_env() -> Result<SniffTestArgs> {
+    let source = std::env::var(SNIFF_TEST_ARGS_ENV)
+        .with_context(|| format!("missing {SNIFF_TEST_ARGS_ENV}"))?;
+    serde_json::from_str(&source).with_context(|| format!("failed to decode {SNIFF_TEST_ARGS_ENV}"))
 }
 
-fn direct_args(mut args: SniffTestArgs) -> SniffTestArgs {
+fn direct_args(mut args: SniffTestArgs) -> Result<SniffTestArgs> {
     if args.manifest_path.is_none() {
         args.manifest_path = std::env::var_os(MANIFEST_PATH_ENV).map(std::path::PathBuf::from);
     }
+    if let Some(path) = &args.manifest_path {
+        validate_manifest(path)?;
+    }
     args.manifest_path = Some(
-        std::path::absolute(args.manifest_path()).unwrap_or_else(|error| {
-            eprintln!("sniff-test: failed to make manifest path absolute: {error}");
-            std::process::exit(2);
-        }),
+        std::path::absolute(args.manifest_path())
+            .context("failed to make manifest path absolute")?,
     );
     args.cache_dir = Some(
-        std::path::absolute(args.cache_dir()).unwrap_or_else(|error| {
-            eprintln!("sniff-test: failed to make cache directory absolute: {error}");
-            std::process::exit(2);
-        }),
+        std::path::absolute(args.cache_dir()).context("failed to make cache directory absolute")?,
     );
-    args
+    Ok(args)
 }
 
 fn run_driver(compiler_args: &[String], args: SniffTestArgs) -> ExitCode {
@@ -217,17 +225,14 @@ fn has_no_steal_thir(compiler_args: &[String]) -> bool {
             .any(|pair| pair[0] == "-Z" && pair[1] == "no-steal-thir")
 }
 
-pub(crate) fn driver_path() -> std::path::PathBuf {
+pub(crate) fn driver_path() -> Result<std::path::PathBuf> {
     let mut path = std::env::current_exe()
-        .unwrap_or_else(|error| {
-            eprintln!("sniff-test: failed to locate current executable: {error}");
-            std::process::exit(2);
-        })
+        .context("failed to locate current executable")?
         .with_file_name(DRIVER_NAME);
     if cfg!(windows) {
         path.set_extension("exe");
     }
-    path
+    Ok(path)
 }
 
 pub(crate) fn current_rustc_version() -> String {

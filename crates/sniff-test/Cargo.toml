@@ -4,6 +4,7 @@ version.workspace = true
 edition.workspace = true
 
 [dependencies]
+anyhow = "1"
 cargo_metadata = "0.19"
 clap = { version = "4.6", features = ["derive"] }
 globset = { version = "0.4", default-features = false }
