@@ -539,15 +539,16 @@ fn run_direct_driver_case(
     let mut command = Command::new(binary);
     clean_cargo_package_env(&mut command);
     let output = command
-        .args(["--crate-name", crate_name.as_str()])
-        .args(["--crate-type", crate_type])
-        .args(["--edition", edition])
-        .arg(source)
-        .args(["--sysroot", sysroot.trim(), "-Zno-codegen", "--"])
         .args(["--manifest"])
         .arg(manifest)
         .args(["--message-format", "json", "--color", "never"])
         .args(case.args)
+        .arg("--")
+        .args(["--crate-name", crate_name.as_str()])
+        .args(["--crate-type", crate_type])
+        .args(["--edition", edition])
+        .arg(source)
+        .args(["--sysroot", sysroot.trim(), "-Zno-codegen"])
         // Cargo would normally set this; direct-driver cases need it for scope.
         .env("CARGO_PRIMARY_PACKAGE", "1")
         .current_dir(root)

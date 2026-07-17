@@ -19,7 +19,6 @@ use std::collections::BTreeMap;
 use std::fmt::{Debug, Display, Formatter};
 use std::ops::Range;
 use std::path::{Path, PathBuf};
-use std::str::FromStr;
 
 use globset::{GlobBuilder, GlobSet, GlobSetBuilder};
 use reachability::{
@@ -325,7 +324,7 @@ impl Default for AnalysisLintConfig {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize, Serialize, clap::ValueEnum)]
 #[serde(rename_all = "kebab-case")]
 pub enum OverflowChecks {
     /// Respect the selected Cargo/rustc profile.
@@ -347,38 +346,6 @@ impl OverflowChecks {
         }
     }
 }
-
-impl FromStr for OverflowChecks {
-    type Err = OverflowChecksParseError;
-
-    fn from_str(value: &str) -> Result<Self, Self::Err> {
-        match value {
-            "profile" => Ok(Self::Profile),
-            "on" => Ok(Self::On),
-            "off" => Ok(Self::Off),
-            other => Err(OverflowChecksParseError {
-                value: other.to_owned(),
-            }),
-        }
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct OverflowChecksParseError {
-    value: String,
-}
-
-impl Display for OverflowChecksParseError {
-    fn fmt(&self, formatter: &mut Formatter<'_>) -> std::fmt::Result {
-        write!(
-            formatter,
-            "invalid overflow-checks value `{}`; expected profile, on, or off",
-            self.value
-        )
-    }
-}
-
-impl std::error::Error for OverflowChecksParseError {}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize, Serialize)]
 #[serde(rename_all = "kebab-case")]

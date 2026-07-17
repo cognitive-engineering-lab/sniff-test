@@ -123,6 +123,7 @@ fn direct_driver_compile_error_follows_rustc_exit_status() {
     let mut command = Command::new(&driver);
     clean_cargo_package_env(&mut command);
     let output = command
+        .args(["--message-format", "json", "--color", "never", "--"])
         .args([
             "--crate-name",
             "broken",
@@ -132,8 +133,7 @@ fn direct_driver_compile_error_follows_rustc_exit_status() {
             "2024",
         ])
         .arg(&source)
-        .args(["--sysroot", rustc_sysroot().trim(), "-Zno-codegen", "--"])
-        .args(["--message-format", "json", "--color", "never"])
+        .args(["--sysroot", rustc_sysroot().trim(), "-Zno-codegen"])
         .current_dir(temp.path())
         .output()
         .expect("run driver");
@@ -149,6 +149,47 @@ fn direct_driver_compile_error_follows_rustc_exit_status() {
     assert!(
         !stderr.contains("internal compiler error"),
         "stderr:\n{stderr}"
+    );
+}
+
+#[test]
+fn init_subcommand_writes_example_manifest() {
+    let temp = tempfile::tempdir().expect("temp dir");
+    let manifest = temp.path().join("custom-sniff-test.toml");
+    let binary = PathBuf::from(env!("CARGO_BIN_EXE_cargo-sniff-test"));
+    let mut command = Command::new(binary);
+    clean_cargo_package_env(&mut command);
+    let output = command
+        .args(["init", "--manifest"])
+        .arg(&manifest)
+        .current_dir(temp.path())
+        .output()
+        .expect("run init");
+
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(
+        fs::read_to_string(manifest).expect("read generated manifest"),
+        include_str!("../example-manifest.toml")
+    );
+}
+
+#[test]
+fn cargo_subcommand_token_is_accepted() {
+    let binary = PathBuf::from(env!("CARGO_BIN_EXE_cargo-sniff-test"));
+    let output = Command::new(binary)
+        .args(["sniff-test", "--help"])
+        .output()
+        .expect("run help");
+
+    assert!(output.status.success());
+    assert!(
+        String::from_utf8_lossy(&output.stdout).contains("Usage: cargo sniff-test"),
+        "stdout: {}",
+        String::from_utf8_lossy(&output.stdout)
     );
 }
 

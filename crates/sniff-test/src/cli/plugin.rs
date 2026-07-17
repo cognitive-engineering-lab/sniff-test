@@ -9,7 +9,7 @@ use rustc_interface::interface;
 use rustc_middle::ty::TyCtxt;
 use rustc_span::symbol::Symbol;
 
-use super::args::{ColorChoice, MANIFEST_PATH_ENV, SniffTestArgParseError, SniffTestArgs};
+use super::args::{ColorChoice, DriverCli, MANIFEST_PATH_ENV, SniffTestArgs};
 use super::driver::{analyze_crate, load_config};
 
 pub(crate) const DRIVER_NAME: &str = "sniff-test-driver";
@@ -110,8 +110,7 @@ pub(crate) fn modify_cargo(cargo: &mut Command, args: &SniffTestArgs) {
 
 pub fn driver_main() -> ExitCode {
     let original_args = std::env::args().collect::<Vec<_>>();
-    let separator = original_args.iter().rposition(|arg| arg == "--");
-    if separator.is_none() && second_arg_is_rustc(&original_args) {
+    if second_arg_is_rustc(&original_args) {
         let mut compiler_args = original_args;
         strip_rustc_wrapper_arg(&mut compiler_args);
         if is_info_query(&compiler_args) {
@@ -130,36 +129,17 @@ pub fn driver_main() -> ExitCode {
         return run_driver(&compiler_args, args);
     }
 
-    let Some(separator) = separator else {
-        if is_help_request(&original_args) {
-            print_driver_help();
-            return ExitCode::SUCCESS;
-        }
-
-        if is_version_request(&original_args) {
-            println!("{}", env!("CARGO_PKG_VERSION"));
-            return ExitCode::SUCCESS;
-        }
-
-        eprintln!("sniff-test: direct driver mode requires `--` before sniff-test arguments");
-        print_driver_help();
-        return ExitCode::FAILURE;
-    };
-
-    let mut compiler_args = vec![original_args[0].clone()];
-    compiler_args.extend(original_args[1..separator].iter().cloned());
-    strip_rustc_wrapper_arg(&mut compiler_args);
-    let args = match direct_args(original_args[(separator + 1)..].iter().cloned()) {
-        Ok(args) => args,
+    let binary = original_args[0].clone();
+    let driver = match DriverCli::try_parse(original_args) {
+        Ok(driver) => driver,
         Err(error) => {
-            eprintln!("sniff-test: {error}");
-            return ExitCode::from(2);
+            let exit_code = error.exit_code();
+            let _ = error.print();
+            return ExitCode::from(u8::try_from(exit_code).unwrap_or(2));
         }
     };
-    if compiler_args.len() == 1 {
-        eprintln!("sniff-test: direct driver mode requires rustc arguments before `--`");
-        return ExitCode::FAILURE;
-    }
+    let (compiler_args, args) = driver.into_parts(binary);
+    let args = direct_args(args);
     if is_info_query(&compiler_args) {
         rustc_driver::run_compiler(&compiler_args, &mut DefaultCallbacks);
         return ExitCode::SUCCESS;
@@ -189,10 +169,7 @@ fn args_from_env() -> Result<SniffTestArgs, String> {
     }
 }
 
-fn direct_args(
-    args: impl IntoIterator<Item = String>,
-) -> Result<SniffTestArgs, SniffTestArgParseError> {
-    let mut args = SniffTestArgs::parse_from_driver_args(args)?;
+fn direct_args(mut args: SniffTestArgs) -> SniffTestArgs {
     if args.manifest_path.is_none() {
         args.manifest_path = std::env::var_os(MANIFEST_PATH_ENV).map(std::path::PathBuf::from);
     }
@@ -208,7 +185,7 @@ fn direct_args(
             std::process::exit(2);
         }),
     );
-    Ok(args)
+    args
 }
 
 fn run_driver(compiler_args: &[String], args: SniffTestArgs) -> ExitCode {
@@ -412,10 +389,6 @@ fn sanitize_component(value: &str) -> String {
     }
 }
 
-fn is_help_request(args: &[String]) -> bool {
-    args.len() == 1 || args.iter().any(|arg| arg == "--help" || arg == "-h")
-}
-
 fn is_info_query(args: &[String]) -> bool {
     args.iter().any(|arg| {
         arg == "--version"
@@ -425,22 +398,6 @@ fn is_info_query(args: &[String]) -> bool {
             || arg == "--print"
             || arg.starts_with("--print=")
     })
-}
-
-fn is_version_request(args: &[String]) -> bool {
-    args.iter().any(|arg| arg == "--version" || arg == "-V")
-}
-
-fn print_driver_help() {
-    println!(
-        "sniff-test-driver runs sniff-test with rustc-style arguments.\n\n\
-Usage:\n    sniff-test-driver [RUSTC-ARGS] -- [SNIFF-TEST-ARGS]\n\n\
-SNIFF-TEST-ARGS:\n    --manifest PATH\n    --cache-dir DIR\n    --color auto|always|never\n    --message-format human|json\n\n\
-Cargo frontend options such as --release, --build-std, and --overflow-checks\n\
-belong to `cargo sniff-test`; pass equivalent rustc flags before `--` in direct mode.\n\
-Direct mode follows rustc exit status; use cargo sniff-test for fail-on-panic policy.\n\n\
-This binary is normally invoked by `cargo sniff-test` as a RUSTC_WRAPPER."
-    );
 }
 
 struct DefaultCallbacks;

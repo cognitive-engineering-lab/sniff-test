@@ -206,7 +206,7 @@ independently to each site; each callee still checks its own named requirements.
 `RUSTC_WRAPPER`. It can also be used directly for harness tests:
 
 ```sh
-sniff-test-driver [RUSTC-ARGS] -- [SNIFF-TEST-ARGS]
+sniff-test-driver [SNIFF-TEST-ARGS] -- [RUSTC-ARGS]
 ```
 
 Direct-mode sniff-test arguments:
@@ -217,10 +217,10 @@ Direct-mode sniff-test arguments:
 - `--message-format human|json`
 
 Cargo frontend options are intentionally rejected in direct mode. Put rustc
-profile/codegen flags before the driver separator instead:
+profile/codegen flags after the driver separator instead:
 
 ```sh
-sniff-test-driver rustc src/lib.rs -C overflow-checks=on -- --message-format json
+sniff-test-driver --message-format json -- src/lib.rs -C overflow-checks=on
 ```
 
 Direct driver mode follows rustc-driver exit semantics: it returns success when

@@ -5,8 +5,9 @@ use std::path::Path;
 use std::process::{Command, ExitCode};
 
 use crate::cache::{artifact_id_from_extern_path, read_unit_outcome};
+use crate::config::EXAMPLE_MANIFEST;
 
-use super::args::{self, SniffTestArgs};
+use super::args::{self, FrontendAction, FrontendCli, InitCliArgs, SniffTestArgs};
 use super::plugin::{
     RUSTC_VERSION_ENV, SNIFF_TEST_ARGS_ENV, current_rustc_version, frontend_args, modify_cargo,
     rustc_version_dir_component,
@@ -18,16 +19,22 @@ use super::plugin::{
     reason = "the frontend is one linear command-execution flow"
 )]
 pub fn cargo_frontend() -> ExitCode {
-    if std::env::args()
-        .skip(1)
-        .take_while(|arg| arg != "--")
-        .any(|arg| arg == "-V" || arg == "--version")
-    {
-        println!("{}", env!("CARGO_PKG_VERSION"));
-        return ExitCode::SUCCESS;
+    let cli = match FrontendCli::try_parse_env() {
+        Ok(cli) => cli,
+        Err(error) => {
+            let exit_code = error.exit_code();
+            let _ = error.print();
+            return ExitCode::from(u8::try_from(exit_code).unwrap_or(2));
+        }
+    };
+    let mut parsed_args = match cli.into_action() {
+        FrontendAction::Run(args) => args,
+        FrontendAction::Init(args) => return run_init(&args),
+    };
+    if parsed_args.manifest_path.is_none() {
+        parsed_args.manifest_path =
+            std::env::var_os(args::MANIFEST_PATH_ENV).map(std::path::PathBuf::from);
     }
-
-    let parsed_args = SniffTestArgs::parse_from_env();
     if parsed_args
         .cargo_args
         .iter()
@@ -133,6 +140,27 @@ pub fn cargo_frontend() -> ExitCode {
             ExitCode::FAILURE
         }
     }
+}
+
+fn run_init(args: &InitCliArgs) -> ExitCode {
+    if args.manifest.exists() && !args.force {
+        eprintln!(
+            "sniff-test: {} already exists; pass --force to overwrite it",
+            args.manifest.display()
+        );
+        return ExitCode::FAILURE;
+    }
+
+    if let Err(error) = std::fs::write(&args.manifest, EXAMPLE_MANIFEST) {
+        eprintln!(
+            "sniff-test: failed to write {}: {error}",
+            args.manifest.display()
+        );
+        return ExitCode::FAILURE;
+    }
+
+    println!("sniff-test: wrote {}", args.manifest.display());
+    ExitCode::SUCCESS
 }
 
 fn discover_manifest(mut args: SniffTestArgs, workspace_root: &Path) -> SniffTestArgs {
