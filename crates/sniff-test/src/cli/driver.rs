@@ -12,7 +12,7 @@ use crate::cache::{
 use crate::config::{
     AnalysisConfig, CallableEdgeAttribution, PanicBoundaryPolicy, PanicConfig, SniffTestConfig,
 };
-use crate::dependency_cache::{DependencyAnalysisCache, DependencyInput};
+use crate::dependency_cache::DependencyAnalysisCache;
 use crate::namespace::{canonical_namespace, stable_def_path_hash};
 use crate::panics::{PanicAnalysis, PanicEvidence, PanicPathDecision, analyze_panic_evidence};
 use crate::report_roots::{
@@ -98,10 +98,7 @@ pub(crate) fn analyze_crate(
     let rustc_version = rustc_version();
     let dependency_cache = DependencyAnalysisCache::load(
         &args.cache_dir(),
-        invocation.externs.iter().map(|extern_arg| DependencyInput {
-            name: extern_arg.name.clone(),
-            path: extern_arg.path.clone(),
-        }),
+        &invocation.externs,
         &config.panics,
         &CacheExpectations {
             tool_version: env!("CARGO_PKG_VERSION"),

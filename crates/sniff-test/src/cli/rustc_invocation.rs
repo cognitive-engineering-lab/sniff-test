@@ -1,10 +1,12 @@
 use std::path::PathBuf;
 
+use crate::dependency_cache::DependencyInput;
+
 #[derive(Debug, Default)]
 pub(crate) struct RustcInvocation {
     pub(crate) crate_types: Vec<String>,
     pub(crate) extra_filename: Option<String>,
-    pub(crate) externs: Vec<ExternCrateArg>,
+    pub(crate) externs: Vec<DependencyInput>,
 }
 
 impl RustcInvocation {
@@ -24,7 +26,7 @@ impl RustcInvocation {
                 }
                 "--extern" => {
                     if let Some(value) = args.next()
-                        && let Some(extern_arg) = ExternCrateArg::parse(value)
+                        && let Some(extern_arg) = parse_extern_arg(value)
                     {
                         parsed.externs.push(extern_arg);
                     }
@@ -38,7 +40,7 @@ impl RustcInvocation {
                     if let Some(value) = arg.strip_prefix("--crate-type=") {
                         parsed.crate_types.push(value.to_owned());
                     } else if let Some(value) = arg.strip_prefix("--extern=") {
-                        if let Some(extern_arg) = ExternCrateArg::parse(value) {
+                        if let Some(extern_arg) = parse_extern_arg(value) {
                             parsed.externs.push(extern_arg);
                         }
                     } else if let Some(value) = arg.strip_prefix("-C") {
@@ -58,51 +60,42 @@ impl RustcInvocation {
     }
 }
 
-#[derive(Debug, Clone)]
-pub(crate) struct ExternCrateArg {
-    pub(crate) name: String,
-    pub(crate) path: Option<PathBuf>,
-}
-
-impl ExternCrateArg {
-    fn parse(value: &str) -> Option<Self> {
-        let (name, path) = match value.split_once('=') {
-            Some((name, path)) => (name, (!path.is_empty()).then(|| PathBuf::from(path))),
-            // Cargo passes pathless externs such as `--extern proc_macro`.
-            None => (value, None),
-        };
-        // Cargo can glue modifiers onto the name, such as `noprelude:std`
-        // under -Zbuild-std or `priv:` under -Zpublic-dependency.
-        let name = name.rsplit_once(':').map_or(name, |(_, name)| name);
-        (!name.is_empty()).then(|| Self {
-            name: name.to_owned(),
-            path,
-        })
-    }
+fn parse_extern_arg(value: &str) -> Option<DependencyInput> {
+    let (name, path) = match value.split_once('=') {
+        Some((name, path)) => (name, (!path.is_empty()).then(|| PathBuf::from(path))),
+        // Cargo passes pathless externs such as `--extern proc_macro`.
+        None => (value, None),
+    };
+    // Cargo can glue modifiers onto the name, such as `noprelude:std`
+    // under -Zbuild-std or `priv:` under -Zpublic-dependency.
+    let name = name.rsplit_once(':').map_or(name, |(_, name)| name);
+    (!name.is_empty()).then(|| DependencyInput {
+        name: name.to_owned(),
+        path,
+    })
 }
 
 #[cfg(test)]
 mod tests {
-    use super::ExternCrateArg;
+    use super::parse_extern_arg;
 
     #[test]
     fn extern_args_keep_pathless_externs_and_strip_modifiers() {
-        let parsed = ExternCrateArg::parse("serde=/deps/libserde-1234.rmeta").expect("parses");
+        let parsed = parse_extern_arg("serde=/deps/libserde-1234.rmeta").expect("parses");
         assert_eq!(parsed.name, "serde");
         assert_eq!(
             parsed.path.as_deref(),
             Some("/deps/libserde-1234.rmeta".as_ref())
         );
 
-        let pathless = ExternCrateArg::parse("proc_macro").expect("parses");
+        let pathless = parse_extern_arg("proc_macro").expect("parses");
         assert_eq!(pathless.name, "proc_macro");
         assert_eq!(pathless.path, None);
 
-        let modified =
-            ExternCrateArg::parse("noprelude:std=/deps/libstd-1234.rmeta").expect("parses");
+        let modified = parse_extern_arg("noprelude:std=/deps/libstd-1234.rmeta").expect("parses");
         assert_eq!(modified.name, "std");
 
-        assert!(ExternCrateArg::parse("").is_none());
-        assert!(ExternCrateArg::parse("=path-without-name").is_none());
+        assert!(parse_extern_arg("").is_none());
+        assert!(parse_extern_arg("=path-without-name").is_none());
     }
 }

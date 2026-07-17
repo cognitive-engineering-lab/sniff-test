@@ -37,7 +37,7 @@ impl DependencyAnalysisCache {
     #[must_use]
     pub fn load(
         cache_dir: &Path,
-        externs: impl IntoIterator<Item = DependencyInput>,
+        externs: &[DependencyInput],
         config: &PanicConfig,
         expected: &CacheExpectations<'_>,
     ) -> Self {
@@ -110,7 +110,7 @@ impl DependencyAnalysisCache {
             }
 
             dependencies.push(ResolvedDependency {
-                extern_name: extern_arg.name,
+                extern_name: extern_arg.name.clone(),
                 artifact_id,
                 load_error,
             });
