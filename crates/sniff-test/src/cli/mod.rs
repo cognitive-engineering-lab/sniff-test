@@ -8,7 +8,6 @@ mod driver;
 mod findings;
 mod plugin;
 mod report;
-mod rustc_invocation;
 
 pub use self::args::SniffTestArgs;
 pub use self::plugin::driver_main;

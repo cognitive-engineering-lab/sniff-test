@@ -13,7 +13,6 @@ use rustc_span::symbol::Symbol;
 use super::args::{ColorChoice, DriverCli, MANIFEST_PATH_ENV, SniffTestArgs};
 use super::driver::{analyze_crate, load_config};
 use super::report::CrateOutputScope;
-use super::rustc_invocation::RustcInvocation;
 
 pub(crate) const DRIVER_NAME: &str = "sniff-test-driver";
 pub(crate) const SNIFF_TEST_ARGS_ENV: &str = "SNIFF_TEST_ARGS";
@@ -208,13 +207,11 @@ fn run_driver(compiler_args: &[String], args: SniffTestArgs) -> Result<ExitCode>
         compiler_args.push(String::from("-Zno-steal-thir"));
     }
     let config = load_config(&args).context("failed to load configuration")?;
-    let invocation = RustcInvocation::parse(&compiler_args);
-    let output_scope = CrateOutputScope::current(&args, &invocation)
-        .context("failed to determine crate output scope")?;
+    let output_scope =
+        CrateOutputScope::current(&args).context("failed to determine crate output scope")?;
     let mut callbacks = SniffTestCallbacks {
         args,
         config,
-        invocation,
         output_scope,
     };
     // Fatal compile errors unwind with `FatalErrorMarker`; catching them here
@@ -372,7 +369,6 @@ impl Callbacks for DefaultCallbacks {}
 struct SniffTestCallbacks {
     args: SniffTestArgs,
     config: SniffTestConfig,
-    invocation: RustcInvocation,
     output_scope: CrateOutputScope,
 }
 
@@ -395,13 +391,8 @@ impl Callbacks for SniffTestCallbacks {
     }
 
     fn after_analysis(&mut self, _compiler: &interface::Compiler, tcx: TyCtxt<'_>) -> Compilation {
-        analyze_crate(
-            tcx,
-            &self.args,
-            &self.config,
-            &self.invocation,
-            self.output_scope,
-        );
+        let output_scope = self.output_scope.for_crate(tcx);
+        analyze_crate(tcx, &self.args, &self.config, output_scope);
         Compilation::Continue
     }
 }

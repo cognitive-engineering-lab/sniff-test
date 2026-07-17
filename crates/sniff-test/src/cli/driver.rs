@@ -12,7 +12,7 @@ use crate::cache::{
 use crate::config::{
     AnalysisConfig, CallableEdgeAttribution, PanicBoundaryPolicy, PanicConfig, SniffTestConfig,
 };
-use crate::dependency_cache::DependencyAnalysisCache;
+use crate::dependency_cache::{DependencyAnalysisCache, DependencyInput};
 use crate::namespace::{canonical_namespace, stable_def_path_hash};
 use crate::panics::{PanicAnalysis, PanicEvidence, PanicPathDecision, analyze_panic_evidence};
 use crate::report_roots::{
@@ -27,6 +27,7 @@ use reachability::{
 };
 use rustc_hir::def_id::{DefId, LOCAL_CRATE};
 use rustc_middle::ty::{Instance, TyCtxt};
+use rustc_session::config::CrateType;
 
 use super::args::{self, SniffTestArgs};
 use super::cache_encode::{
@@ -40,7 +41,6 @@ use super::plugin::rustc_version;
 use super::report::{
     AnalysisArtifactReport, CrateOutputScope, PanicRootReport, REPORT_FORMAT_VERSION, render_node,
 };
-use super::rustc_invocation::RustcInvocation;
 
 struct PanicReachabilityHooks<'config> {
     config: &'config PanicConfig,
@@ -73,7 +73,6 @@ pub(crate) fn analyze_crate(
     tcx: TyCtxt<'_>,
     args: &SniffTestArgs,
     config: &SniffTestConfig,
-    invocation: &RustcInvocation,
     output_scope: CrateOutputScope,
 ) {
     let crate_name = tcx.crate_name(LOCAL_CRATE).to_string();
@@ -84,7 +83,7 @@ pub(crate) fn analyze_crate(
         let outcome = UnitOutcome {
             format_version: OUTCOME_FORMAT_VERSION,
             tool_version: env!("CARGO_PKG_VERSION").to_owned(),
-            artifact_id: artifact_id(&crate_name, invocation.extra_filename.as_deref()),
+            artifact_id: local_artifact_id(tcx, &crate_name),
             has_denied_findings: false,
             report_json: None,
         };
@@ -95,9 +94,10 @@ pub(crate) fn analyze_crate(
     }
 
     let rustc_version = rustc_version();
+    let externs = dependency_inputs(tcx);
     let dependency_cache = DependencyAnalysisCache::load(
         &args.cache_dir(),
-        &invocation.externs,
+        &externs,
         &config.panics,
         &CacheExpectations {
             tool_version: env!("CARGO_PKG_VERSION"),
@@ -144,7 +144,6 @@ pub(crate) fn analyze_crate(
     );
     let analysis = AnalysisArtifact::new(
         tcx,
-        invocation,
         output_scope,
         &dependency_cache,
         config,
@@ -244,7 +243,6 @@ impl AnalysisArtifact {
     )]
     fn new(
         tcx: TyCtxt<'_>,
-        invocation: &RustcInvocation,
         scope: CrateOutputScope,
         dependency_cache: &DependencyAnalysisCache,
         config: &SniffTestConfig,
@@ -253,7 +251,7 @@ impl AnalysisArtifact {
         mut findings: Vec<Finding>,
     ) -> Self {
         let dependencies = dependency_cache.resolved_dependencies();
-        let artifact = artifact_info(tcx, invocation);
+        let artifact = artifact_info(tcx);
         let tool_version = env!("CARGO_PKG_VERSION").to_owned();
         let rustc_version = rustc_version();
         findings.extend(root_analysis.findings);
@@ -324,19 +322,10 @@ fn analyze_report_roots<'tcx>(
 }
 
 impl CrateOutputScope {
-    pub(crate) fn current(
-        args: &SniffTestArgs,
-        invocation: &RustcInvocation,
-    ) -> anyhow::Result<Self> {
-        // Build scripts and proc macros never ship as target code; workspace
-        // deny gating and diagnostics would fail builds over their normal
-        // panic-on-error idiom.
-        if std::env::var("CARGO_CRATE_NAME").is_ok_and(|name| name.starts_with("build_script_"))
-            || invocation
-                .crate_types
-                .iter()
-                .any(|crate_type| crate_type == "proc-macro")
-        {
+    pub(crate) fn current(args: &SniffTestArgs) -> anyhow::Result<Self> {
+        // Build scripts never ship as target code; workspace deny gating and
+        // diagnostics would fail builds over their normal panic-on-error idiom.
+        if std::env::var("CARGO_CRATE_NAME").is_ok_and(|name| name.starts_with("build_script_")) {
             return Ok(Self::Dependency);
         }
 
@@ -375,6 +364,17 @@ impl CrateOutputScope {
             Self::Workspace
         } else {
             Self::Dependency
+        }
+    }
+
+    pub(crate) fn for_crate(self, tcx: TyCtxt<'_>) -> Self {
+        // Proc macros also execute during compilation rather than shipping as
+        // target code. Use rustc's effective crate types so crate attributes
+        // and command-line options are both handled by the compiler.
+        if tcx.crate_types().contains(&CrateType::ProcMacro) {
+            Self::Dependency
+        } else {
+            self
         }
     }
 }
@@ -491,12 +491,38 @@ fn reachability_options(
     }
 }
 
-fn artifact_info(tcx: TyCtxt<'_>, invocation: &RustcInvocation) -> CachedArtifactInfo {
+fn artifact_info(tcx: TyCtxt<'_>) -> CachedArtifactInfo {
     let crate_name = tcx.crate_name(LOCAL_CRATE).to_string();
     CachedArtifactInfo {
-        artifact_id: artifact_id(&crate_name, invocation.extra_filename.as_deref()),
+        artifact_id: local_artifact_id(tcx, &crate_name),
         crate_name,
     }
+}
+
+fn local_artifact_id(tcx: TyCtxt<'_>, crate_name: &str) -> String {
+    let extra_filename = tcx.sess.opts.cg.extra_filename.as_str();
+    artifact_id(
+        crate_name,
+        (!extra_filename.is_empty()).then_some(extra_filename),
+    )
+}
+
+fn dependency_inputs(tcx: TyCtxt<'_>) -> Vec<DependencyInput> {
+    let mut inputs = Vec::new();
+    for (name, entry) in tcx.sess.opts.externs.iter() {
+        if let Some(files) = entry.files() {
+            inputs.extend(files.map(|file| DependencyInput {
+                name: name.clone(),
+                path: Some(file.original().clone()),
+            }));
+        } else {
+            inputs.push(DependencyInput {
+                name: name.clone(),
+                path: None,
+            });
+        }
+    }
+    inputs
 }
 
 #[derive(Clone, Copy)]
