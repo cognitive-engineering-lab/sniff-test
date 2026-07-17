@@ -1,4 +1,4 @@
-use std::ffi::{OsStr, OsString};
+use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitCode};
 
@@ -12,9 +12,10 @@ use rustc_span::symbol::Symbol;
 
 use super::args::{ColorChoice, DriverCli, MANIFEST_PATH_ENV, SniffTestArgs};
 use super::driver::{analyze_crate, load_config};
+use super::report::CrateOutputScope;
+use super::rustc_invocation::RustcInvocation;
 
 pub(crate) const DRIVER_NAME: &str = "sniff-test-driver";
-pub(crate) const RUSTC_VERSION_ENV: &str = "SNIFF_TEST_RUSTC_VERSION";
 pub(crate) const SNIFF_TEST_ARGS_ENV: &str = "SNIFF_TEST_ARGS";
 
 pub(crate) fn validate_manifest(path: &Path) -> Result<()> {
@@ -55,7 +56,7 @@ pub(crate) fn modify_cargo(cargo: &mut Command, args: &SniffTestArgs) -> Result<
         cargo.args(["-Z", "build-std=core,alloc,std"]);
     }
 
-    let config = load_config(args);
+    let config = load_config(args).context("failed to load configuration")?;
     let config_hash = config_hash(args, &config);
     let overflow_checks = args
         .overflow_checks
@@ -123,7 +124,7 @@ pub fn driver_main() -> ExitCode {
     match try_driver_main() {
         Ok(exit_code) => exit_code,
         Err(error) => {
-            super::display_error(&error);
+            eprintln!("error: {error:?}");
             ExitCode::FAILURE
         }
     }
@@ -141,7 +142,7 @@ fn try_driver_main() -> Result<ExitCode> {
 
         let mut args = args_from_env()?;
         args.under_cargo = true;
-        return Ok(run_driver(&compiler_args, args));
+        return run_driver(&compiler_args, args);
     }
 
     let binary = original_args[0].clone();
@@ -160,7 +161,7 @@ fn try_driver_main() -> Result<ExitCode> {
         return Ok(ExitCode::SUCCESS);
     }
 
-    Ok(run_driver(&compiler_args, args))
+    run_driver(&compiler_args, args)
 }
 
 fn second_arg_is_rustc(args: &[String]) -> bool {
@@ -196,7 +197,7 @@ fn direct_args(mut args: SniffTestArgs) -> Result<SniffTestArgs> {
     Ok(args)
 }
 
-fn run_driver(compiler_args: &[String], args: SniffTestArgs) -> ExitCode {
+fn run_driver(compiler_args: &[String], args: SniffTestArgs) -> Result<ExitCode> {
     let mut compiler_args = compiler_args.to_owned();
     // The safety analysis reads THIR in `after_analysis`, after MIR building
     // would normally have stolen it. Appending here covers cargo mode, direct
@@ -206,16 +207,22 @@ fn run_driver(compiler_args: &[String], args: SniffTestArgs) -> ExitCode {
     if !has_no_steal_thir(&compiler_args) {
         compiler_args.push(String::from("-Zno-steal-thir"));
     }
+    let config = load_config(&args).context("failed to load configuration")?;
+    let invocation = RustcInvocation::parse(&compiler_args);
+    let output_scope = CrateOutputScope::current(&args, &invocation)
+        .context("failed to determine crate output scope")?;
     let mut callbacks = SniffTestCallbacks {
         args,
-        compiler_args: compiler_args.clone(),
+        config,
+        invocation,
+        output_scope,
     };
     // Fatal compile errors unwind with `FatalErrorMarker`; catching them here
     // turns that into rustc's ordinary exit status, matching the direct-mode
     // help text.
-    rustc_driver::catch_with_exit_code(|| {
+    Ok(rustc_driver::catch_with_exit_code(|| {
         rustc_driver::run_compiler(&compiler_args, &mut callbacks);
-    })
+    }))
 }
 
 fn has_no_steal_thir(compiler_args: &[String]) -> bool {
@@ -235,29 +242,10 @@ pub(crate) fn driver_path() -> Result<std::path::PathBuf> {
     Ok(path)
 }
 
-pub(crate) fn current_rustc_version() -> String {
-    let rustc = std::env::var_os("RUSTC").unwrap_or_else(|| OsString::from("rustc"));
-    let output = Command::new(rustc).arg("-Vv").output();
-    let Ok(output) = output else {
-        return String::from("rustc unknown");
-    };
-    if !output.status.success() {
-        return String::from("rustc unknown");
-    }
-    String::from_utf8_lossy(&output.stdout)
-        .lines()
-        .next()
-        .filter(|line| !line.is_empty())
-        .unwrap_or("rustc unknown")
-        .to_owned()
-}
-
 pub(crate) fn rustc_version() -> String {
-    std::env::var(RUSTC_VERSION_ENV).unwrap_or_else(|_| current_rustc_version())
-}
-
-pub(crate) fn rustc_version_dir_component(version: &str) -> String {
-    sanitize_component(version)
+    let version = rustc_interface::util::rustc_version_str()
+        .expect("linked rustc does not provide an embedded version");
+    format!("rustc {version}")
 }
 
 fn stable_hash(source: &[u8]) -> u64 {
@@ -286,15 +274,6 @@ fn config_hash(args: &SniffTestArgs, config: &SniffTestConfig) -> u64 {
     } else {
         stable_hash(&source)
     }
-}
-
-fn tracked_config_files(args: &SniffTestArgs) -> Vec<PathBuf> {
-    let manifest_path = args.manifest_path();
-    if !manifest_path.exists() {
-        return Vec::new();
-    }
-    let config = load_config(args);
-    tracked_config_files_from_config(args, &config)
 }
 
 fn tracked_config_files_from_config(
@@ -375,25 +354,6 @@ fn config_build_rustflags() -> Option<Vec<String>> {
     }
 }
 
-fn sanitize_component(value: &str) -> String {
-    let sanitized = value
-        .chars()
-        .map(|ch| {
-            if ch.is_ascii_alphanumeric() || matches!(ch, '-' | '_' | '.') {
-                ch
-            } else {
-                '_'
-            }
-        })
-        .collect::<String>();
-
-    if sanitized.is_empty() {
-        String::from("unknown")
-    } else {
-        sanitized
-    }
-}
-
 fn is_info_query(args: &[String]) -> bool {
     args.iter().any(|arg| {
         arg == "--version"
@@ -411,13 +371,15 @@ impl Callbacks for DefaultCallbacks {}
 
 struct SniffTestCallbacks {
     args: SniffTestArgs,
-    compiler_args: Vec<String>,
+    config: SniffTestConfig,
+    invocation: RustcInvocation,
+    output_scope: CrateOutputScope,
 }
 
 impl Callbacks for SniffTestCallbacks {
     fn config(&mut self, config: &mut interface::Config) {
         let encoded_args = std::env::var(SNIFF_TEST_ARGS_ENV).ok();
-        let config_files = tracked_config_files(&self.args)
+        let config_files = tracked_config_files_from_config(&self.args, &self.config)
             .into_iter()
             .map(|path| path.display().to_string())
             .collect::<Vec<_>>();
@@ -433,7 +395,13 @@ impl Callbacks for SniffTestCallbacks {
     }
 
     fn after_analysis(&mut self, _compiler: &interface::Compiler, tcx: TyCtxt<'_>) -> Compilation {
-        analyze_crate(tcx, &self.args, &self.compiler_args);
+        analyze_crate(
+            tcx,
+            &self.args,
+            &self.config,
+            &self.invocation,
+            self.output_scope,
+        );
         Compilation::Continue
     }
 }

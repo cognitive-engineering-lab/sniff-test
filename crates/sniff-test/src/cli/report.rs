@@ -54,18 +54,6 @@ pub(crate) enum CrateOutputScope {
     Dependency,
 }
 
-pub(crate) fn render_json_analysis_artifact_report(
-    report: &AnalysisArtifactReport,
-) -> Option<String> {
-    match serde_json::to_string(report) {
-        Ok(json) => Some(json),
-        Err(error) => {
-            eprintln!("sniff-test: failed to encode JSON report: {error}");
-            None
-        }
-    }
-}
-
 #[derive(Debug, Clone)]
 pub(crate) struct PanicRootReport {
     pub(crate) root: String,

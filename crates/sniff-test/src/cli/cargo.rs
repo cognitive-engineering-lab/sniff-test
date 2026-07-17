@@ -9,17 +9,14 @@ use crate::config::EXAMPLE_MANIFEST;
 use anyhow::{Context, Result, anyhow, bail};
 
 use super::args::{self, FrontendAction, FrontendCli, InitCliArgs, SniffTestArgs};
-use super::plugin::{
-    RUSTC_VERSION_ENV, SNIFF_TEST_ARGS_ENV, current_rustc_version, frontend_args, modify_cargo,
-    rustc_version_dir_component, validate_manifest,
-};
+use super::plugin::{SNIFF_TEST_ARGS_ENV, frontend_args, modify_cargo, validate_manifest};
 
 #[must_use]
 pub fn cargo_frontend() -> ExitCode {
     match try_cargo_frontend() {
         Ok(exit_code) => exit_code,
         Err(error) => {
-            super::display_error(&error);
+            eprintln!("error: {error:?}");
             ExitCode::FAILURE
         }
     }
@@ -50,20 +47,13 @@ fn try_cargo_frontend() -> Result<ExitCode> {
         .iter()
         .any(|arg| arg == "--message-format" || arg.starts_with("--message-format="))
     {
-        eprintln!(
-            "sniff-test: pass --message-format to sniff-test itself, before any `--` separator"
-        );
-        return Ok(ExitCode::FAILURE);
+        bail!("pass --message-format to sniff-test itself, before any `--` separator");
     }
     let metadata = metadata_command(&parsed_args)
         .exec()
         .context("failed to read Cargo metadata")?;
     let parsed_args = discover_manifest(parsed_args, metadata.workspace_root.as_std_path())?;
-    let rustc_version = current_rustc_version();
-    let target_dir = metadata.target_directory.join(format!(
-        "sniff-test-{}",
-        rustc_version_dir_component(&rustc_version)
-    ));
+    let target_dir = metadata.target_directory.join("sniff-test");
     let mut args = frontend_args(parsed_args, target_dir.as_std_path())?;
     args.workspace_manifests = metadata
         .packages
@@ -84,7 +74,6 @@ fn try_cargo_frontend() -> Result<ExitCode> {
     if std::env::var_os("CARGO_VERBOSE").is_some() {
         cargo.arg("-vv");
     }
-    cargo.env(RUSTC_VERSION_ENV, &rustc_version);
     cargo.env(
         SNIFF_TEST_ARGS_ENV,
         serde_json::to_string(&args).context("failed to encode driver arguments")?,

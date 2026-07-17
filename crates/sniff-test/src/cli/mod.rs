@@ -10,10 +10,6 @@ mod plugin;
 mod report;
 mod rustc_invocation;
 
-fn display_error(error: &anyhow::Error) {
-    eprintln!("error: {error:?}");
-}
-
 pub use self::args::SniffTestArgs;
 pub use self::plugin::driver_main;
 

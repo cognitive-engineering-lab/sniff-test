@@ -5,8 +5,9 @@ use std::ops::ControlFlow;
 use std::path::{Path, PathBuf};
 
 use crate::cache::{
-    CacheExpectations, CachedArtifactAnalysis, CachedArtifactInfo, CachedFunctionSummary,
-    OUTCOME_FORMAT_VERSION, UnitOutcome, artifact_id, write_artifact_analysis, write_unit_outcome,
+    CacheError, CacheExpectations, CachedArtifactAnalysis, CachedArtifactInfo,
+    CachedFunctionSummary, OUTCOME_FORMAT_VERSION, UnitOutcome, artifact_id,
+    write_artifact_analysis, write_unit_outcome,
 };
 use crate::config::{
     AnalysisConfig, CallableEdgeAttribution, PanicBoundaryPolicy, PanicConfig, SniffTestConfig,
@@ -18,6 +19,7 @@ use crate::report_roots::{
     MissingReportRoot, ReportRoot, ReportRootSelection, select_report_roots,
 };
 use crate::safety::{SafetyAnalysis, analyze_safety};
+use anyhow::Context;
 use reachability::{
     ReachabilityContext, ReachabilityControl, ReachabilityEdge, ReachabilityEdgeKind,
     ReachabilityGraph, ReachabilityHooks, ReachabilityIndex, ReachabilityOptions, ReachabilityRoot,
@@ -37,8 +39,7 @@ use super::findings::{
 };
 use super::plugin::rustc_version;
 use super::report::{
-    AnalysisArtifactReport, CrateOutputScope, PanicRootReport, REPORT_FORMAT_VERSION,
-    render_json_analysis_artifact_report, render_node,
+    AnalysisArtifactReport, CrateOutputScope, PanicRootReport, REPORT_FORMAT_VERSION, render_node,
 };
 use super::rustc_invocation::RustcInvocation;
 
@@ -69,25 +70,28 @@ impl<'tcx> ReachabilityHooks<'tcx> for PanicReachabilityHooks<'_> {
     }
 }
 
-pub(crate) fn analyze_crate(tcx: TyCtxt<'_>, args: &SniffTestArgs, compiler_args: &[String]) {
-    let config = load_config(args);
-    let invocation = RustcInvocation::parse(compiler_args);
+pub(crate) fn analyze_crate(
+    tcx: TyCtxt<'_>,
+    args: &SniffTestArgs,
+    config: &SniffTestConfig,
+    invocation: &RustcInvocation,
+    output_scope: CrateOutputScope,
+) {
     let crate_name = tcx.crate_name(LOCAL_CRATE).to_string();
-    let output_scope = CrateOutputScope::current(args, &invocation);
 
     if config.panics.ignored_namespace_match(&crate_name).is_some() {
         // A config change that newly ignores this crate must not leave a
         // stale denied verdict behind.
-        write_unit_outcome_file(
-            args,
-            &UnitOutcome {
-                format_version: OUTCOME_FORMAT_VERSION,
-                tool_version: env!("CARGO_PKG_VERSION").to_owned(),
-                artifact_id: artifact_id(&crate_name, invocation.extra_filename.as_deref()),
-                has_denied_findings: false,
-                report_json: None,
-            },
-        );
+        let outcome = UnitOutcome {
+            format_version: OUTCOME_FORMAT_VERSION,
+            tool_version: env!("CARGO_PKG_VERSION").to_owned(),
+            artifact_id: artifact_id(&crate_name, invocation.extra_filename.as_deref()),
+            has_denied_findings: false,
+            report_json: None,
+        };
+        if let Err(error) = write_unit_outcome_file(args, &outcome) {
+            report_unit_outcome_write_error(tcx, args, &error);
+        }
         return;
     }
 
@@ -144,10 +148,10 @@ pub(crate) fn analyze_crate(tcx: TyCtxt<'_>, args: &SniffTestArgs, compiler_args
     );
     let analysis = AnalysisArtifact::new(
         tcx,
-        &invocation,
+        invocation,
         output_scope,
         &dependency_cache,
-        &config,
+        config,
         root_analysis,
         safety_analysis,
         analysis_findings,
@@ -157,8 +161,18 @@ pub(crate) fn analyze_crate(tcx: TyCtxt<'_>, args: &SniffTestArgs, compiler_args
             emit_finding_diagnostic(tcx, finding.level, &finding.finding.diagnostic);
         }
     }
-    write_analysis_cache(args, &analysis.cache);
+    if let Err(error) = write_artifact_analysis(&args.cache_dir(), &analysis.cache) {
+        if args.under_cargo {
+            let diagnostic = tcx
+                .dcx()
+                .struct_err(format!("failed to write analysis cache: {error}"));
+            let _ = diagnostic.emit();
+        } else {
+            eprintln!("sniff-test: warning: failed to write analysis cache: {error}");
+        }
+    }
     emit_report_and_outcome(
+        tcx,
         args,
         &analysis.report,
         analysis.report.scope == CrateOutputScope::Workspace
@@ -167,32 +181,48 @@ pub(crate) fn analyze_crate(tcx: TyCtxt<'_>, args: &SniffTestArgs, compiler_args
 }
 
 fn emit_report_and_outcome(
+    tcx: TyCtxt<'_>,
     args: &SniffTestArgs,
     report: &AnalysisArtifactReport,
     has_denied_findings: bool,
 ) {
-    let report_json = render_json_analysis_artifact_report(report);
+    let report_json = match serde_json::to_string(report) {
+        Ok(report_json) => Some(report_json),
+        Err(error) => {
+            eprintln!("sniff-test: failed to encode JSON report: {error}");
+            None
+        }
+    };
     if args.message_format == args::MessageFormat::Json
         && let Some(report_json) = &report_json
     {
         println!("{report_json}");
     }
-    write_unit_outcome_file(
-        args,
-        &UnitOutcome {
-            format_version: OUTCOME_FORMAT_VERSION,
-            tool_version: env!("CARGO_PKG_VERSION").to_owned(),
-            artifact_id: report.artifact.artifact_id.clone(),
-            has_denied_findings,
-            report_json,
-        },
-    );
+    let outcome = UnitOutcome {
+        format_version: OUTCOME_FORMAT_VERSION,
+        tool_version: env!("CARGO_PKG_VERSION").to_owned(),
+        artifact_id: report.artifact.artifact_id.clone(),
+        has_denied_findings,
+        report_json,
+    };
+    if let Err(error) = write_unit_outcome_file(args, &outcome) {
+        report_unit_outcome_write_error(tcx, args, &error);
+    }
 }
 
-fn write_unit_outcome_file(args: &SniffTestArgs, outcome: &UnitOutcome) {
-    if let Err(error) = write_unit_outcome(&args.cache_dir(), outcome) {
-        eprintln!("sniff-test: failed to write unit outcome: {error}");
+fn report_unit_outcome_write_error(tcx: TyCtxt<'_>, args: &SniffTestArgs, error: &CacheError) {
+    if args.under_cargo {
+        let diagnostic = tcx
+            .dcx()
+            .struct_err(format!("failed to write unit outcome: {error}"));
+        let _ = diagnostic.emit();
+    } else {
+        eprintln!("sniff-test: warning: failed to write unit outcome: {error}");
     }
+}
+
+fn write_unit_outcome_file(args: &SniffTestArgs, outcome: &UnitOutcome) -> Result<(), CacheError> {
+    let result = write_unit_outcome(&args.cache_dir(), outcome);
     // Deny findings fail this unit's compilation, so cargo never announces it
     // with a compiler-artifact message. This line puts the unit in the
     // frontend's build plan regardless; the frontend swallows it, users never
@@ -203,6 +233,7 @@ fn write_unit_outcome_file(args: &SniffTestArgs, outcome: &UnitOutcome) {
             serde_json::json!(outcome.artifact_id)
         );
     }
+    result
 }
 
 struct AnalysisArtifact {
@@ -309,8 +340,10 @@ fn analyze_report_roots<'tcx>(
 }
 
 impl CrateOutputScope {
-    #[must_use]
-    fn current(args: &SniffTestArgs, invocation: &RustcInvocation) -> Self {
+    pub(crate) fn current(
+        args: &SniffTestArgs,
+        invocation: &RustcInvocation,
+    ) -> anyhow::Result<Self> {
         // Build scripts and proc macros never ship as target code; workspace
         // deny gating and diagnostics would fail builds over their normal
         // panic-on-error idiom.
@@ -320,24 +353,22 @@ impl CrateOutputScope {
                 .iter()
                 .any(|crate_type| crate_type == "proc-macro")
         {
-            return Self::Dependency;
+            return Ok(Self::Dependency);
         }
 
-        let cargo_manifest = std::env::var_os("CARGO_MANIFEST_PATH").map(|path| {
-            let path = PathBuf::from(path);
-            path.canonicalize().unwrap_or_else(|error| {
-                eprintln!(
-                    "sniff-test: failed to canonicalize Cargo manifest {}: {error}",
-                    path.display()
-                );
-                std::process::exit(2);
+        let cargo_manifest = std::env::var_os("CARGO_MANIFEST_PATH")
+            .map(|path| {
+                let path = PathBuf::from(path);
+                path.canonicalize().with_context(|| {
+                    format!("failed to canonicalize Cargo manifest {}", path.display())
+                })
             })
-        });
-        Self::from_manifest_paths(
+            .transpose()?;
+        Ok(Self::from_manifest_paths(
             &args.workspace_manifests,
             cargo_manifest.as_deref(),
             std::env::var_os("CARGO_PRIMARY_PACKAGE").is_some(),
-        )
+        ))
     }
 
     #[must_use]
@@ -478,12 +509,6 @@ fn reachability_options(
         analyze_external,
         dyn_dispatch_vtable_edges: analysis_config.callable_edge_attribution.into(),
         fn_pointer_edges: analysis_config.callable_edge_attribution.into(),
-    }
-}
-
-fn write_analysis_cache(args: &SniffTestArgs, analysis: &CachedArtifactAnalysis) {
-    if let Err(error) = write_artifact_analysis(&args.cache_dir(), analysis) {
-        eprintln!("sniff-test: failed to write analysis cache: {error}");
     }
 }
 
@@ -722,15 +747,14 @@ fn collect_cached_dependency_findings<'tcx>(
     }
 }
 
-pub(crate) fn load_config(args: &SniffTestArgs) -> SniffTestConfig {
+pub(crate) fn load_config(
+    args: &SniffTestArgs,
+) -> Result<SniffTestConfig, crate::config::ConfigError> {
     let path = args.manifest_path();
     if path.exists() {
-        SniffTestConfig::from_manifest_path(path).unwrap_or_else(|error| {
-            eprintln!("sniff-test: {error}");
-            std::process::exit(2);
-        })
+        SniffTestConfig::from_manifest_path(path)
     } else {
-        SniffTestConfig::default()
+        Ok(SniffTestConfig::default())
     }
 }
 

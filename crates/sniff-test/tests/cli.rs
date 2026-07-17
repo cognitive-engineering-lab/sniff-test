@@ -153,6 +153,235 @@ fn direct_driver_compile_error_follows_rustc_exit_status() {
 }
 
 #[test]
+fn direct_driver_reports_linked_rustc_version() {
+    let temp = tempfile::tempdir().expect("temp dir");
+    let source = repo_root().join("tests/fixtures/direct_panic/src/lib.rs");
+    let driver = PathBuf::from(env!("CARGO_BIN_EXE_sniff-test-driver"));
+    let mut command = Command::new(driver);
+    clean_cargo_package_env(&mut command);
+    let output = command
+        .args(["--message-format", "json", "--color", "never", "--"])
+        .args([
+            "--crate-name",
+            "version_probe",
+            "--crate-type",
+            "lib",
+            "--edition",
+            "2024",
+        ])
+        .arg(source)
+        .args(["--sysroot", rustc_sysroot().trim(), "-Zno-codegen"])
+        .env("RUSTC", "/definitely/missing/rustc")
+        .current_dir(temp.path())
+        .output()
+        .expect("run driver");
+
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let report: serde_json::Value =
+        serde_json::from_slice(&output.stdout).expect("parse artifact report");
+    let rustc_version = report["rustc-version"]
+        .as_str()
+        .expect("rustc version should be a string");
+    assert_ne!(rustc_version, "rustc unknown");
+    assert!(
+        rustc_version.starts_with("rustc "),
+        "unexpected rustc version: {rustc_version}"
+    );
+}
+
+#[test]
+fn cargo_frontend_fails_when_unit_outcome_cannot_be_written() {
+    let temp = tempfile::tempdir().expect("temp dir");
+    let fixture = temp.path().join("direct_panic");
+    copy_dir_all(&repo_root().join("tests/fixtures/direct_panic"), &fixture).expect("copy fixture");
+    let cache_file = temp.path().join("not-a-cache-directory");
+    fs::write(&cache_file, "occupied").expect("write cache file");
+
+    let binary = PathBuf::from(env!("CARGO_BIN_EXE_cargo-sniff-test"));
+    let mut command = Command::new(binary);
+    clean_cargo_package_env(&mut command);
+    let output = command
+        .args(["--message-format", "json", "--cache-dir"])
+        .arg(&cache_file)
+        .args(["--color", "never"])
+        .current_dir(&fixture)
+        .output()
+        .expect("run cargo frontend");
+
+    assert!(
+        !output.status.success(),
+        "stdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        String::from_utf8_lossy(&output.stderr).contains("failed to write unit outcome"),
+        "stderr:\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[test]
+fn cargo_frontend_fails_when_dependency_analysis_cannot_be_cached() {
+    let temp = tempfile::tempdir().expect("temp dir");
+    let fixture = temp.path().join("dependency_identity");
+    copy_dir_all(
+        &repo_root().join("tests/fixtures/dependency_identity"),
+        &fixture,
+    )
+    .expect("copy fixture");
+    let cache_dir = temp.path().join("cache");
+    fs::create_dir(&cache_dir).expect("create cache directory");
+    fs::write(cache_dir.join("artifacts"), "occupied").expect("block artifact directory");
+
+    let binary = PathBuf::from(env!("CARGO_BIN_EXE_cargo-sniff-test"));
+    let mut command = Command::new(binary);
+    clean_cargo_package_env(&mut command);
+    let output = command
+        .args(["--cache-dir"])
+        .arg(&cache_dir)
+        .args(["--color", "never", "--release"])
+        .current_dir(fixture.join("app"))
+        .output()
+        .expect("run cargo frontend");
+
+    assert!(
+        !output.status.success(),
+        "stdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        String::from_utf8_lossy(&output.stderr).contains("error: failed to write analysis cache"),
+        "stderr:\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[test]
+fn direct_driver_warns_when_cache_writes_fail() {
+    let temp = tempfile::tempdir().expect("temp dir");
+    let cache_file = temp.path().join("not-a-cache-directory");
+    fs::write(&cache_file, "occupied").expect("write cache file");
+    let fixture = repo_root().join("tests/fixtures/direct_panic");
+    let source = fixture.join("src/lib.rs");
+    let manifest = fixture.join("sniff-test.toml");
+    let driver = PathBuf::from(env!("CARGO_BIN_EXE_sniff-test-driver"));
+    let mut command = Command::new(driver);
+    clean_cargo_package_env(&mut command);
+    let output = command
+        .args(["--manifest"])
+        .arg(manifest)
+        .args(["--cache-dir"])
+        .arg(&cache_file)
+        .args(["--message-format", "json", "--color", "never", "--"])
+        .args([
+            "--crate-name",
+            "direct_outcome_failure",
+            "--crate-type",
+            "lib",
+            "--edition",
+            "2024",
+        ])
+        .arg(source)
+        .args(["--sysroot", rustc_sysroot().trim(), "-Zno-codegen"])
+        .current_dir(temp.path())
+        .output()
+        .expect("run driver");
+
+    assert!(
+        output.status.success(),
+        "stderr:\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        String::from_utf8_lossy(&output.stderr).contains("warning: failed to write analysis cache"),
+        "stderr:\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        String::from_utf8_lossy(&output.stderr).contains("warning: failed to write unit outcome"),
+        "stderr:\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[test]
+fn invalid_config_is_rendered_by_driver_boundary() {
+    let temp = tempfile::tempdir().expect("temp dir");
+    let manifest = temp.path().join("sniff-test.toml");
+    fs::write(&manifest, "invalid = [").expect("write invalid manifest");
+    let source = repo_root().join("tests/fixtures/direct_panic/src/lib.rs");
+    let driver = PathBuf::from(env!("CARGO_BIN_EXE_sniff-test-driver"));
+    let mut command = Command::new(driver);
+    clean_cargo_package_env(&mut command);
+    let output = command
+        .args(["--manifest"])
+        .arg(&manifest)
+        .args(["--message-format", "json", "--color", "never", "--"])
+        .args([
+            "--crate-name",
+            "invalid_config",
+            "--crate-type",
+            "lib",
+            "--edition",
+            "2024",
+        ])
+        .arg(source)
+        .args(["--sysroot", rustc_sysroot().trim(), "-Zno-codegen"])
+        .current_dir(temp.path())
+        .output()
+        .expect("run driver");
+
+    assert_eq!(output.status.code(), Some(1));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.starts_with("error: failed to load configuration\n\nCaused by:\n    "),
+        "stderr: {stderr}"
+    );
+    assert!(stderr.contains(&manifest.display().to_string()));
+}
+
+#[test]
+fn invalid_cargo_manifest_is_rendered_by_driver_boundary() {
+    let temp = tempfile::tempdir().expect("temp dir");
+    let cargo_manifest = temp.path().join("missing/Cargo.toml");
+    let source = repo_root().join("tests/fixtures/direct_panic/src/lib.rs");
+    let driver = PathBuf::from(env!("CARGO_BIN_EXE_sniff-test-driver"));
+    let mut command = Command::new(driver);
+    clean_cargo_package_env(&mut command);
+    let output = command
+        .args(["--message-format", "json", "--color", "never", "--"])
+        .args([
+            "--crate-name",
+            "invalid_cargo_manifest",
+            "--crate-type",
+            "lib",
+            "--edition",
+            "2024",
+        ])
+        .arg(source)
+        .args(["--sysroot", rustc_sysroot().trim(), "-Zno-codegen"])
+        .env("CARGO_MANIFEST_PATH", &cargo_manifest)
+        .env("CARGO_PRIMARY_PACKAGE", "1")
+        .current_dir(temp.path())
+        .output()
+        .expect("run driver");
+
+    assert_eq!(output.status.code(), Some(1));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.starts_with("error: failed to determine crate output scope\n\nCaused by:\n    "),
+        "stderr: {stderr}"
+    );
+    assert!(stderr.contains(&cargo_manifest.display().to_string()));
+}
+
+#[test]
 fn init_subcommand_writes_example_manifest() {
     let temp = tempfile::tempdir().expect("temp dir");
     let manifest = temp.path().join("custom-sniff-test.toml");
@@ -212,6 +441,21 @@ fn cargo_subcommand_token_is_accepted() {
         String::from_utf8_lossy(&output.stdout).contains("Usage: cargo sniff-test"),
         "stdout: {}",
         String::from_utf8_lossy(&output.stdout)
+    );
+}
+
+#[test]
+fn misplaced_message_format_is_rendered_by_frontend_boundary() {
+    let binary = PathBuf::from(env!("CARGO_BIN_EXE_cargo-sniff-test"));
+    let output = Command::new(binary)
+        .args(["--", "--message-format=json"])
+        .output()
+        .expect("run cargo frontend");
+
+    assert_eq!(output.status.code(), Some(1));
+    assert_eq!(
+        String::from_utf8_lossy(&output.stderr),
+        "error: pass --message-format to sniff-test itself, before any `--` separator\n"
     );
 }
 
