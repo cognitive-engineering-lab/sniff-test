@@ -38,57 +38,58 @@ pub struct UnitOutcome {
     pub report_json: Option<String>,
 }
 
-/// Writes a unit outcome under the cache directory.
-///
-/// # Errors
-///
-/// Returns an error when the outcome directory cannot be created or the file
-/// cannot be serialized or written.
-pub fn write_unit_outcome(cache_dir: &Path, outcome: &UnitOutcome) -> Result<(), CacheError> {
-    let path = outcome_cache_path(cache_dir, &outcome.artifact_id);
-    let source = serde_json::to_string_pretty(outcome).map_err(|source| CacheError::Json {
-        path: path.clone(),
-        source,
-    })?;
-    write_atomic(&path, &source)
-}
-
-/// Reads a unit outcome for one artifact.
-///
-/// # Errors
-///
-/// Returns an error when the file is missing or unreadable, or was written by
-/// a different outcome format or sniff-test version.
-pub fn read_unit_outcome(
-    cache_dir: &Path,
-    artifact_id: &str,
-    expected_tool_version: &str,
-) -> Result<UnitOutcome, CacheError> {
-    let path = outcome_cache_path(cache_dir, artifact_id);
-    let source = std::fs::read_to_string(&path).map_err(|source| CacheError::Io {
-        path: path.clone(),
-        source,
-    })?;
-    let outcome =
-        serde_json::from_str::<UnitOutcome>(&source).map_err(|source| CacheError::Json {
+impl UnitOutcome {
+    /// Writes this outcome under the cache directory.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the outcome directory cannot be created or the
+    /// file cannot be serialized or written.
+    pub fn write(&self, cache_dir: &Path) -> Result<(), CacheError> {
+        let path = outcome_cache_path(cache_dir, &self.artifact_id);
+        let source = serde_json::to_string_pretty(self).map_err(|source| CacheError::Json {
             path: path.clone(),
             source,
         })?;
-    if outcome.format_version != OUTCOME_FORMAT_VERSION {
-        return Err(CacheError::Format {
-            path,
-            version: outcome.format_version,
-        });
+        write_atomic(&path, &source)
     }
-    if outcome.tool_version != expected_tool_version {
-        return Err(CacheError::Version {
-            path,
-            field: "sniff-test",
-            found: outcome.tool_version,
-            expected: expected_tool_version.to_owned(),
-        });
+
+    /// Reads an outcome for one artifact.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the file is missing or unreadable, or was written
+    /// by a different outcome format or sniff-test version.
+    pub fn read(
+        cache_dir: &Path,
+        artifact_id: &str,
+        expected_tool_version: &str,
+    ) -> Result<Self, CacheError> {
+        let path = outcome_cache_path(cache_dir, artifact_id);
+        let source = std::fs::read_to_string(&path).map_err(|source| CacheError::Io {
+            path: path.clone(),
+            source,
+        })?;
+        let outcome = serde_json::from_str::<Self>(&source).map_err(|source| CacheError::Json {
+            path: path.clone(),
+            source,
+        })?;
+        if outcome.format_version != OUTCOME_FORMAT_VERSION {
+            return Err(CacheError::Format {
+                path,
+                version: outcome.format_version,
+            });
+        }
+        if outcome.tool_version != expected_tool_version {
+            return Err(CacheError::Version {
+                path,
+                field: "sniff-test",
+                found: outcome.tool_version,
+                expected: expected_tool_version.to_owned(),
+            });
+        }
+        Ok(outcome)
     }
-    Ok(outcome)
 }
 
 fn outcome_cache_path(cache_dir: &Path, artifact_id: &str) -> PathBuf {
@@ -135,6 +136,67 @@ impl CachedArtifactAnalysis {
             dependencies,
             functions,
         }
+    }
+
+    /// Writes this analysis to the artifact cache and crate-name mirror.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the cache directories cannot be created, the
+    /// analysis cannot be serialized, or a cache file cannot be written.
+    pub fn write(&self, cache_dir: &Path) -> Result<(), CacheError> {
+        let artifact_path = artifact_cache_path(cache_dir, &self.artifact.artifact_id);
+        let crate_path = crate_cache_path(
+            cache_dir,
+            &self.artifact.crate_name,
+            &self.artifact.artifact_id,
+        );
+        let source = serde_json::to_string_pretty(self).map_err(|source| CacheError::Json {
+            path: artifact_path.clone(),
+            source,
+        })?;
+
+        write_atomic(&artifact_path, &source)?;
+        write_atomic(&crate_path, &source)
+    }
+
+    /// Reads an analysis from a cache file.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the file cannot be read, the JSON cannot be
+    /// parsed, the cache format version is unsupported, or the file was
+    /// written by a different sniff-test or rustc version than `expected`.
+    pub fn read(path: &Path, expected: &CacheExpectations<'_>) -> Result<Self, CacheError> {
+        let source = std::fs::read_to_string(path).map_err(|source| CacheError::Io {
+            path: path.to_owned(),
+            source,
+        })?;
+        let analysis =
+            serde_json::from_str::<Self>(&source).map_err(|source| CacheError::Json {
+                path: path.to_owned(),
+                source,
+            })?;
+        if analysis.format_version != CACHE_FORMAT_VERSION {
+            return Err(CacheError::Format {
+                path: path.to_owned(),
+                version: analysis.format_version,
+            });
+        }
+        for (field, found, expected) in [
+            ("sniff-test", &analysis.tool_version, expected.tool_version),
+            ("rustc", &analysis.rustc_version, expected.rustc_version),
+        ] {
+            if found != expected {
+                return Err(CacheError::Version {
+                    path: path.to_owned(),
+                    field,
+                    found: found.clone(),
+                    expected: expected.to_owned(),
+                });
+            }
+        }
+        Ok(analysis)
     }
 }
 
@@ -427,74 +489,6 @@ impl std::error::Error for CacheError {
     }
 }
 
-/// Writes an artifact analysis summary to the artifact cache and crate-name mirror.
-///
-/// # Errors
-///
-/// Returns an error when the cache directories cannot be created, the summary
-/// cannot be serialized, or the cache file cannot be written.
-pub fn write_artifact_analysis(
-    cache_dir: &Path,
-    analysis: &CachedArtifactAnalysis,
-) -> Result<(), CacheError> {
-    let artifact_path = artifact_cache_path(cache_dir, &analysis.artifact.artifact_id);
-    let crate_path = crate_cache_path(
-        cache_dir,
-        &analysis.artifact.crate_name,
-        &analysis.artifact.artifact_id,
-    );
-    let source = serde_json::to_string_pretty(analysis).map_err(|source| CacheError::Json {
-        path: artifact_path.clone(),
-        source,
-    })?;
-
-    write_atomic(&artifact_path, &source)?;
-    write_atomic(&crate_path, &source)
-}
-
-/// Reads an artifact analysis summary from a cache file.
-///
-/// # Errors
-///
-/// Returns an error when the file cannot be read, the JSON cannot be parsed,
-/// the cache format version is unsupported, or the file was written by a
-/// different sniff-test or rustc version than `expected`.
-pub fn read_artifact_analysis(
-    path: &Path,
-    expected: &CacheExpectations<'_>,
-) -> Result<CachedArtifactAnalysis, CacheError> {
-    let source = std::fs::read_to_string(path).map_err(|source| CacheError::Io {
-        path: path.to_owned(),
-        source,
-    })?;
-    let analysis = serde_json::from_str::<CachedArtifactAnalysis>(&source).map_err(|source| {
-        CacheError::Json {
-            path: path.to_owned(),
-            source,
-        }
-    })?;
-    if analysis.format_version != CACHE_FORMAT_VERSION {
-        return Err(CacheError::Format {
-            path: path.to_owned(),
-            version: analysis.format_version,
-        });
-    }
-    for (field, found, expected) in [
-        ("sniff-test", &analysis.tool_version, expected.tool_version),
-        ("rustc", &analysis.rustc_version, expected.rustc_version),
-    ] {
-        if found != expected {
-            return Err(CacheError::Version {
-                path: path.to_owned(),
-                field,
-                found: found.clone(),
-                expected: expected.to_owned(),
-            });
-        }
-    }
-    Ok(analysis)
-}
-
 #[must_use]
 pub fn artifact_cache_path(cache_dir: &Path, artifact_id: &str) -> PathBuf {
     cache_dir
@@ -572,7 +566,7 @@ mod tests {
     use super::{
         CacheError, CacheExpectations, CachedArtifactAnalysis, CachedArtifactInfo,
         artifact_cache_path, artifact_id_from_extern_path, crate_cache_path, default_cache_dir,
-        read_artifact_analysis, write_atomic,
+        write_atomic,
     };
 
     #[test]
@@ -626,11 +620,14 @@ mod tests {
 
         let good = analysis("0.1.0", "rustc 1.97.0-nightly");
         write(&good);
-        assert_eq!(read_artifact_analysis(&path, &current).expect("read"), good);
+        assert_eq!(
+            CachedArtifactAnalysis::read(&path, &current).expect("read"),
+            good
+        );
 
         write(&analysis("0.0.9", "rustc 1.97.0-nightly"));
         assert!(matches!(
-            read_artifact_analysis(&path, &current),
+            CachedArtifactAnalysis::read(&path, &current),
             Err(CacheError::Version {
                 field: "sniff-test",
                 ..
@@ -639,7 +636,7 @@ mod tests {
 
         write(&analysis("0.1.0", "rustc 1.96.0-nightly"));
         assert!(matches!(
-            read_artifact_analysis(&path, &current),
+            CachedArtifactAnalysis::read(&path, &current),
             Err(CacheError::Version { field: "rustc", .. })
         ));
 
@@ -647,7 +644,7 @@ mod tests {
         old_format.format_version = 3;
         write(&old_format);
         assert!(matches!(
-            read_artifact_analysis(&path, &current),
+            CachedArtifactAnalysis::read(&path, &current),
             Err(CacheError::Format { version: 3, .. })
         ));
     }

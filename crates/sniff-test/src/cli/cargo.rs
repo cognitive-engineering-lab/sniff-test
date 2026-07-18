@@ -4,7 +4,7 @@ use std::collections::HashSet;
 use std::path::Path;
 use std::process::{Command, ExitCode};
 
-use crate::cache::{artifact_id_from_extern_path, read_unit_outcome};
+use crate::cache::{UnitOutcome, artifact_id_from_extern_path};
 use crate::config::EXAMPLE_MANIFEST;
 use anyhow::{Context, Result, anyhow, bail};
 
@@ -230,7 +230,7 @@ fn consume_unit_outcomes(
 ) -> bool {
     let mut denied = false;
     for artifact_id in plan {
-        match read_unit_outcome(&args.cache_dir(), artifact_id, env!("CARGO_PKG_VERSION")) {
+        match UnitOutcome::read(&args.cache_dir(), artifact_id, env!("CARGO_PKG_VERSION")) {
             Ok(outcome) => {
                 denied |= outcome.has_denied_findings;
                 if args.message_format == args::MessageFormat::Json

@@ -161,7 +161,7 @@ impl PanicRootReport {
         );
         let mut trace = render_trace(tcx, graph, local_trace);
         if let Some(finding) = cached_finding {
-            trace.extend(render_cached_trace(summary, finding));
+            trace.extend(summary.render_trace(finding));
         }
         self.push_finding(Finding {
             target: Some(summary.path.clone()),
@@ -169,7 +169,7 @@ impl PanicRootReport {
             trace,
             ..Finding::new(
                 FindingKind::CachedDependencyPanic,
-                cached_dependency_panic_reason(summary),
+                summary.panic_reason(),
                 diagnostic,
             )
         });
@@ -204,17 +204,13 @@ impl PanicRootReport {
         );
         let mut trace = render_trace(tcx, graph, local_trace);
         if let Some(finding) = cached_finding {
-            trace.extend(render_cached_trace(summary, finding));
+            trace.extend(summary.render_trace(finding));
         }
         self.push_finding(Finding {
             target: Some(summary.path.clone()),
             span: Some(render_span(tcx, edge.span)),
             trace,
-            ..Finding::new(
-                kind,
-                cached_dependency_contract_reason(summary, kind),
-                diagnostic,
-            )
+            ..Finding::new(kind, summary.contract_reason(kind), diagnostic)
         });
     }
 
@@ -343,114 +339,117 @@ fn report_evidence_kind<'tcx>(
     }
 }
 
-pub(crate) fn cached_dependency_panic_reason(summary: &CachedFunctionSummary) -> String {
-    let mut reason = format!("{} has cached panic evidence: ", summary.path);
-    let mut has_count = false;
+impl CachedFunctionSummary {
+    pub(crate) fn panic_reason(&self) -> String {
+        let mut reason = format!("{} has cached panic evidence: ", self.path);
+        let mut has_count = false;
 
-    for (count, singular, plural) in [
-        (
-            summary.raw_panic_paths,
-            "undocumented panic path",
-            "undocumented panic paths",
-        ),
-        (
-            summary.panic_obligations,
-            "documented panic",
-            "documented panics",
-        ),
-        (
-            summary.trusted_panic_obligations,
-            "trusted panic",
-            "trusted panics",
-        ),
-    ] {
-        if count == 0 {
-            continue;
+        for (count, singular, plural) in [
+            (
+                self.raw_panic_paths,
+                "undocumented panic path",
+                "undocumented panic paths",
+            ),
+            (
+                self.panic_obligations,
+                "documented panic",
+                "documented panics",
+            ),
+            (
+                self.trusted_panic_obligations,
+                "trusted panic",
+                "trusted panics",
+            ),
+        ] {
+            if count == 0 {
+                continue;
+            }
+            if has_count {
+                reason.push_str(", ");
+            }
+            reason.push_str(&count_text(count, singular, plural));
+            has_count = true;
         }
-        if has_count {
-            reason.push_str(", ");
+
+        if !has_count {
+            reason.push_str("0 undocumented panic paths");
         }
-        reason.push_str(&count_text(count, singular, plural));
-        has_count = true;
+
+        reason
     }
 
-    if !has_count {
-        reason.push_str("0 undocumented panic paths");
+    fn contract_reason(&self, kind: FindingKind) -> String {
+        let panic_kind = match kind {
+            FindingKind::TrustedPanic => "trusted panic",
+            _ => "documented panic",
+        };
+        format!("{} has cached {panic_kind} evidence", self.path)
     }
 
-    reason
+    pub(crate) fn render_trace(&self, finding: &CachedFinding) -> Vec<String> {
+        let Some(graph) = &self.graph else {
+            return Vec::new();
+        };
+
+        finding
+            .trace
+            .iter()
+            .filter_map(|edge_id| {
+                let edge = graph.edges.iter().find(|edge| edge.id == *edge_id)?;
+                let source = graph.nodes.iter().find(|node| node.id == edge.source)?;
+                let target = graph.nodes.iter().find(|node| node.id == edge.target)?;
+                Some(format!(
+                    "{}: {} --{}-> {}",
+                    edge.span,
+                    source.kind.render(),
+                    edge.kind.label(),
+                    target.kind.render(),
+                ))
+            })
+            .collect()
+    }
 }
 
 fn documented_panic_reason(path: &str) -> String {
     format!("{path} documents when it may panic under # Panics")
 }
 
-fn cached_dependency_contract_reason(summary: &CachedFunctionSummary, kind: FindingKind) -> String {
-    let panic_kind = match kind {
-        FindingKind::TrustedPanic => "trusted panic",
-        _ => "documented panic",
-    };
-    format!("{} has cached {panic_kind} evidence", summary.path)
-}
-
-pub(crate) fn render_cached_trace(
-    summary: &CachedFunctionSummary,
-    finding: &CachedFinding,
-) -> Vec<String> {
-    let Some(graph) = &summary.graph else {
-        return Vec::new();
-    };
-
-    finding
-        .trace
-        .iter()
-        .filter_map(|edge_id| {
-            let edge = graph.edges.iter().find(|edge| edge.id == *edge_id)?;
-            let source = graph.nodes.iter().find(|node| node.id == edge.source)?;
-            let target = graph.nodes.iter().find(|node| node.id == edge.target)?;
-            Some(format!(
-                "{}: {} --{}-> {}",
-                edge.span,
-                render_cached_node(&source.kind),
-                render_cached_edge_kind(edge.kind),
-                render_cached_node(&target.kind),
-            ))
-        })
-        .collect()
-}
-
-fn render_cached_node(node: &CachedReachabilityNodeKind) -> String {
-    match node {
-        CachedReachabilityNodeKind::Instance { path, .. } => path.clone(),
-        CachedReachabilityNodeKind::CompilerAssert { message } => {
-            format!("compiler assert {message}")
+impl CachedReachabilityNodeKind {
+    fn render(&self) -> String {
+        match self {
+            Self::Instance { path, .. } => path.clone(),
+            Self::CompilerAssert { message } => {
+                format!("compiler assert {message}")
+            }
+            Self::MacroExpansion { path, .. } => format!("macro {path}"),
+            Self::IndirectCall { callee_ty } => {
+                format!("indirect call {callee_ty}")
+            }
+            Self::DynObjectCast {
+                source_ty,
+                target_ty,
+            } => format!("dyn object cast {source_ty} as {target_ty}"),
         }
-        CachedReachabilityNodeKind::MacroExpansion { path, .. } => format!("macro {path}"),
-        CachedReachabilityNodeKind::IndirectCall { callee_ty } => {
-            format!("indirect call {callee_ty}")
-        }
-        CachedReachabilityNodeKind::DynObjectCast {
-            source_ty,
-            target_ty,
-        } => format!("dyn object cast {source_ty} as {target_ty}"),
     }
 }
 
-fn render_cached_edge_kind(kind: CachedReachabilityEdgeKind) -> &'static str {
-    match kind {
-        CachedReachabilityEdgeKind::DirectCall => "direct-call",
-        CachedReachabilityEdgeKind::TailCall => "tail-call",
-        CachedReachabilityEdgeKind::FnPointerReify => "fn-pointer-reify",
-        CachedReachabilityEdgeKind::ClosureFnPointerReify => "closure-fn-pointer-reify",
-        CachedReachabilityEdgeKind::ClosureDefinition => "closure-definition",
-        CachedReachabilityEdgeKind::FnPointerCallTarget => "fn-pointer-call-target",
-        CachedReachabilityEdgeKind::DynObjectCast => "dyn-object-cast",
-        CachedReachabilityEdgeKind::VTableEntry => "vtable-entry",
-        CachedReachabilityEdgeKind::DynDispatchVTableEntry => "dyn-dispatch-vtable-entry",
-        CachedReachabilityEdgeKind::MacroExpansion => "macro-expansion",
-        CachedReachabilityEdgeKind::ConstBody => "const-body",
-        CachedReachabilityEdgeKind::Assert => "assert",
-        CachedReachabilityEdgeKind::IndirectCall => "indirect-call",
+impl CachedReachabilityEdgeKind {
+    fn label(self) -> &'static str {
+        match self {
+            Self::DirectCall => "direct-call",
+            Self::TailCall => "tail-call",
+            Self::FnPointerReify => "fn-pointer-reify",
+            Self::ClosureFnPointerReify => "closure-fn-pointer-reify",
+            Self::ClosureDefinition => "closure-definition",
+            Self::FnPointerCallTarget => "fn-pointer-call-target",
+            Self::DynObjectCast => "dyn-object-cast",
+            Self::VTableEntry => "vtable-entry",
+            Self::DynDispatchVTableEntry => "dyn-dispatch-vtable-entry",
+            Self::MacroExpansion => "macro-expansion",
+            Self::ConstBody => "const-body",
+            Self::Assert => "assert",
+            Self::IndirectCall => "indirect-call",
+        }
     }
 }
 

@@ -9,8 +9,8 @@ use std::collections::{HashMap, hash_map::Entry};
 use std::path::{Path, PathBuf};
 
 use crate::cache::{
-    CacheExpectations, CachedDependencyRef, CachedFunctionSummary, artifact_cache_path,
-    artifact_id_from_extern_path, read_artifact_analysis,
+    CacheExpectations, CachedArtifactAnalysis, CachedDependencyRef, CachedFunctionSummary,
+    artifact_cache_path, artifact_id_from_extern_path,
 };
 use crate::config::PanicConfig;
 
@@ -59,7 +59,7 @@ impl DependencyAnalysisCache {
                 .map(|id| artifact_cache_path(cache_dir, id));
             let mut load_error = None;
             let analysis = exact_cache_path.as_deref().and_then(|path| {
-                match read_artifact_analysis(path, expected) {
+                match CachedArtifactAnalysis::read(path, expected) {
                     Ok(analysis) => Some(analysis),
                     Err(error) => {
                         // A missing file is the routine miss for crates that

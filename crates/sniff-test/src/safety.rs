@@ -81,20 +81,22 @@ pub enum SafetyOpKind {
     UnsafeBinderCast,
 }
 
-#[must_use]
-pub fn safety_op_label(op: SafetyOpKind) -> &'static str {
-    match op {
-        SafetyOpKind::DerefRawPointer => "raw pointer dereference",
-        SafetyOpKind::UseOfMutableStatic => "mutable static access",
-        SafetyOpKind::UseOfExternStatic => "extern static access",
-        SafetyOpKind::AccessToUnionField => "union field access",
-        SafetyOpKind::UseOfUnsafeField => "unsafe field access",
-        SafetyOpKind::InitializingLayoutConstrainedType => "layout-constrained type initialization",
-        SafetyOpKind::InitializingTypeWithUnsafeField => "unsafe field initialization",
-        SafetyOpKind::MutationOfLayoutConstrainedField => "layout-constrained field mutation",
-        SafetyOpKind::BorrowOfLayoutConstrainedField => "layout-constrained field borrow",
-        SafetyOpKind::InlineAssembly => "inline assembly",
-        SafetyOpKind::UnsafeBinderCast => "unsafe binder cast",
+impl SafetyOpKind {
+    #[must_use]
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::DerefRawPointer => "raw pointer dereference",
+            Self::UseOfMutableStatic => "mutable static access",
+            Self::UseOfExternStatic => "extern static access",
+            Self::AccessToUnionField => "union field access",
+            Self::UseOfUnsafeField => "unsafe field access",
+            Self::InitializingLayoutConstrainedType => "layout-constrained type initialization",
+            Self::InitializingTypeWithUnsafeField => "unsafe field initialization",
+            Self::MutationOfLayoutConstrainedField => "layout-constrained field mutation",
+            Self::BorrowOfLayoutConstrainedField => "layout-constrained field borrow",
+            Self::InlineAssembly => "inline assembly",
+            Self::UnsafeBinderCast => "unsafe binder cast",
+        }
     }
 }
 
@@ -104,10 +106,30 @@ pub enum SafetyCallee {
     FunctionPointer,
 }
 
+impl SafetyCallee {
+    #[must_use]
+    pub fn name(self, tcx: TyCtxt<'_>) -> String {
+        match self {
+            Self::Def(def_id) => canonical_namespace(tcx, def_id),
+            Self::FunctionPointer => String::from("unsafe function pointer"),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SafetyCallKind {
     Unsafe,
     ConfiguredObligation,
+}
+
+impl SafetyCallKind {
+    #[must_use]
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Unsafe => "unsafe call",
+            Self::ConfiguredObligation => "safety-obligation call",
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -121,6 +143,16 @@ pub struct SafetyRequirement {
     pub name: String,
     pub condition: String,
     pub span: Span,
+}
+
+impl SafetyRequirement {
+    pub(crate) fn render(&self) -> String {
+        if self.condition.is_empty() {
+            self.name.clone()
+        } else {
+            format!("{}: {}", self.name, self.condition)
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -214,22 +246,6 @@ pub fn safety_requirements(
     safety_doc_summary(tcx, def_id, overrides).requirements
 }
 
-#[must_use]
-pub fn safety_callee_name(tcx: TyCtxt<'_>, callee: SafetyCallee) -> String {
-    match callee {
-        SafetyCallee::Def(def_id) => canonical_namespace(tcx, def_id),
-        SafetyCallee::FunctionPointer => String::from("unsafe function pointer"),
-    }
-}
-
-#[must_use]
-pub fn safety_call_label(kind: SafetyCallKind) -> &'static str {
-    match kind {
-        SafetyCallKind::Unsafe => "unsafe call",
-        SafetyCallKind::ConfiguredObligation => "safety-obligation call",
-    }
-}
-
 fn collect_missing_safety_docs(
     tcx: TyCtxt<'_>,
     owner: LocalDefId,
@@ -309,14 +325,6 @@ fn line_has_safety_heading(line: &str) -> bool {
 #[cfg(test)]
 fn parse_safety_doc_lines<'a>(lines: impl IntoIterator<Item = &'a str>) -> SafetyDocSummary {
     crate::contracts::parse_contract_doc_lines(lines, ContractKind::Safety).into()
-}
-
-pub(crate) fn render_safety_requirement(requirement: &SafetyRequirement) -> String {
-    if requirement.condition.is_empty() {
-        requirement.name.clone()
-    } else {
-        format!("{}: {}", requirement.name, requirement.condition)
-    }
 }
 
 fn missing_safety_requirements(

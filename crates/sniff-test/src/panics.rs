@@ -77,6 +77,16 @@ pub struct PanicRequirement {
     pub span: Span,
 }
 
+impl PanicRequirement {
+    pub(crate) fn render(&self) -> String {
+        if self.condition.is_empty() {
+            self.name.clone()
+        } else {
+            format!("{}: {}", self.name, self.condition)
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 struct AmbiguousPanicRequirements {
     normalized_name: String,

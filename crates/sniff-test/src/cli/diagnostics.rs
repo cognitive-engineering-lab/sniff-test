@@ -8,10 +8,7 @@ use crate::panics::{
     trace_edges_until, trigger_edge_id,
 };
 use crate::report_roots::{MissingReportRoot, MissingRootReason};
-use crate::safety::{
-    SafetyCallee, SafetyFinding, render_safety_requirement, safety_call_label, safety_callee_name,
-    safety_op_label,
-};
+use crate::safety::{SafetyCallee, SafetyFinding};
 use reachability::{ReachabilityEdgeId, ReachabilityGraph, ReachabilityNodeKind};
 use rustc_errors::{Diag, EmissionGuarantee};
 use rustc_hir::def_id::DefId;
@@ -19,10 +16,7 @@ use rustc_middle::ty::TyCtxt;
 use rustc_span::{BytePos, SourceFile, Span};
 
 use super::findings::{DiagnosticMessage, FindingDiagnostic};
-use super::report::{
-    cached_dependency_panic_reason, render_assert_message, render_cached_trace,
-    render_edge_without_span, render_node,
-};
+use super::report::{render_assert_message, render_edge_without_span, render_node};
 
 #[derive(Debug, Clone, Copy)]
 pub(super) struct PanicContractDiagnostic {
@@ -235,7 +229,7 @@ pub(super) fn ambiguous_obligation_name_diagnostic(
                 requirement.span,
                 format!(
                     "`{}` normalizes to `{}`",
-                    render_panic_requirement(requirement),
+                    requirement.render(),
                     name.normalized_name
                 ),
             );
@@ -375,14 +369,6 @@ fn decorate_panic_contract_diagnostic<'tcx>(
     diag.help("ensure the callee's panic conditions cannot occur, justify that with `// PANIC:`, or document when the caller may panic with `# Panics`");
 }
 
-fn render_panic_requirement(requirement: &crate::panics::PanicRequirement) -> String {
-    if requirement.condition.is_empty() {
-        requirement.name.clone()
-    } else {
-        format!("{}: {}", requirement.name, requirement.condition)
-    }
-}
-
 fn decorate_cached_dependency_contract_diagnostic<'tcx>(
     diag: &mut dyn LintDiag,
     tcx: TyCtxt<'tcx>,
@@ -423,7 +409,7 @@ fn decorate_cached_dependency_raw_panic_diagnostic<'tcx>(
     summary: &CachedFunctionSummary,
     include_stack: bool,
 ) {
-    diag.note(cached_dependency_panic_reason(summary));
+    diag.note(summary.panic_reason());
     add_cached_dependency_panic_site_notes(diag, tcx, summary);
     add_trace_notes(diag, tcx, graph, local_trace, include_stack);
     add_cached_trace_notes(diag, summary, include_stack, |kind| {
@@ -457,7 +443,7 @@ fn add_cached_trace_notes(
         .iter()
         .filter(|finding| include(finding.kind))
     {
-        for edge in render_cached_trace(summary, finding) {
+        for edge in summary.render_trace(finding) {
             diag.note(format!("cached trace: {edge}"));
         }
     }
@@ -642,8 +628,8 @@ pub(super) fn safety_finding_diagnostic(
             span,
         } => {
             let caller = canonical_namespace(tcx, *caller);
-            let target = safety_callee_name(tcx, *callee);
-            let call = safety_call_label(*call_kind);
+            let target = callee.name(tcx);
+            let call = call_kind.label();
             let message = format!(
                 "{call} to `{target}` in `{caller}` is missing a `// SAFETY:` justification"
             );
@@ -660,8 +646,8 @@ pub(super) fn safety_finding_diagnostic(
             missing_requirements,
         } => {
             let caller = canonical_namespace(tcx, *caller);
-            let target = safety_callee_name(tcx, *callee);
-            let call = safety_call_label(*call_kind);
+            let target = callee.name(tcx);
+            let call = call_kind.label();
             let message = format!(
                 "{call} to `{target}` in `{caller}` does not satisfy all `# Safety` requirements"
             );
@@ -677,7 +663,7 @@ pub(super) fn safety_finding_diagnostic(
         }
         SafetyFinding::OpMissingJustification { caller, op, span } => {
             let caller = canonical_namespace(tcx, *caller);
-            let operation = safety_op_label(*op);
+            let operation = op.label();
             let message = format!(
                 "unsafe operation ({operation}) in `{caller}` is missing a `// SAFETY:` justification"
             );
@@ -704,7 +690,7 @@ pub(super) fn safety_finding_diagnostic(
                         requirement.span,
                         format!(
                             "`{}` normalizes to `{normalized_name}`",
-                            render_safety_requirement(requirement)
+                            requirement.render()
                         ),
                     );
                 }
@@ -727,7 +713,7 @@ fn add_missing_safety_requirement_notes(
     for requirement in missing_requirements {
         diag.note(format!(
             "missing safety requirement `{}`",
-            render_safety_requirement(requirement)
+            requirement.render()
         ));
     }
     diag.help(

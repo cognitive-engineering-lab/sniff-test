@@ -6,10 +6,7 @@ use crate::config::{ContractDocOverrides, LintLevel, ReportRootSet, SniffTestCon
 use crate::namespace::canonical_namespace;
 use crate::panics::PanicEvidenceKind;
 use crate::report_roots::{MissingReportRoot, MissingRootReason, ReportRootKind};
-use crate::safety::{
-    SafetyAnalysis, SafetyCallKind, SafetyFinding, render_safety_requirement, safety_call_label,
-    safety_callee_name, safety_op_label,
-};
+use crate::safety::{SafetyAnalysis, SafetyCallKind, SafetyFinding, SafetyRequirement};
 use rustc_middle::ty::TyCtxt;
 use rustc_span::Span;
 use serde::Serialize;
@@ -253,8 +250,8 @@ fn safety_finding_report(
             call_kind,
             span,
         } => {
-            let target = safety_callee_name(tcx, callee);
-            let call = safety_call_label(call_kind);
+            let target = callee.name(tcx);
+            let call = call_kind.label();
             let kind = match call_kind {
                 SafetyCallKind::Unsafe => FindingKind::UnsafeCallMissingJustification,
                 SafetyCallKind::ConfiguredObligation => {
@@ -279,11 +276,11 @@ fn safety_finding_report(
             span,
             missing_requirements,
         } => {
-            let target = safety_callee_name(tcx, callee);
-            let call = safety_call_label(call_kind);
+            let target = callee.name(tcx);
+            let call = call_kind.label();
             let missing_requirements = missing_requirements
                 .iter()
-                .map(render_safety_requirement)
+                .map(SafetyRequirement::render)
                 .collect();
             let kind = match call_kind {
                 SafetyCallKind::Unsafe => FindingKind::UnsafeCallMissingRequirements,
@@ -304,7 +301,7 @@ fn safety_finding_report(
             }
         }
         SafetyFinding::OpMissingJustification { caller, op, span } => {
-            let operation = safety_op_label(op);
+            let operation = op.label();
             Finding {
                 function: Some(canonical_namespace(tcx, caller)),
                 span: Some(render_span(tcx, span)),
@@ -324,7 +321,7 @@ fn safety_finding_report(
             let span = requirements
                 .first()
                 .map_or_else(|| tcx.def_span(def_id), |requirement| requirement.span);
-            let requirements = requirements.iter().map(render_safety_requirement).collect();
+            let requirements = requirements.iter().map(SafetyRequirement::render).collect();
             Finding {
                 function: Some(function.clone()),
                 span: Some(render_span(tcx, span)),

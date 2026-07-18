@@ -7,7 +7,6 @@ use std::path::{Path, PathBuf};
 use crate::cache::{
     CacheError, CacheExpectations, CachedArtifactAnalysis, CachedArtifactInfo,
     CachedFunctionSummary, OUTCOME_FORMAT_VERSION, UnitOutcome, artifact_id,
-    write_artifact_analysis, write_unit_outcome,
 };
 use crate::config::{
     AnalysisConfig, CallableEdgeAttribution, PanicBoundaryPolicy, PanicConfig, SniffTestConfig,
@@ -87,7 +86,7 @@ pub(crate) fn analyze_crate(
             has_denied_findings: false,
             report_json: None,
         };
-        if let Err(error) = write_unit_outcome_file(args, &outcome) {
+        if let Err(error) = write_unit_outcome_and_announce(args, &outcome) {
             report_unit_outcome_write_error(tcx, args, &error);
         }
         return;
@@ -156,7 +155,7 @@ pub(crate) fn analyze_crate(
             emit_finding_diagnostic(tcx, finding.level, &finding.finding.diagnostic);
         }
     }
-    if let Err(error) = write_artifact_analysis(&args.cache_dir(), &analysis.cache) {
+    if let Err(error) = analysis.cache.write(&args.cache_dir()) {
         if args.under_cargo {
             let diagnostic = tcx
                 .dcx()
@@ -200,7 +199,7 @@ fn emit_report_and_outcome(
         has_denied_findings,
         report_json,
     };
-    if let Err(error) = write_unit_outcome_file(args, &outcome) {
+    if let Err(error) = write_unit_outcome_and_announce(args, &outcome) {
         report_unit_outcome_write_error(tcx, args, &error);
     }
 }
@@ -216,8 +215,11 @@ fn report_unit_outcome_write_error(tcx: TyCtxt<'_>, args: &SniffTestArgs, error:
     }
 }
 
-fn write_unit_outcome_file(args: &SniffTestArgs, outcome: &UnitOutcome) -> Result<(), CacheError> {
-    let result = write_unit_outcome(&args.cache_dir(), outcome);
+fn write_unit_outcome_and_announce(
+    args: &SniffTestArgs,
+    outcome: &UnitOutcome,
+) -> Result<(), CacheError> {
+    let result = outcome.write(&args.cache_dir());
     // Deny findings fail this unit's compilation, so cargo never announces it
     // with a compiler-artifact message. This line puts the unit in the
     // frontend's build plan regardless; the frontend swallows it, users never
