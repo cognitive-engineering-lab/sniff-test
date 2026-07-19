@@ -106,9 +106,10 @@ pub enum DynDispatchVTableEdges {
     CastSites,
     /// Record concrete vtable methods at dynamic dispatch call sites.
     ///
-    /// This is a query-local, trait-keyed approximation. If a query reaches
-    /// multiple concrete values cast to the same dyn trait, each dyn call to
-    /// that trait may be connected to every observed concrete impl.
+    /// This is a shared-index, trait-keyed approximation. Concrete targets
+    /// observed by one query become graph edges that later queries against the
+    /// same index can reuse. Each matching dyn call may therefore be connected
+    /// to every concrete impl observed so far.
     CallSites,
 }
 
@@ -120,9 +121,10 @@ pub enum FnPointerEdges {
     ReifySites,
     /// Record concrete callables at function-pointer call sites.
     ///
-    /// This is a query-local, function-pointer-type-keyed approximation. If a
-    /// query reaches multiple reifications to the same function-pointer type,
-    /// each matching call site may be connected to every observed target.
+    /// This is a shared-index, function-pointer-type-keyed approximation.
+    /// Concrete targets observed by one query become graph edges that later
+    /// queries against the same index can reuse. Each matching call site may
+    /// therefore be connected to every target observed so far.
     CallSites,
 }
 

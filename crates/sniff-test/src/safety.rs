@@ -3,7 +3,7 @@
 //! This pass checks that public unsafe functions document a `# Safety`
 //! contract and that unsafe operations — calls and non-call operations alike —
 //! have nearby `// SAFETY:` justifications satisfying any named requirements
-//! listed by the callee. Operation detection lives in the [`thir`] submodule,
+//! listed by the callee. Operation detection lives in the `thir` submodule,
 //! modeled on rustc's own unsafety checker.
 
 mod thir;

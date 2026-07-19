@@ -11,7 +11,7 @@ use rustc_middle::ty::TyCtxt;
 use rustc_span::symbol::Symbol;
 
 use super::args::{ColorChoice, DriverCli, MANIFEST_PATH_ENV, SniffTestArgs};
-use super::driver::{analyze_crate, load_config};
+use super::driver::{analyze_crate, is_build_script, load_config};
 use super::report::CrateOutputScope;
 
 pub(crate) const DRIVER_NAME: &str = "sniff-test-driver";
@@ -61,8 +61,9 @@ pub(crate) fn modify_cargo(cargo: &mut Command, args: &SniffTestArgs) -> Result<
         .overflow_checks
         .unwrap_or(config.analysis.overflow_checks);
     let inline_mir = config.analysis.inline_mir;
-    // Cargo replays cached rustc stderr/stdout for fresh artifacts. Include
-    // report-affecting inputs in the rustc fingerprint so output matches.
+    // Cargo can reuse fresh units without rerunning the driver. Include every
+    // report-affecting input in the rustc fingerprint so persisted outcomes
+    // remain valid.
     let mut rustflags = vec![
         "--cfg".to_owned(),
         format!("sniff_test_color_{}", args.color.as_cargo_arg()),
@@ -379,6 +380,9 @@ impl Callbacks for SniffTestCallbacks {
             .into_iter()
             .map(|path| path.display().to_string())
             .collect::<Vec<_>>();
+        // These inputs are read outside rustc's normal source loading, so register
+        // them explicitly in dep-info. Cargo will then rerun the driver when the
+        // encoded arguments or any configuration file changes, as it does for Clippy.
         config.track_state = Some(Box::new(move |sess| {
             sess.env_depinfo.borrow_mut().insert((
                 Symbol::intern(SNIFF_TEST_ARGS_ENV),
@@ -391,6 +395,10 @@ impl Callbacks for SniffTestCallbacks {
     }
 
     fn after_analysis(&mut self, _compiler: &interface::Compiler, tcx: TyCtxt<'_>) -> Compilation {
+        if is_build_script(tcx) {
+            return Compilation::Continue;
+        }
+
         let output_scope = self.output_scope.for_crate(tcx);
         analyze_crate(tcx, &self.args, &self.config, output_scope);
         Compilation::Continue

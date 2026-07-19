@@ -108,6 +108,50 @@ cli_cases! {
     }
 }
 
+#[test]
+fn cargo_frontend_skips_build_scripts() {
+    let temp = tempfile::tempdir().expect("temp dir");
+    fs::create_dir(temp.path().join("src")).expect("create source directory");
+    fs::write(
+        temp.path().join("Cargo.toml"),
+        "[package]\nname = \"build-script-scope\"\nversion = \"0.1.0\"\nedition = \"2024\"\nbuild = \"build.rs\"\n\n[workspace]\n",
+    )
+    .expect("write Cargo manifest");
+    fs::write(
+        temp.path().join("build.rs"),
+        "pub fn unused_panic() { panic!(\"build helper\"); }\nfn main() {}\n",
+    )
+    .expect("write build script");
+    fs::write(
+        temp.path().join("src/lib.rs"),
+        "pub fn library_target() {}\n",
+    )
+    .expect("write library source");
+
+    let binary = PathBuf::from(env!("CARGO_BIN_EXE_cargo-sniff-test"));
+    let mut command = Command::new(binary);
+    clean_cargo_package_env(&mut command);
+    let output = command
+        .args(["--message-format", "json", "--color", "never"])
+        .current_dir(temp.path())
+        .output()
+        .expect("run cargo frontend");
+
+    assert!(
+        output.status.success(),
+        "stderr:\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let crate_names = String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .filter_map(|line| serde_json::from_str::<serde_json::Value>(line).ok())
+        .filter(|report| report["reason"] == "sniff-test-artifact")
+        .filter_map(|report| report["artifact"]["crate-name"].as_str().map(str::to_owned))
+        .collect::<Vec<_>>();
+    assert!(crate_names.iter().any(|name| name == "build_script_scope"));
+    assert!(!crate_names.iter().any(|name| name == "build_script_build"));
+}
+
 /// A compile error through the driver must exit with rustc's ordinary status,
 /// not a 101 panic exit.
 #[test]

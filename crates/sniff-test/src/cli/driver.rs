@@ -325,12 +325,6 @@ fn analyze_report_roots<'tcx>(
 
 impl CrateOutputScope {
     pub(crate) fn current(args: &SniffTestArgs) -> anyhow::Result<Self> {
-        // Build scripts never ship as target code; workspace deny gating and
-        // diagnostics would fail builds over their normal panic-on-error idiom.
-        if std::env::var("CARGO_CRATE_NAME").is_ok_and(|name| name.starts_with("build_script_")) {
-            return Ok(Self::Dependency);
-        }
-
         let cargo_manifest = std::env::var_os("CARGO_MANIFEST_PATH")
             .map(|path| {
                 let path = PathBuf::from(path);
@@ -379,6 +373,13 @@ impl CrateOutputScope {
             self
         }
     }
+}
+
+pub(crate) fn is_build_script(tcx: TyCtxt<'_>) -> bool {
+    // Match rustc's own best-effort Cargo build-script detection in
+    // `rustc_attr_parsing/attributes/diagnostic/check_cfg.rs`: Cargo invokes
+    // these targets with `--crate-name build_script_build`.
+    tcx.crate_name(LOCAL_CRATE).as_str() == "build_script_build"
 }
 
 fn analyze_root<'tcx>(

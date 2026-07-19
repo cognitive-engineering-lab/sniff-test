@@ -1,11 +1,11 @@
 //! Canonical Rust namespace rendering for config and cache matching.
 //!
-//! Configuration patterns are matched against the session-independent
-//! [`NamespaceCandidates`] forms of a definition: the crate root, such as
-//! `serde`, the definition-site path, such as `serde::de::from_str`, and for
-//! impl items the self-type path, such as `alloc::vec::Vec::index`. Rust crate
-//! names use underscores, not package-name hyphens, so users should write
-//! `proc_macro2`, not `proc-macro2`.
+//! Configuration patterns are matched against stable [`NamespaceCandidates`]
+//! forms of a definition: the crate root, such as `serde`, the definition-site
+//! path, such as `serde::de::from_str`, and for impl items the self-type path,
+//! such as `alloc::vec::Vec::index`. A legacy session-rendered form is also
+//! retained for pattern compatibility. Rust crate names use underscores, not
+//! package-name hyphens, so users should write `proc_macro2`, not `proc-macro2`.
 //!
 //! Cache identity uses [`stable_def_path_hash`] instead of rendered paths:
 //! pretty-printed paths differ between the defining crate's session and a
@@ -41,7 +41,11 @@ pub fn stable_def_path_hash(tcx: TyCtxt<'_>, def_id: DefId) -> String {
     )
 }
 
-/// Session-independent namespace forms a definition can be matched against.
+/// Namespace forms a definition can be matched against.
+///
+/// The crate, definition-site, and self-type forms are stable across compiler
+/// sessions. `display` preserves the legacy session-rendered form for pattern
+/// compatibility.
 #[derive(Debug, Clone)]
 pub struct NamespaceCandidates {
     /// The defining crate root, such as `alloc`.

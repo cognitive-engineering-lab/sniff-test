@@ -89,11 +89,10 @@ to the source call structure.
 where a function item, closure, or concrete type is erased into an indirect
 callable such as a `fn` pointer or `dyn Trait`. `call-sites` reports concrete
 function-pointer targets and dynamic-dispatch vtable methods at the call span
-instead of the erasure span. Call-site attribution is query-local and keyed by
-erased callable type: if a traversal sees multiple function-pointer
-reifications with the same `fn` pointer type, or multiple concrete values cast
-to the same dyn trait, each matching call site may connect to every observed
-target.
+instead of the erasure span. Call-site attribution uses shared, type-keyed
+evidence: function-pointer reifications with the same `fn` pointer type, or
+concrete values cast to the same dyn trait, may cause each matching call site
+to connect to every target observed by the shared reachability index.
 
 The three `ambiguous-*-*` lints independently control shared panic markers,
 duplicate normalized `# Panics` requirement names, and duplicate normalized
@@ -277,3 +276,11 @@ Run all snapshot tests with stale-snapshot rejection via:
 ```sh
 just snapshots
 ```
+
+## Acknowledgments
+
+The `reachability` crate's methodology was informed by
+[Ferrocene](https://github.com/ferrocene/ferrocene), a downstream of the Rust
+compiler maintained by Ferrous Systems. Its implementation evolved from the
+original sniff-test reachability modules and has since been substantially
+rewritten. See [ACKNOWLEDGMENTS.md](ACKNOWLEDGMENTS.md) for details.

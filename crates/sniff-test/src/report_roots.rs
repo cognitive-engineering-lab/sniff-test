@@ -45,25 +45,18 @@ pub enum MissingRootReason {
 #[derive(Debug, Clone, Copy)]
 pub enum ReportRoot<'tcx> {
     /// Monomorphic function that can be analyzed immediately.
-    Concrete {
-        local: LocalDefId,
-        instance: Instance<'tcx>,
-    },
+    Concrete { instance: Instance<'tcx> },
     /// Generic function analyzed structurally with identity generic arguments.
     Generic { local: LocalDefId },
 }
 
 impl<'tcx> ReportRoot<'tcx> {
     #[must_use]
-    pub fn local_def_id(self) -> LocalDefId {
-        match self {
-            Self::Concrete { local, .. } | Self::Generic { local } => local,
-        }
-    }
-
-    #[must_use]
     pub fn def_id(self) -> DefId {
-        self.local_def_id().to_def_id()
+        match self {
+            Self::Concrete { instance } => instance.def_id(),
+            Self::Generic { local } => local.to_def_id(),
+        }
     }
 
     #[must_use]
@@ -159,8 +152,7 @@ fn sorted_selection<'tcx>(
         .collect::<Vec<_>>();
 
     roots.sort_by(|left, right| {
-        canonical_namespace(tcx, left.local_def_id().to_def_id())
-            .cmp(&canonical_namespace(tcx, right.local_def_id().to_def_id()))
+        canonical_namespace(tcx, left.def_id()).cmp(&canonical_namespace(tcx, right.def_id()))
     });
 
     ReportRootSelection {
@@ -177,7 +169,6 @@ fn report_root(tcx: TyCtxt<'_>, local: LocalDefId) -> ReportRoot<'_> {
         ReportRoot::Generic { local }
     } else {
         ReportRoot::Concrete {
-            local,
             instance: Instance::mono(tcx, local.to_def_id()),
         }
     }

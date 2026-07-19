@@ -788,7 +788,7 @@ pub enum ReportRootSet {
     /// Report from public exported functions.
     #[default]
     Public,
-    /// Report from every local function.
+    /// Report from every analyzable local function item.
     All,
     /// Report from these fully qualified current-crate function paths.
     Explicit(Vec<ReportRootPath>),

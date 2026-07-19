@@ -23,6 +23,14 @@
 //! boundaries instead of guessed implementations. [`ReachabilityHooks`] can
 //! observe nodes/edges, stop traversal, or prevent descending into selected
 //! callees.
+//!
+//! # Provenance
+//!
+//! This crate's reachability methodology was informed by
+//! [Ferrocene](https://github.com/ferrocene/ferrocene). Its implementation
+//! evolved from the original sniff-test reachability modules and has since
+//! been substantially rewritten as a standalone crate. See the repository's
+//! `ACKNOWLEDGMENTS.md` for details.
 
 #![feature(rustc_private)]
 #![deny(warnings)]
