@@ -305,7 +305,6 @@ pub struct AnalysisLintConfig {
     pub analysis_incomplete: LintLevel,
     pub empty_report_roots: LintLevel,
     pub missing_report_root: LintLevel,
-    pub ignored_report_root: LintLevel,
 }
 
 impl Default for AnalysisLintConfig {
@@ -317,7 +316,6 @@ impl Default for AnalysisLintConfig {
             analysis_incomplete: LintLevel::Deny,
             empty_report_roots: LintLevel::Warn,
             missing_report_root: LintLevel::Warn,
-            ignored_report_root: LintLevel::Warn,
         }
     }
 }
@@ -780,7 +778,7 @@ fn pattern_precision(pattern: &str) -> usize {
         .count()
 }
 
-/// Current-crate functions whose reachable panic paths should be reported.
+/// Current-crate functions whose reachable effect paths should be reported.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub enum ReportRootSet {
     /// Report from public exported functions.
@@ -1042,7 +1040,6 @@ mod tests {
             ambiguous-effect-requirement = "warn"
             empty-report-roots = "deny"
             missing-report-root = "allow"
-            ignored-report-root = "deny"
         "#;
 
         let parsed = SniffTestConfig::from_manifest_str(config).expect("manifest should parse");
@@ -1058,7 +1055,6 @@ mod tests {
         );
         assert_eq!(parsed.analysis.lints.empty_report_roots, LintLevel::Deny);
         assert_eq!(parsed.analysis.lints.missing_report_root, LintLevel::Allow);
-        assert_eq!(parsed.analysis.lints.ignored_report_root, LintLevel::Deny);
     }
 
     #[test]
@@ -1087,6 +1083,10 @@ mod tests {
             (
                 "[analysis.lints]\nambiguous-safety-requirement = \"allow\"",
                 "ambiguous-safety-requirement",
+            ),
+            (
+                "[analysis.lints]\nignored-report-root = \"warn\"",
+                "ignored-report-root",
             ),
             ("[panics.lints]\nmissing-docs = \"allow\"", "missing-docs"),
             (
@@ -1198,7 +1198,6 @@ mod tests {
         assert_eq!(lints.analysis_incomplete, LintLevel::Deny,);
         assert_eq!(lints.empty_report_roots, LintLevel::Warn);
         assert_eq!(lints.missing_report_root, LintLevel::Warn);
-        assert_eq!(lints.ignored_report_root, LintLevel::Warn);
     }
 
     #[test]

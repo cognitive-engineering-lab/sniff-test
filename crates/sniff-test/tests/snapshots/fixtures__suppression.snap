@@ -9,13 +9,7 @@ expression: messages
       "crate-name": "suppression"
     },
     "dependencies": [],
-    "findings": [
-      {
-        "kind": "empty-report-roots",
-        "level": "warn",
-        "reason": "`[analysis].report-roots = \"public\"` selected no functions in `suppression`"
-      }
-    ],
+    "findings": [],
     "format-version": 6,
     "reason": "sniff-test-artifact",
     "rustc-version": "[RUSTC_VERSION]",

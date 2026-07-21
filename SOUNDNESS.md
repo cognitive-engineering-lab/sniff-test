@@ -30,7 +30,7 @@ belongs with the consistency check above.
 ### Dependency safety analysis is not performed
 
 Safety (unsafe-justification) analysis runs only for workspace crates
-(`analyze_crate` in `crates/sniff-test/src/cli/mod.rs`). Dependencies get
+(`analyze_crate` in `crates/sniff-test/src/cli/driver.rs`). Dependencies get
 panic analysis and caching, but their unsafe blocks are never audited. The
 original's `DependenciesPosture::Verify` offered this; restoring it is a
 pending feature decision.
@@ -55,7 +55,7 @@ cannot express named per-function requirements.
 
 ### Build scripts and proc macros are dependency-scoped
 
-Units whose crate name starts with `build_script_` or whose crate type is
+Units whose crate name is Cargo's `build_script_build` or whose crate type is
 `proc-macro` never receive workspace deny gating or diagnostics
 (`CrateOutputScope::current`). Their code runs at build time on the developer
 machine; panics there fail builds loudly on their own, and holding them to
@@ -136,6 +136,11 @@ detection arm and a fixture. The `unsafe_ops` fixture covers the stable op
 kinds; layout-constrained types, `unsafe_fields`, `unsafe_binders`, and
 `#[target_feature]` calls are ported but have no fixture canaries yet
 (nightly-feature crates).
+
+The port is intentionally applied only to runtime function-like bodies.
+Standalone const/static initializers and inline-const bodies are excluded from
+sniff-test's runtime effect graph, even though rustc's checker also validates
+their language-level unsafety.
 
 ### Rustflags composition masks config-file target flags
 

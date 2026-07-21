@@ -6,7 +6,7 @@ use crate::config::{ContractDocOverrides, LintLevel, ReportRootSet, SniffTestCon
 use crate::contracts::EffectKind;
 use crate::namespace::canonical_namespace;
 use crate::panics::PanicEvidenceKind;
-use crate::report_roots::{MissingReportRoot, MissingRootReason, ReportRootKind};
+use crate::report_roots::{MissingReportRoot, ReportRootKind};
 use crate::safety::{SafetyCallKind, SafetyFinding, SafetyRequirement};
 use rustc_middle::ty::TyCtxt;
 use rustc_span::Span;
@@ -119,7 +119,6 @@ pub(crate) enum FindingKind {
     AnalysisIncomplete,
     EmptyReportRoots,
     MissingReportRoot,
-    IgnoredReportRoot,
     MissingSafetyDocs,
     UnsafeCallMissingJustification,
     UnsafeCallMissingRequirements,
@@ -151,7 +150,6 @@ impl FindingKind {
             Self::AnalysisIncomplete => config.analysis.lints.analysis_incomplete,
             Self::EmptyReportRoots => config.analysis.lints.empty_report_roots,
             Self::MissingReportRoot => config.analysis.lints.missing_report_root,
-            Self::IgnoredReportRoot => config.analysis.lints.ignored_report_root,
             Self::MissingSafetyDocs => config.safety.lints.missing_safety_docs,
             Self::UnsafeCallMissingJustification => {
                 config.safety.lints.unsafe_call_missing_justification
@@ -193,25 +191,13 @@ pub(crate) fn collect_report_root_findings(
             diagnostic,
         ));
     }
-    findings.extend(missing_roots.iter().map(|root| {
-        let kind = match root.reason {
-            MissingRootReason::NotFound => FindingKind::MissingReportRoot,
-            MissingRootReason::Ignored => FindingKind::IgnoredReportRoot,
-        };
-        let reason = match root.reason {
-            MissingRootReason::NotFound => String::from("configured report root was not found"),
-            MissingRootReason::Ignored => {
-                String::from("configured report root is excluded by `[panics].ignored-namespaces`")
-            }
-        };
-        Finding {
-            target: Some(root.path.clone()),
-            ..Finding::new(
-                kind,
-                reason,
-                missing_report_root_diagnostic(tcx, manifest_path, root),
-            )
-        }
+    findings.extend(missing_roots.iter().map(|root| Finding {
+        target: Some(root.path.clone()),
+        ..Finding::new(
+            FindingKind::MissingReportRoot,
+            String::from("configured report root was not found"),
+            missing_report_root_diagnostic(tcx, manifest_path, root),
+        )
     }));
     findings
 }
@@ -240,10 +226,9 @@ pub(crate) fn safety_finding_report(
             }
         }
         SafetyFinding::CallMissingJustification {
-            caller,
+            site,
             callee,
             call_kind,
-            span,
         } => {
             let target = callee.name(tcx);
             let call = call_kind.label();
@@ -254,9 +239,9 @@ pub(crate) fn safety_finding_report(
                 }
             };
             Finding {
-                function: Some(canonical_namespace(tcx, caller)),
+                function: Some(canonical_namespace(tcx, site.owner)),
                 target: Some(target.clone()),
-                span: Some(render_span(tcx, span)),
+                span: Some(render_span(tcx, site.span)),
                 ..Finding::new(
                     kind,
                     format!("{call} to `{target}` has no `// SAFETY:` justification"),
@@ -265,10 +250,9 @@ pub(crate) fn safety_finding_report(
             }
         }
         SafetyFinding::CallMissingRequirements {
-            caller,
+            site,
             callee,
             call_kind,
-            span,
             missing_requirements,
         } => {
             let target = callee.name(tcx);
@@ -284,9 +268,9 @@ pub(crate) fn safety_finding_report(
                 }
             };
             Finding {
-                function: Some(canonical_namespace(tcx, caller)),
+                function: Some(canonical_namespace(tcx, site.owner)),
                 target: Some(target.clone()),
-                span: Some(render_span(tcx, span)),
+                span: Some(render_span(tcx, site.span)),
                 missing_requirements,
                 ..Finding::new(
                     kind,
@@ -295,11 +279,11 @@ pub(crate) fn safety_finding_report(
                 )
             }
         }
-        SafetyFinding::OpMissingJustification { caller, op, span } => {
+        SafetyFinding::OpMissingJustification { site, op } => {
             let operation = op.label();
             Finding {
-                function: Some(canonical_namespace(tcx, caller)),
-                span: Some(render_span(tcx, span)),
+                function: Some(canonical_namespace(tcx, site.owner)),
+                span: Some(render_span(tcx, site.span)),
                 ..Finding::new(
                     FindingKind::UnsafeOpMissingJustification,
                     format!("unsafe operation ({operation}) has no `// SAFETY:` justification"),

@@ -168,6 +168,12 @@ pub struct ReachabilityView<'view, 'tcx> {
 }
 
 impl<'view, 'tcx> ReachabilityView<'view, 'tcx> {
+    /// Returns the shared graph arena underlying this query view.
+    #[must_use]
+    pub fn graph(self) -> &'view ReachabilityGraph<'tcx> {
+        self.graph
+    }
+
     #[must_use]
     /// Returns the root node for this query.
     pub fn root(self) -> ReachedNode<'view, 'tcx> {

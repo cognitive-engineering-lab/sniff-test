@@ -5,8 +5,9 @@
 //! line references appear in comments so toolchain-bump diffs stay
 //! mechanical). rustc's checker owns the definition of "operation that
 //! requires `unsafe`"; this pass reuses those rules with a different sink:
-//! every detected operation needs a nearby `// SAFETY:` justification, inside
-//! or outside an `unsafe` block. Unsafe blocks only anchor where
+//! every detected runtime operation in the selected reachability domain needs
+//! a nearby `// SAFETY:` justification, inside or outside an `unsafe` block.
+//! Unsafe blocks only anchor where
 //! justification comments attach, and compiler-generated (`BuiltinUnsafe`)
 //! blocks suppress findings entirely — their unsafety is the compiler's
 //! obligation, not the user's.
@@ -37,6 +38,7 @@ use super::{
 };
 use crate::config::SafetyConfig;
 use crate::contracts::{ContractCheck, check_contract};
+use crate::effect_tracker::EffectSite;
 use crate::source_markers::{
     SafetyMarkerBlock, SafetySatisfaction, span_safety_marker_block, span_safety_satisfactions,
 };
@@ -117,9 +119,11 @@ impl<'a, 'tcx> UnsafeOpVisitor<'a, 'tcx> {
             self.analysis
                 .findings
                 .push(SafetyFinding::OpMissingJustification {
-                    caller: self.owner.to_def_id(),
+                    site: EffectSite {
+                        owner: self.owner.to_def_id(),
+                        span,
+                    },
                     op,
-                    span,
                 });
         } else {
             self.claim_applicable_markers(span);
@@ -151,10 +155,12 @@ impl<'a, 'tcx> UnsafeOpVisitor<'a, 'tcx> {
                     self.analysis
                         .findings
                         .push(SafetyFinding::CallMissingRequirements {
-                            caller: self.owner.to_def_id(),
+                            site: EffectSite {
+                                owner: self.owner.to_def_id(),
+                                span,
+                            },
                             callee: call.callee,
                             call_kind: call.kind,
-                            span,
                             missing_requirements: missing,
                         });
                 } else {
@@ -168,10 +174,12 @@ impl<'a, 'tcx> UnsafeOpVisitor<'a, 'tcx> {
             self.analysis
                 .findings
                 .push(SafetyFinding::CallMissingJustification {
-                    caller: self.owner.to_def_id(),
+                    site: EffectSite {
+                        owner: self.owner.to_def_id(),
+                        span,
+                    },
                     callee: call.callee,
                     call_kind: call.kind,
-                    span,
                 });
         } else {
             self.claim_applicable_markers(span);

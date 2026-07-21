@@ -1,8 +1,9 @@
 # sniff-test
 
-`sniff-test` runs panic reachability analysis through Cargo. It wraps
-`cargo check`, records panic evidence from rustc MIR, and reports undocumented
-panic paths, documented panic behavior, and trusted panic boundaries.
+`sniff-test` checks source-level effect contracts through Cargo. It wraps
+`cargo check`, discovers panic effects from rustc MIR and safety effects from
+THIR, then reports paths whose `# Panics`/`# Safety` obligations or
+`// PANIC:`/`// SAFETY:` justifications are incomplete.
 
 ## Cargo Frontend
 
@@ -55,7 +56,6 @@ ambiguous-effect-marker = "deny" # deny | warn | allow
 ambiguous-effect-requirement = "deny"
 empty-report-roots = "warn"
 missing-report-root = "warn"
-ignored-report-root = "warn"
 
 [documentation]
 override-files = [] # TOML files relative to sniff-test.toml
@@ -93,15 +93,22 @@ evidence: function-pointer reifications with the same `fn` pointer type, or
 concrete values cast to the same dyn trait, may cause each matching call site
 to connect to every target observed by the shared reachability index.
 
-The three `ambiguous-*-*` lints independently control shared panic markers,
-duplicate normalized `# Panics` requirement names, and duplicate normalized
-`# Safety` requirement names. `warn` accepts the ambiguity but reports it;
-`allow` accepts it silently.
+The two `ambiguous-effect-*` lints apply uniformly to panic and safety markers
+and to duplicate normalized requirement names. `warn` accepts the ambiguity
+but reports it; `allow` accepts it silently.
 
 `marker-probing = "macro-definition-first"` lets `// PANIC:` and `// SAFETY:`
 markers inside macro definitions satisfy operations produced by that macro,
 then falls back through macro callsites to the outer source callsite.
 `source-callsite` keeps lookup at the final user callsite only.
+
+`report-roots` scopes both analyses. Effects propagate through reachable local
+functions until a matching documented obligation or ignored namespace stops
+the path. With `"public"`, a private helper is reported through the public root
+that reaches it; with `"all"`, the helper can also receive its own finding.
+Safety probing covers runtime function, method, closure, and coroutine bodies;
+const, static, and inline-const initializers are intentionally outside this
+runtime effect graph.
 
 `cargo sniff-test` exits with status `1` when a final workspace crate has a
 finding whose configured lint level is `deny`. `allow` suppresses a finding from
@@ -192,10 +199,11 @@ comment lines following a requirement bullet in the same contiguous block are
 kept as explanation context. Use `/// # Panics` to document public API panic behavior;
 `// PANIC:` is only for local call-site justifications.
 
-`// PANIC:` can also sit immediately above an enclosing block. In strict mode,
-one marker block that resolves to multiple panic obligation sites is ambiguous
-and binds to none of them. In `warn` or `allow` mode, the marker is applied
-independently to each site; each callee still checks its own named requirements.
+`// PANIC:` can also sit immediately above an enclosing block. A marker reused
+by multiple panic sites is ambiguous. For safety, one explicit unsafe block is
+one effect group, so a single `// SAFETY:` marker can justify all operations in
+that block; reuse across distinct groups is ambiguous. Each callee still checks
+its own named requirements.
 
 ## Direct Driver
 
@@ -221,8 +229,8 @@ sniff-test-driver --message-format json -- src/lib.rs -C overflow-checks=on
 ```
 
 Direct driver mode follows rustc-driver exit semantics: it returns success when
-rustc succeeds, even if sniff-test emits panic findings. Use the Cargo frontend
-for final workspace aggregation and fail-on-undocumented-panic behavior.
+rustc succeeds, even if sniff-test emits findings. Use the Cargo frontend for
+final workspace aggregation and deny-level effect gating.
 
 ## Checks
 

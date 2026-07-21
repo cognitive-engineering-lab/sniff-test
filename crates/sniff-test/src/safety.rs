@@ -1,10 +1,11 @@
 //! Safety documentation and justification analysis.
 //!
-//! This pass checks that public unsafe functions document a `# Safety`
-//! contract and that unsafe operations — calls and non-call operations alike —
-//! have nearby `// SAFETY:` justifications satisfying any named requirements
-//! listed by the callee. Operation detection lives in the `thir` submodule,
-//! modeled on rustc's own unsafety checker.
+//! For each selected report root, this pass checks that reached public unsafe
+//! functions document a `# Safety` contract and that reached unsafe operations
+//! — calls and non-call operations alike — have nearby `// SAFETY:`
+//! justifications satisfying any named requirements listed by the callee.
+//! Operation detection lives in the `thir` submodule, modeled on rustc's own
+//! unsafety checker.
 
 mod thir;
 
@@ -20,6 +21,7 @@ use crate::contracts::{
     AmbiguousContractRequirements, ContractDocSummary, ContractRequirement, EffectKind,
     contract_doc_summary,
 };
+use crate::effect_tracker::EffectSite;
 use crate::namespace::canonical_namespace;
 use crate::source_markers::{MarkerBlockKey, SafetyMarkerBlock};
 
@@ -38,22 +40,19 @@ pub enum SafetyFinding {
         span: Span,
     },
     CallMissingJustification {
-        caller: DefId,
+        site: EffectSite,
         callee: SafetyCallee,
         call_kind: SafetyCallKind,
-        span: Span,
     },
     CallMissingRequirements {
-        caller: DefId,
+        site: EffectSite,
         callee: SafetyCallee,
         call_kind: SafetyCallKind,
-        span: Span,
         missing_requirements: Vec<SafetyRequirement>,
     },
     OpMissingJustification {
-        caller: DefId,
+        site: EffectSite,
         op: SafetyOpKind,
-        span: Span,
     },
     AmbiguousObligationName {
         caller: DefId,
@@ -73,11 +72,12 @@ impl SafetyFinding {
     pub(crate) fn owner(&self) -> DefId {
         match *self {
             Self::MissingSafetyDocs { def_id, .. } => def_id,
-            Self::CallMissingJustification { caller, .. }
-            | Self::CallMissingRequirements { caller, .. }
-            | Self::OpMissingJustification { caller, .. }
-            | Self::AmbiguousObligationName { caller, .. }
-            | Self::AmbiguousMarker { caller, .. } => caller,
+            Self::CallMissingJustification { site, .. }
+            | Self::CallMissingRequirements { site, .. }
+            | Self::OpMissingJustification { site, .. } => site.owner,
+            Self::AmbiguousObligationName { caller, .. } | Self::AmbiguousMarker { caller, .. } => {
+                caller
+            }
         }
     }
 
@@ -287,17 +287,10 @@ impl SafetyAnalysis {
 }
 
 #[must_use]
-pub(crate) fn analyze_safety(
-    tcx: TyCtxt<'_>,
-    config: &SafetyConfig,
-    reachable_functions: &HashSet<LocalDefId>,
-) -> SafetyAnalysis {
+pub(crate) fn analyze_safety(tcx: TyCtxt<'_>, config: &SafetyConfig) -> SafetyAnalysis {
     let mut analysis = SafetyAnalysis::default();
 
-    for owner in tcx
-        .hir_body_owners()
-        .filter(|owner| reachable_functions.contains(owner))
-    {
+    for owner in tcx.hir_body_owners() {
         if !matches!(tcx.def_kind(owner), DefKind::Fn | DefKind::AssocFn)
             || config.ignores_def(tcx, owner.to_def_id())
         {

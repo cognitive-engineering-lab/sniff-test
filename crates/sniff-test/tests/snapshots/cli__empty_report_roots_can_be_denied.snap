@@ -7,7 +7,7 @@ stdout:
 <empty>
 stderr:
     Checking report-roots v0.1.0 ([FIXTURE])
-error: `[analysis].report-roots = "public"` selected no functions in `report_roots`; no panic roots were analyzed
+error: `[analysis].report-roots = 0 explicit paths` selected no functions in `report_roots`; no effects were analyzed
   |
   = help: update `[analysis].report-roots` to include functions in the current crate
 

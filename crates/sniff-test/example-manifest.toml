@@ -40,7 +40,6 @@ ambiguous-effect-requirement = "deny"
 # Report-root selection problems warn by default.
 empty-report-roots = "warn"
 missing-report-root = "warn"
-ignored-report-root = "warn"
 
 [documentation]
 # Synthetic rustdoc markdown by namespace glob, loaded from TOML files relative

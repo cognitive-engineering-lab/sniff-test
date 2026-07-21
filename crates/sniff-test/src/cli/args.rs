@@ -44,7 +44,7 @@ impl CommonCliArgs {
     name = "cargo-sniff-test",
     bin_name = "cargo sniff-test",
     version,
-    about = "Run sniff-test panic reachability analysis through Cargo",
+    about = "Check panic and safety effect contracts through Cargo",
     args_conflicts_with_subcommands = true,
     after_help = "Cargo arguments after `--` are passed to `cargo check`."
 )]

@@ -13,7 +13,7 @@ use std::collections::{HashMap, HashSet};
 
 use reachability::{
     CallableEdgeInfo, ReachabilityEdge, ReachabilityEdgeId, ReachabilityEdgeKind,
-    ReachabilityGraph, ReachabilityNodeKind, ReachabilitySnapshot, ReachedEdge, ReachedNode,
+    ReachabilityGraph, ReachabilityNodeKind, ReachabilityView, ReachedEdge, ReachedNode,
 };
 use rustc_hir::def_id::{DefId, LocalDefId};
 use rustc_middle::mir::AssertKind;
@@ -27,7 +27,8 @@ use crate::contracts::{
     ContractDocSummary, ContractRequirement, EffectKind, check_contract, contract_doc_summary,
 };
 use crate::effect_tracker::{
-    EffectPathDecision, EffectTrace, ambiguous_marker_uses, classify_effect_path, trace_to_edge,
+    EffectPathDecision, EffectSite, EffectTrace, ambiguous_marker_uses, classify_effect_path,
+    trace_to_edge,
 };
 use crate::namespace::canonical_namespace;
 use crate::source_markers::{
@@ -43,6 +44,8 @@ pub struct PanicAnalysis {
 
 #[derive(Debug, Clone)]
 pub struct PanicEvidence {
+    /// Function body and source span where the effect originates.
+    pub site: EffectSite,
     /// Edge that directly triggered this evidence before report-local adjustment.
     pub edge_id: ReachabilityEdgeId,
     /// Reachability path from the root to the triggering edge.
@@ -111,20 +114,23 @@ impl From<EffectPathDecision> for PanicPathDecision {
 #[must_use]
 pub fn analyze_panic_evidence<'tcx>(
     tcx: TyCtxt<'tcx>,
-    graph: &ReachabilityGraph<'tcx>,
-    result: &ReachabilitySnapshot<'tcx>,
+    view: ReachabilityView<'_, 'tcx>,
     config: &PanicConfig,
 ) -> PanicAnalysis {
-    let view = graph.view(result);
+    let graph = view.graph();
     let root = view.root();
-    let marker_resolution = resolve_panic_markers(tcx, graph, result, config);
-    let ambiguous_names = collect_ambiguous_panic_requirement_names(tcx, graph, result, config);
+    let marker_resolution = resolve_panic_markers(tcx, view, config);
+    let ambiguous_names = collect_ambiguous_panic_requirement_names(tcx, view, config);
     let mut seen_panic_obligations = HashSet::new();
     let mut evidence = view
         .edges()
         .filter_map(|edge| {
             let edge_id = edge.id();
             let kind = classify_edge(tcx, edge, config, &marker_resolution)?;
+            let site = EffectSite {
+                owner: edge.origin().instance()?.def_id(),
+                span: edge.span(),
+            };
             let trace = PanicTrace {
                 edge_ids: trace_to_edge_ids(edge),
             };
@@ -160,6 +166,7 @@ pub fn analyze_panic_evidence<'tcx>(
             }
 
             Some(PanicEvidence {
+                site,
                 edge_id,
                 trace,
                 kind,
@@ -368,11 +375,10 @@ fn panic_doc_summary(tcx: TyCtxt<'_>, def_id: DefId, config: &PanicConfig) -> Pa
 
 fn collect_ambiguous_panic_requirement_names<'tcx>(
     tcx: TyCtxt<'tcx>,
-    graph: &ReachabilityGraph<'tcx>,
-    result: &ReachabilitySnapshot<'tcx>,
+    view: ReachabilityView<'_, 'tcx>,
     config: &PanicConfig,
 ) -> Vec<AmbiguousPanicRequirementName> {
-    let view = graph.view(result);
+    let graph = view.graph();
     let mut seen = HashSet::new();
     let mut ambiguous_names = Vec::new();
     if let Some(def_id) = panic_obligation_node_kind(tcx, view.root().kind(), config) {
@@ -647,11 +653,10 @@ impl From<PanicMarkerBlock> for PanicMarkerCandidate {
 
 fn resolve_panic_markers<'tcx>(
     tcx: TyCtxt<'tcx>,
-    graph: &ReachabilityGraph<'tcx>,
-    result: &ReachabilitySnapshot<'tcx>,
+    view: ReachabilityView<'_, 'tcx>,
     config: &PanicConfig,
 ) -> PanicMarkerResolution {
-    let view = graph.view(result);
+    let graph = view.graph();
     let candidates = view
         .edges()
         .filter_map(|edge| {

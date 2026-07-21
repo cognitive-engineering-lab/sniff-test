@@ -195,8 +195,8 @@ fixture_cases! {
             Case::direct("closures inherit unsafe block justifications");
     }
     "unsafe_const_init" => {
-        unsafe_const_init => Case::cargo("const and static initializers are analyzed");
-        driver_unsafe_const_init => Case::direct("const and static initializers are analyzed");
+        unsafe_const_init => Case::cargo("const and static initializers are skipped");
+        driver_unsafe_const_init => Case::direct("const and static initializers are skipped");
     }
     "node_limit" => {
         node_limit => Case::cargo("halted traversals fail loudly").exit_code(1);
@@ -213,6 +213,8 @@ fixture_cases! {
     }
     "visibility_roots" => {
         visibility_roots => Case::cargo("effective visibility selects roots").exit_code(1);
+        visibility_roots_panic_ignored => Case::cargo("panic ignores do not suppress safety")
+            .args(&["--manifest", "panic-ignore.toml"]);
         driver_visibility_roots => Case::direct("effective visibility selects roots");
     }
     "vendored_dep" => {

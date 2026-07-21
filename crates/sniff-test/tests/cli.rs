@@ -85,9 +85,6 @@ cli_cases! {
         missing_report_root_can_be_denied => Case::new("missing report root deny policy")
             .args(&["--manifest", "deny-missing.toml"])
             .exit_code(1);
-        ignored_report_root_can_be_denied => Case::new("ignored report root deny policy")
-            .args(&["--manifest", "deny-ignored.toml"])
-            .exit_code(1);
         empty_report_roots_can_be_denied => Case::new("empty report roots deny policy")
             .args(&["--manifest", "deny-empty.toml"])
             .exit_code(1);

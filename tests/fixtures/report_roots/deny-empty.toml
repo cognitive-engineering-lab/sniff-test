@@ -1,11 +1,5 @@
 [analysis]
-report-roots = "public"
+report-roots = []
 
 [analysis.lints]
 empty-report-roots = "deny"
-
-[panics]
-ignored-namespaces = [
-    "report_roots::public_panic",
-    "report_roots::public_safe",
-]

@@ -11,7 +11,7 @@ use crate::panics::{
 };
 use reachability::{
     ReachabilityEdgeId, ReachabilityEdgeKind, ReachabilityGraph, ReachabilityNodeKind,
-    ReachabilitySnapshot, ReachabilityView,
+    ReachabilityView,
 };
 use rustc_middle::ty::TyCtxt;
 use rustc_span::Pos;
@@ -20,12 +20,11 @@ use super::report::{render_assert_message, render_node, render_span};
 
 pub(super) fn cached_boundary_findings<'tcx>(
     tcx: TyCtxt<'tcx>,
-    graph: &ReachabilityGraph<'tcx>,
-    result: &ReachabilitySnapshot<'tcx>,
+    view: ReachabilityView<'_, 'tcx>,
     analysis: &PanicAnalysis,
     config: &PanicConfig,
 ) -> Vec<CachedFinding> {
-    let view = graph.view(result);
+    let graph = view.graph();
     let mut findings = analysis
         .evidence
         .iter()
@@ -201,10 +200,8 @@ fn cached_finding_target<'tcx>(
 
 pub(super) fn cached_reachability_graph<'tcx>(
     tcx: TyCtxt<'tcx>,
-    graph: &ReachabilityGraph<'tcx>,
-    result: &ReachabilitySnapshot<'tcx>,
+    view: ReachabilityView<'_, 'tcx>,
 ) -> CachedReachabilityGraph {
-    let view = graph.view(result);
     CachedReachabilityGraph {
         root: view.root().id().index(),
         nodes: view

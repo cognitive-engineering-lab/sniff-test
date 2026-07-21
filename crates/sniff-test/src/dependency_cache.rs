@@ -18,7 +18,7 @@ use crate::config::PanicConfig;
 #[derive(Debug, Clone)]
 pub struct DependencyInput {
     pub name: String,
-    pub path: Option<PathBuf>,
+    pub path: PathBuf,
 }
 
 /// Loaded dependency cache for one rustc invocation.
@@ -45,15 +45,14 @@ impl DependencyAnalysisCache {
         let mut crate_artifacts = HashMap::new();
         let mut functions = HashMap::new();
 
-        for extern_arg in externs {
-            if config.ignores_namespace(&extern_arg.name) {
+        for dependency in externs {
+            // Check the invocation's extern name first: Cargo dependencies can
+            // be renamed independently of their canonical crate names.
+            if config.ignores_namespace(&dependency.name) {
                 continue;
             }
 
-            let artifact_id = extern_arg
-                .path
-                .as_deref()
-                .and_then(artifact_id_from_extern_path);
+            let artifact_id = artifact_id_from_extern_path(&dependency.path);
             let exact_cache_path = artifact_id
                 .as_deref()
                 .map(|id| artifact_cache_path(cache_dir, id));
@@ -73,6 +72,8 @@ impl DependencyAnalysisCache {
             });
 
             if let Some(analysis) = &analysis {
+                // The cache records the canonical crate name, which may differ
+                // from the extern alias checked above.
                 if config.ignores_namespace(&analysis.artifact.crate_name) {
                     continue;
                 }
@@ -93,8 +94,11 @@ impl DependencyAnalysisCache {
                 }
 
                 for function in analysis.functions.values() {
-                    // Incomplete summaries stay loaded even with clean counts:
-                    // their evidence under-approximates.
+                    // A complete summary with no panic evidence can be
+                    // discarded. An incomplete summary cannot be treated as
+                    // clean: analysis may have stopped before reaching panic
+                    // evidence. The function-path check supports ignores more
+                    // specific than either crate-name check above.
                     if (function.is_panic_reachable() || !function.analysis_complete)
                         && !config.ignores_namespace(&function.path)
                     {
@@ -110,7 +114,7 @@ impl DependencyAnalysisCache {
             }
 
             dependencies.push(ResolvedDependency {
-                extern_name: extern_arg.name.clone(),
+                extern_name: dependency.name.clone(),
                 artifact_id,
                 load_error,
             });

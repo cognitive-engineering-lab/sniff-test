@@ -11,6 +11,13 @@ use rustc_span::Span;
 
 use crate::source_markers::MarkerBlockKey;
 
+/// Source-level location of an effect detected inside one function body.
+#[derive(Debug, Clone, Copy)]
+pub struct EffectSite {
+    pub owner: DefId,
+    pub span: Span,
+}
+
 #[derive(Debug)]
 pub(crate) struct AmbiguousMarkerUse<Group> {
     pub(crate) marker_span: Span,

@@ -36,3 +36,4 @@ pub mod safety;
 pub mod source_markers;
 
 pub use cli::{SniffTestArgs, cargo_frontend, driver_main};
+pub use effect_tracker::EffectSite;

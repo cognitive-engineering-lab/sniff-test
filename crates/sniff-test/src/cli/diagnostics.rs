@@ -7,7 +7,7 @@ use crate::panics::{
     AmbiguousPanicMarker, AmbiguousPanicRequirementName, PanicEvidence, PanicEvidenceKind,
     trace_edges_until, trigger_edge_id,
 };
-use crate::report_roots::{MissingReportRoot, MissingRootReason};
+use crate::report_roots::MissingReportRoot;
 use crate::safety::{SafetyCallee, SafetyFinding};
 use reachability::{ReachabilityEdgeId, ReachabilityGraph, ReachabilityNodeKind};
 use rustc_errors::{Diag, EmissionGuarantee};
@@ -622,36 +622,34 @@ pub(super) fn safety_finding_diagnostic(
             })
         }
         SafetyFinding::CallMissingJustification {
-            caller,
+            site,
             callee,
             call_kind,
-            span,
         } => {
-            let caller = canonical_namespace(tcx, *caller);
+            let caller = canonical_namespace(tcx, site.owner);
             let target = callee.name(tcx);
             let call = call_kind.label();
             let message = format!(
                 "{call} to `{target}` in `{caller}` is missing a `// SAFETY:` justification"
             );
-            finding_diagnostic(Some(*span), message, |diag| {
+            finding_diagnostic(Some(site.span), message, |diag| {
                 add_safety_callee_note(diag, tcx, *callee, overrides);
                 diag.help("add a `// SAFETY:` comment above the unsafe block or call site");
             })
         }
         SafetyFinding::CallMissingRequirements {
-            caller,
+            site,
             callee,
             call_kind,
-            span,
             missing_requirements,
         } => {
-            let caller = canonical_namespace(tcx, *caller);
+            let caller = canonical_namespace(tcx, site.owner);
             let target = callee.name(tcx);
             let call = call_kind.label();
             let message = format!(
                 "{call} to `{target}` in `{caller}` does not satisfy all `# Safety` requirements"
             );
-            finding_diagnostic(Some(*span), message, |diag| {
+            finding_diagnostic(Some(site.span), message, |diag| {
                 add_missing_safety_requirement_notes(
                     diag,
                     tcx,
@@ -661,13 +659,13 @@ pub(super) fn safety_finding_diagnostic(
                 );
             })
         }
-        SafetyFinding::OpMissingJustification { caller, op, span } => {
-            let caller = canonical_namespace(tcx, *caller);
+        SafetyFinding::OpMissingJustification { site, op } => {
+            let caller = canonical_namespace(tcx, site.owner);
             let operation = op.label();
             let message = format!(
                 "unsafe operation ({operation}) in `{caller}` is missing a `// SAFETY:` justification"
             );
-            finding_diagnostic(Some(*span), message, |diag| {
+            finding_diagnostic(Some(site.span), message, |diag| {
                 diag.help("add a `// SAFETY:` comment above the unsafe block or operation");
             })
         }
@@ -755,7 +753,7 @@ pub(super) fn empty_report_roots_diagnostic(
     crate_name: &str,
 ) -> FindingDiagnostic {
     let message = format!(
-        "`[analysis].report-roots = {}` selected no functions in `{crate_name}`; no panic roots were analyzed",
+        "`[analysis].report-roots = {}` selected no functions in `{crate_name}`; no effects were analyzed",
         report_roots.description()
     );
     let source_file = tcx.sess.source_map().load_file(manifest_path).ok();
@@ -776,16 +774,7 @@ pub(super) fn missing_report_root_diagnostic(
     root: &MissingReportRoot,
 ) -> FindingDiagnostic {
     let source_file = tcx.sess.source_map().load_file(manifest_path).ok();
-    let (message, help) = match root.reason {
-        MissingRootReason::NotFound => (
-            "configured report root was not found",
-            "remove it or update it to a function in the current crate",
-        ),
-        MissingRootReason::Ignored => (
-            "configured report root is excluded by `[panics].ignored-namespaces`",
-            "remove the root or the ignore pattern covering it",
-        ),
-    };
+    let message = "configured report root was not found";
     let span = source_file
         .as_ref()
         .and_then(|file| config_span(file, root.source_span.clone()));
@@ -796,7 +785,7 @@ pub(super) fn missing_report_root_diagnostic(
     };
     finding_diagnostic(span, message, |diag| {
         diag.note(String::from("configured under `[analysis].report-roots`"));
-        diag.help(help);
+        diag.help("remove it or update it to a function in the current crate");
     })
 }
 
