@@ -16,6 +16,32 @@ error: `ambiguous_safety::read_duplicate` has an ambiguous `# Safety` requiremen
   | ----------------------------------------------------------- `valid_ptr: pointer must reference initialized memory.` normalizes to `valid ptr`
   |
   = note: multiple `# Safety` requirements normalize to `valid ptr`
-  = help: give each requirement a unique name, or set `ambiguous-safety-requirement = "allow"` under `[analysis.lints]`
+  = help: give each requirement a unique name, or set `ambiguous-effect-requirement = "allow"` under `[analysis.lints]`
 
-error: could not compile `ambiguous-safety` (lib) due to 1 previous error
+error: function `ambiguous_safety::reused_macro_marker` has an ambiguous `// SAFETY:` marker
+  --> src/lib.rs:27:1
+   |
+27 | /         // SAFETY: this fixture's operation has no additional requirements.
+28 | |         unsafe { perform() }
+   | |_^
+   |
+note: this safety effect group resolves to the same marker
+  --> src/lib.rs:28:9
+   |
+28 |         unsafe { perform() }
+   |         ^^^^^^^^^^^^^^^^^^^^
+...
+33 |     perform_once!();
+   |     --------------- in this macro invocation
+note: this safety effect group resolves to the same marker
+  --> src/lib.rs:28:9
+   |
+28 |         unsafe { perform() }
+   |         ^^^^^^^^^^^^^^^^^^^^
+...
+34 |     perform_once!();
+   |     --------------- in this macro invocation
+   = help: give each unsafe block or operation its own marker, or set `ambiguous-effect-marker = "allow"` under `[analysis.lints]`
+   = note: this error originates in the macro `perform_once` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error: could not compile `ambiguous-safety` (lib) due to 2 previous errors

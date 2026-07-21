@@ -15,11 +15,16 @@ expression: messages
         "kind": "unsafe-call-missing-justification",
         "level": "warn",
         "reason": "unsafe call to `unsafe_closure_inherit::dangerous` has no `// SAFETY:` justification",
+        "root": "unsafe_closure_inherit::unjustified_closure",
+        "root-kind": "concrete",
         "span": "[FIXTURE]/src/lib.rs:12:13: 12:24",
-        "target": "unsafe_closure_inherit::dangerous"
+        "target": "unsafe_closure_inherit::dangerous",
+        "trace": [
+          "[FIXTURE]/src/lib.rs:12:9: 12:27: unsafe_closure_inherit::unjustified_closure --direct-call-> unsafe_closure_inherit::unjustified_closure::{closure#0}"
+        ]
       }
     ],
-    "format-version": 5,
+    "format-version": 6,
     "reason": "sniff-test-artifact",
     "rustc-version": "[RUSTC_VERSION]",
     "scope": "workspace",

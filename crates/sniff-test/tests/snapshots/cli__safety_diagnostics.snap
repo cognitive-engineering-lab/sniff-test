@@ -7,13 +7,27 @@ stdout:
 <empty>
 stderr:
     Checking safety-requirements v0.1.0 ([FIXTURE])
-warning: public unsafe function `safety_requirements::undocumented_public` is missing `# Safety` docs
-  --> src/lib.rs:33:1
+warning: unsafe call to `safety_requirements::UnsafeGreeter::greet` in `safety_requirements::generic_unsafe_trait_method_missing` does not satisfy all `# Safety` requirements
+   --> src/lib.rs:139:14
+    |
+139 |     unsafe { greeter.greet(ptr) }
+    |              ^^^^^^^^^^^^^^^^^^
+    |
+note: `safety_requirements::UnsafeGreeter::greet` documents `# Safety` here
+   --> src/lib.rs:112:5
+    |
+112 |     unsafe fn greet(&self, ptr: *const u8);
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    = note: missing safety requirement `valid_ptr: pointer must be non-null.`
+    = help: add named bullets under the applicable `// SAFETY:` comment for each missing requirement
+
+warning: unsafe call to `safety_requirements::private_unsafe_no_docs` in `safety_requirements::missing_justification` is missing a `// SAFETY:` justification
+  --> src/lib.rs:90:14
    |
-33 | pub unsafe fn undocumented_public(_ptr: *const u8) -> u8 {
-   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+90 |     unsafe { private_unsafe_no_docs() }
+   |              ^^^^^^^^^^^^^^^^^^^^^^^^
    |
-   = help: document the caller obligations under a `# Safety` section
+   = help: add a `// SAFETY:` comment above the unsafe block or call site
 
 warning: unsafe call to `safety_requirements::read_byte` in `safety_requirements::missing_requirement` does not satisfy all `# Safety` requirements
   --> src/lib.rs:75:14
@@ -44,13 +58,13 @@ note: `safety_requirements::read_byte` documents `# Safety` here
    = note: missing safety requirement `initialized: pointer must reference initialized memory.`
    = help: add named bullets under the applicable `// SAFETY:` comment for each missing requirement
 
-warning: unsafe call to `safety_requirements::private_unsafe_no_docs` in `safety_requirements::missing_justification` is missing a `// SAFETY:` justification
-  --> src/lib.rs:90:14
+warning: public unsafe function `safety_requirements::undocumented_public` is missing `# Safety` docs
+  --> src/lib.rs:33:1
    |
-90 |     unsafe { private_unsafe_no_docs() }
-   |              ^^^^^^^^^^^^^^^^^^^^^^^^
+33 | pub unsafe fn undocumented_public(_ptr: *const u8) -> u8 {
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
    |
-   = help: add a `// SAFETY:` comment above the unsafe block or call site
+   = help: document the caller obligations under a `# Safety` section
 
 warning: unsafe call to `unsafe function pointer` in `safety_requirements::unsafe_fn_pointer_missing_justification` is missing a `// SAFETY:` justification
    --> src/lib.rs:103:14
@@ -59,20 +73,6 @@ warning: unsafe call to `unsafe function pointer` in `safety_requirements::unsaf
     |              ^^^^^^^^^^
     |
     = help: add a `// SAFETY:` comment above the unsafe block or call site
-
-warning: unsafe call to `safety_requirements::UnsafeGreeter::greet` in `safety_requirements::generic_unsafe_trait_method_missing` does not satisfy all `# Safety` requirements
-   --> src/lib.rs:139:14
-    |
-139 |     unsafe { greeter.greet(ptr) }
-    |              ^^^^^^^^^^^^^^^^^^
-    |
-note: `safety_requirements::UnsafeGreeter::greet` documents `# Safety` here
-   --> src/lib.rs:112:5
-    |
-112 |     unsafe fn greet(&self, ptr: *const u8);
-    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-    = note: missing safety requirement `valid_ptr: pointer must be non-null.`
-    = help: add named bullets under the applicable `// SAFETY:` comment for each missing requirement
 
 warning: `safety-requirements` (lib) generated 6 warnings
     Finished `release` profile [optimized] target(s) in [TIME]

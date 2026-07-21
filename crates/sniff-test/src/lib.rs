@@ -28,6 +28,7 @@ mod cli;
 pub mod config;
 mod contracts;
 pub mod dependency_cache;
+mod effect_tracker;
 pub mod namespace;
 pub mod panics;
 pub mod report_roots;

@@ -67,7 +67,7 @@ expression: messages
         ]
       }
     ],
-    "format-version": 5,
+    "format-version": 6,
     "reason": "sniff-test-artifact",
     "rustc-version": "[RUSTC_VERSION]",
     "scope": "workspace",

@@ -51,9 +51,8 @@ marker-probing = "macro-definition-first" # macro-definition-first | source-call
 
 [analysis.lints]
 analysis-incomplete = "deny"
-ambiguous-panic-marker = "deny" # deny | warn | allow
-ambiguous-panic-requirement = "deny"
-ambiguous-safety-requirement = "deny"
+ambiguous-effect-marker = "deny" # deny | warn | allow
+ambiguous-effect-requirement = "deny"
 empty-report-roots = "warn"
 missing-report-root = "warn"
 ignored-report-root = "warn"
@@ -186,8 +185,7 @@ conditions may be empty when the name is enough, but call-site satisfaction
 bullets must include justification text. Names are matched case-insensitively,
 with punctuation and whitespace treated as separators, so `bounded[total]` and
 `bounded total` match. Duplicate names inside one documentation section are ambiguous under
-the matching `ambiguous-panic-requirement = "deny"` or
-`ambiguous-safety-requirement = "deny"` policy: a single marker bullet
+the `ambiguous-effect-requirement = "deny"` policy: a single marker bullet
 cannot prove two distinct requirements with the same normalized name. Prose and
 labels such as `Requirements:` are allowed before the first bullet. Plain
 comment lines following a requirement bullet in the same contiguous block are

@@ -202,7 +202,7 @@ pub(super) fn ambiguous_obligation_marker_diagnostic<'tcx>(
             );
         }
         diag.help(
-            "move the marker directly above one obligation, split it into separate markers, or set `ambiguous-panic-marker = \"allow\"` under `[analysis.lints]`",
+            "move the marker directly above one obligation, split it into separate markers, or set `ambiguous-effect-marker = \"allow\"` under `[analysis.lints]`",
         );
     })
 }
@@ -235,7 +235,7 @@ pub(super) fn ambiguous_obligation_name_diagnostic(
             );
         }
         diag.help(
-            "give each requirement a unique name, or set `ambiguous-panic-requirement = \"allow\"` under `[analysis.lints]`",
+            "give each requirement a unique name, or set `ambiguous-effect-requirement = \"allow\"` under `[analysis.lints]`",
         );
     })
 }
@@ -672,6 +672,7 @@ pub(super) fn safety_finding_diagnostic(
             })
         }
         SafetyFinding::AmbiguousObligationName {
+            caller: _,
             def_id,
             normalized_name,
             requirements,
@@ -695,11 +696,37 @@ pub(super) fn safety_finding_diagnostic(
                     );
                 }
                 diag.help(
-                        "give each requirement a unique name, or set `ambiguous-safety-requirement = \"allow\"` under `[analysis.lints]`",
-                    );
+                        "give each requirement a unique name, or set `ambiguous-effect-requirement = \"allow\"` under `[analysis.lints]`",
+                );
             })
         }
+        SafetyFinding::AmbiguousMarker {
+            caller,
+            marker_span,
+            effect_spans,
+        } => ambiguous_safety_marker_diagnostic(tcx, *caller, *marker_span, effect_spans),
     }
+}
+
+fn ambiguous_safety_marker_diagnostic(
+    tcx: TyCtxt<'_>,
+    caller: DefId,
+    marker_span: Span,
+    effect_spans: &[Span],
+) -> FindingDiagnostic {
+    let caller = canonical_namespace(tcx, caller);
+    let message = format!("function `{caller}` has an ambiguous `// SAFETY:` marker");
+    finding_diagnostic(Some(marker_span), message, |diag| {
+        for span in effect_spans {
+            diag.span_note(
+                *span,
+                String::from("this safety effect group resolves to the same marker"),
+            );
+        }
+        diag.help(
+            "give each unsafe block or operation its own marker, or set `ambiguous-effect-marker = \"allow\"` under `[analysis.lints]`",
+        );
+    })
 }
 
 fn add_missing_safety_requirement_notes(

@@ -11,18 +11,45 @@ expression: messages
     "dependencies": [],
     "findings": [
       {
+        "effect": "safety",
         "function": "ambiguous_safety::read_duplicate",
-        "kind": "ambiguous-safety-requirement",
+        "kind": "ambiguous-effect-requirement",
         "level": "deny",
         "reason": "`ambiguous_safety::read_duplicate` has multiple # Safety requirements named `valid ptr`",
         "requirements": [
           "valid_ptr: pointer must be non-null.",
           "valid_ptr: pointer must reference initialized memory."
         ],
+        "root": "ambiguous_safety::duplicate_safety_marker",
+        "root-kind": "concrete",
         "span": "[FIXTURE]/src/lib.rs:7:1: 7:43"
+      },
+      {
+        "effect": "safety",
+        "function": "ambiguous_safety::read_duplicate",
+        "kind": "ambiguous-effect-requirement",
+        "level": "deny",
+        "reason": "`ambiguous_safety::read_duplicate` has multiple # Safety requirements named `valid ptr`",
+        "requirements": [
+          "valid_ptr: pointer must be non-null.",
+          "valid_ptr: pointer must reference initialized memory."
+        ],
+        "root": "ambiguous_safety::read_duplicate",
+        "root-kind": "concrete",
+        "span": "[FIXTURE]/src/lib.rs:7:1: 7:43"
+      },
+      {
+        "effect": "safety",
+        "function": "ambiguous_safety::reused_macro_marker",
+        "kind": "ambiguous-effect-marker",
+        "level": "deny",
+        "reason": "one `// SAFETY:` marker applies to 2 safety effect groups",
+        "root": "ambiguous_safety::reused_macro_marker",
+        "root-kind": "concrete",
+        "span": "[FIXTURE]/src/lib.rs:27:1: 28:1"
       }
     ],
-    "format-version": 5,
+    "format-version": 6,
     "reason": "sniff-test-artifact",
     "rustc-version": "[RUSTC_VERSION]",
     "scope": "workspace",

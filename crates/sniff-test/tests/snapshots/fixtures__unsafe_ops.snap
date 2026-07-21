@@ -11,42 +11,52 @@ expression: messages
     "dependencies": [],
     "findings": [
       {
+        "function": "unsafe_ops::asm_unjustified",
+        "kind": "unsafe-op-missing-justification",
+        "level": "warn",
+        "reason": "unsafe operation (inline assembly) has no `// SAFETY:` justification",
+        "root": "unsafe_ops::asm_unjustified",
+        "root-kind": "concrete",
+        "span": "src/lib.rs:49:9: 49:20"
+      },
+      {
         "function": "unsafe_ops::deref_unjustified",
         "kind": "unsafe-op-missing-justification",
         "level": "warn",
         "reason": "unsafe operation (raw pointer dereference) has no `// SAFETY:` justification",
+        "root": "unsafe_ops::deref_unjustified",
+        "root-kind": "concrete",
         "span": "src/lib.rs:18:14: 18:18"
-      },
-      {
-        "function": "unsafe_ops::mutable_static_unjustified",
-        "kind": "unsafe-op-missing-justification",
-        "level": "warn",
-        "reason": "unsafe operation (mutable static access) has no `// SAFETY:` justification",
-        "span": "src/lib.rs:27:14: 27:21"
       },
       {
         "function": "unsafe_ops::extern_static_unjustified",
         "kind": "unsafe-op-missing-justification",
         "level": "warn",
         "reason": "unsafe operation (extern static access) has no `// SAFETY:` justification",
+        "root": "unsafe_ops::extern_static_unjustified",
+        "root-kind": "concrete",
         "span": "src/lib.rs:36:14: 36:22"
+      },
+      {
+        "function": "unsafe_ops::mutable_static_unjustified",
+        "kind": "unsafe-op-missing-justification",
+        "level": "warn",
+        "reason": "unsafe operation (mutable static access) has no `// SAFETY:` justification",
+        "root": "unsafe_ops::mutable_static_unjustified",
+        "root-kind": "concrete",
+        "span": "src/lib.rs:27:14: 27:21"
       },
       {
         "function": "unsafe_ops::union_read_unjustified",
         "kind": "unsafe-op-missing-justification",
         "level": "warn",
         "reason": "unsafe operation (union field access) has no `// SAFETY:` justification",
+        "root": "unsafe_ops::union_read_unjustified",
+        "root-kind": "concrete",
         "span": "src/lib.rs:40:14: 40:23"
-      },
-      {
-        "function": "unsafe_ops::asm_unjustified",
-        "kind": "unsafe-op-missing-justification",
-        "level": "warn",
-        "reason": "unsafe operation (inline assembly) has no `// SAFETY:` justification",
-        "span": "src/lib.rs:49:9: 49:20"
       }
     ],
-    "format-version": 5,
+    "format-version": 6,
     "reason": "sniff-test-artifact",
     "rustc-version": "[RUSTC_VERSION]",
     "scope": "workspace",

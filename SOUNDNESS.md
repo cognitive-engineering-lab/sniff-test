@@ -102,8 +102,7 @@ a call split across lines in ways rustfmt does not produce — can anchor a mark
 to a different link than the author intended. Named requirement bullets are
 matched by normalized name and are format-insensitive, but duplicate names in
 one documentation section are ambiguous under the default
-`ambiguous-panic-requirement = "deny"` or
-`ambiguous-safety-requirement = "deny"` policy.
+`ambiguous-effect-requirement = "deny"` policy.
 
 ## Latent hazards (not reachable through the shipped tool)
 

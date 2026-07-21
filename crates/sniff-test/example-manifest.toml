@@ -35,9 +35,8 @@ node-limit = 4096
 [analysis.lints]
 analysis-incomplete = "deny"
 # Use `warn` while auditing, or `allow` to accept squashed evidence.
-ambiguous-panic-marker = "deny"
-ambiguous-panic-requirement = "deny"
-ambiguous-safety-requirement = "deny"
+ambiguous-effect-marker = "deny"
+ambiguous-effect-requirement = "deny"
 # Report-root selection problems warn by default.
 empty-report-roots = "warn"
 missing-report-root = "warn"

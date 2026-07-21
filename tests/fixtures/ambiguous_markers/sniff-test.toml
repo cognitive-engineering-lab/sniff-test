@@ -5,9 +5,8 @@ report-roots = [
 ]
 
 [analysis.lints]
-ambiguous-panic-marker = "allow"
-ambiguous-panic-requirement = "allow"
-ambiguous-safety-requirement = "allow"
+ambiguous-effect-marker = "allow"
+ambiguous-effect-requirement = "allow"
 
 [panics]
 panic-sink-namespaces = [

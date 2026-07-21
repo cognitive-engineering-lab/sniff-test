@@ -12,17 +12,18 @@ use crate::config::{
     AnalysisConfig, CallableEdgeAttribution, PanicBoundaryPolicy, PanicConfig, SniffTestConfig,
 };
 use crate::dependency_cache::{DependencyAnalysisCache, DependencyInput};
+use crate::effect_tracker::{EffectPathDecision, EffectTrace, classify_effect_path, trace_to_node};
 use crate::namespace::{canonical_namespace, stable_def_path_hash};
 use crate::panics::{PanicAnalysis, PanicEvidence, PanicPathDecision, analyze_panic_evidence};
 use crate::report_roots::{
     MissingReportRoot, ReportRoot, ReportRootKind, ReportRootSelection, select_report_roots,
 };
-use crate::safety::{SafetyAnalysis, analyze_safety};
+use crate::safety::{analyze_safety, safety_doc_summary};
 use anyhow::Context;
 use reachability::{
     ReachabilityContext, ReachabilityControl, ReachabilityEdge, ReachabilityEdgeKind,
-    ReachabilityGraph, ReachabilityHooks, ReachabilityIndex, ReachabilityOptions,
-    ReachabilitySnapshot, ReachabilityView,
+    ReachabilityGraph, ReachabilityHooks, ReachabilityIndex, ReachabilityNodeKind,
+    ReachabilityOptions, ReachabilitySnapshot, ReachabilityView,
 };
 use rustc_hir::def_id::{DefId, LOCAL_CRATE};
 use rustc_middle::ty::{Instance, TyCtxt};
@@ -34,7 +35,7 @@ use super::cache_encode::{
 };
 use super::diagnostics::emit_finding_diagnostic;
 use super::findings::{
-    Finding, FindingKind, collect_report_root_findings, collect_safety_findings, resolve_findings,
+    Finding, FindingKind, collect_report_root_findings, resolve_findings, safety_finding_report,
 };
 use super::plugin::rustc_version;
 use super::report::{
@@ -119,6 +120,11 @@ pub(crate) fn analyze_crate(
     let selection_has_roots = !selection.roots.is_empty();
     let emit_diagnostics = args.message_format == args::MessageFormat::Human
         && output_scope == CrateOutputScope::Workspace;
+    let safety_findings = if output_scope == CrateOutputScope::Workspace {
+        analyze_safety_roots(tcx, &selection.roots, &config.analysis, &config.safety)
+    } else {
+        Vec::new()
+    };
     let root_analysis = analyze_report_roots(
         tcx,
         selection,
@@ -128,12 +134,7 @@ pub(crate) fn analyze_crate(
         config.analysis.show_full_stack_trace,
     );
     let empty_report_roots = !selection_has_roots && root_analysis.missing_roots.is_empty();
-    let safety_analysis = if output_scope == CrateOutputScope::Workspace {
-        analyze_safety(tcx, &config.safety)
-    } else {
-        SafetyAnalysis::default()
-    };
-    let analysis_findings = collect_report_root_findings(
+    let mut analysis_findings = collect_report_root_findings(
         tcx,
         &args.manifest_path(),
         empty_report_roots,
@@ -141,13 +142,13 @@ pub(crate) fn analyze_crate(
         &config.analysis.report_roots,
         &crate_name,
     );
+    analysis_findings.extend(safety_findings);
     let analysis = AnalysisArtifact::new(
         tcx,
         output_scope,
         &dependency_cache,
         config,
         root_analysis,
-        safety_analysis,
         analysis_findings,
     );
     if emit_diagnostics {
@@ -172,6 +173,114 @@ pub(crate) fn analyze_crate(
         analysis.report.scope == CrateOutputScope::Workspace
             && analysis.report.has_denied_findings(),
     );
+}
+
+fn analyze_safety_roots<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    roots: &[ReportRoot<'tcx>],
+    analysis_config: &AnalysisConfig,
+    safety_config: &crate::config::SafetyConfig,
+) -> Vec<Finding> {
+    let mut reachability = ReachabilityIndex::new(tcx);
+    let mut snapshots = Vec::with_capacity(roots.len());
+    for root in roots {
+        let mut hooks = reachability::NoopReachabilityHooks;
+        let snapshot = reachability.query(
+            root.reachability_root(),
+            &mut hooks,
+            reachability_options(analysis_config, false),
+        );
+        snapshots.push(snapshot);
+    }
+    let graph = reachability.graph();
+    let reachable = snapshots
+        .iter()
+        .flat_map(|snapshot| graph.view(snapshot).nodes())
+        .filter_map(|node| node.instance()?.def_id().as_local())
+        .collect();
+    let analysis = analyze_safety(tcx, safety_config, &reachable);
+    let mut findings = Vec::new();
+
+    for (root, snapshot) in roots.iter().zip(&snapshots) {
+        let view = graph.view(snapshot);
+        for safety_finding in &analysis.findings {
+            if safety_finding.is_root_contract_finding() && safety_finding.owner() != root.def_id()
+            {
+                continue;
+            }
+            let Some(owner) = view.nodes().find(|node| {
+                node.instance()
+                    .is_some_and(|instance| instance.def_id() == safety_finding.owner())
+            }) else {
+                continue;
+            };
+            let trace = EffectTrace {
+                edge_ids: trace_to_node(owner),
+            };
+            if safety_finding.is_effect_site()
+                && !safety_path_is_raw(tcx, graph, view.root(), &trace, safety_config)
+            {
+                continue;
+            }
+
+            let mut finding = safety_finding_report(
+                tcx,
+                safety_finding.clone(),
+                &safety_config.documentation_overrides,
+            );
+            finding.root = Some(canonical_namespace(tcx, root.def_id()));
+            finding.root_kind = Some(root.kind());
+            finding.trace = super::report::render_trace(tcx, graph, &trace.edge_ids);
+            findings.push(finding);
+        }
+
+        for safety_finding in analysis.ambiguous_marker_findings(root.def_id(), |owner_id| {
+            let Some(owner) = view.nodes().find(|node| {
+                node.instance()
+                    .is_some_and(|instance| instance.def_id() == owner_id)
+            }) else {
+                return false;
+            };
+            safety_path_is_raw(
+                tcx,
+                graph,
+                view.root(),
+                &EffectTrace {
+                    edge_ids: trace_to_node(owner),
+                },
+                safety_config,
+            )
+        }) {
+            let mut finding =
+                safety_finding_report(tcx, safety_finding, &safety_config.documentation_overrides);
+            finding.root = Some(canonical_namespace(tcx, root.def_id()));
+            finding.root_kind = Some(root.kind());
+            findings.push(finding);
+        }
+    }
+
+    findings
+}
+
+fn safety_path_is_raw<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    graph: &ReachabilityGraph<'tcx>,
+    root: reachability::ReachedNode<'_, 'tcx>,
+    trace: &EffectTrace,
+    config: &crate::config::SafetyConfig,
+) -> bool {
+    matches!(
+        classify_effect_path(graph, root, trace, |node| {
+            let ReachabilityNodeKind::Instance(instance) = node else {
+                return None;
+            };
+            let def_id = instance.def_id();
+            (config.ignores_def(tcx, def_id)
+                || safety_doc_summary(tcx, def_id, &config.documentation_overrides).has_docs)
+                .then_some(def_id)
+        }),
+        EffectPathDecision::RawEffect
+    )
 }
 
 fn emit_report_and_outcome(
@@ -249,7 +358,6 @@ impl AnalysisArtifact {
         dependency_cache: &DependencyAnalysisCache,
         config: &SniffTestConfig,
         root_analysis: RootAnalysis,
-        safety_analysis: SafetyAnalysis,
         mut findings: Vec<Finding>,
     ) -> Self {
         let dependencies = dependency_cache.resolved_dependencies();
@@ -257,11 +365,6 @@ impl AnalysisArtifact {
         let tool_version = env!("CARGO_PKG_VERSION").to_owned();
         let rustc_version = rustc_version();
         findings.extend(root_analysis.findings);
-        findings.extend(collect_safety_findings(
-            tcx,
-            safety_analysis,
-            &config.safety.documentation_overrides,
-        ));
         let findings = resolve_findings(findings, config);
         let report = AnalysisArtifactReport {
             reason: String::from("sniff-test-artifact"),

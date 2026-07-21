@@ -300,9 +300,8 @@ pub enum MarkerProbing {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "kebab-case", deny_unknown_fields, default)]
 pub struct AnalysisLintConfig {
-    pub ambiguous_panic_marker: LintLevel,
-    pub ambiguous_panic_requirement: LintLevel,
-    pub ambiguous_safety_requirement: LintLevel,
+    pub ambiguous_effect_marker: LintLevel,
+    pub ambiguous_effect_requirement: LintLevel,
     pub analysis_incomplete: LintLevel,
     pub empty_report_roots: LintLevel,
     pub missing_report_root: LintLevel,
@@ -312,9 +311,8 @@ pub struct AnalysisLintConfig {
 impl Default for AnalysisLintConfig {
     fn default() -> Self {
         Self {
-            ambiguous_panic_marker: LintLevel::Deny,
-            ambiguous_panic_requirement: LintLevel::Deny,
-            ambiguous_safety_requirement: LintLevel::Deny,
+            ambiguous_effect_marker: LintLevel::Deny,
+            ambiguous_effect_requirement: LintLevel::Deny,
             // A truncated traversal proves nothing about the missing region.
             analysis_incomplete: LintLevel::Deny,
             empty_report_roots: LintLevel::Warn,
@@ -1040,9 +1038,8 @@ mod tests {
         let config = r#"
             [analysis.lints]
             analysis-incomplete = "warn"
-            ambiguous-panic-marker = "allow"
-            ambiguous-panic-requirement = "warn"
-            ambiguous-safety-requirement = "allow"
+            ambiguous-effect-marker = "allow"
+            ambiguous-effect-requirement = "warn"
             empty-report-roots = "deny"
             missing-report-root = "allow"
             ignored-report-root = "deny"
@@ -1052,16 +1049,12 @@ mod tests {
 
         assert_eq!(parsed.analysis.lints.analysis_incomplete, LintLevel::Warn);
         assert_eq!(
-            parsed.analysis.lints.ambiguous_panic_marker,
+            parsed.analysis.lints.ambiguous_effect_marker,
             LintLevel::Allow
         );
         assert_eq!(
-            parsed.analysis.lints.ambiguous_panic_requirement,
+            parsed.analysis.lints.ambiguous_effect_requirement,
             LintLevel::Warn
-        );
-        assert_eq!(
-            parsed.analysis.lints.ambiguous_safety_requirement,
-            LintLevel::Allow
         );
         assert_eq!(parsed.analysis.lints.empty_report_roots, LintLevel::Deny);
         assert_eq!(parsed.analysis.lints.missing_report_root, LintLevel::Allow);
@@ -1082,6 +1075,18 @@ mod tests {
             (
                 "[analysis]\ncallable-edge-attribution = \"cast-sites\"",
                 "cast-sites",
+            ),
+            (
+                "[analysis.lints]\nambiguous-panic-marker = \"allow\"",
+                "ambiguous-panic-marker",
+            ),
+            (
+                "[analysis.lints]\nambiguous-panic-requirement = \"allow\"",
+                "ambiguous-panic-requirement",
+            ),
+            (
+                "[analysis.lints]\nambiguous-safety-requirement = \"allow\"",
+                "ambiguous-safety-requirement",
             ),
             ("[panics.lints]\nmissing-docs = \"allow\"", "missing-docs"),
             (
@@ -1130,7 +1135,7 @@ mod tests {
 
         assert_eq!(parsed.analysis.lints.empty_report_roots, LintLevel::Deny);
         assert_eq!(
-            parsed.analysis.lints.ambiguous_panic_marker,
+            parsed.analysis.lints.ambiguous_effect_marker,
             LintLevel::Deny
         );
         assert_eq!(parsed.panics.lints.panic_invocation, LintLevel::Allow);
@@ -1188,9 +1193,8 @@ mod tests {
             MarkerProbing::MacroDefinitionFirst
         );
         let lints = AnalysisConfig::default().lints;
-        assert_eq!(lints.ambiguous_panic_marker, LintLevel::Deny);
-        assert_eq!(lints.ambiguous_panic_requirement, LintLevel::Deny);
-        assert_eq!(lints.ambiguous_safety_requirement, LintLevel::Deny);
+        assert_eq!(lints.ambiguous_effect_marker, LintLevel::Deny);
+        assert_eq!(lints.ambiguous_effect_requirement, LintLevel::Deny);
         assert_eq!(lints.analysis_incomplete, LintLevel::Deny,);
         assert_eq!(lints.empty_report_roots, LintLevel::Warn);
         assert_eq!(lints.missing_report_root, LintLevel::Warn);

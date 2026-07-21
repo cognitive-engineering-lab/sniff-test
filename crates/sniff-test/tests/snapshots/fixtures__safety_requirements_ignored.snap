@@ -11,14 +11,6 @@ expression: messages
     "dependencies": [],
     "findings": [
       {
-        "function": "safety_requirements::unsafe_fn_pointer_missing_justification",
-        "kind": "unsafe-call-missing-justification",
-        "level": "warn",
-        "reason": "unsafe call to `unsafe function pointer` has no `// SAFETY:` justification",
-        "span": "src/lib.rs:103:14: 103:24",
-        "target": "unsafe function pointer"
-      },
-      {
         "function": "safety_requirements::generic_unsafe_trait_method_missing",
         "kind": "unsafe-call-missing-requirements",
         "level": "warn",
@@ -26,11 +18,23 @@ expression: messages
           "valid_ptr: pointer must be non-null."
         ],
         "reason": "unsafe call to `safety_requirements::UnsafeGreeter::greet` does not satisfy all # Safety requirements",
+        "root": "safety_requirements::generic_unsafe_trait_method_missing",
+        "root-kind": "generic",
         "span": "src/lib.rs:139:14: 139:32",
         "target": "safety_requirements::UnsafeGreeter::greet"
+      },
+      {
+        "function": "safety_requirements::unsafe_fn_pointer_missing_justification",
+        "kind": "unsafe-call-missing-justification",
+        "level": "warn",
+        "reason": "unsafe call to `unsafe function pointer` has no `// SAFETY:` justification",
+        "root": "safety_requirements::unsafe_fn_pointer_missing_justification",
+        "root-kind": "concrete",
+        "span": "src/lib.rs:103:14: 103:24",
+        "target": "unsafe function pointer"
       }
     ],
-    "format-version": 5,
+    "format-version": 6,
     "reason": "sniff-test-artifact",
     "rustc-version": "[RUSTC_VERSION]",
     "scope": "workspace",

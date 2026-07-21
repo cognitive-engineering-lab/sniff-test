@@ -19,3 +19,17 @@ pub fn duplicate_safety_marker() -> u8 {
     // - valid_ptr: pointer was created from a live reference.
     unsafe { read_duplicate(ptr.as_ptr()) }
 }
+
+unsafe fn perform() {}
+
+macro_rules! perform_once {
+    () => {{
+        // SAFETY: this fixture's operation has no additional requirements.
+        unsafe { perform() }
+    }};
+}
+
+pub fn reused_macro_marker() {
+    perform_once!();
+    perform_once!();
+}

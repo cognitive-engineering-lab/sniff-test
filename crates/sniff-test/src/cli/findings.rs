@@ -3,10 +3,11 @@
 use std::path::Path;
 
 use crate::config::{ContractDocOverrides, LintLevel, ReportRootSet, SniffTestConfig};
+use crate::contracts::EffectKind;
 use crate::namespace::canonical_namespace;
 use crate::panics::PanicEvidenceKind;
 use crate::report_roots::{MissingReportRoot, MissingRootReason, ReportRootKind};
-use crate::safety::{SafetyAnalysis, SafetyCallKind, SafetyFinding, SafetyRequirement};
+use crate::safety::{SafetyCallKind, SafetyFinding, SafetyRequirement};
 use rustc_middle::ty::TyCtxt;
 use rustc_span::Span;
 use serde::Serialize;
@@ -20,6 +21,8 @@ use super::report::render_span;
 #[serde(rename_all = "kebab-case")]
 pub(crate) struct Finding {
     pub(crate) kind: FindingKind,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) effect: Option<EffectKind>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) root: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -45,6 +48,7 @@ impl Finding {
     pub(crate) fn new(kind: FindingKind, reason: String, diagnostic: FindingDiagnostic) -> Self {
         Self {
             kind,
+            effect: None,
             root: None,
             root_kind: None,
             function: None,
@@ -56,6 +60,11 @@ impl Finding {
             requirements: Vec::new(),
             diagnostic,
         }
+    }
+
+    pub(crate) fn with_effect(mut self, effect: EffectKind) -> Self {
+        self.effect = Some(effect);
+        self
     }
 }
 
@@ -105,8 +114,8 @@ pub(crate) enum FindingKind {
     DocumentedPanic,
     TrustedPanic,
     IndirectCallBoundary,
-    AmbiguousPanicMarker,
-    AmbiguousPanicRequirement,
+    AmbiguousEffectMarker,
+    AmbiguousEffectRequirement,
     AnalysisIncomplete,
     EmptyReportRoots,
     MissingReportRoot,
@@ -117,7 +126,6 @@ pub(crate) enum FindingKind {
     UnsafeOpMissingJustification,
     SafetyObligationMissingJustification,
     SafetyObligationMissingRequirements,
-    AmbiguousSafetyRequirement,
 }
 
 impl FindingKind {
@@ -138,8 +146,8 @@ impl FindingKind {
             Self::DocumentedPanic => config.panics.lints.documented_panic,
             Self::TrustedPanic => config.panics.lints.trusted_panic,
             Self::IndirectCallBoundary => config.panics.lints.indirect_call_boundary,
-            Self::AmbiguousPanicMarker => config.analysis.lints.ambiguous_panic_marker,
-            Self::AmbiguousPanicRequirement => config.analysis.lints.ambiguous_panic_requirement,
+            Self::AmbiguousEffectMarker => config.analysis.lints.ambiguous_effect_marker,
+            Self::AmbiguousEffectRequirement => config.analysis.lints.ambiguous_effect_requirement,
             Self::AnalysisIncomplete => config.analysis.lints.analysis_incomplete,
             Self::EmptyReportRoots => config.analysis.lints.empty_report_roots,
             Self::MissingReportRoot => config.analysis.lints.missing_report_root,
@@ -160,7 +168,6 @@ impl FindingKind {
             Self::SafetyObligationMissingRequirements => {
                 config.safety.lints.safety_obligation_missing_requirements
             }
-            Self::AmbiguousSafetyRequirement => config.analysis.lints.ambiguous_safety_requirement,
         }
     }
 }
@@ -209,23 +216,11 @@ pub(crate) fn collect_report_root_findings(
     findings
 }
 
-pub(crate) fn collect_safety_findings(
-    tcx: TyCtxt<'_>,
-    analysis: SafetyAnalysis,
-    overrides: &ContractDocOverrides,
-) -> Vec<Finding> {
-    analysis
-        .findings
-        .into_iter()
-        .map(|finding| safety_finding_report(tcx, finding, overrides))
-        .collect()
-}
-
 #[allow(
     clippy::too_many_lines,
     reason = "keeping all finding variants together makes their output mapping easier to compare"
 )]
-fn safety_finding_report(
+pub(crate) fn safety_finding_report(
     tcx: TyCtxt<'_>,
     finding: SafetyFinding,
     overrides: &ContractDocOverrides,
@@ -313,6 +308,7 @@ fn safety_finding_report(
             }
         }
         SafetyFinding::AmbiguousObligationName {
+            caller: _,
             def_id,
             normalized_name,
             requirements,
@@ -327,14 +323,32 @@ fn safety_finding_report(
                 span: Some(render_span(tcx, span)),
                 requirements,
                 ..Finding::new(
-                    FindingKind::AmbiguousSafetyRequirement,
+                    FindingKind::AmbiguousEffectRequirement,
                     format!(
                         "`{function}` has multiple # Safety requirements named `{normalized_name}`"
                     ),
                     diagnostic,
                 )
+                .with_effect(EffectKind::Safety)
             }
         }
+        SafetyFinding::AmbiguousMarker {
+            caller,
+            marker_span,
+            effect_spans,
+        } => Finding {
+            function: Some(canonical_namespace(tcx, caller)),
+            span: Some(render_span(tcx, marker_span)),
+            ..Finding::new(
+                FindingKind::AmbiguousEffectMarker,
+                format!(
+                    "one `// SAFETY:` marker applies to {} safety effect groups",
+                    effect_spans.len()
+                ),
+                diagnostic,
+            )
+            .with_effect(EffectKind::Safety)
+        },
     }
 }
 #[cfg(test)]

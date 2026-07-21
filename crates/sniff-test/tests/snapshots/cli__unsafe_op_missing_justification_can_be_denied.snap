@@ -7,19 +7,19 @@ stdout:
 <empty>
 stderr:
     Checking unsafe-ops v0.1.0 ([FIXTURE])
+error: unsafe operation (inline assembly) in `unsafe_ops::asm_unjustified` is missing a `// SAFETY:` justification
+  --> src/lib.rs:49:9
+   |
+49 |         asm!("nop");
+   |         ^^^^^^^^^^^
+   |
+   = help: add a `// SAFETY:` comment above the unsafe block or operation
+
 error: unsafe operation (raw pointer dereference) in `unsafe_ops::deref_unjustified` is missing a `// SAFETY:` justification
   --> src/lib.rs:18:14
    |
 18 |     unsafe { *ptr }
    |              ^^^^
-   |
-   = help: add a `// SAFETY:` comment above the unsafe block or operation
-
-error: unsafe operation (mutable static access) in `unsafe_ops::mutable_static_unjustified` is missing a `// SAFETY:` justification
-  --> src/lib.rs:27:14
-   |
-27 |     unsafe { COUNTER }
-   |              ^^^^^^^
    |
    = help: add a `// SAFETY:` comment above the unsafe block or operation
 
@@ -31,19 +31,19 @@ error: unsafe operation (extern static access) in `unsafe_ops::extern_static_unj
    |
    = help: add a `// SAFETY:` comment above the unsafe block or operation
 
+error: unsafe operation (mutable static access) in `unsafe_ops::mutable_static_unjustified` is missing a `// SAFETY:` justification
+  --> src/lib.rs:27:14
+   |
+27 |     unsafe { COUNTER }
+   |              ^^^^^^^
+   |
+   = help: add a `// SAFETY:` comment above the unsafe block or operation
+
 error: unsafe operation (union field access) in `unsafe_ops::union_read_unjustified` is missing a `// SAFETY:` justification
   --> src/lib.rs:40:14
    |
 40 |     unsafe { bits.word }
    |              ^^^^^^^^^
-   |
-   = help: add a `// SAFETY:` comment above the unsafe block or operation
-
-error: unsafe operation (inline assembly) in `unsafe_ops::asm_unjustified` is missing a `// SAFETY:` justification
-  --> src/lib.rs:49:9
-   |
-49 |         asm!("nop");
-   |         ^^^^^^^^^^^
    |
    = help: add a `// SAFETY:` comment above the unsafe block or operation
 

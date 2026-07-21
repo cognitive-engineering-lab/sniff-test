@@ -24,8 +24,10 @@ use rustc_span::Span;
 
 use crate::config::{PanicBoundaryPolicy, PanicConfig};
 use crate::contracts::{
-    AmbiguousContractRequirements, ContractDocSummary, ContractKind, ContractRequirement,
-    contract_doc_summary, normalize_requirement_name, satisfied_requirement_names,
+    ContractDocSummary, ContractRequirement, EffectKind, check_contract, contract_doc_summary,
+};
+use crate::effect_tracker::{
+    EffectPathDecision, EffectTrace, ambiguous_marker_uses, classify_effect_path, trace_to_edge,
 };
 use crate::namespace::canonical_namespace;
 use crate::source_markers::{
@@ -51,11 +53,7 @@ pub struct PanicEvidence {
     pub decision: PanicPathDecision,
 }
 
-/// Edge-id trace through a reachability graph.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct PanicTrace {
-    pub edge_ids: Vec<ReachabilityEdgeId>,
-}
+pub type PanicTrace = EffectTrace;
 
 #[derive(Debug, Clone)]
 pub struct AmbiguousPanicMarker {
@@ -70,51 +68,7 @@ pub struct AmbiguousPanicRequirementName {
     pub requirements: Vec<PanicRequirement>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct PanicRequirement {
-    pub name: String,
-    pub condition: String,
-    pub span: Span,
-}
-
-impl PanicRequirement {
-    pub(crate) fn render(&self) -> String {
-        if self.condition.is_empty() {
-            self.name.clone()
-        } else {
-            format!("{}: {}", self.name, self.condition)
-        }
-    }
-}
-
-#[derive(Debug, Clone)]
-struct AmbiguousPanicRequirements {
-    normalized_name: String,
-    requirements: Vec<PanicRequirement>,
-}
-
-impl From<ContractRequirement> for PanicRequirement {
-    fn from(requirement: ContractRequirement) -> Self {
-        Self {
-            name: requirement.name,
-            condition: requirement.condition,
-            span: requirement.span,
-        }
-    }
-}
-
-impl From<AmbiguousContractRequirements> for AmbiguousPanicRequirements {
-    fn from(requirements: AmbiguousContractRequirements) -> Self {
-        Self {
-            normalized_name: requirements.normalized_name,
-            requirements: requirements
-                .requirements
-                .into_iter()
-                .map(PanicRequirement::from)
-                .collect(),
-        }
-    }
-}
+pub type PanicRequirement = ContractRequirement;
 
 /// Raw panic evidence found in the graph.
 #[derive(Debug, Clone, Copy)]
@@ -141,6 +95,17 @@ pub enum PanicPathDecision {
         edge_id: Option<ReachabilityEdgeId>,
         def_id: DefId,
     },
+}
+
+impl From<EffectPathDecision> for PanicPathDecision {
+    fn from(decision: EffectPathDecision) -> Self {
+        match decision {
+            EffectPathDecision::RawEffect => Self::RawPanic,
+            EffectPathDecision::Obligation { edge_id, def_id } => {
+                Self::PanicObligation { edge_id, def_id }
+            }
+        }
+    }
 }
 
 #[must_use]
@@ -306,9 +271,7 @@ pub fn trigger_edge_id(
 /// Returns the graph trace up to and including `edge`.
 #[must_use]
 pub fn trace_to_edge_ids(edge: ReachedEdge<'_, '_>) -> Vec<ReachabilityEdgeId> {
-    let mut edge_ids = trace_to_node(edge.source());
-    edge_ids.push(edge.id());
-    edge_ids
+    trace_to_edge(edge).edge_ids
 }
 
 /// Stable plain-text description for cached evidence reasons.
@@ -353,25 +316,10 @@ fn classify_panic_path<'tcx>(
     trace: &PanicTrace,
     config: &PanicConfig,
 ) -> PanicPathDecision {
-    if let Some(def_id) = panic_obligation_node_kind(tcx, root.kind(), config) {
-        return PanicPathDecision::PanicObligation {
-            edge_id: None,
-            def_id,
-        };
-    }
-
-    for edge_id in &trace.edge_ids {
-        let edge = graph.edge(*edge_id);
-        let target = &graph.node(edge.target).kind;
-        if let Some(def_id) = panic_obligation_node_kind(tcx, target, config) {
-            return PanicPathDecision::PanicObligation {
-                edge_id: Some(*edge_id),
-                def_id,
-            };
-        }
-    }
-
-    PanicPathDecision::RawPanic
+    classify_effect_path(graph, root, trace, |node| {
+        panic_obligation_node_kind(tcx, node, config)
+    })
+    .into()
 }
 
 fn panic_obligation_node_kind<'tcx>(
@@ -407,39 +355,15 @@ pub fn panic_requirements(
     panic_doc_summary(tcx, def_id, config).requirements
 }
 
-#[derive(Debug, Default)]
-struct PanicDocSummary {
-    has_docs: bool,
-    requirements: Vec<PanicRequirement>,
-    ambiguous_requirements: Vec<AmbiguousPanicRequirements>,
-}
-
-impl From<ContractDocSummary> for PanicDocSummary {
-    fn from(summary: ContractDocSummary) -> Self {
-        Self {
-            has_docs: summary.has_docs,
-            requirements: summary
-                .requirements
-                .into_iter()
-                .map(PanicRequirement::from)
-                .collect(),
-            ambiguous_requirements: summary
-                .ambiguous_requirements
-                .into_iter()
-                .map(AmbiguousPanicRequirements::from)
-                .collect(),
-        }
-    }
-}
+type PanicDocSummary = ContractDocSummary;
 
 fn panic_doc_summary(tcx: TyCtxt<'_>, def_id: DefId, config: &PanicConfig) -> PanicDocSummary {
     contract_doc_summary(
         tcx,
         def_id,
-        ContractKind::Panic,
+        EffectKind::Panic,
         &config.documentation_overrides,
     )
-    .into()
 }
 
 fn collect_ambiguous_panic_requirement_names<'tcx>(
@@ -508,23 +432,12 @@ fn push_ambiguous_panic_requirement_names(
 
 #[cfg(test)]
 fn line_has_panic_heading(line: &str) -> bool {
-    crate::contracts::line_has_contract_heading(line, ContractKind::Panic)
+    crate::contracts::line_has_contract_heading(line, EffectKind::Panic)
 }
 
 #[cfg(test)]
 fn parse_panic_doc_lines<'a>(lines: impl IntoIterator<Item = &'a str>) -> PanicDocSummary {
-    crate::contracts::parse_contract_doc_lines(lines, ContractKind::Panic).into()
-}
-
-fn trace_to_node(mut node: ReachedNode<'_, '_>) -> Vec<ReachabilityEdgeId> {
-    let mut edge_ids = Vec::new();
-    while let Some(edge) = node.predecessor_edge() {
-        let edge_id = edge.id();
-        edge_ids.push(edge_id);
-        node = edge.source();
-    }
-    edge_ids.reverse();
-    edge_ids
+    crate::contracts::parse_contract_doc_lines(lines, EffectKind::Panic)
 }
 
 fn trace_crosses_ignored_namespace<'tcx>(
@@ -706,7 +619,7 @@ fn marker_satisfies_target<'tcx>(
     };
     let summary = panic_doc_summary(tcx, contract_def_id, config);
     summary.requirements.is_empty()
-        || panic_requirements_satisfied(&summary.requirements, satisfactions)
+        || check_contract(&summary.requirements, satisfactions).is_satisfied()
 }
 
 #[derive(Debug)]
@@ -732,12 +645,6 @@ impl From<PanicMarkerBlock> for PanicMarkerCandidate {
     }
 }
 
-#[derive(Debug)]
-struct MarkerUse {
-    marker_span: Span,
-    edge_ids: HashSet<ReachabilityEdgeId>,
-}
-
 fn resolve_panic_markers<'tcx>(
     tcx: TyCtxt<'tcx>,
     graph: &ReachabilityGraph<'tcx>,
@@ -760,7 +667,7 @@ fn resolve_panic_markers<'tcx>(
         };
     }
 
-    let mut marker_uses: HashMap<MarkerBlockKey, MarkerUse> = HashMap::new();
+    let mut marker_claims = Vec::new();
     for edge in view.edges() {
         if classify_edge_without_marker(tcx, edge, config).is_none() {
             continue;
@@ -781,29 +688,19 @@ fn resolve_panic_markers<'tcx>(
             }
             Some((*edge_id, candidate))
         }) {
-            marker_uses
-                .entry(candidate.key)
-                .or_insert_with(|| MarkerUse {
-                    marker_span: candidate.marker_span,
-                    edge_ids: HashSet::new(),
-                })
-                .edge_ids
-                .insert(edge_id);
+            marker_claims.push((candidate.key, candidate.marker_span, edge_id));
         }
     }
 
-    let mut ambiguous_markers = marker_uses
-        .into_values()
-        .filter_map(|marker_use| {
-            if marker_use.edge_ids.len() <= 1 {
-                return None;
-            }
-            let mut edge_ids = marker_use.edge_ids.into_iter().collect::<Vec<_>>();
+    let mut ambiguous_markers = ambiguous_marker_uses(marker_claims)
+        .into_iter()
+        .map(|marker_use| {
+            let mut edge_ids = marker_use.groups;
             edge_ids.sort_by_key(|edge_id| edge_id.index());
-            Some(AmbiguousPanicMarker {
+            AmbiguousPanicMarker {
                 marker_span: marker_use.marker_span,
                 edge_ids,
-            })
+            }
         })
         .collect::<Vec<_>>();
     ambiguous_markers.sort_by_key(|marker| {
@@ -939,28 +836,9 @@ fn spans_start_on_same_line(tcx: TyCtxt<'_>, left: Span, right: Span) -> bool {
     source_map.lookup_char_pos(left.lo()).line == source_map.lookup_char_pos(right.lo()).line
 }
 
-fn panic_requirements_satisfied(
-    requirements: &[PanicRequirement],
-    satisfactions: &[PanicSatisfaction],
-) -> bool {
-    let satisfied_requirements = satisfied_requirement_names(
-        satisfactions
-            .iter()
-            .map(|satisfaction| (satisfaction.requirement.as_deref(), &*satisfaction.reason)),
-    );
-
-    requirements.iter().all(|requirement| {
-        satisfied_requirements.contains(&normalize_requirement_name(&requirement.name))
-    })
-}
-
 #[cfg(test)]
 mod tests {
-    use super::{
-        PanicRequirement, line_has_panic_heading, panic_requirements_satisfied,
-        parse_panic_doc_lines,
-    };
-    use crate::source_markers::PanicSatisfaction;
+    use super::{PanicRequirement, line_has_panic_heading, parse_panic_doc_lines};
     use rustc_span::DUMMY_SP;
 
     #[test]
@@ -1016,66 +894,6 @@ mod tests {
                 },
             ]
         );
-    }
-
-    #[test]
-    fn all_named_requirements_must_be_satisfied() {
-        let requirements = [
-            PanicRequirement {
-                name: String::from("index_in_bounds"),
-                condition: String::from("index must be valid"),
-                span: DUMMY_SP,
-            },
-            PanicRequirement {
-                name: String::from("nonzero"),
-                condition: String::from("denominator must be nonzero"),
-                span: DUMMY_SP,
-            },
-            PanicRequirement {
-                name: String::from("something[var_1]"),
-                condition: String::new(),
-                span: DUMMY_SP,
-            },
-        ];
-        let partial = [PanicSatisfaction {
-            requirement: Some(String::from("index in bounds")),
-            reason: String::from("checked"),
-        }];
-        let complete_with_empty_reason = [
-            PanicSatisfaction {
-                requirement: Some(String::from("index in bounds")),
-                reason: String::from("checked"),
-            },
-            PanicSatisfaction {
-                requirement: Some(String::from("nonzero")),
-                reason: String::new(),
-            },
-            PanicSatisfaction {
-                requirement: Some(String::from("something var_1")),
-                reason: String::from("checked"),
-            },
-        ];
-        let complete = [
-            PanicSatisfaction {
-                requirement: Some(String::from("index in bounds")),
-                reason: String::from("checked"),
-            },
-            PanicSatisfaction {
-                requirement: Some(String::from("nonzero")),
-                reason: String::from("checked"),
-            },
-            PanicSatisfaction {
-                requirement: Some(String::from("something var_1")),
-                reason: String::from("checked"),
-            },
-        ];
-
-        assert!(!panic_requirements_satisfied(&requirements, &partial));
-        assert!(!panic_requirements_satisfied(
-            &requirements,
-            &complete_with_empty_reason
-        ));
-        assert!(panic_requirements_satisfied(&requirements, &complete));
     }
 
     #[test]

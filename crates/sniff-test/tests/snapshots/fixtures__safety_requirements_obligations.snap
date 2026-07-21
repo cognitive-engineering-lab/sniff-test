@@ -11,6 +11,16 @@ expression: messages
     "dependencies": [],
     "findings": [
       {
+        "function": "safety_requirements::configured_safety_obligation_missing_justification",
+        "kind": "safety-obligation-missing-justification",
+        "level": "warn",
+        "reason": "safety-obligation call to `safety_requirements::safe_undocumented_contract` has no `// SAFETY:` justification",
+        "root": "safety_requirements::configured_safety_obligation_missing_justification",
+        "root-kind": "concrete",
+        "span": "src/lib.rs:168:5: 168:33",
+        "target": "safety_requirements::safe_undocumented_contract"
+      },
+      {
         "function": "safety_requirements::configured_safety_obligation_missing_requirement",
         "kind": "safety-obligation-missing-requirements",
         "level": "warn",
@@ -18,19 +28,13 @@ expression: messages
           "valid_ptr: pointer must be non-null."
         ],
         "reason": "safety-obligation call to `safety_requirements::safe_documented_contract` does not satisfy all # Safety requirements",
+        "root": "safety_requirements::configured_safety_obligation_missing_requirement",
+        "root-kind": "concrete",
         "span": "src/lib.rs:164:5: 164:34",
         "target": "safety_requirements::safe_documented_contract"
-      },
-      {
-        "function": "safety_requirements::configured_safety_obligation_missing_justification",
-        "kind": "safety-obligation-missing-justification",
-        "level": "warn",
-        "reason": "safety-obligation call to `safety_requirements::safe_undocumented_contract` has no `// SAFETY:` justification",
-        "span": "src/lib.rs:168:5: 168:33",
-        "target": "safety_requirements::safe_undocumented_contract"
       }
     ],
-    "format-version": 5,
+    "format-version": 6,
     "reason": "sniff-test-artifact",
     "rustc-version": "[RUSTC_VERSION]",
     "scope": "workspace",

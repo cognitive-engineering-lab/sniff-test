@@ -11,7 +11,8 @@ expression: messages
     "dependencies": [],
     "findings": [
       {
-        "kind": "ambiguous-panic-requirement",
+        "effect": "panic",
+        "kind": "ambiguous-effect-requirement",
         "level": "warn",
         "reason": "`ambiguous_markers::duplicate_name_ratio` has 2 # Panics requirements named `nonzero`",
         "root": "ambiguous_markers::duplicate_name_marker",
@@ -20,7 +21,8 @@ expression: messages
         "target": "ambiguous_markers::duplicate_name_ratio"
       },
       {
-        "kind": "ambiguous-panic-marker",
+        "effect": "panic",
+        "kind": "ambiguous-effect-marker",
         "level": "warn",
         "reason": "one `// PANIC:` marker applies to 2 panic obligation sites",
         "root": "ambiguous_markers::shared_block_marker",
@@ -32,7 +34,7 @@ expression: messages
         ]
       }
     ],
-    "format-version": 5,
+    "format-version": 6,
     "reason": "sniff-test-artifact",
     "rustc-version": "[RUSTC_VERSION]",
     "scope": "workspace",

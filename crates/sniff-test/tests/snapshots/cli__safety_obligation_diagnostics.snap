@@ -7,6 +7,14 @@ stdout:
 <empty>
 stderr:
     Checking safety-requirements v0.1.0 ([FIXTURE])
+warning: safety-obligation call to `safety_requirements::safe_undocumented_contract` in `safety_requirements::configured_safety_obligation_missing_justification` is missing a `// SAFETY:` justification
+   --> src/lib.rs:168:5
+    |
+168 |     safe_undocumented_contract();
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = help: add a `// SAFETY:` comment above the unsafe block or call site
+
 warning: safety-obligation call to `safety_requirements::safe_documented_contract` in `safety_requirements::configured_safety_obligation_missing_requirement` does not satisfy all `# Safety` requirements
    --> src/lib.rs:164:5
     |
@@ -20,14 +28,6 @@ note: `safety_requirements::safe_documented_contract` documents `# Safety` here
     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
     = note: missing safety requirement `valid_ptr: pointer must be non-null.`
     = help: add named bullets under the applicable `// SAFETY:` comment for each missing requirement
-
-warning: safety-obligation call to `safety_requirements::safe_undocumented_contract` in `safety_requirements::configured_safety_obligation_missing_justification` is missing a `// SAFETY:` justification
-   --> src/lib.rs:168:5
-    |
-168 |     safe_undocumented_contract();
-    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-    |
-    = help: add a `// SAFETY:` comment above the unsafe block or call site
 
 warning: `safety-requirements` (lib) generated 2 warnings
     Finished `release` profile [optimized] target(s) in [TIME]

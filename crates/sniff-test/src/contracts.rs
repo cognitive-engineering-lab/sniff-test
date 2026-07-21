@@ -7,26 +7,68 @@ use rustc_hir::attrs::{AttributeKind, HasAttrs};
 use rustc_hir::{Attribute, def_id::DefId};
 use rustc_middle::ty::TyCtxt;
 use rustc_span::{DUMMY_SP, Span};
+use serde::Serialize;
 
 use crate::config::ContractDocOverrides;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub(crate) enum ContractKind {
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub(crate) enum EffectKind {
     Panic,
     Safety,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct ContractRequirement {
-    pub(crate) name: String,
-    pub(crate) condition: String,
-    pub(crate) span: Span,
+impl EffectKind {
+    pub(crate) const ALL: [Self; 2] = [Self::Panic, Self::Safety];
+
+    pub(crate) fn marker_prefix(self) -> &'static str {
+        match self {
+            Self::Panic => "PANIC:",
+            Self::Safety => "SAFETY:",
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct AmbiguousContractRequirements {
-    pub(crate) normalized_name: String,
-    pub(crate) requirements: Vec<ContractRequirement>,
+pub struct ContractRequirement {
+    pub name: String,
+    pub condition: String,
+    pub span: Span,
+}
+
+impl ContractRequirement {
+    pub(crate) fn render(&self) -> String {
+        if self.condition.is_empty() {
+            self.name.clone()
+        } else {
+            format!("{}: {}", self.name, self.condition)
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AmbiguousContractRequirements {
+    pub normalized_name: String,
+    pub requirements: Vec<ContractRequirement>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MarkerSatisfaction {
+    pub requirement: Option<String>,
+    pub reason: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum ContractCheck {
+    Satisfied,
+    MissingJustification,
+    MissingRequirements(Vec<ContractRequirement>),
+}
+
+impl ContractCheck {
+    pub(crate) fn is_satisfied(&self) -> bool {
+        matches!(self, Self::Satisfied)
+    }
 }
 
 #[derive(Debug, Clone, Default)]
@@ -41,7 +83,7 @@ pub(crate) struct ContractDocSummary {
 // classification without this.
 thread_local! {
     static SUMMARY_CACHE: std::cell::RefCell<
-        std::collections::HashMap<(DefId, ContractKind), ContractDocSummary>,
+        std::collections::HashMap<(DefId, EffectKind), ContractDocSummary>,
     > = std::cell::RefCell::new(std::collections::HashMap::new());
 }
 
@@ -49,7 +91,7 @@ thread_local! {
 pub(crate) fn contract_doc_summary(
     tcx: TyCtxt<'_>,
     def_id: DefId,
-    kind: ContractKind,
+    kind: EffectKind,
     overrides: &ContractDocOverrides,
 ) -> ContractDocSummary {
     if let Some(markdown) = overrides.markdown_for_def(tcx, def_id) {
@@ -82,7 +124,7 @@ pub(crate) fn contract_doc_summary(
 #[must_use]
 pub(crate) fn parse_contract_doc_lines(
     lines: impl IntoIterator<Item = impl Into<ContractDocLine>>,
-    kind: ContractKind,
+    kind: EffectKind,
 ) -> ContractDocSummary {
     let lines = lines.into_iter().map(Into::into).collect::<Vec<_>>();
     let mut markdown = String::new();
@@ -98,18 +140,14 @@ pub(crate) fn parse_contract_doc_lines(
     parse_contract_doc_markdown_with_spans(&markdown, &line_spans, kind)
 }
 
-fn parse_contract_doc_markdown(
-    markdown: &str,
-    span: Span,
-    kind: ContractKind,
-) -> ContractDocSummary {
+fn parse_contract_doc_markdown(markdown: &str, span: Span, kind: EffectKind) -> ContractDocSummary {
     parse_contract_doc_markdown_with_spans(markdown, &[(0..markdown.len(), span)], kind)
 }
 
 fn parse_contract_doc_markdown_with_spans(
     markdown: &str,
     line_spans: &[(std::ops::Range<usize>, Span)],
-    kind: ContractKind,
+    kind: EffectKind,
 ) -> ContractDocSummary {
     use pulldown_cmark::{Event, Parser, Tag, TagEnd};
 
@@ -203,7 +241,7 @@ impl From<(String, Span)> for ContractDocLine {
 
 #[cfg(test)]
 #[must_use]
-pub(crate) fn line_has_contract_heading(line: &str, kind: ContractKind) -> bool {
+pub(crate) fn line_has_contract_heading(line: &str, kind: EffectKind) -> bool {
     let mut heading = None::<String>;
     for event in pulldown_cmark::Parser::new(line) {
         match event {
@@ -236,6 +274,41 @@ pub(crate) fn satisfied_requirement_names<'a>(
         .filter_map(|(requirement, _)| requirement)
         .map(normalize_requirement_name)
         .collect()
+}
+
+pub(crate) fn check_contract(
+    requirements: &[ContractRequirement],
+    satisfactions: &[MarkerSatisfaction],
+) -> ContractCheck {
+    if requirements.is_empty() {
+        return if satisfactions
+            .iter()
+            .any(|satisfaction| !satisfaction.reason.trim().is_empty())
+        {
+            ContractCheck::Satisfied
+        } else {
+            ContractCheck::MissingJustification
+        };
+    }
+
+    let satisfied_requirements = satisfied_requirement_names(
+        satisfactions
+            .iter()
+            .map(|satisfaction| (satisfaction.requirement.as_deref(), &*satisfaction.reason)),
+    );
+    let missing = requirements
+        .iter()
+        .filter(|requirement| {
+            !satisfied_requirements.contains(&normalize_requirement_name(&requirement.name))
+        })
+        .cloned()
+        .collect::<Vec<_>>();
+
+    if missing.is_empty() {
+        ContractCheck::Satisfied
+    } else {
+        ContractCheck::MissingRequirements(missing)
+    }
 }
 
 fn ambiguous_requirements(
@@ -314,7 +387,7 @@ fn span_for_offset(line_spans: &[(std::ops::Range<usize>, Span)], offset: usize)
         .map_or(DUMMY_SP, |(_, span)| *span)
 }
 
-impl ContractKind {
+impl EffectKind {
     fn matches_heading(self, heading: &str) -> bool {
         match self {
             Self::Panic => matches!(
@@ -328,7 +401,52 @@ impl ContractKind {
 
 #[cfg(test)]
 mod tests {
-    use super::{ContractKind, parse_contract_doc_lines};
+    use super::{
+        ContractCheck, ContractRequirement, EffectKind, MarkerSatisfaction, check_contract,
+        parse_contract_doc_lines,
+    };
+    use rustc_span::DUMMY_SP;
+
+    #[test]
+    fn contract_check_distinguishes_justification_from_named_requirements() {
+        assert_eq!(
+            check_contract(&[], &[]),
+            ContractCheck::MissingJustification
+        );
+        assert_eq!(
+            check_contract(
+                &[],
+                &[MarkerSatisfaction {
+                    requirement: None,
+                    reason: String::from("the caller established the invariant"),
+                }],
+            ),
+            ContractCheck::Satisfied
+        );
+
+        let requirements = vec![
+            ContractRequirement {
+                name: String::from("nonzero"),
+                condition: String::from("the divisor must not be zero"),
+                span: DUMMY_SP,
+            },
+            ContractRequirement {
+                name: String::from("bounded"),
+                condition: String::from("the input must fit"),
+                span: DUMMY_SP,
+            },
+        ];
+        assert_eq!(
+            check_contract(
+                &requirements,
+                &[MarkerSatisfaction {
+                    requirement: Some(String::from("NONZERO!")),
+                    reason: String::from("checked above"),
+                }],
+            ),
+            ContractCheck::MissingRequirements(vec![requirements[1].clone()])
+        );
+    }
 
     #[test]
     fn commonmark_setext_contract_headings_are_recognized() {
@@ -339,7 +457,7 @@ mod tests {
                 "",
                 "- nonzero: denominator must not be zero",
             ],
-            ContractKind::Panic,
+            EffectKind::Panic,
         );
 
         assert!(summary.has_docs);
@@ -356,7 +474,7 @@ mod tests {
                 "- `valid_ptr`: pointer must be non-null",
                 "- **initialized**: pointer must reference initialized memory",
             ],
-            ContractKind::Safety,
+            EffectKind::Safety,
         );
 
         assert_eq!(summary.requirements.len(), 2);
@@ -377,7 +495,7 @@ mod tests {
                 "",
                 "- valid[data]: `data` must point to initialized values.",
             ],
-            ContractKind::Safety,
+            EffectKind::Safety,
         );
 
         assert_eq!(summary.requirements.len(), 2);
@@ -396,7 +514,7 @@ mod tests {
                 "- flag: must be set",
                 "```",
             ],
-            ContractKind::Panic,
+            EffectKind::Panic,
         );
 
         assert!(!summary.has_docs);
@@ -418,7 +536,7 @@ mod tests {
                 "",
                 "- valid_ptr: pointer must be non-null",
             ],
-            ContractKind::Safety,
+            EffectKind::Safety,
         );
 
         assert!(summary.has_docs);
@@ -430,7 +548,7 @@ mod tests {
     fn tilde_fences_and_longer_closers_are_respected() {
         let summary = parse_contract_doc_lines(
             ["~~~", "# Panics", "~~~", "# Panics", "- flag: must be set"],
-            ContractKind::Panic,
+            EffectKind::Panic,
         );
 
         assert!(summary.has_docs);
@@ -438,7 +556,7 @@ mod tests {
 
         let nested = parse_contract_doc_lines(
             ["````", "```", "# Panics", "```", "````", "# Safety"],
-            ContractKind::Panic,
+            EffectKind::Panic,
         );
         assert!(!nested.has_docs);
     }
@@ -452,7 +570,7 @@ mod tests {
                 "- valid ptr: pointer must be initialized",
                 "- other: independent requirement",
             ],
-            ContractKind::Panic,
+            EffectKind::Panic,
         );
 
         assert_eq!(summary.ambiguous_requirements.len(), 1);

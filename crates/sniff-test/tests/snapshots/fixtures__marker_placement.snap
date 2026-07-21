@@ -11,6 +11,20 @@ expression: messages
     "dependencies": [],
     "findings": [
       {
+        "function": "marker_placement::safety_comment_on_function_def_bad",
+        "kind": "unsafe-call-missing-requirements",
+        "level": "warn",
+        "missing-requirements": [
+          "valid_ptr: pointer must be non-null.",
+          "initialized: pointer must reference initialized memory."
+        ],
+        "reason": "unsafe call to `marker_placement::read_byte` does not satisfy all # Safety requirements",
+        "root": "marker_placement::safety_comment_on_function_def_bad",
+        "root-kind": "concrete",
+        "span": "src/lib.rs:58:14: 58:28",
+        "target": "marker_placement::read_byte"
+      },
+      {
         "kind": "compiler-assert",
         "level": "deny",
         "reason": "compiler assert",
@@ -21,21 +35,9 @@ expression: messages
         "trace": [
           "src/lib.rs:27:5: 27:24: marker_placement::panic_comment_on_function_def_bad --assert-> compiler assert attempt to divide `total` (_1, argument 1) by zero"
         ]
-      },
-      {
-        "function": "marker_placement::safety_comment_on_function_def_bad",
-        "kind": "unsafe-call-missing-requirements",
-        "level": "warn",
-        "missing-requirements": [
-          "valid_ptr: pointer must be non-null.",
-          "initialized: pointer must reference initialized memory."
-        ],
-        "reason": "unsafe call to `marker_placement::read_byte` does not satisfy all # Safety requirements",
-        "span": "src/lib.rs:58:14: 58:28",
-        "target": "marker_placement::read_byte"
       }
     ],
-    "format-version": 5,
+    "format-version": 6,
     "reason": "sniff-test-artifact",
     "rustc-version": "[RUSTC_VERSION]",
     "scope": "workspace",

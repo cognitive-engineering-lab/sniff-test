@@ -32,11 +32,14 @@ use rustc_middle::ty::{self, Ty, TyCtxt};
 use rustc_span::Span;
 
 use super::{
-    SafetyAnalysis, SafetyCall, SafetyCallKind, SafetyCallee, SafetyFinding, SafetyOpKind,
-    missing_safety_requirements, safety_doc_summary,
+    SafetyAnalysis, SafetyCall, SafetyCallKind, SafetyCallee, SafetyEffectGroup, SafetyFinding,
+    SafetyOpKind, safety_doc_summary,
 };
 use crate::config::SafetyConfig;
-use crate::source_markers::{SafetySatisfaction, span_safety_satisfactions};
+use crate::contracts::{ContractCheck, check_contract};
+use crate::source_markers::{
+    SafetyMarkerBlock, SafetySatisfaction, span_safety_marker_block, span_safety_satisfactions,
+};
 
 pub(super) fn collect_body_findings(
     tcx: TyCtxt<'_>,
@@ -49,6 +52,7 @@ pub(super) fn collect_body_findings(
     };
     let thir = thir.borrow();
     let mut safety_scopes = Vec::new();
+    let mut effect_groups = Vec::new();
     let mut visitor = UnsafeOpVisitor {
         tcx,
         thir: &thir,
@@ -61,6 +65,7 @@ pub(super) fn collect_body_findings(
         inside_adt: false,
         builtin_unsafe_depth: 0,
         safety_scopes: &mut safety_scopes,
+        effect_groups: &mut effect_groups,
         analysis,
     };
     // Params can contain unsafe patterns, such as union destructuring
@@ -71,6 +76,11 @@ pub(super) fn collect_body_findings(
         }
     }
     visitor.visit_expr(&thir[root]);
+}
+
+struct SafetyScope {
+    satisfactions: Vec<SafetySatisfaction>,
+    marker: Option<SafetyMarkerBlock>,
 }
 
 struct UnsafeOpVisitor<'a, 'tcx> {
@@ -93,7 +103,8 @@ struct UnsafeOpVisitor<'a, 'tcx> {
     builtin_unsafe_depth: usize,
     /// `// SAFETY:` satisfactions of the enclosing user unsafe blocks. Shared
     /// with inner bodies so closures inherit enclosing scopes lexically.
-    safety_scopes: &'a mut Vec<Vec<SafetySatisfaction>>,
+    safety_scopes: &'a mut Vec<SafetyScope>,
+    effect_groups: &'a mut Vec<SafetyEffectGroup>,
     analysis: &'a mut SafetyAnalysis,
 }
 
@@ -110,6 +121,8 @@ impl<'a, 'tcx> UnsafeOpVisitor<'a, 'tcx> {
                     op,
                     span,
                 });
+        } else {
+            self.claim_applicable_markers(span);
         }
     }
 
@@ -125,14 +138,16 @@ impl<'a, 'tcx> UnsafeOpVisitor<'a, 'tcx> {
         if let SafetyCallee::Def(def_id) = call.callee {
             self.analysis.push_ambiguous_requirement_names(
                 self.tcx,
+                self.owner.to_def_id(),
                 def_id,
                 &self.config.documentation_overrides,
             );
             let summary =
                 safety_doc_summary(self.tcx, def_id, &self.config.documentation_overrides);
             if !summary.requirements.is_empty() {
-                let missing = missing_safety_requirements(&summary.requirements, &satisfactions);
-                if !missing.is_empty() {
+                if let ContractCheck::MissingRequirements(missing) =
+                    check_contract(&summary.requirements, &satisfactions)
+                {
                     self.analysis
                         .findings
                         .push(SafetyFinding::CallMissingRequirements {
@@ -142,6 +157,8 @@ impl<'a, 'tcx> UnsafeOpVisitor<'a, 'tcx> {
                             span,
                             missing_requirements: missing,
                         });
+                } else {
+                    self.claim_applicable_markers(span);
                 }
                 return;
             }
@@ -156,6 +173,8 @@ impl<'a, 'tcx> UnsafeOpVisitor<'a, 'tcx> {
                     call_kind: call.kind,
                     span,
                 });
+        } else {
+            self.claim_applicable_markers(span);
         }
     }
 
@@ -166,13 +185,34 @@ impl<'a, 'tcx> UnsafeOpVisitor<'a, 'tcx> {
     fn applicable_satisfactions(&self, span: Span) -> Vec<SafetySatisfaction> {
         self.safety_scopes
             .iter()
-            .flat_map(|scope| scope.iter().cloned())
+            .flat_map(|scope| scope.satisfactions.iter().cloned())
             .chain(span_safety_satisfactions(
                 self.tcx,
                 span,
                 self.config.marker_probing,
             ))
             .collect()
+    }
+
+    fn claim_applicable_markers(&mut self, span: Span) {
+        let group = self
+            .effect_groups
+            .last()
+            .copied()
+            .unwrap_or_else(|| self.analysis.new_effect_group(span));
+        let scoped_markers = self
+            .safety_scopes
+            .iter()
+            .filter_map(|scope| scope.marker.clone())
+            .collect::<Vec<_>>();
+        for marker in scoped_markers {
+            self.analysis
+                .claim_marker(self.owner.to_def_id(), &marker, group);
+        }
+        if let Some(marker) = span_safety_marker_block(self.tcx, span, self.config.marker_probing) {
+            self.analysis
+                .claim_marker(self.owner.to_def_id(), &marker, group);
+        }
     }
 
     /// The `// SAFETY:` comment sits above the `unsafe` keyword, which only
@@ -184,8 +224,8 @@ impl<'a, 'tcx> UnsafeOpVisitor<'a, 'tcx> {
         }
     }
 
-    /// Closures, coroutines, and inline consts are visited with their
-    /// enclosing body so scopes flow into them (check_unsafety.rs:185-224).
+    /// Closures and coroutines are runtime code and inherit the enclosing
+    /// source-level justification scopes.
     fn visit_inner_body(&mut self, def: LocalDefId) {
         let Ok((inner_thir, root)) = self.tcx.thir_body(def) else {
             return;
@@ -203,6 +243,7 @@ impl<'a, 'tcx> UnsafeOpVisitor<'a, 'tcx> {
             inside_adt: false,
             builtin_unsafe_depth: self.builtin_unsafe_depth,
             safety_scopes: &mut *self.safety_scopes,
+            effect_groups: &mut *self.effect_groups,
             analysis: &mut *self.analysis,
         };
         for param in &inner_thir.params {
@@ -437,15 +478,23 @@ impl<'a, 'tcx> Visitor<'a, 'tcx> for UnsafeOpVisitor<'a, 'tcx> {
             }
             BlockSafety::ExplicitUnsafe(hir_id) => {
                 let span = self.unsafe_block_span(hir_id, block.span);
-                self.safety_scopes.push(span_safety_satisfactions(
-                    self.tcx,
-                    span,
-                    self.config.marker_probing,
-                ));
+                let group = self.analysis.new_effect_group(span);
+                self.effect_groups.push(group);
+                self.safety_scopes.push(SafetyScope {
+                    satisfactions: span_safety_satisfactions(
+                        self.tcx,
+                        span,
+                        self.config.marker_probing,
+                    ),
+                    marker: span_safety_marker_block(self.tcx, span, self.config.marker_probing),
+                });
                 visit::walk_block(self, block);
                 self.safety_scopes
                     .pop()
                     .expect("unsafe block scope should be present");
+                self.effect_groups
+                    .pop()
+                    .expect("unsafe block effect group should be present");
             }
             BlockSafety::Safe => {
                 visit::walk_block(self, block);
@@ -601,9 +650,9 @@ impl<'a, 'tcx> Visitor<'a, 'tcx> for UnsafeOpVisitor<'a, 'tcx> {
             ExprKind::Closure(ref closure) => {
                 self.visit_inner_body(closure.closure_id);
             }
-            ExprKind::ConstBlock { did, args: _ } => {
-                self.visit_inner_body(did.expect_local());
-            }
+            // Compile-time inline-const effects are outside the runtime
+            // effect graph tracked by sniff-test.
+            ExprKind::ConstBlock { .. } => return,
             // check_unsafety.rs:633-651
             ExprKind::Field {
                 lhs,

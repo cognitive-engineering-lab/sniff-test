@@ -2,6 +2,5 @@
 report-roots = "all"
 
 [analysis.lints]
-ambiguous-panic-marker = "warn"
-ambiguous-panic-requirement = "warn"
-ambiguous-safety-requirement = "warn"
+ambiguous-effect-marker = "warn"
+ambiguous-effect-requirement = "warn"

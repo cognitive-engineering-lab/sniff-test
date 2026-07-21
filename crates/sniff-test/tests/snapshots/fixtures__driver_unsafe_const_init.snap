@@ -9,25 +9,8 @@ expression: messages
       "crate-name": "unsafe_const_init"
     },
     "dependencies": [],
-    "findings": [
-      {
-        "function": "unsafe_const_init::UNJUSTIFIED_STATIC",
-        "kind": "unsafe-call-missing-justification",
-        "level": "warn",
-        "reason": "unsafe call to `unsafe_const_init::seeded` has no `// SAFETY:` justification",
-        "span": "[FIXTURE]/src/lib.rs:5:47: 5:55",
-        "target": "unsafe_const_init::seeded"
-      },
-      {
-        "function": "unsafe_const_init::UNJUSTIFIED_CONST",
-        "kind": "unsafe-call-missing-justification",
-        "level": "warn",
-        "reason": "unsafe call to `unsafe_const_init::seeded` has no `// SAFETY:` justification",
-        "span": "[FIXTURE]/src/lib.rs:11:45: 11:53",
-        "target": "unsafe_const_init::seeded"
-      }
-    ],
-    "format-version": 5,
+    "findings": [],
+    "format-version": 6,
     "reason": "sniff-test-artifact",
     "rustc-version": "[RUSTC_VERSION]",
     "scope": "workspace",

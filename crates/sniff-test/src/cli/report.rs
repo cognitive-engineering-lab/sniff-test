@@ -27,7 +27,7 @@ use super::diagnostics::{
 };
 use super::findings::{Finding, FindingKind, ResolvedFinding};
 
-pub(crate) const REPORT_FORMAT_VERSION: u32 = 5;
+pub(crate) const REPORT_FORMAT_VERSION: u32 = 6;
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "kebab-case")]
@@ -246,13 +246,14 @@ impl PanicRootReport {
             span: Some(render_span(tcx, marker.marker_span)),
             trace: render_trace(tcx, graph, &marker.edge_ids),
             ..Finding::new(
-                FindingKind::AmbiguousPanicMarker,
+                FindingKind::AmbiguousEffectMarker,
                 format!(
                     "one `// PANIC:` marker applies to {} panic obligation sites",
                     marker.edge_ids.len()
                 ),
                 diagnostic,
             )
+            .with_effect(crate::contracts::EffectKind::Panic)
         });
     }
 
@@ -271,7 +272,7 @@ impl PanicRootReport {
             target: Some(target.clone()),
             span: Some(render_span(tcx, span)),
             ..Finding::new(
-                FindingKind::AmbiguousPanicRequirement,
+                FindingKind::AmbiguousEffectRequirement,
                 format!(
                     "`{target}` has {} # Panics requirements named `{}`",
                     name.requirements.len(),
@@ -279,6 +280,7 @@ impl PanicRootReport {
                 ),
                 diagnostic,
             )
+            .with_effect(crate::contracts::EffectKind::Panic)
         });
     }
 
@@ -636,7 +638,7 @@ mod tests {
 
         let json = serde_json::to_value(report).expect("serialize report");
         let object = json.as_object().expect("report object");
-        assert_eq!(object["format-version"], 5);
+        assert_eq!(object["format-version"], REPORT_FORMAT_VERSION);
         assert_eq!(object["findings"].as_array().expect("findings").len(), 1);
         for removed in [
             "analysis-findings",
