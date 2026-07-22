@@ -230,7 +230,6 @@ pub struct CachedFunctionSummary {
     /// Display form as rendered by the defining crate's session.
     pub path: String,
     pub is_generic: bool,
-    #[serde(default)]
     pub root_span: Option<CachedSourceSpan>,
     pub effects: BTreeMap<EffectKind, CachedEffectSummary>,
 }
@@ -241,15 +240,10 @@ pub struct CachedEffectSummary {
     /// False when a reachability query halted at the node limit; the findings
     /// then under-approximate and consumers must not treat this summary as
     /// exhaustive.
-    #[serde(default = "default_analysis_complete")]
     pub analysis_complete: bool,
     pub has_contract: bool,
     pub graph: Option<CachedReachabilityGraph>,
     pub findings: Vec<CachedFinding>,
-}
-
-fn default_analysis_complete() -> bool {
-    true
 }
 
 impl CachedFunctionSummary {
@@ -300,9 +294,7 @@ impl CachedEffectSummary {
 pub struct CachedFinding {
     pub kind: CachedFindingKind,
     pub span: String,
-    #[serde(default)]
     pub source_span: Option<CachedSourceSpan>,
-    #[serde(default)]
     pub diagnostic_spans: Vec<CachedDiagnosticSpan>,
     /// Arena edge id of the triggering edge; resolves against
     /// [`CachedReachabilityEdge::id`] in this summary's `graph`.
@@ -311,7 +303,6 @@ pub struct CachedFinding {
     /// `edge_index`.
     pub trace: Vec<usize>,
     pub reason: String,
-    #[serde(default)]
     pub missing_requirements: Vec<CachedRequirement>,
     pub target: Option<CachedFindingTarget>,
 }
@@ -362,7 +353,7 @@ impl CachedFindingKind {
         self != Self::CrateBoundary
     }
 
-    fn is_raw_effect(self) -> bool {
+    pub(crate) fn is_raw_effect(self) -> bool {
         matches!(
             self,
             Self::CompilerAssert
@@ -448,7 +439,6 @@ pub struct CachedReachabilityEdge {
     pub target: usize,
     pub kind: CachedReachabilityEdgeKind,
     pub span: String,
-    #[serde(default)]
     pub source_span: Option<CachedSourceSpan>,
 }
 
@@ -726,9 +716,9 @@ mod tests {
             Err(CacheError::Version { field: "rustc", .. })
         ));
 
-        let mut old_format = analysis("0.1.0", "rustc 1.97.0-nightly");
-        old_format.format_version = 3;
-        write(&old_format);
+        let mut unsupported_format = analysis("0.1.0", "rustc 1.97.0-nightly");
+        unsupported_format.format_version = 3;
+        write(&unsupported_format);
         assert!(matches!(
             CachedArtifactAnalysis::read(&path, &current),
             Err(CacheError::Format { version: 3, .. })

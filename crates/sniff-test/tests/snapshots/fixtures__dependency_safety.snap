@@ -11,6 +11,7 @@ expression: messages
     "dependencies": [],
     "findings": [
       {
+        "effect": "safety",
         "function": "dependency_safety::read_byte",
         "kind": "unsafe-op-missing-justification",
         "level": "deny",
@@ -20,7 +21,7 @@ expression: messages
         "span": "[FIXTURE]/dep/src/lib.rs:2:14: 2:22"
       }
     ],
-    "format-version": 7,
+    "format-version": 8,
     "reason": "sniff-test-artifact",
     "rustc-version": "[RUSTC_VERSION]",
     "scope": "dependency",
@@ -40,6 +41,7 @@ expression: messages
     "findings": [
       {
         "effect": "safety",
+        "effect-span": "[FIXTURE]/dep/src/lib.rs:2:14: 2:22",
         "kind": "unsafe-op-missing-justification",
         "level": "deny",
         "reason": "dependency_safety::read_byte has cached safety effect: unsafe operation (raw pointer dereference) has no `// SAFETY:` justification",
@@ -52,7 +54,7 @@ expression: messages
         ]
       }
     ],
-    "format-version": 7,
+    "format-version": 8,
     "reason": "sniff-test-artifact",
     "rustc-version": "[RUSTC_VERSION]",
     "scope": "workspace",

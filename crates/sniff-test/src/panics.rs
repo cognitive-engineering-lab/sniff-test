@@ -47,7 +47,7 @@ pub(crate) struct PanicEvidence {
     /// Raw reason found in MIR/reachability data.
     pub kind: PanicEvidenceKind,
     /// Policy decision for whether this propagates as a raw panic path.
-    pub decision: PanicPathDecision,
+    pub decision: EffectPathDecision,
 }
 
 pub(crate) type PanicTrace = EffectTrace;
@@ -82,29 +82,6 @@ pub(crate) enum PanicEvidenceKind {
     IndirectBoundary { def_id: Option<DefId> },
 }
 
-/// Propagation decision for one panic evidence path.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum PanicPathDecision {
-    /// No documented/configured obligation stopped this path.
-    RawPanic,
-    /// The path reached a function boundary that documents or declares panic behavior.
-    PanicObligation {
-        edge_id: Option<ReachabilityEdgeId>,
-        def_id: DefId,
-    },
-}
-
-impl From<EffectPathDecision> for PanicPathDecision {
-    fn from(decision: EffectPathDecision) -> Self {
-        match decision {
-            EffectPathDecision::RawEffect => Self::RawPanic,
-            EffectPathDecision::Obligation { edge_id, def_id } => {
-                Self::PanicObligation { edge_id, def_id }
-            }
-        }
-    }
-}
-
 #[must_use]
 pub(crate) fn analyze_panic_evidence<'tcx>(
     tcx: TyCtxt<'tcx>,
@@ -135,8 +112,8 @@ pub(crate) fn analyze_panic_evidence<'tcx>(
             let decision = match kind {
                 PanicEvidenceKind::PanicObligation { def_id } => {
                     let path_decision = classify_panic_path(tcx, graph, root, &trace, config);
-                    if matches!(path_decision, PanicPathDecision::RawPanic) {
-                        PanicPathDecision::PanicObligation {
+                    if matches!(path_decision, EffectPathDecision::RawEffect) {
+                        EffectPathDecision::Obligation {
                             edge_id: Some(edge_id),
                             def_id,
                         }
@@ -150,7 +127,7 @@ pub(crate) fn analyze_panic_evidence<'tcx>(
                     classify_panic_path(tcx, graph, root, &trace, config)
                 }
             };
-            if let PanicPathDecision::PanicObligation { edge_id, def_id } = decision
+            if let EffectPathDecision::Obligation { edge_id, def_id } = decision
                 && !seen_panic_obligations.insert((edge_id, def_id))
             {
                 return None;
@@ -312,11 +289,10 @@ fn classify_panic_path<'tcx>(
     root: ReachedNode<'_, 'tcx>,
     trace: &PanicTrace,
     config: &PanicConfig,
-) -> PanicPathDecision {
+) -> EffectPathDecision {
     classify_effect_path(graph, root, trace, |node| {
         panic_obligation_node_kind(tcx, node, config)
     })
-    .into()
 }
 
 fn panic_obligation_node_kind<'tcx>(

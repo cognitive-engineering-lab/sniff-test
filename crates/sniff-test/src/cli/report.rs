@@ -28,7 +28,7 @@ use super::diagnostics::{
 };
 use super::findings::{Finding, FindingKind, ResolvedFinding};
 
-pub(crate) const REPORT_FORMAT_VERSION: u32 = 7;
+pub(crate) const REPORT_FORMAT_VERSION: u32 = 8;
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "kebab-case")]
@@ -167,6 +167,7 @@ impl PanicRootReport {
         self.push_finding(Finding {
             target: Some(summary.path.clone()),
             span: Some(render_span(tcx, edge.span)),
+            effect_span: cached_finding.map(render_cached_effect_span),
             trace,
             ..Finding::new(
                 FindingKind::CachedDependencyPanic,
@@ -210,6 +211,7 @@ impl PanicRootReport {
         self.push_finding(Finding {
             target: Some(summary.path.clone()),
             span: Some(render_span(tcx, edge.span)),
+            effect_span: cached_finding.map(render_cached_effect_span),
             trace,
             ..Finding::new(kind, summary.contract_reason(kind), diagnostic)
         });
@@ -232,6 +234,7 @@ impl PanicRootReport {
                 ),
                 diagnostic,
             )
+            .with_effect(EffectKind::Panic)
         });
     }
 
@@ -611,6 +614,18 @@ pub(crate) fn render_span(tcx: TyCtxt<'_>, span: rustc_span::Span) -> String {
     tcx.sess.source_map().span_to_diagnostic_string(span)
 }
 
+pub(crate) fn render_cached_effect_span(finding: &CachedFinding) -> String {
+    finding.source_span.as_ref().map_or_else(
+        || finding.span.clone(),
+        |span| {
+            format!(
+                "{}:{}:{}: {}:{}",
+                span.file, span.line_start, span.column_start, span.line_end, span.column_end
+            )
+        },
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::{AnalysisArtifactReport, CrateOutputScope, REPORT_FORMAT_VERSION};
@@ -619,7 +634,7 @@ mod tests {
     use crate::config::LintLevel;
 
     #[test]
-    fn public_report_has_one_flat_findings_array() {
+    fn public_report_serializes_flat_findings() {
         let report = AnalysisArtifactReport {
             reason: String::from("sniff-test-artifact"),
             format_version: REPORT_FORMAT_VERSION,
@@ -649,15 +664,5 @@ mod tests {
         let object = json.as_object().expect("report object");
         assert_eq!(object["format-version"], REPORT_FORMAT_VERSION);
         assert_eq!(object["findings"].as_array().expect("findings").len(), 1);
-        for removed in [
-            "analysis-findings",
-            "roots",
-            "safety",
-            "concrete-roots",
-            "generic-roots",
-            "dependency-cache",
-        ] {
-            assert!(!object.contains_key(removed), "removed field {removed}");
-        }
     }
 }

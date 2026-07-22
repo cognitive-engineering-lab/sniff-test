@@ -5,7 +5,10 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use common::{CommandOutput, clean_cargo_package_env, copy_dir_all, repo_root, rustc_sysroot};
+use common::{
+    CommandOutput, clean_cargo_package_env, copy_dir_all, lock_nested_cargo, repo_root,
+    rustc_sysroot,
+};
 
 #[derive(Clone, Copy, Debug)]
 struct Case {
@@ -128,6 +131,7 @@ fn cargo_frontend_skips_build_scripts() {
     let binary = PathBuf::from(env!("CARGO_BIN_EXE_cargo-sniff-test"));
     let mut command = Command::new(binary);
     clean_cargo_package_env(&mut command);
+    let _cargo_guard = lock_nested_cargo();
     let output = command
         .args(["--message-format", "json", "--color", "never"])
         .current_dir(temp.path())
@@ -245,6 +249,7 @@ fn cargo_frontend_fails_when_unit_outcome_cannot_be_written() {
     let binary = PathBuf::from(env!("CARGO_BIN_EXE_cargo-sniff-test"));
     let mut command = Command::new(binary);
     clean_cargo_package_env(&mut command);
+    let _cargo_guard = lock_nested_cargo();
     let output = command
         .args(["--message-format", "json", "--cache-dir"])
         .arg(&cache_file)
@@ -282,6 +287,7 @@ fn cargo_frontend_fails_when_dependency_analysis_cannot_be_cached() {
     let binary = PathBuf::from(env!("CARGO_BIN_EXE_cargo-sniff-test"));
     let mut command = Command::new(binary);
     clean_cargo_package_env(&mut command);
+    let _cargo_guard = lock_nested_cargo();
     let output = command
         .args(["--cache-dir"])
         .arg(&cache_dir)
@@ -670,6 +676,7 @@ fn run_case(
     }
 
     let working_dir = root.join(case.working_dir.unwrap_or(case.crate_dir));
+    let _cargo_guard = lock_nested_cargo();
     let output = run_cargo_sniff_test(binary, &working_dir, &root, name, case);
     (output, root)
 }

@@ -11,6 +11,7 @@ expression: messages
     "dependencies": [],
     "findings": [
       {
+        "effect": "safety",
         "function": "unsafe_ops::asm_unjustified",
         "kind": "unsafe-op-missing-justification",
         "level": "warn",
@@ -20,6 +21,7 @@ expression: messages
         "span": "src/lib.rs:49:9: 49:20"
       },
       {
+        "effect": "safety",
         "function": "unsafe_ops::deref_unjustified",
         "kind": "unsafe-op-missing-justification",
         "level": "warn",
@@ -29,6 +31,7 @@ expression: messages
         "span": "src/lib.rs:18:14: 18:18"
       },
       {
+        "effect": "safety",
         "function": "unsafe_ops::extern_static_unjustified",
         "kind": "unsafe-op-missing-justification",
         "level": "warn",
@@ -38,6 +41,7 @@ expression: messages
         "span": "src/lib.rs:36:14: 36:22"
       },
       {
+        "effect": "safety",
         "function": "unsafe_ops::mutable_static_unjustified",
         "kind": "unsafe-op-missing-justification",
         "level": "warn",
@@ -47,6 +51,7 @@ expression: messages
         "span": "src/lib.rs:27:14: 27:21"
       },
       {
+        "effect": "safety",
         "function": "unsafe_ops::union_read_unjustified",
         "kind": "unsafe-op-missing-justification",
         "level": "warn",
@@ -56,7 +61,7 @@ expression: messages
         "span": "src/lib.rs:40:14: 40:23"
       }
     ],
-    "format-version": 7,
+    "format-version": 8,
     "reason": "sniff-test-artifact",
     "rustc-version": "[RUSTC_VERSION]",
     "scope": "workspace",

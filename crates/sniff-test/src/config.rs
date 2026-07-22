@@ -987,16 +987,11 @@ mod tests {
     }
 
     #[test]
-    fn rejects_old_split_namespace_fields() {
-        let config = r#"
-            [panics]
-            ignored-crates = ["syn"]
-        "#;
+    fn rejects_unknown_config_fields() {
+        let error = SniffTestConfig::from_manifest_str("[analysis]\nnode-limt = 10")
+            .expect_err("unknown config fields should be rejected");
 
-        let error = SniffTestConfig::from_manifest_str(config)
-            .expect_err("old split namespace fields should be rejected");
-
-        assert!(error.to_string().contains("unknown field `ignored-crates`"));
+        assert!(error.to_string().contains("unknown field `node-limt`"));
     }
 
     #[test]
@@ -1056,67 +1051,6 @@ mod tests {
     }
 
     #[test]
-    fn rejects_config_compatibility_shims() {
-        let manifests = [
-            (
-                "[analysis.lints]\nambiguous-obligations = \"allow\"",
-                "ambiguous-obligations",
-            ),
-            (
-                "[analysis]\ndyn-dispatch-vtable-edges = \"cast-sites\"",
-                "dyn-dispatch-vtable-edges",
-            ),
-            (
-                "[analysis]\ncallable-edge-attribution = \"cast-sites\"",
-                "cast-sites",
-            ),
-            (
-                "[analysis.lints]\nambiguous-panic-marker = \"allow\"",
-                "ambiguous-panic-marker",
-            ),
-            (
-                "[analysis.lints]\nambiguous-panic-requirement = \"allow\"",
-                "ambiguous-panic-requirement",
-            ),
-            (
-                "[analysis.lints]\nambiguous-safety-requirement = \"allow\"",
-                "ambiguous-safety-requirement",
-            ),
-            (
-                "[analysis.lints]\nignored-report-root = \"warn\"",
-                "ignored-report-root",
-            ),
-            ("[panics.lints]\nmissing-docs = \"allow\"", "missing-docs"),
-            (
-                "[panics.lints]\ndocumented-contract = \"allow\"",
-                "documented-contract",
-            ),
-            (
-                "[panics.lints]\ntrusted-contract = \"allow\"",
-                "trusted-contract",
-            ),
-            ("[safety.lints]\nmissing-docs = \"allow\"", "missing-docs"),
-            (
-                "[safety.lints]\nmissing-justification = \"allow\"",
-                "missing-justification",
-            ),
-            (
-                "[safety.lints]\nmissing-requirements = \"allow\"",
-                "missing-requirements",
-            ),
-        ];
-
-        for (manifest, removed_name) in manifests {
-            let error = SniffTestConfig::from_manifest_str(manifest)
-                .expect_err("removed config spelling should be rejected");
-            assert!(
-                error.to_string().contains(removed_name),
-                "error should identify {removed_name}: {error}"
-            );
-        }
-    }
-
-    #[test]
     fn partial_lint_tables_use_direct_field_defaults() {
         let config = r#"
             [analysis.lints]
@@ -1142,40 +1076,6 @@ mod tests {
         assert_eq!(
             parsed.safety.lints.unsafe_call_missing_justification,
             LintLevel::Warn
-        );
-    }
-
-    #[test]
-    fn rejects_old_ambiguous_obligations_location() {
-        let config = r#"
-            [analysis]
-            ambiguous-obligations = "warn"
-        "#;
-
-        let error = SniffTestConfig::from_manifest_str(config)
-            .expect_err("analysis lints should live under [analysis.lints]");
-
-        assert!(
-            error
-                .to_string()
-                .contains("unknown field `ambiguous-obligations`")
-        );
-    }
-
-    #[test]
-    fn rejects_old_ambiguous_obligation_marker_policy() {
-        let config = r#"
-            [analysis]
-            ambiguous-obligation-markers = "warn"
-        "#;
-
-        let error = SniffTestConfig::from_manifest_str(config)
-            .expect_err("old marker-specific ambiguity policy should be rejected");
-
-        assert!(
-            error
-                .to_string()
-                .contains("unknown field `ambiguous-obligation-markers`")
         );
     }
 

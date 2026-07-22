@@ -10,7 +10,7 @@ expression: messages
     },
     "dependencies": [],
     "findings": [],
-    "format-version": 7,
+    "format-version": 8,
     "reason": "sniff-test-artifact",
     "rustc-version": "[RUSTC_VERSION]",
     "scope": "workspace",

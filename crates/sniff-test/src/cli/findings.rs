@@ -34,6 +34,9 @@ pub(crate) struct Finding {
     pub(crate) target: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) span: Option<String>,
+    /// Originating effect site when it differs from the local diagnostic span.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) effect_span: Option<String>,
     pub(crate) reason: String,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub(crate) trace: Vec<String>,
@@ -49,12 +52,13 @@ impl Finding {
     pub(crate) fn new(kind: FindingKind, reason: String, diagnostic: FindingDiagnostic) -> Self {
         Self {
             kind,
-            effect: None,
+            effect: kind.effect(),
             root: None,
             root_kind: None,
             function: None,
             target: None,
             span: None,
+            effect_span: None,
             reason,
             trace: Vec::new(),
             missing_requirements: Vec::new(),
@@ -129,6 +133,28 @@ pub(crate) enum FindingKind {
 }
 
 impl FindingKind {
+    fn effect(self) -> Option<EffectKind> {
+        match self {
+            Self::CompilerAssert
+            | Self::PanicInvocation
+            | Self::CachedDependencyPanic
+            | Self::DocumentedPanic
+            | Self::TrustedPanic
+            | Self::IndirectCallBoundary => Some(EffectKind::Panic),
+            Self::MissingSafetyDocs
+            | Self::UnsafeCallMissingJustification
+            | Self::UnsafeCallMissingRequirements
+            | Self::UnsafeOpMissingJustification
+            | Self::SafetyObligationMissingJustification
+            | Self::SafetyObligationMissingRequirements => Some(EffectKind::Safety),
+            Self::AmbiguousEffectMarker
+            | Self::AmbiguousEffectRequirement
+            | Self::AnalysisIncomplete
+            | Self::EmptyReportRoots
+            | Self::MissingReportRoot => None,
+        }
+    }
+
     pub(crate) fn from_evidence(kind: &PanicEvidenceKind) -> Self {
         match kind {
             PanicEvidenceKind::CompilerAssert => Self::CompilerAssert,

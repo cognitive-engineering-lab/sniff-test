@@ -465,7 +465,6 @@ mod tests {
             "/// PANIC: doc comments are not call-site markers",
             "// SAFETY: not the sniff-test marker",
             "// panic: no",
-            "// SAFE: old marker spelling",
             "// PANIC:",
             "// PANIC: nonzero:",
         ] {

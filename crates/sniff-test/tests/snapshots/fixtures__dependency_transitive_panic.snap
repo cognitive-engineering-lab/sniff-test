@@ -1,0 +1,105 @@
+---
+source: crates/sniff-test/tests/fixtures.rs
+expression: messages
+---
+[
+  {
+    "artifact": {
+      "artifact-id": "[ARTIFACT_ID]",
+      "crate-name": "dependency_transitive_panic_app"
+    },
+    "dependencies": [
+      {
+        "artifact-id": "[ARTIFACT_ID]",
+        "extern-name": "dependency_transitive_panic_middle"
+      }
+    ],
+    "findings": [
+      {
+        "effect": "panic",
+        "effect-span": "[FIXTURE]/leaf/src/lib.rs:2:5: 2:46",
+        "kind": "cached-dependency-panic",
+        "level": "deny",
+        "reason": "dependency_transitive_panic_middle::middle has cached panic evidence: 1 undocumented panic path",
+        "root": "dependency_transitive_panic_app::app",
+        "root-kind": "concrete",
+        "span": "src/lib.rs:2:5: 2:53",
+        "target": "dependency_transitive_panic_middle::middle",
+        "trace": [
+          "src/lib.rs:2:5: 2:53: dependency_transitive_panic_app::app --direct-call-> dependency_transitive_panic_middle::middle",
+          "[FIXTURE]/middle/src/lib.rs:2:5: 2:49: dependency_transitive_panic_middle::middle --direct-call-> dependency_transitive_panic_leaf::leaf"
+        ]
+      }
+    ],
+    "format-version": 8,
+    "reason": "sniff-test-artifact",
+    "rustc-version": "[RUSTC_VERSION]",
+    "scope": "workspace",
+    "tool-version": "0.1.0"
+  },
+  {
+    "artifact": {
+      "artifact-id": "[ARTIFACT_ID]",
+      "crate-name": "dependency_transitive_panic_leaf"
+    },
+    "dependencies": [],
+    "findings": [
+      {
+        "effect": "panic",
+        "kind": "panic-invocation",
+        "level": "deny",
+        "reason": "panic sink core::std::rt::panic_fmt",
+        "root": "dependency_transitive_panic_leaf::leaf",
+        "root-kind": "concrete",
+        "span": "[FIXTURE]/leaf/src/lib.rs:2:5: 2:46",
+        "target": "core::std::rt::panic_fmt",
+        "trace": [
+          "[FIXTURE]/leaf/src/lib.rs:2:5: 2:46: dependency_transitive_panic_leaf::leaf --macro-expansion-> macro core::std::assert",
+          "[FIXTURE]/leaf/src/lib.rs:2:5: 2:46: macro core::std::assert --macro-expansion-> macro core::std::panic::panic_2021",
+          "[SYSROOT]/lib/rustlib/src/rust/library/core/src/panic.rs:62:9: 62:73: macro core::std::panic::panic_2021 --direct-call-> core::std::rt::panic_fmt"
+        ]
+      }
+    ],
+    "format-version": 8,
+    "reason": "sniff-test-artifact",
+    "rustc-version": "[RUSTC_VERSION]",
+    "scope": "dependency",
+    "tool-version": "0.1.0"
+  },
+  {
+    "artifact": {
+      "artifact-id": "[ARTIFACT_ID]",
+      "crate-name": "dependency_transitive_panic_middle"
+    },
+    "dependencies": [
+      {
+        "artifact-id": "[ARTIFACT_ID]",
+        "extern-name": "dependency_transitive_panic_leaf"
+      }
+    ],
+    "findings": [
+      {
+        "effect": "panic",
+        "effect-span": "[FIXTURE]/leaf/src/lib.rs:2:5: 2:46",
+        "kind": "cached-dependency-panic",
+        "level": "deny",
+        "reason": "dependency_transitive_panic_leaf::leaf has cached panic evidence: 1 undocumented panic path",
+        "root": "dependency_transitive_panic_middle::middle",
+        "root-kind": "concrete",
+        "span": "[FIXTURE]/middle/src/lib.rs:2:5: 2:49",
+        "target": "dependency_transitive_panic_leaf::leaf",
+        "trace": [
+          "[FIXTURE]/middle/src/lib.rs:2:5: 2:49: dependency_transitive_panic_middle::middle --direct-call-> dependency_transitive_panic_leaf::leaf",
+          "[FIXTURE]/leaf/src/lib.rs:2:5: 2:46: dependency_transitive_panic_leaf::leaf --macro-expansion-> macro core::std::assert",
+          "[FIXTURE]/leaf/src/lib.rs:2:5: 2:46: macro core::std::assert --macro-expansion-> macro core::std::panic::panic_2021",
+          "[SYSROOT]/lib/rustlib/src/rust/library/core/src/panic.rs:62:9: 62:73: macro core::std::panic::panic_2021 --direct-call-> core::std::rt::panic_fmt"
+        ]
+      }
+    ],
+    "format-version": 8,
+    "reason": "sniff-test-artifact",
+    "rustc-version": "[RUSTC_VERSION]",
+    "scope": "dependency",
+    "tool-version": "0.1.0"
+  }
+]

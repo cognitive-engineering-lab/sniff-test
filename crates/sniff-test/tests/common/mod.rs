@@ -7,6 +7,9 @@ use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitStatus};
+use std::sync::{Mutex, MutexGuard};
+
+static NESTED_CARGO_LOCK: Mutex<()> = Mutex::new(());
 
 pub struct CommandOutput {
     pub status: ExitStatus,
@@ -49,6 +52,17 @@ pub fn rustc_sysroot() -> String {
     );
 
     String::from_utf8(output.stdout).expect("rustc sysroot output should be utf-8")
+}
+
+/// Serializes nested Cargo invocations within one integration-test process.
+///
+/// The outer test harness may otherwise run several Cargo processes against
+/// the same package cache, making volatile file-lock status messages leak into
+/// snapshot output.
+pub fn lock_nested_cargo() -> MutexGuard<'static, ()> {
+    NESTED_CARGO_LOCK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
 }
 
 /// Prevent the outer `cargo test` package metadata from leaking into fixture

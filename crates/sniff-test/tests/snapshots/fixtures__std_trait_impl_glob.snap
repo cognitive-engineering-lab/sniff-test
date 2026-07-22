@@ -11,6 +11,7 @@ expression: messages
     "dependencies": [],
     "findings": [
       {
+        "effect": "panic",
         "kind": "trusted-panic",
         "level": "warn",
         "reason": "alloc::std::vec::Vec::<T, A>::push documents when it may panic under # Panics",
@@ -23,7 +24,7 @@ expression: messages
         ]
       }
     ],
-    "format-version": 7,
+    "format-version": 8,
     "reason": "sniff-test-artifact",
     "rustc-version": "[RUSTC_VERSION]",
     "scope": "workspace",

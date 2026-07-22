@@ -1,0 +1,9 @@
+[package]
+name = "dependency-transitive-panic-middle"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+dependency-transitive-panic-leaf = { path = "../leaf" }
+
+[workspace]

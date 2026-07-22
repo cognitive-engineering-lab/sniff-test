@@ -161,7 +161,6 @@ pub struct SniffTestArgs {
     /// Workspace member manifests from `cargo metadata`, plumbed to the
     /// driver so crate scope uses real membership instead of path prefixes.
     /// Empty in direct driver mode.
-    #[serde(default)]
     pub(crate) workspace_manifests: Vec<PathBuf>,
     /// True when the driver runs as cargo's `RUSTC_WRAPPER`; set by the
     /// driver itself, never carried through the environment.
@@ -271,23 +270,5 @@ mod tests {
 
         assert_eq!(args.message_format, MessageFormat::Json);
         assert_eq!(rustc_args, ["sniff-test-driver", "--crate-name", "demo"]);
-    }
-
-    #[test]
-    fn direct_driver_rejects_legacy_reversed_syntax() {
-        let error = DriverCli::try_parse(
-            [
-                "sniff-test-driver",
-                "--crate-name",
-                "demo",
-                "--",
-                "--message-format",
-                "json",
-            ]
-            .map(String::from),
-        )
-        .expect_err("legacy direct-driver syntax should be rejected");
-
-        assert_eq!(error.kind(), clap::error::ErrorKind::UnknownArgument);
     }
 }

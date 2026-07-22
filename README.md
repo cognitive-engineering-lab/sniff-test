@@ -275,7 +275,7 @@ just cli
 
 They snapshot normalized rustc-style output, including compact traces,
 full-stack traces, dependency warning footers, SAFETY diagnostics, Cargo
-argument forwarding, and the absence of old summary lines.
+argument forwarding, and flat effect findings.
 
 Run all snapshot tests with stale-snapshot rejection via:
 

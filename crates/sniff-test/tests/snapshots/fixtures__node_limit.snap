@@ -11,6 +11,7 @@ expression: messages
     "dependencies": [],
     "findings": [
       {
+        "effect": "panic",
         "kind": "analysis-incomplete",
         "level": "deny",
         "reason": "reachability analysis halted at the 4-instance node limit before the call graph was exhausted",
@@ -19,7 +20,7 @@ expression: messages
         "span": "src/lib.rs:24:1: 24:30"
       }
     ],
-    "format-version": 7,
+    "format-version": 8,
     "reason": "sniff-test-artifact",
     "rustc-version": "[RUSTC_VERSION]",
     "scope": "workspace",

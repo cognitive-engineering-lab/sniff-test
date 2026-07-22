@@ -1,0 +1,9 @@
+[package]
+name = "dependency-transitive-panic-app"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+dependency-transitive-panic-middle = { path = "../middle" }
+
+[workspace]

@@ -11,6 +11,7 @@ expression: messages
     "dependencies": [],
     "findings": [
       {
+        "effect": "safety",
         "function": "marker_placement::safety_comment_on_function_def_bad",
         "kind": "unsafe-call-missing-requirements",
         "level": "warn",
@@ -25,6 +26,7 @@ expression: messages
         "target": "marker_placement::read_byte"
       },
       {
+        "effect": "panic",
         "kind": "compiler-assert",
         "level": "deny",
         "reason": "compiler assert",
@@ -37,7 +39,7 @@ expression: messages
         ]
       }
     ],
-    "format-version": 7,
+    "format-version": 8,
     "reason": "sniff-test-artifact",
     "rustc-version": "[RUSTC_VERSION]",
     "scope": "workspace",

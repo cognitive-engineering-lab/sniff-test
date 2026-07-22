@@ -6,8 +6,8 @@ use crate::cache::{
 use crate::config::PanicConfig;
 use crate::namespace::canonical_namespace;
 use crate::panics::{
-    PanicAnalysis, PanicEvidence, PanicEvidenceKind, PanicPathDecision,
-    describe_panic_evidence_kind, trace_edges_until, trace_to_edge_ids, trigger_edge_id,
+    PanicAnalysis, PanicEvidence, PanicEvidenceKind, describe_panic_evidence_kind,
+    trace_edges_until, trace_to_edge_ids, trigger_edge_id,
 };
 use reachability::{
     ReachabilityEdgeId, ReachabilityEdgeKind, ReachabilityGraph, ReachabilityNodeKind,
@@ -17,6 +17,7 @@ use rustc_middle::ty::TyCtxt;
 use rustc_span::Pos;
 
 use crate::EffectSite;
+use crate::effect_tracker::EffectPathDecision;
 use crate::safety::SafetyFinding;
 
 use super::findings::{Finding, FindingKind};
@@ -95,7 +96,7 @@ fn cached_panic_finding<'tcx>(
     config: &PanicConfig,
 ) -> CachedFinding {
     match evidence.decision {
-        PanicPathDecision::RawPanic => {
+        EffectPathDecision::RawEffect => {
             let edge_id = trigger_edge_id(graph, evidence);
             let edge = graph.edge(edge_id);
             CachedFinding {
@@ -126,7 +127,7 @@ fn cached_panic_finding<'tcx>(
                 target: Some(cached_finding_target(tcx, graph, edge.target)),
             }
         }
-        PanicPathDecision::PanicObligation { edge_id, def_id } => {
+        EffectPathDecision::Obligation { edge_id, def_id } => {
             let trusted = super::driver::is_trusted_panic_obligation(tcx, def_id, config);
             let (span, source_span, mut diagnostic_spans, target) = edge_id.map_or_else(
                 || {

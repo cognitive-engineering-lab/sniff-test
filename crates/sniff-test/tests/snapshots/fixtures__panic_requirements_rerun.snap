@@ -11,6 +11,7 @@ expression: second_messages
     "dependencies": [],
     "findings": [
       {
+        "effect": "panic",
         "kind": "documented-panic",
         "level": "warn",
         "reason": "panic_requirements::documented_ratio documents when it may panic under # Panics",
@@ -23,6 +24,7 @@ expression: second_messages
         ]
       },
       {
+        "effect": "panic",
         "kind": "documented-panic",
         "level": "warn",
         "reason": "panic_requirements::documented_ratio documents when it may panic under # Panics",
@@ -35,6 +37,7 @@ expression: second_messages
         ]
       },
       {
+        "effect": "panic",
         "kind": "documented-panic",
         "level": "warn",
         "reason": "panic_requirements::documented_ratio documents when it may panic under # Panics",
@@ -47,6 +50,7 @@ expression: second_messages
         ]
       },
       {
+        "effect": "panic",
         "kind": "documented-panic",
         "level": "warn",
         "reason": "panic_requirements::documented_ratio documents when it may panic under # Panics",
@@ -59,6 +63,7 @@ expression: second_messages
         ]
       },
       {
+        "effect": "panic",
         "kind": "documented-panic",
         "level": "warn",
         "reason": "panic_requirements::documented_ratio documents when it may panic under # Panics",
@@ -71,6 +76,7 @@ expression: second_messages
         ]
       },
       {
+        "effect": "panic",
         "kind": "documented-panic",
         "level": "warn",
         "reason": "panic_requirements::documented_ratio documents when it may panic under # Panics",
@@ -83,7 +89,7 @@ expression: second_messages
         ]
       }
     ],
-    "format-version": 7,
+    "format-version": 8,
     "reason": "sniff-test-artifact",
     "rustc-version": "[RUSTC_VERSION]",
     "scope": "workspace",

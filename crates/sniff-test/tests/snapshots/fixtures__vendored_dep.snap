@@ -10,7 +10,7 @@ expression: messages
     },
     "dependencies": [],
     "findings": [],
-    "format-version": 7,
+    "format-version": 8,
     "reason": "sniff-test-artifact",
     "rustc-version": "[RUSTC_VERSION]",
     "scope": "dependency",
@@ -29,6 +29,7 @@ expression: messages
     ],
     "findings": [
       {
+        "effect": "panic",
         "kind": "documented-panic",
         "level": "warn",
         "reason": "vendored::checked documents when it may panic under # Panics",
@@ -41,7 +42,7 @@ expression: messages
         ]
       }
     ],
-    "format-version": 7,
+    "format-version": 8,
     "reason": "sniff-test-artifact",
     "rustc-version": "[RUSTC_VERSION]",
     "scope": "workspace",

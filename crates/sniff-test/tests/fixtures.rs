@@ -5,7 +5,10 @@ use std::process::Command;
 
 use serde_json::Value;
 
-use common::{CommandOutput, clean_cargo_package_env, copy_dir_all, repo_root, rustc_sysroot};
+use common::{
+    CommandOutput, clean_cargo_package_env, copy_dir_all, lock_nested_cargo, repo_root,
+    rustc_sysroot,
+};
 
 #[derive(Clone, Copy, Debug)]
 struct Case {
@@ -208,6 +211,16 @@ fixture_cases! {
             .crate_dir("app")
             .exit_code(1);
     }
+    "dependency_transitive_panic" => {
+        dependency_transitive_panic => Case::cargo("panic evidence crosses two cache boundaries")
+            .crate_dir("app")
+            .exit_code(1);
+    }
+    "dependency_mixed_panic" => {
+        dependency_mixed_panic => Case::cargo("cached raw and trusted panic evidence coexist")
+            .crate_dir("app")
+            .exit_code(1);
+    }
     "std_trait_impl_glob" => {
         std_trait_impl_glob => Case::cargo("trait-impl methods match trusted globs");
         driver_std_trait_impl_glob => Case::direct("trait-impl methods match trusted globs");
@@ -373,6 +386,47 @@ fn dependency_scope_keeps_safety_findings() {
     );
 }
 
+#[test]
+fn cached_safety_findings_keep_their_effect_spans() {
+    let repo = repo_root();
+    let binaries = Binaries::from_cargo();
+    let sysroot = rustc_sysroot();
+    let case = Case::cargo("cached safety findings retain their originating spans")
+        .crate_dir("app")
+        .exit_code(1);
+    let messages = run_case(
+        &repo,
+        &binaries,
+        &sysroot,
+        "cached_safety_findings_keep_their_effect_spans",
+        "dependency_safety_contract",
+        &case,
+    );
+    let report = messages
+        .iter()
+        .find(|message| message["artifact"]["crate-name"] == "dependency_safety_contract_app")
+        .expect("fixture should emit the application report");
+    let effect_spans = report["findings"]
+        .as_array()
+        .expect("report findings should be an array")
+        .iter()
+        .filter(|finding| finding["root"] == "dependency_safety_contract_app::reaches_two_effects")
+        .map(|finding| {
+            finding["effect-span"]
+                .as_str()
+                .expect("cached safety finding should retain its effect span")
+        })
+        .collect::<Vec<_>>();
+
+    assert_eq!(
+        effect_spans,
+        [
+            "[FIXTURE]/dep/src/lib.rs:2:26: 2:34",
+            "[FIXTURE]/dep/src/lib.rs:3:27: 3:35",
+        ]
+    );
+}
+
 /// Runs a cargo case twice against one fixture copy. The second run is fully
 /// fresh — cargo never re-invokes the driver — and must reproduce the first
 /// run's exit code and messages from persisted unit outcomes.
@@ -398,8 +452,13 @@ fn run_named_rerun_case(name: &'static str, fixture_name: &'static str, case: &C
     copy_dir_all(&fixture, &root)
         .unwrap_or_else(|error| panic!("{name}: failed to copy fixture: {error}"));
 
-    let first = run_cargo_case(&binaries.cargo, &root, name, case);
-    let second = run_cargo_case(&binaries.cargo, &root, name, case);
+    let (first, second) = {
+        let _cargo_guard = lock_nested_cargo();
+        (
+            run_cargo_case(&binaries.cargo, &root, name, case),
+            run_cargo_case(&binaries.cargo, &root, name, case),
+        )
+    };
     for (run, output) in [("first", &first), ("second", &second)] {
         assert_eq!(
             output.status.code(),
@@ -488,10 +547,14 @@ fn run_case(
     copy_dir_all(&fixture, &root)
         .unwrap_or_else(|error| panic!("{name}: failed to copy fixture: {error}"));
 
-    let output = if case.driver == Driver::Direct {
-        run_direct_driver_case(&binaries.driver, sysroot, &root, name, fixture_name, case)
-    } else {
-        run_cargo_case(&binaries.cargo, &root, name, case)
+    let output = match case.driver {
+        Driver::Direct => {
+            run_direct_driver_case(&binaries.driver, sysroot, &root, name, fixture_name, case)
+        }
+        Driver::Cargo => {
+            let _cargo_guard = lock_nested_cargo();
+            run_cargo_case(&binaries.cargo, &root, name, case)
+        }
     };
     assert_eq!(
         output.status.code(),
@@ -529,7 +592,7 @@ fn parse_messages(
                 )
             });
             normalize_json(&mut value, root, sysroot.trim());
-            assert_no_report_counts(&value);
+            assert_finding_effects(&value);
             value
         })
         .collect::<Vec<_>>();
@@ -546,23 +609,20 @@ fn parse_messages(
     messages
 }
 
-fn assert_no_report_counts(value: &Value) {
-    match value {
-        Value::Object(map) => {
+fn assert_finding_effects(report: &Value) {
+    let Some(findings) = report.get("findings").and_then(Value::as_array) else {
+        return;
+    };
+    for finding in findings {
+        let kind = finding["kind"]
+            .as_str()
+            .expect("finding kind should be a string");
+        if !matches!(kind, "empty-report-roots" | "missing-report-root") {
             assert!(
-                !map.contains_key("counts"),
-                "report findings are the source of truth; duplicated `counts` are not allowed"
+                matches!(finding["effect"].as_str(), Some("panic" | "safety")),
+                "effect finding `{kind}` should identify its effect: {finding}"
             );
-            for value in map.values() {
-                assert_no_report_counts(value);
-            }
         }
-        Value::Array(values) => {
-            for value in values {
-                assert_no_report_counts(value);
-            }
-        }
-        Value::Null | Value::Bool(_) | Value::Number(_) | Value::String(_) => {}
     }
 }
 

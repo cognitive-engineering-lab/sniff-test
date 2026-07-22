@@ -11,6 +11,7 @@ expression: messages
     "dependencies": [],
     "findings": [
       {
+        "effect": "safety",
         "function": "unsafe_closure_inherit::unjustified_closure::{closure#0}",
         "kind": "unsafe-call-missing-justification",
         "level": "warn",
@@ -24,7 +25,7 @@ expression: messages
         ]
       }
     ],
-    "format-version": 7,
+    "format-version": 8,
     "reason": "sniff-test-artifact",
     "rustc-version": "[RUSTC_VERSION]",
     "scope": "workspace",
