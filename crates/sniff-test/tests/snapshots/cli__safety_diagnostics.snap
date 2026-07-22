@@ -7,6 +7,20 @@ stdout:
 <empty>
 stderr:
     Checking safety-requirements v0.1.0 ([FIXTURE])
+warning: safety-obligation call to `safety_requirements::safe_documented_contract` in `safety_requirements::configured_safety_obligation_missing_requirement` does not satisfy all `# Safety` requirements
+   --> src/lib.rs:164:5
+    |
+164 |     safe_documented_contract(ptr);
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+note: `safety_requirements::safe_documented_contract` documents `# Safety` here
+   --> src/lib.rs:147:1
+    |
+147 | pub fn safe_documented_contract(_ptr: *const u8) {}
+    | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    = note: missing safety requirement `valid_ptr: pointer must be non-null.`
+    = help: add named bullets under the applicable `// SAFETY:` comment for each missing requirement
+
 warning: unsafe call to `safety_requirements::UnsafeGreeter::greet` in `safety_requirements::generic_unsafe_trait_method_missing` does not satisfy all `# Safety` requirements
    --> src/lib.rs:139:14
     |
@@ -74,5 +88,5 @@ warning: unsafe call to `unsafe function pointer` in `safety_requirements::unsaf
     |
     = help: add a `// SAFETY:` comment above the unsafe block or call site
 
-warning: `safety-requirements` (lib) generated 6 warnings
+warning: `safety-requirements` (lib) generated 7 warnings
     Finished `release` profile [optimized] target(s) in [TIME]

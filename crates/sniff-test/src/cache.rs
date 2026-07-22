@@ -2,7 +2,7 @@
 //!
 //! Cache files are keyed by compiled artifact identity, not only by crate name.
 //! Cargo can compile multiple versions or feature combinations of the same crate
-//! name in one build, and those artifacts must not share panic evidence.
+//! name in one build, and those artifacts must not share effect evidence.
 //!
 //! The schema intentionally stores structured findings and graph data. Terminal
 //! concerns such as colors are applied later by the reporter.
@@ -13,10 +13,12 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
-pub const CACHE_FORMAT_VERSION: u32 = 4;
+use crate::EffectKind;
+
+pub const CACHE_FORMAT_VERSION: u32 = 8;
 pub const CACHE_DIR_NAME: &str = "sniff-test-cache";
-pub const CACHE_VERSION_DIR: &str = "v4";
-pub const OUTCOME_FORMAT_VERSION: u32 = 1;
+pub const CACHE_VERSION_DIR: &str = "v8";
+pub const OUTCOME_FORMAT_VERSION: u32 = 2;
 
 /// Per-unit verdict persisted with artifact lifetime.
 ///
@@ -210,7 +212,7 @@ pub struct CachedArtifactInfo {
 
 /// A dependency artifact observed while analyzing this artifact.
 ///
-/// These references are mostly diagnostic and cache-hit metadata. Panic evidence
+/// These references are mostly diagnostic and cache-hit metadata. Effect evidence
 /// is looked up from the dependency artifact cache by `artifact_id`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
@@ -219,7 +221,7 @@ pub struct CachedDependencyRef {
     pub artifact_id: String,
 }
 
-/// Cached panic reachability facts for one analyzed report root.
+/// Cached effect facts for one analyzed report root.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub struct CachedFunctionSummary {
@@ -228,17 +230,20 @@ pub struct CachedFunctionSummary {
     /// Display form as rendered by the defining crate's session.
     pub path: String,
     pub is_generic: bool,
-    /// False when a reachability query halted at the node limit; the counts
-    /// below then under-approximate and consumers must not treat this summary
-    /// as exhaustive.
-    #[serde(default = "default_analysis_complete")]
-    pub analysis_complete: bool,
-    pub has_panic_docs: bool,
     #[serde(default)]
     pub root_span: Option<CachedSourceSpan>,
-    pub raw_panic_paths: usize,
-    pub panic_obligations: usize,
-    pub trusted_panic_obligations: usize,
+    pub effects: BTreeMap<EffectKind, CachedEffectSummary>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub struct CachedEffectSummary {
+    /// False when a reachability query halted at the node limit; the findings
+    /// then under-approximate and consumers must not treat this summary as
+    /// exhaustive.
+    #[serde(default = "default_analysis_complete")]
+    pub analysis_complete: bool,
+    pub has_contract: bool,
     pub graph: Option<CachedReachabilityGraph>,
     pub findings: Vec<CachedFinding>,
 }
@@ -249,15 +254,47 @@ fn default_analysis_complete() -> bool {
 
 impl CachedFunctionSummary {
     #[must_use]
-    pub fn is_panic_reachable(&self) -> bool {
-        self.has_panic_docs
-            || self.raw_panic_paths > 0
-            || self.panic_obligations > 0
-            || self.trusted_panic_obligations > 0
+    pub fn effect(&self, kind: EffectKind) -> Option<&CachedEffectSummary> {
+        self.effects.get(&kind)
     }
 }
 
-/// One concrete cached reason a function is panic-reachable or crosses a boundary.
+impl CachedEffectSummary {
+    #[must_use]
+    pub fn is_reachable(&self) -> bool {
+        self.has_contract
+            || self
+                .findings
+                .iter()
+                .any(|finding| finding.kind.is_effect_evidence())
+    }
+
+    #[must_use]
+    pub fn raw_path_count(&self) -> usize {
+        self.findings
+            .iter()
+            .filter(|finding| finding.kind.is_raw_effect())
+            .count()
+    }
+
+    #[must_use]
+    pub fn obligation_count(&self) -> usize {
+        self.findings
+            .iter()
+            .filter(|finding| finding.kind == CachedFindingKind::PanicObligation)
+            .count()
+    }
+
+    #[must_use]
+    pub fn trusted_obligation_count(&self) -> usize {
+        self.findings
+            .iter()
+            .filter(|finding| finding.kind == CachedFindingKind::TrustedPanicObligation)
+            .count()
+    }
+}
+
+/// One concrete cached effect site, obligation, or analysis boundary.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub struct CachedFinding {
@@ -274,8 +311,12 @@ pub struct CachedFinding {
     /// `edge_index`.
     pub trace: Vec<usize>,
     pub reason: String,
+    #[serde(default)]
+    pub missing_requirements: Vec<CachedRequirement>,
     pub target: Option<CachedFindingTarget>,
 }
+
+pub type CachedRequirement = crate::contracts::ContractRequirement;
 
 /// Structured source range for later diagnostic rendering.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -309,6 +350,31 @@ pub enum CachedFindingKind {
     TrustedPanicObligation,
     CrateBoundary,
     IndirectCallBoundary,
+    UnsafeCallMissingJustification,
+    UnsafeCallMissingRequirements,
+    UnsafeOpMissingJustification,
+    SafetyObligationMissingJustification,
+    SafetyObligationMissingRequirements,
+}
+
+impl CachedFindingKind {
+    fn is_effect_evidence(self) -> bool {
+        self != Self::CrateBoundary
+    }
+
+    fn is_raw_effect(self) -> bool {
+        matches!(
+            self,
+            Self::CompilerAssert
+                | Self::PanicInvocation
+                | Self::IndirectCallBoundary
+                | Self::UnsafeCallMissingJustification
+                | Self::UnsafeCallMissingRequirements
+                | Self::UnsafeOpMissingJustification
+                | Self::SafetyObligationMissingJustification
+                | Self::SafetyObligationMissingRequirements
+        )
+    }
 }
 
 /// Cached target of a finding.
@@ -565,8 +631,8 @@ fn sanitize_path_component(value: &str) -> String {
 mod tests {
     use super::{
         CacheError, CacheExpectations, CachedArtifactAnalysis, CachedArtifactInfo,
-        artifact_cache_path, artifact_id_from_extern_path, crate_cache_path, default_cache_dir,
-        write_atomic,
+        CachedEffectSummary, CachedFinding, CachedFindingKind, artifact_cache_path,
+        artifact_id_from_extern_path, crate_cache_path, default_cache_dir, write_atomic,
     };
 
     #[test]
@@ -595,14 +661,34 @@ mod tests {
             artifact_cache_path(&root, "sniff_test-29f0")
                 .display()
                 .to_string(),
-            "/target/plugin-nightly/sniff-test-cache/v4/artifacts/sniff_test-29f0.json"
+            "/target/plugin-nightly/sniff-test-cache/v8/artifacts/sniff_test-29f0.json"
         );
         assert_eq!(
             crate_cache_path(&root, "sniff-test", "sniff_test-29f0")
                 .display()
                 .to_string(),
-            "/target/plugin-nightly/sniff-test-cache/v4/crates/sniff-test/sniff_test-29f0.json"
+            "/target/plugin-nightly/sniff-test-cache/v8/crates/sniff-test/sniff_test-29f0.json"
         );
+    }
+
+    #[test]
+    fn effect_counts_are_derived_from_cached_findings() {
+        let summary = effect_summary([
+            CachedFindingKind::CompilerAssert,
+            CachedFindingKind::PanicObligation,
+            CachedFindingKind::TrustedPanicObligation,
+            CachedFindingKind::CrateBoundary,
+        ]);
+
+        assert!(summary.is_reachable());
+        assert_eq!(summary.raw_path_count(), 1);
+        assert_eq!(summary.obligation_count(), 1);
+        assert_eq!(summary.trusted_obligation_count(), 1);
+    }
+
+    #[test]
+    fn crate_boundaries_are_not_effect_evidence() {
+        assert!(!effect_summary([CachedFindingKind::CrateBoundary]).is_reachable());
     }
 
     #[test]
@@ -660,5 +746,27 @@ mod tests {
             Vec::new(),
             Vec::new(),
         )
+    }
+
+    fn effect_summary(kinds: impl IntoIterator<Item = CachedFindingKind>) -> CachedEffectSummary {
+        CachedEffectSummary {
+            analysis_complete: true,
+            has_contract: false,
+            graph: None,
+            findings: kinds
+                .into_iter()
+                .map(|kind| CachedFinding {
+                    kind,
+                    span: String::new(),
+                    source_span: None,
+                    diagnostic_spans: Vec::new(),
+                    edge_index: None,
+                    trace: Vec::new(),
+                    reason: String::new(),
+                    missing_requirements: Vec::new(),
+                    target: None,
+                })
+                .collect(),
+        }
     }
 }

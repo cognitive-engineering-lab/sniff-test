@@ -23,29 +23,23 @@ use rustc_middle::ty::{self, Ty, TyCtxt};
 use rustc_span::Span;
 
 use crate::config::{PanicBoundaryPolicy, PanicConfig};
-use crate::contracts::{
-    ContractDocSummary, ContractRequirement, EffectKind, check_contract, contract_doc_summary,
-};
+use crate::contracts::{ContractDocSummary, ContractRequirement, EffectKind, contract_doc_summary};
 use crate::effect_tracker::{
-    EffectPathDecision, EffectSite, EffectTrace, ambiguous_marker_uses, classify_effect_path,
-    trace_to_edge,
+    EffectPathDecision, EffectTrace, ambiguous_marker_uses, classify_effect_path,
+    resolve_effect_evidence, trace_to_edge,
 };
 use crate::namespace::canonical_namespace;
-use crate::source_markers::{
-    MarkerBlockKey, PanicMarkerBlock, PanicSatisfaction, span_panic_marker_block,
-};
+use crate::source_markers::{EffectMarkerBlock, span_marker_block};
 
 #[derive(Debug, Clone)]
-pub struct PanicAnalysis {
+pub(crate) struct PanicAnalysis {
     pub evidence: Vec<PanicEvidence>,
     pub ambiguous_markers: Vec<AmbiguousPanicMarker>,
     pub ambiguous_names: Vec<AmbiguousPanicRequirementName>,
 }
 
 #[derive(Debug, Clone)]
-pub struct PanicEvidence {
-    /// Function body and source span where the effect originates.
-    pub site: EffectSite,
+pub(crate) struct PanicEvidence {
     /// Edge that directly triggered this evidence before report-local adjustment.
     pub edge_id: ReachabilityEdgeId,
     /// Reachability path from the root to the triggering edge.
@@ -56,26 +50,26 @@ pub struct PanicEvidence {
     pub decision: PanicPathDecision,
 }
 
-pub type PanicTrace = EffectTrace;
+pub(crate) type PanicTrace = EffectTrace;
 
 #[derive(Debug, Clone)]
-pub struct AmbiguousPanicMarker {
+pub(crate) struct AmbiguousPanicMarker {
     pub marker_span: Span,
     pub edge_ids: Vec<ReachabilityEdgeId>,
 }
 
 #[derive(Debug, Clone)]
-pub struct AmbiguousPanicRequirementName {
+pub(crate) struct AmbiguousPanicRequirementName {
     pub def_id: DefId,
     pub normalized_name: String,
     pub requirements: Vec<PanicRequirement>,
 }
 
-pub type PanicRequirement = ContractRequirement;
+pub(crate) type PanicRequirement = ContractRequirement;
 
 /// Raw panic evidence found in the graph.
 #[derive(Debug, Clone, Copy)]
-pub enum PanicEvidenceKind {
+pub(crate) enum PanicEvidenceKind {
     /// Compiler-generated MIR assert, such as bounds, overflow, or invalid shift checks.
     CompilerAssert,
     /// Direct call to a function documented or configured as panicable.
@@ -90,7 +84,7 @@ pub enum PanicEvidenceKind {
 
 /// Propagation decision for one panic evidence path.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum PanicPathDecision {
+pub(crate) enum PanicPathDecision {
     /// No documented/configured obligation stopped this path.
     RawPanic,
     /// The path reached a function boundary that documents or declares panic behavior.
@@ -112,7 +106,7 @@ impl From<EffectPathDecision> for PanicPathDecision {
 }
 
 #[must_use]
-pub fn analyze_panic_evidence<'tcx>(
+pub(crate) fn analyze_panic_evidence<'tcx>(
     tcx: TyCtxt<'tcx>,
     view: ReachabilityView<'_, 'tcx>,
     config: &PanicConfig,
@@ -127,10 +121,7 @@ pub fn analyze_panic_evidence<'tcx>(
         .filter_map(|edge| {
             let edge_id = edge.id();
             let kind = classify_edge(tcx, edge, config, &marker_resolution)?;
-            let site = EffectSite {
-                owner: edge.origin().instance()?.def_id(),
-                span: edge.span(),
-            };
+            edge.origin().instance()?;
             let trace = PanicTrace {
                 edge_ids: trace_to_edge_ids(edge),
             };
@@ -166,7 +157,6 @@ pub fn analyze_panic_evidence<'tcx>(
             }
 
             Some(PanicEvidence {
-                site,
                 edge_id,
                 trace,
                 kind,
@@ -232,7 +222,7 @@ fn concrete_callable_keys_in_trace<'tcx>(
 
 /// Returns the evidence trace up to and including `edge_id`.
 #[must_use]
-pub fn trace_edges_until(
+pub(crate) fn trace_edges_until(
     evidence: &PanicEvidence,
     edge_id: Option<ReachabilityEdgeId>,
 ) -> Vec<ReachabilityEdgeId> {
@@ -256,7 +246,7 @@ pub fn trace_edges_until(
 /// Reports prefer the last edge whose source is local, because dependency
 /// internals can otherwise hide the current-crate call site that matters most.
 #[must_use]
-pub fn trigger_edge_id(
+pub(crate) fn trigger_edge_id(
     graph: &ReachabilityGraph<'_>,
     evidence: &PanicEvidence,
 ) -> ReachabilityEdgeId {
@@ -277,13 +267,13 @@ pub fn trigger_edge_id(
 
 /// Returns the graph trace up to and including `edge`.
 #[must_use]
-pub fn trace_to_edge_ids(edge: ReachedEdge<'_, '_>) -> Vec<ReachabilityEdgeId> {
+pub(crate) fn trace_to_edge_ids(edge: ReachedEdge<'_, '_>) -> Vec<ReachabilityEdgeId> {
     trace_to_edge(edge).edge_ids
 }
 
 /// Stable plain-text description for cached evidence reasons.
 #[must_use]
-pub fn describe_panic_evidence_kind(tcx: TyCtxt<'_>, kind: &PanicEvidenceKind) -> String {
+pub(crate) fn describe_panic_evidence_kind(tcx: TyCtxt<'_>, kind: &PanicEvidenceKind) -> String {
     match kind {
         PanicEvidenceKind::CompilerAssert => String::from("compiler assert"),
         PanicEvidenceKind::PanicObligation { def_id } => {
@@ -349,17 +339,8 @@ fn panic_obligation_node_kind<'tcx>(
 }
 
 #[must_use]
-pub fn has_panic_docs(tcx: TyCtxt<'_>, def_id: DefId, config: &PanicConfig) -> bool {
+pub(crate) fn has_panic_docs(tcx: TyCtxt<'_>, def_id: DefId, config: &PanicConfig) -> bool {
     panic_doc_summary(tcx, def_id, config).has_docs
-}
-
-#[must_use]
-pub fn panic_requirements(
-    tcx: TyCtxt<'_>,
-    def_id: DefId,
-    config: &PanicConfig,
-) -> Vec<PanicRequirement> {
-    panic_doc_summary(tcx, def_id, config).requirements
 }
 
 type PanicDocSummary = ContractDocSummary;
@@ -602,53 +583,34 @@ fn edge_panic_marker_suppresses<'tcx>(
         return false;
     };
 
-    marker_satisfies_target(tcx, &candidate.satisfactions, target, config)
+    marker_satisfies_target(tcx, candidate, target, config)
 }
 
 fn marker_satisfies_target<'tcx>(
     tcx: TyCtxt<'tcx>,
-    satisfactions: &[PanicSatisfaction],
+    marker: &EffectMarkerBlock,
     target: &ReachabilityNodeKind<'tcx>,
     config: &PanicConfig,
 ) -> bool {
     let contract_def_id = match target {
-        ReachabilityNodeKind::Instance(instance) => instance.def_id(),
-        ReachabilityNodeKind::IndirectCall { callee_ty } => {
-            match indirect_callee_def_id(*callee_ty) {
-                Some(def_id) => def_id,
-                None => return true,
-            }
-        }
+        ReachabilityNodeKind::Instance(instance) => Some(instance.def_id()),
+        ReachabilityNodeKind::IndirectCall { callee_ty } => indirect_callee_def_id(*callee_ty),
         ReachabilityNodeKind::MacroExpansion { .. }
         | ReachabilityNodeKind::CompilerAssert { .. }
-        | ReachabilityNodeKind::DynObjectCast { .. } => return true,
+        | ReachabilityNodeKind::DynObjectCast { .. } => None,
     };
-    let summary = panic_doc_summary(tcx, contract_def_id, config);
-    summary.requirements.is_empty()
-        || check_contract(&summary.requirements, satisfactions).is_satisfied()
+    let requirements = contract_def_id
+        .map(|def_id| panic_doc_summary(tcx, def_id, config).requirements)
+        .unwrap_or_default();
+    resolve_effect_evidence(&requirements, [marker])
+        .contract
+        .is_satisfied()
 }
 
 #[derive(Debug)]
 struct PanicMarkerResolution {
-    candidates: HashMap<ReachabilityEdgeId, PanicMarkerCandidate>,
+    candidates: HashMap<ReachabilityEdgeId, EffectMarkerBlock>,
     ambiguous_markers: Vec<AmbiguousPanicMarker>,
-}
-
-#[derive(Debug, Clone)]
-struct PanicMarkerCandidate {
-    key: MarkerBlockKey,
-    marker_span: Span,
-    satisfactions: Vec<PanicSatisfaction>,
-}
-
-impl From<PanicMarkerBlock> for PanicMarkerCandidate {
-    fn from(block: PanicMarkerBlock) -> Self {
-        Self {
-            key: block.key,
-            marker_span: block.span,
-            satisfactions: block.satisfactions,
-        }
-    }
 }
 
 fn resolve_panic_markers<'tcx>(
@@ -688,12 +650,12 @@ fn resolve_panic_markers<'tcx>(
             let candidate = candidates.get(edge_id)?;
             let edge = graph.edge(*edge_id);
             let target = &graph.node(edge.target).kind;
-            if !marker_satisfies_target(tcx, &candidate.satisfactions, target, config) {
+            if !marker_satisfies_target(tcx, candidate, target, config) {
                 return None;
             }
             Some((*edge_id, candidate))
         }) {
-            marker_claims.push((candidate.key, candidate.marker_span, edge_id));
+            marker_claims.push((candidate.key, candidate.span, edge_id));
         }
     }
 
@@ -732,13 +694,15 @@ fn edge_marker_candidate(
     graph: &ReachabilityGraph<'_>,
     edge: &ReachabilityEdge,
     config: &PanicConfig,
-) -> Option<PanicMarkerCandidate> {
-    let statement = span_panic_marker_block(tcx, edge.span, config.marker_probing);
+) -> Option<EffectMarkerBlock> {
+    let statement = span_marker_block(tcx, edge.span, EffectKind::Panic, config.marker_probing);
     if let Some(callee_span) = edge.callee_span
         && !spans_start_on_same_line(tcx, edge.span, callee_span)
     {
-        if let Some(callee) = span_panic_marker_block(tcx, callee_span, config.marker_probing) {
-            return Some(callee.into());
+        if let Some(callee) =
+            span_marker_block(tcx, callee_span, EffectKind::Panic, config.marker_probing)
+        {
+            return Some(callee);
         }
         if let Some(statement) = statement {
             let satisfactions = statement
@@ -746,9 +710,9 @@ fn edge_marker_candidate(
                 .into_iter()
                 .filter(|satisfaction| satisfaction.requirement.is_some())
                 .collect::<Vec<_>>();
-            return (!satisfactions.is_empty()).then_some(PanicMarkerCandidate {
+            return (!satisfactions.is_empty()).then_some(EffectMarkerBlock {
                 key: statement.key,
-                marker_span: statement.span,
+                span: statement.span,
                 satisfactions,
             });
         }
@@ -756,9 +720,7 @@ fn edge_marker_candidate(
         return enclosing_block_marker_candidate(tcx, graph, edge, config);
     }
 
-    statement
-        .map(Into::into)
-        .or_else(|| enclosing_block_marker_candidate(tcx, graph, edge, config))
+    statement.or_else(|| enclosing_block_marker_candidate(tcx, graph, edge, config))
 }
 
 fn enclosing_block_marker_candidate(
@@ -766,7 +728,7 @@ fn enclosing_block_marker_candidate(
     graph: &ReachabilityGraph<'_>,
     edge: &ReachabilityEdge,
     config: &PanicConfig,
-) -> Option<PanicMarkerCandidate> {
+) -> Option<EffectMarkerBlock> {
     let owner = match &graph.node(edge.origin).kind {
         ReachabilityNodeKind::Instance(instance) => instance.def_id().as_local()?,
         ReachabilityNodeKind::CompilerAssert { .. }
@@ -777,7 +739,7 @@ fn enclosing_block_marker_candidate(
 
     enclosing_block_spans(tcx, owner, edge.span)
         .into_iter()
-        .find_map(|span| span_panic_marker_block(tcx, span, config.marker_probing).map(Into::into))
+        .find_map(|span| span_marker_block(tcx, span, EffectKind::Panic, config.marker_probing))
 }
 
 fn enclosing_block_spans(tcx: TyCtxt<'_>, owner: LocalDefId, target: Span) -> Vec<Span> {

@@ -9,7 +9,7 @@
 
 mod thir;
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 use rustc_hir::def::DefKind;
 use rustc_hir::def_id::{DefId, LocalDefId};
@@ -17,24 +17,22 @@ use rustc_middle::ty::TyCtxt;
 use rustc_span::Span;
 
 use crate::config::{ContractDocOverrides, SafetyConfig};
-use crate::contracts::{
-    AmbiguousContractRequirements, ContractDocSummary, ContractRequirement, EffectKind,
-    contract_doc_summary,
-};
+use crate::contracts::{ContractDocSummary, ContractRequirement, EffectKind, contract_doc_summary};
 use crate::effect_tracker::EffectSite;
 use crate::namespace::canonical_namespace;
-use crate::source_markers::{MarkerBlockKey, SafetyMarkerBlock};
+use crate::source_markers::MarkerBlockKey;
 
 #[derive(Debug, Default)]
-pub struct SafetyAnalysis {
-    pub findings: Vec<SafetyFinding>,
+pub(crate) struct SafetyAnalysis {
+    findings_by_owner: HashMap<DefId, Vec<SafetyFinding>>,
+    analyzed_owners: HashSet<LocalDefId>,
     ambiguous_requirement_names: HashSet<(DefId, DefId, String)>,
-    marker_claims: Vec<SafetyMarkerClaim>,
+    marker_claims_by_owner: HashMap<DefId, Vec<SafetyMarkerClaim>>,
     next_effect_group: usize,
 }
 
 #[derive(Debug, Clone)]
-pub enum SafetyFinding {
+pub(crate) enum SafetyFinding {
     MissingSafetyDocs {
         def_id: DefId,
         span: Span,
@@ -69,6 +67,18 @@ pub enum SafetyFinding {
 
 impl SafetyFinding {
     #[must_use]
+    pub(crate) fn effect_site(&self) -> Option<crate::EffectSite> {
+        match *self {
+            Self::CallMissingJustification { site, .. }
+            | Self::CallMissingRequirements { site, .. }
+            | Self::OpMissingJustification { site, .. } => Some(site),
+            Self::MissingSafetyDocs { .. }
+            | Self::AmbiguousObligationName { .. }
+            | Self::AmbiguousMarker { .. } => None,
+        }
+    }
+
+    #[must_use]
     pub(crate) fn owner(&self) -> DefId {
         match *self {
             Self::MissingSafetyDocs { def_id, .. } => def_id,
@@ -83,12 +93,7 @@ impl SafetyFinding {
 
     #[must_use]
     pub(crate) fn is_effect_site(&self) -> bool {
-        matches!(
-            self,
-            Self::CallMissingJustification { .. }
-                | Self::CallMissingRequirements { .. }
-                | Self::OpMissingJustification { .. }
-        )
+        self.effect_site().is_some()
     }
 
     #[must_use]
@@ -126,7 +131,6 @@ impl std::hash::Hash for SafetyEffectGroup {
 
 #[derive(Debug)]
 struct SafetyMarkerClaim {
-    owner: DefId,
     key: MarkerBlockKey,
     marker_span: Span,
     group: SafetyEffectGroup,
@@ -139,7 +143,7 @@ struct SafetyMarkerClaim {
 /// against rustc's enum on toolchain bumps. The `unsafe_ops*` fixtures cover
 /// one operation per variant as a behavioral canary.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum SafetyOpKind {
+pub(crate) enum SafetyOpKind {
     DerefRawPointer,
     UseOfMutableStatic,
     UseOfExternStatic,
@@ -173,7 +177,7 @@ impl SafetyOpKind {
 }
 
 #[derive(Debug, Clone, Copy)]
-pub enum SafetyCallee {
+pub(crate) enum SafetyCallee {
     Def(DefId),
     FunctionPointer,
 }
@@ -189,9 +193,9 @@ impl SafetyCallee {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum SafetyCallKind {
+pub(crate) enum SafetyCallKind {
     Unsafe,
-    ConfiguredObligation,
+    Obligation,
 }
 
 impl SafetyCallKind {
@@ -199,7 +203,7 @@ impl SafetyCallKind {
     pub fn label(self) -> &'static str {
         match self {
             Self::Unsafe => "unsafe call",
-            Self::ConfiguredObligation => "safety-obligation call",
+            Self::Obligation => "safety-obligation call",
         }
     }
 }
@@ -210,13 +214,39 @@ struct SafetyCall {
     kind: SafetyCallKind,
 }
 
-pub type SafetyRequirement = ContractRequirement;
-pub type AmbiguousSafetyRequirements = AmbiguousContractRequirements;
+pub(crate) type SafetyRequirement = ContractRequirement;
 
 impl SafetyAnalysis {
-    #[must_use]
-    pub fn is_empty(&self) -> bool {
-        self.findings.is_empty()
+    pub(crate) fn findings(&self, owner: DefId) -> &[SafetyFinding] {
+        self.findings_by_owner
+            .get(&owner)
+            .map_or(&[], Vec::as_slice)
+    }
+
+    pub(super) fn push_finding(&mut self, finding: SafetyFinding) {
+        self.findings_by_owner
+            .entry(finding.owner())
+            .or_default()
+            .push(finding);
+    }
+
+    pub(crate) fn analyze_owners(
+        &mut self,
+        tcx: TyCtxt<'_>,
+        config: &SafetyConfig,
+        owners: impl IntoIterator<Item = LocalDefId>,
+    ) {
+        for owner in owners {
+            if !self.analyzed_owners.insert(owner)
+                || !matches!(tcx.def_kind(owner), DefKind::Fn | DefKind::AssocFn)
+                || tcx.hir_maybe_body_owned_by(owner).is_none()
+                || config.ignores_def(tcx, owner.to_def_id())
+            {
+                continue;
+            }
+            collect_missing_safety_docs(tcx, owner, config, self);
+            thir::collect_body_findings(tcx, owner, config, self);
+        }
     }
 
     fn push_ambiguous_requirement_names(
@@ -234,7 +264,7 @@ impl SafetyAnalysis {
             )) {
                 continue;
             }
-            self.findings.push(SafetyFinding::AmbiguousObligationName {
+            self.push_finding(SafetyFinding::AmbiguousObligationName {
                 caller,
                 def_id,
                 normalized_name: ambiguous.normalized_name,
@@ -252,24 +282,33 @@ impl SafetyAnalysis {
         group
     }
 
-    fn claim_marker(&mut self, owner: DefId, marker: &SafetyMarkerBlock, group: SafetyEffectGroup) {
-        self.marker_claims.push(SafetyMarkerClaim {
-            owner,
-            key: marker.key,
-            marker_span: marker.span,
-            group,
-        });
+    fn claim_marker(
+        &mut self,
+        owner: DefId,
+        key: MarkerBlockKey,
+        marker_span: Span,
+        group: SafetyEffectGroup,
+    ) {
+        self.marker_claims_by_owner
+            .entry(owner)
+            .or_default()
+            .push(SafetyMarkerClaim {
+                key,
+                marker_span,
+                group,
+            });
     }
 
     pub(crate) fn ambiguous_marker_findings(
         &self,
         caller: DefId,
-        mut include_owner: impl FnMut(DefId) -> bool,
+        owners: impl IntoIterator<Item = DefId>,
     ) -> Vec<SafetyFinding> {
         crate::effect_tracker::ambiguous_marker_uses(
-            self.marker_claims
-                .iter()
-                .filter(|claim| include_owner(claim.owner))
+            owners
+                .into_iter()
+                .filter_map(|owner| self.marker_claims_by_owner.get(&owner))
+                .flatten()
                 .map(|claim| (claim.key, claim.marker_span, claim.group)),
         )
         .into_iter()
@@ -287,34 +326,12 @@ impl SafetyAnalysis {
 }
 
 #[must_use]
-pub(crate) fn analyze_safety(tcx: TyCtxt<'_>, config: &SafetyConfig) -> SafetyAnalysis {
-    let mut analysis = SafetyAnalysis::default();
-
-    for owner in tcx.hir_body_owners() {
-        if !matches!(tcx.def_kind(owner), DefKind::Fn | DefKind::AssocFn)
-            || config.ignores_def(tcx, owner.to_def_id())
-        {
-            continue;
-        }
-        collect_missing_safety_docs(tcx, owner, config, &mut analysis);
-        thir::collect_body_findings(tcx, owner, config, &mut analysis);
-    }
-
-    analysis
-}
-
-#[must_use]
-pub fn has_safety_docs(tcx: TyCtxt<'_>, def_id: DefId, overrides: &ContractDocOverrides) -> bool {
-    safety_doc_summary(tcx, def_id, overrides).has_docs
-}
-
-#[must_use]
-pub fn safety_requirements(
+pub(crate) fn has_safety_docs(
     tcx: TyCtxt<'_>,
     def_id: DefId,
     overrides: &ContractDocOverrides,
-) -> Vec<SafetyRequirement> {
-    safety_doc_summary(tcx, def_id, overrides).requirements
+) -> bool {
+    safety_doc_summary(tcx, def_id, overrides).has_docs
 }
 
 fn collect_missing_safety_docs(
@@ -342,7 +359,7 @@ fn collect_missing_safety_docs(
             &config.documentation_overrides,
         );
     } else {
-        analysis.findings.push(SafetyFinding::MissingSafetyDocs {
+        analysis.push_finding(SafetyFinding::MissingSafetyDocs {
             def_id,
             span: tcx.def_span(def_id),
         });
@@ -350,7 +367,7 @@ fn collect_missing_safety_docs(
 }
 
 #[must_use]
-pub fn fn_def_is_unsafe(tcx: TyCtxt<'_>, def_id: DefId) -> bool {
+pub(crate) fn fn_def_is_unsafe(tcx: TyCtxt<'_>, def_id: DefId) -> bool {
     matches!(tcx.def_kind(def_id), DefKind::Fn | DefKind::AssocFn)
         && tcx
             .fn_sig(def_id)

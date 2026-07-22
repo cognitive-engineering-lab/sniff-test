@@ -1,0 +1,11 @@
+[analysis]
+node-limit = 2
+
+[analysis.lints]
+analysis-incomplete = "deny"
+
+[panics]
+ignored-namespaces = [
+    "dependency_safety_incomplete_leaf::**",
+    "dependency_safety_incomplete_middle::**",
+]

@@ -16,7 +16,60 @@ use reachability::{
 use rustc_middle::ty::TyCtxt;
 use rustc_span::Pos;
 
+use crate::EffectSite;
+use crate::safety::SafetyFinding;
+
+use super::findings::{Finding, FindingKind};
 use super::report::{render_assert_message, render_node, render_span};
+
+pub(super) fn cached_safety_finding(
+    tcx: TyCtxt<'_>,
+    site: EffectSite,
+    trace: &crate::effect_tracker::EffectTrace,
+    safety_finding: &SafetyFinding,
+    finding: &Finding,
+) -> Option<CachedFinding> {
+    let kind = match finding.kind {
+        FindingKind::UnsafeCallMissingJustification => {
+            CachedFindingKind::UnsafeCallMissingJustification
+        }
+        FindingKind::UnsafeCallMissingRequirements => {
+            CachedFindingKind::UnsafeCallMissingRequirements
+        }
+        FindingKind::UnsafeOpMissingJustification => {
+            CachedFindingKind::UnsafeOpMissingJustification
+        }
+        FindingKind::SafetyObligationMissingJustification => {
+            CachedFindingKind::SafetyObligationMissingJustification
+        }
+        FindingKind::SafetyObligationMissingRequirements => {
+            CachedFindingKind::SafetyObligationMissingRequirements
+        }
+        _ => return None,
+    };
+    let missing_requirements = match safety_finding {
+        SafetyFinding::CallMissingRequirements {
+            missing_requirements,
+            ..
+        } => missing_requirements.clone(),
+        _ => Vec::new(),
+    };
+    Some(CachedFinding {
+        kind,
+        span: render_span(tcx, site.span),
+        source_span: cached_source_span(tcx, site.span),
+        diagnostic_spans: cached_primary_span(tcx, site.span, Some("safety effect")),
+        edge_index: None,
+        trace: trace.edge_ids.iter().map(|edge| edge.index()).collect(),
+        reason: finding.reason.clone(),
+        missing_requirements,
+        target: Some(CachedFindingTarget::Function {
+            path: canonical_namespace(tcx, site.owner),
+            crate_name: tcx.crate_name(site.owner.krate).to_string(),
+            is_local: site.owner.is_local(),
+        }),
+    })
+}
 
 pub(super) fn cached_boundary_findings<'tcx>(
     tcx: TyCtxt<'tcx>,
@@ -69,6 +122,7 @@ fn cached_panic_finding<'tcx>(
                     .map(|edge_id| edge_id.index())
                     .collect(),
                 reason: describe_panic_evidence_kind(tcx, &evidence.kind),
+                missing_requirements: Vec::new(),
                 target: Some(cached_finding_target(tcx, graph, edge.target)),
             }
         }
@@ -130,6 +184,7 @@ fn cached_panic_finding<'tcx>(
                     "{} documents when it may panic under # Panics",
                     canonical_namespace(tcx, def_id)
                 ),
+                missing_requirements: Vec::new(),
                 target: Some(target),
             }
         }
@@ -170,6 +225,7 @@ fn cached_crate_boundary_findings<'tcx>(
                     .map(|edge_id| edge_id.index())
                     .collect(),
                 reason: format!("crate boundary {} to {}", edge.kind(), target_path),
+                missing_requirements: Vec::new(),
                 target: Some(CachedFindingTarget::Function {
                     path: target_path,
                     crate_name: tcx.crate_name(target.krate).to_string(),

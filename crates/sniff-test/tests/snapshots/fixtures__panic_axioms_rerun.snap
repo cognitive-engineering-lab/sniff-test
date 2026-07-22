@@ -62,7 +62,7 @@ expression: second_messages
         ]
       }
     ],
-    "format-version": 6,
+    "format-version": 7,
     "reason": "sniff-test-artifact",
     "rustc-version": "[RUSTC_VERSION]",
     "scope": "workspace",

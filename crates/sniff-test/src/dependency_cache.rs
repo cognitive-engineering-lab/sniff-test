@@ -1,7 +1,7 @@
 //! Runtime view of cached dependency analyses.
 //!
 //! This module loads cache files for the `--extern` artifacts rustc passed to
-//! the current compilation. It indexes panic-reachable functions by artifact id
+//! the current compilation. It indexes effect-reachable functions by artifact id
 //! and def path hash, then only permits crate-name lookup when that crate name
 //! resolves to exactly one artifact.
 
@@ -12,7 +12,7 @@ use crate::cache::{
     CacheExpectations, CachedArtifactAnalysis, CachedDependencyRef, CachedFunctionSummary,
     artifact_cache_path, artifact_id_from_extern_path,
 };
-use crate::config::PanicConfig;
+use crate::config::SniffTestConfig;
 
 /// A rustc `--extern` dependency relevant to cache lookup.
 #[derive(Debug, Clone)]
@@ -38,7 +38,7 @@ impl DependencyAnalysisCache {
     pub fn load(
         cache_dir: &Path,
         externs: &[DependencyInput],
-        config: &PanicConfig,
+        config: &SniffTestConfig,
         expected: &CacheExpectations<'_>,
     ) -> Self {
         let mut dependencies = Vec::new();
@@ -48,7 +48,12 @@ impl DependencyAnalysisCache {
         for dependency in externs {
             // Check the invocation's extern name first: Cargo dependencies can
             // be renamed independently of their canonical crate names.
-            if config.ignores_namespace(&dependency.name) {
+            if config.panics.ignores_namespace(&dependency.name)
+                && config
+                    .safety
+                    .ignored_namespace_match(&dependency.name)
+                    .is_some()
+            {
                 continue;
             }
 
@@ -74,7 +79,14 @@ impl DependencyAnalysisCache {
             if let Some(analysis) = &analysis {
                 // The cache records the canonical crate name, which may differ
                 // from the extern alias checked above.
-                if config.ignores_namespace(&analysis.artifact.crate_name) {
+                if config
+                    .panics
+                    .ignores_namespace(&analysis.artifact.crate_name)
+                    && config
+                        .safety
+                        .ignored_namespace_match(&analysis.artifact.crate_name)
+                        .is_some()
+                {
                     continue;
                 }
 
@@ -94,13 +106,20 @@ impl DependencyAnalysisCache {
                 }
 
                 for function in analysis.functions.values() {
-                    // A complete summary with no panic evidence can be
+                    // A complete summary with no effect evidence can be
                     // discarded. An incomplete summary cannot be treated as
-                    // clean: analysis may have stopped before reaching panic
+                    // clean: analysis may have stopped before reaching effect
                     // evidence. The function-path check supports ignores more
                     // specific than either crate-name check above.
-                    if (function.is_panic_reachable() || !function.analysis_complete)
-                        && !config.ignores_namespace(&function.path)
+                    if function
+                        .effects
+                        .values()
+                        .any(|effect| effect.is_reachable() || !effect.analysis_complete)
+                        && (!config.panics.ignores_namespace(&function.path)
+                            || config
+                                .safety
+                                .ignored_namespace_match(&function.path)
+                                .is_none())
                     {
                         functions.insert(
                             FunctionCacheKey {
@@ -205,7 +224,10 @@ struct ResolvedDependency {
 
 #[cfg(test)]
 mod tests {
-    use crate::cache::CachedFunctionSummary;
+    use std::collections::BTreeMap;
+
+    use crate::cache::{CachedEffectSummary, CachedFunctionSummary};
+    use crate::contracts::EffectKind;
 
     use super::{CrateArtifactIndex, DependencyAnalysisCache, FunctionCacheKey};
 
@@ -236,14 +258,16 @@ mod tests {
             def_path_hash: String::from("00000000000000010000000000000002"),
             path: path.to_owned(),
             is_generic: false,
-            analysis_complete: true,
-            has_panic_docs: false,
             root_span: None,
-            raw_panic_paths: 1,
-            panic_obligations: 0,
-            trusted_panic_obligations: 0,
-            graph: None,
-            findings: Vec::new(),
+            effects: BTreeMap::from([(
+                EffectKind::Panic,
+                CachedEffectSummary {
+                    analysis_complete: true,
+                    has_contract: false,
+                    graph: None,
+                    findings: Vec::new(),
+                },
+            )]),
         }
     }
 }

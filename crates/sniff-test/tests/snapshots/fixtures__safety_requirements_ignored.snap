@@ -11,6 +11,19 @@ expression: messages
     "dependencies": [],
     "findings": [
       {
+        "function": "safety_requirements::configured_safety_obligation_missing_requirement",
+        "kind": "safety-obligation-missing-requirements",
+        "level": "warn",
+        "missing-requirements": [
+          "valid_ptr: pointer must be non-null."
+        ],
+        "reason": "safety-obligation call to `safety_requirements::safe_documented_contract` does not satisfy all # Safety requirements",
+        "root": "safety_requirements::configured_safety_obligation_missing_requirement",
+        "root-kind": "concrete",
+        "span": "src/lib.rs:164:5: 164:34",
+        "target": "safety_requirements::safe_documented_contract"
+      },
+      {
         "function": "safety_requirements::generic_unsafe_trait_method_missing",
         "kind": "unsafe-call-missing-requirements",
         "level": "warn",
@@ -34,7 +47,7 @@ expression: messages
         "target": "unsafe function pointer"
       }
     ],
-    "format-version": 6,
+    "format-version": 7,
     "reason": "sniff-test-artifact",
     "rustc-version": "[RUSTC_VERSION]",
     "scope": "workspace",

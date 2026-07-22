@@ -243,7 +243,8 @@ impl ContractDocOverrides {
     }
 
     #[must_use]
-    pub fn markdown_for_namespace(&self, namespace: &str) -> Option<&str> {
+    #[cfg(test)]
+    fn markdown_for_namespace(&self, namespace: &str) -> Option<&str> {
         let matched = self.patterns.best_match(namespace)?;
         self.entries
             .iter()
@@ -535,18 +536,14 @@ impl PanicConfig {
     }
 
     #[must_use]
-    pub fn trusts_panic_obligation_namespace(&self, namespace: &str) -> bool {
+    #[cfg(test)]
+    fn trusts_panic_obligation_namespace(&self, namespace: &str) -> bool {
         self.trusted_panic_obligation_namespaces.is_match(namespace)
     }
 
     #[must_use]
-    pub fn trusts_panic_obligation_def(&self, tcx: TyCtxt<'_>, def_id: DefId) -> bool {
-        self.trusted_panic_obligation_def_match(tcx, def_id)
-            .is_some()
-    }
-
-    #[must_use]
-    pub fn marks_panic_sink_namespace(&self, namespace: &str) -> bool {
+    #[cfg(test)]
+    fn marks_panic_sink_namespace(&self, namespace: &str) -> bool {
         self.panic_sink_namespaces.is_match(namespace)
     }
 
@@ -617,7 +614,8 @@ impl SafetyConfig {
     }
 
     #[must_use]
-    pub fn marks_safety_obligation_namespace(&self, namespace: &str) -> bool {
+    #[cfg(test)]
+    fn marks_safety_obligation_namespace(&self, namespace: &str) -> bool {
         self.safety_obligation_namespaces.is_match(namespace)
     }
 

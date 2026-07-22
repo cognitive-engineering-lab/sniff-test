@@ -2,6 +2,7 @@
 
 use std::path::Path;
 
+use crate::cache::CachedFindingKind;
 use crate::config::{ContractDocOverrides, LintLevel, ReportRootSet, SniffTestConfig};
 use crate::contracts::EffectKind;
 use crate::namespace::canonical_namespace;
@@ -137,6 +138,32 @@ impl FindingKind {
         }
     }
 
+    pub(crate) fn from_cached_safety(kind: CachedFindingKind) -> Option<Self> {
+        match kind {
+            CachedFindingKind::UnsafeCallMissingJustification => {
+                Some(Self::UnsafeCallMissingJustification)
+            }
+            CachedFindingKind::UnsafeCallMissingRequirements => {
+                Some(Self::UnsafeCallMissingRequirements)
+            }
+            CachedFindingKind::UnsafeOpMissingJustification => {
+                Some(Self::UnsafeOpMissingJustification)
+            }
+            CachedFindingKind::SafetyObligationMissingJustification => {
+                Some(Self::SafetyObligationMissingJustification)
+            }
+            CachedFindingKind::SafetyObligationMissingRequirements => {
+                Some(Self::SafetyObligationMissingRequirements)
+            }
+            CachedFindingKind::CompilerAssert
+            | CachedFindingKind::PanicInvocation
+            | CachedFindingKind::PanicObligation
+            | CachedFindingKind::TrustedPanicObligation
+            | CachedFindingKind::CrateBoundary
+            | CachedFindingKind::IndirectCallBoundary => None,
+        }
+    }
+
     fn lint_level(self, config: &SniffTestConfig) -> LintLevel {
         match self {
             Self::CompilerAssert => config.panics.lints.compiler_assert,
@@ -234,9 +261,7 @@ pub(crate) fn safety_finding_report(
             let call = call_kind.label();
             let kind = match call_kind {
                 SafetyCallKind::Unsafe => FindingKind::UnsafeCallMissingJustification,
-                SafetyCallKind::ConfiguredObligation => {
-                    FindingKind::SafetyObligationMissingJustification
-                }
+                SafetyCallKind::Obligation => FindingKind::SafetyObligationMissingJustification,
             };
             Finding {
                 function: Some(canonical_namespace(tcx, site.owner)),
@@ -263,9 +288,7 @@ pub(crate) fn safety_finding_report(
                 .collect();
             let kind = match call_kind {
                 SafetyCallKind::Unsafe => FindingKind::UnsafeCallMissingRequirements,
-                SafetyCallKind::ConfiguredObligation => {
-                    FindingKind::SafetyObligationMissingRequirements
-                }
+                SafetyCallKind::Obligation => FindingKind::SafetyObligationMissingRequirements,
             };
             Finding {
                 function: Some(canonical_namespace(tcx, site.owner)),

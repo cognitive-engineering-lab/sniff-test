@@ -37,11 +37,11 @@ use super::{
     SafetyOpKind, safety_doc_summary,
 };
 use crate::config::SafetyConfig;
-use crate::contracts::{ContractCheck, check_contract};
-use crate::effect_tracker::EffectSite;
-use crate::source_markers::{
-    SafetyMarkerBlock, SafetySatisfaction, span_safety_marker_block, span_safety_satisfactions,
+use crate::contracts::{ContractCheck, EffectKind};
+use crate::effect_tracker::{
+    EffectEvidenceResolution, EffectSite, ResolvedEffectMarker, resolve_effect_evidence,
 };
+use crate::source_markers::{EffectMarkerBlock, span_marker_block};
 
 pub(super) fn collect_body_findings(
     tcx: TyCtxt<'_>,
@@ -81,8 +81,7 @@ pub(super) fn collect_body_findings(
 }
 
 struct SafetyScope {
-    satisfactions: Vec<SafetySatisfaction>,
-    marker: Option<SafetyMarkerBlock>,
+    marker: Option<EffectMarkerBlock>,
 }
 
 struct UnsafeOpVisitor<'a, 'tcx> {
@@ -103,8 +102,8 @@ struct UnsafeOpVisitor<'a, 'tcx> {
     /// inside them: `.await` and similar desugarings perform unsafe calls the
     /// user cannot justify and does not need to.
     builtin_unsafe_depth: usize,
-    /// `// SAFETY:` satisfactions of the enclosing user unsafe blocks. Shared
-    /// with inner bodies so closures inherit enclosing scopes lexically.
+    /// `// SAFETY:` markers on enclosing user unsafe blocks. Shared with inner
+    /// bodies so closures inherit enclosing scopes lexically.
     safety_scopes: &'a mut Vec<SafetyScope>,
     effect_groups: &'a mut Vec<SafetyEffectGroup>,
     analysis: &'a mut SafetyAnalysis,
@@ -115,18 +114,19 @@ impl<'a, 'tcx> UnsafeOpVisitor<'a, 'tcx> {
         if self.builtin_unsafe_depth > 0 {
             return;
         }
-        if self.applicable_satisfactions(span).is_empty() {
-            self.analysis
-                .findings
-                .push(SafetyFinding::OpMissingJustification {
-                    site: EffectSite {
-                        owner: self.owner.to_def_id(),
-                        span,
-                    },
-                    op,
-                });
-        } else {
-            self.claim_applicable_markers(span);
+        let resolution = self.resolve_evidence(span, &[]);
+        match resolution.contract {
+            ContractCheck::Satisfied => self.claim_markers(span, resolution.markers),
+            ContractCheck::MissingJustification | ContractCheck::MissingRequirements(_) => {
+                self.analysis
+                    .push_finding(SafetyFinding::OpMissingJustification {
+                        site: EffectSite {
+                            owner: self.owner.to_def_id(),
+                            span,
+                        },
+                        op,
+                    });
+            }
         }
     }
 
@@ -137,7 +137,7 @@ impl<'a, 'tcx> UnsafeOpVisitor<'a, 'tcx> {
         if self.ignores_callee(call.callee) {
             return;
         }
-        let satisfactions = self.applicable_satisfactions(span);
+        let markers = self.applicable_markers(span);
 
         if let SafetyCallee::Def(def_id) = call.callee {
             self.analysis.push_ambiguous_requirement_names(
@@ -149,40 +149,43 @@ impl<'a, 'tcx> UnsafeOpVisitor<'a, 'tcx> {
             let summary =
                 safety_doc_summary(self.tcx, def_id, &self.config.documentation_overrides);
             if !summary.requirements.is_empty() {
-                if let ContractCheck::MissingRequirements(missing) =
-                    check_contract(&summary.requirements, &satisfactions)
-                {
-                    self.analysis
-                        .findings
-                        .push(SafetyFinding::CallMissingRequirements {
-                            site: EffectSite {
-                                owner: self.owner.to_def_id(),
-                                span,
-                            },
-                            callee: call.callee,
-                            call_kind: call.kind,
-                            missing_requirements: missing,
-                        });
-                } else {
-                    self.claim_applicable_markers(span);
+                let resolution = resolve_effect_evidence(&summary.requirements, &markers);
+                match resolution.contract {
+                    ContractCheck::MissingRequirements(missing) => {
+                        self.analysis
+                            .push_finding(SafetyFinding::CallMissingRequirements {
+                                site: EffectSite {
+                                    owner: self.owner.to_def_id(),
+                                    span,
+                                },
+                                callee: call.callee,
+                                call_kind: call.kind,
+                                missing_requirements: missing,
+                            });
+                    }
+                    ContractCheck::Satisfied => self.claim_markers(span, resolution.markers),
+                    ContractCheck::MissingJustification => unreachable!(
+                        "a contract with named requirements cannot lack only justification"
+                    ),
                 }
                 return;
             }
         }
 
-        if satisfactions.is_empty() {
-            self.analysis
-                .findings
-                .push(SafetyFinding::CallMissingJustification {
-                    site: EffectSite {
-                        owner: self.owner.to_def_id(),
-                        span,
-                    },
-                    callee: call.callee,
-                    call_kind: call.kind,
-                });
-        } else {
-            self.claim_applicable_markers(span);
+        let resolution = resolve_effect_evidence(&[], &markers);
+        match resolution.contract {
+            ContractCheck::Satisfied => self.claim_markers(span, resolution.markers),
+            ContractCheck::MissingJustification | ContractCheck::MissingRequirements(_) => {
+                self.analysis
+                    .push_finding(SafetyFinding::CallMissingJustification {
+                        site: EffectSite {
+                            owner: self.owner.to_def_id(),
+                            span,
+                        },
+                        callee: call.callee,
+                        call_kind: call.kind,
+                    });
+            }
         }
     }
 
@@ -190,36 +193,39 @@ impl<'a, 'tcx> UnsafeOpVisitor<'a, 'tcx> {
         matches!(callee, SafetyCallee::Def(def_id) if self.config.ignores_def(self.tcx, def_id))
     }
 
-    fn applicable_satisfactions(&self, span: Span) -> Vec<SafetySatisfaction> {
-        self.safety_scopes
+    fn applicable_markers(&self, span: Span) -> Vec<EffectMarkerBlock> {
+        let mut markers = self
+            .safety_scopes
             .iter()
-            .flat_map(|scope| scope.satisfactions.iter().cloned())
-            .chain(span_safety_satisfactions(
-                self.tcx,
-                span,
-                self.config.marker_probing,
-            ))
-            .collect()
+            .filter_map(|scope| scope.marker.clone())
+            .collect::<Vec<_>>();
+        markers.extend(span_marker_block(
+            self.tcx,
+            span,
+            EffectKind::Safety,
+            self.config.marker_probing,
+        ));
+        markers
     }
 
-    fn claim_applicable_markers(&mut self, span: Span) {
+    fn resolve_evidence(
+        &self,
+        span: Span,
+        requirements: &[crate::contracts::ContractRequirement],
+    ) -> EffectEvidenceResolution {
+        let markers = self.applicable_markers(span);
+        resolve_effect_evidence(requirements, &markers)
+    }
+
+    fn claim_markers(&mut self, span: Span, markers: Vec<ResolvedEffectMarker>) {
         let group = self
             .effect_groups
             .last()
             .copied()
             .unwrap_or_else(|| self.analysis.new_effect_group(span));
-        let scoped_markers = self
-            .safety_scopes
-            .iter()
-            .filter_map(|scope| scope.marker.clone())
-            .collect::<Vec<_>>();
-        for marker in scoped_markers {
+        for marker in markers {
             self.analysis
-                .claim_marker(self.owner.to_def_id(), &marker, group);
-        }
-        if let Some(marker) = span_safety_marker_block(self.tcx, span, self.config.marker_probing) {
-            self.analysis
-                .claim_marker(self.owner.to_def_id(), &marker, group);
+                .claim_marker(self.owner.to_def_id(), marker.key, marker.span, group);
         }
     }
 
@@ -329,12 +335,15 @@ impl<'a, 'tcx> UnsafeOpVisitor<'a, 'tcx> {
                         kind: SafetyCallKind::Unsafe,
                     },
                 );
-            } else if self.config.marks_safety_obligation_def(self.tcx, func_id) {
+            } else if self.config.marks_safety_obligation_def(self.tcx, func_id)
+                || safety_doc_summary(self.tcx, func_id, &self.config.documentation_overrides)
+                    .has_docs
+            {
                 self.unsafe_call(
                     expr.span,
                     SafetyCall {
                         callee: SafetyCallee::Def(func_id),
-                        kind: SafetyCallKind::ConfiguredObligation,
+                        kind: SafetyCallKind::Obligation,
                     },
                 );
             }
@@ -489,12 +498,12 @@ impl<'a, 'tcx> Visitor<'a, 'tcx> for UnsafeOpVisitor<'a, 'tcx> {
                 let group = self.analysis.new_effect_group(span);
                 self.effect_groups.push(group);
                 self.safety_scopes.push(SafetyScope {
-                    satisfactions: span_safety_satisfactions(
+                    marker: span_marker_block(
                         self.tcx,
                         span,
+                        EffectKind::Safety,
                         self.config.marker_probing,
                     ),
-                    marker: span_safety_marker_block(self.tcx, span, self.config.marker_probing),
                 });
                 visit::walk_block(self, block);
                 self.safety_scopes

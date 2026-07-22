@@ -1,0 +1,2 @@
+[safety.lints]
+unsafe-op-missing-justification = "deny"

@@ -412,7 +412,7 @@ mod tests {
     use crate::config::SniffTestConfig;
 
     use super::{config_hash, encode_rustflags, tracked_config_files_from_config};
-    use crate::cli::SniffTestArgs;
+    use crate::cli::args::SniffTestArgs;
 
     #[test]
     fn tool_rustflags_append_to_user_flags_in_encoded_form() {

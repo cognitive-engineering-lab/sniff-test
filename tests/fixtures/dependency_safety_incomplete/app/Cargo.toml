@@ -1,0 +1,9 @@
+[package]
+name = "dependency-safety-incomplete-app"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+dependency-safety-incomplete-middle = { path = "../middle" }
+
+[workspace]

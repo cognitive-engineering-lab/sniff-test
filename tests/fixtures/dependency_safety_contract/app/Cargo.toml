@@ -1,0 +1,9 @@
+[package]
+name = "dependency-safety-contract-app"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+dependency-safety-contract = { path = "../dep" }
+
+[workspace]

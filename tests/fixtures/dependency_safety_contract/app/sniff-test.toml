@@ -1,0 +1,3 @@
+[safety.lints]
+unsafe-op-missing-justification = "deny"
+safety-obligation-missing-requirements = "warn"

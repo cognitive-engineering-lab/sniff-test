@@ -1,0 +1,86 @@
+---
+source: crates/sniff-test/tests/fixtures.rs
+expression: messages
+---
+[
+  {
+    "artifact": {
+      "artifact-id": "[ARTIFACT_ID]",
+      "crate-name": "dependency_safety_contract"
+    },
+    "dependencies": [],
+    "findings": [
+      {
+        "function": "dependency_safety_contract::misses_named_requirement",
+        "kind": "safety-obligation-missing-requirements",
+        "level": "deny",
+        "missing-requirements": [
+          "initialized: global state must be initialized"
+        ],
+        "reason": "safety-obligation call to `dependency_safety_contract::requires_initialized_state` does not satisfy all # Safety requirements",
+        "root": "dependency_safety_contract::misses_named_requirement",
+        "root-kind": "concrete",
+        "span": "[FIXTURE]/dep/src/lib.rs:14:5: 14:33",
+        "target": "dependency_safety_contract::requires_initialized_state"
+      },
+      {
+        "function": "dependency_safety_contract::two_reads",
+        "kind": "unsafe-op-missing-justification",
+        "level": "warn",
+        "reason": "unsafe operation (raw pointer dereference) has no `// SAFETY:` justification",
+        "root": "dependency_safety_contract::two_reads",
+        "root-kind": "concrete",
+        "span": "[FIXTURE]/dep/src/lib.rs:2:26: 2:34"
+      },
+      {
+        "function": "dependency_safety_contract::two_reads",
+        "kind": "unsafe-op-missing-justification",
+        "level": "warn",
+        "reason": "unsafe operation (raw pointer dereference) has no `// SAFETY:` justification",
+        "root": "dependency_safety_contract::two_reads",
+        "root-kind": "concrete",
+        "span": "[FIXTURE]/dep/src/lib.rs:3:27: 3:35"
+      }
+    ],
+    "format-version": 7,
+    "reason": "sniff-test-artifact",
+    "rustc-version": "[RUSTC_VERSION]",
+    "scope": "dependency",
+    "tool-version": "0.1.0"
+  },
+  {
+    "artifact": {
+      "artifact-id": "[ARTIFACT_ID]",
+      "crate-name": "dependency_safety_contract_app"
+    },
+    "dependencies": [
+      {
+        "artifact-id": "[ARTIFACT_ID]",
+        "extern-name": "dependency_safety_contract"
+      }
+    ],
+    "findings": [
+      {
+        "effect": "safety",
+        "kind": "safety-obligation-missing-requirements",
+        "level": "deny",
+        "missing-requirements": [
+          "initialized: global state must be initialized"
+        ],
+        "reason": "dependency_safety_contract::misses_named_requirement has cached safety effect: safety-obligation call to `dependency_safety_contract::requires_initialized_state` does not satisfy all # Safety requirements",
+        "root": "dependency_safety_contract_app::unnamed_marker_does_not_satisfy_cached_requirement",
+        "root-kind": "concrete",
+        "span": "src/lib.rs:16:5: 16:59",
+        "target": "dependency_safety_contract::misses_named_requirement",
+        "trace": [
+          "src/lib.rs:16:5: 16:59: dependency_safety_contract_app::unnamed_marker_does_not_satisfy_cached_requirement --direct-call-> dependency_safety_contract::misses_named_requirement"
+        ]
+      }
+    ],
+    "format-version": 7,
+    "reason": "sniff-test-artifact",
+    "rustc-version": "[RUSTC_VERSION]",
+    "scope": "workspace",
+    "tool-version": "0.1.0"
+  }
+]

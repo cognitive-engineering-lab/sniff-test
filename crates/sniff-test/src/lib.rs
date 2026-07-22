@@ -23,17 +23,18 @@ extern crate rustc_middle;
 extern crate rustc_session;
 extern crate rustc_span;
 
-pub mod cache;
+mod cache;
 mod cli;
-pub mod config;
+mod config;
 mod contracts;
-pub mod dependency_cache;
+mod dependency_cache;
 mod effect_tracker;
-pub mod namespace;
-pub mod panics;
-pub mod report_roots;
-pub mod safety;
-pub mod source_markers;
+mod namespace;
+mod panics;
+mod report_roots;
+mod safety;
+mod source_markers;
 
-pub use cli::{SniffTestArgs, cargo_frontend, driver_main};
-pub use effect_tracker::EffectSite;
+pub use cli::{cargo_frontend, driver_main};
+pub(crate) use contracts::EffectKind;
+pub(crate) use effect_tracker::EffectSite;

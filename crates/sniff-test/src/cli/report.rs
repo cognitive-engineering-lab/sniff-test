@@ -1,8 +1,9 @@
 //! JSON serialization and panic report rendering.
 use crate::cache::{
-    CachedArtifactInfo, CachedDependencyRef, CachedFinding, CachedFunctionSummary,
-    CachedReachabilityEdgeKind, CachedReachabilityNodeKind,
+    CachedArtifactInfo, CachedDependencyRef, CachedEffectSummary, CachedFinding,
+    CachedFunctionSummary, CachedReachabilityEdgeKind, CachedReachabilityNodeKind,
 };
+use crate::contracts::EffectKind;
 use crate::namespace::canonical_namespace;
 use crate::panics::{
     AmbiguousPanicMarker, AmbiguousPanicRequirementName, PanicEvidence, PanicEvidenceKind,
@@ -27,7 +28,7 @@ use super::diagnostics::{
 };
 use super::findings::{Finding, FindingKind, ResolvedFinding};
 
-pub(crate) const REPORT_FORMAT_VERSION: u32 = 6;
+pub(crate) const REPORT_FORMAT_VERSION: u32 = 7;
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "kebab-case")]
@@ -161,7 +162,7 @@ impl PanicRootReport {
         );
         let mut trace = render_trace(tcx, graph, local_trace);
         if let Some(finding) = cached_finding {
-            trace.extend(summary.render_trace(finding));
+            trace.extend(summary.render_effect_trace(EffectKind::Panic, finding));
         }
         self.push_finding(Finding {
             target: Some(summary.path.clone()),
@@ -204,7 +205,7 @@ impl PanicRootReport {
         );
         let mut trace = render_trace(tcx, graph, local_trace);
         if let Some(finding) = cached_finding {
-            trace.extend(summary.render_trace(finding));
+            trace.extend(summary.render_effect_trace(EffectKind::Panic, finding));
         }
         self.push_finding(Finding {
             target: Some(summary.path.clone()),
@@ -345,20 +346,21 @@ impl CachedFunctionSummary {
     pub(crate) fn panic_reason(&self) -> String {
         let mut reason = format!("{} has cached panic evidence: ", self.path);
         let mut has_count = false;
+        let panic = self.effect(crate::contracts::EffectKind::Panic);
 
         for (count, singular, plural) in [
             (
-                self.raw_panic_paths,
+                panic.map_or(0, CachedEffectSummary::raw_path_count),
                 "undocumented panic path",
                 "undocumented panic paths",
             ),
             (
-                self.panic_obligations,
+                panic.map_or(0, CachedEffectSummary::obligation_count),
                 "documented panic",
                 "documented panics",
             ),
             (
-                self.trusted_panic_obligations,
+                panic.map_or(0, CachedEffectSummary::trusted_obligation_count),
                 "trusted panic",
                 "trusted panics",
             ),
@@ -388,8 +390,15 @@ impl CachedFunctionSummary {
         format!("{} has cached {panic_kind} evidence", self.path)
     }
 
-    pub(crate) fn render_trace(&self, finding: &CachedFinding) -> Vec<String> {
-        let Some(graph) = &self.graph else {
+    pub(crate) fn render_effect_trace(
+        &self,
+        effect: crate::contracts::EffectKind,
+        finding: &CachedFinding,
+    ) -> Vec<String> {
+        let Some(graph) = self
+            .effect(effect)
+            .and_then(|summary| summary.graph.as_ref())
+        else {
             return Vec::new();
         };
 

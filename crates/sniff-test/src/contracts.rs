@@ -7,13 +7,13 @@ use rustc_hir::attrs::{AttributeKind, HasAttrs};
 use rustc_hir::{Attribute, def_id::DefId};
 use rustc_middle::ty::TyCtxt;
 use rustc_span::{DUMMY_SP, Span};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 use crate::config::ContractDocOverrides;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
-pub(crate) enum EffectKind {
+pub enum EffectKind {
     Panic,
     Safety,
 }
@@ -29,11 +29,16 @@ impl EffectKind {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ContractRequirement {
     pub name: String,
     pub condition: String,
+    #[serde(skip, default = "dummy_span")]
     pub span: Span,
+}
+
+fn dummy_span() -> Span {
+    DUMMY_SP
 }
 
 impl ContractRequirement {

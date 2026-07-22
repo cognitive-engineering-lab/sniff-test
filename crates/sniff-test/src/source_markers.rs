@@ -6,92 +6,32 @@ use rustc_span::{SourceFile, Span};
 use crate::config::MarkerProbing;
 use crate::contracts::EffectKind;
 
-pub use crate::contracts::MarkerSatisfaction;
+use crate::contracts::MarkerSatisfaction;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct MarkerBlockKey {
+pub(crate) struct MarkerBlockKey {
     pub file_start: u32,
     pub start_line: usize,
     pub end_line: usize,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-struct LocatedMarkerBlock {
+pub(crate) struct EffectMarkerBlock {
     pub key: MarkerBlockKey,
     pub span: Span,
     pub satisfactions: Vec<MarkerSatisfaction>,
 }
 
-pub type PanicSatisfaction = MarkerSatisfaction;
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct PanicMarkerBlock {
-    pub key: MarkerBlockKey,
-    pub span: Span,
-    pub satisfactions: Vec<PanicSatisfaction>,
-}
-
-pub type SafetySatisfaction = MarkerSatisfaction;
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct SafetyMarkerBlock {
-    pub key: MarkerBlockKey,
-    pub span: Span,
-    pub satisfactions: Vec<SafetySatisfaction>,
-}
-
 #[must_use]
-pub fn span_has_panic_marker(tcx: TyCtxt<'_>, span: Span, probing: MarkerProbing) -> bool {
-    !span_panic_satisfactions(tcx, span, probing).is_empty()
-}
-
-#[must_use]
-pub fn span_panic_satisfactions(
+pub(crate) fn span_marker_block(
     tcx: TyCtxt<'_>,
     span: Span,
+    kind: EffectKind,
     probing: MarkerProbing,
-) -> Vec<PanicSatisfaction> {
-    span_satisfactions(tcx, span, EffectKind::Panic, probing)
-}
-
-#[must_use]
-pub fn span_panic_marker_block(
-    tcx: TyCtxt<'_>,
-    span: Span,
-    probing: MarkerProbing,
-) -> Option<PanicMarkerBlock> {
-    span_marker_block(tcx, span, EffectKind::Panic, probing).map(|block| PanicMarkerBlock {
-        key: block.key,
-        span: block.span,
-        satisfactions: block.satisfactions,
-    })
-}
-
-#[must_use]
-pub fn span_has_safety_marker(tcx: TyCtxt<'_>, span: Span, probing: MarkerProbing) -> bool {
-    !span_safety_satisfactions(tcx, span, probing).is_empty()
-}
-
-#[must_use]
-pub fn span_safety_satisfactions(
-    tcx: TyCtxt<'_>,
-    span: Span,
-    probing: MarkerProbing,
-) -> Vec<SafetySatisfaction> {
-    span_satisfactions(tcx, span, EffectKind::Safety, probing)
-}
-
-#[must_use]
-pub fn span_safety_marker_block(
-    tcx: TyCtxt<'_>,
-    span: Span,
-    probing: MarkerProbing,
-) -> Option<SafetyMarkerBlock> {
-    span_marker_block(tcx, span, EffectKind::Safety, probing).map(|block| SafetyMarkerBlock {
-        key: block.key,
-        span: block.span,
-        satisfactions: block.satisfactions,
-    })
+) -> Option<EffectMarkerBlock> {
+    marker_probe_spans(span, probing)
+        .into_iter()
+        .find_map(|span| span_marker_block_at(tcx, span, kind))
 }
 
 // One rustc session per process and single-threaded analysis; source files
@@ -99,39 +39,9 @@ pub fn span_safety_marker_block(
 // start plus line index identifies a marker lookup. Every edge of every
 // per-root traversal re-scans its lines without this.
 thread_local! {
-    static LINE_CACHE: std::cell::RefCell<
-        std::collections::HashMap<(u32, usize, EffectKind), Vec<MarkerSatisfaction>>,
-    > = std::cell::RefCell::new(std::collections::HashMap::new());
-
     static MARKER_BLOCK_CACHE: std::cell::RefCell<
-        std::collections::HashMap<(u32, usize, EffectKind), Option<LocatedMarkerBlock>>,
+        std::collections::HashMap<(u32, usize, EffectKind), Option<EffectMarkerBlock>>,
     > = std::cell::RefCell::new(std::collections::HashMap::new());
-}
-
-fn span_satisfactions(
-    tcx: TyCtxt<'_>,
-    span: Span,
-    kind: EffectKind,
-    probing: MarkerProbing,
-) -> Vec<MarkerSatisfaction> {
-    marker_probe_spans(span, probing)
-        .into_iter()
-        .find_map(|span| {
-            let satisfactions = span_line_satisfactions(tcx, span, kind);
-            (!satisfactions.is_empty()).then_some(satisfactions)
-        })
-        .unwrap_or_default()
-}
-
-fn span_marker_block(
-    tcx: TyCtxt<'_>,
-    span: Span,
-    kind: EffectKind,
-    probing: MarkerProbing,
-) -> Option<LocatedMarkerBlock> {
-    marker_probe_spans(span, probing)
-        .into_iter()
-        .find_map(|span| span_marker_block_at(tcx, span, kind))
 }
 
 fn marker_probe_spans(span: Span, probing: MarkerProbing) -> Vec<Span> {
@@ -163,66 +73,23 @@ fn push_unique_probe_span(spans: &mut Vec<Span>, span: Span) {
     spans.push(span);
 }
 
-fn span_line_satisfactions(
-    tcx: TyCtxt<'_>,
-    span: Span,
-    kind: EffectKind,
-) -> Vec<MarkerSatisfaction> {
-    let location = tcx.sess.source_map().lookup_char_pos(span.lo());
-    let line_index = location.line.saturating_sub(1);
-
-    LINE_CACHE.with_borrow_mut(|cache| {
-        cache
-            .entry((location.file.start_pos.0, line_index, kind))
-            .or_insert_with(|| {
-                let mut satisfactions = source_line_satisfactions(&location.file, line_index, kind);
-                satisfactions.extend(preceding_comment_block_satisfactions(
-                    &location.file,
-                    line_index,
-                    kind,
-                ));
-                satisfactions
-            })
-            .clone()
-    })
-}
-
 fn span_marker_block_at(
     tcx: TyCtxt<'_>,
     span: Span,
     kind: EffectKind,
-) -> Option<LocatedMarkerBlock> {
+) -> Option<EffectMarkerBlock> {
     let location = tcx.sess.source_map().lookup_char_pos(span.lo());
     let line_index = location.line.saturating_sub(1);
 
     MARKER_BLOCK_CACHE.with_borrow_mut(|cache| {
         cache
             .entry((location.file.start_pos.0, line_index, kind))
-            .or_insert_with(|| preceding_marker_block(&location.file, line_index, kind))
+            .or_insert_with(|| marker_block_at(&location.file, line_index, kind))
             .clone()
     })
 }
 
 #[must_use]
-pub fn line_has_panic_marker(line: &str) -> bool {
-    line_panic_satisfaction(line).is_some()
-}
-
-#[must_use]
-pub fn line_panic_satisfaction(line: &str) -> Option<PanicSatisfaction> {
-    line_satisfaction(line, EffectKind::Panic)
-}
-
-#[must_use]
-pub fn line_has_safety_marker(line: &str) -> bool {
-    line_safety_satisfaction(line).is_some()
-}
-
-#[must_use]
-pub fn line_safety_satisfaction(line: &str) -> Option<SafetySatisfaction> {
-    line_satisfaction(line, EffectKind::Safety)
-}
-
 fn line_satisfaction(line: &str, kind: EffectKind) -> Option<MarkerSatisfaction> {
     comment_body(line)
         .and_then(|body| body.strip_prefix(kind.marker_prefix()))
@@ -231,7 +98,7 @@ fn line_satisfaction(line: &str, kind: EffectKind) -> Option<MarkerSatisfaction>
 }
 
 #[must_use]
-pub fn normalize_requirement_name(name: &str) -> String {
+fn normalize_requirement_name(name: &str) -> String {
     crate::contracts::normalize_requirement_name(name)
 }
 
@@ -260,28 +127,45 @@ fn looks_like_requirement_name(name: &str) -> bool {
     !normalize_requirement_name(name).is_empty()
 }
 
-fn preceding_comment_block_satisfactions(
+fn marker_block_at(
     file: &SourceFile,
     line_index: usize,
     kind: EffectKind,
-) -> Vec<MarkerSatisfaction> {
-    preceding_comment_block(file, line_index)
-        .map(|block| comment_block_satisfactions(&block.lines, kind))
-        .unwrap_or_default()
+) -> Option<EffectMarkerBlock> {
+    let mut block = preceding_marker_block(file, line_index, kind);
+    let line_satisfactions = source_line_satisfactions(file, line_index, kind);
+    if line_satisfactions.is_empty() {
+        return block;
+    }
+
+    if let Some(block) = &mut block {
+        block.satisfactions.extend(line_satisfactions);
+        return Some(block.clone());
+    }
+
+    Some(EffectMarkerBlock {
+        key: MarkerBlockKey {
+            file_start: file.start_pos.0,
+            start_line: line_index,
+            end_line: line_index,
+        },
+        span: comment_block_span(file, line_index, line_index),
+        satisfactions: line_satisfactions,
+    })
 }
 
 fn preceding_marker_block(
     file: &SourceFile,
     line_index: usize,
     kind: EffectKind,
-) -> Option<LocatedMarkerBlock> {
+) -> Option<EffectMarkerBlock> {
     let block = preceding_comment_block(file, line_index)?;
     let satisfactions = comment_block_satisfactions(&block.lines, kind);
     if satisfactions.is_empty() {
         return None;
     }
 
-    Some(LocatedMarkerBlock {
+    Some(EffectMarkerBlock {
         key: MarkerBlockKey {
             file_start: file.start_pos.0,
             start_line: block.start_line,
@@ -437,26 +321,33 @@ fn parse_satisfaction_bullet(line: &str) -> Option<MarkerSatisfaction> {
 
 #[cfg(test)]
 mod tests {
-    use super::SafetySatisfaction;
-    use super::{
-        PanicSatisfaction, line_has_panic_marker, line_has_safety_marker, line_panic_satisfaction,
-        line_safety_satisfaction, normalize_requirement_name,
-    };
+    use super::{MarkerSatisfaction, normalize_requirement_name};
     use crate::contracts::EffectKind;
+
+    fn line_has_marker(line: &str, kind: EffectKind) -> bool {
+        super::line_satisfaction(line, kind).is_some()
+    }
 
     #[test]
     fn panic_marker_matches_plain_comments() {
-        assert!(line_has_panic_marker(
-            "// PANIC: caller checked denominator"
+        assert!(line_has_marker(
+            "// PANIC: caller checked denominator",
+            EffectKind::Panic
         ));
-        assert!(line_has_panic_marker("    // PANIC: inspected"));
+        assert!(line_has_marker(
+            "    // PANIC: inspected",
+            EffectKind::Panic
+        ));
     }
 
     #[test]
     fn panic_marker_parses_named_satisfactions() {
         assert_eq!(
-            line_panic_satisfaction("// PANIC: index in bounds: checked by caller"),
-            Some(PanicSatisfaction {
+            super::line_satisfaction(
+                "// PANIC: index in bounds: checked by caller",
+                EffectKind::Panic,
+            ),
+            Some(MarkerSatisfaction {
                 requirement: Some(String::from("index in bounds")),
                 reason: String::from("checked by caller"),
             })
@@ -474,13 +365,13 @@ mod tests {
         assert_eq!(
             comment_block_satisfactions_for_panic(&lines),
             [
-                PanicSatisfaction {
+                MarkerSatisfaction {
                     requirement: Some(String::from("nonzero")),
                     reason: String::from(
                         "caller checked denominator.\nThe constructor rejects zero."
                     ),
                 },
-                PanicSatisfaction {
+                MarkerSatisfaction {
                     requirement: Some(String::from("index in bounds")),
                     reason: String::from("caller checked the index."),
                 },
@@ -505,17 +396,17 @@ mod tests {
         assert_eq!(
             comment_block_satisfactions_for_panic(&lines),
             [
-                PanicSatisfaction {
+                MarkerSatisfaction {
                     requirement: Some(String::from("something[var_1]")),
                     reason: String::from(
                         "checked the first precondition.\nAdditional evidence for the first precondition."
                     ),
                 },
-                PanicSatisfaction {
+                MarkerSatisfaction {
                     requirement: Some(String::from("something2[var_1]")),
                     reason: String::from("checked the second precondition."),
                 },
-                PanicSatisfaction {
+                MarkerSatisfaction {
                     requirement: Some(String::from("something3")),
                     reason: String::from("checked the third precondition."),
                 },
@@ -532,7 +423,7 @@ mod tests {
 
         assert_eq!(
             comment_block_satisfactions_for_panic(&lines),
-            [PanicSatisfaction {
+            [MarkerSatisfaction {
                 requirement: None,
                 reason: String::from("caller checked the local invariant."),
             }]
@@ -568,36 +459,38 @@ mod tests {
 
     #[test]
     fn panic_marker_rejects_non_plain_comment_text() {
-        assert!(!line_has_panic_marker("let label = \"PANIC:\";"));
-        assert!(!line_has_panic_marker("let _ = f(); // PANIC: inspected"));
-        assert!(!line_has_panic_marker(
-            "/// PANIC: doc comments are not call-site markers"
-        ));
-        assert!(!line_has_panic_marker(
-            "// SAFETY: not the sniff-test marker"
-        ));
-        assert!(!line_has_panic_marker("// panic: no"));
-        assert!(!line_has_panic_marker("// SAFE: old marker spelling"));
-        assert!(!line_has_panic_marker("// PANIC:"));
-        assert!(!line_has_panic_marker("// PANIC: nonzero:"));
+        for line in [
+            "let label = \"PANIC:\";",
+            "let _ = f(); // PANIC: inspected",
+            "/// PANIC: doc comments are not call-site markers",
+            "// SAFETY: not the sniff-test marker",
+            "// panic: no",
+            "// SAFE: old marker spelling",
+            "// PANIC:",
+            "// PANIC: nonzero:",
+        ] {
+            assert!(!line_has_marker(line, EffectKind::Panic));
+        }
     }
 
     #[test]
     fn safety_marker_uses_same_comment_syntax() {
-        assert!(line_has_safety_marker(
-            "// SAFETY: pointer came from NonNull"
+        assert!(line_has_marker(
+            "// SAFETY: pointer came from NonNull",
+            EffectKind::Safety,
         ));
         assert_eq!(
-            line_safety_satisfaction("// SAFETY: initialized: written above"),
-            Some(SafetySatisfaction {
+            super::line_satisfaction("// SAFETY: initialized: written above", EffectKind::Safety,),
+            Some(MarkerSatisfaction {
                 requirement: Some(String::from("initialized")),
                 reason: String::from("written above"),
             })
         );
-        assert!(!line_has_safety_marker("// PANIC: not safety"));
-        assert!(!line_has_safety_marker("// SAFETY:"));
-        assert!(!line_has_safety_marker(
-            "/// SAFETY: doc comments are not call-site markers"
+        assert!(!line_has_marker("// PANIC: not safety", EffectKind::Safety));
+        assert!(!line_has_marker("// SAFETY:", EffectKind::Safety));
+        assert!(!line_has_marker(
+            "/// SAFETY: doc comments are not call-site markers",
+            EffectKind::Safety,
         ));
     }
 
@@ -665,7 +558,7 @@ mod tests {
             let Some(line) = lines.get(previous) else {
                 break;
             };
-            if line_has_panic_marker(line) {
+            if line_has_marker(line, EffectKind::Panic) {
                 return true;
             }
             if !super::line_is_standalone_comment(line) {
@@ -677,7 +570,7 @@ mod tests {
         false
     }
 
-    fn comment_block_satisfactions_for_panic(lines: &[String]) -> Vec<PanicSatisfaction> {
+    fn comment_block_satisfactions_for_panic(lines: &[String]) -> Vec<MarkerSatisfaction> {
         super::comment_block_satisfactions(lines, EffectKind::Panic)
     }
 }

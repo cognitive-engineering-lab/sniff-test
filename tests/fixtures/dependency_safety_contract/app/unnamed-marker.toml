@@ -1,0 +1,9 @@
+[safety]
+ignored-namespaces = [
+    "dependency_safety_contract_app::reaches_two_effects",
+    "dependency_safety_contract_app::reaches_missing_requirement",
+    "dependency_safety_contract_app::justifies_dependency_effects",
+]
+
+[safety.lints]
+safety-obligation-missing-requirements = "deny"

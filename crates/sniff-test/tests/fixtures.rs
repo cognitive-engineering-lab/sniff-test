@@ -176,6 +176,33 @@ fixture_cases! {
             .crate_dir("app")
             .args(&["--cache-dir", ".sniff-cache"]);
     }
+    "dependency_safety" => {
+        dependency_safety => Case::cargo("dependency safety effect")
+            .crate_dir("app")
+            .exit_code(1);
+    }
+    "dependency_safety_contract" => {
+        dependency_safety_contract => Case::cargo("cached safety markers and concrete findings")
+            .crate_dir("app")
+            .exit_code(1);
+        dependency_safety_policy => Case::cargo("cached safety finding policy")
+            .crate_dir("app")
+            .args(&["--manifest", "policy.toml"])
+            .exit_code(1);
+        dependency_safety_unnamed_marker => Case::cargo("cached named safety requirement")
+            .crate_dir("app")
+            .args(&["--manifest", "unnamed-marker.toml"])
+            .exit_code(1);
+        dependency_safety_ambiguous_marker => Case::cargo("ambiguous cached safety marker")
+            .crate_dir("app")
+            .args(&["--manifest", "ambiguous-marker.toml"])
+            .exit_code(1);
+    }
+    "dependency_safety_incomplete" => {
+        dependency_safety_incomplete => Case::cargo("incomplete safety cache propagation")
+            .crate_dir("app")
+            .exit_code(1);
+    }
     "dependency_identity" => {
         dependency_identity => Case::cargo("dependency cache identity across sessions")
             .crate_dir("app")
@@ -316,6 +343,34 @@ fn run_named_case(name: &'static str, fixture_name: &'static str, case: Case) {
     let sysroot = rustc_sysroot();
     let messages = run_case(&repo, &binaries, &sysroot, name, fixture_name, &case);
     insta::assert_json_snapshot!(name, messages);
+}
+
+#[test]
+fn dependency_scope_keeps_safety_findings() {
+    let repo = repo_root();
+    let binaries = Binaries::from_cargo();
+    let sysroot = rustc_sysroot();
+    let case = Case::cargo("dependency safety findings match panic scope behavior")
+        .crate_dir("app")
+        .exit_code(1);
+    let messages = run_case(
+        &repo,
+        &binaries,
+        &sysroot,
+        "dependency_scope_keeps_safety_findings",
+        "dependency_safety",
+        &case,
+    );
+    let dependency = messages
+        .iter()
+        .find(|message| message["scope"] == "dependency")
+        .expect("fixture should emit a dependency artifact report");
+    assert!(
+        dependency["findings"]
+            .as_array()
+            .is_some_and(|findings| !findings.is_empty()),
+        "dependency safety findings should be retained like panic findings"
+    );
 }
 
 /// Runs a cargo case twice against one fixture copy. The second run is fully

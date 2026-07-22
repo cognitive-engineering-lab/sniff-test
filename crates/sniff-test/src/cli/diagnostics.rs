@@ -438,12 +438,15 @@ fn add_cached_trace_notes(
     if !include_stack {
         return;
     }
-    for finding in summary
+    let Some(panic) = summary.effect(crate::contracts::EffectKind::Panic) else {
+        return;
+    };
+    for finding in panic
         .findings
         .iter()
         .filter(|finding| include(finding.kind))
     {
-        for edge in summary.render_trace(finding) {
+        for edge in summary.render_effect_trace(crate::contracts::EffectKind::Panic, finding) {
             diag.note(format!("cached trace: {edge}"));
         }
     }
@@ -455,7 +458,10 @@ fn add_cached_dependency_panic_site_notes(
     summary: &CachedFunctionSummary,
 ) {
     let mut notes = 0;
-    for finding in summary.findings.iter().filter(|finding| {
+    let Some(panic) = summary.effect(crate::contracts::EffectKind::Panic) else {
+        return;
+    };
+    for finding in panic.findings.iter().filter(|finding| {
         matches!(
             finding.kind,
             CachedFindingKind::CompilerAssert
@@ -481,7 +487,7 @@ fn add_cached_dependency_panic_site_notes(
         notes += 1;
     }
 
-    if notes == 0 && !summary.analysis_complete {
+    if notes == 0 && !panic.analysis_complete {
         diag.note(String::from(
             "dependency analysis was incomplete, so no concrete cached panic site is available",
         ));
@@ -704,6 +710,47 @@ pub(super) fn safety_finding_diagnostic(
             effect_spans,
         } => ambiguous_safety_marker_diagnostic(tcx, *caller, *marker_span, effect_spans),
     }
+}
+
+pub(super) fn cached_dependency_safety_diagnostic(
+    tcx: TyCtxt<'_>,
+    call_span: Span,
+    summary: &CachedFunctionSummary,
+    finding: &crate::cache::CachedFinding,
+) -> FindingDiagnostic {
+    let message = format!(
+        "call to `{}` reaches cached undocumented safety effects",
+        summary.path
+    );
+    finding_diagnostic(Some(call_span), message, |diag| {
+        if let Some(span) = finding
+            .source_span
+            .as_ref()
+            .and_then(|source_span| cached_source_span(tcx, source_span))
+        {
+            diag.span_note(span, format!("cached safety effect: {}", finding.reason));
+        } else {
+            diag.note(format!(
+                "cached safety effect at {}: {}",
+                finding.span, finding.reason
+            ));
+        }
+    })
+}
+
+pub(super) fn cached_dependency_safety_incomplete_diagnostic(
+    call_span: Span,
+    summary: &CachedFunctionSummary,
+) -> FindingDiagnostic {
+    let message = format!(
+        "call to `{}` reaches an incomplete cached safety analysis",
+        summary.path
+    );
+    finding_diagnostic(Some(call_span), message, |diag| {
+        diag.note(String::from(
+            "dependency safety analysis stopped before proving that the function has no effects",
+        ));
+    })
 }
 
 fn ambiguous_safety_marker_diagnostic(

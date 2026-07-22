@@ -49,7 +49,7 @@ expression: messages
         "span": "src/lib.rs:27:1: 28:1"
       }
     ],
-    "format-version": 6,
+    "format-version": 7,
     "reason": "sniff-test-artifact",
     "rustc-version": "[RUSTC_VERSION]",
     "scope": "workspace",
