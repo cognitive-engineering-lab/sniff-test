@@ -223,19 +223,12 @@ impl PanicRootReport {
         root_def_id: rustc_hir::def_id::DefId,
         node_limit: usize,
     ) {
-        let diagnostic = analysis_incomplete_diagnostic(tcx, root_def_id, node_limit);
-        self.push_finding(Finding {
-            span: Some(render_span(tcx, tcx.def_span(root_def_id))),
-            ..Finding::new(
-                FindingKind::AnalysisIncomplete,
-                format!(
-                    "reachability analysis halted at the {node_limit}-instance node limit \
-                     before the call graph was exhausted"
-                ),
-                diagnostic,
-            )
-            .with_effect(EffectKind::Panic)
-        });
+        self.push_finding(analysis_incomplete_finding(
+            tcx,
+            root_def_id,
+            node_limit,
+            EffectKind::Panic,
+        ));
     }
 
     pub(crate) fn push_ambiguous_obligation_marker<'tcx>(
@@ -292,6 +285,26 @@ impl PanicRootReport {
         finding.root = Some(self.root.clone());
         finding.root_kind = Some(self.root_kind);
         self.findings.push(finding);
+    }
+}
+
+pub(crate) fn analysis_incomplete_finding(
+    tcx: TyCtxt<'_>,
+    root_def_id: DefId,
+    node_limit: usize,
+    effect: EffectKind,
+) -> Finding {
+    Finding {
+        span: Some(render_span(tcx, tcx.def_span(root_def_id))),
+        ..Finding::new(
+            FindingKind::AnalysisIncomplete,
+            format!(
+                "reachability analysis halted at the {node_limit}-instance node limit \
+                 before the call graph was exhausted"
+            ),
+            analysis_incomplete_diagnostic(tcx, root_def_id, node_limit),
+        )
+        .with_effect(effect)
     }
 }
 
@@ -398,27 +411,16 @@ impl CachedFunctionSummary {
         effect: crate::contracts::EffectKind,
         finding: &CachedFinding,
     ) -> Vec<String> {
-        let Some(graph) = self
-            .effect(effect)
-            .and_then(|summary| summary.graph.as_ref())
-        else {
-            return Vec::new();
-        };
-
-        finding
-            .trace
-            .iter()
-            .filter_map(|edge_id| {
-                let edge = graph.edges.iter().find(|edge| edge.id == *edge_id)?;
-                let source = graph.nodes.iter().find(|node| node.id == edge.source)?;
-                let target = graph.nodes.iter().find(|node| node.id == edge.target)?;
-                Some(format!(
+        self.effect_trace(effect, finding)
+            .into_iter()
+            .map(|step| {
+                format!(
                     "{}: {} --{}-> {}",
-                    edge.span,
-                    source.kind.render(),
-                    edge.kind.label(),
-                    target.kind.render(),
-                ))
+                    step.span,
+                    step.source.render(),
+                    step.kind.label(),
+                    step.target.render(),
+                )
             })
             .collect()
     }

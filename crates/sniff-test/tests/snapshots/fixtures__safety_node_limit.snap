@@ -1,0 +1,29 @@
+---
+source: crates/sniff-test/tests/fixtures.rs
+expression: messages
+---
+[
+  {
+    "artifact": {
+      "artifact-id": "[ARTIFACT_ID]",
+      "crate-name": "safety_node_limit"
+    },
+    "dependencies": [],
+    "findings": [
+      {
+        "effect": "safety",
+        "kind": "analysis-incomplete",
+        "level": "deny",
+        "reason": "reachability analysis halted at the 2-instance node limit before the call graph was exhausted",
+        "root": "safety_node_limit::root",
+        "root-kind": "concrete",
+        "span": "src/lib.rs:1:1: 1:38"
+      }
+    ],
+    "format-version": 8,
+    "reason": "sniff-test-artifact",
+    "rustc-version": "[RUSTC_VERSION]",
+    "scope": "workspace",
+    "tool-version": "0.1.0"
+  }
+]

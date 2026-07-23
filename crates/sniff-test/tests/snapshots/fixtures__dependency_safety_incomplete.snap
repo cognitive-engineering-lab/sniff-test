@@ -51,6 +51,15 @@ expression: messages
         "root": "dependency_safety_incomplete_leaf::leaf",
         "root-kind": "concrete",
         "span": "[FIXTURE]/leaf/src/lib.rs:8:22: 8:30"
+      },
+      {
+        "effect": "safety",
+        "kind": "analysis-incomplete",
+        "level": "deny",
+        "reason": "reachability analysis halted at the 2-instance node limit before the call graph was exhausted",
+        "root": "dependency_safety_incomplete_leaf::leaf",
+        "root-kind": "concrete",
+        "span": "[FIXTURE]/leaf/src/lib.rs:7:1: 7:32"
       }
     ],
     "format-version": 8,

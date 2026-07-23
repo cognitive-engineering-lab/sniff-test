@@ -1,0 +1,14 @@
+[analysis.lints]
+ambiguous-effect-marker = "deny"
+
+[panics]
+panic-sink-namespaces = [
+    "core::panicking::**",
+    "std::panicking::**",
+    "core::std::rt::panic_fmt",
+    "std::rt::panic_fmt",
+]
+
+[panics.lints]
+cached-dependency-panic = "deny"
+documented-panic = "deny"

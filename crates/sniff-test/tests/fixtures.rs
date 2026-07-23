@@ -215,9 +215,18 @@ fixture_cases! {
         dependency_transitive_panic => Case::cargo("panic evidence crosses two cache boundaries")
             .crate_dir("app")
             .exit_code(1);
+        dependency_transitive_panic_four_crates =>
+            Case::cargo("panic traces survive three cache boundaries")
+                .crate_dir("outer")
+                .exit_code(1);
     }
     "dependency_mixed_panic" => {
         dependency_mixed_panic => Case::cargo("cached raw and trusted panic evidence coexist")
+            .crate_dir("app")
+            .exit_code(1);
+    }
+    "dependency_panic_contract" => {
+        dependency_panic_contract => Case::cargo("cached panic marker contracts")
             .crate_dir("app")
             .exit_code(1);
     }
@@ -242,6 +251,9 @@ fixture_cases! {
         node_limit => Case::cargo("halted traversals fail loudly").exit_code(1);
         driver_node_limit => Case::direct("halted traversals fail loudly");
     }
+    "safety_node_limit" => {
+        safety_node_limit => Case::cargo("safety traversal truncation fails loudly").exit_code(1);
+    }
     "indirect_calls" => {
         indirect_calls => Case::cargo("indirect calls surface obligations or boundaries");
         driver_indirect_calls =>
@@ -263,6 +275,9 @@ fixture_cases! {
     "safe_markers" => {
         safe_markers => Case::cargo("panic marker satisfaction").exit_code(1);
         driver_safe_markers => Case::direct("panic marker satisfaction");
+    }
+    "transitive_effect_markers" => {
+        transitive_effect_markers => Case::cargo("transitive panic and safety markers");
     }
     "panic_requirements" => {
         panic_requirements => Case::cargo("panic requirement satisfaction");

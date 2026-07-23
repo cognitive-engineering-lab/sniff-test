@@ -15,9 +15,9 @@ use serde::{Deserialize, Serialize};
 
 use crate::EffectKind;
 
-pub const CACHE_FORMAT_VERSION: u32 = 8;
+pub const CACHE_FORMAT_VERSION: u32 = 9;
 pub const CACHE_DIR_NAME: &str = "sniff-test-cache";
-pub const CACHE_VERSION_DIR: &str = "v8";
+pub const CACHE_VERSION_DIR: &str = "v9";
 pub const OUTCOME_FORMAT_VERSION: u32 = 2;
 
 /// Per-unit verdict persisted with artifact lifetime.
@@ -251,6 +251,30 @@ impl CachedFunctionSummary {
     pub fn effect(&self, kind: EffectKind) -> Option<&CachedEffectSummary> {
         self.effects.get(&kind)
     }
+
+    #[must_use]
+    pub fn effect_trace(&self, kind: EffectKind, finding: &CachedFinding) -> Vec<CachedTraceStep> {
+        let mut trace = self
+            .effect(kind)
+            .and_then(|summary| summary.graph.as_ref())
+            .into_iter()
+            .flat_map(|graph| {
+                finding.trace.iter().filter_map(|edge_id| {
+                    let edge = graph.edges.iter().find(|edge| edge.id == *edge_id)?;
+                    let source = graph.nodes.iter().find(|node| node.id == edge.source)?;
+                    let target = graph.nodes.iter().find(|node| node.id == edge.target)?;
+                    Some(CachedTraceStep {
+                        span: edge.span.clone(),
+                        source: source.kind.clone(),
+                        kind: edge.kind,
+                        target: target.kind.clone(),
+                    })
+                })
+            })
+            .collect::<Vec<_>>();
+        trace.extend(finding.dependency_trace.iter().cloned());
+        trace
+    }
 }
 
 impl CachedEffectSummary {
@@ -302,9 +326,21 @@ pub struct CachedFinding {
     /// Arena edge ids from the root to the finding, same id space as
     /// `edge_index`.
     pub trace: Vec<usize>,
+    /// Trace steps inherited from nested dependency caches. These cannot refer
+    /// to this summary's graph id space, so rebasing flattens them structurally.
+    pub dependency_trace: Vec<CachedTraceStep>,
     pub reason: String,
     pub missing_requirements: Vec<CachedRequirement>,
     pub target: Option<CachedFindingTarget>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub struct CachedTraceStep {
+    pub span: String,
+    pub source: CachedReachabilityNodeKind,
+    pub kind: CachedReachabilityEdgeKind,
+    pub target: CachedReachabilityNodeKind,
 }
 
 pub type CachedRequirement = crate::contracts::ContractRequirement;
@@ -350,7 +386,23 @@ pub enum CachedFindingKind {
 
 impl CachedFindingKind {
     fn is_effect_evidence(self) -> bool {
-        self != Self::CrateBoundary
+        self.effect().is_some()
+    }
+
+    pub(crate) fn effect(self) -> Option<EffectKind> {
+        match self {
+            Self::CompilerAssert
+            | Self::PanicInvocation
+            | Self::PanicObligation
+            | Self::TrustedPanicObligation
+            | Self::IndirectCallBoundary => Some(EffectKind::Panic),
+            Self::UnsafeCallMissingJustification
+            | Self::UnsafeCallMissingRequirements
+            | Self::UnsafeOpMissingJustification
+            | Self::SafetyObligationMissingJustification
+            | Self::SafetyObligationMissingRequirements => Some(EffectKind::Safety),
+            Self::CrateBoundary => None,
+        }
     }
 
     pub(crate) fn is_raw_effect(self) -> bool {
@@ -651,13 +703,13 @@ mod tests {
             artifact_cache_path(&root, "sniff_test-29f0")
                 .display()
                 .to_string(),
-            "/target/plugin-nightly/sniff-test-cache/v8/artifacts/sniff_test-29f0.json"
+            "/target/plugin-nightly/sniff-test-cache/v9/artifacts/sniff_test-29f0.json"
         );
         assert_eq!(
             crate_cache_path(&root, "sniff-test", "sniff_test-29f0")
                 .display()
                 .to_string(),
-            "/target/plugin-nightly/sniff-test-cache/v8/crates/sniff-test/sniff_test-29f0.json"
+            "/target/plugin-nightly/sniff-test-cache/v9/crates/sniff-test/sniff_test-29f0.json"
         );
     }
 
@@ -752,6 +804,7 @@ mod tests {
                     diagnostic_spans: Vec::new(),
                     edge_index: None,
                     trace: Vec::new(),
+                    dependency_trace: Vec::new(),
                     reason: String::new(),
                     missing_requirements: Vec::new(),
                     target: None,

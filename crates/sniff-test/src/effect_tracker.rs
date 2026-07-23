@@ -7,10 +7,13 @@ use reachability::{
     ReachabilityEdgeId, ReachabilityGraph, ReachabilityNodeKind, ReachedEdge, ReachedNode,
 };
 use rustc_hir::def_id::DefId;
+use rustc_middle::ty::TyCtxt;
 use rustc_span::Span;
 
+use crate::config::MarkerProbing;
+use crate::contracts::EffectKind;
 use crate::contracts::{ContractCheck, ContractRequirement, check_contract};
-use crate::source_markers::{EffectMarkerBlock, MarkerBlockKey};
+use crate::source_markers::{EffectMarkerBlock, MarkerBlockKey, span_marker_block};
 
 /// Source-level location of an effect detected inside one function body.
 #[derive(Debug, Clone, Copy)]
@@ -54,6 +57,30 @@ pub(crate) fn resolve_effect_evidence<'a>(
     };
 
     EffectEvidenceResolution { contract, markers }
+}
+
+pub(crate) fn resolved_trace_marker_claims<Group: Copy>(
+    tcx: TyCtxt<'_>,
+    graph: &ReachabilityGraph<'_>,
+    trace: &EffectTrace,
+    kind: EffectKind,
+    probing: MarkerProbing,
+    requirements: &[ContractRequirement],
+    group: Group,
+) -> Option<Vec<(MarkerBlockKey, Span, Group)>> {
+    let markers = trace
+        .edge_ids
+        .iter()
+        .filter_map(|edge_id| span_marker_block(tcx, graph.edge(*edge_id).span, kind, probing))
+        .collect::<Vec<_>>();
+    let resolution = resolve_effect_evidence(requirements, &markers);
+    resolution.contract.is_satisfied().then(|| {
+        resolution
+            .markers
+            .into_iter()
+            .map(|marker| (marker.key, marker.span, group))
+            .collect()
+    })
 }
 
 #[derive(Debug)]

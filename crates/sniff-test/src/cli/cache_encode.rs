@@ -62,6 +62,7 @@ pub(super) fn cached_safety_finding(
         diagnostic_spans: cached_primary_span(tcx, site.span, Some("safety effect")),
         edge_index: None,
         trace: trace.edge_ids.iter().map(|edge| edge.index()).collect(),
+        dependency_trace: Vec::new(),
         reason: finding.reason.clone(),
         missing_requirements,
         target: Some(CachedFindingTarget::Function {
@@ -122,6 +123,7 @@ fn cached_panic_finding<'tcx>(
                     .iter()
                     .map(|edge_id| edge_id.index())
                     .collect(),
+                dependency_trace: Vec::new(),
                 reason: describe_panic_evidence_kind(tcx, &evidence.kind),
                 missing_requirements: Vec::new(),
                 target: Some(cached_finding_target(tcx, graph, edge.target)),
@@ -181,11 +183,13 @@ fn cached_panic_finding<'tcx>(
                     .iter()
                     .map(|edge_id| edge_id.index())
                     .collect(),
+                dependency_trace: Vec::new(),
                 reason: format!(
                     "{} documents when it may panic under # Panics",
                     canonical_namespace(tcx, def_id)
                 ),
-                missing_requirements: Vec::new(),
+                missing_requirements: crate::panics::panic_doc_summary(tcx, def_id, config)
+                    .requirements,
                 target: Some(target),
             }
         }
@@ -225,6 +229,7 @@ fn cached_crate_boundary_findings<'tcx>(
                     .iter()
                     .map(|edge_id| edge_id.index())
                     .collect(),
+                dependency_trace: Vec::new(),
                 reason: format!("crate boundary {} to {}", edge.kind(), target_path),
                 missing_requirements: Vec::new(),
                 target: Some(CachedFindingTarget::Function {

@@ -321,7 +321,11 @@ pub(crate) fn has_panic_docs(tcx: TyCtxt<'_>, def_id: DefId, config: &PanicConfi
 
 type PanicDocSummary = ContractDocSummary;
 
-fn panic_doc_summary(tcx: TyCtxt<'_>, def_id: DefId, config: &PanicConfig) -> PanicDocSummary {
+pub(crate) fn panic_doc_summary(
+    tcx: TyCtxt<'_>,
+    def_id: DefId,
+    config: &PanicConfig,
+) -> PanicDocSummary {
     contract_doc_summary(
         tcx,
         def_id,

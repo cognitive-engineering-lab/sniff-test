@@ -27,14 +27,6 @@ classifies it as non-panic evidence instead of a documented obligation — see
 the `std_trait_impl_glob` fixture's `get` root. A trait-method-docs fallback
 belongs with the consistency check above.
 
-### Dependency safety analysis is not performed
-
-Safety (unsafe-justification) analysis runs only for workspace crates
-(`analyze_crate` in `crates/sniff-test/src/cli/driver.rs`). Dependencies get
-panic analysis and caching, but their unsafe blocks are never audited. The
-original's `DependenciesPosture::Verify` offered this; restoring it is a
-pending feature decision.
-
 ### Safety precondition asserts are not panic evidence
 
 Compiler checks for null pointer dereference, misaligned pointer dereference,

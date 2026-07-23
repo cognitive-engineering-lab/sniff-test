@@ -107,6 +107,21 @@ impl SafetyFinding {
             | Self::AmbiguousMarker { .. } => false,
         }
     }
+
+    #[must_use]
+    pub(crate) fn missing_requirements(&self) -> &[SafetyRequirement] {
+        match self {
+            Self::CallMissingRequirements {
+                missing_requirements,
+                ..
+            } => missing_requirements,
+            Self::MissingSafetyDocs { .. }
+            | Self::CallMissingJustification { .. }
+            | Self::OpMissingJustification { .. }
+            | Self::AmbiguousObligationName { .. }
+            | Self::AmbiguousMarker { .. } => &[],
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy)]

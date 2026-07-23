@@ -1,0 +1,9 @@
+[analysis]
+node-limit = 2
+report-roots = ["safety_node_limit::root"]
+
+[analysis.lints]
+analysis-incomplete = "deny"
+
+[panics]
+ignored-namespaces = ["safety_node_limit::middle"]

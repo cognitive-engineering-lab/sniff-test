@@ -1,0 +1,5 @@
+[panics.lints]
+panic-invocation = "deny"
+
+[safety.lints]
+unsafe-op-missing-justification = "deny"
