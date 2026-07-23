@@ -1,6 +1,9 @@
 [analysis]
 node-limit = 2
-report-roots = ["safety_node_limit::root"]
+report-roots = [
+    "safety_node_limit::root",
+    "safety_node_limit::bounded_root",
+]
 
 [analysis.lints]
 analysis-incomplete = "deny"

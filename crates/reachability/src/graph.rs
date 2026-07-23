@@ -112,7 +112,7 @@ impl<'tcx> ReachabilityGraph<'tcx> {
 
     pub(crate) fn snapshot_for_root(&self, root: ReachabilityNodeId) -> ReachabilitySnapshot<'tcx> {
         debug_assert!(root.index() < self.nodes.len());
-        ReachabilitySnapshot::new(root, self.nodes.len())
+        ReachabilitySnapshot::new(root, self.nodes.len(), self.edges.len())
     }
 
     pub(crate) fn node_for_instance(&mut self, instance: Instance<'tcx>) -> ReachabilityNodeId {
@@ -196,6 +196,19 @@ impl<'view, 'tcx> ReachabilityView<'view, 'tcx> {
             .iter()
             .copied()
             .map(move |id| self.reached_edge(id))
+    }
+
+    /// Returns accepted outgoing edges for one node in this query.
+    pub fn outgoing_edges(
+        self,
+        node: ReachabilityNodeId,
+    ) -> impl Iterator<Item = ReachedEdge<'view, 'tcx>> + 'view {
+        self.graph
+            .outgoing_edges(node)
+            .iter()
+            .copied()
+            .filter(move |edge| self.snapshot.contains_edge(*edge))
+            .map(move |edge| self.reached_edge(edge))
     }
 
     #[must_use]
@@ -380,17 +393,19 @@ pub struct ReachabilitySnapshot<'tcx> {
     root: ReachabilityNodeId,
     node_ids: Vec<ReachabilityNodeId>,
     edge_ids: Vec<ReachabilityEdgeId>,
+    reached_edges: Vec<bool>,
     depths: Vec<Option<usize>>,
     predecessor_edges: Vec<Option<ReachabilityEdgeId>>,
     halt: Option<ReachabilityHalt<'tcx>>,
 }
 
 impl<'tcx> ReachabilitySnapshot<'tcx> {
-    fn new(root: ReachabilityNodeId, graph_node_count: usize) -> Self {
+    fn new(root: ReachabilityNodeId, graph_node_count: usize, graph_edge_count: usize) -> Self {
         let mut snapshot = Self {
             root,
             node_ids: Vec::new(),
             edge_ids: Vec::new(),
+            reached_edges: vec![false; graph_edge_count],
             depths: vec![None; graph_node_count],
             predecessor_edges: vec![None; graph_node_count],
             halt: None,
@@ -411,6 +426,13 @@ impl<'tcx> ReachabilitySnapshot<'tcx> {
         self.predecessor_edges.get(node.index()).copied().flatten()
     }
 
+    fn contains_edge(&self, edge: ReachabilityEdgeId) -> bool {
+        self.reached_edges
+            .get(edge.index())
+            .copied()
+            .unwrap_or(false)
+    }
+
     pub(crate) fn stats(&self) -> ReachabilityQueryStats {
         ReachabilityQueryStats::new(self.node_ids.len(), self.edge_ids.len())
     }
@@ -425,7 +447,11 @@ impl<'tcx> ReachabilitySnapshot<'tcx> {
         target: ReachabilityNodeId,
         depth: usize,
     ) -> bool {
-        self.edge_ids.push(edge_id);
+        self.ensure_edge_capacity(edge_id);
+        if !self.reached_edges[edge_id.index()] {
+            self.reached_edges[edge_id.index()] = true;
+            self.edge_ids.push(edge_id);
+        }
         self.record_node(target, depth, Some(edge_id))
     }
 
@@ -451,6 +477,13 @@ impl<'tcx> ReachabilitySnapshot<'tcx> {
         if self.depths.len() < len {
             self.depths.resize(len, None);
             self.predecessor_edges.resize(len, None);
+        }
+    }
+
+    fn ensure_edge_capacity(&mut self, edge: ReachabilityEdgeId) {
+        let len = edge.index() + 1;
+        if self.reached_edges.len() < len {
+            self.reached_edges.resize(len, false);
         }
     }
 }

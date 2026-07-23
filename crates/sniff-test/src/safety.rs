@@ -66,6 +66,20 @@ pub(crate) enum SafetyFinding {
 }
 
 impl SafetyFinding {
+    pub(crate) fn with_missing_requirements(
+        mut self,
+        requirements: Vec<SafetyRequirement>,
+    ) -> Self {
+        if let Self::CallMissingRequirements {
+            missing_requirements,
+            ..
+        } = &mut self
+        {
+            *missing_requirements = requirements;
+        }
+        self
+    }
+
     #[must_use]
     pub(crate) fn effect_site(&self) -> Option<crate::EffectSite> {
         match *self {

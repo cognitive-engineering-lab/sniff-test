@@ -26,7 +26,7 @@ use crate::config::{PanicBoundaryPolicy, PanicConfig};
 use crate::contracts::{ContractDocSummary, ContractRequirement, EffectKind, contract_doc_summary};
 use crate::effect_tracker::{
     EffectPathDecision, EffectTrace, ambiguous_marker_uses, classify_effect_path,
-    resolve_effect_evidence, trace_to_edge,
+    find_effect_trace, resolve_effect_evidence, trace_to_edge,
 };
 use crate::namespace::canonical_namespace;
 use crate::source_markers::{EffectMarkerBlock, span_marker_block};
@@ -96,36 +96,39 @@ pub(crate) fn analyze_panic_evidence<'tcx>(
     let mut evidence = view
         .edges()
         .filter_map(|edge| {
-            let edge_id = edge.id();
-            let kind = classify_edge(tcx, edge, config, &marker_resolution)?;
+            let kind = classify_edge_without_marker(tcx, edge, config)?;
             edge.origin().instance()?;
-            let trace = PanicTrace {
-                edge_ids: trace_to_edge_ids(edge),
+            let raw_trace = (!matches!(kind, PanicEvidenceKind::PanicObligation { .. }))
+                .then(|| {
+                    find_panic_trace_to_edge(tcx, view, edge, config, &marker_resolution, true)
+                })
+                .flatten();
+            let (trace, decision) = if let Some(trace) = raw_trace {
+                (trace, EffectPathDecision::RawEffect)
+            } else {
+                let trace =
+                    find_panic_trace_to_edge(tcx, view, edge, config, &marker_resolution, false)?;
+                let decision = classify_panic_path(tcx, graph, root, &trace, config);
+                (trace, decision)
             };
-            if trace_crosses_satisfied_panic_marker(tcx, graph, &trace, config, &marker_resolution)
-            {
-                return None;
-            }
-            if trace_crosses_ignored_namespace(tcx, graph, &trace, config) {
-                return None;
-            }
-            let decision = match kind {
-                PanicEvidenceKind::PanicObligation { def_id } => {
-                    let path_decision = classify_panic_path(tcx, graph, root, &trace, config);
-                    if matches!(path_decision, EffectPathDecision::RawEffect) {
+            let edge_id = *trace.edge_ids.last()?;
+            let decision = match (kind, decision) {
+                (PanicEvidenceKind::PanicObligation { def_id }, decision) => {
+                    if matches!(decision, EffectPathDecision::RawEffect) {
                         EffectPathDecision::Obligation {
                             edge_id: Some(edge_id),
                             def_id,
                         }
                     } else {
-                        path_decision
+                        decision
                     }
                 }
-                PanicEvidenceKind::CompilerAssert
-                | PanicEvidenceKind::PanicSink { .. }
-                | PanicEvidenceKind::IndirectBoundary { .. } => {
-                    classify_panic_path(tcx, graph, root, &trace, config)
-                }
+                (
+                    PanicEvidenceKind::CompilerAssert
+                    | PanicEvidenceKind::PanicSink { .. }
+                    | PanicEvidenceKind::IndirectBoundary { .. },
+                    decision,
+                ) => decision,
             };
             if let EffectPathDecision::Obligation { edge_id, def_id } = decision
                 && !seen_panic_obligations.insert((edge_id, def_id))
@@ -148,6 +151,54 @@ pub(crate) fn analyze_panic_evidence<'tcx>(
         ambiguous_markers: marker_resolution.ambiguous_markers,
         ambiguous_names,
     }
+}
+
+fn find_panic_trace_to_edge<'view, 'tcx>(
+    tcx: TyCtxt<'tcx>,
+    view: ReachabilityView<'view, 'tcx>,
+    effect_edge: ReachedEdge<'view, 'tcx>,
+    config: &PanicConfig,
+    marker_resolution: &PanicMarkerResolution,
+    require_raw_path: bool,
+) -> Option<PanicTrace> {
+    if node_kind_is_ignored_namespace(tcx, view.root().kind(), config)
+        || (require_raw_path
+            && panic_obligation_node_kind(tcx, view.root().kind(), config).is_some())
+    {
+        return None;
+    }
+
+    let mut trace = find_effect_trace(
+        view,
+        |node| node.id() == effect_edge.source().id(),
+        |edge| panic_path_edge_is_open(tcx, edge, config, marker_resolution, require_raw_path),
+    )?;
+    if !panic_path_edge_is_open(
+        tcx,
+        effect_edge,
+        config,
+        marker_resolution,
+        require_raw_path,
+    ) {
+        return None;
+    }
+    trace.edge_ids.push(effect_edge.id());
+    Some(trace)
+}
+
+fn panic_path_edge_is_open<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    edge: ReachedEdge<'_, 'tcx>,
+    config: &PanicConfig,
+    marker_resolution: &PanicMarkerResolution,
+    require_raw_path: bool,
+) -> bool {
+    let source = edge.source().kind();
+    let target = edge.target().kind();
+    !node_kind_is_ignored_namespace(tcx, source, config)
+        && !node_kind_is_ignored_namespace(tcx, target, config)
+        && !edge_panic_marker_suppresses(tcx, edge.id(), target, config, marker_resolution)
+        && (!require_raw_path || panic_obligation_node_kind(tcx, target, config).is_none())
 }
 
 fn suppress_resolved_callable_indirect_boundaries(
@@ -295,7 +346,7 @@ fn classify_panic_path<'tcx>(
     })
 }
 
-fn panic_obligation_node_kind<'tcx>(
+pub(crate) fn panic_obligation_node_kind<'tcx>(
     tcx: TyCtxt<'tcx>,
     node: &ReachabilityNodeKind<'tcx>,
     config: &PanicConfig,
@@ -312,6 +363,15 @@ fn panic_obligation_node_kind<'tcx>(
         && config.panic_boundary_policy(tcx, def_id) != PanicBoundaryPolicy::PanicSink
         && has_panic_docs(tcx, def_id, config))
     .then_some(def_id)
+}
+
+pub(crate) fn panic_path_node_is_boundary<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    node: &ReachabilityNodeKind<'tcx>,
+    config: &PanicConfig,
+) -> bool {
+    node_kind_is_ignored_namespace(tcx, node, config)
+        || panic_obligation_node_kind(tcx, node, config).is_some()
 }
 
 #[must_use]
@@ -422,20 +482,6 @@ fn trace_crosses_ignored_namespace<'tcx>(
     })
 }
 
-fn trace_crosses_satisfied_panic_marker<'tcx>(
-    tcx: TyCtxt<'tcx>,
-    graph: &ReachabilityGraph<'tcx>,
-    trace: &PanicTrace,
-    config: &PanicConfig,
-    marker_resolution: &PanicMarkerResolution,
-) -> bool {
-    trace.edge_ids.iter().any(|edge_id| {
-        let edge = graph.edge(*edge_id);
-        let target = &graph.node(edge.target).kind;
-        edge_panic_marker_suppresses(tcx, *edge_id, target, config, marker_resolution)
-    })
-}
-
 fn node_kind_is_ignored_namespace<'tcx>(
     tcx: TyCtxt<'tcx>,
     node: &ReachabilityNodeKind<'tcx>,
@@ -453,20 +499,6 @@ fn node_kind_is_ignored_namespace<'tcx>(
         ReachabilityNodeKind::CompilerAssert { .. }
         | ReachabilityNodeKind::DynObjectCast { .. } => false,
     }
-}
-
-fn classify_edge<'tcx>(
-    tcx: TyCtxt<'tcx>,
-    edge: ReachedEdge<'_, 'tcx>,
-    config: &PanicConfig,
-    marker_resolution: &PanicMarkerResolution,
-) -> Option<PanicEvidenceKind> {
-    let target = edge.target().kind();
-    if edge_panic_marker_suppresses(tcx, edge.id(), target, config, marker_resolution) {
-        return None;
-    }
-
-    classify_edge_without_marker(tcx, edge, config)
 }
 
 fn classify_edge_without_marker<'tcx>(

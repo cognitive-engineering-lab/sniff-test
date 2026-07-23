@@ -1,0 +1,47 @@
+---
+source: crates/sniff-test/tests/fixtures.rs
+expression: messages
+---
+[
+  {
+    "artifact": {
+      "artifact-id": "[ARTIFACT_ID]",
+      "crate-name": "dependency_panic_incomplete_boundary"
+    },
+    "dependencies": [],
+    "findings": [
+      {
+        "effect": "panic",
+        "kind": "analysis-incomplete",
+        "level": "deny",
+        "reason": "reachability analysis halted at the 2-instance node limit before the call graph was exhausted",
+        "root": "dependency_panic_incomplete_boundary::incomplete",
+        "root-kind": "concrete",
+        "span": "[FIXTURE]/dep/src/lib.rs:7:1: 7:20"
+      }
+    ],
+    "format-version": 8,
+    "reason": "sniff-test-artifact",
+    "rustc-version": "[RUSTC_VERSION]",
+    "scope": "dependency",
+    "tool-version": "0.1.0"
+  },
+  {
+    "artifact": {
+      "artifact-id": "[ARTIFACT_ID]",
+      "crate-name": "dependency_panic_incomplete_boundary_app"
+    },
+    "dependencies": [
+      {
+        "artifact-id": "[ARTIFACT_ID]",
+        "extern-name": "dependency_panic_incomplete_boundary"
+      }
+    ],
+    "findings": [],
+    "format-version": 8,
+    "reason": "sniff-test-artifact",
+    "rustc-version": "[RUSTC_VERSION]",
+    "scope": "workspace",
+    "tool-version": "0.1.0"
+  }
+]

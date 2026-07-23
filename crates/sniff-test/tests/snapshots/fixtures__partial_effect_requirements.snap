@@ -1,0 +1,126 @@
+---
+source: crates/sniff-test/tests/fixtures.rs
+expression: messages
+---
+[
+  {
+    "artifact": {
+      "artifact-id": "[ARTIFACT_ID]",
+      "crate-name": "partial_effect_requirements"
+    },
+    "dependencies": [],
+    "findings": [
+      {
+        "effect": "safety",
+        "function": "partial_effect_requirements::shared_effect",
+        "kind": "safety-obligation-missing-requirements",
+        "level": "deny",
+        "missing-requirements": [
+          "exclusive: no other thread may access the global state"
+        ],
+        "reason": "safety-obligation call to `partial_effect_requirements::requires_initialized_exclusive_state` does not satisfy all # Safety requirements",
+        "root": "partial_effect_requirements::complementary_paths",
+        "root-kind": "concrete",
+        "span": "[FIXTURE]/dep/src/lib.rs:13:5: 13:43",
+        "target": "partial_effect_requirements::requires_initialized_exclusive_state",
+        "trace": [
+          "[FIXTURE]/dep/src/lib.rs:29:5: 29:28: partial_effect_requirements::complementary_paths --direct-call-> partial_effect_requirements::satisfies_initialized",
+          "[FIXTURE]/dep/src/lib.rs:19:5: 19:20: partial_effect_requirements::satisfies_initialized --direct-call-> partial_effect_requirements::shared_effect"
+        ]
+      },
+      {
+        "effect": "safety",
+        "function": "partial_effect_requirements::shared_effect",
+        "kind": "safety-obligation-missing-requirements",
+        "level": "deny",
+        "missing-requirements": [
+          "initialized: global state must be initialized"
+        ],
+        "reason": "safety-obligation call to `partial_effect_requirements::requires_initialized_exclusive_state` does not satisfy all # Safety requirements",
+        "root": "partial_effect_requirements::complementary_paths",
+        "root-kind": "concrete",
+        "span": "[FIXTURE]/dep/src/lib.rs:13:5: 13:43",
+        "target": "partial_effect_requirements::requires_initialized_exclusive_state",
+        "trace": [
+          "[FIXTURE]/dep/src/lib.rs:30:5: 30:26: partial_effect_requirements::complementary_paths --direct-call-> partial_effect_requirements::satisfies_exclusive",
+          "[FIXTURE]/dep/src/lib.rs:25:5: 25:20: partial_effect_requirements::satisfies_exclusive --direct-call-> partial_effect_requirements::shared_effect"
+        ]
+      },
+      {
+        "effect": "safety",
+        "function": "partial_effect_requirements::misses_both_requirements",
+        "kind": "safety-obligation-missing-requirements",
+        "level": "deny",
+        "missing-requirements": [
+          "initialized: global state must be initialized",
+          "exclusive: no other thread may access the global state"
+        ],
+        "reason": "safety-obligation call to `partial_effect_requirements::requires_initialized_exclusive_state` does not satisfy all # Safety requirements",
+        "root": "partial_effect_requirements::misses_both_requirements",
+        "root-kind": "concrete",
+        "span": "[FIXTURE]/dep/src/lib.rs:9:5: 9:43",
+        "target": "partial_effect_requirements::requires_initialized_exclusive_state"
+      }
+    ],
+    "format-version": 8,
+    "reason": "sniff-test-artifact",
+    "rustc-version": "[RUSTC_VERSION]",
+    "scope": "dependency",
+    "tool-version": "0.1.0"
+  },
+  {
+    "artifact": {
+      "artifact-id": "[ARTIFACT_ID]",
+      "crate-name": "partial_effect_requirements_app"
+    },
+    "dependencies": [
+      {
+        "artifact-id": "[ARTIFACT_ID]",
+        "extern-name": "partial_effect_requirements"
+      }
+    ],
+    "findings": [
+      {
+        "effect": "safety",
+        "effect-span": "[FIXTURE]/dep/src/lib.rs:9:5: 9:43",
+        "kind": "safety-obligation-missing-requirements",
+        "level": "deny",
+        "missing-requirements": [
+          "exclusive: no other thread may access the global state"
+        ],
+        "reason": "partial_effect_requirements::misses_both_requirements has cached safety effect: safety-obligation call to `partial_effect_requirements::requires_initialized_exclusive_state` does not satisfy all # Safety requirements",
+        "root": "partial_effect_requirements_app::partially_satisfies_requirements",
+        "root-kind": "concrete",
+        "span": "src/lib.rs:4:5: 4:60",
+        "target": "partial_effect_requirements::misses_both_requirements",
+        "trace": [
+          "src/lib.rs:4:5: 4:60: partial_effect_requirements_app::partially_satisfies_requirements --direct-call-> partial_effect_requirements::misses_both_requirements"
+        ]
+      },
+      {
+        "effect": "safety",
+        "effect-span": "[FIXTURE]/dep/src/lib.rs:13:5: 13:43",
+        "kind": "safety-obligation-missing-requirements",
+        "level": "deny",
+        "missing-requirements": [
+          "exclusive: no other thread may access the global state"
+        ],
+        "reason": "partial_effect_requirements::complementary_paths has cached safety effect: safety-obligation call to `partial_effect_requirements::requires_initialized_exclusive_state` does not satisfy all # Safety requirements",
+        "root": "partial_effect_requirements_app::preserves_complementary_path_requirements",
+        "root-kind": "concrete",
+        "span": "src/lib.rs:22:5: 22:55",
+        "target": "partial_effect_requirements::complementary_paths",
+        "trace": [
+          "src/lib.rs:22:5: 22:55: partial_effect_requirements_app::preserves_complementary_path_requirements --direct-call-> partial_effect_requirements::complementary_paths",
+          "[FIXTURE]/dep/src/lib.rs:29:5: 29:28: partial_effect_requirements::complementary_paths --direct-call-> partial_effect_requirements::satisfies_initialized",
+          "[FIXTURE]/dep/src/lib.rs:19:5: 19:20: partial_effect_requirements::satisfies_initialized --direct-call-> partial_effect_requirements::shared_effect"
+        ]
+      }
+    ],
+    "format-version": 8,
+    "reason": "sniff-test-artifact",
+    "rustc-version": "[RUSTC_VERSION]",
+    "scope": "workspace",
+    "tool-version": "0.1.0"
+  }
+]

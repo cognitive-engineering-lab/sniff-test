@@ -1,10 +1,11 @@
 //! Effect-independent reachability path tracking.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::hash::Hash;
 
 use reachability::{
-    ReachabilityEdgeId, ReachabilityGraph, ReachabilityNodeKind, ReachedEdge, ReachedNode,
+    ReachabilityEdgeId, ReachabilityGraph, ReachabilityNodeId, ReachabilityNodeKind,
+    ReachabilityView, ReachedEdge, ReachedNode,
 };
 use rustc_hir::def_id::DefId;
 use rustc_middle::ty::TyCtxt;
@@ -12,7 +13,9 @@ use rustc_span::Span;
 
 use crate::config::MarkerProbing;
 use crate::contracts::EffectKind;
-use crate::contracts::{ContractCheck, ContractRequirement, check_contract};
+use crate::contracts::{
+    ContractCheck, ContractRequirement, check_contract, normalize_requirement_name,
+};
 use crate::source_markers::{EffectMarkerBlock, MarkerBlockKey, span_marker_block};
 
 /// Source-level location of an effect detected inside one function body.
@@ -117,6 +120,246 @@ where
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct EffectTrace {
     pub edge_ids: Vec<ReachabilityEdgeId>,
+}
+
+#[derive(Debug)]
+pub(crate) struct UnsatisfiedEffectTrace {
+    pub(crate) trace: EffectTrace,
+    pub(crate) missing_requirements: Vec<ContractRequirement>,
+}
+
+pub(crate) fn find_effect_trace<'view, 'tcx>(
+    view: ReachabilityView<'view, 'tcx>,
+    mut is_target: impl FnMut(ReachedNode<'view, 'tcx>) -> bool,
+    mut permits_edge: impl FnMut(ReachedEdge<'view, 'tcx>) -> bool,
+) -> Option<EffectTrace> {
+    if is_target(view.root()) {
+        return Some(EffectTrace {
+            edge_ids: Vec::new(),
+        });
+    }
+
+    let mut seen = HashSet::from([view.root().id()]);
+    let mut predecessors = HashMap::new();
+    let mut queue = VecDeque::from([view.root().id()]);
+    while let Some(node) = queue.pop_front() {
+        for edge in view.outgoing_edges(node) {
+            if !permits_edge(edge) {
+                continue;
+            }
+            let target = edge.target();
+            if !seen.insert(target.id()) {
+                continue;
+            }
+            predecessors.insert(target.id(), edge.id());
+            if is_target(target) {
+                return Some(EffectTrace {
+                    edge_ids: reconstruct_trace(view, &predecessors, target.id()),
+                });
+            }
+            queue.push_back(target.id());
+        }
+    }
+
+    None
+}
+
+fn reconstruct_trace(
+    view: ReachabilityView<'_, '_>,
+    predecessors: &HashMap<ReachabilityNodeId, ReachabilityEdgeId>,
+    mut node: ReachabilityNodeId,
+) -> Vec<ReachabilityEdgeId> {
+    let mut edge_ids = Vec::new();
+    while node != view.root().id() {
+        let edge_id = predecessors[&node];
+        edge_ids.push(edge_id);
+        node = view.graph().edge(edge_id).source;
+    }
+    edge_ids.reverse();
+    edge_ids
+}
+
+pub(crate) fn find_unsatisfied_effect_traces_to_edge<'view, 'tcx>(
+    tcx: TyCtxt<'tcx>,
+    view: ReachabilityView<'view, 'tcx>,
+    effect_edge: ReachedEdge<'view, 'tcx>,
+    kind: EffectKind,
+    probing: MarkerProbing,
+    requirements: &[ContractRequirement],
+    is_boundary: impl Fn(&ReachabilityNodeKind<'tcx>) -> bool + Copy,
+) -> Vec<UnsatisfiedEffectTrace> {
+    deduplicate_unsatisfied_traces(unresolved_requirement_names(requirements).filter_map(
+        |requirement| {
+            let trace = find_effect_trace_to_edge_with(
+                view,
+                effect_edge,
+                |edge| {
+                    !is_boundary(edge.target().kind())
+                        && !edge_marker_satisfies(tcx, edge, kind, probing, requirement.as_deref())
+                },
+                |root| !is_boundary(root),
+            )?;
+            Some(UnsatisfiedEffectTrace {
+                missing_requirements: missing_requirements_on_trace(
+                    tcx,
+                    view.graph(),
+                    &trace,
+                    kind,
+                    probing,
+                    requirements,
+                ),
+                trace,
+            })
+        },
+    ))
+}
+
+pub(crate) fn find_effect_trace_to_edge<'view, 'tcx>(
+    view: ReachabilityView<'view, 'tcx>,
+    effect_edge: ReachedEdge<'view, 'tcx>,
+    is_boundary: impl Fn(&ReachabilityNodeKind<'tcx>) -> bool + Copy,
+) -> Option<EffectTrace> {
+    find_effect_trace_to_edge_with(
+        view,
+        effect_edge,
+        |edge| !is_boundary(edge.target().kind()),
+        |root| !is_boundary(root),
+    )
+}
+
+fn find_effect_trace_to_edge_with<'view, 'tcx>(
+    view: ReachabilityView<'view, 'tcx>,
+    effect_edge: ReachedEdge<'view, 'tcx>,
+    mut permits_edge: impl FnMut(ReachedEdge<'view, 'tcx>) -> bool,
+    mut permits_root: impl FnMut(&ReachabilityNodeKind<'tcx>) -> bool,
+) -> Option<EffectTrace> {
+    if !permits_root(view.root().kind()) {
+        return None;
+    }
+    let mut trace = find_effect_trace(
+        view,
+        |node| node.id() == effect_edge.source().id(),
+        &mut permits_edge,
+    )?;
+    if !permits_edge(effect_edge) {
+        return None;
+    }
+    trace.edge_ids.push(effect_edge.id());
+    Some(trace)
+}
+
+pub(crate) fn find_unsatisfied_effect_traces<'view, 'tcx>(
+    tcx: TyCtxt<'tcx>,
+    view: ReachabilityView<'view, 'tcx>,
+    is_target: impl FnMut(ReachedNode<'view, 'tcx>) -> bool + Copy,
+    kind: EffectKind,
+    probing: MarkerProbing,
+    requirements: &[ContractRequirement],
+    is_boundary: impl Fn(&ReachabilityNodeKind<'tcx>) -> bool + Copy,
+) -> Vec<UnsatisfiedEffectTrace> {
+    if is_boundary(view.root().kind()) {
+        return Vec::new();
+    }
+    deduplicate_unsatisfied_traces(unresolved_requirement_names(requirements).filter_map(
+        |requirement| {
+            let trace = find_effect_trace(view, is_target, |edge| {
+                !is_boundary(edge.target().kind())
+                    && !edge_marker_satisfies(tcx, edge, kind, probing, requirement.as_deref())
+            })?;
+            Some(UnsatisfiedEffectTrace {
+                missing_requirements: missing_requirements_on_trace(
+                    tcx,
+                    view.graph(),
+                    &trace,
+                    kind,
+                    probing,
+                    requirements,
+                ),
+                trace,
+            })
+        },
+    ))
+}
+
+fn deduplicate_unsatisfied_traces(
+    traces: impl IntoIterator<Item = UnsatisfiedEffectTrace>,
+) -> Vec<UnsatisfiedEffectTrace> {
+    let mut unique = Vec::<UnsatisfiedEffectTrace>::new();
+    for trace in traces {
+        if unique.iter().any(|existing| {
+            existing.trace == trace.trace
+                && existing.missing_requirements == trace.missing_requirements
+        }) {
+            continue;
+        }
+        unique.push(trace);
+    }
+    unique
+}
+
+fn missing_requirements_on_trace(
+    tcx: TyCtxt<'_>,
+    graph: &ReachabilityGraph<'_>,
+    trace: &EffectTrace,
+    kind: EffectKind,
+    probing: MarkerProbing,
+    requirements: &[ContractRequirement],
+) -> Vec<ContractRequirement> {
+    requirements
+        .iter()
+        .filter(|requirement| {
+            let normalized_name = normalize_requirement_name(&requirement.name);
+            !trace.edge_ids.iter().any(|edge_id| {
+                let edge = graph.edge(*edge_id);
+                span_marker_block(tcx, edge.span, kind, probing).is_some_and(|marker| {
+                    marker.satisfactions.iter().any(|satisfaction| {
+                        !satisfaction.reason.trim().is_empty()
+                            && satisfaction.requirement.as_deref().is_some_and(|name| {
+                                normalize_requirement_name(name) == normalized_name
+                            })
+                    })
+                })
+            })
+        })
+        .cloned()
+        .collect()
+}
+
+fn unresolved_requirement_names(
+    requirements: &[ContractRequirement],
+) -> impl Iterator<Item = Option<String>> {
+    let mut names = if requirements.is_empty() {
+        vec![None]
+    } else {
+        requirements
+            .iter()
+            .map(|requirement| Some(normalize_requirement_name(&requirement.name)))
+            .collect::<Vec<_>>()
+    };
+    names.sort();
+    names.dedup();
+    names.into_iter()
+}
+
+fn edge_marker_satisfies(
+    tcx: TyCtxt<'_>,
+    edge: ReachedEdge<'_, '_>,
+    kind: EffectKind,
+    probing: MarkerProbing,
+    requirement: Option<&str>,
+) -> bool {
+    let Some(marker) = span_marker_block(tcx, edge.span(), kind, probing) else {
+        return false;
+    };
+    marker.satisfactions.iter().any(|satisfaction| {
+        !satisfaction.reason.trim().is_empty()
+            && requirement.is_none_or(|required| {
+                satisfaction
+                    .requirement
+                    .as_deref()
+                    .is_some_and(|name| normalize_requirement_name(name) == required)
+            })
+    })
 }
 
 /// How an effect path reaches the selected report root.

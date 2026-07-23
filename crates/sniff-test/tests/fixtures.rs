@@ -153,6 +153,10 @@ fixture_cases! {
         contract_overrides => Case::cargo("documentation overrides");
         driver_contract_overrides => Case::direct("documentation overrides");
     }
+    "converging_effect_paths" => {
+        converging_effect_paths =>
+            Case::cargo("raw effect paths survive convergence").exit_code(1);
+    }
     "release_pruning" => {
         release_pruning => Case::cargo("release profile pruning").exit_code(1);
     }
@@ -201,6 +205,11 @@ fixture_cases! {
             .args(&["--manifest", "ambiguous-marker.toml"])
             .exit_code(1);
     }
+    "partial_effect_requirements" => {
+        partial_effect_requirements => Case::cargo("partial cached requirement propagation")
+            .crate_dir("app")
+            .exit_code(1);
+    }
     "dependency_safety_incomplete" => {
         dependency_safety_incomplete => Case::cargo("incomplete safety cache propagation")
             .crate_dir("app")
@@ -219,6 +228,11 @@ fixture_cases! {
             Case::cargo("panic traces survive three cache boundaries")
                 .crate_dir("outer")
                 .exit_code(1);
+    }
+    "dependency_panic_incomplete_boundary" => {
+        dependency_panic_incomplete_boundary =>
+            Case::cargo("incomplete panic cache stops at documented boundaries")
+                .crate_dir("app");
     }
     "dependency_mixed_panic" => {
         dependency_mixed_panic => Case::cargo("cached raw and trusted panic evidence coexist")

@@ -1,0 +1,9 @@
+[package]
+name = "partial-effect-requirements-app"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+partial-effect-requirements = { path = "../dep" }
+
+[workspace]
