@@ -14,6 +14,9 @@ expression: messages
         "effect": "panic",
         "kind": "documented-panic",
         "level": "deny",
+        "missing-requirements": [
+          "nonzero: the value must not be zero"
+        ],
         "reason": "dependency_panic_contract::requires_nonzero documents when it may panic under # Panics",
         "root": "dependency_panic_contract::misses_named_requirement",
         "root-kind": "concrete",
@@ -21,6 +24,22 @@ expression: messages
         "target": "dependency_panic_contract::requires_nonzero",
         "trace": [
           "[FIXTURE]/dep/src/lib.rs:17:5: 17:23: dependency_panic_contract::misses_named_requirement --direct-call-> dependency_panic_contract::requires_nonzero"
+        ]
+      },
+      {
+        "effect": "panic",
+        "kind": "documented-panic",
+        "level": "deny",
+        "missing-requirements": [
+          "exclusive: no other thread may access the global state"
+        ],
+        "reason": "dependency_panic_contract::requires_initialized_exclusive_state documents when it may panic under # Panics",
+        "root": "dependency_panic_contract::partially_satisfies_requirements",
+        "root-kind": "concrete",
+        "span": "[FIXTURE]/dep/src/lib.rs:30:5: 30:43",
+        "target": "dependency_panic_contract::requires_initialized_exclusive_state",
+        "trace": [
+          "[FIXTURE]/dep/src/lib.rs:30:5: 30:43: dependency_panic_contract::partially_satisfies_requirements --direct-call-> dependency_panic_contract::requires_initialized_exclusive_state"
         ]
       },
       {
@@ -102,9 +121,30 @@ expression: messages
       },
       {
         "effect": "panic",
+        "effect-span": "[FIXTURE]/dep/src/lib.rs:30:5: 30:43",
+        "kind": "documented-panic",
+        "level": "deny",
+        "missing-requirements": [
+          "exclusive: no other thread may access the global state"
+        ],
+        "reason": "dependency_panic_contract::partially_satisfies_requirements has cached documented panic evidence",
+        "root": "dependency_panic_contract_app::leaves_cached_requirement_unsatisfied",
+        "root-kind": "concrete",
+        "span": "src/lib.rs:29:5: 29:66",
+        "target": "dependency_panic_contract::partially_satisfies_requirements",
+        "trace": [
+          "src/lib.rs:29:5: 29:66: dependency_panic_contract_app::leaves_cached_requirement_unsatisfied --direct-call-> dependency_panic_contract::partially_satisfies_requirements",
+          "[FIXTURE]/dep/src/lib.rs:30:5: 30:43: dependency_panic_contract::partially_satisfies_requirements --direct-call-> dependency_panic_contract::requires_initialized_exclusive_state"
+        ]
+      },
+      {
+        "effect": "panic",
         "effect-span": "[FIXTURE]/dep/src/lib.rs:17:5: 17:23",
         "kind": "documented-panic",
         "level": "deny",
+        "missing-requirements": [
+          "nonzero: the value must not be zero"
+        ],
         "reason": "dependency_panic_contract::misses_named_requirement has cached documented panic evidence",
         "root": "dependency_panic_contract_app::unnamed_marker_misses_requirement",
         "root-kind": "concrete",

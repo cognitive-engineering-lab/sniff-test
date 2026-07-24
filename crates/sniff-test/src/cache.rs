@@ -296,7 +296,7 @@ impl CachedEffectSummary {
     }
 
     #[must_use]
-    pub fn obligation_count(&self) -> usize {
+    pub fn panic_obligation_count(&self) -> usize {
         self.findings
             .iter()
             .filter(|finding| finding.kind == CachedFindingKind::PanicObligation)
@@ -304,7 +304,7 @@ impl CachedEffectSummary {
     }
 
     #[must_use]
-    pub fn trusted_obligation_count(&self) -> usize {
+    pub fn trusted_panic_obligation_count(&self) -> usize {
         self.findings
             .iter()
             .filter(|finding| finding.kind == CachedFindingKind::TrustedPanicObligation)
@@ -724,8 +724,8 @@ mod tests {
 
         assert!(summary.is_reachable());
         assert_eq!(summary.raw_path_count(), 1);
-        assert_eq!(summary.obligation_count(), 1);
-        assert_eq!(summary.trusted_obligation_count(), 1);
+        assert_eq!(summary.panic_obligation_count(), 1);
+        assert_eq!(summary.trusted_panic_obligation_count(), 1);
     }
 
     #[test]

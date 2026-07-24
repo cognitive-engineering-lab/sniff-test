@@ -137,6 +137,11 @@ impl PanicRootReport {
             target: Some(documented.clone()),
             span: Some(span),
             trace: render_trace(tcx, graph, &trace_edges_until(evidence, obligation_edge_id)),
+            missing_requirements: evidence
+                .missing_requirements
+                .iter()
+                .map(crate::contracts::ContractRequirement::render)
+                .collect(),
             ..Finding::new(kind, documented_panic_reason(&documented), diagnostic)
         });
     }
@@ -213,6 +218,11 @@ impl PanicRootReport {
             span: Some(render_span(tcx, edge.span)),
             effect_span: cached_finding.map(render_cached_effect_span),
             trace,
+            missing_requirements: cached_finding
+                .into_iter()
+                .flat_map(|finding| finding.missing_requirements.iter())
+                .map(crate::cache::CachedRequirement::render)
+                .collect(),
             ..Finding::new(kind, summary.contract_reason(kind), diagnostic)
         });
     }
@@ -371,12 +381,12 @@ impl CachedFunctionSummary {
                 "undocumented panic paths",
             ),
             (
-                panic.map_or(0, CachedEffectSummary::obligation_count),
+                panic.map_or(0, CachedEffectSummary::panic_obligation_count),
                 "documented panic",
                 "documented panics",
             ),
             (
-                panic.map_or(0, CachedEffectSummary::trusted_obligation_count),
+                panic.map_or(0, CachedEffectSummary::trusted_panic_obligation_count),
                 "trusted panic",
                 "trusted panics",
             ),

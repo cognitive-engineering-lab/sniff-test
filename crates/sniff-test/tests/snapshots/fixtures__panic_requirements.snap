@@ -14,6 +14,11 @@ expression: messages
         "effect": "panic",
         "kind": "documented-panic",
         "level": "warn",
+        "missing-requirements": [
+          "nonzero: denominator must not be zero.",
+          "bounded[total]: total must be bounded by the caller.",
+          "audited"
+        ],
         "reason": "panic_requirements::documented_ratio documents when it may panic under # Panics",
         "root": "panic_requirements::bullet_without_marker",
         "root-kind": "concrete",
@@ -27,6 +32,11 @@ expression: messages
         "effect": "panic",
         "kind": "documented-panic",
         "level": "warn",
+        "missing-requirements": [
+          "nonzero: denominator must not be zero.",
+          "bounded[total]: total must be bounded by the caller.",
+          "audited"
+        ],
         "reason": "panic_requirements::documented_ratio documents when it may panic under # Panics",
         "root": "panic_requirements::empty_marker",
         "root-kind": "concrete",
@@ -40,6 +50,9 @@ expression: messages
         "effect": "panic",
         "kind": "documented-panic",
         "level": "warn",
+        "missing-requirements": [
+          "nonzero: denominator must not be zero."
+        ],
         "reason": "panic_requirements::documented_ratio documents when it may panic under # Panics",
         "root": "panic_requirements::empty_requirement",
         "root-kind": "concrete",
@@ -53,6 +66,11 @@ expression: messages
         "effect": "panic",
         "kind": "documented-panic",
         "level": "warn",
+        "missing-requirements": [
+          "nonzero: denominator must not be zero.",
+          "bounded[total]: total must be bounded by the caller.",
+          "audited"
+        ],
         "reason": "panic_requirements::documented_ratio documents when it may panic under # Panics",
         "root": "panic_requirements::safety_marker_does_not_satisfy_panic",
         "root-kind": "concrete",
@@ -66,6 +84,10 @@ expression: messages
         "effect": "panic",
         "kind": "documented-panic",
         "level": "warn",
+        "missing-requirements": [
+          "bounded[total]: total must be bounded by the caller.",
+          "audited"
+        ],
         "reason": "panic_requirements::documented_ratio documents when it may panic under # Panics",
         "root": "panic_requirements::safety_marker_stops_partial_panic_block",
         "root-kind": "concrete",
@@ -79,6 +101,48 @@ expression: messages
         "effect": "panic",
         "kind": "documented-panic",
         "level": "warn",
+        "missing-requirements": [
+          "bounded[total]: total must be bounded by the caller.",
+          "audited"
+        ],
+        "reason": "panic_requirements::documented_ratio documents when it may panic under # Panics",
+        "root": "panic_requirements::transitive_partial_marker",
+        "root-kind": "concrete",
+        "span": "src/lib.rs:66:5: 66:41",
+        "target": "panic_requirements::documented_ratio",
+        "trace": [
+          "src/lib.rs:72:5: 72:40: panic_requirements::transitive_partial_marker --direct-call-> panic_requirements::forwarded_ratio",
+          "src/lib.rs:66:5: 66:41: panic_requirements::forwarded_ratio --direct-call-> panic_requirements::documented_ratio"
+        ]
+      },
+      {
+        "effect": "panic",
+        "kind": "documented-panic",
+        "level": "warn",
+        "missing-requirements": [
+          "nonzero: denominator must not be zero.",
+          "bounded[total]: total must be bounded by the caller.",
+          "audited"
+        ],
+        "reason": "panic_requirements::documented_ratio documents when it may panic under # Panics",
+        "root": "panic_requirements::transitive_unrelated_marker",
+        "root-kind": "concrete",
+        "span": "src/lib.rs:66:5: 66:41",
+        "target": "panic_requirements::documented_ratio",
+        "trace": [
+          "src/lib.rs:78:5: 78:40: panic_requirements::transitive_unrelated_marker --direct-call-> panic_requirements::forwarded_ratio",
+          "src/lib.rs:66:5: 66:41: panic_requirements::forwarded_ratio --direct-call-> panic_requirements::documented_ratio"
+        ]
+      },
+      {
+        "effect": "panic",
+        "kind": "documented-panic",
+        "level": "warn",
+        "missing-requirements": [
+          "nonzero: denominator must not be zero.",
+          "bounded[total]: total must be bounded by the caller.",
+          "audited"
+        ],
         "reason": "panic_requirements::documented_ratio documents when it may panic under # Panics",
         "root": "panic_requirements::unnamed_marker",
         "root-kind": "concrete",

@@ -286,10 +286,9 @@ pub(crate) fn check_contract(
     satisfactions: &[MarkerSatisfaction],
 ) -> ContractCheck {
     if requirements.is_empty() {
-        return if satisfactions
-            .iter()
-            .any(|satisfaction| !satisfaction.reason.trim().is_empty())
-        {
+        return if satisfactions.iter().any(|satisfaction| {
+            satisfaction.requirement.is_none() && !satisfaction.reason.trim().is_empty()
+        }) {
             ContractCheck::Satisfied
         } else {
             ContractCheck::MissingJustification
@@ -451,6 +450,19 @@ mod tests {
             ),
             ContractCheck::MissingRequirements(vec![requirements[1].clone()])
         );
+    }
+
+    #[test]
+    fn named_satisfaction_does_not_justify_an_unnamed_effect() {
+        let check = check_contract(
+            &[],
+            &[MarkerSatisfaction {
+                requirement: Some(String::from("unrelated")),
+                reason: String::from("this proves a different condition"),
+            }],
+        );
+
+        assert_eq!(check, ContractCheck::MissingJustification);
     }
 
     #[test]

@@ -16,3 +16,16 @@ pub fn requires_nonzero() {}
 pub fn misses_named_requirement() {
     requires_nonzero();
 }
+
+/// # Panics
+///
+/// Requirements:
+/// - initialized: global state must be initialized
+/// - exclusive: no other thread may access the global state
+pub fn requires_initialized_exclusive_state() {}
+
+pub fn partially_satisfies_requirements() {
+    // PANIC:
+    // - initialized: this dependency initialized the global state.
+    requires_initialized_exclusive_state();
+}

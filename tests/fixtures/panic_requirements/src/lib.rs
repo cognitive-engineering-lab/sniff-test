@@ -61,3 +61,27 @@ pub fn safety_marker_stops_partial_panic_block(total: usize, denominator: usize)
     // - audited: this must not satisfy the panic contract.
     documented_ratio(total, denominator)
 }
+
+fn forwarded_ratio(total: usize, denominator: usize) -> usize {
+    documented_ratio(total, denominator)
+}
+
+pub fn transitive_partial_marker(total: usize, denominator: usize) -> usize {
+    // PANIC:
+    // - nonzero: caller checked the denominator.
+    forwarded_ratio(total, denominator)
+}
+
+pub fn transitive_unrelated_marker(total: usize, denominator: usize) -> usize {
+    // PANIC:
+    // - initialized: this does not satisfy the downstream panic contract.
+    forwarded_ratio(total, denominator)
+}
+
+pub fn transitive_satisfied(total: usize, denominator: usize) -> usize {
+    // PANIC:
+    // - nonzero: caller checked the denominator.
+    // - bounded[total]: caller checked the total bound.
+    // - audited: this call site is covered by the API audit.
+    forwarded_ratio(total, denominator)
+}

@@ -188,8 +188,7 @@ fn cached_panic_finding<'tcx>(
                     "{} documents when it may panic under # Panics",
                     canonical_namespace(tcx, def_id)
                 ),
-                missing_requirements: crate::panics::panic_doc_summary(tcx, def_id, config)
-                    .requirements,
+                missing_requirements: evidence.missing_requirements.clone(),
                 target: Some(target),
             }
         }

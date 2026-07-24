@@ -50,6 +50,7 @@ pub(crate) fn resolve_effect_evidence<'a>(
     let markers = if contract.is_satisfied() {
         markers
             .into_iter()
+            .filter(|marker| marker_contributes_to_contract(marker, requirements))
             .map(|marker| ResolvedEffectMarker {
                 key: marker.key,
                 span: marker.span,
@@ -60,6 +61,26 @@ pub(crate) fn resolve_effect_evidence<'a>(
     };
 
     EffectEvidenceResolution { contract, markers }
+}
+
+fn marker_contributes_to_contract(
+    marker: &EffectMarkerBlock,
+    requirements: &[ContractRequirement],
+) -> bool {
+    marker.satisfactions.iter().any(|satisfaction| {
+        if satisfaction.reason.trim().is_empty() {
+            return false;
+        }
+        if requirements.is_empty() {
+            return satisfaction.requirement.is_none();
+        }
+        satisfaction.requirement.as_deref().is_some_and(|name| {
+            let normalized = normalize_requirement_name(name);
+            requirements
+                .iter()
+                .any(|requirement| normalize_requirement_name(&requirement.name) == normalized)
+        })
+    })
 }
 
 pub(crate) fn resolved_trace_marker_claims<Group: Copy>(
@@ -188,30 +209,45 @@ pub(crate) fn find_unsatisfied_effect_traces_to_edge<'view, 'tcx>(
     requirements: &[ContractRequirement],
     is_boundary: impl Fn(&ReachabilityNodeKind<'tcx>) -> bool + Copy,
 ) -> Vec<UnsatisfiedEffectTrace> {
-    deduplicate_unsatisfied_traces(unresolved_requirement_names(requirements).filter_map(
+    find_unsatisfied_effect_traces_to_edge_with(
+        view,
+        effect_edge,
+        requirements,
+        is_boundary,
+        |edge_id, requirement| {
+            edge_marker_satisfies(
+                tcx,
+                view.graph().edge(edge_id).span,
+                kind,
+                probing,
+                requirement,
+            )
+        },
+    )
+}
+
+pub(crate) fn find_unsatisfied_effect_traces_to_edge_with<'view, 'tcx>(
+    view: ReachabilityView<'view, 'tcx>,
+    effect_edge: ReachedEdge<'view, 'tcx>,
+    requirements: &[ContractRequirement],
+    is_boundary: impl Fn(&ReachabilityNodeKind<'tcx>) -> bool + Copy,
+    marker_satisfies: impl Fn(ReachabilityEdgeId, Option<&str>) -> bool + Copy,
+) -> Vec<UnsatisfiedEffectTrace> {
+    unsatisfied_effect_traces(
+        requirements,
         |requirement| {
-            let trace = find_effect_trace_to_edge_with(
+            find_effect_trace_to_edge_with(
                 view,
                 effect_edge,
                 |edge| {
-                    !is_boundary(edge.target().kind())
-                        && !edge_marker_satisfies(tcx, edge, kind, probing, requirement.as_deref())
+                    !is_boundary(edge.target().kind()) && !marker_satisfies(edge.id(), requirement)
                 },
                 |root| !is_boundary(root),
-            )?;
-            Some(UnsatisfiedEffectTrace {
-                missing_requirements: missing_requirements_on_trace(
-                    tcx,
-                    view.graph(),
-                    &trace,
-                    kind,
-                    probing,
-                    requirements,
-                ),
-                trace,
-            })
+                |edge| !marker_satisfies(edge.id(), requirement),
+            )
         },
-    ))
+        marker_satisfies,
+    )
 }
 
 pub(crate) fn find_effect_trace_to_edge<'view, 'tcx>(
@@ -224,6 +260,7 @@ pub(crate) fn find_effect_trace_to_edge<'view, 'tcx>(
         effect_edge,
         |edge| !is_boundary(edge.target().kind()),
         |root| !is_boundary(root),
+        |_| true,
     )
 }
 
@@ -232,6 +269,7 @@ fn find_effect_trace_to_edge_with<'view, 'tcx>(
     effect_edge: ReachedEdge<'view, 'tcx>,
     mut permits_edge: impl FnMut(ReachedEdge<'view, 'tcx>) -> bool,
     mut permits_root: impl FnMut(&ReachabilityNodeKind<'tcx>) -> bool,
+    mut permits_effect_edge: impl FnMut(ReachedEdge<'view, 'tcx>) -> bool,
 ) -> Option<EffectTrace> {
     if !permits_root(view.root().kind()) {
         return None;
@@ -241,7 +279,7 @@ fn find_effect_trace_to_edge_with<'view, 'tcx>(
         |node| node.id() == effect_edge.source().id(),
         &mut permits_edge,
     )?;
-    if !permits_edge(effect_edge) {
+    if !permits_effect_edge(effect_edge) {
         return None;
     }
     trace.edge_ids.push(effect_edge.id());
@@ -260,20 +298,39 @@ pub(crate) fn find_unsatisfied_effect_traces<'view, 'tcx>(
     if is_boundary(view.root().kind()) {
         return Vec::new();
     }
+    unsatisfied_effect_traces(
+        requirements,
+        |requirement| {
+            find_effect_trace(view, is_target, |edge| {
+                !is_boundary(edge.target().kind())
+                    && !edge_marker_satisfies(tcx, edge.span(), kind, probing, requirement)
+            })
+        },
+        |edge_id, requirement| {
+            edge_marker_satisfies(
+                tcx,
+                view.graph().edge(edge_id).span,
+                kind,
+                probing,
+                requirement,
+            )
+        },
+    )
+}
+
+fn unsatisfied_effect_traces(
+    requirements: &[ContractRequirement],
+    mut find_trace: impl FnMut(Option<&str>) -> Option<EffectTrace>,
+    marker_satisfies: impl Fn(ReachabilityEdgeId, Option<&str>) -> bool + Copy,
+) -> Vec<UnsatisfiedEffectTrace> {
     deduplicate_unsatisfied_traces(unresolved_requirement_names(requirements).filter_map(
         |requirement| {
-            let trace = find_effect_trace(view, is_target, |edge| {
-                !is_boundary(edge.target().kind())
-                    && !edge_marker_satisfies(tcx, edge, kind, probing, requirement.as_deref())
-            })?;
+            let trace = find_trace(requirement.as_deref())?;
             Some(UnsatisfiedEffectTrace {
                 missing_requirements: missing_requirements_on_trace(
-                    tcx,
-                    view.graph(),
                     &trace,
-                    kind,
-                    probing,
                     requirements,
+                    marker_satisfies,
                 ),
                 trace,
             })
@@ -298,28 +355,18 @@ fn deduplicate_unsatisfied_traces(
 }
 
 fn missing_requirements_on_trace(
-    tcx: TyCtxt<'_>,
-    graph: &ReachabilityGraph<'_>,
     trace: &EffectTrace,
-    kind: EffectKind,
-    probing: MarkerProbing,
     requirements: &[ContractRequirement],
+    marker_satisfies: impl Fn(ReachabilityEdgeId, Option<&str>) -> bool,
 ) -> Vec<ContractRequirement> {
     requirements
         .iter()
         .filter(|requirement| {
             let normalized_name = normalize_requirement_name(&requirement.name);
-            !trace.edge_ids.iter().any(|edge_id| {
-                let edge = graph.edge(*edge_id);
-                span_marker_block(tcx, edge.span, kind, probing).is_some_and(|marker| {
-                    marker.satisfactions.iter().any(|satisfaction| {
-                        !satisfaction.reason.trim().is_empty()
-                            && satisfaction.requirement.as_deref().is_some_and(|name| {
-                                normalize_requirement_name(name) == normalized_name
-                            })
-                    })
-                })
-            })
+            !trace
+                .edge_ids
+                .iter()
+                .any(|edge_id| marker_satisfies(*edge_id, Some(&normalized_name)))
         })
         .cloned()
         .collect()
@@ -343,22 +390,23 @@ fn unresolved_requirement_names(
 
 fn edge_marker_satisfies(
     tcx: TyCtxt<'_>,
-    edge: ReachedEdge<'_, '_>,
+    span: Span,
     kind: EffectKind,
     probing: MarkerProbing,
     requirement: Option<&str>,
 ) -> bool {
-    let Some(marker) = span_marker_block(tcx, edge.span(), kind, probing) else {
+    let Some(marker) = span_marker_block(tcx, span, kind, probing) else {
         return false;
     };
     marker.satisfactions.iter().any(|satisfaction| {
         !satisfaction.reason.trim().is_empty()
-            && requirement.is_none_or(|required| {
-                satisfaction
+            && match requirement {
+                Some(required) => satisfaction
                     .requirement
                     .as_deref()
-                    .is_some_and(|name| normalize_requirement_name(name) == required)
-            })
+                    .is_some_and(|name| normalize_requirement_name(name) == required),
+                None => satisfaction.requirement.is_none(),
+            }
     })
 }
 
@@ -372,33 +420,6 @@ pub(crate) enum EffectPathDecision {
         edge_id: Option<ReachabilityEdgeId>,
         def_id: DefId,
     },
-}
-
-pub(crate) fn classify_effect_path<'tcx>(
-    graph: &ReachabilityGraph<'tcx>,
-    root: ReachedNode<'_, 'tcx>,
-    trace: &EffectTrace,
-    mut obligation_for_node: impl FnMut(&ReachabilityNodeKind<'tcx>) -> Option<DefId>,
-) -> EffectPathDecision {
-    if let Some(def_id) = obligation_for_node(root.kind()) {
-        return EffectPathDecision::Obligation {
-            edge_id: None,
-            def_id,
-        };
-    }
-
-    for edge_id in &trace.edge_ids {
-        let edge = graph.edge(*edge_id);
-        let target = &graph.node(edge.target).kind;
-        if let Some(def_id) = obligation_for_node(target) {
-            return EffectPathDecision::Obligation {
-                edge_id: Some(*edge_id),
-                def_id,
-            };
-        }
-    }
-
-    EffectPathDecision::RawEffect
 }
 
 pub(crate) fn trace_to_edge(edge: ReachedEdge<'_, '_>) -> EffectTrace {
@@ -469,5 +490,45 @@ mod tests {
 
         assert_eq!(resolution.contract, ContractCheck::MissingJustification);
         assert!(resolution.markers.is_empty());
+    }
+
+    #[test]
+    fn evidence_resolution_claims_only_markers_that_satisfy_the_contract() {
+        let unrelated = EffectMarkerBlock {
+            key: MarkerBlockKey {
+                file_start: 1,
+                start_line: 2,
+                end_line: 3,
+            },
+            span: DUMMY_SP,
+            satisfactions: vec![MarkerSatisfaction {
+                requirement: Some(String::from("initialized")),
+                reason: String::from("initialized by the caller"),
+            }],
+        };
+        let relevant = EffectMarkerBlock {
+            key: MarkerBlockKey {
+                file_start: 1,
+                start_line: 4,
+                end_line: 5,
+            },
+            span: DUMMY_SP,
+            satisfactions: vec![MarkerSatisfaction {
+                requirement: Some(String::from("valid_ptr")),
+                reason: String::from("validated by the caller"),
+            }],
+        };
+        let resolution = resolve_effect_evidence(
+            &[ContractRequirement {
+                name: String::from("valid_ptr"),
+                condition: String::from("pointer must be valid"),
+                span: DUMMY_SP,
+            }],
+            [&unrelated, &relevant],
+        );
+
+        assert_eq!(resolution.contract, ContractCheck::Satisfied);
+        assert_eq!(resolution.markers.len(), 1);
+        assert_eq!(resolution.markers[0].key, relevant.key);
     }
 }

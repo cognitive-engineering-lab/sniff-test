@@ -18,3 +18,13 @@ pub fn ambiguous_marker(left: bool, right: bool) {
     // PANIC: the caller maintains both dependency invariants.
     dependency_panic_contract::two_raw_panics(left, right);
 }
+
+pub fn completes_cached_requirements() {
+    // PANIC:
+    // - exclusive: this call runs before worker threads start.
+    dependency_panic_contract::partially_satisfies_requirements();
+}
+
+pub fn leaves_cached_requirement_unsatisfied() {
+    dependency_panic_contract::partially_satisfies_requirements();
+}
