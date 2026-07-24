@@ -9,7 +9,18 @@ expression: messages
       "crate-name": "transitive_effect_markers"
     },
     "dependencies": [],
-    "findings": [],
+    "findings": [
+      {
+        "effect": "safety",
+        "function": "transitive_effect_markers::justified_safety_path",
+        "kind": "ambiguous-effect-marker",
+        "level": "deny",
+        "reason": "one `// SAFETY:` marker applies to 2 safety effect groups",
+        "root": "transitive_effect_markers::justified_safety_path",
+        "root-kind": "concrete",
+        "span": "src/lib.rs:17:1: 18:1"
+      }
+    ],
     "format-version": 8,
     "reason": "sniff-test-artifact",
     "rustc-version": "[RUSTC_VERSION]",

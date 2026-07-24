@@ -18,7 +18,7 @@ use crate::dependency_cache::{DependencyAnalysisCache, DependencyInput};
 use crate::effect_tracker::{
     EffectPathDecision, EffectTrace, find_effect_trace, find_effect_trace_to_edge,
     find_unsatisfied_effect_traces, find_unsatisfied_effect_traces_to_edge,
-    resolved_trace_marker_claims, trace_to_node,
+    resolved_trace_marker_claims,
 };
 use crate::namespace::{canonical_namespace, stable_def_path_hash};
 use crate::panics::{AmbiguousPanicMarker, PanicAnalysis, PanicEvidence, analyze_panic_evidence};
@@ -249,11 +249,7 @@ fn analyze_safety_root<'tcx>(
         findings: cached_findings,
     };
 
-    EffectRootAnalysis {
-        kind: EffectKind::Safety,
-        summary,
-        findings,
-    }
+    EffectRootAnalysis { summary, findings }
 }
 
 fn collect_local_safety_findings<'tcx>(
@@ -267,6 +263,7 @@ fn collect_local_safety_findings<'tcx>(
     let mut findings = Vec::new();
     let mut cached_findings = Vec::new();
     let mut trace_marker_claims = Vec::new();
+    let mut raw_effect_owners = Vec::new();
     let mut reached_instances = HashMap::<DefId, Vec<_>>::new();
     for node in view.nodes() {
         if let Some(instance) = node.instance() {
@@ -284,42 +281,45 @@ fn collect_local_safety_findings<'tcx>(
             .filter_map(|def_id| def_id.as_local()),
     );
     for (owner, owner_instances) in &reached_instances {
+        let boundary_trace = safety_boundary_trace(tcx, view, owner_instances, config);
+        if boundary_trace.is_some() {
+            raw_effect_owners.push(*owner);
+        }
         for (finding_index, safety_finding) in analysis.findings(*owner).iter().enumerate() {
             if safety_finding.is_root_contract_finding() && *owner != root.def_id() {
                 continue;
+            }
+            if let (Some(site), Some(trace)) =
+                (safety_finding.effect_site(), boundary_trace.as_ref())
+                && let Some(boundary_edge) = trace.edge_ids.last().copied()
+            {
+                let group = TraceEffectGroup {
+                    boundary_edge,
+                    finding: finding_index,
+                    span: site.span,
+                };
+                if let Some(claims) = resolved_trace_marker_claims(
+                    tcx,
+                    graph,
+                    trace,
+                    EffectKind::Safety,
+                    config.marker_probing,
+                    safety_finding.missing_requirements(),
+                    group,
+                ) {
+                    trace_marker_claims.extend(claims);
+                }
             }
             let unresolved_traces = safety_finding_traces(
                 tcx,
                 view,
                 owner_instances,
                 config,
-                safety_finding.is_effect_site(),
+                safety_finding.effect_site().is_some(),
                 safety_finding.missing_requirements(),
             );
             for unresolved in unresolved_traces {
                 let trace = &unresolved.trace;
-                if let (Some(site), Some(boundary_edge)) =
-                    (safety_finding.effect_site(), trace.edge_ids.last().copied())
-                {
-                    let group = TraceEffectGroup {
-                        boundary_edge,
-                        finding: finding_index,
-                        span: site.span,
-                    };
-                    if let Some(claims) = resolved_trace_marker_claims(
-                        tcx,
-                        graph,
-                        trace,
-                        EffectKind::Safety,
-                        config.marker_probing,
-                        safety_finding.missing_requirements(),
-                        group,
-                    ) {
-                        trace_marker_claims.extend(claims);
-                        continue;
-                    }
-                }
-
                 let safety_finding = safety_finding
                     .clone()
                     .with_missing_requirements(unresolved.missing_requirements);
@@ -342,11 +342,6 @@ fn collect_local_safety_findings<'tcx>(
         }
     }
 
-    let raw_effect_owners = reached_instances.iter().filter_map(|(owner, instances)| {
-        safety_boundary_trace(tcx, view, instances, config)
-            .is_some()
-            .then_some(*owner)
-    });
     for safety_finding in analysis.ambiguous_marker_findings(root.def_id(), raw_effect_owners) {
         let mut finding =
             safety_finding_report(tcx, safety_finding, &config.documentation_overrides);
@@ -374,9 +369,7 @@ fn safety_finding_traces<'tcx>(
     if !require_raw_path {
         return owner_instances.first().map_or_else(Vec::new, |owner| {
             vec![crate::effect_tracker::UnsatisfiedEffectTrace {
-                trace: EffectTrace {
-                    edge_ids: trace_to_node(*owner),
-                },
+                trace: EffectTrace::from_node(*owner),
                 missing_requirements: requirements.to_vec(),
             }]
         });
@@ -763,7 +756,6 @@ struct RootEffectAnalysis {
 }
 
 struct EffectRootAnalysis {
-    kind: EffectKind,
     summary: CachedEffectSummary,
     findings: Vec<Finding>,
 }
@@ -809,7 +801,10 @@ fn analyze_effect_roots<'tcx>(
             path: canonical_namespace(tcx, root.def_id()),
             is_generic: root.kind() == ReportRootKind::Generic,
             root_span: cached_source_span(tcx, tcx.def_span(root.def_id())),
-            effects: BTreeMap::from([(panic.kind, panic.summary), (safety.kind, safety.summary)]),
+            effects: BTreeMap::from([
+                (EffectKind::Panic, panic.summary),
+                (EffectKind::Safety, safety.summary),
+            ]),
         });
         panic_findings.extend(panic.findings);
     }
@@ -962,7 +957,6 @@ fn analyze_panic_root<'tcx>(
     };
 
     EffectRootAnalysis {
-        kind: EffectKind::Panic,
         summary,
         findings: report.findings,
     }
@@ -1278,12 +1272,6 @@ struct ResolvedCachedBoundary<'view, 'tcx, 'cache> {
     resolved: ResolvedCachedEffect<'cache>,
 }
 
-impl CachedEffectBoundary<'_, '_, '_> {
-    fn local_trace(&self) -> Vec<reachability::ReachabilityEdgeId> {
-        crate::panics::trace_to_edge_ids(self.edge)
-    }
-}
-
 fn resolve_cached_effect_boundary<'tcx, 'cache>(
     tcx: TyCtxt<'tcx>,
     view: ReachabilityView<'_, 'tcx>,
@@ -1293,9 +1281,7 @@ fn resolve_cached_effect_boundary<'tcx, 'cache>(
     is_boundary: impl Fn(&ReachabilityNodeKind<'tcx>) -> bool + Copy,
 ) -> ResolvedCachedEffect<'cache> {
     let graph = view.graph();
-    let first_trace = EffectTrace {
-        edge_ids: boundary.local_trace(),
-    };
+    let first_trace = EffectTrace::from_edge(boundary.edge);
     let mut unresolved_findings = Vec::new();
     let mut marker_claims = Vec::new();
     let mut has_raw_findings = false;

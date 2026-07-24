@@ -94,7 +94,7 @@ fn line_satisfaction(line: &str, kind: EffectKind) -> Option<MarkerSatisfaction>
     comment_body(line)
         .and_then(|body| body.strip_prefix(kind.marker_prefix()))
         .map(parse_marker)
-        .filter(has_justification)
+        .filter(MarkerSatisfaction::has_justification)
 }
 
 #[must_use]
@@ -269,7 +269,7 @@ fn comment_block_satisfactions(lines: &[String], kind: EffectKind) -> Vec<Marker
         }
     }
     flush_pending_header(&mut satisfactions, &mut pending_header_reason);
-    satisfactions.retain(has_justification);
+    satisfactions.retain(MarkerSatisfaction::has_justification);
 
     satisfactions
 }
@@ -300,10 +300,6 @@ fn append_reason_line(reason: &mut String, line: &str) {
         reason.push('\n');
     }
     reason.push_str(line);
-}
-
-fn has_justification(satisfaction: &MarkerSatisfaction) -> bool {
-    !satisfaction.reason.trim().is_empty()
 }
 
 fn parse_satisfaction_bullet(line: &str) -> Option<MarkerSatisfaction> {

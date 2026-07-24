@@ -81,7 +81,7 @@ impl SafetyFinding {
     }
 
     #[must_use]
-    pub(crate) fn effect_site(&self) -> Option<crate::EffectSite> {
+    pub(crate) fn effect_site(&self) -> Option<EffectSite> {
         match *self {
             Self::CallMissingJustification { site, .. }
             | Self::CallMissingRequirements { site, .. }
@@ -103,11 +103,6 @@ impl SafetyFinding {
                 caller
             }
         }
-    }
-
-    #[must_use]
-    pub(crate) fn is_effect_site(&self) -> bool {
-        self.effect_site().is_some()
     }
 
     #[must_use]

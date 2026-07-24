@@ -67,19 +67,18 @@ fn marker_contributes_to_contract(
     marker: &EffectMarkerBlock,
     requirements: &[ContractRequirement],
 ) -> bool {
-    marker.satisfactions.iter().any(|satisfaction| {
-        if satisfaction.reason.trim().is_empty() {
-            return false;
-        }
-        if requirements.is_empty() {
-            return satisfaction.requirement.is_none();
-        }
-        satisfaction.requirement.as_deref().is_some_and(|name| {
-            let normalized = normalize_requirement_name(name);
-            requirements
-                .iter()
-                .any(|requirement| normalize_requirement_name(&requirement.name) == normalized)
-        })
+    if requirements.is_empty() {
+        return marker
+            .satisfactions
+            .iter()
+            .any(|satisfaction| satisfaction.satisfies_requirement(None));
+    }
+    requirements.iter().any(|requirement| {
+        let normalized = normalize_requirement_name(&requirement.name);
+        marker
+            .satisfactions
+            .iter()
+            .any(|satisfaction| satisfaction.satisfies_requirement(Some(&normalized)))
     })
 }
 
@@ -141,6 +140,24 @@ where
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct EffectTrace {
     pub edge_ids: Vec<ReachabilityEdgeId>,
+}
+
+impl EffectTrace {
+    pub(crate) fn from_edge(edge: ReachedEdge<'_, '_>) -> Self {
+        let mut trace = Self::from_node(edge.source());
+        trace.edge_ids.push(edge.id());
+        trace
+    }
+
+    pub(crate) fn from_node(mut node: ReachedNode<'_, '_>) -> Self {
+        let mut edge_ids = Vec::new();
+        while let Some(edge) = node.predecessor_edge() {
+            edge_ids.push(edge.id());
+            node = edge.source();
+        }
+        edge_ids.reverse();
+        Self { edge_ids }
+    }
 }
 
 #[derive(Debug)]
@@ -398,16 +415,10 @@ fn edge_marker_satisfies(
     let Some(marker) = span_marker_block(tcx, span, kind, probing) else {
         return false;
     };
-    marker.satisfactions.iter().any(|satisfaction| {
-        !satisfaction.reason.trim().is_empty()
-            && match requirement {
-                Some(required) => satisfaction
-                    .requirement
-                    .as_deref()
-                    .is_some_and(|name| normalize_requirement_name(name) == required),
-                None => satisfaction.requirement.is_none(),
-            }
-    })
+    marker
+        .satisfactions
+        .iter()
+        .any(|satisfaction| satisfaction.satisfies_requirement(requirement))
 }
 
 /// How an effect path reaches the selected report root.
@@ -420,22 +431,6 @@ pub(crate) enum EffectPathDecision {
         edge_id: Option<ReachabilityEdgeId>,
         def_id: DefId,
     },
-}
-
-pub(crate) fn trace_to_edge(edge: ReachedEdge<'_, '_>) -> EffectTrace {
-    let mut edge_ids = trace_to_node(edge.source());
-    edge_ids.push(edge.id());
-    EffectTrace { edge_ids }
-}
-
-pub(crate) fn trace_to_node(mut node: ReachedNode<'_, '_>) -> Vec<ReachabilityEdgeId> {
-    let mut edge_ids = Vec::new();
-    while let Some(edge) = node.predecessor_edge() {
-        edge_ids.push(edge.id());
-        node = edge.source();
-    }
-    edge_ids.reverse();
-    edge_ids
 }
 
 #[cfg(test)]

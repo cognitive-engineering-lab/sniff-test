@@ -4,10 +4,11 @@ use crate::cache::{
     CachedReachabilityNode, CachedReachabilityNodeKind, CachedSourceSpan,
 };
 use crate::config::PanicConfig;
+use crate::effect_tracker::EffectTrace;
 use crate::namespace::canonical_namespace;
 use crate::panics::{
     PanicAnalysis, PanicEvidence, PanicEvidenceKind, describe_panic_evidence_kind,
-    trace_edges_until, trace_to_edge_ids, trigger_edge_id,
+    trace_edges_until, trigger_edge_id,
 };
 use reachability::{
     ReachabilityEdgeId, ReachabilityEdgeKind, ReachabilityGraph, ReachabilityNodeKind,
@@ -224,7 +225,8 @@ fn cached_crate_boundary_findings<'tcx>(
                     Some("crate boundary call"),
                 ),
                 edge_index: Some(edge.id().index()),
-                trace: trace_to_edge_ids(edge)
+                trace: EffectTrace::from_edge(edge)
+                    .edge_ids
                     .iter()
                     .map(|edge_id| edge_id.index())
                     .collect(),

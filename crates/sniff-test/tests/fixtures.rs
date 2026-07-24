@@ -291,7 +291,8 @@ fixture_cases! {
         driver_safe_markers => Case::direct("panic marker satisfaction");
     }
     "transitive_effect_markers" => {
-        transitive_effect_markers => Case::cargo("transitive panic and safety markers");
+        transitive_effect_markers => Case::cargo("transitive panic and safety markers")
+            .exit_code(1);
     }
     "panic_requirements" => {
         panic_requirements => Case::cargo("panic requirement satisfaction");

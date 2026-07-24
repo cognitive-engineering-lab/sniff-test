@@ -63,6 +63,23 @@ pub struct MarkerSatisfaction {
     pub reason: String,
 }
 
+impl MarkerSatisfaction {
+    pub(crate) fn has_justification(&self) -> bool {
+        !self.reason.trim().is_empty()
+    }
+
+    pub(crate) fn satisfies_requirement(&self, requirement: Option<&str>) -> bool {
+        self.has_justification()
+            && match requirement {
+                Some(required) => self
+                    .requirement
+                    .as_deref()
+                    .is_some_and(|name| normalize_requirement_name(name) == required),
+                None => self.requirement.is_none(),
+            }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum ContractCheck {
     Satisfied,
@@ -268,15 +285,13 @@ pub(crate) fn line_has_contract_heading(line: &str, kind: EffectKind) -> bool {
     false
 }
 
-/// Normalized names of requirements satisfied by marker bullets with
-/// non-empty reasons; shared by the panic and safety requirement checks.
-pub(crate) fn satisfied_requirement_names<'a>(
-    satisfactions: impl IntoIterator<Item = (Option<&'a str>, &'a str)>,
+fn satisfied_requirement_names(
+    satisfactions: &[MarkerSatisfaction],
 ) -> std::collections::HashSet<String> {
     satisfactions
-        .into_iter()
-        .filter(|(_, reason)| !reason.trim().is_empty())
-        .filter_map(|(requirement, _)| requirement)
+        .iter()
+        .filter(|satisfaction| satisfaction.has_justification())
+        .filter_map(|satisfaction| satisfaction.requirement.as_deref())
         .map(normalize_requirement_name)
         .collect()
 }
@@ -286,20 +301,17 @@ pub(crate) fn check_contract(
     satisfactions: &[MarkerSatisfaction],
 ) -> ContractCheck {
     if requirements.is_empty() {
-        return if satisfactions.iter().any(|satisfaction| {
-            satisfaction.requirement.is_none() && !satisfaction.reason.trim().is_empty()
-        }) {
+        return if satisfactions
+            .iter()
+            .any(|satisfaction| satisfaction.satisfies_requirement(None))
+        {
             ContractCheck::Satisfied
         } else {
             ContractCheck::MissingJustification
         };
     }
 
-    let satisfied_requirements = satisfied_requirement_names(
-        satisfactions
-            .iter()
-            .map(|satisfaction| (satisfaction.requirement.as_deref(), &*satisfaction.reason)),
-    );
+    let satisfied_requirements = satisfied_requirement_names(satisfactions);
     let missing = requirements
         .iter()
         .filter(|requirement| {

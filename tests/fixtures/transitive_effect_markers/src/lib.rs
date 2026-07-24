@@ -8,7 +8,9 @@ pub fn justified_panic_path() {
 }
 
 fn safety_inner(pointer: *const u8) -> u8 {
-    unsafe { *pointer }
+    let first = unsafe { *pointer };
+    let second = unsafe { *pointer };
+    first + second
 }
 
 pub fn justified_safety_path(pointer: *const u8) -> u8 {
