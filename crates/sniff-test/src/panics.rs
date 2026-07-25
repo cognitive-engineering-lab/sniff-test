@@ -23,9 +23,11 @@ use rustc_middle::ty::{self, Ty, TyCtxt};
 use rustc_span::Span;
 
 use crate::config::{PanicBoundaryPolicy, PanicConfig};
-use crate::contracts::{ContractDocSummary, ContractRequirement, EffectKind, contract_doc_summary};
+use crate::contracts::{
+    ContractCheck, ContractDocSummary, ContractRequirement, EffectKind, contract_doc_summary,
+};
 use crate::effect_tracker::{
-    EffectPathDecision, EffectTrace, ambiguous_marker_uses,
+    EffectEvidence, EffectPathDecision, EffectTrace, ambiguous_marker_uses,
     find_unsatisfied_effect_traces_to_edge_with, resolve_effect_evidence,
 };
 use crate::namespace::canonical_namespace;
@@ -94,14 +96,17 @@ pub(crate) fn analyze_panic_evidence<'tcx>(
     let marker_candidates = panic_marker_candidates(tcx, view, config);
     let ambiguous_names = collect_ambiguous_panic_requirement_names(tcx, view, config);
     let mut evidence = Vec::new();
-    for edge in view.edges() {
-        let Some(kind) = classify_edge_without_marker(tcx, edge, config) else {
-            continue;
+    for raw in probe_panic_evidence(tcx, view, config) {
+        let edge = raw.endpoint;
+        let kind = raw.details;
+        let requirements = match raw
+            .resolve_terminal_markers(tcx, EffectKind::Panic, config.marker_probing)
+            .contract
+        {
+            ContractCheck::Satisfied => continue,
+            ContractCheck::MissingJustification => Vec::new(),
+            ContractCheck::MissingRequirements(missing) => missing,
         };
-        if edge.origin().instance().is_none() {
-            continue;
-        }
-        let requirements = panic_evidence_requirements(tcx, kind, config);
         let unresolved = find_unsatisfied_effect_traces_to_edge_with(
             view,
             edge,
@@ -116,15 +121,7 @@ pub(crate) fn analyze_panic_evidence<'tcx>(
                 })
             },
         );
-        let decision = match kind {
-            PanicEvidenceKind::PanicObligation { def_id } => EffectPathDecision::Obligation {
-                edge_id: Some(edge.id()),
-                def_id,
-            },
-            PanicEvidenceKind::CompilerAssert
-            | PanicEvidenceKind::PanicSink { .. }
-            | PanicEvidenceKind::IndirectBoundary { .. } => EffectPathDecision::RawEffect,
-        };
+        let decision = panic_path_decision(edge.id(), kind);
         for unresolved in unresolved {
             evidence.push(PanicEvidence {
                 edge_id: edge.id(),
@@ -141,6 +138,42 @@ pub(crate) fn analyze_panic_evidence<'tcx>(
         evidence,
         ambiguous_markers: collect_ambiguous_panic_markers(tcx, view, config, &marker_candidates),
         ambiguous_names,
+    }
+}
+
+fn probe_panic_evidence<'view, 'tcx>(
+    tcx: TyCtxt<'tcx>,
+    view: ReachabilityView<'view, 'tcx>,
+    config: &PanicConfig,
+) -> Vec<EffectEvidence<ReachedEdge<'view, 'tcx>, PanicEvidenceKind>> {
+    let mut evidence = Vec::new();
+    for edge in view.edges() {
+        let Some(kind) = classify_edge_without_marker(tcx, edge, config) else {
+            continue;
+        };
+        if edge.origin().instance().is_none() {
+            continue;
+        }
+        let requirements = panic_evidence_requirements(tcx, kind, config);
+        evidence.push(EffectEvidence {
+            endpoint: edge,
+            requirements,
+            terminal_marker_spans: Vec::new(),
+            details: kind,
+        });
+    }
+    evidence
+}
+
+fn panic_path_decision(edge_id: ReachabilityEdgeId, kind: PanicEvidenceKind) -> EffectPathDecision {
+    match kind {
+        PanicEvidenceKind::PanicObligation { def_id } => EffectPathDecision::Obligation {
+            edge_id: Some(edge_id),
+            def_id,
+        },
+        PanicEvidenceKind::CompilerAssert
+        | PanicEvidenceKind::PanicSink { .. }
+        | PanicEvidenceKind::IndirectBoundary { .. } => EffectPathDecision::RawEffect,
     }
 }
 

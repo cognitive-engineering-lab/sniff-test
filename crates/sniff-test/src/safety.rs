@@ -18,16 +18,15 @@ use rustc_span::Span;
 
 use crate::config::{ContractDocOverrides, SafetyConfig};
 use crate::contracts::{ContractDocSummary, ContractRequirement, EffectKind, contract_doc_summary};
-use crate::effect_tracker::EffectSite;
+use crate::effect_tracker::{EffectEvidence, EffectSite};
 use crate::namespace::canonical_namespace;
-use crate::source_markers::MarkerBlockKey;
 
-#[derive(Debug, Default)]
+#[derive(Default)]
 pub(crate) struct SafetyAnalysis {
     findings_by_owner: HashMap<DefId, Vec<SafetyFinding>>,
+    evidence_by_owner: HashMap<DefId, Vec<SafetyEvidence>>,
     analyzed_owners: HashSet<LocalDefId>,
     ambiguous_requirement_names: HashSet<(DefId, DefId, String)>,
-    marker_claims_by_owner: HashMap<DefId, Vec<SafetyMarkerClaim>>,
     next_effect_group: usize,
 }
 
@@ -81,18 +80,6 @@ impl SafetyFinding {
     }
 
     #[must_use]
-    pub(crate) fn effect_site(&self) -> Option<EffectSite> {
-        match *self {
-            Self::CallMissingJustification { site, .. }
-            | Self::CallMissingRequirements { site, .. }
-            | Self::OpMissingJustification { site, .. } => Some(site),
-            Self::MissingSafetyDocs { .. }
-            | Self::AmbiguousObligationName { .. }
-            | Self::AmbiguousMarker { .. } => None,
-        }
-    }
-
-    #[must_use]
     pub(crate) fn owner(&self) -> DefId {
         match *self {
             Self::MissingSafetyDocs { def_id, .. } => def_id,
@@ -134,9 +121,9 @@ impl SafetyFinding {
 }
 
 #[derive(Debug, Clone, Copy)]
-struct SafetyEffectGroup {
+pub(crate) struct SafetyEffectGroup {
     id: usize,
-    span: Span,
+    pub(crate) span: Span,
 }
 
 impl PartialEq for SafetyEffectGroup {
@@ -153,11 +140,18 @@ impl std::hash::Hash for SafetyEffectGroup {
     }
 }
 
-#[derive(Debug)]
-struct SafetyMarkerClaim {
-    key: MarkerBlockKey,
-    marker_span: Span,
-    group: SafetyEffectGroup,
+pub(crate) struct SafetyEvidence {
+    effect: EffectEvidence<EffectSite, SafetyEvidenceKind>,
+    pub(crate) group: SafetyEffectGroup,
+}
+
+#[derive(Debug, Clone, Copy)]
+enum SafetyEvidenceKind {
+    Call {
+        callee: SafetyCallee,
+        call_kind: SafetyCallKind,
+    },
+    Operation(SafetyOpKind),
 }
 
 /// Non-call operations that require `unsafe`, mirroring the non-call variants
@@ -247,11 +241,39 @@ impl SafetyAnalysis {
             .map_or(&[], Vec::as_slice)
     }
 
+    pub(crate) fn evidence(&self, owner: DefId) -> &[SafetyEvidence] {
+        self.evidence_by_owner
+            .get(&owner)
+            .map_or(&[], Vec::as_slice)
+    }
+
     pub(super) fn push_finding(&mut self, finding: SafetyFinding) {
         self.findings_by_owner
             .entry(finding.owner())
             .or_default()
             .push(finding);
+    }
+
+    fn push_evidence(
+        &mut self,
+        site: EffectSite,
+        details: SafetyEvidenceKind,
+        requirements: Vec<SafetyRequirement>,
+        terminal_marker_spans: Vec<Span>,
+        group: SafetyEffectGroup,
+    ) {
+        self.evidence_by_owner
+            .entry(site.owner)
+            .or_default()
+            .push(SafetyEvidence {
+                effect: EffectEvidence {
+                    endpoint: site,
+                    requirements,
+                    terminal_marker_spans,
+                    details,
+                },
+                group,
+            });
     }
 
     pub(crate) fn analyze_owners(
@@ -269,7 +291,7 @@ impl SafetyAnalysis {
                 continue;
             }
             collect_missing_safety_docs(tcx, owner, config, self);
-            thir::collect_body_findings(tcx, owner, config, self);
+            thir::collect_body_evidence(tcx, owner, config, self);
         }
     }
 
@@ -305,47 +327,45 @@ impl SafetyAnalysis {
         self.next_effect_group += 1;
         group
     }
+}
 
-    fn claim_marker(
-        &mut self,
-        owner: DefId,
-        key: MarkerBlockKey,
-        marker_span: Span,
-        group: SafetyEffectGroup,
-    ) {
-        self.marker_claims_by_owner
-            .entry(owner)
-            .or_default()
-            .push(SafetyMarkerClaim {
-                key,
-                marker_span,
-                group,
-            });
+impl SafetyEvidence {
+    pub(crate) fn resolve_terminal_markers(
+        &self,
+        tcx: TyCtxt<'_>,
+        config: &SafetyConfig,
+    ) -> crate::effect_tracker::EffectEvidenceResolution {
+        self.effect
+            .resolve_terminal_markers(tcx, EffectKind::Safety, config.marker_probing)
     }
 
-    pub(crate) fn ambiguous_marker_findings(
-        &self,
-        caller: DefId,
-        owners: impl IntoIterator<Item = DefId>,
-    ) -> Vec<SafetyFinding> {
-        crate::effect_tracker::ambiguous_marker_uses(
-            owners
-                .into_iter()
-                .filter_map(|owner| self.marker_claims_by_owner.get(&owner))
-                .flatten()
-                .map(|claim| (claim.key, claim.marker_span, claim.group)),
-        )
-        .into_iter()
-        .map(|marker_use| SafetyFinding::AmbiguousMarker {
-            caller,
-            marker_span: marker_use.marker_span,
-            effect_spans: marker_use
-                .groups
-                .into_iter()
-                .map(|group| group.span)
-                .collect(),
-        })
-        .collect()
+    pub(crate) fn site(&self) -> EffectSite {
+        self.effect.endpoint
+    }
+
+    pub(crate) fn finding(&self, missing_requirements: Vec<SafetyRequirement>) -> SafetyFinding {
+        let site = self.effect.endpoint;
+        match self.effect.details {
+            SafetyEvidenceKind::Call { callee, call_kind } if missing_requirements.is_empty() => {
+                SafetyFinding::CallMissingJustification {
+                    site,
+                    callee,
+                    call_kind,
+                }
+            }
+            SafetyEvidenceKind::Call { callee, call_kind } => {
+                SafetyFinding::CallMissingRequirements {
+                    site,
+                    callee,
+                    call_kind,
+                    missing_requirements,
+                }
+            }
+            SafetyEvidenceKind::Operation(op) => {
+                debug_assert!(missing_requirements.is_empty());
+                SafetyFinding::OpMissingJustification { site, op }
+            }
+        }
     }
 }
 

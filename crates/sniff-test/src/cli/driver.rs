@@ -13,7 +13,7 @@ use crate::config::{
     AnalysisConfig, CallableEdgeAttribution, MarkerProbing, PanicBoundaryPolicy, PanicConfig,
     SniffTestConfig,
 };
-use crate::contracts::EffectKind;
+use crate::contracts::{ContractCheck, EffectKind};
 use crate::dependency_cache::{DependencyAnalysisCache, DependencyInput};
 use crate::effect_tracker::{
     EffectPathDecision, EffectTrace, find_effect_trace, find_effect_trace_to_edge,
@@ -262,8 +262,111 @@ fn collect_local_safety_findings<'tcx>(
     let graph = view.graph();
     let mut findings = Vec::new();
     let mut cached_findings = Vec::new();
+    let mut terminal_marker_claims = Vec::new();
     let mut trace_marker_claims = Vec::new();
-    let mut raw_effect_owners = Vec::new();
+    let reached_instances = analyze_reached_safety_owners(tcx, view, config, analysis);
+    for (owner, owner_instances) in &reached_instances {
+        let boundary_trace = safety_boundary_trace(tcx, view, owner_instances, config);
+        findings.extend(collect_safety_contract_findings(
+            tcx,
+            view,
+            root,
+            config,
+            *owner,
+            owner_instances,
+            analysis.findings(*owner),
+        ));
+
+        for (evidence_index, evidence) in analysis.evidence(*owner).iter().enumerate() {
+            let terminal = evidence.resolve_terminal_markers(tcx, config);
+            let missing_requirements = match terminal.contract {
+                ContractCheck::Satisfied => {
+                    if boundary_trace.is_some() {
+                        terminal_marker_claims.extend(
+                            terminal
+                                .markers
+                                .into_iter()
+                                .map(|marker| (marker.key, marker.span, evidence.group)),
+                        );
+                    }
+                    continue;
+                }
+                ContractCheck::MissingJustification => Vec::new(),
+                ContractCheck::MissingRequirements(missing) => missing,
+            };
+            let safety_finding = evidence.finding(missing_requirements);
+            if let Some(trace) = boundary_trace.as_ref()
+                && let Some(boundary_edge) = trace.edge_ids.last().copied()
+            {
+                let group = TraceEffectGroup {
+                    boundary_edge,
+                    finding: evidence_index,
+                    span: evidence.site().span,
+                };
+                if let Some(claims) = resolved_trace_marker_claims(
+                    tcx,
+                    graph,
+                    trace,
+                    EffectKind::Safety,
+                    config.marker_probing,
+                    safety_finding.missing_requirements(),
+                    group,
+                ) {
+                    trace_marker_claims.extend(claims);
+                }
+            }
+            for unresolved in safety_finding_traces(
+                tcx,
+                view,
+                owner_instances,
+                config,
+                safety_finding.missing_requirements(),
+            ) {
+                let trace = &unresolved.trace;
+                let safety_finding = safety_finding
+                    .clone()
+                    .with_missing_requirements(unresolved.missing_requirements);
+                let mut finding = safety_finding_report(
+                    tcx,
+                    safety_finding.clone(),
+                    &config.documentation_overrides,
+                );
+                finding.root = Some(canonical_namespace(tcx, root.def_id()));
+                finding.root_kind = Some(root.kind());
+                finding.trace = super::report::render_trace(tcx, graph, &trace.edge_ids);
+                if let Some(cached) =
+                    cached_safety_finding(tcx, evidence.site(), trace, &safety_finding, &finding)
+                {
+                    cached_findings.push(cached);
+                }
+                findings.push(finding);
+            }
+        }
+    }
+
+    findings.extend(safety_ambiguity_findings(
+        tcx,
+        root,
+        config,
+        terminal_marker_claims,
+        |group| group.span,
+    ));
+    findings.extend(safety_ambiguity_findings(
+        tcx,
+        root,
+        config,
+        trace_marker_claims,
+        |group| group.span,
+    ));
+    (findings, cached_findings)
+}
+
+fn analyze_reached_safety_owners<'view, 'tcx>(
+    tcx: TyCtxt<'tcx>,
+    view: ReachabilityView<'view, 'tcx>,
+    config: &crate::config::SafetyConfig,
+    analysis: &mut SafetyAnalysis,
+) -> HashMap<DefId, Vec<reachability::ReachedNode<'view, 'tcx>>> {
     let mut reached_instances = HashMap::<DefId, Vec<_>>::new();
     for node in view.nodes() {
         if let Some(instance) = node.instance() {
@@ -280,82 +383,38 @@ fn collect_local_safety_findings<'tcx>(
             .keys()
             .filter_map(|def_id| def_id.as_local()),
     );
-    for (owner, owner_instances) in &reached_instances {
-        let boundary_trace = safety_boundary_trace(tcx, view, owner_instances, config);
-        if boundary_trace.is_some() {
-            raw_effect_owners.push(*owner);
-        }
-        for (finding_index, safety_finding) in analysis.findings(*owner).iter().enumerate() {
-            if safety_finding.is_root_contract_finding() && *owner != root.def_id() {
-                continue;
-            }
-            if let (Some(site), Some(trace)) =
-                (safety_finding.effect_site(), boundary_trace.as_ref())
-                && let Some(boundary_edge) = trace.edge_ids.last().copied()
-            {
-                let group = TraceEffectGroup {
-                    boundary_edge,
-                    finding: finding_index,
-                    span: site.span,
-                };
-                if let Some(claims) = resolved_trace_marker_claims(
-                    tcx,
-                    graph,
-                    trace,
-                    EffectKind::Safety,
-                    config.marker_probing,
-                    safety_finding.missing_requirements(),
-                    group,
-                ) {
-                    trace_marker_claims.extend(claims);
-                }
-            }
-            let unresolved_traces = safety_finding_traces(
-                tcx,
-                view,
-                owner_instances,
-                config,
-                safety_finding.effect_site().is_some(),
-                safety_finding.missing_requirements(),
-            );
-            for unresolved in unresolved_traces {
-                let trace = &unresolved.trace;
-                let safety_finding = safety_finding
-                    .clone()
-                    .with_missing_requirements(unresolved.missing_requirements);
-                let mut finding = safety_finding_report(
-                    tcx,
-                    safety_finding.clone(),
-                    &config.documentation_overrides,
-                );
-                finding.root = Some(canonical_namespace(tcx, root.def_id()));
-                finding.root_kind = Some(root.kind());
-                finding.trace = super::report::render_trace(tcx, graph, &trace.edge_ids);
-                if let Some(site) = safety_finding.effect_site()
-                    && let Some(cached) =
-                        cached_safety_finding(tcx, site, trace, &safety_finding, &finding)
-                {
-                    cached_findings.push(cached);
-                }
-                findings.push(finding);
-            }
-        }
-    }
+    reached_instances
+}
 
-    for safety_finding in analysis.ambiguous_marker_findings(root.def_id(), raw_effect_owners) {
+fn collect_safety_contract_findings<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    view: ReachabilityView<'_, 'tcx>,
+    root: ReportRoot<'tcx>,
+    config: &crate::config::SafetyConfig,
+    owner: DefId,
+    owner_instances: &[reachability::ReachedNode<'_, 'tcx>],
+    safety_findings: &[crate::safety::SafetyFinding],
+) -> Vec<Finding> {
+    let mut findings = Vec::new();
+    let Some(owner_instance) = owner_instances.first() else {
+        return findings;
+    };
+    for safety_finding in safety_findings {
+        if safety_finding.is_root_contract_finding() && owner != root.def_id() {
+            continue;
+        }
         let mut finding =
-            safety_finding_report(tcx, safety_finding, &config.documentation_overrides);
+            safety_finding_report(tcx, safety_finding.clone(), &config.documentation_overrides);
         finding.root = Some(canonical_namespace(tcx, root.def_id()));
         finding.root_kind = Some(root.kind());
+        finding.trace = super::report::render_trace(
+            tcx,
+            view.graph(),
+            &EffectTrace::from_node(*owner_instance).edge_ids,
+        );
         findings.push(finding);
     }
-    findings.extend(trace_ambiguous_marker_findings(
-        tcx,
-        root,
-        config,
-        trace_marker_claims,
-    ));
-    (findings, cached_findings)
+    findings
 }
 
 fn safety_finding_traces<'tcx>(
@@ -363,17 +422,8 @@ fn safety_finding_traces<'tcx>(
     view: ReachabilityView<'_, 'tcx>,
     owner_instances: &[reachability::ReachedNode<'_, 'tcx>],
     config: &crate::config::SafetyConfig,
-    require_raw_path: bool,
     requirements: &[crate::contracts::ContractRequirement],
 ) -> Vec<crate::effect_tracker::UnsatisfiedEffectTrace> {
-    if !require_raw_path {
-        return owner_instances.first().map_or_else(Vec::new, |owner| {
-            vec![crate::effect_tracker::UnsatisfiedEffectTrace {
-                trace: EffectTrace::from_node(*owner),
-                missing_requirements: requirements.to_vec(),
-            }]
-        });
-    }
     let owner_ids = owner_instances
         .iter()
         .map(|owner| owner.id())
@@ -497,33 +547,34 @@ fn collect_cached_dependency_safety_findings<'tcx>(
         }
     }
 
-    findings.extend(trace_ambiguous_marker_findings(
+    findings.extend(safety_ambiguity_findings(
         tcx,
         root,
         config,
         marker_claims,
+        |group| group.span,
     ));
 
     (findings, propagation)
 }
 
-fn trace_ambiguous_marker_findings(
+fn safety_ambiguity_findings<Group>(
     tcx: TyCtxt<'_>,
     root: ReportRoot<'_>,
     config: &crate::config::SafetyConfig,
-    marker_claims: Vec<(MarkerBlockKey, Span, TraceEffectGroup)>,
-) -> Vec<Finding> {
+    marker_claims: Vec<(MarkerBlockKey, Span, Group)>,
+    effect_span: impl Fn(Group) -> Span + Copy,
+) -> Vec<Finding>
+where
+    Group: Copy + Eq + std::hash::Hash,
+{
     crate::effect_tracker::ambiguous_marker_uses(marker_claims)
         .into_iter()
         .map(|marker_use| {
             let safety_finding = crate::safety::SafetyFinding::AmbiguousMarker {
                 caller: root.def_id(),
                 marker_span: marker_use.marker_span,
-                effect_spans: marker_use
-                    .groups
-                    .into_iter()
-                    .map(|group| group.span)
-                    .collect(),
+                effect_spans: marker_use.groups.into_iter().map(effect_span).collect(),
             };
             let mut finding =
                 safety_finding_report(tcx, safety_finding, &config.documentation_overrides);

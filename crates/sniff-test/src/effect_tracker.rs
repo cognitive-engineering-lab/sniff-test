@@ -25,6 +25,30 @@ pub(crate) struct EffectSite {
     pub span: Span,
 }
 
+/// Raw effect evidence before comment contracts are resolved.
+pub(crate) struct EffectEvidence<Endpoint, Details> {
+    pub(crate) endpoint: Endpoint,
+    pub(crate) requirements: Vec<ContractRequirement>,
+    pub(crate) terminal_marker_spans: Vec<Span>,
+    pub(crate) details: Details,
+}
+
+impl<Endpoint, Details> EffectEvidence<Endpoint, Details> {
+    pub(crate) fn resolve_terminal_markers(
+        &self,
+        tcx: TyCtxt<'_>,
+        kind: EffectKind,
+        probing: MarkerProbing,
+    ) -> EffectEvidenceResolution {
+        let markers = self
+            .terminal_marker_spans
+            .iter()
+            .filter_map(|span| span_marker_block(tcx, *span, kind, probing))
+            .collect::<Vec<_>>();
+        resolve_effect_evidence(&self.requirements, &markers)
+    }
+}
+
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct ResolvedEffectMarker {
     pub(crate) key: MarkerBlockKey,

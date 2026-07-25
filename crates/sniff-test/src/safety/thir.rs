@@ -33,17 +33,13 @@ use rustc_middle::ty::{self, Ty, TyCtxt};
 use rustc_span::Span;
 
 use super::{
-    SafetyAnalysis, SafetyCall, SafetyCallKind, SafetyCallee, SafetyEffectGroup, SafetyFinding,
-    SafetyOpKind, safety_doc_summary,
+    SafetyAnalysis, SafetyCall, SafetyCallKind, SafetyCallee, SafetyEffectGroup,
+    SafetyEvidenceKind, SafetyOpKind, safety_doc_summary,
 };
 use crate::config::SafetyConfig;
-use crate::contracts::{ContractCheck, EffectKind};
-use crate::effect_tracker::{
-    EffectEvidenceResolution, EffectSite, ResolvedEffectMarker, resolve_effect_evidence,
-};
-use crate::source_markers::{EffectMarkerBlock, span_marker_block};
+use crate::effect_tracker::EffectSite;
 
-pub(super) fn collect_body_findings(
+pub(super) fn collect_body_evidence(
     tcx: TyCtxt<'_>,
     owner: LocalDefId,
     config: &SafetyConfig,
@@ -81,7 +77,7 @@ pub(super) fn collect_body_findings(
 }
 
 struct SafetyScope {
-    marker: Option<EffectMarkerBlock>,
+    marker_span: Span,
 }
 
 struct UnsafeOpVisitor<'a, 'tcx> {
@@ -114,20 +110,7 @@ impl<'a, 'tcx> UnsafeOpVisitor<'a, 'tcx> {
         if self.builtin_unsafe_depth > 0 {
             return;
         }
-        let resolution = self.resolve_evidence(span, &[]);
-        match resolution.contract {
-            ContractCheck::Satisfied => self.claim_markers(span, resolution.markers),
-            ContractCheck::MissingJustification | ContractCheck::MissingRequirements(_) => {
-                self.analysis
-                    .push_finding(SafetyFinding::OpMissingJustification {
-                        site: EffectSite {
-                            owner: self.owner.to_def_id(),
-                            span,
-                        },
-                        op,
-                    });
-            }
-        }
+        self.record_evidence(span, SafetyEvidenceKind::Operation(op), Vec::new());
     }
 
     fn unsafe_call(&mut self, span: Span, call: SafetyCall) {
@@ -137,9 +120,7 @@ impl<'a, 'tcx> UnsafeOpVisitor<'a, 'tcx> {
         if self.ignores_callee(call.callee) {
             return;
         }
-        let markers = self.applicable_markers(span);
-
-        if let SafetyCallee::Def(def_id) = call.callee {
+        let requirements = if let SafetyCallee::Def(def_id) = call.callee {
             self.analysis.push_ambiguous_requirement_names(
                 self.tcx,
                 self.owner.to_def_id(),
@@ -148,85 +129,55 @@ impl<'a, 'tcx> UnsafeOpVisitor<'a, 'tcx> {
             );
             let summary =
                 safety_doc_summary(self.tcx, def_id, &self.config.documentation_overrides);
-            if !summary.requirements.is_empty() {
-                let resolution = resolve_effect_evidence(&summary.requirements, &markers);
-                match resolution.contract {
-                    ContractCheck::MissingRequirements(missing) => {
-                        self.analysis
-                            .push_finding(SafetyFinding::CallMissingRequirements {
-                                site: EffectSite {
-                                    owner: self.owner.to_def_id(),
-                                    span,
-                                },
-                                callee: call.callee,
-                                call_kind: call.kind,
-                                missing_requirements: missing,
-                            });
-                    }
-                    ContractCheck::Satisfied => self.claim_markers(span, resolution.markers),
-                    ContractCheck::MissingJustification => unreachable!(
-                        "a contract with named requirements cannot lack only justification"
-                    ),
-                }
-                return;
-            }
-        }
-
-        let resolution = resolve_effect_evidence(&[], &markers);
-        match resolution.contract {
-            ContractCheck::Satisfied => self.claim_markers(span, resolution.markers),
-            ContractCheck::MissingJustification | ContractCheck::MissingRequirements(_) => {
-                self.analysis
-                    .push_finding(SafetyFinding::CallMissingJustification {
-                        site: EffectSite {
-                            owner: self.owner.to_def_id(),
-                            span,
-                        },
-                        callee: call.callee,
-                        call_kind: call.kind,
-                    });
-            }
-        }
+            summary.requirements
+        } else {
+            Vec::new()
+        };
+        self.record_evidence(
+            span,
+            SafetyEvidenceKind::Call {
+                callee: call.callee,
+                call_kind: call.kind,
+            },
+            requirements,
+        );
     }
 
     fn ignores_callee(&self, callee: SafetyCallee) -> bool {
         matches!(callee, SafetyCallee::Def(def_id) if self.config.ignores_def(self.tcx, def_id))
     }
 
-    fn applicable_markers(&self, span: Span) -> Vec<EffectMarkerBlock> {
-        let mut markers = self
+    fn applicable_marker_spans(&self, span: Span) -> Vec<Span> {
+        let mut spans = self
             .safety_scopes
             .iter()
-            .filter_map(|scope| scope.marker.clone())
+            .map(|scope| scope.marker_span)
             .collect::<Vec<_>>();
-        markers.extend(span_marker_block(
-            self.tcx,
-            span,
-            EffectKind::Safety,
-            self.config.marker_probing,
-        ));
-        markers
+        spans.push(span);
+        spans
     }
 
-    fn resolve_evidence(
-        &self,
+    fn record_evidence(
+        &mut self,
         span: Span,
-        requirements: &[crate::contracts::ContractRequirement],
-    ) -> EffectEvidenceResolution {
-        let markers = self.applicable_markers(span);
-        resolve_effect_evidence(requirements, &markers)
-    }
-
-    fn claim_markers(&mut self, span: Span, markers: Vec<ResolvedEffectMarker>) {
+        details: SafetyEvidenceKind,
+        requirements: Vec<crate::contracts::ContractRequirement>,
+    ) {
         let group = self
             .effect_groups
             .last()
             .copied()
             .unwrap_or_else(|| self.analysis.new_effect_group(span));
-        for marker in markers {
-            self.analysis
-                .claim_marker(self.owner.to_def_id(), marker.key, marker.span, group);
-        }
+        self.analysis.push_evidence(
+            EffectSite {
+                owner: self.owner.to_def_id(),
+                span,
+            },
+            details,
+            requirements,
+            self.applicable_marker_spans(span),
+            group,
+        );
     }
 
     /// The `// SAFETY:` comment sits above the `unsafe` keyword, which only
@@ -497,14 +448,7 @@ impl<'a, 'tcx> Visitor<'a, 'tcx> for UnsafeOpVisitor<'a, 'tcx> {
                 let span = self.unsafe_block_span(hir_id, block.span);
                 let group = self.analysis.new_effect_group(span);
                 self.effect_groups.push(group);
-                self.safety_scopes.push(SafetyScope {
-                    marker: span_marker_block(
-                        self.tcx,
-                        span,
-                        EffectKind::Safety,
-                        self.config.marker_probing,
-                    ),
-                });
+                self.safety_scopes.push(SafetyScope { marker_span: span });
                 visit::walk_block(self, block);
                 self.safety_scopes
                     .pop()
