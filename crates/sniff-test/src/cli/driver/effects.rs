@@ -39,7 +39,7 @@ struct EffectSnapshotAnalysis {
 trait EffectPass<'tcx> {
     fn kind(&self) -> EffectKind;
 
-    fn report_includes_external_mir(&self) -> bool {
+    fn requires_separate_cache_snapshot(&self) -> bool {
         false
     }
 
@@ -48,8 +48,16 @@ trait EffectPass<'tcx> {
         reachability: &mut ReachabilityIndex<'tcx>,
         root: ReportRoot<'tcx>,
         analysis_config: &AnalysisConfig,
-        include_external_mir: bool,
     ) -> reachability::ReachabilitySnapshot<'tcx>;
+
+    fn query_report(
+        &self,
+        reachability: &mut ReachabilityIndex<'tcx>,
+        root: ReportRoot<'tcx>,
+        analysis_config: &AnalysisConfig,
+    ) -> reachability::ReachabilitySnapshot<'tcx> {
+        self.query(reachability, root, analysis_config)
+    }
 
     fn path_index(&self, tcx: TyCtxt<'tcx>, view: ReachabilityView<'_, 'tcx>) -> EffectPathIndex;
 
@@ -62,29 +70,21 @@ trait EffectPass<'tcx> {
         root: ReportRoot<'tcx>,
         purpose: EffectViewPurpose,
         dependency_cache: &DependencyAnalysisCache,
-        include_stack: bool,
     ) -> EffectSnapshotAnalysis;
 }
 
 struct PanicPass<'config> {
     config: &'config PanicConfig,
+    include_stack: bool,
 }
 
-impl<'tcx> EffectPass<'tcx> for PanicPass<'_> {
-    fn kind(&self) -> EffectKind {
-        EffectKind::Panic
-    }
-
-    fn report_includes_external_mir(&self) -> bool {
-        true
-    }
-
-    fn query(
+impl<'tcx> PanicPass<'_> {
+    fn query_with_external_mir(
         &self,
         reachability: &mut ReachabilityIndex<'tcx>,
         root: ReportRoot<'tcx>,
         analysis_config: &AnalysisConfig,
-        include_external_mir: bool,
+        analyze_external: bool,
     ) -> reachability::ReachabilitySnapshot<'tcx> {
         let mut hooks = PanicReachabilityHooks {
             config: self.config,
@@ -94,8 +94,36 @@ impl<'tcx> EffectPass<'tcx> for PanicPass<'_> {
         reachability.query(
             root.reachability_root(),
             &mut hooks,
-            reachability_options(analysis_config, include_external_mir),
+            reachability_options(analysis_config, analyze_external),
         )
+    }
+}
+
+impl<'tcx> EffectPass<'tcx> for PanicPass<'_> {
+    fn kind(&self) -> EffectKind {
+        EffectKind::Panic
+    }
+
+    fn requires_separate_cache_snapshot(&self) -> bool {
+        true
+    }
+
+    fn query(
+        &self,
+        reachability: &mut ReachabilityIndex<'tcx>,
+        root: ReportRoot<'tcx>,
+        analysis_config: &AnalysisConfig,
+    ) -> reachability::ReachabilitySnapshot<'tcx> {
+        self.query_with_external_mir(reachability, root, analysis_config, false)
+    }
+
+    fn query_report(
+        &self,
+        reachability: &mut ReachabilityIndex<'tcx>,
+        root: ReportRoot<'tcx>,
+        analysis_config: &AnalysisConfig,
+    ) -> reachability::ReachabilitySnapshot<'tcx> {
+        self.query_with_external_mir(reachability, root, analysis_config, true)
     }
 
     fn path_index(&self, tcx: TyCtxt<'tcx>, view: ReachabilityView<'_, 'tcx>) -> EffectPathIndex {
@@ -115,7 +143,6 @@ impl<'tcx> EffectPass<'tcx> for PanicPass<'_> {
         root: ReportRoot<'tcx>,
         purpose: EffectViewPurpose,
         dependency_cache: &DependencyAnalysisCache,
-        include_stack: bool,
     ) -> EffectSnapshotAnalysis {
         let marker_index =
             EffectMarkerIndex::new(tcx, view, EffectKind::Panic, self.config.marker_probing);
@@ -126,7 +153,7 @@ impl<'tcx> EffectPass<'tcx> for PanicPass<'_> {
             root_def_id: root.def_id(),
             config: self.config,
             dependency_cache,
-            include_stack,
+            include_stack: self.include_stack,
         };
         if purpose == EffectViewPurpose::Report {
             let mut report = collect_panic_findings(tcx, view, &analysis, collection);
@@ -178,7 +205,6 @@ impl<'tcx> EffectPass<'tcx> for SafetyPass<'_, '_> {
         reachability: &mut ReachabilityIndex<'tcx>,
         root: ReportRoot<'tcx>,
         analysis_config: &AnalysisConfig,
-        _include_external_mir: bool,
     ) -> reachability::ReachabilitySnapshot<'tcx> {
         let mut hooks = SafetyReachabilityHooks {
             config: self.config,
@@ -207,7 +233,6 @@ impl<'tcx> EffectPass<'tcx> for SafetyPass<'_, '_> {
         root: ReportRoot<'tcx>,
         _purpose: EffectViewPurpose,
         dependency_cache: &DependencyAnalysisCache,
-        _include_stack: bool,
     ) -> EffectSnapshotAnalysis {
         let marker_index =
             EffectMarkerIndex::new(tcx, view, EffectKind::Safety, self.config.marker_probing);
@@ -249,42 +274,24 @@ fn analyze_effect_root<'tcx>(
     pass: &mut impl EffectPass<'tcx>,
 ) -> EffectRootAnalysis {
     let kind = pass.kind();
-    let report_includes_external_mir = pass.report_includes_external_mir();
-    let report_snapshot = pass.query(
-        reachability,
-        root,
-        analysis_config,
-        report_includes_external_mir,
-    );
+    let requires_separate_cache_snapshot = pass.requires_separate_cache_snapshot();
+    let report_snapshot = pass.query_report(reachability, root, analysis_config);
     let report_complete = reachability.graph().view(&report_snapshot).halt().is_none();
     let report_analysis = {
         let view = reachability.graph().view(&report_snapshot);
-        pass.analyze_snapshot(
-            tcx,
-            view,
-            root,
-            EffectViewPurpose::Report,
-            dependency_cache,
-            analysis_config.show_full_stack_trace,
-        )
+        pass.analyze_snapshot(tcx, view, root, EffectViewPurpose::Report, dependency_cache)
     };
     let mut findings = report_analysis.findings;
 
     let (cached_findings, dependency_complete, cache_complete, graph) =
-        if report_includes_external_mir {
+        if requires_separate_cache_snapshot {
             // User-facing panic reports can inspect available external MIR. Cached
             // summaries stop at dependency boundaries so downstream crates can
             // combine them with independently versioned dependency caches.
-            let cache_snapshot = pass.query(reachability, root, analysis_config, false);
+            let cache_snapshot = pass.query(reachability, root, analysis_config);
             let view = reachability.graph().view(&cache_snapshot);
-            let cache_analysis = pass.analyze_snapshot(
-                tcx,
-                view,
-                root,
-                EffectViewPurpose::Cache,
-                dependency_cache,
-                analysis_config.show_full_stack_trace,
-            );
+            let cache_analysis =
+                pass.analyze_snapshot(tcx, view, root, EffectViewPurpose::Cache, dependency_cache);
             (
                 cache_analysis.cached_findings,
                 cache_analysis.dependency_complete,
@@ -347,6 +354,7 @@ pub(super) fn analyze_effect_roots<'tcx>(
                     dependency_cache,
                     &mut PanicPass {
                         config: &config.panics,
+                        include_stack: analysis_config.show_full_stack_trace,
                     },
                 ),
                 EffectKind::Safety => analyze_effect_root(
