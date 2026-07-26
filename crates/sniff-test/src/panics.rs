@@ -95,9 +95,9 @@ pub(crate) fn analyze_panic_evidence<'tcx>(
     tcx: TyCtxt<'tcx>,
     view: ReachabilityView<'_, 'tcx>,
     config: &PanicConfig,
+    marker_index: &EffectMarkerIndex,
 ) -> PanicAnalysis {
     let graph = view.graph();
-    let marker_index = EffectMarkerIndex::new(tcx, view, EffectKind::Panic, config.marker_probing);
     let ambiguous_names = collect_ambiguous_panic_requirement_names(tcx, view, config);
     let mut evidence = Vec::new();
     let mut marker_claims = Vec::new();

@@ -75,6 +75,8 @@ pub(crate) struct ResolvedEffectPaths {
 }
 
 pub(crate) struct EffectMarkerIndex {
+    kind: EffectKind,
+    probing: MarkerProbing,
     markers: HashMap<ReachabilityEdgeId, EffectMarkerBlock>,
 }
 
@@ -93,7 +95,19 @@ impl EffectMarkerIndex {
                     .map(|marker| (edge.id(), marker))
             })
             .collect();
-        Self { markers }
+        Self {
+            kind,
+            probing,
+            markers,
+        }
+    }
+
+    pub(crate) fn kind(&self) -> EffectKind {
+        self.kind
+    }
+
+    pub(crate) fn probing(&self) -> MarkerProbing {
+        self.probing
     }
 
     pub(crate) fn blocks(
