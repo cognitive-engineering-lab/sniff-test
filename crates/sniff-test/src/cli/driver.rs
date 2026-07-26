@@ -16,9 +16,10 @@ use crate::config::{
 use crate::contracts::EffectKind;
 use crate::dependency_cache::{DependencyAnalysisCache, DependencyInput};
 use crate::effect_tracker::{
-    EffectPathDecision, EffectTrace, effect_path_edge_ids_to_edge, effect_path_edge_ids_to_nodes,
-    find_effect_trace, find_effect_trace_to_edge, find_unsatisfied_effect_traces,
-    find_unsatisfied_effect_traces_to_edge, resolve_effect_paths,
+    EffectMarkerIndex, EffectPathDecision, EffectTrace, effect_path_edge_ids_to_edge,
+    effect_path_edge_ids_to_nodes, find_effect_trace, find_effect_trace_to_edge,
+    find_unsatisfied_effect_traces_to_edge_with, find_unsatisfied_effect_traces_with,
+    resolve_effect_paths,
 };
 use crate::namespace::{canonical_namespace, stable_def_path_hash};
 use crate::panics::{AmbiguousPanicMarker, PanicAnalysis, PanicEvidence, analyze_panic_evidence};
@@ -26,7 +27,7 @@ use crate::report_roots::{
     MissingReportRoot, ReportRoot, ReportRootKind, ReportRootSelection, select_report_roots,
 };
 use crate::safety::{SafetyAnalysis, safety_doc_summary};
-use crate::source_markers::{MarkerBlockKey, span_marker_block};
+use crate::source_markers::MarkerBlockKey;
 use anyhow::Context;
 use reachability::{
     ReachabilityContext, ReachabilityControl, ReachabilityEdge, ReachabilityEdgeKind,
@@ -264,6 +265,7 @@ fn collect_local_safety_findings<'tcx>(
     let mut cached_findings = Vec::new();
     let mut terminal_marker_claims = Vec::new();
     let mut trace_marker_claims = Vec::new();
+    let marker_index = EffectMarkerIndex::new(tcx, view, EffectKind::Safety, config.marker_probing);
     let reached_instances = analyze_reached_safety_owners(tcx, view, config, analysis);
     for (owner, owner_instances) in &reached_instances {
         let boundary_trace = safety_boundary_trace(tcx, view, owner_instances, config);
@@ -282,25 +284,22 @@ fn collect_local_safety_findings<'tcx>(
                 tcx,
                 config,
                 || {
-                    effect_path_edge_ids_to_nodes(
+                    marker_index.blocks(effect_path_edge_ids_to_nodes(
                         view,
                         owner_instances.iter().map(|owner| owner.id()),
                         |node| safety_graph_node_is_boundary(tcx, node, config),
                         false,
-                    )
-                    .into_iter()
-                    .filter_map(|edge_id| {
-                        span_marker_block(
-                            tcx,
-                            graph.edge(edge_id).span,
-                            EffectKind::Safety,
-                            config.marker_probing,
-                        )
-                    })
-                    .collect()
+                    ))
                 },
                 |requirements| {
-                    safety_finding_traces(tcx, view, owner_instances, config, requirements)
+                    safety_finding_traces(
+                        tcx,
+                        view,
+                        owner_instances,
+                        config,
+                        &marker_index,
+                        requirements,
+                    )
                 },
             );
             if boundary_trace.is_some() {
@@ -426,20 +425,19 @@ fn safety_finding_traces<'tcx>(
     view: ReachabilityView<'_, 'tcx>,
     owner_instances: &[reachability::ReachedNode<'_, 'tcx>],
     config: &crate::config::SafetyConfig,
+    marker_index: &EffectMarkerIndex,
     requirements: &[crate::contracts::ContractRequirement],
 ) -> Vec<crate::effect_tracker::UnsatisfiedEffectTrace> {
     let owner_ids = owner_instances
         .iter()
         .map(|owner| owner.id())
         .collect::<HashSet<_>>();
-    find_unsatisfied_effect_traces(
-        tcx,
+    find_unsatisfied_effect_traces_with(
         view,
         |node| owner_ids.contains(&node.id()),
-        EffectKind::Safety,
-        config.marker_probing,
         requirements,
         |node| safety_graph_node_is_boundary(tcx, node, config),
+        |edge_id, requirement| marker_index.satisfies(edge_id, requirement),
     )
 }
 
@@ -1331,11 +1329,11 @@ fn resolve_cached_effect_boundary<'tcx, 'cache>(
     tcx: TyCtxt<'tcx>,
     view: ReachabilityView<'_, 'tcx>,
     boundary: &CachedEffectBoundary<'_, 'tcx, 'cache>,
+    marker_index: &EffectMarkerIndex,
     kind: EffectKind,
     probing: MarkerProbing,
     is_boundary: impl Fn(&ReachabilityNodeKind<'tcx>) -> bool + Copy,
 ) -> ResolvedCachedEffect<'cache> {
-    let graph = view.graph();
     let mut unresolved_findings = Vec::new();
     let mut marker_claims = Vec::new();
     let mut has_raw_findings = false;
@@ -1356,22 +1354,19 @@ fn resolve_cached_effect_boundary<'tcx, 'cache>(
             &finding.missing_requirements,
             &[],
             || {
-                effect_path_edge_ids_to_edge(view, boundary.edge, is_boundary)
-                    .into_iter()
-                    .filter_map(|edge_id| {
-                        span_marker_block(tcx, graph.edge(edge_id).span, kind, probing)
-                    })
-                    .collect()
-            },
-            |requirements| {
-                find_unsatisfied_effect_traces_to_edge(
-                    tcx,
+                marker_index.blocks(effect_path_edge_ids_to_edge(
                     view,
                     boundary.edge,
-                    kind,
-                    probing,
+                    is_boundary,
+                ))
+            },
+            |requirements| {
+                find_unsatisfied_effect_traces_to_edge_with(
+                    view,
+                    boundary.edge,
                     requirements,
                     is_boundary,
+                    |edge_id, requirement| marker_index.satisfies(edge_id, requirement),
                 )
             },
         );
@@ -1405,11 +1400,19 @@ fn resolved_cached_effect_boundaries<'view, 'tcx, 'cache>(
     ignores: impl FnMut(DefId) -> bool + 'cache,
     is_boundary: impl Fn(&ReachabilityNodeKind<'tcx>) -> bool + Copy,
 ) -> Vec<ResolvedCachedBoundary<'view, 'tcx, 'cache>> {
+    let marker_index = EffectMarkerIndex::new(tcx, view, kind, probing);
     propagating_cached_effect_boundaries(tcx, view, cache, kind, ignores)
         .filter_map(|cached| {
             let trace = find_effect_trace_to_edge(view, cached.edge, is_boundary)?;
-            let resolved =
-                resolve_cached_effect_boundary(tcx, view, &cached, kind, probing, is_boundary);
+            let resolved = resolve_cached_effect_boundary(
+                tcx,
+                view,
+                &cached,
+                &marker_index,
+                kind,
+                probing,
+                is_boundary,
+            );
             Some(ResolvedCachedBoundary {
                 edge: cached.edge,
                 function: cached.function,

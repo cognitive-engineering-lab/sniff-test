@@ -29,3 +29,15 @@ pub fn partially_satisfies_requirements() {
     // - initialized: this dependency initialized the global state.
     requires_initialized_exclusive_state();
 }
+
+pub struct CachedWidget;
+
+impl CachedWidget {
+    pub fn calm(&self) -> &Self {
+        self
+    }
+
+    pub fn raw_panic(&self) {
+        raw_panic();
+    }
+}

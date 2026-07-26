@@ -12,6 +12,22 @@ expression: messages
     "findings": [
       {
         "effect": "panic",
+        "kind": "panic-invocation",
+        "level": "deny",
+        "reason": "panic sink core::std::rt::panic_fmt",
+        "root": "dependency_panic_contract::CachedWidget::raw_panic",
+        "root-kind": "concrete",
+        "span": "[FIXTURE]/dep/src/lib.rs:2:5: 2:31",
+        "target": "core::std::rt::panic_fmt",
+        "trace": [
+          "[FIXTURE]/dep/src/lib.rs:41:9: 41:20: dependency_panic_contract::CachedWidget::raw_panic --direct-call-> dependency_panic_contract::raw_panic",
+          "[FIXTURE]/dep/src/lib.rs:2:5: 2:31: dependency_panic_contract::raw_panic --macro-expansion-> macro std::panic",
+          "[FIXTURE]/dep/src/lib.rs:2:5: 2:31: macro std::panic --macro-expansion-> macro core::std::panic::panic_2021",
+          "[SYSROOT]/lib/rustlib/src/rust/library/core/src/panic.rs:62:9: 62:73: macro core::std::panic::panic_2021 --direct-call-> core::std::rt::panic_fmt"
+        ]
+      },
+      {
+        "effect": "panic",
         "kind": "documented-panic",
         "level": "deny",
         "missing-requirements": [
@@ -113,10 +129,10 @@ expression: messages
         "reason": "one `// PANIC:` marker applies to 2 panic obligation sites",
         "root": "dependency_panic_contract_app::ambiguous_marker",
         "root-kind": "concrete",
-        "span": "src/lib.rs:18:1: 19:1",
+        "span": "src/lib.rs:32:1: 33:1",
         "trace": [
-          "src/lib.rs:19:5: 19:59: dependency_panic_contract_app::ambiguous_marker --direct-call-> dependency_panic_contract::two_raw_panics",
-          "src/lib.rs:19:5: 19:59: dependency_panic_contract_app::ambiguous_marker --direct-call-> dependency_panic_contract::two_raw_panics"
+          "src/lib.rs:33:5: 33:59: dependency_panic_contract_app::ambiguous_marker --direct-call-> dependency_panic_contract::two_raw_panics",
+          "src/lib.rs:33:5: 33:59: dependency_panic_contract_app::ambiguous_marker --direct-call-> dependency_panic_contract::two_raw_panics"
         ]
       },
       {
@@ -130,10 +146,10 @@ expression: messages
         "reason": "dependency_panic_contract::partially_satisfies_requirements has cached documented panic evidence",
         "root": "dependency_panic_contract_app::leaves_cached_requirement_unsatisfied",
         "root-kind": "concrete",
-        "span": "src/lib.rs:29:5: 29:66",
+        "span": "src/lib.rs:43:5: 43:66",
         "target": "dependency_panic_contract::partially_satisfies_requirements",
         "trace": [
-          "src/lib.rs:29:5: 29:66: dependency_panic_contract_app::leaves_cached_requirement_unsatisfied --direct-call-> dependency_panic_contract::partially_satisfies_requirements",
+          "src/lib.rs:43:5: 43:66: dependency_panic_contract_app::leaves_cached_requirement_unsatisfied --direct-call-> dependency_panic_contract::partially_satisfies_requirements",
           "[FIXTURE]/dep/src/lib.rs:30:5: 30:43: dependency_panic_contract::partially_satisfies_requirements --direct-call-> dependency_panic_contract::requires_initialized_exclusive_state"
         ]
       },
@@ -148,10 +164,10 @@ expression: messages
         "reason": "dependency_panic_contract::misses_named_requirement has cached documented panic evidence",
         "root": "dependency_panic_contract_app::unnamed_marker_misses_requirement",
         "root-kind": "concrete",
-        "span": "src/lib.rs:8:5: 8:58",
+        "span": "src/lib.rs:22:5: 22:58",
         "target": "dependency_panic_contract::misses_named_requirement",
         "trace": [
-          "src/lib.rs:8:5: 8:58: dependency_panic_contract_app::unnamed_marker_misses_requirement --direct-call-> dependency_panic_contract::misses_named_requirement",
+          "src/lib.rs:22:5: 22:58: dependency_panic_contract_app::unnamed_marker_misses_requirement --direct-call-> dependency_panic_contract::misses_named_requirement",
           "[FIXTURE]/dep/src/lib.rs:17:5: 17:23: dependency_panic_contract::misses_named_requirement --direct-call-> dependency_panic_contract::requires_nonzero"
         ]
       }

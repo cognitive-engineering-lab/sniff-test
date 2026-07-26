@@ -1,5 +1,9 @@
 //! Source-local analysis markers.
 
+use reachability::{ReachabilityEdge, ReachabilityGraph, ReachabilityNodeKind};
+use rustc_hir::def_id::LocalDefId;
+use rustc_middle::thir::visit::{self, Visitor};
+use rustc_middle::thir::{Block, Thir};
 use rustc_middle::ty::TyCtxt;
 use rustc_span::{SourceFile, Span};
 
@@ -32,6 +36,127 @@ pub(crate) fn span_marker_block(
     marker_probe_spans(span, probing)
         .into_iter()
         .find_map(|span| span_marker_block_at(tcx, span, kind))
+}
+
+/// Marker block that justifies one effect-bearing reachability edge.
+///
+/// A marker directly above a callee segment wins, so a marker between links of
+/// a multi-line method chain applies only to that link. An unnamed marker above
+/// the whole multi-line statement cannot select one link, although named
+/// requirement bullets still apply. Enclosing block markers are the fallback.
+#[must_use]
+pub(crate) fn effect_edge_marker_block(
+    tcx: TyCtxt<'_>,
+    graph: &ReachabilityGraph<'_>,
+    edge: &ReachabilityEdge,
+    kind: EffectKind,
+    probing: MarkerProbing,
+) -> Option<EffectMarkerBlock> {
+    let statement = span_marker_block(tcx, edge.span, kind, probing);
+    if let Some(callee_span) = edge.callee_span
+        && !spans_start_on_same_line(tcx, edge.span, callee_span)
+    {
+        if let Some(callee) = span_marker_block(tcx, callee_span, kind, probing) {
+            return Some(callee);
+        }
+        if let Some(statement) = statement {
+            let satisfactions = statement
+                .satisfactions
+                .into_iter()
+                .filter(|satisfaction| satisfaction.requirement.is_some())
+                .collect::<Vec<_>>();
+            return (!satisfactions.is_empty()).then_some(EffectMarkerBlock {
+                key: statement.key,
+                span: statement.span,
+                satisfactions,
+            });
+        }
+
+        return enclosing_block_marker_block(tcx, graph, edge, kind, probing);
+    }
+
+    statement.or_else(|| enclosing_block_marker_block(tcx, graph, edge, kind, probing))
+}
+
+fn enclosing_block_marker_block(
+    tcx: TyCtxt<'_>,
+    graph: &ReachabilityGraph<'_>,
+    edge: &ReachabilityEdge,
+    kind: EffectKind,
+    probing: MarkerProbing,
+) -> Option<EffectMarkerBlock> {
+    let owner = match &graph.node(edge.origin).kind {
+        ReachabilityNodeKind::Instance(instance) => instance.def_id().as_local()?,
+        ReachabilityNodeKind::CompilerAssert { .. }
+        | ReachabilityNodeKind::MacroExpansion { .. }
+        | ReachabilityNodeKind::IndirectCall { .. }
+        | ReachabilityNodeKind::DynObjectCast { .. } => return None,
+    };
+
+    enclosing_block_spans(tcx, owner, edge.span)
+        .into_iter()
+        .find_map(|span| span_marker_block(tcx, span, kind, probing))
+}
+
+fn enclosing_block_spans(tcx: TyCtxt<'_>, owner: LocalDefId, target: Span) -> Vec<Span> {
+    let Ok((thir, root)) = tcx.thir_body(owner) else {
+        return Vec::new();
+    };
+    let thir = thir.borrow();
+    let mut visitor = EnclosingBlockVisitor {
+        thir: &thir,
+        target,
+        block_depth: 0,
+        spans: Vec::new(),
+    };
+    visitor.visit_expr(&thir[root]);
+    visitor.spans.sort_by_key(|span| {
+        let span = span.source_callsite();
+        (span.hi().0.saturating_sub(span.lo().0), span.lo().0)
+    });
+    visitor.spans.dedup_by_key(|span| {
+        let span = span.source_callsite();
+        (span.lo(), span.hi())
+    });
+    visitor.spans
+}
+
+struct EnclosingBlockVisitor<'a, 'tcx> {
+    thir: &'a Thir<'tcx>,
+    target: Span,
+    block_depth: usize,
+    spans: Vec<Span>,
+}
+
+impl<'a, 'tcx> Visitor<'a, 'tcx> for EnclosingBlockVisitor<'a, 'tcx> {
+    fn thir(&self) -> &'a Thir<'tcx> {
+        self.thir
+    }
+
+    fn visit_block(&mut self, block: &'a Block) {
+        if self.block_depth > 0 && span_contains(block.span, self.target) {
+            self.spans.push(block.span);
+        }
+        self.block_depth += 1;
+        visit::walk_block(self, block);
+        self.block_depth -= 1;
+    }
+}
+
+fn span_contains(outer: Span, inner: Span) -> bool {
+    let outer = outer.source_callsite();
+    let inner = inner.source_callsite();
+    !outer.is_dummy() && !inner.is_dummy() && outer.lo() <= inner.lo() && inner.hi() <= outer.hi()
+}
+
+fn spans_start_on_same_line(tcx: TyCtxt<'_>, left: Span, right: Span) -> bool {
+    let left = left.source_callsite();
+    let right = right.source_callsite();
+    if left.is_dummy() || right.is_dummy() {
+        return true;
+    }
+    let source_map = tcx.sess.source_map();
+    source_map.lookup_char_pos(left.lo()).line == source_map.lookup_char_pos(right.lo()).line
 }
 
 // One rustc session per process and single-threaded analysis; source files

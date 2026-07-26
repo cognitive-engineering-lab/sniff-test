@@ -3,6 +3,20 @@ pub fn justifies_raw_panic() {
     dependency_panic_contract::raw_panic();
 }
 
+pub fn justifies_cached_chain_link(widget: &dependency_panic_contract::CachedWidget) {
+    widget
+        .calm()
+        // PANIC: the caller maintains the dependency invariant.
+        .raw_panic();
+}
+
+pub fn justifies_cached_effect_with_block_marker() {
+    // PANIC: the caller maintains the dependency invariant.
+    {
+        dependency_panic_contract::raw_panic();
+    }
+}
+
 pub fn unnamed_marker_misses_requirement() {
     // PANIC: this does not name the dependency's nonzero requirement.
     dependency_panic_contract::misses_named_requirement();
