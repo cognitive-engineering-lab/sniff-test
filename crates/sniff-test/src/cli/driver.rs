@@ -10,8 +10,7 @@ use crate::cache::{
     OUTCOME_FORMAT_VERSION, UnitOutcome, artifact_id,
 };
 use crate::config::{
-    AnalysisConfig, CallableEdgeAttribution, MarkerProbing, PanicBoundaryPolicy, PanicConfig,
-    SniffTestConfig,
+    AnalysisConfig, CallableEdgeAttribution, PanicBoundaryPolicy, PanicConfig, SniffTestConfig,
 };
 use crate::contracts::EffectKind;
 use crate::dependency_cache::{DependencyAnalysisCache, DependencyInput};
@@ -55,14 +54,13 @@ use super::report::{
     analysis_incomplete_finding, render_node,
 };
 
-enum EffectReachabilityHooks<'config> {
-    Panic {
-        config: &'config PanicConfig,
-        descend_reified_callables: bool,
-    },
-    Safety {
-        config: &'config crate::config::SafetyConfig,
-    },
+struct PanicReachabilityHooks<'config> {
+    config: &'config PanicConfig,
+    descend_reified_callables: bool,
+}
+
+struct SafetyReachabilityHooks<'config> {
+    config: &'config crate::config::SafetyConfig,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -85,41 +83,42 @@ struct ResolvedCachedEffect<'cache> {
     has_raw_findings: bool,
 }
 
-impl<'tcx> ReachabilityHooks<'tcx> for EffectReachabilityHooks<'_> {
+impl<'tcx> ReachabilityHooks<'tcx> for PanicReachabilityHooks<'_> {
     fn should_descend(
         &mut self,
         cx: ReachabilityContext<'tcx>,
         edge: &ReachabilityEdge,
         target: Instance<'tcx>,
     ) -> ReachabilityControl<'tcx, bool> {
-        match *self {
-            Self::Panic {
-                config,
-                descend_reified_callables,
-            } => {
-                if matches!(
-                    edge.kind,
-                    ReachabilityEdgeKind::FnPointerReify
-                        | ReachabilityEdgeKind::ClosureFnPointerReify
-                ) && !descend_reified_callables
-                {
-                    return ControlFlow::Continue(false);
-                }
-
-                let def_id = target.def_id();
-                ControlFlow::Continue(
-                    !config.ignores_def(cx.tcx, def_id)
-                        && config.panic_boundary_policy(cx.tcx, def_id)
-                            == PanicBoundaryPolicy::Normal
-                        && !crate::panics::has_panic_docs(cx.tcx, def_id, config),
-                )
-            }
-            Self::Safety { config } => ControlFlow::Continue(!safety_path_node_is_boundary(
-                cx.tcx,
-                target.def_id(),
-                config,
-            )),
+        if matches!(
+            edge.kind,
+            ReachabilityEdgeKind::FnPointerReify | ReachabilityEdgeKind::ClosureFnPointerReify
+        ) && !self.descend_reified_callables
+        {
+            return ControlFlow::Continue(false);
         }
+
+        let def_id = target.def_id();
+        ControlFlow::Continue(
+            !self.config.ignores_def(cx.tcx, def_id)
+                && self.config.panic_boundary_policy(cx.tcx, def_id) == PanicBoundaryPolicy::Normal
+                && !crate::panics::has_panic_docs(cx.tcx, def_id, self.config),
+        )
+    }
+}
+
+impl<'tcx> ReachabilityHooks<'tcx> for SafetyReachabilityHooks<'_> {
+    fn should_descend(
+        &mut self,
+        cx: ReachabilityContext<'tcx>,
+        _edge: &ReachabilityEdge,
+        target: Instance<'tcx>,
+    ) -> ReachabilityControl<'tcx, bool> {
+        ControlFlow::Continue(!safety_path_node_is_boundary(
+            cx.tcx,
+            target.def_id(),
+            self.config,
+        ))
     }
 }
 
@@ -774,69 +773,74 @@ struct EffectSnapshotAnalysis {
     dependency_complete: bool,
 }
 
-enum EffectPass<'config, 'analysis> {
-    Panic(&'config PanicConfig),
-    Safety {
-        config: &'config crate::config::SafetyConfig,
-        analysis: &'analysis mut SafetyAnalysis,
-    },
-}
-
-impl EffectPass<'_, '_> {
-    fn kind(&self) -> EffectKind {
-        match self {
-            Self::Panic(_) => EffectKind::Panic,
-            Self::Safety { .. } => EffectKind::Safety,
-        }
+trait EffectPass<'tcx> {
+    fn kind(&self) -> EffectKind;
+    fn report_includes_external_mir(&self) -> bool {
+        false
     }
-
-    fn analyzes_external_mir(&self) -> bool {
-        matches!(self, Self::Panic(_))
-    }
-
-    fn hooks(&self, analysis_config: &AnalysisConfig) -> EffectReachabilityHooks<'_> {
-        match self {
-            Self::Panic(config) => EffectReachabilityHooks::Panic {
-                config,
-                descend_reified_callables: analysis_config.callable_edge_attribution
-                    == CallableEdgeAttribution::ErasureSites,
-            },
-            Self::Safety { config, .. } => EffectReachabilityHooks::Safety { config },
-        }
-    }
-
-    fn has_root_contract(&self, tcx: TyCtxt<'_>, root: DefId) -> bool {
-        match self {
-            Self::Panic(config) => crate::panics::has_panic_docs(tcx, root, config),
-            Self::Safety { config, .. } => {
-                safety_doc_summary(tcx, root, &config.documentation_overrides).has_docs
-            }
-        }
-    }
-
-    fn marker_probing(&self) -> MarkerProbing {
-        match self {
-            Self::Panic(config) => config.marker_probing,
-            Self::Safety { config, .. } => config.marker_probing,
-        }
-    }
-
-    fn path_index<'tcx>(
+    fn query(
         &self,
+        reachability: &mut ReachabilityIndex<'tcx>,
+        root: ReportRoot<'tcx>,
+        analysis_config: &AnalysisConfig,
+        include_external_mir: bool,
+    ) -> reachability::ReachabilitySnapshot<'tcx>;
+    fn path_index(&self, tcx: TyCtxt<'tcx>, view: ReachabilityView<'_, 'tcx>) -> EffectPathIndex;
+    fn has_root_contract(&self, tcx: TyCtxt<'tcx>, root: DefId) -> bool;
+    fn analyze_snapshot(
+        &mut self,
         tcx: TyCtxt<'tcx>,
         view: ReachabilityView<'_, 'tcx>,
-    ) -> EffectPathIndex {
-        match self {
-            Self::Panic(config) => EffectPathIndex::new(view, |node| {
-                crate::panics::panic_path_node_is_boundary(tcx, node, config)
-            }),
-            Self::Safety { config, .. } => EffectPathIndex::new(view, |node| {
-                safety_graph_node_is_boundary(tcx, node, config)
-            }),
-        }
+        root: ReportRoot<'tcx>,
+        purpose: EffectViewPurpose,
+        dependency_cache: &DependencyAnalysisCache,
+        include_stack: bool,
+    ) -> EffectSnapshotAnalysis;
+}
+
+struct PanicPass<'config> {
+    config: &'config PanicConfig,
+}
+
+impl<'tcx> EffectPass<'tcx> for PanicPass<'_> {
+    fn kind(&self) -> EffectKind {
+        EffectKind::Panic
     }
 
-    fn analyze_snapshot<'tcx>(
+    fn report_includes_external_mir(&self) -> bool {
+        true
+    }
+
+    fn query(
+        &self,
+        reachability: &mut ReachabilityIndex<'tcx>,
+        root: ReportRoot<'tcx>,
+        analysis_config: &AnalysisConfig,
+        include_external_mir: bool,
+    ) -> reachability::ReachabilitySnapshot<'tcx> {
+        let mut hooks = PanicReachabilityHooks {
+            config: self.config,
+            descend_reified_callables: analysis_config.callable_edge_attribution
+                == CallableEdgeAttribution::ErasureSites,
+        };
+        reachability.query(
+            root.reachability_root(),
+            &mut hooks,
+            reachability_options(analysis_config, include_external_mir),
+        )
+    }
+
+    fn path_index(&self, tcx: TyCtxt<'tcx>, view: ReachabilityView<'_, 'tcx>) -> EffectPathIndex {
+        EffectPathIndex::new(view, |node| {
+            crate::panics::panic_path_node_is_boundary(tcx, node, self.config)
+        })
+    }
+
+    fn has_root_contract(&self, tcx: TyCtxt<'tcx>, root: DefId) -> bool {
+        crate::panics::has_panic_docs(tcx, root, self.config)
+    }
+
+    fn analyze_snapshot(
         &mut self,
         tcx: TyCtxt<'tcx>,
         view: ReachabilityView<'_, 'tcx>,
@@ -845,80 +849,125 @@ impl EffectPass<'_, '_> {
         dependency_cache: &DependencyAnalysisCache,
         include_stack: bool,
     ) -> EffectSnapshotAnalysis {
-        let marker_index = EffectMarkerIndex::new(tcx, view, self.kind(), self.marker_probing());
+        let marker_index =
+            EffectMarkerIndex::new(tcx, view, EffectKind::Panic, self.config.marker_probing);
         let path_index = self.path_index(tcx, view);
-        match self {
-            Self::Safety { config, analysis } => {
-                let (mut findings, mut cached_findings) = collect_local_safety_findings(
-                    tcx,
-                    view,
-                    root,
-                    config,
-                    analysis,
-                    &marker_index,
-                    &path_index,
-                );
-                let (dependency_findings, propagation) = collect_cached_dependency_safety_findings(
-                    tcx,
-                    view,
-                    root,
-                    config,
-                    dependency_cache,
-                    &marker_index,
-                    &path_index,
-                );
-                findings.extend(dependency_findings);
-                cached_findings.extend(propagation.cached_findings);
-                EffectSnapshotAnalysis {
-                    findings,
-                    cached_findings,
-                    dependency_complete: propagation.analysis_complete,
-                }
+        let analysis = analyze_panic_evidence(tcx, view, self.config, &marker_index, &path_index);
+        let collection = PanicFindingCollection {
+            root_kind: root.kind(),
+            root_def_id: root.def_id(),
+            config: self.config,
+            dependency_cache,
+            include_stack,
+        };
+        if purpose == EffectViewPurpose::Report {
+            let mut report = collect_panic_findings(tcx, view, &analysis, collection);
+            let propagation = collect_cached_dependency_findings(
+                tcx,
+                view,
+                &collection,
+                &marker_index,
+                &path_index,
+                Some(&mut report),
+            );
+            EffectSnapshotAnalysis {
+                findings: report.findings,
+                cached_findings: Vec::new(),
+                dependency_complete: propagation.analysis_complete,
             }
-            Self::Panic(config) => {
-                let analysis =
-                    analyze_panic_evidence(tcx, view, config, &marker_index, &path_index);
-                let collection = PanicFindingCollection {
-                    root_kind: root.kind(),
-                    root_def_id: root.def_id(),
-                    config,
-                    dependency_cache,
-                    include_stack,
-                };
-                if purpose == EffectViewPurpose::Report {
-                    let mut report = collect_panic_findings(tcx, view, &analysis, collection);
-                    let propagation = collect_cached_dependency_findings(
-                        tcx,
-                        view,
-                        &collection,
-                        &marker_index,
-                        &path_index,
-                        Some(&mut report),
-                    );
-                    EffectSnapshotAnalysis {
-                        findings: report.findings,
-                        cached_findings: Vec::new(),
-                        dependency_complete: propagation.analysis_complete,
-                    }
-                } else {
-                    let mut cached_findings =
-                        cached_boundary_findings(tcx, view, &analysis, config);
-                    let propagation = collect_cached_dependency_findings(
-                        tcx,
-                        view,
-                        &collection,
-                        &marker_index,
-                        &path_index,
-                        None,
-                    );
-                    cached_findings.extend(propagation.cached_findings);
-                    EffectSnapshotAnalysis {
-                        findings: Vec::new(),
-                        cached_findings,
-                        dependency_complete: propagation.analysis_complete,
-                    }
-                }
+        } else {
+            let mut cached_findings = cached_boundary_findings(tcx, view, &analysis, self.config);
+            let propagation = collect_cached_dependency_findings(
+                tcx,
+                view,
+                &collection,
+                &marker_index,
+                &path_index,
+                None,
+            );
+            cached_findings.extend(propagation.cached_findings);
+            EffectSnapshotAnalysis {
+                findings: Vec::new(),
+                cached_findings,
+                dependency_complete: propagation.analysis_complete,
             }
+        }
+    }
+}
+
+struct SafetyPass<'config, 'analysis> {
+    config: &'config crate::config::SafetyConfig,
+    analysis: &'analysis mut SafetyAnalysis,
+}
+
+impl<'tcx> EffectPass<'tcx> for SafetyPass<'_, '_> {
+    fn kind(&self) -> EffectKind {
+        EffectKind::Safety
+    }
+
+    fn query(
+        &self,
+        reachability: &mut ReachabilityIndex<'tcx>,
+        root: ReportRoot<'tcx>,
+        analysis_config: &AnalysisConfig,
+        _include_external_mir: bool,
+    ) -> reachability::ReachabilitySnapshot<'tcx> {
+        let mut hooks = SafetyReachabilityHooks {
+            config: self.config,
+        };
+        reachability.query(
+            root.reachability_root(),
+            &mut hooks,
+            reachability_options(analysis_config, false),
+        )
+    }
+
+    fn path_index(&self, tcx: TyCtxt<'tcx>, view: ReachabilityView<'_, 'tcx>) -> EffectPathIndex {
+        EffectPathIndex::new(view, |node| {
+            safety_graph_node_is_boundary(tcx, node, self.config)
+        })
+    }
+
+    fn has_root_contract(&self, tcx: TyCtxt<'tcx>, root: DefId) -> bool {
+        safety_doc_summary(tcx, root, &self.config.documentation_overrides).has_docs
+    }
+
+    fn analyze_snapshot(
+        &mut self,
+        tcx: TyCtxt<'tcx>,
+        view: ReachabilityView<'_, 'tcx>,
+        root: ReportRoot<'tcx>,
+        _purpose: EffectViewPurpose,
+        dependency_cache: &DependencyAnalysisCache,
+        _include_stack: bool,
+    ) -> EffectSnapshotAnalysis {
+        let marker_index =
+            EffectMarkerIndex::new(tcx, view, EffectKind::Safety, self.config.marker_probing);
+        let path_index = self.path_index(tcx, view);
+        let (mut findings, mut cached_findings) = collect_local_safety_findings(
+            tcx,
+            view,
+            root,
+            self.config,
+            self.analysis,
+            &marker_index,
+            &path_index,
+        );
+        let (dependency_findings, propagation) = collect_cached_dependency_safety_findings(
+            tcx,
+            view,
+            root,
+            self.config,
+            dependency_cache,
+            &marker_index,
+            &path_index,
+        );
+        findings.extend(dependency_findings);
+        cached_findings.extend(propagation.cached_findings);
+        EffectSnapshotAnalysis {
+            findings,
+            cached_findings,
+            dependency_complete: propagation.analysis_complete,
         }
     }
 }
@@ -929,15 +978,15 @@ fn analyze_effect_root<'tcx>(
     root: ReportRoot<'tcx>,
     analysis_config: &AnalysisConfig,
     dependency_cache: &DependencyAnalysisCache,
-    pass: &mut EffectPass<'_, '_>,
+    pass: &mut impl EffectPass<'tcx>,
 ) -> EffectRootAnalysis {
     let kind = pass.kind();
-    let analyzes_external_mir = pass.analyzes_external_mir();
-    let mut hooks = pass.hooks(analysis_config);
-    let report_snapshot = reachability.query(
-        root.reachability_root(),
-        &mut hooks,
-        reachability_options(analysis_config, analyzes_external_mir),
+    let report_includes_external_mir = pass.report_includes_external_mir();
+    let report_snapshot = pass.query(
+        reachability,
+        root,
+        analysis_config,
+        report_includes_external_mir,
     );
     let report_complete = reachability.graph().view(&report_snapshot).halt().is_none();
     let report_analysis = {
@@ -953,37 +1002,36 @@ fn analyze_effect_root<'tcx>(
     };
     let mut findings = report_analysis.findings;
 
-    let (cached_findings, dependency_complete, cache_complete, graph) = if analyzes_external_mir {
-        let mut hooks = pass.hooks(analysis_config);
-        let cache_snapshot = reachability.query(
-            root.reachability_root(),
-            &mut hooks,
-            reachability_options(analysis_config, false),
-        );
-        let view = reachability.graph().view(&cache_snapshot);
-        let cache_analysis = pass.analyze_snapshot(
-            tcx,
-            view,
-            root,
-            EffectViewPurpose::Cache,
-            dependency_cache,
-            analysis_config.show_full_stack_trace,
-        );
-        (
-            cache_analysis.cached_findings,
-            cache_analysis.dependency_complete,
-            view.halt().is_none(),
-            cached_reachability_graph(tcx, view),
-        )
-    } else {
-        let view = reachability.graph().view(&report_snapshot);
-        (
-            report_analysis.cached_findings,
-            report_analysis.dependency_complete,
-            report_complete,
-            cached_reachability_graph(tcx, view),
-        )
-    };
+    let (cached_findings, dependency_complete, cache_complete, graph) =
+        if report_includes_external_mir {
+            // User-facing panic reports can inspect available external MIR. Cached
+            // summaries stop at dependency boundaries so downstream crates can
+            // combine them with independently versioned dependency caches.
+            let cache_snapshot = pass.query(reachability, root, analysis_config, false);
+            let view = reachability.graph().view(&cache_snapshot);
+            let cache_analysis = pass.analyze_snapshot(
+                tcx,
+                view,
+                root,
+                EffectViewPurpose::Cache,
+                dependency_cache,
+                analysis_config.show_full_stack_trace,
+            );
+            (
+                cache_analysis.cached_findings,
+                cache_analysis.dependency_complete,
+                view.halt().is_none(),
+                cached_reachability_graph(tcx, view),
+            )
+        } else {
+            let view = reachability.graph().view(&report_snapshot);
+            (
+                report_analysis.cached_findings,
+                report_analysis.dependency_complete,
+                report_complete,
+                cached_reachability_graph(tcx, view),
+            )
+        };
     let analysis_complete = report_complete && cache_complete && dependency_complete;
     if !report_complete || !cache_complete {
         let mut finding =
@@ -1029,7 +1077,9 @@ fn analyze_effect_roots<'tcx>(
                     root,
                     analysis_config,
                     dependency_cache,
-                    &mut EffectPass::Panic(&config.panics),
+                    &mut PanicPass {
+                        config: &config.panics,
+                    },
                 ),
                 EffectKind::Safety => analyze_effect_root(
                     tcx,
@@ -1037,7 +1087,7 @@ fn analyze_effect_roots<'tcx>(
                     root,
                     analysis_config,
                     dependency_cache,
-                    &mut EffectPass::Safety {
+                    &mut SafetyPass {
                         config: &config.safety,
                         analysis: &mut safety_analysis,
                     },
