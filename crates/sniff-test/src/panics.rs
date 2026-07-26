@@ -23,15 +23,13 @@ use rustc_middle::ty::{self, Ty, TyCtxt};
 use rustc_span::Span;
 
 use crate::config::{PanicBoundaryPolicy, PanicConfig};
-use crate::contracts::{
-    ContractCheck, ContractDocSummary, ContractRequirement, EffectKind, contract_doc_summary,
-};
+use crate::contracts::{ContractDocSummary, ContractRequirement, EffectKind, contract_doc_summary};
 use crate::effect_tracker::{
     EffectEvidence, EffectPathDecision, EffectTrace, ambiguous_marker_uses,
-    find_unsatisfied_effect_traces_to_edge_with, resolve_effect_evidence,
+    find_unsatisfied_effect_traces_to_edge_with,
 };
 use crate::namespace::canonical_namespace;
-use crate::source_markers::{EffectMarkerBlock, span_marker_block};
+use crate::source_markers::{EffectMarkerBlock, MarkerBlockKey, span_marker_block};
 
 #[derive(Debug, Clone)]
 pub(crate) struct PanicAnalysis {
@@ -96,33 +94,58 @@ pub(crate) fn analyze_panic_evidence<'tcx>(
     let marker_candidates = panic_marker_candidates(tcx, view, config);
     let ambiguous_names = collect_ambiguous_panic_requirement_names(tcx, view, config);
     let mut evidence = Vec::new();
+    let mut marker_claims = Vec::new();
+    let collect_marker_claims =
+        panic_obligation_node_kind(tcx, view.root().kind(), config).is_none();
     for raw in probe_panic_evidence(tcx, view, config) {
         let edge = raw.endpoint;
         let kind = raw.details;
-        let requirements = match raw
-            .resolve_terminal_markers(tcx, EffectKind::Panic, config.marker_probing)
-            .contract
-        {
-            ContractCheck::Satisfied => continue,
-            ContractCheck::MissingJustification => Vec::new(),
-            ContractCheck::MissingRequirements(missing) => missing,
-        };
-        let unresolved = find_unsatisfied_effect_traces_to_edge_with(
-            view,
-            edge,
-            &requirements,
-            |node| panic_path_node_is_boundary(tcx, node, config),
-            |edge_id, requirement| {
-                marker_candidates.get(&edge_id).is_some_and(|marker| {
-                    marker
-                        .satisfactions
-                        .iter()
-                        .any(|satisfaction| satisfaction.satisfies_requirement(requirement))
-                })
+        let report_evidence = edge.origin().instance().is_some();
+        let trace = EffectTrace::from_edge(edge);
+        let resolved = raw.resolve_paths(
+            tcx,
+            EffectKind::Panic,
+            config.marker_probing,
+            || {
+                trace
+                    .edge_ids
+                    .iter()
+                    .filter_map(|edge_id| marker_candidates.get(edge_id).cloned())
+                    .collect()
+            },
+            |requirements| {
+                if !report_evidence {
+                    return Vec::new();
+                }
+                find_unsatisfied_effect_traces_to_edge_with(
+                    view,
+                    edge,
+                    requirements,
+                    |node| panic_path_node_is_boundary(tcx, node, config),
+                    |edge_id, requirement| {
+                        marker_candidates.get(&edge_id).is_some_and(|marker| {
+                            marker
+                                .satisfactions
+                                .iter()
+                                .any(|satisfaction| satisfaction.satisfies_requirement(requirement))
+                        })
+                    },
+                )
             },
         );
+        if collect_marker_claims {
+            marker_claims.extend(
+                resolved
+                    .path_markers
+                    .into_iter()
+                    .map(|marker| (marker.key, marker.span, edge.id())),
+            );
+        }
+        if !report_evidence {
+            continue;
+        }
         let decision = panic_path_decision(edge.id(), kind);
-        for unresolved in unresolved {
+        for unresolved in resolved.unresolved_traces {
             evidence.push(PanicEvidence {
                 edge_id: edge.id(),
                 trace: unresolved.trace,
@@ -136,7 +159,7 @@ pub(crate) fn analyze_panic_evidence<'tcx>(
 
     PanicAnalysis {
         evidence,
-        ambiguous_markers: collect_ambiguous_panic_markers(tcx, view, config, &marker_candidates),
+        ambiguous_markers: collect_ambiguous_panic_markers(marker_claims),
         ambiguous_names,
     }
 }
@@ -151,9 +174,6 @@ fn probe_panic_evidence<'view, 'tcx>(
         let Some(kind) = classify_edge_without_marker(tcx, edge, config) else {
             continue;
         };
-        if edge.origin().instance().is_none() {
-            continue;
-        }
         let requirements = panic_evidence_requirements(tcx, kind, config);
         evidence.push(EffectEvidence {
             endpoint: edge,
@@ -192,39 +212,9 @@ fn panic_evidence_requirements(
     }
 }
 
-fn collect_ambiguous_panic_markers<'tcx>(
-    tcx: TyCtxt<'tcx>,
-    view: ReachabilityView<'_, 'tcx>,
-    config: &PanicConfig,
-    candidates: &HashMap<ReachabilityEdgeId, EffectMarkerBlock>,
+fn collect_ambiguous_panic_markers(
+    marker_claims: impl IntoIterator<Item = (MarkerBlockKey, Span, ReachabilityEdgeId)>,
 ) -> Vec<AmbiguousPanicMarker> {
-    if panic_obligation_node_kind(tcx, view.root().kind(), config).is_some() {
-        return Vec::new();
-    }
-
-    let mut marker_claims = Vec::new();
-    for edge in view.edges() {
-        let Some(kind) = classify_edge_without_marker(tcx, edge, config) else {
-            continue;
-        };
-        let requirements = panic_evidence_requirements(tcx, kind, config);
-        let trace = EffectTrace::from_edge(edge);
-        let markers = trace
-            .edge_ids
-            .iter()
-            .filter_map(|edge_id| candidates.get(edge_id))
-            .collect::<Vec<_>>();
-        let resolution = resolve_effect_evidence(&requirements, markers);
-        if resolution.contract.is_satisfied() {
-            marker_claims.extend(
-                resolution
-                    .markers
-                    .into_iter()
-                    .map(|marker| (marker.key, marker.span, edge.id())),
-            );
-        }
-    }
-
     let mut ambiguous_markers = ambiguous_marker_uses(marker_claims)
         .into_iter()
         .map(|marker_use| {

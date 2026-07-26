@@ -34,18 +34,23 @@ pub(crate) struct EffectEvidence<Endpoint, Details> {
 }
 
 impl<Endpoint, Details> EffectEvidence<Endpoint, Details> {
-    pub(crate) fn resolve_terminal_markers(
+    pub(crate) fn resolve_paths(
         &self,
         tcx: TyCtxt<'_>,
         kind: EffectKind,
         probing: MarkerProbing,
-    ) -> EffectEvidenceResolution {
-        let markers = self
-            .terminal_marker_spans
-            .iter()
-            .filter_map(|span| span_marker_block(tcx, *span, kind, probing))
-            .collect::<Vec<_>>();
-        resolve_effect_evidence(&self.requirements, &markers)
+        path_markers: impl FnOnce() -> Vec<EffectMarkerBlock>,
+        find_unsatisfied: impl FnOnce(&[ContractRequirement]) -> Vec<UnsatisfiedEffectTrace>,
+    ) -> ResolvedEffectPaths {
+        resolve_effect_paths(
+            tcx,
+            kind,
+            probing,
+            &self.requirements,
+            &self.terminal_marker_spans,
+            path_markers,
+            find_unsatisfied,
+        )
     }
 }
 
@@ -61,6 +66,46 @@ pub(crate) struct EffectEvidenceResolution {
     pub(crate) markers: Vec<ResolvedEffectMarker>,
 }
 
+pub(crate) struct ResolvedEffectPaths {
+    pub(crate) terminal_markers: Vec<ResolvedEffectMarker>,
+    pub(crate) path_markers: Vec<ResolvedEffectMarker>,
+    pub(crate) unresolved_traces: Vec<UnsatisfiedEffectTrace>,
+}
+
+pub(crate) fn resolve_effect_paths(
+    tcx: TyCtxt<'_>,
+    kind: EffectKind,
+    probing: MarkerProbing,
+    requirements: &[ContractRequirement],
+    terminal_marker_spans: &[Span],
+    path_markers: impl FnOnce() -> Vec<EffectMarkerBlock>,
+    find_unsatisfied: impl FnOnce(&[ContractRequirement]) -> Vec<UnsatisfiedEffectTrace>,
+) -> ResolvedEffectPaths {
+    let terminal_markers = terminal_marker_spans
+        .iter()
+        .filter_map(|span| span_marker_block(tcx, *span, kind, probing))
+        .collect::<Vec<_>>();
+    let terminal = resolve_effect_evidence(requirements, &terminal_markers);
+    let requirements = match terminal.contract {
+        ContractCheck::Satisfied => {
+            return ResolvedEffectPaths {
+                terminal_markers: terminal.markers,
+                path_markers: Vec::new(),
+                unresolved_traces: Vec::new(),
+            };
+        }
+        ContractCheck::MissingJustification => Vec::new(),
+        ContractCheck::MissingRequirements(missing) => missing,
+    };
+    let path = resolve_effect_evidence(&requirements, &path_markers());
+    let unresolved_traces = find_unsatisfied(&requirements);
+    ResolvedEffectPaths {
+        terminal_markers: terminal.markers,
+        path_markers: path.markers,
+        unresolved_traces,
+    }
+}
+
 pub(crate) fn resolve_effect_evidence<'a>(
     requirements: &[ContractRequirement],
     markers: impl IntoIterator<Item = &'a EffectMarkerBlock>,
@@ -71,18 +116,14 @@ pub(crate) fn resolve_effect_evidence<'a>(
         .flat_map(|marker| marker.satisfactions.iter().cloned())
         .collect::<Vec<_>>();
     let contract = check_contract(requirements, &satisfactions);
-    let markers = if contract.is_satisfied() {
-        markers
-            .into_iter()
-            .filter(|marker| marker_contributes_to_contract(marker, requirements))
-            .map(|marker| ResolvedEffectMarker {
-                key: marker.key,
-                span: marker.span,
-            })
-            .collect()
-    } else {
-        Vec::new()
-    };
+    let markers = markers
+        .into_iter()
+        .filter(|marker| marker_contributes_to_contract(marker, requirements))
+        .map(|marker| ResolvedEffectMarker {
+            key: marker.key,
+            span: marker.span,
+        })
+        .collect();
 
     EffectEvidenceResolution { contract, markers }
 }
@@ -106,28 +147,18 @@ fn marker_contributes_to_contract(
     })
 }
 
-pub(crate) fn resolved_trace_marker_claims<Group: Copy>(
+pub(crate) fn trace_marker_blocks(
     tcx: TyCtxt<'_>,
     graph: &ReachabilityGraph<'_>,
     trace: &EffectTrace,
     kind: EffectKind,
     probing: MarkerProbing,
-    requirements: &[ContractRequirement],
-    group: Group,
-) -> Option<Vec<(MarkerBlockKey, Span, Group)>> {
-    let markers = trace
+) -> Vec<EffectMarkerBlock> {
+    trace
         .edge_ids
         .iter()
         .filter_map(|edge_id| span_marker_block(tcx, graph.edge(*edge_id).span, kind, probing))
-        .collect::<Vec<_>>();
-    let resolution = resolve_effect_evidence(requirements, &markers);
-    resolution.contract.is_satisfied().then(|| {
-        resolution
-            .markers
-            .into_iter()
-            .map(|marker| (marker.key, marker.span, group))
-            .collect()
-    })
+        .collect()
 }
 
 #[derive(Debug)]
@@ -549,5 +580,43 @@ mod tests {
         assert_eq!(resolution.contract, ContractCheck::Satisfied);
         assert_eq!(resolution.markers.len(), 1);
         assert_eq!(resolution.markers[0].key, relevant.key);
+    }
+
+    #[test]
+    fn evidence_resolution_claims_markers_that_partially_satisfy_the_contract() {
+        let marker = EffectMarkerBlock {
+            key: MarkerBlockKey {
+                file_start: 1,
+                start_line: 2,
+                end_line: 3,
+            },
+            span: DUMMY_SP,
+            satisfactions: vec![MarkerSatisfaction {
+                requirement: Some(String::from("initialized")),
+                reason: String::from("initialized by the caller"),
+            }],
+        };
+        let resolution = resolve_effect_evidence(
+            &[
+                ContractRequirement {
+                    name: String::from("initialized"),
+                    condition: String::from("memory must be initialized"),
+                    span: DUMMY_SP,
+                },
+                ContractRequirement {
+                    name: String::from("valid_ptr"),
+                    condition: String::from("pointer must be valid"),
+                    span: DUMMY_SP,
+                },
+            ],
+            [&marker],
+        );
+
+        assert!(matches!(
+            resolution.contract,
+            ContractCheck::MissingRequirements(_)
+        ));
+        assert_eq!(resolution.markers.len(), 1);
+        assert_eq!(resolution.markers[0].key, marker.key);
     }
 }

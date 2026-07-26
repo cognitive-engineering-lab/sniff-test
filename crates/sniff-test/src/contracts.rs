@@ -87,12 +87,6 @@ pub(crate) enum ContractCheck {
     MissingRequirements(Vec<ContractRequirement>),
 }
 
-impl ContractCheck {
-    pub(crate) fn is_satisfied(&self) -> bool {
-        matches!(self, Self::Satisfied)
-    }
-}
-
 #[derive(Debug, Clone, Default)]
 pub(crate) struct ContractDocSummary {
     pub(crate) has_docs: bool,

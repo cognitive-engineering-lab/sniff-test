@@ -13,12 +13,12 @@ use crate::config::{
     AnalysisConfig, CallableEdgeAttribution, MarkerProbing, PanicBoundaryPolicy, PanicConfig,
     SniffTestConfig,
 };
-use crate::contracts::{ContractCheck, EffectKind};
+use crate::contracts::EffectKind;
 use crate::dependency_cache::{DependencyAnalysisCache, DependencyInput};
 use crate::effect_tracker::{
     EffectPathDecision, EffectTrace, find_effect_trace, find_effect_trace_to_edge,
-    find_unsatisfied_effect_traces, find_unsatisfied_effect_traces_to_edge,
-    resolved_trace_marker_claims,
+    find_unsatisfied_effect_traces, find_unsatisfied_effect_traces_to_edge, resolve_effect_paths,
+    trace_marker_blocks,
 };
 use crate::namespace::{canonical_namespace, stable_def_path_hash};
 use crate::panics::{AmbiguousPanicMarker, PanicAnalysis, PanicEvidence, analyze_panic_evidence};
@@ -278,54 +278,51 @@ fn collect_local_safety_findings<'tcx>(
         ));
 
         for (evidence_index, evidence) in analysis.evidence(*owner).iter().enumerate() {
-            let terminal = evidence.resolve_terminal_markers(tcx, config);
-            let missing_requirements = match terminal.contract {
-                ContractCheck::Satisfied => {
-                    if boundary_trace.is_some() {
-                        terminal_marker_claims.extend(
-                            terminal
-                                .markers
-                                .into_iter()
-                                .map(|marker| (marker.key, marker.span, evidence.group)),
-                        );
-                    }
-                    continue;
-                }
-                ContractCheck::MissingJustification => Vec::new(),
-                ContractCheck::MissingRequirements(missing) => missing,
-            };
-            let safety_finding = evidence.finding(missing_requirements);
-            if let Some(trace) = boundary_trace.as_ref()
-                && let Some(boundary_edge) = trace.edge_ids.last().copied()
+            let resolved = evidence.resolve_paths(
+                tcx,
+                config,
+                || {
+                    boundary_trace.as_ref().map_or_else(Vec::new, |trace| {
+                        trace_marker_blocks(
+                            tcx,
+                            graph,
+                            trace,
+                            EffectKind::Safety,
+                            config.marker_probing,
+                        )
+                    })
+                },
+                |requirements| {
+                    safety_finding_traces(tcx, view, owner_instances, config, requirements)
+                },
+            );
+            if boundary_trace.is_some() {
+                terminal_marker_claims.extend(
+                    resolved
+                        .terminal_markers
+                        .into_iter()
+                        .map(|marker| (marker.key, marker.span, evidence.group)),
+                );
+            }
+            if let Some(boundary_edge) = boundary_trace
+                .as_ref()
+                .and_then(|trace| trace.edge_ids.last().copied())
             {
                 let group = TraceEffectGroup {
                     boundary_edge,
                     finding: evidence_index,
                     span: evidence.site().span,
                 };
-                if let Some(claims) = resolved_trace_marker_claims(
-                    tcx,
-                    graph,
-                    trace,
-                    EffectKind::Safety,
-                    config.marker_probing,
-                    safety_finding.missing_requirements(),
-                    group,
-                ) {
-                    trace_marker_claims.extend(claims);
-                }
+                trace_marker_claims.extend(
+                    resolved
+                        .path_markers
+                        .into_iter()
+                        .map(|marker| (marker.key, marker.span, group)),
+                );
             }
-            for unresolved in safety_finding_traces(
-                tcx,
-                view,
-                owner_instances,
-                config,
-                safety_finding.missing_requirements(),
-            ) {
+            for unresolved in resolved.unresolved_traces {
                 let trace = &unresolved.trace;
-                let safety_finding = safety_finding
-                    .clone()
-                    .with_missing_requirements(unresolved.missing_requirements);
+                let safety_finding = evidence.finding(unresolved.missing_requirements);
                 let mut finding = safety_finding_report(
                     tcx,
                     safety_finding.clone(),
@@ -1346,26 +1343,32 @@ fn resolve_cached_effect_boundary<'tcx, 'cache>(
             finding: finding_index,
             span: boundary.edge.span(),
         };
-        if let Some(claims) = resolved_trace_marker_claims(
+        let resolved = resolve_effect_paths(
             tcx,
-            graph,
-            &first_trace,
             kind,
             probing,
             &finding.missing_requirements,
-            group,
-        ) {
-            marker_claims.extend(claims);
-        }
-        for unresolved in find_unsatisfied_effect_traces_to_edge(
-            tcx,
-            view,
-            boundary.edge,
-            kind,
-            probing,
-            &finding.missing_requirements,
-            is_boundary,
-        ) {
+            &[],
+            || trace_marker_blocks(tcx, graph, &first_trace, kind, probing),
+            |requirements| {
+                find_unsatisfied_effect_traces_to_edge(
+                    tcx,
+                    view,
+                    boundary.edge,
+                    kind,
+                    probing,
+                    requirements,
+                    is_boundary,
+                )
+            },
+        );
+        marker_claims.extend(
+            resolved
+                .path_markers
+                .into_iter()
+                .map(|marker| (marker.key, marker.span, group)),
+        );
+        for unresolved in resolved.unresolved_traces {
             unresolved_findings.push(UnresolvedCachedFinding {
                 finding,
                 trace: unresolved.trace,

@@ -20,6 +20,7 @@ use crate::config::{ContractDocOverrides, SafetyConfig};
 use crate::contracts::{ContractDocSummary, ContractRequirement, EffectKind, contract_doc_summary};
 use crate::effect_tracker::{EffectEvidence, EffectSite};
 use crate::namespace::canonical_namespace;
+use crate::source_markers::EffectMarkerBlock;
 
 #[derive(Default)]
 pub(crate) struct SafetyAnalysis {
@@ -65,20 +66,6 @@ pub(crate) enum SafetyFinding {
 }
 
 impl SafetyFinding {
-    pub(crate) fn with_missing_requirements(
-        mut self,
-        requirements: Vec<SafetyRequirement>,
-    ) -> Self {
-        if let Self::CallMissingRequirements {
-            missing_requirements,
-            ..
-        } = &mut self
-        {
-            *missing_requirements = requirements;
-        }
-        self
-    }
-
     #[must_use]
     pub(crate) fn owner(&self) -> DefId {
         match *self {
@@ -101,21 +88,6 @@ impl SafetyFinding {
             | Self::CallMissingRequirements { .. }
             | Self::OpMissingJustification { .. }
             | Self::AmbiguousMarker { .. } => false,
-        }
-    }
-
-    #[must_use]
-    pub(crate) fn missing_requirements(&self) -> &[SafetyRequirement] {
-        match self {
-            Self::CallMissingRequirements {
-                missing_requirements,
-                ..
-            } => missing_requirements,
-            Self::MissingSafetyDocs { .. }
-            | Self::CallMissingJustification { .. }
-            | Self::OpMissingJustification { .. }
-            | Self::AmbiguousObligationName { .. }
-            | Self::AmbiguousMarker { .. } => &[],
         }
     }
 }
@@ -330,13 +302,22 @@ impl SafetyAnalysis {
 }
 
 impl SafetyEvidence {
-    pub(crate) fn resolve_terminal_markers(
+    pub(crate) fn resolve_paths(
         &self,
         tcx: TyCtxt<'_>,
         config: &SafetyConfig,
-    ) -> crate::effect_tracker::EffectEvidenceResolution {
-        self.effect
-            .resolve_terminal_markers(tcx, EffectKind::Safety, config.marker_probing)
+        path_markers: impl FnOnce() -> Vec<EffectMarkerBlock>,
+        find_unsatisfied: impl FnOnce(
+            &[ContractRequirement],
+        ) -> Vec<crate::effect_tracker::UnsatisfiedEffectTrace>,
+    ) -> crate::effect_tracker::ResolvedEffectPaths {
+        self.effect.resolve_paths(
+            tcx,
+            EffectKind::Safety,
+            config.marker_probing,
+            path_markers,
+            find_unsatisfied,
+        )
     }
 
     pub(crate) fn site(&self) -> EffectSite {
