@@ -16,10 +16,9 @@ use crate::config::{
 use crate::contracts::EffectKind;
 use crate::dependency_cache::{DependencyAnalysisCache, DependencyInput};
 use crate::effect_tracker::{
-    EffectMarkerIndex, EffectPathDecision, EffectTrace, effect_path_edge_ids_to_edge,
-    effect_path_edge_ids_to_nodes, find_effect_trace, find_effect_trace_to_edge,
-    find_unsatisfied_effect_traces_to_edge_with, find_unsatisfied_effect_traces_with,
-    resolve_effect_paths,
+    EffectMarkerIndex, EffectPathDecision, EffectPathIndex, EffectTrace, find_effect_trace,
+    find_effect_trace_to_edge, find_unsatisfied_effect_traces_to_edge_with,
+    find_unsatisfied_effect_traces_with, resolve_effect_paths,
 };
 use crate::namespace::{canonical_namespace, stable_def_path_hash};
 use crate::panics::{AmbiguousPanicMarker, PanicAnalysis, PanicEvidence, analyze_panic_evidence};
@@ -209,6 +208,7 @@ fn collect_local_safety_findings<'tcx>(
     config: &crate::config::SafetyConfig,
     analysis: &mut SafetyAnalysis,
     marker_index: &EffectMarkerIndex,
+    path_index: &EffectPathIndex,
 ) -> (Vec<Finding>, Vec<CachedFinding>) {
     let graph = view.graph();
     let mut findings = Vec::new();
@@ -233,12 +233,10 @@ fn collect_local_safety_findings<'tcx>(
                 tcx,
                 config,
                 || {
-                    marker_index.blocks(effect_path_edge_ids_to_nodes(
-                        view,
-                        owner_instances.iter().map(|owner| owner.id()),
-                        |node| safety_graph_node_is_boundary(tcx, node, config),
-                        false,
-                    ))
+                    marker_index.blocks(
+                        path_index
+                            .edges_to_nodes(owner_instances.iter().map(|owner| owner.id()), false),
+                    )
                 },
                 |requirements| {
                     safety_finding_traces(
@@ -448,6 +446,7 @@ fn collect_cached_dependency_safety_findings<'tcx>(
     config: &crate::config::SafetyConfig,
     dependency_cache: &DependencyAnalysisCache,
     marker_index: &EffectMarkerIndex,
+    path_index: &EffectPathIndex,
 ) -> (Vec<Finding>, CachedEffectPropagation) {
     let graph = view.graph();
     let mut findings = Vec::new();
@@ -459,6 +458,7 @@ fn collect_cached_dependency_safety_findings<'tcx>(
         view,
         dependency_cache,
         marker_index,
+        path_index,
         |def_id| config.ignores_def(tcx, def_id),
         |node| safety_graph_node_is_boundary(tcx, node, config),
     ) {
@@ -821,6 +821,21 @@ impl EffectPass<'_, '_> {
         }
     }
 
+    fn path_index<'tcx>(
+        &self,
+        tcx: TyCtxt<'tcx>,
+        view: ReachabilityView<'_, 'tcx>,
+    ) -> EffectPathIndex {
+        match self {
+            Self::Panic(config) => EffectPathIndex::new(view, |node| {
+                crate::panics::panic_path_node_is_boundary(tcx, node, config)
+            }),
+            Self::Safety { config, .. } => EffectPathIndex::new(view, |node| {
+                safety_graph_node_is_boundary(tcx, node, config)
+            }),
+        }
+    }
+
     fn analyze_snapshot<'tcx>(
         &mut self,
         tcx: TyCtxt<'tcx>,
@@ -831,10 +846,18 @@ impl EffectPass<'_, '_> {
         include_stack: bool,
     ) -> EffectSnapshotAnalysis {
         let marker_index = EffectMarkerIndex::new(tcx, view, self.kind(), self.marker_probing());
+        let path_index = self.path_index(tcx, view);
         match self {
             Self::Safety { config, analysis } => {
-                let (mut findings, mut cached_findings) =
-                    collect_local_safety_findings(tcx, view, root, config, analysis, &marker_index);
+                let (mut findings, mut cached_findings) = collect_local_safety_findings(
+                    tcx,
+                    view,
+                    root,
+                    config,
+                    analysis,
+                    &marker_index,
+                    &path_index,
+                );
                 let (dependency_findings, propagation) = collect_cached_dependency_safety_findings(
                     tcx,
                     view,
@@ -842,6 +865,7 @@ impl EffectPass<'_, '_> {
                     config,
                     dependency_cache,
                     &marker_index,
+                    &path_index,
                 );
                 findings.extend(dependency_findings);
                 cached_findings.extend(propagation.cached_findings);
@@ -852,7 +876,8 @@ impl EffectPass<'_, '_> {
                 }
             }
             Self::Panic(config) => {
-                let analysis = analyze_panic_evidence(tcx, view, config, &marker_index);
+                let analysis =
+                    analyze_panic_evidence(tcx, view, config, &marker_index, &path_index);
                 let collection = PanicFindingCollection {
                     root_kind: root.kind(),
                     root_def_id: root.def_id(),
@@ -867,6 +892,7 @@ impl EffectPass<'_, '_> {
                         view,
                         &collection,
                         &marker_index,
+                        &path_index,
                         Some(&mut report),
                     );
                     EffectSnapshotAnalysis {
@@ -882,6 +908,7 @@ impl EffectPass<'_, '_> {
                         view,
                         &collection,
                         &marker_index,
+                        &path_index,
                         None,
                     );
                     cached_findings.extend(propagation.cached_findings);
@@ -1248,6 +1275,7 @@ fn collect_cached_dependency_findings<'tcx>(
     view: ReachabilityView<'_, 'tcx>,
     collection: &PanicFindingCollection<'_>,
     marker_index: &EffectMarkerIndex,
+    path_index: &EffectPathIndex,
     mut report: Option<&mut PanicRootReport>,
 ) -> CachedEffectPropagation {
     let graph = view.graph();
@@ -1258,6 +1286,7 @@ fn collect_cached_dependency_findings<'tcx>(
         view,
         collection.dependency_cache,
         marker_index,
+        path_index,
         |def_id| {
             collection.config.ignores_def(tcx, def_id)
                 || collection.config.panic_boundary_policy(tcx, def_id)
@@ -1411,6 +1440,7 @@ fn resolve_cached_effect_boundary<'tcx, 'cache>(
     view: ReachabilityView<'_, 'tcx>,
     boundary: &CachedEffectBoundary<'_, 'tcx, 'cache>,
     marker_index: &EffectMarkerIndex,
+    path_index: &EffectPathIndex,
     is_boundary: impl Fn(&ReachabilityNodeKind<'tcx>) -> bool + Copy,
 ) -> ResolvedCachedEffect<'cache> {
     let kind = marker_index.kind();
@@ -1433,13 +1463,7 @@ fn resolve_cached_effect_boundary<'tcx, 'cache>(
             marker_index.probing(),
             &finding.missing_requirements,
             &[],
-            || {
-                marker_index.blocks(effect_path_edge_ids_to_edge(
-                    view,
-                    boundary.edge,
-                    is_boundary,
-                ))
-            },
+            || marker_index.blocks(path_index.edges_to_edge(boundary.edge)),
             |requirements| {
                 find_unsatisfied_effect_traces_to_edge_with(
                     view,
@@ -1476,6 +1500,7 @@ fn resolved_cached_effect_boundaries<'view, 'tcx, 'cache>(
     view: ReachabilityView<'view, 'tcx>,
     cache: &'cache DependencyAnalysisCache,
     marker_index: &EffectMarkerIndex,
+    path_index: &EffectPathIndex,
     ignores: impl FnMut(DefId) -> bool + 'cache,
     is_boundary: impl Fn(&ReachabilityNodeKind<'tcx>) -> bool + Copy,
 ) -> Vec<ResolvedCachedBoundary<'view, 'tcx, 'cache>> {
@@ -1483,8 +1508,14 @@ fn resolved_cached_effect_boundaries<'view, 'tcx, 'cache>(
     propagating_cached_effect_boundaries(tcx, view, cache, kind, ignores)
         .filter_map(|cached| {
             let trace = find_effect_trace_to_edge(view, cached.edge, is_boundary)?;
-            let resolved =
-                resolve_cached_effect_boundary(tcx, view, &cached, marker_index, is_boundary);
+            let resolved = resolve_cached_effect_boundary(
+                tcx,
+                view,
+                &cached,
+                marker_index,
+                path_index,
+                is_boundary,
+            );
             Some(ResolvedCachedBoundary {
                 edge: cached.edge,
                 function: cached.function,

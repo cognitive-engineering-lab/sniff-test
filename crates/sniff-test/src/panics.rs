@@ -23,8 +23,8 @@ use rustc_span::Span;
 use crate::config::{PanicBoundaryPolicy, PanicConfig};
 use crate::contracts::{ContractDocSummary, ContractRequirement, EffectKind, contract_doc_summary};
 use crate::effect_tracker::{
-    EffectEvidence, EffectMarkerIndex, EffectPathDecision, EffectTrace, ambiguous_marker_uses,
-    effect_path_edge_ids_to_edge, find_unsatisfied_effect_traces_to_edge_with,
+    EffectEvidence, EffectMarkerIndex, EffectPathDecision, EffectPathIndex, EffectTrace,
+    ambiguous_marker_uses, find_unsatisfied_effect_traces_to_edge_with,
 };
 use crate::namespace::canonical_namespace;
 use crate::source_markers::MarkerBlockKey;
@@ -96,6 +96,7 @@ pub(crate) fn analyze_panic_evidence<'tcx>(
     view: ReachabilityView<'_, 'tcx>,
     config: &PanicConfig,
     marker_index: &EffectMarkerIndex,
+    path_index: &EffectPathIndex,
 ) -> PanicAnalysis {
     let graph = view.graph();
     let ambiguous_names = collect_ambiguous_panic_requirement_names(tcx, view, config);
@@ -114,11 +115,7 @@ pub(crate) fn analyze_panic_evidence<'tcx>(
             EffectKind::Panic,
             config.marker_probing,
             &requirements,
-            || {
-                marker_index.blocks(effect_path_edge_ids_to_edge(view, edge, |node| {
-                    panic_path_node_is_boundary(tcx, node, config)
-                }))
-            },
+            || marker_index.blocks(path_index.edges_to_edge(edge)),
             |requirements| {
                 if !report_evidence {
                     return Vec::new();

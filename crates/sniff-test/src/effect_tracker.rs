@@ -205,97 +205,143 @@ fn marker_contributes_to_contract(
     })
 }
 
-pub(crate) fn effect_path_edge_ids_to_edge<'view, 'tcx>(
-    view: ReachabilityView<'view, 'tcx>,
-    effect_edge: ReachedEdge<'view, 'tcx>,
-    is_boundary: impl Fn(&ReachabilityNodeKind<'tcx>) -> bool + Copy,
-) -> Vec<ReachabilityEdgeId> {
-    effect_path_edge_ids_to_nodes(view, [effect_edge.target().id()], is_boundary, true)
+pub(crate) struct EffectPathIndex {
+    paths: PathIndex<ReachabilityNodeId, ReachabilityEdgeId>,
 }
 
-pub(crate) fn effect_path_edge_ids_to_nodes<'view, 'tcx>(
-    view: ReachabilityView<'view, 'tcx>,
-    targets: impl IntoIterator<Item = ReachabilityNodeId>,
-    is_boundary: impl Fn(&ReachabilityNodeKind<'tcx>) -> bool + Copy,
-    permit_boundary_targets: bool,
-) -> Vec<ReachabilityEdgeId> {
-    if is_boundary(view.root().kind()) {
-        return Vec::new();
-    }
-    let targets = targets
-        .into_iter()
-        .filter(|target| {
-            permit_boundary_targets
-                || view
-                    .node(*target)
+impl EffectPathIndex {
+    pub(crate) fn new<'tcx>(
+        view: ReachabilityView<'_, 'tcx>,
+        is_boundary: impl Fn(&ReachabilityNodeKind<'tcx>) -> bool,
+    ) -> Self {
+        let edges = view
+            .edges()
+            .map(|edge| (edge.id(), edge.source().id(), edge.target().id()))
+            .collect::<Vec<_>>();
+        Self {
+            paths: PathIndex::new(view.root().id(), &edges, |target| {
+                view.node(target)
                     .is_some_and(|node| !is_boundary(node.kind()))
-        })
-        .collect::<Vec<_>>();
-    let edges = view
-        .edges()
-        .map(|edge| (edge.id(), edge.source().id(), edge.target().id()))
-        .collect::<Vec<_>>();
-    edges_on_paths_to_targets(view.root().id(), &edges, targets, |_, target| {
-        view.node(target)
-            .is_some_and(|node| !is_boundary(node.kind()))
-    })
+            }),
+        }
+    }
+
+    pub(crate) fn edges_to_edge(
+        &self,
+        effect_edge: ReachedEdge<'_, '_>,
+    ) -> Vec<ReachabilityEdgeId> {
+        self.edges_to_nodes([effect_edge.target().id()], true)
+    }
+
+    pub(crate) fn edges_to_nodes(
+        &self,
+        targets: impl IntoIterator<Item = ReachabilityNodeId>,
+        permit_boundary_targets: bool,
+    ) -> Vec<ReachabilityEdgeId> {
+        self.paths
+            .edges_to_targets_with(targets, permit_boundary_targets)
+    }
 }
 
-fn edges_on_paths_to_targets<Node, Edge>(
+struct PathIndex<Node, Edge> {
     root: Node,
-    edges: &[(Edge, Node, Node)],
-    targets: impl IntoIterator<Item = Node>,
-    permits_intermediate_target: impl Fn(Edge, Node) -> bool + Copy,
-) -> Vec<Edge>
+    edges: Vec<(Edge, Node, Node)>,
+    incoming: HashMap<Node, Vec<Node>>,
+    reachable: HashSet<Node>,
+    intermediate_nodes: HashSet<Node>,
+    enabled: bool,
+}
+
+impl<Node, Edge> PathIndex<Node, Edge>
 where
     Node: Copy + Eq + Hash,
     Edge: Copy,
 {
-    let targets = targets.into_iter().collect::<HashSet<_>>();
-    let mut reached = HashSet::from([root]);
-    loop {
-        let mut changed = false;
-        for &(edge, source, target) in edges {
-            if targets.contains(&source)
-                || !reached.contains(&source)
-                || (!targets.contains(&target) && !permits_intermediate_target(edge, target))
-            {
-                continue;
+    fn new(
+        root: Node,
+        edges: &[(Edge, Node, Node)],
+        permits_intermediate_node: impl Fn(Node) -> bool,
+    ) -> Self {
+        let mut outgoing = HashMap::<Node, Vec<Node>>::new();
+        let mut incoming = HashMap::<Node, Vec<Node>>::new();
+        let mut intermediate_nodes = HashSet::new();
+        for &(_, source, target) in edges {
+            outgoing.entry(source).or_default().push(target);
+            incoming.entry(target).or_default().push(source);
+            if permits_intermediate_node(target) {
+                intermediate_nodes.insert(target);
             }
-            changed |= reached.insert(target);
         }
-        if !changed {
-            break;
+        let enabled = permits_intermediate_node(root);
+        let mut reachable = HashSet::new();
+        if enabled {
+            reachable.insert(root);
+            let mut pending = VecDeque::from([root]);
+            while let Some(source) = pending.pop_front() {
+                for &target in outgoing.get(&source).into_iter().flatten() {
+                    if reachable.insert(target) && intermediate_nodes.contains(&target) {
+                        pending.push_back(target);
+                    }
+                }
+            }
+        }
+
+        Self {
+            root,
+            edges: edges.to_vec(),
+            incoming,
+            reachable,
+            intermediate_nodes,
+            enabled,
         }
     }
 
-    let mut reaches_target = targets.clone();
-    loop {
-        let mut changed = false;
-        for &(edge, source, target) in edges.iter().rev() {
-            if !reached.contains(&source)
-                || !reaches_target.contains(&target)
-                || (!targets.contains(&target) && !permits_intermediate_target(edge, target))
-            {
-                continue;
-            }
-            changed |= reaches_target.insert(source);
-        }
-        if !changed {
-            break;
-        }
+    #[cfg(test)]
+    fn edges_to_targets(&self, targets: impl IntoIterator<Item = Node>) -> Vec<Edge> {
+        self.edges_to_targets_with(targets, true)
     }
 
-    edges
-        .iter()
-        .filter_map(|&(edge, source, target)| {
-            (reached.contains(&source)
-                && reaches_target.contains(&target)
-                && !targets.contains(&source)
-                && (targets.contains(&target) || permits_intermediate_target(edge, target)))
-            .then_some(edge)
-        })
-        .collect()
+    fn edges_to_targets_with(
+        &self,
+        targets: impl IntoIterator<Item = Node>,
+        permit_boundary_targets: bool,
+    ) -> Vec<Edge> {
+        if !self.enabled {
+            return Vec::new();
+        }
+        let targets = targets
+            .into_iter()
+            .filter(|target| {
+                self.reachable.contains(target)
+                    && (permit_boundary_targets || self.intermediate_nodes.contains(target))
+            })
+            .collect::<HashSet<_>>();
+        let mut reaches_target = targets.clone();
+        let mut pending = targets.iter().copied().collect::<VecDeque<_>>();
+        while let Some(target) = pending.pop_front() {
+            for &source in self.incoming.get(&target).into_iter().flatten() {
+                if self.reachable.contains(&source)
+                    && (source == self.root || self.intermediate_nodes.contains(&source))
+                    && !targets.contains(&source)
+                    && reaches_target.insert(source)
+                {
+                    pending.push_back(source);
+                }
+            }
+        }
+
+        self.edges
+            .iter()
+            .filter_map(|&(edge, source, target)| {
+                (self.reachable.contains(&source)
+                    && reaches_target.contains(&target)
+                    && !targets.contains(&source)
+                    && (source == self.root || self.intermediate_nodes.contains(&source))
+                    && (targets.contains(&target) || self.intermediate_nodes.contains(&target)))
+                .then_some(edge)
+            })
+            .collect()
+    }
 }
 
 #[derive(Debug)]
@@ -579,13 +625,14 @@ mod tests {
     use crate::contracts::{ContractCheck, ContractRequirement, MarkerSatisfaction};
     use crate::source_markers::{EffectMarkerBlock, MarkerBlockKey};
 
-    use super::{edges_on_paths_to_targets, resolve_effect_evidence};
+    use super::{PathIndex, resolve_effect_evidence};
 
     #[test]
     fn path_edge_collection_includes_all_converging_routes() {
         let edges = [(10, 0, 1), (11, 0, 2), (12, 1, 3), (13, 2, 3), (14, 2, 4)];
+        let paths = PathIndex::new(0, &edges, |_| true);
 
-        let path_edges = edges_on_paths_to_targets(0, &edges, [3], |_, _| true);
+        let path_edges = paths.edges_to_targets([3]);
 
         assert_eq!(path_edges, vec![10, 11, 12, 13]);
     }
@@ -593,8 +640,9 @@ mod tests {
     #[test]
     fn path_edge_collection_stops_at_intermediate_boundaries() {
         let edges = [(10, 0, 1), (11, 1, 2), (12, 2, 3)];
+        let paths = PathIndex::new(0, &edges, |target| target != 2);
 
-        let path_edges = edges_on_paths_to_targets(0, &edges, [3], |_, target| target != 2);
+        let path_edges = paths.edges_to_targets([3]);
 
         assert!(path_edges.is_empty());
     }
@@ -602,10 +650,28 @@ mod tests {
     #[test]
     fn path_edge_collection_allows_the_effect_edge_to_enter_a_boundary() {
         let edges = [(10, 0, 1), (11, 1, 2)];
+        let paths = PathIndex::new(0, &edges, |target| target != 2);
 
-        let path_edges = edges_on_paths_to_targets(0, &edges, [2], |_, target| target != 2);
+        let path_edges = paths.edges_to_targets([2]);
 
         assert_eq!(path_edges, vec![10, 11]);
+    }
+
+    #[test]
+    fn path_index_supports_repeated_target_queries() {
+        let edges = [(10, 0, 1), (11, 1, 2), (12, 1, 3)];
+        let paths = PathIndex::new(0, &edges, |_| true);
+
+        assert_eq!(paths.edges_to_targets([2]), vec![10, 11]);
+        assert_eq!(paths.edges_to_targets([3]), vec![10, 12]);
+    }
+
+    #[test]
+    fn path_index_includes_cycles_on_paths_to_a_target() {
+        let edges = [(10, 0, 1), (11, 1, 2), (12, 2, 1), (13, 2, 3)];
+        let paths = PathIndex::new(0, &edges, |_| true);
+
+        assert_eq!(paths.edges_to_targets([3]), vec![10, 11, 12, 13]);
     }
 
     #[test]
