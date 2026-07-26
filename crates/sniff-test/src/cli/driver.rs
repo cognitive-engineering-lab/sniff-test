@@ -3,7 +3,6 @@
 mod effects;
 
 use std::collections::{BTreeMap, HashMap, HashSet};
-use std::ops::ControlFlow;
 use std::path::{Path, PathBuf};
 
 use crate::cache::{
@@ -11,9 +10,7 @@ use crate::cache::{
     CachedFinding, CachedFindingKind, CachedFindingTarget, CachedFunctionSummary,
     OUTCOME_FORMAT_VERSION, UnitOutcome, artifact_id,
 };
-use crate::config::{
-    AnalysisConfig, CallableEdgeAttribution, PanicBoundaryPolicy, PanicConfig, SniffTestConfig,
-};
+use crate::config::{AnalysisConfig, PanicBoundaryPolicy, PanicConfig, SniffTestConfig};
 use crate::contracts::EffectKind;
 use crate::dependency_cache::{DependencyAnalysisCache, DependencyInput};
 use crate::effect_tracker::{
@@ -22,7 +19,7 @@ use crate::effect_tracker::{
     find_unsatisfied_effect_traces_with, resolve_effect_paths,
 };
 use crate::namespace::{canonical_namespace, stable_def_path_hash};
-use crate::panics::{AmbiguousPanicMarker, PanicAnalysis, PanicEvidence, analyze_panic_evidence};
+use crate::panics::{AmbiguousPanicMarker, PanicAnalysis, PanicEvidence};
 use crate::report_roots::{
     MissingReportRoot, ReportRoot, ReportRootKind, ReportRootSelection, select_report_roots,
 };
@@ -30,12 +27,11 @@ use crate::safety::{SafetyAnalysis, safety_doc_summary};
 use crate::source_markers::MarkerBlockKey;
 use anyhow::Context;
 use reachability::{
-    ReachabilityContext, ReachabilityControl, ReachabilityEdge, ReachabilityEdgeKind,
-    ReachabilityGraph, ReachabilityHooks, ReachabilityIndex, ReachabilityNodeKind,
+    ReachabilityEdgeKind, ReachabilityGraph, ReachabilityIndex, ReachabilityNodeKind,
     ReachabilityOptions, ReachabilityView,
 };
 use rustc_hir::def_id::{DefId, LOCAL_CRATE};
-use rustc_middle::ty::{Instance, TyCtxt};
+use rustc_middle::ty::TyCtxt;
 use rustc_session::config::CrateType;
 use rustc_span::Span;
 
@@ -57,15 +53,6 @@ use super::report::{
 };
 use effects::{RootEffectAnalysis, analyze_effect_roots};
 
-struct PanicReachabilityHooks<'config> {
-    config: &'config PanicConfig,
-    descend_reified_callables: bool,
-}
-
-struct SafetyReachabilityHooks<'config> {
-    config: &'config crate::config::SafetyConfig,
-}
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 struct TraceEffectGroup {
     boundary_edge: reachability::ReachabilityEdgeId,
@@ -84,45 +71,6 @@ struct ResolvedCachedEffect<'cache> {
     unresolved_findings: Vec<UnresolvedCachedFinding<'cache>>,
     marker_claims: Vec<TraceMarkerClaim>,
     has_raw_findings: bool,
-}
-
-impl<'tcx> ReachabilityHooks<'tcx> for PanicReachabilityHooks<'_> {
-    fn should_descend(
-        &mut self,
-        cx: ReachabilityContext<'tcx>,
-        edge: &ReachabilityEdge,
-        target: Instance<'tcx>,
-    ) -> ReachabilityControl<'tcx, bool> {
-        if matches!(
-            edge.kind,
-            ReachabilityEdgeKind::FnPointerReify | ReachabilityEdgeKind::ClosureFnPointerReify
-        ) && !self.descend_reified_callables
-        {
-            return ControlFlow::Continue(false);
-        }
-
-        let def_id = target.def_id();
-        ControlFlow::Continue(
-            !self.config.ignores_def(cx.tcx, def_id)
-                && self.config.panic_boundary_policy(cx.tcx, def_id) == PanicBoundaryPolicy::Normal
-                && !crate::panics::has_panic_docs(cx.tcx, def_id, self.config),
-        )
-    }
-}
-
-impl<'tcx> ReachabilityHooks<'tcx> for SafetyReachabilityHooks<'_> {
-    fn should_descend(
-        &mut self,
-        cx: ReachabilityContext<'tcx>,
-        _edge: &ReachabilityEdge,
-        target: Instance<'tcx>,
-    ) -> ReachabilityControl<'tcx, bool> {
-        ControlFlow::Continue(!safety_path_node_is_boundary(
-            cx.tcx,
-            target.def_id(),
-            self.config,
-        ))
-    }
 }
 
 pub(crate) fn analyze_crate(
