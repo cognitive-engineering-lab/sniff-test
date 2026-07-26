@@ -26,6 +26,7 @@ use crate::source_markers::EffectMarkerBlock;
 pub(crate) struct SafetyAnalysis {
     findings_by_owner: HashMap<DefId, Vec<SafetyFinding>>,
     evidence_by_owner: HashMap<DefId, Vec<SafetyEvidence>>,
+    probes_by_owner: HashMap<DefId, Vec<SafetyProbe>>,
     analyzed_owners: HashSet<LocalDefId>,
     ambiguous_requirement_names: HashSet<(DefId, DefId, String)>,
     next_effect_group: usize,
@@ -114,7 +115,28 @@ impl std::hash::Hash for SafetyEffectGroup {
 
 pub(crate) struct SafetyEvidence {
     effect: EffectEvidence<EffectSite, SafetyEvidenceKind>,
+    requirements: Vec<SafetyRequirement>,
     pub(crate) group: SafetyEffectGroup,
+}
+
+struct SafetyProbe {
+    effect: EffectEvidence<EffectSite, SafetyProbeKind>,
+    group: SafetyEffectGroup,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub(super) enum SafetyProbeKind {
+    Call {
+        callee: SafetyCallee,
+        call_kind: SafetyProbeCallKind,
+    },
+    Operation(SafetyOpKind),
+}
+
+#[derive(Debug, Clone, Copy)]
+pub(super) enum SafetyProbeCallKind {
+    Unsafe,
+    PotentialObligation,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -199,9 +221,9 @@ impl SafetyCallKind {
 }
 
 #[derive(Debug, Clone, Copy)]
-struct SafetyCall {
+pub(super) struct SafetyCall {
     callee: SafetyCallee,
-    kind: SafetyCallKind,
+    kind: SafetyProbeCallKind,
 }
 
 pub(crate) type SafetyRequirement = ContractRequirement;
@@ -226,21 +248,19 @@ impl SafetyAnalysis {
             .push(finding);
     }
 
-    fn push_evidence(
+    pub(super) fn push_probe(
         &mut self,
         site: EffectSite,
-        details: SafetyEvidenceKind,
-        requirements: Vec<SafetyRequirement>,
+        details: SafetyProbeKind,
         terminal_marker_spans: Vec<Span>,
         group: SafetyEffectGroup,
     ) {
-        self.evidence_by_owner
+        self.probes_by_owner
             .entry(site.owner)
             .or_default()
-            .push(SafetyEvidence {
+            .push(SafetyProbe {
                 effect: EffectEvidence {
                     endpoint: site,
-                    requirements,
                     terminal_marker_spans,
                     details,
                 },
@@ -264,6 +284,58 @@ impl SafetyAnalysis {
             }
             collect_missing_safety_docs(tcx, owner, config, self);
             thir::collect_body_evidence(tcx, owner, config, self);
+            self.resolve_owner_probes(tcx, owner.to_def_id(), config);
+        }
+    }
+
+    fn resolve_owner_probes(&mut self, tcx: TyCtxt<'_>, owner: DefId, config: &SafetyConfig) {
+        for probe in self.probes_by_owner.remove(&owner).unwrap_or_default() {
+            let (details, requirements) = match probe.effect.details {
+                SafetyProbeKind::Operation(op) => (SafetyEvidenceKind::Operation(op), Vec::new()),
+                SafetyProbeKind::Call { callee, call_kind } => {
+                    let summary = match callee {
+                        SafetyCallee::Def(def_id) => {
+                            self.push_ambiguous_requirement_names(
+                                tcx,
+                                owner,
+                                def_id,
+                                &config.documentation_overrides,
+                            );
+                            safety_doc_summary(tcx, def_id, &config.documentation_overrides)
+                        }
+                        SafetyCallee::FunctionPointer => ContractDocSummary::default(),
+                    };
+                    let call_kind = match call_kind {
+                        SafetyProbeCallKind::Unsafe => SafetyCallKind::Unsafe,
+                        SafetyProbeCallKind::PotentialObligation => {
+                            let SafetyCallee::Def(def_id) = callee else {
+                                continue;
+                            };
+                            if !config.marks_safety_obligation_def(tcx, def_id) && !summary.has_docs
+                            {
+                                continue;
+                            }
+                            SafetyCallKind::Obligation
+                        }
+                    };
+                    (
+                        SafetyEvidenceKind::Call { callee, call_kind },
+                        summary.requirements,
+                    )
+                }
+            };
+            self.evidence_by_owner
+                .entry(owner)
+                .or_default()
+                .push(SafetyEvidence {
+                    effect: EffectEvidence {
+                        endpoint: probe.effect.endpoint,
+                        terminal_marker_spans: probe.effect.terminal_marker_spans,
+                        details,
+                    },
+                    requirements,
+                    group: probe.group,
+                });
         }
     }
 
@@ -315,6 +387,7 @@ impl SafetyEvidence {
             tcx,
             EffectKind::Safety,
             config.marker_probing,
+            &self.requirements,
             path_markers,
             find_unsatisfied,
         )

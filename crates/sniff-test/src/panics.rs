@@ -82,6 +82,14 @@ pub(crate) enum PanicEvidenceKind {
     IndirectBoundary { def_id: Option<DefId> },
 }
 
+#[derive(Debug, Clone, Copy)]
+enum PanicProbeKind {
+    CompilerAssert,
+    Call { def_id: DefId, indirect: bool },
+    PanicSink { def_id: DefId },
+    OpaqueIndirectCall,
+}
+
 #[must_use]
 pub(crate) fn analyze_panic_evidence<'tcx>(
     tcx: TyCtxt<'tcx>,
@@ -97,12 +105,15 @@ pub(crate) fn analyze_panic_evidence<'tcx>(
         panic_obligation_node_kind(tcx, view.root().kind(), config).is_none();
     for raw in probe_panic_evidence(tcx, view, config) {
         let edge = raw.endpoint;
-        let kind = raw.details;
+        let Some((kind, requirements)) = resolve_panic_probe(tcx, edge, raw.details, config) else {
+            continue;
+        };
         let report_evidence = edge.origin().instance().is_some();
         let resolved = raw.resolve_paths(
             tcx,
             EffectKind::Panic,
             config.marker_probing,
+            &requirements,
             || {
                 marker_index.blocks(effect_path_edge_ids_to_edge(view, edge, |node| {
                     panic_path_node_is_boundary(tcx, node, config)
@@ -156,21 +167,58 @@ fn probe_panic_evidence<'view, 'tcx>(
     tcx: TyCtxt<'tcx>,
     view: ReachabilityView<'view, 'tcx>,
     config: &PanicConfig,
-) -> Vec<EffectEvidence<ReachedEdge<'view, 'tcx>, PanicEvidenceKind>> {
+) -> Vec<EffectEvidence<ReachedEdge<'view, 'tcx>, PanicProbeKind>> {
     let mut evidence = Vec::new();
     for edge in view.edges() {
-        let Some(kind) = classify_edge_without_marker(tcx, edge, config) else {
+        let Some(kind) = probe_panic_edge(tcx, edge, config) else {
             continue;
         };
-        let requirements = panic_evidence_requirements(tcx, kind, config);
         evidence.push(EffectEvidence {
             endpoint: edge,
-            requirements,
             terminal_marker_spans: Vec::new(),
             details: kind,
         });
     }
     evidence
+}
+
+fn resolve_panic_probe<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    edge: ReachedEdge<'_, 'tcx>,
+    probe: PanicProbeKind,
+    config: &PanicConfig,
+) -> Option<(PanicEvidenceKind, Vec<PanicRequirement>)> {
+    let kind = match probe {
+        PanicProbeKind::CompilerAssert => {
+            let ReachabilityNodeKind::CompilerAssert { message, .. } = edge.target().kind() else {
+                unreachable!("compiler-assert probe must target a compiler assert");
+            };
+            if compiler_assert_is_safety_precondition(tcx, edge, message, config) {
+                return None;
+            }
+            PanicEvidenceKind::CompilerAssert
+        }
+        PanicProbeKind::PanicSink { def_id } => PanicEvidenceKind::PanicSink { def_id },
+        PanicProbeKind::OpaqueIndirectCall => PanicEvidenceKind::IndirectBoundary { def_id: None },
+        PanicProbeKind::Call { def_id, indirect } => {
+            let summary = panic_doc_summary(tcx, def_id, config);
+            if summary.has_docs {
+                return Some((
+                    PanicEvidenceKind::PanicObligation { def_id },
+                    summary.requirements,
+                ));
+            }
+            if indirect && config.panic_boundary_policy(tcx, def_id) == PanicBoundaryPolicy::Normal
+            {
+                PanicEvidenceKind::IndirectBoundary {
+                    def_id: Some(def_id),
+                }
+            } else {
+                return None;
+            }
+        }
+    };
+    Some((kind, Vec::new()))
 }
 
 fn panic_path_decision(edge_id: ReachabilityEdgeId, kind: PanicEvidenceKind) -> EffectPathDecision {
@@ -182,21 +230,6 @@ fn panic_path_decision(edge_id: ReachabilityEdgeId, kind: PanicEvidenceKind) -> 
         PanicEvidenceKind::CompilerAssert
         | PanicEvidenceKind::PanicSink { .. }
         | PanicEvidenceKind::IndirectBoundary { .. } => EffectPathDecision::RawEffect,
-    }
-}
-
-fn panic_evidence_requirements(
-    tcx: TyCtxt<'_>,
-    kind: PanicEvidenceKind,
-    config: &PanicConfig,
-) -> Vec<PanicRequirement> {
-    match kind {
-        PanicEvidenceKind::PanicObligation { def_id } => {
-            panic_doc_summary(tcx, def_id, config).requirements
-        }
-        PanicEvidenceKind::CompilerAssert
-        | PanicEvidenceKind::PanicSink { .. }
-        | PanicEvidenceKind::IndirectBoundary { .. } => Vec::new(),
     }
 }
 
@@ -501,19 +534,14 @@ fn node_kind_is_ignored_namespace<'tcx>(
     }
 }
 
-fn classify_edge_without_marker<'tcx>(
+fn probe_panic_edge<'tcx>(
     tcx: TyCtxt<'tcx>,
     edge: ReachedEdge<'_, 'tcx>,
     config: &PanicConfig,
-) -> Option<PanicEvidenceKind> {
+) -> Option<PanicProbeKind> {
     let target = edge.target().kind();
     match target {
-        ReachabilityNodeKind::CompilerAssert { message, .. } => {
-            if compiler_assert_is_safety_precondition(tcx, edge, message, config) {
-                return None;
-            }
-            Some(PanicEvidenceKind::CompilerAssert)
-        }
+        ReachabilityNodeKind::CompilerAssert { .. } => Some(PanicProbeKind::CompilerAssert),
         // Every edge kind into an instance — direct and tail calls, vtable
         // entries, closure definitions, pointer reifications, const bodies —
         // carries the same obligation a direct call does; macro-expansion
@@ -525,35 +553,32 @@ fn classify_edge_without_marker<'tcx>(
             }
 
             match config.panic_boundary_policy(tcx, def_id) {
-                PanicBoundaryPolicy::PanicSink => Some(PanicEvidenceKind::PanicSink { def_id }),
+                PanicBoundaryPolicy::PanicSink => Some(PanicProbeKind::PanicSink { def_id }),
                 PanicBoundaryPolicy::TrustedPanicObligation | PanicBoundaryPolicy::Normal => {
-                    has_panic_docs(tcx, def_id, config)
-                        .then_some(PanicEvidenceKind::PanicObligation { def_id })
+                    Some(PanicProbeKind::Call {
+                        def_id,
+                        indirect: false,
+                    })
                 }
             }
         }
         ReachabilityNodeKind::IndirectCall { callee_ty } => {
             let Some(def_id) = indirect_callee_def_id(*callee_ty) else {
                 // Opaque callable: nothing to descend into or consult.
-                return Some(PanicEvidenceKind::IndirectBoundary { def_id: None });
+                return Some(PanicProbeKind::OpaqueIndirectCall);
             };
             if config.ignores_def(tcx, def_id) {
                 return None;
             }
 
             match config.panic_boundary_policy(tcx, def_id) {
-                PanicBoundaryPolicy::PanicSink => Some(PanicEvidenceKind::PanicSink { def_id }),
-                PanicBoundaryPolicy::TrustedPanicObligation => has_panic_docs(tcx, def_id, config)
-                    .then_some(PanicEvidenceKind::PanicObligation { def_id }),
-                PanicBoundaryPolicy::Normal => Some(if has_panic_docs(tcx, def_id, config) {
-                    PanicEvidenceKind::PanicObligation { def_id }
-                } else {
-                    // The trait method is undocumented and the running impl is
-                    // unknowable: surface the boundary instead of staying silent.
-                    PanicEvidenceKind::IndirectBoundary {
-                        def_id: Some(def_id),
-                    }
-                }),
+                PanicBoundaryPolicy::PanicSink => Some(PanicProbeKind::PanicSink { def_id }),
+                PanicBoundaryPolicy::TrustedPanicObligation | PanicBoundaryPolicy::Normal => {
+                    Some(PanicProbeKind::Call {
+                        def_id,
+                        indirect: true,
+                    })
+                }
             }
         }
         ReachabilityNodeKind::MacroExpansion { .. }

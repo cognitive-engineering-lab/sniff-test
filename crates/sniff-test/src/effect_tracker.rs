@@ -30,7 +30,6 @@ pub(crate) struct EffectSite {
 /// Raw effect evidence before comment contracts are resolved.
 pub(crate) struct EffectEvidence<Endpoint, Details> {
     pub(crate) endpoint: Endpoint,
-    pub(crate) requirements: Vec<ContractRequirement>,
     pub(crate) terminal_marker_spans: Vec<Span>,
     pub(crate) details: Details,
 }
@@ -41,6 +40,7 @@ impl<Endpoint, Details> EffectEvidence<Endpoint, Details> {
         tcx: TyCtxt<'_>,
         kind: EffectKind,
         probing: MarkerProbing,
+        requirements: &[ContractRequirement],
         path_markers: impl FnOnce() -> Vec<EffectMarkerBlock>,
         find_unsatisfied: impl FnOnce(&[ContractRequirement]) -> Vec<UnsatisfiedEffectTrace>,
     ) -> ResolvedEffectPaths {
@@ -48,7 +48,7 @@ impl<Endpoint, Details> EffectEvidence<Endpoint, Details> {
             tcx,
             kind,
             probing,
-            &self.requirements,
+            requirements,
             &self.terminal_marker_spans,
             path_markers,
             find_unsatisfied,

@@ -33,8 +33,8 @@ use rustc_middle::ty::{self, Ty, TyCtxt};
 use rustc_span::Span;
 
 use super::{
-    SafetyAnalysis, SafetyCall, SafetyCallKind, SafetyCallee, SafetyEffectGroup,
-    SafetyEvidenceKind, SafetyOpKind, safety_doc_summary,
+    SafetyAnalysis, SafetyCall, SafetyCallee, SafetyEffectGroup, SafetyOpKind, SafetyProbeCallKind,
+    SafetyProbeKind,
 };
 use crate::config::SafetyConfig;
 use crate::effect_tracker::EffectSite;
@@ -110,36 +110,22 @@ impl<'a, 'tcx> UnsafeOpVisitor<'a, 'tcx> {
         if self.builtin_unsafe_depth > 0 {
             return;
         }
-        self.record_evidence(span, SafetyEvidenceKind::Operation(op), Vec::new());
+        self.record_evidence(span, SafetyProbeKind::Operation(op));
     }
 
-    fn unsafe_call(&mut self, span: Span, call: SafetyCall) {
+    fn record_call(&mut self, span: Span, call: SafetyCall) {
         if self.builtin_unsafe_depth > 0 {
             return;
         }
         if self.ignores_callee(call.callee) {
             return;
         }
-        let requirements = if let SafetyCallee::Def(def_id) = call.callee {
-            self.analysis.push_ambiguous_requirement_names(
-                self.tcx,
-                self.owner.to_def_id(),
-                def_id,
-                &self.config.documentation_overrides,
-            );
-            let summary =
-                safety_doc_summary(self.tcx, def_id, &self.config.documentation_overrides);
-            summary.requirements
-        } else {
-            Vec::new()
-        };
         self.record_evidence(
             span,
-            SafetyEvidenceKind::Call {
+            SafetyProbeKind::Call {
                 callee: call.callee,
                 call_kind: call.kind,
             },
-            requirements,
         );
     }
 
@@ -157,24 +143,18 @@ impl<'a, 'tcx> UnsafeOpVisitor<'a, 'tcx> {
         spans
     }
 
-    fn record_evidence(
-        &mut self,
-        span: Span,
-        details: SafetyEvidenceKind,
-        requirements: Vec<crate::contracts::ContractRequirement>,
-    ) {
+    fn record_evidence(&mut self, span: Span, details: SafetyProbeKind) {
         let group = self
             .effect_groups
             .last()
             .copied()
             .unwrap_or_else(|| self.analysis.new_effect_group(span));
-        self.analysis.push_evidence(
+        self.analysis.push_probe(
             EffectSite {
                 owner: self.owner.to_def_id(),
                 span,
             },
             details,
-            requirements,
             self.applicable_marker_spans(span),
             group,
         );
@@ -265,36 +245,33 @@ impl<'a, 'tcx> UnsafeOpVisitor<'a, 'tcx> {
             } else {
                 SafetyCallee::FunctionPointer
             };
-            self.unsafe_call(
+            self.record_call(
                 expr.span,
                 SafetyCall {
                     callee,
-                    kind: SafetyCallKind::Unsafe,
+                    kind: SafetyProbeCallKind::Unsafe,
                 },
             );
         } else if let &ty::FnDef(func_id, _) = fn_ty.kind() {
-            if !self
+            if self
                 .tcx
                 .is_target_feature_call_safe(callee_features, self.body_target_features)
             {
-                // A call to a safe `#[target_feature]` function still
-                // requires unsafe when the caller lacks the features.
-                self.unsafe_call(
+                self.record_call(
                     expr.span,
                     SafetyCall {
                         callee: SafetyCallee::Def(func_id),
-                        kind: SafetyCallKind::Unsafe,
+                        kind: SafetyProbeCallKind::PotentialObligation,
                     },
                 );
-            } else if self.config.marks_safety_obligation_def(self.tcx, func_id)
-                || safety_doc_summary(self.tcx, func_id, &self.config.documentation_overrides)
-                    .has_docs
-            {
-                self.unsafe_call(
+            } else {
+                // A call to a safe `#[target_feature]` function still
+                // requires unsafe when the caller lacks the features.
+                self.record_call(
                     expr.span,
                     SafetyCall {
                         callee: SafetyCallee::Def(func_id),
-                        kind: SafetyCallKind::Obligation,
+                        kind: SafetyProbeCallKind::Unsafe,
                     },
                 );
             }
