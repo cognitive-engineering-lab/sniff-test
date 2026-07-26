@@ -19,11 +19,7 @@ pub enum EffectKind {
 }
 
 impl EffectKind {
-    pub(crate) const ALL: [Self; 2] = [Self::Panic, Self::Safety];
-
-    pub(crate) fn analysis_order() -> impl Iterator<Item = Self> {
-        Self::ALL.into_iter().rev()
-    }
+    pub(crate) const ALL: [Self; 2] = [Self::Safety, Self::Panic];
 
     pub(crate) fn marker_prefix(self) -> &'static str {
         match self {

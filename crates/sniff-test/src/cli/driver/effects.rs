@@ -337,7 +337,7 @@ pub(super) fn analyze_effect_roots<'tcx>(
 
     for root in selection.roots {
         let mut effects = BTreeMap::new();
-        for kind in EffectKind::analysis_order() {
+        for kind in EffectKind::ALL {
             let effect = match kind {
                 EffectKind::Panic => analyze_effect_root(
                     tcx,
@@ -375,7 +375,7 @@ pub(super) fn analyze_effect_roots<'tcx>(
             effects,
         });
     }
-    for kind in EffectKind::analysis_order() {
+    for kind in EffectKind::ALL {
         analysis
             .findings
             .extend(findings_by_effect.remove(&kind).unwrap_or_default());
