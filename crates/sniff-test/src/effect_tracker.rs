@@ -63,9 +63,9 @@ pub(crate) struct ResolvedEffectMarker {
 }
 
 #[derive(Debug)]
-pub(crate) struct EffectEvidenceResolution {
-    pub(crate) contract: ContractCheck,
-    pub(crate) markers: Vec<ResolvedEffectMarker>,
+struct EffectEvidenceResolution {
+    contract: ContractCheck,
+    markers: Vec<ResolvedEffectMarker>,
 }
 
 pub(crate) struct ResolvedEffectPaths {
@@ -164,7 +164,7 @@ pub(crate) fn resolve_effect_paths(
     }
 }
 
-pub(crate) fn resolve_effect_evidence<'a>(
+fn resolve_effect_evidence<'a>(
     requirements: &[ContractRequirement],
     markers: impl IntoIterator<Item = &'a EffectMarkerBlock>,
 ) -> EffectEvidenceResolution {
