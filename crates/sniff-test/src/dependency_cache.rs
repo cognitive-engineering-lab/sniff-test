@@ -48,12 +48,7 @@ impl DependencyAnalysisCache {
         for dependency in externs {
             // Check the invocation's extern name first: Cargo dependencies can
             // be renamed independently of their canonical crate names.
-            if config.panics.ignores_namespace(&dependency.name)
-                && config
-                    .safety
-                    .ignored_namespace_match(&dependency.name)
-                    .is_some()
-            {
+            if config.all_effects_ignore_namespace(&dependency.name) {
                 continue;
             }
 
@@ -79,14 +74,7 @@ impl DependencyAnalysisCache {
             if let Some(analysis) = &analysis {
                 // The cache records the canonical crate name, which may differ
                 // from the extern alias checked above.
-                if config
-                    .panics
-                    .ignores_namespace(&analysis.artifact.crate_name)
-                    && config
-                        .safety
-                        .ignored_namespace_match(&analysis.artifact.crate_name)
-                        .is_some()
-                {
+                if config.all_effects_ignore_namespace(&analysis.artifact.crate_name) {
                     continue;
                 }
 
@@ -115,11 +103,7 @@ impl DependencyAnalysisCache {
                         .effects
                         .values()
                         .any(|effect| effect.is_reachable() || !effect.analysis_complete)
-                        && (!config.panics.ignores_namespace(&function.path)
-                            || config
-                                .safety
-                                .ignored_namespace_match(&function.path)
-                                .is_none())
+                        && !config.all_effects_ignore_namespace(&function.path)
                     {
                         functions.insert(
                             FunctionCacheKey {

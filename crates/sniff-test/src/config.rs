@@ -30,6 +30,7 @@ use rustc_middle::ty::TyCtxt;
 use serde::{Deserialize, Serialize, de::Error as _};
 use toml::Spanned;
 
+use crate::contracts::EffectKind;
 use crate::namespace::namespace_candidates;
 
 pub const DEFAULT_MANIFEST_FILE: &str = "sniff-test.toml";
@@ -92,6 +93,21 @@ impl SniffTestConfig {
         self.safety.documentation_overrides = self.documentation.overrides.clone();
         self.panics.marker_probing = self.analysis.marker_probing;
         self.safety.marker_probing = self.analysis.marker_probing;
+    }
+
+    #[must_use]
+    pub(crate) fn effect_ignores_namespace(&self, kind: EffectKind, namespace: &str) -> bool {
+        match kind {
+            EffectKind::Panic => self.panics.ignores_namespace(namespace),
+            EffectKind::Safety => self.safety.ignores_namespace(namespace),
+        }
+    }
+
+    #[must_use]
+    pub(crate) fn all_effects_ignore_namespace(&self, namespace: &str) -> bool {
+        EffectKind::ALL
+            .into_iter()
+            .all(|kind| self.effect_ignores_namespace(kind, namespace))
     }
 }
 
@@ -588,6 +604,11 @@ impl PanicConfig {
 }
 
 impl SafetyConfig {
+    #[must_use]
+    pub fn ignores_namespace(&self, namespace: &str) -> bool {
+        self.ignored_namespace_match(namespace).is_some()
+    }
+
     #[must_use]
     pub fn ignored_namespace_match<'patterns>(
         &'patterns self,

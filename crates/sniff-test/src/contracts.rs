@@ -20,6 +20,7 @@ pub enum EffectKind {
 
 impl EffectKind {
     pub(crate) const ALL: [Self; 2] = [Self::Panic, Self::Safety];
+    pub(crate) const ANALYSIS_ORDER: [Self; 2] = [Self::Safety, Self::Panic];
 
     pub(crate) fn marker_prefix(self) -> &'static str {
         match self {

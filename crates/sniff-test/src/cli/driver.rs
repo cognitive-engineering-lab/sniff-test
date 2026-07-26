@@ -975,42 +975,51 @@ fn analyze_effect_roots<'tcx>(
     };
     let mut reachability = ReachabilityIndex::new(tcx);
     let mut safety_analysis = SafetyAnalysis::default();
-    let mut panic_findings = Vec::new();
+    let mut findings_by_effect = BTreeMap::<EffectKind, Vec<Finding>>::new();
 
     for root in selection.roots {
-        let safety = analyze_effect_root(
-            tcx,
-            &mut reachability,
-            root,
-            analysis_config,
-            dependency_cache,
-            &mut EffectPass::Safety {
-                config: &config.safety,
-                analysis: &mut safety_analysis,
-            },
-        );
-        analysis.findings.extend(safety.findings);
-        let panic = analyze_effect_root(
-            tcx,
-            &mut reachability,
-            root,
-            analysis_config,
-            dependency_cache,
-            &mut EffectPass::Panic(&config.panics),
-        );
+        let mut effects = BTreeMap::new();
+        for kind in EffectKind::ANALYSIS_ORDER {
+            let effect = match kind {
+                EffectKind::Panic => analyze_effect_root(
+                    tcx,
+                    &mut reachability,
+                    root,
+                    analysis_config,
+                    dependency_cache,
+                    &mut EffectPass::Panic(&config.panics),
+                ),
+                EffectKind::Safety => analyze_effect_root(
+                    tcx,
+                    &mut reachability,
+                    root,
+                    analysis_config,
+                    dependency_cache,
+                    &mut EffectPass::Safety {
+                        config: &config.safety,
+                        analysis: &mut safety_analysis,
+                    },
+                ),
+            };
+            effects.insert(kind, effect.summary);
+            findings_by_effect
+                .entry(kind)
+                .or_default()
+                .extend(effect.findings);
+        }
         analysis.function_summaries.push(CachedFunctionSummary {
             def_path_hash: stable_def_path_hash(tcx, root.def_id()),
             path: canonical_namespace(tcx, root.def_id()),
             is_generic: root.kind() == ReportRootKind::Generic,
             root_span: cached_source_span(tcx, tcx.def_span(root.def_id())),
-            effects: BTreeMap::from([
-                (EffectKind::Panic, panic.summary),
-                (EffectKind::Safety, safety.summary),
-            ]),
+            effects,
         });
-        panic_findings.extend(panic.findings);
     }
-    analysis.findings.extend(panic_findings);
+    for kind in EffectKind::ANALYSIS_ORDER {
+        analysis
+            .findings
+            .extend(findings_by_effect.remove(&kind).unwrap_or_default());
+    }
 
     analysis
 }
