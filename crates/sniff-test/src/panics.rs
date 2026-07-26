@@ -26,7 +26,7 @@ use crate::config::{PanicBoundaryPolicy, PanicConfig};
 use crate::contracts::{ContractDocSummary, ContractRequirement, EffectKind, contract_doc_summary};
 use crate::effect_tracker::{
     EffectEvidence, EffectPathDecision, EffectTrace, ambiguous_marker_uses,
-    find_unsatisfied_effect_traces_to_edge_with,
+    effect_path_edge_ids_to_edge, find_unsatisfied_effect_traces_to_edge_with,
 };
 use crate::namespace::canonical_namespace;
 use crate::source_markers::{EffectMarkerBlock, MarkerBlockKey, span_marker_block};
@@ -101,17 +101,17 @@ pub(crate) fn analyze_panic_evidence<'tcx>(
         let edge = raw.endpoint;
         let kind = raw.details;
         let report_evidence = edge.origin().instance().is_some();
-        let trace = EffectTrace::from_edge(edge);
         let resolved = raw.resolve_paths(
             tcx,
             EffectKind::Panic,
             config.marker_probing,
             || {
-                trace
-                    .edge_ids
-                    .iter()
-                    .filter_map(|edge_id| marker_candidates.get(edge_id).cloned())
-                    .collect()
+                effect_path_edge_ids_to_edge(view, edge, |node| {
+                    panic_path_node_is_boundary(tcx, node, config)
+                })
+                .into_iter()
+                .filter_map(|edge_id| marker_candidates.get(&edge_id).cloned())
+                .collect()
             },
             |requirements| {
                 if !report_evidence {

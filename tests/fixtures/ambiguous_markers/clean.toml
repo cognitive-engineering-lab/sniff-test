@@ -1,13 +1,8 @@
 [analysis]
-report-roots = [
-    "ambiguous_markers::shared_block_marker",
-    "ambiguous_markers::duplicate_name_marker",
-    "ambiguous_markers::marker_on_noncanonical_route",
-]
+report-roots = ["ambiguous_markers::shared_block_marker"]
 
 [analysis.lints]
 ambiguous-effect-marker = "allow"
-ambiguous-effect-requirement = "allow"
 
 [panics]
 panic-sink-namespaces = [

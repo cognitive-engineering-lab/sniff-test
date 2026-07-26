@@ -9,7 +9,23 @@ expression: messages
       "crate-name": "ambiguous_markers"
     },
     "dependencies": [],
-    "findings": [],
+    "findings": [
+      {
+        "effect": "panic",
+        "kind": "documented-panic",
+        "level": "warn",
+        "reason": "ambiguous_markers::ratio documents when it may panic under # Panics",
+        "root": "ambiguous_markers::marker_on_noncanonical_route",
+        "root-kind": "concrete",
+        "span": "src/lib.rs:34:5: 34:30",
+        "target": "ambiguous_markers::ratio",
+        "trace": [
+          "src/lib.rs:46:17: 46:51: ambiguous_markers::marker_on_noncanonical_route --direct-call-> ambiguous_markers::unmarked_route",
+          "src/lib.rs:38:5: 38:37: ambiguous_markers::unmarked_route --direct-call-> ambiguous_markers::shared_ratio",
+          "src/lib.rs:34:5: 34:30: ambiguous_markers::shared_ratio --direct-call-> ambiguous_markers::ratio"
+        ]
+      }
+    ],
     "format-version": 8,
     "reason": "sniff-test-artifact",
     "rustc-version": "[RUSTC_VERSION]",

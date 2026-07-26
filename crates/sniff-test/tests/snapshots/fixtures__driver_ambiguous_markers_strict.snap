@@ -22,6 +22,34 @@ expression: messages
       },
       {
         "effect": "panic",
+        "kind": "documented-panic",
+        "level": "warn",
+        "reason": "ambiguous_markers::ratio documents when it may panic under # Panics",
+        "root": "ambiguous_markers::marker_on_noncanonical_route",
+        "root-kind": "concrete",
+        "span": "[FIXTURE]/src/lib.rs:34:5: 34:30",
+        "target": "ambiguous_markers::ratio",
+        "trace": [
+          "[FIXTURE]/src/lib.rs:46:17: 46:51: ambiguous_markers::marker_on_noncanonical_route --direct-call-> ambiguous_markers::unmarked_route",
+          "[FIXTURE]/src/lib.rs:38:5: 38:37: ambiguous_markers::unmarked_route --direct-call-> ambiguous_markers::shared_ratio",
+          "[FIXTURE]/src/lib.rs:34:5: 34:30: ambiguous_markers::shared_ratio --direct-call-> ambiguous_markers::ratio"
+        ]
+      },
+      {
+        "effect": "panic",
+        "kind": "ambiguous-effect-marker",
+        "level": "deny",
+        "reason": "one `// PANIC:` marker applies to 2 panic obligation sites",
+        "root": "ambiguous_markers::marker_on_noncanonical_route",
+        "root-kind": "concrete",
+        "span": "[FIXTURE]/src/lib.rs:47:1: 48:1",
+        "trace": [
+          "[FIXTURE]/src/lib.rs:42:53: 42:78: ambiguous_markers::marked_route --direct-call-> ambiguous_markers::ratio",
+          "[FIXTURE]/src/lib.rs:34:5: 34:30: ambiguous_markers::shared_ratio --direct-call-> ambiguous_markers::ratio"
+        ]
+      },
+      {
+        "effect": "panic",
         "kind": "ambiguous-effect-marker",
         "level": "deny",
         "reason": "one `// PANIC:` marker applies to 2 panic obligation sites",

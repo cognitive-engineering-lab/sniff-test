@@ -4,8 +4,8 @@ use std::collections::{HashMap, HashSet, VecDeque};
 use std::hash::Hash;
 
 use reachability::{
-    ReachabilityEdgeId, ReachabilityGraph, ReachabilityNodeId, ReachabilityNodeKind,
-    ReachabilityView, ReachedEdge, ReachedNode,
+    ReachabilityEdgeId, ReachabilityNodeId, ReachabilityNodeKind, ReachabilityView, ReachedEdge,
+    ReachedNode,
 };
 use rustc_hir::def_id::DefId;
 use rustc_middle::ty::TyCtxt;
@@ -147,17 +147,96 @@ fn marker_contributes_to_contract(
     })
 }
 
-pub(crate) fn trace_marker_blocks(
-    tcx: TyCtxt<'_>,
-    graph: &ReachabilityGraph<'_>,
-    trace: &EffectTrace,
-    kind: EffectKind,
-    probing: MarkerProbing,
-) -> Vec<EffectMarkerBlock> {
-    trace
-        .edge_ids
+pub(crate) fn effect_path_edge_ids_to_edge<'view, 'tcx>(
+    view: ReachabilityView<'view, 'tcx>,
+    effect_edge: ReachedEdge<'view, 'tcx>,
+    is_boundary: impl Fn(&ReachabilityNodeKind<'tcx>) -> bool + Copy,
+) -> Vec<ReachabilityEdgeId> {
+    effect_path_edge_ids_to_nodes(view, [effect_edge.target().id()], is_boundary, true)
+}
+
+pub(crate) fn effect_path_edge_ids_to_nodes<'view, 'tcx>(
+    view: ReachabilityView<'view, 'tcx>,
+    targets: impl IntoIterator<Item = ReachabilityNodeId>,
+    is_boundary: impl Fn(&ReachabilityNodeKind<'tcx>) -> bool + Copy,
+    permit_boundary_targets: bool,
+) -> Vec<ReachabilityEdgeId> {
+    if is_boundary(view.root().kind()) {
+        return Vec::new();
+    }
+    let targets = targets
+        .into_iter()
+        .filter(|target| {
+            permit_boundary_targets
+                || view
+                    .node(*target)
+                    .is_some_and(|node| !is_boundary(node.kind()))
+        })
+        .collect::<Vec<_>>();
+    let edges = view
+        .edges()
+        .map(|edge| (edge.id(), edge.source().id(), edge.target().id()))
+        .collect::<Vec<_>>();
+    edges_on_paths_to_targets(view.root().id(), &edges, targets, |_, target| {
+        view.node(target)
+            .is_some_and(|node| !is_boundary(node.kind()))
+    })
+}
+
+fn edges_on_paths_to_targets<Node, Edge>(
+    root: Node,
+    edges: &[(Edge, Node, Node)],
+    targets: impl IntoIterator<Item = Node>,
+    permits_intermediate_target: impl Fn(Edge, Node) -> bool + Copy,
+) -> Vec<Edge>
+where
+    Node: Copy + Eq + Hash,
+    Edge: Copy,
+{
+    let targets = targets.into_iter().collect::<HashSet<_>>();
+    let mut reached = HashSet::from([root]);
+    loop {
+        let mut changed = false;
+        for &(edge, source, target) in edges {
+            if targets.contains(&source)
+                || !reached.contains(&source)
+                || (!targets.contains(&target) && !permits_intermediate_target(edge, target))
+            {
+                continue;
+            }
+            changed |= reached.insert(target);
+        }
+        if !changed {
+            break;
+        }
+    }
+
+    let mut reaches_target = targets.clone();
+    loop {
+        let mut changed = false;
+        for &(edge, source, target) in edges.iter().rev() {
+            if !reached.contains(&source)
+                || !reaches_target.contains(&target)
+                || (!targets.contains(&target) && !permits_intermediate_target(edge, target))
+            {
+                continue;
+            }
+            changed |= reaches_target.insert(source);
+        }
+        if !changed {
+            break;
+        }
+    }
+
+    edges
         .iter()
-        .filter_map(|edge_id| span_marker_block(tcx, graph.edge(*edge_id).span, kind, probing))
+        .filter_map(|&(edge, source, target)| {
+            (reached.contains(&source)
+                && reaches_target.contains(&target)
+                && !targets.contains(&source)
+                && (targets.contains(&target) || permits_intermediate_target(edge, target)))
+            .then_some(edge)
+        })
         .collect()
 }
 
@@ -495,7 +574,34 @@ mod tests {
     use crate::contracts::{ContractCheck, ContractRequirement, MarkerSatisfaction};
     use crate::source_markers::{EffectMarkerBlock, MarkerBlockKey};
 
-    use super::resolve_effect_evidence;
+    use super::{edges_on_paths_to_targets, resolve_effect_evidence};
+
+    #[test]
+    fn path_edge_collection_includes_all_converging_routes() {
+        let edges = [(10, 0, 1), (11, 0, 2), (12, 1, 3), (13, 2, 3), (14, 2, 4)];
+
+        let path_edges = edges_on_paths_to_targets(0, &edges, [3], |_, _| true);
+
+        assert_eq!(path_edges, vec![10, 11, 12, 13]);
+    }
+
+    #[test]
+    fn path_edge_collection_stops_at_intermediate_boundaries() {
+        let edges = [(10, 0, 1), (11, 1, 2), (12, 2, 3)];
+
+        let path_edges = edges_on_paths_to_targets(0, &edges, [3], |_, target| target != 2);
+
+        assert!(path_edges.is_empty());
+    }
+
+    #[test]
+    fn path_edge_collection_allows_the_effect_edge_to_enter_a_boundary() {
+        let edges = [(10, 0, 1), (11, 1, 2)];
+
+        let path_edges = edges_on_paths_to_targets(0, &edges, [2], |_, target| target != 2);
+
+        assert_eq!(path_edges, vec![10, 11]);
+    }
 
     #[test]
     fn evidence_resolution_checks_named_requirements_and_returns_claimed_markers() {

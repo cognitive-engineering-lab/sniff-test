@@ -98,7 +98,8 @@ cli_cases! {
             .exit_code(1);
     }
     "ambiguous_markers" => {
-        clean_explicit_report_roots_do_not_warn => Case::new("clean explicit report roots");
+        clean_explicit_report_roots_do_not_warn => Case::new("clean explicit report roots")
+            .args(&["--manifest", "clean.toml"]);
         ambiguous_marker_diagnostics => Case::new("ambiguous marker diagnostics")
             .args(&["--manifest", "strict.toml"])
             .exit_code(1);

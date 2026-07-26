@@ -16,9 +16,9 @@ use crate::config::{
 use crate::contracts::EffectKind;
 use crate::dependency_cache::{DependencyAnalysisCache, DependencyInput};
 use crate::effect_tracker::{
-    EffectPathDecision, EffectTrace, find_effect_trace, find_effect_trace_to_edge,
-    find_unsatisfied_effect_traces, find_unsatisfied_effect_traces_to_edge, resolve_effect_paths,
-    trace_marker_blocks,
+    EffectPathDecision, EffectTrace, effect_path_edge_ids_to_edge, effect_path_edge_ids_to_nodes,
+    find_effect_trace, find_effect_trace_to_edge, find_unsatisfied_effect_traces,
+    find_unsatisfied_effect_traces_to_edge, resolve_effect_paths,
 };
 use crate::namespace::{canonical_namespace, stable_def_path_hash};
 use crate::panics::{AmbiguousPanicMarker, PanicAnalysis, PanicEvidence, analyze_panic_evidence};
@@ -26,7 +26,7 @@ use crate::report_roots::{
     MissingReportRoot, ReportRoot, ReportRootKind, ReportRootSelection, select_report_roots,
 };
 use crate::safety::{SafetyAnalysis, safety_doc_summary};
-use crate::source_markers::MarkerBlockKey;
+use crate::source_markers::{MarkerBlockKey, span_marker_block};
 use anyhow::Context;
 use reachability::{
     ReachabilityContext, ReachabilityControl, ReachabilityEdge, ReachabilityEdgeKind,
@@ -282,15 +282,22 @@ fn collect_local_safety_findings<'tcx>(
                 tcx,
                 config,
                 || {
-                    boundary_trace.as_ref().map_or_else(Vec::new, |trace| {
-                        trace_marker_blocks(
+                    effect_path_edge_ids_to_nodes(
+                        view,
+                        owner_instances.iter().map(|owner| owner.id()),
+                        |node| safety_graph_node_is_boundary(tcx, node, config),
+                        false,
+                    )
+                    .into_iter()
+                    .filter_map(|edge_id| {
+                        span_marker_block(
                             tcx,
-                            graph,
-                            trace,
+                            graph.edge(edge_id).span,
                             EffectKind::Safety,
                             config.marker_probing,
                         )
                     })
+                    .collect()
                 },
                 |requirements| {
                     safety_finding_traces(tcx, view, owner_instances, config, requirements)
@@ -1329,7 +1336,6 @@ fn resolve_cached_effect_boundary<'tcx, 'cache>(
     is_boundary: impl Fn(&ReachabilityNodeKind<'tcx>) -> bool + Copy,
 ) -> ResolvedCachedEffect<'cache> {
     let graph = view.graph();
-    let first_trace = EffectTrace::from_edge(boundary.edge);
     let mut unresolved_findings = Vec::new();
     let mut marker_claims = Vec::new();
     let mut has_raw_findings = false;
@@ -1349,7 +1355,14 @@ fn resolve_cached_effect_boundary<'tcx, 'cache>(
             probing,
             &finding.missing_requirements,
             &[],
-            || trace_marker_blocks(tcx, graph, &first_trace, kind, probing),
+            || {
+                effect_path_edge_ids_to_edge(view, boundary.edge, is_boundary)
+                    .into_iter()
+                    .filter_map(|edge_id| {
+                        span_marker_block(tcx, graph.edge(edge_id).span, kind, probing)
+                    })
+                    .collect()
+            },
             |requirements| {
                 find_unsatisfied_effect_traces_to_edge(
                     tcx,
