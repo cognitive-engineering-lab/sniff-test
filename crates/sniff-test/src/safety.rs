@@ -284,7 +284,9 @@ impl SafetyAnalysis {
             }
             collect_missing_safety_docs(tcx, owner, config, self);
             thir::collect_body_evidence(tcx, owner, config, self);
-            self.resolve_owner_probes(tcx, owner.to_def_id(), config);
+        }
+        for owner in self.probes_by_owner.keys().copied().collect::<Vec<_>>() {
+            self.resolve_owner_probes(tcx, owner, config);
         }
     }
 

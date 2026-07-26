@@ -227,20 +227,6 @@ impl PanicRootReport {
         });
     }
 
-    pub(crate) fn push_analysis_incomplete(
-        &mut self,
-        tcx: TyCtxt<'_>,
-        root_def_id: rustc_hir::def_id::DefId,
-        node_limit: usize,
-    ) {
-        self.push_finding(analysis_incomplete_finding(
-            tcx,
-            root_def_id,
-            node_limit,
-            EffectKind::Panic,
-        ));
-    }
-
     pub(crate) fn push_ambiguous_obligation_marker<'tcx>(
         &mut self,
         tcx: TyCtxt<'tcx>,
