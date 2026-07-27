@@ -1,5 +1,6 @@
 //! Effect-independent root analysis and built-in effect passes.
 
+pub(super) mod cache;
 mod panic;
 mod safety;
 
