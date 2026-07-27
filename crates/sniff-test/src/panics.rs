@@ -411,6 +411,14 @@ pub(crate) fn has_panic_docs(tcx: TyCtxt<'_>, def_id: DefId, config: &PanicConfi
     panic_doc_summary(tcx, def_id, config).has_docs
 }
 
+pub(crate) fn is_trusted_panic_obligation(
+    tcx: TyCtxt<'_>,
+    def_id: DefId,
+    config: &PanicConfig,
+) -> bool {
+    config.panic_boundary_policy(tcx, def_id) == PanicBoundaryPolicy::TrustedPanicObligation
+}
+
 type PanicDocSummary = ContractDocSummary;
 
 pub(crate) fn panic_doc_summary(

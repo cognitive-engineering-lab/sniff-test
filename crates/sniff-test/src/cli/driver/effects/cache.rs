@@ -7,7 +7,10 @@ use rustc_hir::def_id::DefId;
 use rustc_middle::ty::TyCtxt;
 use rustc_span::Span;
 
-use crate::cache::{CachedEffectSummary, CachedFinding, CachedFunctionSummary};
+use crate::cache::{
+    CachedEffectSummary, CachedFinding, CachedFindingTarget, CachedFunctionSummary,
+};
+use crate::cli::report::render_span;
 use crate::contracts::{ContractRequirement, EffectKind};
 use crate::dependency_cache::DependencyAnalysisCache;
 use crate::effect_tracker::{
@@ -18,18 +21,18 @@ use crate::namespace::stable_def_path_hash;
 use crate::source_markers::MarkerBlockKey;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub(in crate::cli::driver) struct TraceEffectGroup {
-    pub(in crate::cli::driver) boundary_edge: ReachabilityEdgeId,
-    pub(in crate::cli::driver) finding: usize,
-    pub(in crate::cli::driver) span: Span,
+pub(super) struct TraceEffectGroup {
+    pub(super) boundary_edge: ReachabilityEdgeId,
+    pub(super) finding: usize,
+    pub(super) span: Span,
 }
 
 type TraceMarkerClaim = (MarkerBlockKey, Span, TraceEffectGroup);
 
-pub(in crate::cli::driver) struct UnresolvedCachedFinding<'cache> {
-    pub(in crate::cli::driver) finding: &'cache CachedFinding,
-    pub(in crate::cli::driver) trace: EffectTrace,
-    pub(in crate::cli::driver) missing_requirements: Vec<ContractRequirement>,
+pub(super) struct UnresolvedCachedFinding<'cache> {
+    pub(super) finding: &'cache CachedFinding,
+    pub(super) trace: EffectTrace,
+    pub(super) missing_requirements: Vec<ContractRequirement>,
 }
 
 struct ResolvedCachedEffect<'cache> {
@@ -38,9 +41,9 @@ struct ResolvedCachedEffect<'cache> {
     has_raw_findings: bool,
 }
 
-pub(in crate::cli::driver) struct CachedEffectPropagation {
-    pub(in crate::cli::driver) cached_findings: Vec<CachedFinding>,
-    pub(in crate::cli::driver) analysis_complete: bool,
+pub(super) struct CachedEffectPropagation {
+    pub(super) cached_findings: Vec<CachedFinding>,
+    pub(super) analysis_complete: bool,
 }
 
 impl Default for CachedEffectPropagation {
@@ -52,14 +55,14 @@ impl Default for CachedEffectPropagation {
     }
 }
 
-pub(in crate::cli::driver) struct ResolvedCachedBoundary<'view, 'tcx, 'cache> {
-    pub(in crate::cli::driver) edge: reachability::ReachedEdge<'view, 'tcx>,
-    pub(in crate::cli::driver) function: &'cache CachedFunctionSummary,
-    pub(in crate::cli::driver) effect: &'cache CachedEffectSummary,
-    pub(in crate::cli::driver) trace: EffectTrace,
-    pub(in crate::cli::driver) unresolved_findings: Vec<UnresolvedCachedFinding<'cache>>,
-    pub(in crate::cli::driver) marker_claims: Vec<TraceMarkerClaim>,
-    pub(in crate::cli::driver) has_raw_findings: bool,
+pub(super) struct ResolvedCachedBoundary<'view, 'tcx, 'cache> {
+    pub(super) edge: reachability::ReachedEdge<'view, 'tcx>,
+    pub(super) function: &'cache CachedFunctionSummary,
+    pub(super) effect: &'cache CachedEffectSummary,
+    pub(super) trace: EffectTrace,
+    pub(super) unresolved_findings: Vec<UnresolvedCachedFinding<'cache>>,
+    pub(super) marker_claims: Vec<TraceMarkerClaim>,
+    pub(super) has_raw_findings: bool,
 }
 
 struct CachedEffectBoundary<'view, 'tcx, 'cache> {
@@ -145,7 +148,7 @@ fn resolve_cached_effect_boundary<'tcx, 'cache>(
     }
 }
 
-pub(in crate::cli::driver) fn resolved_cached_effect_boundaries<'view, 'tcx, 'cache>(
+pub(super) fn resolved_cached_effect_boundaries<'view, 'tcx, 'cache>(
     tcx: TyCtxt<'tcx>,
     view: ReachabilityView<'view, 'tcx>,
     cache: &'cache DependencyAnalysisCache,
@@ -177,6 +180,37 @@ pub(in crate::cli::driver) fn resolved_cached_effect_boundaries<'view, 'tcx, 'ca
             })
         })
         .collect()
+}
+
+pub(super) fn rebase_cached_dependency_finding(
+    tcx: TyCtxt<'_>,
+    edge: reachability::ReachedEdge<'_, '_>,
+    trace: &EffectTrace,
+    summary: &CachedFunctionSummary,
+    cached: &CachedFinding,
+) -> Option<CachedFinding> {
+    let def_id = edge.target().instance()?.def_id();
+    let effect = cached.kind.effect()?;
+    Some(CachedFinding {
+        kind: cached.kind,
+        span: render_span(tcx, edge.span()),
+        source_span: cached.source_span.clone(),
+        diagnostic_spans: cached.diagnostic_spans.clone(),
+        edge_index: Some(edge.id().index()),
+        trace: trace
+            .edge_ids
+            .iter()
+            .map(|edge_id| edge_id.index())
+            .collect(),
+        dependency_trace: summary.effect_trace(effect, cached),
+        reason: cached.reason.clone(),
+        missing_requirements: cached.missing_requirements.clone(),
+        target: Some(CachedFindingTarget::Function {
+            path: summary.path.clone(),
+            crate_name: tcx.crate_name(def_id.krate).to_string(),
+            is_local: false,
+        }),
+    })
 }
 
 fn propagating_cached_effect_boundaries<'view, 'tcx, 'cache>(

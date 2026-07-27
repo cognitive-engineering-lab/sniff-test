@@ -131,7 +131,7 @@ fn cached_panic_finding<'tcx>(
             }
         }
         EffectPathDecision::Obligation { edge_id, def_id } => {
-            let trusted = super::driver::is_trusted_panic_obligation(tcx, def_id, config);
+            let trusted = crate::panics::is_trusted_panic_obligation(tcx, def_id, config);
             let (span, source_span, mut diagnostic_spans, target) = edge_id.map_or_else(
                 || {
                     let span = tcx.def_span(def_id);

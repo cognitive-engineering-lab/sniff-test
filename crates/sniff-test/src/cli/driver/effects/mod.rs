@@ -1,16 +1,26 @@
 //! Effect-independent root analysis and built-in effect passes.
 
-pub(super) mod cache;
+mod cache;
 mod panic;
 mod safety;
 
-use super::{
-    AnalysisConfig, BTreeMap, CachedEffectSummary, CachedFinding, CachedFunctionSummary, DefId,
-    DependencyAnalysisCache, EffectKind, EffectPathIndex, Finding, MissingReportRoot,
-    ReachabilityIndex, ReachabilityView, ReportRoot, ReportRootKind, ReportRootSelection,
-    SafetyAnalysis, SniffTestConfig, TyCtxt, analysis_incomplete_finding,
-    cached_reachability_graph, cached_source_span, canonical_namespace, stable_def_path_hash,
-};
+use std::collections::BTreeMap;
+
+use reachability::{ReachabilityIndex, ReachabilityOptions, ReachabilityView};
+use rustc_hir::def_id::DefId;
+use rustc_middle::ty::TyCtxt;
+
+use crate::cache::{CachedEffectSummary, CachedFinding, CachedFunctionSummary};
+use crate::cli::cache_encode::{cached_reachability_graph, cached_source_span};
+use crate::cli::findings::Finding;
+use crate::cli::report::analysis_incomplete_finding;
+use crate::config::{AnalysisConfig, SniffTestConfig};
+use crate::contracts::EffectKind;
+use crate::dependency_cache::DependencyAnalysisCache;
+use crate::effect_tracker::EffectPathIndex;
+use crate::namespace::{canonical_namespace, stable_def_path_hash};
+use crate::report_roots::{MissingReportRoot, ReportRoot, ReportRootKind, ReportRootSelection};
+use crate::safety::SafetyAnalysis;
 use panic::PanicPass;
 use safety::SafetyPass;
 
@@ -72,6 +82,18 @@ trait EffectPass<'tcx> {
         purpose: EffectViewPurpose,
         dependency_cache: &DependencyAnalysisCache,
     ) -> EffectSnapshotAnalysis;
+}
+
+fn reachability_options(
+    analysis_config: &AnalysisConfig,
+    analyze_external: bool,
+) -> ReachabilityOptions {
+    ReachabilityOptions {
+        node_limit: Some(analysis_config.node_limit),
+        analyze_external,
+        dyn_dispatch_vtable_edges: analysis_config.callable_edge_attribution.into(),
+        fn_pointer_edges: analysis_config.callable_edge_attribution.into(),
+    }
 }
 
 fn analyze_effect_root<'tcx>(
