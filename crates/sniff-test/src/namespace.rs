@@ -14,10 +14,15 @@
 
 use std::cell::RefCell;
 use std::collections::HashMap;
+use std::fmt;
 
+use rustc_data_structures::fingerprint::Fingerprint;
+use rustc_data_structures::stable_hasher::ToStableHashKey;
 use rustc_hir::def::DefKind;
 use rustc_hir::def_id::DefId;
-use rustc_middle::ty::TyCtxt;
+use rustc_middle::mono::MonoItem;
+use rustc_middle::ty::{Instance, TyCtxt};
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 // The driver runs one rustc session per process and the analysis is
 // single-threaded, so `DefId`-keyed caches stay valid for the process
@@ -29,16 +34,124 @@ thread_local! {
         RefCell::new(HashMap::new());
 }
 
-/// Session-independent identity for a definition, as a 32-hex-digit string of
-/// the stable crate id followed by the local def path hash.
+/// Session-independent identity for a definition.
+///
+/// Its serialized form is 32 hexadecimal digits: the stable crate id followed
+/// by the item-local def-path hash.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct StableDefPathHash(StableHash);
+
+impl StableDefPathHash {
+    #[must_use]
+    pub fn from_def_id(tcx: TyCtxt<'_>, def_id: DefId) -> Self {
+        let hash = tcx.def_path_hash(def_id);
+        Self::from_parts(hash.stable_crate_id().as_u64(), hash.local_hash().as_u64())
+    }
+
+    const fn from_parts(stable_crate_id: u64, local_hash: u64) -> Self {
+        Self(StableHash::from_parts(stable_crate_id, local_hash))
+    }
+}
+
+impl fmt::Display for StableDefPathHash {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.0.fmt(formatter)
+    }
+}
+
+/// Session-independent identity for one rustc function instance.
+///
+/// Unlike [`StableDefPathHash`], this distinguishes generic substitutions and
+/// compiler-generated instance kinds such as shims. It deliberately uses
+/// rustc's stable `MonoItem::Fn` key so cache identity matches rustc's own
+/// monomorphization identity.
+#[allow(dead_code)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct StableInstanceHash(StableHash);
+
+#[allow(dead_code)]
+impl StableInstanceHash {
+    #[must_use]
+    pub fn from_instance<'tcx>(tcx: TyCtxt<'tcx>, instance: Instance<'tcx>) -> Self {
+        let fingerprint = tcx.with_stable_hashing_context(|mut hcx| {
+            MonoItem::Fn(instance).to_stable_hash_key(&mut hcx)
+        });
+        Self::from_fingerprint(fingerprint)
+    }
+
+    fn from_fingerprint(fingerprint: Fingerprint) -> Self {
+        let (first, second) = fingerprint.split();
+        Self::from_parts(first.as_u64(), second.as_u64())
+    }
+
+    const fn from_parts(first: u64, second: u64) -> Self {
+        Self(StableHash::from_parts(first, second))
+    }
+}
+
+impl fmt::Display for StableInstanceHash {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.0.fmt(formatter)
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+struct StableHash {
+    first: u64,
+    second: u64,
+}
+
+impl StableHash {
+    const fn from_parts(first: u64, second: u64) -> Self {
+        Self { first, second }
+    }
+
+    fn from_hex(value: &str) -> Option<Self> {
+        if value.len() != 32 || !value.is_ascii() {
+            return None;
+        }
+        let (first, second) = value.split_at(16);
+        Some(Self {
+            first: u64::from_str_radix(first, 16).ok()?,
+            second: u64::from_str_radix(second, 16).ok()?,
+        })
+    }
+}
+
+impl fmt::Display for StableHash {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(formatter, "{:016x}{:016x}", self.first, self.second)
+    }
+}
+
+impl Serialize for StableHash {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        serializer.collect_str(self)
+    }
+}
+
+impl<'de> Deserialize<'de> for StableHash {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let value = String::deserialize(deserializer)?;
+        Self::from_hex(&value).ok_or_else(|| {
+            serde::de::Error::custom("stable hash must contain exactly 32 hexadecimal digits")
+        })
+    }
+}
+
+/// Compatibility rendering for cache fields that have not migrated to
+/// [`StableDefPathHash`] yet.
 #[must_use]
 pub fn stable_def_path_hash(tcx: TyCtxt<'_>, def_id: DefId) -> String {
-    let hash = tcx.def_path_hash(def_id);
-    format!(
-        "{:016x}{:016x}",
-        hash.stable_crate_id().as_u64(),
-        hash.local_hash().as_u64()
-    )
+    StableDefPathHash::from_def_id(tcx, def_id).to_string()
 }
 
 /// Namespace forms a definition can be matched against.
@@ -152,7 +265,66 @@ fn canonicalize_def_path(crate_name: &str, path: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::canonicalize_def_path;
+    use std::collections::{BTreeMap, HashMap};
+
+    use super::{StableDefPathHash, StableInstanceHash, canonicalize_def_path};
+
+    #[test]
+    fn stable_hashes_render_as_fixed_width_lowercase_hex() {
+        assert_eq!(
+            StableDefPathHash::from_parts(0x1, 0xabcdef).to_string(),
+            "00000000000000010000000000abcdef"
+        );
+        assert_eq!(
+            StableInstanceHash::from_parts(0x10, 0xfedcba).to_string(),
+            "00000000000000100000000000fedcba"
+        );
+    }
+
+    #[test]
+    fn stable_hashes_serialize_as_hex_strings() {
+        let definition = StableDefPathHash::from_parts(0x1, 0x2);
+        let instance = StableInstanceHash::from_parts(0x3, 0x4);
+
+        let definition_json = serde_json::to_string(&definition).expect("serialize definition");
+        let instance_json = serde_json::to_string(&instance).expect("serialize instance");
+
+        assert_eq!(definition_json, "\"00000000000000010000000000000002\"");
+        assert_eq!(instance_json, "\"00000000000000030000000000000004\"");
+        assert_eq!(
+            serde_json::from_str::<StableDefPathHash>(&definition_json)
+                .expect("deserialize definition"),
+            definition
+        );
+        assert_eq!(
+            serde_json::from_str::<StableInstanceHash>(&instance_json)
+                .expect("deserialize instance"),
+            instance
+        );
+    }
+
+    #[test]
+    fn stable_hash_deserialization_rejects_noncanonical_width() {
+        let error = serde_json::from_str::<StableDefPathHash>("\"12\"")
+            .expect_err("short hashes must be rejected");
+
+        assert!(error.to_string().contains("32 hexadecimal digits"));
+    }
+
+    #[test]
+    fn stable_hashes_are_ordered_hash_map_keys() {
+        let first = StableDefPathHash::from_parts(1, 2);
+        let second = StableDefPathHash::from_parts(1, 3);
+        let mut ordered = BTreeMap::new();
+        let mut hashed = HashMap::new();
+
+        ordered.insert(second, "second");
+        ordered.insert(first, "first");
+        hashed.insert(first, "first");
+
+        assert_eq!(ordered.keys().copied().collect::<Vec<_>>(), [first, second]);
+        assert_eq!(hashed.get(&first), Some(&"first"));
+    }
 
     #[test]
     fn canonical_paths_include_crate_root_once() {
