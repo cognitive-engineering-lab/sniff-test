@@ -9,7 +9,8 @@ use crate::body::BodyEdge;
 use crate::body::collect_body_edges;
 use crate::graph::{
     CallableEdgeInfo, ReachabilityEdge, ReachabilityEdgeId, ReachabilityEdgeKind,
-    ReachabilityGraph, ReachabilityNodeId, ReachabilityNodeKind, ReachabilitySnapshot,
+    ReachabilityGraph, ReachabilityNodeExpansion, ReachabilityNodeId, ReachabilityNodeKind,
+    ReachabilitySnapshot,
 };
 use crate::hooks::{ReachabilityContext, ReachabilityControl, ReachabilityHalt, ReachabilityHooks};
 
@@ -64,6 +65,18 @@ impl<'tcx> IntoInstance<'tcx> for Instance<'tcx> {
     }
 }
 
+/// Artifact boundary used while expanding reached function instances.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ArtifactScope {
+    /// Expand only instances defined by the crate containing the query root.
+    ///
+    /// Calls into another crate remain recorded and are classified as
+    /// [`ReachabilityNodeExpansion::DifferentArtifact`].
+    RootArtifact,
+    /// Expand instances from any crate when their MIR is available.
+    AllArtifacts,
+}
+
 /// Options controlling graph traversal.
 #[derive(Debug, Clone, Copy)]
 pub struct ReachabilityOptions {
@@ -73,12 +86,8 @@ pub struct ReachabilityOptions {
     /// When reached, the snapshot is returned with
     /// [`ReachabilityHalt::NodeLimitReached`].
     pub node_limit: Option<usize>,
-    /// Whether traversal may descend into non-local instances when MIR is
-    /// available.
-    ///
-    /// Edges to external functions can still be recorded when this is false;
-    /// they are just not recursively expanded.
-    pub analyze_external: bool,
+    /// Which artifacts may have their function bodies expanded.
+    pub artifact_scope: ArtifactScope,
     /// Where concrete vtable method edges introduced by dynamic object casts
     /// should be recorded.
     pub dyn_dispatch_vtable_edges: DynDispatchVTableEdges,
@@ -91,7 +100,7 @@ impl Default for ReachabilityOptions {
     fn default() -> Self {
         Self {
             node_limit: None,
-            analyze_external: true,
+            artifact_scope: ArtifactScope::AllArtifacts,
             dyn_dispatch_vtable_edges: DynDispatchVTableEdges::CastSites,
             fn_pointer_edges: FnPointerEdges::ReifySites,
         }
@@ -234,13 +243,27 @@ impl<'tcx> ReachabilityIndex<'tcx> {
         );
     }
 
-    fn can_descend_into(&self, options: ReachabilityOptions, instance: Instance<'tcx>) -> bool {
+    fn expansion_blocker(
+        &self,
+        root: Instance<'tcx>,
+        artifact_scope: ArtifactScope,
+        instance: Instance<'tcx>,
+    ) -> Option<ReachabilityNodeExpansion> {
+        if artifact_scope == ArtifactScope::RootArtifact
+            && instance.def_id().krate != root.def_id().krate
+        {
+            return Some(ReachabilityNodeExpansion::DifferentArtifact);
+        }
+
         match instance.def {
-            InstanceKind::Item(def_id) => {
-                (options.analyze_external || def_id.is_local()) && self.item_mir_available(def_id)
+            InstanceKind::Item(def_id) if !self.item_mir_available(def_id) => {
+                Some(ReachabilityNodeExpansion::MirUnavailable)
             }
-            InstanceKind::Intrinsic(..) | InstanceKind::Virtual(..) => false,
-            InstanceKind::VTableShim(..)
+            InstanceKind::Intrinsic(..) | InstanceKind::Virtual(..) => {
+                Some(ReachabilityNodeExpansion::UnsupportedInstance)
+            }
+            InstanceKind::Item(..)
+            | InstanceKind::VTableShim(..)
             | InstanceKind::ReifyShim(..)
             | InstanceKind::FnPtrShim(..)
             | InstanceKind::ClosureOnceShim { .. }
@@ -251,9 +274,7 @@ impl<'tcx> ReachabilityIndex<'tcx> {
             | InstanceKind::ThreadLocalShim(..)
             | InstanceKind::FnPtrAddrShim(..)
             | InstanceKind::AsyncDropGlueCtorShim(..)
-            | InstanceKind::AsyncDropGlue(..) => {
-                options.analyze_external || instance.def_id().is_local()
-            }
+            | InstanceKind::AsyncDropGlue(..) => None,
         }
     }
 
@@ -313,6 +334,7 @@ where
                 if let Some(limit) = self.options.node_limit
                     && self.visited_instances.len() >= limit
                 {
+                    self.mark_node_limit_frontier(item.node_id);
                     return ControlFlow::Break(ReachabilityHalt::NodeLimitReached { limit });
                 }
 
@@ -321,11 +343,17 @@ where
                 let cx = self.context(instance, item.depth);
                 self.hooks.on_node(cx)?;
 
-                if !self.index.can_descend_into(self.options, instance) {
+                if let Some(expansion) =
+                    self.index
+                        .expansion_blocker(self.root, self.options.artifact_scope, instance)
+                {
+                    self.snapshot.record_expansion(item.node_id, expansion);
                     continue;
                 }
 
                 self.index.ensure_expanded(instance);
+                self.snapshot
+                    .record_expansion(item.node_id, ReachabilityNodeExpansion::Expanded);
             } else if !self.visited_bridge_nodes.insert(item.node_id) {
                 continue;
             }
@@ -374,7 +402,10 @@ where
             .record_edge(edge_id, edge.target, item.depth + 1);
         if let Some(target) = self.index.graph.node_instance(edge.target) {
             let should_descend = self.hooks.should_descend(cx, &edge, target)?;
-            if should_descend && first_reach && !self.visited_instances.contains(&target) {
+            if !should_descend {
+                self.snapshot
+                    .record_expansion(edge.target, ReachabilityNodeExpansion::PolicyBoundary);
+            } else if first_reach && !self.visited_instances.contains(&target) {
                 self.queue.push_back(QueueItem {
                     node_id: edge.target,
                     current_instance: target,
@@ -390,6 +421,17 @@ where
         }
 
         ControlFlow::Continue(true)
+    }
+
+    fn mark_node_limit_frontier(&mut self, current: ReachabilityNodeId) {
+        let pending = std::iter::once(current)
+            .chain(self.queue.iter().map(|item| item.node_id))
+            .filter(|node| self.index.graph.node_instance(*node).is_some())
+            .collect::<Vec<_>>();
+        for node in pending {
+            self.snapshot
+                .record_expansion(node, ReachabilityNodeExpansion::NodeLimit);
+        }
     }
 
     fn register_erased_callable_target(

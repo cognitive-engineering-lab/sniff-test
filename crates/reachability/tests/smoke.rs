@@ -11,15 +11,15 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use reachability::{
-    DynDispatchVTableEdges, FnPointerEdges, NoopReachabilityHooks, ReachabilityContext,
-    ReachabilityControl, ReachabilityEdge, ReachabilityEdgeKind, ReachabilityGraph,
-    ReachabilityHooks, ReachabilityIndex, ReachabilityNodeKind, ReachabilityOptions,
-    ReachabilityRoot, ReachabilitySnapshot,
+    ArtifactScope, DynDispatchVTableEdges, FnPointerEdges, NoopReachabilityHooks,
+    ReachabilityContext, ReachabilityControl, ReachabilityEdge, ReachabilityEdgeKind,
+    ReachabilityGraph, ReachabilityHooks, ReachabilityIndex, ReachabilityNodeExpansion,
+    ReachabilityNodeKind, ReachabilityOptions, ReachabilityRoot, ReachabilitySnapshot,
 };
 use rustc_driver::{Callbacks, Compilation};
 use rustc_hir::def_id::LocalDefId;
 use rustc_interface::interface;
-use rustc_middle::ty::TyCtxt;
+use rustc_middle::ty::{GenericArgs, Instance, InstanceKind, TyCtxt};
 
 const DEMO_SOURCE: &str = r"
 pub trait Worker {
@@ -191,6 +191,18 @@ pub fn expose_dyn_target() -> &'static dyn Worker {
 
 pub fn call_dyn_target(target: &dyn Worker) {
     target.work();
+}
+";
+
+const EXPANDED_LEAF_SOURCE: &str = r"
+pub fn entry() {
+    leaf();
+}
+
+fn leaf() {}
+
+pub fn external_entry() {
+    std::process::abort();
 }
 ";
 
@@ -593,6 +605,224 @@ fn derived_callable_edges_follow_their_parent_call_once() {
             hook_calls: 1,
         })
     );
+}
+
+#[test]
+fn expanded_leaf_is_not_a_frontier() {
+    let project = TempProject::new(EXPANDED_LEAF_SOURCE);
+    let mut callbacks = LocalExpansionCallbacks { result: None };
+    run_test_compiler(&project, &mut callbacks);
+    let result = callbacks.result.expect("compiler callback did not run");
+
+    assert_eq!(
+        (
+            result.leaf_expansion,
+            result.leaf_outgoing_edges,
+            result.leaf_is_frontier,
+        ),
+        (ReachabilityNodeExpansion::Expanded, 0, false)
+    );
+}
+
+#[test]
+fn artifact_scope_distinguishes_crossings_from_unavailable_mir() {
+    let project = TempProject::new(EXPANDED_LEAF_SOURCE);
+    let mut callbacks = ArtifactScopeCallbacks { result: None };
+    run_test_compiler(&project, &mut callbacks);
+
+    assert_eq!(
+        callbacks.result,
+        Some(ArtifactScopeResult {
+            root_artifact: ReachabilityNodeExpansion::DifferentArtifact,
+            all_artifacts: ReachabilityNodeExpansion::MirUnavailable,
+        })
+    );
+}
+
+#[test]
+fn hook_boundary_and_node_limit_are_explicit_frontiers() {
+    let project = TempProject::new(EXPANDED_LEAF_SOURCE);
+    let mut callbacks = LocalExpansionCallbacks { result: None };
+    run_test_compiler(&project, &mut callbacks);
+    let result = callbacks.result.expect("compiler callback did not run");
+
+    assert_eq!(
+        (
+            result.hook_boundary,
+            result.node_limit,
+            result.unsupported_instance,
+        ),
+        (
+            ReachabilityNodeExpansion::PolicyBoundary,
+            ReachabilityNodeExpansion::NodeLimit,
+            ReachabilityNodeExpansion::UnsupportedInstance,
+        )
+    );
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct ArtifactScopeResult {
+    root_artifact: ReachabilityNodeExpansion,
+    all_artifacts: ReachabilityNodeExpansion,
+}
+
+struct ArtifactScopeCallbacks {
+    result: Option<ArtifactScopeResult>,
+}
+
+impl Callbacks for ArtifactScopeCallbacks {
+    fn after_analysis(&mut self, _compiler: &interface::Compiler, tcx: TyCtxt<'_>) -> Compilation {
+        let entry = ReachabilityRoot::LocalBody(find_local_body(tcx, "external_entry"));
+        let root_artifact = expansion_for_target(
+            tcx,
+            entry,
+            ReachabilityOptions {
+                artifact_scope: ArtifactScope::RootArtifact,
+                ..ReachabilityOptions::default()
+            },
+            "process::abort",
+        );
+        let all_artifacts =
+            expansion_for_target(tcx, entry, ReachabilityOptions::default(), "process::abort");
+        self.result = Some(ArtifactScopeResult {
+            root_artifact,
+            all_artifacts,
+        });
+        Compilation::Stop
+    }
+}
+
+fn expansion_for_target<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    root: ReachabilityRoot<'tcx>,
+    options: ReachabilityOptions,
+    suffix: &str,
+) -> ReachabilityNodeExpansion {
+    let mut index = ReachabilityIndex::new(tcx);
+    let mut hooks = NoopReachabilityHooks;
+    let snapshot = index.query(root, &mut hooks, options);
+    index
+        .graph()
+        .view(&snapshot)
+        .nodes()
+        .find_map(|node| {
+            let instance = node.instance()?;
+            tcx.def_path_str(instance.def_id())
+                .ends_with(suffix)
+                .then(|| node.expansion())
+                .flatten()
+        })
+        .unwrap_or_else(|| panic!("target ending with `{suffix}` was not reached"))
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct LocalExpansionResult {
+    leaf_expansion: ReachabilityNodeExpansion,
+    leaf_outgoing_edges: usize,
+    leaf_is_frontier: bool,
+    hook_boundary: ReachabilityNodeExpansion,
+    node_limit: ReachabilityNodeExpansion,
+    unsupported_instance: ReachabilityNodeExpansion,
+}
+
+struct LocalExpansionCallbacks {
+    result: Option<LocalExpansionResult>,
+}
+
+impl Callbacks for LocalExpansionCallbacks {
+    fn after_analysis(&mut self, _compiler: &interface::Compiler, tcx: TyCtxt<'_>) -> Compilation {
+        let root = ReachabilityRoot::LocalBody(find_local_body(tcx, "entry"));
+        let mut index = ReachabilityIndex::new(tcx);
+        let mut hooks = NoopReachabilityHooks;
+        let snapshot = index.query(
+            root,
+            &mut hooks,
+            ReachabilityOptions {
+                artifact_scope: ArtifactScope::RootArtifact,
+                ..ReachabilityOptions::default()
+            },
+        );
+        let view = index.graph().view(&snapshot);
+        let leaf = view
+            .nodes()
+            .find(|node| {
+                node.instance()
+                    .is_some_and(|instance| tcx.def_path_str(instance.def_id()).ends_with("leaf"))
+            })
+            .expect("leaf was not reached");
+        let leaf_expansion = leaf.expansion().expect("leaf is an instance");
+        let leaf_outgoing_edges = view.outgoing_edges(leaf.id()).count();
+        let leaf_is_frontier = view.frontier().any(|node| node.id() == leaf.id());
+
+        let mut policy_index = ReachabilityIndex::new(tcx);
+        let mut policy_hooks = RejectLeafHooks;
+        let policy_snapshot = policy_index.query(
+            root,
+            &mut policy_hooks,
+            ReachabilityOptions {
+                artifact_scope: ArtifactScope::RootArtifact,
+                ..ReachabilityOptions::default()
+            },
+        );
+        let hook_boundary = policy_index
+            .graph()
+            .view(&policy_snapshot)
+            .frontier()
+            .find_map(|node| {
+                let instance = node.instance()?;
+                tcx.def_path_str(instance.def_id())
+                    .ends_with("leaf")
+                    .then(|| node.expansion())
+                    .flatten()
+            })
+            .expect("policy-boundary leaf was not reached");
+
+        let node_limit = expansion_for_target(
+            tcx,
+            root,
+            ReachabilityOptions {
+                node_limit: Some(1),
+                artifact_scope: ArtifactScope::RootArtifact,
+                ..ReachabilityOptions::default()
+            },
+            "leaf",
+        );
+        let unsupported_root = ReachabilityRoot::Instance(Instance {
+            def: InstanceKind::Intrinsic(find_local_body(tcx, "entry").to_def_id()),
+            args: GenericArgs::empty(),
+        });
+        let unsupported_instance = expansion_for_target(
+            tcx,
+            unsupported_root,
+            ReachabilityOptions {
+                artifact_scope: ArtifactScope::RootArtifact,
+                ..ReachabilityOptions::default()
+            },
+            "entry",
+        );
+        self.result = Some(LocalExpansionResult {
+            leaf_expansion,
+            leaf_outgoing_edges,
+            leaf_is_frontier,
+            hook_boundary,
+            node_limit,
+            unsupported_instance,
+        });
+        Compilation::Stop
+    }
+}
+
+struct RejectLeafHooks;
+
+impl<'tcx> ReachabilityHooks<'tcx> for RejectLeafHooks {
+    fn should_descend(
+        &mut self,
+        cx: ReachabilityContext<'tcx>,
+        _edge: &ReachabilityEdge,
+        target: rustc_middle::ty::Instance<'tcx>,
+    ) -> ReachabilityControl<'tcx, bool> {
+        ControlFlow::Continue(!cx.tcx.def_path_str(target.def_id()).ends_with("leaf"))
+    }
 }
 
 struct DumpCallbacks {

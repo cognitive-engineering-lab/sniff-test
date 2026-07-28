@@ -14,7 +14,8 @@
 //! [`ReachabilityIndex::query`] for each root. The index stores root-independent
 //! graph facts and caches expanded outgoing edges per instance. A
 //! [`ReachabilitySnapshot`] is the per-root BFS result: it records reached nodes,
-//! reached edges, depths, predecessor edges, and halt reason for one query.
+//! reached edges, depths, predecessor edges, per-instance expansion outcomes,
+//! and the halt reason for one query.
 //!
 //! Use [`ReachabilityRoot::Instance`] when the caller already has a
 //! monomorphized instance, or [`ReachabilityRoot::LocalBody`] to walk a local
@@ -22,7 +23,9 @@
 //! arguments; unresolved trait-dispatched calls are recorded as indirect
 //! boundaries instead of guessed implementations. [`ReachabilityHooks`] can
 //! observe nodes/edges, stop traversal, or prevent descending into selected
-//! callees.
+//! callees. [`ReachabilityOptions::artifact_scope`] can limit body expansion to
+//! the crate containing the query root while retaining cross-artifact calls as
+//! explicit frontier nodes.
 //!
 //! # Provenance
 //!
@@ -47,14 +50,14 @@ mod graph;
 mod hooks;
 
 pub use analysis::{
-    DynDispatchVTableEdges, FnPointerEdges, IntoInstance, ReachabilityIndex, ReachabilityOptions,
-    ReachabilityRoot,
+    ArtifactScope, DynDispatchVTableEdges, FnPointerEdges, IntoInstance, ReachabilityIndex,
+    ReachabilityOptions, ReachabilityRoot,
 };
 pub use graph::{
     CallableEdgeInfo, CompilerAssertLocal, CompilerAssertLocalRole, ReachabilityEdge,
     ReachabilityEdgeId, ReachabilityEdgeKind, ReachabilityGraph, ReachabilityNode,
-    ReachabilityNodeId, ReachabilityNodeKind, ReachabilitySnapshot, ReachabilityView, ReachedEdge,
-    ReachedNode,
+    ReachabilityNodeExpansion, ReachabilityNodeId, ReachabilityNodeKind, ReachabilitySnapshot,
+    ReachabilityView, ReachedEdge, ReachedNode,
 };
 pub use hooks::{
     NoopReachabilityHooks, ReachabilityContext, ReachabilityControl, ReachabilityHalt,

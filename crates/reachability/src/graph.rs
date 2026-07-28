@@ -219,6 +219,14 @@ impl<'view, 'tcx> ReachabilityView<'view, 'tcx> {
             .map(move |id| self.reached_node(id))
     }
 
+    /// Returns reached function nodes whose bodies were not expanded.
+    pub fn frontier(self) -> impl Iterator<Item = ReachedNode<'view, 'tcx>> + 'view {
+        self.nodes().filter(|node| {
+            node.expansion()
+                .is_some_and(|expansion| expansion != ReachabilityNodeExpansion::Expanded)
+        })
+    }
+
     /// Returns accepted edges in traversal order.
     pub fn edges(self) -> impl Iterator<Item = ReachedEdge<'view, 'tcx>> + 'view {
         self.snapshot
@@ -319,6 +327,14 @@ impl<'view, 'tcx> ReachedNode<'view, 'tcx> {
             | ReachabilityNodeKind::DynObjectCast { .. }
             | ReachabilityNodeKind::MacroExpansion { .. } => None,
         }
+    }
+
+    #[must_use]
+    /// Returns how this query handled the function body represented by this
+    /// node, or `None` for non-function graph nodes.
+    pub fn expansion(self) -> Option<ReachabilityNodeExpansion> {
+        self.instance()?;
+        self.snapshot.expansion(self.id)
     }
 
     #[must_use]
@@ -426,6 +442,7 @@ pub struct ReachabilitySnapshot<'tcx> {
     reached_edges: Vec<bool>,
     depths: Vec<Option<usize>>,
     predecessor_edges: Vec<Option<ReachabilityEdgeId>>,
+    expansions: Vec<Option<ReachabilityNodeExpansion>>,
     halt: Option<ReachabilityHalt<'tcx>>,
 }
 
@@ -438,6 +455,7 @@ impl<'tcx> ReachabilitySnapshot<'tcx> {
             reached_edges: vec![false; graph_edge_count],
             depths: vec![None; graph_node_count],
             predecessor_edges: vec![None; graph_node_count],
+            expansions: vec![None; graph_node_count],
             halt: None,
         };
         snapshot.record_node(root, 0, None);
@@ -456,6 +474,10 @@ impl<'tcx> ReachabilitySnapshot<'tcx> {
         self.predecessor_edges.get(node.index()).copied().flatten()
     }
 
+    fn expansion(&self, node: ReachabilityNodeId) -> Option<ReachabilityNodeExpansion> {
+        self.expansions.get(node.index()).copied().flatten()
+    }
+
     fn contains_edge(&self, edge: ReachabilityEdgeId) -> bool {
         self.reached_edges
             .get(edge.index())
@@ -469,6 +491,18 @@ impl<'tcx> ReachabilitySnapshot<'tcx> {
 
     pub(crate) fn mark_halted(&mut self, halt: ReachabilityHalt<'tcx>) {
         self.halt = Some(halt);
+    }
+
+    pub(crate) fn record_expansion(
+        &mut self,
+        node: ReachabilityNodeId,
+        expansion: ReachabilityNodeExpansion,
+    ) {
+        self.ensure_node_capacity(node);
+        let current = &mut self.expansions[node.index()];
+        if current.is_none() || expansion == ReachabilityNodeExpansion::Expanded {
+            *current = Some(expansion);
+        }
     }
 
     pub(crate) fn record_edge(
@@ -507,6 +541,7 @@ impl<'tcx> ReachabilitySnapshot<'tcx> {
         if self.depths.len() < len {
             self.depths.resize(len, None);
             self.predecessor_edges.resize(len, None);
+            self.expansions.resize(len, None);
         }
     }
 
@@ -516,6 +551,24 @@ impl<'tcx> ReachabilitySnapshot<'tcx> {
             self.reached_edges.resize(len, false);
         }
     }
+}
+
+/// Per-query expansion outcome for one reached function instance.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ReachabilityNodeExpansion {
+    /// The instance body was expanded, including when it produced no edges.
+    Expanded,
+    /// Artifact-scoped traversal stopped at a call into another crate.
+    DifferentArtifact,
+    /// A query hook deliberately prevented descent through the incoming edge.
+    PolicyBoundary,
+    /// Rustc did not expose MIR for this item in the current compiler session.
+    MirUnavailable,
+    /// The instance kind has no body this analyzer can expand.
+    UnsupportedInstance,
+    /// The global query node limit stopped traversal before this reached
+    /// instance could be visited.
+    NodeLimit,
 }
 
 /// Stable node handle inside a [`ReachabilityGraph`].
