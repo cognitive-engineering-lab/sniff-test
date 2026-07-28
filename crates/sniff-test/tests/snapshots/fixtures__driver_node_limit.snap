@@ -11,8 +11,7 @@ expression: messages
     "dependencies": [],
     "findings": [
       {
-        "effect": "safety",
-        "kind": "analysis-incomplete",
+        "kind": "safety-analysis-incomplete",
         "level": "deny",
         "reason": "reachability analysis halted at the 4-instance node limit before the call graph was exhausted",
         "root": "node_limit::deep_chain",
@@ -20,8 +19,7 @@ expression: messages
         "span": "[FIXTURE]/src/lib.rs:24:1: 24:30"
       },
       {
-        "effect": "panic",
-        "kind": "analysis-incomplete",
+        "kind": "panic-analysis-incomplete",
         "level": "deny",
         "reason": "reachability analysis halted at the 4-instance node limit before the call graph was exhausted",
         "root": "node_limit::deep_chain",
@@ -29,7 +27,7 @@ expression: messages
         "span": "[FIXTURE]/src/lib.rs:24:1: 24:30"
       }
     ],
-    "format-version": 8,
+    "format-version": 9,
     "reason": "sniff-test-artifact",
     "rustc-version": "[RUSTC_VERSION]",
     "scope": "workspace",

@@ -1,7 +1,8 @@
 use std::path::Path;
 
 use crate::cache::{CachedFinding, CachedFindingKind, CachedFunctionSummary, CachedSourceSpan};
-use crate::config::{ContractDocOverrides, LintLevel, ReportRootSet};
+use crate::config::{LintLevel, ReportRootSet};
+use crate::contracts::ContractDocOverrides;
 use crate::namespace::canonical_namespace;
 use crate::panics::{
     AmbiguousPanicMarker, AmbiguousPanicRequirementName, PanicEvidence, PanicEvidenceKind,
@@ -16,7 +17,9 @@ use rustc_middle::ty::TyCtxt;
 use rustc_span::{BytePos, SourceFile, Span};
 
 use super::findings::{DiagnosticMessage, FindingDiagnostic};
-use super::report::{render_assert_message, render_edge_without_span, render_node};
+use super::report::{
+    render_assert_message, render_cached_trace, render_edge_without_span, render_node,
+};
 
 #[derive(Debug, Clone, Copy)]
 pub(super) struct PanicContractDiagnostic {
@@ -32,6 +35,13 @@ pub(super) struct CachedDependencyContractDiagnostic {
     pub(super) edge_id: ReachabilityEdgeId,
     pub(super) root_def_id: DefId,
     pub(super) trusted: bool,
+    pub(super) include_stack: bool,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub(super) struct CachedDependencyRawPanicDiagnostic {
+    pub(super) edge_id: ReachabilityEdgeId,
+    pub(super) root_def_id: DefId,
     pub(super) include_stack: bool,
 }
 
@@ -374,21 +384,32 @@ fn decorate_cached_dependency_contract_diagnostic<'tcx>(
     tcx: TyCtxt<'tcx>,
     graph: &ReachabilityGraph<'tcx>,
     summary: &CachedFunctionSummary,
-    panic_kind: &str,
+    cached_finding: Option<&CachedFinding>,
     local_trace: &[ReachabilityEdgeId],
     diagnostic: &CachedDependencyContractDiagnostic,
 ) {
+    let panic_kind = if diagnostic.trusted {
+        "trusted panic"
+    } else {
+        "documented panic"
+    };
     diag.note(format!(
         "`{}` has cached {panic_kind} evidence",
         summary.path
     ));
     add_trace_notes(diag, tcx, graph, local_trace, diagnostic.include_stack);
-    add_cached_trace_notes(diag, summary, diagnostic.include_stack, |kind| {
-        matches!(
-            kind,
-            CachedFindingKind::PanicObligation | CachedFindingKind::TrustedPanicObligation
-        )
-    });
+    add_cached_trace_notes(
+        diag,
+        summary,
+        cached_finding,
+        diagnostic.include_stack,
+        |kind| {
+            matches!(
+                kind,
+                CachedFindingKind::PanicObligation | CachedFindingKind::TrustedPanicObligation
+            )
+        },
+    );
     diag.span_help(
         graph.edge(diagnostic.edge_id).span,
         "add `// PANIC:` directly above this call explaining why the dependency's documented panic conditions cannot occur",
@@ -404,24 +425,30 @@ fn decorate_cached_dependency_raw_panic_diagnostic<'tcx>(
     diag: &mut dyn LintDiag,
     tcx: TyCtxt<'tcx>,
     graph: &ReachabilityGraph<'tcx>,
-    edge_id: ReachabilityEdgeId,
     local_trace: &[ReachabilityEdgeId],
     summary: &CachedFunctionSummary,
-    include_stack: bool,
+    cached_finding: Option<&CachedFinding>,
+    diagnostic: CachedDependencyRawPanicDiagnostic,
 ) {
-    diag.note(summary.panic_reason());
-    add_cached_dependency_panic_site_notes(diag, tcx, summary);
-    add_trace_notes(diag, tcx, graph, local_trace, include_stack);
-    add_cached_trace_notes(diag, summary, include_stack, |kind| {
-        matches!(
-            kind,
-            CachedFindingKind::CompilerAssert
-                | CachedFindingKind::PanicInvocation
-                | CachedFindingKind::IndirectCallBoundary
-        )
-    });
+    diag.note(summary.panic_reason(cached_finding));
+    add_cached_dependency_panic_site_notes(diag, tcx, summary, cached_finding);
+    add_trace_notes(diag, tcx, graph, local_trace, diagnostic.include_stack);
+    add_cached_trace_notes(
+        diag,
+        summary,
+        cached_finding,
+        diagnostic.include_stack,
+        |kind| {
+            matches!(
+                kind,
+                CachedFindingKind::CompilerAssert
+                    | CachedFindingKind::PanicInvocation
+                    | CachedFindingKind::IndirectCallBoundary
+            )
+        },
+    );
     diag.span_help(
-        graph.edge(edge_id).span,
+        graph.edge(diagnostic.edge_id).span,
         "guard this path, or add `// PANIC:` here if a local invariant proves it cannot panic",
     );
     diag.help(
@@ -432,38 +459,48 @@ fn decorate_cached_dependency_raw_panic_diagnostic<'tcx>(
 fn add_cached_trace_notes(
     diag: &mut dyn LintDiag,
     summary: &CachedFunctionSummary,
+    cached_finding: Option<&CachedFinding>,
     include_stack: bool,
     include: impl Fn(CachedFindingKind) -> bool,
 ) {
     if !include_stack {
         return;
     }
-    let Some(panic) = summary.effect(crate::contracts::EffectKind::Panic) else {
-        return;
-    };
-    for finding in panic
-        .findings
-        .iter()
-        .filter(|finding| include(finding.kind))
+    for finding in cached_findings_for_diagnostic(&summary.panic.findings, cached_finding, include)
     {
-        for edge in summary.render_effect_trace(crate::contracts::EffectKind::Panic, finding) {
+        for edge in render_cached_trace(&summary.panic, finding) {
             diag.note(format!("cached trace: {edge}"));
         }
     }
+}
+
+fn cached_findings_for_diagnostic<'a>(
+    findings: &'a [CachedFinding],
+    selected: Option<&'a CachedFinding>,
+    include: impl Fn(CachedFindingKind) -> bool,
+) -> Vec<&'a CachedFinding> {
+    if let Some(selected) = selected {
+        return include(selected.kind)
+            .then_some(selected)
+            .into_iter()
+            .collect();
+    }
+    findings
+        .iter()
+        .filter(|finding| include(finding.kind))
+        .collect()
 }
 
 fn add_cached_dependency_panic_site_notes(
     diag: &mut dyn LintDiag,
     tcx: TyCtxt<'_>,
     summary: &CachedFunctionSummary,
+    cached_finding: Option<&CachedFinding>,
 ) {
     let mut notes = 0;
-    let Some(panic) = summary.effect(crate::contracts::EffectKind::Panic) else {
-        return;
-    };
-    for finding in panic.findings.iter().filter(|finding| {
+    for finding in cached_findings_for_diagnostic(&summary.panic.findings, cached_finding, |kind| {
         matches!(
-            finding.kind,
+            kind,
             CachedFindingKind::CompilerAssert
                 | CachedFindingKind::PanicInvocation
                 | CachedFindingKind::IndirectCallBoundary
@@ -487,7 +524,7 @@ fn add_cached_dependency_panic_site_notes(
         notes += 1;
     }
 
-    if notes == 0 && !panic.analysis_complete {
+    if notes == 0 && !summary.panic.analysis_complete {
         diag.note(String::from(
             "dependency analysis was incomplete, so no concrete cached panic site is available",
         ));
@@ -559,6 +596,7 @@ pub(super) fn cached_dependency_contract_diagnostic<'tcx>(
     tcx: TyCtxt<'tcx>,
     graph: &ReachabilityGraph<'tcx>,
     summary: &CachedFunctionSummary,
+    cached_finding: Option<&CachedFinding>,
     local_trace: &[ReachabilityEdgeId],
     diagnostic: CachedDependencyContractDiagnostic,
 ) -> FindingDiagnostic {
@@ -582,7 +620,7 @@ pub(super) fn cached_dependency_contract_diagnostic<'tcx>(
             tcx,
             graph,
             summary,
-            panic_kind,
+            cached_finding,
             local_trace,
             &diagnostic,
         );
@@ -592,26 +630,29 @@ pub(super) fn cached_dependency_contract_diagnostic<'tcx>(
 pub(super) fn cached_dependency_raw_panic_diagnostic<'tcx>(
     tcx: TyCtxt<'tcx>,
     graph: &ReachabilityGraph<'tcx>,
-    edge_id: ReachabilityEdgeId,
     local_trace: &[ReachabilityEdgeId],
     summary: &CachedFunctionSummary,
-    root_def_id: DefId,
-    include_stack: bool,
+    cached_finding: Option<&CachedFinding>,
+    diagnostic: CachedDependencyRawPanicDiagnostic,
 ) -> FindingDiagnostic {
-    let root = canonical_namespace(tcx, root_def_id);
+    let root = canonical_namespace(tcx, diagnostic.root_def_id);
     let message =
         format!("function `{root}` reaches cached undocumented panic evidence from a dependency");
-    finding_diagnostic(Some(tcx.def_span(root_def_id)), message, |diag| {
-        decorate_cached_dependency_raw_panic_diagnostic(
-            diag,
-            tcx,
-            graph,
-            edge_id,
-            local_trace,
-            summary,
-            include_stack,
-        );
-    })
+    finding_diagnostic(
+        Some(tcx.def_span(diagnostic.root_def_id)),
+        message,
+        |diag| {
+            decorate_cached_dependency_raw_panic_diagnostic(
+                diag,
+                tcx,
+                graph,
+                local_trace,
+                summary,
+                cached_finding,
+                diagnostic,
+            );
+        },
+    )
 }
 
 pub(super) fn safety_finding_diagnostic(
@@ -966,12 +1007,55 @@ fn render_trace_endpoint<'tcx>(tcx: TyCtxt<'tcx>, node: &ReachabilityNodeKind<'t
 
 #[cfg(test)]
 mod tests {
-    use crate::cache::CachedSourceSpan;
+    use crate::cache::{CachedFinding, CachedFindingKind, CachedSourceSpan};
 
     use rustc_span::source_map::{FilePathMapping, SourceMap};
     use rustc_span::{BytePos, FileName};
 
-    use super::{cached_source_span_in_file, config_span};
+    use super::{cached_findings_for_diagnostic, cached_source_span_in_file, config_span};
+
+    fn cached_finding(kind: CachedFindingKind, reason: &str) -> CachedFinding {
+        CachedFinding {
+            kind,
+            span: String::new(),
+            source_span: None,
+            diagnostic_spans: Vec::new(),
+            edge_index: None,
+            trace: Vec::new(),
+            dependency_trace: Vec::new(),
+            reason: reason.to_owned(),
+            missing_requirements: Vec::new(),
+            target: None,
+        }
+    }
+
+    #[test]
+    fn selected_cached_finding_scopes_diagnostic_evidence() {
+        let findings = vec![
+            cached_finding(CachedFindingKind::PanicInvocation, "first"),
+            cached_finding(CachedFindingKind::PanicInvocation, "second"),
+        ];
+        let selected = cached_finding(CachedFindingKind::PanicInvocation, "selected");
+
+        let scoped =
+            cached_findings_for_diagnostic(&findings, Some(&selected), CachedFindingKind::is_panic);
+        assert_eq!(
+            scoped
+                .iter()
+                .map(|finding| finding.reason.as_str())
+                .collect::<Vec<_>>(),
+            ["selected"]
+        );
+
+        let fallback = cached_findings_for_diagnostic(&findings, None, CachedFindingKind::is_panic);
+        assert_eq!(
+            fallback
+                .iter()
+                .map(|finding| finding.reason.as_str())
+                .collect::<Vec<_>>(),
+            ["first", "second"]
+        );
+    }
 
     fn with_source_file(source: &str, check: impl FnOnce(&rustc_span::SourceFile)) {
         rustc_span::create_default_session_globals_then(|| {

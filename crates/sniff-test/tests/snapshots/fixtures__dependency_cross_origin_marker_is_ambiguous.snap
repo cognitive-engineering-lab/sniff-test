@@ -1,0 +1,50 @@
+---
+source: crates/sniff-test/tests/fixtures.rs
+expression: messages
+---
+[
+  {
+    "artifact": {
+      "artifact-id": "[ARTIFACT_ID]",
+      "crate-name": "dependency_cross_origin_ambiguity"
+    },
+    "dependencies": [],
+    "findings": [],
+    "format-version": 9,
+    "reason": "sniff-test-artifact",
+    "rustc-version": "[RUSTC_VERSION]",
+    "scope": "dependency",
+    "tool-version": "0.1.0"
+  },
+  {
+    "artifact": {
+      "artifact-id": "[ARTIFACT_ID]",
+      "crate-name": "dependency_cross_origin_ambiguity_app"
+    },
+    "dependencies": [
+      {
+        "artifact-id": "[ARTIFACT_ID]",
+        "extern-name": "dependency_cross_origin_ambiguity"
+      }
+    ],
+    "findings": [
+      {
+        "kind": "ambiguous-panic-marker",
+        "level": "deny",
+        "reason": "one `// PANIC:` marker applies to 2 panic obligation sites",
+        "root": "dependency_cross_origin_ambiguity_app::mixed_sources_share_one_marker",
+        "root-kind": "concrete",
+        "span": "src/lib.rs:2:1: 3:1",
+        "trace": [
+          "src/lib.rs:4:9: 4:58: dependency_cross_origin_ambiguity_app::mixed_sources_share_one_marker --direct-call-> dependency_cross_origin_ambiguity::cached_panic",
+          "[SYSROOT]/lib/rustlib/src/rust/library/core/src/panic.rs:62:9: 62:73: macro core::std::panic::panic_2021 --direct-call-> core::std::rt::panic_fmt"
+        ]
+      }
+    ],
+    "format-version": 9,
+    "reason": "sniff-test-artifact",
+    "rustc-version": "[RUSTC_VERSION]",
+    "scope": "workspace",
+    "tool-version": "0.1.0"
+  }
+]

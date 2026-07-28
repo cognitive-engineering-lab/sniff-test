@@ -2,8 +2,8 @@
 //!
 //! This crate builds shared graph facts for functions and compiler artifacts
 //! that are reachable in MIR/HIR. It records normal calls, tail calls,
-//! function-pointer reification, closure definitions, dynamic object unsizing,
-//! vtable entries, const bodies, compiler assertions, and indirect calls.
+//! function-pointer reification, dynamic object unsizing, vtable entries, const
+//! bodies, compiler assertions, and indirect calls.
 //!
 //! The analysis is structural. It does not evaluate branch conditions or prove
 //! that an edge is taken at runtime. A reported edge means the target is present

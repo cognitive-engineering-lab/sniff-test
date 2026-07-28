@@ -14,7 +14,7 @@ error: function `dependency_identity_app::run_reexported` reaches cached undocum
 11 | pub fn run_reexported(flag: bool) {
    | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
    |
-   = note: dependency_identity::internal::run has cached panic evidence: 1 undocumented panic path
+   = note: dependency_identity::internal::run has cached panic evidence: panic sink core::std::rt::panic_fmt
 note: cached dependency panic evidence was recorded here: panic sink core::std::rt::panic_fmt
   --> [FIXTURE]/dep/src/lib.rs:25:9
    |
@@ -33,7 +33,7 @@ error: function `dependency_identity_app::sniff_buffer` reaches cached undocumen
  7 | pub fn sniff_buffer(buffer: &Vec<u8>, flag: bool) {
    | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
    |
-   = note: <dependency_identity::std::vec::Vec<u8> as Sniffer>::sniff has cached panic evidence: 1 undocumented panic path
+   = note: <dependency_identity::std::vec::Vec<u8> as Sniffer>::sniff has cached panic evidence: panic sink core::std::rt::panic_fmt
 note: cached dependency panic evidence was recorded here: panic sink core::std::rt::panic_fmt
   --> [FIXTURE]/dep/src/lib.rs:19:9
    |
@@ -52,7 +52,7 @@ error: function `dependency_identity_app::sniff_dyn` reaches cached undocumented
 15 | pub fn sniff_dyn(flag: bool) {
    | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
    |
-   = note: <dependency_identity::Widget as Sniffer>::sniff has cached panic evidence: 1 undocumented panic path
+   = note: <dependency_identity::Widget as Sniffer>::sniff has cached panic evidence: panic sink core::std::rt::panic_fmt
 note: cached dependency panic evidence was recorded here: panic sink core::std::rt::panic_fmt
   --> [FIXTURE]/dep/src/lib.rs:13:9
    |
@@ -71,7 +71,7 @@ error: function `dependency_identity_app::sniff_widget` reaches cached undocumen
  3 | pub fn sniff_widget(flag: bool) {
    | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
    |
-   = note: <dependency_identity::Widget as Sniffer>::sniff has cached panic evidence: 1 undocumented panic path
+   = note: <dependency_identity::Widget as Sniffer>::sniff has cached panic evidence: panic sink core::std::rt::panic_fmt
 note: cached dependency panic evidence was recorded here: panic sink core::std::rt::panic_fmt
   --> [FIXTURE]/dep/src/lib.rs:13:9
    |

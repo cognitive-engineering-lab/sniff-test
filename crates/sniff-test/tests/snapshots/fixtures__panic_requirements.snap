@@ -11,7 +11,6 @@ expression: messages
     "dependencies": [],
     "findings": [
       {
-        "effect": "panic",
         "kind": "documented-panic",
         "level": "warn",
         "missing-requirements": [
@@ -29,7 +28,6 @@ expression: messages
         ]
       },
       {
-        "effect": "panic",
         "kind": "documented-panic",
         "level": "warn",
         "missing-requirements": [
@@ -47,7 +45,6 @@ expression: messages
         ]
       },
       {
-        "effect": "panic",
         "kind": "documented-panic",
         "level": "warn",
         "missing-requirements": [
@@ -63,7 +60,6 @@ expression: messages
         ]
       },
       {
-        "effect": "panic",
         "kind": "documented-panic",
         "level": "warn",
         "missing-requirements": [
@@ -81,7 +77,6 @@ expression: messages
         ]
       },
       {
-        "effect": "panic",
         "kind": "documented-panic",
         "level": "warn",
         "missing-requirements": [
@@ -98,7 +93,6 @@ expression: messages
         ]
       },
       {
-        "effect": "panic",
         "kind": "documented-panic",
         "level": "warn",
         "missing-requirements": [
@@ -116,7 +110,6 @@ expression: messages
         ]
       },
       {
-        "effect": "panic",
         "kind": "documented-panic",
         "level": "warn",
         "missing-requirements": [
@@ -135,7 +128,6 @@ expression: messages
         ]
       },
       {
-        "effect": "panic",
         "kind": "documented-panic",
         "level": "warn",
         "missing-requirements": [
@@ -153,7 +145,7 @@ expression: messages
         ]
       }
     ],
-    "format-version": 8,
+    "format-version": 9,
     "reason": "sniff-test-artifact",
     "rustc-version": "[RUSTC_VERSION]",
     "scope": "workspace",

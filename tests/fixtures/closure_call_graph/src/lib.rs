@@ -51,3 +51,9 @@ fn calls_dyn_box(function: Box<dyn Fn() -> i32>) -> i32 {
 fn calls_deref_fn(function: impl std::ops::Deref<Target = impl Fn() -> i32>) -> i32 {
     function()
 }
+
+pub fn marked_fn_pointer_call() {
+    let panic: fn() = || panic!("marked function pointer");
+    // PANIC: the caller accepts the resolved function-pointer target.
+    panic();
+}

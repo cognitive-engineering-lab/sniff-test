@@ -386,7 +386,6 @@ fn cached_reachability_edge_kind(kind: ReachabilityEdgeKind) -> CachedReachabili
         ReachabilityEdgeKind::ClosureFnPointerReify => {
             CachedReachabilityEdgeKind::ClosureFnPointerReify
         }
-        ReachabilityEdgeKind::ClosureDefinition => CachedReachabilityEdgeKind::ClosureDefinition,
         ReachabilityEdgeKind::FnPointerCallTarget => {
             CachedReachabilityEdgeKind::FnPointerCallTarget
         }

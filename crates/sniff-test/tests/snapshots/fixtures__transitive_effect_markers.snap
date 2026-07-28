@@ -11,9 +11,8 @@ expression: messages
     "dependencies": [],
     "findings": [
       {
-        "effect": "safety",
         "function": "transitive_effect_markers::justified_safety_path",
-        "kind": "ambiguous-effect-marker",
+        "kind": "ambiguous-safety-marker",
         "level": "deny",
         "reason": "one `// SAFETY:` marker applies to 2 safety effect groups",
         "root": "transitive_effect_markers::justified_safety_path",
@@ -21,7 +20,7 @@ expression: messages
         "span": "src/lib.rs:17:1: 18:1"
       }
     ],
-    "format-version": 8,
+    "format-version": 9,
     "reason": "sniff-test-artifact",
     "rustc-version": "[RUSTC_VERSION]",
     "scope": "workspace",

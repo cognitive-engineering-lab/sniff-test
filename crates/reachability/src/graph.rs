@@ -15,10 +15,15 @@ use crate::hooks::{ReachabilityHalt, ReachabilityQueryStats};
 /// depth, predecessor edges, and halting reason lives in [`ReachabilitySnapshot`].
 pub struct ReachabilityGraph<'tcx> {
     nodes: Vec<ReachabilityNode<'tcx>>,
-    edges: Vec<ReachabilityEdge>,
-    edge_callables: Vec<Option<CallableEdgeInfo<'tcx>>>,
+    edges: Vec<StoredEdge<'tcx>>,
     outgoing: Vec<Vec<ReachabilityEdgeId>>,
     instance_nodes: HashMap<Instance<'tcx>, ReachabilityNodeId>,
+}
+
+struct StoredEdge<'tcx> {
+    edge: ReachabilityEdge,
+    callable: Option<CallableEdgeInfo<'tcx>>,
+    parent: Option<ReachabilityEdgeId>,
 }
 
 impl<'tcx> ReachabilityGraph<'tcx> {
@@ -26,7 +31,6 @@ impl<'tcx> ReachabilityGraph<'tcx> {
         Self {
             nodes: Vec::new(),
             edges: Vec::new(),
-            edge_callables: Vec::new(),
             outgoing: Vec::new(),
             instance_nodes: HashMap::new(),
         }
@@ -51,8 +55,8 @@ impl<'tcx> ReachabilityGraph<'tcx> {
     /// [`view`](Self::view) when inspecting one query's accepted edges.
     ///
     /// Edges reference their source and target nodes by [`ReachabilityNodeId`].
-    pub fn edges(&self) -> &[ReachabilityEdge] {
-        &self.edges
+    pub fn edges(&self) -> impl ExactSizeIterator<Item = &ReachabilityEdge> + DoubleEndedIterator {
+        self.edges.iter().map(|stored| &stored.edge)
     }
 
     #[must_use]
@@ -83,13 +87,18 @@ impl<'tcx> ReachabilityGraph<'tcx> {
     /// Prefer [`ReachabilityView::edges`] or [`ReachedNode::predecessor_edge`]
     /// when inspecting one query's reached subgraph.
     pub fn edge(&self, edge: ReachabilityEdgeId) -> &ReachabilityEdge {
-        &self.edges[edge.index()]
+        &self.edges[edge.index()].edge
     }
 
     #[must_use]
     /// Returns erased-callable metadata attached to an edge, if any.
     pub fn edge_callable(&self, edge: ReachabilityEdgeId) -> Option<CallableEdgeInfo<'tcx>> {
-        self.edge_callables[edge.index()]
+        self.edges[edge.index()].callable
+    }
+
+    #[must_use]
+    pub(crate) fn edge_parent(&self, edge: ReachabilityEdgeId) -> Option<ReachabilityEdgeId> {
+        self.edges[edge.index()].parent
     }
 
     #[must_use]
@@ -141,10 +150,31 @@ impl<'tcx> ReachabilityGraph<'tcx> {
         edge: ReachabilityEdge,
         callable: Option<CallableEdgeInfo<'tcx>>,
     ) -> ReachabilityEdgeId {
+        self.push_stored_edge(edge, callable, None)
+    }
+
+    pub(crate) fn push_callable_target_edge(
+        &mut self,
+        edge: ReachabilityEdge,
+        callable: Option<CallableEdgeInfo<'tcx>>,
+        parent: ReachabilityEdgeId,
+    ) -> ReachabilityEdgeId {
+        self.push_stored_edge(edge, callable, Some(parent))
+    }
+
+    fn push_stored_edge(
+        &mut self,
+        edge: ReachabilityEdge,
+        callable: Option<CallableEdgeInfo<'tcx>>,
+        parent: Option<ReachabilityEdgeId>,
+    ) -> ReachabilityEdgeId {
         let id = ReachabilityEdgeId(self.edges.len());
         self.outgoing[edge.source.index()].push(id);
-        self.edges.push(edge);
-        self.edge_callables.push(callable);
+        self.edges.push(StoredEdge {
+            edge,
+            callable,
+            parent,
+        });
         id
     }
 
@@ -639,11 +669,6 @@ pub enum ReachabilityEdgeKind {
     /// This is not a runtime call. It records that the closure value escaped as
     /// a callable pointer.
     ClosureFnPointerReify,
-    /// Closure value construction, if an analysis chooses to record it.
-    ///
-    /// This is not a runtime call; constructing a closure value does not by
-    /// itself make the closure body executable.
-    ClosureDefinition,
     /// Concrete callable target reached from a function-pointer call site.
     FnPointerCallTarget,
     /// Dynamic object unsizing, such as `&T` to `&dyn Trait`.
@@ -670,7 +695,6 @@ impl fmt::Display for ReachabilityEdgeKind {
             Self::TailCall => "tail-call",
             Self::FnPointerReify => "fn-pointer-reify",
             Self::ClosureFnPointerReify => "closure-fn-pointer-reify",
-            Self::ClosureDefinition => "closure-definition",
             Self::FnPointerCallTarget => "fn-pointer-call-target",
             Self::DynObjectCast => "dyn-object-cast",
             Self::VTableEntry => "vtable-entry",
@@ -690,7 +714,8 @@ mod tests {
     use rustc_span::DUMMY_SP;
 
     use super::{
-        ReachabilityEdge, ReachabilityEdgeKind, ReachabilityGraph, ReachedEdge, ReachedNode,
+        CallableEdgeInfo, ReachabilityEdge, ReachabilityEdgeKind, ReachabilityGraph, ReachedEdge,
+        ReachedNode,
     };
     use crate::hooks::ReachabilityHalt;
 
@@ -708,14 +733,32 @@ mod tests {
 
         let root_node = graph.node_for_instance(root);
         let child = graph.node_for_instance(root);
-        let edge = graph.push_edge(ReachabilityEdge::new(
-            root_node,
-            child,
-            root_node,
-            ReachabilityEdgeKind::ConstBody,
-            DUMMY_SP,
-            None,
-        ));
+        let callable = CallableEdgeInfo::DynDispatch {
+            trait_def_id: CRATE_DEF_ID.to_def_id(),
+        };
+        let edge = graph.push_edge_with_callable(
+            ReachabilityEdge::new(
+                root_node,
+                child,
+                root_node,
+                ReachabilityEdgeKind::ConstBody,
+                DUMMY_SP,
+                None,
+            ),
+            Some(callable),
+        );
+        let derived = graph.push_callable_target_edge(
+            ReachabilityEdge::new(
+                root_node,
+                child,
+                root_node,
+                ReachabilityEdgeKind::FnPointerCallTarget,
+                DUMMY_SP,
+                None,
+            ),
+            Some(callable),
+            edge,
+        );
         let mut snapshot = graph.snapshot_for_root(root_node);
         snapshot.record_edge(edge, child, 1);
         snapshot.mark_halted(ReachabilityHalt::NodeLimitReached { limit: 1 });
@@ -723,7 +766,10 @@ mod tests {
 
         assert_eq!(view.root().id(), root_node);
         assert_eq!(graph.nodes().len(), 1);
-        assert_eq!(graph.edges().len(), 1);
+        assert_eq!(graph.edges().len(), 2);
+        assert_eq!(graph.edge_callable(edge), Some(callable));
+        assert_eq!(graph.edge_parent(edge), None);
+        assert_eq!(graph.edge_parent(derived), Some(edge));
         assert_eq!(view.nodes().count(), 1);
         assert_eq!(
             view.edges().map(ReachedEdge::id).collect::<Vec<_>>(),

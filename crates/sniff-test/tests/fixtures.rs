@@ -205,6 +205,12 @@ fixture_cases! {
             .args(&["--manifest", "ambiguous-marker.toml"])
             .exit_code(1);
     }
+    "dependency_safety_partial_requirements" => {
+        dependency_safety_partial_requirements =>
+            Case::cargo("cached safety markers satisfy only named requirements they claim")
+                .crate_dir("app")
+                .exit_code(1);
+    }
     "partial_effect_requirements" => {
         partial_effect_requirements => Case::cargo("partial cached requirement propagation")
             .crate_dir("app")
@@ -234,10 +240,22 @@ fixture_cases! {
             Case::cargo("incomplete panic cache stops at documented boundaries")
                 .crate_dir("app");
     }
+    "dependency_panic_incomplete_resolved" => {
+        dependency_panic_incomplete_resolved =>
+            Case::cargo("resolved cached panics do not hide incomplete dependency analysis")
+                .crate_dir("app")
+                .exit_code(1);
+    }
     "dependency_mixed_panic" => {
         dependency_mixed_panic => Case::cargo("cached raw and trusted panic evidence coexist")
             .crate_dir("app")
             .exit_code(1);
+    }
+    "dependency_cross_origin_ambiguity" => {
+        dependency_cross_origin_marker_is_ambiguous =>
+            Case::cargo("one marker cannot justify local and cached dependency effects")
+                .crate_dir("app")
+                .exit_code(1);
     }
     "dependency_panic_contract" => {
         dependency_panic_contract => Case::cargo("cached panic marker contracts")
@@ -622,7 +640,7 @@ fn parse_messages(
                 )
             });
             normalize_json(&mut value, root, sysroot.trim());
-            assert_finding_effects(&value);
+            assert_finding_discriminators(&value);
             value
         })
         .collect::<Vec<_>>();
@@ -639,7 +657,7 @@ fn parse_messages(
     messages
 }
 
-fn assert_finding_effects(report: &Value) {
+fn assert_finding_discriminators(report: &Value) {
     let Some(findings) = report.get("findings").and_then(Value::as_array) else {
         return;
     };
@@ -647,12 +665,19 @@ fn assert_finding_effects(report: &Value) {
         let kind = finding["kind"]
             .as_str()
             .expect("finding kind should be a string");
-        if !matches!(kind, "empty-report-roots" | "missing-report-root") {
-            assert!(
-                matches!(finding["effect"].as_str(), Some("panic" | "safety")),
-                "effect finding `{kind}` should identify its effect: {finding}"
-            );
-        }
+        assert!(
+            finding.get("effect").is_none(),
+            "finding `{kind}` should be discriminated by kind, not a redundant effect field: \
+             {finding}"
+        );
+        assert!(
+            !matches!(
+                kind,
+                "ambiguous-effect-marker" | "ambiguous-effect-requirement" | "analysis-incomplete"
+            ),
+            "contextual finding `{kind}` should identify panic or safety in its discriminator: \
+             {finding}"
+        );
     }
 }
 

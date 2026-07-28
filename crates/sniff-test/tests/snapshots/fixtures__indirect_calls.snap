@@ -11,7 +11,6 @@ expression: messages
     "dependencies": [],
     "findings": [
       {
-        "effect": "panic",
         "kind": "documented-panic",
         "level": "warn",
         "reason": "indirect_calls::Risky::documented documents when it may panic under # Panics",
@@ -24,7 +23,6 @@ expression: messages
         ]
       },
       {
-        "effect": "panic",
         "kind": "indirect-call-boundary",
         "level": "warn",
         "reason": "indirect call through an opaque callable cannot be verified",
@@ -36,7 +34,6 @@ expression: messages
         ]
       },
       {
-        "effect": "panic",
         "kind": "indirect-call-boundary",
         "level": "warn",
         "reason": "indirect call to undocumented trait method indirect_calls::Risky::undocumented cannot be verified",
@@ -49,7 +46,7 @@ expression: messages
         ]
       }
     ],
-    "format-version": 8,
+    "format-version": 9,
     "reason": "sniff-test-artifact",
     "rustc-version": "[RUSTC_VERSION]",
     "scope": "workspace",

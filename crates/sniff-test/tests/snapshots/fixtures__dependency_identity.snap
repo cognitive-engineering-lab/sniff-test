@@ -11,7 +11,6 @@ expression: messages
     "dependencies": [],
     "findings": [
       {
-        "effect": "panic",
         "kind": "panic-invocation",
         "level": "deny",
         "reason": "panic sink core::std::rt::panic_fmt",
@@ -26,7 +25,6 @@ expression: messages
         ]
       },
       {
-        "effect": "panic",
         "kind": "panic-invocation",
         "level": "deny",
         "reason": "panic sink core::std::rt::panic_fmt",
@@ -41,7 +39,6 @@ expression: messages
         ]
       },
       {
-        "effect": "panic",
         "kind": "panic-invocation",
         "level": "deny",
         "reason": "panic sink core::std::rt::panic_fmt",
@@ -56,7 +53,7 @@ expression: messages
         ]
       }
     ],
-    "format-version": 8,
+    "format-version": 9,
     "reason": "sniff-test-artifact",
     "rustc-version": "[RUSTC_VERSION]",
     "scope": "dependency",
@@ -75,11 +72,10 @@ expression: messages
     ],
     "findings": [
       {
-        "effect": "panic",
         "effect-span": "[FIXTURE]/dep/src/lib.rs:25:9: 25:49",
         "kind": "cached-dependency-panic",
         "level": "deny",
-        "reason": "dependency_identity::internal::run has cached panic evidence: 1 undocumented panic path",
+        "reason": "dependency_identity::internal::run has cached panic evidence: panic sink core::std::rt::panic_fmt",
         "root": "dependency_identity_app::run_reexported",
         "root-kind": "concrete",
         "span": "src/lib.rs:12:5: 12:35",
@@ -92,11 +88,10 @@ expression: messages
         ]
       },
       {
-        "effect": "panic",
         "effect-span": "[FIXTURE]/dep/src/lib.rs:19:9: 19:52",
         "kind": "cached-dependency-panic",
         "level": "deny",
-        "reason": "<dependency_identity::std::vec::Vec<u8> as Sniffer>::sniff has cached panic evidence: 1 undocumented panic path",
+        "reason": "<dependency_identity::std::vec::Vec<u8> as Sniffer>::sniff has cached panic evidence: panic sink core::std::rt::panic_fmt",
         "root": "dependency_identity_app::sniff_buffer",
         "root-kind": "concrete",
         "span": "src/lib.rs:8:5: 8:23",
@@ -109,11 +104,10 @@ expression: messages
         ]
       },
       {
-        "effect": "panic",
         "effect-span": "[FIXTURE]/dep/src/lib.rs:13:9: 13:52",
         "kind": "cached-dependency-panic",
         "level": "deny",
-        "reason": "<dependency_identity::Widget as Sniffer>::sniff has cached panic evidence: 1 undocumented panic path",
+        "reason": "<dependency_identity::Widget as Sniffer>::sniff has cached panic evidence: panic sink core::std::rt::panic_fmt",
         "root": "dependency_identity_app::sniff_dyn",
         "root-kind": "concrete",
         "span": "src/lib.rs:16:33: 16:40",
@@ -126,11 +120,10 @@ expression: messages
         ]
       },
       {
-        "effect": "panic",
         "effect-span": "[FIXTURE]/dep/src/lib.rs:13:9: 13:52",
         "kind": "cached-dependency-panic",
         "level": "deny",
-        "reason": "<dependency_identity::Widget as Sniffer>::sniff has cached panic evidence: 1 undocumented panic path",
+        "reason": "<dependency_identity::Widget as Sniffer>::sniff has cached panic evidence: panic sink core::std::rt::panic_fmt",
         "root": "dependency_identity_app::sniff_widget",
         "root-kind": "concrete",
         "span": "src/lib.rs:4:5: 4:23",
@@ -143,7 +136,7 @@ expression: messages
         ]
       }
     ],
-    "format-version": 8,
+    "format-version": 9,
     "reason": "sniff-test-artifact",
     "rustc-version": "[RUSTC_VERSION]",
     "scope": "workspace",

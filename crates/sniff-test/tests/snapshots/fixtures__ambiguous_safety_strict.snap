@@ -11,9 +11,8 @@ expression: messages
     "dependencies": [],
     "findings": [
       {
-        "effect": "safety",
         "function": "ambiguous_safety::read_duplicate",
-        "kind": "ambiguous-effect-requirement",
+        "kind": "ambiguous-safety-requirement",
         "level": "deny",
         "reason": "`ambiguous_safety::read_duplicate` has multiple # Safety requirements named `valid ptr`",
         "requirements": [
@@ -25,9 +24,8 @@ expression: messages
         "span": "src/lib.rs:7:1: 7:43"
       },
       {
-        "effect": "safety",
         "function": "ambiguous_safety::read_duplicate",
-        "kind": "ambiguous-effect-requirement",
+        "kind": "ambiguous-safety-requirement",
         "level": "deny",
         "reason": "`ambiguous_safety::read_duplicate` has multiple # Safety requirements named `valid ptr`",
         "requirements": [
@@ -39,9 +37,8 @@ expression: messages
         "span": "src/lib.rs:7:1: 7:43"
       },
       {
-        "effect": "safety",
         "function": "ambiguous_safety::reused_macro_marker",
-        "kind": "ambiguous-effect-marker",
+        "kind": "ambiguous-safety-marker",
         "level": "deny",
         "reason": "one `// SAFETY:` marker applies to 2 safety effect groups",
         "root": "ambiguous_safety::reused_macro_marker",
@@ -49,7 +46,7 @@ expression: messages
         "span": "src/lib.rs:27:1: 28:1"
       }
     ],
-    "format-version": 8,
+    "format-version": 9,
     "reason": "sniff-test-artifact",
     "rustc-version": "[RUSTC_VERSION]",
     "scope": "workspace",

@@ -16,11 +16,10 @@ expression: messages
     ],
     "findings": [
       {
-        "effect": "panic",
         "effect-span": "[FIXTURE]/leaf/src/lib.rs:2:5: 2:46",
         "kind": "cached-dependency-panic",
         "level": "deny",
-        "reason": "dependency_transitive_panic_middle::middle has cached panic evidence: 1 undocumented panic path",
+        "reason": "dependency_transitive_panic_middle::middle has cached panic evidence: panic sink core::std::rt::panic_fmt",
         "root": "dependency_transitive_panic_app::app",
         "root-kind": "concrete",
         "span": "[FIXTURE]/app/src/lib.rs:2:5: 2:53",
@@ -34,7 +33,7 @@ expression: messages
         ]
       }
     ],
-    "format-version": 8,
+    "format-version": 9,
     "reason": "sniff-test-artifact",
     "rustc-version": "[RUSTC_VERSION]",
     "scope": "dependency",
@@ -48,7 +47,6 @@ expression: messages
     "dependencies": [],
     "findings": [
       {
-        "effect": "panic",
         "kind": "panic-invocation",
         "level": "deny",
         "reason": "panic sink core::std::rt::panic_fmt",
@@ -63,7 +61,7 @@ expression: messages
         ]
       }
     ],
-    "format-version": 8,
+    "format-version": 9,
     "reason": "sniff-test-artifact",
     "rustc-version": "[RUSTC_VERSION]",
     "scope": "dependency",
@@ -82,11 +80,10 @@ expression: messages
     ],
     "findings": [
       {
-        "effect": "panic",
         "effect-span": "[FIXTURE]/leaf/src/lib.rs:2:5: 2:46",
         "kind": "cached-dependency-panic",
         "level": "deny",
-        "reason": "dependency_transitive_panic_leaf::leaf has cached panic evidence: 1 undocumented panic path",
+        "reason": "dependency_transitive_panic_leaf::leaf has cached panic evidence: panic sink core::std::rt::panic_fmt",
         "root": "dependency_transitive_panic_middle::middle",
         "root-kind": "concrete",
         "span": "[FIXTURE]/middle/src/lib.rs:2:5: 2:49",
@@ -99,7 +96,7 @@ expression: messages
         ]
       }
     ],
-    "format-version": 8,
+    "format-version": 9,
     "reason": "sniff-test-artifact",
     "rustc-version": "[RUSTC_VERSION]",
     "scope": "dependency",
@@ -118,11 +115,10 @@ expression: messages
     ],
     "findings": [
       {
-        "effect": "panic",
         "effect-span": "[FIXTURE]/leaf/src/lib.rs:2:5: 2:46",
         "kind": "cached-dependency-panic",
         "level": "deny",
-        "reason": "dependency_transitive_panic_app::app has cached panic evidence: 1 undocumented panic path",
+        "reason": "dependency_transitive_panic_app::app has cached panic evidence: panic sink core::std::rt::panic_fmt",
         "root": "dependency_transitive_panic_outer::outer",
         "root-kind": "concrete",
         "span": "src/lib.rs:2:5: 2:47",
@@ -137,7 +133,7 @@ expression: messages
         ]
       }
     ],
-    "format-version": 8,
+    "format-version": 9,
     "reason": "sniff-test-artifact",
     "rustc-version": "[RUSTC_VERSION]",
     "scope": "workspace",

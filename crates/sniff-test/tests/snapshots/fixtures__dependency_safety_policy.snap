@@ -11,7 +11,6 @@ expression: messages
     "dependencies": [],
     "findings": [
       {
-        "effect": "safety",
         "function": "dependency_safety_contract::misses_named_requirement",
         "kind": "safety-obligation-missing-requirements",
         "level": "deny",
@@ -25,7 +24,7 @@ expression: messages
         "target": "dependency_safety_contract::requires_initialized_state"
       }
     ],
-    "format-version": 8,
+    "format-version": 9,
     "reason": "sniff-test-artifact",
     "rustc-version": "[RUSTC_VERSION]",
     "scope": "dependency",
@@ -44,7 +43,6 @@ expression: messages
     ],
     "findings": [
       {
-        "effect": "safety",
         "effect-span": "[FIXTURE]/dep/src/lib.rs:14:5: 14:33",
         "kind": "safety-obligation-missing-requirements",
         "level": "deny",
@@ -61,7 +59,7 @@ expression: messages
         ]
       }
     ],
-    "format-version": 8,
+    "format-version": 9,
     "reason": "sniff-test-artifact",
     "rustc-version": "[RUSTC_VERSION]",
     "scope": "workspace",

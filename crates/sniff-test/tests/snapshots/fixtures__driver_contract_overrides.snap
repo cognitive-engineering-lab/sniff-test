@@ -11,7 +11,6 @@ expression: messages
     "dependencies": [],
     "findings": [
       {
-        "effect": "safety",
         "function": "contract_overrides::safety_override_missing_requirement",
         "kind": "unsafe-call-missing-requirements",
         "level": "warn",
@@ -25,7 +24,6 @@ expression: messages
         "target": "contract_overrides::synthetic_read"
       },
       {
-        "effect": "panic",
         "kind": "documented-panic",
         "level": "warn",
         "missing-requirements": [
@@ -41,7 +39,7 @@ expression: messages
         ]
       }
     ],
-    "format-version": 8,
+    "format-version": 9,
     "reason": "sniff-test-artifact",
     "rustc-version": "[RUSTC_VERSION]",
     "scope": "workspace",

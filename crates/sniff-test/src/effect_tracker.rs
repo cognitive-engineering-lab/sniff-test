@@ -12,12 +12,12 @@ use rustc_middle::ty::TyCtxt;
 use rustc_span::Span;
 
 use crate::config::MarkerProbing;
-use crate::contracts::EffectKind;
 use crate::contracts::{
     ContractCheck, ContractRequirement, check_contract, normalize_requirement_name,
 };
 use crate::source_markers::{
-    EffectMarkerBlock, MarkerBlockKey, effect_edge_marker_block, span_marker_block,
+    EffectMarkerBlock, MarkerBlockKey, panic_effect_edge_marker_block, panic_span_marker_block,
+    safety_effect_edge_marker_block, safety_span_marker_block,
 };
 
 /// Source-level location of an effect detected inside one function body.
@@ -28,32 +28,11 @@ pub(crate) struct EffectSite {
 }
 
 /// Raw effect evidence before comment contracts are resolved.
+#[derive(Clone)]
 pub(crate) struct EffectEvidence<Endpoint, Details> {
     pub(crate) endpoint: Endpoint,
     pub(crate) terminal_marker_spans: Vec<Span>,
     pub(crate) details: Details,
-}
-
-impl<Endpoint, Details> EffectEvidence<Endpoint, Details> {
-    pub(crate) fn resolve_paths(
-        &self,
-        tcx: TyCtxt<'_>,
-        kind: EffectKind,
-        probing: MarkerProbing,
-        requirements: &[ContractRequirement],
-        path_markers: impl FnOnce() -> Vec<EffectMarkerBlock>,
-        find_unsatisfied: impl FnOnce(&[ContractRequirement]) -> Vec<UnsatisfiedEffectTrace>,
-    ) -> ResolvedEffectPaths {
-        resolve_effect_paths(
-            tcx,
-            kind,
-            probing,
-            requirements,
-            &self.terminal_marker_spans,
-            path_markers,
-            find_unsatisfied,
-        )
-    }
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -75,39 +54,71 @@ pub(crate) struct ResolvedEffectPaths {
 }
 
 pub(crate) struct EffectMarkerIndex {
-    kind: EffectKind,
     probing: MarkerProbing,
+    terminal_marker: for<'tcx> fn(TyCtxt<'tcx>, Span, MarkerProbing) -> Option<EffectMarkerBlock>,
     markers: HashMap<ReachabilityEdgeId, EffectMarkerBlock>,
 }
 
 impl EffectMarkerIndex {
-    pub(crate) fn new(
+    pub(crate) fn panic(
         tcx: TyCtxt<'_>,
         view: ReachabilityView<'_, '_>,
-        kind: EffectKind,
         probing: MarkerProbing,
     ) -> Self {
         let graph = view.graph();
         let markers = view
             .edges()
             .filter_map(|edge| {
-                effect_edge_marker_block(tcx, graph, edge.edge(), kind, probing)
+                panic_effect_edge_marker_block(tcx, graph, edge.edge(), probing)
                     .map(|marker| (edge.id(), marker))
             })
             .collect();
         Self {
-            kind,
             probing,
+            terminal_marker: panic_span_marker_block,
             markers,
         }
     }
 
-    pub(crate) fn kind(&self) -> EffectKind {
-        self.kind
+    pub(crate) fn safety(
+        tcx: TyCtxt<'_>,
+        view: ReachabilityView<'_, '_>,
+        probing: MarkerProbing,
+    ) -> Self {
+        let graph = view.graph();
+        let markers = view
+            .edges()
+            .filter_map(|edge| {
+                safety_effect_edge_marker_block(tcx, graph, edge.edge(), probing)
+                    .map(|marker| (edge.id(), marker))
+            })
+            .collect();
+        Self {
+            probing,
+            terminal_marker: safety_span_marker_block,
+            markers,
+        }
     }
 
-    pub(crate) fn probing(&self) -> MarkerProbing {
-        self.probing
+    pub(crate) fn resolve_paths(
+        &self,
+        tcx: TyCtxt<'_>,
+        requirements: &[ContractRequirement],
+        terminal_marker_spans: &[Span],
+        path_markers: impl FnOnce() -> Vec<EffectMarkerBlock>,
+        find_unsatisfied: impl FnOnce(&[ContractRequirement]) -> Vec<UnsatisfiedEffectTrace>,
+    ) -> ResolvedEffectPaths {
+        resolve_effect_paths_with_markers(
+            requirements,
+            || {
+                terminal_marker_spans
+                    .iter()
+                    .filter_map(|span| (self.terminal_marker)(tcx, *span, self.probing))
+                    .collect()
+            },
+            path_markers,
+            find_unsatisfied,
+        )
     }
 
     pub(crate) fn blocks(
@@ -130,19 +141,13 @@ impl EffectMarkerIndex {
     }
 }
 
-pub(crate) fn resolve_effect_paths(
-    tcx: TyCtxt<'_>,
-    kind: EffectKind,
-    probing: MarkerProbing,
+fn resolve_effect_paths_with_markers(
     requirements: &[ContractRequirement],
-    terminal_marker_spans: &[Span],
+    terminal_markers: impl FnOnce() -> Vec<EffectMarkerBlock>,
     path_markers: impl FnOnce() -> Vec<EffectMarkerBlock>,
     find_unsatisfied: impl FnOnce(&[ContractRequirement]) -> Vec<UnsatisfiedEffectTrace>,
 ) -> ResolvedEffectPaths {
-    let terminal_markers = terminal_marker_spans
-        .iter()
-        .filter_map(|span| span_marker_block(tcx, *span, kind, probing))
-        .collect::<Vec<_>>();
+    let terminal_markers = terminal_markers();
     let terminal = resolve_effect_evidence(requirements, &terminal_markers);
     let requirements = match terminal.contract {
         ContractCheck::Satisfied => {
@@ -224,13 +229,6 @@ impl EffectPathIndex {
                     .is_some_and(|node| !is_boundary(node.kind()))
             }),
         }
-    }
-
-    pub(crate) fn edges_to_edge(
-        &self,
-        effect_edge: ReachedEdge<'_, '_>,
-    ) -> Vec<ReachabilityEdgeId> {
-        self.edges_to_nodes([effect_edge.target().id()], true)
     }
 
     pub(crate) fn edges_to_nodes(
@@ -364,13 +362,31 @@ where
         }
     }
 
-    uses.into_values()
-        .filter_map(|(marker_span, groups)| {
-            (groups.len() > 1).then_some(AmbiguousMarkerUse {
-                marker_span,
-                groups,
-            })
+    let mut ambiguous = uses
+        .into_iter()
+        .filter_map(|(key, (marker_span, groups))| {
+            (groups.len() > 1).then_some((
+                key,
+                AmbiguousMarkerUse {
+                    marker_span,
+                    groups,
+                },
+            ))
         })
+        .collect::<Vec<_>>();
+    ambiguous.sort_by_key(|(key, marker_use)| {
+        let span = marker_use.marker_span.source_callsite();
+        (
+            span.lo().0,
+            span.hi().0,
+            key.file_start,
+            key.start_line,
+            key.end_line,
+        )
+    });
+    ambiguous
+        .into_iter()
+        .map(|(_, marker_use)| marker_use)
         .collect()
 }
 
@@ -620,12 +636,12 @@ pub(crate) enum EffectPathDecision {
 
 #[cfg(test)]
 mod tests {
-    use rustc_span::DUMMY_SP;
+    use rustc_span::{BytePos, DUMMY_SP, Span};
 
     use crate::contracts::{ContractCheck, ContractRequirement, MarkerSatisfaction};
     use crate::source_markers::{EffectMarkerBlock, MarkerBlockKey};
 
-    use super::{PathIndex, resolve_effect_evidence};
+    use super::{PathIndex, ambiguous_marker_uses, resolve_effect_evidence};
 
     #[test]
     fn path_edge_collection_includes_all_converging_routes() {
@@ -672,6 +688,29 @@ mod tests {
         let paths = PathIndex::new(0, &edges, |_| true);
 
         assert_eq!(paths.edges_to_targets([3]), vec![10, 11, 12, 13]);
+    }
+
+    #[test]
+    fn ambiguous_marker_uses_are_sorted_by_source_span() {
+        let claims = [70, 10, 50, 30, 60, 20, 40]
+            .into_iter()
+            .enumerate()
+            .flat_map(|(index, start)| {
+                let key = MarkerBlockKey {
+                    file_start: 1,
+                    start_line: index,
+                    end_line: index,
+                };
+                let span = Span::with_root_ctxt(BytePos(start), BytePos(start + 1));
+                [(key, span, 0_u8), (key, span, 1_u8)]
+            });
+
+        let starts = ambiguous_marker_uses(claims)
+            .into_iter()
+            .map(|marker_use| marker_use.marker_span.lo().0)
+            .collect::<Vec<_>>();
+
+        assert_eq!(starts, vec![10, 20, 30, 40, 50, 60, 70]);
     }
 
     #[test]

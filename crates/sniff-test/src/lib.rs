@@ -31,10 +31,10 @@ mod dependency_cache;
 mod effect_tracker;
 mod namespace;
 mod panics;
+mod path_patterns;
 mod report_roots;
 mod safety;
 mod source_markers;
 
 pub use cli::{cargo_frontend, driver_main};
-pub(crate) use contracts::EffectKind;
 pub(crate) use effect_tracker::EffectSite;

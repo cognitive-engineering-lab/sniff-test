@@ -16,8 +16,7 @@ expression: messages
     ],
     "findings": [
       {
-        "effect": "safety",
-        "kind": "analysis-incomplete",
+        "kind": "safety-analysis-incomplete",
         "level": "deny",
         "reason": "dependency_safety_incomplete_middle::middle has incomplete cached safety analysis",
         "root": "dependency_safety_incomplete_app::application",
@@ -29,7 +28,7 @@ expression: messages
         ]
       }
     ],
-    "format-version": 8,
+    "format-version": 9,
     "reason": "sniff-test-artifact",
     "rustc-version": "[RUSTC_VERSION]",
     "scope": "workspace",
@@ -43,7 +42,6 @@ expression: messages
     "dependencies": [],
     "findings": [
       {
-        "effect": "safety",
         "function": "dependency_safety_incomplete_leaf::leaf",
         "kind": "unsafe-op-missing-justification",
         "level": "warn",
@@ -53,8 +51,7 @@ expression: messages
         "span": "[FIXTURE]/leaf/src/lib.rs:8:22: 8:30"
       },
       {
-        "effect": "safety",
-        "kind": "analysis-incomplete",
+        "kind": "safety-analysis-incomplete",
         "level": "deny",
         "reason": "reachability analysis halted at the 2-instance node limit before the call graph was exhausted",
         "root": "dependency_safety_incomplete_leaf::leaf",
@@ -62,7 +59,7 @@ expression: messages
         "span": "[FIXTURE]/leaf/src/lib.rs:7:1: 7:32"
       }
     ],
-    "format-version": 8,
+    "format-version": 9,
     "reason": "sniff-test-artifact",
     "rustc-version": "[RUSTC_VERSION]",
     "scope": "dependency",
@@ -81,7 +78,6 @@ expression: messages
     ],
     "findings": [
       {
-        "effect": "safety",
         "effect-span": "[FIXTURE]/leaf/src/lib.rs:8:22: 8:30",
         "kind": "unsafe-op-missing-justification",
         "level": "warn",
@@ -95,8 +91,7 @@ expression: messages
         ]
       },
       {
-        "effect": "safety",
-        "kind": "analysis-incomplete",
+        "kind": "safety-analysis-incomplete",
         "level": "deny",
         "reason": "dependency_safety_incomplete_leaf::leaf has incomplete cached safety analysis",
         "root": "dependency_safety_incomplete_middle::middle",
@@ -108,7 +103,7 @@ expression: messages
         ]
       }
     ],
-    "format-version": 8,
+    "format-version": 9,
     "reason": "sniff-test-artifact",
     "rustc-version": "[RUSTC_VERSION]",
     "scope": "dependency",

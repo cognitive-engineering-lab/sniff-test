@@ -99,9 +99,8 @@ impl DependencyAnalysisCache {
                     // clean: analysis may have stopped before reaching effect
                     // evidence. The function-path check supports ignores more
                     // specific than either crate-name check above.
-                    if function
-                        .effects
-                        .values()
+                    if [&function.safety, &function.panic]
+                        .into_iter()
                         .any(|effect| effect.is_reachable() || !effect.analysis_complete)
                         && !config.all_effects_ignore_namespace(&function.path)
                     {
@@ -208,10 +207,7 @@ struct ResolvedDependency {
 
 #[cfg(test)]
 mod tests {
-    use std::collections::BTreeMap;
-
-    use crate::cache::{CachedEffectSummary, CachedFunctionSummary};
-    use crate::contracts::EffectKind;
+    use crate::cache::{CachedEffectSummary, CachedFunctionSummary, CachedReachabilityGraph};
 
     use super::{CrateArtifactIndex, DependencyAnalysisCache, FunctionCacheKey};
 
@@ -243,15 +239,21 @@ mod tests {
             path: path.to_owned(),
             is_generic: false,
             root_span: None,
-            effects: BTreeMap::from([(
-                EffectKind::Panic,
-                CachedEffectSummary {
-                    analysis_complete: true,
-                    has_contract: false,
-                    graph: None,
-                    findings: Vec::new(),
-                },
-            )]),
+            panic: empty_effect_summary(),
+            safety: empty_effect_summary(),
+        }
+    }
+
+    fn empty_effect_summary() -> CachedEffectSummary {
+        CachedEffectSummary {
+            analysis_complete: true,
+            has_contract: false,
+            graph: CachedReachabilityGraph {
+                root: 0,
+                nodes: Vec::new(),
+                edges: Vec::new(),
+            },
+            findings: Vec::new(),
         }
     }
 }

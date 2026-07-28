@@ -3,8 +3,8 @@
 use std::path::Path;
 
 use crate::cache::CachedFindingKind;
-use crate::config::{ContractDocOverrides, LintLevel, ReportRootSet, SniffTestConfig};
-use crate::contracts::EffectKind;
+use crate::config::{LintLevel, ReportRootSet, SniffTestConfig};
+use crate::contracts::ContractDocOverrides;
 use crate::namespace::canonical_namespace;
 use crate::panics::PanicEvidenceKind;
 use crate::report_roots::{MissingReportRoot, ReportRootKind};
@@ -22,8 +22,6 @@ use super::report::render_span;
 #[serde(rename_all = "kebab-case")]
 pub(crate) struct Finding {
     pub(crate) kind: FindingKind,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub(crate) effect: Option<EffectKind>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) root: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -52,7 +50,6 @@ impl Finding {
     pub(crate) fn new(kind: FindingKind, reason: String, diagnostic: FindingDiagnostic) -> Self {
         Self {
             kind,
-            effect: kind.effect(),
             root: None,
             root_kind: None,
             function: None,
@@ -65,11 +62,6 @@ impl Finding {
             requirements: Vec::new(),
             diagnostic,
         }
-    }
-
-    pub(crate) fn with_effect(mut self, effect: EffectKind) -> Self {
-        self.effect = Some(effect);
-        self
     }
 }
 
@@ -119,9 +111,12 @@ pub(crate) enum FindingKind {
     DocumentedPanic,
     TrustedPanic,
     IndirectCallBoundary,
-    AmbiguousEffectMarker,
-    AmbiguousEffectRequirement,
-    AnalysisIncomplete,
+    AmbiguousPanicMarker,
+    AmbiguousSafetyMarker,
+    AmbiguousPanicRequirement,
+    AmbiguousSafetyRequirement,
+    PanicAnalysisIncomplete,
+    SafetyAnalysisIncomplete,
     EmptyReportRoots,
     MissingReportRoot,
     MissingSafetyDocs,
@@ -133,28 +128,6 @@ pub(crate) enum FindingKind {
 }
 
 impl FindingKind {
-    fn effect(self) -> Option<EffectKind> {
-        match self {
-            Self::CompilerAssert
-            | Self::PanicInvocation
-            | Self::CachedDependencyPanic
-            | Self::DocumentedPanic
-            | Self::TrustedPanic
-            | Self::IndirectCallBoundary => Some(EffectKind::Panic),
-            Self::MissingSafetyDocs
-            | Self::UnsafeCallMissingJustification
-            | Self::UnsafeCallMissingRequirements
-            | Self::UnsafeOpMissingJustification
-            | Self::SafetyObligationMissingJustification
-            | Self::SafetyObligationMissingRequirements => Some(EffectKind::Safety),
-            Self::AmbiguousEffectMarker
-            | Self::AmbiguousEffectRequirement
-            | Self::AnalysisIncomplete
-            | Self::EmptyReportRoots
-            | Self::MissingReportRoot => None,
-        }
-    }
-
     pub(crate) fn from_evidence(kind: &PanicEvidenceKind) -> Self {
         match kind {
             PanicEvidenceKind::CompilerAssert => Self::CompilerAssert,
@@ -198,9 +171,15 @@ impl FindingKind {
             Self::DocumentedPanic => config.panics.lints.documented_panic,
             Self::TrustedPanic => config.panics.lints.trusted_panic,
             Self::IndirectCallBoundary => config.panics.lints.indirect_call_boundary,
-            Self::AmbiguousEffectMarker => config.analysis.lints.ambiguous_effect_marker,
-            Self::AmbiguousEffectRequirement => config.analysis.lints.ambiguous_effect_requirement,
-            Self::AnalysisIncomplete => config.analysis.lints.analysis_incomplete,
+            Self::AmbiguousPanicMarker | Self::AmbiguousSafetyMarker => {
+                config.analysis.lints.ambiguous_effect_marker
+            }
+            Self::AmbiguousPanicRequirement | Self::AmbiguousSafetyRequirement => {
+                config.analysis.lints.ambiguous_effect_requirement
+            }
+            Self::PanicAnalysisIncomplete | Self::SafetyAnalysisIncomplete => {
+                config.analysis.lints.analysis_incomplete
+            }
             Self::EmptyReportRoots => config.analysis.lints.empty_report_roots,
             Self::MissingReportRoot => config.analysis.lints.missing_report_root,
             Self::MissingSafetyDocs => config.safety.lints.missing_safety_docs,
@@ -356,13 +335,12 @@ pub(crate) fn safety_finding_report(
                 span: Some(render_span(tcx, span)),
                 requirements,
                 ..Finding::new(
-                    FindingKind::AmbiguousEffectRequirement,
+                    FindingKind::AmbiguousSafetyRequirement,
                     format!(
                         "`{function}` has multiple # Safety requirements named `{normalized_name}`"
                     ),
                     diagnostic,
                 )
-                .with_effect(EffectKind::Safety)
             }
         }
         SafetyFinding::AmbiguousMarker {
@@ -373,14 +351,13 @@ pub(crate) fn safety_finding_report(
             function: Some(canonical_namespace(tcx, caller)),
             span: Some(render_span(tcx, marker_span)),
             ..Finding::new(
-                FindingKind::AmbiguousEffectMarker,
+                FindingKind::AmbiguousSafetyMarker,
                 format!(
                     "one `// SAFETY:` marker applies to {} safety effect groups",
                     effect_spans.len()
                 ),
                 diagnostic,
             )
-            .with_effect(EffectKind::Safety)
         },
     }
 }
@@ -422,5 +399,77 @@ mod tests {
         assert_eq!(resolved[0].level, LintLevel::Warn);
         assert_eq!(resolved[1].finding.kind, FindingKind::EmptyReportRoots);
         assert_eq!(resolved[1].level, LintLevel::Deny);
+    }
+
+    #[test]
+    fn serialized_finding_does_not_repeat_its_effect() {
+        let json =
+            serde_json::to_value(finding(FindingKind::PanicInvocation)).expect("serialize finding");
+        let object = json.as_object().expect("finding object");
+
+        assert_eq!(object["kind"], "panic-invocation");
+        assert!(!object.contains_key("effect"));
+    }
+
+    #[test]
+    fn contextual_kinds_encode_the_effect_in_the_discriminator() {
+        for (kind, expected) in [
+            (FindingKind::AmbiguousPanicMarker, "ambiguous-panic-marker"),
+            (
+                FindingKind::AmbiguousSafetyMarker,
+                "ambiguous-safety-marker",
+            ),
+            (
+                FindingKind::AmbiguousPanicRequirement,
+                "ambiguous-panic-requirement",
+            ),
+            (
+                FindingKind::AmbiguousSafetyRequirement,
+                "ambiguous-safety-requirement",
+            ),
+            (
+                FindingKind::PanicAnalysisIncomplete,
+                "panic-analysis-incomplete",
+            ),
+            (
+                FindingKind::SafetyAnalysisIncomplete,
+                "safety-analysis-incomplete",
+            ),
+        ] {
+            let json = serde_json::to_value(finding(kind)).expect("serialize finding");
+            assert_eq!(json["kind"], expected);
+            assert!(
+                !json
+                    .as_object()
+                    .expect("finding object")
+                    .contains_key("effect")
+            );
+        }
+    }
+
+    #[test]
+    fn contextual_kinds_share_the_existing_analysis_lint_policy() {
+        let mut config = SniffTestConfig::default();
+        config.analysis.lints.ambiguous_effect_marker = LintLevel::Warn;
+        config.analysis.lints.ambiguous_effect_requirement = LintLevel::Deny;
+        config.analysis.lints.analysis_incomplete = LintLevel::Allow;
+
+        let resolved = resolve_findings(
+            vec![
+                finding(FindingKind::AmbiguousPanicMarker),
+                finding(FindingKind::AmbiguousSafetyMarker),
+                finding(FindingKind::AmbiguousPanicRequirement),
+                finding(FindingKind::AmbiguousSafetyRequirement),
+                finding(FindingKind::PanicAnalysisIncomplete),
+                finding(FindingKind::SafetyAnalysisIncomplete),
+            ],
+            &config,
+        );
+
+        assert_eq!(resolved.len(), 4);
+        assert_eq!(resolved[0].level, LintLevel::Warn);
+        assert_eq!(resolved[1].level, LintLevel::Warn);
+        assert_eq!(resolved[2].level, LintLevel::Deny);
+        assert_eq!(resolved[3].level, LintLevel::Deny);
     }
 }

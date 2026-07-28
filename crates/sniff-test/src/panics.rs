@@ -21,18 +21,13 @@ use rustc_middle::ty::{self, Ty, TyCtxt};
 use rustc_span::Span;
 
 use crate::config::{PanicBoundaryPolicy, PanicConfig};
-use crate::contracts::{ContractDocSummary, ContractRequirement, EffectKind, contract_doc_summary};
-use crate::effect_tracker::{
-    EffectEvidence, EffectMarkerIndex, EffectPathDecision, EffectPathIndex, EffectTrace,
-    ambiguous_marker_uses, find_unsatisfied_effect_traces_to_edge_with,
-};
+use crate::contracts::{ContractDocSummary, ContractRequirement, panic_contract_doc_summary};
+use crate::effect_tracker::{EffectPathDecision, EffectTrace};
 use crate::namespace::canonical_namespace;
-use crate::source_markers::MarkerBlockKey;
 
 #[derive(Debug, Clone)]
 pub(crate) struct PanicAnalysis {
     pub evidence: Vec<PanicEvidence>,
-    pub ambiguous_markers: Vec<AmbiguousPanicMarker>,
     pub ambiguous_names: Vec<AmbiguousPanicRequirementName>,
 }
 
@@ -82,6 +77,18 @@ pub(crate) enum PanicEvidenceKind {
     IndirectBoundary { def_id: Option<DefId> },
 }
 
+/// Panic source discovered before comments and reachability paths are resolved.
+#[derive(Debug, Clone)]
+pub(crate) struct PanicSourceEvidence {
+    pub(crate) edge_id: ReachabilityEdgeId,
+    pub(crate) kind: PanicEvidenceKind,
+    pub(crate) decision: EffectPathDecision,
+    pub(crate) requirements: Vec<PanicRequirement>,
+    /// Some graph bridge edges participate in marker attribution but do not
+    /// represent a user-visible panic site.
+    pub(crate) reportable: bool,
+}
+
 #[derive(Debug, Clone, Copy)]
 enum PanicProbeKind {
     CompilerAssert,
@@ -91,92 +98,28 @@ enum PanicProbeKind {
 }
 
 #[must_use]
-pub(crate) fn analyze_panic_evidence<'tcx>(
+pub(crate) fn probe_panic_sources<'tcx>(
     tcx: TyCtxt<'tcx>,
     view: ReachabilityView<'_, 'tcx>,
     config: &PanicConfig,
-    marker_index: &EffectMarkerIndex,
-    path_index: &EffectPathIndex,
-) -> PanicAnalysis {
-    let graph = view.graph();
-    let ambiguous_names = collect_ambiguous_panic_requirement_names(tcx, view, config);
-    let mut evidence = Vec::new();
-    let mut marker_claims = Vec::new();
-    let collect_marker_claims =
-        panic_obligation_node_kind(tcx, view.root().kind(), config).is_none();
-    for raw in probe_panic_evidence(tcx, view, config) {
-        let edge = raw.endpoint;
-        let Some((kind, requirements)) = resolve_panic_probe(tcx, edge, raw.details, config) else {
-            continue;
-        };
-        let report_evidence = edge.origin().instance().is_some();
-        let resolved = raw.resolve_paths(
-            tcx,
-            EffectKind::Panic,
-            config.marker_probing,
-            &requirements,
-            || marker_index.blocks(path_index.edges_to_edge(edge)),
-            |requirements| {
-                if !report_evidence {
-                    return Vec::new();
-                }
-                find_unsatisfied_effect_traces_to_edge_with(
-                    view,
-                    edge,
-                    requirements,
-                    |node| panic_path_node_is_boundary(tcx, node, config),
-                    |edge_id, requirement| marker_index.satisfies(edge_id, requirement),
-                )
-            },
-        );
-        if collect_marker_claims {
-            marker_claims.extend(
-                resolved
-                    .path_markers
-                    .into_iter()
-                    .map(|marker| (marker.key, marker.span, edge.id())),
-            );
-        }
-        if !report_evidence {
-            continue;
-        }
-        let decision = panic_path_decision(edge.id(), kind);
-        for unresolved in resolved.unresolved_traces {
-            evidence.push(PanicEvidence {
-                edge_id: edge.id(),
-                trace: unresolved.trace,
-                kind,
-                decision,
-                missing_requirements: unresolved.missing_requirements,
-            });
-        }
-    }
-    suppress_resolved_callable_indirect_boundaries(graph, &mut evidence);
-
-    PanicAnalysis {
-        evidence,
-        ambiguous_markers: collect_ambiguous_panic_markers(marker_claims),
-        ambiguous_names,
-    }
-}
-
-fn probe_panic_evidence<'view, 'tcx>(
-    tcx: TyCtxt<'tcx>,
-    view: ReachabilityView<'view, 'tcx>,
-    config: &PanicConfig,
-) -> Vec<EffectEvidence<ReachedEdge<'view, 'tcx>, PanicProbeKind>> {
-    let mut evidence = Vec::new();
+) -> Vec<PanicSourceEvidence> {
+    let mut sources = Vec::new();
     for edge in view.edges() {
-        let Some(kind) = probe_panic_edge(tcx, edge, config) else {
+        let Some(probe) = probe_panic_edge(tcx, edge, config) else {
             continue;
         };
-        evidence.push(EffectEvidence {
-            endpoint: edge,
-            terminal_marker_spans: Vec::new(),
-            details: kind,
+        let Some((kind, requirements)) = resolve_panic_probe(tcx, edge, probe, config) else {
+            continue;
+        };
+        sources.push(PanicSourceEvidence {
+            edge_id: edge.id(),
+            kind,
+            decision: panic_path_decision(edge.id(), kind),
+            requirements,
+            reportable: edge.origin().instance().is_some(),
         });
     }
-    evidence
+    sources
 }
 
 fn resolve_panic_probe<'tcx>(
@@ -230,28 +173,7 @@ fn panic_path_decision(edge_id: ReachabilityEdgeId, kind: PanicEvidenceKind) -> 
     }
 }
 
-fn collect_ambiguous_panic_markers(
-    marker_claims: impl IntoIterator<Item = (MarkerBlockKey, Span, ReachabilityEdgeId)>,
-) -> Vec<AmbiguousPanicMarker> {
-    let mut ambiguous_markers = ambiguous_marker_uses(marker_claims)
-        .into_iter()
-        .map(|marker_use| {
-            let mut edge_ids = marker_use.groups;
-            edge_ids.sort_by_key(|edge_id| edge_id.index());
-            AmbiguousPanicMarker {
-                marker_span: marker_use.marker_span,
-                edge_ids,
-            }
-        })
-        .collect::<Vec<_>>();
-    ambiguous_markers.sort_by_key(|marker| {
-        let span = marker.marker_span.source_callsite();
-        (span.lo().0, span.hi().0)
-    });
-    ambiguous_markers
-}
-
-fn suppress_resolved_callable_indirect_boundaries(
+pub(crate) fn suppress_resolved_callable_indirect_boundaries(
     graph: &ReachabilityGraph<'_>,
     evidence: &mut Vec<PanicEvidence>,
 ) {
@@ -426,15 +348,10 @@ pub(crate) fn panic_doc_summary(
     def_id: DefId,
     config: &PanicConfig,
 ) -> PanicDocSummary {
-    contract_doc_summary(
-        tcx,
-        def_id,
-        EffectKind::Panic,
-        &config.documentation_overrides,
-    )
+    panic_contract_doc_summary(tcx, def_id, &config.documentation_overrides)
 }
 
-fn collect_ambiguous_panic_requirement_names<'tcx>(
+pub(crate) fn collect_ambiguous_panic_requirement_names<'tcx>(
     tcx: TyCtxt<'tcx>,
     view: ReachabilityView<'_, 'tcx>,
     config: &PanicConfig,
@@ -493,16 +410,6 @@ fn push_ambiguous_panic_requirement_names(
             requirements: ambiguous.requirements,
         });
     }
-}
-
-#[cfg(test)]
-fn line_has_panic_heading(line: &str) -> bool {
-    crate::contracts::line_has_contract_heading(line, EffectKind::Panic)
-}
-
-#[cfg(test)]
-fn parse_panic_doc_lines<'a>(lines: impl IntoIterator<Item = &'a str>) -> PanicDocSummary {
-    crate::contracts::parse_contract_doc_lines(lines, EffectKind::Panic)
 }
 
 fn trace_crosses_ignored_namespace<'tcx>(
@@ -612,78 +519,4 @@ fn compiler_assert_is_safety_precondition<'tcx>(
     let def_id = instance.def_id();
     crate::safety::fn_def_is_unsafe(tcx, def_id)
         && crate::safety::has_safety_docs(tcx, def_id, &config.documentation_overrides)
-}
-
-#[cfg(test)]
-mod tests {
-    use super::{PanicRequirement, line_has_panic_heading, parse_panic_doc_lines};
-    use rustc_span::DUMMY_SP;
-
-    #[test]
-    fn panic_doc_headings_match_supported_styles() {
-        assert!(line_has_panic_heading("# Panics"));
-        assert!(line_has_panic_heading("   ## Panics   "));
-        assert!(line_has_panic_heading("### PANICS"));
-        assert!(line_has_panic_heading("#### Panic(s)"));
-    }
-
-    #[test]
-    fn panic_doc_headings_do_not_match_arbitrary_text() {
-        assert!(!line_has_panic_heading("Panics: no heading"));
-        assert!(!line_has_panic_heading("#Panics"));
-        assert!(!line_has_panic_heading("# Panics in rare cases"));
-        assert!(!line_has_panic_heading("# Safety"));
-    }
-
-    #[test]
-    fn panic_doc_requirements_are_named_bullets_under_panics() {
-        let summary = parse_panic_doc_lines([
-            "# Panics",
-            "",
-            "Panics when the caller violates any listed requirement.",
-            "",
-            "Requirements:",
-            "",
-            "- nonzero: denominator must not be zero",
-            "* index in bounds: index must be within the slice",
-            "- something[var_1]:",
-            "# Safety",
-            "- ignored: this is outside the panic section",
-        ]);
-
-        assert!(summary.has_docs);
-        assert_eq!(
-            summary.requirements,
-            [
-                PanicRequirement {
-                    name: String::from("nonzero"),
-                    condition: String::from("denominator must not be zero"),
-                    span: DUMMY_SP,
-                },
-                PanicRequirement {
-                    name: String::from("index in bounds"),
-                    condition: String::from("index must be within the slice"),
-                    span: DUMMY_SP,
-                },
-                PanicRequirement {
-                    name: String::from("something[var_1]"),
-                    condition: String::new(),
-                    span: DUMMY_SP,
-                },
-            ]
-        );
-    }
-
-    #[test]
-    fn panic_doc_duplicate_requirement_names_are_ambiguous() {
-        let summary = parse_panic_doc_lines([
-            "# Panics",
-            "- nonzero: denominator must not be zero",
-            "- nonzero!: total must be bounded",
-        ]);
-
-        assert_eq!(summary.ambiguous_requirements.len(), 1);
-        assert_eq!(summary.ambiguous_requirements[0].normalized_name, "nonzero");
-        assert_eq!(summary.ambiguous_requirements[0].requirements.len(), 2);
-    }
 }

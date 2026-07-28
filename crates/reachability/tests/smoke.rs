@@ -6,12 +6,15 @@ extern crate rustc_interface;
 extern crate rustc_middle;
 
 use std::fs;
+use std::ops::ControlFlow;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use reachability::{
-    DynDispatchVTableEdges, NoopReachabilityHooks, ReachabilityGraph, ReachabilityIndex,
-    ReachabilityNodeKind, ReachabilityOptions, ReachabilityRoot, ReachabilitySnapshot,
+    DynDispatchVTableEdges, FnPointerEdges, NoopReachabilityHooks, ReachabilityContext,
+    ReachabilityControl, ReachabilityEdge, ReachabilityEdgeKind, ReachabilityGraph,
+    ReachabilityHooks, ReachabilityIndex, ReachabilityNodeKind, ReachabilityOptions,
+    ReachabilityRoot, ReachabilitySnapshot,
 };
 use rustc_driver::{Callbacks, Compilation};
 use rustc_hir::def_id::LocalDefId;
@@ -120,6 +123,25 @@ impl Worker for OtherFoo {
     fn work(&self) {}
 }
 
+pub trait SuperWorker {
+    fn super_work(&self);
+}
+
+pub trait SubWorker: SuperWorker {}
+
+pub struct SubFoo;
+
+impl SuperWorker for SubFoo {
+    fn super_work(&self) {}
+}
+
+impl SubWorker for SubFoo {}
+
+pub fn supertrait_dyn_dispatch() {
+    let obj: &dyn SubWorker = &SubFoo;
+    obj.super_work();
+}
+
 pub fn mixed_same_dyn_trait() {
     let panicking = Foo;
     let _panicking_obj: &dyn Worker = &panicking;
@@ -132,6 +154,43 @@ pub fn mixed_same_dyn_trait() {
 pub fn generic_const<const N: usize, T: Copy + Default>() -> [T; N] {
     let _ = const { N };
     [T::default(); N]
+}
+";
+
+const SHARED_CALLABLE_SOURCE: &str = r"
+pub fn fn_target() {}
+
+pub fn expose_fn_target() -> fn() {
+    fn_target
+}
+
+pub fn call_fn_target(target: fn()) {
+    target();
+}
+
+pub fn call_known_fn_target() {
+    let target: fn() = fn_target;
+    target();
+}
+
+pub trait Worker {
+    fn work(&self);
+}
+
+pub struct Foo;
+
+impl Worker for Foo {
+    fn work(&self) {}
+}
+
+static FOO: Foo = Foo;
+
+pub fn expose_dyn_target() -> &'static dyn Worker {
+    &FOO
+}
+
+pub fn call_dyn_target(target: &dyn Worker) {
+    target.work();
 }
 ";
 
@@ -200,7 +259,90 @@ fn dyn_dispatch_vtable_edges_can_be_attributed_to_call_sites() {
 
     assert!(output.contains("edge entry --DynObjectCast -> dyn-cast"));
     assert!(!output.contains("edge entry --VTableEntry -> <Foo as Worker>::work"));
-    assert!(output.contains("edge entry --DynDispatchVTableEntry -> <Foo as Worker>::work"));
+    assert_eq!(
+        output
+            .matches("edge entry --DynDispatchVTableEntry -> <Foo as Worker>::work")
+            .count(),
+        1,
+        "each dynamic-dispatch target should be emitted exactly once"
+    );
+}
+
+#[test]
+fn function_pointer_edges_can_be_attributed_to_call_sites() {
+    let project = TempProject::new(DEMO_SOURCE);
+    let sysroot = rustc_sysroot();
+    let mut callbacks = DumpCallbacks {
+        fn_pointer_edges: FnPointerEdges::CallSites,
+        ..DumpCallbacks::default()
+    };
+    let args = vec![
+        String::from("rustc"),
+        String::from("--crate-name"),
+        String::from("demo"),
+        String::from("--crate-type"),
+        String::from("lib"),
+        String::from("--edition"),
+        String::from("2024"),
+        String::from("--sysroot"),
+        sysroot,
+        String::from("-Awarnings"),
+        project.source.display().to_string(),
+    ];
+
+    rustc_driver::run_compiler(&args, &mut callbacks);
+
+    let output = callbacks.output.expect("compiler callback did not run");
+    println!("{output}");
+
+    assert!(!output.contains("edge entry --FnPointerReify -> helper"));
+    assert_eq!(
+        output
+            .matches("edge entry --FnPointerCallTarget -> helper")
+            .count(),
+        1,
+        "each function-pointer target should be emitted exactly once"
+    );
+}
+
+#[test]
+fn dyn_dispatch_call_sites_match_supertrait_vtable_entries() {
+    let project = TempProject::new(DEMO_SOURCE);
+    let sysroot = rustc_sysroot();
+    let mut callbacks = DumpCallbacks {
+        root_suffix: String::from("supertrait_dyn_dispatch"),
+        dyn_dispatch_vtable_edges: DynDispatchVTableEdges::CallSites,
+        ..DumpCallbacks::default()
+    };
+    let args = vec![
+        String::from("rustc"),
+        String::from("--crate-name"),
+        String::from("demo"),
+        String::from("--crate-type"),
+        String::from("lib"),
+        String::from("--edition"),
+        String::from("2024"),
+        String::from("--sysroot"),
+        sysroot,
+        String::from("-Awarnings"),
+        project.source.display().to_string(),
+    ];
+
+    rustc_driver::run_compiler(&args, &mut callbacks);
+
+    let output = callbacks.output.expect("compiler callback did not run");
+    println!("{output}");
+
+    assert_eq!(
+        output
+            .matches(
+                "edge supertrait_dyn_dispatch --DynDispatchVTableEntry -> \
+                 <SubFoo as SuperWorker>::super_work",
+            )
+            .count(),
+        1,
+        "a dyn subtrait call should reach its supertrait implementation once"
+    );
 }
 
 #[test]
@@ -399,9 +541,64 @@ fn generic_const_bodies_do_not_instantiate_with_parent_args() {
     assert!(output.contains("ConstBody ->"));
 }
 
+#[test]
+fn function_pointer_targets_are_reused_across_queries() {
+    let project = TempProject::new(SHARED_CALLABLE_SOURCE);
+    let mut callbacks = SharedCallableCallbacks {
+        scenario: SharedCallableScenario::FunctionPointerReuse,
+        result: None,
+    };
+    run_test_compiler(&project, &mut callbacks);
+
+    assert_eq!(
+        callbacks.result,
+        Some(SharedCallableResult {
+            derived_edges: 1,
+            hook_calls: 0,
+        })
+    );
+}
+
+#[test]
+fn dyn_dispatch_targets_are_reused_across_queries() {
+    let project = TempProject::new(SHARED_CALLABLE_SOURCE);
+    let mut callbacks = SharedCallableCallbacks {
+        scenario: SharedCallableScenario::DynDispatchReuse,
+        result: None,
+    };
+    run_test_compiler(&project, &mut callbacks);
+
+    assert_eq!(
+        callbacks.result,
+        Some(SharedCallableResult {
+            derived_edges: 1,
+            hook_calls: 0,
+        })
+    );
+}
+
+#[test]
+fn derived_callable_edges_follow_their_parent_call_once() {
+    let project = TempProject::new(SHARED_CALLABLE_SOURCE);
+    let mut callbacks = SharedCallableCallbacks {
+        scenario: SharedCallableScenario::ParentHooks,
+        result: None,
+    };
+    run_test_compiler(&project, &mut callbacks);
+
+    assert_eq!(
+        callbacks.result,
+        Some(SharedCallableResult {
+            derived_edges: 0,
+            hook_calls: 1,
+        })
+    );
+}
+
 struct DumpCallbacks {
     root_suffix: String,
     dyn_dispatch_vtable_edges: DynDispatchVTableEdges,
+    fn_pointer_edges: FnPointerEdges,
     output: Option<String>,
 }
 
@@ -410,6 +607,7 @@ impl Default for DumpCallbacks {
         Self {
             root_suffix: String::from("entry"),
             dyn_dispatch_vtable_edges: DynDispatchVTableEdges::CastSites,
+            fn_pointer_edges: FnPointerEdges::ReifySites,
             output: None,
         }
     }
@@ -426,6 +624,7 @@ impl Callbacks for DumpCallbacks {
             ReachabilityOptions {
                 node_limit: Some(96),
                 dyn_dispatch_vtable_edges: self.dyn_dispatch_vtable_edges,
+                fn_pointer_edges: self.fn_pointer_edges,
                 ..ReachabilityOptions::default()
             },
         );
@@ -433,6 +632,162 @@ impl Callbacks for DumpCallbacks {
         self.output = Some(render_graph(tcx, index.graph(), &result));
         Compilation::Stop
     }
+}
+
+#[derive(Clone, Copy)]
+enum SharedCallableScenario {
+    FunctionPointerReuse,
+    DynDispatchReuse,
+    ParentHooks,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct SharedCallableResult {
+    derived_edges: usize,
+    hook_calls: usize,
+}
+
+struct SharedCallableCallbacks {
+    scenario: SharedCallableScenario,
+    result: Option<SharedCallableResult>,
+}
+
+impl Callbacks for SharedCallableCallbacks {
+    fn after_analysis(&mut self, _compiler: &interface::Compiler, tcx: TyCtxt<'_>) -> Compilation {
+        self.result = Some(match self.scenario {
+            SharedCallableScenario::FunctionPointerReuse => {
+                let mut index = ReachabilityIndex::new(tcx);
+                let mut hooks = NoopReachabilityHooks;
+                index.query(
+                    ReachabilityRoot::LocalBody(find_local_body(tcx, "expose_fn_target")),
+                    &mut hooks,
+                    call_site_options(),
+                );
+                let snapshot = index.query(
+                    ReachabilityRoot::LocalBody(find_local_body(tcx, "call_fn_target")),
+                    &mut hooks,
+                    call_site_options(),
+                );
+                let derived_edges = index
+                    .graph()
+                    .view(&snapshot)
+                    .edges()
+                    .filter(|edge| edge.kind() == ReachabilityEdgeKind::FnPointerCallTarget)
+                    .count();
+                SharedCallableResult {
+                    derived_edges,
+                    hook_calls: 0,
+                }
+            }
+            SharedCallableScenario::DynDispatchReuse => {
+                let mut index = ReachabilityIndex::new(tcx);
+                let mut hooks = NoopReachabilityHooks;
+                index.query(
+                    ReachabilityRoot::LocalBody(find_local_body(tcx, "expose_dyn_target")),
+                    &mut hooks,
+                    call_site_options(),
+                );
+                let snapshot = index.query(
+                    ReachabilityRoot::LocalBody(find_local_body(tcx, "call_dyn_target")),
+                    &mut hooks,
+                    call_site_options(),
+                );
+                let derived_edges = index
+                    .graph()
+                    .view(&snapshot)
+                    .edges()
+                    .filter(|edge| edge.kind() == ReachabilityEdgeKind::DynDispatchVTableEntry)
+                    .count();
+                SharedCallableResult {
+                    derived_edges,
+                    hook_calls: 0,
+                }
+            }
+            SharedCallableScenario::ParentHooks => {
+                let root =
+                    ReachabilityRoot::LocalBody(find_local_body(tcx, "call_known_fn_target"));
+                let mut index = ReachabilityIndex::new(tcx);
+                let mut hooks = NoopReachabilityHooks;
+                index.query(root, &mut hooks, call_site_options());
+
+                let mut counting_hooks = DerivedEdgeHooks::default();
+                index.query(root, &mut counting_hooks, call_site_options());
+
+                let mut rejecting_hooks = DerivedEdgeHooks {
+                    reject_indirect_calls: true,
+                    ..DerivedEdgeHooks::default()
+                };
+                let rejected_snapshot =
+                    index.query(root, &mut rejecting_hooks, call_site_options());
+                let derived_edges = index
+                    .graph()
+                    .view(&rejected_snapshot)
+                    .edges()
+                    .filter(|edge| edge.kind() == ReachabilityEdgeKind::FnPointerCallTarget)
+                    .count();
+                SharedCallableResult {
+                    derived_edges,
+                    hook_calls: counting_hooks.derived_edge_calls,
+                }
+            }
+        });
+        Compilation::Stop
+    }
+}
+
+#[derive(Default)]
+struct DerivedEdgeHooks {
+    reject_indirect_calls: bool,
+    derived_edge_calls: usize,
+}
+
+impl<'tcx> ReachabilityHooks<'tcx> for DerivedEdgeHooks {
+    fn on_edge(
+        &mut self,
+        _cx: ReachabilityContext<'tcx>,
+        edge: &ReachabilityEdge,
+    ) -> ReachabilityControl<'tcx> {
+        if edge.kind == ReachabilityEdgeKind::FnPointerCallTarget {
+            self.derived_edge_calls += 1;
+        }
+        ControlFlow::Continue(())
+    }
+
+    fn should_record_edge(
+        &mut self,
+        _cx: ReachabilityContext<'tcx>,
+        edge: &ReachabilityEdge,
+    ) -> ReachabilityControl<'tcx, bool> {
+        ControlFlow::Continue(
+            !self.reject_indirect_calls || edge.kind != ReachabilityEdgeKind::IndirectCall,
+        )
+    }
+}
+
+fn call_site_options() -> ReachabilityOptions {
+    ReachabilityOptions {
+        node_limit: Some(96),
+        dyn_dispatch_vtable_edges: DynDispatchVTableEdges::CallSites,
+        fn_pointer_edges: FnPointerEdges::CallSites,
+        ..ReachabilityOptions::default()
+    }
+}
+
+fn run_test_compiler(project: &TempProject, callbacks: &mut (dyn Callbacks + Send)) {
+    let args = vec![
+        String::from("rustc"),
+        String::from("--crate-name"),
+        String::from("demo"),
+        String::from("--crate-type"),
+        String::from("lib"),
+        String::from("--edition"),
+        String::from("2024"),
+        String::from("--sysroot"),
+        rustc_sysroot(),
+        String::from("-Awarnings"),
+        project.source.display().to_string(),
+    ];
+    rustc_driver::run_compiler(&args, callbacks);
 }
 
 fn find_local_body(tcx: TyCtxt<'_>, suffix: &str) -> LocalDefId {

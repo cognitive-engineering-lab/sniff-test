@@ -11,7 +11,6 @@ expression: messages
     "dependencies": [],
     "findings": [
       {
-        "effect": "panic",
         "kind": "documented-panic",
         "level": "warn",
         "reason": "trusted_boundaries::trusted_doc_helper documents when it may panic under # Panics",
@@ -24,7 +23,6 @@ expression: messages
         ]
       },
       {
-        "effect": "panic",
         "kind": "panic-invocation",
         "level": "deny",
         "reason": "panic sink core::panicking::panic",
@@ -39,7 +37,7 @@ expression: messages
         ]
       }
     ],
-    "format-version": 8,
+    "format-version": 9,
     "reason": "sniff-test-artifact",
     "rustc-version": "[RUSTC_VERSION]",
     "scope": "workspace",

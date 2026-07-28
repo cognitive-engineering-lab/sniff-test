@@ -1,0 +1,19 @@
+[analysis]
+node-limit = 2
+
+[analysis.lints]
+analysis-incomplete = "allow"
+
+[panics]
+panic-sink-namespaces = [
+    "core::panicking::**",
+    "std::panicking::**",
+    "core::std::rt::panic_fmt",
+    "std::rt::panic_fmt",
+]
+
+[panics.lints]
+cached-dependency-panic = "deny"
+
+[safety]
+ignored-namespaces = ["dependency_panic_incomplete_resolved::**"]

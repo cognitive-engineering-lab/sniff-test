@@ -16,11 +16,12 @@ use rustc_hir::def_id::{DefId, LocalDefId};
 use rustc_middle::ty::TyCtxt;
 use rustc_span::Span;
 
-use crate::config::{ContractDocOverrides, SafetyConfig};
-use crate::contracts::{ContractDocSummary, ContractRequirement, EffectKind, contract_doc_summary};
+use crate::config::SafetyConfig;
+use crate::contracts::{
+    ContractDocOverrides, ContractDocSummary, ContractRequirement, safety_contract_doc_summary,
+};
 use crate::effect_tracker::{EffectEvidence, EffectSite};
 use crate::namespace::canonical_namespace;
-use crate::source_markers::EffectMarkerBlock;
 
 #[derive(Default)]
 pub(crate) struct SafetyAnalysis {
@@ -113,6 +114,7 @@ impl std::hash::Hash for SafetyEffectGroup {
     }
 }
 
+#[derive(Clone)]
 pub(crate) struct SafetyEvidence {
     effect: EffectEvidence<EffectSite, SafetyEvidenceKind>,
     requirements: Vec<SafetyRequirement>,
@@ -376,23 +378,12 @@ impl SafetyAnalysis {
 }
 
 impl SafetyEvidence {
-    pub(crate) fn resolve_paths(
-        &self,
-        tcx: TyCtxt<'_>,
-        config: &SafetyConfig,
-        path_markers: impl FnOnce() -> Vec<EffectMarkerBlock>,
-        find_unsatisfied: impl FnOnce(
-            &[ContractRequirement],
-        ) -> Vec<crate::effect_tracker::UnsatisfiedEffectTrace>,
-    ) -> crate::effect_tracker::ResolvedEffectPaths {
-        self.effect.resolve_paths(
-            tcx,
-            EffectKind::Safety,
-            config.marker_probing,
-            &self.requirements,
-            path_markers,
-            find_unsatisfied,
-        )
+    pub(crate) fn requirements(&self) -> &[SafetyRequirement] {
+        &self.requirements
+    }
+
+    pub(crate) fn terminal_marker_spans(&self) -> &[Span] {
+        &self.effect.terminal_marker_spans
     }
 
     pub(crate) fn site(&self) -> EffectSite {
@@ -484,75 +475,5 @@ pub(super) fn safety_doc_summary(
     def_id: DefId,
     overrides: &ContractDocOverrides,
 ) -> SafetyDocSummary {
-    contract_doc_summary(tcx, def_id, EffectKind::Safety, overrides)
-}
-
-#[cfg(test)]
-fn line_has_safety_heading(line: &str) -> bool {
-    crate::contracts::line_has_contract_heading(line, EffectKind::Safety)
-}
-
-#[cfg(test)]
-fn parse_safety_doc_lines<'a>(lines: impl IntoIterator<Item = &'a str>) -> SafetyDocSummary {
-    crate::contracts::parse_contract_doc_lines(lines, EffectKind::Safety)
-}
-
-#[cfg(test)]
-mod tests {
-    use super::{SafetyRequirement, line_has_safety_heading, parse_safety_doc_lines};
-    use rustc_span::DUMMY_SP;
-
-    #[test]
-    fn safety_doc_headings_match_supported_styles() {
-        assert!(line_has_safety_heading("# Safety"));
-        assert!(line_has_safety_heading("   ## SAFETY   "));
-        assert!(line_has_safety_heading("### Safety:"));
-    }
-
-    #[test]
-    fn safety_doc_headings_do_not_match_arbitrary_text() {
-        assert!(!line_has_safety_heading("Safety: no heading"));
-        assert!(!line_has_safety_heading("#Safety"));
-        assert!(!line_has_safety_heading("# Panics"));
-        assert!(!line_has_safety_heading("# Safety notes"));
-    }
-
-    #[test]
-    fn safety_doc_requirements_are_named_bullets_under_safety() {
-        let summary = parse_safety_doc_lines([
-            "# Safety",
-            "",
-            "The caller must satisfy all listed requirements.",
-            "",
-            "Requirements:",
-            "",
-            "- valid_ptr: pointer must be non-null",
-            "* initialized: pointer must reference initialized memory",
-            "- aligned:",
-            "# Panics",
-            "- ignored: this is outside the safety section",
-        ]);
-
-        assert!(summary.has_docs);
-        assert_eq!(
-            summary.requirements,
-            [
-                SafetyRequirement {
-                    name: String::from("valid_ptr"),
-                    condition: String::from("pointer must be non-null"),
-                    span: DUMMY_SP,
-                },
-                SafetyRequirement {
-                    name: String::from("initialized"),
-                    condition: String::from("pointer must reference initialized memory"),
-                    span: DUMMY_SP,
-                },
-                SafetyRequirement {
-                    name: String::from("aligned"),
-                    condition: String::new(),
-                    span: DUMMY_SP,
-                },
-            ]
-        );
-    }
+    safety_contract_doc_summary(tcx, def_id, overrides)
 }

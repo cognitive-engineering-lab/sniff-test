@@ -11,7 +11,6 @@ expression: messages
     "dependencies": [],
     "findings": [
       {
-        "effect": "panic",
         "kind": "panic-invocation",
         "level": "deny",
         "reason": "panic sink core::std::rt::panic_fmt",
@@ -27,7 +26,6 @@ expression: messages
         ]
       },
       {
-        "effect": "panic",
         "kind": "documented-panic",
         "level": "deny",
         "missing-requirements": [
@@ -43,7 +41,6 @@ expression: messages
         ]
       },
       {
-        "effect": "panic",
         "kind": "documented-panic",
         "level": "deny",
         "missing-requirements": [
@@ -59,7 +56,6 @@ expression: messages
         ]
       },
       {
-        "effect": "panic",
         "kind": "panic-invocation",
         "level": "deny",
         "reason": "panic sink core::std::rt::panic_fmt",
@@ -74,7 +70,6 @@ expression: messages
         ]
       },
       {
-        "effect": "panic",
         "kind": "panic-invocation",
         "level": "deny",
         "reason": "panic sink core::std::rt::panic_fmt",
@@ -89,7 +84,6 @@ expression: messages
         ]
       },
       {
-        "effect": "panic",
         "kind": "panic-invocation",
         "level": "deny",
         "reason": "panic sink core::std::rt::panic_fmt",
@@ -104,7 +98,7 @@ expression: messages
         ]
       }
     ],
-    "format-version": 8,
+    "format-version": 9,
     "reason": "sniff-test-artifact",
     "rustc-version": "[RUSTC_VERSION]",
     "scope": "dependency",
@@ -123,8 +117,7 @@ expression: messages
     ],
     "findings": [
       {
-        "effect": "panic",
-        "kind": "ambiguous-effect-marker",
+        "kind": "ambiguous-panic-marker",
         "level": "deny",
         "reason": "one `// PANIC:` marker applies to 2 panic obligation sites",
         "root": "dependency_panic_contract_app::ambiguous_marker",
@@ -136,7 +129,6 @@ expression: messages
         ]
       },
       {
-        "effect": "panic",
         "effect-span": "[FIXTURE]/dep/src/lib.rs:30:5: 30:43",
         "kind": "documented-panic",
         "level": "deny",
@@ -154,7 +146,6 @@ expression: messages
         ]
       },
       {
-        "effect": "panic",
         "effect-span": "[FIXTURE]/dep/src/lib.rs:17:5: 17:23",
         "kind": "documented-panic",
         "level": "deny",
@@ -172,7 +163,7 @@ expression: messages
         ]
       }
     ],
-    "format-version": 8,
+    "format-version": 9,
     "reason": "sniff-test-artifact",
     "rustc-version": "[RUSTC_VERSION]",
     "scope": "workspace",

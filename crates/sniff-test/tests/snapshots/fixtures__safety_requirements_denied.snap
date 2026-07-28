@@ -11,7 +11,6 @@ expression: messages
     "dependencies": [],
     "findings": [
       {
-        "effect": "safety",
         "function": "safety_requirements::configured_safety_obligation_missing_requirement",
         "kind": "safety-obligation-missing-requirements",
         "level": "deny",
@@ -25,7 +24,6 @@ expression: messages
         "target": "safety_requirements::safe_documented_contract"
       },
       {
-        "effect": "safety",
         "function": "safety_requirements::generic_unsafe_trait_method_missing",
         "kind": "unsafe-call-missing-requirements",
         "level": "deny",
@@ -39,7 +37,6 @@ expression: messages
         "target": "safety_requirements::UnsafeGreeter::greet"
       },
       {
-        "effect": "safety",
         "function": "safety_requirements::missing_justification",
         "kind": "unsafe-call-missing-justification",
         "level": "warn",
@@ -50,7 +47,6 @@ expression: messages
         "target": "safety_requirements::private_unsafe_no_docs"
       },
       {
-        "effect": "safety",
         "function": "safety_requirements::missing_requirement",
         "kind": "unsafe-call-missing-requirements",
         "level": "deny",
@@ -64,7 +60,6 @@ expression: messages
         "target": "safety_requirements::read_byte"
       },
       {
-        "effect": "safety",
         "function": "safety_requirements::safety_marker_boundary_missing_requirements",
         "kind": "unsafe-call-missing-requirements",
         "level": "deny",
@@ -79,7 +74,6 @@ expression: messages
         "target": "safety_requirements::read_byte"
       },
       {
-        "effect": "safety",
         "function": "safety_requirements::undocumented_public",
         "kind": "missing-safety-docs",
         "level": "warn",
@@ -89,7 +83,6 @@ expression: messages
         "span": "src/lib.rs:33:1: 33:57"
       },
       {
-        "effect": "safety",
         "function": "safety_requirements::unsafe_fn_pointer_missing_justification",
         "kind": "unsafe-call-missing-justification",
         "level": "warn",
@@ -100,7 +93,7 @@ expression: messages
         "target": "unsafe function pointer"
       }
     ],
-    "format-version": 8,
+    "format-version": 9,
     "reason": "sniff-test-artifact",
     "rustc-version": "[RUSTC_VERSION]",
     "scope": "workspace",

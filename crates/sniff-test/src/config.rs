@@ -14,24 +14,22 @@
 //! crate names in patterns, such as `proc_macro2`, not package names like
 //! `proc-macro2`.
 
-use std::borrow::Cow;
 use std::collections::BTreeMap;
 use std::fmt::{Debug, Display, Formatter};
 use std::ops::Range;
 use std::path::{Path, PathBuf};
 
-use globset::{GlobBuilder, GlobSet, GlobSetBuilder};
 use reachability::{
     DynDispatchVTableEdges as ReachabilityDynDispatchVTableEdges,
     FnPointerEdges as ReachabilityFnPointerEdges,
 };
 use rustc_hir::def_id::DefId;
 use rustc_middle::ty::TyCtxt;
-use serde::{Deserialize, Serialize, de::Error as _};
+use serde::{Deserialize, Serialize};
 use toml::Spanned;
 
-use crate::contracts::EffectKind;
-use crate::namespace::namespace_candidates;
+use crate::contracts::ContractDocOverrides;
+use crate::path_patterns::{PathPatternMatch, PathPatterns};
 
 pub const DEFAULT_MANIFEST_FILE: &str = "sniff-test.toml";
 pub const EXAMPLE_MANIFEST: &str = include_str!("../example-manifest.toml");
@@ -78,36 +76,24 @@ impl SniffTestConfig {
     /// Returns an error when the manifest contains unsupported syntax.
     pub fn from_manifest_str(source: &str) -> Result<Self, toml::de::Error> {
         let mut config: Self = toml::from_str(source)?;
-        config.install_runtime_options();
+        config.install_documentation_overrides();
         Ok(config)
     }
 
     fn load_documentation_overrides(&mut self, base_dir: &Path) -> Result<(), ConfigError> {
         self.documentation.load_overrides(base_dir)?;
-        self.install_runtime_options();
+        self.install_documentation_overrides();
         Ok(())
     }
 
-    fn install_runtime_options(&mut self) {
+    fn install_documentation_overrides(&mut self) {
         self.panics.documentation_overrides = self.documentation.overrides.clone();
         self.safety.documentation_overrides = self.documentation.overrides.clone();
-        self.panics.marker_probing = self.analysis.marker_probing;
-        self.safety.marker_probing = self.analysis.marker_probing;
-    }
-
-    #[must_use]
-    pub(crate) fn effect_ignores_namespace(&self, kind: EffectKind, namespace: &str) -> bool {
-        match kind {
-            EffectKind::Panic => self.panics.ignores_namespace(namespace),
-            EffectKind::Safety => self.safety.ignores_namespace(namespace),
-        }
     }
 
     #[must_use]
     pub(crate) fn all_effects_ignore_namespace(&self, namespace: &str) -> bool {
-        EffectKind::ALL
-            .into_iter()
-            .all(|kind| self.effect_ignores_namespace(kind, namespace))
+        self.safety.ignores_namespace(namespace) && self.panics.ignores_namespace(namespace)
     }
 }
 
@@ -225,67 +211,6 @@ fn normalize_override_markdown(markdown: &str) -> String {
         .map(|line| line.get(indent..).unwrap_or(""))
         .collect::<Vec<_>>()
         .join("\n")
-}
-
-/// Synthetic rustdoc markdown matched by Rust namespace glob.
-#[derive(Clone, Default, PartialEq, Eq)]
-pub struct ContractDocOverrides {
-    entries: Vec<ContractDocOverride>,
-    patterns: PathPatterns,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-struct ContractDocOverride {
-    pattern: String,
-    markdown: String,
-}
-
-impl ContractDocOverrides {
-    /// Compiles documentation overrides.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if any configured glob pattern is invalid.
-    pub fn new(entries: Vec<(String, String)>) -> Result<Self, globset::Error> {
-        let patterns =
-            PathPatterns::new(entries.iter().map(|(pattern, _)| pattern.clone()).collect())?;
-        Ok(Self {
-            entries: entries
-                .into_iter()
-                .map(|(pattern, markdown)| ContractDocOverride { pattern, markdown })
-                .collect(),
-            patterns,
-        })
-    }
-
-    #[must_use]
-    #[cfg(test)]
-    fn markdown_for_namespace(&self, namespace: &str) -> Option<&str> {
-        let matched = self.patterns.best_match(namespace)?;
-        self.entries
-            .iter()
-            .find(|entry| entry.pattern == matched.pattern)
-            .map(|entry| entry.markdown.as_str())
-    }
-
-    #[must_use]
-    pub fn markdown_for_def(&self, tcx: TyCtxt<'_>, def_id: DefId) -> Option<&str> {
-        let candidates = namespace_candidates(tcx, def_id);
-        let matched = candidates
-            .iter()
-            .filter_map(|candidate| self.patterns.best_match(candidate))
-            .max_by_key(|matched| matched.precision)?;
-        self.entries
-            .iter()
-            .find(|entry| entry.pattern == matched.pattern)
-            .map(|entry| entry.markdown.as_str())
-    }
-}
-
-impl Debug for ContractDocOverrides {
-    fn fmt(&self, formatter: &mut Formatter<'_>) -> std::fmt::Result {
-        self.entries.fmt(formatter)
-    }
 }
 
 impl Default for AnalysisConfig {
@@ -433,8 +358,6 @@ pub struct PanicConfig {
     pub panic_sink_namespaces: PathPatterns,
     #[serde(skip)]
     pub documentation_overrides: ContractDocOverrides,
-    #[serde(skip)]
-    pub marker_probing: MarkerProbing,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
@@ -492,8 +415,6 @@ pub struct SafetyConfig {
     pub lints: SafetyLintConfig,
     #[serde(skip)]
     pub documentation_overrides: ContractDocOverrides,
-    #[serde(skip)]
-    pub marker_probing: MarkerProbing,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
@@ -523,7 +444,7 @@ impl Default for SafetyLintConfig {
 impl PanicConfig {
     #[must_use]
     pub fn ignores_namespace(&self, namespace: &str) -> bool {
-        self.ignored_namespaces.is_match(namespace)
+        self.ignored_namespace_match(namespace).is_some()
     }
 
     #[must_use]
@@ -545,10 +466,7 @@ impl PanicConfig {
         tcx: TyCtxt<'_>,
         def_id: DefId,
     ) -> Option<&'patterns str> {
-        let candidates = namespace_candidates(tcx, def_id);
-        candidates
-            .iter()
-            .find_map(|candidate| self.ignored_namespace_match(candidate))
+        self.ignored_namespaces.matching_def_pattern(tcx, def_id)
     }
 
     #[must_use]
@@ -579,7 +497,7 @@ impl PanicConfig {
     }
 
     fn panic_sink_def_match(&self, tcx: TyCtxt<'_>, def_id: DefId) -> Option<PathPatternMatch<'_>> {
-        Self::best_def_match(tcx, def_id, &self.panic_sink_namespaces)
+        self.panic_sink_namespaces.best_def_match(tcx, def_id)
     }
 
     fn trusted_panic_obligation_def_match(
@@ -587,19 +505,8 @@ impl PanicConfig {
         tcx: TyCtxt<'_>,
         def_id: DefId,
     ) -> Option<PathPatternMatch<'_>> {
-        Self::best_def_match(tcx, def_id, &self.trusted_panic_obligation_namespaces)
-    }
-
-    fn best_def_match<'patterns>(
-        tcx: TyCtxt<'_>,
-        def_id: DefId,
-        patterns: &'patterns PathPatterns,
-    ) -> Option<PathPatternMatch<'patterns>> {
-        let candidates = namespace_candidates(tcx, def_id);
-        candidates
-            .iter()
-            .filter_map(|candidate| patterns.best_match(candidate))
-            .max_by_key(|matched| matched.precision)
+        self.trusted_panic_obligation_namespaces
+            .best_def_match(tcx, def_id)
     }
 }
 
@@ -628,10 +535,7 @@ impl SafetyConfig {
         tcx: TyCtxt<'_>,
         def_id: DefId,
     ) -> Option<&'patterns str> {
-        let candidates = namespace_candidates(tcx, def_id);
-        candidates
-            .iter()
-            .find_map(|candidate| self.ignored_namespace_match(candidate))
+        self.ignored_namespaces.matching_def_pattern(tcx, def_id)
     }
 
     #[must_use]
@@ -650,7 +554,8 @@ impl SafetyConfig {
         tcx: TyCtxt<'_>,
         def_id: DefId,
     ) -> Option<PathPatternMatch<'_>> {
-        PanicConfig::best_def_match(tcx, def_id, &self.safety_obligation_namespaces)
+        self.safety_obligation_namespaces
+            .best_def_match(tcx, def_id)
     }
 }
 
@@ -659,142 +564,6 @@ pub enum PanicBoundaryPolicy {
     PanicSink,
     TrustedPanicObligation,
     Normal,
-}
-
-/// Segment-aware glob patterns over Rust-style `::` paths.
-#[derive(Clone, Default)]
-pub struct PathPatterns {
-    patterns: Vec<String>,
-    /// Compiled glob index back to the configured pattern it came from.
-    /// Recursive patterns compile to two globs (see [`PathPatterns::new`]).
-    glob_pattern_indices: Vec<usize>,
-    set: Option<GlobSet>,
-}
-
-impl PathPatterns {
-    /// Compiles path patterns.
-    ///
-    /// A recursive pattern `x::**` also matches the namespace root `x` itself,
-    /// so trusting or ignoring a crate does not require listing both forms.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if any configured glob pattern is invalid.
-    pub fn new(patterns: Vec<String>) -> Result<Self, globset::Error> {
-        if patterns.is_empty() {
-            return Ok(Self {
-                patterns,
-                glob_pattern_indices: Vec::new(),
-                set: None,
-            });
-        }
-
-        let mut set = GlobSetBuilder::new();
-        let mut glob_pattern_indices = Vec::new();
-        for (index, pattern) in patterns.iter().enumerate() {
-            set.add(
-                GlobBuilder::new(normalized_path(pattern).as_ref())
-                    .literal_separator(true)
-                    .build()?,
-            );
-            glob_pattern_indices.push(index);
-
-            if let Some(root) = pattern.strip_suffix("::**")
-                && !root.is_empty()
-            {
-                set.add(
-                    GlobBuilder::new(normalized_path(root).as_ref())
-                        .literal_separator(true)
-                        .build()?,
-                );
-                glob_pattern_indices.push(index);
-            }
-        }
-
-        let set = Some(set.build()?);
-        Ok(Self {
-            patterns,
-            glob_pattern_indices,
-            set,
-        })
-    }
-
-    #[must_use]
-    pub fn matching_pattern(&self, path: &str) -> Option<&str> {
-        self.best_match(path).map(|matched| matched.pattern)
-    }
-
-    #[must_use]
-    pub fn best_match(&self, path: &str) -> Option<PathPatternMatch<'_>> {
-        let set = self.set.as_ref()?;
-
-        let path = normalized_path(path);
-        set.matches(path.as_ref())
-            .into_iter()
-            .map(|index| {
-                let pattern = self.patterns[self.glob_pattern_indices[index]].as_str();
-                PathPatternMatch {
-                    pattern,
-                    precision: pattern_precision(pattern),
-                }
-            })
-            .max_by_key(|matched| matched.precision)
-    }
-
-    #[must_use]
-    pub fn is_match(&self, path: &str) -> bool {
-        let Some(set) = &self.set else {
-            return false;
-        };
-
-        let path = normalized_path(path);
-        set.is_match(path.as_ref())
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct PathPatternMatch<'patterns> {
-    pub pattern: &'patterns str,
-    pub precision: usize,
-}
-
-impl Debug for PathPatterns {
-    fn fmt(&self, formatter: &mut Formatter<'_>) -> std::fmt::Result {
-        self.patterns.fmt(formatter)
-    }
-}
-
-impl PartialEq for PathPatterns {
-    fn eq(&self, other: &Self) -> bool {
-        self.patterns == other.patterns
-    }
-}
-
-impl Eq for PathPatterns {}
-
-impl<'de> Deserialize<'de> for PathPatterns {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: serde::Deserializer<'de>,
-    {
-        let patterns = Vec::<String>::deserialize(deserializer)?;
-        Self::new(patterns).map_err(D::Error::custom)
-    }
-}
-
-fn normalized_path(path: &str) -> Cow<'_, str> {
-    if path.contains("::") {
-        Cow::Owned(path.replace("::", "/"))
-    } else {
-        Cow::Borrowed(path)
-    }
-}
-
-fn pattern_precision(pattern: &str) -> usize {
-    pattern
-        .split("::")
-        .filter(|segment| !segment.is_empty() && *segment != "**")
-        .count()
 }
 
 /// Current-crate functions whose reachable effect paths should be reported.
@@ -1041,8 +810,6 @@ mod tests {
             parsed.analysis.marker_probing,
             MarkerProbing::SourceCallsite
         );
-        assert_eq!(parsed.panics.marker_probing, MarkerProbing::SourceCallsite);
-        assert_eq!(parsed.safety.marker_probing, MarkerProbing::SourceCallsite);
     }
 
     #[test]
@@ -1147,6 +914,17 @@ mod tests {
             lints.safety_obligation_missing_requirements,
             LintLevel::Warn
         );
+    }
+
+    #[test]
+    fn dependency_is_fully_ignored_only_when_both_effects_ignore_it() {
+        let mut config = SniffTestConfig::default();
+        config.panics.ignored_namespaces = path_patterns(&["shared::**", "panic_only::**"]);
+        config.safety.ignored_namespaces = path_patterns(&["shared::**", "safety_only::**"]);
+
+        assert!(config.all_effects_ignore_namespace("shared::module"));
+        assert!(!config.all_effects_ignore_namespace("panic_only::module"));
+        assert!(!config.all_effects_ignore_namespace("safety_only::module"));
     }
 
     #[test]

@@ -13,11 +13,9 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
-use crate::EffectKind;
-
-pub const CACHE_FORMAT_VERSION: u32 = 9;
+pub const CACHE_FORMAT_VERSION: u32 = 10;
 pub const CACHE_DIR_NAME: &str = "sniff-test-cache";
-pub const CACHE_VERSION_DIR: &str = "v9";
+pub const CACHE_VERSION_DIR: &str = "v10";
 pub const OUTCOME_FORMAT_VERSION: u32 = 2;
 
 /// Per-unit verdict persisted with artifact lifetime.
@@ -117,6 +115,12 @@ pub struct CachedArtifactAnalysis {
     pub functions: BTreeMap<String, CachedFunctionSummary>,
 }
 
+#[derive(Deserialize)]
+#[serde(rename_all = "kebab-case")]
+struct CacheFormatHeader {
+    format_version: u32,
+}
+
 impl CachedArtifactAnalysis {
     #[must_use]
     pub fn new(
@@ -174,17 +178,23 @@ impl CachedArtifactAnalysis {
             path: path.to_owned(),
             source,
         })?;
+        let header = serde_json::from_str::<CacheFormatHeader>(&source).map_err(|source| {
+            CacheError::Json {
+                path: path.to_owned(),
+                source,
+            }
+        })?;
+        if header.format_version != CACHE_FORMAT_VERSION {
+            return Err(CacheError::Format {
+                path: path.to_owned(),
+                version: header.format_version,
+            });
+        }
         let analysis =
             serde_json::from_str::<Self>(&source).map_err(|source| CacheError::Json {
                 path: path.to_owned(),
                 source,
             })?;
-        if analysis.format_version != CACHE_FORMAT_VERSION {
-            return Err(CacheError::Format {
-                path: path.to_owned(),
-                version: analysis.format_version,
-            });
-        }
         for (field, found, expected) in [
             ("sniff-test", &analysis.tool_version, expected.tool_version),
             ("rustc", &analysis.rustc_version, expected.rustc_version),
@@ -231,7 +241,8 @@ pub struct CachedFunctionSummary {
     pub path: String,
     pub is_generic: bool,
     pub root_span: Option<CachedSourceSpan>,
-    pub effects: BTreeMap<EffectKind, CachedEffectSummary>,
+    pub panic: CachedEffectSummary,
+    pub safety: CachedEffectSummary,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -242,42 +253,40 @@ pub struct CachedEffectSummary {
     /// exhaustive.
     pub analysis_complete: bool,
     pub has_contract: bool,
-    pub graph: Option<CachedReachabilityGraph>,
+    pub graph: CachedReachabilityGraph,
     pub findings: Vec<CachedFinding>,
 }
 
-impl CachedFunctionSummary {
+impl CachedEffectSummary {
     #[must_use]
-    pub fn effect(&self, kind: EffectKind) -> Option<&CachedEffectSummary> {
-        self.effects.get(&kind)
-    }
-
-    #[must_use]
-    pub fn effect_trace(&self, kind: EffectKind, finding: &CachedFinding) -> Vec<CachedTraceStep> {
-        let mut trace = self
-            .effect(kind)
-            .and_then(|summary| summary.graph.as_ref())
-            .into_iter()
-            .flat_map(|graph| {
-                finding.trace.iter().filter_map(|edge_id| {
-                    let edge = graph.edges.iter().find(|edge| edge.id == *edge_id)?;
-                    let source = graph.nodes.iter().find(|node| node.id == edge.source)?;
-                    let target = graph.nodes.iter().find(|node| node.id == edge.target)?;
-                    Some(CachedTraceStep {
-                        span: edge.span.clone(),
-                        source: source.kind.clone(),
-                        kind: edge.kind,
-                        target: target.kind.clone(),
-                    })
+    pub fn trace(&self, finding: &CachedFinding) -> Vec<CachedTraceStep> {
+        let mut trace = finding
+            .trace
+            .iter()
+            .filter_map(|edge_id| {
+                let edge = self.graph.edges.iter().find(|edge| edge.id == *edge_id)?;
+                let source = self
+                    .graph
+                    .nodes
+                    .iter()
+                    .find(|node| node.id == edge.source)?;
+                let target = self
+                    .graph
+                    .nodes
+                    .iter()
+                    .find(|node| node.id == edge.target)?;
+                Some(CachedTraceStep {
+                    span: edge.span.clone(),
+                    source: source.kind.clone(),
+                    kind: edge.kind,
+                    target: target.kind.clone(),
                 })
             })
             .collect::<Vec<_>>();
         trace.extend(finding.dependency_trace.iter().cloned());
         trace
     }
-}
 
-impl CachedEffectSummary {
     #[must_use]
     pub fn is_reachable(&self) -> bool {
         self.has_contract
@@ -285,30 +294,6 @@ impl CachedEffectSummary {
                 .findings
                 .iter()
                 .any(|finding| finding.kind.is_effect_evidence())
-    }
-
-    #[must_use]
-    pub fn raw_path_count(&self) -> usize {
-        self.findings
-            .iter()
-            .filter(|finding| finding.kind.is_raw_effect())
-            .count()
-    }
-
-    #[must_use]
-    pub fn panic_obligation_count(&self) -> usize {
-        self.findings
-            .iter()
-            .filter(|finding| finding.kind == CachedFindingKind::PanicObligation)
-            .count()
-    }
-
-    #[must_use]
-    pub fn trusted_panic_obligation_count(&self) -> usize {
-        self.findings
-            .iter()
-            .filter(|finding| finding.kind == CachedFindingKind::TrustedPanicObligation)
-            .count()
     }
 }
 
@@ -386,23 +371,29 @@ pub enum CachedFindingKind {
 
 impl CachedFindingKind {
     fn is_effect_evidence(self) -> bool {
-        self.effect().is_some()
+        self != Self::CrateBoundary
     }
 
-    pub(crate) fn effect(self) -> Option<EffectKind> {
-        match self {
+    pub(crate) fn is_panic(self) -> bool {
+        matches!(
+            self,
             Self::CompilerAssert
-            | Self::PanicInvocation
-            | Self::PanicObligation
-            | Self::TrustedPanicObligation
-            | Self::IndirectCallBoundary => Some(EffectKind::Panic),
+                | Self::PanicInvocation
+                | Self::PanicObligation
+                | Self::TrustedPanicObligation
+                | Self::IndirectCallBoundary
+        )
+    }
+
+    pub(crate) fn is_safety(self) -> bool {
+        matches!(
+            self,
             Self::UnsafeCallMissingJustification
-            | Self::UnsafeCallMissingRequirements
-            | Self::UnsafeOpMissingJustification
-            | Self::SafetyObligationMissingJustification
-            | Self::SafetyObligationMissingRequirements => Some(EffectKind::Safety),
-            Self::CrateBoundary => None,
-        }
+                | Self::UnsafeCallMissingRequirements
+                | Self::UnsafeOpMissingJustification
+                | Self::SafetyObligationMissingJustification
+                | Self::SafetyObligationMissingRequirements
+        )
     }
 
     pub(crate) fn is_raw_effect(self) -> bool {
@@ -501,7 +492,6 @@ pub enum CachedReachabilityEdgeKind {
     TailCall,
     FnPointerReify,
     ClosureFnPointerReify,
-    ClosureDefinition,
     FnPointerCallTarget,
     DynObjectCast,
     VTableEntry,
@@ -673,8 +663,9 @@ fn sanitize_path_component(value: &str) -> String {
 mod tests {
     use super::{
         CacheError, CacheExpectations, CachedArtifactAnalysis, CachedArtifactInfo,
-        CachedEffectSummary, CachedFinding, CachedFindingKind, artifact_cache_path,
-        artifact_id_from_extern_path, crate_cache_path, default_cache_dir, write_atomic,
+        CachedEffectSummary, CachedFinding, CachedFindingKind, CachedFunctionSummary,
+        artifact_cache_path, artifact_id_from_extern_path, crate_cache_path, default_cache_dir,
+        write_atomic,
     };
 
     #[test]
@@ -703,34 +694,41 @@ mod tests {
             artifact_cache_path(&root, "sniff_test-29f0")
                 .display()
                 .to_string(),
-            "/target/plugin-nightly/sniff-test-cache/v9/artifacts/sniff_test-29f0.json"
+            "/target/plugin-nightly/sniff-test-cache/v10/artifacts/sniff_test-29f0.json"
         );
         assert_eq!(
             crate_cache_path(&root, "sniff-test", "sniff_test-29f0")
                 .display()
                 .to_string(),
-            "/target/plugin-nightly/sniff-test-cache/v9/crates/sniff-test/sniff_test-29f0.json"
+            "/target/plugin-nightly/sniff-test-cache/v10/crates/sniff-test/sniff_test-29f0.json"
         );
-    }
-
-    #[test]
-    fn effect_counts_are_derived_from_cached_findings() {
-        let summary = effect_summary([
-            CachedFindingKind::CompilerAssert,
-            CachedFindingKind::PanicObligation,
-            CachedFindingKind::TrustedPanicObligation,
-            CachedFindingKind::CrateBoundary,
-        ]);
-
-        assert!(summary.is_reachable());
-        assert_eq!(summary.raw_path_count(), 1);
-        assert_eq!(summary.panic_obligation_count(), 1);
-        assert_eq!(summary.trusted_panic_obligation_count(), 1);
     }
 
     #[test]
     fn crate_boundaries_are_not_effect_evidence() {
         assert!(!effect_summary([CachedFindingKind::CrateBoundary]).is_reachable());
+    }
+
+    #[test]
+    fn effect_findings_are_reachable() {
+        assert!(effect_summary([CachedFindingKind::CompilerAssert]).is_reachable());
+    }
+
+    #[test]
+    fn function_cache_uses_named_effect_summaries() {
+        let function = CachedFunctionSummary {
+            def_path_hash: String::from("hash"),
+            path: String::from("demo::root"),
+            is_generic: false,
+            root_span: None,
+            panic: effect_summary([]),
+            safety: effect_summary([]),
+        };
+
+        let value = serde_json::to_value(function).expect("serialize function cache");
+        assert!(value.get("panic").is_some());
+        assert!(value.get("safety").is_some());
+        assert!(value.get("effects").is_none());
     }
 
     #[test]
@@ -775,6 +773,12 @@ mod tests {
             CachedArtifactAnalysis::read(&path, &current),
             Err(CacheError::Format { version: 3, .. })
         ));
+
+        write_atomic(&path, r#"{"format-version":9}"#).expect("write legacy header");
+        assert!(matches!(
+            CachedArtifactAnalysis::read(&path, &current),
+            Err(CacheError::Format { version: 9, .. })
+        ));
     }
 
     fn analysis(tool_version: &str, rustc_version: &str) -> CachedArtifactAnalysis {
@@ -794,7 +798,11 @@ mod tests {
         CachedEffectSummary {
             analysis_complete: true,
             has_contract: false,
-            graph: None,
+            graph: super::CachedReachabilityGraph {
+                root: 0,
+                nodes: Vec::new(),
+                edges: Vec::new(),
+            },
             findings: kinds
                 .into_iter()
                 .map(|kind| CachedFinding {
