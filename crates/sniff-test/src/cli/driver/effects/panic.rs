@@ -13,7 +13,7 @@ use rustc_middle::ty::{Instance, TyCtxt};
 use crate::cache::{CachedFinding, CachedFindingKind, CachedFunctionSummary};
 use crate::cli::cache_encode::{cached_boundary_findings, cached_reachability_graph};
 use crate::cli::findings::{Finding, FindingKind};
-use crate::cli::report::{PanicRootReport, panic_analysis_incomplete_finding, render_node};
+use crate::cli::report::{PanicRootReport, render_node};
 use crate::config::{AnalysisConfig, CallableEdgeAttribution, PanicBoundaryPolicy, PanicConfig};
 use crate::dependency_cache::DependencyAnalysisCache;
 use crate::effect_tracker::{EffectPathDecision, EffectTrace, find_effect_trace_to_edge};
@@ -286,7 +286,7 @@ pub(super) fn analyze_root<'tcx>(
         tcx,
         root,
         analysis_config,
-        panic_analysis_incomplete_finding,
+        FindingKind::PanicAnalysisIncomplete,
         crate::panics::has_panic_docs(tcx, root.def_id(), config),
         report,
         cache,

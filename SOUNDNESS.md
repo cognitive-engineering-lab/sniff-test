@@ -142,12 +142,11 @@ rustflags and best-effort `build.rustflags` from config files. Config-file
 recovered and do not apply to the analysis build, which can make the analyzed
 cfg set differ from the shipped build's.
 
-### Outcome and cache validity ride on cargo fingerprints
+### Dependency cache validity rides on cargo fingerprints
 
-Persisted unit outcomes and dependency caches are trusted for fresh units on
-the strength of the injected fingerprint inputs (`sniff_test_config_*`,
-`sniff_test_tool_*` cfgs, `SNIFF_TEST_ARGS` env-depinfo, rustc-scoped target
-directories). Anything that bypasses cargo's fingerprinting — hand-editing
-files under `target/`, sharing a `--cache-dir` across machines with
-differently-patched toolchains of the same version string — can replay stale
-verdicts.
+Dependency caches are trusted for fresh units on the strength of the injected
+fingerprint inputs (`sniff_test_config_*`, `sniff_test_tool_*` cfgs,
+`SNIFF_TEST_ARGS` env-depinfo, rustc-scoped target directories). Anything that
+bypasses cargo's fingerprinting — hand-editing files under `target/`, sharing a
+`--cache-dir` across machines with differently-patched toolchains of the same
+version string — can replay stale effect evidence.

@@ -12,7 +12,8 @@ use crate::cache::{
     CachedEffectSummary, CachedFinding, CachedFunctionSummary, CachedReachabilityGraph,
 };
 use crate::cli::cache_encode::cached_source_span;
-use crate::cli::findings::Finding;
+use crate::cli::findings::{Finding, FindingKind};
+use crate::cli::report::analysis_incomplete_finding;
 use crate::config::{AnalysisConfig, SniffTestConfig};
 use crate::dependency_cache::DependencyAnalysisCache;
 use crate::namespace::{canonical_namespace, stable_def_path_hash};
@@ -58,7 +59,7 @@ fn finish_effect_root<'tcx>(
     tcx: TyCtxt<'tcx>,
     root: ReportRoot<'tcx>,
     analysis_config: &AnalysisConfig,
-    incomplete_finding: impl FnOnce(TyCtxt<'tcx>, rustc_hir::def_id::DefId, usize) -> Finding,
+    incomplete_finding_kind: FindingKind,
     has_contract: bool,
     report: EffectReportOutput,
     cache: EffectCacheOutput,
@@ -67,7 +68,12 @@ fn finish_effect_root<'tcx>(
     let analysis_complete =
         report.query_complete && cache.query_complete && cache.dependencies_complete;
     if !report.query_complete || !cache.query_complete {
-        let mut finding = incomplete_finding(tcx, root.def_id(), analysis_config.node_limit);
+        let mut finding = analysis_incomplete_finding(
+            tcx,
+            root.def_id(),
+            analysis_config.node_limit,
+            incomplete_finding_kind,
+        );
         finding.root = Some(canonical_namespace(tcx, root.def_id()));
         finding.root_kind = Some(root.kind());
         findings.push(finding);

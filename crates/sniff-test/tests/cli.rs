@@ -40,9 +40,9 @@ cli_cases! {
             .config_append("\n[panics.lints]\npanic-invocation = \"allow\"\n");
     }
     "safe_markers" => {
-        compact_stack_hint => Case::new("compact stack hint").exit_code(1);
+        compact_stack_hint => Case::new("compact stack hint").exit_code(101);
         full_stack_trace => Case::new("full stack trace")
-            .exit_code(1)
+            .exit_code(101)
             .config_append("\n[analysis]\nshow-full-stack-trace = true\n");
     }
     "dependency_obligation" => {
@@ -51,12 +51,12 @@ cli_cases! {
     "dependency_identity" => {
         cached_dependency_raw_panic_diagnostics => Case::new("cached dependency raw panic diagnostics")
             .crate_dir("app")
-            .exit_code(1);
+            .exit_code(101);
     }
     "closure_call_graph" => {
         closure_call_graph_diagnostics => Case::new("closure diagnostics")
             .args(&["--manifest", "basic.toml"])
-            .exit_code(1);
+            .exit_code(101);
     }
     "indirect_calls" => {
         indirect_call_boundary_diagnostics => Case::new("indirect call boundary diagnostics");
@@ -67,45 +67,45 @@ cli_cases! {
             .args(&["--manifest", "obligations.toml"]);
     }
     "panic_axioms" => {
-        compiler_assert_diagnostics => Case::new("compiler assert diagnostics").exit_code(1);
+        compiler_assert_diagnostics => Case::new("compiler assert diagnostics").exit_code(101);
         cargo_manifest_path_forwarding => Case::new("cargo manifest-path forwarding")
             .working_dir("..")
             .args(&["--", "--manifest-path", "{fixture}/Cargo.toml"])
-            .exit_code(1);
+            .exit_code(101);
         config_found_from_subdirectory => Case::new("config discovered from a subdirectory")
             .working_dir("src")
-            .exit_code(1);
+            .exit_code(101);
         rustflags_env_does_not_disable_analysis => Case::new("user RUSTFLAGS coexist")
             .envs(&[("RUSTFLAGS", "--cfg sniff_test_cli_user_flag")])
-            .exit_code(1);
+            .exit_code(101);
     }
     "report_roots" => {
         missing_report_root_diagnostic => Case::new("missing report root diagnostic")
             .args(&["--manifest", "explicit.toml"])
-            .exit_code(1);
+            .exit_code(101);
         missing_report_root_can_be_allowed => Case::new("missing report root allow policy")
             .args(&["--manifest", "allow-missing.toml"]);
         missing_report_root_can_be_denied => Case::new("missing report root deny policy")
             .args(&["--manifest", "deny-missing.toml"])
-            .exit_code(1);
+            .exit_code(101);
         empty_report_roots_can_be_denied => Case::new("empty report roots deny policy")
             .args(&["--manifest", "deny-empty.toml"])
-            .exit_code(1);
+            .exit_code(101);
     }
     "unsafe_ops" => {
         unsafe_op_missing_justification_can_be_denied => Case::new("unsafe operation deny policy")
             .config_append("\n[safety.lints]\nunsafe-op-missing-justification = \"deny\"\n")
-            .exit_code(1);
+            .exit_code(101);
     }
     "ambiguous_markers" => {
         clean_explicit_report_roots_do_not_warn => Case::new("clean explicit report roots")
             .args(&["--manifest", "clean.toml"]);
         ambiguous_marker_diagnostics => Case::new("ambiguous marker diagnostics")
             .args(&["--manifest", "strict.toml"])
-            .exit_code(1);
+            .exit_code(101);
     }
     "ambiguous_safety" => {
-        ambiguous_safety_diagnostics => Case::new("ambiguous safety diagnostics").exit_code(1);
+        ambiguous_safety_diagnostics => Case::new("ambiguous safety diagnostics").exit_code(101);
     }
 }
 
@@ -240,39 +240,6 @@ fn direct_driver_reports_linked_rustc_version() {
 }
 
 #[test]
-fn cargo_frontend_fails_when_unit_outcome_cannot_be_written() {
-    let temp = tempfile::tempdir().expect("temp dir");
-    let fixture = temp.path().join("direct_panic");
-    copy_dir_all(&repo_root().join("tests/fixtures/direct_panic"), &fixture).expect("copy fixture");
-    let cache_file = temp.path().join("not-a-cache-directory");
-    fs::write(&cache_file, "occupied").expect("write cache file");
-
-    let binary = PathBuf::from(env!("CARGO_BIN_EXE_cargo-sniff-test"));
-    let mut command = Command::new(binary);
-    clean_cargo_package_env(&mut command);
-    let _cargo_guard = lock_nested_cargo();
-    let output = command
-        .args(["--message-format", "json", "--cache-dir"])
-        .arg(&cache_file)
-        .args(["--color", "never"])
-        .current_dir(&fixture)
-        .output()
-        .expect("run cargo frontend");
-
-    assert!(
-        !output.status.success(),
-        "stdout:\n{}\nstderr:\n{}",
-        String::from_utf8_lossy(&output.stdout),
-        String::from_utf8_lossy(&output.stderr)
-    );
-    assert!(
-        String::from_utf8_lossy(&output.stderr).contains("failed to write unit outcome"),
-        "stderr:\n{}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-}
-
-#[test]
 fn cargo_frontend_fails_when_dependency_analysis_cannot_be_cached() {
     let temp = tempfile::tempdir().expect("temp dir");
     let fixture = temp.path().join("dependency_identity");
@@ -311,7 +278,7 @@ fn cargo_frontend_fails_when_dependency_analysis_cannot_be_cached() {
 }
 
 #[test]
-fn direct_driver_warns_when_cache_writes_fail() {
+fn direct_driver_warns_when_analysis_cache_write_fails() {
     let temp = tempfile::tempdir().expect("temp dir");
     let cache_file = temp.path().join("not-a-cache-directory");
     fs::write(&cache_file, "occupied").expect("write cache file");
@@ -329,7 +296,7 @@ fn direct_driver_warns_when_cache_writes_fail() {
         .args(["--message-format", "json", "--color", "never", "--"])
         .args([
             "--crate-name",
-            "direct_outcome_failure",
+            "direct_cache_failure",
             "--crate-type",
             "lib",
             "--edition",
@@ -348,11 +315,6 @@ fn direct_driver_warns_when_cache_writes_fail() {
     );
     assert!(
         String::from_utf8_lossy(&output.stderr).contains("warning: failed to write analysis cache"),
-        "stderr:\n{}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    assert!(
-        String::from_utf8_lossy(&output.stderr).contains("warning: failed to write unit outcome"),
         "stderr:\n{}",
         String::from_utf8_lossy(&output.stderr)
     );
@@ -489,21 +451,6 @@ fn cargo_subcommand_token_is_accepted() {
         String::from_utf8_lossy(&output.stdout).contains("Usage: cargo sniff-test"),
         "stdout: {}",
         String::from_utf8_lossy(&output.stdout)
-    );
-}
-
-#[test]
-fn misplaced_message_format_is_rendered_by_frontend_boundary() {
-    let binary = PathBuf::from(env!("CARGO_BIN_EXE_cargo-sniff-test"));
-    let output = Command::new(binary)
-        .args(["--", "--message-format=json"])
-        .output()
-        .expect("run cargo frontend");
-
-    assert_eq!(output.status.code(), Some(1));
-    assert_eq!(
-        String::from_utf8_lossy(&output.stderr),
-        "error: pass --message-format to sniff-test itself, before any `--` separator\n"
     );
 }
 

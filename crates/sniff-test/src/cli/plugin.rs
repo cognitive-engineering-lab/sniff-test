@@ -5,6 +5,7 @@ use std::process::{Command, ExitCode};
 use crate::cache::default_cache_dir;
 use crate::config::SniffTestConfig;
 use anyhow::{Context, Result, bail};
+use clap::Parser as _;
 use rustc_driver::{Callbacks, Compilation};
 use rustc_interface::interface;
 use rustc_middle::ty::TyCtxt;
@@ -62,8 +63,8 @@ pub(crate) fn modify_cargo(cargo: &mut Command, args: &SniffTestArgs) -> Result<
         .unwrap_or(config.analysis.overflow_checks);
     let inline_mir = config.analysis.inline_mir;
     // Cargo can reuse fresh units without rerunning the driver. Include every
-    // report-affecting input in the rustc fingerprint so persisted outcomes
-    // remain valid.
+    // analysis-affecting input in the rustc fingerprint so reports and
+    // dependency caches stay aligned with the current invocation.
     let mut rustflags = vec![
         "--cfg".to_owned(),
         format!("sniff_test_color_{}", args.color.as_cargo_arg()),
@@ -94,7 +95,7 @@ pub(crate) fn modify_cargo(cargo: &mut Command, args: &SniffTestArgs) -> Result<
     // source, so the sniff_test_* cfg cache-busting keeps working.
     cargo.env(
         "CARGO_ENCODED_RUSTFLAGS",
-        compose_encoded_rustflags(&rustflags),
+        encode_rustflags(user_rustflags(), &rustflags),
     );
 
     if let Some(manifest_path) = &args.manifest_path {
@@ -132,21 +133,35 @@ pub fn driver_main() -> ExitCode {
 
 fn try_driver_main() -> Result<ExitCode> {
     let original_args = std::env::args().collect::<Vec<_>>();
-    if second_arg_is_rustc(&original_args) {
+    let is_info_query = |args: &[String]| {
+        args.iter().any(|arg| {
+            matches!(arg.as_str(), "--version" | "-V" | "-vV" | "-Vv" | "--print")
+                || arg.starts_with("--print=")
+        })
+    };
+    let is_rustc_wrapper_invocation = original_args
+        .get(1)
+        .map(Path::new)
+        .and_then(Path::file_stem)
+        == Some(OsStr::new("rustc"));
+    if is_rustc_wrapper_invocation {
         let mut compiler_args = original_args;
-        strip_rustc_wrapper_arg(&mut compiler_args);
+        compiler_args.remove(1);
         if is_info_query(&compiler_args) {
             rustc_driver::run_compiler(&compiler_args, &mut DefaultCallbacks);
             return Ok(ExitCode::SUCCESS);
         }
 
-        let mut args = args_from_env()?;
+        let source = std::env::var(SNIFF_TEST_ARGS_ENV)
+            .with_context(|| format!("missing {SNIFF_TEST_ARGS_ENV}"))?;
+        let mut args: SniffTestArgs = serde_json::from_str(&source)
+            .with_context(|| format!("failed to decode {SNIFF_TEST_ARGS_ENV}"))?;
         args.under_cargo = true;
         return run_driver(&compiler_args, args);
     }
 
     let binary = original_args[0].clone();
-    let driver = match DriverCli::try_parse(original_args) {
+    let driver = match DriverCli::try_parse_from(original_args) {
         Ok(driver) => driver,
         Err(error) => {
             let exit_code = error.exit_code();
@@ -162,22 +177,6 @@ fn try_driver_main() -> Result<ExitCode> {
     }
 
     run_driver(&compiler_args, args)
-}
-
-fn second_arg_is_rustc(args: &[String]) -> bool {
-    args.get(1).map(Path::new).and_then(Path::file_stem) == Some(OsStr::new("rustc"))
-}
-
-fn strip_rustc_wrapper_arg(args: &mut Vec<String>) {
-    if second_arg_is_rustc(args) {
-        args.remove(1);
-    }
-}
-
-fn args_from_env() -> Result<SniffTestArgs> {
-    let source = std::env::var(SNIFF_TEST_ARGS_ENV)
-        .with_context(|| format!("missing {SNIFF_TEST_ARGS_ENV}"))?;
-    serde_json::from_str(&source).with_context(|| format!("failed to decode {SNIFF_TEST_ARGS_ENV}"))
 }
 
 fn direct_args(mut args: SniffTestArgs) -> Result<SniffTestArgs> {
@@ -204,7 +203,11 @@ fn run_driver(compiler_args: &[String], args: SniffTestArgs) -> Result<ExitCode>
     // mode, and user-RUSTFLAGS scenarios alike; the flag is UNTRACKED, so it
     // never perturbs cargo fingerprints. Cost: THIR stays allocated for the
     // whole compilation of each unit.
-    if !has_no_steal_thir(&compiler_args) {
+    let has_no_steal_thir = compiler_args.iter().any(|arg| arg == "-Zno-steal-thir")
+        || compiler_args
+            .windows(2)
+            .any(|pair| pair[0] == "-Z" && pair[1] == "no-steal-thir");
+    if !has_no_steal_thir {
         compiler_args.push(String::from("-Zno-steal-thir"));
     }
     let config = load_config(&args).context("failed to load configuration")?;
@@ -221,13 +224,6 @@ fn run_driver(compiler_args: &[String], args: SniffTestArgs) -> Result<ExitCode>
     Ok(rustc_driver::catch_with_exit_code(|| {
         rustc_driver::run_compiler(&compiler_args, &mut callbacks);
     }))
-}
-
-fn has_no_steal_thir(compiler_args: &[String]) -> bool {
-    compiler_args.iter().any(|arg| arg == "-Zno-steal-thir")
-        || compiler_args
-            .windows(2)
-            .any(|pair| pair[0] == "-Z" && pair[1] == "no-steal-thir")
 }
 
 pub(crate) fn driver_path() -> Result<std::path::PathBuf> {
@@ -293,10 +289,6 @@ fn tracked_config_files_from_config(
     files
 }
 
-fn compose_encoded_rustflags(tool_flags: &[String]) -> String {
-    encode_rustflags(user_rustflags(), tool_flags)
-}
-
 fn encode_rustflags(user_flags: Vec<String>, tool_flags: &[String]) -> String {
     user_flags
         .into_iter()
@@ -350,17 +342,6 @@ fn config_build_rustflags() -> Option<Vec<String>> {
         }
         _ => None,
     }
-}
-
-fn is_info_query(args: &[String]) -> bool {
-    args.iter().any(|arg| {
-        arg == "--version"
-            || arg == "-V"
-            || arg == "-vV"
-            || arg == "-Vv"
-            || arg == "--print"
-            || arg.starts_with("--print=")
-    })
 }
 
 struct DefaultCallbacks;

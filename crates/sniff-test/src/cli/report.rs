@@ -42,12 +42,6 @@ pub(crate) struct AnalysisArtifactReport {
     pub(crate) findings: Vec<ResolvedFinding>,
 }
 
-impl AnalysisArtifactReport {
-    pub(crate) fn has_denied_findings(&self) -> bool {
-        self.findings.iter().any(|finding| finding.level.is_deny())
-    }
-}
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "kebab-case")]
 pub(crate) enum CrateOutputScope {
@@ -285,33 +279,7 @@ impl PanicRootReport {
     }
 }
 
-pub(crate) fn panic_analysis_incomplete_finding(
-    tcx: TyCtxt<'_>,
-    root_def_id: DefId,
-    node_limit: usize,
-) -> Finding {
-    analysis_incomplete_finding(
-        tcx,
-        root_def_id,
-        node_limit,
-        FindingKind::PanicAnalysisIncomplete,
-    )
-}
-
-pub(crate) fn safety_analysis_incomplete_finding(
-    tcx: TyCtxt<'_>,
-    root_def_id: DefId,
-    node_limit: usize,
-) -> Finding {
-    analysis_incomplete_finding(
-        tcx,
-        root_def_id,
-        node_limit,
-        FindingKind::SafetyAnalysisIncomplete,
-    )
-}
-
-fn analysis_incomplete_finding(
+pub(crate) fn analysis_incomplete_finding(
     tcx: TyCtxt<'_>,
     root_def_id: DefId,
     node_limit: usize,

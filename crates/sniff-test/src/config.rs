@@ -394,11 +394,6 @@ pub enum LintLevel {
 
 impl LintLevel {
     #[must_use]
-    pub fn is_deny(self) -> bool {
-        self == Self::Deny
-    }
-
-    #[must_use]
     pub fn is_allow(self) -> bool {
         self == Self::Allow
     }

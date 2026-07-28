@@ -98,51 +98,51 @@ macro_rules! fixture_cases {
 
 fixture_cases! {
     "panic_axioms" => {
-        panic_axioms => Case::cargo("raw panic paths").exit_code(1);
+        panic_axioms => Case::cargo("raw panic paths").exit_code(101);
         driver_panic_axioms => Case::direct("raw panic paths");
     }
     "generic_roots" => {
-        generic_roots => Case::cargo("generic roots").exit_code(1);
+        generic_roots => Case::cargo("generic roots").exit_code(101);
         driver_generic_roots => Case::direct("generic roots");
     }
     "direct_panic" => {
-        direct_panic => Case::cargo("direct panic").exit_code(1);
+        direct_panic => Case::cargo("direct panic").exit_code(101);
         driver_direct_panic => Case::direct("direct panic");
     }
     "closure_call_graph" => {
-        closure_call_graph => Case::cargo("call graph edges").exit_code(1);
+        closure_call_graph => Case::cargo("call graph edges").exit_code(101);
         closure_call_graph_call_sites => Case::cargo("call graph edges with callable call-site attribution")
             .args(&["--manifest", "call-sites.toml"])
-            .exit_code(1);
+            .exit_code(101);
         driver_closure_call_graph => Case::direct("call graph edges");
         driver_closure_call_graph_call_sites =>
             Case::direct("call graph edges with callable call-site attribution")
                 .manifest("call-sites.toml");
     }
     "custom_index_impl" => {
-        custom_index_impl => Case::cargo("custom index dispatch").exit_code(1);
+        custom_index_impl => Case::cargo("custom index dispatch").exit_code(101);
         driver_custom_index_impl => Case::direct("custom index dispatch");
     }
     "trait_default_method" => {
-        trait_default_method => Case::cargo("trait default dispatch").exit_code(1);
+        trait_default_method => Case::cargo("trait default dispatch").exit_code(101);
         driver_trait_default_method => Case::direct("trait default dispatch");
     }
     "dyn_dispatch_call_site" => {
-        dyn_dispatch_call_site => Case::cargo("dyn dispatch call-site attribution").exit_code(1);
+        dyn_dispatch_call_site => Case::cargo("dyn dispatch call-site attribution").exit_code(101);
         driver_dyn_dispatch_call_site => Case::direct("dyn dispatch call-site attribution");
     }
     "dyn_dispatch_same_trait" => {
-        dyn_dispatch_same_trait => Case::cargo("dyn dispatch same-trait approximation").exit_code(1);
+        dyn_dispatch_same_trait => Case::cargo("dyn dispatch same-trait approximation").exit_code(101);
         driver_dyn_dispatch_same_trait => Case::direct("dyn dispatch same-trait approximation");
     }
     "supertrait_dyn_dispatch" => {
         supertrait_dyn_dispatch => Case::cargo("supertrait methods match dyn vtable entries")
-            .exit_code(1);
+            .exit_code(101);
         driver_supertrait_dyn_dispatch =>
             Case::direct("supertrait methods match dyn vtable entries");
     }
     "documented_obligation" => {
-        documented_obligation => Case::cargo("documented panic obligation").exit_code(1);
+        documented_obligation => Case::cargo("documented panic obligation").exit_code(101);
         documented_obligation_allowed => Case::cargo("allowed documented panic obligation")
             .args(&["--manifest", "allow.toml"]);
         driver_documented_obligation => Case::direct("documented panic obligation");
@@ -155,10 +155,10 @@ fixture_cases! {
     }
     "converging_effect_paths" => {
         converging_effect_paths =>
-            Case::cargo("raw effect paths survive convergence").exit_code(1);
+            Case::cargo("raw effect paths survive convergence").exit_code(101);
     }
     "release_pruning" => {
-        release_pruning => Case::cargo("release profile pruning").exit_code(1);
+        release_pruning => Case::cargo("release profile pruning").exit_code(101);
     }
     "optimizer_pruning" => {
         optimizer_pruning => Case::cargo("optimizer pruning");
@@ -166,14 +166,14 @@ fixture_cases! {
     "feature_gated" => {
         feature_gated => Case::cargo("feature-enabled raw panic")
             .args(&["--", "--features", "dangerous"])
-            .exit_code(1);
+            .exit_code(101);
         feature_gated_default => Case::cargo("feature-default clean");
     }
     "suppression" => {
         suppression => Case::cargo("suppressed");
         suppression_miss => Case::cargo("suppression miss")
             .args(&["--manifest", "miss.toml"])
-            .exit_code(1);
+            .exit_code(101);
         driver_suppression => Case::direct("suppressed");
         driver_suppression_miss => Case::direct("suppression miss").manifest("miss.toml");
     }
@@ -186,54 +186,54 @@ fixture_cases! {
     "dependency_safety" => {
         dependency_safety => Case::cargo("dependency safety effect")
             .crate_dir("app")
-            .exit_code(1);
+            .exit_code(101);
     }
     "dependency_safety_contract" => {
         dependency_safety_contract => Case::cargo("cached safety markers and concrete findings")
             .crate_dir("app")
-            .exit_code(1);
+            .exit_code(101);
         dependency_safety_policy => Case::cargo("cached safety finding policy")
             .crate_dir("app")
             .args(&["--manifest", "policy.toml"])
-            .exit_code(1);
+            .exit_code(101);
         dependency_safety_unnamed_marker => Case::cargo("cached named safety requirement")
             .crate_dir("app")
             .args(&["--manifest", "unnamed-marker.toml"])
-            .exit_code(1);
+            .exit_code(101);
         dependency_safety_ambiguous_marker => Case::cargo("ambiguous cached safety marker")
             .crate_dir("app")
             .args(&["--manifest", "ambiguous-marker.toml"])
-            .exit_code(1);
+            .exit_code(101);
     }
     "dependency_safety_partial_requirements" => {
         dependency_safety_partial_requirements =>
             Case::cargo("cached safety markers satisfy only named requirements they claim")
                 .crate_dir("app")
-                .exit_code(1);
+                .exit_code(101);
     }
     "partial_effect_requirements" => {
         partial_effect_requirements => Case::cargo("partial cached requirement propagation")
             .crate_dir("app")
-            .exit_code(1);
+            .exit_code(101);
     }
     "dependency_safety_incomplete" => {
         dependency_safety_incomplete => Case::cargo("incomplete safety cache propagation")
             .crate_dir("app")
-            .exit_code(1);
+            .exit_code(101);
     }
     "dependency_identity" => {
         dependency_identity => Case::cargo("dependency cache identity across sessions")
             .crate_dir("app")
-            .exit_code(1);
+            .exit_code(101);
     }
     "dependency_transitive_panic" => {
         dependency_transitive_panic => Case::cargo("panic evidence crosses two cache boundaries")
             .crate_dir("app")
-            .exit_code(1);
+            .exit_code(101);
         dependency_transitive_panic_four_crates =>
             Case::cargo("panic traces survive three cache boundaries")
                 .crate_dir("outer")
-                .exit_code(1);
+                .exit_code(101);
     }
     "dependency_panic_incomplete_boundary" => {
         dependency_panic_incomplete_boundary =>
@@ -244,23 +244,23 @@ fixture_cases! {
         dependency_panic_incomplete_resolved =>
             Case::cargo("resolved cached panics do not hide incomplete dependency analysis")
                 .crate_dir("app")
-                .exit_code(1);
+                .exit_code(101);
     }
     "dependency_mixed_panic" => {
         dependency_mixed_panic => Case::cargo("cached raw and trusted panic evidence coexist")
             .crate_dir("app")
-            .exit_code(1);
+            .exit_code(101);
     }
     "dependency_cross_origin_ambiguity" => {
         dependency_cross_origin_marker_is_ambiguous =>
             Case::cargo("one marker cannot justify local and cached dependency effects")
                 .crate_dir("app")
-                .exit_code(1);
+                .exit_code(101);
     }
     "dependency_panic_contract" => {
         dependency_panic_contract => Case::cargo("cached panic marker contracts")
             .crate_dir("app")
-            .exit_code(1);
+            .exit_code(101);
     }
     "std_trait_impl_glob" => {
         std_trait_impl_glob => Case::cargo("trait-impl methods match trusted globs");
@@ -280,11 +280,11 @@ fixture_cases! {
         driver_unsafe_const_init => Case::direct("const and static initializers are skipped");
     }
     "node_limit" => {
-        node_limit => Case::cargo("halted traversals fail loudly").exit_code(1);
+        node_limit => Case::cargo("halted traversals fail loudly").exit_code(101);
         driver_node_limit => Case::direct("halted traversals fail loudly");
     }
     "safety_node_limit" => {
-        safety_node_limit => Case::cargo("safety traversal truncation fails loudly").exit_code(1);
+        safety_node_limit => Case::cargo("safety traversal truncation fails loudly").exit_code(101);
     }
     "indirect_calls" => {
         indirect_calls => Case::cargo("indirect calls surface obligations or boundaries");
@@ -296,7 +296,7 @@ fixture_cases! {
         driver_chain_markers => Case::direct("markers anchor to chain links");
     }
     "visibility_roots" => {
-        visibility_roots => Case::cargo("effective visibility selects roots").exit_code(1);
+        visibility_roots => Case::cargo("effective visibility selects roots").exit_code(101);
         visibility_roots_panic_ignored => Case::cargo("panic ignores do not suppress safety")
             .args(&["--manifest", "panic-ignore.toml"]);
         driver_visibility_roots => Case::direct("effective visibility selects roots");
@@ -305,12 +305,12 @@ fixture_cases! {
         vendored_dep => Case::cargo("vendored path deps are not workspace code");
     }
     "safe_markers" => {
-        safe_markers => Case::cargo("panic marker satisfaction").exit_code(1);
+        safe_markers => Case::cargo("panic marker satisfaction").exit_code(101);
         driver_safe_markers => Case::direct("panic marker satisfaction");
     }
     "transitive_effect_markers" => {
         transitive_effect_markers => Case::cargo("transitive panic and safety markers")
-            .exit_code(1);
+            .exit_code(101);
     }
     "panic_requirements" => {
         panic_requirements => Case::cargo("panic requirement satisfaction");
@@ -322,7 +322,7 @@ fixture_cases! {
             .args(&["--manifest", "warn.toml"]);
         ambiguous_markers_strict => Case::cargo("ambiguous marker default error policy")
             .args(&["--manifest", "strict.toml"])
-            .exit_code(1);
+            .exit_code(101);
         driver_ambiguous_markers => Case::direct("ambiguous marker allow policy");
         driver_ambiguous_markers_warn => Case::direct("ambiguous marker warn policy")
             .manifest("warn.toml");
@@ -335,7 +335,7 @@ fixture_cases! {
         ambiguous_safety_warn => Case::cargo("ambiguous safety warn policy")
             .args(&["--manifest", "warn.toml"]);
         ambiguous_safety_strict => Case::cargo("ambiguous safety default error policy")
-            .exit_code(1);
+            .exit_code(101);
         driver_ambiguous_safety_strict => Case::direct("ambiguous safety default error policy");
     }
     "safety_requirements" => {
@@ -344,7 +344,7 @@ fixture_cases! {
             .args(&["--manifest", "allow.toml"]);
         safety_requirements_denied => Case::cargo("denied safety finding")
             .args(&["--manifest", "deny.toml"])
-            .exit_code(1);
+            .exit_code(101);
         safety_requirements_ignored => Case::cargo("ignored safety namespaces")
             .args(&["--manifest", "ignore.toml"]);
         safety_requirements_obligations => Case::cargo("configured safety obligations")
@@ -352,17 +352,17 @@ fixture_cases! {
         driver_safety_requirements => Case::direct("safety requirement satisfaction");
     }
     "marker_placement" => {
-        marker_placement => Case::cargo("marker placement").exit_code(1);
+        marker_placement => Case::cargo("marker placement").exit_code(101);
         driver_marker_placement => Case::direct("marker placement");
     }
     "macro_expansion" => {
-        macro_expansion => Case::cargo("macro expansion trace").exit_code(1);
+        macro_expansion => Case::cargo("macro expansion trace").exit_code(101);
         macro_expansion_source_callsite => Case::cargo("source-callsite marker probing")
             .args(&["--manifest", "source-callsite.toml"])
-            .exit_code(1);
+            .exit_code(101);
         macro_expansion_static_assert_ignored => Case::cargo("ignored macro expansion")
             .args(&["--manifest", "ignore-static.toml"])
-            .exit_code(1);
+            .exit_code(101);
         driver_macro_expansion => Case::direct("macro expansion trace");
         driver_macro_expansion_source_callsite => Case::direct("source-callsite marker probing")
             .manifest("source-callsite.toml");
@@ -373,19 +373,19 @@ fixture_cases! {
         trusted_boundaries => Case::cargo("trusted boundary");
         trusted_boundaries_untrusted => Case::cargo("untrusted boundary")
             .args(&["--manifest", "untrusted.toml"])
-            .exit_code(1);
+            .exit_code(101);
         driver_trusted_boundaries => Case::direct("trusted boundary");
         driver_trusted_boundaries_untrusted => Case::direct("untrusted boundary")
             .manifest("untrusted.toml");
     }
     "report_roots" => {
-        report_roots_public => Case::cargo("public report roots").exit_code(1);
+        report_roots_public => Case::cargo("public report roots").exit_code(101);
         report_roots_all => Case::cargo("all report roots")
             .args(&["--manifest", "all.toml"])
-            .exit_code(1);
+            .exit_code(101);
         report_roots_explicit => Case::cargo("explicit report roots")
             .args(&["--manifest", "explicit.toml"])
-            .exit_code(1);
+            .exit_code(101);
         driver_report_roots_public => Case::direct("public report roots");
         driver_report_roots_all => Case::direct("all report roots").manifest("all.toml");
         driver_report_roots_explicit => Case::direct("explicit report roots").manifest("explicit.toml");
@@ -413,7 +413,7 @@ fn dependency_scope_keeps_safety_findings() {
     let sysroot = rustc_sysroot();
     let case = Case::cargo("dependency safety findings match panic scope behavior")
         .crate_dir("app")
-        .exit_code(1);
+        .exit_code(101);
     let messages = run_case(
         &repo,
         &binaries,
@@ -441,7 +441,7 @@ fn cached_safety_findings_keep_their_effect_spans() {
     let sysroot = rustc_sysroot();
     let case = Case::cargo("cached safety findings retain their originating spans")
         .crate_dir("app")
-        .exit_code(1);
+        .exit_code(101);
     let messages = run_case(
         &repo,
         &binaries,
@@ -475,13 +475,13 @@ fn cached_safety_findings_keep_their_effect_spans() {
     );
 }
 
-/// Runs a cargo case twice against one fixture copy. The second run is fully
-/// fresh — cargo never re-invokes the driver — and must reproduce the first
-/// run's exit code and messages from persisted unit outcomes.
-fn run_named_rerun_case(name: &'static str, fixture_name: &'static str, case: &Case) {
+#[test]
+fn fresh_cargo_run_does_not_replay_json_reports() {
+    let name = "fresh_cargo_run_does_not_replay_json_reports";
+    let fixture_name = "panic_requirements";
+    let case = Case::cargo("fresh units do not emit reports");
     let repo = repo_root();
     let binaries = Binaries::from_cargo();
-    let sysroot = rustc_sysroot();
 
     let fixture = repo.join("tests/fixtures").join(fixture_name);
     assert!(
@@ -503,60 +503,27 @@ fn run_named_rerun_case(name: &'static str, fixture_name: &'static str, case: &C
     let (first, second) = {
         let _cargo_guard = lock_nested_cargo();
         (
-            run_cargo_case(&binaries.cargo, &root, name, case),
-            run_cargo_case(&binaries.cargo, &root, name, case),
+            run_cargo_case(&binaries.cargo, &root, name, &case),
+            run_cargo_case(&binaries.cargo, &root, name, &case),
         )
     };
-    for (run, output) in [("first", &first), ("second", &second)] {
-        assert_eq!(
-            output.status.code(),
-            Some(case.exit_code),
-            "{} ({}/{}): {run} run exited {:?}, expected {}\nstdout:\n{}\nstderr:\n{}",
-            name,
-            fixture_name,
-            case.behavior,
-            output.status.code(),
-            case.exit_code,
+    for output in [&first, &second] {
+        assert!(
+            output.status.success(),
+            "stdout:\n{}\nstderr:\n{}",
             output.stdout,
             output.stderr
         );
     }
-
-    let first_messages = parse_messages(&first, &root, &sysroot, name, fixture_name, case);
-    let second_messages = parse_messages(&second, &root, &sysroot, name, fixture_name, case);
-    assert_eq!(
-        first_messages, second_messages,
-        "{name}: a fresh rerun must reproduce the first run's messages"
+    assert!(
+        first.stdout.contains(r#""reason":"sniff-test-artifact""#),
+        "first stdout:\n{}",
+        first.stdout
     );
-    insta::assert_json_snapshot!(name, second_messages);
-}
-
-#[test]
-fn panic_axioms_rerun() {
-    run_named_rerun_case(
-        "panic_axioms_rerun",
-        "panic_axioms",
-        &Case::cargo("rerun keeps denied panic verdicts").exit_code(1),
-    );
-}
-
-#[test]
-fn safety_requirements_denied_rerun() {
-    run_named_rerun_case(
-        "safety_requirements_denied_rerun",
-        "safety_requirements",
-        &Case::cargo("rerun keeps denied safety verdicts")
-            .args(&["--manifest", "deny.toml"])
-            .exit_code(1),
-    );
-}
-
-#[test]
-fn panic_requirements_rerun() {
-    run_named_rerun_case(
-        "panic_requirements_rerun",
-        "panic_requirements",
-        &Case::cargo("rerun re-emits clean reports"),
+    assert!(
+        second.stdout.trim().is_empty(),
+        "fresh stdout:\n{}",
+        second.stdout
     );
 }
 
@@ -616,6 +583,16 @@ fn run_case(
         output.stdout,
         output.stderr
     );
+    if case.driver == Driver::Cargo && case.exit_code != 0 {
+        assert!(
+            output.stderr.contains("error:"),
+            "{} ({}/{}): denied findings must fail through rustc/Cargo\nstderr:\n{}",
+            name,
+            fixture_name,
+            case.behavior,
+            output.stderr
+        );
+    }
 
     parse_messages(&output, &root, sysroot, name, fixture_name, case)
 }

@@ -136,10 +136,6 @@ pub(super) struct DriverCli {
 }
 
 impl DriverCli {
-    pub(super) fn try_parse(args: impl IntoIterator<Item = String>) -> Result<Self, clap::Error> {
-        Self::try_parse_from(args)
-    }
-
     pub(super) fn into_parts(self, binary: String) -> (Vec<String>, SniffTestArgs) {
         let mut rustc_args = Vec::with_capacity(self.rustc_args.len() + 1);
         rustc_args.push(binary);
@@ -255,7 +251,7 @@ mod tests {
 
     #[test]
     fn direct_driver_parses_options_before_rustc_args() {
-        let cli = DriverCli::try_parse(
+        let cli = DriverCli::try_parse_from(
             [
                 "sniff-test-driver",
                 "--message-format=json",

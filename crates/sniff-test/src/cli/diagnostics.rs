@@ -519,7 +519,10 @@ fn add_cached_dependency_panic_site_notes(
                 ),
             );
         } else {
-            diag.note(cached_dependency_panic_site_note(finding));
+            diag.note(format!(
+                "cached dependency panic evidence was recorded at {}: {}",
+                finding.span, finding.reason
+            ));
         }
         notes += 1;
     }
@@ -529,13 +532,6 @@ fn add_cached_dependency_panic_site_notes(
             "dependency analysis was incomplete, so no concrete cached panic site is available",
         ));
     }
-}
-
-fn cached_dependency_panic_site_note(finding: &CachedFinding) -> String {
-    format!(
-        "cached dependency panic evidence was recorded at {}: {}",
-        finding.span, finding.reason
-    )
 }
 
 fn cached_source_span(tcx: TyCtxt<'_>, span: &CachedSourceSpan) -> Option<Span> {

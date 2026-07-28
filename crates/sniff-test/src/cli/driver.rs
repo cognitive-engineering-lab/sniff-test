@@ -4,10 +4,7 @@ mod effects;
 
 use std::path::{Path, PathBuf};
 
-use crate::cache::{
-    CacheError, CacheExpectations, CachedArtifactAnalysis, CachedArtifactInfo,
-    OUTCOME_FORMAT_VERSION, UnitOutcome, artifact_id,
-};
+use crate::cache::{CacheExpectations, CachedArtifactAnalysis, CachedArtifactInfo, artifact_id};
 use crate::config::SniffTestConfig;
 use crate::dependency_cache::{DependencyAnalysisCache, DependencyInput};
 use crate::report_roots::select_report_roots;
@@ -56,8 +53,8 @@ pub(crate) fn analyze_crate(
 
     let selection = select_report_roots(tcx, &config.analysis);
     let selection_has_roots = !selection.roots.is_empty();
-    let emit_diagnostics = args.message_format == args::MessageFormat::Human
-        && output_scope == CrateOutputScope::Workspace;
+    let emit_diagnostics = output_scope == CrateOutputScope::Workspace
+        && (args.under_cargo || args.message_format == args::MessageFormat::Human);
     let effect_analysis =
         analyze_effect_roots(tcx, selection, &config.analysis, config, &dependency_cache);
     let empty_report_roots = !selection_has_roots && effect_analysis.missing_roots.is_empty();
@@ -92,72 +89,19 @@ pub(crate) fn analyze_crate(
             eprintln!("sniff-test: warning: failed to write analysis cache: {error}");
         }
     }
-    emit_report_and_outcome(
-        tcx,
-        args,
-        &analysis.report,
-        analysis.report.scope == CrateOutputScope::Workspace
-            && analysis.report.has_denied_findings(),
-    );
+    emit_report(args, &analysis.report);
 }
 
-fn emit_report_and_outcome(
-    tcx: TyCtxt<'_>,
-    args: &SniffTestArgs,
-    report: &AnalysisArtifactReport,
-    has_denied_findings: bool,
-) {
-    let report_json = match serde_json::to_string(report) {
-        Ok(report_json) => Some(report_json),
+fn emit_report(args: &SniffTestArgs, report: &AnalysisArtifactReport) {
+    if args.message_format != args::MessageFormat::Json {
+        return;
+    }
+    match serde_json::to_string(report) {
+        Ok(report) => println!("{report}"),
         Err(error) => {
             eprintln!("sniff-test: failed to encode JSON report: {error}");
-            None
         }
-    };
-    if args.message_format == args::MessageFormat::Json
-        && let Some(report_json) = &report_json
-    {
-        println!("{report_json}");
     }
-    let outcome = UnitOutcome {
-        format_version: OUTCOME_FORMAT_VERSION,
-        tool_version: env!("CARGO_PKG_VERSION").to_owned(),
-        artifact_id: report.artifact.artifact_id.clone(),
-        has_denied_findings,
-        report_json,
-    };
-    if let Err(error) = write_unit_outcome_and_announce(args, &outcome) {
-        report_unit_outcome_write_error(tcx, args, &error);
-    }
-}
-
-fn report_unit_outcome_write_error(tcx: TyCtxt<'_>, args: &SniffTestArgs, error: &CacheError) {
-    if args.under_cargo {
-        let diagnostic = tcx
-            .dcx()
-            .struct_err(format!("failed to write unit outcome: {error}"));
-        let _ = diagnostic.emit();
-    } else {
-        eprintln!("sniff-test: warning: failed to write unit outcome: {error}");
-    }
-}
-
-fn write_unit_outcome_and_announce(
-    args: &SniffTestArgs,
-    outcome: &UnitOutcome,
-) -> Result<(), CacheError> {
-    let result = outcome.write(&args.cache_dir());
-    // Deny findings fail this unit's compilation, so cargo never announces it
-    // with a compiler-artifact message. This line puts the unit in the
-    // frontend's build plan regardless; the frontend swallows it, users never
-    // see it.
-    if args.under_cargo {
-        println!(
-            r#"{{"reason":"sniff-test-outcome","artifact-id":{}}}"#,
-            serde_json::json!(outcome.artifact_id)
-        );
-    }
-    result
 }
 
 struct AnalysisArtifact {

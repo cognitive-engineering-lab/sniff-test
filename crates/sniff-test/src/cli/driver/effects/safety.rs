@@ -16,7 +16,6 @@ use crate::cli::diagnostics::{
     cached_dependency_safety_diagnostic, cached_dependency_safety_incomplete_diagnostic,
 };
 use crate::cli::findings::{Finding, FindingKind, safety_finding_report};
-use crate::cli::report::safety_analysis_incomplete_finding;
 use crate::config::{AnalysisConfig, SafetyConfig};
 use crate::dependency_cache::DependencyAnalysisCache;
 use crate::effect_tracker::{EffectTrace, find_effect_trace, find_effect_trace_to_edge};
@@ -233,7 +232,7 @@ pub(super) fn analyze_root<'tcx>(
         tcx,
         root,
         analysis_config,
-        safety_analysis_incomplete_finding,
+        FindingKind::SafetyAnalysisIncomplete,
         safety_doc_summary(tcx, root.def_id(), &config.documentation_overrides).has_docs,
         EffectReportOutput {
             findings,

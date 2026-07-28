@@ -1,12 +1,10 @@
-//! Cargo execution, message processing, build-plan tracking, and outcome replay.
+//! Cargo command orchestration.
 
-use std::collections::HashSet;
 use std::path::Path;
 use std::process::{Command, ExitCode};
 
-use crate::cache::{UnitOutcome, artifact_id_from_extern_path};
 use crate::config::EXAMPLE_MANIFEST;
-use anyhow::{Context, Result, anyhow, bail};
+use anyhow::{Context, Result, bail};
 
 use super::args::{self, FrontendAction, FrontendCli, InitCliArgs, SniffTestArgs};
 use super::plugin::{SNIFF_TEST_ARGS_ENV, frontend_args, modify_cargo, validate_manifest};
@@ -42,14 +40,10 @@ fn try_cargo_frontend() -> Result<ExitCode> {
     if let Some(path) = &parsed_args.manifest_path {
         validate_manifest(path)?;
     }
-    if parsed_args
-        .cargo_args
-        .iter()
-        .any(|arg| arg == "--message-format" || arg.starts_with("--message-format="))
-    {
-        bail!("pass --message-format to sniff-test itself, before any `--` separator");
-    }
-    let metadata = metadata_command(&parsed_args)
+    let mut metadata_command = cargo_metadata::MetadataCommand::new();
+    metadata_command.no_deps();
+    metadata_command.other_options(metadata_cargo_args(&parsed_args.cargo_args));
+    let metadata = metadata_command
         .exec()
         .context("failed to read Cargo metadata")?;
     let parsed_args = discover_manifest(parsed_args, metadata.workspace_root.as_std_path())?;
@@ -70,7 +64,6 @@ fn try_cargo_frontend() -> Result<ExitCode> {
 
     let mut cargo = Command::new("cargo");
     cargo.args(["check", "--target-dir"]).arg(&target_dir);
-    cargo.args(["--message-format", "json-render-diagnostics"]);
     if std::env::var_os("CARGO_VERBOSE").is_some() {
         cargo.arg("-vv");
     }
@@ -79,39 +72,11 @@ fn try_cargo_frontend() -> Result<ExitCode> {
         serde_json::to_string(&args).context("failed to encode driver arguments")?,
     );
     modify_cargo(&mut cargo, &args)?;
-    cargo.stdout(std::process::Stdio::piped());
-
-    let mut child = cargo.spawn().context("failed to run Cargo")?;
-    let Some(stdout) = child.stdout.take() else {
-        let _ = child.kill();
-        return Err(anyhow!("failed to capture Cargo output"));
+    let status = cargo.status().context("failed to run Cargo")?;
+    let Some(code) = status.code() else {
+        return Ok(ExitCode::FAILURE);
     };
-    let mut plan = Vec::new();
-    let mut planned = HashSet::new();
-    let mut streamed = HashSet::new();
-    for line in std::io::BufRead::lines(std::io::BufReader::new(stdout)) {
-        let Ok(line) = line else {
-            break;
-        };
-        process_cargo_message(&line, &args, &mut plan, &mut planned, &mut streamed);
-    }
-    let status = child.wait();
-    let denied = consume_unit_outcomes(&args, &plan, &streamed);
-    let status = status.context("failed to wait for Cargo")?;
-    Ok(if status.success() {
-        if denied {
-            ExitCode::FAILURE
-        } else {
-            ExitCode::SUCCESS
-        }
-    } else if denied {
-        ExitCode::FAILURE
-    } else {
-        match status.code() {
-            Some(code) => ExitCode::from(u8::try_from(code).unwrap_or(1)),
-            None => ExitCode::FAILURE,
-        }
-    })
+    Ok(ExitCode::from(u8::try_from(code).unwrap_or(1)))
 }
 
 fn run_init(args: &InitCliArgs) -> Result<ExitCode> {
@@ -158,104 +123,6 @@ fn discover_manifest(mut args: SniffTestArgs, workspace_root: &Path) -> Result<S
         workspace_root.display(),
     );
     Ok(args)
-}
-
-fn process_cargo_message(
-    line: &str,
-    args: &SniffTestArgs,
-    plan: &mut Vec<String>,
-    planned: &mut HashSet<String>,
-    streamed: &mut HashSet<String>,
-) {
-    let Ok(message) = serde_json::from_str::<serde_json::Value>(line) else {
-        return;
-    };
-    match message.get("reason").and_then(serde_json::Value::as_str) {
-        Some("compiler-artifact") => {
-            if let Some(id) = compiler_artifact_id(&message)
-                && planned.insert(id.clone())
-            {
-                plan.push(id);
-            }
-        }
-        Some("sniff-test-outcome") => {
-            if let Some(id) = message
-                .get("artifact-id")
-                .and_then(serde_json::Value::as_str)
-                && planned.insert(id.to_owned())
-            {
-                plan.push(id.to_owned());
-            }
-        }
-        Some("sniff-test-artifact") => {
-            if args.message_format == args::MessageFormat::Json {
-                println!("{line}");
-            }
-            if let Some(id) = message
-                .get("artifact")
-                .and_then(|artifact| artifact.get("artifact-id"))
-                .and_then(serde_json::Value::as_str)
-            {
-                streamed.insert(id.to_owned());
-            }
-        }
-        _ => {}
-    }
-}
-
-fn compiler_artifact_id(message: &serde_json::Value) -> Option<String> {
-    let filenames = message.get("filenames")?.as_array()?;
-    let mut fallback = None;
-    for name in filenames.iter().filter_map(serde_json::Value::as_str) {
-        let path = Path::new(name);
-        let Some(id) = artifact_id_from_extern_path(path) else {
-            continue;
-        };
-        if path
-            .parent()
-            .and_then(Path::file_name)
-            .is_some_and(|dir| dir == "deps")
-        {
-            return Some(id);
-        }
-        fallback.get_or_insert(id);
-    }
-    fallback
-}
-
-fn consume_unit_outcomes(
-    args: &SniffTestArgs,
-    plan: &[String],
-    streamed: &HashSet<String>,
-) -> bool {
-    let mut denied = false;
-    for artifact_id in plan {
-        match UnitOutcome::read(&args.cache_dir(), artifact_id, env!("CARGO_PKG_VERSION")) {
-            Ok(outcome) => {
-                denied |= outcome.has_denied_findings;
-                if args.message_format == args::MessageFormat::Json
-                    && !streamed.contains(artifact_id)
-                    && let Some(report_json) = &outcome.report_json
-                {
-                    println!("{report_json}");
-                }
-            }
-            Err(error) if error.is_missing_file() => {}
-            Err(error) => {
-                eprintln!(
-                    "sniff-test: warning: ignoring unit outcome for `{artifact_id}`: {error}"
-                );
-            }
-        }
-    }
-    denied
-}
-
-fn metadata_command(args: &SniffTestArgs) -> cargo_metadata::MetadataCommand {
-    let mut command = cargo_metadata::MetadataCommand::new();
-    command.no_deps();
-    command.other_options(metadata_cargo_args(&args.cargo_args));
-    command
 }
 
 pub(crate) fn metadata_cargo_args(cargo_args: &[String]) -> Vec<String> {

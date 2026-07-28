@@ -2,7 +2,7 @@
 source: crates/sniff-test/tests/cli.rs
 expression: snapshot
 ---
-exit: 1
+exit: 101
 stdout:
 <empty>
 stderr:

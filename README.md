@@ -110,9 +110,9 @@ Safety probing covers runtime function, method, closure, and coroutine bodies;
 const, static, and inline-const initializers are intentionally outside this
 runtime effect graph.
 
-`cargo sniff-test` exits with status `1` when a final workspace crate has a
-finding whose configured lint level is `deny`. `allow` suppresses a finding from
-human diagnostics and JSON output; `warn` reports it without failing the run.
+`cargo sniff-test` exits unsuccessfully when a workspace crate has a finding
+whose configured lint level is `deny`. `allow` suppresses a finding from human
+diagnostics and JSON output; `warn` reports it without failing the run.
 
 Use `[safety].safety-obligation-namespaces` for safe functions that still carry
 caller obligations. Calls to matching functions must have a nearby `// SAFETY:`
@@ -145,7 +145,8 @@ cargo sniff-test --message-format json
 
 JSON mode writes newline-delimited messages to stdout, while Cargo and rustc
 diagnostics stay on stderr. Each sniff-test message has
-`"reason":"sniff-test-artifact"` and describes one analyzed artifact.
+`"reason":"sniff-test-artifact"` and describes one artifact analyzed during
+that invocation. A fully fresh Cargo run may emit no sniff-test messages.
 
 ## Source Markers
 
@@ -230,7 +231,7 @@ sniff-test-driver --message-format json -- src/lib.rs -C overflow-checks=on
 
 Direct driver mode follows rustc-driver exit semantics: it returns success when
 rustc succeeds, even if sniff-test emits findings. Use the Cargo frontend for
-final workspace aggregation and deny-level effect gating.
+deny-level effect gating.
 
 ## Checks
 
