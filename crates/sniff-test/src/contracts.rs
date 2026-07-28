@@ -71,22 +71,14 @@ impl Debug for ContractDocOverrides {
     }
 }
 
-#[derive(Debug, Clone, Copy)]
-enum ContractSyntax {
-    Panic,
-    Safety,
+fn is_panic_heading(heading: &str) -> bool {
+    heading.eq_ignore_ascii_case("panic")
+        || heading.eq_ignore_ascii_case("panics")
+        || heading.eq_ignore_ascii_case("panic(s)")
 }
 
-impl ContractSyntax {
-    fn matches_heading(self, heading: &str) -> bool {
-        match self {
-            Self::Panic => matches!(
-                heading.to_ascii_lowercase().as_str(),
-                "panic" | "panics" | "panic(s)"
-            ),
-            Self::Safety => heading.eq_ignore_ascii_case("safety"),
-        }
-    }
+fn is_safety_heading(heading: &str) -> bool {
+    heading.eq_ignore_ascii_case("safety")
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -173,13 +165,13 @@ pub(crate) fn panic_contract_doc_summary(
     overrides: &ContractDocOverrides,
 ) -> ContractDocSummary {
     if let Some(markdown) = overrides.markdown_for_def(tcx, def_id) {
-        return parse_contract_doc_markdown(markdown, tcx.def_span(def_id), ContractSyntax::Panic);
+        return parse_contract_doc_markdown(markdown, tcx.def_span(def_id), is_panic_heading);
     }
 
     PANIC_SUMMARY_CACHE.with_borrow_mut(|cache| {
         cache
             .entry(def_id)
-            .or_insert_with(|| contract_doc_summary_from_attrs(tcx, def_id, ContractSyntax::Panic))
+            .or_insert_with(|| contract_doc_summary_from_attrs(tcx, def_id, is_panic_heading))
             .clone()
     })
 }
@@ -191,13 +183,13 @@ pub(crate) fn safety_contract_doc_summary(
     overrides: &ContractDocOverrides,
 ) -> ContractDocSummary {
     if let Some(markdown) = overrides.markdown_for_def(tcx, def_id) {
-        return parse_contract_doc_markdown(markdown, tcx.def_span(def_id), ContractSyntax::Safety);
+        return parse_contract_doc_markdown(markdown, tcx.def_span(def_id), is_safety_heading);
     }
 
     SAFETY_SUMMARY_CACHE.with_borrow_mut(|cache| {
         cache
             .entry(def_id)
-            .or_insert_with(|| contract_doc_summary_from_attrs(tcx, def_id, ContractSyntax::Safety))
+            .or_insert_with(|| contract_doc_summary_from_attrs(tcx, def_id, is_safety_heading))
             .clone()
     })
 }
@@ -205,10 +197,11 @@ pub(crate) fn safety_contract_doc_summary(
 fn contract_doc_summary_from_attrs(
     tcx: TyCtxt<'_>,
     def_id: DefId,
-    syntax: ContractSyntax,
+    is_contract_heading: fn(&str) -> bool,
 ) -> ContractDocSummary {
     parse_contract_doc_lines_with(
-        HasAttrs::get_attrs(def_id, &tcx)
+        def_id
+            .get_attrs(&tcx)
             .iter()
             .filter_map(doc_comment)
             .flat_map(|(comment, span)| {
@@ -219,7 +212,7 @@ fn contract_doc_summary_from_attrs(
                     .collect::<Vec<_>>();
                 lines.into_iter()
             }),
-        syntax,
+        is_contract_heading,
     )
 }
 
@@ -228,7 +221,7 @@ fn contract_doc_summary_from_attrs(
 fn parse_panic_contract_doc_lines(
     lines: impl IntoIterator<Item = impl Into<ContractDocLine>>,
 ) -> ContractDocSummary {
-    parse_contract_doc_lines_with(lines, ContractSyntax::Panic)
+    parse_contract_doc_lines_with(lines, is_panic_heading)
 }
 
 #[must_use]
@@ -236,12 +229,12 @@ fn parse_panic_contract_doc_lines(
 fn parse_safety_contract_doc_lines(
     lines: impl IntoIterator<Item = impl Into<ContractDocLine>>,
 ) -> ContractDocSummary {
-    parse_contract_doc_lines_with(lines, ContractSyntax::Safety)
+    parse_contract_doc_lines_with(lines, is_safety_heading)
 }
 
 fn parse_contract_doc_lines_with(
     lines: impl IntoIterator<Item = impl Into<ContractDocLine>>,
-    syntax: ContractSyntax,
+    is_contract_heading: fn(&str) -> bool,
 ) -> ContractDocSummary {
     let lines = lines.into_iter().map(Into::into).collect::<Vec<_>>();
     let mut markdown = String::new();
@@ -254,21 +247,25 @@ fn parse_contract_doc_lines_with(
         markdown.push('\n');
     }
 
-    parse_contract_doc_markdown_with_spans(&markdown, &line_spans, syntax)
+    parse_contract_doc_markdown_with_spans(&markdown, &line_spans, is_contract_heading)
 }
 
 fn parse_contract_doc_markdown(
     markdown: &str,
     span: Span,
-    syntax: ContractSyntax,
+    is_contract_heading: fn(&str) -> bool,
 ) -> ContractDocSummary {
-    parse_contract_doc_markdown_with_spans(markdown, &[(0..markdown.len(), span)], syntax)
+    parse_contract_doc_markdown_with_spans(
+        markdown,
+        &[(0..markdown.len(), span)],
+        is_contract_heading,
+    )
 }
 
 fn parse_contract_doc_markdown_with_spans(
     markdown: &str,
     line_spans: &[(std::ops::Range<usize>, Span)],
-    syntax: ContractSyntax,
+    is_contract_heading: fn(&str) -> bool,
 ) -> ContractDocSummary {
     use pulldown_cmark::{Event, Parser, Tag, TagEnd};
 
@@ -283,7 +280,7 @@ fn parse_contract_doc_markdown_with_spans(
             Event::Start(Tag::Heading { .. }) => heading = Some(String::new()),
             Event::End(TagEnd::Heading(_)) => {
                 if let Some(heading) = heading.take() {
-                    in_contract_section = syntax.matches_heading(markdown_heading_text(&heading));
+                    in_contract_section = is_contract_heading(markdown_heading_text(&heading));
                     summary.has_docs |= in_contract_section;
                 }
             }

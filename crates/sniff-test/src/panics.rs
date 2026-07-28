@@ -12,12 +12,12 @@
 use std::collections::HashSet;
 
 use reachability::{
-    CallableEdgeInfo, ReachabilityEdgeId, ReachabilityEdgeKind, ReachabilityGraph,
-    ReachabilityNodeKind, ReachabilityView, ReachedEdge,
+    ReachabilityEdgeId, ReachabilityEdgeKind, ReachabilityGraph, ReachabilityNodeKind,
+    ReachabilityView, ReachedEdge,
 };
 use rustc_hir::def_id::DefId;
 use rustc_middle::mir::AssertKind;
-use rustc_middle::ty::{self, Ty, TyCtxt};
+use rustc_middle::ty::{self, InstanceKind, Ty, TyCtxt};
 use rustc_span::Span;
 
 use crate::config::{PanicBoundaryPolicy, PanicConfig};
@@ -174,13 +174,23 @@ fn panic_path_decision(edge_id: ReachabilityEdgeId, kind: PanicEvidenceKind) -> 
 }
 
 pub(crate) fn suppress_resolved_callable_indirect_boundaries(
-    graph: &ReachabilityGraph<'_>,
+    view: ReachabilityView<'_, '_>,
     evidence: &mut Vec<PanicEvidence>,
 ) {
-    let resolved_callable_keys = evidence
-        .iter()
-        .filter(|evidence| !matches!(evidence.kind, PanicEvidenceKind::IndirectBoundary { .. }))
-        .flat_map(|evidence| concrete_callable_keys_in_trace(graph, &evidence.trace))
+    let graph = view.graph();
+    let resolved_callable_keys = view
+        .edges()
+        .filter(|edge| {
+            matches!(
+                edge.kind(),
+                ReachabilityEdgeKind::FnPointerReify
+                    | ReachabilityEdgeKind::ClosureFnPointerReify
+                    | ReachabilityEdgeKind::FnPointerCallTarget
+                    | ReachabilityEdgeKind::VTableEntry
+                    | ReachabilityEdgeKind::DynDispatchVTableEntry
+            )
+        })
+        .filter_map(|edge| graph.edge_callable(edge.id()))
         .collect::<HashSet<_>>();
 
     if resolved_callable_keys.is_empty() {
@@ -193,31 +203,6 @@ pub(crate) fn suppress_resolved_callable_indirect_boundaries(
                 .edge_callable(evidence.edge_id)
                 .is_none_or(|key| !resolved_callable_keys.contains(&key))
     });
-}
-
-fn concrete_callable_keys_in_trace<'tcx>(
-    graph: &ReachabilityGraph<'tcx>,
-    trace: &PanicTrace,
-) -> Vec<CallableEdgeInfo<'tcx>> {
-    trace
-        .edge_ids
-        .iter()
-        .filter_map(|edge_id| {
-            let edge = graph.edge(*edge_id);
-            if !matches!(
-                edge.kind,
-                ReachabilityEdgeKind::FnPointerReify
-                    | ReachabilityEdgeKind::ClosureFnPointerReify
-                    | ReachabilityEdgeKind::FnPointerCallTarget
-                    | ReachabilityEdgeKind::VTableEntry
-                    | ReachabilityEdgeKind::DynDispatchVTableEntry
-            ) {
-                return None;
-            }
-
-            graph.edge_callable(*edge_id)
-        })
-        .collect()
 }
 
 /// Returns the evidence trace up to and including `edge_id`.
@@ -469,7 +454,7 @@ fn probe_panic_edge<'tcx>(
                 PanicBoundaryPolicy::TrustedPanicObligation | PanicBoundaryPolicy::Normal => {
                     Some(PanicProbeKind::Call {
                         def_id,
-                        indirect: false,
+                        indirect: matches!(instance.def, InstanceKind::Virtual(..)),
                     })
                 }
             }

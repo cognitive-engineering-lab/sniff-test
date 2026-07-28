@@ -1,21 +1,20 @@
 use std::collections::{HashMap, HashSet};
 use std::ops::ControlFlow;
-use std::rc::Rc;
 
 use reachability::{
-    ReachabilityContext, ReachabilityControl, ReachabilityEdge, ReachabilityEdgeKind,
-    ReachabilityGraph, ReachabilityHooks, ReachabilityIndex, ReachabilityNodeKind,
+    ArtifactScope, ReachabilityContext, ReachabilityControl, ReachabilityEdge,
+    ReachabilityEdgeKind, ReachabilityHooks, ReachabilityIndex, ReachabilityNodeKind,
     ReachabilityView,
 };
 use rustc_hir::def_id::DefId;
 use rustc_middle::ty::{Instance, TyCtxt};
 
-use crate::cache::{CachedFinding, CachedFindingKind, CachedFunctionSummary};
-use crate::cli::cache_encode::{cached_boundary_findings, cached_reachability_graph};
+use crate::cache::{CachedEffectInput, CachedFinding, CachedFindingInput, CachedFindingKind};
+use crate::cli::cache_encode::cached_panic_findings;
 use crate::cli::findings::{Finding, FindingKind};
 use crate::cli::report::{PanicRootReport, render_node};
 use crate::config::{AnalysisConfig, CallableEdgeAttribution, PanicBoundaryPolicy, PanicConfig};
-use crate::dependency_cache::DependencyAnalysisCache;
+use crate::dependency_cache::{CachedFunction, DependencyAnalysisCache};
 use crate::effect_tracker::{EffectPathDecision, EffectTrace, find_effect_trace_to_edge};
 use crate::panics::{
     AmbiguousPanicMarker, AmbiguousPanicRequirementName, PanicAnalysis, PanicEvidence,
@@ -24,14 +23,14 @@ use crate::panics::{
 };
 use crate::report_roots::{ReportRoot, ReportRootKind};
 
-use super::cache::{propagating_cached_panic_boundaries, rebase_cached_dependency_finding};
+use super::cache::{EffectBoundary, panic_boundaries, rebase_cached_dependency_finding};
 use super::pipeline::{
     CommentIndex, Effect, EffectCx, EffectGroupAllocator, EffectGroupId, EffectResolution,
     EffectSource, PathAnchor,
 };
 use super::{
-    EffectCacheOutput, EffectReportOutput, EffectRootAnalysis, finish_effect_root,
-    reachability_options,
+    EffectRootAnalysis, IncompleteDependency, dependency_analysis_incomplete_finding,
+    reachability_options, root_analysis_incomplete_finding,
 };
 
 struct PanicReachabilityHooks<'config> {
@@ -67,7 +66,7 @@ struct PanicEffect<'config> {
     config: &'config PanicConfig,
     groups: EffectGroupAllocator,
     ambiguous_names: Vec<AmbiguousPanicRequirementName>,
-    incomplete_dependencies: Vec<IncompletePanicDependency>,
+    incomplete_dependencies: Vec<IncompleteDependency>,
 }
 
 #[derive(Clone)]
@@ -75,54 +74,9 @@ enum PanicSource {
     Local(PanicSourceEvidence),
     Dependency {
         edge_id: reachability::ReachabilityEdgeId,
-        function: Rc<CachedFunctionSummary>,
-        finding: Rc<CachedFinding>,
+        function: CachedFunction,
+        finding: CachedFinding,
     },
-}
-
-struct IncompletePanicDependency {
-    edge_id: reachability::ReachabilityEdgeId,
-    function: Rc<CachedFunctionSummary>,
-    trace: EffectTrace,
-}
-
-impl PanicSource {
-    fn edge_id(&self) -> reachability::ReachabilityEdgeId {
-        match self {
-            Self::Local(source) => source.edge_id,
-            Self::Dependency { edge_id, .. } => *edge_id,
-        }
-    }
-}
-
-impl<'tcx> PanicEffect<'_> {
-    fn new(config: &PanicConfig) -> PanicEffect<'_> {
-        PanicEffect {
-            config,
-            groups: EffectGroupAllocator::default(),
-            ambiguous_names: Vec::new(),
-            incomplete_dependencies: Vec::new(),
-        }
-    }
-
-    fn query(
-        &self,
-        reachability: &mut ReachabilityIndex<'tcx>,
-        root: ReportRoot<'tcx>,
-        analysis_config: &AnalysisConfig,
-        analyze_external: bool,
-    ) -> reachability::ReachabilitySnapshot<'tcx> {
-        let mut hooks = PanicReachabilityHooks {
-            config: self.config,
-            descend_reified_callables: analysis_config.callable_edge_attribution
-                == CallableEdgeAttribution::ErasureSites,
-        };
-        reachability.query(
-            root.reachability_root(),
-            &mut hooks,
-            reachability_options(analysis_config, analyze_external),
-        )
-    }
 }
 
 impl<'tcx> Effect<'tcx> for PanicEffect<'_> {
@@ -161,7 +115,7 @@ impl<'tcx> Effect<'tcx> for PanicEffect<'_> {
                 })
             })
             .collect::<Vec<_>>();
-        suppress_resolved_callable_indirect_boundaries(cx.view.graph(), &mut candidates);
+        suppress_resolved_callable_indirect_boundaries(cx.view, &mut candidates);
         let surviving_edges = candidates
             .into_iter()
             .map(|evidence| evidence.edge_id)
@@ -188,41 +142,60 @@ impl<'tcx> Effect<'tcx> for PanicEffect<'_> {
         cx: &EffectCx<'_, 'tcx>,
     ) -> Vec<EffectSource<Self::Source>> {
         let mut sources = Vec::new();
-        for boundary in
-            propagating_cached_panic_boundaries(cx.tcx, cx.view, cx.dependency_cache, |def_id| {
-                self.config.ignores_def(cx.tcx, def_id)
-                    || self.config.panic_boundary_policy(cx.tcx, def_id)
-                        != PanicBoundaryPolicy::Normal
-            })
-        {
-            let Some(trace) = find_effect_trace_to_edge(cx.view, boundary.edge, |node| {
-                self.is_path_boundary(cx, node)
-            }) else {
+        for boundary in panic_boundaries(cx.tcx, cx.view, cx.dependency_cache, |def_id| {
+            self.config.ignores_def(cx.tcx, def_id)
+                || self.config.panic_boundary_policy(cx.tcx, def_id) != PanicBoundaryPolicy::Normal
+        }) {
+            let (edge, function) = match boundary {
+                EffectBoundary::Cached { edge, function } => (edge, function),
+                EffectBoundary::Missing { edge, target } => {
+                    if let Some(trace) = find_effect_trace_to_edge(cx.view, edge, |node| {
+                        self.is_path_boundary(cx, node)
+                    }) {
+                        self.incomplete_dependencies.push(IncompleteDependency {
+                            edge_id: edge.id(),
+                            target,
+                            trace,
+                        });
+                    }
+                    continue;
+                }
+            };
+            let Some(trace) =
+                find_effect_trace_to_edge(cx.view, edge, |node| self.is_path_boundary(cx, node))
+            else {
                 continue;
             };
-            let function = Rc::new(boundary.function.clone());
-            if !boundary.effect.analysis_complete {
-                self.incomplete_dependencies
-                    .push(IncompletePanicDependency {
-                        edge_id: boundary.edge.id(),
-                        function: Rc::clone(&function),
-                        trace,
-                    });
-            }
-            for finding in &boundary.effect.findings {
+            let summary = function.summary();
+            let target = summary.path.clone();
+            let finding_ids = summary.panic.findings.clone();
+            let mut incomplete = !summary.panic.analysis_complete || function.is_generic_template();
+            for finding_id in finding_ids {
+                let Some(finding) = function.finding(finding_id).cloned() else {
+                    incomplete = true;
+                    continue;
+                };
+                incomplete |= !function.resolve_trace(finding.trace).complete;
                 if !finding.kind.is_panic() {
                     continue;
                 }
                 sources.push(EffectSource {
                     group: self.groups.allocate(),
-                    anchor: PathAnchor::from_terminal_edge(boundary.edge),
+                    anchor: PathAnchor::from_terminal_edge(edge),
                     terminal_marker_spans: Vec::new(),
                     requirements: finding.missing_requirements.clone(),
                     payload: PanicSource::Dependency {
-                        edge_id: boundary.edge.id(),
-                        function: Rc::clone(&function),
-                        finding: Rc::new(finding.clone()),
+                        edge_id: edge.id(),
+                        function: function.clone(),
+                        finding,
                     },
+                });
+            }
+            if incomplete {
+                self.incomplete_dependencies.push(IncompleteDependency {
+                    edge_id: edge.id(),
+                    target,
+                    trace,
                 });
             }
         }
@@ -237,60 +210,62 @@ pub(super) fn analyze_root<'tcx>(
     analysis_config: &AnalysisConfig,
     config: &PanicConfig,
     dependency_cache: &DependencyAnalysisCache,
-) -> EffectRootAnalysis {
-    // Reports can inspect available external MIR, while cached summaries stop
-    // at dependency boundaries so downstream crates can compose their caches.
-    let mut report_effect = PanicEffect::new(config);
-    let report_snapshot = report_effect.query(reachability, root, analysis_config, true);
-    let report_view = reachability.graph().view(&report_snapshot);
-    let report_cx = EffectCx {
+) -> EffectRootAnalysis<'tcx> {
+    let mut hooks = PanicReachabilityHooks {
+        config,
+        descend_reified_callables: analysis_config.callable_edge_attribution
+            == CallableEdgeAttribution::ErasureSites,
+    };
+    let snapshot = reachability.query(
+        root.reachability_root(),
+        &mut hooks,
+        reachability_options(analysis_config, ArtifactScope::AllArtifacts),
+    );
+    let mut effect = PanicEffect {
+        config,
+        groups: EffectGroupAllocator::default(),
+        ambiguous_names: Vec::new(),
+        incomplete_dependencies: Vec::new(),
+    };
+    let view = reachability.graph().view(&snapshot);
+    let cx = EffectCx {
         tcx,
         root,
-        view: report_view,
+        view,
         dependency_cache,
         marker_probing: analysis_config.marker_probing,
     };
-    let report_resolution = super::pipeline::resolve(&mut report_effect, &report_cx);
-    let findings = panic_report_findings(
-        &report_effect,
-        &report_cx,
-        &report_resolution,
+    let resolution = super::pipeline::resolve(&mut effect, &cx);
+    let (local_analysis, suppressed_groups) = local_panic_analysis(&effect, &cx, &resolution);
+    let mut findings = panic_report_findings(
+        &effect,
+        &cx,
+        &resolution,
+        &local_analysis,
+        &suppressed_groups,
         analysis_config.show_full_stack_trace,
     );
-    let report = EffectReportOutput {
+    let query_complete = view.halt().is_none();
+    if !query_complete {
+        findings.push(root_analysis_incomplete_finding(
+            tcx,
+            root,
+            analysis_config,
+            FindingKind::PanicAnalysisIncomplete,
+        ));
+    }
+    EffectRootAnalysis {
+        summary: CachedEffectInput {
+            analysis_complete: query_complete && effect.incomplete_dependencies.is_empty(),
+            has_contract: crate::panics::has_panic_docs(tcx, root.def_id(), config),
+            findings: panic_cache_findings(&effect, &cx, &resolution, &local_analysis),
+        },
         findings,
-        query_complete: report_view.halt().is_none(),
-    };
-
-    let mut cache_effect = PanicEffect::new(config);
-    let cache_snapshot = cache_effect.query(reachability, root, analysis_config, false);
-    let cache_view = reachability.graph().view(&cache_snapshot);
-    let cache_cx = EffectCx {
-        tcx,
-        root,
-        view: cache_view,
-        dependency_cache,
-        marker_probing: analysis_config.marker_probing,
-    };
-    let cache_resolution = super::pipeline::resolve(&mut cache_effect, &cache_cx);
-    let findings = panic_cache_findings(&cache_effect, &cache_cx, &cache_resolution);
-    let dependencies_complete = cache_effect.incomplete_dependencies.is_empty();
-    let cache = EffectCacheOutput {
-        findings,
-        graph: cached_reachability_graph(tcx, cache_view),
-        query_complete: cache_view.halt().is_none(),
-        dependencies_complete,
-    };
-
-    finish_effect_root(
-        tcx,
-        root,
-        analysis_config,
-        FindingKind::PanicAnalysisIncomplete,
-        crate::panics::has_panic_docs(tcx, root.def_id(), config),
-        report,
-        cache,
-    )
+        reached_instances: view
+            .nodes()
+            .filter_map(reachability::ReachedNode::instance)
+            .collect(),
+    }
 }
 
 fn local_panic_analysis(
@@ -319,7 +294,7 @@ fn local_panic_analysis(
             }
         })
         .collect::<Vec<_>>();
-    suppress_resolved_callable_indirect_boundaries(cx.view.graph(), &mut evidence);
+    suppress_resolved_callable_indirect_boundaries(cx.view, &mut evidence);
     let surviving_edges = evidence
         .iter()
         .map(|evidence| evidence.edge_id)
@@ -341,18 +316,17 @@ fn panic_report_findings(
     effect: &PanicEffect<'_>,
     cx: &EffectCx<'_, '_>,
     resolution: &EffectResolution<PanicSource>,
+    analysis: &PanicAnalysis,
+    suppressed_groups: &HashSet<EffectGroupId>,
     include_stack: bool,
 ) -> Vec<Finding> {
-    let (analysis, suppressed_groups) = local_panic_analysis(effect, cx, resolution);
     let collection = PanicFindingCollection {
         root_kind: cx.root.kind(),
         root_def_id: cx.root.def_id(),
         config: effect.config,
         include_stack,
     };
-    let mut report = collect_panic_findings(cx.tcx, cx.view, &analysis, collection);
-    let mut reported_raw_dependencies = HashSet::new();
-
+    let mut report = collect_panic_findings(cx.tcx, cx.view, analysis, collection);
     for unresolved in &resolution.unresolved {
         let PanicSource::Dependency {
             edge_id,
@@ -362,45 +336,41 @@ fn panic_report_findings(
         else {
             continue;
         };
-        let mut finding = finding.as_ref().clone();
+        let mut finding = finding.clone();
         finding
             .missing_requirements
             .clone_from(&unresolved.path.missing_requirements);
-        if finding.kind.is_raw_effect() {
-            reported_raw_dependencies.insert(*edge_id);
-        }
         push_cached_dependency_finding(
             cx,
             &mut report,
             *edge_id,
-            function.as_ref(),
+            function,
             &finding,
             &unresolved.path.trace,
         );
     }
 
-    for boundary in &effect.incomplete_dependencies {
-        if reported_raw_dependencies.contains(&boundary.edge_id) {
-            continue;
-        }
-        // A truncated dependency summary with no raw findings proves nothing:
-        // treat it as raw panic evidence rather than silence. The same applies
-        // when every known raw finding was justified: truncated analysis may
-        // have missed another path.
-        report.push_cached_dependency_panic(
+    for dependency in &effect.incomplete_dependencies {
+        report.findings.push(dependency_analysis_incomplete_finding(
             cx.tcx,
             cx.view.graph(),
-            boundary.edge_id,
-            &boundary.trace.edge_ids,
-            boundary.function.as_ref(),
-            None,
-        );
+            cx.root,
+            dependency,
+            FindingKind::PanicAnalysisIncomplete,
+            "panic",
+        ));
     }
 
     let source_edges = resolution
         .sources
         .iter()
-        .map(|source| (source.group, source.payload.edge_id()))
+        .map(|source| {
+            let edge_id = match &source.payload {
+                PanicSource::Local(source) => source.edge_id,
+                PanicSource::Dependency { edge_id, .. } => *edge_id,
+            };
+            (source.group, edge_id)
+        })
         .collect::<HashMap<_, _>>();
     let marker_uses = crate::effect_tracker::ambiguous_marker_uses(
         resolution
@@ -434,7 +404,7 @@ fn push_cached_dependency_finding(
     cx: &EffectCx<'_, '_>,
     report: &mut PanicRootReport,
     edge_id: reachability::ReachabilityEdgeId,
-    function: &CachedFunctionSummary,
+    function: &CachedFunction,
     finding: &CachedFinding,
     trace: &EffectTrace,
 ) {
@@ -454,8 +424,7 @@ fn push_cached_dependency_finding(
             );
             None
         }
-        CachedFindingKind::CrateBoundary
-        | CachedFindingKind::UnsafeCallMissingJustification
+        CachedFindingKind::UnsafeCallMissingJustification
         | CachedFindingKind::UnsafeCallMissingRequirements
         | CachedFindingKind::UnsafeOpMissingJustification
         | CachedFindingKind::SafetyObligationMissingJustification
@@ -478,9 +447,9 @@ fn panic_cache_findings(
     effect: &PanicEffect<'_>,
     cx: &EffectCx<'_, '_>,
     resolution: &EffectResolution<PanicSource>,
-) -> Vec<CachedFinding> {
-    let (analysis, _) = local_panic_analysis(effect, cx, resolution);
-    let mut findings = cached_boundary_findings(cx.tcx, cx.view, &analysis, effect.config);
+    analysis: &PanicAnalysis,
+) -> Vec<CachedFindingInput> {
+    let mut findings = cached_panic_findings(cx.tcx, cx.view, analysis, effect.config);
     let edges = cx
         .view
         .edges()
@@ -498,19 +467,18 @@ fn panic_cache_findings(
         let Some(edge) = edges.get(edge_id).copied() else {
             continue;
         };
-        let mut finding = finding.as_ref().clone();
+        let mut finding = finding.clone();
         finding
             .missing_requirements
             .clone_from(&unresolved.path.missing_requirements);
-        if let Some(cached) = rebase_cached_dependency_finding(
+        findings.push(rebase_cached_dependency_finding(
             cx.tcx,
+            cx.view.graph(),
             edge,
             &unresolved.path.trace,
-            function.as_ref(),
+            function,
             &finding,
-        ) {
-            findings.push(cached);
-        }
+        ));
     }
     findings
 }
@@ -551,48 +519,19 @@ fn collect_panic_findings<'tcx>(
                 edge_id: Some(edge_id),
                 def_id,
             } => {
-                push_panic_obligation_finding(
-                    tcx,
-                    graph,
-                    evidence,
-                    Some(edge_id),
-                    def_id,
-                    &collection,
-                    &mut report,
-                );
+                let kind = if is_trusted_panic_obligation(tcx, def_id, collection.config) {
+                    FindingKind::TrustedPanic
+                } else {
+                    FindingKind::DocumentedPanic
+                };
+                report.push_panic_obligation(tcx, graph, evidence, Some(edge_id), def_id, kind);
             }
         }
     }
 
-    collect_ambiguous_obligation_name_findings(tcx, analysis, &mut report);
-
-    report
-}
-
-fn collect_ambiguous_obligation_name_findings(
-    tcx: TyCtxt<'_>,
-    analysis: &PanicAnalysis,
-    report: &mut PanicRootReport,
-) {
     for name in &analysis.ambiguous_names {
         report.push_ambiguous_obligation_name(tcx, name);
     }
-}
 
-fn push_panic_obligation_finding<'tcx>(
-    tcx: TyCtxt<'tcx>,
-    graph: &ReachabilityGraph<'tcx>,
-    evidence: &PanicEvidence,
-    edge_id: Option<reachability::ReachabilityEdgeId>,
-    def_id: DefId,
-    collection: &PanicFindingCollection<'_>,
-    report: &mut PanicRootReport,
-) {
-    let trusted = is_trusted_panic_obligation(tcx, def_id, collection.config);
-    let kind = if trusted {
-        FindingKind::TrustedPanic
-    } else {
-        FindingKind::DocumentedPanic
-    };
-    report.push_panic_obligation(tcx, graph, evidence, edge_id, def_id, kind);
+    report
 }

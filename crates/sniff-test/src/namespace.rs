@@ -7,7 +7,7 @@
 //! retained for pattern compatibility. Rust crate names use underscores, not
 //! package-name hyphens, so users should write `proc_macro2`, not `proc-macro2`.
 //!
-//! Cache identity uses [`stable_def_path_hash`] instead of rendered paths:
+//! Cache identity uses [`StableDefPathHash`] instead of rendered paths:
 //! pretty-printed paths differ between the defining crate's session and a
 //! consumer's session (trait qualification, re-exports), while def path hashes
 //! are read from crate metadata and agree by construction.
@@ -49,6 +49,11 @@ impl StableDefPathHash {
         Self::from_parts(hash.stable_crate_id().as_u64(), hash.local_hash().as_u64())
     }
 
+    #[must_use]
+    pub const fn stable_crate_id(self) -> u64 {
+        self.0.first
+    }
+
     const fn from_parts(stable_crate_id: u64, local_hash: u64) -> Self {
         Self(StableHash::from_parts(stable_crate_id, local_hash))
     }
@@ -66,12 +71,10 @@ impl fmt::Display for StableDefPathHash {
 /// compiler-generated instance kinds such as shims. It deliberately uses
 /// rustc's stable `MonoItem::Fn` key so cache identity matches rustc's own
 /// monomorphization identity.
-#[allow(dead_code)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(transparent)]
 pub struct StableInstanceHash(StableHash);
 
-#[allow(dead_code)]
 impl StableInstanceHash {
     #[must_use]
     pub fn from_instance<'tcx>(tcx: TyCtxt<'tcx>, instance: Instance<'tcx>) -> Self {
@@ -145,13 +148,6 @@ impl<'de> Deserialize<'de> for StableHash {
             serde::de::Error::custom("stable hash must contain exactly 32 hexadecimal digits")
         })
     }
-}
-
-/// Compatibility rendering for cache fields that have not migrated to
-/// [`StableDefPathHash`] yet.
-#[must_use]
-pub fn stable_def_path_hash(tcx: TyCtxt<'_>, def_id: DefId) -> String {
-    StableDefPathHash::from_def_id(tcx, def_id).to_string()
 }
 
 /// Namespace forms a definition can be matched against.
@@ -272,11 +268,11 @@ mod tests {
     #[test]
     fn stable_hashes_render_as_fixed_width_lowercase_hex() {
         assert_eq!(
-            StableDefPathHash::from_parts(0x1, 0xabcdef).to_string(),
+            StableDefPathHash::from_parts(0x1, 0x00ab_cdef).to_string(),
             "00000000000000010000000000abcdef"
         );
         assert_eq!(
-            StableInstanceHash::from_parts(0x10, 0xfedcba).to_string(),
+            StableInstanceHash::from_parts(0x10, 0x00fe_dcba).to_string(),
             "00000000000000100000000000fedcba"
         );
     }

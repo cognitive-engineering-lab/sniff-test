@@ -1,8 +1,6 @@
 //! JSON serialization and panic report rendering.
-use crate::cache::{
-    CachedArtifactInfo, CachedDependencyRef, CachedEffectSummary, CachedFinding,
-    CachedFunctionSummary, CachedReachabilityEdgeKind, CachedReachabilityNodeKind,
-};
+use crate::cache::{CachedFinding, CachedFunctionSummary};
+use crate::dependency_cache::CachedFunction;
 use crate::namespace::canonical_namespace;
 use crate::panics::{
     AmbiguousPanicMarker, AmbiguousPanicRequirementName, PanicEvidence, PanicEvidenceKind,
@@ -36,10 +34,24 @@ pub(crate) struct AnalysisArtifactReport {
     pub(crate) format_version: u32,
     pub(crate) tool_version: String,
     pub(crate) rustc_version: String,
-    pub(crate) artifact: CachedArtifactInfo,
+    pub(crate) artifact: ReportArtifact,
     pub(crate) scope: CrateOutputScope,
-    pub(crate) dependencies: Vec<CachedDependencyRef>,
+    pub(crate) dependencies: Vec<ReportDependency>,
     pub(crate) findings: Vec<ResolvedFinding>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub(crate) struct ReportArtifact {
+    pub(crate) artifact_id: String,
+    pub(crate) crate_name: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub(crate) struct ReportDependency {
+    pub(crate) extern_name: String,
+    pub(crate) artifact_id: String,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -145,15 +157,16 @@ impl PanicRootReport {
         graph: &ReachabilityGraph<'tcx>,
         edge_id: ReachabilityEdgeId,
         local_trace: &[ReachabilityEdgeId],
-        summary: &CachedFunctionSummary,
+        function: &CachedFunction,
         cached_finding: Option<&CachedFinding>,
     ) {
+        let summary = function.summary();
         let edge = graph.edge(edge_id);
         let diagnostic = cached_dependency_raw_panic_diagnostic(
             tcx,
             graph,
             local_trace,
-            summary,
+            function,
             cached_finding,
             CachedDependencyRawPanicDiagnostic {
                 edge_id,
@@ -163,7 +176,7 @@ impl PanicRootReport {
         );
         let mut trace = render_trace(tcx, graph, local_trace);
         if let Some(finding) = cached_finding {
-            trace.extend(render_cached_trace(&summary.panic, finding));
+            trace.extend(render_cached_trace(function, finding));
         }
         self.push_finding(Finding {
             target: Some(summary.path.clone()),
@@ -188,15 +201,16 @@ impl PanicRootReport {
         graph: &ReachabilityGraph<'tcx>,
         edge_id: ReachabilityEdgeId,
         local_trace: &[ReachabilityEdgeId],
-        summary: &CachedFunctionSummary,
+        function: &CachedFunction,
         cached_finding: Option<&CachedFinding>,
         kind: FindingKind,
     ) {
+        let summary = function.summary();
         let edge = graph.edge(edge_id);
         let diagnostic = cached_dependency_contract_diagnostic(
             tcx,
             graph,
-            summary,
+            function,
             cached_finding,
             local_trace,
             CachedDependencyContractDiagnostic {
@@ -208,7 +222,7 @@ impl PanicRootReport {
         );
         let mut trace = render_trace(tcx, graph, local_trace);
         if let Some(finding) = cached_finding {
-            trace.extend(render_cached_trace(&summary.panic, finding));
+            trace.extend(render_cached_trace(function, finding));
         }
         self.push_finding(Finding {
             target: Some(summary.path.clone()),
@@ -364,64 +378,14 @@ impl CachedFunctionSummary {
 }
 
 pub(crate) fn render_cached_trace(
-    summary: &CachedEffectSummary,
+    function: &CachedFunction,
     finding: &CachedFinding,
 ) -> Vec<String> {
-    summary
-        .trace(finding)
-        .into_iter()
-        .map(|step| {
-            format!(
-                "{}: {} --{}-> {}",
-                step.span,
-                step.source.render(),
-                step.kind.label(),
-                step.target.render(),
-            )
-        })
-        .collect()
+    function.resolve_trace(finding.trace).steps
 }
 
 fn documented_panic_reason(path: &str) -> String {
     format!("{path} documents when it may panic under # Panics")
-}
-
-impl CachedReachabilityNodeKind {
-    fn render(&self) -> String {
-        match self {
-            Self::Instance { path, .. } => path.clone(),
-            Self::CompilerAssert { message } => {
-                format!("compiler assert {message}")
-            }
-            Self::MacroExpansion { path, .. } => format!("macro {path}"),
-            Self::IndirectCall { callee_ty } => {
-                format!("indirect call {callee_ty}")
-            }
-            Self::DynObjectCast {
-                source_ty,
-                target_ty,
-            } => format!("dyn object cast {source_ty} as {target_ty}"),
-        }
-    }
-}
-
-impl CachedReachabilityEdgeKind {
-    fn label(self) -> &'static str {
-        match self {
-            Self::DirectCall => "direct-call",
-            Self::TailCall => "tail-call",
-            Self::FnPointerReify => "fn-pointer-reify",
-            Self::ClosureFnPointerReify => "closure-fn-pointer-reify",
-            Self::FnPointerCallTarget => "fn-pointer-call-target",
-            Self::DynObjectCast => "dyn-object-cast",
-            Self::VTableEntry => "vtable-entry",
-            Self::DynDispatchVTableEntry => "dyn-dispatch-vtable-entry",
-            Self::MacroExpansion => "macro-expansion",
-            Self::ConstBody => "const-body",
-            Self::Assert => "assert",
-            Self::IndirectCall => "indirect-call",
-        }
-    }
 }
 
 pub(crate) fn render_edge<'tcx>(
@@ -585,67 +549,9 @@ pub(crate) fn render_cached_effect_span(finding: &CachedFinding) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{AnalysisArtifactReport, CrateOutputScope, REPORT_FORMAT_VERSION};
-    use crate::cache::{
-        CachedArtifactInfo, CachedEffectSummary, CachedFinding, CachedFindingKind,
-        CachedFunctionSummary, CachedReachabilityGraph,
-    };
+    use super::{AnalysisArtifactReport, CrateOutputScope, REPORT_FORMAT_VERSION, ReportArtifact};
     use crate::cli::findings::{Finding, FindingDiagnostic, FindingKind, ResolvedFinding};
     use crate::config::LintLevel;
-
-    fn cached_finding(kind: CachedFindingKind, reason: &str) -> CachedFinding {
-        CachedFinding {
-            kind,
-            span: String::new(),
-            source_span: None,
-            diagnostic_spans: Vec::new(),
-            edge_index: None,
-            trace: Vec::new(),
-            dependency_trace: Vec::new(),
-            reason: reason.to_owned(),
-            missing_requirements: Vec::new(),
-            target: None,
-        }
-    }
-
-    fn cached_effect(findings: Vec<CachedFinding>) -> CachedEffectSummary {
-        CachedEffectSummary {
-            analysis_complete: true,
-            has_contract: false,
-            graph: CachedReachabilityGraph {
-                root: 0,
-                nodes: Vec::new(),
-                edges: Vec::new(),
-            },
-            findings,
-        }
-    }
-
-    #[test]
-    fn cached_panic_reason_scopes_selected_findings_and_describes_incomplete_fallbacks() {
-        let mut summary = CachedFunctionSummary {
-            def_path_hash: String::from("hash"),
-            path: String::from("dependency::root"),
-            is_generic: false,
-            root_span: None,
-            panic: cached_effect(vec![
-                cached_finding(CachedFindingKind::PanicInvocation, "first panic site"),
-                cached_finding(CachedFindingKind::CompilerAssert, "selected panic site"),
-                cached_finding(CachedFindingKind::PanicObligation, "documented panic"),
-            ]),
-            safety: cached_effect(Vec::new()),
-        };
-        summary.panic.analysis_complete = false;
-
-        assert_eq!(
-            summary.panic_reason(Some(&summary.panic.findings[1])),
-            "dependency::root has cached panic evidence: selected panic site"
-        );
-        assert_eq!(
-            summary.panic_reason(None),
-            "dependency::root has incomplete cached panic analysis"
-        );
-    }
 
     #[test]
     fn public_report_serializes_flat_findings() {
@@ -656,7 +562,7 @@ mod tests {
             format_version: REPORT_FORMAT_VERSION,
             tool_version: String::from("0.1.0"),
             rustc_version: String::from("rustc test"),
-            artifact: CachedArtifactInfo {
+            artifact: ReportArtifact {
                 artifact_id: String::from("demo-1234"),
                 crate_name: String::from("demo"),
             },

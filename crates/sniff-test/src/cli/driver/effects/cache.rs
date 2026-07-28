@@ -1,116 +1,199 @@
 use std::collections::HashSet;
 
-use reachability::{ReachabilityEdgeKind, ReachabilityView};
+use reachability::{
+    ReachabilityEdgeKind, ReachabilityNodeExpansion, ReachabilityView, ReachedEdge,
+};
 use rustc_hir::def_id::DefId;
-use rustc_middle::ty::TyCtxt;
+use rustc_middle::ty::{Instance, InstanceKind, TyCtxt};
 
 use crate::cache::{
-    CachedEffectSummary, CachedFinding, CachedFindingTarget, CachedFunctionSummary,
+    CachedDependencyTraceInput, CachedEffectSummary, CachedFinding, CachedFindingInput,
 };
+use crate::cli::cache_encode::cached_trace;
 use crate::cli::report::render_span;
-use crate::dependency_cache::DependencyAnalysisCache;
+use crate::dependency_cache::{CachedFunction, DependencyAnalysisCache};
 use crate::effect_tracker::EffectTrace;
-use crate::namespace::stable_def_path_hash;
+use crate::namespace::{StableDefPathHash, StableInstanceHash};
 
-pub(super) struct CachedEffectBoundary<'view, 'tcx, 'cache> {
-    pub(super) edge: reachability::ReachedEdge<'view, 'tcx>,
-    pub(super) function: &'cache CachedFunctionSummary,
-    pub(super) effect: &'cache CachedEffectSummary,
+pub(super) enum EffectBoundary<'view, 'tcx> {
+    Cached {
+        edge: ReachedEdge<'view, 'tcx>,
+        function: CachedFunction,
+    },
+    Missing {
+        edge: ReachedEdge<'view, 'tcx>,
+        target: String,
+    },
 }
 
-fn dependency_boundary_edges<'view, 'tcx>(
-    view: ReachabilityView<'view, 'tcx>,
-) -> impl Iterator<Item = reachability::ReachedEdge<'view, 'tcx>> {
-    let expanded_sources = view
-        .edges()
-        .map(|edge| edge.source().id().index())
-        .collect::<HashSet<_>>();
-
-    // Any edge into a non-expanded external instance — direct calls, vtable
-    // entries, and pointer reifications — reaches the cache
-    // boundary. Macro-expansion edges are bridge hops rather than calls.
-    view.edges().filter(move |edge| {
-        edge.kind() != ReachabilityEdgeKind::MacroExpansion
-            && !expanded_sources.contains(&edge.target().id().index())
-    })
-}
-
-pub(super) fn rebase_cached_dependency_finding(
-    tcx: TyCtxt<'_>,
-    edge: reachability::ReachedEdge<'_, '_>,
+pub(super) fn rebase_cached_dependency_finding<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    graph: &reachability::ReachabilityGraph<'tcx>,
+    edge: ReachedEdge<'_, 'tcx>,
     trace: &EffectTrace,
-    summary: &CachedFunctionSummary,
+    function: &CachedFunction,
     cached: &CachedFinding,
-) -> Option<CachedFinding> {
-    let def_id = edge.target().instance()?.def_id();
-    let effect = if cached.kind.is_panic() {
-        &summary.panic
-    } else if cached.kind.is_safety() {
-        &summary.safety
-    } else {
-        return None;
-    };
-    Some(CachedFinding {
+) -> CachedFindingInput {
+    let mut cached_trace = cached_trace(tcx, graph, &trace.edge_ids);
+    cached_trace.dependency_tail = Some(CachedDependencyTraceInput {
+        artifact_id: function.analysis().artifact.artifact_id.clone(),
+        analysis_id: function.analysis().analysis_id.clone(),
+        trace: cached.trace,
+    });
+    CachedFindingInput {
         kind: cached.kind,
         span: render_span(tcx, edge.span()),
         source_span: cached.source_span.clone(),
-        diagnostic_spans: cached.diagnostic_spans.clone(),
-        edge_index: Some(edge.id().index()),
-        trace: trace
-            .edge_ids
-            .iter()
-            .map(|edge_id| edge_id.index())
-            .collect(),
-        dependency_trace: effect.trace(cached),
+        trace: cached_trace,
         reason: cached.reason.clone(),
         missing_requirements: cached.missing_requirements.clone(),
-        target: Some(CachedFindingTarget::Function {
-            path: summary.path.clone(),
-            crate_name: tcx.crate_name(def_id.krate).to_string(),
-            is_local: false,
-        }),
+    }
+}
+
+pub(super) fn panic_boundaries<'view, 'tcx>(
+    tcx: TyCtxt<'tcx>,
+    view: ReachabilityView<'view, 'tcx>,
+    cache: &DependencyAnalysisCache,
+    ignores: impl FnMut(DefId) -> bool,
+) -> Vec<EffectBoundary<'view, 'tcx>> {
+    effect_boundaries(tcx, view, cache, ignores, |function| {
+        &function.summary().panic
     })
 }
 
-pub(super) fn propagating_cached_panic_boundaries<'view, 'tcx, 'cache>(
+pub(super) fn safety_boundaries<'view, 'tcx>(
     tcx: TyCtxt<'tcx>,
     view: ReachabilityView<'view, 'tcx>,
-    cache: &'cache DependencyAnalysisCache,
-    ignores: impl FnMut(DefId) -> bool + 'cache,
-) -> impl Iterator<Item = CachedEffectBoundary<'view, 'tcx, 'cache>> {
-    propagating_cached_effect_boundaries(tcx, view, cache, ignores, |function| &function.panic)
+    cache: &DependencyAnalysisCache,
+    ignores: impl FnMut(DefId) -> bool,
+) -> Vec<EffectBoundary<'view, 'tcx>> {
+    effect_boundaries(tcx, view, cache, ignores, |function| {
+        &function.summary().safety
+    })
 }
 
-pub(super) fn propagating_cached_safety_boundaries<'view, 'tcx, 'cache>(
+fn effect_boundaries<'view, 'tcx>(
     tcx: TyCtxt<'tcx>,
     view: ReachabilityView<'view, 'tcx>,
-    cache: &'cache DependencyAnalysisCache,
-    ignores: impl FnMut(DefId) -> bool + 'cache,
-) -> impl Iterator<Item = CachedEffectBoundary<'view, 'tcx, 'cache>> {
-    propagating_cached_effect_boundaries(tcx, view, cache, ignores, |function| &function.safety)
-}
+    cache: &DependencyAnalysisCache,
+    mut ignores: impl FnMut(DefId) -> bool,
+    select: impl Fn(&CachedFunction) -> &CachedEffectSummary,
+) -> Vec<EffectBoundary<'view, 'tcx>> {
+    let frontier = view
+        .frontier()
+        .filter(|node| {
+            matches!(
+                node.expansion(),
+                Some(
+                    ReachabilityNodeExpansion::DifferentArtifact
+                        | ReachabilityNodeExpansion::MirUnavailable
+                )
+            )
+        })
+        .map(reachability::ReachedNode::id)
+        .collect::<HashSet<_>>();
+    let mut seen = HashSet::new();
+    let mut boundaries = Vec::new();
 
-fn propagating_cached_effect_boundaries<'view, 'tcx, 'cache>(
-    tcx: TyCtxt<'tcx>,
-    view: ReachabilityView<'view, 'tcx>,
-    cache: &'cache DependencyAnalysisCache,
-    mut ignores: impl FnMut(DefId) -> bool + 'cache,
-    select: fn(&CachedFunctionSummary) -> &CachedEffectSummary,
-) -> impl Iterator<Item = CachedEffectBoundary<'view, 'tcx, 'cache>> {
-    dependency_boundary_edges(view).filter_map(move |edge| {
-        let def_id = edge.target().instance()?.def_id();
-        if def_id.is_local() || ignores(def_id) {
-            return None;
+    for edge in view.edges().filter(|edge| {
+        edge.kind() != ReachabilityEdgeKind::MacroExpansion
+            && frontier.contains(&edge.target().id())
+    }) {
+        let Some(instance) = edge.target().instance() else {
+            continue;
+        };
+        if matches!(
+            instance.def,
+            InstanceKind::Intrinsic(..) | InstanceKind::Virtual(..)
+        ) {
+            continue;
         }
-        let crate_name = tcx.crate_name(def_id.krate).to_string();
-        let function = cache.function(&crate_name, &stable_def_path_hash(tcx, def_id))?;
-        let effect = select(function);
-        (!effect.has_contract && (effect.is_reachable() || !effect.analysis_complete)).then_some(
-            CachedEffectBoundary {
-                edge,
-                function,
-                effect,
-            },
-        )
-    })
+        let def_id = instance.def_id();
+        if ignores(def_id) {
+            continue;
+        }
+        let managed_dependency = cache
+            .has_analysis_for_crate(tcx.stable_crate_id(def_id.krate).as_u64())
+            || tcx
+                .crate_extern_paths(def_id.krate)
+                .iter()
+                .any(|path| cache.tracks_artifact_path(path));
+
+        let (edge, function) = function_for_instance(tcx, cache, instance)
+            .map(|function| (edge, function))
+            .or_else(|| {
+                let entry = artifact_entry_edge(edge)?;
+                let function = function_for_instance(tcx, cache, entry.target().instance()?)?;
+                Some((entry, function))
+            })
+            .map_or((edge, None), |(edge, function)| (edge, Some(function)));
+        if !seen.insert(edge.id()) {
+            continue;
+        }
+
+        if let Some(function) = function {
+            let effect = select(&function);
+            if effect.has_contract {
+                continue;
+            }
+            if !effect.findings.is_empty()
+                || !effect.analysis_complete
+                || function.is_generic_template()
+            {
+                boundaries.push(EffectBoundary::Cached { edge, function });
+            }
+        } else if managed_dependency {
+            let target = edge.target().instance().map_or_else(
+                || String::from("opaque dependency boundary"),
+                |instance| tcx.def_path_str(instance.def_id()),
+            );
+            boundaries.push(EffectBoundary::Missing { edge, target });
+        }
+    }
+
+    boundaries
+}
+
+fn function_for_instance<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    cache: &DependencyAnalysisCache,
+    instance: Instance<'tcx>,
+) -> Option<CachedFunction> {
+    cache.function(
+        StableDefPathHash::from_def_id(tcx, instance.def_id()),
+        Some(StableInstanceHash::from_instance(tcx, instance)),
+    )
+}
+
+fn artifact_entry_edge<'view, 'tcx>(
+    frontier: ReachedEdge<'view, 'tcx>,
+) -> Option<ReachedEdge<'view, 'tcx>> {
+    let artifact = frontier.target().instance()?.def_id().krate;
+    if frontier
+        .origin()
+        .instance()
+        .is_some_and(|origin| origin.def_id().krate != artifact)
+    {
+        return Some(frontier);
+    }
+    let mut node = frontier.origin();
+    let mut entry = frontier;
+    while let Some(edge) = node.predecessor_edge() {
+        if edge
+            .target()
+            .instance()
+            .is_some_and(|target| target.def_id().krate == artifact)
+        {
+            entry = edge;
+        }
+        if edge
+            .origin()
+            .instance()
+            .is_some_and(|origin| origin.def_id().krate != artifact)
+        {
+            return Some(entry);
+        }
+        node = edge.origin();
+    }
+    None
 }

@@ -1,37 +1,34 @@
 use std::collections::{HashMap, HashSet};
 use std::ops::ControlFlow;
-use std::rc::Rc;
 
 use reachability::{
-    ReachabilityContext, ReachabilityControl, ReachabilityEdge, ReachabilityGraph,
+    ArtifactScope, ReachabilityContext, ReachabilityControl, ReachabilityEdge, ReachabilityGraph,
     ReachabilityHooks, ReachabilityIndex, ReachabilityNodeKind, ReachabilityView,
 };
 use rustc_hir::def_id::DefId;
 use rustc_middle::ty::{Instance, TyCtxt};
 use rustc_span::Span;
 
-use crate::cache::{CachedFinding, CachedFunctionSummary};
-use crate::cli::cache_encode::{cached_reachability_graph, cached_safety_finding};
-use crate::cli::diagnostics::{
-    cached_dependency_safety_diagnostic, cached_dependency_safety_incomplete_diagnostic,
-};
+use crate::cache::{CachedEffectInput, CachedFinding, CachedFindingInput};
+use crate::cli::cache_encode::cached_safety_finding;
+use crate::cli::diagnostics::cached_dependency_safety_diagnostic;
 use crate::cli::findings::{Finding, FindingKind, safety_finding_report};
 use crate::config::{AnalysisConfig, SafetyConfig};
-use crate::dependency_cache::DependencyAnalysisCache;
+use crate::dependency_cache::{CachedFunction, DependencyAnalysisCache};
 use crate::effect_tracker::{EffectTrace, find_effect_trace, find_effect_trace_to_edge};
 use crate::namespace::canonical_namespace;
 use crate::report_roots::ReportRoot;
 use crate::safety::{SafetyAnalysis, SafetyEffectGroup, SafetyEvidence, safety_doc_summary};
 use crate::source_markers::MarkerBlockKey;
 
-use super::cache::{propagating_cached_safety_boundaries, rebase_cached_dependency_finding};
+use super::cache::{EffectBoundary, rebase_cached_dependency_finding, safety_boundaries};
 use super::pipeline::{
     CommentIndex, Effect, EffectCx, EffectGroupAllocator, EffectGroupId, EffectResolution,
     EffectSource, PathAnchor,
 };
 use super::{
-    EffectCacheOutput, EffectReportOutput, EffectRootAnalysis, finish_effect_root,
-    reachability_options,
+    EffectRootAnalysis, IncompleteDependency, dependency_analysis_incomplete_finding,
+    reachability_options, root_analysis_incomplete_finding,
 };
 
 struct SafetyReachabilityHooks<'config> {
@@ -58,7 +55,7 @@ struct SafetyEffect<'config, 'analysis> {
     analysis: &'analysis mut SafetyAnalysis,
     groups: EffectGroupAllocator,
     local_groups: HashMap<SafetyEffectGroup, EffectGroupId>,
-    incomplete_dependencies: Vec<IncompleteSafetyDependency>,
+    incomplete_dependencies: Vec<IncompleteDependency>,
 }
 
 #[derive(Clone)]
@@ -69,42 +66,10 @@ enum SafetySource {
     },
     Dependency {
         edge_id: reachability::ReachabilityEdgeId,
-        function: Rc<CachedFunctionSummary>,
-        finding: Rc<CachedFinding>,
+        function: CachedFunction,
+        finding: CachedFinding,
         effect_span: Span,
     },
-}
-
-struct IncompleteSafetyDependency {
-    edge_id: reachability::ReachabilityEdgeId,
-    function: Rc<CachedFunctionSummary>,
-    trace: EffectTrace,
-}
-
-impl SafetySource {
-    fn effect_span(&self) -> Span {
-        match self {
-            Self::Local { effect_span, .. } | Self::Dependency { effect_span, .. } => *effect_span,
-        }
-    }
-}
-
-impl<'tcx> SafetyEffect<'_, '_> {
-    fn query(
-        &self,
-        reachability: &mut ReachabilityIndex<'tcx>,
-        root: ReportRoot<'tcx>,
-        analysis_config: &AnalysisConfig,
-    ) -> reachability::ReachabilitySnapshot<'tcx> {
-        let mut hooks = SafetyReachabilityHooks {
-            config: self.config,
-        };
-        reachability.query(
-            root.reachability_root(),
-            &mut hooks,
-            reachability_options(analysis_config, false),
-        )
-    }
 }
 
 impl<'tcx> Effect<'tcx> for SafetyEffect<'_, '_> {
@@ -121,8 +86,14 @@ impl<'tcx> Effect<'tcx> for SafetyEffect<'_, '_> {
     }
 
     fn probe_local_sources(&mut self, cx: &EffectCx<'_, 'tcx>) -> Vec<EffectSource<Self::Source>> {
-        let reached_instances =
-            analyze_reached_safety_owners(cx.tcx, cx.view, self.config, self.analysis);
+        let reached_instances = reached_safety_owners(cx.view);
+        self.analysis.analyze_owners(
+            cx.tcx,
+            self.config,
+            reached_instances
+                .iter()
+                .filter_map(|(def_id, _)| def_id.as_local()),
+        );
         let mut sources = Vec::new();
         for (owner, owner_instances) in reached_instances {
             if safety_boundary_trace(cx.tcx, cx.view, &owner_instances, self.config).is_none() {
@@ -157,40 +128,61 @@ impl<'tcx> Effect<'tcx> for SafetyEffect<'_, '_> {
         cx: &EffectCx<'_, 'tcx>,
     ) -> Vec<EffectSource<Self::Source>> {
         let mut sources = Vec::new();
-        for boundary in
-            propagating_cached_safety_boundaries(cx.tcx, cx.view, cx.dependency_cache, |def_id| {
-                self.config.ignores_def(cx.tcx, def_id)
-            })
-        {
-            let Some(trace) = find_effect_trace_to_edge(cx.view, boundary.edge, |node| {
-                self.is_path_boundary(cx, node)
-            }) else {
+        for boundary in safety_boundaries(cx.tcx, cx.view, cx.dependency_cache, |def_id| {
+            self.config.ignores_def(cx.tcx, def_id)
+        }) {
+            let (edge, function) = match boundary {
+                EffectBoundary::Cached { edge, function } => (edge, function),
+                EffectBoundary::Missing { edge, target } => {
+                    if let Some(trace) = find_effect_trace_to_edge(cx.view, edge, |node| {
+                        self.is_path_boundary(cx, node)
+                    }) {
+                        self.incomplete_dependencies.push(IncompleteDependency {
+                            edge_id: edge.id(),
+                            target,
+                            trace,
+                        });
+                    }
+                    continue;
+                }
+            };
+            let Some(trace) =
+                find_effect_trace_to_edge(cx.view, edge, |node| self.is_path_boundary(cx, node))
+            else {
                 continue;
             };
-            let function = Rc::new(boundary.function.clone());
-            if !boundary.effect.analysis_complete {
-                self.incomplete_dependencies
-                    .push(IncompleteSafetyDependency {
-                        edge_id: boundary.edge.id(),
-                        function: Rc::clone(&function),
-                        trace,
-                    });
-            }
-            for finding in &boundary.effect.findings {
+            let summary = function.summary();
+            let target = summary.path.clone();
+            let finding_ids = summary.safety.findings.clone();
+            let mut incomplete =
+                !summary.safety.analysis_complete || function.is_generic_template();
+            for finding_id in finding_ids {
+                let Some(finding) = function.finding(finding_id).cloned() else {
+                    incomplete = true;
+                    continue;
+                };
+                incomplete |= !function.resolve_trace(finding.trace).complete;
                 if FindingKind::from_cached_safety(finding.kind).is_none() {
                     continue;
                 }
                 sources.push(EffectSource {
                     group: self.groups.allocate(),
-                    anchor: PathAnchor::from_terminal_edge(boundary.edge),
+                    anchor: PathAnchor::from_terminal_edge(edge),
                     terminal_marker_spans: Vec::new(),
                     requirements: finding.missing_requirements.clone(),
                     payload: SafetySource::Dependency {
-                        edge_id: boundary.edge.id(),
-                        function: Rc::clone(&function),
-                        finding: Rc::new(finding.clone()),
-                        effect_span: boundary.edge.span(),
+                        edge_id: edge.id(),
+                        function: function.clone(),
+                        finding,
+                        effect_span: edge.span(),
                     },
+                });
+            }
+            if incomplete {
+                self.incomplete_dependencies.push(IncompleteDependency {
+                    edge_id: edge.id(),
+                    target,
+                    trace,
                 });
             }
         }
@@ -206,7 +198,13 @@ pub(super) fn analyze_root<'tcx>(
     config: &SafetyConfig,
     analysis: &mut SafetyAnalysis,
     dependency_cache: &DependencyAnalysisCache,
-) -> EffectRootAnalysis {
+) -> EffectRootAnalysis<'tcx> {
+    let mut hooks = SafetyReachabilityHooks { config };
+    let snapshot = reachability.query(
+        root.reachability_root(),
+        &mut hooks,
+        reachability_options(analysis_config, ArtifactScope::RootArtifact),
+    );
     let mut effect = SafetyEffect {
         config,
         analysis,
@@ -214,7 +212,6 @@ pub(super) fn analyze_root<'tcx>(
         local_groups: HashMap::new(),
         incomplete_dependencies: Vec::new(),
     };
-    let snapshot = effect.query(reachability, root, analysis_config);
     let view = reachability.graph().view(&snapshot);
     let cx = EffectCx {
         tcx,
@@ -224,27 +221,29 @@ pub(super) fn analyze_root<'tcx>(
         marker_probing: analysis_config.marker_probing,
     };
     let resolution = super::pipeline::resolve(&mut effect, &cx);
-    let findings = safety_report_findings(&effect, &cx, &resolution);
-    let cached_findings = safety_cache_findings(&effect, &cx, &resolution);
-    let dependencies_complete = effect.incomplete_dependencies.is_empty();
+    let mut findings = safety_report_findings(&effect, &cx, &resolution);
     let query_complete = view.halt().is_none();
-    finish_effect_root(
-        tcx,
-        root,
-        analysis_config,
-        FindingKind::SafetyAnalysisIncomplete,
-        safety_doc_summary(tcx, root.def_id(), &config.documentation_overrides).has_docs,
-        EffectReportOutput {
-            findings,
-            query_complete,
+    if !query_complete {
+        findings.push(root_analysis_incomplete_finding(
+            tcx,
+            root,
+            analysis_config,
+            FindingKind::SafetyAnalysisIncomplete,
+        ));
+    }
+    EffectRootAnalysis {
+        summary: CachedEffectInput {
+            analysis_complete: query_complete && effect.incomplete_dependencies.is_empty(),
+            has_contract: safety_doc_summary(tcx, root.def_id(), &config.documentation_overrides)
+                .has_docs,
+            findings: safety_cache_findings(&effect, &cx, &resolution),
         },
-        EffectCacheOutput {
-            findings: cached_findings,
-            graph: cached_reachability_graph(tcx, view),
-            query_complete,
-            dependencies_complete,
-        },
-    )
+        findings,
+        reached_instances: view
+            .nodes()
+            .filter_map(reachability::ReachedNode::instance)
+            .collect(),
+    }
 }
 
 fn safety_report_findings(
@@ -282,17 +281,17 @@ fn safety_report_findings(
                 let Some(edge) = cx.view.edges().find(|edge| edge.id() == *edge_id) else {
                     continue;
                 };
-                let mut finding = finding.as_ref().clone();
+                let mut finding = finding.clone();
                 finding
                     .missing_requirements
                     .clone_from(&unresolved.path.missing_requirements);
-                if let Some((finding, _)) = cached_dependency_safety_finding(
+                if let Some(finding) = cached_dependency_safety_finding(
                     cx.tcx,
                     cx.view.graph(),
                     edge,
                     &unresolved.path.trace,
                     cx.root,
-                    function.as_ref(),
+                    function,
                     &finding,
                 ) {
                     findings.push(finding);
@@ -301,24 +300,27 @@ fn safety_report_findings(
         }
     }
 
-    for incomplete in &effect.incomplete_dependencies {
-        let Some(edge) = cx.view.edges().find(|edge| edge.id() == incomplete.edge_id) else {
-            continue;
-        };
-        findings.push(cached_dependency_safety_incomplete_finding(
+    for dependency in &effect.incomplete_dependencies {
+        findings.push(dependency_analysis_incomplete_finding(
             cx.tcx,
             cx.view.graph(),
-            edge,
-            &incomplete.trace,
             cx.root,
-            incomplete.function.as_ref(),
+            dependency,
+            FindingKind::SafetyAnalysisIncomplete,
+            "safety",
         ));
     }
 
     let effect_spans = resolution
         .sources
         .iter()
-        .map(|source| (source.group, source.payload.effect_span()))
+        .map(|source| {
+            let effect_span = match &source.payload {
+                SafetySource::Local { effect_span, .. }
+                | SafetySource::Dependency { effect_span, .. } => *effect_span,
+            };
+            (source.group, effect_span)
+        })
         .collect::<HashMap<_, _>>();
     findings.extend(safety_ambiguity_findings(
         cx.tcx,
@@ -338,7 +340,7 @@ fn safety_cache_findings(
     effect: &SafetyEffect<'_, '_>,
     cx: &EffectCx<'_, '_>,
     resolution: &EffectResolution<SafetySource>,
-) -> Vec<CachedFinding> {
+) -> Vec<CachedFindingInput> {
     let mut findings = Vec::new();
     for unresolved in &resolution.unresolved {
         match &resolution.sources[unresolved.source].payload {
@@ -347,6 +349,7 @@ fn safety_cache_findings(
                     local_safety_finding(cx, effect.config, evidence, &unresolved.path);
                 if let Some(cached) = cached_safety_finding(
                     cx.tcx,
+                    cx.view.graph(),
                     evidence.site(),
                     &unresolved.path.trace,
                     &safety_finding,
@@ -364,19 +367,18 @@ fn safety_cache_findings(
                 let Some(edge) = cx.view.edges().find(|edge| edge.id() == *edge_id) else {
                     continue;
                 };
-                let mut finding = finding.as_ref().clone();
+                let mut finding = finding.clone();
                 finding
                     .missing_requirements
                     .clone_from(&unresolved.path.missing_requirements);
-                if let Some(cached) = rebase_cached_dependency_finding(
+                findings.push(rebase_cached_dependency_finding(
                     cx.tcx,
+                    cx.view.graph(),
                     edge,
                     &unresolved.path.trace,
-                    function.as_ref(),
+                    function,
                     &finding,
-                ) {
-                    findings.push(cached);
-                }
+                ));
             }
         }
     }
@@ -400,23 +402,6 @@ fn local_safety_finding(
     finding.trace =
         crate::cli::report::render_trace(cx.tcx, cx.view.graph(), &unresolved.trace.edge_ids);
     (safety_finding, finding)
-}
-
-fn analyze_reached_safety_owners<'view, 'tcx>(
-    tcx: TyCtxt<'tcx>,
-    view: ReachabilityView<'view, 'tcx>,
-    config: &crate::config::SafetyConfig,
-    analysis: &mut SafetyAnalysis,
-) -> Vec<(DefId, Vec<reachability::ReachedNode<'view, 'tcx>>)> {
-    let reached_instances = reached_safety_owners(view);
-    analysis.analyze_owners(
-        tcx,
-        config,
-        reached_instances
-            .iter()
-            .filter_map(|(def_id, _)| def_id.as_local()),
-    );
-    reached_instances
 }
 
 fn reached_safety_owners<'view, 'tcx>(
@@ -552,15 +537,13 @@ fn cached_dependency_safety_finding<'tcx>(
     edge: reachability::ReachedEdge<'_, 'tcx>,
     trace: &EffectTrace,
     root: ReportRoot<'tcx>,
-    summary: &CachedFunctionSummary,
+    function: &CachedFunction,
     cached: &CachedFinding,
-) -> Option<(Finding, CachedFinding)> {
+) -> Option<Finding> {
     let kind = FindingKind::from_cached_safety(cached.kind)?;
+    let summary = function.summary();
     let mut rendered_trace = crate::cli::report::render_trace(tcx, graph, &trace.edge_ids);
-    rendered_trace.extend(crate::cli::report::render_cached_trace(
-        &summary.safety,
-        cached,
-    ));
+    rendered_trace.extend(crate::cli::report::render_cached_trace(function, cached));
     let finding = Finding {
         root: Some(canonical_namespace(tcx, root.def_id())),
         root_kind: Some(root.kind()),
@@ -584,31 +567,5 @@ fn cached_dependency_safety_finding<'tcx>(
             cached_dependency_safety_diagnostic(tcx, edge.span(), summary, cached),
         )
     };
-    let cached_finding = rebase_cached_dependency_finding(tcx, edge, trace, summary, cached)?;
-    Some((finding, cached_finding))
-}
-
-fn cached_dependency_safety_incomplete_finding<'tcx>(
-    tcx: TyCtxt<'tcx>,
-    graph: &ReachabilityGraph<'tcx>,
-    edge: reachability::ReachedEdge<'_, 'tcx>,
-    trace: &EffectTrace,
-    root: ReportRoot<'tcx>,
-    summary: &CachedFunctionSummary,
-) -> Finding {
-    Finding {
-        root: Some(canonical_namespace(tcx, root.def_id())),
-        root_kind: Some(root.kind()),
-        function: None,
-        target: Some(summary.path.clone()),
-        span: Some(crate::cli::report::render_span(tcx, edge.span())),
-        trace: crate::cli::report::render_trace(tcx, graph, &trace.edge_ids),
-        missing_requirements: Vec::new(),
-        requirements: Vec::new(),
-        ..Finding::new(
-            FindingKind::SafetyAnalysisIncomplete,
-            format!("{} has incomplete cached safety analysis", summary.path),
-            cached_dependency_safety_incomplete_diagnostic(edge.span(), summary),
-        )
-    }
+    Some(finding)
 }

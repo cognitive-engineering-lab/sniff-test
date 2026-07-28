@@ -1,9 +1,3 @@
-[analysis]
-node-limit = 2
-
-[analysis.lints]
-analysis-incomplete = "deny"
-
 [panics]
 panic-sink-namespaces = [
     "core::panicking::**",
@@ -16,4 +10,4 @@ panic-sink-namespaces = [
 cached-dependency-panic = "deny"
 
 [safety]
-ignored-namespaces = ["**"]
+ignored-namespaces = ["dependency_generic_private_panic::**"]

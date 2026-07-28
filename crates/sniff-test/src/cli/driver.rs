@@ -4,7 +4,10 @@ mod effects;
 
 use std::path::{Path, PathBuf};
 
-use crate::cache::{CacheExpectations, CachedArtifactAnalysis, CachedArtifactInfo, artifact_id};
+use crate::cache::{
+    CacheExpectations, CacheValidationError, CachedArtifactAnalysis, CachedArtifactInfo,
+    artifact_id,
+};
 use crate::config::SniffTestConfig;
 use crate::dependency_cache::{DependencyAnalysisCache, DependencyInput};
 use crate::report_roots::select_report_roots;
@@ -17,7 +20,10 @@ use super::args::{self, SniffTestArgs};
 use super::diagnostics::emit_finding_diagnostic;
 use super::findings::{Finding, collect_report_root_findings, resolve_findings};
 use super::plugin::rustc_version;
-use super::report::{AnalysisArtifactReport, CrateOutputScope, REPORT_FORMAT_VERSION};
+use super::report::{
+    AnalysisArtifactReport, CrateOutputScope, REPORT_FORMAT_VERSION, ReportArtifact,
+    ReportDependency,
+};
 use effects::{RootEffectAnalysis, analyze_effect_roots};
 
 pub(crate) fn analyze_crate(
@@ -42,12 +48,6 @@ pub(crate) fn analyze_crate(
     for (extern_name, error) in dependency_cache.load_failures() {
         eprintln!(
             "sniff-test: warning: ignoring cached analysis for dependency `{extern_name}`: {error}"
-        );
-    }
-    for ambiguous in dependency_cache.ambiguous_crate_names() {
-        eprintln!(
-            "sniff-test: warning: multiple compiled artifacts are named `{ambiguous}`; \
-             cached effect evidence for that crate is disabled"
         );
     }
 
@@ -79,7 +79,13 @@ pub(crate) fn analyze_crate(
             emit_finding_diagnostic(tcx, finding.level, &finding.finding.diagnostic);
         }
     }
-    if let Err(error) = analysis.cache.write(&args.cache_dir()) {
+    let cache_write = match &analysis.cache {
+        Ok(cache) => cache
+            .write(&args.cache_dir())
+            .map_err(|error| error.to_string()),
+        Err(error) => Err(error.to_string()),
+    };
+    if let Err(error) = cache_write {
         if args.under_cargo {
             let diagnostic = tcx
                 .dcx()
@@ -106,7 +112,7 @@ fn emit_report(args: &SniffTestArgs, report: &AnalysisArtifactReport) {
 
 struct AnalysisArtifact {
     report: AnalysisArtifactReport,
-    cache: CachedArtifactAnalysis,
+    cache: Result<CachedArtifactAnalysis, CacheValidationError>,
 }
 
 impl AnalysisArtifact {
@@ -122,7 +128,6 @@ impl AnalysisArtifact {
         effect_analysis: RootEffectAnalysis,
         mut findings: Vec<Finding>,
     ) -> Self {
-        let dependencies = dependency_cache.resolved_dependencies();
         let artifact = artifact_info(tcx);
         let tool_version = env!("CARGO_PKG_VERSION").to_owned();
         let rustc_version = rustc_version();
@@ -133,17 +138,25 @@ impl AnalysisArtifact {
             format_version: REPORT_FORMAT_VERSION,
             tool_version: tool_version.clone(),
             rustc_version: rustc_version.clone(),
-            artifact: artifact.clone(),
+            artifact: ReportArtifact {
+                artifact_id: artifact.artifact_id.clone(),
+                crate_name: artifact.crate_name.clone(),
+            },
             scope,
-            dependencies: dependencies.clone(),
+            dependencies: dependency_cache
+                .direct_dependency_aliases()
+                .map(|(extern_name, artifact_id)| ReportDependency {
+                    extern_name: extern_name.to_owned(),
+                    artifact_id: artifact_id.to_owned(),
+                })
+                .collect(),
             findings,
         };
         let cache = CachedArtifactAnalysis::new(
             tool_version,
             rustc_version,
             artifact,
-            dependencies,
-            effect_analysis.function_summaries,
+            effect_analysis.functions,
         );
 
         Self { report, cache }
@@ -218,6 +231,7 @@ fn artifact_info(tcx: TyCtxt<'_>) -> CachedArtifactInfo {
             (!extra_filename.is_empty()).then_some(extra_filename),
         ),
         crate_name,
+        stable_crate_id: tcx.stable_crate_id(LOCAL_CRATE).as_u64(),
     }
 }
 

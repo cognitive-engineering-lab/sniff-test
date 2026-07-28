@@ -1,5 +1,6 @@
 mod common;
 
+use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -472,6 +473,220 @@ fn cached_safety_findings_keep_their_effect_spans() {
             "[FIXTURE]/dep/src/lib.rs:2:26: 2:34",
             "[FIXTURE]/dep/src/lib.rs:3:27: 3:35",
         ]
+    );
+}
+
+#[test]
+fn generic_dependency_template_retains_private_helper_trace() {
+    let repo = repo_root();
+    let binaries = Binaries::from_cargo();
+    let sysroot = rustc_sysroot();
+    let case = Case::cargo("generic cache templates retain evidence without proving completeness")
+        .crate_dir("app")
+        .exit_code(101);
+    let messages = run_case(
+        &repo,
+        &binaries,
+        &sysroot,
+        "generic_dependency_template_retains_private_helper_trace",
+        "dependency_generic_private_panic",
+        &case,
+    );
+    let report = messages
+        .iter()
+        .find(|message| message["artifact"]["crate-name"] == "dependency_generic_private_panic_app")
+        .expect("fixture should emit the application report");
+    let findings = report["findings"].as_array().expect("application findings");
+    assert!(
+        findings
+            .iter()
+            .any(|finding| finding["kind"] == "panic-analysis-incomplete"),
+        "a generic cache template must not prove a concrete instance clean: {findings:?}"
+    );
+    let finding = findings
+        .iter()
+        .find(|finding| {
+            finding["root"] == "dependency_generic_private_panic_app::caller"
+                && finding["kind"] == "cached-dependency-panic"
+        })
+        .expect("the application should retain the dependency panic");
+    let trace = finding["trace"]
+        .as_array()
+        .expect("cached dependency panic should include a trace");
+
+    assert!(
+        trace.iter().any(|step| {
+            step.as_str()
+                .is_some_and(|step| step.contains("dependency_generic_private_panic::hidden"))
+        }),
+        "trace should cross the dependency's private helper: {trace:?}"
+    );
+}
+
+#[test]
+#[allow(
+    clippy::too_many_lines,
+    reason = "the regression test compiles and verifies both cached and missing-cache variants"
+)]
+fn expanded_generic_dependency_resumes_at_private_helper() {
+    let name = "expanded_generic_dependency_resumes_at_private_helper";
+    let fixture_name = "dependency_generic_private_panic";
+    let repo = repo_root();
+    let binaries = Binaries::from_cargo();
+    let sysroot = rustc_sysroot();
+    let fixture = repo.join("tests/fixtures").join(fixture_name);
+    let temp = tempfile::Builder::new()
+        .prefix(&format!("sniff-test-{name}-"))
+        .tempdir()
+        .expect("temporary fixture directory");
+    let root = temp.path().join(fixture_name);
+    copy_dir_all(&fixture, &root).expect("copy fixture");
+    let cache_dir = temp.path().join("cache");
+    let out_dir = temp.path().join("out");
+    fs::create_dir_all(&out_dir).expect("create rustc output directory");
+    let manifest = root.join("app/sniff-test.toml");
+
+    let mut dependency = Command::new(&binaries.driver);
+    clean_cargo_package_env(&mut dependency);
+    let dependency = dependency
+        .args(["--manifest"])
+        .arg(&manifest)
+        .args(["--cache-dir"])
+        .arg(&cache_dir)
+        .args(["--message-format", "json", "--color", "never", "--"])
+        .args([
+            "--crate-name",
+            "dependency_generic_private_panic",
+            "--crate-type",
+            "rlib",
+            "--edition",
+            "2024",
+        ])
+        .arg(root.join("dep/src/lib.rs"))
+        .args(["--sysroot", sysroot.trim(), "--out-dir"])
+        .arg(&out_dir)
+        .args(["-C", "extra-filename=-audit"])
+        .current_dir(&root)
+        .output()
+        .unwrap_or_else(|error| panic!("{name}: failed to compile dependency: {error}"));
+    let dependency = CommandOutput::from_output(dependency);
+    assert!(
+        dependency.status.success(),
+        "{name}: dependency compilation failed\nstdout:\n{}\nstderr:\n{}",
+        dependency.stdout,
+        dependency.stderr
+    );
+
+    let dependency_rlib = out_dir.join("libdependency_generic_private_panic-audit.rlib");
+    assert!(
+        dependency_rlib.exists(),
+        "{name}: missing dependency artifact {}",
+        dependency_rlib.display()
+    );
+
+    let compile_application = |cache_dir: &Path, suffix: &str| {
+        let mut application = Command::new(&binaries.driver);
+        clean_cargo_package_env(&mut application);
+        let output = application
+            .args(["--manifest"])
+            .arg(&manifest)
+            .args(["--cache-dir"])
+            .arg(cache_dir)
+            .args(["--message-format", "json", "--color", "never", "--"])
+            .args([
+                "--crate-name",
+                "dependency_generic_private_panic_app",
+                "--crate-type",
+                "lib",
+                "--edition",
+                "2024",
+            ])
+            .arg(root.join("app/src/lib.rs"))
+            .args(["--sysroot", sysroot.trim(), "--out-dir"])
+            .arg(&out_dir)
+            .args(["-C", &format!("extra-filename={suffix}"), "--extern"])
+            .arg(format!(
+                "dependency_generic_private_panic={}",
+                dependency_rlib.display()
+            ))
+            .arg("-Zno-codegen")
+            .env("CARGO_PRIMARY_PACKAGE", "1")
+            .current_dir(&root)
+            .output()
+            .unwrap_or_else(|error| panic!("{name}: failed to compile application: {error}"));
+        CommandOutput::from_output(output)
+    };
+    let application = compile_application(&cache_dir, "-app-audit");
+    assert!(
+        application.status.success(),
+        "{name}: application compilation failed\nstdout:\n{}\nstderr:\n{}",
+        application.stdout,
+        application.stderr
+    );
+
+    let case = Case::direct("expanded dependency MIR resumes from an exact private cache entry");
+    let messages = parse_messages(&application, &root, &sysroot, name, fixture_name, &case);
+    let report = messages
+        .iter()
+        .find(|message| message["artifact"]["crate-name"] == "dependency_generic_private_panic_app")
+        .expect("application report");
+    let findings = report["findings"].as_array().expect("application findings");
+    assert!(
+        !findings
+            .iter()
+            .any(|finding| finding["kind"] == "panic-analysis-incomplete"),
+        "exact private resume should complete dependency analysis: {findings:?}"
+    );
+    let finding = findings
+        .iter()
+        .find(|finding| finding["kind"] == "cached-dependency-panic")
+        .expect("cached private-helper panic");
+    assert_eq!(
+        finding["target"],
+        "dependency_generic_private_panic::hidden"
+    );
+    let trace = finding["trace"]
+        .as_array()
+        .expect("cached dependency panic trace");
+    assert!(
+        trace.iter().any(|step| {
+            step.as_str()
+                .is_some_and(|step| step.contains("dependency_generic_private_panic::api"))
+        }) && trace.iter().any(|step| {
+            step.as_str()
+                .is_some_and(|step| step.contains("dependency_generic_private_panic::hidden"))
+        }),
+        "trace should enter the generic API and resume at its private helper: {trace:?}"
+    );
+
+    let missing_cache_application =
+        compile_application(&temp.path().join("empty-cache"), "-app-missing-cache");
+    assert!(
+        missing_cache_application.status.success(),
+        "{name}: missing-cache application compilation failed\nstdout:\n{}\nstderr:\n{}",
+        missing_cache_application.stdout,
+        missing_cache_application.stderr
+    );
+    let messages = parse_messages(
+        &missing_cache_application,
+        &root,
+        &sysroot,
+        name,
+        fixture_name,
+        &case,
+    );
+    let report = messages
+        .iter()
+        .find(|message| message["artifact"]["crate-name"] == "dependency_generic_private_panic_app")
+        .expect("missing-cache application report");
+    let findings = report["findings"]
+        .as_array()
+        .expect("missing-cache application findings");
+    assert!(
+        findings
+            .iter()
+            .any(|finding| finding["kind"] == "panic-analysis-incomplete"),
+        "a tracked Cargo dependency with no cache must remain explicitly incomplete: {findings:?}"
     );
 }
 

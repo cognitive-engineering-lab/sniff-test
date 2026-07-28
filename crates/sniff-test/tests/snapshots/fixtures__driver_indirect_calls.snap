@@ -25,12 +25,24 @@ expression: messages
       {
         "kind": "indirect-call-boundary",
         "level": "warn",
+        "reason": "indirect call to undocumented trait method indirect_calls::Risky::undocumented cannot be verified",
+        "root": "indirect_calls::call_dyn",
+        "root-kind": "concrete",
+        "span": "[FIXTURE]/src/lib.rs:19:5: 19:29",
+        "target": "indirect_calls::Risky::undocumented",
+        "trace": [
+          "[FIXTURE]/src/lib.rs:19:5: 19:29: indirect_calls::call_dyn --direct-call-> indirect_calls::Risky::undocumented"
+        ]
+      },
+      {
+        "kind": "indirect-call-boundary",
+        "level": "warn",
         "reason": "indirect call through an opaque callable cannot be verified",
         "root": "indirect_calls::call_pointer",
         "root-kind": "concrete",
-        "span": "[FIXTURE]/src/lib.rs:19:5: 19:17",
+        "span": "[FIXTURE]/src/lib.rs:23:5: 23:17",
         "trace": [
-          "[FIXTURE]/src/lib.rs:19:5: 19:17: indirect_calls::call_pointer --indirect-call-> indirect call Binder { value: fn(bool), bound_vars: [] }"
+          "[FIXTURE]/src/lib.rs:23:5: 23:17: indirect_calls::call_pointer --indirect-call-> indirect call Binder { value: fn(bool), bound_vars: [] }"
         ]
       },
       {

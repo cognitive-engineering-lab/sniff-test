@@ -30,16 +30,29 @@ help: document when this function may panic with `/// # Panics` here
    | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
    = help: ensure the callee's panic conditions cannot occur, justify that with `// PANIC:`, or document when the caller may panic with `# Panics`
 
-warning: function `indirect_calls::call_pointer` reaches an unverifiable indirect call
+warning: function `indirect_calls::call_dyn` reaches an unverifiable indirect call
   --> src/lib.rs:18:1
    |
-18 | pub fn call_pointer(callee: fn(bool), flag: bool) {
+18 | pub fn call_dyn(value: &dyn Risky, flag: bool) {
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   |
+note: panic behavior cannot be verified here: indirect call to undocumented trait method `indirect_calls::Risky::undocumented`
+  --> src/lib.rs:19:5
+   |
+19 |     value.undocumented(flag);
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^
+   = help: document this boundary with `# Panics`, add `// PANIC:` only if every possible callee is locally constrained, or configure `indirect-call-boundary` if this opacity is acceptable
+
+warning: function `indirect_calls::call_pointer` reaches an unverifiable indirect call
+  --> src/lib.rs:22:1
+   |
+22 | pub fn call_pointer(callee: fn(bool), flag: bool) {
    | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
    |
 note: panic behavior cannot be verified here: indirect call through an opaque callable
-  --> src/lib.rs:19:5
+  --> src/lib.rs:23:5
    |
-19 |     callee(flag);
+23 |     callee(flag);
    |     ^^^^^^^^^^^^
    = help: document this boundary with `# Panics`, add `// PANIC:` only if every possible callee is locally constrained, or configure `indirect-call-boundary` if this opacity is acceptable
 
@@ -56,5 +69,5 @@ note: panic behavior cannot be verified here: indirect call to undocumented trai
    |     ^^^^^^^^^^^^^^^^^^^^^^^^
    = help: document this boundary with `# Panics`, add `// PANIC:` only if every possible callee is locally constrained, or configure `indirect-call-boundary` if this opacity is acceptable
 
-warning: `indirect-calls` (lib) generated 3 warnings
+warning: `indirect-calls` (lib) generated 4 warnings
     Finished `release` profile [optimized] target(s) in [TIME]

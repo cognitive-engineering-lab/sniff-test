@@ -15,6 +15,10 @@ pub fn call_undocumented<T: Risky>(value: &T, flag: bool) {
     value.undocumented(flag);
 }
 
+pub fn call_dyn(value: &dyn Risky, flag: bool) {
+    value.undocumented(flag);
+}
+
 pub fn call_pointer(callee: fn(bool), flag: bool) {
     callee(flag);
 }

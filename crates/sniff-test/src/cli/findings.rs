@@ -158,7 +158,6 @@ impl FindingKind {
             | CachedFindingKind::PanicInvocation
             | CachedFindingKind::PanicObligation
             | CachedFindingKind::TrustedPanicObligation
-            | CachedFindingKind::CrateBoundary
             | CachedFindingKind::IndirectCallBoundary => None,
         }
     }

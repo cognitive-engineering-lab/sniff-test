@@ -23,6 +23,14 @@ expression: messages
           "[FIXTURE]/dep/src/lib.rs:8:5: 8:51: macro core::std::assert --macro-expansion-> macro core::std::panic::panic_2021",
           "[SYSROOT]/lib/rustlib/src/rust/library/core/src/panic.rs:62:9: 62:73: macro core::std::panic::panic_2021 --direct-call-> core::std::rt::panic_fmt"
         ]
+      },
+      {
+        "kind": "panic-analysis-incomplete",
+        "level": "deny",
+        "reason": "reachability analysis halted at the 2-instance node limit before the call graph was exhausted",
+        "root": "dependency_panic_incomplete_resolved::incomplete_with_known_panic",
+        "root-kind": "concrete",
+        "span": "[FIXTURE]/dep/src/lib.rs:7:1: 7:47"
       }
     ],
     "format-version": 9,
@@ -44,9 +52,9 @@ expression: messages
     ],
     "findings": [
       {
-        "kind": "cached-dependency-panic",
+        "kind": "panic-analysis-incomplete",
         "level": "deny",
-        "reason": "dependency_panic_incomplete_resolved::incomplete_with_known_panic has incomplete cached panic analysis",
+        "reason": "dependency_panic_incomplete_resolved::incomplete_with_known_panic has no complete cached panic analysis",
         "root": "dependency_panic_incomplete_resolved_app::call_incomplete_dependency",
         "root-kind": "concrete",
         "span": "src/lib.rs:3:5: 3:76",

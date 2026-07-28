@@ -1,0 +1,9 @@
+[package]
+name = "dependency-generic-private-panic-app"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+dependency-generic-private-panic = { path = "../dep" }
+
+[workspace]
