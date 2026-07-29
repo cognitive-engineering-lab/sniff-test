@@ -707,30 +707,30 @@ pub enum ConfigError {
 impl Display for ConfigError {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::Io { path, source } => {
-                write!(f, "failed to read {}: {source}", path.display())
+            Self::Io { path, .. } => {
+                write!(f, "failed to read {}", path.display())
             }
-            Self::Parse { path, source } => {
-                write!(f, "failed to parse {}: {source}", path.display())
+            Self::Parse { path, .. } => {
+                write!(f, "failed to parse {}", path.display())
             }
-            Self::OverrideIo { path, source } => {
+            Self::OverrideIo { path, .. } => {
                 write!(
                     f,
-                    "failed to read documentation override file {}: {source}",
+                    "failed to read documentation override file {}",
                     path.display()
                 )
             }
-            Self::OverrideParse { path, source } => {
+            Self::OverrideParse { path, .. } => {
                 write!(
                     f,
-                    "failed to parse documentation override file {}: {source}",
+                    "failed to parse documentation override file {}",
                     path.display()
                 )
             }
-            Self::OverrideGlob { path, source } => {
+            Self::OverrideGlob { path, .. } => {
                 write!(
                     f,
-                    "failed to compile documentation override globs in {}: {source}",
+                    "failed to compile documentation override globs in {}",
                     path.display()
                 )
             }
@@ -753,9 +753,9 @@ mod tests {
     use std::path::PathBuf;
 
     use super::{
-        AnalysisConfig, CallableEdgeAttribution, ContractDocOverrides, EXAMPLE_MANIFEST, LintLevel,
-        MarkerProbing, MirInlining, OverflowChecks, PanicConfig, PathPatterns, ReportRootSet,
-        SafetyConfig, SniffTestConfig,
+        AnalysisConfig, CallableEdgeAttribution, ConfigError, ContractDocOverrideFile,
+        ContractDocOverrides, EXAMPLE_MANIFEST, LintLevel, MarkerProbing, MirInlining,
+        OverflowChecks, PanicConfig, PathPatterns, ReportRootSet, SafetyConfig, SniffTestConfig,
     };
 
     fn path_patterns(patterns: &[&str]) -> PathPatterns {
@@ -766,6 +766,124 @@ mod tests {
                 .collect(),
         )
         .expect("patterns should compile")
+    }
+
+    fn config_error_source<T>(error: &ConfigError) -> &T
+    where
+        T: std::error::Error + 'static,
+    {
+        std::error::Error::source(error)
+            .expect("config error should retain its source")
+            .downcast_ref::<T>()
+            .expect("config error should retain the typed source")
+    }
+
+    #[test]
+    fn config_error_display_keeps_context_without_rendering_sources() {
+        let path = PathBuf::from("sniff-test.toml");
+        let errors = [
+            (
+                ConfigError::Io {
+                    path: path.clone(),
+                    source: std::io::Error::new(std::io::ErrorKind::NotFound, "read source"),
+                },
+                "failed to read sniff-test.toml",
+            ),
+            (
+                ConfigError::Parse {
+                    path: path.clone(),
+                    source: toml::from_str::<SniffTestConfig>("invalid = [")
+                        .expect_err("manifest should be invalid"),
+                },
+                "failed to parse sniff-test.toml",
+            ),
+            (
+                ConfigError::OverrideIo {
+                    path: path.clone(),
+                    source: std::io::Error::new(
+                        std::io::ErrorKind::PermissionDenied,
+                        "override read source",
+                    ),
+                },
+                "failed to read documentation override file sniff-test.toml",
+            ),
+            (
+                ConfigError::OverrideParse {
+                    path: path.clone(),
+                    source: toml::from_str::<ContractDocOverrideFile>("overrides = [")
+                        .expect_err("override file should be invalid"),
+                },
+                "failed to parse documentation override file sniff-test.toml",
+            ),
+            (
+                ConfigError::OverrideGlob {
+                    path,
+                    source: globset::Glob::new("[").expect_err("override glob should be invalid"),
+                },
+                "failed to compile documentation override globs in sniff-test.toml",
+            ),
+        ];
+
+        for (error, expected) in errors {
+            assert_eq!(error.to_string(), expected);
+        }
+    }
+
+    #[test]
+    fn config_error_sources_retain_their_typed_causes() {
+        let path = PathBuf::from("sniff-test.toml");
+        let error = ConfigError::Io {
+            path: path.clone(),
+            source: std::io::Error::new(std::io::ErrorKind::NotFound, "read source"),
+        };
+        assert_eq!(
+            config_error_source::<std::io::Error>(&error).kind(),
+            std::io::ErrorKind::NotFound
+        );
+
+        let source = toml::from_str::<SniffTestConfig>("invalid = [")
+            .expect_err("manifest should be invalid");
+        let source_message = source.to_string();
+        let error = ConfigError::Parse {
+            path: path.clone(),
+            source,
+        };
+        assert_eq!(
+            config_error_source::<toml::de::Error>(&error).to_string(),
+            source_message
+        );
+
+        let error = ConfigError::OverrideIo {
+            path: path.clone(),
+            source: std::io::Error::new(
+                std::io::ErrorKind::PermissionDenied,
+                "override read source",
+            ),
+        };
+        assert_eq!(
+            config_error_source::<std::io::Error>(&error).kind(),
+            std::io::ErrorKind::PermissionDenied
+        );
+
+        let source = toml::from_str::<ContractDocOverrideFile>("overrides = [")
+            .expect_err("override file should be invalid");
+        let source_message = source.to_string();
+        let error = ConfigError::OverrideParse {
+            path: path.clone(),
+            source,
+        };
+        assert_eq!(
+            config_error_source::<toml::de::Error>(&error).to_string(),
+            source_message
+        );
+
+        let source = globset::Glob::new("[").expect_err("override glob should be invalid");
+        let source_message = source.to_string();
+        let error = ConfigError::OverrideGlob { path, source };
+        assert_eq!(
+            config_error_source::<globset::Error>(&error).to_string(),
+            source_message
+        );
     }
 
     #[test]

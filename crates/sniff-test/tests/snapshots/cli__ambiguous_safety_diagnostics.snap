@@ -25,7 +25,7 @@ error: function `ambiguous_safety::reused_macro_marker` has an ambiguous `// SAF
 28 | |         unsafe { perform() }
    | |_^
    |
-note: this safety effect group resolves to the same marker
+note: safety effect group 1 of 2 resolves to the same marker
   --> src/lib.rs:28:9
    |
 28 |         unsafe { perform() }
@@ -33,7 +33,7 @@ note: this safety effect group resolves to the same marker
 ...
 33 |     perform_once!();
    |     --------------- in this macro invocation
-note: this safety effect group resolves to the same marker
+note: safety effect group 2 of 2 resolves to the same marker
   --> src/lib.rs:28:9
    |
 28 |         unsafe { perform() }

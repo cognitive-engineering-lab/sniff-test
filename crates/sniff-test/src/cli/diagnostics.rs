@@ -793,10 +793,14 @@ fn ambiguous_safety_marker_diagnostic(
     let caller = canonical_namespace(tcx, caller);
     let message = format!("function `{caller}` has an ambiguous `// SAFETY:` marker");
     finding_diagnostic(Some(marker_span), message, |diag| {
-        for span in effect_spans {
+        let total = effect_spans.len();
+        for (index, span) in effect_spans.iter().enumerate() {
             diag.span_note(
                 *span,
-                String::from("this safety effect group resolves to the same marker"),
+                format!(
+                    "safety effect group {} of {total} resolves to the same marker",
+                    index + 1
+                ),
             );
         }
         diag.help(

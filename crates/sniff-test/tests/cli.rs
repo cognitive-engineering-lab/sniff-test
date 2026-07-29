@@ -324,6 +324,55 @@ fn direct_driver_warns_when_analysis_cache_write_fails() {
 }
 
 #[test]
+fn invalid_config_is_rendered_once_by_cargo_frontend() {
+    let temp = tempfile::tempdir().expect("temp dir");
+    fs::create_dir(temp.path().join("src")).expect("create source directory");
+    fs::write(
+        temp.path().join("Cargo.toml"),
+        "[package]\nname = \"invalid-config\"\nversion = \"0.1.0\"\nedition = \"2024\"\n",
+    )
+    .expect("write Cargo manifest");
+    fs::write(temp.path().join("src/lib.rs"), "pub fn valid() {}\n").expect("write source");
+    let manifest = temp.path().join("sniff-test.toml");
+    fs::write(&manifest, "invalid = [").expect("write invalid sniff-test manifest");
+
+    let binary = PathBuf::from(env!("CARGO_BIN_EXE_cargo-sniff-test"));
+    let mut command = Command::new(binary);
+    clean_cargo_package_env(&mut command);
+    let _cargo_guard = lock_nested_cargo();
+    let output = command
+        .args(["--color", "never"])
+        .current_dir(temp.path())
+        .output()
+        .expect("run cargo frontend");
+
+    assert_eq!(output.status.code(), Some(1));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let load_context = stderr
+        .find("error: failed to load configuration")
+        .expect("outer load context should be rendered");
+    let path_context = stderr
+        .find(&format!("failed to parse {}", manifest.display()))
+        .expect("manifest path context should be rendered");
+    let parser_source = stderr
+        .find("TOML parse error")
+        .expect("typed TOML parser source should be rendered");
+    assert_eq!(
+        load_context, 0,
+        "outer load context should begin the error chain\nstderr: {stderr}"
+    );
+    assert!(
+        load_context < path_context && path_context < parser_source,
+        "error chain should render outer context before its sources\nstderr: {stderr}"
+    );
+    assert_eq!(
+        stderr.matches("TOML parse error").count(),
+        1,
+        "the TOML diagnostic should appear once in the frontend error chain\nstderr: {stderr}"
+    );
+}
+
+#[test]
 fn invalid_config_is_rendered_by_driver_boundary() {
     let temp = tempfile::tempdir().expect("temp dir");
     let manifest = temp.path().join("sniff-test.toml");
@@ -357,6 +406,11 @@ fn invalid_config_is_rendered_by_driver_boundary() {
         "stderr: {stderr}"
     );
     assert!(stderr.contains(&manifest.display().to_string()));
+    assert_eq!(
+        stderr.matches("TOML parse error").count(),
+        1,
+        "the TOML diagnostic should appear once in the error chain\nstderr: {stderr}"
+    );
 }
 
 #[test]

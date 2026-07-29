@@ -479,6 +479,43 @@ fn callable_marker_is_not_ambiguous_between_generic_and_concrete_evidence() {
     );
 }
 
+#[test]
+fn local_foreign_function_does_not_query_extern_crate_paths() {
+    let repo = repo_root();
+    let binaries = Binaries::from_cargo();
+    let sysroot = rustc_sysroot();
+    let case = Case::cargo("local foreign functions are not extern crates");
+    let messages = run_case(
+        &repo,
+        &binaries,
+        &sysroot,
+        "local_foreign_function_does_not_query_extern_crate_paths",
+        "local_foreign_function",
+        &case,
+    );
+    let report = messages
+        .iter()
+        .find(|message| message["artifact"]["crate-name"] == "local_foreign_function")
+        .expect("fixture should emit its local artifact report");
+    assert_eq!(
+        report["scope"], "workspace",
+        "a local foreign function must remain in the workspace artifact: {report:?}"
+    );
+    assert!(
+        messages
+            .iter()
+            .all(|message| message["scope"] != "dependency"),
+        "a local foreign function must not produce a dependency report: {messages:?}"
+    );
+    let findings = report["findings"]
+        .as_array()
+        .expect("local foreign function findings");
+    assert!(
+        findings.is_empty(),
+        "a justified local foreign call should be clean: {findings:?}"
+    );
+}
+
 fn run_named_case(name: &'static str, fixture_name: &'static str, case: Case) {
     let repo = repo_root();
     let binaries = Binaries::from_cargo();

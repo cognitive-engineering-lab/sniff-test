@@ -296,12 +296,21 @@ fn normalize_requirement_name(name: &str) -> String {
 }
 
 fn parse_marker_body(body: &str) -> (Option<String>, &str) {
-    let Some((name, reason)) = body.split_once(':') else {
+    let Some(separator) = body.char_indices().find_map(|(index, character)| {
+        let previous = body[..index].chars().next_back();
+        let remainder = &body[index + character.len_utf8()..];
+        let next = remainder.chars().next();
+        // Neither half of a Rust path separator nor a URL scheme colon is a
+        // named marker delimiter.
+        (character == ':' && previous != Some(':') && next != Some(':') && next != Some('/'))
+            .then_some(index)
+    }) else {
         return (None, body);
     };
+    let (name, reason) = body.split_at(separator);
     let name = name.trim();
     if looks_like_requirement_name(name) {
-        (Some(name.to_owned()), reason.trim())
+        (Some(name.to_owned()), reason[1..].trim())
     } else {
         (None, body)
     }
@@ -317,7 +326,13 @@ fn parse_marker(body: &str) -> MarkerSatisfaction {
 }
 
 fn looks_like_requirement_name(name: &str) -> bool {
-    !normalize_requirement_name(name).is_empty()
+    let backticks_are_a_single_wrapper = name
+        .strip_prefix('`')
+        .and_then(|name| name.strip_suffix('`'))
+        .is_some_and(|name| !name.is_empty() && !name.contains('`'));
+    (!name.contains('`') || backticks_are_a_single_wrapper)
+        && !name.contains("://")
+        && !normalize_requirement_name(name).is_empty()
 }
 
 fn marker_block_at(
@@ -674,6 +689,93 @@ mod tests {
         assert!(!line_has_safety_marker(
             "/// SAFETY: doc comments are not call-site markers"
         ));
+    }
+
+    #[test]
+    fn marker_reason_treats_rust_paths_and_urls_as_prose() {
+        for reason in [
+            "`KnownLayout::size_of_val_raw` guarantees the result.",
+            "See https://example.com/safety for the invariant.",
+        ] {
+            assert_eq!(
+                super::line_satisfaction(&format!("// SAFETY: {reason}"), MarkerSyntax::Safety,),
+                Some(MarkerSatisfaction {
+                    requirement: None,
+                    reason: reason.to_owned(),
+                })
+            );
+        }
+    }
+
+    #[test]
+    fn marker_reason_does_not_use_the_second_path_colon_as_a_delimiter() {
+        for reason in [
+            "KnownLayout::",
+            "KnownLayout:: size_of_val_raw guarantees the result.",
+        ] {
+            assert_eq!(
+                super::line_satisfaction(&format!("// SAFETY: {reason}"), MarkerSyntax::Safety),
+                Some(MarkerSatisfaction {
+                    requirement: None,
+                    reason: reason.to_owned(),
+                })
+            );
+        }
+    }
+
+    #[test]
+    fn marker_reason_with_code_or_url_before_a_later_colon_stays_unnamed() {
+        for reason in [
+            "`KnownLayout::size_of_val_raw` guarantees: the size fits.",
+            "See https://example.com/safety: the invariant is documented.",
+        ] {
+            assert_eq!(
+                super::line_satisfaction(&format!("// SAFETY: {reason}"), MarkerSyntax::Safety),
+                Some(MarkerSatisfaction {
+                    requirement: None,
+                    reason: reason.to_owned(),
+                })
+            );
+        }
+    }
+
+    #[test]
+    fn qualified_requirement_name_uses_its_trailing_colon_as_the_delimiter() {
+        assert_eq!(
+            super::line_satisfaction(
+                "// SAFETY: module::condition: checked by the caller",
+                MarkerSyntax::Safety,
+            ),
+            Some(MarkerSatisfaction {
+                requirement: Some(String::from("module::condition")),
+                reason: String::from("checked by the caller"),
+            })
+        );
+    }
+
+    #[test]
+    fn compact_named_marker_remains_supported() {
+        assert_eq!(
+            super::line_satisfaction("// SAFETY: initialized:written above", MarkerSyntax::Safety,),
+            Some(MarkerSatisfaction {
+                requirement: Some(String::from("initialized")),
+                reason: String::from("written above"),
+            })
+        );
+    }
+
+    #[test]
+    fn backtick_wrapped_requirement_name_remains_supported() {
+        assert_eq!(
+            super::line_satisfaction(
+                "// SAFETY: `valid_ptr`: checked by the caller",
+                MarkerSyntax::Safety,
+            ),
+            Some(MarkerSatisfaction {
+                requirement: Some(String::from("`valid_ptr`")),
+                reason: String::from("checked by the caller"),
+            })
+        );
     }
 
     #[test]

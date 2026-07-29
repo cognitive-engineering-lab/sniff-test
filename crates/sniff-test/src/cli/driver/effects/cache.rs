@@ -109,7 +109,7 @@ fn effect_boundaries<'view, 'tcx>(
             continue;
         }
         let def_id = instance.def_id();
-        if ignores(def_id) {
+        if def_id.is_local() || ignores(def_id) {
             continue;
         }
         let managed_dependency = cache

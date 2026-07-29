@@ -57,3 +57,14 @@ pub fn safety_comment_on_function_def_bad() -> u8 {
 
     unsafe { read_byte(ptr) }
 }
+
+unsafe fn rust_path_marker_target() {}
+
+pub fn safety_comment_with_rust_path_in_reason_ok(value: Option<()>) {
+    match value {
+        Some(()) => (),
+        // SAFETY: `KnownLayout::size_of_val_raw` proves this fixture's
+        // remaining branch is unreachable.
+        None => unsafe { rust_path_marker_target() },
+    }
+}
