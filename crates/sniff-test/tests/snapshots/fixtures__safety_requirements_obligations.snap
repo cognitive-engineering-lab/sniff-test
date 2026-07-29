@@ -11,16 +11,6 @@ expression: messages
     "dependencies": [],
     "findings": [
       {
-        "function": "safety_requirements::configured_safety_obligation_missing_justification",
-        "kind": "safety-obligation-missing-justification",
-        "level": "warn",
-        "reason": "safety-obligation call to `safety_requirements::safe_undocumented_contract` has no `// SAFETY:` justification",
-        "root": "safety_requirements::configured_safety_obligation_missing_justification",
-        "root-kind": "concrete",
-        "span": "src/lib.rs:168:5: 168:33",
-        "target": "safety_requirements::safe_undocumented_contract"
-      },
-      {
         "function": "safety_requirements::configured_safety_obligation_missing_requirement",
         "kind": "safety-obligation-missing-requirements",
         "level": "warn",

@@ -61,6 +61,9 @@ cli_cases! {
     "indirect_calls" => {
         indirect_call_boundary_diagnostics => Case::new("indirect call boundary diagnostics");
     }
+    "trusted_boundaries" => {
+        trusted_boundary_diagnostics => Case::new("trusted boundary diagnostics");
+    }
     "safety_requirements" => {
         safety_diagnostics => Case::new("safety diagnostics");
         safety_obligation_diagnostics => Case::new("safety obligation diagnostics")

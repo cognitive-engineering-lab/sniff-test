@@ -1,70 +1,46 @@
-use std::collections::{HashMap, HashSet};
-use std::ops::ControlFlow;
+use std::collections::HashMap;
 
 use reachability::{
-    ArtifactScope, ReachabilityContext, ReachabilityControl, ReachabilityEdge,
-    ReachabilityEdgeKind, ReachabilityHooks, ReachabilityIndex, ReachabilityNodeKind,
-    ReachabilityView,
+    ArtifactScope, ReachabilityEdgeId, ReachabilityIndex, ReachabilityNodeKind, ReachabilityView,
+    ReachedEdge,
 };
 use rustc_hir::def_id::DefId;
-use rustc_middle::ty::{Instance, TyCtxt};
+use rustc_middle::ty::TyCtxt;
+use rustc_span::Span;
 
 use crate::cache::{CachedEffectInput, CachedFinding, CachedFindingInput, CachedFindingKind};
 use crate::cli::cache_encode::cached_panic_findings;
 use crate::cli::findings::{Finding, FindingKind};
 use crate::cli::report::{PanicRootReport, render_node};
-use crate::config::{AnalysisConfig, CallableEdgeAttribution, PanicBoundaryPolicy, PanicConfig};
+use crate::config::{AnalysisConfig, PanicBoundaryPolicy, PanicConfig};
 use crate::dependency_cache::{CachedFunction, DependencyAnalysisCache};
-use crate::effect_tracker::{EffectPathDecision, EffectTrace, find_effect_trace_to_edge};
+use crate::effect_tracker::{
+    EffectPathDecision, EffectTarget, EffectTrace, find_effect_trace_to_edge,
+};
 use crate::panics::{
     AmbiguousPanicMarker, AmbiguousPanicRequirementName, PanicAnalysis, PanicEvidence,
-    PanicSourceEvidence, collect_ambiguous_panic_requirement_names, is_trusted_panic_obligation,
-    probe_panic_sources, suppress_resolved_callable_indirect_boundaries,
+    PanicEvidenceKind, PanicSourceEvidence, collect_ambiguous_panic_requirement_names,
+    is_trusted_panic_boundary, panic_effect_target, probe_panic_sources,
 };
 use crate::report_roots::{ReportRoot, ReportRootKind};
+use crate::source_markers::{
+    EffectMarkerBlock, panic_effect_edge_marker_block, panic_span_marker_block,
+};
 
 use super::cache::{EffectBoundary, panic_boundaries, rebase_cached_dependency_finding};
 use super::pipeline::{
-    CommentIndex, Effect, EffectCx, EffectGroupAllocator, EffectGroupId, EffectResolution,
-    EffectSource, PathAnchor,
+    Effect, EffectCx, EffectGroupAllocator, EffectGroupId, EffectReachabilityHooks,
+    EffectResolution, EffectSource, PathAnchor,
 };
 use super::{
     EffectRootAnalysis, IncompleteDependency, dependency_analysis_incomplete_finding,
     reachability_options, root_analysis_incomplete_finding,
 };
 
-struct PanicReachabilityHooks<'config> {
-    config: &'config PanicConfig,
-    descend_reified_callables: bool,
-}
-
-impl<'tcx> ReachabilityHooks<'tcx> for PanicReachabilityHooks<'_> {
-    fn should_descend(
-        &mut self,
-        cx: ReachabilityContext<'tcx>,
-        edge: &ReachabilityEdge,
-        target: Instance<'tcx>,
-    ) -> ReachabilityControl<'tcx, bool> {
-        if matches!(
-            edge.kind,
-            ReachabilityEdgeKind::FnPointerReify | ReachabilityEdgeKind::ClosureFnPointerReify
-        ) && !self.descend_reified_callables
-        {
-            return ControlFlow::Continue(false);
-        }
-
-        let def_id = target.def_id();
-        ControlFlow::Continue(
-            !self.config.ignores_def(cx.tcx, def_id)
-                && self.config.panic_boundary_policy(cx.tcx, def_id) == PanicBoundaryPolicy::Normal
-                && !crate::panics::has_panic_docs(cx.tcx, def_id, self.config),
-        )
-    }
-}
-
 struct PanicEffect<'config> {
     config: &'config PanicConfig,
     groups: EffectGroupAllocator,
+    callable_groups: HashMap<ReachabilityEdgeId, EffectGroupId>,
     ambiguous_names: Vec<AmbiguousPanicRequirementName>,
     incomplete_dependencies: Vec<IncompleteDependency>,
 }
@@ -79,17 +55,51 @@ enum PanicSource {
     },
 }
 
+impl PanicEffect<'_> {
+    fn local_group(
+        &mut self,
+        cx: &EffectCx<'_, '_>,
+        source: &PanicSourceEvidence,
+    ) -> EffectGroupId {
+        let callable_call = matches!(source.kind, PanicEvidenceKind::IndirectBoundary { .. })
+            && cx.view.graph().edge_callable(source.edge_id).is_some();
+        if !callable_call {
+            return self.groups.allocate();
+        }
+        if let Some(group) = self.callable_groups.get(&source.edge_id) {
+            return *group;
+        }
+        let group = self.groups.allocate();
+        self.callable_groups.insert(source.edge_id, group);
+        group
+    }
+}
+
 impl<'tcx> Effect<'tcx> for PanicEffect<'_> {
     type Source = PanicSource;
+
+    fn classify_target(&self, tcx: TyCtxt<'tcx>, target: DefId) -> EffectTarget {
+        panic_effect_target(tcx, target, self.config)
+    }
 
     fn is_path_boundary(&self, cx: &EffectCx<'_, 'tcx>, node: &ReachabilityNodeKind<'tcx>) -> bool {
         crate::panics::panic_path_node_is_boundary(cx.tcx, node, self.config)
     }
 
-    fn probe_comments(&self, cx: &EffectCx<'_, 'tcx>) -> CommentIndex {
-        CommentIndex::panic(cx.tcx, cx.view, cx.marker_probing, |node| {
-            self.is_path_boundary(cx, node)
-        })
+    fn probe_edge_marker(
+        &self,
+        cx: &EffectCx<'_, 'tcx>,
+        edge: ReachedEdge<'_, 'tcx>,
+    ) -> Option<EffectMarkerBlock> {
+        panic_effect_edge_marker_block(cx.tcx, cx.view.graph(), edge.edge(), cx.marker_probing)
+    }
+
+    fn probe_terminal_marker(
+        &self,
+        cx: &EffectCx<'_, 'tcx>,
+        span: Span,
+    ) -> Option<EffectMarkerBlock> {
+        panic_span_marker_block(cx.tcx, span, cx.marker_probing)
     }
 
     fn probe_local_sources(&mut self, cx: &EffectCx<'_, 'tcx>) -> Vec<EffectSource<Self::Source>> {
@@ -100,34 +110,13 @@ impl<'tcx> Effect<'tcx> for PanicEffect<'_> {
             .edges()
             .map(|edge| (edge.id(), edge))
             .collect::<HashMap<_, _>>();
-        let mut sources = probe_panic_sources(cx.tcx, cx.view, self.config);
-        let mut candidates = sources
-            .iter()
-            .filter(|source| source.reportable)
-            .filter_map(|source| {
-                let edge = *edges.get(&source.edge_id)?;
-                Some(PanicEvidence {
-                    edge_id: source.edge_id,
-                    trace: EffectTrace::from_edge(edge),
-                    kind: source.kind,
-                    decision: source.decision,
-                    missing_requirements: Vec::new(),
-                })
-            })
-            .collect::<Vec<_>>();
-        suppress_resolved_callable_indirect_boundaries(cx.view, &mut candidates);
-        let surviving_edges = candidates
-            .into_iter()
-            .map(|evidence| evidence.edge_id)
-            .collect::<HashSet<_>>();
-        sources.retain(|source| !source.reportable || surviving_edges.contains(&source.edge_id));
-
-        sources
+        probe_panic_sources(cx.tcx, cx.view, self.config)
             .into_iter()
             .filter_map(|source| {
                 let edge = *edges.get(&source.edge_id)?;
+                let group = self.local_group(cx, &source);
                 Some(EffectSource {
-                    group: self.groups.allocate(),
+                    group,
                     anchor: PathAnchor::from_terminal_edge(edge),
                     terminal_marker_spans: Vec::new(),
                     requirements: source.requirements.clone(),
@@ -211,22 +200,19 @@ pub(super) fn analyze_root<'tcx>(
     config: &PanicConfig,
     dependency_cache: &DependencyAnalysisCache,
 ) -> EffectRootAnalysis<'tcx> {
-    let mut hooks = PanicReachabilityHooks {
-        config,
-        descend_reified_callables: analysis_config.callable_edge_attribution
-            == CallableEdgeAttribution::ErasureSites,
-    };
-    let snapshot = reachability.query(
-        root.reachability_root(),
-        &mut hooks,
-        reachability_options(analysis_config, ArtifactScope::AllArtifacts),
-    );
     let mut effect = PanicEffect {
         config,
         groups: EffectGroupAllocator::default(),
+        callable_groups: HashMap::new(),
         ambiguous_names: Vec::new(),
         incomplete_dependencies: Vec::new(),
     };
+    let hooks = EffectReachabilityHooks::new(&effect);
+    let snapshot = reachability.query(
+        root.reachability_root(),
+        &hooks,
+        reachability_options(analysis_config, ArtifactScope::AllArtifacts),
+    );
     let view = reachability.graph().view(&snapshot);
     let cx = EffectCx {
         tcx,
@@ -236,13 +222,12 @@ pub(super) fn analyze_root<'tcx>(
         marker_probing: analysis_config.marker_probing,
     };
     let resolution = super::pipeline::resolve(&mut effect, &cx);
-    let (local_analysis, suppressed_groups) = local_panic_analysis(&effect, &cx, &resolution);
+    let local_analysis = local_panic_analysis(&effect, &resolution);
     let mut findings = panic_report_findings(
         &effect,
         &cx,
         &resolution,
         &local_analysis,
-        &suppressed_groups,
         analysis_config.show_full_stack_trace,
     );
     let query_complete = view.halt().is_none();
@@ -270,46 +255,29 @@ pub(super) fn analyze_root<'tcx>(
 
 fn local_panic_analysis(
     effect: &PanicEffect<'_>,
-    cx: &EffectCx<'_, '_>,
     resolution: &EffectResolution<PanicSource>,
-) -> (PanicAnalysis, HashSet<EffectGroupId>) {
-    let mut groups_by_edge = HashMap::new();
-    let mut evidence = resolution
+) -> PanicAnalysis {
+    let evidence = resolution
         .unresolved
         .iter()
         .filter_map(|unresolved| {
             let effect_source = &resolution.sources[unresolved.source];
             match &effect_source.payload {
-                PanicSource::Local(source) if source.reportable => {
-                    groups_by_edge.insert(source.edge_id, effect_source.group);
-                    Some(PanicEvidence {
-                        edge_id: source.edge_id,
-                        trace: unresolved.path.trace.clone(),
-                        kind: source.kind,
-                        decision: source.decision,
-                        missing_requirements: unresolved.path.missing_requirements.clone(),
-                    })
-                }
+                PanicSource::Local(source) if source.reportable => Some(PanicEvidence {
+                    edge_id: source.edge_id,
+                    trace: unresolved.path.trace.clone(),
+                    kind: source.kind,
+                    decision: source.decision,
+                    missing_requirements: unresolved.path.missing_requirements.clone(),
+                }),
                 PanicSource::Local(_) | PanicSource::Dependency { .. } => None,
             }
         })
         .collect::<Vec<_>>();
-    suppress_resolved_callable_indirect_boundaries(cx.view, &mut evidence);
-    let surviving_edges = evidence
-        .iter()
-        .map(|evidence| evidence.edge_id)
-        .collect::<HashSet<_>>();
-    let suppressed_groups = groups_by_edge
-        .into_iter()
-        .filter_map(|(edge_id, group)| (!surviving_edges.contains(&edge_id)).then_some(group))
-        .collect();
-    (
-        PanicAnalysis {
-            evidence,
-            ambiguous_names: effect.ambiguous_names.clone(),
-        },
-        suppressed_groups,
-    )
+    PanicAnalysis {
+        evidence,
+        ambiguous_names: effect.ambiguous_names.clone(),
+    }
 }
 
 fn panic_report_findings(
@@ -317,7 +285,6 @@ fn panic_report_findings(
     cx: &EffectCx<'_, '_>,
     resolution: &EffectResolution<PanicSource>,
     analysis: &PanicAnalysis,
-    suppressed_groups: &HashSet<EffectGroupId>,
     include_stack: bool,
 ) -> Vec<Finding> {
     let collection = PanicFindingCollection {
@@ -372,12 +339,26 @@ fn panic_report_findings(
             (source.group, edge_id)
         })
         .collect::<HashMap<_, _>>();
+    let reached_edges = cx
+        .view
+        .edges()
+        .map(|edge| (edge.id(), edge))
+        .collect::<HashMap<_, _>>();
     let marker_uses = crate::effect_tracker::ambiguous_marker_uses(
         resolution
             .marker_claims
             .iter()
-            .filter(|claim| !suppressed_groups.contains(&claim.group))
-            .map(|claim| (claim.key, claim.span, claim.group))
+            .map(|claim| {
+                let group = claim
+                    .edge_id
+                    .and_then(|edge_id| {
+                        let edge = reached_edges.get(&edge_id)?;
+                        let callable_call = edge.parent_edge().map_or(edge_id, ReachedEdge::id);
+                        effect.callable_groups.get(&callable_call).copied()
+                    })
+                    .unwrap_or(claim.group);
+                (claim.key, claim.span, group)
+            })
             .collect::<Vec<_>>(),
     );
     for marker_use in marker_uses {
@@ -519,7 +500,7 @@ fn collect_panic_findings<'tcx>(
                 edge_id: Some(edge_id),
                 def_id,
             } => {
-                let kind = if is_trusted_panic_obligation(tcx, def_id, collection.config) {
+                let kind = if is_trusted_panic_boundary(tcx, def_id, collection.config) {
                     FindingKind::TrustedPanic
                 } else {
                     FindingKind::DocumentedPanic

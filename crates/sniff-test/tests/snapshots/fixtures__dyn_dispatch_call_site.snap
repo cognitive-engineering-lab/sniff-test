@@ -11,6 +11,18 @@ expression: messages
     "dependencies": [],
     "findings": [
       {
+        "kind": "indirect-call-boundary",
+        "level": "warn",
+        "reason": "indirect call to undocumented trait method dyn_dispatch_call_site::Runner::run cannot be verified",
+        "root": "dyn_dispatch_call_site::entry",
+        "root-kind": "concrete",
+        "span": "src/lib.rs:15:5: 15:17",
+        "target": "dyn_dispatch_call_site::Runner::run",
+        "trace": [
+          "src/lib.rs:15:5: 15:17: dyn_dispatch_call_site::entry --direct-call-> dyn_dispatch_call_site::Runner::run"
+        ]
+      },
+      {
         "kind": "panic-invocation",
         "level": "deny",
         "reason": "panic sink core::std::rt::panic_fmt",

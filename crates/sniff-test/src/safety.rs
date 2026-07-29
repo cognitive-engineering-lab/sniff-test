@@ -18,7 +18,8 @@ use rustc_span::Span;
 
 use crate::config::SafetyConfig;
 use crate::contracts::{
-    ContractDocOverrides, ContractDocSummary, ContractRequirement, safety_contract_doc_summary,
+    AmbiguousContractRequirements, ContractDocOverrides, ContractDocSummary, ContractRequirement,
+    safety_contract_doc_summary,
 };
 use crate::effect_tracker::{EffectEvidence, EffectSite};
 use crate::namespace::canonical_namespace;
@@ -30,6 +31,8 @@ pub(crate) struct SafetyAnalysis {
     probes_by_owner: HashMap<DefId, Vec<SafetyProbe>>,
     analyzed_owners: HashSet<LocalDefId>,
     ambiguous_requirement_names: HashSet<(DefId, DefId, String)>,
+    safety_scopes_by_owner: HashMap<DefId, Vec<SafetyEffectGroup>>,
+    callable_groups: HashMap<EffectSite, SafetyEffectGroup>,
     next_effect_group: usize,
 }
 
@@ -292,6 +295,73 @@ impl SafetyAnalysis {
         }
     }
 
+    /// Resolves a safe obligation whose concrete target is visible only in a
+    /// reachability callable edge; THIR sees the call operand as an erased type.
+    pub(crate) fn callable_obligation_evidence(
+        &mut self,
+        tcx: TyCtxt<'_>,
+        config: &SafetyConfig,
+        site: EffectSite,
+        def_id: DefId,
+    ) -> Option<SafetyEvidence> {
+        if fn_def_is_unsafe(tcx, def_id) || config.ignores_def(tcx, def_id) {
+            return None;
+        }
+        let summary = safety_doc_summary(tcx, def_id, &config.documentation_overrides);
+        if !summary.has_docs {
+            return None;
+        }
+        self.push_ambiguous_requirement_names(site.owner, def_id, summary.ambiguous_requirements);
+        let (group, terminal_marker_spans) = self.effect_context_for_site(site);
+        Some(SafetyEvidence {
+            effect: EffectEvidence {
+                endpoint: site,
+                terminal_marker_spans,
+                details: SafetyEvidenceKind::Call {
+                    callee: SafetyCallee::Def(def_id),
+                    call_kind: SafetyCallKind::Obligation,
+                },
+            },
+            requirements: summary.requirements,
+            group,
+        })
+    }
+
+    /// Adds target-specific contract evidence beside an erased unsafe-call
+    /// probe while retaining the original source marker group.
+    pub(crate) fn resolved_unsafe_call_evidence(
+        &mut self,
+        tcx: TyCtxt<'_>,
+        config: &SafetyConfig,
+        erased: &SafetyEvidence,
+        def_id: DefId,
+    ) -> Option<SafetyEvidence> {
+        if !fn_def_is_unsafe(tcx, def_id) || config.ignores_def(tcx, def_id) {
+            return None;
+        }
+        let summary = safety_doc_summary(tcx, def_id, &config.documentation_overrides);
+        if !summary.has_docs {
+            return None;
+        }
+        self.push_ambiguous_requirement_names(
+            erased.site().owner,
+            def_id,
+            summary.ambiguous_requirements,
+        );
+        Some(SafetyEvidence {
+            effect: EffectEvidence {
+                endpoint: erased.site(),
+                terminal_marker_spans: erased.terminal_marker_spans().to_vec(),
+                details: SafetyEvidenceKind::Call {
+                    callee: SafetyCallee::Def(def_id),
+                    call_kind: SafetyCallKind::Unsafe,
+                },
+            },
+            requirements: summary.requirements,
+            group: erased.group,
+        })
+    }
+
     fn resolve_owner_probes(&mut self, tcx: TyCtxt<'_>, owner: DefId, config: &SafetyConfig) {
         for probe in self.probes_by_owner.remove(&owner).unwrap_or_default() {
             let (details, requirements) = match probe.effect.details {
@@ -299,24 +369,29 @@ impl SafetyAnalysis {
                 SafetyProbeKind::Call { callee, call_kind } => {
                     let summary = match callee {
                         SafetyCallee::Def(def_id) => {
+                            let summary =
+                                safety_doc_summary(tcx, def_id, &config.documentation_overrides);
                             self.push_ambiguous_requirement_names(
-                                tcx,
                                 owner,
                                 def_id,
-                                &config.documentation_overrides,
+                                summary.ambiguous_requirements.clone(),
                             );
-                            safety_doc_summary(tcx, def_id, &config.documentation_overrides)
+                            summary
                         }
                         SafetyCallee::FunctionPointer => ContractDocSummary::default(),
                     };
                     let call_kind = match call_kind {
-                        SafetyProbeCallKind::Unsafe => SafetyCallKind::Unsafe,
-                        SafetyProbeCallKind::PotentialObligation => {
-                            let SafetyCallee::Def(def_id) = callee else {
-                                continue;
-                            };
-                            if !config.marks_safety_obligation_def(tcx, def_id) && !summary.has_docs
+                        SafetyProbeCallKind::Unsafe => {
+                            if let SafetyCallee::Def(def_id) = callee
+                                && config.trusts_safety_boundary_def(tcx, def_id)
+                                && !summary.has_docs
                             {
+                                continue;
+                            }
+                            SafetyCallKind::Unsafe
+                        }
+                        SafetyProbeCallKind::PotentialObligation => {
+                            if !matches!(callee, SafetyCallee::Def(_)) || !summary.has_docs {
                                 continue;
                             }
                             SafetyCallKind::Obligation
@@ -345,12 +420,11 @@ impl SafetyAnalysis {
 
     fn push_ambiguous_requirement_names(
         &mut self,
-        tcx: TyCtxt<'_>,
         caller: DefId,
         def_id: DefId,
-        overrides: &ContractDocOverrides,
+        ambiguous_requirements: Vec<AmbiguousContractRequirements>,
     ) {
-        for ambiguous in safety_doc_summary(tcx, def_id, overrides).ambiguous_requirements {
+        for ambiguous in ambiguous_requirements {
             if !self.ambiguous_requirement_names.insert((
                 caller,
                 def_id,
@@ -365,6 +439,48 @@ impl SafetyAnalysis {
                 requirements: ambiguous.requirements,
             });
         }
+    }
+
+    fn effect_context_for_site(&mut self, site: EffectSite) -> (SafetyEffectGroup, Vec<Span>) {
+        let containing = self
+            .safety_scopes_by_owner
+            .get(&site.owner)
+            .into_iter()
+            .flatten()
+            .filter(|group| crate::source_markers::span_contains(group.span, site.span))
+            .copied()
+            .collect::<Vec<_>>();
+        if let Some(group) = containing.last().copied() {
+            let marker_spans = containing.into_iter().map(|group| group.span).collect();
+            (group, marker_spans)
+        } else {
+            let group = if let Some(group) = self.callable_groups.get(&site) {
+                *group
+            } else {
+                let group = self.new_effect_group(site.span);
+                self.callable_groups.insert(site, group);
+                group
+            };
+            (group, vec![site.span])
+        }
+    }
+
+    fn inherit_effect_scopes(&mut self, owner: DefId, inherited: &[SafetyEffectGroup]) {
+        let groups = self.safety_scopes_by_owner.entry(owner).or_default();
+        for group in inherited {
+            if !groups.contains(group) {
+                groups.push(*group);
+            }
+        }
+    }
+
+    fn new_safety_scope(&mut self, owner: DefId, span: Span) -> SafetyEffectGroup {
+        let group = self.new_effect_group(span);
+        self.safety_scopes_by_owner
+            .entry(owner)
+            .or_default()
+            .push(group);
+        group
     }
 
     fn new_effect_group(&mut self, span: Span) -> SafetyEffectGroup {
@@ -388,6 +504,16 @@ impl SafetyEvidence {
 
     pub(crate) fn site(&self) -> EffectSite {
         self.effect.endpoint
+    }
+
+    pub(crate) fn is_function_pointer_call(&self) -> bool {
+        matches!(
+            self.effect.details,
+            SafetyEvidenceKind::Call {
+                callee: SafetyCallee::FunctionPointer,
+                ..
+            }
+        )
     }
 
     pub(crate) fn finding(&self, missing_requirements: Vec<SafetyRequirement>) -> SafetyFinding {
@@ -442,13 +568,9 @@ fn collect_missing_safety_docs(
         return;
     }
 
-    if has_safety_docs(tcx, def_id, &config.documentation_overrides) {
-        analysis.push_ambiguous_requirement_names(
-            tcx,
-            def_id,
-            def_id,
-            &config.documentation_overrides,
-        );
+    let summary = safety_doc_summary(tcx, def_id, &config.documentation_overrides);
+    if summary.has_docs {
+        analysis.push_ambiguous_requirement_names(def_id, def_id, summary.ambiguous_requirements);
     } else {
         analysis.push_finding(SafetyFinding::MissingSafetyDocs {
             def_id,

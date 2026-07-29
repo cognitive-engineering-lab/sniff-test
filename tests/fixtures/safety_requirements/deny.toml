@@ -4,6 +4,12 @@ report-roots = "all"
 [panics.lints]
 indirect-call-boundary = "allow"
 
+[safety]
+ignored-namespaces = [
+    "safety_requirements::unknown_unsafe_fn_pointer",
+    "safety_requirements::unsafe_fn_pointer_named_requirement_missing",
+]
+
 [safety.lints]
 unsafe-call-missing-requirements = "deny"
 safety-obligation-missing-requirements = "deny"

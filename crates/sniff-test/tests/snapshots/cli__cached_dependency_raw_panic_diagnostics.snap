@@ -46,6 +46,19 @@ help: guard this path, or add `// PANIC:` here if a local invariant proves it ca
    |     ^^^^^^^^^^^^^^^^^^
    = help: add a guard, document the panic with `# Panics`, or add `// PANIC:` if a local invariant proves it cannot panic
 
+warning: function `dependency_identity_app::sniff_dyn` reaches an unverifiable indirect call
+  --> src/lib.rs:15:1
+   |
+15 | pub fn sniff_dyn(flag: bool) {
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   |
+note: panic behavior cannot be verified here: indirect call to undocumented trait method `dependency_identity::Sniffer::sniff`
+  --> src/lib.rs:17:5
+   |
+17 |     sniffer.sniff(flag);
+   |     ^^^^^^^^^^^^^^^^^^^
+   = help: document this boundary with `# Panics`, add `// PANIC:` only if every possible callee is locally constrained, or configure `indirect-call-boundary` if this opacity is acceptable
+
 error: function `dependency_identity_app::sniff_dyn` reaches cached undocumented panic evidence from a dependency
   --> src/lib.rs:15:1
    |
@@ -84,4 +97,5 @@ help: guard this path, or add `// PANIC:` here if a local invariant proves it ca
    |     ^^^^^^^^^^^^^^^^^^
    = help: add a guard, document the panic with `# Panics`, or add `// PANIC:` if a local invariant proves it cannot panic
 
-error: could not compile `dependency-identity-app` (lib) due to 4 previous errors
+warning: `dependency-identity-app` (lib) generated 1 warning
+error: could not compile `dependency-identity-app` (lib) due to 4 previous errors; 1 warning emitted

@@ -83,6 +83,16 @@ expression: messages
         "span": "[FIXTURE]/src/lib.rs:33:1: 33:57"
       },
       {
+        "function": "safety_requirements::unknown_unsafe_fn_pointer",
+        "kind": "unsafe-call-missing-justification",
+        "level": "warn",
+        "reason": "unsafe call to `unsafe function pointer` has no `// SAFETY:` justification",
+        "root": "safety_requirements::unknown_unsafe_fn_pointer",
+        "root-kind": "concrete",
+        "span": "[FIXTURE]/src/lib.rs:194:14: 194:24",
+        "target": "unsafe function pointer"
+      },
+      {
         "function": "safety_requirements::unsafe_fn_pointer_missing_justification",
         "kind": "unsafe-call-missing-justification",
         "level": "warn",
@@ -91,6 +101,22 @@ expression: messages
         "root-kind": "concrete",
         "span": "[FIXTURE]/src/lib.rs:103:14: 103:24",
         "target": "unsafe function pointer"
+      },
+      {
+        "function": "safety_requirements::unsafe_fn_pointer_named_requirement_missing",
+        "kind": "unsafe-call-missing-requirements",
+        "level": "warn",
+        "missing-requirements": [
+          "ready: the caller must establish the target-specific precondition."
+        ],
+        "reason": "unsafe call to `safety_requirements::documented_pointer_target` does not satisfy all # Safety requirements",
+        "root": "safety_requirements::unsafe_fn_pointer_named_requirement_missing",
+        "root-kind": "concrete",
+        "span": "[FIXTURE]/src/lib.rs:190:14: 190:24",
+        "target": "safety_requirements::documented_pointer_target",
+        "trace": [
+          "[FIXTURE]/src/lib.rs:190:14: 190:24: safety_requirements::unsafe_fn_pointer_named_requirement_missing --indirect-call-> indirect call Binder { value: unsafe fn(), bound_vars: [] }"
+        ]
       }
     ],
     "format-version": 9,

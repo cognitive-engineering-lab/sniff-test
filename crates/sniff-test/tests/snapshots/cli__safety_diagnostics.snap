@@ -80,6 +80,14 @@ warning: public unsafe function `safety_requirements::undocumented_public` is mi
    |
    = help: document the caller obligations under a `# Safety` section
 
+warning: unsafe call to `unsafe function pointer` in `safety_requirements::unknown_unsafe_fn_pointer` is missing a `// SAFETY:` justification
+   --> src/lib.rs:194:14
+    |
+194 |     unsafe { function() }
+    |              ^^^^^^^^^^
+    |
+    = help: add a `// SAFETY:` comment above the unsafe block or call site
+
 warning: unsafe call to `unsafe function pointer` in `safety_requirements::unsafe_fn_pointer_missing_justification` is missing a `// SAFETY:` justification
    --> src/lib.rs:103:14
     |
@@ -88,5 +96,19 @@ warning: unsafe call to `unsafe function pointer` in `safety_requirements::unsaf
     |
     = help: add a `// SAFETY:` comment above the unsafe block or call site
 
-warning: `safety-requirements` (lib) generated 7 warnings
+warning: unsafe call to `safety_requirements::documented_pointer_target` in `safety_requirements::unsafe_fn_pointer_named_requirement_missing` does not satisfy all `# Safety` requirements
+   --> src/lib.rs:190:14
+    |
+190 |     unsafe { function() }
+    |              ^^^^^^^^^^
+    |
+note: `safety_requirements::documented_pointer_target` documents `# Safety` here
+   --> src/lib.rs:176:1
+    |
+176 | unsafe fn documented_pointer_target() {}
+    | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    = note: missing safety requirement `ready: the caller must establish the target-specific precondition.`
+    = help: add named bullets under the applicable `// SAFETY:` comment for each missing requirement
+
+warning: `safety-requirements` (lib) generated 9 warnings
     Finished `release` profile [optimized] target(s) in [TIME]

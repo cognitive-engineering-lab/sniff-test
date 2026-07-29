@@ -5,17 +5,20 @@
 //! resolve paths, and emit an effect-specific result.
 
 use reachability::{
-    ReachabilityEdgeId, ReachabilityNodeId, ReachabilityNodeKind, ReachabilityView, ReachedEdge,
+    ReachabilityEdgeId, ReachabilityHooks, ReachabilityNodeId, ReachabilityNodeKind,
+    ReachabilityView, ReachedEdge,
 };
-use rustc_middle::ty::TyCtxt;
+use rustc_hir::def_id::DefId;
+use rustc_middle::ty::{Instance, TyCtxt};
 use rustc_span::Span;
 
 use crate::config::MarkerProbing;
 use crate::contracts::ContractRequirement;
 use crate::dependency_cache::DependencyAnalysisCache;
 use crate::effect_tracker::{
-    EffectMarkerIndex, EffectPathIndex, UnsatisfiedEffectTrace,
+    EffectMarkerIndex, EffectPathIndex, EffectTarget, UnsatisfiedEffectTrace,
     find_unsatisfied_effect_traces_to_edge_with, find_unsatisfied_effect_traces_with,
+    resolve_effect_paths,
 };
 use crate::report_roots::ReportRoot;
 use crate::source_markers::{EffectMarkerBlock, MarkerBlockKey};
@@ -86,6 +89,7 @@ pub(super) struct EffectSource<S> {
 pub(super) struct MarkerClaim {
     pub(super) key: MarkerBlockKey,
     pub(super) span: Span,
+    pub(super) edge_id: Option<ReachabilityEdgeId>,
     pub(super) group: EffectGroupId,
 }
 
@@ -104,48 +108,24 @@ pub(super) struct CommentIndex {
 }
 
 impl CommentIndex {
-    pub(super) fn panic<'tcx>(
-        tcx: TyCtxt<'tcx>,
-        view: ReachabilityView<'_, 'tcx>,
-        probing: MarkerProbing,
-        is_boundary: impl Fn(&ReachabilityNodeKind<'tcx>) -> bool,
-    ) -> Self {
-        Self::new(
-            view,
-            EffectMarkerIndex::panic(tcx, view, probing),
-            is_boundary,
-        )
-    }
-
-    pub(super) fn safety<'tcx>(
-        tcx: TyCtxt<'tcx>,
-        view: ReachabilityView<'_, 'tcx>,
-        probing: MarkerProbing,
-        is_boundary: impl Fn(&ReachabilityNodeKind<'tcx>) -> bool,
-    ) -> Self {
-        Self::new(
-            view,
-            EffectMarkerIndex::safety(tcx, view, probing),
-            is_boundary,
-        )
-    }
-
-    fn new<'tcx>(
-        view: ReachabilityView<'_, 'tcx>,
-        markers: EffectMarkerIndex,
-        is_boundary: impl Fn(&ReachabilityNodeKind<'tcx>) -> bool,
-    ) -> Self {
-        let paths_enabled = !is_boundary(view.root().kind());
+    fn new<'tcx, E>(effect: &E, cx: &EffectCx<'_, 'tcx>) -> Self
+    where
+        E: Effect<'tcx>,
+    {
+        let paths_enabled = !effect.is_path_boundary(cx, cx.view.root().kind());
         Self {
-            markers,
-            paths: EffectPathIndex::new(view, is_boundary),
+            markers: EffectMarkerIndex::new(cx.view, |edge| effect.probe_edge_marker(cx, edge)),
+            paths: EffectPathIndex::new(cx.view, |node| effect.is_path_boundary(cx, node)),
             paths_enabled,
         }
     }
 
     /// Returns marker blocks on paths to the supplied anchor, including its
     /// terminal effect edge when present.
-    pub(super) fn blocks(&self, anchor: &PathAnchor) -> Vec<EffectMarkerBlock> {
+    pub(super) fn blocks(
+        &self,
+        anchor: &PathAnchor,
+    ) -> Vec<(ReachabilityEdgeId, EffectMarkerBlock)> {
         let mut edge_ids = self
             .paths
             .edges_to_nodes(anchor.nodes.iter().copied(), false);
@@ -172,15 +152,28 @@ pub(super) struct EffectResolution<S> {
 
 /// Behavior shared by effect implementations.
 ///
-/// Snapshot planning, effect identity, and result projection remain outside
-/// this contract. Callers decide which graph view to analyze and how resolved
-/// sources become reports or cached findings.
+/// Root and artifact-scope selection, effect identity, and result projection
+/// remain outside this contract. Each effect owns target descent, path
+/// boundaries, marker interpretation, and source discovery within the graph
+/// view selected by its caller.
 pub(super) trait Effect<'tcx> {
     type Source;
 
+    fn classify_target(&self, tcx: TyCtxt<'tcx>, target: DefId) -> EffectTarget;
+
     fn is_path_boundary(&self, cx: &EffectCx<'_, 'tcx>, node: &ReachabilityNodeKind<'tcx>) -> bool;
 
-    fn probe_comments(&self, cx: &EffectCx<'_, 'tcx>) -> CommentIndex;
+    fn probe_edge_marker(
+        &self,
+        cx: &EffectCx<'_, 'tcx>,
+        edge: ReachedEdge<'_, 'tcx>,
+    ) -> Option<EffectMarkerBlock>;
+
+    fn probe_terminal_marker(
+        &self,
+        cx: &EffectCx<'_, 'tcx>,
+        span: Span,
+    ) -> Option<EffectMarkerBlock>;
 
     fn probe_local_sources(&mut self, cx: &EffectCx<'_, 'tcx>) -> Vec<EffectSource<Self::Source>>;
 
@@ -188,6 +181,27 @@ pub(super) trait Effect<'tcx> {
         &mut self,
         cx: &EffectCx<'_, 'tcx>,
     ) -> Vec<EffectSource<Self::Source>>;
+}
+
+pub(super) struct EffectReachabilityHooks<'effect, E> {
+    effect: &'effect E,
+}
+
+impl<'effect, E> EffectReachabilityHooks<'effect, E> {
+    pub(super) fn new(effect: &'effect E) -> Self {
+        Self { effect }
+    }
+}
+
+impl<'tcx, E> ReachabilityHooks<'tcx> for EffectReachabilityHooks<'_, E>
+where
+    E: Effect<'tcx>,
+{
+    fn should_descend(&self, tcx: TyCtxt<'tcx>, target: Instance<'tcx>) -> bool {
+        self.effect
+            .classify_target(tcx, target.def_id())
+            .should_descend()
+    }
 }
 
 /// Runs source discovery and shared comment/path resolution for one graph view.
@@ -198,7 +212,7 @@ pub(super) fn resolve<'view, 'tcx, E>(
 where
     E: Effect<'tcx>,
 {
-    let comments = effect.probe_comments(cx);
+    let comments = CommentIndex::new(effect, cx);
     let mut sources = effect.probe_local_sources(cx);
     sources.extend(effect.probe_dependency_sources(cx));
 
@@ -218,10 +232,15 @@ where
     let mut unresolved = Vec::new();
 
     for (source_index, source) in sources.iter().enumerate() {
-        let resolved = comments.markers.resolve_paths(
-            cx.tcx,
+        let resolved = resolve_effect_paths(
             &source.requirements,
-            &source.terminal_marker_spans,
+            || {
+                source
+                    .terminal_marker_spans
+                    .iter()
+                    .filter_map(|span| effect.probe_terminal_marker(cx, *span))
+                    .collect()
+            },
             || comments.blocks(&source.anchor),
             |requirements| {
                 unresolved_paths_for_anchor(effect, cx, comments, &source.anchor, requirements)
@@ -235,6 +254,7 @@ where
                 .map(|marker| MarkerClaim {
                     key: marker.key,
                     span: marker.span,
+                    edge_id: marker.edge_id,
                     group: source.group,
                 }),
         );

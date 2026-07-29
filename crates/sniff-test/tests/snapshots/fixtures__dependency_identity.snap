@@ -104,6 +104,18 @@ expression: messages
         ]
       },
       {
+        "kind": "indirect-call-boundary",
+        "level": "warn",
+        "reason": "indirect call to undocumented trait method dependency_identity::Sniffer::sniff cannot be verified",
+        "root": "dependency_identity_app::sniff_dyn",
+        "root-kind": "concrete",
+        "span": "src/lib.rs:17:5: 17:24",
+        "target": "dependency_identity::Sniffer::sniff",
+        "trace": [
+          "src/lib.rs:17:5: 17:24: dependency_identity_app::sniff_dyn --direct-call-> dependency_identity::Sniffer::sniff"
+        ]
+      },
+      {
         "effect-span": "[FIXTURE]/dep/src/lib.rs:13:9: 13:52",
         "kind": "cached-dependency-panic",
         "level": "deny",

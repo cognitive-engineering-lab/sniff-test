@@ -4,7 +4,7 @@ use crate::dependency_cache::CachedFunction;
 use crate::namespace::canonical_namespace;
 use crate::panics::{
     AmbiguousPanicMarker, AmbiguousPanicRequirementName, PanicEvidence, PanicEvidenceKind,
-    trace_edges_until, trigger_edge_id,
+    panic_obligation_reason, trace_edges_until, trigger_edge_id,
 };
 use crate::report_roots::ReportRootKind;
 use reachability::{
@@ -115,12 +115,12 @@ impl PanicRootReport {
         graph: &ReachabilityGraph<'tcx>,
         evidence: &PanicEvidence,
         obligation_edge_id: Option<ReachabilityEdgeId>,
-        documented_def_id: DefId,
+        obligation_def_id: DefId,
         kind: FindingKind,
     ) {
-        let documented = canonical_namespace(tcx, documented_def_id);
+        let obligation = canonical_namespace(tcx, obligation_def_id);
         let span = obligation_edge_id.map_or_else(
-            || render_span(tcx, tcx.def_span(documented_def_id)),
+            || render_span(tcx, tcx.def_span(obligation_def_id)),
             |edge_id| {
                 let edge = graph.edge(edge_id);
                 render_span(tcx, edge.span)
@@ -132,14 +132,14 @@ impl PanicRootReport {
             evidence,
             PanicContractDiagnostic {
                 obligation_edge_id,
-                documented_def_id,
+                obligation_def_id,
                 root_def_id: self.root_def_id,
                 trusted: kind == FindingKind::TrustedPanic,
                 include_stack: self.include_stack,
             },
         );
         self.push_finding(Finding {
-            target: Some(documented.clone()),
+            target: Some(obligation.clone()),
             span: Some(span),
             trace: render_trace(tcx, graph, &trace_edges_until(evidence, obligation_edge_id)),
             missing_requirements: evidence
@@ -147,7 +147,7 @@ impl PanicRootReport {
                 .iter()
                 .map(crate::contracts::ContractRequirement::render)
                 .collect(),
-            ..Finding::new(kind, documented_panic_reason(&documented), diagnostic)
+            ..Finding::new(kind, panic_obligation_reason(&obligation), diagnostic)
         });
     }
 
@@ -335,7 +335,7 @@ fn report_evidence_kind<'tcx>(
         }
         PanicEvidenceKind::PanicObligation { def_id } => {
             let target = canonical_namespace(tcx, *def_id);
-            (documented_panic_reason(&target), Some(target))
+            (panic_obligation_reason(&target), Some(target))
         }
         PanicEvidenceKind::PanicSink { def_id } => {
             let target = canonical_namespace(tcx, *def_id);
@@ -382,10 +382,6 @@ pub(crate) fn render_cached_trace(
     finding: &CachedFinding,
 ) -> Vec<String> {
     function.resolve_trace(finding.trace).steps
-}
-
-fn documented_panic_reason(path: &str) -> String {
-    format!("{path} documents when it may panic under # Panics")
 }
 
 pub(crate) fn render_edge<'tcx>(

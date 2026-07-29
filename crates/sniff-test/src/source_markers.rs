@@ -200,7 +200,7 @@ impl<'a, 'tcx> Visitor<'a, 'tcx> for EnclosingBlockVisitor<'a, 'tcx> {
     }
 }
 
-fn span_contains(outer: Span, inner: Span) -> bool {
+pub(crate) fn span_contains(outer: Span, inner: Span) -> bool {
     let outer = outer.source_callsite();
     let inner = inner.source_callsite();
     !outer.is_dummy() && !inner.is_dummy() && outer.lo() <= inner.lo() && inner.hi() <= outer.hi()

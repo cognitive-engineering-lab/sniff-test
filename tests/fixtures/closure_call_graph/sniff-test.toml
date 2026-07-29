@@ -12,7 +12,7 @@ report-roots = [
 
 [panics]
 # This fixture is about closure reachability, not allocator internals from Box::new.
-trusted-panic-obligation-namespaces = ["alloc::**"]
+ignored-namespaces = ["alloc::**"]
 panic-sink-namespaces = [
     "core::panicking::**",
     "std::panicking::**",

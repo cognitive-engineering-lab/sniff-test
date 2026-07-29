@@ -22,10 +22,9 @@ restoring it is deferred feature work.
 
 A resolved direct call to a trait-impl method consults the impl method's own
 docs only. `<Vec<T> as Index<usize>>::index` carries no `# Panics` section of
-its own (the docs live on `Index::index`), so a trusted-namespace boundary
-classifies it as non-panic evidence instead of a documented obligation — see
-the `std_trait_impl_glob` fixture's `get` root. A trait-method-docs fallback
-belongs with the consistency check above.
+its own (the docs live on `Index::index`), so a trusted boundary treats it as
+non-panicking instead of inheriting the trait method's named requirements. A
+trait-method-docs fallback belongs with the consistency check above.
 
 ### Safety precondition asserts are not panic evidence
 
@@ -38,12 +37,15 @@ document the callee's internal UB guard as a panic. Other compiler assertions
 inside the same unsafe function — bounds checks, overflow, division by zero,
 and explicit panic sinks — remain panic evidence.
 
-### Per-function TOML requirement overrides were dropped
+### Trusted boundary documentation is assumed complete
 
-The original could attach named requirements to external undocumented
-functions from the manifest (`annotations/toml.rs`). The refactor's namespace
-lists can force a generic justification (`safety-obligation-namespaces`) but
-cannot express named per-function requirements.
+`trusted-panic-boundary-namespaces` and
+`trusted-safety-boundary-namespaces` stop traversal at matching APIs. Their
+documented requirements become caller obligations, but undocumented matches
+are trusted as having no corresponding effect. An incomplete external contract
+therefore hides real behavior—including the generic obligation normally
+reported for an undocumented `unsafe fn`. Use narrow audited patterns and
+documentation override files when source documentation is missing.
 
 ### Build scripts and proc macros are dependency-scoped
 
@@ -64,8 +66,9 @@ Plain external functions are opaque; coverage comes from the dependency
 cache (each dependency is analyzed during its own compilation) plus the
 `indirect-call-boundary` lint for unresolvable targets. Sysroot crates are
 never driver-compiled, so `std`/`core`/`alloc` internals are covered only as
-deep as encoded MIR allows — the recommended trusted-namespace config treats
-them as documented API boundaries instead.
+deep as encoded MIR allows. Audited APIs can be configured as trusted
+boundaries, but broad globs trust their documentation completeness and can hide
+undocumented effects.
 
 ### The node limit bounds every traversal
 
@@ -83,7 +86,10 @@ query. If one reached closure or function item reifies to `fn() -> i32`, every
 reached `fn() -> i32` call site may connect to that target; similarly, every dyn
 call to a trait may connect to every reached concrete vtable entry for that
 trait. This avoids false negatives from simple erasure flows, but it is not
-precise value-flow analysis and can over-report.
+precise value-flow analysis and can over-report. A concrete target therefore
+does not discharge the generic effect of an erased callable: another function
+pointer value or dyn object of the same erased type may still reach that call
+site.
 
 ### Marker suppression is source-anchored
 
@@ -95,17 +101,6 @@ to a different link than the author intended. Named requirement bullets are
 matched by normalized name and are format-insensitive, but duplicate names in
 one documentation section are ambiguous under the default
 `ambiguous-effect-requirement = "deny"` policy.
-
-## Latent hazards (not reachable through the shipped tool)
-
-### First-reach gating in the reachability API
-
-`crates/reachability/src/analysis.rs` enqueues a target only when the
-*first* edge that reaches it wants descent. The shipped hooks decide descent
-purely from the target, so every edge agrees; a third-party
-`ReachabilityHooks` implementation whose `should_descend` depends on the edge
-kind would silently under-traverse. Fix option: track descend-eligibility
-separately from first-reach.
 
 ### Dyn-to-dyn upcasts are not traversed
 

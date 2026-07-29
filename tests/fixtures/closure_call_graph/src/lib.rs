@@ -54,6 +54,8 @@ fn calls_deref_fn(function: impl std::ops::Deref<Target = impl Fn() -> i32>) -> 
 
 pub fn marked_fn_pointer_call() {
     let panic: fn() = || panic!("marked function pointer");
-    // PANIC: the caller accepts the resolved function-pointer target.
+    // PANIC: the caller accepts the first function-pointer call.
+    panic();
+    // PANIC: the caller accepts the second call to the same target.
     panic();
 }

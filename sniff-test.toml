@@ -1,16 +1,18 @@
 [analysis]
 overflow-checks = "profile"
 inline-mir = "off"
+show-full-stack-trace = false
 
 [panics]
-show-full-stack-trace = false
 ignored-namespaces = [
     "syn", "syn::**",
     "quote", "quote::**",
     "proc_macro2", "proc_macro2::**",
     "rustc*", "rustc*::**",
 ]
-trusted-panic-obligation-namespaces = ["std::**", "core::**", "alloc::**"]
+# Add audited APIs here. Matching bodies are opaque and their `# Panics`
+# documentation is trusted as complete.
+trusted-panic-boundary-namespaces = []
 panic-sink-namespaces = [
     "core::panicking::**",
     "std::panicking::**",

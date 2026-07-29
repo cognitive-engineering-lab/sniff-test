@@ -6,15 +6,14 @@ extern crate rustc_interface;
 extern crate rustc_middle;
 
 use std::fs;
-use std::ops::ControlFlow;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use reachability::{
     ArtifactScope, DynDispatchVTableEdges, FnPointerEdges, NoopReachabilityHooks,
-    ReachabilityContext, ReachabilityControl, ReachabilityEdge, ReachabilityEdgeKind,
-    ReachabilityGraph, ReachabilityHooks, ReachabilityIndex, ReachabilityNodeExpansion,
-    ReachabilityNodeKind, ReachabilityOptions, ReachabilityRoot, ReachabilitySnapshot,
+    ReachabilityEdgeKind, ReachabilityGraph, ReachabilityHooks, ReachabilityIndex,
+    ReachabilityNodeExpansion, ReachabilityNodeKind, ReachabilityOptions, ReachabilityRoot,
+    ReachabilitySnapshot,
 };
 use rustc_driver::{Callbacks, Compilation};
 use rustc_hir::def_id::LocalDefId;
@@ -562,13 +561,7 @@ fn function_pointer_targets_are_reused_across_queries() {
     };
     run_test_compiler(&project, &mut callbacks);
 
-    assert_eq!(
-        callbacks.result,
-        Some(SharedCallableResult {
-            derived_edges: 1,
-            hook_calls: 0,
-        })
-    );
+    assert_eq!(callbacks.result, Some(1));
 }
 
 #[test]
@@ -580,31 +573,7 @@ fn dyn_dispatch_targets_are_reused_across_queries() {
     };
     run_test_compiler(&project, &mut callbacks);
 
-    assert_eq!(
-        callbacks.result,
-        Some(SharedCallableResult {
-            derived_edges: 1,
-            hook_calls: 0,
-        })
-    );
-}
-
-#[test]
-fn derived_callable_edges_follow_their_parent_call_once() {
-    let project = TempProject::new(SHARED_CALLABLE_SOURCE);
-    let mut callbacks = SharedCallableCallbacks {
-        scenario: SharedCallableScenario::ParentHooks,
-        result: None,
-    };
-    run_test_compiler(&project, &mut callbacks);
-
-    assert_eq!(
-        callbacks.result,
-        Some(SharedCallableResult {
-            derived_edges: 0,
-            hook_calls: 1,
-        })
-    );
+    assert_eq!(callbacks.result, Some(1));
 }
 
 #[test]
@@ -640,7 +609,7 @@ fn artifact_scope_distinguishes_crossings_from_unavailable_mir() {
 }
 
 #[test]
-fn hook_boundary_and_node_limit_are_explicit_frontiers() {
+fn policy_boundary_and_node_limit_are_explicit_frontiers() {
     let project = TempProject::new(EXPANDED_LEAF_SOURCE);
     let mut callbacks = LocalExpansionCallbacks { result: None };
     run_test_compiler(&project, &mut callbacks);
@@ -648,7 +617,7 @@ fn hook_boundary_and_node_limit_are_explicit_frontiers() {
 
     assert_eq!(
         (
-            result.hook_boundary,
+            result.policy_boundary,
             result.node_limit,
             result.unsupported_instance,
         ),
@@ -699,8 +668,8 @@ fn expansion_for_target<'tcx>(
     suffix: &str,
 ) -> ReachabilityNodeExpansion {
     let mut index = ReachabilityIndex::new(tcx);
-    let mut hooks = NoopReachabilityHooks;
-    let snapshot = index.query(root, &mut hooks, options);
+    let hooks = NoopReachabilityHooks;
+    let snapshot = index.query(root, &hooks, options);
     index
         .graph()
         .view(&snapshot)
@@ -720,7 +689,7 @@ struct LocalExpansionResult {
     leaf_expansion: ReachabilityNodeExpansion,
     leaf_outgoing_edges: usize,
     leaf_is_frontier: bool,
-    hook_boundary: ReachabilityNodeExpansion,
+    policy_boundary: ReachabilityNodeExpansion,
     node_limit: ReachabilityNodeExpansion,
     unsupported_instance: ReachabilityNodeExpansion,
 }
@@ -733,10 +702,10 @@ impl Callbacks for LocalExpansionCallbacks {
     fn after_analysis(&mut self, _compiler: &interface::Compiler, tcx: TyCtxt<'_>) -> Compilation {
         let root = ReachabilityRoot::LocalBody(find_local_body(tcx, "entry"));
         let mut index = ReachabilityIndex::new(tcx);
-        let mut hooks = NoopReachabilityHooks;
+        let hooks = NoopReachabilityHooks;
         let snapshot = index.query(
             root,
-            &mut hooks,
+            &hooks,
             ReachabilityOptions {
                 artifact_scope: ArtifactScope::RootArtifact,
                 ..ReachabilityOptions::default()
@@ -755,16 +724,16 @@ impl Callbacks for LocalExpansionCallbacks {
         let leaf_is_frontier = view.frontier().any(|node| node.id() == leaf.id());
 
         let mut policy_index = ReachabilityIndex::new(tcx);
-        let mut policy_hooks = RejectLeafHooks;
+        let policy_hooks = RejectLeafHooks;
         let policy_snapshot = policy_index.query(
             root,
-            &mut policy_hooks,
+            &policy_hooks,
             ReachabilityOptions {
                 artifact_scope: ArtifactScope::RootArtifact,
                 ..ReachabilityOptions::default()
             },
         );
-        let hook_boundary = policy_index
+        let policy_boundary = policy_index
             .graph()
             .view(&policy_snapshot)
             .frontier()
@@ -804,7 +773,7 @@ impl Callbacks for LocalExpansionCallbacks {
             leaf_expansion,
             leaf_outgoing_edges,
             leaf_is_frontier,
-            hook_boundary,
+            policy_boundary,
             node_limit,
             unsupported_instance,
         });
@@ -815,13 +784,8 @@ impl Callbacks for LocalExpansionCallbacks {
 struct RejectLeafHooks;
 
 impl<'tcx> ReachabilityHooks<'tcx> for RejectLeafHooks {
-    fn should_descend(
-        &mut self,
-        cx: ReachabilityContext<'tcx>,
-        _edge: &ReachabilityEdge,
-        target: rustc_middle::ty::Instance<'tcx>,
-    ) -> ReachabilityControl<'tcx, bool> {
-        ControlFlow::Continue(!cx.tcx.def_path_str(target.def_id()).ends_with("leaf"))
+    fn should_descend(&self, tcx: TyCtxt<'tcx>, target: rustc_middle::ty::Instance<'tcx>) -> bool {
+        !tcx.def_path_str(target.def_id()).ends_with("leaf")
     }
 }
 
@@ -846,11 +810,11 @@ impl Default for DumpCallbacks {
 impl Callbacks for DumpCallbacks {
     fn after_analysis(&mut self, _compiler: &interface::Compiler, tcx: TyCtxt<'_>) -> Compilation {
         let entry = find_local_body(tcx, &self.root_suffix);
-        let mut hooks = NoopReachabilityHooks;
+        let hooks = NoopReachabilityHooks;
         let mut index = ReachabilityIndex::new(tcx);
         let result = index.query(
             ReachabilityRoot::LocalBody(entry),
-            &mut hooks,
+            &hooks,
             ReachabilityOptions {
                 node_limit: Some(96),
                 dyn_dispatch_vtable_edges: self.dyn_dispatch_vtable_edges,
@@ -868,18 +832,11 @@ impl Callbacks for DumpCallbacks {
 enum SharedCallableScenario {
     FunctionPointerReuse,
     DynDispatchReuse,
-    ParentHooks,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-struct SharedCallableResult {
-    derived_edges: usize,
-    hook_calls: usize,
 }
 
 struct SharedCallableCallbacks {
     scenario: SharedCallableScenario,
-    result: Option<SharedCallableResult>,
+    result: Option<usize>,
 }
 
 impl Callbacks for SharedCallableCallbacks {
@@ -887,110 +844,46 @@ impl Callbacks for SharedCallableCallbacks {
         self.result = Some(match self.scenario {
             SharedCallableScenario::FunctionPointerReuse => {
                 let mut index = ReachabilityIndex::new(tcx);
-                let mut hooks = NoopReachabilityHooks;
+                let hooks = NoopReachabilityHooks;
                 index.query(
                     ReachabilityRoot::LocalBody(find_local_body(tcx, "expose_fn_target")),
-                    &mut hooks,
+                    &hooks,
                     call_site_options(),
                 );
                 let snapshot = index.query(
                     ReachabilityRoot::LocalBody(find_local_body(tcx, "call_fn_target")),
-                    &mut hooks,
+                    &hooks,
                     call_site_options(),
                 );
-                let derived_edges = index
+                index
                     .graph()
                     .view(&snapshot)
                     .edges()
                     .filter(|edge| edge.kind() == ReachabilityEdgeKind::FnPointerCallTarget)
-                    .count();
-                SharedCallableResult {
-                    derived_edges,
-                    hook_calls: 0,
-                }
+                    .count()
             }
             SharedCallableScenario::DynDispatchReuse => {
                 let mut index = ReachabilityIndex::new(tcx);
-                let mut hooks = NoopReachabilityHooks;
+                let hooks = NoopReachabilityHooks;
                 index.query(
                     ReachabilityRoot::LocalBody(find_local_body(tcx, "expose_dyn_target")),
-                    &mut hooks,
+                    &hooks,
                     call_site_options(),
                 );
                 let snapshot = index.query(
                     ReachabilityRoot::LocalBody(find_local_body(tcx, "call_dyn_target")),
-                    &mut hooks,
+                    &hooks,
                     call_site_options(),
                 );
-                let derived_edges = index
+                index
                     .graph()
                     .view(&snapshot)
                     .edges()
                     .filter(|edge| edge.kind() == ReachabilityEdgeKind::DynDispatchVTableEntry)
-                    .count();
-                SharedCallableResult {
-                    derived_edges,
-                    hook_calls: 0,
-                }
-            }
-            SharedCallableScenario::ParentHooks => {
-                let root =
-                    ReachabilityRoot::LocalBody(find_local_body(tcx, "call_known_fn_target"));
-                let mut index = ReachabilityIndex::new(tcx);
-                let mut hooks = NoopReachabilityHooks;
-                index.query(root, &mut hooks, call_site_options());
-
-                let mut counting_hooks = DerivedEdgeHooks::default();
-                index.query(root, &mut counting_hooks, call_site_options());
-
-                let mut rejecting_hooks = DerivedEdgeHooks {
-                    reject_indirect_calls: true,
-                    ..DerivedEdgeHooks::default()
-                };
-                let rejected_snapshot =
-                    index.query(root, &mut rejecting_hooks, call_site_options());
-                let derived_edges = index
-                    .graph()
-                    .view(&rejected_snapshot)
-                    .edges()
-                    .filter(|edge| edge.kind() == ReachabilityEdgeKind::FnPointerCallTarget)
-                    .count();
-                SharedCallableResult {
-                    derived_edges,
-                    hook_calls: counting_hooks.derived_edge_calls,
-                }
+                    .count()
             }
         });
         Compilation::Stop
-    }
-}
-
-#[derive(Default)]
-struct DerivedEdgeHooks {
-    reject_indirect_calls: bool,
-    derived_edge_calls: usize,
-}
-
-impl<'tcx> ReachabilityHooks<'tcx> for DerivedEdgeHooks {
-    fn on_edge(
-        &mut self,
-        _cx: ReachabilityContext<'tcx>,
-        edge: &ReachabilityEdge,
-    ) -> ReachabilityControl<'tcx> {
-        if edge.kind == ReachabilityEdgeKind::FnPointerCallTarget {
-            self.derived_edge_calls += 1;
-        }
-        ControlFlow::Continue(())
-    }
-
-    fn should_record_edge(
-        &mut self,
-        _cx: ReachabilityContext<'tcx>,
-        edge: &ReachabilityEdge,
-    ) -> ReachabilityControl<'tcx, bool> {
-        ControlFlow::Continue(
-            !self.reject_indirect_calls || edge.kind != ReachabilityEdgeKind::IndirectCall,
-        )
     }
 }
 
@@ -1029,7 +922,7 @@ fn find_local_body(tcx: TyCtxt<'_>, suffix: &str) -> LocalDefId {
 fn render_graph<'tcx>(
     tcx: TyCtxt<'tcx>,
     graph: &ReachabilityGraph<'tcx>,
-    result: &ReachabilitySnapshot<'tcx>,
+    result: &ReachabilitySnapshot,
 ) -> String {
     let view = graph.view(result);
     let mut lines = vec![format!("root {}", render_node(tcx, view.root().kind()))];

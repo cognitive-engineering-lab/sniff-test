@@ -16,6 +16,7 @@ use rustc_errors::{Diag, EmissionGuarantee};
 use rustc_hir::def_id::DefId;
 use rustc_middle::ty::TyCtxt;
 use rustc_span::{BytePos, SourceFile, Span};
+use toml::Spanned;
 
 use super::findings::{DiagnosticMessage, FindingDiagnostic};
 use super::report::{
@@ -25,7 +26,7 @@ use super::report::{
 #[derive(Debug, Clone, Copy)]
 pub(super) struct PanicContractDiagnostic {
     pub(super) obligation_edge_id: Option<ReachabilityEdgeId>,
-    pub(super) documented_def_id: DefId,
+    pub(super) obligation_def_id: DefId,
     pub(super) root_def_id: DefId,
     pub(super) trusted: bool,
     pub(super) include_stack: bool,
@@ -354,11 +355,11 @@ fn decorate_panic_contract_diagnostic<'tcx>(
     graph: &ReachabilityGraph<'tcx>,
     evidence: &PanicEvidence,
     diagnostic: &PanicContractDiagnostic,
-    documented: &str,
+    obligation: &str,
 ) {
     diag.span_note(
-        tcx.def_span(diagnostic.documented_def_id),
-        format!("the reached callee `{documented}` documents `# Panics` here"),
+        tcx.def_span(diagnostic.obligation_def_id),
+        format!("the reached callee `{obligation}` documents `# Panics` here"),
     );
     add_trace_notes(
         diag,
@@ -377,7 +378,9 @@ fn decorate_panic_contract_diagnostic<'tcx>(
         tcx.def_span(diagnostic.root_def_id),
         "document when this function may panic with `/// # Panics` here",
     );
-    diag.help("ensure the callee's panic conditions cannot occur, justify that with `// PANIC:`, or document when the caller may panic with `# Panics`");
+    diag.help(
+        "ensure the callee's panic conditions cannot occur, justify that with `// PANIC:`, or document when the caller may panic with `# Panics`",
+    );
 }
 
 fn decorate_cached_dependency_contract_diagnostic<'tcx>(
@@ -578,7 +581,7 @@ pub(super) fn panic_contract_diagnostic<'tcx>(
     diagnostic: PanicContractDiagnostic,
 ) -> FindingDiagnostic {
     let root = canonical_namespace(tcx, diagnostic.root_def_id);
-    let documented = canonical_namespace(tcx, diagnostic.documented_def_id);
+    let obligation = canonical_namespace(tcx, diagnostic.obligation_def_id);
     let panic_kind = if diagnostic.trusted {
         "trusted panic"
     } else {
@@ -590,7 +593,7 @@ pub(super) fn panic_contract_diagnostic<'tcx>(
     );
     let message = format!("function `{root}` may panic through a {panic_kind}");
     finding_diagnostic(Some(primary_span), message, |diag| {
-        decorate_panic_contract_diagnostic(diag, tcx, graph, evidence, &diagnostic, &documented);
+        decorate_panic_contract_diagnostic(diag, tcx, graph, evidence, &diagnostic, &obligation);
     })
 }
 
@@ -824,19 +827,22 @@ fn add_missing_safety_requirement_notes(
 pub(super) fn empty_report_roots_diagnostic(
     tcx: TyCtxt<'_>,
     manifest_path: &Path,
-    report_roots: &ReportRootSet,
+    report_roots: &Spanned<ReportRootSet>,
     crate_name: &str,
 ) -> FindingDiagnostic {
     let message = format!(
         "`[analysis].report-roots = {}` selected no functions in `{crate_name}`; no effects were analyzed",
-        report_roots.description()
+        report_roots.get_ref().description()
     );
     let source_file = tcx.sess.source_map().load_file(manifest_path).ok();
-    let span = report_roots.source_span().and_then(|source_span| {
-        source_file
-            .as_ref()
-            .and_then(|file| config_span(file, source_span))
-    });
+    let source_span = report_roots.span();
+    let span = (!source_span.is_empty())
+        .then_some(source_span)
+        .and_then(|source_span| {
+            source_file
+                .as_ref()
+                .and_then(|file| config_span(file, source_span))
+        });
 
     finding_diagnostic(span, message, |diag| {
         diag.help("update `[analysis].report-roots` to include functions in the current crate");
@@ -964,10 +970,8 @@ fn panic_trigger_note<'tcx>(
             format!("panic sink `{}`", canonical_namespace(tcx, def_id))
         }
         PanicEvidenceKind::PanicObligation { def_id } => {
-            format!(
-                "documented panic behavior of `{}`",
-                canonical_namespace(tcx, def_id)
-            )
+            let target = canonical_namespace(tcx, def_id);
+            format!("documented panic behavior of `{target}`")
         }
         PanicEvidenceKind::IndirectBoundary {
             def_id: Some(def_id),

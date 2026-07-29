@@ -25,6 +25,18 @@ expression: messages
         ]
       },
       {
+        "kind": "indirect-call-boundary",
+        "level": "warn",
+        "reason": "indirect call to undocumented trait method supertrait_dyn_dispatch::Super::risky cannot be verified",
+        "root": "supertrait_dyn_dispatch::call_supertrait_method",
+        "root-kind": "concrete",
+        "span": "[FIXTURE]/src/lib.rs:21:5: 21:23",
+        "target": "supertrait_dyn_dispatch::Super::risky",
+        "trace": [
+          "[FIXTURE]/src/lib.rs:21:5: 21:23: supertrait_dyn_dispatch::call_supertrait_method --direct-call-> supertrait_dyn_dispatch::Super::risky"
+        ]
+      },
+      {
         "kind": "panic-invocation",
         "level": "deny",
         "reason": "panic sink core::std::rt::panic_fmt",

@@ -167,3 +167,41 @@ pub fn configured_safety_obligation_missing_requirement() {
 pub fn configured_safety_obligation_missing_justification() {
     safe_undocumented_contract();
 }
+
+/// # Safety
+///
+/// Requirements:
+///
+/// - ready: the caller must establish the target-specific precondition.
+unsafe fn documented_pointer_target() {}
+
+pub fn unsafe_fn_pointer_named_requirement_satisfied() {
+    let function: unsafe fn() = documented_pointer_target;
+
+    // SAFETY: the erased pointer is constrained to the documented target.
+    // - ready: the target-specific precondition is established.
+    unsafe { function() }
+}
+
+pub fn unsafe_fn_pointer_named_requirement_missing() {
+    let function: unsafe fn() = documented_pointer_target;
+
+    // SAFETY: the erased pointer call is intentional, but `ready` is not established.
+    unsafe { function() }
+}
+
+pub fn unknown_unsafe_fn_pointer(function: unsafe fn()) {
+    unsafe { function() }
+}
+
+pub fn safe_obligation_through_unsafe_pointer_satisfied() {
+    let byte = 7;
+    let ptr = &raw const byte;
+
+    // SAFETY: the erased pointer is constrained to the documented target.
+    // - valid_ptr: pointer was created from a live reference.
+    unsafe {
+        let function: unsafe fn(*const u8) = safe_documented_contract;
+        function(ptr);
+    }
+}

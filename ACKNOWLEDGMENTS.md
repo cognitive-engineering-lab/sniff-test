@@ -11,7 +11,7 @@ transitively reachable definitions.
 The implementation in the standalone `reachability` crate evolved from the
 original reachability modules in sniff-test. It has since been substantially
 rewritten around concrete function instances, a shared graph index, per-root
-snapshots, typed edges, and configurable traversal hooks.
+snapshots, typed edges, and configurable descent policy.
 
 sniff-test is an independent project and is not a component of, or affiliated
 with, Ferrocene or Ferrous Systems.

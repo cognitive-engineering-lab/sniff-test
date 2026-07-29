@@ -10,10 +10,12 @@ ignored-namespaces = [
     "safety_requirements::safety_marker_boundary_missing_requirements",
     "safety_requirements::missing_justification",
     "safety_requirements::unsafe_fn_pointer_missing_justification",
+    "safety_requirements::unknown_unsafe_fn_pointer",
+    "safety_requirements::unsafe_fn_pointer_named_requirement_missing",
     "safety_requirements::generic_unsafe_trait_method_missing",
 ]
 
-safety-obligation-namespaces = [
+trusted-safety-boundary-namespaces = [
     "safety_requirements::safe_documented_contract",
     "safety_requirements::safe_undocumented_contract",
 ]

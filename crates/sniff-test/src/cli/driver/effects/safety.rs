@@ -1,12 +1,11 @@
 use std::collections::{HashMap, HashSet};
-use std::ops::ControlFlow;
 
 use reachability::{
-    ArtifactScope, ReachabilityContext, ReachabilityControl, ReachabilityEdge, ReachabilityGraph,
-    ReachabilityHooks, ReachabilityIndex, ReachabilityNodeKind, ReachabilityView,
+    ArtifactScope, ReachabilityEdgeKind, ReachabilityGraph, ReachabilityIndex,
+    ReachabilityNodeExpansion, ReachabilityNodeKind, ReachabilityView, ReachedEdge,
 };
 use rustc_hir::def_id::DefId;
-use rustc_middle::ty::{Instance, TyCtxt};
+use rustc_middle::ty::TyCtxt;
 use rustc_span::Span;
 
 use crate::cache::{CachedEffectInput, CachedFinding, CachedFindingInput};
@@ -15,40 +14,25 @@ use crate::cli::diagnostics::cached_dependency_safety_diagnostic;
 use crate::cli::findings::{Finding, FindingKind, safety_finding_report};
 use crate::config::{AnalysisConfig, SafetyConfig};
 use crate::dependency_cache::{CachedFunction, DependencyAnalysisCache};
-use crate::effect_tracker::{EffectTrace, find_effect_trace, find_effect_trace_to_edge};
+use crate::effect_tracker::{
+    EffectTarget, EffectTrace, find_effect_trace, find_effect_trace_to_edge,
+};
 use crate::namespace::canonical_namespace;
 use crate::report_roots::ReportRoot;
 use crate::safety::{SafetyAnalysis, SafetyEffectGroup, SafetyEvidence, safety_doc_summary};
-use crate::source_markers::MarkerBlockKey;
+use crate::source_markers::{
+    EffectMarkerBlock, MarkerBlockKey, safety_effect_edge_marker_block, safety_span_marker_block,
+};
 
 use super::cache::{EffectBoundary, rebase_cached_dependency_finding, safety_boundaries};
 use super::pipeline::{
-    CommentIndex, Effect, EffectCx, EffectGroupAllocator, EffectGroupId, EffectResolution,
-    EffectSource, PathAnchor,
+    Effect, EffectCx, EffectGroupAllocator, EffectGroupId, EffectReachabilityHooks,
+    EffectResolution, EffectSource, PathAnchor,
 };
 use super::{
     EffectRootAnalysis, IncompleteDependency, dependency_analysis_incomplete_finding,
     reachability_options, root_analysis_incomplete_finding,
 };
-
-struct SafetyReachabilityHooks<'config> {
-    config: &'config SafetyConfig,
-}
-
-impl<'tcx> ReachabilityHooks<'tcx> for SafetyReachabilityHooks<'_> {
-    fn should_descend(
-        &mut self,
-        cx: ReachabilityContext<'tcx>,
-        _edge: &ReachabilityEdge,
-        target: Instance<'tcx>,
-    ) -> ReachabilityControl<'tcx, bool> {
-        ControlFlow::Continue(!safety_path_node_is_boundary(
-            cx.tcx,
-            target.def_id(),
-            self.config,
-        ))
-    }
-}
 
 struct SafetyEffect<'config, 'analysis> {
     config: &'config SafetyConfig,
@@ -60,10 +44,7 @@ struct SafetyEffect<'config, 'analysis> {
 
 #[derive(Clone)]
 enum SafetySource {
-    Local {
-        evidence: SafetyEvidence,
-        effect_span: Span,
-    },
+    Local(SafetyEvidence),
     Dependency {
         edge_id: reachability::ReachabilityEdgeId,
         function: CachedFunction,
@@ -72,17 +53,62 @@ enum SafetySource {
     },
 }
 
+impl SafetyEffect<'_, '_> {
+    fn local_source(
+        &mut self,
+        evidence: SafetyEvidence,
+        anchor: PathAnchor,
+    ) -> EffectSource<SafetySource> {
+        let group = if let Some(group) = self.local_groups.get(&evidence.group) {
+            *group
+        } else {
+            let group = self.groups.allocate();
+            self.local_groups.insert(evidence.group, group);
+            group
+        };
+        EffectSource {
+            group,
+            anchor,
+            terminal_marker_spans: evidence.terminal_marker_spans().to_vec(),
+            requirements: evidence.requirements().to_vec(),
+            payload: SafetySource::Local(evidence),
+        }
+    }
+}
+
 impl<'tcx> Effect<'tcx> for SafetyEffect<'_, '_> {
     type Source = SafetySource;
 
-    fn is_path_boundary(&self, cx: &EffectCx<'_, 'tcx>, node: &ReachabilityNodeKind<'tcx>) -> bool {
-        safety_graph_node_is_boundary(cx.tcx, node, self.config)
+    fn classify_target(&self, tcx: TyCtxt<'tcx>, target: DefId) -> EffectTarget {
+        safety_effect_target(tcx, target, self.config)
     }
 
-    fn probe_comments(&self, cx: &EffectCx<'_, 'tcx>) -> CommentIndex {
-        CommentIndex::safety(cx.tcx, cx.view, cx.marker_probing, |node| {
-            self.is_path_boundary(cx, node)
-        })
+    fn is_path_boundary(&self, cx: &EffectCx<'_, 'tcx>, node: &ReachabilityNodeKind<'tcx>) -> bool {
+        match node {
+            ReachabilityNodeKind::Instance(instance) => {
+                safety_path_node_is_boundary(cx.tcx, instance.def_id(), self.config)
+            }
+            ReachabilityNodeKind::CompilerAssert { .. }
+            | ReachabilityNodeKind::MacroExpansion { .. }
+            | ReachabilityNodeKind::IndirectCall { .. }
+            | ReachabilityNodeKind::DynObjectCast { .. } => false,
+        }
+    }
+
+    fn probe_edge_marker(
+        &self,
+        cx: &EffectCx<'_, 'tcx>,
+        edge: ReachedEdge<'_, 'tcx>,
+    ) -> Option<EffectMarkerBlock> {
+        safety_effect_edge_marker_block(cx.tcx, cx.view.graph(), edge.edge(), cx.marker_probing)
+    }
+
+    fn probe_terminal_marker(
+        &self,
+        cx: &EffectCx<'_, 'tcx>,
+        span: Span,
+    ) -> Option<EffectMarkerBlock> {
+        safety_span_marker_block(cx.tcx, span, cx.marker_probing)
     }
 
     fn probe_local_sources(&mut self, cx: &EffectCx<'_, 'tcx>) -> Vec<EffectSource<Self::Source>> {
@@ -100,25 +126,54 @@ impl<'tcx> Effect<'tcx> for SafetyEffect<'_, '_> {
                 continue;
             }
             let anchor = PathAnchor::from_nodes(owner_instances.iter().map(|node| node.id()));
-            for evidence in self.analysis.evidence(owner) {
-                let group = if let Some(group) = self.local_groups.get(&evidence.group) {
-                    *group
-                } else {
-                    let group = self.groups.allocate();
-                    self.local_groups.insert(evidence.group, group);
-                    group
-                };
-                sources.push(EffectSource {
-                    group,
-                    anchor: anchor.clone(),
-                    terminal_marker_spans: evidence.terminal_marker_spans().to_vec(),
-                    requirements: evidence.requirements().to_vec(),
-                    payload: SafetySource::Local {
-                        evidence: evidence.clone(),
-                        effect_span: evidence.group.span,
-                    },
-                });
+            for evidence in self.analysis.evidence(owner).to_vec() {
+                let resolved_targets = resolved_unsafe_callable_targets(cx.view, &evidence);
+                if let Some(targets) = resolved_targets {
+                    for (effect_edge, target) in targets {
+                        let Some(concrete) = self.analysis.resolved_unsafe_call_evidence(
+                            cx.tcx,
+                            self.config,
+                            &evidence,
+                            target,
+                        ) else {
+                            continue;
+                        };
+                        sources.push(
+                            self.local_source(
+                                concrete,
+                                PathAnchor::from_terminal_edge(effect_edge),
+                            ),
+                        );
+                    }
+                }
+                // Callable targets are correlated by erased type, not proven
+                // exhaustive by value flow. Concrete evidence enriches this
+                // finding but cannot discharge the opaque call itself.
+                sources.push(self.local_source(evidence, anchor.clone()));
             }
+        }
+        for edge in cx
+            .view
+            .edges()
+            .filter(|edge| is_callable_target_edge(edge.kind()))
+        {
+            let (Some(owner), Some(target)) = (edge.origin().instance(), edge.target().instance())
+            else {
+                continue;
+            };
+            let site = crate::effect_tracker::EffectSite {
+                owner: owner.def_id(),
+                span: edge.span(),
+            };
+            let Some(evidence) = self.analysis.callable_obligation_evidence(
+                cx.tcx,
+                self.config,
+                site,
+                target.def_id(),
+            ) else {
+                continue;
+            };
+            sources.push(self.local_source(evidence, PathAnchor::from_terminal_edge(edge)));
         }
         sources
     }
@@ -199,12 +254,6 @@ pub(super) fn analyze_root<'tcx>(
     analysis: &mut SafetyAnalysis,
     dependency_cache: &DependencyAnalysisCache,
 ) -> EffectRootAnalysis<'tcx> {
-    let mut hooks = SafetyReachabilityHooks { config };
-    let snapshot = reachability.query(
-        root.reachability_root(),
-        &mut hooks,
-        reachability_options(analysis_config, ArtifactScope::RootArtifact),
-    );
     let mut effect = SafetyEffect {
         config,
         analysis,
@@ -212,6 +261,12 @@ pub(super) fn analyze_root<'tcx>(
         local_groups: HashMap::new(),
         incomplete_dependencies: Vec::new(),
     };
+    let hooks = EffectReachabilityHooks::new(&effect);
+    let snapshot = reachability.query(
+        root.reachability_root(),
+        &hooks,
+        reachability_options(analysis_config, ArtifactScope::RootArtifact),
+    );
     let view = reachability.graph().view(&snapshot);
     let cx = EffectCx {
         tcx,
@@ -267,7 +322,7 @@ fn safety_report_findings(
     for unresolved in &resolution.unresolved {
         let source = &resolution.sources[unresolved.source].payload;
         match source {
-            SafetySource::Local { evidence, .. } => {
+            SafetySource::Local(evidence) => {
                 let (_, finding) =
                     local_safety_finding(cx, effect.config, evidence, &unresolved.path);
                 findings.push(finding);
@@ -316,8 +371,8 @@ fn safety_report_findings(
         .iter()
         .map(|source| {
             let effect_span = match &source.payload {
-                SafetySource::Local { effect_span, .. }
-                | SafetySource::Dependency { effect_span, .. } => *effect_span,
+                SafetySource::Local(evidence) => evidence.group.span,
+                SafetySource::Dependency { effect_span, .. } => *effect_span,
             };
             (source.group, effect_span)
         })
@@ -344,7 +399,7 @@ fn safety_cache_findings(
     let mut findings = Vec::new();
     for unresolved in &resolution.unresolved {
         match &resolution.sources[unresolved.source].payload {
-            SafetySource::Local { evidence, .. } => {
+            SafetySource::Local(evidence) => {
                 let (safety_finding, finding) =
                     local_safety_finding(cx, effect.config, evidence, &unresolved.path);
                 if let Some(cached) = cached_safety_finding(
@@ -409,7 +464,10 @@ fn reached_safety_owners<'view, 'tcx>(
 ) -> Vec<(DefId, Vec<reachability::ReachedNode<'view, 'tcx>>)> {
     let mut owner_indexes = HashMap::<DefId, usize>::new();
     let mut reached_instances = Vec::<(DefId, Vec<_>)>::new();
-    for node in view.nodes() {
+    for node in view
+        .nodes()
+        .filter(|node| node.expansion() == Some(ReachabilityNodeExpansion::Expanded))
+    {
         if let Some(instance) = node.instance() {
             let owner = instance.def_id();
             let index = *owner_indexes.entry(owner).or_insert_with(|| {
@@ -420,6 +478,76 @@ fn reached_safety_owners<'view, 'tcx>(
         }
     }
     reached_instances
+}
+
+fn resolved_unsafe_callable_targets<'view, 'tcx>(
+    view: ReachabilityView<'view, 'tcx>,
+    evidence: &SafetyEvidence,
+) -> Option<Vec<(reachability::ReachedEdge<'view, 'tcx>, DefId)>> {
+    if !evidence.is_function_pointer_call() {
+        return None;
+    }
+    let site = evidence.site();
+    let graph = view.graph();
+    let call_edges = view
+        .edges()
+        .filter(|edge| {
+            edge.kind() == ReachabilityEdgeKind::IndirectCall
+                && edge
+                    .origin()
+                    .instance()
+                    .is_some_and(|origin| origin.def_id() == site.owner)
+                && edge.span() == site.span
+        })
+        .collect::<Vec<_>>();
+    let target_edges = view
+        .edges()
+        .filter(|edge| is_callable_target_edge(edge.kind()))
+        .collect::<Vec<_>>();
+    let mut seen = HashSet::new();
+    let mut targets = Vec::new();
+    for call_edge in call_edges {
+        let Some(callable) = graph.edge_callable(call_edge.id()) else {
+            continue;
+        };
+        for target_edge in &target_edges {
+            if graph.edge_callable(target_edge.id()) != Some(callable) {
+                continue;
+            }
+            let Some(target) = target_edge
+                .target()
+                .instance()
+                .map(|target| target.def_id())
+            else {
+                continue;
+            };
+            let effect_edge = if target_edge.kind() == ReachabilityEdgeKind::FnPointerCallTarget {
+                if target_edge.parent_edge().map(reachability::ReachedEdge::id)
+                    != Some(call_edge.id())
+                {
+                    continue;
+                }
+                *target_edge
+            } else {
+                call_edge
+            };
+            if seen.insert((call_edge.id(), target)) {
+                targets.push((effect_edge, target));
+            }
+        }
+    }
+    (!targets.is_empty()).then_some(targets)
+}
+
+fn is_callable_target_edge(kind: ReachabilityEdgeKind) -> bool {
+    matches!(
+        kind,
+        ReachabilityEdgeKind::FnPointerReify
+            | ReachabilityEdgeKind::ClosureFnPointerReify
+            | ReachabilityEdgeKind::FnPointerCallTarget
+            | ReachabilityEdgeKind::VTableEntry
+            | ReachabilityEdgeKind::DynDispatchVTableEntry
+    )
 }
 
 fn collect_safety_contract_findings<'tcx>(
@@ -453,29 +581,28 @@ fn collect_safety_contract_findings<'tcx>(
     findings
 }
 
+fn safety_effect_target(
+    tcx: TyCtxt<'_>,
+    def_id: DefId,
+    config: &crate::config::SafetyConfig,
+) -> EffectTarget {
+    if config.ignores_def(tcx, def_id) {
+        EffectTarget::Ignored
+    } else if safety_doc_summary(tcx, def_id, &config.documentation_overrides).has_docs {
+        EffectTarget::Obligation
+    } else if config.trusts_safety_boundary_def(tcx, def_id) {
+        EffectTarget::Ignored
+    } else {
+        EffectTarget::Descend
+    }
+}
+
 fn safety_path_node_is_boundary(
     tcx: TyCtxt<'_>,
     def_id: DefId,
     config: &crate::config::SafetyConfig,
 ) -> bool {
-    config.ignores_def(tcx, def_id)
-        || safety_doc_summary(tcx, def_id, &config.documentation_overrides).has_docs
-}
-
-fn safety_graph_node_is_boundary(
-    tcx: TyCtxt<'_>,
-    node: &ReachabilityNodeKind<'_>,
-    config: &crate::config::SafetyConfig,
-) -> bool {
-    match node {
-        ReachabilityNodeKind::Instance(instance) => {
-            safety_path_node_is_boundary(tcx, instance.def_id(), config)
-        }
-        ReachabilityNodeKind::CompilerAssert { .. }
-        | ReachabilityNodeKind::MacroExpansion { .. }
-        | ReachabilityNodeKind::IndirectCall { .. }
-        | ReachabilityNodeKind::DynObjectCast { .. } => false,
-    }
+    safety_effect_target(tcx, def_id, config).blocks_path()
 }
 
 fn safety_boundary_trace<'tcx>(

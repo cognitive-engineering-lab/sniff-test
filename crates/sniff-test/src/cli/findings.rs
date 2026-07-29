@@ -12,6 +12,7 @@ use crate::safety::{SafetyCallKind, SafetyFinding, SafetyRequirement};
 use rustc_middle::ty::TyCtxt;
 use rustc_span::Span;
 use serde::Serialize;
+use toml::Spanned;
 
 use super::diagnostics::{
     empty_report_roots_diagnostic, missing_report_root_diagnostic, safety_finding_diagnostic,
@@ -206,7 +207,7 @@ pub(crate) fn collect_report_root_findings(
     manifest_path: &Path,
     empty_report_roots: bool,
     missing_roots: &[MissingReportRoot],
-    report_roots: &ReportRootSet,
+    report_roots: &Spanned<ReportRootSet>,
     crate_name: &str,
 ) -> Vec<Finding> {
     let mut findings = Vec::new();
@@ -217,7 +218,7 @@ pub(crate) fn collect_report_root_findings(
             FindingKind::EmptyReportRoots,
             format!(
                 "`[analysis].report-roots = {}` selected no functions in `{crate_name}`",
-                report_roots.description()
+                report_roots.get_ref().description()
             ),
             diagnostic,
         ));

@@ -22,9 +22,9 @@
 //! body structurally. Generic local bodies are walked with identity generic
 //! arguments; unresolved trait-dispatched calls are recorded as indirect
 //! boundaries instead of guessed implementations. [`ReachabilityHooks`] can
-//! observe nodes/edges, stop traversal, or prevent descending into selected
-//! callees. [`ReachabilityOptions::artifact_scope`] can limit body expansion to
-//! the crate containing the query root while retaining cross-artifact calls as
+//! prevent descending into selected callees.
+//! [`ReachabilityOptions::artifact_scope`] can limit body expansion to the
+//! crate containing the query root while retaining cross-artifact calls as
 //! explicit frontier nodes.
 //!
 //! # Provenance
@@ -59,7 +59,4 @@ pub use graph::{
     ReachabilityNodeExpansion, ReachabilityNodeId, ReachabilityNodeKind, ReachabilitySnapshot,
     ReachabilityView, ReachedEdge, ReachedNode,
 };
-pub use hooks::{
-    NoopReachabilityHooks, ReachabilityContext, ReachabilityControl, ReachabilityHalt,
-    ReachabilityHooks, ReachabilityQueryStats,
-};
+pub use hooks::{NoopReachabilityHooks, ReachabilityHalt, ReachabilityHooks};

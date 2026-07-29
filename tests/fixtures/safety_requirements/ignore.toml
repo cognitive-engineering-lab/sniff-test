@@ -9,4 +9,6 @@ ignored-namespaces = [
     "safety_requirements::undocumented_public",
     "safety_requirements::read_byte",
     "safety_requirements::missing_justification",
+    "safety_requirements::unknown_unsafe_fn_pointer",
+    "safety_requirements::unsafe_fn_pointer_named_requirement_missing",
 ]

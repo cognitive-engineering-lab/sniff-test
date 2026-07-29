@@ -6,7 +6,7 @@ use rustc_middle::mir::AssertMessage;
 use rustc_middle::ty::{Instance, Ty};
 use rustc_span::Span;
 
-use crate::hooks::{ReachabilityHalt, ReachabilityQueryStats};
+use crate::hooks::ReachabilityHalt;
 
 /// Shared directed graph facts discovered by reachability queries.
 ///
@@ -63,7 +63,7 @@ impl<'tcx> ReachabilityGraph<'tcx> {
     /// Borrows this graph with one root-specific query snapshot.
     pub fn view<'view>(
         &'view self,
-        snapshot: &'view ReachabilitySnapshot<'tcx>,
+        snapshot: &'view ReachabilitySnapshot,
     ) -> ReachabilityView<'view, 'tcx> {
         ReachabilityView {
             graph: self,
@@ -119,7 +119,7 @@ impl<'tcx> ReachabilityGraph<'tcx> {
         }
     }
 
-    pub(crate) fn snapshot_for_root(&self, root: ReachabilityNodeId) -> ReachabilitySnapshot<'tcx> {
+    pub(crate) fn snapshot_for_root(&self, root: ReachabilityNodeId) -> ReachabilitySnapshot {
         debug_assert!(root.index() < self.nodes.len());
         ReachabilitySnapshot::new(root, self.nodes.len(), self.edges.len())
     }
@@ -194,7 +194,7 @@ impl<'tcx> ReachabilityGraph<'tcx> {
 #[derive(Clone, Copy)]
 pub struct ReachabilityView<'view, 'tcx> {
     graph: &'view ReachabilityGraph<'tcx>,
-    snapshot: &'view ReachabilitySnapshot<'tcx>,
+    snapshot: &'view ReachabilitySnapshot,
 }
 
 impl<'view, 'tcx> ReachabilityView<'view, 'tcx> {
@@ -278,7 +278,7 @@ impl<'view, 'tcx> ReachabilityView<'view, 'tcx> {
 
     #[must_use]
     /// Returns why traversal stopped early, if it did.
-    pub fn halt(self) -> Option<&'view ReachabilityHalt<'tcx>> {
+    pub fn halt(self) -> Option<&'view ReachabilityHalt> {
         self.snapshot.halt.as_ref()
     }
 }
@@ -287,7 +287,7 @@ impl<'view, 'tcx> ReachabilityView<'view, 'tcx> {
 #[derive(Clone, Copy)]
 pub struct ReachedNode<'view, 'tcx> {
     graph: &'view ReachabilityGraph<'tcx>,
-    snapshot: &'view ReachabilitySnapshot<'tcx>,
+    snapshot: &'view ReachabilitySnapshot,
     id: ReachabilityNodeId,
     depth: usize,
 }
@@ -351,14 +351,14 @@ impl<'view, 'tcx> ReachedNode<'view, 'tcx> {
 #[derive(Clone, Copy)]
 pub struct ReachedEdge<'view, 'tcx> {
     graph: &'view ReachabilityGraph<'tcx>,
-    snapshot: &'view ReachabilitySnapshot<'tcx>,
+    snapshot: &'view ReachabilitySnapshot,
     id: ReachabilityEdgeId,
 }
 
 impl<'view, 'tcx> ReachedEdge<'view, 'tcx> {
     fn new(
         graph: &'view ReachabilityGraph<'tcx>,
-        snapshot: &'view ReachabilitySnapshot<'tcx>,
+        snapshot: &'view ReachabilitySnapshot,
         id: ReachabilityEdgeId,
     ) -> Self {
         Self {
@@ -429,13 +429,22 @@ impl<'view, 'tcx> ReachedEdge<'view, 'tcx> {
     pub fn callee_span(self) -> Option<Span> {
         self.edge().callee_span
     }
+
+    #[must_use]
+    /// Returns the indirect call edge that this synthesized callable-target
+    /// edge refines, if any.
+    pub fn parent_edge(self) -> Option<Self> {
+        self.graph
+            .edge_parent(self.id)
+            .map(|parent| Self::new(self.graph, self.snapshot, parent))
+    }
 }
 
 /// Per-root reachability query snapshot over a shared [`ReachabilityGraph`].
 ///
 /// Node and edge ids refer to the shared graph, but depth/predecessor data is
 /// local to this root.
-pub struct ReachabilitySnapshot<'tcx> {
+pub struct ReachabilitySnapshot {
     root: ReachabilityNodeId,
     node_ids: Vec<ReachabilityNodeId>,
     edge_ids: Vec<ReachabilityEdgeId>,
@@ -443,10 +452,10 @@ pub struct ReachabilitySnapshot<'tcx> {
     depths: Vec<Option<usize>>,
     predecessor_edges: Vec<Option<ReachabilityEdgeId>>,
     expansions: Vec<Option<ReachabilityNodeExpansion>>,
-    halt: Option<ReachabilityHalt<'tcx>>,
+    halt: Option<ReachabilityHalt>,
 }
 
-impl<'tcx> ReachabilitySnapshot<'tcx> {
+impl ReachabilitySnapshot {
     fn new(root: ReachabilityNodeId, graph_node_count: usize, graph_edge_count: usize) -> Self {
         let mut snapshot = Self {
             root,
@@ -485,11 +494,7 @@ impl<'tcx> ReachabilitySnapshot<'tcx> {
             .unwrap_or(false)
     }
 
-    pub(crate) fn stats(&self) -> ReachabilityQueryStats {
-        ReachabilityQueryStats::new(self.node_ids.len(), self.edge_ids.len())
-    }
-
-    pub(crate) fn mark_halted(&mut self, halt: ReachabilityHalt<'tcx>) {
+    pub(crate) fn mark_halted(&mut self, halt: ReachabilityHalt) {
         self.halt = Some(halt);
     }
 
@@ -560,7 +565,7 @@ pub enum ReachabilityNodeExpansion {
     Expanded,
     /// Artifact-scoped traversal stopped at a call into another crate.
     DifferentArtifact,
-    /// A query hook deliberately prevented descent through the incoming edge.
+    /// The query's descent policy stopped at this instance.
     PolicyBoundary,
     /// Rustc did not expose MIR for this item in the current compiler session.
     MirUnavailable,

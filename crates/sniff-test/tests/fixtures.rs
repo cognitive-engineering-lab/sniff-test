@@ -341,6 +341,8 @@ fixture_cases! {
     }
     "safety_requirements" => {
         safety_requirements => Case::cargo("safety requirement satisfaction");
+        safety_requirements_call_sites => Case::cargo("safety callable call-site attribution")
+            .args(&["--manifest", "call-sites.toml"]);
         safety_requirements_allowed => Case::cargo("allowed safety findings")
             .args(&["--manifest", "allow.toml"]);
         safety_requirements_denied => Case::cargo("denied safety finding")
@@ -351,6 +353,9 @@ fixture_cases! {
         safety_requirements_obligations => Case::cargo("configured safety obligations")
             .args(&["--manifest", "obligations.toml"]);
         driver_safety_requirements => Case::direct("safety requirement satisfaction");
+    }
+    "safety_callable_sites" => {
+        safety_callable_sites => Case::cargo("independent callable call sites");
     }
     "marker_placement" => {
         marker_placement => Case::cargo("marker placement").exit_code(101);
@@ -372,6 +377,8 @@ fixture_cases! {
     }
     "trusted_boundaries" => {
         trusted_boundaries => Case::cargo("trusted boundary");
+        trusted_boundaries_call_sites => Case::cargo("trusted boundary call-site attribution")
+            .args(&["--manifest", "call-sites.toml"]);
         trusted_boundaries_untrusted => Case::cargo("untrusted boundary")
             .args(&["--manifest", "untrusted.toml"])
             .exit_code(101);
@@ -397,6 +404,79 @@ fixture_cases! {
     "direct_driver_safe" => {
         direct_driver_safe => Case::direct("direct driver clean");
     }
+}
+
+#[test]
+fn trusted_boundaries_keep_unknown_callable_effects() {
+    let repo = repo_root();
+    let binaries = Binaries::from_cargo();
+    let sysroot = rustc_sysroot();
+    let case = Case::cargo("unknown callable alternatives remain generic");
+    let messages = run_case(
+        &repo,
+        &binaries,
+        &sysroot,
+        "trusted_boundaries_keep_unknown_callable_effects",
+        "trusted_boundaries",
+        &case,
+    );
+    let findings = messages
+        .iter()
+        .find(|message| message["artifact"]["crate-name"] == "trusted_boundaries")
+        .and_then(|message| message["findings"].as_array())
+        .expect("trusted boundary fixture findings");
+    let has_finding = |root, kind| {
+        findings
+            .iter()
+            .any(|finding| finding["root"] == root && finding["kind"] == kind)
+    };
+
+    assert!(
+        has_finding(
+            "trusted_boundaries::trusted_through_fn_pointer",
+            "indirect-call-boundary"
+        ),
+        "an unknown safe function-pointer alternative must remain a panic boundary: {findings:?}"
+    );
+    assert!(
+        has_finding(
+            "trusted_boundaries::trusted_unsafe_through_fn_pointer",
+            "unsafe-call-missing-justification"
+        ),
+        "an unknown unsafe function-pointer alternative must retain its safety effect: {findings:?}"
+    );
+}
+
+#[test]
+fn callable_marker_is_not_ambiguous_between_generic_and_concrete_evidence() {
+    let repo = repo_root();
+    let binaries = Binaries::from_cargo();
+    let sysroot = rustc_sysroot();
+    let case = Case::cargo("one callable site has one semantic panic group")
+        .args(&["--manifest", "call-sites.toml"])
+        .exit_code(101);
+    let messages = run_case(
+        &repo,
+        &binaries,
+        &sysroot,
+        "callable_marker_is_not_ambiguous_between_generic_and_concrete_evidence",
+        "closure_call_graph",
+        &case,
+    );
+    let findings = messages
+        .iter()
+        .find(|message| message["artifact"]["crate-name"] == "closure_call_graph")
+        .and_then(|message| message["findings"].as_array())
+        .expect("closure call graph findings");
+
+    let marked_findings = findings
+        .iter()
+        .filter(|finding| finding["root"] == "closure_call_graph::marked_fn_pointer_call")
+        .collect::<Vec<_>>();
+    assert!(
+        marked_findings.is_empty(),
+        "each call marker must cover that call's generic and concrete evidence: {marked_findings:?}"
+    );
 }
 
 fn run_named_case(name: &'static str, fixture_name: &'static str, case: Case) {

@@ -8,6 +8,10 @@ stdout:
 stderr:
     Checking report-roots v0.1.0 ([FIXTURE])
 error: `[analysis].report-roots = 0 explicit paths` selected no functions in `report_roots`; no effects were analyzed
+ --> [FIXTURE]/deny-empty.toml:2:16
+  |
+2 | report-roots = []
+  |                ^^
   |
   = help: update `[analysis].report-roots` to include functions in the current crate
 

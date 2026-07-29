@@ -8,23 +8,43 @@ use reachability::{
     ReachedNode,
 };
 use rustc_hir::def_id::DefId;
-use rustc_middle::ty::TyCtxt;
 use rustc_span::Span;
 
-use crate::config::MarkerProbing;
 use crate::contracts::{
     ContractCheck, ContractRequirement, check_contract, normalize_requirement_name,
 };
-use crate::source_markers::{
-    EffectMarkerBlock, MarkerBlockKey, panic_effect_edge_marker_block, panic_span_marker_block,
-    safety_effect_edge_marker_block, safety_span_marker_block,
-};
+use crate::source_markers::{EffectMarkerBlock, MarkerBlockKey};
 
 /// Source-level location of an effect detected inside one function body.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(crate) struct EffectSite {
     pub owner: DefId,
     pub span: Span,
+}
+
+/// Effect-specific interpretation of a reached function target.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum EffectTarget {
+    /// Ordinary target whose body remains part of the traversal.
+    Descend,
+    /// Suppressed opaque target.
+    Ignored,
+    /// Raw effect reported on entry; its entering edge remains a valid path.
+    Sink,
+    /// Caller obligation reported on entry and treated as an opaque path boundary.
+    Obligation,
+}
+
+impl EffectTarget {
+    #[must_use]
+    pub(crate) fn should_descend(self) -> bool {
+        self == Self::Descend
+    }
+
+    #[must_use]
+    pub(crate) fn blocks_path(self) -> bool {
+        matches!(self, Self::Ignored | Self::Obligation)
+    }
 }
 
 /// Raw effect evidence before comment contracts are resolved.
@@ -39,6 +59,7 @@ pub(crate) struct EffectEvidence<Endpoint, Details> {
 pub(crate) struct ResolvedEffectMarker {
     pub(crate) key: MarkerBlockKey,
     pub(crate) span: Span,
+    pub(crate) edge_id: Option<ReachabilityEdgeId>,
 }
 
 #[derive(Debug)]
@@ -54,80 +75,34 @@ pub(crate) struct ResolvedEffectPaths {
 }
 
 pub(crate) struct EffectMarkerIndex {
-    probing: MarkerProbing,
-    terminal_marker: for<'tcx> fn(TyCtxt<'tcx>, Span, MarkerProbing) -> Option<EffectMarkerBlock>,
     markers: HashMap<ReachabilityEdgeId, EffectMarkerBlock>,
 }
 
 impl EffectMarkerIndex {
-    pub(crate) fn panic(
-        tcx: TyCtxt<'_>,
-        view: ReachabilityView<'_, '_>,
-        probing: MarkerProbing,
+    pub(crate) fn new<'view, 'tcx>(
+        view: ReachabilityView<'view, 'tcx>,
+        mut probe: impl FnMut(ReachedEdge<'view, 'tcx>) -> Option<EffectMarkerBlock>,
     ) -> Self {
-        let graph = view.graph();
-        let markers = view
-            .edges()
-            .filter_map(|edge| {
-                panic_effect_edge_marker_block(tcx, graph, edge.edge(), probing)
-                    .map(|marker| (edge.id(), marker))
-            })
-            .collect();
         Self {
-            probing,
-            terminal_marker: panic_span_marker_block,
-            markers,
+            markers: view
+                .edges()
+                .filter_map(|edge| probe(edge).map(|marker| (edge.id(), marker)))
+                .collect(),
         }
-    }
-
-    pub(crate) fn safety(
-        tcx: TyCtxt<'_>,
-        view: ReachabilityView<'_, '_>,
-        probing: MarkerProbing,
-    ) -> Self {
-        let graph = view.graph();
-        let markers = view
-            .edges()
-            .filter_map(|edge| {
-                safety_effect_edge_marker_block(tcx, graph, edge.edge(), probing)
-                    .map(|marker| (edge.id(), marker))
-            })
-            .collect();
-        Self {
-            probing,
-            terminal_marker: safety_span_marker_block,
-            markers,
-        }
-    }
-
-    pub(crate) fn resolve_paths(
-        &self,
-        tcx: TyCtxt<'_>,
-        requirements: &[ContractRequirement],
-        terminal_marker_spans: &[Span],
-        path_markers: impl FnOnce() -> Vec<EffectMarkerBlock>,
-        find_unsatisfied: impl FnOnce(&[ContractRequirement]) -> Vec<UnsatisfiedEffectTrace>,
-    ) -> ResolvedEffectPaths {
-        resolve_effect_paths_with_markers(
-            requirements,
-            || {
-                terminal_marker_spans
-                    .iter()
-                    .filter_map(|span| (self.terminal_marker)(tcx, *span, self.probing))
-                    .collect()
-            },
-            path_markers,
-            find_unsatisfied,
-        )
     }
 
     pub(crate) fn blocks(
         &self,
         edge_ids: impl IntoIterator<Item = ReachabilityEdgeId>,
-    ) -> Vec<EffectMarkerBlock> {
+    ) -> Vec<(ReachabilityEdgeId, EffectMarkerBlock)> {
         edge_ids
             .into_iter()
-            .filter_map(|edge_id| self.markers.get(&edge_id).cloned())
+            .filter_map(|edge_id| {
+                self.markers
+                    .get(&edge_id)
+                    .cloned()
+                    .map(|marker| (edge_id, marker))
+            })
             .collect()
     }
 
@@ -141,10 +116,10 @@ impl EffectMarkerIndex {
     }
 }
 
-fn resolve_effect_paths_with_markers(
+pub(crate) fn resolve_effect_paths(
     requirements: &[ContractRequirement],
     terminal_markers: impl FnOnce() -> Vec<EffectMarkerBlock>,
-    path_markers: impl FnOnce() -> Vec<EffectMarkerBlock>,
+    path_markers: impl FnOnce() -> Vec<(ReachabilityEdgeId, EffectMarkerBlock)>,
     find_unsatisfied: impl FnOnce(&[ContractRequirement]) -> Vec<UnsatisfiedEffectTrace>,
 ) -> ResolvedEffectPaths {
     let terminal_markers = terminal_markers();
@@ -160,11 +135,30 @@ fn resolve_effect_paths_with_markers(
         ContractCheck::MissingJustification => Vec::new(),
         ContractCheck::MissingRequirements(missing) => missing,
     };
-    let path = resolve_effect_evidence(&requirements, &path_markers());
+    let path_markers = path_markers();
+    let path =
+        resolve_effect_evidence(&requirements, path_markers.iter().map(|(_, marker)| marker));
+    let claimed_keys = path
+        .markers
+        .into_iter()
+        .map(|marker| marker.key)
+        .collect::<HashSet<_>>();
+    let path_markers = path_markers
+        .into_iter()
+        .filter_map(|(edge_id, marker)| {
+            claimed_keys
+                .contains(&marker.key)
+                .then_some(ResolvedEffectMarker {
+                    key: marker.key,
+                    span: marker.span,
+                    edge_id: Some(edge_id),
+                })
+        })
+        .collect();
     let unresolved_traces = find_unsatisfied(&requirements);
     ResolvedEffectPaths {
         terminal_markers: terminal.markers,
-        path_markers: path.markers,
+        path_markers,
         unresolved_traces,
     }
 }
@@ -185,6 +179,7 @@ fn resolve_effect_evidence<'a>(
         .map(|marker| ResolvedEffectMarker {
             key: marker.key,
             span: marker.span,
+            edge_id: None,
         })
         .collect();
 

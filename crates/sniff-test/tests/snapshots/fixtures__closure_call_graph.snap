@@ -76,6 +76,19 @@ expression: messages
         ]
       },
       {
+        "kind": "indirect-call-boundary",
+        "level": "warn",
+        "reason": "indirect call through an opaque callable cannot be verified",
+        "root": "closure_call_graph::fn_pointer_closure_boundary",
+        "root-kind": "concrete",
+        "span": "src/lib.rs:40:5: 40:15",
+        "trace": [
+          "src/lib.rs:15:5: 15:26: closure_call_graph::fn_pointer_closure_boundary --direct-call-> closure_call_graph::calls_fn",
+          "src/lib.rs:40:5: 40:15: closure_call_graph::calls_fn --direct-call-> core::std::ops::Fn::call",
+          "[SYSROOT]/lib/rustlib/src/rust/library/core/src/ops/function.rs:79:5: 79:67: core::std::ops::Fn::call --indirect-call-> indirect call Binder { value: fn() -> i32, bound_vars: [] }"
+        ]
+      },
+      {
         "kind": "panic-invocation",
         "level": "deny",
         "reason": "panic sink core::std::rt::panic_fmt",

@@ -3,7 +3,7 @@ use crate::config::PanicConfig;
 use crate::namespace::canonical_namespace;
 use crate::panics::{
     PanicAnalysis, PanicEvidence, PanicEvidenceKind, describe_panic_evidence_kind,
-    trace_edges_until, trigger_edge_id,
+    panic_obligation_reason, trace_edges_until, trigger_edge_id,
 };
 use reachability::{ReachabilityEdgeId, ReachabilityGraph, ReachabilityView};
 use rustc_middle::ty::TyCtxt;
@@ -100,7 +100,7 @@ fn cached_panic_finding<'tcx>(
             }
         }
         EffectPathDecision::Obligation { edge_id, def_id } => {
-            let trusted = crate::panics::is_trusted_panic_obligation(tcx, def_id, config);
+            let trusted = crate::panics::is_trusted_panic_boundary(tcx, def_id, config);
             let (span, source_span) = edge_id.map_or_else(
                 || {
                     let span = tcx.def_span(def_id);
@@ -123,10 +123,7 @@ fn cached_panic_finding<'tcx>(
                 span,
                 source_span,
                 trace: cached_trace(tcx, graph, &trace_edges_until(evidence, edge_id)),
-                reason: format!(
-                    "{} documents when it may panic under # Panics",
-                    canonical_namespace(tcx, def_id)
-                ),
+                reason: panic_obligation_reason(&canonical_namespace(tcx, def_id)),
                 missing_requirements: evidence.missing_requirements.clone(),
             }
         }

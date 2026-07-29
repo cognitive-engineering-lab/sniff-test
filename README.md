@@ -60,6 +60,9 @@ missing-report-root = "warn"
 [documentation]
 override-files = [] # TOML files relative to sniff-test.toml
 
+[panics]
+trusted-panic-boundary-namespaces = []
+
 [panics.lints]
 compiler-assert = "deny"
 panic-invocation = "deny"
@@ -70,7 +73,7 @@ indirect-call-boundary = "warn"
 
 [safety]
 ignored-namespaces = []
-safety-obligation-namespaces = []
+trusted-safety-boundary-namespaces = []
 
 [safety.lints]
 missing-safety-docs = "warn"
@@ -103,9 +106,9 @@ then falls back through macro callsites to the outer source callsite.
 `source-callsite` keeps lookup at the final user callsite only.
 
 `report-roots` scopes both analyses. Effects propagate through reachable local
-functions until a matching documented obligation or ignored namespace stops
-the path. With `"public"`, a private helper is reported through the public root
-that reaches it; with `"all"`, the helper can also receive its own finding.
+functions until a documented contract, trusted boundary, or ignored namespace
+stops the path. With `"public"`, a private helper is reported through the public
+root that reaches it; with `"all"`, the helper can also receive its own finding.
 Safety probing covers runtime function, method, closure, and coroutine bodies;
 const, static, and inline-const initializers are intentionally outside this
 runtime effect graph.
@@ -114,10 +117,17 @@ runtime effect graph.
 whose configured lint level is `deny`. `allow` suppresses a finding from human
 diagnostics and JSON output; `warn` reports it without failing the run.
 
-Use `[safety].safety-obligation-namespaces` for safe functions that still carry
-caller obligations. Calls to matching functions must have a nearby `// SAFETY:`
-justification, and named bullets under a callee `# Safety` section must be
-satisfied by matching named bullets at the call site.
+Use `[panics].trusted-panic-boundary-namespaces` for audited APIs whose
+`# Panics` documentation is authoritative. Every match is opaque. Documented
+conditions become caller obligations; an undocumented match is trusted as
+non-panicking. A broad glob therefore asserts that the matched library
+documents every caller-visible panic condition.
+
+Use `[safety].trusted-safety-boundary-namespaces` for audited APIs whose
+`# Safety` documentation is authoritative. Documented requirements must be
+satisfied by nearby `// SAFETY:` markers; an undocumented match is trusted as
+carrying no safety obligation, even when declared `unsafe`. Matching
+implementations remain opaque.
 
 Use `[documentation].override-files` while auditing generated or third-party
 APIs whose documented behavior is known but not written in source yet. Override files are

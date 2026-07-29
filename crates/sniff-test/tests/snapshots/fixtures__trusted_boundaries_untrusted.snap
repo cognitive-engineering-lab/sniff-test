@@ -11,6 +11,88 @@ expression: messages
     "dependencies": [],
     "findings": [
       {
+        "function": "trusted_boundaries::trusted_helper",
+        "kind": "unsafe-call-missing-justification",
+        "level": "warn",
+        "reason": "unsafe call to `trusted_boundaries::unsafe_helper` has no `// SAFETY:` justification",
+        "root": "trusted_boundaries::trusted_through_fn_pointer",
+        "root-kind": "concrete",
+        "span": "src/lib.rs:11:14: 11:29",
+        "target": "trusted_boundaries::unsafe_helper",
+        "trace": [
+          "src/lib.rs:23:38: 23:52: trusted_boundaries::trusted_through_fn_pointer --fn-pointer-reify-> trusted_boundaries::trusted_helper"
+        ]
+      },
+      {
+        "function": "trusted_boundaries::trusted_unsafe_through_fn_pointer",
+        "kind": "unsafe-call-missing-justification",
+        "level": "warn",
+        "reason": "unsafe call to `unsafe function pointer` has no `// SAFETY:` justification",
+        "root": "trusted_boundaries::trusted_unsafe_through_fn_pointer",
+        "root-kind": "concrete",
+        "span": "src/lib.rs:33:14: 33:22",
+        "target": "unsafe function pointer"
+      },
+      {
+        "function": "trusted_boundaries::trusted_unsafe_without_docs",
+        "kind": "unsafe-call-missing-justification",
+        "level": "warn",
+        "reason": "unsafe call to `trusted_boundaries::unsafe_helper` has no `// SAFETY:` justification",
+        "root": "trusted_boundaries::trusted_unsafe_without_docs",
+        "root-kind": "concrete",
+        "span": "src/lib.rs:28:14: 28:29",
+        "target": "trusted_boundaries::unsafe_helper"
+      },
+      {
+        "function": "trusted_boundaries::trusted_helper",
+        "kind": "unsafe-call-missing-justification",
+        "level": "warn",
+        "reason": "unsafe call to `trusted_boundaries::unsafe_helper` has no `// SAFETY:` justification",
+        "root": "trusted_boundaries::trusted_without_docs",
+        "root-kind": "concrete",
+        "span": "src/lib.rs:11:14: 11:29",
+        "target": "trusted_boundaries::unsafe_helper",
+        "trace": [
+          "src/lib.rs:2:5: 2:25: trusted_boundaries::trusted_without_docs --direct-call-> trusted_boundaries::trusted_helper"
+        ]
+      },
+      {
+        "kind": "indirect-call-boundary",
+        "level": "warn",
+        "reason": "indirect call through an opaque callable cannot be verified",
+        "root": "trusted_boundaries::trusted_through_fn_pointer",
+        "root-kind": "concrete",
+        "span": "src/lib.rs:24:5: 24:17",
+        "trace": [
+          "src/lib.rs:24:5: 24:17: trusted_boundaries::trusted_through_fn_pointer --indirect-call-> indirect call Binder { value: fn(bool), bound_vars: [] }"
+        ]
+      },
+      {
+        "kind": "panic-invocation",
+        "level": "deny",
+        "reason": "panic sink core::panicking::panic",
+        "root": "trusted_boundaries::trusted_through_fn_pointer",
+        "root-kind": "concrete",
+        "span": "src/lib.rs:10:5: 10:18",
+        "target": "core::panicking::panic",
+        "trace": [
+          "src/lib.rs:23:38: 23:52: trusted_boundaries::trusted_through_fn_pointer --fn-pointer-reify-> trusted_boundaries::trusted_helper",
+          "src/lib.rs:10:5: 10:18: trusted_boundaries::trusted_helper --macro-expansion-> macro core::std::assert",
+          "src/lib.rs:10:5: 10:18: macro core::std::assert --direct-call-> core::panicking::panic"
+        ]
+      },
+      {
+        "kind": "indirect-call-boundary",
+        "level": "warn",
+        "reason": "indirect call through an opaque callable cannot be verified",
+        "root": "trusted_boundaries::trusted_unsafe_through_fn_pointer",
+        "root-kind": "concrete",
+        "span": "src/lib.rs:33:14: 33:22",
+        "trace": [
+          "src/lib.rs:33:14: 33:22: trusted_boundaries::trusted_unsafe_through_fn_pointer --indirect-call-> indirect call Binder { value: unsafe fn(), bound_vars: [] }"
+        ]
+      },
+      {
         "kind": "documented-panic",
         "level": "warn",
         "reason": "trusted_boundaries::trusted_doc_helper documents when it may panic under # Panics",

@@ -71,14 +71,14 @@ ignored-namespaces = [
 ]
 
 # Trusted crates or fully-qualified functions whose internals should be treated
-# as opaque API boundaries. If a matched function has `# Panics` docs, reaching
-# it is reported as a trusted panic. If it has no panic docs, it is
-# treated as non-panic evidence.
+# as opaque API boundaries. Their `# Panics` documentation is assumed complete:
+# documented conditions become caller obligations, while an undocumented match
+# is trusted as non-panicking.
 #
 # Patterns match a definition's crate root, definition-site path, and impl
-# self-type path, so `alloc::**` also covers trait-impl methods such as
-# `<Vec<T> as Index<usize>>::index`, and `x::**` includes `x` itself.
-trusted-panic-obligation-namespaces = ["std::**", "core::**", "alloc::**"]
+# self-type path. A broad pattern such as `alloc::**` asserts that the matched
+# crate documents every caller-visible panic condition.
+trusted-panic-boundary-namespaces = []
 
 # Callees that should be treated as direct panic sinks. When this overlaps with
 # trusted panic namespaces, the more precise namespace match wins; if
@@ -111,11 +111,11 @@ indirect-call-boundary = "warn"
 # suppresses requirements for calls to that callee.
 ignored-namespaces = []
 
-# Safe functions that should be treated as safety obligations at call sites.
-# If a matched function documents `# Safety` requirements, callers must satisfy
-# them with `// SAFETY:` requirement bullets. Otherwise callers must still add a
-# generic `// SAFETY:` justification.
-safety-obligation-namespaces = []
+# Trusted APIs whose implementations should be opaque. Their `# Safety`
+# documentation is assumed complete: documented requirements become caller
+# obligations, while an undocumented match is trusted as carrying none, even
+# when the function is declared `unsafe`.
+trusted-safety-boundary-namespaces = []
 
 [safety.lints]
 # `deny` emits an error and makes `cargo sniff-test` fail.

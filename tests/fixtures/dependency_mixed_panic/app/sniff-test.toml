@@ -5,4 +5,4 @@ panic-sink-namespaces = [
     "core::std::rt::panic_fmt",
     "std::rt::panic_fmt",
 ]
-trusted-panic-obligation-namespaces = ["dependency_mixed_panic::documented"]
+trusted-panic-boundary-namespaces = ["dependency_mixed_panic::documented"]

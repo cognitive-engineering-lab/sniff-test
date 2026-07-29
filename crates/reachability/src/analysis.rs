@@ -1,5 +1,4 @@
 use std::collections::{HashMap, HashSet, VecDeque};
-use std::ops::ControlFlow;
 
 use rustc_hir::def_id::{DefId, LocalDefId};
 use rustc_middle::ty::{GenericArgs, Instance, InstanceKind, TyCtxt};
@@ -12,7 +11,7 @@ use crate::graph::{
     ReachabilityGraph, ReachabilityNodeExpansion, ReachabilityNodeId, ReachabilityNodeKind,
     ReachabilitySnapshot,
 };
-use crate::hooks::{ReachabilityContext, ReachabilityControl, ReachabilityHalt, ReachabilityHooks};
+use crate::hooks::{ReachabilityHalt, ReachabilityHooks};
 
 /// Starting point for reachability analysis.
 #[derive(Debug, Clone, Copy)]
@@ -169,9 +168,9 @@ impl<'tcx> ReachabilityIndex<'tcx> {
     pub fn query<R, H>(
         &mut self,
         root: R,
-        hooks: &mut H,
+        hooks: &H,
         options: ReachabilityOptions,
-    ) -> ReachabilitySnapshot<'tcx>
+    ) -> ReachabilitySnapshot
     where
         R: IntoInstance<'tcx>,
         H: ReachabilityHooks<'tcx>,
@@ -189,7 +188,6 @@ impl<'tcx> ReachabilityIndex<'tcx> {
             pending_callable_calls: HashMap::new(),
             queue: VecDeque::from([QueueItem {
                 node_id: root_node_id,
-                current_instance: root,
                 depth: 0,
             }]),
             snapshot,
@@ -288,27 +286,26 @@ impl<'tcx> ReachabilityIndex<'tcx> {
 }
 
 #[derive(Debug, Clone, Copy)]
-struct QueueItem<'tcx> {
+struct QueueItem {
     node_id: ReachabilityNodeId,
-    current_instance: Instance<'tcx>,
     depth: usize,
 }
 
 struct ReachabilityQuery<'a, 'tcx, H> {
     index: &'a mut ReachabilityIndex<'tcx>,
     root: Instance<'tcx>,
-    hooks: &'a mut H,
+    hooks: &'a H,
     options: ReachabilityOptions,
     visited_instances: HashSet<Instance<'tcx>>,
     visited_bridge_nodes: HashSet<ReachabilityNodeId>,
-    pending_callable_calls: HashMap<CallableEdgeInfo<'tcx>, Vec<PendingCallableCallSite<'tcx>>>,
-    queue: VecDeque<QueueItem<'tcx>>,
-    snapshot: ReachabilitySnapshot<'tcx>,
+    pending_callable_calls: HashMap<CallableEdgeInfo<'tcx>, Vec<PendingCallableCallSite>>,
+    queue: VecDeque<QueueItem>,
+    snapshot: ReachabilitySnapshot,
 }
 
 #[derive(Debug, Clone, Copy)]
-struct PendingCallableCallSite<'tcx> {
-    item: QueueItem<'tcx>,
+struct PendingCallableCallSite {
+    item: QueueItem,
     edge_id: ReachabilityEdgeId,
 }
 
@@ -316,15 +313,12 @@ impl<'tcx, H> ReachabilityQuery<'_, 'tcx, H>
 where
     H: ReachabilityHooks<'tcx>,
 {
-    fn run(mut self) -> ReachabilitySnapshot<'tcx> {
-        if let ControlFlow::Break(halt) = self.traverse() {
-            self.snapshot.mark_halted(halt);
-        }
-
+    fn run(mut self) -> ReachabilitySnapshot {
+        self.traverse();
         self.snapshot
     }
 
-    fn traverse(&mut self) -> ReachabilityControl<'tcx> {
+    fn traverse(&mut self) {
         while let Some(item) = self.queue.pop_front() {
             if let Some(instance) = self.index.graph.node_instance(item.node_id) {
                 if self.visited_instances.contains(&instance) {
@@ -335,13 +329,12 @@ where
                     && self.visited_instances.len() >= limit
                 {
                     self.mark_node_limit_frontier(item.node_id);
-                    return ControlFlow::Break(ReachabilityHalt::NodeLimitReached { limit });
+                    self.snapshot
+                        .mark_halted(ReachabilityHalt::NodeLimitReached { limit });
+                    return;
                 }
 
                 self.visited_instances.insert(instance);
-
-                let cx = self.context(instance, item.depth);
-                self.hooks.on_node(cx)?;
 
                 if let Some(expansion) =
                     self.index
@@ -358,69 +351,50 @@ where
                 continue;
             }
 
-            self.visit_outgoing_edges(item)?;
+            self.visit_outgoing_edges(item);
         }
-
-        ControlFlow::Continue(())
     }
 
-    fn visit_outgoing_edges(&mut self, item: QueueItem<'tcx>) -> ReachabilityControl<'tcx> {
+    fn visit_outgoing_edges(&mut self, item: QueueItem) {
         let outgoing = self.index.graph.outgoing_edges(item.node_id).to_vec();
 
         for edge_id in outgoing {
             if self.index.graph.edge_parent(edge_id).is_some() {
                 continue;
             }
-            self.register_erased_callable_target(edge_id)?;
+            self.register_erased_callable_target(edge_id);
             let edge = self.index.graph.edge(edge_id);
             if !self.edge_matches_options(edge) {
                 continue;
             }
 
-            if self.accept_edge(item, edge_id)? {
-                self.register_callable_call_site(item, edge_id)?;
-            }
+            self.accept_edge(item, edge_id);
+            self.register_callable_call_site(item, edge_id);
         }
-
-        ControlFlow::Continue(())
     }
 
-    fn accept_edge(
-        &mut self,
-        item: QueueItem<'tcx>,
-        edge_id: ReachabilityEdgeId,
-    ) -> ReachabilityControl<'tcx, bool> {
+    fn accept_edge(&mut self, item: QueueItem, edge_id: ReachabilityEdgeId) {
         let edge = self.index.graph.edge(edge_id).clone();
-        let cx = self.context(item.current_instance, item.depth);
-        self.hooks.on_edge(cx, &edge)?;
-        if !self.hooks.should_record_edge(cx, &edge)? {
-            return ControlFlow::Continue(false);
-        }
-
         let first_reach = self
             .snapshot
             .record_edge(edge_id, edge.target, item.depth + 1);
         if let Some(target) = self.index.graph.node_instance(edge.target) {
-            let should_descend = self.hooks.should_descend(cx, &edge, target)?;
+            let should_descend = self.hooks.should_descend(self.index.tcx, target);
             if !should_descend {
                 self.snapshot
                     .record_expansion(edge.target, ReachabilityNodeExpansion::PolicyBoundary);
             } else if first_reach && !self.visited_instances.contains(&target) {
                 self.queue.push_back(QueueItem {
                     node_id: edge.target,
-                    current_instance: target,
                     depth: item.depth + 1,
                 });
             }
         } else if first_reach {
             self.queue.push_back(QueueItem {
                 node_id: edge.target,
-                current_instance: item.current_instance,
                 depth: item.depth + 1,
             });
         }
-
-        ControlFlow::Continue(true)
     }
 
     fn mark_node_limit_frontier(&mut self, current: ReachabilityNodeId) {
@@ -434,19 +408,16 @@ where
         }
     }
 
-    fn register_erased_callable_target(
-        &mut self,
-        edge_id: ReachabilityEdgeId,
-    ) -> ReachabilityControl<'tcx> {
+    fn register_erased_callable_target(&mut self, edge_id: ReachabilityEdgeId) {
         let edge = self.index.graph.edge(edge_id);
         let Some(callable) = self.index.graph.edge_callable(edge_id) else {
-            return ControlFlow::Continue(());
+            return;
         };
         if !is_callable_target_edge(edge.kind, callable) {
-            return ControlFlow::Continue(());
+            return;
         }
         let Some(target) = self.index.graph.node_instance(edge.target) else {
-            return ControlFlow::Continue(());
+            return;
         };
 
         for key in self.callable_target_keys(callable) {
@@ -463,32 +434,26 @@ where
                 .cloned()
                 .unwrap_or_default();
             for call_site in pending {
-                self.accept_callable_target_edge(call_site.item, call_site.edge_id, target)?;
+                self.accept_callable_target_edge(call_site.item, call_site.edge_id, target);
             }
         }
-
-        ControlFlow::Continue(())
     }
 
-    fn register_callable_call_site(
-        &mut self,
-        item: QueueItem<'tcx>,
-        edge_id: ReachabilityEdgeId,
-    ) -> ReachabilityControl<'tcx> {
+    fn register_callable_call_site(&mut self, item: QueueItem, edge_id: ReachabilityEdgeId) {
         if !matches!(
             self.index.graph.edge(edge_id).kind,
             ReachabilityEdgeKind::DirectCall
                 | ReachabilityEdgeKind::TailCall
                 | ReachabilityEdgeKind::IndirectCall
         ) {
-            return ControlFlow::Continue(());
+            return;
         }
 
         let Some(callable) = self.index.graph.edge_callable(edge_id) else {
-            return ControlFlow::Continue(());
+            return;
         };
         if !self.call_site_attribution_enabled(callable) {
-            return ControlFlow::Continue(());
+            return;
         }
 
         let call_site = PendingCallableCallSite { item, edge_id };
@@ -503,10 +468,8 @@ where
             .cloned()
             .unwrap_or_default();
         for target in targets {
-            self.accept_callable_target_edge(item, edge_id, target)?;
+            self.accept_callable_target_edge(item, edge_id, target);
         }
-
-        ControlFlow::Continue(())
     }
 
     fn call_site_attribution_enabled(&self, callable: CallableEdgeInfo<'tcx>) -> bool {
@@ -537,10 +500,10 @@ where
 
     fn accept_callable_target_edge(
         &mut self,
-        item: QueueItem<'tcx>,
+        item: QueueItem,
         call_edge_id: ReachabilityEdgeId,
         target: Instance<'tcx>,
-    ) -> ReachabilityControl<'tcx> {
+    ) {
         let call_edge = self.index.graph.edge(call_edge_id).clone();
         let callable = self
             .index
@@ -549,8 +512,7 @@ where
             .expect("callable target edges require callable parent metadata");
         let target_id = self.index.graph.node_for_instance(target);
         let edge_id = self.callable_target_edge_id(call_edge_id, &call_edge, target_id, callable);
-        self.accept_edge(item, edge_id)?;
-        ControlFlow::Continue(())
+        self.accept_edge(item, edge_id);
     }
 
     fn callable_target_edge_id(
@@ -616,16 +578,6 @@ where
             | crate::graph::ReachabilityEdgeKind::MacroExpansion
             | crate::graph::ReachabilityEdgeKind::Assert
             | crate::graph::ReachabilityEdgeKind::IndirectCall => true,
-        }
-    }
-
-    fn context(&self, current: Instance<'tcx>, depth: usize) -> ReachabilityContext<'tcx> {
-        ReachabilityContext {
-            tcx: self.index.tcx,
-            root: self.root,
-            current,
-            depth,
-            stats: self.snapshot.stats(),
         }
     }
 }

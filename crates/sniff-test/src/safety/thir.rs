@@ -176,6 +176,8 @@ impl<'a, 'tcx> UnsafeOpVisitor<'a, 'tcx> {
             return;
         };
         let inner_thir = inner_thir.borrow();
+        self.analysis
+            .inherit_effect_scopes(def.to_def_id(), self.effect_groups);
         let mut inner = UnsafeOpVisitor {
             tcx: self.tcx,
             thir: &inner_thir,
@@ -228,7 +230,7 @@ impl<'a, 'tcx> UnsafeOpVisitor<'a, 'tcx> {
     }
 
     /// Unsafe-fn and target-feature call detection, plus the tool's
-    /// configured-obligation policy (check_unsafety.rs:470-517).
+    /// documented-obligation policy (check_unsafety.rs:470-517).
     fn check_call(&mut self, expr: &'a Expr<'tcx>, fun: ExprId) {
         let fn_ty = self.thir[fun].ty;
         let sig = fn_ty.fn_sig(self.tcx);
@@ -423,7 +425,7 @@ impl<'a, 'tcx> Visitor<'a, 'tcx> for UnsafeOpVisitor<'a, 'tcx> {
             }
             BlockSafety::ExplicitUnsafe(hir_id) => {
                 let span = self.unsafe_block_span(hir_id, block.span);
-                let group = self.analysis.new_effect_group(span);
+                let group = self.analysis.new_safety_scope(self.owner.to_def_id(), span);
                 self.effect_groups.push(group);
                 self.safety_scopes.push(SafetyScope { marker_span: span });
                 visit::walk_block(self, block);
@@ -553,7 +555,7 @@ impl<'a, 'tcx> Visitor<'a, 'tcx> for UnsafeOpVisitor<'a, 'tcx> {
                 });
                 return; // don't visit the whole expression
             }
-            // check_unsafety.rs:470-517, plus the configured-obligation policy.
+            // check_unsafety.rs:470-517, plus the documented-obligation policy.
             ExprKind::Call { fun, .. } => {
                 self.check_call(expr, fun);
             }

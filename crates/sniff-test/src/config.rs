@@ -104,7 +104,7 @@ pub struct AnalysisConfig {
     /// Whether detailed reports include every edge in the triggering trace.
     pub show_full_stack_trace: bool,
     /// Current-crate functions selected as report roots.
-    pub report_roots: ReportRootSet,
+    pub report_roots: Spanned<ReportRootSet>,
     /// Whether rustc should emit integer overflow and invalid-shift checks.
     pub overflow_checks: OverflowChecks,
     /// Whether rustc should perform MIR inlining before analysis.
@@ -217,7 +217,7 @@ impl Default for AnalysisConfig {
     fn default() -> Self {
         Self {
             show_full_stack_trace: false,
-            report_roots: ReportRootSet::Public,
+            report_roots: Spanned::new(0..0, ReportRootSet::Public),
             overflow_checks: OverflowChecks::Profile,
             inline_mir: MirInlining::Off,
             callable_edge_attribution: CallableEdgeAttribution::ErasureSites,
@@ -352,8 +352,11 @@ pub struct PanicConfig {
     pub lints: PanicLintConfig,
     /// Namespaces whose internals are treated as opaque and suppressed.
     pub ignored_namespaces: PathPatterns,
-    /// Trusted callee namespaces treated as opaque panic-obligation boundaries.
-    pub trusted_panic_obligation_namespaces: PathPatterns,
+    /// Callee namespaces whose `# Panics` documentation is trusted as complete.
+    ///
+    /// Matching callees are opaque: documented panic conditions become caller
+    /// obligations, while undocumented callees are trusted as non-panicking.
+    pub trusted_panic_boundary_namespaces: PathPatterns,
     /// Callee paths treated as direct panic sinks.
     pub panic_sink_namespaces: PathPatterns,
     #[serde(skip)]
@@ -405,8 +408,11 @@ impl LintLevel {
 pub struct SafetyConfig {
     /// Namespaces whose safety findings should be suppressed.
     pub ignored_namespaces: PathPatterns,
-    /// Safe functions that should be treated as safety obligations at call sites.
-    pub safety_obligation_namespaces: PathPatterns,
+    /// Callee namespaces whose `# Safety` documentation is trusted as complete.
+    ///
+    /// Matching callees are opaque: documented safety conditions become caller
+    /// obligations, while undocumented callees are trusted as having none.
+    pub trusted_safety_boundary_namespaces: PathPatterns,
     pub lints: SafetyLintConfig,
     #[serde(skip)]
     pub documentation_overrides: ContractDocOverrides,
@@ -466,8 +472,8 @@ impl PanicConfig {
 
     #[must_use]
     #[cfg(test)]
-    fn trusts_panic_obligation_namespace(&self, namespace: &str) -> bool {
-        self.trusted_panic_obligation_namespaces.is_match(namespace)
+    fn trusts_panic_boundary_namespace(&self, namespace: &str) -> bool {
+        self.trusted_panic_boundary_namespaces.is_match(namespace)
     }
 
     #[must_use]
@@ -479,14 +485,14 @@ impl PanicConfig {
     #[must_use]
     pub fn panic_boundary_policy(&self, tcx: TyCtxt<'_>, def_id: DefId) -> PanicBoundaryPolicy {
         let sink = self.panic_sink_def_match(tcx, def_id);
-        let trusted = self.trusted_panic_obligation_def_match(tcx, def_id);
+        let trusted = self.trusted_panic_boundary_def_match(tcx, def_id);
 
         match (sink, trusted) {
             (Some(sink), Some(trusted)) if trusted.precision > sink.precision => {
-                PanicBoundaryPolicy::TrustedPanicObligation
+                PanicBoundaryPolicy::TrustedBoundary
             }
             (Some(_), Some(_) | None) => PanicBoundaryPolicy::PanicSink,
-            (None, Some(_)) => PanicBoundaryPolicy::TrustedPanicObligation,
+            (None, Some(_)) => PanicBoundaryPolicy::TrustedBoundary,
             (None, None) => PanicBoundaryPolicy::Normal,
         }
     }
@@ -495,12 +501,12 @@ impl PanicConfig {
         self.panic_sink_namespaces.best_def_match(tcx, def_id)
     }
 
-    fn trusted_panic_obligation_def_match(
+    fn trusted_panic_boundary_def_match(
         &self,
         tcx: TyCtxt<'_>,
         def_id: DefId,
     ) -> Option<PathPatternMatch<'_>> {
-        self.trusted_panic_obligation_namespaces
+        self.trusted_panic_boundary_namespaces
             .best_def_match(tcx, def_id)
     }
 }
@@ -535,21 +541,22 @@ impl SafetyConfig {
 
     #[must_use]
     #[cfg(test)]
-    fn marks_safety_obligation_namespace(&self, namespace: &str) -> bool {
-        self.safety_obligation_namespaces.is_match(namespace)
+    fn trusts_safety_boundary_namespace(&self, namespace: &str) -> bool {
+        self.trusted_safety_boundary_namespaces.is_match(namespace)
     }
 
     #[must_use]
-    pub fn marks_safety_obligation_def(&self, tcx: TyCtxt<'_>, def_id: DefId) -> bool {
-        self.safety_obligation_def_match(tcx, def_id).is_some()
+    pub fn trusts_safety_boundary_def(&self, tcx: TyCtxt<'_>, def_id: DefId) -> bool {
+        self.trusted_safety_boundary_def_match(tcx, def_id)
+            .is_some()
     }
 
-    fn safety_obligation_def_match(
+    fn trusted_safety_boundary_def_match(
         &self,
         tcx: TyCtxt<'_>,
         def_id: DefId,
     ) -> Option<PathPatternMatch<'_>> {
-        self.safety_obligation_namespaces
+        self.trusted_safety_boundary_namespaces
             .best_def_match(tcx, def_id)
     }
 }
@@ -557,7 +564,7 @@ impl SafetyConfig {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PanicBoundaryPolicy {
     PanicSink,
-    TrustedPanicObligation,
+    TrustedBoundary,
     Normal,
 }
 
@@ -584,16 +591,6 @@ impl ReportRootSet {
                 count => format!("{count} explicit paths"),
             },
         }
-    }
-
-    #[must_use]
-    pub fn source_span(&self) -> Option<Range<usize>> {
-        let Self::Explicit(roots) = self else {
-            return None;
-        };
-        let start = roots.first()?.source_span.start;
-        let end = roots.last()?.source_span.end;
-        Some(start..end)
     }
 }
 
@@ -794,7 +791,7 @@ mod tests {
         let parsed = SniffTestConfig::from_manifest_str(config).expect("manifest should parse");
 
         assert!(parsed.analysis.show_full_stack_trace);
-        assert_eq!(parsed.analysis.report_roots, ReportRootSet::All);
+        assert_eq!(parsed.analysis.report_roots.get_ref(), &ReportRootSet::All);
         assert_eq!(parsed.analysis.overflow_checks, OverflowChecks::On);
         assert_eq!(parsed.analysis.inline_mir, MirInlining::Profile);
         assert_eq!(
@@ -949,7 +946,7 @@ mod tests {
         let config = r#"
             [safety]
             ignored-namespaces = ["bindgen::**", "my_crate::ffi"]
-            safety-obligation-namespaces = ["ffi::safe_contract", "ffi::safe_method"]
+            trusted-safety-boundary-namespaces = ["ffi::safe_contract", "ffi::safe_method"]
 
             [safety.lints]
             missing-safety-docs = "allow"
@@ -983,17 +980,17 @@ mod tests {
         assert!(
             parsed
                 .safety
-                .marks_safety_obligation_namespace("ffi::safe_contract")
+                .trusts_safety_boundary_namespace("ffi::safe_contract")
         );
         assert!(
             parsed
                 .safety
-                .marks_safety_obligation_namespace("ffi::safe_method")
+                .trusts_safety_boundary_namespace("ffi::safe_method")
         );
         assert!(
             !parsed
                 .safety
-                .marks_safety_obligation_namespace("ffi::plain_safe")
+                .trusts_safety_boundary_namespace("ffi::plain_safe")
         );
         assert_eq!(parsed.safety.lints.missing_safety_docs, LintLevel::Allow);
         assert_eq!(
@@ -1049,9 +1046,9 @@ mod tests {
     }
 
     #[test]
-    fn trusted_panic_obligation_namespace_patterns_match_exact_names_paths_and_globs() {
+    fn trusted_panic_boundary_namespace_patterns_match_exact_names_paths_and_globs() {
         let config = PanicConfig {
-            trusted_panic_obligation_namespaces: path_patterns(&[
+            trusted_panic_boundary_namespaces: path_patterns(&[
                 "std",
                 "std::*",
                 "alloc::**",
@@ -1063,23 +1060,21 @@ mod tests {
             ..PanicConfig::default()
         };
 
-        assert!(config.trusts_panic_obligation_namespace("std"));
-        assert!(!config.trusts_panic_obligation_namespace("std::io::Error::new"));
-        assert!(config.trusts_panic_obligation_namespace("std::io"));
-        assert!(config.trusts_panic_obligation_namespace("alloc::vec::Vec::push"));
+        assert!(config.trusts_panic_boundary_namespace("std"));
+        assert!(!config.trusts_panic_boundary_namespace("std::io::Error::new"));
+        assert!(config.trusts_panic_boundary_namespace("std::io"));
+        assert!(config.trusts_panic_boundary_namespace("alloc::vec::Vec::push"));
         // Recursive patterns include the namespace root itself.
-        assert!(config.trusts_panic_obligation_namespace("alloc"));
-        assert!(config.trusts_panic_obligation_namespace("rustc_middle::ty::TyCtxt"));
-        assert!(config.trusts_panic_obligation_namespace("rustc_middle"));
-        assert!(config.trusts_panic_obligation_namespace("smallvec"));
-        assert!(config.trusts_panic_obligation_namespace("serde_json"));
-        assert!(
-            config.trusts_panic_obligation_namespace("core::char::methods::from_u32_unchecked")
-        );
-        assert!(!config.trusts_panic_obligation_namespace("rustix"));
-        assert!(!config.trusts_panic_obligation_namespace("smallalloc"));
-        assert!(!config.trusts_panic_obligation_namespace("serde_core"));
-        assert!(!config.trusts_panic_obligation_namespace("core::char::methods::from_u32"));
+        assert!(config.trusts_panic_boundary_namespace("alloc"));
+        assert!(config.trusts_panic_boundary_namespace("rustc_middle::ty::TyCtxt"));
+        assert!(config.trusts_panic_boundary_namespace("rustc_middle"));
+        assert!(config.trusts_panic_boundary_namespace("smallvec"));
+        assert!(config.trusts_panic_boundary_namespace("serde_json"));
+        assert!(config.trusts_panic_boundary_namespace("core::char::methods::from_u32_unchecked"));
+        assert!(!config.trusts_panic_boundary_namespace("rustix"));
+        assert!(!config.trusts_panic_boundary_namespace("smallalloc"));
+        assert!(!config.trusts_panic_boundary_namespace("serde_core"));
+        assert!(!config.trusts_panic_boundary_namespace("core::char::methods::from_u32"));
     }
 
     #[test]
@@ -1162,14 +1157,35 @@ mod tests {
         let parsed_all = SniffTestConfig::from_manifest_str(all).expect("manifest should parse");
         let parsed_explicit =
             SniffTestConfig::from_manifest_str(explicit).expect("manifest should parse");
-        assert_eq!(parsed_all.analysis.report_roots, ReportRootSet::All);
-        let ReportRootSet::Explicit(paths) = parsed_explicit.analysis.report_roots else {
+        assert_eq!(
+            parsed_all.analysis.report_roots.get_ref(),
+            &ReportRootSet::All
+        );
+        let ReportRootSet::Explicit(paths) = parsed_explicit.analysis.report_roots.get_ref() else {
             panic!("explicit report roots should parse as explicit paths");
         };
         assert_eq!(paths[0].path(), "test::a");
         assert_eq!(paths[1].path(), "test::b");
         assert_eq!(&explicit[paths[0].source_span()], "\"test::a\"");
         assert_eq!(&explicit[paths[1].source_span()], "\"test::b\"");
+    }
+
+    #[test]
+    fn report_roots_retain_the_entire_config_value_span() {
+        for (manifest, expected) in [
+            ("[analysis]\nreport-roots = \"all\"\n", "\"all\""),
+            ("[analysis]\nreport-roots = []\n", "[]"),
+            (
+                "[analysis]\nreport-roots = [\"test::a\", \"test::b\"]\n",
+                "[\"test::a\", \"test::b\"]",
+            ),
+        ] {
+            let parsed =
+                SniffTestConfig::from_manifest_str(manifest).expect("manifest should parse");
+            let span = parsed.analysis.report_roots.span();
+
+            assert_eq!(&manifest[span], expected);
+        }
     }
 
     #[test]

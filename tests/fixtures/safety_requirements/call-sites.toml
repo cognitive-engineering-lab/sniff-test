@@ -1,0 +1,11 @@
+[analysis]
+callable-edge-attribution = "call-sites"
+report-roots = [
+    "safety_requirements::safe_obligation_through_unsafe_pointer_satisfied",
+    "safety_requirements::unsafe_fn_pointer_named_requirement_missing",
+    "safety_requirements::unsafe_fn_pointer_named_requirement_satisfied",
+    "safety_requirements::unknown_unsafe_fn_pointer",
+]
+
+[panics.lints]
+indirect-call-boundary = "allow"

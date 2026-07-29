@@ -80,7 +80,7 @@ pub fn select_report_roots<'tcx>(
 ) -> ReportRootSelection<'tcx> {
     let mut roots = HashSet::new();
 
-    match &analysis_config.report_roots {
+    match analysis_config.report_roots.get_ref() {
         ReportRootSet::Public => {
             roots.extend(public_local_fn_defs(tcx));
         }
