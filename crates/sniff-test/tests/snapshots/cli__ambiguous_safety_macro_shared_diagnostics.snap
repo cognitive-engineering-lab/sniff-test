@@ -7,17 +7,6 @@ stdout:
 <empty>
 stderr:
     Checking ambiguous-safety v0.1.0 ([FIXTURE])
-error: `ambiguous_safety::read_duplicate` has an ambiguous `# Safety` requirement name
- --> src/lib.rs:7:1
-  |
-7 | /// - valid_ptr: pointer must be non-null.
-  | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `valid_ptr: pointer must be non-null.` normalizes to `valid ptr`
-8 | /// - valid_ptr: pointer must reference initialized memory.
-  | ----------------------------------------------------------- `valid_ptr: pointer must reference initialized memory.` normalizes to `valid ptr`
-  |
-  = note: multiple `# Safety` requirements normalize to `valid ptr`
-  = help: give each requirement a unique name, or set `ambiguous-effect-requirement = "allow"` under `[analysis.lints]`
-
 error: function `ambiguous_safety::reused_caller_marker_for_macro_expansion` has an ambiguous `// SAFETY:` marker
   --> src/lib.rs:91:1
    |
@@ -70,4 +59,4 @@ note: safety effect group 2 of 2 resolves to the same marker
    = help: give each unsafe block or operation its own marker, or set `ambiguous-effect-marker = "allow"` under `[analysis.lints]`
    = note: this error originates in the macro `perform_twice_without_marker` which comes from the expansion of the macro `call_perform_twice_with_one_marker` (in Nightly builds, run with -Z macro-backtrace for more info)
 
-error: could not compile `ambiguous-safety` (lib) due to 3 previous errors
+error: could not compile `ambiguous-safety` (lib) due to 2 previous errors

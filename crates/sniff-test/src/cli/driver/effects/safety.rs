@@ -21,7 +21,7 @@ use crate::namespace::canonical_namespace;
 use crate::report_roots::ReportRoot;
 use crate::safety::{SafetyAnalysis, SafetyEffectGroup, SafetyEvidence, safety_doc_summary};
 use crate::source_markers::{
-    EffectMarkerBlock, MarkerBlockKey, safety_effect_edge_marker_block, safety_span_marker_block,
+    EffectMarkerBlock, MarkerInstanceKey, safety_effect_edge_marker_block, safety_span_marker_block,
 };
 
 use super::cache::{EffectBoundary, rebase_cached_dependency_finding, safety_boundaries};
@@ -635,7 +635,7 @@ fn safety_ambiguity_findings<Group>(
     tcx: TyCtxt<'_>,
     root: ReportRoot<'_>,
     config: &crate::config::SafetyConfig,
-    marker_claims: Vec<(MarkerBlockKey, Span, Group)>,
+    marker_claims: Vec<(MarkerInstanceKey, Span, Group)>,
     effect_span: impl Fn(Group) -> Span + Copy,
 ) -> Vec<Finding>
 where

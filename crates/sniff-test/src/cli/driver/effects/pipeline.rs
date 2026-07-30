@@ -21,7 +21,7 @@ use crate::effect_tracker::{
     resolve_effect_paths,
 };
 use crate::report_roots::ReportRoot;
-use crate::source_markers::{EffectMarkerBlock, MarkerBlockKey};
+use crate::source_markers::{EffectMarkerBlock, MarkerInstanceKey};
 
 /// Inputs shared by every stage of one effect analysis over one graph view.
 #[derive(Clone, Copy)]
@@ -87,7 +87,7 @@ pub(super) struct EffectSource<S> {
 /// Marker use attributed to one semantic effect group.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) struct MarkerClaim {
-    pub(super) key: MarkerBlockKey,
+    pub(super) key: MarkerInstanceKey,
     pub(super) span: Span,
     pub(super) edge_id: Option<ReachabilityEdgeId>,
     pub(super) group: EffectGroupId,

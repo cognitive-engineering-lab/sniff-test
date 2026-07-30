@@ -11,35 +11,9 @@ expression: messages
     "dependencies": [],
     "findings": [
       {
-        "function": "ambiguous_safety::read_duplicate",
-        "kind": "ambiguous-safety-requirement",
-        "level": "warn",
-        "reason": "`ambiguous_safety::read_duplicate` has multiple # Safety requirements named `valid ptr`",
-        "requirements": [
-          "valid_ptr: pointer must be non-null.",
-          "valid_ptr: pointer must reference initialized memory."
-        ],
-        "root": "ambiguous_safety::duplicate_safety_marker",
-        "root-kind": "concrete",
-        "span": "src/lib.rs:7:1: 7:43"
-      },
-      {
-        "function": "ambiguous_safety::read_duplicate",
-        "kind": "ambiguous-safety-requirement",
-        "level": "warn",
-        "reason": "`ambiguous_safety::read_duplicate` has multiple # Safety requirements named `valid ptr`",
-        "requirements": [
-          "valid_ptr: pointer must be non-null.",
-          "valid_ptr: pointer must reference initialized memory."
-        ],
-        "root": "ambiguous_safety::read_duplicate",
-        "root-kind": "concrete",
-        "span": "src/lib.rs:7:1: 7:43"
-      },
-      {
         "function": "ambiguous_safety::reused_caller_marker_for_macro_expansion",
         "kind": "ambiguous-safety-marker",
-        "level": "warn",
+        "level": "deny",
         "reason": "one `// SAFETY:` marker applies to 2 safety effect groups",
         "root": "ambiguous_safety::reused_caller_marker_for_macro_expansion",
         "root-kind": "concrete",
@@ -48,7 +22,7 @@ expression: messages
       {
         "function": "ambiguous_safety::reused_marker_within_one_macro_expansion",
         "kind": "ambiguous-safety-marker",
-        "level": "warn",
+        "level": "deny",
         "reason": "one `// SAFETY:` marker applies to 2 safety effect groups",
         "root": "ambiguous_safety::reused_marker_within_one_macro_expansion",
         "root-kind": "concrete",

@@ -337,6 +337,13 @@ fixture_cases! {
             .args(&["--manifest", "warn.toml"]);
         ambiguous_safety_strict => Case::cargo("ambiguous safety default error policy")
             .exit_code(101);
+        ambiguous_safety_macro_instances =>
+            Case::cargo("definition-site safety markers are scoped to macro instances")
+                .args(&["--manifest", "macro-instances.toml"]);
+        ambiguous_safety_macro_shared =>
+            Case::cargo("shared safety markers remain ambiguous within one occurrence")
+                .args(&["--manifest", "macro-shared.toml"])
+                .exit_code(101);
         driver_ambiguous_safety_strict => Case::direct("ambiguous safety default error policy");
     }
     "safety_requirements" => {

@@ -109,6 +109,10 @@ cli_cases! {
     }
     "ambiguous_safety" => {
         ambiguous_safety_diagnostics => Case::new("ambiguous safety diagnostics").exit_code(101);
+        ambiguous_safety_macro_shared_diagnostics =>
+            Case::new("shared macro safety marker diagnostics")
+                .args(&["--manifest", "macro-shared.toml"])
+                .exit_code(101);
     }
 }
 

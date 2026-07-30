@@ -5,7 +5,7 @@ use rustc_hir::def_id::LocalDefId;
 use rustc_middle::thir::visit::{self, Visitor};
 use rustc_middle::thir::{Block, Thir};
 use rustc_middle::ty::TyCtxt;
-use rustc_span::{SourceFile, Span};
+use rustc_span::{ExpnId, ExpnKind, SourceFile, Span};
 
 use crate::config::MarkerProbing;
 use crate::contracts::MarkerSatisfaction;
@@ -39,11 +39,47 @@ pub(crate) struct MarkerBlockKey {
     pub end_line: usize,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub(crate) enum MarkerOrigin {
+    Source,
+    Macro(ExpnId),
+}
+
+/// Identity of one logical marker occurrence.
+///
+/// A physical comment block in a macro definition becomes a distinct marker
+/// each time that macro is expanded.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub(crate) struct MarkerInstanceKey {
+    pub physical_block: MarkerBlockKey,
+    pub origin: MarkerOrigin,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct EffectMarkerBlock {
-    pub key: MarkerBlockKey,
+    pub key: MarkerInstanceKey,
     pub span: Span,
     pub satisfactions: Vec<MarkerSatisfaction>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ParsedMarkerBlock {
+    key: MarkerBlockKey,
+    span: Span,
+    satisfactions: Vec<MarkerSatisfaction>,
+}
+
+impl ParsedMarkerBlock {
+    fn instantiate(self, origin: MarkerOrigin) -> EffectMarkerBlock {
+        EffectMarkerBlock {
+            key: MarkerInstanceKey {
+                physical_block: self.key,
+                origin,
+            },
+            span: self.span,
+            satisfactions: self.satisfactions,
+        }
+    }
 }
 
 #[must_use]
@@ -222,10 +258,10 @@ fn spans_start_on_same_line(tcx: TyCtxt<'_>, left: Span, right: Span) -> bool {
 // per-root traversal re-scans its lines without this.
 thread_local! {
     static PANIC_MARKER_BLOCK_CACHE: std::cell::RefCell<
-        std::collections::HashMap<(u32, usize), Option<EffectMarkerBlock>>,
+        std::collections::HashMap<(u32, usize), Option<ParsedMarkerBlock>>,
     > = std::cell::RefCell::new(std::collections::HashMap::new());
     static SAFETY_MARKER_BLOCK_CACHE: std::cell::RefCell<
-        std::collections::HashMap<(u32, usize), Option<EffectMarkerBlock>>,
+        std::collections::HashMap<(u32, usize), Option<ParsedMarkerBlock>>,
     > = std::cell::RefCell::new(std::collections::HashMap::new());
 }
 
@@ -258,6 +294,20 @@ fn push_unique_probe_span(spans: &mut Vec<Span>, span: Span) {
     spans.push(span);
 }
 
+fn marker_origin(probe_span: Span) -> MarkerOrigin {
+    // Use the nearest real macro expansion on the span that found the marker.
+    // Compiler passes and desugarings do not instantiate source comments.
+    probe_span
+        .ctxt()
+        .marks()
+        .into_iter()
+        .rev()
+        .find_map(|(expn_id, _)| {
+            matches!(expn_id.expn_data().kind, ExpnKind::Macro(..)).then_some(expn_id)
+        })
+        .map_or(MarkerOrigin::Source, MarkerOrigin::Macro)
+}
+
 fn span_marker_block_at(
     tcx: TyCtxt<'_>,
     span: Span,
@@ -266,7 +316,7 @@ fn span_marker_block_at(
     let location = tcx.sess.source_map().lookup_char_pos(span.lo());
     let line_index = location.line.saturating_sub(1);
     let key = (location.file.start_pos.0, line_index);
-    match syntax {
+    let parsed = match syntax {
         MarkerSyntax::Panic => PANIC_MARKER_BLOCK_CACHE.with_borrow_mut(|cache| {
             cache
                 .entry(key)
@@ -279,7 +329,8 @@ fn span_marker_block_at(
                 .or_insert_with(|| marker_block_at(&location.file, line_index, syntax))
                 .clone()
         }),
-    }
+    };
+    parsed.map(|block| block.instantiate(marker_origin(span)))
 }
 
 #[must_use]
@@ -339,7 +390,7 @@ fn marker_block_at(
     file: &SourceFile,
     line_index: usize,
     syntax: MarkerSyntax,
-) -> Option<EffectMarkerBlock> {
+) -> Option<ParsedMarkerBlock> {
     let mut block = preceding_marker_block(file, line_index, syntax);
     let line_satisfactions = source_line_satisfactions(file, line_index, syntax);
     if line_satisfactions.is_empty() {
@@ -351,7 +402,7 @@ fn marker_block_at(
         return Some(block.clone());
     }
 
-    Some(EffectMarkerBlock {
+    Some(ParsedMarkerBlock {
         key: MarkerBlockKey {
             file_start: file.start_pos.0,
             start_line: line_index,
@@ -366,14 +417,14 @@ fn preceding_marker_block(
     file: &SourceFile,
     line_index: usize,
     syntax: MarkerSyntax,
-) -> Option<EffectMarkerBlock> {
+) -> Option<ParsedMarkerBlock> {
     let block = preceding_comment_block(file, line_index)?;
     let satisfactions = comment_block_satisfactions(&block.lines, syntax);
     if satisfactions.is_empty() {
         return None;
     }
 
-    Some(EffectMarkerBlock {
+    Some(ParsedMarkerBlock {
         key: MarkerBlockKey {
             file_start: file.start_pos.0,
             start_line: block.start_line,

@@ -13,7 +13,7 @@ use rustc_span::Span;
 use crate::contracts::{
     ContractCheck, ContractRequirement, check_contract, normalize_requirement_name,
 };
-use crate::source_markers::{EffectMarkerBlock, MarkerBlockKey};
+use crate::source_markers::{EffectMarkerBlock, MarkerInstanceKey};
 
 /// Source-level location of an effect detected inside one function body.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -57,7 +57,7 @@ pub(crate) struct EffectEvidence<Endpoint, Details> {
 
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct ResolvedEffectMarker {
-    pub(crate) key: MarkerBlockKey,
+    pub(crate) key: MarkerInstanceKey,
     pub(crate) span: Span,
     pub(crate) edge_id: Option<ReachabilityEdgeId>,
 }
@@ -344,14 +344,23 @@ pub(crate) struct AmbiguousMarkerUse<Group> {
 }
 
 pub(crate) fn ambiguous_marker_uses<Group>(
-    claims: impl IntoIterator<Item = (MarkerBlockKey, Span, Group)>,
+    claims: impl IntoIterator<Item = (MarkerInstanceKey, Span, Group)>,
 ) -> Vec<AmbiguousMarkerUse<Group>>
 where
     Group: Copy + Eq + Hash,
 {
-    let mut uses: HashMap<MarkerBlockKey, (Span, Vec<Group>)> = HashMap::new();
+    // Separate macro instances can render at the same physical span, and
+    // `ExpnId` intentionally has no ordering. Preserve first-seen order for
+    // those ties while retaining constant-time grouping.
+    let mut use_indices = HashMap::<MarkerInstanceKey, usize>::new();
+    let mut uses = Vec::<(MarkerInstanceKey, Span, Vec<Group>)>::new();
     for (key, marker_span, group) in claims {
-        let groups = &mut uses.entry(key).or_insert((marker_span, Vec::new())).1;
+        let index = *use_indices.entry(key).or_insert_with(|| {
+            let index = uses.len();
+            uses.push((key, marker_span, Vec::new()));
+            index
+        });
+        let groups = &mut uses[index].2;
         if !groups.contains(&group) {
             groups.push(group);
         }
@@ -359,7 +368,7 @@ where
 
     let mut ambiguous = uses
         .into_iter()
-        .filter_map(|(key, (marker_span, groups))| {
+        .filter_map(|(key, marker_span, groups)| {
             (groups.len() > 1).then_some((
                 key,
                 AmbiguousMarkerUse {
@@ -374,9 +383,9 @@ where
         (
             span.lo().0,
             span.hi().0,
-            key.file_start,
-            key.start_line,
-            key.end_line,
+            key.physical_block.file_start,
+            key.physical_block.start_line,
+            key.physical_block.end_line,
         )
     });
     ambiguous
@@ -631,12 +640,25 @@ pub(crate) enum EffectPathDecision {
 
 #[cfg(test)]
 mod tests {
-    use rustc_span::{BytePos, DUMMY_SP, Span};
+    use rustc_span::{BytePos, DUMMY_SP, ExpnId, Span};
 
     use crate::contracts::{ContractCheck, ContractRequirement, MarkerSatisfaction};
-    use crate::source_markers::{EffectMarkerBlock, MarkerBlockKey};
+    use crate::source_markers::{
+        EffectMarkerBlock, MarkerBlockKey, MarkerInstanceKey, MarkerOrigin,
+    };
 
     use super::{PathIndex, ambiguous_marker_uses, resolve_effect_evidence};
+
+    fn source_marker_key(file_start: u32, start_line: usize, end_line: usize) -> MarkerInstanceKey {
+        MarkerInstanceKey {
+            physical_block: MarkerBlockKey {
+                file_start,
+                start_line,
+                end_line,
+            },
+            origin: MarkerOrigin::Source,
+        }
+    }
 
     #[test]
     fn path_edge_collection_includes_all_converging_routes() {
@@ -691,11 +713,7 @@ mod tests {
             .into_iter()
             .enumerate()
             .flat_map(|(index, start)| {
-                let key = MarkerBlockKey {
-                    file_start: 1,
-                    start_line: index,
-                    end_line: index,
-                };
+                let key = source_marker_key(1, index, index);
                 let span = Span::with_root_ctxt(BytePos(start), BytePos(start + 1));
                 [(key, span, 0_u8), (key, span, 1_u8)]
             });
@@ -709,13 +727,32 @@ mod tests {
     }
 
     #[test]
+    fn ambiguous_marker_instances_at_one_source_span_keep_first_seen_order() {
+        let source_key = source_marker_key(1, 2, 3);
+        let macro_key = MarkerInstanceKey {
+            physical_block: source_key.physical_block,
+            // A real macro never uses the root ID; this test only needs a
+            // distinct `MarkerOrigin` variant.
+            origin: MarkerOrigin::Macro(ExpnId::root()),
+        };
+        let span = Span::with_root_ctxt(BytePos(10), BytePos(11));
+
+        let uses = ambiguous_marker_uses([
+            (macro_key, span, 2_u8),
+            (source_key, span, 0_u8),
+            (macro_key, span, 3_u8),
+            (source_key, span, 1_u8),
+        ]);
+
+        assert_eq!(uses.len(), 2);
+        assert_eq!(uses[0].groups, vec![2, 3]);
+        assert_eq!(uses[1].groups, vec![0, 1]);
+    }
+
+    #[test]
     fn evidence_resolution_checks_named_requirements_and_returns_claimed_markers() {
         let marker = EffectMarkerBlock {
-            key: MarkerBlockKey {
-                file_start: 1,
-                start_line: 2,
-                end_line: 3,
-            },
+            key: source_marker_key(1, 2, 3),
             span: DUMMY_SP,
             satisfactions: vec![MarkerSatisfaction {
                 requirement: Some(String::from("valid_ptr")),
@@ -739,11 +776,7 @@ mod tests {
     #[test]
     fn unresolved_evidence_does_not_claim_markers() {
         let marker = EffectMarkerBlock {
-            key: MarkerBlockKey {
-                file_start: 1,
-                start_line: 2,
-                end_line: 3,
-            },
+            key: source_marker_key(1, 2, 3),
             span: DUMMY_SP,
             satisfactions: Vec::new(),
         };
@@ -756,11 +789,7 @@ mod tests {
     #[test]
     fn evidence_resolution_claims_only_markers_that_satisfy_the_contract() {
         let unrelated = EffectMarkerBlock {
-            key: MarkerBlockKey {
-                file_start: 1,
-                start_line: 2,
-                end_line: 3,
-            },
+            key: source_marker_key(1, 2, 3),
             span: DUMMY_SP,
             satisfactions: vec![MarkerSatisfaction {
                 requirement: Some(String::from("initialized")),
@@ -768,11 +797,7 @@ mod tests {
             }],
         };
         let relevant = EffectMarkerBlock {
-            key: MarkerBlockKey {
-                file_start: 1,
-                start_line: 4,
-                end_line: 5,
-            },
+            key: source_marker_key(1, 4, 5),
             span: DUMMY_SP,
             satisfactions: vec![MarkerSatisfaction {
                 requirement: Some(String::from("valid_ptr")),
@@ -796,11 +821,7 @@ mod tests {
     #[test]
     fn evidence_resolution_claims_markers_that_partially_satisfy_the_contract() {
         let marker = EffectMarkerBlock {
-            key: MarkerBlockKey {
-                file_start: 1,
-                start_line: 2,
-                end_line: 3,
-            },
+            key: source_marker_key(1, 2, 3),
             span: DUMMY_SP,
             satisfactions: vec![MarkerSatisfaction {
                 requirement: Some(String::from("initialized")),
