@@ -16,7 +16,7 @@ error: `ambiguous_safety::read_duplicate` has an ambiguous `# Safety` requiremen
   | ----------------------------------------------------------- `valid_ptr: pointer must reference initialized memory.` normalizes to `valid ptr`
   |
   = note: multiple `# Safety` requirements normalize to `valid ptr`
-  = help: give each requirement a unique name, or set `ambiguous-effect-requirement = "allow"` under `[analysis.lints]`
+  = help: give each requirement a unique name, or set `ambiguous-safety-requirement = "allow"` under `[analysis.lints]`
 
 error: function `ambiguous_safety::reused_caller_marker_for_macro_expansion` has an ambiguous `// SAFETY:` marker
   --> src/lib.rs:91:1
@@ -41,7 +41,7 @@ note: safety effect group 2 of 2 resolves to the same marker
 ...
 92 |     call_perform_twice_without_marker!();
    |     ------------------------------------ in this macro invocation
-   = help: give each unsafe block or operation its own marker, or set `ambiguous-effect-marker = "allow"` under `[analysis.lints]`
+   = help: give each unsafe block or operation its own marker, or set `ambiguous-safety-marker = "allow"` under `[analysis.lints]`
    = note: this error originates in the macro `perform_once_without_marker` which comes from the expansion of the macro `call_perform_twice_without_marker` (in Nightly builds, run with -Z macro-backtrace for more info)
 
 error: function `ambiguous_safety::reused_marker_within_one_macro_expansion` has an ambiguous `// SAFETY:` marker
@@ -67,7 +67,7 @@ note: safety effect group 2 of 2 resolves to the same marker
 ...
 74 |     call_perform_twice_with_one_marker!();
    |     ------------------------------------- in this macro invocation
-   = help: give each unsafe block or operation its own marker, or set `ambiguous-effect-marker = "allow"` under `[analysis.lints]`
+   = help: give each unsafe block or operation its own marker, or set `ambiguous-safety-marker = "allow"` under `[analysis.lints]`
    = note: this error originates in the macro `perform_twice_without_marker` which comes from the expansion of the macro `call_perform_twice_with_one_marker` (in Nightly builds, run with -Z macro-backtrace for more info)
 
 error: could not compile `ambiguous-safety` (lib) due to 3 previous errors

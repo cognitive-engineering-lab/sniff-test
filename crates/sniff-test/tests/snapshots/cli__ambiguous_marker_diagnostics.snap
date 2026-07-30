@@ -16,7 +16,7 @@ error: function `ambiguous_markers::duplicate_name_marker` reaches an ambiguous 
    | --------------------------------------------------- `nonzero: total must be bounded by the caller.` normalizes to `nonzero`
    |
    = note: `ambiguous_markers::duplicate_name_ratio` has multiple `# Panics` requirements that normalize to `nonzero`
-   = help: give each requirement a unique name, or set `ambiguous-effect-requirement = "allow"` under `[analysis.lints]`
+   = help: give each requirement a unique name, or set `ambiguous-panic-requirement = "allow"` under `[analysis.lints]`
 
 warning: function `ambiguous_markers::marker_on_noncanonical_route` may panic through a documented panic
   --> src/lib.rs:34:5
@@ -60,7 +60,7 @@ note: this obligation also resolves to the same marker: ambiguous_markers::share
    |
 34 |     ratio(total, denominator)
    |     ^^^^^^^^^^^^^^^^^^^^^^^^^
-   = help: move the marker directly above one obligation, split it into separate markers, or set `ambiguous-effect-marker = "allow"` under `[analysis.lints]`
+   = help: move the marker directly above one obligation, split it into separate markers, or set `ambiguous-panic-marker = "allow"` under `[analysis.lints]`
 
 error: function `ambiguous_markers::shared_block_marker` has an ambiguous `// PANIC:` marker
   --> src/lib.rs:9:1
@@ -79,7 +79,7 @@ note: this obligation also resolves to the same marker: ambiguous_markers::share
    |
 12 |         let second = ratio(b, denominator);
    |                      ^^^^^^^^^^^^^^^^^^^^^
-   = help: move the marker directly above one obligation, split it into separate markers, or set `ambiguous-effect-marker = "allow"` under `[analysis.lints]`
+   = help: move the marker directly above one obligation, split it into separate markers, or set `ambiguous-panic-marker = "allow"` under `[analysis.lints]`
 
 warning: `ambiguous-markers` (lib) generated 1 warning
 error: could not compile `ambiguous-markers` (lib) due to 3 previous errors; 1 warning emitted

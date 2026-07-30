@@ -29,14 +29,18 @@ marker-probing = "macro-definition-first"
 # Ambiguous requirement names and shared proof markers default to failing closed.
 #
 # Instance budget per reachability query. Traversals that halt at the limit are
-# reported through the `analysis-incomplete` lint instead of passing silently.
+# reported through the effect-specific analysis-incomplete lint instead of
+# passing silently.
 node-limit = 4096
 
 [analysis.lints]
-analysis-incomplete = "deny"
+panic-analysis-incomplete = "deny"
+safety-analysis-incomplete = "deny"
 # Use `warn` while auditing, or `allow` to accept squashed evidence.
-ambiguous-effect-marker = "deny"
-ambiguous-effect-requirement = "deny"
+ambiguous-panic-marker = "deny"
+ambiguous-safety-marker = "deny"
+ambiguous-panic-requirement = "deny"
+ambiguous-safety-requirement = "deny"
 # Report-root selection problems warn by default.
 empty-report-roots = "warn"
 missing-report-root = "warn"

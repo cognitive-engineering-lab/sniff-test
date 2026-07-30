@@ -171,15 +171,12 @@ impl FindingKind {
             Self::DocumentedPanic => config.panics.lints.documented_panic,
             Self::TrustedPanic => config.panics.lints.trusted_panic,
             Self::IndirectCallBoundary => config.panics.lints.indirect_call_boundary,
-            Self::AmbiguousPanicMarker | Self::AmbiguousSafetyMarker => {
-                config.analysis.lints.ambiguous_effect_marker
-            }
-            Self::AmbiguousPanicRequirement | Self::AmbiguousSafetyRequirement => {
-                config.analysis.lints.ambiguous_effect_requirement
-            }
-            Self::PanicAnalysisIncomplete | Self::SafetyAnalysisIncomplete => {
-                config.analysis.lints.analysis_incomplete
-            }
+            Self::AmbiguousPanicMarker => config.analysis.lints.ambiguous_panic_marker,
+            Self::AmbiguousSafetyMarker => config.analysis.lints.ambiguous_safety_marker,
+            Self::AmbiguousPanicRequirement => config.analysis.lints.ambiguous_panic_requirement,
+            Self::AmbiguousSafetyRequirement => config.analysis.lints.ambiguous_safety_requirement,
+            Self::PanicAnalysisIncomplete => config.analysis.lints.panic_analysis_incomplete,
+            Self::SafetyAnalysisIncomplete => config.analysis.lints.safety_analysis_incomplete,
             Self::EmptyReportRoots => config.analysis.lints.empty_report_roots,
             Self::MissingReportRoot => config.analysis.lints.missing_report_root,
             Self::MissingSafetyDocs => config.safety.lints.missing_safety_docs,
@@ -448,28 +445,54 @@ mod tests {
     }
 
     #[test]
-    fn contextual_kinds_share_the_existing_analysis_lint_policy() {
-        let mut config = SniffTestConfig::default();
-        config.analysis.lints.ambiguous_effect_marker = LintLevel::Warn;
-        config.analysis.lints.ambiguous_effect_requirement = LintLevel::Deny;
-        config.analysis.lints.analysis_incomplete = LintLevel::Allow;
+    fn contextual_kinds_use_their_granular_analysis_lint_policy() {
+        const CONTEXTUAL_KINDS: [FindingKind; 6] = [
+            FindingKind::AmbiguousPanicMarker,
+            FindingKind::AmbiguousSafetyMarker,
+            FindingKind::AmbiguousPanicRequirement,
+            FindingKind::AmbiguousSafetyRequirement,
+            FindingKind::PanicAnalysisIncomplete,
+            FindingKind::SafetyAnalysisIncomplete,
+        ];
 
-        let resolved = resolve_findings(
-            vec![
-                finding(FindingKind::AmbiguousPanicMarker),
-                finding(FindingKind::AmbiguousSafetyMarker),
-                finding(FindingKind::AmbiguousPanicRequirement),
-                finding(FindingKind::AmbiguousSafetyRequirement),
-                finding(FindingKind::PanicAnalysisIncomplete),
-                finding(FindingKind::SafetyAnalysisIncomplete),
-            ],
-            &config,
-        );
+        type ConfigureLint = fn(&mut SniffTestConfig);
+        let cases: [(FindingKind, ConfigureLint); 6] = [
+            (FindingKind::AmbiguousPanicMarker, |config| {
+                config.analysis.lints.ambiguous_panic_marker = LintLevel::Allow;
+            }),
+            (FindingKind::AmbiguousSafetyMarker, |config| {
+                config.analysis.lints.ambiguous_safety_marker = LintLevel::Allow;
+            }),
+            (FindingKind::AmbiguousPanicRequirement, |config| {
+                config.analysis.lints.ambiguous_panic_requirement = LintLevel::Allow;
+            }),
+            (FindingKind::AmbiguousSafetyRequirement, |config| {
+                config.analysis.lints.ambiguous_safety_requirement = LintLevel::Allow;
+            }),
+            (FindingKind::PanicAnalysisIncomplete, |config| {
+                config.analysis.lints.panic_analysis_incomplete = LintLevel::Allow;
+            }),
+            (FindingKind::SafetyAnalysisIncomplete, |config| {
+                config.analysis.lints.safety_analysis_incomplete = LintLevel::Allow;
+            }),
+        ];
 
-        assert_eq!(resolved.len(), 4);
-        assert_eq!(resolved[0].level, LintLevel::Warn);
-        assert_eq!(resolved[1].level, LintLevel::Warn);
-        assert_eq!(resolved[2].level, LintLevel::Deny);
-        assert_eq!(resolved[3].level, LintLevel::Deny);
+        for (allowed_kind, allow) in cases {
+            let mut config = SniffTestConfig::default();
+            allow(&mut config);
+
+            for kind in CONTEXTUAL_KINDS {
+                let expected = if kind == allowed_kind {
+                    LintLevel::Allow
+                } else {
+                    LintLevel::Deny
+                };
+                assert_eq!(
+                    kind.lint_level(&config),
+                    expected,
+                    "{kind:?} must resolve only its own granular analysis lint"
+                );
+            }
+        }
     }
 }

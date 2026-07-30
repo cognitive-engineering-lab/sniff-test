@@ -25,7 +25,7 @@ use reachability::{
 };
 use rustc_hir::def_id::DefId;
 use rustc_middle::ty::TyCtxt;
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
 use toml::Spanned;
 
 use crate::contracts::ContractDocOverrides;
@@ -118,7 +118,7 @@ pub struct AnalysisConfig {
     /// User-facing severity for analyzer-wide finding classes.
     pub lints: AnalysisLintConfig,
     /// Instance budget per reachability query; halting at the limit is
-    /// surfaced through the `analysis-incomplete` lint.
+    /// surfaced through the effect-specific analysis-incomplete lint.
     pub node_limit: usize,
 }
 
@@ -239,12 +239,15 @@ pub enum MarkerProbing {
     MacroDefinitionFirst,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
-#[serde(rename_all = "kebab-case", deny_unknown_fields, default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "kebab-case")]
 pub struct AnalysisLintConfig {
-    pub ambiguous_effect_marker: LintLevel,
-    pub ambiguous_effect_requirement: LintLevel,
-    pub analysis_incomplete: LintLevel,
+    pub ambiguous_panic_marker: LintLevel,
+    pub ambiguous_safety_marker: LintLevel,
+    pub ambiguous_panic_requirement: LintLevel,
+    pub ambiguous_safety_requirement: LintLevel,
+    pub panic_analysis_incomplete: LintLevel,
+    pub safety_analysis_incomplete: LintLevel,
     pub empty_report_roots: LintLevel,
     pub missing_report_root: LintLevel,
 }
@@ -252,13 +255,75 @@ pub struct AnalysisLintConfig {
 impl Default for AnalysisLintConfig {
     fn default() -> Self {
         Self {
-            ambiguous_effect_marker: LintLevel::Deny,
-            ambiguous_effect_requirement: LintLevel::Deny,
+            ambiguous_panic_marker: LintLevel::Deny,
+            ambiguous_safety_marker: LintLevel::Deny,
+            ambiguous_panic_requirement: LintLevel::Deny,
+            ambiguous_safety_requirement: LintLevel::Deny,
             // A truncated traversal proves nothing about the missing region.
-            analysis_incomplete: LintLevel::Deny,
+            panic_analysis_incomplete: LintLevel::Deny,
+            safety_analysis_incomplete: LintLevel::Deny,
             empty_report_roots: LintLevel::Warn,
             missing_report_root: LintLevel::Warn,
         }
+    }
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(rename_all = "kebab-case", deny_unknown_fields, default)]
+struct RawAnalysisLintConfig {
+    ambiguous_panic_marker: Option<LintLevel>,
+    ambiguous_safety_marker: Option<LintLevel>,
+    ambiguous_panic_requirement: Option<LintLevel>,
+    ambiguous_safety_requirement: Option<LintLevel>,
+    panic_analysis_incomplete: Option<LintLevel>,
+    safety_analysis_incomplete: Option<LintLevel>,
+    empty_report_roots: Option<LintLevel>,
+    missing_report_root: Option<LintLevel>,
+    // Backward-compatible group defaults. Exact finding keys take precedence.
+    ambiguous_effect_marker: Option<LintLevel>,
+    ambiguous_effect_requirement: Option<LintLevel>,
+    analysis_incomplete: Option<LintLevel>,
+}
+
+impl<'de> Deserialize<'de> for AnalysisLintConfig {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let raw = RawAnalysisLintConfig::deserialize(deserializer)?;
+        let defaults = Self::default();
+        Ok(Self {
+            ambiguous_panic_marker: raw
+                .ambiguous_panic_marker
+                .or(raw.ambiguous_effect_marker)
+                .unwrap_or(defaults.ambiguous_panic_marker),
+            ambiguous_safety_marker: raw
+                .ambiguous_safety_marker
+                .or(raw.ambiguous_effect_marker)
+                .unwrap_or(defaults.ambiguous_safety_marker),
+            ambiguous_panic_requirement: raw
+                .ambiguous_panic_requirement
+                .or(raw.ambiguous_effect_requirement)
+                .unwrap_or(defaults.ambiguous_panic_requirement),
+            ambiguous_safety_requirement: raw
+                .ambiguous_safety_requirement
+                .or(raw.ambiguous_effect_requirement)
+                .unwrap_or(defaults.ambiguous_safety_requirement),
+            panic_analysis_incomplete: raw
+                .panic_analysis_incomplete
+                .or(raw.analysis_incomplete)
+                .unwrap_or(defaults.panic_analysis_incomplete),
+            safety_analysis_incomplete: raw
+                .safety_analysis_incomplete
+                .or(raw.analysis_incomplete)
+                .unwrap_or(defaults.safety_analysis_incomplete),
+            empty_report_roots: raw
+                .empty_report_roots
+                .unwrap_or(defaults.empty_report_roots),
+            missing_report_root: raw
+                .missing_report_root
+                .unwrap_or(defaults.missing_report_root),
+        })
     }
 }
 
@@ -753,9 +818,10 @@ mod tests {
     use std::path::PathBuf;
 
     use super::{
-        AnalysisConfig, CallableEdgeAttribution, ConfigError, ContractDocOverrideFile,
-        ContractDocOverrides, EXAMPLE_MANIFEST, LintLevel, MarkerProbing, MirInlining,
-        OverflowChecks, PanicConfig, PathPatterns, ReportRootSet, SafetyConfig, SniffTestConfig,
+        AnalysisConfig, AnalysisLintConfig, CallableEdgeAttribution, ConfigError,
+        ContractDocOverrideFile, ContractDocOverrides, EXAMPLE_MANIFEST, LintLevel, MarkerProbing,
+        MirInlining, OverflowChecks, PanicConfig, PathPatterns, ReportRootSet, SafetyConfig,
+        SniffTestConfig,
     };
 
     fn path_patterns(patterns: &[&str]) -> PathPatterns {
@@ -923,29 +989,153 @@ mod tests {
     }
 
     #[test]
-    fn parses_analysis_lint_levels() {
+    fn parses_granular_analysis_lint_levels() {
         let config = r#"
             [analysis.lints]
-            analysis-incomplete = "warn"
-            ambiguous-effect-marker = "allow"
-            ambiguous-effect-requirement = "warn"
+            ambiguous-panic-marker = "allow"
+            ambiguous-safety-marker = "warn"
+            ambiguous-panic-requirement = "deny"
+            ambiguous-safety-requirement = "allow"
+            panic-analysis-incomplete = "warn"
+            safety-analysis-incomplete = "deny"
             empty-report-roots = "deny"
             missing-report-root = "allow"
         "#;
 
         let parsed = SniffTestConfig::from_manifest_str(config).expect("manifest should parse");
 
-        assert_eq!(parsed.analysis.lints.analysis_incomplete, LintLevel::Warn);
         assert_eq!(
-            parsed.analysis.lints.ambiguous_effect_marker,
+            parsed.analysis.lints.ambiguous_panic_marker,
             LintLevel::Allow
         );
         assert_eq!(
-            parsed.analysis.lints.ambiguous_effect_requirement,
+            parsed.analysis.lints.ambiguous_safety_marker,
             LintLevel::Warn
+        );
+        assert_eq!(
+            parsed.analysis.lints.ambiguous_panic_requirement,
+            LintLevel::Deny
+        );
+        assert_eq!(
+            parsed.analysis.lints.ambiguous_safety_requirement,
+            LintLevel::Allow
+        );
+        assert_eq!(
+            parsed.analysis.lints.panic_analysis_incomplete,
+            LintLevel::Warn
+        );
+        assert_eq!(
+            parsed.analysis.lints.safety_analysis_incomplete,
+            LintLevel::Deny
         );
         assert_eq!(parsed.analysis.lints.empty_report_roots, LintLevel::Deny);
         assert_eq!(parsed.analysis.lints.missing_report_root, LintLevel::Allow);
+    }
+
+    #[test]
+    fn legacy_analysis_lint_umbrellas_seed_granular_levels() {
+        let config = r#"
+            [analysis.lints]
+            ambiguous-effect-marker = "warn"
+            ambiguous-effect-requirement = "allow"
+            analysis-incomplete = "warn"
+        "#;
+
+        let parsed = SniffTestConfig::from_manifest_str(config).expect("manifest should parse");
+
+        assert_eq!(
+            parsed.analysis.lints.ambiguous_panic_marker,
+            LintLevel::Warn
+        );
+        assert_eq!(
+            parsed.analysis.lints.ambiguous_safety_marker,
+            LintLevel::Warn
+        );
+        assert_eq!(
+            parsed.analysis.lints.ambiguous_panic_requirement,
+            LintLevel::Allow
+        );
+        assert_eq!(
+            parsed.analysis.lints.ambiguous_safety_requirement,
+            LintLevel::Allow
+        );
+        assert_eq!(
+            parsed.analysis.lints.panic_analysis_incomplete,
+            LintLevel::Warn
+        );
+        assert_eq!(
+            parsed.analysis.lints.safety_analysis_incomplete,
+            LintLevel::Warn
+        );
+    }
+
+    #[test]
+    fn granular_analysis_lints_override_legacy_umbrellas() {
+        let config = r#"
+            [analysis.lints]
+            ambiguous-effect-marker = "allow"
+            ambiguous-panic-marker = "deny"
+            ambiguous-effect-requirement = "deny"
+            ambiguous-safety-requirement = "warn"
+            analysis-incomplete = "allow"
+            safety-analysis-incomplete = "deny"
+        "#;
+
+        let parsed = SniffTestConfig::from_manifest_str(config).expect("manifest should parse");
+
+        assert_eq!(
+            parsed.analysis.lints.ambiguous_panic_marker,
+            LintLevel::Deny
+        );
+        assert_eq!(
+            parsed.analysis.lints.ambiguous_safety_marker,
+            LintLevel::Allow
+        );
+        assert_eq!(
+            parsed.analysis.lints.ambiguous_panic_requirement,
+            LintLevel::Deny
+        );
+        assert_eq!(
+            parsed.analysis.lints.ambiguous_safety_requirement,
+            LintLevel::Warn
+        );
+        assert_eq!(
+            parsed.analysis.lints.panic_analysis_incomplete,
+            LintLevel::Allow
+        );
+        assert_eq!(
+            parsed.analysis.lints.safety_analysis_incomplete,
+            LintLevel::Deny
+        );
+    }
+
+    #[test]
+    fn serializes_only_canonical_analysis_lint_keys() {
+        let serialized =
+            toml::to_string(&AnalysisLintConfig::default()).expect("lint config should serialize");
+
+        for key in [
+            "ambiguous-panic-marker",
+            "ambiguous-safety-marker",
+            "ambiguous-panic-requirement",
+            "ambiguous-safety-requirement",
+            "panic-analysis-incomplete",
+            "safety-analysis-incomplete",
+        ] {
+            assert!(serialized.contains(key), "missing canonical key `{key}`");
+        }
+        for legacy in [
+            "ambiguous-effect-marker",
+            "ambiguous-effect-requirement",
+            "analysis-incomplete",
+        ] {
+            assert!(
+                !serialized
+                    .lines()
+                    .any(|line| line.starts_with(&format!("{legacy} ="))),
+                "serialized legacy key `{legacy}`"
+            );
+        }
     }
 
     #[test]
@@ -965,7 +1155,11 @@ mod tests {
 
         assert_eq!(parsed.analysis.lints.empty_report_roots, LintLevel::Deny);
         assert_eq!(
-            parsed.analysis.lints.ambiguous_effect_marker,
+            parsed.analysis.lints.ambiguous_panic_marker,
+            LintLevel::Deny
+        );
+        assert_eq!(
+            parsed.analysis.lints.ambiguous_safety_marker,
             LintLevel::Deny
         );
         assert_eq!(parsed.panics.lints.panic_invocation, LintLevel::Allow);
@@ -989,9 +1183,12 @@ mod tests {
             MarkerProbing::MacroDefinitionFirst
         );
         let lints = AnalysisConfig::default().lints;
-        assert_eq!(lints.ambiguous_effect_marker, LintLevel::Deny);
-        assert_eq!(lints.ambiguous_effect_requirement, LintLevel::Deny);
-        assert_eq!(lints.analysis_incomplete, LintLevel::Deny,);
+        assert_eq!(lints.ambiguous_panic_marker, LintLevel::Deny);
+        assert_eq!(lints.ambiguous_safety_marker, LintLevel::Deny);
+        assert_eq!(lints.ambiguous_panic_requirement, LintLevel::Deny);
+        assert_eq!(lints.ambiguous_safety_requirement, LintLevel::Deny);
+        assert_eq!(lints.panic_analysis_incomplete, LintLevel::Deny);
+        assert_eq!(lints.safety_analysis_incomplete, LintLevel::Deny);
         assert_eq!(lints.empty_report_roots, LintLevel::Warn);
         assert_eq!(lints.missing_report_root, LintLevel::Warn);
     }

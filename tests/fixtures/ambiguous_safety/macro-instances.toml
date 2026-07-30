@@ -6,7 +6,7 @@ report-roots = [
 ]
 
 [analysis.lints]
-ambiguous-effect-marker = "deny"
+ambiguous-safety-marker = "deny"
 
 [safety.lints]
 unsafe-call-missing-justification = "deny"

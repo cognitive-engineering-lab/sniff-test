@@ -214,7 +214,7 @@ pub(super) fn ambiguous_obligation_marker_diagnostic<'tcx>(
             );
         }
         diag.help(
-            "move the marker directly above one obligation, split it into separate markers, or set `ambiguous-effect-marker = \"allow\"` under `[analysis.lints]`",
+            "move the marker directly above one obligation, split it into separate markers, or set `ambiguous-panic-marker = \"allow\"` under `[analysis.lints]`",
         );
     })
 }
@@ -247,7 +247,7 @@ pub(super) fn ambiguous_obligation_name_diagnostic(
             );
         }
         diag.help(
-            "give each requirement a unique name, or set `ambiguous-effect-requirement = \"allow\"` under `[analysis.lints]`",
+            "give each requirement a unique name, or set `ambiguous-panic-requirement = \"allow\"` under `[analysis.lints]`",
         );
     })
 }
@@ -746,7 +746,7 @@ pub(super) fn safety_finding_diagnostic(
                     );
                 }
                 diag.help(
-                        "give each requirement a unique name, or set `ambiguous-effect-requirement = \"allow\"` under `[analysis.lints]`",
+                        "give each requirement a unique name, or set `ambiguous-safety-requirement = \"allow\"` under `[analysis.lints]`",
                 );
             })
         }
@@ -804,7 +804,7 @@ fn ambiguous_safety_marker_diagnostic(
             );
         }
         diag.help(
-            "give each unsafe block or operation its own marker, or set `ambiguous-effect-marker = \"allow\"` under `[analysis.lints]`",
+            "give each unsafe block or operation its own marker, or set `ambiguous-safety-marker = \"allow\"` under `[analysis.lints]`",
         );
     })
 }

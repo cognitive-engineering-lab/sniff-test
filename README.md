@@ -51,9 +51,12 @@ callable-edge-attribution = "erasure-sites" # erasure-sites | call-sites
 marker-probing = "macro-definition-first" # macro-definition-first | source-callsite
 
 [analysis.lints]
-analysis-incomplete = "deny"
-ambiguous-effect-marker = "deny" # deny | warn | allow
-ambiguous-effect-requirement = "deny"
+panic-analysis-incomplete = "deny"
+safety-analysis-incomplete = "deny"
+ambiguous-panic-marker = "deny" # deny | warn | allow
+ambiguous-safety-marker = "deny"
+ambiguous-panic-requirement = "deny"
+ambiguous-safety-requirement = "deny"
 empty-report-roots = "warn"
 missing-report-root = "warn"
 
@@ -96,8 +99,10 @@ evidence: function-pointer reifications with the same `fn` pointer type, or
 concrete values cast to the same dyn trait, may cause each matching call site
 to connect to every target observed by the shared reachability index.
 
-The two `ambiguous-effect-*` lints apply uniformly to panic and safety markers
-and to duplicate normalized requirement names. `warn` accepts the ambiguity
+The older `ambiguous-effect-marker`, `ambiguous-effect-requirement`, and
+`analysis-incomplete` keys remain accepted as group defaults for both effect
+domains. An explicit panic- or safety-specific key takes precedence over its
+group default regardless of TOML ordering. `warn` accepts the ambiguity
 but reports it; `allow` accepts it silently.
 
 `marker-probing = "macro-definition-first"` lets `// PANIC:` and `// SAFETY:`
@@ -203,7 +208,8 @@ conditions may be empty when the name is enough, but call-site satisfaction
 bullets must include justification text. Names are matched case-insensitively,
 with punctuation and whitespace treated as separators, so `bounded[total]` and
 `bounded total` match. Duplicate names inside one documentation section are ambiguous under
-the `ambiguous-effect-requirement = "deny"` policy: a single marker bullet
+the effect-specific `ambiguous-panic-requirement = "deny"` or
+`ambiguous-safety-requirement = "deny"` policy: a single marker bullet
 cannot prove two distinct requirements with the same normalized name. Prose and
 labels such as `Requirements:` are allowed before the first bullet. Plain
 comment lines following a requirement bullet in the same contiguous block are
