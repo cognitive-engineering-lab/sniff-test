@@ -181,9 +181,7 @@ pub(crate) enum SafetyOpKind {
     MutationOfLayoutConstrainedField,
     #[serde(rename = "layout-constrained-field-borrow")]
     BorrowOfLayoutConstrainedField,
-    #[serde(rename = "inline-assembly")]
     InlineAssembly,
-    #[serde(rename = "unsafe-binder-cast")]
     UnsafeBinderCast,
 }
 
