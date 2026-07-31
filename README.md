@@ -67,7 +67,20 @@ override-files = [] # TOML files relative to sniff-test.toml
 trusted-panic-boundary-namespaces = []
 
 [panics.lints]
+# Group default for compiler-generated MIR assertions.
 compiler-assert = "deny"
+# Optional exact overrides:
+# compiler-assert-bounds-check = "deny"
+# compiler-assert-overflow = "deny"
+# compiler-assert-overflow-negation = "deny"
+# compiler-assert-division-by-zero = "deny"
+# compiler-assert-remainder-by-zero = "deny"
+# compiler-assert-resumed-after-return = "deny"
+# compiler-assert-resumed-after-panic = "deny"
+# compiler-assert-resumed-after-drop = "deny"
+# compiler-assert-misaligned-pointer-dereference = "deny"
+# compiler-assert-null-pointer-dereference = "deny"
+# compiler-assert-invalid-enum-construction = "deny"
 panic-invocation = "deny"
 cached-dependency-panic = "deny"
 documented-panic = "warn"
@@ -82,7 +95,20 @@ trusted-safety-boundary-namespaces = []
 missing-safety-docs = "warn"
 unsafe-call-missing-justification = "warn"
 unsafe-call-missing-requirements = "warn"
+# Group default for non-call unsafe operations.
 unsafe-op-missing-justification = "warn"
+# Optional exact overrides:
+# raw-pointer-dereference-missing-justification = "warn"
+# mutable-static-access-missing-justification = "warn"
+# extern-static-access-missing-justification = "warn"
+# union-field-access-missing-justification = "warn"
+# unsafe-field-access-missing-justification = "warn"
+# layout-constrained-type-initialization-missing-justification = "warn"
+# unsafe-field-initialization-missing-justification = "warn"
+# layout-constrained-field-mutation-missing-justification = "warn"
+# layout-constrained-field-borrow-missing-justification = "warn"
+# inline-assembly-missing-justification = "warn"
+# unsafe-binder-cast-missing-justification = "warn"
 safety-obligation-missing-justification = "warn"
 safety-obligation-missing-requirements = "warn"
 ```
@@ -104,6 +130,14 @@ The older `ambiguous-effect-marker`, `ambiguous-effect-requirement`, and
 domains. An explicit panic- or safety-specific key takes precedence over its
 group default regardless of TOML ordering. `warn` accepts the ambiguity
 but reports it; `allow` accepts it silently.
+
+Likewise, exact `compiler-assert-*` overrides take precedence for both local
+and cached dependency findings. Without an exact override, local assertions use
+`compiler-assert` and dependency assertions use `cached-dependency-panic`.
+`unsafe-op-missing-justification` is the fallback for every exact non-call
+unsafe-operation key. JSON reports retain the broad `kind` and add
+`compiler-assert-kind` or `safety-op-kind`, so the selected subtype remains
+machine-readable.
 
 `marker-probing = "macro-definition-first"` lets `// PANIC:` and `// SAFETY:`
 markers inside macro definitions satisfy operations produced by that macro,

@@ -24,7 +24,7 @@ expression: messages
         "target": "safety_requirements::safe_documented_contract"
       }
     ],
-    "format-version": 9,
+    "format-version": 10,
     "reason": "sniff-test-artifact",
     "rustc-version": "[RUSTC_VERSION]",
     "scope": "workspace",

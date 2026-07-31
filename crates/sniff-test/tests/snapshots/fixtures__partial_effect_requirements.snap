@@ -59,7 +59,7 @@ expression: messages
         "target": "partial_effect_requirements::requires_initialized_exclusive_state"
       }
     ],
-    "format-version": 9,
+    "format-version": 10,
     "reason": "sniff-test-artifact",
     "rustc-version": "[RUSTC_VERSION]",
     "scope": "dependency",
@@ -112,7 +112,7 @@ expression: messages
         ]
       }
     ],
-    "format-version": 9,
+    "format-version": 10,
     "reason": "sniff-test-artifact",
     "rustc-version": "[RUSTC_VERSION]",
     "scope": "workspace",

@@ -100,7 +100,21 @@ panic-sink-namespaces = [
 # `deny` emits an error and makes `cargo sniff-test` fail.
 # `warn` emits a warning without failing the run.
 # `allow` suppresses the finding from diagnostics and JSON reports.
+# Group default for local compiler-generated MIR assertions. Each exact
+# override is optional and also applies to dependency findings; a dependency
+# assertion without an exact override uses `cached-dependency-panic` below.
 compiler-assert = "deny"
+# compiler-assert-bounds-check = "deny"
+# compiler-assert-overflow = "deny"
+# compiler-assert-overflow-negation = "deny"
+# compiler-assert-division-by-zero = "deny"
+# compiler-assert-remainder-by-zero = "deny"
+# compiler-assert-resumed-after-return = "deny"
+# compiler-assert-resumed-after-panic = "deny"
+# compiler-assert-resumed-after-drop = "deny"
+# compiler-assert-misaligned-pointer-dereference = "deny"
+# compiler-assert-null-pointer-dereference = "deny"
+# compiler-assert-invalid-enum-construction = "deny"
 panic-invocation = "deny"
 cached-dependency-panic = "deny"
 documented-panic = "warn"
@@ -128,6 +142,19 @@ trusted-safety-boundary-namespaces = []
 missing-safety-docs = "warn"
 unsafe-call-missing-justification = "warn"
 unsafe-call-missing-requirements = "warn"
+# Group default for non-call unsafe operations. Each exact override is optional
+# and wins over this fallback for local and dependency findings.
 unsafe-op-missing-justification = "warn"
+# raw-pointer-dereference-missing-justification = "warn"
+# mutable-static-access-missing-justification = "warn"
+# extern-static-access-missing-justification = "warn"
+# union-field-access-missing-justification = "warn"
+# unsafe-field-access-missing-justification = "warn"
+# layout-constrained-type-initialization-missing-justification = "warn"
+# unsafe-field-initialization-missing-justification = "warn"
+# layout-constrained-field-mutation-missing-justification = "warn"
+# layout-constrained-field-borrow-missing-justification = "warn"
+# inline-assembly-missing-justification = "warn"
+# unsafe-binder-cast-missing-justification = "warn"
 safety-obligation-missing-justification = "warn"
 safety-obligation-missing-requirements = "warn"

@@ -47,7 +47,7 @@ expression: messages
         "target": "unsafe function pointer"
       }
     ],
-    "format-version": 9,
+    "format-version": 10,
     "reason": "sniff-test-artifact",
     "rustc-version": "[RUSTC_VERSION]",
     "scope": "workspace",

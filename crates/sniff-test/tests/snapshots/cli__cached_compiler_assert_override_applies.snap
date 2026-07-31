@@ -1,0 +1,30 @@
+---
+source: crates/sniff-test/tests/cli.rs
+expression: snapshot
+---
+exit: 101
+stdout:
+<empty>
+stderr:
+    Checking dependency-assert-kinds v0.1.0 ([FIXTURE]/dep)
+    Checking dependency-assert-kinds-app v0.1.0 ([FIXTURE]/app)
+error: function `dependency_assert_kinds_app::divide_dependency` reaches cached undocumented panic evidence from a dependency
+ --> src/lib.rs:1:1
+  |
+1 | pub fn divide_dependency(value: usize, divisor: usize) -> usize {
+  | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  |
+  = note: dependency_assert_kinds::divide has cached panic evidence: compiler assert
+note: cached dependency panic evidence was recorded here: compiler assert
+ --> [FIXTURE]/dep/src/lib.rs:2:5
+  |
+2 |     value / divisor
+  |     ^^^^^^^^^^^^^^^
+help: guard this path, or add `// PANIC:` here if a local invariant proves it cannot panic
+ --> src/lib.rs:2:5
+  |
+2 |     dependency_assert_kinds::divide(value, divisor)
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  = help: add a guard, document the panic with `# Panics`, or add `// PANIC:` if a local invariant proves it cannot panic
+
+error: could not compile `dependency-assert-kinds-app` (lib) due to 1 previous error

@@ -25,7 +25,7 @@ use super::diagnostics::{
 };
 use super::findings::{Finding, FindingKind, ResolvedFinding};
 
-pub(crate) const REPORT_FORMAT_VERSION: u32 = 9;
+pub(crate) const REPORT_FORMAT_VERSION: u32 = 10;
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "kebab-case")]
@@ -102,6 +102,10 @@ impl PanicRootReport {
             raw_panic_diagnostic(tcx, graph, evidence, self.root_def_id, self.include_stack)
         };
         self.push_finding(Finding {
+            compiler_assert_kind: match evidence.kind {
+                PanicEvidenceKind::CompilerAssert { kind } => Some(kind),
+                _ => None,
+            },
             target,
             span: Some(render_span(tcx, trigger_edge.span)),
             trace: render_trace(tcx, graph, &evidence.trace.edge_ids),
@@ -179,6 +183,7 @@ impl PanicRootReport {
             trace.extend(render_cached_trace(function, finding));
         }
         self.push_finding(Finding {
+            compiler_assert_kind: cached_finding.and_then(|finding| finding.compiler_assert_kind),
             target: Some(summary.path.clone()),
             span: Some(render_span(tcx, edge.span)),
             effect_span: cached_finding.map(render_cached_effect_span),
@@ -329,7 +334,7 @@ fn report_evidence_kind<'tcx>(
     evidence: &PanicEvidence,
 ) -> (String, Option<String>) {
     match &evidence.kind {
-        PanicEvidenceKind::CompilerAssert => {
+        PanicEvidenceKind::CompilerAssert { .. } => {
             let target = render_node(tcx, &graph.node(graph.edge(evidence.edge_id).target).kind);
             (String::from("compiler assert"), Some(target))
         }
@@ -551,7 +556,7 @@ mod tests {
 
     #[test]
     fn public_report_serializes_flat_findings() {
-        assert_eq!(REPORT_FORMAT_VERSION, 9);
+        assert_eq!(REPORT_FORMAT_VERSION, 10);
 
         let report = AnalysisArtifactReport {
             reason: String::from("sniff-test-artifact"),

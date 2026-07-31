@@ -1,0 +1,27 @@
+---
+source: crates/sniff-test/tests/cli.rs
+expression: snapshot
+---
+exit: 101
+stdout:
+<empty>
+stderr:
+    Checking unsafe-ops v0.1.0 ([FIXTURE])
+error: unsafe operation (inline assembly) in `unsafe_ops::asm_unjustified` is missing a `// SAFETY:` justification
+  --> src/lib.rs:49:9
+   |
+49 |         asm!("nop");
+   |         ^^^^^^^^^^^
+   |
+   = help: add a `// SAFETY:` comment above the unsafe block or operation
+
+warning: unsafe operation (raw pointer dereference) in `unsafe_ops::deref_unjustified` is missing a `// SAFETY:` justification
+  --> src/lib.rs:18:14
+   |
+18 |     unsafe { *ptr }
+   |              ^^^^
+   |
+   = help: add a `// SAFETY:` comment above the unsafe block or operation
+
+warning: `unsafe-ops` (lib) generated 1 warning
+error: could not compile `unsafe-ops` (lib) due to 1 previous error; 1 warning emitted

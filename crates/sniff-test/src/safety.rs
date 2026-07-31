@@ -15,6 +15,7 @@ use rustc_hir::def::DefKind;
 use rustc_hir::def_id::{DefId, LocalDefId};
 use rustc_middle::ty::TyCtxt;
 use rustc_span::Span;
+use serde::{Deserialize, Serialize};
 
 use crate::config::SafetyConfig;
 use crate::contracts::{
@@ -159,18 +160,30 @@ enum SafetyEvidenceKind {
 /// The variant set is pinned to the toolchain in rust-toolchain.toml; diff it
 /// against rustc's enum on toolchain bumps. The `unsafe_ops*` fixtures cover
 /// one operation per variant as a behavioral canary.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
 pub(crate) enum SafetyOpKind {
+    #[serde(rename = "raw-pointer-dereference")]
     DerefRawPointer,
+    #[serde(rename = "mutable-static-access")]
     UseOfMutableStatic,
+    #[serde(rename = "extern-static-access")]
     UseOfExternStatic,
+    #[serde(rename = "union-field-access")]
     AccessToUnionField,
+    #[serde(rename = "unsafe-field-access")]
     UseOfUnsafeField,
+    #[serde(rename = "layout-constrained-type-initialization")]
     InitializingLayoutConstrainedType,
+    #[serde(rename = "unsafe-field-initialization")]
     InitializingTypeWithUnsafeField,
+    #[serde(rename = "layout-constrained-field-mutation")]
     MutationOfLayoutConstrainedField,
+    #[serde(rename = "layout-constrained-field-borrow")]
     BorrowOfLayoutConstrainedField,
+    #[serde(rename = "inline-assembly")]
     InlineAssembly,
+    #[serde(rename = "unsafe-binder-cast")]
     UnsafeBinderCast,
 }
 
@@ -598,4 +611,47 @@ pub(super) fn safety_doc_summary(
     overrides: &ContractDocOverrides,
 ) -> SafetyDocSummary {
     safety_contract_doc_summary(tcx, def_id, overrides)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::SafetyOpKind;
+
+    #[test]
+    fn safety_op_kinds_have_stable_user_facing_names() {
+        let cases = [
+            (SafetyOpKind::DerefRawPointer, "raw-pointer-dereference"),
+            (SafetyOpKind::UseOfMutableStatic, "mutable-static-access"),
+            (SafetyOpKind::UseOfExternStatic, "extern-static-access"),
+            (SafetyOpKind::AccessToUnionField, "union-field-access"),
+            (SafetyOpKind::UseOfUnsafeField, "unsafe-field-access"),
+            (
+                SafetyOpKind::InitializingLayoutConstrainedType,
+                "layout-constrained-type-initialization",
+            ),
+            (
+                SafetyOpKind::InitializingTypeWithUnsafeField,
+                "unsafe-field-initialization",
+            ),
+            (
+                SafetyOpKind::MutationOfLayoutConstrainedField,
+                "layout-constrained-field-mutation",
+            ),
+            (
+                SafetyOpKind::BorrowOfLayoutConstrainedField,
+                "layout-constrained-field-borrow",
+            ),
+            (SafetyOpKind::InlineAssembly, "inline-assembly"),
+            (SafetyOpKind::UnsafeBinderCast, "unsafe-binder-cast"),
+        ];
+
+        for (kind, expected) in cases {
+            let serialized = serde_json::to_string(&kind).expect("serialize safety op kind");
+            assert_eq!(serialized, format!("\"{expected}\""));
+            assert_eq!(
+                serde_json::from_str::<SafetyOpKind>(&serialized).expect("deserialize safety op"),
+                kind
+            );
+        }
+    }
 }

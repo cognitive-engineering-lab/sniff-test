@@ -16,10 +16,12 @@ use rustc_data_structures::{fingerprint::Fingerprint, stable_hasher::StableHashe
 use serde::{Deserialize, Serialize};
 
 use crate::namespace::{StableDefPathHash, StableInstanceHash};
+use crate::panics::CompilerAssertKind;
+use crate::safety::SafetyOpKind;
 
-pub const CACHE_FORMAT_VERSION: u32 = 11;
+pub const CACHE_FORMAT_VERSION: u32 = 12;
 pub const CACHE_DIR_NAME: &str = "sniff-test-cache";
-pub const CACHE_VERSION_DIR: &str = "v11";
+pub const CACHE_VERSION_DIR: &str = "v12";
 
 /// Cached analysis for one exact rustc output artifact.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -317,6 +319,10 @@ pub struct CachedEffectInput {
 #[serde(rename_all = "kebab-case")]
 pub struct CachedFindingInput {
     pub kind: CachedFindingKind,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub compiler_assert_kind: Option<CompilerAssertKind>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub safety_op_kind: Option<SafetyOpKind>,
     pub span: String,
     pub source_span: Option<CachedSourceSpan>,
     pub trace: CachedTraceInput,
@@ -362,6 +368,10 @@ pub struct CachedEffectSummary {
 #[serde(rename_all = "kebab-case")]
 pub struct CachedFinding {
     pub kind: CachedFindingKind,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub compiler_assert_kind: Option<CompilerAssertKind>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub safety_op_kind: Option<SafetyOpKind>,
     pub span: String,
     pub source_span: Option<CachedSourceSpan>,
     pub trace: CachedTraceId,
@@ -574,6 +584,8 @@ fn intern_effect(
         })?;
         let finding = arenas.intern_finding(CachedFinding {
             kind: input.kind,
+            compiler_assert_kind: input.compiler_assert_kind,
+            safety_op_kind: input.safety_op_kind,
             span: input.span,
             source_span: input.source_span,
             trace,
@@ -734,6 +746,32 @@ fn validate_findings(
     traces: &CachedTraceArena,
 ) -> Result<(), CacheValidationError> {
     for (index, finding) in findings.iter().enumerate() {
+        match (finding.kind, finding.compiler_assert_kind) {
+            (CachedFindingKind::CompilerAssert, None) => {
+                return Err(CacheValidationError::new(format!(
+                    "compiler-assert finding requires compiler-assert-kind at finding {index}"
+                )));
+            }
+            (CachedFindingKind::CompilerAssert, Some(_)) | (_, None) => {}
+            (_, Some(_)) => {
+                return Err(CacheValidationError::new(format!(
+                    "compiler-assert-kind requires a compiler-assert finding at finding {index}"
+                )));
+            }
+        }
+        match (finding.kind, finding.safety_op_kind) {
+            (CachedFindingKind::UnsafeOpMissingJustification, None) => {
+                return Err(CacheValidationError::new(format!(
+                    "unsafe-op-missing-justification finding requires safety-op-kind at finding {index}"
+                )));
+            }
+            (CachedFindingKind::UnsafeOpMissingJustification, Some(_)) | (_, None) => {}
+            (_, Some(_)) => {
+                return Err(CacheValidationError::new(format!(
+                    "safety-op-kind requires an unsafe-op-missing-justification finding at finding {index}"
+                )));
+            }
+        }
         if traces.trace(finding.trace).is_none() {
             return Err(CacheValidationError::new(format!(
                 "finding {index} references missing trace {}",
@@ -982,6 +1020,8 @@ mod tests {
         CachedFunctionInput, CachedItemKey, CachedTraceId, CachedTraceInput, artifact_cache_path,
         artifact_id_from_extern_path, default_cache_dir, write_atomic,
     };
+    use crate::panics::CompilerAssertKind;
+    use crate::safety::SafetyOpKind;
 
     #[test]
     fn dependency_artifact_ids_strip_lib_prefix_and_extension() {
@@ -1009,7 +1049,7 @@ mod tests {
             artifact_cache_path(&root, "sniff_test-29f0")
                 .display()
                 .to_string(),
-            "/target/plugin-nightly/sniff-test-cache/v11/artifacts/sniff_test-29f0.json"
+            "/target/plugin-nightly/sniff-test-cache/v12/artifacts/sniff_test-29f0.json"
         );
     }
 
@@ -1061,6 +1101,178 @@ mod tests {
         assert_eq!(first.trace_arena.steps.len(), 1);
         assert_eq!(first.trace_arena.traces.len(), 1);
         assert_eq!(first.finding_arena.len(), 2);
+    }
+
+    #[test]
+    fn construction_preserves_and_serializes_typed_finding_subtypes() {
+        let compiler_assert = CachedFindingInput {
+            kind: CachedFindingKind::CompilerAssert,
+            compiler_assert_kind: Some(CompilerAssertKind::BoundsCheck),
+            safety_op_kind: None,
+            ..finding_input("bounds check")
+        };
+        let safety_op = CachedFindingInput {
+            kind: CachedFindingKind::UnsafeOpMissingJustification,
+            compiler_assert_kind: None,
+            safety_op_kind: Some(SafetyOpKind::DerefRawPointer),
+            ..finding_input("raw pointer dereference")
+        };
+        let analysis = analysis_with_input(vec![CachedFunctionInput {
+            key: exact_key(7, 77),
+            path: String::from("demo::typed"),
+            panic: effect_input(vec![compiler_assert]),
+            safety: effect_input(vec![safety_op]),
+        }]);
+
+        let compiler_assert = analysis
+            .finding_arena
+            .iter()
+            .find(|finding| finding.kind == CachedFindingKind::CompilerAssert)
+            .expect("compiler assert");
+        assert_eq!(
+            compiler_assert.compiler_assert_kind,
+            Some(CompilerAssertKind::BoundsCheck)
+        );
+        assert_eq!(compiler_assert.safety_op_kind, None);
+
+        let safety_op = analysis
+            .finding_arena
+            .iter()
+            .find(|finding| finding.kind == CachedFindingKind::UnsafeOpMissingJustification)
+            .expect("safety op");
+        assert_eq!(safety_op.compiler_assert_kind, None);
+        assert_eq!(
+            safety_op.safety_op_kind,
+            Some(SafetyOpKind::DerefRawPointer)
+        );
+
+        let json = serde_json::to_value(&analysis).expect("serialize");
+        let findings = json["finding-arena"].as_array().expect("finding arena");
+        assert!(findings.iter().any(|finding| {
+            finding["compiler-assert-kind"] == "bounds-check"
+                && finding.get("safety-op-kind").is_none()
+        }));
+        assert!(findings.iter().any(|finding| {
+            finding["safety-op-kind"] == "raw-pointer-dereference"
+                && finding.get("compiler-assert-kind").is_none()
+        }));
+    }
+
+    #[test]
+    fn construction_rejects_compiler_assert_without_its_subtype() {
+        let mut finding = finding_input("compiler assert");
+        finding.kind = CachedFindingKind::CompilerAssert;
+
+        let error = CachedArtifactAnalysis::new(
+            "0.1.0",
+            "rustc 1.97.0-nightly",
+            CachedArtifactInfo {
+                artifact_id: String::from("dep-1234"),
+                crate_name: String::from("dep"),
+                stable_crate_id: 1,
+            },
+            vec![function_input(
+                exact_key(8, 88),
+                "demo::compiler_assert",
+                vec![finding],
+            )],
+        )
+        .expect_err("compiler assert without subtype");
+
+        assert!(
+            error
+                .to_string()
+                .contains("compiler-assert finding requires compiler-assert-kind")
+        );
+    }
+
+    #[test]
+    fn construction_rejects_compiler_assert_subtype_on_another_kind() {
+        let mut finding = finding_input("panic invocation");
+        finding.compiler_assert_kind = Some(CompilerAssertKind::BoundsCheck);
+
+        let error = CachedArtifactAnalysis::new(
+            "0.1.0",
+            "rustc 1.97.0-nightly",
+            CachedArtifactInfo {
+                artifact_id: String::from("dep-1234"),
+                crate_name: String::from("dep"),
+                stable_crate_id: 1,
+            },
+            vec![function_input(
+                exact_key(9, 99),
+                "demo::panic",
+                vec![finding],
+            )],
+        )
+        .expect_err("compiler assert subtype on panic invocation");
+
+        assert!(
+            error
+                .to_string()
+                .contains("compiler-assert-kind requires a compiler-assert finding")
+        );
+    }
+
+    #[test]
+    fn construction_rejects_unsafe_op_without_its_subtype() {
+        let mut finding = finding_input("unsafe operation");
+        finding.kind = CachedFindingKind::UnsafeOpMissingJustification;
+        let function = CachedFunctionInput {
+            key: exact_key(10, 100),
+            path: String::from("demo::unsafe_op"),
+            panic: effect_input(Vec::new()),
+            safety: effect_input(vec![finding]),
+        };
+
+        let error = CachedArtifactAnalysis::new(
+            "0.1.0",
+            "rustc 1.97.0-nightly",
+            CachedArtifactInfo {
+                artifact_id: String::from("dep-1234"),
+                crate_name: String::from("dep"),
+                stable_crate_id: 1,
+            },
+            vec![function],
+        )
+        .expect_err("unsafe operation without subtype");
+
+        assert!(
+            error
+                .to_string()
+                .contains("unsafe-op-missing-justification finding requires safety-op-kind")
+        );
+    }
+
+    #[test]
+    fn construction_rejects_safety_op_subtype_on_another_kind() {
+        let mut finding = finding_input("unsafe call");
+        finding.kind = CachedFindingKind::UnsafeCallMissingJustification;
+        finding.safety_op_kind = Some(SafetyOpKind::DerefRawPointer);
+        let function = CachedFunctionInput {
+            key: exact_key(11, 111),
+            path: String::from("demo::unsafe_call"),
+            panic: effect_input(Vec::new()),
+            safety: effect_input(vec![finding]),
+        };
+
+        let error = CachedArtifactAnalysis::new(
+            "0.1.0",
+            "rustc 1.97.0-nightly",
+            CachedArtifactInfo {
+                artifact_id: String::from("dep-1234"),
+                crate_name: String::from("dep"),
+                stable_crate_id: 1,
+            },
+            vec![function],
+        )
+        .expect_err("safety operation subtype on unsafe call");
+
+        assert!(
+            error
+                .to_string()
+                .contains("safety-op-kind requires an unsafe-op-missing-justification finding")
+        );
     }
 
     #[test]
@@ -1399,6 +1611,8 @@ mod tests {
     fn finding_input(reason: &str) -> CachedFindingInput {
         CachedFindingInput {
             kind: CachedFindingKind::PanicInvocation,
+            compiler_assert_kind: None,
+            safety_op_kind: None,
             span: String::from("src/lib.rs:1:1"),
             source_span: None,
             trace: CachedTraceInput {

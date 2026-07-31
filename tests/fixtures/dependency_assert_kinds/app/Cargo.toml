@@ -1,0 +1,9 @@
+[package]
+name = "dependency-assert-kinds-app"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+dependency-assert-kinds = { path = "../dep" }
+
+[workspace]

@@ -18,6 +18,7 @@ use rustc_hir::def_id::DefId;
 use rustc_middle::mir::AssertKind;
 use rustc_middle::ty::{self, InstanceKind, Ty, TyCtxt};
 use rustc_span::Span;
+use serde::{Deserialize, Serialize};
 
 use crate::config::{PanicBoundaryPolicy, PanicConfig};
 use crate::contracts::{ContractDocSummary, ContractRequirement, panic_contract_doc_summary};
@@ -61,11 +62,48 @@ pub(crate) struct AmbiguousPanicRequirementName {
 
 pub(crate) type PanicRequirement = ContractRequirement;
 
+/// Stable semantic subtype for a compiler-generated MIR assertion.
+///
+/// The variant set mirrors [`AssertKind`] without retaining its MIR operands.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub(crate) enum CompilerAssertKind {
+    BoundsCheck,
+    Overflow,
+    OverflowNegation,
+    DivisionByZero,
+    RemainderByZero,
+    ResumedAfterReturn,
+    ResumedAfterPanic,
+    ResumedAfterDrop,
+    MisalignedPointerDereference,
+    NullPointerDereference,
+    InvalidEnumConstruction,
+}
+
+impl<O> From<&AssertKind<O>> for CompilerAssertKind {
+    fn from(kind: &AssertKind<O>) -> Self {
+        match kind {
+            AssertKind::BoundsCheck { .. } => Self::BoundsCheck,
+            AssertKind::Overflow(..) => Self::Overflow,
+            AssertKind::OverflowNeg(..) => Self::OverflowNegation,
+            AssertKind::DivisionByZero(..) => Self::DivisionByZero,
+            AssertKind::RemainderByZero(..) => Self::RemainderByZero,
+            AssertKind::ResumedAfterReturn(..) => Self::ResumedAfterReturn,
+            AssertKind::ResumedAfterPanic(..) => Self::ResumedAfterPanic,
+            AssertKind::ResumedAfterDrop(..) => Self::ResumedAfterDrop,
+            AssertKind::MisalignedPointerDereference { .. } => Self::MisalignedPointerDereference,
+            AssertKind::NullPointerDereference => Self::NullPointerDereference,
+            AssertKind::InvalidEnumConstruction(..) => Self::InvalidEnumConstruction,
+        }
+    }
+}
+
 /// Raw panic evidence found in the graph.
 #[derive(Debug, Clone, Copy)]
 pub(crate) enum PanicEvidenceKind {
     /// Compiler-generated MIR assert, such as bounds, overflow, or invalid shift checks.
-    CompilerAssert,
+    CompilerAssert { kind: CompilerAssertKind },
     /// Direct call to a function documented as panicable.
     PanicObligation { def_id: DefId },
     /// Direct call to a configured panic sink.
@@ -155,7 +193,9 @@ fn resolve_panic_probe<'tcx>(
             if compiler_assert_is_safety_precondition(tcx, edge, message, config) {
                 return None;
             }
-            PanicEvidenceKind::CompilerAssert
+            PanicEvidenceKind::CompilerAssert {
+                kind: CompilerAssertKind::from(message.as_ref()),
+            }
         }
         PanicProbeKind::PanicSink { def_id } => PanicEvidenceKind::PanicSink { def_id },
         PanicProbeKind::OpaqueIndirectCall => PanicEvidenceKind::IndirectBoundary { def_id: None },
@@ -186,7 +226,7 @@ fn panic_path_decision(edge_id: ReachabilityEdgeId, kind: PanicEvidenceKind) -> 
             edge_id: Some(edge_id),
             def_id,
         },
-        PanicEvidenceKind::CompilerAssert
+        PanicEvidenceKind::CompilerAssert { .. }
         | PanicEvidenceKind::PanicSink { .. }
         | PanicEvidenceKind::IndirectBoundary { .. } => EffectPathDecision::RawEffect,
     }
@@ -241,7 +281,7 @@ pub(crate) fn trigger_edge_id(
 #[must_use]
 pub(crate) fn describe_panic_evidence_kind(tcx: TyCtxt<'_>, kind: &PanicEvidenceKind) -> String {
     match kind {
-        PanicEvidenceKind::CompilerAssert => String::from("compiler assert"),
+        PanicEvidenceKind::CompilerAssert { .. } => String::from("compiler assert"),
         PanicEvidenceKind::PanicObligation { def_id, .. } => {
             format!("panic obligation {}", canonical_namespace(tcx, *def_id))
         }
@@ -485,4 +525,59 @@ fn compiler_assert_is_safety_precondition<'tcx>(
     let def_id = instance.def_id();
     crate::safety::fn_def_is_unsafe(tcx, def_id)
         && crate::safety::has_safety_docs(tcx, def_id, &config.documentation_overrides)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::CompilerAssertKind;
+
+    #[test]
+    fn compiler_assert_kinds_have_stable_serialized_names() {
+        let cases = [
+            (CompilerAssertKind::BoundsCheck, "\"bounds-check\""),
+            (CompilerAssertKind::Overflow, "\"overflow\""),
+            (
+                CompilerAssertKind::OverflowNegation,
+                "\"overflow-negation\"",
+            ),
+            (CompilerAssertKind::DivisionByZero, "\"division-by-zero\""),
+            (CompilerAssertKind::RemainderByZero, "\"remainder-by-zero\""),
+            (
+                CompilerAssertKind::ResumedAfterReturn,
+                "\"resumed-after-return\"",
+            ),
+            (
+                CompilerAssertKind::ResumedAfterPanic,
+                "\"resumed-after-panic\"",
+            ),
+            (
+                CompilerAssertKind::ResumedAfterDrop,
+                "\"resumed-after-drop\"",
+            ),
+            (
+                CompilerAssertKind::MisalignedPointerDereference,
+                "\"misaligned-pointer-dereference\"",
+            ),
+            (
+                CompilerAssertKind::NullPointerDereference,
+                "\"null-pointer-dereference\"",
+            ),
+            (
+                CompilerAssertKind::InvalidEnumConstruction,
+                "\"invalid-enum-construction\"",
+            ),
+        ];
+
+        for (kind, expected) in cases {
+            assert_eq!(
+                serde_json::to_string(&kind).expect("compiler assert kind should serialize"),
+                expected
+            );
+            assert_eq!(
+                serde_json::from_str::<CompilerAssertKind>(expected)
+                    .expect("compiler assert kind should deserialize"),
+                kind
+            );
+        }
+    }
 }

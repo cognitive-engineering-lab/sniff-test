@@ -432,6 +432,28 @@ pub struct PanicConfig {
 #[serde(rename_all = "kebab-case", deny_unknown_fields, default)]
 pub struct PanicLintConfig {
     pub compiler_assert: LintLevel,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub compiler_assert_bounds_check: Option<LintLevel>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub compiler_assert_overflow: Option<LintLevel>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub compiler_assert_overflow_negation: Option<LintLevel>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub compiler_assert_division_by_zero: Option<LintLevel>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub compiler_assert_remainder_by_zero: Option<LintLevel>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub compiler_assert_resumed_after_return: Option<LintLevel>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub compiler_assert_resumed_after_panic: Option<LintLevel>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub compiler_assert_resumed_after_drop: Option<LintLevel>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub compiler_assert_misaligned_pointer_dereference: Option<LintLevel>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub compiler_assert_null_pointer_dereference: Option<LintLevel>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub compiler_assert_invalid_enum_construction: Option<LintLevel>,
     pub panic_invocation: LintLevel,
     pub cached_dependency_panic: LintLevel,
     pub documented_panic: LintLevel,
@@ -443,6 +465,17 @@ impl Default for PanicLintConfig {
     fn default() -> Self {
         Self {
             compiler_assert: LintLevel::Deny,
+            compiler_assert_bounds_check: None,
+            compiler_assert_overflow: None,
+            compiler_assert_overflow_negation: None,
+            compiler_assert_division_by_zero: None,
+            compiler_assert_remainder_by_zero: None,
+            compiler_assert_resumed_after_return: None,
+            compiler_assert_resumed_after_panic: None,
+            compiler_assert_resumed_after_drop: None,
+            compiler_assert_misaligned_pointer_dereference: None,
+            compiler_assert_null_pointer_dereference: None,
+            compiler_assert_invalid_enum_construction: None,
             panic_invocation: LintLevel::Deny,
             cached_dependency_panic: LintLevel::Deny,
             documented_panic: LintLevel::Warn,
@@ -490,6 +523,28 @@ pub struct SafetyLintConfig {
     pub unsafe_call_missing_justification: LintLevel,
     pub unsafe_call_missing_requirements: LintLevel,
     pub unsafe_op_missing_justification: LintLevel,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub raw_pointer_dereference_missing_justification: Option<LintLevel>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub mutable_static_access_missing_justification: Option<LintLevel>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub extern_static_access_missing_justification: Option<LintLevel>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub union_field_access_missing_justification: Option<LintLevel>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub unsafe_field_access_missing_justification: Option<LintLevel>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub layout_constrained_type_initialization_missing_justification: Option<LintLevel>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub unsafe_field_initialization_missing_justification: Option<LintLevel>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub layout_constrained_field_mutation_missing_justification: Option<LintLevel>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub layout_constrained_field_borrow_missing_justification: Option<LintLevel>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub inline_assembly_missing_justification: Option<LintLevel>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub unsafe_binder_cast_missing_justification: Option<LintLevel>,
     pub safety_obligation_missing_justification: LintLevel,
     pub safety_obligation_missing_requirements: LintLevel,
 }
@@ -501,6 +556,17 @@ impl Default for SafetyLintConfig {
             unsafe_call_missing_justification: LintLevel::Warn,
             unsafe_call_missing_requirements: LintLevel::Warn,
             unsafe_op_missing_justification: LintLevel::Warn,
+            raw_pointer_dereference_missing_justification: None,
+            mutable_static_access_missing_justification: None,
+            extern_static_access_missing_justification: None,
+            union_field_access_missing_justification: None,
+            unsafe_field_access_missing_justification: None,
+            layout_constrained_type_initialization_missing_justification: None,
+            unsafe_field_initialization_missing_justification: None,
+            layout_constrained_field_mutation_missing_justification: None,
+            layout_constrained_field_borrow_missing_justification: None,
+            inline_assembly_missing_justification: None,
+            unsafe_binder_cast_missing_justification: None,
             safety_obligation_missing_justification: LintLevel::Warn,
             safety_obligation_missing_requirements: LintLevel::Warn,
         }
@@ -1198,6 +1264,22 @@ mod tests {
         let lints = PanicConfig::default().lints;
 
         assert_eq!(lints.compiler_assert, LintLevel::Deny);
+        assert_eq!(
+            [
+                lints.compiler_assert_bounds_check,
+                lints.compiler_assert_overflow,
+                lints.compiler_assert_overflow_negation,
+                lints.compiler_assert_division_by_zero,
+                lints.compiler_assert_remainder_by_zero,
+                lints.compiler_assert_resumed_after_return,
+                lints.compiler_assert_resumed_after_panic,
+                lints.compiler_assert_resumed_after_drop,
+                lints.compiler_assert_misaligned_pointer_dereference,
+                lints.compiler_assert_null_pointer_dereference,
+                lints.compiler_assert_invalid_enum_construction,
+            ],
+            [None; 11]
+        );
         assert_eq!(lints.panic_invocation, LintLevel::Deny);
         assert_eq!(lints.cached_dependency_panic, LintLevel::Deny);
         assert_eq!(lints.documented_panic, LintLevel::Warn);
@@ -1213,6 +1295,22 @@ mod tests {
         assert_eq!(lints.unsafe_call_missing_justification, LintLevel::Warn);
         assert_eq!(lints.unsafe_call_missing_requirements, LintLevel::Warn);
         assert_eq!(lints.unsafe_op_missing_justification, LintLevel::Warn);
+        assert_eq!(
+            [
+                lints.raw_pointer_dereference_missing_justification,
+                lints.mutable_static_access_missing_justification,
+                lints.extern_static_access_missing_justification,
+                lints.union_field_access_missing_justification,
+                lints.unsafe_field_access_missing_justification,
+                lints.layout_constrained_type_initialization_missing_justification,
+                lints.unsafe_field_initialization_missing_justification,
+                lints.layout_constrained_field_mutation_missing_justification,
+                lints.layout_constrained_field_borrow_missing_justification,
+                lints.inline_assembly_missing_justification,
+                lints.unsafe_binder_cast_missing_justification,
+            ],
+            [None; 11]
+        );
         assert_eq!(
             lints.safety_obligation_missing_justification,
             LintLevel::Warn
@@ -1239,6 +1337,17 @@ mod tests {
         let config = r#"
             [panics.lints]
             compiler-assert = "warn"
+            compiler-assert-bounds-check = "allow"
+            compiler-assert-overflow = "warn"
+            compiler-assert-overflow-negation = "deny"
+            compiler-assert-division-by-zero = "allow"
+            compiler-assert-remainder-by-zero = "warn"
+            compiler-assert-resumed-after-return = "deny"
+            compiler-assert-resumed-after-panic = "allow"
+            compiler-assert-resumed-after-drop = "warn"
+            compiler-assert-misaligned-pointer-dereference = "deny"
+            compiler-assert-null-pointer-dereference = "allow"
+            compiler-assert-invalid-enum-construction = "warn"
             panic-invocation = "allow"
             cached-dependency-panic = "warn"
             documented-panic = "allow"
@@ -1249,6 +1358,40 @@ mod tests {
         let parsed = SniffTestConfig::from_manifest_str(config).expect("manifest should parse");
 
         assert_eq!(parsed.panics.lints.compiler_assert, LintLevel::Warn);
+        assert_eq!(
+            [
+                parsed.panics.lints.compiler_assert_bounds_check,
+                parsed.panics.lints.compiler_assert_overflow,
+                parsed.panics.lints.compiler_assert_overflow_negation,
+                parsed.panics.lints.compiler_assert_division_by_zero,
+                parsed.panics.lints.compiler_assert_remainder_by_zero,
+                parsed.panics.lints.compiler_assert_resumed_after_return,
+                parsed.panics.lints.compiler_assert_resumed_after_panic,
+                parsed.panics.lints.compiler_assert_resumed_after_drop,
+                parsed
+                    .panics
+                    .lints
+                    .compiler_assert_misaligned_pointer_dereference,
+                parsed.panics.lints.compiler_assert_null_pointer_dereference,
+                parsed
+                    .panics
+                    .lints
+                    .compiler_assert_invalid_enum_construction,
+            ],
+            [
+                Some(LintLevel::Allow),
+                Some(LintLevel::Warn),
+                Some(LintLevel::Deny),
+                Some(LintLevel::Allow),
+                Some(LintLevel::Warn),
+                Some(LintLevel::Deny),
+                Some(LintLevel::Allow),
+                Some(LintLevel::Warn),
+                Some(LintLevel::Deny),
+                Some(LintLevel::Allow),
+                Some(LintLevel::Warn),
+            ]
+        );
         assert_eq!(parsed.panics.lints.panic_invocation, LintLevel::Allow);
         assert_eq!(parsed.panics.lints.cached_dependency_panic, LintLevel::Warn);
         assert_eq!(parsed.panics.lints.documented_panic, LintLevel::Allow);
@@ -1328,6 +1471,103 @@ mod tests {
             parsed.safety.lints.safety_obligation_missing_requirements,
             LintLevel::Deny
         );
+    }
+
+    #[test]
+    fn parses_safety_operation_lint_overrides() {
+        let config = r#"
+            [safety.lints]
+            raw-pointer-dereference-missing-justification = "allow"
+            mutable-static-access-missing-justification = "warn"
+            extern-static-access-missing-justification = "deny"
+            union-field-access-missing-justification = "allow"
+            unsafe-field-access-missing-justification = "warn"
+            layout-constrained-type-initialization-missing-justification = "deny"
+            unsafe-field-initialization-missing-justification = "allow"
+            layout-constrained-field-mutation-missing-justification = "warn"
+            layout-constrained-field-borrow-missing-justification = "deny"
+            inline-assembly-missing-justification = "allow"
+            unsafe-binder-cast-missing-justification = "warn"
+        "#;
+
+        let parsed = SniffTestConfig::from_manifest_str(config).expect("manifest should parse");
+        let lints = parsed.safety.lints;
+        assert_eq!(
+            [
+                lints.raw_pointer_dereference_missing_justification,
+                lints.mutable_static_access_missing_justification,
+                lints.extern_static_access_missing_justification,
+                lints.union_field_access_missing_justification,
+                lints.unsafe_field_access_missing_justification,
+                lints.layout_constrained_type_initialization_missing_justification,
+                lints.unsafe_field_initialization_missing_justification,
+                lints.layout_constrained_field_mutation_missing_justification,
+                lints.layout_constrained_field_borrow_missing_justification,
+                lints.inline_assembly_missing_justification,
+                lints.unsafe_binder_cast_missing_justification,
+            ],
+            [
+                Some(LintLevel::Allow),
+                Some(LintLevel::Warn),
+                Some(LintLevel::Deny),
+                Some(LintLevel::Allow),
+                Some(LintLevel::Warn),
+                Some(LintLevel::Deny),
+                Some(LintLevel::Allow),
+                Some(LintLevel::Warn),
+                Some(LintLevel::Deny),
+                Some(LintLevel::Allow),
+                Some(LintLevel::Warn),
+            ]
+        );
+    }
+
+    #[test]
+    fn optional_exact_lint_overrides_serialize_only_when_set() {
+        let mut panic_lints = PanicConfig::default().lints;
+        panic_lints.compiler_assert_bounds_check = Some(LintLevel::Warn);
+        let serialized = toml::to_string(&panic_lints).expect("panic lint config should serialize");
+        assert!(serialized.contains("compiler-assert-bounds-check = \"warn\""));
+        for omitted in [
+            "compiler-assert-overflow",
+            "compiler-assert-overflow-negation",
+            "compiler-assert-division-by-zero",
+            "compiler-assert-remainder-by-zero",
+            "compiler-assert-resumed-after-return",
+            "compiler-assert-resumed-after-panic",
+            "compiler-assert-resumed-after-drop",
+            "compiler-assert-misaligned-pointer-dereference",
+            "compiler-assert-null-pointer-dereference",
+            "compiler-assert-invalid-enum-construction",
+        ] {
+            assert!(
+                !serialized.contains(omitted),
+                "serialized unset panic override `{omitted}`"
+            );
+        }
+
+        let mut safety_lints = SafetyConfig::default().lints;
+        safety_lints.inline_assembly_missing_justification = Some(LintLevel::Deny);
+        let serialized =
+            toml::to_string(&safety_lints).expect("safety lint config should serialize");
+        assert!(serialized.contains("inline-assembly-missing-justification = \"deny\""));
+        for omitted in [
+            "raw-pointer-dereference-missing-justification",
+            "mutable-static-access-missing-justification",
+            "extern-static-access-missing-justification",
+            "union-field-access-missing-justification",
+            "unsafe-field-access-missing-justification",
+            "layout-constrained-type-initialization-missing-justification",
+            "unsafe-field-initialization-missing-justification",
+            "layout-constrained-field-mutation-missing-justification",
+            "layout-constrained-field-borrow-missing-justification",
+            "unsafe-binder-cast-missing-justification",
+        ] {
+            assert!(
+                !serialized.contains(omitted),
+                "serialized unset safety override `{omitted}`"
+            );
+        }
     }
 
     #[test]

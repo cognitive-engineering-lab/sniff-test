@@ -11,6 +11,7 @@ expression: messages
     "dependencies": [],
     "findings": [
       {
+        "compiler-assert-kind": "bounds-check",
         "kind": "compiler-assert",
         "level": "deny",
         "reason": "compiler assert",
@@ -35,7 +36,7 @@ expression: messages
         ]
       }
     ],
-    "format-version": 9,
+    "format-version": 10,
     "reason": "sniff-test-artifact",
     "rustc-version": "[RUSTC_VERSION]",
     "scope": "workspace",

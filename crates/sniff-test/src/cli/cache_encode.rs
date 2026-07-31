@@ -51,6 +51,8 @@ pub(super) fn cached_safety_finding<'tcx>(
     };
     Some(CachedFindingInput {
         kind,
+        compiler_assert_kind: finding.compiler_assert_kind,
+        safety_op_kind: finding.safety_op_kind,
         span: render_span(tcx, site.span),
         source_span: cached_source_span(tcx, site.span),
         trace: cached_trace(tcx, graph, &trace.edge_ids),
@@ -85,13 +87,18 @@ fn cached_panic_finding<'tcx>(
             let edge = graph.edge(edge_id);
             CachedFindingInput {
                 kind: match &evidence.kind {
-                    PanicEvidenceKind::CompilerAssert => CachedFindingKind::CompilerAssert,
+                    PanicEvidenceKind::CompilerAssert { .. } => CachedFindingKind::CompilerAssert,
                     PanicEvidenceKind::PanicObligation { .. } => CachedFindingKind::PanicObligation,
                     PanicEvidenceKind::PanicSink { .. } => CachedFindingKind::PanicInvocation,
                     PanicEvidenceKind::IndirectBoundary { .. } => {
                         CachedFindingKind::IndirectCallBoundary
                     }
                 },
+                compiler_assert_kind: match evidence.kind {
+                    PanicEvidenceKind::CompilerAssert { kind } => Some(kind),
+                    _ => None,
+                },
+                safety_op_kind: None,
                 span: render_span(tcx, edge.span),
                 source_span: cached_source_span(tcx, edge.span),
                 trace: cached_trace(tcx, graph, &evidence.trace.edge_ids),
@@ -120,6 +127,8 @@ fn cached_panic_finding<'tcx>(
                 } else {
                     CachedFindingKind::PanicObligation
                 },
+                compiler_assert_kind: None,
+                safety_op_kind: None,
                 span,
                 source_span,
                 trace: cached_trace(tcx, graph, &trace_edges_until(evidence, edge_id)),

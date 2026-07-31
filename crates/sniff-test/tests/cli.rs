@@ -53,6 +53,20 @@ cli_cases! {
             .crate_dir("app")
             .exit_code(101);
     }
+    "dependency_safety" => {
+        cached_raw_pointer_override_applies =>
+            Case::new("cached raw pointer override")
+                .crate_dir("app")
+                .config_append(
+                    "\nraw-pointer-dereference-missing-justification = \"allow\"\n",
+                );
+    }
+    "dependency_assert_kinds" => {
+        cached_compiler_assert_override_applies =>
+            Case::new("cached compiler assert override")
+                .crate_dir("app")
+                .exit_code(101);
+    }
     "closure_call_graph" => {
         closure_call_graph_diagnostics => Case::new("closure diagnostics")
             .args(&["--manifest", "basic.toml"])
@@ -71,6 +85,25 @@ cli_cases! {
     }
     "panic_axioms" => {
         compiler_assert_diagnostics => Case::new("compiler assert diagnostics").exit_code(101);
+        compiler_assert_division_override_uses_umbrella_fallback =>
+            Case::new("division assert override with umbrella fallback")
+                .config_append(
+                    "\n[panics.lints]\n\
+                     compiler-assert-division-by-zero = \"deny\"\n\
+                     compiler-assert = \"allow\"\n\
+                     panic-invocation = \"allow\"\n",
+                )
+                .exit_code(101);
+        compiler_assert_overrides_are_independent =>
+            Case::new("remainder and bounds assert overrides")
+                .config_append(
+                    "\n[panics.lints]\n\
+                     compiler-assert = \"allow\"\n\
+                     compiler-assert-remainder-by-zero = \"warn\"\n\
+                     compiler-assert-bounds-check = \"deny\"\n\
+                     panic-invocation = \"allow\"\n",
+                )
+                .exit_code(101);
         cargo_manifest_path_forwarding => Case::new("cargo manifest-path forwarding")
             .working_dir("..")
             .args(&["--", "--manifest-path", "{fixture}/Cargo.toml"])
@@ -99,6 +132,15 @@ cli_cases! {
         unsafe_op_missing_justification_can_be_denied => Case::new("unsafe operation deny policy")
             .config_append("\n[safety.lints]\nunsafe-op-missing-justification = \"deny\"\n")
             .exit_code(101);
+        unsafe_op_overrides_use_umbrella_fallback =>
+            Case::new("unsafe operation overrides with umbrella fallback")
+                .config_append(
+                    "\n[safety.lints]\n\
+                     raw-pointer-dereference-missing-justification = \"warn\"\n\
+                     unsafe-op-missing-justification = \"allow\"\n\
+                     inline-assembly-missing-justification = \"deny\"\n",
+                )
+                .exit_code(101);
     }
     "ambiguous_markers" => {
         clean_explicit_report_roots_do_not_warn => Case::new("clean explicit report roots")

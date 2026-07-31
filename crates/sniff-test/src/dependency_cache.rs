@@ -862,6 +862,8 @@ mod tests {
             .enumerate()
             .map(|(index, dependency)| CachedFindingInput {
                 kind: CachedFindingKind::PanicInvocation,
+                compiler_assert_kind: None,
+                safety_op_kind: None,
                 span: format!("dependency {index}"),
                 source_span: None,
                 trace: CachedTraceInput {
@@ -930,6 +932,8 @@ mod tests {
                     has_contract: false,
                     findings: vec![CachedFindingInput {
                         kind: CachedFindingKind::PanicInvocation,
+                        compiler_assert_kind: None,
+                        safety_op_kind: None,
                         span: step_span.to_owned(),
                         source_span: None,
                         trace: CachedTraceInput {

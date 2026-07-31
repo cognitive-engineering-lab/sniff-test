@@ -6,9 +6,9 @@ use crate::cache::CachedFindingKind;
 use crate::config::{LintLevel, ReportRootSet, SniffTestConfig};
 use crate::contracts::ContractDocOverrides;
 use crate::namespace::canonical_namespace;
-use crate::panics::PanicEvidenceKind;
+use crate::panics::{CompilerAssertKind, PanicEvidenceKind};
 use crate::report_roots::{MissingReportRoot, ReportRootKind};
-use crate::safety::{SafetyCallKind, SafetyFinding, SafetyRequirement};
+use crate::safety::{SafetyCallKind, SafetyFinding, SafetyOpKind, SafetyRequirement};
 use rustc_middle::ty::TyCtxt;
 use rustc_span::Span;
 use serde::Serialize;
@@ -23,6 +23,10 @@ use super::report::render_span;
 #[serde(rename_all = "kebab-case")]
 pub(crate) struct Finding {
     pub(crate) kind: FindingKind,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) compiler_assert_kind: Option<CompilerAssertKind>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) safety_op_kind: Option<SafetyOpKind>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) root: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -51,6 +55,8 @@ impl Finding {
     pub(crate) fn new(kind: FindingKind, reason: String, diagnostic: FindingDiagnostic) -> Self {
         Self {
             kind,
+            compiler_assert_kind: None,
+            safety_op_kind: None,
             root: None,
             root_kind: None,
             function: None,
@@ -63,6 +69,32 @@ impl Finding {
             requirements: Vec::new(),
             diagnostic,
         }
+    }
+
+    fn lint_level(&self, config: &SniffTestConfig) -> LintLevel {
+        assert!(
+            match self.kind {
+                FindingKind::CompilerAssert => self.compiler_assert_kind.is_some(),
+                FindingKind::CachedDependencyPanic => true,
+                _ => self.compiler_assert_kind.is_none(),
+            },
+            "compiler-assert-kind must be present exactly for local compiler-assert findings, \
+             and may also be present for cached-dependency-panic findings"
+        );
+        assert!(
+            match self.kind {
+                FindingKind::UnsafeOpMissingJustification => self.safety_op_kind.is_some(),
+                _ => self.safety_op_kind.is_none(),
+            },
+            "safety-op-kind must be present exactly for unsafe-op-missing-justification findings"
+        );
+        self.compiler_assert_kind
+            .and_then(|kind| compiler_assert_lint_override(kind, config))
+            .or_else(|| {
+                self.safety_op_kind
+                    .and_then(|kind| safety_op_lint_override(kind, config))
+            })
+            .unwrap_or_else(|| self.kind.lint_level(config))
     }
 }
 
@@ -81,10 +113,61 @@ pub(crate) fn resolve_findings(
     findings
         .into_iter()
         .filter_map(|finding| {
-            let level = finding.kind.lint_level(config);
+            let level = finding.lint_level(config);
             (!level.is_allow()).then_some(ResolvedFinding { level, finding })
         })
         .collect()
+}
+
+fn compiler_assert_lint_override(
+    kind: CompilerAssertKind,
+    config: &SniffTestConfig,
+) -> Option<LintLevel> {
+    let lints = &config.panics.lints;
+    match kind {
+        CompilerAssertKind::BoundsCheck => lints.compiler_assert_bounds_check,
+        CompilerAssertKind::Overflow => lints.compiler_assert_overflow,
+        CompilerAssertKind::OverflowNegation => lints.compiler_assert_overflow_negation,
+        CompilerAssertKind::DivisionByZero => lints.compiler_assert_division_by_zero,
+        CompilerAssertKind::RemainderByZero => lints.compiler_assert_remainder_by_zero,
+        CompilerAssertKind::ResumedAfterReturn => lints.compiler_assert_resumed_after_return,
+        CompilerAssertKind::ResumedAfterPanic => lints.compiler_assert_resumed_after_panic,
+        CompilerAssertKind::ResumedAfterDrop => lints.compiler_assert_resumed_after_drop,
+        CompilerAssertKind::MisalignedPointerDereference => {
+            lints.compiler_assert_misaligned_pointer_dereference
+        }
+        CompilerAssertKind::NullPointerDereference => {
+            lints.compiler_assert_null_pointer_dereference
+        }
+        CompilerAssertKind::InvalidEnumConstruction => {
+            lints.compiler_assert_invalid_enum_construction
+        }
+    }
+}
+
+fn safety_op_lint_override(kind: SafetyOpKind, config: &SniffTestConfig) -> Option<LintLevel> {
+    let lints = &config.safety.lints;
+    match kind {
+        SafetyOpKind::DerefRawPointer => lints.raw_pointer_dereference_missing_justification,
+        SafetyOpKind::UseOfMutableStatic => lints.mutable_static_access_missing_justification,
+        SafetyOpKind::UseOfExternStatic => lints.extern_static_access_missing_justification,
+        SafetyOpKind::AccessToUnionField => lints.union_field_access_missing_justification,
+        SafetyOpKind::UseOfUnsafeField => lints.unsafe_field_access_missing_justification,
+        SafetyOpKind::InitializingLayoutConstrainedType => {
+            lints.layout_constrained_type_initialization_missing_justification
+        }
+        SafetyOpKind::InitializingTypeWithUnsafeField => {
+            lints.unsafe_field_initialization_missing_justification
+        }
+        SafetyOpKind::MutationOfLayoutConstrainedField => {
+            lints.layout_constrained_field_mutation_missing_justification
+        }
+        SafetyOpKind::BorrowOfLayoutConstrainedField => {
+            lints.layout_constrained_field_borrow_missing_justification
+        }
+        SafetyOpKind::InlineAssembly => lints.inline_assembly_missing_justification,
+        SafetyOpKind::UnsafeBinderCast => lints.unsafe_binder_cast_missing_justification,
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -131,7 +214,7 @@ pub(crate) enum FindingKind {
 impl FindingKind {
     pub(crate) fn from_evidence(kind: &PanicEvidenceKind) -> Self {
         match kind {
-            PanicEvidenceKind::CompilerAssert => Self::CompilerAssert,
+            PanicEvidenceKind::CompilerAssert { .. } => Self::CompilerAssert,
             PanicEvidenceKind::PanicObligation { .. } => Self::DocumentedPanic,
             PanicEvidenceKind::PanicSink { .. } => Self::PanicInvocation,
             PanicEvidenceKind::IndirectBoundary { .. } => Self::IndirectCallBoundary,
@@ -309,6 +392,7 @@ pub(crate) fn safety_finding_report(
             Finding {
                 function: Some(canonical_namespace(tcx, site.owner)),
                 span: Some(render_span(tcx, site.span)),
+                safety_op_kind: Some(op),
                 ..Finding::new(
                     FindingKind::UnsafeOpMissingJustification,
                     format!("unsafe operation ({operation}) has no `// SAFETY:` justification"),
@@ -362,6 +446,8 @@ pub(crate) fn safety_finding_report(
 mod tests {
     use super::{Finding, FindingDiagnostic, FindingKind, resolve_findings};
     use crate::config::{LintLevel, SniffTestConfig};
+    use crate::panics::CompilerAssertKind;
+    use crate::safety::SafetyOpKind;
 
     fn finding(kind: FindingKind) -> Finding {
         Finding::new(
@@ -494,5 +580,183 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn compiler_assert_subtypes_use_only_their_exact_override() {
+        type ConfigureLint = fn(&mut SniffTestConfig);
+        let cases: [(CompilerAssertKind, ConfigureLint); 11] = [
+            (CompilerAssertKind::BoundsCheck, |config| {
+                config.panics.lints.compiler_assert_bounds_check = Some(LintLevel::Warn);
+            }),
+            (CompilerAssertKind::Overflow, |config| {
+                config.panics.lints.compiler_assert_overflow = Some(LintLevel::Warn);
+            }),
+            (CompilerAssertKind::OverflowNegation, |config| {
+                config.panics.lints.compiler_assert_overflow_negation = Some(LintLevel::Warn);
+            }),
+            (CompilerAssertKind::DivisionByZero, |config| {
+                config.panics.lints.compiler_assert_division_by_zero = Some(LintLevel::Warn);
+            }),
+            (CompilerAssertKind::RemainderByZero, |config| {
+                config.panics.lints.compiler_assert_remainder_by_zero = Some(LintLevel::Warn);
+            }),
+            (CompilerAssertKind::ResumedAfterReturn, |config| {
+                config.panics.lints.compiler_assert_resumed_after_return = Some(LintLevel::Warn);
+            }),
+            (CompilerAssertKind::ResumedAfterPanic, |config| {
+                config.panics.lints.compiler_assert_resumed_after_panic = Some(LintLevel::Warn);
+            }),
+            (CompilerAssertKind::ResumedAfterDrop, |config| {
+                config.panics.lints.compiler_assert_resumed_after_drop = Some(LintLevel::Warn);
+            }),
+            (CompilerAssertKind::MisalignedPointerDereference, |config| {
+                config
+                    .panics
+                    .lints
+                    .compiler_assert_misaligned_pointer_dereference = Some(LintLevel::Warn);
+            }),
+            (CompilerAssertKind::NullPointerDereference, |config| {
+                config.panics.lints.compiler_assert_null_pointer_dereference =
+                    Some(LintLevel::Warn);
+            }),
+            (CompilerAssertKind::InvalidEnumConstruction, |config| {
+                config
+                    .panics
+                    .lints
+                    .compiler_assert_invalid_enum_construction = Some(LintLevel::Warn);
+            }),
+        ];
+
+        for (kind, configure) in cases {
+            let mut config = SniffTestConfig::default();
+            config.panics.lints.compiler_assert = LintLevel::Allow;
+            configure(&mut config);
+            let mut finding = finding(FindingKind::CompilerAssert);
+            finding.compiler_assert_kind = Some(kind);
+
+            assert_eq!(finding.lint_level(&config), LintLevel::Warn, "{kind:?}");
+        }
+    }
+
+    #[test]
+    fn cached_compiler_assert_without_exact_override_uses_dependency_fallback() {
+        let mut config = SniffTestConfig::default();
+        config.panics.lints.compiler_assert = LintLevel::Deny;
+        config.panics.lints.cached_dependency_panic = LintLevel::Allow;
+        let mut finding = finding(FindingKind::CachedDependencyPanic);
+        finding.compiler_assert_kind = Some(CompilerAssertKind::DivisionByZero);
+
+        assert_eq!(finding.lint_level(&config), LintLevel::Allow);
+    }
+
+    #[test]
+    #[should_panic(expected = "compiler-assert-kind must be present")]
+    fn local_compiler_assert_requires_its_subtype() {
+        let finding = finding(FindingKind::CompilerAssert);
+
+        let _ = finding.lint_level(&SniffTestConfig::default());
+    }
+
+    #[test]
+    fn safety_op_subtypes_use_only_their_exact_override() {
+        type ConfigureLint = fn(&mut SniffTestConfig);
+        let cases: [(SafetyOpKind, ConfigureLint); 11] = [
+            (SafetyOpKind::DerefRawPointer, |config| {
+                config
+                    .safety
+                    .lints
+                    .raw_pointer_dereference_missing_justification = Some(LintLevel::Deny);
+            }),
+            (SafetyOpKind::UseOfMutableStatic, |config| {
+                config
+                    .safety
+                    .lints
+                    .mutable_static_access_missing_justification = Some(LintLevel::Deny);
+            }),
+            (SafetyOpKind::UseOfExternStatic, |config| {
+                config
+                    .safety
+                    .lints
+                    .extern_static_access_missing_justification = Some(LintLevel::Deny);
+            }),
+            (SafetyOpKind::AccessToUnionField, |config| {
+                config.safety.lints.union_field_access_missing_justification =
+                    Some(LintLevel::Deny);
+            }),
+            (SafetyOpKind::UseOfUnsafeField, |config| {
+                config
+                    .safety
+                    .lints
+                    .unsafe_field_access_missing_justification = Some(LintLevel::Deny);
+            }),
+            (SafetyOpKind::InitializingLayoutConstrainedType, |config| {
+                config
+                    .safety
+                    .lints
+                    .layout_constrained_type_initialization_missing_justification =
+                    Some(LintLevel::Deny);
+            }),
+            (SafetyOpKind::InitializingTypeWithUnsafeField, |config| {
+                config
+                    .safety
+                    .lints
+                    .unsafe_field_initialization_missing_justification = Some(LintLevel::Deny);
+            }),
+            (SafetyOpKind::MutationOfLayoutConstrainedField, |config| {
+                config
+                    .safety
+                    .lints
+                    .layout_constrained_field_mutation_missing_justification =
+                    Some(LintLevel::Deny);
+            }),
+            (SafetyOpKind::BorrowOfLayoutConstrainedField, |config| {
+                config
+                    .safety
+                    .lints
+                    .layout_constrained_field_borrow_missing_justification = Some(LintLevel::Deny);
+            }),
+            (SafetyOpKind::InlineAssembly, |config| {
+                config.safety.lints.inline_assembly_missing_justification = Some(LintLevel::Deny);
+            }),
+            (SafetyOpKind::UnsafeBinderCast, |config| {
+                config.safety.lints.unsafe_binder_cast_missing_justification =
+                    Some(LintLevel::Deny);
+            }),
+        ];
+
+        for (kind, configure) in cases {
+            let mut config = SniffTestConfig::default();
+            config.safety.lints.unsafe_op_missing_justification = LintLevel::Allow;
+            configure(&mut config);
+            let mut finding = finding(FindingKind::UnsafeOpMissingJustification);
+            finding.safety_op_kind = Some(kind);
+
+            assert_eq!(finding.lint_level(&config), LintLevel::Deny, "{kind:?}");
+        }
+    }
+
+    #[test]
+    #[should_panic(expected = "safety-op-kind must be present")]
+    fn unsafe_operation_requires_its_subtype() {
+        let finding = finding(FindingKind::UnsafeOpMissingJustification);
+
+        let _ = finding.lint_level(&SniffTestConfig::default());
+    }
+
+    #[test]
+    fn serialized_findings_include_typed_subtypes() {
+        let mut compiler_assert = finding(FindingKind::CompilerAssert);
+        compiler_assert.compiler_assert_kind = Some(CompilerAssertKind::DivisionByZero);
+        let compiler_assert =
+            serde_json::to_value(compiler_assert).expect("serialize compiler assert");
+        assert_eq!(compiler_assert["compiler-assert-kind"], "division-by-zero");
+        assert!(compiler_assert.get("safety-op-kind").is_none());
+
+        let mut safety_op = finding(FindingKind::UnsafeOpMissingJustification);
+        safety_op.safety_op_kind = Some(SafetyOpKind::DerefRawPointer);
+        let safety_op = serde_json::to_value(safety_op).expect("serialize safety op");
+        assert_eq!(safety_op["safety-op-kind"], "raw-pointer-dereference");
+        assert!(safety_op.get("compiler-assert-kind").is_none());
     }
 }

@@ -959,7 +959,7 @@ fn panic_trigger_note<'tcx>(
     evidence: &PanicEvidence,
 ) -> String {
     match evidence.kind {
-        PanicEvidenceKind::CompilerAssert => {
+        PanicEvidenceKind::CompilerAssert { .. } => {
             let target = &graph.node(graph.edge(evidence.edge_id).target).kind;
             if let ReachabilityNodeKind::CompilerAssert { message, locals } = target {
                 format!(

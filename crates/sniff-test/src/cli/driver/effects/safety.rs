@@ -672,6 +672,7 @@ fn cached_dependency_safety_finding<'tcx>(
     let mut rendered_trace = crate::cli::report::render_trace(tcx, graph, &trace.edge_ids);
     rendered_trace.extend(crate::cli::report::render_cached_trace(function, cached));
     let finding = Finding {
+        safety_op_kind: cached.safety_op_kind,
         root: Some(canonical_namespace(tcx, root.def_id())),
         root_kind: Some(root.kind()),
         function: None,

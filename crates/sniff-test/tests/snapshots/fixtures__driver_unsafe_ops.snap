@@ -17,6 +17,7 @@ expression: messages
         "reason": "unsafe operation (inline assembly) has no `// SAFETY:` justification",
         "root": "unsafe_ops::asm_unjustified",
         "root-kind": "concrete",
+        "safety-op-kind": "inline-assembly",
         "span": "[FIXTURE]/src/lib.rs:49:9: 49:20"
       },
       {
@@ -26,6 +27,7 @@ expression: messages
         "reason": "unsafe operation (raw pointer dereference) has no `// SAFETY:` justification",
         "root": "unsafe_ops::deref_unjustified",
         "root-kind": "concrete",
+        "safety-op-kind": "raw-pointer-dereference",
         "span": "[FIXTURE]/src/lib.rs:18:14: 18:18"
       },
       {
@@ -35,6 +37,7 @@ expression: messages
         "reason": "unsafe operation (extern static access) has no `// SAFETY:` justification",
         "root": "unsafe_ops::extern_static_unjustified",
         "root-kind": "concrete",
+        "safety-op-kind": "extern-static-access",
         "span": "[FIXTURE]/src/lib.rs:36:14: 36:22"
       },
       {
@@ -44,6 +47,7 @@ expression: messages
         "reason": "unsafe operation (mutable static access) has no `// SAFETY:` justification",
         "root": "unsafe_ops::mutable_static_unjustified",
         "root-kind": "concrete",
+        "safety-op-kind": "mutable-static-access",
         "span": "[FIXTURE]/src/lib.rs:27:14: 27:21"
       },
       {
@@ -53,10 +57,11 @@ expression: messages
         "reason": "unsafe operation (union field access) has no `// SAFETY:` justification",
         "root": "unsafe_ops::union_read_unjustified",
         "root-kind": "concrete",
+        "safety-op-kind": "union-field-access",
         "span": "[FIXTURE]/src/lib.rs:40:14: 40:23"
       }
     ],
-    "format-version": 9,
+    "format-version": 10,
     "reason": "sniff-test-artifact",
     "rustc-version": "[RUSTC_VERSION]",
     "scope": "workspace",
