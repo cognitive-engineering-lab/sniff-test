@@ -156,18 +156,18 @@ pub(crate) enum DiagnosticMessage {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "kebab-case", tag = "kind")]
+#[serde(
+    rename_all = "kebab-case",
+    rename_all_fields = "kebab-case",
+    tag = "kind"
+)]
 pub(crate) enum FindingKind {
     CompilerAssert {
-        #[serde(rename = "compiler-assert-kind")]
         compiler_assert_kind: CompilerAssertKind,
     },
     PanicInvocation,
     CachedDependencyPanic {
-        #[serde(
-            rename = "compiler-assert-kind",
-            skip_serializing_if = "Option::is_none"
-        )]
+        #[serde(skip_serializing_if = "Option::is_none")]
         compiler_assert_kind: Option<CompilerAssertKind>,
     },
     DocumentedPanic,
@@ -185,7 +185,6 @@ pub(crate) enum FindingKind {
     UnsafeCallMissingJustification,
     UnsafeCallMissingRequirements,
     UnsafeOpMissingJustification {
-        #[serde(rename = "safety-op-kind")]
         safety_op_kind: SafetyOpKind,
     },
     SafetyObligationMissingJustification,

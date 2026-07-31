@@ -615,6 +615,8 @@ pub struct CachedSourceSpan {
 /// Semantic category for cached evidence.
 ///
 /// The reporter maps these categories to labels, counts, and colors.
+/// Empty struct variants are intentional: together with `deny_unknown_fields`,
+/// they reject subtype fields that belong only to payload-bearing variants.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(
     rename_all = "kebab-case",
