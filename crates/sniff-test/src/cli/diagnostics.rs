@@ -411,7 +411,8 @@ fn decorate_cached_dependency_contract_diagnostic<'tcx>(
         |kind| {
             matches!(
                 kind,
-                CachedFindingKind::PanicObligation | CachedFindingKind::TrustedPanicObligation
+                CachedFindingKind::PanicObligation {}
+                    | CachedFindingKind::TrustedPanicObligation {}
             )
         },
     );
@@ -447,9 +448,9 @@ fn decorate_cached_dependency_raw_panic_diagnostic<'tcx>(
         |kind| {
             matches!(
                 kind,
-                CachedFindingKind::CompilerAssert
-                    | CachedFindingKind::PanicInvocation
-                    | CachedFindingKind::IndirectCallBoundary
+                CachedFindingKind::CompilerAssert { .. }
+                    | CachedFindingKind::PanicInvocation {}
+                    | CachedFindingKind::IndirectCallBoundary {}
             )
         },
     );
@@ -510,9 +511,9 @@ fn add_cached_dependency_panic_site_notes(
     for finding in cached_findings_for_diagnostic(function, cached_finding, |kind| {
         matches!(
             kind,
-            CachedFindingKind::CompilerAssert
-                | CachedFindingKind::PanicInvocation
-                | CachedFindingKind::IndirectCallBoundary
+            CachedFindingKind::CompilerAssert { .. }
+                | CachedFindingKind::PanicInvocation {}
+                | CachedFindingKind::IndirectCallBoundary {}
         )
     }) {
         if let Some(span) = finding

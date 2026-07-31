@@ -186,7 +186,7 @@ impl PanicRootReport {
             ..Finding::new(
                 FindingKind::CachedDependencyPanic {
                     compiler_assert_kind: cached_finding
-                        .and_then(|finding| finding.compiler_assert_kind),
+                        .and_then(|finding| finding.kind.compiler_assert_kind()),
                 },
                 summary.panic_reason(cached_finding),
                 diagnostic,

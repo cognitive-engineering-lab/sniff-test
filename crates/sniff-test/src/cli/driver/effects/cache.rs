@@ -42,8 +42,6 @@ pub(super) fn rebase_cached_dependency_finding<'tcx>(
     });
     CachedFindingInput {
         kind: cached.kind,
-        compiler_assert_kind: cached.compiler_assert_kind,
-        safety_op_kind: cached.safety_op_kind,
         span: render_span(tcx, edge.span()),
         source_span: cached.source_span.clone(),
         trace: cached_trace,

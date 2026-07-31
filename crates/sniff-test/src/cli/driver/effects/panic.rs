@@ -390,11 +390,11 @@ fn push_cached_dependency_finding(
     trace: &EffectTrace,
 ) {
     let obligation_kind = match finding.kind {
-        CachedFindingKind::PanicObligation => Some(FindingKind::DocumentedPanic),
-        CachedFindingKind::TrustedPanicObligation => Some(FindingKind::TrustedPanic),
-        CachedFindingKind::CompilerAssert
-        | CachedFindingKind::PanicInvocation
-        | CachedFindingKind::IndirectCallBoundary => {
+        CachedFindingKind::PanicObligation {} => Some(FindingKind::DocumentedPanic),
+        CachedFindingKind::TrustedPanicObligation {} => Some(FindingKind::TrustedPanic),
+        CachedFindingKind::CompilerAssert { .. }
+        | CachedFindingKind::PanicInvocation {}
+        | CachedFindingKind::IndirectCallBoundary {} => {
             report.push_cached_dependency_panic(
                 cx.tcx,
                 cx.view.graph(),
@@ -405,11 +405,11 @@ fn push_cached_dependency_finding(
             );
             None
         }
-        CachedFindingKind::UnsafeCallMissingJustification
-        | CachedFindingKind::UnsafeCallMissingRequirements
-        | CachedFindingKind::UnsafeOpMissingJustification
-        | CachedFindingKind::SafetyObligationMissingJustification
-        | CachedFindingKind::SafetyObligationMissingRequirements => return,
+        CachedFindingKind::UnsafeCallMissingJustification {}
+        | CachedFindingKind::UnsafeCallMissingRequirements {}
+        | CachedFindingKind::UnsafeOpMissingJustification { .. }
+        | CachedFindingKind::SafetyObligationMissingJustification {}
+        | CachedFindingKind::SafetyObligationMissingRequirements {} => return,
     };
     if let Some(kind) = obligation_kind {
         report.push_cached_dependency_obligation(

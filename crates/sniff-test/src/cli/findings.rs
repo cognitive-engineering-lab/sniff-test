@@ -2,7 +2,7 @@
 
 use std::path::Path;
 
-use crate::cache::{CachedFinding, CachedFindingKind};
+use crate::cache::CachedFindingKind;
 use crate::config::{LintLevel, ReportRootSet, SniffTestConfig};
 use crate::contracts::ContractDocOverrides;
 use crate::namespace::canonical_namespace;
@@ -204,32 +204,28 @@ impl FindingKind {
         }
     }
 
-    pub(crate) fn from_cached_safety(finding: &CachedFinding) -> Option<Self> {
-        match finding.kind {
-            CachedFindingKind::UnsafeCallMissingJustification => {
+    pub(crate) fn from_cached_safety(kind: CachedFindingKind) -> Option<Self> {
+        match kind {
+            CachedFindingKind::UnsafeCallMissingJustification {} => {
                 Some(Self::UnsafeCallMissingJustification)
             }
-            CachedFindingKind::UnsafeCallMissingRequirements => {
+            CachedFindingKind::UnsafeCallMissingRequirements {} => {
                 Some(Self::UnsafeCallMissingRequirements)
             }
-            CachedFindingKind::UnsafeOpMissingJustification => {
-                Some(Self::UnsafeOpMissingJustification {
-                    safety_op_kind: finding
-                        .safety_op_kind
-                        .expect("validated cached unsafe operation must have its subtype"),
-                })
+            CachedFindingKind::UnsafeOpMissingJustification { safety_op_kind } => {
+                Some(Self::UnsafeOpMissingJustification { safety_op_kind })
             }
-            CachedFindingKind::SafetyObligationMissingJustification => {
+            CachedFindingKind::SafetyObligationMissingJustification {} => {
                 Some(Self::SafetyObligationMissingJustification)
             }
-            CachedFindingKind::SafetyObligationMissingRequirements => {
+            CachedFindingKind::SafetyObligationMissingRequirements {} => {
                 Some(Self::SafetyObligationMissingRequirements)
             }
-            CachedFindingKind::CompilerAssert
-            | CachedFindingKind::PanicInvocation
-            | CachedFindingKind::PanicObligation
-            | CachedFindingKind::TrustedPanicObligation
-            | CachedFindingKind::IndirectCallBoundary => None,
+            CachedFindingKind::CompilerAssert { .. }
+            | CachedFindingKind::PanicInvocation {}
+            | CachedFindingKind::PanicObligation {}
+            | CachedFindingKind::TrustedPanicObligation {}
+            | CachedFindingKind::IndirectCallBoundary {} => None,
         }
     }
 
