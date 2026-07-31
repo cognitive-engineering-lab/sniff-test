@@ -217,7 +217,7 @@ impl<'tcx> Effect<'tcx> for SafetyEffect<'_, '_> {
                     continue;
                 };
                 incomplete |= !function.resolve_trace(finding.trace).complete;
-                if FindingKind::from_cached_safety(finding.kind).is_none() {
+                if FindingKind::from_cached_safety(&finding).is_none() {
                     continue;
                 }
                 sources.push(EffectSource {
@@ -667,12 +667,11 @@ fn cached_dependency_safety_finding<'tcx>(
     function: &CachedFunction,
     cached: &CachedFinding,
 ) -> Option<Finding> {
-    let kind = FindingKind::from_cached_safety(cached.kind)?;
+    let kind = FindingKind::from_cached_safety(cached)?;
     let summary = function.summary();
     let mut rendered_trace = crate::cli::report::render_trace(tcx, graph, &trace.edge_ids);
     rendered_trace.extend(crate::cli::report::render_cached_trace(function, cached));
     let finding = Finding {
-        safety_op_kind: cached.safety_op_kind,
         root: Some(canonical_namespace(tcx, root.def_id())),
         root_kind: Some(root.kind()),
         function: None,

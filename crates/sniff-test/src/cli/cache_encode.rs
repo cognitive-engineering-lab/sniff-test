@@ -24,21 +24,23 @@ pub(super) fn cached_safety_finding<'tcx>(
     safety_finding: &SafetyFinding,
     finding: &Finding,
 ) -> Option<CachedFindingInput> {
-    let kind = match finding.kind {
+    let (kind, safety_op_kind) = match finding.kind {
         FindingKind::UnsafeCallMissingJustification => {
-            CachedFindingKind::UnsafeCallMissingJustification
+            (CachedFindingKind::UnsafeCallMissingJustification, None)
         }
         FindingKind::UnsafeCallMissingRequirements => {
-            CachedFindingKind::UnsafeCallMissingRequirements
+            (CachedFindingKind::UnsafeCallMissingRequirements, None)
         }
-        FindingKind::UnsafeOpMissingJustification => {
-            CachedFindingKind::UnsafeOpMissingJustification
-        }
-        FindingKind::SafetyObligationMissingJustification => {
-            CachedFindingKind::SafetyObligationMissingJustification
-        }
+        FindingKind::UnsafeOpMissingJustification { safety_op_kind } => (
+            CachedFindingKind::UnsafeOpMissingJustification,
+            Some(safety_op_kind),
+        ),
+        FindingKind::SafetyObligationMissingJustification => (
+            CachedFindingKind::SafetyObligationMissingJustification,
+            None,
+        ),
         FindingKind::SafetyObligationMissingRequirements => {
-            CachedFindingKind::SafetyObligationMissingRequirements
+            (CachedFindingKind::SafetyObligationMissingRequirements, None)
         }
         _ => return None,
     };
@@ -51,8 +53,8 @@ pub(super) fn cached_safety_finding<'tcx>(
     };
     Some(CachedFindingInput {
         kind,
-        compiler_assert_kind: finding.compiler_assert_kind,
-        safety_op_kind: finding.safety_op_kind,
+        compiler_assert_kind: None,
+        safety_op_kind,
         span: render_span(tcx, site.span),
         source_span: cached_source_span(tcx, site.span),
         trace: cached_trace(tcx, graph, &trace.edge_ids),

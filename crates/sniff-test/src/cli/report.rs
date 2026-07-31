@@ -102,10 +102,6 @@ impl PanicRootReport {
             raw_panic_diagnostic(tcx, graph, evidence, self.root_def_id, self.include_stack)
         };
         self.push_finding(Finding {
-            compiler_assert_kind: match evidence.kind {
-                PanicEvidenceKind::CompilerAssert { kind } => Some(kind),
-                _ => None,
-            },
             target,
             span: Some(render_span(tcx, trigger_edge.span)),
             trace: render_trace(tcx, graph, &evidence.trace.edge_ids),
@@ -183,13 +179,15 @@ impl PanicRootReport {
             trace.extend(render_cached_trace(function, finding));
         }
         self.push_finding(Finding {
-            compiler_assert_kind: cached_finding.and_then(|finding| finding.compiler_assert_kind),
             target: Some(summary.path.clone()),
             span: Some(render_span(tcx, edge.span)),
             effect_span: cached_finding.map(render_cached_effect_span),
             trace,
             ..Finding::new(
-                FindingKind::CachedDependencyPanic,
+                FindingKind::CachedDependencyPanic {
+                    compiler_assert_kind: cached_finding
+                        .and_then(|finding| finding.compiler_assert_kind),
+                },
                 summary.panic_reason(cached_finding),
                 diagnostic,
             )
