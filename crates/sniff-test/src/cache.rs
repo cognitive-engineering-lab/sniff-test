@@ -1110,6 +1110,11 @@ mod tests {
             panic: effect_input(vec![compiler_assert]),
             safety: effect_input(vec![safety_op]),
         }]);
+        // Analysis IDs hash serialized bytes, so this freezes the v12 field order as well as shape.
+        assert_eq!(
+            analysis.analysis_id,
+            AnalysisId::from("bf170eedcf5f07aa1a60141abec0a7f6")
+        );
 
         let compiler_assert = analysis
             .finding_arena
