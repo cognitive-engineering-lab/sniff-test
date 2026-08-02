@@ -29,7 +29,7 @@ pub(super) struct PanicContractDiagnostic {
     pub(super) obligation_def_id: DefId,
     pub(super) root_def_id: DefId,
     pub(super) trusted: bool,
-    pub(super) include_stack: bool,
+    pub(super) show_full_stack_trace: bool,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -37,14 +37,14 @@ pub(super) struct CachedDependencyContractDiagnostic {
     pub(super) edge_id: ReachabilityEdgeId,
     pub(super) root_def_id: DefId,
     pub(super) trusted: bool,
-    pub(super) include_stack: bool,
+    pub(super) show_full_stack_trace: bool,
 }
 
 #[derive(Debug, Clone, Copy)]
 pub(super) struct CachedDependencyRawPanicDiagnostic {
     pub(super) edge_id: ReachabilityEdgeId,
     pub(super) root_def_id: DefId,
-    pub(super) include_stack: bool,
+    pub(super) show_full_stack_trace: bool,
 }
 
 /// The diagnostic surface findings decorate, bridging the two `Diag`
@@ -257,20 +257,28 @@ pub(super) fn indirect_boundary_diagnostic<'tcx>(
     graph: &ReachabilityGraph<'tcx>,
     evidence: &PanicEvidence,
     root_def_id: DefId,
-    include_stack: bool,
+    show_full_stack_trace: bool,
 ) -> FindingDiagnostic {
     let root = canonical_namespace(tcx, root_def_id);
-    let trigger_edge_id = trigger_edge_id(graph, evidence);
-    let trigger_edge = graph.edge(trigger_edge_id);
+    let trigger_span = graph.edge(trigger_edge_id(graph, evidence)).span;
     let message = format!("function `{root}` reaches an unverifiable indirect call");
     finding_diagnostic(Some(tcx.def_span(root_def_id)), message, |diag| {
-        decorate_indirect_boundary_diagnostic(
+        diag.span_note(
+            trigger_span,
+            format!(
+                "panic behavior cannot be verified here: {}",
+                panic_trigger_note(tcx, graph, evidence)
+            ),
+        );
+        add_trace_notes(
             diag,
             tcx,
             graph,
-            evidence,
-            trigger_edge.span,
-            include_stack,
+            &evidence.trace.edge_ids,
+            show_full_stack_trace,
+        );
+        diag.help(
+            "document this boundary with `# Panics`, add `// PANIC:` only if every possible callee is locally constrained, or configure `indirect-call-boundary` if this opacity is acceptable",
         );
     })
 }
@@ -280,200 +288,55 @@ pub(super) fn raw_panic_diagnostic<'tcx>(
     graph: &ReachabilityGraph<'tcx>,
     evidence: &PanicEvidence,
     root_def_id: DefId,
-    include_stack: bool,
+    show_full_stack_trace: bool,
 ) -> FindingDiagnostic {
     let root = canonical_namespace(tcx, root_def_id);
-    let trigger_edge_id = trigger_edge_id(graph, evidence);
-    let trigger_edge = graph.edge(trigger_edge_id);
+    let trigger_span = graph.edge(trigger_edge_id(graph, evidence)).span;
     let message = format!("function `{root}` has an undocumented panic path");
     finding_diagnostic(Some(tcx.def_span(root_def_id)), message, |diag| {
-        decorate_raw_panic_diagnostic(diag, tcx, graph, evidence, trigger_edge.span, include_stack);
+        diag.span_note(
+            trigger_span,
+            format!(
+                "panic may happen here: {}",
+                panic_trigger_note(tcx, graph, evidence)
+            ),
+        );
+        add_trace_notes(
+            diag,
+            tcx,
+            graph,
+            &evidence.trace.edge_ids,
+            show_full_stack_trace,
+        );
+        // The sink span above already shows where the panic originates. Add a
+        // second, spanned help only when the user would place the guard or
+        // `// PANIC:` marker at an earlier entry edge; otherwise keep the fix list
+        // as a generic help because the alternatives land in different places.
+        if let Some(entry_span) = evidence
+            .trace
+            .edge_ids
+            .first()
+            .map(|edge_id| graph.edge(*edge_id).span)
+            .filter(|entry_span| !entry_span.source_equal(trigger_span))
+        {
+            diag.span_help(
+                entry_span,
+                "guard this path, or add `// PANIC:` here if a local invariant proves it cannot panic",
+            );
+        }
+        diag.help(
+            "add a guard, document the panic with `# Panics`, or add `// PANIC:` if a local invariant proves it cannot panic",
+        );
     })
-}
-
-fn decorate_raw_panic_diagnostic<'tcx>(
-    diag: &mut dyn LintDiag,
-    tcx: TyCtxt<'tcx>,
-    graph: &ReachabilityGraph<'tcx>,
-    evidence: &PanicEvidence,
-    trigger_span: Span,
-    include_stack: bool,
-) {
-    diag.span_note(
-        trigger_span,
-        format!(
-            "panic may happen here: {}",
-            panic_trigger_note(tcx, graph, evidence)
-        ),
-    );
-    add_trace_notes(diag, tcx, graph, &evidence.trace.edge_ids, include_stack);
-    // The sink span above already shows where the panic originates. Add a
-    // second, spanned help only when the user would place the guard or
-    // `// PANIC:` marker at an earlier entry edge; otherwise keep the fix list
-    // as a generic help because the alternatives land in different places.
-    if let Some(entry_span) = evidence
-        .trace
-        .edge_ids
-        .first()
-        .map(|edge_id| graph.edge(*edge_id).span)
-        .filter(|entry_span| !entry_span.source_equal(trigger_span))
-    {
-        diag.span_help(
-            entry_span,
-            "guard this path, or add `// PANIC:` here if a local invariant proves it cannot panic",
-        );
-    }
-    diag.help(
-        "add a guard, document the panic with `# Panics`, or add `// PANIC:` if a local invariant proves it cannot panic",
-    );
-}
-
-fn decorate_indirect_boundary_diagnostic<'tcx>(
-    diag: &mut dyn LintDiag,
-    tcx: TyCtxt<'tcx>,
-    graph: &ReachabilityGraph<'tcx>,
-    evidence: &PanicEvidence,
-    trigger_span: Span,
-    include_stack: bool,
-) {
-    diag.span_note(
-        trigger_span,
-        format!(
-            "panic behavior cannot be verified here: {}",
-            panic_trigger_note(tcx, graph, evidence)
-        ),
-    );
-    add_trace_notes(diag, tcx, graph, &evidence.trace.edge_ids, include_stack);
-    diag.help(
-        "document this boundary with `# Panics`, add `// PANIC:` only if every possible callee is locally constrained, or configure `indirect-call-boundary` if this opacity is acceptable",
-    );
-}
-
-fn decorate_panic_contract_diagnostic<'tcx>(
-    diag: &mut dyn LintDiag,
-    tcx: TyCtxt<'tcx>,
-    graph: &ReachabilityGraph<'tcx>,
-    evidence: &PanicEvidence,
-    diagnostic: &PanicContractDiagnostic,
-    obligation: &str,
-) {
-    diag.span_note(
-        tcx.def_span(diagnostic.obligation_def_id),
-        format!("the reached callee `{obligation}` documents `# Panics` here"),
-    );
-    add_trace_notes(
-        diag,
-        tcx,
-        graph,
-        &trace_edges_until(evidence, diagnostic.obligation_edge_id),
-        diagnostic.include_stack,
-    );
-    if let Some(edge_id) = diagnostic.obligation_edge_id {
-        diag.span_help(
-            graph.edge(edge_id).span,
-            "add `// PANIC:` directly above this call explaining why its documented panic conditions cannot occur",
-        );
-    }
-    diag.span_help(
-        tcx.def_span(diagnostic.root_def_id),
-        "document when this function may panic with `/// # Panics` here",
-    );
-    diag.help(
-        "ensure the callee's panic conditions cannot occur, justify that with `// PANIC:`, or document when the caller may panic with `# Panics`",
-    );
-}
-
-fn decorate_cached_dependency_contract_diagnostic<'tcx>(
-    diag: &mut dyn LintDiag,
-    tcx: TyCtxt<'tcx>,
-    graph: &ReachabilityGraph<'tcx>,
-    function: &CachedFunction,
-    cached_finding: Option<&CachedFinding>,
-    local_trace: &[ReachabilityEdgeId],
-    diagnostic: &CachedDependencyContractDiagnostic,
-) {
-    let summary = function.summary();
-    let panic_kind = if diagnostic.trusted {
-        "trusted panic"
-    } else {
-        "documented panic"
-    };
-    diag.note(format!(
-        "`{}` has cached {panic_kind} evidence",
-        summary.path
-    ));
-    add_trace_notes(diag, tcx, graph, local_trace, diagnostic.include_stack);
-    add_cached_trace_notes(
-        diag,
-        function,
-        cached_finding,
-        diagnostic.include_stack,
-        |kind| {
-            matches!(
-                kind,
-                CachedFindingKind::PanicObligation {}
-                    | CachedFindingKind::TrustedPanicObligation {}
-            )
-        },
-    );
-    diag.span_help(
-        graph.edge(diagnostic.edge_id).span,
-        "add `// PANIC:` directly above this call explaining why the dependency's documented panic conditions cannot occur",
-    );
-    diag.span_help(
-        tcx.def_span(diagnostic.root_def_id),
-        "document when this function may panic with `/// # Panics` here",
-    );
-    diag.help("ensure the dependency's panic conditions cannot occur, justify that with `// PANIC:`, or document when the caller may panic with `# Panics`");
-}
-
-fn decorate_cached_dependency_raw_panic_diagnostic<'tcx>(
-    diag: &mut dyn LintDiag,
-    tcx: TyCtxt<'tcx>,
-    graph: &ReachabilityGraph<'tcx>,
-    local_trace: &[ReachabilityEdgeId],
-    function: &CachedFunction,
-    cached_finding: Option<&CachedFinding>,
-    diagnostic: CachedDependencyRawPanicDiagnostic,
-) {
-    let summary = function.summary();
-    diag.note(summary.panic_reason(cached_finding));
-    add_cached_dependency_panic_site_notes(diag, tcx, function, cached_finding);
-    add_trace_notes(diag, tcx, graph, local_trace, diagnostic.include_stack);
-    add_cached_trace_notes(
-        diag,
-        function,
-        cached_finding,
-        diagnostic.include_stack,
-        |kind| {
-            matches!(
-                kind,
-                CachedFindingKind::CompilerAssert { .. }
-                    | CachedFindingKind::PanicInvocation {}
-                    | CachedFindingKind::IndirectCallBoundary {}
-            )
-        },
-    );
-    diag.span_help(
-        graph.edge(diagnostic.edge_id).span,
-        "guard this path, or add `// PANIC:` here if a local invariant proves it cannot panic",
-    );
-    diag.help(
-        "add a guard, document the panic with `# Panics`, or add `// PANIC:` if a local invariant proves it cannot panic",
-    );
 }
 
 fn add_cached_trace_notes(
     diag: &mut dyn LintDiag,
     function: &CachedFunction,
     cached_finding: Option<&CachedFinding>,
-    include_stack: bool,
-    include: impl Fn(CachedFindingKind) -> bool,
+    include_kind: impl Fn(CachedFindingKind) -> bool,
 ) {
-    if !include_stack {
-        return;
-    }
-    for finding in cached_findings_for_diagnostic(function, cached_finding, include) {
+    for finding in cached_findings_for_diagnostic(function, cached_finding, include_kind) {
         for edge in render_cached_trace(function, finding) {
             diag.note(format!("cached trace: {edge}"));
         }
@@ -483,10 +346,10 @@ fn add_cached_trace_notes(
 fn cached_findings_for_diagnostic<'a>(
     function: &'a CachedFunction,
     selected: Option<&'a CachedFinding>,
-    include: impl Fn(CachedFindingKind) -> bool,
+    include_kind: impl Fn(CachedFindingKind) -> bool,
 ) -> Vec<&'a CachedFinding> {
     if let Some(selected) = selected {
-        return include(selected.kind)
+        return include_kind(selected.kind)
             .then_some(selected)
             .into_iter()
             .collect();
@@ -497,7 +360,7 @@ fn cached_findings_for_diagnostic<'a>(
         .findings
         .iter()
         .filter_map(|finding| function.finding(*finding))
-        .filter(|finding| include(finding.kind))
+        .filter(|finding| include_kind(finding.kind))
         .collect()
 }
 
@@ -581,20 +444,50 @@ pub(super) fn panic_contract_diagnostic<'tcx>(
     evidence: &PanicEvidence,
     diagnostic: PanicContractDiagnostic,
 ) -> FindingDiagnostic {
-    let root = canonical_namespace(tcx, diagnostic.root_def_id);
-    let obligation = canonical_namespace(tcx, diagnostic.obligation_def_id);
-    let panic_kind = if diagnostic.trusted {
+    let PanicContractDiagnostic {
+        obligation_edge_id,
+        obligation_def_id,
+        root_def_id,
+        trusted,
+        show_full_stack_trace,
+    } = diagnostic;
+    let root = canonical_namespace(tcx, root_def_id);
+    let obligation = canonical_namespace(tcx, obligation_def_id);
+    let panic_kind = if trusted {
         "trusted panic"
     } else {
         "documented panic"
     };
-    let primary_span = diagnostic.obligation_edge_id.map_or_else(
-        || tcx.def_span(diagnostic.root_def_id),
+    let primary_span = obligation_edge_id.map_or_else(
+        || tcx.def_span(root_def_id),
         |edge_id| graph.edge(edge_id).span,
     );
     let message = format!("function `{root}` may panic through a {panic_kind}");
     finding_diagnostic(Some(primary_span), message, |diag| {
-        decorate_panic_contract_diagnostic(diag, tcx, graph, evidence, &diagnostic, &obligation);
+        diag.span_note(
+            tcx.def_span(obligation_def_id),
+            format!("the reached callee `{obligation}` documents `# Panics` here"),
+        );
+        add_trace_notes(
+            diag,
+            tcx,
+            graph,
+            &trace_edges_until(evidence, obligation_edge_id),
+            show_full_stack_trace,
+        );
+        if let Some(edge_id) = obligation_edge_id {
+            diag.span_help(
+                graph.edge(edge_id).span,
+                "add `// PANIC:` directly above this call explaining why its documented panic conditions cannot occur",
+            );
+        }
+        diag.span_help(
+            tcx.def_span(root_def_id),
+            "document when this function may panic with `/// # Panics` here",
+        );
+        diag.help(
+            "ensure the callee's panic conditions cannot occur, justify that with `// PANIC:`, or document when the caller may panic with `# Panics`",
+        );
     })
 }
 
@@ -610,7 +503,7 @@ pub(super) fn cached_dependency_contract_diagnostic<'tcx>(
         edge_id,
         root_def_id,
         trusted,
-        ..
+        show_full_stack_trace,
     } = diagnostic;
     let root = canonical_namespace(tcx, root_def_id);
     let panic_kind = if trusted {
@@ -619,17 +512,32 @@ pub(super) fn cached_dependency_contract_diagnostic<'tcx>(
         "documented panic"
     };
     let edge = graph.edge(edge_id);
+    let summary = function.summary();
     let message = format!("function `{root}` may panic through a cached dependency {panic_kind}");
     finding_diagnostic(Some(edge.span), message, |diag| {
-        decorate_cached_dependency_contract_diagnostic(
-            diag,
-            tcx,
-            graph,
-            function,
-            cached_finding,
-            local_trace,
-            &diagnostic,
+        diag.note(format!(
+            "`{}` has cached {panic_kind} evidence",
+            summary.path
+        ));
+        add_trace_notes(diag, tcx, graph, local_trace, show_full_stack_trace);
+        if show_full_stack_trace {
+            add_cached_trace_notes(diag, function, cached_finding, |kind| {
+                matches!(
+                    kind,
+                    CachedFindingKind::PanicObligation {}
+                        | CachedFindingKind::TrustedPanicObligation {}
+                )
+            });
+        }
+        diag.span_help(
+            edge.span,
+            "add `// PANIC:` directly above this call explaining why the dependency's documented panic conditions cannot occur",
         );
+        diag.span_help(
+            tcx.def_span(root_def_id),
+            "document when this function may panic with `/// # Panics` here",
+        );
+        diag.help("ensure the dependency's panic conditions cannot occur, justify that with `// PANIC:`, or document when the caller may panic with `# Panics`");
     })
 }
 
@@ -641,24 +549,37 @@ pub(super) fn cached_dependency_raw_panic_diagnostic<'tcx>(
     cached_finding: Option<&CachedFinding>,
     diagnostic: CachedDependencyRawPanicDiagnostic,
 ) -> FindingDiagnostic {
-    let root = canonical_namespace(tcx, diagnostic.root_def_id);
+    let CachedDependencyRawPanicDiagnostic {
+        edge_id,
+        root_def_id,
+        show_full_stack_trace,
+    } = diagnostic;
+    let root = canonical_namespace(tcx, root_def_id);
+    let summary = function.summary();
     let message =
         format!("function `{root}` reaches cached undocumented panic evidence from a dependency");
-    finding_diagnostic(
-        Some(tcx.def_span(diagnostic.root_def_id)),
-        message,
-        |diag| {
-            decorate_cached_dependency_raw_panic_diagnostic(
-                diag,
-                tcx,
-                graph,
-                local_trace,
-                function,
-                cached_finding,
-                diagnostic,
-            );
-        },
-    )
+    finding_diagnostic(Some(tcx.def_span(root_def_id)), message, |diag| {
+        diag.note(summary.panic_reason(cached_finding));
+        add_cached_dependency_panic_site_notes(diag, tcx, function, cached_finding);
+        add_trace_notes(diag, tcx, graph, local_trace, show_full_stack_trace);
+        if show_full_stack_trace {
+            add_cached_trace_notes(diag, function, cached_finding, |kind| {
+                matches!(
+                    kind,
+                    CachedFindingKind::CompilerAssert { .. }
+                        | CachedFindingKind::PanicInvocation {}
+                        | CachedFindingKind::IndirectCallBoundary {}
+                )
+            });
+        }
+        diag.span_help(
+            graph.edge(edge_id).span,
+            "guard this path, or add `// PANIC:` here if a local invariant proves it cannot panic",
+        );
+        diag.help(
+            "add a guard, document the panic with `# Panics`, or add `// PANIC:` if a local invariant proves it cannot panic",
+        );
+    })
 }
 
 pub(super) fn safety_finding_diagnostic(
@@ -923,13 +844,13 @@ fn add_trace_notes<'tcx>(
     tcx: TyCtxt<'tcx>,
     graph: &ReachabilityGraph<'tcx>,
     edge_ids: &[ReachabilityEdgeId],
-    include_stack: bool,
+    show_full_stack_trace: bool,
 ) {
     if edge_ids.is_empty() {
         return;
     }
 
-    if include_stack {
+    if show_full_stack_trace {
         for (index, edge_id) in edge_ids.iter().enumerate() {
             let edge = graph.edge(*edge_id);
             diag.span_note(

@@ -19,7 +19,7 @@ use crate::effect_tracker::{
 };
 use crate::namespace::canonical_namespace;
 use crate::report_roots::ReportRoot;
-use crate::safety::{SafetyAnalysis, SafetyEffectGroup, SafetyEvidence, safety_doc_summary};
+use crate::safety::{SafetyAnalysis, SafetyEffectGroup, SafetyEvidence, has_safety_docs};
 use crate::source_markers::{
     EffectMarkerBlock, MarkerInstanceKey, safety_effect_edge_marker_block, safety_span_marker_block,
 };
@@ -282,15 +282,14 @@ pub(super) fn analyze_root<'tcx>(
         findings.push(root_analysis_incomplete_finding(
             tcx,
             root,
-            analysis_config,
+            analysis_config.node_limit,
             FindingKind::SafetyAnalysisIncomplete,
         ));
     }
     EffectRootAnalysis {
         summary: CachedEffectInput {
             analysis_complete: query_complete && effect.incomplete_dependencies.is_empty(),
-            has_contract: safety_doc_summary(tcx, root.def_id(), &config.documentation_overrides)
-                .has_docs,
+            has_contract: has_safety_docs(tcx, root.def_id(), &config.documentation_overrides),
             findings: safety_cache_findings(&effect, &cx, &resolution),
         },
         findings,
@@ -588,7 +587,7 @@ fn safety_effect_target(
 ) -> EffectTarget {
     if config.ignores_def(tcx, def_id) {
         EffectTarget::Ignored
-    } else if safety_doc_summary(tcx, def_id, &config.documentation_overrides).has_docs {
+    } else if has_safety_docs(tcx, def_id, &config.documentation_overrides) {
         EffectTarget::Obligation
     } else if config.trusts_safety_boundary_def(tcx, def_id) {
         EffectTarget::Ignored

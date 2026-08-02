@@ -19,9 +19,9 @@ use serde::Serialize;
 use super::diagnostics::{
     CachedDependencyContractDiagnostic, CachedDependencyRawPanicDiagnostic,
     PanicContractDiagnostic, ambiguous_obligation_marker_diagnostic,
-    ambiguous_obligation_name_diagnostic, analysis_incomplete_diagnostic,
-    cached_dependency_contract_diagnostic, cached_dependency_raw_panic_diagnostic,
-    indirect_boundary_diagnostic, panic_contract_diagnostic, raw_panic_diagnostic,
+    ambiguous_obligation_name_diagnostic, cached_dependency_contract_diagnostic,
+    cached_dependency_raw_panic_diagnostic, indirect_boundary_diagnostic,
+    panic_contract_diagnostic, raw_panic_diagnostic,
 };
 use super::findings::{Finding, FindingKind, ResolvedFinding};
 
@@ -66,7 +66,7 @@ pub(crate) struct PanicRootReport {
     pub(crate) root: String,
     pub(crate) root_kind: ReportRootKind,
     root_def_id: DefId,
-    include_stack: bool,
+    show_full_stack_trace: bool,
     pub(crate) findings: Vec<Finding>,
 }
 
@@ -75,13 +75,13 @@ impl PanicRootReport {
         root: String,
         root_kind: ReportRootKind,
         root_def_id: DefId,
-        include_stack: bool,
+        show_full_stack_trace: bool,
     ) -> Self {
         Self {
             root,
             root_kind,
             root_def_id,
-            include_stack,
+            show_full_stack_trace,
             findings: Vec::new(),
         }
     }
@@ -97,9 +97,21 @@ impl PanicRootReport {
         let kind = FindingKind::from_evidence(&evidence.kind);
         let (reason, target) = report_evidence_kind(tcx, graph, evidence);
         let diagnostic = if matches!(evidence.kind, PanicEvidenceKind::IndirectBoundary { .. }) {
-            indirect_boundary_diagnostic(tcx, graph, evidence, self.root_def_id, self.include_stack)
+            indirect_boundary_diagnostic(
+                tcx,
+                graph,
+                evidence,
+                self.root_def_id,
+                self.show_full_stack_trace,
+            )
         } else {
-            raw_panic_diagnostic(tcx, graph, evidence, self.root_def_id, self.include_stack)
+            raw_panic_diagnostic(
+                tcx,
+                graph,
+                evidence,
+                self.root_def_id,
+                self.show_full_stack_trace,
+            )
         };
         self.push_finding(Finding {
             target,
@@ -135,7 +147,7 @@ impl PanicRootReport {
                 obligation_def_id,
                 root_def_id: self.root_def_id,
                 trusted: kind == FindingKind::TrustedPanic,
-                include_stack: self.include_stack,
+                show_full_stack_trace: self.show_full_stack_trace,
             },
         );
         self.push_finding(Finding {
@@ -171,7 +183,7 @@ impl PanicRootReport {
             CachedDependencyRawPanicDiagnostic {
                 edge_id,
                 root_def_id: self.root_def_id,
-                include_stack: self.include_stack,
+                show_full_stack_trace: self.show_full_stack_trace,
             },
         );
         let mut trace = render_trace(tcx, graph, local_trace);
@@ -220,7 +232,7 @@ impl PanicRootReport {
                 edge_id,
                 root_def_id: self.root_def_id,
                 trusted: kind == FindingKind::TrustedPanic,
-                include_stack: self.include_stack,
+                show_full_stack_trace: self.show_full_stack_trace,
             },
         );
         let mut trace = render_trace(tcx, graph, local_trace);
@@ -296,25 +308,6 @@ impl PanicRootReport {
     }
 }
 
-pub(crate) fn analysis_incomplete_finding(
-    tcx: TyCtxt<'_>,
-    root_def_id: DefId,
-    node_limit: usize,
-    kind: FindingKind,
-) -> Finding {
-    Finding {
-        span: Some(render_span(tcx, tcx.def_span(root_def_id))),
-        ..Finding::new(
-            kind,
-            format!(
-                "reachability analysis halted at the {node_limit}-instance node limit \
-                 before the call graph was exhausted"
-            ),
-            analysis_incomplete_diagnostic(tcx, root_def_id, node_limit),
-        )
-    }
-}
-
 pub(crate) fn render_trace<'tcx>(
     tcx: TyCtxt<'tcx>,
     graph: &ReachabilityGraph<'tcx>,
@@ -387,7 +380,7 @@ pub(crate) fn render_cached_trace(
     function.resolve_trace(finding.trace).steps
 }
 
-pub(crate) fn render_edge<'tcx>(
+fn render_edge<'tcx>(
     tcx: TyCtxt<'tcx>,
     graph: &ReachabilityGraph<'tcx>,
     edge_id: ReachabilityEdgeId,

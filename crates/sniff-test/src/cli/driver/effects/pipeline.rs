@@ -101,7 +101,7 @@ pub(super) struct UnresolvedEffect {
 }
 
 /// Comment and path indexes shared by all sources in one graph view.
-pub(super) struct CommentIndex {
+struct CommentIndex {
     markers: EffectMarkerIndex,
     paths: EffectPathIndex,
     paths_enabled: bool,
@@ -122,10 +122,7 @@ impl CommentIndex {
 
     /// Returns marker blocks on paths to the supplied anchor, including its
     /// terminal effect edge when present.
-    pub(super) fn blocks(
-        &self,
-        anchor: &PathAnchor,
-    ) -> Vec<(ReachabilityEdgeId, EffectMarkerBlock)> {
+    fn blocks(&self, anchor: &PathAnchor) -> Vec<(ReachabilityEdgeId, EffectMarkerBlock)> {
         let mut edge_ids = self
             .paths
             .edges_to_nodes(anchor.nodes.iter().copied(), false);
@@ -136,10 +133,6 @@ impl CommentIndex {
             edge_ids.push(terminal_edge);
         }
         self.markers.blocks(edge_ids)
-    }
-
-    pub(super) fn satisfies(&self, edge: ReachabilityEdgeId, requirement: Option<&str>) -> bool {
-        self.markers.satisfies(edge, requirement)
     }
 }
 
@@ -304,7 +297,7 @@ where
             edge,
             requirements,
             |node| effect.is_path_boundary(cx, node),
-            |edge, requirement| comments.satisfies(edge, requirement),
+            |edge, requirement| comments.markers.satisfies(edge, requirement),
         );
     }
 
@@ -321,7 +314,7 @@ where
             |node| node_anchors.contains(&node.id()),
             requirements,
             |node| effect.is_path_boundary(cx, node),
-            |edge, requirement| comments.satisfies(edge, requirement),
+            |edge, requirement| comments.markers.satisfies(edge, requirement),
         )
     }
 }

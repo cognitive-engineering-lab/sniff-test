@@ -33,7 +33,7 @@ use rustc_middle::ty::{self, Ty, TyCtxt};
 use rustc_span::Span;
 
 use super::{
-    SafetyAnalysis, SafetyCall, SafetyCallee, SafetyEffectGroup, SafetyOpKind, SafetyProbeCallKind,
+    SafetyAnalysis, SafetyCallee, SafetyEffectGroup, SafetyOpKind, SafetyProbeCallKind,
     SafetyProbeKind,
 };
 use crate::config::SafetyConfig;
@@ -113,20 +113,14 @@ impl<'a, 'tcx> UnsafeOpVisitor<'a, 'tcx> {
         self.record_evidence(span, SafetyProbeKind::Operation(op));
     }
 
-    fn record_call(&mut self, span: Span, call: SafetyCall) {
+    fn record_call(&mut self, span: Span, callee: SafetyCallee, call_kind: SafetyProbeCallKind) {
         if self.builtin_unsafe_depth > 0 {
             return;
         }
-        if self.ignores_callee(call.callee) {
+        if self.ignores_callee(callee) {
             return;
         }
-        self.record_evidence(
-            span,
-            SafetyProbeKind::Call {
-                callee: call.callee,
-                call_kind: call.kind,
-            },
-        );
+        self.record_evidence(span, SafetyProbeKind::Call { callee, call_kind });
     }
 
     fn ignores_callee(&self, callee: SafetyCallee) -> bool {
@@ -247,36 +241,19 @@ impl<'a, 'tcx> UnsafeOpVisitor<'a, 'tcx> {
             } else {
                 SafetyCallee::FunctionPointer
             };
-            self.record_call(
-                expr.span,
-                SafetyCall {
-                    callee,
-                    kind: SafetyProbeCallKind::Unsafe,
-                },
-            );
+            self.record_call(expr.span, callee, SafetyProbeCallKind::Unsafe);
         } else if let &ty::FnDef(func_id, _) = fn_ty.kind() {
-            if self
+            let call_kind = if self
                 .tcx
                 .is_target_feature_call_safe(callee_features, self.body_target_features)
             {
-                self.record_call(
-                    expr.span,
-                    SafetyCall {
-                        callee: SafetyCallee::Def(func_id),
-                        kind: SafetyProbeCallKind::PotentialObligation,
-                    },
-                );
+                SafetyProbeCallKind::PotentialObligation
             } else {
                 // A call to a safe `#[target_feature]` function still
                 // requires unsafe when the caller lacks the features.
-                self.record_call(
-                    expr.span,
-                    SafetyCall {
-                        callee: SafetyCallee::Def(func_id),
-                        kind: SafetyProbeCallKind::Unsafe,
-                    },
-                );
-            }
+                SafetyProbeCallKind::Unsafe
+            };
+            self.record_call(expr.span, SafetyCallee::Def(func_id), call_kind);
         }
     }
 

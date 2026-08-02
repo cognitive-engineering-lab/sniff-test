@@ -20,7 +20,7 @@ use serde::{Deserialize, Serialize};
 use crate::config::SafetyConfig;
 use crate::contracts::{
     AmbiguousContractRequirements, ContractDocOverrides, ContractDocSummary, ContractRequirement,
-    safety_contract_doc_summary,
+    safety_contract_doc_summary as safety_doc_summary,
 };
 use crate::effect_tracker::{EffectEvidence, EffectSite};
 use crate::namespace::canonical_namespace;
@@ -131,7 +131,7 @@ struct SafetyProbe {
 }
 
 #[derive(Debug, Clone, Copy)]
-pub(super) enum SafetyProbeKind {
+enum SafetyProbeKind {
     Call {
         callee: SafetyCallee,
         call_kind: SafetyProbeCallKind,
@@ -140,7 +140,7 @@ pub(super) enum SafetyProbeKind {
 }
 
 #[derive(Debug, Clone, Copy)]
-pub(super) enum SafetyProbeCallKind {
+enum SafetyProbeCallKind {
     Unsafe,
     PotentialObligation,
 }
@@ -236,12 +236,6 @@ impl SafetyCallKind {
     }
 }
 
-#[derive(Debug, Clone, Copy)]
-pub(super) struct SafetyCall {
-    callee: SafetyCallee,
-    kind: SafetyProbeCallKind,
-}
-
 pub(crate) type SafetyRequirement = ContractRequirement;
 
 impl SafetyAnalysis {
@@ -257,14 +251,14 @@ impl SafetyAnalysis {
             .map_or(&[], Vec::as_slice)
     }
 
-    pub(super) fn push_finding(&mut self, finding: SafetyFinding) {
+    fn push_finding(&mut self, finding: SafetyFinding) {
         self.findings_by_owner
             .entry(finding.owner())
             .or_default()
             .push(finding);
     }
 
-    pub(super) fn push_probe(
+    fn push_probe(
         &mut self,
         site: EffectSite,
         details: SafetyProbeKind,
@@ -599,16 +593,6 @@ pub(crate) fn fn_def_is_unsafe(tcx: TyCtxt<'_>, def_id: DefId) -> bool {
             .skip_binder()
             .safety()
             .is_unsafe()
-}
-
-pub(super) type SafetyDocSummary = ContractDocSummary;
-
-pub(super) fn safety_doc_summary(
-    tcx: TyCtxt<'_>,
-    def_id: DefId,
-    overrides: &ContractDocOverrides,
-) -> SafetyDocSummary {
-    safety_contract_doc_summary(tcx, def_id, overrides)
 }
 
 #[cfg(test)]

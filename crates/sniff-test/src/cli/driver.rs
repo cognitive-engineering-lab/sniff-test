@@ -116,10 +116,6 @@ struct AnalysisArtifact {
 }
 
 impl AnalysisArtifact {
-    #[allow(
-        clippy::too_many_arguments,
-        reason = "the constructor assembles independent analysis outputs without hiding them"
-    )]
     fn new(
         tcx: TyCtxt<'_>,
         scope: CrateOutputScope,

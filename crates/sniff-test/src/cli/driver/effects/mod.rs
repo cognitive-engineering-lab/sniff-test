@@ -15,8 +15,9 @@ use rustc_hir::def::DefKind;
 use rustc_middle::ty::{GenericArgs, Instance, InstanceKind, TyCtxt};
 
 use crate::cache::{CachedEffectInput, CachedFunctionInput, CachedItemKey};
+use crate::cli::diagnostics::analysis_incomplete_diagnostic;
 use crate::cli::findings::{DiagnosticMessage, Finding, FindingDiagnostic, FindingKind};
-use crate::cli::report::{analysis_incomplete_finding, render_span, render_trace};
+use crate::cli::report::{render_span, render_trace};
 use crate::config::{AnalysisConfig, SniffTestConfig};
 use crate::dependency_cache::DependencyAnalysisCache;
 use crate::effect_tracker::EffectTrace;
@@ -57,14 +58,23 @@ fn reachability_options(
 fn root_analysis_incomplete_finding<'tcx>(
     tcx: TyCtxt<'tcx>,
     root: ReportRoot<'tcx>,
-    analysis_config: &AnalysisConfig,
+    node_limit: usize,
     kind: FindingKind,
 ) -> Finding {
-    let mut finding =
-        analysis_incomplete_finding(tcx, root.def_id(), analysis_config.node_limit, kind);
-    finding.root = Some(canonical_namespace(tcx, root.def_id()));
-    finding.root_kind = Some(root.kind());
-    finding
+    let root_def_id = root.def_id();
+    Finding {
+        root: Some(canonical_namespace(tcx, root_def_id)),
+        root_kind: Some(root.kind()),
+        span: Some(render_span(tcx, tcx.def_span(root_def_id))),
+        ..Finding::new(
+            kind,
+            format!(
+                "reachability analysis halted at the {node_limit}-instance node limit \
+                 before the call graph was exhausted"
+            ),
+            analysis_incomplete_diagnostic(tcx, root_def_id, node_limit),
+        )
+    }
 }
 
 fn dependency_analysis_incomplete_finding<'tcx>(

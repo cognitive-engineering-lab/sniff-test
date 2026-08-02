@@ -5,7 +5,7 @@ use crate::panics::{
     PanicAnalysis, PanicEvidence, PanicEvidenceKind, describe_panic_evidence_kind,
     panic_obligation_reason, trace_edges_until, trigger_edge_id,
 };
-use reachability::{ReachabilityEdgeId, ReachabilityGraph, ReachabilityView};
+use reachability::{ReachabilityEdgeId, ReachabilityGraph};
 use rustc_middle::ty::TyCtxt;
 use rustc_span::Pos;
 
@@ -61,11 +61,10 @@ pub(super) fn cached_safety_finding<'tcx>(
 
 pub(super) fn cached_panic_findings<'tcx>(
     tcx: TyCtxt<'tcx>,
-    view: ReachabilityView<'_, 'tcx>,
+    graph: &ReachabilityGraph<'tcx>,
     analysis: &PanicAnalysis,
     config: &PanicConfig,
 ) -> Vec<CachedFindingInput> {
-    let graph = view.graph();
     analysis
         .evidence
         .iter()
@@ -147,10 +146,7 @@ pub(super) fn cached_trace<'tcx>(
     }
 }
 
-pub(super) fn cached_source_span(
-    tcx: TyCtxt<'_>,
-    span: rustc_span::Span,
-) -> Option<CachedSourceSpan> {
+fn cached_source_span(tcx: TyCtxt<'_>, span: rustc_span::Span) -> Option<CachedSourceSpan> {
     if span.is_dummy() {
         return None;
     }

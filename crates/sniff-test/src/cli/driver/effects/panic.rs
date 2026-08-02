@@ -235,7 +235,7 @@ pub(super) fn analyze_root<'tcx>(
         findings.push(root_analysis_incomplete_finding(
             tcx,
             root,
-            analysis_config,
+            analysis_config.node_limit,
             FindingKind::PanicAnalysisIncomplete,
         ));
     }
@@ -285,13 +285,13 @@ fn panic_report_findings(
     cx: &EffectCx<'_, '_>,
     resolution: &EffectResolution<PanicSource>,
     analysis: &PanicAnalysis,
-    include_stack: bool,
+    show_full_stack_trace: bool,
 ) -> Vec<Finding> {
     let collection = PanicFindingCollection {
         root_kind: cx.root.kind(),
         root_def_id: cx.root.def_id(),
         config: effect.config,
-        include_stack,
+        show_full_stack_trace,
     };
     let mut report = collect_panic_findings(cx.tcx, cx.view, analysis, collection);
     for unresolved in &resolution.unresolved {
@@ -430,7 +430,7 @@ fn panic_cache_findings(
     resolution: &EffectResolution<PanicSource>,
     analysis: &PanicAnalysis,
 ) -> Vec<CachedFindingInput> {
-    let mut findings = cached_panic_findings(cx.tcx, cx.view, analysis, effect.config);
+    let mut findings = cached_panic_findings(cx.tcx, cx.view.graph(), analysis, effect.config);
     let edges = cx
         .view
         .edges()
@@ -469,7 +469,7 @@ struct PanicFindingCollection<'config> {
     root_kind: ReportRootKind,
     root_def_id: DefId,
     config: &'config PanicConfig,
-    include_stack: bool,
+    show_full_stack_trace: bool,
 }
 
 fn collect_panic_findings<'tcx>(
@@ -484,7 +484,7 @@ fn collect_panic_findings<'tcx>(
         render_node(tcx, root_node.kind()),
         collection.root_kind,
         collection.root_def_id,
-        collection.include_stack,
+        collection.show_full_stack_trace,
     );
 
     for evidence in &analysis.evidence {
