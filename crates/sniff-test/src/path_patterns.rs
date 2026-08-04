@@ -4,11 +4,7 @@ use std::borrow::Cow;
 use std::fmt::{Debug, Formatter};
 
 use globset::{GlobBuilder, GlobSet, GlobSetBuilder};
-use rustc_hir::def_id::DefId;
-use rustc_middle::ty::TyCtxt;
 use serde::{Deserialize, de::Error as _};
-
-use crate::namespace::namespace_candidates;
 
 /// Segment-aware glob patterns over Rust-style `::` paths.
 #[derive(Clone, Default)]
@@ -68,6 +64,7 @@ impl PathPatterns {
     }
 
     #[must_use]
+    #[cfg(test)]
     pub(crate) fn matching_pattern(&self, path: &str) -> Option<&str> {
         self.best_match(path).map(|matched| matched.pattern)
     }
@@ -89,20 +86,19 @@ impl PathPatterns {
     }
 
     #[must_use]
-    pub(crate) fn best_def_match(
+    pub(crate) fn best_candidates_match(
         &self,
-        tcx: TyCtxt<'_>,
-        def_id: DefId,
+        candidates: &[String],
     ) -> Option<PathPatternMatch<'_>> {
-        namespace_candidates(tcx, def_id)
+        candidates
             .iter()
             .filter_map(|candidate| self.best_match(candidate))
             .max_by_key(|matched| matched.precision)
     }
 
     #[must_use]
-    pub(crate) fn matching_def_pattern(&self, tcx: TyCtxt<'_>, def_id: DefId) -> Option<&str> {
-        self.best_def_match(tcx, def_id)
+    pub(crate) fn matching_candidates_pattern(&self, candidates: &[String]) -> Option<&str> {
+        self.best_candidates_match(candidates)
             .map(|matched| matched.pattern)
     }
 
@@ -159,4 +155,28 @@ fn pattern_precision(pattern: &str) -> usize {
         .split("::")
         .filter(|segment| !segment.is_empty() && *segment != "**")
         .count()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::PathPatterns;
+
+    #[test]
+    fn stable_candidate_sets_use_the_most_specific_matching_pattern() {
+        let patterns = PathPatterns::new(vec![
+            String::from("dependency::**"),
+            String::from("dependency::Widget::run"),
+        ])
+        .expect("valid patterns");
+        let candidates = vec![
+            String::from("dependency"),
+            String::from("dependency::impls::{impl#0}::run"),
+            String::from("dependency::Widget::run"),
+        ];
+
+        assert_eq!(
+            patterns.matching_candidates_pattern(&candidates),
+            Some("dependency::Widget::run")
+        );
+    }
 }

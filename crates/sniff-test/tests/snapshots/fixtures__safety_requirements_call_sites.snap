@@ -18,7 +18,10 @@ expression: messages
         "root": "safety_requirements::unknown_unsafe_fn_pointer",
         "root-kind": "concrete",
         "span": "src/lib.rs:194:14: 194:24",
-        "target": "unsafe function pointer"
+        "target": "unsafe function pointer",
+        "trace": [
+          "src/lib.rs:194:14: 194:24: safety_requirements::unknown_unsafe_fn_pointer --indirect-call-> indirect call Binder { value: unsafe fn(), bound_vars: [] }"
+        ]
       },
       {
         "function": "safety_requirements::unsafe_fn_pointer_named_requirement_missing",
@@ -28,6 +31,9 @@ expression: messages
           "ready: the caller must establish the target-specific precondition."
         ],
         "reason": "unsafe call to `safety_requirements::documented_pointer_target` does not satisfy all # Safety requirements",
+        "requirements": [
+          "ready: the caller must establish the target-specific precondition."
+        ],
         "root": "safety_requirements::unsafe_fn_pointer_named_requirement_missing",
         "root-kind": "concrete",
         "span": "src/lib.rs:190:14: 190:24",
@@ -37,10 +43,9 @@ expression: messages
         ]
       }
     ],
-    "format-version": 10,
+    "format-version": 11,
     "reason": "sniff-test-artifact",
     "rustc-version": "[RUSTC_VERSION]",
-    "scope": "workspace",
     "tool-version": "0.1.0"
   }
 ]

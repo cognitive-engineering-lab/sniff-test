@@ -110,6 +110,19 @@ fixture_cases! {
         direct_panic => Case::cargo("direct panic").exit_code(101);
         driver_direct_panic => Case::direct("direct panic");
     }
+    "async_runtime_bodies" => {
+        async_runtime_bodies => Case::cargo("async runtime bodies").exit_code(101);
+        driver_async_runtime_bodies => Case::direct("async runtime bodies");
+    }
+    "desugared_runtime_bodies" => {
+        desugared_runtime_bodies =>
+            Case::cargo("question-mark and derived Debug runtime bodies");
+    }
+    "target_feature_call_safety" => {
+        target_feature_call_safety =>
+            Case::cargo("target-feature call safety is relative to the caller")
+                .exit_code(101);
+    }
     "closure_call_graph" => {
         closure_call_graph => Case::cargo("call graph edges").exit_code(101);
         closure_call_graph_call_sites => Case::cargo("call graph edges with callable call-site attribution")
@@ -189,6 +202,11 @@ fixture_cases! {
             .crate_dir("app")
             .exit_code(101);
     }
+    "dependency_async_panic" => {
+        dependency_async_panic => Case::cargo("cached dependency async runtime body")
+            .crate_dir("app")
+            .exit_code(101);
+    }
     "dependency_safety_contract" => {
         dependency_safety_contract => Case::cargo("cached safety markers and concrete findings")
             .crate_dir("app")
@@ -219,7 +237,8 @@ fixture_cases! {
     }
     "dependency_safety_incomplete" => {
         dependency_safety_incomplete => Case::cargo("incomplete safety cache propagation")
-            .crate_dir("app");
+            .crate_dir("app")
+            .exit_code(101);
     }
     "dependency_identity" => {
         dependency_identity => Case::cargo("dependency cache identity across sessions")
@@ -243,7 +262,8 @@ fixture_cases! {
     "dependency_panic_incomplete_resolved" => {
         dependency_panic_incomplete_resolved =>
             Case::cargo("resolved cached panics do not hide incomplete dependency analysis")
-                .crate_dir("app");
+                .crate_dir("app")
+                .exit_code(101);
     }
     "dependency_mixed_panic" => {
         dependency_mixed_panic => Case::cargo("cached raw and trusted panic evidence coexist")
@@ -502,15 +522,11 @@ fn local_foreign_function_does_not_query_extern_crate_paths() {
         .iter()
         .find(|message| message["artifact"]["crate-name"] == "local_foreign_function")
         .expect("fixture should emit its local artifact report");
-    assert_eq!(
-        report["scope"], "workspace",
-        "a local foreign function must remain in the workspace artifact: {report:?}"
-    );
     assert!(
         messages
             .iter()
-            .all(|message| message["scope"] != "dependency"),
-        "a local foreign function must not produce a dependency report: {messages:?}"
+            .all(|message| message.get("scope").is_none()),
+        "workspace-only reports must not serialize the removed scope field: {messages:?}"
     );
     let findings = report["findings"]
         .as_array()
@@ -530,7 +546,33 @@ fn run_named_case(name: &'static str, fixture_name: &'static str, case: Case) {
 }
 
 #[test]
-fn dependency_scope_keeps_safety_findings() {
+fn unselected_callable_evidence_does_not_refine_selected_call_sites() {
+    let name = "unselected_callable_evidence_does_not_refine_selected_call_sites";
+    let repo = repo_root();
+    let binaries = Binaries::from_cargo();
+    let sysroot = rustc_sysroot();
+    let messages = run_case(
+        &repo,
+        &binaries,
+        &sysroot,
+        name,
+        "callable_root_isolation",
+        &Case::cargo("call-site attribution stays within selected-root reachability"),
+    );
+    let report = messages
+        .iter()
+        .find(|message| message["artifact"]["crate-name"] == "callable_root_isolation")
+        .expect("fixture should emit one workspace report");
+
+    assert_eq!(
+        report["findings"],
+        serde_json::json!([]),
+        "unused callable evidence must not attach panicking targets to selected roots"
+    );
+}
+
+#[test]
+fn dependency_units_are_silent_while_workspace_reinterprets_their_safety_ir() {
     let repo = repo_root();
     let binaries = Binaries::from_cargo();
     let sysroot = rustc_sysroot();
@@ -541,24 +583,35 @@ fn dependency_scope_keeps_safety_findings() {
         &repo,
         &binaries,
         &sysroot,
-        "dependency_scope_keeps_safety_findings",
+        "dependency_units_are_silent_while_workspace_reinterprets_their_safety_ir",
         "dependency_safety",
         &case,
     );
-    let dependency = messages
-        .iter()
-        .find(|message| message["scope"] == "dependency")
-        .expect("fixture should emit a dependency artifact report");
+    assert_eq!(
+        messages.len(),
+        1,
+        "the Cargo run must emit exactly one workspace report: {messages:?}"
+    );
     assert!(
-        dependency["findings"]
+        messages
+            .iter()
+            .all(|message| message["artifact"]["crate-name"] != "dependency_safety"),
+        "dependency rustc units must not emit public JSON reports: {messages:?}"
+    );
+    let workspace = messages
+        .iter()
+        .find(|message| message["artifact"]["crate-name"] == "dependency_safety_app")
+        .expect("fixture should emit one workspace artifact report");
+    assert!(
+        workspace["findings"]
             .as_array()
             .is_some_and(|findings| !findings.is_empty()),
-        "dependency safety findings should be retained like panic findings"
+        "the workspace must reinterpret reachable dependency safety IR"
     );
 }
 
 #[test]
-fn cached_safety_findings_keep_their_effect_spans() {
+fn dependency_safety_ir_findings_keep_their_effect_spans() {
     let repo = repo_root();
     let binaries = Binaries::from_cargo();
     let sysroot = rustc_sysroot();
@@ -569,7 +622,7 @@ fn cached_safety_findings_keep_their_effect_spans() {
         &repo,
         &binaries,
         &sysroot,
-        "cached_safety_findings_keep_their_effect_spans",
+        "dependency_safety_ir_findings_keep_their_effect_spans",
         "dependency_safety_contract",
         &case,
     );
@@ -583,9 +636,9 @@ fn cached_safety_findings_keep_their_effect_spans() {
         .iter()
         .filter(|finding| finding["root"] == "dependency_safety_contract_app::reaches_two_effects")
         .map(|finding| {
-            finding["effect-span"]
+            finding["span"]
                 .as_str()
-                .expect("cached safety finding should retain its effect span")
+                .expect("dependency IR finding should retain its verified effect span")
         })
         .collect::<Vec<_>>();
 
@@ -599,18 +652,18 @@ fn cached_safety_findings_keep_their_effect_spans() {
 }
 
 #[test]
-fn generic_dependency_template_retains_private_helper_trace() {
+fn dependency_ir_retains_private_helper_trace() {
     let repo = repo_root();
     let binaries = Binaries::from_cargo();
     let sysroot = rustc_sysroot();
-    let case = Case::cargo("generic cache templates retain evidence without proving completeness")
+    let case = Case::cargo("dependency IR retains evidence through private helpers")
         .crate_dir("app")
         .exit_code(101);
     let messages = run_case(
         &repo,
         &binaries,
         &sysroot,
-        "generic_dependency_template_retains_private_helper_trace",
+        "dependency_ir_retains_private_helper_trace",
         "dependency_generic_private_panic",
         &case,
     );
@@ -620,21 +673,21 @@ fn generic_dependency_template_retains_private_helper_trace() {
         .expect("fixture should emit the application report");
     let findings = report["findings"].as_array().expect("application findings");
     assert!(
-        findings
+        !findings
             .iter()
             .any(|finding| finding["kind"] == "panic-analysis-incomplete"),
-        "a generic cache template must not prove a concrete instance clean: {findings:?}"
+        "the exact dependency graph should completely interpret the reachable path: {findings:?}"
     );
     let finding = findings
         .iter()
         .find(|finding| {
             finding["root"] == "dependency_generic_private_panic_app::caller"
-                && finding["kind"] == "cached-dependency-panic"
+                && finding["kind"] == "panic-invocation"
         })
-        .expect("the application should retain the dependency panic");
+        .expect("the workspace should derive the panic from the dependency IR");
     let trace = finding["trace"]
         .as_array()
-        .expect("cached dependency panic should include a trace");
+        .expect("dependency panic should include a trace");
 
     assert!(
         trace.iter().any(|step| {
@@ -646,9 +699,71 @@ fn generic_dependency_template_retains_private_helper_trace() {
 }
 
 #[test]
+fn consumer_overlay_resolves_generic_dependency_dispatch_to_workspace_impl() {
+    let repo = repo_root();
+    let binaries = Binaries::from_cargo();
+    let sysroot = rustc_sysroot();
+    let case = Case::cargo("consumer IR retains exact cross-crate generic dispatch")
+        .crate_dir("app")
+        .exit_code(101);
+    let messages = run_case(
+        &repo,
+        &binaries,
+        &sysroot,
+        "consumer_overlay_resolves_generic_dependency_dispatch_to_workspace_impl",
+        "dependency_generic_local_impl",
+        &case,
+    );
+    let report = messages
+        .iter()
+        .find(|message| message["artifact"]["crate-name"] == "dependency_generic_local_impl_app")
+        .expect("fixture should emit the application report");
+    let findings = report["findings"].as_array().expect("application findings");
+    assert!(
+        !findings
+            .iter()
+            .any(|finding| finding["kind"] == "panic-analysis-incomplete"),
+        "the consumer overlay should completely interpret the exact dependency instance: \
+         {findings:?}"
+    );
+    assert!(
+        !findings
+            .iter()
+            .any(|finding| finding["kind"] == "ambiguous-safety-marker"),
+        "one definition-site unsafe scope must remain one effect group in its consumer overlay: \
+         {findings:?}"
+    );
+
+    for kind in ["panic-invocation", "unsafe-op-missing-justification"] {
+        let finding = findings
+            .iter()
+            .find(|finding| {
+                finding["root"] == "dependency_generic_local_impl_app::caller"
+                    && finding["kind"] == kind
+            })
+            .unwrap_or_else(|| {
+                panic!("the workspace-local trait implementation should expose `{kind}`")
+            });
+        let trace = finding["trace"]
+            .as_array()
+            .expect("cross-artifact finding should include a trace");
+        assert!(
+            trace.iter().any(|step| {
+                step.as_str()
+                    .is_some_and(|step| step.contains("dependency_generic_local_impl::invoke"))
+            }) && trace.iter().any(|step| {
+                step.as_str()
+                    .is_some_and(|step| step.contains("Action>::apply"))
+            }),
+            "trace should cross the exact dependency instance into the local impl: {trace:?}"
+        );
+    }
+}
+
+#[test]
 #[allow(
     clippy::too_many_lines,
-    reason = "the regression test compiles and verifies both cached and missing-cache variants"
+    reason = "the regression test compiles both complete-IR and missing-IR variants"
 )]
 fn expanded_generic_dependency_resumes_at_private_helper() {
     let name = "expanded_generic_dependency_resumes_at_private_helper";
@@ -671,6 +786,7 @@ fn expanded_generic_dependency_resumes_at_private_helper() {
     let mut dependency = Command::new(&binaries.driver);
     clean_cargo_package_env(&mut dependency);
     let dependency = dependency
+        .arg("--dependency")
         .args(["--manifest"])
         .arg(&manifest)
         .args(["--cache-dir"])
@@ -746,7 +862,7 @@ fn expanded_generic_dependency_resumes_at_private_helper() {
         application.stderr
     );
 
-    let case = Case::direct("expanded dependency MIR resumes from an exact private cache entry");
+    let case = Case::direct("expanded dependency MIR resumes from exact private IR");
     let messages = parse_messages(&application, &root, &sysroot, name, fixture_name, &case);
     let report = messages
         .iter()
@@ -761,15 +877,10 @@ fn expanded_generic_dependency_resumes_at_private_helper() {
     );
     let finding = findings
         .iter()
-        .find(|finding| finding["kind"] == "cached-dependency-panic")
-        .expect("cached private-helper panic");
-    assert_eq!(
-        finding["target"],
-        "dependency_generic_private_panic::hidden"
-    );
-    let trace = finding["trace"]
-        .as_array()
-        .expect("cached dependency panic trace");
+        .find(|finding| finding["kind"] == "panic-invocation")
+        .expect("private-helper panic derived from dependency IR");
+    assert_eq!(finding["target"], "core::std::rt::panic_fmt");
+    let trace = finding["trace"].as_array().expect("dependency panic trace");
     assert!(
         trace.iter().any(|step| {
             step.as_str()
@@ -781,42 +892,116 @@ fn expanded_generic_dependency_resumes_at_private_helper() {
         "trace should enter the generic API and resume at its private helper: {trace:?}"
     );
 
-    let missing_cache_application =
-        compile_application(&temp.path().join("empty-cache"), "-app-missing-cache");
+    let mut pathless_application = Command::new(&binaries.driver);
+    clean_cargo_package_env(&mut pathless_application);
+    let pathless_application = pathless_application
+        .args(["--manifest"])
+        .arg(&manifest)
+        .args(["--cache-dir"])
+        .arg(&cache_dir)
+        .args(["--message-format", "json", "--color", "never", "--"])
+        .args([
+            "--crate-name",
+            "dependency_generic_private_panic_app",
+            "--crate-type",
+            "lib",
+            "--edition",
+            "2024",
+        ])
+        .arg(root.join("app/src/lib.rs"))
+        .args(["--sysroot", sysroot.trim(), "--out-dir"])
+        .arg(&out_dir)
+        .args(["-C", "extra-filename=-app-pathless", "-L"])
+        .arg(&out_dir)
+        .args([
+            "--extern",
+            "dependency_generic_private_panic",
+            "-Zno-codegen",
+        ])
+        .env("CARGO_PRIMARY_PACKAGE", "1")
+        .current_dir(&root)
+        .output()
+        .unwrap_or_else(|error| panic!("{name}: failed to compile pathless application: {error}"));
+    let pathless_application = CommandOutput::from_output(pathless_application);
     assert!(
-        missing_cache_application.status.success(),
-        "{name}: missing-cache application compilation failed\nstdout:\n{}\nstderr:\n{}",
-        missing_cache_application.stdout,
-        missing_cache_application.stderr
+        pathless_application.status.success(),
+        "{name}: pathless --extern application compilation failed\nstdout:\n{}\nstderr:\n{}",
+        pathless_application.stdout,
+        pathless_application.stderr
     );
-    let messages = parse_messages(
-        &missing_cache_application,
+    assert!(
+        pathless_application
+            .stdout
+            .contains(r#""reason":"sniff-test-artifact""#),
+        "{name}: pathless --extern application must emit its workspace report\nstdout:\n{}",
+        pathless_application.stdout
+    );
+    let pathless_messages = parse_messages(
+        &pathless_application,
         &root,
         &sysroot,
         name,
         fixture_name,
         &case,
     );
-    let report = messages
+    let pathless_report = pathless_messages
         .iter()
         .find(|message| message["artifact"]["crate-name"] == "dependency_generic_private_panic_app")
-        .expect("missing-cache application report");
-    let findings = report["findings"]
-        .as_array()
-        .expect("missing-cache application findings");
+        .expect("pathless application report");
     assert!(
-        findings
-            .iter()
-            .any(|finding| finding["kind"] == "panic-analysis-incomplete"),
-        "a tracked Cargo dependency with no cache must remain explicitly incomplete: {findings:?}"
+        pathless_report["dependencies"]
+            .as_array()
+            .is_some_and(|dependencies| dependencies.iter().any(|dependency| {
+                dependency["extern-name"] == "dependency_generic_private_panic"
+            })),
+        "{name}: pathless extern must bind the dependency artifact: {pathless_report:?}"
+    );
+    assert!(
+        pathless_report["findings"]
+            .as_array()
+            .is_some_and(|findings| findings
+                .iter()
+                .any(|finding| finding["kind"] == "panic-invocation")),
+        "{name}: pathless extern must interpret the dependency panic: {pathless_report:?}"
+    );
+
+    let missing_cache_application =
+        compile_application(&temp.path().join("empty-cache"), "-app-missing-cache");
+    assert!(
+        !missing_cache_application.status.success(),
+        "{name}: missing dependency IR must fail the run\nstdout:\n{}\nstderr:\n{}",
+        missing_cache_application.stdout,
+        missing_cache_application.stderr
+    );
+    assert!(
+        !missing_cache_application
+            .stdout
+            .contains(r#""reason":"sniff-test-artifact""#),
+        "{name}: a failed workspace run must not emit an analysis report\nstdout:\n{}",
+        missing_cache_application.stdout
+    );
+    let required_ir_error = "error: failed to load required dependency artifact IR";
+    assert!(
+        missing_cache_application.stderr.contains(required_ir_error),
+        "{name}: missing dependency IR should emit a tool error\nstderr:\n{}",
+        missing_cache_application.stderr
+    );
+    assert_eq!(
+        missing_cache_application
+            .stderr
+            .matches(required_ir_error)
+            .count(),
+        1,
+        "{name}: missing dependency IR should fail exactly once\nstderr:\n{}",
+        missing_cache_application.stderr
     );
 }
 
 #[test]
-fn fresh_cargo_run_does_not_replay_json_reports() {
-    let name = "fresh_cargo_run_does_not_replay_json_reports";
+fn every_cargo_run_reinterprets_and_emits_the_workspace_report() {
+    let name = "every_cargo_run_reinterprets_and_emits_the_workspace_report";
     let fixture_name = "panic_requirements";
-    let case = Case::cargo("fresh units do not emit reports");
+    let case = Case::cargo("workspace units rerun while dependency IR stays reusable");
     let repo = repo_root();
     let binaries = Binaries::from_cargo();
 
@@ -837,12 +1022,26 @@ fn fresh_cargo_run_does_not_replay_json_reports() {
     copy_dir_all(&fixture, &root)
         .unwrap_or_else(|error| panic!("{name}: failed to copy fixture: {error}"));
 
-    let (first, second) = {
+    let artifact_filenames = || {
+        let deps = root.join("target/sniff-test/release/deps");
+        fs::read_dir(&deps)
+            .unwrap_or_else(|error| {
+                panic!(
+                    "{name}: failed to read Cargo artifacts {}: {error}",
+                    deps.display()
+                )
+            })
+            .filter_map(Result::ok)
+            .map(|entry| entry.file_name())
+            .collect::<std::collections::BTreeSet<_>>()
+    };
+    let (first, first_artifacts, second, second_artifacts) = {
         let _cargo_guard = lock_nested_cargo();
-        (
-            run_cargo_case(&binaries.cargo, &root, name, &case),
-            run_cargo_case(&binaries.cargo, &root, name, &case),
-        )
+        let first = run_cargo_case(&binaries.cargo, &root, name, &case);
+        let first_artifacts = artifact_filenames();
+        let second = run_cargo_case(&binaries.cargo, &root, name, &case);
+        let second_artifacts = artifact_filenames();
+        (first, first_artifacts, second, second_artifacts)
     };
     for output in [&first, &second] {
         assert!(
@@ -858,9 +1057,105 @@ fn fresh_cargo_run_does_not_replay_json_reports() {
         first.stdout
     );
     assert!(
-        second.stdout.trim().is_empty(),
-        "fresh stdout:\n{}",
+        second.stdout.contains(r#""reason":"sniff-test-artifact""#),
+        "second stdout:\n{}",
         second.stdout
+    );
+    assert_eq!(
+        first_artifacts, second_artifacts,
+        "workspace run nonce must not churn Cargo artifact filenames"
+    );
+}
+
+#[test]
+fn cargo_fresh_workspace_run_rejects_a_missing_dependency_ir_cache() {
+    let name = "cargo_fresh_workspace_run_rejects_a_missing_dependency_ir_cache";
+    let fixture_name = "dependency_safety";
+    let case = Case::cargo("fresh workspace validates required dependency IR").crate_dir("app");
+    let repo = repo_root();
+    let binaries = Binaries::from_cargo();
+    let fixture = repo.join("tests/fixtures").join(fixture_name);
+    let temp = tempfile::Builder::new()
+        .prefix(&format!("sniff-test-{name}-"))
+        .tempdir()
+        .unwrap_or_else(|error| panic!("{name}: failed to create temp dir: {error}"));
+    let root = temp.path().join(fixture_name);
+    copy_dir_all(&fixture, &root)
+        .unwrap_or_else(|error| panic!("{name}: failed to copy fixture: {error}"));
+    fs::write(
+        root.join("app/sniff-test.toml"),
+        "[safety.lints]\nunsafe-op-missing-justification = \"warn\"\n",
+    )
+    .unwrap_or_else(|error| panic!("{name}: failed to install warning-only policy: {error}"));
+
+    let first = {
+        let _cargo_guard = lock_nested_cargo();
+        run_cargo_case(&binaries.cargo, &root, name, &case)
+    };
+    assert_eq!(
+        first.status.code(),
+        Some(case.exit_code),
+        "first stdout:\n{}\nfirst stderr:\n{}",
+        first.stdout,
+        first.stderr
+    );
+    assert!(
+        first.stdout.contains(r#""reason":"sniff-test-artifact""#),
+        "first stdout:\n{}",
+        first.stdout
+    );
+
+    let artifact_cache_dir = root.join("app/target/sniff-test/sniff-test-cache/v13/artifacts");
+    let dependency_cache = fs::read_dir(&artifact_cache_dir)
+        .unwrap_or_else(|error| {
+            panic!(
+                "{name}: failed to read artifact cache {}: {error}",
+                artifact_cache_dir.display()
+            )
+        })
+        .filter_map(Result::ok)
+        .map(|entry| entry.path())
+        .find(|path| {
+            fs::read_to_string(path)
+                .ok()
+                .and_then(|source| serde_json::from_str::<Value>(&source).ok())
+                .is_some_and(|cache| cache["artifact"]["crate-name"] == "dependency_safety")
+        })
+        .unwrap_or_else(|| {
+            panic!(
+                "{name}: dependency artifact cache missing from {}",
+                artifact_cache_dir.display()
+            )
+        });
+    fs::remove_file(&dependency_cache).unwrap_or_else(|error| {
+        panic!(
+            "{name}: failed to remove dependency cache {}: {error}",
+            dependency_cache.display()
+        )
+    });
+
+    let second = {
+        let _cargo_guard = lock_nested_cargo();
+        run_cargo_case(&binaries.cargo, &root, name, &case)
+    };
+    assert_eq!(
+        second.status.code(),
+        Some(101),
+        "second stdout:\n{}\nsecond stderr:\n{}",
+        second.stdout,
+        second.stderr
+    );
+    assert!(
+        !second.stdout.contains(r#""reason":"sniff-test-artifact""#),
+        "failed workspace run must not emit a report:\n{}",
+        second.stdout
+    );
+    let required_ir_error = "error: failed to load required dependency artifact IR";
+    assert_eq!(
+        second.stderr.matches(required_ir_error).count(),
+        1,
+        "fresh workspace run must fail exactly once for missing dependency IR:\n{}",
+        second.stderr
     );
 }
 
@@ -987,9 +1282,12 @@ fn assert_finding_discriminators(report: &Value) {
         assert!(
             !matches!(
                 kind,
-                "ambiguous-effect-marker" | "ambiguous-effect-requirement" | "analysis-incomplete"
+                "cached-dependency-panic"
+                    | "ambiguous-effect-marker"
+                    | "ambiguous-effect-requirement"
+                    | "analysis-incomplete"
             ),
-            "contextual finding `{kind}` should identify panic or safety in its discriminator: \
+            "finding `{kind}` must use the workspace interpreter's policy-domain discriminator: \
              {finding}"
         );
     }
@@ -1035,8 +1333,6 @@ fn run_direct_driver_case(
         .args(["--edition", edition])
         .arg(source)
         .args(["--sysroot", sysroot.trim(), "-Zno-codegen"])
-        // Cargo would normally set this; direct-driver cases need it for scope.
-        .env("CARGO_PRIMARY_PACKAGE", "1")
         .current_dir(root)
         .output()
         .unwrap_or_else(|error| panic!("{name}: failed to run {}: {error}", binary.display()));
@@ -1074,12 +1370,11 @@ fn volatile_key(key: &str) -> bool {
     matches!(key, "artifact-id" | "rustc-version")
 }
 
-fn message_sort_key(message: &Value) -> (String, String, String) {
+fn message_sort_key(message: &Value) -> (String, String) {
     let artifact = message.get("artifact").unwrap_or(&Value::Null);
     (
         json_string(message, "reason"),
         json_string(artifact, "crate-name"),
-        json_string(message, "scope"),
     )
 }
 

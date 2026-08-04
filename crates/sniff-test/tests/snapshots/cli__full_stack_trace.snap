@@ -46,12 +46,12 @@ error: function `safe_markers::unsafe_ratio` has an undocumented panic path
 7 | pub fn unsafe_ratio(total: usize, denominator: usize) -> usize {
   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
   |
-note: panic may happen here: compiler assertion: attempt to divide `total` (_1, argument 1) by zero
+note: panic may happen here: compiler assertion: division by zero
  --> src/lib.rs:8:5
   |
 8 |     total / denominator
   |     ^^^^^^^^^^^^^^^^^^^
-note: reachable step 0: safe_markers::unsafe_ratio --assert-> compiler assert attempt to divide `total` (_1, argument 1) by zero
+note: reachable step 0: safe_markers::unsafe_ratio --assert-> compiler assert DivisionByZero(copy _1) with locals [CompilerAssertLocal { index: 0, name: None, role: ReturnPointer }, CompilerAssertLocal { index: 1, name: Some("total"), role: Argument }, CompilerAssertLocal { index: 2, name: Some("denominator"), role: Argument }, CompilerAssertLocal { index: 3, name: None, role: Temporary }]
  --> src/lib.rs:8:5
   |
 8 |     total / denominator

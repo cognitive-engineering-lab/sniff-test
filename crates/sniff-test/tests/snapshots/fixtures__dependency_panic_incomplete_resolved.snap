@@ -6,42 +6,6 @@ expression: messages
   {
     "artifact": {
       "artifact-id": "[ARTIFACT_ID]",
-      "crate-name": "dependency_panic_incomplete_resolved"
-    },
-    "dependencies": [],
-    "findings": [
-      {
-        "kind": "panic-invocation",
-        "level": "deny",
-        "reason": "panic sink core::std::rt::panic_fmt",
-        "root": "dependency_panic_incomplete_resolved::incomplete_with_known_panic",
-        "root-kind": "concrete",
-        "span": "[FIXTURE]/dep/src/lib.rs:8:5: 8:51",
-        "target": "core::std::rt::panic_fmt",
-        "trace": [
-          "[FIXTURE]/dep/src/lib.rs:8:5: 8:51: dependency_panic_incomplete_resolved::incomplete_with_known_panic --macro-expansion-> macro core::std::assert",
-          "[FIXTURE]/dep/src/lib.rs:8:5: 8:51: macro core::std::assert --macro-expansion-> macro core::std::panic::panic_2021",
-          "[SYSROOT]/lib/rustlib/src/rust/library/core/src/panic.rs:62:9: 62:73: macro core::std::panic::panic_2021 --direct-call-> core::std::rt::panic_fmt"
-        ]
-      },
-      {
-        "kind": "panic-analysis-incomplete",
-        "level": "deny",
-        "reason": "reachability analysis halted at the 2-instance node limit before the call graph was exhausted",
-        "root": "dependency_panic_incomplete_resolved::incomplete_with_known_panic",
-        "root-kind": "concrete",
-        "span": "[FIXTURE]/dep/src/lib.rs:7:1: 7:47"
-      }
-    ],
-    "format-version": 10,
-    "reason": "sniff-test-artifact",
-    "rustc-version": "[RUSTC_VERSION]",
-    "scope": "dependency",
-    "tool-version": "0.1.0"
-  },
-  {
-    "artifact": {
-      "artifact-id": "[ARTIFACT_ID]",
       "crate-name": "dependency_panic_incomplete_resolved_app"
     },
     "dependencies": [
@@ -53,21 +17,15 @@ expression: messages
     "findings": [
       {
         "kind": "panic-analysis-incomplete",
-        "level": "warn",
-        "reason": "dependency_panic_incomplete_resolved::incomplete_with_known_panic has no complete cached panic analysis",
+        "level": "deny",
+        "reason": "panic analysis reached the configured node limit (2)",
         "root": "dependency_panic_incomplete_resolved_app::call_incomplete_dependency",
-        "root-kind": "concrete",
-        "span": "src/lib.rs:3:5: 3:76",
-        "target": "dependency_panic_incomplete_resolved::incomplete_with_known_panic",
-        "trace": [
-          "src/lib.rs:3:5: 3:76: dependency_panic_incomplete_resolved_app::call_incomplete_dependency --direct-call-> dependency_panic_incomplete_resolved::incomplete_with_known_panic"
-        ]
+        "root-kind": "concrete"
       }
     ],
-    "format-version": 10,
+    "format-version": 11,
     "reason": "sniff-test-artifact",
     "rustc-version": "[RUSTC_VERSION]",
-    "scope": "workspace",
     "tool-version": "0.1.0"
   }
 ]

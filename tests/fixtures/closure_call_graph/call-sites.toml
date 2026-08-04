@@ -1,5 +1,7 @@
-[analysis]
+[compiler]
 inline-mir = "off"
+
+[analysis]
 callable-edge-attribution = "call-sites"
 report-roots = [
     "closure_call_graph::basic_closure_panics",

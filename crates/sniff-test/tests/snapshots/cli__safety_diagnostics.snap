@@ -7,6 +7,20 @@ stdout:
 <empty>
 stderr:
     Checking safety-requirements v0.1.0 ([FIXTURE])
+warning: unsafe call to `safety_requirements::read_byte` in `safety_requirements::block_scope_covers_multiple_calls` does not satisfy all `# Safety` requirements
+  --> src/lib.rs:62:20
+   |
+62 |         let read = read_byte(ptr.as_ptr());
+   |                    ^^^^^^^^^^^^^^^^^^^^^^^
+   |
+note: `safety_requirements::read_byte` documents `# Safety` here
+  --> src/lib.rs:11:1
+   |
+11 | pub unsafe fn read_byte(ptr: *const u8) -> u8 {
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   = note: missing safety requirement `valid_ptr: pointer must be non-null.`
+   = help: add named bullets under the applicable `// SAFETY:` comment for each missing requirement
+
 warning: safety-obligation call to `safety_requirements::safe_documented_contract` in `safety_requirements::configured_safety_obligation_missing_requirement` does not satisfy all `# Safety` requirements
    --> src/lib.rs:164:5
     |
@@ -28,10 +42,10 @@ warning: unsafe call to `safety_requirements::UnsafeGreeter::greet` in `safety_r
     |              ^^^^^^^^^^^^^^^^^^
     |
 note: `safety_requirements::UnsafeGreeter::greet` documents `# Safety` here
-   --> src/lib.rs:112:5
+   --> src/lib.rs:111:5
     |
-112 |     unsafe fn greet(&self, ptr: *const u8);
-    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+111 |     /// - valid_ptr: pointer must be non-null.
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
     = note: missing safety requirement `valid_ptr: pointer must be non-null.`
     = help: add named bullets under the applicable `// SAFETY:` comment for each missing requirement
 
@@ -72,6 +86,20 @@ note: `safety_requirements::read_byte` documents `# Safety` here
    = note: missing safety requirement `initialized: pointer must reference initialized memory.`
    = help: add named bullets under the applicable `// SAFETY:` comment for each missing requirement
 
+warning: unsafe call to `safety_requirements::read_byte` in `safety_requirements::satisfied_by_block_and_call` does not satisfy all `# Safety` requirements
+  --> src/lib.rs:48:9
+   |
+48 |         read_byte(ptr.as_ptr())
+   |         ^^^^^^^^^^^^^^^^^^^^^^^
+   |
+note: `safety_requirements::read_byte` documents `# Safety` here
+  --> src/lib.rs:11:1
+   |
+11 | pub unsafe fn read_byte(ptr: *const u8) -> u8 {
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   = note: missing safety requirement `valid_ptr: pointer must be non-null.`
+   = help: add named bullets under the applicable `// SAFETY:` comment for each missing requirement
+
 warning: public unsafe function `safety_requirements::undocumented_public` is missing `# Safety` docs
   --> src/lib.rs:33:1
    |
@@ -96,19 +124,5 @@ warning: unsafe call to `unsafe function pointer` in `safety_requirements::unsaf
     |
     = help: add a `// SAFETY:` comment above the unsafe block or call site
 
-warning: unsafe call to `safety_requirements::documented_pointer_target` in `safety_requirements::unsafe_fn_pointer_named_requirement_missing` does not satisfy all `# Safety` requirements
-   --> src/lib.rs:190:14
-    |
-190 |     unsafe { function() }
-    |              ^^^^^^^^^^
-    |
-note: `safety_requirements::documented_pointer_target` documents `# Safety` here
-   --> src/lib.rs:176:1
-    |
-176 | unsafe fn documented_pointer_target() {}
-    | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-    = note: missing safety requirement `ready: the caller must establish the target-specific precondition.`
-    = help: add named bullets under the applicable `// SAFETY:` comment for each missing requirement
-
-warning: `safety-requirements` (lib) generated 9 warnings
+warning: `safety-requirements` (lib) generated 10 warnings
     Finished `release` profile [optimized] target(s) in [TIME]

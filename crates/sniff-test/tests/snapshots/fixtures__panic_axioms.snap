@@ -18,9 +18,9 @@ expression: messages
         "root": "panic_axioms::division",
         "root-kind": "concrete",
         "span": "src/lib.rs:2:5: 2:29",
-        "target": "compiler assert attempt to divide `total_size` (_1, argument 1) by zero",
+        "target": "compiler assert division by zero",
         "trace": [
-          "src/lib.rs:2:5: 2:29: panic_axioms::division --assert-> compiler assert attempt to divide `total_size` (_1, argument 1) by zero"
+          "src/lib.rs:2:5: 2:29: panic_axioms::division --assert-> compiler assert DivisionByZero(copy _1) with locals [CompilerAssertLocal { index: 0, name: None, role: ReturnPointer }, CompilerAssertLocal { index: 1, name: Some(\"total_size\"), role: Argument }, CompilerAssertLocal { index: 2, name: Some(\"block_count\"), role: Argument }, CompilerAssertLocal { index: 3, name: None, role: Temporary }]"
         ]
       },
       {
@@ -31,9 +31,9 @@ expression: messages
         "root": "panic_axioms::indexed",
         "root-kind": "concrete",
         "span": "src/lib.rs:10:5: 10:18",
-        "target": "compiler assert index out of bounds: index `index` (_2, argument 2) may exceed length `_3` (temporary)",
+        "target": "compiler assert index out of bounds",
         "trace": [
-          "src/lib.rs:10:5: 10:18: panic_axioms::indexed --assert-> compiler assert index out of bounds: index `index` (_2, argument 2) may exceed length `_3` (temporary)"
+          "src/lib.rs:10:5: 10:18: panic_axioms::indexed --assert-> compiler assert BoundsCheck { len: move _3, index: copy _2 } with locals [CompilerAssertLocal { index: 0, name: None, role: ReturnPointer }, CompilerAssertLocal { index: 1, name: Some(\"values\"), role: Argument }, CompilerAssertLocal { index: 2, name: Some(\"index\"), role: Argument }, CompilerAssertLocal { index: 3, name: None, role: Temporary }, CompilerAssertLocal { index: 4, name: None, role: Temporary }]"
         ]
       },
       {
@@ -44,9 +44,9 @@ expression: messages
         "root": "panic_axioms::remainder",
         "root-kind": "concrete",
         "span": "src/lib.rs:6:5: 6:28",
-        "target": "compiler assert attempt to calculate the remainder of `total_size` (_1, argument 1) with a zero divisor",
+        "target": "compiler assert remainder with a zero divisor",
         "trace": [
-          "src/lib.rs:6:5: 6:28: panic_axioms::remainder --assert-> compiler assert attempt to calculate the remainder of `total_size` (_1, argument 1) with a zero divisor"
+          "src/lib.rs:6:5: 6:28: panic_axioms::remainder --assert-> compiler assert RemainderByZero(copy _1) with locals [CompilerAssertLocal { index: 0, name: None, role: ReturnPointer }, CompilerAssertLocal { index: 1, name: Some(\"total_size\"), role: Argument }, CompilerAssertLocal { index: 2, name: Some(\"block_size\"), role: Argument }, CompilerAssertLocal { index: 3, name: None, role: Temporary }]"
         ]
       },
       {
@@ -65,10 +65,9 @@ expression: messages
         ]
       }
     ],
-    "format-version": 10,
+    "format-version": 11,
     "reason": "sniff-test-artifact",
     "rustc-version": "[RUSTC_VERSION]",
-    "scope": "workspace",
     "tool-version": "0.1.0"
   }
 ]

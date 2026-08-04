@@ -24,7 +24,7 @@ warning: function `ambiguous_markers::marker_on_noncanonical_route` may panic th
 34 |     ratio(total, denominator)
    |     ^^^^^^^^^^^^^^^^^^^^^^^^^
    |
-note: the reached callee `ambiguous_markers::ratio` documents `# Panics` here
+note: `ambiguous_markers::ratio` documents `# Panics` here
   --> src/lib.rs:4:1
    |
  4 | pub fn ratio(total: usize, denominator: usize) -> usize {
@@ -50,16 +50,9 @@ error: function `ambiguous_markers::marker_on_noncanonical_route` has an ambiguo
 48 | |     let second = marked_route(total, denominator);
    | |_^
    |
-note: this obligation also resolves to the same marker: ambiguous_markers::marked_route --direct-call-> ambiguous_markers::ratio
-  --> src/lib.rs:42:53
-   |
-42 |     shared_ratio(total, denominator).saturating_add(ratio(total, denominator))
-   |                                                     ^^^^^^^^^^^^^^^^^^^^^^^^^
-note: this obligation also resolves to the same marker: ambiguous_markers::shared_ratio --direct-call-> ambiguous_markers::ratio
-  --> src/lib.rs:34:5
-   |
-34 |     ratio(total, denominator)
-   |     ^^^^^^^^^^^^^^^^^^^^^^^^^
+   = note: this marker applies to 2 panic effect groups
+   = note: reachable from `ambiguous_markers::marker_on_noncanonical_route` to `ambiguous_markers::ratio`
+   = note: set `show-full-stack-trace = true` under `[analysis]` in sniff-test.toml to show every reachability step
    = help: move the marker directly above one obligation, split it into separate markers, or set `ambiguous-panic-marker = "allow"` under `[analysis.lints]`
 
 error: function `ambiguous_markers::shared_block_marker` has an ambiguous `// PANIC:` marker
@@ -69,16 +62,7 @@ error: function `ambiguous_markers::shared_block_marker` has an ambiguous `// PA
 10 | |     {
    | |_^
    |
-note: this obligation also resolves to the same marker: ambiguous_markers::shared_block_marker --direct-call-> ambiguous_markers::ratio
-  --> src/lib.rs:11:21
-   |
-11 |         let first = ratio(a, denominator);
-   |                     ^^^^^^^^^^^^^^^^^^^^^
-note: this obligation also resolves to the same marker: ambiguous_markers::shared_block_marker --direct-call-> ambiguous_markers::ratio
-  --> src/lib.rs:12:22
-   |
-12 |         let second = ratio(b, denominator);
-   |                      ^^^^^^^^^^^^^^^^^^^^^
+   = note: this marker applies to 2 panic effect groups
    = help: move the marker directly above one obligation, split it into separate markers, or set `ambiguous-panic-marker = "allow"` under `[analysis.lints]`
 
 warning: `ambiguous-markers` (lib) generated 1 warning

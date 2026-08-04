@@ -18,6 +18,9 @@ expression: messages
           "ready: the first target's precondition must hold."
         ],
         "reason": "unsafe call to `safety_callable_sites::first_target` does not satisfy all # Safety requirements",
+        "requirements": [
+          "ready: the first target's precondition must hold."
+        ],
         "root": "safety_callable_sites::independently_marked_calls",
         "root-kind": "concrete",
         "span": "src/lib.rs:24:14: 24:22",
@@ -34,6 +37,9 @@ expression: messages
           "ready: the second target's precondition must hold."
         ],
         "reason": "unsafe call to `safety_callable_sites::second_target` does not satisfy all # Safety requirements",
+        "requirements": [
+          "ready: the second target's precondition must hold."
+        ],
         "root": "safety_callable_sites::independently_marked_calls",
         "root-kind": "concrete",
         "span": "src/lib.rs:24:14: 24:22",
@@ -43,10 +49,9 @@ expression: messages
         ]
       }
     ],
-    "format-version": 10,
+    "format-version": 11,
     "reason": "sniff-test-artifact",
     "rustc-version": "[RUSTC_VERSION]",
-    "scope": "workspace",
     "tool-version": "0.1.0"
   }
 ]

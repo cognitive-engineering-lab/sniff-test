@@ -1,6 +1,6 @@
 use std::collections::{HashMap, HashSet, VecDeque};
 
-use rustc_hir::def_id::{DefId, LocalDefId};
+use rustc_hir::def_id::{CrateNum, DefId, LocalDefId};
 use rustc_middle::ty::{GenericArgs, Instance, InstanceKind, TyCtxt};
 use rustc_span::Span;
 
@@ -67,7 +67,7 @@ impl<'tcx> IntoInstance<'tcx> for Instance<'tcx> {
 /// Artifact boundary used while expanding reached function instances.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ArtifactScope {
-    /// Expand only instances defined by the crate containing the query root.
+    /// Expand only instances defined by a crate containing a query root.
     ///
     /// Calls into another crate remain recorded and are classified as
     /// [`ReachabilityNodeExpansion::DifferentArtifact`].
@@ -139,8 +139,9 @@ pub enum FnPointerEdges {
 /// Shared reachability index for one compiler context.
 ///
 /// The index caches expanded outgoing edges per function instance and stores a
-/// shared node/edge arena. Each call to [`query`](Self::query) performs a
-/// root-specific BFS over that arena and returns a [`ReachabilitySnapshot`].
+/// shared node/edge arena. [`query`](Self::query) performs a single-root BFS;
+/// [`query_many`](Self::query_many) performs one shared BFS/fixed point for a
+/// set of roots and returns a combined [`ReachabilitySnapshot`].
 pub struct ReachabilityIndex<'tcx> {
     tcx: TyCtxt<'tcx>,
     graph: ReachabilityGraph<'tcx>,
@@ -164,7 +165,7 @@ impl<'tcx> ReachabilityIndex<'tcx> {
         &self.graph
     }
 
-    /// Runs a root-specific reachability query over the shared graph.
+    /// Runs a single-root reachability query over the shared graph.
     pub fn query<R, H>(
         &mut self,
         root: R,
@@ -175,21 +176,73 @@ impl<'tcx> ReachabilityIndex<'tcx> {
         R: IntoInstance<'tcx>,
         H: ReachabilityHooks<'tcx>,
     {
-        let root = root.into_instance(self.tcx);
-        let root_node_id = self.graph.node_for_instance(root);
-        let snapshot = self.graph.snapshot_for_root(root_node_id);
+        self.query_instances(&[root.into_instance(self.tcx)], hooks, options)
+    }
+
+    /// Runs one reachability query from every supplied root.
+    ///
+    /// Roots share a queue, visited-instance set, callable target index, and
+    /// pending callable call sites. A target discovered from any root can
+    /// therefore refine an earlier call site from any other root without a
+    /// second discovery pass. The returned snapshot records every distinct
+    /// supplied root at depth zero.
+    ///
+    /// Returns `None` when `roots` is empty.
+    pub fn query_many<I, R, H>(
+        &mut self,
+        roots: I,
+        hooks: &H,
+        options: ReachabilityOptions,
+    ) -> Option<ReachabilitySnapshot>
+    where
+        I: IntoIterator<Item = R>,
+        R: IntoInstance<'tcx>,
+        H: ReachabilityHooks<'tcx>,
+    {
+        let mut seen_roots = HashSet::new();
+        let roots = roots
+            .into_iter()
+            .map(|root| root.into_instance(self.tcx))
+            .filter(|root| seen_roots.insert(*root))
+            .collect::<Vec<_>>();
+        if roots.is_empty() {
+            return None;
+        }
+
+        Some(self.query_instances(&roots, hooks, options))
+    }
+
+    fn query_instances<H>(
+        &mut self,
+        roots: &[Instance<'tcx>],
+        hooks: &H,
+        options: ReachabilityOptions,
+    ) -> ReachabilitySnapshot
+    where
+        H: ReachabilityHooks<'tcx>,
+    {
+        debug_assert!(!roots.is_empty());
+        let root_artifacts = roots
+            .iter()
+            .map(|root| root.def_id().krate)
+            .collect::<HashSet<_>>();
+        let root_node_ids = roots
+            .iter()
+            .map(|root| self.graph.node_for_instance(*root))
+            .collect::<Vec<_>>();
+        let snapshot = self.graph.snapshot_for_roots(&root_node_ids);
         let query = ReachabilityQuery {
             index: self,
-            root,
+            root_artifacts,
             hooks,
             options,
             visited_instances: HashSet::new(),
             visited_bridge_nodes: HashSet::new(),
             pending_callable_calls: HashMap::new(),
-            queue: VecDeque::from([QueueItem {
-                node_id: root_node_id,
-                depth: 0,
-            }]),
+            queue: root_node_ids
+                .into_iter()
+                .map(|node_id| QueueItem { node_id, depth: 0 })
+                .collect(),
             snapshot,
         };
 
@@ -243,12 +296,12 @@ impl<'tcx> ReachabilityIndex<'tcx> {
 
     fn expansion_blocker(
         &self,
-        root: Instance<'tcx>,
+        root_artifacts: &HashSet<CrateNum>,
         artifact_scope: ArtifactScope,
         instance: Instance<'tcx>,
     ) -> Option<ReachabilityNodeExpansion> {
         if artifact_scope == ArtifactScope::RootArtifact
-            && instance.def_id().krate != root.def_id().krate
+            && !root_artifacts.contains(&instance.def_id().krate)
         {
             return Some(ReachabilityNodeExpansion::DifferentArtifact);
         }
@@ -293,7 +346,7 @@ struct QueueItem {
 
 struct ReachabilityQuery<'a, 'tcx, H> {
     index: &'a mut ReachabilityIndex<'tcx>,
-    root: Instance<'tcx>,
+    root_artifacts: HashSet<CrateNum>,
     hooks: &'a H,
     options: ReachabilityOptions,
     visited_instances: HashSet<Instance<'tcx>>,
@@ -336,10 +389,11 @@ where
 
                 self.visited_instances.insert(instance);
 
-                if let Some(expansion) =
-                    self.index
-                        .expansion_blocker(self.root, self.options.artifact_scope, instance)
-                {
+                if let Some(expansion) = self.index.expansion_blocker(
+                    &self.root_artifacts,
+                    self.options.artifact_scope,
+                    instance,
+                ) {
                     self.snapshot.record_expansion(item.node_id, expansion);
                     continue;
                 }
@@ -575,6 +629,7 @@ where
             | crate::graph::ReachabilityEdgeKind::TailCall
             | crate::graph::ReachabilityEdgeKind::DynObjectCast
             | crate::graph::ReachabilityEdgeKind::ConstBody
+            | crate::graph::ReachabilityEdgeKind::CoroutineBody
             | crate::graph::ReachabilityEdgeKind::MacroExpansion
             | crate::graph::ReachabilityEdgeKind::Assert
             | crate::graph::ReachabilityEdgeKind::IndirectCall => true,

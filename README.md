@@ -42,21 +42,23 @@ Arguments after `--` are passed to the wrapped `cargo check` command:
 cargo sniff-test -- --features dangerous -p my-crate
 ```
 
-Common `sniff-test.toml` analysis knobs:
+Common `sniff-test.toml` knobs:
 
 ```toml
+[compiler]
+overflow-checks = "profile" # profile | on | off
+inline-mir = "off"          # profile | on | off
+
 [analysis]
 show-full-stack-trace = false
 report-roots = "public"     # public | all | ["crate::path"]
-overflow-checks = "profile" # profile | on | off
-inline-mir = "off"          # profile | on | off
 callable-edge-attribution = "erasure-sites" # erasure-sites | call-sites
 marker-probing = "macro-definition-first" # macro-definition-first | source-callsite
 
 [analysis.lints]
 panic-analysis-incomplete = "deny"
 safety-analysis-incomplete = "deny"
-# Optional overrides for missing, stale, or incomplete dependency evidence:
+# Optional overrides when a reached managed dependency body is missing:
 # dependency-panic-analysis-incomplete = "warn"
 # dependency-safety-analysis-incomplete = "warn"
 ambiguous-panic-marker = "deny" # deny | warn | allow
@@ -88,7 +90,6 @@ compiler-assert = "deny"
 # compiler-assert-null-pointer-dereference = "deny"
 # compiler-assert-invalid-enum-construction = "deny"
 panic-invocation = "deny"
-cached-dependency-panic = "deny"
 documented-panic = "warn"
 trusted-panic = "warn"
 indirect-call-boundary = "warn"
@@ -119,17 +120,47 @@ safety-obligation-missing-justification = "warn"
 safety-obligation-missing-requirements = "warn"
 ```
 
-`inline-mir = "off"` passes `-Z inline-mir=no`, which keeps panic traces closer
-to the source call structure.
+`[compiler].inline-mir = "off"` passes `-Z inline-mir=no`, which keeps panic
+traces closer to the source call structure. Compiler settings are applied
+literally and independently from lint policy. For example, disabling overflow
+checks does not change or reject `[panics.lints].compiler-assert-overflow`.
+
+The v13 analysis cache stores policy-neutral artifact IR: function identities,
+call edges, raw compiler assertions and unsafe operations, source markers,
+contracts, and verified file-relative source ranges. It does not store selected
+report roots, lint levels, interpreted findings, or rendered traces.
+Dependency rustc units extract every analyzable body and silently persist this
+IR; they do not select roots, interpret policy, emit diagnostics, or write JSON
+reports. Workspace units select `[analysis].report-roots`, compose local IR with
+verified dependency IR, interpret only the reachable combined graph, and emit
+the workspace findings. Unreachable dependency IR therefore produces no
+findings.
+
+For concrete cross-crate generic calls, the consuming rustc unit also stores an
+exact-instantiation overlay. This preserves dispatch selected using a
+workspace-local type while the defining dependency cache remains generic and
+policy-neutral. The frontend ensures dependency metadata contains the MIR
+needed to build these overlays.
+
+Compiler settings affect extracted facts and participate in each artifact's
+cache identity. Direct caches are bound to the exact crate name, stable crate
+ID, and rustc crate hash loaded by the consuming session; the workspace's own
+profile is not imposed on dependencies that legitimately use different
+per-package settings. Lint and other interpretation-only changes reuse the same
+dependency IR, so a workspace can reinterpret cached dependencies without
+recompiling them. Failure to produce, validate, or persist required artifact IR
+is a tool error rather than a successful run with partial dependency analysis.
 
 `callable-edge-attribution = "erasure-sites"` reports concrete callable targets
 where a function item, closure, or concrete type is erased into an indirect
 callable such as a `fn` pointer or `dyn Trait`. `call-sites` reports concrete
 function-pointer targets and dynamic-dispatch vtable methods at the call span
-instead of the erasure span. Call-site attribution uses shared, type-keyed
-evidence: function-pointer reifications with the same `fn` pointer type, or
-concrete values cast to the same dyn trait, may cause each matching call site
-to connect to every target observed by the shared reachability index.
+instead of the erasure span. Call-site attribution uses type-keyed evidence
+reached while interpreting each selected root: function-pointer reifications
+with the same `fn` pointer type, or concrete values cast to the same dyn trait,
+may cause matching reachable call sites to connect to every target reached from
+that root. Dependency caches store only raw erasure, invocation, and key facts;
+they do not pre-resolve callable targets for any workspace policy or root set.
 
 The older `ambiguous-effect-marker`, `ambiguous-effect-requirement`, and
 `analysis-incomplete` keys remain accepted as group defaults for both effect
@@ -138,15 +169,15 @@ group default regardless of TOML ordering. `warn` accepts the ambiguity
 but reports it; `allow` accepts it silently.
 
 `dependency-panic-analysis-incomplete` and
-`dependency-safety-analysis-incomplete` are optional overrides for incomplete
-cross-crate evidence. Without an exact dependency override, the corresponding
+`dependency-safety-analysis-incomplete` are optional overrides for a reached
+managed dependency body that is absent from the composed artifact graph.
+Without an exact dependency override, the corresponding
 `panic-analysis-incomplete` or `safety-analysis-incomplete` level applies.
-These overrides do not weaken node-limit findings from the crate currently
-being analyzed.
+These overrides do not apply to the workspace traversal's node limit.
 
-Likewise, exact `compiler-assert-*` overrides take precedence for both local
-and cached dependency findings. Without an exact override, local assertions use
-`compiler-assert` and dependency assertions use `cached-dependency-panic`.
+Likewise, exact `compiler-assert-*` overrides take precedence for assertions
+regardless of which artifact supplied the raw fact. Without an exact override,
+all compiler assertions use `compiler-assert`.
 `unsafe-op-missing-justification` is the fallback for every exact non-call
 unsafe-operation key. JSON reports retain the broad `kind` and add
 `compiler-assert-kind` or `safety-op-kind`, so the selected subtype remains
@@ -157,13 +188,17 @@ markers inside macro definitions satisfy operations produced by that macro,
 then falls back through macro callsites to the outer source callsite.
 `source-callsite` keeps lookup at the final user callsite only.
 
-`report-roots` scopes both analyses. Effects propagate through reachable local
-functions until a documented contract, trusted boundary, or ignored namespace
-stops the path. With `"public"`, a private helper is reported through the public
-root that reaches it; with `"all"`, the helper can also receive its own finding.
+`report-roots` controls workspace traversal and reporting, not artifact
+extraction. Effects propagate from each selected workspace root through local
+and cached dependency functions until a documented contract, trusted boundary,
+or ignored namespace stops the path. With `"public"`, a private helper is
+reported through the public root that reaches it; with `"all"`, the helper can
+also receive its own finding.
 Safety probing covers runtime function, method, closure, and coroutine bodies;
 const, static, and inline-const initializers are intentionally outside this
-runtime effect graph.
+runtime effect graph. Coroutine construction conservatively makes its stored
+runtime body reachable; merely constructing an async closure does not, until
+that callable is invoked.
 
 `cargo sniff-test` exits unsuccessfully when a workspace crate has a finding
 whose configured lint level is `deny`. `allow` suppresses a finding from human
@@ -206,9 +241,19 @@ cargo sniff-test --message-format json
 ```
 
 JSON mode writes newline-delimited messages to stdout, while Cargo and rustc
-diagnostics stay on stderr. Each sniff-test message has
-`"reason":"sniff-test-artifact"` and describes one artifact analyzed during
-that invocation. A fully fresh Cargo run may emit no sniff-test messages.
+diagnostics stay on stderr. Only workspace rustc units emit sniff-test messages;
+dependency units cache IR silently. Each workspace unit emits at most one
+message with `"reason":"sniff-test-artifact"`. Reports have no dependency
+`scope` discriminator because every public report is a workspace report.
+sniff-test records an invocation token only in workspace dep-info, so Cargo
+reruns report-producing workspace units on every invocation to reinterpret and
+validate cached IR while leaving otherwise-fresh dependency units untouched.
+
+When a finding originated in cached dependency IR, sniff-test loads its recorded
+source file into rustc's active source map only after verifying the stable file
+identity, exact content hash, normalized byte length, and byte range. If source
+is missing or no longer matches, the finding remains reportable but degrades to
+an unspanned diagnostic instead of pointing at unverified text.
 
 ## Source Markers
 
@@ -284,6 +329,7 @@ Direct-mode sniff-test arguments:
 - `--cache-dir DIR`
 - `--color auto|always|never`
 - `--message-format human|json`
+- `--dependency` to cache this manually compiled upstream unit silently
 
 Cargo frontend options are intentionally rejected in direct mode. Put rustc
 profile/codegen flags after the driver separator instead:
@@ -292,8 +338,15 @@ profile/codegen flags after the driver separator instead:
 sniff-test-driver --message-format json -- src/lib.rs -C overflow-checks=on
 ```
 
+Standalone invocations are report-producing workspace units by default and do
+not depend on Cargo's `CARGO_PRIMARY_PACKAGE` environment variable. When
+manually building a dependency before its consumer, pass `--dependency` for
+that upstream rustc unit so it persists complete IR without diagnostics or a
+JSON report.
+
 Direct driver mode follows rustc-driver exit semantics: it returns success when
-rustc succeeds, even if sniff-test emits findings. Use the Cargo frontend for
+rustc succeeds, even if sniff-test emits findings. Required IR extraction or
+cache persistence failures are tool errors. Use the Cargo frontend for
 deny-level effect gating.
 
 ## Checks
@@ -338,8 +391,8 @@ just cli
 ```
 
 They snapshot normalized rustc-style output, including compact traces,
-full-stack traces, dependency warning footers, SAFETY diagnostics, Cargo
-argument forwarding, and flat effect findings.
+full-stack traces, verified cached-source snippets and fallback notes, SAFETY
+diagnostics, Cargo argument forwarding, and flat effect findings.
 
 Run all snapshot tests with stale-snapshot rejection via:
 

@@ -6,53 +6,6 @@ expression: messages
   {
     "artifact": {
       "artifact-id": "[ARTIFACT_ID]",
-      "crate-name": "dependency_safety_contract"
-    },
-    "dependencies": [],
-    "findings": [
-      {
-        "function": "dependency_safety_contract::misses_named_requirement",
-        "kind": "safety-obligation-missing-requirements",
-        "level": "warn",
-        "missing-requirements": [
-          "initialized: global state must be initialized"
-        ],
-        "reason": "safety-obligation call to `dependency_safety_contract::requires_initialized_state` does not satisfy all # Safety requirements",
-        "root": "dependency_safety_contract::misses_named_requirement",
-        "root-kind": "concrete",
-        "span": "[FIXTURE]/dep/src/lib.rs:14:5: 14:33",
-        "target": "dependency_safety_contract::requires_initialized_state"
-      },
-      {
-        "function": "dependency_safety_contract::two_reads",
-        "kind": "unsafe-op-missing-justification",
-        "level": "deny",
-        "reason": "unsafe operation (raw pointer dereference) has no `// SAFETY:` justification",
-        "root": "dependency_safety_contract::two_reads",
-        "root-kind": "concrete",
-        "safety-op-kind": "raw-pointer-dereference",
-        "span": "[FIXTURE]/dep/src/lib.rs:2:26: 2:34"
-      },
-      {
-        "function": "dependency_safety_contract::two_reads",
-        "kind": "unsafe-op-missing-justification",
-        "level": "deny",
-        "reason": "unsafe operation (raw pointer dereference) has no `// SAFETY:` justification",
-        "root": "dependency_safety_contract::two_reads",
-        "root-kind": "concrete",
-        "safety-op-kind": "raw-pointer-dereference",
-        "span": "[FIXTURE]/dep/src/lib.rs:3:27: 3:35"
-      }
-    ],
-    "format-version": 10,
-    "reason": "sniff-test-artifact",
-    "rustc-version": "[RUSTC_VERSION]",
-    "scope": "dependency",
-    "tool-version": "0.1.0"
-  },
-  {
-    "artifact": {
-      "artifact-id": "[ARTIFACT_ID]",
       "crate-name": "dependency_safety_contract_app"
     },
     "dependencies": [
@@ -69,73 +22,84 @@ expression: messages
         "reason": "one `// SAFETY:` marker applies to 2 safety effect groups",
         "root": "dependency_safety_contract_app::justifies_dependency_effects",
         "root-kind": "concrete",
-        "span": "src/lib.rs:6:1: 7:1"
+        "span": "src/lib.rs:6:1: 7:1",
+        "trace": [
+          "src/lib.rs:7:5: 7:51: dependency_safety_contract_app::justifies_dependency_effects --direct-call-> dependency_safety_contract::two_reads",
+          "[FIXTURE]/dep/src/lib.rs:2:26: 2:34: dependency_safety_contract::two_reads --unsafe-operation-> unsafe operation (raw pointer dereference)"
+        ]
       },
       {
-        "effect-span": "[FIXTURE]/dep/src/lib.rs:14:5: 14:33",
+        "function": "dependency_safety_contract::misses_named_requirement",
         "kind": "safety-obligation-missing-requirements",
         "level": "warn",
         "missing-requirements": [
           "initialized: global state must be initialized"
         ],
-        "reason": "dependency_safety_contract::misses_named_requirement has cached safety effect: safety-obligation call to `dependency_safety_contract::requires_initialized_state` does not satisfy all # Safety requirements",
+        "reason": "safety-obligation call to `dependency_safety_contract::requires_initialized_state` does not satisfy all # Safety requirements",
+        "requirements": [
+          "initialized: global state must be initialized"
+        ],
         "root": "dependency_safety_contract_app::reaches_missing_requirement",
         "root-kind": "concrete",
-        "span": "src/lib.rs:11:5: 11:59",
-        "target": "dependency_safety_contract::misses_named_requirement",
+        "span": "[FIXTURE]/dep/src/lib.rs:14:5: 14:33",
+        "target": "dependency_safety_contract::requires_initialized_state",
         "trace": [
-          "src/lib.rs:11:5: 11:59: dependency_safety_contract_app::reaches_missing_requirement --direct-call-> dependency_safety_contract::misses_named_requirement"
+          "src/lib.rs:11:5: 11:59: dependency_safety_contract_app::reaches_missing_requirement --direct-call-> dependency_safety_contract::misses_named_requirement",
+          "[FIXTURE]/dep/src/lib.rs:14:5: 14:33: dependency_safety_contract::misses_named_requirement --direct-call-> dependency_safety_contract::requires_initialized_state"
         ]
       },
       {
-        "effect-span": "[FIXTURE]/dep/src/lib.rs:2:26: 2:34",
+        "function": "dependency_safety_contract::two_reads",
         "kind": "unsafe-op-missing-justification",
         "level": "deny",
-        "reason": "dependency_safety_contract::two_reads has cached safety effect: unsafe operation (raw pointer dereference) has no `// SAFETY:` justification",
+        "reason": "unsafe operation (raw pointer dereference) has no `// SAFETY:` justification",
         "root": "dependency_safety_contract_app::reaches_two_effects",
         "root-kind": "concrete",
         "safety-op-kind": "raw-pointer-dereference",
-        "span": "src/lib.rs:2:5: 2:51",
-        "target": "dependency_safety_contract::two_reads",
+        "span": "[FIXTURE]/dep/src/lib.rs:2:26: 2:34",
         "trace": [
-          "src/lib.rs:2:5: 2:51: dependency_safety_contract_app::reaches_two_effects --direct-call-> dependency_safety_contract::two_reads"
+          "src/lib.rs:2:5: 2:51: dependency_safety_contract_app::reaches_two_effects --direct-call-> dependency_safety_contract::two_reads",
+          "[FIXTURE]/dep/src/lib.rs:2:26: 2:34: dependency_safety_contract::two_reads --unsafe-operation-> unsafe operation (raw pointer dereference)"
         ]
       },
       {
-        "effect-span": "[FIXTURE]/dep/src/lib.rs:3:27: 3:35",
+        "function": "dependency_safety_contract::two_reads",
         "kind": "unsafe-op-missing-justification",
         "level": "deny",
-        "reason": "dependency_safety_contract::two_reads has cached safety effect: unsafe operation (raw pointer dereference) has no `// SAFETY:` justification",
+        "reason": "unsafe operation (raw pointer dereference) has no `// SAFETY:` justification",
         "root": "dependency_safety_contract_app::reaches_two_effects",
         "root-kind": "concrete",
         "safety-op-kind": "raw-pointer-dereference",
-        "span": "src/lib.rs:2:5: 2:51",
-        "target": "dependency_safety_contract::two_reads",
+        "span": "[FIXTURE]/dep/src/lib.rs:3:27: 3:35",
         "trace": [
-          "src/lib.rs:2:5: 2:51: dependency_safety_contract_app::reaches_two_effects --direct-call-> dependency_safety_contract::two_reads"
+          "src/lib.rs:2:5: 2:51: dependency_safety_contract_app::reaches_two_effects --direct-call-> dependency_safety_contract::two_reads",
+          "[FIXTURE]/dep/src/lib.rs:3:27: 3:35: dependency_safety_contract::two_reads --unsafe-operation-> unsafe operation (raw pointer dereference)"
         ]
       },
       {
-        "effect-span": "[FIXTURE]/dep/src/lib.rs:14:5: 14:33",
+        "function": "dependency_safety_contract::misses_named_requirement",
         "kind": "safety-obligation-missing-requirements",
         "level": "warn",
         "missing-requirements": [
           "initialized: global state must be initialized"
         ],
-        "reason": "dependency_safety_contract::misses_named_requirement has cached safety effect: safety-obligation call to `dependency_safety_contract::requires_initialized_state` does not satisfy all # Safety requirements",
+        "reason": "safety-obligation call to `dependency_safety_contract::requires_initialized_state` does not satisfy all # Safety requirements",
+        "requirements": [
+          "initialized: global state must be initialized"
+        ],
         "root": "dependency_safety_contract_app::unnamed_marker_does_not_satisfy_cached_requirement",
         "root-kind": "concrete",
-        "span": "src/lib.rs:16:5: 16:59",
-        "target": "dependency_safety_contract::misses_named_requirement",
+        "span": "[FIXTURE]/dep/src/lib.rs:14:5: 14:33",
+        "target": "dependency_safety_contract::requires_initialized_state",
         "trace": [
-          "src/lib.rs:16:5: 16:59: dependency_safety_contract_app::unnamed_marker_does_not_satisfy_cached_requirement --direct-call-> dependency_safety_contract::misses_named_requirement"
+          "src/lib.rs:16:5: 16:59: dependency_safety_contract_app::unnamed_marker_does_not_satisfy_cached_requirement --direct-call-> dependency_safety_contract::misses_named_requirement",
+          "[FIXTURE]/dep/src/lib.rs:14:5: 14:33: dependency_safety_contract::misses_named_requirement --direct-call-> dependency_safety_contract::requires_initialized_state"
         ]
       }
     ],
-    "format-version": 10,
+    "format-version": 11,
     "reason": "sniff-test-artifact",
     "rustc-version": "[RUSTC_VERSION]",
-    "scope": "workspace",
     "tool-version": "0.1.0"
   }
 ]

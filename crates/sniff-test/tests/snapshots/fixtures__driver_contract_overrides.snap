@@ -11,25 +11,15 @@ expression: messages
     "dependencies": [],
     "findings": [
       {
-        "function": "contract_overrides::safety_override_missing_requirement",
-        "kind": "unsafe-call-missing-requirements",
-        "level": "warn",
-        "missing-requirements": [
-          "initialized: pointer must reference initialized memory."
-        ],
-        "reason": "unsafe call to `contract_overrides::synthetic_read` does not satisfy all # Safety requirements",
-        "root": "contract_overrides::safety_override_missing_requirement",
-        "root-kind": "concrete",
-        "span": "[FIXTURE]/src/lib.rs:30:14: 30:42",
-        "target": "contract_overrides::synthetic_read"
-      },
-      {
         "kind": "documented-panic",
         "level": "warn",
         "missing-requirements": [
           "flag: flag must be true."
         ],
         "reason": "contract_overrides::panic_contract documents when it may panic under # Panics",
+        "requirements": [
+          "flag: flag must be true."
+        ],
         "root": "contract_overrides::panic_override_missing_marker",
         "root-kind": "concrete",
         "span": "[FIXTURE]/src/lib.rs:8:5: 8:25",
@@ -37,12 +27,31 @@ expression: messages
         "trace": [
           "[FIXTURE]/src/lib.rs:8:5: 8:25: contract_overrides::panic_override_missing_marker --direct-call-> contract_overrides::panic_contract"
         ]
+      },
+      {
+        "function": "contract_overrides::safety_override_missing_requirement",
+        "kind": "unsafe-call-missing-requirements",
+        "level": "warn",
+        "missing-requirements": [
+          "initialized: pointer must reference initialized memory."
+        ],
+        "reason": "unsafe call to `contract_overrides::synthetic_read` does not satisfy all # Safety requirements",
+        "requirements": [
+          "valid_ptr: pointer must be non-null.",
+          "initialized: pointer must reference initialized memory."
+        ],
+        "root": "contract_overrides::safety_override_missing_requirement",
+        "root-kind": "concrete",
+        "span": "[FIXTURE]/src/lib.rs:30:14: 30:42",
+        "target": "contract_overrides::synthetic_read",
+        "trace": [
+          "[FIXTURE]/src/lib.rs:30:14: 30:42: contract_overrides::safety_override_missing_requirement --direct-call-> contract_overrides::synthetic_read"
+        ]
       }
     ],
-    "format-version": 10,
+    "format-version": 11,
     "reason": "sniff-test-artifact",
     "rustc-version": "[RUSTC_VERSION]",
-    "scope": "workspace",
     "tool-version": "0.1.0"
   }
 ]

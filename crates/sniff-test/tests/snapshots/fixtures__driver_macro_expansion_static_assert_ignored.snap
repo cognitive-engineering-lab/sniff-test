@@ -36,12 +36,26 @@ expression: messages
           "[FIXTURE]/src/lib.rs:3:9: 3:28: macro macro_expansion::const_assert --macro-expansion-> macro core::std::assert",
           "[FIXTURE]/src/lib.rs:3:9: 3:28: macro core::std::assert --direct-call-> core::panicking::panic"
         ]
+      },
+      {
+        "kind": "panic-invocation",
+        "level": "deny",
+        "reason": "panic sink core::panicking::panic",
+        "root": "macro_expansion::macro_wrapped",
+        "root-kind": "concrete",
+        "span": "[FIXTURE]/src/lib.rs:14:5: 14:25",
+        "target": "core::panicking::panic",
+        "trace": [
+          "[FIXTURE]/src/lib.rs:14:5: 14:25: macro_expansion::macro_wrapped --macro-expansion-> macro macro_expansion::static_assert",
+          "[FIXTURE]/src/lib.rs:9:9: 9:34: macro macro_expansion::static_assert --macro-expansion-> macro macro_expansion::const_assert",
+          "[FIXTURE]/src/lib.rs:3:9: 3:28: macro macro_expansion::const_assert --macro-expansion-> macro core::std::assert",
+          "[FIXTURE]/src/lib.rs:3:9: 3:28: macro core::std::assert --direct-call-> core::panicking::panic"
+        ]
       }
     ],
-    "format-version": 10,
+    "format-version": 11,
     "reason": "sniff-test-artifact",
     "rustc-version": "[RUSTC_VERSION]",
-    "scope": "workspace",
     "tool-version": "0.1.0"
   }
 ]

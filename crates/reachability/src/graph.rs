@@ -60,7 +60,7 @@ impl<'tcx> ReachabilityGraph<'tcx> {
     }
 
     #[must_use]
-    /// Borrows this graph with one root-specific query snapshot.
+    /// Borrows this graph with one query snapshot.
     pub fn view<'view>(
         &'view self,
         snapshot: &'view ReachabilitySnapshot,
@@ -119,9 +119,10 @@ impl<'tcx> ReachabilityGraph<'tcx> {
         }
     }
 
-    pub(crate) fn snapshot_for_root(&self, root: ReachabilityNodeId) -> ReachabilitySnapshot {
-        debug_assert!(root.index() < self.nodes.len());
-        ReachabilitySnapshot::new(root, self.nodes.len(), self.edges.len())
+    pub(crate) fn snapshot_for_roots(&self, roots: &[ReachabilityNodeId]) -> ReachabilitySnapshot {
+        debug_assert!(!roots.is_empty());
+        debug_assert!(roots.iter().all(|root| root.index() < self.nodes.len()));
+        ReachabilitySnapshot::new(roots, self.nodes.len(), self.edges.len())
     }
 
     pub(crate) fn node_for_instance(&mut self, instance: Instance<'tcx>) -> ReachabilityNodeId {
@@ -186,7 +187,7 @@ impl<'tcx> ReachabilityGraph<'tcx> {
     }
 }
 
-/// Graph-bound view of one root-specific reachability query.
+/// Graph-bound view of one reachability query.
 ///
 /// This is the preferred inspection API. The underlying snapshot stores typed ids
 /// so batch queries can keep running, while the view turns those ids into values
@@ -205,9 +206,19 @@ impl<'view, 'tcx> ReachabilityView<'view, 'tcx> {
     }
 
     #[must_use]
-    /// Returns the root node for this query.
+    /// Returns the first root node for this query.
     pub fn root(self) -> ReachedNode<'view, 'tcx> {
         self.reached_node(self.snapshot.root)
+    }
+
+    /// Returns every query root in caller-supplied order.
+    #[must_use]
+    pub fn roots(self) -> impl ExactSizeIterator<Item = ReachedNode<'view, 'tcx>> + 'view {
+        self.snapshot
+            .roots
+            .iter()
+            .copied()
+            .map(move |id| self.reached_node(id))
     }
 
     /// Returns reached nodes in first-discovery order.
@@ -283,7 +294,7 @@ impl<'view, 'tcx> ReachabilityView<'view, 'tcx> {
     }
 }
 
-/// A node reached by one root-specific query.
+/// A node reached by one query.
 #[derive(Clone, Copy)]
 pub struct ReachedNode<'view, 'tcx> {
     graph: &'view ReachabilityGraph<'tcx>,
@@ -312,7 +323,7 @@ impl<'view, 'tcx> ReachedNode<'view, 'tcx> {
     }
 
     #[must_use]
-    /// Returns the breadth-first depth from the query root.
+    /// Returns the breadth-first depth from the nearest query root.
     pub fn depth(self) -> usize {
         self.depth
     }
@@ -347,7 +358,7 @@ impl<'view, 'tcx> ReachedNode<'view, 'tcx> {
     }
 }
 
-/// An edge accepted by one root-specific query.
+/// An edge accepted by one query.
 #[derive(Clone, Copy)]
 pub struct ReachedEdge<'view, 'tcx> {
     graph: &'view ReachabilityGraph<'tcx>,
@@ -446,6 +457,7 @@ impl<'view, 'tcx> ReachedEdge<'view, 'tcx> {
 /// local to this root.
 pub struct ReachabilitySnapshot {
     root: ReachabilityNodeId,
+    roots: Vec<ReachabilityNodeId>,
     node_ids: Vec<ReachabilityNodeId>,
     edge_ids: Vec<ReachabilityEdgeId>,
     reached_edges: Vec<bool>,
@@ -456,9 +468,11 @@ pub struct ReachabilitySnapshot {
 }
 
 impl ReachabilitySnapshot {
-    fn new(root: ReachabilityNodeId, graph_node_count: usize, graph_edge_count: usize) -> Self {
+    fn new(roots: &[ReachabilityNodeId], graph_node_count: usize, graph_edge_count: usize) -> Self {
+        let root = roots[0];
         let mut snapshot = Self {
             root,
+            roots: roots.to_vec(),
             node_ids: Vec::new(),
             edge_ids: Vec::new(),
             reached_edges: vec![false; graph_edge_count],
@@ -467,7 +481,9 @@ impl ReachabilitySnapshot {
             expansions: vec![None; graph_node_count],
             halt: None,
         };
-        snapshot.record_node(root, 0, None);
+        for root in roots {
+            snapshot.record_node(*root, 0, None);
+        }
         snapshot
     }
 
@@ -740,6 +756,8 @@ pub enum ReachabilityEdgeKind {
     MacroExpansion,
     /// Anonymous or inline const body referenced by the current body.
     ConstBody,
+    /// Runtime body stored in a constructed coroutine.
+    CoroutineBody,
     /// Compiler-generated MIR assertion.
     Assert,
     /// Call-like operation whose concrete callee could not be resolved.
@@ -759,6 +777,7 @@ impl fmt::Display for ReachabilityEdgeKind {
             Self::DynDispatchVTableEntry => "dyn-dispatch-vtable-entry",
             Self::MacroExpansion => "macro-expansion",
             Self::ConstBody => "const-body",
+            Self::CoroutineBody => "coroutine-body",
             Self::Assert => "assert",
             Self::IndirectCall => "indirect-call",
         })
@@ -817,7 +836,7 @@ mod tests {
             Some(callable),
             edge,
         );
-        let mut snapshot = graph.snapshot_for_root(root_node);
+        let mut snapshot = graph.snapshot_for_roots(&[root_node]);
         snapshot.record_edge(edge, child, 1);
         snapshot.mark_halted(ReachabilityHalt::NodeLimitReached { limit: 1 });
         let view = graph.view(&snapshot);

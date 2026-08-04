@@ -11,11 +11,12 @@
 //! code.
 //!
 //! Create a [`ReachabilityIndex`] for a compiler context, then call
-//! [`ReachabilityIndex::query`] for each root. The index stores root-independent
-//! graph facts and caches expanded outgoing edges per instance. A
-//! [`ReachabilitySnapshot`] is the per-root BFS result: it records reached nodes,
-//! reached edges, depths, predecessor edges, per-instance expansion outcomes,
-//! and the halt reason for one query.
+//! [`ReachabilityIndex::query`] for one root or [`ReachabilityIndex::query_many`]
+//! for a shared multi-root traversal. The index stores root-independent graph
+//! facts and caches expanded outgoing edges per instance. A
+//! [`ReachabilitySnapshot`] records reached nodes, reached edges, depths,
+//! predecessor edges, per-instance expansion outcomes, and the halt reason for
+//! one query.
 //!
 //! Use [`ReachabilityRoot::Instance`] when the caller already has a
 //! monomorphized instance, or [`ReachabilityRoot::LocalBody`] to walk a local
@@ -23,9 +24,9 @@
 //! arguments; unresolved trait-dispatched calls are recorded as indirect
 //! boundaries instead of guessed implementations. [`ReachabilityHooks`] can
 //! prevent descending into selected callees.
-//! [`ReachabilityOptions::artifact_scope`] can limit body expansion to the
-//! crate containing the query root while retaining cross-artifact calls as
-//! explicit frontier nodes.
+//! [`ReachabilityOptions::artifact_scope`] can limit body expansion to crates
+//! containing query roots while retaining cross-artifact calls as explicit
+//! frontier nodes.
 //!
 //! # Provenance
 //!

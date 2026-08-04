@@ -2,7 +2,7 @@ use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitCode};
 
-use crate::cache::default_cache_dir;
+use crate::analysis::cache::default_cache_dir;
 use crate::config::SniffTestConfig;
 use anyhow::{Context, Result, bail};
 use clap::Parser as _;
@@ -17,6 +17,7 @@ use super::report::CrateOutputScope;
 
 pub(crate) const DRIVER_NAME: &str = "sniff-test-driver";
 pub(crate) const SNIFF_TEST_ARGS_ENV: &str = "SNIFF_TEST_ARGS";
+pub(crate) const SNIFF_TEST_RUN_ID_ENV: &str = "SNIFF_TEST_RUN_ID";
 
 pub(crate) fn validate_manifest(path: &Path) -> Result<()> {
     if !path.exists() {
@@ -57,34 +58,7 @@ pub(crate) fn modify_cargo(cargo: &mut Command, args: &SniffTestArgs) -> Result<
     }
 
     let config = load_config(args).context("failed to load configuration")?;
-    let config_hash = config_hash(args, &config);
-    let overflow_checks = args
-        .overflow_checks
-        .unwrap_or(config.analysis.overflow_checks);
-    let inline_mir = config.analysis.inline_mir;
-    // Cargo can reuse fresh units without rerunning the driver. Include every
-    // analysis-affecting input in the rustc fingerprint so reports and
-    // dependency caches stay aligned with the current invocation.
-    let mut rustflags = vec![
-        "--cfg".to_owned(),
-        format!("sniff_test_color_{}", args.color.as_cargo_arg()),
-        "--cfg".to_owned(),
-        format!("sniff_test_config_{config_hash:016x}"),
-        "--cfg".to_owned(),
-        format!("sniff_test_tool_{}", env!("SNIFF_TEST_SOURCE_STAMP")),
-    ];
-    if args.release {
-        // The checker reads optimized MIR. Release mode disables debug
-        // assertions, and this pins rustc's optimized MIR default.
-        rustflags.extend(["-Z", "mir-opt-level=2"].map(String::from));
-    }
-    for flag in inline_mir.rustc_flags() {
-        // Keep this after `mir-opt-level` so explicit inlining policy wins.
-        rustflags.extend(["-Z".to_owned(), (*flag).to_owned()]);
-    }
-    if let Some(flag) = overflow_checks.rustc_flag() {
-        rustflags.extend(["-C".to_owned(), flag.to_owned()]);
-    }
+    let rustflags = analysis_rustflags(args, &config);
 
     // Cargo's rustflags sources are mutually exclusive, checked in order:
     // CARGO_ENCODED_RUSTFLAGS, RUSTFLAGS, target.*.rustflags, build.rustflags.
@@ -252,22 +226,35 @@ fn stable_hash(source: &[u8]) -> u64 {
     })
 }
 
-fn config_hash(args: &SniffTestArgs, config: &SniffTestConfig) -> u64 {
-    let mut source = Vec::new();
-    for path in tracked_config_files_from_config(args, config) {
-        let Ok(contents) = std::fs::read(&path) else {
-            continue;
-        };
-        source.extend_from_slice(path.as_os_str().as_encoded_bytes());
-        source.push(0);
-        source.extend_from_slice(&contents);
-        source.push(0);
+fn analysis_rustflags(args: &SniffTestArgs, config: &SniffTestConfig) -> Vec<String> {
+    let cache_location_hash = stable_hash(args.cache_dir().as_os_str().as_encoded_bytes());
+    let overflow_checks = args
+        .overflow_checks
+        .unwrap_or(config.compiler.overflow_checks);
+    let mut rustflags = vec![
+        "--cfg".to_owned(),
+        format!("sniff_test_cache_{cache_location_hash:016x}"),
+        "--cfg".to_owned(),
+        format!("sniff_test_tool_{}", env!("SNIFF_TEST_SOURCE_STAMP")),
+        // Workspace consumers need upstream MIR to materialize exact
+        // monomorphization overlays (for example, trait dispatch selected by
+        // a workspace-local type).
+        "-Z".to_owned(),
+        "always-encode-mir".to_owned(),
+    ];
+    if args.release {
+        // The checker reads optimized MIR. Release mode disables debug
+        // assertions, and this pins rustc's optimized MIR default.
+        rustflags.extend(["-Z", "mir-opt-level=2"].map(String::from));
     }
-    if source.is_empty() {
-        0
-    } else {
-        stable_hash(&source)
+    for flag in config.compiler.inline_mir.rustc_flags() {
+        // Keep this after `mir-opt-level` so explicit inlining policy wins.
+        rustflags.extend(["-Z".to_owned(), (*flag).to_owned()]);
     }
+    if let Some(flag) = overflow_checks.rustc_flag() {
+        rustflags.extend(["-C".to_owned(), flag.to_owned()]);
+    }
+    rustflags
 }
 
 fn tracked_config_files_from_config(
@@ -356,7 +343,19 @@ struct SniffTestCallbacks {
 
 impl Callbacks for SniffTestCallbacks {
     fn config(&mut self, config: &mut interface::Config) {
+        // Direct driver invocations do not pass through `modify_cargo`, but
+        // their artifacts must still expose MIR to downstream consumers.
+        config.opts.unstable_opts.always_encode_mir = true;
+        let is_build_script = config.opts.crate_name.as_deref() == Some("build_script_build");
+        let is_proc_macro = config
+            .opts
+            .crate_types
+            .contains(&rustc_session::config::CrateType::ProcMacro);
+        if !should_track_workspace_run(self.output_scope, is_build_script, is_proc_macro) {
+            return;
+        }
         let encoded_args = std::env::var(SNIFF_TEST_ARGS_ENV).ok();
+        let run_id = std::env::var(SNIFF_TEST_RUN_ID_ENV).ok();
         let config_files = tracked_config_files_from_config(&self.args, &self.config)
             .into_iter()
             .map(|path| path.display().to_string())
@@ -368,6 +367,10 @@ impl Callbacks for SniffTestCallbacks {
             sess.env_depinfo.borrow_mut().insert((
                 Symbol::intern(SNIFF_TEST_ARGS_ENV),
                 encoded_args.as_deref().map(Symbol::intern),
+            ));
+            sess.env_depinfo.borrow_mut().insert((
+                Symbol::intern(SNIFF_TEST_RUN_ID_ENV),
+                run_id.as_deref().map(Symbol::intern),
             ));
             for path in &config_files {
                 sess.file_depinfo.borrow_mut().insert(Symbol::intern(path));
@@ -386,14 +389,26 @@ impl Callbacks for SniffTestCallbacks {
     }
 }
 
+const fn should_track_workspace_run(
+    output_scope: CrateOutputScope,
+    is_build_script: bool,
+    is_proc_macro: bool,
+) -> bool {
+    matches!(output_scope, CrateOutputScope::Workspace) && !is_build_script && !is_proc_macro
+}
+
 #[cfg(test)]
 mod tests {
     use std::path::PathBuf;
 
     use crate::config::SniffTestConfig;
 
-    use super::{config_hash, encode_rustflags, tracked_config_files_from_config};
+    use super::{
+        analysis_rustflags, encode_rustflags, should_track_workspace_run,
+        tracked_config_files_from_config,
+    };
     use crate::cli::args::SniffTestArgs;
+    use crate::cli::report::CrateOutputScope;
 
     #[test]
     fn tool_rustflags_append_to_user_flags_in_encoded_form() {
@@ -411,7 +426,42 @@ mod tests {
     }
 
     #[test]
-    fn config_hash_includes_documentation_override_files() {
+    fn run_nonce_tracks_only_report_producing_workspace_units() {
+        assert!(should_track_workspace_run(
+            CrateOutputScope::Workspace,
+            false,
+            false
+        ));
+        assert!(!should_track_workspace_run(
+            CrateOutputScope::Dependency,
+            false,
+            false
+        ));
+        assert!(!should_track_workspace_run(
+            CrateOutputScope::Workspace,
+            true,
+            false
+        ));
+        assert!(!should_track_workspace_run(
+            CrateOutputScope::Workspace,
+            false,
+            true
+        ));
+    }
+
+    #[test]
+    fn dependency_rustflags_make_upstream_mir_available_to_consumers() {
+        let flags = analysis_rustflags(&SniffTestArgs::default(), &SniffTestConfig::default());
+
+        assert!(
+            flags
+                .windows(2)
+                .any(|pair| pair == ["-Z", "always-encode-mir"])
+        );
+    }
+
+    #[test]
+    fn policy_only_changes_do_not_change_dependency_rustflags() {
         let dir = tempfile::tempdir().expect("tempdir should be created");
         let manifest = dir.path().join("sniff-test.toml");
         let override_file = dir.path().join("override.toml");
@@ -442,7 +492,7 @@ mod tests {
             tracked_config_files_from_config(&args, &config),
             [manifest.clone(), override_file.clone()]
         );
-        let before = config_hash(&args, &config);
+        let before = analysis_rustflags(&args, &config);
 
         std::fs::write(
             &override_file,
@@ -452,7 +502,30 @@ mod tests {
             "##,
         )
         .expect("override should be updated");
+        let changed_policy =
+            SniffTestConfig::from_manifest_path(&manifest).expect("changed config should load");
 
-        assert_ne!(before, config_hash(&args, &config));
+        assert_eq!(before, analysis_rustflags(&args, &changed_policy));
+    }
+
+    #[test]
+    fn compiler_changes_do_change_dependency_rustflags() {
+        let args = SniffTestArgs {
+            cache_dir: Some(PathBuf::from("/tmp/sniff-test-cache-a")),
+            ..SniffTestArgs::default()
+        };
+        let profile = SniffTestConfig::from_manifest_str(
+            "[compiler]\noverflow-checks = \"profile\"\ninline-mir = \"off\"\n",
+        )
+        .expect("profile config");
+        let overflow = SniffTestConfig::from_manifest_str(
+            "[compiler]\noverflow-checks = \"on\"\ninline-mir = \"off\"\n",
+        )
+        .expect("overflow config");
+
+        assert_ne!(
+            analysis_rustflags(&args, &profile),
+            analysis_rustflags(&args, &overflow)
+        );
     }
 }

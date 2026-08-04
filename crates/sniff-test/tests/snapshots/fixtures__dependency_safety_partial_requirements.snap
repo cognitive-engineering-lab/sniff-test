@@ -6,34 +6,6 @@ expression: messages
   {
     "artifact": {
       "artifact-id": "[ARTIFACT_ID]",
-      "crate-name": "dependency_safety_partial_requirements"
-    },
-    "dependencies": [],
-    "findings": [
-      {
-        "function": "dependency_safety_partial_requirements::misses_both_requirements",
-        "kind": "safety-obligation-missing-requirements",
-        "level": "deny",
-        "missing-requirements": [
-          "initialized: global state must be initialized",
-          "aligned: the shared buffer must be aligned"
-        ],
-        "reason": "safety-obligation call to `dependency_safety_partial_requirements::requires_both_invariants` does not satisfy all # Safety requirements",
-        "root": "dependency_safety_partial_requirements::misses_both_requirements",
-        "root-kind": "concrete",
-        "span": "[FIXTURE]/dep/src/lib.rs:9:5: 9:31",
-        "target": "dependency_safety_partial_requirements::requires_both_invariants"
-      }
-    ],
-    "format-version": 10,
-    "reason": "sniff-test-artifact",
-    "rustc-version": "[RUSTC_VERSION]",
-    "scope": "dependency",
-    "tool-version": "0.1.0"
-  },
-  {
-    "artifact": {
-      "artifact-id": "[ARTIFACT_ID]",
       "crate-name": "dependency_safety_partial_requirements_app"
     },
     "dependencies": [
@@ -44,26 +16,30 @@ expression: messages
     ],
     "findings": [
       {
-        "effect-span": "[FIXTURE]/dep/src/lib.rs:9:5: 9:31",
+        "function": "dependency_safety_partial_requirements::misses_both_requirements",
         "kind": "safety-obligation-missing-requirements",
         "level": "deny",
         "missing-requirements": [
           "aligned: the shared buffer must be aligned"
         ],
-        "reason": "dependency_safety_partial_requirements::misses_both_requirements has cached safety effect: safety-obligation call to `dependency_safety_partial_requirements::requires_both_invariants` does not satisfy all # Safety requirements",
+        "reason": "safety-obligation call to `dependency_safety_partial_requirements::requires_both_invariants` does not satisfy all # Safety requirements",
+        "requirements": [
+          "initialized: global state must be initialized",
+          "aligned: the shared buffer must be aligned"
+        ],
         "root": "dependency_safety_partial_requirements_app::satisfies_only_one_cached_requirement",
         "root-kind": "concrete",
-        "span": "src/lib.rs:4:5: 4:71",
-        "target": "dependency_safety_partial_requirements::misses_both_requirements",
+        "span": "[FIXTURE]/dep/src/lib.rs:9:5: 9:31",
+        "target": "dependency_safety_partial_requirements::requires_both_invariants",
         "trace": [
-          "src/lib.rs:4:5: 4:71: dependency_safety_partial_requirements_app::satisfies_only_one_cached_requirement --direct-call-> dependency_safety_partial_requirements::misses_both_requirements"
+          "src/lib.rs:4:5: 4:71: dependency_safety_partial_requirements_app::satisfies_only_one_cached_requirement --direct-call-> dependency_safety_partial_requirements::misses_both_requirements",
+          "[FIXTURE]/dep/src/lib.rs:9:5: 9:31: dependency_safety_partial_requirements::misses_both_requirements --direct-call-> dependency_safety_partial_requirements::requires_both_invariants"
         ]
       }
     ],
-    "format-version": 10,
+    "format-version": 11,
     "reason": "sniff-test-artifact",
     "rustc-version": "[RUSTC_VERSION]",
-    "scope": "workspace",
     "tool-version": "0.1.0"
   }
 ]

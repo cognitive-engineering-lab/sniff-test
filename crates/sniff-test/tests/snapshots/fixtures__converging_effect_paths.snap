@@ -11,20 +11,6 @@ expression: messages
     "dependencies": [],
     "findings": [
       {
-        "function": "converging_effect_paths::safety_effect",
-        "kind": "unsafe-op-missing-justification",
-        "level": "deny",
-        "reason": "unsafe operation (raw pointer dereference) has no `// SAFETY:` justification",
-        "root": "converging_effect_paths::converging_safety_paths",
-        "root-kind": "concrete",
-        "safety-op-kind": "raw-pointer-dereference",
-        "span": "src/lib.rs:16:14: 16:22",
-        "trace": [
-          "src/lib.rs:26:14: 26:40: converging_effect_paths::converging_safety_paths --direct-call-> converging_effect_paths::raw_safety_branch",
-          "src/lib.rs:20:5: 20:27: converging_effect_paths::raw_safety_branch --direct-call-> converging_effect_paths::safety_effect"
-        ]
-      },
-      {
         "kind": "panic-invocation",
         "level": "deny",
         "reason": "panic sink core::std::rt::panic_fmt",
@@ -39,12 +25,26 @@ expression: messages
           "src/lib.rs:2:5: 2:19: macro std::panic --macro-expansion-> macro core::std::panic::panic_2021",
           "[SYSROOT]/lib/rustlib/src/rust/library/core/src/panic.rs:62:9: 62:73: macro core::std::panic::panic_2021 --direct-call-> core::std::rt::panic_fmt"
         ]
+      },
+      {
+        "function": "converging_effect_paths::safety_effect",
+        "kind": "unsafe-op-missing-justification",
+        "level": "deny",
+        "reason": "unsafe operation (raw pointer dereference) has no `// SAFETY:` justification",
+        "root": "converging_effect_paths::converging_safety_paths",
+        "root-kind": "concrete",
+        "safety-op-kind": "raw-pointer-dereference",
+        "span": "src/lib.rs:16:14: 16:22",
+        "trace": [
+          "src/lib.rs:26:14: 26:40: converging_effect_paths::converging_safety_paths --direct-call-> converging_effect_paths::raw_safety_branch",
+          "src/lib.rs:20:5: 20:27: converging_effect_paths::raw_safety_branch --direct-call-> converging_effect_paths::safety_effect",
+          "src/lib.rs:16:14: 16:22: converging_effect_paths::safety_effect --unsafe-operation-> unsafe operation (raw pointer dereference)"
+        ]
       }
     ],
-    "format-version": 10,
+    "format-version": 11,
     "reason": "sniff-test-artifact",
     "rustc-version": "[RUSTC_VERSION]",
-    "scope": "workspace",
     "tool-version": "0.1.0"
   }
 ]

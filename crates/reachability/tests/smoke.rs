@@ -577,6 +577,22 @@ fn dyn_dispatch_targets_are_reused_across_queries() {
 }
 
 #[test]
+fn multi_root_query_discovers_callable_targets_independent_of_root_order() {
+    let project = TempProject::new(SHARED_CALLABLE_SOURCE);
+    let mut callbacks = SharedCallableCallbacks {
+        scenario: SharedCallableScenario::MultiRootCallableDiscovery,
+        result: None,
+    };
+    run_test_compiler(&project, &mut callbacks);
+
+    assert_eq!(
+        callbacks.result,
+        Some(4),
+        "both roots and both callable target kinds should share one traversal snapshot"
+    );
+}
+
+#[test]
 fn expanded_leaf_is_not_a_frontier() {
     let project = TempProject::new(EXPANDED_LEAF_SOURCE);
     let mut callbacks = LocalExpansionCallbacks { result: None };
@@ -832,6 +848,7 @@ impl Callbacks for DumpCallbacks {
 enum SharedCallableScenario {
     FunctionPointerReuse,
     DynDispatchReuse,
+    MultiRootCallableDiscovery,
 }
 
 struct SharedCallableCallbacks {
@@ -881,6 +898,37 @@ impl Callbacks for SharedCallableCallbacks {
                     .edges()
                     .filter(|edge| edge.kind() == ReachabilityEdgeKind::DynDispatchVTableEntry)
                     .count()
+            }
+            SharedCallableScenario::MultiRootCallableDiscovery => {
+                let mut index = ReachabilityIndex::new(tcx);
+                let hooks = NoopReachabilityHooks;
+                let snapshot = index
+                    .query_many(
+                        [
+                            ReachabilityRoot::LocalBody(find_local_body(tcx, "call_fn_target")),
+                            ReachabilityRoot::LocalBody(find_local_body(tcx, "call_dyn_target")),
+                            ReachabilityRoot::LocalBody(find_local_body(tcx, "expose_fn_target")),
+                            ReachabilityRoot::LocalBody(find_local_body(tcx, "expose_dyn_target")),
+                        ],
+                        &hooks,
+                        call_site_options(),
+                    )
+                    .expect("the batch has roots");
+                let view = index.graph().view(&snapshot);
+                let root_count = view.roots().count();
+                let target_count = view
+                    .edges()
+                    .filter(|edge| {
+                        matches!(
+                            edge.kind(),
+                            ReachabilityEdgeKind::FnPointerCallTarget
+                                | ReachabilityEdgeKind::DynDispatchVTableEntry
+                        )
+                    })
+                    .count();
+                assert_eq!(root_count, 4);
+                assert_eq!(target_count, 2);
+                root_count
             }
         });
         Compilation::Stop

@@ -20,14 +20,14 @@ expression: messages
         "span": "[FIXTURE]/src/lib.rs:12:13: 12:24",
         "target": "unsafe_closure_inherit::dangerous",
         "trace": [
-          "[FIXTURE]/src/lib.rs:12:9: 12:27: unsafe_closure_inherit::unjustified_closure --direct-call-> unsafe_closure_inherit::unjustified_closure::{closure#0}"
+          "[FIXTURE]/src/lib.rs:12:9: 12:27: unsafe_closure_inherit::unjustified_closure --direct-call-> unsafe_closure_inherit::unjustified_closure::{closure#0}",
+          "[FIXTURE]/src/lib.rs:12:13: 12:24: unsafe_closure_inherit::unjustified_closure::{closure#0} --direct-call-> unsafe_closure_inherit::dangerous"
         ]
       }
     ],
-    "format-version": 10,
+    "format-version": 11,
     "reason": "sniff-test-artifact",
     "rustc-version": "[RUSTC_VERSION]",
-    "scope": "workspace",
     "tool-version": "0.1.0"
   }
 ]

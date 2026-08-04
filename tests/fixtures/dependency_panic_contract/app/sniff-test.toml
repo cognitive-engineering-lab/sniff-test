@@ -10,5 +10,4 @@ panic-sink-namespaces = [
 ]
 
 [panics.lints]
-cached-dependency-panic = "deny"
 documented-panic = "deny"

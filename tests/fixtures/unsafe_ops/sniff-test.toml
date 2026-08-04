@@ -9,4 +9,3 @@ report-roots = "all"
 # assertions are covered by panic-focused fixtures.
 compiler-assert = "allow"
 panic-invocation = "allow"
-cached-dependency-panic = "allow"

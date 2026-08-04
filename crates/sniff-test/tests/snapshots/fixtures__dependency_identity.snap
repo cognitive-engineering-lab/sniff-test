@@ -6,62 +6,6 @@ expression: messages
   {
     "artifact": {
       "artifact-id": "[ARTIFACT_ID]",
-      "crate-name": "dependency_identity"
-    },
-    "dependencies": [],
-    "findings": [
-      {
-        "kind": "panic-invocation",
-        "level": "deny",
-        "reason": "panic sink core::std::rt::panic_fmt",
-        "root": "<dependency_identity::Widget as Sniffer>::sniff",
-        "root-kind": "concrete",
-        "span": "[FIXTURE]/dep/src/lib.rs:13:9: 13:52",
-        "target": "core::std::rt::panic_fmt",
-        "trace": [
-          "[FIXTURE]/dep/src/lib.rs:13:9: 13:52: <dependency_identity::Widget as Sniffer>::sniff --macro-expansion-> macro core::std::assert",
-          "[FIXTURE]/dep/src/lib.rs:13:9: 13:52: macro core::std::assert --macro-expansion-> macro core::std::panic::panic_2021",
-          "[SYSROOT]/lib/rustlib/src/rust/library/core/src/panic.rs:62:9: 62:73: macro core::std::panic::panic_2021 --direct-call-> core::std::rt::panic_fmt"
-        ]
-      },
-      {
-        "kind": "panic-invocation",
-        "level": "deny",
-        "reason": "panic sink core::std::rt::panic_fmt",
-        "root": "<dependency_identity::std::vec::Vec<u8> as Sniffer>::sniff",
-        "root-kind": "concrete",
-        "span": "[FIXTURE]/dep/src/lib.rs:19:9: 19:52",
-        "target": "core::std::rt::panic_fmt",
-        "trace": [
-          "[FIXTURE]/dep/src/lib.rs:19:9: 19:52: <dependency_identity::std::vec::Vec<u8> as Sniffer>::sniff --macro-expansion-> macro core::std::assert",
-          "[FIXTURE]/dep/src/lib.rs:19:9: 19:52: macro core::std::assert --macro-expansion-> macro core::std::panic::panic_2021",
-          "[SYSROOT]/lib/rustlib/src/rust/library/core/src/panic.rs:62:9: 62:73: macro core::std::panic::panic_2021 --direct-call-> core::std::rt::panic_fmt"
-        ]
-      },
-      {
-        "kind": "panic-invocation",
-        "level": "deny",
-        "reason": "panic sink core::std::rt::panic_fmt",
-        "root": "dependency_identity::internal::run",
-        "root-kind": "concrete",
-        "span": "[FIXTURE]/dep/src/lib.rs:25:9: 25:49",
-        "target": "core::std::rt::panic_fmt",
-        "trace": [
-          "[FIXTURE]/dep/src/lib.rs:25:9: 25:49: dependency_identity::internal::run --macro-expansion-> macro core::std::assert",
-          "[FIXTURE]/dep/src/lib.rs:25:9: 25:49: macro core::std::assert --macro-expansion-> macro core::std::panic::panic_2021",
-          "[SYSROOT]/lib/rustlib/src/rust/library/core/src/panic.rs:62:9: 62:73: macro core::std::panic::panic_2021 --direct-call-> core::std::rt::panic_fmt"
-        ]
-      }
-    ],
-    "format-version": 10,
-    "reason": "sniff-test-artifact",
-    "rustc-version": "[RUSTC_VERSION]",
-    "scope": "dependency",
-    "tool-version": "0.1.0"
-  },
-  {
-    "artifact": {
-      "artifact-id": "[ARTIFACT_ID]",
       "crate-name": "dependency_identity_app"
     },
     "dependencies": [
@@ -72,34 +16,47 @@ expression: messages
     ],
     "findings": [
       {
-        "effect-span": "[FIXTURE]/dep/src/lib.rs:25:9: 25:49",
-        "kind": "cached-dependency-panic",
+        "kind": "panic-invocation",
         "level": "deny",
-        "reason": "dependency_identity::internal::run has cached panic evidence: panic sink core::std::rt::panic_fmt",
+        "reason": "panic sink core::std::rt::panic_fmt",
         "root": "dependency_identity_app::run_reexported",
         "root-kind": "concrete",
-        "span": "src/lib.rs:12:5: 12:35",
-        "target": "dependency_identity::internal::run",
+        "span": "[FIXTURE]/dep/src/lib.rs:25:9: 25:49",
+        "target": "core::std::rt::panic_fmt",
         "trace": [
           "src/lib.rs:12:5: 12:35: dependency_identity_app::run_reexported --direct-call-> dependency_identity::run",
-          "[FIXTURE]/dep/src/lib.rs:25:9: 25:49: dependency_identity::internal::run --macro-expansion-> macro core::std::assert",
+          "[FIXTURE]/dep/src/lib.rs:25:9: 25:49: dependency_identity::run --macro-expansion-> macro core::std::assert",
           "[FIXTURE]/dep/src/lib.rs:25:9: 25:49: macro core::std::assert --macro-expansion-> macro core::std::panic::panic_2021",
           "[SYSROOT]/lib/rustlib/src/rust/library/core/src/panic.rs:62:9: 62:73: macro core::std::panic::panic_2021 --direct-call-> core::std::rt::panic_fmt"
         ]
       },
       {
-        "effect-span": "[FIXTURE]/dep/src/lib.rs:19:9: 19:52",
-        "kind": "cached-dependency-panic",
+        "kind": "panic-invocation",
         "level": "deny",
-        "reason": "<dependency_identity::std::vec::Vec<u8> as Sniffer>::sniff has cached panic evidence: panic sink core::std::rt::panic_fmt",
+        "reason": "panic sink core::std::rt::panic_fmt",
         "root": "dependency_identity_app::sniff_buffer",
         "root-kind": "concrete",
-        "span": "src/lib.rs:8:5: 8:23",
-        "target": "<dependency_identity::std::vec::Vec<u8> as Sniffer>::sniff",
+        "span": "[FIXTURE]/dep/src/lib.rs:19:9: 19:52",
+        "target": "core::std::rt::panic_fmt",
         "trace": [
           "src/lib.rs:8:5: 8:23: dependency_identity_app::sniff_buffer --direct-call-> <dependency_identity::std::vec::Vec<u8> as dependency_identity::Sniffer>::sniff",
-          "[FIXTURE]/dep/src/lib.rs:19:9: 19:52: <dependency_identity::std::vec::Vec<u8> as Sniffer>::sniff --macro-expansion-> macro core::std::assert",
+          "[FIXTURE]/dep/src/lib.rs:19:9: 19:52: <dependency_identity::std::vec::Vec<u8> as dependency_identity::Sniffer>::sniff --macro-expansion-> macro core::std::assert",
           "[FIXTURE]/dep/src/lib.rs:19:9: 19:52: macro core::std::assert --macro-expansion-> macro core::std::panic::panic_2021",
+          "[SYSROOT]/lib/rustlib/src/rust/library/core/src/panic.rs:62:9: 62:73: macro core::std::panic::panic_2021 --direct-call-> core::std::rt::panic_fmt"
+        ]
+      },
+      {
+        "kind": "panic-invocation",
+        "level": "deny",
+        "reason": "panic sink core::std::rt::panic_fmt",
+        "root": "dependency_identity_app::sniff_dyn",
+        "root-kind": "concrete",
+        "span": "[FIXTURE]/dep/src/lib.rs:13:9: 13:52",
+        "target": "core::std::rt::panic_fmt",
+        "trace": [
+          "src/lib.rs:16:33: 16:40: dependency_identity_app::sniff_dyn --vtable-entry-> <dependency_identity::Widget as dependency_identity::Sniffer>::sniff",
+          "[FIXTURE]/dep/src/lib.rs:13:9: 13:52: <dependency_identity::Widget as dependency_identity::Sniffer>::sniff --macro-expansion-> macro core::std::assert",
+          "[FIXTURE]/dep/src/lib.rs:13:9: 13:52: macro core::std::assert --macro-expansion-> macro core::std::panic::panic_2021",
           "[SYSROOT]/lib/rustlib/src/rust/library/core/src/panic.rs:62:9: 62:73: macro core::std::panic::panic_2021 --direct-call-> core::std::rt::panic_fmt"
         ]
       },
@@ -116,42 +73,24 @@ expression: messages
         ]
       },
       {
-        "effect-span": "[FIXTURE]/dep/src/lib.rs:13:9: 13:52",
-        "kind": "cached-dependency-panic",
+        "kind": "panic-invocation",
         "level": "deny",
-        "reason": "<dependency_identity::Widget as Sniffer>::sniff has cached panic evidence: panic sink core::std::rt::panic_fmt",
-        "root": "dependency_identity_app::sniff_dyn",
-        "root-kind": "concrete",
-        "span": "src/lib.rs:16:33: 16:40",
-        "target": "<dependency_identity::Widget as Sniffer>::sniff",
-        "trace": [
-          "src/lib.rs:16:33: 16:40: dependency_identity_app::sniff_dyn --vtable-entry-> <dependency_identity::Widget as dependency_identity::Sniffer>::sniff",
-          "[FIXTURE]/dep/src/lib.rs:13:9: 13:52: <dependency_identity::Widget as Sniffer>::sniff --macro-expansion-> macro core::std::assert",
-          "[FIXTURE]/dep/src/lib.rs:13:9: 13:52: macro core::std::assert --macro-expansion-> macro core::std::panic::panic_2021",
-          "[SYSROOT]/lib/rustlib/src/rust/library/core/src/panic.rs:62:9: 62:73: macro core::std::panic::panic_2021 --direct-call-> core::std::rt::panic_fmt"
-        ]
-      },
-      {
-        "effect-span": "[FIXTURE]/dep/src/lib.rs:13:9: 13:52",
-        "kind": "cached-dependency-panic",
-        "level": "deny",
-        "reason": "<dependency_identity::Widget as Sniffer>::sniff has cached panic evidence: panic sink core::std::rt::panic_fmt",
+        "reason": "panic sink core::std::rt::panic_fmt",
         "root": "dependency_identity_app::sniff_widget",
         "root-kind": "concrete",
-        "span": "src/lib.rs:4:5: 4:23",
-        "target": "<dependency_identity::Widget as Sniffer>::sniff",
+        "span": "[FIXTURE]/dep/src/lib.rs:13:9: 13:52",
+        "target": "core::std::rt::panic_fmt",
         "trace": [
           "src/lib.rs:4:5: 4:23: dependency_identity_app::sniff_widget --direct-call-> <dependency_identity::Widget as dependency_identity::Sniffer>::sniff",
-          "[FIXTURE]/dep/src/lib.rs:13:9: 13:52: <dependency_identity::Widget as Sniffer>::sniff --macro-expansion-> macro core::std::assert",
+          "[FIXTURE]/dep/src/lib.rs:13:9: 13:52: <dependency_identity::Widget as dependency_identity::Sniffer>::sniff --macro-expansion-> macro core::std::assert",
           "[FIXTURE]/dep/src/lib.rs:13:9: 13:52: macro core::std::assert --macro-expansion-> macro core::std::panic::panic_2021",
           "[SYSROOT]/lib/rustlib/src/rust/library/core/src/panic.rs:62:9: 62:73: macro core::std::panic::panic_2021 --direct-call-> core::std::rt::panic_fmt"
         ]
       }
     ],
-    "format-version": 10,
+    "format-version": 11,
     "reason": "sniff-test-artifact",
     "rustc-version": "[RUSTC_VERSION]",
-    "scope": "workspace",
     "tool-version": "0.1.0"
   }
 ]

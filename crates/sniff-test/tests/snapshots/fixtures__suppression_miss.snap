@@ -18,16 +18,15 @@ expression: messages
         "root": "suppression::unchecked_index",
         "root-kind": "concrete",
         "span": "src/lib.rs:2:5: 2:18",
-        "target": "compiler assert index out of bounds: index `index` (_2, argument 2) may exceed length `_3` (temporary)",
+        "target": "compiler assert index out of bounds",
         "trace": [
-          "src/lib.rs:2:5: 2:18: suppression::unchecked_index --assert-> compiler assert index out of bounds: index `index` (_2, argument 2) may exceed length `_3` (temporary)"
+          "src/lib.rs:2:5: 2:18: suppression::unchecked_index --assert-> compiler assert BoundsCheck { len: move _3, index: copy _2 } with locals [CompilerAssertLocal { index: 0, name: None, role: ReturnPointer }, CompilerAssertLocal { index: 1, name: Some(\"values\"), role: Argument }, CompilerAssertLocal { index: 2, name: Some(\"index\"), role: Argument }, CompilerAssertLocal { index: 3, name: None, role: Temporary }, CompilerAssertLocal { index: 4, name: None, role: Temporary }]"
         ]
       }
     ],
-    "format-version": 10,
+    "format-version": 11,
     "reason": "sniff-test-artifact",
     "rustc-version": "[RUSTC_VERSION]",
-    "scope": "workspace",
     "tool-version": "0.1.0"
   }
 ]

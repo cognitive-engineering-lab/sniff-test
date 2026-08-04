@@ -17,98 +17,15 @@ expression: messages
     "findings": [
       {
         "kind": "safety-analysis-incomplete",
-        "level": "warn",
-        "reason": "dependency_safety_incomplete_middle::middle has no complete cached safety analysis",
-        "root": "dependency_safety_incomplete_app::application",
-        "root-kind": "concrete",
-        "span": "src/lib.rs:3:5: 3:57",
-        "target": "dependency_safety_incomplete_middle::middle",
-        "trace": [
-          "src/lib.rs:3:5: 3:57: dependency_safety_incomplete_app::application --direct-call-> dependency_safety_incomplete_middle::middle"
-        ]
-      }
-    ],
-    "format-version": 10,
-    "reason": "sniff-test-artifact",
-    "rustc-version": "[RUSTC_VERSION]",
-    "scope": "workspace",
-    "tool-version": "0.1.0"
-  },
-  {
-    "artifact": {
-      "artifact-id": "[ARTIFACT_ID]",
-      "crate-name": "dependency_safety_incomplete_leaf"
-    },
-    "dependencies": [],
-    "findings": [
-      {
-        "function": "dependency_safety_incomplete_leaf::leaf",
-        "kind": "unsafe-op-missing-justification",
-        "level": "warn",
-        "reason": "unsafe operation (raw pointer dereference) has no `// SAFETY:` justification",
-        "root": "dependency_safety_incomplete_leaf::leaf",
-        "root-kind": "concrete",
-        "safety-op-kind": "raw-pointer-dereference",
-        "span": "[FIXTURE]/leaf/src/lib.rs:8:22: 8:30"
-      },
-      {
-        "kind": "safety-analysis-incomplete",
         "level": "deny",
-        "reason": "reachability analysis halted at the 2-instance node limit before the call graph was exhausted",
-        "root": "dependency_safety_incomplete_leaf::leaf",
-        "root-kind": "concrete",
-        "span": "[FIXTURE]/leaf/src/lib.rs:7:1: 7:32"
+        "reason": "safety analysis reached the configured node limit (2)",
+        "root": "dependency_safety_incomplete_app::application",
+        "root-kind": "concrete"
       }
     ],
-    "format-version": 10,
+    "format-version": 11,
     "reason": "sniff-test-artifact",
     "rustc-version": "[RUSTC_VERSION]",
-    "scope": "dependency",
-    "tool-version": "0.1.0"
-  },
-  {
-    "artifact": {
-      "artifact-id": "[ARTIFACT_ID]",
-      "crate-name": "dependency_safety_incomplete_middle"
-    },
-    "dependencies": [
-      {
-        "artifact-id": "[ARTIFACT_ID]",
-        "extern-name": "dependency_safety_incomplete_leaf"
-      }
-    ],
-    "findings": [
-      {
-        "effect-span": "[FIXTURE]/leaf/src/lib.rs:8:22: 8:30",
-        "kind": "unsafe-op-missing-justification",
-        "level": "warn",
-        "reason": "dependency_safety_incomplete_leaf::leaf has cached safety effect: unsafe operation (raw pointer dereference) has no `// SAFETY:` justification",
-        "root": "dependency_safety_incomplete_middle::middle",
-        "root-kind": "concrete",
-        "safety-op-kind": "raw-pointer-dereference",
-        "span": "[FIXTURE]/middle/src/lib.rs:2:5: 2:53",
-        "target": "dependency_safety_incomplete_leaf::leaf",
-        "trace": [
-          "[FIXTURE]/middle/src/lib.rs:2:5: 2:53: dependency_safety_incomplete_middle::middle --direct-call-> dependency_safety_incomplete_leaf::leaf"
-        ]
-      },
-      {
-        "kind": "safety-analysis-incomplete",
-        "level": "warn",
-        "reason": "dependency_safety_incomplete_leaf::leaf has no complete cached safety analysis",
-        "root": "dependency_safety_incomplete_middle::middle",
-        "root-kind": "concrete",
-        "span": "[FIXTURE]/middle/src/lib.rs:2:5: 2:53",
-        "target": "dependency_safety_incomplete_leaf::leaf",
-        "trace": [
-          "[FIXTURE]/middle/src/lib.rs:2:5: 2:53: dependency_safety_incomplete_middle::middle --direct-call-> dependency_safety_incomplete_leaf::leaf"
-        ]
-      }
-    ],
-    "format-version": 10,
-    "reason": "sniff-test-artifact",
-    "rustc-version": "[RUSTC_VERSION]",
-    "scope": "dependency",
     "tool-version": "0.1.0"
   }
 ]

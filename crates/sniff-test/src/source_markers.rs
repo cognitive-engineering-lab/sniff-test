@@ -83,15 +83,6 @@ impl ParsedMarkerBlock {
 }
 
 #[must_use]
-pub(crate) fn panic_span_marker_block(
-    tcx: TyCtxt<'_>,
-    span: Span,
-    probing: MarkerProbing,
-) -> Option<EffectMarkerBlock> {
-    span_marker_block_with(tcx, span, MarkerSyntax::Panic, probing)
-}
-
-#[must_use]
 pub(crate) fn safety_span_marker_block(
     tcx: TyCtxt<'_>,
     span: Span,

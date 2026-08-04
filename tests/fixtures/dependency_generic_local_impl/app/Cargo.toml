@@ -1,0 +1,9 @@
+[package]
+name = "dependency-generic-local-impl-app"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+dependency-generic-local-impl = { path = "../dep" }
+
+[workspace]

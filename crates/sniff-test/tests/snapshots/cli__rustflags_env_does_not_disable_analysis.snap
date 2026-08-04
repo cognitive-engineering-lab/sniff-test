@@ -13,7 +13,7 @@ error: function `panic_axioms::division` has an undocumented panic path
 1 | pub fn division(total_size: usize, block_count: usize) -> usize {
   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
   |
-note: panic may happen here: compiler assertion: attempt to divide `total_size` (_1, argument 1) by zero
+note: panic may happen here: compiler assertion: division by zero
  --> src/lib.rs:2:5
   |
 2 |     total_size / block_count
@@ -26,7 +26,7 @@ error: function `panic_axioms::indexed` has an undocumented panic path
  9 | pub fn indexed(values: &[usize], index: usize) -> usize {
    | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
    |
-note: panic may happen here: compiler assertion: index out of bounds: index `index` (_2, argument 2) may exceed length `_3` (temporary)
+note: panic may happen here: compiler assertion: index out of bounds
   --> src/lib.rs:10:5
    |
 10 |     values[index]
@@ -39,7 +39,7 @@ error: function `panic_axioms::remainder` has an undocumented panic path
 5 | pub fn remainder(total_size: usize, block_size: usize) -> usize {
   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
   |
-note: panic may happen here: compiler assertion: attempt to calculate the remainder of `total_size` (_1, argument 1) with a zero divisor
+note: panic may happen here: compiler assertion: remainder with a zero divisor
  --> src/lib.rs:6:5
   |
 6 |     total_size % block_size

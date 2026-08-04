@@ -11,26 +11,23 @@ expression: messages
     "dependencies": [],
     "findings": [
       {
-        "kind": "safety-analysis-incomplete",
-        "level": "deny",
-        "reason": "reachability analysis halted at the 4-instance node limit before the call graph was exhausted",
-        "root": "node_limit::deep_chain",
-        "root-kind": "concrete",
-        "span": "src/lib.rs:24:1: 24:30"
-      },
-      {
         "kind": "panic-analysis-incomplete",
         "level": "deny",
-        "reason": "reachability analysis halted at the 4-instance node limit before the call graph was exhausted",
+        "reason": "panic analysis reached the configured node limit (4)",
         "root": "node_limit::deep_chain",
-        "root-kind": "concrete",
-        "span": "src/lib.rs:24:1: 24:30"
+        "root-kind": "concrete"
+      },
+      {
+        "kind": "safety-analysis-incomplete",
+        "level": "deny",
+        "reason": "safety analysis reached the configured node limit (4)",
+        "root": "node_limit::deep_chain",
+        "root-kind": "concrete"
       }
     ],
-    "format-version": 10,
+    "format-version": 11,
     "reason": "sniff-test-artifact",
     "rustc-version": "[RUSTC_VERSION]",
-    "scope": "workspace",
     "tool-version": "0.1.0"
   }
 ]

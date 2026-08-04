@@ -1,107 +1,85 @@
-//! Safety documentation and justification analysis.
+//! Policy-neutral safety fact extraction.
 //!
-//! For each selected report root, this pass checks that reached public unsafe
-//! functions document a `# Safety` contract and that reached unsafe operations
-//! — calls and non-call operations alike — have nearby `// SAFETY:`
-//! justifications satisfying any named requirements listed by the callee.
-//! Operation detection lives in the `thir` submodule, modeled on rustc's own
-//! unsafety checker.
+//! Operation detection lives in the `thir` submodule and mirrors rustc's own
+//! unsafety checker. This module records raw calls, unsafe operations, and
+//! source-level unsafe scopes; lint policy and contract interpretation belong
+//! to `analysis::interpret`.
 
 mod thir;
 
-use std::collections::{HashMap, HashSet};
-
 use rustc_hir::def::DefKind;
-use rustc_hir::def_id::{DefId, LocalDefId};
+use rustc_hir::def_id::DefId;
 use rustc_middle::ty::TyCtxt;
 use rustc_span::Span;
 use serde::{Deserialize, Serialize};
 
-use crate::config::SafetyConfig;
-use crate::contracts::{
-    AmbiguousContractRequirements, ContractDocOverrides, ContractDocSummary, ContractRequirement,
-    safety_contract_doc_summary as safety_doc_summary,
-};
-use crate::effect_tracker::{EffectEvidence, EffectSite};
-use crate::namespace::canonical_namespace;
-
-#[derive(Default)]
-pub(crate) struct SafetyAnalysis {
-    findings_by_owner: HashMap<DefId, Vec<SafetyFinding>>,
-    evidence_by_owner: HashMap<DefId, Vec<SafetyEvidence>>,
-    probes_by_owner: HashMap<DefId, Vec<SafetyProbe>>,
-    analyzed_owners: HashSet<LocalDefId>,
-    ambiguous_requirement_names: HashSet<(DefId, DefId, String)>,
-    safety_scopes_by_owner: HashMap<DefId, Vec<SafetyEffectGroup>>,
-    callable_groups: HashMap<EffectSite, SafetyEffectGroup>,
-    next_effect_group: usize,
-}
-
-#[derive(Debug, Clone)]
-pub(crate) enum SafetyFinding {
-    MissingSafetyDocs {
-        def_id: DefId,
-        span: Span,
-    },
-    CallMissingJustification {
-        site: EffectSite,
-        callee: SafetyCallee,
-        call_kind: SafetyCallKind,
-    },
-    CallMissingRequirements {
-        site: EffectSite,
-        callee: SafetyCallee,
-        call_kind: SafetyCallKind,
-        missing_requirements: Vec<SafetyRequirement>,
-    },
-    OpMissingJustification {
-        site: EffectSite,
-        op: SafetyOpKind,
-    },
-    AmbiguousObligationName {
-        caller: DefId,
-        def_id: DefId,
-        normalized_name: String,
-        requirements: Vec<SafetyRequirement>,
-    },
-    AmbiguousMarker {
-        caller: DefId,
-        marker_span: Span,
-        effect_spans: Vec<Span>,
-    },
-}
-
-impl SafetyFinding {
-    #[must_use]
-    pub(crate) fn owner(&self) -> DefId {
-        match *self {
-            Self::MissingSafetyDocs { def_id, .. } => def_id,
-            Self::CallMissingJustification { site, .. }
-            | Self::CallMissingRequirements { site, .. }
-            | Self::OpMissingJustification { site, .. } => site.owner,
-            Self::AmbiguousObligationName { caller, .. } | Self::AmbiguousMarker { caller, .. } => {
-                caller
-            }
-        }
-    }
-
-    #[must_use]
-    pub(crate) fn is_root_contract_finding(&self) -> bool {
-        match *self {
-            Self::MissingSafetyDocs { .. } => true,
-            Self::AmbiguousObligationName { caller, def_id, .. } => caller == def_id,
-            Self::CallMissingJustification { .. }
-            | Self::CallMissingRequirements { .. }
-            | Self::OpMissingJustification { .. }
-            | Self::AmbiguousMarker { .. } => false,
-        }
-    }
-}
-
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct SafetyEffectGroup {
-    id: usize,
+    pub(crate) id: usize,
     pub(crate) span: Span,
+}
+
+/// Policy-neutral identity for operations that share one source-level unsafe
+/// scope. The numeric identity is stable only within one collection run; the
+/// span is the source anchor for that group.
+pub(crate) type RawSafetyEffectGroup = SafetyEffectGroup;
+
+/// One runtime operation that rustc requires to occur in an unsafe context.
+///
+/// `owner` is the exact THIR body owner. Operations in nested closures retain
+/// the closure's `DefId`, even though collection is seeded from local
+/// functions and associated functions. Consumers whose IR only models those
+/// outer items must explicitly attach or remap closure-owned facts.
+#[derive(Debug, Clone)]
+pub(crate) struct RawSafetyOpFact {
+    pub(crate) owner: DefId,
+    pub(crate) op: SafetyOpKind,
+    pub(crate) span: Span,
+    pub(crate) marker_anchor_spans: Vec<Span>,
+    pub(crate) effect_group: RawSafetyEffectGroup,
+}
+
+/// One THIR call site that can participate in safety interpretation.
+///
+/// The call's unsafe/obligation meaning is deliberately absent: extraction
+/// records only its source-level effect group, while the interpreter combines
+/// call metadata and the active safety policy later.
+#[derive(Debug, Clone)]
+pub(crate) struct RawSafetyCallFact {
+    pub(crate) owner: DefId,
+    /// Static callee definition when THIR exposes one. Desugared expressions
+    /// such as `value?` can contain several calls with one exact span, so the
+    /// callee is required to join those calls to MIR reachability edges.
+    pub(crate) callee: Option<DefId>,
+    /// The call occurs inside a compiler-generated `BuiltinUnsafe` block.
+    /// rustc treats that unsafe context as the compiler's responsibility, so
+    /// the call must not become a user-facing safety obligation.
+    pub(crate) inside_builtin_unsafe: bool,
+    /// Artifact-local identity of this THIR source call. Compiler-generated
+    /// branches with the same owner, exact span, callee, and unsafe context
+    /// reuse this identity, as do derived reachability endpoints for an
+    /// indirect call.
+    pub(crate) call_site: usize,
+    /// Exact THIR call span, including expansion context. Source-callsite
+    /// ranges alone can collapse two macro expansions onto the same text.
+    pub(crate) span: Span,
+    pub(crate) effect_group: RawSafetyEffectGroup,
+}
+
+/// One source-level unsafe scope, including scopes with no direct THIR
+/// operation and scopes inherited lexically by a nested closure body.
+#[derive(Debug, Clone)]
+pub(crate) struct RawSafetyGroupFact {
+    pub(crate) owner: DefId,
+    pub(crate) effect_group: RawSafetyEffectGroup,
+}
+
+/// Policy-neutral safety facts collected in one THIR walk.
+#[derive(Debug, Default)]
+pub(crate) struct RawSafetyFacts {
+    pub(crate) groups: Vec<RawSafetyGroupFact>,
+    pub(crate) calls: Vec<RawSafetyCallFact>,
+    pub(crate) operations: Vec<RawSafetyOpFact>,
 }
 
 impl PartialEq for SafetyEffectGroup {
@@ -118,40 +96,20 @@ impl std::hash::Hash for SafetyEffectGroup {
     }
 }
 
-#[derive(Clone)]
-pub(crate) struct SafetyEvidence {
-    effect: EffectEvidence<EffectSite, SafetyEvidenceKind>,
-    requirements: Vec<SafetyRequirement>,
-    pub(crate) group: SafetyEffectGroup,
+/// Collects call grouping and unsafe-operation facts for every analyzable
+/// local function and associated function body without applying safety policy.
+pub(crate) fn collect_raw_safety_facts(tcx: TyCtxt<'_>) -> RawSafetyFacts {
+    thir::collect_raw_safety_facts(tcx)
 }
 
-struct SafetyProbe {
-    effect: EffectEvidence<EffectSite, SafetyProbeKind>,
-    group: SafetyEffectGroup,
-}
-
-#[derive(Debug, Clone, Copy)]
-enum SafetyProbeKind {
-    Call {
-        callee: SafetyCallee,
-        call_kind: SafetyProbeCallKind,
-    },
-    Operation(SafetyOpKind),
-}
-
-#[derive(Debug, Clone, Copy)]
-enum SafetyProbeCallKind {
-    Unsafe,
-    PotentialObligation,
-}
-
-#[derive(Debug, Clone, Copy)]
-enum SafetyEvidenceKind {
-    Call {
-        callee: SafetyCallee,
-        call_kind: SafetyCallKind,
-    },
-    Operation(SafetyOpKind),
+/// Normalizes an impl method to the trait item named by THIR.
+///
+/// MIR reachability resolves trait calls to concrete impl methods, while THIR
+/// retains the declared trait method. Both identify the same source call for
+/// safety grouping.
+#[must_use]
+pub(crate) fn call_identity_def_id(tcx: TyCtxt<'_>, def_id: DefId) -> DefId {
+    tcx.trait_item_of(def_id).unwrap_or(def_id)
 }
 
 /// Non-call operations that require `unsafe`, mirroring the non-call variants
@@ -201,386 +159,6 @@ impl SafetyOpKind {
             Self::InlineAssembly => "inline assembly",
             Self::UnsafeBinderCast => "unsafe binder cast",
         }
-    }
-}
-
-#[derive(Debug, Clone, Copy)]
-pub(crate) enum SafetyCallee {
-    Def(DefId),
-    FunctionPointer,
-}
-
-impl SafetyCallee {
-    #[must_use]
-    pub fn name(self, tcx: TyCtxt<'_>) -> String {
-        match self {
-            Self::Def(def_id) => canonical_namespace(tcx, def_id),
-            Self::FunctionPointer => String::from("unsafe function pointer"),
-        }
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum SafetyCallKind {
-    Unsafe,
-    Obligation,
-}
-
-impl SafetyCallKind {
-    #[must_use]
-    pub fn label(self) -> &'static str {
-        match self {
-            Self::Unsafe => "unsafe call",
-            Self::Obligation => "safety-obligation call",
-        }
-    }
-}
-
-pub(crate) type SafetyRequirement = ContractRequirement;
-
-impl SafetyAnalysis {
-    pub(crate) fn findings(&self, owner: DefId) -> &[SafetyFinding] {
-        self.findings_by_owner
-            .get(&owner)
-            .map_or(&[], Vec::as_slice)
-    }
-
-    pub(crate) fn evidence(&self, owner: DefId) -> &[SafetyEvidence] {
-        self.evidence_by_owner
-            .get(&owner)
-            .map_or(&[], Vec::as_slice)
-    }
-
-    fn push_finding(&mut self, finding: SafetyFinding) {
-        self.findings_by_owner
-            .entry(finding.owner())
-            .or_default()
-            .push(finding);
-    }
-
-    fn push_probe(
-        &mut self,
-        site: EffectSite,
-        details: SafetyProbeKind,
-        terminal_marker_spans: Vec<Span>,
-        group: SafetyEffectGroup,
-    ) {
-        self.probes_by_owner
-            .entry(site.owner)
-            .or_default()
-            .push(SafetyProbe {
-                effect: EffectEvidence {
-                    endpoint: site,
-                    terminal_marker_spans,
-                    details,
-                },
-                group,
-            });
-    }
-
-    pub(crate) fn analyze_owners(
-        &mut self,
-        tcx: TyCtxt<'_>,
-        config: &SafetyConfig,
-        owners: impl IntoIterator<Item = LocalDefId>,
-    ) {
-        for owner in owners {
-            if !self.analyzed_owners.insert(owner)
-                || !matches!(tcx.def_kind(owner), DefKind::Fn | DefKind::AssocFn)
-                || tcx.hir_maybe_body_owned_by(owner).is_none()
-                || config.ignores_def(tcx, owner.to_def_id())
-            {
-                continue;
-            }
-            collect_missing_safety_docs(tcx, owner, config, self);
-            thir::collect_body_evidence(tcx, owner, config, self);
-        }
-        for owner in self.probes_by_owner.keys().copied().collect::<Vec<_>>() {
-            self.resolve_owner_probes(tcx, owner, config);
-        }
-    }
-
-    /// Resolves a safe obligation whose concrete target is visible only in a
-    /// reachability callable edge; THIR sees the call operand as an erased type.
-    pub(crate) fn callable_obligation_evidence(
-        &mut self,
-        tcx: TyCtxt<'_>,
-        config: &SafetyConfig,
-        site: EffectSite,
-        def_id: DefId,
-    ) -> Option<SafetyEvidence> {
-        if fn_def_is_unsafe(tcx, def_id) || config.ignores_def(tcx, def_id) {
-            return None;
-        }
-        let summary = safety_doc_summary(tcx, def_id, &config.documentation_overrides);
-        if !summary.has_docs {
-            return None;
-        }
-        self.push_ambiguous_requirement_names(site.owner, def_id, summary.ambiguous_requirements);
-        let (group, terminal_marker_spans) = self.effect_context_for_site(site);
-        Some(SafetyEvidence {
-            effect: EffectEvidence {
-                endpoint: site,
-                terminal_marker_spans,
-                details: SafetyEvidenceKind::Call {
-                    callee: SafetyCallee::Def(def_id),
-                    call_kind: SafetyCallKind::Obligation,
-                },
-            },
-            requirements: summary.requirements,
-            group,
-        })
-    }
-
-    /// Adds target-specific contract evidence beside an erased unsafe-call
-    /// probe while retaining the original source marker group.
-    pub(crate) fn resolved_unsafe_call_evidence(
-        &mut self,
-        tcx: TyCtxt<'_>,
-        config: &SafetyConfig,
-        erased: &SafetyEvidence,
-        def_id: DefId,
-    ) -> Option<SafetyEvidence> {
-        if !fn_def_is_unsafe(tcx, def_id) || config.ignores_def(tcx, def_id) {
-            return None;
-        }
-        let summary = safety_doc_summary(tcx, def_id, &config.documentation_overrides);
-        if !summary.has_docs {
-            return None;
-        }
-        self.push_ambiguous_requirement_names(
-            erased.site().owner,
-            def_id,
-            summary.ambiguous_requirements,
-        );
-        Some(SafetyEvidence {
-            effect: EffectEvidence {
-                endpoint: erased.site(),
-                terminal_marker_spans: erased.terminal_marker_spans().to_vec(),
-                details: SafetyEvidenceKind::Call {
-                    callee: SafetyCallee::Def(def_id),
-                    call_kind: SafetyCallKind::Unsafe,
-                },
-            },
-            requirements: summary.requirements,
-            group: erased.group,
-        })
-    }
-
-    fn resolve_owner_probes(&mut self, tcx: TyCtxt<'_>, owner: DefId, config: &SafetyConfig) {
-        for probe in self.probes_by_owner.remove(&owner).unwrap_or_default() {
-            let (details, requirements) = match probe.effect.details {
-                SafetyProbeKind::Operation(op) => (SafetyEvidenceKind::Operation(op), Vec::new()),
-                SafetyProbeKind::Call { callee, call_kind } => {
-                    let summary = match callee {
-                        SafetyCallee::Def(def_id) => {
-                            let summary =
-                                safety_doc_summary(tcx, def_id, &config.documentation_overrides);
-                            self.push_ambiguous_requirement_names(
-                                owner,
-                                def_id,
-                                summary.ambiguous_requirements.clone(),
-                            );
-                            summary
-                        }
-                        SafetyCallee::FunctionPointer => ContractDocSummary::default(),
-                    };
-                    let call_kind = match call_kind {
-                        SafetyProbeCallKind::Unsafe => {
-                            if let SafetyCallee::Def(def_id) = callee
-                                && config.trusts_safety_boundary_def(tcx, def_id)
-                                && !summary.has_docs
-                            {
-                                continue;
-                            }
-                            SafetyCallKind::Unsafe
-                        }
-                        SafetyProbeCallKind::PotentialObligation => {
-                            if !matches!(callee, SafetyCallee::Def(_)) || !summary.has_docs {
-                                continue;
-                            }
-                            SafetyCallKind::Obligation
-                        }
-                    };
-                    (
-                        SafetyEvidenceKind::Call { callee, call_kind },
-                        summary.requirements,
-                    )
-                }
-            };
-            self.evidence_by_owner
-                .entry(owner)
-                .or_default()
-                .push(SafetyEvidence {
-                    effect: EffectEvidence {
-                        endpoint: probe.effect.endpoint,
-                        terminal_marker_spans: probe.effect.terminal_marker_spans,
-                        details,
-                    },
-                    requirements,
-                    group: probe.group,
-                });
-        }
-    }
-
-    fn push_ambiguous_requirement_names(
-        &mut self,
-        caller: DefId,
-        def_id: DefId,
-        ambiguous_requirements: Vec<AmbiguousContractRequirements>,
-    ) {
-        for ambiguous in ambiguous_requirements {
-            if !self.ambiguous_requirement_names.insert((
-                caller,
-                def_id,
-                ambiguous.normalized_name.clone(),
-            )) {
-                continue;
-            }
-            self.push_finding(SafetyFinding::AmbiguousObligationName {
-                caller,
-                def_id,
-                normalized_name: ambiguous.normalized_name,
-                requirements: ambiguous.requirements,
-            });
-        }
-    }
-
-    fn effect_context_for_site(&mut self, site: EffectSite) -> (SafetyEffectGroup, Vec<Span>) {
-        let containing = self
-            .safety_scopes_by_owner
-            .get(&site.owner)
-            .into_iter()
-            .flatten()
-            .filter(|group| crate::source_markers::span_contains(group.span, site.span))
-            .copied()
-            .collect::<Vec<_>>();
-        if let Some(group) = containing.last().copied() {
-            let marker_spans = containing.into_iter().map(|group| group.span).collect();
-            (group, marker_spans)
-        } else {
-            let group = if let Some(group) = self.callable_groups.get(&site) {
-                *group
-            } else {
-                let group = self.new_effect_group(site.span);
-                self.callable_groups.insert(site, group);
-                group
-            };
-            (group, vec![site.span])
-        }
-    }
-
-    fn inherit_effect_scopes(&mut self, owner: DefId, inherited: &[SafetyEffectGroup]) {
-        let groups = self.safety_scopes_by_owner.entry(owner).or_default();
-        for group in inherited {
-            if !groups.contains(group) {
-                groups.push(*group);
-            }
-        }
-    }
-
-    fn new_safety_scope(&mut self, owner: DefId, span: Span) -> SafetyEffectGroup {
-        let group = self.new_effect_group(span);
-        self.safety_scopes_by_owner
-            .entry(owner)
-            .or_default()
-            .push(group);
-        group
-    }
-
-    fn new_effect_group(&mut self, span: Span) -> SafetyEffectGroup {
-        let group = SafetyEffectGroup {
-            id: self.next_effect_group,
-            span,
-        };
-        self.next_effect_group += 1;
-        group
-    }
-}
-
-impl SafetyEvidence {
-    pub(crate) fn requirements(&self) -> &[SafetyRequirement] {
-        &self.requirements
-    }
-
-    pub(crate) fn terminal_marker_spans(&self) -> &[Span] {
-        &self.effect.terminal_marker_spans
-    }
-
-    pub(crate) fn site(&self) -> EffectSite {
-        self.effect.endpoint
-    }
-
-    pub(crate) fn is_function_pointer_call(&self) -> bool {
-        matches!(
-            self.effect.details,
-            SafetyEvidenceKind::Call {
-                callee: SafetyCallee::FunctionPointer,
-                ..
-            }
-        )
-    }
-
-    pub(crate) fn finding(&self, missing_requirements: Vec<SafetyRequirement>) -> SafetyFinding {
-        let site = self.effect.endpoint;
-        match self.effect.details {
-            SafetyEvidenceKind::Call { callee, call_kind } if missing_requirements.is_empty() => {
-                SafetyFinding::CallMissingJustification {
-                    site,
-                    callee,
-                    call_kind,
-                }
-            }
-            SafetyEvidenceKind::Call { callee, call_kind } => {
-                SafetyFinding::CallMissingRequirements {
-                    site,
-                    callee,
-                    call_kind,
-                    missing_requirements,
-                }
-            }
-            SafetyEvidenceKind::Operation(op) => {
-                debug_assert!(missing_requirements.is_empty());
-                SafetyFinding::OpMissingJustification { site, op }
-            }
-        }
-    }
-}
-
-#[must_use]
-pub(crate) fn has_safety_docs(
-    tcx: TyCtxt<'_>,
-    def_id: DefId,
-    overrides: &ContractDocOverrides,
-) -> bool {
-    safety_doc_summary(tcx, def_id, overrides).has_docs
-}
-
-fn collect_missing_safety_docs(
-    tcx: TyCtxt<'_>,
-    owner: LocalDefId,
-    config: &SafetyConfig,
-    analysis: &mut SafetyAnalysis,
-) {
-    let def_id = owner.to_def_id();
-    // Effective visibility, not declared: only functions callers outside the
-    // crate can actually reach — directly or through re-exports — owe them
-    // `# Safety` docs.
-    if !tcx.effective_visibilities(()).is_exported(owner)
-        || !fn_def_is_unsafe(tcx, def_id)
-        || config.ignores_def(tcx, def_id)
-    {
-        return;
-    }
-
-    let summary = safety_doc_summary(tcx, def_id, &config.documentation_overrides);
-    if summary.has_docs {
-        analysis.push_ambiguous_requirement_names(def_id, def_id, summary.ambiguous_requirements);
-    } else {
-        analysis.push_finding(SafetyFinding::MissingSafetyDocs {
-            def_id,
-            span: tcx.def_span(def_id),
-        });
     }
 }
 

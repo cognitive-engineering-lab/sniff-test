@@ -52,8 +52,8 @@ impl ContractDocOverrides {
     }
 
     #[must_use]
-    pub(crate) fn markdown_for_def(&self, tcx: TyCtxt<'_>, def_id: DefId) -> Option<&str> {
-        let matched = self.patterns.best_def_match(tcx, def_id)?;
+    pub(crate) fn markdown_for_candidates(&self, candidates: &[String]) -> Option<&str> {
+        let matched = self.patterns.best_candidates_match(candidates)?;
         self.markdown_for_pattern(matched.pattern)
     }
 
@@ -93,16 +93,6 @@ fn dummy_span() -> Span {
     DUMMY_SP
 }
 
-impl ContractRequirement {
-    pub(crate) fn render(&self) -> String {
-        if self.condition.is_empty() {
-            self.name.clone()
-        } else {
-            format!("{}: {}", self.name, self.condition)
-        }
-    }
-}
-
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AmbiguousContractRequirements {
     pub normalized_name: String,
@@ -119,24 +109,6 @@ impl MarkerSatisfaction {
     pub(crate) fn has_justification(&self) -> bool {
         !self.reason.trim().is_empty()
     }
-
-    pub(crate) fn satisfies_requirement(&self, requirement: Option<&str>) -> bool {
-        self.has_justification()
-            && match requirement {
-                Some(required) => self
-                    .requirement
-                    .as_deref()
-                    .is_some_and(|name| normalize_requirement_name(name) == required),
-                None => self.requirement.is_none(),
-            }
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) enum ContractCheck {
-    Satisfied,
-    MissingJustification,
-    MissingRequirements(Vec<ContractRequirement>),
 }
 
 #[derive(Debug, Clone, Default)]
@@ -158,16 +130,12 @@ thread_local! {
     > = std::cell::RefCell::new(std::collections::HashMap::new());
 }
 
+/// Parses a panic contract directly from rustdoc attributes.
 #[must_use]
-pub(crate) fn panic_contract_doc_summary(
+pub(crate) fn panic_contract_doc_summary_from_attrs(
     tcx: TyCtxt<'_>,
     def_id: DefId,
-    overrides: &ContractDocOverrides,
 ) -> ContractDocSummary {
-    if let Some(markdown) = overrides.markdown_for_def(tcx, def_id) {
-        return parse_contract_doc_markdown(markdown, tcx.def_span(def_id), is_panic_heading);
-    }
-
     PANIC_SUMMARY_CACHE.with_borrow_mut(|cache| {
         cache
             .entry(def_id)
@@ -176,16 +144,12 @@ pub(crate) fn panic_contract_doc_summary(
     })
 }
 
+/// Parses a safety contract directly from rustdoc attributes.
 #[must_use]
-pub(crate) fn safety_contract_doc_summary(
+pub(crate) fn safety_contract_doc_summary_from_attrs(
     tcx: TyCtxt<'_>,
     def_id: DefId,
-    overrides: &ContractDocOverrides,
 ) -> ContractDocSummary {
-    if let Some(markdown) = overrides.markdown_for_def(tcx, def_id) {
-        return parse_contract_doc_markdown(markdown, tcx.def_span(def_id), is_safety_heading);
-    }
-
     SAFETY_SUMMARY_CACHE.with_borrow_mut(|cache| {
         cache
             .entry(def_id)
@@ -260,6 +224,16 @@ fn parse_contract_doc_markdown(
         &[(0..markdown.len(), span)],
         is_contract_heading,
     )
+}
+
+#[must_use]
+pub(crate) fn panic_contract_doc_summary_from_markdown(markdown: &str) -> ContractDocSummary {
+    parse_contract_doc_markdown(markdown, DUMMY_SP, is_panic_heading)
+}
+
+#[must_use]
+pub(crate) fn safety_contract_doc_summary_from_markdown(markdown: &str) -> ContractDocSummary {
+    parse_contract_doc_markdown(markdown, DUMMY_SP, is_safety_heading)
 }
 
 fn parse_contract_doc_markdown_with_spans(
@@ -357,48 +331,6 @@ impl From<(String, Span)> for ContractDocLine {
     }
 }
 
-fn satisfied_requirement_names(
-    satisfactions: &[MarkerSatisfaction],
-) -> std::collections::HashSet<String> {
-    satisfactions
-        .iter()
-        .filter(|satisfaction| satisfaction.has_justification())
-        .filter_map(|satisfaction| satisfaction.requirement.as_deref())
-        .map(normalize_requirement_name)
-        .collect()
-}
-
-pub(crate) fn check_contract(
-    requirements: &[ContractRequirement],
-    satisfactions: &[MarkerSatisfaction],
-) -> ContractCheck {
-    if requirements.is_empty() {
-        return if satisfactions
-            .iter()
-            .any(|satisfaction| satisfaction.satisfies_requirement(None))
-        {
-            ContractCheck::Satisfied
-        } else {
-            ContractCheck::MissingJustification
-        };
-    }
-
-    let satisfied_requirements = satisfied_requirement_names(satisfactions);
-    let missing = requirements
-        .iter()
-        .filter(|requirement| {
-            !satisfied_requirements.contains(&normalize_requirement_name(&requirement.name))
-        })
-        .cloned()
-        .collect::<Vec<_>>();
-
-    if missing.is_empty() {
-        ContractCheck::Satisfied
-    } else {
-        ContractCheck::MissingRequirements(missing)
-    }
-}
-
 fn ambiguous_requirements(
     requirements: &[ContractRequirement],
 ) -> Vec<AmbiguousContractRequirements> {
@@ -478,8 +410,7 @@ fn span_for_offset(line_spans: &[(std::ops::Range<usize>, Span)], offset: usize)
 #[cfg(test)]
 mod tests {
     use super::{
-        ContractCheck, ContractRequirement, MarkerSatisfaction, check_contract,
-        parse_panic_contract_doc_lines, parse_safety_contract_doc_lines,
+        ContractRequirement, parse_panic_contract_doc_lines, parse_safety_contract_doc_lines,
     };
     use rustc_span::DUMMY_SP;
 
@@ -610,60 +541,6 @@ mod tests {
                 },
             ]
         );
-    }
-
-    #[test]
-    fn contract_check_distinguishes_justification_from_named_requirements() {
-        assert_eq!(
-            check_contract(&[], &[]),
-            ContractCheck::MissingJustification
-        );
-        assert_eq!(
-            check_contract(
-                &[],
-                &[MarkerSatisfaction {
-                    requirement: None,
-                    reason: String::from("the caller established the invariant"),
-                }],
-            ),
-            ContractCheck::Satisfied
-        );
-
-        let requirements = vec![
-            ContractRequirement {
-                name: String::from("nonzero"),
-                condition: String::from("the divisor must not be zero"),
-                span: DUMMY_SP,
-            },
-            ContractRequirement {
-                name: String::from("bounded"),
-                condition: String::from("the input must fit"),
-                span: DUMMY_SP,
-            },
-        ];
-        assert_eq!(
-            check_contract(
-                &requirements,
-                &[MarkerSatisfaction {
-                    requirement: Some(String::from("NONZERO!")),
-                    reason: String::from("checked above"),
-                }],
-            ),
-            ContractCheck::MissingRequirements(vec![requirements[1].clone()])
-        );
-    }
-
-    #[test]
-    fn named_satisfaction_does_not_justify_an_unnamed_effect() {
-        let check = check_contract(
-            &[],
-            &[MarkerSatisfaction {
-                requirement: Some(String::from("unrelated")),
-                reason: String::from("this proves a different condition"),
-            }],
-        );
-
-        assert_eq!(check, ContractCheck::MissingJustification);
     }
 
     #[test]

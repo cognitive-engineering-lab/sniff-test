@@ -32,16 +32,15 @@ expression: messages
         "root": "safe_markers::unsafe_ratio",
         "root-kind": "concrete",
         "span": "src/lib.rs:8:5: 8:24",
-        "target": "compiler assert attempt to divide `total` (_1, argument 1) by zero",
+        "target": "compiler assert division by zero",
         "trace": [
-          "src/lib.rs:8:5: 8:24: safe_markers::unsafe_ratio --assert-> compiler assert attempt to divide `total` (_1, argument 1) by zero"
+          "src/lib.rs:8:5: 8:24: safe_markers::unsafe_ratio --assert-> compiler assert DivisionByZero(copy _1) with locals [CompilerAssertLocal { index: 0, name: None, role: ReturnPointer }, CompilerAssertLocal { index: 1, name: Some(\"total\"), role: Argument }, CompilerAssertLocal { index: 2, name: Some(\"denominator\"), role: Argument }, CompilerAssertLocal { index: 3, name: None, role: Temporary }]"
         ]
       }
     ],
-    "format-version": 10,
+    "format-version": 11,
     "reason": "sniff-test-artifact",
     "rustc-version": "[RUSTC_VERSION]",
-    "scope": "workspace",
     "tool-version": "0.1.0"
   }
 ]

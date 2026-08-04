@@ -6,107 +6,6 @@ expression: messages
   {
     "artifact": {
       "artifact-id": "[ARTIFACT_ID]",
-      "crate-name": "dependency_panic_contract"
-    },
-    "dependencies": [],
-    "findings": [
-      {
-        "kind": "panic-invocation",
-        "level": "deny",
-        "reason": "panic sink core::std::rt::panic_fmt",
-        "root": "dependency_panic_contract::CachedWidget::raw_panic",
-        "root-kind": "concrete",
-        "span": "[FIXTURE]/dep/src/lib.rs:2:5: 2:31",
-        "target": "core::std::rt::panic_fmt",
-        "trace": [
-          "[FIXTURE]/dep/src/lib.rs:41:9: 41:20: dependency_panic_contract::CachedWidget::raw_panic --direct-call-> dependency_panic_contract::raw_panic",
-          "[FIXTURE]/dep/src/lib.rs:2:5: 2:31: dependency_panic_contract::raw_panic --macro-expansion-> macro std::panic",
-          "[FIXTURE]/dep/src/lib.rs:2:5: 2:31: macro std::panic --macro-expansion-> macro core::std::panic::panic_2021",
-          "[SYSROOT]/lib/rustlib/src/rust/library/core/src/panic.rs:62:9: 62:73: macro core::std::panic::panic_2021 --direct-call-> core::std::rt::panic_fmt"
-        ]
-      },
-      {
-        "kind": "documented-panic",
-        "level": "deny",
-        "missing-requirements": [
-          "nonzero: the value must not be zero"
-        ],
-        "reason": "dependency_panic_contract::requires_nonzero documents when it may panic under # Panics",
-        "root": "dependency_panic_contract::misses_named_requirement",
-        "root-kind": "concrete",
-        "span": "[FIXTURE]/dep/src/lib.rs:17:5: 17:23",
-        "target": "dependency_panic_contract::requires_nonzero",
-        "trace": [
-          "[FIXTURE]/dep/src/lib.rs:17:5: 17:23: dependency_panic_contract::misses_named_requirement --direct-call-> dependency_panic_contract::requires_nonzero"
-        ]
-      },
-      {
-        "kind": "documented-panic",
-        "level": "deny",
-        "missing-requirements": [
-          "exclusive: no other thread may access the global state"
-        ],
-        "reason": "dependency_panic_contract::requires_initialized_exclusive_state documents when it may panic under # Panics",
-        "root": "dependency_panic_contract::partially_satisfies_requirements",
-        "root-kind": "concrete",
-        "span": "[FIXTURE]/dep/src/lib.rs:30:5: 30:43",
-        "target": "dependency_panic_contract::requires_initialized_exclusive_state",
-        "trace": [
-          "[FIXTURE]/dep/src/lib.rs:30:5: 30:43: dependency_panic_contract::partially_satisfies_requirements --direct-call-> dependency_panic_contract::requires_initialized_exclusive_state"
-        ]
-      },
-      {
-        "kind": "panic-invocation",
-        "level": "deny",
-        "reason": "panic sink core::std::rt::panic_fmt",
-        "root": "dependency_panic_contract::raw_panic",
-        "root-kind": "concrete",
-        "span": "[FIXTURE]/dep/src/lib.rs:2:5: 2:31",
-        "target": "core::std::rt::panic_fmt",
-        "trace": [
-          "[FIXTURE]/dep/src/lib.rs:2:5: 2:31: dependency_panic_contract::raw_panic --macro-expansion-> macro std::panic",
-          "[FIXTURE]/dep/src/lib.rs:2:5: 2:31: macro std::panic --macro-expansion-> macro core::std::panic::panic_2021",
-          "[SYSROOT]/lib/rustlib/src/rust/library/core/src/panic.rs:62:9: 62:73: macro core::std::panic::panic_2021 --direct-call-> core::std::rt::panic_fmt"
-        ]
-      },
-      {
-        "kind": "panic-invocation",
-        "level": "deny",
-        "reason": "panic sink core::std::rt::panic_fmt",
-        "root": "dependency_panic_contract::two_raw_panics",
-        "root-kind": "concrete",
-        "span": "[FIXTURE]/dep/src/lib.rs:6:5: 6:39",
-        "target": "core::std::rt::panic_fmt",
-        "trace": [
-          "[FIXTURE]/dep/src/lib.rs:6:5: 6:39: dependency_panic_contract::two_raw_panics --macro-expansion-> macro core::std::assert",
-          "[FIXTURE]/dep/src/lib.rs:6:5: 6:39: macro core::std::assert --macro-expansion-> macro core::std::panic::panic_2021",
-          "[SYSROOT]/lib/rustlib/src/rust/library/core/src/panic.rs:62:9: 62:73: macro core::std::panic::panic_2021 --direct-call-> core::std::rt::panic_fmt"
-        ]
-      },
-      {
-        "kind": "panic-invocation",
-        "level": "deny",
-        "reason": "panic sink core::std::rt::panic_fmt",
-        "root": "dependency_panic_contract::two_raw_panics",
-        "root-kind": "concrete",
-        "span": "[FIXTURE]/dep/src/lib.rs:7:5: 7:41",
-        "target": "core::std::rt::panic_fmt",
-        "trace": [
-          "[FIXTURE]/dep/src/lib.rs:7:5: 7:41: dependency_panic_contract::two_raw_panics --macro-expansion-> macro core::std::assert",
-          "[FIXTURE]/dep/src/lib.rs:7:5: 7:41: macro core::std::assert --macro-expansion-> macro core::std::panic::panic_2021",
-          "[SYSROOT]/lib/rustlib/src/rust/library/core/src/panic.rs:62:9: 62:73: macro core::std::panic::panic_2021 --direct-call-> core::std::rt::panic_fmt"
-        ]
-      }
-    ],
-    "format-version": 10,
-    "reason": "sniff-test-artifact",
-    "rustc-version": "[RUSTC_VERSION]",
-    "scope": "dependency",
-    "tool-version": "0.1.0"
-  },
-  {
-    "artifact": {
-      "artifact-id": "[ARTIFACT_ID]",
       "crate-name": "dependency_panic_contract_app"
     },
     "dependencies": [
@@ -119,54 +18,81 @@ expression: messages
       {
         "kind": "ambiguous-panic-marker",
         "level": "deny",
-        "reason": "one `// PANIC:` marker applies to 2 panic obligation sites",
+        "reason": "one `// PANIC:` marker applies to 2 panic effect groups",
         "root": "dependency_panic_contract_app::ambiguous_marker",
         "root-kind": "concrete",
         "span": "src/lib.rs:32:1: 33:1",
         "trace": [
           "src/lib.rs:33:5: 33:59: dependency_panic_contract_app::ambiguous_marker --direct-call-> dependency_panic_contract::two_raw_panics",
-          "src/lib.rs:33:5: 33:59: dependency_panic_contract_app::ambiguous_marker --direct-call-> dependency_panic_contract::two_raw_panics"
+          "[FIXTURE]/dep/src/lib.rs:6:5: 6:39: dependency_panic_contract::two_raw_panics --macro-expansion-> macro core::std::assert",
+          "[FIXTURE]/dep/src/lib.rs:6:5: 6:39: macro core::std::assert --macro-expansion-> macro core::std::panic::panic_2021",
+          "[SYSROOT]/lib/rustlib/src/rust/library/core/src/panic.rs:62:9: 62:73: macro core::std::panic::panic_2021 --direct-call-> core::std::rt::panic_fmt"
         ]
       },
       {
-        "effect-span": "[FIXTURE]/dep/src/lib.rs:30:5: 30:43",
         "kind": "documented-panic",
         "level": "deny",
         "missing-requirements": [
+          "initialized: global state must be initialized"
+        ],
+        "reason": "dependency_panic_contract::requires_initialized_exclusive_state documents when it may panic under # Panics",
+        "requirements": [
+          "initialized: global state must be initialized",
           "exclusive: no other thread may access the global state"
         ],
-        "reason": "dependency_panic_contract::partially_satisfies_requirements has cached documented panic evidence",
+        "root": "dependency_panic_contract_app::completes_cached_requirements",
+        "root-kind": "concrete",
+        "span": "[FIXTURE]/dep/src/lib.rs:30:5: 30:43",
+        "target": "dependency_panic_contract::requires_initialized_exclusive_state",
+        "trace": [
+          "src/lib.rs:39:5: 39:66: dependency_panic_contract_app::completes_cached_requirements --direct-call-> dependency_panic_contract::partially_satisfies_requirements",
+          "[FIXTURE]/dep/src/lib.rs:30:5: 30:43: dependency_panic_contract::partially_satisfies_requirements --direct-call-> dependency_panic_contract::requires_initialized_exclusive_state"
+        ]
+      },
+      {
+        "kind": "documented-panic",
+        "level": "deny",
+        "missing-requirements": [
+          "initialized: global state must be initialized",
+          "exclusive: no other thread may access the global state"
+        ],
+        "reason": "dependency_panic_contract::requires_initialized_exclusive_state documents when it may panic under # Panics",
+        "requirements": [
+          "initialized: global state must be initialized",
+          "exclusive: no other thread may access the global state"
+        ],
         "root": "dependency_panic_contract_app::leaves_cached_requirement_unsatisfied",
         "root-kind": "concrete",
-        "span": "src/lib.rs:43:5: 43:66",
-        "target": "dependency_panic_contract::partially_satisfies_requirements",
+        "span": "[FIXTURE]/dep/src/lib.rs:30:5: 30:43",
+        "target": "dependency_panic_contract::requires_initialized_exclusive_state",
         "trace": [
           "src/lib.rs:43:5: 43:66: dependency_panic_contract_app::leaves_cached_requirement_unsatisfied --direct-call-> dependency_panic_contract::partially_satisfies_requirements",
           "[FIXTURE]/dep/src/lib.rs:30:5: 30:43: dependency_panic_contract::partially_satisfies_requirements --direct-call-> dependency_panic_contract::requires_initialized_exclusive_state"
         ]
       },
       {
-        "effect-span": "[FIXTURE]/dep/src/lib.rs:17:5: 17:23",
         "kind": "documented-panic",
         "level": "deny",
         "missing-requirements": [
           "nonzero: the value must not be zero"
         ],
-        "reason": "dependency_panic_contract::misses_named_requirement has cached documented panic evidence",
+        "reason": "dependency_panic_contract::requires_nonzero documents when it may panic under # Panics",
+        "requirements": [
+          "nonzero: the value must not be zero"
+        ],
         "root": "dependency_panic_contract_app::unnamed_marker_misses_requirement",
         "root-kind": "concrete",
-        "span": "src/lib.rs:22:5: 22:58",
-        "target": "dependency_panic_contract::misses_named_requirement",
+        "span": "[FIXTURE]/dep/src/lib.rs:17:5: 17:23",
+        "target": "dependency_panic_contract::requires_nonzero",
         "trace": [
           "src/lib.rs:22:5: 22:58: dependency_panic_contract_app::unnamed_marker_misses_requirement --direct-call-> dependency_panic_contract::misses_named_requirement",
           "[FIXTURE]/dep/src/lib.rs:17:5: 17:23: dependency_panic_contract::misses_named_requirement --direct-call-> dependency_panic_contract::requires_nonzero"
         ]
       }
     ],
-    "format-version": 10,
+    "format-version": 11,
     "reason": "sniff-test-artifact",
     "rustc-version": "[RUSTC_VERSION]",
-    "scope": "workspace",
     "tool-version": "0.1.0"
   }
 ]

@@ -1,54 +1,16 @@
+//! Rustc diagnostic emission for interpreted workspace findings.
+
 use std::path::Path;
 
-use crate::cache::{CachedFinding, CachedFindingKind, CachedFunctionSummary, CachedSourceSpan};
 use crate::config::{LintLevel, ReportRootSet};
-use crate::contracts::ContractDocOverrides;
-use crate::dependency_cache::CachedFunction;
-use crate::namespace::canonical_namespace;
-use crate::panics::{
-    AmbiguousPanicMarker, AmbiguousPanicRequirementName, PanicEvidence, PanicEvidenceKind,
-    trace_edges_until, trigger_edge_id,
-};
 use crate::report_roots::MissingReportRoot;
-use crate::safety::{SafetyCallee, SafetyFinding};
-use reachability::{ReachabilityEdgeId, ReachabilityGraph, ReachabilityNodeKind};
 use rustc_errors::{Diag, EmissionGuarantee};
-use rustc_hir::def_id::DefId;
 use rustc_middle::ty::TyCtxt;
-use rustc_span::{BytePos, SourceFile, Span};
+use rustc_span::{BytePos, Span};
 use toml::Spanned;
 
 use super::findings::{DiagnosticMessage, FindingDiagnostic};
-use super::report::{
-    render_assert_message, render_cached_trace, render_edge_without_span, render_node,
-};
 
-#[derive(Debug, Clone, Copy)]
-pub(super) struct PanicContractDiagnostic {
-    pub(super) obligation_edge_id: Option<ReachabilityEdgeId>,
-    pub(super) obligation_def_id: DefId,
-    pub(super) root_def_id: DefId,
-    pub(super) trusted: bool,
-    pub(super) show_full_stack_trace: bool,
-}
-
-#[derive(Debug, Clone, Copy)]
-pub(super) struct CachedDependencyContractDiagnostic {
-    pub(super) edge_id: ReachabilityEdgeId,
-    pub(super) root_def_id: DefId,
-    pub(super) trusted: bool,
-    pub(super) show_full_stack_trace: bool,
-}
-
-#[derive(Debug, Clone, Copy)]
-pub(super) struct CachedDependencyRawPanicDiagnostic {
-    pub(super) edge_id: ReachabilityEdgeId,
-    pub(super) root_def_id: DefId,
-    pub(super) show_full_stack_trace: bool,
-}
-
-/// The diagnostic surface findings decorate, bridging the two `Diag`
-/// emission-guarantee types (warn vs deny) behind one emission skeleton.
 trait LintDiag {
     fn note(&mut self, note: String);
     fn span_note(&mut self, span: Span, note: String);
@@ -79,675 +41,50 @@ impl<G: EmissionGuarantee> LintDiag for Diag<'_, G> {
     }
 }
 
-impl LintDiag for FindingDiagnostic {
-    fn note(&mut self, note: String) {
-        self.messages.push(DiagnosticMessage::Note(note));
-    }
-
-    fn span_note(&mut self, span: Span, note: String) {
-        self.messages.push(DiagnosticMessage::SpanNote(span, note));
-    }
-
-    fn span_label(&mut self, span: Span, label: String) {
-        self.messages
-            .push(DiagnosticMessage::SpanLabel(span, label));
-    }
-
-    fn span_help(&mut self, span: Span, help: &'static str) {
-        self.messages.push(DiagnosticMessage::SpanHelp(span, help));
-    }
-
-    fn help(&mut self, help: &'static str) {
-        self.messages.push(DiagnosticMessage::Help(help));
-    }
-}
-
-fn finding_diagnostic(
-    span: Option<Span>,
-    message: String,
-    decorate: impl FnOnce(&mut dyn LintDiag),
-) -> FindingDiagnostic {
-    let mut diagnostic = FindingDiagnostic {
-        span,
-        message,
-        messages: Vec::new(),
-    };
-    decorate(&mut diagnostic);
-    diagnostic
-}
-
 pub(super) fn emit_finding_diagnostic(
     tcx: TyCtxt<'_>,
     level: LintLevel,
     diagnostic: &FindingDiagnostic,
 ) {
-    emit_lint_diagnostic_at(
-        tcx,
-        level,
-        diagnostic.span,
-        diagnostic.message.clone(),
-        |diag| {
-            for message in &diagnostic.messages {
-                match message {
-                    DiagnosticMessage::Note(note) => diag.note(note.clone()),
-                    DiagnosticMessage::SpanNote(span, note) => {
-                        diag.span_note(*span, note.clone());
-                    }
-                    DiagnosticMessage::SpanLabel(span, label) => {
-                        diag.span_label(*span, label.clone());
-                    }
-                    DiagnosticMessage::SpanHelp(span, help) => diag.span_help(*span, help),
-                    DiagnosticMessage::Help(help) => diag.help(help),
-                }
-            }
-        },
-    );
-}
-
-fn emit_lint_diagnostic_at(
-    tcx: TyCtxt<'_>,
-    level: LintLevel,
-    span: Option<Span>,
-    message: String,
-    decorate: impl FnOnce(&mut dyn LintDiag),
-) {
-    match (level, span) {
+    match (level, diagnostic.span) {
         (LintLevel::Allow, _) => {}
         (LintLevel::Warn, Some(span)) => {
-            let mut diag = tcx.dcx().struct_span_warn(span, message);
-            decorate(&mut diag);
-            diag.emit();
+            let mut emitted = tcx.dcx().struct_span_warn(span, diagnostic.message.clone());
+            decorate(&mut emitted, &diagnostic.messages);
+            emitted.emit();
         }
         (LintLevel::Warn, None) => {
-            let mut diag = tcx.dcx().struct_warn(message);
-            decorate(&mut diag);
-            diag.emit();
+            let mut emitted = tcx.dcx().struct_warn(diagnostic.message.clone());
+            decorate(&mut emitted, &diagnostic.messages);
+            emitted.emit();
         }
         (LintLevel::Deny, Some(span)) => {
-            let mut diag = tcx.dcx().struct_span_err(span, message);
-            decorate(&mut diag);
-            let _ = diag.emit();
+            let mut emitted = tcx.dcx().struct_span_err(span, diagnostic.message.clone());
+            decorate(&mut emitted, &diagnostic.messages);
+            let _ = emitted.emit();
         }
         (LintLevel::Deny, None) => {
-            let mut diag = tcx.dcx().struct_err(message);
-            decorate(&mut diag);
-            let _ = diag.emit();
+            let mut emitted = tcx.dcx().struct_err(diagnostic.message.clone());
+            decorate(&mut emitted, &diagnostic.messages);
+            let _ = emitted.emit();
         }
     }
 }
 
-pub(super) fn analysis_incomplete_diagnostic(
-    tcx: TyCtxt<'_>,
-    root_def_id: DefId,
-    node_limit: usize,
-) -> FindingDiagnostic {
-    let root = canonical_namespace(tcx, root_def_id);
-    let message = format!(
-        "analysis of `{root}` is incomplete: reachability halted at the \
-         {node_limit}-instance node limit"
-    );
-    finding_diagnostic(Some(tcx.def_span(root_def_id)), message, |diag| {
-        diag.help(
-            "raise `node-limit` under `[analysis]` in sniff-test.toml, or shrink the traversal \
-             by trusting or ignoring namespaces",
-        );
-    })
-}
-
-pub(super) fn ambiguous_obligation_marker_diagnostic<'tcx>(
-    tcx: TyCtxt<'tcx>,
-    graph: &ReachabilityGraph<'tcx>,
-    marker: &AmbiguousPanicMarker,
-    root_def_id: DefId,
-) -> FindingDiagnostic {
-    let root = canonical_namespace(tcx, root_def_id);
-    let message = format!("function `{root}` has an ambiguous `// PANIC:` marker");
-    finding_diagnostic(Some(marker.marker_span), message, |diag| {
-        for edge_id in &marker.edge_ids {
-            let edge = graph.edge(*edge_id);
-            diag.span_note(
-                edge.span,
-                format!(
-                    "this obligation also resolves to the same marker: {}",
-                    render_edge_without_span(tcx, graph, edge)
-                ),
-            );
-        }
-        diag.help(
-            "move the marker directly above one obligation, split it into separate markers, or set `ambiguous-panic-marker = \"allow\"` under `[analysis.lints]`",
-        );
-    })
-}
-
-pub(super) fn ambiguous_obligation_name_diagnostic(
-    tcx: TyCtxt<'_>,
-    name: &AmbiguousPanicRequirementName,
-    root_def_id: DefId,
-) -> FindingDiagnostic {
-    let root = canonical_namespace(tcx, root_def_id);
-    let target = canonical_namespace(tcx, name.def_id);
-    let message = format!("function `{root}` reaches an ambiguous `# Panics` requirement name");
-    let primary_span = name
-        .requirements
-        .first()
-        .map_or_else(|| tcx.def_span(name.def_id), |requirement| requirement.span);
-    finding_diagnostic(Some(primary_span), message, |diag| {
-        diag.note(format!(
-            "`{target}` has multiple `# Panics` requirements that normalize to `{}`",
-            name.normalized_name
-        ));
-        for requirement in &name.requirements {
-            diag.span_label(
-                requirement.span,
-                format!(
-                    "`{}` normalizes to `{}`",
-                    requirement.render(),
-                    name.normalized_name
-                ),
-            );
-        }
-        diag.help(
-            "give each requirement a unique name, or set `ambiguous-panic-requirement = \"allow\"` under `[analysis.lints]`",
-        );
-    })
-}
-
-pub(super) fn indirect_boundary_diagnostic<'tcx>(
-    tcx: TyCtxt<'tcx>,
-    graph: &ReachabilityGraph<'tcx>,
-    evidence: &PanicEvidence,
-    root_def_id: DefId,
-    show_full_stack_trace: bool,
-) -> FindingDiagnostic {
-    let root = canonical_namespace(tcx, root_def_id);
-    let trigger_span = graph.edge(trigger_edge_id(graph, evidence)).span;
-    let message = format!("function `{root}` reaches an unverifiable indirect call");
-    finding_diagnostic(Some(tcx.def_span(root_def_id)), message, |diag| {
-        diag.span_note(
-            trigger_span,
-            format!(
-                "panic behavior cannot be verified here: {}",
-                panic_trigger_note(tcx, graph, evidence)
-            ),
-        );
-        add_trace_notes(
-            diag,
-            tcx,
-            graph,
-            &evidence.trace.edge_ids,
-            show_full_stack_trace,
-        );
-        diag.help(
-            "document this boundary with `# Panics`, add `// PANIC:` only if every possible callee is locally constrained, or configure `indirect-call-boundary` if this opacity is acceptable",
-        );
-    })
-}
-
-pub(super) fn raw_panic_diagnostic<'tcx>(
-    tcx: TyCtxt<'tcx>,
-    graph: &ReachabilityGraph<'tcx>,
-    evidence: &PanicEvidence,
-    root_def_id: DefId,
-    show_full_stack_trace: bool,
-) -> FindingDiagnostic {
-    let root = canonical_namespace(tcx, root_def_id);
-    let trigger_span = graph.edge(trigger_edge_id(graph, evidence)).span;
-    let message = format!("function `{root}` has an undocumented panic path");
-    finding_diagnostic(Some(tcx.def_span(root_def_id)), message, |diag| {
-        diag.span_note(
-            trigger_span,
-            format!(
-                "panic may happen here: {}",
-                panic_trigger_note(tcx, graph, evidence)
-            ),
-        );
-        add_trace_notes(
-            diag,
-            tcx,
-            graph,
-            &evidence.trace.edge_ids,
-            show_full_stack_trace,
-        );
-        // The sink span above already shows where the panic originates. Add a
-        // second, spanned help only when the user would place the guard or
-        // `// PANIC:` marker at an earlier entry edge; otherwise keep the fix list
-        // as a generic help because the alternatives land in different places.
-        if let Some(entry_span) = evidence
-            .trace
-            .edge_ids
-            .first()
-            .map(|edge_id| graph.edge(*edge_id).span)
-            .filter(|entry_span| !entry_span.source_equal(trigger_span))
-        {
-            diag.span_help(
-                entry_span,
-                "guard this path, or add `// PANIC:` here if a local invariant proves it cannot panic",
-            );
-        }
-        diag.help(
-            "add a guard, document the panic with `# Panics`, or add `// PANIC:` if a local invariant proves it cannot panic",
-        );
-    })
-}
-
-fn add_cached_trace_notes(
-    diag: &mut dyn LintDiag,
-    function: &CachedFunction,
-    cached_finding: Option<&CachedFinding>,
-    include_kind: impl Fn(CachedFindingKind) -> bool,
-) {
-    for finding in cached_findings_for_diagnostic(function, cached_finding, include_kind) {
-        for edge in render_cached_trace(function, finding) {
-            diag.note(format!("cached trace: {edge}"));
+fn decorate(diagnostic: &mut dyn LintDiag, messages: &[DiagnosticMessage]) {
+    for message in messages {
+        match message {
+            DiagnosticMessage::Note(note) => diagnostic.note(note.clone()),
+            DiagnosticMessage::SpanNote(span, note) => {
+                diagnostic.span_note(*span, note.clone());
+            }
+            DiagnosticMessage::SpanLabel(span, label) => {
+                diagnostic.span_label(*span, label.clone());
+            }
+            DiagnosticMessage::SpanHelp(span, help) => diagnostic.span_help(*span, help),
+            DiagnosticMessage::Help(help) => diagnostic.help(help),
         }
     }
-}
-
-fn cached_findings_for_diagnostic<'a>(
-    function: &'a CachedFunction,
-    selected: Option<&'a CachedFinding>,
-    include_kind: impl Fn(CachedFindingKind) -> bool,
-) -> Vec<&'a CachedFinding> {
-    if let Some(selected) = selected {
-        return include_kind(selected.kind)
-            .then_some(selected)
-            .into_iter()
-            .collect();
-    }
-    function
-        .summary()
-        .panic
-        .findings
-        .iter()
-        .filter_map(|finding| function.finding(*finding))
-        .filter(|finding| include_kind(finding.kind))
-        .collect()
-}
-
-fn add_cached_dependency_panic_site_notes(
-    diag: &mut dyn LintDiag,
-    tcx: TyCtxt<'_>,
-    function: &CachedFunction,
-    cached_finding: Option<&CachedFinding>,
-) {
-    let mut notes = 0;
-    for finding in cached_findings_for_diagnostic(function, cached_finding, |kind| {
-        matches!(
-            kind,
-            CachedFindingKind::CompilerAssert { .. }
-                | CachedFindingKind::PanicInvocation {}
-                | CachedFindingKind::IndirectCallBoundary {}
-        )
-    }) {
-        if let Some(span) = finding
-            .source_span
-            .as_ref()
-            .and_then(|source_span| cached_source_span(tcx, source_span))
-        {
-            diag.span_note(
-                span,
-                format!(
-                    "cached dependency panic evidence was recorded here: {}",
-                    finding.reason
-                ),
-            );
-        } else {
-            diag.note(format!(
-                "cached dependency panic evidence was recorded at {}: {}",
-                finding.span, finding.reason
-            ));
-        }
-        notes += 1;
-    }
-
-    if notes == 0 && !function.summary().panic.analysis_complete {
-        diag.note(String::from(
-            "dependency analysis was incomplete, so no concrete cached panic site is available",
-        ));
-    }
-}
-
-fn cached_source_span(tcx: TyCtxt<'_>, span: &CachedSourceSpan) -> Option<Span> {
-    let file = tcx
-        .sess
-        .source_map()
-        .load_file(Path::new(&span.file))
-        .ok()?;
-    cached_source_span_in_file(&file, span)
-}
-
-fn cached_source_span_in_file(file: &SourceFile, span: &CachedSourceSpan) -> Option<Span> {
-    let lo = cached_line_column_pos(file, span.line_start, span.column_start)?;
-    let hi = cached_line_column_pos(file, span.line_end, span.column_end)?;
-    (lo <= hi).then(|| Span::with_root_ctxt(lo, hi))
-}
-
-fn cached_line_column_pos(file: &SourceFile, line: usize, column: usize) -> Option<BytePos> {
-    let line_index = line.checked_sub(1)?;
-    let column_index = column.checked_sub(1)?;
-    let line = file.get_line(line_index)?;
-    let byte_offset = byte_offset_for_char_column(line.as_ref(), column_index)?;
-    let byte_offset = u32::try_from(byte_offset).ok()?;
-    Some(file.line_bounds(line_index).start + BytePos(byte_offset))
-}
-
-fn byte_offset_for_char_column(line: &str, column_index: usize) -> Option<usize> {
-    line.char_indices()
-        .nth(column_index)
-        .map(|(byte_offset, _)| byte_offset)
-        .or_else(|| (column_index == line.chars().count()).then_some(line.len()))
-}
-
-pub(super) fn panic_contract_diagnostic<'tcx>(
-    tcx: TyCtxt<'tcx>,
-    graph: &ReachabilityGraph<'tcx>,
-    evidence: &PanicEvidence,
-    diagnostic: PanicContractDiagnostic,
-) -> FindingDiagnostic {
-    let PanicContractDiagnostic {
-        obligation_edge_id,
-        obligation_def_id,
-        root_def_id,
-        trusted,
-        show_full_stack_trace,
-    } = diagnostic;
-    let root = canonical_namespace(tcx, root_def_id);
-    let obligation = canonical_namespace(tcx, obligation_def_id);
-    let panic_kind = if trusted {
-        "trusted panic"
-    } else {
-        "documented panic"
-    };
-    let primary_span = obligation_edge_id.map_or_else(
-        || tcx.def_span(root_def_id),
-        |edge_id| graph.edge(edge_id).span,
-    );
-    let message = format!("function `{root}` may panic through a {panic_kind}");
-    finding_diagnostic(Some(primary_span), message, |diag| {
-        diag.span_note(
-            tcx.def_span(obligation_def_id),
-            format!("the reached callee `{obligation}` documents `# Panics` here"),
-        );
-        add_trace_notes(
-            diag,
-            tcx,
-            graph,
-            &trace_edges_until(evidence, obligation_edge_id),
-            show_full_stack_trace,
-        );
-        if let Some(edge_id) = obligation_edge_id {
-            diag.span_help(
-                graph.edge(edge_id).span,
-                "add `// PANIC:` directly above this call explaining why its documented panic conditions cannot occur",
-            );
-        }
-        diag.span_help(
-            tcx.def_span(root_def_id),
-            "document when this function may panic with `/// # Panics` here",
-        );
-        diag.help(
-            "ensure the callee's panic conditions cannot occur, justify that with `// PANIC:`, or document when the caller may panic with `# Panics`",
-        );
-    })
-}
-
-pub(super) fn cached_dependency_contract_diagnostic<'tcx>(
-    tcx: TyCtxt<'tcx>,
-    graph: &ReachabilityGraph<'tcx>,
-    function: &CachedFunction,
-    cached_finding: Option<&CachedFinding>,
-    local_trace: &[ReachabilityEdgeId],
-    diagnostic: CachedDependencyContractDiagnostic,
-) -> FindingDiagnostic {
-    let CachedDependencyContractDiagnostic {
-        edge_id,
-        root_def_id,
-        trusted,
-        show_full_stack_trace,
-    } = diagnostic;
-    let root = canonical_namespace(tcx, root_def_id);
-    let panic_kind = if trusted {
-        "trusted panic"
-    } else {
-        "documented panic"
-    };
-    let edge = graph.edge(edge_id);
-    let summary = function.summary();
-    let message = format!("function `{root}` may panic through a cached dependency {panic_kind}");
-    finding_diagnostic(Some(edge.span), message, |diag| {
-        diag.note(format!(
-            "`{}` has cached {panic_kind} evidence",
-            summary.path
-        ));
-        add_trace_notes(diag, tcx, graph, local_trace, show_full_stack_trace);
-        if show_full_stack_trace {
-            add_cached_trace_notes(diag, function, cached_finding, |kind| {
-                matches!(
-                    kind,
-                    CachedFindingKind::PanicObligation {}
-                        | CachedFindingKind::TrustedPanicObligation {}
-                )
-            });
-        }
-        diag.span_help(
-            edge.span,
-            "add `// PANIC:` directly above this call explaining why the dependency's documented panic conditions cannot occur",
-        );
-        diag.span_help(
-            tcx.def_span(root_def_id),
-            "document when this function may panic with `/// # Panics` here",
-        );
-        diag.help("ensure the dependency's panic conditions cannot occur, justify that with `// PANIC:`, or document when the caller may panic with `# Panics`");
-    })
-}
-
-pub(super) fn cached_dependency_raw_panic_diagnostic<'tcx>(
-    tcx: TyCtxt<'tcx>,
-    graph: &ReachabilityGraph<'tcx>,
-    local_trace: &[ReachabilityEdgeId],
-    function: &CachedFunction,
-    cached_finding: Option<&CachedFinding>,
-    diagnostic: CachedDependencyRawPanicDiagnostic,
-) -> FindingDiagnostic {
-    let CachedDependencyRawPanicDiagnostic {
-        edge_id,
-        root_def_id,
-        show_full_stack_trace,
-    } = diagnostic;
-    let root = canonical_namespace(tcx, root_def_id);
-    let summary = function.summary();
-    let message =
-        format!("function `{root}` reaches cached undocumented panic evidence from a dependency");
-    finding_diagnostic(Some(tcx.def_span(root_def_id)), message, |diag| {
-        diag.note(summary.panic_reason(cached_finding));
-        add_cached_dependency_panic_site_notes(diag, tcx, function, cached_finding);
-        add_trace_notes(diag, tcx, graph, local_trace, show_full_stack_trace);
-        if show_full_stack_trace {
-            add_cached_trace_notes(diag, function, cached_finding, |kind| {
-                matches!(
-                    kind,
-                    CachedFindingKind::CompilerAssert { .. }
-                        | CachedFindingKind::PanicInvocation {}
-                        | CachedFindingKind::IndirectCallBoundary {}
-                )
-            });
-        }
-        diag.span_help(
-            graph.edge(edge_id).span,
-            "guard this path, or add `// PANIC:` here if a local invariant proves it cannot panic",
-        );
-        diag.help(
-            "add a guard, document the panic with `# Panics`, or add `// PANIC:` if a local invariant proves it cannot panic",
-        );
-    })
-}
-
-pub(super) fn safety_finding_diagnostic(
-    tcx: TyCtxt<'_>,
-    finding: &SafetyFinding,
-    overrides: &ContractDocOverrides,
-) -> FindingDiagnostic {
-    match finding {
-        SafetyFinding::MissingSafetyDocs { def_id, span } => {
-            let function = canonical_namespace(tcx, *def_id);
-            let message = format!("public unsafe function `{function}` is missing `# Safety` docs");
-            finding_diagnostic(Some(*span), message, |diag| {
-                diag.help("document the caller obligations under a `# Safety` section");
-            })
-        }
-        SafetyFinding::CallMissingJustification {
-            site,
-            callee,
-            call_kind,
-        } => {
-            let caller = canonical_namespace(tcx, site.owner);
-            let target = callee.name(tcx);
-            let call = call_kind.label();
-            let message = format!(
-                "{call} to `{target}` in `{caller}` is missing a `// SAFETY:` justification"
-            );
-            finding_diagnostic(Some(site.span), message, |diag| {
-                add_safety_callee_note(diag, tcx, *callee, overrides);
-                diag.help("add a `// SAFETY:` comment above the unsafe block or call site");
-            })
-        }
-        SafetyFinding::CallMissingRequirements {
-            site,
-            callee,
-            call_kind,
-            missing_requirements,
-        } => {
-            let caller = canonical_namespace(tcx, site.owner);
-            let target = callee.name(tcx);
-            let call = call_kind.label();
-            let message = format!(
-                "{call} to `{target}` in `{caller}` does not satisfy all `# Safety` requirements"
-            );
-            finding_diagnostic(Some(site.span), message, |diag| {
-                add_missing_safety_requirement_notes(
-                    diag,
-                    tcx,
-                    *callee,
-                    overrides,
-                    missing_requirements,
-                );
-            })
-        }
-        SafetyFinding::OpMissingJustification { site, op } => {
-            let caller = canonical_namespace(tcx, site.owner);
-            let operation = op.label();
-            let message = format!(
-                "unsafe operation ({operation}) in `{caller}` is missing a `// SAFETY:` justification"
-            );
-            finding_diagnostic(Some(site.span), message, |diag| {
-                diag.help("add a `// SAFETY:` comment above the unsafe block or operation");
-            })
-        }
-        SafetyFinding::AmbiguousObligationName {
-            caller: _,
-            def_id,
-            normalized_name,
-            requirements,
-        } => {
-            let function = canonical_namespace(tcx, *def_id);
-            let message = format!("`{function}` has an ambiguous `# Safety` requirement name");
-            let primary_span = requirements
-                .first()
-                .map_or_else(|| tcx.def_span(*def_id), |requirement| requirement.span);
-            finding_diagnostic(Some(primary_span), message, |diag| {
-                diag.note(format!(
-                    "multiple `# Safety` requirements normalize to `{normalized_name}`"
-                ));
-                for requirement in requirements {
-                    diag.span_label(
-                        requirement.span,
-                        format!(
-                            "`{}` normalizes to `{normalized_name}`",
-                            requirement.render()
-                        ),
-                    );
-                }
-                diag.help(
-                        "give each requirement a unique name, or set `ambiguous-safety-requirement = \"allow\"` under `[analysis.lints]`",
-                );
-            })
-        }
-        SafetyFinding::AmbiguousMarker {
-            caller,
-            marker_span,
-            effect_spans,
-        } => ambiguous_safety_marker_diagnostic(tcx, *caller, *marker_span, effect_spans),
-    }
-}
-
-pub(super) fn cached_dependency_safety_diagnostic(
-    tcx: TyCtxt<'_>,
-    call_span: Span,
-    summary: &CachedFunctionSummary,
-    finding: &crate::cache::CachedFinding,
-) -> FindingDiagnostic {
-    let message = format!(
-        "call to `{}` reaches cached undocumented safety effects",
-        summary.path
-    );
-    finding_diagnostic(Some(call_span), message, |diag| {
-        if let Some(span) = finding
-            .source_span
-            .as_ref()
-            .and_then(|source_span| cached_source_span(tcx, source_span))
-        {
-            diag.span_note(span, format!("cached safety effect: {}", finding.reason));
-        } else {
-            diag.note(format!(
-                "cached safety effect at {}: {}",
-                finding.span, finding.reason
-            ));
-        }
-    })
-}
-
-fn ambiguous_safety_marker_diagnostic(
-    tcx: TyCtxt<'_>,
-    caller: DefId,
-    marker_span: Span,
-    effect_spans: &[Span],
-) -> FindingDiagnostic {
-    let caller = canonical_namespace(tcx, caller);
-    let message = format!("function `{caller}` has an ambiguous `// SAFETY:` marker");
-    finding_diagnostic(Some(marker_span), message, |diag| {
-        let total = effect_spans.len();
-        for (index, span) in effect_spans.iter().enumerate() {
-            diag.span_note(
-                *span,
-                format!(
-                    "safety effect group {} of {total} resolves to the same marker",
-                    index + 1
-                ),
-            );
-        }
-        diag.help(
-            "give each unsafe block or operation its own marker, or set `ambiguous-safety-marker = \"allow\"` under `[analysis.lints]`",
-        );
-    })
-}
-
-fn add_missing_safety_requirement_notes(
-    diag: &mut dyn LintDiag,
-    tcx: TyCtxt<'_>,
-    callee: SafetyCallee,
-    overrides: &ContractDocOverrides,
-    missing_requirements: &[crate::safety::SafetyRequirement],
-) {
-    add_safety_callee_note(diag, tcx, callee, overrides);
-    for requirement in missing_requirements {
-        diag.note(format!(
-            "missing safety requirement `{}`",
-            requirement.render()
-        ));
-    }
-    diag.help(
-        "add named bullets under the applicable `// SAFETY:` comment for each missing requirement",
-    );
 }
 
 pub(super) fn empty_report_roots_diagnostic(
@@ -769,10 +106,13 @@ pub(super) fn empty_report_roots_diagnostic(
                 .as_ref()
                 .and_then(|file| config_span(file, source_span))
         });
-
-    finding_diagnostic(span, message, |diag| {
-        diag.help("update `[analysis].report-roots` to include functions in the current crate");
-    })
+    FindingDiagnostic {
+        span,
+        message,
+        messages: vec![DiagnosticMessage::Help(
+            "update `[analysis].report-roots` to include functions in the current crate",
+        )],
+    }
 }
 
 pub(super) fn missing_report_root_diagnostic(
@@ -781,19 +121,21 @@ pub(super) fn missing_report_root_diagnostic(
     root: &MissingReportRoot,
 ) -> FindingDiagnostic {
     let source_file = tcx.sess.source_map().load_file(manifest_path).ok();
-    let message = "configured report root was not found";
     let span = source_file
         .as_ref()
         .and_then(|file| config_span(file, root.source_span.clone()));
-    let message = if span.is_some() {
-        String::from(message)
-    } else {
-        format!("{message}: `{}`", root.path)
-    };
-    finding_diagnostic(span, message, |diag| {
-        diag.note(String::from("configured under `[analysis].report-roots`"));
-        diag.help("remove it or update it to a function in the current crate");
-    })
+    let message = span.map_or_else(
+        || format!("configured report root was not found: `{}`", root.path),
+        |_| String::from("configured report root was not found"),
+    );
+    FindingDiagnostic {
+        span,
+        message,
+        messages: vec![
+            DiagnosticMessage::Note(String::from("configured under `[analysis].report-roots`")),
+            DiagnosticMessage::Help("remove it or update it to a function in the current crate"),
+        ],
+    }
 }
 
 fn config_span(file: &rustc_span::SourceFile, source_span: std::ops::Range<usize>) -> Option<Span> {
@@ -805,10 +147,6 @@ fn config_span(file: &rustc_span::SourceFile, source_span: std::ops::Range<usize
     ))
 }
 
-/// Maps a byte offset in the on-disk manifest to the offset in rustc's
-/// normalized source, which strips a UTF-8 BOM and the CR bytes of CRLF
-/// pairs. TOML spans are raw-file offsets, so they drift on CRLF manifests
-/// without this adjustment.
 fn normalized_offset(file: &rustc_span::SourceFile, original: usize) -> Option<u32> {
     let original = u32::try_from(original).ok()?;
     let diff = file
@@ -820,116 +158,46 @@ fn normalized_offset(file: &rustc_span::SourceFile, original: usize) -> Option<u
     Some(original - diff)
 }
 
-fn add_safety_callee_note(
-    diag: &mut dyn LintDiag,
-    tcx: TyCtxt<'_>,
-    callee: SafetyCallee,
-    overrides: &ContractDocOverrides,
-) {
-    if let SafetyCallee::Def(def_id) = callee
-        && crate::safety::has_safety_docs(tcx, def_id, overrides)
-    {
-        diag.span_note(
-            tcx.def_span(def_id),
-            format!(
-                "`{}` documents `# Safety` here",
-                canonical_namespace(tcx, def_id)
-            ),
-        );
-    }
-}
-
-fn add_trace_notes<'tcx>(
-    diag: &mut dyn LintDiag,
-    tcx: TyCtxt<'tcx>,
-    graph: &ReachabilityGraph<'tcx>,
-    edge_ids: &[ReachabilityEdgeId],
-    show_full_stack_trace: bool,
-) {
-    if edge_ids.is_empty() {
-        return;
-    }
-
-    if show_full_stack_trace {
-        for (index, edge_id) in edge_ids.iter().enumerate() {
-            let edge = graph.edge(*edge_id);
-            diag.span_note(
-                edge.span,
-                format!(
-                    "reachable step {index}: {}",
-                    render_edge_without_span(tcx, graph, edge)
-                ),
-            );
-        }
-    } else if edge_ids.len() > 1 {
-        let first = graph.edge(edge_ids[0]);
-        let last = graph.edge(*edge_ids.last().expect("trace is non-empty"));
-        diag.note(format!(
-            "reachable from {} to {}",
-            render_trace_endpoint(tcx, &graph.node(first.source).kind),
-            render_trace_endpoint(tcx, &graph.node(last.target).kind)
-        ));
-        diag.note(String::from(
-            "set `show-full-stack-trace = true` under `[analysis]` in sniff-test.toml to show every reachability step",
-        ));
-    }
-}
-
-fn panic_trigger_note<'tcx>(
-    tcx: TyCtxt<'tcx>,
-    graph: &ReachabilityGraph<'tcx>,
-    evidence: &PanicEvidence,
-) -> String {
-    match evidence.kind {
-        PanicEvidenceKind::CompilerAssert { .. } => {
-            let target = &graph.node(graph.edge(evidence.edge_id).target).kind;
-            if let ReachabilityNodeKind::CompilerAssert { message, locals } = target {
-                format!(
-                    "compiler assertion: {}",
-                    render_assert_message(message, locals)
-                )
-            } else {
-                format!("compiler assertion: {}", render_node(tcx, target))
-            }
-        }
-        PanicEvidenceKind::PanicSink { def_id } => {
-            format!("panic sink `{}`", canonical_namespace(tcx, def_id))
-        }
-        PanicEvidenceKind::PanicObligation { def_id } => {
-            let target = canonical_namespace(tcx, def_id);
-            format!("documented panic behavior of `{target}`")
-        }
-        PanicEvidenceKind::IndirectBoundary {
-            def_id: Some(def_id),
-        } => {
-            format!(
-                "indirect call to undocumented trait method `{}`",
-                canonical_namespace(tcx, def_id)
-            )
-        }
-        PanicEvidenceKind::IndirectBoundary { def_id: None } => {
-            String::from("indirect call through an opaque callable")
-        }
-    }
-}
-
-fn render_trace_endpoint<'tcx>(tcx: TyCtxt<'tcx>, node: &ReachabilityNodeKind<'tcx>) -> String {
-    let rendered = render_node(tcx, node);
-    if matches!(node, ReachabilityNodeKind::CompilerAssert { .. }) {
-        rendered
-    } else {
-        format!("`{rendered}`")
-    }
-}
-
 #[cfg(test)]
 mod tests {
-    use crate::cache::CachedSourceSpan;
-
     use rustc_span::source_map::{FilePathMapping, SourceMap};
-    use rustc_span::{BytePos, FileName};
+    use rustc_span::{BytePos, FileName, Span};
 
-    use super::{cached_source_span_in_file, config_span};
+    use super::{LintDiag, config_span, decorate};
+    use crate::cli::findings::DiagnosticMessage;
+
+    #[derive(Default)]
+    struct RecordedDiagnostic {
+        decorations: Vec<String>,
+    }
+
+    impl LintDiag for RecordedDiagnostic {
+        fn note(&mut self, note: String) {
+            self.decorations.push(format!("note:{note}"));
+        }
+
+        fn span_note(&mut self, span: Span, note: String) {
+            self.decorations
+                .push(format!("span-note:{}..{}:{note}", span.lo().0, span.hi().0));
+        }
+
+        fn span_label(&mut self, span: Span, label: String) {
+            self.decorations.push(format!(
+                "span-label:{}..{}:{label}",
+                span.lo().0,
+                span.hi().0
+            ));
+        }
+
+        fn span_help(&mut self, span: Span, help: &'static str) {
+            self.decorations
+                .push(format!("span-help:{}..{}:{help}", span.lo().0, span.hi().0));
+        }
+
+        fn help(&mut self, help: &'static str) {
+            self.decorations.push(format!("help:{help}"));
+        }
+    }
 
     fn with_source_file(source: &str, check: impl FnOnce(&rustc_span::SourceFile)) {
         rustc_span::create_default_session_globals_then(|| {
@@ -945,72 +213,53 @@ mod tests {
     #[test]
     fn converts_config_byte_range_to_source_span() {
         with_source_file("key = \"value\"\n", |file| {
-            let span = config_span(file, 6..13).expect("span should fit in u32");
-
+            let span = config_span(file, 6..13).expect("span should fit");
             assert_eq!(span.lo(), file.start_pos + BytePos(6));
             assert_eq!(span.hi(), file.start_pos + BytePos(13));
         });
     }
 
     #[test]
-    fn crlf_manifest_offsets_account_for_stripped_carriage_returns() {
-        // Raw file: `a = 1\r\nkey = "value"\r\n`; toml reports raw offsets,
-        // rustc's normalized source has the CR bytes removed.
+    fn crlf_manifest_offsets_account_for_normalization() {
         with_source_file("a = 1\r\nkey = \"value\"\r\n", |file| {
-            let span = config_span(file, 13..20).expect("span should fit in u32");
-
+            let span = config_span(file, 13..20).expect("span should fit");
             assert_eq!(span.lo(), file.start_pos + BytePos(12));
             assert_eq!(span.hi(), file.start_pos + BytePos(19));
         });
     }
 
     #[test]
-    fn bom_prefixed_manifest_offsets_account_for_stripped_bom() {
+    fn bom_manifest_offsets_account_for_normalization() {
         with_source_file("\u{feff}key = \"value\"\n", |file| {
-            let span = config_span(file, 9..16).expect("span should fit in u32");
-
+            let span = config_span(file, 9..16).expect("span should fit");
             assert_eq!(span.lo(), file.start_pos + BytePos(6));
             assert_eq!(span.hi(), file.start_pos + BytePos(13));
         });
     }
 
     #[test]
-    fn converts_cached_line_columns_to_source_span() {
-        with_source_file("first\nsecond\n", |file| {
-            let span = cached_source_span_in_file(
-                file,
-                &CachedSourceSpan {
-                    file: String::from("unused.rs"),
-                    line_start: 2,
-                    column_start: 2,
-                    line_end: 2,
-                    column_end: 5,
-                },
-            )
-            .expect("span should resolve");
+    fn finding_decorations_preserve_spanned_notes_labels_and_help() {
+        let span = Span::with_root_ctxt(BytePos(10), BytePos(20));
+        let messages = [
+            DiagnosticMessage::Note(String::from("plain")),
+            DiagnosticMessage::SpanNote(span, String::from("site")),
+            DiagnosticMessage::SpanLabel(span, String::from("requirement")),
+            DiagnosticMessage::SpanHelp(span, "fix here"),
+            DiagnosticMessage::Help("general fix"),
+        ];
+        let mut diagnostic = RecordedDiagnostic::default();
 
-            assert_eq!(span.lo(), file.start_pos + BytePos(7));
-            assert_eq!(span.hi(), file.start_pos + BytePos(10));
-        });
-    }
+        decorate(&mut diagnostic, &messages);
 
-    #[test]
-    fn cached_line_columns_are_character_based() {
-        with_source_file("αβγ\n", |file| {
-            let span = cached_source_span_in_file(
-                file,
-                &CachedSourceSpan {
-                    file: String::from("unused.rs"),
-                    line_start: 1,
-                    column_start: 2,
-                    line_end: 1,
-                    column_end: 3,
-                },
-            )
-            .expect("span should resolve");
-
-            assert_eq!(span.lo(), file.start_pos + BytePos(2));
-            assert_eq!(span.hi(), file.start_pos + BytePos(4));
-        });
+        assert_eq!(
+            diagnostic.decorations,
+            [
+                "note:plain",
+                "span-note:10..20:site",
+                "span-label:10..20:requirement",
+                "span-help:10..20:fix here",
+                "help:general fix",
+            ]
+        );
     }
 }

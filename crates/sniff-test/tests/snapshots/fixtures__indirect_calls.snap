@@ -19,7 +19,7 @@ expression: messages
         "span": "src/lib.rs:11:5: 11:27",
         "target": "indirect_calls::Risky::documented",
         "trace": [
-          "src/lib.rs:11:5: 11:27: indirect_calls::call_documented --indirect-call-> indirect call FnDef(DefId(0:4 ~ indirect_calls[8a0a]::Risky::documented), [T/#0])"
+          "src/lib.rs:11:5: 11:27: indirect_calls::call_documented --indirect-call-> indirect_calls::Risky::documented"
         ]
       },
       {
@@ -54,14 +54,13 @@ expression: messages
         "span": "src/lib.rs:15:5: 15:29",
         "target": "indirect_calls::Risky::undocumented",
         "trace": [
-          "src/lib.rs:15:5: 15:29: indirect_calls::call_undocumented --indirect-call-> indirect call FnDef(DefId(0:5 ~ indirect_calls[8a0a]::Risky::undocumented), [T/#0])"
+          "src/lib.rs:15:5: 15:29: indirect_calls::call_undocumented --indirect-call-> indirect_calls::Risky::undocumented"
         ]
       }
     ],
-    "format-version": 10,
+    "format-version": 11,
     "reason": "sniff-test-artifact",
     "rustc-version": "[RUSTC_VERSION]",
-    "scope": "workspace",
     "tool-version": "0.1.0"
   }
 ]

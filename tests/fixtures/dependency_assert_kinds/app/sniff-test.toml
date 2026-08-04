@@ -1,6 +1,5 @@
 [panics.lints]
 compiler-assert = "allow"
-cached-dependency-panic = "allow"
 compiler-assert-division-by-zero = "deny"
 compiler-assert-bounds-check = "allow"
 panic-invocation = "allow"

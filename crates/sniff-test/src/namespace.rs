@@ -17,11 +17,11 @@ use std::collections::HashMap;
 use std::fmt;
 
 use rustc_data_structures::fingerprint::Fingerprint;
-use rustc_data_structures::stable_hasher::ToStableHashKey;
+use rustc_data_structures::stable_hasher::{HashStable, StableHasher, ToStableHashKey};
 use rustc_hir::def::DefKind;
 use rustc_hir::def_id::DefId;
 use rustc_middle::mono::MonoItem;
-use rustc_middle::ty::{Instance, TyCtxt};
+use rustc_middle::ty::{Instance, Ty, TyCtxt};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 // The driver runs one rustc session per process and the analysis is
@@ -100,6 +100,33 @@ impl fmt::Display for StableInstanceHash {
     }
 }
 
+/// Session-independent identity for one monomorphized Rust type.
+///
+/// Callable call-site attribution uses this for function-pointer signatures so
+/// raw erasure and invocation facts can be matched after artifact IR is loaded
+/// into a different compiler session.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct StableTypeHash(StableHash);
+
+impl StableTypeHash {
+    #[must_use]
+    pub fn from_ty<'tcx>(tcx: TyCtxt<'tcx>, ty: Ty<'tcx>) -> Self {
+        let fingerprint = tcx.with_stable_hashing_context(|mut hcx| {
+            let mut hasher = StableHasher::new();
+            ty.hash_stable(&mut hcx, &mut hasher);
+            hasher.finish::<Fingerprint>()
+        });
+        Self(StableHash::from_fingerprint(fingerprint))
+    }
+}
+
+impl fmt::Display for StableTypeHash {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.0.fmt(formatter)
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 struct StableHash {
     first: u64,
@@ -109,6 +136,11 @@ struct StableHash {
 impl StableHash {
     const fn from_parts(first: u64, second: u64) -> Self {
         Self { first, second }
+    }
+
+    fn from_fingerprint(fingerprint: Fingerprint) -> Self {
+        let (first, second) = fingerprint.split();
+        Self::from_parts(first.as_u64(), second.as_u64())
     }
 
     fn from_hex(value: &str) -> Option<Self> {

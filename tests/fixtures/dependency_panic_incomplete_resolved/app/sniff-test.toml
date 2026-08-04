@@ -13,8 +13,5 @@ panic-sink-namespaces = [
     "std::rt::panic_fmt",
 ]
 
-[panics.lints]
-cached-dependency-panic = "deny"
-
 [safety]
 ignored-namespaces = ["**"]

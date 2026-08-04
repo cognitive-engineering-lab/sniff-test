@@ -7,7 +7,6 @@
 use std::collections::HashSet;
 use std::ops::Range;
 
-use reachability::ReachabilityRoot;
 use rustc_hir::def::DefKind;
 use rustc_hir::def_id::{DefId, LocalDefId};
 use rustc_middle::ty::{Instance, TyCtxt};
@@ -40,20 +39,12 @@ pub enum ReportRoot<'tcx> {
     Generic { local: LocalDefId },
 }
 
-impl<'tcx> ReportRoot<'tcx> {
+impl ReportRoot<'_> {
     #[must_use]
     pub fn def_id(self) -> DefId {
         match self {
             Self::Concrete { instance } => instance.def_id(),
             Self::Generic { local } => local.to_def_id(),
-        }
-    }
-
-    #[must_use]
-    pub fn reachability_root(self) -> ReachabilityRoot<'tcx> {
-        match self {
-            Self::Concrete { instance, .. } => ReachabilityRoot::Instance(instance),
-            Self::Generic { local } => ReachabilityRoot::LocalBody(local),
         }
     }
 

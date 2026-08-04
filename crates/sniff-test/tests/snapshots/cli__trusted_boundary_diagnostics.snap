@@ -7,14 +7,6 @@ stdout:
 <empty>
 stderr:
     Checking trusted-boundaries v0.1.0 ([FIXTURE])
-warning: unsafe call to `unsafe function pointer` in `trusted_boundaries::trusted_unsafe_through_fn_pointer` is missing a `// SAFETY:` justification
-  --> src/lib.rs:33:14
-   |
-33 |     unsafe { helper() }
-   |              ^^^^^^^^
-   |
-   = help: add a `// SAFETY:` comment above the unsafe block or call site
-
 warning: function `trusted_boundaries::trusted_through_fn_pointer` reaches an unverifiable indirect call
   --> src/lib.rs:22:1
    |
@@ -41,13 +33,21 @@ note: panic behavior cannot be verified here: indirect call through an opaque ca
    |              ^^^^^^^^
    = help: document this boundary with `# Panics`, add `// PANIC:` only if every possible callee is locally constrained, or configure `indirect-call-boundary` if this opacity is acceptable
 
+warning: unsafe call to `unsafe function pointer` in `trusted_boundaries::trusted_unsafe_through_fn_pointer` is missing a `// SAFETY:` justification
+  --> src/lib.rs:33:14
+   |
+33 |     unsafe { helper() }
+   |              ^^^^^^^^
+   |
+   = help: add a `// SAFETY:` comment above the unsafe block or call site
+
 warning: function `trusted_boundaries::trusted_with_docs` may panic through a trusted panic
   --> src/lib.rs:6:5
    |
  6 |     trusted_doc_helper(flag);
    |     ^^^^^^^^^^^^^^^^^^^^^^^^
    |
-note: the reached callee `trusted_boundaries::trusted_doc_helper` documents `# Panics` here
+note: `trusted_boundaries::trusted_doc_helper` documents `# Panics` here
   --> src/lib.rs:16:1
    |
 16 | fn trusted_doc_helper(flag: bool) {

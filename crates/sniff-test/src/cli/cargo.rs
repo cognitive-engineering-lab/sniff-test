@@ -2,12 +2,15 @@
 
 use std::path::Path;
 use std::process::{Command, ExitCode};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::config::EXAMPLE_MANIFEST;
 use anyhow::{Context, Result, bail};
 
 use super::args::{self, FrontendAction, FrontendCli, InitCliArgs, SniffTestArgs};
-use super::plugin::{SNIFF_TEST_ARGS_ENV, frontend_args, modify_cargo, validate_manifest};
+use super::plugin::{
+    SNIFF_TEST_ARGS_ENV, SNIFF_TEST_RUN_ID_ENV, frontend_args, modify_cargo, validate_manifest,
+};
 
 #[must_use]
 pub fn cargo_frontend() -> ExitCode {
@@ -71,12 +74,23 @@ fn try_cargo_frontend() -> Result<ExitCode> {
         SNIFF_TEST_ARGS_ENV,
         serde_json::to_string(&args).context("failed to encode driver arguments")?,
     );
+    // The workspace callback records this value in rustc dep-info. Changing it
+    // makes Cargo rerun report-producing workspace units so each invocation
+    // validates and reinterprets cached IR; dependency units never record it.
+    cargo.env(SNIFF_TEST_RUN_ID_ENV, workspace_run_id());
     modify_cargo(&mut cargo, &args)?;
     let status = cargo.status().context("failed to run Cargo")?;
     let Some(code) = status.code() else {
         return Ok(ExitCode::FAILURE);
     };
     Ok(ExitCode::from(u8::try_from(code).unwrap_or(1)))
+}
+
+fn workspace_run_id() -> String {
+    let elapsed = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default();
+    format!("{}-{}", std::process::id(), elapsed.as_nanos())
 }
 
 fn run_init(args: &InitCliArgs) -> Result<ExitCode> {

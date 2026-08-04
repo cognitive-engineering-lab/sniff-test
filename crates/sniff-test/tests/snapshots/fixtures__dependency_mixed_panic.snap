@@ -6,46 +6,6 @@ expression: messages
   {
     "artifact": {
       "artifact-id": "[ARTIFACT_ID]",
-      "crate-name": "dependency_mixed_panic"
-    },
-    "dependencies": [],
-    "findings": [
-      {
-        "kind": "trusted-panic",
-        "level": "warn",
-        "reason": "dependency_mixed_panic::documented documents when it may panic under # Panics",
-        "root": "dependency_mixed_panic::mixed",
-        "root-kind": "concrete",
-        "span": "[FIXTURE]/dep/src/lib.rs:9:5: 9:17",
-        "target": "dependency_mixed_panic::documented",
-        "trace": [
-          "[FIXTURE]/dep/src/lib.rs:9:5: 9:17: dependency_mixed_panic::mixed --direct-call-> dependency_mixed_panic::documented"
-        ]
-      },
-      {
-        "kind": "panic-invocation",
-        "level": "deny",
-        "reason": "panic sink core::std::rt::panic_fmt",
-        "root": "dependency_mixed_panic::mixed",
-        "root-kind": "concrete",
-        "span": "[FIXTURE]/dep/src/lib.rs:10:5: 10:27",
-        "target": "core::std::rt::panic_fmt",
-        "trace": [
-          "[FIXTURE]/dep/src/lib.rs:10:5: 10:27: dependency_mixed_panic::mixed --macro-expansion-> macro std::panic",
-          "[FIXTURE]/dep/src/lib.rs:10:5: 10:27: macro std::panic --macro-expansion-> macro core::std::panic::panic_2021",
-          "[SYSROOT]/lib/rustlib/src/rust/library/core/src/panic.rs:62:9: 62:73: macro core::std::panic::panic_2021 --direct-call-> core::std::rt::panic_fmt"
-        ]
-      }
-    ],
-    "format-version": 10,
-    "reason": "sniff-test-artifact",
-    "rustc-version": "[RUSTC_VERSION]",
-    "scope": "dependency",
-    "tool-version": "0.1.0"
-  },
-  {
-    "artifact": {
-      "artifact-id": "[ARTIFACT_ID]",
       "crate-name": "dependency_mixed_panic_app"
     },
     "dependencies": [
@@ -56,40 +16,37 @@ expression: messages
     ],
     "findings": [
       {
-        "effect-span": "[FIXTURE]/dep/src/lib.rs:10:5: 10:27",
-        "kind": "cached-dependency-panic",
-        "level": "deny",
-        "reason": "dependency_mixed_panic::mixed has cached panic evidence: panic sink core::std::rt::panic_fmt",
+        "kind": "trusted-panic",
+        "level": "warn",
+        "reason": "dependency_mixed_panic::documented documents when it may panic under # Panics",
         "root": "dependency_mixed_panic_app::call_mixed",
         "root-kind": "concrete",
-        "span": "src/lib.rs:2:5: 2:36",
-        "target": "dependency_mixed_panic::mixed",
+        "span": "[FIXTURE]/dep/src/lib.rs:9:5: 9:17",
+        "target": "dependency_mixed_panic::documented",
+        "trace": [
+          "src/lib.rs:2:5: 2:36: dependency_mixed_panic_app::call_mixed --direct-call-> dependency_mixed_panic::mixed",
+          "[FIXTURE]/dep/src/lib.rs:9:5: 9:17: dependency_mixed_panic::mixed --direct-call-> dependency_mixed_panic::documented"
+        ]
+      },
+      {
+        "kind": "panic-invocation",
+        "level": "deny",
+        "reason": "panic sink core::std::rt::panic_fmt",
+        "root": "dependency_mixed_panic_app::call_mixed",
+        "root-kind": "concrete",
+        "span": "[FIXTURE]/dep/src/lib.rs:10:5: 10:27",
+        "target": "core::std::rt::panic_fmt",
         "trace": [
           "src/lib.rs:2:5: 2:36: dependency_mixed_panic_app::call_mixed --direct-call-> dependency_mixed_panic::mixed",
           "[FIXTURE]/dep/src/lib.rs:10:5: 10:27: dependency_mixed_panic::mixed --macro-expansion-> macro std::panic",
           "[FIXTURE]/dep/src/lib.rs:10:5: 10:27: macro std::panic --macro-expansion-> macro core::std::panic::panic_2021",
           "[SYSROOT]/lib/rustlib/src/rust/library/core/src/panic.rs:62:9: 62:73: macro core::std::panic::panic_2021 --direct-call-> core::std::rt::panic_fmt"
         ]
-      },
-      {
-        "effect-span": "[FIXTURE]/dep/src/lib.rs:9:5: 9:17",
-        "kind": "trusted-panic",
-        "level": "warn",
-        "reason": "dependency_mixed_panic::mixed has cached trusted panic evidence",
-        "root": "dependency_mixed_panic_app::call_mixed",
-        "root-kind": "concrete",
-        "span": "src/lib.rs:2:5: 2:36",
-        "target": "dependency_mixed_panic::mixed",
-        "trace": [
-          "src/lib.rs:2:5: 2:36: dependency_mixed_panic_app::call_mixed --direct-call-> dependency_mixed_panic::mixed",
-          "[FIXTURE]/dep/src/lib.rs:9:5: 9:17: dependency_mixed_panic::mixed --direct-call-> dependency_mixed_panic::documented"
-        ]
       }
     ],
-    "format-version": 10,
+    "format-version": 11,
     "reason": "sniff-test-artifact",
     "rustc-version": "[RUSTC_VERSION]",
-    "scope": "workspace",
     "tool-version": "0.1.0"
   }
 ]

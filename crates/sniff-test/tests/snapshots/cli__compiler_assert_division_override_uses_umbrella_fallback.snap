@@ -13,7 +13,7 @@ error: function `panic_axioms::division` has an undocumented panic path
 1 | pub fn division(total_size: usize, block_count: usize) -> usize {
   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
   |
-note: panic may happen here: compiler assertion: attempt to divide `total_size` (_1, argument 1) by zero
+note: panic may happen here: compiler assertion: division by zero
  --> src/lib.rs:2:5
   |
 2 |     total_size / block_count

@@ -31,6 +31,16 @@ error: unsafe operation (extern static access) in `unsafe_ops::extern_static_unj
    |
    = help: add a `// SAFETY:` comment above the unsafe block or operation
 
+error: unsafe operation (raw pointer dereference) in `unsafe_ops::macro_deref_unjustified` is missing a `// SAFETY:` justification
+  --> src/lib.rs:73:5
+   |
+73 |     nested_deref_in_macro!(ptr)
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   |
+   = help: add a `// SAFETY:` comment above the unsafe block or operation
+   = note: reachable from `unsafe_ops::macro_deref_unjustified` to `unsafe operation (raw pointer dereference)`
+   = note: set `show-full-stack-trace = true` under `[analysis]` in sniff-test.toml to show every reachability step
+
 error: unsafe operation (mutable static access) in `unsafe_ops::mutable_static_unjustified` is missing a `// SAFETY:` justification
   --> src/lib.rs:27:14
    |
@@ -47,4 +57,4 @@ error: unsafe operation (union field access) in `unsafe_ops::union_read_unjustif
    |
    = help: add a `// SAFETY:` comment above the unsafe block or operation
 
-error: could not compile `unsafe-ops` (lib) due to 5 previous errors
+error: could not compile `unsafe-ops` (lib) due to 6 previous errors

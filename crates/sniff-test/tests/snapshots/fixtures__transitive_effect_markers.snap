@@ -17,13 +17,16 @@ expression: messages
         "reason": "one `// SAFETY:` marker applies to 2 safety effect groups",
         "root": "transitive_effect_markers::justified_safety_path",
         "root-kind": "concrete",
-        "span": "src/lib.rs:17:1: 18:1"
+        "span": "src/lib.rs:17:1: 18:1",
+        "trace": [
+          "src/lib.rs:18:5: 18:26: transitive_effect_markers::justified_safety_path --direct-call-> transitive_effect_markers::safety_inner",
+          "src/lib.rs:11:26: 11:34: transitive_effect_markers::safety_inner --unsafe-operation-> unsafe operation (raw pointer dereference)"
+        ]
       }
     ],
-    "format-version": 10,
+    "format-version": 11,
     "reason": "sniff-test-artifact",
     "rustc-version": "[RUSTC_VERSION]",
-    "scope": "workspace",
     "tool-version": "0.1.0"
   }
 ]

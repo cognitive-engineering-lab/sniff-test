@@ -11,16 +11,6 @@ expression: messages
     "dependencies": [],
     "findings": [
       {
-        "function": "trusted_boundaries::trusted_unsafe_through_fn_pointer",
-        "kind": "unsafe-call-missing-justification",
-        "level": "warn",
-        "reason": "unsafe call to `unsafe function pointer` has no `// SAFETY:` justification",
-        "root": "trusted_boundaries::trusted_unsafe_through_fn_pointer",
-        "root-kind": "concrete",
-        "span": "[FIXTURE]/src/lib.rs:33:14: 33:22",
-        "target": "unsafe function pointer"
-      },
-      {
         "kind": "indirect-call-boundary",
         "level": "warn",
         "reason": "indirect call through an opaque callable cannot be verified",
@@ -43,6 +33,19 @@ expression: messages
         ]
       },
       {
+        "function": "trusted_boundaries::trusted_unsafe_through_fn_pointer",
+        "kind": "unsafe-call-missing-justification",
+        "level": "warn",
+        "reason": "unsafe call to `unsafe function pointer` has no `// SAFETY:` justification",
+        "root": "trusted_boundaries::trusted_unsafe_through_fn_pointer",
+        "root-kind": "concrete",
+        "span": "[FIXTURE]/src/lib.rs:33:14: 33:22",
+        "target": "unsafe function pointer",
+        "trace": [
+          "[FIXTURE]/src/lib.rs:33:14: 33:22: trusted_boundaries::trusted_unsafe_through_fn_pointer --indirect-call-> indirect call Binder { value: unsafe fn(), bound_vars: [] }"
+        ]
+      },
+      {
         "kind": "trusted-panic",
         "level": "warn",
         "reason": "trusted_boundaries::trusted_doc_helper documents when it may panic under # Panics",
@@ -55,10 +58,9 @@ expression: messages
         ]
       }
     ],
-    "format-version": 10,
+    "format-version": 11,
     "reason": "sniff-test-artifact",
     "rustc-version": "[RUSTC_VERSION]",
-    "scope": "workspace",
     "tool-version": "0.1.0"
   }
 ]

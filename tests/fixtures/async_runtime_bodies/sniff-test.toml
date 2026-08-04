@@ -1,0 +1,24 @@
+[compiler]
+inline-mir = "off"
+
+[analysis]
+report-roots = [
+    "async_runtime_bodies::async_root",
+    "async_runtime_bodies::generic_async_root",
+    "async_runtime_bodies::nested_async_runtime_bodies",
+    "async_runtime_bodies::unused_async_closure",
+]
+
+[panics]
+panic-sink-namespaces = [
+    "core::panicking::**",
+    "std::panicking::**",
+    "core::std::rt::panic_fmt",
+    "std::rt::panic_fmt",
+]
+
+[panics.lints]
+compiler-assert = "allow"
+
+[safety.lints]
+unsafe-call-missing-justification = "deny"

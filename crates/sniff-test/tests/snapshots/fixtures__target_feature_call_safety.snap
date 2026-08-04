@@ -1,0 +1,32 @@
+---
+source: crates/sniff-test/tests/fixtures.rs
+expression: messages
+---
+[
+  {
+    "artifact": {
+      "artifact-id": "[ARTIFACT_ID]",
+      "crate-name": "target_feature_call_safety"
+    },
+    "dependencies": [],
+    "findings": [
+      {
+        "function": "target_feature_call_safety::ordinary_caller",
+        "kind": "unsafe-call-missing-justification",
+        "level": "deny",
+        "reason": "unsafe call to `target_feature_call_safety::target_feature_callee` has no `// SAFETY:` justification",
+        "root": "target_feature_call_safety::ordinary_caller",
+        "root-kind": "concrete",
+        "span": "src/lib.rs:27:9: 27:32",
+        "target": "target_feature_call_safety::target_feature_callee",
+        "trace": [
+          "src/lib.rs:27:9: 27:32: target_feature_call_safety::ordinary_caller --direct-call-> target_feature_call_safety::target_feature_callee"
+        ]
+      }
+    ],
+    "format-version": 11,
+    "reason": "sniff-test-artifact",
+    "rustc-version": "[RUSTC_VERSION]",
+    "tool-version": "0.1.0"
+  }
+]

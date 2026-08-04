@@ -13,11 +13,7 @@ warning: function `indirect_calls::call_documented` may panic through a document
 11 |     value.documented(flag);
    |     ^^^^^^^^^^^^^^^^^^^^^^
    |
-note: the reached callee `indirect_calls::Risky::documented` documents `# Panics` here
-  --> src/lib.rs:5:5
-   |
- 5 |     fn documented(&self, flag: bool);
-   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   = note: `indirect_calls::Risky::documented` documents `# Panics` here
 help: add `// PANIC:` directly above this call explaining why its documented panic conditions cannot occur
   --> src/lib.rs:11:5
    |

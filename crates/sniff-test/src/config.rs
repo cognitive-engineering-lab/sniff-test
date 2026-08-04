@@ -23,13 +23,11 @@ use reachability::{
     DynDispatchVTableEdges as ReachabilityDynDispatchVTableEdges,
     FnPointerEdges as ReachabilityFnPointerEdges,
 };
-use rustc_hir::def_id::DefId;
-use rustc_middle::ty::TyCtxt;
 use serde::{Deserialize, Deserializer, Serialize};
 use toml::Spanned;
 
 use crate::contracts::ContractDocOverrides;
-use crate::path_patterns::{PathPatternMatch, PathPatterns};
+use crate::path_patterns::PathPatterns;
 
 pub const DEFAULT_MANIFEST_FILE: &str = "sniff-test.toml";
 pub const EXAMPLE_MANIFEST: &str = include_str!("../example-manifest.toml");
@@ -37,6 +35,8 @@ pub const EXAMPLE_MANIFEST: &str = include_str!("../example-manifest.toml");
 #[derive(Debug, Default, Clone, PartialEq, Eq, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct SniffTestConfig {
+    #[serde(default)]
+    pub compiler: CompilerConfig,
     #[serde(default)]
     pub analysis: AnalysisConfig,
     #[serde(default)]
@@ -90,10 +90,24 @@ impl SniffTestConfig {
         self.panics.documentation_overrides = self.documentation.overrides.clone();
         self.safety.documentation_overrides = self.documentation.overrides.clone();
     }
+}
 
-    #[must_use]
-    pub(crate) fn all_effects_ignore_namespace(&self, namespace: &str) -> bool {
-        self.safety.ignores_namespace(namespace) && self.panics.ignores_namespace(namespace)
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "kebab-case", deny_unknown_fields)]
+#[serde(default)]
+pub struct CompilerConfig {
+    /// Whether rustc should emit integer overflow and invalid-shift checks.
+    pub overflow_checks: OverflowChecks,
+    /// Whether rustc should perform MIR inlining before analysis.
+    pub inline_mir: MirInlining,
+}
+
+impl Default for CompilerConfig {
+    fn default() -> Self {
+        Self {
+            overflow_checks: OverflowChecks::Profile,
+            inline_mir: MirInlining::Off,
+        }
     }
 }
 
@@ -105,10 +119,6 @@ pub struct AnalysisConfig {
     pub show_full_stack_trace: bool,
     /// Current-crate functions selected as report roots.
     pub report_roots: Spanned<ReportRootSet>,
-    /// Whether rustc should emit integer overflow and invalid-shift checks.
-    pub overflow_checks: OverflowChecks,
-    /// Whether rustc should perform MIR inlining before analysis.
-    pub inline_mir: MirInlining,
     /// Where concrete callable targets should appear once erased behind dyn
     /// dispatch or function pointers.
     pub callable_edge_attribution: CallableEdgeAttribution,
@@ -117,8 +127,8 @@ pub struct AnalysisConfig {
     pub marker_probing: MarkerProbing,
     /// User-facing severity for analyzer-wide finding classes.
     pub lints: AnalysisLintConfig,
-    /// Instance budget per reachability query; halting at the limit is
-    /// surfaced through the effect-specific analysis-incomplete lint.
+    /// Distinct function-state budget per interpretation traversal; halting at
+    /// the limit is surfaced through the effect-specific incomplete lint.
     pub node_limit: usize,
 }
 
@@ -218,8 +228,6 @@ impl Default for AnalysisConfig {
         Self {
             show_full_stack_trace: false,
             report_roots: Spanned::new(0..0, ReportRootSet::Public),
-            overflow_checks: OverflowChecks::Profile,
-            inline_mir: MirInlining::Off,
             callable_edge_attribution: CallableEdgeAttribution::ErasureSites,
             marker_probing: MarkerProbing::MacroDefinitionFirst,
             lints: AnalysisLintConfig::default(),
@@ -465,7 +473,6 @@ pub struct PanicLintConfig {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub compiler_assert_invalid_enum_construction: Option<LintLevel>,
     pub panic_invocation: LintLevel,
-    pub cached_dependency_panic: LintLevel,
     pub documented_panic: LintLevel,
     pub trusted_panic: LintLevel,
     pub indirect_call_boundary: LintLevel,
@@ -487,7 +494,6 @@ impl Default for PanicLintConfig {
             compiler_assert_null_pointer_dereference: None,
             compiler_assert_invalid_enum_construction: None,
             panic_invocation: LintLevel::Deny,
-            cached_dependency_panic: LintLevel::Deny,
             documented_panic: LintLevel::Warn,
             trusted_panic: LintLevel::Warn,
             indirect_call_boundary: LintLevel::Warn,
@@ -585,30 +591,25 @@ impl Default for SafetyLintConfig {
 
 impl PanicConfig {
     #[must_use]
+    pub(crate) fn ignores_candidates(&self, candidates: &[String]) -> bool {
+        self.ignored_namespaces
+            .matching_candidates_pattern(candidates)
+            .is_some()
+    }
+
+    #[must_use]
+    #[cfg(test)]
     pub fn ignores_namespace(&self, namespace: &str) -> bool {
         self.ignored_namespace_match(namespace).is_some()
     }
 
     #[must_use]
+    #[cfg(test)]
     pub fn ignored_namespace_match<'patterns>(
         &'patterns self,
         namespace: &str,
     ) -> Option<&'patterns str> {
         self.ignored_namespaces.matching_pattern(namespace)
-    }
-
-    #[must_use]
-    pub fn ignores_def(&self, tcx: TyCtxt<'_>, def_id: DefId) -> bool {
-        self.ignored_def_match(tcx, def_id).is_some()
-    }
-
-    #[must_use]
-    pub fn ignored_def_match<'patterns>(
-        &'patterns self,
-        tcx: TyCtxt<'_>,
-        def_id: DefId,
-    ) -> Option<&'patterns str> {
-        self.ignored_namespaces.matching_def_pattern(tcx, def_id)
     }
 
     #[must_use]
@@ -624,10 +625,14 @@ impl PanicConfig {
     }
 
     #[must_use]
-    pub fn panic_boundary_policy(&self, tcx: TyCtxt<'_>, def_id: DefId) -> PanicBoundaryPolicy {
-        let sink = self.panic_sink_def_match(tcx, def_id);
-        let trusted = self.trusted_panic_boundary_def_match(tcx, def_id);
-
+    pub(crate) fn panic_boundary_policy_candidates(
+        &self,
+        candidates: &[String],
+    ) -> PanicBoundaryPolicy {
+        let sink = self.panic_sink_namespaces.best_candidates_match(candidates);
+        let trusted = self
+            .trusted_panic_boundary_namespaces
+            .best_candidates_match(candidates);
         match (sink, trusted) {
             (Some(sink), Some(trusted)) if trusted.precision > sink.precision => {
                 PanicBoundaryPolicy::TrustedBoundary
@@ -637,47 +642,23 @@ impl PanicConfig {
             (None, None) => PanicBoundaryPolicy::Normal,
         }
     }
-
-    fn panic_sink_def_match(&self, tcx: TyCtxt<'_>, def_id: DefId) -> Option<PathPatternMatch<'_>> {
-        self.panic_sink_namespaces.best_def_match(tcx, def_id)
-    }
-
-    fn trusted_panic_boundary_def_match(
-        &self,
-        tcx: TyCtxt<'_>,
-        def_id: DefId,
-    ) -> Option<PathPatternMatch<'_>> {
-        self.trusted_panic_boundary_namespaces
-            .best_def_match(tcx, def_id)
-    }
 }
 
 impl SafetyConfig {
     #[must_use]
-    pub fn ignores_namespace(&self, namespace: &str) -> bool {
-        self.ignored_namespace_match(namespace).is_some()
+    pub(crate) fn ignores_candidates(&self, candidates: &[String]) -> bool {
+        self.ignored_namespaces
+            .matching_candidates_pattern(candidates)
+            .is_some()
     }
 
     #[must_use]
+    #[cfg(test)]
     pub fn ignored_namespace_match<'patterns>(
         &'patterns self,
         namespace: &str,
     ) -> Option<&'patterns str> {
         self.ignored_namespaces.matching_pattern(namespace)
-    }
-
-    #[must_use]
-    pub fn ignores_def(&self, tcx: TyCtxt<'_>, def_id: DefId) -> bool {
-        self.ignored_def_match(tcx, def_id).is_some()
-    }
-
-    #[must_use]
-    pub fn ignored_def_match<'patterns>(
-        &'patterns self,
-        tcx: TyCtxt<'_>,
-        def_id: DefId,
-    ) -> Option<&'patterns str> {
-        self.ignored_namespaces.matching_def_pattern(tcx, def_id)
     }
 
     #[must_use]
@@ -687,18 +668,10 @@ impl SafetyConfig {
     }
 
     #[must_use]
-    pub fn trusts_safety_boundary_def(&self, tcx: TyCtxt<'_>, def_id: DefId) -> bool {
-        self.trusted_safety_boundary_def_match(tcx, def_id)
-            .is_some()
-    }
-
-    fn trusted_safety_boundary_def_match(
-        &self,
-        tcx: TyCtxt<'_>,
-        def_id: DefId,
-    ) -> Option<PathPatternMatch<'_>> {
+    pub(crate) fn trusts_safety_boundary_candidates(&self, candidates: &[String]) -> bool {
         self.trusted_safety_boundary_namespaces
-            .best_def_match(tcx, def_id)
+            .matching_candidates_pattern(candidates)
+            .is_some()
     }
 }
 
@@ -894,7 +867,7 @@ mod tests {
     use std::path::PathBuf;
 
     use super::{
-        AnalysisConfig, AnalysisLintConfig, CallableEdgeAttribution, ConfigError,
+        AnalysisConfig, AnalysisLintConfig, CallableEdgeAttribution, CompilerConfig, ConfigError,
         ContractDocOverrideFile, ContractDocOverrides, EXAMPLE_MANIFEST, LintLevel, MarkerProbing,
         MirInlining, OverflowChecks, PanicConfig, PathPatterns, ReportRootSet, SafetyConfig,
         SniffTestConfig,
@@ -1037,13 +1010,15 @@ mod tests {
     }
 
     #[test]
-    fn parses_analysis_overflow_checks() {
+    fn parses_compiler_configuration_separately_from_analysis_policy() {
         let config = r#"
+            [compiler]
+            overflow-checks = "on"
+            inline-mir = "profile"
+
             [analysis]
             show-full-stack-trace = true
             report-roots = "all"
-            overflow-checks = "on"
-            inline-mir = "profile"
             callable-edge-attribution = "call-sites"
             marker-probing = "source-callsite"
         "#;
@@ -1052,8 +1027,8 @@ mod tests {
 
         assert!(parsed.analysis.show_full_stack_trace);
         assert_eq!(parsed.analysis.report_roots.get_ref(), &ReportRootSet::All);
-        assert_eq!(parsed.analysis.overflow_checks, OverflowChecks::On);
-        assert_eq!(parsed.analysis.inline_mir, MirInlining::Profile);
+        assert_eq!(parsed.compiler.overflow_checks, OverflowChecks::On);
+        assert_eq!(parsed.compiler.inline_mir, MirInlining::Profile);
         assert_eq!(
             parsed.analysis.callable_edge_attribution,
             CallableEdgeAttribution::CallSites
@@ -1062,6 +1037,55 @@ mod tests {
             parsed.analysis.marker_probing,
             MarkerProbing::SourceCallsite
         );
+    }
+
+    #[test]
+    fn rejects_compiler_settings_under_analysis_without_compatibility_aliases() {
+        for setting in ["overflow-checks = \"on\"", "inline-mir = \"profile\""] {
+            let config = format!("[analysis]\n{setting}\n");
+            let error = SniffTestConfig::from_manifest_str(&config)
+                .expect_err("legacy compiler setting location should be rejected");
+
+            assert!(error.to_string().contains("unknown field"));
+        }
+    }
+
+    #[test]
+    fn rejects_removed_dependency_specific_panic_lint() {
+        let error = SniffTestConfig::from_manifest_str(
+            "[panics.lints]\ncached-dependency-panic = \"warn\"\n",
+        )
+        .expect_err("artifact origin is no longer a lint-policy distinction");
+
+        assert!(error.to_string().contains("unknown field"));
+    }
+
+    #[test]
+    fn overflow_checks_and_overflow_lint_parse_independently() {
+        for (overflow, expected_overflow) in [
+            ("profile", OverflowChecks::Profile),
+            ("on", OverflowChecks::On),
+            ("off", OverflowChecks::Off),
+        ] {
+            for (lint, expected_lint) in [
+                ("allow", LintLevel::Allow),
+                ("warn", LintLevel::Warn),
+                ("deny", LintLevel::Deny),
+            ] {
+                let config = format!(
+                    "[compiler]\noverflow-checks = \"{overflow}\"\n\
+                     [panics.lints]\ncompiler-assert-overflow = \"{lint}\"\n"
+                );
+                let parsed = SniffTestConfig::from_manifest_str(&config)
+                    .expect("compiler behavior and lint policy should be independent");
+
+                assert_eq!(parsed.compiler.overflow_checks, expected_overflow);
+                assert_eq!(
+                    parsed.panics.lints.compiler_assert_overflow,
+                    Some(expected_lint)
+                );
+            }
+        }
     }
 
     #[test]
@@ -1287,8 +1311,12 @@ mod tests {
     }
 
     #[test]
-    fn default_analysis_disables_mir_inlining_for_trace_stability() {
-        assert_eq!(AnalysisConfig::default().inline_mir, MirInlining::Off);
+    fn compiler_and_analysis_defaults_are_independent() {
+        assert_eq!(
+            CompilerConfig::default().overflow_checks,
+            OverflowChecks::Profile
+        );
+        assert_eq!(CompilerConfig::default().inline_mir, MirInlining::Off);
         assert_eq!(
             AnalysisConfig::default().callable_edge_attribution,
             CallableEdgeAttribution::ErasureSites
@@ -1332,7 +1360,6 @@ mod tests {
             [None; 11]
         );
         assert_eq!(lints.panic_invocation, LintLevel::Deny);
-        assert_eq!(lints.cached_dependency_panic, LintLevel::Deny);
         assert_eq!(lints.documented_panic, LintLevel::Warn);
         assert_eq!(lints.trusted_panic, LintLevel::Warn);
         assert_eq!(lints.indirect_call_boundary, LintLevel::Warn);
@@ -1373,17 +1400,6 @@ mod tests {
     }
 
     #[test]
-    fn dependency_is_fully_ignored_only_when_both_effects_ignore_it() {
-        let mut config = SniffTestConfig::default();
-        config.panics.ignored_namespaces = path_patterns(&["shared::**", "panic_only::**"]);
-        config.safety.ignored_namespaces = path_patterns(&["shared::**", "safety_only::**"]);
-
-        assert!(config.all_effects_ignore_namespace("shared::module"));
-        assert!(!config.all_effects_ignore_namespace("panic_only::module"));
-        assert!(!config.all_effects_ignore_namespace("safety_only::module"));
-    }
-
-    #[test]
     fn parses_panic_lint_levels() {
         let config = r#"
             [panics.lints]
@@ -1400,7 +1416,6 @@ mod tests {
             compiler-assert-null-pointer-dereference = "allow"
             compiler-assert-invalid-enum-construction = "warn"
             panic-invocation = "allow"
-            cached-dependency-panic = "warn"
             documented-panic = "allow"
             trusted-panic = "deny"
             indirect-call-boundary = "deny"
@@ -1444,7 +1459,6 @@ mod tests {
             ]
         );
         assert_eq!(parsed.panics.lints.panic_invocation, LintLevel::Allow);
-        assert_eq!(parsed.panics.lints.cached_dependency_panic, LintLevel::Warn);
         assert_eq!(parsed.panics.lints.documented_panic, LintLevel::Allow);
         assert_eq!(parsed.panics.lints.trusted_panic, LintLevel::Deny);
         assert_eq!(parsed.panics.lints.indirect_call_boundary, LintLevel::Deny);

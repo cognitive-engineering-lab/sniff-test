@@ -4,26 +4,24 @@
 //! (`rustc_mir_build/src/check_unsafety.rs` in the pinned toolchain; rustc
 //! line references appear in comments so toolchain-bump diffs stay
 //! mechanical). rustc's checker owns the definition of "operation that
-//! requires `unsafe`"; this pass reuses those rules with a different sink:
-//! every detected runtime operation in the selected reachability domain needs
-//! a nearby `// SAFETY:` justification, inside or outside an `unsafe` block.
-//! Unsafe blocks only anchor where
-//! justification comments attach, and compiler-generated (`BuiltinUnsafe`)
-//! blocks suppress findings entirely — their unsafety is the compiler's
-//! obligation, not the user's.
+//! requires `unsafe`"; this pass reuses those rules to record raw artifact IR
+//! facts. Unsafe blocks anchor source-level effect groups. Non-call operations
+//! in compiler-generated (`BuiltinUnsafe`) blocks are excluded, while calls are
+//! retained with a suppression fact because their unsafety is the compiler's
+//! obligation rather than a user-code effect.
 //!
 //! Reading THIR in `after_analysis` requires `-Zno-steal-thir`, which the
 //! driver appends to every rustc invocation.
 
+use std::collections::HashSet;
 use std::ops::Bound;
 
 use rustc_abi::{FieldIdx, VariantIdx};
 use rustc_ast::AsmMacro;
 use rustc_data_structures::stack::ensure_sufficient_stack;
 use rustc_hir::def::DefKind;
-use rustc_hir::def_id::LocalDefId;
+use rustc_hir::def_id::{DefId, LocalDefId};
 use rustc_hir::{self as hir, BindingMode, ByRef, Mutability};
-use rustc_middle::middle::codegen_fn_attrs::TargetFeature;
 use rustc_middle::mir::BorrowKind;
 use rustc_middle::thir::visit::{self, Visitor};
 use rustc_middle::thir::{
@@ -33,18 +31,22 @@ use rustc_middle::ty::{self, Ty, TyCtxt};
 use rustc_span::Span;
 
 use super::{
-    SafetyAnalysis, SafetyCallee, SafetyEffectGroup, SafetyOpKind, SafetyProbeCallKind,
-    SafetyProbeKind,
+    RawSafetyCallFact, RawSafetyFacts, RawSafetyGroupFact, RawSafetyOpFact, SafetyEffectGroup,
+    SafetyOpKind, call_identity_def_id,
 };
-use crate::config::SafetyConfig;
-use crate::effect_tracker::EffectSite;
 
-pub(super) fn collect_body_evidence(
-    tcx: TyCtxt<'_>,
-    owner: LocalDefId,
-    config: &SafetyConfig,
-    analysis: &mut SafetyAnalysis,
-) {
+pub(super) fn collect_raw_safety_facts(tcx: TyCtxt<'_>) -> RawSafetyFacts {
+    let mut sink = RawSafetyFactSink::default();
+    for owner in tcx
+        .hir_body_owners()
+        .filter(|owner| matches!(tcx.def_kind(*owner), DefKind::Fn | DefKind::AssocFn))
+    {
+        collect_body(tcx, owner, &mut sink);
+    }
+    sink.into_facts()
+}
+
+fn collect_body(tcx: TyCtxt<'_>, owner: LocalDefId, sink: &mut RawSafetyFactSink) {
     let Ok((thir, root)) = tcx.thir_body(owner) else {
         return;
     };
@@ -55,8 +57,6 @@ pub(super) fn collect_body_evidence(
         tcx,
         thir: &thir,
         owner,
-        config,
-        body_target_features: &tcx.body_codegen_attrs(owner.to_def_id()).target_features,
         typing_env: ty::TypingEnv::non_body_analysis(tcx, owner),
         assignment_info: None,
         in_union_destructure: false,
@@ -64,7 +64,7 @@ pub(super) fn collect_body_evidence(
         builtin_unsafe_depth: 0,
         safety_scopes: &mut safety_scopes,
         effect_groups: &mut effect_groups,
-        analysis,
+        sink,
     };
     // Params can contain unsafe patterns, such as union destructuring
     // (check_unsafety.rs:1191).
@@ -74,6 +74,112 @@ pub(super) fn collect_body_evidence(
         }
     }
     visitor.visit_expr(&thir[root]);
+}
+
+#[derive(Default)]
+struct RawSafetyFactSink {
+    facts: RawSafetyFacts,
+    call_identities: HashSet<RawCallIdentity>,
+    group_identities: HashSet<(DefId, SafetyEffectGroup)>,
+    next_effect_group: usize,
+    next_call_site: usize,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+struct RawCallIdentity {
+    owner: DefId,
+    callee: Option<DefId>,
+    span: Span,
+    enclosing_group: Option<SafetyEffectGroup>,
+    inside_builtin_unsafe: bool,
+}
+
+impl RawSafetyFactSink {
+    fn new_effect_group(&mut self, span: Span) -> SafetyEffectGroup {
+        let group = SafetyEffectGroup {
+            id: self.next_effect_group,
+            span,
+        };
+        self.next_effect_group += 1;
+        group
+    }
+
+    fn into_facts(self) -> RawSafetyFacts {
+        self.facts
+    }
+
+    fn new_safety_scope(&mut self, owner: DefId, span: Span) -> SafetyEffectGroup {
+        let effect_group = self.new_effect_group(span);
+        self.group_identities.insert((owner, effect_group));
+        self.facts.groups.push(RawSafetyGroupFact {
+            owner,
+            effect_group,
+        });
+        effect_group
+    }
+
+    fn inherit_effect_scopes(&mut self, owner: DefId, inherited: &[SafetyEffectGroup]) {
+        for effect_group in inherited {
+            if self.group_identities.insert((owner, *effect_group)) {
+                self.facts.groups.push(RawSafetyGroupFact {
+                    owner,
+                    effect_group: *effect_group,
+                });
+            }
+        }
+    }
+
+    fn record_call(
+        &mut self,
+        owner: DefId,
+        callee: Option<DefId>,
+        span: Span,
+        active_group: Option<SafetyEffectGroup>,
+        inside_builtin_unsafe: bool,
+    ) {
+        let identity = RawCallIdentity {
+            owner,
+            callee,
+            span,
+            enclosing_group: active_group,
+            inside_builtin_unsafe,
+        };
+        // Derive and desugaring expansion can lower multiple control-flow
+        // branches from one compiler-generated source expression. MIR
+        // reachability canonicalizes those branches by owner, span, and
+        // callee, so retain that same source identity in the THIR facts.
+        if !self.call_identities.insert(identity) {
+            return;
+        }
+        let effect_group = active_group.unwrap_or_else(|| self.new_effect_group(span));
+        self.facts.calls.push(RawSafetyCallFact {
+            owner,
+            callee,
+            inside_builtin_unsafe,
+            call_site: self.next_call_site,
+            span,
+            effect_group,
+        });
+        self.next_call_site += 1;
+    }
+
+    fn record_operation(
+        &mut self,
+        owner: DefId,
+        span: Span,
+        op: SafetyOpKind,
+        marker_anchor_spans: Vec<Span>,
+        active_group: Option<SafetyEffectGroup>,
+    ) {
+        let effect_group = active_group.unwrap_or_else(|| self.new_effect_group(span));
+        self.facts.operations.push(RawSafetyOpFact {
+            owner,
+            op,
+            span,
+            marker_anchor_spans,
+            effect_group,
+        });
+    }
 }
 
 struct SafetyScope {
@@ -86,8 +192,6 @@ struct UnsafeOpVisitor<'a, 'tcx> {
     /// The body owner findings are attributed to; the closure's own def id
     /// inside closure bodies.
     owner: LocalDefId,
-    config: &'a SafetyConfig,
-    body_target_features: &'tcx [TargetFeature],
     typing_env: ty::TypingEnv<'tcx>,
     /// Type of the assignment LHS while visiting it; a write-only union field
     /// access is safe (check_unsafety.rs:38-39).
@@ -102,7 +206,7 @@ struct UnsafeOpVisitor<'a, 'tcx> {
     /// bodies so closures inherit enclosing scopes lexically.
     safety_scopes: &'a mut Vec<SafetyScope>,
     effect_groups: &'a mut Vec<SafetyEffectGroup>,
-    analysis: &'a mut SafetyAnalysis,
+    sink: &'a mut RawSafetyFactSink,
 }
 
 impl<'a, 'tcx> UnsafeOpVisitor<'a, 'tcx> {
@@ -110,21 +214,23 @@ impl<'a, 'tcx> UnsafeOpVisitor<'a, 'tcx> {
         if self.builtin_unsafe_depth > 0 {
             return;
         }
-        self.record_evidence(span, SafetyProbeKind::Operation(op));
+        self.sink.record_operation(
+            self.owner.to_def_id(),
+            span,
+            op,
+            self.applicable_marker_spans(span),
+            self.effect_groups.last().copied(),
+        );
     }
 
-    fn record_call(&mut self, span: Span, callee: SafetyCallee, call_kind: SafetyProbeCallKind) {
-        if self.builtin_unsafe_depth > 0 {
-            return;
-        }
-        if self.ignores_callee(callee) {
-            return;
-        }
-        self.record_evidence(span, SafetyProbeKind::Call { callee, call_kind });
-    }
-
-    fn ignores_callee(&self, callee: SafetyCallee) -> bool {
-        matches!(callee, SafetyCallee::Def(def_id) if self.config.ignores_def(self.tcx, def_id))
+    fn record_call(&mut self, callee: Option<DefId>, span: Span) {
+        self.sink.record_call(
+            self.owner.to_def_id(),
+            callee,
+            span,
+            self.effect_groups.last().copied(),
+            self.builtin_unsafe_depth > 0,
+        );
     }
 
     fn applicable_marker_spans(&self, span: Span) -> Vec<Span> {
@@ -135,23 +241,6 @@ impl<'a, 'tcx> UnsafeOpVisitor<'a, 'tcx> {
             .collect::<Vec<_>>();
         spans.push(span);
         spans
-    }
-
-    fn record_evidence(&mut self, span: Span, details: SafetyProbeKind) {
-        let group = self
-            .effect_groups
-            .last()
-            .copied()
-            .unwrap_or_else(|| self.analysis.new_effect_group(span));
-        self.analysis.push_probe(
-            EffectSite {
-                owner: self.owner.to_def_id(),
-                span,
-            },
-            details,
-            self.applicable_marker_spans(span),
-            group,
-        );
     }
 
     /// The `// SAFETY:` comment sits above the `unsafe` keyword, which only
@@ -170,14 +259,12 @@ impl<'a, 'tcx> UnsafeOpVisitor<'a, 'tcx> {
             return;
         };
         let inner_thir = inner_thir.borrow();
-        self.analysis
+        self.sink
             .inherit_effect_scopes(def.to_def_id(), self.effect_groups);
         let mut inner = UnsafeOpVisitor {
             tcx: self.tcx,
             thir: &inner_thir,
             owner: def,
-            config: self.config,
-            body_target_features: self.body_target_features,
             typing_env: self.typing_env,
             assignment_info: self.assignment_info,
             in_union_destructure: false,
@@ -185,7 +272,7 @@ impl<'a, 'tcx> UnsafeOpVisitor<'a, 'tcx> {
             builtin_unsafe_depth: self.builtin_unsafe_depth,
             safety_scopes: &mut *self.safety_scopes,
             effect_groups: &mut *self.effect_groups,
-            analysis: &mut *self.analysis,
+            sink: &mut *self.sink,
         };
         for param in &inner_thir.params {
             if let Some(pat) = param.pat.as_deref() {
@@ -223,37 +310,20 @@ impl<'a, 'tcx> UnsafeOpVisitor<'a, 'tcx> {
         }
     }
 
-    /// Unsafe-fn and target-feature call detection, plus the tool's
-    /// documented-obligation policy (check_unsafety.rs:470-517).
+    /// Retains every statically known call plus unsafe function-pointer calls.
+    ///
+    /// Extraction deliberately does not decide whether a known call represents
+    /// an unsafe call or a documented safety obligation. The interpreter makes
+    /// that decision from the call edge and active policy.
     fn check_call(&mut self, expr: &'a Expr<'tcx>, fun: ExprId) {
         let fn_ty = self.thir[fun].ty;
         let sig = fn_ty.fn_sig(self.tcx);
-        let (callee_features, safe_target_features): (&[_], _) = match *fn_ty.kind() {
-            ty::FnDef(func_id, ..) => {
-                let cg_attrs = self.tcx.codegen_fn_attrs(func_id);
-                (&cg_attrs.target_features, cg_attrs.safe_target_features)
-            }
-            _ => (&[], false),
-        };
-        if sig.safety().is_unsafe() && !safe_target_features {
-            let callee = if let ty::FnDef(func_id, _) = fn_ty.kind() {
-                SafetyCallee::Def(*func_id)
-            } else {
-                SafetyCallee::FunctionPointer
+        if sig.safety().is_unsafe() || matches!(fn_ty.kind(), ty::FnDef(..)) {
+            let callee = match fn_ty.kind() {
+                ty::FnDef(def_id, _) => Some(call_identity_def_id(self.tcx, *def_id)),
+                _ => None,
             };
-            self.record_call(expr.span, callee, SafetyProbeCallKind::Unsafe);
-        } else if let &ty::FnDef(func_id, _) = fn_ty.kind() {
-            let call_kind = if self
-                .tcx
-                .is_target_feature_call_safe(callee_features, self.body_target_features)
-            {
-                SafetyProbeCallKind::PotentialObligation
-            } else {
-                // A call to a safe `#[target_feature]` function still
-                // requires unsafe when the caller lacks the features.
-                SafetyProbeCallKind::Unsafe
-            };
-            self.record_call(expr.span, SafetyCallee::Def(func_id), call_kind);
+            self.record_call(callee, expr.span);
         }
     }
 
@@ -402,7 +472,7 @@ impl<'a, 'tcx> Visitor<'a, 'tcx> for UnsafeOpVisitor<'a, 'tcx> {
             }
             BlockSafety::ExplicitUnsafe(hir_id) => {
                 let span = self.unsafe_block_span(hir_id, block.span);
-                let group = self.analysis.new_safety_scope(self.owner.to_def_id(), span);
+                let group = self.sink.new_safety_scope(self.owner.to_def_id(), span);
                 self.effect_groups.push(group);
                 self.safety_scopes.push(SafetyScope { marker_span: span });
                 visit::walk_block(self, block);
@@ -667,5 +737,161 @@ impl<'a, 'tcx> Visitor<'a, 'tcx> for LayoutConstrainedPlaceVisitor<'a, 'tcx> {
             // Everything else — including a dereference — leaves the place.
             _ => {}
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use rustc_hir::def_id::CRATE_DEF_ID;
+    use rustc_span::{BytePos, Span};
+
+    use super::RawSafetyFactSink;
+    use crate::safety::SafetyOpKind;
+
+    fn span(start: u32, end: u32) -> Span {
+        Span::with_root_ctxt(BytePos(start), BytePos(end))
+    }
+
+    #[test]
+    fn raw_sink_records_calls_and_operations_without_safety_policy() {
+        let owner = CRATE_DEF_ID.to_def_id();
+        let scope_span = span(10, 40);
+        let operation_span = span(20, 21);
+        let mut sink = RawSafetyFactSink::default();
+        let group = sink.new_safety_scope(owner, scope_span);
+
+        sink.record_operation(
+            owner,
+            operation_span,
+            SafetyOpKind::DerefRawPointer,
+            vec![scope_span, operation_span],
+            Some(group),
+        );
+        sink.record_call(owner, Some(owner), span(30, 31), Some(group), false);
+
+        let facts = sink.into_facts();
+        assert_eq!(facts.groups.len(), 1);
+        assert_eq!(facts.groups[0].owner, owner);
+        assert_eq!(facts.groups[0].effect_group.id, group.id);
+        assert_eq!(facts.operations.len(), 1);
+        assert_eq!(facts.operations[0].owner, owner);
+        assert_eq!(facts.operations[0].op, SafetyOpKind::DerefRawPointer);
+        assert_eq!(facts.operations[0].span, operation_span);
+        assert_eq!(
+            facts.operations[0].marker_anchor_spans,
+            [scope_span, operation_span]
+        );
+        assert_eq!(facts.operations[0].effect_group.id, group.id);
+        assert_eq!(facts.operations[0].effect_group.span, scope_span);
+        assert_eq!(facts.calls.len(), 1);
+        assert_eq!(facts.calls[0].owner, owner);
+        assert_eq!(facts.calls[0].callee, Some(owner));
+        assert_eq!(facts.calls[0].call_site, 0);
+        assert_eq!(facts.calls[0].span, span(30, 31));
+        assert_eq!(facts.calls[0].effect_group.id, group.id);
+        assert_eq!(facts.calls[0].effect_group.span, scope_span);
+    }
+
+    #[test]
+    fn raw_sink_coalesces_compiler_generated_calls_with_one_source_identity() {
+        let owner = CRATE_DEF_ID.to_def_id();
+        let generated_span = span(30, 31);
+        let mut sink = RawSafetyFactSink::default();
+
+        sink.record_call(owner, Some(owner), generated_span, None, false);
+        sink.record_call(owner, Some(owner), generated_span, None, false);
+
+        let facts = sink.into_facts();
+        assert_eq!(facts.calls.len(), 1);
+        assert_eq!(facts.calls[0].call_site, 0);
+        assert_eq!(facts.calls[0].effect_group.id, 0);
+    }
+
+    #[test]
+    fn raw_sink_keeps_same_source_call_in_distinct_unsafe_scopes() {
+        let owner = CRATE_DEF_ID.to_def_id();
+        let generated_span = span(30, 31);
+        let mut sink = RawSafetyFactSink::default();
+        let first_scope = sink.new_safety_scope(owner, span(10, 20));
+        let second_scope = sink.new_safety_scope(owner, span(40, 50));
+
+        sink.record_call(owner, Some(owner), generated_span, Some(first_scope), false);
+        sink.record_call(
+            owner,
+            Some(owner),
+            generated_span,
+            Some(second_scope),
+            false,
+        );
+
+        let facts = sink.into_facts();
+        assert_eq!(facts.calls.len(), 2);
+        assert_eq!(facts.calls[0].effect_group, first_scope);
+        assert_eq!(facts.calls[1].effect_group, second_scope);
+    }
+
+    #[test]
+    fn raw_sink_retains_calls_inside_builtin_unsafe_blocks() {
+        let owner = CRATE_DEF_ID.to_def_id();
+        let generated_span = span(30, 31);
+        let mut sink = RawSafetyFactSink::default();
+
+        sink.record_call(owner, Some(owner), generated_span, None, true);
+
+        let facts = sink.into_facts();
+        assert_eq!(facts.calls.len(), 1);
+        assert!(facts.calls[0].inside_builtin_unsafe);
+    }
+
+    #[test]
+    fn raw_sink_retains_an_empty_unsafe_scope() {
+        let owner = CRATE_DEF_ID.to_def_id();
+        let scope_span = span(10, 40);
+        let mut sink = RawSafetyFactSink::default();
+        let group = sink.new_safety_scope(owner, scope_span);
+
+        let facts = sink.into_facts();
+
+        assert!(facts.calls.is_empty());
+        assert!(facts.operations.is_empty());
+        assert_eq!(facts.groups.len(), 1);
+        assert_eq!(facts.groups[0].owner, owner);
+        assert_eq!(facts.groups[0].effect_group.id, group.id);
+        assert_eq!(facts.groups[0].effect_group.span, scope_span);
+    }
+
+    #[test]
+    fn raw_sink_preserves_shared_and_standalone_effect_groups() {
+        let owner = CRATE_DEF_ID.to_def_id();
+        let scope_span = span(10, 40);
+        let first_span = span(20, 21);
+        let second_span = span(30, 31);
+        let standalone_span = span(50, 51);
+        let mut sink = RawSafetyFactSink::default();
+        let shared_group = sink.new_safety_scope(owner, scope_span);
+
+        for operation_span in [first_span, second_span] {
+            sink.record_operation(
+                owner,
+                operation_span,
+                SafetyOpKind::DerefRawPointer,
+                vec![scope_span, operation_span],
+                Some(shared_group),
+            );
+        }
+        sink.record_operation(
+            owner,
+            standalone_span,
+            SafetyOpKind::InlineAssembly,
+            vec![standalone_span],
+            None,
+        );
+
+        let facts = sink.into_facts().operations;
+        assert_eq!(facts.len(), 3);
+        assert_eq!(facts[0].effect_group.id, facts[1].effect_group.id);
+        assert_eq!(facts[0].effect_group.span, scope_span);
+        assert_ne!(facts[0].effect_group.id, facts[2].effect_group.id);
+        assert_eq!(facts[2].effect_group.span, standalone_span);
     }
 }

@@ -11,4 +11,3 @@ panic-sink-namespaces = [
 
 [panics.lints]
 panic-invocation = "allow"
-cached-dependency-panic = "allow"

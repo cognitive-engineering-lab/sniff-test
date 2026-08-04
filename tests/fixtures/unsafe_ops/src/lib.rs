@@ -56,3 +56,19 @@ pub fn asm_justified() {
         asm!("nop");
     }
 }
+
+macro_rules! deref_in_macro {
+    ($pointer:expr) => {{
+        unsafe { *$pointer }
+    }};
+}
+
+macro_rules! nested_deref_in_macro {
+    ($pointer:expr) => {{
+        deref_in_macro!($pointer)
+    }};
+}
+
+pub fn macro_deref_unjustified(ptr: *const u32) -> u32 {
+    nested_deref_in_macro!(ptr)
+}

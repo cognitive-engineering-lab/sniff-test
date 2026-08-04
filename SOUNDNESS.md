@@ -47,42 +47,53 @@ therefore hides real behavior—including the generic obligation normally
 reported for an undocumented `unsafe fn`. Use narrow audited patterns and
 documentation override files when source documentation is missing.
 
-### Build scripts and proc macros are dependency-scoped
+### Build scripts are skipped and proc macros are dependency-scoped
 
-Units whose crate name is Cargo's `build_script_build` or whose crate type is
-`proc-macro` never receive workspace deny gating or diagnostics
-(`CrateOutputScope::current`). Their code runs at build time on the developer
-machine; panics there fail builds loudly on their own, and holding them to
-target-code policy would deny the ordinary panic-on-error idiom. Their code is
-still analyzed and cached as dependency evidence.
+Units whose crate name is Cargo's `build_script_build` are skipped. Proc-macro
+units are treated like dependencies: they never select report roots, interpret
+lint policy, emit diagnostics, or emit JSON reports, but they silently persist
+policy-neutral artifact IR. Both kinds of code run at build time on the
+developer machine; panics there fail builds loudly on their own, and holding
+them to target-code reporting policy would deny the ordinary panic-on-error
+idiom.
 
 ## Analysis limits
 
 ### MIR availability bounds external descent
 
-Reachability descends into external functions only when their MIR is encoded
-in the rmeta (generic, `#[inline]`, or cross-crate-inlinable functions).
-Plain external functions are opaque; coverage comes from the dependency
-cache (each dependency is analyzed during its own compilation) plus the
-`indirect-call-boundary` lint for unresolvable targets. Sysroot crates are
-never driver-compiled, so `std`/`core`/`alloc` internals are covered only as
-deep as encoded MIR allows. Audited APIs can be configured as trusted
-boundaries, but broad globs trust their documentation completeness and can hide
-undocumented effects.
+The frontend asks driver-built dependencies to encode MIR. This lets a
+consuming unit record an exact-instantiation overlay when generic dispatch is
+selected using a consumer-local type; for example, a dependency generic that
+calls a trait implemented by a workspace type. The dependency's own v13 cache
+still supplies its defining, generic body and raw THIR-only facts.
 
-### The node limit bounds every traversal
+External code without encoded MIR remains opaque to that rustc unit. Ordinary
+dependency coverage comes from v13 artifact IR produced during each
+dependency's compilation and composed by stable function identity. Sysroot
+crates are not driver-compiled and therefore have no defining artifact cache;
+an exact sysroot instantiation is traversable only when rustc exposes its MIR
+to the consumer. Other `std`/`core`/`alloc` crossings remain raw boundaries
+whose treatment depends on configured panic sinks, contracts, trusted
+boundaries, and opaque-boundary policy. Broad trusted globs assume complete
+documentation and can hide undocumented effects.
 
-Each per-root query visits at most `[analysis] node-limit` instances
-(default 4096). Halting is loud — the effect-specific
-`panic-analysis-incomplete` or `safety-analysis-incomplete` lint denies by
-default, and truncated cached summaries are marked `analysis-complete: false`
-— but the region beyond the halt is simply unknown.
+### The node limit bounds workspace interpretation
 
-Consumers also fail closed when dependency evidence is missing, stale, generic,
-or truncated. The optional `dependency-panic-analysis-incomplete` and
-`dependency-safety-analysis-incomplete` overrides can change that cross-crate
-policy without weakening node-limit findings in the crate currently being
-analyzed.
+Each selected workspace-root traversal visits at most `[analysis] node-limit`
+functions (default 4096). Dependency extraction is root-independent and is not
+truncated according to workspace reporting policy. Halting during
+interpretation is loud through the effect-specific analysis-incomplete lint,
+which denies by default, but the region beyond the halt is simply unknown.
+
+### Missing managed dependency bodies are reported separately
+
+Failure to produce, validate, or persist required artifact IR is a tool error.
+If a reached body from a managed dependency is nevertheless absent from the
+composed graph, interpretation emits an incomplete-analysis finding. The
+optional `dependency-panic-analysis-incomplete` and
+`dependency-safety-analysis-incomplete` overrides can change the policy for
+that missing cross-crate body without weakening the workspace node-limit
+finding above.
 
 ### Callable call-site attribution is type-keyed
 
@@ -126,9 +137,10 @@ upcast in one function and called in another (in `call-sites` mode) can miss.
 `rust-toolchain.toml` is the source of truth. On toolchain bumps, diff the
 port against rustc's file — a new `UnsafeOpKind` variant means a new
 detection arm and a fixture. The `unsafe_ops` fixture covers the stable op
-kinds; layout-constrained types, `unsafe_fields`, `unsafe_binders`, and
-`#[target_feature]` calls are ported but have no fixture canaries yet
-(nightly-feature crates).
+kinds, and `target_feature_call_safety` covers caller-relative
+`#[target_feature]` calls, including a nested inline closure. Layout-constrained
+types, `unsafe_fields`, and `unsafe_binders` are ported but have no fixture
+canaries yet (nightly-feature crates).
 
 The port is intentionally applied only to runtime function-like bodies.
 Standalone const/static initializers and inline-const bodies are excluded from
@@ -143,11 +155,30 @@ rustflags and best-effort `build.rustflags` from config files. Config-file
 recovered and do not apply to the analysis build, which can make the analyzed
 cfg set differ from the shipped build's.
 
-### Dependency cache validity rides on cargo fingerprints
+### Artifact IR validity rides on rustc identity and v13 fingerprints
 
-Dependency caches are trusted for fresh units on the strength of the injected
-fingerprint inputs (`sniff_test_config_*`, `sniff_test_tool_*` cfgs,
-`SNIFF_TEST_ARGS` env-depinfo, rustc-scoped target directories). Anything that
-bypasses cargo's fingerprinting — hand-editing files under `target/`, sharing a
-`--cache-dir` across machines with differently-patched toolchains of the same
-version string — can replay stale effect evidence.
+Dependency IR is reused only after the v13 envelope validates its tool and
+rustc versions, artifact-local compiler fingerprint, canonical content ID,
+exact dependency-generation references, stable function identities, and source
+content hashes. A direct cache is additionally matched against the actual
+rustc-loaded crate name, stable crate ID, and strict version hash (SVH), so a
+stale sidecar beside a replaced fixed-name rlib is rejected. Transitive caches
+are pinned by the exact analysis generation recorded by their parent.
+
+The workspace's compiler profile is not compared with dependency fingerprints:
+Cargo package-profile overrides may compile them differently. The dependency's
+own compiler settings contribute to its rustc identity and cache generation.
+Lint levels, report roots, and other interpretation-only policy deliberately do
+not invalidate dependency IR; the workspace reinterprets the same facts under
+the active configuration. Sharing a cache with a modified toolchain that
+misreports the same version and produces colliding rustc identities remains
+outside this validation model.
+
+### Cached source spans require the original source
+
+Dependency IR stores stable source-file identity, filename, exact content hash,
+normalized byte length, and file-relative byte ranges. A workspace loads the
+recorded file into rustc's active source map and uses its span only when every
+value matches. Missing, edited, remapped-to-a-different-identity, or malformed
+source degrades to an unspanned diagnostic. This preserves diagnostic honesty
+but loses the source snippet and precise location.

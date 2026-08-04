@@ -18,10 +18,16 @@ expression: messages
           "valid_ptr: pointer must be non-null."
         ],
         "reason": "safety-obligation call to `safety_requirements::safe_documented_contract` does not satisfy all # Safety requirements",
+        "requirements": [
+          "valid_ptr: pointer must be non-null."
+        ],
         "root": "safety_requirements::configured_safety_obligation_missing_requirement",
         "root-kind": "concrete",
         "span": "src/lib.rs:164:5: 164:34",
-        "target": "safety_requirements::safe_documented_contract"
+        "target": "safety_requirements::safe_documented_contract",
+        "trace": [
+          "src/lib.rs:164:5: 164:34: safety_requirements::configured_safety_obligation_missing_requirement --direct-call-> safety_requirements::safe_documented_contract"
+        ]
       },
       {
         "function": "safety_requirements::generic_unsafe_trait_method_missing",
@@ -31,10 +37,16 @@ expression: messages
           "valid_ptr: pointer must be non-null."
         ],
         "reason": "unsafe call to `safety_requirements::UnsafeGreeter::greet` does not satisfy all # Safety requirements",
+        "requirements": [
+          "valid_ptr: pointer must be non-null."
+        ],
         "root": "safety_requirements::generic_unsafe_trait_method_missing",
         "root-kind": "generic",
         "span": "src/lib.rs:139:14: 139:32",
-        "target": "safety_requirements::UnsafeGreeter::greet"
+        "target": "safety_requirements::UnsafeGreeter::greet",
+        "trace": [
+          "src/lib.rs:139:14: 139:32: safety_requirements::generic_unsafe_trait_method_missing --indirect-call-> safety_requirements::UnsafeGreeter::greet"
+        ]
       },
       {
         "function": "safety_requirements::unsafe_fn_pointer_missing_justification",
@@ -44,13 +56,15 @@ expression: messages
         "root": "safety_requirements::unsafe_fn_pointer_missing_justification",
         "root-kind": "concrete",
         "span": "src/lib.rs:103:14: 103:24",
-        "target": "unsafe function pointer"
+        "target": "unsafe function pointer",
+        "trace": [
+          "src/lib.rs:103:14: 103:24: safety_requirements::unsafe_fn_pointer_missing_justification --indirect-call-> indirect call Binder { value: unsafe fn(), bound_vars: [] }"
+        ]
       }
     ],
-    "format-version": 10,
+    "format-version": 11,
     "reason": "sniff-test-artifact",
     "rustc-version": "[RUSTC_VERSION]",
-    "scope": "workspace",
     "tool-version": "0.1.0"
   }
 ]

@@ -3,10 +3,8 @@
 # The default configuration leaves all policy lists empty. This example includes
 # recommended Rust panic sinks and can be edited to match your threat model.
 
-[analysis]
-show-full-stack-trace = false
-report-roots = "public"
-
+[compiler]
+# Compiler settings affect extracted facts and therefore artifact-IR validity.
 # `profile` preserves Cargo/rustc's selected profile behavior.
 # `on` forces `-C overflow-checks=yes`; useful for checked release-mode audits.
 # `off` forces `-C overflow-checks=no`.
@@ -16,6 +14,13 @@ overflow-checks = "profile"
 # `off` forces `-Z inline-mir=no` and disables MIR inline passes;
 # `on` forces `-Z inline-mir=yes`.
 inline-mir = "off"
+
+[analysis]
+# Analysis settings are workspace interpretation policy. Dependency rustc units
+# ignore report roots and lints while silently caching v13 IR for every
+# analyzable body.
+show-full-stack-trace = false
+report-roots = "public"
 
 # Concrete callable edges can be attributed to `erasure-sites` where a callable
 # becomes indirect, or `call-sites` where it is used.
@@ -28,16 +33,17 @@ marker-probing = "macro-definition-first"
 
 # Ambiguous requirement names and shared proof markers default to failing closed.
 #
-# Instance budget per reachability query. Traversals that halt at the limit are
-# reported through the effect-specific analysis-incomplete lint instead of
-# passing silently.
+# Function budget per selected workspace-root interpretation. Dependency IR is
+# extracted independently of this limit. Traversals that halt are reported
+# through the effect-specific analysis-incomplete lint instead of passing
+# silently.
 node-limit = 4096
 
 [analysis.lints]
 panic-analysis-incomplete = "deny"
 safety-analysis-incomplete = "deny"
-# Missing, stale, generic, or truncated dependency evidence falls back to the
-# corresponding effect-specific lint above unless one of these is set:
+# A reached managed dependency body that is absent from the composed graph
+# falls back to the corresponding effect-specific lint unless one is set:
 # dependency-panic-analysis-incomplete = "warn"
 # dependency-safety-analysis-incomplete = "warn"
 # Use `warn` while auditing, or `allow` to accept squashed evidence.
@@ -104,9 +110,9 @@ panic-sink-namespaces = [
 # `deny` emits an error and makes `cargo sniff-test` fail.
 # `warn` emits a warning without failing the run.
 # `allow` suppresses the finding from diagnostics and JSON reports.
-# Group default for local compiler-generated MIR assertions. Each exact
-# override is optional and also applies to dependency findings; a dependency
-# assertion without an exact override uses `cached-dependency-panic` below.
+# Group default for compiler-generated MIR assertions across the combined local
+# and dependency graph. Each exact override is optional and wins regardless of
+# which artifact supplied the raw assertion fact.
 compiler-assert = "deny"
 # compiler-assert-bounds-check = "deny"
 # compiler-assert-overflow = "deny"
@@ -120,7 +126,6 @@ compiler-assert = "deny"
 # compiler-assert-null-pointer-dereference = "deny"
 # compiler-assert-invalid-enum-construction = "deny"
 panic-invocation = "deny"
-cached-dependency-panic = "deny"
 documented-panic = "warn"
 trusted-panic = "warn"
 # Calls whose target cannot be resolved or verified: undocumented trait
@@ -147,7 +152,8 @@ missing-safety-docs = "warn"
 unsafe-call-missing-justification = "warn"
 unsafe-call-missing-requirements = "warn"
 # Group default for non-call unsafe operations. Each exact override is optional
-# and wins over this fallback for local and dependency findings.
+# and wins over this fallback regardless of which artifact supplied the raw
+# operation fact.
 unsafe-op-missing-justification = "warn"
 # raw-pointer-dereference-missing-justification = "warn"
 # mutable-static-access-missing-justification = "warn"

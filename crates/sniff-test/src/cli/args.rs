@@ -1,7 +1,7 @@
 //! User-facing CLI parsing for the Cargo frontend and direct driver.
 use std::path::PathBuf;
 
-use crate::cache::default_cache_dir;
+use crate::analysis::cache::default_cache_dir;
 use crate::config::{DEFAULT_MANIFEST_FILE, OverflowChecks};
 use clap::{Args, Parser, Subcommand, ValueEnum};
 use serde::{Deserialize, Serialize};
@@ -134,6 +134,10 @@ pub(super) struct DriverCli {
     #[command(flatten)]
     common: CommonCliArgs,
 
+    /// Cache artifact IR silently instead of interpreting this unit as a report-producing root.
+    #[arg(long)]
+    dependency: bool,
+
     /// Arguments passed directly to rustc.
     #[arg(last = true, required = true, num_args = 1.., value_name = "RUSTC-ARGS")]
     rustc_args: Vec<String>,
@@ -144,8 +148,21 @@ impl DriverCli {
         let mut rustc_args = Vec::with_capacity(self.rustc_args.len() + 1);
         rustc_args.push(binary);
         rustc_args.extend(self.rustc_args);
-        (rustc_args, self.common.into_sniff_test_args())
+        let mut args = self.common.into_sniff_test_args();
+        args.direct_scope = if self.dependency {
+            DirectInvocationScope::Dependency
+        } else {
+            DirectInvocationScope::Workspace
+        };
+        (rustc_args, args)
     }
+}
+
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum DirectInvocationScope {
+    #[default]
+    Workspace,
+    Dependency,
 }
 
 #[derive(Debug, Default, Clone, Serialize, Deserialize)]
@@ -166,6 +183,9 @@ pub struct SniffTestArgs {
     /// driver itself, never carried through the environment.
     #[serde(skip)]
     pub(crate) under_cargo: bool,
+    /// Explicit artifact scope for standalone driver invocations.
+    #[serde(skip)]
+    pub(crate) direct_scope: DirectInvocationScope,
 }
 
 impl SniffTestArgs {
@@ -216,7 +236,7 @@ mod tests {
 
     use clap::Parser as _;
 
-    use super::{DriverCli, FrontendAction, FrontendCli, MessageFormat};
+    use super::{DirectInvocationScope, DriverCli, FrontendAction, FrontendCli, MessageFormat};
 
     #[test]
     fn frontend_parses_equals_options_and_cargo_args_after_separator() {
@@ -304,6 +324,7 @@ mod tests {
             [
                 "sniff-test-driver",
                 "--message-format=json",
+                "--dependency",
                 "--",
                 "--crate-name",
                 "demo",
@@ -314,6 +335,7 @@ mod tests {
         let (rustc_args, args) = cli.into_parts(String::from("sniff-test-driver"));
 
         assert_eq!(args.message_format, MessageFormat::Json);
+        assert_eq!(args.direct_scope, DirectInvocationScope::Dependency);
         assert_eq!(rustc_args, ["sniff-test-driver", "--crate-name", "demo"]);
     }
 }

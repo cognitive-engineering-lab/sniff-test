@@ -13,16 +13,14 @@ expression: messages
       {
         "kind": "safety-analysis-incomplete",
         "level": "deny",
-        "reason": "reachability analysis halted at the 2-instance node limit before the call graph was exhausted",
+        "reason": "safety analysis reached the configured node limit (2)",
         "root": "safety_node_limit::root",
-        "root-kind": "concrete",
-        "span": "src/lib.rs:1:1: 1:38"
+        "root-kind": "concrete"
       }
     ],
-    "format-version": 10,
+    "format-version": 11,
     "reason": "sniff-test-artifact",
     "rustc-version": "[RUSTC_VERSION]",
-    "scope": "workspace",
     "tool-version": "0.1.0"
   }
 ]

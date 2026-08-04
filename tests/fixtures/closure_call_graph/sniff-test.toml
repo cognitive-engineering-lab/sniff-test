@@ -1,5 +1,7 @@
-[analysis]
+[compiler]
 inline-mir = "off"
+
+[analysis]
 report-roots = [
     "closure_call_graph::basic_closure_panics",
     "closure_call_graph::unused_closure_argument",

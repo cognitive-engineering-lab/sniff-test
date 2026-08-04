@@ -1,6 +1,10 @@
-[analysis]
+[compiler]
+# Compiler settings contribute to v13 artifact-IR validity.
 overflow-checks = "profile"
 inline-mir = "off"
+
+[analysis]
+# Workspace-only interpretation policy; dependency units cache IR silently.
 show-full-stack-trace = false
 
 [panics]

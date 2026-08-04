@@ -1,7 +1,6 @@
 //! Executable plumbing for the sniff-test Cargo/rustc integration.
 
 mod args;
-mod cache_encode;
 mod cargo;
 mod diagnostics;
 mod driver;
