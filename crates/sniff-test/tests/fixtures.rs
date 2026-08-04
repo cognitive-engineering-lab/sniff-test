@@ -98,6 +98,10 @@ macro_rules! fixture_cases {
 }
 
 fixture_cases! {
+    "executable_artifact" => {
+        executable_artifact =>
+            Case::cargo("workspace executables without a rustc crate hash");
+    }
     "panic_axioms" => {
         panic_axioms => Case::cargo("raw panic paths").exit_code(101);
         driver_panic_axioms => Case::direct("raw panic paths");
@@ -206,6 +210,11 @@ fixture_cases! {
         dependency_async_panic => Case::cargo("cached dependency async runtime body")
             .crate_dir("app")
             .exit_code(101);
+    }
+    "dependency_unsafe_trait_call" => {
+        dependency_unsafe_trait_call =>
+            Case::cargo("cached generic unsafe trait-call justification")
+                .crate_dir("app");
     }
     "dependency_safety_contract" => {
         dependency_safety_contract => Case::cargo("cached safety markers and concrete findings")
@@ -378,6 +387,10 @@ fixture_cases! {
         safety_requirements_obligations => Case::cargo("configured safety obligations")
             .args(&["--manifest", "obligations.toml"]);
         driver_safety_requirements => Case::direct("safety requirement satisfaction");
+    }
+    "local_generic_impl_contract" => {
+        local_generic_impl_contract =>
+            Case::cargo("statically selected generic impl contract");
     }
     "safety_callable_sites" => {
         safety_callable_sites => Case::cargo("independent callable call sites");

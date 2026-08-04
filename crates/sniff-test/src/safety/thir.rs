@@ -27,7 +27,7 @@ use rustc_middle::thir::visit::{self, Visitor};
 use rustc_middle::thir::{
     Block, BlockSafety, Expr, ExprId, ExprKind, InlineAsmExpr, Pat, PatKind, Thir,
 };
-use rustc_middle::ty::{self, Ty, TyCtxt};
+use rustc_middle::ty::{self, Instance, InstanceKind, Ty, TyCtxt};
 use rustc_span::Span;
 
 use super::{
@@ -89,6 +89,7 @@ struct RawSafetyFactSink {
 struct RawCallIdentity {
     owner: DefId,
     callee: Option<DefId>,
+    source_callee: Option<DefId>,
     span: Span,
     enclosing_group: Option<SafetyEffectGroup>,
     inside_builtin_unsafe: bool,
@@ -133,6 +134,7 @@ impl RawSafetyFactSink {
         &mut self,
         owner: DefId,
         callee: Option<DefId>,
+        source_callee: Option<DefId>,
         span: Span,
         active_group: Option<SafetyEffectGroup>,
         inside_builtin_unsafe: bool,
@@ -140,6 +142,7 @@ impl RawSafetyFactSink {
         let identity = RawCallIdentity {
             owner,
             callee,
+            source_callee,
             span,
             enclosing_group: active_group,
             inside_builtin_unsafe,
@@ -155,6 +158,7 @@ impl RawSafetyFactSink {
         self.facts.calls.push(RawSafetyCallFact {
             owner,
             callee,
+            source_callee,
             inside_builtin_unsafe,
             call_site: self.next_call_site,
             span,
@@ -223,14 +227,45 @@ impl<'a, 'tcx> UnsafeOpVisitor<'a, 'tcx> {
         );
     }
 
-    fn record_call(&mut self, callee: Option<DefId>, span: Span) {
+    fn record_call(&mut self, callee: Option<DefId>, source_callee: Option<DefId>, span: Span) {
         self.sink.record_call(
             self.owner.to_def_id(),
             callee,
+            source_callee,
             span,
             self.effect_groups.last().copied(),
             self.builtin_unsafe_depth > 0,
         );
+    }
+
+    /// Keeps the declared trait method only while dispatch remains unresolved.
+    ///
+    /// THIR can name the trait item for both `T::method()` and a statically
+    /// selected call such as `Wrapper::<T>::method()`. Generic arguments alone
+    /// cannot distinguish those cases. Instance resolution can: an unresolved
+    /// bound returns no instance, dynamic dispatch returns `Virtual`, and a
+    /// selected impl returns its concrete item.
+    fn source_call_callee(
+        &self,
+        def_id: DefId,
+        args: ty::GenericArgsRef<'tcx>,
+        identity: DefId,
+    ) -> Option<DefId> {
+        if identity != def_id || self.tcx.trait_of_assoc(def_id).is_none() {
+            return Some(def_id);
+        }
+        let typing_env = ty::TypingEnv::post_analysis(self.tcx, self.owner);
+        match Instance::try_resolve(self.tcx, typing_env, def_id, args) {
+            Ok(
+                None
+                | Some(Instance {
+                    def: InstanceKind::Virtual(..),
+                    ..
+                }),
+            )
+            | Err(_) => Some(def_id),
+            Ok(Some(_)) => None,
+        }
     }
 
     fn applicable_marker_spans(&self, span: Span) -> Vec<Span> {
@@ -319,11 +354,15 @@ impl<'a, 'tcx> UnsafeOpVisitor<'a, 'tcx> {
         let fn_ty = self.thir[fun].ty;
         let sig = fn_ty.fn_sig(self.tcx);
         if sig.safety().is_unsafe() || matches!(fn_ty.kind(), ty::FnDef(..)) {
-            let callee = match fn_ty.kind() {
-                ty::FnDef(def_id, _) => Some(call_identity_def_id(self.tcx, *def_id)),
-                _ => None,
+            let (callee, source_callee) = match fn_ty.kind() {
+                ty::FnDef(def_id, args) => {
+                    let identity = call_identity_def_id(self.tcx, *def_id);
+                    let source_callee = self.source_call_callee(*def_id, args, identity);
+                    (Some(identity), source_callee)
+                }
+                _ => (None, None),
             };
-            self.record_call(callee, expr.span);
+            self.record_call(callee, source_callee, expr.span);
         }
     }
 
@@ -767,7 +806,14 @@ mod tests {
             vec![scope_span, operation_span],
             Some(group),
         );
-        sink.record_call(owner, Some(owner), span(30, 31), Some(group), false);
+        sink.record_call(
+            owner,
+            Some(owner),
+            Some(owner),
+            span(30, 31),
+            Some(group),
+            false,
+        );
 
         let facts = sink.into_facts();
         assert_eq!(facts.groups.len(), 1);
@@ -786,6 +832,7 @@ mod tests {
         assert_eq!(facts.calls.len(), 1);
         assert_eq!(facts.calls[0].owner, owner);
         assert_eq!(facts.calls[0].callee, Some(owner));
+        assert_eq!(facts.calls[0].source_callee, Some(owner));
         assert_eq!(facts.calls[0].call_site, 0);
         assert_eq!(facts.calls[0].span, span(30, 31));
         assert_eq!(facts.calls[0].effect_group.id, group.id);
@@ -798,8 +845,8 @@ mod tests {
         let generated_span = span(30, 31);
         let mut sink = RawSafetyFactSink::default();
 
-        sink.record_call(owner, Some(owner), generated_span, None, false);
-        sink.record_call(owner, Some(owner), generated_span, None, false);
+        sink.record_call(owner, Some(owner), Some(owner), generated_span, None, false);
+        sink.record_call(owner, Some(owner), Some(owner), generated_span, None, false);
 
         let facts = sink.into_facts();
         assert_eq!(facts.calls.len(), 1);
@@ -815,9 +862,17 @@ mod tests {
         let first_scope = sink.new_safety_scope(owner, span(10, 20));
         let second_scope = sink.new_safety_scope(owner, span(40, 50));
 
-        sink.record_call(owner, Some(owner), generated_span, Some(first_scope), false);
         sink.record_call(
             owner,
+            Some(owner),
+            Some(owner),
+            generated_span,
+            Some(first_scope),
+            false,
+        );
+        sink.record_call(
+            owner,
+            Some(owner),
             Some(owner),
             generated_span,
             Some(second_scope),
@@ -836,7 +891,7 @@ mod tests {
         let generated_span = span(30, 31);
         let mut sink = RawSafetyFactSink::default();
 
-        sink.record_call(owner, Some(owner), generated_span, None, true);
+        sink.record_call(owner, Some(owner), Some(owner), generated_span, None, true);
 
         let facts = sink.into_facts();
         assert_eq!(facts.calls.len(), 1);

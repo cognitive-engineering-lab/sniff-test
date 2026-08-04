@@ -47,6 +47,9 @@ impl ArtifactAnalysisIr {
             for call in &mut body.calls {
                 sort_and_deduplicate(&mut call.applicable_attribution);
                 sort_and_deduplicate(&mut call.callable_keys);
+                if let Some(target) = &mut call.source_target {
+                    canonicalize_function_target(target);
+                }
                 canonicalize_call_target(&mut call.target);
             }
             for marker in &mut body.markers {
@@ -92,6 +95,25 @@ impl ArtifactAnalysisIr {
     pub(crate) fn defining_function_body(&self, function: FunctionId) -> Option<&FunctionBodyIr> {
         self.function_body_matching(function, |body| {
             matches!(body.provenance, FunctionBodyProvenanceIr::DefiningArtifact)
+        })
+    }
+
+    /// Resolves source-level facts from the defining artifact.
+    ///
+    /// Nested closures, coroutines, and inline constants can be emitted only
+    /// as exact instances. A consumer can assign the same stable definition a
+    /// different instance hash, so source facts fall back by definition path
+    /// after exact and generic lookup fail.
+    #[must_use]
+    pub(crate) fn defining_source_function_body(
+        &self,
+        function: FunctionId,
+    ) -> Option<&FunctionBodyIr> {
+        self.defining_function_body(function).or_else(|| {
+            self.functions.iter().find(|body| {
+                body.function.def_path_hash == function.def_path_hash
+                    && matches!(body.provenance, FunctionBodyProvenanceIr::DefiningArtifact)
+            })
         })
     }
 
@@ -335,6 +357,14 @@ pub(crate) struct CallEdgeIr {
     /// Workspace interpretation joins only evidence reachable from its selected
     /// roots, so cached IR never bakes a report-root-specific target edge.
     pub(crate) callable_keys: Vec<CallableKeyIr>,
+    /// Source-contract callee retained from THIR when every matched raw call
+    /// fact agrees on one definition.
+    ///
+    /// Unresolved generic or dynamic dispatch retains the trait declaration
+    /// even when a consumer later resolves [`Self::target`] to an impl. Calls
+    /// whose impl is already statically selected omit this field, leaving the
+    /// runtime target authoritative. This metadata never changes traversal.
+    pub(crate) source_target: Option<FunctionTargetIr>,
     pub(crate) target: CallTargetIr,
 }
 
@@ -580,6 +610,9 @@ fn validate_body(
             "callable-attribution applicability",
         )?;
         validate_strictly_sorted(&call.callable_keys, "callable key")?;
+        if let Some(target) = &call.source_target {
+            validate_function_target(target, source_lengths)?;
+        }
         validate_call_target(&call.target, source_lengths)?;
     }
 
@@ -989,6 +1022,31 @@ mod tests {
                 safety: None,
             },
         };
+        let source_target = FunctionTargetIr {
+            function: FunctionId::generic(def_hash("00000000000000110000000000000012")),
+            display_path: String::from("dependency::Action::call"),
+            attributes: FunctionAttributesIr {
+                is_unsafe: true,
+                is_exported: true,
+                has_rust_body: false,
+                is_foreign: false,
+                namespace_candidates: vec![
+                    String::from("dependency::Action::call"),
+                    String::from("dependency"),
+                ],
+            },
+            contracts: FunctionContractsIr {
+                panic: None,
+                safety: Some(RawContractIr {
+                    source_range: Some(range(181, 200)),
+                    requirements: vec![ContractRequirementIr {
+                        name: String::from("source-valid"),
+                        condition: String::from("the source-level precondition holds"),
+                        source_range: Some(range(185, 198)),
+                    }],
+                }),
+            },
+        };
         let root_contract_requirement = ContractRequirementIr {
             name: String::from("capacity"),
             condition: String::from("the buffer has capacity"),
@@ -1031,6 +1089,7 @@ mod tests {
                     CallableKeyIr::FnPointer(type_hash("000000000000000d000000000000000e")),
                     CallableKeyIr::FnPointer(type_hash("000000000000000d000000000000000e")),
                 ],
+                source_target: Some(source_target),
                 target: CallTargetIr::Function(callee_target),
             }],
             effects: vec![
@@ -1137,6 +1196,28 @@ mod tests {
         assert_eq!(
             decoded.functions[0].calls[0].safety_effect_group,
             Some(SafetyEffectGroupId::new(6))
+        );
+        let source_target = decoded.functions[0].calls[0]
+            .source_target
+            .as_ref()
+            .expect("round trip preserves the source-level callee");
+        assert_eq!(
+            source_target.function,
+            FunctionId::generic(def_hash("00000000000000110000000000000012"))
+        );
+        assert_eq!(
+            source_target.attributes.namespace_candidates,
+            ["dependency", "dependency::Action::call"]
+        );
+        assert_eq!(
+            source_target
+                .contracts
+                .safety
+                .as_ref()
+                .expect("source safety contract")
+                .requirements[0]
+                .name,
+            "source-valid"
         );
         assert_eq!(
             decoded.functions[0].markers[0].applicable_probing,
@@ -1304,6 +1385,7 @@ mod tests {
             callee_range: None,
             applicable_attribution: vec![CallableAttributionIr::CallSites],
             callable_keys: Vec::new(),
+            source_target: None,
             target: CallTargetIr::Function(target),
         });
         let error = ArtifactAnalysisIr::new(vec![body], Vec::new())

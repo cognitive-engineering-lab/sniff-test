@@ -171,13 +171,22 @@ impl ArtifactAnalysisCache {
             ),
             (self.artifact.artifact_id.as_str(), "artifact ID"),
             (self.artifact.crate_name.as_str(), "artifact crate name"),
-            (self.artifact.crate_hash.as_str(), "rustc crate hash"),
         ] {
             if value.trim().is_empty() {
                 return Err(CacheValidationError::new(format!(
                     "{label} must not be empty"
                 )));
             }
+        }
+        if self
+            .artifact
+            .crate_hash
+            .as_deref()
+            .is_some_and(|hash| hash.trim().is_empty())
+        {
+            return Err(CacheValidationError::new(
+                "rustc crate hash must not be empty when present",
+            ));
         }
         validate_dependencies(&self.artifact, &self.dependencies)?;
         self.ir
@@ -266,8 +275,10 @@ pub(crate) struct ArtifactInfo {
     pub(crate) artifact_id: String,
     pub(crate) crate_name: String,
     pub(crate) stable_crate_id: u64,
-    /// rustc's strict version hash (SVH) for the exact metadata loaded.
-    pub(crate) crate_hash: String,
+    /// rustc's strict version hash (SVH), when this compilation configuration
+    /// produces one. Artifacts that cannot be loaded as dependencies, such as
+    /// ordinary executables, may not need a crate hash.
+    pub(crate) crate_hash: Option<String>,
 }
 
 /// Exact dependency generation needed to compose this artifact's graph.
@@ -573,7 +584,7 @@ mod tests {
             artifact_id: String::from("sample-a1b2"),
             crate_name: String::from("sample"),
             stable_crate_id: LOCAL_STABLE_CRATE_ID,
-            crate_hash: String::from("0123456789abcdef0123456789abcdef"),
+            crate_hash: Some(String::from("0123456789abcdef0123456789abcdef")),
         }
     }
 

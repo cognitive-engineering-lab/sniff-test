@@ -290,6 +290,7 @@ fn collect_edge<'tcx>(
             edge.callee_span,
         ))
     })?;
+    let source_target = source_call_target(tcx, groups.source_callee, sources)?;
     let key = edge_key(
         tcx,
         graph,
@@ -318,10 +319,12 @@ fn collect_edge<'tcx>(
             callee_range,
             applicable_attribution: callable_attribution_for_edge(edge.kind),
             callable_keys: callable_keys(tcx, graph, reached),
+            source_target,
             target,
         },
     )?;
     let call_target = body.calls[call_index].call.target.clone();
+    let source_target = body.calls[call_index].call.source_target.clone();
 
     let effect_key = collect_compiler_assert_effect(
         graph,
@@ -341,8 +344,19 @@ fn collect_edge<'tcx>(
         body,
         &key,
         effect_key.as_deref(),
+        source_target.as_ref(),
         &call_target,
     )
+}
+
+fn source_call_target(
+    tcx: TyCtxt<'_>,
+    source_callee: Option<DefId>,
+    sources: &mut SourceTable,
+) -> Result<Option<FunctionTargetIr>, ExtractError> {
+    source_callee
+        .map(|def_id| function_target_for_def(tcx, def_id, sources))
+        .transpose()
 }
 
 fn reachability_call_identity(tcx: TyCtxt<'_>, reached: ReachedEdge<'_, '_>) -> Option<DefId> {
@@ -389,6 +403,7 @@ fn insert_or_merge_call(
         || existing.inside_builtin_unsafe != call.inside_builtin_unsafe
         || existing.callee_range != call.callee_range
         || existing.kind != call.kind
+        || existing.source_target != call.source_target
         || existing.target != call.target
     {
         return Err(ExtractError::new(
@@ -503,6 +518,7 @@ fn collect_edge_markers(
     body: &mut PendingBody,
     call_key: &str,
     effect_key: Option<&str>,
+    source_target: Option<&FunctionTargetIr>,
     call_target: &CallTargetIr,
 ) -> Result<(), ExtractError> {
     for (probing, applicable_probing) in probing_modes() {
@@ -515,7 +531,7 @@ fn collect_edge_markers(
             } else {
                 (
                     PendingMarkerTarget::Call(call_key.to_owned()),
-                    panic_requirements(call_target),
+                    panic_requirements(source_target, call_target),
                 )
             };
             push_effect_marker(
@@ -538,7 +554,7 @@ fn collect_edge_markers(
                 PendingMarkerTarget::Call(call_key.to_owned()),
                 marker,
                 applicable_probing,
-                safety_requirements(call_target),
+                safety_requirements(source_target, call_target),
             )?;
         }
     }
@@ -1024,6 +1040,7 @@ struct RawSafetyGroupSite {
 #[derive(Debug, Clone, Copy)]
 struct RawCallSite {
     callee: Option<DefId>,
+    source_callee: Option<DefId>,
     safety_group: usize,
     call_site: usize,
     inside_builtin_unsafe: bool,
@@ -1046,6 +1063,7 @@ struct ResolvedCallGroups {
     safety_effect_group: SafetyEffectGroupId,
     call_site: CallSiteId,
     inside_builtin_unsafe: bool,
+    source_callee: Option<DefId>,
 }
 
 /// Replays the policy-neutral grouping performed by the THIR unsafety walk.
@@ -1072,6 +1090,7 @@ impl RawSafetyGroupResolver {
                 .or_default()
                 .push(RawCallSite {
                     callee: fact.callee,
+                    source_callee: fact.source_callee,
                     safety_group: fact.effect_group.id,
                     call_site: fact.call_site,
                     inside_builtin_unsafe: fact.inside_builtin_unsafe,
@@ -1132,13 +1151,19 @@ impl RawSafetyGroupResolver {
                 site.safety_group,
                 site.call_site,
                 site.inside_builtin_unsafe,
+                site.source_callee,
             );
         }
-        if let Some(site) = unique_raw_call_groups(exact_calls.iter()) {
+        if let Some(site) = unique_raw_call_groups(
+            exact_calls
+                .iter()
+                .filter(|site| callee.is_none() || site.callee.is_none()),
+        ) {
             return resolved_call_groups(
                 site.safety_group,
                 site.call_site,
                 site.inside_builtin_unsafe,
+                site.source_callee,
             );
         }
         // Coroutine lowering can add a direct runtime-body edge at the same
@@ -1169,7 +1194,7 @@ impl RawSafetyGroupResolver {
         }
         .get(&(owner, span));
         if let Some(site) = existing {
-            return resolved_call_groups(site.safety_group, site.call_site, false);
+            return resolved_call_groups(site.safety_group, site.call_site, false, None);
         }
         let safety_group =
             if let Some(group) = containing_scope_group(&self.scopes_by_owner, owner, span) {
@@ -1197,21 +1222,40 @@ impl RawSafetyGroupResolver {
                 self.standalone_structural_edges.insert((owner, span), site);
             }
         }
-        resolved_call_groups(safety_group, call_site, false)
+        resolved_call_groups(safety_group, call_site, false, None)
     }
+}
+
+#[derive(Debug, Clone, Copy)]
+struct RawCallConsensus {
+    safety_group: usize,
+    call_site: usize,
+    inside_builtin_unsafe: bool,
+    source_callee: Option<DefId>,
 }
 
 fn unique_raw_call_groups<'a>(
     mut calls: impl Iterator<Item = &'a RawCallSite>,
-) -> Option<&'a RawCallSite> {
-    let first = calls.next()?;
-    calls
-        .all(|candidate| {
-            candidate.safety_group == first.safety_group
-                && candidate.call_site == first.call_site
-                && candidate.inside_builtin_unsafe == first.inside_builtin_unsafe
-        })
-        .then_some(first)
+) -> Option<RawCallConsensus> {
+    let first = *calls.next()?;
+    let mut source_callee = first.source_callee;
+    for candidate in calls {
+        if candidate.safety_group != first.safety_group
+            || candidate.call_site != first.call_site
+            || candidate.inside_builtin_unsafe != first.inside_builtin_unsafe
+        {
+            return None;
+        }
+        if candidate.source_callee != source_callee {
+            source_callee = None;
+        }
+    }
+    Some(RawCallConsensus {
+        safety_group: first.safety_group,
+        call_site: first.call_site,
+        inside_builtin_unsafe: first.inside_builtin_unsafe,
+        source_callee,
+    })
 }
 
 fn containing_scope_group(
@@ -1289,6 +1333,7 @@ fn resolved_call_groups(
     safety_group: usize,
     call_site: usize,
     inside_builtin_unsafe: bool,
+    source_callee: Option<DefId>,
 ) -> Result<ResolvedCallGroups, ExtractError> {
     Ok(ResolvedCallGroups {
         safety_effect_group: raw_safety_group_id(safety_group)?,
@@ -1296,6 +1341,7 @@ fn resolved_call_groups(
             .map(CallSiteId::new)
             .map_err(|_| ExtractError::new("too many raw call sites in one artifact"))?,
         inside_builtin_unsafe,
+        source_callee,
     })
 }
 
@@ -1436,15 +1482,25 @@ fn push_effect_marker(
     Ok(())
 }
 
-fn panic_requirements(target: &CallTargetIr) -> Vec<ContractRequirementIr> {
-    target_contracts(target)
-        .and_then(|contracts| contracts.panic.as_ref())
+fn panic_requirements(
+    source_target: Option<&FunctionTargetIr>,
+    runtime_target: &CallTargetIr,
+) -> Vec<ContractRequirementIr> {
+    source_target
+        .and_then(|target| target.contracts.panic.as_ref())
+        .or_else(|| target_contracts(runtime_target).and_then(|contracts| contracts.panic.as_ref()))
         .map_or_else(Vec::new, |contract| contract.requirements.clone())
 }
 
-fn safety_requirements(target: &CallTargetIr) -> Vec<ContractRequirementIr> {
-    target_contracts(target)
-        .and_then(|contracts| contracts.safety.as_ref())
+fn safety_requirements(
+    source_target: Option<&FunctionTargetIr>,
+    runtime_target: &CallTargetIr,
+) -> Vec<ContractRequirementIr> {
+    source_target
+        .and_then(|target| target.contracts.safety.as_ref())
+        .or_else(|| {
+            target_contracts(runtime_target).and_then(|contracts| contracts.safety.as_ref())
+        })
         .map_or_else(Vec::new, |contract| contract.requirements.clone())
 }
 
@@ -1722,6 +1778,7 @@ mod tests {
                 safety_effect_group: SafetyEffectGroupId::new(0),
                 call_site: CallSiteId::new(0),
                 inside_builtin_unsafe: false,
+                source_callee: None,
             }
         );
         assert_eq!(
@@ -1732,6 +1789,7 @@ mod tests {
                 safety_effect_group: SafetyEffectGroupId::new(1),
                 call_site: CallSiteId::new(1),
                 inside_builtin_unsafe: false,
+                source_callee: None,
             }
         );
         let first = resolver
@@ -1746,6 +1804,7 @@ mod tests {
                 safety_effect_group: SafetyEffectGroupId::new(2),
                 call_site: CallSiteId::new(2),
                 inside_builtin_unsafe: false,
+                source_callee: None,
             }
         );
         assert_eq!(second, first);
@@ -1757,6 +1816,7 @@ mod tests {
         let first_callee = DefId::local(DefIndex::from_u32(1));
         let second_callee = DefId::local(DefIndex::from_u32(2));
         let unmatched_callee = DefId::local(DefIndex::from_u32(3));
+        let second_source_callee = DefId::local(DefIndex::from_u32(4));
         let shared_span = span(10, 40);
         let facts = RawSafetyFacts {
             groups: Vec::new(),
@@ -1764,6 +1824,7 @@ mod tests {
                 RawSafetyCallFact {
                     owner,
                     callee: Some(first_callee),
+                    source_callee: Some(first_callee),
                     inside_builtin_unsafe: false,
                     call_site: 0,
                     span: shared_span,
@@ -1775,6 +1836,7 @@ mod tests {
                 RawSafetyCallFact {
                     owner,
                     callee: Some(second_callee),
+                    source_callee: Some(second_source_callee),
                     inside_builtin_unsafe: true,
                     call_site: 1,
                     span: shared_span,
@@ -1796,6 +1858,7 @@ mod tests {
                 safety_effect_group: SafetyEffectGroupId::new(1),
                 call_site: CallSiteId::new(1),
                 inside_builtin_unsafe: true,
+                source_callee: Some(second_source_callee),
             }
         );
         assert_eq!(
@@ -1806,6 +1869,93 @@ mod tests {
                 safety_effect_group: SafetyEffectGroupId::new(2),
                 call_site: CallSiteId::new(2),
                 inside_builtin_unsafe: false,
+                source_callee: None,
+            }
+        );
+    }
+
+    #[test]
+    fn call_grouping_keeps_only_a_consensus_source_callee() {
+        let owner = CRATE_DEF_ID.to_def_id();
+        let first_callee = DefId::local(DefIndex::from_u32(1));
+        let second_callee = DefId::local(DefIndex::from_u32(2));
+        let shared_span = span(10, 40);
+        let shared_group = RawSafetyEffectGroup {
+            id: 0,
+            span: shared_span,
+        };
+        let facts = RawSafetyFacts {
+            groups: Vec::new(),
+            calls: vec![
+                RawSafetyCallFact {
+                    owner,
+                    callee: Some(first_callee),
+                    source_callee: Some(first_callee),
+                    inside_builtin_unsafe: false,
+                    call_site: 0,
+                    span: shared_span,
+                    effect_group: shared_group,
+                },
+                RawSafetyCallFact {
+                    owner,
+                    callee: Some(second_callee),
+                    source_callee: Some(second_callee),
+                    inside_builtin_unsafe: false,
+                    call_site: 0,
+                    span: shared_span,
+                    effect_group: shared_group,
+                },
+            ],
+            operations: Vec::new(),
+        };
+        let mut resolver = RawSafetyGroupResolver::new(&facts);
+
+        assert_eq!(
+            resolver
+                .group_for_call(owner, shared_span, None)
+                .expect("shared raw site remains a valid group"),
+            super::ResolvedCallGroups {
+                safety_effect_group: SafetyEffectGroupId::new(0),
+                call_site: CallSiteId::new(0),
+                inside_builtin_unsafe: false,
+                source_callee: None,
+            }
+        );
+    }
+
+    #[test]
+    fn call_grouping_does_not_borrow_a_different_known_callee() {
+        let owner = CRATE_DEF_ID.to_def_id();
+        let source_callee = DefId::local(DefIndex::from_u32(1));
+        let requested_callee = DefId::local(DefIndex::from_u32(2));
+        let shared_span = span(10, 40);
+        let facts = RawSafetyFacts {
+            groups: Vec::new(),
+            calls: vec![RawSafetyCallFact {
+                owner,
+                callee: Some(source_callee),
+                source_callee: Some(source_callee),
+                inside_builtin_unsafe: true,
+                call_site: 0,
+                span: shared_span,
+                effect_group: RawSafetyEffectGroup {
+                    id: 0,
+                    span: shared_span,
+                },
+            }],
+            operations: Vec::new(),
+        };
+        let mut resolver = RawSafetyGroupResolver::new(&facts);
+
+        assert_eq!(
+            resolver
+                .group_for_call(owner, shared_span, Some(requested_callee))
+                .expect("a different known callee gets a standalone identity"),
+            super::ResolvedCallGroups {
+                safety_effect_group: SafetyEffectGroupId::new(1),
+                call_site: CallSiteId::new(1),
+                inside_builtin_unsafe: false,
+                source_callee: None,
             }
         );
     }
@@ -1822,6 +1972,7 @@ mod tests {
                 RawSafetyCallFact {
                     owner,
                     callee: Some(first_callee),
+                    source_callee: Some(first_callee),
                     inside_builtin_unsafe: false,
                     call_site: 0,
                     span: shared_span,
@@ -1833,6 +1984,7 @@ mod tests {
                 RawSafetyCallFact {
                     owner,
                     callee: Some(second_callee),
+                    source_callee: Some(second_callee),
                     inside_builtin_unsafe: false,
                     call_site: 1,
                     span: shared_span,
@@ -1858,6 +2010,7 @@ mod tests {
                 safety_effect_group: SafetyEffectGroupId::new(2),
                 call_site: CallSiteId::new(2),
                 inside_builtin_unsafe: false,
+                source_callee: None,
             }
         );
         assert_eq!(second, first);
@@ -1890,6 +2043,7 @@ mod tests {
                 safety_effect_group: SafetyEffectGroupId::new(1),
                 call_site: CallSiteId::new(0),
                 inside_builtin_unsafe: false,
+                source_callee: None,
             }
         );
     }
@@ -1928,6 +2082,7 @@ mod tests {
                 safety_effect_group: SafetyEffectGroupId::new(2),
                 call_site: CallSiteId::new(0),
                 inside_builtin_unsafe: false,
+                source_callee: None,
             }
         );
     }

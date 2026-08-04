@@ -194,6 +194,34 @@ pub fn unknown_unsafe_fn_pointer(function: unsafe fn()) {
     unsafe { function() }
 }
 
+trait LocalContractAction {
+    /// # Safety
+    ///
+    /// Requirements:
+    ///
+    /// - invariant: the caller must preserve the local invariant.
+    unsafe fn apply();
+}
+
+struct LocalContractImpl;
+
+impl LocalContractAction for LocalContractImpl {
+    unsafe fn apply() {}
+}
+
+#[inline(never)]
+fn invoke_local_contract<T: LocalContractAction>() {
+    // SAFETY:
+    // - invariant: this generic invocation preserves the local invariant.
+    unsafe {
+        T::apply();
+    }
+}
+
+pub fn local_generic_trait_contract_satisfied() {
+    invoke_local_contract::<LocalContractImpl>();
+}
+
 pub fn safe_obligation_through_unsafe_pointer_satisfied() {
     let byte = 7;
     let ptr = &raw const byte;

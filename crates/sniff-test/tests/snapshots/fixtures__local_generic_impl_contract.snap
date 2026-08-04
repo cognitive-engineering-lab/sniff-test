@@ -1,0 +1,19 @@
+---
+source: crates/sniff-test/tests/fixtures.rs
+assertion_line: 558
+expression: messages
+---
+[
+  {
+    "artifact": {
+      "artifact-id": "[ARTIFACT_ID]",
+      "crate-name": "local_generic_impl_contract"
+    },
+    "dependencies": [],
+    "findings": [],
+    "format-version": 11,
+    "reason": "sniff-test-artifact",
+    "rustc-version": "[RUSTC_VERSION]",
+    "tool-version": "0.1.0"
+  }
+]

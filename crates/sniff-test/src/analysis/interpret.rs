@@ -50,6 +50,15 @@ pub(crate) trait FunctionLookup {
         })
     }
 
+    /// Resolves only source-level facts from the defining artifact.
+    ///
+    /// Unlike [`Self::defining_body`], this may use a different exact
+    /// instance with the same stable definition path. It must not be used for
+    /// MIR call-graph traversal.
+    fn defining_source_body(&self, function: FunctionId) -> Option<LoadedFunction<'_>> {
+        self.defining_body(function)
+    }
+
     /// Resolves a target in the current artifact context, then falls back only
     /// to facts from its defining artifact. It must never borrow an exact
     /// overlay from an unrelated consumer generation.
@@ -90,6 +99,11 @@ impl FunctionLookup for ArtifactAnalysisIr {
         self.defining_function_body(function)
             .map(|body| LoadedFunction::new(body, BodyScope::in_memory(self)))
     }
+
+    fn defining_source_body(&self, function: FunctionId) -> Option<LoadedFunction<'_>> {
+        self.defining_source_function_body(function)
+            .map(|body| LoadedFunction::new(body, BodyScope::in_memory(self)))
+    }
 }
 
 impl FunctionLookup for ArtifactAnalysisCache {
@@ -115,6 +129,12 @@ impl FunctionLookup for ArtifactAnalysisCache {
             .map(|body| LoadedFunction::new(body, BodyScope::artifact(self)))
     }
 
+    fn defining_source_body(&self, function: FunctionId) -> Option<LoadedFunction<'_>> {
+        self.ir
+            .defining_source_function_body(function)
+            .map(|body| LoadedFunction::new(body, BodyScope::artifact(self)))
+    }
+
     fn manages_stable_crate_id(&self, stable_crate_id: u64) -> bool {
         self.artifact.stable_crate_id == stable_crate_id
     }
@@ -135,6 +155,10 @@ impl FunctionLookup for ArtifactAnalysisGraph {
 
     fn defining_body(&self, function: FunctionId) -> Option<LoadedFunction<'_>> {
         ArtifactAnalysisGraph::defining_function(self, function)
+    }
+
+    fn defining_source_body(&self, function: FunctionId) -> Option<LoadedFunction<'_>> {
+        ArtifactAnalysisGraph::defining_source_function(self, function)
     }
 
     fn manages_stable_crate_id(&self, stable_crate_id: u64) -> bool {
@@ -176,6 +200,12 @@ impl FunctionLookup for LayeredFunctionLookup<'_> {
         self.layers
             .iter()
             .find_map(|layer| layer.defining_body(function))
+    }
+
+    fn defining_source_body(&self, function: FunctionId) -> Option<LoadedFunction<'_>> {
+        self.layers
+            .iter()
+            .find_map(|layer| layer.defining_source_body(function))
     }
 
     fn manages_stable_crate_id(&self, stable_crate_id: u64) -> bool {
@@ -391,14 +421,20 @@ struct CallableTargetEvidence {
 
 struct ResolvedCallContext {
     target_scope: BodyScope,
-    safety: ReconciledCallSafety,
+    facts: ReconciledCallFacts,
 }
 
 #[derive(Debug, Clone)]
-struct ReconciledCallSafety {
+struct ReconciledCallFacts {
     fact_scope: BodyScope,
+    call_site: CallSiteId,
     effect_group: Option<SafetyEffectGroupId>,
     inside_builtin_unsafe: bool,
+    /// Source-contract target retained from unresolved or dynamic THIR
+    /// dispatch. This carries the declared contract when a consumer later
+    /// resolves the runtime edge to a concrete impl.
+    source_target: Option<FunctionTargetIr>,
+    defining_target: Option<FunctionTargetIr>,
 }
 
 #[derive(Debug, Clone)]
@@ -664,7 +700,7 @@ impl<'a> DomainInterpreter<'a> {
             FunctionBodyProvenanceIr::ConsumerInstantiation { .. }
         );
         let defining_body = (is_consumer_overlay && self.domain == EffectDomain::Safety)
-            .then(|| self.lookup.defining_body(body.function))
+            .then(|| self.lookup.defining_source_body(body.function))
             .flatten();
         // rustc can expose exact MIR for an unmanaged compiler-crate
         // instantiation even though no defining artifact can provide THIR
@@ -673,6 +709,19 @@ impl<'a> DomainInterpreter<'a> {
         // into managed workspace closures or implementations.
         let opaque_consumer_safety =
             is_consumer_overlay && self.domain == EffectDomain::Safety && defining_body.is_none();
+        if opaque_consumer_safety
+            && body.attributes.has_rust_body
+            && self
+                .lookup
+                .manages_stable_crate_id(body.function.def_path_hash.stable_crate_id())
+        {
+            self.missing_body(
+                body.function,
+                pending.path.clone(),
+                pending.source_range.clone(),
+                pending.trace.to_interpreted(&self.trace_nodes),
+            );
+        }
         if !opaque_consumer_safety {
             self.interpret_effects(&body, &body_scope, &pending.satisfactions, &pending.trace);
             if let Some(defining_body) = defining_body {
@@ -810,7 +859,7 @@ impl<'a> DomainInterpreter<'a> {
         let raw_call = &pending.call.body.calls[pending.call.call_index];
         let context = ResolvedCallContext {
             target_scope: pending.evidence.scope.clone(),
-            safety: self.reconciled_call_safety(
+            facts: self.reconciled_call_facts(
                 &pending.call.body,
                 &pending.call.body_scope,
                 raw_call,
@@ -1066,12 +1115,7 @@ impl<'a> DomainInterpreter<'a> {
                 target_path: target.as_ref().map(|target| target.path.clone()),
             },
         );
-        let satisfactions = self.satisfactions_for(
-            body,
-            body_scope,
-            &MarkerTargetIr::Call(call.id),
-            path_satisfactions,
-        );
+        let satisfactions = self.satisfactions_for_call(body, body_scope, call, path_satisfactions);
 
         match self.domain {
             EffectDomain::Panic => self.interpret_panic_call(
@@ -1116,7 +1160,12 @@ impl<'a> DomainInterpreter<'a> {
         };
         // A consumer overlay is opaque for its own safety facts, but it can
         // relay dispatch through further overlays until traversal reaches a
-        // defining body owned by the composed analysis.
+        // defining body owned by the composed analysis. A managed target with
+        // an omitted body must still be scheduled so `visit` records the
+        // incomplete artifact IR.
+        let target_is_managed = self
+            .lookup
+            .manages_stable_crate_id(metadata.function.def_path_hash.stable_crate_id());
         let target_body_is_traversable = self
             .lookup
             .resolve(target_scope, metadata.function)
@@ -1128,7 +1177,7 @@ impl<'a> DomainInterpreter<'a> {
                 )
             })
             || self.lookup.defining_body(metadata.function).is_some();
-        if !target_body_is_traversable
+        if (!target_body_is_traversable && !target_is_managed)
             || metadata.attributes.is_foreign
             || !metadata.attributes.has_rust_body
             || self
@@ -1202,7 +1251,15 @@ impl<'a> DomainInterpreter<'a> {
         satisfactions: &SatisfactionState,
         trace: TracePath,
     ) {
-        let Some(metadata) = metadata else {
+        let facts = resolved.map_or_else(
+            || self.reconciled_call_facts(body, body_scope, call),
+            |resolved| resolved.facts.clone(),
+        );
+        let runtime_metadata = metadata;
+        let Some(metadata) = runtime_metadata
+            .or(facts.defining_target.as_ref())
+            .or(facts.source_target.as_ref())
+        else {
             if opaque_description.is_some() && is_actual_call(call.kind) {
                 self.push_terminal_call(
                     body,
@@ -1234,7 +1291,7 @@ impl<'a> DomainInterpreter<'a> {
             .config
             .panics
             .panic_boundary_policy_candidates(&metadata.attributes.namespace_candidates);
-        let contract = self.target_contract(metadata, EffectDomain::Panic);
+        let contract = self.call_contract(&facts, runtime_metadata, EffectDomain::Panic);
         if policy == PanicBoundaryPolicy::PanicSink {
             self.push_terminal_call(
                 body,
@@ -1342,6 +1399,14 @@ impl<'a> DomainInterpreter<'a> {
         satisfactions: &SatisfactionState,
         trace: TracePath,
     ) {
+        let facts = resolved.map_or_else(
+            || self.reconciled_call_facts(body, body_scope, call),
+            |resolved| resolved.facts.clone(),
+        );
+        let runtime_metadata = metadata;
+        let metadata = runtime_metadata
+            .or(facts.defining_target.as_ref())
+            .or(facts.source_target.as_ref());
         if let Some(metadata) = metadata
             && self
                 .config
@@ -1351,15 +1416,8 @@ impl<'a> DomainInterpreter<'a> {
             return;
         }
 
-        let inside_builtin_unsafe = resolved.map_or_else(
-            || {
-                self.reconciled_call_safety(body, body_scope, call)
-                    .inside_builtin_unsafe
-            },
-            |resolved| resolved.safety.inside_builtin_unsafe,
-        );
-        let contract =
-            metadata.and_then(|target| self.target_contract(target, EffectDomain::Safety));
+        let inside_builtin_unsafe = facts.inside_builtin_unsafe;
+        let contract = self.call_contract(&facts, runtime_metadata, EffectDomain::Safety);
         if let (Some(metadata), Some(contract)) = (metadata, contract) {
             if inside_builtin_unsafe {
                 return;
@@ -1462,17 +1520,17 @@ impl<'a> DomainInterpreter<'a> {
             call.id,
             callable_resolution_target(call),
         );
-        let safety = resolved.map_or_else(
-            || self.reconciled_call_safety(body, body_scope, call),
-            |resolved| resolved.safety.clone(),
+        let facts = resolved.map_or_else(
+            || self.reconciled_call_facts(body, body_scope, call),
+            |resolved| resolved.facts.clone(),
         );
         self.claim_markers(
             requirements,
             satisfactions,
             &endpoint,
-            &safety.fact_scope,
-            Some(call.call_site),
-            safety.effect_group,
+            &facts.fact_scope,
+            Some(facts.call_site),
+            facts.effect_group,
             &trace,
         );
         let Some(missing) = missing_requirements(requirements, satisfactions) else {
@@ -1490,58 +1548,59 @@ impl<'a> DomainInterpreter<'a> {
         );
     }
 
-    fn reconciled_call_safety(
+    fn reconciled_call_facts(
         &self,
         body: &FunctionBodyIr,
         body_scope: &BodyScope,
         call: &CallEdgeIr,
-    ) -> ReconciledCallSafety {
-        let fallback = ReconciledCallSafety {
+    ) -> ReconciledCallFacts {
+        let fallback = ReconciledCallFacts {
             fact_scope: body_scope.clone(),
+            call_site: call.call_site,
             effect_group: call.safety_effect_group,
             inside_builtin_unsafe: call.inside_builtin_unsafe,
+            source_target: call.source_target.clone(),
+            defining_target: None,
         };
-        if self.domain != EffectDomain::Safety
-            || !matches!(
-                body.provenance,
-                FunctionBodyProvenanceIr::ConsumerInstantiation { .. }
-            )
-        {
+        if !matches!(
+            body.provenance,
+            FunctionBodyProvenanceIr::ConsumerInstantiation { .. }
+        ) {
             return fallback;
         }
-        let Some(defining_body) = self.lookup.defining_body(body.function) else {
+        let Some(defining_body) = self.lookup.defining_source_body(body.function) else {
             return fallback;
         };
         let active_attribution = self.active_attribution();
-        let candidates = defining_body
-            .body()
-            .calls
-            .iter()
-            .filter(|candidate| {
-                candidate
-                    .applicable_attribution
-                    .contains(&active_attribution)
-                    && definition_call_matches(call, candidate)
-            })
-            .collect::<Vec<_>>();
-        let Some(first) = candidates.first() else {
+        let candidates = matching_definition_calls(defining_body.body(), call, active_attribution);
+        if candidates.is_empty() {
             return fallback;
+        }
+        let defining_call_site = shared_call_site(&candidates);
+        let defining_effect_group = shared_safety_effect_group(&candidates);
+        let uses_defining_scope = match self.domain {
+            EffectDomain::Panic => defining_call_site.is_some(),
+            EffectDomain::Safety => defining_effect_group.is_shared(),
         };
-        let (fact_scope, effect_group) = if candidates
-            .iter()
-            .all(|candidate| candidate.safety_effect_group == first.safety_effect_group)
-        {
-            (defining_body.scope().clone(), first.safety_effect_group)
+        let fact_scope = if uses_defining_scope {
+            defining_body.scope().clone()
         } else {
-            (fallback.fact_scope, fallback.effect_group)
+            fallback.fact_scope.clone()
         };
-        ReconciledCallSafety {
+        let source_target =
+            shared_source_target(&candidates).or_else(|| fallback.source_target.clone());
+        ReconciledCallFacts {
             fact_scope,
-            effect_group,
+            call_site: defining_call_site.unwrap_or(fallback.call_site),
+            effect_group: defining_effect_group
+                .into_shared()
+                .unwrap_or(fallback.effect_group),
             inside_builtin_unsafe: fallback.inside_builtin_unsafe
                 || candidates
                     .iter()
                     .all(|candidate| candidate.inside_builtin_unsafe),
+            source_target,
+            defining_target: shared_definition_target(&candidates),
         }
     }
 
@@ -1734,6 +1793,61 @@ impl<'a> DomainInterpreter<'a> {
         satisfactions
     }
 
+    fn satisfactions_for_call(
+        &self,
+        body: &FunctionBodyIr,
+        body_scope: &BodyScope,
+        call: &CallEdgeIr,
+        path_satisfactions: &SatisfactionState,
+    ) -> SatisfactionState {
+        let mut satisfactions = self.satisfactions_for(
+            body,
+            body_scope,
+            &MarkerTargetIr::Call(call.id),
+            path_satisfactions,
+        );
+        if !matches!(
+            body.provenance,
+            FunctionBodyProvenanceIr::ConsumerInstantiation { .. }
+        ) {
+            return satisfactions;
+        }
+        let Some(defining_body) = self.lookup.defining_source_body(body.function) else {
+            return satisfactions;
+        };
+        let candidates =
+            matching_definition_calls(defining_body.body(), call, self.active_attribution());
+        if candidates.is_empty() {
+            return satisfactions;
+        }
+        let source_group_is_unambiguous = match self.domain {
+            EffectDomain::Panic => shared_call_site(&candidates).is_some(),
+            EffectDomain::Safety => shared_safety_effect_group(&candidates).is_shared(),
+        };
+        if !source_group_is_unambiguous {
+            return satisfactions;
+        }
+
+        let marker_kind = match self.domain {
+            EffectDomain::Panic => MarkerKindIr::PanicJustification,
+            EffectDomain::Safety => MarkerKindIr::SafetyJustification,
+        };
+        let marker_owner =
+            ScopedFunctionId::new(defining_body.scope(), defining_body.body().function);
+        for marker in defining_body.body().markers.iter().filter(|marker| {
+            marker.kind == marker_kind
+                && self.marker_applies(marker)
+                && matches!(
+                    &marker.target,
+                    MarkerTargetIr::Call(call_id)
+                        if candidates.iter().any(|candidate| candidate.id == *call_id)
+                )
+        }) {
+            satisfactions.add_marker(marker_owner.clone(), marker);
+        }
+        satisfactions
+    }
+
     fn active_attribution(&self) -> CallableAttributionIr {
         match self.config.analysis.callable_edge_attribution {
             CallableEdgeAttribution::ErasureSites => CallableAttributionIr::ErasureSites,
@@ -1791,6 +1905,28 @@ impl<'a> DomainInterpreter<'a> {
             EffectDomain::Safety => target.contracts.safety.as_ref(),
         };
         self.effective_contract(&target.attributes.namespace_candidates, raw, domain)
+    }
+
+    fn call_contract(
+        &self,
+        facts: &ReconciledCallFacts,
+        runtime_target: Option<&FunctionTargetIr>,
+        domain: EffectDomain,
+    ) -> Option<EffectiveContract> {
+        if let Some(contract) = facts
+            .source_target
+            .as_ref()
+            .and_then(|target| self.target_contract(target, domain))
+        {
+            return Some(contract);
+        }
+        match runtime_target {
+            Some(target) => self.target_contract(target, domain),
+            None => facts
+                .defining_target
+                .as_ref()
+                .and_then(|target| self.target_contract(target, domain)),
+        }
     }
 
     fn effective_contract(
@@ -2117,11 +2253,118 @@ fn append_macro_expansion_steps(
 }
 
 fn definition_call_matches(overlay: &CallEdgeIr, defining: &CallEdgeIr) -> bool {
+    same_source_call(overlay, defining)
+        && (call_target(overlay)
+            .0
+            .zip(call_target(defining).0)
+            .is_some_and(|(overlay, defining)| {
+                overlay.function.def_path_hash == defining.function.def_path_hash
+            })
+            || (overlay.kind == defining.kind
+                && call_target_definitions_match(&overlay.target, &defining.target)))
+}
+
+fn same_source_call(overlay: &CallEdgeIr, defining: &CallEdgeIr) -> bool {
     overlay.expanded_range.is_some()
         && overlay.expanded_range == defining.expanded_range
         && overlay.callee_range == defining.callee_range
-        && overlay.kind == defining.kind
-        && call_target_definitions_match(&overlay.target, &defining.target)
+}
+
+fn matching_definition_calls<'a>(
+    defining_body: &'a FunctionBodyIr,
+    overlay: &CallEdgeIr,
+    active_attribution: CallableAttributionIr,
+) -> Vec<&'a CallEdgeIr> {
+    let source_candidates = defining_body
+        .calls
+        .iter()
+        .filter(|candidate| {
+            candidate
+                .applicable_attribution
+                .contains(&active_attribution)
+                && same_source_call(overlay, candidate)
+        })
+        .collect::<Vec<_>>();
+    let semantic_matches = source_candidates
+        .iter()
+        .copied()
+        .filter(|candidate| definition_call_matches(overlay, candidate))
+        .collect::<Vec<_>>();
+    if !semantic_matches.is_empty() {
+        return semantic_matches;
+    }
+
+    // Monomorphization can turn an opaque trait invocation into a concrete
+    // direct call with a different definition identity. Fall back to the
+    // stable source-call identity only when no semantic target match exists;
+    // consensus checks on group/site identity keep ambiguous lowering
+    // candidates conservative.
+    source_candidates
+        .into_iter()
+        .filter(|candidate| is_actual_call(overlay.kind) && is_actual_call(candidate.kind))
+        .collect()
+}
+
+fn shared_call_site(candidates: &[&CallEdgeIr]) -> Option<CallSiteId> {
+    let first = candidates.first()?.call_site;
+    candidates
+        .iter()
+        .all(|candidate| candidate.call_site == first)
+        .then_some(first)
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum FactConsensus<T> {
+    Shared(T),
+    Ambiguous,
+}
+
+impl<T> FactConsensus<T> {
+    const fn is_shared(&self) -> bool {
+        matches!(self, Self::Shared(_))
+    }
+
+    fn into_shared(self) -> Option<T> {
+        match self {
+            Self::Shared(value) => Some(value),
+            Self::Ambiguous => None,
+        }
+    }
+}
+
+fn shared_safety_effect_group(
+    candidates: &[&CallEdgeIr],
+) -> FactConsensus<Option<SafetyEffectGroupId>> {
+    let Some(first) = candidates.first() else {
+        return FactConsensus::Ambiguous;
+    };
+    let first = first.safety_effect_group;
+    if candidates
+        .iter()
+        .all(|candidate| candidate.safety_effect_group == first)
+    {
+        FactConsensus::Shared(first)
+    } else {
+        FactConsensus::Ambiguous
+    }
+}
+
+fn shared_definition_target(candidates: &[&CallEdgeIr]) -> Option<FunctionTargetIr> {
+    let first = call_target(candidates.first()?).0?;
+    candidates
+        .iter()
+        .skip(1)
+        .all(|candidate| call_target(candidate).0 == Some(first))
+        .then(|| first.clone())
+}
+
+fn shared_source_target(candidates: &[&CallEdgeIr]) -> Option<FunctionTargetIr> {
+    let first = candidates.first()?.source_target.as_ref()?;
+    candidates
+        .iter()
+        .skip(1)
+        .all(|candidate| candidate.source_target.as_ref() == Some(first))
+        .then(|| first.clone())
 }
 
 fn call_target_definitions_match(overlay: &CallTargetIr, defining: &CallTargetIr) -> bool {
@@ -2321,7 +2564,8 @@ mod tests {
         EffectKindIr, FunctionAttributesIr, FunctionBodyIr, FunctionBodyProvenanceIr,
         FunctionContractsIr, FunctionId, FunctionTargetIr, MacroExpansionFrameIr, MarkerId,
         MarkerIr, MarkerKindIr, MarkerProbingIr, MarkerSatisfactionIr, MarkerTargetIr,
-        RawContractIr, SafetyEffectGroupId, SourceFileId, SourceFileIr, SourceRangeIr,
+        OpaqueTargetIr, RawContractIr, SafetyEffectGroupId, SourceFileId, SourceFileIr,
+        SourceRangeIr,
     };
     use crate::config::{CallableEdgeAttribution, LintLevel, MarkerProbing, SniffTestConfig};
     use crate::contracts::ContractDocOverrides;
@@ -2988,6 +3232,306 @@ mod tests {
     }
 
     #[test]
+    fn consumer_overlay_concrete_trait_call_reuses_defining_safety_marker() {
+        let root = id(1, 1);
+        let dependency_generic = id(2, 1);
+        let dependency_exact =
+            FunctionId::exact(dependency_generic.def_path_hash, instance_hash(7));
+        let trait_method = id(2, 2);
+        let dependency_impl = id(2, 3);
+        let concrete_impl = id(1, 2);
+
+        let mut overlay_call = call(
+            0,
+            unsafe_function_target(concrete_impl, "workspace::Local::apply"),
+        );
+        overlay_call.requires_unsafe = true;
+        overlay_call.source_range = Some(source_range(20, 30));
+        overlay_call.expanded_range = Some(source_range(20, 30));
+        overlay_call.callee_range = Some(source_range(20, 25));
+        overlay_call.safety_effect_group = Some(SafetyEffectGroupId::new(10));
+        let local = ir_with_source(vec![
+            body(root, "workspace::root").with_call(call(
+                0,
+                function_target(dependency_exact, "dependency::invoke::<workspace::Local>"),
+            )),
+            body(dependency_exact, "dependency::invoke::<workspace::Local>")
+                .consumer_instantiation(1)
+                .with_call(overlay_call),
+            body(concrete_impl, "workspace::Local::apply").unsafe_function(),
+        ]);
+
+        let CallTargetIr::Function(mut trait_metadata) =
+            unsafe_function_target(trait_method, "dependency::Action::apply")
+        else {
+            unreachable!("unsafe_function_target always creates a function target");
+        };
+        trait_metadata.contracts.safety = Some(contract(vec![requirement(
+            "invariant",
+            "implementations uphold the private invariant",
+        )]));
+        let mut defining_call = call(
+            0,
+            unsafe_function_target(dependency_impl, "dependency::DependencyAction::apply"),
+        );
+        defining_call.source_target = Some(trait_metadata);
+        defining_call.requires_unsafe = true;
+        defining_call.source_range = Some(source_range(20, 30));
+        defining_call.expanded_range = Some(source_range(20, 30));
+        defining_call.callee_range = Some(source_range(20, 25));
+        defining_call.safety_effect_group = Some(SafetyEffectGroupId::new(7));
+        let marker = justification_marker(
+            0,
+            MarkerKindIr::SafetyJustification,
+            MarkerTargetIr::Call(CallId::new(0)),
+            Some("invariant"),
+        );
+        let dependency = ir_with_source(vec![
+            body(dependency_generic, "dependency::invoke")
+                .with_call(defining_call)
+                .with_marker(marker),
+        ]);
+        let lookup = LayeredFunctionLookup::new(vec![&local, &dependency]);
+
+        let result = interpret(&lookup, &[report_root(root)], &SniffTestConfig::default());
+
+        assert!(
+            !result.roots[0]
+                .findings
+                .iter()
+                .any(|finding| matches!(finding.kind, InterpretedFindingKind::SafetyCall { .. }))
+        );
+    }
+
+    #[test]
+    fn consumer_overlay_concrete_trait_call_reuses_defining_panic_contract_and_marker() {
+        let root = id(1, 1);
+        let dependency_generic = id(2, 1);
+        let dependency_exact =
+            FunctionId::exact(dependency_generic.def_path_hash, instance_hash(7));
+        let trait_method = id(2, 2);
+        let dependency_impl = id(2, 3);
+        let concrete_impl = id(1, 2);
+
+        let mut overlay_call = call(
+            0,
+            function_target(concrete_impl, "workspace::Local::may_panic"),
+        );
+        overlay_call.expanded_range = Some(source_range(20, 30));
+        overlay_call.callee_range = Some(source_range(20, 25));
+        let local = ir_with_source(vec![
+            body(root, "workspace::root").with_call(call(
+                0,
+                function_target(dependency_exact, "dependency::invoke::<workspace::Local>"),
+            )),
+            body(dependency_exact, "dependency::invoke::<workspace::Local>")
+                .consumer_instantiation(1)
+                .with_call(overlay_call),
+            body(concrete_impl, "workspace::Local::may_panic")
+                .with_effect(assert_effect(0, CompilerAssertKind::BoundsCheck)),
+        ]);
+
+        let CallTargetIr::Function(mut trait_metadata) =
+            function_target(trait_method, "dependency::Action::may_panic")
+        else {
+            unreachable!("function_target always creates a function target");
+        };
+        trait_metadata.contracts.panic = Some(contract(vec![requirement(
+            "invariant",
+            "the private invariant holds",
+        )]));
+        let mut defining_call = call(
+            0,
+            function_target_with_contracts(
+                dependency_impl,
+                "dependency::DependencyAction::may_panic",
+                FunctionContractsIr {
+                    panic: Some(contract(vec![requirement(
+                        "dependency",
+                        "the dependency-local implementation precondition holds",
+                    )])),
+                    safety: None,
+                },
+            ),
+        );
+        defining_call.source_target = Some(trait_metadata);
+        defining_call.expanded_range = Some(source_range(20, 30));
+        defining_call.callee_range = Some(source_range(20, 25));
+        let marker = justification_marker(
+            0,
+            MarkerKindIr::PanicJustification,
+            MarkerTargetIr::Call(CallId::new(0)),
+            Some("invariant"),
+        );
+        let dependency = ir_with_source(vec![
+            body(dependency_generic, "dependency::invoke")
+                .with_call(defining_call)
+                .with_marker(marker),
+        ]);
+        let lookup = LayeredFunctionLookup::new(vec![&local, &dependency]);
+
+        let result = interpret(&lookup, &[report_root(root)], &SniffTestConfig::default());
+
+        assert!(result.roots[0].findings.is_empty());
+    }
+
+    #[test]
+    fn source_trait_without_docs_falls_back_to_the_concrete_impl_contract() {
+        let root = id(1, 1);
+        let dependency_generic = id(2, 1);
+        let dependency_exact =
+            FunctionId::exact(dependency_generic.def_path_hash, instance_hash(7));
+        let trait_method = id(2, 2);
+        let dependency_impl = id(2, 3);
+        let concrete_impl = id(1, 2);
+
+        let mut overlay_call = call(
+            0,
+            function_target_with_contracts(
+                concrete_impl,
+                "workspace::Local::may_panic",
+                FunctionContractsIr {
+                    panic: Some(contract(vec![requirement(
+                        "concrete",
+                        "the concrete implementation precondition holds",
+                    )])),
+                    safety: None,
+                },
+            ),
+        );
+        overlay_call.expanded_range = Some(source_range(20, 30));
+        overlay_call.callee_range = Some(source_range(20, 25));
+        let local = ir_with_source(vec![
+            body(root, "workspace::root").with_call(call(
+                0,
+                function_target(dependency_exact, "dependency::invoke::<workspace::Local>"),
+            )),
+            body(dependency_exact, "dependency::invoke::<workspace::Local>")
+                .consumer_instantiation(1)
+                .with_call(overlay_call),
+            body(concrete_impl, "workspace::Local::may_panic")
+                .with_effect(assert_effect(0, CompilerAssertKind::BoundsCheck)),
+        ]);
+
+        let CallTargetIr::Function(trait_metadata) =
+            function_target(trait_method, "dependency::Action::may_panic")
+        else {
+            unreachable!("function_target always creates a function target");
+        };
+        let mut defining_call = call(
+            0,
+            function_target_with_contracts(
+                dependency_impl,
+                "dependency::DependencyAction::may_panic",
+                FunctionContractsIr {
+                    panic: Some(contract(vec![requirement(
+                        "dependency",
+                        "the dependency-local implementation precondition holds",
+                    )])),
+                    safety: None,
+                },
+            ),
+        );
+        defining_call.source_target = Some(trait_metadata);
+        defining_call.expanded_range = Some(source_range(20, 30));
+        defining_call.callee_range = Some(source_range(20, 25));
+        let dependency = ir_with_source(vec![
+            body(dependency_generic, "dependency::invoke").with_call(defining_call),
+        ]);
+        let lookup = LayeredFunctionLookup::new(vec![&local, &dependency]);
+
+        let result = interpret(&lookup, &[report_root(root)], &SniffTestConfig::default());
+        let finding = result.roots[0]
+            .findings
+            .iter()
+            .find(|finding| matches!(finding.kind, InterpretedFindingKind::DocumentedPanic { .. }))
+            .expect("the concrete implementation contract remains active");
+
+        assert_eq!(finding.missing_requirements[0].name, "concrete");
+    }
+
+    #[test]
+    fn consumer_overlay_does_not_borrow_an_ambiguous_source_marker() {
+        let root = id(1, 1);
+        let dependency_generic = id(2, 1);
+        let dependency_exact =
+            FunctionId::exact(dependency_generic.def_path_hash, instance_hash(7));
+        let first_trait_method = id(2, 2);
+        let second_trait_method = id(2, 3);
+        let concrete_impl = id(1, 2);
+
+        let mut overlay_call = call(
+            0,
+            unsafe_function_target(concrete_impl, "workspace::Local::apply"),
+        );
+        overlay_call.requires_unsafe = true;
+        overlay_call.expanded_range = Some(source_range(20, 30));
+        overlay_call.callee_range = Some(source_range(20, 25));
+        let local = ir_with_source(vec![
+            body(root, "workspace::root").with_call(call(
+                0,
+                function_target(dependency_exact, "dependency::invoke::<workspace::Local>"),
+            )),
+            body(dependency_exact, "dependency::invoke::<workspace::Local>")
+                .consumer_instantiation(1)
+                .with_call(overlay_call),
+            body(concrete_impl, "workspace::Local::apply").unsafe_function(),
+        ]);
+
+        let defining_call = |id, method, path, group| {
+            let CallTargetIr::Function(trait_metadata) = unsafe_function_target(method, path)
+            else {
+                unreachable!("unsafe_function_target always creates a function target");
+            };
+            let mut call = call(
+                id,
+                CallTargetIr::OpaqueBoundary {
+                    description: String::from("generic unsafe trait call"),
+                    target: Some(OpaqueTargetIr::Trait(trait_metadata)),
+                },
+            );
+            call.kind = CallEdgeKindIr::IndirectCall;
+            call.requires_unsafe = true;
+            call.expanded_range = Some(source_range(20, 30));
+            call.callee_range = Some(source_range(20, 25));
+            call.safety_effect_group = Some(SafetyEffectGroupId::new(group));
+            call
+        };
+        let marker = justification_marker(
+            0,
+            MarkerKindIr::SafetyJustification,
+            MarkerTargetIr::Call(CallId::new(0)),
+            None,
+        );
+        let dependency = ir_with_source(vec![
+            body(dependency_generic, "dependency::invoke")
+                .with_call(defining_call(
+                    0,
+                    first_trait_method,
+                    "dependency::First::apply",
+                    7,
+                ))
+                .with_call(defining_call(
+                    1,
+                    second_trait_method,
+                    "dependency::Second::apply",
+                    8,
+                ))
+                .with_marker(marker),
+        ]);
+        let lookup = LayeredFunctionLookup::new(vec![&local, &dependency]);
+
+        let result = interpret(&lookup, &[report_root(root)], &SniffTestConfig::default());
+
+        assert!(
+            result.roots[0]
+                .findings
+                .iter()
+                .any(|finding| matches!(finding.kind, InterpretedFindingKind::SafetyCall { .. }))
+        );
+    }
+
+    #[test]
     fn unmanaged_consumer_overlay_hides_internal_safety_but_follows_managed_target() {
         let root = id(1, 1);
         let callback = id(1, 2);
@@ -3014,8 +3558,12 @@ mod tests {
                 .with_call(inner_call)
                 .with_call(callback_call),
         ]);
+        let lookup = ManagedLookup {
+            ir: &local,
+            stable_crate_ids: vec![root.def_path_hash.stable_crate_id()],
+        };
 
-        let result = interpret(&local, &[report_root(root)], &SniffTestConfig::default());
+        let result = interpret(&lookup, &[report_root(root)], &SniffTestConfig::default());
         let unsafe_calls = result.roots[0]
             .findings
             .iter()
@@ -3077,8 +3625,12 @@ mod tests {
             body(callback, "workspace::callback")
                 .with_effect(unsafe_effect(0, SafetyOpKind::DerefRawPointer)),
         ]);
+        let lookup = ManagedLookup {
+            ir: &local,
+            stable_crate_ids: vec![root.def_path_hash.stable_crate_id()],
+        };
 
-        let result = interpret(&local, &[report_root(root)], &SniffTestConfig::default());
+        let result = interpret(&lookup, &[report_root(root)], &SniffTestConfig::default());
         let root = &result.roots[0];
 
         assert!(root.findings.iter().any(|finding| {
@@ -3091,6 +3643,134 @@ mod tests {
                 )
         }));
         assert!(root.completeness.safety.complete);
+    }
+
+    #[test]
+    fn managed_consumer_overlay_without_defining_body_is_incomplete_but_relays_safety() {
+        let root = id(1, 1);
+        let callback = id(1, 2);
+        let definition = id(2, 1);
+        let overlay = FunctionId::exact(definition.def_path_hash, instance_hash(7));
+        let local_ir = ir(vec![
+            body(root, "workspace::root").with_call(call(
+                0,
+                function_target(overlay, "dependency::generic::<workspace::Local>"),
+            )),
+            body(overlay, "dependency::generic::<workspace::Local>")
+                .consumer_instantiation(1)
+                .with_call(call(0, function_target(callback, "workspace::callback"))),
+            body(callback, "workspace::callback")
+                .with_effect(unsafe_effect(0, SafetyOpKind::DerefRawPointer)),
+        ]);
+        let dependency_ir = ir(Vec::<FunctionBodyIr>::new());
+        let local = ManagedLookup {
+            ir: &local_ir,
+            stable_crate_ids: vec![root.def_path_hash.stable_crate_id()],
+        };
+        let dependency = ManagedLookup {
+            ir: &dependency_ir,
+            stable_crate_ids: vec![definition.def_path_hash.stable_crate_id()],
+        };
+        let lookup = LayeredFunctionLookup::new(vec![&local, &dependency]);
+
+        let result = interpret(&lookup, &[report_root(root)], &SniffTestConfig::default());
+        let root = &result.roots[0];
+
+        assert!(!root.completeness.safety.complete);
+        assert!(matches!(
+            root.completeness.safety.reasons.as_slice(),
+            [IncompleteReason::MissingBody { function, .. }] if *function == overlay
+        ));
+        assert!(root.findings.iter().any(|finding| {
+            finding.function == callback
+                && matches!(
+                    finding.kind,
+                    InterpretedFindingKind::UnsafeOperation {
+                        kind: SafetyOpKind::DerefRawPointer
+                    }
+                )
+        }));
+    }
+
+    #[test]
+    fn managed_consumer_overlay_uses_a_different_exact_defining_source_body() {
+        let root = id(1, 1);
+        let definition = id(2, 1);
+        let overlay = FunctionId::exact(definition.def_path_hash, instance_hash(7));
+        let defining_source = FunctionId::exact(definition.def_path_hash, instance_hash(8));
+        let local_ir = ir(vec![
+            body(root, "workspace::root").with_call(call(
+                0,
+                function_target(overlay, "dependency::nested::<workspace::Local>"),
+            )),
+            body(overlay, "dependency::nested::<workspace::Local>").consumer_instantiation(1),
+        ]);
+        let dependency_ir = ir(vec![
+            body(defining_source, "dependency::nested")
+                .with_effect(unsafe_effect(0, SafetyOpKind::DerefRawPointer)),
+        ]);
+        let local = ManagedLookup {
+            ir: &local_ir,
+            stable_crate_ids: vec![root.def_path_hash.stable_crate_id()],
+        };
+        let dependency = ManagedLookup {
+            ir: &dependency_ir,
+            stable_crate_ids: vec![definition.def_path_hash.stable_crate_id()],
+        };
+        let lookup = LayeredFunctionLookup::new(vec![&local, &dependency]);
+
+        let result = interpret(&lookup, &[report_root(root)], &SniffTestConfig::default());
+        let root = &result.roots[0];
+
+        assert!(root.completeness.safety.complete);
+        assert!(root.findings.iter().any(|finding| {
+            finding.function == defining_source
+                && matches!(
+                    finding.kind,
+                    InterpretedFindingKind::UnsafeOperation {
+                        kind: SafetyOpKind::DerefRawPointer
+                    }
+                )
+        }));
+    }
+
+    #[test]
+    fn unmanaged_consumer_overlay_reports_a_managed_missing_target() {
+        let root = id(1, 1);
+        let unmanaged_definition = id(9, 1);
+        let overlay = FunctionId::exact(unmanaged_definition.def_path_hash, instance_hash(7));
+        let missing_target = id(2, 1);
+        let local_ir = ir(vec![
+            body(root, "workspace::root").with_call(call(
+                0,
+                function_target(overlay, "unmanaged::generic::<workspace::Local>"),
+            )),
+            body(overlay, "unmanaged::generic::<workspace::Local>")
+                .consumer_instantiation(1)
+                .with_call(call(
+                    0,
+                    function_target(missing_target, "dependency::missing"),
+                )),
+        ]);
+        let dependency_ir = ir(Vec::<FunctionBodyIr>::new());
+        let local = ManagedLookup {
+            ir: &local_ir,
+            stable_crate_ids: vec![root.def_path_hash.stable_crate_id()],
+        };
+        let dependency = ManagedLookup {
+            ir: &dependency_ir,
+            stable_crate_ids: vec![missing_target.def_path_hash.stable_crate_id()],
+        };
+        let lookup = LayeredFunctionLookup::new(vec![&local, &dependency]);
+
+        let result = interpret(&lookup, &[report_root(root)], &SniffTestConfig::default());
+        let safety = &result.roots[0].completeness.safety;
+
+        assert!(!safety.complete);
+        assert!(matches!(
+            safety.reasons.as_slice(),
+            [IncompleteReason::MissingBody { function, .. }] if *function == missing_target
+        ));
     }
 
     #[test]
@@ -3968,7 +4648,7 @@ mod tests {
                 artifact_id: artifact_id.to_owned(),
                 crate_name: artifact_id.to_owned(),
                 stable_crate_id,
-                crate_hash: format!("crate-hash-{stable_crate_id}"),
+                crate_hash: Some(format!("crate-hash-{stable_crate_id}")),
             },
             Vec::new(),
             ir(functions),
@@ -4060,6 +4740,13 @@ mod tests {
             FunctionLookup::function_in_scope(self.ir, scope, function)
         }
 
+        fn defining_source_body(
+            &self,
+            function: FunctionId,
+        ) -> Option<crate::analysis::graph::LoadedFunction<'_>> {
+            FunctionLookup::defining_source_body(self.ir, function)
+        }
+
         fn manages_stable_crate_id(&self, stable_crate_id: u64) -> bool {
             self.stable_crate_ids.contains(&stable_crate_id)
         }
@@ -4117,6 +4804,7 @@ mod tests {
                 CallableAttributionIr::CallSites,
             ],
             callable_keys: Vec::new(),
+            source_target: None,
             target,
         }
     }

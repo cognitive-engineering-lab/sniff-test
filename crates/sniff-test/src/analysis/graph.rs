@@ -8,7 +8,10 @@ use super::cache::{
     AnalysisId, ArtifactAnalysisCache, ArtifactInfo, CacheError, CacheExpectations,
     DependencyAnalysisRef, artifact_cache_path,
 };
-use super::ir::{FunctionBodyIr, FunctionBodyProvenanceIr, FunctionId, SourceFileId, SourceFileIr};
+use super::ir::{
+    FunctionBodyIr, FunctionBodyProvenanceIr, FunctionId, SourceFileId, SourceFileIr,
+    StableDefPathHash,
+};
 
 /// One path-bearing rustc `--extern` input.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -256,6 +259,7 @@ pub(crate) struct ArtifactAnalysisGraph {
     artifact_indices: BTreeMap<String, usize>,
     direct_aliases: BTreeMap<String, BTreeSet<String>>,
     defining_functions: HashMap<FunctionId, FunctionLocation>,
+    defining_source_functions: HashMap<StableDefPathHash, FunctionLocation>,
     sources: HashMap<SourceFileId, SourceLocation>,
     failures: Vec<GraphLoadFailure>,
 }
@@ -288,11 +292,15 @@ impl ArtifactAnalysisGraph {
         let artifacts = loaded.into_values().collect::<Vec<_>>();
         let mut artifact_indices = BTreeMap::new();
         let mut defining_functions = HashMap::new();
+        let mut defining_source_functions = HashMap::new();
         let mut sources = HashMap::new();
         for (artifact, analysis) in artifacts.iter().enumerate() {
             artifact_indices.insert(analysis.artifact.artifact_id.clone(), artifact);
             for (function, body) in analysis.ir.functions.iter().enumerate() {
                 if matches!(body.provenance, FunctionBodyProvenanceIr::DefiningArtifact) {
+                    defining_source_functions
+                        .entry(body.function.def_path_hash)
+                        .or_insert(FunctionLocation { artifact, function });
                     match defining_functions.entry(body.function) {
                         std::collections::hash_map::Entry::Vacant(entry) => {
                             entry.insert(FunctionLocation { artifact, function });
@@ -319,6 +327,7 @@ impl ArtifactAnalysisGraph {
             artifact_indices,
             direct_aliases,
             defining_functions,
+            defining_source_functions,
             sources,
             failures,
         }
@@ -390,6 +399,26 @@ impl ArtifactAnalysisGraph {
     #[must_use]
     pub(crate) fn defining_function(&self, function: FunctionId) -> Option<LoadedFunction<'_>> {
         self.function(function)
+    }
+
+    /// Resolves source facts for a definition even when nested-body instance
+    /// hashes differ between the defining artifact and a consumer overlay.
+    #[must_use]
+    pub(crate) fn defining_source_function(
+        &self,
+        function: FunctionId,
+    ) -> Option<LoadedFunction<'_>> {
+        if let Some(body) = self.defining_function(function) {
+            return Some(body);
+        }
+        let location = self
+            .defining_source_functions
+            .get(&function.def_path_hash)?;
+        let artifact = &self.artifacts[location.artifact];
+        Some(LoadedFunction::new(
+            &artifact.ir.functions[location.function],
+            BodyScope::artifact(artifact),
+        ))
     }
 
     pub(crate) fn direct_dependency_aliases(&self) -> impl Iterator<Item = (&str, &str)> {
@@ -553,7 +582,7 @@ where
         if let Some(expected) = request.expected_identity.as_ref()
             && (analysis.artifact.crate_name != expected.crate_name
                 || analysis.artifact.stable_crate_id != expected.stable_crate_id
-                || analysis.artifact.crate_hash != expected.crate_hash)
+                || analysis.artifact.crate_hash.as_deref() != Some(expected.crate_hash.as_str()))
         {
             self.failures
                 .push(GraphLoadFailure::LoadedCrateIdentityMismatch {
@@ -563,7 +592,10 @@ where
                     expected_crate_name: expected.crate_name.clone(),
                     found_crate_name: analysis.artifact.crate_name,
                     expected_crate_hash: expected.crate_hash.clone(),
-                    found_crate_hash: analysis.artifact.crate_hash,
+                    found_crate_hash: analysis
+                        .artifact
+                        .crate_hash
+                        .unwrap_or_else(|| String::from("<unavailable>")),
                 });
             self.rejected.insert(request.artifact_id.clone());
             return;
@@ -1184,7 +1216,7 @@ mod tests {
                     .map_or(artifact_id, |(name, _)| name)
                     .to_owned(),
                 stable_crate_id,
-                crate_hash: crate_hash(stable_crate_id),
+                crate_hash: Some(crate_hash(stable_crate_id)),
             },
             dependencies,
             ArtifactAnalysisIr::new(functions, source_files).expect("valid IR"),

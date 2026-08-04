@@ -233,7 +233,13 @@ fn artifact_info(tcx: TyCtxt<'_>) -> ArtifactInfo {
         ),
         crate_name,
         stable_crate_id: tcx.stable_crate_id(LOCAL_CRATE).as_u64(),
-        crate_hash: tcx.crate_hash(LOCAL_CRATE).to_hex(),
+        // rustc only computes the local strict version hash when this output
+        // configuration needs it. Querying it unconditionally ICEs for
+        // ordinary executable units because their HIR hash is intentionally
+        // absent.
+        crate_hash: tcx
+            .needs_crate_hash()
+            .then(|| tcx.crate_hash(LOCAL_CRATE).to_hex()),
     }
 }
 

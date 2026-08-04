@@ -47,10 +47,18 @@ pub(crate) struct RawSafetyOpFact {
 #[derive(Debug, Clone)]
 pub(crate) struct RawSafetyCallFact {
     pub(crate) owner: DefId,
-    /// Static callee definition when THIR exposes one. Desugared expressions
-    /// such as `value?` can contain several calls with one exact span, so the
-    /// callee is required to join those calls to MIR reachability edges.
+    /// Callee identity normalized to the declared trait item when applicable.
+    /// Desugared expressions such as `value?` can contain several calls with
+    /// one exact span, so this identity joins THIR calls to MIR reachability
+    /// edges after MIR resolves a concrete impl.
     pub(crate) callee: Option<DefId>,
+    /// THIR callee retained for source-contract interpretation.
+    ///
+    /// Unlike [`Self::callee`], a direct impl call remains an impl method and
+    /// unresolved generic or dynamic dispatch remains a trait method. A trait
+    /// item whose impl is statically selected is omitted so the resolved impl's
+    /// contract remains authoritative.
+    pub(crate) source_callee: Option<DefId>,
     /// The call occurs inside a compiler-generated `BuiltinUnsafe` block.
     /// rustc treats that unsafe context as the compiler's responsibility, so
     /// the call must not become a user-facing safety obligation.
