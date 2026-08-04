@@ -1002,7 +1002,7 @@ fn run_cargo_case(binary: &Path, root: &Path, name: &str, case: &Case) -> Comman
     let mut command = Command::new(binary);
     clean_cargo_package_env(&mut command);
     let output = command
-        .args(["--message-format", "json", "--color", "never", "--release"])
+        .args(["--message-format", "json", "--color", "never"])
         .args(case.args)
         .current_dir(crate_dir)
         .output()

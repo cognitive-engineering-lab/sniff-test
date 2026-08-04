@@ -31,12 +31,15 @@ Common options:
 - `--message-format human|json`
 - `--overflow-checks on|off`
 - `--build-std`
-- `--release`
+- `--debug`: analyze debug-profile MIR instead of the default release profile
+
+An explicit Cargo `--profile` argument after `--` overrides the default release
+profile.
 
 Arguments after `--` are passed to the wrapped `cargo check` command:
 
 ```sh
-cargo sniff-test --release -- --features dangerous -p my-crate
+cargo sniff-test -- --features dangerous -p my-crate
 ```
 
 Common `sniff-test.toml` analysis knobs:

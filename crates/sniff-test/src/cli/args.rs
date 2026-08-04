@@ -60,9 +60,9 @@ pub(super) struct FrontendCli {
     #[arg(long)]
     build_std: bool,
 
-    /// Analyze release-profile MIR.
+    /// Analyze debug-profile MIR instead of the default release profile.
     #[arg(long)]
-    release: bool,
+    debug: bool,
 
     #[command(subcommand)]
     command: Option<FrontendCommand>,
@@ -111,7 +111,11 @@ impl FrontendCli {
         let mut args = self.common.into_sniff_test_args();
         args.overflow_checks = self.overflow_checks;
         args.build_std = self.build_std;
-        args.release = self.release;
+        let cargo_profile_is_explicit = self
+            .cargo_args
+            .iter()
+            .any(|arg| arg == "--profile" || arg.starts_with("--profile="));
+        args.release = !self.debug && !cargo_profile_is_explicit;
         args.cargo_args = self.cargo_args;
         FrontendAction::Run(args)
     }
@@ -229,6 +233,51 @@ mod tests {
         };
         assert_eq!(args.message_format, MessageFormat::Json);
         assert_eq!(args.cargo_args, ["--locked"]);
+    }
+
+    #[test]
+    fn frontend_uses_release_profile_by_default() {
+        let cli = FrontendCli::try_parse_from(["cargo-sniff-test"])
+            .expect("frontend arguments should parse");
+
+        let FrontendAction::Run(args) = cli.into_action() else {
+            panic!("expected frontend run action");
+        };
+        assert!(args.release);
+    }
+
+    #[test]
+    fn frontend_debug_flag_selects_debug_profile() {
+        let cli = FrontendCli::try_parse_from(["cargo-sniff-test", "--debug"])
+            .expect("frontend arguments should parse");
+
+        let FrontendAction::Run(args) = cli.into_action() else {
+            panic!("expected frontend run action");
+        };
+        assert!(!args.release);
+    }
+
+    #[test]
+    fn frontend_respects_forwarded_cargo_profile() {
+        for argv in [
+            &["cargo-sniff-test", "--", "--profile", "ci"][..],
+            &["cargo-sniff-test", "--", "--profile=ci"][..],
+        ] {
+            let cli = FrontendCli::try_parse_from(argv).expect("frontend arguments should parse");
+
+            let FrontendAction::Run(args) = cli.into_action() else {
+                panic!("expected frontend run action");
+            };
+            assert!(!args.release, "argv: {argv:?}");
+        }
+    }
+
+    #[test]
+    fn frontend_rejects_legacy_release_flag() {
+        let error = FrontendCli::try_parse_from(["cargo-sniff-test", "--release"])
+            .expect_err("legacy release flag should be rejected");
+
+        assert_eq!(error.kind(), clap::error::ErrorKind::UnknownArgument);
     }
 
     #[test]

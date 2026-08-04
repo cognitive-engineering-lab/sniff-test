@@ -308,7 +308,7 @@ fn cargo_frontend_fails_when_dependency_analysis_cannot_be_cached() {
     let output = command
         .args(["--cache-dir"])
         .arg(&cache_dir)
-        .args(["--color", "never", "--release"])
+        .args(["--color", "never"])
         .current_dir(fixture.join("app"))
         .output()
         .expect("run cargo frontend");
@@ -550,11 +550,13 @@ fn cargo_subcommand_token_is_accepted() {
         .expect("run help");
 
     assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(
-        String::from_utf8_lossy(&output.stdout).contains("Usage: cargo sniff-test"),
-        "stdout: {}",
-        String::from_utf8_lossy(&output.stdout)
+        stdout.contains("Usage: cargo sniff-test"),
+        "stdout: {stdout}"
     );
+    assert!(stdout.contains("--debug"), "stdout: {stdout}");
+    assert!(!stdout.contains("--release"), "stdout: {stdout}");
 }
 
 #[test]
@@ -745,7 +747,7 @@ fn run_cargo_sniff_test(
         command.env(key, value);
     }
     let output = command
-        .args(["--color", "never", "--release"])
+        .args(["--color", "never"])
         .args(expand_args(case.args, fixture_root))
         .current_dir(working_dir)
         .output()
