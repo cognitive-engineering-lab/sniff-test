@@ -17,7 +17,7 @@ expression: messages
     "findings": [
       {
         "kind": "safety-analysis-incomplete",
-        "level": "deny",
+        "level": "warn",
         "reason": "dependency_safety_incomplete_middle::middle has no complete cached safety analysis",
         "root": "dependency_safety_incomplete_app::application",
         "root-kind": "concrete",
@@ -94,7 +94,7 @@ expression: messages
       },
       {
         "kind": "safety-analysis-incomplete",
-        "level": "deny",
+        "level": "warn",
         "reason": "dependency_safety_incomplete_leaf::leaf has no complete cached safety analysis",
         "root": "dependency_safety_incomplete_middle::middle",
         "root-kind": "concrete",

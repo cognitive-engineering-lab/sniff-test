@@ -110,6 +110,7 @@ fn dependency_analysis_incomplete_finding<'tcx>(
                 ))],
             },
         )
+        .with_dependency_analysis_lint()
     }
 }
 

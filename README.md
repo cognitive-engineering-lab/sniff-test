@@ -56,6 +56,9 @@ marker-probing = "macro-definition-first" # macro-definition-first | source-call
 [analysis.lints]
 panic-analysis-incomplete = "deny"
 safety-analysis-incomplete = "deny"
+# Optional overrides for missing, stale, or incomplete dependency evidence:
+# dependency-panic-analysis-incomplete = "warn"
+# dependency-safety-analysis-incomplete = "warn"
 ambiguous-panic-marker = "deny" # deny | warn | allow
 ambiguous-safety-marker = "deny"
 ambiguous-panic-requirement = "deny"
@@ -133,6 +136,13 @@ The older `ambiguous-effect-marker`, `ambiguous-effect-requirement`, and
 domains. An explicit panic- or safety-specific key takes precedence over its
 group default regardless of TOML ordering. `warn` accepts the ambiguity
 but reports it; `allow` accepts it silently.
+
+`dependency-panic-analysis-incomplete` and
+`dependency-safety-analysis-incomplete` are optional overrides for incomplete
+cross-crate evidence. Without an exact dependency override, the corresponding
+`panic-analysis-incomplete` or `safety-analysis-incomplete` level applies.
+These overrides do not weaken node-limit findings from the crate currently
+being analyzed.
 
 Likewise, exact `compiler-assert-*` overrides take precedence for both local
 and cached dependency findings. Without an exact override, local assertions use

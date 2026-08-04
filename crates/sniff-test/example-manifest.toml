@@ -36,6 +36,10 @@ node-limit = 4096
 [analysis.lints]
 panic-analysis-incomplete = "deny"
 safety-analysis-incomplete = "deny"
+# Missing, stale, generic, or truncated dependency evidence falls back to the
+# corresponding effect-specific lint above unless one of these is set:
+# dependency-panic-analysis-incomplete = "warn"
+# dependency-safety-analysis-incomplete = "warn"
 # Use `warn` while auditing, or `allow` to accept squashed evidence.
 ambiguous-panic-marker = "deny"
 ambiguous-safety-marker = "deny"

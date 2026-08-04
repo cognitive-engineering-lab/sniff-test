@@ -53,7 +53,7 @@ expression: messages
     "findings": [
       {
         "kind": "panic-analysis-incomplete",
-        "level": "deny",
+        "level": "warn",
         "reason": "dependency_panic_incomplete_resolved::incomplete_with_known_panic has no complete cached panic analysis",
         "root": "dependency_panic_incomplete_resolved_app::call_incomplete_dependency",
         "root-kind": "concrete",

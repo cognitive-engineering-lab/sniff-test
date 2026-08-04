@@ -19,6 +19,14 @@ use super::diagnostics::{
 };
 use super::report::render_span;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub(crate) enum LintSelector {
+    #[default]
+    FindingKind,
+    // Preserve the public finding kind while allowing cache-specific policy.
+    DependencyAnalysisIncomplete,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "kebab-case")]
 pub(crate) struct Finding {
@@ -45,6 +53,8 @@ pub(crate) struct Finding {
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub(crate) requirements: Vec<String>,
     #[serde(skip)]
+    pub(crate) lint_selector: LintSelector,
+    #[serde(skip)]
     pub(crate) diagnostic: FindingDiagnostic,
 }
 
@@ -62,7 +72,38 @@ impl Finding {
             trace: Vec::new(),
             missing_requirements: Vec::new(),
             requirements: Vec::new(),
+            lint_selector: LintSelector::FindingKind,
             diagnostic,
+        }
+    }
+
+    pub(crate) fn with_dependency_analysis_lint(mut self) -> Self {
+        debug_assert!(matches!(
+            self.kind,
+            FindingKind::PanicAnalysisIncomplete | FindingKind::SafetyAnalysisIncomplete
+        ));
+        self.lint_selector = LintSelector::DependencyAnalysisIncomplete;
+        self
+    }
+
+    fn lint_level(&self, config: &SniffTestConfig) -> LintLevel {
+        let fallback = self.kind.lint_level(config);
+        match (self.lint_selector, self.kind) {
+            (LintSelector::DependencyAnalysisIncomplete, FindingKind::PanicAnalysisIncomplete) => {
+                config
+                    .analysis
+                    .lints
+                    .dependency_panic_analysis_incomplete
+                    .unwrap_or(fallback)
+            }
+            (LintSelector::DependencyAnalysisIncomplete, FindingKind::SafetyAnalysisIncomplete) => {
+                config
+                    .analysis
+                    .lints
+                    .dependency_safety_analysis_incomplete
+                    .unwrap_or(fallback)
+            }
+            _ => fallback,
         }
     }
 }
@@ -82,7 +123,7 @@ pub(crate) fn resolve_findings(
     findings
         .into_iter()
         .filter_map(|finding| {
-            let level = finding.kind.lint_level(config);
+            let level = finding.lint_level(config);
             (!level.is_allow()).then_some(ResolvedFinding { level, finding })
         })
         .collect()
@@ -450,6 +491,10 @@ mod tests {
         )
     }
 
+    fn dependency_incomplete_finding(kind: FindingKind) -> Finding {
+        finding(kind).with_dependency_analysis_lint()
+    }
+
     #[test]
     fn resolves_policy_and_filters_allowed_findings_once() {
         let mut config = SniffTestConfig::default();
@@ -481,6 +526,18 @@ mod tests {
 
         assert_eq!(object["kind"], "panic-invocation");
         assert!(!object.contains_key("effect"));
+    }
+
+    #[test]
+    fn dependency_lint_selector_is_not_serialized() {
+        let json = serde_json::to_value(dependency_incomplete_finding(
+            FindingKind::PanicAnalysisIncomplete,
+        ))
+        .expect("serialize dependency incomplete finding");
+        let object = json.as_object().expect("finding object");
+
+        assert_eq!(object["kind"], "panic-analysis-incomplete");
+        assert!(!object.contains_key("lint-selector"));
     }
 
     #[test]
@@ -569,6 +626,59 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn dependency_incomplete_findings_use_only_their_exact_overrides() {
+        let mut config = SniffTestConfig::default();
+        config.analysis.lints.panic_analysis_incomplete = LintLevel::Allow;
+        config.analysis.lints.safety_analysis_incomplete = LintLevel::Warn;
+        config.analysis.lints.dependency_panic_analysis_incomplete = Some(LintLevel::Warn);
+        config.analysis.lints.dependency_safety_analysis_incomplete = Some(LintLevel::Allow);
+
+        let resolved = resolve_findings(
+            vec![
+                finding(FindingKind::PanicAnalysisIncomplete),
+                dependency_incomplete_finding(FindingKind::PanicAnalysisIncomplete),
+                finding(FindingKind::SafetyAnalysisIncomplete),
+                dependency_incomplete_finding(FindingKind::SafetyAnalysisIncomplete),
+            ],
+            &config,
+        );
+
+        assert_eq!(resolved.len(), 2);
+        assert_eq!(
+            resolved[0].finding.kind,
+            FindingKind::PanicAnalysisIncomplete
+        );
+        assert_eq!(resolved[0].level, LintLevel::Warn);
+        assert_eq!(
+            resolved[1].finding.kind,
+            FindingKind::SafetyAnalysisIncomplete
+        );
+        assert_eq!(resolved[1].level, LintLevel::Warn);
+    }
+
+    #[test]
+    fn dependency_incomplete_findings_fall_back_to_their_effect_policy() {
+        let mut config = SniffTestConfig::default();
+        config.analysis.lints.panic_analysis_incomplete = LintLevel::Warn;
+        config.analysis.lints.safety_analysis_incomplete = LintLevel::Allow;
+
+        let resolved = resolve_findings(
+            vec![
+                dependency_incomplete_finding(FindingKind::PanicAnalysisIncomplete),
+                dependency_incomplete_finding(FindingKind::SafetyAnalysisIncomplete),
+            ],
+            &config,
+        );
+
+        assert_eq!(resolved.len(), 1);
+        assert_eq!(
+            resolved[0].finding.kind,
+            FindingKind::PanicAnalysisIncomplete
+        );
+        assert_eq!(resolved[0].level, LintLevel::Warn);
     }
 
     #[test]

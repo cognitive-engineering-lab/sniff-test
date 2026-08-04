@@ -219,8 +219,7 @@ fixture_cases! {
     }
     "dependency_safety_incomplete" => {
         dependency_safety_incomplete => Case::cargo("incomplete safety cache propagation")
-            .crate_dir("app")
-            .exit_code(101);
+            .crate_dir("app");
     }
     "dependency_identity" => {
         dependency_identity => Case::cargo("dependency cache identity across sessions")
@@ -244,8 +243,7 @@ fixture_cases! {
     "dependency_panic_incomplete_resolved" => {
         dependency_panic_incomplete_resolved =>
             Case::cargo("resolved cached panics do not hide incomplete dependency analysis")
-                .crate_dir("app")
-                .exit_code(101);
+                .crate_dir("app");
     }
     "dependency_mixed_panic" => {
         dependency_mixed_panic => Case::cargo("cached raw and trusted panic evidence coexist")

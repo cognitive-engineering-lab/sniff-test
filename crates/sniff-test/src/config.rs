@@ -248,6 +248,10 @@ pub struct AnalysisLintConfig {
     pub ambiguous_safety_requirement: LintLevel,
     pub panic_analysis_incomplete: LintLevel,
     pub safety_analysis_incomplete: LintLevel,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub dependency_panic_analysis_incomplete: Option<LintLevel>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub dependency_safety_analysis_incomplete: Option<LintLevel>,
     pub empty_report_roots: LintLevel,
     pub missing_report_root: LintLevel,
 }
@@ -262,6 +266,8 @@ impl Default for AnalysisLintConfig {
             // A truncated traversal proves nothing about the missing region.
             panic_analysis_incomplete: LintLevel::Deny,
             safety_analysis_incomplete: LintLevel::Deny,
+            dependency_panic_analysis_incomplete: None,
+            dependency_safety_analysis_incomplete: None,
             empty_report_roots: LintLevel::Warn,
             missing_report_root: LintLevel::Warn,
         }
@@ -277,6 +283,8 @@ struct RawAnalysisLintConfig {
     ambiguous_safety_requirement: Option<LintLevel>,
     panic_analysis_incomplete: Option<LintLevel>,
     safety_analysis_incomplete: Option<LintLevel>,
+    dependency_panic_analysis_incomplete: Option<LintLevel>,
+    dependency_safety_analysis_incomplete: Option<LintLevel>,
     empty_report_roots: Option<LintLevel>,
     missing_report_root: Option<LintLevel>,
     // Backward-compatible group defaults. Exact finding keys take precedence.
@@ -317,6 +325,8 @@ impl<'de> Deserialize<'de> for AnalysisLintConfig {
                 .safety_analysis_incomplete
                 .or(raw.analysis_incomplete)
                 .unwrap_or(defaults.safety_analysis_incomplete),
+            dependency_panic_analysis_incomplete: raw.dependency_panic_analysis_incomplete,
+            dependency_safety_analysis_incomplete: raw.dependency_safety_analysis_incomplete,
             empty_report_roots: raw
                 .empty_report_roots
                 .unwrap_or(defaults.empty_report_roots),
@@ -1099,6 +1109,27 @@ mod tests {
     }
 
     #[test]
+    fn parses_dependency_analysis_incomplete_lint_overrides() {
+        let config = r#"
+            [analysis.lints]
+            dependency-panic-analysis-incomplete = "warn"
+            dependency-safety-analysis-incomplete = "allow"
+        "#;
+
+        let parsed = SniffTestConfig::from_manifest_str(config)
+            .expect("dependency analysis lint overrides should parse");
+
+        assert_eq!(
+            parsed.analysis.lints.dependency_panic_analysis_incomplete,
+            Some(LintLevel::Warn)
+        );
+        assert_eq!(
+            parsed.analysis.lints.dependency_safety_analysis_incomplete,
+            Some(LintLevel::Allow)
+        );
+    }
+
+    #[test]
     fn legacy_analysis_lint_umbrellas_seed_granular_levels() {
         let config = r#"
             [analysis.lints]
@@ -1202,6 +1233,24 @@ mod tests {
                 "serialized legacy key `{legacy}`"
             );
         }
+        for optional in [
+            "dependency-panic-analysis-incomplete",
+            "dependency-safety-analysis-incomplete",
+        ] {
+            assert!(
+                !serialized.contains(optional),
+                "unset optional key `{optional}` should not serialize"
+            );
+        }
+
+        let lints = AnalysisLintConfig {
+            dependency_panic_analysis_incomplete: Some(LintLevel::Warn),
+            dependency_safety_analysis_incomplete: Some(LintLevel::Allow),
+            ..AnalysisLintConfig::default()
+        };
+        let serialized = toml::to_string(&lints).expect("lint overrides should serialize");
+        assert!(serialized.contains("dependency-panic-analysis-incomplete = \"warn\""));
+        assert!(serialized.contains("dependency-safety-analysis-incomplete = \"allow\""));
     }
 
     #[test]
@@ -1255,6 +1304,8 @@ mod tests {
         assert_eq!(lints.ambiguous_safety_requirement, LintLevel::Deny);
         assert_eq!(lints.panic_analysis_incomplete, LintLevel::Deny);
         assert_eq!(lints.safety_analysis_incomplete, LintLevel::Deny);
+        assert_eq!(lints.dependency_panic_analysis_incomplete, None);
+        assert_eq!(lints.dependency_safety_analysis_incomplete, None);
         assert_eq!(lints.empty_report_roots, LintLevel::Warn);
         assert_eq!(lints.missing_report_root, LintLevel::Warn);
     }

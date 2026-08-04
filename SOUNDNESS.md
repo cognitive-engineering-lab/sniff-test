@@ -73,10 +73,16 @@ undocumented effects.
 ### The node limit bounds every traversal
 
 Each per-root query visits at most `[analysis] node-limit` instances
-(default 4096). Halting is loud — the `analysis-incomplete` lint denies by
+(default 4096). Halting is loud — the effect-specific
+`panic-analysis-incomplete` or `safety-analysis-incomplete` lint denies by
 default, and truncated cached summaries are marked `analysis-complete: false`
-and treated as raw panic evidence by consumers — but the region beyond the
-halt is simply unknown.
+— but the region beyond the halt is simply unknown.
+
+Consumers also fail closed when dependency evidence is missing, stale, generic,
+or truncated. The optional `dependency-panic-analysis-incomplete` and
+`dependency-safety-analysis-incomplete` overrides can change that cross-crate
+policy without weakening node-limit findings in the crate currently being
+analyzed.
 
 ### Callable call-site attribution is type-keyed
 

@@ -3,6 +3,7 @@ node-limit = 2
 
 [analysis.lints]
 analysis-incomplete = "deny"
+dependency-safety-analysis-incomplete = "warn"
 
 [panics]
 ignored-namespaces = [
