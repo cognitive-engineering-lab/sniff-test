@@ -5,9 +5,12 @@ mod interpretation;
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
-use crate::analysis::cache::{ArtifactAnalysisCache, ArtifactInfo, CacheExpectations, artifact_id};
+use crate::analysis::cache::{
+    ArtifactAnalysisCache, ArtifactInfo, CacheExpectations, RustcArtifactId,
+};
 use crate::analysis::extract::extract_artifact_ir;
 use crate::analysis::graph::{ArtifactAnalysisGraph, ExternArtifactInput};
+use crate::analysis::source::verify_cached_marker_sources;
 use crate::config::SniffTestConfig;
 use crate::report_roots::select_report_roots;
 use anyhow::Context;
@@ -22,7 +25,6 @@ use super::findings::{Finding, collect_report_root_findings, resolve_findings};
 use super::plugin::rustc_version;
 use super::report::{
     AnalysisArtifactReport, CrateOutputScope, REPORT_FORMAT_VERSION, ReportArtifact,
-    ReportDependency,
 };
 use interpretation::interpret_workspace;
 
@@ -33,8 +35,8 @@ pub(crate) fn analyze_crate(
     output_scope: CrateOutputScope,
 ) {
     let crate_name = tcx.crate_name(LOCAL_CRATE).to_string();
+    let local_stable_crate_id = tcx.stable_crate_id(LOCAL_CRATE).as_u64();
     let rustc_version = rustc_version();
-    let compiler_fingerprint = compiler_fingerprint(tcx);
     let externs = match dependency_inputs(tcx) {
         Ok(externs) => externs,
         Err(error) => {
@@ -62,6 +64,10 @@ pub(crate) fn analyze_crate(
         );
         return;
     }
+    if let Err(error) = verify_dependency_marker_sources(tcx, &dependency_graph) {
+        emit_tool_error(tcx, error);
+        return;
+    }
     let ir = match extract_artifact_ir(tcx) {
         Ok(ir) => ir,
         Err(error) => {
@@ -69,31 +75,48 @@ pub(crate) fn analyze_crate(
             return;
         }
     };
-    let cache = match ArtifactAnalysisCache::new(
-        env!("CARGO_PKG_VERSION"),
-        rustc_version.clone(),
-        compiler_fingerprint,
-        artifact_info(tcx),
-        dependency_graph.direct_dependency_refs().collect(),
-        ir,
-    ) {
-        Ok(cache) => cache,
-        Err(error) => {
-            emit_tool_error(tcx, format!("failed to create analysis cache: {error}"));
+    let local_ir = if let Some(artifact) = local_cache_artifact_info(tcx) {
+        let cache = match ArtifactAnalysisCache::new(
+            env!("CARGO_PKG_VERSION"),
+            rustc_version.clone(),
+            artifact,
+            dependency_graph.direct_dependency_ids().collect(),
+            ir,
+        ) {
+            Ok(cache) => cache,
+            Err(error) => {
+                emit_tool_error(tcx, format!("failed to create analysis cache: {error}"));
+                return;
+            }
+        };
+        if let Err(error) = cache.write(&args.cache_dir()) {
+            emit_tool_error(tcx, format!("failed to write analysis cache: {error}"));
             return;
         }
-    };
-    if let Err(error) = cache.write(&args.cache_dir()) {
-        emit_tool_error(tcx, format!("failed to write analysis cache: {error}"));
+        cache.ir
+    } else if output_scope == CrateOutputScope::Dependency {
+        emit_tool_error(
+            tcx,
+            "cannot persist required dependency artifact IR because rustc did not produce an SVH",
+        );
         return;
-    }
+    } else {
+        ir
+    };
     if output_scope == CrateOutputScope::Dependency {
         return;
     }
 
     let selection = select_report_roots(tcx, &config.analysis);
     let emit_diagnostics = args.under_cargo || args.message_format == args::MessageFormat::Human;
-    let interpretation = interpret_workspace(tcx, &cache, &dependency_graph, selection, config);
+    let interpretation = interpret_workspace(
+        tcx,
+        &local_ir,
+        local_stable_crate_id,
+        &dependency_graph,
+        selection,
+        config,
+    );
     let empty_report_roots =
         interpretation.selected_roots == 0 && interpretation.missing_roots.is_empty();
     let mut findings = collect_report_root_findings(
@@ -105,7 +128,7 @@ pub(crate) fn analyze_crate(
         &crate_name,
     );
     findings.extend(interpretation.findings);
-    let report = build_report(tcx, &dependency_graph, config, findings);
+    let report = build_report(tcx, config, findings);
     if emit_diagnostics {
         for finding in &report.findings {
             emit_finding_diagnostic(tcx, finding.level, &finding.finding.diagnostic);
@@ -117,6 +140,21 @@ pub(crate) fn analyze_crate(
 fn emit_tool_error(tcx: TyCtxt<'_>, message: impl Into<String>) {
     let diagnostic = tcx.dcx().struct_err(message.into());
     let _ = diagnostic.emit();
+}
+
+fn verify_dependency_marker_sources(
+    tcx: TyCtxt<'_>,
+    dependencies: &ArtifactAnalysisGraph,
+) -> Result<(), String> {
+    for dependency in dependencies.artifacts() {
+        verify_cached_marker_sources(tcx, &dependency.ir).map_err(|error| {
+            format!(
+                "cached source marker facts for artifact {} do not match the available source: {error}",
+                dependency.artifact.id
+            )
+        })?;
+    }
+    Ok(())
 }
 
 fn emit_report(args: &SniffTestArgs, report: &AnalysisArtifactReport) {
@@ -133,27 +171,17 @@ fn emit_report(args: &SniffTestArgs, report: &AnalysisArtifactReport) {
 
 fn build_report(
     tcx: TyCtxt<'_>,
-    dependency_graph: &ArtifactAnalysisGraph,
     config: &SniffTestConfig,
     findings: Vec<Finding>,
 ) -> AnalysisArtifactReport {
-    let artifact = artifact_info(tcx);
     AnalysisArtifactReport {
         reason: String::from("sniff-test-artifact"),
         format_version: REPORT_FORMAT_VERSION,
         tool_version: env!("CARGO_PKG_VERSION").to_owned(),
         rustc_version: rustc_version(),
         artifact: ReportArtifact {
-            artifact_id: artifact.artifact_id,
-            crate_name: artifact.crate_name,
+            crate_name: tcx.crate_name(LOCAL_CRATE).to_string(),
         },
-        dependencies: dependency_graph
-            .direct_dependency_aliases()
-            .map(|(extern_name, artifact_id)| ReportDependency {
-                extern_name: extern_name.to_owned(),
-                artifact_id: artifact_id.to_owned(),
-            })
-            .collect(),
         findings: resolve_findings(findings, config),
     }
 }
@@ -223,24 +251,26 @@ pub(crate) fn is_build_script(tcx: TyCtxt<'_>) -> bool {
     tcx.crate_name(LOCAL_CRATE).as_str() == "build_script_build"
 }
 
-fn artifact_info(tcx: TyCtxt<'_>) -> ArtifactInfo {
-    let crate_name = tcx.crate_name(LOCAL_CRATE).to_string();
-    let extra_filename = tcx.sess.opts.cg.extra_filename.as_str();
-    ArtifactInfo {
-        artifact_id: artifact_id(
-            &crate_name,
-            (!extra_filename.is_empty()).then_some(extra_filename),
-        ),
-        crate_name,
-        stable_crate_id: tcx.stable_crate_id(LOCAL_CRATE).as_u64(),
-        // rustc only computes the local strict version hash when this output
-        // configuration needs it. Querying it unconditionally ICEs for
-        // ordinary executable units because their HIR hash is intentionally
-        // absent.
-        crate_hash: tcx
-            .needs_crate_hash()
-            .then(|| tcx.crate_hash(LOCAL_CRATE).to_hex()),
-    }
+fn local_cache_artifact_info(tcx: TyCtxt<'_>) -> Option<ArtifactInfo> {
+    // Only outputs rustc can later load as crates need sidecars. In particular,
+    // `cargo check` asks executable units to emit metadata, but their crate
+    // type still is not loadable and rustc may omit the HIR hash required by
+    // `crate_hash`. Interpret those units in memory without querying it.
+    has_loadable_crate_output(tcx.crate_types()).then(|| ArtifactInfo {
+        id: rustc_artifact_id(tcx, LOCAL_CRATE),
+        crate_name: tcx.crate_name(LOCAL_CRATE).to_string(),
+    })
+}
+
+fn has_loadable_crate_output(crate_types: &[CrateType]) -> bool {
+    crate_types.iter().copied().any(CrateType::has_metadata)
+}
+
+fn rustc_artifact_id(tcx: TyCtxt<'_>, crate_num: CrateNum) -> RustcArtifactId {
+    RustcArtifactId::new(
+        tcx.stable_crate_id(crate_num).as_u64(),
+        tcx.crate_hash(crate_num).to_hex(),
+    )
 }
 
 fn dependency_inputs(tcx: TyCtxt<'_>) -> Result<Vec<ExternArtifactInput>, String> {
@@ -262,22 +292,7 @@ fn dependency_inputs(tcx: TyCtxt<'_>) -> Result<Vec<ExternArtifactInput>, String
                 // rustc assigns no CrateNum to an unused --extern.
                 continue;
             };
-            let loaded_paths = loaded
-                .iter()
-                .find_map(|(loaded_crate, paths)| {
-                    (*loaded_crate == crate_num).then_some(paths)
-                })
-                .ok_or_else(|| {
-                    format!(
-                        "cannot load required dependency artifact IR for pathless extern `{name}` because its resolved rustc crate {crate_num:?} was not loaded"
-                    )
-                })?;
-            let path = loaded_paths.first().cloned().ok_or_else(|| {
-                format!(
-                    "cannot load required dependency artifact IR for `{name}` because rustc recorded no artifact path for its loaded crate"
-                )
-            })?;
-            inputs.push(extern_artifact_input(tcx, name.clone(), path, crate_num));
+            inputs.push(extern_artifact_input(tcx, name.clone(), crate_num));
             continue;
         };
         let files = files.collect::<Vec<_>>();
@@ -312,13 +327,7 @@ fn dependency_inputs(tcx: TyCtxt<'_>) -> Result<Vec<ExternArtifactInput>, String
                 ));
             }
         };
-        let Some(first_file) = files.first() else {
-            return Err(format!(
-                "cannot load required dependency artifact IR for `{name}` because rustc provided an empty artifact-path set"
-            ));
-        };
-        let path = first_file.original().clone();
-        inputs.push(extern_artifact_input(tcx, name.clone(), path, crate_num));
+        inputs.push(extern_artifact_input(tcx, name.clone(), crate_num));
     }
     Ok(inputs)
 }
@@ -334,21 +343,11 @@ fn resolved_extern_crate(tcx: TyCtxt<'_>, name: &str) -> Option<CrateNum> {
 fn extern_artifact_input(
     tcx: TyCtxt<'_>,
     name: String,
-    path: PathBuf,
     crate_num: CrateNum,
 ) -> ExternArtifactInput {
-    let crate_name = tcx.crate_name(crate_num).to_string();
-    let extra_filename = tcx.extra_filename(crate_num);
     ExternArtifactInput {
         name,
-        path,
-        artifact_id: artifact_id(
-            &crate_name,
-            (!extra_filename.is_empty()).then_some(extra_filename.as_str()),
-        ),
-        crate_name,
-        stable_crate_id: tcx.stable_crate_id(crate_num).as_u64(),
-        crate_hash: tcx.crate_hash(crate_num).to_hex(),
+        artifact_id: rustc_artifact_id(tcx, crate_num),
     }
 }
 
@@ -359,21 +358,6 @@ fn same_artifact_path(left: &Path, right: &Path) -> bool {
             .ok()
             .zip(right.canonicalize().ok())
             .is_some_and(|(left, right)| left == right)
-}
-
-fn compiler_fingerprint(tcx: TyCtxt<'_>) -> String {
-    let unstable = &tcx.sess.opts.unstable_opts;
-    format!(
-        "overflow-checks={};mir-opt-level={};always-encode-mir={};inline-mir={:?};inline-mir-threshold={:?};inline-mir-forwarder-threshold={:?};inline-mir-hint-threshold={:?};mir-enable-passes={:?}",
-        tcx.sess.overflow_checks(),
-        tcx.sess.mir_opt_level(),
-        unstable.always_encode_mir,
-        unstable.inline_mir,
-        unstable.inline_mir_threshold,
-        unstable.inline_mir_forwarder_threshold,
-        unstable.inline_mir_hint_threshold,
-        unstable.mir_enable_passes,
-    )
 }
 
 pub(crate) fn load_config(
@@ -391,7 +375,34 @@ pub(crate) fn load_config(
 mod tests {
     use std::path::{Path, PathBuf};
 
-    use super::CrateOutputScope;
+    use rustc_session::config::CrateType;
+
+    use super::{CrateOutputScope, has_loadable_crate_output};
+
+    #[test]
+    fn only_rust_linkable_crate_types_receive_persisted_cache_identities() {
+        for crate_type in [
+            CrateType::Executable,
+            CrateType::StaticLib,
+            CrateType::Cdylib,
+            CrateType::Sdylib,
+        ] {
+            assert!(
+                !has_loadable_crate_output(&[crate_type]),
+                "{crate_type:?} must be interpreted in memory"
+            );
+        }
+        for crate_type in [CrateType::Rlib, CrateType::Dylib, CrateType::ProcMacro] {
+            assert!(
+                has_loadable_crate_output(&[crate_type]),
+                "{crate_type:?} needs a persisted identity"
+            );
+        }
+        assert!(has_loadable_crate_output(&[
+            CrateType::Executable,
+            CrateType::Rlib,
+        ]));
+    }
 
     #[test]
     fn output_scope_classifies_workspace_dependency_and_fallback_crates() {

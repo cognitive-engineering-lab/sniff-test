@@ -64,11 +64,11 @@ idiom.
 The frontend asks driver-built dependencies to encode MIR. This lets a
 consuming unit record an exact-instantiation overlay when generic dispatch is
 selected using a consumer-local type; for example, a dependency generic that
-calls a trait implemented by a workspace type. The dependency's own v13 cache
+calls a trait implemented by a workspace type. The dependency's own v14 cache
 still supplies its defining, generic body and raw THIR-only facts.
 
 External code without encoded MIR remains opaque to that rustc unit. Ordinary
-dependency coverage comes from v13 artifact IR produced during each
+dependency coverage comes from v14 artifact IR produced during each
 dependency's compilation and composed by stable function identity. Sysroot
 crates are not driver-compiled and therefore have no defining artifact cache;
 an exact sysroot instantiation is traversable only when rustc exposes its MIR
@@ -155,19 +155,30 @@ rustflags and best-effort `build.rustflags` from config files. Config-file
 recovered and do not apply to the analysis build, which can make the analyzed
 cfg set differ from the shipped build's.
 
-### Artifact IR validity rides on rustc identity and v13 fingerprints
+### Artifact IR validity rides on rustc identity
 
-Dependency IR is reused only after the v13 envelope validates its tool and
-rustc versions, artifact-local compiler fingerprint, canonical content ID,
-exact dependency-generation references, stable function identities, and source
-content hashes. A direct cache is additionally matched against the actual
-rustc-loaded crate name, stable crate ID, and strict version hash (SVH), so a
-stale sidecar beside a replaced fixed-name rlib is rejected. Transitive caches
-are pinned by the exact analysis generation recorded by their parent.
+Dependency IR is addressed by rustc's stable crate ID plus strict version hash
+(SVH). The v14 envelope validates its tool and rustc versions, exact artifact
+identity, stable function identities, dependency artifact identities, and
+source-range structure. A behavior-changing replacement of a fixed-name rlib
+has a different SVH and therefore selects a different cache path; transitive
+edges likewise name the exact rustc artifact selected by their parent. Multiple
+SVHs for the same stable crate ID may remain cached across builds, but one
+composed rustc graph rejects that ambiguous combination.
+
+Ordinary `// PANIC:` and `// SAFETY:` comments are deliberately outside rustc's
+SVH even though they contribute marker facts to sniff-test IR. Before
+interpretation, sniff-test verifies every marker-bearing source file whose
+recorded path still exists against the content hash stored in its sidecar and
+rejects a mismatch or reload failure. If that path is absent, the marker facts
+remain trusted as part of the exact artifact sidecar. This relies on dependency
+artifacts and sidecars being produced together by the sniff-test driver;
+replacing an artifact outside the driver while hiding its source is outside the
+validation model.
 
 The workspace's compiler profile is not compared with dependency fingerprints:
 Cargo package-profile overrides may compile them differently. The dependency's
-own compiler settings contribute to its rustc identity and cache generation.
+own compiler settings contribute to its rustc identity.
 Lint levels, report roots, and other interpretation-only policy deliberately do
 not invalidate dependency IR; the workspace reinterprets the same facts under
 the active configuration. Sharing a cache with a modified toolchain that
@@ -179,6 +190,7 @@ outside this validation model.
 Dependency IR stores stable source-file identity, filename, exact content hash,
 normalized byte length, and file-relative byte ranges. A workspace loads the
 recorded file into rustc's active source map and uses its span only when every
-value matches. Missing, edited, remapped-to-a-different-identity, or malformed
-source degrades to an unspanned diagnostic. This preserves diagnostic honesty
-but loses the source snippet and precise location.
+value matches. Apart from the pre-interpretation marker check above, missing,
+edited, remapped-to-a-different-identity, or malformed source degrades to an
+unspanned diagnostic. This preserves diagnostic honesty but loses the source
+snippet and precise location.

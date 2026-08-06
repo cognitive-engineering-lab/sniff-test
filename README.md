@@ -125,7 +125,7 @@ traces closer to the source call structure. Compiler settings are applied
 literally and independently from lint policy. For example, disabling overflow
 checks does not change or reject `[panics.lints].compiler-assert-overflow`.
 
-The v13 analysis cache stores policy-neutral artifact IR: function identities,
+The v14 analysis cache stores policy-neutral artifact IR: function identities,
 call edges, raw compiler assertions and unsafe operations, source markers,
 contracts, and verified file-relative source ranges. It does not store selected
 report roots, lint levels, interpreted findings, or rendered traces.
@@ -142,14 +142,18 @@ workspace-local type while the defining dependency cache remains generic and
 policy-neutral. The frontend ensures dependency metadata contains the MIR
 needed to build these overlays.
 
-Compiler settings affect extracted facts and participate in each artifact's
-cache identity. Direct caches are bound to the exact crate name, stable crate
-ID, and rustc crate hash loaded by the consuming session; the workspace's own
-profile is not imposed on dependencies that legitimately use different
-per-package settings. Lint and other interpretation-only changes reuse the same
-dependency IR, so a workspace can reinterpret cached dependencies without
-recompiling them. Failure to produce, validate, or persist required artifact IR
-is a tool error rather than a successful run with partial dependency analysis.
+Loadable caches use rustc's own exact artifact identity: the stable crate ID
+plus strict version hash (SVH). Cache filenames are
+`artifacts/<stable-crate-id>-<svh>.json`; Cargo output suffixes and crate names
+are not used as identity. Compiler settings that affect the crate are already
+reflected in rustc's SVH, while lint and other interpretation-only changes
+reuse the same dependency IR. Workspace executable IR, for which rustc does not
+produce an SVH, is interpreted in memory rather than assigned a synthetic cache
+identity. Failure to produce, validate, or persist required dependency IR is a
+tool error rather than a successful run with partial dependency analysis.
+Because rustc excludes ordinary comments from the SVH, available source files
+that contributed `// PANIC:` or `// SAFETY:` marker facts are content-verified
+before those facts are interpreted.
 
 `callable-edge-attribution = "erasure-sites"` reports concrete callable targets
 where a function item, closure, or concrete type is erased into an indirect
@@ -244,7 +248,8 @@ JSON mode writes newline-delimited messages to stdout, while Cargo and rustc
 diagnostics stay on stderr. Only workspace rustc units emit sniff-test messages;
 dependency units cache IR silently. Each workspace unit emits at most one
 message with `"reason":"sniff-test-artifact"`. Reports have no dependency
-`scope` discriminator because every public report is a workspace report.
+`scope`, cache identity, or dependency list because every public report is a
+workspace report.
 sniff-test records an invocation token only in workspace dep-info, so Cargo
 reruns report-producing workspace units on every invocation to reinterpret and
 validate cached IR while leaving otherwise-fresh dependency units untouched.

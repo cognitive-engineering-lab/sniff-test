@@ -5,10 +5,8 @@ expression: messages
 [
   {
     "artifact": {
-      "artifact-id": "[ARTIFACT_ID]",
       "crate-name": "safety_requirements"
     },
-    "dependencies": [],
     "findings": [
       {
         "function": "safety_requirements::configured_safety_obligation_missing_requirement",
@@ -62,7 +60,7 @@ expression: messages
         ]
       }
     ],
-    "format-version": 11,
+    "format-version": 12,
     "reason": "sniff-test-artifact",
     "rustc-version": "[RUSTC_VERSION]",
     "tool-version": "0.1.0"

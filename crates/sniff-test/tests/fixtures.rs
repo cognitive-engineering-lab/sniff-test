@@ -962,12 +962,8 @@ fn expanded_generic_dependency_resumes_at_private_helper() {
         .find(|message| message["artifact"]["crate-name"] == "dependency_generic_private_panic_app")
         .expect("pathless application report");
     assert!(
-        pathless_report["dependencies"]
-            .as_array()
-            .is_some_and(|dependencies| dependencies.iter().any(|dependency| {
-                dependency["extern-name"] == "dependency_generic_private_panic"
-            })),
-        "{name}: pathless extern must bind the dependency artifact: {pathless_report:?}"
+        pathless_report.get("dependencies").is_none(),
+        "{name}: workspace reports must not expose dependency cache identities: {pathless_report:?}"
     );
     assert!(
         pathless_report["findings"]
@@ -1118,7 +1114,7 @@ fn cargo_fresh_workspace_run_rejects_a_missing_dependency_ir_cache() {
         first.stdout
     );
 
-    let artifact_cache_dir = root.join("app/target/sniff-test/sniff-test-cache/v13/artifacts");
+    let artifact_cache_dir = root.join("app/target/sniff-test/sniff-test-cache/v14/artifacts");
     let dependency_cache = fs::read_dir(&artifact_cache_dir)
         .unwrap_or_else(|error| {
             panic!(
@@ -1380,7 +1376,7 @@ fn normalize_json(value: &mut Value, fixture_root: &Path, sysroot: &str) {
 }
 
 fn volatile_key(key: &str) -> bool {
-    matches!(key, "artifact-id" | "rustc-version")
+    key == "rustc-version"
 }
 
 fn message_sort_key(message: &Value) -> (String, String) {

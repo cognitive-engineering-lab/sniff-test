@@ -5,10 +5,8 @@ expression: messages
 [
   {
     "artifact": {
-      "artifact-id": "[ARTIFACT_ID]",
       "crate-name": "node_limit"
     },
-    "dependencies": [],
     "findings": [
       {
         "kind": "panic-analysis-incomplete",
@@ -25,7 +23,7 @@ expression: messages
         "root-kind": "concrete"
       }
     ],
-    "format-version": 11,
+    "format-version": 12,
     "reason": "sniff-test-artifact",
     "rustc-version": "[RUSTC_VERSION]",
     "tool-version": "0.1.0"

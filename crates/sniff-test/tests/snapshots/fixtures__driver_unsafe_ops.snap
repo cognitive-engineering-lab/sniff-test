@@ -5,10 +5,8 @@ expression: messages
 [
   {
     "artifact": {
-      "artifact-id": "[ARTIFACT_ID]",
       "crate-name": "unsafe_ops"
     },
-    "dependencies": [],
     "findings": [
       {
         "function": "unsafe_ops::asm_unjustified",
@@ -91,7 +89,7 @@ expression: messages
         ]
       }
     ],
-    "format-version": 11,
+    "format-version": 12,
     "reason": "sniff-test-artifact",
     "rustc-version": "[RUSTC_VERSION]",
     "tool-version": "0.1.0"

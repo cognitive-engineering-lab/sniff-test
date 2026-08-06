@@ -289,7 +289,7 @@ fn standalone_direct_driver_emits_a_workspace_report_with_linked_rustc_version()
 }
 
 #[test]
-fn direct_dependency_unit_silently_caches_complete_policy_neutral_v13_ir() {
+fn direct_dependency_unit_silently_caches_complete_policy_neutral_v14_ir() {
     let temp = tempfile::tempdir().expect("temp dir");
     let source = temp.path().join("dependency.rs");
     fs::write(
@@ -326,15 +326,21 @@ impl Probe {
     );
     assert_silent_success(&output, "dependency unit");
 
-    let cache_path = cache_dir
-        .join("artifacts")
-        .join("artifact_ir_dependency.json");
+    let cache_path = artifact_cache_for_crate(&cache_dir, "artifact_ir_dependency");
     let serialized = fs::read_to_string(&cache_path)
         .unwrap_or_else(|error| panic!("failed to read {}: {error}", cache_path.display()));
     let cache: serde_json::Value =
         serde_json::from_str(&serialized).expect("cache should contain JSON");
-    assert_eq!(cache["format-version"], 13);
+    assert_eq!(cache["format-version"], 14);
     assert_eq!(cache["artifact"]["crate-name"], "artifact_ir_dependency");
+    assert!(cache["artifact"]["id"]["stable-crate-id"].is_u64());
+    assert_eq!(
+        cache["artifact"]["id"]["svh"]
+            .as_str()
+            .expect("SVH should be a string")
+            .len(),
+        32
+    );
 
     let functions = cache["ir"]["functions"]
         .as_array()
@@ -375,13 +381,20 @@ impl Probe {
     assert_json_keys_absent(
         &cache,
         &[
-            "finding", "findings", "scope", "trace", "traces", "policy", "policies",
+            "compiler-fingerprint",
+            "finding",
+            "findings",
+            "scope",
+            "trace",
+            "traces",
+            "policy",
+            "policies",
         ],
     );
 }
 
 #[test]
-fn workspace_lint_policy_reinterprets_unchanged_dependency_v13_ir() {
+fn workspace_lint_policy_reinterprets_unchanged_dependency_v14_ir() {
     let temp = tempfile::tempdir().expect("temp dir");
     let fixture = PolicyReinterpretationFixture::new(temp.path());
     let dependency_output = run_dependency_unit(
@@ -395,19 +408,13 @@ fn workspace_lint_policy_reinterprets_unchanged_dependency_v13_ir() {
     );
     assert_silent_success(&dependency_output, "dependency unit");
 
-    let dependency_cache = fixture
-        .cache_dir
-        .join("artifacts")
-        .join("policy_dependency.json");
+    let dependency_cache = artifact_cache_for_crate(&fixture.cache_dir, "policy_dependency");
     let initial_bytes = fs::read(&dependency_cache)
         .unwrap_or_else(|error| panic!("failed to read {}: {error}", dependency_cache.display()));
     let initial_document: serde_json::Value =
         serde_json::from_slice(&initial_bytes).expect("dependency cache should contain JSON");
-    assert_eq!(initial_document["format-version"], 13);
-    let analysis_id_before = initial_document["analysis-id"]
-        .as_str()
-        .expect("dependency cache should have an analysis id")
-        .to_owned();
+    assert_eq!(initial_document["format-version"], 14);
+    assert!(initial_document.get("analysis-id").is_none());
     let cache_modified_before = fs::metadata(&dependency_cache)
         .and_then(|metadata| metadata.modified())
         .expect("read dependency cache modification time");
@@ -457,9 +464,6 @@ fn workspace_lint_policy_reinterprets_unchanged_dependency_v13_ir() {
 
     let final_bytes = fs::read(&dependency_cache)
         .unwrap_or_else(|error| panic!("failed to reread {}: {error}", dependency_cache.display()));
-    let final_document: serde_json::Value =
-        serde_json::from_slice(&final_bytes).expect("dependency cache should remain valid JSON");
-    assert_eq!(final_document["analysis-id"], analysis_id_before);
     assert_eq!(
         final_bytes, initial_bytes,
         "lint-only workspace runs must not rewrite dependency IR"
@@ -477,6 +481,335 @@ fn workspace_lint_policy_reinterprets_unchanged_dependency_v13_ir() {
             .expect("reread dependency artifact modification time"),
         rlib_modified_before,
         "workspace reinterpretation recompiled the dependency artifact"
+    );
+}
+
+#[test]
+fn dependency_compiler_settings_select_distinct_rustc_artifact_ids() {
+    let temp = tempfile::tempdir().expect("temp dir");
+    let source = temp.path().join("compiler_identity.rs");
+    fs::write(
+        &source,
+        "pub fn indexed(values: &[u8], index: usize) -> u8 { values[index] }\n",
+    )
+    .expect("write dependency source");
+    let cache_dir = temp.path().join("cache");
+
+    for setting in ["off", "on"] {
+        let artifact = temp
+            .path()
+            .join(format!("libcompiler_identity_{setting}.rlib"));
+        let output = run_dependency_unit(
+            temp.path(),
+            &cache_dir,
+            "compiler_identity",
+            &source,
+            Some(&artifact),
+            "json",
+            &[if setting == "on" {
+                "-Coverflow-checks=on"
+            } else {
+                "-Coverflow-checks=off"
+            }],
+        );
+        assert_silent_success(&output, "dependency compiler-setting variant");
+    }
+
+    let caches = artifact_caches_for_crate(&cache_dir, "compiler_identity");
+    assert_eq!(
+        caches.len(),
+        2,
+        "compiler settings that affect extracted MIR must select distinct rustc artifact IDs"
+    );
+    let identities = caches
+        .iter()
+        .map(|path| {
+            let cache: serde_json::Value =
+                serde_json::from_slice(&fs::read(path).expect("read artifact cache"))
+                    .expect("artifact cache should contain JSON");
+            cache["artifact"]["id"].clone()
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        identities[0]["stable-crate-id"], identities[1]["stable-crate-id"],
+        "the crate identity should remain stable"
+    );
+    assert_ne!(
+        identities[0]["svh"], identities[1]["svh"],
+        "rustc's SVH should distinguish compiler behavior"
+    );
+}
+
+#[test]
+fn cargo_output_suffix_does_not_change_rustc_artifact_identity() {
+    let temp = tempfile::tempdir().expect("temp dir");
+    let source = temp.path().join("output_shape_identity.rs");
+    fs::write(&source, "pub fn dependency_body() {}\n").expect("write dependency source");
+    let cache_dir = temp.path().join("cache");
+
+    let rlib = run_dependency_unit(
+        temp.path(),
+        &cache_dir,
+        "output_shape_identity",
+        &source,
+        None,
+        "json",
+        &["-Cextra-filename=-rlib"],
+    );
+    assert_silent_success(&rlib, "rlib dependency unit");
+    let first_path = artifact_cache_for_crate(&cache_dir, "output_shape_identity");
+    let first_cache: serde_json::Value =
+        serde_json::from_slice(&fs::read(&first_path).expect("read rlib cache"))
+            .expect("rlib cache should contain JSON");
+
+    let renamed_rlib = run_dependency_unit(
+        temp.path(),
+        &cache_dir,
+        "output_shape_identity",
+        &source,
+        None,
+        "json",
+        &["-Cextra-filename=-second"],
+    );
+    assert_silent_success(&renamed_rlib, "renamed rlib dependency unit");
+    let caches = artifact_caches_for_crate(&cache_dir, "output_shape_identity");
+    assert_eq!(
+        caches,
+        [first_path],
+        "Cargo output suffixes must not create cache identities"
+    );
+    let second_cache: serde_json::Value =
+        serde_json::from_slice(&fs::read(&caches[0]).expect("read renamed rlib cache"))
+            .expect("renamed rlib cache should contain JSON");
+    assert_eq!(
+        first_cache["artifact"]["id"], second_cache["artifact"]["id"],
+        "rustc should identify both output names as the same artifact"
+    );
+}
+
+#[test]
+fn ordinary_workspace_binary_is_interpreted_without_a_cache_identity() {
+    let temp = tempfile::tempdir().expect("temp dir");
+    let cache_dir = temp.path().join("cache");
+    let dependency_source = temp.path().join("workspace_binary_dependency.rs");
+    fs::write(&dependency_source, "pub fn touch() {}\n").expect("write dependency source");
+    let dependency_rlib = temp.path().join("libworkspace_binary_dependency.rlib");
+    let dependency = run_dependency_unit(
+        temp.path(),
+        &cache_dir,
+        "workspace_binary_dependency",
+        &dependency_source,
+        Some(&dependency_rlib),
+        "json",
+        &[],
+    );
+    assert_silent_success(&dependency, "workspace binary dependency");
+
+    let source = temp.path().join("workspace_binary.rs");
+    fs::write(
+        &source,
+        "fn main() {\n    let unused = 1_u8;\n    workspace_binary_dependency::touch();\n}\n",
+    )
+    .expect("write workspace binary");
+    let manifest = temp.path().join("sniff-test.toml");
+    fs::write(
+        &manifest,
+        "[analysis]\nreport-roots = [\"workspace_binary::main\"]\n",
+    )
+    .expect("write manifest");
+    let mut command = direct_driver_command();
+    let output = command
+        .args(["--manifest"])
+        .arg(&manifest)
+        .args(["--cache-dir"])
+        .arg(&cache_dir)
+        .args(["--message-format", "json", "--color", "never", "--"])
+        .args([
+            "--crate-name",
+            "workspace_binary",
+            "--crate-type",
+            "bin",
+            "--edition",
+            "2024",
+        ])
+        .arg(&source)
+        .arg("--extern")
+        .arg(format!(
+            "workspace_binary_dependency={}",
+            dependency_rlib.display()
+        ))
+        .args([
+            "--sysroot",
+            rustc_sysroot().trim(),
+            "--emit=dep-info,metadata",
+            "-C",
+            "opt-level=3",
+            "-C",
+            "embed-bitcode=no",
+            "-C",
+            "metadata=1edabe6620e8238b",
+            "-C",
+            "extra-filename=-45e50dbbc42c973f",
+            "-C",
+            "strip=debuginfo",
+            "-Z",
+            "always-encode-mir",
+            "-Z",
+            "mir-opt-level=2",
+            "-Z",
+            "inline-mir=no",
+            "-Z",
+            "inline-mir-threshold=0",
+            "-Z",
+            "inline-mir-forwarder-threshold=0",
+            "-Z",
+            "inline-mir-hint-threshold=0",
+            "-Z",
+            "mir-enable-passes=-Inline,-ForceInline",
+        ])
+        .arg("-L")
+        .arg(format!("dependency={}", temp.path().display()))
+        .env("CARGO_PRIMARY_PACKAGE", "1")
+        .current_dir(temp.path())
+        .output()
+        .expect("run workspace binary");
+
+    assert_success(&output, "workspace binary");
+    let report: serde_json::Value =
+        serde_json::from_slice(&output.stdout).expect("parse workspace binary report");
+    assert_eq!(report["artifact"]["crate-name"], "workspace_binary");
+    assert!(
+        artifact_caches_for_crate(&cache_dir, "workspace_binary").is_empty(),
+        "ordinary binaries must not receive a synthetic persisted identity"
+    );
+    assert_eq!(
+        artifact_caches_for_crate(&cache_dir, "workspace_binary_dependency").len(),
+        1,
+        "the dependency should retain its real rustc cache identity"
+    );
+}
+
+#[test]
+#[allow(
+    clippy::too_many_lines,
+    reason = "the regression proves the cache identity, extracted marker delta, and workspace rejection together"
+)]
+fn stale_source_marker_ir_is_rejected_even_when_rustc_identity_is_unchanged() {
+    let temp = tempfile::tempdir().expect("temp dir");
+    let dependency_source = temp.path().join("stale_marker_dependency.rs");
+    fs::write(
+        &dependency_source,
+        "pub fn read(pointer: *const u8) -> u8 {\n\
+             // SAFETY: the caller guarantees that the byte is readable.\n\
+             unsafe { *pointer }\n\
+         }\n",
+    )
+    .expect("write marked dependency source");
+    let dependency_rlib = temp.path().join("libstale_marker_dependency.rlib");
+    let stale_cache_dir = temp.path().join("stale-cache");
+    let marked = run_dependency_unit(
+        temp.path(),
+        &stale_cache_dir,
+        "stale_marker_dependency",
+        &dependency_source,
+        Some(&dependency_rlib),
+        "json",
+        &[],
+    );
+    assert_silent_success(&marked, "marked dependency unit");
+    let stale_cache = artifact_cache_for_crate(&stale_cache_dir, "stale_marker_dependency");
+    let stale_document: serde_json::Value =
+        serde_json::from_slice(&fs::read(&stale_cache).expect("read stale cache"))
+            .expect("stale cache should contain JSON");
+    assert!(
+        stale_document["ir"]["functions"]
+            .as_array()
+            .is_some_and(|functions| functions.iter().any(|function| {
+                function["markers"]
+                    .as_array()
+                    .is_some_and(|markers| !markers.is_empty())
+            })),
+        "the regression requires a cached source marker"
+    );
+
+    fs::write(
+        &dependency_source,
+        "pub fn read(pointer: *const u8) -> u8 {\n\
+             // XAFETY: the caller guarantees that the byte is readable.\n\
+             unsafe { *pointer }\n\
+         }\n",
+    )
+    .expect("replace only the marker prefix with same-length text");
+    let fresh_cache_dir = temp.path().join("fresh-cache");
+    let unmarked = run_dependency_unit(
+        temp.path(),
+        &fresh_cache_dir,
+        "stale_marker_dependency",
+        &dependency_source,
+        Some(&dependency_rlib),
+        "json",
+        &[],
+    );
+    assert_silent_success(&unmarked, "unmarked dependency unit");
+    let fresh_cache = artifact_cache_for_crate(&fresh_cache_dir, "stale_marker_dependency");
+    let fresh_document: serde_json::Value =
+        serde_json::from_slice(&fs::read(&fresh_cache).expect("read fresh cache"))
+            .expect("fresh cache should contain JSON");
+    assert!(
+        fresh_document["ir"]["functions"]
+            .as_array()
+            .is_some_and(|functions| functions
+                .iter()
+                .all(|function| { function["markers"].as_array().is_some_and(Vec::is_empty) })),
+        "the replacement source must remove the cached marker semantics"
+    );
+    assert_eq!(
+        stale_document["artifact"]["id"], fresh_document["artifact"]["id"],
+        "ordinary marker comments are intentionally outside rustc's artifact identity"
+    );
+
+    let workspace_source = temp.path().join("stale_marker_workspace.rs");
+    fs::write(
+        &workspace_source,
+        "pub fn workspace_root(pointer: *const u8) -> u8 {\n\
+             stale_marker_dependency::read(pointer)\n\
+         }\n",
+    )
+    .expect("write workspace source");
+    let manifest = temp.path().join("sniff-test.toml");
+    fs::write(
+        &manifest,
+        "[analysis]\n\
+         report-roots = [\"stale_marker_workspace::workspace_root\"]\n\
+         \n\
+         [safety.lints]\n\
+         unsafe-op-missing-justification = \"deny\"\n",
+    )
+    .expect("write manifest");
+    let output = run_workspace_unit(
+        temp.path(),
+        &stale_cache_dir,
+        &manifest,
+        "stale_marker_workspace",
+        &workspace_source,
+        "human",
+        |command| {
+            command.arg("--extern").arg(format!(
+                "stale_marker_dependency={}",
+                dependency_rlib.display()
+            ));
+        },
+    );
+
+    assert!(!output.status.success(), "stale marker IR was accepted");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("cached source marker facts"),
+        "stderr:\n{stderr}"
+    );
+    assert!(
+        stderr.contains("content hash"),
+        "source mismatch should explain the failed integrity check:\n{stderr}"
     );
 }
 
@@ -507,7 +840,7 @@ fn fixed_name_dependency_cache_must_match_the_crate_rustc_actually_loaded() {
     assert_success(&analyzed_output, "analyzed dependency");
 
     // Replace the exact same output filename without running sniff-test, so
-    // the v13 sidecar deliberately describes the previous crate metadata.
+    // the v14 cache deliberately contains only the previous rustc identity.
     fs::write(
         &dependency_source,
         "pub fn dependency_value() -> u8 { 2 }\n",
@@ -566,15 +899,13 @@ fn fixed_name_dependency_cache_must_match_the_crate_rustc_actually_loaded() {
     assert!(!output.status.success(), "stale cache was accepted");
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
-        stderr.contains("does not match rustc's loaded crate identity"),
+        stderr.contains("missing artifact IR for"),
         "stderr:\n{stderr}"
     );
     assert_eq!(
-        stderr
-            .matches("does not match rustc's loaded crate identity")
-            .count(),
+        stderr.matches("missing artifact IR for").count(),
         1,
-        "identity mismatch should be reported once\nstderr:\n{stderr}"
+        "the new rustc identity should be reported missing once\nstderr:\n{stderr}"
     );
 }
 
@@ -807,7 +1138,7 @@ fn workspace_unit_fails_when_required_extern_artifact_ir_is_missing() {
     );
     assert!(dependency_rlib.is_file(), "dependency rlib was not written");
 
-    let dependency_cache = cache_dir.join("artifacts").join("required_ir_dep.json");
+    let dependency_cache = artifact_cache_for_crate(&cache_dir, "required_ir_dep");
     fs::remove_file(&dependency_cache)
         .unwrap_or_else(|error| panic!("failed to remove {}: {error}", dependency_cache.display()));
 
@@ -1339,6 +1670,29 @@ fn direct_driver_command() -> Command {
     let mut command = Command::new(env!("CARGO_BIN_EXE_sniff-test-driver"));
     clean_cargo_package_env(&mut command);
     command
+}
+
+fn artifact_cache_for_crate(cache_dir: &Path, crate_name: &str) -> PathBuf {
+    let matches = artifact_caches_for_crate(cache_dir, crate_name);
+    match matches.as_slice() {
+        [path] => path.clone(),
+        [] => panic!("no artifact cache found for crate `{crate_name}`"),
+        paths => panic!("multiple artifact caches found for crate `{crate_name}`: {paths:?}"),
+    }
+}
+
+fn artifact_caches_for_crate(cache_dir: &Path, crate_name: &str) -> Vec<PathBuf> {
+    let artifacts = cache_dir.join("artifacts");
+    fs::read_dir(&artifacts)
+        .unwrap_or_else(|error| panic!("failed to read {}: {error}", artifacts.display()))
+        .filter_map(|entry| {
+            let path = entry.expect("read artifact cache entry").path();
+            let source = fs::read(&path).expect("read artifact cache");
+            let cache: serde_json::Value =
+                serde_json::from_slice(&source).expect("artifact cache should contain JSON");
+            (cache["artifact"]["crate-name"] == crate_name).then_some(path)
+        })
+        .collect()
 }
 
 fn assert_success(output: &Output, context: &str) {

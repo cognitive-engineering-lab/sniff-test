@@ -5,20 +5,17 @@
 //! this schema so a workspace can reinterpret one dependency artifact under a
 //! different policy without recompiling it.
 
-use std::collections::BTreeMap;
 use std::fmt::{self, Display, Formatter};
-use std::hash::Hasher as _;
 use std::io::Write as _;
 use std::path::{Path, PathBuf};
 
-use rustc_data_structures::{fingerprint::Fingerprint, stable_hasher::StableHasher};
 use serde::{Deserialize, Serialize};
 
 use super::ir::{ArtifactAnalysisIr, FunctionBodyProvenanceIr};
 
-pub(crate) const CACHE_FORMAT_VERSION: u32 = 13;
+pub(crate) const CACHE_FORMAT_VERSION: u32 = 14;
 pub(crate) const CACHE_DIR_NAME: &str = "sniff-test-cache";
-pub(crate) const CACHE_VERSION_DIR: &str = "v13";
+pub(crate) const CACHE_VERSION_DIR: &str = "v14";
 
 /// Cached policy-neutral analysis for one exact rustc output artifact.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -27,10 +24,8 @@ pub(crate) struct ArtifactAnalysisCache {
     pub(crate) format_version: u32,
     pub(crate) tool_version: String,
     pub(crate) rustc_version: String,
-    pub(crate) compiler_fingerprint: String,
-    pub(crate) analysis_id: AnalysisId,
     pub(crate) artifact: ArtifactInfo,
-    pub(crate) dependencies: Vec<DependencyAnalysisRef>,
+    pub(crate) dependencies: Vec<RustcArtifactId>,
     pub(crate) ir: ArtifactAnalysisIr,
 }
 
@@ -45,45 +40,30 @@ impl ArtifactAnalysisCache {
     pub(crate) fn new(
         tool_version: impl Into<String>,
         rustc_version: impl Into<String>,
-        compiler_fingerprint: impl Into<String>,
         artifact: ArtifactInfo,
-        dependencies: Vec<DependencyAnalysisRef>,
+        mut dependencies: Vec<RustcArtifactId>,
         mut ir: ArtifactAnalysisIr,
     ) -> Result<Self, CacheValidationError> {
-        let dependencies = canonical_dependencies(dependencies)?;
+        dependencies.sort_unstable();
+        dependencies.dedup();
         ir.canonicalize();
-        let mut analysis = Self {
+        let analysis = Self {
             format_version: CACHE_FORMAT_VERSION,
             tool_version: tool_version.into(),
             rustc_version: rustc_version.into(),
-            compiler_fingerprint: compiler_fingerprint.into(),
-            analysis_id: AnalysisId::default(),
             artifact,
             dependencies,
             ir,
         };
         analysis.validate()?;
-        analysis.analysis_id = analysis.compute_analysis_id()?;
         Ok(analysis)
     }
 
     /// Writes this analysis to the path derived from its artifact identity.
     pub(crate) fn write(&self, cache_dir: &Path) -> Result<(), CacheError> {
-        let path = artifact_cache_path(cache_dir, &self.artifact.artifact_id);
+        let path = artifact_cache_path(cache_dir, &self.artifact.id);
         self.validate()
             .map_err(|error| CacheError::invalid(&path, error))?;
-        let expected_id = self
-            .compute_analysis_id()
-            .map_err(|error| CacheError::invalid(&path, error))?;
-        if self.analysis_id != expected_id {
-            return Err(CacheError::Invalid {
-                path,
-                reason: format!(
-                    "analysis id {} does not match canonical content {expected_id}",
-                    self.analysis_id
-                ),
-            });
-        }
         let source = serde_json::to_string_pretty(self).map_err(|source| CacheError::Json {
             path: path.clone(),
             source,
@@ -91,7 +71,7 @@ impl ArtifactAnalysisCache {
         write_atomic(&path, &source)
     }
 
-    /// Reads and validates one v13 cache file against the active extraction
+    /// Reads and validates one v14 cache file against the active extraction
     /// environment.
     pub(crate) fn read(path: &Path, expected: &CacheExpectations<'_>) -> Result<Self, CacheError> {
         let source = std::fs::read_to_string(path).map_err(|source| CacheError::Io {
@@ -140,18 +120,6 @@ impl ArtifactAnalysisCache {
         analysis
             .validate()
             .map_err(|error| CacheError::invalid(path, error))?;
-        let expected_id = analysis
-            .compute_analysis_id()
-            .map_err(|error| CacheError::invalid(path, error))?;
-        if analysis.analysis_id != expected_id {
-            return Err(CacheError::Invalid {
-                path: path.to_owned(),
-                reason: format!(
-                    "analysis id {} does not match canonical content {expected_id}",
-                    analysis.analysis_id
-                ),
-            });
-        }
         Ok(analysis)
     }
 
@@ -165,11 +133,6 @@ impl ArtifactAnalysisCache {
         for (value, label) in [
             (self.tool_version.as_str(), "sniff-test version"),
             (self.rustc_version.as_str(), "rustc version"),
-            (
-                self.compiler_fingerprint.as_str(),
-                "compiler configuration fingerprint",
-            ),
-            (self.artifact.artifact_id.as_str(), "artifact ID"),
             (self.artifact.crate_name.as_str(), "artifact crate name"),
         ] {
             if value.trim().is_empty() {
@@ -178,16 +141,7 @@ impl ArtifactAnalysisCache {
                 )));
             }
         }
-        if self
-            .artifact
-            .crate_hash
-            .as_deref()
-            .is_some_and(|hash| hash.trim().is_empty())
-        {
-            return Err(CacheValidationError::new(
-                "rustc crate hash must not be empty when present",
-            ));
-        }
+        self.artifact.id.validate()?;
         validate_dependencies(&self.artifact, &self.dependencies)?;
         self.ir
             .validate()
@@ -196,25 +150,25 @@ impl ArtifactAnalysisCache {
             let definition_stable_crate_id = body.function.def_path_hash.stable_crate_id();
             match body.provenance {
                 FunctionBodyProvenanceIr::DefiningArtifact
-                    if definition_stable_crate_id != self.artifact.stable_crate_id =>
+                    if definition_stable_crate_id != self.artifact.id.stable_crate_id =>
                 {
                     return Err(CacheValidationError::new(format!(
                         "defining function {index} does not belong to artifact stable crate id \
                          {:016x}",
-                        self.artifact.stable_crate_id
+                        self.artifact.id.stable_crate_id
                     )));
                 }
                 FunctionBodyProvenanceIr::ConsumerInstantiation {
                     consumer_stable_crate_id,
-                } if consumer_stable_crate_id != self.artifact.stable_crate_id => {
+                } if consumer_stable_crate_id != self.artifact.id.stable_crate_id => {
                     return Err(CacheValidationError::new(format!(
                         "consumer function {index} names stable crate id \
                          {consumer_stable_crate_id:016x}, expected {:016x}",
-                        self.artifact.stable_crate_id
+                        self.artifact.id.stable_crate_id
                     )));
                 }
                 FunctionBodyProvenanceIr::ConsumerInstantiation { .. }
-                    if definition_stable_crate_id == self.artifact.stable_crate_id =>
+                    if definition_stable_crate_id == self.artifact.id.stable_crate_id =>
                 {
                     return Err(CacheValidationError::new(format!(
                         "consumer function {index} must be defined by another artifact"
@@ -226,45 +180,47 @@ impl ArtifactAnalysisCache {
         }
         Ok(())
     }
+}
 
-    fn compute_analysis_id(&self) -> Result<AnalysisId, CacheValidationError> {
-        let mut canonical = self.clone();
-        canonical.analysis_id = AnalysisId::default();
-        let source = serde_json::to_vec(&canonical).map_err(|error| {
-            CacheValidationError::new(format!("cannot fingerprint cache data: {error}"))
-        })?;
-        let mut hasher = StableHasher::new();
-        hasher.write(&source);
-        let mut id = String::with_capacity(32);
-        for byte in hasher.finish::<Fingerprint>().to_le_bytes() {
-            const HEX: &[u8; 16] = b"0123456789abcdef";
-            id.push(char::from(HEX[usize::from(byte >> 4)]));
-            id.push(char::from(HEX[usize::from(byte & 0x0f)]));
+/// rustc's identity for one loadable crate artifact.
+///
+/// The stable crate ID identifies the crate, while the strict version hash
+/// (SVH) selects the exact artifact rustc loaded. Cargo output filenames are
+/// deliberately not part of this identity.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case", deny_unknown_fields)]
+pub(crate) struct RustcArtifactId {
+    pub(crate) stable_crate_id: u64,
+    pub(crate) svh: String,
+}
+
+impl RustcArtifactId {
+    #[must_use]
+    pub(crate) fn new(stable_crate_id: u64, svh: impl Into<String>) -> Self {
+        Self {
+            stable_crate_id,
+            svh: svh.into(),
         }
-        Ok(AnalysisId(id))
+    }
+
+    fn validate(&self) -> Result<(), CacheValidationError> {
+        if self.svh.len() != 32
+            || !self
+                .svh
+                .bytes()
+                .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+        {
+            return Err(CacheValidationError::new(
+                "rustc artifact SVH must be a 32-digit lowercase hexadecimal value",
+            ));
+        }
+        Ok(())
     }
 }
 
-/// Deterministic generation identity for one sealed artifact IR.
-#[derive(Debug, Clone, Default, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
-#[serde(transparent)]
-pub(crate) struct AnalysisId(String);
-
-impl From<&str> for AnalysisId {
-    fn from(value: &str) -> Self {
-        Self(value.to_owned())
-    }
-}
-
-impl From<String> for AnalysisId {
-    fn from(value: String) -> Self {
-        Self(value)
-    }
-}
-
-impl Display for AnalysisId {
+impl Display for RustcArtifactId {
     fn fmt(&self, formatter: &mut Formatter<'_>) -> fmt::Result {
-        self.0.fmt(formatter)
+        write!(formatter, "{:016x}-{}", self.stable_crate_id, self.svh)
     }
 }
 
@@ -272,80 +228,33 @@ impl Display for AnalysisId {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case", deny_unknown_fields)]
 pub(crate) struct ArtifactInfo {
-    pub(crate) artifact_id: String,
+    pub(crate) id: RustcArtifactId,
     pub(crate) crate_name: String,
-    pub(crate) stable_crate_id: u64,
-    /// rustc's strict version hash (SVH), when this compilation configuration
-    /// produces one. Artifacts that cannot be loaded as dependencies, such as
-    /// ordinary executables, may not need a crate hash.
-    pub(crate) crate_hash: Option<String>,
-}
-
-/// Exact dependency generation needed to compose this artifact's graph.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
-#[serde(rename_all = "kebab-case", deny_unknown_fields)]
-pub(crate) struct DependencyAnalysisRef {
-    pub(crate) artifact_id: String,
-    pub(crate) analysis_id: AnalysisId,
-}
-
-fn canonical_dependencies(
-    dependencies: Vec<DependencyAnalysisRef>,
-) -> Result<Vec<DependencyAnalysisRef>, CacheValidationError> {
-    let mut by_artifact = BTreeMap::<String, AnalysisId>::new();
-    for dependency in dependencies {
-        match by_artifact.entry(dependency.artifact_id) {
-            std::collections::btree_map::Entry::Vacant(entry) => {
-                entry.insert(dependency.analysis_id);
-            }
-            std::collections::btree_map::Entry::Occupied(entry)
-                if entry.get() == &dependency.analysis_id => {}
-            std::collections::btree_map::Entry::Occupied(entry) => {
-                return Err(CacheValidationError::new(format!(
-                    "dependency {} has conflicting analysis generations {} and {}",
-                    entry.key(),
-                    entry.get(),
-                    dependency.analysis_id
-                )));
-            }
-        }
-    }
-    Ok(by_artifact
-        .into_iter()
-        .map(|(artifact_id, analysis_id)| DependencyAnalysisRef {
-            artifact_id,
-            analysis_id,
-        })
-        .collect())
 }
 
 fn validate_dependencies(
     artifact: &ArtifactInfo,
-    dependencies: &[DependencyAnalysisRef],
+    dependencies: &[RustcArtifactId],
 ) -> Result<(), CacheValidationError> {
     for pair in dependencies.windows(2) {
-        if pair[0].artifact_id >= pair[1].artifact_id {
+        if pair[0] >= pair[1] {
             return Err(CacheValidationError::new(
-                "dependencies must be uniquely sorted by artifact id",
+                "dependencies must be uniquely sorted by rustc artifact identity",
             ));
+        }
+        if pair[0].stable_crate_id == pair[1].stable_crate_id {
+            return Err(CacheValidationError::new(format!(
+                "dependencies contain two SVHs for stable crate id {:016x}",
+                pair[0].stable_crate_id
+            )));
         }
     }
     for dependency in dependencies {
-        if dependency.artifact_id.trim().is_empty() {
-            return Err(CacheValidationError::new(
-                "dependency artifact ID must not be empty",
-            ));
-        }
-        if dependency.artifact_id == artifact.artifact_id {
+        dependency.validate()?;
+        if dependency.stable_crate_id == artifact.id.stable_crate_id {
             return Err(CacheValidationError::new(format!(
-                "artifact {} cannot depend on its own analysis",
-                artifact.artifact_id
-            )));
-        }
-        if dependency.analysis_id.0.trim().is_empty() {
-            return Err(CacheValidationError::new(format!(
-                "dependency {} has an empty analysis generation",
-                dependency.artifact_id
+                "artifact {} cannot depend on another SVH of its own stable crate id",
+                artifact.id,
             )));
         }
     }
@@ -464,15 +373,10 @@ impl std::error::Error for CacheError {
 }
 
 #[must_use]
-pub(crate) fn artifact_cache_path(cache_dir: &Path, artifact_id: &str) -> PathBuf {
+pub(crate) fn artifact_cache_path(cache_dir: &Path, artifact_id: &RustcArtifactId) -> PathBuf {
     cache_dir
         .join("artifacts")
-        .join(format!("{}.json", sanitize_path_component(artifact_id)))
-}
-
-#[must_use]
-pub(crate) fn artifact_id(crate_name: &str, extra_filename: Option<&str>) -> String {
-    format!("{}{}", crate_name, extra_filename.unwrap_or_default())
+        .join(format!("{artifact_id}.json"))
 }
 
 #[must_use]
@@ -512,33 +416,16 @@ fn write_atomic(path: &Path, source: &str) -> Result<(), CacheError> {
         })
 }
 
-fn sanitize_path_component(value: &str) -> String {
-    let sanitized = value
-        .chars()
-        .map(|character| {
-            if character.is_ascii_alphanumeric() || matches!(character, '-' | '_' | '.') {
-                character
-            } else {
-                '_'
-            }
-        })
-        .collect::<String>();
-    if sanitized.is_empty() {
-        String::from("_")
-    } else {
-        sanitized
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use std::fs;
+    use std::path::Path;
 
     use tempfile::tempdir;
 
     use super::{
-        AnalysisId, ArtifactAnalysisCache, ArtifactInfo, CACHE_FORMAT_VERSION, CacheError,
-        CacheExpectations, DependencyAnalysisRef, artifact_cache_path, default_cache_dir,
+        ArtifactAnalysisCache, ArtifactInfo, CACHE_FORMAT_VERSION, CacheError, CacheExpectations,
+        RustcArtifactId, artifact_cache_path, default_cache_dir,
     };
     use crate::analysis::ir::{
         ArtifactAnalysisIr, FunctionAttributesIr, FunctionBodyIr, FunctionBodyProvenanceIr,
@@ -581,23 +468,17 @@ mod tests {
 
     fn artifact() -> ArtifactInfo {
         ArtifactInfo {
-            artifact_id: String::from("sample-a1b2"),
+            id: rustc_id(LOCAL_STABLE_CRATE_ID, "0123456789abcdef0123456789abcdef"),
             crate_name: String::from("sample"),
-            stable_crate_id: LOCAL_STABLE_CRATE_ID,
-            crate_hash: Some(String::from("0123456789abcdef0123456789abcdef")),
         }
     }
 
-    fn analysis(compiler_fingerprint: &str) -> ArtifactAnalysisCache {
+    fn analysis() -> ArtifactAnalysisCache {
         ArtifactAnalysisCache::new(
             "0.1.0",
             "rustc 1.90.0-nightly",
-            compiler_fingerprint,
             artifact(),
-            vec![DependencyAnalysisRef {
-                artifact_id: String::from("dependency-c3d4"),
-                analysis_id: AnalysisId::from("dependency-generation"),
-            }],
+            vec![rustc_id(2, "22222222222222222222222222222222")],
             ir(),
         )
         .expect("valid artifact analysis")
@@ -610,13 +491,32 @@ mod tests {
         }
     }
 
+    fn rustc_id(stable_crate_id: u64, svh: &str) -> RustcArtifactId {
+        RustcArtifactId::new(stable_crate_id, svh)
+    }
+
     #[test]
-    fn v13_round_trip_preserves_only_artifact_ir_and_dependencies() {
+    fn rustc_identity_alone_determines_the_cache_path() {
+        let identity =
+            RustcArtifactId::new(0x0123_4567_89ab_cdef, "fedcba98765432100123456789abcdef");
+
+        assert_eq!(
+            identity.to_string(),
+            "0123456789abcdef-fedcba98765432100123456789abcdef"
+        );
+        assert_eq!(
+            artifact_cache_path(Path::new("/cache"), &identity).to_string_lossy(),
+            "/cache/artifacts/0123456789abcdef-fedcba98765432100123456789abcdef.json"
+        );
+    }
+
+    #[test]
+    fn v14_round_trip_preserves_artifact_identity_dependencies_and_ir() {
         let directory = tempdir().expect("temporary cache root");
-        let expected = analysis("compiler-profile");
+        let expected = analysis();
         expected.write(directory.path()).expect("write cache");
 
-        let path = artifact_cache_path(directory.path(), "sample-a1b2");
+        let path = artifact_cache_path(directory.path(), &expected.artifact.id);
         let source = fs::read_to_string(&path).expect("read serialized cache");
         let json: serde_json::Value = serde_json::from_str(&source).expect("valid JSON");
         let object = json.as_object().expect("cache object");
@@ -627,74 +527,56 @@ mod tests {
         assert!(!object.contains_key("trace-arena"));
         assert!(!object.contains_key("functions"));
         assert!(!object.contains_key("scope"));
+        assert!(!object.contains_key("analysis-id"));
+        assert!(!object.contains_key("compiler-fingerprint"));
+        assert_eq!(
+            json["artifact"]["id"]["stable-crate-id"],
+            LOCAL_STABLE_CRATE_ID
+        );
+        assert_eq!(
+            json["artifact"]["id"]["svh"],
+            "0123456789abcdef0123456789abcdef"
+        );
+        assert!(json["artifact"].get("artifact-id").is_none());
+        assert!(json["artifact"].get("crate-hash").is_none());
 
         let decoded = ArtifactAnalysisCache::read(&path, &expectations()).expect("read cache");
         assert_eq!(decoded, expected);
         assert_eq!(decoded.ir, ir());
-        assert_eq!(decoded.dependencies.len(), 1);
+        assert_eq!(
+            decoded.dependencies,
+            [rustc_id(2, "22222222222222222222222222222222")]
+        );
     }
 
     #[test]
-    fn writing_same_artifact_twice_replaces_the_previous_generation() {
+    fn writing_same_rustc_artifact_identity_refreshes_cached_ir() {
         let directory = tempdir().expect("temporary cache root");
-        let first = analysis("compiler-profile");
-        let second = analysis("compiler-overflow-on");
+        let first = analysis();
+        let second = analysis();
 
-        first
-            .write(directory.path())
-            .expect("write first generation");
-        second
-            .write(directory.path())
-            .expect("replace first generation");
+        first.write(directory.path()).expect("write first cache");
+        second.write(directory.path()).expect("refresh first cache");
 
-        let path = artifact_cache_path(directory.path(), "sample-a1b2");
+        let path = artifact_cache_path(directory.path(), &second.artifact.id);
         let decoded =
-            ArtifactAnalysisCache::read(&path, &expectations()).expect("read second generation");
+            ArtifactAnalysisCache::read(&path, &expectations()).expect("read refreshed cache");
 
         assert_eq!(decoded, second);
     }
 
     #[test]
-    fn compiler_fingerprint_is_artifact_local_and_part_of_generation_identity() {
-        let profile = analysis("compiler-profile");
-        let overflow_on = analysis("compiler-overflow-on");
-
-        assert_ne!(profile.analysis_id, overflow_on.analysis_id);
-
-        let directory = tempdir().expect("temporary cache root");
-        profile.write(directory.path()).expect("write cache");
-        let path = artifact_cache_path(directory.path(), "sample-a1b2");
-        let decoded = ArtifactAnalysisCache::read(&path, &expectations())
-            .expect("a consumer must not impose its compiler profile on a dependency");
-
-        assert_eq!(decoded.compiler_fingerprint, "compiler-profile");
-    }
-
-    #[test]
     fn canonicalization_makes_dependency_order_irrelevant() {
         let dependencies = vec![
-            DependencyAnalysisRef {
-                artifact_id: String::from("z-dependency"),
-                analysis_id: AnalysisId::from("z-generation"),
-            },
-            DependencyAnalysisRef {
-                artifact_id: String::from("a-dependency"),
-                analysis_id: AnalysisId::from("a-generation"),
-            },
+            rustc_id(3, "33333333333333333333333333333333"),
+            rustc_id(2, "22222222222222222222222222222222"),
         ];
-        let forward = ArtifactAnalysisCache::new(
-            "0.1.0",
-            "rustc",
-            "compiler",
-            artifact(),
-            dependencies.clone(),
-            ir(),
-        )
-        .expect("valid analysis");
+        let forward =
+            ArtifactAnalysisCache::new("0.1.0", "rustc", artifact(), dependencies.clone(), ir())
+                .expect("valid analysis");
         let reverse = ArtifactAnalysisCache::new(
             "0.1.0",
             "rustc",
-            "compiler",
             artifact(),
             dependencies.into_iter().rev().collect(),
             ir(),
@@ -702,35 +584,77 @@ mod tests {
         .expect("valid analysis");
 
         assert_eq!(forward, reverse);
-        assert_eq!(forward.dependencies[0].artifact_id, "a-dependency");
+        assert_eq!(forward.dependencies[0].stable_crate_id, 2);
     }
 
     #[test]
-    fn rejects_conflicting_dependency_generations() {
+    fn exact_duplicate_dependencies_are_deduplicated() {
+        let dependency = rustc_id(2, "22222222222222222222222222222222");
+        let analysis = ArtifactAnalysisCache::new(
+            "0.1.0",
+            "rustc",
+            artifact(),
+            vec![dependency.clone(), dependency.clone()],
+            ir(),
+        )
+        .expect("duplicate graph edges are harmless");
+
+        assert_eq!(analysis.dependencies, [dependency]);
+    }
+
+    #[test]
+    fn rejects_two_svhs_for_one_dependency_stable_crate_id() {
         let error = ArtifactAnalysisCache::new(
             "0.1.0",
             "rustc",
-            "compiler",
             artifact(),
             vec![
-                DependencyAnalysisRef {
-                    artifact_id: String::from("dependency"),
-                    analysis_id: AnalysisId::from("first"),
-                },
-                DependencyAnalysisRef {
-                    artifact_id: String::from("dependency"),
-                    analysis_id: AnalysisId::from("second"),
-                },
+                rustc_id(2, "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"),
+                rustc_id(2, "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"),
             ],
             ir(),
         )
-        .expect_err("one artifact cannot name two dependency generations");
+        .expect_err("one rustc crate graph cannot contain two SVHs for one stable crate ID");
 
         assert!(
             error
                 .to_string()
-                .contains("conflicting analysis generations")
+                .contains("stable crate id 0000000000000002")
         );
+    }
+
+    #[test]
+    fn rejects_a_dependency_with_the_artifacts_stable_crate_id() {
+        let error = ArtifactAnalysisCache::new(
+            "0.1.0",
+            "rustc",
+            artifact(),
+            vec![rustc_id(
+                LOCAL_STABLE_CRATE_ID,
+                "ffffffffffffffffffffffffffffffff",
+            )],
+            ir(),
+        )
+        .expect_err("a rustc crate graph cannot depend on another SVH of itself");
+
+        assert!(error.to_string().contains("its own stable crate id"));
+    }
+
+    #[test]
+    fn rejects_noncanonical_svhs() {
+        for invalid in [
+            "0123456789abcdef",
+            "0123456789ABCDEF0123456789ABCDEF",
+            "0123456789abcdef0123456789abcde/",
+        ] {
+            let mut invalid_artifact = artifact();
+            invalid_artifact.id.svh = invalid.to_owned();
+            let error =
+                ArtifactAnalysisCache::new("0.1.0", "rustc", invalid_artifact, Vec::new(), ir())
+                    .expect_err("malformed SVHs must not reach cache paths");
+
+            assert!(error.to_string().contains("lowercase hexadecimal"));
+        }
     }
 
     #[test]
@@ -756,15 +680,9 @@ mod tests {
         )
         .expect("structurally valid IR");
 
-        let error = ArtifactAnalysisCache::new(
-            "0.1.0",
-            "rustc",
-            "compiler",
-            artifact(),
-            Vec::new(),
-            foreign_ir,
-        )
-        .expect_err("function identities must belong to the artifact");
+        let error =
+            ArtifactAnalysisCache::new("0.1.0", "rustc", artifact(), Vec::new(), foreign_ir)
+                .expect_err("function identities must belong to the artifact");
 
         assert!(error.to_string().contains("does not belong to artifact"));
     }
@@ -785,15 +703,8 @@ mod tests {
         let overlay_ir =
             ArtifactAnalysisIr::new(vec![overlay], Vec::new()).expect("structurally valid overlay");
 
-        ArtifactAnalysisCache::new(
-            "0.1.0",
-            "rustc",
-            "compiler",
-            artifact(),
-            Vec::new(),
-            overlay_ir,
-        )
-        .expect("the consumer artifact should own the exact foreign overlay");
+        ArtifactAnalysisCache::new("0.1.0", "rustc", artifact(), Vec::new(), overlay_ir)
+            .expect("the consumer artifact should own the exact foreign overlay");
     }
 
     #[test]
@@ -809,15 +720,9 @@ mod tests {
         let overlay_ir =
             ArtifactAnalysisIr::new(vec![overlay], Vec::new()).expect("structurally valid overlay");
 
-        let error = ArtifactAnalysisCache::new(
-            "0.1.0",
-            "rustc",
-            "compiler",
-            artifact(),
-            Vec::new(),
-            overlay_ir,
-        )
-        .expect_err("consumer provenance must match the artifact owner");
+        let error =
+            ArtifactAnalysisCache::new("0.1.0", "rustc", artifact(), Vec::new(), overlay_ir)
+                .expect_err("consumer provenance must match the artifact owner");
 
         assert!(
             error
@@ -827,28 +732,29 @@ mod tests {
     }
 
     #[test]
-    fn rejects_v12_before_deserializing_the_old_schema() {
+    fn rejects_v13_before_deserializing_the_old_schema() {
         let directory = tempdir().expect("temporary cache root");
         let path = directory.path().join("legacy.json");
-        fs::write(&path, r#"{"format-version":12,"functions":[]}"#).expect("write legacy header");
+        fs::write(&path, r#"{"format-version":13,"functions":[]}"#).expect("write legacy header");
 
         let error = ArtifactAnalysisCache::read(&path, &expectations())
-            .expect_err("v12 is deliberately incompatible");
+            .expect_err("v13 is deliberately incompatible");
 
-        assert!(matches!(error, CacheError::Format { version: 12, .. }));
+        assert!(matches!(error, CacheError::Format { version: 13, .. }));
     }
 
     #[test]
-    fn cache_paths_use_the_v13_directory() {
+    fn cache_paths_use_the_v14_directory() {
         let root = default_cache_dir("/target/plugin-nightly");
+        let identity = rustc_id(1, "0123456789abcdef0123456789abcdef");
 
         assert_eq!(
             root.to_string_lossy(),
-            "/target/plugin-nightly/sniff-test-cache/v13"
+            "/target/plugin-nightly/sniff-test-cache/v14"
         );
         assert_eq!(
-            artifact_cache_path(&root, "sample-a1b2").to_string_lossy(),
-            "/target/plugin-nightly/sniff-test-cache/v13/artifacts/sample-a1b2.json"
+            artifact_cache_path(&root, &identity).to_string_lossy(),
+            "/target/plugin-nightly/sniff-test-cache/v14/artifacts/0000000000000001-0123456789abcdef0123456789abcdef.json"
         );
     }
 }

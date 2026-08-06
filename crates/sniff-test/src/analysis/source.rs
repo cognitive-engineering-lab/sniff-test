@@ -4,6 +4,7 @@
 //! after the loaded file's stable identity, content hash, normalized byte
 //! length, and requested byte range all match the artifact IR.
 
+use std::collections::BTreeSet;
 use std::fmt;
 use std::hash::Hasher;
 use std::io;
@@ -14,7 +15,46 @@ use rustc_middle::ty::TyCtxt;
 use rustc_span::source_map::SourceMap;
 use rustc_span::{BytePos, Pos, SourceFile, Span};
 
-use super::ir::{SourceFileId, SourceFileIr, SourceRangeIr};
+use super::ir::{ArtifactAnalysisIr, SourceFileId, SourceFileIr, SourceRangeIr};
+
+/// Verifies every available source file that contributed ordinary comment
+/// markers to cached IR.
+///
+/// rustc's SVH intentionally ignores ordinary comments, while sniff-test's
+/// `// PANIC:` and `// SAFETY:` markers affect interpretation. A matching SVH
+/// therefore cannot by itself prove that a sidecar still matches a marker-
+/// bearing source file. Source whose recorded path is absent remains trusted
+/// as part of the exact sidecar; every failure for an existing path rejects the
+/// stale marker facts.
+pub(crate) fn verify_cached_marker_sources(
+    tcx: TyCtxt<'_>,
+    ir: &ArtifactAnalysisIr,
+) -> Result<(), CachedSourceError> {
+    let mut checked = BTreeSet::new();
+    for range in ir.functions.iter().flat_map(|body| {
+        body.markers
+            .iter()
+            .filter_map(|marker| marker.source_range.as_ref().or(body.source_range.as_ref()))
+    }) {
+        if !checked.insert(range.file.clone()) {
+            continue;
+        }
+        let source = ir
+            .source_files
+            .binary_search_by(|source| source.id.cmp(&range.file))
+            .ok()
+            .map(|index| &ir.source_files[index])
+            .ok_or_else(|| CachedSourceError::MissingSourceIdentity {
+                identity: range.file.as_str().to_owned(),
+            })?;
+        match cached_source_span(tcx, source, range) {
+            Ok(_) => {}
+            Err(error) if error.is_absent_from_disk() => {}
+            Err(error) => return Err(error),
+        }
+    }
+    Ok(())
+}
 
 /// Loads and verifies one cached source range in rustc's active source map.
 ///
@@ -200,6 +240,9 @@ pub(crate) enum CachedSourceError {
         kind: io::ErrorKind,
         message: String,
     },
+    MissingSourceIdentity {
+        identity: String,
+    },
     RangeSourceMismatch {
         source: String,
         range: String,
@@ -241,6 +284,10 @@ impl fmt::Display for CachedSourceError {
             } => write!(
                 formatter,
                 "cached source `{filename}` is unavailable: {message}"
+            ),
+            Self::MissingSourceIdentity { identity } => write!(
+                formatter,
+                "cached source identity `{identity}` is absent from the artifact IR"
             ),
             Self::RangeSourceMismatch { source, range } => write!(
                 formatter,
@@ -291,6 +338,17 @@ impl fmt::Display for CachedSourceError {
 }
 
 impl std::error::Error for CachedSourceError {}
+
+impl CachedSourceError {
+    fn is_absent_from_disk(&self) -> bool {
+        match self {
+            Self::SourceUnavailable { filename, .. } => {
+                matches!(Path::new(filename).try_exists(), Ok(false))
+            }
+            _ => false,
+        }
+    }
+}
 
 #[cfg(test)]
 mod tests {
@@ -431,6 +489,27 @@ mod tests {
                 }
             ));
         });
+    }
+
+    #[test]
+    fn source_unavailable_is_ignorable_only_when_the_recorded_path_is_absent() {
+        let directory = tempfile::tempdir().expect("temp directory");
+        let existing = write_source(&directory, "fn present() {}\n");
+        let missing = directory.path().join("missing.rs");
+        let error_for = |path: &Path| CachedSourceError::SourceUnavailable {
+            filename: path.to_string_lossy().into_owned(),
+            kind: std::io::ErrorKind::NotFound,
+            message: String::from("test source-map reload failure"),
+        };
+
+        assert!(
+            !error_for(&existing).is_absent_from_disk(),
+            "a source-map reload failure must not hide a changed file that still exists"
+        );
+        assert!(
+            error_for(&missing).is_absent_from_disk(),
+            "truly unavailable dependency source may safely degrade to cached marker facts"
+        );
     }
 
     #[test]

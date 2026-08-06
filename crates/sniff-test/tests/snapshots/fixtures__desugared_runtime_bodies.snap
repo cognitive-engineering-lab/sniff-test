@@ -1,17 +1,14 @@
 ---
 source: crates/sniff-test/tests/fixtures.rs
-assertion_line: 540
 expression: messages
 ---
 [
   {
     "artifact": {
-      "artifact-id": "[ARTIFACT_ID]",
       "crate-name": "desugared_runtime_bodies"
     },
-    "dependencies": [],
     "findings": [],
-    "format-version": 11,
+    "format-version": 12,
     "reason": "sniff-test-artifact",
     "rustc-version": "[RUSTC_VERSION]",
     "tool-version": "0.1.0"

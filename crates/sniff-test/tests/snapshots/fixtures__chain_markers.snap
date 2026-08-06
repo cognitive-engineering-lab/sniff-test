@@ -5,10 +5,8 @@ expression: messages
 [
   {
     "artifact": {
-      "artifact-id": "[ARTIFACT_ID]",
       "crate-name": "chain_markers"
     },
-    "dependencies": [],
     "findings": [
       {
         "kind": "documented-panic",
@@ -23,7 +21,7 @@ expression: messages
         ]
       }
     ],
-    "format-version": 11,
+    "format-version": 12,
     "reason": "sniff-test-artifact",
     "rustc-version": "[RUSTC_VERSION]",
     "tool-version": "0.1.0"

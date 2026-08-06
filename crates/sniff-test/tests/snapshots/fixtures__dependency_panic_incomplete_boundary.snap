@@ -5,17 +5,10 @@ expression: messages
 [
   {
     "artifact": {
-      "artifact-id": "[ARTIFACT_ID]",
       "crate-name": "dependency_panic_incomplete_boundary_app"
     },
-    "dependencies": [
-      {
-        "artifact-id": "[ARTIFACT_ID]",
-        "extern-name": "dependency_panic_incomplete_boundary"
-      }
-    ],
     "findings": [],
-    "format-version": 11,
+    "format-version": 12,
     "reason": "sniff-test-artifact",
     "rustc-version": "[RUSTC_VERSION]",
     "tool-version": "0.1.0"

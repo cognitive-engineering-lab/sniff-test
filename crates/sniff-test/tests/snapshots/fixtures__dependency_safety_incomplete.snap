@@ -5,15 +5,8 @@ expression: messages
 [
   {
     "artifact": {
-      "artifact-id": "[ARTIFACT_ID]",
       "crate-name": "dependency_safety_incomplete_app"
     },
-    "dependencies": [
-      {
-        "artifact-id": "[ARTIFACT_ID]",
-        "extern-name": "dependency_safety_incomplete_middle"
-      }
-    ],
     "findings": [
       {
         "kind": "safety-analysis-incomplete",
@@ -23,7 +16,7 @@ expression: messages
         "root-kind": "concrete"
       }
     ],
-    "format-version": 11,
+    "format-version": 12,
     "reason": "sniff-test-artifact",
     "rustc-version": "[RUSTC_VERSION]",
     "tool-version": "0.1.0"

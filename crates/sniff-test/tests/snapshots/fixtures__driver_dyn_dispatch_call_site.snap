@@ -5,10 +5,8 @@ expression: messages
 [
   {
     "artifact": {
-      "artifact-id": "[ARTIFACT_ID]",
       "crate-name": "dyn_dispatch_call_site"
     },
-    "dependencies": [],
     "findings": [
       {
         "kind": "indirect-call-boundary",
@@ -38,7 +36,7 @@ expression: messages
         ]
       }
     ],
-    "format-version": 11,
+    "format-version": 12,
     "reason": "sniff-test-artifact",
     "rustc-version": "[RUSTC_VERSION]",
     "tool-version": "0.1.0"

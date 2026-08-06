@@ -17,7 +17,7 @@ inline-mir = "off"
 
 [analysis]
 # Analysis settings are workspace interpretation policy. Dependency rustc units
-# ignore report roots and lints while silently caching v13 IR for every
+# ignore report roots and lints while silently caching v14 IR for every
 # analyzable body.
 show-full-stack-trace = false
 report-roots = "public"

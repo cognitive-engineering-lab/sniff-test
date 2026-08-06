@@ -26,8 +26,8 @@ pub(crate) trait FunctionLookup {
     /// Resolves an exact instance, falling back to its generic definition.
     fn function(&self, function: FunctionId) -> Option<LoadedFunction<'_>>;
 
-    /// Resolves an exact instance within one artifact generation, falling back
-    /// only to a generic body in that same generation.
+    /// Resolves an exact instance within one artifact, falling back only to a
+    /// generic body in that same artifact.
     fn function_in_scope(
         &self,
         scope: &BodyScope,
@@ -61,7 +61,7 @@ pub(crate) trait FunctionLookup {
 
     /// Resolves a target in the current artifact context, then falls back only
     /// to facts from its defining artifact. It must never borrow an exact
-    /// overlay from an unrelated consumer generation.
+    /// overlay from an unrelated consumer artifact.
     fn resolve(&self, scope: &BodyScope, function: FunctionId) -> Option<LoadedFunction<'_>> {
         self.function_in_scope(scope, function)
             .or_else(|| self.defining_body(function))
@@ -71,7 +71,7 @@ pub(crate) trait FunctionLookup {
     /// stable crate.
     ///
     /// Implicit compiler crates such as `core` and `std` are not rustc
-    /// `--extern` inputs and therefore do not have artifact-IR generations in
+    /// `--extern` inputs and therefore do not have artifact-IR caches in
     /// the composed cache graph. An absent body is incomplete only when its
     /// defining artifact is managed by this lookup.
     fn manages_stable_crate_id(&self, _stable_crate_id: u64) -> bool {
@@ -106,6 +106,51 @@ impl FunctionLookup for ArtifactAnalysisIr {
     }
 }
 
+/// Local artifact IR together with the one crate identity it manages.
+///
+/// Workspace executable units do not necessarily have a rustc SVH, so their
+/// IR stays in memory instead of receiving a synthetic cache identity.
+pub(crate) struct InMemoryArtifactLookup<'a> {
+    ir: &'a ArtifactAnalysisIr,
+    stable_crate_id: u64,
+}
+
+impl<'a> InMemoryArtifactLookup<'a> {
+    #[must_use]
+    pub(crate) const fn new(ir: &'a ArtifactAnalysisIr, stable_crate_id: u64) -> Self {
+        Self {
+            ir,
+            stable_crate_id,
+        }
+    }
+}
+
+impl FunctionLookup for InMemoryArtifactLookup<'_> {
+    fn function(&self, function: FunctionId) -> Option<LoadedFunction<'_>> {
+        self.ir.function(function)
+    }
+
+    fn function_in_scope(
+        &self,
+        scope: &BodyScope,
+        function: FunctionId,
+    ) -> Option<LoadedFunction<'_>> {
+        self.ir.function_in_scope(scope, function)
+    }
+
+    fn defining_body(&self, function: FunctionId) -> Option<LoadedFunction<'_>> {
+        self.ir.defining_body(function)
+    }
+
+    fn defining_source_body(&self, function: FunctionId) -> Option<LoadedFunction<'_>> {
+        self.ir.defining_source_body(function)
+    }
+
+    fn manages_stable_crate_id(&self, stable_crate_id: u64) -> bool {
+        self.stable_crate_id == stable_crate_id
+    }
+}
+
 impl FunctionLookup for ArtifactAnalysisCache {
     fn function(&self, function: FunctionId) -> Option<LoadedFunction<'_>> {
         self.ir
@@ -136,7 +181,7 @@ impl FunctionLookup for ArtifactAnalysisCache {
     }
 
     fn manages_stable_crate_id(&self, stable_crate_id: u64) -> bool {
-        self.artifact.stable_crate_id == stable_crate_id
+        self.artifact.id.stable_crate_id == stable_crate_id
     }
 }
 
@@ -163,7 +208,7 @@ impl FunctionLookup for ArtifactAnalysisGraph {
 
     fn manages_stable_crate_id(&self, stable_crate_id: u64) -> bool {
         self.artifacts()
-            .any(|artifact| artifact.artifact.stable_crate_id == stable_crate_id)
+            .any(|artifact| artifact.artifact.id.stable_crate_id == stable_crate_id)
     }
 }
 
@@ -2554,10 +2599,11 @@ fn ambiguous_requirements(
 #[cfg(test)]
 mod tests {
     use super::{
-        FunctionLookup, IncompleteReason, InterpretationRoot, InterpretedFindingKind,
-        InterpretedSafetyCallKind, InterpretedTraceStepKind, LayeredFunctionLookup, interpret,
+        FunctionLookup, InMemoryArtifactLookup, IncompleteReason, InterpretationRoot,
+        InterpretedFindingKind, InterpretedSafetyCallKind, InterpretedTraceStepKind,
+        LayeredFunctionLookup, interpret,
     };
-    use crate::analysis::cache::{ArtifactAnalysisCache, ArtifactInfo};
+    use crate::analysis::cache::{ArtifactAnalysisCache, ArtifactInfo, RustcArtifactId};
     use crate::analysis::ir::{
         ArtifactAnalysisIr, CallEdgeIr, CallEdgeKindIr, CallId, CallSiteId, CallTargetIr,
         CallableAttributionIr, CallableKeyIr, ContractRequirementIr, EffectFactIr, EffectId,
@@ -2574,6 +2620,15 @@ mod tests {
     use crate::path_patterns::PathPatterns;
     use crate::report_roots::ReportRootKind;
     use crate::safety::SafetyOpKind;
+
+    #[test]
+    fn in_memory_artifact_lookup_manages_only_its_local_crate() {
+        let analysis = ir(Vec::<FunctionBodyIr>::new());
+        let lookup = InMemoryArtifactLookup::new(&analysis, 42);
+
+        assert!(lookup.manages_stable_crate_id(42));
+        assert!(!lookup.manages_stable_crate_id(7));
+    }
 
     #[test]
     fn traverses_local_dependency_and_private_helper_but_not_unused_dependency_ir() {
@@ -4636,19 +4691,16 @@ mod tests {
     }
 
     fn cache<T: Into<FunctionBodyIr>>(
-        artifact_id: &str,
+        crate_name: &str,
         stable_crate_id: u64,
         functions: Vec<T>,
     ) -> ArtifactAnalysisCache {
         ArtifactAnalysisCache::new(
             "test-tool",
             "test-rustc",
-            "test-compiler",
             ArtifactInfo {
-                artifact_id: artifact_id.to_owned(),
-                crate_name: artifact_id.to_owned(),
-                stable_crate_id,
-                crate_hash: Some(format!("crate-hash-{stable_crate_id}")),
+                id: RustcArtifactId::new(stable_crate_id, format!("{stable_crate_id:032x}")),
+                crate_name: crate_name.to_owned(),
             },
             Vec::new(),
             ir(functions),

@@ -1,15 +1,14 @@
 //! Adapts policy-neutral interpreter output to diagnostics and JSON findings.
 
-use crate::analysis::cache::ArtifactAnalysisCache;
 use crate::analysis::graph::ArtifactAnalysisGraph;
 use crate::analysis::interpret::{
-    IncompleteReason, InterpretationResult, InterpretationRoot, InterpretedFinding,
-    InterpretedFindingKind, InterpretedSafetyCallKind, InterpretedTrace, InterpretedTraceStepKind,
-    LayeredFunctionLookup, interpret,
+    InMemoryArtifactLookup, IncompleteReason, InterpretationResult, InterpretationRoot,
+    InterpretedFinding, InterpretedFindingKind, InterpretedSafetyCallKind, InterpretedTrace,
+    InterpretedTraceStepKind, LayeredFunctionLookup, interpret,
 };
 use crate::analysis::ir::{
-    CallEdgeKindIr, ContractRequirementIr, FunctionBodyIr, FunctionId, SourceFileIr, SourceRangeIr,
-    StableDefPathHash, StableInstanceHash,
+    ArtifactAnalysisIr, CallEdgeKindIr, ContractRequirementIr, FunctionBodyIr, FunctionId,
+    SourceFileIr, SourceRangeIr, StableDefPathHash, StableInstanceHash,
 };
 use crate::analysis::source::cached_source_span;
 use crate::config::SniffTestConfig;
@@ -31,7 +30,8 @@ pub(super) struct WorkspaceInterpretation {
 
 pub(super) fn interpret_workspace<'tcx>(
     tcx: TyCtxt<'tcx>,
-    local: &ArtifactAnalysisCache,
+    local: &ArtifactAnalysisIr,
+    local_stable_crate_id: u64,
     dependencies: &ArtifactAnalysisGraph,
     selection: ReportRootSelection<'tcx>,
     config: &SniffTestConfig,
@@ -42,11 +42,13 @@ pub(super) fn interpret_workspace<'tcx>(
         .copied()
         .map(|root| interpretation_root(tcx, root))
         .collect::<Vec<_>>();
-    let lookup = LayeredFunctionLookup::new(vec![local, dependencies]);
+    let local_lookup = InMemoryArtifactLookup::new(local, local_stable_crate_id);
+    let lookup = LayeredFunctionLookup::new(vec![&local_lookup, dependencies]);
     let result = interpret(&lookup, &roots, config);
     let sources = SourceResolver {
         tcx,
         local,
+        local_stable_crate_id,
         dependencies,
     };
 
@@ -765,7 +767,7 @@ fn adapt_incomplete(
     show_full_stack_trace: bool,
 ) -> Finding {
     let use_dependency_analysis_lint =
-        uses_dependency_analysis_lint(sources.local.artifact.stable_crate_id, &reason);
+        uses_dependency_analysis_lint(sources.local_stable_crate_id, &reason);
     let (target, range, trace, reason, message) = match reason {
         IncompleteReason::NodeLimit { limit } => (
             None,
@@ -1008,14 +1010,14 @@ fn render_requirement(requirement: &ContractRequirementIr) -> String {
 
 struct SourceResolver<'tcx, 'analysis> {
     tcx: TyCtxt<'tcx>,
-    local: &'analysis ArtifactAnalysisCache,
+    local: &'analysis ArtifactAnalysisIr,
+    local_stable_crate_id: u64,
     dependencies: &'analysis ArtifactAnalysisGraph,
 }
 
 impl SourceResolver<'_, '_> {
     fn function_body(&self, function: FunctionId) -> Option<&FunctionBodyIr> {
         self.local
-            .ir
             .function_body(function)
             .or_else(|| self.dependencies.function(function).map(|body| body.body()))
     }
@@ -1046,11 +1048,10 @@ impl SourceResolver<'_, '_> {
 
     fn source_file(&self, range: &SourceRangeIr) -> Option<&SourceFileIr> {
         self.local
-            .ir
             .source_files
             .binary_search_by(|source| source.id.cmp(&range.file))
             .ok()
-            .map(|index| &self.local.ir.source_files[index])
+            .map(|index| &self.local.source_files[index])
             .or_else(|| {
                 self.dependencies
                     .source_file(&range.file)
