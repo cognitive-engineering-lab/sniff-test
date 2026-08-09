@@ -7,28 +7,21 @@ stdout:
 <empty>
 stderr:
     Checking ambiguous-safety v0.1.0 ([FIXTURE])
-error: function `ambiguous_safety::reused_caller_marker_for_macro_expansion` has an ambiguous `// SAFETY:` marker
-  --> src/lib.rs:91:1
-   |
-91 | /     // SAFETY: this fixture's operations have no additional requirements.
-92 | |     call_perform_twice_without_marker!();
-   | |_^
-   |
-   = note: this marker applies to 2 safety effect groups
-   = note: reachable from `ambiguous_safety::reused_caller_marker_for_macro_expansion` to `ambiguous_safety::perform`
-   = note: set `show-full-stack-trace = true` under `[analysis]` in sniff-test.toml to show every reachability step
-   = help: give each unsafe block or operation its own marker, or set `ambiguous-safety-marker = "allow"` under `[analysis.lints]`
-
 error: function `ambiguous_safety::reused_marker_within_one_macro_expansion` has an ambiguous `// SAFETY:` marker
-  --> src/lib.rs:68:1
+  --> src/lib.rs:34:1
    |
-68 | /         // SAFETY: this fixture's operations have no additional requirements.
-69 | |         perform_twice_without_marker!()
+34 | /         // SAFETY: this fixture's operations have no additional requirements.
+35 | |         perform_twice_without_marker!()
    | |_^
    |
-   = note: this marker applies to 2 safety effect groups
+   = note: this marker applies to 2 safety obligations
    = note: reachable from `ambiguous_safety::reused_marker_within_one_macro_expansion` to `ambiguous_safety::perform`
    = note: set `show-full-stack-trace = true` under `[analysis]` in sniff-test.toml to show every reachability step
+note: this function can reach 2 safety obligations covered by the same `// SAFETY:` marker
+  --> src/lib.rs:39:1
+   |
+39 | pub fn reused_marker_within_one_macro_expansion() {
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
    = help: give each unsafe block or operation its own marker, or set `ambiguous-safety-marker = "allow"` under `[analysis.lints]`
 
-error: could not compile `ambiguous-safety` (lib) due to 2 previous errors
+error: could not compile `ambiguous-safety` (lib) due to 1 previous error

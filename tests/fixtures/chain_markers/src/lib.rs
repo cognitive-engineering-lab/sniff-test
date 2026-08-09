@@ -14,21 +14,11 @@ impl Widget {
     }
 }
 
-pub fn marker_on_chain_link(widget: &Widget) -> bool {
-    widget
+pub fn marked_and_unmarked_chain_links(widget: &Widget) -> bool {
+    let marked = widget
         .calm()
         // PANIC: the constructor guarantees the flag is set.
-        .risky()
-}
-
-pub fn blanket_marker_above_chain(widget: &Widget) -> bool {
-    // PANIC: a statement-level marker cannot single out one chain link.
-    widget
-        .calm()
-        .risky()
-}
-
-pub fn marker_on_single_line(widget: &Widget) -> bool {
-    // PANIC: the constructor guarantees the flag is set.
-    widget.calm().risky()
+        .risky();
+    let unmarked = widget.calm().risky();
+    marked && unmarked
 }

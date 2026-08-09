@@ -1,11 +1,12 @@
 //! High-level sniff-test policy and checking behavior.
 //!
-//! This crate owns sniff-test's panic policy, rustc/Cargo integration,
-//! reporting, and versioned on-disk analysis IR.
+//! This crate owns sniff-test's panic and safety policies, rustc/Cargo
+//! integration, reporting, and versioned on-disk analysis IR.
 //!
-//! Artifact IR stores policy-neutral semantic facts, such as compiler asserts
-//! and panic invocations, rather than findings or rendered diagnostics. This
-//! keeps cached dependency evidence reusable under different lint policies.
+//! Artifact IR stores policy-neutral semantic facts, such as call edges,
+//! compiler-assert kinds, unsafe operations, contracts, and source markers,
+//! rather than findings or rendered diagnostics. This keeps dependency
+//! evidence reusable under different lint policies.
 
 #![feature(rustc_private)]
 #![deny(warnings)]

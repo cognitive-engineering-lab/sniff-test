@@ -1,9 +1,0 @@
-[analysis.lints]
-ambiguous-effect-marker = "deny"
-
-[safety]
-ignored-namespaces = [
-    "dependency_safety_contract_app::reaches_two_effects",
-    "dependency_safety_contract_app::reaches_missing_requirement",
-    "dependency_safety_contract_app::unnamed_marker_does_not_satisfy_cached_requirement",
-]

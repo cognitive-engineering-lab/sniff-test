@@ -22,14 +22,14 @@ cargo-sniff-test [sniff-test] [OPTIONS] [-- CARGO-ARGS]
 The optional `sniff-test` word is accepted because Cargo invokes subcommands as
 `cargo-sniff-test sniff-test ...`.
 
-Common options:
+Commands and common options:
 
 - `init`: write a sample `sniff-test.toml`
 - `--manifest PATH`: path to `sniff-test.toml`
 - `--cache-dir DIR`: analysis cache directory
 - `--color auto|always|never`
 - `--message-format human|json`
-- `--overflow-checks on|off`
+- `--overflow-checks profile|on|off`
 - `--build-std`
 - `--debug`: analyze debug-profile MIR instead of the default release profile
 
@@ -54,13 +54,12 @@ show-full-stack-trace = false
 report-roots = "public"     # public | all | ["crate::path"]
 callable-edge-attribution = "erasure-sites" # erasure-sites | call-sites
 marker-probing = "macro-definition-first" # macro-definition-first | source-callsite
+node-limit = 4096
 
 [analysis.lints]
+# These policies apply regardless of which artifact supplied the reached body.
 panic-analysis-incomplete = "deny"
 safety-analysis-incomplete = "deny"
-# Optional overrides when a reached managed dependency body is missing:
-# dependency-panic-analysis-incomplete = "warn"
-# dependency-safety-analysis-incomplete = "warn"
 ambiguous-panic-marker = "deny" # deny | warn | allow
 ambiguous-safety-marker = "deny"
 ambiguous-panic-requirement = "deny"
@@ -125,16 +124,17 @@ traces closer to the source call structure. Compiler settings are applied
 literally and independently from lint policy. For example, disabling overflow
 checks does not change or reject `[panics.lints].compiler-assert-overflow`.
 
-The v14 analysis cache stores policy-neutral artifact IR: function identities,
-call edges, raw compiler assertions and unsafe operations, source markers,
-contracts, and verified file-relative source ranges. It does not store selected
-report roots, lint levels, interpreted findings, or rendered traces.
+The analysis cache uses format version 15 and stores policy-neutral artifact IR:
+function identities, call edges, compiler-assert kinds, unsafe operations,
+source markers, contracts, and verified file-relative source ranges. It does
+not store selected report roots, lint levels, interpreted findings, or rendered
+traces.
 Dependency rustc units extract every analyzable body and silently persist this
-IR; they do not select roots, interpret policy, emit diagnostics, or write JSON
-reports. Workspace units select `[analysis].report-roots`, compose local IR with
-verified dependency IR, interpret only the reachable combined graph, and emit
-the workspace findings. Unreachable dependency IR therefore produces no
-findings.
+IR. Successful dependency units do not select roots, interpret policy, emit
+finding diagnostics, or write JSON reports. Workspace units select
+`[analysis].report-roots`, compose local IR with verified dependency IR,
+interpret only the reachable combined graph, and emit the workspace findings.
+Unreachable dependency IR therefore produces no findings.
 
 For concrete cross-crate generic calls, the consuming rustc unit also stores an
 exact-instantiation overlay. This preserves dispatch selected using a
@@ -146,11 +146,12 @@ Loadable caches use rustc's own exact artifact identity: the stable crate ID
 plus strict version hash (SVH). Cache filenames are
 `artifacts/<stable-crate-id>-<svh>.json`; Cargo output suffixes and crate names
 are not used as identity. Compiler settings that affect the crate are already
-reflected in rustc's SVH, while lint and other interpretation-only changes
-reuse the same dependency IR. Workspace executable IR, for which rustc does not
-produce an SVH, is interpreted in memory rather than assigned a synthetic cache
-identity. Failure to produce, validate, or persist required dependency IR is a
-tool error rather than a successful run with partial dependency analysis.
+reflected in rustc's SVH, while lint and other interpretation-only settings
+reuse the same dependency IR. Workspace outputs that are not loadable as
+crates, including executable-only units, are interpreted in memory and are not
+assigned cache identities. Failure to produce, validate, or persist required
+dependency IR is a tool error rather than a successful run with partial
+dependency analysis.
 Because rustc excludes ordinary comments from the SVH, available source files
 that contributed `// PANIC:` or `// SAFETY:` marker facts are content-verified
 before those facts are interpreted.
@@ -166,26 +167,23 @@ may cause matching reachable call sites to connect to every target reached from
 that root. Dependency caches store only raw erasure, invocation, and key facts;
 they do not pre-resolve callable targets for any workspace policy or root set.
 
-The older `ambiguous-effect-marker`, `ambiguous-effect-requirement`, and
-`analysis-incomplete` keys remain accepted as group defaults for both effect
-domains. An explicit panic- or safety-specific key takes precedence over its
-group default regardless of TOML ordering. `warn` accepts the ambiguity
-but reports it; `allow` accepts it silently.
+`ambiguous-effect-marker`, `ambiguous-effect-requirement`, and
+`analysis-incomplete` set group defaults for both effect domains. An explicit
+panic- or safety-specific key takes precedence over its group default
+regardless of TOML ordering. `warn` accepts the ambiguity but reports it;
+`allow` accepts it silently.
 
-`dependency-panic-analysis-incomplete` and
-`dependency-safety-analysis-incomplete` are optional overrides for a reached
-managed dependency body that is absent from the composed artifact graph.
-Without an exact dependency override, the corresponding
-`panic-analysis-incomplete` or `safety-analysis-incomplete` level applies.
-These overrides do not apply to the workspace traversal's node limit.
+`panic-analysis-incomplete` controls incomplete panic traversals, and
+`safety-analysis-incomplete` controls incomplete safety traversals. These
+findings include traversals that reach the node limit and reachable managed
+bodies that are absent from the composed graph.
 
-Likewise, exact `compiler-assert-*` overrides take precedence for assertions
-regardless of which artifact supplied the raw fact. Without an exact override,
-all compiler assertions use `compiler-assert`.
-`unsafe-op-missing-justification` is the fallback for every exact non-call
-unsafe-operation key. JSON reports retain the broad `kind` and add
-`compiler-assert-kind` or `safety-op-kind`, so the selected subtype remains
-machine-readable.
+Exact `compiler-assert-*` keys override `compiler-assert` for their assertion
+subtypes. Exact non-call unsafe-operation keys override
+`unsafe-op-missing-justification` for their operation subtypes. Compiler-assert
+findings use `kind = "compiler-assert"` with `compiler-assert-kind`; unsafe
+operations use `kind = "unsafe-op-missing-justification"` with
+`safety-op-kind`.
 
 `marker-probing = "macro-definition-first"` lets `// PANIC:` and `// SAFETY:`
 markers inside macro definitions satisfy operations produced by that macro,
@@ -218,14 +216,15 @@ Use `[safety].trusted-safety-boundary-namespaces` for audited APIs whose
 `# Safety` documentation is authoritative. Documented requirements must be
 satisfied by nearby `// SAFETY:` markers; an undocumented match is trusted as
 carrying no safety obligation, even when declared `unsafe`. Matching
-implementations remain opaque.
+implementations remain opaque. An exported unsafe function selected as a report
+root is still checked for missing `# Safety` documentation.
 
 Use `[documentation].override-files` while auditing generated or third-party
-APIs whose documented behavior is known but not written in source yet. Override files are
-TOML files keyed by Rust namespace globs; the value replaces that function's
-rustdoc markdown for both panic and safety documentation parsing. The markdown is
-parsed as CommonMark, so normal headings, setext headings, inline code, and
-formatted list text work as expected.
+APIs whose documented behavior is known but not written in source yet. Override
+files are TOML files keyed by Rust namespace globs; the value replaces that
+function's rustdoc markdown for both panic and safety documentation parsing.
+The markdown is parsed as CommonMark, so normal headings, setext headings,
+inline code, and formatted list text work as expected.
 
 ```toml
 [overrides]
@@ -249,16 +248,20 @@ diagnostics stay on stderr. Only workspace rustc units emit sniff-test messages;
 dependency units cache IR silently. Each workspace unit emits at most one
 message with `"reason":"sniff-test-artifact"`. Reports have no dependency
 `scope`, cache identity, or dependency list because every public report is a
-workspace report.
+workspace report. Reports use format version 13. A finding includes
+`root-span` alongside `root` when the selected function's source location is
+available and verified; `span` is the finding's effect location, and every
+`trace` entry is a call or effect edge.
 sniff-test records an invocation token only in workspace dep-info, so Cargo
 reruns report-producing workspace units on every invocation to reinterpret and
 validate cached IR while leaving otherwise-fresh dependency units untouched.
 
-When a finding originated in cached dependency IR, sniff-test loads its recorded
-source file into rustc's active source map only after verifying the stable file
-identity, exact content hash, normalized byte length, and byte range. If source
-is missing or no longer matches, the finding remains reportable but degrades to
-an unspanned diagnostic instead of pointing at unverified text.
+Recorded dependency source ranges become rustc spans only after the source
+file's stable identity, exact content hash, normalized byte length, and byte
+range are verified. A source range that cannot be verified remains reportable
+without a span. Marker-bearing source files receive an additional check before
+interpretation: if the recorded path exists but its contents do not match, the
+run fails rather than interpreting stale `// PANIC:` or `// SAFETY:` facts.
 
 ## Source Markers
 
@@ -304,13 +307,14 @@ The accepted requirement bullet format is `- name: condition`; rustdoc
 conditions may be empty when the name is enough, but call-site satisfaction
 bullets must include justification text. Names are matched case-insensitively,
 with punctuation and whitespace treated as separators, so `bounded[total]` and
-`bounded total` match. Duplicate names inside one documentation section are ambiguous under
-the effect-specific `ambiguous-panic-requirement = "deny"` or
-`ambiguous-safety-requirement = "deny"` policy: a single marker bullet
-cannot prove two distinct requirements with the same normalized name. Prose and
-labels such as `Requirements:` are allowed before the first bullet. Plain
-comment lines following a requirement bullet in the same contiguous block are
-kept as explanation context. Use `/// # Panics` to document public API panic behavior;
+`bounded total` match. Duplicate names inside one documentation section are
+ambiguous under the effect-specific
+`ambiguous-panic-requirement = "deny"` or
+`ambiguous-safety-requirement = "deny"` policy: a single marker bullet cannot
+prove two distinct requirements with the same normalized name. Prose and labels
+such as `Requirements:` are allowed before the first bullet. Plain comment lines
+following a requirement bullet in the same contiguous block are kept as
+explanation context. Use `/// # Panics` to document public API panic behavior;
 `// PANIC:` is only for local call-site justifications.
 
 `// PANIC:` can also sit immediately above an enclosing block. A marker reused
@@ -407,8 +411,8 @@ just snapshots
 
 ## Acknowledgments
 
-The `reachability` crate's methodology was informed by
+The standalone `reachability` crate is an independent implementation whose
+methodology was informed by
 [Ferrocene](https://github.com/ferrocene/ferrocene), a downstream of the Rust
-compiler maintained by Ferrous Systems. Its implementation evolved from the
-original sniff-test reachability modules and has since been substantially
-rewritten. See [ACKNOWLEDGMENTS.md](ACKNOWLEDGMENTS.md) for details.
+compiler maintained by Ferrous Systems. See
+[ACKNOWLEDGMENTS.md](ACKNOWLEDGMENTS.md) for details.

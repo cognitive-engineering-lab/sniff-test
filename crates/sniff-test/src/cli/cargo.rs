@@ -9,7 +9,8 @@ use anyhow::{Context, Result, bail};
 
 use super::args::{self, FrontendAction, FrontendCli, InitCliArgs, SniffTestArgs};
 use super::plugin::{
-    SNIFF_TEST_ARGS_ENV, SNIFF_TEST_RUN_ID_ENV, frontend_args, modify_cargo, validate_manifest,
+    SNIFF_TEST_ARGS_ENV, SNIFF_TEST_RUN_ID_ENV, frontend_args, modify_cargo, render_error_chain,
+    validate_manifest,
 };
 
 #[must_use]
@@ -17,7 +18,7 @@ pub fn cargo_frontend() -> ExitCode {
     match try_cargo_frontend() {
         Ok(exit_code) => exit_code,
         Err(error) => {
-            eprintln!("error: {error:?}");
+            eprintln!("error: {}", render_error_chain(&error));
             ExitCode::FAILURE
         }
     }

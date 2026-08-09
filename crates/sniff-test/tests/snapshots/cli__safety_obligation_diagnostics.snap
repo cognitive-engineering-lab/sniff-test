@@ -6,48 +6,25 @@ exit: 0
 stdout:
 <empty>
 stderr:
-    Checking safety-requirements v0.1.0 ([FIXTURE])
-warning: unsafe call to `safety_requirements::read_byte` in `safety_requirements::block_scope_covers_multiple_calls` does not satisfy all `# Safety` requirements
-  --> src/lib.rs:62:20
+    Checking safety-obligations v0.1.0 ([FIXTURE])
+warning: safety-obligation call to `safety_obligations::documented_contract` in `safety_obligations::misses_requirement` does not satisfy all `# Safety` requirements
+  --> src/lib.rs:18:5
    |
-62 |         let read = read_byte(ptr.as_ptr());
-   |                    ^^^^^^^^^^^^^^^^^^^^^^^
+18 |     documented_contract(&raw const byte);
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
    |
-note: `safety_requirements::read_byte` documents `# Safety` here
-  --> src/lib.rs:11:1
+note: `safety_obligations::documented_contract` documents `# Safety` here
+  --> src/lib.rs:5:1
    |
-11 | pub unsafe fn read_byte(ptr: *const u8) -> u8 {
-   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+ 5 | pub fn documented_contract(_ptr: *const u8) {}
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
    = note: missing safety requirement `valid_ptr: pointer must be non-null.`
    = help: add named bullets under the applicable `// SAFETY:` comment for each missing requirement
-
-warning: safety-obligation call to `safety_requirements::safe_documented_contract` in `safety_requirements::configured_safety_obligation_missing_requirement` does not satisfy all `# Safety` requirements
-   --> src/lib.rs:164:5
-    |
-164 |     safe_documented_contract(ptr);
-    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-    |
-note: `safety_requirements::safe_documented_contract` documents `# Safety` here
-   --> src/lib.rs:147:1
-    |
-147 | pub fn safe_documented_contract(_ptr: *const u8) {}
-    | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-    = note: missing safety requirement `valid_ptr: pointer must be non-null.`
-    = help: add named bullets under the applicable `// SAFETY:` comment for each missing requirement
-
-warning: unsafe call to `safety_requirements::read_byte` in `safety_requirements::satisfied_by_block_and_call` does not satisfy all `# Safety` requirements
-  --> src/lib.rs:48:9
+note: this function can reach a call whose documented `# Safety` requirements are not all satisfied
+  --> src/lib.rs:16:1
    |
-48 |         read_byte(ptr.as_ptr())
-   |         ^^^^^^^^^^^^^^^^^^^^^^^
-   |
-note: `safety_requirements::read_byte` documents `# Safety` here
-  --> src/lib.rs:11:1
-   |
-11 | pub unsafe fn read_byte(ptr: *const u8) -> u8 {
-   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-   = note: missing safety requirement `valid_ptr: pointer must be non-null.`
-   = help: add named bullets under the applicable `// SAFETY:` comment for each missing requirement
+16 | pub fn misses_requirement() {
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-warning: `safety-requirements` (lib) generated 3 warnings
+warning: `safety-obligations` (lib) generated 1 warning
     Finished `release` profile [optimized] target(s) in [TIME]

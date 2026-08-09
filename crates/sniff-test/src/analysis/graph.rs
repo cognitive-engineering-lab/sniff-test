@@ -40,7 +40,7 @@ pub(crate) enum GraphLoadFailure {
         artifacts: Vec<RustcArtifactId>,
     },
     ConflictingFunctionDefinition {
-        function: FunctionId,
+        display_path: String,
         first_artifact: RustcArtifactId,
         second_artifact: RustcArtifactId,
     },
@@ -82,12 +82,12 @@ impl Display for GraphLoadFailure {
                     .join(", ")
             ),
             Self::ConflictingFunctionDefinition {
-                function,
+                display_path,
                 first_artifact,
                 second_artifact,
             } => write!(
                 formatter,
-                "function {function:?} is defined by both artifact {first_artifact} and artifact {second_artifact}",
+                "function `{display_path}` is defined by both artifact {first_artifact} and artifact {second_artifact}",
             ),
             Self::Cycle {
                 artifacts,
@@ -235,7 +235,7 @@ impl ArtifactAnalysisGraph {
                         std::collections::hash_map::Entry::Occupied(entry) => {
                             let first = &artifacts[entry.get().artifact];
                             failures.push(GraphLoadFailure::ConflictingFunctionDefinition {
-                                function: body.function,
+                                display_path: body.display_path.clone(),
                                 first_artifact: first.artifact.id.clone(),
                                 second_artifact: analysis.artifact.id.clone(),
                             });
@@ -359,16 +359,11 @@ impl ArtifactAnalysisGraph {
     }
 }
 
-#[derive(Debug)]
-struct LoadRequest {
-    artifact_id: RustcArtifactId,
-}
-
 struct GraphLoader<'a, R> {
     cache_dir: &'a Path,
     read: R,
     direct_aliases: BTreeMap<RustcArtifactId, BTreeSet<String>>,
-    pending: VecDeque<LoadRequest>,
+    pending: VecDeque<RustcArtifactId>,
     attempted: BTreeSet<RustcArtifactId>,
     rejected: BTreeSet<RustcArtifactId>,
     loaded: BTreeMap<RustcArtifactId, ArtifactAnalysisCache>,
@@ -387,11 +382,7 @@ where
                 .or_default()
                 .insert(dependency.name.clone());
         }
-        let pending = direct_aliases
-            .keys()
-            .cloned()
-            .map(|artifact_id| LoadRequest { artifact_id })
-            .collect();
+        let pending = direct_aliases.keys().cloned().collect();
         Self {
             cache_dir,
             read,
@@ -405,62 +396,60 @@ where
     }
 
     fn load(mut self) -> ArtifactAnalysisGraph {
-        while let Some(request) = self.pending.pop_front() {
-            self.load_request(&request);
+        while let Some(artifact_id) = self.pending.pop_front() {
+            self.load_artifact(&artifact_id);
         }
         self.reject_stable_crate_id_conflicts();
         self.reject_cycle();
         ArtifactAnalysisGraph::from_loaded(self.loaded, self.direct_aliases, self.failures)
     }
 
-    fn load_request(&mut self, request: &LoadRequest) {
-        if self.rejected.contains(&request.artifact_id)
-            || self.loaded.contains_key(&request.artifact_id)
-            || !self.attempted.insert(request.artifact_id.clone())
+    fn load_artifact(&mut self, artifact_id: &RustcArtifactId) {
+        if self.rejected.contains(artifact_id)
+            || self.loaded.contains_key(artifact_id)
+            || !self.attempted.insert(artifact_id.clone())
         {
             return;
         }
 
-        let Some(analysis) = self.read_artifact(request) else {
+        let Some(analysis) = self.read_artifact(artifact_id) else {
             return;
         };
-        if analysis.artifact.id != request.artifact_id {
+        if analysis.artifact.id != *artifact_id {
             let found = analysis.artifact.id;
             self.failures
                 .push(GraphLoadFailure::ArtifactIdentityMismatch {
-                    expected: request.artifact_id.clone(),
+                    expected: artifact_id.clone(),
                     found,
                 });
-            self.rejected.insert(request.artifact_id.clone());
+            self.rejected.insert(artifact_id.clone());
             return;
         }
 
         for dependency in &analysis.dependencies {
-            self.pending.push_back(LoadRequest {
-                artifact_id: dependency.clone(),
-            });
+            self.pending.push_back(dependency.clone());
         }
-        self.loaded.insert(request.artifact_id.clone(), analysis);
+        self.loaded.insert(artifact_id.clone(), analysis);
     }
 
-    fn read_artifact(&mut self, request: &LoadRequest) -> Option<ArtifactAnalysisCache> {
-        let path = artifact_cache_path(self.cache_dir, &request.artifact_id);
-        match (self.read)(&request.artifact_id, &path) {
+    fn read_artifact(&mut self, artifact_id: &RustcArtifactId) -> Option<ArtifactAnalysisCache> {
+        let path = artifact_cache_path(self.cache_dir, artifact_id);
+        match (self.read)(artifact_id, &path) {
             Ok(analysis) => Some(analysis),
             Err(error) if error.is_missing_file() => {
                 self.failures.push(GraphLoadFailure::Missing {
-                    artifact_id: request.artifact_id.clone(),
+                    artifact_id: artifact_id.clone(),
                     path,
                 });
-                self.rejected.insert(request.artifact_id.clone());
+                self.rejected.insert(artifact_id.clone());
                 None
             }
             Err(error) => {
                 self.failures.push(GraphLoadFailure::Invalid {
-                    artifact_id: request.artifact_id.clone(),
+                    artifact_id: artifact_id.clone(),
                     error,
                 });
-                self.rejected.insert(request.artifact_id.clone());
+                self.rejected.insert(artifact_id.clone());
                 None
             }
         }
@@ -591,8 +580,28 @@ mod tests {
     };
 
     #[test]
+    fn conflicting_function_errors_render_the_human_function_path() {
+        let first_artifact = rustc_id(1, &crate_hash(1));
+        let second_artifact = rustc_id(2, &crate_hash(2));
+        let failure = GraphLoadFailure::ConflictingFunctionDefinition {
+            display_path: String::from("crate1::generic_20"),
+            first_artifact: first_artifact.clone(),
+            second_artifact: second_artifact.clone(),
+        };
+
+        assert_eq!(
+            failure.to_string(),
+            format!(
+                "function `crate1::generic_20` is defined by both artifact {first_artifact} and artifact {second_artifact}"
+            )
+        );
+    }
+
+    #[test]
     fn recursively_loads_exact_rustc_artifacts_and_exposes_sources() {
         let directory = tempdir().expect("cache directory");
+        let old_child_id = rustc_id(2, "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
+        let old_child = analysis_with_id("child-old", old_child_id.clone(), Vec::new(), Vec::new());
         let child = analysis("child-a", 2, Vec::new(), vec![generic_function(2, 20)]);
         let root = analysis(
             "root-a",
@@ -602,6 +611,7 @@ mod tests {
         );
         let root_id = root.artifact.id.clone();
         let child_id = child.artifact.id.clone();
+        write(directory.path(), &old_child);
         write(directory.path(), &child);
         write(directory.path(), &root);
 
@@ -631,10 +641,11 @@ mod tests {
             [("root-a", "src/root-a.rs"), ("child-a", "src/child-a.rs")]
         );
         assert_eq!(graph.direct_dependency_ids().collect::<Vec<_>>(), [root_id]);
+        assert!(graph.artifact(&old_child_id).is_none());
     }
 
     #[test]
-    fn exact_function_lookup_falls_back_only_to_its_generic_definition() {
+    fn exact_function_lookup_uses_exact_then_generic_definitions() {
         let directory = tempdir().expect("cache directory");
         let exact = exact_function(1, 10, 100);
         let generic = generic_function(1, 10);
@@ -745,7 +756,7 @@ mod tests {
     }
 
     #[test]
-    fn rejects_a_cache_payload_with_the_wrong_rustc_identity() {
+    fn artifact_identity_mismatches_are_reported_and_excluded() {
         let directory = tempdir().expect("cache directory");
         let artifact = analysis("root-a", 1, Vec::new(), Vec::new());
         let found = artifact.artifact.id.clone();
@@ -796,7 +807,7 @@ mod tests {
     }
 
     #[test]
-    fn rejects_caches_from_a_different_extraction_environment() {
+    fn extraction_environment_mismatches_are_reported_as_invalid() {
         let directory = tempdir().expect("cache directory");
         let artifact = analysis("root-a", 1, Vec::new(), Vec::new());
         let artifact_id = artifact.artifact.id.clone();
@@ -824,27 +835,7 @@ mod tests {
     }
 
     #[test]
-    fn dependency_reference_loads_the_exact_svh() {
-        let directory = tempdir().expect("cache directory");
-        let old_child_id = rustc_id(3, "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
-        let new_child_id = rustc_id(3, "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb");
-        let old_child = analysis_with_id("child-old", old_child_id.clone(), Vec::new(), Vec::new());
-        let new_child = analysis_with_id("child-new", new_child_id.clone(), Vec::new(), Vec::new());
-        let root = analysis("root-a", 1, vec![new_child_id.clone()], Vec::new());
-        write(directory.path(), &old_child);
-        write(directory.path(), &new_child);
-        write(directory.path(), &root);
-
-        let graph =
-            ArtifactAnalysisGraph::load(directory.path(), &[external("root", 1)], &EXPECTED);
-
-        assert!(graph.is_complete());
-        assert!(graph.artifact(&new_child_id).is_some());
-        assert!(graph.artifact(&old_child_id).is_none());
-    }
-
-    #[test]
-    fn rejects_distinct_svhs_for_one_stable_crate_id_in_a_composed_graph() {
+    fn stable_crate_identity_conflicts_are_reported_and_excluded() {
         let directory = tempdir().expect("cache directory");
         let first_child_id = rustc_id(3, "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
         let second_child_id = rustc_id(3, "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb");

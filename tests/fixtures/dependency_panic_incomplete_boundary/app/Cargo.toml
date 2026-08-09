@@ -1,9 +1,0 @@
-[package]
-name = "dependency-panic-incomplete-boundary-app"
-version = "0.1.0"
-edition = "2024"
-
-[dependencies]
-dependency-panic-incomplete-boundary = { path = "../dep" }
-
-[workspace]

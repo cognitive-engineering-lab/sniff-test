@@ -64,12 +64,6 @@ impl PathPatterns {
     }
 
     #[must_use]
-    #[cfg(test)]
-    pub(crate) fn matching_pattern(&self, path: &str) -> Option<&str> {
-        self.best_match(path).map(|matched| matched.pattern)
-    }
-
-    #[must_use]
     pub(crate) fn best_match(&self, path: &str) -> Option<PathPatternMatch<'_>> {
         let set = self.set.as_ref()?;
         let path = normalized_path(path);
@@ -94,21 +88,6 @@ impl PathPatterns {
             .iter()
             .filter_map(|candidate| self.best_match(candidate))
             .max_by_key(|matched| matched.precision)
-    }
-
-    #[must_use]
-    pub(crate) fn matching_candidates_pattern(&self, candidates: &[String]) -> Option<&str> {
-        self.best_candidates_match(candidates)
-            .map(|matched| matched.pattern)
-    }
-
-    #[must_use]
-    #[cfg(test)]
-    pub(crate) fn is_match(&self, path: &str) -> bool {
-        let Some(set) = &self.set else {
-            return false;
-        };
-        set.is_match(normalized_path(path).as_ref())
     }
 }
 
@@ -162,12 +141,20 @@ mod tests {
     use super::PathPatterns;
 
     #[test]
-    fn stable_candidate_sets_use_the_most_specific_matching_pattern() {
+    fn candidate_paths_match_recursive_roots_and_prefer_specific_patterns() {
         let patterns = PathPatterns::new(vec![
             String::from("dependency::**"),
             String::from("dependency::Widget::run"),
         ])
         .expect("valid patterns");
+
+        assert_eq!(
+            patterns
+                .best_candidates_match(&[String::from("dependency")])
+                .map(|matched| matched.pattern),
+            Some("dependency::**")
+        );
+
         let candidates = vec![
             String::from("dependency"),
             String::from("dependency::impls::{impl#0}::run"),
@@ -175,7 +162,9 @@ mod tests {
         ];
 
         assert_eq!(
-            patterns.matching_candidates_pattern(&candidates),
+            patterns
+                .best_candidates_match(&candidates)
+                .map(|matched| matched.pattern),
             Some("dependency::Widget::run")
         );
     }

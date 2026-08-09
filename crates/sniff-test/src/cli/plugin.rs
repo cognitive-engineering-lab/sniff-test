@@ -1,4 +1,5 @@
 use std::ffi::OsStr;
+use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitCode};
 
@@ -11,13 +12,30 @@ use rustc_interface::interface;
 use rustc_middle::ty::TyCtxt;
 use rustc_span::symbol::Symbol;
 
-use super::args::{ColorChoice, DriverCli, MANIFEST_PATH_ENV, SniffTestArgs};
+use super::args::{ColorChoice, CrateOutputScope, DriverCli, MANIFEST_PATH_ENV, SniffTestArgs};
 use super::driver::{analyze_crate, is_build_script, load_config};
-use super::report::CrateOutputScope;
 
 pub(crate) const DRIVER_NAME: &str = "sniff-test-driver";
 pub(crate) const SNIFF_TEST_ARGS_ENV: &str = "SNIFF_TEST_ARGS";
 pub(crate) const SNIFF_TEST_RUN_ID_ENV: &str = "SNIFF_TEST_RUN_ID";
+
+pub(super) fn render_error_chain(error: &anyhow::Error) -> String {
+    let mut rendered = error.to_string();
+    let causes = error.chain().skip(1).collect::<Vec<_>>();
+    if causes.is_empty() {
+        return rendered;
+    }
+
+    rendered.push_str("\n\nCaused by:");
+    if let [cause] = causes.as_slice() {
+        let _ = write!(rendered, "\n    {cause}");
+    } else {
+        for (index, cause) in causes.into_iter().enumerate() {
+            let _ = write!(rendered, "\n    {index}: {cause}");
+        }
+    }
+    rendered
+}
 
 pub(crate) fn validate_manifest(path: &Path) -> Result<()> {
     if !path.exists() {
@@ -99,7 +117,7 @@ pub fn driver_main() -> ExitCode {
     match try_driver_main() {
         Ok(exit_code) => exit_code,
         Err(error) => {
-            eprintln!("error: {error:?}");
+            eprintln!("error: {}", render_error_chain(&error));
             ExitCode::FAILURE
         }
     }
@@ -401,14 +419,28 @@ const fn should_track_workspace_run(
 mod tests {
     use std::path::PathBuf;
 
+    use anyhow::Context as _;
+
     use crate::config::SniffTestConfig;
 
     use super::{
-        analysis_rustflags, encode_rustflags, should_track_workspace_run,
+        analysis_rustflags, encode_rustflags, render_error_chain, should_track_workspace_run,
         tracked_config_files_from_config,
     };
-    use crate::cli::args::SniffTestArgs;
-    use crate::cli::report::CrateOutputScope;
+    use crate::cli::args::{CrateOutputScope, SniffTestArgs};
+
+    #[test]
+    fn error_chains_render_context_and_numbered_causes() {
+        let error = Err::<(), _>(anyhow::anyhow!("low-level failure"))
+            .context("middle context")
+            .context("outer context")
+            .expect_err("the test error should retain its context chain");
+
+        assert_eq!(
+            render_error_chain(&error),
+            "outer context\n\nCaused by:\n    0: middle context\n    1: low-level failure"
+        );
+    }
 
     #[test]
     fn tool_rustflags_append_to_user_flags_in_encoded_form() {
@@ -461,7 +493,7 @@ mod tests {
     }
 
     #[test]
-    fn policy_only_changes_do_not_change_dependency_rustflags() {
+    fn policy_changes_preserve_dependency_rustflags() {
         let dir = tempfile::tempdir().expect("tempdir should be created");
         let manifest = dir.path().join("sniff-test.toml");
         let override_file = dir.path().join("override.toml");
@@ -509,23 +541,21 @@ mod tests {
     }
 
     #[test]
-    fn compiler_changes_do_change_dependency_rustflags() {
+    fn overflow_check_mode_adds_its_dependency_rustflag() {
         let args = SniffTestArgs {
             cache_dir: Some(PathBuf::from("/tmp/sniff-test-cache-a")),
             ..SniffTestArgs::default()
         };
-        let profile = SniffTestConfig::from_manifest_str(
-            "[compiler]\noverflow-checks = \"profile\"\ninline-mir = \"off\"\n",
-        )
-        .expect("profile config");
         let overflow = SniffTestConfig::from_manifest_str(
             "[compiler]\noverflow-checks = \"on\"\ninline-mir = \"off\"\n",
         )
         .expect("overflow config");
+        let flags = analysis_rustflags(&args, &overflow);
 
-        assert_ne!(
-            analysis_rustflags(&args, &profile),
-            analysis_rustflags(&args, &overflow)
+        assert!(
+            flags
+                .windows(2)
+                .any(|pair| pair == ["-C", "overflow-checks=yes"])
         );
     }
 }

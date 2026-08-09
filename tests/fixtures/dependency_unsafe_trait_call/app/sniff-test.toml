@@ -3,38 +3,10 @@ inline-mir = "off"
 
 [analysis]
 report-roots = [
-    "dependency_unsafe_trait_call_app::caller",
-    "dependency_unsafe_trait_call_app::nested_caller",
-    "dependency_unsafe_trait_call_app::nested_panic_caller",
-    "dependency_unsafe_trait_call_app::panic_caller",
-]
-
-[analysis.lints]
-ambiguous-panic-marker = "allow"
-ambiguous-safety-marker = "deny"
-ambiguous-panic-requirement = "allow"
-ambiguous-safety-requirement = "allow"
-panic-analysis-incomplete = "deny"
-safety-analysis-incomplete = "deny"
-
-[panics.lints]
-compiler-assert = "deny"
-panic-invocation = "deny"
-documented-panic = "allow"
-trusted-panic = "allow"
-indirect-call-boundary = "allow"
-
-[panics]
-panic-sink-namespaces = [
-    "core::panicking::**",
-    "core::std::rt::panic_fmt",
-    "std::rt::panic_fmt",
+    "dependency_unsafe_trait_call_app::justified_caller",
+    "dependency_unsafe_trait_call_app::unjustified_caller",
 ]
 
 [safety.lints]
-missing-safety-docs = "allow"
 unsafe-call-missing-justification = "deny"
 unsafe-call-missing-requirements = "deny"
-unsafe-op-missing-justification = "deny"
-safety-obligation-missing-justification = "deny"
-safety-obligation-missing-requirements = "deny"

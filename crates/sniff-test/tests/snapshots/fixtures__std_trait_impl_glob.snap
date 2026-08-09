@@ -1,29 +1,19 @@
 ---
 source: crates/sniff-test/tests/fixtures.rs
-expression: messages
+expression: "report[\"findings\"]"
 ---
 [
   {
-    "artifact": {
-      "crate-name": "std_trait_impl_glob"
-    },
-    "findings": [
-      {
-        "kind": "trusted-panic",
-        "level": "warn",
-        "reason": "alloc::std::vec::Vec::<T, A>::push documents when it may panic under # Panics",
-        "root": "std_trait_impl_glob::put",
-        "root-kind": "concrete",
-        "span": "src/lib.rs:9:5: 9:23",
-        "target": "alloc::std::vec::Vec::<T, A>::push",
-        "trace": [
-          "src/lib.rs:9:5: 9:23: std_trait_impl_glob::put --direct-call-> alloc::std::vec::Vec::<T, A>::push"
-        ]
-      }
-    ],
-    "format-version": 12,
-    "reason": "sniff-test-artifact",
-    "rustc-version": "[RUSTC_VERSION]",
-    "tool-version": "0.1.0"
+    "kind": "trusted-panic",
+    "level": "warn",
+    "reason": "alloc::std::vec::Vec::<T, A>::push documents when it may panic under # Panics",
+    "root": "std_trait_impl_glob::put",
+    "root-kind": "concrete",
+    "root-span": "src/lib.rs:8:1: 8:44",
+    "span": "src/lib.rs:9:5: 9:23",
+    "target": "alloc::std::vec::Vec::<T, A>::push",
+    "trace": [
+      "src/lib.rs:9:5: 9:23: std_trait_impl_glob::put --direct-call-> alloc::std::vec::Vec::<T, A>::push"
+    ]
   }
 ]

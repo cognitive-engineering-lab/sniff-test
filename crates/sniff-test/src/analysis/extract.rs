@@ -11,7 +11,7 @@ use std::fmt;
 
 use reachability::{
     ArtifactScope, CallableEdgeInfo, DynDispatchVTableEdges, FnPointerEdges, NoopReachabilityHooks,
-    ReachabilityEdge, ReachabilityEdgeKind, ReachabilityGraph, ReachabilityIndex,
+    ReachabilityEdge, ReachabilityEdgeKind, ReachabilityGraph, ReachabilityHalt, ReachabilityIndex,
     ReachabilityNodeExpansion, ReachabilityNodeKind, ReachabilityOptions, ReachabilityRoot,
     ReachedEdge,
 };
@@ -148,6 +148,32 @@ fn extraction_options() -> ReachabilityOptions {
     }
 }
 
+fn reachability_halt_description(halt: &ReachabilityHalt) -> String {
+    match halt {
+        ReachabilityHalt::NodeLimitReached { limit } => {
+            format!("artifact reachability analysis reached the configured node limit ({limit})")
+        }
+    }
+}
+
+const fn reachability_edge_description(kind: ReachabilityEdgeKind) -> &'static str {
+    match kind {
+        ReachabilityEdgeKind::DirectCall => "direct call",
+        ReachabilityEdgeKind::TailCall => "tail call",
+        ReachabilityEdgeKind::FnPointerReify => "function-to-pointer conversion",
+        ReachabilityEdgeKind::ClosureFnPointerReify => "closure-to-pointer conversion",
+        ReachabilityEdgeKind::FnPointerCallTarget => "function-pointer call target",
+        ReachabilityEdgeKind::DynObjectCast => "trait-object conversion",
+        ReachabilityEdgeKind::VTableEntry => "dynamic-dispatch method",
+        ReachabilityEdgeKind::DynDispatchVTableEntry => "dynamic call target",
+        ReachabilityEdgeKind::MacroExpansion => "macro expansion",
+        ReachabilityEdgeKind::ConstBody => "constant body",
+        ReachabilityEdgeKind::CoroutineBody => "async or coroutine body",
+        ReachabilityEdgeKind::Assert => "compiler check",
+        ReachabilityEdgeKind::IndirectCall => "indirect call",
+    }
+}
+
 fn collect_reachability_mode(
     tcx: TyCtxt<'_>,
     roots: &[LocalDefId],
@@ -176,9 +202,7 @@ fn collect_reachability_mode(
         }
     }
     if let Some(halt) = view.halt() {
-        return Err(ExtractError::new(format!(
-            "artifact reachability extraction halted: {halt:?}"
-        )));
+        return Err(ExtractError::new(reachability_halt_description(halt)));
     }
 
     for node in view.nodes() {
@@ -281,15 +305,7 @@ fn collect_edge<'tcx>(
     } else {
         safety_groups.group_for_structural_edge(origin.def_id(), edge.span)
     }
-    .map_err(|error| {
-        ExtractError::new(format!(
-            "failed to group `{:?}` edge in `{}` at {:?} (callee {:?}): {error}",
-            edge.kind,
-            canonical_namespace(tcx, origin.def_id()),
-            edge.span,
-            edge.callee_span,
-        ))
-    })?;
+    .map_err(|error| edge_grouping_error(tcx, origin.def_id(), edge, &error))?;
     let source_target = source_call_target(tcx, groups.source_callee, sources)?;
     let key = edge_key(
         tcx,
@@ -428,8 +444,7 @@ fn collect_compiler_assert_effect(
     expanded_range: Option<&SourceRangeIr>,
     macro_expansions: &[MacroExpansionFrameIr],
 ) -> Option<String> {
-    let ReachabilityNodeKind::CompilerAssert { message, locals } = &graph.node(edge.target).kind
-    else {
+    let ReachabilityNodeKind::CompilerAssert { message, .. } = &graph.node(edge.target).kind else {
         return None;
     };
     let effect_key = format!("compiler-assert:{call_key}");
@@ -444,7 +459,6 @@ fn collect_compiler_assert_effect(
                 macro_expansions: macro_expansions.to_vec(),
                 kind: EffectKindIr::CompilerAssert {
                     kind: CompilerAssertKind::from(message.as_ref()),
-                    description: compiler_assert_description(message, locals),
                 },
             },
         });
@@ -559,6 +573,24 @@ fn collect_edge_markers(
         }
     }
     Ok(())
+}
+
+fn edge_grouping_error(
+    tcx: TyCtxt<'_>,
+    origin: DefId,
+    edge: &ReachabilityEdge,
+    error: &ExtractError,
+) -> ExtractError {
+    let source_map = tcx.sess.source_map();
+    let location = source_map.span_to_diagnostic_string(edge.span);
+    let callee_location = edge.callee_span.map_or_else(String::new, |span| {
+        format!(", callee at {}", source_map.span_to_diagnostic_string(span))
+    });
+    ExtractError::new(format!(
+        "failed to associate the {} in `{}` at {location}{callee_location} with its source-level safety scope: {error}",
+        reachability_edge_description(edge.kind),
+        canonical_namespace(tcx, origin),
+    ))
 }
 
 fn edge_requires_unsafe<'view, 'tcx>(
@@ -701,9 +733,9 @@ fn compiler_assert_description(
     message: &rustc_middle::mir::AssertMessage<'_>,
     locals: &[reachability::CompilerAssertLocal],
 ) -> String {
-    // The semantic assertion subtype is serialized separately. This text is
-    // explanatory only, and the cache's rustc fingerprint guards its compiler
-    // formatting.
+    // The semantic assertion subtype is stored separately. This session-rendered
+    // text identifies the corresponding opaque target, and cache loading requires
+    // the rustc version that produced it.
     if locals.is_empty() {
         format!("{message:?}")
     } else {
@@ -1701,11 +1733,16 @@ impl SourceTable {
 
 #[cfg(test)]
 mod tests {
-    use reachability::{DynDispatchVTableEdges, FnPointerEdges};
+    use reachability::{
+        DynDispatchVTableEdges, FnPointerEdges, ReachabilityEdgeKind, ReachabilityHalt,
+    };
     use rustc_hir::def_id::{CRATE_DEF_ID, DefId, DefIndex};
     use rustc_span::{BytePos, Span};
 
-    use super::{RawSafetyGroupResolver, extraction_options, probing_modes};
+    use super::{
+        RawSafetyGroupResolver, extraction_options, probing_modes, reachability_edge_description,
+        reachability_halt_description,
+    };
     use crate::analysis::ir::{CallSiteId, MarkerProbingIr, SafetyEffectGroupId};
     use crate::safety::{
         RawSafetyCallFact, RawSafetyEffectGroup, RawSafetyFacts, RawSafetyGroupFact,
@@ -1714,6 +1751,14 @@ mod tests {
 
     fn span(start: u32, end: u32) -> Span {
         Span::with_root_ctxt(BytePos(start), BytePos(end))
+    }
+
+    fn safety_group_id(raw: usize) -> SafetyEffectGroupId {
+        SafetyEffectGroupId::new(u32::try_from(raw).expect("test safety group fits in u32"))
+    }
+
+    fn call_site_id(raw: usize) -> CallSiteId {
+        CallSiteId::new(u32::try_from(raw).expect("test call site fits in u32"))
     }
 
     #[test]
@@ -1734,6 +1779,26 @@ mod tests {
                 MarkerProbingIr::SourceCallsite,
                 MarkerProbingIr::MacroDefinitionFirst
             ]
+        );
+    }
+
+    #[test]
+    fn reachability_failures_have_stable_human_descriptions() {
+        assert_eq!(
+            reachability_halt_description(&ReachabilityHalt::NodeLimitReached { limit: 42 }),
+            "artifact reachability analysis reached the configured node limit (42)"
+        );
+        assert_eq!(
+            reachability_edge_description(ReachabilityEdgeKind::DirectCall),
+            "direct call"
+        );
+        assert_eq!(
+            reachability_edge_description(ReachabilityEdgeKind::FnPointerReify),
+            "function-to-pointer conversion"
+        );
+        assert_eq!(
+            reachability_edge_description(ReachabilityEdgeKind::Assert),
+            "compiler check"
         );
     }
 
@@ -1770,43 +1835,33 @@ mod tests {
         };
         let mut resolver = RawSafetyGroupResolver::new(&facts);
 
-        assert_eq!(
-            resolver
-                .group_for_call(owner, span(15, 16), None)
-                .expect("outer group"),
-            super::ResolvedCallGroups {
-                safety_effect_group: SafetyEffectGroupId::new(0),
-                call_site: CallSiteId::new(0),
-                inside_builtin_unsafe: false,
-                source_callee: None,
-            }
-        );
-        assert_eq!(
-            resolver
-                .group_for_call(owner, span(30, 31), None)
-                .expect("inner group"),
-            super::ResolvedCallGroups {
-                safety_effect_group: SafetyEffectGroupId::new(1),
-                call_site: CallSiteId::new(1),
-                inside_builtin_unsafe: false,
-                source_callee: None,
-            }
-        );
+        let outer_call = resolver
+            .group_for_call(owner, span(15, 16), None)
+            .expect("outer group");
+        assert_eq!(outer_call.safety_effect_group, safety_group_id(outer.id));
+        assert!(!outer_call.inside_builtin_unsafe);
+        assert_eq!(outer_call.source_callee, None);
+
+        let inner_call = resolver
+            .group_for_call(owner, span(30, 31), None)
+            .expect("inner group");
+        assert_eq!(inner_call.safety_effect_group, safety_group_id(inner.id));
+        assert_ne!(inner_call.call_site, outer_call.call_site);
+        assert!(!inner_call.inside_builtin_unsafe);
+        assert_eq!(inner_call.source_callee, None);
+
         let first = resolver
             .group_for_call(owner, span(60, 61), None)
             .expect("standalone group");
         let second = resolver
             .group_for_call(owner, span(60, 61), None)
             .expect("same standalone group");
-        assert_eq!(
-            first,
-            super::ResolvedCallGroups {
-                safety_effect_group: SafetyEffectGroupId::new(2),
-                call_site: CallSiteId::new(2),
-                inside_builtin_unsafe: false,
-                source_callee: None,
-            }
-        );
+        assert_ne!(first.safety_effect_group, outer_call.safety_effect_group);
+        assert_ne!(first.safety_effect_group, inner_call.safety_effect_group);
+        assert_ne!(first.call_site, outer_call.call_site);
+        assert_ne!(first.call_site, inner_call.call_site);
+        assert!(!first.inside_builtin_unsafe);
+        assert_eq!(first.source_callee, None);
         assert_eq!(second, first);
     }
 
@@ -1850,28 +1905,29 @@ mod tests {
         };
         let mut resolver = RawSafetyGroupResolver::new(&facts);
 
+        let matched = resolver
+            .group_for_call(owner, shared_span, Some(second_callee))
+            .expect("callee identifies one desugared call");
         assert_eq!(
-            resolver
-                .group_for_call(owner, shared_span, Some(second_callee))
-                .expect("callee identifies one desugared call"),
-            super::ResolvedCallGroups {
-                safety_effect_group: SafetyEffectGroupId::new(1),
-                call_site: CallSiteId::new(1),
-                inside_builtin_unsafe: true,
-                source_callee: Some(second_source_callee),
-            }
+            matched.safety_effect_group,
+            safety_group_id(facts.calls[1].effect_group.id)
         );
-        assert_eq!(
-            resolver
-                .group_for_call(owner, shared_span, Some(unmatched_callee))
-                .expect("unmatched compiler edge gets a standalone identity"),
-            super::ResolvedCallGroups {
-                safety_effect_group: SafetyEffectGroupId::new(2),
-                call_site: CallSiteId::new(2),
-                inside_builtin_unsafe: false,
-                source_callee: None,
-            }
-        );
+        assert_eq!(matched.call_site, call_site_id(facts.calls[1].call_site));
+        assert!(matched.inside_builtin_unsafe);
+        assert_eq!(matched.source_callee, Some(second_source_callee));
+
+        let unmatched = resolver
+            .group_for_call(owner, shared_span, Some(unmatched_callee))
+            .expect("unmatched compiler edge gets a standalone identity");
+        for call in &facts.calls {
+            assert_ne!(
+                unmatched.safety_effect_group,
+                safety_group_id(call.effect_group.id)
+            );
+            assert_ne!(unmatched.call_site, call_site_id(call.call_site));
+        }
+        assert!(!unmatched.inside_builtin_unsafe);
+        assert_eq!(unmatched.source_callee, None);
     }
 
     #[test]
@@ -1910,21 +1966,23 @@ mod tests {
         };
         let mut resolver = RawSafetyGroupResolver::new(&facts);
 
+        let call_groups = resolver
+            .group_for_call(owner, shared_span, None)
+            .expect("shared raw site remains a valid group");
         assert_eq!(
-            resolver
-                .group_for_call(owner, shared_span, None)
-                .expect("shared raw site remains a valid group"),
-            super::ResolvedCallGroups {
-                safety_effect_group: SafetyEffectGroupId::new(0),
-                call_site: CallSiteId::new(0),
-                inside_builtin_unsafe: false,
-                source_callee: None,
-            }
+            call_groups.safety_effect_group,
+            safety_group_id(shared_group.id)
         );
+        assert_eq!(
+            call_groups.call_site,
+            call_site_id(facts.calls[0].call_site)
+        );
+        assert!(!call_groups.inside_builtin_unsafe);
+        assert_eq!(call_groups.source_callee, None);
     }
 
     #[test]
-    fn call_grouping_does_not_borrow_a_different_known_callee() {
+    fn a_mismatched_callee_gets_an_independent_call_identity() {
         let owner = CRATE_DEF_ID.to_def_id();
         let source_callee = DefId::local(DefIndex::from_u32(1));
         let requested_callee = DefId::local(DefIndex::from_u32(2));
@@ -1947,21 +2005,23 @@ mod tests {
         };
         let mut resolver = RawSafetyGroupResolver::new(&facts);
 
-        assert_eq!(
-            resolver
-                .group_for_call(owner, shared_span, Some(requested_callee))
-                .expect("a different known callee gets a standalone identity"),
-            super::ResolvedCallGroups {
-                safety_effect_group: SafetyEffectGroupId::new(1),
-                call_site: CallSiteId::new(1),
-                inside_builtin_unsafe: false,
-                source_callee: None,
-            }
+        let call_groups = resolver
+            .group_for_call(owner, shared_span, Some(requested_callee))
+            .expect("a different known callee gets a standalone identity");
+        assert_ne!(
+            call_groups.safety_effect_group,
+            safety_group_id(facts.calls[0].effect_group.id)
         );
+        assert_ne!(
+            call_groups.call_site,
+            call_site_id(facts.calls[0].call_site)
+        );
+        assert!(!call_groups.inside_builtin_unsafe);
+        assert_eq!(call_groups.source_callee, None);
     }
 
     #[test]
-    fn structural_edge_grouping_does_not_reuse_thir_call_identity() {
+    fn structural_edges_get_a_stable_identity_distinct_from_thir_calls() {
         let owner = CRATE_DEF_ID.to_def_id();
         let first_callee = DefId::local(DefIndex::from_u32(1));
         let second_callee = DefId::local(DefIndex::from_u32(2));
@@ -2004,20 +2064,20 @@ mod tests {
         let second = resolver
             .group_for_structural_edge(owner, shared_span)
             .expect("same structural edge reuses its identity");
-        assert_eq!(
-            first,
-            super::ResolvedCallGroups {
-                safety_effect_group: SafetyEffectGroupId::new(2),
-                call_site: CallSiteId::new(2),
-                inside_builtin_unsafe: false,
-                source_callee: None,
-            }
-        );
+        for call in &facts.calls {
+            assert_ne!(
+                first.safety_effect_group,
+                safety_group_id(call.effect_group.id)
+            );
+            assert_ne!(first.call_site, call_site_id(call.call_site));
+        }
+        assert!(!first.inside_builtin_unsafe);
+        assert_eq!(first.source_callee, None);
         assert_eq!(second, first);
     }
 
     #[test]
-    fn standalone_operation_anchor_is_not_a_lexical_scope() {
+    fn standalone_operation_anchors_leave_structural_edges_independent() {
         let owner = CRATE_DEF_ID.to_def_id();
         let facts = RawSafetyFacts {
             groups: Vec::new(),
@@ -2035,17 +2095,15 @@ mod tests {
         };
         let mut resolver = RawSafetyGroupResolver::new(&facts);
 
-        assert_eq!(
-            resolver
-                .group_for_structural_edge(owner, span(20, 21))
-                .expect("structural edge gets a standalone identity"),
-            super::ResolvedCallGroups {
-                safety_effect_group: SafetyEffectGroupId::new(1),
-                call_site: CallSiteId::new(0),
-                inside_builtin_unsafe: false,
-                source_callee: None,
-            }
+        let edge_groups = resolver
+            .group_for_structural_edge(owner, span(20, 21))
+            .expect("structural edge gets a standalone identity");
+        assert_ne!(
+            edge_groups.safety_effect_group,
+            safety_group_id(facts.operations[0].effect_group.id)
         );
+        assert!(!edge_groups.inside_builtin_unsafe);
+        assert_eq!(edge_groups.source_callee, None);
     }
 
     #[test]
@@ -2074,17 +2132,17 @@ mod tests {
         };
         let mut resolver = RawSafetyGroupResolver::new(&facts);
 
-        assert_eq!(
-            resolver
-                .group_for_structural_edge(owner, span(20, 21))
-                .expect("ambiguous containment degrades to a fresh group"),
-            super::ResolvedCallGroups {
-                safety_effect_group: SafetyEffectGroupId::new(2),
-                call_site: CallSiteId::new(0),
-                inside_builtin_unsafe: false,
-                source_callee: None,
-            }
-        );
+        let edge_groups = resolver
+            .group_for_structural_edge(owner, span(20, 21))
+            .expect("ambiguous containment degrades to a fresh group");
+        for group in &facts.groups {
+            assert_ne!(
+                edge_groups.safety_effect_group,
+                safety_group_id(group.effect_group.id)
+            );
+        }
+        assert!(!edge_groups.inside_builtin_unsafe);
+        assert_eq!(edge_groups.source_callee, None);
     }
 
     #[test]
@@ -2097,7 +2155,7 @@ mod tests {
     }
 
     #[test]
-    fn reifying_an_unsafe_function_does_not_become_an_unsafe_call() {
+    fn unsafe_function_reification_is_safe_until_invoked() {
         assert!(!super::unsafe_requirement_for_edge(
             reachability::ReachabilityEdgeKind::FnPointerReify,
             true,
@@ -2115,7 +2173,7 @@ mod tests {
     }
 
     #[test]
-    fn structural_edges_do_not_query_call_safety() {
+    fn edge_kinds_select_their_unsafe_requirement_source() {
         use reachability::ReachabilityEdgeKind;
 
         assert!(!super::edge_uses_target_unsafe_requirement(

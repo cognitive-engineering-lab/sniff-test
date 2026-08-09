@@ -19,6 +19,11 @@ note: panic may happen here: compiler assertion: division by zero
   |
 2 |     total_size / block_count
   |     ^^^^^^^^^^^^^^^^^^^^^^^^
+note: this function can reach a compiler assertion that may panic (division by zero)
+ --> src/lib.rs:1:1
+  |
+1 | pub fn division(total_size: usize, block_count: usize) -> usize {
+  | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
   = help: add a guard, document the panic with `# Panics`, or add `// PANIC:` if a local invariant proves it cannot panic
 
 error: function `panic_axioms::indexed` has an undocumented panic path
@@ -32,6 +37,11 @@ note: panic may happen here: compiler assertion: index out of bounds
    |
 10 |     values[index]
    |     ^^^^^^^^^^^^^
+note: this function can reach a compiler assertion that may panic (index out of bounds)
+  --> src/lib.rs:9:1
+   |
+ 9 | pub fn indexed(values: &[usize], index: usize) -> usize {
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
    = help: add a guard, document the panic with `# Panics`, or add `// PANIC:` if a local invariant proves it cannot panic
 
 error: function `panic_axioms::remainder` has an undocumented panic path
@@ -45,6 +55,11 @@ note: panic may happen here: compiler assertion: remainder with a zero divisor
   |
 6 |     total_size % block_size
   |     ^^^^^^^^^^^^^^^^^^^^^^^
+note: this function can reach a compiler assertion that may panic (remainder with a zero divisor)
+ --> src/lib.rs:5:1
+  |
+5 | pub fn remainder(total_size: usize, block_size: usize) -> usize {
+  | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
   = help: add a guard, document the panic with `# Panics`, or add `// PANIC:` if a local invariant proves it cannot panic
 
 error: could not compile `panic-axioms` (lib) due to 3 previous errors

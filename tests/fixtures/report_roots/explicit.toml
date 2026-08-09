@@ -1,8 +1,5 @@
 [analysis]
-report-roots = [
-    "report_roots::private_panic",
-    "report_roots::missing_root",
-]
+report-roots = ["report_roots::private_panic"]
 
 [panics]
 panic-sink-namespaces = [

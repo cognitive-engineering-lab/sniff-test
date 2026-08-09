@@ -1,31 +1,21 @@
 ---
 source: crates/sniff-test/tests/fixtures.rs
-expression: messages
+expression: "report[\"findings\"]"
 ---
 [
   {
-    "artifact": {
-      "crate-name": "report_roots"
-    },
-    "findings": [
-      {
-        "kind": "panic-invocation",
-        "level": "deny",
-        "reason": "panic sink core::std::rt::panic_fmt",
-        "root": "report_roots::public_panic",
-        "root-kind": "concrete",
-        "span": "src/lib.rs:4:5: 4:26",
-        "target": "core::std::rt::panic_fmt",
-        "trace": [
-          "src/lib.rs:4:5: 4:26: report_roots::public_panic --macro-expansion-> macro std::panic",
-          "src/lib.rs:4:5: 4:26: macro std::panic --macro-expansion-> macro core::std::panic::panic_2021",
-          "[SYSROOT]/lib/rustlib/src/rust/library/core/src/panic.rs:62:9: 62:73: macro core::std::panic::panic_2021 --direct-call-> core::std::rt::panic_fmt"
-        ]
-      }
-    ],
-    "format-version": 12,
-    "reason": "sniff-test-artifact",
-    "rustc-version": "[RUSTC_VERSION]",
-    "tool-version": "0.1.0"
+    "kind": "panic-invocation",
+    "level": "deny",
+    "reason": "panic sink core::std::rt::panic_fmt",
+    "root": "report_roots::public_panic",
+    "root-kind": "concrete",
+    "root-span": "src/lib.rs:3:1: 3:22",
+    "span": "src/lib.rs:4:5: 4:26",
+    "target": "core::std::rt::panic_fmt",
+    "trace": [
+      "src/lib.rs:4:5: 4:26: report_roots::public_panic --macro-expansion-> macro std::panic",
+      "src/lib.rs:4:5: 4:26: macro std::panic --macro-expansion-> macro core::std::panic::panic_2021",
+      "[SYSROOT]/lib/rustlib/src/rust/library/core/src/panic.rs:62:9: 62:73: macro core::std::panic::panic_2021 --direct-call-> core::std::rt::panic_fmt"
+    ]
   }
 ]

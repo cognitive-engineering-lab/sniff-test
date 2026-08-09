@@ -19,13 +19,11 @@ use rustc_middle::ty::TyCtxt;
 use rustc_session::config::CrateType;
 use rustc_span::symbol::Symbol;
 
-use super::args::{self, SniffTestArgs};
+use super::args::{CrateOutputScope, MessageFormat, SniffTestArgs};
 use super::diagnostics::emit_finding_diagnostic;
 use super::findings::{Finding, collect_report_root_findings, resolve_findings};
 use super::plugin::rustc_version;
-use super::report::{
-    AnalysisArtifactReport, CrateOutputScope, REPORT_FORMAT_VERSION, ReportArtifact,
-};
+use super::report::{AnalysisArtifactReport, REPORT_FORMAT_VERSION, ReportArtifact};
 use interpretation::interpret_workspace;
 
 pub(crate) fn analyze_crate(
@@ -108,26 +106,25 @@ pub(crate) fn analyze_crate(
     }
 
     let selection = select_report_roots(tcx, &config.analysis);
-    let emit_diagnostics = args.under_cargo || args.message_format == args::MessageFormat::Human;
-    let interpretation = interpret_workspace(
+    let emit_diagnostics = args.under_cargo || args.message_format == MessageFormat::Human;
+    let interpreted_findings = interpret_workspace(
         tcx,
         &local_ir,
         local_stable_crate_id,
         &dependency_graph,
-        selection,
+        &selection.roots,
         config,
     );
-    let empty_report_roots =
-        interpretation.selected_roots == 0 && interpretation.missing_roots.is_empty();
+    let empty_report_roots = selection.roots.is_empty() && selection.missing_roots.is_empty();
     let mut findings = collect_report_root_findings(
         tcx,
         &args.manifest_path(),
         empty_report_roots,
-        &interpretation.missing_roots,
+        &selection.missing_roots,
         &config.analysis.report_roots,
         &crate_name,
     );
-    findings.extend(interpretation.findings);
+    findings.extend(interpreted_findings);
     let report = build_report(tcx, config, findings);
     if emit_diagnostics {
         for finding in &report.findings {
@@ -158,7 +155,7 @@ fn verify_dependency_marker_sources(
 }
 
 fn emit_report(args: &SniffTestArgs, report: &AnalysisArtifactReport) {
-    if args.message_format != args::MessageFormat::Json {
+    if args.message_format != MessageFormat::Json {
         return;
     }
     match serde_json::to_string(report) {
@@ -189,10 +186,7 @@ fn build_report(
 impl CrateOutputScope {
     pub(crate) fn current(args: &SniffTestArgs) -> anyhow::Result<Self> {
         if !args.under_cargo {
-            return Ok(match args.direct_scope {
-                args::DirectInvocationScope::Workspace => Self::Workspace,
-                args::DirectInvocationScope::Dependency => Self::Dependency,
-            });
+            return Ok(args.direct_scope);
         }
         let cargo_manifest = std::env::var_os("CARGO_MANIFEST_PATH")
             .map(|path| {
@@ -322,14 +316,29 @@ fn dependency_inputs(tcx: TyCtxt<'_>) -> Result<Vec<ExternArtifactInput>, String
             // so it is intentionally absent from the composed IR graph.
             [] => continue,
             candidates => {
+                let candidate_names = candidates
+                    .iter()
+                    .map(|crate_num| tcx.crate_name(*crate_num).to_string())
+                    .collect::<Vec<_>>();
+                let candidates = describe_candidate_crates(&candidate_names);
                 return Err(format!(
-                    "cannot bind required dependency artifact IR for `{name}` at [{supplied_paths}] to one loaded rustc crate; matched {candidates:?}"
+                    "cannot bind required dependency artifact IR for `{name}` at [{supplied_paths}] to one loaded rustc crate; {candidates}"
                 ));
             }
         };
         inputs.push(extern_artifact_input(tcx, name.clone(), crate_num));
     }
     Ok(inputs)
+}
+
+fn describe_candidate_crates(names: &[String]) -> String {
+    let count = names.len();
+    let names = names
+        .iter()
+        .map(|name| format!("`{name}`"))
+        .collect::<Vec<_>>()
+        .join(", ");
+    format!("matched {count} loaded crates: {names}")
 }
 
 fn resolved_extern_crate(tcx: TyCtxt<'_>, name: &str) -> Option<CrateNum> {
@@ -377,7 +386,15 @@ mod tests {
 
     use rustc_session::config::CrateType;
 
-    use super::{CrateOutputScope, has_loadable_crate_output};
+    use super::{CrateOutputScope, describe_candidate_crates, has_loadable_crate_output};
+
+    #[test]
+    fn ambiguous_loaded_crates_render_human_crate_names() {
+        assert_eq!(
+            describe_candidate_crates(&[String::from("alpha"), String::from("beta")]),
+            "matched 2 loaded crates: `alpha`, `beta`"
+        );
+    }
 
     #[test]
     fn only_rust_linkable_crate_types_receive_persisted_cache_identities() {

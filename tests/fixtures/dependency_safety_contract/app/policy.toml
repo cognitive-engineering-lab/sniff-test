@@ -1,9 +1,0 @@
-[safety]
-ignored-namespaces = [
-    "dependency_safety_contract_app::justifies_dependency_effects",
-    "dependency_safety_contract_app::unnamed_marker_does_not_satisfy_cached_requirement",
-]
-
-[safety.lints]
-unsafe-op-missing-justification = "allow"
-safety-obligation-missing-requirements = "deny"

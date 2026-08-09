@@ -14,13 +14,6 @@ use toml::Spanned;
 
 use super::diagnostics::{empty_report_roots_diagnostic, missing_report_root_diagnostic};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub(crate) enum LintSelector {
-    #[default]
-    FindingKind,
-    DependencyAnalysisIncomplete,
-}
-
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "kebab-case")]
 pub(crate) struct Finding {
@@ -30,6 +23,8 @@ pub(crate) struct Finding {
     pub(crate) root: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) root_kind: Option<ReportRootKind>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) root_span: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) function: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -44,8 +39,6 @@ pub(crate) struct Finding {
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub(crate) requirements: Vec<String>,
     #[serde(skip)]
-    pub(crate) lint_selector: LintSelector,
-    #[serde(skip)]
     pub(crate) diagnostic: FindingDiagnostic,
     #[serde(skip)]
     pub(crate) source_order: Option<FindingSourceOrder>,
@@ -59,6 +52,7 @@ impl Finding {
             kind,
             root: None,
             root_kind: None,
+            root_span: None,
             function: None,
             target: None,
             span: None,
@@ -66,7 +60,6 @@ impl Finding {
             trace: Vec::new(),
             missing_requirements: Vec::new(),
             requirements: Vec::new(),
-            lint_selector: LintSelector::FindingKind,
             diagnostic,
             source_order: None,
             trace_order: Vec::new(),
@@ -85,36 +78,6 @@ impl Finding {
     pub(crate) fn with_trace_order(mut self, trace_order: Vec<FindingTraceStepOrder>) -> Self {
         self.trace_order = trace_order;
         self
-    }
-
-    pub(crate) fn with_dependency_analysis_lint(mut self) -> Self {
-        debug_assert!(matches!(
-            self.kind,
-            FindingKind::PanicAnalysisIncomplete | FindingKind::SafetyAnalysisIncomplete
-        ));
-        self.lint_selector = LintSelector::DependencyAnalysisIncomplete;
-        self
-    }
-
-    fn lint_level(&self, config: &SniffTestConfig) -> LintLevel {
-        let fallback = self.kind.lint_level(config);
-        match (self.lint_selector, self.kind) {
-            (LintSelector::DependencyAnalysisIncomplete, FindingKind::PanicAnalysisIncomplete) => {
-                config
-                    .analysis
-                    .lints
-                    .dependency_panic_analysis_incomplete
-                    .unwrap_or(fallback)
-            }
-            (LintSelector::DependencyAnalysisIncomplete, FindingKind::SafetyAnalysisIncomplete) => {
-                config
-                    .analysis
-                    .lints
-                    .dependency_safety_analysis_incomplete
-                    .unwrap_or(fallback)
-            }
-            _ => fallback,
-        }
     }
 }
 
@@ -177,7 +140,7 @@ pub(crate) fn resolve_findings(
     let mut resolved = findings
         .into_iter()
         .filter_map(|finding| {
-            let level = finding.lint_level(config);
+            let level = finding.kind.lint_level(config);
             (!level.is_allow()).then_some(ResolvedFinding { level, finding })
         })
         .collect::<Vec<_>>();
@@ -191,6 +154,7 @@ fn compare_findings(left: &Finding, right: &Finding) -> std::cmp::Ordering {
         .then_with(|| {
             report_root_kind_order(left.root_kind).cmp(&report_root_kind_order(right.root_kind))
         })
+        .then_with(|| left.root_span.cmp(&right.root_span))
         .then_with(|| finding_domain_order(left.kind).cmp(&finding_domain_order(right.kind)))
         .then_with(|| left.trace_order.cmp(&right.trace_order))
         .then_with(|| left.source_order.cmp(&right.source_order))
@@ -424,10 +388,6 @@ mod tests {
         )
     }
 
-    fn dependency_incomplete_finding(kind: FindingKind) -> Finding {
-        finding(kind).with_dependency_analysis_lint()
-    }
-
     #[test]
     fn resolves_policy_and_filters_allowed_findings_once() {
         let mut config = SniffTestConfig::default();
@@ -450,76 +410,54 @@ mod tests {
     }
 
     #[test]
-    fn dependency_lint_selector_is_not_serialized() {
-        let json = serde_json::to_value(dependency_incomplete_finding(
-            FindingKind::PanicAnalysisIncomplete,
-        ))
-        .expect("serialize dependency incomplete finding");
-        let object = json.as_object().expect("finding object");
-
-        assert_eq!(object["kind"], "panic-analysis-incomplete");
-        assert!(!object.contains_key("lint-selector"));
-    }
-
-    #[test]
-    fn dependency_incomplete_findings_use_only_their_exact_overrides() {
-        let mut config = SniffTestConfig::default();
-        config.analysis.lints.panic_analysis_incomplete = LintLevel::Deny;
-        config.analysis.lints.safety_analysis_incomplete = LintLevel::Warn;
-        config.analysis.lints.dependency_panic_analysis_incomplete = Some(LintLevel::Warn);
-        config.analysis.lints.dependency_safety_analysis_incomplete = Some(LintLevel::Allow);
-
-        assert_eq!(
-            dependency_incomplete_finding(FindingKind::PanicAnalysisIncomplete).lint_level(&config),
-            LintLevel::Warn
-        );
-        assert_eq!(
-            dependency_incomplete_finding(FindingKind::SafetyAnalysisIncomplete)
-                .lint_level(&config),
-            LintLevel::Allow
-        );
-        assert_eq!(
-            finding(FindingKind::PanicAnalysisIncomplete).lint_level(&config),
-            LintLevel::Deny
-        );
-        assert_eq!(
-            finding(FindingKind::SafetyAnalysisIncomplete).lint_level(&config),
-            LintLevel::Warn
-        );
-    }
-
-    #[test]
-    fn dependency_incomplete_findings_fall_back_to_their_effect_policy() {
+    fn incomplete_findings_use_their_effect_policy() {
         let mut config = SniffTestConfig::default();
         config.analysis.lints.panic_analysis_incomplete = LintLevel::Warn;
         config.analysis.lints.safety_analysis_incomplete = LintLevel::Allow;
 
-        assert_eq!(
-            dependency_incomplete_finding(FindingKind::PanicAnalysisIncomplete).lint_level(&config),
-            LintLevel::Warn
+        let resolved = resolve_findings(
+            vec![
+                finding(FindingKind::PanicAnalysisIncomplete),
+                finding(FindingKind::SafetyAnalysisIncomplete),
+            ],
+            &config,
         );
+
+        assert_eq!(resolved.len(), 1);
+        assert_eq!(resolved[0].level, LintLevel::Warn);
         assert_eq!(
-            dependency_incomplete_finding(FindingKind::SafetyAnalysisIncomplete)
-                .lint_level(&config),
-            LintLevel::Allow
+            resolved[0].finding.kind,
+            FindingKind::PanicAnalysisIncomplete
         );
     }
 
     #[test]
-    fn findings_serialize_typed_subtypes_without_effect_or_dependency_origin() {
+    fn findings_serialize_their_public_semantic_fields() {
         let assert = serde_json::to_value(finding(FindingKind::CompilerAssert {
             compiler_assert_kind: CompilerAssertKind::DivisionByZero,
         }))
         .expect("serialize compiler assert");
-        assert_eq!(assert["kind"], "compiler-assert");
-        assert_eq!(assert["compiler-assert-kind"], "division-by-zero");
-        assert!(assert.get("effect").is_none());
+        assert_eq!(
+            assert,
+            serde_json::json!({
+                "kind": "compiler-assert",
+                "compiler-assert-kind": "division-by-zero",
+                "reason": "test finding",
+            })
+        );
 
         let safety = serde_json::to_value(finding(FindingKind::UnsafeOpMissingJustification {
             safety_op_kind: SafetyOpKind::DerefRawPointer,
         }))
         .expect("serialize safety operation");
-        assert_eq!(safety["safety-op-kind"], "raw-pointer-dereference");
+        assert_eq!(
+            safety,
+            serde_json::json!({
+                "kind": "unsafe-op-missing-justification",
+                "safety-op-kind": "raw-pointer-dereference",
+                "reason": "test finding",
+            })
+        );
     }
 
     #[test]

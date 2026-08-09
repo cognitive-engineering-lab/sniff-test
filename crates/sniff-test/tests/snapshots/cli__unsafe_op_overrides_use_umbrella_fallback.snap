@@ -8,30 +8,30 @@ stdout:
 stderr:
     Checking unsafe-ops v0.1.0 ([FIXTURE])
 error: unsafe operation (inline assembly) in `unsafe_ops::asm_unjustified` is missing a `// SAFETY:` justification
-  --> src/lib.rs:49:9
+  --> src/lib.rs:34:9
    |
-49 |         asm!("nop");
+34 |         asm!("nop");
    |         ^^^^^^^^^^^
    |
    = help: add a `// SAFETY:` comment above the unsafe block or operation
+note: this function can reach an unsafe operation (inline assembly) without a `// SAFETY:` justification
+  --> src/lib.rs:32:1
+   |
+32 | pub fn asm_unjustified() {
+   | ^^^^^^^^^^^^^^^^^^^^^^^^
 
 warning: unsafe operation (raw pointer dereference) in `unsafe_ops::deref_unjustified` is missing a `// SAFETY:` justification
-  --> src/lib.rs:18:14
+  --> src/lib.rs:17:14
    |
-18 |     unsafe { *ptr }
+17 |     unsafe { *ptr }
    |              ^^^^
    |
    = help: add a `// SAFETY:` comment above the unsafe block or operation
-
-warning: unsafe operation (raw pointer dereference) in `unsafe_ops::macro_deref_unjustified` is missing a `// SAFETY:` justification
-  --> src/lib.rs:73:5
+note: this function can reach an unsafe operation (raw pointer dereference) without a `// SAFETY:` justification
+  --> src/lib.rs:16:1
    |
-73 |     nested_deref_in_macro!(ptr)
-   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^
-   |
-   = help: add a `// SAFETY:` comment above the unsafe block or operation
-   = note: reachable from `unsafe_ops::macro_deref_unjustified` to `unsafe operation (raw pointer dereference)`
-   = note: set `show-full-stack-trace = true` under `[analysis]` in sniff-test.toml to show every reachability step
+16 | pub fn deref_unjustified(ptr: *const u32) -> u32 {
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-warning: `unsafe-ops` (lib) generated 2 warnings
-error: could not compile `unsafe-ops` (lib) due to 1 previous error; 2 warnings emitted
+warning: `unsafe-ops` (lib) generated 1 warning
+error: could not compile `unsafe-ops` (lib) due to 1 previous error; 1 warning emitted

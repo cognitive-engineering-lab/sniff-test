@@ -1,97 +1,76 @@
 ---
 source: crates/sniff-test/tests/fixtures.rs
-expression: messages
+expression: "report[\"findings\"]"
 ---
 [
   {
-    "artifact": {
-      "crate-name": "unsafe_ops"
-    },
-    "findings": [
-      {
-        "function": "unsafe_ops::asm_unjustified",
-        "kind": "unsafe-op-missing-justification",
-        "level": "warn",
-        "reason": "unsafe operation (inline assembly) has no `// SAFETY:` justification",
-        "root": "unsafe_ops::asm_unjustified",
-        "root-kind": "concrete",
-        "safety-op-kind": "inline-assembly",
-        "span": "src/lib.rs:49:9: 49:20",
-        "trace": [
-          "src/lib.rs:49:9: 49:20: unsafe_ops::asm_unjustified --unsafe-operation-> unsafe operation (inline assembly)"
-        ]
-      },
-      {
-        "function": "unsafe_ops::deref_unjustified",
-        "kind": "unsafe-op-missing-justification",
-        "level": "warn",
-        "reason": "unsafe operation (raw pointer dereference) has no `// SAFETY:` justification",
-        "root": "unsafe_ops::deref_unjustified",
-        "root-kind": "concrete",
-        "safety-op-kind": "raw-pointer-dereference",
-        "span": "src/lib.rs:18:14: 18:18",
-        "trace": [
-          "src/lib.rs:18:14: 18:18: unsafe_ops::deref_unjustified --unsafe-operation-> unsafe operation (raw pointer dereference)"
-        ]
-      },
-      {
-        "function": "unsafe_ops::extern_static_unjustified",
-        "kind": "unsafe-op-missing-justification",
-        "level": "warn",
-        "reason": "unsafe operation (extern static access) has no `// SAFETY:` justification",
-        "root": "unsafe_ops::extern_static_unjustified",
-        "root-kind": "concrete",
-        "safety-op-kind": "extern-static-access",
-        "span": "src/lib.rs:36:14: 36:22",
-        "trace": [
-          "src/lib.rs:36:14: 36:22: unsafe_ops::extern_static_unjustified --unsafe-operation-> unsafe operation (extern static access)"
-        ]
-      },
-      {
-        "function": "unsafe_ops::macro_deref_unjustified",
-        "kind": "unsafe-op-missing-justification",
-        "level": "warn",
-        "reason": "unsafe operation (raw pointer dereference) has no `// SAFETY:` justification",
-        "root": "unsafe_ops::macro_deref_unjustified",
-        "root-kind": "concrete",
-        "safety-op-kind": "raw-pointer-dereference",
-        "span": "src/lib.rs:73:5: 73:32",
-        "trace": [
-          "src/lib.rs:73:5: 73:32: unsafe_ops::macro_deref_unjustified --macro-expansion-> macro unsafe_ops::nested_deref_in_macro",
-          "src/lib.rs:68:9: 68:34: macro unsafe_ops::nested_deref_in_macro --macro-expansion-> macro unsafe_ops::deref_in_macro",
-          "src/lib.rs:62:18: 62:27: macro unsafe_ops::deref_in_macro --unsafe-operation-> unsafe operation (raw pointer dereference)"
-        ]
-      },
-      {
-        "function": "unsafe_ops::mutable_static_unjustified",
-        "kind": "unsafe-op-missing-justification",
-        "level": "warn",
-        "reason": "unsafe operation (mutable static access) has no `// SAFETY:` justification",
-        "root": "unsafe_ops::mutable_static_unjustified",
-        "root-kind": "concrete",
-        "safety-op-kind": "mutable-static-access",
-        "span": "src/lib.rs:27:14: 27:21",
-        "trace": [
-          "src/lib.rs:27:14: 27:21: unsafe_ops::mutable_static_unjustified --unsafe-operation-> unsafe operation (mutable static access)"
-        ]
-      },
-      {
-        "function": "unsafe_ops::union_read_unjustified",
-        "kind": "unsafe-op-missing-justification",
-        "level": "warn",
-        "reason": "unsafe operation (union field access) has no `// SAFETY:` justification",
-        "root": "unsafe_ops::union_read_unjustified",
-        "root-kind": "concrete",
-        "safety-op-kind": "union-field-access",
-        "span": "src/lib.rs:40:14: 40:23",
-        "trace": [
-          "src/lib.rs:40:14: 40:23: unsafe_ops::union_read_unjustified --unsafe-operation-> unsafe operation (union field access)"
-        ]
-      }
-    ],
-    "format-version": 12,
-    "reason": "sniff-test-artifact",
-    "rustc-version": "[RUSTC_VERSION]",
-    "tool-version": "0.1.0"
+    "function": "unsafe_ops::asm_unjustified",
+    "kind": "unsafe-op-missing-justification",
+    "level": "warn",
+    "reason": "unsafe operation (inline assembly) has no `// SAFETY:` justification",
+    "root": "unsafe_ops::asm_unjustified",
+    "root-kind": "concrete",
+    "root-span": "src/lib.rs:32:1: 32:25",
+    "safety-op-kind": "inline-assembly",
+    "span": "src/lib.rs:34:9: 34:20",
+    "trace": [
+      "src/lib.rs:34:9: 34:20: unsafe_ops::asm_unjustified --unsafe-operation-> unsafe operation (inline assembly)"
+    ]
+  },
+  {
+    "function": "unsafe_ops::deref_unjustified",
+    "kind": "unsafe-op-missing-justification",
+    "level": "warn",
+    "reason": "unsafe operation (raw pointer dereference) has no `// SAFETY:` justification",
+    "root": "unsafe_ops::deref_unjustified",
+    "root-kind": "concrete",
+    "root-span": "src/lib.rs:16:1: 16:49",
+    "safety-op-kind": "raw-pointer-dereference",
+    "span": "src/lib.rs:17:14: 17:18",
+    "trace": [
+      "src/lib.rs:17:14: 17:18: unsafe_ops::deref_unjustified --unsafe-operation-> unsafe operation (raw pointer dereference)"
+    ]
+  },
+  {
+    "function": "unsafe_ops::extern_static_unjustified",
+    "kind": "unsafe-op-missing-justification",
+    "level": "warn",
+    "reason": "unsafe operation (extern static access) has no `// SAFETY:` justification",
+    "root": "unsafe_ops::extern_static_unjustified",
+    "root-kind": "concrete",
+    "root-span": "src/lib.rs:24:1: 24:42",
+    "safety-op-kind": "extern-static-access",
+    "span": "src/lib.rs:25:14: 25:22",
+    "trace": [
+      "src/lib.rs:25:14: 25:22: unsafe_ops::extern_static_unjustified --unsafe-operation-> unsafe operation (extern static access)"
+    ]
+  },
+  {
+    "function": "unsafe_ops::mutable_static_unjustified",
+    "kind": "unsafe-op-missing-justification",
+    "level": "warn",
+    "reason": "unsafe operation (mutable static access) has no `// SAFETY:` justification",
+    "root": "unsafe_ops::mutable_static_unjustified",
+    "root-kind": "concrete",
+    "root-span": "src/lib.rs:20:1: 20:43",
+    "safety-op-kind": "mutable-static-access",
+    "span": "src/lib.rs:21:14: 21:21",
+    "trace": [
+      "src/lib.rs:21:14: 21:21: unsafe_ops::mutable_static_unjustified --unsafe-operation-> unsafe operation (mutable static access)"
+    ]
+  },
+  {
+    "function": "unsafe_ops::union_read_unjustified",
+    "kind": "unsafe-op-missing-justification",
+    "level": "warn",
+    "reason": "unsafe operation (union field access) has no `// SAFETY:` justification",
+    "root": "unsafe_ops::union_read_unjustified",
+    "root-kind": "concrete",
+    "root-span": "src/lib.rs:28:1: 28:50",
+    "safety-op-kind": "union-field-access",
+    "span": "src/lib.rs:29:14: 29:23",
+    "trace": [
+      "src/lib.rs:29:14: 29:23: unsafe_ops::union_read_unjustified --unsafe-operation-> unsafe operation (union field access)"
+    ]
   }
 ]

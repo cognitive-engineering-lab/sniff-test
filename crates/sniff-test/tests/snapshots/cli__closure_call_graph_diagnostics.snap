@@ -20,6 +20,11 @@ note: panic may happen here: panic sink `core::std::rt::panic_fmt`
   |                    ^^^^^^^^^^^^^^^^^^^^^^^^
   = note: reachable from `closure_call_graph::basic_closure_panics` to `core::std::rt::panic_fmt`
   = note: set `show-full-stack-trace = true` under `[analysis]` in sniff-test.toml to show every reachability step
+note: this function can reach a panic invocation
+ --> src/lib.rs:1:1
+  |
+1 | pub fn basic_closure_panics() {
+  | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 help: guard this path, or add `// PANIC:` here if a local invariant proves it cannot panic
  --> src/lib.rs:3:5
   |

@@ -13,11 +13,16 @@ warning: function `trusted_boundaries::trusted_through_fn_pointer` reaches an un
 22 | pub fn trusted_through_fn_pointer(flag: bool, unknown: fn(bool)) {
    | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
    |
-note: panic behavior cannot be verified here: indirect call through an opaque callable
+note: panic behavior cannot be verified here: indirect call through a function pointer
   --> src/lib.rs:24:5
    |
 24 |     helper(flag);
    |     ^^^^^^^^^^^^
+note: this function can reach a call whose panic behavior cannot be verified
+  --> src/lib.rs:22:1
+   |
+22 | pub fn trusted_through_fn_pointer(flag: bool, unknown: fn(bool)) {
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
    = help: document this boundary with `# Panics`, add `// PANIC:` only if every possible callee is locally constrained, or configure `indirect-call-boundary` if this opacity is acceptable
 
 warning: function `trusted_boundaries::trusted_unsafe_through_fn_pointer` reaches an unverifiable indirect call
@@ -26,11 +31,16 @@ warning: function `trusted_boundaries::trusted_unsafe_through_fn_pointer` reache
 31 | pub fn trusted_unsafe_through_fn_pointer(use_trusted: bool, unknown: unsafe fn()) {
    | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
    |
-note: panic behavior cannot be verified here: indirect call through an opaque callable
+note: panic behavior cannot be verified here: indirect call through an unsafe function pointer
   --> src/lib.rs:33:14
    |
 33 |     unsafe { helper() }
    |              ^^^^^^^^
+note: this function can reach a call whose panic behavior cannot be verified
+  --> src/lib.rs:31:1
+   |
+31 | pub fn trusted_unsafe_through_fn_pointer(use_trusted: bool, unknown: unsafe fn()) {
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
    = help: document this boundary with `# Panics`, add `// PANIC:` only if every possible callee is locally constrained, or configure `indirect-call-boundary` if this opacity is acceptable
 
 warning: unsafe call to `unsafe function pointer` in `trusted_boundaries::trusted_unsafe_through_fn_pointer` is missing a `// SAFETY:` justification
@@ -40,6 +50,11 @@ warning: unsafe call to `unsafe function pointer` in `trusted_boundaries::truste
    |              ^^^^^^^^
    |
    = help: add a `// SAFETY:` comment above the unsafe block or call site
+note: this function can reach an unsafe call without a `// SAFETY:` justification
+  --> src/lib.rs:31:1
+   |
+31 | pub fn trusted_unsafe_through_fn_pointer(use_trusted: bool, unknown: unsafe fn()) {
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
 warning: function `trusted_boundaries::trusted_with_docs` may panic through a trusted panic
   --> src/lib.rs:6:5
@@ -52,6 +67,11 @@ note: `trusted_boundaries::trusted_doc_helper` documents `# Panics` here
    |
 16 | fn trusted_doc_helper(flag: bool) {
    | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+note: this function can reach a trusted panic boundary with `# Panics` documentation
+  --> src/lib.rs:5:1
+   |
+ 5 | pub fn trusted_with_docs(flag: bool) {
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 help: add `// PANIC:` directly above this call explaining why its documented panic conditions cannot occur
   --> src/lib.rs:6:5
    |

@@ -1,2 +1,2 @@
 [analysis]
-report-roots = "all"
+report-roots = ["ambiguous_safety::duplicate_safety_marker"]

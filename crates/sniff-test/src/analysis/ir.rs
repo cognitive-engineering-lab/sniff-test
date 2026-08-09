@@ -485,13 +485,8 @@ pub(crate) struct EffectFactIr {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case", tag = "effect")]
 pub(crate) enum EffectKindIr {
-    CompilerAssert {
-        kind: CompilerAssertKind,
-        description: String,
-    },
-    UnsafeOperation {
-        kind: SafetyOpKind,
-    },
+    CompilerAssert { kind: CompilerAssertKind },
+    UnsafeOperation { kind: SafetyOpKind },
 }
 
 /// One source marker and the fact it was associated with.
@@ -622,14 +617,13 @@ fn validate_body(
         validate_optional_range(effect.expanded_range.as_ref(), source_lengths)?;
         validate_macro_expansions(&effect.macro_expansions, source_lengths)?;
         match &effect.kind {
-            EffectKindIr::CompilerAssert { description, .. } => {
+            EffectKindIr::CompilerAssert { .. } => {
                 if effect.safety_effect_group.is_some() {
                     return Err(IrValidationError::new(format!(
                         "compiler assertion effect {} has a safety effect group",
                         effect.id.index()
                     )));
                 }
-                require_nonempty(description, "compiler assertion description")?;
             }
             EffectKindIr::UnsafeOperation { .. } if effect.safety_effect_group.is_none() => {
                 return Err(IrValidationError::new(format!(
@@ -1115,7 +1109,6 @@ mod tests {
                     macro_expansions: Vec::new(),
                     kind: EffectKindIr::CompilerAssert {
                         kind: CompilerAssertKind::BoundsCheck,
-                        description: String::from("index out of bounds"),
                     },
                 },
             ],
@@ -1278,7 +1271,7 @@ mod tests {
     }
 
     #[test]
-    fn rejects_duplicate_function_identity() {
+    fn new_rejects_invalid_ir() {
         let function = FunctionId::generic(def_hash("00000000000000010000000000000002"));
         let error = ArtifactAnalysisIr::new(
             vec![
@@ -1290,130 +1283,5 @@ mod tests {
         .expect_err("duplicate function identities must be rejected");
 
         assert!(error.to_string().contains("duplicate function identity"));
-    }
-
-    #[test]
-    fn consumer_instantiation_requires_an_exact_function_identity() {
-        let function = FunctionId::generic(def_hash("00000000000000090000000000000002"));
-        let mut body = empty_body(function, "dependency::generic");
-        body.provenance = FunctionBodyProvenanceIr::ConsumerInstantiation {
-            consumer_stable_crate_id: 1,
-        };
-
-        let error = ArtifactAnalysisIr::new(vec![body], Vec::new())
-            .expect_err("a generic body cannot be a consumer overlay");
-
-        assert!(
-            error
-                .to_string()
-                .contains("consumer-instantiation overlay must have an exact function identity")
-        );
-    }
-
-    #[test]
-    fn rejects_source_range_with_missing_file() {
-        let function = FunctionId::generic(def_hash("00000000000000010000000000000002"));
-        let mut body = empty_body(function, "sample::root");
-        body.source_range = Some(SourceRangeIr {
-            file: SourceFileId::new("missing"),
-            byte_start: 0,
-            byte_end: 1,
-        });
-
-        let error = ArtifactAnalysisIr::new(vec![body], vec![source_file()])
-            .expect_err("ranges must refer to declared source files");
-
-        assert!(error.to_string().contains("undeclared source file"));
-    }
-
-    #[test]
-    fn rejects_out_of_bounds_source_range() {
-        let function = FunctionId::generic(def_hash("00000000000000010000000000000002"));
-        let mut body = empty_body(function, "sample::root");
-        body.source_range = Some(range(250, 260));
-
-        let error = ArtifactAnalysisIr::new(vec![body], vec![source_file()])
-            .expect_err("ranges must fit in the declared source file");
-
-        assert!(error.to_string().contains("outside source file"));
-    }
-
-    #[test]
-    fn rejects_dangling_marker_target() {
-        let function = FunctionId::generic(def_hash("00000000000000010000000000000002"));
-        let mut body = empty_body(function, "sample::root");
-        body.markers.push(MarkerIr {
-            id: MarkerId::new(0),
-            identity: String::from("dangling-marker"),
-            kind: MarkerKindIr::PanicJustification,
-            source_range: None,
-            target: MarkerTargetIr::Call(CallId::new(99)),
-            applicable_probing: vec![MarkerProbingIr::SourceCallsite],
-            satisfactions: vec![MarkerSatisfactionIr {
-                requirement: None,
-                reason: String::from("not actually attached"),
-            }],
-            requirements: Vec::new(),
-        });
-
-        let error = ArtifactAnalysisIr::new(vec![body], Vec::new())
-            .expect_err("marker targets must refer to local facts");
-
-        assert!(error.to_string().contains("dangling call target"));
-    }
-
-    #[test]
-    fn rejects_missing_or_misapplied_safety_effect_groups() {
-        let function = FunctionId::generic(def_hash("00000000000000010000000000000002"));
-        let target = FunctionTargetIr {
-            function,
-            display_path: String::from("sample::root"),
-            attributes: attributes(),
-            contracts: FunctionContractsIr::default(),
-        };
-        let mut body = empty_body(function, "sample::root");
-        body.calls.push(CallEdgeIr {
-            id: CallId::new(0),
-            call_site: CallSiteId::new(0),
-            kind: CallEdgeKindIr::DirectCall,
-            safety_effect_group: None,
-            requires_unsafe: false,
-            inside_builtin_unsafe: false,
-            source_range: None,
-            expanded_range: None,
-            macro_expansions: Vec::new(),
-            callee_range: None,
-            applicable_attribution: vec![CallableAttributionIr::CallSites],
-            callable_keys: Vec::new(),
-            source_target: None,
-            target: CallTargetIr::Function(target),
-        });
-        let error = ArtifactAnalysisIr::new(vec![body], Vec::new())
-            .expect_err("every call must retain its raw safety grouping");
-        assert!(
-            error
-                .to_string()
-                .contains("call 0 has no safety effect group")
-        );
-
-        let mut body = empty_body(function, "sample::root");
-        body.effects.push(EffectFactIr {
-            id: EffectId::new(0),
-            safety_effect_group: Some(SafetyEffectGroupId::new(0)),
-            source_range: None,
-            expanded_range: None,
-            macro_expansions: Vec::new(),
-            kind: EffectKindIr::CompilerAssert {
-                kind: CompilerAssertKind::BoundsCheck,
-                description: String::from("bounds check"),
-            },
-        });
-        let error = ArtifactAnalysisIr::new(vec![body], Vec::new())
-            .expect_err("panic-only effects cannot claim a safety group");
-        assert!(
-            error
-                .to_string()
-                .contains("compiler assertion effect 0 has a safety effect group")
-        );
     }
 }

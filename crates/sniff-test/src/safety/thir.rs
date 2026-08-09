@@ -792,7 +792,7 @@ mod tests {
     }
 
     #[test]
-    fn raw_sink_records_calls_and_operations_without_safety_policy() {
+    fn raw_sink_records_policy_neutral_calls_and_operations() {
         let owner = CRATE_DEF_ID.to_def_id();
         let scope_span = span(10, 40);
         let operation_span = span(20, 21);
@@ -818,7 +818,7 @@ mod tests {
         let facts = sink.into_facts();
         assert_eq!(facts.groups.len(), 1);
         assert_eq!(facts.groups[0].owner, owner);
-        assert_eq!(facts.groups[0].effect_group.id, group.id);
+        assert_eq!(facts.groups[0].effect_group, group);
         assert_eq!(facts.operations.len(), 1);
         assert_eq!(facts.operations[0].owner, owner);
         assert_eq!(facts.operations[0].op, SafetyOpKind::DerefRawPointer);
@@ -827,16 +827,13 @@ mod tests {
             facts.operations[0].marker_anchor_spans,
             [scope_span, operation_span]
         );
-        assert_eq!(facts.operations[0].effect_group.id, group.id);
-        assert_eq!(facts.operations[0].effect_group.span, scope_span);
+        assert_eq!(facts.operations[0].effect_group, group);
         assert_eq!(facts.calls.len(), 1);
         assert_eq!(facts.calls[0].owner, owner);
         assert_eq!(facts.calls[0].callee, Some(owner));
         assert_eq!(facts.calls[0].source_callee, Some(owner));
-        assert_eq!(facts.calls[0].call_site, 0);
         assert_eq!(facts.calls[0].span, span(30, 31));
-        assert_eq!(facts.calls[0].effect_group.id, group.id);
-        assert_eq!(facts.calls[0].effect_group.span, scope_span);
+        assert_eq!(facts.calls[0].effect_group, group);
     }
 
     #[test]
@@ -850,8 +847,7 @@ mod tests {
 
         let facts = sink.into_facts();
         assert_eq!(facts.calls.len(), 1);
-        assert_eq!(facts.calls[0].call_site, 0);
-        assert_eq!(facts.calls[0].effect_group.id, 0);
+        assert_eq!(facts.calls[0].span, generated_span);
     }
 
     #[test]

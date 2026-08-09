@@ -1,59 +1,22 @@
 ---
 source: crates/sniff-test/tests/fixtures.rs
-expression: messages
+expression: "report[\"findings\"]"
 ---
 [
   {
-    "artifact": {
-      "crate-name": "macro_expansion"
-    },
-    "findings": [
-      {
-        "kind": "panic-invocation",
-        "level": "deny",
-        "reason": "panic sink core::panicking::panic",
-        "root": "macro_expansion::direct_assert",
-        "root-kind": "concrete",
-        "span": "src/lib.rs:27:5: 27:18",
-        "target": "core::panicking::panic",
-        "trace": [
-          "src/lib.rs:27:5: 27:18: macro_expansion::direct_assert --macro-expansion-> macro core::std::assert",
-          "src/lib.rs:27:5: 27:18: macro core::std::assert --direct-call-> core::panicking::panic"
-        ]
-      },
-      {
-        "kind": "panic-invocation",
-        "level": "deny",
-        "reason": "panic sink core::panicking::panic",
-        "root": "macro_expansion::direct_macro",
-        "root-kind": "concrete",
-        "span": "src/lib.rs:23:5: 23:24",
-        "target": "core::panicking::panic",
-        "trace": [
-          "src/lib.rs:23:5: 23:24: macro_expansion::direct_macro --macro-expansion-> macro macro_expansion::const_assert",
-          "src/lib.rs:3:9: 3:28: macro macro_expansion::const_assert --macro-expansion-> macro core::std::assert",
-          "src/lib.rs:3:9: 3:28: macro core::std::assert --direct-call-> core::panicking::panic"
-        ]
-      },
-      {
-        "kind": "panic-invocation",
-        "level": "deny",
-        "reason": "panic sink core::panicking::panic",
-        "root": "macro_expansion::macro_wrapped",
-        "root-kind": "concrete",
-        "span": "src/lib.rs:14:5: 14:25",
-        "target": "core::panicking::panic",
-        "trace": [
-          "src/lib.rs:14:5: 14:25: macro_expansion::macro_wrapped --macro-expansion-> macro macro_expansion::static_assert",
-          "src/lib.rs:9:9: 9:34: macro macro_expansion::static_assert --macro-expansion-> macro macro_expansion::const_assert",
-          "src/lib.rs:3:9: 3:28: macro macro_expansion::const_assert --macro-expansion-> macro core::std::assert",
-          "src/lib.rs:3:9: 3:28: macro core::std::assert --direct-call-> core::panicking::panic"
-        ]
-      }
-    ],
-    "format-version": 12,
-    "reason": "sniff-test-artifact",
-    "rustc-version": "[RUSTC_VERSION]",
-    "tool-version": "0.1.0"
+    "kind": "panic-invocation",
+    "level": "deny",
+    "reason": "panic sink core::panicking::panic",
+    "root": "macro_expansion::macro_wrapped",
+    "root-kind": "concrete",
+    "root-span": "src/lib.rs:13:1: 13:33",
+    "span": "src/lib.rs:14:5: 14:25",
+    "target": "core::panicking::panic",
+    "trace": [
+      "src/lib.rs:14:5: 14:25: macro_expansion::macro_wrapped --macro-expansion-> macro macro_expansion::static_assert",
+      "src/lib.rs:9:9: 9:34: macro macro_expansion::static_assert --macro-expansion-> macro macro_expansion::const_assert",
+      "src/lib.rs:3:9: 3:28: macro macro_expansion::const_assert --macro-expansion-> macro core::std::assert",
+      "src/lib.rs:3:9: 3:28: macro core::std::assert --direct-call-> core::panicking::panic"
+    ]
   }
 ]

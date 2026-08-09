@@ -1,6 +1,0 @@
-[analysis]
-report-roots = "all"
-
-[analysis.lints]
-ambiguous-effect-marker = "warn"
-ambiguous-effect-requirement = "warn"

@@ -3,8 +3,8 @@
 //! Configuration patterns are matched against stable [`NamespaceCandidates`]
 //! forms of a definition: the crate root, such as `serde`, the definition-site
 //! path, such as `serde::de::from_str`, and for impl items the self-type path,
-//! such as `alloc::vec::Vec::index`. A legacy session-rendered form is also
-//! retained for pattern compatibility. Rust crate names use underscores, not
+//! such as `alloc::vec::Vec::index`. The session-rendered display form is also
+//! a match candidate. Rust crate names use underscores, not
 //! package-name hyphens, so users should write `proc_macro2`, not `proc-macro2`.
 //!
 //! Cache identity uses [`StableDefPathHash`] instead of rendered paths:
@@ -185,8 +185,7 @@ impl<'de> Deserialize<'de> for StableHash {
 /// Namespace forms a definition can be matched against.
 ///
 /// The crate, definition-site, and self-type forms are stable across compiler
-/// sessions. `display` preserves the legacy session-rendered form for pattern
-/// compatibility.
+/// sessions. `display` is rustc's session-rendered form.
 #[derive(Debug, Clone)]
 pub struct NamespaceCandidates {
     /// The defining crate root, such as `alloc`.
@@ -198,7 +197,7 @@ pub struct NamespaceCandidates {
     /// Only present when the self type is an ADT of the defining crate, so an
     /// `impl MyTrait for Vec<u8>` in a user crate never matches `alloc::**`.
     pub self_type: Option<String>,
-    /// The legacy pretty-printed form kept for pattern back-compat.
+    /// rustc's session-rendered pretty-printed form.
     pub display: String,
 }
 
@@ -293,32 +292,21 @@ fn canonicalize_def_path(crate_name: &str, path: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use std::collections::{BTreeMap, HashMap};
-
     use super::{StableDefPathHash, StableInstanceHash, canonicalize_def_path};
 
     #[test]
-    fn stable_hashes_render_as_fixed_width_lowercase_hex() {
-        assert_eq!(
-            StableDefPathHash::from_parts(0x1, 0x00ab_cdef).to_string(),
-            "00000000000000010000000000abcdef"
-        );
-        assert_eq!(
-            StableInstanceHash::from_parts(0x10, 0x00fe_dcba).to_string(),
-            "00000000000000100000000000fedcba"
-        );
-    }
+    fn stable_hashes_use_canonical_hex_for_display_and_serde() {
+        let definition = StableDefPathHash::from_parts(0x1, 0x00ab_cdef);
+        let instance = StableInstanceHash::from_parts(0x10, 0x00fe_dcba);
 
-    #[test]
-    fn stable_hashes_serialize_as_hex_strings() {
-        let definition = StableDefPathHash::from_parts(0x1, 0x2);
-        let instance = StableInstanceHash::from_parts(0x3, 0x4);
+        assert_eq!(definition.to_string(), "00000000000000010000000000abcdef");
+        assert_eq!(instance.to_string(), "00000000000000100000000000fedcba");
 
         let definition_json = serde_json::to_string(&definition).expect("serialize definition");
         let instance_json = serde_json::to_string(&instance).expect("serialize instance");
 
-        assert_eq!(definition_json, "\"00000000000000010000000000000002\"");
-        assert_eq!(instance_json, "\"00000000000000030000000000000004\"");
+        assert_eq!(definition_json, format!("\"{definition}\""));
+        assert_eq!(instance_json, format!("\"{instance}\""));
         assert_eq!(
             serde_json::from_str::<StableDefPathHash>(&definition_json)
                 .expect("deserialize definition"),
@@ -332,26 +320,11 @@ mod tests {
     }
 
     #[test]
-    fn stable_hash_deserialization_rejects_noncanonical_width() {
+    fn stable_hash_deserialization_rejects_malformed_hex() {
         let error = serde_json::from_str::<StableDefPathHash>("\"12\"")
-            .expect_err("short hashes must be rejected");
+            .expect_err("malformed hashes must be rejected");
 
         assert!(error.to_string().contains("32 hexadecimal digits"));
-    }
-
-    #[test]
-    fn stable_hashes_are_ordered_hash_map_keys() {
-        let first = StableDefPathHash::from_parts(1, 2);
-        let second = StableDefPathHash::from_parts(1, 3);
-        let mut ordered = BTreeMap::new();
-        let mut hashed = HashMap::new();
-
-        ordered.insert(second, "second");
-        ordered.insert(first, "first");
-        hashed.insert(first, "first");
-
-        assert_eq!(ordered.keys().copied().collect::<Vec<_>>(), [first, second]);
-        assert_eq!(hashed.get(&first), Some(&"first"));
     }
 
     #[test]

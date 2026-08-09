@@ -1,29 +1,19 @@
 ---
 source: crates/sniff-test/tests/fixtures.rs
-expression: messages
+expression: "report[\"findings\"]"
 ---
 [
   {
-    "artifact": {
-      "crate-name": "vendored_app"
-    },
-    "findings": [
-      {
-        "kind": "documented-panic",
-        "level": "warn",
-        "reason": "vendored::checked documents when it may panic under # Panics",
-        "root": "vendored_app::use_vendored",
-        "root-kind": "concrete",
-        "span": "src/lib.rs:2:5: 2:28",
-        "target": "vendored::checked",
-        "trace": [
-          "src/lib.rs:2:5: 2:28: vendored_app::use_vendored --direct-call-> vendored::checked"
-        ]
-      }
-    ],
-    "format-version": 12,
-    "reason": "sniff-test-artifact",
-    "rustc-version": "[RUSTC_VERSION]",
-    "tool-version": "0.1.0"
+    "kind": "documented-panic",
+    "level": "warn",
+    "reason": "vendored::checked documents when it may panic under # Panics",
+    "root": "vendored_app::use_vendored",
+    "root-kind": "concrete",
+    "root-span": "src/lib.rs:1:1: 1:32",
+    "span": "src/lib.rs:2:5: 2:28",
+    "target": "vendored::checked",
+    "trace": [
+      "src/lib.rs:2:5: 2:28: vendored_app::use_vendored --direct-call-> vendored::checked"
+    ]
   }
 ]

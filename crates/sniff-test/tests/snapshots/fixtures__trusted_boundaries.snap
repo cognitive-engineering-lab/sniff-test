@@ -1,64 +1,57 @@
 ---
 source: crates/sniff-test/tests/fixtures.rs
-expression: messages
+expression: "report[\"findings\"]"
 ---
 [
   {
-    "artifact": {
-      "crate-name": "trusted_boundaries"
-    },
-    "findings": [
-      {
-        "kind": "indirect-call-boundary",
-        "level": "warn",
-        "reason": "indirect call through an opaque callable cannot be verified",
-        "root": "trusted_boundaries::trusted_through_fn_pointer",
-        "root-kind": "concrete",
-        "span": "src/lib.rs:24:5: 24:17",
-        "trace": [
-          "src/lib.rs:24:5: 24:17: trusted_boundaries::trusted_through_fn_pointer --indirect-call-> indirect call Binder { value: fn(bool), bound_vars: [] }"
-        ]
-      },
-      {
-        "kind": "indirect-call-boundary",
-        "level": "warn",
-        "reason": "indirect call through an opaque callable cannot be verified",
-        "root": "trusted_boundaries::trusted_unsafe_through_fn_pointer",
-        "root-kind": "concrete",
-        "span": "src/lib.rs:33:14: 33:22",
-        "trace": [
-          "src/lib.rs:33:14: 33:22: trusted_boundaries::trusted_unsafe_through_fn_pointer --indirect-call-> indirect call Binder { value: unsafe fn(), bound_vars: [] }"
-        ]
-      },
-      {
-        "function": "trusted_boundaries::trusted_unsafe_through_fn_pointer",
-        "kind": "unsafe-call-missing-justification",
-        "level": "warn",
-        "reason": "unsafe call to `unsafe function pointer` has no `// SAFETY:` justification",
-        "root": "trusted_boundaries::trusted_unsafe_through_fn_pointer",
-        "root-kind": "concrete",
-        "span": "src/lib.rs:33:14: 33:22",
-        "target": "unsafe function pointer",
-        "trace": [
-          "src/lib.rs:33:14: 33:22: trusted_boundaries::trusted_unsafe_through_fn_pointer --indirect-call-> indirect call Binder { value: unsafe fn(), bound_vars: [] }"
-        ]
-      },
-      {
-        "kind": "trusted-panic",
-        "level": "warn",
-        "reason": "trusted_boundaries::trusted_doc_helper documents when it may panic under # Panics",
-        "root": "trusted_boundaries::trusted_with_docs",
-        "root-kind": "concrete",
-        "span": "src/lib.rs:6:5: 6:29",
-        "target": "trusted_boundaries::trusted_doc_helper",
-        "trace": [
-          "src/lib.rs:6:5: 6:29: trusted_boundaries::trusted_with_docs --direct-call-> trusted_boundaries::trusted_doc_helper"
-        ]
-      }
-    ],
-    "format-version": 12,
-    "reason": "sniff-test-artifact",
-    "rustc-version": "[RUSTC_VERSION]",
-    "tool-version": "0.1.0"
+    "kind": "indirect-call-boundary",
+    "level": "warn",
+    "reason": "indirect call through a function pointer cannot be verified",
+    "root": "trusted_boundaries::trusted_through_fn_pointer",
+    "root-kind": "concrete",
+    "root-span": "src/lib.rs:22:1: 22:65",
+    "span": "src/lib.rs:24:5: 24:17",
+    "trace": [
+      "src/lib.rs:24:5: 24:17: trusted_boundaries::trusted_through_fn_pointer --indirect-call-> indirect call through a function pointer"
+    ]
+  },
+  {
+    "kind": "indirect-call-boundary",
+    "level": "warn",
+    "reason": "indirect call through an unsafe function pointer cannot be verified",
+    "root": "trusted_boundaries::trusted_unsafe_through_fn_pointer",
+    "root-kind": "concrete",
+    "root-span": "src/lib.rs:31:1: 31:82",
+    "span": "src/lib.rs:33:14: 33:22",
+    "trace": [
+      "src/lib.rs:33:14: 33:22: trusted_boundaries::trusted_unsafe_through_fn_pointer --indirect-call-> indirect call through an unsafe function pointer"
+    ]
+  },
+  {
+    "function": "trusted_boundaries::trusted_unsafe_through_fn_pointer",
+    "kind": "unsafe-call-missing-justification",
+    "level": "warn",
+    "reason": "unsafe call to `unsafe function pointer` has no `// SAFETY:` justification",
+    "root": "trusted_boundaries::trusted_unsafe_through_fn_pointer",
+    "root-kind": "concrete",
+    "root-span": "src/lib.rs:31:1: 31:82",
+    "span": "src/lib.rs:33:14: 33:22",
+    "target": "unsafe function pointer",
+    "trace": [
+      "src/lib.rs:33:14: 33:22: trusted_boundaries::trusted_unsafe_through_fn_pointer --indirect-call-> indirect call through an unsafe function pointer"
+    ]
+  },
+  {
+    "kind": "trusted-panic",
+    "level": "warn",
+    "reason": "trusted_boundaries::trusted_doc_helper documents when it may panic under # Panics",
+    "root": "trusted_boundaries::trusted_with_docs",
+    "root-kind": "concrete",
+    "root-span": "src/lib.rs:5:1: 5:37",
+    "span": "src/lib.rs:6:5: 6:29",
+    "target": "trusted_boundaries::trusted_doc_helper",
+    "trace": [
+      "src/lib.rs:6:5: 6:29: trusted_boundaries::trusted_with_docs --direct-call-> trusted_boundaries::trusted_doc_helper"
+    ]
   }
 ]

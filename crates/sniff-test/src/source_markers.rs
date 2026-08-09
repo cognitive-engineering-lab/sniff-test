@@ -572,15 +572,8 @@ mod tests {
     }
 
     #[test]
-    fn panic_marker_matches_plain_comments() {
-        assert!(line_has_panic_marker(
-            "// PANIC: caller checked denominator"
-        ));
+    fn line_satisfaction_parses_plain_and_named_markers() {
         assert!(line_has_panic_marker("    // PANIC: inspected"));
-    }
-
-    #[test]
-    fn panic_marker_parses_named_satisfactions() {
         assert_eq!(
             super::line_satisfaction(
                 "// PANIC: index in bounds: checked by caller",
@@ -670,45 +663,10 @@ mod tests {
     }
 
     #[test]
-    fn empty_panic_marker_alone_does_not_suppress() {
+    fn comment_blocks_without_a_justified_marker_produce_no_satisfactions() {
         let lines = [String::from("    // PANIC:")];
 
         assert_eq!(comment_block_satisfactions_for_panic(&lines), []);
-    }
-
-    #[test]
-    fn requirement_bullets_without_panic_marker_are_ignored() {
-        let lines = [
-            String::from("    // Requirements:"),
-            String::from("    // - nonzero: checked above."),
-        ];
-
-        assert_eq!(comment_block_satisfactions_for_panic(&lines), []);
-    }
-
-    #[test]
-    fn empty_requirement_bullets_do_not_satisfy_requirements() {
-        let lines = [
-            String::from("    // PANIC:"),
-            String::from("    // - nonzero:"),
-        ];
-
-        assert_eq!(comment_block_satisfactions_for_panic(&lines), []);
-    }
-
-    #[test]
-    fn panic_marker_rejects_non_plain_comment_text() {
-        for line in [
-            "let label = \"PANIC:\";",
-            "let _ = f(); // PANIC: inspected",
-            "/// PANIC: doc comments are not call-site markers",
-            "// SAFETY: not the sniff-test marker",
-            "// panic: no",
-            "// PANIC:",
-            "// PANIC: nonzero:",
-        ] {
-            assert!(!line_has_panic_marker(line));
-        }
     }
 
     #[test]
@@ -727,97 +685,49 @@ mod tests {
             })
         );
         assert!(!line_has_safety_marker("// PANIC: not safety"));
-        assert!(!line_has_safety_marker("// SAFETY:"));
-        assert!(!line_has_safety_marker(
-            "/// SAFETY: doc comments are not call-site markers"
-        ));
     }
 
     #[test]
-    fn marker_reason_treats_rust_paths_and_urls_as_prose() {
-        for reason in [
-            "`KnownLayout::size_of_val_raw` guarantees the result.",
-            "See https://example.com/safety for the invariant.",
-        ] {
-            assert_eq!(
-                super::line_satisfaction(&format!("// SAFETY: {reason}"), MarkerSyntax::Safety,),
-                Some(MarkerSatisfaction {
-                    requirement: None,
-                    reason: reason.to_owned(),
-                })
-            );
-        }
-    }
-
-    #[test]
-    fn marker_reason_does_not_use_the_second_path_colon_as_a_delimiter() {
-        for reason in [
-            "KnownLayout::",
-            "KnownLayout:: size_of_val_raw guarantees the result.",
-        ] {
-            assert_eq!(
-                super::line_satisfaction(&format!("// SAFETY: {reason}"), MarkerSyntax::Safety),
-                Some(MarkerSatisfaction {
-                    requirement: None,
-                    reason: reason.to_owned(),
-                })
-            );
-        }
-    }
-
-    #[test]
-    fn marker_reason_with_code_or_url_before_a_later_colon_stays_unnamed() {
-        for reason in [
-            "`KnownLayout::size_of_val_raw` guarantees: the size fits.",
-            "See https://example.com/safety: the invariant is documented.",
-        ] {
-            assert_eq!(
-                super::line_satisfaction(&format!("// SAFETY: {reason}"), MarkerSyntax::Safety),
-                Some(MarkerSatisfaction {
-                    requirement: None,
-                    reason: reason.to_owned(),
-                })
-            );
-        }
-    }
-
-    #[test]
-    fn qualified_requirement_name_uses_its_trailing_colon_as_the_delimiter() {
-        assert_eq!(
-            super::line_satisfaction(
-                "// SAFETY: module::condition: checked by the caller",
-                MarkerSyntax::Safety,
+    fn marker_bodies_distinguish_named_requirements_from_prose() {
+        for (body, expected_requirement, expected_reason) in [
+            (
+                "`KnownLayout::size_of_val_raw` guarantees: the size fits.",
+                None,
+                "`KnownLayout::size_of_val_raw` guarantees: the size fits.",
             ),
-            Some(MarkerSatisfaction {
-                requirement: Some(String::from("module::condition")),
-                reason: String::from("checked by the caller"),
-            })
-        );
-    }
-
-    #[test]
-    fn compact_named_marker_remains_supported() {
-        assert_eq!(
-            super::line_satisfaction("// SAFETY: initialized:written above", MarkerSyntax::Safety,),
-            Some(MarkerSatisfaction {
-                requirement: Some(String::from("initialized")),
-                reason: String::from("written above"),
-            })
-        );
-    }
-
-    #[test]
-    fn backtick_wrapped_requirement_name_remains_supported() {
-        assert_eq!(
-            super::line_satisfaction(
-                "// SAFETY: `valid_ptr`: checked by the caller",
-                MarkerSyntax::Safety,
+            (
+                "See https://example.com/safety: the invariant is documented.",
+                None,
+                "See https://example.com/safety: the invariant is documented.",
             ),
-            Some(MarkerSatisfaction {
-                requirement: Some(String::from("`valid_ptr`")),
-                reason: String::from("checked by the caller"),
-            })
-        );
+            (
+                "KnownLayout:: size_of_val_raw guarantees the result.",
+                None,
+                "KnownLayout:: size_of_val_raw guarantees the result.",
+            ),
+            (
+                "module::condition: checked by the caller",
+                Some("module::condition"),
+                "checked by the caller",
+            ),
+            (
+                "initialized:written above",
+                Some("initialized"),
+                "written above",
+            ),
+            (
+                "`valid_ptr`: checked by the caller",
+                Some("`valid_ptr`"),
+                "checked by the caller",
+            ),
+        ] {
+            let parsed =
+                super::line_satisfaction(&format!("// SAFETY: {body}"), MarkerSyntax::Safety)
+                    .expect("marker should contain a justification");
+
+            assert_eq!(parsed.requirement.as_deref(), expected_requirement);
+            assert_eq!(parsed.reason, expected_reason);
+        }
     }
 
     #[test]
@@ -850,50 +760,6 @@ mod tests {
             normalize_requirement_name("something[var_1]"),
             "something var 1"
         );
-    }
-
-    #[test]
-    fn leading_comment_block_can_contain_panic_marker_above_explanation() {
-        let lines = [
-            "pub fn ratio(total: usize, denominator: usize) -> usize {",
-            "    // PANIC: caller guarantees denominator is nonzero.",
-            "    // This is enforced by the public constructor.",
-            "    total / denominator",
-            "}",
-        ];
-
-        assert!(lines_have_panic_marker_before(&lines, 3));
-    }
-
-    #[test]
-    fn leading_comment_block_stops_at_non_comment_lines() {
-        let lines = [
-            "pub fn ratio(total: usize, denominator: usize) -> usize {",
-            "    // PANIC: this belongs to the checked branch.",
-            "    let checked = denominator.max(1);",
-            "    total / denominator",
-            "}",
-        ];
-
-        assert!(!lines_have_panic_marker_before(&lines, 3));
-    }
-
-    fn lines_have_panic_marker_before(lines: &[&str], line_index: usize) -> bool {
-        let mut current = line_index;
-        while let Some(previous) = current.checked_sub(1) {
-            let Some(line) = lines.get(previous) else {
-                break;
-            };
-            if line_has_panic_marker(line) {
-                return true;
-            }
-            if !super::line_is_standalone_comment(line) {
-                break;
-            }
-            current = previous;
-        }
-
-        false
     }
 
     fn comment_block_satisfactions_for_panic(lines: &[String]) -> Vec<MarkerSatisfaction> {

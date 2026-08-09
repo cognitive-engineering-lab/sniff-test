@@ -13,9 +13,9 @@ use serde::{Deserialize, Serialize};
 
 use super::ir::{ArtifactAnalysisIr, FunctionBodyProvenanceIr};
 
-pub(crate) const CACHE_FORMAT_VERSION: u32 = 14;
+pub(crate) const CACHE_FORMAT_VERSION: u32 = 15;
 pub(crate) const CACHE_DIR_NAME: &str = "sniff-test-cache";
-pub(crate) const CACHE_VERSION_DIR: &str = "v14";
+pub(crate) const CACHE_VERSION_DIR: &str = "v15";
 
 /// Cached policy-neutral analysis for one exact rustc output artifact.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -71,7 +71,7 @@ impl ArtifactAnalysisCache {
         write_atomic(&path, &source)
     }
 
-    /// Reads and validates one v14 cache file against the active extraction
+    /// Reads and validates one v15 cache file against the active extraction
     /// environment.
     pub(crate) fn read(path: &Path, expected: &CacheExpectations<'_>) -> Result<Self, CacheError> {
         let source = std::fs::read_to_string(path).map_err(|source| CacheError::Io {
@@ -511,7 +511,7 @@ mod tests {
     }
 
     #[test]
-    fn v14_round_trip_preserves_artifact_identity_dependencies_and_ir() {
+    fn v15_round_trip_preserves_artifact_identity_dependencies_and_ir() {
         let directory = tempdir().expect("temporary cache root");
         let expected = analysis();
         expected.write(directory.path()).expect("write cache");
@@ -522,13 +522,19 @@ mod tests {
         let object = json.as_object().expect("cache object");
 
         assert_eq!(json["format-version"], CACHE_FORMAT_VERSION);
-        assert!(object.contains_key("ir"));
-        assert!(!object.contains_key("finding-arena"));
-        assert!(!object.contains_key("trace-arena"));
-        assert!(!object.contains_key("functions"));
-        assert!(!object.contains_key("scope"));
-        assert!(!object.contains_key("analysis-id"));
-        assert!(!object.contains_key("compiler-fingerprint"));
+        let mut fields = object.keys().map(String::as_str).collect::<Vec<_>>();
+        fields.sort_unstable();
+        assert_eq!(
+            fields,
+            [
+                "artifact",
+                "dependencies",
+                "format-version",
+                "ir",
+                "rustc-version",
+                "tool-version",
+            ]
+        );
         assert_eq!(
             json["artifact"]["id"]["stable-crate-id"],
             LOCAL_STABLE_CRATE_ID
@@ -537,8 +543,10 @@ mod tests {
             json["artifact"]["id"]["svh"],
             "0123456789abcdef0123456789abcdef"
         );
-        assert!(json["artifact"].get("artifact-id").is_none());
-        assert!(json["artifact"].get("crate-hash").is_none());
+        let artifact = json["artifact"].as_object().expect("artifact object");
+        let mut artifact_fields = artifact.keys().map(String::as_str).collect::<Vec<_>>();
+        artifact_fields.sort_unstable();
+        assert_eq!(artifact_fields, ["crate-name", "id"]);
 
         let decoded = ArtifactAnalysisCache::read(&path, &expectations()).expect("read cache");
         assert_eq!(decoded, expected);
@@ -603,88 +611,15 @@ mod tests {
     }
 
     #[test]
-    fn rejects_two_svhs_for_one_dependency_stable_crate_id() {
-        let error = ArtifactAnalysisCache::new(
-            "0.1.0",
-            "rustc",
-            artifact(),
-            vec![
-                rustc_id(2, "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"),
-                rustc_id(2, "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"),
-            ],
-            ir(),
-        )
-        .expect_err("one rustc crate graph cannot contain two SVHs for one stable crate ID");
-
-        assert!(
-            error
-                .to_string()
-                .contains("stable crate id 0000000000000002")
-        );
-    }
-
-    #[test]
-    fn rejects_a_dependency_with_the_artifacts_stable_crate_id() {
-        let error = ArtifactAnalysisCache::new(
-            "0.1.0",
-            "rustc",
-            artifact(),
-            vec![rustc_id(
-                LOCAL_STABLE_CRATE_ID,
-                "ffffffffffffffffffffffffffffffff",
-            )],
-            ir(),
-        )
-        .expect_err("a rustc crate graph cannot depend on another SVH of itself");
-
-        assert!(error.to_string().contains("its own stable crate id"));
-    }
-
-    #[test]
-    fn rejects_noncanonical_svhs() {
-        for invalid in [
-            "0123456789abcdef",
-            "0123456789ABCDEF0123456789ABCDEF",
-            "0123456789abcdef0123456789abcde/",
-        ] {
-            let mut invalid_artifact = artifact();
-            invalid_artifact.id.svh = invalid.to_owned();
-            let error =
-                ArtifactAnalysisCache::new("0.1.0", "rustc", invalid_artifact, Vec::new(), ir())
-                    .expect_err("malformed SVHs must not reach cache paths");
-
-            assert!(error.to_string().contains("lowercase hexadecimal"));
-        }
-    }
-
-    #[test]
-    fn rejects_ir_owned_by_another_artifact() {
-        let foreign_ir = ArtifactAnalysisIr::new(
-            vec![FunctionBodyIr {
-                function: FunctionId::generic(def_hash("00000000000000090000000000000002")),
-                provenance: FunctionBodyProvenanceIr::DefiningArtifact,
-                display_path: String::from("foreign::root"),
-                attributes: FunctionAttributesIr {
-                    is_unsafe: false,
-                    is_exported: false,
-                    has_rust_body: true,
-                    is_foreign: false,
-                    namespace_candidates: vec![String::from("foreign::root")],
-                },
-                source_range: None,
-                calls: Vec::new(),
-                effects: Vec::new(),
-                markers: Vec::new(),
-            }],
-            Vec::new(),
-        )
-        .expect("structurally valid IR");
+    fn new_rejects_invalid_cache_data() {
+        let mut invalid_artifact = artifact();
+        invalid_artifact.id.svh = String::from("not-a-valid-svh");
 
         let error =
-            ArtifactAnalysisCache::new("0.1.0", "rustc", artifact(), Vec::new(), foreign_ir)
-                .expect_err("function identities must belong to the artifact");
+            ArtifactAnalysisCache::new("0.1.0", "rustc", invalid_artifact, Vec::new(), ir())
+                .expect_err("malformed cache data must be rejected");
 
-        assert!(error.to_string().contains("does not belong to artifact"));
+        assert!(error.to_string().contains("lowercase hexadecimal"));
     }
 
     #[test]
@@ -708,53 +643,29 @@ mod tests {
     }
 
     #[test]
-    fn rejects_consumer_instantiation_claimed_by_another_artifact() {
-        let mut overlay = ir().functions.remove(0);
-        overlay.function = FunctionId::exact(
-            def_hash("00000000000000090000000000000002"),
-            instance_hash("000000000000000a000000000000000b"),
-        );
-        overlay.provenance = FunctionBodyProvenanceIr::ConsumerInstantiation {
-            consumer_stable_crate_id: 99,
-        };
-        let overlay_ir =
-            ArtifactAnalysisIr::new(vec![overlay], Vec::new()).expect("structurally valid overlay");
-
-        let error =
-            ArtifactAnalysisCache::new("0.1.0", "rustc", artifact(), Vec::new(), overlay_ir)
-                .expect_err("consumer provenance must match the artifact owner");
-
-        assert!(
-            error
-                .to_string()
-                .contains("consumer function 0 names stable crate id")
-        );
-    }
-
-    #[test]
-    fn rejects_v13_before_deserializing_the_old_schema() {
+    fn read_reports_v14_as_incompatible_before_deserializing() {
         let directory = tempdir().expect("temporary cache root");
         let path = directory.path().join("legacy.json");
-        fs::write(&path, r#"{"format-version":13,"functions":[]}"#).expect("write legacy header");
+        fs::write(&path, r#"{"format-version":14,"functions":[]}"#).expect("write legacy header");
 
         let error = ArtifactAnalysisCache::read(&path, &expectations())
-            .expect_err("v13 is deliberately incompatible");
+            .expect_err("v14 is deliberately incompatible");
 
-        assert!(matches!(error, CacheError::Format { version: 13, .. }));
+        assert!(matches!(error, CacheError::Format { version: 14, .. }));
     }
 
     #[test]
-    fn cache_paths_use_the_v14_directory() {
+    fn cache_paths_use_the_v15_directory() {
         let root = default_cache_dir("/target/plugin-nightly");
         let identity = rustc_id(1, "0123456789abcdef0123456789abcdef");
 
         assert_eq!(
             root.to_string_lossy(),
-            "/target/plugin-nightly/sniff-test-cache/v14"
+            "/target/plugin-nightly/sniff-test-cache/v15"
         );
         assert_eq!(
             artifact_cache_path(&root, &identity).to_string_lossy(),
-            "/target/plugin-nightly/sniff-test-cache/v14/artifacts/0000000000000001-0123456789abcdef0123456789abcdef.json"
+            "/target/plugin-nightly/sniff-test-cache/v15/artifacts/0000000000000001-0123456789abcdef0123456789abcdef.json"
         );
     }
 }

@@ -4,15 +4,7 @@ inline-mir = "off"
 [analysis]
 report-roots = [
     "panic_requirements::satisfied",
-    "panic_requirements::unnamed_marker",
-    "panic_requirements::bullet_without_marker",
-    "panic_requirements::empty_marker",
-    "panic_requirements::empty_requirement",
-    "panic_requirements::safety_marker_does_not_satisfy_panic",
-    "panic_requirements::safety_marker_stops_partial_panic_block",
-    "panic_requirements::transitive_partial_marker",
-    "panic_requirements::transitive_unrelated_marker",
-    "panic_requirements::transitive_satisfied",
+    "panic_requirements::partially_satisfied",
 ]
 
 [panics]

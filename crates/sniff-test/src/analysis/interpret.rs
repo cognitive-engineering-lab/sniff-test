@@ -268,12 +268,6 @@ pub(crate) struct InterpretationRoot {
     pub(crate) kind: ReportRootKind,
 }
 
-/// Interpretation for all selected roots.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct InterpretationResult {
-    pub(crate) roots: Vec<RootInterpretation>,
-}
-
 /// Findings and completeness for one selected root.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct RootInterpretation {
@@ -356,36 +350,17 @@ pub(crate) enum InterpretedSafetyCallKind {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum InterpretedFindingKind {
-    CompilerAssert {
-        kind: CompilerAssertKind,
-        description: String,
-    },
+    CompilerAssert { kind: CompilerAssertKind },
     PanicSink,
-    DocumentedPanic {
-        trusted: bool,
-    },
-    OpaquePanicBoundary {
-        description: String,
-    },
+    DocumentedPanic { trusted: bool },
+    OpaquePanicBoundary { description: String },
     MissingSafetyDocs,
-    SafetyCall {
-        kind: InterpretedSafetyCallKind,
-    },
-    UnsafeOperation {
-        kind: SafetyOpKind,
-    },
-    AmbiguousPanicRequirement {
-        normalized_name: String,
-    },
-    AmbiguousSafetyRequirement {
-        normalized_name: String,
-    },
-    AmbiguousPanicMarker {
-        effect_count: usize,
-    },
-    AmbiguousSafetyMarker {
-        effect_count: usize,
-    },
+    SafetyCall { kind: InterpretedSafetyCallKind },
+    UnsafeOperation { kind: SafetyOpKind },
+    AmbiguousPanicRequirement { normalized_name: String },
+    AmbiguousSafetyRequirement { normalized_name: String },
+    AmbiguousPanicMarker { effect_count: usize },
+    AmbiguousSafetyMarker { effect_count: usize },
 }
 
 /// Interprets only graph portions reachable from the supplied workspace roots.
@@ -394,29 +369,25 @@ pub(crate) fn interpret(
     lookup: &dyn FunctionLookup,
     roots: &[InterpretationRoot],
     config: &SniffTestConfig,
-) -> InterpretationResult {
-    InterpretationResult {
-        roots: roots
-            .iter()
-            .cloned()
-            .map(|root| {
-                let panic =
-                    DomainInterpreter::new(lookup, &root, config, EffectDomain::Panic).run();
-                let safety =
-                    DomainInterpreter::new(lookup, &root, config, EffectDomain::Safety).run();
-                let mut findings = panic.findings;
-                findings.extend(safety.findings);
-                RootInterpretation {
-                    root,
-                    findings,
-                    completeness: EffectCompleteness {
-                        panic: panic.completeness,
-                        safety: safety.completeness,
-                    },
-                }
-            })
-            .collect(),
-    }
+) -> Vec<RootInterpretation> {
+    roots
+        .iter()
+        .cloned()
+        .map(|root| {
+            let panic = DomainInterpreter::new(lookup, &root, config, EffectDomain::Panic).run();
+            let safety = DomainInterpreter::new(lookup, &root, config, EffectDomain::Safety).run();
+            let mut findings = panic.findings;
+            findings.extend(safety.findings);
+            RootInterpretation {
+                root,
+                findings,
+                completeness: EffectCompleteness {
+                    panic: panic.completeness,
+                    safety: safety.completeness,
+                },
+            }
+        })
+        .collect()
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -602,8 +573,8 @@ impl<'a> DomainInterpreter<'a> {
     }
 
     fn drain_actions(&mut self) {
-        // Calls are scheduled in reverse source order, so this LIFO worklist
-        // preserves the former depth-first traversal without recursive frames.
+        // Calls are scheduled in reverse source order so this LIFO worklist
+        // traverses them depth-first in source order.
         while let Some(action) = self.actions.pop() {
             match action {
                 TraversalAction::Visit(visit) => self.visit(visit),
@@ -948,7 +919,7 @@ impl<'a> DomainInterpreter<'a> {
     ) {
         for effect in &body.effects {
             match (&self.domain, &effect.kind) {
-                (EffectDomain::Panic, EffectKindIr::CompilerAssert { kind, description })
+                (EffectDomain::Panic, EffectKindIr::CompilerAssert { kind, .. })
                     if !self.suppresses_safety_precondition_assert(body, *kind) =>
                 {
                     let mut effect_trace = *trace;
@@ -971,7 +942,10 @@ impl<'a> DomainInterpreter<'a> {
                                 .clone()
                                 .or_else(|| effect.source_range.clone()),
                             target: None,
-                            target_path: Some(format!("compiler assert {description}")),
+                            target_path: Some(format!(
+                                "compiler assert {}",
+                                kind.human_description()
+                            )),
                         },
                     );
                     let satisfactions = self.satisfactions_for(
@@ -996,10 +970,7 @@ impl<'a> DomainInterpreter<'a> {
                     if missing_requirements(&[], &satisfactions).is_some() {
                         self.push_finding(
                             endpoint,
-                            InterpretedFindingKind::CompilerAssert {
-                                kind: *kind,
-                                description: description.clone(),
-                            },
+                            InterpretedFindingKind::CompilerAssert { kind: *kind },
                             body,
                             None,
                             effect.source_range.clone(),
@@ -1136,7 +1107,9 @@ impl<'a> DomainInterpreter<'a> {
             return;
         }
         let (metadata, opaque_description) = call_target(call);
-        let target = interpreted_target(metadata, opaque_description);
+        let opaque_description =
+            opaque_description.map(|description| opaque_call_description(call, description));
+        let target = interpreted_target(metadata, opaque_description.as_deref());
         let mut next_trace = *trace;
         let (caller, caller_path) = append_macro_expansion_steps(
             &mut self.trace_nodes,
@@ -1169,7 +1142,7 @@ impl<'a> DomainInterpreter<'a> {
                 resolved,
                 call,
                 metadata,
-                opaque_description,
+                opaque_description.as_deref(),
                 target,
                 &satisfactions,
                 next_trace,
@@ -1180,7 +1153,7 @@ impl<'a> DomainInterpreter<'a> {
                 resolved,
                 call,
                 metadata,
-                opaque_description,
+                opaque_description.as_deref(),
                 target,
                 &satisfactions,
                 next_trace,
@@ -1980,11 +1953,12 @@ impl<'a> DomainInterpreter<'a> {
         raw: Option<&RawContractIr>,
         domain: EffectDomain,
     ) -> Option<EffectiveContract> {
-        let overrides = match domain {
-            EffectDomain::Panic => &self.config.panics.documentation_overrides,
-            EffectDomain::Safety => &self.config.safety.documentation_overrides,
-        };
-        if let Some(markdown) = overrides.markdown_for_candidates(candidates) {
+        if let Some(markdown) = self
+            .config
+            .documentation
+            .overrides
+            .markdown_for_candidates(candidates)
+        {
             let summary = match domain {
                 EffectDomain::Panic => panic_contract_doc_summary_from_markdown(markdown),
                 EffectDomain::Safety => safety_contract_doc_summary_from_markdown(markdown),
@@ -2464,6 +2438,17 @@ fn interpreted_target(
         })
 }
 
+fn opaque_call_description(call: &CallEdgeIr, description: &str) -> String {
+    if call.kind != CallEdgeKindIr::IndirectCall {
+        return description.to_owned();
+    }
+    if call.requires_unsafe {
+        String::from("indirect call through an unsafe function pointer")
+    } else {
+        String::from("indirect call through a function pointer")
+    }
+}
+
 fn is_duplicate_bridge(kind: CallEdgeKindIr) -> bool {
     matches!(
         kind,
@@ -2631,7 +2616,7 @@ mod tests {
     }
 
     #[test]
-    fn traverses_local_dependency_and_private_helper_but_not_unused_dependency_ir() {
+    fn reports_effects_only_from_reachable_dependency_bodies() {
         let root = id(1, 1);
         let dependency = id(2, 1);
         let helper = id(2, 2);
@@ -2654,7 +2639,7 @@ mod tests {
         let lookup = LayeredFunctionLookup::new(vec![&local, &dependencies]);
 
         let result = interpret(&lookup, &[report_root(root)], &SniffTestConfig::default());
-        let root_result = &result.roots[0];
+        let root_result = &result[0];
 
         assert_eq!(root_result.findings.len(), 1);
         assert!(matches!(
@@ -2665,6 +2650,14 @@ mod tests {
             }
         ));
         assert_eq!(root_result.findings[0].trace.steps.len(), 3);
+        assert_eq!(
+            root_result.findings[0]
+                .trace
+                .steps
+                .last()
+                .and_then(|step| step.target_path.as_deref()),
+            Some("compiler assert index out of bounds")
+        );
         assert!(root_result.completeness.panic.complete);
         assert!(root_result.completeness.safety.complete);
     }
@@ -2695,7 +2688,7 @@ mod tests {
         .expect("valid test configuration");
 
         let result = interpret(&analysis, &[report_root(root)], &config);
-        let finding = &result.roots[0].findings[0];
+        let finding = &result[0].findings[0];
 
         assert_eq!(finding.source_range, Some(source_range(10, 15)));
         assert_eq!(finding.trace.steps.len(), 3);
@@ -2748,7 +2741,7 @@ mod tests {
         let analysis = ir_with_source(vec![body(root, "workspace::root").with_effect(effect)]);
 
         let result = interpret(&analysis, &[report_root(root)], &SniffTestConfig::default());
-        let finding = &result.roots[0].findings[0];
+        let finding = &result[0].findings[0];
 
         assert_eq!(finding.source_range, Some(source_range(10, 15)));
         assert_eq!(
@@ -2791,7 +2784,7 @@ mod tests {
         let analysis = ir_with_source(vec![body(root, "workspace::root").with_effect(effect)]);
 
         let result = interpret(&analysis, &[report_root(root)], &SniffTestConfig::default());
-        let finding = &result.roots[0].findings[0];
+        let finding = &result[0].findings[0];
 
         assert_eq!(finding.source_range, Some(source_range(10, 15)));
         assert_eq!(
@@ -2828,7 +2821,7 @@ mod tests {
             &SniffTestConfig::default(),
         );
         assert!(matches!(
-            fallback.roots[0].findings[0].kind,
+            fallback[0].findings[0].kind,
             InterpretedFindingKind::CompilerAssert {
                 kind: CompilerAssertKind::BoundsCheck,
                 ..
@@ -2846,9 +2839,9 @@ mod tests {
             &[report_root(exact)],
             &SniffTestConfig::default(),
         );
-        assert_eq!(preferred.roots[0].findings.len(), 1);
+        assert_eq!(preferred[0].findings.len(), 1);
         assert!(matches!(
-            preferred.roots[0].findings[0].kind,
+            preferred[0].findings[0].kind,
             InterpretedFindingKind::CompilerAssert {
                 kind: CompilerAssertKind::Overflow,
                 ..
@@ -2885,7 +2878,7 @@ mod tests {
             FunctionBodyProvenanceIr::ConsumerInstantiation { .. }
         ));
         let result = interpret(&lookup, &[report_root(root)], &SniffTestConfig::default());
-        let unsafe_findings = result.roots[0]
+        let unsafe_findings = result[0]
             .findings
             .iter()
             .filter(|finding| {
@@ -2964,23 +2957,11 @@ mod tests {
             &SniffTestConfig::default(),
         );
 
-        assert!(has_assert(
-            &result.roots[0],
-            CompilerAssertKind::BoundsCheck
-        ));
-        assert!(!has_assert(
-            &result.roots[0],
-            CompilerAssertKind::DivisionByZero
-        ));
-        assert!(has_assert(
-            &result.roots[1],
-            CompilerAssertKind::DivisionByZero
-        ));
-        assert!(!has_assert(
-            &result.roots[1],
-            CompilerAssertKind::BoundsCheck
-        ));
-        for root in &result.roots {
+        assert!(has_assert(&result[0], CompilerAssertKind::BoundsCheck));
+        assert!(!has_assert(&result[0], CompilerAssertKind::DivisionByZero));
+        assert!(has_assert(&result[1], CompilerAssertKind::DivisionByZero));
+        assert!(!has_assert(&result[1], CompilerAssertKind::BoundsCheck));
+        for root in &result {
             assert!(root.findings.iter().any(|finding| matches!(
                 finding.kind,
                 InterpretedFindingKind::UnsafeOperation {
@@ -3053,7 +3034,7 @@ mod tests {
         let result = interpret(&lookup, &[report_root(root)], &config);
 
         assert!(
-            has_assert(&result.roots[0], CompilerAssertKind::Overflow),
+            has_assert(&result[0], CompilerAssertKind::Overflow),
             "the callable target must resolve in the artifact that exposed its exact overlay"
         );
     }
@@ -3132,7 +3113,7 @@ mod tests {
         let result = interpret(&lookup, &[report_root(root)], &config);
 
         assert!(
-            !result.roots[0].findings.iter().any(|finding| matches!(
+            !result[0].findings.iter().any(|finding| matches!(
                 finding.kind,
                 InterpretedFindingKind::AmbiguousSafetyMarker { .. }
             )),
@@ -3226,7 +3207,7 @@ mod tests {
 
         let result = interpret(&lookup, &[report_root(root)], &SniffTestConfig::default());
 
-        assert!(!result.roots[0].findings.iter().any(|finding| matches!(
+        assert!(!result[0].findings.iter().any(|finding| matches!(
             finding.kind,
             InterpretedFindingKind::AmbiguousSafetyMarker { .. }
         )));
@@ -3279,7 +3260,7 @@ mod tests {
         let result = interpret(&lookup, &[report_root(root)], &SniffTestConfig::default());
 
         assert!(
-            !result.roots[0]
+            !result[0]
                 .findings
                 .iter()
                 .any(|finding| matches!(finding.kind, InterpretedFindingKind::SafetyCall { .. }))
@@ -3351,7 +3332,7 @@ mod tests {
         let result = interpret(&lookup, &[report_root(root)], &SniffTestConfig::default());
 
         assert!(
-            !result.roots[0]
+            !result[0]
                 .findings
                 .iter()
                 .any(|finding| matches!(finding.kind, InterpretedFindingKind::SafetyCall { .. }))
@@ -3427,7 +3408,7 @@ mod tests {
 
         let result = interpret(&lookup, &[report_root(root)], &SniffTestConfig::default());
 
-        assert!(result.roots[0].findings.is_empty());
+        assert!(result[0].findings.is_empty());
     }
 
     #[test]
@@ -3496,7 +3477,7 @@ mod tests {
         let lookup = LayeredFunctionLookup::new(vec![&local, &dependency]);
 
         let result = interpret(&lookup, &[report_root(root)], &SniffTestConfig::default());
-        let finding = result.roots[0]
+        let finding = result[0]
             .findings
             .iter()
             .find(|finding| matches!(finding.kind, InterpretedFindingKind::DocumentedPanic { .. }))
@@ -3506,7 +3487,7 @@ mod tests {
     }
 
     #[test]
-    fn consumer_overlay_does_not_borrow_an_ambiguous_source_marker() {
+    fn ambiguous_source_markers_leave_consumer_overlay_obligations_unsatisfied() {
         let root = id(1, 1);
         let dependency_generic = id(2, 1);
         let dependency_exact =
@@ -3579,7 +3560,7 @@ mod tests {
         let result = interpret(&lookup, &[report_root(root)], &SniffTestConfig::default());
 
         assert!(
-            result.roots[0]
+            result[0]
                 .findings
                 .iter()
                 .any(|finding| matches!(finding.kind, InterpretedFindingKind::SafetyCall { .. }))
@@ -3619,7 +3600,7 @@ mod tests {
         };
 
         let result = interpret(&lookup, &[report_root(root)], &SniffTestConfig::default());
-        let unsafe_calls = result.roots[0]
+        let unsafe_calls = result[0]
             .findings
             .iter()
             .filter(|finding| {
@@ -3634,7 +3615,7 @@ mod tests {
 
         assert_eq!(unsafe_calls.len(), 1);
         assert_eq!(unsafe_calls[0].function, root);
-        assert!(result.roots[0].findings.iter().any(|finding| {
+        assert!(result[0].findings.iter().any(|finding| {
             finding.function == callback
                 && matches!(
                     finding.kind,
@@ -3644,12 +3625,12 @@ mod tests {
                 )
         }));
         assert!(
-            !result.roots[0]
+            !result[0]
                 .findings
                 .iter()
                 .any(|finding| finding.function == overlay_exact)
         );
-        assert!(result.roots[0].completeness.safety.complete);
+        assert!(result[0].completeness.safety.complete);
     }
 
     #[test]
@@ -3686,7 +3667,7 @@ mod tests {
         };
 
         let result = interpret(&lookup, &[report_root(root)], &SniffTestConfig::default());
-        let root = &result.roots[0];
+        let root = &result[0];
 
         assert!(root.findings.iter().any(|finding| {
             finding.function == callback
@@ -3729,7 +3710,7 @@ mod tests {
         let lookup = LayeredFunctionLookup::new(vec![&local, &dependency]);
 
         let result = interpret(&lookup, &[report_root(root)], &SniffTestConfig::default());
-        let root = &result.roots[0];
+        let root = &result[0];
 
         assert!(!root.completeness.safety.complete);
         assert!(matches!(
@@ -3775,7 +3756,7 @@ mod tests {
         let lookup = LayeredFunctionLookup::new(vec![&local, &dependency]);
 
         let result = interpret(&lookup, &[report_root(root)], &SniffTestConfig::default());
-        let root = &result.roots[0];
+        let root = &result[0];
 
         assert!(root.completeness.safety.complete);
         assert!(root.findings.iter().any(|finding| {
@@ -3819,7 +3800,7 @@ mod tests {
         let lookup = LayeredFunctionLookup::new(vec![&local, &dependency]);
 
         let result = interpret(&lookup, &[report_root(root)], &SniffTestConfig::default());
-        let safety = &result.roots[0].completeness.safety;
+        let safety = &result[0].completeness.safety;
 
         assert!(!safety.complete);
         assert!(matches!(
@@ -3843,7 +3824,7 @@ mod tests {
         ]);
 
         let result = interpret(&analysis, &[report_root(root)], &SniffTestConfig::default());
-        let root = &result.roots[0];
+        let root = &result[0];
 
         assert!(root.findings.is_empty());
         assert!(root.completeness.panic.complete);
@@ -3851,7 +3832,7 @@ mod tests {
     }
 
     #[test]
-    fn bodyless_trait_method_is_an_opaque_panic_boundary_not_incomplete_ir() {
+    fn bodyless_trait_method_is_a_complete_opaque_panic_boundary() {
         let root = id(1, 1);
         let required_method = id(1, 2);
         let mut target = function_target(required_method, "workspace::Trait::required");
@@ -3864,7 +3845,7 @@ mod tests {
         ]);
 
         let result = interpret(&analysis, &[report_root(root)], &SniffTestConfig::default());
-        let root = &result.roots[0];
+        let root = &result[0];
 
         assert!(root.findings.iter().any(|finding| matches!(
             finding.kind,
@@ -3896,7 +3877,7 @@ mod tests {
         .expect("valid test IR");
 
         let result = interpret(&analysis, &[report_root(root)], &SniffTestConfig::default());
-        let root = &result.roots[0];
+        let root = &result[0];
 
         assert_eq!(root.findings[0].source_range, Some(effect_range));
         for completeness in [&root.completeness.panic, &root.completeness.safety] {
@@ -3915,7 +3896,7 @@ mod tests {
     }
 
     #[test]
-    fn unmanaged_compiler_crate_boundary_is_not_a_missing_artifact_body() {
+    fn unmanaged_compiler_crate_boundary_keeps_analysis_complete() {
         let root = id(1, 1);
         let compiler_helper = id(99, 1);
         let analysis = ir(vec![body(root, "workspace::root").with_call(call(
@@ -3928,7 +3909,7 @@ mod tests {
         };
 
         let result = interpret(&lookup, &[report_root(root)], &SniffTestConfig::default());
-        let root = &result.roots[0];
+        let root = &result[0];
 
         assert!(root.findings.is_empty());
         assert!(root.completeness.panic.complete);
@@ -3955,7 +3936,7 @@ mod tests {
         let lookup = LayeredFunctionLookup::new(vec![&local, &dependency]);
 
         let result = interpret(&lookup, &[report_root(root)], &SniffTestConfig::default());
-        let root = &result.roots[0];
+        let root = &result[0];
 
         for completeness in [&root.completeness.panic, &root.completeness.safety] {
             assert!(!completeness.complete);
@@ -3968,7 +3949,7 @@ mod tests {
     }
 
     #[test]
-    fn lint_levels_do_not_change_policy_interpretation_of_the_same_ir() {
+    fn policy_interpretation_is_independent_of_lint_levels() {
         let root = id(1, 1);
         let analysis =
             ir(vec![body(root, "workspace::root").with_effect(
@@ -4023,14 +4004,14 @@ mod tests {
         let default_result =
             interpret(&analysis, &[report_root(root)], &SniffTestConfig::default());
         assert!(matches!(
-            default_result.roots[0].findings[0].kind,
+            default_result[0].findings[0].kind,
             InterpretedFindingKind::DocumentedPanic { .. }
         ));
 
         let mut source_callsite = SniffTestConfig::default();
         source_callsite.analysis.marker_probing = MarkerProbing::SourceCallsite;
         assert!(
-            interpret(&analysis, &[report_root(root)], &source_callsite).roots[0]
+            interpret(&analysis, &[report_root(root)], &source_callsite)[0]
                 .findings
                 .is_empty()
         );
@@ -4046,14 +4027,14 @@ mod tests {
                 function_target(target, "dependency::overridden"),
             ))]);
         let mut config = SniffTestConfig::default();
-        config.panics.documentation_overrides = ContractDocOverrides::new(vec![(
+        config.documentation.overrides = ContractDocOverrides::new(vec![(
             String::from("dependency::overridden"),
             String::from("# Panics\n\n- ready: the value must be ready"),
         )])
         .expect("valid override");
 
         let result = interpret(&analysis, &[report_root(root)], &config);
-        let finding = &result.roots[0].findings[0];
+        let finding = &result[0].findings[0];
 
         assert!(matches!(
             finding.kind,
@@ -4079,7 +4060,7 @@ mod tests {
         ]);
 
         let result = interpret(&analysis, &[report_root(root)], &SniffTestConfig::default());
-        let kinds = result.roots[0]
+        let kinds = result[0]
             .findings
             .iter()
             .map(|finding| &finding.kind)
@@ -4100,12 +4081,14 @@ mod tests {
     }
 
     #[test]
-    fn opaque_indirect_boundary_is_reportable_but_not_incomplete() {
+    fn opaque_indirect_boundary_is_reported_with_complete_analysis() {
         let root = id(1, 1);
         let mut edge = call(
             0,
             CallTargetIr::OpaqueBoundary {
-                description: String::from("opaque function pointer"),
+                description: String::from(
+                    "indirect call Binder { value: unsafe fn(), bound_vars: [] }",
+                ),
                 target: None,
             },
         );
@@ -4114,12 +4097,31 @@ mod tests {
         let analysis = ir(vec![body(root, "workspace::root").with_call(edge)]);
 
         let result = interpret(&analysis, &[report_root(root)], &SniffTestConfig::default());
-        let root = &result.roots[0];
+        let root = &result[0];
 
-        assert!(root.findings.iter().any(|finding| matches!(
-            finding.kind,
-            InterpretedFindingKind::OpaquePanicBoundary { .. }
-        )));
+        let panic = root
+            .findings
+            .iter()
+            .find(|finding| {
+                matches!(
+                    finding.kind,
+                    InterpretedFindingKind::OpaquePanicBoundary { .. }
+                )
+            })
+            .expect("the opaque panic boundary should be reported");
+        assert!(matches!(
+            &panic.kind,
+            InterpretedFindingKind::OpaquePanicBoundary { description }
+                if description == "indirect call through an unsafe function pointer"
+        ));
+        assert_eq!(
+            panic
+                .trace
+                .steps
+                .last()
+                .and_then(|step| step.target_path.as_deref()),
+            Some("indirect call through an unsafe function pointer")
+        );
         assert!(root.findings.iter().any(|finding| matches!(
             finding.kind,
             InterpretedFindingKind::SafetyCall {
@@ -4153,7 +4155,7 @@ mod tests {
 
         let erasure = interpret(&analysis, &[report_root(root)], &config);
         assert_eq!(
-            erasure.roots[0].findings[0]
+            erasure[0].findings[0]
                 .target
                 .as_ref()
                 .expect("sink target")
@@ -4164,7 +4166,7 @@ mod tests {
         config.analysis.callable_edge_attribution = CallableEdgeAttribution::CallSites;
         let callsite = interpret(&analysis, &[report_root(root)], &config);
         assert_eq!(
-            callsite.roots[0].findings[0]
+            callsite[0].findings[0]
                 .target
                 .as_ref()
                 .expect("sink target")
@@ -4190,18 +4192,18 @@ mod tests {
             &[report_root(first)],
             &SniffTestConfig::default(),
         );
-        assert!(complete.roots[0].completeness.panic.complete);
-        assert_eq!(complete.roots[0].findings.len(), 1);
+        assert!(complete[0].completeness.panic.complete);
+        assert_eq!(complete[0].findings.len(), 1);
 
         let mut limited = SniffTestConfig::default();
         limited.analysis.node_limit = 1;
         let limited = interpret(&analysis, &[report_root(first)], &limited);
-        assert!(!limited.roots[0].completeness.panic.complete);
-        assert!(!limited.roots[0].completeness.safety.complete);
+        assert!(!limited[0].completeness.panic.complete);
+        assert!(!limited[0].completeness.safety.complete);
     }
 
     #[test]
-    fn exact_node_limit_does_not_charge_a_cycle_backedge() {
+    fn two_unique_cycle_bodies_fit_a_two_node_limit() {
         let first = id(1, 1);
         let second = id(1, 2);
         let analysis = ir(vec![
@@ -4214,7 +4216,7 @@ mod tests {
         config.analysis.node_limit = 2;
 
         let result = interpret(&analysis, &[report_root(first)], &config);
-        let root = &result.roots[0];
+        let root = &result[0];
 
         assert!(root.completeness.panic.complete);
         assert!(root.completeness.safety.complete);
@@ -4223,7 +4225,7 @@ mod tests {
     }
 
     #[test]
-    fn deep_call_chain_is_interpreted_without_recursive_traversal() {
+    fn deep_call_chain_is_interpreted_to_its_terminal_effect() {
         const BODY_COUNT: usize = 2_048;
 
         let last_local_id = u64::try_from(BODY_COUNT).expect("test body count fits in u64");
@@ -4250,7 +4252,7 @@ mod tests {
         config.analysis.node_limit = BODY_COUNT;
 
         let result = interpret(&analysis, &[report_root(id(1, 1))], &config);
-        let root = &result.roots[0];
+        let root = &result[0];
 
         assert!(root.completeness.panic.complete);
         assert_eq!(root.completeness.panic.visited_bodies, BODY_COUNT);
@@ -4283,7 +4285,7 @@ mod tests {
 
         let result = interpret(&analysis, &[report_root(root)], &SniffTestConfig::default());
 
-        assert!(result.roots[0].findings.is_empty());
+        assert!(result[0].findings.is_empty());
     }
 
     #[test]
@@ -4315,7 +4317,7 @@ mod tests {
         ]);
 
         let result = interpret(&analysis, &[report_root(root)], &SniffTestConfig::default());
-        let findings = &result.roots[0].findings;
+        let findings = &result[0].findings;
 
         assert_eq!(findings.len(), 2);
         assert!(findings.iter().any(|finding| matches!(
@@ -4381,7 +4383,7 @@ mod tests {
         ]);
 
         let result = interpret(&analysis, &[report_root(root)], &SniffTestConfig::default());
-        let ambiguous = result.roots[0]
+        let ambiguous = result[0]
             .findings
             .iter()
             .find(|finding| {
@@ -4400,7 +4402,7 @@ mod tests {
     }
 
     #[test]
-    fn duplicate_callable_endpoints_in_one_safety_group_are_not_ambiguous() {
+    fn duplicate_callable_endpoints_share_one_unambiguous_safety_group() {
         let root = id(1, 1);
         let erased_target = id(1, 2);
         let concrete_target = id(1, 3);
@@ -4441,11 +4443,11 @@ mod tests {
 
         let result = interpret(&analysis, &[report_root(root)], &SniffTestConfig::default());
 
-        assert!(result.roots[0].findings.is_empty());
+        assert!(result[0].findings.is_empty());
     }
 
     #[test]
-    fn bridge_edges_do_not_duplicate_boundaries_and_erasure_targets_still_traverse() {
+    fn bridge_edges_traverse_erasure_targets_without_extra_boundaries() {
         let root = id(1, 1);
         let dyn_target = id(1, 2);
         let reified_target = id(1, 3);
@@ -4487,7 +4489,7 @@ mod tests {
         ]);
 
         let result = interpret(&analysis, &[report_root(root)], &SniffTestConfig::default());
-        let findings = &result.roots[0].findings;
+        let findings = &result[0].findings;
 
         assert_eq!(
             findings
@@ -4535,7 +4537,7 @@ mod tests {
             PathPatterns::new(vec![String::from("dependency::sink")]).expect("valid sink pattern");
 
         let result = interpret(&analysis, &[report_root(root)], &config);
-        let panic_findings = result.roots[0]
+        let panic_findings = result[0]
             .findings
             .iter()
             .filter(|finding| {
@@ -4585,14 +4587,14 @@ mod tests {
             body(overridden, "workspace::overridden_safety"),
         ]);
         let mut config = SniffTestConfig::default();
-        config.safety.documentation_overrides = ContractDocOverrides::new(vec![(
+        config.documentation.overrides = ContractDocOverrides::new(vec![(
             String::from("workspace::overridden_safety"),
             String::from("# Safety\n\n- override invariant: it holds"),
         )])
         .expect("valid override");
 
         let result = interpret(&analysis, &[report_root(root)], &config);
-        let mut missing = result.roots[0]
+        let mut missing = result[0]
             .findings
             .iter()
             .filter_map(|finding| match finding.kind {
@@ -4608,7 +4610,7 @@ mod tests {
     }
 
     #[test]
-    fn builtin_unsafe_call_does_not_create_a_documented_obligation() {
+    fn builtin_unsafe_call_is_satisfied_by_its_compiler_context() {
         let root = id(1, 1);
         let callee = id(1, 2);
         let mut compiler_call = call(
@@ -4634,7 +4636,7 @@ mod tests {
         let result = interpret(&analysis, &[report_root(root)], &SniffTestConfig::default());
 
         assert!(
-            !result.roots[0]
+            !result[0]
                 .findings
                 .iter()
                 .any(|finding| matches!(finding.kind, InterpretedFindingKind::SafetyCall { .. }))
@@ -4665,8 +4667,8 @@ mod tests {
 
         let result = interpret(&analysis, &[report_root(root)], &SniffTestConfig::default());
 
-        assert!(result.roots[0].findings.is_empty());
-        assert!(result.roots[0].completeness.panic.complete);
+        assert!(result[0].findings.is_empty());
+        assert!(result[0].completeness.panic.complete);
     }
 
     fn report_root(function: FunctionId) -> InterpretationRoot {
@@ -4916,10 +4918,7 @@ mod tests {
             source_range: None,
             expanded_range: None,
             macro_expansions: Vec::new(),
-            kind: EffectKindIr::CompilerAssert {
-                kind,
-                description: format!("{kind:?}"),
-            },
+            kind: EffectKindIr::CompilerAssert { kind },
         }
     }
 

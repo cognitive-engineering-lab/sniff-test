@@ -1,29 +1,19 @@
 ---
 source: crates/sniff-test/tests/fixtures.rs
-expression: messages
+expression: "report[\"findings\"]"
 ---
 [
   {
-    "artifact": {
-      "crate-name": "chain_markers"
-    },
-    "findings": [
-      {
-        "kind": "documented-panic",
-        "level": "warn",
-        "reason": "chain_markers::Widget::risky documents when it may panic under # Panics",
-        "root": "chain_markers::blanket_marker_above_chain",
-        "root-kind": "concrete",
-        "span": "src/lib.rs:26:5: 28:17",
-        "target": "chain_markers::Widget::risky",
-        "trace": [
-          "src/lib.rs:26:5: 28:17: chain_markers::blanket_marker_above_chain --direct-call-> chain_markers::Widget::risky"
-        ]
-      }
-    ],
-    "format-version": 12,
-    "reason": "sniff-test-artifact",
-    "rustc-version": "[RUSTC_VERSION]",
-    "tool-version": "0.1.0"
+    "kind": "documented-panic",
+    "level": "warn",
+    "reason": "chain_markers::Widget::risky documents when it may panic under # Panics",
+    "root": "chain_markers::marked_and_unmarked_chain_links",
+    "root-kind": "concrete",
+    "root-span": "src/lib.rs:17:1: 17:64",
+    "span": "src/lib.rs:22:20: 22:41",
+    "target": "chain_markers::Widget::risky",
+    "trace": [
+      "src/lib.rs:22:20: 22:41: chain_markers::marked_and_unmarked_chain_links --direct-call-> chain_markers::Widget::risky"
+    ]
   }
 ]

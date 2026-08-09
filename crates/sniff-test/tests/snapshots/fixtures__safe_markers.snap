@@ -1,44 +1,35 @@
 ---
 source: crates/sniff-test/tests/fixtures.rs
-expression: messages
+expression: "report[\"findings\"]"
 ---
 [
   {
-    "artifact": {
-      "crate-name": "safe_markers"
-    },
-    "findings": [
-      {
-        "kind": "panic-invocation",
-        "level": "deny",
-        "reason": "panic sink core::panicking::panic",
-        "root": "safe_markers::unsafe_call",
-        "root-kind": "concrete",
-        "span": "src/lib.rs:21:5: 21:18",
-        "target": "core::panicking::panic",
-        "trace": [
-          "src/lib.rs:17:5: 17:17: safe_markers::unsafe_call --direct-call-> safe_markers::helper",
-          "src/lib.rs:21:5: 21:18: safe_markers::helper --macro-expansion-> macro core::std::assert",
-          "src/lib.rs:21:5: 21:18: macro core::std::assert --direct-call-> core::panicking::panic"
-        ]
-      },
-      {
-        "compiler-assert-kind": "division-by-zero",
-        "kind": "compiler-assert",
-        "level": "deny",
-        "reason": "compiler assert",
-        "root": "safe_markers::unsafe_ratio",
-        "root-kind": "concrete",
-        "span": "src/lib.rs:8:5: 8:24",
-        "target": "compiler assert division by zero",
-        "trace": [
-          "src/lib.rs:8:5: 8:24: safe_markers::unsafe_ratio --assert-> compiler assert DivisionByZero(copy _1) with locals [CompilerAssertLocal { index: 0, name: None, role: ReturnPointer }, CompilerAssertLocal { index: 1, name: Some(\"total\"), role: Argument }, CompilerAssertLocal { index: 2, name: Some(\"denominator\"), role: Argument }, CompilerAssertLocal { index: 3, name: None, role: Temporary }]"
-        ]
-      }
-    ],
-    "format-version": 12,
-    "reason": "sniff-test-artifact",
-    "rustc-version": "[RUSTC_VERSION]",
-    "tool-version": "0.1.0"
+    "kind": "panic-invocation",
+    "level": "deny",
+    "reason": "panic sink core::panicking::panic",
+    "root": "safe_markers::unsafe_call",
+    "root-kind": "concrete",
+    "root-span": "src/lib.rs:16:1: 16:31",
+    "span": "src/lib.rs:21:5: 21:18",
+    "target": "core::panicking::panic",
+    "trace": [
+      "src/lib.rs:17:5: 17:17: safe_markers::unsafe_call --direct-call-> safe_markers::helper",
+      "src/lib.rs:21:5: 21:18: safe_markers::helper --macro-expansion-> macro core::std::assert",
+      "src/lib.rs:21:5: 21:18: macro core::std::assert --direct-call-> core::panicking::panic"
+    ]
+  },
+  {
+    "compiler-assert-kind": "division-by-zero",
+    "kind": "compiler-assert",
+    "level": "deny",
+    "reason": "compiler assert",
+    "root": "safe_markers::unsafe_ratio",
+    "root-kind": "concrete",
+    "root-span": "src/lib.rs:7:1: 7:63",
+    "span": "src/lib.rs:8:5: 8:24",
+    "target": "compiler assert division by zero",
+    "trace": [
+      "src/lib.rs:8:5: 8:24: safe_markers::unsafe_ratio --assert-> compiler assert division by zero"
+    ]
   }
 ]

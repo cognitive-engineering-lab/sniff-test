@@ -1,5 +1,0 @@
-# Const and static initializer bodies get the same justification analysis as
-# function bodies.
-
-[analysis]
-report-roots = "all"

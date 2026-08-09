@@ -1,60 +1,37 @@
 ---
 source: crates/sniff-test/tests/fixtures.rs
-expression: messages
+expression: "report[\"findings\"]"
 ---
 [
   {
-    "artifact": {
-      "crate-name": "visibility_roots"
-    },
-    "findings": [
-      {
-        "kind": "panic-invocation",
-        "level": "deny",
-        "reason": "panic sink core::std::rt::panic_fmt",
-        "root": "visibility_roots::imp::exported",
-        "root-kind": "concrete",
-        "span": "src/lib.rs:7:9: 7:53",
-        "target": "core::std::rt::panic_fmt",
-        "trace": [
-          "src/lib.rs:7:9: 7:53: visibility_roots::imp::exported --macro-expansion-> macro core::std::assert",
-          "src/lib.rs:7:9: 7:53: macro core::std::assert --macro-expansion-> macro core::std::panic::panic_2021",
-          "[SYSROOT]/lib/rustlib/src/rust/library/core/src/panic.rs:62:9: 62:73: macro core::std::panic::panic_2021 --direct-call-> core::std::rt::panic_fmt"
-        ]
-      },
-      {
-        "kind": "panic-invocation",
-        "level": "deny",
-        "reason": "panic sink core::std::rt::panic_fmt",
-        "root": "visibility_roots::public_entry",
-        "root-kind": "concrete",
-        "span": "src/lib.rs:3:9: 3:51",
-        "target": "core::std::rt::panic_fmt",
-        "trace": [
-          "src/lib.rs:14:5: 14:22: visibility_roots::public_entry --direct-call-> visibility_roots::imp::hidden",
-          "src/lib.rs:3:9: 3:51: visibility_roots::imp::hidden --macro-expansion-> macro core::std::assert",
-          "src/lib.rs:3:9: 3:51: macro core::std::assert --macro-expansion-> macro core::std::panic::panic_2021",
-          "[SYSROOT]/lib/rustlib/src/rust/library/core/src/panic.rs:62:9: 62:73: macro core::std::panic::panic_2021 --direct-call-> core::std::rt::panic_fmt"
-        ]
-      },
-      {
-        "function": "visibility_roots::reachable_unsafe",
-        "kind": "unsafe-op-missing-justification",
-        "level": "warn",
-        "reason": "unsafe operation (raw pointer dereference) has no `// SAFETY:` justification",
-        "root": "visibility_roots::public_unsafe_entry",
-        "root-kind": "concrete",
-        "safety-op-kind": "raw-pointer-dereference",
-        "span": "src/lib.rs:22:14: 22:22",
-        "trace": [
-          "src/lib.rs:18:5: 18:30: visibility_roots::public_unsafe_entry --direct-call-> visibility_roots::reachable_unsafe",
-          "src/lib.rs:22:14: 22:22: visibility_roots::reachable_unsafe --unsafe-operation-> unsafe operation (raw pointer dereference)"
-        ]
-      }
-    ],
-    "format-version": 12,
-    "reason": "sniff-test-artifact",
-    "rustc-version": "[RUSTC_VERSION]",
-    "tool-version": "0.1.0"
+    "kind": "panic-invocation",
+    "level": "deny",
+    "reason": "panic sink core::std::rt::panic_fmt",
+    "root": "visibility_roots::imp::exported",
+    "root-kind": "concrete",
+    "root-span": "src/lib.rs:6:5: 6:32",
+    "span": "src/lib.rs:7:9: 7:53",
+    "target": "core::std::rt::panic_fmt",
+    "trace": [
+      "src/lib.rs:7:9: 7:53: visibility_roots::imp::exported --macro-expansion-> macro core::std::assert",
+      "src/lib.rs:7:9: 7:53: macro core::std::assert --macro-expansion-> macro core::std::panic::panic_2021",
+      "[SYSROOT]/lib/rustlib/src/rust/library/core/src/panic.rs:62:9: 62:73: macro core::std::panic::panic_2021 --direct-call-> core::std::rt::panic_fmt"
+    ]
+  },
+  {
+    "kind": "panic-invocation",
+    "level": "deny",
+    "reason": "panic sink core::std::rt::panic_fmt",
+    "root": "visibility_roots::public_entry",
+    "root-kind": "concrete",
+    "root-span": "src/lib.rs:13:1: 13:32",
+    "span": "src/lib.rs:3:9: 3:51",
+    "target": "core::std::rt::panic_fmt",
+    "trace": [
+      "src/lib.rs:14:5: 14:22: visibility_roots::public_entry --direct-call-> visibility_roots::imp::hidden",
+      "src/lib.rs:3:9: 3:51: visibility_roots::imp::hidden --macro-expansion-> macro core::std::assert",
+      "src/lib.rs:3:9: 3:51: macro core::std::assert --macro-expansion-> macro core::std::panic::panic_2021",
+      "[SYSROOT]/lib/rustlib/src/rust/library/core/src/panic.rs:62:9: 62:73: macro core::std::panic::panic_2021 --direct-call-> core::std::rt::panic_fmt"
+    ]
   }
 ]

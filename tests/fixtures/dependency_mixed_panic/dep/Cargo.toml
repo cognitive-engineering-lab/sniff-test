@@ -1,6 +1,0 @@
-[package]
-name = "dependency-mixed-panic"
-version = "0.1.0"
-edition = "2024"
-
-[workspace]

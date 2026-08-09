@@ -1,55 +1,46 @@
 ---
 source: crates/sniff-test/tests/fixtures.rs
-expression: messages
+expression: "report[\"findings\"]"
 ---
 [
   {
-    "artifact": {
-      "crate-name": "contract_overrides"
-    },
-    "findings": [
-      {
-        "kind": "documented-panic",
-        "level": "warn",
-        "missing-requirements": [
-          "flag: flag must be true."
-        ],
-        "reason": "contract_overrides::panic_contract documents when it may panic under # Panics",
-        "requirements": [
-          "flag: flag must be true."
-        ],
-        "root": "contract_overrides::panic_override_missing_marker",
-        "root-kind": "concrete",
-        "span": "src/lib.rs:8:5: 8:25",
-        "target": "contract_overrides::panic_contract",
-        "trace": [
-          "src/lib.rs:8:5: 8:25: contract_overrides::panic_override_missing_marker --direct-call-> contract_overrides::panic_contract"
-        ]
-      },
-      {
-        "function": "contract_overrides::safety_override_missing_requirement",
-        "kind": "unsafe-call-missing-requirements",
-        "level": "warn",
-        "missing-requirements": [
-          "initialized: pointer must reference initialized memory."
-        ],
-        "reason": "unsafe call to `contract_overrides::synthetic_read` does not satisfy all # Safety requirements",
-        "requirements": [
-          "valid_ptr: pointer must be non-null.",
-          "initialized: pointer must reference initialized memory."
-        ],
-        "root": "contract_overrides::safety_override_missing_requirement",
-        "root-kind": "concrete",
-        "span": "src/lib.rs:30:14: 30:42",
-        "target": "contract_overrides::synthetic_read",
-        "trace": [
-          "src/lib.rs:30:14: 30:42: contract_overrides::safety_override_missing_requirement --direct-call-> contract_overrides::synthetic_read"
-        ]
-      }
+    "kind": "documented-panic",
+    "level": "warn",
+    "missing-requirements": [
+      "flag: flag must be true."
     ],
-    "format-version": 12,
-    "reason": "sniff-test-artifact",
-    "rustc-version": "[RUSTC_VERSION]",
-    "tool-version": "0.1.0"
+    "reason": "contract_overrides::panic_contract documents when it may panic under # Panics",
+    "requirements": [
+      "flag: flag must be true."
+    ],
+    "root": "contract_overrides::panic_override_missing_marker",
+    "root-kind": "concrete",
+    "root-span": "src/lib.rs:7:1: 7:49",
+    "span": "src/lib.rs:8:5: 8:25",
+    "target": "contract_overrides::panic_contract",
+    "trace": [
+      "src/lib.rs:8:5: 8:25: contract_overrides::panic_override_missing_marker --direct-call-> contract_overrides::panic_contract"
+    ]
+  },
+  {
+    "function": "contract_overrides::safety_override_missing_requirement",
+    "kind": "unsafe-call-missing-requirements",
+    "level": "warn",
+    "missing-requirements": [
+      "initialized: pointer must reference initialized memory."
+    ],
+    "reason": "unsafe call to `contract_overrides::synthetic_read` does not satisfy all # Safety requirements",
+    "requirements": [
+      "valid_ptr: pointer must be non-null.",
+      "initialized: pointer must reference initialized memory."
+    ],
+    "root": "contract_overrides::safety_override_missing_requirement",
+    "root-kind": "concrete",
+    "root-span": "src/lib.rs:18:1: 18:51",
+    "span": "src/lib.rs:24:14: 24:42",
+    "target": "contract_overrides::synthetic_read",
+    "trace": [
+      "src/lib.rs:24:14: 24:42: contract_overrides::safety_override_missing_requirement --direct-call-> contract_overrides::synthetic_read"
+    ]
   }
 ]

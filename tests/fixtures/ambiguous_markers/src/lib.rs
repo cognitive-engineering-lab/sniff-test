@@ -29,22 +29,3 @@ pub fn duplicate_name_marker(total: usize, denominator: usize) -> usize {
     // - nonzero: caller checked the local preconditions.
     duplicate_name_ratio(total, denominator)
 }
-
-fn shared_ratio(total: usize, denominator: usize) -> usize {
-    ratio(total, denominator)
-}
-
-fn unmarked_route(total: usize, denominator: usize) -> usize {
-    shared_ratio(total, denominator)
-}
-
-fn marked_route(total: usize, denominator: usize) -> usize {
-    shared_ratio(total, denominator).saturating_add(ratio(total, denominator))
-}
-
-pub fn marker_on_noncanonical_route(total: usize, denominator: usize) -> usize {
-    let first = unmarked_route(total, denominator);
-    // PANIC: the denominator is nonzero on this route.
-    let second = marked_route(total, denominator);
-    first.saturating_add(second)
-}

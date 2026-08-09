@@ -1,5 +1,4 @@
-//! One unsafe operation per detected kind, each with a justified and an
-//! unjustified instance.
+//! One unmarked unsafe operation per detected kind.
 
 use std::arch::asm;
 
@@ -18,17 +17,7 @@ pub fn deref_unjustified(ptr: *const u32) -> u32 {
     unsafe { *ptr }
 }
 
-pub fn deref_justified(ptr: *const u32) -> u32 {
-    // SAFETY: callers pass a pointer derived from a live reference.
-    unsafe { *ptr }
-}
-
 pub fn mutable_static_unjustified() -> u32 {
-    unsafe { COUNTER }
-}
-
-pub fn mutable_static_justified() -> u32 {
-    // SAFETY: single-threaded fixture; no concurrent access exists.
     unsafe { COUNTER }
 }
 
@@ -40,35 +29,8 @@ pub fn union_read_unjustified(bits: &Bits) -> u32 {
     unsafe { bits.word }
 }
 
-pub fn union_write_is_safe(bits: &mut Bits) {
-    bits.word = 7;
-}
-
 pub fn asm_unjustified() {
     unsafe {
         asm!("nop");
     }
-}
-
-pub fn asm_justified() {
-    // SAFETY: `nop` has no observable effects.
-    unsafe {
-        asm!("nop");
-    }
-}
-
-macro_rules! deref_in_macro {
-    ($pointer:expr) => {{
-        unsafe { *$pointer }
-    }};
-}
-
-macro_rules! nested_deref_in_macro {
-    ($pointer:expr) => {{
-        deref_in_macro!($pointer)
-    }};
-}
-
-pub fn macro_deref_unjustified(ptr: *const u32) -> u32 {
-    nested_deref_in_macro!(ptr)
 }

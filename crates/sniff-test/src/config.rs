@@ -7,11 +7,11 @@
 //! Path patterns treat `::` as a separator. For example, `std` matches only
 //! the crate namespace root, `std::*` matches one segment under `std`, and
 //! `std::**` matches `std` and everything beneath it. Definitions are matched
-//! against every session-independent namespace form they have (crate root,
-//! definition-site path, and impl self-type path — see
-//! [`crate::namespace::namespace_candidates`]), so `alloc::**` also covers
-//! trait-impl methods such as `<Vec<T> as Index<usize>>::index`. Use Rust
-//! crate names in patterns, such as `proc_macro2`, not package names like
+//! against their stable namespace forms (crate root, definition-site path, and
+//! impl self-type path) plus rustc's session-rendered display path; see
+//! [`crate::namespace::namespace_candidates`]. Thus `alloc::**` also covers
+//! trait-impl methods such as `<Vec<T> as Index<usize>>::index`. Use Rust crate
+//! names in patterns, such as `proc_macro2`, not package names like
 //! `proc-macro2`.
 
 use std::collections::BTreeMap;
@@ -65,7 +65,7 @@ impl SniffTestConfig {
             source,
         })?;
         let base_dir = path.parent().unwrap_or_else(|| Path::new("."));
-        config.load_documentation_overrides(base_dir)?;
+        config.documentation.load_overrides(base_dir)?;
         Ok(config)
     }
 
@@ -75,20 +75,7 @@ impl SniffTestConfig {
     ///
     /// Returns an error when the manifest contains unsupported syntax.
     pub fn from_manifest_str(source: &str) -> Result<Self, toml::de::Error> {
-        let mut config: Self = toml::from_str(source)?;
-        config.install_documentation_overrides();
-        Ok(config)
-    }
-
-    fn load_documentation_overrides(&mut self, base_dir: &Path) -> Result<(), ConfigError> {
-        self.documentation.load_overrides(base_dir)?;
-        self.install_documentation_overrides();
-        Ok(())
-    }
-
-    fn install_documentation_overrides(&mut self) {
-        self.panics.documentation_overrides = self.documentation.overrides.clone();
-        self.safety.documentation_overrides = self.documentation.overrides.clone();
+        toml::from_str(source)
     }
 }
 
@@ -239,7 +226,7 @@ impl Default for AnalysisConfig {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize, Serialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum MarkerProbing {
-    /// Probe the final user callsite only. This is the historical behavior.
+    /// Probe the final user callsite only.
     SourceCallsite,
     /// Probe macro definition spans first, then macro callsites outward, then
     /// the final user callsite.
@@ -256,10 +243,6 @@ pub struct AnalysisLintConfig {
     pub ambiguous_safety_requirement: LintLevel,
     pub panic_analysis_incomplete: LintLevel,
     pub safety_analysis_incomplete: LintLevel,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub dependency_panic_analysis_incomplete: Option<LintLevel>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub dependency_safety_analysis_incomplete: Option<LintLevel>,
     pub empty_report_roots: LintLevel,
     pub missing_report_root: LintLevel,
 }
@@ -274,8 +257,6 @@ impl Default for AnalysisLintConfig {
             // A truncated traversal proves nothing about the missing region.
             panic_analysis_incomplete: LintLevel::Deny,
             safety_analysis_incomplete: LintLevel::Deny,
-            dependency_panic_analysis_incomplete: None,
-            dependency_safety_analysis_incomplete: None,
             empty_report_roots: LintLevel::Warn,
             missing_report_root: LintLevel::Warn,
         }
@@ -291,11 +272,9 @@ struct RawAnalysisLintConfig {
     ambiguous_safety_requirement: Option<LintLevel>,
     panic_analysis_incomplete: Option<LintLevel>,
     safety_analysis_incomplete: Option<LintLevel>,
-    dependency_panic_analysis_incomplete: Option<LintLevel>,
-    dependency_safety_analysis_incomplete: Option<LintLevel>,
     empty_report_roots: Option<LintLevel>,
     missing_report_root: Option<LintLevel>,
-    // Backward-compatible group defaults. Exact finding keys take precedence.
+    // Group defaults used when exact effect-specific values are absent.
     ambiguous_effect_marker: Option<LintLevel>,
     ambiguous_effect_requirement: Option<LintLevel>,
     analysis_incomplete: Option<LintLevel>,
@@ -333,8 +312,6 @@ impl<'de> Deserialize<'de> for AnalysisLintConfig {
                 .safety_analysis_incomplete
                 .or(raw.analysis_incomplete)
                 .unwrap_or(defaults.safety_analysis_incomplete),
-            dependency_panic_analysis_incomplete: raw.dependency_panic_analysis_incomplete,
-            dependency_safety_analysis_incomplete: raw.dependency_safety_analysis_incomplete,
             empty_report_roots: raw
                 .empty_report_roots
                 .unwrap_or(defaults.empty_report_roots),
@@ -442,8 +419,6 @@ pub struct PanicConfig {
     pub trusted_panic_boundary_namespaces: PathPatterns,
     /// Callee paths treated as direct panic sinks.
     pub panic_sink_namespaces: PathPatterns,
-    #[serde(skip)]
-    pub documentation_overrides: ContractDocOverrides,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
@@ -528,8 +503,6 @@ pub struct SafetyConfig {
     /// obligations, while undocumented callees are trusted as having none.
     pub trusted_safety_boundary_namespaces: PathPatterns,
     pub lints: SafetyLintConfig,
-    #[serde(skip)]
-    pub documentation_overrides: ContractDocOverrides,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
@@ -593,35 +566,8 @@ impl PanicConfig {
     #[must_use]
     pub(crate) fn ignores_candidates(&self, candidates: &[String]) -> bool {
         self.ignored_namespaces
-            .matching_candidates_pattern(candidates)
+            .best_candidates_match(candidates)
             .is_some()
-    }
-
-    #[must_use]
-    #[cfg(test)]
-    pub fn ignores_namespace(&self, namespace: &str) -> bool {
-        self.ignored_namespace_match(namespace).is_some()
-    }
-
-    #[must_use]
-    #[cfg(test)]
-    pub fn ignored_namespace_match<'patterns>(
-        &'patterns self,
-        namespace: &str,
-    ) -> Option<&'patterns str> {
-        self.ignored_namespaces.matching_pattern(namespace)
-    }
-
-    #[must_use]
-    #[cfg(test)]
-    fn trusts_panic_boundary_namespace(&self, namespace: &str) -> bool {
-        self.trusted_panic_boundary_namespaces.is_match(namespace)
-    }
-
-    #[must_use]
-    #[cfg(test)]
-    fn marks_panic_sink_namespace(&self, namespace: &str) -> bool {
-        self.panic_sink_namespaces.is_match(namespace)
     }
 
     #[must_use]
@@ -648,29 +594,14 @@ impl SafetyConfig {
     #[must_use]
     pub(crate) fn ignores_candidates(&self, candidates: &[String]) -> bool {
         self.ignored_namespaces
-            .matching_candidates_pattern(candidates)
+            .best_candidates_match(candidates)
             .is_some()
-    }
-
-    #[must_use]
-    #[cfg(test)]
-    pub fn ignored_namespace_match<'patterns>(
-        &'patterns self,
-        namespace: &str,
-    ) -> Option<&'patterns str> {
-        self.ignored_namespaces.matching_pattern(namespace)
-    }
-
-    #[must_use]
-    #[cfg(test)]
-    fn trusts_safety_boundary_namespace(&self, namespace: &str) -> bool {
-        self.trusted_safety_boundary_namespaces.is_match(namespace)
     }
 
     #[must_use]
     pub(crate) fn trusts_safety_boundary_candidates(&self, candidates: &[String]) -> bool {
         self.trusted_safety_boundary_namespaces
-            .matching_candidates_pattern(candidates)
+            .best_candidates_match(candidates)
             .is_some()
     }
 }
@@ -869,8 +800,8 @@ mod tests {
     use super::{
         AnalysisConfig, AnalysisLintConfig, CallableEdgeAttribution, CompilerConfig, ConfigError,
         ContractDocOverrideFile, ContractDocOverrides, EXAMPLE_MANIFEST, LintLevel, MarkerProbing,
-        MirInlining, OverflowChecks, PanicConfig, PathPatterns, ReportRootSet, SafetyConfig,
-        SniffTestConfig,
+        MirInlining, OverflowChecks, PanicBoundaryPolicy, PanicConfig, PathPatterns, ReportRootSet,
+        SafetyConfig, SniffTestConfig,
     };
 
     fn path_patterns(patterns: &[&str]) -> PathPatterns {
@@ -883,19 +814,21 @@ mod tests {
         .expect("patterns should compile")
     }
 
-    fn config_error_source<T>(error: &ConfigError) -> &T
-    where
-        T: std::error::Error + 'static,
-    {
-        std::error::Error::source(error)
-            .expect("config error should retain its source")
-            .downcast_ref::<T>()
-            .expect("config error should retain the typed source")
+    fn candidates(paths: &[&str]) -> Vec<String> {
+        paths.iter().map(|path| (*path).to_owned()).collect()
     }
 
     #[test]
-    fn config_error_display_keeps_context_without_rendering_sources() {
+    fn config_errors_preserve_context_and_their_source() {
         let path = PathBuf::from("sniff-test.toml");
+        let manifest_parse = toml::from_str::<SniffTestConfig>("invalid = [")
+            .expect_err("manifest should be invalid");
+        let manifest_parse_message = manifest_parse.to_string();
+        let override_parse = toml::from_str::<ContractDocOverrideFile>("overrides = [")
+            .expect_err("override should be invalid");
+        let override_parse_message = override_parse.to_string();
+        let override_glob = globset::Glob::new("[").expect_err("glob should be invalid");
+        let override_glob_message = override_glob.to_string();
         let errors = [
             (
                 ConfigError::Io {
@@ -903,14 +836,15 @@ mod tests {
                     source: std::io::Error::new(std::io::ErrorKind::NotFound, "read source"),
                 },
                 "failed to read sniff-test.toml",
+                String::from("read source"),
             ),
             (
                 ConfigError::Parse {
                     path: path.clone(),
-                    source: toml::from_str::<SniffTestConfig>("invalid = [")
-                        .expect_err("manifest should be invalid"),
+                    source: manifest_parse,
                 },
                 "failed to parse sniff-test.toml",
+                manifest_parse_message,
             ),
             (
                 ConfigError::OverrideIo {
@@ -921,88 +855,39 @@ mod tests {
                     ),
                 },
                 "failed to read documentation override file sniff-test.toml",
+                String::from("override read source"),
             ),
             (
                 ConfigError::OverrideParse {
                     path: path.clone(),
-                    source: toml::from_str::<ContractDocOverrideFile>("overrides = [")
-                        .expect_err("override file should be invalid"),
+                    source: override_parse,
                 },
                 "failed to parse documentation override file sniff-test.toml",
+                override_parse_message,
             ),
             (
                 ConfigError::OverrideGlob {
                     path,
-                    source: globset::Glob::new("[").expect_err("override glob should be invalid"),
+                    source: override_glob,
                 },
                 "failed to compile documentation override globs in sniff-test.toml",
+                override_glob_message,
             ),
         ];
 
-        for (error, expected) in errors {
-            assert_eq!(error.to_string(), expected);
+        for (error, context, source) in errors {
+            assert_eq!(error.to_string(), context);
+            assert_eq!(
+                std::error::Error::source(&error)
+                    .expect("config error should retain its source")
+                    .to_string(),
+                source
+            );
         }
     }
 
     #[test]
-    fn config_error_sources_retain_their_typed_causes() {
-        let path = PathBuf::from("sniff-test.toml");
-        let error = ConfigError::Io {
-            path: path.clone(),
-            source: std::io::Error::new(std::io::ErrorKind::NotFound, "read source"),
-        };
-        assert_eq!(
-            config_error_source::<std::io::Error>(&error).kind(),
-            std::io::ErrorKind::NotFound
-        );
-
-        let source = toml::from_str::<SniffTestConfig>("invalid = [")
-            .expect_err("manifest should be invalid");
-        let source_message = source.to_string();
-        let error = ConfigError::Parse {
-            path: path.clone(),
-            source,
-        };
-        assert_eq!(
-            config_error_source::<toml::de::Error>(&error).to_string(),
-            source_message
-        );
-
-        let error = ConfigError::OverrideIo {
-            path: path.clone(),
-            source: std::io::Error::new(
-                std::io::ErrorKind::PermissionDenied,
-                "override read source",
-            ),
-        };
-        assert_eq!(
-            config_error_source::<std::io::Error>(&error).kind(),
-            std::io::ErrorKind::PermissionDenied
-        );
-
-        let source = toml::from_str::<ContractDocOverrideFile>("overrides = [")
-            .expect_err("override file should be invalid");
-        let source_message = source.to_string();
-        let error = ConfigError::OverrideParse {
-            path: path.clone(),
-            source,
-        };
-        assert_eq!(
-            config_error_source::<toml::de::Error>(&error).to_string(),
-            source_message
-        );
-
-        let source = globset::Glob::new("[").expect_err("override glob should be invalid");
-        let source_message = source.to_string();
-        let error = ConfigError::OverrideGlob { path, source };
-        assert_eq!(
-            config_error_source::<globset::Error>(&error).to_string(),
-            source_message
-        );
-    }
-
-    #[test]
-    fn rejects_unknown_config_fields() {
+    fn manifest_rejects_unknown_fields() {
         let error = SniffTestConfig::from_manifest_str("[analysis]\nnode-limt = 10")
             .expect_err("unknown config fields should be rejected");
 
@@ -1040,51 +925,24 @@ mod tests {
     }
 
     #[test]
-    fn rejects_compiler_settings_under_analysis_without_compatibility_aliases() {
-        for setting in ["overflow-checks = \"on\"", "inline-mir = \"profile\""] {
-            let config = format!("[analysis]\n{setting}\n");
-            let error = SniffTestConfig::from_manifest_str(&config)
-                .expect_err("legacy compiler setting location should be rejected");
-
-            assert!(error.to_string().contains("unknown field"));
-        }
-    }
-
-    #[test]
-    fn rejects_removed_dependency_specific_panic_lint() {
-        let error = SniffTestConfig::from_manifest_str(
-            "[panics.lints]\ncached-dependency-panic = \"warn\"\n",
-        )
-        .expect_err("artifact origin is no longer a lint-policy distinction");
-
-        assert!(error.to_string().contains("unknown field"));
-    }
-
-    #[test]
     fn overflow_checks_and_overflow_lint_parse_independently() {
         for (overflow, expected_overflow) in [
             ("profile", OverflowChecks::Profile),
             ("on", OverflowChecks::On),
             ("off", OverflowChecks::Off),
         ] {
-            for (lint, expected_lint) in [
-                ("allow", LintLevel::Allow),
-                ("warn", LintLevel::Warn),
-                ("deny", LintLevel::Deny),
-            ] {
-                let config = format!(
-                    "[compiler]\noverflow-checks = \"{overflow}\"\n\
-                     [panics.lints]\ncompiler-assert-overflow = \"{lint}\"\n"
-                );
-                let parsed = SniffTestConfig::from_manifest_str(&config)
-                    .expect("compiler behavior and lint policy should be independent");
+            let config = format!(
+                "[compiler]\noverflow-checks = \"{overflow}\"\n\
+                 [panics.lints]\ncompiler-assert-overflow = \"deny\"\n"
+            );
+            let parsed = SniffTestConfig::from_manifest_str(&config)
+                .expect("compiler behavior and lint policy should be independent");
 
-                assert_eq!(parsed.compiler.overflow_checks, expected_overflow);
-                assert_eq!(
-                    parsed.panics.lints.compiler_assert_overflow,
-                    Some(expected_lint)
-                );
-            }
+            assert_eq!(parsed.compiler.overflow_checks, expected_overflow);
+            assert_eq!(
+                parsed.panics.lints.compiler_assert_overflow,
+                Some(LintLevel::Deny)
+            );
         }
     }
 
@@ -1130,27 +988,6 @@ mod tests {
         );
         assert_eq!(parsed.analysis.lints.empty_report_roots, LintLevel::Deny);
         assert_eq!(parsed.analysis.lints.missing_report_root, LintLevel::Allow);
-    }
-
-    #[test]
-    fn parses_dependency_analysis_incomplete_lint_overrides() {
-        let config = r#"
-            [analysis.lints]
-            dependency-panic-analysis-incomplete = "warn"
-            dependency-safety-analysis-incomplete = "allow"
-        "#;
-
-        let parsed = SniffTestConfig::from_manifest_str(config)
-            .expect("dependency analysis lint overrides should parse");
-
-        assert_eq!(
-            parsed.analysis.lints.dependency_panic_analysis_incomplete,
-            Some(LintLevel::Warn)
-        );
-        assert_eq!(
-            parsed.analysis.lints.dependency_safety_analysis_incomplete,
-            Some(LintLevel::Allow)
-        );
     }
 
     #[test]
@@ -1257,24 +1094,6 @@ mod tests {
                 "serialized legacy key `{legacy}`"
             );
         }
-        for optional in [
-            "dependency-panic-analysis-incomplete",
-            "dependency-safety-analysis-incomplete",
-        ] {
-            assert!(
-                !serialized.contains(optional),
-                "unset optional key `{optional}` should not serialize"
-            );
-        }
-
-        let lints = AnalysisLintConfig {
-            dependency_panic_analysis_incomplete: Some(LintLevel::Warn),
-            dependency_safety_analysis_incomplete: Some(LintLevel::Allow),
-            ..AnalysisLintConfig::default()
-        };
-        let serialized = toml::to_string(&lints).expect("lint overrides should serialize");
-        assert!(serialized.contains("dependency-panic-analysis-incomplete = \"warn\""));
-        assert!(serialized.contains("dependency-safety-analysis-incomplete = \"allow\""));
     }
 
     #[test]
@@ -1332,8 +1151,6 @@ mod tests {
         assert_eq!(lints.ambiguous_safety_requirement, LintLevel::Deny);
         assert_eq!(lints.panic_analysis_incomplete, LintLevel::Deny);
         assert_eq!(lints.safety_analysis_incomplete, LintLevel::Deny);
-        assert_eq!(lints.dependency_panic_analysis_incomplete, None);
-        assert_eq!(lints.dependency_safety_analysis_incomplete, None);
         assert_eq!(lints.empty_report_roots, LintLevel::Warn);
         assert_eq!(lints.missing_report_root, LintLevel::Warn);
     }
@@ -1482,38 +1299,24 @@ mod tests {
 
         let parsed = SniffTestConfig::from_manifest_str(config).expect("manifest should parse");
 
+        assert!(parsed.safety.ignores_candidates(&candidates(&[
+            "my_crate::caller",
+            "bindgen::root::unsafe_fn",
+        ])));
         assert!(
-            parsed
+            !parsed
                 .safety
-                .ignored_namespace_match("bindgen::root::unsafe_fn")
-                .is_some()
+                .ignores_candidates(&candidates(&["my_crate::safe"]))
         );
         assert!(
             parsed
                 .safety
-                .ignored_namespace_match("my_crate::ffi")
-                .is_some()
-        );
-        assert!(
-            parsed
-                .safety
-                .ignored_namespace_match("my_crate::safe")
-                .is_none()
-        );
-        assert!(
-            parsed
-                .safety
-                .trusts_safety_boundary_namespace("ffi::safe_contract")
-        );
-        assert!(
-            parsed
-                .safety
-                .trusts_safety_boundary_namespace("ffi::safe_method")
+                .trusts_safety_boundary_candidates(&candidates(&["ffi::safe_contract"]))
         );
         assert!(
             !parsed
                 .safety
-                .trusts_safety_boundary_namespace("ffi::plain_safe")
+                .trusts_safety_boundary_candidates(&candidates(&["ffi::plain_safe"]))
         );
         assert_eq!(parsed.safety.lints.missing_safety_docs, LintLevel::Allow);
         assert_eq!(
@@ -1636,22 +1439,6 @@ mod tests {
     }
 
     #[test]
-    fn rejects_ambiguous_callable_edge_attribution_both_mode() {
-        let config = r#"
-            [analysis]
-            callable-edge-attribution = "both"
-        "#;
-
-        let error =
-            SniffTestConfig::from_manifest_str(config).expect_err("manifest should be rejected");
-
-        let message = error.to_string();
-        assert!(message.contains("unknown variant `both`"));
-        assert!(message.contains("erasure-sites"));
-        assert!(message.contains("call-sites"));
-    }
-
-    #[test]
     fn mir_inlining_off_disables_mir_inline_passes() {
         assert_eq!(
             MirInlining::Off.rustc_flags(),
@@ -1666,76 +1453,27 @@ mod tests {
     }
 
     #[test]
-    fn trusted_panic_boundary_namespace_patterns_match_exact_names_paths_and_globs() {
+    fn panic_namespace_policies_use_stable_candidate_sets() {
         let config = PanicConfig {
-            trusted_panic_boundary_namespaces: path_patterns(&[
-                "std",
-                "std::*",
-                "alloc::**",
-                "rustc*::**",
-                "small?ec",
-                "serde_{derive,json}",
-                "**::*unchecked",
-            ]),
-            ..PanicConfig::default()
-        };
-
-        assert!(config.trusts_panic_boundary_namespace("std"));
-        assert!(!config.trusts_panic_boundary_namespace("std::io::Error::new"));
-        assert!(config.trusts_panic_boundary_namespace("std::io"));
-        assert!(config.trusts_panic_boundary_namespace("alloc::vec::Vec::push"));
-        // Recursive patterns include the namespace root itself.
-        assert!(config.trusts_panic_boundary_namespace("alloc"));
-        assert!(config.trusts_panic_boundary_namespace("rustc_middle::ty::TyCtxt"));
-        assert!(config.trusts_panic_boundary_namespace("rustc_middle"));
-        assert!(config.trusts_panic_boundary_namespace("smallvec"));
-        assert!(config.trusts_panic_boundary_namespace("serde_json"));
-        assert!(config.trusts_panic_boundary_namespace("core::char::methods::from_u32_unchecked"));
-        assert!(!config.trusts_panic_boundary_namespace("rustix"));
-        assert!(!config.trusts_panic_boundary_namespace("smallalloc"));
-        assert!(!config.trusts_panic_boundary_namespace("serde_core"));
-        assert!(!config.trusts_panic_boundary_namespace("core::char::methods::from_u32"));
-    }
-
-    #[test]
-    fn ignored_namespace_patterns_match_exact_names_paths_and_globs() {
-        let config = PanicConfig {
-            ignored_namespaces: path_patterns(&[
-                "syn",
-                "quote",
-                "proc_macro2",
-                "proc_macro2::**",
-                "*_derive",
-                "std::io::Error::new",
-                "**::from_*_unchecked",
-            ]),
-            ..PanicConfig::default()
-        };
-
-        assert!(config.ignores_namespace("syn"));
-        assert!(!config.ignores_namespace("syn::parse"));
-        assert!(config.ignores_namespace("quote"));
-        assert!(config.ignores_namespace("proc_macro2"));
-        assert!(config.ignores_namespace("proc_macro2::TokenStream"));
-        assert!(!config.ignores_namespace("proc-macro2"));
-        assert!(config.ignores_namespace("serde_derive"));
-        assert!(config.ignores_namespace("std::io::Error::new"));
-        assert!(config.ignores_namespace("core::char::methods::from_u32_unchecked"));
-        assert!(!config.ignores_namespace("serde"));
-        assert!(!config.ignores_namespace("std::io::Error::kind"));
-        assert!(!config.ignores_namespace("core::char::methods::from_u32"));
-    }
-
-    #[test]
-    fn panic_sink_namespace_patterns_match_segmented_def_paths() {
-        let config = PanicConfig {
+            ignored_namespaces: path_patterns(&["generated::**"]),
+            trusted_panic_boundary_namespaces: path_patterns(&["core::**"]),
             panic_sink_namespaces: path_patterns(&["core::panicking::**"]),
             ..PanicConfig::default()
         };
 
-        assert!(config.marks_panic_sink_namespace("core::panicking::panic_fmt"));
-        assert!(config.marks_panic_sink_namespace("core::panicking::panic_bounds_check"));
-        assert!(!config.marks_panic_sink_namespace("core::option::unwrap_failed"));
+        assert!(config.ignores_candidates(&candidates(&["app::wrapper", "generated::helper",])));
+        assert_eq!(
+            config.panic_boundary_policy_candidates(&candidates(&["core::fmt::write"])),
+            PanicBoundaryPolicy::TrustedBoundary
+        );
+        assert_eq!(
+            config.panic_boundary_policy_candidates(&candidates(&["core::panicking::panic_fmt"])),
+            PanicBoundaryPolicy::PanicSink
+        );
+        assert_eq!(
+            config.panic_boundary_policy_candidates(&candidates(&["app::run"])),
+            PanicBoundaryPolicy::Normal
+        );
     }
 
     #[test]
@@ -1743,15 +1481,16 @@ mod tests {
         let config = SniffTestConfig::from_manifest_str(EXAMPLE_MANIFEST)
             .expect("example manifest should parse");
 
-        assert!(
+        assert_eq!(
             config
                 .panics
-                .marks_panic_sink_namespace("core::std::rt::panic_fmt")
+                .panic_boundary_policy_candidates(&candidates(&["core::std::rt::panic_fmt"])),
+            PanicBoundaryPolicy::PanicSink
         );
     }
 
     #[test]
-    fn rejects_invalid_glob_patterns() {
+    fn manifest_validates_namespace_globs() {
         let config = r#"
             [panics]
             panic-sink-namespaces = ["std::ops::{Index"]
@@ -1838,11 +1577,14 @@ mod tests {
         .expect("override globs should compile");
 
         assert_eq!(
-            overrides.markdown_for_namespace("zerocopy::Layout::for_type"),
+            overrides.markdown_for_candidates(&candidates(&[
+                "zerocopy::impls::{impl#0}::for_type",
+                "zerocopy::Layout::for_type",
+            ])),
             Some("# Panics\n")
         );
         assert_eq!(
-            overrides.markdown_for_namespace("zerocopy::FromBytes"),
+            overrides.markdown_for_candidates(&candidates(&["zerocopy::FromBytes"])),
             Some("# Safety\n")
         );
     }
@@ -1884,7 +1626,7 @@ mod tests {
             parsed
                 .documentation
                 .overrides
-                .markdown_for_namespace("zerocopy::Layout::for_type")
+                .markdown_for_candidates(&candidates(&["zerocopy::Layout::for_type"]))
                 .map(str::trim),
             Some("# Panics\n\n- nonzero: layout size must be representable.")
         );

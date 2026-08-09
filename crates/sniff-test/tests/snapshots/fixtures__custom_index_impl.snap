@@ -1,32 +1,22 @@
 ---
 source: crates/sniff-test/tests/fixtures.rs
-expression: messages
+expression: "report[\"findings\"]"
 ---
 [
   {
-    "artifact": {
-      "crate-name": "custom_index_impl"
-    },
-    "findings": [
-      {
-        "kind": "panic-invocation",
-        "level": "deny",
-        "reason": "panic sink core::std::rt::panic_fmt",
-        "root": "custom_index_impl::custom_index_panics",
-        "root-kind": "concrete",
-        "span": "src/lib.rs:14:9: 14:36",
-        "target": "core::std::rt::panic_fmt",
-        "trace": [
-          "src/lib.rs:5:16: 5:20: custom_index_impl::custom_index_panics --direct-call-> <custom_index_impl::Foo as std::ops::Index<usize>>::index",
-          "src/lib.rs:14:9: 14:36: <custom_index_impl::Foo as std::ops::Index<usize>>::index --macro-expansion-> macro std::panic",
-          "src/lib.rs:14:9: 14:36: macro std::panic --macro-expansion-> macro core::std::panic::panic_2021",
-          "[SYSROOT]/lib/rustlib/src/rust/library/core/src/panic.rs:62:9: 62:73: macro core::std::panic::panic_2021 --direct-call-> core::std::rt::panic_fmt"
-        ]
-      }
-    ],
-    "format-version": 12,
-    "reason": "sniff-test-artifact",
-    "rustc-version": "[RUSTC_VERSION]",
-    "tool-version": "0.1.0"
+    "kind": "panic-invocation",
+    "level": "deny",
+    "reason": "panic sink core::std::rt::panic_fmt",
+    "root": "custom_index_impl::custom_index_panics",
+    "root-kind": "concrete",
+    "root-span": "src/lib.rs:3:1: 3:29",
+    "span": "src/lib.rs:14:9: 14:36",
+    "target": "core::std::rt::panic_fmt",
+    "trace": [
+      "src/lib.rs:5:16: 5:20: custom_index_impl::custom_index_panics --direct-call-> <custom_index_impl::Foo as std::ops::Index<usize>>::index",
+      "src/lib.rs:14:9: 14:36: <custom_index_impl::Foo as std::ops::Index<usize>>::index --macro-expansion-> macro std::panic",
+      "src/lib.rs:14:9: 14:36: macro std::panic --macro-expansion-> macro core::std::panic::panic_2021",
+      "[SYSROOT]/lib/rustlib/src/rust/library/core/src/panic.rs:62:9: 62:73: macro core::std::panic::panic_2021 --direct-call-> core::std::rt::panic_fmt"
+    ]
   }
 ]

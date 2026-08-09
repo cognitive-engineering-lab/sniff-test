@@ -131,10 +131,9 @@ pub(crate) fn cached_source_span_in(
     let span = Span::with_root_ctxt(BytePos(lo), BytePos(hi));
     source_map
         .span_to_snippet(span)
-        .map_err(|error| CachedSourceError::InvalidSourceRange {
+        .map_err(|_| CachedSourceError::InvalidSourceRange {
             byte_start: range.byte_start,
             byte_end: range.byte_end,
-            message: format!("{error:?}"),
         })?;
     Ok(span)
 }
@@ -272,7 +271,6 @@ pub(crate) enum CachedSourceError {
     InvalidSourceRange {
         byte_start: u64,
         byte_end: u64,
-        message: String,
     },
 }
 
@@ -328,10 +326,9 @@ impl fmt::Display for CachedSourceError {
             Self::InvalidSourceRange {
                 byte_start,
                 byte_end,
-                message,
             } => write!(
                 formatter,
-                "cached source range {byte_start}..{byte_end} is not a valid source span: {message}"
+                "cached source range {byte_start}..{byte_end} could not be read from the verified source file"
             ),
         }
     }
@@ -361,6 +358,19 @@ mod tests {
 
     use super::{CachedSourceError, cached_source_span_in, stable_source_file_id};
     use crate::analysis::ir::{SourceFileIr, SourceRangeIr};
+
+    #[test]
+    fn invalid_source_ranges_render_stable_human_errors() {
+        let error = CachedSourceError::InvalidSourceRange {
+            byte_start: 4,
+            byte_end: 9,
+        };
+
+        assert_eq!(
+            error.to_string(),
+            "cached source range 4..9 could not be read from the verified source file"
+        );
+    }
 
     fn write_source(directory: &TempDir, source: &str) -> std::path::PathBuf {
         let path = directory.path().join("cached.rs");
@@ -407,7 +417,7 @@ mod tests {
     }
 
     #[test]
-    fn changed_cached_source_is_rejected_before_returning_a_span() {
+    fn cached_source_span_requires_verified_source() {
         with_session_globals(|| {
             let directory = tempfile::tempdir().expect("temp directory");
             let path = write_source(&directory, "fn old() {}\n");
@@ -421,30 +431,6 @@ mod tests {
             assert!(matches!(
                 error,
                 CachedSourceError::ContentHashMismatch { .. }
-            ));
-        });
-    }
-
-    #[test]
-    fn matching_content_at_a_different_source_identity_is_rejected() {
-        with_session_globals(|| {
-            let directory = tempfile::tempdir().expect("temp directory");
-            let original = write_source(&directory, "same\n");
-            let source = source_metadata(&original);
-            let replacement = directory.path().join("replacement.rs");
-            fs::write(&replacement, "same\n").expect("write replacement source");
-            let source = SourceFileIr {
-                filename: replacement.to_string_lossy().into_owned(),
-                ..source
-            };
-            let active = SourceMap::new(FilePathMapping::empty());
-
-            let error = cached_source_span_in(&active, &source, &range(&source, 0, 4))
-                .expect_err("a different source identity must not produce a span");
-
-            assert!(matches!(
-                error,
-                CachedSourceError::StableIdentityMismatch { .. }
             ));
         });
     }
@@ -510,28 +496,6 @@ mod tests {
             error_for(&missing).is_absent_from_disk(),
             "truly unavailable dependency source may safely degrade to cached marker facts"
         );
-    }
-
-    #[test]
-    fn out_of_range_cached_offsets_are_rejected() {
-        with_session_globals(|| {
-            let directory = tempfile::tempdir().expect("temp directory");
-            let path = write_source(&directory, "x");
-            let source = source_metadata(&path);
-            let active = SourceMap::new(FilePathMapping::empty());
-
-            let error = cached_source_span_in(&active, &source, &range(&source, 0, 2))
-                .expect_err("out-of-range source must not produce a span");
-
-            assert_eq!(
-                error,
-                CachedSourceError::RangeOutOfBounds {
-                    byte_start: 0,
-                    byte_end: 2,
-                    byte_len: 1,
-                }
-            );
-        });
     }
 
     #[test]

@@ -1,9 +1,0 @@
-[package]
-name = "dependency-async-panic-app"
-version = "0.1.0"
-edition = "2024"
-
-[dependencies]
-dependency-async-panic = { path = "../dep" }
-
-[workspace]

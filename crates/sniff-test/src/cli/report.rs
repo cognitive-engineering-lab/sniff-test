@@ -5,7 +5,7 @@ use serde::Serialize;
 
 use super::findings::ResolvedFinding;
 
-pub(crate) const REPORT_FORMAT_VERSION: u32 = 12;
+pub(crate) const REPORT_FORMAT_VERSION: u32 = 13;
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "kebab-case")]
@@ -24,14 +24,6 @@ pub(crate) struct ReportArtifact {
     pub(crate) crate_name: String,
 }
 
-/// Internal rustc-unit classification. This is deliberately not serialized:
-/// every public report is a workspace report.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum CrateOutputScope {
-    Workspace,
-    Dependency,
-}
-
 pub(crate) fn render_span(tcx: TyCtxt<'_>, span: rustc_span::Span) -> String {
     tcx.sess.source_map().span_to_diagnostic_string(span)
 }
@@ -41,7 +33,9 @@ mod tests {
     use super::{AnalysisArtifactReport, REPORT_FORMAT_VERSION, ReportArtifact};
 
     #[test]
-    fn workspace_report_v12_has_no_scope_or_cache_identity_fields() {
+    fn workspace_report_v13_serializes_its_public_fields() {
+        assert_eq!(REPORT_FORMAT_VERSION, 13);
+
         let report = AnalysisArtifactReport {
             reason: String::from("sniff-test-artifact"),
             format_version: REPORT_FORMAT_VERSION,
@@ -53,16 +47,18 @@ mod tests {
             findings: Vec::new(),
         };
 
-        let value = serde_json::to_value(report).expect("report should serialize");
-        let object = value.as_object().expect("report object");
-        assert_eq!(object["format-version"], REPORT_FORMAT_VERSION);
-        assert!(!object.contains_key("scope"));
-        assert!(!object.contains_key("dependencies"));
-        assert!(
-            !object["artifact"]
-                .as_object()
-                .expect("artifact object")
-                .contains_key("artifact-id")
+        assert_eq!(
+            serde_json::to_value(report).expect("report should serialize"),
+            serde_json::json!({
+                "reason": "sniff-test-artifact",
+                "format-version": 13,
+                "tool-version": "0.1.0",
+                "rustc-version": "rustc test",
+                "artifact": {
+                    "crate-name": "workspace",
+                },
+                "findings": [],
+            })
         );
     }
 }

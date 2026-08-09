@@ -1,41 +1,19 @@
 ---
 source: crates/sniff-test/tests/fixtures.rs
-expression: messages
+expression: "report[\"findings\"]"
 ---
 [
   {
-    "artifact": {
-      "crate-name": "optimizer_pruning"
-    },
-    "findings": [
-      {
-        "kind": "documented-panic",
-        "level": "warn",
-        "reason": "optimizer_pruning::greater_than_zero documents when it may panic under # Panics",
-        "root": "optimizer_pruning::documented_inlinable_call",
-        "root-kind": "concrete",
-        "span": "src/lib.rs:26:5: 26:26",
-        "target": "optimizer_pruning::greater_than_zero",
-        "trace": [
-          "src/lib.rs:26:5: 26:26: optimizer_pruning::documented_inlinable_call --direct-call-> optimizer_pruning::greater_than_zero"
-        ]
-      },
-      {
-        "kind": "documented-panic",
-        "level": "warn",
-        "reason": "optimizer_pruning::greater_than_zero_inline documents when it may panic under # Panics",
-        "root": "optimizer_pruning::documented_inline_always_call",
-        "root-kind": "concrete",
-        "span": "src/lib.rs:30:5: 30:33",
-        "target": "optimizer_pruning::greater_than_zero_inline",
-        "trace": [
-          "src/lib.rs:30:5: 30:33: optimizer_pruning::documented_inline_always_call --direct-call-> optimizer_pruning::greater_than_zero_inline"
-        ]
-      }
-    ],
-    "format-version": 12,
-    "reason": "sniff-test-artifact",
-    "rustc-version": "[RUSTC_VERSION]",
-    "tool-version": "0.1.0"
+    "kind": "documented-panic",
+    "level": "warn",
+    "reason": "optimizer_pruning::greater_than_zero documents when it may panic under # Panics",
+    "root": "optimizer_pruning::documented_inlinable_call",
+    "root-kind": "concrete",
+    "root-span": "src/lib.rs:7:1: 7:44",
+    "span": "src/lib.rs:8:5: 8:26",
+    "target": "optimizer_pruning::greater_than_zero",
+    "trace": [
+      "src/lib.rs:8:5: 8:26: optimizer_pruning::documented_inlinable_call --direct-call-> optimizer_pruning::greater_than_zero"
+    ]
   }
 ]

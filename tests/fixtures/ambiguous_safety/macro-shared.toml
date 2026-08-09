@@ -1,7 +1,6 @@
 [analysis]
 report-roots = [
     "ambiguous_safety::reused_marker_within_one_macro_expansion",
-    "ambiguous_safety::reused_caller_marker_for_macro_expansion",
 ]
 
 [analysis.lints]

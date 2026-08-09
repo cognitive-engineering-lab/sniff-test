@@ -1,16 +1,20 @@
 ---
 source: crates/sniff-test/tests/fixtures.rs
-expression: messages
+expression: "report[\"findings\"]"
 ---
 [
   {
-    "artifact": {
-      "crate-name": "suppression"
-    },
-    "findings": [],
-    "format-version": 12,
-    "reason": "sniff-test-artifact",
-    "rustc-version": "[RUSTC_VERSION]",
-    "tool-version": "0.1.0"
+    "compiler-assert-kind": "bounds-check",
+    "kind": "compiler-assert",
+    "level": "deny",
+    "reason": "compiler assert",
+    "root": "suppression::reported_index",
+    "root-kind": "concrete",
+    "root-span": "src/lib.rs:5:1: 5:63",
+    "span": "src/lib.rs:6:5: 6:18",
+    "target": "compiler assert index out of bounds",
+    "trace": [
+      "src/lib.rs:6:5: 6:18: suppression::reported_index --assert-> compiler assert index out of bounds"
+    ]
   }
 ]

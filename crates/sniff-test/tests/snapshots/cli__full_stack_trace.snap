@@ -18,21 +18,26 @@ note: panic may happen here: panic sink `core::panicking::panic`
    |
 21 |     assert!(flag);
    |     ^^^^^^^^^^^^^
-note: reachable step 0: safe_markers::unsafe_call --direct-call-> safe_markers::helper
-  --> src/lib.rs:17:5
+note: reachable step 0: macro core::std::assert --direct-call-> core::panicking::panic
+  --> src/lib.rs:21:5
    |
-17 |     helper(flag);
-   |     ^^^^^^^^^^^^
+21 |     assert!(flag);
+   |     ^^^^^^^^^^^^^
 note: reachable step 1: safe_markers::helper --macro-expansion-> macro core::std::assert
   --> src/lib.rs:21:5
    |
 21 |     assert!(flag);
    |     ^^^^^^^^^^^^^
-note: reachable step 2: macro core::std::assert --direct-call-> core::panicking::panic
-  --> src/lib.rs:21:5
+note: reachable step 2: safe_markers::unsafe_call --direct-call-> safe_markers::helper
+  --> src/lib.rs:17:5
    |
-21 |     assert!(flag);
-   |     ^^^^^^^^^^^^^
+17 |     helper(flag);
+   |     ^^^^^^^^^^^^
+note: this function can reach a panic invocation
+  --> src/lib.rs:16:1
+   |
+16 | pub fn unsafe_call(flag: bool) {
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 help: guard this path, or add `// PANIC:` here if a local invariant proves it cannot panic
   --> src/lib.rs:17:5
    |
@@ -51,11 +56,16 @@ note: panic may happen here: compiler assertion: division by zero
   |
 8 |     total / denominator
   |     ^^^^^^^^^^^^^^^^^^^
-note: reachable step 0: safe_markers::unsafe_ratio --assert-> compiler assert DivisionByZero(copy _1) with locals [CompilerAssertLocal { index: 0, name: None, role: ReturnPointer }, CompilerAssertLocal { index: 1, name: Some("total"), role: Argument }, CompilerAssertLocal { index: 2, name: Some("denominator"), role: Argument }, CompilerAssertLocal { index: 3, name: None, role: Temporary }]
+note: reachable step 0: safe_markers::unsafe_ratio --assert-> compiler assert division by zero
  --> src/lib.rs:8:5
   |
 8 |     total / denominator
   |     ^^^^^^^^^^^^^^^^^^^
+note: this function can reach a compiler assertion that may panic (division by zero)
+ --> src/lib.rs:7:1
+  |
+7 | pub fn unsafe_ratio(total: usize, denominator: usize) -> usize {
+  | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
   = help: add a guard, document the panic with `# Panics`, or add `// PANIC:` if a local invariant proves it cannot panic
 
 error: could not compile `safe-markers` (lib) due to 2 previous errors

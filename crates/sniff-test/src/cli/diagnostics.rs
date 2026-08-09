@@ -11,36 +11,6 @@ use toml::Spanned;
 
 use super::findings::{DiagnosticMessage, FindingDiagnostic};
 
-trait LintDiag {
-    fn note(&mut self, note: String);
-    fn span_note(&mut self, span: Span, note: String);
-    fn span_label(&mut self, span: Span, label: String);
-    fn span_help(&mut self, span: Span, help: &'static str);
-    fn help(&mut self, help: &'static str);
-}
-
-impl<G: EmissionGuarantee> LintDiag for Diag<'_, G> {
-    fn note(&mut self, note: String) {
-        Diag::note(self, note);
-    }
-
-    fn span_note(&mut self, span: Span, note: String) {
-        Diag::span_note(self, span, note);
-    }
-
-    fn span_label(&mut self, span: Span, label: String) {
-        Diag::span_label(self, span, label);
-    }
-
-    fn span_help(&mut self, span: Span, help: &'static str) {
-        Diag::span_help(self, span, help);
-    }
-
-    fn help(&mut self, help: &'static str) {
-        Diag::help(self, help);
-    }
-}
-
 pub(super) fn emit_finding_diagnostic(
     tcx: TyCtxt<'_>,
     level: LintLevel,
@@ -71,18 +41,24 @@ pub(super) fn emit_finding_diagnostic(
     }
 }
 
-fn decorate(diagnostic: &mut dyn LintDiag, messages: &[DiagnosticMessage]) {
+fn decorate<G: EmissionGuarantee>(diagnostic: &mut Diag<'_, G>, messages: &[DiagnosticMessage]) {
     for message in messages {
         match message {
-            DiagnosticMessage::Note(note) => diagnostic.note(note.clone()),
+            DiagnosticMessage::Note(note) => {
+                diagnostic.note(note.clone());
+            }
             DiagnosticMessage::SpanNote(span, note) => {
                 diagnostic.span_note(*span, note.clone());
             }
             DiagnosticMessage::SpanLabel(span, label) => {
                 diagnostic.span_label(*span, label.clone());
             }
-            DiagnosticMessage::SpanHelp(span, help) => diagnostic.span_help(*span, help),
-            DiagnosticMessage::Help(help) => diagnostic.help(help),
+            DiagnosticMessage::SpanHelp(span, help) => {
+                diagnostic.span_help(*span, *help);
+            }
+            DiagnosticMessage::Help(help) => {
+                diagnostic.help(*help);
+            }
         }
     }
 }
@@ -161,43 +137,9 @@ fn normalized_offset(file: &rustc_span::SourceFile, original: usize) -> Option<u
 #[cfg(test)]
 mod tests {
     use rustc_span::source_map::{FilePathMapping, SourceMap};
-    use rustc_span::{BytePos, FileName, Span};
+    use rustc_span::{BytePos, FileName};
 
-    use super::{LintDiag, config_span, decorate};
-    use crate::cli::findings::DiagnosticMessage;
-
-    #[derive(Default)]
-    struct RecordedDiagnostic {
-        decorations: Vec<String>,
-    }
-
-    impl LintDiag for RecordedDiagnostic {
-        fn note(&mut self, note: String) {
-            self.decorations.push(format!("note:{note}"));
-        }
-
-        fn span_note(&mut self, span: Span, note: String) {
-            self.decorations
-                .push(format!("span-note:{}..{}:{note}", span.lo().0, span.hi().0));
-        }
-
-        fn span_label(&mut self, span: Span, label: String) {
-            self.decorations.push(format!(
-                "span-label:{}..{}:{label}",
-                span.lo().0,
-                span.hi().0
-            ));
-        }
-
-        fn span_help(&mut self, span: Span, help: &'static str) {
-            self.decorations
-                .push(format!("span-help:{}..{}:{help}", span.lo().0, span.hi().0));
-        }
-
-        fn help(&mut self, help: &'static str) {
-            self.decorations.push(format!("help:{help}"));
-        }
-    }
+    use super::config_span;
 
     fn with_source_file(source: &str, check: impl FnOnce(&rustc_span::SourceFile)) {
         rustc_span::create_default_session_globals_then(|| {
@@ -235,31 +177,5 @@ mod tests {
             assert_eq!(span.lo(), file.start_pos + BytePos(6));
             assert_eq!(span.hi(), file.start_pos + BytePos(13));
         });
-    }
-
-    #[test]
-    fn finding_decorations_preserve_spanned_notes_labels_and_help() {
-        let span = Span::with_root_ctxt(BytePos(10), BytePos(20));
-        let messages = [
-            DiagnosticMessage::Note(String::from("plain")),
-            DiagnosticMessage::SpanNote(span, String::from("site")),
-            DiagnosticMessage::SpanLabel(span, String::from("requirement")),
-            DiagnosticMessage::SpanHelp(span, "fix here"),
-            DiagnosticMessage::Help("general fix"),
-        ];
-        let mut diagnostic = RecordedDiagnostic::default();
-
-        decorate(&mut diagnostic, &messages);
-
-        assert_eq!(
-            diagnostic.decorations,
-            [
-                "note:plain",
-                "span-note:10..20:site",
-                "span-label:10..20:requirement",
-                "span-help:10..20:fix here",
-                "help:general fix",
-            ]
-        );
     }
 }

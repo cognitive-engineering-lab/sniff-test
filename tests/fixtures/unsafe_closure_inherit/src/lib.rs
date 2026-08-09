@@ -12,10 +12,3 @@ pub fn unjustified_closure() {
         (|| dangerous())();
     }
 }
-
-pub fn justified_direct() {
-    // SAFETY: dangerous has no requirements in this fixture.
-    unsafe {
-        dangerous();
-    }
-}

@@ -1,64 +1,57 @@
 ---
 source: crates/sniff-test/tests/fixtures.rs
-expression: messages
+expression: "report[\"findings\"]"
 ---
 [
   {
-    "artifact": {
-      "crate-name": "indirect_calls"
-    },
-    "findings": [
-      {
-        "kind": "documented-panic",
-        "level": "warn",
-        "reason": "indirect_calls::Risky::documented documents when it may panic under # Panics",
-        "root": "indirect_calls::call_documented",
-        "root-kind": "generic",
-        "span": "src/lib.rs:11:5: 11:27",
-        "target": "indirect_calls::Risky::documented",
-        "trace": [
-          "src/lib.rs:11:5: 11:27: indirect_calls::call_documented --indirect-call-> indirect_calls::Risky::documented"
-        ]
-      },
-      {
-        "kind": "indirect-call-boundary",
-        "level": "warn",
-        "reason": "indirect call to undocumented trait method indirect_calls::Risky::undocumented cannot be verified",
-        "root": "indirect_calls::call_dyn",
-        "root-kind": "concrete",
-        "span": "src/lib.rs:19:5: 19:29",
-        "target": "indirect_calls::Risky::undocumented",
-        "trace": [
-          "src/lib.rs:19:5: 19:29: indirect_calls::call_dyn --direct-call-> indirect_calls::Risky::undocumented"
-        ]
-      },
-      {
-        "kind": "indirect-call-boundary",
-        "level": "warn",
-        "reason": "indirect call through an opaque callable cannot be verified",
-        "root": "indirect_calls::call_pointer",
-        "root-kind": "concrete",
-        "span": "src/lib.rs:23:5: 23:17",
-        "trace": [
-          "src/lib.rs:23:5: 23:17: indirect_calls::call_pointer --indirect-call-> indirect call Binder { value: fn(bool), bound_vars: [] }"
-        ]
-      },
-      {
-        "kind": "indirect-call-boundary",
-        "level": "warn",
-        "reason": "indirect call to undocumented trait method indirect_calls::Risky::undocumented cannot be verified",
-        "root": "indirect_calls::call_undocumented",
-        "root-kind": "generic",
-        "span": "src/lib.rs:15:5: 15:29",
-        "target": "indirect_calls::Risky::undocumented",
-        "trace": [
-          "src/lib.rs:15:5: 15:29: indirect_calls::call_undocumented --indirect-call-> indirect_calls::Risky::undocumented"
-        ]
-      }
-    ],
-    "format-version": 12,
-    "reason": "sniff-test-artifact",
-    "rustc-version": "[RUSTC_VERSION]",
-    "tool-version": "0.1.0"
+    "kind": "documented-panic",
+    "level": "warn",
+    "reason": "indirect_calls::Risky::documented documents when it may panic under # Panics",
+    "root": "indirect_calls::call_documented",
+    "root-kind": "generic",
+    "root-span": "src/lib.rs:10:1: 10:56",
+    "span": "src/lib.rs:11:5: 11:27",
+    "target": "indirect_calls::Risky::documented",
+    "trace": [
+      "src/lib.rs:11:5: 11:27: indirect_calls::call_documented --indirect-call-> indirect_calls::Risky::documented"
+    ]
+  },
+  {
+    "kind": "indirect-call-boundary",
+    "level": "warn",
+    "reason": "indirect call to undocumented trait method indirect_calls::Risky::undocumented cannot be verified",
+    "root": "indirect_calls::call_dyn",
+    "root-kind": "concrete",
+    "root-span": "src/lib.rs:18:1: 18:47",
+    "span": "src/lib.rs:19:5: 19:29",
+    "target": "indirect_calls::Risky::undocumented",
+    "trace": [
+      "src/lib.rs:19:5: 19:29: indirect_calls::call_dyn --direct-call-> indirect_calls::Risky::undocumented"
+    ]
+  },
+  {
+    "kind": "indirect-call-boundary",
+    "level": "warn",
+    "reason": "indirect call through a function pointer cannot be verified",
+    "root": "indirect_calls::call_pointer",
+    "root-kind": "concrete",
+    "root-span": "src/lib.rs:22:1: 22:50",
+    "span": "src/lib.rs:23:5: 23:17",
+    "trace": [
+      "src/lib.rs:23:5: 23:17: indirect_calls::call_pointer --indirect-call-> indirect call through a function pointer"
+    ]
+  },
+  {
+    "kind": "indirect-call-boundary",
+    "level": "warn",
+    "reason": "indirect call to undocumented trait method indirect_calls::Risky::undocumented cannot be verified",
+    "root": "indirect_calls::call_undocumented",
+    "root-kind": "generic",
+    "root-span": "src/lib.rs:14:1: 14:58",
+    "span": "src/lib.rs:15:5: 15:29",
+    "target": "indirect_calls::Risky::undocumented",
+    "trace": [
+      "src/lib.rs:15:5: 15:29: indirect_calls::call_undocumented --indirect-call-> indirect_calls::Risky::undocumented"
+    ]
   }
 ]

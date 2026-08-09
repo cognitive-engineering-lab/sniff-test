@@ -1,9 +1,0 @@
-[package]
-name = "dependency-cross-origin-ambiguity-app"
-version = "0.1.0"
-edition = "2024"
-
-[dependencies]
-dependency-cross-origin-ambiguity = { path = "../dep" }
-
-[workspace]

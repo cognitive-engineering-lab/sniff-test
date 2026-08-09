@@ -6,19 +6,17 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 
 use common::{
-    CommandOutput, clean_cargo_package_env, copy_dir_all, lock_nested_cargo, repo_root,
-    rustc_sysroot,
+    COMPILER_DEBUG_FRAGMENTS, CommandOutput, clean_cargo_package_env, copy_dir_all,
+    lock_nested_cargo, repo_root, rustc_sysroot,
 };
 
-#[derive(Clone, Copy, Debug)]
 struct Case {
-    behavior: &'static str,
-    expected_exit: i32,
-    crate_dir: &'static str,
+    denied: bool,
+    app_crate: bool,
     working_dir: Option<&'static str>,
     config_append: &'static str,
     args: &'static [&'static str],
-    envs: &'static [(&'static str, &'static str)],
+    rustflags: Option<&'static str>,
 }
 
 macro_rules! cli_cases {
@@ -27,7 +25,7 @@ macro_rules! cli_cases {
             $(
                 #[test]
                 fn $case() {
-                    run_named_case(stringify!($case), $fixture, $spec);
+                    run_named_case(stringify!($case), $fixture, &$spec);
                 }
             )+
         )+
@@ -36,66 +34,53 @@ macro_rules! cli_cases {
 
 cli_cases! {
     "direct_panic" => {
-        panic_invocation_can_be_allowed => Case::new("panic invocation allow policy")
+        panic_invocation_can_be_allowed => Case::new()
             .config_append("\n[panics.lints]\npanic-invocation = \"allow\"\n");
     }
     "safe_markers" => {
-        compact_stack_hint => Case::new("compact stack hint").exit_code(101);
-        full_stack_trace => Case::new("full stack trace")
-            .exit_code(101)
+        compact_stack_hint => Case::new().denied();
+        full_stack_trace => Case::new()
+            .denied()
             .config_append("\n[analysis]\nshow-full-stack-trace = true\n");
     }
     "dependency_obligation" => {
-        dependency_warning_footer => Case::new("dependency warning footer").crate_dir("app");
+        dependency_warning_footer => Case::new().in_app();
     }
-    "dependency_identity" => {
-        cached_dependency_raw_panic_diagnostics => Case::new("cached dependency raw panic diagnostics")
-            .crate_dir("app")
-            .exit_code(101);
-    }
-    "dependency_safety" => {
-        cached_raw_pointer_override_applies =>
-            Case::new("cached raw pointer override")
-                .crate_dir("app")
-                .config_append(
-                    "\nraw-pointer-dereference-missing-justification = \"allow\"\n",
-                );
-    }
-    "dependency_assert_kinds" => {
-        cached_compiler_assert_override_applies =>
-            Case::new("cached compiler assert override")
-                .crate_dir("app")
-                .exit_code(101);
+    "dependency_transitive_panic" => {
+        dependency_panic_diagnostics => Case::new()
+            .in_app()
+            .denied();
     }
     "closure_call_graph" => {
-        closure_call_graph_diagnostics => Case::new("closure diagnostics")
+        closure_call_graph_diagnostics => Case::new()
             .args(&["--manifest", "basic.toml"])
-            .exit_code(101);
+            .denied();
     }
     "indirect_calls" => {
-        indirect_call_boundary_diagnostics => Case::new("indirect call boundary diagnostics");
+        indirect_call_boundary_diagnostics => Case::new();
     }
     "trusted_boundaries" => {
-        trusted_boundary_diagnostics => Case::new("trusted boundary diagnostics");
+        trusted_boundary_diagnostics => Case::new();
     }
     "safety_requirements" => {
-        safety_diagnostics => Case::new("safety diagnostics");
-        safety_obligation_diagnostics => Case::new("safety obligation diagnostics")
-            .args(&["--manifest", "obligations.toml"]);
+        safety_diagnostics => Case::new();
+    }
+    "safety_obligations" => {
+        safety_obligation_diagnostics => Case::new();
     }
     "panic_axioms" => {
-        compiler_assert_diagnostics => Case::new("compiler assert diagnostics").exit_code(101);
+        compiler_assert_diagnostics => Case::new().denied();
         compiler_assert_division_override_uses_umbrella_fallback =>
-            Case::new("division assert override with umbrella fallback")
+            Case::new()
                 .config_append(
                     "\n[panics.lints]\n\
                      compiler-assert-division-by-zero = \"deny\"\n\
                      compiler-assert = \"allow\"\n\
                      panic-invocation = \"allow\"\n",
                 )
-                .exit_code(101);
+                .denied();
         compiler_assert_overrides_are_independent =>
-            Case::new("remainder and bounds assert overrides")
+            Case::new()
                 .config_append(
                     "\n[panics.lints]\n\
                      compiler-assert = \"allow\"\n\
@@ -103,58 +88,87 @@ cli_cases! {
                      compiler-assert-bounds-check = \"deny\"\n\
                      panic-invocation = \"allow\"\n",
                 )
-                .exit_code(101);
-        cargo_manifest_path_forwarding => Case::new("cargo manifest-path forwarding")
+                .denied();
+        cargo_manifest_path_forwarding => Case::new()
             .working_dir("..")
-            .args(&["--", "--manifest-path", "{fixture}/Cargo.toml"])
-            .exit_code(101);
-        config_found_from_subdirectory => Case::new("config discovered from a subdirectory")
+            .args(&["--", "--manifest-path", "panic_axioms/Cargo.toml"])
+            .denied();
+        config_found_from_subdirectory => Case::new()
             .working_dir("src")
-            .exit_code(101);
-        rustflags_env_does_not_disable_analysis => Case::new("user RUSTFLAGS coexist")
-            .envs(&[("RUSTFLAGS", "--cfg sniff_test_cli_user_flag")])
-            .exit_code(101);
+            .denied();
+        rustflags_env_does_not_disable_analysis => Case::new()
+            .rustflags("--cfg sniff_test_cli_user_flag")
+            .denied();
     }
     "report_roots" => {
-        missing_report_root_diagnostic => Case::new("missing report root diagnostic")
-            .args(&["--manifest", "explicit.toml"])
-            .exit_code(101);
-        missing_report_root_can_be_allowed => Case::new("missing report root allow policy")
-            .args(&["--manifest", "allow-missing.toml"]);
-        missing_report_root_can_be_denied => Case::new("missing report root deny policy")
+        missing_report_root_diagnostic => Case::new()
             .args(&["--manifest", "deny-missing.toml"])
-            .exit_code(101);
-        empty_report_roots_can_be_denied => Case::new("empty report roots deny policy")
-            .args(&["--manifest", "deny-empty.toml"])
-            .exit_code(101);
+            .denied();
+        empty_report_roots_diagnostic => Case::new()
+            .args(&["--manifest", "empty.toml"]);
     }
     "unsafe_ops" => {
-        unsafe_op_missing_justification_can_be_denied => Case::new("unsafe operation deny policy")
+        unsafe_op_missing_justification_can_be_denied => Case::new()
             .config_append("\n[safety.lints]\nunsafe-op-missing-justification = \"deny\"\n")
-            .exit_code(101);
+            .denied();
         unsafe_op_overrides_use_umbrella_fallback =>
-            Case::new("unsafe operation overrides with umbrella fallback")
+            Case::new()
                 .config_append(
                     "\n[safety.lints]\n\
                      raw-pointer-dereference-missing-justification = \"warn\"\n\
                      unsafe-op-missing-justification = \"allow\"\n\
                      inline-assembly-missing-justification = \"deny\"\n",
                 )
-                .exit_code(101);
+                .denied();
     }
     "ambiguous_markers" => {
-        clean_explicit_report_roots_do_not_warn => Case::new("clean explicit report roots")
-            .args(&["--manifest", "clean.toml"]);
-        ambiguous_marker_diagnostics => Case::new("ambiguous marker diagnostics")
-            .args(&["--manifest", "strict.toml"])
-            .exit_code(101);
+        ambiguous_marker_diagnostics => Case::new().denied();
     }
     "ambiguous_safety" => {
-        ambiguous_safety_diagnostics => Case::new("ambiguous safety diagnostics").exit_code(101);
+        ambiguous_safety_diagnostics => Case::new().denied();
         ambiguous_safety_macro_shared_diagnostics =>
-            Case::new("shared macro safety marker diagnostics")
+            Case::new()
                 .args(&["--manifest", "macro-shared.toml"])
-                .exit_code(101);
+                .denied();
+    }
+}
+
+#[test]
+fn every_cargo_run_emits_the_workspace_report() {
+    let name = "every_cargo_run_emits_the_workspace_report";
+    let fixture = repo_root().join("tests/fixtures/panic_requirements");
+    let temp = tempfile::Builder::new()
+        .prefix("sniff-test-cli-repeat-report-")
+        .tempdir()
+        .expect("create temporary fixture directory");
+    let root = temp.path().join("panic_requirements");
+    copy_dir_all(&fixture, &root).expect("copy panic requirements fixture");
+
+    let binary = PathBuf::from(env!("CARGO_BIN_EXE_cargo-sniff-test"));
+    let case = Case::new().args(&["--message-format", "json"]);
+    let run = || run_cargo_sniff_test(&binary, &root, name, &case);
+    let _cargo_guard = lock_nested_cargo();
+    let first = run();
+    let second = run();
+
+    for (run_name, output) in [("first", first), ("second", second)] {
+        assert!(
+            output.status.success(),
+            "{run_name} run failed\nstdout:\n{}\nstderr:\n{}",
+            output.stdout,
+            output.stderr
+        );
+        let report_count = output
+            .stdout
+            .lines()
+            .filter_map(|line| serde_json::from_str::<serde_json::Value>(line).ok())
+            .filter(|message| message["reason"] == "sniff-test-artifact")
+            .count();
+        assert_eq!(
+            report_count, 1,
+            "{run_name} run should emit exactly one workspace report\nstdout:\n{}",
+            output.stdout
+        );
     }
 }
 
@@ -228,7 +242,7 @@ fn direct_driver_compile_error_follows_rustc_exit_status() {
             "2024",
         ])
         .arg(&source)
-        .args(["--sysroot", rustc_sysroot().trim(), "-Zno-codegen"])
+        .args(["--sysroot", rustc_sysroot().as_str(), "-Zno-codegen"])
         .current_dir(temp.path())
         .output()
         .expect("run driver");
@@ -265,7 +279,7 @@ fn standalone_direct_driver_emits_a_workspace_report_with_linked_rustc_version()
             "2024",
         ])
         .arg(source)
-        .args(["--sysroot", rustc_sysroot().trim(), "-Zno-codegen"])
+        .args(["--sysroot", rustc_sysroot().as_str(), "-Zno-codegen"])
         .env("RUSTC", "/definitely/missing/rustc")
         .current_dir(temp.path())
         .output()
@@ -289,7 +303,7 @@ fn standalone_direct_driver_emits_a_workspace_report_with_linked_rustc_version()
 }
 
 #[test]
-fn direct_dependency_unit_silently_caches_complete_policy_neutral_v14_ir() {
+fn direct_dependency_unit_silently_caches_complete_policy_neutral_v15_ir() {
     let temp = tempfile::tempdir().expect("temp dir");
     let source = temp.path().join("dependency.rs");
     fs::write(
@@ -331,7 +345,7 @@ impl Probe {
         .unwrap_or_else(|error| panic!("failed to read {}: {error}", cache_path.display()));
     let cache: serde_json::Value =
         serde_json::from_str(&serialized).expect("cache should contain JSON");
-    assert_eq!(cache["format-version"], 14);
+    assert_eq!(cache["format-version"], 15);
     assert_eq!(cache["artifact"]["crate-name"], "artifact_ir_dependency");
     assert!(cache["artifact"]["id"]["stable-crate-id"].is_u64());
     assert_eq!(
@@ -394,7 +408,7 @@ impl Probe {
 }
 
 #[test]
-fn workspace_lint_policy_reinterprets_unchanged_dependency_v14_ir() {
+fn workspace_lint_policy_reinterprets_unchanged_dependency_v15_ir() {
     let temp = tempfile::tempdir().expect("temp dir");
     let fixture = PolicyReinterpretationFixture::new(temp.path());
     let dependency_output = run_dependency_unit(
@@ -413,7 +427,7 @@ fn workspace_lint_policy_reinterprets_unchanged_dependency_v14_ir() {
         .unwrap_or_else(|error| panic!("failed to read {}: {error}", dependency_cache.display()));
     let initial_document: serde_json::Value =
         serde_json::from_slice(&initial_bytes).expect("dependency cache should contain JSON");
-    assert_eq!(initial_document["format-version"], 14);
+    assert_eq!(initial_document["format-version"], 15);
     assert!(initial_document.get("analysis-id").is_none());
     let cache_modified_before = fs::metadata(&dependency_cache)
         .and_then(|metadata| metadata.modified())
@@ -640,7 +654,7 @@ fn ordinary_workspace_binary_is_interpreted_without_a_cache_identity() {
         ))
         .args([
             "--sysroot",
-            rustc_sysroot().trim(),
+            rustc_sysroot().as_str(),
             "--emit=dep-info,metadata",
             "-C",
             "opt-level=3",
@@ -840,7 +854,7 @@ fn fixed_name_dependency_cache_must_match_the_crate_rustc_actually_loaded() {
     assert_success(&analyzed_output, "analyzed dependency");
 
     // Replace the exact same output filename without running sniff-test, so
-    // the v14 cache deliberately contains only the previous rustc identity.
+    // the v15 cache deliberately contains only the previous rustc identity.
     fs::write(
         &dependency_source,
         "pub fn dependency_value() -> u8 { 2 }\n",
@@ -859,7 +873,7 @@ fn fixed_name_dependency_cache_must_match_the_crate_rustc_actually_loaded() {
         .arg(&dependency_source)
         .arg("-o")
         .arg(&dependency_rlib)
-        .args(["--sysroot", sysroot.trim()])
+        .args(["--sysroot", sysroot.as_str()])
         .current_dir(temp.path())
         .output()
         .expect("compile replacement dependency");
@@ -940,7 +954,7 @@ fn unused_dependency_ir_produces_no_workspace_findings() {
         .arg(&dependency_source)
         .arg("-o")
         .arg(&dependency_rlib)
-        .args(["--sysroot", sysroot.trim()])
+        .args(["--sysroot", sysroot.as_str()])
         .current_dir(temp.path())
         .output()
         .expect("compile dependency");
@@ -982,7 +996,7 @@ fn unused_dependency_ir_produces_no_workspace_findings() {
         .arg(temp.path())
         .arg("--extern")
         .arg("unused_ir_dependency")
-        .args(["--sysroot", sysroot.trim(), "-Zno-codegen"])
+        .args(["--sysroot", sysroot.as_str(), "-Zno-codegen"])
         .env("CARGO_PRIMARY_PACKAGE", "1")
         .current_dir(temp.path())
         .output()
@@ -1090,11 +1104,19 @@ fn cached_dependency_source_is_verified_before_rendering_a_snippet() {
         !unavailable_stderr.contains("values[index]"),
         "stale source text must not be rendered:\n{unavailable_stderr}"
     );
+    let span_locations = unavailable_stderr
+        .lines()
+        .filter(|line| line.trim_start().starts_with("-->"))
+        .collect::<Vec<_>>();
+    assert_eq!(
+        span_locations.len(),
+        1,
+        "only the verified workspace root may be spanned when the cached effect source is unavailable:\n{unavailable_stderr}"
+    );
+    let workspace_source_path = workspace_source.display().to_string();
     assert!(
-        unavailable_stderr
-            .lines()
-            .all(|line| !line.trim_start().starts_with("-->")),
-        "a finding with unavailable cached source must be unspanned:\n{unavailable_stderr}"
+        span_locations[0].contains(&workspace_source_path),
+        "the remaining span must identify the verified workspace root:\n{unavailable_stderr}"
     );
 }
 
@@ -1126,7 +1148,7 @@ fn workspace_unit_fails_when_required_extern_artifact_ir_is_missing() {
         .arg(&dependency_source)
         .arg("-o")
         .arg(&dependency_rlib)
-        .args(["--sysroot", rustc_sysroot().trim()])
+        .args(["--sysroot", rustc_sysroot().as_str()])
         .current_dir(temp.path())
         .output()
         .expect("compile dependency rustc unit");
@@ -1165,7 +1187,7 @@ fn workspace_unit_fails_when_required_extern_artifact_ir_is_missing() {
         .arg(&workspace_source)
         .arg("--extern")
         .arg(format!("required_ir_dep={}", dependency_rlib.display()))
-        .args(["--sysroot", rustc_sysroot().trim(), "-Zno-codegen"])
+        .args(["--sysroot", rustc_sysroot().as_str(), "-Zno-codegen"])
         .env("CARGO_PRIMARY_PACKAGE", "1")
         .current_dir(temp.path())
         .output()
@@ -1255,7 +1277,7 @@ fn direct_driver_fails_when_required_artifact_ir_cannot_be_cached() {
             "2024",
         ])
         .arg(source)
-        .args(["--sysroot", rustc_sysroot().trim(), "-Zno-codegen"])
+        .args(["--sysroot", rustc_sysroot().as_str(), "-Zno-codegen"])
         .current_dir(temp.path())
         .output()
         .expect("run driver");
@@ -1348,7 +1370,7 @@ fn invalid_config_is_rendered_by_driver_boundary() {
             "2024",
         ])
         .arg(source)
-        .args(["--sysroot", rustc_sysroot().trim(), "-Zno-codegen"])
+        .args(["--sysroot", rustc_sysroot().as_str(), "-Zno-codegen"])
         .current_dir(temp.path())
         .output()
         .expect("run driver");
@@ -1386,7 +1408,7 @@ fn standalone_direct_driver_ignores_ambient_cargo_scope_environment() {
             "2024",
         ])
         .arg(source)
-        .args(["--sysroot", rustc_sysroot().trim(), "-Zno-codegen"])
+        .args(["--sysroot", rustc_sysroot().as_str(), "-Zno-codegen"])
         .env("CARGO_MANIFEST_PATH", &cargo_manifest)
         .env("CARGO_PRIMARY_PACKAGE", "1")
         .current_dir(temp.path())
@@ -1625,7 +1647,7 @@ fn run_dependency_unit(
         command.arg("-o").arg(artifact);
     }
     command
-        .args(["--sysroot", rustc_sysroot().trim()])
+        .args(["--sysroot", rustc_sysroot().as_str()])
         .args(rustc_args)
         .current_dir(current_dir)
         .output()
@@ -1657,7 +1679,7 @@ fn run_workspace_unit(
             "2024",
         ])
         .arg(source)
-        .args(["--sysroot", rustc_sysroot().trim(), "-Zno-codegen"])
+        .args(["--sysroot", rustc_sysroot().as_str(), "-Zno-codegen"])
         .env("CARGO_PRIMARY_PACKAGE", "1");
     configure(&mut command);
     command
@@ -1735,70 +1757,81 @@ fn assert_denied_dependency_bounds_check(report: &serde_json::Value) {
 }
 
 impl Case {
-    const fn new(behavior: &'static str) -> Self {
+    fn new() -> Self {
         Self {
-            behavior,
-            expected_exit: 0,
-            crate_dir: "",
+            denied: false,
+            app_crate: false,
             working_dir: None,
             config_append: "",
             args: &[],
-            envs: &[],
+            rustflags: None,
         }
     }
 
-    const fn exit_code(mut self, exit_code: i32) -> Self {
-        self.expected_exit = exit_code;
+    fn denied(mut self) -> Self {
+        self.denied = true;
         self
     }
 
-    const fn crate_dir(mut self, crate_dir: &'static str) -> Self {
-        self.crate_dir = crate_dir;
+    fn in_app(mut self) -> Self {
+        self.app_crate = true;
         self
     }
 
-    const fn working_dir(mut self, working_dir: &'static str) -> Self {
+    fn working_dir(mut self, working_dir: &'static str) -> Self {
         self.working_dir = Some(working_dir);
         self
     }
 
-    const fn config_append(mut self, config_append: &'static str) -> Self {
+    fn config_append(mut self, config_append: &'static str) -> Self {
         self.config_append = config_append;
         self
     }
 
-    const fn args(mut self, args: &'static [&'static str]) -> Self {
+    fn args(mut self, args: &'static [&'static str]) -> Self {
         self.args = args;
         self
     }
 
-    const fn envs(mut self, envs: &'static [(&'static str, &'static str)]) -> Self {
-        self.envs = envs;
+    fn rustflags(mut self, rustflags: &'static str) -> Self {
+        self.rustflags = Some(rustflags);
         self
     }
 }
 
-fn run_named_case(name: &'static str, fixture_name: &'static str, case: Case) {
+fn run_named_case(name: &'static str, fixture_name: &'static str, case: &Case) {
     let repo = repo_root();
     let sysroot = rustc_sysroot();
     let binary = PathBuf::from(env!("CARGO_BIN_EXE_cargo-sniff-test"));
-    let (output, fixture_root) = run_case(&repo, &binary, name, fixture_name, &case);
+    let (output, fixture_root) = run_case(&repo, &binary, name, fixture_name, case);
 
+    let expected_exit = if case.denied { 101 } else { 0 };
     assert_eq!(
         output.status.code(),
-        Some(case.expected_exit),
-        "{} ({}/{}): command exited {:?}, expected {}\nstdout:\n{}\nstderr:\n{}",
-        name,
-        fixture_name,
-        case.behavior,
+        Some(expected_exit),
+        "{name} ({fixture_name}): command exited {:?}, expected {}\nstdout:\n{}\nstderr:\n{}",
         output.status.code(),
-        case.expected_exit,
+        expected_exit,
         output.stdout,
         output.stderr
     );
 
-    let snapshot = render_snapshot(&output, &fixture_root, sysroot.trim());
+    let snapshot = render_snapshot(&output, &fixture_root, sysroot.as_str());
+    assert_public_output_uses_human_words(name, &snapshot);
     insta::assert_snapshot!(name, snapshot);
+}
+
+fn assert_public_output_uses_human_words(name: &str, output: &str) {
+    for fragment in COMPILER_DEBUG_FRAGMENTS {
+        assert!(
+            !output.contains(fragment),
+            "{name}: public diagnostic contains compiler debug output `{fragment}`:\n{output}"
+        );
+    }
+    assert!(
+        !output.contains("reachability root"),
+        "{name}: public diagnostic contains internal reachability jargon:\n{output}"
+    );
 }
 
 fn run_case(
@@ -1811,10 +1844,7 @@ fn run_case(
     let fixture = repo.join("tests/fixtures").join(fixture_name);
     assert!(
         fixture.exists(),
-        "{} ({}/{}): missing fixture {}",
-        name,
-        fixture_name,
-        case.behavior,
+        "{name} ({fixture_name}): missing fixture {}",
         fixture.display()
     );
 
@@ -1826,49 +1856,39 @@ fn run_case(
     copy_dir_all(&fixture, &root)
         .unwrap_or_else(|error| panic!("{name}: failed to copy fixture: {error}"));
 
+    let crate_dir = if case.app_crate { "app" } else { "" };
     if !case.config_append.is_empty() {
-        let config = root.join(case.crate_dir).join("sniff-test.toml");
+        let config = root.join(crate_dir).join("sniff-test.toml");
         let existing = fs::read_to_string(&config)
             .unwrap_or_else(|error| panic!("{name}: failed to read config: {error}"));
         fs::write(config, existing + case.config_append)
             .unwrap_or_else(|error| panic!("{name}: failed to update config: {error}"));
     }
 
-    let working_dir = root.join(case.working_dir.unwrap_or(case.crate_dir));
+    let working_dir = root.join(case.working_dir.unwrap_or(crate_dir));
     let _cargo_guard = lock_nested_cargo();
-    let output = run_cargo_sniff_test(binary, &working_dir, &root, name, case);
+    let output = run_cargo_sniff_test(binary, &working_dir, name, case);
     (output, root)
 }
 
 fn run_cargo_sniff_test(
     binary: &Path,
     working_dir: &Path,
-    fixture_root: &Path,
     name: &str,
     case: &Case,
 ) -> CommandOutput {
     let mut command = Command::new(binary);
     clean_cargo_package_env(&mut command);
-    for (key, value) in case.envs {
-        command.env(key, value);
+    if let Some(rustflags) = case.rustflags {
+        command.env("RUSTFLAGS", rustflags);
     }
     let output = command
         .args(["--color", "never"])
-        .args(expand_args(case.args, fixture_root))
+        .args(case.args)
         .current_dir(working_dir)
         .output()
         .unwrap_or_else(|error| panic!("{name}: failed to run {}: {error}", binary.display()));
     CommandOutput::from_output(output)
-}
-
-fn expand_args(args: &[&str], fixture_root: &Path) -> Vec<String> {
-    let fixture_name = fixture_root
-        .file_name()
-        .expect("fixture root should have a name")
-        .to_string_lossy();
-    args.iter()
-        .map(|arg| arg.replace("{fixture}", &fixture_name))
-        .collect()
 }
 
 fn render_snapshot(output: &CommandOutput, fixture_root: &Path, sysroot: &str) -> String {

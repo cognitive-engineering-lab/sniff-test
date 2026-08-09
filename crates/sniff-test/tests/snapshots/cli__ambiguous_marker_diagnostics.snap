@@ -16,44 +16,12 @@ error: function `ambiguous_markers::duplicate_name_marker` reaches an ambiguous 
    | --------------------------------------------------- `nonzero: total must be bounded by the caller.` normalizes to `nonzero`
    |
    = note: `ambiguous_markers::duplicate_name_ratio` has multiple `# Panics` requirements that normalize to `nonzero`
+note: this function can reach a call whose `# Panics` contract contains multiple requirements with names that normalize to `nonzero`
+  --> src/lib.rs:27:1
+   |
+27 | pub fn duplicate_name_marker(total: usize, denominator: usize) -> usize {
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
    = help: give each requirement a unique name, or set `ambiguous-panic-requirement = "allow"` under `[analysis.lints]`
-
-warning: function `ambiguous_markers::marker_on_noncanonical_route` may panic through a documented panic
-  --> src/lib.rs:34:5
-   |
-34 |     ratio(total, denominator)
-   |     ^^^^^^^^^^^^^^^^^^^^^^^^^
-   |
-note: `ambiguous_markers::ratio` documents `# Panics` here
-  --> src/lib.rs:4:1
-   |
- 4 | pub fn ratio(total: usize, denominator: usize) -> usize {
-   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-   = note: reachable from `ambiguous_markers::marker_on_noncanonical_route` to `ambiguous_markers::ratio`
-   = note: set `show-full-stack-trace = true` under `[analysis]` in sniff-test.toml to show every reachability step
-help: add `// PANIC:` directly above this call explaining why its documented panic conditions cannot occur
-  --> src/lib.rs:34:5
-   |
-34 |     ratio(total, denominator)
-   |     ^^^^^^^^^^^^^^^^^^^^^^^^^
-help: document when this function may panic with `/// # Panics` here
-  --> src/lib.rs:45:1
-   |
-45 | pub fn marker_on_noncanonical_route(total: usize, denominator: usize) -> usize {
-   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-   = help: ensure the callee's panic conditions cannot occur, justify that with `// PANIC:`, or document when the caller may panic with `# Panics`
-
-error: function `ambiguous_markers::marker_on_noncanonical_route` has an ambiguous `// PANIC:` marker
-  --> src/lib.rs:47:1
-   |
-47 | /     // PANIC: the denominator is nonzero on this route.
-48 | |     let second = marked_route(total, denominator);
-   | |_^
-   |
-   = note: this marker applies to 2 panic effect groups
-   = note: reachable from `ambiguous_markers::marker_on_noncanonical_route` to `ambiguous_markers::ratio`
-   = note: set `show-full-stack-trace = true` under `[analysis]` in sniff-test.toml to show every reachability step
-   = help: move the marker directly above one obligation, split it into separate markers, or set `ambiguous-panic-marker = "allow"` under `[analysis.lints]`
 
 error: function `ambiguous_markers::shared_block_marker` has an ambiguous `// PANIC:` marker
   --> src/lib.rs:9:1
@@ -62,8 +30,12 @@ error: function `ambiguous_markers::shared_block_marker` has an ambiguous `// PA
 10 | |     {
    | |_^
    |
-   = note: this marker applies to 2 panic effect groups
+   = note: this marker applies to 2 possible panics
+note: this function can reach 2 possible panics covered by the same `// PANIC:` marker
+  --> src/lib.rs:8:1
+   |
+ 8 | pub fn shared_block_marker(a: usize, b: usize, denominator: usize) -> usize {
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
    = help: move the marker directly above one obligation, split it into separate markers, or set `ambiguous-panic-marker = "allow"` under `[analysis.lints]`
 
-warning: `ambiguous-markers` (lib) generated 1 warning
-error: could not compile `ambiguous-markers` (lib) due to 3 previous errors; 1 warning emitted
+error: could not compile `ambiguous-markers` (lib) due to 2 previous errors

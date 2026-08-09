@@ -1,0 +1,8 @@
+[analysis]
+report-roots = [
+    "safety_obligations::satisfies_requirement",
+    "safety_obligations::misses_requirement",
+]
+
+[safety]
+trusted-safety-boundary-namespaces = ["safety_obligations::documented_contract"]

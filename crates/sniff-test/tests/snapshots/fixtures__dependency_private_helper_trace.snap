@@ -1,0 +1,23 @@
+---
+source: crates/sniff-test/tests/fixtures.rs
+expression: "report[\"findings\"]"
+---
+[
+  {
+    "kind": "panic-invocation",
+    "level": "deny",
+    "reason": "panic sink core::std::rt::panic_fmt",
+    "root": "dependency_generic_private_panic_app::caller",
+    "root-kind": "concrete",
+    "root-span": "src/lib.rs:1:1: 1:26",
+    "span": "[FIXTURE]/dep/src/lib.rs:8:5: 8:67",
+    "target": "core::std::rt::panic_fmt",
+    "trace": [
+      "src/lib.rs:2:5: 2:54: dependency_generic_private_panic_app::caller --direct-call-> dependency_generic_private_panic::api",
+      "[FIXTURE]/dep/src/lib.rs:3:5: 3:17: dependency_generic_private_panic::api --direct-call-> dependency_generic_private_panic::hidden",
+      "[FIXTURE]/dep/src/lib.rs:8:5: 8:67: dependency_generic_private_panic::hidden --macro-expansion-> macro core::std::assert",
+      "[FIXTURE]/dep/src/lib.rs:8:5: 8:67: macro core::std::assert --macro-expansion-> macro core::std::panic::panic_2021",
+      "[SYSROOT]/lib/rustlib/src/rust/library/core/src/panic.rs:62:9: 62:73: macro core::std::panic::panic_2021 --direct-call-> core::std::rt::panic_fmt"
+    ]
+  }
+]

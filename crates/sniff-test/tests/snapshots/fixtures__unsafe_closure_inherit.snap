@@ -1,31 +1,21 @@
 ---
 source: crates/sniff-test/tests/fixtures.rs
-expression: messages
+expression: "report[\"findings\"]"
 ---
 [
   {
-    "artifact": {
-      "crate-name": "unsafe_closure_inherit"
-    },
-    "findings": [
-      {
-        "function": "unsafe_closure_inherit::unjustified_closure::{closure#0}",
-        "kind": "unsafe-call-missing-justification",
-        "level": "warn",
-        "reason": "unsafe call to `unsafe_closure_inherit::dangerous` has no `// SAFETY:` justification",
-        "root": "unsafe_closure_inherit::unjustified_closure",
-        "root-kind": "concrete",
-        "span": "src/lib.rs:12:13: 12:24",
-        "target": "unsafe_closure_inherit::dangerous",
-        "trace": [
-          "src/lib.rs:12:9: 12:27: unsafe_closure_inherit::unjustified_closure --direct-call-> unsafe_closure_inherit::unjustified_closure::{closure#0}",
-          "src/lib.rs:12:13: 12:24: unsafe_closure_inherit::unjustified_closure::{closure#0} --direct-call-> unsafe_closure_inherit::dangerous"
-        ]
-      }
-    ],
-    "format-version": 12,
-    "reason": "sniff-test-artifact",
-    "rustc-version": "[RUSTC_VERSION]",
-    "tool-version": "0.1.0"
+    "function": "unsafe_closure_inherit::unjustified_closure::{closure#0}",
+    "kind": "unsafe-call-missing-justification",
+    "level": "warn",
+    "reason": "unsafe call to `unsafe_closure_inherit::dangerous` has no `// SAFETY:` justification",
+    "root": "unsafe_closure_inherit::unjustified_closure",
+    "root-kind": "concrete",
+    "root-span": "src/lib.rs:10:1: 10:29",
+    "span": "src/lib.rs:12:13: 12:24",
+    "target": "unsafe_closure_inherit::dangerous",
+    "trace": [
+      "src/lib.rs:12:9: 12:27: unsafe_closure_inherit::unjustified_closure --direct-call-> unsafe_closure_inherit::unjustified_closure::{closure#0}",
+      "src/lib.rs:12:13: 12:24: unsafe_closure_inherit::unjustified_closure::{closure#0} --direct-call-> unsafe_closure_inherit::dangerous"
+    ]
   }
 ]

@@ -128,7 +128,7 @@ impl FrontendCli {
     name = "sniff-test-driver",
     version,
     about = "Run sniff-test directly with rustc arguments",
-    after_help = "Rustc arguments must follow `--`. Direct mode follows rustc's exit status; use `cargo sniff-test` for fail-on-panic policy."
+    after_help = "Rustc arguments must follow `--`. Direct mode follows rustc's exit status; use `cargo sniff-test` to fail the Cargo run on denied findings."
 )]
 pub(super) struct DriverCli {
     #[command(flatten)]
@@ -150,16 +150,18 @@ impl DriverCli {
         rustc_args.extend(self.rustc_args);
         let mut args = self.common.into_sniff_test_args();
         args.direct_scope = if self.dependency {
-            DirectInvocationScope::Dependency
+            CrateOutputScope::Dependency
         } else {
-            DirectInvocationScope::Workspace
+            CrateOutputScope::Workspace
         };
         (rustc_args, args)
     }
 }
 
+/// Internal rustc-unit classification. This is deliberately not serialized:
+/// every public report is a workspace report.
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum DirectInvocationScope {
+pub(crate) enum CrateOutputScope {
     #[default]
     Workspace,
     Dependency,
@@ -185,7 +187,7 @@ pub struct SniffTestArgs {
     pub(crate) under_cargo: bool,
     /// Explicit artifact scope for standalone driver invocations.
     #[serde(skip)]
-    pub(crate) direct_scope: DirectInvocationScope,
+    pub(crate) direct_scope: CrateOutputScope,
 }
 
 impl SniffTestArgs {
@@ -236,7 +238,7 @@ mod tests {
 
     use clap::Parser as _;
 
-    use super::{DirectInvocationScope, DriverCli, FrontendAction, FrontendCli, MessageFormat};
+    use super::{CrateOutputScope, DriverCli, FrontendAction, FrontendCli, MessageFormat};
 
     #[test]
     fn frontend_parses_equals_options_and_cargo_args_after_separator() {
@@ -256,46 +258,26 @@ mod tests {
     }
 
     #[test]
-    fn frontend_uses_release_profile_by_default() {
-        let cli = FrontendCli::try_parse_from(["cargo-sniff-test"])
-            .expect("frontend arguments should parse");
-
-        let FrontendAction::Run(args) = cli.into_action() else {
-            panic!("expected frontend run action");
-        };
-        assert!(args.release);
-    }
-
-    #[test]
-    fn frontend_debug_flag_selects_debug_profile() {
-        let cli = FrontendCli::try_parse_from(["cargo-sniff-test", "--debug"])
-            .expect("frontend arguments should parse");
-
-        let FrontendAction::Run(args) = cli.into_action() else {
-            panic!("expected frontend run action");
-        };
-        assert!(!args.release);
-    }
-
-    #[test]
-    fn frontend_respects_forwarded_cargo_profile() {
-        for argv in [
-            &["cargo-sniff-test", "--", "--profile", "ci"][..],
-            &["cargo-sniff-test", "--", "--profile=ci"][..],
+    fn frontend_selects_profile_from_arguments() {
+        for (argv, expected_release) in [
+            (&["cargo-sniff-test"][..], true),
+            (&["cargo-sniff-test", "--debug"][..], false),
+            (&["cargo-sniff-test", "--", "--profile", "ci"][..], false),
+            (&["cargo-sniff-test", "--", "--profile=ci"][..], false),
         ] {
             let cli = FrontendCli::try_parse_from(argv).expect("frontend arguments should parse");
 
             let FrontendAction::Run(args) = cli.into_action() else {
                 panic!("expected frontend run action");
             };
-            assert!(!args.release, "argv: {argv:?}");
+            assert_eq!(args.release, expected_release, "argv: {argv:?}");
         }
     }
 
     #[test]
-    fn frontend_rejects_legacy_release_flag() {
-        let error = FrontendCli::try_parse_from(["cargo-sniff-test", "--release"])
-            .expect_err("legacy release flag should be rejected");
+    fn frontend_rejects_unknown_arguments() {
+        let error = FrontendCli::try_parse_from(["cargo-sniff-test", "--not-an-option"])
+            .expect_err("unknown arguments should be rejected");
 
         assert_eq!(error.kind(), clap::error::ErrorKind::UnknownArgument);
     }
@@ -335,7 +317,7 @@ mod tests {
         let (rustc_args, args) = cli.into_parts(String::from("sniff-test-driver"));
 
         assert_eq!(args.message_format, MessageFormat::Json);
-        assert_eq!(args.direct_scope, DirectInvocationScope::Dependency);
+        assert_eq!(args.direct_scope, CrateOutputScope::Dependency);
         assert_eq!(rustc_args, ["sniff-test-driver", "--crate-name", "demo"]);
     }
 }

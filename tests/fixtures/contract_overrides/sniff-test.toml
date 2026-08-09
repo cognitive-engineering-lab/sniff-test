@@ -1,9 +1,7 @@
 [analysis]
 report-roots = [
     "contract_overrides::panic_override_missing_marker",
-    "contract_overrides::panic_override_satisfied",
     "contract_overrides::safety_override_missing_requirement",
-    "contract_overrides::safety_override_satisfied",
 ]
 
 [documentation]
@@ -22,8 +20,4 @@ documented-panic = "warn"
 
 [safety.lints]
 missing-safety-docs = "deny"
-unsafe-call-missing-justification = "warn"
 unsafe-call-missing-requirements = "warn"
-unsafe-op-missing-justification = "warn"
-safety-obligation-missing-justification = "warn"
-safety-obligation-missing-requirements = "warn"

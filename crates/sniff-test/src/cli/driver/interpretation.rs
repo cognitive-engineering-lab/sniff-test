@@ -2,9 +2,9 @@
 
 use crate::analysis::graph::ArtifactAnalysisGraph;
 use crate::analysis::interpret::{
-    InMemoryArtifactLookup, IncompleteReason, InterpretationResult, InterpretationRoot,
-    InterpretedFinding, InterpretedFindingKind, InterpretedSafetyCallKind, InterpretedTrace,
-    InterpretedTraceStepKind, LayeredFunctionLookup, interpret,
+    InMemoryArtifactLookup, IncompleteReason, InterpretationRoot, InterpretedFinding,
+    InterpretedFindingKind, InterpretedSafetyCallKind, InterpretedTrace, InterpretedTraceStepKind,
+    LayeredFunctionLookup, RootInterpretation, interpret,
 };
 use crate::analysis::ir::{
     ArtifactAnalysisIr, CallEdgeKindIr, ContractRequirementIr, FunctionBodyIr, FunctionId,
@@ -13,7 +13,7 @@ use crate::analysis::ir::{
 use crate::analysis::source::cached_source_span;
 use crate::config::SniffTestConfig;
 use crate::namespace::canonical_namespace;
-use crate::report_roots::{ReportRoot, ReportRootSelection};
+use crate::report_roots::ReportRoot;
 use rustc_middle::ty::TyCtxt;
 use rustc_span::Span;
 
@@ -22,22 +22,15 @@ use super::super::findings::{
 };
 use super::super::report::render_span;
 
-pub(super) struct WorkspaceInterpretation {
-    pub(super) findings: Vec<Finding>,
-    pub(super) missing_roots: Vec<crate::report_roots::MissingReportRoot>,
-    pub(super) selected_roots: usize,
-}
-
 pub(super) fn interpret_workspace<'tcx>(
     tcx: TyCtxt<'tcx>,
     local: &ArtifactAnalysisIr,
     local_stable_crate_id: u64,
     dependencies: &ArtifactAnalysisGraph,
-    selection: ReportRootSelection<'tcx>,
+    report_roots: &[ReportRoot<'tcx>],
     config: &SniffTestConfig,
-) -> WorkspaceInterpretation {
-    let roots = selection
-        .roots
+) -> Vec<Finding> {
+    let roots = report_roots
         .iter()
         .copied()
         .map(|root| interpretation_root(tcx, root))
@@ -48,15 +41,10 @@ pub(super) fn interpret_workspace<'tcx>(
     let sources = SourceResolver {
         tcx,
         local,
-        local_stable_crate_id,
         dependencies,
     };
 
-    WorkspaceInterpretation {
-        findings: adapt_result(&sources, result, config.analysis.show_full_stack_trace),
-        missing_roots: selection.missing_roots,
-        selected_roots: roots.len(),
-    }
+    adapt_result(&sources, result, config.analysis.show_full_stack_trace)
 }
 
 fn interpretation_root<'tcx>(tcx: TyCtxt<'tcx>, root: ReportRoot<'tcx>) -> InterpretationRoot {
@@ -76,11 +64,11 @@ fn interpretation_root<'tcx>(tcx: TyCtxt<'tcx>, root: ReportRoot<'tcx>) -> Inter
 
 fn adapt_result(
     sources: &SourceResolver<'_, '_>,
-    result: InterpretationResult,
+    result: Vec<RootInterpretation>,
     show_full_stack_trace: bool,
 ) -> Vec<Finding> {
     let mut findings = Vec::new();
-    for root in result.roots {
+    for root in result {
         findings.extend(
             root.findings
                 .into_iter()
@@ -129,10 +117,9 @@ fn adapt_finding(
         (_, None) => None,
     }
     .or_else(|| match &finding.kind {
-        InterpretedFindingKind::CompilerAssert { kind, description } => Some(format!(
-            "compiler assert {}",
-            compiler_assert_summary(*kind, description)
-        )),
+        InterpretedFindingKind::CompilerAssert { kind } => {
+            Some(format!("compiler assert {}", kind.human_description()))
+        }
         _ => None,
     });
     let missing_requirements = finding
@@ -147,8 +134,9 @@ fn adapt_finding(
         .collect::<Vec<_>>();
     let (kind, reason, message) = finding_description(finding, root, target.as_deref());
     let (recorded_span, source_error) = sources.resolve(finding.source_range.as_ref());
-    let effect_span = ambiguity_primary_span(sources, finding).or(recorded_span);
-    let source_order_range = ambiguity_primary_range(finding).or(finding.source_range.as_ref());
+    let ambiguity_range = ambiguity_primary_range(finding);
+    let effect_span = sources.resolve(ambiguity_range).0.or(recorded_span);
+    let source_order_range = ambiguity_range.or(finding.source_range.as_ref());
     let root_span = sources.function_span(root.function);
     // A recorded cached location is only diagnostic evidence after source
     // verification succeeds. If it fails, keep reporting the interpreted
@@ -175,6 +163,7 @@ fn adapt_finding(
         sources,
         &mut diagnostic,
         root,
+        root_span,
         finding,
         effect_span,
         show_full_stack_trace,
@@ -183,6 +172,7 @@ fn adapt_finding(
     Finding {
         root: Some(root.path.clone()),
         root_kind: Some(root.kind),
+        root_span: root_span.map(|span| render_span(sources.tcx, span)),
         function,
         target,
         span: effect_span.map(|span| render_span(sources.tcx, span)),
@@ -220,13 +210,6 @@ fn public_function_path(finding: &InterpretedFinding) -> Option<String> {
     }
 }
 
-fn ambiguity_primary_span(
-    sources: &SourceResolver<'_, '_>,
-    finding: &InterpretedFinding,
-) -> Option<Span> {
-    sources.resolve(ambiguity_primary_range(finding)).0
-}
-
 fn ambiguity_primary_range(finding: &InterpretedFinding) -> Option<&SourceRangeIr> {
     matches!(
         &finding.kind,
@@ -252,10 +235,7 @@ fn finding_description(
     target: Option<&str>,
 ) -> (FindingKind, String, String) {
     match &finding.kind {
-        InterpretedFindingKind::CompilerAssert {
-            kind,
-            description: _,
-        } => (
+        InterpretedFindingKind::CompilerAssert { kind } => (
             FindingKind::CompilerAssert {
                 compiler_assert_kind: *kind,
             },
@@ -431,21 +411,29 @@ fn decorate_finding(
     sources: &SourceResolver<'_, '_>,
     diagnostic: &mut FindingDiagnostic,
     root: &InterpretationRoot,
+    root_span: Option<Span>,
     finding: &InterpretedFinding,
     effect_span: Option<Span>,
     show_full_stack_trace: bool,
 ) {
     match &finding.kind {
-        InterpretedFindingKind::CompilerAssert { kind, description } => {
+        InterpretedFindingKind::CompilerAssert { kind } => {
             add_effect_note(
                 diagnostic,
                 effect_span,
                 format!(
                     "panic may happen here: compiler assertion: {}",
-                    compiler_assert_summary(*kind, description)
+                    kind.human_description()
                 ),
             );
-            add_trace_notes(sources, diagnostic, &finding.trace, show_full_stack_trace);
+            add_finding_trace_notes(
+                sources,
+                diagnostic,
+                root,
+                root_span,
+                finding,
+                show_full_stack_trace,
+            );
             add_panic_help(
                 diagnostic,
                 effect_span,
@@ -462,7 +450,14 @@ fn decorate_finding(
                 effect_span,
                 format!("panic may happen here: panic sink `{target}`"),
             );
-            add_trace_notes(sources, diagnostic, &finding.trace, show_full_stack_trace);
+            add_finding_trace_notes(
+                sources,
+                diagnostic,
+                root,
+                root_span,
+                finding,
+                show_full_stack_trace,
+            );
             add_panic_help(
                 diagnostic,
                 effect_span,
@@ -471,7 +466,14 @@ fn decorate_finding(
         }
         InterpretedFindingKind::DocumentedPanic { .. } => {
             add_contract_note(sources, diagnostic, finding, "Panics");
-            add_trace_notes(sources, diagnostic, &finding.trace, show_full_stack_trace);
+            add_finding_trace_notes(
+                sources,
+                diagnostic,
+                root,
+                root_span,
+                finding,
+                show_full_stack_trace,
+            );
             if let Some(span) = effect_span {
                 diagnostic.messages.push(DiagnosticMessage::SpanHelp(
                     span,
@@ -484,12 +486,7 @@ fn decorate_finding(
                     "document when this function may panic with `/// # Panics` here",
                 ));
             }
-            add_missing_requirement_notes(
-                sources,
-                diagnostic,
-                &finding.missing_requirements,
-                "panic",
-            );
+            add_missing_requirement_notes(diagnostic, &finding.missing_requirements, "panic");
             diagnostic.messages.push(DiagnosticMessage::Help(
                 "ensure the callee's panic conditions cannot occur, justify that with `// PANIC:`, or document when the caller may panic with `# Panics`",
             ));
@@ -508,7 +505,14 @@ fn decorate_finding(
                     opaque_boundary_summary(description, target)
                 ),
             );
-            add_trace_notes(sources, diagnostic, &finding.trace, show_full_stack_trace);
+            add_finding_trace_notes(
+                sources,
+                diagnostic,
+                root,
+                root_span,
+                finding,
+                show_full_stack_trace,
+            );
             diagnostic.messages.push(DiagnosticMessage::Help(
                 "document this boundary with `# Panics`, add `// PANIC:` only if every possible callee is locally constrained, or configure `indirect-call-boundary` if this opacity is acceptable",
             ));
@@ -535,23 +539,32 @@ fn decorate_finding(
                 };
                 diagnostic.messages.push(DiagnosticMessage::Help(help));
             } else {
-                add_missing_requirement_notes(
-                    sources,
-                    diagnostic,
-                    &finding.missing_requirements,
-                    "safety",
-                );
+                add_missing_requirement_notes(diagnostic, &finding.missing_requirements, "safety");
                 diagnostic.messages.push(DiagnosticMessage::Help(
                     "add named bullets under the applicable `// SAFETY:` comment for each missing requirement",
                 ));
             }
-            add_trace_notes(sources, diagnostic, &finding.trace, show_full_stack_trace);
+            add_finding_trace_notes(
+                sources,
+                diagnostic,
+                root,
+                root_span,
+                finding,
+                show_full_stack_trace,
+            );
         }
         InterpretedFindingKind::UnsafeOperation { .. } => {
             diagnostic.messages.push(DiagnosticMessage::Help(
                 "add a `// SAFETY:` comment above the unsafe block or operation",
             ));
-            add_trace_notes(sources, diagnostic, &finding.trace, show_full_stack_trace);
+            add_finding_trace_notes(
+                sources,
+                diagnostic,
+                root,
+                root_span,
+                finding,
+                show_full_stack_trace,
+            );
         }
         InterpretedFindingKind::AmbiguousPanicRequirement { normalized_name } => {
             add_ambiguous_requirement_notes(
@@ -560,6 +573,14 @@ fn decorate_finding(
                 finding,
                 "Panics",
                 normalized_name,
+            );
+            add_finding_trace_notes(
+                sources,
+                diagnostic,
+                root,
+                root_span,
+                finding,
+                show_full_stack_trace,
             );
             diagnostic.messages.push(DiagnosticMessage::Help(
                 "give each requirement a unique name, or set `ambiguous-panic-requirement = \"allow\"` under `[analysis.lints]`",
@@ -573,24 +594,46 @@ fn decorate_finding(
                 "Safety",
                 normalized_name,
             );
+            add_finding_trace_notes(
+                sources,
+                diagnostic,
+                root,
+                root_span,
+                finding,
+                show_full_stack_trace,
+            );
             diagnostic.messages.push(DiagnosticMessage::Help(
                 "give each requirement a unique name, or set `ambiguous-safety-requirement = \"allow\"` under `[analysis.lints]`",
             ));
         }
         InterpretedFindingKind::AmbiguousPanicMarker { effect_count } => {
             diagnostic.messages.push(DiagnosticMessage::Note(format!(
-                "this marker applies to {effect_count} panic effect groups"
+                "this marker applies to {effect_count} possible panics"
             )));
-            add_trace_notes(sources, diagnostic, &finding.trace, show_full_stack_trace);
+            add_finding_trace_notes(
+                sources,
+                diagnostic,
+                root,
+                root_span,
+                finding,
+                show_full_stack_trace,
+            );
             diagnostic.messages.push(DiagnosticMessage::Help(
                 "move the marker directly above one obligation, split it into separate markers, or set `ambiguous-panic-marker = \"allow\"` under `[analysis.lints]`",
             ));
         }
         InterpretedFindingKind::AmbiguousSafetyMarker { effect_count } => {
             diagnostic.messages.push(DiagnosticMessage::Note(format!(
-                "this marker applies to {effect_count} safety effect groups"
+                "this marker applies to {effect_count} safety obligations"
             )));
-            add_trace_notes(sources, diagnostic, &finding.trace, show_full_stack_trace);
+            add_finding_trace_notes(
+                sources,
+                diagnostic,
+                root,
+                root_span,
+                finding,
+                show_full_stack_trace,
+            );
             diagnostic.messages.push(DiagnosticMessage::Help(
                 "give each unsafe block or operation its own marker, or set `ambiguous-safety-marker = \"allow\"` under `[analysis.lints]`",
             ));
@@ -662,7 +705,6 @@ fn add_contract_note(
 }
 
 fn add_missing_requirement_notes(
-    _sources: &SourceResolver<'_, '_>,
     diagnostic: &mut FindingDiagnostic,
     requirements: &[ContractRequirementIr],
     domain: &str,
@@ -707,55 +749,15 @@ fn add_ambiguous_requirement_notes(
     }
 }
 
-fn compiler_assert_summary(kind: crate::panics::CompilerAssertKind, description: &str) -> &str {
-    use crate::panics::CompilerAssertKind;
-
-    // Extraction keeps rustc's detailed debug rendering as a raw explanatory
-    // fact. It is intentionally not a stable user-facing format, so diagnostics
-    // use the stable semantic subtype whenever that raw text looks compiler
-    // generated.
-    let stable = match kind {
-        CompilerAssertKind::BoundsCheck => "index out of bounds",
-        CompilerAssertKind::Overflow => "arithmetic overflow",
-        CompilerAssertKind::OverflowNegation => "negation overflow",
-        CompilerAssertKind::DivisionByZero => "division by zero",
-        CompilerAssertKind::RemainderByZero => "remainder with a zero divisor",
-        CompilerAssertKind::ResumedAfterReturn => "coroutine resumed after returning",
-        CompilerAssertKind::ResumedAfterPanic => "coroutine resumed after panicking",
-        CompilerAssertKind::ResumedAfterDrop => "coroutine resumed after being dropped",
-        CompilerAssertKind::MisalignedPointerDereference => "misaligned pointer dereference",
-        CompilerAssertKind::NullPointerDereference => "null pointer dereference",
-        CompilerAssertKind::InvalidEnumConstruction => "invalid enum construction",
-    };
-    if description.contains(" with locals ")
-        || description
-            .chars()
-            .next()
-            .is_some_and(|character| character.is_ascii_uppercase())
-    {
-        stable
-    } else {
-        description
-    }
-}
-
 fn opaque_boundary_summary<'a>(description: &'a str, target: Option<&'a str>) -> String {
     if description.starts_with("indirect call") {
         target.map_or_else(
-            || String::from("indirect call through an opaque callable"),
+            || description.to_owned(),
             |target| format!("indirect call to undocumented trait method `{target}`"),
         )
     } else {
         description.to_owned()
     }
-}
-
-fn uses_dependency_analysis_lint(local_stable_crate_id: u64, reason: &IncompleteReason) -> bool {
-    matches!(
-        reason,
-        IncompleteReason::MissingBody { function, .. }
-            if function.def_path_hash.stable_crate_id() != local_stable_crate_id
-    )
 }
 
 fn adapt_incomplete(
@@ -766,9 +768,7 @@ fn adapt_incomplete(
     reason: IncompleteReason,
     show_full_stack_trace: bool,
 ) -> Finding {
-    let use_dependency_analysis_lint =
-        uses_dependency_analysis_lint(sources.local_stable_crate_id, &reason);
-    let (target, range, trace, reason, message) = match reason {
+    let (target, range, trace, reason, message, body_missing_at_root) = match reason {
         IncompleteReason::NodeLimit { limit } => (
             None,
             None,
@@ -778,22 +778,26 @@ fn adapt_incomplete(
                 "function `{}` exceeded the {domain} analysis node limit ({limit})",
                 root.path
             ),
+            false,
         ),
         IncompleteReason::MissingBody {
+            function,
             path,
             source_range,
             trace,
-            ..
-        } => (
-            Some(path.clone()),
-            source_range,
-            trace,
-            format!("{domain} analysis could not load the body for `{path}`"),
-            format!(
-                "function `{}` reaches `{path}` without complete {domain} analysis",
-                root.path
-            ),
-        ),
+        } => {
+            let body_missing_at_root = function == root.function && trace.steps.is_empty();
+            let message =
+                missing_body_diagnostic_message(&root.path, &path, domain, body_missing_at_root);
+            (
+                Some(path.clone()),
+                source_range,
+                trace,
+                format!("{domain} analysis could not load the body for `{path}`"),
+                message,
+                body_missing_at_root,
+            )
+        }
     };
     let (effect_span, source_error) = sources.resolve(range.as_ref());
     let root_span = sources.function_span(root.function);
@@ -813,22 +817,33 @@ fn adapt_incomplete(
             "the recorded source location was unavailable: {error}"
         )));
     }
-    match (&target, effect_span) {
-        (Some(target), Some(span)) => diagnostic.messages.push(DiagnosticMessage::SpanNote(
-            span,
-            format!("{domain} analysis could not continue through `{target}` here"),
-        )),
-        (Some(target), None) => diagnostic.messages.push(DiagnosticMessage::Note(format!(
-            "{domain} analysis could not continue through `{target}`"
-        ))),
-        (None, _) => diagnostic.messages.push(DiagnosticMessage::Help(
-            "raise `node-limit` under `[analysis]` in sniff-test.toml, or shrink the traversal by trusting or ignoring namespaces",
-        )),
-    }
-    add_trace_notes(sources, &mut diagnostic, &trace, show_full_stack_trace);
-    let finding = Finding {
+    add_incomplete_reason_note(
+        &mut diagnostic,
+        target.as_deref(),
+        effect_span,
+        body_missing_at_root,
+        domain,
+    );
+    let trace_destination = target.as_ref().map_or_else(
+        || format!("code that could not be fully inspected during {domain} analysis"),
+        |target| {
+            let subject = incomplete_analysis_subject(domain);
+            format!("the function `{target}`, whose body could not be inspected for {subject}")
+        },
+    );
+    add_trace_notes(
+        sources,
+        &mut diagnostic,
+        root,
+        root_span,
+        &trace,
+        &trace_destination,
+        show_full_stack_trace,
+    );
+    Finding {
         root: Some(root.path.clone()),
         root_kind: Some(root.kind),
+        root_span: root_span.map(|span| render_span(sources.tcx, span)),
         target,
         span: effect_span.map(|span| render_span(sources.tcx, span)),
         trace: rendered_trace,
@@ -838,11 +853,66 @@ fn adapt_incomplete(
         range.as_ref().and_then(|range| sources.source_file(range)),
         range.as_ref(),
     )
-    .with_trace_order(trace_order);
-    if use_dependency_analysis_lint {
-        finding.with_dependency_analysis_lint()
+    .with_trace_order(trace_order)
+}
+
+fn add_incomplete_reason_note(
+    diagnostic: &mut FindingDiagnostic,
+    target: Option<&str>,
+    effect_span: Option<Span>,
+    body_missing_at_root: bool,
+    domain: &str,
+) {
+    match (target, effect_span, body_missing_at_root) {
+        (Some(target), Some(span), true) => {
+            diagnostic.messages.push(DiagnosticMessage::SpanNote(
+                span,
+                format!("the body for `{target}` was unavailable to {domain} analysis here"),
+            ));
+        }
+        (Some(target), None, true) => {
+            diagnostic.messages.push(DiagnosticMessage::Note(format!(
+                "the body for `{target}` was unavailable to {domain} analysis"
+            )));
+        }
+        (Some(target), Some(span), false) => {
+            diagnostic.messages.push(DiagnosticMessage::SpanNote(
+                span,
+                format!("{domain} analysis could not continue through `{target}` here"),
+            ));
+        }
+        (Some(target), None, false) => diagnostic.messages.push(DiagnosticMessage::Note(format!(
+            "{domain} analysis could not continue through `{target}`"
+        ))),
+        (None, _, _) => diagnostic.messages.push(DiagnosticMessage::Help(
+            "raise `node-limit` under `[analysis]` in sniff-test.toml, or shrink the traversal by trusting or ignoring namespaces",
+        )),
+    }
+}
+
+fn missing_body_diagnostic_message(
+    root: &str,
+    target: &str,
+    domain: &str,
+    body_missing_at_root: bool,
+) -> String {
+    let subject = incomplete_analysis_subject(domain);
+    if body_missing_at_root {
+        format!(
+            "function `{root}` could not be checked for {subject} because its body was unavailable"
+        )
     } else {
-        finding
+        format!(
+            "function `{root}` reaches `{target}`, whose body could not be checked for {subject}"
+        )
+    }
+}
+
+fn incomplete_analysis_subject(domain: &str) -> &'static str {
+    match domain {
+        "panic" => "possible panics",
+        "safety" => "unsafe operations",
+        _ => "the reported effects",
     }
 }
 
@@ -928,10 +998,93 @@ const fn safety_op_kind_order(kind: crate::safety::SafetyOpKind) -> u8 {
     }
 }
 
+fn add_finding_trace_notes(
+    sources: &SourceResolver<'_, '_>,
+    diagnostic: &mut FindingDiagnostic,
+    root: &InterpretationRoot,
+    root_span: Option<Span>,
+    finding: &InterpretedFinding,
+    show_full_stack_trace: bool,
+) {
+    let destination = trace_destination(finding);
+    add_trace_notes(
+        sources,
+        diagnostic,
+        root,
+        root_span,
+        &finding.trace,
+        &destination,
+        show_full_stack_trace,
+    );
+}
+
+fn trace_destination(finding: &InterpretedFinding) -> String {
+    match &finding.kind {
+        InterpretedFindingKind::CompilerAssert { kind } => format!(
+            "a compiler assertion that may panic ({})",
+            kind.human_description()
+        ),
+        InterpretedFindingKind::PanicSink => String::from("a panic invocation"),
+        InterpretedFindingKind::DocumentedPanic { trusted: false } => {
+            String::from("a call with `# Panics` documentation")
+        }
+        InterpretedFindingKind::DocumentedPanic { trusted: true } => {
+            String::from("a trusted panic boundary with `# Panics` documentation")
+        }
+        InterpretedFindingKind::OpaquePanicBoundary { .. } => {
+            String::from("a call whose panic behavior cannot be verified")
+        }
+        InterpretedFindingKind::MissingSafetyDocs => {
+            String::from("a public unsafe function without `# Safety` documentation")
+        }
+        InterpretedFindingKind::SafetyCall {
+            kind: InterpretedSafetyCallKind::Unsafe,
+        } if finding.missing_requirements.is_empty() => {
+            String::from("an unsafe call without a `// SAFETY:` justification")
+        }
+        InterpretedFindingKind::SafetyCall {
+            kind: InterpretedSafetyCallKind::Unsafe,
+        } => String::from(
+            "an unsafe call whose documented `# Safety` requirements are not all satisfied",
+        ),
+        InterpretedFindingKind::SafetyCall {
+            kind: InterpretedSafetyCallKind::Obligation,
+        } if finding.missing_requirements.is_empty() => {
+            String::from("a call with `# Safety` documentation but no `// SAFETY:` justification")
+        }
+        InterpretedFindingKind::SafetyCall {
+            kind: InterpretedSafetyCallKind::Obligation,
+        } => String::from("a call whose documented `# Safety` requirements are not all satisfied"),
+        InterpretedFindingKind::UnsafeOperation { kind } => format!(
+            "an unsafe operation ({}) without a `// SAFETY:` justification",
+            kind.label()
+        ),
+        InterpretedFindingKind::AmbiguousPanicRequirement { normalized_name } => {
+            format!(
+                "a call whose `# Panics` contract contains multiple requirements with names that normalize to `{normalized_name}`"
+            )
+        }
+        InterpretedFindingKind::AmbiguousSafetyRequirement { normalized_name } => {
+            format!(
+                "a call whose `# Safety` contract contains multiple requirements with names that normalize to `{normalized_name}`"
+            )
+        }
+        InterpretedFindingKind::AmbiguousPanicMarker { effect_count } => {
+            format!("{effect_count} possible panics covered by the same `// PANIC:` marker")
+        }
+        InterpretedFindingKind::AmbiguousSafetyMarker { effect_count } => {
+            format!("{effect_count} safety obligations covered by the same `// SAFETY:` marker")
+        }
+    }
+}
+
 fn add_trace_notes(
     sources: &SourceResolver<'_, '_>,
     diagnostic: &mut FindingDiagnostic,
+    root: &InterpretationRoot,
+    root_span: Option<Span>,
     trace: &InterpretedTrace,
+    destination: &str,
     show_full_stack_trace: bool,
 ) {
     if trace.steps.is_empty() {
@@ -939,7 +1092,7 @@ fn add_trace_notes(
     }
 
     if show_full_stack_trace {
-        for (index, step) in trace.steps.iter().enumerate() {
+        for (index, step) in trace.steps.iter().rev().enumerate() {
             let note = format!("reachable step {index}: {}", render_trace_step(step));
             if let Some(span) = sources.resolve(step.source_range.as_ref()).0 {
                 diagnostic
@@ -963,6 +1116,17 @@ fn add_trace_notes(
         diagnostic.messages.push(DiagnosticMessage::Note(String::from(
             "set `show-full-stack-trace = true` under `[analysis]` in sniff-test.toml to show every reachability step",
         )));
+    }
+
+    match root_span {
+        Some(span) => diagnostic.messages.push(DiagnosticMessage::SpanNote(
+            span,
+            format!("this function can reach {destination}"),
+        )),
+        None => diagnostic.messages.push(DiagnosticMessage::Note(format!(
+            "function `{}` can reach {destination}; its source location is unavailable",
+            root.path
+        ))),
     }
 }
 
@@ -1011,7 +1175,6 @@ fn render_requirement(requirement: &ContractRequirementIr) -> String {
 struct SourceResolver<'tcx, 'analysis> {
     tcx: TyCtxt<'tcx>,
     local: &'analysis ArtifactAnalysisIr,
-    local_stable_crate_id: u64,
     dependencies: &'analysis ArtifactAnalysisGraph,
 }
 
@@ -1062,59 +1225,17 @@ impl SourceResolver<'_, '_> {
 
 #[cfg(test)]
 mod tests {
-    use crate::analysis::interpret::{IncompleteReason, InterpretedTrace};
-    use crate::analysis::ir::FunctionId;
-    use crate::panics::CompilerAssertKind;
-
-    use super::{compiler_assert_summary, uses_dependency_analysis_lint};
-
-    fn missing_body(stable_crate_id: u64) -> IncompleteReason {
-        let definition = serde_json::from_str(&format!(
-            "\"{stable_crate_id:016x}{local_hash:016x}\"",
-            local_hash = 1
-        ))
-        .expect("valid stable definition hash");
-        IncompleteReason::MissingBody {
-            function: FunctionId::generic(definition),
-            path: String::from("crate::missing"),
-            source_range: None,
-            trace: InterpretedTrace { steps: Vec::new() },
-        }
-    }
+    use super::missing_body_diagnostic_message;
 
     #[test]
-    fn compiler_assert_diagnostics_hide_unstable_mir_debug_details() {
+    fn missing_body_diagnostics_distinguish_the_root_from_a_reachable_target() {
         assert_eq!(
-            compiler_assert_summary(
-                CompilerAssertKind::DivisionByZero,
-                "DivisionByZero(copy _1) with locals [CompilerAssertLocal { index: 1 }]",
-            ),
-            "division by zero"
+            missing_body_diagnostic_message("app::root", "app::root", "panic", true),
+            "function `app::root` could not be checked for possible panics because its body was unavailable"
         );
         assert_eq!(
-            compiler_assert_summary(
-                CompilerAssertKind::BoundsCheck,
-                "BoundsCheck { len: move _3, index: copy _2 } with locals [...]",
-            ),
-            "index out of bounds"
+            missing_body_diagnostic_message("app::root", "dep::helper", "safety", false),
+            "function `app::root` reaches `dep::helper`, whose body could not be checked for unsafe operations"
         );
-    }
-
-    #[test]
-    fn only_foreign_missing_bodies_use_dependency_analysis_lints() {
-        const LOCAL_STABLE_CRATE_ID: u64 = 1;
-
-        assert!(uses_dependency_analysis_lint(
-            LOCAL_STABLE_CRATE_ID,
-            &missing_body(2)
-        ));
-        assert!(!uses_dependency_analysis_lint(
-            LOCAL_STABLE_CRATE_ID,
-            &missing_body(LOCAL_STABLE_CRATE_ID)
-        ));
-        assert!(!uses_dependency_analysis_lint(
-            LOCAL_STABLE_CRATE_ID,
-            &IncompleteReason::NodeLimit { limit: 1 }
-        ));
     }
 }

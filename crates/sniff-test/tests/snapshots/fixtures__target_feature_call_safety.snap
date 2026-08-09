@@ -1,30 +1,20 @@
 ---
 source: crates/sniff-test/tests/fixtures.rs
-expression: messages
+expression: "report[\"findings\"]"
 ---
 [
   {
-    "artifact": {
-      "crate-name": "target_feature_call_safety"
-    },
-    "findings": [
-      {
-        "function": "target_feature_call_safety::ordinary_caller",
-        "kind": "unsafe-call-missing-justification",
-        "level": "deny",
-        "reason": "unsafe call to `target_feature_call_safety::target_feature_callee` has no `// SAFETY:` justification",
-        "root": "target_feature_call_safety::ordinary_caller",
-        "root-kind": "concrete",
-        "span": "src/lib.rs:27:9: 27:32",
-        "target": "target_feature_call_safety::target_feature_callee",
-        "trace": [
-          "src/lib.rs:27:9: 27:32: target_feature_call_safety::ordinary_caller --direct-call-> target_feature_call_safety::target_feature_callee"
-        ]
-      }
-    ],
-    "format-version": 12,
-    "reason": "sniff-test-artifact",
-    "rustc-version": "[RUSTC_VERSION]",
-    "tool-version": "0.1.0"
+    "function": "target_feature_call_safety::ordinary_caller",
+    "kind": "unsafe-call-missing-justification",
+    "level": "deny",
+    "reason": "unsafe call to `target_feature_call_safety::target_feature_callee` has no `// SAFETY:` justification",
+    "root": "target_feature_call_safety::ordinary_caller",
+    "root-kind": "concrete",
+    "root-span": "src/lib.rs:23:1: 23:25",
+    "span": "src/lib.rs:25:9: 25:32",
+    "target": "target_feature_call_safety::target_feature_callee",
+    "trace": [
+      "src/lib.rs:25:9: 25:32: target_feature_call_safety::ordinary_caller --direct-call-> target_feature_call_safety::target_feature_callee"
+    ]
   }
 ]

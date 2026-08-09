@@ -9,7 +9,3 @@ pub fn remainder(total_size: usize, block_size: usize) -> usize {
 pub fn indexed(values: &[usize], index: usize) -> usize {
     values[index]
 }
-
-pub fn todo_macro() {
-    todo!("not implemented")
-}

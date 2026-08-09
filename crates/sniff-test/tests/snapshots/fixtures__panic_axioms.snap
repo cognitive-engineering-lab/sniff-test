@@ -1,71 +1,48 @@
 ---
 source: crates/sniff-test/tests/fixtures.rs
-expression: messages
+expression: "report[\"findings\"]"
 ---
 [
   {
-    "artifact": {
-      "crate-name": "panic_axioms"
-    },
-    "findings": [
-      {
-        "compiler-assert-kind": "division-by-zero",
-        "kind": "compiler-assert",
-        "level": "deny",
-        "reason": "compiler assert",
-        "root": "panic_axioms::division",
-        "root-kind": "concrete",
-        "span": "src/lib.rs:2:5: 2:29",
-        "target": "compiler assert division by zero",
-        "trace": [
-          "src/lib.rs:2:5: 2:29: panic_axioms::division --assert-> compiler assert DivisionByZero(copy _1) with locals [CompilerAssertLocal { index: 0, name: None, role: ReturnPointer }, CompilerAssertLocal { index: 1, name: Some(\"total_size\"), role: Argument }, CompilerAssertLocal { index: 2, name: Some(\"block_count\"), role: Argument }, CompilerAssertLocal { index: 3, name: None, role: Temporary }]"
-        ]
-      },
-      {
-        "compiler-assert-kind": "bounds-check",
-        "kind": "compiler-assert",
-        "level": "deny",
-        "reason": "compiler assert",
-        "root": "panic_axioms::indexed",
-        "root-kind": "concrete",
-        "span": "src/lib.rs:10:5: 10:18",
-        "target": "compiler assert index out of bounds",
-        "trace": [
-          "src/lib.rs:10:5: 10:18: panic_axioms::indexed --assert-> compiler assert BoundsCheck { len: move _3, index: copy _2 } with locals [CompilerAssertLocal { index: 0, name: None, role: ReturnPointer }, CompilerAssertLocal { index: 1, name: Some(\"values\"), role: Argument }, CompilerAssertLocal { index: 2, name: Some(\"index\"), role: Argument }, CompilerAssertLocal { index: 3, name: None, role: Temporary }, CompilerAssertLocal { index: 4, name: None, role: Temporary }]"
-        ]
-      },
-      {
-        "compiler-assert-kind": "remainder-by-zero",
-        "kind": "compiler-assert",
-        "level": "deny",
-        "reason": "compiler assert",
-        "root": "panic_axioms::remainder",
-        "root-kind": "concrete",
-        "span": "src/lib.rs:6:5: 6:28",
-        "target": "compiler assert remainder with a zero divisor",
-        "trace": [
-          "src/lib.rs:6:5: 6:28: panic_axioms::remainder --assert-> compiler assert RemainderByZero(copy _1) with locals [CompilerAssertLocal { index: 0, name: None, role: ReturnPointer }, CompilerAssertLocal { index: 1, name: Some(\"total_size\"), role: Argument }, CompilerAssertLocal { index: 2, name: Some(\"block_size\"), role: Argument }, CompilerAssertLocal { index: 3, name: None, role: Temporary }]"
-        ]
-      },
-      {
-        "kind": "panic-invocation",
-        "level": "deny",
-        "reason": "panic sink core::std::rt::panic_fmt",
-        "root": "panic_axioms::todo_macro",
-        "root-kind": "concrete",
-        "span": "src/lib.rs:14:5: 14:29",
-        "target": "core::std::rt::panic_fmt",
-        "trace": [
-          "src/lib.rs:14:5: 14:29: panic_axioms::todo_macro --macro-expansion-> macro core::std::todo",
-          "[SYSROOT]/lib/rustlib/src/rust/library/core/src/macros/mod.rs:880:9: 880:82: macro core::std::todo --macro-expansion-> macro core::macros::panic",
-          "[SYSROOT]/lib/rustlib/src/rust/library/core/src/macros/mod.rs:880:9: 880:82: macro core::macros::panic --macro-expansion-> macro core::std::panic::panic_2021",
-          "[SYSROOT]/lib/rustlib/src/rust/library/core/src/panic.rs:62:9: 62:73: macro core::std::panic::panic_2021 --direct-call-> core::std::rt::panic_fmt"
-        ]
-      }
-    ],
-    "format-version": 12,
-    "reason": "sniff-test-artifact",
-    "rustc-version": "[RUSTC_VERSION]",
-    "tool-version": "0.1.0"
+    "compiler-assert-kind": "division-by-zero",
+    "kind": "compiler-assert",
+    "level": "deny",
+    "reason": "compiler assert",
+    "root": "panic_axioms::division",
+    "root-kind": "concrete",
+    "root-span": "src/lib.rs:1:1: 1:64",
+    "span": "src/lib.rs:2:5: 2:29",
+    "target": "compiler assert division by zero",
+    "trace": [
+      "src/lib.rs:2:5: 2:29: panic_axioms::division --assert-> compiler assert division by zero"
+    ]
+  },
+  {
+    "compiler-assert-kind": "bounds-check",
+    "kind": "compiler-assert",
+    "level": "deny",
+    "reason": "compiler assert",
+    "root": "panic_axioms::indexed",
+    "root-kind": "concrete",
+    "root-span": "src/lib.rs:9:1: 9:56",
+    "span": "src/lib.rs:10:5: 10:18",
+    "target": "compiler assert index out of bounds",
+    "trace": [
+      "src/lib.rs:10:5: 10:18: panic_axioms::indexed --assert-> compiler assert index out of bounds"
+    ]
+  },
+  {
+    "compiler-assert-kind": "remainder-by-zero",
+    "kind": "compiler-assert",
+    "level": "deny",
+    "reason": "compiler assert",
+    "root": "panic_axioms::remainder",
+    "root-kind": "concrete",
+    "root-span": "src/lib.rs:5:1: 5:64",
+    "span": "src/lib.rs:6:5: 6:28",
+    "target": "compiler assert remainder with a zero divisor",
+    "trace": [
+      "src/lib.rs:6:5: 6:28: panic_axioms::remainder --assert-> compiler assert remainder with a zero divisor"
+    ]
   }
 ]

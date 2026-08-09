@@ -1,0 +1,9 @@
+[analysis]
+report-roots = [
+    "macro_marker_instances::marked_expansions_are_justified",
+    "macro_marker_instances::direct_call_requires_justification",
+]
+
+[safety.lints]
+missing-safety-docs = "allow"
+unsafe-call-missing-justification = "deny"

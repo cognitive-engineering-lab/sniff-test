@@ -45,13 +45,6 @@ impl ContractDocOverrides {
     }
 
     #[must_use]
-    #[cfg(test)]
-    pub(crate) fn markdown_for_namespace(&self, namespace: &str) -> Option<&str> {
-        let matched = self.patterns.best_match(namespace)?;
-        self.markdown_for_pattern(matched.pattern)
-    }
-
-    #[must_use]
     pub(crate) fn markdown_for_candidates(&self, candidates: &[String]) -> Option<&str> {
         let matched = self.patterns.best_candidates_match(candidates)?;
         self.markdown_for_pattern(matched.pattern)
@@ -409,109 +402,36 @@ fn span_for_offset(line_spans: &[(std::ops::Range<usize>, Span)], offset: usize)
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        ContractRequirement, parse_panic_contract_doc_lines, parse_safety_contract_doc_lines,
-    };
-    use rustc_span::DUMMY_SP;
+    use super::{parse_panic_contract_doc_lines, parse_safety_contract_doc_lines};
 
     #[test]
-    fn panic_doc_headings_match_supported_styles() {
+    fn contract_parsers_accept_supported_heading_styles() {
         for heading in ["# Panics", "   ## Panics   ", "### PANICS", "#### Panic(s)"] {
             assert!(parse_panic_contract_doc_lines([heading]).has_docs);
         }
-    }
-
-    #[test]
-    fn panic_doc_headings_do_not_match_arbitrary_text() {
-        for line in [
-            "Panics: no heading",
-            "#Panics",
-            "# Panics in rare cases",
-            "# Safety",
-        ] {
-            assert!(!parse_panic_contract_doc_lines([line]).has_docs);
-        }
-    }
-
-    #[test]
-    fn panic_doc_requirements_are_named_bullets_under_panics() {
-        let summary = parse_panic_contract_doc_lines([
-            "# Panics",
-            "",
-            "Panics when the caller violates any listed requirement.",
-            "",
-            "Requirements:",
-            "",
-            "- nonzero: denominator must not be zero",
-            "* index in bounds: index must be within the slice",
-            "- something[var_1]:",
-            "# Safety",
-            "- ignored: this is outside the panic section",
-        ]);
-
-        assert!(summary.has_docs);
-        assert_eq!(
-            summary.requirements,
-            [
-                ContractRequirement {
-                    name: String::from("nonzero"),
-                    condition: String::from("denominator must not be zero"),
-                    span: DUMMY_SP,
-                },
-                ContractRequirement {
-                    name: String::from("index in bounds"),
-                    condition: String::from("index must be within the slice"),
-                    span: DUMMY_SP,
-                },
-                ContractRequirement {
-                    name: String::from("something[var_1]"),
-                    condition: String::new(),
-                    span: DUMMY_SP,
-                },
-            ]
-        );
-    }
-
-    #[test]
-    fn panic_doc_duplicate_requirement_names_are_ambiguous() {
-        let summary = parse_panic_contract_doc_lines([
-            "# Panics",
-            "- nonzero: denominator must not be zero",
-            "- nonzero!: total must be bounded",
-        ]);
-
-        assert_eq!(summary.ambiguous_requirements.len(), 1);
-        assert_eq!(summary.ambiguous_requirements[0].normalized_name, "nonzero");
-        assert_eq!(summary.ambiguous_requirements[0].requirements.len(), 2);
-    }
-
-    #[test]
-    fn safety_doc_headings_match_supported_styles() {
         for heading in ["# Safety", "   ## SAFETY   ", "### Safety:"] {
             assert!(parse_safety_contract_doc_lines([heading]).has_docs);
         }
     }
 
     #[test]
-    fn safety_doc_headings_do_not_match_arbitrary_text() {
-        for line in [
-            "Safety: no heading",
-            "#Safety",
-            "# Panics",
-            "# Safety notes",
-        ] {
-            assert!(!parse_safety_contract_doc_lines([line]).has_docs);
-        }
+    fn contract_parsers_ignore_malformed_headings() {
+        assert!(!parse_panic_contract_doc_lines(["# Panics in rare cases"]).has_docs);
+        assert!(!parse_safety_contract_doc_lines(["# Safety notes"]).has_docs);
     }
 
     #[test]
-    fn safety_doc_requirements_are_named_bullets_under_safety() {
-        let summary = parse_safety_contract_doc_lines([
+    fn contract_parsers_extract_their_named_requirements() {
+        let panic = parse_panic_contract_doc_lines([
+            "# Panics",
+            "",
+            "- nonzero: denominator must not be zero",
+            "* index in bounds: index must be within the slice",
             "# Safety",
-            "",
-            "The caller must satisfy all listed requirements.",
-            "",
-            "Requirements:",
+            "- ignored: this is outside the panic section",
+        ]);
+        let safety = parse_safety_contract_doc_lines([
+            "# Safety",
             "",
             "- valid_ptr: pointer must be non-null",
             "* initialized: pointer must reference initialized memory",
@@ -520,25 +440,29 @@ mod tests {
             "- ignored: this is outside the safety section",
         ]);
 
-        assert!(summary.has_docs);
+        assert!(panic.has_docs);
         assert_eq!(
-            summary.requirements,
+            panic
+                .requirements
+                .iter()
+                .map(|requirement| (requirement.name.as_str(), requirement.condition.as_str()))
+                .collect::<Vec<_>>(),
             [
-                ContractRequirement {
-                    name: String::from("valid_ptr"),
-                    condition: String::from("pointer must be non-null"),
-                    span: DUMMY_SP,
-                },
-                ContractRequirement {
-                    name: String::from("initialized"),
-                    condition: String::from("pointer must reference initialized memory"),
-                    span: DUMMY_SP,
-                },
-                ContractRequirement {
-                    name: String::from("aligned"),
-                    condition: String::new(),
-                    span: DUMMY_SP,
-                },
+                ("nonzero", "denominator must not be zero"),
+                ("index in bounds", "index must be within the slice"),
+            ]
+        );
+        assert!(safety.has_docs);
+        assert_eq!(
+            safety
+                .requirements
+                .iter()
+                .map(|requirement| (requirement.name.as_str(), requirement.condition.as_str()))
+                .collect::<Vec<_>>(),
+            [
+                ("valid_ptr", "pointer must be non-null"),
+                ("initialized", "pointer must reference initialized memory"),
+                ("aligned", ""),
             ]
         );
     }

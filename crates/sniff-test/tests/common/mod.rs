@@ -1,8 +1,5 @@
 //! Helpers shared by the cli and fixtures harnesses.
 
-// Each harness uses a subset of these helpers.
-#![allow(dead_code)]
-
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
@@ -10,6 +7,26 @@ use std::process::{Command, ExitStatus};
 use std::sync::{Mutex, MutexGuard};
 
 static NESTED_CARGO_LOCK: Mutex<()> = Mutex::new(());
+
+pub const COMPILER_DEBUG_FRAGMENTS: &[&str] = &[
+    "copy _",
+    "move _",
+    " with locals ",
+    "CompilerAssertLocal {",
+    "Binder {",
+    "bound_vars:",
+    "BoundsCheck {",
+    "Overflow(",
+    "OverflowNeg(",
+    "DivisionByZero(",
+    "RemainderByZero(",
+    "ResumedAfterReturn(",
+    "ResumedAfterPanic(",
+    "ResumedAfterDrop(",
+    "MisalignedPointerDereference {",
+    "NullPointerDereference",
+    "InvalidEnumConstruction(",
+];
 
 pub struct CommandOutput {
     pub status: ExitStatus,
@@ -47,11 +64,16 @@ pub fn rustc_sysroot() -> String {
 
     assert!(
         output.status.success(),
-        "{}",
-        command_failure(&rustc.display().to_string(), &output)
+        "command failed: {} --print sysroot\nstdout:\n{}\nstderr:\n{}",
+        rustc.display(),
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
     );
 
-    String::from_utf8(output.stdout).expect("rustc sysroot output should be utf-8")
+    String::from_utf8(output.stdout)
+        .expect("rustc sysroot output should be utf-8")
+        .trim()
+        .to_owned()
 }
 
 /// Serializes nested Cargo invocations within one integration-test process.
@@ -89,12 +111,4 @@ pub fn copy_dir_all(source: &Path, destination: &Path) -> io::Result<()> {
         }
     }
     Ok(())
-}
-
-pub fn command_failure(command: &str, output: &std::process::Output) -> String {
-    format!(
-        "command failed: {command}\nstdout:\n{}\nstderr:\n{}",
-        String::from_utf8_lossy(&output.stdout),
-        String::from_utf8_lossy(&output.stderr)
-    )
 }

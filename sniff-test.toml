@@ -1,5 +1,5 @@
 [compiler]
-# Compiler settings contribute to rustc's artifact identity; v14 is the cache schema.
+# Compiler settings contribute to rustc's artifact identity.
 overflow-checks = "profile"
 inline-mir = "off"
 

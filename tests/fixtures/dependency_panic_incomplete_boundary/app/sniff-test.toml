@@ -1,8 +1,0 @@
-[analysis]
-node-limit = 2
-
-[analysis.lints]
-analysis-incomplete = "deny"
-
-[safety]
-ignored-namespaces = ["dependency_panic_incomplete_boundary::**"]

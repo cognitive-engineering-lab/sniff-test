@@ -10,14 +10,14 @@
 # `off` forces `-C overflow-checks=no`.
 overflow-checks = "profile"
 
-# MIR inlining can hide call edges that are useful in panic traces.
+# MIR inlining can hide call edges that are useful in diagnostic traces.
 # `off` forces `-Z inline-mir=no` and disables MIR inline passes;
 # `on` forces `-Z inline-mir=yes`.
 inline-mir = "off"
 
 [analysis]
 # Analysis settings are workspace interpretation policy. Dependency rustc units
-# ignore report roots and lints while silently caching v14 IR for every
+# ignore report roots and lints while silently caching artifact IR for every
 # analyzable body.
 show-full-stack-trace = false
 report-roots = "public"
@@ -27,26 +27,23 @@ report-roots = "public"
 callable-edge-attribution = "erasure-sites"
 
 # Marker lookup checks comments in macro definitions before walking outward to
-# macro callsites and the final source callsite. Use `source-callsite` for the
-# older callsite-only behavior.
+# macro callsites and the final source callsite. Use `source-callsite` to check
+# only the final source callsite.
 marker-probing = "macro-definition-first"
 
 # Ambiguous requirement names and shared proof markers default to failing closed.
 #
-# Function budget per selected workspace-root interpretation. Dependency IR is
-# extracted independently of this limit. Traversals that halt are reported
-# through the effect-specific analysis-incomplete lint instead of passing
-# silently.
+# Function-state budget for each panic or safety traversal from a selected
+# workspace root. Dependency IR is extracted independently of this limit.
+# Traversals that halt are reported through the corresponding
+# analysis-incomplete lint instead of passing silently.
 node-limit = 4096
 
 [analysis.lints]
+# Incomplete panic and safety traversals use their corresponding policy. Use
+# `warn` while auditing incomplete evidence, or `allow` to accept it.
 panic-analysis-incomplete = "deny"
 safety-analysis-incomplete = "deny"
-# A reached managed dependency body that is absent from the composed graph
-# falls back to the corresponding effect-specific lint unless one is set:
-# dependency-panic-analysis-incomplete = "warn"
-# dependency-safety-analysis-incomplete = "warn"
-# Use `warn` while auditing, or `allow` to accept squashed evidence.
 ambiguous-panic-marker = "deny"
 ambiguous-safety-marker = "deny"
 ambiguous-panic-requirement = "deny"
@@ -69,9 +66,9 @@ missing-report-root = "warn"
 override-files = []
 
 [panics]
-# Crates, fully-qualified functions, or macro expansion paths whose internals should be treated as
-# opaque analysis boundaries. Patterns use Rust crate/path names: write
-# `proc_macro2`, not the package name `proc-macro2`.
+# Crates, fully-qualified functions, or macro expansion paths whose internals
+# should be treated as opaque analysis boundaries. Patterns use Rust crate/path
+# names: write `proc_macro2`, not the package name `proc-macro2`.
 #
 # Use this list as the crate-local false-positive ledger too. When a reported
 # compiler assert is unreachable because this crate maintains an invariant,
@@ -89,9 +86,9 @@ ignored-namespaces = [
 # documented conditions become caller obligations, while an undocumented match
 # is trusted as non-panicking.
 #
-# Patterns match a definition's crate root, definition-site path, and impl
-# self-type path. A broad pattern such as `alloc::**` asserts that the matched
-# crate documents every caller-visible panic condition.
+# Patterns match a definition's crate root, definition-site path, impl self-type
+# path, and rustc-rendered display path. A broad pattern such as `alloc::**`
+# asserts that the matched crate documents every caller-visible panic condition.
 trusted-panic-boundary-namespaces = []
 
 # Callees that should be treated as direct panic sinks. When this overlaps with
@@ -110,9 +107,8 @@ panic-sink-namespaces = [
 # `deny` emits an error and makes `cargo sniff-test` fail.
 # `warn` emits a warning without failing the run.
 # `allow` suppresses the finding from diagnostics and JSON reports.
-# Group default for compiler-generated MIR assertions across the combined local
-# and dependency graph. Each exact override is optional and wins regardless of
-# which artifact supplied the raw assertion fact.
+# Group default for compiler-generated MIR assertions. Each exact override is
+# optional and takes precedence for its assertion subtype.
 compiler-assert = "deny"
 # compiler-assert-bounds-check = "deny"
 # compiler-assert-overflow = "deny"
@@ -152,8 +148,7 @@ missing-safety-docs = "warn"
 unsafe-call-missing-justification = "warn"
 unsafe-call-missing-requirements = "warn"
 # Group default for non-call unsafe operations. Each exact override is optional
-# and wins over this fallback regardless of which artifact supplied the raw
-# operation fact.
+# and takes precedence for its operation subtype.
 unsafe-op-missing-justification = "warn"
 # raw-pointer-dereference-missing-justification = "warn"
 # mutable-static-access-missing-justification = "warn"

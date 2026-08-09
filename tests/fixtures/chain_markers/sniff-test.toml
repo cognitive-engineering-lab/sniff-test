@@ -1,6 +1,5 @@
-# Markers between the links of a multi-line method chain justify exactly
-# their link; a blanket marker above the statement does not reach links on
-# other lines.
+# A marker between method-chain links justifies that link without covering a
+# separate unmarked chain.
 
 [panics]
 panic-sink-namespaces = [

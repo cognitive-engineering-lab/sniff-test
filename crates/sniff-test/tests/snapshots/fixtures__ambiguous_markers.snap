@@ -1,31 +1,35 @@
 ---
 source: crates/sniff-test/tests/fixtures.rs
-expression: messages
+expression: "report[\"findings\"]"
 ---
 [
   {
-    "artifact": {
-      "crate-name": "ambiguous_markers"
-    },
-    "findings": [
-      {
-        "kind": "documented-panic",
-        "level": "warn",
-        "reason": "ambiguous_markers::ratio documents when it may panic under # Panics",
-        "root": "ambiguous_markers::marker_on_noncanonical_route",
-        "root-kind": "concrete",
-        "span": "src/lib.rs:34:5: 34:30",
-        "target": "ambiguous_markers::ratio",
-        "trace": [
-          "src/lib.rs:46:17: 46:51: ambiguous_markers::marker_on_noncanonical_route --direct-call-> ambiguous_markers::unmarked_route",
-          "src/lib.rs:38:5: 38:37: ambiguous_markers::unmarked_route --direct-call-> ambiguous_markers::shared_ratio",
-          "src/lib.rs:34:5: 34:30: ambiguous_markers::shared_ratio --direct-call-> ambiguous_markers::ratio"
-        ]
-      }
+    "kind": "ambiguous-panic-requirement",
+    "level": "deny",
+    "reason": "`ambiguous_markers::duplicate_name_ratio` has 2 # Panics requirements named `nonzero`",
+    "requirements": [
+      "nonzero: denominator must not be zero.",
+      "nonzero: total must be bounded by the caller."
     ],
-    "format-version": 12,
-    "reason": "sniff-test-artifact",
-    "rustc-version": "[RUSTC_VERSION]",
-    "tool-version": "0.1.0"
+    "root": "ambiguous_markers::duplicate_name_marker",
+    "root-kind": "concrete",
+    "root-span": "src/lib.rs:27:1: 27:72",
+    "span": "src/lib.rs:21:1: 21:45",
+    "target": "ambiguous_markers::duplicate_name_ratio",
+    "trace": [
+      "src/lib.rs:30:5: 30:45: ambiguous_markers::duplicate_name_marker --direct-call-> ambiguous_markers::duplicate_name_ratio"
+    ]
+  },
+  {
+    "kind": "ambiguous-panic-marker",
+    "level": "deny",
+    "reason": "one `// PANIC:` marker applies to 2 panic effect groups",
+    "root": "ambiguous_markers::shared_block_marker",
+    "root-kind": "concrete",
+    "root-span": "src/lib.rs:8:1: 8:76",
+    "span": "src/lib.rs:9:1: 10:1",
+    "trace": [
+      "src/lib.rs:11:21: 11:42: ambiguous_markers::shared_block_marker --direct-call-> ambiguous_markers::ratio"
+    ]
   }
 ]

@@ -1,30 +1,37 @@
 ---
 source: crates/sniff-test/tests/fixtures.rs
-expression: messages
+expression: "report[\"findings\"]"
 ---
 [
   {
-    "artifact": {
-      "crate-name": "transitive_effect_markers"
-    },
-    "findings": [
-      {
-        "function": "transitive_effect_markers::justified_safety_path",
-        "kind": "ambiguous-safety-marker",
-        "level": "deny",
-        "reason": "one `// SAFETY:` marker applies to 2 safety effect groups",
-        "root": "transitive_effect_markers::justified_safety_path",
-        "root-kind": "concrete",
-        "span": "src/lib.rs:17:1: 18:1",
-        "trace": [
-          "src/lib.rs:18:5: 18:26: transitive_effect_markers::justified_safety_path --direct-call-> transitive_effect_markers::safety_inner",
-          "src/lib.rs:11:26: 11:34: transitive_effect_markers::safety_inner --unsafe-operation-> unsafe operation (raw pointer dereference)"
-        ]
-      }
-    ],
-    "format-version": 12,
-    "reason": "sniff-test-artifact",
-    "rustc-version": "[RUSTC_VERSION]",
-    "tool-version": "0.1.0"
+    "kind": "panic-invocation",
+    "level": "deny",
+    "reason": "panic sink core::std::rt::panic_fmt",
+    "root": "transitive_effect_markers::unmarked_panic_path",
+    "root-kind": "concrete",
+    "root-span": "src/lib.rs:14:1: 14:29",
+    "span": "src/lib.rs:11:5: 11:56",
+    "target": "core::std::rt::panic_fmt",
+    "trace": [
+      "src/lib.rs:15:5: 15:27: transitive_effect_markers::unmarked_panic_path --direct-call-> transitive_effect_markers::unmarked_panic_inner",
+      "src/lib.rs:11:5: 11:56: transitive_effect_markers::unmarked_panic_inner --macro-expansion-> macro std::panic",
+      "src/lib.rs:11:5: 11:56: macro std::panic --macro-expansion-> macro core::std::panic::panic_2021",
+      "[SYSROOT]/lib/rustlib/src/rust/library/core/src/panic.rs:62:9: 62:73: macro core::std::panic::panic_2021 --direct-call-> core::std::rt::panic_fmt"
+    ]
+  },
+  {
+    "function": "transitive_effect_markers::unmarked_safety_inner",
+    "kind": "unsafe-op-missing-justification",
+    "level": "deny",
+    "reason": "unsafe operation (raw pointer dereference) has no `// SAFETY:` justification",
+    "root": "transitive_effect_markers::unmarked_safety_path",
+    "root-kind": "concrete",
+    "root-span": "src/lib.rs:31:1: 31:54",
+    "safety-op-kind": "raw-pointer-dereference",
+    "span": "src/lib.rs:28:14: 28:22",
+    "trace": [
+      "src/lib.rs:32:5: 32:35: transitive_effect_markers::unmarked_safety_path --direct-call-> transitive_effect_markers::unmarked_safety_inner",
+      "src/lib.rs:28:14: 28:22: transitive_effect_markers::unmarked_safety_inner --unsafe-operation-> unsafe operation (raw pointer dereference)"
+    ]
   }
 ]

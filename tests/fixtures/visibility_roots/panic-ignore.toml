@@ -1,5 +1,0 @@
-[analysis]
-report-roots = "public"
-
-[panics]
-ignored-namespaces = ["visibility_roots"]

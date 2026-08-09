@@ -1,5 +1,6 @@
 [analysis]
-report-roots = "all"
-
-[panics.lints]
-indirect-call-boundary = "allow"
+report-roots = [
+    "safety_requirements::satisfies_requirements",
+    "safety_requirements::misses_one_requirement",
+    "safety_requirements::misses_justification",
+]

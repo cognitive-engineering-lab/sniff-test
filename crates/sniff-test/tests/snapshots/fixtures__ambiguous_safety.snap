@@ -1,0 +1,24 @@
+---
+source: crates/sniff-test/tests/fixtures.rs
+expression: "report[\"findings\"]"
+---
+[
+  {
+    "function": "ambiguous_safety::read_duplicate",
+    "kind": "ambiguous-safety-requirement",
+    "level": "deny",
+    "reason": "`ambiguous_safety::read_duplicate` has multiple # Safety requirements named `valid ptr`",
+    "requirements": [
+      "valid_ptr: pointer must be non-null.",
+      "valid_ptr: pointer must reference initialized memory."
+    ],
+    "root": "ambiguous_safety::duplicate_safety_marker",
+    "root-kind": "concrete",
+    "root-span": "src/lib.rs:14:1: 14:39",
+    "span": "src/lib.rs:7:1: 7:43",
+    "target": "ambiguous_safety::read_duplicate",
+    "trace": [
+      "src/lib.rs:20:14: 20:42: ambiguous_safety::duplicate_safety_marker --direct-call-> ambiguous_safety::read_duplicate"
+    ]
+  }
+]

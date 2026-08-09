@@ -1,29 +1,19 @@
 ---
 source: crates/sniff-test/tests/fixtures.rs
-expression: messages
+expression: "report[\"findings\"]"
 ---
 [
   {
-    "artifact": {
-      "crate-name": "dependency_app"
-    },
-    "findings": [
-      {
-        "kind": "documented-panic",
-        "level": "warn",
-        "reason": "dependency_obligation::documented documents when it may panic under # Panics",
-        "root": "dependency_app::call_dependency",
-        "root-kind": "concrete",
-        "span": "src/lib.rs:2:5: 2:44",
-        "target": "dependency_obligation::documented",
-        "trace": [
-          "src/lib.rs:2:5: 2:44: dependency_app::call_dependency --direct-call-> dependency_obligation::documented"
-        ]
-      }
-    ],
-    "format-version": 12,
-    "reason": "sniff-test-artifact",
-    "rustc-version": "[RUSTC_VERSION]",
-    "tool-version": "0.1.0"
+    "kind": "documented-panic",
+    "level": "warn",
+    "reason": "dependency_obligation::documented documents when it may panic under # Panics",
+    "root": "dependency_app::call_dependency",
+    "root-kind": "concrete",
+    "root-span": "src/lib.rs:1:1: 1:35",
+    "span": "src/lib.rs:2:5: 2:44",
+    "target": "dependency_obligation::documented",
+    "trace": [
+      "src/lib.rs:2:5: 2:44: dependency_app::call_dependency --direct-call-> dependency_obligation::documented"
+    ]
   }
 ]

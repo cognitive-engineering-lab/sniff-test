@@ -7,122 +7,37 @@ stdout:
 <empty>
 stderr:
     Checking safety-requirements v0.1.0 ([FIXTURE])
-warning: unsafe call to `safety_requirements::read_byte` in `safety_requirements::block_scope_covers_multiple_calls` does not satisfy all `# Safety` requirements
-  --> src/lib.rs:62:20
+warning: unsafe call to `safety_requirements::uncontracted_operation` in `safety_requirements::misses_justification` is missing a `// SAFETY:` justification
+  --> src/lib.rs:37:14
    |
-62 |         let read = read_byte(ptr.as_ptr());
-   |                    ^^^^^^^^^^^^^^^^^^^^^^^
-   |
-note: `safety_requirements::read_byte` documents `# Safety` here
-  --> src/lib.rs:11:1
-   |
-11 | pub unsafe fn read_byte(ptr: *const u8) -> u8 {
-   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-   = note: missing safety requirement `valid_ptr: pointer must be non-null.`
-   = help: add named bullets under the applicable `// SAFETY:` comment for each missing requirement
-
-warning: safety-obligation call to `safety_requirements::safe_documented_contract` in `safety_requirements::configured_safety_obligation_missing_requirement` does not satisfy all `# Safety` requirements
-   --> src/lib.rs:164:5
-    |
-164 |     safe_documented_contract(ptr);
-    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-    |
-note: `safety_requirements::safe_documented_contract` documents `# Safety` here
-   --> src/lib.rs:147:1
-    |
-147 | pub fn safe_documented_contract(_ptr: *const u8) {}
-    | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-    = note: missing safety requirement `valid_ptr: pointer must be non-null.`
-    = help: add named bullets under the applicable `// SAFETY:` comment for each missing requirement
-
-warning: unsafe call to `safety_requirements::UnsafeGreeter::greet` in `safety_requirements::generic_unsafe_trait_method_missing` does not satisfy all `# Safety` requirements
-   --> src/lib.rs:139:14
-    |
-139 |     unsafe { greeter.greet(ptr) }
-    |              ^^^^^^^^^^^^^^^^^^
-    |
-note: `safety_requirements::UnsafeGreeter::greet` documents `# Safety` here
-   --> src/lib.rs:111:5
-    |
-111 |     /// - valid_ptr: pointer must be non-null.
-    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-    = note: missing safety requirement `valid_ptr: pointer must be non-null.`
-    = help: add named bullets under the applicable `// SAFETY:` comment for each missing requirement
-
-warning: unsafe call to `safety_requirements::private_unsafe_no_docs` in `safety_requirements::missing_justification` is missing a `// SAFETY:` justification
-  --> src/lib.rs:90:14
-   |
-90 |     unsafe { private_unsafe_no_docs() }
+37 |     unsafe { uncontracted_operation() }
    |              ^^^^^^^^^^^^^^^^^^^^^^^^
    |
    = help: add a `// SAFETY:` comment above the unsafe block or call site
-
-warning: unsafe call to `safety_requirements::read_byte` in `safety_requirements::missing_requirement` does not satisfy all `# Safety` requirements
-  --> src/lib.rs:75:14
+note: this function can reach an unsafe call without a `// SAFETY:` justification
+  --> src/lib.rs:36:1
    |
-75 |     unsafe { read_byte(ptr.as_ptr()) }
+36 | pub fn misses_justification() {
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unsafe call to `safety_requirements::read_byte` in `safety_requirements::misses_one_requirement` does not satisfy all `# Safety` requirements
+  --> src/lib.rs:33:14
+   |
+33 |     unsafe { read_byte(ptr.as_ptr()) }
    |              ^^^^^^^^^^^^^^^^^^^^^^^
    |
 note: `safety_requirements::read_byte` documents `# Safety` here
-  --> src/lib.rs:11:1
+  --> src/lib.rs:8:1
    |
-11 | pub unsafe fn read_byte(ptr: *const u8) -> u8 {
+ 8 | pub unsafe fn read_byte(ptr: *const u8) -> u8 {
    | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
    = note: missing safety requirement `initialized: pointer must reference initialized memory.`
    = help: add named bullets under the applicable `// SAFETY:` comment for each missing requirement
+note: this function can reach an unsafe call whose documented `# Safety` requirements are not all satisfied
+  --> src/lib.rs:27:1
+   |
+27 | pub fn misses_one_requirement() -> u8 {
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-warning: unsafe call to `safety_requirements::read_byte` in `safety_requirements::safety_marker_boundary_missing_requirements` does not satisfy all `# Safety` requirements
-  --> src/lib.rs:86:14
-   |
-86 |     unsafe { read_byte(ptr.as_ptr()) }
-   |              ^^^^^^^^^^^^^^^^^^^^^^^
-   |
-note: `safety_requirements::read_byte` documents `# Safety` here
-  --> src/lib.rs:11:1
-   |
-11 | pub unsafe fn read_byte(ptr: *const u8) -> u8 {
-   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-   = note: missing safety requirement `valid_ptr: pointer must be non-null.`
-   = note: missing safety requirement `initialized: pointer must reference initialized memory.`
-   = help: add named bullets under the applicable `// SAFETY:` comment for each missing requirement
-
-warning: unsafe call to `safety_requirements::read_byte` in `safety_requirements::satisfied_by_block_and_call` does not satisfy all `# Safety` requirements
-  --> src/lib.rs:48:9
-   |
-48 |         read_byte(ptr.as_ptr())
-   |         ^^^^^^^^^^^^^^^^^^^^^^^
-   |
-note: `safety_requirements::read_byte` documents `# Safety` here
-  --> src/lib.rs:11:1
-   |
-11 | pub unsafe fn read_byte(ptr: *const u8) -> u8 {
-   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-   = note: missing safety requirement `valid_ptr: pointer must be non-null.`
-   = help: add named bullets under the applicable `// SAFETY:` comment for each missing requirement
-
-warning: public unsafe function `safety_requirements::undocumented_public` is missing `# Safety` docs
-  --> src/lib.rs:33:1
-   |
-33 | pub unsafe fn undocumented_public(_ptr: *const u8) -> u8 {
-   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-   |
-   = help: document the caller obligations under a `# Safety` section
-
-warning: unsafe call to `unsafe function pointer` in `safety_requirements::unknown_unsafe_fn_pointer` is missing a `// SAFETY:` justification
-   --> src/lib.rs:194:14
-    |
-194 |     unsafe { function() }
-    |              ^^^^^^^^^^
-    |
-    = help: add a `// SAFETY:` comment above the unsafe block or call site
-
-warning: unsafe call to `unsafe function pointer` in `safety_requirements::unsafe_fn_pointer_missing_justification` is missing a `// SAFETY:` justification
-   --> src/lib.rs:103:14
-    |
-103 |     unsafe { function() }
-    |              ^^^^^^^^^^
-    |
-    = help: add a `// SAFETY:` comment above the unsafe block or call site
-
-warning: `safety-requirements` (lib) generated 10 warnings
+warning: `safety-requirements` (lib) generated 2 warnings
     Finished `release` profile [optimized] target(s) in [TIME]

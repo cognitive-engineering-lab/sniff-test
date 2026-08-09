@@ -14,6 +14,11 @@ warning: function `indirect_calls::call_documented` may panic through a document
    |     ^^^^^^^^^^^^^^^^^^^^^^
    |
    = note: `indirect_calls::Risky::documented` documents `# Panics` here
+note: this function can reach a call with `# Panics` documentation
+  --> src/lib.rs:10:1
+   |
+10 | pub fn call_documented<T: Risky>(value: &T, flag: bool) {
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 help: add `// PANIC:` directly above this call explaining why its documented panic conditions cannot occur
   --> src/lib.rs:11:5
    |
@@ -37,6 +42,11 @@ note: panic behavior cannot be verified here: indirect call to undocumented trai
    |
 19 |     value.undocumented(flag);
    |     ^^^^^^^^^^^^^^^^^^^^^^^^
+note: this function can reach a call whose panic behavior cannot be verified
+  --> src/lib.rs:18:1
+   |
+18 | pub fn call_dyn(value: &dyn Risky, flag: bool) {
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
    = help: document this boundary with `# Panics`, add `// PANIC:` only if every possible callee is locally constrained, or configure `indirect-call-boundary` if this opacity is acceptable
 
 warning: function `indirect_calls::call_pointer` reaches an unverifiable indirect call
@@ -45,11 +55,16 @@ warning: function `indirect_calls::call_pointer` reaches an unverifiable indirec
 22 | pub fn call_pointer(callee: fn(bool), flag: bool) {
    | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
    |
-note: panic behavior cannot be verified here: indirect call through an opaque callable
+note: panic behavior cannot be verified here: indirect call through a function pointer
   --> src/lib.rs:23:5
    |
 23 |     callee(flag);
    |     ^^^^^^^^^^^^
+note: this function can reach a call whose panic behavior cannot be verified
+  --> src/lib.rs:22:1
+   |
+22 | pub fn call_pointer(callee: fn(bool), flag: bool) {
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
    = help: document this boundary with `# Panics`, add `// PANIC:` only if every possible callee is locally constrained, or configure `indirect-call-boundary` if this opacity is acceptable
 
 warning: function `indirect_calls::call_undocumented` reaches an unverifiable indirect call
@@ -63,6 +78,11 @@ note: panic behavior cannot be verified here: indirect call to undocumented trai
    |
 15 |     value.undocumented(flag);
    |     ^^^^^^^^^^^^^^^^^^^^^^^^
+note: this function can reach a call whose panic behavior cannot be verified
+  --> src/lib.rs:14:1
+   |
+14 | pub fn call_undocumented<T: Risky>(value: &T, flag: bool) {
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
    = help: document this boundary with `# Panics`, add `// PANIC:` only if every possible callee is locally constrained, or configure `indirect-call-boundary` if this opacity is acceptable
 
 warning: `indirect-calls` (lib) generated 4 warnings

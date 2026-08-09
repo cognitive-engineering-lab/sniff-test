@@ -1,55 +1,46 @@
 ---
 source: crates/sniff-test/tests/fixtures.rs
-expression: messages
+expression: "report[\"findings\"]"
 ---
 [
   {
-    "artifact": {
-      "crate-name": "safety_callable_sites"
-    },
-    "findings": [
-      {
-        "function": "safety_callable_sites::independently_marked_calls",
-        "kind": "unsafe-call-missing-requirements",
-        "level": "warn",
-        "missing-requirements": [
-          "ready: the first target's precondition must hold."
-        ],
-        "reason": "unsafe call to `safety_callable_sites::first_target` does not satisfy all # Safety requirements",
-        "requirements": [
-          "ready: the first target's precondition must hold."
-        ],
-        "root": "safety_callable_sites::independently_marked_calls",
-        "root-kind": "concrete",
-        "span": "src/lib.rs:24:14: 24:22",
-        "target": "safety_callable_sites::first_target",
-        "trace": [
-          "src/lib.rs:24:14: 24:22: safety_callable_sites::independently_marked_calls --fn-pointer-call-target-> safety_callable_sites::first_target"
-        ]
-      },
-      {
-        "function": "safety_callable_sites::independently_marked_calls",
-        "kind": "unsafe-call-missing-requirements",
-        "level": "warn",
-        "missing-requirements": [
-          "ready: the second target's precondition must hold."
-        ],
-        "reason": "unsafe call to `safety_callable_sites::second_target` does not satisfy all # Safety requirements",
-        "requirements": [
-          "ready: the second target's precondition must hold."
-        ],
-        "root": "safety_callable_sites::independently_marked_calls",
-        "root-kind": "concrete",
-        "span": "src/lib.rs:24:14: 24:22",
-        "target": "safety_callable_sites::second_target",
-        "trace": [
-          "src/lib.rs:24:14: 24:22: safety_callable_sites::independently_marked_calls --fn-pointer-call-target-> safety_callable_sites::second_target"
-        ]
-      }
+    "function": "safety_callable_sites::independently_marked_calls",
+    "kind": "unsafe-call-missing-requirements",
+    "level": "warn",
+    "missing-requirements": [
+      "ready: the first target's precondition must hold."
     ],
-    "format-version": 12,
-    "reason": "sniff-test-artifact",
-    "rustc-version": "[RUSTC_VERSION]",
-    "tool-version": "0.1.0"
+    "reason": "unsafe call to `safety_callable_sites::first_target` does not satisfy all # Safety requirements",
+    "requirements": [
+      "ready: the first target's precondition must hold."
+    ],
+    "root": "safety_callable_sites::independently_marked_calls",
+    "root-kind": "concrete",
+    "root-span": "src/lib.rs:15:1: 15:36",
+    "span": "src/lib.rs:24:14: 24:22",
+    "target": "safety_callable_sites::first_target",
+    "trace": [
+      "src/lib.rs:24:14: 24:22: safety_callable_sites::independently_marked_calls --fn-pointer-call-target-> safety_callable_sites::first_target"
+    ]
+  },
+  {
+    "function": "safety_callable_sites::independently_marked_calls",
+    "kind": "unsafe-call-missing-requirements",
+    "level": "warn",
+    "missing-requirements": [
+      "ready: the second target's precondition must hold."
+    ],
+    "reason": "unsafe call to `safety_callable_sites::second_target` does not satisfy all # Safety requirements",
+    "requirements": [
+      "ready: the second target's precondition must hold."
+    ],
+    "root": "safety_callable_sites::independently_marked_calls",
+    "root-kind": "concrete",
+    "root-span": "src/lib.rs:15:1: 15:36",
+    "span": "src/lib.rs:24:14: 24:22",
+    "target": "safety_callable_sites::second_target",
+    "trace": [
+      "src/lib.rs:24:14: 24:22: safety_callable_sites::independently_marked_calls --fn-pointer-call-target-> safety_callable_sites::second_target"
+    ]
   }
 ]
