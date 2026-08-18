@@ -6,7 +6,8 @@
 //! different policy without recompiling it.
 
 use std::fmt::{self, Display, Formatter};
-use std::io::Write as _;
+use std::fs::File;
+use std::io::{Read, Write as _};
 use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
@@ -16,6 +17,12 @@ use super::ir::{ArtifactAnalysisIr, FunctionBodyProvenanceIr};
 pub(crate) const CACHE_FORMAT_VERSION: u32 = 15;
 pub(crate) const CACHE_DIR_NAME: &str = "sniff-test-cache";
 pub(crate) const CACHE_VERSION_DIR: &str = "v15";
+/// Independent outer limit for one complete serialized cache envelope.
+///
+/// This limit protects allocation and parsing at the file boundary regardless
+/// of the limits enforced by any IR stored inside the envelope. Readers and
+/// writers enforce the same policy so every cache written here is readable.
+pub(crate) const MAX_CACHE_FILE_BYTES: u64 = 512 * 1024 * 1024;
 
 /// Cached policy-neutral analysis for one exact rustc output artifact.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -68,16 +75,13 @@ impl ArtifactAnalysisCache {
             path: path.clone(),
             source,
         })?;
-        write_atomic(&path, &source)
+        write_bounded_cache_source(&path, &source, MAX_CACHE_FILE_BYTES)
     }
 
     /// Reads and validates one v15 cache file against the active extraction
     /// environment.
     pub(crate) fn read(path: &Path, expected: &CacheExpectations<'_>) -> Result<Self, CacheError> {
-        let source = std::fs::read_to_string(path).map_err(|source| CacheError::Io {
-            path: path.to_owned(),
-            source,
-        })?;
+        let source = read_bounded_cache_file(path, MAX_CACHE_FILE_BYTES)?;
         let header = serde_json::from_str::<CacheFormatHeader>(&source).map_err(|source| {
             CacheError::Json {
                 path: path.to_owned(),
@@ -312,6 +316,10 @@ pub(crate) enum CacheError {
         path: PathBuf,
         reason: String,
     },
+    TooLarge {
+        path: PathBuf,
+        max_bytes: u64,
+    },
 }
 
 impl CacheError {
@@ -358,6 +366,11 @@ impl Display for CacheError {
             Self::Invalid { path, reason } => {
                 write!(formatter, "invalid cache {}: {reason}", path.display())
             }
+            Self::TooLarge { path, max_bytes } => write!(
+                formatter,
+                "cache {} exceeds the maximum size of {max_bytes} bytes",
+                path.display()
+            ),
         }
     }
 }
@@ -367,8 +380,77 @@ impl std::error::Error for CacheError {
         match self {
             Self::Io { source, .. } => Some(source),
             Self::Json { source, .. } => Some(source),
-            Self::Format { .. } | Self::Version { .. } | Self::Invalid { .. } => None,
+            Self::Format { .. }
+            | Self::Version { .. }
+            | Self::Invalid { .. }
+            | Self::TooLarge { .. } => None,
         }
+    }
+}
+
+fn read_bounded_cache_file(path: &Path, max_bytes: u64) -> Result<String, CacheError> {
+    let file = File::open(path).map_err(|source| CacheError::Io {
+        path: path.to_owned(),
+        source,
+    })?;
+    let metadata = file.metadata().map_err(|source| CacheError::Io {
+        path: path.to_owned(),
+        source,
+    })?;
+    if metadata.is_file() {
+        ensure_cache_byte_limit(path, metadata.len(), max_bytes)?;
+    }
+    read_bounded_cache_source(file, path, max_bytes)
+}
+
+fn read_bounded_cache_source(
+    reader: impl Read,
+    path: &Path,
+    max_bytes: u64,
+) -> Result<String, CacheError> {
+    let read_limit = max_bytes
+        .checked_add(1)
+        .expect("cache byte limit must leave room for an overflow sentinel");
+    let mut bytes = Vec::new();
+    reader
+        .take(read_limit)
+        .read_to_end(&mut bytes)
+        .map_err(|source| CacheError::Io {
+            path: path.to_owned(),
+            source,
+        })?;
+    let bytes_read = u64::try_from(bytes.len()).map_err(|_| CacheError::TooLarge {
+        path: path.to_owned(),
+        max_bytes,
+    })?;
+    ensure_cache_byte_limit(path, bytes_read, max_bytes)?;
+    String::from_utf8(bytes).map_err(|source| CacheError::Io {
+        path: path.to_owned(),
+        source: std::io::Error::new(std::io::ErrorKind::InvalidData, source),
+    })
+}
+
+fn write_bounded_cache_source(path: &Path, source: &str, max_bytes: u64) -> Result<(), CacheError> {
+    let source_bytes = u64::try_from(source.len()).map_err(|_| CacheError::TooLarge {
+        path: path.to_owned(),
+        max_bytes,
+    })?;
+    ensure_cache_byte_limit(path, source_bytes, max_bytes)?;
+    write_atomic(path, source)
+}
+
+fn ensure_cache_byte_limit(
+    path: &Path,
+    actual_bytes: u64,
+    max_bytes: u64,
+) -> Result<(), CacheError> {
+    if actual_bytes > max_bytes {
+        Err(CacheError::TooLarge {
+            path: path.to_owned(),
+            max_bytes,
+        })
+    } else {
+        Ok(())
     }
 }
 
@@ -419,13 +501,15 @@ fn write_atomic(path: &Path, source: &str) -> Result<(), CacheError> {
 #[cfg(test)]
 mod tests {
     use std::fs;
+    use std::io::Cursor;
     use std::path::Path;
 
     use tempfile::tempdir;
 
     use super::{
         ArtifactAnalysisCache, ArtifactInfo, CACHE_FORMAT_VERSION, CacheError, CacheExpectations,
-        RustcArtifactId, artifact_cache_path, default_cache_dir,
+        RustcArtifactId, artifact_cache_path, default_cache_dir, read_bounded_cache_file,
+        read_bounded_cache_source, write_bounded_cache_source,
     };
     use crate::analysis::ir::{
         ArtifactAnalysisIr, FunctionAttributesIr, FunctionBodyIr, FunctionBodyProvenanceIr,
@@ -508,6 +592,52 @@ mod tests {
             artifact_cache_path(Path::new("/cache"), &identity).to_string_lossy(),
             "/cache/artifacts/0123456789abcdef-fedcba98765432100123456789abcdef.json"
         );
+    }
+
+    #[test]
+    fn bounded_cache_reader_accepts_the_exact_byte_limit() {
+        let source =
+            read_bounded_cache_source(Cursor::new(b"12345678"), Path::new("cache.json"), 8)
+                .expect("input at the limit should be accepted");
+
+        assert_eq!(source, "12345678");
+    }
+
+    #[test]
+    fn bounded_cache_reader_rejects_input_over_the_byte_limit() {
+        let error =
+            read_bounded_cache_source(Cursor::new(b"123456789"), Path::new("cache.json"), 8)
+                .expect_err("input beyond the limit should be rejected");
+
+        assert!(matches!(error, CacheError::TooLarge { max_bytes: 8, .. }));
+        assert_eq!(
+            error.to_string(),
+            "cache cache.json exceeds the maximum size of 8 bytes"
+        );
+    }
+
+    #[test]
+    fn bounded_cache_file_reader_rejects_input_over_the_byte_limit() {
+        let directory = tempdir().expect("temporary cache root");
+        let path = directory.path().join("cache.json");
+        fs::write(&path, b"123456789").expect("write oversized input");
+
+        let error = read_bounded_cache_file(&path, 8)
+            .expect_err("a regular file beyond the limit should be rejected");
+
+        assert!(matches!(error, CacheError::TooLarge { max_bytes: 8, .. }));
+    }
+
+    #[test]
+    fn bounded_cache_writer_rejects_input_before_creating_the_file() {
+        let directory = tempdir().expect("temporary cache root");
+        let path = directory.path().join("cache.json");
+
+        let error = write_bounded_cache_source(&path, "123456789", 8)
+            .expect_err("output beyond the limit should be rejected");
+
+        assert!(matches!(error, CacheError::TooLarge { max_bytes: 8, .. }));
+        assert!(!path.exists());
     }
 
     #[test]
