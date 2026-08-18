@@ -40,8 +40,8 @@ pub(crate) struct ArtifactAnalysisCache {
     pub(crate) rustc_version: String,
     pub(crate) artifact: ArtifactInfo,
     pub(crate) dependencies: Vec<RustcArtifactId>,
-    /// Remaining panic-call, safety, ambiguity, and completeness input.
-    /// Compiler-assert authority does not read this legacy projection.
+    /// Production safety input plus the non-authoritative legacy panic oracle.
+    /// Unified typed-panic authority does not read this legacy projection.
     pub(crate) legacy_ir: ArtifactAnalysisIr,
     /// Open, independently versioned compiler and human fact tables.
     pub(crate) facts: ArtifactFactIr,

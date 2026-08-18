@@ -11,9 +11,9 @@ use crate::analysis::facts::panic::{
 };
 use crate::analysis::graph::ArtifactAnalysisGraph;
 use crate::analysis::interpret::{
-    InMemoryArtifactLookup, IncompleteReason, InterpretationRoot, InterpretedFinding,
-    InterpretedFindingKind, InterpretedSafetyCallKind, InterpretedTrace, InterpretedTraceStepKind,
-    LayeredFunctionLookup, RootInterpretation, interpret,
+    DomainCompleteness, InMemoryArtifactLookup, IncompleteReason, InterpretationRoot,
+    InterpretedFinding, InterpretedFindingKind, InterpretedSafetyCallKind, InterpretedTrace,
+    InterpretedTraceStepKind, LayeredFunctionLookup, SafetyRootInterpretation, interpret_safety,
 };
 use crate::analysis::ir::{
     ArtifactAnalysisIr, CallEdgeKindIr, ContractRequirementIr, FunctionBodyIr, FunctionId,
@@ -32,13 +32,22 @@ use super::super::findings::{
 use super::super::report::render_span;
 use super::typed_panic::{
     TypedPanicEvaluationError, TypedPanicIssueReport, TypedPanicLocalArtifact,
-    TypedPanicRootReport, evaluate_typed_panic_roots, semantic_edge_label, semantic_edge_order,
+    TypedPanicRootReport, semantic_edge_label, semantic_edge_order,
+};
+use super::typed_panic_call::{
+    TypedPanicCallBatchReport, TypedPanicCallEvaluationError,
+    adapt_prevalidated_typed_panic_ambiguity_reports,
+    adapt_prevalidated_typed_panic_call_completeness_batch,
+    adapt_prevalidated_typed_panic_call_reports,
+    adapt_prevalidated_typed_panic_root_contract_reports, evaluate_typed_panic_call_roots,
+    preflight_typed_panic_call_batch,
 };
 
 /// Atomic failure from typed panic evaluation or its report-v13 adapter.
 #[derive(Debug)]
 pub(super) enum InterpretWorkspaceError {
     TypedPanicEvaluation(TypedPanicEvaluationError),
+    TypedPanicCallEvaluation(TypedPanicCallEvaluationError),
     TypedReportCount {
         expected: usize,
         actual: usize,
@@ -72,6 +81,7 @@ impl Display for InterpretWorkspaceError {
     fn fmt(&self, formatter: &mut Formatter<'_>) -> fmt::Result {
         match self {
             Self::TypedPanicEvaluation(source) => Display::fmt(source, formatter),
+            Self::TypedPanicCallEvaluation(source) => Display::fmt(source, formatter),
             Self::TypedReportCount { expected, actual } => write!(
                 formatter,
                 "typed panic evaluation returned {actual} root reports for {expected} traversal roots"
@@ -109,6 +119,7 @@ impl Error for InterpretWorkspaceError {
     fn source(&self) -> Option<&(dyn Error + 'static)> {
         match self {
             Self::TypedPanicEvaluation(source) => Some(source),
+            Self::TypedPanicCallEvaluation(source) => Some(source),
             Self::TypedReportCount { .. }
             | Self::TypedReportRootMismatch { .. }
             | Self::TypedIssueRootMismatch { .. }
@@ -120,6 +131,12 @@ impl Error for InterpretWorkspaceError {
 impl From<TypedPanicEvaluationError> for InterpretWorkspaceError {
     fn from(source: TypedPanicEvaluationError) -> Self {
         Self::TypedPanicEvaluation(source)
+    }
+}
+
+impl From<TypedPanicCallEvaluationError> for InterpretWorkspaceError {
+    fn from(source: TypedPanicCallEvaluationError) -> Self {
+        Self::TypedPanicCallEvaluation(source)
     }
 }
 
@@ -147,32 +164,36 @@ pub(super) fn interpret_workspace(
     let local_lookup =
         InMemoryArtifactLookup::new(&request.local.legacy_ir, request.local_stable_crate_id);
     let lookup = LayeredFunctionLookup::new(vec![&local_lookup, request.dependencies]);
-    let traversal_results = interpret(&lookup, &roots, request.config);
+    let traversal_results = interpret_safety(&lookup, &roots, request.config);
     let typed_local = request.local_artifact_id.map_or_else(
         || TypedPanicLocalArtifact::in_memory(&request.local.facts, request.local_stable_crate_id),
         |artifact| TypedPanicLocalArtifact::persisted(&request.local.facts, artifact),
     );
-    let typed_reports = evaluate_typed_panic_roots(
+    let dependency_artifacts = request.dependencies.artifacts().collect::<Vec<_>>();
+    let direct_dependencies = request.dependencies.direct_dependency_ids().collect();
+    let mut typed_reports = evaluate_typed_panic_call_roots(
         typed_local,
-        request.dependencies,
+        &dependency_artifacts,
+        direct_dependencies,
         request.active_runtime_artifacts,
         &roots,
         request.config,
     )?;
+    let typed_source_files = std::mem::take(&mut typed_reports.source_files);
     let sources = SourceResolver {
         tcx: request.tcx,
         local: &request.local.legacy_ir,
         dependencies: request.dependencies,
-        typed_source_files: typed_reports.source_files,
+        typed_source_files,
     };
 
-    let typed_findings = adapt_typed_panic_reports(
+    let typed_findings = adapt_typed_panic_authority_batch(
         &sources,
-        typed_reports.roots,
+        typed_reports,
         &roots,
         request.config.analysis.show_full_stack_trace,
     )?;
-    let mut findings = adapt_result(
+    let mut findings = adapt_legacy_safety_result(
         &sources,
         traversal_results,
         request.config.analysis.show_full_stack_trace,
@@ -196,29 +217,55 @@ fn interpretation_root<'tcx>(tcx: TyCtxt<'tcx>, root: ReportRoot<'tcx>) -> Inter
     }
 }
 
-fn adapt_result(
+struct LegacySafetyRemainder {
+    root: InterpretationRoot,
+    findings: Vec<InterpretedFinding>,
+    completeness: DomainCompleteness,
+}
+
+fn legacy_safety_remainder(result: Vec<SafetyRootInterpretation>) -> Vec<LegacySafetyRemainder> {
+    result
+        .into_iter()
+        .map(|root| LegacySafetyRemainder {
+            root: root.root,
+            findings: root
+                .findings
+                .into_iter()
+                .filter(|finding| legacy_safety_is_authoritative(&finding.kind))
+                .collect(),
+            completeness: root.completeness,
+        })
+        .collect()
+}
+
+const fn legacy_safety_is_authoritative(kind: &InterpretedFindingKind) -> bool {
+    match kind {
+        InterpretedFindingKind::PanicSink
+        | InterpretedFindingKind::DocumentedPanic { .. }
+        | InterpretedFindingKind::OpaquePanicBoundary { .. }
+        | InterpretedFindingKind::AmbiguousPanicRequirement { .. }
+        | InterpretedFindingKind::AmbiguousPanicMarker { .. } => false,
+        InterpretedFindingKind::MissingSafetyDocs
+        | InterpretedFindingKind::SafetyCall { .. }
+        | InterpretedFindingKind::UnsafeOperation { .. }
+        | InterpretedFindingKind::AmbiguousSafetyRequirement { .. }
+        | InterpretedFindingKind::AmbiguousSafetyMarker { .. } => true,
+    }
+}
+
+fn adapt_legacy_safety_result(
     sources: &impl FindingSources,
-    result: Vec<RootInterpretation>,
+    result: Vec<SafetyRootInterpretation>,
     show_full_stack_trace: bool,
 ) -> Vec<Finding> {
     let mut findings = Vec::new();
-    for root in result {
+    for root in legacy_safety_remainder(result) {
         findings.extend(
             root.findings
                 .into_iter()
                 .map(|finding| adapt_finding(sources, &root.root, &finding, show_full_stack_trace)),
         );
-        for reason in root.completeness.panic.reasons {
-            findings.push(adapt_incomplete(
-                sources,
-                &root.root,
-                FindingKind::PanicAnalysisIncomplete,
-                "panic",
-                reason,
-                show_full_stack_trace,
-            ));
-        }
-        for reason in root.completeness.safety.reasons {
+        for reason in root.completeness.reasons {
             findings.push(adapt_incomplete(
                 sources,
                 &root.root,
@@ -237,28 +284,104 @@ fn adapt_result(
 /// Root alignment is validated for the whole batch before issue adaptation.
 /// Any later renderer-output failure drops the locally accumulated vector and
 /// returns one error, so callers can never observe partial typed findings.
+#[cfg(test)]
 pub(super) fn adapt_typed_panic_reports(
     sources: &impl FindingSources,
     reports: Vec<TypedPanicRootReport>,
     roots: &[InterpretationRoot],
     show_full_stack_trace: bool,
 ) -> Result<Vec<Finding>, InterpretWorkspaceError> {
-    validate_typed_report_roots(&reports, roots)?;
+    preflight_typed_panic_reports(&reports, roots)?;
+    Ok(adapt_prevalidated_typed_panic_reports(
+        sources,
+        reports,
+        show_full_stack_trace,
+    ))
+}
+
+fn adapt_prevalidated_typed_panic_reports(
+    sources: &impl FindingSources,
+    reports: Vec<TypedPanicRootReport>,
+    show_full_stack_trace: bool,
+) -> Vec<Finding> {
     let capacity = reports.iter().map(|report| report.issues.len()).sum();
     let mut findings = Vec::with_capacity(capacity);
-    for (root_index, report) in reports.into_iter().enumerate() {
-        for (issue_index, issue) in report.issues.iter().enumerate() {
-            findings.push(adapt_typed_panic_issue(
+    for report in reports {
+        for issue in &report.issues {
+            findings.push(adapt_prevalidated_typed_panic_issue(
                 sources,
                 &report,
                 issue,
-                root_index,
-                issue_index,
                 show_full_stack_trace,
-            )?);
+            ));
         }
     }
+    findings
+}
+
+/// Adapts every typed panic authority lane after one source-free batch preflight.
+///
+/// The preflight covers sparse missing-root preparation, every ready report
+/// lane, fallible call DTO projection, and renderer-output compatibility before
+/// the first source lookup. The returned vector is local until all lane
+/// adapters succeed, so callers cannot observe a partial authority result.
+pub(super) fn adapt_typed_panic_authority_batch(
+    sources: &impl FindingSources,
+    batch: TypedPanicCallBatchReport,
+    roots: &[InterpretationRoot],
+    show_full_stack_trace: bool,
+) -> Result<Vec<Finding>, InterpretWorkspaceError> {
+    let preflight = preflight_typed_panic_call_batch(&batch, roots)?;
+    preflight_typed_panic_reports(&batch.compiler_asserts, &preflight.ready_roots)?;
+
+    let completeness = adapt_prevalidated_typed_panic_call_completeness_batch(
+        sources,
+        &batch,
+        show_full_stack_trace,
+    );
+    let TypedPanicCallBatchReport {
+        compiler_asserts,
+        roots: call_reports,
+        root_contracts,
+        ambiguities,
+        ..
+    } = batch;
+    let mut findings =
+        adapt_prevalidated_typed_panic_reports(sources, compiler_asserts, show_full_stack_trace);
+    findings.extend(adapt_prevalidated_typed_panic_call_reports(
+        sources,
+        call_reports,
+        &preflight.ready_roots,
+        preflight.call_findings,
+        show_full_stack_trace,
+    ));
+    findings.extend(adapt_prevalidated_typed_panic_root_contract_reports(
+        sources,
+        root_contracts,
+        &preflight.ready_roots,
+        show_full_stack_trace,
+    ));
+    findings.extend(adapt_prevalidated_typed_panic_ambiguity_reports(
+        sources,
+        ambiguities,
+        &preflight.ready_roots,
+        show_full_stack_trace,
+    ));
+    findings.extend(completeness);
     Ok(findings)
+}
+
+fn preflight_typed_panic_reports(
+    reports: &[TypedPanicRootReport],
+    roots: &[InterpretationRoot],
+) -> Result<(), InterpretWorkspaceError> {
+    validate_typed_report_roots(reports, roots)?;
+    for (root_index, report) in reports.iter().enumerate() {
+        for (issue_index, issue) in report.issues.iter().enumerate() {
+            validate_supported_renderer_output(issue, root_index, issue_index)?;
+        }
+    }
+    Ok(())
 }
 
 fn validate_typed_report_roots(
@@ -298,15 +421,12 @@ fn validate_typed_report_roots(
     Ok(())
 }
 
-fn adapt_typed_panic_issue(
+fn adapt_prevalidated_typed_panic_issue(
     sources: &impl FindingSources,
     report: &TypedPanicRootReport,
     issue: &TypedPanicIssueReport,
-    root_index: usize,
-    issue_index: usize,
     show_full_stack_trace: bool,
-) -> Result<Finding, InterpretWorkspaceError> {
-    validate_supported_renderer_output(issue, root_index, issue_index)?;
+) -> Finding {
     let (effect_span, source_error) = sources.resolve(issue.presentation_range.as_ref());
     // Legacy root lookup intentionally discarded root-source failures. The
     // typed function presentation range retains the same verified identity,
@@ -341,7 +461,7 @@ fn adapt_typed_panic_issue(
     );
     add_typed_panic_help(sources, &mut diagnostic, effect_span, issue);
 
-    Ok(Finding {
+    Finding {
         root: Some(report.path.clone()),
         root_kind: Some(report.kind),
         root_span: root_span.map(|span| sources.render_span(span)),
@@ -363,7 +483,7 @@ fn adapt_typed_panic_issue(
             .and_then(|range| sources.source_file(range)),
         issue.presentation_range.as_ref(),
     )
-    .with_trace_order(typed_panic_trace_order(sources, &issue.trace)))
+    .with_trace_order(typed_panic_trace_order(sources, &issue.trace))
 }
 
 fn validate_supported_renderer_output(
@@ -625,7 +745,6 @@ fn adapt_finding(
     .with_trace_order(finding_trace_order(sources, &finding.trace))
 }
 
-#[cfg(test)]
 pub(super) fn adapt_typed_panic_call_finding(
     sources: &impl FindingSources,
     root: &InterpretationRoot,
@@ -633,6 +752,31 @@ pub(super) fn adapt_typed_panic_call_finding(
     show_full_stack_trace: bool,
 ) -> Finding {
     adapt_finding(sources, root, finding, show_full_stack_trace)
+}
+
+pub(super) fn adapt_typed_panic_ambiguity_finding(
+    sources: &impl FindingSources,
+    root: &InterpretationRoot,
+    finding: &InterpretedFinding,
+    show_full_stack_trace: bool,
+) -> Finding {
+    adapt_finding(sources, root, finding, show_full_stack_trace)
+}
+
+pub(super) fn adapt_typed_panic_incomplete_finding(
+    sources: &impl FindingSources,
+    root: &InterpretationRoot,
+    reason: IncompleteReason,
+    show_full_stack_trace: bool,
+) -> Finding {
+    adapt_incomplete(
+        sources,
+        root,
+        FindingKind::PanicAnalysisIncomplete,
+        "panic",
+        reason,
+        show_full_stack_trace,
+    )
 }
 
 fn public_function_path(finding: &InterpretedFinding) -> Option<String> {
@@ -1694,16 +1838,21 @@ impl FindingSources for SourceResolver<'_, '_> {
 mod tests {
     use super::{
         FindingSources, InterpretWorkspaceError, TypedPanicRootReport, adapt_typed_panic_reports,
-        missing_body_diagnostic_message,
+        legacy_safety_remainder, missing_body_diagnostic_message,
     };
     use crate::analysis::facts::encoded::EntityRef;
     use crate::analysis::facts::evaluation::{DomainId, EvaluationRoot};
     use crate::analysis::facts::program::FunctionEntity;
     use crate::analysis::facts::schema::{RowSchema, SchemaId};
     use crate::analysis::facts::workspace::{ArtifactScopeId, ScopedEntityRef};
-    use crate::analysis::interpret::InterpretationRoot;
+    use crate::analysis::interpret::{
+        DomainCompleteness, IncompleteReason, InterpretationRoot, InterpretedFinding,
+        InterpretedFindingKind, InterpretedSafetyCallKind, InterpretedTrace,
+        SafetyRootInterpretation,
+    };
     use crate::analysis::ir::{FunctionId, SourceFileIr, SourceRangeIr, StableDefPathHash};
     use crate::report_roots::ReportRootKind;
+    use crate::safety::SafetyOpKind;
     use rustc_span::Span;
 
     struct NoSources;
@@ -1760,6 +1909,116 @@ mod tests {
             presentation_range: None,
             issues: Vec::new(),
         }
+    }
+
+    fn legacy_finding(function: FunctionId, kind: InterpretedFindingKind) -> InterpretedFinding {
+        InterpretedFinding {
+            kind,
+            function,
+            function_path: String::from("fixture::root"),
+            target: None,
+            source_range: None,
+            trace: InterpretedTrace { steps: Vec::new() },
+            missing_requirements: Vec::new(),
+            requirements: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn legacy_remainder_exhaustively_retains_only_safety_authority() {
+        let function = function(9);
+        let requested_root = root(function, "fixture::root");
+        let findings = vec![
+            legacy_finding(function, InterpretedFindingKind::PanicSink),
+            legacy_finding(
+                function,
+                InterpretedFindingKind::DocumentedPanic { trusted: false },
+            ),
+            legacy_finding(
+                function,
+                InterpretedFindingKind::OpaquePanicBoundary {
+                    description: String::from("opaque"),
+                },
+            ),
+            legacy_finding(
+                function,
+                InterpretedFindingKind::AmbiguousPanicRequirement {
+                    normalized_name: String::from("ready"),
+                },
+            ),
+            legacy_finding(
+                function,
+                InterpretedFindingKind::AmbiguousPanicMarker { effect_count: 2 },
+            ),
+            legacy_finding(function, InterpretedFindingKind::MissingSafetyDocs),
+            legacy_finding(
+                function,
+                InterpretedFindingKind::SafetyCall {
+                    kind: InterpretedSafetyCallKind::Unsafe,
+                },
+            ),
+            legacy_finding(
+                function,
+                InterpretedFindingKind::UnsafeOperation {
+                    kind: SafetyOpKind::DerefRawPointer,
+                },
+            ),
+            legacy_finding(
+                function,
+                InterpretedFindingKind::AmbiguousSafetyRequirement {
+                    normalized_name: String::from("valid"),
+                },
+            ),
+            legacy_finding(
+                function,
+                InterpretedFindingKind::AmbiguousSafetyMarker { effect_count: 2 },
+            ),
+        ];
+        let result = SafetyRootInterpretation {
+            root: requested_root,
+            findings,
+            completeness: DomainCompleteness {
+                complete: false,
+                visited_bodies: 2,
+                reasons: vec![IncompleteReason::NodeLimit { limit: 12 }],
+            },
+        };
+
+        let remainder = legacy_safety_remainder(vec![result]);
+        let [remainder] = remainder.as_slice() else {
+            panic!("one legacy root must produce one safety remainder");
+        };
+        assert_eq!(remainder.findings.len(), 5);
+        assert!(matches!(
+            remainder.findings.as_slice(),
+            [
+                InterpretedFinding {
+                    kind: InterpretedFindingKind::MissingSafetyDocs,
+                    ..
+                },
+                InterpretedFinding {
+                    kind: InterpretedFindingKind::SafetyCall { .. },
+                    ..
+                },
+                InterpretedFinding {
+                    kind: InterpretedFindingKind::UnsafeOperation { .. },
+                    ..
+                },
+                InterpretedFinding {
+                    kind: InterpretedFindingKind::AmbiguousSafetyRequirement { .. },
+                    ..
+                },
+                InterpretedFinding {
+                    kind: InterpretedFindingKind::AmbiguousSafetyMarker { .. },
+                    ..
+                },
+            ]
+        ));
+        assert_eq!(
+            remainder.completeness.reasons,
+            [IncompleteReason::NodeLimit { limit: 12 }]
+        );
+        assert_eq!(remainder.completeness.visited_bodies, 2);
     }
 
     #[test]

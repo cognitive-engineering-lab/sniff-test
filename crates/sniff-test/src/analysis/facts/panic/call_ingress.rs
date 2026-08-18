@@ -304,6 +304,15 @@ fn semantic_order_for_call_trace(
     Ok(order)
 }
 
+impl PanicCallSemanticTrace {
+    pub(crate) fn evidence_order_for_report(
+        &self,
+        traversal_order: u64,
+    ) -> Result<EvidenceSemanticOrder, RuleError> {
+        semantic_order_for_call_trace(self, traversal_order)
+    }
+}
+
 fn semantic_call_node_label(node: &PanicCallTraceNode) -> String {
     match node {
         PanicCallTraceNode::Macro { data, .. } => format!("macro {}", data.display_path()),
@@ -2379,7 +2388,7 @@ mod tests {
         clippy::too_many_lines,
         reason = "one registry contract test freezes every call-pack schema and rule surface"
     )]
-    fn exposes_the_additive_panic_call_ingress_surface() {
+    fn exposes_the_production_panic_call_ingress_surface() {
         fn assert_types(
             _: PanicCallInputPack,
             _: Option<PanicCallObligation>,

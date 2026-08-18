@@ -1,4 +1,4 @@
-//! Shadow-only issue projections for validated panic-call inputs.
+//! Production issue projections for validated panic-call inputs.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -189,6 +189,21 @@ struct PendingIssue {
     context: EvaluationIssueContext,
 }
 
+/// Canonical unsatisfied-call issues reconstructed from the validated call
+/// obligations and their committed evidence matches.
+pub(crate) fn expected_unsatisfied_panic_call_issues(
+    obligations: &[PanicCallObligation],
+    matches: &[PanicCallEvidenceMatch],
+    root: &crate::analysis::facts::evaluation::EvaluationRoot,
+) -> Result<Vec<(UnsatisfiedPanicCallIssue, EvaluationIssueContext)>, RuleError> {
+    prepare_issues(obligations, matches, root).map(|pending| {
+        pending
+            .into_iter()
+            .map(|candidate| (candidate.issue, candidate.context))
+            .collect()
+    })
+}
+
 fn prepare_issues(
     obligations: &[PanicCallObligation],
     matches: &[PanicCallEvidenceMatch],
@@ -273,6 +288,20 @@ struct PendingDuplicateRequirementIssue {
     traversal_order: u64,
     issue: DuplicatePanicCallRequirementIssue,
     context: EvaluationIssueContext,
+}
+
+/// Canonical duplicate-requirement issues reconstructed from the validated
+/// call obligations.
+pub(crate) fn expected_duplicate_panic_call_requirement_issues(
+    obligations: &[PanicCallObligation],
+    root: &crate::analysis::facts::evaluation::EvaluationRoot,
+) -> Result<Vec<(DuplicatePanicCallRequirementIssue, EvaluationIssueContext)>, RuleError> {
+    prepare_duplicate_requirement_issues(obligations, root).map(|pending| {
+        pending
+            .into_iter()
+            .map(|candidate| (candidate.issue, candidate.context))
+            .collect()
+    })
 }
 
 fn prepare_duplicate_requirement_issues(

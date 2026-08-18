@@ -385,15 +385,18 @@ current cutover boundary.
 4. **Composition and callable joins:** move scoped body resolution,
    source/runtime contract fallback, exact/generic lookup, and callable joins
    onto composed fact databases.
-5. **Removal:** migrate remaining panic boundaries and completeness issues,
-   remove legacy effect/marker/finding/trace enums and pending structures, and
-   reduce extraction/interpretation to pass and rule orchestration.
+5. **Removal:** after safety analysis migrates, remove the legacy
+   effect/marker/finding/trace enums and pending structures, eliminate the
+   non-authoritative panic oracle projection, and reduce
+   extraction/interpretation to pass and rule orchestration.
 
 The first authoritative fact-database cache is format 16 in directory `v16`.
-Compiler assertions now have one permanent representation and evaluation path;
-legacy IR remains in that envelope only for panic-call, safety, ambiguity, and
-completeness authority. Report format 13 remains unchanged while diagnostics
-and JSON stay behaviorally identical.
+All ready-root panic findings and panic completeness now have one permanent
+representation and one unified evaluation path; missing selected roots use the
+ordered preparation bridge described below because they have no evaluation
+root. Legacy IR remains in that envelope as the production safety input and as
+a non-authoritative panic parity oracle pending its removal. Report format 13
+remains unchanged while diagnostics and JSON stay behaviorally identical.
 
 ## Implementation state
 
@@ -516,36 +519,73 @@ permanent typed facts. The neutral pending model feeds both outputs directly;
 there is no assertion/evidence extension or semantic fact merge. Typed-only
 macro sources enter permanent source tables without mutating legacy IR.
 Collection or finalization failure rejects the whole extraction. The strict
-format-16 cache still requires both halves while remaining panic-call and
-safety owners use legacy IR; unknown historical adapter tables are inert.
+format-16 cache still requires both halves: typed facts own production panic
+analysis, while legacy IR remains the production safety-analysis input and the
+panic parity oracle. Unknown historical adapter tables are inert.
 
-The production driver verifies one exact managed workspace closure, prepares
-all permanent compiler-assert root traversals, emits each root into one
-composition builder, finalizes and binds once, and evaluates each root in a
-fresh database. The compiler-assert input rule validates the complete
-assertion and marker-attachment set before committing any delta. Its semantic
-trace projector indexes each resolved root once and projects issues by dense
-witness order without rescanning the traversal. Source presentation first uses
-the permanent `SourceFileEntity` catalog and retains exact generation identity.
+The production driver installs one `AnalysisRegistry<PanicRootInputs>` with the
+compiler-assert, panic-call, root-contract, completeness, and shared evidence
+packs. It verifies one exact managed workspace closure and classifies every
+requested root through an ordered `TypedPanicRootPreparationReport`. Only ready
+requests enter one shared `PreparedCompilerAssertRootBatch`. Each ready root is
+emitted into one composition builder, finalized and bound once, then evaluated
+in exactly one fresh `EvaluationDb`; all five panic report lanes are read from
+that one result. There is no second compiler-only production registry or
+evaluation database.
+
+The five sparse ready-root lanes are compiler assertions, panic calls,
+selected-root contract duplicates, panic completeness, and occurrence-wide
+marker ambiguity. Every evaluatable preparation retains the exact core-created
+`EvaluationRoot` and maps to a dense report index. A missing preparation carries
+the legacy-compatible `MissingBody` reason without fabricating an
+`EvaluationRoot`, issue, summary row, or ready report. If every request is
+missing, one exact request still passes through the core preparer and only its
+matching `UnknownRoot` is accepted, so global input and registry validation
+cannot be skipped.
 
 `UnsatisfiedCompilerAssertIssue` is the sole compiler-assert issue. Its
-pack-owned renderer handles every precise `MirAssertKind`; the CLI adapts the
+pack-owned renderer handles every precise `MirAssertKind`; the CLI adapts its
 owned semantic trace and presentation to report-v13 without parsing renderer
-JSON. Preparation, root evaluation, rendering, root alignment, and projection
-are atomic across the batch, so no mixed or partial authority escapes.
+JSON. The compiler-assert input rule validates the complete assertion and
+marker-attachment set before committing any delta, and its trace projector
+indexes each resolved root once rather than rescanning traversal state.
 
-Legacy interpretation remains authoritative only for panic-call and safety
-findings, panic and safety completeness, and marker ambiguity. It still calls
-`claim_markers` for those ambiguity semantics but no longer records or exports
-compiler-assert witnesses. The next migration boundary moves these remaining
-owners, after which the facts-only cache cut can remove central legacy IR and
-the interpreter.
+`PanicCompletenessPack` emits exactly one positive summary per ready root, even
+when it has no incomplete reasons. Reached `MissingManagedBody` routes collapse
+by their legacy scope-independent semantic identity while retaining the
+earliest exact source and relation-trace witness; reached `BudgetExceeded`
+frontiers collapse to one root-only reason. Missing selected roots stay outside
+the pack because no evaluation root exists for them, and are restored only by
+the ordered preparation bridge described above.
 
-The permanent panic-call rules, occurrence-wide evidence coordinator, and the
-combined `PanicRootInputs` compiler-assert ingress are additive at this point.
-Tests run the real panic-call and compiler-assert matchers in one evaluation
-database and prove cross-producer physical-marker reuse, but production CLI
-authority has not switched to these call or ambiguity issues yet.
+`PanicRootContractPack` consumes the retained
+`PanicContractBoundary::Root` directly. A selected root contract is a body
+boundary rather than a call obligation, so its exact selected-body endpoint and
+empty root trace are not duplicated into a derived row. The rule emits one
+strict-v1 issue per lexically ordered normalized duplicate group, preserving
+declaration-order requirement ordinals. Projection reconstructs the exact raw
+contract source (absent for overrides), endpoint, and trace and requires a
+bijection before report adaptation. Policy precedence remains ignored root,
+override, raw exact, raw generic, then trusted fallback; an override without
+`# Panics` removes raw authority.
+
+The unified report adapter validates the complete preparation mapping, every
+lane's count/order/root identity, every cross-lane `EvaluationRoot`, every
+fallible panic-call DTO projection, and all compiler-renderer compatibility
+before the first source lookup. It then adapts compact or full traces through
+the existing report-v13 boundary; unavailable source identities degrade in the
+same way as legacy output. Any validation or adaptation error drops the local
+batch, so partial typed findings cannot escape.
+
+Legacy interpretation is now authoritative only for the five safety finding
+classes and safety completeness. Production invokes a safety-only legacy
+entry point, so it neither traverses the panic domain nor materializes panic
+findings and panic-completeness reasons that the typed pipeline would discard.
+A single exhaustive match at the `InterpretedFinding` boundary remains as a
+defensive authority check and rejects every typed-covered panic class before
+rendering; no post-render deduplication is used. The full two-domain legacy
+interpreter is compiled only for tests and remains the oracle for safety-output
+parity until the later facts-only cache migration.
 
 ## Rejected alternatives
 

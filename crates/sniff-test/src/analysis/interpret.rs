@@ -269,6 +269,7 @@ pub(crate) struct InterpretationRoot {
 }
 
 /// Findings and completeness for one selected root.
+#[cfg(test)]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct RootInterpretation {
     pub(crate) root: InterpretationRoot,
@@ -276,6 +277,15 @@ pub(crate) struct RootInterpretation {
     pub(crate) completeness: EffectCompleteness,
 }
 
+/// Safety findings and completeness for one selected root.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct SafetyRootInterpretation {
+    pub(crate) root: InterpretationRoot,
+    pub(crate) findings: Vec<InterpretedFinding>,
+    pub(crate) completeness: DomainCompleteness,
+}
+
+#[cfg(test)]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct EffectCompleteness {
     pub(crate) panic: DomainCompleteness,
@@ -363,6 +373,7 @@ pub(crate) enum InterpretedFindingKind {
 }
 
 /// Interprets only graph portions reachable from the supplied workspace roots.
+#[cfg(test)]
 #[must_use]
 pub(crate) fn interpret(
     lookup: &dyn FunctionLookup,
@@ -384,6 +395,27 @@ pub(crate) fn interpret(
                     panic: panic.completeness,
                     safety: safety.completeness,
                 },
+            }
+        })
+        .collect()
+}
+
+/// Interprets only safety effects reachable from the supplied workspace roots.
+#[must_use]
+pub(crate) fn interpret_safety(
+    lookup: &dyn FunctionLookup,
+    roots: &[InterpretationRoot],
+    config: &SniffTestConfig,
+) -> Vec<SafetyRootInterpretation> {
+    roots
+        .iter()
+        .cloned()
+        .map(|root| {
+            let safety = DomainInterpreter::new(lookup, &root, config, EffectDomain::Safety).run();
+            SafetyRootInterpretation {
+                root,
+                findings: safety.findings,
+                completeness: safety.completeness,
             }
         })
         .collect()
@@ -2568,10 +2600,12 @@ fn ambiguous_requirements(
 
 #[cfg(test)]
 mod tests {
+    use std::cell::Cell;
+
     use super::{
         FunctionLookup, InMemoryArtifactLookup, IncompleteReason, InterpretationRoot,
         InterpretedFindingKind, InterpretedSafetyCallKind, InterpretedTraceStepKind,
-        LayeredFunctionLookup, interpret,
+        LayeredFunctionLookup, interpret, interpret_safety,
     };
     use crate::analysis::cache::{ArtifactAnalysisCache, ArtifactInfo, RustcArtifactId};
     use crate::analysis::facts::encoded::{ArtifactFactIr, FACT_IR_FORMAT_VERSION};
@@ -2593,6 +2627,29 @@ mod tests {
     use crate::report_roots::ReportRootKind;
     use crate::safety::SafetyOpKind;
 
+    struct CountingLookup<'a> {
+        ir: &'a ArtifactAnalysisIr,
+        function_calls: Cell<usize>,
+    }
+
+    impl FunctionLookup for CountingLookup<'_> {
+        fn function(
+            &self,
+            function: FunctionId,
+        ) -> Option<crate::analysis::graph::LoadedFunction<'_>> {
+            self.function_calls.set(self.function_calls.get() + 1);
+            FunctionLookup::function(self.ir, function)
+        }
+
+        fn function_in_scope(
+            &self,
+            scope: &crate::analysis::graph::BodyScope,
+            function: FunctionId,
+        ) -> Option<crate::analysis::graph::LoadedFunction<'_>> {
+            FunctionLookup::function_in_scope(self.ir, scope, function)
+        }
+    }
+
     #[test]
     fn in_memory_artifact_lookup_manages_only_its_local_crate() {
         let analysis = ir(Vec::<FunctionBodyIr>::new());
@@ -2600,6 +2657,39 @@ mod tests {
 
         assert!(lookup.manages_stable_crate_id(42));
         assert!(!lookup.manages_stable_crate_id(7));
+    }
+
+    #[test]
+    fn safety_only_interpretation_runs_one_domain_and_matches_the_full_oracle() {
+        let root = id(1, 1);
+        let analysis =
+            ir(vec![body(root, "workspace::root").with_effect(
+                unsafe_effect(0, SafetyOpKind::DerefRawPointer),
+            )]);
+        let roots = [report_root(root)];
+        let config = SniffTestConfig::default();
+        let full = interpret(&analysis, &roots, &config);
+        let lookup = CountingLookup {
+            ir: &analysis,
+            function_calls: Cell::new(0),
+        };
+
+        let safety = interpret_safety(&lookup, &roots, &config);
+
+        assert_eq!(lookup.function_calls.get(), 1);
+        assert!(matches!(
+            safety[0].findings.as_slice(),
+            [finding]
+                if matches!(
+                    finding.kind,
+                    InterpretedFindingKind::UnsafeOperation {
+                        kind: SafetyOpKind::DerefRawPointer
+                    }
+                )
+        ));
+        assert_eq!(safety[0].root, full[0].root);
+        assert_eq!(safety[0].findings, full[0].findings);
+        assert_eq!(safety[0].completeness, full[0].completeness.safety);
     }
 
     #[test]

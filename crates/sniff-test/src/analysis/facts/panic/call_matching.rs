@@ -236,8 +236,14 @@ fn prepare_matches(expected: &ValidatedBatch) -> Result<Vec<PendingCallEvidence>
 pub(super) fn expected_matches(
     expected: &ValidatedBatch,
 ) -> Result<Vec<PanicCallEvidenceMatch>, RuleError> {
+    expected_matches_from_obligations(expected.obligations())
+}
+
+pub(crate) fn expected_matches_from_obligations(
+    obligations: &[PanicCallObligation],
+) -> Result<Vec<PanicCallEvidenceMatch>, RuleError> {
     let mut pending = Vec::new();
-    for obligation in expected.obligations() {
+    for obligation in obligations {
         #[cfg(test)]
         if rejects_call_match(obligation.call_id()) {
             return Err(RuleError::failed(format!(
@@ -272,6 +278,14 @@ pub(super) fn expected_matches(
         }
     }
     Ok(pending)
+}
+
+impl PanicCallObligation {
+    pub(crate) fn expected_evidence_matches_for_report(
+        &self,
+    ) -> Result<Vec<PanicCallEvidenceMatch>, RuleError> {
+        expected_matches_from_obligations(std::slice::from_ref(self))
+    }
 }
 
 pub(super) fn validate_committed_matches(

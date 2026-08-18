@@ -1069,6 +1069,67 @@ mod tests {
     }
 
     #[test]
+    fn exact_callable_may_enter_its_same_definition_generic_body() {
+        let mut registry = AnalysisRegistry::<()>::new();
+        registry.install(&CollectedArtifactSchemaPack).unwrap();
+        let root = FunctionKey::new(definition(3), None);
+        let target_definition = definition(4);
+        let exact_target = FunctionKey::new(target_definition, Some(instance(4)));
+        let generic_target = FunctionKey::new(target_definition, None);
+        let terminal = FunctionKey::new(definition(5), Some(instance(5)));
+        let mut builder = declared_builder(&registry);
+        let (root_body, _) = insert_function(&mut builder, root, "crate::root");
+        let (target_body, _) =
+            insert_function(&mut builder, generic_target, "crate::generic_target");
+        let exact_target_callable = builder
+            .insert_entity(&CallableEntity::new(
+                exact_target,
+                "crate::generic_target::<u8>",
+                false,
+                false,
+                true,
+                false,
+                vec![String::from("crate::generic_target::<u8>")],
+            ))
+            .unwrap();
+        let terminal_callable = builder
+            .insert_entity(&CallableEntity::new(
+                terminal,
+                "crate::terminal",
+                false,
+                false,
+                false,
+                false,
+                vec![String::from("crate::terminal")],
+            ))
+            .unwrap();
+        insert_direct_call(&mut builder, &root_body, root, 0, &exact_target_callable);
+        insert_direct_call(
+            &mut builder,
+            &target_body,
+            generic_target,
+            0,
+            &terminal_callable,
+        );
+        let inputs = resolve_single_panic_artifact(&registry, builder, root, 8);
+
+        let projector = PanicCallTraceProjector::prepare(&inputs)
+            .expect("the explicit exact-to-generic body selection is a valid trace route");
+        let trace = projector.project(0).unwrap();
+
+        assert_eq!(trace.steps().len(), 2);
+        assert_eq!(
+            trace.steps()[0].target_display_path(),
+            "crate::generic_target::<u8>"
+        );
+        assert_eq!(
+            trace.steps()[1].caller_display_path(),
+            "crate::generic_target"
+        );
+        assert_eq!(trace.steps()[1].target_display_path(), "crate::terminal");
+    }
+
+    #[test]
     fn policy_trace_callable_can_have_a_description_only_presentation() {
         let mut registry = AnalysisRegistry::<()>::new();
         registry.install(&CollectedArtifactSchemaPack).unwrap();

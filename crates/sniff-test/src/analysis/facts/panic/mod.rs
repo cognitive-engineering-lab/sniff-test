@@ -1,4 +1,4 @@
-//! Typed compiler-assert facts and root-specific panic evaluation rules.
+//! Typed facts and root-specific evaluation rules for unified panic authority.
 
 pub(crate) mod assertion_collector;
 pub(crate) mod assertion_index;
@@ -10,68 +10,55 @@ mod call_trace;
 mod compiler_assert_ingress;
 mod compiler_assert_inputs;
 mod compiler_assert_trace;
+mod completeness;
 pub(crate) mod contract_collector;
 mod contract_index;
 pub(crate) mod contracts;
 pub(crate) mod model;
 mod render;
+mod root_contract;
 pub(crate) mod rules;
 mod trace_route;
 
-#[allow(
-    unused_imports,
-    reason = "typed panic root preparation consumes the permanent assertion index next"
-)]
-pub(crate) use assertion_index::{
-    IndexedMirAssert, WorkspaceMirAssertIndex, WorkspaceMirAssertIndexError,
-};
-#[allow(
-    unused_imports,
-    reason = "the additive panic-call pack is installed by the next authority-switch slice"
-)]
 pub(crate) use call_ingress::PanicCallInputPack;
-#[allow(
-    unused_imports,
-    reason = "panic-call evaluation rules consume these permanent DTOs in the next slice"
-)]
-pub(crate) use call_model::{
-    DuplicatePanicCallRequirementIssue, PanicCallBoundaryKind, PanicCallObligation,
-    PanicCallOpaqueKind, PanicCallRequirementMatchId, PanicCallRequirementValue,
-    UnsatisfiedPanicCallIssue,
+pub(crate) use call_issues::{
+    expected_duplicate_panic_call_requirement_issues, expected_unsatisfied_panic_call_issues,
 };
-#[cfg(test)]
+pub(crate) use call_matching::expected_matches_from_obligations;
+pub(crate) use call_model::{
+    DuplicatePanicCallRequirementIssue, PanicCallBoundaryKind, PanicCallEvidenceMatch,
+    PanicCallObligation, PanicCallOpaqueKind, PanicCallRequirementMatchId,
+    PanicCallRequirementValue, UnsatisfiedPanicCallIssue,
+};
 pub(crate) use call_model::{
     PanicCallResolution, PanicCallTargetAuthority, PanicCallableResolutionKind,
 };
-#[cfg(test)]
 pub(crate) use call_trace::{
     PanicCallSemanticEdge, PanicCallSemanticTrace, PanicCallSemanticTraceStepKind,
     PanicCallTraceError, PanicCallTraceNode, PanicCallTraceProjector,
 };
 pub(crate) use compiler_assert_ingress::CompilerAssertInputPack;
-#[allow(
-    unused_imports,
-    reason = "the additive panic-call pack is installed by the next authority-switch slice"
-)]
 pub(crate) use compiler_assert_inputs::PanicRootInputs;
 pub(crate) use compiler_assert_inputs::{
     CompilerAssertInputError, CompilerAssertRootInputs, CompilerAssertRootRequest,
     PreparedCompilerAssertRootBatch,
 };
-#[cfg(test)]
 pub(crate) use compiler_assert_inputs::{PanicCallInputKind, PanicOpaqueBoundaryKind};
 pub(crate) use compiler_assert_trace::{
     CompilerAssertSemanticEdge, CompilerAssertSemanticNodeRole, CompilerAssertSemanticTrace,
     CompilerAssertSemanticTraceStep, CompilerAssertTraceError, CompilerAssertTraceProjector,
 };
-#[allow(
-    unused_imports,
-    reason = "typed panic root preparation consumes the effective contract index next"
-)]
-pub(crate) use contract_index::{
-    WorkspaceEffectivePanicContracts, WorkspaceEffectivePanicContractsError,
+#[cfg(test)]
+pub(crate) use completeness::PanicCompletenessSemanticStep;
+pub(crate) use completeness::{
+    PanicAnalysisIncompleteIssue, PanicCompletenessOutcome, PanicCompletenessPack,
+    PanicCompletenessReason, PanicIncompleteReason,
 };
+#[cfg(test)]
+pub(crate) use contract_index::EffectivePanicContractOrigin;
 pub(crate) use render::{CompilerAssertPresentation, coarse_public_assert_kind};
+pub(crate) use root_contract::{DuplicatePanicRootRequirementIssue, PanicRootContractPack};
+pub(crate) use root_contract::{root_contract, root_contract_boundary};
 
 /// Returns the pack-owned public presentation of one precise MIR assertion.
 #[must_use]

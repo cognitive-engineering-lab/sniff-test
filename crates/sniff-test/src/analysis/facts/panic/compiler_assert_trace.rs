@@ -130,6 +130,15 @@ impl CompilerAssertTraceNode {
             Self::CompilerAssert { .. } => None,
         }
     }
+
+    fn semantic_function(&self) -> Option<FunctionKey> {
+        match self {
+            Self::Function { data, .. } => Some(*data.key()),
+            Self::Macro(data) => Some(data.semantic_function()),
+            Self::Callable { data, .. } => Some(*data.key()),
+            Self::CompilerAssert { .. } => None,
+        }
+    }
 }
 
 /// Semantic role of the exact source anchor selected for presentation.
@@ -310,6 +319,11 @@ impl CompilerAssertSemanticTraceStep {
     }
 
     #[must_use]
+    pub(crate) fn caller_function(&self) -> Option<FunctionKey> {
+        self.caller.semantic_function()
+    }
+
+    #[must_use]
     pub(crate) const fn target(&self) -> &CompilerAssertTraceNode {
         &self.target
     }
@@ -322,6 +336,35 @@ impl CompilerAssertSemanticTraceStep {
     #[must_use]
     pub(crate) fn target_display_path(&self) -> Option<&str> {
         self.target.display_path()
+    }
+
+    #[must_use]
+    pub(crate) fn target_function(&self) -> Option<FunctionKey> {
+        self.target.semantic_function()
+    }
+
+    #[must_use]
+    pub(crate) fn call_local_id(&self) -> Option<u32> {
+        match &self.kind {
+            CompilerAssertSemanticTraceStepKind::CallMacro {
+                occurrence_data, ..
+            } => Some(occurrence_data.key().local_id()),
+            CompilerAssertSemanticTraceStepKind::Call(call) => {
+                Some(call.occurrence_data().key().local_id())
+            }
+            CompilerAssertSemanticTraceStepKind::EffectMacro { .. }
+            | CompilerAssertSemanticTraceStepKind::Assert { .. } => None,
+        }
+    }
+
+    #[must_use]
+    pub(crate) fn effect(&self) -> Option<&ScopedEntityId<EffectSiteEntity>> {
+        match &self.kind {
+            CompilerAssertSemanticTraceStepKind::EffectMacro { effect, .. }
+            | CompilerAssertSemanticTraceStepKind::Assert { effect, .. } => Some(effect),
+            CompilerAssertSemanticTraceStepKind::CallMacro { .. }
+            | CompilerAssertSemanticTraceStepKind::Call(_) => None,
+        }
     }
 
     #[must_use]

@@ -493,12 +493,29 @@ impl<'a> TraceRouteIndexes<'a> {
                     callable: call.target().callable().erase(),
                 },
             })?;
-        if entered.function() != *call.target_data().key() {
-            return Err(TraceRouteError::TargetBodyMismatch {
-                callable: call.target().callable().erase(),
-            });
-        }
+        validate_entered_body_function(
+            &call.target().callable().erase(),
+            entered.function(),
+            *call.target_data().key(),
+        )?;
         Ok(entered)
+    }
+}
+
+fn validate_entered_body_function(
+    callable: &ScopedEntityRef,
+    entered_function: FunctionKey,
+    callable_function: FunctionKey,
+) -> Result<(), TraceRouteError> {
+    let same_definition_generic_fallback = entered_function.instance().is_none()
+        && callable_function.instance().is_some()
+        && entered_function.definition() == callable_function.definition();
+    if entered_function == callable_function || same_definition_generic_fallback {
+        Ok(())
+    } else {
+        Err(TraceRouteError::TargetBodyMismatch {
+            callable: callable.clone(),
+        })
     }
 }
 
@@ -734,3 +751,57 @@ fn record_marker_claims(count: usize) {
 
 #[cfg(not(test))]
 fn record_marker_claims(_count: usize) {}
+
+#[cfg(test)]
+mod tests {
+    use super::{TraceRouteError, validate_entered_body_function};
+    use crate::analysis::facts::encoded::EntityRef;
+    use crate::analysis::facts::panic::compiler_assert_trace::tests::{definition, instance};
+    use crate::analysis::facts::program::FunctionKey;
+    use crate::analysis::facts::schema::SchemaId;
+    use crate::analysis::facts::workspace::{ArtifactScopeId, ScopedEntityRef};
+
+    fn callable() -> ScopedEntityRef {
+        ScopedEntityRef::new(
+            ArtifactScopeId::for_in_memory(1, 0),
+            EntityRef {
+                schema: SchemaId::new("sniff-test.core.callable").unwrap(),
+                row: 0,
+            },
+        )
+    }
+
+    #[test]
+    fn entered_body_compatibility_rejects_every_fallback_except_exact_to_same_generic() {
+        let callable = callable();
+        let exact = FunctionKey::new(definition(1), Some(instance(1)));
+        let generic = FunctionKey::new(definition(1), None);
+        assert_eq!(
+            validate_entered_body_function(&callable, exact, exact),
+            Ok(())
+        );
+        assert_eq!(
+            validate_entered_body_function(&callable, generic, exact),
+            Ok(())
+        );
+
+        let different_generic = FunctionKey::new(definition(2), None);
+        assert_eq!(
+            validate_entered_body_function(&callable, different_generic, exact),
+            Err(TraceRouteError::TargetBodyMismatch {
+                callable: callable.clone(),
+            })
+        );
+        let different_exact = FunctionKey::new(definition(1), Some(instance(2)));
+        assert_eq!(
+            validate_entered_body_function(&callable, different_exact, exact),
+            Err(TraceRouteError::TargetBodyMismatch {
+                callable: callable.clone(),
+            })
+        );
+        assert_eq!(
+            validate_entered_body_function(&callable, exact, generic),
+            Err(TraceRouteError::TargetBodyMismatch { callable })
+        );
+    }
+}

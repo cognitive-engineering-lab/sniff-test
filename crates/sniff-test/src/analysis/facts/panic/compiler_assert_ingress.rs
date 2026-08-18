@@ -283,6 +283,15 @@ pub(super) fn semantic_order_for_trace(
     Ok(order)
 }
 
+impl CompilerAssertSemanticTrace {
+    pub(crate) fn evidence_order_for_report(
+        &self,
+        traversal_order: u64,
+    ) -> Result<EvidenceSemanticOrder, RuleError> {
+        semantic_order_for_trace(self, traversal_order)
+    }
+}
+
 fn semantic_node_label(
     role: CompilerAssertSemanticNodeRole,
     display_path: Option<&str>,

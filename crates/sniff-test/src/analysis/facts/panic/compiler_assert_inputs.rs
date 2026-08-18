@@ -1,20 +1,20 @@
-//! Private preparation for compiler-assert and additive panic-root inputs.
+//! Private preparation for unified typed-panic root inputs.
 //!
-//! This module does not publish evaluation rows, switch evaluation authority,
-//! or own a composition builder. It preserves the compiler-assert input API
-//! while retaining panic call obligations and their raw active marker state for
-//! a future projection. Marker selector matching is intentionally deferred.
+//! This module does not publish evaluation rows or own a composition builder.
+//! It preserves the compiler-assert input API while retaining panic-call
+//! obligations and their raw active marker state for the production evaluator.
+//! Marker selector matching remains an evaluation-rule concern.
 
 use std::collections::BTreeMap;
 use std::error::Error;
 use std::fmt::{self, Display, Formatter};
 use std::sync::Arc;
 
+use super::assertion_index::{WorkspaceMirAssertIndex, WorkspaceMirAssertIndexError};
 use super::call_model::PanicCallPresentationFunction;
-use super::contract_index::{EffectivePanicContract, EffectivePanicRequirement};
-use super::{
-    WorkspaceEffectivePanicContracts, WorkspaceEffectivePanicContractsError,
-    WorkspaceMirAssertIndex, WorkspaceMirAssertIndexError,
+use super::contract_index::{
+    EffectivePanicContract, EffectivePanicRequirement, WorkspaceEffectivePanicContracts,
+    WorkspaceEffectivePanicContractsError,
 };
 use crate::analysis::facts::composition::{
     CompositionRelationBuilder, CompositionRelationRegistry, WorkspaceRelationGraph,
@@ -936,7 +936,7 @@ fn invalid_presentation_target(
     }
 }
 
-/// Additive panic-wide wrapper over the existing compiler-assert authority.
+/// Unified root input for every production typed-panic pack.
 #[derive(Clone, Debug)]
 pub(crate) struct PanicRootInputs {
     compiler_asserts: CompilerAssertRootInputs,

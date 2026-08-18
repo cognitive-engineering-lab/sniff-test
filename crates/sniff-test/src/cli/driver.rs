@@ -2,7 +2,6 @@
 
 mod interpretation;
 mod typed_panic;
-#[cfg(test)]
 mod typed_panic_call;
 
 use std::collections::BTreeSet;

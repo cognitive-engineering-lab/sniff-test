@@ -9,8 +9,10 @@ use crate::analysis::collected::{
     CollectedMirAssert, CollectedProgram,
 };
 use crate::analysis::facts::collection::collect_artifact_facts;
-use crate::analysis::facts::panic::CompilerAssertSemanticNodeRole;
 use crate::analysis::facts::panic::model::MirAssertKind;
+use crate::analysis::facts::panic::{
+    CompilerAssertSemanticNodeRole, PanicAnalysisIncompleteIssue, PanicCompletenessOutcome,
+};
 use crate::analysis::facts::program::topology::{
     CallAttributionRole, CallKind, CallOccurrenceEntity, CallOccurrenceKey, CallSiteEntity,
     CallSiteKey, CallTargetRole, CallableEntity, SafetyEffectGroupEntity, SafetyEffectGroupKey,
@@ -19,6 +21,7 @@ use crate::analysis::facts::program::{
     EffectSiteEntity, EffectSiteKey, EffectSourceAnchorRole, FunctionBodyProvenance,
     FunctionEntity, FunctionKey, SourceAnchorEntity, SourceAnchorKey, SourceFileEntity,
 };
+use crate::analysis::facts::schema::{PassId, RowSchema};
 use crate::analysis::ir::{ArtifactAnalysisIr, StableInstanceHash};
 use crate::analysis::workspace_closure::VerifiedWorkspaceClosureError;
 use crate::cli::driver::interpretation::{FindingSources, adapt_typed_panic_reports};
@@ -341,6 +344,63 @@ fn permanent_local_assertion_evaluates_without_legacy_witnesses() {
 }
 
 #[test]
+fn compiler_assert_projection_rejects_an_issue_from_the_wrong_producer() {
+    let function = function(1);
+    let facts = permanent_artifact(&[(function, "fixture::root", true)], None);
+    let roots = [root(function, "fixture::root")];
+
+    let result = evaluate_roots_with_dependencies_mutating_issues(
+        TypedPanicLocalArtifact::in_memory(&facts, LOCAL_CRATE),
+        &[],
+        Vec::new(),
+        &[],
+        &roots,
+        &SniffTestConfig::default(),
+        &mut |issues| {
+            assert_eq!(issues.len(), 1);
+            issues[0].producer = PassId::new("sniff-test.panic.match-assert-evidence").unwrap();
+        },
+    );
+
+    let error = result.expect_err("compiler-assert projection must reject a foreign producer");
+    assert!(matches!(
+        error,
+        TypedPanicEvaluationError::InvalidCompilerAssertIssueProjection { reason, .. }
+            if reason.contains("expected producer")
+    ));
+}
+
+#[test]
+fn compiler_assert_projection_rejects_a_duplicate_issue_identity() {
+    let function = function(1);
+    let facts = permanent_artifact(&[(function, "fixture::root", true)], None);
+    let roots = [root(function, "fixture::root")];
+
+    let result = evaluate_roots_with_dependencies_mutating_issues(
+        TypedPanicLocalArtifact::in_memory(&facts, LOCAL_CRATE),
+        &[],
+        Vec::new(),
+        &[],
+        &roots,
+        &SniffTestConfig::default(),
+        &mut |issues| {
+            assert_eq!(issues.len(), 1);
+            let mut duplicate = issues[0].clone();
+            duplicate.reference.row += 1;
+            issues.push(duplicate);
+        },
+    );
+
+    let error =
+        result.expect_err("compiler-assert projection must reject duplicate issue identity");
+    assert!(matches!(
+        error,
+        TypedPanicEvaluationError::InvalidCompilerAssertIssueProjection { reason, .. }
+            if reason.contains("duplicate canonical issue identity")
+    ));
+}
+
+#[test]
 fn each_root_uses_a_fresh_evaluation_database() {
     let asserted = function(1);
     let empty = function(2);
@@ -558,7 +618,21 @@ fn a_late_missing_root_rejects_the_whole_typed_batch() {
     )
     .expect_err("failure while preparing the later root returns no report batch");
 
-    assert!(matches!(error, TypedPanicEvaluationError::Input(_)));
+    let TypedPanicEvaluationError::Input(source) = error else {
+        panic!("the production batch must preserve the typed input failure boundary");
+    };
+    let crate::analysis::facts::panic::CompilerAssertInputError::Traversal(source) = *source else {
+        panic!("the production batch must preserve the root traversal failure");
+    };
+    let crate::analysis::facts::program::root_traversal::RootProgramTraversalError::UnknownRoot {
+        scope,
+        function,
+    } = *source
+    else {
+        panic!("the production batch must preserve the exact unknown-root failure");
+    };
+    assert_eq!(scope, ArtifactScopeId::for_in_memory(LOCAL_CRATE, 0));
+    assert_eq!(function, key(missing));
 }
 
 #[test]
@@ -666,4 +740,37 @@ fn compact_and_full_report_v13_modes_keep_identical_public_semantics() {
             DiagnosticMessage::Note(note) if note.contains("show-full-stack-trace = true")
         )
     }));
+}
+
+#[test]
+fn compiler_assert_oracle_registry_does_not_install_unified_completeness_authority() {
+    let registry = compiler_assert_oracle_registry().unwrap();
+
+    assert!(
+        registry
+            .schemas()
+            .descriptor_for::<PanicCompletenessOutcome>()
+            .is_err()
+    );
+    assert!(
+        registry
+            .schemas()
+            .descriptor_for::<PanicAnalysisIncompleteIssue>()
+            .is_err()
+    );
+    for rule in [
+        "sniff-test.panic.emit-completeness",
+        "sniff-test.panic.report-incomplete",
+    ] {
+        assert!(
+            registry
+                .evaluation_rules()
+                .descriptor(&PassId::new(rule).unwrap())
+                .is_none()
+        );
+    }
+    assert_ne!(
+        PanicCompletenessOutcome::ID,
+        UnsatisfiedCompilerAssertIssue::ID
+    );
 }

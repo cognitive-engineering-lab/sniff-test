@@ -391,6 +391,26 @@ impl AmbiguousEvidenceReuseIssue {
         }
     }
 
+    #[cfg(test)]
+    #[must_use]
+    pub(crate) fn new_for_report_test(
+        domain: DomainId,
+        marker: ScopedEntityRef,
+        witness_source: ScopedRowRef,
+        witness_endpoint: ScopedEntityRef,
+        witness_order: u64,
+        groups: Vec<ScopedEntityRef>,
+    ) -> Self {
+        Self::new(
+            domain,
+            marker,
+            witness_source,
+            witness_endpoint,
+            witness_order,
+            groups,
+        )
+    }
+
     #[must_use]
     pub(crate) const fn domain(&self) -> &DomainId {
         &self.domain
@@ -448,7 +468,7 @@ impl IssueRenderer<AmbiguousEvidenceReuseIssue> for AmbiguousEvidenceReuseRender
     }
 }
 
-fn canonical_evidence_use<'a>(
+pub(crate) fn canonical_evidence_use<'a>(
     uses: impl IntoIterator<Item = &'a EvidenceUseRecord>,
 ) -> Option<&'a EvidenceUseRecord> {
     uses.into_iter()

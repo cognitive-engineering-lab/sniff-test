@@ -1,35 +1,42 @@
-//! Permanent typed compiler-assert evaluation and owned report projection.
+//! Shared permanent typed-panic artifact and compiler-assert projection support.
 //!
-//! Compiler assertions are prepared from the exact typed workspace closure.
-//! The legacy interpreter remains a separate consumer for panic calls, safety,
-//! ambiguity, and completeness; none of its compiler-assert witnesses enter
-//! this module.
+//! The unified production authority uses these artifact, source, and owned
+//! compiler-assert report helpers. The standalone compiler-assert evaluator and
+//! registry below are compiled only as a legacy oracle for parity tests.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::error::Error;
 use std::fmt::{self, Display, Formatter};
 
 use crate::analysis::cache::{ArtifactAnalysisCache, RustcArtifactId};
+#[cfg(test)]
 use crate::analysis::facts::collection::CollectedArtifactSchemaPack;
+use crate::analysis::facts::composition::CompositionBuildError;
 use crate::analysis::facts::composition::graph::WorkspaceRelationError;
+#[cfg(test)]
 use crate::analysis::facts::composition::{
-    CompositionBuildError, CompositionRelationBuilder, WorkspaceEvaluationView,
-    WorkspaceRelationIndex,
+    CompositionRelationBuilder, WorkspaceEvaluationView, WorkspaceRelationIndex,
 };
 use crate::analysis::facts::encoded::{ArtifactFactIr, RowRef};
+#[cfg(test)]
+use crate::analysis::facts::evaluation::EvaluationDb;
 use crate::analysis::facts::evaluation::{
-    EvaluationDb, EvaluationPipelineError, EvaluationRoot, EvaluationStorageError,
-    TypedEvaluatedIssue,
+    EvaluationPipelineError, EvaluationRoot, EvaluationStorageError, TypedEvaluatedIssue,
 };
+#[cfg(test)]
 use crate::analysis::facts::human::HumanEvidencePack;
 use crate::analysis::facts::pack::{AnalysisRegistry, PackRegistrationError};
 use crate::analysis::facts::panic::model::UnsatisfiedCompilerAssertIssue;
+#[cfg(test)]
 use crate::analysis::facts::panic::rules::PanicPack;
 use crate::analysis::facts::panic::{
-    CompilerAssertInputError, CompilerAssertInputPack, CompilerAssertRootInputs,
-    CompilerAssertRootRequest, CompilerAssertSemanticEdge, CompilerAssertSemanticTrace,
-    CompilerAssertSemanticTraceStep, CompilerAssertTraceError, CompilerAssertTraceProjector,
-    PreparedCompilerAssertRootBatch, compiler_assert_presentation,
+    CompilerAssertInputError, CompilerAssertRootRequest, CompilerAssertSemanticEdge,
+    CompilerAssertSemanticTrace, CompilerAssertSemanticTraceStep, CompilerAssertTraceError,
+    CompilerAssertTraceProjector, compiler_assert_presentation,
+};
+#[cfg(test)]
+use crate::analysis::facts::panic::{
+    CompilerAssertInputPack, CompilerAssertRootInputs, PreparedCompilerAssertRootBatch,
 };
 use crate::analysis::facts::program::root_traversal::MarkerProbe;
 use crate::analysis::facts::program::topology::{CallAttributionRole, CallKind};
@@ -41,12 +48,12 @@ use crate::analysis::facts::view::{ArtifactDbView, ViewError};
 use crate::analysis::facts::workspace::{
     ArtifactScopeId, ArtifactScopeIdError, ScopedEntityRef, WorkspaceFactView, WorkspaceViewError,
 };
-use crate::analysis::graph::ArtifactAnalysisGraph;
 use crate::analysis::interpret::InterpretationRoot;
 use crate::analysis::ir::{FunctionId, SourceFileId, SourceFileIr, SourceRangeIr};
+#[cfg(test)]
+use crate::analysis::workspace_closure::VerifiedWorkspaceClosure;
 use crate::analysis::workspace_closure::{
-    ManagedArtifactGeneration, ManagedArtifactManifest, VerifiedWorkspaceClosure,
-    VerifiedWorkspaceClosureError,
+    ManagedArtifactGeneration, ManagedArtifactManifest, VerifiedWorkspaceClosureError,
 };
 use crate::config::{CallableEdgeAttribution, MarkerProbing, SniffTestConfig};
 use crate::panics::CompilerAssertKind;
@@ -135,6 +142,10 @@ pub(super) enum TypedPanicEvaluationError {
         issue: RowRef,
         reason: String,
     },
+    InvalidCompilerAssertIssueProjection {
+        issue: RowRef,
+        reason: String,
+    },
 }
 
 /// Owned compiler-assert report for one requested root.
@@ -149,6 +160,7 @@ pub(super) struct TypedPanicRootReport {
 }
 
 #[derive(Clone, Debug)]
+#[cfg(test)]
 pub(super) struct TypedPanicBatchReport {
     pub(super) roots: Vec<TypedPanicRootReport>,
     pub(super) source_files: Vec<SourceFileIr>,
@@ -167,6 +179,7 @@ pub(super) struct TypedPanicIssueReport {
 
 type RootTypedPanicEvaluation = Result<TypedPanicRootReport, TypedPanicEvaluationError>;
 
+#[cfg(test)]
 struct PreparedTypedPanicWorkspace<'a, 'facts> {
     registry: &'a AnalysisRegistry<CompilerAssertRootInputs>,
     workspace: &'a WorkspaceFactView<'facts>,
@@ -302,6 +315,11 @@ impl Display for TypedPanicEvaluationError {
                 "typed panic issue `{}`:{} has an invalid permanent semantic trace: {reason}",
                 issue.schema, issue.row
             ),
+            Self::InvalidCompilerAssertIssueProjection { issue, reason } => write!(
+                formatter,
+                "typed panic issue `{}`:{} has invalid compiler-assert projection metadata: {reason}",
+                issue.schema, issue.row
+            ),
         }
     }
 }
@@ -325,28 +343,10 @@ impl Error for TypedPanicEvaluationError {
             | Self::PreparedRootCount { .. }
             | Self::MultiplePresentationAnchors { .. }
             | Self::ConflictingSourceFileIdentity { .. }
-            | Self::InvalidSemanticTraceProjection { .. } => None,
+            | Self::InvalidSemanticTraceProjection { .. }
+            | Self::InvalidCompilerAssertIssueProjection { .. } => None,
         }
     }
-}
-
-/// Evaluates every requested root atomically from permanent typed facts.
-pub(super) fn evaluate_typed_panic_roots(
-    local: TypedPanicLocalArtifact<'_>,
-    dependencies: &ArtifactAnalysisGraph,
-    active_runtime_artifacts: &[RustcArtifactId],
-    roots: &[InterpretationRoot],
-    config: &SniffTestConfig,
-) -> Result<TypedPanicBatchReport, TypedPanicEvaluationError> {
-    let artifacts = dependencies.artifacts().collect::<Vec<_>>();
-    evaluate_roots_with_dependencies(
-        local,
-        &artifacts,
-        dependencies.direct_dependency_ids().collect(),
-        active_runtime_artifacts,
-        roots,
-        config,
-    )
 }
 
 #[cfg(test)]
@@ -422,6 +422,7 @@ pub(super) fn open_typed_artifacts<'view, C: ?Sized>(
     })
 }
 
+#[cfg(test)]
 fn evaluate_roots_with_dependencies(
     local: TypedPanicLocalArtifact<'_>,
     dependencies: &[&ArtifactAnalysisCache],
@@ -430,13 +431,34 @@ fn evaluate_roots_with_dependencies(
     roots: &[InterpretationRoot],
     config: &SniffTestConfig,
 ) -> Result<TypedPanicBatchReport, TypedPanicEvaluationError> {
+    evaluate_roots_with_dependencies_mutating_issues(
+        local,
+        dependencies,
+        direct_dependencies,
+        active_runtime_artifacts,
+        roots,
+        config,
+        &mut |_| {},
+    )
+}
+
+#[cfg(test)]
+fn evaluate_roots_with_dependencies_mutating_issues(
+    local: TypedPanicLocalArtifact<'_>,
+    dependencies: &[&ArtifactAnalysisCache],
+    direct_dependencies: Vec<RustcArtifactId>,
+    active_runtime_artifacts: &[RustcArtifactId],
+    roots: &[InterpretationRoot],
+    config: &SniffTestConfig,
+    mutate_issues: &mut dyn FnMut(&mut Vec<TypedEvaluatedIssue<UnsatisfiedCompilerAssertIssue>>),
+) -> Result<TypedPanicBatchReport, TypedPanicEvaluationError> {
     if roots.is_empty() {
         return Ok(TypedPanicBatchReport {
             roots: Vec::new(),
             source_files: Vec::new(),
         });
     }
-    let registry = typed_panic_registry()
+    let registry = compiler_assert_oracle_registry()
         .map_err(|source| TypedPanicEvaluationError::Registration(Box::new(source)))?;
     let opened = open_typed_artifacts(local, dependencies, &registry)?;
     let workspace = WorkspaceFactView::compose(opened.views)
@@ -514,9 +536,10 @@ fn evaluate_roots_with_dependencies(
             let results = evaluated
                 .finish()
                 .map_err(|source| TypedPanicEvaluationError::Results(Box::new(source)))?;
-            let issues = results
+            let mut issues = results
                 .issues::<UnsatisfiedCompilerAssertIssue>(prepared.registry.schemas())
                 .map_err(|source| TypedPanicEvaluationError::Results(Box::new(source)))?;
+            mutate_issues(&mut issues);
             project_root_report(&prepared, &inputs, request, root, issues)
         })
         .collect::<Result<Vec<_>, _>>()?;
@@ -583,6 +606,7 @@ pub(super) fn compiler_assert_root_request(
     )
 }
 
+#[cfg(test)]
 fn project_root_report(
     prepared: &PreparedTypedPanicWorkspace<'_, '_>,
     inputs: &CompilerAssertRootInputs,
@@ -592,11 +616,34 @@ fn project_root_report(
 ) -> RootTypedPanicEvaluation {
     let projector = CompilerAssertTraceProjector::prepare(inputs)
         .map_err(|source| TypedPanicEvaluationError::Trace(Box::new(source)))?;
+    project_compiler_assert_root_report(
+        prepared.registry,
+        prepared.render_contexts,
+        prepared.presentation_anchors,
+        &projector,
+        request,
+        root,
+        issues,
+    )
+}
+
+pub(super) fn project_compiler_assert_root_report<C>(
+    registry: &AnalysisRegistry<C>,
+    render_contexts: &BTreeMap<ArtifactScopeId, RenderCx<'_>>,
+    presentation_anchors: &FunctionPresentationIndex,
+    projector: &CompilerAssertTraceProjector<'_>,
+    request: &InterpretationRoot,
+    root: EvaluationRoot,
+    issues: Vec<TypedEvaluatedIssue<UnsatisfiedCompilerAssertIssue>>,
+) -> RootTypedPanicEvaluation {
+    validate_compiler_assert_issue_batch(&issues)?;
     let issues = issues
         .into_iter()
-        .map(|issue| project_issue(prepared, &projector, &root, issue))
+        .map(|issue| {
+            project_compiler_assert_issue(registry, render_contexts, projector, &root, issue)
+        })
         .collect::<Result<Vec<_>, _>>()?;
-    let presentation_range = prepared.presentation_anchors.range(&root.entity)?;
+    let presentation_range = presentation_anchors.range(&root.entity)?;
     Ok(TypedPanicRootReport {
         root,
         function: request.function,
@@ -607,8 +654,46 @@ fn project_root_report(
     })
 }
 
-fn project_issue(
-    prepared: &PreparedTypedPanicWorkspace<'_, '_>,
+fn validate_compiler_assert_issue_batch(
+    issues: &[TypedEvaluatedIssue<UnsatisfiedCompilerAssertIssue>],
+) -> Result<(), TypedPanicEvaluationError> {
+    const EXPECTED_PRODUCER: &str = "sniff-test.panic.report-unsatisfied-asserts";
+
+    let mut identities = BTreeSet::new();
+    for issue in issues {
+        if issue.producer.as_str() != EXPECTED_PRODUCER {
+            return Err(invalid_compiler_assert_issue_projection(
+                issue,
+                format!(
+                    "expected producer `{EXPECTED_PRODUCER}`, found `{}`",
+                    issue.producer
+                ),
+            ));
+        }
+        let identity = (issue.data.endpoint(), issue.data.missing_requirements());
+        if !identities.insert(identity) {
+            return Err(invalid_compiler_assert_issue_projection(
+                issue,
+                "duplicate canonical issue identity",
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn invalid_compiler_assert_issue_projection(
+    issue: &TypedEvaluatedIssue<UnsatisfiedCompilerAssertIssue>,
+    reason: impl Into<String>,
+) -> TypedPanicEvaluationError {
+    TypedPanicEvaluationError::InvalidCompilerAssertIssueProjection {
+        issue: issue.reference.clone(),
+        reason: reason.into(),
+    }
+}
+
+fn project_compiler_assert_issue<C>(
+    registry: &AnalysisRegistry<C>,
+    render_contexts: &BTreeMap<ArtifactScopeId, RenderCx<'_>>,
     projector: &CompilerAssertTraceProjector<'_>,
     root: &EvaluationRoot,
     issue: TypedEvaluatedIssue<UnsatisfiedCompilerAssertIssue>,
@@ -618,14 +703,12 @@ fn project_issue(
         .map_err(|source| TypedPanicEvaluationError::Trace(Box::new(source)))?;
     validate_issue_trace(projector, root, &issue, &trace)?;
     let assertion_scope = issue.data.assertion().scope();
-    let render_cx = prepared
-        .render_contexts
-        .get(assertion_scope)
-        .ok_or_else(|| TypedPanicEvaluationError::MissingRenderContext {
+    let render_cx = render_contexts.get(assertion_scope).ok_or_else(|| {
+        TypedPanicEvaluationError::MissingRenderContext {
             scope: assertion_scope.clone(),
-        })?;
-    let diagnostic = prepared
-        .registry
+        }
+    })?;
+    let diagnostic = registry
         .rendering()
         .render(&issue.data, render_cx)
         .map_err(|source| TypedPanicEvaluationError::Render(Box::new(source)))?;
@@ -692,7 +775,8 @@ fn invalid_trace_projection(
     }
 }
 
-fn typed_panic_registry()
+#[cfg(test)]
+fn compiler_assert_oracle_registry()
 -> Result<AnalysisRegistry<CompilerAssertRootInputs>, PackRegistrationError> {
     let mut registry = AnalysisRegistry::new();
     registry.install(&CollectedArtifactSchemaPack)?;
@@ -700,6 +784,12 @@ fn typed_panic_registry()
     registry.install(&PanicPack)?;
     registry.install(&CompilerAssertInputPack)?;
     Ok(registry)
+}
+
+#[cfg(test)]
+pub(super) fn compiler_assert_oracle_registry_for_test()
+-> Result<AnalysisRegistry<CompilerAssertRootInputs>, PackRegistrationError> {
+    compiler_assert_oracle_registry()
 }
 
 fn canonical_persisted_scope(
