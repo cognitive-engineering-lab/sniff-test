@@ -311,8 +311,10 @@ macro_rules! local_index {
 }
 
 local_index!(CallId);
+local_index!(CallSiteId);
 local_index!(EffectId);
 local_index!(MarkerId);
+local_index!(SafetyEffectGroupId);
 
 /// One graph edge emitted while expanding a function body.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

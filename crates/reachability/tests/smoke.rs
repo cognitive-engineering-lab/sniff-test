@@ -10,7 +10,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use reachability::{
-    ArtifactScope, DynDispatchVTableEdges, FnPointerEdges, NoopReachabilityHooks,
+    ArtifactScope, DynDispatchVTableEdges, FnPointerEdges, MirBodyLocation, NoopReachabilityHooks,
     ReachabilityEdgeKind, ReachabilityGraph, ReachabilityHooks, ReachabilityIndex,
     ReachabilityNodeExpansion, ReachabilityNodeKind, ReachabilityOptions, ReachabilityRoot,
     ReachabilitySnapshot,
@@ -202,6 +202,23 @@ fn leaf() {}
 
 pub fn external_entry() {
     std::process::abort();
+}
+";
+
+const DUPLICATED_ASSERT_SOURCE: &str = r"
+macro_rules! duplicate {
+    ($expression:expr) => {
+        ($expression, $expression)
+    };
+}
+
+#[inline(never)]
+fn select(values: &[u8]) -> &[u8] {
+    values
+}
+
+pub fn entry(values: &[u8], index: usize) -> (u8, u8) {
+    duplicate!(select(values)[index])
 }
 ";
 
@@ -593,6 +610,17 @@ fn multi_root_query_discovers_callable_targets_independent_of_root_order() {
 }
 
 #[test]
+fn same_kind_same_span_assertions_have_distinct_deterministic_mir_sites() {
+    let project = TempProject::new(DUPLICATED_ASSERT_SOURCE);
+    let mut callbacks = CompilerAssertSiteCallbacks { result: None };
+    run_test_compiler(&project, &mut callbacks);
+
+    let result = callbacks.result.expect("compiler callback did not run");
+    assert_ne!(result.first_run[0], result.first_run[1]);
+    assert_eq!(result.first_run, result.second_run);
+}
+
+#[test]
 fn expanded_leaf_is_not_a_frontier() {
     let project = TempProject::new(EXPANDED_LEAF_SOURCE);
     let mut callbacks = LocalExpansionCallbacks { result: None };
@@ -653,6 +681,54 @@ struct ArtifactScopeResult {
 
 struct ArtifactScopeCallbacks {
     result: Option<ArtifactScopeResult>,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+struct CompilerAssertSiteResult {
+    first_run: Vec<MirBodyLocation>,
+    second_run: Vec<MirBodyLocation>,
+}
+
+struct CompilerAssertSiteCallbacks {
+    result: Option<CompilerAssertSiteResult>,
+}
+
+impl Callbacks for CompilerAssertSiteCallbacks {
+    fn after_analysis(&mut self, _compiler: &interface::Compiler, tcx: TyCtxt<'_>) -> Compilation {
+        let first_run = compiler_assert_sites(tcx);
+        let second_run = compiler_assert_sites(tcx);
+        self.result = Some(CompilerAssertSiteResult {
+            first_run,
+            second_run,
+        });
+        Compilation::Stop
+    }
+}
+
+fn compiler_assert_sites(tcx: TyCtxt<'_>) -> Vec<MirBodyLocation> {
+    let entry = ReachabilityRoot::LocalBody(find_local_body(tcx, "entry"));
+    let mut index = ReachabilityIndex::new(tcx);
+    let snapshot = index.query(
+        entry,
+        &NoopReachabilityHooks,
+        ReachabilityOptions::default(),
+    );
+    let view = index.graph().view(&snapshot);
+    let assertions = view
+        .edges()
+        .filter_map(|edge| {
+            let ReachabilityNodeKind::CompilerAssert { message, site, .. } = edge.target().kind()
+            else {
+                return None;
+            };
+            Some((*site, edge.span(), std::mem::discriminant(message.as_ref())))
+        })
+        .collect::<Vec<_>>();
+
+    assert_eq!(assertions.len(), 2);
+    assert_eq!(assertions[0].1, assertions[1].1);
+    assert_eq!(assertions[0].2, assertions[1].2);
+    assertions.into_iter().map(|(site, _, _)| site).collect()
 }
 
 impl Callbacks for ArtifactScopeCallbacks {

@@ -46,8 +46,26 @@ impl ContractDocOverrides {
 
     #[must_use]
     pub(crate) fn markdown_for_candidates(&self, candidates: &[String]) -> Option<&str> {
-        let matched = self.patterns.best_candidates_match(candidates)?;
-        self.markdown_for_pattern(matched.pattern)
+        self.markdown_for_pattern(self.best_pattern_for_candidates(candidates)?)
+    }
+
+    /// Returns configured documents in their original order.
+    ///
+    /// Prepared contract indexes use this narrow view to parse every document
+    /// once while retaining the first configured value for duplicate patterns.
+    pub(crate) fn prepared_entries(
+        &self,
+    ) -> impl ExactSizeIterator<Item = (&str, &str)> + DoubleEndedIterator {
+        self.entries
+            .iter()
+            .map(|entry| (entry.pattern.as_str(), entry.markdown.as_str()))
+    }
+
+    #[must_use]
+    pub(crate) fn best_pattern_for_candidates(&self, candidates: &[String]) -> Option<&str> {
+        self.patterns
+            .best_candidates_match(candidates)
+            .map(|matched| matched.pattern)
     }
 
     fn markdown_for_pattern(&self, pattern: &str) -> Option<&str> {
@@ -121,6 +139,10 @@ thread_local! {
     static SAFETY_SUMMARY_CACHE: std::cell::RefCell<
         std::collections::HashMap<DefId, ContractDocSummary>,
     > = std::cell::RefCell::new(std::collections::HashMap::new());
+    #[cfg(test)]
+    static PANIC_MARKDOWN_PARSE_COUNT: std::cell::Cell<usize> = const {
+        std::cell::Cell::new(0)
+    };
 }
 
 /// Parses a panic contract directly from rustdoc attributes.
@@ -221,7 +243,20 @@ fn parse_contract_doc_markdown(
 
 #[must_use]
 pub(crate) fn panic_contract_doc_summary_from_markdown(markdown: &str) -> ContractDocSummary {
+    #[cfg(test)]
+    PANIC_MARKDOWN_PARSE_COUNT.set(PANIC_MARKDOWN_PARSE_COUNT.get().saturating_add(1));
     parse_contract_doc_markdown(markdown, DUMMY_SP, is_panic_heading)
+}
+
+#[cfg(test)]
+pub(crate) fn reset_panic_markdown_parse_count() {
+    PANIC_MARKDOWN_PARSE_COUNT.set(0);
+}
+
+#[cfg(test)]
+#[must_use]
+pub(crate) fn panic_markdown_parse_count() -> usize {
+    PANIC_MARKDOWN_PARSE_COUNT.get()
 }
 
 #[must_use]

@@ -59,7 +59,10 @@ pub(crate) struct MarkerInstanceKey {
 pub(crate) struct EffectMarkerBlock {
     pub key: MarkerInstanceKey,
     pub span: Span,
+    /// Complete physical source-ordered claim inventory.
     pub satisfactions: Vec<MarkerSatisfaction>,
+    /// Original source ordinals applicable to the selected semantic target.
+    pub applicable_satisfactions: Vec<usize>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -71,6 +74,7 @@ struct ParsedMarkerBlock {
 
 impl ParsedMarkerBlock {
     fn instantiate(self, origin: MarkerOrigin) -> EffectMarkerBlock {
+        let applicable_satisfactions = (0..self.satisfactions.len()).collect();
         EffectMarkerBlock {
             key: MarkerInstanceKey {
                 physical_block: self.key,
@@ -78,6 +82,7 @@ impl ParsedMarkerBlock {
             },
             span: self.span,
             satisfactions: self.satisfactions,
+            applicable_satisfactions,
         }
     }
 }
@@ -144,15 +149,19 @@ fn effect_edge_marker_block_with(
             return Some(callee);
         }
         if let Some(statement) = statement {
-            let satisfactions = statement
+            let applicable_satisfactions = statement
                 .satisfactions
-                .into_iter()
-                .filter(|satisfaction| satisfaction.requirement.is_some())
+                .iter()
+                .enumerate()
+                .filter_map(|(ordinal, satisfaction)| {
+                    satisfaction.requirement.is_some().then_some(ordinal)
+                })
                 .collect::<Vec<_>>();
-            return (!satisfactions.is_empty()).then_some(EffectMarkerBlock {
+            return (!applicable_satisfactions.is_empty()).then_some(EffectMarkerBlock {
                 key: statement.key,
                 span: statement.span,
-                satisfactions,
+                satisfactions: statement.satisfactions,
+                applicable_satisfactions,
             });
         }
 

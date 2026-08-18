@@ -303,7 +303,7 @@ fn standalone_direct_driver_emits_a_workspace_report_with_linked_rustc_version()
 }
 
 #[test]
-fn direct_dependency_unit_silently_caches_complete_policy_neutral_v15_ir() {
+fn direct_dependency_unit_silently_caches_complete_policy_neutral_v16_facts() {
     let temp = tempfile::tempdir().expect("temp dir");
     let source = temp.path().join("dependency.rs");
     fs::write(
@@ -345,18 +345,15 @@ impl Probe {
         .unwrap_or_else(|error| panic!("failed to read {}: {error}", cache_path.display()));
     let cache: serde_json::Value =
         serde_json::from_str(&serialized).expect("cache should contain JSON");
-    assert_eq!(cache["format-version"], 15);
+    assert_eq!(cache["format-version"], 16);
     assert_eq!(cache["artifact"]["crate-name"], "artifact_ir_dependency");
     assert!(cache["artifact"]["id"]["stable-crate-id"].is_u64());
     assert_eq!(
-        cache["artifact"]["id"]["svh"]
-            .as_str()
-            .expect("SVH should be a string")
-            .len(),
-        32
+        cache["artifact"]["id"]["svh"].as_str().map(str::len),
+        Some(32)
     );
 
-    let functions = cache["ir"]["functions"]
+    let functions = cache["legacy-ir"]["functions"]
         .as_array()
         .expect("artifact IR functions should be an array");
     let display_paths = functions
@@ -391,6 +388,7 @@ impl Probe {
         }),
         "artifact IR omitted the private helper's raw compiler-assert effect"
     );
+    assert_fact_table_has_rows(&cache, "sniff-test.panic.mir-assert");
 
     assert_json_keys_absent(
         &cache,
@@ -408,7 +406,7 @@ impl Probe {
 }
 
 #[test]
-fn workspace_lint_policy_reinterprets_unchanged_dependency_v15_ir() {
+fn workspace_lint_policy_reinterprets_unchanged_dependency_v16_facts() {
     let temp = tempfile::tempdir().expect("temp dir");
     let fixture = PolicyReinterpretationFixture::new(temp.path());
     let dependency_output = run_dependency_unit(
@@ -427,7 +425,7 @@ fn workspace_lint_policy_reinterprets_unchanged_dependency_v15_ir() {
         .unwrap_or_else(|error| panic!("failed to read {}: {error}", dependency_cache.display()));
     let initial_document: serde_json::Value =
         serde_json::from_slice(&initial_bytes).expect("dependency cache should contain JSON");
-    assert_eq!(initial_document["format-version"], 15);
+    assert_eq!(initial_document["format-version"], 16);
     assert!(initial_document.get("analysis-id").is_none());
     let cache_modified_before = fs::metadata(&dependency_cache)
         .and_then(|metadata| metadata.modified())
@@ -736,7 +734,7 @@ fn stale_source_marker_ir_is_rejected_even_when_rustc_identity_is_unchanged() {
         serde_json::from_slice(&fs::read(&stale_cache).expect("read stale cache"))
             .expect("stale cache should contain JSON");
     assert!(
-        stale_document["ir"]["functions"]
+        stale_document["legacy-ir"]["functions"]
             .as_array()
             .is_some_and(|functions| functions.iter().any(|function| {
                 function["markers"]
@@ -770,7 +768,7 @@ fn stale_source_marker_ir_is_rejected_even_when_rustc_identity_is_unchanged() {
         serde_json::from_slice(&fs::read(&fresh_cache).expect("read fresh cache"))
             .expect("fresh cache should contain JSON");
     assert!(
-        fresh_document["ir"]["functions"]
+        fresh_document["legacy-ir"]["functions"]
             .as_array()
             .is_some_and(|functions| functions
                 .iter()
@@ -854,7 +852,7 @@ fn fixed_name_dependency_cache_must_match_the_crate_rustc_actually_loaded() {
     assert_success(&analyzed_output, "analyzed dependency");
 
     // Replace the exact same output filename without running sniff-test, so
-    // the v15 cache deliberately contains only the previous rustc identity.
+    // the v16 cache deliberately contains only the previous rustc identity.
     fs::write(
         &dependency_source,
         "pub fn dependency_value() -> u8 { 2 }\n",
@@ -1973,4 +1971,18 @@ fn assert_json_keys_absent(value: &serde_json::Value, forbidden: &[&str]) {
         }
         _ => {}
     }
+}
+
+fn assert_fact_table_has_rows(cache: &serde_json::Value, schema: &str) {
+    assert!(
+        cache["facts"]["tables"]
+            .as_array()
+            .is_some_and(|tables| tables.iter().any(|table| {
+                table["schema"] == schema
+                    && table["rows"]
+                        .as_array()
+                        .is_some_and(|rows| !rows.is_empty())
+            })),
+        "typed artifact facts omitted rows for `{schema}`"
+    );
 }

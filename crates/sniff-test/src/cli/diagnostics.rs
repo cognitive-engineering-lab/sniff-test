@@ -54,10 +54,10 @@ fn decorate<G: EmissionGuarantee>(diagnostic: &mut Diag<'_, G>, messages: &[Diag
                 diagnostic.span_label(*span, label.clone());
             }
             DiagnosticMessage::SpanHelp(span, help) => {
-                diagnostic.span_help(*span, *help);
+                diagnostic.span_help(*span, help.clone());
             }
             DiagnosticMessage::Help(help) => {
-                diagnostic.help(*help);
+                diagnostic.help(help.clone());
             }
         }
     }
@@ -85,9 +85,9 @@ pub(super) fn empty_report_roots_diagnostic(
     FindingDiagnostic {
         span,
         message,
-        messages: vec![DiagnosticMessage::Help(
+        messages: vec![DiagnosticMessage::Help(String::from(
             "update `[analysis].report-roots` to include functions in the current crate",
-        )],
+        ))],
     }
 }
 
@@ -109,7 +109,9 @@ pub(super) fn missing_report_root_diagnostic(
         message,
         messages: vec![
             DiagnosticMessage::Note(String::from("configured under `[analysis].report-roots`")),
-            DiagnosticMessage::Help("remove it or update it to a function in the current crate"),
+            DiagnosticMessage::Help(String::from(
+                "remove it or update it to a function in the current crate",
+            )),
         ],
     }
 }

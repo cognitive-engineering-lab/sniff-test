@@ -23,8 +23,8 @@ use rustc_middle::ty::{
 use rustc_span::Span;
 
 use crate::graph::{
-    CallableEdgeInfo, CompilerAssertLocal, CompilerAssertLocalRole, ReachabilityEdgeKind,
-    ReachabilityNodeKind,
+    CallableEdgeInfo, CompilerAssertLocal, CompilerAssertLocalRole, MirBodyLocation,
+    ReachabilityEdgeKind, ReachabilityNodeKind,
 };
 
 pub(crate) fn collect_body_edges<'tcx>(
@@ -227,11 +227,17 @@ impl<'tcx> BodyEdgeCollector<'tcx> {
         }
     }
 
-    fn emit_assert(&mut self, message: Box<AssertMessage<'tcx>>, span: Span) {
+    fn emit_assert(
+        &mut self,
+        message: Box<AssertMessage<'tcx>>,
+        site: MirBodyLocation,
+        span: Span,
+    ) {
         self.emit_edge(
             ReachabilityNodeKind::CompilerAssert {
                 message,
                 locals: self.compiler_assert_locals(),
+                site,
             },
             ReachabilityEdgeKind::Assert,
             span,
@@ -567,7 +573,7 @@ impl<'tcx> rustc_middle::mir::visit::Visitor<'tcx> for BodyEdgeCollector<'tcx> {
                 self.callee_span = None;
             }
             TerminatorKind::Assert { msg, .. } => {
-                self.emit_assert(msg.clone(), terminator.source_info.span);
+                self.emit_assert(msg.clone(), location.into(), terminator.source_info.span);
             }
             _ => {}
         }

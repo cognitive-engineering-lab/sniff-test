@@ -6,20 +6,56 @@
 //! interpreter derives configured call-site edges only within each selected
 //! root's reachable graph.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::fmt;
 
 use reachability::{
-    ArtifactScope, CallableEdgeInfo, DynDispatchVTableEdges, FnPointerEdges, NoopReachabilityHooks,
-    ReachabilityEdge, ReachabilityEdgeKind, ReachabilityGraph, ReachabilityHalt, ReachabilityIndex,
-    ReachabilityNodeExpansion, ReachabilityNodeKind, ReachabilityOptions, ReachabilityRoot,
-    ReachedEdge,
+    ArtifactScope, CallableEdgeInfo, DynDispatchVTableEdges, FnPointerEdges, MirBodyLocation,
+    NoopReachabilityHooks, ReachabilityEdge, ReachabilityEdgeKind, ReachabilityGraph,
+    ReachabilityHalt, ReachabilityIndex, ReachabilityNodeExpansion, ReachabilityNodeKind,
+    ReachabilityOptions, ReachabilityRoot, ReachedEdge,
 };
 use rustc_hir::def::DefKind;
 use rustc_hir::def_id::{DefId, LOCAL_CRATE, LocalDefId};
+use rustc_middle::mir::{AssertKind, BinOp};
 use rustc_middle::ty::{AssocContainer, GenericArgs, Instance, InstanceKind, TyCtxt, TyKind};
-use rustc_span::{Pos, Span};
+use rustc_span::{ExpnId, ExpnKind, Pos, Span};
 
+use super::collected::{
+    CollectedArtifact, CollectedArtifactInput, CollectedCallMacroFrame, CollectedCallOccurrence,
+    CollectedCallSite, CollectedCallSourceAnchor, CollectedCallTarget, CollectedEffectMacroFrame,
+    CollectedEffectMarkerCandidate, CollectedEffectSite, CollectedEffectSourceAnchor,
+    CollectedFunctionBody, CollectedMarkerCallCandidate, CollectedMarkerOccurrence,
+    CollectedMirAssert, CollectedPanicContract, CollectedProgram, CollectedSafetyContract,
+    CollectedUnsafeOperation, CollectedUnsafeOperationMacroFrame,
+    CollectedUnsafeOperationMarkerCandidate, CollectedUnsafeOperationSourceAnchor,
+};
+use super::facts::collection::collect_artifact_facts;
+use super::facts::encoded::ArtifactFactIr;
+use super::facts::evaluation::DomainId;
+use super::facts::human::EvidenceClaimSelector;
+use super::facts::human::markers::{
+    CallOccurrenceHasMarkerClaimCandidate, EffectSiteHasMarkerClaimCandidate, MarkerClaimEntity,
+    MarkerClaimKey, MarkerOccurrenceEntity, MarkerOccurrenceKey,
+    UnsafeOperationHasMarkerClaimCandidate,
+};
+use super::facts::panic::contracts::PanicRequirement;
+use super::facts::panic::model::{BinaryOverflowOperation, MirAssertKind};
+use super::facts::program::topology::{
+    CallAttributionRole, CallKind, CallMacroExpansionEntity, CallMacroExpansionKey,
+    CallOccurrenceEntity, CallOccurrenceKey, CallSiteEntity, CallSiteKey, CallSourceAnchorRole,
+    CallTargetRole, CallableEntity, CallableKey, SafetyEffectGroupEntity, SafetyEffectGroupKey,
+};
+use super::facts::program::{
+    EffectSiteEntity, EffectSiteKey, EffectSourceAnchorRole, FunctionBodyProvenance,
+    FunctionEntity, FunctionKey, MacroExpansionEntity, MacroExpansionKey, SourceAnchorEntity,
+    SourceAnchorKey, SourceFileEntity,
+};
+use super::facts::safety::SafetyRequirement;
+use super::facts::safety::operations::{
+    UnsafeOperationEntity, UnsafeOperationKey, UnsafeOperationMacroExpansionEntity,
+    UnsafeOperationMacroExpansionKey, UnsafeOperationSourceAnchorRole,
+};
 use super::ir::{
     ArtifactAnalysisIr, CallEdgeIr, CallEdgeKindIr, CallId, CallSiteId, CallTargetIr,
     CallableAttributionIr, CallableKeyIr, ContractRequirementIr, EffectFactIr, EffectId,
@@ -35,15 +71,15 @@ use crate::contracts::{
     ContractDocSummary, panic_contract_doc_summary_from_attrs,
     safety_contract_doc_summary_from_attrs,
 };
-use crate::namespace::{canonical_namespace, namespace_candidates};
+use crate::namespace::{StableExpansionHash, canonical_namespace, namespace_candidates};
 use crate::panics::CompilerAssertKind;
 use crate::safety::{
     RawSafetyFacts, RawSafetyOpFact, call_identity_def_id, collect_raw_safety_facts,
     fn_def_is_unsafe,
 };
 use crate::source_markers::{
-    EffectMarkerBlock, panic_effect_edge_marker_block, safety_effect_edge_marker_block,
-    safety_span_marker_block,
+    EffectMarkerBlock, MarkerOrigin, panic_effect_edge_marker_block,
+    safety_effect_edge_marker_block, safety_span_marker_block,
 };
 
 /// Failure to produce complete, structurally valid IR for a required body.
@@ -68,25 +104,116 @@ impl fmt::Display for ExtractError {
 
 impl std::error::Error for ExtractError {}
 
-/// Extracts every analyzable local function and associated-function body.
+/// Atomic result of one policy-neutral compiler extraction.
 ///
-/// Reachable local closure, coroutine, and const bodies are retained as exact
-/// instance bodies so facts owned by those nested bodies do not disappear.
-/// No report-root or lint configuration participates in extraction.
-pub(crate) fn extract_artifact_ir(tcx: TyCtxt<'_>) -> Result<ArtifactAnalysisIr, ExtractError> {
+/// Both halves are structurally validated before this value is returned.
+pub(crate) struct ExtractedArtifactBundle {
+    pub(crate) legacy_ir: ArtifactAnalysisIr,
+    pub(crate) facts: ArtifactFactIr,
+}
+
+/// Extracts and validates legacy and typed policy-neutral facts atomically.
+///
+/// Failure to collect or finalize typed facts fails the production extraction
+/// rather than silently returning only the legacy half of the artifact.
+pub(crate) fn extract_artifact_bundle(
+    tcx: TyCtxt<'_>,
+) -> Result<ExtractedArtifactBundle, ExtractError> {
+    let parts = extract_artifact_parts(tcx)?;
+    let facts = collect_artifact_facts(&parts.collected).map_err(|error| {
+        ExtractError::new(format!(
+            "failed to collect permanent typed artifact facts: {error}"
+        ))
+    })?;
+    Ok(ExtractedArtifactBundle {
+        legacy_ir: parts.legacy,
+        facts,
+    })
+}
+
+struct ExtractedArtifactParts {
+    collected: CollectedArtifact,
+    legacy: ArtifactAnalysisIr,
+}
+
+#[derive(Clone)]
+struct PendingTypedMirAssert {
+    function: FunctionId,
+    location: MirBodyLocation,
+    legacy_effect_key: String,
+    kind: MirAssertKind,
+    presentation_anchor: Option<SourceAnchorKey>,
+    expanded_anchor: Option<SourceAnchorKey>,
+    macro_expansions: Vec<ExtractedMacroExpansionFrame>,
+}
+
+/// Compiler-owned identity and presentation data for one real macro frame.
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct ExtractedMacroExpansionFrame {
+    expansion_hash: StableExpansionHash,
+    macro_definition: StableDefPathHash,
+    display_path: String,
+    source_range: Option<SourceRangeIr>,
+}
+
+impl ExtractedMacroExpansionFrame {
+    fn new(
+        expansion_hash: StableExpansionHash,
+        macro_definition: StableDefPathHash,
+        display_path: impl Into<String>,
+        source_range: Option<SourceRangeIr>,
+    ) -> Self {
+        Self {
+            expansion_hash,
+            macro_definition,
+            display_path: display_path.into(),
+            source_range,
+        }
+    }
+
+    const fn expansion_hash(&self) -> StableExpansionHash {
+        self.expansion_hash
+    }
+
+    const fn macro_definition(&self) -> StableDefPathHash {
+        self.macro_definition
+    }
+
+    fn display_path(&self) -> &str {
+        &self.display_path
+    }
+
+    const fn source_range(&self) -> Option<&SourceRangeIr> {
+        self.source_range.as_ref()
+    }
+}
+
+#[derive(Clone)]
+struct PendingTypedUnsafeOperation {
+    operation: UnsafeOperationEntity,
+    safety_effect_group: SafetyEffectGroupKey,
+    presentation_anchor: Option<SourceAnchorKey>,
+    expanded_anchor: Option<SourceAnchorKey>,
+    macro_expansions: Vec<ExtractedMacroExpansionFrame>,
+}
+
+fn extract_artifact_parts(tcx: TyCtxt<'_>) -> Result<ExtractedArtifactParts, ExtractError> {
     let required_owners = analyzable_local_fn_defs(tcx).collect::<Vec<_>>();
     ensure_required_thir_is_available(tcx, &required_owners)?;
 
-    let mut sources = SourceTable::default();
+    let mut sources = ExtractionSources::default();
     let mut bodies = BTreeMap::<FunctionId, PendingBody>::new();
     let raw_safety_facts = collect_raw_safety_facts(tcx);
     let mut safety_groups = RawSafetyGroupResolver::new(&raw_safety_facts);
+    let mut pending_typed_assertions = Vec::new();
+    let mut pending_typed_unsafe_operations = Vec::new();
+    let mut next_typed_unsafe_operation = BTreeMap::new();
 
     for owner in &required_owners {
         let function = FunctionId::generic(StableDefPathHash::from_def_id(tcx, owner.to_def_id()));
         ensure_body(
             tcx,
-            &mut sources,
+            &mut sources.legacy,
             &mut bodies,
             function,
             owner.to_def_id(),
@@ -101,16 +228,37 @@ pub(crate) fn extract_artifact_ir(tcx: TyCtxt<'_>) -> Result<ArtifactAnalysisIr,
         &mut sources,
         &mut bodies,
         &mut safety_groups,
+        &mut pending_typed_assertions,
     )?;
 
-    attach_raw_unsafe_operations(tcx, raw_safety_facts.operations, &mut sources, &mut bodies)?;
+    attach_raw_unsafe_operations(
+        tcx,
+        raw_safety_facts.operations,
+        &mut sources,
+        &mut bodies,
+        &mut pending_typed_unsafe_operations,
+        &mut next_typed_unsafe_operation,
+    )?;
 
-    let functions = bodies
+    let collected = build_collected_artifact(
+        &sources,
+        &bodies,
+        &pending_typed_assertions,
+        pending_typed_unsafe_operations,
+    )?;
+
+    let finished_bodies = bodies
         .into_values()
+        .filter(|body| body.projects_to_legacy)
         .map(PendingBody::finish)
         .collect::<Result<Vec<_>, _>>()?;
-    ArtifactAnalysisIr::new(functions, sources.into_files())
-        .map_err(|error| ExtractError::new(format!("extracted artifact IR is invalid: {error}")))
+    let mut functions = Vec::with_capacity(finished_bodies.len());
+    for finished in finished_bodies {
+        functions.push(finished.body);
+    }
+    let legacy = ArtifactAnalysisIr::new(functions, sources.legacy.into_files())
+        .map_err(|error| ExtractError::new(format!("extracted artifact IR is invalid: {error}")))?;
+    Ok(ExtractedArtifactParts { collected, legacy })
 }
 
 fn analyzable_local_fn_defs(tcx: TyCtxt<'_>) -> impl Iterator<Item = LocalDefId> + '_ {
@@ -178,9 +326,10 @@ fn collect_reachability_mode(
     tcx: TyCtxt<'_>,
     roots: &[LocalDefId],
     options: ReachabilityOptions,
-    sources: &mut SourceTable,
+    sources: &mut ExtractionSources,
     bodies: &mut BTreeMap<FunctionId, PendingBody>,
     safety_groups: &mut RawSafetyGroupResolver,
+    typed_assertions: &mut Vec<PendingTypedMirAssert>,
 ) -> Result<(), ExtractError> {
     let mut reachability = ReachabilityIndex::new(tcx);
     let hooks = NoopReachabilityHooks;
@@ -216,7 +365,7 @@ fn collect_reachability_mode(
         let def_id = instance.def_id();
         ensure_body(
             tcx,
-            sources,
+            &mut sources.legacy,
             bodies,
             function,
             def_id,
@@ -228,7 +377,15 @@ fn collect_reachability_mode(
         if reached.kind() == ReachabilityEdgeKind::MacroExpansion {
             continue;
         }
-        collect_edge(tcx, view.graph(), reached, sources, bodies, safety_groups)?;
+        collect_edge(
+            tcx,
+            view.graph(),
+            reached,
+            sources,
+            bodies,
+            safety_groups,
+            typed_assertions,
+        )?;
     }
     Ok(())
 }
@@ -259,43 +416,94 @@ fn body_provenance(tcx: TyCtxt<'_>, def_id: DefId) -> FunctionBodyProvenanceIr {
     }
 }
 
+fn edge_origin<'tcx>(
+    graph: &ReachabilityGraph<'tcx>,
+    edge: &ReachabilityEdge,
+) -> Result<Instance<'tcx>, ExtractError> {
+    graph
+        .node_instance(edge.origin)
+        .ok_or_else(|| ExtractError::new("reachability edge has no function-instance origin"))
+}
+
 fn collect_edge<'tcx>(
     tcx: TyCtxt<'tcx>,
     graph: &ReachabilityGraph<'tcx>,
     reached: ReachedEdge<'_, 'tcx>,
-    sources: &mut SourceTable,
+    sources: &mut ExtractionSources,
     bodies: &mut BTreeMap<FunctionId, PendingBody>,
     safety_groups: &mut RawSafetyGroupResolver,
+    typed_assertions: &mut Vec<PendingTypedMirAssert>,
 ) -> Result<(), ExtractError> {
     let edge = reached.edge();
-    let Some(origin) = graph.node_instance(edge.origin) else {
-        return Err(ExtractError::new(
-            "reachability edge has no function-instance origin",
-        ));
-    };
+    let origin = edge_origin(graph, edge)?;
     let origin_def_id = origin.def_id();
     let body_id = body_id_for_instance(tcx, origin);
     ensure_body(
         tcx,
-        sources,
+        &mut sources.legacy,
         bodies,
         body_id,
         origin_def_id,
         body_provenance(tcx, origin_def_id),
     )?;
+    let (key, provenance, pending_call) =
+        pending_call_for_edge(tcx, graph, reached, origin, sources, safety_groups)?;
+    let body = bodies
+        .get_mut(&body_id)
+        .expect("origin body was inserted before edge collection");
+    let call_index = insert_or_merge_call(body, pending_call)?;
+    let panic_requirements = body.calls[call_index].panic_requirements.clone();
+    let safety_requirements = body.calls[call_index].safety_requirements.clone();
 
-    let expanded_range = sources.range(tcx, edge.span)?;
-    let macro_expansions = edge_macro_expansions(tcx, reached, sources)?;
-    let source_range = sources
-        .range(tcx, edge.span.source_callsite())?
-        .or_else(|| expanded_range.clone());
+    let effect_key = collect_compiler_assert_effect(
+        graph,
+        edge,
+        body,
+        &key,
+        provenance.source_range.as_ref(),
+        provenance.expanded_range.as_ref(),
+        &provenance.macro_expansions,
+    );
+    if let Some(effect_key) = effect_key.as_deref() {
+        capture_typed_compiler_assert(
+            graph,
+            edge,
+            body_id,
+            effect_key,
+            &provenance,
+            typed_assertions,
+        );
+    }
+
+    collect_edge_markers(
+        tcx,
+        graph,
+        edge,
+        &mut sources.legacy,
+        body,
+        &key,
+        effect_key.as_deref(),
+        &panic_requirements,
+        &safety_requirements,
+    )
+}
+
+fn pending_call_for_edge<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    graph: &ReachabilityGraph<'tcx>,
+    reached: ReachedEdge<'_, 'tcx>,
+    origin: Instance<'tcx>,
+    sources: &mut ExtractionSources,
+    safety_groups: &mut RawSafetyGroupResolver,
+) -> Result<(String, EdgeSourceProvenance, PendingCall), ExtractError> {
+    let edge = reached.edge();
+    let provenance = edge_source_provenance(tcx, reached, &mut sources.legacy, &mut sources.typed)?;
     let callee_range = edge
         .callee_span
-        .map(|span| sources.range(tcx, span))
+        .map(|span| sources.legacy.range(tcx, span))
         .transpose()?
         .flatten();
-    let target = call_target(tcx, graph, edge, sources)?;
-    let requires_unsafe = edge_requires_unsafe(tcx, graph, reached, &target);
+    let target = call_target(tcx, graph, edge, &mut sources.legacy)?;
     let groups = if is_reachability_call(edge.kind) {
         safety_groups.group_for_call(
             origin.def_id(),
@@ -306,70 +514,182 @@ fn collect_edge<'tcx>(
         safety_groups.group_for_structural_edge(origin.def_id(), edge.span)
     }
     .map_err(|error| edge_grouping_error(tcx, origin.def_id(), edge, &error))?;
-    let source_target = source_call_target(tcx, groups.source_callee, sources)?;
+    let source_target = source_call_target(tcx, groups.source_callee, &mut sources.legacy)?;
+    let signature_requires_unsafe =
+        target_function(&target).is_some_and(|target| target.attributes.is_unsafe);
+    let callable_declarations = pending_callable_declarations(&target, source_target.as_ref())?;
+    let panic_requirements = panic_requirements(source_target.as_ref(), &target);
+    let safety_requirements = safety_requirements(source_target.as_ref(), &target);
     let key = edge_key(
         tcx,
         graph,
         edge,
-        expanded_range.as_ref(),
+        provenance.expanded_range.as_ref(),
         callee_range.as_ref(),
         &target,
     );
-
-    let body = bodies
-        .get_mut(&body_id)
-        .expect("origin body was inserted before edge collection");
-    let call_index = insert_or_merge_call(
-        body,
-        key.clone(),
-        CallEdgeIr {
-            id: CallId::new(0),
-            call_site: groups.call_site,
-            kind: call_edge_kind(edge.kind),
-            safety_effect_group: Some(groups.safety_effect_group),
-            requires_unsafe,
-            inside_builtin_unsafe: groups.inside_builtin_unsafe,
-            source_range: source_range.clone(),
-            expanded_range: expanded_range.clone(),
-            macro_expansions: macro_expansions.clone(),
-            callee_range,
-            applicable_attribution: callable_attribution_for_edge(edge.kind),
-            callable_keys: callable_keys(tcx, graph, reached),
+    let kind = call_edge_kind(edge.kind);
+    let presentation_anchor = provenance
+        .source_range
+        .as_ref()
+        .map(SourceTable::anchor_from_range);
+    let expanded_anchor = provenance
+        .expanded_range
+        .as_ref()
+        .map(SourceTable::anchor_from_range);
+    let callee_anchor = callee_range.as_ref().map(SourceTable::anchor_from_range);
+    let applicable_attribution = callable_attribution_for_edge(edge.kind);
+    let callable_keys = callable_keys(tcx, graph, reached);
+    let targets = collected_call_targets(&target, source_target.as_ref());
+    let requires_unsafe = edge_requires_unsafe(tcx, graph, reached, signature_requires_unsafe);
+    let stable_sort_key = PendingCallSortKey {
+        kind,
+        presentation_anchor: presentation_anchor.clone(),
+        expanded_anchor: expanded_anchor.clone(),
+        callee_anchor: callee_anchor.clone(),
+        macro_expansions: provenance
+            .typed_macro_expansions
+            .iter()
+            .map(ExtractedMacroExpansionFrame::expansion_hash)
+            .collect(),
+        targets: targets
+            .iter()
+            .map(|target| (target.role(), *target.callable()))
+            .collect(),
+        compiler_assert_site: match &graph.node(edge.target).kind {
+            ReachabilityNodeKind::CompilerAssert { site, .. } => Some(*site),
+            ReachabilityNodeKind::Instance(_)
+            | ReachabilityNodeKind::IndirectCall { .. }
+            | ReachabilityNodeKind::DynObjectCast { .. }
+            | ReachabilityNodeKind::MacroExpansion { .. } => None,
+        },
+        call_site: groups.call_site.index(),
+        safety_effect_group: groups.safety_effect_group.index(),
+        requires_unsafe,
+        inside_builtin_unsafe: groups.inside_builtin_unsafe,
+    };
+    let pending = PendingCall {
+        key: key.clone(),
+        stable_sort_key,
+        call_site: groups.call_site.index(),
+        kind,
+        safety_effect_group: groups.safety_effect_group.index(),
+        requires_unsafe,
+        inside_builtin_unsafe: groups.inside_builtin_unsafe,
+        presentation_anchor,
+        expanded_anchor,
+        callee_anchor,
+        applicable_attribution,
+        callable_keys,
+        targets,
+        callable_declarations,
+        opaque_target_description: opaque_target_description(&target),
+        panic_requirements,
+        safety_requirements,
+        typed_macro_expansions: provenance.typed_macro_expansions.clone(),
+        legacy: PendingLegacyCallProjection {
+            macro_expansions: provenance.macro_expansions.clone(),
             source_target,
             target,
         },
-    )?;
-    let call_target = body.calls[call_index].call.target.clone();
-    let source_target = body.calls[call_index].call.source_target.clone();
+    };
+    Ok((key, provenance, pending))
+}
 
-    let effect_key = collect_compiler_assert_effect(
-        graph,
-        edge,
-        body,
-        &key,
-        source_range.as_ref(),
-        expanded_range.as_ref(),
-        &macro_expansions,
-    );
+struct EdgeSourceProvenance {
+    source_range: Option<SourceRangeIr>,
+    expanded_range: Option<SourceRangeIr>,
+    macro_expansions: Vec<MacroExpansionFrameIr>,
+    typed_macro_expansions: Vec<ExtractedMacroExpansionFrame>,
+}
 
-    collect_edge_markers(
-        tcx,
-        graph,
-        edge,
-        sources,
-        body,
-        &key,
-        effect_key.as_deref(),
-        source_target.as_ref(),
-        &call_target,
-    )
+fn edge_source_provenance(
+    tcx: TyCtxt<'_>,
+    reached: ReachedEdge<'_, '_>,
+    sources: &mut SourceTable,
+    typed_sources: &mut SourceTable,
+) -> Result<EdgeSourceProvenance, ExtractError> {
+    let edge = reached.edge();
+    let expanded = sources.range(tcx, edge.span)?;
+    let source = sources
+        .range(tcx, edge.span.source_callsite())?
+        .or_else(|| expanded.clone());
+    let expansions = edge_macro_expansions(tcx, reached, sources)?;
+    let typed_expansions = typed_macro_expansions(tcx, edge.span, typed_sources)?;
+    Ok(EdgeSourceProvenance {
+        source_range: source,
+        expanded_range: expanded,
+        macro_expansions: expansions,
+        typed_macro_expansions: typed_expansions,
+    })
+}
+
+fn capture_typed_compiler_assert(
+    graph: &ReachabilityGraph<'_>,
+    edge: &ReachabilityEdge,
+    function: FunctionId,
+    legacy_effect_key: &str,
+    provenance: &EdgeSourceProvenance,
+    assertions: &mut Vec<PendingTypedMirAssert>,
+) {
+    let ReachabilityNodeKind::CompilerAssert { message, site, .. } = &graph.node(edge.target).kind
+    else {
+        return;
+    };
+    let kind = classify_mir_assert(message.as_ref());
+    assertions.push(PendingTypedMirAssert {
+        function,
+        location: *site,
+        legacy_effect_key: legacy_effect_key.to_owned(),
+        kind,
+        presentation_anchor: provenance
+            .source_range
+            .as_ref()
+            .map(SourceTable::anchor_from_range),
+        expanded_anchor: provenance
+            .expanded_range
+            .as_ref()
+            .map(SourceTable::anchor_from_range),
+        macro_expansions: provenance.typed_macro_expansions.clone(),
+    });
+}
+
+fn classify_mir_assert<O>(assertion: &AssertKind<O>) -> MirAssertKind {
+    match assertion {
+        AssertKind::BoundsCheck { .. } => MirAssertKind::BoundsCheck,
+        AssertKind::Overflow(operation, ..) => classify_overflow_operation(*operation),
+        AssertKind::OverflowNeg(..) => MirAssertKind::OverflowNegation,
+        AssertKind::DivisionByZero(..) => MirAssertKind::DivisionByZero,
+        AssertKind::RemainderByZero(..) => MirAssertKind::RemainderByZero,
+        AssertKind::ResumedAfterReturn(..) => MirAssertKind::ResumedAfterReturn,
+        AssertKind::ResumedAfterPanic(..) => MirAssertKind::ResumedAfterPanic,
+        AssertKind::ResumedAfterDrop(..) => MirAssertKind::ResumedAfterDrop,
+        AssertKind::MisalignedPointerDereference { .. } => {
+            MirAssertKind::MisalignedPointerDereference
+        }
+        AssertKind::NullPointerDereference => MirAssertKind::NullPointerDereference,
+        AssertKind::InvalidEnumConstruction(..) => MirAssertKind::InvalidEnumConstruction,
+    }
+}
+
+const fn classify_overflow_operation(operation: BinOp) -> MirAssertKind {
+    match operation {
+        BinOp::Add => MirAssertKind::Overflow(BinaryOverflowOperation::Addition),
+        BinOp::Sub => MirAssertKind::Overflow(BinaryOverflowOperation::Subtraction),
+        BinOp::Mul => MirAssertKind::Overflow(BinaryOverflowOperation::Multiplication),
+        BinOp::Div => MirAssertKind::Overflow(BinaryOverflowOperation::Division),
+        BinOp::Rem => MirAssertKind::Overflow(BinaryOverflowOperation::Remainder),
+        BinOp::Shl => MirAssertKind::Overflow(BinaryOverflowOperation::LeftShift),
+        BinOp::Shr => MirAssertKind::Overflow(BinaryOverflowOperation::RightShift),
+        _ => MirAssertKind::OpaqueOverflow,
+    }
 }
 
 fn source_call_target(
     tcx: TyCtxt<'_>,
     source_callee: Option<DefId>,
     sources: &mut SourceTable,
-) -> Result<Option<FunctionTargetIr>, ExtractError> {
+) -> Result<Option<PendingFunctionTarget>, ExtractError> {
     source_callee
         .map(|def_id| function_target_for_def(tcx, def_id, sources))
         .transpose()
@@ -402,25 +722,35 @@ fn is_reachability_call(kind: ReachabilityEdgeKind) -> bool {
 
 fn insert_or_merge_call(
     body: &mut PendingBody,
-    key: String,
-    mut call: CallEdgeIr,
+    mut call: PendingCall,
 ) -> Result<usize, ExtractError> {
-    let Some(index) = body.calls.iter().position(|pending| pending.key == key) else {
-        body.calls.push(PendingCall { key, call });
+    let Some(index) = body
+        .calls
+        .iter()
+        .position(|pending| pending.key == call.key)
+    else {
+        body.calls.push(call);
         return Ok(body.calls.len() - 1);
     };
-    let existing = &mut body.calls[index].call;
-    if existing.safety_effect_group != call.safety_effect_group
+    let existing = &mut body.calls[index];
+    if existing.stable_sort_key != call.stable_sort_key
         || existing.call_site != call.call_site
-        || existing.source_range != call.source_range
-        || existing.expanded_range != call.expanded_range
-        || existing.macro_expansions != call.macro_expansions
+        || existing.safety_effect_group != call.safety_effect_group
+        || existing.presentation_anchor != call.presentation_anchor
+        || existing.expanded_anchor != call.expanded_anchor
+        || existing.callee_anchor != call.callee_anchor
+        || existing.typed_macro_expansions != call.typed_macro_expansions
+        || existing.legacy.macro_expansions != call.legacy.macro_expansions
         || existing.requires_unsafe != call.requires_unsafe
         || existing.inside_builtin_unsafe != call.inside_builtin_unsafe
-        || existing.callee_range != call.callee_range
         || existing.kind != call.kind
-        || existing.source_target != call.source_target
-        || existing.target != call.target
+        || existing.targets != call.targets
+        || existing.callable_declarations != call.callable_declarations
+        || existing.opaque_target_description != call.opaque_target_description
+        || existing.panic_requirements != call.panic_requirements
+        || existing.safety_requirements != call.safety_requirements
+        || existing.legacy.source_target != call.legacy.source_target
+        || existing.legacy.target != call.legacy.target
     {
         return Err(ExtractError::new(
             "one call edge resolved to inconsistent raw call facts",
@@ -523,6 +853,68 @@ fn span_macro_expansions(
         .collect()
 }
 
+/// Returns real macro marks in rustc's outer-to-inner syntax-context order.
+///
+/// Compiler desugarings and AST passes are deliberately absent. Every retained
+/// frame carries rustc's stable expansion hash, so downstream typed rows never
+/// infer invocation identity from a span, display string, or session-local id.
+/// In particular, equal definition/call-site pairs are not deduplicated:
+/// rustc's expansion disambiguator is the identity of repeated invocations.
+fn typed_macro_expansions(
+    tcx: TyCtxt<'_>,
+    span: Span,
+    sources: &mut SourceTable,
+) -> Result<Vec<ExtractedMacroExpansionFrame>, ExtractError> {
+    real_macro_expansion_chain(span)
+        .into_iter()
+        .map(|expansion| (expansion, expansion.expn_data()))
+        .map(|(expansion, data)| {
+            let macro_definition = data.macro_def_id.ok_or_else(|| {
+                ExtractError::new(format!(
+                    "real macro expansion {} has no macro definition identity",
+                    StableExpansionHash::from_expn_id(expansion)
+                ))
+            })?;
+            Ok(ExtractedMacroExpansionFrame::new(
+                StableExpansionHash::from_expn_id(expansion),
+                StableDefPathHash::from_def_id(tcx, macro_definition),
+                canonical_namespace(tcx, macro_definition),
+                sources.range(tcx, data.call_site)?,
+            ))
+        })
+        .collect()
+}
+
+/// Returns every real macro ancestor of the innermost syntax-context mark.
+///
+/// `SyntaxContext::marks` can omit an outer expansion when the inner macro was
+/// invoked by tokens produced in that outer macro. The expansion-parent chain
+/// remains authoritative for that nesting and is also the identity used by
+/// marker occurrences, so use the same chain for endpoint topology.
+fn real_macro_expansion_chain(span: Span) -> Vec<ExpnId> {
+    let Some(mut expansion) = span
+        .ctxt()
+        .marks()
+        .into_iter()
+        .rev()
+        .find_map(|(expansion, _)| {
+            matches!(expansion.expn_data().kind, ExpnKind::Macro(..)).then_some(expansion)
+        })
+    else {
+        return Vec::new();
+    };
+    let mut path = Vec::new();
+    while expansion != ExpnId::root() {
+        let data = expansion.expn_data();
+        if matches!(data.kind, ExpnKind::Macro(..)) {
+            path.push(expansion);
+        }
+        expansion = data.parent;
+    }
+    path.reverse();
+    path
+}
+
 #[allow(clippy::too_many_arguments)]
 fn collect_edge_markers(
     tcx: TyCtxt<'_>,
@@ -532,8 +924,8 @@ fn collect_edge_markers(
     body: &mut PendingBody,
     call_key: &str,
     effect_key: Option<&str>,
-    source_target: Option<&FunctionTargetIr>,
-    call_target: &CallTargetIr,
+    panic_requirements: &[ContractRequirementIr],
+    safety_requirements: &[ContractRequirementIr],
 ) -> Result<(), ExtractError> {
     for (probing, applicable_probing) in probing_modes() {
         if let Some(marker) = panic_effect_edge_marker_block(tcx, graph, edge, probing) {
@@ -545,7 +937,7 @@ fn collect_edge_markers(
             } else {
                 (
                     PendingMarkerTarget::Call(call_key.to_owned()),
-                    panic_requirements(source_target, call_target),
+                    panic_requirements.to_vec(),
                 )
             };
             push_effect_marker(
@@ -553,7 +945,16 @@ fn collect_edge_markers(
                 sources,
                 body,
                 MarkerKindIr::PanicJustification,
-                target,
+                target.clone(),
+                Some(match target {
+                    PendingMarkerTarget::Call(key) => PendingTypedMarkerTarget::Call(key),
+                    PendingMarkerTarget::Effect(key) => PendingTypedMarkerTarget::Effect(key),
+                    PendingMarkerTarget::Function => {
+                        return Err(ExtractError::new(
+                            "effect marker unexpectedly targeted a function declaration",
+                        ));
+                    }
+                }),
                 marker,
                 applicable_probing,
                 requirements,
@@ -566,9 +967,10 @@ fn collect_edge_markers(
                 body,
                 MarkerKindIr::SafetyJustification,
                 PendingMarkerTarget::Call(call_key.to_owned()),
+                Some(PendingTypedMarkerTarget::Call(call_key.to_owned())),
                 marker,
                 applicable_probing,
-                safety_requirements(source_target, call_target),
+                safety_requirements.to_vec(),
             )?;
         }
     }
@@ -597,16 +999,8 @@ fn edge_requires_unsafe<'view, 'tcx>(
     tcx: TyCtxt<'tcx>,
     graph: &'view ReachabilityGraph<'tcx>,
     reached: ReachedEdge<'view, 'tcx>,
-    target: &CallTargetIr,
+    signature_requires_unsafe: bool,
 ) -> bool {
-    let signature_requires_unsafe = match target {
-        CallTargetIr::Function(target)
-        | CallTargetIr::OpaqueBoundary {
-            target: Some(OpaqueTargetIr::Trait(target) | OpaqueTargetIr::Function(target)),
-            ..
-        } => target.attributes.is_unsafe,
-        CallTargetIr::OpaqueBoundary { target: None, .. } => false,
-    };
     let caller = reached.origin().instance();
     let target_requires_unsafe = if edge_uses_target_unsafe_requirement(reached.kind()) {
         reached
@@ -749,26 +1143,37 @@ fn edge_key<'tcx>(
     edge: &ReachabilityEdge,
     expanded_range: Option<&SourceRangeIr>,
     callee_range: Option<&SourceRangeIr>,
-    target: &CallTargetIr,
+    target: &PendingCallTarget,
 ) -> String {
     let origin = graph
         .node_instance(edge.origin)
         .map(|instance| StableInstanceHash::from_instance(tcx, instance).to_string())
         .unwrap_or_default();
-    format!(
+    let structural = format!(
         "{origin}|{:?}|{expanded_range:?}|{callee_range:?}|{target:?}|{:?}",
         edge.kind,
         edge.span.ctxt()
+    );
+    let ReachabilityNodeKind::CompilerAssert { site, .. } = &graph.node(edge.target).kind else {
+        return structural;
+    };
+    // MIR can contain distinct assertions with identical kind, span, target,
+    // and hygiene. Coordinates intentionally participate in the legacy
+    // pending-call/effect identity so those assertions cannot coalesce before
+    // each typed site is linked to its finalized legacy effect.
+    format!(
+        "{structural}|mir-site:{}:{}",
+        site.basic_block, site.statement_index
     )
 }
 
-fn callable_attribution_for_edge(kind: ReachabilityEdgeKind) -> Vec<CallableAttributionIr> {
+fn callable_attribution_for_edge(kind: ReachabilityEdgeKind) -> Vec<CallAttributionRole> {
     match kind {
         ReachabilityEdgeKind::FnPointerReify
         | ReachabilityEdgeKind::ClosureFnPointerReify
-        | ReachabilityEdgeKind::VTableEntry => vec![CallableAttributionIr::ErasureSites],
+        | ReachabilityEdgeKind::VTableEntry => vec![CallAttributionRole::ErasureSite],
         ReachabilityEdgeKind::FnPointerCallTarget
-        | ReachabilityEdgeKind::DynDispatchVTableEntry => vec![CallableAttributionIr::CallSites],
+        | ReachabilityEdgeKind::DynDispatchVTableEntry => vec![CallAttributionRole::CallSite],
         ReachabilityEdgeKind::DirectCall
         | ReachabilityEdgeKind::TailCall
         | ReachabilityEdgeKind::DynObjectCast
@@ -777,8 +1182,8 @@ fn callable_attribution_for_edge(kind: ReachabilityEdgeKind) -> Vec<CallableAttr
         | ReachabilityEdgeKind::CoroutineBody
         | ReachabilityEdgeKind::Assert
         | ReachabilityEdgeKind::IndirectCall => vec![
-            CallableAttributionIr::ErasureSites,
-            CallableAttributionIr::CallSites,
+            CallAttributionRole::ErasureSite,
+            CallAttributionRole::CallSite,
         ],
     }
 }
@@ -787,10 +1192,10 @@ fn callable_keys<'view, 'tcx>(
     tcx: TyCtxt<'tcx>,
     graph: &'view ReachabilityGraph<'tcx>,
     reached: ReachedEdge<'view, 'tcx>,
-) -> Vec<CallableKeyIr> {
+) -> Vec<CallableKey> {
     match graph.edge_callable(reached.id()) {
         Some(CallableEdgeInfo::FnPointer { fn_ptr_ty }) => {
-            vec![CallableKeyIr::FnPointer(StableTypeHash::from_ty(
+            vec![CallableKey::FnPointer(StableTypeHash::from_ty(
                 tcx, fn_ptr_ty,
             ))]
         }
@@ -799,32 +1204,32 @@ fn callable_keys<'view, 'tcx>(
         {
             rustc_middle::ty::elaborate::supertrait_def_ids(tcx, trait_def_id)
                 .map(|trait_def_id| {
-                    CallableKeyIr::DynDispatch(StableDefPathHash::from_def_id(tcx, trait_def_id))
+                    CallableKey::DynDispatch(StableDefPathHash::from_def_id(tcx, trait_def_id))
                 })
                 .collect()
         }
-        Some(CallableEdgeInfo::DynDispatch { trait_def_id }) => vec![CallableKeyIr::DynDispatch(
+        Some(CallableEdgeInfo::DynDispatch { trait_def_id }) => vec![CallableKey::DynDispatch(
             StableDefPathHash::from_def_id(tcx, trait_def_id),
         )],
         None => Vec::new(),
     }
 }
 
-fn call_edge_kind(kind: ReachabilityEdgeKind) -> CallEdgeKindIr {
+fn call_edge_kind(kind: ReachabilityEdgeKind) -> CallKind {
     match kind {
-        ReachabilityEdgeKind::DirectCall => CallEdgeKindIr::DirectCall,
-        ReachabilityEdgeKind::TailCall => CallEdgeKindIr::TailCall,
-        ReachabilityEdgeKind::FnPointerReify => CallEdgeKindIr::FnPointerReify,
-        ReachabilityEdgeKind::ClosureFnPointerReify => CallEdgeKindIr::ClosureFnPointerReify,
-        ReachabilityEdgeKind::FnPointerCallTarget => CallEdgeKindIr::FnPointerCallTarget,
-        ReachabilityEdgeKind::DynObjectCast => CallEdgeKindIr::DynObjectCast,
-        ReachabilityEdgeKind::VTableEntry => CallEdgeKindIr::VTableEntry,
-        ReachabilityEdgeKind::DynDispatchVTableEntry => CallEdgeKindIr::DynDispatchVTableEntry,
-        ReachabilityEdgeKind::MacroExpansion => CallEdgeKindIr::MacroExpansion,
-        ReachabilityEdgeKind::ConstBody => CallEdgeKindIr::ConstBody,
-        ReachabilityEdgeKind::CoroutineBody => CallEdgeKindIr::CoroutineBody,
-        ReachabilityEdgeKind::Assert => CallEdgeKindIr::Assert,
-        ReachabilityEdgeKind::IndirectCall => CallEdgeKindIr::IndirectCall,
+        ReachabilityEdgeKind::DirectCall => CallKind::DirectCall,
+        ReachabilityEdgeKind::TailCall => CallKind::TailCall,
+        ReachabilityEdgeKind::FnPointerReify => CallKind::FnPointerReify,
+        ReachabilityEdgeKind::ClosureFnPointerReify => CallKind::ClosureFnPointerReify,
+        ReachabilityEdgeKind::FnPointerCallTarget => CallKind::FnPointerCallTarget,
+        ReachabilityEdgeKind::DynObjectCast => CallKind::DynObjectCast,
+        ReachabilityEdgeKind::VTableEntry => CallKind::VTableEntry,
+        ReachabilityEdgeKind::DynDispatchVTableEntry => CallKind::DynDispatchVTableEntry,
+        ReachabilityEdgeKind::MacroExpansion => CallKind::MacroExpansion,
+        ReachabilityEdgeKind::ConstBody => CallKind::ConstBody,
+        ReachabilityEdgeKind::CoroutineBody => CallKind::CoroutineBody,
+        ReachabilityEdgeKind::Assert => CallKind::Assert,
+        ReachabilityEdgeKind::IndirectCall => CallKind::IndirectCall,
     }
 }
 
@@ -833,23 +1238,23 @@ fn call_target<'tcx>(
     graph: &ReachabilityGraph<'tcx>,
     edge: &ReachabilityEdge,
     sources: &mut SourceTable,
-) -> Result<CallTargetIr, ExtractError> {
+) -> Result<PendingCallTarget, ExtractError> {
     match &graph.node(edge.target).kind {
-        ReachabilityNodeKind::Instance(instance) => Ok(CallTargetIr::Function(
+        ReachabilityNodeKind::Instance(instance) => Ok(PendingCallTarget::Function(
             function_target_for_instance(tcx, *instance, sources)?,
         )),
-        ReachabilityNodeKind::CompilerAssert { message, locals } => {
-            Ok(CallTargetIr::OpaqueBoundary {
-                description: format!(
-                    "compiler assertion {}",
-                    compiler_assert_description(message, locals)
-                ),
-                target: None,
-            })
-        }
-        ReachabilityNodeKind::MacroExpansion { def_id } => Ok(CallTargetIr::OpaqueBoundary {
+        ReachabilityNodeKind::CompilerAssert {
+            message, locals, ..
+        } => Ok(PendingCallTarget::OpaqueBoundary {
+            description: format!(
+                "compiler assertion {}",
+                compiler_assert_description(message, locals)
+            ),
+            target: None,
+        }),
+        ReachabilityNodeKind::MacroExpansion { def_id } => Ok(PendingCallTarget::OpaqueBoundary {
             description: format!("macro expansion {}", canonical_namespace(tcx, *def_id)),
-            target: Some(OpaqueTargetIr::Function(function_target_for_def(
+            target: Some(PendingOpaqueTarget::Function(function_target_for_def(
                 tcx, *def_id, sources,
             )?)),
         }),
@@ -857,13 +1262,13 @@ fn call_target<'tcx>(
             let target = indirect_target_def_id(tcx, *callee_ty).map(|(def_id, is_trait)| {
                 function_target_for_def(tcx, def_id, sources).map(|target| {
                     if is_trait {
-                        OpaqueTargetIr::Trait(target)
+                        PendingOpaqueTarget::Trait(target)
                     } else {
-                        OpaqueTargetIr::Function(target)
+                        PendingOpaqueTarget::Function(target)
                     }
                 })
             });
-            Ok(CallTargetIr::OpaqueBoundary {
+            Ok(PendingCallTarget::OpaqueBoundary {
                 description: format!("indirect call {callee_ty:?}"),
                 target: target.transpose()?,
             })
@@ -876,17 +1281,123 @@ fn call_target<'tcx>(
                 TyKind::Dynamic(predicates, _) => predicates
                     .principal_def_id()
                     .map(|def_id| {
-                        function_target_for_def(tcx, def_id, sources).map(OpaqueTargetIr::Trait)
+                        function_target_for_def(tcx, def_id, sources)
+                            .map(PendingOpaqueTarget::Trait)
                     })
                     .transpose()?,
                 _ => None,
             };
-            Ok(CallTargetIr::OpaqueBoundary {
+            Ok(PendingCallTarget::OpaqueBoundary {
                 description: format!("dynamic object cast {source_ty:?} as {target_ty:?}"),
                 target,
             })
         }
     }
+}
+
+fn collected_call_targets(
+    target: &PendingCallTarget,
+    source_target: Option<&PendingFunctionTarget>,
+) -> Vec<CollectedCallTarget> {
+    let mut targets = match target {
+        PendingCallTarget::Function(target) => vec![CollectedCallTarget::new(
+            CallTargetRole::Runtime,
+            function_key(target.function),
+        )],
+        PendingCallTarget::OpaqueBoundary { target, .. } => target
+            .as_ref()
+            .map(|target| match target {
+                PendingOpaqueTarget::Trait(target) => CollectedCallTarget::new(
+                    CallTargetRole::OpaqueTrait,
+                    function_key(target.function),
+                ),
+                PendingOpaqueTarget::Function(target) => CollectedCallTarget::new(
+                    CallTargetRole::OpaqueFunction,
+                    function_key(target.function),
+                ),
+            })
+            .into_iter()
+            .collect(),
+    };
+    if let Some(source_target) = source_target {
+        targets.push(CollectedCallTarget::new(
+            CallTargetRole::SourceContract,
+            function_key(source_target.function),
+        ));
+    }
+    targets
+}
+
+fn target_function(target: &PendingCallTarget) -> Option<&PendingFunctionTarget> {
+    match target {
+        PendingCallTarget::Function(target)
+        | PendingCallTarget::OpaqueBoundary {
+            target: Some(PendingOpaqueTarget::Trait(target) | PendingOpaqueTarget::Function(target)),
+            ..
+        } => Some(target),
+        PendingCallTarget::OpaqueBoundary { target: None, .. } => None,
+    }
+}
+
+fn opaque_target_description(target: &PendingCallTarget) -> Option<String> {
+    match target {
+        PendingCallTarget::Function(_) => None,
+        PendingCallTarget::OpaqueBoundary { description, .. } => Some(description.clone()),
+    }
+}
+
+fn pending_callable_declarations(
+    target: &PendingCallTarget,
+    source_target: Option<&PendingFunctionTarget>,
+) -> Result<Vec<PendingCallableDeclaration>, ExtractError> {
+    let mut declarations = Vec::new();
+    if let Some(target) = target_function(target) {
+        declarations.extend(pending_function_declarations(target)?);
+    }
+    if let Some(source_target) = source_target {
+        declarations.extend(pending_function_declarations(source_target)?);
+    }
+    Ok(declarations)
+}
+
+fn pending_function_declarations(
+    target: &PendingFunctionTarget,
+) -> Result<Vec<PendingCallableDeclaration>, ExtractError> {
+    let runtime_key = function_key(target.function);
+    let defining_key = FunctionKey::new(runtime_key.definition(), None);
+    let callable = |key| {
+        CallableEntity::new(
+            key,
+            &target.display_path,
+            target.attributes.is_unsafe,
+            target.attributes.is_exported,
+            target.attributes.has_rust_body,
+            target.attributes.is_foreign,
+            target.attributes.namespace_candidates.clone(),
+        )
+    };
+    let mut declarations = Vec::new();
+    if runtime_key != defining_key {
+        declarations.push(PendingCallableDeclaration {
+            callable: callable(runtime_key),
+            panic_contract: None,
+            safety_contract: None,
+        });
+    }
+    let mut panic_contracts = BTreeMap::new();
+    let mut safety_contracts = BTreeMap::new();
+    register_collected_contracts(
+        defining_key,
+        &target.contracts,
+        &mut panic_contracts,
+        &mut safety_contracts,
+    )?;
+    declarations.push(PendingCallableDeclaration {
+        callable: callable(defining_key),
+        panic_contract: panic_contracts.remove(&defining_key),
+        safety_contract: safety_contracts.remove(&defining_key),
+    });
+    Ok(declarations)
 }
 
 fn indirect_target_def_id<'tcx>(
@@ -906,9 +1417,9 @@ fn function_target_for_instance<'tcx>(
     tcx: TyCtxt<'tcx>,
     instance: Instance<'tcx>,
     sources: &mut SourceTable,
-) -> Result<FunctionTargetIr, ExtractError> {
+) -> Result<PendingFunctionTarget, ExtractError> {
     let def_id = instance.def_id();
-    Ok(FunctionTargetIr {
+    Ok(PendingFunctionTarget {
         function: FunctionId::exact(
             StableDefPathHash::from_def_id(tcx, def_id),
             StableInstanceHash::from_instance(tcx, instance),
@@ -923,8 +1434,8 @@ fn function_target_for_def(
     tcx: TyCtxt<'_>,
     def_id: DefId,
     sources: &mut SourceTable,
-) -> Result<FunctionTargetIr, ExtractError> {
-    Ok(FunctionTargetIr {
+) -> Result<PendingFunctionTarget, ExtractError> {
+    Ok(PendingFunctionTarget {
         function: FunctionId::generic(StableDefPathHash::from_def_id(tcx, def_id)),
         display_path: canonical_namespace(tcx, def_id),
         attributes: function_attributes(tcx, def_id),
@@ -1026,8 +1537,21 @@ fn ensure_body(
     def_id: DefId,
     provenance: FunctionBodyProvenanceIr,
 ) -> Result<(), ExtractError> {
-    if let Some(body) = bodies.get(&function) {
+    ensure_body_with_projection(tcx, sources, bodies, function, def_id, provenance, true)
+}
+
+fn ensure_body_with_projection(
+    tcx: TyCtxt<'_>,
+    sources: &mut SourceTable,
+    bodies: &mut BTreeMap<FunctionId, PendingBody>,
+    function: FunctionId,
+    def_id: DefId,
+    provenance: FunctionBodyProvenanceIr,
+    projects_to_legacy: bool,
+) -> Result<(), ExtractError> {
+    if let Some(body) = bodies.get_mut(&function) {
         return if body.provenance == provenance {
+            body.projects_to_legacy |= projects_to_legacy;
             Ok(())
         } else {
             Err(ExtractError::new(format!(
@@ -1037,7 +1561,8 @@ fn ensure_body(
         };
     }
     let contracts = function_contracts(tcx, def_id, sources)?;
-    let mut attributes = function_attributes(tcx, def_id);
+    let declaration_attributes = function_attributes(tcx, def_id);
+    let mut attributes = declaration_attributes.clone();
     // `ensure_body` is used only for required HIR bodies and expanded rustc
     // instances. That proves this IR entry has a body even when its defining
     // `DefId` is an abstract callable trait method backed by a compiler-
@@ -1048,10 +1573,15 @@ fn ensure_body(
         provenance,
         display_path: canonical_namespace(tcx, def_id),
         attributes,
+        declaration_attributes,
+        contracts: contracts.clone(),
         source_range: sources.range(tcx, tcx.def_span(def_id))?,
         calls: Vec::new(),
         effects: Vec::new(),
         markers: Vec::new(),
+        typed_markers: Vec::new(),
+        typed_safety_groups: BTreeSet::new(),
+        projects_to_legacy,
     };
     if let Some(contract) = contracts.panic {
         body.push_contract_marker(MarkerKindIr::PanicContract, contract);
@@ -1061,6 +1591,752 @@ fn ensure_body(
     }
     bodies.insert(function, body);
     Ok(())
+}
+
+fn build_collected_artifact(
+    sources: &ExtractionSources,
+    bodies: &BTreeMap<FunctionId, PendingBody>,
+    assertions: &[PendingTypedMirAssert],
+    unsafe_operations: Vec<PendingTypedUnsafeOperation>,
+) -> Result<CollectedArtifact, ExtractError> {
+    let mut callable_entities = BTreeMap::new();
+    let mut panic_contracts = BTreeMap::new();
+    let mut safety_contracts = BTreeMap::new();
+    for body in bodies.values() {
+        let owner = function_key(body.function);
+        register_collected_callable(
+            &mut callable_entities,
+            owner,
+            &body.display_path,
+            &body.attributes,
+        )?;
+        let defining_owner = FunctionKey::new(owner.definition(), None);
+        register_collected_callable(
+            &mut callable_entities,
+            defining_owner,
+            &body.display_path,
+            &body.declaration_attributes,
+        )?;
+        register_collected_contracts(
+            defining_owner,
+            &body.contracts,
+            &mut panic_contracts,
+            &mut safety_contracts,
+        )?;
+        for call in &body.calls {
+            for declaration in &call.callable_declarations {
+                register_collected_callable_entity(
+                    &mut callable_entities,
+                    declaration.callable.clone(),
+                )?;
+                if let Some(contract) = declaration.panic_contract.clone() {
+                    insert_contract(&mut panic_contracts, *contract.owner(), contract, "panic")?;
+                }
+                if let Some(contract) = declaration.safety_contract.clone() {
+                    insert_contract(&mut safety_contracts, *contract.owner(), contract, "safety")?;
+                }
+            }
+        }
+    }
+
+    let collection_index = PermanentCollectionIndex::new(bodies, assertions)?;
+    let marker_occurrences = collect_marker_occurrences(bodies, &collection_index)?;
+    let collected_bodies = bodies
+        .values()
+        .map(|body| {
+            collected_function_body(
+                body,
+                collection_index.calls(body.function),
+                collection_index.assertions(body.function),
+            )
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+
+    let mut source_files = sources.legacy.source_files();
+    source_files.extend(sources.typed.source_files());
+    let mut source_anchors = sources.legacy.source_anchors();
+    source_anchors.extend(sources.typed.source_anchors());
+    let program = CollectedProgram::try_new(
+        source_files,
+        source_anchors,
+        callable_entities.into_values().collect(),
+        collected_bodies,
+    )
+    .map_err(|error| ExtractError::new(error.to_string()))?;
+
+    let unsafe_operations = unsafe_operations
+        .into_iter()
+        .map(collected_unsafe_operation)
+        .collect::<Result<Vec<_>, _>>()?;
+    CollectedArtifact::try_new(CollectedArtifactInput {
+        program,
+        unsafe_operations,
+        panic_contracts: panic_contracts.into_values().collect(),
+        safety_contracts: safety_contracts.into_values().collect(),
+        mir_asserts: collection_index.mir_asserts,
+        marker_occurrences,
+    })
+    .map_err(|error| ExtractError::new(error.to_string()))
+}
+
+struct PreparedTypedAssertion<'a> {
+    assertion: &'a PendingTypedMirAssert,
+    site: EffectSiteKey,
+}
+
+/// Validated, reusable ordering and ownership indexes for permanent collection.
+///
+/// Assertion sites are derived and partitioned once instead of rescanning the
+/// complete artifact for every body. Typed calls are likewise sorted once and
+/// shared by body materialization and marker target resolution.
+struct PermanentCollectionIndex<'a> {
+    assertions_by_function: BTreeMap<FunctionId, Vec<PreparedTypedAssertion<'a>>>,
+    calls_by_function: BTreeMap<FunctionId, Vec<&'a PendingCall>>,
+    marker_effect_sites: BTreeMap<(FunctionId, String), EffectSiteKey>,
+    mir_asserts: Vec<CollectedMirAssert>,
+}
+
+impl<'a> PermanentCollectionIndex<'a> {
+    fn new(
+        bodies: &'a BTreeMap<FunctionId, PendingBody>,
+        assertions: &'a [PendingTypedMirAssert],
+    ) -> Result<Self, ExtractError> {
+        let mut assertions_by_function = BTreeMap::<_, Vec<_>>::new();
+        let mut marker_effect_sites = BTreeMap::new();
+        let mut mir_asserts = Vec::with_capacity(assertions.len());
+        for assertion in assertions {
+            let function = assertion.function;
+            let site = effect_site_key(assertion)?;
+            assertions_by_function
+                .entry(function)
+                .or_default()
+                .push(PreparedTypedAssertion { assertion, site });
+            marker_effect_sites.insert((function, assertion.legacy_effect_key.clone()), site);
+            mir_asserts.push(CollectedMirAssert::new(site, assertion.kind));
+        }
+        let calls_by_function = bodies
+            .iter()
+            .map(|(function, body)| Ok((*function, sorted_typed_calls(body)?)))
+            .collect::<Result<_, ExtractError>>()?;
+        Ok(Self {
+            assertions_by_function,
+            calls_by_function,
+            marker_effect_sites,
+            mir_asserts,
+        })
+    }
+
+    fn assertions(&self, function: FunctionId) -> &[PreparedTypedAssertion<'a>] {
+        self.assertions_by_function
+            .get(&function)
+            .map_or(&[], Vec::as_slice)
+    }
+
+    fn calls(&self, function: FunctionId) -> &[&'a PendingCall] {
+        self.calls_by_function
+            .get(&function)
+            .expect("every pending body has one validated typed call order")
+    }
+}
+
+fn function_key(function: FunctionId) -> FunctionKey {
+    FunctionKey::new(function.def_path_hash, function.instance_hash)
+}
+
+fn register_collected_callable(
+    callables: &mut BTreeMap<FunctionKey, CallableEntity>,
+    key: FunctionKey,
+    display_path: &str,
+    attributes: &FunctionAttributesIr,
+) -> Result<(), ExtractError> {
+    let candidate = CallableEntity::new(
+        key,
+        display_path,
+        attributes.is_unsafe,
+        attributes.is_exported,
+        attributes.has_rust_body,
+        attributes.is_foreign,
+        attributes.namespace_candidates.clone(),
+    );
+    register_collected_callable_entity(callables, candidate)
+}
+
+fn register_collected_callable_entity(
+    callables: &mut BTreeMap<FunctionKey, CallableEntity>,
+    candidate: CallableEntity,
+) -> Result<(), ExtractError> {
+    let key = *candidate.key();
+    let Some(existing) = callables.get(&key) else {
+        callables.insert(key, candidate);
+        return Ok(());
+    };
+    if existing == &candidate {
+        return Ok(());
+    }
+    if existing.display_path() != candidate.display_path()
+        || existing.is_unsafe() != candidate.is_unsafe()
+        || existing.is_exported() != candidate.is_exported()
+        || existing.is_foreign() != candidate.is_foreign()
+        || existing.namespace_candidates() != candidate.namespace_candidates()
+    {
+        return Err(ExtractError::new(format!(
+            "callable `{}` was extracted with conflicting metadata",
+            candidate.display_path()
+        )));
+    }
+    callables.insert(
+        key,
+        CallableEntity::new(
+            key,
+            candidate.display_path(),
+            candidate.is_unsafe(),
+            candidate.is_exported(),
+            existing.has_rust_body() || candidate.has_rust_body(),
+            candidate.is_foreign(),
+            candidate.namespace_candidates().to_vec(),
+        ),
+    );
+    Ok(())
+}
+
+fn register_collected_contracts(
+    owner: FunctionKey,
+    contracts: &FunctionContractsIr,
+    panic_contracts: &mut BTreeMap<FunctionKey, CollectedPanicContract>,
+    safety_contracts: &mut BTreeMap<FunctionKey, CollectedSafetyContract>,
+) -> Result<(), ExtractError> {
+    if let Some(contract) = contracts.panic.as_ref() {
+        let collected = CollectedPanicContract::new(
+            owner,
+            contract
+                .source_range
+                .as_ref()
+                .map(SourceTable::anchor_from_range),
+            contract
+                .requirements
+                .iter()
+                .enumerate()
+                .map(|(ordinal, requirement)| {
+                    Ok(PanicRequirement::new(
+                        owner,
+                        local_id(ordinal, "panic contract requirement")?,
+                        &requirement.name,
+                        &requirement.condition,
+                        requirement
+                            .source_range
+                            .as_ref()
+                            .map(SourceTable::anchor_from_range),
+                    ))
+                })
+                .collect::<Result<Vec<_>, ExtractError>>()?,
+        );
+        insert_contract(panic_contracts, owner, collected, "panic")?;
+    }
+    if let Some(contract) = contracts.safety.as_ref() {
+        let collected = CollectedSafetyContract::new(
+            owner,
+            contract
+                .source_range
+                .as_ref()
+                .map(SourceTable::anchor_from_range),
+            contract
+                .requirements
+                .iter()
+                .enumerate()
+                .map(|(ordinal, requirement)| {
+                    Ok(SafetyRequirement::new(
+                        owner,
+                        local_id(ordinal, "safety contract requirement")?,
+                        &requirement.name,
+                        &requirement.condition,
+                        requirement
+                            .source_range
+                            .as_ref()
+                            .map(SourceTable::anchor_from_range),
+                    ))
+                })
+                .collect::<Result<Vec<_>, ExtractError>>()?,
+        );
+        insert_contract(safety_contracts, owner, collected, "safety")?;
+    }
+    Ok(())
+}
+
+fn insert_contract<C: Eq>(
+    contracts: &mut BTreeMap<FunctionKey, C>,
+    owner: FunctionKey,
+    contract: C,
+    domain: &str,
+) -> Result<(), ExtractError> {
+    if let Some(existing) = contracts.get(&owner) {
+        if existing != &contract {
+            return Err(ExtractError::new(format!(
+                "callable {owner:?} was extracted with conflicting {domain} contracts"
+            )));
+        }
+    } else {
+        contracts.insert(owner, contract);
+    }
+    Ok(())
+}
+
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
+enum ResolvedMarkerTarget {
+    Call(CallOccurrenceKey),
+    Effect(EffectSiteKey),
+    UnsafeOperation(UnsafeOperationKey),
+}
+
+struct MarkerAggregate {
+    entity: MarkerOccurrenceEntity,
+    claims: BTreeMap<DomainId, Vec<(EvidenceClaimSelector, String)>>,
+    candidates: BTreeMap<(ResolvedMarkerTarget, MarkerClaimKey), (bool, bool)>,
+}
+
+fn collect_marker_occurrences(
+    bodies: &BTreeMap<FunctionId, PendingBody>,
+    collection_index: &PermanentCollectionIndex<'_>,
+) -> Result<Vec<CollectedMarkerOccurrence>, ExtractError> {
+    let mut aggregates = BTreeMap::<MarkerOccurrenceKey, MarkerAggregate>::new();
+    for body in bodies.values() {
+        let calls = marker_call_targets(body, collection_index.calls(body.function))?;
+        for marker in &body.typed_markers {
+            let target = resolve_marker_target(
+                body.function,
+                marker,
+                &calls,
+                &collection_index.marker_effect_sites,
+            )?;
+            merge_marker_aggregate(&mut aggregates, marker, target)?;
+        }
+    }
+    aggregates
+        .into_values()
+        .map(finish_marker_aggregate)
+        .collect()
+}
+
+fn marker_call_targets(
+    body: &PendingBody,
+    calls: &[&PendingCall],
+) -> Result<BTreeMap<String, CallOccurrenceKey>, ExtractError> {
+    let owner = function_key(body.function);
+    calls
+        .iter()
+        .copied()
+        .enumerate()
+        .map(|(ordinal, call)| {
+            Ok((
+                call.key.clone(),
+                CallOccurrenceKey::new(owner, local_id(ordinal, "marker call target")?),
+            ))
+        })
+        .collect()
+}
+
+fn resolve_marker_target(
+    function: FunctionId,
+    marker: &PendingTypedMarker,
+    calls: &BTreeMap<String, CallOccurrenceKey>,
+    effect_sites: &BTreeMap<(FunctionId, String), EffectSiteKey>,
+) -> Result<ResolvedMarkerTarget, ExtractError> {
+    if marker.satisfactions.is_empty() {
+        return Err(ExtractError::new(
+            "a typed human marker has no justification claims",
+        ));
+    }
+    match &marker.target {
+        PendingTypedMarkerTarget::Call(key) => calls
+            .get(key)
+            .copied()
+            .map(ResolvedMarkerTarget::Call)
+            .ok_or_else(|| ExtractError::new("typed marker refers to an unknown extracted call")),
+        PendingTypedMarkerTarget::Effect(key) => effect_sites
+            .get(&(function, key.clone()))
+            .copied()
+            .map(ResolvedMarkerTarget::Effect)
+            .ok_or_else(|| {
+                ExtractError::new("typed marker refers to an unknown compiler effect site")
+            }),
+        PendingTypedMarkerTarget::UnsafeOperation(key) => {
+            Ok(ResolvedMarkerTarget::UnsafeOperation(*key))
+        }
+    }
+}
+
+fn merge_marker_aggregate(
+    aggregates: &mut BTreeMap<MarkerOccurrenceKey, MarkerAggregate>,
+    marker: &PendingTypedMarker,
+    target: ResolvedMarkerTarget,
+) -> Result<(), ExtractError> {
+    let occurrence_key = marker.occurrence.key().clone();
+    let claims = marker
+        .satisfactions
+        .iter()
+        .map(|satisfaction| {
+            (
+                satisfaction
+                    .requirement
+                    .as_ref()
+                    .map_or(EvidenceClaimSelector::Unnamed, |requirement| {
+                        EvidenceClaimSelector::Named(requirement.clone())
+                    }),
+                satisfaction.reason.clone(),
+            )
+        })
+        .collect::<Vec<_>>();
+    let aggregate = aggregates
+        .entry(occurrence_key.clone())
+        .or_insert_with(|| MarkerAggregate {
+            entity: marker.occurrence.clone(),
+            claims: BTreeMap::new(),
+            candidates: BTreeMap::new(),
+        });
+    if aggregate.entity != marker.occurrence {
+        return Err(ExtractError::new(
+            "one marker occurrence resolved to conflicting expansion paths",
+        ));
+    }
+    if let Some(existing) = aggregate.claims.get(&marker.domain) {
+        if existing != &claims {
+            return Err(ExtractError::new(
+                "one marker occurrence resolved to conflicting human claims",
+            ));
+        }
+    } else {
+        aggregate.claims.insert(marker.domain.clone(), claims);
+    }
+    for ordinal in &marker.applicable_satisfactions {
+        if usize::try_from(*ordinal)
+            .ok()
+            .is_none_or(|ordinal| ordinal >= marker.satisfactions.len())
+        {
+            return Err(ExtractError::new(
+                "a typed human marker selected an unknown physical claim ordinal",
+            ));
+        }
+        let claim = MarkerClaimKey::new(occurrence_key.clone(), marker.domain.clone(), *ordinal);
+        let applicability = aggregate.candidates.entry((target, claim)).or_default();
+        applicability.0 |= marker.source_callsite;
+        applicability.1 |= marker.macro_definition_first;
+    }
+    Ok(())
+}
+
+fn finish_marker_aggregate(
+    aggregate: MarkerAggregate,
+) -> Result<CollectedMarkerOccurrence, ExtractError> {
+    let occurrence = aggregate.entity.key().clone();
+    let claims = aggregate
+        .claims
+        .into_iter()
+        .flat_map(|(domain, claims)| {
+            let occurrence = occurrence.clone();
+            claims
+                .into_iter()
+                .enumerate()
+                .map(move |(ordinal, (selector, rationale))| {
+                    Ok(MarkerClaimEntity::new(
+                        MarkerClaimKey::new(
+                            occurrence.clone(),
+                            domain.clone(),
+                            local_id(ordinal, "marker claim")?,
+                        ),
+                        selector,
+                        rationale,
+                    ))
+                })
+        })
+        .collect::<Result<Vec<_>, ExtractError>>()?;
+    let mut call_candidates = Vec::new();
+    let mut effect_candidates = Vec::new();
+    let mut unsafe_operation_candidates = Vec::new();
+    for ((target, claim), (source_callsite, macro_definition_first)) in aggregate.candidates {
+        match target {
+            ResolvedMarkerTarget::Call(call) => {
+                call_candidates.push(CollectedMarkerCallCandidate::new(
+                    call,
+                    claim,
+                    CallOccurrenceHasMarkerClaimCandidate::new(
+                        source_callsite,
+                        macro_definition_first,
+                    ),
+                ));
+            }
+            ResolvedMarkerTarget::Effect(effect) => {
+                effect_candidates.push(CollectedEffectMarkerCandidate::new(
+                    effect,
+                    claim,
+                    EffectSiteHasMarkerClaimCandidate::new(source_callsite, macro_definition_first),
+                ));
+            }
+            ResolvedMarkerTarget::UnsafeOperation(operation) => {
+                unsafe_operation_candidates.push(CollectedUnsafeOperationMarkerCandidate::new(
+                    operation,
+                    claim,
+                    UnsafeOperationHasMarkerClaimCandidate::new(
+                        source_callsite,
+                        macro_definition_first,
+                    ),
+                ));
+            }
+        }
+    }
+    Ok(CollectedMarkerOccurrence::new(
+        aggregate.entity,
+        claims,
+        Vec::new(),
+        call_candidates,
+        effect_candidates,
+        unsafe_operation_candidates,
+    ))
+}
+
+fn collected_function_body(
+    body: &PendingBody,
+    calls: &[&PendingCall],
+    assertions: &[PreparedTypedAssertion<'_>],
+) -> Result<CollectedFunctionBody, ExtractError> {
+    let owner = function_key(body.function);
+    let mut sites = BTreeMap::<CallSiteKey, Vec<CollectedCallOccurrence>>::new();
+    let mut safety_groups = body.typed_safety_groups.clone();
+    for (ordinal, pending) in calls.iter().copied().enumerate() {
+        let occurrence_key = CallOccurrenceKey::new(owner, local_id(ordinal, "call")?);
+        safety_groups.insert(pending.safety_effect_group);
+        let site_key = CallSiteKey::new(owner, pending.call_site);
+        sites
+            .entry(site_key)
+            .or_default()
+            .push(collected_call_occurrence(occurrence_key, pending)?);
+    }
+    let call_sites = sites
+        .into_iter()
+        .map(|(key, occurrences)| CollectedCallSite::new(CallSiteEntity::new(key), occurrences))
+        .collect();
+    let safety_effect_groups = safety_groups
+        .into_iter()
+        .map(|local_id| SafetyEffectGroupEntity::new(SafetyEffectGroupKey::new(owner, local_id)))
+        .collect();
+    let effect_sites = assertions
+        .iter()
+        .map(|assertion| collected_effect_site(assertion.assertion, assertion.site))
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok(CollectedFunctionBody::new(
+        FunctionEntity::new(
+            owner,
+            &body.display_path,
+            match body.provenance {
+                FunctionBodyProvenanceIr::DefiningArtifact => {
+                    FunctionBodyProvenance::DefiningArtifact
+                }
+                FunctionBodyProvenanceIr::ConsumerInstantiation {
+                    consumer_stable_crate_id,
+                } => FunctionBodyProvenance::ConsumerInstantiation {
+                    consumer_stable_crate_id,
+                },
+            },
+        ),
+        body.source_range
+            .as_ref()
+            .map(SourceTable::anchor_from_range),
+        call_sites,
+        safety_effect_groups,
+        effect_sites,
+    ))
+}
+
+fn sorted_typed_calls(body: &PendingBody) -> Result<Vec<&PendingCall>, ExtractError> {
+    let mut calls = body.calls.iter().collect::<Vec<_>>();
+    calls.sort_by(|left, right| left.stable_sort_key.cmp(&right.stable_sort_key));
+    if calls
+        .windows(2)
+        .any(|pair| pair[0].stable_sort_key == pair[1].stable_sort_key)
+    {
+        return Err(ExtractError::new(
+            "two extracted call occurrences have the same stable typed identity",
+        ));
+    }
+    Ok(calls)
+}
+
+fn collected_call_occurrence(
+    key: CallOccurrenceKey,
+    pending: &PendingCall,
+) -> Result<CollectedCallOccurrence, ExtractError> {
+    Ok(CollectedCallOccurrence::new(
+        CallOccurrenceEntity::new(
+            key,
+            pending.kind,
+            pending.applicable_attribution.clone(),
+            pending.requires_unsafe,
+            pending.inside_builtin_unsafe,
+            pending.opaque_target_description.clone(),
+        ),
+        pending.targets.clone(),
+        pending.callable_keys.clone(),
+        vec![SafetyEffectGroupKey::new(
+            *key.owner(),
+            pending.safety_effect_group,
+        )],
+        call_source_anchors(pending),
+        collected_call_macro_frames(key, &pending.typed_macro_expansions)?,
+    ))
+}
+
+fn legacy_call_kind(kind: CallKind) -> CallEdgeKindIr {
+    match kind {
+        CallKind::DirectCall => CallEdgeKindIr::DirectCall,
+        CallKind::TailCall => CallEdgeKindIr::TailCall,
+        CallKind::FnPointerReify => CallEdgeKindIr::FnPointerReify,
+        CallKind::ClosureFnPointerReify => CallEdgeKindIr::ClosureFnPointerReify,
+        CallKind::FnPointerCallTarget => CallEdgeKindIr::FnPointerCallTarget,
+        CallKind::DynObjectCast => CallEdgeKindIr::DynObjectCast,
+        CallKind::VTableEntry => CallEdgeKindIr::VTableEntry,
+        CallKind::DynDispatchVTableEntry => CallEdgeKindIr::DynDispatchVTableEntry,
+        CallKind::MacroExpansion => CallEdgeKindIr::MacroExpansion,
+        CallKind::ConstBody => CallEdgeKindIr::ConstBody,
+        CallKind::CoroutineBody => CallEdgeKindIr::CoroutineBody,
+        CallKind::Assert => CallEdgeKindIr::Assert,
+        CallKind::IndirectCall => CallEdgeKindIr::IndirectCall,
+    }
+}
+
+fn call_source_anchors(call: &PendingCall) -> Vec<CollectedCallSourceAnchor> {
+    [
+        (
+            CallSourceAnchorRole::Presentation,
+            call.presentation_anchor.as_ref(),
+        ),
+        (
+            CallSourceAnchorRole::Expanded,
+            call.expanded_anchor.as_ref(),
+        ),
+        (CallSourceAnchorRole::Callee, call.callee_anchor.as_ref()),
+    ]
+    .into_iter()
+    .filter_map(|(role, anchor)| {
+        anchor.map(|anchor| CollectedCallSourceAnchor::new(role, anchor.clone()))
+    })
+    .collect()
+}
+
+fn collected_call_macro_frames(
+    occurrence: CallOccurrenceKey,
+    frames: &[ExtractedMacroExpansionFrame],
+) -> Result<Vec<CollectedCallMacroFrame>, ExtractError> {
+    frames
+        .iter()
+        .enumerate()
+        .map(|(depth, frame)| {
+            Ok(CollectedCallMacroFrame::new(
+                CallMacroExpansionEntity::new(
+                    CallMacroExpansionKey::new(
+                        occurrence,
+                        local_id(depth, "call macro expansion")?,
+                    ),
+                    frame.expansion_hash(),
+                    frame.macro_definition(),
+                    frame.display_path(),
+                ),
+                frame.source_range().map(SourceTable::anchor_from_range),
+            ))
+        })
+        .collect()
+}
+
+fn effect_site_key(assertion: &PendingTypedMirAssert) -> Result<EffectSiteKey, ExtractError> {
+    EffectSiteKey::from_mir(function_key(assertion.function), assertion.location)
+        .map_err(|error| ExtractError::new(error.to_string()))
+}
+
+fn collected_effect_site(
+    assertion: &PendingTypedMirAssert,
+    site: EffectSiteKey,
+) -> Result<CollectedEffectSite, ExtractError> {
+    let source_anchors = [
+        (
+            EffectSourceAnchorRole::Presentation,
+            assertion.presentation_anchor.as_ref(),
+        ),
+        (
+            EffectSourceAnchorRole::Expanded,
+            assertion.expanded_anchor.as_ref(),
+        ),
+    ]
+    .into_iter()
+    .filter_map(|(role, anchor)| {
+        anchor
+            .cloned()
+            .map(|anchor| CollectedEffectSourceAnchor::new(role, anchor))
+    })
+    .collect();
+    let macro_frames = assertion
+        .macro_expansions
+        .iter()
+        .enumerate()
+        .map(|(depth, frame)| {
+            Ok(CollectedEffectMacroFrame::new(
+                MacroExpansionEntity::new(
+                    MacroExpansionKey::new(site, local_id(depth, "effect macro expansion")?),
+                    frame.expansion_hash(),
+                    frame.macro_definition(),
+                    frame.display_path(),
+                ),
+                frame.source_range().map(SourceTable::anchor_from_range),
+            ))
+        })
+        .collect::<Result<Vec<_>, ExtractError>>()?;
+    Ok(CollectedEffectSite::new(
+        EffectSiteEntity::new(site),
+        source_anchors,
+        macro_frames,
+    ))
+}
+
+fn collected_unsafe_operation(
+    operation: PendingTypedUnsafeOperation,
+) -> Result<CollectedUnsafeOperation, ExtractError> {
+    let key = *operation.operation.key();
+    let source_anchors = [
+        (
+            UnsafeOperationSourceAnchorRole::Presentation,
+            operation.presentation_anchor,
+        ),
+        (
+            UnsafeOperationSourceAnchorRole::Expanded,
+            operation.expanded_anchor,
+        ),
+    ]
+    .into_iter()
+    .filter_map(|(role, anchor)| {
+        anchor.map(|anchor| CollectedUnsafeOperationSourceAnchor::new(role, anchor))
+    })
+    .collect();
+    let macro_frames = operation
+        .macro_expansions
+        .iter()
+        .enumerate()
+        .map(|(depth, frame)| {
+            Ok(CollectedUnsafeOperationMacroFrame::new(
+                UnsafeOperationMacroExpansionEntity::new(
+                    UnsafeOperationMacroExpansionKey::new(
+                        key,
+                        local_id(depth, "unsafe operation macro expansion")?,
+                    ),
+                    frame.expansion_hash(),
+                    frame.macro_definition(),
+                    frame.display_path(),
+                ),
+                frame.source_range().map(SourceTable::anchor_from_range),
+            ))
+        })
+        .collect::<Result<Vec<_>, ExtractError>>()?;
+    Ok(CollectedUnsafeOperation::new(
+        operation.operation,
+        operation.safety_effect_group,
+        source_anchors,
+        macro_frames,
+    ))
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -1386,76 +2662,186 @@ fn raw_safety_group_id(group: usize) -> Result<SafetyEffectGroupId, ExtractError
 fn attach_raw_unsafe_operations(
     tcx: TyCtxt<'_>,
     facts: Vec<RawSafetyOpFact>,
+    sources: &mut ExtractionSources,
+    bodies: &mut BTreeMap<FunctionId, PendingBody>,
+    typed_operations: &mut Vec<PendingTypedUnsafeOperation>,
+    next_typed_operation: &mut BTreeMap<FunctionKey, u32>,
+) -> Result<(), ExtractError> {
+    for (ordinal, fact) in facts.into_iter().enumerate() {
+        let prepared = prepare_permanent_unsafe_operation(
+            tcx,
+            &fact,
+            sources,
+            bodies,
+            typed_operations,
+            next_typed_operation,
+        )?;
+        attach_legacy_unsafe_operation(
+            tcx,
+            ordinal,
+            &fact,
+            &prepared,
+            &mut sources.legacy,
+            bodies,
+        )?;
+    }
+    Ok(())
+}
+
+struct PreparedUnsafeOperation {
+    generic_function: FunctionId,
+    body_ids: Vec<FunctionId>,
+    operation_key: UnsafeOperationKey,
+    source_range: Option<SourceRangeIr>,
+    expanded_range: Option<SourceRangeIr>,
+    legacy_macro_expansions: Vec<MacroExpansionFrameIr>,
+}
+
+fn prepare_permanent_unsafe_operation(
+    tcx: TyCtxt<'_>,
+    fact: &RawSafetyOpFact,
+    sources: &mut ExtractionSources,
+    bodies: &mut BTreeMap<FunctionId, PendingBody>,
+    typed_operations: &mut Vec<PendingTypedUnsafeOperation>,
+    next_typed_operation: &mut BTreeMap<FunctionKey, u32>,
+) -> Result<PreparedUnsafeOperation, ExtractError> {
+    let Some(local) = fact.owner.as_local() else {
+        return Err(ExtractError::new(
+            "raw unsafe operation is not owned by the local artifact",
+        ));
+    };
+    let definition = StableDefPathHash::from_def_id(tcx, fact.owner);
+    let generic_function = FunctionId::generic(definition);
+    let mut body_ids = bodies
+        .iter()
+        .filter_map(|(function, body)| {
+            (body.projects_to_legacy && function.def_path_hash == definition).then_some(*function)
+        })
+        .collect::<Vec<_>>();
+    let generic_projects_to_legacy = body_ids.is_empty();
+    ensure_body_with_projection(
+        tcx,
+        &mut sources.legacy,
+        bodies,
+        generic_function,
+        local.to_def_id(),
+        FunctionBodyProvenanceIr::DefiningArtifact,
+        generic_projects_to_legacy,
+    )?;
+    if generic_projects_to_legacy {
+        body_ids.push(generic_function);
+    }
+    let expanded_range = sources.legacy.range(tcx, fact.span)?;
+    let legacy_macro_expansions = span_macro_expansions(tcx, fact.span, &mut sources.legacy)?;
+    let source_range = sources
+        .legacy
+        .range(tcx, fact.span.source_callsite())?
+        .or_else(|| expanded_range.clone());
+    let typed_owner = function_key(generic_function);
+    let local_id = next_typed_operation.entry(typed_owner).or_default();
+    let operation_key = UnsafeOperationKey::new(typed_owner, *local_id);
+    *local_id = local_id
+        .checked_add(1)
+        .ok_or_else(|| ExtractError::new("too many unsafe operations in one function"))?;
+    let group = SafetyEffectGroupKey::new(
+        typed_owner,
+        u32::try_from(fact.effect_group.id)
+            .map_err(|_| ExtractError::new("too many raw safety effect groups"))?,
+    );
+    bodies
+        .get_mut(&generic_function)
+        .expect("generic unsafe-operation body was inserted")
+        .typed_safety_groups
+        .insert(group.local_id());
+    typed_operations.push(PendingTypedUnsafeOperation {
+        operation: UnsafeOperationEntity::new(operation_key, fact.op),
+        safety_effect_group: group,
+        presentation_anchor: source_range.as_ref().map(SourceTable::anchor_from_range),
+        expanded_anchor: expanded_range.as_ref().map(SourceTable::anchor_from_range),
+        macro_expansions: typed_macro_expansions(tcx, fact.span, &mut sources.typed)?,
+    });
+    Ok(PreparedUnsafeOperation {
+        generic_function,
+        body_ids,
+        operation_key,
+        source_range,
+        expanded_range,
+        legacy_macro_expansions,
+    })
+}
+
+fn attach_legacy_unsafe_operation(
+    tcx: TyCtxt<'_>,
+    ordinal: usize,
+    fact: &RawSafetyOpFact,
+    prepared: &PreparedUnsafeOperation,
     sources: &mut SourceTable,
     bodies: &mut BTreeMap<FunctionId, PendingBody>,
 ) -> Result<(), ExtractError> {
-    for (ordinal, fact) in facts.into_iter().enumerate() {
-        let Some(local) = fact.owner.as_local() else {
-            return Err(ExtractError::new(
-                "raw unsafe operation is not owned by the local artifact",
-            ));
-        };
-        let definition = StableDefPathHash::from_def_id(tcx, fact.owner);
-        let mut body_ids = bodies
-            .keys()
-            .copied()
-            .filter(|function| function.def_path_hash == definition)
-            .collect::<Vec<_>>();
-        if body_ids.is_empty() {
-            let function = FunctionId::generic(definition);
-            ensure_body(
-                tcx,
-                sources,
-                bodies,
-                function,
-                local.to_def_id(),
-                FunctionBodyProvenanceIr::DefiningArtifact,
-            )?;
-            body_ids.push(function);
+    let key = format!(
+        "unsafe:{ordinal}:{:?}:{:?}:{}",
+        fact.op, prepared.source_range, fact.effect_group.id
+    );
+    for body_id in prepared.body_ids.iter().copied() {
+        let body = bodies
+            .get_mut(&body_id)
+            .expect("unsafe-operation body was inserted");
+        body.effects.push(PendingEffect {
+            key: key.clone(),
+            effect: EffectFactIr {
+                id: EffectId::new(0),
+                safety_effect_group: Some(raw_safety_group_id(fact.effect_group.id)?),
+                source_range: prepared.source_range.clone(),
+                expanded_range: prepared.expanded_range.clone(),
+                macro_expansions: prepared.legacy_macro_expansions.clone(),
+                kind: EffectKindIr::UnsafeOperation { kind: fact.op },
+            },
+        });
+        for (probing, applicable_probing) in probing_modes() {
+            let marker = fact
+                .marker_anchor_spans
+                .iter()
+                .find_map(|span| safety_span_marker_block(tcx, *span, probing));
+            if let Some(marker) = marker {
+                push_effect_marker(
+                    tcx,
+                    sources,
+                    body,
+                    MarkerKindIr::SafetyJustification,
+                    PendingMarkerTarget::Effect(key.clone()),
+                    (body_id == prepared.generic_function).then_some(
+                        PendingTypedMarkerTarget::UnsafeOperation(prepared.operation_key),
+                    ),
+                    marker,
+                    applicable_probing,
+                    Vec::new(),
+                )?;
+            }
         }
-
-        let expanded_range = sources.range(tcx, fact.span)?;
-        let macro_expansions = span_macro_expansions(tcx, fact.span, sources)?;
-        let source_range = sources
-            .range(tcx, fact.span.source_callsite())?
-            .or_else(|| expanded_range.clone());
-        for body_id in body_ids {
-            let key = format!(
-                "unsafe:{ordinal}:{:?}:{source_range:?}:{}",
-                fact.op, fact.effect_group.id
-            );
-            let body = bodies
-                .get_mut(&body_id)
-                .expect("unsafe-operation body was inserted");
-            body.effects.push(PendingEffect {
-                key: key.clone(),
-                effect: EffectFactIr {
-                    id: EffectId::new(0),
-                    safety_effect_group: Some(raw_safety_group_id(fact.effect_group.id)?),
-                    source_range: source_range.clone(),
-                    expanded_range: expanded_range.clone(),
-                    macro_expansions: macro_expansions.clone(),
-                    kind: EffectKindIr::UnsafeOperation { kind: fact.op },
-                },
-            });
-
-            for (probing, applicable_probing) in probing_modes() {
-                let marker = fact
-                    .marker_anchor_spans
-                    .iter()
-                    .find_map(|span| safety_span_marker_block(tcx, *span, probing));
-                if let Some(marker) = marker {
-                    push_effect_marker(
-                        tcx,
-                        sources,
-                        body,
-                        MarkerKindIr::SafetyJustification,
-                        PendingMarkerTarget::Effect(key.clone()),
-                        marker,
-                        applicable_probing,
-                        Vec::new(),
-                    )?;
-                }
+    }
+    if !prepared.body_ids.contains(&prepared.generic_function) {
+        let body = bodies
+            .get_mut(&prepared.generic_function)
+            .expect("permanent generic unsafe-operation body was inserted");
+        for (probing, applicable_probing) in probing_modes() {
+            let marker = fact
+                .marker_anchor_spans
+                .iter()
+                .find_map(|span| safety_span_marker_block(tcx, *span, probing));
+            if let Some(marker) = marker {
+                push_effect_marker(
+                    tcx,
+                    sources,
+                    body,
+                    MarkerKindIr::SafetyJustification,
+                    PendingMarkerTarget::Effect(key.clone()),
+                    Some(PendingTypedMarkerTarget::UnsafeOperation(
+                        prepared.operation_key,
+                    )),
+                    marker,
+                    applicable_probing,
+                    Vec::new(),
+                )?;
             }
         }
     }
@@ -1482,6 +2868,7 @@ fn push_effect_marker(
     body: &mut PendingBody,
     kind: MarkerKindIr,
     target: PendingMarkerTarget,
+    typed_target: Option<PendingTypedMarkerTarget>,
     marker: EffectMarkerBlock,
     applicable_probing: MarkerProbingIr,
     requirements: Vec<ContractRequirementIr>,
@@ -1489,14 +2876,65 @@ fn push_effect_marker(
     let source_range = sources.range(tcx, marker.span)?;
     let satisfactions = marker
         .satisfactions
-        .into_iter()
+        .iter()
         .map(|satisfaction| MarkerSatisfactionIr {
-            requirement: satisfaction.requirement,
-            reason: satisfaction.reason,
+            requirement: satisfaction.requirement.clone(),
+            reason: satisfaction.reason.clone(),
         })
         .collect::<Vec<_>>();
+    let applicable_satisfactions = marker
+        .applicable_satisfactions
+        .iter()
+        .map(|ordinal| local_id(*ordinal, "marker claim"))
+        .collect::<Result<Vec<_>, _>>()?;
+    if marker
+        .applicable_satisfactions
+        .iter()
+        .any(|ordinal| *ordinal >= satisfactions.len())
+    {
+        return Err(ExtractError::new(
+            "a human marker selected a claim outside its physical source inventory",
+        ));
+    }
+    if let Some(target) = typed_target {
+        let anchor = source_range
+            .as_ref()
+            .map(SourceTable::anchor_from_range)
+            .ok_or_else(|| {
+                ExtractError::new("a human marker did not resolve to a physical source anchor")
+            })?;
+        let (origin, expansion_path) = marker_expansion_identity(marker.key.origin);
+        let domain = match kind {
+            MarkerKindIr::PanicJustification => DomainId::new("sniff-test.panic"),
+            MarkerKindIr::SafetyJustification => DomainId::new("sniff-test.safety"),
+            MarkerKindIr::PanicContract | MarkerKindIr::SafetyContract => {
+                return Err(ExtractError::new(
+                    "a declaration contract entered human marker collection",
+                ));
+            }
+        }
+        .expect("built-in marker domain IDs are valid");
+        body.typed_markers.push(PendingTypedMarker {
+            occurrence: MarkerOccurrenceEntity::new(
+                MarkerOccurrenceKey::new(anchor, origin),
+                expansion_path,
+            ),
+            domain,
+            satisfactions: satisfactions.clone(),
+            applicable_satisfactions: applicable_satisfactions.clone(),
+            target,
+            source_callsite: applicable_probing == MarkerProbingIr::SourceCallsite,
+            macro_definition_first: applicable_probing == MarkerProbingIr::MacroDefinitionFirst,
+        });
+    }
+    let legacy_satisfactions = marker
+        .applicable_satisfactions
+        .into_iter()
+        .map(|ordinal| satisfactions[ordinal].clone())
+        .collect::<Vec<_>>();
     let identity = format!("{kind:?}|{:?}", marker.key);
-    let key = format!("{identity}|{target:?}|{source_range:?}|{satisfactions:?}|{requirements:?}");
+    let key =
+        format!("{identity}|{target:?}|{source_range:?}|{legacy_satisfactions:?}|{requirements:?}");
     if let Some(existing) = body.markers.iter_mut().find(|pending| pending.key == key) {
         push_unique(&mut existing.applicable_probing, applicable_probing);
     } else {
@@ -1507,16 +2945,35 @@ fn push_effect_marker(
             source_range,
             target,
             applicable_probing: vec![applicable_probing],
-            satisfactions,
+            satisfactions: legacy_satisfactions,
             requirements,
         });
     }
     Ok(())
 }
 
+fn marker_expansion_identity(
+    origin: MarkerOrigin,
+) -> (Option<StableExpansionHash>, Vec<StableExpansionHash>) {
+    let MarkerOrigin::Macro(origin) = origin else {
+        return (None, Vec::new());
+    };
+    let mut expansion = origin;
+    let mut path = Vec::new();
+    while expansion != ExpnId::root() {
+        let data = expansion.expn_data();
+        if matches!(data.kind, ExpnKind::Macro(..)) {
+            path.push(StableExpansionHash::from_expn_id(expansion));
+        }
+        expansion = data.parent;
+    }
+    path.reverse();
+    (Some(StableExpansionHash::from_expn_id(origin)), path)
+}
+
 fn panic_requirements(
-    source_target: Option<&FunctionTargetIr>,
-    runtime_target: &CallTargetIr,
+    source_target: Option<&PendingFunctionTarget>,
+    runtime_target: &PendingCallTarget,
 ) -> Vec<ContractRequirementIr> {
     source_target
         .and_then(|target| target.contracts.panic.as_ref())
@@ -1525,8 +2982,8 @@ fn panic_requirements(
 }
 
 fn safety_requirements(
-    source_target: Option<&FunctionTargetIr>,
-    runtime_target: &CallTargetIr,
+    source_target: Option<&PendingFunctionTarget>,
+    runtime_target: &PendingCallTarget,
 ) -> Vec<ContractRequirementIr> {
     source_target
         .and_then(|target| target.contracts.safety.as_ref())
@@ -1536,15 +2993,8 @@ fn safety_requirements(
         .map_or_else(Vec::new, |contract| contract.requirements.clone())
 }
 
-fn target_contracts(target: &CallTargetIr) -> Option<&FunctionContractsIr> {
-    match target {
-        CallTargetIr::Function(target)
-        | CallTargetIr::OpaqueBoundary {
-            target: Some(OpaqueTargetIr::Trait(target) | OpaqueTargetIr::Function(target)),
-            ..
-        } => Some(&target.contracts),
-        CallTargetIr::OpaqueBoundary { target: None, .. } => None,
-    }
+fn target_contracts(target: &PendingCallTarget) -> Option<&FunctionContractsIr> {
+    target_function(target).map(|target| &target.contracts)
 }
 
 fn push_unique<T: PartialEq>(values: &mut Vec<T>, value: T) {
@@ -1558,10 +3008,15 @@ struct PendingBody {
     provenance: FunctionBodyProvenanceIr,
     display_path: String,
     attributes: FunctionAttributesIr,
+    declaration_attributes: FunctionAttributesIr,
+    contracts: FunctionContractsIr,
     source_range: Option<SourceRangeIr>,
     calls: Vec<PendingCall>,
     effects: Vec<PendingEffect>,
     markers: Vec<PendingMarker>,
+    typed_markers: Vec<PendingTypedMarker>,
+    typed_safety_groups: BTreeSet<u32>,
+    projects_to_legacy: bool,
 }
 
 impl PendingBody {
@@ -1581,7 +3036,7 @@ impl PendingBody {
         });
     }
 
-    fn finish(mut self) -> Result<FunctionBodyIr, ExtractError> {
+    fn finish(mut self) -> Result<FinishedBody, ExtractError> {
         self.calls.sort_by(|left, right| left.key.cmp(&right.key));
         self.effects.sort_by(|left, right| left.key.cmp(&right.key));
         self.markers.sort_by(|left, right| left.key.cmp(&right.key));
@@ -1591,11 +3046,12 @@ impl PendingBody {
             .calls
             .into_iter()
             .enumerate()
-            .map(|(index, mut pending)| {
+            .map(|(index, pending)| {
                 let id = local_id(index, "call")?;
-                pending.call.id = CallId::new(id);
-                call_ids.insert(pending.key, pending.call.id);
-                Ok(pending.call)
+                let key = pending.key.clone();
+                let call = pending.into_legacy(CallId::new(id));
+                call_ids.insert(key, call.id);
+                Ok(call)
             })
             .collect::<Result<Vec<_>, ExtractError>>()?;
         let mut effect_ids = BTreeMap::new();
@@ -1641,17 +3097,23 @@ impl PendingBody {
             })
             .collect::<Result<Vec<_>, ExtractError>>()?;
 
-        Ok(FunctionBodyIr {
-            function: self.function,
-            provenance: self.provenance,
-            display_path: self.display_path,
-            attributes: self.attributes,
-            source_range: self.source_range,
-            calls,
-            effects,
-            markers,
+        Ok(FinishedBody {
+            body: FunctionBodyIr {
+                function: self.function,
+                provenance: self.provenance,
+                display_path: self.display_path,
+                attributes: self.attributes,
+                source_range: self.source_range,
+                calls,
+                effects,
+                markers,
+            },
         })
     }
+}
+
+struct FinishedBody {
+    body: FunctionBodyIr,
 }
 
 fn local_id(index: usize, label: &str) -> Result<u32, ExtractError> {
@@ -1661,7 +3123,154 @@ fn local_id(index: usize, label: &str) -> Result<u32, ExtractError> {
 
 struct PendingCall {
     key: String,
-    call: CallEdgeIr,
+    stable_sort_key: PendingCallSortKey,
+    call_site: u32,
+    kind: CallKind,
+    safety_effect_group: u32,
+    requires_unsafe: bool,
+    inside_builtin_unsafe: bool,
+    presentation_anchor: Option<SourceAnchorKey>,
+    expanded_anchor: Option<SourceAnchorKey>,
+    callee_anchor: Option<SourceAnchorKey>,
+    applicable_attribution: Vec<CallAttributionRole>,
+    callable_keys: Vec<CallableKey>,
+    targets: Vec<CollectedCallTarget>,
+    callable_declarations: Vec<PendingCallableDeclaration>,
+    opaque_target_description: Option<String>,
+    panic_requirements: Vec<ContractRequirementIr>,
+    safety_requirements: Vec<ContractRequirementIr>,
+    typed_macro_expansions: Vec<ExtractedMacroExpansionFrame>,
+    legacy: PendingLegacyCallProjection,
+}
+
+#[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
+struct PendingCallSortKey {
+    kind: CallKind,
+    presentation_anchor: Option<SourceAnchorKey>,
+    expanded_anchor: Option<SourceAnchorKey>,
+    callee_anchor: Option<SourceAnchorKey>,
+    macro_expansions: Vec<StableExpansionHash>,
+    targets: Vec<(CallTargetRole, FunctionKey)>,
+    compiler_assert_site: Option<reachability::MirBodyLocation>,
+    call_site: u32,
+    safety_effect_group: u32,
+    requires_unsafe: bool,
+    inside_builtin_unsafe: bool,
+}
+
+impl PendingCall {
+    fn into_legacy(self, id: CallId) -> CallEdgeIr {
+        CallEdgeIr {
+            id,
+            call_site: CallSiteId::new(self.call_site),
+            kind: legacy_call_kind(self.kind),
+            safety_effect_group: Some(SafetyEffectGroupId::new(self.safety_effect_group)),
+            requires_unsafe: self.requires_unsafe,
+            inside_builtin_unsafe: self.inside_builtin_unsafe,
+            source_range: self
+                .presentation_anchor
+                .as_ref()
+                .map(SourceTable::project_anchor),
+            expanded_range: self
+                .expanded_anchor
+                .as_ref()
+                .map(SourceTable::project_anchor),
+            macro_expansions: self.legacy.macro_expansions,
+            callee_range: self.callee_anchor.as_ref().map(SourceTable::project_anchor),
+            applicable_attribution: self
+                .applicable_attribution
+                .into_iter()
+                .map(|role| match role {
+                    CallAttributionRole::ErasureSite => CallableAttributionIr::ErasureSites,
+                    CallAttributionRole::CallSite => CallableAttributionIr::CallSites,
+                })
+                .collect(),
+            callable_keys: self
+                .callable_keys
+                .into_iter()
+                .map(|key| match key {
+                    CallableKey::FnPointer(identity) => CallableKeyIr::FnPointer(identity),
+                    CallableKey::DynDispatch(identity) => CallableKeyIr::DynDispatch(identity),
+                })
+                .collect(),
+            source_target: self
+                .legacy
+                .source_target
+                .map(PendingFunctionTarget::into_legacy),
+            target: self.legacy.target.into_legacy(),
+        }
+    }
+}
+
+struct PendingLegacyCallProjection {
+    macro_expansions: Vec<MacroExpansionFrameIr>,
+    source_target: Option<PendingFunctionTarget>,
+    target: PendingCallTarget,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct PendingFunctionTarget {
+    function: FunctionId,
+    display_path: String,
+    attributes: FunctionAttributesIr,
+    contracts: FunctionContractsIr,
+}
+
+impl PendingFunctionTarget {
+    fn into_legacy(self) -> FunctionTargetIr {
+        FunctionTargetIr {
+            function: self.function,
+            display_path: self.display_path,
+            attributes: self.attributes,
+            contracts: self.contracts,
+        }
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+enum PendingOpaqueTarget {
+    Trait(PendingFunctionTarget),
+    Function(PendingFunctionTarget),
+}
+
+impl PendingOpaqueTarget {
+    fn into_legacy(self) -> OpaqueTargetIr {
+        match self {
+            Self::Trait(target) => OpaqueTargetIr::Trait(target.into_legacy()),
+            Self::Function(target) => OpaqueTargetIr::Function(target.into_legacy()),
+        }
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+enum PendingCallTarget {
+    Function(PendingFunctionTarget),
+    OpaqueBoundary {
+        description: String,
+        target: Option<PendingOpaqueTarget>,
+    },
+}
+
+impl PendingCallTarget {
+    fn into_legacy(self) -> CallTargetIr {
+        match self {
+            Self::Function(target) => CallTargetIr::Function(target.into_legacy()),
+            Self::OpaqueBoundary {
+                description,
+                target,
+            } => CallTargetIr::OpaqueBoundary {
+                description,
+                target: target.map(PendingOpaqueTarget::into_legacy),
+            },
+        }
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct PendingCallableDeclaration {
+    callable: CallableEntity,
+    panic_contract: Option<CollectedPanicContract>,
+    safety_contract: Option<CollectedSafetyContract>,
 }
 
 struct PendingEffect {
@@ -1680,16 +3289,41 @@ struct PendingMarker {
     requirements: Vec<ContractRequirementIr>,
 }
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 enum PendingMarkerTarget {
     Function,
     Call(String),
     Effect(String),
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+enum PendingTypedMarkerTarget {
+    Call(String),
+    Effect(String),
+    UnsafeOperation(UnsafeOperationKey),
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct PendingTypedMarker {
+    occurrence: MarkerOccurrenceEntity,
+    domain: DomainId,
+    satisfactions: Vec<MarkerSatisfactionIr>,
+    applicable_satisfactions: Vec<u32>,
+    target: PendingTypedMarkerTarget,
+    source_callsite: bool,
+    macro_definition_first: bool,
+}
+
+#[derive(Default)]
+struct ExtractionSources {
+    legacy: SourceTable,
+    typed: SourceTable,
+}
+
 #[derive(Default)]
 struct SourceTable {
-    files: BTreeMap<SourceFileId, SourceFileIr>,
+    files: BTreeMap<String, SourceFileEntity>,
+    anchors: BTreeSet<SourceAnchorKey>,
 }
 
 impl SourceTable {
@@ -1711,39 +3345,111 @@ impl SourceTable {
             )));
         }
         let id = stable_source_file_id(&file);
-        self.files
-            .entry(id.clone())
-            .or_insert_with(|| SourceFileIr {
-                id: id.clone(),
-                filename: source_filename(&file),
-                content_hash: file.src_hash.to_string(),
-                byte_len: u64::from(file.normalized_source_len.to_u32()),
-            });
-        Ok(Some(SourceRangeIr {
-            file: id,
-            byte_start: u64::from(span.lo().0 - file.start_pos.0),
-            byte_end: u64::from(span.hi().0 - file.start_pos.0),
-        }))
+        self.files.entry(id.as_str().to_owned()).or_insert_with(|| {
+            SourceFileEntity::new(
+                id.as_str(),
+                source_filename(&file),
+                file.src_hash.to_string(),
+                u64::from(file.normalized_source_len.to_u32()),
+            )
+        });
+        let anchor = SourceAnchorKey::new(
+            id.as_str(),
+            u64::from(span.lo().0 - file.start_pos.0),
+            u64::from(span.hi().0 - file.start_pos.0),
+        );
+        self.anchors.insert(anchor.clone());
+        Ok(Some(Self::project_anchor(&anchor)))
     }
 
     fn into_files(self) -> Vec<SourceFileIr> {
-        self.files.into_values().collect()
+        self.files
+            .into_values()
+            .map(|file| SourceFileIr {
+                id: SourceFileId::new(file.id()),
+                filename: file.filename().to_owned(),
+                content_hash: file.content_hash().to_owned(),
+                byte_len: file.byte_len(),
+            })
+            .collect()
+    }
+
+    fn project_anchor(anchor: &SourceAnchorKey) -> SourceRangeIr {
+        SourceRangeIr {
+            file: SourceFileId::new(anchor.file()),
+            byte_start: anchor.byte_start(),
+            byte_end: anchor.byte_end(),
+        }
+    }
+
+    fn anchor_from_range(range: &SourceRangeIr) -> SourceAnchorKey {
+        SourceAnchorKey::new(range.file.as_str(), range.byte_start, range.byte_end)
+    }
+
+    fn source_files(&self) -> Vec<SourceFileEntity> {
+        self.files.values().cloned().collect()
+    }
+
+    fn source_anchors(&self) -> Vec<SourceAnchorEntity> {
+        self.anchors
+            .iter()
+            .cloned()
+            .map(SourceAnchorEntity::new)
+            .collect()
     }
 }
 
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeSet;
+    use std::fs;
+    use std::path::Path;
+    use std::process::Command;
+
     use reachability::{
         DynDispatchVTableEdges, FnPointerEdges, ReachabilityEdgeKind, ReachabilityHalt,
     };
+    use rustc_driver::{Callbacks, Compilation};
     use rustc_hir::def_id::{CRATE_DEF_ID, DefId, DefIndex};
+    use rustc_interface::interface;
+    use rustc_middle::ty::TyCtxt;
     use rustc_span::{BytePos, Span};
 
     use super::{
-        RawSafetyGroupResolver, extraction_options, probing_modes, reachability_edge_description,
-        reachability_halt_description,
+        RawSafetyGroupResolver, extract_artifact_bundle, extraction_options, probing_modes,
+        reachability_edge_description, reachability_halt_description,
     };
-    use crate::analysis::ir::{CallSiteId, MarkerProbingIr, SafetyEffectGroupId};
+    use crate::analysis::facts::collection::CollectedArtifactSchemaPack;
+    use crate::analysis::facts::encoded::ArtifactFactIr;
+    use crate::analysis::facts::human::{
+        EvidenceClaimSelector,
+        markers::{
+            CallOccurrenceHasMarkerClaimCandidate, EffectSiteHasMarkerClaimCandidate,
+            MarkerClaimEntity, MarkerOccurrenceEntity, UnsafeOperationHasMarkerClaimCandidate,
+        },
+    };
+    use crate::analysis::facts::pack::AnalysisRegistry;
+    use crate::analysis::facts::panic::contracts::PanicContractFact;
+    use crate::analysis::facts::panic::model::{
+        BinaryOverflowOperation, MirAssertFact, MirAssertKind,
+    };
+    use crate::analysis::facts::program::topology::{
+        CallMacroExpansionEntity, CallMacroExpansionHasCallsite,
+    };
+    use crate::analysis::facts::program::{
+        EffectSiteEntity, FunctionEntity, FunctionKey, MacroExpansionEntity,
+        MacroExpansionHasCallsite,
+    };
+    use crate::analysis::facts::safety::SafetyContractFact;
+    use crate::analysis::facts::safety::operations::{
+        UnsafeOperationEntity, UnsafeOperationMacroExpansionEntity,
+    };
+    use crate::analysis::facts::schema::EntitySchema;
+    use crate::analysis::facts::view::ArtifactDbView;
+    use crate::analysis::ir::{
+        ArtifactAnalysisIr, CallEdgeKindIr, CallSiteId, EffectKindIr, MarkerProbingIr,
+        SafetyEffectGroupId,
+    };
     use crate::safety::{
         RawSafetyCallFact, RawSafetyEffectGroup, RawSafetyFacts, RawSafetyGroupFact,
         RawSafetyOpFact, SafetyOpKind,
@@ -1751,6 +3457,671 @@ mod tests {
 
     fn span(start: u32, end: u32) -> Span {
         Span::with_root_ctxt(BytePos(start), BytePos(end))
+    }
+
+    const TYPED_ASSERT_SOURCE: &str = r"
+macro_rules! checked_lookup {
+    ($values:expr, $index:expr) => {{
+        let first = $values[$index];
+        let second = $values[$index];
+        first + second
+    }};
+}
+
+pub fn entry(values: &[u8], index: usize) -> u8 {
+    checked_lookup!(values, index)
+}
+";
+
+    const SAME_SPAN_ASSERT_SOURCE: &str = r"
+macro_rules! duplicate {
+    ($expression:expr) => {
+        ($expression, $expression)
+    };
+}
+
+#[inline(never)]
+fn select(values: &[u8]) -> &[u8] {
+    values
+}
+
+pub fn entry(values: &[u8], index: usize) -> (u8, u8) {
+    duplicate!(select(values)[index])
+}
+";
+
+    const EQUAL_CALLSITE_MACRO_ASSERT_SOURCE: &str = r"
+macro_rules! repeated_check {
+    ($values:expr, $index:expr) => {{
+        select($values)[$index]
+    }};
+}
+
+macro_rules! duplicate_tokens {
+    ($expression:expr) => {
+        ($expression, $expression)
+    };
+}
+
+#[inline(never)]
+fn select(values: &[u8]) -> &[u8] {
+    values
+}
+
+pub fn entry(values: &[u8], index: usize) -> (u8, u8) {
+    duplicate_tokens!(repeated_check!(values, index))
+}
+";
+
+    const DIRECT_COLLECTION_SOURCE: &str = r"
+macro_rules! read_pointer_inner {
+    ($pointer:expr) => {{
+        unsafe { &*$pointer }
+    }};
+}
+
+macro_rules! read_pointer {
+    ($pointer:expr) => {{
+        // SAFETY: pointer-valid: guaranteed by the caller.
+        read_pointer_inner!($pointer)
+    }};
+}
+
+/// # Safety
+/// - `pointer-valid`: `pointer` must be valid for reads.
+///
+/// # Panics
+/// - `index-in-bounds`: `index` must be less than `values.len()`.
+pub unsafe fn documented<T>(pointer: *const T, values: &[u8], index: usize) -> u8 {
+    let _reference = read_pointer!(pointer);
+    // PANIC: index-in-bounds: guaranteed by the caller.
+    values[index]
+}
+
+pub fn entry(first: *const u8, second: *const u16, values: &[u8], index: usize) -> u8 {
+    unsafe {
+        documented::<u8>(first, values, index)
+            + documented::<u16>(second, values, index)
+    }
+}
+";
+
+    const CLOSURE_UNSAFE_SOURCE: &str = r"
+pub fn closure_owner(pointer: *const u8) -> u8 {
+    let read = || {
+        // SAFETY: pointer validity is guaranteed by the caller.
+        unsafe { *pointer }
+    };
+    read()
+}
+";
+
+    const MIXED_MARKER_SOURCE: &str = r"
+struct Chain(u8);
+
+impl Chain {
+    fn first(self) -> Self { self }
+    fn second(self) -> u8 { self.0 }
+}
+
+fn make(value: u8) -> Chain { Chain(value) }
+
+pub fn entry(value: u8) -> u8 {
+    // PANIC: the complete statement invariant was checked.
+    // PANIC: nested-link: each nested link was checked.
+    make(value)
+        .first()
+        .second()
+}
+";
+
+    #[derive(Debug)]
+    struct DirectCollectionCompilerResult {
+        deterministic: bool,
+        unsafe_operation_count: usize,
+        exact_runtime_bodies_for_unsafe_definition: usize,
+        panic_contract_count: usize,
+        safety_contract_count: usize,
+        marker_occurrence_count: usize,
+        marker_claim_count: usize,
+        effect_marker_candidate_count: usize,
+        unsafe_marker_candidate_count: usize,
+        unsafe_macro_frame_count: usize,
+        macro_marker_occurrence_count: usize,
+        legacy_generic_closure_bodies: usize,
+        legacy_exact_closure_bodies: usize,
+        legacy_exact_closure_unsafe_effects: usize,
+        marker_claims: Vec<(u32, EvidenceClaimSelector)>,
+        call_candidate_claim_ordinals: Vec<u32>,
+        invariants: DirectCollectionInvariants,
+    }
+
+    #[derive(Debug)]
+    struct DirectCollectionInvariants {
+        unsafe_owners_are_generic: bool,
+        contract_owners_are_generic: bool,
+        unsafe_marker_path_is_endpoint_prefix: bool,
+    }
+
+    #[derive(Clone, Copy)]
+    struct LegacyClosureObservation {
+        generic_bodies: usize,
+        exact_bodies: usize,
+        exact_unsafe_effects: usize,
+    }
+
+    fn observe_legacy_closure(ir: &ArtifactAnalysisIr) -> LegacyClosureObservation {
+        let closure_bodies = ir
+            .functions
+            .iter()
+            .filter(|body| body.display_path.contains("::{closure"))
+            .collect::<Vec<_>>();
+        LegacyClosureObservation {
+            generic_bodies: closure_bodies
+                .iter()
+                .filter(|body| body.function.instance_hash.is_none())
+                .count(),
+            exact_bodies: closure_bodies
+                .iter()
+                .filter(|body| body.function.instance_hash.is_some())
+                .count(),
+            exact_unsafe_effects: closure_bodies
+                .into_iter()
+                .filter(|body| body.function.instance_hash.is_some())
+                .flat_map(|body| &body.effects)
+                .filter(|effect| matches!(effect.kind, EffectKindIr::UnsafeOperation { .. }))
+                .count(),
+        }
+    }
+
+    #[derive(Default)]
+    struct DirectCollectionCallbacks {
+        result: Option<DirectCollectionCompilerResult>,
+    }
+
+    impl Callbacks for DirectCollectionCallbacks {
+        fn after_analysis(
+            &mut self,
+            _compiler: &interface::Compiler,
+            tcx: TyCtxt<'_>,
+        ) -> Compilation {
+            self.result = Some(observe_direct_collection(tcx));
+            Compilation::Stop
+        }
+    }
+
+    fn observe_direct_collection(tcx: TyCtxt<'_>) -> DirectCollectionCompilerResult {
+        let first = extract_artifact_bundle(tcx).expect("first direct typed extraction");
+        first
+            .legacy_ir
+            .validate()
+            .expect("direct collection preserves valid legacy IR");
+        let legacy_closure = observe_legacy_closure(&first.legacy_ir);
+        let second = extract_artifact_bundle(tcx)
+            .expect("second direct typed extraction")
+            .facts;
+        let deterministic = first.facts == second;
+        let mut registry = AnalysisRegistry::<()>::new();
+        registry.install(&CollectedArtifactSchemaPack).unwrap();
+        let view = ArtifactDbView::open(&first.facts, registry.schemas()).unwrap();
+        observe_direct_view(&view, deterministic, legacy_closure)
+    }
+
+    fn observe_direct_view(
+        view: &ArtifactDbView<'_>,
+        deterministic: bool,
+        legacy_closure: LegacyClosureObservation,
+    ) -> DirectCollectionCompilerResult {
+        let operations = view.table::<UnsafeOperationEntity>().unwrap();
+        let unsafe_definition = operations
+            .iter()
+            .next()
+            .map(|operation| operation.key().owner().definition());
+        let functions = view.table::<FunctionEntity>().unwrap();
+        let exact_runtime_bodies_for_unsafe_definition = unsafe_definition.map_or(0, |hash| {
+            functions
+                .iter()
+                .filter(|function| {
+                    function.key().definition() == hash && function.key().instance().is_some()
+                })
+                .count()
+        });
+        let panic_contracts = view.facts::<PanicContractFact>().unwrap();
+        let safety_contracts = view.facts::<SafetyContractFact>().unwrap();
+        let callables = view
+            .table::<crate::analysis::facts::program::topology::CallableEntity>()
+            .unwrap();
+        let owner_is_generic = |owner: Option<&crate::analysis::facts::encoded::EntityRef>| {
+            owner.is_some_and(|owner| {
+                callables
+                    .get(owner.row)
+                    .is_some_and(|callable| callable.key().instance().is_none())
+            })
+        };
+        let contract_owners_are_generic = panic_contracts
+            .iter()
+            .all(|contract| owner_is_generic(contract.metadata.owner.as_ref()))
+            && safety_contracts
+                .iter()
+                .all(|contract| owner_is_generic(contract.metadata.owner.as_ref()));
+        let unsafe_macro_frames = view.table::<UnsafeOperationMacroExpansionEntity>().unwrap();
+        DirectCollectionCompilerResult {
+            deterministic,
+            unsafe_operation_count: operations.len(),
+            exact_runtime_bodies_for_unsafe_definition,
+            panic_contract_count: panic_contracts.len(),
+            safety_contract_count: safety_contracts.len(),
+            marker_occurrence_count: view.table::<MarkerOccurrenceEntity>().unwrap().len(),
+            marker_claim_count: view.table::<MarkerClaimEntity>().unwrap().len(),
+            effect_marker_candidate_count: view
+                .relations::<EffectSiteHasMarkerClaimCandidate>()
+                .unwrap()
+                .len(),
+            unsafe_marker_candidate_count: view
+                .relations::<UnsafeOperationHasMarkerClaimCandidate>()
+                .unwrap()
+                .len(),
+            unsafe_macro_frame_count: unsafe_macro_frames.len(),
+            macro_marker_occurrence_count: view
+                .table::<MarkerOccurrenceEntity>()
+                .unwrap()
+                .iter()
+                .filter(|occurrence| occurrence.key().origin().is_some())
+                .count(),
+            legacy_generic_closure_bodies: legacy_closure.generic_bodies,
+            legacy_exact_closure_bodies: legacy_closure.exact_bodies,
+            legacy_exact_closure_unsafe_effects: legacy_closure.exact_unsafe_effects,
+            marker_claims: view
+                .table::<MarkerClaimEntity>()
+                .unwrap()
+                .iter()
+                .map(|claim| (claim.key().source_ordinal(), claim.selector().clone()))
+                .collect(),
+            call_candidate_claim_ordinals: view
+                .relations::<CallOccurrenceHasMarkerClaimCandidate>()
+                .unwrap()
+                .into_iter()
+                .map(|candidate| view.entity(candidate.to).unwrap().key().source_ordinal())
+                .collect(),
+            invariants: DirectCollectionInvariants {
+                unsafe_owners_are_generic: operations
+                    .iter()
+                    .all(|operation| operation.key().owner().instance().is_none()),
+                contract_owners_are_generic,
+                unsafe_marker_path_is_endpoint_prefix: unsafe_marker_path_is_endpoint_prefix(
+                    view,
+                    &unsafe_macro_frames,
+                ),
+            },
+        }
+    }
+
+    fn unsafe_marker_path_is_endpoint_prefix(
+        view: &ArtifactDbView<'_>,
+        frames: &crate::analysis::facts::view::TypedTable<UnsafeOperationMacroExpansionEntity>,
+    ) -> bool {
+        view.relations::<UnsafeOperationHasMarkerClaimCandidate>()
+            .unwrap()
+            .into_iter()
+            .all(|candidate| {
+                let operation = view.entity(candidate.from).unwrap();
+                let claim = view.entity(candidate.to).unwrap();
+                let occurrence = view
+                    .entity_by_key::<MarkerOccurrenceEntity>(claim.key().occurrence())
+                    .unwrap()
+                    .unwrap();
+                let mut path = frames
+                    .iter()
+                    .filter(|frame| frame.key().operation() == operation.key())
+                    .collect::<Vec<_>>();
+                path.sort_by_key(|frame| frame.key().depth());
+                let path = path
+                    .into_iter()
+                    .map(UnsafeOperationMacroExpansionEntity::expansion_hash)
+                    .collect::<Vec<_>>();
+                path.starts_with(occurrence.1.expansion_path())
+            })
+    }
+
+    #[derive(Debug)]
+    struct TypedAssertCompilerResult {
+        deterministic: bool,
+        facts: ArtifactFactIr,
+        kinds: Vec<MirAssertKind>,
+        legacy_assert_calls: usize,
+        legacy_effects: usize,
+        effect_sites: usize,
+        unique_effect_sites: usize,
+        repeated_macros: RepeatedMacroObservation,
+    }
+
+    #[derive(Debug)]
+    struct RepeatedMacroObservation {
+        frame_count: usize,
+        depths: Vec<u32>,
+        unique_hash_count: usize,
+        callsite_count: usize,
+        unique_callsite_count: usize,
+        call_frame_count: usize,
+        unique_call_hash_count: usize,
+        call_macro_callsite_count: usize,
+        unique_call_macro_callsite_count: usize,
+    }
+
+    #[derive(Default)]
+    struct TypedAssertCallbacks {
+        result: Option<TypedAssertCompilerResult>,
+    }
+
+    fn observe_repeated_macros(view: &ArtifactDbView<'_>) -> RepeatedMacroObservation {
+        let macro_expansions = view.table::<MacroExpansionEntity>().unwrap();
+        let frames = macro_expansions
+            .iter()
+            .filter(|frame| frame.display_path().ends_with("::repeated_check"))
+            .collect::<Vec<_>>();
+        let unique_hash_count = frames
+            .iter()
+            .map(|frame| frame.expansion_hash())
+            .collect::<BTreeSet<_>>()
+            .len();
+        let callsites = view
+            .relations::<MacroExpansionHasCallsite>()
+            .unwrap()
+            .into_iter()
+            .filter_map(|relation| {
+                let frame = view.entity(relation.from).unwrap();
+                frame
+                    .display_path()
+                    .ends_with("::repeated_check")
+                    .then(|| view.entity(relation.to).unwrap().anchor().clone())
+            })
+            .collect::<Vec<_>>();
+        let call_macro_expansions = view.table::<CallMacroExpansionEntity>().unwrap();
+        let call_frames = call_macro_expansions
+            .iter()
+            .filter(|frame| frame.display_path().ends_with("::repeated_check"))
+            .collect::<Vec<_>>();
+        let call_macro_callsites = view
+            .relations::<CallMacroExpansionHasCallsite>()
+            .unwrap()
+            .into_iter()
+            .filter_map(|relation| {
+                let frame = view.entity(relation.from).unwrap();
+                frame
+                    .display_path()
+                    .ends_with("::repeated_check")
+                    .then(|| view.entity(relation.to).unwrap().anchor().clone())
+            })
+            .collect::<Vec<_>>();
+        RepeatedMacroObservation {
+            frame_count: frames.len(),
+            depths: frames
+                .iter()
+                .map(|frame| frame.expansion().depth())
+                .collect(),
+            unique_hash_count,
+            callsite_count: callsites.len(),
+            unique_callsite_count: callsites.into_iter().collect::<BTreeSet<_>>().len(),
+            call_frame_count: call_frames.len(),
+            unique_call_hash_count: call_frames
+                .iter()
+                .map(|frame| frame.expansion_hash())
+                .collect::<BTreeSet<_>>()
+                .len(),
+            call_macro_callsite_count: call_macro_callsites.len(),
+            unique_call_macro_callsite_count: call_macro_callsites
+                .into_iter()
+                .collect::<BTreeSet<_>>()
+                .len(),
+        }
+    }
+
+    impl Callbacks for TypedAssertCallbacks {
+        fn after_analysis(
+            &mut self,
+            _compiler: &interface::Compiler,
+            tcx: TyCtxt<'_>,
+        ) -> Compilation {
+            let first_bundle = extract_artifact_bundle(tcx).expect("first typed extraction");
+            first_bundle
+                .legacy_ir
+                .validate()
+                .expect("typed fact collection preserves valid legacy IR");
+            let legacy_effects = first_bundle
+                .legacy_ir
+                .functions
+                .iter()
+                .flat_map(|body| {
+                    let function =
+                        FunctionKey::new(body.function.def_path_hash, body.function.instance_hash);
+                    body.effects.iter().filter_map(move |effect| {
+                        matches!(effect.kind, EffectKindIr::CompilerAssert { .. })
+                            .then_some((function, effect.id.index()))
+                    })
+                })
+                .collect::<BTreeSet<_>>();
+            let legacy_assert_calls = first_bundle
+                .legacy_ir
+                .functions
+                .iter()
+                .flat_map(|body| &body.calls)
+                .filter(|call| call.kind == CallEdgeKindIr::Assert)
+                .count();
+            let first = first_bundle.facts;
+            let second = extract_artifact_bundle(tcx)
+                .expect("second typed extraction")
+                .facts;
+            let mut registry = AnalysisRegistry::<()>::new();
+            registry.install(&CollectedArtifactSchemaPack).unwrap();
+            let view = ArtifactDbView::open(&first, registry.schemas()).unwrap();
+            let kinds = view
+                .facts::<MirAssertFact>()
+                .unwrap()
+                .into_iter()
+                .map(|fact| fact.fact.data.kind())
+                .collect::<Vec<_>>();
+            let effect_sites = view.table::<EffectSiteEntity>().unwrap();
+            let unique_effect_sites = effect_sites
+                .iter()
+                .map(EntitySchema::key)
+                .collect::<BTreeSet<_>>()
+                .len();
+            let repeated_macros = observe_repeated_macros(&view);
+            self.result = Some(TypedAssertCompilerResult {
+                deterministic: first == second,
+                facts: first.clone(),
+                kinds,
+                legacy_assert_calls,
+                legacy_effects: legacy_effects.len(),
+                effect_sites: effect_sites.len(),
+                unique_effect_sites,
+                repeated_macros,
+            });
+            Compilation::Stop
+        }
+    }
+
+    fn compile_typed_asserts(source_text: &str, crate_name: &str) -> TypedAssertCompilerResult {
+        let directory = tempfile::tempdir().expect("temporary compiler fixture");
+        let source = directory.path().join("lib.rs");
+        fs::write(&source, source_text).expect("write compiler fixture");
+        run_typed_assert_compiler(&source, crate_name)
+    }
+
+    fn run_typed_assert_compiler(source: &Path, crate_name: &str) -> TypedAssertCompilerResult {
+        let sysroot = Command::new("rustc")
+            .args(["--print", "sysroot"])
+            .output()
+            .expect("query rustc sysroot");
+        assert!(sysroot.status.success());
+        let sysroot = String::from_utf8(sysroot.stdout)
+            .expect("UTF-8 sysroot")
+            .trim()
+            .to_owned();
+        let args = vec![
+            String::from("rustc"),
+            String::from("--crate-name"),
+            String::from(crate_name),
+            String::from("--crate-type"),
+            String::from("lib"),
+            String::from("--edition"),
+            String::from("2024"),
+            String::from("--sysroot"),
+            sysroot,
+            String::from("-Zno-steal-thir"),
+            String::from("-Awarnings"),
+            source.display().to_string(),
+        ];
+        let mut callbacks = TypedAssertCallbacks::default();
+        rustc_driver::run_compiler(&args, &mut callbacks);
+        callbacks.result.expect("compiler callback ran")
+    }
+
+    fn compile_direct_collection(
+        source_text: &str,
+        crate_name: &str,
+    ) -> DirectCollectionCompilerResult {
+        let directory = tempfile::tempdir().expect("temporary compiler fixture");
+        let source = directory.path().join("lib.rs");
+        fs::write(&source, source_text).expect("write compiler fixture");
+        let sysroot = Command::new("rustc")
+            .args(["--print", "sysroot"])
+            .output()
+            .expect("query rustc sysroot");
+        assert!(sysroot.status.success());
+        let sysroot = String::from_utf8(sysroot.stdout)
+            .expect("UTF-8 sysroot")
+            .trim()
+            .to_owned();
+        let args = vec![
+            String::from("rustc"),
+            String::from("--crate-name"),
+            String::from(crate_name),
+            String::from("--crate-type"),
+            String::from("lib"),
+            String::from("--edition"),
+            String::from("2024"),
+            String::from("--sysroot"),
+            sysroot,
+            String::from("-Zno-steal-thir"),
+            String::from("-Awarnings"),
+            source.display().to_string(),
+        ];
+        let mut callbacks = DirectCollectionCallbacks::default();
+        rustc_driver::run_compiler(&args, &mut callbacks);
+        callbacks.result.expect("compiler callback ran")
+    }
+
+    #[test]
+    fn compiler_extraction_emits_precise_deterministic_typed_assert_facts() {
+        let result = compile_typed_asserts(TYPED_ASSERT_SOURCE, "typed_assert_fixture");
+
+        assert!(result.deterministic);
+        assert_eq!(result.effect_sites, result.unique_effect_sites);
+        assert_eq!(result.effect_sites, result.kinds.len());
+        assert!(result.kinds.contains(&MirAssertKind::BoundsCheck));
+        assert!(
+            result
+                .kinds
+                .contains(&MirAssertKind::Overflow(BinaryOverflowOperation::Addition))
+        );
+    }
+
+    #[test]
+    fn typed_call_occurrence_order_is_stable_across_compiler_sessions() {
+        let directory = tempfile::tempdir().expect("temporary compiler fixture");
+        let source = directory.path().join("lib.rs");
+        fs::write(&source, EQUAL_CALLSITE_MACRO_ASSERT_SOURCE).expect("write compiler fixture");
+
+        let first = run_typed_assert_compiler(&source, "cross_session_call_order_fixture");
+        let second = run_typed_assert_compiler(&source, "cross_session_call_order_fixture");
+
+        assert_eq!(first.facts, second.facts);
+    }
+
+    #[test]
+    fn compiler_extraction_keeps_same_span_assertions_as_distinct_legacy_effects() {
+        let result = compile_typed_asserts(SAME_SPAN_ASSERT_SOURCE, "same_span_assert_fixture");
+
+        assert_eq!(result.kinds, [MirAssertKind::BoundsCheck; 2]);
+        assert_eq!(result.legacy_assert_calls, 2);
+        assert_eq!(result.legacy_effects, 2);
+        assert_eq!(result.effect_sites, 2);
+        assert_eq!(result.unique_effect_sites, 2);
+    }
+
+    #[test]
+    fn repeated_macro_invocations_with_one_callsite_keep_distinct_stable_identity() {
+        let result = compile_typed_asserts(
+            EQUAL_CALLSITE_MACRO_ASSERT_SOURCE,
+            "equal_callsite_macro_assert_fixture",
+        );
+
+        assert_eq!(result.kinds, [MirAssertKind::BoundsCheck; 2]);
+        assert_eq!(result.repeated_macros.frame_count, 2);
+        assert_eq!(result.repeated_macros.depths, [1, 1]);
+        assert_eq!(result.repeated_macros.unique_hash_count, 2);
+        assert_eq!(result.repeated_macros.callsite_count, 2);
+        assert_eq!(result.repeated_macros.unique_callsite_count, 1);
+        assert_eq!(result.repeated_macros.call_frame_count, 4);
+        assert_eq!(result.repeated_macros.unique_call_hash_count, 2);
+        assert_eq!(result.repeated_macros.call_macro_callsite_count, 4);
+        assert_eq!(result.repeated_macros.unique_call_macro_callsite_count, 1);
+    }
+
+    #[test]
+    fn direct_collection_keeps_source_owned_domains_generic_and_migrates_markers() {
+        let result =
+            compile_direct_collection(DIRECT_COLLECTION_SOURCE, "direct_collection_fixture");
+
+        assert!(result.deterministic);
+        assert_eq!(result.unsafe_operation_count, 1);
+        assert!(result.invariants.unsafe_owners_are_generic);
+        assert_eq!(result.exact_runtime_bodies_for_unsafe_definition, 2);
+        assert_eq!(result.panic_contract_count, 1);
+        assert_eq!(result.safety_contract_count, 1);
+        assert!(result.invariants.contract_owners_are_generic);
+        assert_eq!(result.marker_occurrence_count, 2);
+        assert_eq!(result.marker_claim_count, 2);
+        assert_eq!(result.effect_marker_candidate_count, 3);
+        assert_eq!(result.unsafe_marker_candidate_count, 1);
+        assert_eq!(result.unsafe_macro_frame_count, 2);
+        assert!(result.invariants.unsafe_marker_path_is_endpoint_prefix);
+        assert_eq!(result.macro_marker_occurrence_count, 1);
+    }
+
+    #[test]
+    fn permanent_generic_unsafe_ownership_preserves_exact_legacy_closure_projection() {
+        let result = compile_direct_collection(CLOSURE_UNSAFE_SOURCE, "closure_unsafe_fixture");
+
+        assert_eq!(result.unsafe_operation_count, 1);
+        assert!(result.invariants.unsafe_owners_are_generic);
+        assert_eq!(result.legacy_generic_closure_bodies, 0);
+        assert_eq!(result.legacy_exact_closure_bodies, 1);
+        assert_eq!(result.legacy_exact_closure_unsafe_effects, 1);
+        assert_eq!(result.unsafe_marker_candidate_count, 1);
+    }
+
+    #[test]
+    fn mixed_statement_marker_preserves_full_claims_and_original_candidate_ordinals() {
+        let result = compile_direct_collection(MIXED_MARKER_SOURCE, "mixed_marker_fixture");
+
+        assert_eq!(
+            result.marker_claims,
+            [
+                (0, EvidenceClaimSelector::Unnamed),
+                (1, EvidenceClaimSelector::Named(String::from("nested-link")),),
+            ]
+        );
+        assert!(result.call_candidate_claim_ordinals.contains(&0));
+        assert!(
+            result
+                .call_candidate_claim_ordinals
+                .iter()
+                .filter(|ordinal| **ordinal == 1)
+                .count()
+                > 1
+        );
     }
 
     fn safety_group_id(raw: usize) -> SafetyEffectGroupId {

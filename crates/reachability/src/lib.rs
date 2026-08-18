@@ -54,9 +54,9 @@ pub use analysis::{
     ReachabilityOptions, ReachabilityRoot,
 };
 pub use graph::{
-    CallableEdgeInfo, CompilerAssertLocal, CompilerAssertLocalRole, ReachabilityEdge,
-    ReachabilityEdgeId, ReachabilityEdgeKind, ReachabilityGraph, ReachabilityNode,
-    ReachabilityNodeExpansion, ReachabilityNodeId, ReachabilityNodeKind, ReachabilitySnapshot,
-    ReachabilityView, ReachedEdge, ReachedNode,
+    CallableEdgeInfo, CompilerAssertLocal, CompilerAssertLocalRole, MirBodyLocation,
+    ReachabilityEdge, ReachabilityEdgeId, ReachabilityEdgeKind, ReachabilityGraph,
+    ReachabilityNode, ReachabilityNodeExpansion, ReachabilityNodeId, ReachabilityNodeKind,
+    ReachabilitySnapshot, ReachabilityView, ReachedEdge, ReachedNode,
 };
 pub use hooks::{NoopReachabilityHooks, ReachabilityHalt, ReachabilityHooks};

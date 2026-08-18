@@ -4,21 +4,28 @@
 //! after the loaded file's stable identity, content hash, normalized byte
 //! length, and requested byte range all match the artifact IR.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::hash::Hasher;
 use std::io;
 use std::path::Path;
+use std::sync::Arc;
 
 use rustc_data_structures::{fingerprint::Fingerprint, stable_hasher::StableHasher};
 use rustc_middle::ty::TyCtxt;
 use rustc_span::source_map::SourceMap;
 use rustc_span::{BytePos, Pos, SourceFile, Span};
 
+use super::facts::encoded::ArtifactFactIr;
+use super::facts::human::markers::{MarkerOccurrenceEntity, MarkerOccurrenceHasSourceAnchor};
+use super::facts::program::{SourceAnchorEntity, SourceAnchorInFile, SourceFileEntity};
+use super::facts::registry::SchemaRegistry;
+use super::facts::schema::RowSchema;
+use super::facts::view::{ArtifactDbView, IndexedRow};
 use super::ir::{ArtifactAnalysisIr, SourceFileId, SourceFileIr, SourceRangeIr};
 
 /// Verifies every available source file that contributed ordinary comment
-/// markers to cached IR.
+/// markers to cached legacy IR.
 ///
 /// rustc's SVH intentionally ignores ordinary comments, while sniff-test's
 /// `// PANIC:` and `// SAFETY:` markers affect interpretation. A matching SVH
@@ -26,8 +33,8 @@ use super::ir::{ArtifactAnalysisIr, SourceFileId, SourceFileIr, SourceRangeIr};
 /// bearing source file. Source whose recorded path is absent remains trusted
 /// as part of the exact sidecar; every failure for an existing path rejects the
 /// stale marker facts.
-pub(crate) fn verify_cached_marker_sources(
-    tcx: TyCtxt<'_>,
+pub(crate) fn verify_cached_marker_sources_in(
+    source_map: &SourceMap,
     ir: &ArtifactAnalysisIr,
 ) -> Result<(), CachedSourceError> {
     let mut checked = BTreeSet::new();
@@ -47,13 +54,225 @@ pub(crate) fn verify_cached_marker_sources(
             .ok_or_else(|| CachedSourceError::MissingSourceIdentity {
                 identity: range.file.as_str().to_owned(),
             })?;
-        match cached_source_span(tcx, source, range) {
+        match cached_source_span_in(source_map, source, range) {
             Ok(_) => {}
             Err(error) if error.is_absent_from_disk() => {}
             Err(error) => return Err(error),
         }
     }
     Ok(())
+}
+
+/// Verifies every source chain that permanently owns a human marker.
+///
+/// Unlike the legacy verifier, this validates the typed relation cardinality
+/// before consulting any filename. Missing producer tables, missing or
+/// duplicate links, and inconsistent stable keys all reject the cache rather
+/// than silently turning marker evidence into an empty set.
+pub(crate) fn verify_cached_permanent_marker_sources_in(
+    source_map: &SourceMap,
+    facts: &ArtifactFactIr,
+    schemas: &SchemaRegistry,
+) -> Result<(), CachedSourceError> {
+    require_permanent_source_tables(facts, schemas)?;
+    let view = ArtifactDbView::open(facts, schemas)
+        .map_err(|error| malformed_permanent_source_chain(error.to_string()))?;
+    let occurrences = view
+        .indexed_rows::<MarkerOccurrenceEntity>()
+        .map_err(|error| malformed_permanent_source_chain(error.to_string()))?;
+    let anchors = view
+        .indexed_rows::<SourceAnchorEntity>()
+        .map_err(|error| malformed_permanent_source_chain(error.to_string()))?;
+    let files = view
+        .indexed_rows::<SourceFileEntity>()
+        .map_err(|error| malformed_permanent_source_chain(error.to_string()))?;
+    let active_files = active_source_files(source_map);
+    let anchor_by_occurrence = marker_anchor_rows(view, occurrences.len())?;
+    let file_by_anchor = anchor_file_rows(view, anchors.len())?;
+    verify_permanent_marker_ranges(
+        source_map,
+        &occurrences,
+        &anchors,
+        &files,
+        &anchor_by_occurrence,
+        &file_by_anchor,
+        &active_files,
+    )
+}
+
+fn marker_anchor_rows(
+    view: ArtifactDbView<'_>,
+    occurrence_count: usize,
+) -> Result<Vec<Option<u32>>, CachedSourceError> {
+    let mut anchor_by_occurrence = vec![None; occurrence_count];
+    for relation in view
+        .relations::<MarkerOccurrenceHasSourceAnchor>()
+        .map_err(|error| malformed_permanent_source_chain(error.to_string()))?
+    {
+        let occurrence = usize::try_from(relation.from.row()).map_err(|_| {
+            malformed_permanent_source_chain("marker occurrence row does not fit usize")
+        })?;
+        let anchor = relation.to.row();
+        let slot = anchor_by_occurrence.get_mut(occurrence).ok_or_else(|| {
+            malformed_permanent_source_chain(format!(
+                "marker occurrence row {} is outside its entity table",
+                relation.from.row()
+            ))
+        })?;
+        if slot.replace(anchor).is_some() {
+            return Err(malformed_permanent_source_chain(format!(
+                "marker occurrence row {} has multiple physical source anchors",
+                relation.from.row()
+            )));
+        }
+    }
+    Ok(anchor_by_occurrence)
+}
+
+fn anchor_file_rows(
+    view: ArtifactDbView<'_>,
+    anchor_count: usize,
+) -> Result<Vec<Option<u32>>, CachedSourceError> {
+    let mut file_by_anchor = vec![None; anchor_count];
+    for relation in view
+        .relations::<SourceAnchorInFile>()
+        .map_err(|error| malformed_permanent_source_chain(error.to_string()))?
+    {
+        let anchor = usize::try_from(relation.from.row()).map_err(|_| {
+            malformed_permanent_source_chain("source anchor row does not fit usize")
+        })?;
+        let file = relation.to.row();
+        let slot = file_by_anchor.get_mut(anchor).ok_or_else(|| {
+            malformed_permanent_source_chain(format!(
+                "source anchor row {} is outside its entity table",
+                relation.from.row()
+            ))
+        })?;
+        if slot.replace(file).is_some() {
+            return Err(malformed_permanent_source_chain(format!(
+                "source anchor row {} has multiple source files",
+                relation.from.row()
+            )));
+        }
+    }
+    Ok(file_by_anchor)
+}
+
+fn verify_permanent_marker_ranges(
+    source_map: &SourceMap,
+    occurrences: &[IndexedRow<MarkerOccurrenceEntity>],
+    anchors: &[IndexedRow<SourceAnchorEntity>],
+    files: &[IndexedRow<SourceFileEntity>],
+    anchor_by_occurrence: &[Option<u32>],
+    file_by_anchor: &[Option<u32>],
+    active_files: &BTreeMap<SourceFileId, Arc<SourceFile>>,
+) -> Result<(), CachedSourceError> {
+    let mut loaded_files = vec![None::<Option<Arc<SourceFile>>>; files.len()];
+    for (occurrence_index, occurrence) in occurrences.iter().enumerate() {
+        let anchor_row = anchor_by_occurrence[occurrence_index].ok_or_else(|| {
+            malformed_permanent_source_chain(format!(
+                "marker occurrence row {} has no physical source anchor",
+                occurrence.reference.row
+            ))
+        })?;
+        let anchor_index = usize::try_from(anchor_row).map_err(|_| {
+            malformed_permanent_source_chain("source anchor row does not fit usize")
+        })?;
+        let anchor = anchors.get(anchor_index).ok_or_else(|| {
+            malformed_permanent_source_chain(format!(
+                "source anchor row {anchor_row} is outside its entity table"
+            ))
+        })?;
+        if occurrence.data.key().anchor() != anchor.data.anchor() {
+            return Err(malformed_permanent_source_chain(format!(
+                "marker occurrence row {} does not identify physical source anchor row {anchor_row}",
+                occurrence.reference.row
+            )));
+        }
+
+        let file_row = file_by_anchor[anchor_index].ok_or_else(|| {
+            malformed_permanent_source_chain(format!(
+                "source anchor row {anchor_row} has no source file"
+            ))
+        })?;
+        let file_index = usize::try_from(file_row)
+            .map_err(|_| malformed_permanent_source_chain("source file row does not fit usize"))?;
+        let file = files.get(file_index).ok_or_else(|| {
+            malformed_permanent_source_chain(format!(
+                "source file row {file_row} is outside its entity table"
+            ))
+        })?;
+        if anchor.data.anchor().file() != file.data.id() {
+            return Err(malformed_permanent_source_chain(format!(
+                "source anchor row {anchor_row} identifies file `{}`, but relation names `{}`",
+                anchor.data.anchor().file(),
+                file.data.id()
+            )));
+        }
+
+        let source = SourceFileIr {
+            id: SourceFileId::new(file.data.id()),
+            filename: file.data.filename().to_owned(),
+            content_hash: file.data.content_hash().to_owned(),
+            byte_len: file.data.byte_len(),
+        };
+        let range = SourceRangeIr {
+            file: source.id.clone(),
+            byte_start: anchor.data.anchor().byte_start(),
+            byte_end: anchor.data.anchor().byte_end(),
+        };
+        validate_declared_range(&source, &range)?;
+        let verified = &mut loaded_files[file_index];
+        if verified.is_none() {
+            *verified = Some(
+                match load_verified_cached_source_from_index(source_map, &source, active_files) {
+                    Ok(file) => Some(file),
+                    Err(error) if error.is_absent_from_disk() => None,
+                    Err(error) => return Err(error),
+                },
+            );
+        }
+        let verified = verified.as_ref().ok_or_else(|| {
+            malformed_permanent_source_chain("source verification state was not initialized")
+        })?;
+        if let Some(file) = verified {
+            cached_source_range_span(source_map, &source, &range, file)?;
+        }
+    }
+    Ok(())
+}
+
+fn require_permanent_source_tables(
+    facts: &ArtifactFactIr,
+    schemas: &SchemaRegistry,
+) -> Result<(), CachedSourceError> {
+    for schema in [
+        MarkerOccurrenceEntity::ID,
+        MarkerOccurrenceHasSourceAnchor::ID,
+        SourceAnchorEntity::ID,
+        SourceAnchorInFile::ID,
+        SourceFileEntity::ID,
+    ] {
+        let schema = schema.parse().map_err(|error| {
+            malformed_permanent_source_chain(format!(
+                "built-in source schema ID is invalid: {error}"
+            ))
+        })?;
+        if schemas.descriptor(&schema).is_none()
+            || !facts.tables.iter().any(|table| table.schema == schema)
+        {
+            return Err(CachedSourceError::MissingPermanentSourceSchema {
+                schema: schema.to_string(),
+            });
+        }
+    }
+    Ok(())
+}
+
+fn malformed_permanent_source_chain(reason: impl Into<String>) -> CachedSourceError {
+    CachedSourceError::MalformedPermanentSourceFacts {
+        reason: reason.into(),
+    }
 }
 
 /// Loads and verifies one cached source range in rustc's active source map.
@@ -74,16 +293,34 @@ pub(crate) fn cached_source_span_in(
     range: &SourceRangeIr,
 ) -> Result<Span, CachedSourceError> {
     validate_declared_range(source, range)?;
+    let file = load_verified_cached_source(source_map, source)?;
+    cached_source_range_span(source_map, source, range, &file)
+}
+
+fn load_verified_cached_source(
+    source_map: &SourceMap,
+    source: &SourceFileIr,
+) -> Result<Arc<SourceFile>, CachedSourceError> {
+    load_verified_cached_source_from_index(source_map, source, &active_source_files(source_map))
+}
+
+fn active_source_files(source_map: &SourceMap) -> BTreeMap<SourceFileId, Arc<SourceFile>> {
+    source_map
+        .files()
+        .iter()
+        .map(|file| (stable_source_file_id(file), Arc::clone(file)))
+        .collect()
+}
+
+fn load_verified_cached_source_from_index(
+    source_map: &SourceMap,
+    source: &SourceFileIr,
+    active_files: &BTreeMap<SourceFileId, Arc<SourceFile>>,
+) -> Result<Arc<SourceFile>, CachedSourceError> {
     // Prefer an existing SourceFile to avoid loading a duplicate. The analysis
     // identity is independent of rustc's exporting-crate identity, so loading
     // a verified dependency or sysroot file below is also valid.
-    let existing = {
-        let files = source_map.files();
-        files
-            .iter()
-            .find(|file| stable_source_file_id(file) == source.id)
-            .cloned()
-    };
+    let existing = active_files.get(&source.id).cloned();
     let file = match existing {
         Some(file) => file,
         None => source_map
@@ -102,7 +339,15 @@ pub(crate) fn cached_source_span_in(
             message: String::from("rustc could not load source matching the recorded content hash"),
         });
     }
+    Ok(file)
+}
 
+fn cached_source_range_span(
+    source_map: &SourceMap,
+    source: &SourceFileIr,
+    range: &SourceRangeIr,
+    file: &SourceFile,
+) -> Result<Span, CachedSourceError> {
     let start =
         u32::try_from(range.byte_start).map_err(|_| CachedSourceError::RangeOutOfBounds {
             byte_start: range.byte_start,
@@ -242,6 +487,12 @@ pub(crate) enum CachedSourceError {
     MissingSourceIdentity {
         identity: String,
     },
+    MissingPermanentSourceSchema {
+        schema: String,
+    },
+    MalformedPermanentSourceFacts {
+        reason: String,
+    },
     RangeSourceMismatch {
         source: String,
         range: String,
@@ -286,6 +537,14 @@ impl fmt::Display for CachedSourceError {
             Self::MissingSourceIdentity { identity } => write!(
                 formatter,
                 "cached source identity `{identity}` is absent from the artifact IR"
+            ),
+            Self::MissingPermanentSourceSchema { schema } => write!(
+                formatter,
+                "permanent marker source chain is missing required schema `{schema}`"
+            ),
+            Self::MalformedPermanentSourceFacts { reason } => write!(
+                formatter,
+                "permanent marker source chain is malformed: {reason}"
             ),
             Self::RangeSourceMismatch { source, range } => write!(
                 formatter,
@@ -356,8 +615,24 @@ mod tests {
     use rustc_span::{BytePos, Pos};
     use tempfile::TempDir;
 
-    use super::{CachedSourceError, cached_source_span_in, stable_source_file_id};
-    use crate::analysis::ir::{SourceFileIr, SourceRangeIr};
+    use super::{
+        CachedSourceError, cached_source_span_in, stable_source_file_id,
+        verify_cached_marker_sources_in, verify_cached_permanent_marker_sources_in,
+    };
+    use crate::analysis::facts::builder::ArtifactDbBuilder;
+    use crate::analysis::facts::collection::CollectedArtifactSchemaPack;
+    use crate::analysis::facts::evaluation::DomainId;
+    use crate::analysis::facts::human::EvidenceClaimSelector;
+    use crate::analysis::facts::human::markers::{
+        MarkerClaimEntity, MarkerClaimKey, MarkerOccurrenceEntity, MarkerOccurrenceHasClaim,
+        MarkerOccurrenceHasSourceAnchor, MarkerOccurrenceKey,
+    };
+    use crate::analysis::facts::pack::{AnalysisPack, AnalysisRegistry};
+    use crate::analysis::facts::program::{
+        SourceAnchorEntity, SourceAnchorInFile, SourceAnchorKey, SourceFileEntity,
+    };
+    use crate::analysis::facts::schema::RowSchema;
+    use crate::analysis::ir::{ArtifactAnalysisIr, SourceFileIr, SourceRangeIr};
 
     #[test]
     fn invalid_source_ranges_render_stable_human_errors() {
@@ -401,6 +676,78 @@ mod tests {
         rustc_span::create_default_session_globals_then(check);
     }
 
+    fn permanent_panic_marker_facts(
+        source: &SourceFileIr,
+    ) -> (
+        crate::analysis::facts::encoded::ArtifactFactIr,
+        AnalysisRegistry<()>,
+    ) {
+        permanent_panic_marker_facts_for(&[source])
+    }
+
+    fn permanent_panic_marker_facts_for(
+        sources: &[&SourceFileIr],
+    ) -> (
+        crate::analysis::facts::encoded::ArtifactFactIr,
+        AnalysisRegistry<()>,
+    ) {
+        let mut registry = AnalysisRegistry::new();
+        CollectedArtifactSchemaPack.register(&mut registry).unwrap();
+        let mut builder = ArtifactDbBuilder::new();
+        for descriptor in registry.schemas().descriptors() {
+            builder.declare_table(descriptor).unwrap();
+        }
+
+        for source in sources {
+            let file = builder
+                .insert_entity(&SourceFileEntity::new(
+                    source.id.as_str(),
+                    &source.filename,
+                    &source.content_hash,
+                    source.byte_len,
+                ))
+                .unwrap();
+            let anchor_key = SourceAnchorKey::new(source.id.as_str(), 0, source.byte_len);
+            let anchor = builder
+                .insert_entity(&SourceAnchorEntity::new(anchor_key.clone()))
+                .unwrap();
+            builder
+                .relate(&anchor, &file, &SourceAnchorInFile::new())
+                .unwrap();
+            let occurrence_key = MarkerOccurrenceKey::new(anchor_key, None);
+            let occurrence = builder
+                .insert_entity(&MarkerOccurrenceEntity::new(
+                    occurrence_key.clone(),
+                    Vec::new(),
+                ))
+                .unwrap();
+            builder
+                .relate(
+                    &occurrence,
+                    &anchor,
+                    &MarkerOccurrenceHasSourceAnchor::new(),
+                )
+                .unwrap();
+            let claim = builder
+                .insert_entity(&MarkerClaimEntity::new(
+                    MarkerClaimKey::new(
+                        occurrence_key,
+                        DomainId::new("sniff-test.panic").unwrap(),
+                        0,
+                    ),
+                    EvidenceClaimSelector::Unnamed,
+                    "expected panic",
+                ))
+                .unwrap();
+            builder
+                .relate(&occurrence, &claim, &MarkerOccurrenceHasClaim::new())
+                .unwrap();
+        }
+
+        let facts = builder.finalize(registry.schemas()).unwrap();
+        (facts, registry)
+    }
+
     #[test]
     fn matching_cached_source_returns_a_span_in_the_active_source_map() {
         with_session_globals(|| {
@@ -432,6 +779,282 @@ mod tests {
                 error,
                 CachedSourceError::ContentHashMismatch { .. }
             ));
+        });
+    }
+
+    #[test]
+    fn permanent_panic_marker_rejects_stale_source_when_legacy_ir_has_no_marker() {
+        with_session_globals(|| {
+            let directory = tempfile::tempdir().expect("temp directory");
+            let path = write_source(&directory, "// PANIC: expected panic\nfn old() {}\n");
+            let source = source_metadata(&path);
+            let (facts, registry) = permanent_panic_marker_facts(&source);
+            let legacy = ArtifactAnalysisIr::new(Vec::new(), Vec::new()).unwrap();
+            fs::write(&path, "// marker removed\nfn new() {}\n").expect("change cached source");
+            let active = SourceMap::new(FilePathMapping::empty());
+
+            verify_cached_marker_sources_in(&active, &legacy)
+                .expect("legacy IR contains no marker to verify");
+            let error =
+                verify_cached_permanent_marker_sources_in(&active, &facts, registry.schemas())
+                    .expect_err("the permanent PANIC marker must reject stale source");
+
+            assert!(matches!(
+                error,
+                CachedSourceError::ContentHashMismatch { .. }
+            ));
+        });
+    }
+
+    #[test]
+    fn permanent_marker_accepts_matching_source() {
+        with_session_globals(|| {
+            let directory = tempfile::tempdir().expect("temp directory");
+            let path = write_source(&directory, "// PANIC: expected panic\nfn cached() {}\n");
+            let source = source_metadata(&path);
+            let (facts, registry) = permanent_panic_marker_facts(&source);
+            let active = SourceMap::new(FilePathMapping::empty());
+
+            verify_cached_permanent_marker_sources_in(&active, &facts, registry.schemas())
+                .expect("matching permanent marker source must verify");
+        });
+    }
+
+    #[test]
+    fn permanent_marker_allows_source_that_is_absent_from_disk() {
+        with_session_globals(|| {
+            let directory = tempfile::tempdir().expect("temp directory");
+            let path = write_source(&directory, "// PANIC: expected panic\nfn cached() {}\n");
+            let source = source_metadata(&path);
+            let (facts, registry) = permanent_panic_marker_facts(&source);
+            fs::remove_file(&path).expect("remove dependency source");
+            let active = SourceMap::new(FilePathMapping::empty());
+
+            verify_cached_permanent_marker_sources_in(&active, &facts, registry.schemas())
+                .expect("an absent dependency source retains the existing fallback policy");
+        });
+    }
+
+    #[test]
+    fn permanent_marker_rejects_every_missing_required_source_chain_table() {
+        with_session_globals(|| {
+            let directory = tempfile::tempdir().expect("temp directory");
+            let path = write_source(&directory, "// PANIC: expected panic\nfn cached() {}\n");
+            let source = source_metadata(&path);
+            let active = SourceMap::new(FilePathMapping::empty());
+
+            for missing in [
+                MarkerOccurrenceEntity::ID,
+                MarkerOccurrenceHasSourceAnchor::ID,
+                SourceAnchorEntity::ID,
+                SourceAnchorInFile::ID,
+                SourceFileEntity::ID,
+            ] {
+                let (mut facts, registry) = permanent_panic_marker_facts(&source);
+                facts
+                    .tables
+                    .retain(|table| table.schema.as_str() != missing);
+                facts
+                    .relation_index
+                    .retain(|relation| relation.relation.schema.as_str() != missing);
+
+                let error =
+                    verify_cached_permanent_marker_sources_in(&active, &facts, registry.schemas())
+                        .expect_err("missing permanent source-chain tables must fail closed");
+
+                assert!(matches!(
+                    error,
+                    CachedSourceError::MissingPermanentSourceSchema { .. }
+                ));
+                assert!(error.to_string().contains(missing));
+            }
+        });
+    }
+
+    #[test]
+    fn permanent_marker_rejects_every_missing_required_source_chain_relation() {
+        with_session_globals(|| {
+            let directory = tempfile::tempdir().expect("temp directory");
+            let path = write_source(&directory, "// PANIC: expected panic\nfn cached() {}\n");
+            let source = source_metadata(&path);
+            let active = SourceMap::new(FilePathMapping::empty());
+
+            for (missing, expected) in [
+                (
+                    MarkerOccurrenceHasSourceAnchor::ID,
+                    "has no physical source anchor",
+                ),
+                (SourceAnchorInFile::ID, "has no source file"),
+            ] {
+                let (mut facts, registry) = permanent_panic_marker_facts(&source);
+                facts
+                    .tables
+                    .iter_mut()
+                    .find(|table| table.schema.as_str() == missing)
+                    .expect("required source-chain relation table")
+                    .rows
+                    .clear();
+                facts
+                    .relation_index
+                    .retain(|relation| relation.relation.schema.as_str() != missing);
+
+                let error =
+                    verify_cached_permanent_marker_sources_in(&active, &facts, registry.schemas())
+                        .expect_err(
+                            "a marker without its exact source-chain link must fail closed",
+                        );
+
+                assert!(matches!(
+                    error,
+                    CachedSourceError::MalformedPermanentSourceFacts { .. }
+                ));
+                assert!(error.to_string().contains(expected));
+            }
+        });
+    }
+
+    #[test]
+    fn permanent_marker_rejects_duplicate_source_chain_cardinality() {
+        with_session_globals(|| {
+            let directory = tempfile::tempdir().expect("temp directory");
+            let path = write_source(&directory, "// PANIC: expected panic\nfn cached() {}\n");
+            let source = source_metadata(&path);
+            let active = SourceMap::new(FilePathMapping::empty());
+
+            for (relation_schema, expected) in [
+                (
+                    MarkerOccurrenceHasSourceAnchor::ID,
+                    "multiple physical source anchors",
+                ),
+                (SourceAnchorInFile::ID, "multiple source files"),
+            ] {
+                let (mut facts, registry) = permanent_panic_marker_facts(&source);
+                let relation_table = facts
+                    .tables
+                    .iter_mut()
+                    .find(|table| table.schema.as_str() == relation_schema)
+                    .expect("required source-chain relation table");
+                relation_table.rows.push(relation_table.rows[0].clone());
+                let mut duplicate = facts
+                    .relation_index
+                    .iter()
+                    .find(|relation| relation.relation.schema.as_str() == relation_schema)
+                    .expect("required source-chain relation index")
+                    .clone();
+                duplicate.relation.row = 1;
+                facts.relation_index.push(duplicate);
+                facts.relation_index.sort();
+
+                let error =
+                    verify_cached_permanent_marker_sources_in(&active, &facts, registry.schemas())
+                        .expect_err("duplicate permanent source-chain links must fail closed");
+
+                assert!(error.to_string().contains(expected));
+            }
+        });
+    }
+
+    #[test]
+    fn permanent_marker_rejects_a_wrong_valid_physical_anchor_endpoint() {
+        with_session_globals(|| {
+            let first_directory = tempfile::tempdir().expect("first temp directory");
+            let first_path = write_source(
+                &first_directory,
+                "// PANIC: first expected panic\nfn first() {}\n",
+            );
+            let second_directory = tempfile::tempdir().expect("second temp directory");
+            let second_path = write_source(
+                &second_directory,
+                "// PANIC: second expected panic\nfn second() {}\n",
+            );
+            let first = source_metadata(&first_path);
+            let second = source_metadata(&second_path);
+            let (mut facts, registry) = permanent_panic_marker_facts_for(&[&first, &second]);
+            let relation = facts
+                .relation_index
+                .iter_mut()
+                .find(|relation| {
+                    relation.relation.schema.as_str() == MarkerOccurrenceHasSourceAnchor::ID
+                })
+                .expect("marker-anchor relation");
+            relation.to.row = u32::from(relation.to.row == 0);
+            let active = SourceMap::new(FilePathMapping::empty());
+
+            let error =
+                verify_cached_permanent_marker_sources_in(&active, &facts, registry.schemas())
+                    .expect_err("an occurrence linked to a wrong valid anchor must fail closed");
+
+            assert!(matches!(
+                error,
+                CachedSourceError::MalformedPermanentSourceFacts { .. }
+            ));
+            assert!(
+                error
+                    .to_string()
+                    .contains("does not identify physical source anchor")
+            );
+        });
+    }
+
+    #[test]
+    fn permanent_marker_rejects_a_wrong_valid_source_file_endpoint() {
+        with_session_globals(|| {
+            let first_directory = tempfile::tempdir().expect("first temp directory");
+            let first_path = write_source(
+                &first_directory,
+                "// PANIC: first expected panic\nfn first() {}\n",
+            );
+            let second_directory = tempfile::tempdir().expect("second temp directory");
+            let second_path = write_source(
+                &second_directory,
+                "// PANIC: second expected panic\nfn second() {}\n",
+            );
+            let first = source_metadata(&first_path);
+            let second = source_metadata(&second_path);
+            let (mut facts, registry) = permanent_panic_marker_facts_for(&[&first, &second]);
+            let relation = facts
+                .relation_index
+                .iter_mut()
+                .find(|relation| relation.relation.schema.as_str() == SourceAnchorInFile::ID)
+                .expect("anchor-file relation");
+            relation.to.row = u32::from(relation.to.row == 0);
+            let active = SourceMap::new(FilePathMapping::empty());
+
+            let error =
+                verify_cached_permanent_marker_sources_in(&active, &facts, registry.schemas())
+                    .expect_err("an anchor linked to a wrong valid file must fail closed");
+
+            assert!(matches!(
+                error,
+                CachedSourceError::MalformedPermanentSourceFacts { .. }
+            ));
+            assert!(error.to_string().contains("but relation names"));
+        });
+    }
+
+    #[test]
+    fn permanent_marker_rejects_an_out_of_bounds_typed_range() {
+        with_session_globals(|| {
+            let directory = tempfile::tempdir().expect("temp directory");
+            let path = write_source(&directory, "// PANIC: expected panic\nfn cached() {}\n");
+            let source = source_metadata(&path);
+            let (mut facts, registry) = permanent_panic_marker_facts(&source);
+            let file = facts
+                .tables
+                .iter_mut()
+                .find(|table| table.schema.as_str() == SourceFileEntity::ID)
+                .expect("source-file table")
+                .rows
+                .first_mut()
+                .expect("source-file row");
+            file.data["byte-len"] = serde_json::json!(1);
+            let active = SourceMap::new(FilePathMapping::empty());
+
+            let error =
+                verify_cached_permanent_marker_sources_in(&active, &facts, registry.schemas())
+                    .expect_err("typed source ranges must stay within the recorded byte length");
+
+            assert!(matches!(error, CachedSourceError::RangeOutOfBounds { .. }));
         });
     }
 

@@ -1,5 +1,14 @@
 //! Adapts policy-neutral interpreter output to diagnostics and JSON findings.
 
+use std::error::Error;
+use std::fmt::{self, Display, Formatter};
+
+use crate::analysis::cache::RustcArtifactId;
+use crate::analysis::extract::ExtractedArtifactBundle;
+use crate::analysis::facts::panic::{
+    CompilerAssertSemanticNodeRole, CompilerAssertSemanticTrace, CompilerAssertSemanticTraceStep,
+    compiler_assert_presentation,
+};
 use crate::analysis::graph::ArtifactAnalysisGraph;
 use crate::analysis::interpret::{
     InMemoryArtifactLookup, IncompleteReason, InterpretationRoot, InterpretedFinding,
@@ -8,12 +17,12 @@ use crate::analysis::interpret::{
 };
 use crate::analysis::ir::{
     ArtifactAnalysisIr, CallEdgeKindIr, ContractRequirementIr, FunctionBodyIr, FunctionId,
-    SourceFileIr, SourceRangeIr, StableDefPathHash, StableInstanceHash,
+    SourceFileId, SourceFileIr, SourceRangeIr, StableDefPathHash, StableInstanceHash,
 };
 use crate::analysis::source::cached_source_span;
 use crate::config::SniffTestConfig;
 use crate::namespace::canonical_namespace;
-use crate::report_roots::ReportRoot;
+use crate::report_roots::{ReportRoot, ReportRootKind};
 use rustc_middle::ty::TyCtxt;
 use rustc_span::Span;
 
@@ -21,30 +30,155 @@ use super::super::findings::{
     DiagnosticMessage, Finding, FindingDiagnostic, FindingKind, FindingTraceStepOrder,
 };
 use super::super::report::render_span;
+use super::typed_panic::{
+    TypedPanicEvaluationError, TypedPanicIssueReport, TypedPanicLocalArtifact,
+    TypedPanicRootReport, evaluate_typed_panic_roots, semantic_edge_label, semantic_edge_order,
+};
 
-pub(super) fn interpret_workspace<'tcx>(
-    tcx: TyCtxt<'tcx>,
-    local: &ArtifactAnalysisIr,
-    local_stable_crate_id: u64,
-    dependencies: &ArtifactAnalysisGraph,
-    report_roots: &[ReportRoot<'tcx>],
-    config: &SniffTestConfig,
-) -> Vec<Finding> {
-    let roots = report_roots
+/// Atomic failure from typed panic evaluation or its report-v13 adapter.
+#[derive(Debug)]
+pub(super) enum InterpretWorkspaceError {
+    TypedPanicEvaluation(TypedPanicEvaluationError),
+    TypedReportCount {
+        expected: usize,
+        actual: usize,
+    },
+    TypedReportRootMismatch {
+        index: usize,
+        details: Box<TypedReportRootMismatch>,
+    },
+    TypedIssueRootMismatch {
+        root_index: usize,
+        issue_index: usize,
+    },
+    UnsupportedRendererOutput {
+        root_index: usize,
+        issue_index: usize,
+        field: &'static str,
+    },
+}
+
+#[derive(Debug)]
+pub(super) struct TypedReportRootMismatch {
+    expected_function: FunctionId,
+    actual_function: FunctionId,
+    expected_path: String,
+    actual_path: String,
+    expected_kind: ReportRootKind,
+    actual_kind: ReportRootKind,
+}
+
+impl Display for InterpretWorkspaceError {
+    fn fmt(&self, formatter: &mut Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::TypedPanicEvaluation(source) => Display::fmt(source, formatter),
+            Self::TypedReportCount { expected, actual } => write!(
+                formatter,
+                "typed panic evaluation returned {actual} root reports for {expected} traversal roots"
+            ),
+            Self::TypedReportRootMismatch { index, details } => write!(
+                formatter,
+                "typed panic root report {index} does not match its traversal root: expected {:?} `{}` ({:?}), got {:?} `{}` ({:?})",
+                details.expected_function,
+                details.expected_path,
+                details.expected_kind,
+                details.actual_function,
+                details.actual_path,
+                details.actual_kind,
+            ),
+            Self::TypedIssueRootMismatch {
+                root_index,
+                issue_index,
+            } => write!(
+                formatter,
+                "typed panic issue {issue_index} in root report {root_index} belongs to a different evaluation root"
+            ),
+            Self::UnsupportedRendererOutput {
+                root_index,
+                issue_index,
+                field,
+            } => write!(
+                formatter,
+                "typed panic renderer for issue {issue_index} in root report {root_index} emitted unsupported `{field}` output"
+            ),
+        }
+    }
+}
+
+impl Error for InterpretWorkspaceError {
+    fn source(&self) -> Option<&(dyn Error + 'static)> {
+        match self {
+            Self::TypedPanicEvaluation(source) => Some(source),
+            Self::TypedReportCount { .. }
+            | Self::TypedReportRootMismatch { .. }
+            | Self::TypedIssueRootMismatch { .. }
+            | Self::UnsupportedRendererOutput { .. } => None,
+        }
+    }
+}
+
+impl From<TypedPanicEvaluationError> for InterpretWorkspaceError {
+    fn from(source: TypedPanicEvaluationError) -> Self {
+        Self::TypedPanicEvaluation(source)
+    }
+}
+
+#[derive(Clone, Copy)]
+pub(super) struct InterpretWorkspaceRequest<'a, 'tcx> {
+    pub(super) tcx: TyCtxt<'tcx>,
+    pub(super) local: &'a ExtractedArtifactBundle,
+    pub(super) local_artifact_id: Option<&'a RustcArtifactId>,
+    pub(super) local_stable_crate_id: u64,
+    pub(super) dependencies: &'a ArtifactAnalysisGraph,
+    pub(super) active_runtime_artifacts: &'a [RustcArtifactId],
+    pub(super) report_roots: &'a [ReportRoot<'tcx>],
+    pub(super) config: &'a SniffTestConfig,
+}
+
+pub(super) fn interpret_workspace(
+    request: InterpretWorkspaceRequest<'_, '_>,
+) -> Result<Vec<Finding>, InterpretWorkspaceError> {
+    let roots = request
+        .report_roots
         .iter()
         .copied()
-        .map(|root| interpretation_root(tcx, root))
+        .map(|root| interpretation_root(request.tcx, root))
         .collect::<Vec<_>>();
-    let local_lookup = InMemoryArtifactLookup::new(local, local_stable_crate_id);
-    let lookup = LayeredFunctionLookup::new(vec![&local_lookup, dependencies]);
-    let result = interpret(&lookup, &roots, config);
+    let local_lookup =
+        InMemoryArtifactLookup::new(&request.local.legacy_ir, request.local_stable_crate_id);
+    let lookup = LayeredFunctionLookup::new(vec![&local_lookup, request.dependencies]);
+    let traversal_results = interpret(&lookup, &roots, request.config);
+    let typed_local = request.local_artifact_id.map_or_else(
+        || TypedPanicLocalArtifact::in_memory(&request.local.facts, request.local_stable_crate_id),
+        |artifact| TypedPanicLocalArtifact::persisted(&request.local.facts, artifact),
+    );
+    let typed_reports = evaluate_typed_panic_roots(
+        typed_local,
+        request.dependencies,
+        request.active_runtime_artifacts,
+        &roots,
+        request.config,
+    )?;
     let sources = SourceResolver {
-        tcx,
-        local,
-        dependencies,
+        tcx: request.tcx,
+        local: &request.local.legacy_ir,
+        dependencies: request.dependencies,
+        typed_source_files: typed_reports.source_files,
     };
 
-    adapt_result(&sources, result, config.analysis.show_full_stack_trace)
+    let typed_findings = adapt_typed_panic_reports(
+        &sources,
+        typed_reports.roots,
+        &roots,
+        request.config.analysis.show_full_stack_trace,
+    )?;
+    let mut findings = adapt_result(
+        &sources,
+        traversal_results,
+        request.config.analysis.show_full_stack_trace,
+    );
+    findings.extend(typed_findings);
+    Ok(findings)
 }
 
 fn interpretation_root<'tcx>(tcx: TyCtxt<'tcx>, root: ReportRoot<'tcx>) -> InterpretationRoot {
@@ -63,7 +197,7 @@ fn interpretation_root<'tcx>(tcx: TyCtxt<'tcx>, root: ReportRoot<'tcx>) -> Inter
 }
 
 fn adapt_result(
-    sources: &SourceResolver<'_, '_>,
+    sources: &impl FindingSources,
     result: Vec<RootInterpretation>,
     show_full_stack_trace: bool,
 ) -> Vec<Finding> {
@@ -98,8 +232,317 @@ fn adapt_result(
     findings
 }
 
+/// Converts one complete typed panic batch to report-v13 findings.
+///
+/// Root alignment is validated for the whole batch before issue adaptation.
+/// Any later renderer-output failure drops the locally accumulated vector and
+/// returns one error, so callers can never observe partial typed findings.
+pub(super) fn adapt_typed_panic_reports(
+    sources: &impl FindingSources,
+    reports: Vec<TypedPanicRootReport>,
+    roots: &[InterpretationRoot],
+    show_full_stack_trace: bool,
+) -> Result<Vec<Finding>, InterpretWorkspaceError> {
+    validate_typed_report_roots(&reports, roots)?;
+    let capacity = reports.iter().map(|report| report.issues.len()).sum();
+    let mut findings = Vec::with_capacity(capacity);
+    for (root_index, report) in reports.into_iter().enumerate() {
+        for (issue_index, issue) in report.issues.iter().enumerate() {
+            findings.push(adapt_typed_panic_issue(
+                sources,
+                &report,
+                issue,
+                root_index,
+                issue_index,
+                show_full_stack_trace,
+            )?);
+        }
+    }
+    Ok(findings)
+}
+
+fn validate_typed_report_roots(
+    reports: &[TypedPanicRootReport],
+    roots: &[InterpretationRoot],
+) -> Result<(), InterpretWorkspaceError> {
+    if reports.len() != roots.len() {
+        return Err(InterpretWorkspaceError::TypedReportCount {
+            expected: roots.len(),
+            actual: reports.len(),
+        });
+    }
+    for (index, (report, root)) in reports.iter().zip(roots).enumerate() {
+        if report.function != root.function || report.path != root.path || report.kind != root.kind
+        {
+            return Err(InterpretWorkspaceError::TypedReportRootMismatch {
+                index,
+                details: Box::new(TypedReportRootMismatch {
+                    expected_function: root.function,
+                    actual_function: report.function,
+                    expected_path: root.path.clone(),
+                    actual_path: report.path.clone(),
+                    expected_kind: root.kind,
+                    actual_kind: report.kind,
+                }),
+            });
+        }
+        for (issue_index, issue) in report.issues.iter().enumerate() {
+            if issue.issue.context.root != report.root {
+                return Err(InterpretWorkspaceError::TypedIssueRootMismatch {
+                    root_index: index,
+                    issue_index,
+                });
+            }
+        }
+    }
+    Ok(())
+}
+
+fn adapt_typed_panic_issue(
+    sources: &impl FindingSources,
+    report: &TypedPanicRootReport,
+    issue: &TypedPanicIssueReport,
+    root_index: usize,
+    issue_index: usize,
+    show_full_stack_trace: bool,
+) -> Result<Finding, InterpretWorkspaceError> {
+    validate_supported_renderer_output(issue, root_index, issue_index)?;
+    let (effect_span, source_error) = sources.resolve(issue.presentation_range.as_ref());
+    // Legacy root lookup intentionally discarded root-source failures. The
+    // typed function presentation range retains the same verified identity,
+    // so preserve that degradation behavior at the report-v13 boundary.
+    let root_span = sources.resolve(report.presentation_range.as_ref()).0;
+    let diagnostic_span = if source_error.is_some() {
+        None
+    } else {
+        root_span.or(effect_span)
+    };
+    let trace = render_typed_panic_trace(sources, &issue.trace);
+    let mut diagnostic = FindingDiagnostic {
+        span: diagnostic_span,
+        message: format!("function `{}` has an undocumented panic path", report.path),
+        messages: Vec::new(),
+    };
+    if let Some(error) = source_error {
+        diagnostic.messages.push(DiagnosticMessage::Note(format!(
+            "the recorded source location was unavailable: {error}"
+        )));
+    }
+    for note in &issue.diagnostic.notes {
+        add_effect_note(&mut diagnostic, effect_span, note.clone());
+    }
+    add_typed_panic_trace_notes(
+        sources,
+        &mut diagnostic,
+        report,
+        root_span,
+        issue,
+        show_full_stack_trace,
+    );
+    add_typed_panic_help(sources, &mut diagnostic, effect_span, issue);
+
+    Ok(Finding {
+        root: Some(report.path.clone()),
+        root_kind: Some(report.kind),
+        root_span: root_span.map(|span| sources.render_span(span)),
+        target: Some(issue.target.clone()),
+        span: effect_span.map(|span| sources.render_span(span)),
+        trace,
+        ..Finding::new(
+            FindingKind::CompilerAssert {
+                compiler_assert_kind: issue.compiler_assert_kind,
+            },
+            issue.reason.clone(),
+            diagnostic,
+        )
+    }
+    .with_source_order(
+        issue
+            .presentation_range
+            .as_ref()
+            .and_then(|range| sources.source_file(range)),
+        issue.presentation_range.as_ref(),
+    )
+    .with_trace_order(typed_panic_trace_order(sources, &issue.trace)))
+}
+
+fn validate_supported_renderer_output(
+    issue: &TypedPanicIssueReport,
+    root_index: usize,
+    issue_index: usize,
+) -> Result<(), InterpretWorkspaceError> {
+    for (unsupported, present) in [
+        ("primary-anchor", issue.diagnostic.primary_anchor.is_some()),
+        ("labels", !issue.diagnostic.labels.is_empty()),
+        ("trace", !issue.diagnostic.trace.is_empty()),
+    ] {
+        if present {
+            return Err(InterpretWorkspaceError::UnsupportedRendererOutput {
+                root_index,
+                issue_index,
+                field: unsupported,
+            });
+        }
+    }
+    Ok(())
+}
+
+fn render_typed_panic_trace(
+    sources: &impl FindingSources,
+    trace: &CompilerAssertSemanticTrace,
+) -> Vec<String> {
+    trace
+        .steps()
+        .iter()
+        .map(|step| {
+            let summary = semantic_trace_summary(step);
+            let range = semantic_step_range(step);
+            sources
+                .resolve(range.as_ref())
+                .0
+                .map_or(summary.clone(), |span| {
+                    format!("{}: {summary}", sources.render_span(span))
+                })
+        })
+        .collect()
+}
+
+fn typed_panic_trace_order(
+    sources: &impl FindingSources,
+    trace: &CompilerAssertSemanticTrace,
+) -> Vec<FindingTraceStepOrder> {
+    trace
+        .steps()
+        .iter()
+        .map(|step| {
+            let range = semantic_step_range(step);
+            let caller = semantic_node_label(step.caller_role(), step.caller_display_path());
+            FindingTraceStepOrder::new(
+                range.as_ref().and_then(|range| sources.source_file(range)),
+                range.as_ref(),
+                (0, semantic_edge_order(step.edge())),
+                &caller,
+            )
+        })
+        .collect()
+}
+
+fn semantic_trace_summary(step: &CompilerAssertSemanticTraceStep) -> String {
+    let caller = semantic_node_label(step.caller_role(), step.caller_display_path());
+    let target = semantic_node_label(step.target_role(), step.target_display_path());
+    format!("{caller} --{}-> {target}", semantic_edge_label(step.edge()))
+}
+
+fn semantic_node_label(role: CompilerAssertSemanticNodeRole, path: Option<&str>) -> String {
+    match role {
+        CompilerAssertSemanticNodeRole::Function | CompilerAssertSemanticNodeRole::Callable => {
+            path.unwrap_or("unavailable function").to_owned()
+        }
+        CompilerAssertSemanticNodeRole::Macro => {
+            format!("macro {}", path.unwrap_or("unavailable macro"))
+        }
+        CompilerAssertSemanticNodeRole::CompilerAssert(kind) => format!(
+            "compiler assert {}",
+            compiler_assert_presentation(kind)
+                .public_kind()
+                .human_description()
+        ),
+    }
+}
+
+fn semantic_step_range(step: &CompilerAssertSemanticTraceStep) -> Option<SourceRangeIr> {
+    step.source_key().map(|anchor| SourceRangeIr {
+        file: SourceFileId::new(anchor.file()),
+        byte_start: anchor.byte_start(),
+        byte_end: anchor.byte_end(),
+    })
+}
+
+fn add_typed_panic_trace_notes(
+    sources: &impl FindingSources,
+    diagnostic: &mut FindingDiagnostic,
+    report: &TypedPanicRootReport,
+    root_span: Option<Span>,
+    issue: &TypedPanicIssueReport,
+    show_full_stack_trace: bool,
+) {
+    if issue.trace.steps().is_empty() {
+        return;
+    }
+    if show_full_stack_trace {
+        for (index, step) in issue.trace.steps().iter().rev().enumerate() {
+            let note = format!("reachable step {index}: {}", semantic_trace_summary(step));
+            let range = semantic_step_range(step);
+            if let Some(span) = sources.resolve(range.as_ref()).0 {
+                diagnostic
+                    .messages
+                    .push(DiagnosticMessage::SpanNote(span, note));
+            } else {
+                diagnostic.messages.push(DiagnosticMessage::Note(note));
+            }
+        }
+    } else if issue.trace.steps().len() > 1 {
+        let first = &issue.trace.steps()[0];
+        let last = issue
+            .trace
+            .steps()
+            .last()
+            .expect("typed panic trace is non-empty");
+        let caller = semantic_node_label(first.caller_role(), first.caller_display_path());
+        let target = semantic_node_label(last.target_role(), last.target_display_path());
+        diagnostic.messages.push(DiagnosticMessage::Note(format!(
+            "reachable from `{caller}` to `{target}`"
+        )));
+        diagnostic.messages.push(DiagnosticMessage::Note(String::from(
+            "set `show-full-stack-trace = true` under `[analysis]` in sniff-test.toml to show every reachability step",
+        )));
+    }
+    let destination = format!(
+        "a compiler assertion that may panic ({})",
+        issue.compiler_assert_kind.human_description()
+    );
+    match root_span {
+        Some(span) => diagnostic.messages.push(DiagnosticMessage::SpanNote(
+            span,
+            format!("this function can reach {destination}"),
+        )),
+        None => diagnostic.messages.push(DiagnosticMessage::Note(format!(
+            "function `{}` can reach {destination}; its source location is unavailable",
+            report.path
+        ))),
+    }
+}
+
+fn add_typed_panic_help(
+    sources: &impl FindingSources,
+    diagnostic: &mut FindingDiagnostic,
+    effect_span: Option<Span>,
+    issue: &TypedPanicIssueReport,
+) {
+    if let Some(entry_span) = issue.trace.steps().first().and_then(|step| {
+        let range = semantic_step_range(step);
+        sources.resolve(range.as_ref()).0
+    }) && effect_span.is_some_and(|effect_span| !effect_span.source_equal(entry_span))
+    {
+        diagnostic.messages.push(DiagnosticMessage::SpanHelp(
+            entry_span,
+            String::from(
+                "guard this path, or add `// PANIC:` here if a local invariant proves it cannot panic",
+            ),
+        ));
+    }
+    diagnostic.messages.extend(
+        issue
+            .diagnostic
+            .help
+            .iter()
+            .cloned()
+            .map(DiagnosticMessage::Help),
+    );
+}
+
 fn adapt_finding(
-    sources: &SourceResolver<'_, '_>,
+    sources: &impl FindingSources,
     root: &InterpretationRoot,
     finding: &InterpretedFinding,
     show_full_stack_trace: bool,
@@ -115,13 +558,7 @@ fn adapt_finding(
         }
         (_, Some(target)) => Some(target.path.clone()),
         (_, None) => None,
-    }
-    .or_else(|| match &finding.kind {
-        InterpretedFindingKind::CompilerAssert { kind } => {
-            Some(format!("compiler assert {}", kind.human_description()))
-        }
-        _ => None,
-    });
+    };
     let missing_requirements = finding
         .missing_requirements
         .iter()
@@ -172,10 +609,10 @@ fn adapt_finding(
     Finding {
         root: Some(root.path.clone()),
         root_kind: Some(root.kind),
-        root_span: root_span.map(|span| render_span(sources.tcx, span)),
+        root_span: root_span.map(|span| sources.render_span(span)),
         function,
         target,
-        span: effect_span.map(|span| render_span(sources.tcx, span)),
+        span: effect_span.map(|span| sources.render_span(span)),
         trace,
         missing_requirements,
         requirements,
@@ -186,6 +623,16 @@ fn adapt_finding(
         source_order_range,
     )
     .with_trace_order(finding_trace_order(sources, &finding.trace))
+}
+
+#[cfg(test)]
+pub(super) fn adapt_typed_panic_call_finding(
+    sources: &impl FindingSources,
+    root: &InterpretationRoot,
+    finding: &InterpretedFinding,
+    show_full_stack_trace: bool,
+) -> Finding {
+    adapt_finding(sources, root, finding, show_full_stack_trace)
 }
 
 fn public_function_path(finding: &InterpretedFinding) -> Option<String> {
@@ -201,8 +648,7 @@ fn public_function_path(finding: &InterpretedFinding) -> Option<String> {
         | InterpretedFindingKind::AmbiguousSafetyMarker { .. } => {
             Some(finding.function_path.clone())
         }
-        InterpretedFindingKind::CompilerAssert { .. }
-        | InterpretedFindingKind::PanicSink
+        InterpretedFindingKind::PanicSink
         | InterpretedFindingKind::DocumentedPanic { .. }
         | InterpretedFindingKind::OpaquePanicBoundary { .. }
         | InterpretedFindingKind::AmbiguousPanicRequirement { .. }
@@ -235,13 +681,6 @@ fn finding_description(
     target: Option<&str>,
 ) -> (FindingKind, String, String) {
     match &finding.kind {
-        InterpretedFindingKind::CompilerAssert { kind } => (
-            FindingKind::CompilerAssert {
-                compiler_assert_kind: *kind,
-            },
-            String::from("compiler assert"),
-            format!("function `{}` has an undocumented panic path", root.path),
-        ),
         InterpretedFindingKind::PanicSink => {
             let target = target.unwrap_or("panic sink");
             (
@@ -389,9 +828,9 @@ fn diagnostic_primary_span(
     effect_span: Option<Span>,
 ) -> Option<Span> {
     match kind {
-        InterpretedFindingKind::CompilerAssert { .. }
-        | InterpretedFindingKind::PanicSink
-        | InterpretedFindingKind::OpaquePanicBoundary { .. } => root_span.or(effect_span),
+        InterpretedFindingKind::PanicSink | InterpretedFindingKind::OpaquePanicBoundary { .. } => {
+            root_span.or(effect_span)
+        }
         InterpretedFindingKind::DocumentedPanic { .. }
         | InterpretedFindingKind::MissingSafetyDocs
         | InterpretedFindingKind::SafetyCall { .. }
@@ -408,7 +847,7 @@ fn diagnostic_primary_span(
     reason = "the diagnostic variants stay together so their rustc UX remains directly comparable"
 )]
 fn decorate_finding(
-    sources: &SourceResolver<'_, '_>,
+    sources: &impl FindingSources,
     diagnostic: &mut FindingDiagnostic,
     root: &InterpretationRoot,
     root_span: Option<Span>,
@@ -417,29 +856,6 @@ fn decorate_finding(
     show_full_stack_trace: bool,
 ) {
     match &finding.kind {
-        InterpretedFindingKind::CompilerAssert { kind } => {
-            add_effect_note(
-                diagnostic,
-                effect_span,
-                format!(
-                    "panic may happen here: compiler assertion: {}",
-                    kind.human_description()
-                ),
-            );
-            add_finding_trace_notes(
-                sources,
-                diagnostic,
-                root,
-                root_span,
-                finding,
-                show_full_stack_trace,
-            );
-            add_panic_help(
-                diagnostic,
-                effect_span,
-                trace_entry_span(sources, &finding.trace),
-            );
-        }
         InterpretedFindingKind::PanicSink => {
             let target = finding
                 .target
@@ -477,18 +893,22 @@ fn decorate_finding(
             if let Some(span) = effect_span {
                 diagnostic.messages.push(DiagnosticMessage::SpanHelp(
                     span,
-                    "add `// PANIC:` directly above this call explaining why its documented panic conditions cannot occur",
+                    String::from(
+                        "add `// PANIC:` directly above this call explaining why its documented panic conditions cannot occur",
+                    ),
                 ));
             }
             if let Some(span) = sources.function_span(root.function) {
                 diagnostic.messages.push(DiagnosticMessage::SpanHelp(
                     span,
-                    "document when this function may panic with `/// # Panics` here",
+                    String::from("document when this function may panic with `/// # Panics` here"),
                 ));
             }
             add_missing_requirement_notes(diagnostic, &finding.missing_requirements, "panic");
             diagnostic.messages.push(DiagnosticMessage::Help(
-                "ensure the callee's panic conditions cannot occur, justify that with `// PANIC:`, or document when the caller may panic with `# Panics`",
+                String::from(
+                    "ensure the callee's panic conditions cannot occur, justify that with `// PANIC:`, or document when the caller may panic with `# Panics`",
+                ),
             ));
         }
         InterpretedFindingKind::OpaquePanicBoundary { description } => {
@@ -514,13 +934,17 @@ fn decorate_finding(
                 show_full_stack_trace,
             );
             diagnostic.messages.push(DiagnosticMessage::Help(
-                "document this boundary with `# Panics`, add `// PANIC:` only if every possible callee is locally constrained, or configure `indirect-call-boundary` if this opacity is acceptable",
+                String::from(
+                    "document this boundary with `# Panics`, add `// PANIC:` only if every possible callee is locally constrained, or configure `indirect-call-boundary` if this opacity is acceptable",
+                ),
             ));
         }
         InterpretedFindingKind::MissingSafetyDocs => {
-            diagnostic.messages.push(DiagnosticMessage::Help(
-                "document the caller obligations under a `# Safety` section",
-            ));
+            diagnostic
+                .messages
+                .push(DiagnosticMessage::Help(String::from(
+                    "document the caller obligations under a `# Safety` section",
+                )));
         }
         InterpretedFindingKind::SafetyCall { kind } => {
             if matches!(kind, InterpretedSafetyCallKind::Obligation)
@@ -537,11 +961,15 @@ fn decorate_finding(
                         "add a `// SAFETY:` comment directly above the call site"
                     }
                 };
-                diagnostic.messages.push(DiagnosticMessage::Help(help));
+                diagnostic
+                    .messages
+                    .push(DiagnosticMessage::Help(help.to_owned()));
             } else {
                 add_missing_requirement_notes(diagnostic, &finding.missing_requirements, "safety");
                 diagnostic.messages.push(DiagnosticMessage::Help(
-                    "add named bullets under the applicable `// SAFETY:` comment for each missing requirement",
+                    String::from(
+                        "add named bullets under the applicable `// SAFETY:` comment for each missing requirement",
+                    ),
                 ));
             }
             add_finding_trace_notes(
@@ -554,9 +982,11 @@ fn decorate_finding(
             );
         }
         InterpretedFindingKind::UnsafeOperation { .. } => {
-            diagnostic.messages.push(DiagnosticMessage::Help(
-                "add a `// SAFETY:` comment above the unsafe block or operation",
-            ));
+            diagnostic
+                .messages
+                .push(DiagnosticMessage::Help(String::from(
+                    "add a `// SAFETY:` comment above the unsafe block or operation",
+                )));
             add_finding_trace_notes(
                 sources,
                 diagnostic,
@@ -583,7 +1013,9 @@ fn decorate_finding(
                 show_full_stack_trace,
             );
             diagnostic.messages.push(DiagnosticMessage::Help(
-                "give each requirement a unique name, or set `ambiguous-panic-requirement = \"allow\"` under `[analysis.lints]`",
+                String::from(
+                    "give each requirement a unique name, or set `ambiguous-panic-requirement = \"allow\"` under `[analysis.lints]`",
+                ),
             ));
         }
         InterpretedFindingKind::AmbiguousSafetyRequirement { normalized_name } => {
@@ -603,7 +1035,9 @@ fn decorate_finding(
                 show_full_stack_trace,
             );
             diagnostic.messages.push(DiagnosticMessage::Help(
-                "give each requirement a unique name, or set `ambiguous-safety-requirement = \"allow\"` under `[analysis.lints]`",
+                String::from(
+                    "give each requirement a unique name, or set `ambiguous-safety-requirement = \"allow\"` under `[analysis.lints]`",
+                ),
             ));
         }
         InterpretedFindingKind::AmbiguousPanicMarker { effect_count } => {
@@ -619,7 +1053,9 @@ fn decorate_finding(
                 show_full_stack_trace,
             );
             diagnostic.messages.push(DiagnosticMessage::Help(
-                "move the marker directly above one obligation, split it into separate markers, or set `ambiguous-panic-marker = \"allow\"` under `[analysis.lints]`",
+                String::from(
+                    "move the marker directly above one obligation, split it into separate markers, or set `ambiguous-panic-marker = \"allow\"` under `[analysis.lints]`",
+                ),
             ));
         }
         InterpretedFindingKind::AmbiguousSafetyMarker { effect_count } => {
@@ -635,7 +1071,9 @@ fn decorate_finding(
                 show_full_stack_trace,
             );
             diagnostic.messages.push(DiagnosticMessage::Help(
-                "give each unsafe block or operation its own marker, or set `ambiguous-safety-marker = \"allow\"` under `[analysis.lints]`",
+                String::from(
+                    "give each unsafe block or operation its own marker, or set `ambiguous-safety-marker = \"allow\"` under `[analysis.lints]`",
+                ),
             ));
         }
     }
@@ -661,15 +1099,19 @@ fn add_panic_help(
     {
         diagnostic.messages.push(DiagnosticMessage::SpanHelp(
             span,
-            "guard this path, or add `// PANIC:` here if a local invariant proves it cannot panic",
+            String::from(
+                "guard this path, or add `// PANIC:` here if a local invariant proves it cannot panic",
+            ),
         ));
     }
     diagnostic.messages.push(DiagnosticMessage::Help(
-        "add a guard, document the panic with `# Panics`, or add `// PANIC:` if a local invariant proves it cannot panic",
+        String::from(
+            "add a guard, document the panic with `# Panics`, or add `// PANIC:` if a local invariant proves it cannot panic",
+        ),
     ));
 }
 
-fn trace_entry_span(sources: &SourceResolver<'_, '_>, trace: &InterpretedTrace) -> Option<Span> {
+fn trace_entry_span(sources: &impl FindingSources, trace: &InterpretedTrace) -> Option<Span> {
     trace
         .steps
         .first()
@@ -677,7 +1119,7 @@ fn trace_entry_span(sources: &SourceResolver<'_, '_>, trace: &InterpretedTrace) 
 }
 
 fn add_contract_note(
-    sources: &SourceResolver<'_, '_>,
+    sources: &impl FindingSources,
     diagnostic: &mut FindingDiagnostic,
     finding: &InterpretedFinding,
     heading: &str,
@@ -719,7 +1161,7 @@ fn add_missing_requirement_notes(
 }
 
 fn add_ambiguous_requirement_notes(
-    sources: &SourceResolver<'_, '_>,
+    sources: &impl FindingSources,
     diagnostic: &mut FindingDiagnostic,
     finding: &InterpretedFinding,
     heading: &str,
@@ -761,7 +1203,7 @@ fn opaque_boundary_summary<'a>(description: &'a str, target: Option<&'a str>) ->
 }
 
 fn adapt_incomplete(
-    sources: &SourceResolver<'_, '_>,
+    sources: &impl FindingSources,
     root: &InterpretationRoot,
     kind: FindingKind,
     domain: &str,
@@ -843,9 +1285,9 @@ fn adapt_incomplete(
     Finding {
         root: Some(root.path.clone()),
         root_kind: Some(root.kind),
-        root_span: root_span.map(|span| render_span(sources.tcx, span)),
+        root_span: root_span.map(|span| sources.render_span(span)),
         target,
-        span: effect_span.map(|span| render_span(sources.tcx, span)),
+        span: effect_span.map(|span| sources.render_span(span)),
         trace: rendered_trace,
         ..Finding::new(kind, reason, diagnostic)
     }
@@ -885,7 +1327,9 @@ fn add_incomplete_reason_note(
             "{domain} analysis could not continue through `{target}`"
         ))),
         (None, _, _) => diagnostic.messages.push(DiagnosticMessage::Help(
-            "raise `node-limit` under `[analysis]` in sniff-test.toml, or shrink the traversal by trusting or ignoring namespaces",
+            String::from(
+                "raise `node-limit` under `[analysis]` in sniff-test.toml, or shrink the traversal by trusting or ignoring namespaces",
+            ),
         )),
     }
 }
@@ -916,7 +1360,7 @@ fn incomplete_analysis_subject(domain: &str) -> &'static str {
     }
 }
 
-fn render_trace(sources: &SourceResolver<'_, '_>, trace: &InterpretedTrace) -> Vec<String> {
+fn render_trace(sources: &impl FindingSources, trace: &InterpretedTrace) -> Vec<String> {
     trace
         .steps
         .iter()
@@ -931,14 +1375,14 @@ fn render_trace(sources: &SourceResolver<'_, '_>, trace: &InterpretedTrace) -> V
                 .resolve(step.source_range.as_ref())
                 .0
                 .map_or(edge.clone(), |span| {
-                    format!("{}: {edge}", render_span(sources.tcx, span))
+                    format!("{}: {edge}", sources.render_span(span))
                 })
         })
         .collect()
 }
 
 fn finding_trace_order(
-    sources: &SourceResolver<'_, '_>,
+    sources: &impl FindingSources,
     trace: &InterpretedTrace,
 ) -> Vec<FindingTraceStepOrder> {
     trace
@@ -999,7 +1443,7 @@ const fn safety_op_kind_order(kind: crate::safety::SafetyOpKind) -> u8 {
 }
 
 fn add_finding_trace_notes(
-    sources: &SourceResolver<'_, '_>,
+    sources: &impl FindingSources,
     diagnostic: &mut FindingDiagnostic,
     root: &InterpretationRoot,
     root_span: Option<Span>,
@@ -1020,10 +1464,6 @@ fn add_finding_trace_notes(
 
 fn trace_destination(finding: &InterpretedFinding) -> String {
     match &finding.kind {
-        InterpretedFindingKind::CompilerAssert { kind } => format!(
-            "a compiler assertion that may panic ({})",
-            kind.human_description()
-        ),
         InterpretedFindingKind::PanicSink => String::from("a panic invocation"),
         InterpretedFindingKind::DocumentedPanic { trusted: false } => {
             String::from("a call with `# Panics` documentation")
@@ -1079,7 +1519,7 @@ fn trace_destination(finding: &InterpretedFinding) -> String {
 }
 
 fn add_trace_notes(
-    sources: &SourceResolver<'_, '_>,
+    sources: &impl FindingSources,
     diagnostic: &mut FindingDiagnostic,
     root: &InterpretationRoot,
     root_span: Option<Span>,
@@ -1176,6 +1616,21 @@ struct SourceResolver<'tcx, 'analysis> {
     tcx: TyCtxt<'tcx>,
     local: &'analysis ArtifactAnalysisIr,
     dependencies: &'analysis ArtifactAnalysisGraph,
+    typed_source_files: Vec<SourceFileIr>,
+}
+
+/// Source-verification boundary shared by legacy and typed finding adapters.
+///
+/// Keeping the adapter generic makes report conversion pure and lets parity
+/// tests exercise identical verified/degraded span behavior without a `TyCtxt`.
+pub(super) trait FindingSources {
+    fn function_span(&self, function: FunctionId) -> Option<Span>;
+
+    fn resolve(&self, range: Option<&SourceRangeIr>) -> (Option<Span>, Option<String>);
+
+    fn source_file<'a>(&'a self, range: &SourceRangeIr) -> Option<&'a SourceFileIr>;
+
+    fn render_span(&self, span: Span) -> String;
 }
 
 impl SourceResolver<'_, '_> {
@@ -1184,7 +1639,9 @@ impl SourceResolver<'_, '_> {
             .function_body(function)
             .or_else(|| self.dependencies.function(function).map(|body| body.body()))
     }
+}
 
+impl FindingSources for SourceResolver<'_, '_> {
     fn function_span(&self, function: FunctionId) -> Option<Span> {
         self.function_body(function)
             .and_then(|body| self.resolve(body.source_range.as_ref()).0)
@@ -1210,22 +1667,100 @@ impl SourceResolver<'_, '_> {
     }
 
     fn source_file(&self, range: &SourceRangeIr) -> Option<&SourceFileIr> {
-        self.local
-            .source_files
+        self.typed_source_files
             .binary_search_by(|source| source.id.cmp(&range.file))
             .ok()
-            .map(|index| &self.local.source_files[index])
+            .map(|index| &self.typed_source_files[index])
+            .or_else(|| {
+                self.local
+                    .source_files
+                    .binary_search_by(|source| source.id.cmp(&range.file))
+                    .ok()
+                    .map(|index| &self.local.source_files[index])
+            })
             .or_else(|| {
                 self.dependencies
                     .source_file(&range.file)
                     .map(|(_, source)| source)
             })
     }
+
+    fn render_span(&self, span: Span) -> String {
+        render_span(self.tcx, span)
+    }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::missing_body_diagnostic_message;
+    use super::{
+        FindingSources, InterpretWorkspaceError, TypedPanicRootReport, adapt_typed_panic_reports,
+        missing_body_diagnostic_message,
+    };
+    use crate::analysis::facts::encoded::EntityRef;
+    use crate::analysis::facts::evaluation::{DomainId, EvaluationRoot};
+    use crate::analysis::facts::program::FunctionEntity;
+    use crate::analysis::facts::schema::{RowSchema, SchemaId};
+    use crate::analysis::facts::workspace::{ArtifactScopeId, ScopedEntityRef};
+    use crate::analysis::interpret::InterpretationRoot;
+    use crate::analysis::ir::{FunctionId, SourceFileIr, SourceRangeIr, StableDefPathHash};
+    use crate::report_roots::ReportRootKind;
+    use rustc_span::Span;
+
+    struct NoSources;
+
+    impl FindingSources for NoSources {
+        fn function_span(&self, _function: FunctionId) -> Option<Span> {
+            None
+        }
+
+        fn resolve(&self, _range: Option<&SourceRangeIr>) -> (Option<Span>, Option<String>) {
+            (None, None)
+        }
+
+        fn source_file<'a>(&'a self, _range: &SourceRangeIr) -> Option<&'a SourceFileIr> {
+            None
+        }
+
+        fn render_span(&self, _span: Span) -> String {
+            String::from("unreachable test span")
+        }
+    }
+
+    fn function(local: u64) -> FunctionId {
+        let definition =
+            serde_json::from_str::<StableDefPathHash>(&format!("\"{:016x}{local:016x}\"", 1_u64))
+                .expect("valid stable definition hash");
+        FunctionId::generic(definition)
+    }
+
+    fn root(function: FunctionId, path: &str) -> InterpretationRoot {
+        InterpretationRoot {
+            function,
+            path: path.to_owned(),
+            kind: ReportRootKind::Generic,
+        }
+    }
+
+    fn empty_report(root: &InterpretationRoot, row: u32) -> TypedPanicRootReport {
+        let evaluation_root = EvaluationRoot::new(
+            DomainId::new("sniff-test.test.typed-report-alignment").expect("valid test domain"),
+            ScopedEntityRef::new(
+                ArtifactScopeId::for_in_memory(1, 0),
+                EntityRef {
+                    schema: SchemaId::new(FunctionEntity::ID).expect("valid function schema"),
+                    row,
+                },
+            ),
+        );
+        TypedPanicRootReport {
+            root: evaluation_root,
+            function: root.function,
+            path: root.path.clone(),
+            kind: root.kind,
+            presentation_range: None,
+            issues: Vec::new(),
+        }
+    }
 
     #[test]
     fn missing_body_diagnostics_distinguish_the_root_from_a_reachable_target() {
@@ -1237,5 +1772,35 @@ mod tests {
             missing_body_diagnostic_message("app::root", "dep::helper", "safety", false),
             "function `app::root` reaches `dep::helper`, whose body could not be checked for unsafe operations"
         );
+    }
+
+    #[test]
+    fn typed_adapter_rejects_wrong_root_count_and_reordered_reports() {
+        let first = root(function(1), "fixture::first");
+        let second = root(function(2), "fixture::second");
+        let roots = [first.clone(), second.clone()];
+
+        let count_error =
+            adapt_typed_panic_reports(&NoSources, vec![empty_report(&first, 0)], &roots, false)
+                .expect_err("the report count is validated before adaptation");
+        assert!(matches!(
+            count_error,
+            InterpretWorkspaceError::TypedReportCount {
+                expected: 2,
+                actual: 1
+            }
+        ));
+
+        let order_error = adapt_typed_panic_reports(
+            &NoSources,
+            vec![empty_report(&second, 1), empty_report(&first, 0)],
+            &roots,
+            false,
+        )
+        .expect_err("same-sized reports must retain exact request order");
+        assert!(matches!(
+            order_error,
+            InterpretWorkspaceError::TypedReportRootMismatch { index: 0, .. }
+        ));
     }
 }

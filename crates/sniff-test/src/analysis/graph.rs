@@ -8,6 +8,7 @@ use super::cache::{
     ArtifactAnalysisCache, ArtifactInfo, CacheError, CacheExpectations, RustcArtifactId,
     artifact_cache_path,
 };
+use super::facts::registry::SchemaRegistry;
 use super::ir::{
     FunctionBodyIr, FunctionBodyProvenanceIr, FunctionId, SourceFileId, SourceFileIr,
     StableDefPathHash,
@@ -197,9 +198,10 @@ impl ArtifactAnalysisGraph {
         cache_dir: &Path,
         externs: &[ExternArtifactInput],
         expected: &CacheExpectations<'_>,
+        schemas: &SchemaRegistry,
     ) -> Self {
         Self::load_with(cache_dir, externs, |_, path| {
-            ArtifactAnalysisCache::read(path, expected)
+            ArtifactAnalysisCache::read(path, expected, schemas)
         })
     }
 
@@ -223,7 +225,7 @@ impl ArtifactAnalysisGraph {
         let mut sources = HashMap::new();
         for (artifact, analysis) in artifacts.iter().enumerate() {
             artifact_indices.insert(analysis.artifact.id.clone(), artifact);
-            for (function, body) in analysis.ir.functions.iter().enumerate() {
+            for (function, body) in analysis.legacy_ir.functions.iter().enumerate() {
                 if matches!(body.provenance, FunctionBodyProvenanceIr::DefiningArtifact) {
                     defining_source_functions
                         .entry(body.function.def_path_hash)
@@ -243,7 +245,7 @@ impl ArtifactAnalysisGraph {
                     }
                 }
             }
-            for (source, file) in analysis.ir.source_files.iter().enumerate() {
+            for (source, file) in analysis.legacy_ir.source_files.iter().enumerate() {
                 sources
                     .entry(file.id.clone())
                     .or_insert(SourceLocation { artifact, source });
@@ -280,7 +282,7 @@ impl ArtifactAnalysisGraph {
         let artifact = &self.artifacts[location.artifact];
         Some((
             &artifact.artifact,
-            &artifact.ir.source_files[location.source],
+            &artifact.legacy_ir.source_files[location.source],
         ))
     }
 
@@ -291,7 +293,7 @@ impl ArtifactAnalysisGraph {
             .find_map(|candidate| self.defining_functions.get(&candidate).copied())?;
         let artifact = &self.artifacts[location.artifact];
         Some(LoadedFunction::new(
-            &artifact.ir.functions[location.function],
+            &artifact.legacy_ir.functions[location.function],
             BodyScope::artifact(artifact),
         ))
     }
@@ -307,7 +309,7 @@ impl ArtifactAnalysisGraph {
             return None;
         };
         let artifact = self.artifact(artifact_id)?;
-        let body = artifact.ir.function_body(function)?;
+        let body = artifact.legacy_ir.function_body(function)?;
         Some(LoadedFunction::new(body, scope.clone()))
     }
 
@@ -336,7 +338,7 @@ impl ArtifactAnalysisGraph {
             .get(&function.def_path_hash)?;
         let artifact = &self.artifacts[location.artifact];
         Some(LoadedFunction::new(
-            &artifact.ir.functions[location.function],
+            &artifact.legacy_ir.functions[location.function],
             BodyScope::artifact(artifact),
         ))
     }
@@ -559,6 +561,7 @@ mod tests {
     use std::fs;
     use std::path::Path;
 
+    use serde_json::json;
     use tempfile::tempdir;
 
     use super::{
@@ -568,6 +571,11 @@ mod tests {
     use crate::analysis::cache::{
         ArtifactAnalysisCache, ArtifactInfo, CacheError, CacheExpectations, RustcArtifactId,
     };
+    use crate::analysis::facts::encoded::{
+        ArtifactFactIr, EncodedRow, EncodedTable, FACT_IR_FORMAT_VERSION, TableKind,
+    };
+    use crate::analysis::facts::registry::SchemaRegistry;
+    use crate::analysis::facts::schema::SchemaId;
     use crate::analysis::ir::{
         ArtifactAnalysisIr, FunctionAttributesIr, FunctionBodyIr, FunctionBodyProvenanceIr,
         FunctionId, SourceFileId, SourceFileIr,
@@ -602,21 +610,27 @@ mod tests {
         let directory = tempdir().expect("cache directory");
         let old_child_id = rustc_id(2, "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
         let old_child = analysis_with_id("child-old", old_child_id.clone(), Vec::new(), Vec::new());
-        let child = analysis("child-a", 2, Vec::new(), vec![generic_function(2, 20)]);
-        let root = analysis(
+        let mut child = analysis("child-a", 2, Vec::new(), vec![generic_function(2, 20)]);
+        child.facts = sentinel_facts("child-generation");
+        let mut root = analysis(
             "root-a",
             1,
             vec![child.artifact.id.clone()],
             vec![generic_function(1, 10)],
         );
+        root.facts = sentinel_facts("root-generation");
         let root_id = root.artifact.id.clone();
         let child_id = child.artifact.id.clone();
         write(directory.path(), &old_child);
         write(directory.path(), &child);
         write(directory.path(), &root);
 
-        let graph =
-            ArtifactAnalysisGraph::load(directory.path(), &[external("root_alias", 1)], &EXPECTED);
+        let graph = ArtifactAnalysisGraph::load(
+            directory.path(),
+            &[external("root_alias", 1)],
+            &EXPECTED,
+            &schemas(),
+        );
 
         assert!(graph.is_complete());
         assert_eq!(
@@ -630,7 +644,7 @@ mod tests {
             graph
                 .artifacts()
                 .flat_map(|analysis| {
-                    analysis.ir.source_files.iter().map(move |source| {
+                    analysis.legacy_ir.source_files.iter().map(move |source| {
                         (
                             analysis.artifact.crate_name.as_str(),
                             source.filename.as_str(),
@@ -641,6 +655,14 @@ mod tests {
             [("root-a", "src/root-a.rs"), ("child-a", "src/child-a.rs")]
         );
         assert_eq!(graph.direct_dependency_ids().collect::<Vec<_>>(), [root_id]);
+        assert_eq!(
+            graph.artifact(&root.artifact.id).unwrap().facts,
+            sentinel_facts("root-generation")
+        );
+        assert_eq!(
+            graph.artifact(&child.artifact.id).unwrap().facts,
+            sentinel_facts("child-generation")
+        );
         assert!(graph.artifact(&old_child_id).is_none());
     }
 
@@ -651,8 +673,12 @@ mod tests {
         let generic = generic_function(1, 10);
         let artifact = analysis("root-a", 1, Vec::new(), vec![generic, exact]);
         write(directory.path(), &artifact);
-        let graph =
-            ArtifactAnalysisGraph::load(directory.path(), &[external("root", 1)], &EXPECTED);
+        let graph = ArtifactAnalysisGraph::load(
+            directory.path(),
+            &[external("root", 1)],
+            &EXPECTED,
+            &schemas(),
+        );
 
         let exact = graph
             .function(FunctionId::exact(
@@ -701,6 +727,7 @@ mod tests {
             directory.path(),
             &[external("first", 1), external("second", 2)],
             &EXPECTED,
+            &schemas(),
         );
         let first_scope = BodyScope::artifact(graph.artifact(&first_id).expect("first artifact"));
         let second_scope =
@@ -740,6 +767,7 @@ mod tests {
             directory.path(),
             &[external("first_alias", 1), external("second_alias", 1)],
             &EXPECTED,
+            &schemas(),
         );
 
         assert_eq!(
@@ -793,6 +821,7 @@ mod tests {
                 external_with_id("missing_alias", missing_id.clone()),
             ],
             &EXPECTED,
+            &schemas(),
         );
 
         assert!(graph.failures().any(|failure| matches!(
@@ -821,6 +850,7 @@ mod tests {
             directory.path(),
             &[external("root", 1)],
             &stale_environment,
+            &schemas(),
         );
 
         assert!(matches!(
@@ -862,6 +892,7 @@ mod tests {
             directory.path(),
             &[external("first", 1), external("second", 2)],
             &EXPECTED,
+            &schemas(),
         );
 
         assert!(matches!(
@@ -887,8 +918,12 @@ mod tests {
         write(directory.path(), &first);
         write(directory.path(), &second);
 
-        let graph =
-            ArtifactAnalysisGraph::load(directory.path(), &[external("first", 1)], &EXPECTED);
+        let graph = ArtifactAnalysisGraph::load(
+            directory.path(),
+            &[external("first", 1)],
+            &EXPECTED,
+            &schemas(),
+        );
 
         assert!(graph.failures().any(|failure| matches!(
             failure,
@@ -935,6 +970,8 @@ mod tests {
             },
             dependencies,
             ArtifactAnalysisIr::new(functions, source_files).expect("valid IR"),
+            facts(),
+            &schemas(),
         )
         .expect("valid cache")
     }
@@ -1006,7 +1043,37 @@ mod tests {
         format!("{stable_crate_id:032x}")
     }
 
+    fn schemas() -> SchemaRegistry {
+        SchemaRegistry::new()
+    }
+
+    fn facts() -> ArtifactFactIr {
+        ArtifactFactIr {
+            format_version: FACT_IR_FORMAT_VERSION,
+            tables: Vec::new(),
+            fact_index: Vec::new(),
+            relation_index: Vec::new(),
+        }
+    }
+
+    fn sentinel_facts(generation: &str) -> ArtifactFactIr {
+        ArtifactFactIr {
+            format_version: FACT_IR_FORMAT_VERSION,
+            tables: vec![EncodedTable {
+                schema: SchemaId::new("test.graph.generation-sentinel").unwrap(),
+                version: 1,
+                kind: TableKind::Requirement,
+                rows: vec![EncodedRow {
+                    stable_key: None,
+                    data: json!({ "generation": generation }),
+                }],
+            }],
+            fact_index: Vec::new(),
+            relation_index: Vec::new(),
+        }
+    }
+
     fn write(directory: &Path, analysis: &ArtifactAnalysisCache) {
-        analysis.write(directory).expect("write cache");
+        analysis.write(directory, &schemas()).expect("write cache");
     }
 }

@@ -211,8 +211,8 @@ pub(crate) enum DiagnosticMessage {
     Note(String),
     SpanNote(Span, String),
     SpanLabel(Span, String),
-    SpanHelp(Span, &'static str),
-    Help(&'static str),
+    SpanHelp(Span, String),
+    Help(String),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize)]

@@ -22,6 +22,7 @@ use rustc_hir::def::DefKind;
 use rustc_hir::def_id::DefId;
 use rustc_middle::mono::MonoItem;
 use rustc_middle::ty::{Instance, Ty, TyCtxt};
+use rustc_span::ExpnId;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 // The driver runs one rustc session per process and the analysis is
@@ -60,6 +61,37 @@ impl StableDefPathHash {
 }
 
 impl fmt::Display for StableDefPathHash {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.0.fmt(formatter)
+    }
+}
+
+/// Session-independent identity for one macro invocation and expansion.
+///
+/// This is rustc's stable expansion hash, not the session-local numeric
+/// [`ExpnId`]. Distinct invocations remain distinct even when their token text
+/// and call-site spans are equal because rustc includes an expansion
+/// disambiguator in this hash.
+///
+/// Its serialized form is 32 hexadecimal digits: the stable crate id followed
+/// by rustc's crate-local expansion hash.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct StableExpansionHash(StableHash);
+
+impl StableExpansionHash {
+    #[must_use]
+    pub fn from_expn_id(expansion: ExpnId) -> Self {
+        let hash = expansion.expn_hash();
+        Self::from_parts(hash.stable_crate_id().as_u64(), hash.local_hash().as_u64())
+    }
+
+    const fn from_parts(stable_crate_id: u64, local_hash: u64) -> Self {
+        Self(StableHash::from_parts(stable_crate_id, local_hash))
+    }
+}
+
+impl fmt::Display for StableExpansionHash {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         self.0.fmt(formatter)
     }
@@ -292,25 +324,36 @@ fn canonicalize_def_path(crate_name: &str, path: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{StableDefPathHash, StableInstanceHash, canonicalize_def_path};
+    use super::{
+        StableDefPathHash, StableExpansionHash, StableInstanceHash, canonicalize_def_path,
+    };
 
     #[test]
     fn stable_hashes_use_canonical_hex_for_display_and_serde() {
         let definition = StableDefPathHash::from_parts(0x1, 0x00ab_cdef);
+        let expansion = StableExpansionHash::from_parts(0x2, 0x00bc_def0);
         let instance = StableInstanceHash::from_parts(0x10, 0x00fe_dcba);
 
         assert_eq!(definition.to_string(), "00000000000000010000000000abcdef");
+        assert_eq!(expansion.to_string(), "00000000000000020000000000bcdef0");
         assert_eq!(instance.to_string(), "00000000000000100000000000fedcba");
 
         let definition_json = serde_json::to_string(&definition).expect("serialize definition");
+        let expansion_json = serde_json::to_string(&expansion).expect("serialize expansion");
         let instance_json = serde_json::to_string(&instance).expect("serialize instance");
 
         assert_eq!(definition_json, format!("\"{definition}\""));
+        assert_eq!(expansion_json, format!("\"{expansion}\""));
         assert_eq!(instance_json, format!("\"{instance}\""));
         assert_eq!(
             serde_json::from_str::<StableDefPathHash>(&definition_json)
                 .expect("deserialize definition"),
             definition
+        );
+        assert_eq!(
+            serde_json::from_str::<StableExpansionHash>(&expansion_json)
+                .expect("deserialize expansion"),
+            expansion
         );
         assert_eq!(
             serde_json::from_str::<StableInstanceHash>(&instance_json)
@@ -325,6 +368,15 @@ mod tests {
             .expect_err("malformed hashes must be rejected");
 
         assert!(error.to_string().contains("32 hexadecimal digits"));
+
+        for malformed in [
+            "0000000000000000000000000000000g",
+            "000000000000000000000000000000000",
+            "0000000000000000000000000000000",
+        ] {
+            let json = format!("\"{malformed}\"");
+            assert!(serde_json::from_str::<StableExpansionHash>(&json).is_err());
+        }
     }
 
     #[test]

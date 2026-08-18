@@ -153,7 +153,7 @@ impl FunctionLookup for InMemoryArtifactLookup<'_> {
 
 impl FunctionLookup for ArtifactAnalysisCache {
     fn function(&self, function: FunctionId) -> Option<LoadedFunction<'_>> {
-        self.ir
+        self.legacy_ir
             .function_body(function)
             .map(|body| LoadedFunction::new(body, BodyScope::artifact(self)))
     }
@@ -169,13 +169,13 @@ impl FunctionLookup for ArtifactAnalysisCache {
     }
 
     fn defining_body(&self, function: FunctionId) -> Option<LoadedFunction<'_>> {
-        self.ir
+        self.legacy_ir
             .defining_function_body(function)
             .map(|body| LoadedFunction::new(body, BodyScope::artifact(self)))
     }
 
     fn defining_source_body(&self, function: FunctionId) -> Option<LoadedFunction<'_>> {
-        self.ir
+        self.legacy_ir
             .defining_source_function_body(function)
             .map(|body| LoadedFunction::new(body, BodyScope::artifact(self)))
     }
@@ -350,7 +350,6 @@ pub(crate) enum InterpretedSafetyCallKind {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum InterpretedFindingKind {
-    CompilerAssert { kind: CompilerAssertKind },
     PanicSink,
     DocumentedPanic { trusted: bool },
     OpaquePanicBoundary { description: String },
@@ -967,18 +966,6 @@ impl<'a> DomainInterpreter<'a> {
                         None,
                         &effect_trace,
                     );
-                    if missing_requirements(&[], &satisfactions).is_some() {
-                        self.push_finding(
-                            endpoint,
-                            InterpretedFindingKind::CompilerAssert { kind: *kind },
-                            body,
-                            None,
-                            effect.source_range.clone(),
-                            effect_trace.to_interpreted(&self.trace_nodes),
-                            Vec::new(),
-                            Vec::new(),
-                        );
-                    }
                 }
                 (EffectDomain::Safety, EffectKindIr::UnsafeOperation { kind }) => {
                     self.interpret_unsafe_effect(
@@ -2191,7 +2178,6 @@ struct FindingKey {
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 enum FindingClass {
-    CompilerAssert,
     PanicSink,
     DocumentedPanic(bool),
     OpaquePanicBoundary,
@@ -2207,7 +2193,6 @@ enum FindingClass {
 impl FindingClass {
     fn from_kind(kind: &InterpretedFindingKind) -> Self {
         match kind {
-            InterpretedFindingKind::CompilerAssert { .. } => Self::CompilerAssert,
             InterpretedFindingKind::PanicSink => Self::PanicSink,
             InterpretedFindingKind::DocumentedPanic { trusted } => Self::DocumentedPanic(*trusted),
             InterpretedFindingKind::OpaquePanicBoundary { .. } => Self::OpaquePanicBoundary,
@@ -2589,6 +2574,8 @@ mod tests {
         LayeredFunctionLookup, interpret,
     };
     use crate::analysis::cache::{ArtifactAnalysisCache, ArtifactInfo, RustcArtifactId};
+    use crate::analysis::facts::encoded::{ArtifactFactIr, FACT_IR_FORMAT_VERSION};
+    use crate::analysis::facts::registry::SchemaRegistry;
     use crate::analysis::ir::{
         ArtifactAnalysisIr, CallEdgeIr, CallEdgeKindIr, CallId, CallSiteId, CallTargetIr,
         CallableAttributionIr, CallableKeyIr, ContractRequirementIr, EffectFactIr, EffectId,
@@ -2613,53 +2600,6 @@ mod tests {
 
         assert!(lookup.manages_stable_crate_id(42));
         assert!(!lookup.manages_stable_crate_id(7));
-    }
-
-    #[test]
-    fn reports_effects_only_from_reachable_dependency_bodies() {
-        let root = id(1, 1);
-        let dependency = id(2, 1);
-        let helper = id(2, 2);
-        let unused = id(2, 3);
-        let local =
-            ir(vec![body(root, "workspace::root").with_call(call(
-                0,
-                function_target(dependency, "dependency::entry"),
-            ))]);
-        let dependencies = ir(vec![
-            body(dependency, "dependency::entry").with_call(call(
-                0,
-                function_target(helper, "dependency::private_helper"),
-            )),
-            body(helper, "dependency::private_helper")
-                .with_effect(assert_effect(0, CompilerAssertKind::BoundsCheck)),
-            body(unused, "dependency::unused")
-                .with_effect(assert_effect(0, CompilerAssertKind::DivisionByZero)),
-        ]);
-        let lookup = LayeredFunctionLookup::new(vec![&local, &dependencies]);
-
-        let result = interpret(&lookup, &[report_root(root)], &SniffTestConfig::default());
-        let root_result = &result[0];
-
-        assert_eq!(root_result.findings.len(), 1);
-        assert!(matches!(
-            root_result.findings[0].kind,
-            InterpretedFindingKind::CompilerAssert {
-                kind: CompilerAssertKind::BoundsCheck,
-                ..
-            }
-        ));
-        assert_eq!(root_result.findings[0].trace.steps.len(), 3);
-        assert_eq!(
-            root_result.findings[0]
-                .trace
-                .steps
-                .last()
-                .and_then(|step| step.target_path.as_deref()),
-            Some("compiler assert index out of bounds")
-        );
-        assert!(root_result.completeness.panic.complete);
-        assert!(root_result.completeness.safety.complete);
     }
 
     #[test]
@@ -2712,49 +2652,6 @@ mod tests {
                     InterpretedTraceStepKind::Reachability(CallEdgeKindIr::DirectCall),
                     "macro workspace::inner",
                 ),
-            ]
-        );
-        assert_eq!(
-            finding.trace.steps[2].source_range,
-            Some(source_range(50, 60))
-        );
-    }
-
-    #[test]
-    fn macro_expanded_compiler_assert_keeps_macro_and_semantic_trace_steps() {
-        let root = id(1, 1);
-        let mut effect = assert_effect(0, CompilerAssertKind::BoundsCheck);
-        effect.source_range = Some(source_range(10, 15));
-        effect.expanded_range = Some(source_range(50, 60));
-        effect.macro_expansions = vec![
-            MacroExpansionFrameIr {
-                macro_def: definition_hash(1, 10),
-                display_path: String::from("workspace::outer"),
-                source_range: Some(source_range(10, 15)),
-            },
-            MacroExpansionFrameIr {
-                macro_def: definition_hash(1, 11),
-                display_path: String::from("workspace::inner"),
-                source_range: Some(source_range(30, 35)),
-            },
-        ];
-        let analysis = ir_with_source(vec![body(root, "workspace::root").with_effect(effect)]);
-
-        let result = interpret(&analysis, &[report_root(root)], &SniffTestConfig::default());
-        let finding = &result[0].findings[0];
-
-        assert_eq!(finding.source_range, Some(source_range(10, 15)));
-        assert_eq!(
-            finding
-                .trace
-                .steps
-                .iter()
-                .map(|step| step.kind)
-                .collect::<Vec<_>>(),
-            [
-                InterpretedTraceStepKind::Reachability(CallEdgeKindIr::MacroExpansion),
-                InterpretedTraceStepKind::Reachability(CallEdgeKindIr::MacroExpansion),
-                InterpretedTraceStepKind::Reachability(CallEdgeKindIr::Assert),
             ]
         );
         assert_eq!(
@@ -2820,13 +2717,8 @@ mod tests {
             &[report_root(exact)],
             &SniffTestConfig::default(),
         );
-        assert!(matches!(
-            fallback[0].findings[0].kind,
-            InterpretedFindingKind::CompilerAssert {
-                kind: CompilerAssertKind::BoundsCheck,
-                ..
-            }
-        ));
+        assert!(fallback[0].findings.is_empty());
+        assert!(fallback[0].completeness.panic.complete);
 
         let generic_and_exact = ir(vec![
             body(generic, "workspace::root")
@@ -2839,14 +2731,8 @@ mod tests {
             &[report_root(exact)],
             &SniffTestConfig::default(),
         );
-        assert_eq!(preferred[0].findings.len(), 1);
-        assert!(matches!(
-            preferred[0].findings[0].kind,
-            InterpretedFindingKind::CompilerAssert {
-                kind: CompilerAssertKind::Overflow,
-                ..
-            }
-        ));
+        assert!(preferred[0].findings.is_empty());
+        assert!(preferred[0].completeness.panic.complete);
     }
 
     #[test]
@@ -2957,11 +2843,8 @@ mod tests {
             &SniffTestConfig::default(),
         );
 
-        assert!(has_assert(&result[0], CompilerAssertKind::BoundsCheck));
-        assert!(!has_assert(&result[0], CompilerAssertKind::DivisionByZero));
-        assert!(has_assert(&result[1], CompilerAssertKind::DivisionByZero));
-        assert!(!has_assert(&result[1], CompilerAssertKind::BoundsCheck));
         for root in &result {
+            assert!(root.completeness.panic.complete);
             assert!(root.findings.iter().any(|finding| matches!(
                 finding.kind,
                 InterpretedFindingKind::UnsafeOperation {
@@ -2972,7 +2855,7 @@ mod tests {
     }
 
     #[test]
-    fn callable_target_resolution_keeps_the_evidence_artifact_scope() {
+    fn callable_target_resolution_across_evidence_artifacts_stays_complete() {
         let root = id(10, 1);
         let evidence_holder = id(20, 1);
         let target_generic = id(30, 1);
@@ -3033,10 +2916,8 @@ mod tests {
 
         let result = interpret(&lookup, &[report_root(root)], &config);
 
-        assert!(
-            has_assert(&result[0], CompilerAssertKind::Overflow),
-            "the callable target must resolve in the artifact that exposed its exact overlay"
-        );
+        assert!(result[0].completeness.panic.complete);
+        assert!(result[0].completeness.safety.complete);
     }
 
     #[test]
@@ -3856,15 +3737,14 @@ mod tests {
     }
 
     #[test]
-    fn findings_traces_and_missing_body_reasons_preserve_source_ranges() {
+    fn missing_body_reasons_preserve_source_ranges() {
         let root = id(1, 1);
         let missing = id(2, 1);
         let call_range = source_range(10, 20);
-        let effect_range = source_range(30, 40);
         let mut edge = call(0, function_target(missing, "dependency::missing"));
         edge.source_range = Some(call_range.clone());
         let mut effect = assert_effect(0, CompilerAssertKind::BoundsCheck);
-        effect.source_range = Some(effect_range.clone());
+        effect.source_range = Some(source_range(30, 40));
         let analysis = ArtifactAnalysisIr::new(
             vec![
                 body(root, "workspace::root")
@@ -3879,7 +3759,7 @@ mod tests {
         let result = interpret(&analysis, &[report_root(root)], &SniffTestConfig::default());
         let root = &result[0];
 
-        assert_eq!(root.findings[0].source_range, Some(effect_range));
+        assert!(root.findings.is_empty());
         for completeness in [&root.completeness.panic, &root.completeness.safety] {
             assert!(!completeness.complete);
             let IncompleteReason::MissingBody {
@@ -4193,13 +4073,15 @@ mod tests {
             &SniffTestConfig::default(),
         );
         assert!(complete[0].completeness.panic.complete);
-        assert_eq!(complete[0].findings.len(), 1);
+        assert!(complete[0].findings.is_empty());
 
         let mut limited = SniffTestConfig::default();
         limited.analysis.node_limit = 1;
         let limited = interpret(&analysis, &[report_root(first)], &limited);
         assert!(!limited[0].completeness.panic.complete);
         assert!(!limited[0].completeness.safety.complete);
+        assert_eq!(limited[0].completeness.panic.visited_bodies, 1);
+        assert_eq!(limited[0].completeness.safety.visited_bodies, 1);
     }
 
     #[test]
@@ -4256,8 +4138,7 @@ mod tests {
 
         assert!(root.completeness.panic.complete);
         assert_eq!(root.completeness.panic.visited_bodies, BODY_COUNT);
-        assert_eq!(root.findings.len(), 1);
-        assert_eq!(root.findings[0].trace.steps.len(), BODY_COUNT);
+        assert!(root.findings.is_empty());
     }
 
     #[test]
@@ -4286,10 +4167,12 @@ mod tests {
         let result = interpret(&analysis, &[report_root(root)], &SniffTestConfig::default());
 
         assert!(result[0].findings.is_empty());
+        assert!(result[0].completeness.panic.complete);
+        assert!(result[0].completeness.safety.complete);
     }
 
     #[test]
-    fn path_markers_suppress_downstream_effects_and_report_ambiguous_use() {
+    fn mixed_panic_and_safety_marker_ambiguity_stays_in_legacy_findings() {
         let root = id(1, 1);
         let helper = id(1, 2);
         let panic_marker = justification_marker(
@@ -4490,22 +4373,12 @@ mod tests {
 
         let result = interpret(&analysis, &[report_root(root)], &SniffTestConfig::default());
         let findings = &result[0].findings;
-
-        assert_eq!(
-            findings
-                .iter()
-                .filter(|finding| matches!(
-                    finding.kind,
-                    InterpretedFindingKind::CompilerAssert { .. }
-                ))
-                .count(),
-            2
-        );
         assert!(!findings.iter().any(|finding| matches!(
             finding.kind,
             InterpretedFindingKind::OpaquePanicBoundary { .. }
                 | InterpretedFindingKind::SafetyCall { .. }
         )));
+        assert!(findings.is_empty());
     }
 
     #[test]
@@ -4543,8 +4416,7 @@ mod tests {
             .filter(|finding| {
                 matches!(
                     finding.kind,
-                    InterpretedFindingKind::CompilerAssert { .. }
-                        | InterpretedFindingKind::PanicSink
+                    InterpretedFindingKind::PanicSink
                         | InterpretedFindingKind::DocumentedPanic { .. }
                         | InterpretedFindingKind::OpaquePanicBoundary { .. }
                 )
@@ -4697,6 +4569,12 @@ mod tests {
         stable_crate_id: u64,
         functions: Vec<T>,
     ) -> ArtifactAnalysisCache {
+        let facts = ArtifactFactIr {
+            format_version: FACT_IR_FORMAT_VERSION,
+            tables: Vec::new(),
+            fact_index: Vec::new(),
+            relation_index: Vec::new(),
+        };
         ArtifactAnalysisCache::new(
             "test-tool",
             "test-rustc",
@@ -4706,20 +4584,10 @@ mod tests {
             },
             Vec::new(),
             ir(functions),
+            facts,
+            &SchemaRegistry::new(),
         )
         .expect("valid test cache")
-    }
-
-    fn has_assert(root: &super::RootInterpretation, kind: CompilerAssertKind) -> bool {
-        root.findings.iter().any(|finding| {
-            matches!(
-                finding.kind,
-                InterpretedFindingKind::CompilerAssert {
-                    kind: found,
-                    ..
-                } if found == kind
-            )
-        })
     }
 
     fn id(stable_crate_id: u64, local_id: u64) -> FunctionId {

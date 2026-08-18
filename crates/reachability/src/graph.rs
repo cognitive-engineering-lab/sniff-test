@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::fmt;
 
 use rustc_hir::def_id::DefId;
-use rustc_middle::mir::AssertMessage;
+use rustc_middle::mir::{AssertMessage, Location};
 use rustc_middle::ty::{Instance, Ty};
 use rustc_span::Span;
 
@@ -642,6 +642,7 @@ pub enum ReachabilityNodeKind<'tcx> {
     CompilerAssert {
         message: Box<AssertMessage<'tcx>>,
         locals: Vec<CompilerAssertLocal>,
+        site: MirBodyLocation,
     },
     /// Macro expansion frame that produced the source span for another edge.
     ///
@@ -663,6 +664,28 @@ pub enum ReachabilityNodeKind<'tcx> {
         source_ty: Ty<'tcx>,
         target_ty: Ty<'tcx>,
     },
+}
+
+/// Stable location of one operation relative to its owning MIR body.
+///
+/// The statement index is the number of statements in the basic block for a
+/// terminator location. Keeping the numeric components avoids using rustc's
+/// debug rendering as semantic identity.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct MirBodyLocation {
+    /// Basic-block index within the MIR body.
+    pub basic_block: usize,
+    /// Statement or terminator index within the basic block.
+    pub statement_index: usize,
+}
+
+impl From<Location> for MirBodyLocation {
+    fn from(location: Location) -> Self {
+        Self {
+            basic_block: location.block.index(),
+            statement_index: location.statement_index,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
