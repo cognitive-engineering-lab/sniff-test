@@ -71,7 +71,9 @@ use crate::contracts::{
     ContractDocSummary, panic_contract_doc_summary_from_attrs,
     safety_contract_doc_summary_from_attrs,
 };
-use crate::namespace::{StableExpansionHash, canonical_namespace, namespace_candidates};
+use crate::namespace::{
+    StableExpansionHash, canonical_namespace, definition_backed_macro, namespace_candidates,
+};
 use crate::panics::CompilerAssertKind;
 use crate::safety::{
     RawSafetyFacts, RawSafetyOpFact, call_identity_def_id, collect_raw_safety_facts,
@@ -567,6 +569,7 @@ fn pending_call_for_edge<'tcx>(
         safety_effect_group: groups.safety_effect_group.index(),
         requires_unsafe,
         inside_builtin_unsafe: groups.inside_builtin_unsafe,
+        indirect_callee_type: indirect_callee_type_hash(tcx, &graph.node(edge.target).kind),
     };
     let pending = PendingCall {
         key: key.clone(),
@@ -867,14 +870,8 @@ fn typed_macro_expansions(
 ) -> Result<Vec<ExtractedMacroExpansionFrame>, ExtractError> {
     real_macro_expansion_chain(span)
         .into_iter()
-        .map(|expansion| (expansion, expansion.expn_data()))
-        .map(|(expansion, data)| {
-            let macro_definition = data.macro_def_id.ok_or_else(|| {
-                ExtractError::new(format!(
-                    "real macro expansion {} has no macro definition identity",
-                    StableExpansionHash::from_expn_id(expansion)
-                ))
-            })?;
+        .map(|(expansion, macro_definition)| {
+            let data = expansion.expn_data();
             Ok(ExtractedMacroExpansionFrame::new(
                 StableExpansionHash::from_expn_id(expansion),
                 StableDefPathHash::from_def_id(tcx, macro_definition),
@@ -885,13 +882,15 @@ fn typed_macro_expansions(
         .collect()
 }
 
-/// Returns every real macro ancestor of the innermost syntax-context mark.
+/// Returns every definition-backed macro ancestor of the innermost mark.
 ///
 /// `SyntaxContext::marks` can omit an outer expansion when the inner macro was
 /// invoked by tokens produced in that outer macro. The expansion-parent chain
 /// remains authoritative for that nesting and is also the identity used by
-/// marker occurrences, so use the same chain for endpoint topology.
-fn real_macro_expansion_chain(span: Span) -> Vec<ExpnId> {
+/// marker occurrences, so use the same chain for endpoint topology. Macro-like
+/// tool attributes such as `rustfmt::skip` have no definition identity; walk
+/// through them without fabricating a permanent macro frame.
+fn real_macro_expansion_chain(span: Span) -> Vec<(ExpnId, DefId)> {
     let Some(mut expansion) = span
         .ctxt()
         .marks()
@@ -906,8 +905,8 @@ fn real_macro_expansion_chain(span: Span) -> Vec<ExpnId> {
     let mut path = Vec::new();
     while expansion != ExpnId::root() {
         let data = expansion.expn_data();
-        if matches!(data.kind, ExpnKind::Macro(..)) {
-            path.push(expansion);
+        if let Some(macro_definition) = definition_backed_macro(expansion) {
+            path.push((expansion, macro_definition));
         }
         expansion = data.parent;
     }
@@ -1212,6 +1211,21 @@ fn callable_keys<'view, 'tcx>(
             StableDefPathHash::from_def_id(tcx, trait_def_id),
         )],
         None => Vec::new(),
+    }
+}
+
+fn indirect_callee_type_hash<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    target: &ReachabilityNodeKind<'tcx>,
+) -> Option<StableTypeHash> {
+    match target {
+        ReachabilityNodeKind::IndirectCall { callee_ty } => {
+            Some(StableTypeHash::from_ty(tcx, *callee_ty))
+        }
+        ReachabilityNodeKind::Instance(_)
+        | ReachabilityNodeKind::CompilerAssert { .. }
+        | ReachabilityNodeKind::DynObjectCast { .. }
+        | ReachabilityNodeKind::MacroExpansion { .. } => None,
     }
 }
 
@@ -2962,13 +2976,13 @@ fn marker_expansion_identity(
     let mut path = Vec::new();
     while expansion != ExpnId::root() {
         let data = expansion.expn_data();
-        if matches!(data.kind, ExpnKind::Macro(..)) {
+        if definition_backed_macro(expansion).is_some() {
             path.push(StableExpansionHash::from_expn_id(expansion));
         }
         expansion = data.parent;
     }
     path.reverse();
-    (Some(StableExpansionHash::from_expn_id(origin)), path)
+    (path.last().copied(), path)
 }
 
 fn panic_requirements(
@@ -3156,6 +3170,7 @@ struct PendingCallSortKey {
     safety_effect_group: u32,
     requires_unsafe: bool,
     inside_builtin_unsafe: bool,
+    indirect_callee_type: Option<StableTypeHash>,
 }
 
 impl PendingCall {
@@ -3434,7 +3449,7 @@ mod tests {
         BinaryOverflowOperation, MirAssertFact, MirAssertKind,
     };
     use crate::analysis::facts::program::topology::{
-        CallMacroExpansionEntity, CallMacroExpansionHasCallsite,
+        CallMacroExpansionEntity, CallMacroExpansionHasCallsite, CallOccurrenceEntity,
     };
     use crate::analysis::facts::program::{
         EffectSiteEntity, FunctionEntity, FunctionKey, MacroExpansionEntity,
@@ -3511,6 +3526,26 @@ fn select(values: &[u8]) -> &[u8] {
 pub fn entry(values: &[u8], index: usize) -> (u8, u8) {
     duplicate_tokens!(repeated_check!(values, index))
 }
+";
+
+    const SAME_SPAN_INDIRECT_CALL_SOURCE: &str = r"
+pub fn entry<T, K: Ord, F: FnMut(&T) -> K>(values: &mut [T], key: F) {
+    values.sort_by_cached_key(key);
+}
+";
+
+    const TOOL_ATTRIBUTE_ON_MACRO_INVOCATION_SOURCE: &str = r"
+macro_rules! define_checked_lookup {
+    () => {
+        pub fn entry(values: &[u8], index: usize) -> u8 {
+            // PANIC: index-in-bounds: guaranteed by the caller.
+            values[index]
+        }
+    };
+}
+
+#[rustfmt::skip]
+define_checked_lookup!();
 ";
 
     const DIRECT_COLLECTION_SOURCE: &str = r"
@@ -4037,6 +4072,67 @@ pub fn entry(value: u8) -> u8 {
         let second = run_typed_assert_compiler(&source, "cross_session_call_order_fixture");
 
         assert_eq!(first.facts, second.facts);
+    }
+
+    #[test]
+    fn same_span_indirect_calls_keep_stable_identity_across_compiler_sessions() {
+        let directory = tempfile::tempdir().expect("temporary compiler fixture");
+        let source = directory.path().join("lib.rs");
+        fs::write(&source, SAME_SPAN_INDIRECT_CALL_SOURCE).expect("write compiler fixture");
+
+        let first = run_typed_assert_compiler(&source, "same_span_indirect_call_fixture");
+        let second = run_typed_assert_compiler(&source, "same_span_indirect_call_fixture");
+
+        assert_eq!(first.facts, second.facts);
+        let mut registry = AnalysisRegistry::<()>::new();
+        registry.install(&CollectedArtifactSchemaPack).unwrap();
+        let view = ArtifactDbView::open(&first.facts, registry.schemas()).unwrap();
+        let descriptions = view
+            .table::<CallOccurrenceEntity>()
+            .unwrap()
+            .iter()
+            .filter_map(CallOccurrenceEntity::opaque_target_description)
+            .filter(|description| description.contains("SpecFromIter"))
+            .map(str::to_owned)
+            .collect::<Vec<_>>();
+
+        assert_eq!(descriptions.len(), 2, "{descriptions:#?}");
+        assert!(
+            descriptions
+                .iter()
+                .any(|description| description.contains("u32"))
+        );
+        assert!(
+            descriptions
+                .iter()
+                .any(|description| description.contains("usize"))
+        );
+    }
+
+    #[test]
+    fn tool_attribute_does_not_hide_definition_backed_macro_provenance() {
+        let result = compile_typed_asserts(
+            TOOL_ATTRIBUTE_ON_MACRO_INVOCATION_SOURCE,
+            "tool_attribute_macro_fixture",
+        );
+        let mut registry = AnalysisRegistry::<()>::new();
+        registry.install(&CollectedArtifactSchemaPack).unwrap();
+        let view = ArtifactDbView::open(&result.facts, registry.schemas()).unwrap();
+        let frames = view.table::<MacroExpansionEntity>().unwrap();
+        let markers = view.table::<MarkerOccurrenceEntity>().unwrap();
+
+        assert!(result.kinds.contains(&MirAssertKind::BoundsCheck));
+        assert_eq!(frames.len(), 1);
+        assert!(
+            frames
+                .iter()
+                .all(|frame| frame.display_path().ends_with("::define_checked_lookup"))
+        );
+        assert_eq!(markers.len(), 1);
+        let frame = frames.iter().next().unwrap();
+        let marker = markers.iter().next().unwrap();
+        assert_eq!(marker.expansion_path(), &[frame.expansion_hash()]);
+        assert_eq!(marker.key().origin(), Some(frame.expansion_hash()));
     }
 
     #[test]

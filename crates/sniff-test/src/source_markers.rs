@@ -5,10 +5,11 @@ use rustc_hir::def_id::LocalDefId;
 use rustc_middle::thir::visit::{self, Visitor};
 use rustc_middle::thir::{Block, Thir};
 use rustc_middle::ty::TyCtxt;
-use rustc_span::{ExpnId, ExpnKind, SourceFile, Span};
+use rustc_span::{ExpnId, SourceFile, Span};
 
 use crate::config::MarkerProbing;
 use crate::contracts::MarkerSatisfaction;
+use crate::namespace::definition_backed_macro;
 
 #[derive(Debug, Clone, Copy)]
 enum MarkerSyntax {
@@ -295,16 +296,15 @@ fn push_unique_probe_span(spans: &mut Vec<Span>, span: Span) {
 }
 
 fn marker_origin(probe_span: Span) -> MarkerOrigin {
-    // Use the nearest real macro expansion on the span that found the marker.
-    // Compiler passes and desugarings do not instantiate source comments.
+    // Use the nearest definition-backed macro expansion on the span that found
+    // the marker. Compiler passes, desugarings, and inert tool attributes do
+    // not instantiate source comments.
     probe_span
         .ctxt()
         .marks()
         .into_iter()
         .rev()
-        .find_map(|(expn_id, _)| {
-            matches!(expn_id.expn_data().kind, ExpnKind::Macro(..)).then_some(expn_id)
-        })
+        .find_map(|(expn_id, _)| definition_backed_macro(expn_id).map(|_| expn_id))
         .map_or(MarkerOrigin::Source, MarkerOrigin::Macro)
 }
 

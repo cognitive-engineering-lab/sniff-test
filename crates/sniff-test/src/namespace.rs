@@ -22,7 +22,7 @@ use rustc_hir::def::DefKind;
 use rustc_hir::def_id::DefId;
 use rustc_middle::mono::MonoItem;
 use rustc_middle::ty::{Instance, Ty, TyCtxt};
-use rustc_span::ExpnId;
+use rustc_span::{ExpnId, ExpnKind};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 // The driver runs one rustc session per process and the analysis is
@@ -33,6 +33,19 @@ thread_local! {
     static NAMESPACE_CACHE: RefCell<HashMap<DefId, String>> = RefCell::new(HashMap::new());
     static CANDIDATES_CACHE: RefCell<HashMap<DefId, NamespaceCandidates>> =
         RefCell::new(HashMap::new());
+}
+
+/// Returns the definition behind a real, definition-backed macro expansion.
+///
+/// rustc represents inert tool attributes such as `rustfmt::skip` with
+/// [`ExpnKind::Macro`] even though they perform no macro expansion and have no
+/// definition. Permanent macro topology and marker identity must omit those
+/// marks consistently instead of inventing a definition for them.
+pub(crate) fn definition_backed_macro(expansion: ExpnId) -> Option<DefId> {
+    let data = expansion.expn_data();
+    matches!(data.kind, ExpnKind::Macro(..))
+        .then_some(data.macro_def_id)
+        .flatten()
 }
 
 /// Session-independent identity for a definition.
