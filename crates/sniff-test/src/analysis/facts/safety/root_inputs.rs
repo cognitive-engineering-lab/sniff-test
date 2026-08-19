@@ -1158,36 +1158,45 @@ pub(crate) mod tests {
         with_call_scenario(Some(satisfied), false, inspect)
     }
 
-    fn resolve_root(has_contract: bool) -> SafetyRootInputs {
-        with_root(has_contract, false, false, |_, inputs, _| inputs)
-    }
-
     #[test]
-    fn root_contract_is_a_silent_boundary_and_missing_docs_expand() {
-        let documented = resolve_root(true);
-        assert!(!documented.root_missing_safety_docs());
-        assert!(documented.traversal().body_visits().is_empty());
-        assert!(matches!(
-            documented.traversal().body_boundaries(),
-            [boundary] if matches!(boundary.payload(), SafetyBoundary::RootContract(contract)
-                if contract.requirements()[0].normalized_name() == "valid")
-        ));
+    fn root_contract_state_drives_traversal_completeness_and_issues() {
+        enum ContractState {
+            Documented,
+            Missing,
+        }
 
-        let undocumented = resolve_root(false);
-        assert!(undocumented.root_missing_safety_docs());
-        assert_eq!(undocumented.traversal().body_visits().len(), 1);
-        assert!(undocumented.traversal().body_boundaries().is_empty());
-    }
-
-    #[test]
-    fn typed_safety_completeness_counts_only_expanded_bodies() {
-        for (has_contract, expanded_bodies) in [(true, 0), (false, 1)] {
+        for (has_contract, expected, expanded_bodies) in [
+            (true, ContractState::Documented, 0),
+            (false, ContractState::Missing, 1),
+        ] {
             with_root(
                 has_contract,
                 false,
                 false,
                 |registry, inputs, evaluation| {
                     let root = inputs.root().clone();
+                    match expected {
+                        ContractState::Documented => {
+                            assert!(!inputs.root_missing_safety_docs());
+                            assert!(inputs.traversal().body_visits().is_empty());
+                            assert!(matches!(
+                                inputs.traversal().body_boundaries(),
+                                [boundary]
+                                    if matches!(
+                                        boundary.payload(),
+                                        SafetyBoundary::RootContract(contract)
+                                            if contract.requirements()[0].normalized_name()
+                                                == "valid"
+                                    )
+                            ));
+                        }
+                        ContractState::Missing => {
+                            assert!(inputs.root_missing_safety_docs());
+                            assert_eq!(inputs.traversal().body_visits().len(), 1);
+                            assert!(inputs.traversal().body_boundaries().is_empty());
+                        }
+                    }
+
                     let mut database = EvaluationDb::new();
                     registry
                         .run_workspace_evaluation(&inputs, &root, &evaluation, &mut database)
@@ -1202,39 +1211,12 @@ pub(crate) mod tests {
                             if summary.data.expanded_bodies() == expanded_bodies
                                 && summary.data.complete()
                     ));
-                },
-            );
-        }
-    }
-
-    #[test]
-    fn root_documentation_state_projects_the_corresponding_issue_set() {
-        enum DocumentationState {
-            Documented,
-            Missing,
-        }
-
-        for (has_contract, expected) in [
-            (true, DocumentationState::Documented),
-            (false, DocumentationState::Missing),
-        ] {
-            with_root(
-                has_contract,
-                false,
-                false,
-                |registry, inputs, evaluation| {
-                    let root = inputs.root().clone();
-                    let mut database = EvaluationDb::new();
-                    registry
-                        .run_workspace_evaluation(&inputs, &root, &evaluation, &mut database)
-                        .unwrap();
-                    let results = database.finish().unwrap();
                     let issues = results
                         .issues::<MissingSafetyDocsIssue>(registry.schemas())
                         .unwrap();
                     match expected {
-                        DocumentationState::Documented => assert!(issues.is_empty()),
-                        DocumentationState::Missing => {
+                        ContractState::Documented => assert!(issues.is_empty()),
+                        ContractState::Missing => {
                             let [issue] = issues.as_slice() else {
                                 panic!("a missing root contract must emit one issue");
                             };
@@ -1286,65 +1268,65 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn undocumented_unsafe_operation_emits_one_typed_issue() {
-        with_root(false, false, false, |registry, inputs, evaluation| {
-            let root = inputs.root().clone();
-            let mut database = EvaluationDb::new();
-            registry
-                .run_workspace_evaluation(&inputs, &root, &evaluation, &mut database)
-                .unwrap();
-            let results = database.finish().unwrap();
-            let issues = results
-                .issues::<UnsatisfiedUnsafeOperationIssue>(registry.schemas())
-                .unwrap();
-            let [issue] = issues.as_slice() else {
-                panic!("one unsafe-operation issue must be emitted");
-            };
-            assert_eq!(issue.data.kind(), SafetyOperationKind::DerefRawPointer);
-            assert_eq!(issue.data.witness_order(), 1);
-            assert_eq!(issue.context.root, root);
-            assert_eq!(
-                issue.context.source.as_ref(),
-                issue
-                    .context
-                    .endpoint
-                    .as_ref()
-                    .map(crate::analysis::facts::workspace::ScopedEntityRef::as_row)
-                    .as_ref()
-            );
-        });
-    }
+    fn unsafe_operation_evidence_state_projects_an_issue_or_use() {
+        enum EvidenceState {
+            Missing,
+            Matched,
+        }
 
-    #[test]
-    fn unnamed_safety_marker_satisfies_the_unsafe_operation() {
-        with_root(false, true, false, |registry, inputs, evaluation| {
-            let root = inputs.root().clone();
-            let [visit] = inputs.traversal().unsafe_operation_visits() else {
-                panic!("the fixture must retain one unsafe-operation witness");
-            };
-            assert_eq!(visit.active_markers().len(), 1);
+        for (has_marker, expected) in [
+            (false, EvidenceState::Missing),
+            (true, EvidenceState::Matched),
+        ] {
+            with_root(false, has_marker, false, |registry, inputs, evaluation| {
+                let root = inputs.root().clone();
+                let [visit] = inputs.traversal().unsafe_operation_visits() else {
+                    panic!("the fixture must retain one unsafe-operation witness");
+                };
+                assert_eq!(visit.active_markers().len(), usize::from(has_marker));
 
-            let mut database = EvaluationDb::new();
-            registry
-                .run_workspace_evaluation(&inputs, &root, &evaluation, &mut database)
-                .unwrap();
-            let results = database.finish().unwrap();
-            assert!(
-                results
+                let mut database = EvaluationDb::new();
+                registry
+                    .run_workspace_evaluation(&inputs, &root, &evaluation, &mut database)
+                    .unwrap();
+                let results = database.finish().unwrap();
+                let issues = results
                     .issues::<UnsatisfiedUnsafeOperationIssue>(registry.schemas())
-                    .unwrap()
-                    .is_empty()
-            );
-            let uses = results
-                .derived_rows::<EvidenceUseRecord>(registry.schemas())
-                .unwrap();
-            assert!(matches!(
-                uses.as_slice(),
-                [usage]
-                    if usage.data.endpoint() == &visit.operation().erase()
-                        && usage.data.group() == &visit.safety_group().erase()
-            ));
-        });
+                    .unwrap();
+                let uses = results
+                    .derived_rows::<EvidenceUseRecord>(registry.schemas())
+                    .unwrap();
+                match expected {
+                    EvidenceState::Missing => {
+                        let [issue] = issues.as_slice() else {
+                            panic!("missing evidence must produce one unsafe-operation issue");
+                        };
+                        assert_eq!(issue.data.kind(), SafetyOperationKind::DerefRawPointer);
+                        assert_eq!(issue.data.witness_order(), 1);
+                        assert_eq!(issue.context.root, root);
+                        assert_eq!(
+                            issue.context.source.as_ref(),
+                            issue
+                                .context
+                                .endpoint
+                                .as_ref()
+                                .map(crate::analysis::facts::workspace::ScopedEntityRef::as_row,)
+                                .as_ref()
+                        );
+                        assert!(uses.is_empty());
+                    }
+                    EvidenceState::Matched => {
+                        assert!(issues.is_empty());
+                        assert!(matches!(
+                            uses.as_slice(),
+                            [usage]
+                                if usage.data.endpoint() == &visit.operation().erase()
+                                    && usage.data.group() == &visit.safety_group().erase()
+                        ));
+                    }
+                }
+            });
+        }
     }
 
     #[test]
