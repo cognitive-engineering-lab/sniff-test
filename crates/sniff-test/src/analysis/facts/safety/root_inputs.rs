@@ -1208,8 +1208,16 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn missing_docs_rule_emits_only_for_the_undocumented_exported_unsafe_root() {
-        for (has_contract, expected) in [(false, 1), (true, 0)] {
+    fn root_documentation_state_projects_the_corresponding_issue_set() {
+        enum DocumentationState {
+            Documented,
+            Missing,
+        }
+
+        for (has_contract, expected) in [
+            (true, DocumentationState::Documented),
+            (false, DocumentationState::Missing),
+        ] {
             with_root(
                 has_contract,
                 false,
@@ -1224,18 +1232,23 @@ pub(crate) mod tests {
                     let issues = results
                         .issues::<MissingSafetyDocsIssue>(registry.schemas())
                         .unwrap();
-                    assert_eq!(issues.len(), expected);
-                    if let [issue] = issues.as_slice() {
-                        assert_eq!(issue.context.root, root);
-                        assert_eq!(issue.context.endpoint.as_ref(), Some(&root.entity));
-                        assert!(issue.context.source.is_none());
-                        assert!(
-                            issue
-                                .context
-                                .trace
-                                .as_ref()
-                                .is_some_and(|trace| trace.relations().is_empty())
-                        );
+                    match expected {
+                        DocumentationState::Documented => assert!(issues.is_empty()),
+                        DocumentationState::Missing => {
+                            let [issue] = issues.as_slice() else {
+                                panic!("a missing root contract must emit one issue");
+                            };
+                            assert_eq!(issue.context.root, root);
+                            assert_eq!(issue.context.endpoint.as_ref(), Some(&root.entity));
+                            assert!(issue.context.source.is_none());
+                            assert!(
+                                issue
+                                    .context
+                                    .trace
+                                    .as_ref()
+                                    .is_some_and(|trace| trace.relations().is_empty())
+                            );
+                        }
                     }
                 },
             );
@@ -1335,8 +1348,16 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn named_safety_call_requirement_is_reported_until_matched() {
-        for (satisfied, expected_missing) in [(false, 1), (true, 0)] {
+    fn matching_safety_markers_discharge_named_call_requirements() {
+        enum EvidenceState {
+            Missing,
+            Matched,
+        }
+
+        for (satisfied, expected) in [
+            (false, EvidenceState::Missing),
+            (true, EvidenceState::Matched),
+        ] {
             with_call_root(satisfied, |registry, inputs, evaluation| {
                 let root = inputs.root().clone();
                 let mut database = EvaluationDb::new();
@@ -1347,14 +1368,19 @@ pub(crate) mod tests {
                 let issues = results
                     .issues::<UnsatisfiedSafetyCallIssue>(registry.schemas())
                     .unwrap();
-                assert_eq!(issues.len(), expected_missing);
-                assert_eq!(
-                    results
-                        .derived_rows::<EvidenceUseRecord>(registry.schemas())
-                        .unwrap()
-                        .len(),
-                    usize::from(satisfied)
-                );
+                let uses = results
+                    .derived_rows::<EvidenceUseRecord>(registry.schemas())
+                    .unwrap();
+                match expected {
+                    EvidenceState::Missing => {
+                        assert!(matches!(issues.as_slice(), [_]));
+                        assert!(uses.is_empty());
+                    }
+                    EvidenceState::Matched => {
+                        assert!(issues.is_empty());
+                        assert!(matches!(uses.as_slice(), [_]));
+                    }
+                }
                 let duplicates = results
                     .issues::<super::super::DuplicateSafetyCallRequirementIssue>(registry.schemas())
                     .unwrap();
@@ -1393,7 +1419,7 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn indirect_safety_boundary_descriptions_hide_compiler_type_debugging() {
+    fn indirect_safety_boundaries_use_stable_user_facing_descriptions() {
         assert_eq!(
             normalized_opaque_description(CallKind::IndirectCall, false, "Binder { raw }"),
             "indirect call through a function pointer"

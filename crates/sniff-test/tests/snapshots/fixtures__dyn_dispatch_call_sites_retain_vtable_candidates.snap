@@ -1,0 +1,92 @@
+---
+source: crates/sniff-test/tests/fixtures.rs
+expression: "report[\"findings\"]"
+---
+[
+  {
+    "kind": "indirect-call-boundary",
+    "level": "warn",
+    "reason": "indirect call to undocumented trait method dyn_dispatch_call_site::Runner::run cannot be verified",
+    "root": "dyn_dispatch_call_site::same_trait_vtable_candidates_are_reachable",
+    "root-kind": "concrete",
+    "root-span": "src/lib.rs:24:1: 24:52",
+    "span": "src/lib.rs:30:5: 30:17",
+    "target": "dyn_dispatch_call_site::Runner::run",
+    "trace": [
+      "src/lib.rs:30:5: 30:17: dyn_dispatch_call_site::same_trait_vtable_candidates_are_reachable --direct-call-> dyn_dispatch_call_site::Runner::run"
+    ]
+  },
+  {
+    "kind": "panic-invocation",
+    "level": "deny",
+    "reason": "panic sink core::std::rt::panic_fmt",
+    "root": "dyn_dispatch_call_site::same_trait_vtable_candidates_are_reachable",
+    "root-kind": "concrete",
+    "root-span": "src/lib.rs:24:1: 24:52",
+    "span": "src/lib.rs:9:9: 9:41",
+    "target": "core::std::rt::panic_fmt",
+    "trace": [
+      "src/lib.rs:30:5: 30:17: dyn_dispatch_call_site::same_trait_vtable_candidates_are_reachable --dyn-dispatch-vtable-entry-> <dyn_dispatch_call_site::Panicker as Runner>::run",
+      "src/lib.rs:9:9: 9:41: <dyn_dispatch_call_site::Panicker as Runner>::run --macro-expansion-> macro std::panic",
+      "src/lib.rs:9:9: 9:41: macro std::panic --macro-expansion-> macro core::std::panic::panic_2021",
+      "[SYSROOT]/lib/rustlib/src/rust/library/core/src/panic.rs:62:9: 62:73: macro core::std::panic::panic_2021 --direct-call-> core::std::rt::panic_fmt"
+    ]
+  },
+  {
+    "function": "dyn_dispatch_call_site::same_trait_vtable_candidates_are_reachable",
+    "kind": "indirect-safety-call-boundary",
+    "level": "warn",
+    "reason": "dyn_dispatch_call_site::Runner::run has unverifiable safety requirements",
+    "root": "dyn_dispatch_call_site::same_trait_vtable_candidates_are_reachable",
+    "root-kind": "concrete",
+    "root-span": "src/lib.rs:24:1: 24:52",
+    "span": "src/lib.rs:30:5: 30:17",
+    "target": "dyn_dispatch_call_site::Runner::run",
+    "trace": [
+      "src/lib.rs:30:5: 30:17: dyn_dispatch_call_site::same_trait_vtable_candidates_are_reachable --direct-call-> dyn_dispatch_call_site::Runner::run"
+    ]
+  },
+  {
+    "kind": "indirect-call-boundary",
+    "level": "warn",
+    "reason": "indirect call to undocumented trait method dyn_dispatch_call_site::Runner::run cannot be verified",
+    "root": "dyn_dispatch_call_site::selected_panicking_runner_is_reachable",
+    "root-kind": "concrete",
+    "root-span": "src/lib.rs:19:1: 19:48",
+    "span": "src/lib.rs:21:5: 21:17",
+    "target": "dyn_dispatch_call_site::Runner::run",
+    "trace": [
+      "src/lib.rs:21:5: 21:17: dyn_dispatch_call_site::selected_panicking_runner_is_reachable --direct-call-> dyn_dispatch_call_site::Runner::run"
+    ]
+  },
+  {
+    "kind": "panic-invocation",
+    "level": "deny",
+    "reason": "panic sink core::std::rt::panic_fmt",
+    "root": "dyn_dispatch_call_site::selected_panicking_runner_is_reachable",
+    "root-kind": "concrete",
+    "root-span": "src/lib.rs:19:1: 19:48",
+    "span": "src/lib.rs:9:9: 9:41",
+    "target": "core::std::rt::panic_fmt",
+    "trace": [
+      "src/lib.rs:21:5: 21:17: dyn_dispatch_call_site::selected_panicking_runner_is_reachable --dyn-dispatch-vtable-entry-> <dyn_dispatch_call_site::Panicker as Runner>::run",
+      "src/lib.rs:9:9: 9:41: <dyn_dispatch_call_site::Panicker as Runner>::run --macro-expansion-> macro std::panic",
+      "src/lib.rs:9:9: 9:41: macro std::panic --macro-expansion-> macro core::std::panic::panic_2021",
+      "[SYSROOT]/lib/rustlib/src/rust/library/core/src/panic.rs:62:9: 62:73: macro core::std::panic::panic_2021 --direct-call-> core::std::rt::panic_fmt"
+    ]
+  },
+  {
+    "function": "dyn_dispatch_call_site::selected_panicking_runner_is_reachable",
+    "kind": "indirect-safety-call-boundary",
+    "level": "warn",
+    "reason": "dyn_dispatch_call_site::Runner::run has unverifiable safety requirements",
+    "root": "dyn_dispatch_call_site::selected_panicking_runner_is_reachable",
+    "root-kind": "concrete",
+    "root-span": "src/lib.rs:19:1: 19:48",
+    "span": "src/lib.rs:21:5: 21:17",
+    "target": "dyn_dispatch_call_site::Runner::run",
+    "trace": [
+      "src/lib.rs:21:5: 21:17: dyn_dispatch_call_site::selected_panicking_runner_is_reachable --direct-call-> dyn_dispatch_call_site::Runner::run"
+    ]
+  }
+]

@@ -93,10 +93,7 @@ fixture_cases! {
         trait_default_method => Case::new().denied();
     }
     "dyn_dispatch_call_site" => {
-        dyn_dispatch_call_site => Case::new().denied();
-    }
-    "dyn_dispatch_same_trait" => {
-        dyn_dispatch_same_trait => Case::new().denied();
+        dyn_dispatch_call_sites_retain_vtable_candidates => Case::new().denied();
     }
     "supertrait_dyn_dispatch" => {
         supertrait_dyn_dispatch => Case::new()

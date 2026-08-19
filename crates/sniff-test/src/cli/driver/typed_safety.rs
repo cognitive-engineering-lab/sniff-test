@@ -2385,12 +2385,13 @@ fn safety_root_request(root: &InterpretationRoot, config: &SniffTestConfig) -> S
 #[cfg(test)]
 mod tests {
     use super::{
-        adapt_typed_safety_authority_batch, evaluate_typed_safety_roots,
+        TypedSafetyBatchReport, adapt_typed_safety_authority_batch, evaluate_typed_safety_roots,
         project_duplicate_safety_call_findings, project_indirect_safety_findings,
         project_safety_call_findings, project_safety_incomplete_reasons,
         project_safety_root_findings, project_unsafe_operation_findings,
         typed_safety_authority_registry,
     };
+    use crate::analysis::facts::encoded::ArtifactFactIr;
     use crate::analysis::facts::evidence::{AmbiguousEvidenceReuseIssue, EvidenceUseRecord};
     use crate::analysis::facts::safety::root_inputs::tests::{root_artifact, root_key};
     use crate::analysis::facts::safety::{
@@ -2430,6 +2431,26 @@ mod tests {
         fn render_span(&self, _span: Span) -> String {
             String::from("unreachable")
         }
+    }
+
+    fn root_request() -> InterpretationRoot {
+        InterpretationRoot {
+            function: FunctionId::generic(root_key().definition()),
+            path: String::from("crate::root"),
+            kind: ReportRootKind::Generic,
+        }
+    }
+
+    fn evaluate_root(facts: &ArtifactFactIr, config: &SniffTestConfig) -> TypedSafetyBatchReport {
+        evaluate_typed_safety_roots(
+            TypedPanicLocalArtifact::in_memory(facts, 1),
+            &[],
+            Vec::new(),
+            &[],
+            std::slice::from_ref(&root_request()),
+            config,
+        )
+        .expect("the typed safety authority evaluates the fixture root")
     }
 
     #[test]
@@ -2514,25 +2535,12 @@ mod tests {
     #[test]
     fn combined_evaluator_projects_unsafe_operation_issues() {
         let (_, facts) = root_artifact(false, false, None, false, false);
-        let key = root_key();
-        let request = InterpretationRoot {
-            function: FunctionId::generic(key.definition()),
-            path: String::from("crate::root"),
-            kind: ReportRootKind::Generic,
-        };
+        let request = root_request();
         let mut config = SniffTestConfig::default();
         config.analysis.callable_edge_attribution =
             crate::config::CallableEdgeAttribution::CallSites;
         config.analysis.marker_probing = crate::config::MarkerProbing::SourceCallsite;
-        let batch = evaluate_typed_safety_roots(
-            TypedPanicLocalArtifact::in_memory(&facts, 1),
-            &[],
-            Vec::new(),
-            &[],
-            std::slice::from_ref(&request),
-            &config,
-        )
-        .expect("the combined safety evaluator accepts an unsafe operation");
+        let batch = evaluate_root(&facts, &config);
 
         let [report] = batch.roots.as_slice() else {
             panic!("one requested root must produce one safety report");
@@ -2558,24 +2566,11 @@ mod tests {
     #[test]
     fn authority_batch_preflights_and_adapts_every_ready_safety_lane() {
         let (_, facts) = root_artifact(false, false, None, true, false);
-        let key = root_key();
-        let request = InterpretationRoot {
-            function: FunctionId::generic(key.definition()),
-            path: String::from("crate::root"),
-            kind: ReportRootKind::Generic,
-        };
+        let request = root_request();
         let mut config = SniffTestConfig::default();
         config.analysis.callable_edge_attribution =
             crate::config::CallableEdgeAttribution::CallSites;
-        let batch = evaluate_typed_safety_roots(
-            TypedPanicLocalArtifact::in_memory(&facts, 1),
-            &[],
-            Vec::new(),
-            &[],
-            std::slice::from_ref(&request),
-            &config,
-        )
-        .expect("the typed safety authority evaluates one ready root");
+        let batch = evaluate_root(&facts, &config);
         let findings = adapt_typed_safety_authority_batch(
             &UnavailableSources,
             &batch,
@@ -2589,7 +2584,7 @@ mod tests {
     }
 
     #[test]
-    fn authority_batch_preserves_ready_and_missing_root_order_without_fake_roots() {
+    fn authority_batch_preserves_ready_and_missing_root_order() {
         let ready = function(991);
         let missing = function(992);
         let facts = root_preparation_artifact(&[ready]);
@@ -2632,24 +2627,11 @@ mod tests {
     #[test]
     fn safety_call_projection_is_bijective_and_preserves_requirements() {
         let (_, facts) = root_artifact(false, false, Some(false), false, false);
-        let key = root_key();
-        let request = InterpretationRoot {
-            function: FunctionId::generic(key.definition()),
-            path: String::from("crate::root"),
-            kind: ReportRootKind::Generic,
-        };
+        let request = root_request();
         let mut config = SniffTestConfig::default();
         config.analysis.callable_edge_attribution =
             crate::config::CallableEdgeAttribution::CallSites;
-        let batch = evaluate_typed_safety_roots(
-            TypedPanicLocalArtifact::in_memory(&facts, 1),
-            &[],
-            Vec::new(),
-            &[],
-            std::slice::from_ref(&request),
-            &config,
-        )
-        .expect("the combined safety evaluator accepts a documented call");
+        let batch = evaluate_root(&facts, &config);
         let [report] = batch.roots.as_slice() else {
             panic!("one requested root must produce one safety report");
         };
@@ -2697,53 +2679,37 @@ mod tests {
     }
 
     #[test]
-    fn root_safety_projection_distinguishes_missing_docs_and_duplicate_contracts() {
-        let key = root_key();
-        let request = InterpretationRoot {
-            function: FunctionId::generic(key.definition()),
-            path: String::from("crate::root"),
-            kind: ReportRootKind::Generic,
-        };
-        for (has_contract, expected_missing, expected_duplicate) in
-            [(false, true, false), (true, false, true)]
-        {
+    fn root_safety_projection_preserves_each_policy_finding() {
+        enum ExpectedFinding {
+            MissingDocs,
+            DuplicateRequirement,
+        }
+
+        for (has_contract, expected) in [
+            (false, ExpectedFinding::MissingDocs),
+            (true, ExpectedFinding::DuplicateRequirement),
+        ] {
             let (_, facts) = root_artifact(has_contract, false, None, false, false);
-            let batch = evaluate_typed_safety_roots(
-                TypedPanicLocalArtifact::in_memory(&facts, 1),
-                &[],
-                Vec::new(),
-                &[],
-                std::slice::from_ref(&request),
-                &SniffTestConfig::default(),
-            )
-            .expect("the combined safety evaluator accepts the root policy");
+            let batch = evaluate_root(&facts, &SniffTestConfig::default());
             let findings = project_safety_root_findings(&batch.roots[0])
                 .expect("root safety rows project bijectively");
-            assert_eq!(
-                findings.iter().any(|finding| matches!(
+            let [finding] = findings.as_slice() else {
+                panic!("each root policy must project one finding, got {findings:?}");
+            };
+            match expected {
+                ExpectedFinding::MissingDocs => assert!(matches!(
                     finding.kind,
                     crate::analysis::findings::InterpretedFindingKind::MissingSafetyDocs
                 )),
-                expected_missing
-            );
-            assert_eq!(
-                findings.iter().any(|finding| matches!(
-                    finding.kind,
-                    crate::analysis::findings::InterpretedFindingKind::AmbiguousSafetyRequirement { .. }
-                )),
-                expected_duplicate
-            );
-            if expected_duplicate {
-                let duplicate = findings
-                    .iter()
-                    .find(|finding| matches!(
+                ExpectedFinding::DuplicateRequirement => {
+                    assert!(matches!(
                         finding.kind,
                         crate::analysis::findings::InterpretedFindingKind::AmbiguousSafetyRequirement { .. }
-                    ))
-                    .unwrap();
-                assert!(duplicate.target.is_none());
-                assert!(duplicate.trace.steps.is_empty());
-                assert_eq!(duplicate.requirements.len(), 2);
+                    ));
+                    assert!(finding.target.is_none());
+                    assert!(finding.trace.steps.is_empty());
+                    assert_eq!(finding.requirements.len(), 2);
+                }
             }
         }
     }
@@ -2751,24 +2717,10 @@ mod tests {
     #[test]
     fn indirect_safety_boundary_is_visible_and_bijective() {
         let (_, facts) = root_artifact(false, false, None, true, false);
-        let key = root_key();
-        let request = InterpretationRoot {
-            function: FunctionId::generic(key.definition()),
-            path: String::from("crate::root"),
-            kind: ReportRootKind::Generic,
-        };
         let mut config = SniffTestConfig::default();
         config.analysis.callable_edge_attribution =
             crate::config::CallableEdgeAttribution::CallSites;
-        let batch = evaluate_typed_safety_roots(
-            TypedPanicLocalArtifact::in_memory(&facts, 1),
-            &[],
-            Vec::new(),
-            &[],
-            std::slice::from_ref(&request),
-            &config,
-        )
-        .expect("the combined safety evaluator accepts an opaque call");
+        let batch = evaluate_root(&facts, &config);
         let report = &batch.roots[0];
         let findings = project_indirect_safety_findings(report)
             .expect("the indirect safety report projects bijectively");
@@ -2789,25 +2741,11 @@ mod tests {
     }
 
     #[test]
-    fn safety_completeness_projection_rejects_missing_and_duplicate_rows() {
+    fn safety_completeness_projection_preserves_the_canonical_reason() {
         let (_, facts) = root_artifact(false, false, None, false, false);
-        let key = root_key();
-        let request = InterpretationRoot {
-            function: FunctionId::generic(key.definition()),
-            path: String::from("crate::root"),
-            kind: ReportRootKind::Generic,
-        };
         let mut config = SniffTestConfig::default();
         config.analysis.node_limit = 0;
-        let batch = evaluate_typed_safety_roots(
-            TypedPanicLocalArtifact::in_memory(&facts, 1),
-            &[],
-            Vec::new(),
-            &[],
-            std::slice::from_ref(&request),
-            &config,
-        )
-        .expect("the combined safety evaluator retains node-limit completeness");
+        let batch = evaluate_root(&facts, &config);
         let report = &batch.roots[0];
         assert!(matches!(
             project_safety_incomplete_reasons(report)
@@ -2827,25 +2765,12 @@ mod tests {
     #[test]
     fn safety_ambiguity_projection_is_bijective_and_owns_the_physical_marker() {
         let (_, facts) = root_artifact(false, true, None, false, true);
-        let key = root_key();
-        let request = InterpretationRoot {
-            function: FunctionId::generic(key.definition()),
-            path: String::from("crate::root"),
-            kind: ReportRootKind::Generic,
-        };
+        let request = root_request();
         let mut config = SniffTestConfig::default();
         config.analysis.callable_edge_attribution =
             crate::config::CallableEdgeAttribution::CallSites;
         config.analysis.marker_probing = crate::config::MarkerProbing::SourceCallsite;
-        let batch = evaluate_typed_safety_roots(
-            TypedPanicLocalArtifact::in_memory(&facts, 1),
-            &[],
-            Vec::new(),
-            &[],
-            std::slice::from_ref(&request),
-            &config,
-        )
-        .expect("the combined safety evaluator accepts a reused physical marker");
+        let batch = evaluate_root(&facts, &config);
         let report = &batch.roots[0];
         assert_eq!(report.evidence_uses.len(), 2);
         assert_eq!(report.ambiguities.len(), 1);

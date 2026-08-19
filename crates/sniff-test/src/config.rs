@@ -930,21 +930,6 @@ mod tests {
     }
 
     #[test]
-    fn parses_symmetric_safety_boundary_lints() {
-        let parsed = SniffTestConfig::from_manifest_str(
-            r#"
-                [safety.lints]
-                trusted-safety = "allow"
-                indirect-call-boundary = "deny"
-            "#,
-        )
-        .expect("safety boundary lint controls should parse");
-
-        assert_eq!(parsed.safety.lints.trusted_safety, Some(LintLevel::Allow));
-        assert_eq!(parsed.safety.lints.indirect_call_boundary, LintLevel::Deny);
-    }
-
-    #[test]
     fn overflow_checks_and_overflow_lint_parse_independently() {
         for (overflow, expected_overflow) in [
             ("profile", OverflowChecks::Profile),
@@ -1302,7 +1287,7 @@ mod tests {
     }
 
     #[test]
-    fn parses_safety_lint_levels() {
+    fn safety_configuration_preserves_namespace_and_lint_policy() {
         let config = r#"
             [safety]
             ignored-namespaces = ["bindgen::**", "my_crate::ffi"]
@@ -1315,6 +1300,8 @@ mod tests {
             unsafe-op-missing-justification = "deny"
             safety-obligation-missing-justification = "allow"
             safety-obligation-missing-requirements = "deny"
+            trusted-safety = "allow"
+            indirect-call-boundary = "deny"
         "#;
 
         let parsed = SniffTestConfig::from_manifest_str(config).expect("manifest should parse");
@@ -1359,6 +1346,8 @@ mod tests {
             parsed.safety.lints.safety_obligation_missing_requirements,
             LintLevel::Deny
         );
+        assert_eq!(parsed.safety.lints.trusted_safety, Some(LintLevel::Allow));
+        assert_eq!(parsed.safety.lints.indirect_call_boundary, LintLevel::Deny);
     }
 
     #[test]

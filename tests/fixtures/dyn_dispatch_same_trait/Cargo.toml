@@ -1,6 +1,0 @@
-[package]
-name = "dyn-dispatch-same-trait"
-version = "0.1.0"
-edition = "2024"
-
-[workspace]

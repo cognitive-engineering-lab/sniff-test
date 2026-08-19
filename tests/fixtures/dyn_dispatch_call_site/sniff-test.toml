@@ -1,6 +1,9 @@
 [analysis]
 callable-edge-attribution = "call-sites"
-report-roots = ["dyn_dispatch_call_site::entry"]
+report-roots = [
+    "dyn_dispatch_call_site::selected_panicking_runner_is_reachable",
+    "dyn_dispatch_call_site::same_trait_vtable_candidates_are_reachable",
+]
 
 [panics]
 panic-sink-namespaces = [
