@@ -1,0 +1,62 @@
+---
+source: crates/sniff-test/tests/fixtures.rs
+expression: "report[\"findings\"]"
+---
+[
+  {
+    "function": "safety_contract_requirements::trusted_obligation_exposes_missing_requirement",
+    "kind": "safety-obligation-missing-requirements",
+    "level": "warn",
+    "missing-requirements": [
+      "valid_ptr: pointer must be non-null."
+    ],
+    "reason": "safety-obligation call to `safety_contract_requirements::documented_obligation` does not satisfy all # Safety requirements",
+    "requirements": [
+      "valid_ptr: pointer must be non-null."
+    ],
+    "root": "safety_contract_requirements::trusted_obligation_exposes_missing_requirement",
+    "root-kind": "concrete",
+    "root-span": "src/lib.rs:55:1: 55:56",
+    "span": "src/lib.rs:57:5: 57:43",
+    "target": "safety_contract_requirements::documented_obligation",
+    "trace": [
+      "src/lib.rs:57:5: 57:43: safety_contract_requirements::trusted_obligation_exposes_missing_requirement --direct-call-> safety_contract_requirements::documented_obligation"
+    ],
+    "trusted-boundary": true
+  },
+  {
+    "function": "safety_contract_requirements::unsafe_call_exposes_missing_justification",
+    "kind": "unsafe-call-missing-justification",
+    "level": "warn",
+    "reason": "unsafe call to `safety_contract_requirements::uncontracted_operation` has no `// SAFETY:` justification",
+    "root": "safety_contract_requirements::unsafe_call_exposes_missing_justification",
+    "root-kind": "concrete",
+    "root-span": "src/lib.rs:36:1: 36:51",
+    "span": "src/lib.rs:37:14: 37:38",
+    "target": "safety_contract_requirements::uncontracted_operation",
+    "trace": [
+      "src/lib.rs:37:14: 37:38: safety_contract_requirements::unsafe_call_exposes_missing_justification --direct-call-> safety_contract_requirements::uncontracted_operation"
+    ]
+  },
+  {
+    "function": "safety_contract_requirements::unsafe_call_exposes_missing_requirement",
+    "kind": "unsafe-call-missing-requirements",
+    "level": "warn",
+    "missing-requirements": [
+      "initialized: pointer must reference initialized memory."
+    ],
+    "reason": "unsafe call to `safety_contract_requirements::read_byte` does not satisfy all # Safety requirements",
+    "requirements": [
+      "valid_ptr: pointer must be non-null.",
+      "initialized: pointer must reference initialized memory."
+    ],
+    "root": "safety_contract_requirements::unsafe_call_exposes_missing_requirement",
+    "root-kind": "concrete",
+    "root-span": "src/lib.rs:27:1: 27:55",
+    "span": "src/lib.rs:33:14: 33:37",
+    "target": "safety_contract_requirements::read_byte",
+    "trace": [
+      "src/lib.rs:33:14: 33:37: safety_contract_requirements::unsafe_call_exposes_missing_requirement --direct-call-> safety_contract_requirements::read_byte"
+    ]
+  }
+]

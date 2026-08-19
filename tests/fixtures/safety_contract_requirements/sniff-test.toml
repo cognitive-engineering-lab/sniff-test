@@ -1,0 +1,13 @@
+[analysis]
+report-roots = [
+    "safety_contract_requirements::unsafe_call_satisfies_all_requirements",
+    "safety_contract_requirements::unsafe_call_exposes_missing_requirement",
+    "safety_contract_requirements::unsafe_call_exposes_missing_justification",
+    "safety_contract_requirements::trusted_obligation_satisfies_requirement",
+    "safety_contract_requirements::trusted_obligation_exposes_missing_requirement",
+]
+
+[safety]
+trusted-safety-boundary-namespaces = [
+    "safety_contract_requirements::documented_obligation",
+]

@@ -14,7 +14,7 @@ pub unsafe fn read_byte(ptr: *const u8) -> u8 {
 
 unsafe fn uncontracted_operation() {}
 
-pub fn satisfies_requirements() -> u8 {
+pub fn unsafe_call_satisfies_all_requirements() -> u8 {
     let byte = 7;
     let ptr = NonNull::from(&byte);
 
@@ -24,7 +24,7 @@ pub fn satisfies_requirements() -> u8 {
     unsafe { read_byte(ptr.as_ptr()) }
 }
 
-pub fn misses_one_requirement() -> u8 {
+pub fn unsafe_call_exposes_missing_requirement() -> u8 {
     let byte = 7;
     let ptr = NonNull::from(&byte);
 
@@ -33,6 +33,26 @@ pub fn misses_one_requirement() -> u8 {
     unsafe { read_byte(ptr.as_ptr()) }
 }
 
-pub fn misses_justification() {
+pub fn unsafe_call_exposes_missing_justification() {
     unsafe { uncontracted_operation() }
+}
+
+/// # Safety
+///
+/// Requirements:
+/// - valid_ptr: pointer must be non-null.
+pub fn documented_obligation(_ptr: *const u8) {}
+
+pub fn trusted_obligation_satisfies_requirement() {
+    let byte = 7;
+    let ptr = &raw const byte;
+
+    // SAFETY:
+    // - valid_ptr: pointer was created from a live reference.
+    documented_obligation(ptr);
+}
+
+pub fn trusted_obligation_exposes_missing_requirement() {
+    let byte = 7;
+    documented_obligation(&raw const byte);
 }

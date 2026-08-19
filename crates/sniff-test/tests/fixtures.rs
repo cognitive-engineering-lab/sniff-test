@@ -208,11 +208,8 @@ fixture_cases! {
                 .args(&["--manifest", "macro-shared.toml"])
                 .denied();
     }
-    "safety_requirements" => {
-        safety_requirements => Case::new();
-    }
-    "safety_obligations" => {
-        safety_obligations => Case::new();
+    "safety_contract_requirements" => {
+        safety_contracts_preserve_call_and_obligation_requirements => Case::new();
     }
     "safety_callable_sites" => {
         safety_callable_sites => Case::new();

@@ -62,11 +62,8 @@ cli_cases! {
     "trusted_boundaries" => {
         trusted_boundary_diagnostics => Case::new();
     }
-    "safety_requirements" => {
-        safety_diagnostics => Case::new();
-    }
-    "safety_obligations" => {
-        safety_obligation_diagnostics => Case::new();
+    "safety_contract_requirements" => {
+        safety_contract_requirement_diagnostics => Case::new();
     }
     "panic_axioms" => {
         compiler_assert_diagnostics => Case::new().denied();
