@@ -45,10 +45,9 @@ use crate::analysis::facts::safety::{
 };
 use crate::analysis::facts::schema::{EntitySchema, PassId, RowSchema};
 use crate::analysis::facts::workspace::{ArtifactScopeId, ScopedEntityRef, ScopedRowRef};
-use crate::analysis::interpret::InterpretationRoot;
-use crate::analysis::interpret::{
-    InterpretedFinding, InterpretedFindingKind, InterpretedSafetyCallKind, InterpretedTarget,
-    InterpretedTrace, InterpretedTraceStep, InterpretedTraceStepKind,
+use crate::analysis::findings::{
+    InterpretationRoot, InterpretedFinding, InterpretedFindingKind, InterpretedSafetyCallKind,
+    InterpretedTarget, InterpretedTrace, InterpretedTraceStep, InterpretedTraceStepKind,
 };
 use crate::analysis::ir::{
     CallEdgeKindIr, CallId, ContractRequirementIr, FunctionId, SourceFileIr, SourceRangeIr,
@@ -187,7 +186,7 @@ pub(super) enum TypedSafetyRootPreparationOutcome {
         selected_function: FunctionKey,
     },
     Missing {
-        reason: crate::analysis::interpret::IncompleteReason,
+        reason: crate::analysis::findings::IncompleteReason,
     },
 }
 
@@ -207,7 +206,7 @@ enum PendingSafetyRootPreparationOutcome {
         selected_function: FunctionKey,
     },
     Missing {
-        reason: crate::analysis::interpret::IncompleteReason,
+        reason: crate::analysis::findings::IncompleteReason,
     },
 }
 
@@ -301,7 +300,7 @@ pub(super) fn evaluate_typed_safety_roots(
             }
         } else {
             PendingSafetyRootPreparationOutcome::Missing {
-                reason: crate::analysis::interpret::IncompleteReason::MissingBody {
+                reason: crate::analysis::findings::IncompleteReason::MissingBody {
                     function: request.function,
                     path: request.path.clone(),
                     source_range: None,
@@ -490,7 +489,7 @@ pub(super) fn evaluate_typed_safety_roots(
 struct TypedSafetyBatchPreflight {
     ready_roots: Vec<InterpretationRoot>,
     findings: Vec<Vec<InterpretedFinding>>,
-    incomplete: Vec<Vec<crate::analysis::interpret::IncompleteReason>>,
+    incomplete: Vec<Vec<crate::analysis::findings::IncompleteReason>>,
 }
 
 /// Adapts the complete typed-safety authority only after one source-free
@@ -627,7 +626,7 @@ fn preflight_typed_safety_batch(
                 ready_preparations.push(preparation);
             }
             TypedSafetyRootPreparationOutcome::Missing { reason } => {
-                let expected = crate::analysis::interpret::IncompleteReason::MissingBody {
+                let expected = crate::analysis::findings::IncompleteReason::MissingBody {
                     function: request.function,
                     path: request.path.clone(),
                     source_range: None,
@@ -1087,7 +1086,7 @@ fn project_indirect_safety_findings(
 
 fn project_safety_incomplete_reasons(
     report: &TypedSafetyRootReport,
-) -> Result<Vec<crate::analysis::interpret::IncompleteReason>, TypedSafetyEvaluationError> {
+) -> Result<Vec<crate::analysis::findings::IncompleteReason>, TypedSafetyEvaluationError> {
     let [summary] = report.completeness.as_slice() else {
         return Err(invalid(
             "safety completeness",
@@ -1712,8 +1711,8 @@ fn safety_completeness_context(
 
 fn project_safety_incomplete_reason(
     reason: &PanicIncompleteReason,
-) -> Result<crate::analysis::interpret::IncompleteReason, TypedSafetyEvaluationError> {
-    use crate::analysis::interpret::IncompleteReason;
+) -> Result<crate::analysis::findings::IncompleteReason, TypedSafetyEvaluationError> {
+    use crate::analysis::findings::IncompleteReason;
     match reason {
         PanicIncompleteReason::NodeLimit { limit } => Ok(IncompleteReason::NodeLimit {
             limit: usize::try_from(*limit)
@@ -2400,7 +2399,7 @@ mod tests {
         SafetyCompletenessOutcome, UnsatisfiedSafetyCallIssue, UnsatisfiedUnsafeOperationIssue,
     };
     use crate::analysis::facts::schema::{RowSchema, SchemaId};
-    use crate::analysis::interpret::InterpretationRoot;
+    use crate::analysis::findings::InterpretationRoot;
     use crate::analysis::ir::FunctionId;
     use crate::analysis::ir::{SourceFileIr, SourceRangeIr};
     use crate::cli::driver::interpretation::FindingSources;
@@ -2552,7 +2551,7 @@ mod tests {
         assert_eq!(finding.function_path, request.path);
         assert!(matches!(
             finding.kind,
-            crate::analysis::interpret::InterpretedFindingKind::UnsafeOperation { .. }
+            crate::analysis::findings::InterpretedFindingKind::UnsafeOperation { .. }
         ));
     }
 
@@ -2664,8 +2663,8 @@ mod tests {
         };
         assert!(matches!(
             finding.kind,
-            crate::analysis::interpret::InterpretedFindingKind::SafetyCall {
-                kind: crate::analysis::interpret::InterpretedSafetyCallKind::Obligation,
+            crate::analysis::findings::InterpretedFindingKind::SafetyCall {
+                kind: crate::analysis::findings::InterpretedSafetyCallKind::Obligation,
                 ..
             }
         ));
@@ -2681,7 +2680,7 @@ mod tests {
         };
         assert!(matches!(
             &duplicate_finding.kind,
-            crate::analysis::interpret::InterpretedFindingKind::AmbiguousSafetyRequirement { normalized_name }
+            crate::analysis::findings::InterpretedFindingKind::AmbiguousSafetyRequirement { normalized_name }
                 if normalized_name == "valid"
         ));
         assert_eq!(duplicate_finding.requirements.len(), 2);
@@ -2723,14 +2722,14 @@ mod tests {
             assert_eq!(
                 findings.iter().any(|finding| matches!(
                     finding.kind,
-                    crate::analysis::interpret::InterpretedFindingKind::MissingSafetyDocs
+                    crate::analysis::findings::InterpretedFindingKind::MissingSafetyDocs
                 )),
                 expected_missing
             );
             assert_eq!(
                 findings.iter().any(|finding| matches!(
                     finding.kind,
-                    crate::analysis::interpret::InterpretedFindingKind::AmbiguousSafetyRequirement { .. }
+                    crate::analysis::findings::InterpretedFindingKind::AmbiguousSafetyRequirement { .. }
                 )),
                 expected_duplicate
             );
@@ -2739,7 +2738,7 @@ mod tests {
                     .iter()
                     .find(|finding| matches!(
                         finding.kind,
-                        crate::analysis::interpret::InterpretedFindingKind::AmbiguousSafetyRequirement { .. }
+                        crate::analysis::findings::InterpretedFindingKind::AmbiguousSafetyRequirement { .. }
                     ))
                     .unwrap();
                 assert!(duplicate.target.is_none());
@@ -2778,7 +2777,7 @@ mod tests {
         };
         assert!(matches!(
             &finding.kind,
-            crate::analysis::interpret::InterpretedFindingKind::OpaqueSafetyBoundary { description }
+            crate::analysis::findings::InterpretedFindingKind::OpaqueSafetyBoundary { description }
                 if description == "indirect call through a function pointer"
         ));
         assert_eq!(finding.target.as_ref().unwrap().function, None);
@@ -2814,7 +2813,7 @@ mod tests {
             project_safety_incomplete_reasons(report)
                 .expect("the safety completeness report projects")
                 .as_slice(),
-            [crate::analysis::interpret::IncompleteReason::NodeLimit { limit: 0 }]
+            [crate::analysis::findings::IncompleteReason::NodeLimit { limit: 0 }]
         ));
 
         let mut missing = report.clone();
@@ -2855,7 +2854,7 @@ mod tests {
         };
         assert!(matches!(
             finding.kind,
-            crate::analysis::interpret::InterpretedFindingKind::AmbiguousSafetyMarker {
+            crate::analysis::findings::InterpretedFindingKind::AmbiguousSafetyMarker {
                 effect_count: 2
             }
         ));

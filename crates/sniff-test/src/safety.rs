@@ -3,7 +3,7 @@
 //! Operation detection lives in the `thir` submodule and mirrors rustc's own
 //! unsafety checker. This module records raw calls, unsafe operations, and
 //! source-level unsafe scopes; lint policy and contract interpretation belong
-//! to `analysis::interpret`.
+//! to the typed safety evaluation pipeline.
 
 mod thir;
 

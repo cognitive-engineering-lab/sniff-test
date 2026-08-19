@@ -83,6 +83,7 @@ impl ArtifactAnalysisIr {
     /// Resolves an exact function body, falling back to the generic definition
     /// only when no matching exact body satisfies the lookup.
     #[must_use]
+    #[cfg(test)]
     pub(crate) fn function_body(&self, function: FunctionId) -> Option<&FunctionBodyIr> {
         self.function_body_matching(function, |_| true)
     }
@@ -92,7 +93,7 @@ impl ArtifactAnalysisIr {
     /// A consumer-instantiation overlay takes precedence for ordinary lookup,
     /// but does not hide a generic defining body from this lookup.
     #[must_use]
-    #[cfg_attr(not(test), allow(dead_code, reason = "legacy safety oracle lookup"))]
+    #[cfg(test)]
     pub(crate) fn defining_function_body(&self, function: FunctionId) -> Option<&FunctionBodyIr> {
         self.function_body_matching(function, |body| {
             matches!(body.provenance, FunctionBodyProvenanceIr::DefiningArtifact)
@@ -106,7 +107,7 @@ impl ArtifactAnalysisIr {
     /// different instance hash, so source facts fall back by definition path
     /// after exact and generic lookup fail.
     #[must_use]
-    #[cfg_attr(not(test), allow(dead_code, reason = "legacy safety oracle lookup"))]
+    #[cfg(test)]
     pub(crate) fn defining_source_function_body(
         &self,
         function: FunctionId,
@@ -119,6 +120,7 @@ impl ArtifactAnalysisIr {
         })
     }
 
+    #[cfg(test)]
     fn function_body_matching(
         &self,
         function: FunctionId,

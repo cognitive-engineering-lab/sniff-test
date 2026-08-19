@@ -84,12 +84,13 @@ fn complete_traversal_retains_positive_summary_without_a_completeness_finding() 
     assert_eq!(completeness.function, root_function);
     assert_eq!(completeness.path, requested_root.path);
     assert_eq!(completeness.kind, requested_root.kind);
-    assert_eq!(completeness.expanded_bodies, 1);
     assert!(completeness.issues.is_empty());
     assert!(fixture.incomplete.is_empty());
     assert!(matches!(
         fixture.completeness.as_slice(),
-        [summary] if summary.data.complete() && summary.data.reasons().is_empty()
+        [summary] if summary.data.complete()
+            && summary.data.expanded_bodies() == 1
+            && summary.data.reasons().is_empty()
     ));
     assert!(
         adapt_typed_panic_call_completeness_reports(
@@ -130,7 +131,6 @@ fn node_limit_completeness_has_exact_legacy_finding_parity() {
         &config,
     )
     .expect("the limited shared evaluator succeeds");
-    assert_eq!(completeness.expanded_bodies, 0);
     assert!(matches!(
         completeness.issues.as_slice(),
         [super::TypedPanicCompletenessIssueReport {
@@ -183,7 +183,6 @@ fn managed_missing_body_completeness_has_exact_legacy_parity_and_source_degradat
         &SniffTestConfig::default(),
     )
     .expect("the shared evaluator projects the reached missing body");
-    assert_eq!(completeness.expanded_bodies, 2);
     let [issue] = completeness.issues.as_slice() else {
         panic!("one missing managed body must produce one report issue");
     };
@@ -375,7 +374,7 @@ fn completeness_projection_rejects_hostile_summary_issue_and_context_joins() {
     let requested_root = root(root_function);
     let mut config = SniffTestConfig::default();
     config.analysis.node_limit = 1;
-    let (call, completeness, fixture) = evaluate_typed_panic_call_with_projection_fixture(
+    let (call, _, fixture) = evaluate_typed_panic_call_with_projection_fixture(
         TypedPanicLocalArtifact::in_memory(&facts, LOCAL_CRATE),
         [],
         &[],
@@ -386,7 +385,6 @@ fn completeness_projection_rejects_hostile_summary_issue_and_context_joins() {
     let project = |summaries, issues| {
         super::project_completeness_report(
             &fixture.inputs,
-            completeness.presentation_range.clone(),
             &requested_root,
             &call.root,
             summaries,
@@ -606,7 +604,6 @@ fn completeness_projection_rejects_hostile_summary_issue_and_context_joins() {
         );
     let relation_error = project_hostile_missing_reason(
         &fixture.inputs,
-        completeness.presentation_range.clone(),
         &requested_root,
         &call.root,
         summary,
@@ -644,7 +641,6 @@ fn completeness_projection_rejects_hostile_summary_issue_and_context_joins() {
         );
     let terminal_error = project_hostile_missing_reason(
         &fixture.inputs,
-        completeness.presentation_range.clone(),
         &requested_root,
         &call.root,
         summary,
@@ -2314,7 +2310,6 @@ fn empty_report(
 )]
 fn project_hostile_missing_reason(
     inputs: &crate::analysis::facts::panic::PanicRootInputs,
-    presentation_range: Option<SourceRangeIr>,
     request: &InterpretationRoot,
     root: &crate::analysis::facts::evaluation::EvaluationRoot,
     summary: &crate::analysis::facts::evaluation::TypedDerivedRow<
@@ -2345,14 +2340,7 @@ fn project_hostile_missing_reason(
         hostile.to_owned(),
     );
     issue.context = super::completeness_issue_context(root, hostile);
-    super::project_completeness_report(
-        inputs,
-        presentation_range,
-        request,
-        root,
-        vec![summary],
-        issues,
-    )
+    super::project_completeness_report(inputs, request, root, vec![summary], issues)
 }
 
 fn sink_artifact(
@@ -5210,7 +5198,6 @@ fn call_projection_rejects_missing_and_duplicate_issue_rows() {
         assert!(
             super::project_root_report(
                 &fixture.inputs,
-                report.presentation_range.clone(),
                 &requested_root,
                 &report.root,
                 super::PanicCallProjectionRows {
@@ -5262,7 +5249,6 @@ fn call_projection_rejects_missing_and_duplicate_requirement_issue_rows() {
         assert!(
             super::project_root_report(
                 &fixture.inputs,
-                report.presentation_range.clone(),
                 &requested_root,
                 &report.root,
                 super::PanicCallProjectionRows {
@@ -6628,14 +6614,9 @@ fn root_contract_projection_rejects_non_bijective_or_altered_issue_rows() {
     cases.push(("trace", trace));
 
     for (name, rows) in cases {
-        let error = super::project_root_contract_report(
-            &fixture.inputs,
-            call.presentation_range.clone(),
-            &request,
-            &call.root,
-            rows,
-        )
-        .expect_err("altered root-contract rows must reject the complete root report");
+        let error =
+            super::project_root_contract_report(&fixture.inputs, &request, &call.root, rows)
+                .expect_err("altered root-contract rows must reject the complete root report");
         assert!(
             error.to_string().contains("root-contract issue"),
             "{name}: {error}"

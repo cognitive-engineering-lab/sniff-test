@@ -62,7 +62,7 @@ use crate::analysis::facts::schema::{PassId, RowSchema};
 use crate::analysis::facts::workspace::{
     ArtifactScopeId, ScopedEntityRef, ScopedRowRef, WorkspaceFactView,
 };
-use crate::analysis::interpret::{
+use crate::analysis::findings::{
     IncompleteReason, InterpretationRoot, InterpretedFinding, InterpretedFindingKind,
     InterpretedTarget, InterpretedTrace, InterpretedTraceStep, InterpretedTraceStepKind,
 };
@@ -222,11 +222,6 @@ pub(super) struct TypedPanicRootContractRootReport {
     pub(super) kind: ReportRootKind,
     pub(super) selected_function: Option<FunctionId>,
     pub(super) selected_path: Option<String>,
-    #[allow(
-        dead_code,
-        reason = "root presentation provenance is retained in the owned authority DTO"
-    )]
-    pub(super) presentation_range: Option<SourceRangeIr>,
     pub(super) issues: Vec<TypedPanicRootContractIssueReport>,
 }
 
@@ -246,11 +241,6 @@ pub(super) struct TypedPanicAmbiguityRootReport {
     pub(super) function: FunctionId,
     pub(super) path: String,
     pub(super) kind: ReportRootKind,
-    #[allow(
-        dead_code,
-        reason = "root presentation provenance is retained in the owned authority DTO"
-    )]
-    pub(super) presentation_range: Option<SourceRangeIr>,
     pub(super) issues: Vec<TypedPanicAmbiguityIssueReport>,
 }
 
@@ -270,19 +260,6 @@ pub(super) struct TypedPanicCompletenessRootReport {
     pub(super) function: FunctionId,
     pub(super) path: String,
     pub(super) kind: ReportRootKind,
-    #[allow(
-        dead_code,
-        reason = "root presentation provenance is retained in the owned authority DTO"
-    )]
-    pub(super) presentation_range: Option<SourceRangeIr>,
-    #[cfg_attr(
-        not(test),
-        allow(
-            dead_code,
-            reason = "the positive completeness summary is retained for typed report inspection"
-        )
-    )]
-    pub(super) expanded_bodies: u64,
     pub(super) issues: Vec<TypedPanicCompletenessIssueReport>,
 }
 
@@ -299,11 +276,6 @@ pub(super) struct TypedPanicCallRootReport {
     pub(super) function: FunctionId,
     pub(super) path: String,
     pub(super) kind: ReportRootKind,
-    #[allow(
-        dead_code,
-        reason = "root presentation provenance is retained in the owned authority DTO"
-    )]
-    pub(super) presentation_range: Option<SourceRangeIr>,
     pub(super) issues: Vec<TypedPanicCallIssueReport>,
 }
 
@@ -956,7 +928,6 @@ fn evaluate_typed_panic_call_roots_inner(
                 .map_err(|source| TypedPanicCallEvaluationError::Trace(Box::new(source)))?;
             let compiler_assert_projector =
                 prepare_compiler_assert_projector(inputs.compiler_asserts())?;
-            let presentation_range = presentation_anchors.range(&root.entity)?;
             let compiler_assert_report = project_compiler_assert_root_report(
                 &registry,
                 &opened.render_contexts,
@@ -969,7 +940,6 @@ fn evaluate_typed_panic_call_roots_inner(
             let ambiguity_report = project_ambiguity_report(
                 &inputs,
                 &evaluation,
-                presentation_range.clone(),
                 request,
                 &root,
                 &obligations,
@@ -981,7 +951,6 @@ fn evaluate_typed_panic_call_roots_inner(
             )?;
             let call_report = project_root_report(
                 &inputs,
-                presentation_range.clone(),
                 request,
                 &root,
                 PanicCallProjectionRows {
@@ -992,21 +961,10 @@ fn evaluate_typed_panic_call_roots_inner(
                     duplicates,
                 },
             )?;
-            let root_contract_report = project_root_contract_report(
-                &inputs,
-                presentation_range.clone(),
-                request,
-                &root,
-                root_contract_duplicates,
-            )?;
-            let completeness_report = project_completeness_report(
-                &inputs,
-                presentation_range,
-                request,
-                &root,
-                completeness,
-                incomplete,
-            )?;
+            let root_contract_report =
+                project_root_contract_report(&inputs, request, &root, root_contract_duplicates)?;
+            let completeness_report =
+                project_completeness_report(&inputs, request, &root, completeness, incomplete)?;
             Ok((
                 compiler_assert_report,
                 call_report,
@@ -1345,7 +1303,6 @@ fn compiler_assert_projector_prepares() -> usize {
 fn project_ambiguity_report(
     inputs: &PanicRootInputs,
     evaluation: &WorkspaceEvaluationView<'_>,
-    presentation_range: Option<SourceRangeIr>,
     request: &InterpretationRoot,
     root: &EvaluationRoot,
     obligations: &[PanicCallObligation],
@@ -1555,7 +1512,6 @@ fn project_ambiguity_report(
         function: request.function,
         path: request.path.clone(),
         kind: request.kind,
-        presentation_range,
         issues: projected,
     })
 }
@@ -1917,7 +1873,6 @@ fn compiler_trace_node_path(
 )]
 fn project_completeness_report(
     inputs: &PanicRootInputs,
-    presentation_range: Option<SourceRangeIr>,
     request: &InterpretationRoot,
     root: &EvaluationRoot,
     summaries: Vec<TypedDerivedRow<PanicCompletenessOutcome>>,
@@ -2022,8 +1977,6 @@ fn project_completeness_report(
         function: request.function,
         path: request.path.clone(),
         kind: request.kind,
-        presentation_range,
-        expanded_bodies: summary.data.expanded_bodies(),
         issues: projected,
     })
 }
@@ -2142,7 +2095,6 @@ struct PanicCallProjectionRows<'a> {
 
 fn project_root_report(
     inputs: &PanicRootInputs,
-    presentation_range: Option<SourceRangeIr>,
     request: &InterpretationRoot,
     root: &EvaluationRoot,
     rows: PanicCallProjectionRows<'_>,
@@ -2205,14 +2157,12 @@ fn project_root_report(
         function: request.function,
         path: request.path.clone(),
         kind: request.kind,
-        presentation_range,
         issues,
     })
 }
 
 fn project_root_contract_report(
     inputs: &PanicRootInputs,
-    presentation_range: Option<SourceRangeIr>,
     request: &InterpretationRoot,
     root: &EvaluationRoot,
     rows: Vec<TypedEvaluatedIssue<DuplicatePanicRootRequirementIssue>>,
@@ -2312,7 +2262,6 @@ fn project_root_contract_report(
         kind: request.kind,
         selected_function,
         selected_path,
-        presentation_range,
         issues: projected,
     })
 }

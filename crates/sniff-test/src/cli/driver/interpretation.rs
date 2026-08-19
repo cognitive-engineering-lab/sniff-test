@@ -10,13 +10,13 @@ use crate::analysis::facts::panic::{
     CompilerAssertSemanticNodeRole, CompilerAssertSemanticTrace, CompilerAssertSemanticTraceStep,
     compiler_assert_presentation,
 };
-use crate::analysis::graph::ArtifactAnalysisGraph;
-#[cfg(test)]
-use crate::analysis::interpret::{DomainCompleteness, SafetyRootInterpretation};
-use crate::analysis::interpret::{
+use crate::analysis::findings::{
     IncompleteReason, InterpretationRoot, InterpretedFinding, InterpretedFindingKind,
     InterpretedSafetyCallKind, InterpretedTrace, InterpretedTraceStepKind,
 };
+use crate::analysis::graph::ArtifactAnalysisGraph;
+#[cfg(test)]
+use crate::analysis::interpret::{DomainCompleteness, SafetyRootInterpretation};
 use crate::analysis::ir::{
     CallEdgeKindIr, ContractRequirementIr, FunctionId, SourceFileId, SourceFileIr, SourceRangeIr,
     StableDefPathHash, StableInstanceHash,
@@ -1797,7 +1797,7 @@ fn add_trace_notes(
     }
 }
 
-fn render_trace_step(step: &crate::analysis::interpret::InterpretedTraceStep) -> String {
+fn render_trace_step(step: &crate::analysis::findings::InterpretedTraceStep) -> String {
     let target = step.target_path.as_deref().unwrap_or("opaque boundary");
     format!(
         "{} --{}-> {target}",
@@ -1909,11 +1909,11 @@ mod tests {
     use crate::analysis::facts::program::FunctionEntity;
     use crate::analysis::facts::schema::{RowSchema, SchemaId};
     use crate::analysis::facts::workspace::{ArtifactScopeId, ScopedEntityRef};
-    use crate::analysis::interpret::{
-        DomainCompleteness, IncompleteReason, InterpretationRoot, InterpretedFinding,
-        InterpretedFindingKind, InterpretedSafetyCallKind, InterpretedTrace,
-        SafetyRootInterpretation,
+    use crate::analysis::findings::{
+        IncompleteReason, InterpretationRoot, InterpretedFinding, InterpretedFindingKind,
+        InterpretedSafetyCallKind, InterpretedTrace,
     };
+    use crate::analysis::interpret::{DomainCompleteness, SafetyRootInterpretation};
     use crate::analysis::ir::{FunctionId, SourceFileIr, SourceRangeIr, StableDefPathHash};
     use crate::report_roots::ReportRootKind;
     use crate::safety::SafetyOpKind;

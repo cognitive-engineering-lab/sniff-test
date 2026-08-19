@@ -1,22 +1,14 @@
 //! Root-driven policy interpretation over composed policy-neutral artifact IR.
 
-#![cfg_attr(
-    not(test),
-    allow(
-        dead_code,
-        reason = "legacy interpretation is retained only as the typed safety parity oracle"
-    )
-)]
-
 use std::cmp::Ordering;
 use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::rc::Rc;
 
-#[cfg(test)]
-use super::cache::ArtifactAnalysisCache;
-#[cfg(test)]
-use super::graph::ArtifactAnalysisGraph;
-use super::graph::{BodyScope, LoadedFunction};
+pub(crate) use super::findings::{
+    IncompleteReason, InterpretationRoot, InterpretedFinding, InterpretedFindingKind,
+    InterpretedSafetyCallKind, InterpretedTarget, InterpretedTrace, InterpretedTraceStep,
+    InterpretedTraceStepKind,
+};
 use super::ir::{
     ArtifactAnalysisIr, CallEdgeIr, CallEdgeKindIr, CallId, CallSiteId, CallTargetIr,
     CallableAttributionIr, CallableKeyIr, CompilerAssertKind, ContractRequirementIr, EffectId,
@@ -30,7 +22,41 @@ use crate::contracts::{
     normalize_requirement_name, panic_contract_doc_summary_from_markdown,
     safety_contract_doc_summary_from_markdown,
 };
-use crate::report_roots::ReportRootKind;
+
+/// Identity of one in-memory legacy-IR layer during parity interpretation.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub(crate) struct BodyScope(usize);
+
+impl BodyScope {
+    #[must_use]
+    fn in_memory(analysis: &ArtifactAnalysisIr) -> Self {
+        Self(std::ptr::from_ref(analysis).addr())
+    }
+}
+
+/// One legacy function body together with its in-memory layer.
+#[derive(Debug, Clone)]
+pub(crate) struct LoadedFunction<'a> {
+    body: &'a FunctionBodyIr,
+    scope: BodyScope,
+}
+
+impl<'a> LoadedFunction<'a> {
+    #[must_use]
+    pub(crate) fn new(body: &'a FunctionBodyIr, scope: BodyScope) -> Self {
+        Self { body, scope }
+    }
+
+    #[must_use]
+    pub(crate) const fn body(&self) -> &'a FunctionBodyIr {
+        self.body
+    }
+
+    #[must_use]
+    pub(crate) fn scope(&self) -> &BodyScope {
+        &self.scope
+    }
+}
 
 /// Read-only function lookup used by the policy interpreter.
 pub(crate) trait FunctionLookup {
@@ -162,69 +188,6 @@ impl FunctionLookup for InMemoryArtifactLookup<'_> {
     }
 }
 
-#[cfg(test)]
-impl FunctionLookup for ArtifactAnalysisCache {
-    fn function(&self, function: FunctionId) -> Option<LoadedFunction<'_>> {
-        self.legacy_ir
-            .function_body(function)
-            .map(|body| LoadedFunction::new(body, BodyScope::artifact(self)))
-    }
-
-    fn function_in_scope(
-        &self,
-        scope: &BodyScope,
-        function: FunctionId,
-    ) -> Option<LoadedFunction<'_>> {
-        (scope == &BodyScope::artifact(self))
-            .then(|| self.function(function))
-            .flatten()
-    }
-
-    fn defining_body(&self, function: FunctionId) -> Option<LoadedFunction<'_>> {
-        self.legacy_ir
-            .defining_function_body(function)
-            .map(|body| LoadedFunction::new(body, BodyScope::artifact(self)))
-    }
-
-    fn defining_source_body(&self, function: FunctionId) -> Option<LoadedFunction<'_>> {
-        self.legacy_ir
-            .defining_source_function_body(function)
-            .map(|body| LoadedFunction::new(body, BodyScope::artifact(self)))
-    }
-
-    fn manages_stable_crate_id(&self, stable_crate_id: u64) -> bool {
-        self.artifact.id.stable_crate_id == stable_crate_id
-    }
-}
-
-#[cfg(test)]
-impl FunctionLookup for ArtifactAnalysisGraph {
-    fn function(&self, function: FunctionId) -> Option<LoadedFunction<'_>> {
-        ArtifactAnalysisGraph::function(self, function)
-    }
-
-    fn function_in_scope(
-        &self,
-        scope: &BodyScope,
-        function: FunctionId,
-    ) -> Option<LoadedFunction<'_>> {
-        ArtifactAnalysisGraph::function_in_scope(self, scope, function)
-    }
-
-    fn defining_body(&self, function: FunctionId) -> Option<LoadedFunction<'_>> {
-        ArtifactAnalysisGraph::defining_function(self, function)
-    }
-
-    fn defining_source_body(&self, function: FunctionId) -> Option<LoadedFunction<'_>> {
-        ArtifactAnalysisGraph::defining_source_function(self, function)
-    }
-
-    fn manages_stable_crate_id(&self, stable_crate_id: u64) -> bool {
-        self.artifacts()
-            .any(|artifact| artifact.artifact.id.stable_crate_id == stable_crate_id)
-    }
-}
-
 /// Ordered composition of local and dependency IR lookups.
 pub(crate) struct LayeredFunctionLookup<'a> {
     layers: Vec<&'a dyn FunctionLookup>,
@@ -273,14 +236,6 @@ impl FunctionLookup for LayeredFunctionLookup<'_> {
     }
 }
 
-/// Selected workspace report root and stable reporting metadata.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct InterpretationRoot {
-    pub(crate) function: FunctionId,
-    pub(crate) path: String,
-    pub(crate) kind: ReportRootKind,
-}
-
 /// Findings and completeness for one selected root.
 #[cfg(test)]
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -310,103 +265,6 @@ pub(crate) struct DomainCompleteness {
     pub(crate) complete: bool,
     pub(crate) visited_bodies: usize,
     pub(crate) reasons: Vec<IncompleteReason>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) enum IncompleteReason {
-    NodeLimit {
-        limit: usize,
-    },
-    MissingBody {
-        function: FunctionId,
-        path: String,
-        source_range: Option<SourceRangeIr>,
-        trace: InterpretedTrace,
-    },
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct InterpretedFinding {
-    pub(crate) kind: InterpretedFindingKind,
-    pub(crate) function: FunctionId,
-    pub(crate) function_path: String,
-    pub(crate) target: Option<InterpretedTarget>,
-    pub(crate) source_range: Option<SourceRangeIr>,
-    pub(crate) trace: InterpretedTrace,
-    pub(crate) missing_requirements: Vec<ContractRequirementIr>,
-    pub(crate) requirements: Vec<ContractRequirementIr>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct InterpretedTarget {
-    pub(crate) function: Option<FunctionId>,
-    pub(crate) path: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct InterpretedTrace {
-    pub(crate) steps: Vec<InterpretedTraceStep>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct InterpretedTraceStep {
-    pub(crate) caller: FunctionId,
-    pub(crate) caller_path: String,
-    pub(crate) call: CallId,
-    pub(crate) kind: InterpretedTraceStepKind,
-    pub(crate) source_range: Option<SourceRangeIr>,
-    pub(crate) target: Option<FunctionId>,
-    pub(crate) target_path: Option<String>,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-pub(crate) enum InterpretedTraceStepKind {
-    Reachability(CallEdgeKindIr),
-    UnsafeOperation(SafetyOpKind),
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub(crate) enum InterpretedSafetyCallKind {
-    Unsafe,
-    Obligation,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) enum InterpretedFindingKind {
-    PanicSink,
-    DocumentedPanic {
-        trusted: bool,
-    },
-    OpaquePanicBoundary {
-        description: String,
-    },
-    MissingSafetyDocs,
-    SafetyCall {
-        kind: InterpretedSafetyCallKind,
-        trusted: bool,
-    },
-    #[allow(
-        dead_code,
-        reason = "the typed safety authority begins emitting this boundary in the cutover slice"
-    )]
-    OpaqueSafetyBoundary {
-        description: String,
-    },
-    UnsafeOperation {
-        kind: SafetyOpKind,
-    },
-    AmbiguousPanicRequirement {
-        normalized_name: String,
-    },
-    AmbiguousSafetyRequirement {
-        normalized_name: String,
-    },
-    AmbiguousPanicMarker {
-        effect_count: usize,
-    },
-    AmbiguousSafetyMarker {
-        effect_count: usize,
-    },
 }
 
 /// Interprets only graph portions reachable from the supplied workspace roots.
@@ -2654,13 +2512,10 @@ mod tests {
     use std::cell::Cell;
 
     use super::{
-        FunctionLookup, InMemoryArtifactLookup, IncompleteReason, InterpretationRoot,
+        BodyScope, FunctionLookup, InMemoryArtifactLookup, IncompleteReason, InterpretationRoot,
         InterpretedFindingKind, InterpretedSafetyCallKind, InterpretedTraceStepKind,
-        LayeredFunctionLookup, interpret, interpret_safety,
+        LayeredFunctionLookup, LoadedFunction, interpret, interpret_safety,
     };
-    use crate::analysis::cache::{ArtifactAnalysisCache, ArtifactInfo, RustcArtifactId};
-    use crate::analysis::facts::encoded::{ArtifactFactIr, FACT_IR_FORMAT_VERSION};
-    use crate::analysis::facts::registry::SchemaRegistry;
     use crate::analysis::ir::{
         ArtifactAnalysisIr, CallEdgeIr, CallEdgeKindIr, CallId, CallSiteId, CallTargetIr,
         CallableAttributionIr, CallableKeyIr, ContractRequirementIr, EffectFactIr, EffectId,
@@ -2684,19 +2539,16 @@ mod tests {
     }
 
     impl FunctionLookup for CountingLookup<'_> {
-        fn function(
-            &self,
-            function: FunctionId,
-        ) -> Option<crate::analysis::graph::LoadedFunction<'_>> {
+        fn function(&self, function: FunctionId) -> Option<LoadedFunction<'_>> {
             self.function_calls.set(self.function_calls.get() + 1);
             FunctionLookup::function(self.ir, function)
         }
 
         fn function_in_scope(
             &self,
-            scope: &crate::analysis::graph::BodyScope,
+            scope: &BodyScope,
             function: FunctionId,
-        ) -> Option<crate::analysis::graph::LoadedFunction<'_>> {
+        ) -> Option<LoadedFunction<'_>> {
             FunctionLookup::function_in_scope(self.ir, scope, function)
         }
     }
@@ -2932,50 +2784,38 @@ mod tests {
         let shared_definition = id(30, 1);
         let shared_exact = FunctionId::exact(shared_definition.def_path_hash, instance_hash(7));
 
-        let first = cache(
-            "first-consumer",
-            10,
-            vec![
-                body(first_root, "first::root").with_call(call(
+        let first = ir(vec![
+            body(first_root, "first::root").with_call(call(
+                0,
+                function_target(shared_exact, "upstream::closure::<first::Callback>"),
+            )),
+            body(first_callback, "first::callback")
+                .with_effect(assert_effect(0, CompilerAssertKind::BoundsCheck)),
+            body(shared_exact, "upstream::closure::<first::Callback>")
+                .consumer_instantiation(10)
+                .with_call(call(0, function_target(first_callback, "first::callback"))),
+        ]);
+        let second = ir(vec![
+            body(second_root, "second::root").with_call(call(
+                0,
+                function_target(shared_exact, "upstream::closure::<second::Callback>"),
+            )),
+            body(second_callback, "second::callback")
+                .with_effect(assert_effect(0, CompilerAssertKind::DivisionByZero)),
+            body(shared_exact, "upstream::closure::<second::Callback>")
+                .consumer_instantiation(20)
+                .with_call(call(
                     0,
-                    function_target(shared_exact, "upstream::closure::<first::Callback>"),
+                    function_target(second_callback, "second::callback"),
                 )),
-                body(first_callback, "first::callback")
-                    .with_effect(assert_effect(0, CompilerAssertKind::BoundsCheck)),
-                body(shared_exact, "upstream::closure::<first::Callback>")
-                    .consumer_instantiation(10)
-                    .with_call(call(0, function_target(first_callback, "first::callback"))),
-            ],
-        );
-        let second = cache(
-            "second-consumer",
-            20,
-            vec![
-                body(second_root, "second::root").with_call(call(
-                    0,
-                    function_target(shared_exact, "upstream::closure::<second::Callback>"),
-                )),
-                body(second_callback, "second::callback")
-                    .with_effect(assert_effect(0, CompilerAssertKind::DivisionByZero)),
-                body(shared_exact, "upstream::closure::<second::Callback>")
-                    .consumer_instantiation(20)
-                    .with_call(call(
-                        0,
-                        function_target(second_callback, "second::callback"),
-                    )),
-            ],
-        );
+        ]);
         // Compiler-generated closure bodies can be exact definitions without
         // a generic body. Their source-level THIR safety facts must survive a
         // consumer overlay that has the same FunctionId.
-        let upstream = cache(
-            "upstream",
-            30,
-            vec![
-                body(shared_exact, "upstream::closure")
-                    .with_effect(unsafe_effect(0, SafetyOpKind::DerefRawPointer)),
-            ],
-        );
+        let upstream =
+            ir(vec![body(shared_exact, "upstream::closure").with_effect(
+                unsafe_effect(0, SafetyOpKind::DerefRawPointer),
+            )]);
         let lookup = LayeredFunctionLookup::new(vec![&first, &second, &upstream]);
 
         let result = interpret(
@@ -3012,18 +2852,14 @@ mod tests {
         );
         invocation.kind = CallEdgeKindIr::IndirectCall;
         invocation.callable_keys = vec![key];
-        let invoking_consumer = cache(
-            "invoking-consumer",
-            10,
-            vec![
-                body(root, "invoking_consumer::root")
-                    .with_call(call(
-                        0,
-                        function_target(evidence_holder, "evidence_consumer::expose"),
-                    ))
-                    .with_call(invocation),
-            ],
-        );
+        let invoking_consumer = ir(vec![
+            body(root, "invoking_consumer::root")
+                .with_call(call(
+                    0,
+                    function_target(evidence_holder, "evidence_consumer::expose"),
+                ))
+                .with_call(invocation),
+        ]);
 
         let mut evidence = call(
             0,
@@ -3032,21 +2868,13 @@ mod tests {
         evidence.kind = CallEdgeKindIr::VTableEntry;
         evidence.applicable_attribution = vec![CallableAttributionIr::ErasureSites];
         evidence.callable_keys = vec![key];
-        let evidence_consumer = cache(
-            "evidence-consumer",
-            20,
-            vec![
-                body(evidence_holder, "evidence_consumer::expose").with_call(evidence),
-                body(target_exact, "upstream::target::<evidence_consumer::Local>")
-                    .consumer_instantiation(20)
-                    .with_effect(assert_effect(0, CompilerAssertKind::Overflow)),
-            ],
-        );
-        let defining_artifact = cache(
-            "upstream",
-            30,
-            vec![body(target_generic, "upstream::target")],
-        );
+        let evidence_consumer = ir(vec![
+            body(evidence_holder, "evidence_consumer::expose").with_call(evidence),
+            body(target_exact, "upstream::target::<evidence_consumer::Local>")
+                .consumer_instantiation(20)
+                .with_effect(assert_effect(0, CompilerAssertKind::Overflow)),
+        ]);
+        let defining_artifact = ir(vec![body(target_generic, "upstream::target")]);
         let lookup = LayeredFunctionLookup::new(vec![
             &invoking_consumer,
             &evidence_consumer,
@@ -4709,32 +4537,6 @@ mod tests {
         .expect("valid test IR")
     }
 
-    fn cache<T: Into<FunctionBodyIr>>(
-        crate_name: &str,
-        stable_crate_id: u64,
-        functions: Vec<T>,
-    ) -> ArtifactAnalysisCache {
-        let facts = ArtifactFactIr {
-            format_version: FACT_IR_FORMAT_VERSION,
-            tables: Vec::new(),
-            fact_index: Vec::new(),
-            relation_index: Vec::new(),
-        };
-        ArtifactAnalysisCache::new_with_legacy(
-            "test-tool",
-            "test-rustc",
-            ArtifactInfo {
-                id: RustcArtifactId::new(stable_crate_id, format!("{stable_crate_id:032x}")),
-                crate_name: crate_name.to_owned(),
-            },
-            Vec::new(),
-            ir(functions),
-            facts,
-            &SchemaRegistry::new(),
-        )
-        .expect("valid test cache")
-    }
-
     fn id(stable_crate_id: u64, local_id: u64) -> FunctionId {
         FunctionId::generic(definition_hash(stable_crate_id, local_id))
     }
@@ -4792,25 +4594,19 @@ mod tests {
     }
 
     impl FunctionLookup for ManagedLookup<'_> {
-        fn function(
-            &self,
-            function: FunctionId,
-        ) -> Option<crate::analysis::graph::LoadedFunction<'_>> {
+        fn function(&self, function: FunctionId) -> Option<LoadedFunction<'_>> {
             FunctionLookup::function(self.ir, function)
         }
 
         fn function_in_scope(
             &self,
-            scope: &crate::analysis::graph::BodyScope,
+            scope: &BodyScope,
             function: FunctionId,
-        ) -> Option<crate::analysis::graph::LoadedFunction<'_>> {
+        ) -> Option<LoadedFunction<'_>> {
             FunctionLookup::function_in_scope(self.ir, scope, function)
         }
 
-        fn defining_source_body(
-            &self,
-            function: FunctionId,
-        ) -> Option<crate::analysis::graph::LoadedFunction<'_>> {
+        fn defining_source_body(&self, function: FunctionId) -> Option<LoadedFunction<'_>> {
             FunctionLookup::defining_source_body(self.ir, function)
         }
 

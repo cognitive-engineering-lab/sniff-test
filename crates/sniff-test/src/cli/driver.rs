@@ -171,23 +171,11 @@ fn persist_local_analysis(
         legacy_ir,
         facts,
     } = extracted;
-    #[cfg(not(test))]
     let cache = ArtifactAnalysisCache::new(
         env!("CARGO_PKG_VERSION"),
         rustc_version,
         artifact,
         dependencies.direct_dependency_ids().collect(),
-        facts,
-        schemas,
-    )
-    .map_err(|error| format!("failed to create analysis cache: {error}"))?;
-    #[cfg(test)]
-    let cache = ArtifactAnalysisCache::new_with_legacy(
-        env!("CARGO_PKG_VERSION"),
-        rustc_version,
-        artifact,
-        dependencies.direct_dependency_ids().collect(),
-        legacy_ir,
         facts,
         schemas,
     )
@@ -198,7 +186,7 @@ fn persist_local_analysis(
     Ok((
         ExtractedArtifactBundle {
             #[cfg(test)]
-            legacy_ir: cache.legacy_ir,
+            legacy_ir,
             facts: cache.facts,
         },
         artifact_id,
@@ -562,7 +550,7 @@ mod tests {
     }
 
     #[test]
-    fn dependency_gate_rejects_stale_permanent_panic_marker_with_empty_legacy_ir() {
+    fn dependency_gate_rejects_stale_permanent_panic_marker() {
         rustc_span::create_default_session_globals_then(|| {
             let directory = tempfile::tempdir().expect("temp directory");
             let path = directory.path().join("dependency.rs");
@@ -636,7 +624,6 @@ mod tests {
                 registry.schemas(),
             )
             .unwrap();
-            assert!(cache.legacy_ir.functions.is_empty());
             fs::write(&path, "// marker removed\nfn new() {}\n")
                 .expect("replace dependency source");
             let active = SourceMap::new(FilePathMapping::empty());

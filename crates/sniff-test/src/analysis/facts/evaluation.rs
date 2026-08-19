@@ -5,26 +5,20 @@ mod rule;
 mod scheduler;
 mod store;
 
-// This facade intentionally retains the complete pre-split module API.
-#[allow(unused_imports)]
 pub(crate) use model::{
     DomainId, EvaluationIssueContext, EvaluationRoot, ObligationRecord, RelationTrace,
     deserialize_strict_relation_trace,
 };
-#[allow(unused_imports)]
-pub(crate) use rule::{
-    DerivedRowInput, EvaluatedIssueInput, EvaluationCx, EvaluationInput, EvaluationOutput,
-    EvaluationRule, RuleError,
-};
-#[allow(unused_imports)]
+pub(crate) use rule::{EvaluationCx, EvaluationInput, EvaluationOutput, EvaluationRule, RuleError};
 pub(crate) use scheduler::{
     EvaluationPipelineError, EvaluationRuleScheduler, RuleDescriptor, RuleRegistrationError,
-    RuleRunError, RuleScheduleError, RuleSchemaAccess,
 };
-#[allow(unused_imports)]
+#[cfg(test)]
+pub(crate) use scheduler::{RuleRunError, RuleScheduleError};
+#[cfg(test)]
+pub(crate) use store::EvaluationResults;
 pub(crate) use store::{
-    DerivedIndexRow, EvaluatedIssueIndexRow, EvaluationDb, EvaluationResults,
-    EvaluationStorageError, TypedDerivedRow, TypedEvaluatedIssue,
+    EvaluationDb, EvaluationStorageError, TypedDerivedRow, TypedEvaluatedIssue,
 };
 
 #[cfg(test)]

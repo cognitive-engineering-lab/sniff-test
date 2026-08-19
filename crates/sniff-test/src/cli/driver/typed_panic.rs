@@ -48,7 +48,7 @@ use crate::analysis::facts::view::{ArtifactDbView, ViewError};
 use crate::analysis::facts::workspace::{
     ArtifactScopeId, ArtifactScopeIdError, ScopedEntityRef, WorkspaceFactView, WorkspaceViewError,
 };
-use crate::analysis::interpret::InterpretationRoot;
+use crate::analysis::findings::InterpretationRoot;
 use crate::analysis::ir::{FunctionId, SourceFileId, SourceFileIr, SourceRangeIr};
 #[cfg(test)]
 use crate::analysis::workspace_closure::VerifiedWorkspaceClosure;

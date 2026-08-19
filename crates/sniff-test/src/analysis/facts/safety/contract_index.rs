@@ -66,10 +66,6 @@ pub(crate) struct EffectiveSafetyRequirement {
     source_anchor: Option<EffectiveSafetyContractSourceAnchor>,
 }
 
-#[allow(
-    dead_code,
-    reason = "typed safety evaluation consumes the remaining requirement accessors next"
-)]
 impl EffectiveSafetyRequirement {
     #[must_use]
     pub(crate) const fn ordinal(&self) -> u32 {
@@ -170,10 +166,6 @@ pub(crate) struct EffectiveSafetyContract {
     content: Arc<EffectiveSafetyContractContent>,
 }
 
-#[allow(
-    dead_code,
-    reason = "typed safety traversal consumes complete contracts in the next slice"
-)]
 impl EffectiveSafetyContract {
     #[must_use]
     pub(crate) const fn queried_callable(&self) -> &ScopedEntityId<CallableEntity> {

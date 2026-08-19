@@ -10,53 +10,23 @@ pub(crate) mod operations;
 pub(crate) mod root_inputs;
 mod root_issues;
 
-#[allow(
-    unused_imports,
-    reason = "the typed safety evaluator consumes call issues in the next slice"
-)]
 pub(crate) use call_issues::{
     DuplicateSafetyCallRequirementIssue, IndirectSafetyCallBoundaryIssue, SafetyCallIssueKind,
     SafetyCallIssuePack, UnsatisfiedSafetyCallIssue,
 };
-#[allow(
-    unused_imports,
-    reason = "the typed safety evaluator consumes completeness reports in the next slice"
-)]
 pub(crate) use completeness::{
     SafetyAnalysisIncompleteIssue, SafetyCompletenessOutcome, SafetyCompletenessPack,
-    SafetyCompletenessReason,
 };
-#[allow(
-    unused_imports,
-    reason = "typed safety root preparation consumes the effective contract index next"
-)]
 pub(crate) use contract_index::{
     EffectiveSafetyContract, EffectiveSafetyRequirement, WorkspaceEffectiveSafetyContracts,
     WorkspaceEffectiveSafetyContractsError,
 };
-#[allow(
-    unused_imports,
-    reason = "the typed safety authority registry installs evidence coordination in the next slice"
-)]
 pub(crate) use evidence_issues::SafetyEvidenceUsePack;
-#[allow(
-    unused_imports,
-    reason = "the typed safety evaluator consumes unsafe-operation issues in the next slice"
-)]
 pub(crate) use operation_issues::{SafetyOperationIssuePack, UnsatisfiedUnsafeOperationIssue};
-#[allow(
-    unused_imports,
-    reason = "the typed safety evaluator consumes root preparation in the next slice"
-)]
 pub(crate) use root_inputs::{
-    EmittedSafetyRoot, PreparedSafetyRoot, PreparedSafetyRootBatch, SafetyBoundary,
-    SafetyContractCallBoundary, SafetyRootInputError, SafetyRootInputs, SafetyRootRequest,
-    safety_domain,
+    PreparedSafetyRootBatch, SafetyBoundary, SafetyRootInputError, SafetyRootInputs,
+    SafetyRootRequest, safety_domain,
 };
-#[allow(
-    unused_imports,
-    reason = "the typed safety evaluator consumes root issues in the next slice"
-)]
 pub(crate) use root_issues::{
     DuplicateSafetyRootRequirementIssue, MissingSafetyDocsIssue, SafetyRootIssuePack,
 };

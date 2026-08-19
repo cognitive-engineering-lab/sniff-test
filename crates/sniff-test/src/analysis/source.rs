@@ -5,8 +5,6 @@
 //! length, and requested byte range all match the artifact IR.
 
 use std::collections::BTreeMap;
-#[cfg(test)]
-use std::collections::BTreeSet;
 use std::fmt;
 use std::hash::Hasher;
 use std::io;
@@ -24,56 +22,14 @@ use super::facts::program::{SourceAnchorEntity, SourceAnchorInFile, SourceFileEn
 use super::facts::registry::SchemaRegistry;
 use super::facts::schema::RowSchema;
 use super::facts::view::{ArtifactDbView, IndexedRow};
-#[cfg(test)]
-use super::ir::ArtifactAnalysisIr;
 use super::ir::{SourceFileId, SourceFileIr, SourceRangeIr};
-
-/// Verifies every available source file that contributed ordinary comment
-/// markers to cached legacy IR.
-///
-/// rustc's SVH intentionally ignores ordinary comments, while sniff-test's
-/// `// PANIC:` and `// SAFETY:` markers affect interpretation. A matching SVH
-/// therefore cannot by itself prove that a sidecar still matches a marker-
-/// bearing source file. Source whose recorded path is absent remains trusted
-/// as part of the exact sidecar; every failure for an existing path rejects the
-/// stale marker facts.
-#[cfg(test)]
-pub(crate) fn verify_cached_marker_sources_in(
-    source_map: &SourceMap,
-    ir: &ArtifactAnalysisIr,
-) -> Result<(), CachedSourceError> {
-    let mut checked = BTreeSet::new();
-    for range in ir.functions.iter().flat_map(|body| {
-        body.markers
-            .iter()
-            .filter_map(|marker| marker.source_range.as_ref().or(body.source_range.as_ref()))
-    }) {
-        if !checked.insert(range.file.clone()) {
-            continue;
-        }
-        let source = ir
-            .source_files
-            .binary_search_by(|source| source.id.cmp(&range.file))
-            .ok()
-            .map(|index| &ir.source_files[index])
-            .ok_or_else(|| CachedSourceError::MissingSourceIdentity {
-                identity: range.file.as_str().to_owned(),
-            })?;
-        match cached_source_span_in(source_map, source, range) {
-            Ok(_) => {}
-            Err(error) if error.is_absent_from_disk() => {}
-            Err(error) => return Err(error),
-        }
-    }
-    Ok(())
-}
 
 /// Verifies every source chain that permanently owns a human marker.
 ///
-/// Unlike the legacy verifier, this validates the typed relation cardinality
-/// before consulting any filename. Missing producer tables, missing or
-/// duplicate links, and inconsistent stable keys all reject the cache rather
-/// than silently turning marker evidence into an empty set.
+/// This validates the typed relation cardinality before consulting any
+/// filename. Missing producer tables, missing or duplicate links, and
+/// inconsistent stable keys all reject the cache rather than silently turning
+/// marker evidence into an empty set.
 pub(crate) fn verify_cached_permanent_marker_sources_in(
     source_map: &SourceMap,
     facts: &ArtifactFactIr,
@@ -489,10 +445,6 @@ pub(crate) enum CachedSourceError {
         kind: io::ErrorKind,
         message: String,
     },
-    #[cfg(test)]
-    MissingSourceIdentity {
-        identity: String,
-    },
     MissingPermanentSourceSchema {
         schema: String,
     },
@@ -539,11 +491,6 @@ impl fmt::Display for CachedSourceError {
             } => write!(
                 formatter,
                 "cached source `{filename}` is unavailable: {message}"
-            ),
-            #[cfg(test)]
-            Self::MissingSourceIdentity { identity } => write!(
-                formatter,
-                "cached source identity `{identity}` is absent from the artifact IR"
             ),
             Self::MissingPermanentSourceSchema { schema } => write!(
                 formatter,
@@ -624,7 +571,7 @@ mod tests {
 
     use super::{
         CachedSourceError, cached_source_span_in, stable_source_file_id,
-        verify_cached_marker_sources_in, verify_cached_permanent_marker_sources_in,
+        verify_cached_permanent_marker_sources_in,
     };
     use crate::analysis::facts::builder::ArtifactDbBuilder;
     use crate::analysis::facts::collection::CollectedArtifactSchemaPack;
@@ -639,7 +586,7 @@ mod tests {
         SourceAnchorEntity, SourceAnchorInFile, SourceAnchorKey, SourceFileEntity,
     };
     use crate::analysis::facts::schema::RowSchema;
-    use crate::analysis::ir::{ArtifactAnalysisIr, SourceFileIr, SourceRangeIr};
+    use crate::analysis::ir::{SourceFileIr, SourceRangeIr};
 
     #[test]
     fn invalid_source_ranges_render_stable_human_errors() {
@@ -790,18 +737,15 @@ mod tests {
     }
 
     #[test]
-    fn permanent_panic_marker_rejects_stale_source_when_legacy_ir_has_no_marker() {
+    fn permanent_panic_marker_rejects_stale_source() {
         with_session_globals(|| {
             let directory = tempfile::tempdir().expect("temp directory");
             let path = write_source(&directory, "// PANIC: expected panic\nfn old() {}\n");
             let source = source_metadata(&path);
             let (facts, registry) = permanent_panic_marker_facts(&source);
-            let legacy = ArtifactAnalysisIr::new(Vec::new(), Vec::new()).unwrap();
             fs::write(&path, "// marker removed\nfn new() {}\n").expect("change cached source");
             let active = SourceMap::new(FilePathMapping::empty());
 
-            verify_cached_marker_sources_in(&active, &legacy)
-                .expect("legacy IR contains no marker to verify");
             let error =
                 verify_cached_permanent_marker_sources_in(&active, &facts, registry.schemas())
                     .expect_err("the permanent PANIC marker must reject stale source");

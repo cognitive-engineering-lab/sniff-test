@@ -22,7 +22,7 @@ use crate::analysis::facts::program::{
     FunctionEntity, FunctionKey, SourceAnchorEntity, SourceAnchorKey, SourceFileEntity,
 };
 use crate::analysis::facts::schema::{PassId, RowSchema};
-use crate::analysis::ir::{ArtifactAnalysisIr, StableInstanceHash};
+use crate::analysis::ir::StableInstanceHash;
 use crate::analysis::workspace_closure::VerifiedWorkspaceClosureError;
 use crate::cli::driver::interpretation::{FindingSources, adapt_typed_panic_reports};
 use crate::cli::findings::{DiagnosticMessage, FindingKind};
@@ -258,8 +258,6 @@ fn dependency_cache(
             crate_name: String::from("fixture_dependency"),
         },
         dependencies,
-        legacy_ir: ArtifactAnalysisIr::new(Vec::new(), Vec::new())
-            .expect("empty legacy compatibility payload is valid"),
         facts,
     }
 }
