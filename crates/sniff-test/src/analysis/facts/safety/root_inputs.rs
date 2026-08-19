@@ -26,6 +26,7 @@ use crate::analysis::facts::program::topology::{
 };
 use crate::analysis::facts::program::workspace_index::ScopedProgramEntity;
 use crate::analysis::facts::workspace::{ArtifactScopeId, WorkspaceFactView};
+use crate::analysis::facts::workspace::{ScopedEntityId, WorkspaceIdentity};
 use crate::analysis::workspace_closure::VerifiedWorkspaceClosure;
 use crate::config::SafetyConfig;
 use crate::contracts::ContractDocOverrides;
@@ -115,10 +116,17 @@ impl SafetyContractCallBoundary {
 #[derive(Clone, Debug)]
 pub(crate) struct SafetyRootInputs {
     traversal: ResolvedRootProgramTraversal<SafetyBoundary>,
+    root_callable: ScopedEntityId<CallableEntity>,
+    root_callable_data: CallableEntity,
     root_missing_safety_docs: bool,
 }
 
 impl SafetyRootInputs {
+    #[must_use]
+    pub(in crate::analysis::facts) const fn workspace_identity(&self) -> &Arc<WorkspaceIdentity> {
+        self.traversal.workspace_identity()
+    }
+
     #[must_use]
     pub(crate) const fn root(&self) -> &EvaluationRoot {
         self.traversal.root()
@@ -127,6 +135,16 @@ impl SafetyRootInputs {
     #[must_use]
     pub(crate) fn traversal(&self) -> &ResolvedRootProgramTraversal<SafetyBoundary> {
         &self.traversal
+    }
+
+    #[must_use]
+    pub(crate) const fn root_callable(&self) -> &ScopedEntityId<CallableEntity> {
+        &self.root_callable
+    }
+
+    #[must_use]
+    pub(crate) const fn root_callable_data(&self) -> &CallableEntity {
+        &self.root_callable_data
     }
 
     #[must_use]
@@ -173,6 +191,11 @@ impl PreparedSafetyRootBatch {
             .map_err(|source| SafetyRootInputError::Traversal(Box::new(source)))?;
             roots.push(PreparedSafetyRoot {
                 traversal,
+                root_callable: policy.root_callable.ok_or_else(|| {
+                    SafetyRootInputError::InvalidPreparedInput {
+                        reason: String::from("safety traversal did not retain its root callable"),
+                    }
+                })?,
                 root_missing_safety_docs: policy.root_missing_safety_docs,
             });
         }
@@ -188,6 +211,7 @@ impl PreparedSafetyRootBatch {
 #[derive(Debug)]
 pub(crate) struct PreparedSafetyRoot {
     traversal: PreparedRootProgramTraversal<SafetyBoundary, SafetyPolicyError>,
+    root_callable: (ScopedEntityId<CallableEntity>, CallableEntity),
     root_missing_safety_docs: bool,
 }
 
@@ -207,6 +231,7 @@ impl PreparedSafetyRoot {
             .map_err(|source| SafetyRootInputError::Traversal(Box::new(source)))?;
         Ok(EmittedSafetyRoot {
             traversal,
+            root_callable: self.root_callable,
             root_missing_safety_docs: self.root_missing_safety_docs,
         })
     }
@@ -215,6 +240,7 @@ impl PreparedSafetyRoot {
 #[derive(Debug)]
 pub(crate) struct EmittedSafetyRoot {
     traversal: EmittedRootProgramTraversal<SafetyBoundary, SafetyPolicyError>,
+    root_callable: (ScopedEntityId<CallableEntity>, CallableEntity),
     root_missing_safety_docs: bool,
 }
 
@@ -230,6 +256,8 @@ impl EmittedSafetyRoot {
             .map_err(|source| SafetyRootInputError::Traversal(Box::new(source)))?;
         Ok(SafetyRootInputs {
             traversal,
+            root_callable: self.root_callable.0,
+            root_callable_data: self.root_callable.1,
             root_missing_safety_docs: self.root_missing_safety_docs,
         })
     }
@@ -260,6 +288,7 @@ impl Error for SafetyPolicyError {
 pub(crate) enum SafetyRootInputError {
     Contracts(Box<WorkspaceEffectiveSafetyContractsError>),
     Traversal(Box<RootProgramTraversalError<SafetyPolicyError>>),
+    InvalidPreparedInput { reason: String },
 }
 
 impl Display for SafetyRootInputError {
@@ -267,6 +296,9 @@ impl Display for SafetyRootInputError {
         match self {
             Self::Contracts(source) => Display::fmt(source, formatter),
             Self::Traversal(source) => Display::fmt(source, formatter),
+            Self::InvalidPreparedInput { reason } => {
+                write!(formatter, "invalid prepared safety input: {reason}")
+            }
         }
     }
 }
@@ -276,6 +308,7 @@ impl Error for SafetyRootInputError {
         match self {
             Self::Contracts(source) => Some(source),
             Self::Traversal(source) => Some(source),
+            Self::InvalidPreparedInput { .. } => None,
         }
     }
 }
@@ -295,6 +328,7 @@ struct SafetyTraversalPolicy<'workspace, 'facts> {
     safety: &'workspace SafetyConfig,
     contracts: &'workspace WorkspaceEffectiveSafetyContracts,
     root_missing_safety_docs: bool,
+    root_callable: Option<(ScopedEntityId<CallableEntity>, CallableEntity)>,
 }
 
 impl<'workspace, 'facts> SafetyTraversalPolicy<'workspace, 'facts> {
@@ -308,6 +342,7 @@ impl<'workspace, 'facts> SafetyTraversalPolicy<'workspace, 'facts> {
             safety,
             contracts,
             root_missing_safety_docs: false,
+            root_callable: None,
         }
     }
 
@@ -449,6 +484,9 @@ impl RootProgramTraversalPolicy for SafetyTraversalPolicy<'_, '_> {
         context: &BodyPolicyContext<'_>,
     ) -> Result<BodyTraversalDecision<Self::Boundary>, Self::Error> {
         let attributes = context.callable.data();
+        if context.is_root {
+            self.root_callable = Some((context.callable.id(), attributes.clone()));
+        }
         if self
             .safety
             .ignores_candidates(attributes.namespace_candidates())
@@ -583,13 +621,31 @@ mod tests {
     use crate::analysis::cache::RustcArtifactId;
     use crate::analysis::facts::builder::{ArtifactDbBuilder, FactMeta};
     use crate::analysis::facts::collection::CollectedArtifactSchemaPack;
-    use crate::analysis::facts::composition::{CompositionRelationBuilder, WorkspaceRelationIndex};
+    use crate::analysis::facts::composition::{
+        CompositionRelationBuilder, WorkspaceEvaluationView, WorkspaceRelationIndex,
+    };
+    use crate::analysis::facts::evaluation::EvaluationDb;
+    use crate::analysis::facts::evidence::{
+        AmbiguousEvidenceReuseIssue, EvidenceCoordinatorPack, EvidenceUseRecord,
+    };
+    use crate::analysis::facts::human::EvidenceClaimSelector;
+    use crate::analysis::facts::human::markers::{
+        MarkerClaimEntity, MarkerClaimKey, MarkerOccurrenceEntity, MarkerOccurrenceHasClaim,
+        MarkerOccurrenceHasSourceAnchor, MarkerOccurrenceKey,
+        UnsafeOperationHasMarkerClaimCandidate,
+    };
     use crate::analysis::facts::pack::AnalysisRegistry;
     use crate::analysis::facts::program::root_traversal::MarkerProbe;
     use crate::analysis::facts::program::topology::{
-        CallAttributionRole, CallableEntity, FunctionDefinesCallable,
+        CallAttributionRole, CallKind, CallOccurrenceEntity, CallOccurrenceInSafetyEffectGroup,
+        CallOccurrenceKey, CallOccurrenceTargetsCallable, CallSiteEntity, CallSiteHasOccurrence,
+        CallSiteKey, CallTargetRole, CallableEntity, FunctionDefinesCallable, FunctionOwnsCallSite,
+        FunctionOwnsSafetyEffectGroup, SafetyEffectGroupEntity, SafetyEffectGroupKey,
     };
-    use crate::analysis::facts::program::{FunctionBodyProvenance, FunctionEntity, FunctionKey};
+    use crate::analysis::facts::program::{
+        FunctionBodyProvenance, FunctionEntity, FunctionKey, SourceAnchorEntity,
+        SourceAnchorInFile, SourceAnchorKey, SourceFileEntity,
+    };
     use crate::analysis::facts::schema::PassId;
     use crate::analysis::facts::view::ArtifactDbView;
     use crate::analysis::facts::workspace::{ArtifactScopeId, WorkspaceFactView};
@@ -598,9 +654,20 @@ mod tests {
     };
     use crate::config::SafetyConfig;
     use crate::contracts::ContractDocOverrides;
-    use crate::namespace::StableDefPathHash;
+    use crate::namespace::{StableDefPathHash, StableInstanceHash};
 
-    use super::super::{SafetyContractFact, SafetyRequirement};
+    use super::super::collector::COLLECT_SAFETY_ARTIFACT_PASS;
+    use super::super::operations::{
+        FunctionOwnsUnsafeOperation, SafetyOperationKind, UnsafeOperationEntity,
+        UnsafeOperationInSafetyEffectGroup, UnsafeOperationKey,
+    };
+    use super::super::{
+        DuplicateSafetyRootRequirementIssue, IndirectSafetyCallBoundaryIssue,
+        MissingSafetyDocsIssue, SafetyCallIssuePack, SafetyCompletenessOutcome,
+        SafetyCompletenessPack, SafetyContractFact, SafetyEvidenceUsePack,
+        SafetyOperationIssuePack, SafetyRequirement, SafetyRootInputs, SafetyRootIssuePack,
+        UnsatisfiedSafetyCallIssue, UnsatisfiedUnsafeOperationIssue,
+    };
 
     fn root_key() -> FunctionKey {
         FunctionKey::new(
@@ -612,6 +679,10 @@ mod tests {
 
     fn root_artifact(
         has_contract: bool,
+        has_operation_marker: bool,
+        call_marker: Option<bool>,
+        has_opaque_call: bool,
+        second_marked_operation: bool,
     ) -> (
         AnalysisRegistry<()>,
         crate::analysis::facts::encoded::ArtifactFactIr,
@@ -644,21 +715,267 @@ mod tests {
         builder
             .relate(&body, &callable, &FunctionDefinesCallable::new())
             .unwrap();
-        if has_contract {
-            let requirement = builder
-                .insert_requirement(&SafetyRequirement::new(
-                    root,
-                    0,
-                    "valid",
-                    "the input is valid",
+        let group = builder
+            .insert_entity(&SafetyEffectGroupEntity::new(SafetyEffectGroupKey::new(
+                root, 0,
+            )))
+            .unwrap();
+        builder
+            .relate(&body, &group, &FunctionOwnsSafetyEffectGroup::new())
+            .unwrap();
+        let operation = builder
+            .insert_entity(&UnsafeOperationEntity::new(
+                UnsafeOperationKey::new(root, 0),
+                SafetyOperationKind::DerefRawPointer,
+            ))
+            .unwrap();
+        builder
+            .relate(&body, &operation, &FunctionOwnsUnsafeOperation::new())
+            .unwrap();
+        builder
+            .relate(
+                &operation,
+                &group,
+                &UnsafeOperationInSafetyEffectGroup::new(),
+            )
+            .unwrap();
+        if has_operation_marker {
+            let file = builder
+                .insert_entity(&SourceFileEntity::new(
+                    "src/lib.rs",
+                    "src/lib.rs",
+                    "verified-hash",
+                    100,
+                ))
+                .unwrap();
+            let anchor_key = SourceAnchorKey::new("src/lib.rs", 20, 40);
+            let anchor = builder
+                .insert_entity(&SourceAnchorEntity::new(anchor_key.clone()))
+                .unwrap();
+            builder
+                .relate(&anchor, &file, &SourceAnchorInFile::new())
+                .unwrap();
+            let occurrence_key = MarkerOccurrenceKey::new(anchor_key, None);
+            let occurrence = builder
+                .insert_entity(&MarkerOccurrenceEntity::new(
+                    occurrence_key.clone(),
+                    Vec::new(),
+                ))
+                .unwrap();
+            builder
+                .relate(
+                    &occurrence,
+                    &anchor,
+                    &MarkerOccurrenceHasSourceAnchor::new(),
+                )
+                .unwrap();
+            let claim = builder
+                .insert_entity(&MarkerClaimEntity::new(
+                    MarkerClaimKey::new(occurrence_key, super::safety_domain(), 0),
+                    EvidenceClaimSelector::Unnamed,
+                    "the raw pointer is valid and aligned",
+                ))
+                .unwrap();
+            builder
+                .relate(&occurrence, &claim, &MarkerOccurrenceHasClaim::new())
+                .unwrap();
+            builder
+                .relate(
+                    &operation,
+                    &claim,
+                    &UnsafeOperationHasMarkerClaimCandidate::new(true, false),
+                )
+                .unwrap();
+            if second_marked_operation {
+                let second_group = builder
+                    .insert_entity(&SafetyEffectGroupEntity::new(SafetyEffectGroupKey::new(
+                        root, 1,
+                    )))
+                    .unwrap();
+                builder
+                    .relate(&body, &second_group, &FunctionOwnsSafetyEffectGroup::new())
+                    .unwrap();
+                let second_operation = builder
+                    .insert_entity(&UnsafeOperationEntity::new(
+                        UnsafeOperationKey::new(root, 1),
+                        SafetyOperationKind::DerefRawPointer,
+                    ))
+                    .unwrap();
+                builder
+                    .relate(
+                        &body,
+                        &second_operation,
+                        &FunctionOwnsUnsafeOperation::new(),
+                    )
+                    .unwrap();
+                builder
+                    .relate(
+                        &second_operation,
+                        &second_group,
+                        &UnsafeOperationInSafetyEffectGroup::new(),
+                    )
+                    .unwrap();
+                builder
+                    .relate(
+                        &second_operation,
+                        &claim,
+                        &UnsafeOperationHasMarkerClaimCandidate::new(true, false),
+                    )
+                    .unwrap();
+            }
+        }
+        if let Some(satisfied) = call_marker {
+            let target_key = FunctionKey::new(
+                serde_json::from_str::<StableDefPathHash>("\"00000000000000010000000000000032\"")
+                    .unwrap(),
+                Some(
+                    serde_json::from_str::<StableInstanceHash>(
+                        "\"00000000000000010000000000000042\"",
+                    )
+                    .unwrap(),
+                ),
+            );
+            let target = builder
+                .insert_entity(&CallableEntity::new(
+                    target_key,
+                    "crate::target",
+                    false,
+                    true,
+                    false,
+                    false,
+                    vec![String::from("crate::target")],
+                ))
+                .unwrap();
+            let site = builder
+                .insert_entity(&CallSiteEntity::new(CallSiteKey::new(root, 0)))
+                .unwrap();
+            builder
+                .relate(&body, &site, &FunctionOwnsCallSite::new())
+                .unwrap();
+            let occurrence = builder
+                .insert_entity(&CallOccurrenceEntity::new(
+                    CallOccurrenceKey::new(root, 0),
+                    CallKind::DirectCall,
+                    vec![CallAttributionRole::CallSite],
+                    false,
+                    false,
                     None,
                 ))
                 .unwrap();
-            let metadata = FactMeta::new(PassId::new("test.safety.root-input").unwrap())
-                .with_owner(&callable)
-                .unwrap()
-                .with_requirement(&requirement)
+            builder
+                .relate(&site, &occurrence, &CallSiteHasOccurrence::new())
                 .unwrap();
+            builder
+                .relate(
+                    &occurrence,
+                    &group,
+                    &CallOccurrenceInSafetyEffectGroup::new(),
+                )
+                .unwrap();
+            builder
+                .relate(
+                    &occurrence,
+                    &target,
+                    &CallOccurrenceTargetsCallable::new(CallTargetRole::Runtime),
+                )
+                .unwrap();
+            let mut metadata = FactMeta::new(PassId::new(COLLECT_SAFETY_ARTIFACT_PASS).unwrap())
+                .with_owner(&target)
+                .unwrap();
+            for requirement in [
+                SafetyRequirement::new(target_key, 0, "Valid", "the argument is valid", None),
+                SafetyRequirement::new(target_key, 1, "VALID", "the argument remains valid", None),
+            ] {
+                let requirement = builder.insert_requirement(&requirement).unwrap();
+                metadata = metadata.with_requirement(&requirement).unwrap();
+            }
+            builder
+                .insert_fact(&SafetyContractFact::new(), metadata)
+                .unwrap();
+            if satisfied {
+                let file = builder
+                    .insert_entity(&SourceFileEntity::new(
+                        "src/call.rs",
+                        "src/call.rs",
+                        "verified-call-hash",
+                        100,
+                    ))
+                    .unwrap();
+                let anchor_key = SourceAnchorKey::new("src/call.rs", 20, 40);
+                let anchor = builder
+                    .insert_entity(&SourceAnchorEntity::new(anchor_key.clone()))
+                    .unwrap();
+                builder
+                    .relate(&anchor, &file, &SourceAnchorInFile::new())
+                    .unwrap();
+                let occurrence_key = MarkerOccurrenceKey::new(anchor_key, None);
+                let marker = builder
+                    .insert_entity(&MarkerOccurrenceEntity::new(
+                        occurrence_key.clone(),
+                        Vec::new(),
+                    ))
+                    .unwrap();
+                builder
+                    .relate(&marker, &anchor, &MarkerOccurrenceHasSourceAnchor::new())
+                    .unwrap();
+                let claim = builder
+                    .insert_entity(&MarkerClaimEntity::new(
+                        MarkerClaimKey::new(occurrence_key, super::safety_domain(), 0),
+                        EvidenceClaimSelector::Named(String::from("VALID")),
+                        "the argument came from a validated source",
+                    ))
+                    .unwrap();
+                builder
+                    .relate(&marker, &claim, &MarkerOccurrenceHasClaim::new())
+                    .unwrap();
+                builder
+                    .relate(
+                        &occurrence,
+                        &claim,
+                        &crate::analysis::facts::human::markers::CallOccurrenceHasMarkerClaimCandidate::new(true, false),
+                    )
+                    .unwrap();
+            }
+        }
+        if has_opaque_call {
+            let site = builder
+                .insert_entity(&CallSiteEntity::new(CallSiteKey::new(root, 0)))
+                .unwrap();
+            builder
+                .relate(&body, &site, &FunctionOwnsCallSite::new())
+                .unwrap();
+            let occurrence = builder
+                .insert_entity(&CallOccurrenceEntity::new(
+                    CallOccurrenceKey::new(root, 0),
+                    CallKind::IndirectCall,
+                    vec![CallAttributionRole::CallSite],
+                    false,
+                    false,
+                    Some(String::from("opaque function pointer")),
+                ))
+                .unwrap();
+            builder
+                .relate(&site, &occurrence, &CallSiteHasOccurrence::new())
+                .unwrap();
+            builder
+                .relate(
+                    &occurrence,
+                    &group,
+                    &CallOccurrenceInSafetyEffectGroup::new(),
+                )
+                .unwrap();
+        }
+        if has_contract {
+            let mut metadata = FactMeta::new(PassId::new(COLLECT_SAFETY_ARTIFACT_PASS).unwrap())
+                .with_owner(&callable)
+                .unwrap();
+            for requirement in [
+                SafetyRequirement::new(root, 0, "Valid", "the input is valid", None),
+                SafetyRequirement::new(root, 1, "VALID", "the input remains valid", None),
+            ] {
+                let requirement = builder.insert_requirement(&requirement).unwrap();
+                metadata = metadata.with_requirement(&requirement).unwrap();
+            }
             builder
                 .insert_fact(&SafetyContractFact::new(), metadata)
                 .unwrap();
@@ -667,8 +984,30 @@ mod tests {
         (registry, artifact)
     }
 
-    fn resolve_root(has_contract: bool) -> super::SafetyRootInputs {
-        let (registry, artifact) = root_artifact(has_contract);
+    fn with_root<T>(
+        has_contract: bool,
+        has_operation_marker: bool,
+        second_marked_operation: bool,
+        inspect: impl FnOnce(
+            &AnalysisRegistry<SafetyRootInputs>,
+            SafetyRootInputs,
+            WorkspaceEvaluationView<'_>,
+        ) -> T,
+    ) -> T {
+        let (_, artifact) = root_artifact(
+            has_contract,
+            has_operation_marker,
+            None,
+            false,
+            second_marked_operation,
+        );
+        let mut registry = AnalysisRegistry::<SafetyRootInputs>::new();
+        registry.install(&CollectedArtifactSchemaPack).unwrap();
+        registry.install(&SafetyRootIssuePack).unwrap();
+        registry.install(&SafetyOperationIssuePack).unwrap();
+        registry.install(&SafetyEvidenceUsePack).unwrap();
+        registry.install(&EvidenceCoordinatorPack).unwrap();
+        registry.install(&SafetyCompletenessPack).unwrap();
         let scope = ArtifactScopeId::for_in_memory(1, 0);
         let workspace = WorkspaceFactView::compose([(
             scope,
@@ -705,9 +1044,85 @@ mod tests {
         let relations = builder.finalize().unwrap();
         let index = WorkspaceRelationIndex::open(&workspace).unwrap();
         let graph = index.bind(&root, relations).unwrap();
-        emitted
+        let inputs = emitted
             .resolve(&graph, registry.composition_relations())
-            .unwrap()
+            .unwrap();
+        let evaluation = WorkspaceEvaluationView::from_graph(&workspace, graph).unwrap();
+        inspect(&registry, inputs, evaluation)
+    }
+
+    fn with_call_scenario<T>(
+        call_marker: Option<bool>,
+        has_opaque_call: bool,
+        inspect: impl FnOnce(
+            &AnalysisRegistry<SafetyRootInputs>,
+            SafetyRootInputs,
+            WorkspaceEvaluationView<'_>,
+        ) -> T,
+    ) -> T {
+        let (_, artifact) = root_artifact(false, false, call_marker, has_opaque_call, false);
+        let mut registry = AnalysisRegistry::<SafetyRootInputs>::new();
+        registry.install(&CollectedArtifactSchemaPack).unwrap();
+        registry.install(&SafetyCallIssuePack).unwrap();
+        registry.install(&SafetyEvidenceUsePack).unwrap();
+        registry.install(&EvidenceCoordinatorPack).unwrap();
+        registry.install(&SafetyCompletenessPack).unwrap();
+        let scope = ArtifactScopeId::for_in_memory(1, 0);
+        let workspace = WorkspaceFactView::compose([(
+            scope,
+            ArtifactDbView::open(&artifact, registry.schemas()).unwrap(),
+        )])
+        .unwrap();
+        let closure = VerifiedWorkspaceClosure::open(
+            &workspace,
+            ManagedArtifactManifest::new(ManagedArtifactGeneration::in_memory(1, 0), vec![]),
+            [],
+            Vec::<RustcArtifactId>::new(),
+        )
+        .unwrap();
+        let mut roots = PreparedSafetyRootBatch::prepare(
+            &workspace,
+            &closure,
+            &SafetyConfig::default(),
+            &ContractDocOverrides::default(),
+            [SafetyRootRequest::new(
+                root_key(),
+                CallAttributionRole::CallSite,
+                MarkerProbe::SourceCallsite,
+                100,
+            )],
+        )
+        .unwrap()
+        .into_roots();
+        let prepared = roots.pop().unwrap();
+        let root = prepared.root().clone();
+        let mut builder =
+            CompositionRelationBuilder::new(&root, &workspace, registry.composition_relations())
+                .unwrap();
+        let emitted = prepared.emit(&mut builder).unwrap();
+        let relations = builder.finalize().unwrap();
+        let index = WorkspaceRelationIndex::open(&workspace).unwrap();
+        let graph = index.bind(&root, relations).unwrap();
+        let inputs = emitted
+            .resolve(&graph, registry.composition_relations())
+            .unwrap();
+        let evaluation = WorkspaceEvaluationView::from_graph(&workspace, graph).unwrap();
+        inspect(&registry, inputs, evaluation)
+    }
+
+    fn with_call_root<T>(
+        satisfied: bool,
+        inspect: impl FnOnce(
+            &AnalysisRegistry<SafetyRootInputs>,
+            SafetyRootInputs,
+            WorkspaceEvaluationView<'_>,
+        ) -> T,
+    ) -> T {
+        with_call_scenario(Some(satisfied), false, inspect)
+    }
+
+    fn resolve_root(has_contract: bool) -> SafetyRootInputs {
+        with_root(has_contract, false, false, |_, inputs, _| inputs)
     }
 
     #[test]
@@ -725,5 +1140,245 @@ mod tests {
         assert!(undocumented.root_missing_safety_docs());
         assert_eq!(undocumented.traversal().body_visits().len(), 1);
         assert!(undocumented.traversal().body_boundaries().is_empty());
+    }
+
+    #[test]
+    fn typed_safety_completeness_counts_only_expanded_bodies() {
+        for (has_contract, expanded_bodies) in [(true, 0), (false, 1)] {
+            with_root(
+                has_contract,
+                false,
+                false,
+                |registry, inputs, evaluation| {
+                    let root = inputs.root().clone();
+                    let mut database = EvaluationDb::new();
+                    registry
+                        .run_workspace_evaluation(&inputs, &root, &evaluation, &mut database)
+                        .unwrap();
+                    let results = database.finish().unwrap();
+                    let summaries = results
+                        .derived_rows::<SafetyCompletenessOutcome>(registry.schemas())
+                        .unwrap();
+                    assert!(matches!(
+                        summaries.as_slice(),
+                        [summary]
+                            if summary.data.expanded_bodies() == expanded_bodies
+                                && summary.data.complete()
+                    ));
+                },
+            );
+        }
+    }
+
+    #[test]
+    fn missing_docs_rule_emits_only_for_the_undocumented_exported_unsafe_root() {
+        for (has_contract, expected) in [(false, 1), (true, 0)] {
+            with_root(
+                has_contract,
+                false,
+                false,
+                |registry, inputs, evaluation| {
+                    let root = inputs.root().clone();
+                    let mut database = EvaluationDb::new();
+                    registry
+                        .run_workspace_evaluation(&inputs, &root, &evaluation, &mut database)
+                        .unwrap();
+                    let results = database.finish().unwrap();
+                    let issues = results
+                        .issues::<MissingSafetyDocsIssue>(registry.schemas())
+                        .unwrap();
+                    assert_eq!(issues.len(), expected);
+                    if let [issue] = issues.as_slice() {
+                        assert_eq!(issue.context.root, root);
+                        assert_eq!(issue.context.endpoint.as_ref(), Some(&root.entity));
+                        assert!(issue.context.source.is_none());
+                        assert!(
+                            issue
+                                .context
+                                .trace
+                                .as_ref()
+                                .is_some_and(|trace| trace.relations().is_empty())
+                        );
+                    }
+                },
+            );
+        }
+    }
+
+    #[test]
+    fn duplicate_root_safety_requirements_emit_one_exact_issue() {
+        with_root(true, false, false, |registry, inputs, evaluation| {
+            let root = inputs.root().clone();
+            let mut database = EvaluationDb::new();
+            registry
+                .run_workspace_evaluation(&inputs, &root, &evaluation, &mut database)
+                .unwrap();
+            let results = database.finish().unwrap();
+            let issues = results
+                .issues::<DuplicateSafetyRootRequirementIssue>(registry.schemas())
+                .unwrap();
+            let [issue] = issues.as_slice() else {
+                panic!("one duplicate root safety requirement issue must be emitted");
+            };
+            assert_eq!(issue.data.normalized_name(), "valid");
+            assert_eq!(issue.data.requirement_ordinals(), [0, 1]);
+            assert_eq!(issue.context.root, root);
+            assert_eq!(issue.context.endpoint.as_ref(), Some(&root.entity));
+            assert!(issue.context.source.is_some());
+            assert!(
+                issue
+                    .context
+                    .trace
+                    .as_ref()
+                    .is_some_and(|trace| trace.relations().is_empty())
+            );
+        });
+    }
+
+    #[test]
+    fn undocumented_unsafe_operation_emits_one_typed_issue() {
+        with_root(false, false, false, |registry, inputs, evaluation| {
+            let root = inputs.root().clone();
+            let mut database = EvaluationDb::new();
+            registry
+                .run_workspace_evaluation(&inputs, &root, &evaluation, &mut database)
+                .unwrap();
+            let results = database.finish().unwrap();
+            let issues = results
+                .issues::<UnsatisfiedUnsafeOperationIssue>(registry.schemas())
+                .unwrap();
+            let [issue] = issues.as_slice() else {
+                panic!("one unsafe-operation issue must be emitted");
+            };
+            assert_eq!(issue.data.kind(), SafetyOperationKind::DerefRawPointer);
+            assert_eq!(issue.data.witness_order(), 1);
+            assert_eq!(issue.context.root, root);
+            assert_eq!(
+                issue.context.source.as_ref(),
+                issue
+                    .context
+                    .endpoint
+                    .as_ref()
+                    .map(|endpoint| endpoint.as_row())
+                    .as_ref()
+            );
+        });
+    }
+
+    #[test]
+    fn unnamed_safety_marker_satisfies_the_unsafe_operation() {
+        with_root(false, true, false, |registry, inputs, evaluation| {
+            let root = inputs.root().clone();
+            let [visit] = inputs.traversal().unsafe_operation_visits() else {
+                panic!("the fixture must retain one unsafe-operation witness");
+            };
+            assert_eq!(visit.active_markers().len(), 1);
+
+            let mut database = EvaluationDb::new();
+            registry
+                .run_workspace_evaluation(&inputs, &root, &evaluation, &mut database)
+                .unwrap();
+            let results = database.finish().unwrap();
+            assert!(
+                results
+                    .issues::<UnsatisfiedUnsafeOperationIssue>(registry.schemas())
+                    .unwrap()
+                    .is_empty()
+            );
+            let uses = results
+                .derived_rows::<EvidenceUseRecord>(registry.schemas())
+                .unwrap();
+            assert!(matches!(
+                uses.as_slice(),
+                [usage]
+                    if usage.data.endpoint() == &visit.operation().erase()
+                        && usage.data.group() == &visit.safety_group().erase()
+            ));
+        });
+    }
+
+    #[test]
+    fn named_safety_call_requirement_is_reported_until_matched() {
+        for (satisfied, expected_missing) in [(false, 1), (true, 0)] {
+            with_call_root(satisfied, |registry, inputs, evaluation| {
+                let root = inputs.root().clone();
+                let mut database = EvaluationDb::new();
+                registry
+                    .run_workspace_evaluation(&inputs, &root, &evaluation, &mut database)
+                    .unwrap();
+                let results = database.finish().unwrap();
+                let issues = results
+                    .issues::<UnsatisfiedSafetyCallIssue>(registry.schemas())
+                    .unwrap();
+                assert_eq!(issues.len(), expected_missing);
+                assert_eq!(
+                    results
+                        .derived_rows::<EvidenceUseRecord>(registry.schemas())
+                        .unwrap()
+                        .len(),
+                    usize::from(satisfied)
+                );
+                let duplicates = results
+                    .issues::<super::super::DuplicateSafetyCallRequirementIssue>(registry.schemas())
+                    .unwrap();
+                assert!(matches!(
+                    duplicates.as_slice(),
+                    [issue]
+                        if issue.data.normalized_name() == "valid"
+                            && issue.data.requirement_ordinals() == [0, 1]
+                ));
+            });
+        }
+    }
+
+    #[test]
+    fn opaque_actual_call_emits_the_typed_safety_boundary_issue() {
+        with_call_scenario(None, true, |registry, inputs, evaluation| {
+            let root = inputs.root().clone();
+            let mut database = EvaluationDb::new();
+            registry
+                .run_workspace_evaluation(&inputs, &root, &evaluation, &mut database)
+                .unwrap();
+            let results = database.finish().unwrap();
+            let issues = results
+                .issues::<IndirectSafetyCallBoundaryIssue>(registry.schemas())
+                .unwrap();
+            assert!(matches!(
+                issues.as_slice(),
+                [issue]
+                    if issue.data.description() == "opaque function pointer"
+                        && issue.context.root == root
+                        && issue.context.source == issue.context.endpoint.as_ref().map(|row| row.as_row())
+            ));
+        });
+    }
+
+    #[test]
+    fn one_safety_marker_reused_across_effect_groups_is_ambiguous() {
+        with_root(false, true, true, |registry, inputs, evaluation| {
+            let root = inputs.root().clone();
+            let mut database = EvaluationDb::new();
+            registry
+                .run_workspace_evaluation(&inputs, &root, &evaluation, &mut database)
+                .unwrap();
+            let results = database.finish().unwrap();
+            assert_eq!(
+                results
+                    .derived_rows::<EvidenceUseRecord>(registry.schemas())
+                    .unwrap()
+                    .len(),
+                2
+            );
+            let issues = results
+                .issues::<AmbiguousEvidenceReuseIssue>(registry.schemas())
+                .unwrap();
+            assert!(matches!(
+                issues.as_slice(),
+                [issue]
+                    if issue.data.domain() == &super::safety_domain()
+                        && issue.data.groups().len() == 2
+                        && issue.context.root == root
+            ));
+        });
     }
 }

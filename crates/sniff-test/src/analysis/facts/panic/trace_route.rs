@@ -17,14 +17,14 @@ use crate::analysis::facts::workspace::{ArtifactScopeId, ScopedEntityRef};
 
 /// A target-agnostic endpoint used to select its strict followed-call prefix.
 #[derive(Clone, Copy)]
-pub(super) struct TraceRouteEndpoint<'a> {
+pub(crate) struct TraceRouteEndpoint<'a> {
     order: u64,
     trace: &'a RelationTrace,
     inherited_markers: &'a [ResolvedMarkerClaim],
 }
 
 impl<'a> TraceRouteEndpoint<'a> {
-    pub(super) const fn new(
+    pub(crate) const fn new(
         order: u64,
         trace: &'a RelationTrace,
         inherited_markers: &'a [ResolvedMarkerClaim],
@@ -39,7 +39,7 @@ impl<'a> TraceRouteEndpoint<'a> {
 
 /// Failure to select one structurally valid route from resolved traversal data.
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub(super) enum TraceRouteError {
+pub(crate) enum TraceRouteError {
     MissingCallerBody { occurrence: ScopedEntityRef },
     AmbiguousCallerBody { occurrence: ScopedEntityRef },
     MissingEnteredBody { callable: ScopedEntityRef },
@@ -52,41 +52,41 @@ pub(super) enum TraceRouteError {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(super) enum TraceBodySelectionError {
+pub(crate) enum TraceBodySelectionError {
     Missing,
     Ambiguous,
 }
 
 /// One selected followed call and the exact body states on either side.
 #[derive(Clone, Copy)]
-pub(super) struct SelectedTraceCall<'a> {
+pub(crate) struct SelectedTraceCall<'a> {
     call: &'a ResolvedFollowedCall,
     caller: &'a ResolvedBodyVisit,
     entered: &'a ResolvedBodyVisit,
 }
 
 impl<'a> SelectedTraceCall<'a> {
-    pub(super) const fn call(&self) -> &'a ResolvedFollowedCall {
+    pub(crate) const fn call(&self) -> &'a ResolvedFollowedCall {
         self.call
     }
 
-    pub(super) const fn caller(&self) -> &'a ResolvedBodyVisit {
+    pub(crate) const fn caller(&self) -> &'a ResolvedBodyVisit {
         self.caller
     }
 }
 
 /// An already-validated strict followed-call prefix for one endpoint.
 #[derive(Clone)]
-pub(super) struct SelectedTraceRoute<'a> {
+pub(crate) struct SelectedTraceRoute<'a> {
     calls: Vec<SelectedTraceCall<'a>>,
 }
 
 impl<'a> SelectedTraceRoute<'a> {
-    pub(super) fn calls(&self) -> impl ExactSizeIterator<Item = &SelectedTraceCall<'a>> {
+    pub(crate) fn calls(&self) -> impl ExactSizeIterator<Item = &SelectedTraceCall<'a>> {
         self.calls.iter()
     }
 
-    pub(super) fn validate_reuse(
+    pub(crate) fn validate_reuse(
         &self,
         endpoint: TraceRouteEndpoint<'_>,
     ) -> Result<(), TraceRouteError> {
@@ -120,20 +120,20 @@ impl<'a> SelectedTraceRoute<'a> {
 }
 
 /// Root-local indexes and path-safe caches for selecting proven call routes.
-pub(super) struct TraceRouteSelector<'a> {
+pub(crate) struct TraceRouteSelector<'a> {
     indexes: TraceRouteIndexes<'a>,
     call_selections: CallSelectionCache<'a>,
 }
 
 impl<'a> TraceRouteSelector<'a> {
-    pub(super) fn prepare<B>(traversal: &'a ResolvedRootProgramTraversal<B>) -> Self {
+    pub(crate) fn prepare<B>(traversal: &'a ResolvedRootProgramTraversal<B>) -> Self {
         Self {
             indexes: TraceRouteIndexes::new(traversal),
             call_selections: CallSelectionCache::new(traversal.followed_calls().len()),
         }
     }
 
-    pub(super) fn select_owner_body(
+    pub(crate) fn select_owner_body(
         &self,
         body: ScopedEntityRef,
         markers: &[ResolvedMarkerClaim],
@@ -142,7 +142,7 @@ impl<'a> TraceRouteSelector<'a> {
         self.indexes.select_owner_body(body, markers, trace)
     }
 
-    pub(super) fn select_terminal_caller(
+    pub(crate) fn select_terminal_caller(
         &self,
         occurrence: &ScopedEntityRef,
         owner: FunctionKey,
@@ -153,7 +153,7 @@ impl<'a> TraceRouteSelector<'a> {
             .select_caller_body(occurrence, owner, inherited_markers, trace)
     }
 
-    pub(super) fn select_route(
+    pub(crate) fn select_route(
         &mut self,
         endpoint: TraceRouteEndpoint<'_>,
     ) -> Result<SelectedTraceRoute<'a>, TraceRouteError> {

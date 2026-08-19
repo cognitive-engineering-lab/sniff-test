@@ -18,7 +18,7 @@ pub(crate) mod model;
 mod render;
 mod root_contract;
 pub(crate) mod rules;
-mod trace_route;
+pub(crate) mod trace_route;
 
 pub(crate) use call_ingress::PanicCallInputPack;
 pub(crate) use call_issues::{
@@ -52,7 +52,7 @@ pub(crate) use compiler_assert_trace::{
 pub(crate) use completeness::PanicCompletenessSemanticStep;
 pub(crate) use completeness::{
     PanicAnalysisIncompleteIssue, PanicCompletenessOutcome, PanicCompletenessPack,
-    PanicCompletenessReason, PanicIncompleteReason,
+    PanicCompletenessReason, PanicIncompleteReason, project_traversal_summary,
 };
 #[cfg(test)]
 pub(crate) use contract_index::EffectivePanicContractOrigin;

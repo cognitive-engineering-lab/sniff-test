@@ -22,7 +22,8 @@ use crate::analysis::facts::evaluation::{
 use crate::analysis::facts::pack::{AnalysisPack, AnalysisRegistry, PackRegistrationError};
 use crate::analysis::facts::program::root_traversal::{
     ProgramCallResolution, ReconciledCallTargetAuthority, ResolvedBodyVisit,
-    ResolvedCallSourceAnchor, ResolvedFollowedCall, ResolvedTraversalOutcome, TraversalOutcomeKind,
+    ResolvedCallSourceAnchor, ResolvedFollowedCall, ResolvedRootProgramTraversal,
+    ResolvedTraversalOutcome, TraversalOutcomeKind,
 };
 use crate::analysis::facts::program::topology::{
     CallKind, CallMacroExpansionEntity, CallOccurrenceEntity, CallSiteEntity, CallSourceAnchorRole,
@@ -559,6 +560,22 @@ fn project_summary(
             "panic completeness traversal root disagrees with its prepared inputs",
         ));
     }
+    project_traversal_summary(traversal, input, output)
+}
+
+/// Projects the domain-neutral root traversal completeness contract.
+///
+/// Safety and panic own distinct derived/issue schemas but share this strict
+/// traversal and presentation proof so their incomplete reasons cannot drift.
+#[allow(
+    clippy::too_many_lines,
+    reason = "one linear pass keeps selective outcome mapping and atomic summary construction auditable"
+)]
+pub(crate) fn project_traversal_summary<B>(
+    traversal: &ResolvedRootProgramTraversal<B>,
+    input: &EvaluationInput<'_>,
+    output: &EvaluationOutput<'_>,
+) -> Result<PanicCompletenessOutcome, RuleError> {
     for visit in traversal.body_visits() {
         validate_body_visit(visit, input, output)?;
     }
