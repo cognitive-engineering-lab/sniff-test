@@ -247,6 +247,7 @@ const fn legacy_safety_is_authoritative(kind: &InterpretedFindingKind) -> bool {
         | InterpretedFindingKind::AmbiguousPanicMarker { .. } => false,
         InterpretedFindingKind::MissingSafetyDocs
         | InterpretedFindingKind::SafetyCall { .. }
+        | InterpretedFindingKind::OpaqueSafetyBoundary { .. }
         | InterpretedFindingKind::UnsafeOperation { .. }
         | InterpretedFindingKind::AmbiguousSafetyRequirement { .. }
         | InterpretedFindingKind::AmbiguousSafetyMarker { .. } => true,
@@ -671,11 +672,11 @@ fn adapt_finding(
         (InterpretedFindingKind::SafetyCall { .. }, Some(target)) if target.function.is_none() => {
             Some(String::from("unsafe function pointer"))
         }
-        (InterpretedFindingKind::OpaquePanicBoundary { .. }, Some(target))
-            if target.function.is_none() =>
-        {
-            None
-        }
+        (
+            InterpretedFindingKind::OpaquePanicBoundary { .. }
+            | InterpretedFindingKind::OpaqueSafetyBoundary { .. },
+            Some(target),
+        ) if target.function.is_none() => None,
         (_, Some(target)) => Some(target.path.clone()),
         (_, None) => None,
     };
@@ -736,6 +737,10 @@ fn adapt_finding(
         trace,
         missing_requirements,
         requirements,
+        trusted_boundary: matches!(
+            finding.kind,
+            InterpretedFindingKind::SafetyCall { trusted: true, .. }
+        ),
         ..Finding::new(kind, reason, diagnostic)
     }
     .with_source_order(
@@ -788,6 +793,7 @@ fn public_function_path(finding: &InterpretedFinding) -> Option<String> {
             .or_else(|| Some(finding.function_path.clone())),
         InterpretedFindingKind::MissingSafetyDocs
         | InterpretedFindingKind::SafetyCall { .. }
+        | InterpretedFindingKind::OpaqueSafetyBoundary { .. }
         | InterpretedFindingKind::UnsafeOperation { .. }
         | InterpretedFindingKind::AmbiguousSafetyMarker { .. } => {
             Some(finding.function_path.clone())
@@ -868,7 +874,7 @@ fn finding_description(
                 finding.function_path
             ),
         ),
-        InterpretedFindingKind::SafetyCall { kind } => {
+        InterpretedFindingKind::SafetyCall { kind, .. } => {
             let target = target.unwrap_or("unsafe function pointer");
             let requirements_missing = !finding.missing_requirements.is_empty();
             match (kind, requirements_missing) {
@@ -909,6 +915,17 @@ fn finding_description(
                     ),
                 ),
             }
+        }
+        InterpretedFindingKind::OpaqueSafetyBoundary { description } => {
+            let boundary = opaque_boundary_summary(description, target).replace('`', "");
+            (
+                FindingKind::IndirectSafetyCallBoundary,
+                format!("{boundary} has unverifiable safety requirements"),
+                format!(
+                    "function `{}` reaches an indirect call whose safety requirements cannot be verified",
+                    root.path
+                ),
+            )
         }
         InterpretedFindingKind::UnsafeOperation { kind } => (
             FindingKind::UnsafeOpMissingJustification {
@@ -978,6 +995,7 @@ fn diagnostic_primary_span(
         InterpretedFindingKind::DocumentedPanic { .. }
         | InterpretedFindingKind::MissingSafetyDocs
         | InterpretedFindingKind::SafetyCall { .. }
+        | InterpretedFindingKind::OpaqueSafetyBoundary { .. }
         | InterpretedFindingKind::UnsafeOperation { .. }
         | InterpretedFindingKind::AmbiguousPanicRequirement { .. }
         | InterpretedFindingKind::AmbiguousSafetyRequirement { .. }
@@ -1090,7 +1108,33 @@ fn decorate_finding(
                     "document the caller obligations under a `# Safety` section",
                 )));
         }
-        InterpretedFindingKind::SafetyCall { kind } => {
+        InterpretedFindingKind::OpaqueSafetyBoundary { description } => {
+            let target = finding
+                .target
+                .as_ref()
+                .filter(|target| target.function.is_some())
+                .map(|target| target.path.as_str());
+            add_effect_note(
+                diagnostic,
+                effect_span,
+                format!(
+                    "safety requirements cannot be verified here: {}",
+                    opaque_boundary_summary(description, target)
+                ),
+            );
+            add_finding_trace_notes(
+                sources,
+                diagnostic,
+                root,
+                root_span,
+                finding,
+                show_full_stack_trace,
+            );
+            diagnostic.messages.push(DiagnosticMessage::Help(String::from(
+                "replace the indirect call with a documented concrete boundary, justify every possible target, or configure `indirect-call-boundary` under `[safety.lints]`",
+            )));
+        }
+        InterpretedFindingKind::SafetyCall { kind, .. } => {
             if matches!(kind, InterpretedSafetyCallKind::Obligation)
                 || !finding.requirements.is_empty()
             {
@@ -1618,26 +1662,33 @@ fn trace_destination(finding: &InterpretedFinding) -> String {
         InterpretedFindingKind::OpaquePanicBoundary { .. } => {
             String::from("a call whose panic behavior cannot be verified")
         }
+        InterpretedFindingKind::OpaqueSafetyBoundary { .. } => {
+            String::from("a call whose safety requirements cannot be verified")
+        }
         InterpretedFindingKind::MissingSafetyDocs => {
             String::from("a public unsafe function without `# Safety` documentation")
         }
         InterpretedFindingKind::SafetyCall {
             kind: InterpretedSafetyCallKind::Unsafe,
+            ..
         } if finding.missing_requirements.is_empty() => {
             String::from("an unsafe call without a `// SAFETY:` justification")
         }
         InterpretedFindingKind::SafetyCall {
             kind: InterpretedSafetyCallKind::Unsafe,
+            ..
         } => String::from(
             "an unsafe call whose documented `# Safety` requirements are not all satisfied",
         ),
         InterpretedFindingKind::SafetyCall {
             kind: InterpretedSafetyCallKind::Obligation,
+            ..
         } if finding.missing_requirements.is_empty() => {
             String::from("a call with `# Safety` documentation but no `// SAFETY:` justification")
         }
         InterpretedFindingKind::SafetyCall {
             kind: InterpretedSafetyCallKind::Obligation,
+            ..
         } => String::from("a call whose documented `# Safety` requirements are not all satisfied"),
         InterpretedFindingKind::UnsafeOperation { kind } => format!(
             "an unsafe operation ({}) without a `// SAFETY:` justification",
@@ -1955,6 +2006,7 @@ mod tests {
                 function,
                 InterpretedFindingKind::SafetyCall {
                     kind: InterpretedSafetyCallKind::Unsafe,
+                    trusted: false,
                 },
             ),
             legacy_finding(

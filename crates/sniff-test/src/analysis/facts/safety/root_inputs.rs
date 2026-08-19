@@ -616,7 +616,7 @@ const fn call_boundary(
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::{PreparedSafetyRootBatch, SafetyBoundary, SafetyRootRequest};
     use crate::analysis::cache::RustcArtifactId;
     use crate::analysis::facts::builder::{ArtifactDbBuilder, FactMeta};
@@ -669,7 +669,7 @@ mod tests {
         UnsatisfiedSafetyCallIssue, UnsatisfiedUnsafeOperationIssue,
     };
 
-    fn root_key() -> FunctionKey {
+    pub(crate) fn root_key() -> FunctionKey {
         FunctionKey::new(
             serde_json::from_str::<StableDefPathHash>("\"00000000000000010000000000000031\"")
                 .unwrap(),
@@ -677,7 +677,12 @@ mod tests {
         )
     }
 
-    fn root_artifact(
+    #[allow(
+        clippy::fn_params_excessive_bools,
+        clippy::too_many_lines,
+        reason = "the test fixture exposes independent traversal-policy switches in one canonical artifact"
+    )]
+    pub(crate) fn root_artifact(
         has_contract: bool,
         has_operation_marker: bool,
         call_marker: Option<bool>,
@@ -1259,7 +1264,7 @@ mod tests {
                     .context
                     .endpoint
                     .as_ref()
-                    .map(|endpoint| endpoint.as_row())
+                    .map(crate::analysis::facts::workspace::ScopedEntityRef::as_row)
                     .as_ref()
             );
         });
@@ -1348,7 +1353,9 @@ mod tests {
                 [issue]
                     if issue.data.description() == "opaque function pointer"
                         && issue.context.root == root
-                        && issue.context.source == issue.context.endpoint.as_ref().map(|row| row.as_row())
+                        && issue.context.source == issue.context.endpoint.as_ref().map(
+                            crate::analysis::facts::workspace::ScopedEntityRef::as_row
+                        )
             ));
         });
     }

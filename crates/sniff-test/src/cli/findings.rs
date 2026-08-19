@@ -38,6 +38,8 @@ pub(crate) struct Finding {
     pub(crate) missing_requirements: Vec<String>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub(crate) requirements: Vec<String>,
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub(crate) trusted_boundary: bool,
     #[serde(skip)]
     pub(crate) diagnostic: FindingDiagnostic,
     #[serde(skip)]
@@ -60,6 +62,7 @@ impl Finding {
             trace: Vec::new(),
             missing_requirements: Vec::new(),
             requirements: Vec::new(),
+            trusted_boundary: false,
             diagnostic,
             source_order: None,
             trace_order: Vec::new(),
@@ -140,7 +143,7 @@ pub(crate) fn resolve_findings(
     let mut resolved = findings
         .into_iter()
         .filter_map(|finding| {
-            let level = finding.kind.lint_level(config);
+            let level = finding.lint_level(config);
             (!level.is_allow()).then_some(ResolvedFinding { level, finding })
         })
         .collect::<Vec<_>>();
@@ -182,6 +185,7 @@ const fn finding_domain_order(kind: FindingKind) -> u8 {
         | FindingKind::AmbiguousSafetyRequirement
         | FindingKind::SafetyAnalysisIncomplete
         | FindingKind::MissingSafetyDocs
+        | FindingKind::IndirectSafetyCallBoundary
         | FindingKind::UnsafeCallMissingJustification
         | FindingKind::UnsafeCallMissingRequirements
         | FindingKind::UnsafeOpMissingJustification { .. }
@@ -238,6 +242,7 @@ pub(crate) enum FindingKind {
     EmptyReportRoots,
     MissingReportRoot,
     MissingSafetyDocs,
+    IndirectSafetyCallBoundary,
     UnsafeCallMissingJustification,
     UnsafeCallMissingRequirements,
     UnsafeOpMissingJustification {
@@ -267,6 +272,7 @@ impl FindingKind {
             Self::EmptyReportRoots => config.analysis.lints.empty_report_roots,
             Self::MissingReportRoot => config.analysis.lints.missing_report_root,
             Self::MissingSafetyDocs => config.safety.lints.missing_safety_docs,
+            Self::IndirectSafetyCallBoundary => config.safety.lints.indirect_call_boundary,
             Self::UnsafeCallMissingJustification => {
                 config.safety.lints.unsafe_call_missing_justification
             }
@@ -283,6 +289,25 @@ impl FindingKind {
             Self::SafetyObligationMissingRequirements => {
                 config.safety.lints.safety_obligation_missing_requirements
             }
+        }
+    }
+}
+
+impl Finding {
+    fn lint_level(&self, config: &SniffTestConfig) -> LintLevel {
+        let base = self.kind.lint_level(config);
+        if self.trusted_boundary
+            && matches!(
+                self.kind,
+                FindingKind::UnsafeCallMissingJustification
+                    | FindingKind::UnsafeCallMissingRequirements
+                    | FindingKind::SafetyObligationMissingJustification
+                    | FindingKind::SafetyObligationMissingRequirements
+            )
+        {
+            config.safety.lints.trusted_safety.unwrap_or(base)
+        } else {
+            base
         }
     }
 }
@@ -407,6 +432,27 @@ mod tests {
         assert_eq!(resolved.len(), 2);
         assert_eq!(resolved[0].level, LintLevel::Warn);
         assert_eq!(resolved[1].level, LintLevel::Deny);
+    }
+
+    #[test]
+    fn trusted_safety_override_preserves_precise_kind_and_controls_policy() {
+        let mut config = SniffTestConfig::default();
+        config.safety.lints.safety_obligation_missing_requirements = LintLevel::Deny;
+        config.safety.lints.trusted_safety = Some(LintLevel::Allow);
+        let mut trusted = finding(FindingKind::SafetyObligationMissingRequirements);
+        trusted.trusted_boundary = true;
+        let ordinary = finding(FindingKind::SafetyObligationMissingRequirements);
+
+        let resolved = resolve_findings(vec![trusted, ordinary], &config);
+        let [remaining] = resolved.as_slice() else {
+            panic!("only the ordinary safety obligation remains");
+        };
+        assert_eq!(
+            remaining.finding.kind,
+            FindingKind::SafetyObligationMissingRequirements
+        );
+        assert!(!remaining.finding.trusted_boundary);
+        assert_eq!(remaining.level, LintLevel::Deny);
     }
 
     #[test]

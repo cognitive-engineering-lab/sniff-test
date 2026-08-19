@@ -7,7 +7,7 @@ mod contract_index;
 mod evidence_issues;
 mod operation_issues;
 pub(crate) mod operations;
-mod root_inputs;
+pub(crate) mod root_inputs;
 mod root_issues;
 
 #[allow(
@@ -31,7 +31,7 @@ pub(crate) use completeness::{
     reason = "typed safety root preparation consumes the effective contract index next"
 )]
 pub(crate) use contract_index::{
-    EffectiveSafetyContract, WorkspaceEffectiveSafetyContracts,
+    EffectiveSafetyContract, EffectiveSafetyRequirement, WorkspaceEffectiveSafetyContracts,
     WorkspaceEffectiveSafetyContractsError,
 };
 #[allow(

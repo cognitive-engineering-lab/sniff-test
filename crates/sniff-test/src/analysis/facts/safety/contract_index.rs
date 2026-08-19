@@ -1456,7 +1456,8 @@ mod tests {
         let owner = callable_key(16, 1, None);
         let requirement = SafetyRequirement::new(owner, 0, "ready", "condition", None);
 
-        let mut orphan = artifact_with_requirements(&registry, owner, &[requirement.clone()]);
+        let mut orphan =
+            artifact_with_requirements(&registry, owner, std::slice::from_ref(&requirement));
         contract_metadata_mut(&mut orphan).requirements.clear();
         let (_, workspace, program) = workspace_and_program(&orphan, &registry, 16);
         assert!(matches!(

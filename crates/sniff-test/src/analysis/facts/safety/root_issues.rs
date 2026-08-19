@@ -14,7 +14,7 @@ use super::{
 };
 use crate::analysis::facts::evaluation::{
     EvaluationCx, EvaluationInput, EvaluationIssueContext, EvaluationOutput, EvaluationRule,
-    RuleDescriptor, RuleError,
+    RelationTrace, RuleDescriptor, RuleError,
 };
 use crate::analysis::facts::pack::{AnalysisPack, AnalysisRegistry, PackRegistrationError};
 use crate::analysis::facts::program::root_traversal::ResolvedBodyBoundary;
@@ -184,33 +184,19 @@ fn missing_docs_context(
             "missing safety-docs root callable changed after preparation",
         ));
     }
-    let mut root_visits = inputs
-        .traversal()
-        .body_visits()
-        .iter()
-        .filter(|visit| visit.body().erase() == inputs.root().entity);
-    let visit = root_visits
-        .next()
-        .ok_or_else(|| RuleError::failed("missing safety-docs root has no expanded body visit"))?;
-    if root_visits.next().is_some()
-        || visit.order() != 0
-        || visit.trace().root() != &inputs.root().entity
-        || visit.trace().target() != &inputs.root().entity
-        || !visit.trace().relations().is_empty()
-    {
-        return Err(RuleError::failed(
-            "missing safety-docs root does not retain one exact empty body witness",
-        ));
-    }
-    let body = input.artifact_entity_at::<FunctionEntity>(&visit.body().erase())?;
-    if body != *visit.data() || body.key() != callable.key() {
+    let body = input.artifact_entity_at::<FunctionEntity>(&inputs.root().entity)?;
+    if body.key() != callable.key() {
         return Err(RuleError::failed(
             "missing safety-docs function and callable identities disagree",
         ));
     }
     Ok(EvaluationIssueContext::new(inputs.root().clone())
-        .with_endpoint(visit.body().erase())
-        .with_trace(visit.trace().clone()))
+        .with_endpoint(inputs.root().entity.clone())
+        .with_trace(RelationTrace::new(
+            inputs.root().entity.clone(),
+            inputs.root().entity.clone(),
+            Vec::new(),
+        )))
 }
 
 fn root_contract_boundary(

@@ -361,15 +361,39 @@ pub(crate) enum InterpretedSafetyCallKind {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum InterpretedFindingKind {
     PanicSink,
-    DocumentedPanic { trusted: bool },
-    OpaquePanicBoundary { description: String },
+    DocumentedPanic {
+        trusted: bool,
+    },
+    OpaquePanicBoundary {
+        description: String,
+    },
     MissingSafetyDocs,
-    SafetyCall { kind: InterpretedSafetyCallKind },
-    UnsafeOperation { kind: SafetyOpKind },
-    AmbiguousPanicRequirement { normalized_name: String },
-    AmbiguousSafetyRequirement { normalized_name: String },
-    AmbiguousPanicMarker { effect_count: usize },
-    AmbiguousSafetyMarker { effect_count: usize },
+    SafetyCall {
+        kind: InterpretedSafetyCallKind,
+        trusted: bool,
+    },
+    #[allow(
+        dead_code,
+        reason = "the typed safety authority begins emitting this boundary in the cutover slice"
+    )]
+    OpaqueSafetyBoundary {
+        description: String,
+    },
+    UnsafeOperation {
+        kind: SafetyOpKind,
+    },
+    AmbiguousPanicRequirement {
+        normalized_name: String,
+    },
+    AmbiguousSafetyRequirement {
+        normalized_name: String,
+    },
+    AmbiguousPanicMarker {
+        effect_count: usize,
+    },
+    AmbiguousSafetyMarker {
+        effect_count: usize,
+    },
 }
 
 /// Interprets only graph portions reachable from the supplied workspace roots.
@@ -1423,7 +1447,11 @@ impl<'a> DomainInterpreter<'a> {
         );
     }
 
-    #[allow(clippy::too_many_arguments)]
+    #[allow(
+        clippy::too_many_arguments,
+        clippy::too_many_lines,
+        reason = "the safety-boundary policy and trust provenance stay visible as one ordered decision table"
+    )]
     fn interpret_safety_call(
         &mut self,
         body: &FunctionBodyIr,
@@ -1459,6 +1487,10 @@ impl<'a> DomainInterpreter<'a> {
             if inside_builtin_unsafe {
                 return;
             }
+            let trusted = self
+                .config
+                .safety
+                .trusts_safety_boundary_candidates(&metadata.attributes.namespace_candidates);
             self.record_ambiguous_requirements(
                 body,
                 body_scope,
@@ -1475,6 +1507,7 @@ impl<'a> DomainInterpreter<'a> {
                     target,
                     InterpretedFindingKind::SafetyCall {
                         kind: InterpretedSafetyCallKind::Unsafe,
+                        trusted,
                     },
                     &contract.requirements,
                     satisfactions,
@@ -1489,6 +1522,7 @@ impl<'a> DomainInterpreter<'a> {
                     target,
                     InterpretedFindingKind::SafetyCall {
                         kind: InterpretedSafetyCallKind::Obligation,
+                        trusted,
                     },
                     &contract.requirements,
                     satisfactions,
@@ -1514,6 +1548,7 @@ impl<'a> DomainInterpreter<'a> {
                 target,
                 InterpretedFindingKind::SafetyCall {
                     kind: InterpretedSafetyCallKind::Unsafe,
+                    trusted: false,
                 },
                 &[],
                 satisfactions,
@@ -2215,6 +2250,7 @@ enum FindingClass {
     OpaquePanicBoundary,
     MissingSafetyDocs,
     SafetyCall(InterpretedSafetyCallKind),
+    OpaqueSafetyBoundary,
     UnsafeOperation,
     AmbiguousPanicRequirement,
     AmbiguousSafetyRequirement,
@@ -2229,7 +2265,8 @@ impl FindingClass {
             InterpretedFindingKind::DocumentedPanic { trusted } => Self::DocumentedPanic(*trusted),
             InterpretedFindingKind::OpaquePanicBoundary { .. } => Self::OpaquePanicBoundary,
             InterpretedFindingKind::MissingSafetyDocs => Self::MissingSafetyDocs,
-            InterpretedFindingKind::SafetyCall { kind } => Self::SafetyCall(*kind),
+            InterpretedFindingKind::SafetyCall { kind, .. } => Self::SafetyCall(*kind),
+            InterpretedFindingKind::OpaqueSafetyBoundary { .. } => Self::OpaqueSafetyBoundary,
             InterpretedFindingKind::UnsafeOperation { .. } => Self::UnsafeOperation,
             InterpretedFindingKind::AmbiguousPanicRequirement { .. } => {
                 Self::AmbiguousPanicRequirement
@@ -3578,7 +3615,8 @@ mod tests {
                 matches!(
                     finding.kind,
                     InterpretedFindingKind::SafetyCall {
-                        kind: InterpretedSafetyCallKind::Unsafe
+                        kind: InterpretedSafetyCallKind::Unsafe,
+                        ..
                     }
                 )
             })
@@ -4045,7 +4083,8 @@ mod tests {
         assert!(kinds.iter().any(|kind| matches!(
             kind,
             InterpretedFindingKind::SafetyCall {
-                kind: InterpretedSafetyCallKind::Unsafe
+                kind: InterpretedSafetyCallKind::Unsafe,
+                ..
             }
         )));
     }
@@ -4095,7 +4134,8 @@ mod tests {
         assert!(root.findings.iter().any(|finding| matches!(
             finding.kind,
             InterpretedFindingKind::SafetyCall {
-                kind: InterpretedSafetyCallKind::Unsafe
+                kind: InterpretedSafetyCallKind::Unsafe,
+                ..
             }
         )));
         assert!(root.completeness.panic.complete);
@@ -4562,6 +4602,7 @@ mod tests {
             .filter_map(|finding| match finding.kind {
                 InterpretedFindingKind::SafetyCall {
                     kind: InterpretedSafetyCallKind::Obligation,
+                    ..
                 } => Some(finding.missing_requirements[0].name.as_str()),
                 _ => None,
             })

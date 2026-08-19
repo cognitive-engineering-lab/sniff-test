@@ -26,7 +26,7 @@ use crate::analysis::facts::human::markers::MarkerOccurrenceHasClaim;
 use crate::analysis::facts::human::markers::{
     CallOccurrenceHasMarkerClaimCandidate, EffectSiteHasMarkerClaimCandidate,
     FunctionHasMarkerClaimCandidate, MarkerClaimEntity, MarkerOccurrenceEntity,
-    MarkerOccurrenceHasSourceAnchor,
+    MarkerOccurrenceHasSourceAnchor, UnsafeOperationHasMarkerClaimCandidate,
 };
 use crate::analysis::facts::pack::{AnalysisRegistry, PackRegistrationError};
 use crate::analysis::facts::panic::model::{MirAssertFact, UnsatisfiedCompilerAssertIssue};
@@ -57,6 +57,7 @@ use crate::analysis::facts::program::workspace_index::WorkspaceProgramIndexError
 use crate::analysis::facts::program::{
     EffectSiteEntity, EffectSiteKey, FunctionEntity, FunctionKey, SourceAnchorEntity,
 };
+use crate::analysis::facts::safety::operations::UnsafeOperationEntity;
 use crate::analysis::facts::schema::{PassId, RowSchema};
 use crate::analysis::facts::workspace::{
     ArtifactScopeId, ScopedEntityRef, ScopedRowRef, WorkspaceFactView,
@@ -1638,7 +1639,11 @@ fn ambiguity_witness<'a>(
     Ok(witness)
 }
 
-fn marker_owner_from_activation(
+#[allow(
+    clippy::too_many_lines,
+    reason = "the exhaustive final-relation dispatch keeps every supported marker owner explicit"
+)]
+pub(super) fn marker_owner_from_activation(
     root: &EvaluationRoot,
     evaluation: &WorkspaceEvaluationView<'_>,
     claim: &ScopedEntityRef,
@@ -1718,6 +1723,25 @@ fn marker_owner_from_activation(
                     )
                 })?
         }
+        UnsafeOperationHasMarkerClaimCandidate::ID => {
+            let operation = evaluation
+                .facts()
+                .entity::<UnsafeOperationEntity>(&final_relation.from)
+                .map_err(|source| invalid("marker owner", source.to_string()))?;
+            evaluation
+                .facts()
+                .entity_by_key::<FunctionEntity>(
+                    final_relation.from.scope(),
+                    operation.key().owner(),
+                )
+                .map_err(|source| invalid("marker owner", source.to_string()))?
+                .ok_or_else(|| {
+                    invalid(
+                        "marker owner",
+                        "unsafe-operation candidate has no exact owning function entity",
+                    )
+                })?
+        }
         schema => {
             return Err(invalid(
                 "marker activation",
@@ -1732,7 +1756,7 @@ fn marker_owner_from_activation(
     Ok((owner, data))
 }
 
-fn physical_marker_source(
+pub(super) fn physical_marker_source(
     evaluation: &WorkspaceEvaluationView<'_>,
     marker: &ScopedEntityRef,
 ) -> Result<SourceRangeIr, TypedPanicCallEvaluationError> {
@@ -2993,7 +3017,7 @@ fn requirement_name_normalized(name: &str) -> String {
     crate::contracts::normalize_requirement_name(name)
 }
 
-fn function_id(function: FunctionKey) -> FunctionId {
+pub(super) fn function_id(function: FunctionKey) -> FunctionId {
     function.instance().map_or_else(
         || FunctionId::generic(function.definition()),
         |instance| FunctionId::exact(function.definition(), instance),
@@ -3791,7 +3815,7 @@ fn semantic_target(node: &PanicCallTraceNode) -> (Option<FunctionId>, String) {
     )
 }
 
-const fn call_edge_kind(kind: CallKind) -> CallEdgeKindIr {
+pub(super) const fn call_edge_kind(kind: CallKind) -> CallEdgeKindIr {
     match kind {
         CallKind::DirectCall => CallEdgeKindIr::DirectCall,
         CallKind::TailCall => CallEdgeKindIr::TailCall,
@@ -3946,4 +3970,4 @@ fn evaluate_typed_panic_call_with_ambiguity_corruption(
 }
 
 #[cfg(test)]
-mod tests;
+pub(super) mod tests;

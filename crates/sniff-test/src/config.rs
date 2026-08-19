@@ -509,6 +509,9 @@ pub struct SafetyConfig {
 #[serde(rename_all = "kebab-case", deny_unknown_fields, default)]
 pub struct SafetyLintConfig {
     pub missing_safety_docs: LintLevel,
+    pub indirect_call_boundary: LintLevel,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub trusted_safety: Option<LintLevel>,
     pub unsafe_call_missing_justification: LintLevel,
     pub unsafe_call_missing_requirements: LintLevel,
     pub unsafe_op_missing_justification: LintLevel,
@@ -542,6 +545,8 @@ impl Default for SafetyLintConfig {
     fn default() -> Self {
         Self {
             missing_safety_docs: LintLevel::Warn,
+            indirect_call_boundary: LintLevel::Warn,
+            trusted_safety: None,
             unsafe_call_missing_justification: LintLevel::Warn,
             unsafe_call_missing_requirements: LintLevel::Warn,
             unsafe_op_missing_justification: LintLevel::Warn,
@@ -922,6 +927,21 @@ mod tests {
             parsed.analysis.marker_probing,
             MarkerProbing::SourceCallsite
         );
+    }
+
+    #[test]
+    fn parses_symmetric_safety_boundary_lints() {
+        let parsed = SniffTestConfig::from_manifest_str(
+            r#"
+                [safety.lints]
+                trusted-safety = "allow"
+                indirect-call-boundary = "deny"
+            "#,
+        )
+        .expect("safety boundary lint controls should parse");
+
+        assert_eq!(parsed.safety.lints.trusted_safety, Some(LintLevel::Allow));
+        assert_eq!(parsed.safety.lints.indirect_call_boundary, LintLevel::Deny);
     }
 
     #[test]

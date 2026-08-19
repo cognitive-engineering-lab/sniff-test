@@ -2271,7 +2271,7 @@ fn definition(local: u64) -> StableDefPathHash {
         .expect("valid stable definition hash")
 }
 
-fn function(local: u64) -> FunctionId {
+pub(in crate::cli::driver) fn function(local: u64) -> FunctionId {
     FunctionId::generic(definition(local))
 }
 
@@ -2289,7 +2289,7 @@ fn key(function: FunctionId) -> FunctionKey {
     FunctionKey::new(function.def_path_hash, function.instance_hash)
 }
 
-fn root(function: FunctionId) -> InterpretationRoot {
+pub(in crate::cli::driver) fn root(function: FunctionId) -> InterpretationRoot {
     InterpretationRoot {
         function,
         path: String::from("fixture::root"),
@@ -2457,7 +2457,7 @@ fn sink_artifact(
     collect_artifact_facts(&artifact).expect("permanent call fact collection succeeds")
 }
 
-fn root_preparation_artifact(
+pub(in crate::cli::driver) fn root_preparation_artifact(
     functions: &[FunctionId],
 ) -> crate::analysis::facts::encoded::ArtifactFactIr {
     let callables = functions
