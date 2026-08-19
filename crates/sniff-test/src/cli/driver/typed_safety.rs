@@ -25,26 +25,26 @@ use crate::analysis::facts::panic::PanicIncompleteReason;
 use crate::analysis::facts::panic::trace_route::{
     SelectedTraceRoute, TraceRouteEndpoint, TraceRouteSelector,
 };
-use crate::analysis::facts::program::FunctionKey;
 use crate::analysis::facts::program::root_traversal::{
     MarkerProbe, ResolvedBodyVisit, ResolvedCallBoundary, ResolvedCallMacroCallsite,
     ResolvedCallMacroFrame, ResolvedCallSourceAnchor, ResolvedFollowedCall, ResolvedMarkerClaim,
     ResolvedUnsafeOperationMacroCallsite, ResolvedUnsafeOperationMacroFrame,
-    ResolvedUnsafeOperationSourceAnchor, ResolvedUnsafeOperationVisit,
+    ResolvedUnsafeOperationSourceAnchor, ResolvedUnsafeOperationVisit, RootProgramTraversalError,
 };
 use crate::analysis::facts::program::topology::{
     CallAttributionRole, CallKind, CallSourceAnchorRole,
 };
+use crate::analysis::facts::program::{FunctionEntity, FunctionKey};
 use crate::analysis::facts::safety::{
     DuplicateSafetyCallRequirementIssue, DuplicateSafetyRootRequirementIssue,
     IndirectSafetyCallBoundaryIssue, MissingSafetyDocsIssue, PreparedSafetyRootBatch,
     SafetyAnalysisIncompleteIssue, SafetyBoundary, SafetyCallIssueKind, SafetyCallIssuePack,
     SafetyCompletenessOutcome, SafetyCompletenessPack, SafetyEvidenceUsePack,
-    SafetyOperationIssuePack, SafetyRootInputs, SafetyRootIssuePack, SafetyRootRequest,
-    UnsatisfiedSafetyCallIssue, UnsatisfiedUnsafeOperationIssue,
+    SafetyOperationIssuePack, SafetyRootInputError, SafetyRootInputs, SafetyRootIssuePack,
+    SafetyRootRequest, UnsatisfiedSafetyCallIssue, UnsatisfiedUnsafeOperationIssue, safety_domain,
 };
-use crate::analysis::facts::schema::{EntitySchema, PassId};
-use crate::analysis::facts::workspace::{ScopedEntityRef, ScopedRowRef};
+use crate::analysis::facts::schema::{EntitySchema, PassId, RowSchema};
+use crate::analysis::facts::workspace::{ArtifactScopeId, ScopedEntityRef, ScopedRowRef};
 use crate::analysis::interpret::InterpretationRoot;
 use crate::analysis::interpret::{
     InterpretedFinding, InterpretedFindingKind, InterpretedSafetyCallKind, InterpretedTarget,
@@ -57,6 +57,9 @@ use crate::analysis::workspace_closure::{ManagedArtifactManifest, VerifiedWorksp
 use crate::config::{CallableEdgeAttribution, MarkerProbing, SniffTestConfig};
 use crate::contracts::normalize_requirement_name;
 
+use super::interpretation::{
+    FindingSources, adapt_typed_panic_call_finding, adapt_typed_safety_incomplete_finding,
+};
 use super::typed_panic::{
     FunctionPresentationIndex, TypedPanicLocalArtifact, open_typed_artifacts,
     permanent_source_files, source_range,
@@ -64,6 +67,7 @@ use super::typed_panic::{
 use super::typed_panic_call::{
     call_edge_kind, function_id, marker_owner_from_activation, physical_marker_source,
 };
+use crate::cli::findings::Finding;
 
 #[derive(Debug)]
 pub(super) enum TypedSafetyEvaluationError {
@@ -152,8 +156,59 @@ pub(super) struct TypedSafetyRootReport {
 
 #[derive(Clone, Debug)]
 pub(super) struct TypedSafetyBatchReport {
+    prepared_root_bindings: Vec<TypedSafetyPreparedRootBinding>,
+    pub(super) root_preparations: Vec<TypedSafetyRootPreparationReport>,
     pub(super) roots: Vec<TypedSafetyRootReport>,
     pub(super) source_files: Vec<SourceFileIr>,
+    pub(super) function_ranges: BTreeMap<FunctionId, SourceRangeIr>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct TypedSafetyPreparedRootBinding {
+    root: EvaluationRoot,
+    selected_function: FunctionKey,
+    selected_path: String,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(super) struct TypedSafetyRootPreparationReport {
+    pub(super) request_ordinal: usize,
+    pub(super) request: InterpretationRoot,
+    pub(super) expected_scope: ArtifactScopeId,
+    pub(super) requested_function: FunctionKey,
+    pub(super) outcome: TypedSafetyRootPreparationOutcome,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(super) enum TypedSafetyRootPreparationOutcome {
+    Evaluatable {
+        report_index: usize,
+        root: EvaluationRoot,
+        selected_function: FunctionKey,
+    },
+    Missing {
+        reason: crate::analysis::interpret::IncompleteReason,
+    },
+}
+
+#[derive(Debug)]
+struct PendingSafetyRootPreparation {
+    request_ordinal: usize,
+    request: InterpretationRoot,
+    expected_scope: ArtifactScopeId,
+    requested_function: FunctionKey,
+    outcome: PendingSafetyRootPreparationOutcome,
+}
+
+#[derive(Debug)]
+enum PendingSafetyRootPreparationOutcome {
+    Evaluatable {
+        report_index: usize,
+        selected_function: FunctionKey,
+    },
+    Missing {
+        reason: crate::analysis::interpret::IncompleteReason,
+    },
 }
 
 fn typed_safety_authority_registry()
@@ -183,6 +238,15 @@ pub(super) fn evaluate_typed_safety_roots(
     roots: &[InterpretationRoot],
     config: &SniffTestConfig,
 ) -> Result<TypedSafetyBatchReport, TypedSafetyEvaluationError> {
+    if roots.is_empty() {
+        return Ok(TypedSafetyBatchReport {
+            prepared_root_bindings: Vec::new(),
+            root_preparations: Vec::new(),
+            roots: Vec::new(),
+            source_files: Vec::new(),
+            function_ranges: BTreeMap::new(),
+        });
+    }
     let registry = typed_safety_authority_registry()
         .map_err(|source| TypedSafetyEvaluationError::Registration(Box::new(source)))?;
     let opened = open_typed_artifacts(local, dependencies, &registry)
@@ -198,31 +262,161 @@ pub(super) fn evaluate_typed_safety_roots(
         active_runtime_artifacts.iter().cloned(),
     )
     .map_err(|source| stage("workspace closure", source))?;
-    let requests = roots
-        .iter()
-        .map(|root| safety_root_request(root, config))
-        .collect::<Vec<_>>();
-    let prepared = PreparedSafetyRootBatch::prepare(
-        &workspace,
-        &closure,
-        &config.safety,
-        &config.documentation.overrides,
-        requests,
-    )
-    .map_err(|source| stage("root preparation", source))?
-    .into_roots();
-    if prepared.len() != roots.len() {
+    let expected_scope = closure.root_scope().clone();
+    closure
+        .program()
+        .validate_workspace(&workspace)
+        .map_err(|source| stage("root preparation", source))?;
+    let local_stable_crate_id = closure
+        .program()
+        .stable_crate_id(&expected_scope)
+        .map_err(|source| stage("root preparation", source))?;
+    let mut pending = Vec::with_capacity(roots.len());
+    let mut ready_ordinals = Vec::with_capacity(roots.len());
+    let mut ready_requests = Vec::with_capacity(roots.len());
+    for (request_ordinal, request) in roots.iter().enumerate() {
+        let requested_function = FunctionKey::new(
+            request.function.def_path_hash,
+            request.function.instance_hash,
+        );
+        if requested_function.definition().stable_crate_id() != local_stable_crate_id {
+            return Err(invalid(
+                "root preparation",
+                format!(
+                    "request {request_ordinal} names a foreign stable crate instead of {local_stable_crate_id:016x}"
+                ),
+            ));
+        }
+        let candidates = closure
+            .program()
+            .body_candidates(&expected_scope, &requested_function)
+            .map_err(|source| stage("root preparation", source))?;
+        let outcome = if let Some(selected) = candidates.first() {
+            let report_index = ready_requests.len();
+            ready_ordinals.push(request_ordinal);
+            ready_requests.push(safety_root_request(request, config));
+            PendingSafetyRootPreparationOutcome::Evaluatable {
+                report_index,
+                selected_function: *selected.body().data().key(),
+            }
+        } else {
+            PendingSafetyRootPreparationOutcome::Missing {
+                reason: crate::analysis::interpret::IncompleteReason::MissingBody {
+                    function: request.function,
+                    path: request.path.clone(),
+                    source_range: None,
+                    trace: InterpretedTrace { steps: Vec::new() },
+                },
+            }
+        };
+        pending.push(PendingSafetyRootPreparation {
+            request_ordinal,
+            request: request.clone(),
+            expected_scope: expected_scope.clone(),
+            requested_function,
+            outcome,
+        });
+    }
+    let prepared = if ready_requests.is_empty() {
+        let probe = safety_root_request(&pending[0].request, config);
+        match PreparedSafetyRootBatch::prepare(
+            &workspace,
+            &closure,
+            &config.safety,
+            &config.documentation.overrides,
+            [probe],
+        ) {
+            Err(SafetyRootInputError::Traversal(source))
+                if matches!(
+                    source.as_ref(),
+                    RootProgramTraversalError::UnknownRoot { scope, function }
+                        if scope == &expected_scope && function == &pending[0].requested_function
+                ) =>
+            {
+                Vec::new()
+            }
+            Err(source) => return Err(stage("root preparation", source)),
+            Ok(_) => {
+                return Err(invalid(
+                    "root preparation",
+                    "the all-missing validation probe unexpectedly resolved",
+                ));
+            }
+        }
+    } else {
+        PreparedSafetyRootBatch::prepare(
+            &workspace,
+            &closure,
+            &config.safety,
+            &config.documentation.overrides,
+            ready_requests,
+        )
+        .map_err(|source| stage("root preparation", source))?
+        .into_roots()
+    };
+    if prepared.len() != ready_ordinals.len() {
         return Err(TypedSafetyEvaluationError::PreparedRootCount {
-            expected: roots.len(),
+            expected: ready_ordinals.len(),
             actual: prepared.len(),
         });
     }
+    let mut prepared_root_bindings = Vec::with_capacity(prepared.len());
+    for (report_index, root) in prepared.iter().enumerate() {
+        let request_ordinal = ready_ordinals[report_index];
+        let PendingSafetyRootPreparationOutcome::Evaluatable {
+            selected_function, ..
+        } = pending[request_ordinal].outcome
+        else {
+            unreachable!("ready ordinals refer only to evaluatable safety roots");
+        };
+        let selected = workspace
+            .entity::<FunctionEntity>(&root.root().entity)
+            .map_err(|source| stage("root preparation", source))?;
+        if *selected.key() != selected_function {
+            return Err(invalid(
+                "root preparation",
+                "core safety preparation selected a different body than the first candidate",
+            ));
+        }
+        prepared_root_bindings.push(TypedSafetyPreparedRootBinding {
+            root: root.root().clone(),
+            selected_function,
+            selected_path: selected.display_path().to_owned(),
+        });
+    }
+    let root_preparations = pending
+        .into_iter()
+        .map(|preparation| {
+            let outcome = match preparation.outcome {
+                PendingSafetyRootPreparationOutcome::Evaluatable {
+                    report_index,
+                    selected_function,
+                } => TypedSafetyRootPreparationOutcome::Evaluatable {
+                    report_index,
+                    root: prepared[report_index].root().clone(),
+                    selected_function,
+                },
+                PendingSafetyRootPreparationOutcome::Missing { reason } => {
+                    TypedSafetyRootPreparationOutcome::Missing { reason }
+                }
+            };
+            TypedSafetyRootPreparationReport {
+                request_ordinal: preparation.request_ordinal,
+                request: preparation.request,
+                expected_scope: preparation.expected_scope,
+                requested_function: preparation.requested_function,
+                outcome,
+            }
+        })
+        .collect::<Vec<_>>();
     let relation_index = WorkspaceRelationIndex::open(&workspace)
         .map_err(|source| stage("relation indexing", source))?;
     let presentation_anchors = FunctionPresentationIndex::build(&workspace)
         .map_err(|source| stage("presentation", source))?;
-    let mut reports = Vec::with_capacity(roots.len());
-    for (prepared, request) in prepared.into_iter().zip(roots) {
+    let function_ranges = presentation_anchors.function_ranges();
+    let mut reports = Vec::with_capacity(prepared.len());
+    for (prepared, request_ordinal) in prepared.into_iter().zip(ready_ordinals) {
+        let request = &roots[request_ordinal];
         let root = prepared.root().clone();
         let mut relation_builder =
             CompositionRelationBuilder::new(&root, &workspace, registry.composition_relations())
@@ -285,8 +479,229 @@ pub(super) fn evaluate_typed_safety_roots(
         reports.push(report);
     }
     Ok(TypedSafetyBatchReport {
+        prepared_root_bindings,
+        root_preparations,
         roots: reports,
         source_files,
+        function_ranges,
+    })
+}
+
+struct TypedSafetyBatchPreflight {
+    ready_roots: Vec<InterpretationRoot>,
+    findings: Vec<Vec<InterpretedFinding>>,
+    incomplete: Vec<Vec<crate::analysis::interpret::IncompleteReason>>,
+}
+
+/// Adapts the complete typed-safety authority only after one source-free
+/// validation pass over the sparse preparation mapping and every issue lane.
+pub(super) fn adapt_typed_safety_authority_batch(
+    sources: &impl FindingSources,
+    batch: &TypedSafetyBatchReport,
+    roots: &[InterpretationRoot],
+    show_full_stack_trace: bool,
+) -> Result<Vec<Finding>, TypedSafetyEvaluationError> {
+    let preflight = preflight_typed_safety_batch(batch, roots)?;
+    let capacity = preflight.findings.iter().map(Vec::len).sum::<usize>()
+        + preflight.incomplete.iter().map(Vec::len).sum::<usize>()
+        + batch
+            .root_preparations
+            .iter()
+            .filter(|preparation| {
+                matches!(
+                    preparation.outcome,
+                    TypedSafetyRootPreparationOutcome::Missing { .. }
+                )
+            })
+            .count();
+    let mut findings = Vec::with_capacity(capacity);
+    for (report_index, root) in preflight.ready_roots.iter().enumerate() {
+        findings.extend(preflight.findings[report_index].iter().map(|finding| {
+            adapt_typed_panic_call_finding(sources, root, finding, show_full_stack_trace)
+        }));
+    }
+    let mut ready_index = 0;
+    for preparation in &batch.root_preparations {
+        match &preparation.outcome {
+            TypedSafetyRootPreparationOutcome::Evaluatable { report_index, .. } => {
+                if *report_index != ready_index {
+                    unreachable!("preflight proved dense safety report indices");
+                }
+                for reason in &preflight.incomplete[ready_index] {
+                    findings.push(adapt_typed_safety_incomplete_finding(
+                        sources,
+                        &preparation.request,
+                        reason.clone(),
+                        show_full_stack_trace,
+                    ));
+                }
+                ready_index += 1;
+            }
+            TypedSafetyRootPreparationOutcome::Missing { reason } => {
+                findings.push(adapt_typed_safety_incomplete_finding(
+                    sources,
+                    &preparation.request,
+                    reason.clone(),
+                    show_full_stack_trace,
+                ));
+            }
+        }
+    }
+    Ok(findings)
+}
+
+#[allow(
+    clippy::too_many_lines,
+    reason = "one source-free preflight keeps sparse preparation and all safety lanes atomic"
+)]
+fn preflight_typed_safety_batch(
+    batch: &TypedSafetyBatchReport,
+    roots: &[InterpretationRoot],
+) -> Result<TypedSafetyBatchPreflight, TypedSafetyEvaluationError> {
+    if batch.root_preparations.len() != roots.len() {
+        return Err(invalid(
+            "root preparation batch",
+            "preparation count differs from requested roots",
+        ));
+    }
+    let mut expected_scope = None;
+    let mut ready_roots = Vec::new();
+    let mut ready_preparations = Vec::new();
+    for (ordinal, (preparation, request)) in batch.root_preparations.iter().zip(roots).enumerate() {
+        let requested_function = FunctionKey::new(
+            request.function.def_path_hash,
+            request.function.instance_hash,
+        );
+        if preparation.request_ordinal != ordinal
+            || preparation.request != *request
+            || preparation.requested_function != requested_function
+        {
+            return Err(invalid(
+                "root preparation report",
+                format!("preparation {ordinal} does not match its request"),
+            ));
+        }
+        if expected_scope
+            .as_ref()
+            .is_some_and(|scope| scope != &preparation.expected_scope)
+        {
+            return Err(invalid(
+                "root preparation report",
+                "preparations disagree about the local scope",
+            ));
+        }
+        expected_scope.get_or_insert_with(|| preparation.expected_scope.clone());
+        match &preparation.outcome {
+            TypedSafetyRootPreparationOutcome::Evaluatable {
+                report_index,
+                root,
+                selected_function,
+            } => {
+                if *report_index != ready_roots.len() {
+                    return Err(invalid(
+                        "root preparation report",
+                        "ready report indices are not dense",
+                    ));
+                }
+                let binding = batch
+                    .prepared_root_bindings
+                    .get(*report_index)
+                    .ok_or_else(|| {
+                        invalid(
+                            "root preparation report",
+                            "ready preparation has no producer binding",
+                        )
+                    })?;
+                if root.domain != safety_domain()
+                    || root.entity.entity().schema.as_str() != FunctionEntity::ID
+                    || root.entity.scope() != &preparation.expected_scope
+                    || binding.root != *root
+                    || binding.selected_function != *selected_function
+                {
+                    return Err(invalid(
+                        "root preparation report",
+                        "prepared root or producer binding changed",
+                    ));
+                }
+                ready_roots.push(request.clone());
+                ready_preparations.push(preparation);
+            }
+            TypedSafetyRootPreparationOutcome::Missing { reason } => {
+                let expected = crate::analysis::interpret::IncompleteReason::MissingBody {
+                    function: request.function,
+                    path: request.path.clone(),
+                    source_range: None,
+                    trace: InterpretedTrace { steps: Vec::new() },
+                };
+                if reason != &expected {
+                    return Err(invalid(
+                        "root preparation report",
+                        "missing root contains fabricated evidence",
+                    ));
+                }
+            }
+        }
+    }
+    if batch.prepared_root_bindings.len() != ready_roots.len()
+        || batch.roots.len() != ready_roots.len()
+    {
+        return Err(invalid(
+            "safety report batch",
+            "ready reports or producer bindings are not dense",
+        ));
+    }
+    let mut findings = Vec::with_capacity(batch.roots.len());
+    let mut incomplete = Vec::with_capacity(batch.roots.len());
+    for (index, ((report, request), preparation)) in batch
+        .roots
+        .iter()
+        .zip(&ready_roots)
+        .zip(ready_preparations)
+        .enumerate()
+    {
+        let TypedSafetyRootPreparationOutcome::Evaluatable { root, .. } = &preparation.outcome
+        else {
+            unreachable!("ready safety preparations are evaluatable");
+        };
+        let binding = &batch.prepared_root_bindings[index];
+        if report.request != *request
+            || report.root != *root
+            || report.inputs.root() != root
+            || function_id(binding.selected_function)
+                != function_id(*report.inputs.root_callable_data().key())
+            || binding.selected_path != report.inputs.root_callable_data().display_path()
+        {
+            return Err(invalid(
+                "safety root report",
+                format!("ready report {index} changed its prepared root binding"),
+            ));
+        }
+        let mut root_findings = project_safety_root_findings(report)?;
+        root_findings.extend(project_unsafe_operation_findings(report)?);
+        root_findings.extend(project_safety_call_findings(report)?);
+        root_findings.extend(project_duplicate_safety_call_findings(report)?);
+        root_findings.extend(project_indirect_safety_findings(report)?);
+        for ambiguity in &report.ambiguity_findings {
+            if !matches!(
+                ambiguity.kind,
+                InterpretedFindingKind::AmbiguousSafetyMarker { .. }
+            ) || ambiguity.target.is_some()
+                || ambiguity.source_range.is_none()
+            {
+                return Err(invalid(
+                    "safety ambiguity finding",
+                    "owned ambiguity projection changed after evaluation",
+                ));
+            }
+        }
+        root_findings.extend(report.ambiguity_findings.clone());
+        incomplete.push(project_safety_incomplete_reasons(report)?);
+        findings.push(root_findings);
+    }
+    Ok(TypedSafetyBatchPreflight {
+        ready_roots,
+        findings,
+        incomplete,
     })
 }
 
@@ -940,6 +1355,7 @@ fn safety_call_contributing_claims(
             Some(contract.contract().requirements())
         }
         SafetyBoundary::ForeignDeclaration
+        | SafetyBoundary::UndocumentedUnsafeCall
         | SafetyBoundary::BodylessDeclaration
         | SafetyBoundary::OpaqueCall { .. }
             if boundary.occurrence_data().requires_unsafe()
@@ -1600,6 +2016,7 @@ fn expected_unsatisfied_safety_call(
             ))
         }
         SafetyBoundary::ForeignDeclaration
+        | SafetyBoundary::UndocumentedUnsafeCall
         | SafetyBoundary::BodylessDeclaration
         | SafetyBoundary::OpaqueCall { .. }
             if kind == SafetyCallIssueKind::Unsafe && !has_unnamed_safety_claim(root, boundary) =>
@@ -1615,6 +2032,7 @@ fn expected_unsatisfied_safety_call(
         | SafetyBoundary::TrustedNamespace
         | SafetyBoundary::BuiltinUnsafe
         | SafetyBoundary::ForeignDeclaration
+        | SafetyBoundary::UndocumentedUnsafeCall
         | SafetyBoundary::BodylessDeclaration
         | SafetyBoundary::OpaqueCall { .. } => None,
     }
@@ -1864,7 +2282,7 @@ fn append_call_macro_steps(
 ) {
     for frame in frames {
         let target = FunctionId::generic(frame.data().macro_definition());
-        let target_path = frame.data().display_path().to_owned();
+        let target_path = format!("macro {}", frame.data().display_path());
         steps.push(InterpretedTraceStep {
             caller: *caller,
             caller_path: caller_path.clone(),
@@ -1888,7 +2306,7 @@ fn append_operation_macro_steps(
 ) {
     for frame in frames {
         let target = FunctionId::generic(frame.data().macro_definition());
-        let target_path = frame.data().display_path().to_owned();
+        let target_path = format!("macro {}", frame.data().display_path());
         steps.push(InterpretedTraceStep {
             caller: *caller,
             caller_path: caller_path.clone(),
@@ -1968,10 +2386,11 @@ fn safety_root_request(root: &InterpretationRoot, config: &SniffTestConfig) -> S
 #[cfg(test)]
 mod tests {
     use super::{
-        evaluate_typed_safety_roots, project_duplicate_safety_call_findings,
-        project_indirect_safety_findings, project_safety_call_findings,
-        project_safety_incomplete_reasons, project_safety_root_findings,
-        project_unsafe_operation_findings, typed_safety_authority_registry,
+        adapt_typed_safety_authority_batch, evaluate_typed_safety_roots,
+        project_duplicate_safety_call_findings, project_indirect_safety_findings,
+        project_safety_call_findings, project_safety_incomplete_reasons,
+        project_safety_root_findings, project_unsafe_operation_findings,
+        typed_safety_authority_registry,
     };
     use crate::analysis::facts::evidence::{AmbiguousEvidenceReuseIssue, EvidenceUseRecord};
     use crate::analysis::facts::safety::root_inputs::tests::{root_artifact, root_key};
@@ -1983,10 +2402,36 @@ mod tests {
     use crate::analysis::facts::schema::{RowSchema, SchemaId};
     use crate::analysis::interpret::InterpretationRoot;
     use crate::analysis::ir::FunctionId;
+    use crate::analysis::ir::{SourceFileIr, SourceRangeIr};
+    use crate::cli::driver::interpretation::FindingSources;
     use crate::cli::driver::typed_panic::TypedPanicLocalArtifact;
     use crate::cli::driver::typed_panic_call::tests::{function, root, root_preparation_artifact};
     use crate::config::SniffTestConfig;
     use crate::report_roots::ReportRootKind;
+    use rustc_span::Span;
+
+    struct UnavailableSources;
+
+    impl FindingSources for UnavailableSources {
+        fn function_span(&self, _function: FunctionId) -> Option<Span> {
+            None
+        }
+
+        fn resolve(&self, range: Option<&SourceRangeIr>) -> (Option<Span>, Option<String>) {
+            match range {
+                Some(_) => (None, Some(String::from("fixture source unavailable"))),
+                None => (None, None),
+            }
+        }
+
+        fn source_file<'a>(&'a self, _range: &SourceRangeIr) -> Option<&'a SourceFileIr> {
+            None
+        }
+
+        fn render_span(&self, _span: Span) -> String {
+            String::from("unreachable")
+        }
+    }
 
     #[test]
     fn authority_registry_installs_every_safety_lane_once() {
@@ -2109,6 +2554,80 @@ mod tests {
             finding.kind,
             crate::analysis::interpret::InterpretedFindingKind::UnsafeOperation { .. }
         ));
+    }
+
+    #[test]
+    fn authority_batch_preflights_and_adapts_every_ready_safety_lane() {
+        let (_, facts) = root_artifact(false, false, None, true, false);
+        let key = root_key();
+        let request = InterpretationRoot {
+            function: FunctionId::generic(key.definition()),
+            path: String::from("crate::root"),
+            kind: ReportRootKind::Generic,
+        };
+        let mut config = SniffTestConfig::default();
+        config.analysis.callable_edge_attribution =
+            crate::config::CallableEdgeAttribution::CallSites;
+        let batch = evaluate_typed_safety_roots(
+            TypedPanicLocalArtifact::in_memory(&facts, 1),
+            &[],
+            Vec::new(),
+            &[],
+            std::slice::from_ref(&request),
+            &config,
+        )
+        .expect("the typed safety authority evaluates one ready root");
+        let findings = adapt_typed_safety_authority_batch(
+            &UnavailableSources,
+            &batch,
+            std::slice::from_ref(&request),
+            false,
+        )
+        .expect("the complete safety batch preflights before adaptation");
+        assert!(findings.iter().any(|finding| {
+            finding.kind == crate::cli::findings::FindingKind::IndirectSafetyCallBoundary
+        }));
+    }
+
+    #[test]
+    fn authority_batch_preserves_ready_and_missing_root_order_without_fake_roots() {
+        let ready = function(991);
+        let missing = function(992);
+        let facts = root_preparation_artifact(&[ready]);
+        let roots = [root(ready), root(missing)];
+        let batch = evaluate_typed_safety_roots(
+            TypedPanicLocalArtifact::in_memory(&facts, 1),
+            &[],
+            Vec::new(),
+            &[],
+            &roots,
+            &SniffTestConfig::default(),
+        )
+        .expect("one missing selected safety root is a typed completeness outcome");
+        assert_eq!(batch.roots.len(), 1);
+        assert!(matches!(
+            batch.root_preparations.as_slice(),
+            [
+                super::TypedSafetyRootPreparationReport {
+                    outcome: super::TypedSafetyRootPreparationOutcome::Evaluatable {
+                        report_index: 0,
+                        ..
+                    },
+                    ..
+                },
+                super::TypedSafetyRootPreparationReport {
+                    outcome: super::TypedSafetyRootPreparationOutcome::Missing { .. },
+                    ..
+                }
+            ]
+        ));
+        let findings =
+            adapt_typed_safety_authority_batch(&UnavailableSources, &batch, &roots, false)
+                .expect("the sparse safety batch adapts atomically");
+        assert!(findings.iter().any(|finding| {
+            finding.kind == crate::cli::findings::FindingKind::SafetyAnalysisIncomplete
+                && finding.root.as_deref() == Some(roots[1].path.as_str())
+        }));
     }
 
     #[test]
@@ -2260,7 +2779,7 @@ mod tests {
         assert!(matches!(
             &finding.kind,
             crate::analysis::interpret::InterpretedFindingKind::OpaqueSafetyBoundary { description }
-                if description == "opaque function pointer"
+                if description == "indirect call through a function pointer"
         ));
         assert_eq!(finding.target.as_ref().unwrap().function, None);
         assert_eq!(finding.trace.steps.len(), 1);

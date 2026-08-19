@@ -45,6 +45,7 @@ impl ContractDocOverrides {
     }
 
     #[must_use]
+    #[cfg_attr(not(test), allow(dead_code, reason = "legacy safety oracle lookup"))]
     pub(crate) fn markdown_for_candidates(&self, candidates: &[String]) -> Option<&str> {
         self.markdown_for_pattern(self.best_pattern_for_candidates(candidates)?)
     }
@@ -68,6 +69,7 @@ impl ContractDocOverrides {
             .map(|matched| matched.pattern)
     }
 
+    #[cfg_attr(not(test), allow(dead_code, reason = "legacy safety oracle lookup"))]
     fn markdown_for_pattern(&self, pattern: &str) -> Option<&str> {
         self.entries
             .iter()

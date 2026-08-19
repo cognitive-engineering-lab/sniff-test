@@ -1,18 +1,18 @@
 //! Policy-neutral composition of exact rustc artifact-IR caches.
 
-use std::collections::{BTreeMap, BTreeSet, HashMap, VecDeque};
+#[cfg(test)]
+use std::collections::HashMap;
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::fmt::{self, Display, Formatter};
 use std::path::{Path, PathBuf};
 
 use super::cache::{
-    ArtifactAnalysisCache, ArtifactInfo, CacheError, CacheExpectations, RustcArtifactId,
-    artifact_cache_path,
+    ArtifactAnalysisCache, CacheError, CacheExpectations, RustcArtifactId, artifact_cache_path,
 };
 use super::facts::registry::SchemaRegistry;
-use super::ir::{
-    FunctionBodyIr, FunctionBodyProvenanceIr, FunctionId, SourceFileId, SourceFileIr,
-    StableDefPathHash,
-};
+use super::ir::FunctionBodyIr;
+#[cfg(test)]
+use super::ir::{FunctionBodyProvenanceIr, FunctionId, StableDefPathHash};
 
 /// One path-bearing rustc `--extern` input.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -40,6 +40,7 @@ pub(crate) enum GraphLoadFailure {
         stable_crate_id: u64,
         artifacts: Vec<RustcArtifactId>,
     },
+    #[cfg(test)]
     ConflictingFunctionDefinition {
         display_path: String,
         first_artifact: RustcArtifactId,
@@ -82,6 +83,7 @@ impl Display for GraphLoadFailure {
                     .collect::<Vec<_>>()
                     .join(", ")
             ),
+            #[cfg(test)]
             Self::ConflictingFunctionDefinition {
                 display_path,
                 first_artifact,
@@ -124,6 +126,7 @@ impl std::error::Error for GraphLoadFailure {}
 /// that materialized them. Keeping this owner beside the body prevents two
 /// consumers of the same upstream instance from sharing dispatch facts.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[cfg_attr(not(test), allow(dead_code, reason = "legacy safety oracle scope"))]
 pub(crate) enum BodyScope {
     Artifact(RustcArtifactId),
     /// Test-only/in-memory IR has no cache envelope. Its address is stable for
@@ -132,6 +135,7 @@ pub(crate) enum BodyScope {
     InMemory(usize),
 }
 
+#[cfg_attr(not(test), allow(dead_code, reason = "legacy safety oracle scope"))]
 impl BodyScope {
     #[must_use]
     pub(crate) fn artifact(analysis: &ArtifactAnalysisCache) -> Self {
@@ -146,11 +150,13 @@ impl BodyScope {
 
 /// One function body together with its owning artifact.
 #[derive(Debug, Clone)]
+#[cfg_attr(not(test), allow(dead_code, reason = "legacy safety oracle body"))]
 pub(crate) struct LoadedFunction<'a> {
     body: &'a FunctionBodyIr,
     scope: BodyScope,
 }
 
+#[cfg_attr(not(test), allow(dead_code, reason = "legacy safety oracle body"))]
 impl<'a> LoadedFunction<'a> {
     #[must_use]
     pub(crate) fn new(body: &'a FunctionBodyIr, scope: BodyScope) -> Self {
@@ -168,16 +174,11 @@ impl<'a> LoadedFunction<'a> {
     }
 }
 
+#[cfg(test)]
 #[derive(Debug, Clone, Copy)]
 struct FunctionLocation {
     artifact: usize,
     function: usize,
-}
-
-#[derive(Debug, Clone, Copy)]
-struct SourceLocation {
-    artifact: usize,
-    source: usize,
 }
 
 /// All verified artifacts reachable from the active rustc externs.
@@ -186,9 +187,10 @@ pub(crate) struct ArtifactAnalysisGraph {
     artifacts: Vec<ArtifactAnalysisCache>,
     artifact_indices: BTreeMap<RustcArtifactId, usize>,
     direct_aliases: BTreeMap<RustcArtifactId, BTreeSet<String>>,
+    #[cfg(test)]
     defining_functions: HashMap<FunctionId, FunctionLocation>,
+    #[cfg(test)]
     defining_source_functions: HashMap<StableDefPathHash, FunctionLocation>,
-    sources: HashMap<SourceFileId, SourceLocation>,
     failures: Vec<GraphLoadFailure>,
 }
 
@@ -216,15 +218,19 @@ impl ArtifactAnalysisGraph {
     fn from_loaded(
         loaded: BTreeMap<RustcArtifactId, ArtifactAnalysisCache>,
         direct_aliases: BTreeMap<RustcArtifactId, BTreeSet<String>>,
-        mut failures: Vec<GraphLoadFailure>,
+        failures: Vec<GraphLoadFailure>,
     ) -> Self {
+        #[cfg(test)]
+        let mut failures = failures;
         let artifacts = loaded.into_values().collect::<Vec<_>>();
         let mut artifact_indices = BTreeMap::new();
+        #[cfg(test)]
         let mut defining_functions = HashMap::new();
+        #[cfg(test)]
         let mut defining_source_functions = HashMap::new();
-        let mut sources = HashMap::new();
         for (artifact, analysis) in artifacts.iter().enumerate() {
             artifact_indices.insert(analysis.artifact.id.clone(), artifact);
+            #[cfg(test)]
             for (function, body) in analysis.legacy_ir.functions.iter().enumerate() {
                 if matches!(body.provenance, FunctionBodyProvenanceIr::DefiningArtifact) {
                     defining_source_functions
@@ -245,19 +251,15 @@ impl ArtifactAnalysisGraph {
                     }
                 }
             }
-            for (source, file) in analysis.legacy_ir.source_files.iter().enumerate() {
-                sources
-                    .entry(file.id.clone())
-                    .or_insert(SourceLocation { artifact, source });
-            }
         }
         Self {
             artifacts,
             artifact_indices,
             direct_aliases,
+            #[cfg(test)]
             defining_functions,
+            #[cfg(test)]
             defining_source_functions,
-            sources,
             failures,
         }
     }
@@ -274,19 +276,7 @@ impl ArtifactAnalysisGraph {
     }
 
     #[must_use]
-    pub(crate) fn source_file(
-        &self,
-        source_file: &SourceFileId,
-    ) -> Option<(&ArtifactInfo, &SourceFileIr)> {
-        let location = self.sources.get(source_file)?;
-        let artifact = &self.artifacts[location.artifact];
-        Some((
-            &artifact.artifact,
-            &artifact.legacy_ir.source_files[location.source],
-        ))
-    }
-
-    #[must_use]
+    #[cfg(test)]
     pub(crate) fn function(&self, function: FunctionId) -> Option<LoadedFunction<'_>> {
         let location = function
             .resolution_candidates()
@@ -300,6 +290,7 @@ impl ArtifactAnalysisGraph {
 
     /// Resolves a body only inside one exact artifact.
     #[must_use]
+    #[cfg(test)]
     pub(crate) fn function_in_scope(
         &self,
         scope: &BodyScope,
@@ -319,6 +310,7 @@ impl ArtifactAnalysisGraph {
     /// closures, coroutines, nested constants, and similar compiler-generated
     /// bodies can have exact identities without a generic counterpart.
     #[must_use]
+    #[cfg(test)]
     pub(crate) fn defining_function(&self, function: FunctionId) -> Option<LoadedFunction<'_>> {
         self.function(function)
     }
@@ -326,6 +318,7 @@ impl ArtifactAnalysisGraph {
     /// Resolves source facts for a definition even when nested-body instance
     /// hashes differ between the defining artifact and a consumer overlay.
     #[must_use]
+    #[cfg(test)]
     pub(crate) fn defining_source_function(
         &self,
         function: FunctionId,
@@ -558,6 +551,7 @@ fn visit_artifact(
 
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeMap;
     use std::fs;
     use std::path::Path;
 
@@ -606,7 +600,7 @@ mod tests {
     }
 
     #[test]
-    fn recursively_loads_exact_rustc_artifacts_and_exposes_sources() {
+    fn recursively_loads_exact_rustc_artifacts_and_exposes_permanent_facts() {
         let directory = tempdir().expect("cache directory");
         let old_child_id = rustc_id(2, "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
         let old_child = analysis_with_id("child-old", old_child_id.clone(), Vec::new(), Vec::new());
@@ -640,20 +634,9 @@ mod tests {
                 .collect::<Vec<_>>(),
             [root_id.clone(), child_id]
         );
-        assert_eq!(
-            graph
-                .artifacts()
-                .flat_map(|analysis| {
-                    analysis.legacy_ir.source_files.iter().map(move |source| {
-                        (
-                            analysis.artifact.crate_name.as_str(),
-                            source.filename.as_str(),
-                        )
-                    })
-                })
-                .collect::<Vec<_>>(),
-            [("root-a", "src/root-a.rs"), ("child-a", "src/child-a.rs")]
-        );
+        assert!(graph.artifacts().all(|analysis| {
+            analysis.legacy_ir.functions.is_empty() && analysis.legacy_ir.source_files.is_empty()
+        }));
         assert_eq!(graph.direct_dependency_ids().collect::<Vec<_>>(), [root_id]);
         assert_eq!(
             graph.artifact(&root.artifact.id).unwrap().facts,
@@ -668,16 +651,14 @@ mod tests {
 
     #[test]
     fn exact_function_lookup_uses_exact_then_generic_definitions() {
-        let directory = tempdir().expect("cache directory");
         let exact = exact_function(1, 10, 100);
         let generic = generic_function(1, 10);
         let artifact = analysis("root-a", 1, Vec::new(), vec![generic, exact]);
-        write(directory.path(), &artifact);
-        let graph = ArtifactAnalysisGraph::load(
-            directory.path(),
-            &[external("root", 1)],
-            &EXPECTED,
-            &schemas(),
+        let artifact_id = artifact.artifact.id.clone();
+        let graph = ArtifactAnalysisGraph::from_loaded(
+            BTreeMap::from([(artifact_id, artifact)]),
+            BTreeMap::new(),
+            Vec::new(),
         );
 
         let exact = graph
@@ -706,7 +687,6 @@ mod tests {
 
     #[test]
     fn retains_same_instance_overlays_in_each_consumer_artifact() {
-        let directory = tempdir().expect("cache directory");
         let shared = FunctionId::exact(definition_hash(3, 10), instance_hash(100));
         let mut first_overlay = function(shared, String::from("shared::<first::Callback>"));
         first_overlay.provenance = FunctionBodyProvenanceIr::ConsumerInstantiation {
@@ -720,14 +700,10 @@ mod tests {
         let second = analysis("second-a", 2, Vec::new(), vec![second_overlay]);
         let first_id = first.artifact.id.clone();
         let second_id = second.artifact.id.clone();
-        write(directory.path(), &first);
-        write(directory.path(), &second);
-
-        let graph = ArtifactAnalysisGraph::load(
-            directory.path(),
-            &[external("first", 1), external("second", 2)],
-            &EXPECTED,
-            &schemas(),
+        let graph = ArtifactAnalysisGraph::from_loaded(
+            BTreeMap::from([(first_id.clone(), first), (second_id.clone(), second)]),
+            BTreeMap::new(),
+            Vec::new(),
         );
         let first_scope = BodyScope::artifact(graph.artifact(&first_id).expect("first artifact"));
         let second_scope =
@@ -961,7 +937,7 @@ mod tests {
             content_hash: String::from("hash"),
             byte_len: 1,
         }];
-        ArtifactAnalysisCache::new(
+        ArtifactAnalysisCache::new_with_legacy(
             EXPECTED.tool_version,
             EXPECTED.rustc_version,
             ArtifactInfo {

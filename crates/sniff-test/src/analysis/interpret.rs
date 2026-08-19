@@ -1,11 +1,22 @@
 //! Root-driven policy interpretation over composed policy-neutral artifact IR.
 
+#![cfg_attr(
+    not(test),
+    allow(
+        dead_code,
+        reason = "legacy interpretation is retained only as the typed safety parity oracle"
+    )
+)]
+
 use std::cmp::Ordering;
 use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::rc::Rc;
 
+#[cfg(test)]
 use super::cache::ArtifactAnalysisCache;
-use super::graph::{ArtifactAnalysisGraph, BodyScope, LoadedFunction};
+#[cfg(test)]
+use super::graph::ArtifactAnalysisGraph;
+use super::graph::{BodyScope, LoadedFunction};
 use super::ir::{
     ArtifactAnalysisIr, CallEdgeIr, CallEdgeKindIr, CallId, CallSiteId, CallTargetIr,
     CallableAttributionIr, CallableKeyIr, CompilerAssertKind, ContractRequirementIr, EffectId,
@@ -151,6 +162,7 @@ impl FunctionLookup for InMemoryArtifactLookup<'_> {
     }
 }
 
+#[cfg(test)]
 impl FunctionLookup for ArtifactAnalysisCache {
     fn function(&self, function: FunctionId) -> Option<LoadedFunction<'_>> {
         self.legacy_ir
@@ -185,6 +197,7 @@ impl FunctionLookup for ArtifactAnalysisCache {
     }
 }
 
+#[cfg(test)]
 impl FunctionLookup for ArtifactAnalysisGraph {
     fn function(&self, function: FunctionId) -> Option<LoadedFunction<'_>> {
         ArtifactAnalysisGraph::function(self, function)
@@ -426,6 +439,7 @@ pub(crate) fn interpret(
 
 /// Interprets only safety effects reachable from the supplied workspace roots.
 #[must_use]
+#[cfg(test)]
 pub(crate) fn interpret_safety(
     lookup: &dyn FunctionLookup,
     roots: &[InterpretationRoot],
@@ -4706,7 +4720,7 @@ mod tests {
             fact_index: Vec::new(),
             relation_index: Vec::new(),
         };
-        ArtifactAnalysisCache::new(
+        ArtifactAnalysisCache::new_with_legacy(
             "test-tool",
             "test-rustc",
             ArtifactInfo {

@@ -4,7 +4,9 @@
 //! after the loaded file's stable identity, content hash, normalized byte
 //! length, and requested byte range all match the artifact IR.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
+#[cfg(test)]
+use std::collections::BTreeSet;
 use std::fmt;
 use std::hash::Hasher;
 use std::io;
@@ -22,7 +24,9 @@ use super::facts::program::{SourceAnchorEntity, SourceAnchorInFile, SourceFileEn
 use super::facts::registry::SchemaRegistry;
 use super::facts::schema::RowSchema;
 use super::facts::view::{ArtifactDbView, IndexedRow};
-use super::ir::{ArtifactAnalysisIr, SourceFileId, SourceFileIr, SourceRangeIr};
+#[cfg(test)]
+use super::ir::ArtifactAnalysisIr;
+use super::ir::{SourceFileId, SourceFileIr, SourceRangeIr};
 
 /// Verifies every available source file that contributed ordinary comment
 /// markers to cached legacy IR.
@@ -33,6 +37,7 @@ use super::ir::{ArtifactAnalysisIr, SourceFileId, SourceFileIr, SourceRangeIr};
 /// bearing source file. Source whose recorded path is absent remains trusted
 /// as part of the exact sidecar; every failure for an existing path rejects the
 /// stale marker facts.
+#[cfg(test)]
 pub(crate) fn verify_cached_marker_sources_in(
     source_map: &SourceMap,
     ir: &ArtifactAnalysisIr,
@@ -484,6 +489,7 @@ pub(crate) enum CachedSourceError {
         kind: io::ErrorKind,
         message: String,
     },
+    #[cfg(test)]
     MissingSourceIdentity {
         identity: String,
     },
@@ -534,6 +540,7 @@ impl fmt::Display for CachedSourceError {
                 formatter,
                 "cached source `{filename}` is unavailable: {message}"
             ),
+            #[cfg(test)]
             Self::MissingSourceIdentity { identity } => write!(
                 formatter,
                 "cached source identity `{identity}` is absent from the artifact IR"

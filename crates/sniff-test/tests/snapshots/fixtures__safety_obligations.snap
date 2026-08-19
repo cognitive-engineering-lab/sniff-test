@@ -21,6 +21,7 @@ expression: "report[\"findings\"]"
     "target": "safety_obligations::documented_contract",
     "trace": [
       "src/lib.rs:18:5: 18:41: safety_obligations::misses_requirement --direct-call-> safety_obligations::documented_contract"
-    ]
+    ],
+    "trusted-boundary": true
   }
 ]

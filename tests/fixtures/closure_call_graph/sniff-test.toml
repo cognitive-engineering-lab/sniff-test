@@ -16,3 +16,7 @@ panic-sink-namespaces = [
     "core::std::rt::panic_fmt",
     "std::rt::panic_fmt",
 ]
+
+[safety]
+# Keep the safety traversal scoped to the closure behavior under test too.
+ignored-namespaces = ["alloc::**"]

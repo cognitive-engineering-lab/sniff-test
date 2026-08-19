@@ -25,6 +25,24 @@ note: this function can reach a call whose panic behavior cannot be verified
    | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
    = help: document this boundary with `# Panics`, add `// PANIC:` only if every possible callee is locally constrained, or configure `indirect-call-boundary` if this opacity is acceptable
 
+warning: function `trusted_boundaries::trusted_through_fn_pointer` reaches an indirect call whose safety requirements cannot be verified
+  --> src/lib.rs:24:5
+   |
+24 |     helper(flag);
+   |     ^^^^^^^^^^^^
+   |
+note: safety requirements cannot be verified here: indirect call through a function pointer
+  --> src/lib.rs:24:5
+   |
+24 |     helper(flag);
+   |     ^^^^^^^^^^^^
+note: this function can reach a call whose safety requirements cannot be verified
+  --> src/lib.rs:22:1
+   |
+22 | pub fn trusted_through_fn_pointer(flag: bool, unknown: fn(bool)) {
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   = help: replace the indirect call with a documented concrete boundary, justify every possible target, or configure `indirect-call-boundary` under `[safety.lints]`
+
 warning: function `trusted_boundaries::trusted_unsafe_through_fn_pointer` reaches an unverifiable indirect call
   --> src/lib.rs:31:1
    |
@@ -42,6 +60,24 @@ note: this function can reach a call whose panic behavior cannot be verified
 31 | pub fn trusted_unsafe_through_fn_pointer(use_trusted: bool, unknown: unsafe fn()) {
    | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
    = help: document this boundary with `# Panics`, add `// PANIC:` only if every possible callee is locally constrained, or configure `indirect-call-boundary` if this opacity is acceptable
+
+warning: function `trusted_boundaries::trusted_unsafe_through_fn_pointer` reaches an indirect call whose safety requirements cannot be verified
+  --> src/lib.rs:33:14
+   |
+33 |     unsafe { helper() }
+   |              ^^^^^^^^
+   |
+note: safety requirements cannot be verified here: indirect call through an unsafe function pointer
+  --> src/lib.rs:33:14
+   |
+33 |     unsafe { helper() }
+   |              ^^^^^^^^
+note: this function can reach a call whose safety requirements cannot be verified
+  --> src/lib.rs:31:1
+   |
+31 | pub fn trusted_unsafe_through_fn_pointer(use_trusted: bool, unknown: unsafe fn()) {
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   = help: replace the indirect call with a documented concrete boundary, justify every possible target, or configure `indirect-call-boundary` under `[safety.lints]`
 
 warning: unsafe call to `unsafe function pointer` in `trusted_boundaries::trusted_unsafe_through_fn_pointer` is missing a `// SAFETY:` justification
   --> src/lib.rs:33:14
@@ -84,5 +120,5 @@ help: document when this function may panic with `/// # Panics` here
    | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
    = help: ensure the callee's panic conditions cannot occur, justify that with `// PANIC:`, or document when the caller may panic with `# Panics`
 
-warning: `trusted-boundaries` (lib) generated 4 warnings
+warning: `trusted-boundaries` (lib) generated 6 warnings
     Finished `release` profile [optimized] target(s) in [TIME]

@@ -81,6 +81,7 @@ pub(crate) enum SafetyBoundary {
     RootContract(Arc<EffectiveSafetyContract>),
     CallContract(SafetyContractCallBoundary),
     TrustedNamespace,
+    UndocumentedUnsafeCall,
     ForeignDeclaration,
     BodylessDeclaration,
     OpaqueCall { description: String },
@@ -446,9 +447,23 @@ impl<'workspace, 'facts> SafetyTraversalPolicy<'workspace, 'facts> {
             return Ok(call_boundary(
                 metadata.selection,
                 SafetyBoundary::OpaqueCall {
-                    description: description.to_owned(),
+                    description: normalized_opaque_description(
+                        context.effective_kind,
+                        context.occurrence.data().requires_unsafe(),
+                        description,
+                    ),
                 },
             ));
+        }
+        if context.occurrence.data().requires_unsafe()
+            && is_actual_call(context.effective_kind)
+            && !context.occurrence.data().inside_builtin_unsafe()
+        {
+            return Ok(CallTraversalDecision::FollowAndBoundary {
+                follow: metadata.selection.clone(),
+                boundary_target: Some(metadata.selection),
+                payload: SafetyBoundary::UndocumentedUnsafeCall,
+            });
         }
         Ok(CallTraversalDecision::Follow(metadata.selection))
     }
@@ -474,7 +489,11 @@ impl RootProgramTraversalPolicy for SafetyTraversalPolicy<'_, '_> {
         Ok(CallTraversalDecision::Boundary {
             target: None,
             payload: SafetyBoundary::OpaqueCall {
-                description: description.to_owned(),
+                description: normalized_opaque_description(
+                    context.effective_kind,
+                    context.occurrence.data().requires_unsafe(),
+                    description,
+                ),
             },
         })
     }
@@ -596,6 +615,17 @@ const fn is_actual_call(kind: CallKind) -> bool {
     )
 }
 
+fn normalized_opaque_description(kind: CallKind, requires_unsafe: bool, raw: &str) -> String {
+    if kind != CallKind::IndirectCall {
+        return raw.to_owned();
+    }
+    if requires_unsafe {
+        String::from("indirect call through an unsafe function pointer")
+    } else {
+        String::from("indirect call through a function pointer")
+    }
+}
+
 fn candidates_share_call_site(candidates: &[DefiningMarkerCandidate]) -> bool {
     let Some(first) = candidates.first() else {
         return false;
@@ -617,7 +647,9 @@ const fn call_boundary(
 
 #[cfg(test)]
 pub(crate) mod tests {
-    use super::{PreparedSafetyRootBatch, SafetyBoundary, SafetyRootRequest};
+    use super::{
+        PreparedSafetyRootBatch, SafetyBoundary, SafetyRootRequest, normalized_opaque_description,
+    };
     use crate::analysis::cache::RustcArtifactId;
     use crate::analysis::facts::builder::{ArtifactDbBuilder, FactMeta};
     use crate::analysis::facts::collection::CollectedArtifactSchemaPack;
@@ -1351,13 +1383,25 @@ pub(crate) mod tests {
             assert!(matches!(
                 issues.as_slice(),
                 [issue]
-                    if issue.data.description() == "opaque function pointer"
+                    if issue.data.description() == "indirect call through a function pointer"
                         && issue.context.root == root
                         && issue.context.source == issue.context.endpoint.as_ref().map(
                             crate::analysis::facts::workspace::ScopedEntityRef::as_row
                         )
             ));
         });
+    }
+
+    #[test]
+    fn indirect_safety_boundary_descriptions_hide_compiler_type_debugging() {
+        assert_eq!(
+            normalized_opaque_description(CallKind::IndirectCall, false, "Binder { raw }"),
+            "indirect call through a function pointer"
+        );
+        assert_eq!(
+            normalized_opaque_description(CallKind::IndirectCall, true, "Binder { raw }"),
+            "indirect call through an unsafe function pointer"
+        );
     }
 
     #[test]

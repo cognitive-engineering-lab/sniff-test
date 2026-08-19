@@ -327,6 +327,11 @@ pub(crate) enum BodyTraversalDecision<B> {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum CallTraversalDecision<B> {
     Follow(CallTargetSelection),
+    FollowAndBoundary {
+        follow: CallTargetSelection,
+        boundary_target: Option<CallTargetSelection>,
+        payload: B,
+    },
     Boundary {
         target: Option<CallTargetSelection>,
         payload: B,

@@ -116,7 +116,7 @@ impl IssueRenderer<UnsatisfiedCompilerAssertIssue> for UnsatisfiedCompilerAssert
     }
 }
 
-/// Collapses the pack's precise MIR subtype only at the public report-v13
+/// Collapses the pack's precise MIR subtype only at the public report-v14
 /// compatibility boundary. Binary operation detail remains authoritative in
 /// [`MirAssertKind`] and is not lost from extracted facts or evaluated issues.
 pub(crate) const fn coarse_public_assert_kind(kind: MirAssertKind) -> CompilerAssertKind {

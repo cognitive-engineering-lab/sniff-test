@@ -1,5 +1,6 @@
 //! Adapts policy-neutral interpreter output to diagnostics and JSON findings.
 
+use std::collections::BTreeMap;
 use std::error::Error;
 use std::fmt::{self, Display, Formatter};
 
@@ -10,14 +11,15 @@ use crate::analysis::facts::panic::{
     compiler_assert_presentation,
 };
 use crate::analysis::graph::ArtifactAnalysisGraph;
+#[cfg(test)]
+use crate::analysis::interpret::{DomainCompleteness, SafetyRootInterpretation};
 use crate::analysis::interpret::{
-    DomainCompleteness, InMemoryArtifactLookup, IncompleteReason, InterpretationRoot,
-    InterpretedFinding, InterpretedFindingKind, InterpretedSafetyCallKind, InterpretedTrace,
-    InterpretedTraceStepKind, LayeredFunctionLookup, SafetyRootInterpretation, interpret_safety,
+    IncompleteReason, InterpretationRoot, InterpretedFinding, InterpretedFindingKind,
+    InterpretedSafetyCallKind, InterpretedTrace, InterpretedTraceStepKind,
 };
 use crate::analysis::ir::{
-    ArtifactAnalysisIr, CallEdgeKindIr, ContractRequirementIr, FunctionBodyIr, FunctionId,
-    SourceFileId, SourceFileIr, SourceRangeIr, StableDefPathHash, StableInstanceHash,
+    CallEdgeKindIr, ContractRequirementIr, FunctionId, SourceFileId, SourceFileIr, SourceRangeIr,
+    StableDefPathHash, StableInstanceHash,
 };
 use crate::analysis::source::cached_source_span;
 use crate::config::SniffTestConfig;
@@ -42,12 +44,18 @@ use super::typed_panic_call::{
     adapt_prevalidated_typed_panic_root_contract_reports, evaluate_typed_panic_call_roots,
     preflight_typed_panic_call_batch,
 };
+use super::typed_safety::{
+    TypedSafetyEvaluationError, adapt_typed_safety_authority_batch, evaluate_typed_safety_roots,
+};
 
-/// Atomic failure from typed panic evaluation or its report-v13 adapter.
+/// Atomic failure from typed panic evaluation or its report-v14 adapter.
 #[derive(Debug)]
 pub(super) enum InterpretWorkspaceError {
     TypedPanicEvaluation(TypedPanicEvaluationError),
     TypedPanicCallEvaluation(TypedPanicCallEvaluationError),
+    TypedSafetyEvaluation(TypedSafetyEvaluationError),
+    TypedSafetySourceFilesMismatch,
+    TypedSafetyFunctionRangesMismatch,
     TypedReportCount {
         expected: usize,
         actual: usize,
@@ -82,6 +90,15 @@ impl Display for InterpretWorkspaceError {
         match self {
             Self::TypedPanicEvaluation(source) => Display::fmt(source, formatter),
             Self::TypedPanicCallEvaluation(source) => Display::fmt(source, formatter),
+            Self::TypedSafetyEvaluation(source) => Display::fmt(source, formatter),
+            Self::TypedSafetySourceFilesMismatch => write!(
+                formatter,
+                "typed panic and safety evaluation produced different source-file inventories"
+            ),
+            Self::TypedSafetyFunctionRangesMismatch => write!(
+                formatter,
+                "typed panic and safety evaluation produced different function presentation inventories"
+            ),
             Self::TypedReportCount { expected, actual } => write!(
                 formatter,
                 "typed panic evaluation returned {actual} root reports for {expected} traversal roots"
@@ -120,7 +137,10 @@ impl Error for InterpretWorkspaceError {
         match self {
             Self::TypedPanicEvaluation(source) => Some(source),
             Self::TypedPanicCallEvaluation(source) => Some(source),
+            Self::TypedSafetyEvaluation(source) => Some(source),
             Self::TypedReportCount { .. }
+            | Self::TypedSafetySourceFilesMismatch
+            | Self::TypedSafetyFunctionRangesMismatch
             | Self::TypedReportRootMismatch { .. }
             | Self::TypedIssueRootMismatch { .. }
             | Self::UnsupportedRendererOutput { .. } => None,
@@ -137,6 +157,12 @@ impl From<TypedPanicEvaluationError> for InterpretWorkspaceError {
 impl From<TypedPanicCallEvaluationError> for InterpretWorkspaceError {
     fn from(source: TypedPanicCallEvaluationError) -> Self {
         Self::TypedPanicCallEvaluation(source)
+    }
+}
+
+impl From<TypedSafetyEvaluationError> for InterpretWorkspaceError {
+    fn from(source: TypedSafetyEvaluationError) -> Self {
+        Self::TypedSafetyEvaluation(source)
     }
 }
 
@@ -161,17 +187,24 @@ pub(super) fn interpret_workspace(
         .copied()
         .map(|root| interpretation_root(request.tcx, root))
         .collect::<Vec<_>>();
-    let local_lookup =
-        InMemoryArtifactLookup::new(&request.local.legacy_ir, request.local_stable_crate_id);
-    let lookup = LayeredFunctionLookup::new(vec![&local_lookup, request.dependencies]);
-    let traversal_results = interpret_safety(&lookup, &roots, request.config);
     let typed_local = request.local_artifact_id.map_or_else(
         || TypedPanicLocalArtifact::in_memory(&request.local.facts, request.local_stable_crate_id),
         |artifact| TypedPanicLocalArtifact::persisted(&request.local.facts, artifact),
     );
     let dependency_artifacts = request.dependencies.artifacts().collect::<Vec<_>>();
-    let direct_dependencies = request.dependencies.direct_dependency_ids().collect();
+    let direct_dependencies = request
+        .dependencies
+        .direct_dependency_ids()
+        .collect::<Vec<_>>();
     let mut typed_reports = evaluate_typed_panic_call_roots(
+        typed_local,
+        &dependency_artifacts,
+        direct_dependencies.clone(),
+        request.active_runtime_artifacts,
+        &roots,
+        request.config,
+    )?;
+    let mut typed_safety_reports = evaluate_typed_safety_roots(
         typed_local,
         &dependency_artifacts,
         direct_dependencies,
@@ -180,25 +213,33 @@ pub(super) fn interpret_workspace(
         request.config,
     )?;
     let typed_source_files = std::mem::take(&mut typed_reports.source_files);
+    let safety_source_files = std::mem::take(&mut typed_safety_reports.source_files);
+    if typed_source_files != safety_source_files {
+        return Err(InterpretWorkspaceError::TypedSafetySourceFilesMismatch);
+    }
+    let function_ranges = std::mem::take(&mut typed_reports.function_ranges);
+    let safety_function_ranges = std::mem::take(&mut typed_safety_reports.function_ranges);
+    if function_ranges != safety_function_ranges {
+        return Err(InterpretWorkspaceError::TypedSafetyFunctionRangesMismatch);
+    }
     let sources = SourceResolver {
         tcx: request.tcx,
-        local: &request.local.legacy_ir,
-        dependencies: request.dependencies,
         typed_source_files,
+        function_ranges,
     };
 
-    let typed_findings = adapt_typed_panic_authority_batch(
+    let mut findings = adapt_typed_panic_authority_batch(
         &sources,
         typed_reports,
         &roots,
         request.config.analysis.show_full_stack_trace,
     )?;
-    let mut findings = adapt_legacy_safety_result(
+    findings.extend(adapt_typed_safety_authority_batch(
         &sources,
-        traversal_results,
+        &typed_safety_reports,
+        &roots,
         request.config.analysis.show_full_stack_trace,
-    );
-    findings.extend(typed_findings);
+    )?);
     Ok(findings)
 }
 
@@ -217,17 +258,17 @@ fn interpretation_root<'tcx>(tcx: TyCtxt<'tcx>, root: ReportRoot<'tcx>) -> Inter
     }
 }
 
+#[cfg(test)]
 struct LegacySafetyRemainder {
-    root: InterpretationRoot,
     findings: Vec<InterpretedFinding>,
     completeness: DomainCompleteness,
 }
 
+#[cfg(test)]
 fn legacy_safety_remainder(result: Vec<SafetyRootInterpretation>) -> Vec<LegacySafetyRemainder> {
     result
         .into_iter()
         .map(|root| LegacySafetyRemainder {
-            root: root.root,
             findings: root
                 .findings
                 .into_iter()
@@ -238,6 +279,7 @@ fn legacy_safety_remainder(result: Vec<SafetyRootInterpretation>) -> Vec<LegacyS
         .collect()
 }
 
+#[cfg(test)]
 const fn legacy_safety_is_authoritative(kind: &InterpretedFindingKind) -> bool {
     match kind {
         InterpretedFindingKind::PanicSink
@@ -254,33 +296,7 @@ const fn legacy_safety_is_authoritative(kind: &InterpretedFindingKind) -> bool {
     }
 }
 
-fn adapt_legacy_safety_result(
-    sources: &impl FindingSources,
-    result: Vec<SafetyRootInterpretation>,
-    show_full_stack_trace: bool,
-) -> Vec<Finding> {
-    let mut findings = Vec::new();
-    for root in legacy_safety_remainder(result) {
-        findings.extend(
-            root.findings
-                .into_iter()
-                .map(|finding| adapt_finding(sources, &root.root, &finding, show_full_stack_trace)),
-        );
-        for reason in root.completeness.reasons {
-            findings.push(adapt_incomplete(
-                sources,
-                &root.root,
-                FindingKind::SafetyAnalysisIncomplete,
-                "safety",
-                reason,
-                show_full_stack_trace,
-            ));
-        }
-    }
-    findings
-}
-
-/// Converts one complete typed panic batch to report-v13 findings.
+/// Converts one complete typed panic batch to report-v14 findings.
 ///
 /// Root alignment is validated for the whole batch before issue adaptation.
 /// Any later renderer-output failure drops the locally accumulated vector and
@@ -431,7 +447,7 @@ fn adapt_prevalidated_typed_panic_issue(
     let (effect_span, source_error) = sources.resolve(issue.presentation_range.as_ref());
     // Legacy root lookup intentionally discarded root-source failures. The
     // typed function presentation range retains the same verified identity,
-    // so preserve that degradation behavior at the report-v13 boundary.
+    // so preserve that degradation behavior at the report-v14 boundary.
     let root_span = sources.resolve(report.presentation_range.as_ref()).0;
     let diagnostic_span = if source_error.is_some() {
         None
@@ -757,6 +773,22 @@ pub(super) fn adapt_typed_panic_call_finding(
     show_full_stack_trace: bool,
 ) -> Finding {
     adapt_finding(sources, root, finding, show_full_stack_trace)
+}
+
+pub(super) fn adapt_typed_safety_incomplete_finding(
+    sources: &impl FindingSources,
+    root: &InterpretationRoot,
+    reason: IncompleteReason,
+    show_full_stack_trace: bool,
+) -> Finding {
+    adapt_incomplete(
+        sources,
+        root,
+        FindingKind::SafetyAnalysisIncomplete,
+        "safety",
+        reason,
+        show_full_stack_trace,
+    )
 }
 
 pub(super) fn adapt_typed_panic_ambiguity_finding(
@@ -1807,11 +1839,10 @@ fn render_requirement(requirement: &ContractRequirementIr) -> String {
     }
 }
 
-struct SourceResolver<'tcx, 'analysis> {
+struct SourceResolver<'tcx> {
     tcx: TyCtxt<'tcx>,
-    local: &'analysis ArtifactAnalysisIr,
-    dependencies: &'analysis ArtifactAnalysisGraph,
     typed_source_files: Vec<SourceFileIr>,
+    function_ranges: BTreeMap<FunctionId, SourceRangeIr>,
 }
 
 /// Source-verification boundary shared by legacy and typed finding adapters.
@@ -1828,18 +1859,12 @@ pub(super) trait FindingSources {
     fn render_span(&self, span: Span) -> String;
 }
 
-impl SourceResolver<'_, '_> {
-    fn function_body(&self, function: FunctionId) -> Option<&FunctionBodyIr> {
-        self.local
-            .function_body(function)
-            .or_else(|| self.dependencies.function(function).map(|body| body.body()))
-    }
-}
-
-impl FindingSources for SourceResolver<'_, '_> {
+impl FindingSources for SourceResolver<'_> {
     fn function_span(&self, function: FunctionId) -> Option<Span> {
-        self.function_body(function)
-            .and_then(|body| self.resolve(body.source_range.as_ref()).0)
+        let range = function
+            .resolution_candidates()
+            .find_map(|candidate| self.function_ranges.get(&candidate));
+        self.resolve(range).0
     }
 
     fn resolve(&self, range: Option<&SourceRangeIr>) -> (Option<Span>, Option<String>) {
@@ -1866,18 +1891,6 @@ impl FindingSources for SourceResolver<'_, '_> {
             .binary_search_by(|source| source.id.cmp(&range.file))
             .ok()
             .map(|index| &self.typed_source_files[index])
-            .or_else(|| {
-                self.local
-                    .source_files
-                    .binary_search_by(|source| source.id.cmp(&range.file))
-                    .ok()
-                    .map(|index| &self.local.source_files[index])
-            })
-            .or_else(|| {
-                self.dependencies
-                    .source_file(&range.file)
-                    .map(|(_, source)| source)
-            })
     }
 
     fn render_span(&self, span: Span) -> String {

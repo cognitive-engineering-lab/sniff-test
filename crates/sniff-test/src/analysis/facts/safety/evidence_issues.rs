@@ -17,13 +17,13 @@ use crate::analysis::facts::pack::{AnalysisPack, AnalysisRegistry, PackRegistrat
 use crate::analysis::facts::panic::trace_route::{
     SelectedTraceRoute, TraceRouteEndpoint, TraceRouteSelector,
 };
-use crate::analysis::facts::program::SourceAnchorKey;
 use crate::analysis::facts::program::root_traversal::{
     ResolvedBodyVisit, ResolvedCallBoundary, ResolvedCallMacroCallsite, ResolvedCallSourceAnchor,
     ResolvedFollowedCall, ResolvedMarkerClaim, ResolvedUnsafeOperationMacroCallsite,
     ResolvedUnsafeOperationSourceAnchor, ResolvedUnsafeOperationVisit,
 };
 use crate::analysis::facts::program::topology::{CallKind, CallSourceAnchorRole};
+use crate::analysis::facts::program::{FunctionEntity, SourceAnchorKey};
 use crate::analysis::facts::schema::PassId;
 use crate::contracts::normalize_requirement_name;
 
@@ -74,16 +74,7 @@ impl EvaluationRule<SafetyRootInputs> for EmitSafetyEvidenceUses {
                     visit.inherited_markers(),
                 ))
                 .map_err(trace_error)?;
-            let owner = selector
-                .select_owner_body(
-                    visit.owner().erase(),
-                    visit.inherited_markers(),
-                    visit.trace(),
-                )
-                .map_err(|error| {
-                    RuleError::failed(format!("invalid safety owner body: {error:?}"))
-                })?;
-            let semantic_order = operation_semantic_order(&route, owner, visit);
+            let semantic_order = operation_semantic_order(&route, visit.owner_data(), visit);
             collect_uses(
                 cx,
                 input,
@@ -222,7 +213,8 @@ fn call_requirements(
         SafetyBoundary::CallContract(contract) if call_is_obligation(boundary) => {
             Some(contract.contract().requirements())
         }
-        SafetyBoundary::ForeignDeclaration
+        SafetyBoundary::UndocumentedUnsafeCall
+        | SafetyBoundary::ForeignDeclaration
         | SafetyBoundary::BodylessDeclaration
         | SafetyBoundary::OpaqueCall { .. }
             if boundary.occurrence_data().requires_unsafe()
@@ -233,6 +225,7 @@ fn call_requirements(
         SafetyBoundary::RootContract(_)
         | SafetyBoundary::CallContract(_)
         | SafetyBoundary::TrustedNamespace
+        | SafetyBoundary::UndocumentedUnsafeCall
         | SafetyBoundary::ForeignDeclaration
         | SafetyBoundary::BodylessDeclaration
         | SafetyBoundary::OpaqueCall { .. }
@@ -260,11 +253,11 @@ const fn is_actual_call(kind: CallKind) -> bool {
 
 fn operation_semantic_order(
     route: &SelectedTraceRoute<'_>,
-    owner: &ResolvedBodyVisit,
+    owner: &FunctionEntity,
     visit: &ResolvedUnsafeOperationVisit,
 ) -> EvidenceSemanticOrder {
     let mut steps = route_semantic_steps(route);
-    let mut caller = owner.data().display_path().to_owned();
+    let mut caller = owner.display_path().to_owned();
     for frame in visit.macro_frames() {
         let target = frame.data().display_path().to_owned();
         steps.push(semantic_step(
@@ -309,6 +302,7 @@ fn call_semantic_order(
             SafetyBoundary::RootContract(_)
             | SafetyBoundary::CallContract(_)
             | SafetyBoundary::TrustedNamespace
+            | SafetyBoundary::UndocumentedUnsafeCall
             | SafetyBoundary::ForeignDeclaration
             | SafetyBoundary::BodylessDeclaration
             | SafetyBoundary::BuiltinUnsafe => None,

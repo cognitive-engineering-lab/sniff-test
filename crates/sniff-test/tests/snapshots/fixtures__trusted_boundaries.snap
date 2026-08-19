@@ -16,9 +16,35 @@ expression: "report[\"findings\"]"
     ]
   },
   {
+    "function": "trusted_boundaries::trusted_through_fn_pointer",
+    "kind": "indirect-safety-call-boundary",
+    "level": "warn",
+    "reason": "indirect call through a function pointer has unverifiable safety requirements",
+    "root": "trusted_boundaries::trusted_through_fn_pointer",
+    "root-kind": "concrete",
+    "root-span": "src/lib.rs:22:1: 22:65",
+    "span": "src/lib.rs:24:5: 24:17",
+    "trace": [
+      "src/lib.rs:24:5: 24:17: trusted_boundaries::trusted_through_fn_pointer --indirect-call-> indirect call through a function pointer"
+    ]
+  },
+  {
     "kind": "indirect-call-boundary",
     "level": "warn",
     "reason": "indirect call through an unsafe function pointer cannot be verified",
+    "root": "trusted_boundaries::trusted_unsafe_through_fn_pointer",
+    "root-kind": "concrete",
+    "root-span": "src/lib.rs:31:1: 31:82",
+    "span": "src/lib.rs:33:14: 33:22",
+    "trace": [
+      "src/lib.rs:33:14: 33:22: trusted_boundaries::trusted_unsafe_through_fn_pointer --indirect-call-> indirect call through an unsafe function pointer"
+    ]
+  },
+  {
+    "function": "trusted_boundaries::trusted_unsafe_through_fn_pointer",
+    "kind": "indirect-safety-call-boundary",
+    "level": "warn",
+    "reason": "indirect call through an unsafe function pointer has unverifiable safety requirements",
     "root": "trusted_boundaries::trusted_unsafe_through_fn_pointer",
     "root-kind": "concrete",
     "root-span": "src/lib.rs:31:1: 31:82",

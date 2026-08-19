@@ -5,9 +5,8 @@
 //! this schema so a workspace can reinterpret one dependency artifact under a
 //! different policy without recompiling it.
 //!
-//! Format 16 persists the open typed fact database beside the remaining legacy
-//! traversal IR. Both payloads describe the same exact rustc artifact
-//! generation; neither may contain workspace/root evaluation state.
+//! Format 17 persists only the open typed fact database. Legacy traversal IR is
+//! retained in test builds as an in-memory parity oracle and never serialized.
 
 use std::fmt::{self, Display, Formatter};
 use std::fs::File;
@@ -19,11 +18,12 @@ use serde::{Deserialize, Serialize};
 use super::facts::encoded::ArtifactFactIr;
 use super::facts::registry::SchemaRegistry;
 use super::facts::view::ArtifactDbView;
+#[cfg(test)]
 use super::ir::{ArtifactAnalysisIr, FunctionBodyProvenanceIr};
 
-pub(crate) const CACHE_FORMAT_VERSION: u32 = 16;
+pub(crate) const CACHE_FORMAT_VERSION: u32 = 17;
 pub(crate) const CACHE_DIR_NAME: &str = "sniff-test-cache";
-pub(crate) const CACHE_VERSION_DIR: &str = "v16";
+pub(crate) const CACHE_VERSION_DIR: &str = "v17";
 /// Independent outer limit for one complete serialized cache envelope.
 ///
 /// This limit protects allocation and parsing at the file boundary regardless
@@ -40,8 +40,9 @@ pub(crate) struct ArtifactAnalysisCache {
     pub(crate) rustc_version: String,
     pub(crate) artifact: ArtifactInfo,
     pub(crate) dependencies: Vec<RustcArtifactId>,
-    /// Production safety input plus the non-authoritative legacy panic oracle.
-    /// Unified typed-panic authority does not read this legacy projection.
+    /// In-memory parity oracle; deliberately absent from the cache envelope.
+    #[cfg(test)]
+    #[serde(skip, default = "empty_legacy_ir")]
     pub(crate) legacy_ir: ArtifactAnalysisIr,
     /// Open, independently versioned compiler and human fact tables.
     pub(crate) facts: ArtifactFactIr,
@@ -60,22 +61,45 @@ impl ArtifactAnalysisCache {
         rustc_version: impl Into<String>,
         artifact: ArtifactInfo,
         mut dependencies: Vec<RustcArtifactId>,
-        mut legacy_ir: ArtifactAnalysisIr,
         facts: ArtifactFactIr,
         schemas: &SchemaRegistry,
     ) -> Result<Self, CacheValidationError> {
         dependencies.sort_unstable();
         dependencies.dedup();
-        legacy_ir.canonicalize();
         let analysis = Self {
             format_version: CACHE_FORMAT_VERSION,
             tool_version: tool_version.into(),
             rustc_version: rustc_version.into(),
             artifact,
             dependencies,
-            legacy_ir,
+            #[cfg(test)]
+            legacy_ir: empty_legacy_ir(),
             facts,
         };
+        analysis.validate(schemas)?;
+        Ok(analysis)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn new_with_legacy(
+        tool_version: impl Into<String>,
+        rustc_version: impl Into<String>,
+        artifact: ArtifactInfo,
+        dependencies: Vec<RustcArtifactId>,
+        mut legacy_ir: ArtifactAnalysisIr,
+        facts: ArtifactFactIr,
+        schemas: &SchemaRegistry,
+    ) -> Result<Self, CacheValidationError> {
+        legacy_ir.canonicalize();
+        let mut analysis = Self::new(
+            tool_version,
+            rustc_version,
+            artifact,
+            dependencies,
+            facts,
+            schemas,
+        )?;
+        analysis.legacy_ir = legacy_ir;
         analysis.validate(schemas)?;
         Ok(analysis)
     }
@@ -96,7 +120,7 @@ impl ArtifactAnalysisCache {
         write_bounded_cache_source(&path, &source, MAX_CACHE_FILE_BYTES)
     }
 
-    /// Reads and validates one v16 cache file against the active extraction
+    /// Reads and validates one v17 cache file against the active extraction
     /// environment.
     pub(crate) fn read(
         path: &Path,
@@ -169,45 +193,58 @@ impl ArtifactAnalysisCache {
         }
         self.artifact.id.validate()?;
         validate_dependencies(&self.artifact, &self.dependencies)?;
-        self.legacy_ir
-            .validate()
-            .map_err(|error| CacheValidationError::new(error.to_string()))?;
-        for (index, body) in self.legacy_ir.functions.iter().enumerate() {
-            let definition_stable_crate_id = body.function.def_path_hash.stable_crate_id();
-            match body.provenance {
-                FunctionBodyProvenanceIr::DefiningArtifact
-                    if definition_stable_crate_id != self.artifact.id.stable_crate_id =>
-                {
-                    return Err(CacheValidationError::new(format!(
-                        "defining function {index} does not belong to artifact stable crate id \
-                         {:016x}",
-                        self.artifact.id.stable_crate_id
-                    )));
-                }
-                FunctionBodyProvenanceIr::ConsumerInstantiation {
-                    consumer_stable_crate_id,
-                } if consumer_stable_crate_id != self.artifact.id.stable_crate_id => {
-                    return Err(CacheValidationError::new(format!(
-                        "consumer function {index} names stable crate id \
-                         {consumer_stable_crate_id:016x}, expected {:016x}",
-                        self.artifact.id.stable_crate_id
-                    )));
-                }
-                FunctionBodyProvenanceIr::ConsumerInstantiation { .. }
-                    if definition_stable_crate_id == self.artifact.id.stable_crate_id =>
-                {
-                    return Err(CacheValidationError::new(format!(
-                        "consumer function {index} must be defined by another artifact"
-                    )));
-                }
-                FunctionBodyProvenanceIr::DefiningArtifact
-                | FunctionBodyProvenanceIr::ConsumerInstantiation { .. } => {}
-            }
-        }
+        #[cfg(test)]
+        validate_legacy_oracle(self)?;
         ArtifactDbView::open(&self.facts, schemas)
             .map_err(|error| CacheValidationError::new(error.to_string()))?;
         Ok(())
     }
+}
+
+#[cfg(test)]
+fn empty_legacy_ir() -> ArtifactAnalysisIr {
+    ArtifactAnalysisIr::new(Vec::new(), Vec::new()).expect("empty legacy oracle is valid")
+}
+
+#[cfg(test)]
+fn validate_legacy_oracle(analysis: &ArtifactAnalysisCache) -> Result<(), CacheValidationError> {
+    analysis
+        .legacy_ir
+        .validate()
+        .map_err(|error| CacheValidationError::new(error.to_string()))?;
+    for (index, body) in analysis.legacy_ir.functions.iter().enumerate() {
+        let definition_stable_crate_id = body.function.def_path_hash.stable_crate_id();
+        match body.provenance {
+            FunctionBodyProvenanceIr::DefiningArtifact
+                if definition_stable_crate_id != analysis.artifact.id.stable_crate_id =>
+            {
+                return Err(CacheValidationError::new(format!(
+                    "defining function {index} does not belong to artifact stable crate id \
+                         {:016x}",
+                    analysis.artifact.id.stable_crate_id
+                )));
+            }
+            FunctionBodyProvenanceIr::ConsumerInstantiation {
+                consumer_stable_crate_id,
+            } if consumer_stable_crate_id != analysis.artifact.id.stable_crate_id => {
+                return Err(CacheValidationError::new(format!(
+                    "consumer function {index} names stable crate id \
+                         {consumer_stable_crate_id:016x}, expected {:016x}",
+                    analysis.artifact.id.stable_crate_id
+                )));
+            }
+            FunctionBodyProvenanceIr::ConsumerInstantiation { .. }
+                if definition_stable_crate_id == analysis.artifact.id.stable_crate_id =>
+            {
+                return Err(CacheValidationError::new(format!(
+                    "consumer function {index} must be defined by another artifact"
+                )));
+            }
+            FunctionBodyProvenanceIr::DefiningArtifact
+            | FunctionBodyProvenanceIr::ConsumerInstantiation { .. } => {}
+        }
+    }
+    Ok(())
 }
 
 /// rustc's identity for one loadable crate artifact.
@@ -710,7 +747,7 @@ mod tests {
     }
 
     fn analysis(schemas: &SchemaRegistry) -> ArtifactAnalysisCache {
-        ArtifactAnalysisCache::new(
+        ArtifactAnalysisCache::new_with_legacy(
             "0.1.0",
             "rustc 1.90.0-nightly",
             artifact(),
@@ -795,7 +832,7 @@ mod tests {
     }
 
     #[test]
-    fn v16_round_trip_preserves_legacy_and_typed_artifact_data() {
+    fn v17_round_trip_persists_only_permanent_artifact_facts() {
         let directory = tempdir().expect("temporary cache root");
         let schemas = schemas();
         let expected = analysis(&schemas);
@@ -818,7 +855,6 @@ mod tests {
                 "dependencies",
                 "facts",
                 "format-version",
-                "legacy-ir",
                 "rustc-version",
                 "tool-version",
             ]
@@ -838,8 +874,11 @@ mod tests {
 
         let decoded =
             ArtifactAnalysisCache::read(&path, &expectations(), &schemas).expect("read cache");
-        assert_eq!(decoded, expected);
-        assert_eq!(decoded.legacy_ir, ir());
+        assert!(decoded.legacy_ir.functions.is_empty());
+        assert!(decoded.legacy_ir.source_files.is_empty());
+        assert_eq!(decoded.artifact, expected.artifact);
+        assert_eq!(decoded.tool_version, expected.tool_version);
+        assert_eq!(decoded.rustc_version, expected.rustc_version);
         assert_eq!(decoded.facts, facts());
         let facts = ArtifactDbView::open(&decoded.facts, &schemas).expect("typed cache view");
         assert_eq!(
@@ -876,7 +915,14 @@ mod tests {
         let decoded = ArtifactAnalysisCache::read(&path, &expectations(), &schemas)
             .expect("read refreshed cache");
 
-        assert_eq!(decoded, second);
+        assert!(decoded.legacy_ir.functions.is_empty());
+        assert!(decoded.legacy_ir.source_files.is_empty());
+        assert_eq!(decoded.format_version, second.format_version);
+        assert_eq!(decoded.tool_version, second.tool_version);
+        assert_eq!(decoded.rustc_version, second.rustc_version);
+        assert_eq!(decoded.artifact, second.artifact);
+        assert_eq!(decoded.dependencies, second.dependencies);
+        assert_eq!(decoded.facts, second.facts);
     }
 
     #[test]
@@ -886,7 +932,7 @@ mod tests {
             rustc_id(3, "33333333333333333333333333333333"),
             rustc_id(2, "22222222222222222222222222222222"),
         ];
-        let forward = ArtifactAnalysisCache::new(
+        let forward = ArtifactAnalysisCache::new_with_legacy(
             "0.1.0",
             "rustc",
             artifact(),
@@ -896,7 +942,7 @@ mod tests {
             &schemas,
         )
         .expect("valid analysis");
-        let reverse = ArtifactAnalysisCache::new(
+        let reverse = ArtifactAnalysisCache::new_with_legacy(
             "0.1.0",
             "rustc",
             artifact(),
@@ -919,7 +965,7 @@ mod tests {
     fn exact_duplicate_dependencies_are_deduplicated() {
         let schemas = schemas();
         let dependency = rustc_id(2, "22222222222222222222222222222222");
-        let analysis = ArtifactAnalysisCache::new(
+        let analysis = ArtifactAnalysisCache::new_with_legacy(
             "0.1.0",
             "rustc",
             artifact(),
@@ -939,7 +985,7 @@ mod tests {
         let mut invalid_artifact = artifact();
         invalid_artifact.id.svh = String::from("not-a-valid-svh");
 
-        let error = ArtifactAnalysisCache::new(
+        let error = ArtifactAnalysisCache::new_with_legacy(
             "0.1.0",
             "rustc",
             invalid_artifact,
@@ -970,7 +1016,7 @@ mod tests {
         let overlay_ir =
             ArtifactAnalysisIr::new(vec![overlay], Vec::new()).expect("structurally valid overlay");
 
-        ArtifactAnalysisCache::new(
+        ArtifactAnalysisCache::new_with_legacy(
             "0.1.0",
             "rustc",
             artifact(),
@@ -986,7 +1032,7 @@ mod tests {
     fn unknown_fact_schemas_round_trip_as_opaque_tables() {
         let directory = tempdir().expect("temporary cache root");
         let schemas = schemas();
-        let expected = ArtifactAnalysisCache::new(
+        let expected = ArtifactAnalysisCache::new_with_legacy(
             "0.1.0",
             "rustc 1.90.0-nightly",
             artifact(),
@@ -1008,7 +1054,14 @@ mod tests {
                 .collect::<Vec<_>>(),
             ["future.allocator.fact"]
         );
-        assert_eq!(decoded, expected);
+        assert!(decoded.legacy_ir.functions.is_empty());
+        assert!(decoded.legacy_ir.source_files.is_empty());
+        assert_eq!(decoded.format_version, expected.format_version);
+        assert_eq!(decoded.tool_version, expected.tool_version);
+        assert_eq!(decoded.rustc_version, expected.rustc_version);
+        assert_eq!(decoded.artifact, expected.artifact);
+        assert_eq!(decoded.dependencies, expected.dependencies);
+        assert_eq!(decoded.facts, expected.facts);
     }
 
     #[test]
@@ -1017,7 +1070,7 @@ mod tests {
         let mut incompatible = facts();
         incompatible.tables[0].version += 1;
 
-        let error = ArtifactAnalysisCache::new(
+        let error = ArtifactAnalysisCache::new_with_legacy(
             "0.1.0",
             "rustc",
             artifact(),
@@ -1034,7 +1087,7 @@ mod tests {
 
     #[test]
     fn dangling_unknown_relation_endpoints_are_rejected() {
-        let error = ArtifactAnalysisCache::new(
+        let error = ArtifactAnalysisCache::new_with_legacy(
             "0.1.0",
             "rustc",
             artifact(),
@@ -1062,7 +1115,7 @@ mod tests {
     }
 
     #[test]
-    fn read_rejects_a_v16_envelope_without_the_fact_database() {
+    fn read_rejects_a_v17_envelope_without_the_fact_database() {
         let directory = tempdir().expect("temporary cache root");
         let path = directory.path().join("incomplete.json");
         let schemas = schemas();
@@ -1074,40 +1127,53 @@ mod tests {
         fs::write(&path, serde_json::to_vec(&document).unwrap()).unwrap();
 
         let error = ArtifactAnalysisCache::read(&path, &expectations(), &schemas)
-            .expect_err("the v16 fact database is required");
+            .expect_err("the v17 fact database is required");
 
         assert!(matches!(error, CacheError::Json { .. }));
         assert!(error.to_string().contains("missing field `facts`"));
     }
 
     #[test]
-    fn read_rejects_a_v16_envelope_without_the_legacy_payload() {
+    fn read_reports_v16_as_incompatible_before_deserializing() {
+        let directory = tempdir().expect("temporary cache root");
+        let path = directory.path().join("legacy.json");
+        fs::write(&path, r#"{"format-version":16,"legacy-ir":{}}"#).expect("write legacy header");
+
+        let error = ArtifactAnalysisCache::read(&path, &expectations(), &schemas())
+            .expect_err("v16 is deliberately incompatible");
+
+        assert!(matches!(error, CacheError::Format { version: 16, .. }));
+    }
+
+    #[test]
+    fn read_rejects_a_legacy_payload_inside_the_v17_envelope() {
         let directory = tempdir().expect("temporary cache root");
         let path = directory.path().join("incomplete.json");
+        let schemas = schemas();
+        let mut document = serde_json::to_value(analysis(&schemas)).unwrap();
+        document.as_object_mut().expect("cache object").insert(
+            String::from("legacy-ir"),
+            serde_json::to_value(ir()).unwrap(),
+        );
+        fs::write(&path, serde_json::to_vec(&document).unwrap()).unwrap();
+
+        let error = ArtifactAnalysisCache::read(&path, &expectations(), &schemas)
+            .expect_err("the removed legacy traversal payload must be rejected");
+
+        assert!(matches!(error, CacheError::Json { .. }));
+        assert!(error.to_string().contains("unknown field `legacy-ir`"));
+    }
+
+    #[test]
+    fn read_rejects_the_v15_ir_field_inside_a_v17_envelope() {
+        let directory = tempdir().expect("temporary cache root");
+        let path = directory.path().join("aliased.json");
         let schemas = schemas();
         let mut document = serde_json::to_value(analysis(&schemas)).unwrap();
         document
             .as_object_mut()
             .expect("cache object")
-            .remove("legacy-ir");
-        fs::write(&path, serde_json::to_vec(&document).unwrap()).unwrap();
-
-        let error = ArtifactAnalysisCache::read(&path, &expectations(), &schemas)
-            .expect_err("the v16 legacy traversal payload is required");
-
-        assert!(matches!(error, CacheError::Json { .. }));
-        assert!(error.to_string().contains("missing field `legacy-ir`"));
-    }
-
-    #[test]
-    fn read_rejects_the_v15_ir_field_inside_a_v16_envelope() {
-        let directory = tempdir().expect("temporary cache root");
-        let path = directory.path().join("aliased.json");
-        let schemas = schemas();
-        let mut document = serde_json::to_value(analysis(&schemas)).unwrap();
-        let object = document.as_object_mut().expect("cache object");
-        let legacy_ir = object.remove("legacy-ir").expect("legacy IR field");
-        object.insert(String::from("ir"), legacy_ir);
+            .insert(String::from("ir"), serde_json::to_value(ir()).unwrap());
         fs::write(&path, serde_json::to_vec(&document).unwrap()).unwrap();
 
         let error = ArtifactAnalysisCache::read(&path, &expectations(), &schemas)
@@ -1118,17 +1184,17 @@ mod tests {
     }
 
     #[test]
-    fn cache_paths_use_the_v16_directory() {
+    fn cache_paths_use_the_v17_directory() {
         let root = default_cache_dir("/target/plugin-nightly");
         let identity = rustc_id(1, "0123456789abcdef0123456789abcdef");
 
         assert_eq!(
             root.to_string_lossy(),
-            "/target/plugin-nightly/sniff-test-cache/v16"
+            "/target/plugin-nightly/sniff-test-cache/v17"
         );
         assert_eq!(
             artifact_cache_path(&root, &identity).to_string_lossy(),
-            "/target/plugin-nightly/sniff-test-cache/v16/artifacts/0000000000000001-0123456789abcdef0123456789abcdef.json"
+            "/target/plugin-nightly/sniff-test-cache/v17/artifacts/0000000000000001-0123456789abcdef0123456789abcdef.json"
         );
     }
 }

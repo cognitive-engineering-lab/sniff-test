@@ -1381,6 +1381,43 @@ impl RootProgramTraversalPolicy for CallBoundaryPolicy {
     }
 }
 
+struct FollowAndBoundaryPolicy;
+
+impl RootProgramTraversalPolicy for FollowAndBoundaryPolicy {
+    type Error = Infallible;
+    type Boundary = &'static str;
+
+    fn decide_call(
+        &mut self,
+        context: &CallPolicyContext<'_>,
+    ) -> Result<CallTraversalDecision<Self::Boundary>, Self::Error> {
+        let selection = context
+            .targets
+            .first()
+            .expect("test call has a target")
+            .selection();
+        Ok(CallTraversalDecision::FollowAndBoundary {
+            follow: selection.clone(),
+            boundary_target: Some(selection),
+            payload: "followed call boundary",
+        })
+    }
+
+    fn decide_body(
+        &mut self,
+        _context: &BodyPolicyContext<'_>,
+    ) -> Result<BodyTraversalDecision<Self::Boundary>, Self::Error> {
+        Ok(BodyTraversalDecision::Expand)
+    }
+
+    fn defining_markers(
+        &mut self,
+        _context: &DefiningMarkerPolicyContext<'_>,
+    ) -> Result<DefiningMarkerDecision, Self::Error> {
+        Ok(DefiningMarkerDecision::RejectCompleteSet)
+    }
+}
+
 #[derive(Default)]
 struct ObservingFollowPolicy {
     body_marker_counts: Vec<(usize, usize)>,
@@ -3554,6 +3591,26 @@ fn marker_candidates_are_retained_at_body_and_call_boundaries_without_propagatio
     assert!(call_boundary.target().is_some());
     assert!(call_resolved.followed_calls().is_empty());
     assert_eq!(call_resolved.body_visits().len(), 1);
+
+    let followed_boundary = PreparedRootProgramTraversal::prepare(
+        &call_workspace,
+        &call_index,
+        &call_authority,
+        &request(domain, call_scope.clone(), root),
+        &mut FollowAndBoundaryPolicy,
+    )
+    .unwrap();
+    let followed_boundary = resolve_prepared(followed_boundary, &call_workspace, &registry);
+    let [boundary] = followed_boundary.call_boundaries() else {
+        panic!("the combined policy should retain one call boundary");
+    };
+    let [followed] = followed_boundary.followed_calls() else {
+        panic!("the combined policy should also follow the call");
+    };
+    assert_eq!(boundary.order(), followed.order());
+    assert_eq!(boundary.occurrence(), followed.occurrence());
+    assert_eq!(boundary.target(), Some(followed.target()));
+    assert_eq!(followed_boundary.body_visits().len(), 2);
 
     let ignored = PreparedRootProgramTraversal::prepare(
         &call_workspace,

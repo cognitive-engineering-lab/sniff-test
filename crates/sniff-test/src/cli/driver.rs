@@ -3,7 +3,6 @@
 mod interpretation;
 mod typed_panic;
 mod typed_panic_call;
-#[cfg(test)]
 mod typed_safety;
 
 use std::collections::BTreeSet;
@@ -17,9 +16,7 @@ use crate::analysis::facts::collection::CollectedArtifactSchemaPack;
 use crate::analysis::facts::pack::{AnalysisRegistry, PackRegistrationError};
 use crate::analysis::facts::registry::SchemaRegistry;
 use crate::analysis::graph::{ArtifactAnalysisGraph, ExternArtifactInput};
-use crate::analysis::source::{
-    verify_cached_marker_sources_in, verify_cached_permanent_marker_sources_in,
-};
+use crate::analysis::source::verify_cached_permanent_marker_sources_in;
 use crate::config::SniffTestConfig;
 use crate::report_roots::select_report_roots;
 use anyhow::Context;
@@ -169,13 +166,29 @@ fn persist_local_analysis(
     schemas: &SchemaRegistry,
 ) -> Result<(ExtractedArtifactBundle, RustcArtifactId), String> {
     let artifact_id = artifact.id.clone();
+    let ExtractedArtifactBundle {
+        #[cfg(test)]
+        legacy_ir,
+        facts,
+    } = extracted;
+    #[cfg(not(test))]
     let cache = ArtifactAnalysisCache::new(
         env!("CARGO_PKG_VERSION"),
         rustc_version,
         artifact,
         dependencies.direct_dependency_ids().collect(),
-        extracted.legacy_ir,
-        extracted.facts,
+        facts,
+        schemas,
+    )
+    .map_err(|error| format!("failed to create analysis cache: {error}"))?;
+    #[cfg(test)]
+    let cache = ArtifactAnalysisCache::new_with_legacy(
+        env!("CARGO_PKG_VERSION"),
+        rustc_version,
+        artifact,
+        dependencies.direct_dependency_ids().collect(),
+        legacy_ir,
+        facts,
         schemas,
     )
     .map_err(|error| format!("failed to create analysis cache: {error}"))?;
@@ -184,6 +197,7 @@ fn persist_local_analysis(
         .map_err(|error| format!("failed to write analysis cache: {error}"))?;
     Ok((
         ExtractedArtifactBundle {
+            #[cfg(test)]
             legacy_ir: cache.legacy_ir,
             facts: cache.facts,
         },
@@ -254,7 +268,6 @@ fn verify_dependency_marker_source_in(
             dependency.artifact.id
         )
     };
-    verify_cached_marker_sources_in(source_map, &dependency.legacy_ir).map_err(stale_error)?;
     verify_cached_permanent_marker_sources_in(source_map, &dependency.facts, schemas)
         .map_err(stale_error)
 }
@@ -520,7 +533,6 @@ mod tests {
     };
     use crate::analysis::facts::safety::operations::UnsafeOperationEntity;
     use crate::analysis::facts::schema::RowSchema;
-    use crate::analysis::ir::ArtifactAnalysisIr;
     use crate::analysis::source::stable_source_file_id;
 
     use super::{
@@ -620,7 +632,6 @@ mod tests {
                     crate_name: String::from("dependency"),
                 },
                 Vec::new(),
-                ArtifactAnalysisIr::new(Vec::new(), Vec::new()).unwrap(),
                 facts,
                 registry.schemas(),
             )

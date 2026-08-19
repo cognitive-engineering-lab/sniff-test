@@ -278,7 +278,9 @@ fn collect_boundary_issues(
                 ));
             }
         }
-        SafetyBoundary::ForeignDeclaration | SafetyBoundary::BodylessDeclaration => {
+        SafetyBoundary::UndocumentedUnsafeCall
+        | SafetyBoundary::ForeignDeclaration
+        | SafetyBoundary::BodylessDeclaration => {
             collect_undocumented_unsafe_call(cx, boundary, pending, &context);
             if matches!(boundary.payload(), SafetyBoundary::BodylessDeclaration)
                 && is_actual_call(boundary.effective_kind())
@@ -389,14 +391,16 @@ fn validate_boundary(
             ));
         }
     }
-    if let SafetyBoundary::CallContract(call_contract) = boundary.payload()
-        && (boundary.target() != Some(call_contract.contract_target())
-            || call_contract.contract().queried_callable()
-                != call_contract.contract_target().callable())
-    {
-        return Err(RuleError::failed(
-            "safety-call contract no longer matches the selected callable",
-        ));
+    if let SafetyBoundary::CallContract(call_contract) = boundary.payload() {
+        let _contract_target = input.artifact_entity_at::<CallableEntity>(
+            &call_contract.contract_target().callable().erase(),
+        )?;
+        if call_contract.contract().queried_callable() != call_contract.contract_target().callable()
+        {
+            return Err(RuleError::failed(
+                "safety-call contract no longer matches its selected contract callable",
+            ));
+        }
     }
     Ok(())
 }

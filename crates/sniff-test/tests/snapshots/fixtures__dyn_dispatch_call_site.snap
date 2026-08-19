@@ -31,5 +31,19 @@ expression: "report[\"findings\"]"
       "src/lib.rs:9:9: 9:41: macro std::panic --macro-expansion-> macro core::std::panic::panic_2021",
       "[SYSROOT]/lib/rustlib/src/rust/library/core/src/panic.rs:62:9: 62:73: macro core::std::panic::panic_2021 --direct-call-> core::std::rt::panic_fmt"
     ]
+  },
+  {
+    "function": "dyn_dispatch_call_site::entry",
+    "kind": "indirect-safety-call-boundary",
+    "level": "warn",
+    "reason": "dyn_dispatch_call_site::Runner::run has unverifiable safety requirements",
+    "root": "dyn_dispatch_call_site::entry",
+    "root-kind": "concrete",
+    "root-span": "src/lib.rs:13:1: 13:15",
+    "span": "src/lib.rs:15:5: 15:17",
+    "target": "dyn_dispatch_call_site::Runner::run",
+    "trace": [
+      "src/lib.rs:15:5: 15:17: dyn_dispatch_call_site::entry --direct-call-> dyn_dispatch_call_site::Runner::run"
+    ]
   }
 ]

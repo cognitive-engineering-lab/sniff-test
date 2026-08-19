@@ -46,5 +46,19 @@ expression: "report[\"findings\"]"
       "src/lib.rs:13:9: 13:42: macro core::std::assert --macro-expansion-> macro core::std::panic::panic_2021",
       "[SYSROOT]/lib/rustlib/src/rust/library/core/src/panic.rs:62:9: 62:73: macro core::std::panic::panic_2021 --direct-call-> core::std::rt::panic_fmt"
     ]
+  },
+  {
+    "function": "supertrait_dyn_dispatch::call_supertrait_method",
+    "kind": "indirect-safety-call-boundary",
+    "level": "warn",
+    "reason": "supertrait_dyn_dispatch::Super::risky has unverifiable safety requirements",
+    "root": "supertrait_dyn_dispatch::call_supertrait_method",
+    "root-kind": "concrete",
+    "root-span": "src/lib.rs:19:1: 19:42",
+    "span": "src/lib.rs:21:5: 21:23",
+    "target": "supertrait_dyn_dispatch::Super::risky",
+    "trace": [
+      "src/lib.rs:21:5: 21:23: supertrait_dyn_dispatch::call_supertrait_method --direct-call-> supertrait_dyn_dispatch::Super::risky"
+    ]
   }
 ]

@@ -1,4 +1,4 @@
-//! Unified permanent typed-panic production authority and report-v13 projection.
+//! Unified permanent typed-panic production authority and report-v14 projection.
 
 use std::collections::{BTreeMap, BTreeSet, btree_map::Entry};
 use std::error::Error;
@@ -156,6 +156,7 @@ pub(super) struct TypedPanicCallBatchReport {
     pub(super) completeness: Vec<TypedPanicCompletenessRootReport>,
     pub(super) ambiguities: Vec<TypedPanicAmbiguityRootReport>,
     pub(super) source_files: Vec<SourceFileIr>,
+    pub(super) function_ranges: BTreeMap<FunctionId, SourceRangeIr>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -664,6 +665,7 @@ fn evaluate_typed_panic_call_roots_inner(
             completeness: Vec::new(),
             ambiguities: Vec::new(),
             source_files: Vec::new(),
+            function_ranges: BTreeMap::new(),
         });
     }
     let registry = typed_panic_authority_registry()
@@ -835,6 +837,7 @@ fn evaluate_typed_panic_call_roots_inner(
         })
         .collect::<Vec<_>>();
     let presentation_anchors = FunctionPresentationIndex::build(&workspace)?;
+    let function_ranges = presentation_anchors.function_ranges();
     let relation_index = WorkspaceRelationIndex::open(&workspace)
         .map_err(|source| TypedPanicEvaluationError::Relations(Box::new(source)))?;
 
@@ -1034,6 +1037,7 @@ fn evaluate_typed_panic_call_roots_inner(
         completeness,
         ambiguities,
         source_files,
+        function_ranges,
     })
 }
 

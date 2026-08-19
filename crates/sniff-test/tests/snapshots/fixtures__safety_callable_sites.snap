@@ -5,6 +5,19 @@ expression: "report[\"findings\"]"
 [
   {
     "function": "safety_callable_sites::independently_marked_calls",
+    "kind": "indirect-safety-call-boundary",
+    "level": "warn",
+    "reason": "indirect call through an unsafe function pointer has unverifiable safety requirements",
+    "root": "safety_callable_sites::independently_marked_calls",
+    "root-kind": "concrete",
+    "root-span": "src/lib.rs:15:1: 15:36",
+    "span": "src/lib.rs:21:14: 21:21",
+    "trace": [
+      "src/lib.rs:21:14: 21:21: safety_callable_sites::independently_marked_calls --indirect-call-> indirect call through an unsafe function pointer"
+    ]
+  },
+  {
+    "function": "safety_callable_sites::independently_marked_calls",
     "kind": "unsafe-call-missing-requirements",
     "level": "warn",
     "missing-requirements": [
@@ -41,6 +54,19 @@ expression: "report[\"findings\"]"
     "target": "safety_callable_sites::second_target",
     "trace": [
       "src/lib.rs:24:14: 24:22: safety_callable_sites::independently_marked_calls --fn-pointer-call-target-> safety_callable_sites::second_target"
+    ]
+  },
+  {
+    "function": "safety_callable_sites::independently_marked_calls",
+    "kind": "indirect-safety-call-boundary",
+    "level": "warn",
+    "reason": "indirect call through an unsafe function pointer has unverifiable safety requirements",
+    "root": "safety_callable_sites::independently_marked_calls",
+    "root-kind": "concrete",
+    "root-span": "src/lib.rs:15:1: 15:36",
+    "span": "src/lib.rs:24:14: 24:22",
+    "trace": [
+      "src/lib.rs:24:14: 24:22: safety_callable_sites::independently_marked_calls --indirect-call-> indirect call through an unsafe function pointer"
     ]
   }
 ]

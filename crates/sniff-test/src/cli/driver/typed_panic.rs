@@ -41,7 +41,7 @@ use crate::analysis::facts::panic::{
 use crate::analysis::facts::program::root_traversal::MarkerProbe;
 use crate::analysis::facts::program::topology::{CallAttributionRole, CallKind};
 use crate::analysis::facts::program::{
-    FunctionHasSourceAnchor, FunctionKey, SourceAnchorKey, SourceFileEntity,
+    FunctionEntity, FunctionHasSourceAnchor, FunctionKey, SourceAnchorKey, SourceFileEntity,
 };
 use crate::analysis::facts::render::{RenderCx, RenderError, RenderedDiagnostic};
 use crate::analysis::facts::view::{ArtifactDbView, ViewError};
@@ -138,6 +138,9 @@ pub(super) enum TypedPanicEvaluationError {
     ConflictingSourceFileIdentity {
         file: SourceFileId,
     },
+    ConflictingFunctionPresentation {
+        function: FunctionId,
+    },
     InvalidSemanticTraceProjection {
         issue: RowRef,
         reason: String,
@@ -197,6 +200,7 @@ pub(super) struct OpenedTypedArtifacts<'facts> {
 #[derive(Debug)]
 pub(super) struct FunctionPresentationIndex {
     by_function: BTreeMap<ScopedEntityRef, Vec<SourceRangeIr>>,
+    by_identity: BTreeMap<FunctionId, SourceRangeIr>,
 }
 
 impl FunctionPresentationIndex {
@@ -204,6 +208,7 @@ impl FunctionPresentationIndex {
         workspace: &WorkspaceFactView<'_>,
     ) -> Result<Self, TypedPanicEvaluationError> {
         let mut by_function = BTreeMap::<ScopedEntityRef, Vec<SourceRangeIr>>::new();
+        let mut by_identity = BTreeMap::<FunctionId, SourceRangeIr>::new();
         for scope in workspace.scopes() {
             let view = workspace
                 .artifact(scope)
@@ -221,13 +226,40 @@ impl FunctionPresentationIndex {
                         source: Box::new(source),
                     }
                 })?;
+                let function: FunctionEntity = view.entity(relation.from).map_err(|source| {
+                    TypedPanicEvaluationError::ArtifactView {
+                        scope: scope.clone(),
+                        source: Box::new(source),
+                    }
+                })?;
+                let range = source_range(anchor.anchor());
+                let identity = FunctionId {
+                    def_path_hash: function.key().definition(),
+                    instance_hash: function.key().instance(),
+                };
+                match by_identity.entry(identity) {
+                    std::collections::btree_map::Entry::Vacant(entry) => {
+                        entry.insert(range.clone());
+                    }
+                    std::collections::btree_map::Entry::Occupied(entry)
+                        if entry.get() != &range =>
+                    {
+                        return Err(TypedPanicEvaluationError::ConflictingFunctionPresentation {
+                            function: identity,
+                        });
+                    }
+                    std::collections::btree_map::Entry::Occupied(_) => {}
+                }
                 by_function
                     .entry(ScopedEntityRef::new(scope.clone(), relation.from.erase()))
                     .or_default()
-                    .push(source_range(anchor.anchor()));
+                    .push(range);
             }
         }
-        Ok(Self { by_function })
+        Ok(Self {
+            by_function,
+            by_identity,
+        })
     }
 
     pub(super) fn range(
@@ -244,6 +276,10 @@ impl FunctionPresentationIndex {
                 endpoint: function.clone(),
             }),
         }
+    }
+
+    pub(super) fn function_ranges(&self) -> BTreeMap<FunctionId, SourceRangeIr> {
+        self.by_identity.clone()
     }
 }
 
@@ -310,6 +346,10 @@ impl Display for TypedPanicEvaluationError {
                 "typed panic workspace contains conflicting metadata for source file identity `{}`",
                 file.as_str()
             ),
+            Self::ConflictingFunctionPresentation { function } => write!(
+                formatter,
+                "typed panic workspace contains conflicting presentation ranges for function {function:?}"
+            ),
             Self::InvalidSemanticTraceProjection { issue, reason } => write!(
                 formatter,
                 "typed panic issue `{}`:{} has an invalid permanent semantic trace: {reason}",
@@ -343,6 +383,7 @@ impl Error for TypedPanicEvaluationError {
             | Self::PreparedRootCount { .. }
             | Self::MultiplePresentationAnchors { .. }
             | Self::ConflictingSourceFileIdentity { .. }
+            | Self::ConflictingFunctionPresentation { .. }
             | Self::InvalidSemanticTraceProjection { .. }
             | Self::InvalidCompilerAssertIssueProjection { .. } => None,
         }

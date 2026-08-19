@@ -681,6 +681,10 @@ impl<'a, P: RootProgramTraversalPolicy> TraversalEngine<'a, '_, P> {
         Ok(targets)
     }
 
+    #[allow(
+        clippy::too_many_lines,
+        reason = "one exhaustive ownership-consuming match commits every call-policy disposition atomically"
+    )]
     fn process_call_policy(
         &mut self,
         invocation: PendingInvocation<'a>,
@@ -757,6 +761,64 @@ impl<'a, P: RootProgramTraversalPolicy> TraversalEngine<'a, '_, P> {
                     payload,
                     path,
                 });
+            }
+            CallTraversalDecision::FollowAndBoundary {
+                follow,
+                boundary_target,
+                payload,
+            } => {
+                let followed = Self::select_target(&selectable_targets, &follow)?;
+                let selected_boundary = boundary_target
+                    .as_ref()
+                    .map(|selection| Self::select_target(&selectable_targets, selection))
+                    .transpose()?;
+                let boundary_target_data = selected_boundary
+                    .as_ref()
+                    .map(|selected| selected.callable.data().clone());
+                let boundary_path =
+                    selected_boundary.map_or_else(|| base_path, |selected| selected.path);
+                let active_markers = invocation.active_markers.clone();
+                let order = self.next_order()?;
+                self.call_boundaries.push(PreparedCallBoundary {
+                    order,
+                    occurrence: invocation.occurrence.id(),
+                    occurrence_data: invocation.occurrence.data().clone(),
+                    call_site: invocation.call_site.id(),
+                    call_site_data: invocation.call_site.data().clone(),
+                    safety_group: invocation.safety_group.id(),
+                    safety_group_data: invocation.safety_group.data().clone(),
+                    effective_kind,
+                    resolution: resolution.clone(),
+                    source_anchors: invocation.source_anchors.clone(),
+                    macro_frames: invocation.macro_frames.clone(),
+                    target: boundary_target,
+                    target_data: boundary_target_data,
+                    inherited_markers: invocation.inherited_markers.clone(),
+                    attached_marker_candidates: invocation.attached_marker_candidates.clone(),
+                    active_markers: invocation.active_markers.clone(),
+                    payload,
+                    path: boundary_path,
+                });
+                self.followed_calls.push(PreparedFollowedCall {
+                    order,
+                    occurrence: invocation.occurrence.id(),
+                    occurrence_data: invocation.occurrence.data().clone(),
+                    call_site: invocation.call_site.id(),
+                    call_site_data: invocation.call_site.data().clone(),
+                    safety_group: invocation.safety_group.id(),
+                    safety_group_data: invocation.safety_group.data().clone(),
+                    effective_kind,
+                    resolution,
+                    source_anchors: invocation.source_anchors,
+                    macro_frames: invocation.macro_frames,
+                    target: follow,
+                    target_data: followed.callable.data().clone(),
+                    inherited_markers: invocation.inherited_markers,
+                    attached_marker_candidates: invocation.attached_marker_candidates,
+                    active_markers: invocation.active_markers,
+                    path: followed.path,
+                });
+                self.follow_callable(followed.callable, followed.path, active_markers)?;
             }
             CallTraversalDecision::Follow(selection) => {
                 let selected = Self::select_target(&selectable_targets, &selection)?;

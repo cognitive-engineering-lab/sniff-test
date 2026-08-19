@@ -108,8 +108,10 @@ impl std::error::Error for ExtractError {}
 
 /// Atomic result of one policy-neutral compiler extraction.
 ///
-/// Both halves are structurally validated before this value is returned.
+/// Permanent facts are always returned; legacy IR exists only in test builds
+/// as a parity oracle and is never persisted.
 pub(crate) struct ExtractedArtifactBundle {
+    #[cfg(test)]
     pub(crate) legacy_ir: ArtifactAnalysisIr,
     pub(crate) facts: ArtifactFactIr,
 }
@@ -127,7 +129,10 @@ pub(crate) fn extract_artifact_bundle(
             "failed to collect permanent typed artifact facts: {error}"
         ))
     })?;
+    #[cfg(not(test))]
+    drop(parts.legacy);
     Ok(ExtractedArtifactBundle {
+        #[cfg(test)]
         legacy_ir: parts.legacy,
         facts,
     })
@@ -1283,7 +1288,7 @@ fn call_target<'tcx>(
                 })
             });
             Ok(PendingCallTarget::OpaqueBoundary {
-                description: format!("indirect call {callee_ty:?}"),
+                description: format!("indirect call {callee_ty}"),
                 target: target.transpose()?,
             })
         }

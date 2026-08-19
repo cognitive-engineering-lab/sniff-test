@@ -164,7 +164,7 @@ validation first enforces explicit limits on table count; rows per table and
 in total; combined fact/relation index rows; requirement references per fact
 and in total; bytes per string; JSON depth and nodes per value; and JSON bytes
 per erased value and across all erased row values. These checks apply after
-deserialization. A v16 cache reader must independently bound the raw cache file
+deserialization. A v17 cache reader must independently bound the raw cache file
 before parsing and may supply tighter limits.
 
 ## Deterministic finalization
@@ -358,9 +358,9 @@ The core program pack retains the current stable file identity, filename,
 content hash, normalized length, and file-relative ranges. Source anchors
 reference those rows. Cached anchors become rustc spans only through the
 existing verification boundary. Marker-bearing source verification remains a
-pre-evaluation integrity check: dependency caches validate both the remaining
-legacy markers and every permanent marker-to-anchor-to-file chain against the
-active source map before either authority can affect a finding. Macro
+pre-evaluation integrity check: dependency caches validate every permanent
+marker-to-anchor-to-file chain against the active source map before it can
+affect a finding. Macro
 relations retain definition and source-callsite anchors so either probing
 policy remains expressible.
 
@@ -374,29 +374,29 @@ current cutover boundary.
 1. **Infrastructure:** add the registry, typed/symbolic IDs, open artifact
    database, canonical builder, typed views, relation adjacency, pass DAG, pack
    registration, renderer adapters, the test-only extension pack, and the
-   strict cache envelope that carries both legacy and typed artifact data.
+   strict cache envelope for permanent typed artifact data.
 2. **MIR assertion slice:** collect function/effect/source entities, call and
    assertion provenance relations, typed MIR assertion and compiler
    requirement facts, and panic evidence claims. Evaluate them per root into a
    typed unsatisfied-obligation issue and render the existing human/JSON
    result. This becomes authoritative for compiler assertions.
 3. **Safety and human facts:** migrate THIR operations, unsafe groups,
-   `BuiltinUnsafe`, contracts, evidence attachment, and ambiguity issues.
+   `BuiltinUnsafe`, contracts, evidence attachment, ambiguity issues, and
+   safety completeness to permanent packs.
 4. **Composition and callable joins:** move scoped body resolution,
    source/runtime contract fallback, exact/generic lookup, and callable joins
    onto composed fact databases.
-5. **Removal:** after safety analysis migrates, remove the legacy
-   effect/marker/finding/trace enums and pending structures, eliminate the
-   non-authoritative panic oracle projection, and reduce
-   extraction/interpretation to pass and rule orchestration.
+5. **Removal:** after both domains migrate, remove legacy IR from the cache and
+   production interpretation, retain it only as an in-memory test parity
+   oracle, then remove the remaining legacy effect/marker/finding/trace enums
+   and pending extraction structures.
 
-The first authoritative fact-database cache is format 16 in directory `v16`.
-All ready-root panic findings and panic completeness now have one permanent
-representation and one unified evaluation path; missing selected roots use the
-ordered preparation bridge described below because they have no evaluation
-root. Legacy IR remains in that envelope as the production safety input and as
-a non-authoritative panic parity oracle pending its removal. Report format 13
-remains unchanged while diagnostics and JSON stay behaviorally identical.
+The facts-only cache is format 17 in directory `v17`. Both panic and safety
+findings now use permanent representations and unified per-domain evaluation
+paths; missing selected roots use ordered preparation bridges because they have
+no evaluation root. Legacy IR is neither serialized nor read by production and
+exists only in test builds as an in-memory parity oracle. Report format 14 adds
+trusted-safety provenance and the distinct indirect-safety-boundary finding.
 
 ## Implementation state
 
@@ -433,9 +433,9 @@ contracts, compiler assertions, safety rows, and human markers. Each pass
 declares its exact reads and writes, materializes empty tables, and produces
 canonical output independent of collection order. Production rustc extraction
 constructs this validated handoff directly from compiler state and runs the
-combined permanent pack independently of the remaining legacy IR projection.
-The typed artifact is therefore a primary collection result, not a
-reconstruction from legacy rows.
+combined permanent pack as the only persisted artifact representation. The
+typed artifact is therefore a primary collection result, not a reconstruction
+from legacy rows.
 
 `WorkspaceProgramIndex` is the one-time, exact-generation preparation boundary
 for those permanent program facts. Its caller supplies the verified stable
@@ -514,14 +514,11 @@ diagnostic source and the canonical use for endpoint and trace. Foreign-root or
 domain rows, mismatched claim domains, and orphan occurrences fail the whole
 coordinator rule before any ambiguity issue is staged.
 
-Production extraction returns one atomic bundle containing legacy IR and
-permanent typed facts. The neutral pending model feeds both outputs directly;
-there is no assertion/evidence extension or semantic fact merge. Typed-only
-macro sources enter permanent source tables without mutating legacy IR.
-Collection or finalization failure rejects the whole extraction. The strict
-format-16 cache still requires both halves: typed facts own production panic
-analysis, while legacy IR remains the production safety-analysis input and the
-panic parity oracle. Unknown historical adapter tables are inert.
+Production extraction returns one validated permanent fact database. In test
+builds the same neutral pending model also yields legacy IR for parity checks;
+that oracle is not part of the serialized bundle. Collection or finalization
+failure rejects the whole extraction. The strict format-17 cache accepts only
+permanent facts, and unknown historical adapter tables remain inert.
 
 The production driver installs one `AnalysisRegistry<PanicRootInputs>` with the
 compiler-assert, panic-call, root-contract, completeness, and shared evidence
@@ -545,7 +542,7 @@ cannot be skipped.
 
 `UnsatisfiedCompilerAssertIssue` is the sole compiler-assert issue. Its
 pack-owned renderer handles every precise `MirAssertKind`; the CLI adapts its
-owned semantic trace and presentation to report-v13 without parsing renderer
+owned semantic trace and presentation to report-v14 without parsing renderer
 JSON. The compiler-assert input rule validates the complete assertion and
 marker-attachment set before committing any delta, and its trace projector
 indexes each resolved root once rather than rescanning traversal state.
@@ -573,19 +570,22 @@ The unified report adapter validates the complete preparation mapping, every
 lane's count/order/root identity, every cross-lane `EvaluationRoot`, every
 fallible panic-call DTO projection, and all compiler-renderer compatibility
 before the first source lookup. It then adapts compact or full traces through
-the existing report-v13 boundary; unavailable source identities degrade in the
+the existing report-v14 boundary; unavailable source identities degrade in the
 same way as legacy output. Any validation or adaptation error drops the local
 batch, so partial typed findings cannot escape.
 
-Legacy interpretation is now authoritative only for the five safety finding
-classes and safety completeness. Production invokes a safety-only legacy
-entry point, so it neither traverses the panic domain nor materializes panic
-findings and panic-completeness reasons that the typed pipeline would discard.
-A single exhaustive match at the `InterpretedFinding` boundary remains as a
-defensive authority check and rejects every typed-covered panic class before
-rendering; no post-render deduplication is used. The full two-domain legacy
-interpreter is compiled only for tests and remains the oracle for safety-output
-parity until the later facts-only cache migration.
+Production also installs one `AnalysisRegistry<SafetyRootInputs>` containing
+root contracts, calls, unsafe operations, completeness, and shared evidence
+coordination. Every ready safety root uses one composition and one evaluation
+database, and its five sparse report lanes are source-free preflighted before
+adaptation. Trusted safety boundaries preserve the precise missing-
+justification or missing-requirements class while carrying explicit provenance;
+opaque targets produce a distinct indirect safety boundary issue.
+
+Legacy traversal entry points are compiled only for tests. Their shared data
+types and neutral pending extractor remain temporarily available to build the
+in-memory two-domain parity oracle, but no legacy IR is serialized, loaded,
+traversed, or used for source resolution in production.
 
 ## Rejected alternatives
 

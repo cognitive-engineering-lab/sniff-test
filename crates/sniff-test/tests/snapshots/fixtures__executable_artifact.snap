@@ -8,7 +8,7 @@ expression: messages
       "crate-name": "executable_artifact"
     },
     "findings": [],
-    "format-version": 13,
+    "format-version": 14,
     "reason": "sniff-test-artifact",
     "rustc-version": "[RUSTC_VERSION]",
     "tool-version": "0.1.0"

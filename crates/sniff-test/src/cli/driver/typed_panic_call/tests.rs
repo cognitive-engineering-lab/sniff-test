@@ -5965,7 +5965,7 @@ fn fully_satisfied_duplicate_groups_share_one_projected_witness() {
 #[test]
 #[allow(
     clippy::too_many_lines,
-    reason = "one parity test freezes the silent boundary, raw issue, and report-v13 projection"
+    reason = "one parity test freezes the silent boundary, raw issue, and report-v14 projection"
 )]
 fn root_contract_duplicate_requirements_have_exact_legacy_parity() {
     let root_function = function(143);

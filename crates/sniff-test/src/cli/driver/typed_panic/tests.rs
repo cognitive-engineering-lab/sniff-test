@@ -461,7 +461,7 @@ fn exact_source_key_projects_file_identity_and_byte_bounds() {
 }
 
 #[test]
-fn semantic_edges_keep_report_v13_labels_and_ordering() {
+fn semantic_edges_keep_report_v14_labels_and_ordering() {
     assert_eq!(
         semantic_edge_label(CompilerAssertSemanticEdge::Call(CallKind::DirectCall)),
         "direct-call"
@@ -636,7 +636,7 @@ fn a_late_missing_root_rejects_the_whole_typed_batch() {
 }
 
 #[test]
-fn typed_source_catalog_alone_resolves_report_v13_spans() {
+fn typed_source_catalog_alone_resolves_report_v14_spans() {
     rustc_span::create_default_session_globals_then(|| {
         let function = function(70);
         let body = SourceAnchorKey::new("fixture-file", 5, 15);
@@ -676,7 +676,7 @@ fn typed_source_catalog_alone_resolves_report_v13_spans() {
 }
 
 #[test]
-fn compact_and_full_report_v13_modes_keep_identical_public_semantics() {
+fn compact_and_full_report_v14_modes_keep_identical_public_semantics() {
     let root_function = function(80);
     let asserted_definition = function(81);
     let asserted = FunctionId::exact(asserted_definition.def_path_hash, instance(82));
@@ -693,9 +693,9 @@ fn compact_and_full_report_v13_modes_keep_identical_public_semantics() {
     let sources = TypedCatalogSources::default();
 
     let compact = adapt_typed_panic_reports(&sources, vec![report.clone()], &roots, false)
-        .expect("compact report-v13 adaptation succeeds");
+        .expect("compact report-v14 adaptation succeeds");
     let full = adapt_typed_panic_reports(&sources, vec![report], &roots, true)
-        .expect("full report-v13 adaptation succeeds");
+        .expect("full report-v14 adaptation succeeds");
 
     assert_eq!(
         serde_json::to_value(&compact).expect("compact report serializes"),

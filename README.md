@@ -99,6 +99,9 @@ trusted-safety-boundary-namespaces = []
 
 [safety.lints]
 missing-safety-docs = "warn"
+indirect-call-boundary = "warn"
+# Optional trusted-boundary override for the precise safety-call lint below:
+# trusted-safety = "warn"
 unsafe-call-missing-justification = "warn"
 unsafe-call-missing-requirements = "warn"
 # Group default for non-call unsafe operations.
@@ -124,17 +127,17 @@ traces closer to the source call structure. Compiler settings are applied
 literally and independently from lint policy. For example, disabling overflow
 checks does not change or reject `[panics.lints].compiler-assert-overflow`.
 
-The analysis cache uses format version 15 and stores policy-neutral artifact IR:
-function identities, call edges, compiler-assert kinds, unsafe operations,
-source markers, contracts, and verified file-relative source ranges. It does
-not store selected report roots, lint levels, interpreted findings, or rendered
-traces.
-Dependency rustc units extract every analyzable body and silently persist this
-IR. Successful dependency units do not select roots, interpret policy, emit
+The analysis cache uses format version 17 and stores only the open,
+policy-neutral permanent fact database: function identities, call edges,
+compiler-assert kinds, unsafe operations, source markers, contracts, and
+verified file-relative source ranges. It does not persist legacy traversal IR,
+selected report roots, lint levels, interpreted findings, or rendered traces.
+Dependency rustc units extract every analyzable body and silently persist these
+facts. Successful dependency units do not select roots, interpret policy, emit
 finding diagnostics, or write JSON reports. Workspace units select
-`[analysis].report-roots`, compose local IR with verified dependency IR,
+`[analysis].report-roots`, compose local facts with verified dependency facts,
 interpret only the reachable combined graph, and emit the workspace findings.
-Unreachable dependency IR therefore produces no findings.
+Unreachable dependency facts therefore produce no findings.
 
 For concrete cross-crate generic calls, the consuming rustc unit also stores an
 exact-instantiation overlay. This preserves dispatch selected using a
@@ -147,10 +150,10 @@ plus strict version hash (SVH). Cache filenames are
 `artifacts/<stable-crate-id>-<svh>.json`; Cargo output suffixes and crate names
 are not used as identity. Compiler settings that affect the crate are already
 reflected in rustc's SVH, while lint and other interpretation-only settings
-reuse the same dependency IR. Workspace outputs that are not loadable as
+reuse the same dependency facts. Workspace outputs that are not loadable as
 crates, including executable-only units, are interpreted in memory and are not
 assigned cache identities. Failure to produce, validate, or persist required
-dependency IR is a tool error rather than a successful run with partial
+dependency analysis facts is a tool error rather than a successful run with partial
 dependency analysis.
 Because rustc excludes ordinary comments from the SVH, available source files
 that contributed `// PANIC:` or `// SAFETY:` marker facts are content-verified
@@ -216,8 +219,16 @@ Use `[safety].trusted-safety-boundary-namespaces` for audited APIs whose
 `# Safety` documentation is authoritative. Documented requirements must be
 satisfied by nearby `// SAFETY:` markers; an undocumented match is trusted as
 carrying no safety obligation, even when declared `unsafe`. Matching
-implementations remain opaque. An exported unsafe function selected as a report
-root is still checked for missing `# Safety` documentation.
+implementations remain opaque. Findings retain their precise missing-
+justification or missing-requirements kind and set `trusted-boundary = true`;
+`[safety.lints].trusted-safety`, when present, overrides the corresponding base
+lint level. An exported unsafe function selected as a report root is still
+checked for missing `# Safety` documentation.
+
+`[safety.lints].indirect-call-boundary` controls calls whose concrete safety
+contract cannot be resolved, such as function pointers. These are reported as
+`kind = "indirect-safety-call-boundary"`; the analogous panic finding remains
+`kind = "indirect-call-boundary"`.
 
 Use `[documentation].override-files` while auditing generated or third-party
 APIs whose documented behavior is known but not written in source yet. Override
@@ -245,16 +256,18 @@ cargo sniff-test --message-format json
 
 JSON mode writes newline-delimited messages to stdout, while Cargo and rustc
 diagnostics stay on stderr. Only workspace rustc units emit sniff-test messages;
-dependency units cache IR silently. Each workspace unit emits at most one
+dependency units cache facts silently. Each workspace unit emits at most one
 message with `"reason":"sniff-test-artifact"`. Reports have no dependency
 `scope`, cache identity, or dependency list because every public report is a
-workspace report. Reports use format version 13. A finding includes
+workspace report. Reports use format version 14. A finding includes
 `root-span` alongside `root` when the selected function's source location is
 available and verified; `span` is the finding's effect location, and every
-`trace` entry is a call or effect edge.
+`trace` entry is a call or effect edge. Safety-call findings produced through a
+trusted boundary include `trusted-boundary = true`; the field is omitted for
+ordinary boundaries.
 sniff-test records an invocation token only in workspace dep-info, so Cargo
 reruns report-producing workspace units on every invocation to reinterpret and
-validate cached IR while leaving otherwise-fresh dependency units untouched.
+validate cached facts while leaving otherwise-fresh dependency units untouched.
 
 Recorded dependency source ranges become rustc spans only after the source
 file's stable identity, exact content hash, normalized byte length, and byte
