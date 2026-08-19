@@ -3,13 +3,24 @@
 pub(crate) mod collector;
 mod contract_index;
 pub(crate) mod operations;
+mod root_inputs;
 
 #[allow(
     unused_imports,
     reason = "typed safety root preparation consumes the effective contract index next"
 )]
 pub(crate) use contract_index::{
-    WorkspaceEffectiveSafetyContracts, WorkspaceEffectiveSafetyContractsError,
+    EffectiveSafetyContract, WorkspaceEffectiveSafetyContracts,
+    WorkspaceEffectiveSafetyContractsError,
+};
+#[allow(
+    unused_imports,
+    reason = "the typed safety evaluator consumes root preparation in the next slice"
+)]
+pub(crate) use root_inputs::{
+    EmittedSafetyRoot, PreparedSafetyRoot, PreparedSafetyRootBatch, SafetyBoundary,
+    SafetyContractCallBoundary, SafetyRootInputError, SafetyRootInputs, SafetyRootRequest,
+    safety_domain,
 };
 
 use serde::{Deserialize, Serialize};
