@@ -1,0 +1,70 @@
+---
+source: crates/sniff-test/tests/fixtures.rs
+expression: "report[\"findings\"]"
+---
+[
+  {
+    "kind": "panic-invocation",
+    "level": "deny",
+    "reason": "panic sink core::std::rt::panic_fmt",
+    "root": "effect_marker_paths::converging_panic_paths_preserve_uncovered_route",
+    "root-kind": "concrete",
+    "root-span": "src/lib.rs:9:1: 9:57",
+    "span": "src/lib.rs:2:5: 2:19",
+    "target": "core::std::rt::panic_fmt",
+    "trace": [
+      "src/lib.rs:12:5: 12:29: effect_marker_paths::converging_panic_paths_preserve_uncovered_route --direct-call-> effect_marker_paths::uncovered_panic_branch",
+      "src/lib.rs:6:5: 6:30: effect_marker_paths::uncovered_panic_branch --direct-call-> effect_marker_paths::converging_panic_effect",
+      "src/lib.rs:2:5: 2:19: effect_marker_paths::converging_panic_effect --macro-expansion-> macro std::panic",
+      "src/lib.rs:2:5: 2:19: macro std::panic --macro-expansion-> macro core::std::panic::panic_2021",
+      "[SYSROOT]/lib/rustlib/src/rust/library/core/src/panic.rs:62:9: 62:73: macro core::std::panic::panic_2021 --direct-call-> core::std::rt::panic_fmt"
+    ]
+  },
+  {
+    "function": "effect_marker_paths::converging_safety_effect",
+    "kind": "unsafe-op-missing-justification",
+    "level": "deny",
+    "reason": "unsafe operation (raw pointer dereference) has no `// SAFETY:` justification",
+    "root": "effect_marker_paths::converging_safety_paths_preserve_uncovered_route",
+    "root-kind": "concrete",
+    "root-span": "src/lib.rs:23:1: 23:82",
+    "safety-op-kind": "raw-pointer-dereference",
+    "span": "src/lib.rs:16:14: 16:22",
+    "trace": [
+      "src/lib.rs:26:14: 26:46: effect_marker_paths::converging_safety_paths_preserve_uncovered_route --direct-call-> effect_marker_paths::uncovered_safety_branch",
+      "src/lib.rs:20:5: 20:38: effect_marker_paths::uncovered_safety_branch --direct-call-> effect_marker_paths::converging_safety_effect",
+      "src/lib.rs:16:14: 16:22: effect_marker_paths::converging_safety_effect --unsafe-operation-> unsafe operation (raw pointer dereference)"
+    ]
+  },
+  {
+    "kind": "panic-invocation",
+    "level": "deny",
+    "reason": "panic sink core::std::rt::panic_fmt",
+    "root": "effect_marker_paths::transitive_panic_path_exposes_uncovered_effect",
+    "root-kind": "concrete",
+    "root-span": "src/lib.rs:42:1: 42:56",
+    "span": "src/lib.rs:39:5: 39:56",
+    "target": "core::std::rt::panic_fmt",
+    "trace": [
+      "src/lib.rs:43:5: 43:28: effect_marker_paths::transitive_panic_path_exposes_uncovered_effect --direct-call-> effect_marker_paths::uncovered_panic_inner",
+      "src/lib.rs:39:5: 39:56: effect_marker_paths::uncovered_panic_inner --macro-expansion-> macro std::panic",
+      "src/lib.rs:39:5: 39:56: macro std::panic --macro-expansion-> macro core::std::panic::panic_2021",
+      "[SYSROOT]/lib/rustlib/src/rust/library/core/src/panic.rs:62:9: 62:73: macro core::std::panic::panic_2021 --direct-call-> core::std::rt::panic_fmt"
+    ]
+  },
+  {
+    "function": "effect_marker_paths::uncovered_safety_inner",
+    "kind": "unsafe-op-missing-justification",
+    "level": "deny",
+    "reason": "unsafe operation (raw pointer dereference) has no `// SAFETY:` justification",
+    "root": "effect_marker_paths::transitive_safety_path_exposes_uncovered_effect",
+    "root-kind": "concrete",
+    "root-span": "src/lib.rs:59:1: 59:81",
+    "safety-op-kind": "raw-pointer-dereference",
+    "span": "src/lib.rs:56:14: 56:22",
+    "trace": [
+      "src/lib.rs:60:5: 60:36: effect_marker_paths::transitive_safety_path_exposes_uncovered_effect --direct-call-> effect_marker_paths::uncovered_safety_inner",
+      "src/lib.rs:56:14: 56:22: effect_marker_paths::uncovered_safety_inner --unsafe-operation-> unsafe operation (raw pointer dereference)"
+    ]
+  }
+]

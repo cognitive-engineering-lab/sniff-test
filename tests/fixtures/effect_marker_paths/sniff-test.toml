@@ -1,0 +1,23 @@
+[analysis]
+report-roots = [
+    "effect_marker_paths::converging_panic_paths_preserve_uncovered_route",
+    "effect_marker_paths::converging_safety_paths_preserve_uncovered_route",
+    "effect_marker_paths::transitive_panic_marker_covers_inner_effect",
+    "effect_marker_paths::transitive_panic_path_exposes_uncovered_effect",
+    "effect_marker_paths::transitive_safety_marker_covers_inner_effect",
+    "effect_marker_paths::transitive_safety_path_exposes_uncovered_effect",
+]
+
+[panics]
+panic-sink-namespaces = [
+    "core::panicking::**",
+    "std::panicking::**",
+    "core::std::rt::panic_fmt",
+    "std::rt::panic_fmt",
+]
+
+[panics.lints]
+panic-invocation = "deny"
+
+[safety.lints]
+unsafe-op-missing-justification = "deny"

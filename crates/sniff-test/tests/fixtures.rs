@@ -105,8 +105,8 @@ fixture_cases! {
     "contract_overrides" => {
         contract_overrides => Case::new();
     }
-    "converging_effect_paths" => {
-        converging_effect_paths =>
+    "effect_marker_paths" => {
+        effect_markers_preserve_path_specific_coverage =>
             Case::new().denied();
     }
     "release_pruning" => {
@@ -192,10 +192,6 @@ fixture_cases! {
     }
     "safe_markers" => {
         safe_markers => Case::new().denied();
-    }
-    "transitive_effect_markers" => {
-        transitive_effect_markers => Case::new()
-            .denied();
     }
     "panic_requirements" => {
         panic_requirements => Case::new();
