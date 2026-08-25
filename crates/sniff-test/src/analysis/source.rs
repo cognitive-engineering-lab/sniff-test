@@ -4,6 +4,7 @@
 //! after the loaded file's stable identity, content hash, normalized byte
 //! length, and requested byte range all match the artifact IR.
 
+use std::cell::RefCell;
 use std::collections::BTreeMap;
 use std::fmt;
 use std::hash::Hasher;
@@ -12,7 +13,6 @@ use std::path::Path;
 use std::sync::Arc;
 
 use rustc_data_structures::{fingerprint::Fingerprint, stable_hasher::StableHasher};
-use rustc_middle::ty::TyCtxt;
 use rustc_span::source_map::SourceMap;
 use rustc_span::{BytePos, Pos, SourceFile, Span};
 
@@ -236,18 +236,7 @@ fn malformed_permanent_source_chain(reason: impl Into<String>) -> CachedSourceEr
     }
 }
 
-/// Loads and verifies one cached source range in rustc's active source map.
-///
-/// Callers should treat every error as a nonfatal signal to render an
-/// unspanned diagnostic. No span from unverified source is ever returned.
-pub(crate) fn cached_source_span(
-    tcx: TyCtxt<'_>,
-    source: &SourceFileIr,
-    range: &SourceRangeIr,
-) -> Result<Span, CachedSourceError> {
-    cached_source_span_in(tcx.sess.source_map(), source, range)
-}
-
+#[cfg(test)]
 pub(crate) fn cached_source_span_in(
     source_map: &SourceMap,
     source: &SourceFileIr,
@@ -258,6 +247,75 @@ pub(crate) fn cached_source_span_in(
     cached_source_range_span(source_map, source, range, &file)
 }
 
+/// Request-scoped cache for verified rustc source files.
+///
+/// Finding adaptation commonly resolves many ranges from the same small set of source files.
+/// Building rustc's stable-file index and verifying or loading a file are therefore performed
+/// once per adaptation request, while range identity and bounds remain validated on every call.
+pub(crate) struct VerifiedSourceCache<'a> {
+    source_map: &'a SourceMap,
+    active_files: BTreeMap<SourceFileId, Arc<SourceFile>>,
+    verified_files: RefCell<BTreeMap<SourceFileId, VerifiedSourceEntry>>,
+    #[cfg(test)]
+    verification_count: std::cell::Cell<usize>,
+}
+
+struct VerifiedSourceEntry {
+    metadata: SourceFileIr,
+    result: Result<Arc<SourceFile>, CachedSourceError>,
+}
+
+impl<'a> VerifiedSourceCache<'a> {
+    #[must_use]
+    pub(crate) fn new(source_map: &'a SourceMap) -> Self {
+        Self {
+            source_map,
+            active_files: active_source_files(source_map),
+            verified_files: RefCell::new(BTreeMap::new()),
+            #[cfg(test)]
+            verification_count: std::cell::Cell::new(0),
+        }
+    }
+
+    pub(crate) fn span(
+        &self,
+        source: &SourceFileIr,
+        range: &SourceRangeIr,
+    ) -> Result<Span, CachedSourceError> {
+        validate_declared_range(source, range)?;
+        let cached = self
+            .verified_files
+            .borrow()
+            .get(&source.id)
+            .filter(|entry| entry.metadata == *source)
+            .map(|entry| entry.result.clone());
+        let file = if let Some(result) = cached {
+            result?
+        } else {
+            #[cfg(test)]
+            self.verification_count
+                .set(self.verification_count.get() + 1);
+            let result =
+                load_verified_cached_source_from_index(self.source_map, source, &self.active_files);
+            self.verified_files.borrow_mut().insert(
+                source.id.clone(),
+                VerifiedSourceEntry {
+                    metadata: source.clone(),
+                    result: result.clone(),
+                },
+            );
+            result?
+        };
+        cached_source_range_span(self.source_map, source, range, &file)
+    }
+
+    #[cfg(test)]
+    fn verification_count(&self) -> usize {
+        self.verification_count.get()
+    }
+}
+
+#[cfg(test)]
 fn load_verified_cached_source(
     source_map: &SourceMap,
     source: &SourceFileIr,
@@ -570,7 +628,7 @@ mod tests {
     use tempfile::TempDir;
 
     use super::{
-        CachedSourceError, cached_source_span_in, stable_source_file_id,
+        CachedSourceError, VerifiedSourceCache, cached_source_span_in, stable_source_file_id,
         verify_cached_permanent_marker_sources_in,
     };
     use crate::analysis::facts::builder::ArtifactDbBuilder;
@@ -714,6 +772,28 @@ mod tests {
                 cached_source_span_in(&active, &source, &range(&source, 3, 9)).expect("valid span");
 
             assert_eq!(active.span_to_snippet(span).expect("snippet"), "cached");
+        });
+    }
+
+    #[test]
+    fn verified_source_cache_reuses_one_file_for_multiple_ranges() {
+        with_session_globals(|| {
+            let directory = tempfile::tempdir().expect("temp directory");
+            let path = write_source(&directory, "fn cached() {}\n");
+            let source = source_metadata(&path);
+            let active = SourceMap::new(FilePathMapping::empty());
+            let cache = VerifiedSourceCache::new(&active);
+
+            let function = cache
+                .span(&source, &range(&source, 0, 2))
+                .expect("the first range verifies its source");
+            let name = cache
+                .span(&source, &range(&source, 3, 9))
+                .expect("the second range reuses the verified source");
+
+            assert_eq!(active.span_to_snippet(function).unwrap(), "fn");
+            assert_eq!(active.span_to_snippet(name).unwrap(), "cached");
+            assert_eq!(cache.verification_count(), 1);
         });
     }
 

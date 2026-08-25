@@ -21,7 +21,7 @@ use crate::analysis::ir::{
     CallEdgeKindIr, ContractRequirementIr, FunctionId, SourceFileId, SourceFileIr, SourceRangeIr,
     StableDefPathHash, StableInstanceHash,
 };
-use crate::analysis::source::cached_source_span;
+use crate::analysis::source::VerifiedSourceCache;
 use crate::config::SniffTestConfig;
 use crate::namespace::canonical_namespace;
 use crate::report_roots::{ReportRoot, ReportRootKind};
@@ -224,6 +224,7 @@ pub(super) fn interpret_workspace(
     }
     let sources = SourceResolver {
         tcx: request.tcx,
+        verified_sources: VerifiedSourceCache::new(request.tcx.sess.source_map()),
         typed_source_files,
         function_ranges,
     };
@@ -1841,6 +1842,7 @@ fn render_requirement(requirement: &ContractRequirementIr) -> String {
 
 struct SourceResolver<'tcx> {
     tcx: TyCtxt<'tcx>,
+    verified_sources: VerifiedSourceCache<'tcx>,
     typed_source_files: Vec<SourceFileIr>,
     function_ranges: BTreeMap<FunctionId, SourceRangeIr>,
 }
@@ -1880,7 +1882,7 @@ impl FindingSources for SourceResolver<'_> {
                 )),
             );
         };
-        match cached_source_span(self.tcx, source, range) {
+        match self.verified_sources.span(source, range) {
             Ok(span) => (Some(span), None),
             Err(error) => (None, Some(error.to_string())),
         }
