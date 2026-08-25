@@ -64,7 +64,8 @@ use super::typed_panic::{
     permanent_source_files, source_range,
 };
 use super::typed_panic_call::{
-    call_edge_kind, function_id, marker_owner_from_activation, physical_marker_source,
+    call_edge_kind, function_id, marker_owner_from_activation, merge_physical_marker_owner,
+    physical_marker_source,
 };
 use crate::cli::findings::Finding;
 
@@ -1536,24 +1537,24 @@ fn project_safety_ambiguity_findings(
                     "use has no active marker activation",
                 )
             })?;
-            let current =
+            let (_, current) =
                 marker_owner_from_activation(&report.root, evaluation, usage.claim(), activation)
                     .map_err(|source| invalid("safety marker owner", source.to_string()))?;
-            if owner
-                .as_ref()
-                .is_some_and(|(expected, _)| expected != &current.0)
-            {
+            if !merge_physical_marker_owner(
+                &mut owner,
+                function_id(*current.key()),
+                current.display_path(),
+            ) {
                 return Err(invalid(
                     "safety marker owner",
                     "contributing uses resolve to different owners",
                 ));
             }
-            owner.get_or_insert(current);
             if usage == canonical {
                 trace = Some(witness.interpreted_trace.clone());
             }
         }
-        let (_, owner_data) =
+        let (function, function_path) =
             owner.ok_or_else(|| invalid("safety marker owner", "ambiguous marker has no owner"))?;
         let trace = trace.ok_or_else(|| {
             invalid(
@@ -1565,8 +1566,8 @@ fn project_safety_ambiguity_findings(
             kind: InterpretedFindingKind::AmbiguousSafetyMarker {
                 effect_count: expected_groups.len(),
             },
-            function: function_id(*owner_data.key()),
-            function_path: owner_data.display_path().to_owned(),
+            function,
+            function_path,
             target: None,
             source_range: Some(
                 physical_marker_source(evaluation, &marker)
@@ -2401,8 +2402,7 @@ mod tests {
     };
     use crate::analysis::facts::schema::{RowSchema, SchemaId};
     use crate::analysis::findings::InterpretationRoot;
-    use crate::analysis::ir::FunctionId;
-    use crate::analysis::ir::{SourceFileIr, SourceRangeIr};
+    use crate::analysis::ir::{FunctionId, SourceFileIr, SourceRangeIr};
     use crate::cli::driver::interpretation::FindingSources;
     use crate::cli::driver::typed_panic::TypedPanicLocalArtifact;
     use crate::cli::driver::typed_panic_call::tests::{function, root, root_preparation_artifact};

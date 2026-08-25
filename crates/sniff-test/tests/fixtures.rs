@@ -207,6 +207,10 @@ fixture_cases! {
             Case::new()
                 .args(&["--manifest", "macro-shared.toml"])
                 .denied();
+        ambiguous_safety_generic_instances =>
+            Case::new()
+                .args(&["--manifest", "generic-instances.toml"])
+                .denied();
     }
     "safety_contract_requirements" => {
         safety_contracts_preserve_call_and_obligation_requirements => Case::new();

@@ -1,0 +1,10 @@
+[analysis]
+report-roots = [
+    "ambiguous_safety::reused_marker_across_generic_instances",
+]
+
+[analysis.lints]
+ambiguous-safety-marker = "deny"
+
+[safety.lints]
+unsafe-call-missing-justification = "deny"

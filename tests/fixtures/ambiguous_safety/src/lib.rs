@@ -39,3 +39,15 @@ macro_rules! call_perform_twice_with_one_marker {
 pub fn reused_marker_within_one_macro_expansion() {
     call_perform_twice_with_one_marker!();
 }
+
+fn read_copy<T: Copy>(value: &T) -> T {
+    // SAFETY: `value` is a valid, initialized `T`.
+    unsafe { std::ptr::read(value) }
+}
+
+pub fn reused_marker_across_generic_instances() {
+    let byte = 7_u8;
+    let word = 11_u16;
+    let _ = read_copy(&byte);
+    let _ = read_copy(&word);
+}

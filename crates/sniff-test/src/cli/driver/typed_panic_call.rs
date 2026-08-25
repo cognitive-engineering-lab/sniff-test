@@ -1464,22 +1464,23 @@ fn project_ambiguity_report(
                     "evidence use has no exact active marker activation",
                 )
             })?;
-            let owner = marker_owner_from_activation(root, evaluation, usage.claim(), activation)?;
-            match &common_owner {
-                Some((expected, _)) if expected != &owner.0 => {
-                    return Err(invalid(
-                        "marker owner",
-                        "contributing evidence uses resolve the physical marker to different owners",
-                    ));
-                }
-                None => common_owner = Some(owner),
-                Some(_) => {}
+            let (_, owner) =
+                marker_owner_from_activation(root, evaluation, usage.claim(), activation)?;
+            if !merge_physical_marker_owner(
+                &mut common_owner,
+                function_id(*owner.key()),
+                owner.display_path(),
+            ) {
+                return Err(invalid(
+                    "marker owner",
+                    "contributing evidence uses resolve the physical marker to different owners",
+                ));
             }
             if usage == canonical {
                 canonical_trace = Some(witness.interpreted_trace.clone());
             }
         }
-        let (_, owner_data) = common_owner.ok_or_else(|| {
+        let (function, function_path) = common_owner.ok_or_else(|| {
             invalid(
                 "marker owner",
                 "a reused marker lost every contributing owner",
@@ -1494,8 +1495,8 @@ fn project_ambiguity_report(
         let source_range = physical_marker_source(evaluation, &marker)?;
         projected.push(TypedPanicAmbiguityIssueReport {
             root: root.clone(),
-            function: function_id(*owner_data.key()),
-            function_path: owner_data.display_path().to_owned(),
+            function,
+            function_path,
             source_range: Some(source_range),
             trace,
             effect_count: expected_groups.len(),
@@ -1514,6 +1515,34 @@ fn project_ambiguity_report(
         kind: request.kind,
         issues: projected,
     })
+}
+
+/// Reconciles the source owner of one physical marker across monomorphized bodies.
+///
+/// Marker occurrences are definition-level source identities. When the same marker is
+/// instantiated in more than one body, its candidate relations legitimately resolve to
+/// different exact `FunctionEntity` rows for the same definition. In that case the only
+/// stable common presentation owner is the generic definition.
+pub(super) fn merge_physical_marker_owner(
+    owner: &mut Option<(FunctionId, String)>,
+    current: FunctionId,
+    current_path: &str,
+) -> bool {
+    match owner {
+        None => {
+            *owner = Some((current, current_path.to_owned()));
+            true
+        }
+        Some((expected, expected_path))
+            if expected.def_path_hash == current.def_path_hash && expected_path == current_path =>
+        {
+            if *expected != current {
+                *expected = FunctionId::generic(expected.def_path_hash);
+            }
+            true
+        }
+        Some(_) => false,
+    }
 }
 
 #[cfg(test)]
