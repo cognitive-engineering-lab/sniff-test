@@ -348,6 +348,7 @@ fn source_callsite_marker_projects_when_exact_call_id_differs() {
         vec![SourceFileFact {
             id: file,
             filename: String::from("src/lib.rs"),
+            logical_path: None,
             content_hash: String::from("sha256:test"),
             byte_len: 100,
         }],
@@ -684,6 +685,7 @@ fn declaration_contract_overrides_apply_without_a_declaration_body_or_call() {
         &graph,
         &namespaces,
         &overrides,
+        &std::collections::BTreeMap::new(),
         MarkerProbing::SourceCallsite,
     )
     .expect("annotations");
@@ -753,6 +755,7 @@ fn declaration_override_uses_union_of_all_occurrence_aliases() {
             &graph,
             &namespaces,
             &overrides,
+            &std::collections::BTreeMap::new(),
             MarkerProbing::SourceCallsite,
         )
         .expect("annotations");

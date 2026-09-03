@@ -103,6 +103,9 @@ fixture_cases! {
     "contract_overrides" => {
         contract_overrides => Case::new();
     }
+    "source_contract_overrides" => {
+        source_contract_overrides_match_only_the_selected_definition => Case::new();
+    }
     "effect_marker_paths" => {
         effect_markers_preserve_path_specific_coverage =>
             Case::new().denied();

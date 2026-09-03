@@ -809,6 +809,7 @@ mod tests {
         let source_files = vec![SourceFileFact {
             id: SourceFileId::new(format!("source-{crate_name}")),
             filename: format!("src/{crate_name}.rs"),
+            logical_path: None,
             content_hash: String::from("hash"),
             byte_len: 1,
         }];
@@ -818,6 +819,7 @@ mod tests {
             ArtifactInfo {
                 id: artifact_id,
                 crate_name: crate_name.to_owned(),
+                package_version: None,
                 scope,
             },
             dependencies,

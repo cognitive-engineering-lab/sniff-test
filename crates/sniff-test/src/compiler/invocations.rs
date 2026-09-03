@@ -954,6 +954,7 @@ mod tests {
         SourceFileFact {
             id: SourceFileId::new("source-1"),
             filename: String::from("src/lib.rs"),
+            logical_path: None,
             content_hash: String::from("sha256:0123456789abcdef"),
             byte_len: 100,
         }

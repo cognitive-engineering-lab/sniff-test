@@ -129,10 +129,11 @@ traces closer to the source call structure. Compiler settings are applied
 literally and independently from lint policy. For example, disabling overflow
 checks does not change or reject `[panics.lints].compiler-assert-overflow`.
 
-The analysis cache uses format version 23 and stores one direct,
+The analysis cache uses format version 24 and stores one direct,
 policy-neutral fact schema: function identities, source-level invocations,
 compiler-assert kinds, unsafe operations, annotations, contracts, and verified
-file-relative source ranges, plus workspace/dependency artifact ownership. It
+file-relative source ranges, extraction-time definition locations, plus
+workspace/dependency artifact ownership and exact Cargo package versions. It
 does not persist traversal state, selected
 report roots, lint levels, interpreted findings, or rendered traces.
 Target-code dependency rustc units extract every analyzable body and silently
@@ -273,10 +274,12 @@ Use `[contracts].override-files` while auditing generated or third-party APIs
 whose documented behavior is known but not written in source yet. This section
 only configures where contract evidence comes from; it does not make a
 namespace trusted or opaque. Domain boundaries remain under `[panics]` and
-`[safety]`. Override files are TOML files keyed by Rust namespace globs; the
-value replaces that function's rustdoc markdown for both panic and safety
-contract parsing. The markdown is parsed as CommonMark, so normal headings,
-setext headings, inline code, and formatted list text work as expected.
+`[safety]`. Override files may select a contract by Rust namespace glob or by
+its defining crate, exact Cargo package version, package-relative source path,
+and definition-start line. The value replaces that function's rustdoc markdown
+for both panic and safety contract parsing. The markdown is parsed as CommonMark,
+so normal headings, setext headings, inline code, and formatted list text work
+as expected.
 
 ```toml
 [overrides]
@@ -285,7 +288,26 @@ setext headings, inline code, and formatted list text work as expected.
 
 - representable: layout size must fit in `usize`.
 """
+
+[overrides.crates."zerocopy"."0.8.27"]
+"src/layout.rs:123:130" = """
+# Panics
+
+- representable: layout size must fit in `usize`.
+"""
 ```
+
+Here `zerocopy` is the Rust crate name (so Cargo package hyphens are normally
+underscores), while `0.8.27` is an exact Cargo package version. Source paths use
+`/`, are relative to that package's manifest directory, and cannot contain
+`.` or `..` components. The final `:start:end` lines are one-based and
+inclusive; a selector matches when a definition starts within that interval. A
+source selector wins over a namespace glob for the same definition. An
+artifact that does not contain the selected crate/version/path is unaffected.
+Once that source path is present, no matching definition, distinct matching
+definitions, or differing source contents make sniff-test report an error
+instead of guessing. Byte-identical mirrors of the same crate/version source
+are treated as the same selection.
 
 ## JSON Output
 

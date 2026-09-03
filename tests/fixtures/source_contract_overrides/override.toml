@@ -1,0 +1,26 @@
+[overrides]
+"source_contract_overrides::selected_panic" = """
+# Safety
+
+This deliberately conflicts with the source selector below. The source
+selector must replace the namespace-selected markdown for this definition.
+"""
+
+[overrides.crates."source_contract_overrides"."0.1.0"]
+"src/lib.rs:1:3" = """
+# Panics
+
+- selected: `flag` must be true.
+"""
+"src/trait_api.rs:1:3" = """
+# Panics
+
+- implemented: the implementation must satisfy its panic contract.
+"""
+
+[overrides.crates."source_contract_dependency"."1.2.3"]
+"src/lib.rs:1:3" = """
+# Panics
+
+- dependency: `flag` must be true.
+"""

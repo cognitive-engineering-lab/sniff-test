@@ -51,14 +51,23 @@ empty-report-roots = "warn"
 missing-report-root = "warn"
 
 [contracts]
-# Synthetic rustdoc markdown by namespace glob, loaded from TOML files relative
-# to this manifest. Useful while auditing external or generated APIs whose
-# documented behavior is known but not written in source yet.
+# Synthetic rustdoc markdown by namespace glob or exact source selector, loaded
+# from TOML files relative to this manifest. Useful while auditing external or
+# generated APIs whose documented behavior is known but not written in source.
 #
 # File format:
 # [overrides]
 # "crate::path::function" = """
 # # Panics
+# - requirement: condition
+# """
+#
+# Exact source selectors live in the same group. The first two keys are the
+# Rust crate name and exact package version. Source paths are package-relative,
+# use `/`, and line ranges are one-based and inclusive:
+# [overrides.crates."crate_name"."1.2.3"]
+# "src/lib.rs:10:20" = """
+# # Safety
 # - requirement: condition
 # """
 override-files = []

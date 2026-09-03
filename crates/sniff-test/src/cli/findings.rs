@@ -849,6 +849,7 @@ mod tests {
         let source = SourceFileFact {
             id: SourceFileId::new("source-id"),
             filename: String::from("dependency/src/lib.rs"),
+            logical_path: None,
             content_hash: String::from("content"),
             byte_len: 200,
         };
@@ -885,6 +886,7 @@ mod tests {
         let source = SourceFileFact {
             id: SourceFileId::new("source-id"),
             filename: String::from("dependency/src/lib.rs"),
+            logical_path: None,
             content_hash: String::from("content"),
             byte_len: 200,
         };
@@ -948,6 +950,7 @@ mod tests {
         let source = SourceFileFact {
             id: SourceFileId::new("source-id"),
             filename: String::from("src/lib.rs"),
+            logical_path: None,
             content_hash: String::from("content"),
             byte_len: 200,
         };
@@ -1014,6 +1017,7 @@ mod tests {
         let source = SourceFileFact {
             id: SourceFileId::new("source-id"),
             filename: String::from("dependency/src/lib.rs"),
+            logical_path: None,
             content_hash: String::from("content"),
             byte_len: 200,
         };
@@ -1073,6 +1077,7 @@ mod tests {
         let source = SourceFileFact {
             id: SourceFileId::new("source-id"),
             filename: String::from("src/lib.rs"),
+            logical_path: None,
             content_hash: String::from("content"),
             byte_len: 200,
         };
@@ -1115,6 +1120,7 @@ mod tests {
         let source = SourceFileFact {
             id: SourceFileId::new("source-id"),
             filename: String::from("src/lib.rs"),
+            logical_path: None,
             content_hash: String::from("content"),
             byte_len: 200,
         };
@@ -1151,6 +1157,7 @@ mod tests {
         let source = SourceFileFact {
             id: SourceFileId::new("source-id"),
             filename: String::from("dependency/src/lib.rs"),
+            logical_path: None,
             content_hash: String::from("content"),
             byte_len: 200,
         };

@@ -11,7 +11,7 @@ use crate::artifact_cache::ArtifactScope;
 use crate::compiler::source::CachedSourceMap;
 use crate::config::SniffTestConfig;
 use crate::namespace::canonical_namespace;
-use crate::report::{EffectReportError, trace_workspace};
+use crate::report::{EffectReportError, trace_workspace_with_source_overrides};
 use crate::report_model::{
     IncompleteReason, IncompleteTraceKind, InterpretationRoot, InterpretedFinding,
     InterpretedFindingKind, InterpretedSafetyCallKind, InterpretedTrace, InterpretedTraceStep,
@@ -19,6 +19,7 @@ use crate::report_model::{
     UnresolvedCallMechanism, UnresolvedCallSite,
 };
 use crate::report_roots::ReportRoot;
+use crate::source_overrides::{ContractSourceArtifact, resolve_source_contract_overrides};
 use crate::workspace::ArtifactAnalysisGraph;
 use rustc_hir::def_id::LOCAL_CRATE;
 use rustc_middle::ty::TyCtxt;
@@ -43,7 +44,26 @@ pub(super) fn interpret_workspace<'tcx>(
         .copied()
         .map(|root| interpretation_root(tcx, root))
         .collect::<Vec<_>>();
-    let result = trace_workspace(local, local_stable_crate_id, dependencies, &roots, config)?;
+    let package_version = std::env::var("CARGO_PKG_VERSION")
+        .ok()
+        .filter(|version| !version.trim().is_empty());
+    let crate_name = tcx.crate_name(LOCAL_CRATE);
+    let local_source = ContractSourceArtifact::new(
+        local_stable_crate_id,
+        crate_name.as_str(),
+        package_version.as_deref(),
+        local,
+    );
+    let source_overrides =
+        resolve_source_contract_overrides(&config.contracts.overrides, local_source, dependencies)?;
+    let result = trace_workspace_with_source_overrides(
+        local,
+        local_stable_crate_id,
+        dependencies,
+        &roots,
+        config,
+        &source_overrides,
+    )?;
     let sources = SourceResolver {
         tcx,
         cache: CachedSourceMap::new(tcx.sess.source_map()),
@@ -1665,6 +1685,7 @@ mod tests {
                 &[(7, 10), (8, 20)],
             )],
             source_files: Vec::new(),
+            definitions: Vec::new(),
         };
         let overlay = ArtifactFacts {
             functions: vec![marker_call_body(
@@ -1675,6 +1696,7 @@ mod tests {
                 &[(7, 100)],
             )],
             source_files: Vec::new(),
+            definitions: Vec::new(),
         };
 
         let exact_body = exact_function_body_in([&definition, &overlay], exact)

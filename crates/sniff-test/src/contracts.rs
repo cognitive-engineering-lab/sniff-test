@@ -3,7 +3,8 @@
 //! Panic and safety analysis both read rustdoc sections with named requirement
 //! bullets. Keep the markdown-ish parsing here so the two policies do not drift.
 
-use std::fmt::{Debug, Formatter};
+use std::collections::BTreeMap;
+use std::fmt::{Debug, Display, Formatter};
 
 use rustc_hir::attrs::{AttributeKind, HasAttrs};
 use rustc_hir::{Attribute, def_id::DefId};
@@ -11,12 +12,154 @@ use rustc_middle::ty::TyCtxt;
 use rustc_span::{DUMMY_SP, Span};
 use serde::{Deserialize, Serialize};
 
+use crate::artifact::is_portable_source_path;
 use crate::path_patterns::PathPatterns;
 
-/// Synthetic rustdoc markdown matched by Rust namespace glob.
+/// Exact package source location used to select synthetic rustdoc markdown.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub(crate) struct SourceContractSelector {
+    crate_name: String,
+    version: String,
+    path: String,
+    start_line: u32,
+    end_line: u32,
+}
+
+impl SourceContractSelector {
+    /// Parses a package-relative `path:start:end` source selector.
+    ///
+    /// Line numbers are one-based and inclusive.
+    pub(crate) fn parse(
+        crate_name: impl Into<String>,
+        version: impl Into<String>,
+        location: &str,
+    ) -> Result<Self, SourceContractSelectorError> {
+        let crate_name = crate_name.into();
+        Self::validate_crate_name(&crate_name)?;
+
+        let version = version.into();
+        Self::validate_version(&version)?;
+
+        let Some((path_and_start, end_line)) = location.rsplit_once(':') else {
+            return Err(SourceContractSelectorError::Location(location.to_owned()));
+        };
+        let Some((path, start_line)) = path_and_start.rsplit_once(':') else {
+            return Err(SourceContractSelectorError::Location(location.to_owned()));
+        };
+        if !is_portable_source_path(path) {
+            return Err(SourceContractSelectorError::Path(path.to_owned()));
+        }
+
+        let line_range = format!("{start_line}:{end_line}");
+        let Ok(start_line) = start_line.parse::<u32>() else {
+            return Err(SourceContractSelectorError::LineRange(line_range));
+        };
+        let Ok(end_line) = end_line.parse::<u32>() else {
+            return Err(SourceContractSelectorError::LineRange(line_range));
+        };
+        if start_line == 0 || start_line > end_line {
+            return Err(SourceContractSelectorError::LineRange(line_range));
+        }
+
+        Ok(Self {
+            crate_name,
+            version,
+            path: path.to_owned(),
+            start_line,
+            end_line,
+        })
+    }
+
+    pub(crate) fn validate_crate_name(crate_name: &str) -> Result<(), SourceContractSelectorError> {
+        if is_valid_crate_name(crate_name) {
+            Ok(())
+        } else {
+            Err(SourceContractSelectorError::CrateName(
+                crate_name.to_owned(),
+            ))
+        }
+    }
+
+    pub(crate) fn validate_version(version: &str) -> Result<(), SourceContractSelectorError> {
+        if version.trim() == version && cargo_metadata::semver::Version::parse(version).is_ok() {
+            Ok(())
+        } else {
+            Err(SourceContractSelectorError::Version(version.to_owned()))
+        }
+    }
+
+    #[must_use]
+    pub(crate) fn crate_name(&self) -> &str {
+        &self.crate_name
+    }
+
+    #[must_use]
+    pub(crate) fn version(&self) -> &str {
+        &self.version
+    }
+
+    #[must_use]
+    pub(crate) fn path(&self) -> &str {
+        &self.path
+    }
+
+    #[must_use]
+    pub(crate) const fn start_line(&self) -> u32 {
+        self.start_line
+    }
+
+    #[must_use]
+    pub(crate) const fn end_line(&self) -> u32 {
+        self.end_line
+    }
+}
+
+fn is_valid_crate_name(name: &str) -> bool {
+    let mut bytes = name.bytes();
+    bytes.next().is_some_and(|first| {
+        (first.is_ascii_alphabetic() || first == b'_')
+            && bytes.all(|byte| byte.is_ascii_alphanumeric() || byte == b'_')
+    })
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum SourceContractSelectorError {
+    CrateName(String),
+    Version(String),
+    Location(String),
+    Path(String),
+    LineRange(String),
+}
+
+impl Display for SourceContractSelectorError {
+    fn fmt(&self, formatter: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::CrateName(name) => write!(formatter, "invalid Rust crate name `{name}`"),
+            Self::Version(version) => {
+                write!(formatter, "invalid exact Cargo package version `{version}`")
+            }
+            Self::Location(location) => write!(
+                formatter,
+                "invalid source location `{location}`; expected path:start:end"
+            ),
+            Self::Path(path) => {
+                write!(formatter, "invalid package-relative source path `{path}`")
+            }
+            Self::LineRange(range) => write!(
+                formatter,
+                "invalid source line range `{range}`; expected positive start:end"
+            ),
+        }
+    }
+}
+
+impl std::error::Error for SourceContractSelectorError {}
+
+/// Synthetic rustdoc markdown selected by namespace glob or exact source location.
 #[derive(Clone, Default, PartialEq, Eq)]
 pub(crate) struct ContractDocOverrides {
     entries: Vec<ContractDocOverride>,
+    source_entries: BTreeMap<SourceContractSelector, String>,
     patterns: PathPatterns,
 }
 
@@ -33,6 +176,18 @@ impl ContractDocOverrides {
     ///
     /// Returns an error if any configured glob pattern is invalid.
     pub(crate) fn new(entries: Vec<(String, String)>) -> Result<Self, globset::Error> {
+        Self::with_source_entries(entries, BTreeMap::new())
+    }
+
+    /// Compiles namespace documentation overrides and stores exact source overrides.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if any configured namespace glob pattern is invalid.
+    pub(crate) fn with_source_entries(
+        entries: Vec<(String, String)>,
+        source_entries: BTreeMap<SourceContractSelector, String>,
+    ) -> Result<Self, globset::Error> {
         let patterns =
             PathPatterns::new(entries.iter().map(|(pattern, _)| pattern.clone()).collect())?;
         Ok(Self {
@@ -40,8 +195,17 @@ impl ContractDocOverrides {
                 .into_iter()
                 .map(|(pattern, markdown)| ContractDocOverride { pattern, markdown })
                 .collect(),
+            source_entries,
             patterns,
         })
+    }
+
+    pub(crate) fn source_entries(
+        &self,
+    ) -> impl ExactSizeIterator<Item = (&SourceContractSelector, &str)> + DoubleEndedIterator {
+        self.source_entries
+            .iter()
+            .map(|(selector, markdown)| (selector, markdown.as_str()))
     }
 
     #[must_use]
@@ -66,7 +230,11 @@ impl ContractDocOverrides {
 
 impl Debug for ContractDocOverrides {
     fn fmt(&self, formatter: &mut Formatter<'_>) -> std::fmt::Result {
-        self.entries.fmt(formatter)
+        formatter
+            .debug_struct("ContractDocOverrides")
+            .field("namespace_entries", &self.entries)
+            .field("source_entries", &self.source_entries)
+            .finish_non_exhaustive()
     }
 }
 
@@ -408,7 +576,113 @@ fn span_for_offset(line_spans: &[(std::ops::Range<usize>, Span)], offset: usize)
 
 #[cfg(test)]
 mod tests {
-    use super::{parse_panic_contract_doc_lines, parse_safety_contract_doc_lines};
+    use std::collections::BTreeMap;
+
+    use super::{
+        SourceContractSelector, parse_panic_contract_doc_lines, parse_safety_contract_doc_lines,
+    };
+
+    #[test]
+    fn source_contract_selector_parses_typed_identity_and_inclusive_lines() {
+        let selector =
+            SourceContractSelector::parse("zerocopy", "0.8.27", "src/layout/for_type.rs:123:130")
+                .expect("valid source selector");
+
+        assert_eq!(selector.crate_name(), "zerocopy");
+        assert_eq!(selector.version(), "0.8.27");
+        assert_eq!(selector.path(), "src/layout/for_type.rs");
+        assert_eq!(selector.start_line(), 123);
+        assert_eq!(selector.end_line(), 130);
+    }
+
+    #[test]
+    fn source_contract_selector_rejects_invalid_crate_names_and_versions() {
+        for crate_name in [
+            "",
+            "9crate",
+            "crate-name",
+            "crate.name",
+            "crate name",
+            "crateé",
+        ] {
+            assert!(
+                SourceContractSelector::parse(crate_name, "1.0.0", "src/lib.rs:1:1").is_err(),
+                "invalid crate name `{crate_name}` was accepted"
+            );
+        }
+        for version in ["", "   ", " 1.0.0", "1.0.0 ", "latest", "1.2"] {
+            assert!(
+                SourceContractSelector::parse("valid_crate", version, "src/lib.rs:1:1").is_err(),
+                "invalid exact version `{version}` was accepted"
+            );
+        }
+
+        SourceContractSelector::parse("valid_crate", "1.2.3-alpha.1+build.7", "src/lib.rs:1:1")
+            .expect("Cargo prerelease and build versions should be accepted");
+    }
+
+    #[test]
+    fn source_contract_selector_rejects_nonportable_paths() {
+        for location in [
+            ":1:1",
+            "/src/lib.rs:1:1",
+            "src\\lib.rs:1:1",
+            "./src/lib.rs:1:1",
+            "src/../lib.rs:1:1",
+            "src//lib.rs:1:1",
+            "src/lib.rs/:1:1",
+            "src:generated/lib.rs:1:1",
+        ] {
+            assert!(
+                SourceContractSelector::parse("valid_crate", "1.0.0", location).is_err(),
+                "nonportable location `{location}` was accepted"
+            );
+        }
+    }
+
+    #[test]
+    fn source_contract_selector_rejects_invalid_line_ranges() {
+        for location in [
+            "src/lib.rs:0:1",
+            "src/lib.rs:1:0",
+            "src/lib.rs:2:1",
+            "src/lib.rs:1",
+            "src/lib.rs:1:",
+            "src/lib.rs::1",
+            "src/lib.rs:one:2",
+            "src/lib.rs:1-2",
+            "src/lib.rs:1:2:3",
+            "src/lib.rs:4294967296:4294967296",
+        ] {
+            assert!(
+                SourceContractSelector::parse("valid_crate", "1.0.0", location).is_err(),
+                "invalid location `{location}` was accepted"
+            );
+        }
+    }
+
+    #[test]
+    fn contract_overrides_expose_namespace_and_source_entries_separately() {
+        let selector = SourceContractSelector::parse("zerocopy", "0.8.27", "src/layout.rs:123:130")
+            .expect("valid source selector");
+        let overrides = super::ContractDocOverrides::with_source_entries(
+            vec![(
+                "zerocopy::Layout::for_type".to_owned(),
+                "# Panics".to_owned(),
+            )],
+            BTreeMap::from([(selector.clone(), "# Safety".to_owned())]),
+        )
+        .expect("valid overrides");
+
+        assert_eq!(
+            overrides.markdown_for_candidates(&[String::from("zerocopy::Layout::for_type")]),
+            Some("# Panics")
+        );
+        assert_eq!(
+            overrides.source_entries().collect::<Vec<_>>(),
+            [(&selector, "# Safety")]
+        );
+    }
 
     #[test]
     fn contract_parsers_accept_supported_heading_styles() {

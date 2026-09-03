@@ -19,7 +19,7 @@ use crate::artifact::{
     AnnotationFactKind, AnnotationProbingFact, AnnotationTargetFact, ArtifactFacts, CallTargetFact,
     CompilerAssertKind, DefinitionNamespaceIndex, EffectFact, EffectId, FunctionFact,
     FunctionId as StableFunctionId, FunctionTargetFact, MarkerEvidenceState, SafetyOpKind,
-    UnverifiedMarkerProbeReason,
+    StableDefPathHash, UnverifiedMarkerProbeReason,
 };
 use crate::compiler::invocations::{
     InvocationGraph, InvocationResolution, UnresolvedCallTargetReason,
@@ -37,6 +37,7 @@ use crate::report_model::{
     RootInterpretation, TraceFrontier, UnresolvedCallCoverage, UnresolvedCallMechanism,
     UnresolvedCallSite,
 };
+use crate::source_overrides::{ResolvedSourceContractOverride, SourceOverrideError};
 use crate::workspace::ArtifactAnalysisGraph;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -121,16 +122,44 @@ impl fmt::Display for EffectReportError {
 
 impl std::error::Error for EffectReportError {}
 
-#[allow(
-    clippy::too_many_lines,
-    reason = "the three explicit effect probes and traces stay visible in one production entry point"
-)]
+impl From<SourceOverrideError> for EffectReportError {
+    fn from(error: SourceOverrideError) -> Self {
+        Self::new(error.to_string())
+    }
+}
+
+#[cfg(test)]
 pub(crate) fn trace_workspace(
     local: &ArtifactFacts,
     local_stable_crate_id: u64,
     dependencies: &ArtifactAnalysisGraph,
     roots: &[InterpretationRoot],
     config: &SniffTestConfig,
+) -> Result<Vec<RootInterpretation>, EffectReportError> {
+    trace_workspace_with_source_overrides(
+        local,
+        local_stable_crate_id,
+        dependencies,
+        roots,
+        config,
+        &std::collections::BTreeMap::new(),
+    )
+}
+
+#[allow(
+    clippy::too_many_lines,
+    reason = "the three explicit effect probes and traces stay visible in one production entry point"
+)]
+pub(crate) fn trace_workspace_with_source_overrides(
+    local: &ArtifactFacts,
+    local_stable_crate_id: u64,
+    dependencies: &ArtifactAnalysisGraph,
+    roots: &[InterpretationRoot],
+    config: &SniffTestConfig,
+    source_overrides: &std::collections::BTreeMap<
+        StableDefPathHash,
+        ResolvedSourceContractOverride,
+    >,
 ) -> Result<Vec<RootInterpretation>, EffectReportError> {
     let artifact = compose_workspace_artifact(local, dependencies)?;
     let artifact = &artifact;
@@ -142,6 +171,7 @@ pub(crate) fn trace_workspace(
         &graph,
         &namespaces,
         &config.contracts.overrides,
+        source_overrides,
         config.analysis.marker_probing,
     )
     .map_err(|error| EffectReportError::new(error.to_string()))?;
@@ -2521,6 +2551,7 @@ unresolved-call-target = "warn"
             ArtifactInfo {
                 id: artifact_id.clone(),
                 crate_name: format!("dependency-{stable_crate_id}"),
+                package_version: None,
                 scope: ArtifactScope::Dependency,
             },
             Vec::new(),
@@ -2952,6 +2983,7 @@ unresolved-call-target = "warn"
             vec![SourceFileFact {
                 id: SourceFileId::new("source-1"),
                 filename: String::from("src/lib.rs"),
+                logical_path: None,
                 content_hash: String::from("sha256:0123456789abcdef"),
                 byte_len: 100,
             }],

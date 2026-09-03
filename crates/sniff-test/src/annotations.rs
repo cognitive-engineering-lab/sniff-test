@@ -21,6 +21,7 @@ use crate::contracts::{
     ContractDocOverrides, ContractDocSummary, panic_contract_doc_summary_from_markdown,
     safety_contract_doc_summary_from_markdown,
 };
+use crate::source_overrides::ResolvedSourceContractOverride;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub(crate) struct AnnotationId(usize);
@@ -136,6 +137,7 @@ impl AnnotationIndex {
             graph,
             &namespaces,
             &ContractDocOverrides::default(),
+            &BTreeMap::new(),
             MarkerProbing::SourceCallsite,
         )
     }
@@ -149,19 +151,32 @@ impl AnnotationIndex {
         graph: &InvocationGraph,
         namespaces: &DefinitionNamespaceIndex,
         overrides: &ContractDocOverrides,
+        source_overrides: &BTreeMap<
+            crate::artifact::StableDefPathHash,
+            ResolvedSourceContractOverride,
+        >,
         marker_probing: MarkerProbing,
     ) -> Result<Self, AnnotationIndexError> {
         let mut ids = BTreeMap::<String, AnnotationId>::new();
         let mut contracts = Vec::new();
         let mut site_comments = Vec::new();
-        let override_markdown_by_definition = namespaces
+        let mut override_markdown_by_definition = namespaces
             .iter()
             .filter_map(|(definition, candidates)| {
                 overrides
                     .markdown_for_candidates(candidates)
-                    .map(|markdown| (*definition, markdown))
+                    .map(|markdown| (*definition, (markdown, None)))
             })
-            .collect::<BTreeMap<_, _>>();
+            .collect::<BTreeMap<_, (&str, Option<SourceRangeFact>)>>();
+        for (definition, source_override) in source_overrides {
+            override_markdown_by_definition.insert(
+                *definition,
+                (
+                    source_override.markdown(),
+                    Some(source_override.source_range().clone()),
+                ),
+            );
+        }
 
         for body in &artifact.functions {
             for marker in &body.markers {
@@ -250,14 +265,16 @@ impl AnnotationIndex {
             }
         }
 
-        for (definition, markdown) in override_markdown_by_definition {
+        for (definition, (markdown, override_source_range)) in override_markdown_by_definition {
             contracts.retain(|contract| contract.owner.def_path_hash != definition);
-            let source_range = artifact
-                .functions
-                .iter()
-                .filter(|body| body.function.def_path_hash == definition)
-                .min_by_key(|body| body.function)
-                .and_then(|body| body.source_range.clone());
+            let source_range = override_source_range.or_else(|| {
+                artifact
+                    .functions
+                    .iter()
+                    .filter(|body| body.function.def_path_hash == definition)
+                    .min_by_key(|body| body.function)
+                    .and_then(|body| body.source_range.clone())
+            });
             let owner = FunctionId::generic(definition);
             push_override_contract_for_owner(
                 &mut ids,

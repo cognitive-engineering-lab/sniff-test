@@ -438,6 +438,14 @@ impl Probe {
         panic!("unreachable private associated helper");
     }
 }
+
+pub trait Required {
+    fn bodyless(&self);
+}
+
+unsafe extern "C" {
+    pub fn foreign_declaration();
+}
 "#,
     )
     .expect("write dependency source");
@@ -458,9 +466,10 @@ impl Probe {
         .unwrap_or_else(|error| panic!("failed to read {}: {error}", cache_path.display()));
     let cache: serde_json::Value =
         serde_json::from_str(&serialized).expect("cache should contain JSON");
-    assert_eq!(cache["format-version"], 23);
+    assert_eq!(cache["format-version"], 24);
     assert_eq!(cache["artifact"]["crate-name"], "artifact_facts_dependency");
     assert_eq!(cache["artifact"]["scope"], "dependency");
+    assert!(cache["artifact"].get("package-version").is_none());
     assert!(cache["artifact"]["id"]["stable-crate-id"].is_u64());
     assert_eq!(
         cache["artifact"]["id"]["svh"].as_str().map(str::len),
@@ -499,6 +508,8 @@ impl Probe {
         }),
         "permanent facts omitted the private helper"
     );
+
+    assert_cached_declaration_sources(&cache, functions);
     assert!(cache["facts"].get("tables").is_none());
     assert!(functions.iter().any(|function| {
         function["effects"].as_array().is_some_and(|effects| {
@@ -508,8 +519,44 @@ impl Probe {
         })
     }));
 
+    assert_policy_neutral_facts(&cache["facts"]);
+}
+
+fn assert_cached_declaration_sources(cache: &serde_json::Value, functions: &[serde_json::Value]) {
+    let definitions = cache["facts"]["definitions"]
+        .as_array()
+        .expect("definition source facts should be an array");
+    for expected_name in ["bodyless", "foreign_declaration"] {
+        let definition = definitions
+            .iter()
+            .find(|definition| {
+                definition["display-path"]
+                    .as_str()
+                    .is_some_and(|path| path.rsplit("::").next() == Some(expected_name))
+            })
+            .unwrap_or_else(|| {
+                panic!("definition source facts omitted `{expected_name}`: {definitions:#?}")
+            });
+        assert!(
+            definition["start-line"]
+                .as_u64()
+                .is_some_and(|line| line > 0)
+        );
+        assert!(definition["source-range"]["file"].is_string());
+    }
+    assert!(
+        functions.iter().all(|function| {
+            function["display-path"].as_str().is_none_or(|path| {
+                !path.ends_with("::bodyless") && !path.ends_with("::foreign_declaration")
+            })
+        }),
+        "bodyless declarations must not be synthesized into body facts"
+    );
+}
+
+fn assert_policy_neutral_facts(facts: &serde_json::Value) {
     assert_json_keys_absent(
-        &cache["facts"],
+        facts,
         &[
             "compiler-fingerprint",
             "finding",
@@ -521,6 +568,67 @@ impl Probe {
             "policies",
         ],
     );
+}
+
+#[test]
+fn cargo_cache_persists_package_relative_definition_provenance() {
+    let temp = tempfile::tempdir().expect("temp dir");
+    fs::create_dir(temp.path().join("src")).expect("create source directory");
+    fs::write(
+        temp.path().join("Cargo.toml"),
+        "[package]\nname = \"provenance-probe\"\nversion = \"1.2.3\"\nedition = \"2024\"\n\n[workspace]\n",
+    )
+    .expect("write Cargo manifest");
+    fs::write(
+        temp.path().join("src/lib.rs"),
+        "pub trait Probe {\n    fn required(&self);\n}\n",
+    )
+    .expect("write package source");
+    let cache_dir = temp.path().join("cache");
+    let mut command = Command::new(env!("CARGO_BIN_EXE_cargo-sniff-test"));
+    clean_cargo_package_env(&mut command);
+    let _cargo_guard = lock_nested_cargo();
+    let output = command
+        .args(["--cache-dir"])
+        .arg(&cache_dir)
+        .args(["--message-format", "json", "--color", "never"])
+        .current_dir(temp.path())
+        .output()
+        .expect("run Cargo frontend");
+    assert!(
+        output.status.success(),
+        "stdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let cache_path = artifact_cache_for_crate(&cache_dir, "provenance_probe");
+    let cache: serde_json::Value = serde_json::from_slice(
+        &fs::read(&cache_path)
+            .unwrap_or_else(|error| panic!("failed to read {}: {error}", cache_path.display())),
+    )
+    .expect("cache should contain JSON");
+    assert_eq!(cache["artifact"]["package-version"], "1.2.3");
+    let source_files = cache["facts"]["source-files"]
+        .as_array()
+        .expect("source files");
+    assert!(
+        source_files
+            .iter()
+            .any(|source| source["logical-path"] == "src/lib.rs"),
+        "source facts omitted the package-relative path: {source_files:#?}"
+    );
+    let required = cache["facts"]["definitions"]
+        .as_array()
+        .expect("definition sources")
+        .iter()
+        .find(|definition| {
+            definition["display-path"]
+                .as_str()
+                .is_some_and(|path| path.ends_with("::Probe::required"))
+        })
+        .expect("required trait declaration definition source");
+    assert_eq!(required["start-line"], 2);
 }
 
 fn assert_definition_backed_display_paths(value: &serde_json::Value, forbidden: &str) {
@@ -701,7 +809,7 @@ fn workspace_lint_policy_reinterprets_unchanged_dependency_facts() {
         .unwrap_or_else(|error| panic!("failed to read {}: {error}", dependency_cache.display()));
     let initial_document: serde_json::Value =
         serde_json::from_slice(&initial_bytes).expect("dependency cache should contain JSON");
-    assert_eq!(initial_document["format-version"], 23);
+    assert_eq!(initial_document["format-version"], 24);
     assert_eq!(initial_document["artifact"]["scope"], "dependency");
     assert!(initial_document["facts"].get("tables").is_none());
     assert!(initial_document.get("analysis-id").is_none());

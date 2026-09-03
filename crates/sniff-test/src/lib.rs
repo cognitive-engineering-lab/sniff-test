@@ -47,6 +47,7 @@ mod report;
 mod report_model;
 mod report_roots;
 mod source_markers;
+mod source_overrides;
 mod workspace;
 
 pub use cli::{cargo_frontend, driver_main};

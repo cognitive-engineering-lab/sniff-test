@@ -14,7 +14,7 @@
 //! names in patterns, such as `proc_macro2`, not package names like
 //! `proc-macro2`.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, btree_map::Entry};
 use std::fmt::{Debug, Display, Formatter};
 use std::ops::Range;
 use std::path::{Path, PathBuf};
@@ -22,7 +22,7 @@ use std::path::{Path, PathBuf};
 use serde::{Deserialize, Deserializer, Serialize};
 use toml::Spanned;
 
-use crate::contracts::ContractDocOverrides;
+use crate::contracts::{ContractDocOverrides, SourceContractSelector, SourceContractSelectorError};
 use crate::path_patterns::PathPatterns;
 
 pub const DEFAULT_MANIFEST_FILE: &str = "sniff-test.toml";
@@ -118,7 +118,7 @@ pub struct AnalysisConfig {
 #[serde(rename_all = "kebab-case", deny_unknown_fields)]
 #[serde(default)]
 pub struct ContractsConfig {
-    /// TOML files containing synthetic rustdoc markdown by namespace glob.
+    /// TOML files containing synthetic rustdoc markdown overrides.
     pub override_files: Vec<PathBuf>,
     #[serde(skip)]
     pub overrides: ContractDocOverrides,
@@ -134,6 +134,7 @@ impl ContractsConfig {
 
     fn load_overrides(&mut self, base_dir: &Path) -> Result<(), ConfigError> {
         let mut entries = Vec::new();
+        let mut source_entries = BTreeMap::new();
         let mut resolved_files = Vec::new();
         for path in &self.override_files {
             let path = if path.is_absolute() {
@@ -155,6 +156,7 @@ impl ContractsConfig {
                 })?;
             let file_entries = override_file
                 .overrides
+                .namespaces
                 .into_iter()
                 .map(|(pattern, markdown)| (pattern, normalize_override_markdown(&markdown)))
                 .collect::<Vec<_>>();
@@ -165,11 +167,51 @@ impl ContractsConfig {
                 }
             })?;
             entries.extend(file_entries);
+            for (crate_name, versions) in override_file.overrides.crates {
+                SourceContractSelector::validate_crate_name(&crate_name).map_err(|source| {
+                    ConfigError::OverrideSource {
+                        path: path.clone(),
+                        source: ContractSourceOverrideError::InvalidSelector(source),
+                    }
+                })?;
+                for (version, locations) in versions {
+                    SourceContractSelector::validate_version(&version).map_err(|source| {
+                        ConfigError::OverrideSource {
+                            path: path.clone(),
+                            source: ContractSourceOverrideError::InvalidSelector(source),
+                        }
+                    })?;
+                    for (location, markdown) in locations {
+                        let selector = SourceContractSelector::parse(
+                            crate_name.clone(),
+                            version.clone(),
+                            &location,
+                        )
+                        .map_err(|source| ConfigError::OverrideSource {
+                            path: path.clone(),
+                            source: ContractSourceOverrideError::InvalidSelector(source),
+                        })?;
+                        match source_entries.entry(selector) {
+                            Entry::Vacant(entry) => {
+                                entry.insert(normalize_override_markdown(&markdown));
+                            }
+                            Entry::Occupied(entry) => {
+                                return Err(ConfigError::OverrideSource {
+                                    path: path.clone(),
+                                    source: ContractSourceOverrideError::DuplicateSelector(
+                                        entry.key().clone(),
+                                    ),
+                                });
+                            }
+                        }
+                    }
+                }
+            }
             resolved_files.push(path);
         }
 
-        self.overrides =
-            ContractDocOverrides::new(entries).expect("override globs were validated per file");
+        self.overrides = ContractDocOverrides::with_source_entries(entries, source_entries)
+            .expect("override globs were validated per file");
         self.resolved_override_files = resolved_files;
         Ok(())
     }
@@ -178,7 +220,15 @@ impl ContractsConfig {
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct ContractDocOverrideFile {
-    overrides: BTreeMap<String, String>,
+    overrides: ContractDocOverrideEntries,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct ContractDocOverrideEntries {
+    #[serde(default)]
+    crates: BTreeMap<String, BTreeMap<String, BTreeMap<String, String>>>,
+    #[serde(flatten)]
+    namespaces: BTreeMap<String, String>,
 }
 
 fn normalize_override_markdown(markdown: &str) -> String {
@@ -735,6 +785,42 @@ pub enum ConfigError {
         path: PathBuf,
         source: globset::Error,
     },
+    OverrideSource {
+        path: PathBuf,
+        source: ContractSourceOverrideError,
+    },
+}
+
+#[derive(Debug)]
+pub(crate) enum ContractSourceOverrideError {
+    InvalidSelector(SourceContractSelectorError),
+    DuplicateSelector(SourceContractSelector),
+}
+
+impl Display for ContractSourceOverrideError {
+    fn fmt(&self, formatter: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::InvalidSelector(source) => Display::fmt(source, formatter),
+            Self::DuplicateSelector(selector) => write!(
+                formatter,
+                "duplicate source override for {}:{}/{}:{}:{}",
+                selector.crate_name(),
+                selector.version(),
+                selector.path(),
+                selector.start_line(),
+                selector.end_line()
+            ),
+        }
+    }
+}
+
+impl std::error::Error for ContractSourceOverrideError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::InvalidSelector(source) => Some(source),
+            Self::DuplicateSelector(_) => None,
+        }
+    }
 }
 
 impl Display for ConfigError {
@@ -767,6 +853,13 @@ impl Display for ConfigError {
                     path.display()
                 )
             }
+            Self::OverrideSource { path, .. } => {
+                write!(
+                    f,
+                    "failed to validate source contract overrides in {}",
+                    path.display()
+                )
+            }
         }
     }
 }
@@ -777,6 +870,7 @@ impl std::error::Error for ConfigError {
             Self::Io { source, .. } | Self::OverrideIo { source, .. } => Some(source),
             Self::Parse { source, .. } | Self::OverrideParse { source, .. } => Some(source),
             Self::OverrideGlob { source, .. } => Some(source),
+            Self::OverrideSource { source, .. } => Some(source),
         }
     }
 }
@@ -804,6 +898,30 @@ mod tests {
 
     fn candidates(paths: &[&str]) -> Vec<String> {
         paths.iter().map(|path| (*path).to_owned()).collect()
+    }
+
+    fn load_contract_override_files(
+        override_sources: &[&str],
+    ) -> Result<SniffTestConfig, ConfigError> {
+        let dir = tempfile::tempdir().expect("tempdir should be created");
+        let manifest_path = dir.path().join("sniff-test.toml");
+        let override_names = override_sources
+            .iter()
+            .enumerate()
+            .map(|(index, _)| format!("\"override-{index}.toml\""))
+            .collect::<Vec<_>>()
+            .join(", ");
+        std::fs::write(
+            &manifest_path,
+            format!("[contracts]\noverride-files = [{override_names}]\n"),
+        )
+        .expect("manifest should be written");
+        for (index, source) in override_sources.iter().enumerate() {
+            std::fs::write(dir.path().join(format!("override-{index}.toml")), source)
+                .expect("override file should be written");
+        }
+
+        SniffTestConfig::from_manifest_path(manifest_path)
     }
 
     #[test]
@@ -1714,5 +1832,102 @@ mod tests {
                 .map(str::trim),
             Some("# Panics\n\n- nonzero: layout size must be representable.")
         );
+    }
+
+    #[test]
+    fn manifest_loads_namespace_and_typed_source_overrides_from_one_group() {
+        let parsed = load_contract_override_files(&[r##"
+            [overrides]
+            "zerocopy::Layout::for_type" = "# Panics"
+
+            [overrides.crates."zerocopy"."0.8.27"]
+            "src/layout.rs:123:130" = """
+                # Safety
+
+                - valid: input must be valid.
+            """
+        "##])
+        .expect("mixed override file should load");
+
+        assert_eq!(
+            parsed
+                .contracts
+                .overrides
+                .markdown_for_candidates(&candidates(&["zerocopy::Layout::for_type"])),
+            Some("# Panics")
+        );
+        let source_entries = parsed
+            .contracts
+            .overrides
+            .source_entries()
+            .collect::<Vec<_>>();
+        let [(selector, markdown)] = source_entries.as_slice() else {
+            panic!("expected one source override");
+        };
+        assert_eq!(selector.crate_name(), "zerocopy");
+        assert_eq!(selector.version(), "0.8.27");
+        assert_eq!(selector.path(), "src/layout.rs");
+        assert_eq!(selector.start_line(), 123);
+        assert_eq!(selector.end_line(), 130);
+        assert_eq!(*markdown, "# Safety\n\n- valid: input must be valid.");
+    }
+
+    #[test]
+    fn manifest_rejects_invalid_source_override_selectors() {
+        for source in [
+            r#"[overrides.crates."invalid-name"]"#,
+            r#"[overrides.crates."valid_crate".""]"#,
+            r##"[overrides.crates."invalid-name"."1.0.0"]
+                "src/lib.rs:1:1" = "# Panics"
+            "##,
+            r##"[overrides.crates."valid_crate".""]
+                "src/lib.rs:1:1" = "# Panics"
+            "##,
+            r##"[overrides.crates."valid_crate"."1.0.0"]
+                "/src/lib.rs:1:1" = "# Panics"
+            "##,
+            r##"[overrides.crates."valid_crate"."1.0.0"]
+                "src/lib.rs:2:1" = "# Panics"
+            "##,
+        ] {
+            let error = load_contract_override_files(&[source])
+                .expect_err("invalid source selector should fail closed");
+
+            assert!(
+                matches!(error, ConfigError::OverrideSource { .. }),
+                "unexpected error: {error}"
+            );
+        }
+    }
+
+    #[test]
+    fn manifest_rejects_duplicate_source_overrides_across_files() {
+        let source = r##"
+            [overrides.crates."valid_crate"."1.0.0"]
+            "src/lib.rs:10:20" = "# Panics"
+        "##;
+
+        let error = load_contract_override_files(&[source, source])
+            .expect_err("duplicate source selector should fail closed");
+
+        assert!(matches!(error, ConfigError::OverrideSource { .. }));
+        assert!(
+            std::error::Error::source(&error)
+                .expect("source override error")
+                .to_string()
+                .contains("duplicate source override"),
+            "unexpected error: {error:?}"
+        );
+    }
+
+    #[test]
+    fn crates_is_reserved_for_nested_source_overrides() {
+        let error = load_contract_override_files(&[r##"
+            [overrides]
+            "crates" = "# Panics"
+        "##])
+        .expect_err("the reserved crates key must be a source override table");
+
+        assert!(matches!(error, ConfigError::OverrideParse { .. }));
     }
 }

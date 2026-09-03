@@ -1,0 +1,107 @@
+---
+source: crates/sniff-test/tests/fixtures.rs
+expression: "report[\"findings\"]"
+---
+[
+  {
+    "kind": "documented-panic",
+    "level": "warn",
+    "missing-requirements": [
+      "selected: flag must be true."
+    ],
+    "owner": {
+      "crate": "source_contract_overrides",
+      "scope": "workspace"
+    },
+    "reason": "call to `source_contract_overrides::selected_panic` with a `# Panics` contract has no recorded `// PANIC:` evidence",
+    "requirements": [
+      "selected: flag must be true."
+    ],
+    "root": "source_contract_overrides::caller",
+    "root-kind": "concrete",
+    "root-span": "src/lib.rs:9:1: 9:26",
+    "source-evidence": {
+      "status": "verified-absent"
+    },
+    "span": "src/lib.rs:10:5: 10:25",
+    "target": "source_contract_overrides::selected_panic",
+    "trace": [
+      "src/lib.rs:10:5: 10:25: source_contract_overrides::caller --direct-call-> source_contract_overrides::selected_panic"
+    ]
+  },
+  {
+    "kind": "panic-invocation",
+    "level": "warn",
+    "owner": {
+      "crate": "source_contract_overrides",
+      "scope": "workspace"
+    },
+    "reason": "panic invocation to `core::panicking::panic_fmt` has no recorded `// PANIC:` evidence",
+    "root": "source_contract_overrides::caller",
+    "root-kind": "concrete",
+    "root-span": "src/lib.rs:9:1: 9:26",
+    "source-evidence": {
+      "status": "verified-absent"
+    },
+    "span": "src/lib.rs:6:5: 6:36",
+    "target": "core::panicking::panic_fmt",
+    "trace": [
+      "src/lib.rs:11:5: 11:25: source_contract_overrides::caller --direct-call-> source_contract_overrides::adjacent_panic",
+      "src/lib.rs:6:5: 6:36: source_contract_overrides::adjacent_panic --macro-expansion-> macro core::macros::builtin::assert",
+      "src/lib.rs:6:5: 6:36: macro core::macros::builtin::assert --macro-expansion-> macro core::panic::panic_2021",
+      "[SYSROOT]/lib/rustlib/src/rust/library/core/src/panic.rs:62:9: 62:73: macro core::panic::panic_2021 --direct-call-> core::panicking::panic_fmt"
+    ]
+  },
+  {
+    "kind": "documented-panic",
+    "level": "warn",
+    "missing-requirements": [
+      "dependency: flag must be true."
+    ],
+    "owner": {
+      "crate": "source_contract_overrides",
+      "scope": "workspace"
+    },
+    "reason": "call to `source_contract_dependency::dependency_panic` with a `# Panics` contract has no recorded `// PANIC:` evidence",
+    "requirements": [
+      "dependency: flag must be true."
+    ],
+    "root": "source_contract_overrides::caller",
+    "root-kind": "concrete",
+    "root-span": "src/lib.rs:9:1: 9:26",
+    "source-evidence": {
+      "status": "verified-absent"
+    },
+    "span": "src/lib.rs:12:5: 12:55",
+    "target": "source_contract_dependency::dependency_panic",
+    "trace": [
+      "src/lib.rs:12:5: 12:55: source_contract_overrides::caller --direct-call-> source_contract_dependency::dependency_panic"
+    ]
+  },
+  {
+    "kind": "documented-panic",
+    "level": "warn",
+    "missing-requirements": [
+      "implemented: the implementation must satisfy its panic contract."
+    ],
+    "owner": {
+      "crate": "source_contract_overrides",
+      "scope": "workspace"
+    },
+    "reason": "call to `source_contract_overrides::trait_api::Operation::execute` with a `# Panics` contract has no recorded `// PANIC:` evidence",
+    "requirements": [
+      "implemented: the implementation must satisfy its panic contract."
+    ],
+    "root": "source_contract_overrides::trait_api::caller",
+    "root-kind": "generic",
+    "root-span": "src/trait_api.rs:5:1: 5:39",
+    "source-evidence": {
+      "status": "verified-absent"
+    },
+    "span": "src/trait_api.rs:6:5: 6:20",
+    "target": "source_contract_overrides::trait_api::Operation::execute",
+    "trace": [
+      "src/trait_api.rs:6:5: 6:20: source_contract_overrides::trait_api::caller --indirect-call-> source_contract_overrides::trait_api::Operation::execute"
+    ]
+  }
+]

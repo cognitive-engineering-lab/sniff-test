@@ -55,7 +55,12 @@ written outside the boundary a SafetyEffect source, so it still needs a local
 `// SAFETY:` justification. This does not suppress `missing-safety-docs` on an
 exported unsafe function selected as a report root. An incomplete external
 contract can therefore hide real behavior. Use narrow audited patterns and
-contract override files when source documentation is missing.
+contract override files when source documentation is missing. Source-located
+overrides are matched against extraction-time crate/version, package-relative
+path, source hash, and definition-start metadata. They take precedence over
+namespace overrides. Artifacts without the selected crate/version/path are
+unaffected; once the source path is present, an absent or ambiguous definition
+fails closed rather than silently attaching a contract to multiple definitions.
 
 ### Build scripts and proc macros are skipped
 

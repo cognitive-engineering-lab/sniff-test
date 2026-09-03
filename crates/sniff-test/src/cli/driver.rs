@@ -274,6 +274,9 @@ fn local_cache_artifact_info(
     has_loadable_crate_output(tcx.crate_types()).then(|| ArtifactInfo {
         id: rustc_artifact_id(tcx, LOCAL_CRATE),
         crate_name: tcx.crate_name(LOCAL_CRATE).to_string(),
+        package_version: std::env::var("CARGO_PKG_VERSION")
+            .ok()
+            .filter(|version| !version.trim().is_empty()),
         scope: output_scope.artifact_scope(),
     })
 }
