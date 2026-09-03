@@ -7,15 +7,55 @@ expression: "report[\"findings\"]"
     "function": "ambiguous_safety::reused_marker_within_one_macro_expansion",
     "kind": "ambiguous-safety-marker",
     "level": "deny",
+    "owner": {
+      "crate": "ambiguous_safety",
+      "scope": "workspace"
+    },
     "reason": "one `// SAFETY:` marker applies to 2 safety effect groups",
     "root": "ambiguous_safety::reused_marker_within_one_macro_expansion",
     "root-kind": "concrete",
-    "root-span": "src/lib.rs:39:1: 39:50",
-    "span": "src/lib.rs:34:1: 35:1",
+    "root-span": "src/lib.rs:42:1: 42:50",
+    "span": "src/lib.rs:37:1: 38:1",
     "trace": [
-      "src/lib.rs:40:5: 40:42: ambiguous_safety::reused_marker_within_one_macro_expansion --macro-expansion-> macro ambiguous_safety::call_perform_twice_with_one_marker",
-      "src/lib.rs:35:9: 35:40: macro ambiguous_safety::call_perform_twice_with_one_marker --macro-expansion-> macro ambiguous_safety::perform_twice_without_marker",
-      "src/lib.rs:27:18: 27:27: macro ambiguous_safety::perform_twice_without_marker --direct-call-> ambiguous_safety::perform"
+      "src/lib.rs:43:5: 43:42: ambiguous_safety::reused_marker_within_one_macro_expansion --macro-expansion-> macro ambiguous_safety::call_perform_twice_with_one_marker",
+      "src/lib.rs:38:9: 38:40: macro ambiguous_safety::call_perform_twice_with_one_marker --macro-expansion-> macro ambiguous_safety::perform_twice_without_marker",
+      "src/lib.rs:30:18: 30:27: macro ambiguous_safety::perform_twice_without_marker --direct-call-> ambiguous_safety::perform"
+    ]
+  },
+  {
+    "function": "ambiguous_safety::reused_partial_marker_for_safe_obligations",
+    "kind": "ambiguous-safety-marker",
+    "level": "deny",
+    "owner": {
+      "crate": "ambiguous_safety",
+      "scope": "workspace"
+    },
+    "reason": "one `// SAFETY:` marker applies to 2 safety effect groups",
+    "root": "ambiguous_safety::reused_partial_marker_for_safe_obligations",
+    "root-kind": "concrete",
+    "root-span": "src/lib.rs:81:1: 81:52",
+    "span": "src/lib.rs:75:1: 77:1",
+    "trace": [
+      "src/lib.rs:82:5: 82:54: ambiguous_safety::reused_partial_marker_for_safe_obligations --macro-expansion-> macro ambiguous_safety::call_safe_obligation_twice_with_partial_marker",
+      "src/lib.rs:77:9: 77:38: macro ambiguous_safety::call_safe_obligation_twice_with_partial_marker --macro-expansion-> macro ambiguous_safety::call_safe_obligation_twice",
+      "src/lib.rs:68:9: 68:26: macro ambiguous_safety::call_safe_obligation_twice --direct-call-> ambiguous_safety::safe_obligation"
+    ]
+  },
+  {
+    "function": "ambiguous_safety::reused_partial_marker_for_safe_obligations_inside_unsafe_block",
+    "kind": "ambiguous-safety-marker",
+    "level": "deny",
+    "owner": {
+      "crate": "ambiguous_safety",
+      "scope": "workspace"
+    },
+    "reason": "one `// SAFETY:` marker applies to 2 safety effect groups",
+    "root": "ambiguous_safety::reused_partial_marker_for_safe_obligations_inside_unsafe_block",
+    "root-kind": "concrete",
+    "root-span": "src/lib.rs:86:1: 86:72",
+    "span": "src/lib.rs:87:1: 89:1",
+    "trace": [
+      "src/lib.rs:90:9: 90:26: ambiguous_safety::reused_partial_marker_for_safe_obligations_inside_unsafe_block --direct-call-> ambiguous_safety::safe_obligation"
     ]
   }
 ]

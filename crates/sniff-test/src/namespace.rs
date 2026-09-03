@@ -3,9 +3,11 @@
 //! Configuration patterns are matched against stable [`NamespaceCandidates`]
 //! forms of a definition: the crate root, such as `serde`, the definition-site
 //! path, such as `serde::de::from_str`, and for impl items the self-type path,
-//! such as `alloc::vec::Vec::index`. The session-rendered display form is also
-//! a match candidate. Rust crate names use underscores, not
-//! package-name hyphens, so users should write `proc_macro2`, not `proc-macro2`.
+//! such as `alloc::vec::Vec::index`. A human-oriented definition-backed form
+//! is also a match candidate. The compiler session's visible re-export form is
+//! retained only as a compatibility alias for existing policy patterns. Rust
+//! crate names use underscores, not package-name hyphens, so users should
+//! write `proc_macro2`, not `proc-macro2`.
 //!
 //! Cache identity uses [`StableDefPathHash`] instead of rendered paths:
 //! pretty-printed paths differ between the defining crate's session and a
@@ -16,12 +18,14 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 use std::fmt;
 
-use rustc_data_structures::fingerprint::Fingerprint;
-use rustc_data_structures::stable_hasher::{HashStable, StableHasher, ToStableHashKey};
+use rustc_data_structures::stable_hasher::ToStableHashKey;
 use rustc_hir::def::DefKind;
 use rustc_hir::def_id::DefId;
 use rustc_middle::mono::MonoItem;
-use rustc_middle::ty::{Instance, Ty, TyCtxt};
+use rustc_middle::ty::print::{
+    with_no_trimmed_paths, with_no_visible_paths, with_resolve_crate_name,
+};
+use rustc_middle::ty::{Instance, TyCtxt};
 use rustc_span::{ExpnId, ExpnKind};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
@@ -79,37 +83,6 @@ impl fmt::Display for StableDefPathHash {
     }
 }
 
-/// Session-independent identity for one macro invocation and expansion.
-///
-/// This is rustc's stable expansion hash, not the session-local numeric
-/// [`ExpnId`]. Distinct invocations remain distinct even when their token text
-/// and call-site spans are equal because rustc includes an expansion
-/// disambiguator in this hash.
-///
-/// Its serialized form is 32 hexadecimal digits: the stable crate id followed
-/// by rustc's crate-local expansion hash.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
-#[serde(transparent)]
-pub struct StableExpansionHash(StableHash);
-
-impl StableExpansionHash {
-    #[must_use]
-    pub fn from_expn_id(expansion: ExpnId) -> Self {
-        let hash = expansion.expn_hash();
-        Self::from_parts(hash.stable_crate_id().as_u64(), hash.local_hash().as_u64())
-    }
-
-    const fn from_parts(stable_crate_id: u64, local_hash: u64) -> Self {
-        Self(StableHash::from_parts(stable_crate_id, local_hash))
-    }
-}
-
-impl fmt::Display for StableExpansionHash {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        self.0.fmt(formatter)
-    }
-}
-
 /// Session-independent identity for one rustc function instance.
 ///
 /// Unlike [`StableDefPathHash`], this distinguishes generic substitutions and
@@ -126,10 +99,6 @@ impl StableInstanceHash {
         let fingerprint = tcx.with_stable_hashing_context(|mut hcx| {
             MonoItem::Fn(instance).to_stable_hash_key(&mut hcx)
         });
-        Self::from_fingerprint(fingerprint)
-    }
-
-    fn from_fingerprint(fingerprint: Fingerprint) -> Self {
         let (first, second) = fingerprint.split();
         Self::from_parts(first.as_u64(), second.as_u64())
     }
@@ -145,33 +114,6 @@ impl fmt::Display for StableInstanceHash {
     }
 }
 
-/// Session-independent identity for one monomorphized Rust type.
-///
-/// Callable call-site attribution uses this for function-pointer signatures so
-/// raw erasure and invocation facts can be matched after artifact IR is loaded
-/// into a different compiler session.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
-#[serde(transparent)]
-pub struct StableTypeHash(StableHash);
-
-impl StableTypeHash {
-    #[must_use]
-    pub fn from_ty<'tcx>(tcx: TyCtxt<'tcx>, ty: Ty<'tcx>) -> Self {
-        let fingerprint = tcx.with_stable_hashing_context(|mut hcx| {
-            let mut hasher = StableHasher::new();
-            ty.hash_stable(&mut hcx, &mut hasher);
-            hasher.finish::<Fingerprint>()
-        });
-        Self(StableHash::from_fingerprint(fingerprint))
-    }
-}
-
-impl fmt::Display for StableTypeHash {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        self.0.fmt(formatter)
-    }
-}
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 struct StableHash {
     first: u64,
@@ -181,11 +123,6 @@ struct StableHash {
 impl StableHash {
     const fn from_parts(first: u64, second: u64) -> Self {
         Self { first, second }
-    }
-
-    fn from_fingerprint(fingerprint: Fingerprint) -> Self {
-        let (first, second) = fingerprint.split();
-        Self::from_parts(first.as_u64(), second.as_u64())
     }
 
     fn from_hex(value: &str) -> Option<Self> {
@@ -229,8 +166,9 @@ impl<'de> Deserialize<'de> for StableHash {
 
 /// Namespace forms a definition can be matched against.
 ///
-/// The crate, definition-site, and self-type forms are stable across compiler
-/// sessions. `display` is rustc's session-rendered form.
+/// The primary forms are definition-backed and stable against
+/// consumer-session re-exports. `display` retains rustc's human-oriented
+/// impl/type rendering; `visible_alias` exists only for config compatibility.
 #[derive(Debug, Clone)]
 pub struct NamespaceCandidates {
     /// The defining crate root, such as `alloc`.
@@ -242,8 +180,14 @@ pub struct NamespaceCandidates {
     /// Only present when the self type is an ADT of the defining crate, so an
     /// `impl MyTrait for Vec<u8>` in a user crate never matches `alloc::**`.
     pub self_type: Option<String>,
-    /// rustc's session-rendered pretty-printed form.
+    /// rustc's definition-backed, pretty-printed form.
     pub display: String,
+    /// rustc's consumer-session visible path when it differs from `display`.
+    ///
+    /// This is never used for presentation or identity. It remains a policy
+    /// match candidate so existing namespace configuration does not silently
+    /// change meaning when display rendering becomes definition-backed.
+    pub visible_alias: Option<String>,
 }
 
 impl NamespaceCandidates {
@@ -253,6 +197,7 @@ impl NamespaceCandidates {
             Some(self.def_site.as_str()),
             self.self_type.as_deref(),
             Some(self.display.as_str()),
+            self.visible_alias.as_deref(),
         ]
         .into_iter()
         .flatten()
@@ -270,9 +215,12 @@ pub fn namespace_candidates(tcx: TyCtxt<'_>, def_id: DefId) -> NamespaceCandidat
                     "{crate_name}{}",
                     tcx.def_path(def_id).to_string_no_crate_verbose()
                 );
+                let display = canonical_namespace(tcx, def_id);
+                let session_visible = canonicalize_def_path(&crate_name, &tcx.def_path_str(def_id));
                 NamespaceCandidates {
                     self_type: impl_self_type_path(tcx, def_id, &crate_name),
-                    display: canonical_namespace(tcx, def_id),
+                    visible_alias: (session_visible != display).then_some(session_visible),
+                    display,
                     crate_name,
                     def_site,
                 }
@@ -309,7 +257,10 @@ pub fn canonical_namespace(tcx: TyCtxt<'_>, def_id: DefId) -> String {
             .entry(def_id)
             .or_insert_with(|| {
                 let crate_name = tcx.crate_name(def_id.krate).to_string();
-                canonicalize_def_path(&crate_name, &tcx.def_path_str(def_id))
+                let definition_path = with_resolve_crate_name!(with_no_trimmed_paths!(
+                    with_no_visible_paths!(tcx.def_path_str(def_id))
+                ));
+                canonicalize_def_path(&crate_name, &definition_path)
             })
             .clone()
     })
@@ -337,36 +288,25 @@ fn canonicalize_def_path(crate_name: &str, path: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        StableDefPathHash, StableExpansionHash, StableInstanceHash, canonicalize_def_path,
-    };
+    use super::{StableDefPathHash, StableInstanceHash, canonicalize_def_path};
 
     #[test]
     fn stable_hashes_use_canonical_hex_for_display_and_serde() {
         let definition = StableDefPathHash::from_parts(0x1, 0x00ab_cdef);
-        let expansion = StableExpansionHash::from_parts(0x2, 0x00bc_def0);
         let instance = StableInstanceHash::from_parts(0x10, 0x00fe_dcba);
 
         assert_eq!(definition.to_string(), "00000000000000010000000000abcdef");
-        assert_eq!(expansion.to_string(), "00000000000000020000000000bcdef0");
         assert_eq!(instance.to_string(), "00000000000000100000000000fedcba");
 
         let definition_json = serde_json::to_string(&definition).expect("serialize definition");
-        let expansion_json = serde_json::to_string(&expansion).expect("serialize expansion");
         let instance_json = serde_json::to_string(&instance).expect("serialize instance");
 
         assert_eq!(definition_json, format!("\"{definition}\""));
-        assert_eq!(expansion_json, format!("\"{expansion}\""));
         assert_eq!(instance_json, format!("\"{instance}\""));
         assert_eq!(
             serde_json::from_str::<StableDefPathHash>(&definition_json)
                 .expect("deserialize definition"),
             definition
-        );
-        assert_eq!(
-            serde_json::from_str::<StableExpansionHash>(&expansion_json)
-                .expect("deserialize expansion"),
-            expansion
         );
         assert_eq!(
             serde_json::from_str::<StableInstanceHash>(&instance_json)
@@ -388,7 +328,7 @@ mod tests {
             "0000000000000000000000000000000",
         ] {
             let json = format!("\"{malformed}\"");
-            assert!(serde_json::from_str::<StableExpansionHash>(&json).is_err());
+            assert!(serde_json::from_str::<StableDefPathHash>(&json).is_err());
         }
     }
 

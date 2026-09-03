@@ -5,6 +5,8 @@ inline-mir = "off"
 report-roots = [
     "panic_requirements::satisfied",
     "panic_requirements::partially_satisfied",
+    "panic_requirements::documented_contract",
+    "panic_requirements::reaches_documented_contract",
 ]
 
 [panics]

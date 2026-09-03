@@ -225,23 +225,8 @@ pub fn entry(values: &[u8], index: usize) -> (u8, u8) {
 #[test]
 fn smoke_test_renders_reachability_graph_for_temp_crate() {
     let project = TempProject::new(DEMO_SOURCE);
-    let sysroot = rustc_sysroot();
     let mut callbacks = DumpCallbacks::default();
-    let args = vec![
-        String::from("rustc"),
-        String::from("--crate-name"),
-        String::from("demo"),
-        String::from("--crate-type"),
-        String::from("lib"),
-        String::from("--edition"),
-        String::from("2024"),
-        String::from("--sysroot"),
-        sysroot,
-        String::from("-Awarnings"),
-        project.source.display().to_string(),
-    ];
-
-    rustc_driver::run_compiler(&args, &mut callbacks);
+    run_test_compiler(&project, &mut callbacks);
 
     let output = callbacks.output.expect("compiler callback did not run");
     println!("{output}");
@@ -261,26 +246,11 @@ fn smoke_test_renders_reachability_graph_for_temp_crate() {
 #[test]
 fn dyn_dispatch_vtable_edges_can_be_attributed_to_call_sites() {
     let project = TempProject::new(DEMO_SOURCE);
-    let sysroot = rustc_sysroot();
     let mut callbacks = DumpCallbacks {
         dyn_dispatch_vtable_edges: DynDispatchVTableEdges::CallSites,
         ..DumpCallbacks::default()
     };
-    let args = vec![
-        String::from("rustc"),
-        String::from("--crate-name"),
-        String::from("demo"),
-        String::from("--crate-type"),
-        String::from("lib"),
-        String::from("--edition"),
-        String::from("2024"),
-        String::from("--sysroot"),
-        sysroot,
-        String::from("-Awarnings"),
-        project.source.display().to_string(),
-    ];
-
-    rustc_driver::run_compiler(&args, &mut callbacks);
+    run_test_compiler(&project, &mut callbacks);
 
     let output = callbacks.output.expect("compiler callback did not run");
     println!("{output}");
@@ -299,26 +269,11 @@ fn dyn_dispatch_vtable_edges_can_be_attributed_to_call_sites() {
 #[test]
 fn function_pointer_edges_can_be_attributed_to_call_sites() {
     let project = TempProject::new(DEMO_SOURCE);
-    let sysroot = rustc_sysroot();
     let mut callbacks = DumpCallbacks {
         fn_pointer_edges: FnPointerEdges::CallSites,
         ..DumpCallbacks::default()
     };
-    let args = vec![
-        String::from("rustc"),
-        String::from("--crate-name"),
-        String::from("demo"),
-        String::from("--crate-type"),
-        String::from("lib"),
-        String::from("--edition"),
-        String::from("2024"),
-        String::from("--sysroot"),
-        sysroot,
-        String::from("-Awarnings"),
-        project.source.display().to_string(),
-    ];
-
-    rustc_driver::run_compiler(&args, &mut callbacks);
+    run_test_compiler(&project, &mut callbacks);
 
     let output = callbacks.output.expect("compiler callback did not run");
     println!("{output}");
@@ -336,27 +291,12 @@ fn function_pointer_edges_can_be_attributed_to_call_sites() {
 #[test]
 fn dyn_dispatch_call_sites_match_supertrait_vtable_entries() {
     let project = TempProject::new(DEMO_SOURCE);
-    let sysroot = rustc_sysroot();
     let mut callbacks = DumpCallbacks {
         root_suffix: String::from("supertrait_dyn_dispatch"),
         dyn_dispatch_vtable_edges: DynDispatchVTableEdges::CallSites,
         ..DumpCallbacks::default()
     };
-    let args = vec![
-        String::from("rustc"),
-        String::from("--crate-name"),
-        String::from("demo"),
-        String::from("--crate-type"),
-        String::from("lib"),
-        String::from("--edition"),
-        String::from("2024"),
-        String::from("--sysroot"),
-        sysroot,
-        String::from("-Awarnings"),
-        project.source.display().to_string(),
-    ];
-
-    rustc_driver::run_compiler(&args, &mut callbacks);
+    run_test_compiler(&project, &mut callbacks);
 
     let output = callbacks.output.expect("compiler callback did not run");
     println!("{output}");
@@ -376,26 +316,11 @@ fn dyn_dispatch_call_sites_match_supertrait_vtable_entries() {
 #[test]
 fn generic_trait_bound_calls_are_indirect_boundaries() {
     let project = TempProject::new(DEMO_SOURCE);
-    let sysroot = rustc_sysroot();
     let mut callbacks = DumpCallbacks {
         root_suffix: String::from("generic"),
         ..DumpCallbacks::default()
     };
-    let args = vec![
-        String::from("rustc"),
-        String::from("--crate-name"),
-        String::from("demo"),
-        String::from("--crate-type"),
-        String::from("lib"),
-        String::from("--edition"),
-        String::from("2024"),
-        String::from("--sysroot"),
-        sysroot,
-        String::from("-Awarnings"),
-        project.source.display().to_string(),
-    ];
-
-    rustc_driver::run_compiler(&args, &mut callbacks);
+    run_test_compiler(&project, &mut callbacks);
 
     let output = callbacks.output.expect("compiler callback did not run");
     println!("{output}");
@@ -408,26 +333,11 @@ fn generic_trait_bound_calls_are_indirect_boundaries() {
 #[test]
 fn generic_dyn_casts_do_not_resolve_vtable_entries() {
     let project = TempProject::new(DEMO_SOURCE);
-    let sysroot = rustc_sysroot();
     let mut callbacks = DumpCallbacks {
         root_suffix: String::from("generic_dyn"),
         ..DumpCallbacks::default()
     };
-    let args = vec![
-        String::from("rustc"),
-        String::from("--crate-name"),
-        String::from("demo"),
-        String::from("--crate-type"),
-        String::from("lib"),
-        String::from("--edition"),
-        String::from("2024"),
-        String::from("--sysroot"),
-        sysroot,
-        String::from("-Awarnings"),
-        project.source.display().to_string(),
-    ];
-
-    rustc_driver::run_compiler(&args, &mut callbacks);
+    run_test_compiler(&project, &mut callbacks);
 
     let output = callbacks.output.expect("compiler callback did not run");
     println!("{output}");
@@ -440,27 +350,12 @@ fn generic_dyn_casts_do_not_resolve_vtable_entries() {
 #[test]
 fn dyn_type_arguments_do_not_imply_dynamic_dispatch() {
     let project = TempProject::new(DEMO_SOURCE);
-    let sysroot = rustc_sysroot();
     let mut callbacks = DumpCallbacks {
         root_suffix: String::from("generic_dyn_argument"),
         dyn_dispatch_vtable_edges: DynDispatchVTableEdges::CallSites,
         ..DumpCallbacks::default()
     };
-    let args = vec![
-        String::from("rustc"),
-        String::from("--crate-name"),
-        String::from("demo"),
-        String::from("--crate-type"),
-        String::from("lib"),
-        String::from("--edition"),
-        String::from("2024"),
-        String::from("--sysroot"),
-        sysroot,
-        String::from("-Awarnings"),
-        project.source.display().to_string(),
-    ];
-
-    rustc_driver::run_compiler(&args, &mut callbacks);
+    run_test_compiler(&project, &mut callbacks);
 
     let output = callbacks.output.expect("compiler callback did not run");
     println!("{output}");
@@ -473,27 +368,12 @@ fn dyn_type_arguments_do_not_imply_dynamic_dispatch() {
 #[test]
 fn call_site_vtable_edges_are_filtered_to_the_called_trait() {
     let project = TempProject::new(DEMO_SOURCE);
-    let sysroot = rustc_sysroot();
     let mut callbacks = DumpCallbacks {
         root_suffix: String::from("mixed_dyn_traits"),
         dyn_dispatch_vtable_edges: DynDispatchVTableEdges::CallSites,
         ..DumpCallbacks::default()
     };
-    let args = vec![
-        String::from("rustc"),
-        String::from("--crate-name"),
-        String::from("demo"),
-        String::from("--crate-type"),
-        String::from("lib"),
-        String::from("--edition"),
-        String::from("2024"),
-        String::from("--sysroot"),
-        sysroot,
-        String::from("-Awarnings"),
-        project.source.display().to_string(),
-    ];
-
-    rustc_driver::run_compiler(&args, &mut callbacks);
+    run_test_compiler(&project, &mut callbacks);
 
     let output = callbacks.output.expect("compiler callback did not run");
     println!("{output}");
@@ -508,27 +388,12 @@ fn call_site_vtable_edges_are_filtered_to_the_called_trait() {
 #[test]
 fn call_site_vtable_edges_are_trait_wide_within_a_body() {
     let project = TempProject::new(DEMO_SOURCE);
-    let sysroot = rustc_sysroot();
     let mut callbacks = DumpCallbacks {
         root_suffix: String::from("mixed_same_dyn_trait"),
         dyn_dispatch_vtable_edges: DynDispatchVTableEdges::CallSites,
         ..DumpCallbacks::default()
     };
-    let args = vec![
-        String::from("rustc"),
-        String::from("--crate-name"),
-        String::from("demo"),
-        String::from("--crate-type"),
-        String::from("lib"),
-        String::from("--edition"),
-        String::from("2024"),
-        String::from("--sysroot"),
-        sysroot,
-        String::from("-Awarnings"),
-        project.source.display().to_string(),
-    ];
-
-    rustc_driver::run_compiler(&args, &mut callbacks);
+    run_test_compiler(&project, &mut callbacks);
 
     let output = callbacks.output.expect("compiler callback did not run");
     println!("{output}");
@@ -541,26 +406,11 @@ fn call_site_vtable_edges_are_trait_wide_within_a_body() {
 #[test]
 fn generic_const_bodies_do_not_instantiate_with_parent_args() {
     let project = TempProject::new(DEMO_SOURCE);
-    let sysroot = rustc_sysroot();
     let mut callbacks = DumpCallbacks {
         root_suffix: String::from("generic_const"),
         ..DumpCallbacks::default()
     };
-    let args = vec![
-        String::from("rustc"),
-        String::from("--crate-name"),
-        String::from("demo"),
-        String::from("--crate-type"),
-        String::from("lib"),
-        String::from("--edition"),
-        String::from("2024"),
-        String::from("--sysroot"),
-        sysroot,
-        String::from("-Awarnings"),
-        project.source.display().to_string(),
-    ];
-
-    rustc_driver::run_compiler(&args, &mut callbacks);
+    run_test_compiler(&project, &mut callbacks);
 
     let output = callbacks.output.expect("compiler callback did not run");
     println!("{output}");

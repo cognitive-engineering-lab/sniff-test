@@ -4,61 +4,23 @@ expression: "report[\"findings\"]"
 ---
 [
   {
-    "kind": "panic-invocation",
+    "kind": "documented-panic",
     "level": "deny",
-    "reason": "panic sink core::std::rt::panic_fmt",
-    "root": "<supertrait_dyn_dispatch::Widget as Super>::risky",
-    "root-kind": "concrete",
-    "root-span": "src/lib.rs:12:5: 12:32",
-    "span": "src/lib.rs:13:9: 13:42",
-    "target": "core::std::rt::panic_fmt",
-    "trace": [
-      "src/lib.rs:13:9: 13:42: <supertrait_dyn_dispatch::Widget as Super>::risky --macro-expansion-> macro core::std::assert",
-      "src/lib.rs:13:9: 13:42: macro core::std::assert --macro-expansion-> macro core::std::panic::panic_2021",
-      "[SYSROOT]/lib/rustlib/src/rust/library/core/src/panic.rs:62:9: 62:73: macro core::std::panic::panic_2021 --direct-call-> core::std::rt::panic_fmt"
-    ]
-  },
-  {
-    "kind": "indirect-call-boundary",
-    "level": "warn",
-    "reason": "indirect call to undocumented trait method supertrait_dyn_dispatch::Super::risky cannot be verified",
+    "owner": {
+      "crate": "supertrait_dyn_dispatch",
+      "scope": "workspace"
+    },
+    "reason": "call to `supertrait_dyn_dispatch::Super::risky` with a `# Panics` contract has no recorded `// PANIC:` evidence",
     "root": "supertrait_dyn_dispatch::call_supertrait_method",
     "root-kind": "concrete",
-    "root-span": "src/lib.rs:19:1: 19:42",
-    "span": "src/lib.rs:21:5: 21:23",
+    "root-span": "src/lib.rs:22:1: 22:42",
+    "source-evidence": {
+      "status": "verified-absent"
+    },
+    "span": "src/lib.rs:24:5: 24:23",
     "target": "supertrait_dyn_dispatch::Super::risky",
     "trace": [
-      "src/lib.rs:21:5: 21:23: supertrait_dyn_dispatch::call_supertrait_method --direct-call-> supertrait_dyn_dispatch::Super::risky"
-    ]
-  },
-  {
-    "kind": "panic-invocation",
-    "level": "deny",
-    "reason": "panic sink core::std::rt::panic_fmt",
-    "root": "supertrait_dyn_dispatch::call_supertrait_method",
-    "root-kind": "concrete",
-    "root-span": "src/lib.rs:19:1: 19:42",
-    "span": "src/lib.rs:13:9: 13:42",
-    "target": "core::std::rt::panic_fmt",
-    "trace": [
-      "src/lib.rs:21:5: 21:23: supertrait_dyn_dispatch::call_supertrait_method --dyn-dispatch-vtable-entry-> <supertrait_dyn_dispatch::Widget as Super>::risky",
-      "src/lib.rs:13:9: 13:42: <supertrait_dyn_dispatch::Widget as Super>::risky --macro-expansion-> macro core::std::assert",
-      "src/lib.rs:13:9: 13:42: macro core::std::assert --macro-expansion-> macro core::std::panic::panic_2021",
-      "[SYSROOT]/lib/rustlib/src/rust/library/core/src/panic.rs:62:9: 62:73: macro core::std::panic::panic_2021 --direct-call-> core::std::rt::panic_fmt"
-    ]
-  },
-  {
-    "function": "supertrait_dyn_dispatch::call_supertrait_method",
-    "kind": "indirect-safety-call-boundary",
-    "level": "warn",
-    "reason": "supertrait_dyn_dispatch::Super::risky has unverifiable safety requirements",
-    "root": "supertrait_dyn_dispatch::call_supertrait_method",
-    "root-kind": "concrete",
-    "root-span": "src/lib.rs:19:1: 19:42",
-    "span": "src/lib.rs:21:5: 21:23",
-    "target": "supertrait_dyn_dispatch::Super::risky",
-    "trace": [
-      "src/lib.rs:21:5: 21:23: supertrait_dyn_dispatch::call_supertrait_method --direct-call-> supertrait_dyn_dispatch::Super::risky"
+      "src/lib.rs:24:5: 24:23: supertrait_dyn_dispatch::call_supertrait_method --indirect-call-> supertrait_dyn_dispatch::Super::risky"
     ]
   }
 ]

@@ -13,3 +13,7 @@ pub fn justified_caller() {
 pub fn unjustified_caller() {
     dependency_unsafe_trait_call_dep::invoke_unjustified::<Local>();
 }
+
+pub fn ambiguous_dependency_contract() {
+    dependency_unsafe_trait_call_dep::ambiguous_obligation();
+}

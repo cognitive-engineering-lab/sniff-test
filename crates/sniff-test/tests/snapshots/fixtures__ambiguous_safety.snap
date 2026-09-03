@@ -7,6 +7,10 @@ expression: "report[\"findings\"]"
     "function": "ambiguous_safety::read_duplicate",
     "kind": "ambiguous-safety-requirement",
     "level": "deny",
+    "owner": {
+      "crate": "ambiguous_safety",
+      "scope": "workspace"
+    },
     "reason": "`ambiguous_safety::read_duplicate` has multiple # Safety requirements named `valid ptr`",
     "requirements": [
       "valid_ptr: pointer must be non-null.",

@@ -8,3 +8,6 @@ panic-sink-namespaces = [
     "core::std::rt::panic_fmt",
     "std::rt::panic_fmt",
 ]
+
+[analysis.lints]
+ambiguous-panic-marker = "warn"

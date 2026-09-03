@@ -7,10 +7,17 @@ expression: "report[\"findings\"]"
     "function": "macro_marker_instances::direct_call_requires_justification",
     "kind": "unsafe-call-missing-justification",
     "level": "deny",
-    "reason": "unsafe call to `macro_marker_instances::perform` has no `// SAFETY:` justification",
+    "owner": {
+      "crate": "macro_marker_instances",
+      "scope": "workspace"
+    },
+    "reason": "unsafe call to `macro_marker_instances::perform` has no recorded `// SAFETY:` evidence",
     "root": "macro_marker_instances::direct_call_requires_justification",
     "root-kind": "concrete",
     "root-span": "src/lib.rs:15:1: 15:44",
+    "source-evidence": {
+      "status": "verified-absent"
+    },
     "span": "src/lib.rs:16:14: 16:23",
     "target": "macro_marker_instances::perform",
     "trace": [

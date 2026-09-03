@@ -7,10 +7,18 @@ expression: "report[\"findings\"]"
     "function": "unsafe_closure_inherit::unjustified_closure::{closure#0}",
     "kind": "unsafe-call-missing-justification",
     "level": "warn",
-    "reason": "unsafe call to `unsafe_closure_inherit::dangerous` has no `// SAFETY:` justification",
+    "owner": {
+      "crate": "unsafe_closure_inherit",
+      "scope": "workspace"
+    },
+    "reason": "could not verify `// SAFETY:` evidence for unsafe call to `unsafe_closure_inherit::dangerous` in workspace crate `unsafe_closure_inherit`: no usable span was available for marker association",
     "root": "unsafe_closure_inherit::unjustified_closure",
     "root-kind": "concrete",
     "root-span": "src/lib.rs:10:1: 10:29",
+    "source-evidence": {
+      "reason": "no-usable-source-span",
+      "status": "unverified"
+    },
     "span": "src/lib.rs:12:13: 12:24",
     "target": "unsafe_closure_inherit::dangerous",
     "trace": [

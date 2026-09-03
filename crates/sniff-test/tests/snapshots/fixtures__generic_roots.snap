@@ -7,10 +7,17 @@ expression: "report[\"findings\"]"
     "compiler-assert-kind": "bounds-check",
     "kind": "compiler-assert",
     "level": "deny",
-    "reason": "compiler assert",
+    "owner": {
+      "crate": "generic_roots",
+      "scope": "workspace"
+    },
+    "reason": "compiler assertion (index out of bounds) has no recorded `// PANIC:` evidence",
     "root": "generic_roots::generic_index",
     "root-kind": "generic",
     "root-span": "src/lib.rs:1:1: 1:58",
+    "source-evidence": {
+      "status": "verified-absent"
+    },
     "span": "src/lib.rs:2:6: 2:19",
     "target": "compiler assert index out of bounds",
     "trace": [

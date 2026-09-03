@@ -10,7 +10,11 @@ expression: "report[\"findings\"]"
     "missing-requirements": [
       "exclusive: no other thread may access the global state"
     ],
-    "reason": "safety-obligation call to `partial_effect_requirements::requires_initialized_exclusive_state` does not satisfy all # Safety requirements",
+    "owner": {
+      "crate": "partial_effect_requirements",
+      "scope": "dependency"
+    },
+    "reason": "dependency crate `partial_effect_requirements` has no recorded `// SAFETY:` evidence for call to `partial_effect_requirements::requires_initialized_exclusive_state` with a `# Safety` contract",
     "requirements": [
       "initialized: global state must be initialized",
       "exclusive: no other thread may access the global state"
@@ -18,6 +22,9 @@ expression: "report[\"findings\"]"
     "root": "partial_effect_requirements_app::partially_satisfies_requirements",
     "root-kind": "concrete",
     "root-span": "src/lib.rs:1:1: 1:42",
+    "source-evidence": {
+      "status": "verified-absent"
+    },
     "span": "[FIXTURE]/dep/src/lib.rs:9:5: 9:43",
     "target": "partial_effect_requirements::requires_initialized_exclusive_state",
     "trace": [

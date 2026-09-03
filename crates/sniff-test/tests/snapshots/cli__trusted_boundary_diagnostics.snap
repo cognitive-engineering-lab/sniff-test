@@ -7,92 +7,27 @@ stdout:
 <empty>
 stderr:
     Checking trusted-boundaries v0.1.0 ([FIXTURE])
-warning: function `trusted_boundaries::trusted_through_fn_pointer` reaches an unverifiable indirect call
-  --> src/lib.rs:22:1
-   |
-22 | pub fn trusted_through_fn_pointer(flag: bool, unknown: fn(bool)) {
-   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-   |
-note: panic behavior cannot be verified here: indirect call through a function pointer
-  --> src/lib.rs:24:5
-   |
-24 |     helper(flag);
-   |     ^^^^^^^^^^^^
-note: this function can reach a call whose panic behavior cannot be verified
-  --> src/lib.rs:22:1
-   |
-22 | pub fn trusted_through_fn_pointer(flag: bool, unknown: fn(bool)) {
-   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-   = help: document this boundary with `# Panics`, add `// PANIC:` only if every possible callee is locally constrained, or configure `indirect-call-boundary` if this opacity is acceptable
-
-warning: function `trusted_boundaries::trusted_through_fn_pointer` reaches an indirect call whose safety requirements cannot be verified
-  --> src/lib.rs:24:5
-   |
-24 |     helper(flag);
-   |     ^^^^^^^^^^^^
-   |
-note: safety requirements cannot be verified here: indirect call through a function pointer
-  --> src/lib.rs:24:5
-   |
-24 |     helper(flag);
-   |     ^^^^^^^^^^^^
-note: this function can reach a call whose safety requirements cannot be verified
-  --> src/lib.rs:22:1
-   |
-22 | pub fn trusted_through_fn_pointer(flag: bool, unknown: fn(bool)) {
-   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-   = help: replace the indirect call with a documented concrete boundary, justify every possible target, or configure `indirect-call-boundary` under `[safety.lints]`
-
-warning: function `trusted_boundaries::trusted_unsafe_through_fn_pointer` reaches an unverifiable indirect call
-  --> src/lib.rs:31:1
-   |
-31 | pub fn trusted_unsafe_through_fn_pointer(use_trusted: bool, unknown: unsafe fn()) {
-   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-   |
-note: panic behavior cannot be verified here: indirect call through an unsafe function pointer
-  --> src/lib.rs:33:14
-   |
-33 |     unsafe { helper() }
-   |              ^^^^^^^^
-note: this function can reach a call whose panic behavior cannot be verified
-  --> src/lib.rs:31:1
-   |
-31 | pub fn trusted_unsafe_through_fn_pointer(use_trusted: bool, unknown: unsafe fn()) {
-   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-   = help: document this boundary with `# Panics`, add `// PANIC:` only if every possible callee is locally constrained, or configure `indirect-call-boundary` if this opacity is acceptable
-
-warning: function `trusted_boundaries::trusted_unsafe_through_fn_pointer` reaches an indirect call whose safety requirements cannot be verified
+warning: [sniff-test::safety::unsafe-call-missing-justification] unsafe call to `unsafe function pointer` has no recorded `// SAFETY:` evidence
   --> src/lib.rs:33:14
    |
 33 |     unsafe { helper() }
    |              ^^^^^^^^
    |
-note: safety requirements cannot be verified here: indirect call through an unsafe function pointer
-  --> src/lib.rs:33:14
-   |
-33 |     unsafe { helper() }
-   |              ^^^^^^^^
-note: this function can reach a call whose safety requirements cannot be verified
-  --> src/lib.rs:31:1
-   |
-31 | pub fn trusted_unsafe_through_fn_pointer(use_trusted: bool, unknown: unsafe fn()) {
-   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-   = help: replace the indirect call with a documented concrete boundary, justify every possible target, or configure `indirect-call-boundary` under `[safety.lints]`
+   = note: reachable from `trusted_boundaries::trusted_unsafe_through_fn_pointer` to `indirect call through an unsafe function pointer`
+   = note: set `show-full-stack-trace = true` under `[analysis]` in sniff-test.toml to show every reachability step
+   = help: add `// SAFETY:` directly above this source after establishing the invariant that contains this safety obligation
 
-warning: unsafe call to `unsafe function pointer` in `trusted_boundaries::trusted_unsafe_through_fn_pointer` is missing a `// SAFETY:` justification
-  --> src/lib.rs:33:14
+warning: [sniff-test::safety::unsafe-call-missing-justification] unsafe call to `trusted_boundaries::unsafe_helper` has no recorded `// SAFETY:` evidence
+  --> src/lib.rs:28:14
    |
-33 |     unsafe { helper() }
-   |              ^^^^^^^^
+28 |     unsafe { unsafe_helper() }
+   |              ^^^^^^^^^^^^^^^
    |
-   = help: add a `// SAFETY:` comment above the unsafe block or call site
-note: this function can reach an unsafe call without a `// SAFETY:` justification
-  --> src/lib.rs:31:1
-   |
-31 | pub fn trusted_unsafe_through_fn_pointer(use_trusted: bool, unknown: unsafe fn()) {
-   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   = note: reachable from `trusted_boundaries::trusted_unsafe_without_docs` to `trusted_boundaries::unsafe_helper`
+   = note: set `show-full-stack-trace = true` under `[analysis]` in sniff-test.toml to show every reachability step
+   = help: add `// SAFETY:` directly above this source after establishing the invariant that contains this safety obligation
 
-warning: function `trusted_boundaries::trusted_with_docs` may panic through a trusted panic
+warning: [sniff-test::panics::documented-panic] call to `trusted_boundaries::trusted_doc_helper` with a `# Panics` contract has no recorded `// PANIC:` evidence
   --> src/lib.rs:6:5
    |
  6 |     trusted_doc_helper(flag);
@@ -103,22 +38,14 @@ note: `trusted_boundaries::trusted_doc_helper` documents `# Panics` here
    |
 16 | fn trusted_doc_helper(flag: bool) {
    | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-note: this function can reach a trusted panic boundary with `# Panics` documentation
-  --> src/lib.rs:5:1
-   |
- 5 | pub fn trusted_with_docs(flag: bool) {
-   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-help: add `// PANIC:` directly above this call explaining why its documented panic conditions cannot occur
-  --> src/lib.rs:6:5
-   |
- 6 |     trusted_doc_helper(flag);
-   |     ^^^^^^^^^^^^^^^^^^^^^^^^
+   = note: reachable from `trusted_boundaries::trusted_with_docs` to `trusted_boundaries::trusted_doc_helper`
+   = note: set `show-full-stack-trace = true` under `[analysis]` in sniff-test.toml to show every reachability step
+   = help: add `// PANIC:` directly above this source after establishing the invariant that contains this panic path
 help: document when this function may panic with `/// # Panics` here
   --> src/lib.rs:5:1
    |
  5 | pub fn trusted_with_docs(flag: bool) {
    | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-   = help: ensure the callee's panic conditions cannot occur, justify that with `// PANIC:`, or document when the caller may panic with `# Panics`
 
-warning: `trusted-boundaries` (lib) generated 6 warnings
+warning: `trusted-boundaries` (lib) generated 3 warnings
     Finished `release` profile [optimized] target(s) in [TIME]

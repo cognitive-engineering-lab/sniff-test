@@ -1,0 +1,4 @@
+[package]
+name = "effect-tracing"
+version.workspace = true
+edition.workspace = true

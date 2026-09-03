@@ -6,10 +6,17 @@ expression: "report[\"findings\"]"
   {
     "kind": "documented-panic",
     "level": "warn",
-    "reason": "optimizer_pruning::greater_than_zero documents when it may panic under # Panics",
+    "owner": {
+      "crate": "optimizer_pruning",
+      "scope": "workspace"
+    },
+    "reason": "call to `optimizer_pruning::greater_than_zero` with a `# Panics` contract has no recorded `// PANIC:` evidence",
     "root": "optimizer_pruning::documented_inlinable_call",
     "root-kind": "concrete",
     "root-span": "src/lib.rs:7:1: 7:44",
+    "source-evidence": {
+      "status": "verified-absent"
+    },
     "span": "src/lib.rs:8:5: 8:26",
     "target": "optimizer_pruning::greater_than_zero",
     "trace": [

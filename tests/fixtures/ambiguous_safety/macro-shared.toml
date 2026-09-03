@@ -1,6 +1,8 @@
 [analysis]
 report-roots = [
     "ambiguous_safety::reused_marker_within_one_macro_expansion",
+    "ambiguous_safety::reused_partial_marker_for_safe_obligations",
+    "ambiguous_safety::reused_partial_marker_for_safe_obligations_inside_unsafe_block",
 ]
 
 [analysis.lints]
@@ -8,3 +10,5 @@ ambiguous-safety-marker = "deny"
 
 [safety.lints]
 unsafe-call-missing-justification = "deny"
+safety-obligation-missing-justification = "allow"
+safety-obligation-missing-requirements = "allow"

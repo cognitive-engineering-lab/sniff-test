@@ -7,11 +7,18 @@ expression: "report[\"findings\"]"
     "function": "unsafe_ops::asm_unjustified",
     "kind": "unsafe-op-missing-justification",
     "level": "warn",
-    "reason": "unsafe operation (inline assembly) has no `// SAFETY:` justification",
+    "owner": {
+      "crate": "unsafe_ops",
+      "scope": "workspace"
+    },
+    "reason": "unsafe operation (inline assembly) has no recorded `// SAFETY:` evidence",
     "root": "unsafe_ops::asm_unjustified",
     "root-kind": "concrete",
     "root-span": "src/lib.rs:32:1: 32:25",
     "safety-op-kind": "inline-assembly",
+    "source-evidence": {
+      "status": "verified-absent"
+    },
     "span": "src/lib.rs:34:9: 34:20",
     "trace": [
       "src/lib.rs:34:9: 34:20: unsafe_ops::asm_unjustified --unsafe-operation-> unsafe operation (inline assembly)"
@@ -21,11 +28,18 @@ expression: "report[\"findings\"]"
     "function": "unsafe_ops::deref_unjustified",
     "kind": "unsafe-op-missing-justification",
     "level": "warn",
-    "reason": "unsafe operation (raw pointer dereference) has no `// SAFETY:` justification",
+    "owner": {
+      "crate": "unsafe_ops",
+      "scope": "workspace"
+    },
+    "reason": "unsafe operation (raw pointer dereference) has no recorded `// SAFETY:` evidence",
     "root": "unsafe_ops::deref_unjustified",
     "root-kind": "concrete",
     "root-span": "src/lib.rs:16:1: 16:49",
     "safety-op-kind": "raw-pointer-dereference",
+    "source-evidence": {
+      "status": "verified-absent"
+    },
     "span": "src/lib.rs:17:14: 17:18",
     "trace": [
       "src/lib.rs:17:14: 17:18: unsafe_ops::deref_unjustified --unsafe-operation-> unsafe operation (raw pointer dereference)"
@@ -35,11 +49,18 @@ expression: "report[\"findings\"]"
     "function": "unsafe_ops::extern_static_unjustified",
     "kind": "unsafe-op-missing-justification",
     "level": "warn",
-    "reason": "unsafe operation (extern static access) has no `// SAFETY:` justification",
+    "owner": {
+      "crate": "unsafe_ops",
+      "scope": "workspace"
+    },
+    "reason": "unsafe operation (extern static access) has no recorded `// SAFETY:` evidence",
     "root": "unsafe_ops::extern_static_unjustified",
     "root-kind": "concrete",
     "root-span": "src/lib.rs:24:1: 24:42",
     "safety-op-kind": "extern-static-access",
+    "source-evidence": {
+      "status": "verified-absent"
+    },
     "span": "src/lib.rs:25:14: 25:22",
     "trace": [
       "src/lib.rs:25:14: 25:22: unsafe_ops::extern_static_unjustified --unsafe-operation-> unsafe operation (extern static access)"
@@ -49,11 +70,18 @@ expression: "report[\"findings\"]"
     "function": "unsafe_ops::mutable_static_unjustified",
     "kind": "unsafe-op-missing-justification",
     "level": "warn",
-    "reason": "unsafe operation (mutable static access) has no `// SAFETY:` justification",
+    "owner": {
+      "crate": "unsafe_ops",
+      "scope": "workspace"
+    },
+    "reason": "unsafe operation (mutable static access) has no recorded `// SAFETY:` evidence",
     "root": "unsafe_ops::mutable_static_unjustified",
     "root-kind": "concrete",
     "root-span": "src/lib.rs:20:1: 20:43",
     "safety-op-kind": "mutable-static-access",
+    "source-evidence": {
+      "status": "verified-absent"
+    },
     "span": "src/lib.rs:21:14: 21:21",
     "trace": [
       "src/lib.rs:21:14: 21:21: unsafe_ops::mutable_static_unjustified --unsafe-operation-> unsafe operation (mutable static access)"
@@ -63,11 +91,18 @@ expression: "report[\"findings\"]"
     "function": "unsafe_ops::union_read_unjustified",
     "kind": "unsafe-op-missing-justification",
     "level": "warn",
-    "reason": "unsafe operation (union field access) has no `// SAFETY:` justification",
+    "owner": {
+      "crate": "unsafe_ops",
+      "scope": "workspace"
+    },
+    "reason": "unsafe operation (union field access) has no recorded `// SAFETY:` evidence",
     "root": "unsafe_ops::union_read_unjustified",
     "root-kind": "concrete",
     "root-span": "src/lib.rs:28:1: 28:50",
     "safety-op-kind": "union-field-access",
+    "source-evidence": {
+      "status": "verified-absent"
+    },
     "span": "src/lib.rs:29:14: 29:23",
     "trace": [
       "src/lib.rs:29:14: 29:23: unsafe_ops::union_read_unjustified --unsafe-operation-> unsafe operation (union field access)"

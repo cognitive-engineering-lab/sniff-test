@@ -1,0 +1,46 @@
+---
+source: crates/sniff-test/tests/fixtures.rs
+expression: "report[\"findings\"]"
+---
+[
+  {
+    "kind": "documented-panic",
+    "level": "deny",
+    "owner": {
+      "crate": "dyn_dispatch_call_site",
+      "scope": "workspace"
+    },
+    "reason": "call to `dyn_dispatch_call_site::Runner::run` with a `# Panics` contract has no recorded `// PANIC:` evidence",
+    "root": "dyn_dispatch_call_site::locally_constructed_implementation_uses_trait_contract",
+    "root-kind": "concrete",
+    "root-span": "src/lib.rs:22:1: 22:64",
+    "source-evidence": {
+      "status": "verified-absent"
+    },
+    "span": "src/lib.rs:24:5: 24:17",
+    "target": "dyn_dispatch_call_site::Runner::run",
+    "trace": [
+      "src/lib.rs:24:5: 24:17: dyn_dispatch_call_site::locally_constructed_implementation_uses_trait_contract --indirect-call-> dyn_dispatch_call_site::Runner::run"
+    ]
+  },
+  {
+    "kind": "documented-panic",
+    "level": "deny",
+    "owner": {
+      "crate": "dyn_dispatch_call_site",
+      "scope": "workspace"
+    },
+    "reason": "call to `dyn_dispatch_call_site::Runner::run` with a `# Panics` contract has no recorded `// PANIC:` evidence",
+    "root": "dyn_dispatch_call_site::unrelated_vtable_creation_does_not_select_an_implementation",
+    "root-kind": "concrete",
+    "root-span": "src/lib.rs:27:1: 27:69",
+    "source-evidence": {
+      "status": "verified-absent"
+    },
+    "span": "src/lib.rs:33:5: 33:17",
+    "target": "dyn_dispatch_call_site::Runner::run",
+    "trace": [
+      "src/lib.rs:33:5: 33:17: dyn_dispatch_call_site::unrelated_vtable_creation_does_not_select_an_implementation --indirect-call-> dyn_dispatch_call_site::Runner::run"
+    ]
+  }
+]

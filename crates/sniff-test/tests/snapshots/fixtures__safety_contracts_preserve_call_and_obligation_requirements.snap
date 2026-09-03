@@ -10,28 +10,41 @@ expression: "report[\"findings\"]"
     "missing-requirements": [
       "valid_ptr: pointer must be non-null."
     ],
-    "reason": "safety-obligation call to `safety_contract_requirements::documented_obligation` does not satisfy all # Safety requirements",
+    "owner": {
+      "crate": "safety_contract_requirements",
+      "scope": "workspace"
+    },
+    "reason": "call to `safety_contract_requirements::documented_obligation` with a `# Safety` contract has no recorded `// SAFETY:` evidence",
     "requirements": [
       "valid_ptr: pointer must be non-null."
     ],
     "root": "safety_contract_requirements::trusted_obligation_exposes_missing_requirement",
     "root-kind": "concrete",
     "root-span": "src/lib.rs:55:1: 55:56",
+    "source-evidence": {
+      "status": "verified-absent"
+    },
     "span": "src/lib.rs:57:5: 57:43",
     "target": "safety_contract_requirements::documented_obligation",
     "trace": [
       "src/lib.rs:57:5: 57:43: safety_contract_requirements::trusted_obligation_exposes_missing_requirement --direct-call-> safety_contract_requirements::documented_obligation"
-    ],
-    "trusted-boundary": true
+    ]
   },
   {
     "function": "safety_contract_requirements::unsafe_call_exposes_missing_justification",
     "kind": "unsafe-call-missing-justification",
     "level": "warn",
-    "reason": "unsafe call to `safety_contract_requirements::uncontracted_operation` has no `// SAFETY:` justification",
+    "owner": {
+      "crate": "safety_contract_requirements",
+      "scope": "workspace"
+    },
+    "reason": "unsafe call to `safety_contract_requirements::uncontracted_operation` has no recorded `// SAFETY:` evidence",
     "root": "safety_contract_requirements::unsafe_call_exposes_missing_justification",
     "root-kind": "concrete",
     "root-span": "src/lib.rs:36:1: 36:51",
+    "source-evidence": {
+      "status": "verified-absent"
+    },
     "span": "src/lib.rs:37:14: 37:38",
     "target": "safety_contract_requirements::uncontracted_operation",
     "trace": [
@@ -45,7 +58,11 @@ expression: "report[\"findings\"]"
     "missing-requirements": [
       "initialized: pointer must reference initialized memory."
     ],
-    "reason": "unsafe call to `safety_contract_requirements::read_byte` does not satisfy all # Safety requirements",
+    "owner": {
+      "crate": "safety_contract_requirements",
+      "scope": "workspace"
+    },
+    "reason": "recorded `// SAFETY:` evidence for unsafe call to `safety_contract_requirements::read_byte` does not satisfy the remaining `# Safety` requirements",
     "requirements": [
       "valid_ptr: pointer must be non-null.",
       "initialized: pointer must reference initialized memory."
@@ -53,6 +70,9 @@ expression: "report[\"findings\"]"
     "root": "safety_contract_requirements::unsafe_call_exposes_missing_requirement",
     "root-kind": "concrete",
     "root-span": "src/lib.rs:27:1: 27:55",
+    "source-evidence": {
+      "status": "present"
+    },
     "span": "src/lib.rs:33:14: 33:37",
     "target": "safety_contract_requirements::read_byte",
     "trace": [

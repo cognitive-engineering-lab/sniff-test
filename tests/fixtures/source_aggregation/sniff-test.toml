@@ -1,0 +1,5 @@
+[panics]
+panic-sink-namespaces = [
+    "core::panicking::**",
+    "std::panicking::**",
+]

@@ -1,0 +1,47 @@
+---
+source: crates/sniff-test/tests/fixtures.rs
+expression: "report[\"findings\"]"
+---
+[
+  {
+    "kind": "unresolved-panic-call-target",
+    "level": "warn",
+    "owner": {
+      "crate": "trusted_boundaries",
+      "scope": "workspace"
+    },
+    "reason": "panic coverage is incomplete for unresolved function-pointer call target",
+    "root": "trusted_boundaries::untrusted_unresolved_wrapper",
+    "root-kind": "concrete",
+    "root-span": "src/lib.rs:80:1: 80:52",
+    "span": "src/lib.rs:81:5: 81:15",
+    "trace": [
+      "src/lib.rs:81:5: 81:15: trusted_boundaries::untrusted_unresolved_wrapper --indirect-call-> indirect call through a function pointer"
+    ],
+    "unresolved-call": {
+      "coverage": "none",
+      "mechanism": "function-pointer"
+    }
+  },
+  {
+    "function": "trusted_boundaries::untrusted_unresolved_wrapper",
+    "kind": "unresolved-safety-call-target",
+    "level": "warn",
+    "owner": {
+      "crate": "trusted_boundaries",
+      "scope": "workspace"
+    },
+    "reason": "safety coverage is incomplete for unresolved function-pointer call target",
+    "root": "trusted_boundaries::untrusted_unresolved_wrapper",
+    "root-kind": "concrete",
+    "root-span": "src/lib.rs:80:1: 80:52",
+    "span": "src/lib.rs:81:5: 81:15",
+    "trace": [
+      "src/lib.rs:81:5: 81:15: trusted_boundaries::untrusted_unresolved_wrapper --indirect-call-> indirect call through a function pointer"
+    ],
+    "unresolved-call": {
+      "coverage": "none",
+      "mechanism": "function-pointer"
+    }
+  }
+]

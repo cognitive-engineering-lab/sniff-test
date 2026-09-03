@@ -1,0 +1,23 @@
+---
+source: crates/sniff-test/tests/fixtures.rs
+expression: "report[\"findings\"]"
+---
+[
+  {
+    "kind": "panic-analysis-incomplete",
+    "level": "deny",
+    "reason": "panic effect tracing reached `[analysis].max-trace-depth` (4) at frontier `trace_depth_limit::step_one`",
+    "root": "trace_depth_limit::deep_chain",
+    "root-kind": "concrete",
+    "root-span": "src/lib.rs:26:1: 26:30",
+    "span": "src/lib.rs:6:1: 6:24",
+    "target": "trace_depth_limit::step_one",
+    "trace": [
+      "src/lib.rs:27:5: 27:19: trace_depth_limit::deep_chain --direct-call-> trace_depth_limit::step_one",
+      "src/lib.rs:7:5: 7:19: trace_depth_limit::step_one --direct-call-> trace_depth_limit::step_two",
+      "src/lib.rs:11:5: 11:21: trace_depth_limit::step_two --direct-call-> trace_depth_limit::step_three",
+      "src/lib.rs:15:5: 15:20: trace_depth_limit::step_three --direct-call-> trace_depth_limit::step_four",
+      "src/lib.rs:19:5: 19:20: trace_depth_limit::step_four --direct-call-> trace_depth_limit::step_five"
+    ]
+  }
+]

@@ -7,47 +7,24 @@ stdout:
 <empty>
 stderr:
     Checking safe-markers v0.1.0 ([FIXTURE])
-error: function `safe_markers::unsafe_call` has an undocumented panic path
-  --> src/lib.rs:16:1
-   |
-16 | pub fn unsafe_call(flag: bool) {
-   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-   |
-note: panic may happen here: panic sink `core::panicking::panic`
+error: [sniff-test::panics::panic-invocation] panic invocation to `core::panicking::panic` has no recorded `// PANIC:` evidence
   --> src/lib.rs:21:5
    |
 21 |     assert!(flag);
    |     ^^^^^^^^^^^^^
+   |
    = note: reachable from `safe_markers::unsafe_call` to `core::panicking::panic`
    = note: set `show-full-stack-trace = true` under `[analysis]` in sniff-test.toml to show every reachability step
-note: this function can reach a panic invocation
-  --> src/lib.rs:16:1
-   |
-16 | pub fn unsafe_call(flag: bool) {
-   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-help: guard this path, or add `// PANIC:` here if a local invariant proves it cannot panic
-  --> src/lib.rs:17:5
-   |
-17 |     helper(flag);
-   |     ^^^^^^^^^^^^
-   = help: add a guard, document the panic with `# Panics`, or add `// PANIC:` if a local invariant proves it cannot panic
+   = help: add `// PANIC:` directly above this source after establishing the invariant that contains this panic path
 
-error: function `safe_markers::unsafe_ratio` has an undocumented panic path
- --> src/lib.rs:7:1
-  |
-7 | pub fn unsafe_ratio(total: usize, denominator: usize) -> usize {
-  | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  |
-note: panic may happen here: compiler assertion: division by zero
+error: [sniff-test::panics::compiler-assert-division-by-zero] compiler assertion (division by zero) has no recorded `// PANIC:` evidence
  --> src/lib.rs:8:5
   |
 8 |     total / denominator
   |     ^^^^^^^^^^^^^^^^^^^
-note: this function can reach a compiler assertion that may panic (division by zero)
- --> src/lib.rs:7:1
   |
-7 | pub fn unsafe_ratio(total: usize, denominator: usize) -> usize {
-  | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  = help: add a guard, document the panic with `# Panics`, or add `// PANIC:` if a local invariant proves it cannot panic
+  = note: reachable from `safe_markers::unsafe_ratio` to `compiler assert division by zero`
+  = note: set `show-full-stack-trace = true` under `[analysis]` in sniff-test.toml to show every reachability step
+  = help: add `// PANIC:` directly above this source after establishing the invariant that contains this panic path
 
 error: could not compile `safe-markers` (lib) due to 2 previous errors

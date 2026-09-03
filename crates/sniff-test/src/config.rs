@@ -19,10 +19,6 @@ use std::fmt::{Debug, Display, Formatter};
 use std::ops::Range;
 use std::path::{Path, PathBuf};
 
-use reachability::{
-    DynDispatchVTableEdges as ReachabilityDynDispatchVTableEdges,
-    FnPointerEdges as ReachabilityFnPointerEdges,
-};
 use serde::{Deserialize, Deserializer, Serialize};
 use toml::Spanned;
 
@@ -40,7 +36,7 @@ pub struct SniffTestConfig {
     #[serde(default)]
     pub analysis: AnalysisConfig,
     #[serde(default)]
-    pub documentation: DocumentationConfig,
+    pub contracts: ContractsConfig,
     #[serde(default)]
     pub panics: PanicConfig,
     #[serde(default)]
@@ -65,7 +61,7 @@ impl SniffTestConfig {
             source,
         })?;
         let base_dir = path.parent().unwrap_or_else(|| Path::new("."));
-        config.documentation.load_overrides(base_dir)?;
+        config.contracts.load_overrides(base_dir)?;
         Ok(config)
     }
 
@@ -106,23 +102,22 @@ pub struct AnalysisConfig {
     pub show_full_stack_trace: bool,
     /// Current-crate functions selected as report roots.
     pub report_roots: Spanned<ReportRootSet>,
-    /// Where concrete callable targets should appear once erased behind dyn
-    /// dispatch or function pointers.
-    pub callable_edge_attribution: CallableEdgeAttribution,
     /// How `// PANIC:` and `// SAFETY:` comments are found for spans produced
     /// by macro expansion.
     pub marker_probing: MarkerProbing,
     /// User-facing severity for analyzer-wide finding classes.
     pub lints: AnalysisLintConfig,
-    /// Distinct function-state budget per interpretation traversal; halting at
-    /// the limit is surfaced through the effect-specific incomplete lint.
-    pub node_limit: usize,
+    /// Maximum number of invocation or transparent-body edges followed from
+    /// one effect source.
+    pub max_trace_depth: usize,
+    /// Distinct `(origin, function, state)` budget for one effect trace.
+    pub trace_state_budget: usize,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "kebab-case", deny_unknown_fields)]
 #[serde(default)]
-pub struct DocumentationConfig {
+pub struct ContractsConfig {
     /// TOML files containing synthetic rustdoc markdown by namespace glob.
     pub override_files: Vec<PathBuf>,
     #[serde(skip)]
@@ -131,7 +126,7 @@ pub struct DocumentationConfig {
     resolved_override_files: Vec<PathBuf>,
 }
 
-impl DocumentationConfig {
+impl ContractsConfig {
     #[must_use]
     pub fn resolved_override_files(&self) -> &[PathBuf] {
         &self.resolved_override_files
@@ -215,10 +210,10 @@ impl Default for AnalysisConfig {
         Self {
             show_full_stack_trace: false,
             report_roots: Spanned::new(0..0, ReportRootSet::Public),
-            callable_edge_attribution: CallableEdgeAttribution::ErasureSites,
             marker_probing: MarkerProbing::MacroDefinitionFirst,
             lints: AnalysisLintConfig::default(),
-            node_limit: 4096,
+            max_trace_depth: 256,
+            trace_state_budget: 1_000_000,
         }
     }
 }
@@ -374,51 +369,37 @@ impl MirInlining {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize, Serialize)]
-#[serde(rename_all = "kebab-case")]
-pub enum CallableEdgeAttribution {
-    /// Attribute concrete targets where callables are erased into dyn objects
-    /// or function pointers.
-    #[default]
-    ErasureSites,
-    /// Attribute concrete dyn-dispatch methods and function-pointer targets to
-    /// dynamic call sites.
-    CallSites,
-}
-
-impl From<CallableEdgeAttribution> for ReachabilityDynDispatchVTableEdges {
-    fn from(value: CallableEdgeAttribution) -> Self {
-        match value {
-            CallableEdgeAttribution::ErasureSites => Self::CastSites,
-            CallableEdgeAttribution::CallSites => Self::CallSites,
-        }
-    }
-}
-
-impl From<CallableEdgeAttribution> for ReachabilityFnPointerEdges {
-    fn from(value: CallableEdgeAttribution) -> Self {
-        match value {
-            CallableEdgeAttribution::ErasureSites => Self::ReifySites,
-            CallableEdgeAttribution::CallSites => Self::CallSites,
-        }
-    }
-}
-
-#[derive(Debug, Default, Clone, PartialEq, Eq, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "kebab-case", deny_unknown_fields)]
 #[serde(default)]
 pub struct PanicConfig {
     /// User-facing severity for panic finding classes.
     pub lints: PanicLintConfig,
-    /// Namespaces whose internals are treated as opaque and suppressed.
+    /// Definition paths whose internals are suppressed, or macro definition
+    /// paths whose matching expansion branch terminates locally.
     pub ignored_namespaces: PathPatterns,
-    /// Callee namespaces whose `# Panics` documentation is trusted as complete.
+    /// Namespaces whose caller-visible panic contracts are trusted as complete.
     ///
-    /// Matching callees are opaque: documented panic conditions become caller
-    /// obligations, while undocumented callees are trusted as non-panicking.
-    pub trusted_panic_boundary_namespaces: PathPatterns,
+    /// Matching implementations and their internal panic contracts are opaque.
+    /// A matching API's own `# Panics` contract remains visible to non-trusted
+    /// callers; an undocumented API is trusted as non-panicking.
+    pub trusted_boundary_namespaces: PathPatterns,
     /// Callee paths treated as direct panic sinks.
     pub panic_sink_namespaces: PathPatterns,
+}
+
+impl Default for PanicConfig {
+    fn default() -> Self {
+        Self {
+            lints: PanicLintConfig::default(),
+            ignored_namespaces: PathPatterns::new(vec![String::from(
+                "core::ub_checks::assert_unsafe_precondition",
+            )])
+            .expect("the built-in panic ignore path is valid"),
+            trusted_boundary_namespaces: PathPatterns::default(),
+            panic_sink_namespaces: PathPatterns::default(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
@@ -449,8 +430,7 @@ pub struct PanicLintConfig {
     pub compiler_assert_invalid_enum_construction: Option<LintLevel>,
     pub panic_invocation: LintLevel,
     pub documented_panic: LintLevel,
-    pub trusted_panic: LintLevel,
-    pub indirect_call_boundary: LintLevel,
+    pub unresolved_call_target: LintLevel,
 }
 
 impl Default for PanicLintConfig {
@@ -470,8 +450,7 @@ impl Default for PanicLintConfig {
             compiler_assert_invalid_enum_construction: None,
             panic_invocation: LintLevel::Deny,
             documented_panic: LintLevel::Warn,
-            trusted_panic: LintLevel::Warn,
-            indirect_call_boundary: LintLevel::Warn,
+            unresolved_call_target: LintLevel::Allow,
         }
     }
 }
@@ -497,11 +476,13 @@ impl LintLevel {
 pub struct SafetyConfig {
     /// Namespaces whose safety findings should be suppressed.
     pub ignored_namespaces: PathPatterns,
-    /// Callee namespaces whose `# Safety` documentation is trusted as complete.
+    /// Namespaces whose caller-visible safety contracts are trusted as complete.
     ///
-    /// Matching callees are opaque: documented safety conditions become caller
-    /// obligations, while undocumented callees are trusted as having none.
-    pub trusted_safety_boundary_namespaces: PathPatterns,
+    /// Matching implementations and their internal safety contracts are opaque.
+    /// A matching API's own `# Safety` contract remains visible to non-trusted
+    /// callers. A direct local unsafe invocation is not suppressed by the
+    /// target's membership in this list.
+    pub trusted_boundary_namespaces: PathPatterns,
     pub lints: SafetyLintConfig,
 }
 
@@ -509,9 +490,7 @@ pub struct SafetyConfig {
 #[serde(rename_all = "kebab-case", deny_unknown_fields, default)]
 pub struct SafetyLintConfig {
     pub missing_safety_docs: LintLevel,
-    pub indirect_call_boundary: LintLevel,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub trusted_safety: Option<LintLevel>,
+    pub unresolved_call_target: LintLevel,
     pub unsafe_call_missing_justification: LintLevel,
     pub unsafe_call_missing_requirements: LintLevel,
     pub unsafe_op_missing_justification: LintLevel,
@@ -545,8 +524,7 @@ impl Default for SafetyLintConfig {
     fn default() -> Self {
         Self {
             missing_safety_docs: LintLevel::Warn,
-            indirect_call_boundary: LintLevel::Warn,
-            trusted_safety: None,
+            unresolved_call_target: LintLevel::Allow,
             unsafe_call_missing_justification: LintLevel::Warn,
             unsafe_call_missing_requirements: LintLevel::Warn,
             unsafe_op_missing_justification: LintLevel::Warn,
@@ -569,6 +547,11 @@ impl Default for SafetyLintConfig {
 
 impl PanicConfig {
     #[must_use]
+    pub(crate) fn ignores_path(&self, path: &str) -> bool {
+        self.ignored_namespaces.best_match(path).is_some()
+    }
+
+    #[must_use]
     pub(crate) fn ignores_candidates(&self, candidates: &[String]) -> bool {
         self.ignored_namespaces
             .best_candidates_match(candidates)
@@ -582,7 +565,7 @@ impl PanicConfig {
     ) -> PanicBoundaryPolicy {
         let sink = self.panic_sink_namespaces.best_candidates_match(candidates);
         let trusted = self
-            .trusted_panic_boundary_namespaces
+            .trusted_boundary_namespaces
             .best_candidates_match(candidates);
         match (sink, trusted) {
             (Some(sink), Some(trusted)) if trusted.precision > sink.precision => {
@@ -605,7 +588,7 @@ impl SafetyConfig {
 
     #[must_use]
     pub(crate) fn trusts_safety_boundary_candidates(&self, candidates: &[String]) -> bool {
-        self.trusted_safety_boundary_namespaces
+        self.trusted_boundary_namespaces
             .best_candidates_match(candidates)
             .is_some()
     }
@@ -766,21 +749,21 @@ impl Display for ConfigError {
             Self::OverrideIo { path, .. } => {
                 write!(
                     f,
-                    "failed to read documentation override file {}",
+                    "failed to read contract override file {}",
                     path.display()
                 )
             }
             Self::OverrideParse { path, .. } => {
                 write!(
                     f,
-                    "failed to parse documentation override file {}",
+                    "failed to parse contract override file {}",
                     path.display()
                 )
             }
             Self::OverrideGlob { path, .. } => {
                 write!(
                     f,
-                    "failed to compile documentation override globs in {}",
+                    "failed to compile contract override globs in {}",
                     path.display()
                 )
             }
@@ -803,9 +786,9 @@ mod tests {
     use std::path::PathBuf;
 
     use super::{
-        AnalysisConfig, AnalysisLintConfig, CallableEdgeAttribution, CompilerConfig, ConfigError,
-        ContractDocOverrideFile, ContractDocOverrides, EXAMPLE_MANIFEST, LintLevel, MarkerProbing,
-        MirInlining, OverflowChecks, PanicBoundaryPolicy, PanicConfig, PathPatterns, ReportRootSet,
+        AnalysisConfig, AnalysisLintConfig, CompilerConfig, ConfigError, ContractDocOverrideFile,
+        ContractDocOverrides, EXAMPLE_MANIFEST, LintLevel, MarkerProbing, MirInlining,
+        OverflowChecks, PanicBoundaryPolicy, PanicConfig, PathPatterns, ReportRootSet,
         SafetyConfig, SniffTestConfig,
     };
 
@@ -859,7 +842,7 @@ mod tests {
                         "override read source",
                     ),
                 },
-                "failed to read documentation override file sniff-test.toml",
+                "failed to read contract override file sniff-test.toml",
                 String::from("override read source"),
             ),
             (
@@ -867,7 +850,7 @@ mod tests {
                     path: path.clone(),
                     source: override_parse,
                 },
-                "failed to parse documentation override file sniff-test.toml",
+                "failed to parse contract override file sniff-test.toml",
                 override_parse_message,
             ),
             (
@@ -875,7 +858,7 @@ mod tests {
                     path,
                     source: override_glob,
                 },
-                "failed to compile documentation override globs in sniff-test.toml",
+                "failed to compile contract override globs in sniff-test.toml",
                 override_glob_message,
             ),
         ];
@@ -892,11 +875,73 @@ mod tests {
     }
 
     #[test]
-    fn manifest_rejects_unknown_fields() {
-        let error = SniffTestConfig::from_manifest_str("[analysis]\nnode-limt = 10")
-            .expect_err("unknown config fields should be rejected");
+    fn manifest_rejects_unknown_fields_including_removed_names() {
+        for (manifest, field) in [
+            ("[analysis]\nnode-limt = 10", "node-limt"),
+            ("[documentation]\noverride-files = []", "documentation"),
+            (
+                "[analysis]\ncallable-edge-attribution = \"call-sites\"",
+                "callable-edge-attribution",
+            ),
+            (
+                "[panics]\ntrusted-panic-boundary-namespaces = []",
+                "trusted-panic-boundary-namespaces",
+            ),
+            (
+                "[safety]\ntrusted-safety-boundary-namespaces = []",
+                "trusted-safety-boundary-namespaces",
+            ),
+            ("[panics.lints]\ntrusted-panic = \"allow\"", "trusted-panic"),
+            (
+                "[safety.lints]\ntrusted-safety = \"allow\"",
+                "trusted-safety",
+            ),
+            (
+                "[panics.lints]\nindirect-call-boundary = \"warn\"",
+                "indirect-call-boundary",
+            ),
+            (
+                "[panics]\nunsafe-precondition-boundary-macros = []",
+                "unsafe-precondition-boundary-macros",
+            ),
+        ] {
+            let error = SniffTestConfig::from_manifest_str(manifest)
+                .expect_err("unknown config fields should be rejected");
+            let message = error.to_string();
 
-        assert!(error.to_string().contains("unknown field `node-limt`"));
+            assert!(
+                message.contains("unknown field") && message.contains(field),
+                "unexpected parse error for `{field}`: {message}"
+            );
+        }
+    }
+
+    #[test]
+    fn parses_contracts_and_domain_local_trusted_boundary_namespaces() {
+        let config = r#"
+            [contracts]
+            override-files = []
+
+            [panics]
+            trusted-boundary-namespaces = ["core::**"]
+
+            [safety]
+            trusted-boundary-namespaces = ["ffi::safe_contract"]
+        "#;
+
+        let parsed = SniffTestConfig::from_manifest_str(config).expect("manifest should parse");
+
+        assert_eq!(
+            parsed
+                .panics
+                .panic_boundary_policy_candidates(&candidates(&["core::fmt::write"])),
+            PanicBoundaryPolicy::TrustedBoundary
+        );
+        assert!(
+            parsed
+                .safety
+                .trusts_safety_boundary_candidates(&candidates(&["ffi::safe_contract"]))
+        );
     }
 
     #[test]
@@ -909,7 +954,6 @@ mod tests {
             [analysis]
             show-full-stack-trace = true
             report-roots = "all"
-            callable-edge-attribution = "call-sites"
             marker-probing = "source-callsite"
         "#;
 
@@ -919,10 +963,6 @@ mod tests {
         assert_eq!(parsed.analysis.report_roots.get_ref(), &ReportRootSet::All);
         assert_eq!(parsed.compiler.overflow_checks, OverflowChecks::On);
         assert_eq!(parsed.compiler.inline_mir, MirInlining::Profile);
-        assert_eq!(
-            parsed.analysis.callable_edge_attribution,
-            CallableEdgeAttribution::CallSites
-        );
         assert_eq!(
             parsed.analysis.marker_probing,
             MarkerProbing::SourceCallsite
@@ -1142,10 +1182,6 @@ mod tests {
         );
         assert_eq!(CompilerConfig::default().inline_mir, MirInlining::Off);
         assert_eq!(
-            AnalysisConfig::default().callable_edge_attribution,
-            CallableEdgeAttribution::ErasureSites
-        );
-        assert_eq!(
             AnalysisConfig::default().marker_probing,
             MarkerProbing::MacroDefinitionFirst
         );
@@ -1183,8 +1219,37 @@ mod tests {
         );
         assert_eq!(lints.panic_invocation, LintLevel::Deny);
         assert_eq!(lints.documented_panic, LintLevel::Warn);
-        assert_eq!(lints.trusted_panic, LintLevel::Warn);
-        assert_eq!(lints.indirect_call_boundary, LintLevel::Warn);
+        assert_eq!(lints.unresolved_call_target, LintLevel::Allow);
+    }
+
+    #[test]
+    fn unsafe_precondition_macro_is_a_user_overridable_default_ignore() {
+        let defaults = PanicConfig::default();
+        assert!(defaults.ignores_path("core::ub_checks::assert_unsafe_precondition"));
+
+        let disabled = SniffTestConfig::from_manifest_str("[panics]\nignored-namespaces = []\n")
+            .expect("an empty ignore list should be accepted");
+        assert!(
+            !disabled
+                .panics
+                .ignores_path("core::ub_checks::assert_unsafe_precondition")
+        );
+        assert!(!defaults.ignores_path("sample::assert_unsafe_precondition"));
+
+        let replacement = SniffTestConfig::from_manifest_str(
+            "[panics]\nignored-namespaces = [\"sample::generated::**\"]\n",
+        )
+        .expect("a custom ignore list should replace the default");
+        assert!(
+            replacement
+                .panics
+                .ignores_path("sample::generated::assert_invariant")
+        );
+        assert!(
+            !replacement
+                .panics
+                .ignores_path("core::ub_checks::assert_unsafe_precondition")
+        );
     }
 
     #[test]
@@ -1192,6 +1257,7 @@ mod tests {
         let lints = SafetyConfig::default().lints;
 
         assert_eq!(lints.missing_safety_docs, LintLevel::Warn);
+        assert_eq!(lints.unresolved_call_target, LintLevel::Allow);
         assert_eq!(lints.unsafe_call_missing_justification, LintLevel::Warn);
         assert_eq!(lints.unsafe_call_missing_requirements, LintLevel::Warn);
         assert_eq!(lints.unsafe_op_missing_justification, LintLevel::Warn);
@@ -1239,8 +1305,7 @@ mod tests {
             compiler-assert-invalid-enum-construction = "warn"
             panic-invocation = "allow"
             documented-panic = "allow"
-            trusted-panic = "deny"
-            indirect-call-boundary = "deny"
+            unresolved-call-target = "deny"
         "#;
 
         let parsed = SniffTestConfig::from_manifest_str(config).expect("manifest should parse");
@@ -1282,8 +1347,7 @@ mod tests {
         );
         assert_eq!(parsed.panics.lints.panic_invocation, LintLevel::Allow);
         assert_eq!(parsed.panics.lints.documented_panic, LintLevel::Allow);
-        assert_eq!(parsed.panics.lints.trusted_panic, LintLevel::Deny);
-        assert_eq!(parsed.panics.lints.indirect_call_boundary, LintLevel::Deny);
+        assert_eq!(parsed.panics.lints.unresolved_call_target, LintLevel::Deny);
     }
 
     #[test]
@@ -1291,7 +1355,7 @@ mod tests {
         let config = r#"
             [safety]
             ignored-namespaces = ["bindgen::**", "my_crate::ffi"]
-            trusted-safety-boundary-namespaces = ["ffi::safe_contract", "ffi::safe_method"]
+            trusted-boundary-namespaces = ["ffi::safe_contract", "ffi::safe_method"]
 
             [safety.lints]
             missing-safety-docs = "allow"
@@ -1300,8 +1364,7 @@ mod tests {
             unsafe-op-missing-justification = "deny"
             safety-obligation-missing-justification = "allow"
             safety-obligation-missing-requirements = "deny"
-            trusted-safety = "allow"
-            indirect-call-boundary = "deny"
+            unresolved-call-target = "deny"
         "#;
 
         let parsed = SniffTestConfig::from_manifest_str(config).expect("manifest should parse");
@@ -1346,8 +1409,7 @@ mod tests {
             parsed.safety.lints.safety_obligation_missing_requirements,
             LintLevel::Deny
         );
-        assert_eq!(parsed.safety.lints.trusted_safety, Some(LintLevel::Allow));
-        assert_eq!(parsed.safety.lints.indirect_call_boundary, LintLevel::Deny);
+        assert_eq!(parsed.safety.lints.unresolved_call_target, LintLevel::Deny);
     }
 
     #[test]
@@ -1465,8 +1527,8 @@ mod tests {
     fn panic_namespace_policies_use_stable_candidate_sets() {
         let config = PanicConfig {
             ignored_namespaces: path_patterns(&["generated::**"]),
-            trusted_panic_boundary_namespaces: path_patterns(&["core::**"]),
-            panic_sink_namespaces: path_patterns(&["core::panicking::**"]),
+            trusted_boundary_namespaces: path_patterns(&["core::**", "compat::panic"]),
+            panic_sink_namespaces: path_patterns(&["core::panicking::**", "canonical::panic"]),
             ..PanicConfig::default()
         };
 
@@ -1480,16 +1542,29 @@ mod tests {
             PanicBoundaryPolicy::PanicSink
         );
         assert_eq!(
+            config.panic_boundary_policy_candidates(&candidates(&[
+                "compat::panic",
+                "canonical::panic",
+            ])),
+            PanicBoundaryPolicy::PanicSink,
+            "equally precise sink and trusted aliases must resolve to the sink"
+        );
+        assert_eq!(
             config.panic_boundary_policy_candidates(&candidates(&["app::run"])),
             PanicBoundaryPolicy::Normal
         );
     }
 
     #[test]
-    fn example_manifest_matches_direct_panic_macro_path() {
+    fn example_manifest_matches_direct_panic_and_ignored_macro_paths() {
         let config = SniffTestConfig::from_manifest_str(EXAMPLE_MANIFEST)
             .expect("example manifest should parse");
 
+        assert!(
+            config
+                .panics
+                .ignores_path("core::ub_checks::assert_unsafe_precondition")
+        );
         assert_eq!(
             config
                 .panics
@@ -1557,16 +1632,16 @@ mod tests {
     }
 
     #[test]
-    fn parses_documentation_override_files() {
+    fn parses_contract_override_files() {
         let config = r#"
-            [documentation]
+            [contracts]
             override-files = ["override.toml", "audit/zerocopy.toml"]
         "#;
 
         let parsed = SniffTestConfig::from_manifest_str(config).expect("manifest should parse");
 
         assert_eq!(
-            parsed.documentation.override_files,
+            parsed.contracts.override_files,
             [
                 PathBuf::from("override.toml"),
                 PathBuf::from("audit/zerocopy.toml")
@@ -1575,7 +1650,7 @@ mod tests {
     }
 
     #[test]
-    fn documentation_overrides_use_most_specific_namespace_glob() {
+    fn contract_overrides_use_most_specific_namespace_glob() {
         let overrides = ContractDocOverrides::new(vec![
             ("zerocopy::**".to_owned(), "# Safety\n".to_owned()),
             (
@@ -1599,14 +1674,14 @@ mod tests {
     }
 
     #[test]
-    fn manifest_loads_documentation_overrides_relative_to_itself() {
+    fn manifest_loads_contract_overrides_relative_to_itself() {
         let dir = tempfile::tempdir().expect("tempdir should be created");
         let manifest_path = dir.path().join("sniff-test.toml");
         let override_path = dir.path().join("override.toml");
         std::fs::write(
             &manifest_path,
             r#"
-                [documentation]
+                [contracts]
                 override-files = ["override.toml"]
             "#,
         )
@@ -1628,12 +1703,12 @@ mod tests {
             SniffTestConfig::from_manifest_path(&manifest_path).expect("manifest should load");
 
         assert_eq!(
-            parsed.documentation.resolved_override_files(),
+            parsed.contracts.resolved_override_files(),
             std::slice::from_ref(&override_path)
         );
         assert_eq!(
             parsed
-                .documentation
+                .contracts
                 .overrides
                 .markdown_for_candidates(&candidates(&["zerocopy::Layout::for_type"]))
                 .map(str::trim),

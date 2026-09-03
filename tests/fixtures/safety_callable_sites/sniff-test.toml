@@ -1,5 +1,2 @@
-[analysis]
-callable-edge-attribution = "call-sites"
-
 [panics.lints]
-indirect-call-boundary = "allow"
+unresolved-call-target = "allow"

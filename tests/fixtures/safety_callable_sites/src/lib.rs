@@ -20,6 +20,5 @@ pub fn independently_marked_calls() {
     // - ready: both observed target preconditions hold here.
     unsafe { first() }
 
-    // SAFETY: the erased pointer targets are known, but `ready` is not established.
     unsafe { second() }
 }

@@ -7,20 +7,17 @@ stdout:
 <empty>
 stderr:
     Checking ambiguous-safety v0.1.0 ([FIXTURE])
-error: `ambiguous_safety::read_duplicate` has an ambiguous `# Safety` requirement name
-  --> src/lib.rs:7:1
-   |
- 7 | /// - valid_ptr: pointer must be non-null.
-   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `valid_ptr: pointer must be non-null.` normalizes to `valid ptr`
- 8 | /// - valid_ptr: pointer must reference initialized memory.
-   | ----------------------------------------------------------- `valid_ptr: pointer must reference initialized memory.` normalizes to `valid ptr`
-   |
-   = note: `ambiguous_safety::read_duplicate` has multiple `# Safety` requirements that normalize to `valid ptr`
-note: this function can reach a call whose `# Safety` contract contains multiple requirements with names that normalize to `valid ptr`
-  --> src/lib.rs:14:1
-   |
-14 | pub fn duplicate_safety_marker() -> u8 {
-   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-   = help: give each requirement a unique name, or set `ambiguous-safety-requirement = "allow"` under `[analysis.lints]`
+error: [sniff-test::analysis::ambiguous-safety-requirement] `ambiguous_safety::read_duplicate` has multiple # Safety requirements named `valid ptr`
+ --> src/lib.rs:7:1
+  |
+7 | /// - valid_ptr: pointer must be non-null.
+  | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `valid_ptr: pointer must be non-null.` normalizes to `valid ptr`
+8 | /// - valid_ptr: pointer must reference initialized memory.
+  | ----------------------------------------------------------- `valid_ptr: pointer must reference initialized memory.` normalizes to `valid ptr`
+  |
+  = note: `ambiguous_safety::read_duplicate` has multiple `# Safety` requirements that normalize to `valid ptr`
+  = note: reachable from `ambiguous_safety::duplicate_safety_marker` to `ambiguous_safety::read_duplicate`
+  = note: set `show-full-stack-trace = true` under `[analysis]` in sniff-test.toml to show every reachability step
+  = help: give each requirement a unique name, or set `ambiguous-safety-requirement = "allow"` under `[analysis.lints]`
 
 error: could not compile `ambiguous-safety` (lib) due to 1 previous error

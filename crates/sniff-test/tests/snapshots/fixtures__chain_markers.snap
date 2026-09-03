@@ -6,14 +6,37 @@ expression: "report[\"findings\"]"
   {
     "kind": "documented-panic",
     "level": "warn",
-    "reason": "chain_markers::Widget::risky documents when it may panic under # Panics",
+    "owner": {
+      "crate": "chain_markers",
+      "scope": "workspace"
+    },
+    "reason": "call to `chain_markers::Widget::risky` with a `# Panics` contract has no recorded `// PANIC:` evidence",
     "root": "chain_markers::marked_and_unmarked_chain_links",
     "root-kind": "concrete",
     "root-span": "src/lib.rs:17:1: 17:64",
+    "source-evidence": {
+      "status": "verified-absent"
+    },
     "span": "src/lib.rs:22:20: 22:41",
     "target": "chain_markers::Widget::risky",
     "trace": [
       "src/lib.rs:22:20: 22:41: chain_markers::marked_and_unmarked_chain_links --direct-call-> chain_markers::Widget::risky"
+    ]
+  },
+  {
+    "kind": "ambiguous-panic-marker",
+    "level": "warn",
+    "owner": {
+      "crate": "chain_markers",
+      "scope": "workspace"
+    },
+    "reason": "one `// PANIC:` marker applies to 2 panic effect groups",
+    "root": "chain_markers::whole_statement_marker_is_ambiguous",
+    "root-kind": "concrete",
+    "root-span": "src/lib.rs:26:1: 26:68",
+    "span": "src/lib.rs:27:1: 28:1",
+    "trace": [
+      "src/lib.rs:28:20: 28:34: chain_markers::whole_statement_marker_is_ambiguous --direct-call-> chain_markers::Widget::risky"
     ]
   }
 ]

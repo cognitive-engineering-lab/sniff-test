@@ -1,0 +1,21 @@
+[analysis]
+report-roots = [
+    "trusted_boundaries::trusted_unresolved_wrapper",
+    "trusted_boundaries::untrusted_unresolved_wrapper",
+]
+
+[panics]
+trusted-boundary-namespaces = [
+    "trusted_boundaries::trusted_unresolved_wrapper",
+]
+
+[panics.lints]
+unresolved-call-target = "warn"
+
+[safety]
+trusted-boundary-namespaces = [
+    "trusted_boundaries::trusted_unresolved_wrapper",
+]
+
+[safety.lints]
+unresolved-call-target = "warn"

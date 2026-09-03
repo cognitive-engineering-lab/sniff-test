@@ -7,41 +7,25 @@ stdout:
 <empty>
 stderr:
     Checking panic-axioms v0.1.0 ([FIXTURE])
-error: function `panic_axioms::indexed` has an undocumented panic path
-  --> src/lib.rs:9:1
-   |
- 9 | pub fn indexed(values: &[usize], index: usize) -> usize {
-   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-   |
-note: panic may happen here: compiler assertion: index out of bounds
+error: [sniff-test::panics::compiler-assert-bounds-check] compiler assertion (index out of bounds) has no recorded `// PANIC:` evidence
   --> src/lib.rs:10:5
    |
 10 |     values[index]
    |     ^^^^^^^^^^^^^
-note: this function can reach a compiler assertion that may panic (index out of bounds)
-  --> src/lib.rs:9:1
    |
- 9 | pub fn indexed(values: &[usize], index: usize) -> usize {
-   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-   = help: add a guard, document the panic with `# Panics`, or add `// PANIC:` if a local invariant proves it cannot panic
+   = note: reachable from `panic_axioms::indexed` to `compiler assert index out of bounds`
+   = note: set `show-full-stack-trace = true` under `[analysis]` in sniff-test.toml to show every reachability step
+   = help: add `// PANIC:` directly above this source after establishing the invariant that contains this panic path
 
-warning: function `panic_axioms::remainder` has an undocumented panic path
- --> src/lib.rs:5:1
-  |
-5 | pub fn remainder(total_size: usize, block_size: usize) -> usize {
-  | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  |
-note: panic may happen here: compiler assertion: remainder with a zero divisor
+warning: [sniff-test::panics::compiler-assert-remainder-by-zero] compiler assertion (remainder with a zero divisor) has no recorded `// PANIC:` evidence
  --> src/lib.rs:6:5
   |
 6 |     total_size % block_size
   |     ^^^^^^^^^^^^^^^^^^^^^^^
-note: this function can reach a compiler assertion that may panic (remainder with a zero divisor)
- --> src/lib.rs:5:1
   |
-5 | pub fn remainder(total_size: usize, block_size: usize) -> usize {
-  | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  = help: add a guard, document the panic with `# Panics`, or add `// PANIC:` if a local invariant proves it cannot panic
+  = note: reachable from `panic_axioms::remainder` to `compiler assert remainder with a zero divisor`
+  = note: set `show-full-stack-trace = true` under `[analysis]` in sniff-test.toml to show every reachability step
+  = help: add `// PANIC:` directly above this source after establishing the invariant that contains this panic path
 
 warning: `panic-axioms` (lib) generated 1 warning
 error: could not compile `panic-axioms` (lib) due to 1 previous error; 1 warning emitted

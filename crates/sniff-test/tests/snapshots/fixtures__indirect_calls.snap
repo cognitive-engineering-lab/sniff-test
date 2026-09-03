@@ -6,10 +6,17 @@ expression: "report[\"findings\"]"
   {
     "kind": "documented-panic",
     "level": "warn",
-    "reason": "indirect_calls::Risky::documented documents when it may panic under # Panics",
+    "owner": {
+      "crate": "indirect_calls",
+      "scope": "workspace"
+    },
+    "reason": "call to `indirect_calls::Risky::documented` with a `# Panics` contract has no recorded `// PANIC:` evidence",
     "root": "indirect_calls::call_documented",
     "root-kind": "generic",
     "root-span": "src/lib.rs:10:1: 10:56",
+    "source-evidence": {
+      "status": "verified-absent"
+    },
     "span": "src/lib.rs:11:5: 11:27",
     "target": "indirect_calls::Risky::documented",
     "trace": [
@@ -18,9 +25,13 @@ expression: "report[\"findings\"]"
   },
   {
     "function": "indirect_calls::call_documented",
-    "kind": "indirect-safety-call-boundary",
+    "kind": "unresolved-safety-call-target",
     "level": "warn",
-    "reason": "indirect_calls::Risky::documented has unverifiable safety requirements",
+    "owner": {
+      "crate": "indirect_calls",
+      "scope": "workspace"
+    },
+    "reason": "safety coverage is incomplete for unresolved generic-dispatch call target (indirect_calls::Risky::documented)",
     "root": "indirect_calls::call_documented",
     "root-kind": "generic",
     "root-span": "src/lib.rs:10:1: 10:56",
@@ -28,64 +39,104 @@ expression: "report[\"findings\"]"
     "target": "indirect_calls::Risky::documented",
     "trace": [
       "src/lib.rs:11:5: 11:27: indirect_calls::call_documented --indirect-call-> indirect_calls::Risky::documented"
-    ]
+    ],
+    "unresolved-call": {
+      "coverage": "none",
+      "mechanism": "generic-dispatch"
+    }
   },
   {
-    "kind": "indirect-call-boundary",
+    "kind": "unresolved-panic-call-target",
     "level": "warn",
-    "reason": "indirect call to undocumented trait method indirect_calls::Risky::undocumented cannot be verified",
+    "owner": {
+      "crate": "indirect_calls",
+      "scope": "workspace"
+    },
+    "reason": "panic coverage is incomplete for unresolved dynamic-dispatch call target (indirect_calls::Risky::undocumented)",
     "root": "indirect_calls::call_dyn",
     "root-kind": "concrete",
     "root-span": "src/lib.rs:18:1: 18:47",
     "span": "src/lib.rs:19:5: 19:29",
     "target": "indirect_calls::Risky::undocumented",
     "trace": [
-      "src/lib.rs:19:5: 19:29: indirect_calls::call_dyn --direct-call-> indirect_calls::Risky::undocumented"
-    ]
+      "src/lib.rs:19:5: 19:29: indirect_calls::call_dyn --indirect-call-> indirect_calls::Risky::undocumented"
+    ],
+    "unresolved-call": {
+      "coverage": "none",
+      "mechanism": "dynamic-dispatch"
+    }
   },
   {
     "function": "indirect_calls::call_dyn",
-    "kind": "indirect-safety-call-boundary",
+    "kind": "unresolved-safety-call-target",
     "level": "warn",
-    "reason": "indirect_calls::Risky::undocumented has unverifiable safety requirements",
+    "owner": {
+      "crate": "indirect_calls",
+      "scope": "workspace"
+    },
+    "reason": "safety coverage is incomplete for unresolved dynamic-dispatch call target (indirect_calls::Risky::undocumented)",
     "root": "indirect_calls::call_dyn",
     "root-kind": "concrete",
     "root-span": "src/lib.rs:18:1: 18:47",
     "span": "src/lib.rs:19:5: 19:29",
     "target": "indirect_calls::Risky::undocumented",
     "trace": [
-      "src/lib.rs:19:5: 19:29: indirect_calls::call_dyn --direct-call-> indirect_calls::Risky::undocumented"
-    ]
+      "src/lib.rs:19:5: 19:29: indirect_calls::call_dyn --indirect-call-> indirect_calls::Risky::undocumented"
+    ],
+    "unresolved-call": {
+      "coverage": "none",
+      "mechanism": "dynamic-dispatch"
+    }
   },
   {
-    "kind": "indirect-call-boundary",
+    "kind": "unresolved-panic-call-target",
     "level": "warn",
-    "reason": "indirect call through a function pointer cannot be verified",
+    "owner": {
+      "crate": "indirect_calls",
+      "scope": "workspace"
+    },
+    "reason": "panic coverage is incomplete for unresolved function-pointer call target",
     "root": "indirect_calls::call_pointer",
     "root-kind": "concrete",
     "root-span": "src/lib.rs:22:1: 22:50",
     "span": "src/lib.rs:23:5: 23:17",
     "trace": [
       "src/lib.rs:23:5: 23:17: indirect_calls::call_pointer --indirect-call-> indirect call through a function pointer"
-    ]
+    ],
+    "unresolved-call": {
+      "coverage": "none",
+      "mechanism": "function-pointer"
+    }
   },
   {
     "function": "indirect_calls::call_pointer",
-    "kind": "indirect-safety-call-boundary",
+    "kind": "unresolved-safety-call-target",
     "level": "warn",
-    "reason": "indirect call through a function pointer has unverifiable safety requirements",
+    "owner": {
+      "crate": "indirect_calls",
+      "scope": "workspace"
+    },
+    "reason": "safety coverage is incomplete for unresolved function-pointer call target",
     "root": "indirect_calls::call_pointer",
     "root-kind": "concrete",
     "root-span": "src/lib.rs:22:1: 22:50",
     "span": "src/lib.rs:23:5: 23:17",
     "trace": [
       "src/lib.rs:23:5: 23:17: indirect_calls::call_pointer --indirect-call-> indirect call through a function pointer"
-    ]
+    ],
+    "unresolved-call": {
+      "coverage": "none",
+      "mechanism": "function-pointer"
+    }
   },
   {
-    "kind": "indirect-call-boundary",
+    "kind": "unresolved-panic-call-target",
     "level": "warn",
-    "reason": "indirect call to undocumented trait method indirect_calls::Risky::undocumented cannot be verified",
+    "owner": {
+      "crate": "indirect_calls",
+      "scope": "workspace"
+    },
+    "reason": "panic coverage is incomplete for unresolved generic-dispatch call target (indirect_calls::Risky::undocumented)",
     "root": "indirect_calls::call_undocumented",
     "root-kind": "generic",
     "root-span": "src/lib.rs:14:1: 14:58",
@@ -93,13 +144,21 @@ expression: "report[\"findings\"]"
     "target": "indirect_calls::Risky::undocumented",
     "trace": [
       "src/lib.rs:15:5: 15:29: indirect_calls::call_undocumented --indirect-call-> indirect_calls::Risky::undocumented"
-    ]
+    ],
+    "unresolved-call": {
+      "coverage": "none",
+      "mechanism": "generic-dispatch"
+    }
   },
   {
     "function": "indirect_calls::call_undocumented",
-    "kind": "indirect-safety-call-boundary",
+    "kind": "unresolved-safety-call-target",
     "level": "warn",
-    "reason": "indirect_calls::Risky::undocumented has unverifiable safety requirements",
+    "owner": {
+      "crate": "indirect_calls",
+      "scope": "workspace"
+    },
+    "reason": "safety coverage is incomplete for unresolved generic-dispatch call target (indirect_calls::Risky::undocumented)",
     "root": "indirect_calls::call_undocumented",
     "root-kind": "generic",
     "root-span": "src/lib.rs:14:1: 14:58",
@@ -107,6 +166,10 @@ expression: "report[\"findings\"]"
     "target": "indirect_calls::Risky::undocumented",
     "trace": [
       "src/lib.rs:15:5: 15:29: indirect_calls::call_undocumented --indirect-call-> indirect_calls::Risky::undocumented"
-    ]
+    ],
+    "unresolved-call": {
+      "coverage": "none",
+      "mechanism": "generic-dispatch"
+    }
   }
 ]

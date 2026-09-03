@@ -9,13 +9,20 @@ expression: "report[\"findings\"]"
     "missing-requirements": [
       "flag: flag must be true."
     ],
-    "reason": "contract_overrides::panic_contract documents when it may panic under # Panics",
+    "owner": {
+      "crate": "contract_overrides",
+      "scope": "workspace"
+    },
+    "reason": "call to `contract_overrides::panic_contract` with a `# Panics` contract has no recorded `// PANIC:` evidence",
     "requirements": [
       "flag: flag must be true."
     ],
     "root": "contract_overrides::panic_override_missing_marker",
     "root-kind": "concrete",
     "root-span": "src/lib.rs:7:1: 7:49",
+    "source-evidence": {
+      "status": "verified-absent"
+    },
     "span": "src/lib.rs:8:5: 8:25",
     "target": "contract_overrides::panic_contract",
     "trace": [
@@ -29,7 +36,11 @@ expression: "report[\"findings\"]"
     "missing-requirements": [
       "initialized: pointer must reference initialized memory."
     ],
-    "reason": "unsafe call to `contract_overrides::synthetic_read` does not satisfy all # Safety requirements",
+    "owner": {
+      "crate": "contract_overrides",
+      "scope": "workspace"
+    },
+    "reason": "recorded `// SAFETY:` evidence for unsafe call to `contract_overrides::synthetic_read` does not satisfy the remaining `# Safety` requirements",
     "requirements": [
       "valid_ptr: pointer must be non-null.",
       "initialized: pointer must reference initialized memory."
@@ -37,6 +48,9 @@ expression: "report[\"findings\"]"
     "root": "contract_overrides::safety_override_missing_requirement",
     "root-kind": "concrete",
     "root-span": "src/lib.rs:18:1: 18:51",
+    "source-evidence": {
+      "status": "present"
+    },
     "span": "src/lib.rs:24:14: 24:42",
     "target": "contract_overrides::synthetic_read",
     "trace": [

@@ -7,21 +7,42 @@ stdout:
 <empty>
 stderr:
     Checking ambiguous-safety v0.1.0 ([FIXTURE])
-error: function `ambiguous_safety::reused_marker_within_one_macro_expansion` has an ambiguous `// SAFETY:` marker
-  --> src/lib.rs:34:1
+error: [sniff-test::analysis::ambiguous-safety-marker] one `// SAFETY:` marker applies to 2 safety effect groups
+  --> src/lib.rs:37:1
    |
-34 | /         // SAFETY: this fixture's operations have no additional requirements.
-35 | |         perform_twice_without_marker!()
+37 | /         // SAFETY: this fixture's operations have no additional requirements.
+38 | |         perform_twice_without_marker!()
    | |_^
    |
    = note: this marker applies to 2 safety obligations
    = note: reachable from `ambiguous_safety::reused_marker_within_one_macro_expansion` to `ambiguous_safety::perform`
    = note: set `show-full-stack-trace = true` under `[analysis]` in sniff-test.toml to show every reachability step
-note: this function can reach 2 safety obligations covered by the same `// SAFETY:` marker
-  --> src/lib.rs:39:1
-   |
-39 | pub fn reused_marker_within_one_macro_expansion() {
-   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
    = help: give each unsafe block or operation its own marker, or set `ambiguous-safety-marker = "allow"` under `[analysis.lints]`
 
-error: could not compile `ambiguous-safety` (lib) due to 1 previous error
+error: [sniff-test::analysis::ambiguous-safety-marker] one `// SAFETY:` marker applies to 2 safety effect groups
+  --> src/lib.rs:75:1
+   |
+75 | /         // SAFETY:
+76 | |         // - initialized: this fixture initializes the shared state.
+77 | |         call_safe_obligation_twice!()
+   | |_^
+   |
+   = note: this marker applies to 2 safety obligations
+   = note: reachable from `ambiguous_safety::reused_partial_marker_for_safe_obligations` to `ambiguous_safety::safe_obligation`
+   = note: set `show-full-stack-trace = true` under `[analysis]` in sniff-test.toml to show every reachability step
+   = help: give each unsafe block or operation its own marker, or set `ambiguous-safety-marker = "allow"` under `[analysis.lints]`
+
+error: [sniff-test::analysis::ambiguous-safety-marker] one `// SAFETY:` marker applies to 2 safety effect groups
+  --> src/lib.rs:87:1
+   |
+87 | /     // SAFETY:
+88 | |     // - initialized: this fixture initializes the shared state.
+89 | |     unsafe {
+   | |_^
+   |
+   = note: this marker applies to 2 safety obligations
+   = note: reachable from `ambiguous_safety::reused_partial_marker_for_safe_obligations_inside_unsafe_block` to `ambiguous_safety::safe_obligation`
+   = note: set `show-full-stack-trace = true` under `[analysis]` in sniff-test.toml to show every reachability step
+   = help: give each unsafe block or operation its own marker, or set `ambiguous-safety-marker = "allow"` under `[analysis.lints]`
+
+error: could not compile `ambiguous-safety` (lib) due to 3 previous errors

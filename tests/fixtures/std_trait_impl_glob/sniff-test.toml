@@ -2,7 +2,7 @@
 # configured trusted globs the same way inherent methods like `Vec::push` do.
 
 [panics]
-trusted-panic-boundary-namespaces = ["std::**", "core::**", "alloc::**"]
+trusted-boundary-namespaces = ["std::**", "core::**", "alloc::**"]
 panic-sink-namespaces = [
     "core::panicking::**",
     "std::panicking::**",
@@ -10,9 +10,6 @@ panic-sink-namespaces = [
     "std::rt::panic_fmt",
 ]
 
-[panics.lints]
-trusted-panic = "warn"
-
 [safety]
 # This fixture isolates panic-boundary glob matching, not allocator internals.
-ignored-namespaces = ["std::**", "core::**", "alloc::**"]
+trusted-boundary-namespaces = ["std::**", "core::**", "alloc::**"]

@@ -8,3 +8,9 @@ panic-sink-namespaces = [
     "core::std::rt::panic_fmt",
     "std::rt::panic_fmt",
 ]
+
+[panics.lints]
+unresolved-call-target = "warn"
+
+[safety.lints]
+unresolved-call-target = "warn"

@@ -5,6 +5,7 @@ inline-mir = "off"
 report-roots = [
     "dependency_unsafe_trait_call_app::justified_caller",
     "dependency_unsafe_trait_call_app::unjustified_caller",
+    "dependency_unsafe_trait_call_app::ambiguous_dependency_contract",
 ]
 
 [safety.lints]

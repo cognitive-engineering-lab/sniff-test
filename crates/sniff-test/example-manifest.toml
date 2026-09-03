@@ -1,10 +1,11 @@
 # sniff-test configuration.
 #
-# The default configuration leaves all policy lists empty. This example includes
-# recommended Rust panic sinks and can be edited to match your threat model.
+# Namespace trust and panic-sink policies default to empty. Panic ignores contain
+# Rust's unsafe-precondition macro by default; this example repeats it alongside
+# optional project policy so an explicit replacement does not drop that behavior.
 
 [compiler]
-# Compiler settings affect extracted facts and therefore artifact-IR validity.
+# Compiler settings affect extracted facts and therefore artifact-fact validity.
 # `profile` preserves Cargo/rustc's selected profile behavior.
 # `on` forces `-C overflow-checks=yes`; useful for checked release-mode audits.
 # `off` forces `-C overflow-checks=no`.
@@ -17,14 +18,10 @@ inline-mir = "off"
 
 [analysis]
 # Analysis settings are workspace interpretation policy. Dependency rustc units
-# ignore report roots and lints while silently caching artifact IR for every
+# ignore report roots and lints while silently caching artifact facts for every
 # analyzable body.
 show-full-stack-trace = false
 report-roots = "public"
-
-# Concrete callable edges can be attributed to `erasure-sites` where a callable
-# becomes indirect, or `call-sites` where it is used.
-callable-edge-attribution = "erasure-sites"
 
 # Marker lookup checks comments in macro definitions before walking outward to
 # macro callsites and the final source callsite. Use `source-callsite` to check
@@ -33,11 +30,12 @@ marker-probing = "macro-definition-first"
 
 # Ambiguous requirement names and shared proof markers default to failing closed.
 #
-# Function-state budget for each panic or safety traversal from a selected
-# workspace root. Dependency IR is extracted independently of this limit.
-# Traversals that halt are reported through the corresponding
-# analysis-incomplete lint instead of passing silently.
-node-limit = 4096
+# Maximum propagation depth from one effect source, plus a separate budget for
+# distinct `(origin, function, effect state)` trace nodes. Dependency facts are
+# extracted independently of these limits. Traversals that halt are reported
+# through the corresponding analysis-incomplete lint instead of passing.
+max-trace-depth = 256
+trace-state-budget = 1000000
 
 [analysis.lints]
 # Incomplete panic and safety traversals use their corresponding policy. Use
@@ -52,7 +50,7 @@ ambiguous-safety-requirement = "deny"
 empty-report-roots = "warn"
 missing-report-root = "warn"
 
-[documentation]
+[contracts]
 # Synthetic rustdoc markdown by namespace glob, loaded from TOML files relative
 # to this manifest. Useful while auditing external or generated APIs whose
 # documented behavior is known but not written in source yet.
@@ -70,30 +68,41 @@ override-files = []
 # should be treated as opaque analysis boundaries. Patterns use Rust crate/path
 # names: write `proc_macro2`, not the package name `proc-macro2`.
 #
+# Patterns match both owning definition paths and macro definition paths in a
+# panic's expansion provenance. Ignoring a macro is path-local: it does not
+# hide unrelated panics in the same function, and it does not affect
+# SafetyEffect.
+#
 # Use this list as the crate-local false-positive ledger too. When a reported
 # compiler assert is unreachable because this crate maintains an invariant,
 # ignore the function that introduces that assert and document the invariant
-# in a TOML comment next to the pattern.
+# in a TOML comment next to the pattern. An explicit list replaces the built-in
+# default, so keep the core macro entry unless you want to audit those checks.
 ignored-namespaces = [
+    # Rust's unsafe-precondition checks are not caller-visible panic behavior.
+    "core::ub_checks::assert_unsafe_precondition",
+
+    # Build and compiler tooling trusted by this example policy.
     "syn", "syn::**",
     "quote", "quote::**",
     "proc_macro2", "proc_macro2::**",
     "rustc*", "rustc*::**",
 ]
 
-# Trusted crates or fully-qualified functions whose internals should be treated
-# as opaque API boundaries. Their `# Panics` documentation is assumed complete:
-# documented conditions become caller obligations, while an undocumented match
-# is trusted as non-panicking.
+# Trusted crates or fully-qualified functions whose panic implementations and
+# internal panic contracts should be opaque. A matched API's own `# Panics`
+# contract remains visible to non-trusted callers; an undocumented match is
+# trusted as non-panicking.
 #
 # Patterns match a definition's crate root, definition-site path, impl self-type
 # path, and rustc-rendered display path. A broad pattern such as `alloc::**`
 # asserts that the matched crate documents every caller-visible panic condition.
-trusted-panic-boundary-namespaces = []
+trusted-boundary-namespaces = []
 
-# Callees that should be treated as direct panic sinks. When this overlaps with
-# trusted panic namespaces, the more precise namespace match wins; if
-# precision ties, panic sinks win.
+# Callees that should be treated as direct panic sinks. When classifying a call
+# that also matches a trusted namespace, the more precise match wins; if
+# precision ties, panic sinks win. A winning sink classification does not also
+# make that implementation a trusted opaque boundary.
 panic-sink-namespaces = [
     "core::panicking::**",
     "std::panicking::**",
@@ -123,28 +132,27 @@ compiler-assert = "deny"
 # compiler-assert-invalid-enum-construction = "deny"
 panic-invocation = "deny"
 documented-panic = "warn"
-trusted-panic = "warn"
-# Calls whose target cannot be resolved or verified: undocumented trait
-# methods behind generic bounds, and opaque callables like function pointers.
-indirect-call-boundary = "warn"
+# Calls with a remaining unresolved target. Known targets are still traced.
+unresolved-call-target = "allow"
 
 [safety]
-# Namespaces whose unsafe docs/call-site findings should be suppressed.
-# Matching a caller suppresses unsafe-call findings inside it; matching a callee
-# suppresses requirements for calls to that callee.
+# Namespaces whose containing function bodies should not produce SafetyEffect
+# sources. This does not trust a called API or suppress its surface `# Safety`
+# contract; use `trusted-boundary-namespaces` for that API-boundary policy.
 ignored-namespaces = []
 
-# Trusted APIs whose implementations should be opaque. Their `# Safety`
-# documentation is assumed complete: documented requirements become caller
-# obligations, while an undocumented match is trusted as carrying none, even
-# when the function is declared `unsafe`.
-trusted-safety-boundary-namespaces = []
+# Trusted APIs whose safety implementations and internal safety contracts should
+# be opaque. A matched API's own `# Safety` contract remains visible to
+# non-trusted callers. Direct unsafe calls written outside the boundary still
+# need a local `// SAFETY:` justification.
+trusted-boundary-namespaces = []
 
 [safety.lints]
 # `deny` emits an error and makes `cargo sniff-test` fail.
 # `warn` emits a warning without failing the run.
 # `allow` suppresses the finding from diagnostics and JSON reports.
 missing-safety-docs = "warn"
+unresolved-call-target = "allow"
 unsafe-call-missing-justification = "warn"
 unsafe-call-missing-requirements = "warn"
 # Group default for non-call unsafe operations. Each exact override is optional

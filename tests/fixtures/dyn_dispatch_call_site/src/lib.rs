@@ -1,4 +1,7 @@
 pub trait Runner {
+    /// # Panics
+    ///
+    /// Implementations may panic while running.
     fn run(&self);
 }
 
@@ -16,12 +19,12 @@ impl Runner for SafeRunner {
     fn run(&self) {}
 }
 
-pub fn selected_panicking_runner_is_reachable() {
+pub fn locally_constructed_implementation_uses_trait_contract() {
     let runner: &dyn Runner = &Panicker;
     runner.run();
 }
 
-pub fn same_trait_vtable_candidates_are_reachable() {
+pub fn unrelated_vtable_creation_does_not_select_an_implementation() {
     let panicker = Panicker;
     let _panicking_runner: &dyn Runner = &panicker;
 

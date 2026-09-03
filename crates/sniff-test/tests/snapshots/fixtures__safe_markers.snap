@@ -6,26 +6,40 @@ expression: "report[\"findings\"]"
   {
     "kind": "panic-invocation",
     "level": "deny",
-    "reason": "panic sink core::panicking::panic",
+    "owner": {
+      "crate": "safe_markers",
+      "scope": "workspace"
+    },
+    "reason": "panic invocation to `core::panicking::panic` has no recorded `// PANIC:` evidence",
     "root": "safe_markers::unsafe_call",
     "root-kind": "concrete",
     "root-span": "src/lib.rs:16:1: 16:31",
+    "source-evidence": {
+      "status": "verified-absent"
+    },
     "span": "src/lib.rs:21:5: 21:18",
     "target": "core::panicking::panic",
     "trace": [
       "src/lib.rs:17:5: 17:17: safe_markers::unsafe_call --direct-call-> safe_markers::helper",
-      "src/lib.rs:21:5: 21:18: safe_markers::helper --macro-expansion-> macro core::std::assert",
-      "src/lib.rs:21:5: 21:18: macro core::std::assert --direct-call-> core::panicking::panic"
+      "src/lib.rs:21:5: 21:18: safe_markers::helper --macro-expansion-> macro core::macros::builtin::assert",
+      "src/lib.rs:21:5: 21:18: macro core::macros::builtin::assert --direct-call-> core::panicking::panic"
     ]
   },
   {
     "compiler-assert-kind": "division-by-zero",
     "kind": "compiler-assert",
     "level": "deny",
-    "reason": "compiler assert",
+    "owner": {
+      "crate": "safe_markers",
+      "scope": "workspace"
+    },
+    "reason": "compiler assertion (division by zero) has no recorded `// PANIC:` evidence",
     "root": "safe_markers::unsafe_ratio",
     "root-kind": "concrete",
     "root-span": "src/lib.rs:7:1: 7:63",
+    "source-evidence": {
+      "status": "verified-absent"
+    },
     "span": "src/lib.rs:8:5: 8:24",
     "target": "compiler assert division by zero",
     "trace": [

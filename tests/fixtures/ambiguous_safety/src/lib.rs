@@ -20,6 +20,9 @@ pub fn duplicate_safety_marker() -> u8 {
     unsafe { read_duplicate(ptr.as_ptr()) }
 }
 
+/// # Safety
+///
+/// The caller must uphold this fixture's synthetic safety invariant.
 unsafe fn perform() {}
 
 macro_rules! perform_twice_without_marker {
@@ -50,4 +53,41 @@ pub fn reused_marker_across_generic_instances() {
     let word = 11_u16;
     let _ = read_copy(&byte);
     let _ = read_copy(&word);
+}
+
+/// # Safety
+///
+/// Requirements:
+///
+/// - initialized: shared state must be initialized.
+/// - exclusive: no concurrent access is allowed.
+pub fn safe_obligation() {}
+
+macro_rules! call_safe_obligation_twice {
+    () => {{
+        safe_obligation();
+        safe_obligation();
+    }};
+}
+
+macro_rules! call_safe_obligation_twice_with_partial_marker {
+    () => {{
+        // SAFETY:
+        // - initialized: this fixture initializes the shared state.
+        call_safe_obligation_twice!()
+    }};
+}
+
+pub fn reused_partial_marker_for_safe_obligations() {
+    call_safe_obligation_twice_with_partial_marker!();
+}
+
+#[allow(unused_unsafe)]
+pub fn reused_partial_marker_for_safe_obligations_inside_unsafe_block() {
+    // SAFETY:
+    // - initialized: this fixture initializes the shared state.
+    unsafe {
+        safe_obligation();
+        safe_obligation();
+    }
 }

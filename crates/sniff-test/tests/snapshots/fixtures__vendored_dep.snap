@@ -6,10 +6,17 @@ expression: "report[\"findings\"]"
   {
     "kind": "documented-panic",
     "level": "warn",
-    "reason": "vendored::checked documents when it may panic under # Panics",
+    "owner": {
+      "crate": "vendored_app",
+      "scope": "workspace"
+    },
+    "reason": "call to `vendored::checked` with a `# Panics` contract has no recorded `// PANIC:` evidence",
     "root": "vendored_app::use_vendored",
     "root-kind": "concrete",
     "root-span": "src/lib.rs:1:1: 1:32",
+    "source-evidence": {
+      "status": "verified-absent"
+    },
     "span": "src/lib.rs:2:5: 2:28",
     "target": "vendored::checked",
     "trace": [

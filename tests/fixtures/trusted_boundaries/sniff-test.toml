@@ -1,5 +1,6 @@
 [panics]
-trusted-panic-boundary-namespaces = [
+trusted-boundary-namespaces = [
+    "trusted_boundaries::trusted_comment_wrapper",
     "trusted_boundaries::trusted_helper",
     "trusted_boundaries::trusted_doc_helper",
 ]
@@ -11,7 +12,8 @@ panic-sink-namespaces = [
 ]
 
 [safety]
-trusted-safety-boundary-namespaces = [
+trusted-boundary-namespaces = [
     "trusted_boundaries::trusted_helper",
+    "trusted_boundaries::trusted_marker_wrapper",
     "trusted_boundaries::unsafe_helper",
 ]

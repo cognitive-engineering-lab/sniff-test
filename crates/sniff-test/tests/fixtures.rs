@@ -1,12 +1,13 @@
 mod common;
 
+use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use serde_json::Value;
 
 use common::{
-    COMPILER_DEBUG_FRAGMENTS, CommandOutput, clean_cargo_package_env, copy_dir_all,
+    COMPILER_DEBUG_FRAGMENTS, CommandOutput, clean_cargo_package_env, copy_fixture_dir,
     lock_nested_cargo, repo_root, rustc_sysroot,
 };
 
@@ -87,20 +88,17 @@ fixture_cases! {
         closure_call_graph => Case::new().denied();
     }
     "custom_index_impl" => {
-        custom_index_impl => Case::new().denied();
+        custom_index_impl => Case::new();
     }
     "trait_default_method" => {
         trait_default_method => Case::new().denied();
     }
     "dyn_dispatch_call_site" => {
-        dyn_dispatch_call_sites_retain_vtable_candidates => Case::new().denied();
+        dyn_dispatch_uses_trait_declaration_contract => Case::new().denied();
     }
     "supertrait_dyn_dispatch" => {
         supertrait_dyn_dispatch => Case::new()
             .denied();
-    }
-    "documented_obligation" => {
-        documented_obligation => Case::new();
     }
     "contract_overrides" => {
         contract_overrides => Case::new();
@@ -174,8 +172,16 @@ fixture_cases! {
     "unsafe_closure_inherit" => {
         unsafe_closure_inherit => Case::new();
     }
-    "node_limit" => {
-        node_limit => Case::new()
+    "trace_depth_limit" => {
+        trace_depth_limit => Case::new()
+            .denied();
+    }
+    "state_budget" => {
+        state_budget => Case::new()
+            .denied();
+    }
+    "source_aggregation" => {
+        source_aggregation_json_retains_each_report_root => Case::new()
             .denied();
     }
     "indirect_calls" => {
@@ -231,6 +237,8 @@ fixture_cases! {
     }
     "trusted_boundaries" => {
         trusted_boundaries => Case::new();
+        trusted_unresolved_boundaries => Case::new()
+            .args(&["--manifest", "trusted-unresolved.toml"]);
     }
     "report_roots" => {
         report_roots_public => Case::new().denied();
@@ -278,7 +286,7 @@ fn run_case(
         .tempdir()
         .unwrap_or_else(|error| panic!("{name}: failed to create temp dir: {error}"));
     let root = temp.path().join(fixture_name);
-    copy_dir_all(&fixture, &root)
+    copy_fixture_dir(&fixture, &root)
         .unwrap_or_else(|error| panic!("{name}: failed to copy fixture: {error}"));
 
     let output = {
@@ -423,4 +431,40 @@ fn json_string(value: &Value, key: &str) -> String {
         .and_then(Value::as_str)
         .unwrap_or_default()
         .to_owned()
+}
+
+#[test]
+fn fixture_copy_excludes_cargo_target_directories() {
+    let temp = tempfile::tempdir().expect("temporary directory should be created");
+    let source = temp.path().join("source");
+    let destination = temp.path().join("destination");
+    let nested = source.join("nested");
+    let source_module = source.join("src/target");
+
+    fs::create_dir_all(source.join("target")).expect("root target directory should be created");
+    fs::create_dir_all(nested.join("target")).expect("nested target directory should be created");
+    fs::create_dir_all(&source_module).expect("source module directory should be created");
+    fs::write(source.join("Cargo.toml"), "[workspace]").expect("root manifest should be written");
+    fs::write(nested.join("Cargo.toml"), "[workspace]").expect("nested manifest should be written");
+    fs::write(source.join("Cargo.lock"), "lockfile").expect("fixture lockfile should be written");
+    fs::write(source.join("target/root-cache"), "cache")
+        .expect("root target cache should be written");
+    fs::write(nested.join("source.rs"), "fn fixture() {}")
+        .expect("nested fixture source should be written");
+    fs::write(nested.join("target/nested-cache"), "cache")
+        .expect("nested target cache should be written");
+    fs::write(source_module.join("module.rs"), "pub struct Target;")
+        .expect("legitimate target module should be written");
+
+    copy_fixture_dir(&source, &destination).expect("fixture should be copied");
+
+    assert_eq!(
+        fs::read_to_string(destination.join("Cargo.lock"))
+            .expect("Cargo.lock should remain part of the fixture"),
+        "lockfile"
+    );
+    assert!(destination.join("nested/source.rs").is_file());
+    assert!(destination.join("src/target/module.rs").is_file());
+    assert!(!destination.join("target").exists());
+    assert!(!destination.join("nested/target").exists());
 }

@@ -4,7 +4,7 @@ report-roots = [
     "contract_overrides::safety_override_missing_requirement",
 ]
 
-[documentation]
+[contracts]
 override-files = ["override.toml"]
 
 [panics]

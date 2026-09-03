@@ -6,6 +6,10 @@ report-roots = [
     "effect_marker_paths::transitive_panic_path_exposes_uncovered_effect",
     "effect_marker_paths::transitive_safety_marker_covers_inner_effect",
     "effect_marker_paths::transitive_safety_path_exposes_uncovered_effect",
+    "effect_marker_paths::multiline_let_else_marker_applies_to_containing_statement",
+    "effect_marker_paths::marker_does_not_cross_an_intervening_statement",
+    "effect_marker_paths::let_else_marker_does_not_cover_the_else_body",
+    "effect_marker_paths::marker_on_an_ordinary_enclosing_block_does_not_cover_its_tail",
 ]
 
 [panics]

@@ -179,6 +179,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "effect-tracing"
+version = "0.1.0"
+
+[[package]]
 name = "encode_unicode"
 version = "1.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -450,6 +454,7 @@ dependencies = [
  "anyhow",
  "cargo_metadata",
  "clap",
+ "effect-tracing",
  "globset",
  "insta",
  "pulldown-cmark",

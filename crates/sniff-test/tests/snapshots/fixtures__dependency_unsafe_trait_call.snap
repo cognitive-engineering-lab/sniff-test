@@ -4,24 +4,53 @@ expression: "report[\"findings\"]"
 ---
 [
   {
+    "function": "dependency_unsafe_trait_call_dep::ambiguous_obligation",
+    "kind": "ambiguous-safety-requirement",
+    "level": "deny",
+    "owner": {
+      "crate": "dependency_unsafe_trait_call_dep",
+      "scope": "dependency"
+    },
+    "reason": "`dependency_unsafe_trait_call_dep::ambiguous_obligation` has multiple # Safety requirements named `state`",
+    "requirements": [
+      "state: the first dependency invariant must hold.",
+      "state: the second dependency invariant must hold."
+    ],
+    "root": "dependency_unsafe_trait_call_app::ambiguous_dependency_contract",
+    "root-kind": "concrete",
+    "root-span": "src/lib.rs:17:1: 17:39",
+    "span": "[FIXTURE]/dep/src/lib.rs:12:1: 12:55",
+    "target": "dependency_unsafe_trait_call_dep::ambiguous_obligation",
+    "trace": [
+      "src/lib.rs:18:5: 18:61: dependency_unsafe_trait_call_app::ambiguous_dependency_contract --direct-call-> dependency_unsafe_trait_call_dep::ambiguous_obligation"
+    ]
+  },
+  {
     "function": "dependency_unsafe_trait_call_dep::invoke_unjustified",
     "kind": "unsafe-call-missing-requirements",
     "level": "deny",
     "missing-requirements": [
       "invariant: the private test invariant must hold."
     ],
-    "reason": "unsafe call to `<dependency_unsafe_trait_call_app::Local as dependency_unsafe_trait_call_dep::Action>::apply` does not satisfy all # Safety requirements",
+    "owner": {
+      "crate": "dependency_unsafe_trait_call_dep",
+      "scope": "dependency"
+    },
+    "reason": "dependency crate `dependency_unsafe_trait_call_dep` has no recorded `// SAFETY:` evidence for unsafe call to `<dependency_unsafe_trait_call_app::Local as dependency_unsafe_trait_call_dep::Action>::apply`",
     "requirements": [
       "invariant: the private test invariant must hold."
     ],
     "root": "dependency_unsafe_trait_call_app::unjustified_caller",
     "root-kind": "concrete",
     "root-span": "src/lib.rs:13:1: 13:28",
-    "span": "[FIXTURE]/dep/src/lib.rs:21:9: 21:19",
+    "source-evidence": {
+      "status": "verified-absent"
+    },
+    "span": "[FIXTURE]/dep/src/lib.rs:28:9: 28:19",
     "target": "<dependency_unsafe_trait_call_app::Local as dependency_unsafe_trait_call_dep::Action>::apply",
     "trace": [
       "src/lib.rs:14:5: 14:68: dependency_unsafe_trait_call_app::unjustified_caller --direct-call-> dependency_unsafe_trait_call_dep::invoke_unjustified",
-      "[FIXTURE]/dep/src/lib.rs:21:9: 21:19: dependency_unsafe_trait_call_dep::invoke_unjustified --direct-call-> <dependency_unsafe_trait_call_app::Local as dependency_unsafe_trait_call_dep::Action>::apply"
+      "[FIXTURE]/dep/src/lib.rs:28:9: 28:19: dependency_unsafe_trait_call_dep::invoke_unjustified --direct-call-> <dependency_unsafe_trait_call_app::Local as dependency_unsafe_trait_call_dep::Action>::apply"
     ]
   }
 ]

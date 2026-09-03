@@ -8,6 +8,7 @@ report-roots = [
 ]
 
 [safety]
-trusted-safety-boundary-namespaces = [
+trusted-boundary-namespaces = [
+    "safety_contract_requirements::read_byte",
     "safety_contract_requirements::documented_obligation",
 ]

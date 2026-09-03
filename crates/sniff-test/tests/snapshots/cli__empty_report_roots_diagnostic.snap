@@ -7,7 +7,7 @@ stdout:
 <empty>
 stderr:
     Checking report-roots v0.1.0 ([FIXTURE])
-warning: `[analysis].report-roots = 0 explicit paths` selected no functions in `report_roots`; no effects were analyzed
+warning: [sniff-test::analysis::empty-report-roots] `[analysis].report-roots = 0 explicit paths` selected no functions in `report_roots`; no effects were analyzed
  --> [FIXTURE]/empty.toml:2:16
   |
 2 | report-roots = []

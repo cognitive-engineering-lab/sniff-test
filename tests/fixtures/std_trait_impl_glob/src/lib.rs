@@ -2,6 +2,7 @@
 //! as the same trusted boundary as inherent methods on the same type.
 
 pub fn get(values: &Vec<u8>, index: usize) -> u8 {
+    // PANIC: callers accept that an out-of-bounds index panics.
     values[index]
 }
 

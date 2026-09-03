@@ -14,34 +14,45 @@ use super::findings::{DiagnosticMessage, FindingDiagnostic};
 pub(super) fn emit_finding_diagnostic(
     tcx: TyCtxt<'_>,
     level: LintLevel,
+    lint_code: &str,
     diagnostic: &FindingDiagnostic,
 ) {
+    let message = lint_coded_message(lint_code, &diagnostic.message);
     match (level, diagnostic.span) {
         (LintLevel::Allow, _) => {}
         (LintLevel::Warn, Some(span)) => {
-            let mut emitted = tcx.dcx().struct_span_warn(span, diagnostic.message.clone());
-            decorate(&mut emitted, &diagnostic.messages);
+            let mut emitted = tcx.dcx().struct_span_warn(span, message.clone());
+            decorate(&mut emitted, lint_code, &diagnostic.messages);
             emitted.emit();
         }
         (LintLevel::Warn, None) => {
-            let mut emitted = tcx.dcx().struct_warn(diagnostic.message.clone());
-            decorate(&mut emitted, &diagnostic.messages);
+            let mut emitted = tcx.dcx().struct_warn(message.clone());
+            decorate(&mut emitted, lint_code, &diagnostic.messages);
             emitted.emit();
         }
         (LintLevel::Deny, Some(span)) => {
-            let mut emitted = tcx.dcx().struct_span_err(span, diagnostic.message.clone());
-            decorate(&mut emitted, &diagnostic.messages);
+            let mut emitted = tcx.dcx().struct_span_err(span, message.clone());
+            decorate(&mut emitted, lint_code, &diagnostic.messages);
             let _ = emitted.emit();
         }
         (LintLevel::Deny, None) => {
-            let mut emitted = tcx.dcx().struct_err(diagnostic.message.clone());
-            decorate(&mut emitted, &diagnostic.messages);
+            let mut emitted = tcx.dcx().struct_err(message);
+            decorate(&mut emitted, lint_code, &diagnostic.messages);
             let _ = emitted.emit();
         }
     }
 }
 
-fn decorate<G: EmissionGuarantee>(diagnostic: &mut Diag<'_, G>, messages: &[DiagnosticMessage]) {
+fn lint_coded_message(lint_code: &str, message: &str) -> String {
+    format!("[{lint_code}] {message}")
+}
+
+fn decorate<G: EmissionGuarantee>(
+    diagnostic: &mut Diag<'_, G>,
+    lint_code: &str,
+    messages: &[DiagnosticMessage],
+) {
+    diagnostic.is_lint(lint_code.to_owned(), false);
     for message in messages {
         match message {
             DiagnosticMessage::Note(note) => {
@@ -141,7 +152,7 @@ mod tests {
     use rustc_span::source_map::{FilePathMapping, SourceMap};
     use rustc_span::{BytePos, FileName};
 
-    use super::config_span;
+    use super::{config_span, lint_coded_message};
 
     fn with_source_file(source: &str, check: impl FnOnce(&rustc_span::SourceFile)) {
         rustc_span::create_default_session_globals_then(|| {
@@ -179,5 +190,16 @@ mod tests {
             assert_eq!(span.lo(), file.start_pos + BytePos(6));
             assert_eq!(span.hi(), file.start_pos + BytePos(13));
         });
+    }
+
+    #[test]
+    fn lint_codes_are_visible_in_the_diagnostic_headline() {
+        assert_eq!(
+            lint_coded_message(
+                "sniff-test::safety::raw-pointer-dereference-missing-justification",
+                "unsafe operation lacks a justification",
+            ),
+            "[sniff-test::safety::raw-pointer-dereference-missing-justification] unsafe operation lacks a justification"
+        );
     }
 }

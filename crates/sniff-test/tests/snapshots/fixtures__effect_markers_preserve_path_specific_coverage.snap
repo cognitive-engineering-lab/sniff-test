@@ -6,29 +6,43 @@ expression: "report[\"findings\"]"
   {
     "kind": "panic-invocation",
     "level": "deny",
-    "reason": "panic sink core::std::rt::panic_fmt",
+    "owner": {
+      "crate": "effect_marker_paths",
+      "scope": "workspace"
+    },
+    "reason": "panic invocation to `core::panicking::panic_fmt` has no recorded `// PANIC:` evidence",
     "root": "effect_marker_paths::converging_panic_paths_preserve_uncovered_route",
     "root-kind": "concrete",
     "root-span": "src/lib.rs:9:1: 9:57",
+    "source-evidence": {
+      "status": "verified-absent"
+    },
     "span": "src/lib.rs:2:5: 2:19",
-    "target": "core::std::rt::panic_fmt",
+    "target": "core::panicking::panic_fmt",
     "trace": [
       "src/lib.rs:12:5: 12:29: effect_marker_paths::converging_panic_paths_preserve_uncovered_route --direct-call-> effect_marker_paths::uncovered_panic_branch",
       "src/lib.rs:6:5: 6:30: effect_marker_paths::uncovered_panic_branch --direct-call-> effect_marker_paths::converging_panic_effect",
-      "src/lib.rs:2:5: 2:19: effect_marker_paths::converging_panic_effect --macro-expansion-> macro std::panic",
-      "src/lib.rs:2:5: 2:19: macro std::panic --macro-expansion-> macro core::std::panic::panic_2021",
-      "[SYSROOT]/lib/rustlib/src/rust/library/core/src/panic.rs:62:9: 62:73: macro core::std::panic::panic_2021 --direct-call-> core::std::rt::panic_fmt"
+      "src/lib.rs:2:5: 2:19: effect_marker_paths::converging_panic_effect --macro-expansion-> macro std::macros::panic",
+      "src/lib.rs:2:5: 2:19: macro std::macros::panic --macro-expansion-> macro core::panic::panic_2021",
+      "[SYSROOT]/lib/rustlib/src/rust/library/core/src/panic.rs:62:9: 62:73: macro core::panic::panic_2021 --direct-call-> core::panicking::panic_fmt"
     ]
   },
   {
     "function": "effect_marker_paths::converging_safety_effect",
     "kind": "unsafe-op-missing-justification",
     "level": "deny",
-    "reason": "unsafe operation (raw pointer dereference) has no `// SAFETY:` justification",
+    "owner": {
+      "crate": "effect_marker_paths",
+      "scope": "workspace"
+    },
+    "reason": "unsafe operation (raw pointer dereference) has no recorded `// SAFETY:` evidence",
     "root": "effect_marker_paths::converging_safety_paths_preserve_uncovered_route",
     "root-kind": "concrete",
     "root-span": "src/lib.rs:23:1: 23:82",
     "safety-op-kind": "raw-pointer-dereference",
+    "source-evidence": {
+      "status": "verified-absent"
+    },
     "span": "src/lib.rs:16:14: 16:22",
     "trace": [
       "src/lib.rs:26:14: 26:46: effect_marker_paths::converging_safety_paths_preserve_uncovered_route --direct-call-> effect_marker_paths::uncovered_safety_branch",
@@ -37,30 +51,107 @@ expression: "report[\"findings\"]"
     ]
   },
   {
+    "function": "effect_marker_paths::let_else_marker_does_not_cover_the_else_body",
+    "kind": "unsafe-call-missing-justification",
+    "level": "warn",
+    "owner": {
+      "crate": "effect_marker_paths",
+      "scope": "workspace"
+    },
+    "reason": "unsafe call to `effect_marker_paths::multiline_unsafe_value` has no recorded `// SAFETY:` evidence",
+    "root": "effect_marker_paths::let_else_marker_does_not_cover_the_else_body",
+    "root-kind": "concrete",
+    "root-span": "src/lib.rs:90:1: 90:77",
+    "source-evidence": {
+      "status": "verified-absent"
+    },
+    "span": "src/lib.rs:93:25: 93:49",
+    "target": "effect_marker_paths::multiline_unsafe_value",
+    "trace": [
+      "src/lib.rs:93:25: 93:49: effect_marker_paths::let_else_marker_does_not_cover_the_else_body --direct-call-> effect_marker_paths::multiline_unsafe_value"
+    ]
+  },
+  {
+    "function": "effect_marker_paths::marker_does_not_cross_an_intervening_statement",
+    "kind": "unsafe-call-missing-justification",
+    "level": "warn",
+    "owner": {
+      "crate": "effect_marker_paths",
+      "scope": "workspace"
+    },
+    "reason": "unsafe call to `effect_marker_paths::multiline_unsafe_value` has no recorded `// SAFETY:` evidence",
+    "root": "effect_marker_paths::marker_does_not_cross_an_intervening_statement",
+    "root-kind": "concrete",
+    "root-span": "src/lib.rs:79:1: 79:62",
+    "source-evidence": {
+      "status": "verified-absent"
+    },
+    "span": "src/lib.rs:83:19: 83:43",
+    "target": "effect_marker_paths::multiline_unsafe_value",
+    "trace": [
+      "src/lib.rs:83:19: 83:43: effect_marker_paths::marker_does_not_cross_an_intervening_statement --direct-call-> effect_marker_paths::multiline_unsafe_value"
+    ]
+  },
+  {
+    "function": "effect_marker_paths::marker_on_an_ordinary_enclosing_block_does_not_cover_its_tail",
+    "kind": "unsafe-call-missing-justification",
+    "level": "warn",
+    "owner": {
+      "crate": "effect_marker_paths",
+      "scope": "workspace"
+    },
+    "reason": "unsafe call to `effect_marker_paths::multiline_unsafe_value` has no recorded `// SAFETY:` evidence",
+    "root": "effect_marker_paths::marker_on_an_ordinary_enclosing_block_does_not_cover_its_tail",
+    "root-kind": "concrete",
+    "root-span": "src/lib.rs:98:1: 98:85",
+    "source-evidence": {
+      "status": "verified-absent"
+    },
+    "span": "src/lib.rs:102:18: 102:42",
+    "target": "effect_marker_paths::multiline_unsafe_value",
+    "trace": [
+      "src/lib.rs:102:18: 102:42: effect_marker_paths::marker_on_an_ordinary_enclosing_block_does_not_cover_its_tail --direct-call-> effect_marker_paths::multiline_unsafe_value"
+    ]
+  },
+  {
     "kind": "panic-invocation",
     "level": "deny",
-    "reason": "panic sink core::std::rt::panic_fmt",
+    "owner": {
+      "crate": "effect_marker_paths",
+      "scope": "workspace"
+    },
+    "reason": "panic invocation to `core::panicking::panic_fmt` has no recorded `// PANIC:` evidence",
     "root": "effect_marker_paths::transitive_panic_path_exposes_uncovered_effect",
     "root-kind": "concrete",
     "root-span": "src/lib.rs:42:1: 42:56",
+    "source-evidence": {
+      "status": "verified-absent"
+    },
     "span": "src/lib.rs:39:5: 39:56",
-    "target": "core::std::rt::panic_fmt",
+    "target": "core::panicking::panic_fmt",
     "trace": [
       "src/lib.rs:43:5: 43:28: effect_marker_paths::transitive_panic_path_exposes_uncovered_effect --direct-call-> effect_marker_paths::uncovered_panic_inner",
-      "src/lib.rs:39:5: 39:56: effect_marker_paths::uncovered_panic_inner --macro-expansion-> macro std::panic",
-      "src/lib.rs:39:5: 39:56: macro std::panic --macro-expansion-> macro core::std::panic::panic_2021",
-      "[SYSROOT]/lib/rustlib/src/rust/library/core/src/panic.rs:62:9: 62:73: macro core::std::panic::panic_2021 --direct-call-> core::std::rt::panic_fmt"
+      "src/lib.rs:39:5: 39:56: effect_marker_paths::uncovered_panic_inner --macro-expansion-> macro std::macros::panic",
+      "src/lib.rs:39:5: 39:56: macro std::macros::panic --macro-expansion-> macro core::panic::panic_2021",
+      "[SYSROOT]/lib/rustlib/src/rust/library/core/src/panic.rs:62:9: 62:73: macro core::panic::panic_2021 --direct-call-> core::panicking::panic_fmt"
     ]
   },
   {
     "function": "effect_marker_paths::uncovered_safety_inner",
     "kind": "unsafe-op-missing-justification",
     "level": "deny",
-    "reason": "unsafe operation (raw pointer dereference) has no `// SAFETY:` justification",
+    "owner": {
+      "crate": "effect_marker_paths",
+      "scope": "workspace"
+    },
+    "reason": "unsafe operation (raw pointer dereference) has no recorded `// SAFETY:` evidence",
     "root": "effect_marker_paths::transitive_safety_path_exposes_uncovered_effect",
     "root-kind": "concrete",
     "root-span": "src/lib.rs:59:1: 59:81",
     "safety-op-kind": "raw-pointer-dereference",
+    "source-evidence": {
+      "status": "verified-absent"
+    },
     "span": "src/lib.rs:56:14: 56:22",
     "trace": [
       "src/lib.rs:60:5: 60:36: effect_marker_paths::transitive_safety_path_exposes_uncovered_effect --direct-call-> effect_marker_paths::uncovered_safety_inner",

@@ -97,15 +97,20 @@ pub fn clean_cargo_package_env(command: &mut Command) {
         .env_remove("CARGO_PKG_VERSION");
 }
 
-pub fn copy_dir_all(source: &Path, destination: &Path) -> io::Result<()> {
+pub fn copy_fixture_dir(source: &Path, destination: &Path) -> io::Result<()> {
     fs::create_dir_all(destination)?;
+    let has_cargo_manifest = source.join("Cargo.toml").is_file();
     for entry in fs::read_dir(source)? {
         let entry = entry?;
         let kind = entry.file_type()?;
         let source_path = entry.path();
-        let destination_path = destination.join(entry.file_name());
+        let file_name = entry.file_name();
+        if has_cargo_manifest && kind.is_dir() && file_name == "target" {
+            continue;
+        }
+        let destination_path = destination.join(file_name);
         if kind.is_dir() {
-            copy_dir_all(&source_path, &destination_path)?;
+            copy_fixture_dir(&source_path, &destination_path)?;
         } else {
             fs::copy(source_path, destination_path)?;
         }

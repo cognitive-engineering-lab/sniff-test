@@ -1,0 +1,52 @@
+---
+source: crates/sniff-test/tests/fixtures.rs
+expression: "report[\"findings\"]"
+---
+[
+  {
+    "kind": "panic-invocation",
+    "level": "deny",
+    "owner": {
+      "crate": "source_aggregation",
+      "scope": "workspace"
+    },
+    "reason": "panic invocation to `core::panicking::panic_fmt` has no recorded `// PANIC:` evidence",
+    "root": "source_aggregation::first_api",
+    "root-kind": "concrete",
+    "root-span": "src/lib.rs:5:1: 5:19",
+    "source-evidence": {
+      "status": "verified-absent"
+    },
+    "span": "src/lib.rs:2:5: 2:28",
+    "target": "core::panicking::panic_fmt",
+    "trace": [
+      "src/lib.rs:6:5: 6:26: source_aggregation::first_api --direct-call-> source_aggregation::shared_panic_source",
+      "src/lib.rs:2:5: 2:28: source_aggregation::shared_panic_source --macro-expansion-> macro std::macros::panic",
+      "src/lib.rs:2:5: 2:28: macro std::macros::panic --macro-expansion-> macro core::panic::panic_2021",
+      "[SYSROOT]/lib/rustlib/src/rust/library/core/src/panic.rs:62:9: 62:73: macro core::panic::panic_2021 --direct-call-> core::panicking::panic_fmt"
+    ]
+  },
+  {
+    "kind": "panic-invocation",
+    "level": "deny",
+    "owner": {
+      "crate": "source_aggregation",
+      "scope": "workspace"
+    },
+    "reason": "panic invocation to `core::panicking::panic_fmt` has no recorded `// PANIC:` evidence",
+    "root": "source_aggregation::second_api",
+    "root-kind": "concrete",
+    "root-span": "src/lib.rs:9:1: 9:20",
+    "source-evidence": {
+      "status": "verified-absent"
+    },
+    "span": "src/lib.rs:2:5: 2:28",
+    "target": "core::panicking::panic_fmt",
+    "trace": [
+      "src/lib.rs:10:5: 10:26: source_aggregation::second_api --direct-call-> source_aggregation::shared_panic_source",
+      "src/lib.rs:2:5: 2:28: source_aggregation::shared_panic_source --macro-expansion-> macro std::macros::panic",
+      "src/lib.rs:2:5: 2:28: macro std::macros::panic --macro-expansion-> macro core::panic::panic_2021",
+      "[SYSROOT]/lib/rustlib/src/rust/library/core/src/panic.rs:62:9: 62:73: macro core::panic::panic_2021 --direct-call-> core::panicking::panic_fmt"
+    ]
+  }
+]

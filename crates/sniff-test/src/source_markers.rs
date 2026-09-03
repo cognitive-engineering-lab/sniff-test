@@ -3,10 +3,11 @@
 use reachability::{ReachabilityEdge, ReachabilityGraph, ReachabilityNodeKind};
 use rustc_hir::def_id::LocalDefId;
 use rustc_middle::thir::visit::{self, Visitor};
-use rustc_middle::thir::{Block, Thir};
+use rustc_middle::thir::{Block, Stmt, StmtKind, Thir};
 use rustc_middle::ty::TyCtxt;
 use rustc_span::{ExpnId, SourceFile, Span};
 
+use crate::artifact::UnverifiedMarkerProbeReason;
 use crate::config::MarkerProbing;
 use crate::contracts::MarkerSatisfaction;
 use crate::namespace::definition_backed_macro;
@@ -66,6 +67,83 @@ pub(crate) struct EffectMarkerBlock {
     pub applicable_satisfactions: Vec<usize>,
 }
 
+/// Result of inspecting every source location that can own one marker.
+///
+/// Absence is verified only when all usable candidates were readable. A
+/// marker found at any candidate is conclusive even when another candidate
+/// could not be inspected.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum MarkerProbe<T> {
+    Present(T),
+    VerifiedAbsent,
+    Unverified(UnverifiedMarkerProbeReason),
+}
+
+impl<T> MarkerProbe<T> {
+    fn or_else(self, probe: impl FnOnce() -> Self) -> Self {
+        match self {
+            Self::Present(_) => self,
+            Self::VerifiedAbsent => probe(),
+            Self::Unverified(reason) => match probe() {
+                present @ Self::Present(_) => present,
+                Self::VerifiedAbsent => Self::Unverified(reason),
+                Self::Unverified(other) => Self::Unverified(reason.merge(other)),
+            },
+        }
+    }
+}
+
+/// Probes ordered candidates while retaining uncertainty from every candidate
+/// that could have owned the marker. An empty candidate set is unverified.
+pub(crate) fn probe_marker_candidates<C, T, U>(
+    candidates: C,
+    mut probe: impl FnMut(T) -> MarkerProbe<U>,
+) -> MarkerProbe<U>
+where
+    C: IntoIterator<Item = T>,
+{
+    let mut saw_candidate = false;
+    let mut unverified_reason: Option<UnverifiedMarkerProbeReason> = None;
+    for candidate in candidates {
+        saw_candidate = true;
+        match probe(candidate) {
+            present @ MarkerProbe::Present(_) => return present,
+            MarkerProbe::VerifiedAbsent => {}
+            MarkerProbe::Unverified(reason) => {
+                unverified_reason =
+                    Some(unverified_reason.map_or(reason, |prior| prior.merge(reason)));
+            }
+        }
+    }
+    if let Some(reason) = unverified_reason {
+        MarkerProbe::Unverified(reason)
+    } else if saw_candidate {
+        MarkerProbe::VerifiedAbsent
+    } else {
+        MarkerProbe::Unverified(UnverifiedMarkerProbeReason::NoUsableSourceSpan)
+    }
+}
+
+fn probe_required_marker_candidate<T, U>(
+    candidate: Option<T>,
+    probe: impl FnOnce(T) -> MarkerProbe<U>,
+) -> MarkerProbe<U> {
+    candidate.map_or(
+        MarkerProbe::Unverified(UnverifiedMarkerProbeReason::NoUsableSourceSpan),
+        probe,
+    )
+}
+
+fn marker_probe_from_source<T>(source_available: bool, marker: Option<T>) -> MarkerProbe<T> {
+    if !source_available {
+        MarkerProbe::Unverified(UnverifiedMarkerProbeReason::SourceUnavailable)
+    } else if let Some(marker) = marker {
+        MarkerProbe::Present(marker)
+    } else {
+        MarkerProbe::VerifiedAbsent
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct ParsedMarkerBlock {
     key: MarkerBlockKey,
@@ -91,10 +169,11 @@ impl ParsedMarkerBlock {
 #[must_use]
 pub(crate) fn safety_span_marker_block(
     tcx: TyCtxt<'_>,
+    owner: LocalDefId,
     span: Span,
     probing: MarkerProbing,
-) -> Option<EffectMarkerBlock> {
-    span_marker_block_with(tcx, span, MarkerSyntax::Safety, probing)
+) -> MarkerProbe<EffectMarkerBlock> {
+    effect_site_marker_block_with(tcx, owner, span, MarkerSyntax::Safety, probing)
 }
 
 fn span_marker_block_with(
@@ -102,25 +181,25 @@ fn span_marker_block_with(
     span: Span,
     syntax: MarkerSyntax,
     probing: MarkerProbing,
-) -> Option<EffectMarkerBlock> {
-    marker_probe_spans(span, probing)
-        .into_iter()
-        .find_map(|span| span_marker_block_at(tcx, span, syntax))
+) -> MarkerProbe<EffectMarkerBlock> {
+    probe_marker_candidates(marker_probe_spans(span, probing), |span| {
+        span_marker_block_at(tcx, span, syntax)
+    })
 }
 
 /// Marker block that justifies one effect-bearing reachability edge.
 ///
 /// A marker directly above a callee segment wins, so a marker between links of
-/// a multi-line method chain applies only to that link. An unnamed marker above
-/// the whole multi-line statement cannot select one link, although named
-/// requirement bullets still apply. Enclosing block markers are the fallback.
+/// a multi-line method chain applies only to that link. Otherwise the edge's
+/// source site wins, followed by the unique immediate THIR statement-like
+/// unit. Arbitrary enclosing blocks do not own markers.
 #[must_use]
 pub(crate) fn panic_effect_edge_marker_block(
     tcx: TyCtxt<'_>,
     graph: &ReachabilityGraph<'_>,
     edge: &ReachabilityEdge,
     probing: MarkerProbing,
-) -> Option<EffectMarkerBlock> {
+) -> MarkerProbe<EffectMarkerBlock> {
     effect_edge_marker_block_with(tcx, graph, edge, MarkerSyntax::Panic, probing)
 }
 
@@ -130,9 +209,17 @@ pub(crate) fn safety_effect_edge_marker_block(
     tcx: TyCtxt<'_>,
     graph: &ReachabilityGraph<'_>,
     edge: &ReachabilityEdge,
+    safety_scope_span: Option<Span>,
     probing: MarkerProbing,
-) -> Option<EffectMarkerBlock> {
-    effect_edge_marker_block_with(tcx, graph, edge, MarkerSyntax::Safety, probing)
+) -> MarkerProbe<EffectMarkerBlock> {
+    effect_edge_marker_block_with(tcx, graph, edge, MarkerSyntax::Safety, probing).or_else(|| {
+        let Some(span) = safety_scope_span else {
+            return MarkerProbe::VerifiedAbsent;
+        };
+        probe_required_marker_candidate(edge_owner(graph, edge), |owner| {
+            effect_site_marker_block_with(tcx, owner, span, MarkerSyntax::Safety, probing)
+        })
+    })
 }
 
 fn effect_edge_marker_block_with(
@@ -141,116 +228,152 @@ fn effect_edge_marker_block_with(
     edge: &ReachabilityEdge,
     syntax: MarkerSyntax,
     probing: MarkerProbing,
-) -> Option<EffectMarkerBlock> {
-    let statement = span_marker_block_with(tcx, edge.span, syntax, probing);
-    if let Some(callee_span) = edge.callee_span
-        && !spans_start_on_same_line(tcx, edge.span, callee_span)
-    {
-        if let Some(callee) = span_marker_block_with(tcx, callee_span, syntax, probing) {
-            return Some(callee);
-        }
-        if let Some(statement) = statement {
-            let applicable_satisfactions = statement
-                .satisfactions
-                .iter()
-                .enumerate()
-                .filter_map(|(ordinal, satisfaction)| {
-                    satisfaction.requirement.is_some().then_some(ordinal)
-                })
-                .collect::<Vec<_>>();
-            return (!applicable_satisfactions.is_empty()).then_some(EffectMarkerBlock {
-                key: statement.key,
-                span: statement.span,
-                satisfactions: statement.satisfactions,
-                applicable_satisfactions,
-            });
-        }
-
-        return enclosing_block_marker_block(tcx, graph, edge, syntax, probing);
-    }
-
-    statement.or_else(|| enclosing_block_marker_block(tcx, graph, edge, syntax, probing))
+) -> MarkerProbe<EffectMarkerBlock> {
+    probe_marker_candidates(
+        edge.callee_span
+            .into_iter()
+            .chain(std::iter::once(edge.span)),
+        |span| span_marker_block_with(tcx, span, syntax, probing),
+    )
+    .or_else(|| {
+        probe_required_marker_candidate(edge_owner(graph, edge), |owner| {
+            probe_required_marker_candidate(
+                immediate_statement_span(tcx, owner, edge.span),
+                |span| span_marker_block_with(tcx, span, syntax, probing),
+            )
+        })
+    })
 }
 
-fn enclosing_block_marker_block(
-    tcx: TyCtxt<'_>,
-    graph: &ReachabilityGraph<'_>,
-    edge: &ReachabilityEdge,
-    syntax: MarkerSyntax,
-    probing: MarkerProbing,
-) -> Option<EffectMarkerBlock> {
-    let owner = match &graph.node(edge.origin).kind {
+fn edge_owner(graph: &ReachabilityGraph<'_>, edge: &ReachabilityEdge) -> Option<LocalDefId> {
+    match &graph.node(edge.origin).kind {
         ReachabilityNodeKind::Instance(instance) => instance.def_id().as_local()?,
         ReachabilityNodeKind::CompilerAssert { .. }
         | ReachabilityNodeKind::MacroExpansion { .. }
         | ReachabilityNodeKind::IndirectCall { .. }
         | ReachabilityNodeKind::DynObjectCast { .. } => return None,
-    };
-
-    enclosing_block_spans(tcx, owner, edge.span)
-        .into_iter()
-        .find_map(|span| span_marker_block_with(tcx, span, syntax, probing))
+    }
+    .into()
 }
 
-fn enclosing_block_spans(tcx: TyCtxt<'_>, owner: LocalDefId, target: Span) -> Vec<Span> {
+fn effect_site_marker_block_with(
+    tcx: TyCtxt<'_>,
+    owner: LocalDefId,
+    span: Span,
+    syntax: MarkerSyntax,
+    probing: MarkerProbing,
+) -> MarkerProbe<EffectMarkerBlock> {
+    span_marker_block_with(tcx, span, syntax, probing).or_else(|| {
+        probe_required_marker_candidate(immediate_statement_span(tcx, owner, span), |statement| {
+            span_marker_block_with(tcx, statement, syntax, probing)
+        })
+    })
+}
+
+fn immediate_statement_span(tcx: TyCtxt<'_>, owner: LocalDefId, target: Span) -> Option<Span> {
     let Ok((thir, root)) = tcx.thir_body(owner) else {
-        return Vec::new();
+        return None;
     };
     let thir = thir.borrow();
-    let mut visitor = EnclosingBlockVisitor {
+    let mut visitor = ContainingStatementVisitor {
         thir: &thir,
         target,
-        block_depth: 0,
         spans: Vec::new(),
     };
     visitor.visit_expr(&thir[root]);
-    visitor.spans.sort_by_key(|span| {
-        let span = span.source_callsite();
-        (span.hi().0.saturating_sub(span.lo().0), span.lo().0)
-    });
-    visitor.spans.dedup_by_key(|span| {
-        let span = span.source_callsite();
-        (span.lo(), span.hi())
-    });
-    visitor.spans
+    select_unique_innermost_statement(visitor.spans, target)
 }
 
-struct EnclosingBlockVisitor<'a, 'tcx> {
+struct ContainingStatementVisitor<'a, 'tcx> {
     thir: &'a Thir<'tcx>,
     target: Span,
-    block_depth: usize,
     spans: Vec<Span>,
 }
 
-impl<'a, 'tcx> Visitor<'a, 'tcx> for EnclosingBlockVisitor<'a, 'tcx> {
+impl<'a, 'tcx> Visitor<'a, 'tcx> for ContainingStatementVisitor<'a, 'tcx> {
     fn thir(&self) -> &'a Thir<'tcx> {
         self.thir
     }
 
-    fn visit_block(&mut self, block: &'a Block) {
-        if self.block_depth > 0 && span_contains(block.span, self.target) {
-            self.spans.push(block.span);
+    fn visit_stmt(&mut self, statement: &'a Stmt<'tcx>) {
+        let span = match statement.kind {
+            StmtKind::Expr { expr, .. } => self.thir[expr].span,
+            StmtKind::Let { span, .. } => span,
+        };
+        if span_contains_exact(span, self.target) || span_contains(span, self.target) {
+            self.spans.push(span);
         }
-        self.block_depth += 1;
-        visit::walk_block(self, block);
-        self.block_depth -= 1;
+        visit::walk_stmt(self, statement);
     }
+
+    fn visit_block(&mut self, block: &'a Block) {
+        // THIR stores a block's trailing expression outside `stmts`. Treat it
+        // as the block's statement-like unit so adding a semicolon cannot
+        // change marker ownership. The innermost-span selection below keeps
+        // this from becoming an enclosing-block walk.
+        if let Some(expression) = block.expr {
+            let span = self.thir[expression].span;
+            if span_contains_exact(span, self.target) || span_contains(span, self.target) {
+                self.spans.push(span);
+            }
+        }
+        visit::walk_block(self, block);
+    }
+}
+
+fn select_unique_innermost_statement(mut spans: Vec<Span>, target: Span) -> Option<Span> {
+    let exact = spans
+        .iter()
+        .copied()
+        .filter(|span| span_contains_exact(*span, target))
+        .collect::<Vec<_>>();
+    if !exact.is_empty() {
+        spans = exact;
+    }
+    spans.sort_by_key(|span| {
+        let span = if span_contains_exact(*span, target) {
+            *span
+        } else {
+            span.source_callsite()
+        };
+        (
+            span.hi().0.saturating_sub(span.lo().0),
+            span.lo().0,
+            span.hi().0,
+        )
+    });
+    spans.dedup_by(|left, right| left.source_equal(*right));
+
+    let first = *spans.first()?;
+    let first = if span_contains_exact(first, target) {
+        first
+    } else {
+        first.source_callsite()
+    };
+    let first_length = first.hi().0.saturating_sub(first.lo().0);
+    let ambiguous = spans.iter().skip(1).any(|span| {
+        let span = if span_contains_exact(*span, target) {
+            *span
+        } else {
+            span.source_callsite()
+        };
+        span.hi().0.saturating_sub(span.lo().0) == first_length
+    });
+    (!ambiguous).then_some(spans[0])
+}
+
+fn span_contains_exact(outer: Span, inner: Span) -> bool {
+    !outer.is_dummy()
+        && !inner.is_dummy()
+        && outer.ctxt() == inner.ctxt()
+        && outer.lo() <= inner.lo()
+        && inner.hi() <= outer.hi()
 }
 
 pub(crate) fn span_contains(outer: Span, inner: Span) -> bool {
     let outer = outer.source_callsite();
     let inner = inner.source_callsite();
     !outer.is_dummy() && !inner.is_dummy() && outer.lo() <= inner.lo() && inner.hi() <= outer.hi()
-}
-
-fn spans_start_on_same_line(tcx: TyCtxt<'_>, left: Span, right: Span) -> bool {
-    let left = left.source_callsite();
-    let right = right.source_callsite();
-    if left.is_dummy() || right.is_dummy() {
-        return true;
-    }
-    let source_map = tcx.sess.source_map();
-    source_map.lookup_char_pos(left.lo()).line == source_map.lookup_char_pos(right.lo()).line
 }
 
 // One rustc session per process and single-threaded analysis; source files
@@ -312,8 +435,12 @@ fn span_marker_block_at(
     tcx: TyCtxt<'_>,
     span: Span,
     syntax: MarkerSyntax,
-) -> Option<EffectMarkerBlock> {
-    let location = tcx.sess.source_map().lookup_char_pos(span.lo());
+) -> MarkerProbe<EffectMarkerBlock> {
+    let source_map = tcx.sess.source_map();
+    let location = source_map.lookup_char_pos(span.lo());
+    if !source_map.ensure_source_file_source_present(&location.file) {
+        return MarkerProbe::Unverified(UnverifiedMarkerProbeReason::SourceUnavailable);
+    }
     let line_index = location.line.saturating_sub(1);
     let key = (location.file.start_pos.0, line_index);
     let parsed = match syntax {
@@ -330,7 +457,10 @@ fn span_marker_block_at(
                 .clone()
         }),
     };
-    parsed.map(|block| block.instantiate(marker_origin(span)))
+    marker_probe_from_source(
+        true,
+        parsed.map(|block| block.instantiate(marker_origin(span))),
+    )
 }
 
 #[must_use]
@@ -570,7 +700,11 @@ fn parse_satisfaction_bullet(line: &str) -> Option<MarkerSatisfaction> {
 
 #[cfg(test)]
 mod tests {
-    use super::{MarkerSatisfaction, MarkerSyntax, normalize_requirement_name};
+    use rustc_span::DUMMY_SP;
+
+    use super::{MarkerProbe, MarkerSatisfaction, MarkerSyntax, normalize_requirement_name};
+    use crate::artifact::UnverifiedMarkerProbeReason;
+    use crate::config::MarkerProbing;
 
     fn line_has_panic_marker(line: &str) -> bool {
         super::line_satisfaction(line, MarkerSyntax::Panic).is_some()
@@ -768,6 +902,77 @@ mod tests {
         assert_eq!(
             normalize_requirement_name("something[var_1]"),
             "something var 1"
+        );
+    }
+
+    #[test]
+    fn marker_probe_distinguishes_presence_verified_absence_and_unavailable_source() {
+        assert_eq!(
+            super::marker_probe_from_source(true, Some(7_u8)),
+            MarkerProbe::Present(7)
+        );
+        assert_eq!(
+            super::marker_probe_from_source(true, None::<u8>),
+            MarkerProbe::VerifiedAbsent
+        );
+        assert_eq!(
+            super::marker_probe_from_source(false, None::<u8>),
+            MarkerProbe::Unverified(UnverifiedMarkerProbeReason::SourceUnavailable)
+        );
+    }
+
+    #[test]
+    fn marker_probe_candidates_propagate_uncertainty_unless_a_marker_is_present() {
+        assert_eq!(
+            super::probe_marker_candidates([0_u8, 1], |candidate| match candidate {
+                0 => MarkerProbe::VerifiedAbsent,
+                _ => MarkerProbe::Unverified(UnverifiedMarkerProbeReason::NoUsableSourceSpan,),
+            }),
+            MarkerProbe::<u8>::Unverified(UnverifiedMarkerProbeReason::NoUsableSourceSpan)
+        );
+        assert_eq!(
+            super::probe_marker_candidates([0_u8, 1], |candidate| match candidate {
+                0 => MarkerProbe::Unverified(UnverifiedMarkerProbeReason::SourceUnavailable),
+                _ => MarkerProbe::Present(9),
+            }),
+            MarkerProbe::Present(9)
+        );
+        assert_eq!(
+            super::probe_marker_candidates([0_u8, 1], |candidate| match candidate {
+                0 => MarkerProbe::Unverified(UnverifiedMarkerProbeReason::NoUsableSourceSpan,),
+                _ => MarkerProbe::Unverified(UnverifiedMarkerProbeReason::SourceUnavailable),
+            }),
+            MarkerProbe::<u8>::Unverified(UnverifiedMarkerProbeReason::SourceUnavailable)
+        );
+    }
+
+    #[test]
+    fn dummy_span_without_a_usable_probe_candidate_is_unverified() {
+        for probing in [
+            MarkerProbing::SourceCallsite,
+            MarkerProbing::MacroDefinitionFirst,
+        ] {
+            assert_eq!(
+                super::probe_marker_candidates(
+                    super::marker_probe_spans(DUMMY_SP, probing),
+                    |_| MarkerProbe::Present(())
+                ),
+                MarkerProbe::Unverified(UnverifiedMarkerProbeReason::NoUsableSourceSpan)
+            );
+        }
+    }
+
+    #[test]
+    fn structural_fallback_distinguishes_unavailable_enumeration_from_readable_absence() {
+        assert_eq!(
+            super::probe_required_marker_candidate(None::<()>, |()| MarkerProbe::Present(7_u8)),
+            MarkerProbe::Unverified(UnverifiedMarkerProbeReason::NoUsableSourceSpan)
+        );
+        assert_eq!(
+            MarkerProbe::<u8>::VerifiedAbsent.or_else(|| {
+                super::probe_required_marker_candidate(Some(()), |()| MarkerProbe::VerifiedAbsent)
+            }),
+            MarkerProbe::VerifiedAbsent
         );
     }
 

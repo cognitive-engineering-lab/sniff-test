@@ -1,0 +1,20 @@
+---
+source: crates/sniff-test/tests/fixtures.rs
+expression: "report[\"findings\"]"
+---
+[
+  {
+    "kind": "panic-analysis-incomplete",
+    "level": "deny",
+    "reason": "panic effect tracing exhausted `[analysis].trace-state-budget` (2) at frontier `state_budget::step_one`",
+    "root": "state_budget::deep_chain",
+    "root-kind": "concrete",
+    "root-span": "src/lib.rs:12:1: 12:30",
+    "span": "src/lib.rs:4:1: 4:24",
+    "target": "state_budget::step_one",
+    "trace": [
+      "src/lib.rs:13:5: 13:19: state_budget::deep_chain --direct-call-> state_budget::step_one",
+      "src/lib.rs:5:5: 5:19: state_budget::step_one --direct-call-> state_budget::step_two"
+    ]
+  }
+]

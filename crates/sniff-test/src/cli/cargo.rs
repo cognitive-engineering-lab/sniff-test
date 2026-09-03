@@ -77,7 +77,7 @@ fn try_cargo_frontend() -> Result<ExitCode> {
     );
     // The workspace callback records this value in rustc dep-info. Changing it
     // makes Cargo rerun report-producing workspace units so each invocation
-    // validates and reinterprets cached IR; dependency units never record it.
+    // validates and reinterprets cached facts; dependency units never record it.
     cargo.env(SNIFF_TEST_RUN_ID_ENV, workspace_run_id());
     modify_cargo(&mut cargo, &args)?;
     let status = cargo.status().context("failed to run Cargo")?;
@@ -132,7 +132,7 @@ fn discover_manifest(mut args: SniffTestArgs, workspace_root: &Path) -> Result<S
     }
 
     eprintln!(
-        "sniff-test: no {} found between {} and {}; running with the empty default policy",
+        "sniff-test: no {} found between {} and {}; using built-in defaults (public report roots, panic findings denied, safety findings warned)",
         crate::config::DEFAULT_MANIFEST_FILE,
         cwd.display(),
         workspace_root.display(),

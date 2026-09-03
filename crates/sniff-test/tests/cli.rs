@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 
 use common::{
-    COMPILER_DEBUG_FRAGMENTS, CommandOutput, clean_cargo_package_env, copy_dir_all,
+    COMPILER_DEBUG_FRAGMENTS, CommandOutput, clean_cargo_package_env, copy_fixture_dir,
     lock_nested_cargo, repo_root, rustc_sysroot,
 };
 
@@ -37,6 +37,10 @@ cli_cases! {
         panic_invocation_can_be_allowed => Case::new()
             .config_append("\n[panics.lints]\npanic-invocation = \"allow\"\n");
     }
+    "source_aggregation" => {
+        source_aggregation_collapses_only_human_diagnostics => Case::new()
+            .denied();
+    }
     "safe_markers" => {
         compact_stack_hint => Case::new().denied();
         full_stack_trace => Case::new()
@@ -51,13 +55,18 @@ cli_cases! {
             .in_app()
             .denied();
     }
+    "dependency_safety" => {
+        dependency_safety_diagnostics => Case::new()
+            .in_app()
+            .denied();
+    }
     "closure_call_graph" => {
         closure_call_graph_diagnostics => Case::new()
             .args(&["--manifest", "basic.toml"])
             .denied();
     }
     "indirect_calls" => {
-        indirect_call_boundary_diagnostics => Case::new();
+        unresolved_call_target_diagnostics => Case::new();
     }
     "trusted_boundaries" => {
         trusted_boundary_diagnostics => Case::new();
@@ -89,12 +98,6 @@ cli_cases! {
         cargo_manifest_path_forwarding => Case::new()
             .working_dir("..")
             .args(&["--", "--manifest-path", "panic_axioms/Cargo.toml"])
-            .denied();
-        config_found_from_subdirectory => Case::new()
-            .working_dir("src")
-            .denied();
-        rustflags_env_does_not_disable_analysis => Case::new()
-            .rustflags("--cfg sniff_test_cli_user_flag")
             .denied();
     }
     "report_roots" => {
@@ -131,6 +134,57 @@ cli_cases! {
 }
 
 #[test]
+fn config_found_from_subdirectory() {
+    let repo = repo_root();
+    let binary = PathBuf::from(env!("CARGO_BIN_EXE_cargo-sniff-test"));
+    let case = Case::new().working_dir("src").denied();
+    let (output, _) = run_case(
+        &repo,
+        &binary,
+        "config_found_from_subdirectory",
+        "panic_axioms",
+        &case,
+    );
+
+    assert_eq!(
+        output.status.code(),
+        Some(101),
+        "stderr:\n{}",
+        output.stderr
+    );
+    assert_panic_axiom_lint_codes(&output.stderr);
+    assert!(
+        !output.stderr.contains("no sniff-test.toml found"),
+        "the manifest should be discovered from the fixture root:\n{}",
+        output.stderr
+    );
+}
+
+#[test]
+fn rustflags_env_does_not_disable_analysis() {
+    let repo = repo_root();
+    let binary = PathBuf::from(env!("CARGO_BIN_EXE_cargo-sniff-test"));
+    let case = Case::new()
+        .rustflags("--cfg sniff_test_cli_user_flag")
+        .denied();
+    let (output, _) = run_case(
+        &repo,
+        &binary,
+        "rustflags_env_does_not_disable_analysis",
+        "panic_axioms",
+        &case,
+    );
+
+    assert_eq!(
+        output.status.code(),
+        Some(101),
+        "stderr:\n{}",
+        output.stderr
+    );
+    assert_panic_axiom_lint_codes(&output.stderr);
+}
+
+#[test]
 fn every_cargo_run_emits_the_workspace_report() {
     let name = "every_cargo_run_emits_the_workspace_report";
     let fixture = repo_root().join("tests/fixtures/panic_requirements");
@@ -139,7 +193,7 @@ fn every_cargo_run_emits_the_workspace_report() {
         .tempdir()
         .expect("create temporary fixture directory");
     let root = temp.path().join("panic_requirements");
-    copy_dir_all(&fixture, &root).expect("copy panic requirements fixture");
+    copy_fixture_dir(&fixture, &root).expect("copy panic requirements fixture");
 
     let binary = PathBuf::from(env!("CARGO_BIN_EXE_cargo-sniff-test"));
     let case = Case::new().args(&["--message-format", "json"]);
@@ -212,6 +266,68 @@ fn cargo_frontend_skips_build_scripts() {
         .collect::<Vec<_>>();
     assert!(crate_names.iter().any(|name| name == "build_script_scope"));
     assert!(!crate_names.iter().any(|name| name == "build_script_build"));
+}
+
+#[test]
+fn cargo_frontend_ignores_compile_time_proc_macro_artifacts() {
+    let temp = tempfile::tempdir().expect("temp dir");
+    let app = temp.path().join("app");
+    let macros = temp.path().join("macros");
+    let empty_macros = temp.path().join("empty-macros");
+    fs::create_dir_all(app.join("src")).expect("create app source directory");
+    fs::create_dir_all(macros.join("src")).expect("create proc-macro source directory");
+    fs::create_dir_all(empty_macros.join("src")).expect("create empty proc-macro source directory");
+    fs::write(
+        temp.path().join("Cargo.toml"),
+        "[workspace]\nmembers = [\"app\", \"macros\", \"empty-macros\"]\nresolver = \"2\"\n",
+    )
+    .expect("write workspace manifest");
+    fs::write(
+        app.join("Cargo.toml"),
+        "[package]\nname = \"proc-macro-consumer\"\nversion = \"0.1.0\"\nedition = \"2024\"\n\n[dependencies]\nempty-macros = { path = \"../empty-macros\" }\nworkspace-macros = { path = \"../macros\" }\n",
+    )
+    .expect("write app manifest");
+    fs::write(
+        app.join("src/lib.rs"),
+        "extern crate empty_macros;\nuse workspace_macros::passthrough;\n\n#[passthrough]\npub fn public_api() {}\n",
+    )
+    .expect("write app source");
+    fs::write(
+        macros.join("Cargo.toml"),
+        "[package]\nname = \"workspace-macros\"\nversion = \"0.1.0\"\nedition = \"2024\"\n\n[lib]\nproc-macro = true\n",
+    )
+    .expect("write proc-macro manifest");
+    fs::write(
+        macros.join("src/lib.rs"),
+        "use proc_macro::TokenStream;\n\n#[proc_macro_attribute]\npub fn passthrough(_: TokenStream, item: TokenStream) -> TokenStream { item }\n",
+    )
+    .expect("write proc-macro source");
+    fs::write(
+        empty_macros.join("Cargo.toml"),
+        "[package]\nname = \"empty-macros\"\nversion = \"0.1.0\"\nedition = \"2024\"\n\n[lib]\nproc-macro = true\n",
+    )
+    .expect("write empty proc-macro manifest");
+    fs::write(empty_macros.join("src/lib.rs"), "").expect("write empty proc-macro source");
+
+    let cache_dir = temp.path().join("cache");
+    let binary = PathBuf::from(env!("CARGO_BIN_EXE_cargo-sniff-test"));
+    let mut command = Command::new(binary);
+    clean_cargo_package_env(&mut command);
+    let _cargo_guard = lock_nested_cargo();
+    let output = command
+        .args(["--cache-dir"])
+        .arg(cache_dir)
+        .args(["--color", "never", "--", "-p", "proc-macro-consumer"])
+        .current_dir(temp.path())
+        .output()
+        .expect("run the proc-macro consumer");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+
+    assert!(output.status.success(), "stderr:\n{stderr}");
+    assert!(
+        !stderr.contains("failed to load required dependency artifact facts"),
+        "proc macros are compile-time tools, not runtime graph dependencies:\n{stderr}"
+    );
 }
 
 /// A compile error through the driver must exit with rustc's ordinary status,
@@ -300,7 +416,7 @@ fn standalone_direct_driver_emits_a_workspace_report_with_linked_rustc_version()
 }
 
 #[test]
-fn direct_dependency_unit_silently_caches_complete_policy_neutral_v17_facts() {
+fn direct_dependency_unit_silently_caches_complete_policy_neutral_facts() {
     let temp = tempfile::tempdir().expect("temp dir");
     let source = temp.path().join("dependency.rs");
     fs::write(
@@ -329,7 +445,7 @@ impl Probe {
     let output = run_dependency_unit(
         temp.path(),
         &cache_dir,
-        "artifact_ir_dependency",
+        "artifact_facts_dependency",
         &source,
         None,
         "json",
@@ -337,32 +453,27 @@ impl Probe {
     );
     assert_silent_success(&output, "dependency unit");
 
-    let cache_path = artifact_cache_for_crate(&cache_dir, "artifact_ir_dependency");
+    let cache_path = artifact_cache_for_crate(&cache_dir, "artifact_facts_dependency");
     let serialized = fs::read_to_string(&cache_path)
         .unwrap_or_else(|error| panic!("failed to read {}: {error}", cache_path.display()));
     let cache: serde_json::Value =
         serde_json::from_str(&serialized).expect("cache should contain JSON");
-    assert_eq!(cache["format-version"], 17);
-    assert_eq!(cache["artifact"]["crate-name"], "artifact_ir_dependency");
+    assert_eq!(cache["format-version"], 23);
+    assert_eq!(cache["artifact"]["crate-name"], "artifact_facts_dependency");
+    assert_eq!(cache["artifact"]["scope"], "dependency");
     assert!(cache["artifact"]["id"]["stable-crate-id"].is_u64());
     assert_eq!(
         cache["artifact"]["id"]["svh"].as_str().map(str::len),
         Some(32)
     );
 
-    let functions = cache["facts"]["tables"]
+    let functions = cache["facts"]["functions"]
         .as_array()
-        .and_then(|tables| {
-            tables
-                .iter()
-                .find(|table| table["schema"] == "sniff-test.core.function")
-        })
-        .and_then(|table| table["rows"].as_array())
-        .expect("permanent function rows should be an array");
+        .expect("function facts should be an array");
     let display_paths = functions
         .iter()
         .map(|function| {
-            function["data"]["display-path"]
+            function["display-path"]
                 .as_str()
                 .expect("function display path should be a string")
         })
@@ -382,17 +493,23 @@ impl Probe {
     }
     assert!(
         functions.iter().any(|function| {
-            function["data"]["display-path"]
+            function["display-path"]
                 .as_str()
                 .is_some_and(|path| path.ends_with("::unreachable_private_helper"))
         }),
         "permanent facts omitted the private helper"
     );
-    assert!(cache.get("legacy-ir").is_none());
-    assert_fact_table_has_rows(&cache, "sniff-test.panic.mir-assert");
+    assert!(cache["facts"].get("tables").is_none());
+    assert!(functions.iter().any(|function| {
+        function["effects"].as_array().is_some_and(|effects| {
+            effects
+                .iter()
+                .any(|effect| effect["kind"]["effect"] == "compiler-assert")
+        })
+    }));
 
     assert_json_keys_absent(
-        &cache,
+        &cache["facts"],
         &[
             "compiler-fingerprint",
             "finding",
@@ -406,8 +523,166 @@ impl Probe {
     );
 }
 
+fn assert_definition_backed_display_paths(value: &serde_json::Value, forbidden: &str) {
+    match value {
+        serde_json::Value::Object(fields) => {
+            for (name, value) in fields {
+                if name == "display-path" {
+                    let path = value
+                        .as_str()
+                        .expect("display paths in artifact facts must be strings");
+                    assert!(
+                        !path.contains(forbidden),
+                        "consumer-visible re-export leaked into display path `{path}`"
+                    );
+                }
+                assert_definition_backed_display_paths(value, forbidden);
+            }
+        }
+        serde_json::Value::Array(values) => {
+            for value in values {
+                assert_definition_backed_display_paths(value, forbidden);
+            }
+        }
+        serde_json::Value::Null
+        | serde_json::Value::Bool(_)
+        | serde_json::Value::Number(_)
+        | serde_json::Value::String(_) => {}
+    }
+}
+
+fn assert_consumer_definition_paths(consumer_facts: &str, consumer_document: &serde_json::Value) {
+    for expected in [
+        r#""display-path":"core::slice::<impl [T]>::get_unchecked""#,
+        r#""display-path":"core::ub_checks::assert_unsafe_precondition""#,
+        r#""display-path":"core::panicking::panic_nounwind_fmt""#,
+    ] {
+        assert!(
+            consumer_facts.contains(expected),
+            "consumer facts omitted definition-backed path {expected}:\n{consumer_facts}"
+        );
+    }
+    assert!(
+        consumer_facts.contains(
+            "core::definition_path_reexport::macros::internal::core::panicking::panic_nounwind_fmt"
+        ),
+        "the old session-visible path should remain available only as a policy alias"
+    );
+    assert_definition_backed_display_paths(
+        consumer_document,
+        "definition_path_reexport::macros::internal::core",
+    );
+}
+
 #[test]
-fn workspace_lint_policy_reinterprets_unchanged_dependency_v17_facts() {
+fn cached_definition_paths_ignore_dependency_reexports() {
+    let temp = tempfile::tempdir().expect("temp dir");
+    let source = temp.path().join("definition_path_reexport.rs");
+    fs::write(
+        &source,
+        r"#![allow(dead_code)]
+
+pub mod macros {
+    pub mod internal {
+        pub use core;
+    }
+}
+
+pub fn exported(values: &[u8], index: usize) -> u8 {
+    // SAFETY: this fixture intentionally models an audited caller.
+    unsafe { *values.get_unchecked(index) }
+}
+",
+    )
+    .expect("write dependency source");
+    let cache_dir = temp.path().join("cache");
+    let dependency_rlib = temp.path().join("libdefinition_path_reexport.rlib");
+    let output = run_dependency_unit(
+        temp.path(),
+        &cache_dir,
+        "definition_path_reexport",
+        &source,
+        Some(&dependency_rlib),
+        "json",
+        &[],
+    );
+    assert_silent_success(&output, "dependency unit");
+
+    let cache_path = artifact_cache_for_crate(&cache_dir, "definition_path_reexport");
+    let serialized = fs::read_to_string(&cache_path)
+        .unwrap_or_else(|error| panic!("failed to read {}: {error}", cache_path.display()));
+    let defining_facts: serde_json::Value =
+        serde_json::from_str(&serialized).expect("dependency cache should be JSON");
+    assert_eq!(defining_facts["artifact"]["scope"], "dependency");
+
+    assert!(
+        serialized.contains("assert_unsafe_precondition"),
+        "the fixture must exercise the core unsafe-precondition macro:\n{serialized}"
+    );
+    assert_definition_backed_display_paths(
+        &defining_facts,
+        "definition_path_reexport::macros::internal::core",
+    );
+
+    let workspace_source = temp.path().join("definition_path_consumer.rs");
+    fs::write(
+        &workspace_source,
+        "pub fn exported(values: &[u8], index: usize) -> u8 {\n\
+         definition_path_reexport::exported(values, index)\n\
+         }\n",
+    )
+    .expect("write workspace source");
+    let manifest = temp.path().join("sniff-test.toml");
+    fs::write(
+        &manifest,
+        "[analysis]\n\
+         report-roots = [\"definition_path_consumer::exported\"]\n\
+         \n\
+         [panics.lints]\n\
+         compiler-assert = \"allow\"\n\
+         panic-invocation = \"deny\"\n",
+    )
+    .expect("write manifest");
+    let workspace = run_workspace_unit(
+        temp.path(),
+        &cache_dir,
+        &manifest,
+        "definition_path_consumer",
+        &workspace_source,
+        "json",
+        |command| {
+            command.arg("--extern").arg(format!(
+                "definition_path_reexport={}",
+                dependency_rlib.display()
+            ));
+        },
+    );
+    assert_success(&workspace, "workspace consumer");
+    assert!(
+        !String::from_utf8_lossy(&workspace.stdout).contains("panic-invocation"),
+        "the default unsafe-precondition macro boundary must suppress its panic sink:\n{}",
+        String::from_utf8_lossy(&workspace.stdout)
+    );
+    let consumer_cache = artifact_cache_for_crate(&cache_dir, "definition_path_consumer");
+    let consumer_facts = fs::read_to_string(&consumer_cache).unwrap_or_else(|error| {
+        panic!(
+            "failed to read consumer cache {}: {error}",
+            consumer_cache.display()
+        )
+    });
+    let consumer_document: serde_json::Value =
+        serde_json::from_str(&consumer_facts).expect("consumer cache should be JSON");
+    assert_eq!(consumer_document["artifact"]["scope"], "workspace");
+
+    assert!(
+        consumer_facts.contains("assert_unsafe_precondition"),
+        "the consumer fixture must extract the core unsafe-precondition macro:\n{consumer_facts}"
+    );
+    assert_consumer_definition_paths(&consumer_facts, &consumer_document);
+}
+
+#[test]
+fn workspace_lint_policy_reinterprets_unchanged_dependency_facts() {
     let temp = tempfile::tempdir().expect("temp dir");
     let fixture = PolicyReinterpretationFixture::new(temp.path());
     let dependency_output = run_dependency_unit(
@@ -426,8 +701,9 @@ fn workspace_lint_policy_reinterprets_unchanged_dependency_v17_facts() {
         .unwrap_or_else(|error| panic!("failed to read {}: {error}", dependency_cache.display()));
     let initial_document: serde_json::Value =
         serde_json::from_slice(&initial_bytes).expect("dependency cache should contain JSON");
-    assert_eq!(initial_document["format-version"], 17);
-    assert!(initial_document.get("legacy-ir").is_none());
+    assert_eq!(initial_document["format-version"], 23);
+    assert_eq!(initial_document["artifact"]["scope"], "dependency");
+    assert!(initial_document["facts"].get("tables").is_none());
     assert!(initial_document.get("analysis-id").is_none());
     let cache_modified_before = fs::metadata(&dependency_cache)
         .and_then(|metadata| metadata.modified())
@@ -480,7 +756,7 @@ fn workspace_lint_policy_reinterprets_unchanged_dependency_v17_facts() {
         .unwrap_or_else(|error| panic!("failed to reread {}: {error}", dependency_cache.display()));
     assert_eq!(
         final_bytes, initial_bytes,
-        "lint-only workspace runs must not rewrite dependency IR"
+        "lint-only workspace runs must not rewrite dependency facts"
     );
     assert_eq!(
         fs::metadata(&dependency_cache)
@@ -708,7 +984,7 @@ fn ordinary_workspace_binary_is_interpreted_without_a_cache_identity() {
     clippy::too_many_lines,
     reason = "the regression proves the cache identity, extracted marker delta, and workspace rejection together"
 )]
-fn stale_source_marker_ir_is_rejected_even_when_rustc_identity_is_unchanged() {
+fn stale_source_marker_facts_are_rejected_even_when_rustc_identity_is_unchanged() {
     let temp = tempfile::tempdir().expect("temp dir");
     let dependency_source = temp.path().join("stale_marker_dependency.rs");
     fs::write(
@@ -736,7 +1012,7 @@ fn stale_source_marker_ir_is_rejected_even_when_rustc_identity_is_unchanged() {
         serde_json::from_slice(&fs::read(&stale_cache).expect("read stale cache"))
             .expect("stale cache should contain JSON");
     assert!(
-        fact_table_row_count(&stale_document, "sniff-test.human.marker-occurrence") > 0,
+        artifact_marker_count(&stale_document) > 0,
         "the regression requires a cached source marker"
     );
 
@@ -764,7 +1040,7 @@ fn stale_source_marker_ir_is_rejected_even_when_rustc_identity_is_unchanged() {
         serde_json::from_slice(&fs::read(&fresh_cache).expect("read fresh cache"))
             .expect("fresh cache should contain JSON");
     assert_eq!(
-        fact_table_row_count(&fresh_document, "sniff-test.human.marker-occurrence"),
+        artifact_marker_count(&fresh_document),
         0,
         "the replacement source must remove the cached marker semantics"
     );
@@ -806,7 +1082,7 @@ fn stale_source_marker_ir_is_rejected_even_when_rustc_identity_is_unchanged() {
         },
     );
 
-    assert!(!output.status.success(), "stale marker IR was accepted");
+    assert!(!output.status.success(), "stale marker facts was accepted");
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
         stderr.contains("cached source marker facts"),
@@ -845,7 +1121,7 @@ fn fixed_name_dependency_cache_must_match_the_crate_rustc_actually_loaded() {
     assert_success(&analyzed_output, "analyzed dependency");
 
     // Replace the exact same output filename without running sniff-test, so
-    // the v17 cache deliberately contains only the previous rustc identity.
+    // The current cache deliberately contains only the previous rustc identity.
     fs::write(
         &dependency_source,
         "pub fn dependency_value() -> u8 { 2 }\n",
@@ -904,18 +1180,18 @@ fn fixed_name_dependency_cache_must_match_the_crate_rustc_actually_loaded() {
     assert!(!output.status.success(), "stale cache was accepted");
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
-        stderr.contains("missing artifact IR for"),
+        stderr.contains("missing artifact facts for"),
         "stderr:\n{stderr}"
     );
     assert_eq!(
-        stderr.matches("missing artifact IR for").count(),
+        stderr.matches("missing artifact facts for").count(),
         1,
         "the new rustc identity should be reported missing once\nstderr:\n{stderr}"
     );
 }
 
 #[test]
-fn unused_dependency_ir_produces_no_workspace_findings() {
+fn unused_dependency_facts_produce_no_workspace_findings() {
     let temp = tempfile::tempdir().expect("temp dir");
     let dependency_source = temp.path().join("unused_ir_dependency.rs");
     fs::write(
@@ -925,38 +1201,16 @@ fn unused_dependency_ir_produces_no_workspace_findings() {
     .expect("write dependency source");
     let dependency_rlib = temp.path().join("libunused_ir_dependency.rlib");
     let cache_dir = temp.path().join("cache");
-    let driver = PathBuf::from(env!("CARGO_BIN_EXE_sniff-test-driver"));
-    let sysroot = rustc_sysroot();
-    let mut dependency = Command::new(&driver);
-    clean_cargo_package_env(&mut dependency);
-    let dependency_output = dependency
-        .arg("--dependency")
-        .args(["--cache-dir"])
-        .arg(&cache_dir)
-        .args(["--message-format", "json", "--color", "never", "--"])
-        .args([
-            "--crate-name",
-            "unused_ir_dependency",
-            "--crate-type",
-            "rlib",
-            "--edition",
-            "2024",
-        ])
-        .arg(&dependency_source)
-        .arg("-o")
-        .arg(&dependency_rlib)
-        .args(["--sysroot", sysroot.as_str()])
-        .current_dir(temp.path())
-        .output()
-        .expect("compile dependency");
-    assert!(
-        dependency_output.status.success()
-            && dependency_output.stdout.is_empty()
-            && dependency_output.stderr.is_empty(),
-        "stdout:\n{}\nstderr:\n{}",
-        String::from_utf8_lossy(&dependency_output.stdout),
-        String::from_utf8_lossy(&dependency_output.stderr)
+    let dependency_output = run_dependency_unit(
+        temp.path(),
+        &cache_dir,
+        "unused_ir_dependency",
+        &dependency_source,
+        Some(&dependency_rlib),
+        "json",
+        &[],
     );
+    assert_silent_success(&dependency_output, "unused dependency analysis");
 
     let workspace_source = temp.path().join("unused_ir_workspace.rs");
     fs::write(&workspace_source, "pub fn workspace_root() {}\n").expect("write workspace source");
@@ -966,39 +1220,22 @@ fn unused_dependency_ir_produces_no_workspace_findings() {
         "[analysis]\nreport-roots = [\"unused_ir_workspace::workspace_root\"]\n",
     )
     .expect("write manifest");
-    let mut workspace = Command::new(&driver);
-    clean_cargo_package_env(&mut workspace);
-    let output = workspace
-        .args(["--manifest"])
-        .arg(&manifest)
-        .args(["--cache-dir"])
-        .arg(&cache_dir)
-        .args(["--message-format", "json", "--color", "never", "--"])
-        .args([
-            "--crate-name",
-            "unused_ir_workspace",
-            "--crate-type",
-            "lib",
-            "--edition",
-            "2024",
-        ])
-        .arg(&workspace_source)
-        .arg("-L")
-        .arg(temp.path())
-        .arg("--extern")
-        .arg("unused_ir_dependency")
-        .args(["--sysroot", sysroot.as_str(), "-Zno-codegen"])
-        .env("CARGO_PRIMARY_PACKAGE", "1")
-        .current_dir(temp.path())
-        .output()
-        .expect("analyze workspace");
-
-    assert!(
-        output.status.success(),
-        "stdout:\n{}\nstderr:\n{}",
-        String::from_utf8_lossy(&output.stdout),
-        String::from_utf8_lossy(&output.stderr)
+    let output = run_workspace_unit(
+        temp.path(),
+        &cache_dir,
+        &manifest,
+        "unused_ir_workspace",
+        &workspace_source,
+        "json",
+        |command| {
+            command
+                .arg("-L")
+                .arg(temp.path())
+                .arg("--extern")
+                .arg("unused_ir_dependency");
+        },
     );
+    assert_success(&output, "unused dependency workspace analysis");
     let report: serde_json::Value =
         serde_json::from_slice(&output.stdout).expect("parse workspace report");
     assert_eq!(report["findings"], serde_json::json!([]));
@@ -1112,7 +1349,7 @@ fn cached_dependency_source_is_verified_before_rendering_a_snippet() {
 }
 
 #[test]
-fn workspace_unit_fails_when_required_extern_artifact_ir_is_missing() {
+fn workspace_unit_fails_when_required_extern_artifact_facts_are_missing() {
     let temp = tempfile::tempdir().expect("temp dir");
     let dependency_source = temp.path().join("required_ir_dep.rs");
     fs::write(&dependency_source, "pub fn dependency_body() {}\n")
@@ -1121,34 +1358,16 @@ fn workspace_unit_fails_when_required_extern_artifact_ir_is_missing() {
     let cache_dir = temp.path().join("cache");
     let driver = PathBuf::from(env!("CARGO_BIN_EXE_sniff-test-driver"));
 
-    let mut dependency_command = Command::new(&driver);
-    clean_cargo_package_env(&mut dependency_command);
-    let dependency_output = dependency_command
-        .arg("--dependency")
-        .args(["--cache-dir"])
-        .arg(&cache_dir)
-        .args(["--message-format", "json", "--color", "never", "--"])
-        .args([
-            "--crate-name",
-            "required_ir_dep",
-            "--crate-type",
-            "rlib",
-            "--edition",
-            "2024",
-        ])
-        .arg(&dependency_source)
-        .arg("-o")
-        .arg(&dependency_rlib)
-        .args(["--sysroot", rustc_sysroot().as_str()])
-        .current_dir(temp.path())
-        .output()
-        .expect("compile dependency rustc unit");
-    assert!(
-        dependency_output.status.success(),
-        "stdout:\n{}\nstderr:\n{}",
-        String::from_utf8_lossy(&dependency_output.stdout),
-        String::from_utf8_lossy(&dependency_output.stderr)
+    let dependency_output = run_dependency_unit(
+        temp.path(),
+        &cache_dir,
+        "required_ir_dep",
+        &dependency_source,
+        Some(&dependency_rlib),
+        "json",
+        &[],
     );
+    assert_success(&dependency_output, "required dependency analysis");
     assert!(dependency_rlib.is_file(), "dependency rlib was not written");
 
     let dependency_cache = artifact_cache_for_crate(&cache_dir, "required_ir_dep");
@@ -1192,15 +1411,15 @@ fn workspace_unit_fails_when_required_extern_artifact_ir_is_missing() {
     );
     let stderr = String::from_utf8_lossy(&workspace_output.stderr);
     assert!(
-        stderr.contains("error: failed to load required dependency artifact IR"),
+        stderr.contains("error: failed to load required dependency artifact facts"),
         "stderr:\n{stderr}"
     );
     assert_eq!(
         stderr
-            .matches("failed to load required dependency artifact IR")
+            .matches("failed to load required dependency artifact facts")
             .count(),
         1,
-        "missing required IR should emit exactly one tool error\nstderr:\n{stderr}"
+        "missing required facts should emit exactly one tool error\nstderr:\n{stderr}"
     );
 }
 
@@ -1208,7 +1427,7 @@ fn workspace_unit_fails_when_required_extern_artifact_ir_is_missing() {
 fn cargo_frontend_fails_when_dependency_analysis_cannot_be_cached() {
     let temp = tempfile::tempdir().expect("temp dir");
     let fixture = temp.path().join("dependency_identity");
-    copy_dir_all(
+    copy_fixture_dir(
         &repo_root().join("tests/fixtures/dependency_identity"),
         &fixture,
     )
@@ -1243,7 +1462,7 @@ fn cargo_frontend_fails_when_dependency_analysis_cannot_be_cached() {
 }
 
 #[test]
-fn direct_driver_fails_when_required_artifact_ir_cannot_be_cached() {
+fn direct_driver_fails_when_required_artifact_facts_cannot_be_cached() {
     let temp = tempfile::tempdir().expect("temp dir");
     let cache_file = temp.path().join("not-a-cache-directory");
     fs::write(&cache_file, "occupied").expect("write cache file");
@@ -1812,6 +2031,29 @@ fn run_named_case(name: &'static str, fixture_name: &'static str, case: &Case) {
     insta::assert_snapshot!(name, snapshot);
 }
 
+fn assert_panic_axiom_lint_codes(stderr: &str) {
+    const EXPECTED: [&str; 3] = [
+        "[sniff-test::panics::compiler-assert-division-by-zero]",
+        "[sniff-test::panics::compiler-assert-bounds-check]",
+        "[sniff-test::panics::compiler-assert-remainder-by-zero]",
+    ];
+
+    for lint_code in EXPECTED {
+        assert_eq!(
+            stderr.matches(lint_code).count(),
+            1,
+            "expected exactly one `{lint_code}` diagnostic:\n{stderr}"
+        );
+    }
+    assert_eq!(
+        stderr
+            .matches("[sniff-test::panics::compiler-assert-")
+            .count(),
+        EXPECTED.len(),
+        "unexpected compiler-assert lint code:\n{stderr}"
+    );
+}
+
 fn assert_public_output_uses_human_words(name: &str, output: &str) {
     for fragment in COMPILER_DEBUG_FRAGMENTS {
         assert!(
@@ -1844,7 +2086,7 @@ fn run_case(
         .tempdir()
         .unwrap_or_else(|error| panic!("{name}: failed to create temp dir: {error}"));
     let root = temp.path().join(fixture_name);
-    copy_dir_all(&fixture, &root)
+    copy_fixture_dir(&fixture, &root)
         .unwrap_or_else(|error| panic!("{name}: failed to copy fixture: {error}"));
 
     let crate_dir = if case.app_crate { "app" } else { "" };
@@ -1952,7 +2194,7 @@ fn assert_json_keys_absent(value: &serde_json::Value, forbidden: &[&str]) {
             for (key, value) in object {
                 assert!(
                     !forbidden.contains(&key.as_str()),
-                    "serialized artifact IR contains forbidden `{key}` field"
+                    "serialized artifact facts contains forbidden `{key}` field"
                 );
                 assert_json_keys_absent(value, forbidden);
             }
@@ -1966,17 +2208,12 @@ fn assert_json_keys_absent(value: &serde_json::Value, forbidden: &[&str]) {
     }
 }
 
-fn assert_fact_table_has_rows(cache: &serde_json::Value, schema: &str) {
-    assert!(
-        fact_table_row_count(cache, schema) > 0,
-        "typed artifact facts omitted rows for `{schema}`"
-    );
-}
-
-fn fact_table_row_count(cache: &serde_json::Value, schema: &str) -> usize {
-    cache["facts"]["tables"]
+fn artifact_marker_count(cache: &serde_json::Value) -> usize {
+    cache["facts"]["functions"]
         .as_array()
-        .and_then(|tables| tables.iter().find(|table| table["schema"] == schema))
-        .and_then(|table| table["rows"].as_array())
-        .map_or(0, Vec::len)
+        .into_iter()
+        .flatten()
+        .filter_map(|function| function["markers"].as_array())
+        .map(Vec::len)
+        .sum()
 }

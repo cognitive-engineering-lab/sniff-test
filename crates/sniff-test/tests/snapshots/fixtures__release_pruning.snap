@@ -6,15 +6,22 @@ expression: "report[\"findings\"]"
   {
     "kind": "panic-invocation",
     "level": "deny",
-    "reason": "panic sink core::panicking::panic",
+    "owner": {
+      "crate": "release_pruning",
+      "scope": "workspace"
+    },
+    "reason": "panic invocation to `core::panicking::panic` has no recorded `// PANIC:` evidence",
     "root": "release_pruning::checked_in_release",
     "root-kind": "concrete",
     "root-span": "src/lib.rs:5:1: 5:38",
+    "source-evidence": {
+      "status": "verified-absent"
+    },
     "span": "src/lib.rs:6:5: 6:18",
     "target": "core::panicking::panic",
     "trace": [
-      "src/lib.rs:6:5: 6:18: release_pruning::checked_in_release --macro-expansion-> macro core::std::assert",
-      "src/lib.rs:6:5: 6:18: macro core::std::assert --direct-call-> core::panicking::panic"
+      "src/lib.rs:6:5: 6:18: release_pruning::checked_in_release --macro-expansion-> macro core::macros::builtin::assert",
+      "src/lib.rs:6:5: 6:18: macro core::macros::builtin::assert --direct-call-> core::panicking::panic"
     ]
   }
 ]

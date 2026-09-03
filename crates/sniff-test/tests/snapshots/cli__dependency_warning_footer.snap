@@ -8,7 +8,7 @@ stdout:
 stderr:
     Checking dependency-obligation v0.1.0 ([FIXTURE]/dep)
     Checking dependency-app v0.1.0 ([FIXTURE]/app)
-warning: function `dependency_app::call_dependency` may panic through a documented panic
+warning: [sniff-test::panics::documented-panic] call to `dependency_obligation::documented` with a `# Panics` contract has no recorded `// PANIC:` evidence
  --> src/lib.rs:2:5
   |
 2 |     dependency_obligation::documented(flag);
@@ -19,22 +19,14 @@ note: `dependency_obligation::documented` documents `# Panics` here
   |
 3 | pub fn documented(flag: bool) {
   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-note: this function can reach a call with `# Panics` documentation
- --> src/lib.rs:1:1
-  |
-1 | pub fn call_dependency(flag: bool) {
-  | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-help: add `// PANIC:` directly above this call explaining why its documented panic conditions cannot occur
- --> src/lib.rs:2:5
-  |
-2 |     dependency_obligation::documented(flag);
-  |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  = note: reachable from `dependency_app::call_dependency` to `dependency_obligation::documented`
+  = note: set `show-full-stack-trace = true` under `[analysis]` in sniff-test.toml to show every reachability step
+  = help: add `// PANIC:` directly above this source after establishing the invariant that contains this panic path
 help: document when this function may panic with `/// # Panics` here
  --> src/lib.rs:1:1
   |
 1 | pub fn call_dependency(flag: bool) {
   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  = help: ensure the callee's panic conditions cannot occur, justify that with `// PANIC:`, or document when the caller may panic with `# Panics`
 
 warning: `dependency-app` (lib) generated 1 warning
     Finished `release` profile [optimized] target(s) in [TIME]

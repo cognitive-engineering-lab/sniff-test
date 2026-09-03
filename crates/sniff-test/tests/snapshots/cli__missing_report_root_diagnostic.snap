@@ -7,7 +7,7 @@ stdout:
 <empty>
 stderr:
     Checking report-roots v0.1.0 ([FIXTURE])
-error: configured report root was not found
+error: [sniff-test::analysis::missing-report-root] configured report root was not found
  --> [FIXTURE]/deny-missing.toml:2:17
   |
 2 | report-roots = ["report_roots::missing_root"]

@@ -5,6 +5,7 @@ mod cargo;
 mod diagnostics;
 mod driver;
 mod findings;
+mod interpretation;
 mod plugin;
 mod report;
 

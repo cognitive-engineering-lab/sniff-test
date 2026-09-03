@@ -6,16 +6,23 @@ expression: "report[\"findings\"]"
   {
     "kind": "panic-invocation",
     "level": "deny",
-    "reason": "panic sink core::std::rt::panic_fmt",
+    "owner": {
+      "crate": "report_roots",
+      "scope": "workspace"
+    },
+    "reason": "panic invocation to `core::panicking::panic_fmt` has no recorded `// PANIC:` evidence",
     "root": "report_roots::private_panic",
     "root-kind": "concrete",
     "root-span": "src/lib.rs:7:1: 7:19",
+    "source-evidence": {
+      "status": "verified-absent"
+    },
     "span": "src/lib.rs:8:5: 8:27",
-    "target": "core::std::rt::panic_fmt",
+    "target": "core::panicking::panic_fmt",
     "trace": [
-      "src/lib.rs:8:5: 8:27: report_roots::private_panic --macro-expansion-> macro std::panic",
-      "src/lib.rs:8:5: 8:27: macro std::panic --macro-expansion-> macro core::std::panic::panic_2021",
-      "[SYSROOT]/lib/rustlib/src/rust/library/core/src/panic.rs:62:9: 62:73: macro core::std::panic::panic_2021 --direct-call-> core::std::rt::panic_fmt"
+      "src/lib.rs:8:5: 8:27: report_roots::private_panic --macro-expansion-> macro std::macros::panic",
+      "src/lib.rs:8:5: 8:27: macro std::macros::panic --macro-expansion-> macro core::panic::panic_2021",
+      "[SYSROOT]/lib/rustlib/src/rust/library/core/src/panic.rs:62:9: 62:73: macro core::panic::panic_2021 --direct-call-> core::panicking::panic_fmt"
     ]
   }
 ]

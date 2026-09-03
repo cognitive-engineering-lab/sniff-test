@@ -6,10 +6,17 @@ expression: "report[\"findings\"]"
   {
     "kind": "documented-panic",
     "level": "warn",
-    "reason": "dependency_obligation::documented documents when it may panic under # Panics",
+    "owner": {
+      "crate": "dependency_app",
+      "scope": "workspace"
+    },
+    "reason": "call to `dependency_obligation::documented` with a `# Panics` contract has no recorded `// PANIC:` evidence",
     "root": "dependency_app::call_dependency",
     "root-kind": "concrete",
     "root-span": "src/lib.rs:1:1: 1:35",
+    "source-evidence": {
+      "status": "verified-absent"
+    },
     "span": "src/lib.rs:2:5: 2:44",
     "target": "dependency_obligation::documented",
     "trace": [

@@ -6,6 +6,13 @@ pub trait Action {
     unsafe fn apply();
 }
 
+/// # Safety
+///
+/// Requirements:
+/// - state: the first dependency invariant must hold.
+/// - state: the second dependency invariant must hold.
+pub fn ambiguous_obligation() {}
+
 #[inline(never)]
 pub fn invoke<T: Action>() {
     // SAFETY:

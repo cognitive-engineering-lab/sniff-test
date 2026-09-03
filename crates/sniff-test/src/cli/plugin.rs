@@ -3,7 +3,7 @@ use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitCode};
 
-use crate::analysis::cache::default_cache_dir;
+use crate::artifact_cache::default_cache_dir;
 use crate::config::SniffTestConfig;
 use anyhow::{Context, Result, bail};
 use clap::Parser as _;
@@ -13,7 +13,7 @@ use rustc_middle::ty::TyCtxt;
 use rustc_span::symbol::Symbol;
 
 use super::args::{ColorChoice, CrateOutputScope, DriverCli, MANIFEST_PATH_ENV, SniffTestArgs};
-use super::driver::{analyze_crate, is_build_script, load_config};
+use super::driver::{analyze_crate, is_build_script, is_proc_macro, load_config};
 
 pub(crate) const DRIVER_NAME: &str = "sniff-test-driver";
 pub(crate) const SNIFF_TEST_ARGS_ENV: &str = "SNIFF_TEST_ARGS";
@@ -284,13 +284,7 @@ fn tracked_config_files_from_config(
         return Vec::new();
     }
     let mut files = vec![manifest_path];
-    files.extend(
-        config
-            .documentation
-            .resolved_override_files()
-            .iter()
-            .cloned(),
-    );
+    files.extend(config.contracts.resolved_override_files().iter().cloned());
     files
 }
 
@@ -397,12 +391,11 @@ impl Callbacks for SniffTestCallbacks {
     }
 
     fn after_analysis(&mut self, _compiler: &interface::Compiler, tcx: TyCtxt<'_>) -> Compilation {
-        if is_build_script(tcx) {
+        if is_build_script(tcx) || is_proc_macro(tcx) {
             return Compilation::Continue;
         }
 
-        let output_scope = self.output_scope.for_crate(tcx);
-        analyze_crate(tcx, &self.args, &self.config, output_scope);
+        analyze_crate(tcx, &self.args, &self.config, self.output_scope);
         Compilation::Continue
     }
 }
@@ -500,7 +493,7 @@ mod tests {
         std::fs::write(
             &manifest,
             r#"
-                [documentation]
+                [contracts]
                 override-files = ["override.toml"]
             "#,
         )

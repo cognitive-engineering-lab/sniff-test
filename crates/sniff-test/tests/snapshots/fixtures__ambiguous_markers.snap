@@ -6,6 +6,10 @@ expression: "report[\"findings\"]"
   {
     "kind": "ambiguous-panic-requirement",
     "level": "deny",
+    "owner": {
+      "crate": "ambiguous_markers",
+      "scope": "workspace"
+    },
     "reason": "`ambiguous_markers::duplicate_name_ratio` has 2 # Panics requirements named `nonzero`",
     "requirements": [
       "nonzero: denominator must not be zero.",
@@ -23,13 +27,118 @@ expression: "report[\"findings\"]"
   {
     "kind": "ambiguous-panic-marker",
     "level": "deny",
+    "owner": {
+      "crate": "ambiguous_markers",
+      "scope": "workspace"
+    },
     "reason": "one `// PANIC:` marker applies to 2 panic effect groups",
+    "root": "ambiguous_markers::marked_path_to_shared_sources",
+    "root-kind": "concrete",
+    "root-span": "src/lib.rs:71:1: 71:39",
+    "span": "src/lib.rs:72:1: 73:1",
+    "trace": [
+      "src/lib.rs:73:5: 73:32: ambiguous_markers::marked_path_to_shared_sources --direct-call-> ambiguous_markers::shared_documented_sources",
+      "src/lib.rs:67:5: 67:30: ambiguous_markers::shared_documented_sources --direct-call-> ambiguous_markers::first_documented_source"
+    ]
+  },
+  {
+    "kind": "ambiguous-panic-marker",
+    "level": "deny",
+    "owner": {
+      "crate": "ambiguous_markers",
+      "scope": "workspace"
+    },
+    "reason": "one `// PANIC:` marker applies to 2 panic effect groups",
+    "root": "ambiguous_markers::marker_covers_documented_call_and_sink",
+    "root-kind": "concrete",
+    "root-span": "src/lib.rs:52:1: 52:48",
+    "span": "src/lib.rs:47:1: 48:1",
+    "trace": [
+      "src/lib.rs:53:5: 53:48: ambiguous_markers::marker_covers_documented_call_and_sink --macro-expansion-> macro ambiguous_markers::call_documented_and_sink_with_one_marker",
+      "src/lib.rs:48:9: 48:36: macro ambiguous_markers::call_documented_and_sink_with_one_marker --macro-expansion-> macro ambiguous_markers::call_documented_and_sink",
+      "src/lib.rs:40:17: 40:28: macro ambiguous_markers::call_documented_and_sink --direct-call-> ambiguous_markers::ratio"
+    ]
+  },
+  {
+    "kind": "documented-panic",
+    "level": "warn",
+    "owner": {
+      "crate": "ambiguous_markers",
+      "scope": "workspace"
+    },
+    "reason": "call to `ambiguous_markers::ratio` with a `# Panics` contract has no recorded `// PANIC:` evidence",
     "root": "ambiguous_markers::shared_block_marker",
     "root-kind": "concrete",
     "root-span": "src/lib.rs:8:1: 8:76",
-    "span": "src/lib.rs:9:1: 10:1",
+    "source-evidence": {
+      "status": "verified-absent"
+    },
+    "span": "src/lib.rs:11:21: 11:42",
+    "target": "ambiguous_markers::ratio",
     "trace": [
       "src/lib.rs:11:21: 11:42: ambiguous_markers::shared_block_marker --direct-call-> ambiguous_markers::ratio"
+    ]
+  },
+  {
+    "kind": "documented-panic",
+    "level": "warn",
+    "owner": {
+      "crate": "ambiguous_markers",
+      "scope": "workspace"
+    },
+    "reason": "call to `ambiguous_markers::ratio` with a `# Panics` contract has no recorded `// PANIC:` evidence",
+    "root": "ambiguous_markers::shared_block_marker",
+    "root-kind": "concrete",
+    "root-span": "src/lib.rs:8:1: 8:76",
+    "source-evidence": {
+      "status": "verified-absent"
+    },
+    "span": "src/lib.rs:12:22: 12:43",
+    "target": "ambiguous_markers::ratio",
+    "trace": [
+      "src/lib.rs:12:22: 12:43: ambiguous_markers::shared_block_marker --direct-call-> ambiguous_markers::ratio"
+    ]
+  },
+  {
+    "kind": "documented-panic",
+    "level": "warn",
+    "owner": {
+      "crate": "ambiguous_markers",
+      "scope": "workspace"
+    },
+    "reason": "call to `ambiguous_markers::first_documented_source` with a `# Panics` contract has no recorded `// PANIC:` evidence",
+    "root": "ambiguous_markers::unmarked_path_to_shared_sources",
+    "root-kind": "concrete",
+    "root-span": "src/lib.rs:76:1: 76:41",
+    "source-evidence": {
+      "status": "verified-absent"
+    },
+    "span": "src/lib.rs:67:5: 67:30",
+    "target": "ambiguous_markers::first_documented_source",
+    "trace": [
+      "src/lib.rs:77:5: 77:32: ambiguous_markers::unmarked_path_to_shared_sources --direct-call-> ambiguous_markers::shared_documented_sources",
+      "src/lib.rs:67:5: 67:30: ambiguous_markers::shared_documented_sources --direct-call-> ambiguous_markers::first_documented_source"
+    ]
+  },
+  {
+    "kind": "documented-panic",
+    "level": "warn",
+    "owner": {
+      "crate": "ambiguous_markers",
+      "scope": "workspace"
+    },
+    "reason": "call to `ambiguous_markers::second_documented_source` with a `# Panics` contract has no recorded `// PANIC:` evidence",
+    "root": "ambiguous_markers::unmarked_path_to_shared_sources",
+    "root-kind": "concrete",
+    "root-span": "src/lib.rs:76:1: 76:41",
+    "source-evidence": {
+      "status": "verified-absent"
+    },
+    "span": "src/lib.rs:68:5: 68:31",
+    "target": "ambiguous_markers::second_documented_source",
+    "trace": [
+      "src/lib.rs:77:5: 77:32: ambiguous_markers::unmarked_path_to_shared_sources --direct-call-> ambiguous_markers::shared_documented_sources",
+      "src/lib.rs:68:5: 68:31: ambiguous_markers::shared_documented_sources --direct-call-> ambiguous_markers::second_documented_source"
     ]
   }
 ]

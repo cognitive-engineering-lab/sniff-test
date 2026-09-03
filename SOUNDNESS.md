@@ -7,23 +7,18 @@ entry states the mechanism, when it bites, and its current status.
 
 ## Deliberate under-approximation
 
-### Impl docs are not checked against trait docs
+### Trait declaration contracts summarize unresolved dispatch
 
-When a call resolves only to a trait method — a generic bound or dyn dispatch
-— the trait method's `# Panics`/`# Safety` docs stand in for whichever impl
-runs (`indirect-call-boundary` and the obligation flow in
-`crates/sniff-test/src/analysis/interpret.rs`). Nothing verifies that impls
-document at most what their trait promises, so an impl that panics more than
-the trait documents escapes through a documented-looking boundary. sniff-test
-does not compare impl contracts with their corresponding trait contracts.
-
-### Trait-impl methods do not inherit trait-method docs
-
-A resolved direct call to a trait-impl method consults the impl method's own
-docs only. `<Vec<T> as Index<usize>>::index` carries no `# Panics` section of
-its own (the docs live on `Index::index`), so a trusted boundary treats it as
-non-panicking instead of inheriting the trait method's named requirements. No
-trait-method documentation fallback is applied to a resolved impl method.
+When rustc resolves a concrete trait implementation, sniff-test traces that
+implementation and uses its contract for each effect domain, falling back to
+the corresponding trait declaration contract when the implementation has no
+contract in that domain. When the implementation remains unresolved, an
+available trait declaration contract is the only caller-visible summary for
+that domain; the unknown implementation is not attributed or traced. If the
+declaration has no contract in that domain, the call remains an unresolved
+coverage gap. Nothing verifies that every implementation obeys the declaration
+contract, so an implementation that has stronger effects than the trait
+promises can still escape through a documented-looking boundary.
 
 ### Safety precondition asserts are not panic evidence
 
@@ -35,26 +30,42 @@ sites; the assertions themselves are not safety-operation findings. Every other
 compiler assertion—including bounds, arithmetic, and coroutine-resume
 checks—remains panic evidence, as do configured panic sinks.
 
+### Ignored panic macro paths are branch-local
+
+`[panics].ignored-namespaces` also matches macro definition paths recorded in
+panic-source and invocation provenance. A matching expansion terminates only
+that PanicEffect branch. It does not hide unrelated panics in the containing
+function and it has no effect on SafetyEffect. The built-in panic ignore for
+`core::ub_checks::assert_unsafe_precondition` uses this same rule; an explicit
+`ignored-namespaces` list replaces the built-in list, and `[]` disables it.
+
 ### Trusted boundary documentation is assumed complete
 
-`trusted-panic-boundary-namespaces` and
-`trusted-safety-boundary-namespaces` make matching call targets opaque. Their
-documented requirements become caller obligations; an undocumented matching
-callee is trusted as having no corresponding effect. This does not suppress
-`missing-safety-docs` on an exported unsafe function selected as a report root.
-An incomplete external contract can therefore hide real behavior. Use narrow
-audited patterns and documentation override files when source documentation is
-missing.
+`[panics].trusted-boundary-namespaces` and
+`[safety].trusted-boundary-namespaces` make matching implementations opaque in
+their respective domains. PanicEffect or SafetyEffect sources owned by the
+implementation do not escape, and same-domain CommentEffect contracts reached
+only through its internal calls stop there as well. The matched API's own
+`# Panics` or `# Safety` contract remains visible to a non-trusted caller. In
+the panic domain, an undocumented matching API is trusted as having no
+caller-visible panic behavior. In the safety domain, missing `# Safety`
+documentation means only that no documentation-derived CommentEffect
+obligations are exposed; an unsafe signature still makes a direct invocation
+written outside the boundary a SafetyEffect source, so it still needs a local
+`// SAFETY:` justification. This does not suppress `missing-safety-docs` on an
+exported unsafe function selected as a report root. An incomplete external
+contract can therefore hide real behavior. Use narrow audited patterns and
+contract override files when source documentation is missing.
 
-### Build scripts are skipped and proc macros are dependency-scoped
+### Build scripts and proc macros are skipped
 
-Units whose crate name is Cargo's `build_script_build` are skipped. Proc-macro
-units are treated like dependencies: they never select report roots, interpret
-lint policy, emit diagnostics, or emit JSON reports, but they silently persist
-policy-neutral artifact IR. Both kinds of code run at build time on the
-developer machine; panics there fail builds loudly on their own, and holding
-them to target-code reporting policy would deny the ordinary panic-on-error
-idiom.
+Units whose crate name is Cargo's `build_script_build` and units whose crate
+type is `proc-macro` are skipped. Proc-macro externs are also excluded from the
+consumer's runtime artifact graph; target code generated by a proc macro is
+still analyzed as part of the consuming crate. Both kinds of tool code run at
+build time on the developer machine, where panics fail builds loudly on their
+own. Holding them to target-code reporting policy would deny the ordinary
+panic-on-error idiom.
 
 ## Analysis limits
 
@@ -76,66 +87,62 @@ unsafe-operation or unsafe-scope facts; the overlay only relays calls back into
 managed bodies. Broad trusted globs assume complete documentation and can hide
 undocumented effects.
 
-### The node limit bounds workspace interpretation
+### Depth and state budgets bound workspace interpretation
 
-Each selected root is interpreted separately for panic and safety. Each
-effect-domain traversal visits at most `[analysis] node-limit` distinct
-function states (default 4096); a state includes the owning artifact and the
-set of requirements already satisfied, so one function can consume more than
-one slot. Dependency extraction is root-independent and has no workspace-policy
-node limit. Reaching the limit emits the corresponding
+Each effect is traced once across the composed workspace and then projected
+onto the selected report roots. Each source path follows at most
+`[analysis] max-trace-depth`
+propagation edges from one source (default 256). A separate
+`trace-state-budget` bounds distinct `(origin, function, effect state)` values
+(default 1000000); one function can consume more than one state when, for
+example, different comment obligations remain. Dependency extraction is
+root-independent and has neither workspace-policy limit. Reaching either
+limit emits the corresponding
 `panic-analysis-incomplete` or `safety-analysis-incomplete` finding, denied by
 default; the unvisited region remains unknown.
 
 ### Missing managed bodies are incomplete analysis
 
-Failure to produce, validate, or persist required artifact IR is a tool error.
+Failure to produce, validate, or persist required artifact facts is a tool error.
 During interpretation, an absent reached body emits an incomplete finding only
-when its stable crate ID is owned by the local IR or a loaded artifact.
-`panic-analysis-incomplete` controls panic missing-body and node-limit findings;
+when its stable crate ID is owned by the local facts or a loaded artifact.
+`panic-analysis-incomplete` controls panic missing-body, trace-depth, and
+state-budget findings;
 `safety-analysis-incomplete` controls the corresponding safety findings.
 Unmanaged compiler-crate bodies have the behavior described above.
 
-### Callable call-site attribution is type-keyed
+### Unresolved callable targets remain unknown
 
-With `callable-edge-attribution = "call-sites"`, function pointers and dyn
-dispatch are resolved conservatively from erased types reached in the same
-query. If one reached closure or function item reifies to `fn() -> i32`, every
-reached `fn() -> i32` call site may connect to that target; similarly, every dyn
-call to a trait may connect to every reached concrete vtable entry for that
-trait. This avoids false negatives from simple erasure flows, but it is not
-precise value-flow analysis and can over-report. A concrete target therefore
-does not discharge the generic effect of an erased callable: another function
-pointer value or dyn object of the same erased type may still reach that call
-site.
+Callable targets are never inferred by globally joining values with the same
+erased type. A compiler-resolved implementation is traced directly. An
+unresolved generic or dyn call uses an available trait declaration contract as
+its API summary; without one, it remains a coverage gap. An unresolved
+function-pointer call always remains a coverage gap because it has no
+declaration fallback. Creating another trait object or function pointer
+elsewhere in the analyzed graph cannot add a candidate target to the call. This
+avoids cross-root false positives, but can miss effects hidden behind a contract
+summary or an allowed unresolved-target finding.
 
 ### Marker suppression is source-anchored
 
 `// PANIC:` and `// SAFETY:` markers are matched against compiler spans according
 to `marker-probing` under `[analysis]`. Its default,
 `macro-definition-first`, checks the macro definition first, then expansion
-call sites outward, then the final source call site. For an effect-bearing call,
-a separately lined callee marker wins; otherwise the statement marker is used,
-with the nearest enclosing block as fallback for both marker kinds. On a
-multi-line call, an unnamed statement marker cannot select one link, although a
-named requirement marker can. Unusual formatting can therefore attach a marker
-to a different link than intended. Requirement names are normalized;
-duplicates produce `ambiguous-panic-requirement` or
-`ambiguous-safety-requirement`, both denied by default.
-
-### Dyn-to-dyn upcasts are not traversed
-
-Concrete-to-dyn unsizing records vtable entries, but dyn-to-dyn upcasting
-records none. Supertrait method calls are handled when concrete vtable evidence
-from the original unsizing is reachable in the same traversal. In `call-sites`
-mode, an upcast value passed in from elsewhere can therefore reach a call
-without corresponding concrete target evidence.
+callsites outward, then the final source callsite. At each provenance location,
+lookup is deliberately bounded: a marker attached to the effect/callee line
+wins; otherwise the marker immediately preceding the containing statement-like
+unit is considered; lookup then stops. It never climbs through enclosing blocks
+or unrelated statements. Explicit unsafe-scope markers are associated through
+SafetyEffect's compiler-derived effect groups rather than generic AST ascent.
+Requirement names are normalized; duplicates produce
+`ambiguous-panic-requirement` or `ambiguous-safety-requirement`, both denied by
+default.
 
 ## Toolchain-pinned assumptions
 
 ### The unsafe-operation set mirrors rustc's checker
 
-`crates/sniff-test/src/safety/thir.rs` ports rustc's
+`crates/sniff-test/src/compiler/safety.rs` ports rustc's
 `check_unsafety.rs` arm for arm; the pinned toolchain in
 `rust-toolchain.toml` is the source of truth. On toolchain bumps, diff the
 port against rustc's file — a new `UnsafeOpKind` variant means a new
@@ -158,9 +165,9 @@ rustflags and best-effort `build.rustflags` from config files. Config-file
 recovered and do not apply to the analysis build, which can make the analyzed
 cfg set differ from the shipped build's.
 
-### Artifact IR validity rides on rustc identity
+### Artifact facts validity rides on rustc identity
 
-Persisted artifact IR is addressed by rustc's stable crate ID plus strict
+Persisted artifact facts is addressed by rustc's stable crate ID plus strict
 version hash (SVH). The cache envelope validates its tool and rustc versions,
 exact artifact identity, stable function identities, dependency artifact
 identities, and source-range structure. A behavior-changing replacement of a
@@ -170,7 +177,7 @@ parent. Multiple SVHs for the same stable crate ID may remain cached across
 builds, but one composed rustc graph rejects that ambiguous combination.
 
 Ordinary `// PANIC:` and `// SAFETY:` comments are deliberately outside rustc's
-SVH even though they contribute marker facts to sniff-test IR. Before
+SVH even though they contribute marker facts to sniff-test facts. Before
 interpretation, sniff-test verifies every marker-bearing source file whose
 recorded path still exists against the content hash stored in its sidecar and
 rejects a mismatch or reload failure. If that path is absent, the marker facts
@@ -183,12 +190,12 @@ The workspace's compiler profile is not compared with dependency fingerprints:
 Cargo package-profile overrides may compile them differently. The dependency's
 own compiler settings contribute to its rustc identity.
 Lint levels, report roots, and other interpretation-only policy deliberately do
-not invalidate persisted artifact IR; the workspace reinterprets the same facts
+not invalidate persisted artifact facts; the workspace reinterprets the same facts
 under the active configuration. Sharing a cache with a modified toolchain that
 misreports the same version and produces colliding rustc identities remains
 outside this validation model.
 
-Local in-memory IR and loaded artifact IR are composed into one lookup and
+Local in-memory facts and loaded artifact facts are composed into one lookup and
 interpreted together. Findings carry no cache provenance, and the active
 configuration resolves severity from `FindingKind`; equivalent facts therefore
 produce the same human diagnostics and JSON policy regardless of where their
@@ -197,7 +204,7 @@ has a verified span, as described below.
 
 ### Cached source spans require the original source
 
-Artifact IR stores stable source-file identity, filename, exact content hash,
+Artifact facts stores stable source-file identity, filename, exact content hash,
 normalized byte length, and file-relative byte ranges. A workspace loads the
 recorded file into rustc's active source map and uses its span only when every
 value matches. Apart from the pre-interpretation marker check above, missing,

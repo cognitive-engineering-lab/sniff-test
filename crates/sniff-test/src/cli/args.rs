@@ -1,7 +1,7 @@
 //! User-facing CLI parsing for the Cargo frontend and direct driver.
 use std::path::PathBuf;
 
-use crate::analysis::cache::default_cache_dir;
+use crate::artifact_cache::default_cache_dir;
 use crate::config::{DEFAULT_MANIFEST_FILE, OverflowChecks};
 use clap::{Args, Parser, Subcommand, ValueEnum};
 use serde::{Deserialize, Serialize};
@@ -134,7 +134,7 @@ pub(super) struct DriverCli {
     #[command(flatten)]
     common: CommonCliArgs,
 
-    /// Cache artifact IR silently instead of interpreting this unit as a report-producing root.
+    /// Cache artifact facts silently instead of interpreting this unit as a report-producing root.
     #[arg(long)]
     dependency: bool,
 

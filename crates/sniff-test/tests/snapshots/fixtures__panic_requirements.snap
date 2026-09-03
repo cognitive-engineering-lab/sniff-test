@@ -10,7 +10,11 @@ expression: "report[\"findings\"]"
       "bounded[total]: total must be bounded by the caller.",
       "audited"
     ],
-    "reason": "panic_requirements::documented_ratio documents when it may panic under # Panics",
+    "owner": {
+      "crate": "panic_requirements",
+      "scope": "workspace"
+    },
+    "reason": "recorded `// PANIC:` evidence for call to `panic_requirements::documented_ratio` with a `# Panics` contract does not satisfy the remaining `# Panics` requirements",
     "requirements": [
       "nonzero: denominator must not be zero.",
       "bounded[total]: total must be bounded by the caller.",
@@ -19,10 +23,33 @@ expression: "report[\"findings\"]"
     "root": "panic_requirements::partially_satisfied",
     "root-kind": "concrete",
     "root-span": "src/lib.rs:24:1: 24:70",
+    "source-evidence": {
+      "status": "present"
+    },
     "span": "src/lib.rs:27:5: 27:41",
     "target": "panic_requirements::documented_ratio",
     "trace": [
       "src/lib.rs:27:5: 27:41: panic_requirements::partially_satisfied --direct-call-> panic_requirements::documented_ratio"
+    ]
+  },
+  {
+    "kind": "documented-panic",
+    "level": "warn",
+    "owner": {
+      "crate": "panic_requirements",
+      "scope": "workspace"
+    },
+    "reason": "call to `panic_requirements::documented_contract` with a `# Panics` contract has no recorded `// PANIC:` evidence",
+    "root": "panic_requirements::reaches_documented_contract",
+    "root-kind": "concrete",
+    "root-span": "src/lib.rs:36:1: 36:47",
+    "source-evidence": {
+      "status": "verified-absent"
+    },
+    "span": "src/lib.rs:37:5: 37:30",
+    "target": "panic_requirements::documented_contract",
+    "trace": [
+      "src/lib.rs:37:5: 37:30: panic_requirements::reaches_documented_contract --direct-call-> panic_requirements::documented_contract"
     ]
   }
 ]

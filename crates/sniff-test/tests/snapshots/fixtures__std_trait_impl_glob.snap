@@ -4,16 +4,23 @@ expression: "report[\"findings\"]"
 ---
 [
   {
-    "kind": "trusted-panic",
+    "kind": "documented-panic",
     "level": "warn",
-    "reason": "alloc::std::vec::Vec::<T, A>::push documents when it may panic under # Panics",
+    "owner": {
+      "crate": "std_trait_impl_glob",
+      "scope": "workspace"
+    },
+    "reason": "call to `alloc::vec::Vec::<T, A>::push` with a `# Panics` contract has no recorded `// PANIC:` evidence",
     "root": "std_trait_impl_glob::put",
     "root-kind": "concrete",
-    "root-span": "src/lib.rs:8:1: 8:44",
-    "span": "src/lib.rs:9:5: 9:23",
-    "target": "alloc::std::vec::Vec::<T, A>::push",
+    "root-span": "src/lib.rs:9:1: 9:44",
+    "source-evidence": {
+      "status": "verified-absent"
+    },
+    "span": "src/lib.rs:10:5: 10:23",
+    "target": "alloc::vec::Vec::<T, A>::push",
     "trace": [
-      "src/lib.rs:9:5: 9:23: std_trait_impl_glob::put --direct-call-> alloc::std::vec::Vec::<T, A>::push"
+      "src/lib.rs:10:5: 10:23: std_trait_impl_glob::put --direct-call-> alloc::vec::Vec::<T, A>::push"
     ]
   }
 ]

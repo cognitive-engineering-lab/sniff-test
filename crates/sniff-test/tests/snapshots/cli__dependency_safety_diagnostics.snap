@@ -1,0 +1,26 @@
+---
+source: crates/sniff-test/tests/cli.rs
+expression: snapshot
+---
+exit: 101
+stdout:
+<empty>
+stderr:
+    Checking dependency-safety v0.1.0 ([FIXTURE]/dep)
+    Checking dependency-safety-app v0.1.0 ([FIXTURE]/app)
+error: [sniff-test::safety::raw-pointer-dereference-missing-justification] dependency crate `dependency_safety` has no recorded `// SAFETY:` evidence for unsafe operation (raw pointer dereference)
+ --> [FIXTURE]/dep/src/lib.rs:2:14
+  |
+2 |     unsafe { *pointer }
+  |              ^^^^^^^^
+  |
+  = note: reachable from `dependency_safety_app::read_dependency` to `unsafe operation (raw pointer dereference)`
+  = note: set `show-full-stack-trace = true` under `[analysis]` in sniff-test.toml to show every reachability step
+  = help: audit or upgrade dependency crate `dependency_safety`; it has no recorded `// SAFETY:` evidence for this source
+help: guard this local call or record a local `// SAFETY:` containment only after verifying the invariant; treating this boundary as trusted must be a deliberate trust decision backed by review
+ --> src/lib.rs:2:5
+  |
+2 |     dependency_safety::read_byte(pointer)
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+error: could not compile `dependency-safety-app` (lib) due to 1 previous error

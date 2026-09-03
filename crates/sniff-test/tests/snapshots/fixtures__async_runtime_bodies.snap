@@ -6,35 +6,49 @@ expression: "report[\"findings\"]"
   {
     "kind": "panic-invocation",
     "level": "deny",
-    "reason": "panic sink core::std::rt::panic_fmt",
+    "owner": {
+      "crate": "async_runtime_bodies",
+      "scope": "workspace"
+    },
+    "reason": "panic invocation to `core::panicking::panic_fmt` has no recorded `// PANIC:` evidence",
     "root": "async_runtime_bodies::async_root",
     "root-kind": "concrete",
     "root-span": "src/lib.rs:1:1: 1:26",
+    "source-evidence": {
+      "status": "verified-absent"
+    },
     "span": "src/lib.rs:2:5: 2:46",
-    "target": "core::std::rt::panic_fmt",
+    "target": "core::panicking::panic_fmt",
     "trace": [
       "src/lib.rs:1:27: 3:2: async_runtime_bodies::async_root --coroutine-body-> async_runtime_bodies::async_root::{closure#0}",
-      "src/lib.rs:2:5: 2:46: async_runtime_bodies::async_root::{closure#0} --macro-expansion-> macro std::panic",
-      "src/lib.rs:2:5: 2:46: macro std::panic --macro-expansion-> macro core::std::panic::panic_2021",
-      "[SYSROOT]/lib/rustlib/src/rust/library/core/src/panic.rs:62:9: 62:73: macro core::std::panic::panic_2021 --direct-call-> core::std::rt::panic_fmt"
+      "src/lib.rs:2:5: 2:46: async_runtime_bodies::async_root::{closure#0} --macro-expansion-> macro std::macros::panic",
+      "src/lib.rs:2:5: 2:46: macro std::macros::panic --macro-expansion-> macro core::panic::panic_2021",
+      "[SYSROOT]/lib/rustlib/src/rust/library/core/src/panic.rs:62:9: 62:73: macro core::panic::panic_2021 --direct-call-> core::panicking::panic_fmt"
     ]
   },
   {
     "kind": "panic-invocation",
     "level": "deny",
-    "reason": "panic sink core::std::rt::panic_fmt",
+    "owner": {
+      "crate": "async_runtime_bodies",
+      "scope": "workspace"
+    },
+    "reason": "panic invocation to `core::panicking::panic_fmt` has no recorded `// PANIC:` evidence",
     "root": "async_runtime_bodies::invoked_async_closure",
     "root-kind": "concrete",
     "root-span": "src/lib.rs:5:1: 5:37",
+    "source-evidence": {
+      "status": "verified-absent"
+    },
     "span": "src/lib.rs:9:9: 9:52",
-    "target": "core::std::rt::panic_fmt",
+    "target": "core::panicking::panic_fmt",
     "trace": [
       "src/lib.rs:5:38: 12:2: async_runtime_bodies::invoked_async_closure --coroutine-body-> async_runtime_bodies::invoked_async_closure::{closure#0}",
       "src/lib.rs:11:5: 11:14: async_runtime_bodies::invoked_async_closure::{closure#0} --direct-call-> async_runtime_bodies::invoked_async_closure::{closure#0}::{closure#0}",
       "src/lib.rs:7:33: 10:6: async_runtime_bodies::invoked_async_closure::{closure#0}::{closure#0} --coroutine-body-> async_runtime_bodies::invoked_async_closure::{closure#0}::{closure#0}::{closure#0}",
-      "src/lib.rs:9:9: 9:52: async_runtime_bodies::invoked_async_closure::{closure#0}::{closure#0}::{closure#0} --macro-expansion-> macro std::panic",
-      "src/lib.rs:9:9: 9:52: macro std::panic --macro-expansion-> macro core::std::panic::panic_2021",
-      "[SYSROOT]/lib/rustlib/src/rust/library/core/src/panic.rs:62:9: 62:73: macro core::std::panic::panic_2021 --direct-call-> core::std::rt::panic_fmt"
+      "src/lib.rs:9:9: 9:52: async_runtime_bodies::invoked_async_closure::{closure#0}::{closure#0}::{closure#0} --macro-expansion-> macro std::macros::panic",
+      "src/lib.rs:9:9: 9:52: macro std::macros::panic --macro-expansion-> macro core::panic::panic_2021",
+      "[SYSROOT]/lib/rustlib/src/rust/library/core/src/panic.rs:62:9: 62:73: macro core::panic::panic_2021 --direct-call-> core::panicking::panic_fmt"
     ]
   }
 ]

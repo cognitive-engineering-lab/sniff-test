@@ -7,10 +7,17 @@ expression: "report[\"findings\"]"
     "function": "target_feature_call_safety::ordinary_caller",
     "kind": "unsafe-call-missing-justification",
     "level": "deny",
-    "reason": "unsafe call to `target_feature_call_safety::target_feature_callee` has no `// SAFETY:` justification",
+    "owner": {
+      "crate": "target_feature_call_safety",
+      "scope": "workspace"
+    },
+    "reason": "unsafe call to `target_feature_call_safety::target_feature_callee` has no recorded `// SAFETY:` evidence",
     "root": "target_feature_call_safety::ordinary_caller",
     "root-kind": "concrete",
     "root-span": "src/lib.rs:23:1: 23:25",
+    "source-evidence": {
+      "status": "verified-absent"
+    },
     "span": "src/lib.rs:25:9: 25:32",
     "target": "target_feature_call_safety::target_feature_callee",
     "trace": [

@@ -2,6 +2,9 @@
 report-roots = [
     "ambiguous_markers::shared_block_marker",
     "ambiguous_markers::duplicate_name_marker",
+    "ambiguous_markers::marker_covers_documented_call_and_sink",
+    "ambiguous_markers::marked_path_to_shared_sources",
+    "ambiguous_markers::unmarked_path_to_shared_sources",
 ]
 
 [panics]
@@ -10,4 +13,5 @@ panic-sink-namespaces = [
     "std::panicking::**",
     "core::std::rt::panic_fmt",
     "std::rt::panic_fmt",
+    "ambiguous_markers::configured_sink",
 ]

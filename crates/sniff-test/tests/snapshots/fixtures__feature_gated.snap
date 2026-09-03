@@ -6,15 +6,22 @@ expression: "report[\"findings\"]"
   {
     "kind": "panic-invocation",
     "level": "deny",
-    "reason": "panic sink core::panicking::panic",
+    "owner": {
+      "crate": "feature_gated",
+      "scope": "workspace"
+    },
+    "reason": "panic invocation to `core::panicking::panic` has no recorded `// PANIC:` evidence",
     "root": "feature_gated::feature_root",
     "root-kind": "concrete",
     "root-span": "src/lib.rs:2:1: 2:32",
+    "source-evidence": {
+      "status": "verified-absent"
+    },
     "span": "src/lib.rs:3:5: 3:18",
     "target": "core::panicking::panic",
     "trace": [
-      "src/lib.rs:3:5: 3:18: feature_gated::feature_root --macro-expansion-> macro core::std::assert",
-      "src/lib.rs:3:5: 3:18: macro core::std::assert --direct-call-> core::panicking::panic"
+      "src/lib.rs:3:5: 3:18: feature_gated::feature_root --macro-expansion-> macro core::macros::builtin::assert",
+      "src/lib.rs:3:5: 3:18: macro core::macros::builtin::assert --direct-call-> core::panicking::panic"
     ]
   }
 ]

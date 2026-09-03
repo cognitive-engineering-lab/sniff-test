@@ -1,4 +1,7 @@
 pub trait Super {
+    /// # Panics
+    ///
+    /// Panics when `flag` is false.
     fn risky(&self, flag: bool);
 }
 

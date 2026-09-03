@@ -6,17 +6,24 @@ expression: "report[\"findings\"]"
   {
     "kind": "panic-invocation",
     "level": "deny",
-    "reason": "panic sink core::std::rt::panic_fmt",
+    "owner": {
+      "crate": "dependency_identity",
+      "scope": "dependency"
+    },
+    "reason": "dependency crate `dependency_identity` has no recorded `// PANIC:` evidence for panic invocation to `core::panicking::panic_fmt`",
     "root": "dependency_identity_app::sniff_buffer",
     "root-kind": "concrete",
     "root-span": "src/lib.rs:3:1: 3:50",
+    "source-evidence": {
+      "status": "verified-absent"
+    },
     "span": "[FIXTURE]/dep/src/lib.rs:11:9: 11:52",
-    "target": "core::std::rt::panic_fmt",
+    "target": "core::panicking::panic_fmt",
     "trace": [
-      "src/lib.rs:4:5: 4:23: dependency_identity_app::sniff_buffer --direct-call-> <dependency_identity::std::vec::Vec<u8> as dependency_identity::Sniffer>::sniff",
-      "[FIXTURE]/dep/src/lib.rs:11:9: 11:52: <dependency_identity::std::vec::Vec<u8> as dependency_identity::Sniffer>::sniff --macro-expansion-> macro core::std::assert",
-      "[FIXTURE]/dep/src/lib.rs:11:9: 11:52: macro core::std::assert --macro-expansion-> macro core::std::panic::panic_2021",
-      "[SYSROOT]/lib/rustlib/src/rust/library/core/src/panic.rs:62:9: 62:73: macro core::std::panic::panic_2021 --direct-call-> core::std::rt::panic_fmt"
+      "src/lib.rs:4:5: 4:23: dependency_identity_app::sniff_buffer --direct-call-> <dependency_identity::alloc::vec::Vec<u8> as dependency_identity::Sniffer>::sniff",
+      "[FIXTURE]/dep/src/lib.rs:11:9: 11:52: <dependency_identity::alloc::vec::Vec<u8> as dependency_identity::Sniffer>::sniff --macro-expansion-> macro core::macros::builtin::assert",
+      "[FIXTURE]/dep/src/lib.rs:11:9: 11:52: macro core::macros::builtin::assert --macro-expansion-> macro core::panic::panic_2021",
+      "[SYSROOT]/lib/rustlib/src/rust/library/core/src/panic.rs:62:9: 62:73: macro core::panic::panic_2021 --direct-call-> core::panicking::panic_fmt"
     ]
   }
 ]

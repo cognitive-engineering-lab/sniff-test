@@ -59,3 +59,46 @@ fn uncovered_safety_inner(pointer: *const u8) -> u8 {
 pub fn transitive_safety_path_exposes_uncovered_effect(pointer: *const u8) -> u8 {
     uncovered_safety_inner(pointer)
 }
+
+unsafe fn multiline_unsafe_value() -> Option<u8> {
+    Some(42)
+}
+
+#[rustfmt::skip]
+pub fn multiline_let_else_marker_applies_to_containing_statement() -> u8 {
+    // SAFETY: this fixture's unsafe function has no preconditions.
+    let Some(value) =
+        (unsafe { multiline_unsafe_value() })
+    else {
+        return 0;
+    };
+    value
+}
+
+#[rustfmt::skip]
+pub fn marker_does_not_cross_an_intervening_statement() -> u8 {
+    // SAFETY: this marker applies only to the unrelated statement.
+    let _unrelated = 0;
+    let Some(value) =
+        (unsafe { multiline_unsafe_value() })
+    else {
+        return 0;
+    };
+    value
+}
+
+pub fn let_else_marker_does_not_cover_the_else_body(value: Option<u8>) -> u8 {
+    // SAFETY: this marker belongs to the let-else statement, not its else body.
+    let Some(value) = value else {
+        return unsafe { multiline_unsafe_value() }.unwrap_or(0);
+    };
+    value
+}
+
+pub fn marker_on_an_ordinary_enclosing_block_does_not_cover_its_tail() -> Option<u8> {
+    // SAFETY: this marker belongs to the enclosing block expression only.
+    {
+        let _unrelated = 0;
+        unsafe { multiline_unsafe_value() }
+    }
+}
