@@ -269,6 +269,57 @@ fn cargo_frontend_skips_build_scripts() {
 }
 
 #[test]
+fn stale_source_override_for_loaded_file_without_definitions_fails_closed() {
+    let temp = tempfile::tempdir().expect("temp dir");
+    fs::create_dir(temp.path().join("src")).expect("create source directory");
+    fs::write(
+        temp.path().join("Cargo.toml"),
+        "[package]\nname = \"stale-source-override\"\nversion = \"1.2.3\"\nedition = \"2024\"\n\n[workspace]\n",
+    )
+    .expect("write Cargo manifest");
+    fs::write(temp.path().join("src/lib.rs"), "mod retired;\n").expect("write library source");
+    fs::write(
+        temp.path().join("src/retired.rs"),
+        "pub struct FormerFunction;\n",
+    )
+    .expect("write loaded source without definitions");
+    fs::write(
+        temp.path().join("sniff-test.toml"),
+        "[contracts]\noverride-files = [\"override.toml\"]\n",
+    )
+    .expect("write sniff-test manifest");
+    fs::write(
+        temp.path().join("override.toml"),
+        "[overrides.crates.\"stale_source_override\".\"1.2.3\"]\n\"src/retired.rs:1:1\" = \"# Panics\\n\\n- retired: this definition must still exist.\"\n",
+    )
+    .expect("write stale source override");
+
+    let binary = PathBuf::from(env!("CARGO_BIN_EXE_cargo-sniff-test"));
+    let mut command = Command::new(binary);
+    clean_cargo_package_env(&mut command);
+    let _cargo_guard = lock_nested_cargo();
+    let output = command
+        .args(["--color", "never"])
+        .current_dir(temp.path())
+        .output()
+        .expect("run cargo frontend");
+
+    assert!(
+        !output.status.success(),
+        "a stale source override must fail closed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains(
+            "source override `stale_source_override:1.2.3/src/retired.rs:1:1` matched no definition"
+        ),
+        "stderr:\n{stderr}"
+    );
+}
+
+#[test]
 fn cargo_frontend_ignores_compile_time_proc_macro_artifacts() {
     let temp = tempfile::tempdir().expect("temp dir");
     let app = temp.path().join("app");
@@ -520,6 +571,56 @@ unsafe extern "C" {
     }));
 
     assert_policy_neutral_facts(&cache["facts"]);
+}
+
+#[test]
+fn direct_driver_ignores_ambient_cargo_package_provenance() {
+    let temp = tempfile::tempdir().expect("temp dir");
+    let source = temp.path().join("ambient.rs");
+    fs::write(&source, "pub fn exported() {}\n").expect("write direct-driver source");
+    let cache_dir = temp.path().join("cache");
+    let mut command = direct_driver_command();
+    let output = command
+        .arg("--dependency")
+        .args(["--cache-dir"])
+        .arg(&cache_dir)
+        .args(["--message-format", "json", "--color", "never", "--"])
+        .args([
+            "--crate-name",
+            "ambient_provenance",
+            "--crate-type",
+            "rlib",
+            "--edition",
+            "2024",
+        ])
+        .arg(&source)
+        .args(["--sysroot", rustc_sysroot().as_str(), "-Zno-codegen"])
+        .env("CARGO_MANIFEST_DIR", temp.path())
+        .env("CARGO_PKG_VERSION", "9.9.9")
+        .current_dir(temp.path())
+        .output()
+        .expect("run direct dependency unit with ambient Cargo metadata");
+    assert_silent_success(&output, "direct dependency unit");
+
+    let cache_path = artifact_cache_for_crate(&cache_dir, "ambient_provenance");
+    let cache: serde_json::Value = serde_json::from_slice(
+        &fs::read(&cache_path)
+            .unwrap_or_else(|error| panic!("failed to read {}: {error}", cache_path.display())),
+    )
+    .expect("cache should contain JSON");
+    assert!(
+        cache["artifact"].get("package-version").is_none(),
+        "standalone analysis must not trust an ambient Cargo package version: {cache:#}"
+    );
+    let sources = cache["facts"]["source-files"]
+        .as_array()
+        .expect("source files should be an array");
+    assert!(
+        sources
+            .iter()
+            .all(|source| source.get("logical-path").is_none()),
+        "standalone analysis must not derive package-relative paths from ambient Cargo metadata: {sources:#?}"
+    );
 }
 
 fn assert_cached_declaration_sources(cache: &serde_json::Value, functions: &[serde_json::Value]) {

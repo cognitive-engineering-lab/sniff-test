@@ -38,20 +38,18 @@ pub(super) fn interpret_workspace<'tcx>(
     dependencies: &ArtifactAnalysisGraph,
     report_roots: &[ReportRoot<'tcx>],
     config: &SniffTestConfig,
+    package_version: Option<&str>,
 ) -> Result<Vec<Finding>, EffectReportError> {
     let roots = report_roots
         .iter()
         .copied()
         .map(|root| interpretation_root(tcx, root))
         .collect::<Vec<_>>();
-    let package_version = std::env::var("CARGO_PKG_VERSION")
-        .ok()
-        .filter(|version| !version.trim().is_empty());
     let crate_name = tcx.crate_name(LOCAL_CRATE);
     let local_source = ContractSourceArtifact::new(
         local_stable_crate_id,
         crate_name.as_str(),
-        package_version.as_deref(),
+        package_version,
         local,
     );
     let source_overrides =

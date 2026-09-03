@@ -18,7 +18,7 @@ use reachability::{
 use rustc_hir::def::DefKind;
 use rustc_hir::def_id::{DefId, LOCAL_CRATE, LocalDefId};
 use rustc_middle::ty::{AssocContainer, GenericArgs, Instance, InstanceKind, TyCtxt, TyKind};
-use rustc_span::{FileName, Pos, Span, StableSourceFileId};
+use rustc_span::{FileName, Pos, SourceFile, Span, StableSourceFileId};
 
 use super::source::{source_filename, stable_source_file_id};
 use crate::artifact::{
@@ -74,11 +74,14 @@ impl std::error::Error for ExtractError {}
 /// Reachable local closure, coroutine, and const bodies are retained as exact
 /// instance bodies so facts owned by those nested bodies do not disappear.
 /// No report-root or lint configuration participates in extraction.
-pub(crate) fn extract_artifact_facts(tcx: TyCtxt<'_>) -> Result<ArtifactFacts, ExtractError> {
+pub(crate) fn extract_artifact_facts(
+    tcx: TyCtxt<'_>,
+    package_manifest_dir: Option<&Path>,
+) -> Result<ArtifactFacts, ExtractError> {
     let required_owners = analyzable_local_fn_defs(tcx).collect::<Vec<_>>();
     ensure_required_thir_is_available(tcx, &required_owners)?;
 
-    let mut sources = SourceTable::default();
+    let mut sources = SourceTable::new(package_manifest_dir.map(Path::to_path_buf));
     let mut bodies = BTreeMap::<FunctionId, PendingBody>::new();
     let raw_safety_facts = collect_raw_safety_facts(tcx);
     let mut safety_groups = RawSafetyGroupResolver::new(&raw_safety_facts);
@@ -106,6 +109,7 @@ pub(crate) fn extract_artifact_facts(tcx: TyCtxt<'_>) -> Result<ArtifactFacts, E
 
     attach_raw_unsafe_operations(tcx, raw_safety_facts.operations, &mut sources, &mut bodies)?;
     collect_local_definition_sources(tcx, &mut sources)?;
+    sources.record_loaded_package_sources(tcx);
 
     let functions = bodies
         .into_values()
@@ -1848,18 +1852,24 @@ struct SourceTable {
     definitions: BTreeMap<StableDefPathHash, DefinitionSourceFact>,
 }
 
-impl Default for SourceTable {
-    fn default() -> Self {
+impl SourceTable {
+    fn new(manifest_dir: Option<PathBuf>) -> Self {
         Self {
-            manifest_dir: std::env::var_os("CARGO_MANIFEST_DIR").map(PathBuf::from),
+            manifest_dir,
             source_ids: BTreeMap::new(),
             files: BTreeMap::new(),
             definitions: BTreeMap::new(),
         }
     }
-}
 
-impl SourceTable {
+    fn record_loaded_package_sources(&mut self, tcx: TyCtxt<'_>) {
+        for file in tcx.sess.source_map().files().iter() {
+            if self.logical_path(file).is_some() {
+                self.record_file(file);
+            }
+        }
+    }
+
     fn record_definition(&mut self, tcx: TyCtxt<'_>, def_id: DefId) -> Result<(), ExtractError> {
         let span = tcx.def_span(def_id);
         let Some(source_range) = self.range(tcx, span)? else {
@@ -1907,36 +1917,41 @@ impl SourceTable {
                 file.name.prefer_local_unconditionally()
             )));
         }
-        let id = if let Some(id) = self.source_ids.get(&file.stable_id) {
-            id.clone()
-        } else {
-            let id = stable_source_file_id(&file);
-            let logical_path =
-                self.manifest_dir
-                    .as_deref()
-                    .and_then(|manifest_dir| match &file.name {
-                        FileName::Real(filename) => filename.local_path().and_then(|source_path| {
-                            package_relative_logical_path(manifest_dir, source_path)
-                        }),
-                        _ => None,
-                    });
-            self.files
-                .entry(id.clone())
-                .or_insert_with(|| SourceFileFact {
-                    id: id.clone(),
-                    filename: source_filename(&file),
-                    logical_path,
-                    content_hash: file.src_hash.to_string(),
-                    byte_len: u64::from(file.normalized_source_len.to_u32()),
-                });
-            self.source_ids.insert(file.stable_id, id.clone());
-            id
-        };
+        let id = self.record_file(&file);
         Ok(Some(SourceRangeFact {
             file: id,
             byte_start: u64::from(span.lo().0 - file.start_pos.0),
             byte_end: u64::from(span.hi().0 - file.start_pos.0),
         }))
+    }
+
+    fn record_file(&mut self, file: &SourceFile) -> SourceFileId {
+        if let Some(id) = self.source_ids.get(&file.stable_id) {
+            return id.clone();
+        }
+        let id = stable_source_file_id(file);
+        let logical_path = self.logical_path(file);
+        self.files
+            .entry(id.clone())
+            .or_insert_with(|| SourceFileFact {
+                id: id.clone(),
+                filename: source_filename(file),
+                logical_path,
+                content_hash: file.src_hash.to_string(),
+                byte_len: u64::from(file.normalized_source_len.to_u32()),
+            });
+        self.source_ids.insert(file.stable_id, id.clone());
+        id
+    }
+
+    fn logical_path(&self, file: &SourceFile) -> Option<String> {
+        let manifest_dir = self.manifest_dir.as_deref()?;
+        let FileName::Real(filename) = &file.name else {
+            return None;
+        };
+        filename
+            .local_path()
+            .and_then(|source_path| package_relative_logical_path(manifest_dir, source_path))
     }
 
     fn into_facts(self) -> (Vec<SourceFileFact>, Vec<DefinitionSourceFact>) {
@@ -1953,17 +1968,26 @@ fn package_relative_logical_path(manifest_dir: &Path, source_path: &Path) -> Opt
     } else {
         source_path.to_owned()
     };
-    let relative = source_path
-        .strip_prefix(manifest_dir)
-        .ok()
-        .map(Path::to_path_buf)
-        .or_else(|| {
-            let canonical_manifest = std::fs::canonicalize(manifest_dir).ok()?;
-            source_path
-                .strip_prefix(canonical_manifest)
-                .ok()
-                .map(Path::to_path_buf)
-        })?;
+    let relative = match (
+        std::fs::canonicalize(manifest_dir),
+        std::fs::canonicalize(&source_path),
+    ) {
+        (Ok(manifest_dir), Ok(source_path)) => source_path
+            .strip_prefix(manifest_dir)
+            .ok()
+            .map(Path::to_path_buf)?,
+        _ => source_path
+            .strip_prefix(manifest_dir)
+            .ok()
+            .map(Path::to_path_buf)
+            .or_else(|| {
+                let canonical_manifest = std::fs::canonicalize(manifest_dir).ok()?;
+                source_path
+                    .strip_prefix(canonical_manifest)
+                    .ok()
+                    .map(Path::to_path_buf)
+            })?,
+    };
     let segments = relative
         .components()
         .map(|component| match component {
@@ -2049,6 +2073,38 @@ mod tests {
                 "source selectors cannot represent {filename:?}"
             );
         }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn logical_source_paths_use_physical_package_containment_for_symlinks() {
+        use std::os::unix::fs::symlink;
+
+        let temporary = tempdir().expect("temporary directory");
+        let package = temporary.path().join("package");
+        let source = package.join("src/lib.rs");
+        fs::create_dir_all(source.parent().expect("source parent"))
+            .expect("create package source directory");
+        fs::write(&source, "pub fn sample() {}\n").expect("write package source");
+
+        let package_alias = temporary.path().join("package-alias");
+        symlink(&package, &package_alias).expect("create package alias");
+        assert_eq!(
+            package_relative_logical_path(&package, &package_alias.join("src/lib.rs")),
+            Some(String::from("src/lib.rs")),
+            "a source spelling that resolves into the package should retain its logical path"
+        );
+
+        let outside = temporary.path().join("outside");
+        fs::create_dir_all(&outside).expect("create outside directory");
+        fs::write(outside.join("external.rs"), "pub fn external() {}\n")
+            .expect("write outside source");
+        symlink(&outside, package.join("src/linked")).expect("create escaping source alias");
+        assert_eq!(
+            package_relative_logical_path(&package, &package.join("src/linked/external.rs")),
+            None,
+            "a package-local symlink must not attribute an external source to the package"
+        );
     }
 
     #[test]

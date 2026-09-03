@@ -38,6 +38,7 @@ pub(crate) fn analyze_crate(
 ) {
     let crate_name = tcx.crate_name(LOCAL_CRATE).to_string();
     let local_stable_crate_id = tcx.stable_crate_id(LOCAL_CRATE).as_u64();
+    let package_provenance = LocalPackageProvenance::from_args(args);
     let rustc_version = rustc_version();
     let externs = match dependency_inputs(tcx) {
         Ok(externs) => externs,
@@ -70,14 +71,18 @@ pub(crate) fn analyze_crate(
         emit_tool_error(tcx, error);
         return;
     }
-    let facts = match extract_artifact_facts(tcx) {
+    let facts = match extract_artifact_facts(tcx, package_provenance.manifest_dir.as_deref()) {
         Ok(facts) => facts,
         Err(error) => {
             emit_tool_error(tcx, format!("failed to extract artifact facts: {error}"));
             return;
         }
     };
-    let local_facts = if let Some(artifact) = local_cache_artifact_info(tcx, output_scope) {
+    let local_facts = if let Some(artifact) = local_cache_artifact_info(
+        tcx,
+        output_scope,
+        package_provenance.package_version.as_deref(),
+    ) {
         let cache = match ArtifactAnalysisCache::new(
             env!("CARGO_PKG_VERSION"),
             rustc_version.clone(),
@@ -118,6 +123,7 @@ pub(crate) fn analyze_crate(
         &dependency_graph,
         &selection.roots,
         config,
+        package_provenance.package_version.as_deref(),
     ) {
         Ok(findings) => findings,
         Err(error) => {
@@ -147,6 +153,26 @@ pub(crate) fn analyze_crate(
         }
     }
     emit_report(args, &report);
+}
+
+#[derive(Debug, Default)]
+struct LocalPackageProvenance {
+    manifest_dir: Option<PathBuf>,
+    package_version: Option<String>,
+}
+
+impl LocalPackageProvenance {
+    fn from_args(args: &SniffTestArgs) -> Self {
+        if !args.under_cargo {
+            return Self::default();
+        }
+        Self {
+            manifest_dir: std::env::var_os("CARGO_MANIFEST_DIR").map(PathBuf::from),
+            package_version: std::env::var("CARGO_PKG_VERSION")
+                .ok()
+                .filter(|version| !version.trim().is_empty()),
+        }
+    }
 }
 
 fn emit_tool_error(tcx: TyCtxt<'_>, message: impl Into<String>) {
@@ -266,6 +292,7 @@ pub(crate) fn is_proc_macro(tcx: TyCtxt<'_>) -> bool {
 fn local_cache_artifact_info(
     tcx: TyCtxt<'_>,
     output_scope: CrateOutputScope,
+    package_version: Option<&str>,
 ) -> Option<ArtifactInfo> {
     // Only outputs rustc can later load as crates need sidecars. In particular,
     // `cargo check` asks executable units to emit metadata, but their crate
@@ -274,9 +301,7 @@ fn local_cache_artifact_info(
     has_loadable_crate_output(tcx.crate_types()).then(|| ArtifactInfo {
         id: rustc_artifact_id(tcx, LOCAL_CRATE),
         crate_name: tcx.crate_name(LOCAL_CRATE).to_string(),
-        package_version: std::env::var("CARGO_PKG_VERSION")
-            .ok()
-            .filter(|version| !version.trim().is_empty()),
+        package_version: package_version.map(str::to_owned),
         scope: output_scope.artifact_scope(),
     })
 }
