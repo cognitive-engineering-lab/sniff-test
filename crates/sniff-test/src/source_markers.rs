@@ -573,7 +573,8 @@ struct CommentBlock {
 
 fn preceding_comment_block(file: &SourceFile, line_index: usize) -> Option<CommentBlock> {
     let mut block = Vec::new();
-    let mut current = line_index;
+    let mut current = preceding_outer_attributes_start(file, line_index);
+    let end_line = current.checked_sub(1)?;
     while let Some(previous) = current.checked_sub(1) {
         let Some(line) = file.get_line(previous) else {
             break;
@@ -593,9 +594,98 @@ fn preceding_comment_block(file: &SourceFile, line_index: usize) -> Option<Comme
     block.reverse();
     Some(CommentBlock {
         start_line: current,
-        end_line: line_index - 1,
+        end_line,
         lines: block,
     })
+}
+
+/// Returns the first line of the contiguous outer attributes immediately
+/// preceding `line_index`, or `line_index` when there are none.
+///
+/// rustc's expression and statement spans begin at the expression itself, so
+/// an outer attribute is not part of the span used for marker probing. Treat
+/// those attributes as transparent: the comment still directly documents the
+/// attributed source construct.
+fn preceding_outer_attributes_start(file: &SourceFile, mut line_index: usize) -> usize {
+    while let Some(start_line) = preceding_outer_attribute_start(file, line_index) {
+        line_index = start_line;
+    }
+    line_index
+}
+
+fn preceding_outer_attribute_start(file: &SourceFile, line_index: usize) -> Option<usize> {
+    let end_line = line_index.checked_sub(1)?;
+    let end = file.get_line(end_line)?;
+    let end = end.trim();
+
+    // A complete outer attribute must finish on the line directly above the
+    // attributed construct. Avoid searching backwards through ordinary code
+    // when that line cannot possibly close an attribute.
+    if !end.ends_with(']') {
+        return None;
+    }
+
+    for start_line in (0..=end_line).rev() {
+        let line = file.get_line(start_line)?;
+        let trimmed = line.trim_start();
+        if trimmed.starts_with("#[") {
+            let source = (start_line..=end_line)
+                .filter_map(|line_index| file.get_line(line_index))
+                .map(|line| line.to_string())
+                .collect::<Vec<_>>()
+                .join("\n");
+            return outer_attribute_occupies_source(&source).then_some(start_line);
+        }
+        if trimmed.is_empty() || line_is_standalone_comment(trimmed) {
+            return None;
+        }
+    }
+    None
+}
+
+fn outer_attribute_occupies_source(source: &str) -> bool {
+    let source = source.trim();
+    let Some(body) = source.strip_prefix("#[") else {
+        return false;
+    };
+
+    let mut square_depth = 1_u32;
+    let mut characters = body.char_indices().peekable();
+    while let Some((index, character)) = characters.next() {
+        match character {
+            '[' => square_depth += 1,
+            ']' => {
+                square_depth -= 1;
+                if square_depth == 0 {
+                    return body[index + character.len_utf8()..].trim().is_empty();
+                }
+            }
+            '"' => skip_quoted(&mut characters, '"'),
+            '\'' => skip_quoted(&mut characters, '\''),
+            '/' if characters.peek().is_some_and(|(_, next)| *next == '/') => {
+                characters.next();
+                while characters.next().is_some_and(|(_, next)| next != '\n') {}
+            }
+            _ => {}
+        }
+    }
+    false
+}
+
+fn skip_quoted(
+    characters: &mut std::iter::Peekable<impl Iterator<Item = (usize, char)>>,
+    delimiter: char,
+) {
+    let mut escaped = false;
+    for (_, character) in characters.by_ref() {
+        if escaped {
+            escaped = false;
+        } else if character == '\\' {
+            escaped = true;
+        } else if character == delimiter {
+            break;
+        }
+    }
 }
 
 fn comment_block_span(file: &SourceFile, start_line: usize, end_line: usize) -> Span {
@@ -701,10 +791,23 @@ fn parse_satisfaction_bullet(line: &str) -> Option<MarkerSatisfaction> {
 #[cfg(test)]
 mod tests {
     use rustc_span::DUMMY_SP;
+    use rustc_span::FileName;
+    use rustc_span::source_map::{FilePathMapping, SourceMap};
 
     use super::{MarkerProbe, MarkerSatisfaction, MarkerSyntax, normalize_requirement_name};
     use crate::artifact::UnverifiedMarkerProbeReason;
     use crate::config::MarkerProbing;
+
+    fn with_source_file(source: &str, check: impl FnOnce(&rustc_span::SourceFile)) {
+        rustc_span::create_default_session_globals_then(|| {
+            let source_map = SourceMap::new(FilePathMapping::empty());
+            let file = source_map.new_source_file(
+                FileName::Custom(String::from("markers.rs")),
+                source.to_owned(),
+            );
+            check(&file);
+        });
+    }
 
     fn line_has_panic_marker(line: &str) -> bool {
         super::line_satisfaction(line, MarkerSyntax::Panic).is_some()
@@ -828,6 +931,58 @@ mod tests {
             })
         );
         assert!(!line_has_safety_marker("// PANIC: not safety"));
+    }
+
+    #[test]
+    fn safety_marker_applies_across_an_outer_attribute() {
+        with_source_file(
+            "// SAFETY: pointer is valid.\n#[allow(unused_variables)]\nunsafe { read(ptr) }\n",
+            |file| {
+                let marker = super::marker_block_at(file, 2, MarkerSyntax::Safety)
+                    .expect("marker above the attribute should apply");
+
+                assert_eq!(marker.key.start_line, 0);
+                assert_eq!(marker.key.end_line, 0);
+                assert_eq!(marker.satisfactions[0].reason, "pointer is valid.");
+            },
+        );
+    }
+
+    #[test]
+    fn panic_marker_applies_across_multiple_and_multiline_outer_attributes() {
+        with_source_file(
+            "// PANIC: invariant checked by caller.\n\
+             #[cfg_attr(\n\
+                 all(),\n\
+                 allow(dead_code)\n\
+             )]\n\
+             #[allow(unused_variables)]\n\
+             panic!(\"boom\");\n",
+            |file| {
+                let marker = super::marker_block_at(file, 6, MarkerSyntax::Panic)
+                    .expect("marker above the attributes should apply");
+
+                assert_eq!(marker.key.start_line, 0);
+                assert_eq!(marker.key.end_line, 0);
+                assert_eq!(
+                    marker.satisfactions[0].reason,
+                    "invariant checked by caller."
+                );
+            },
+        );
+    }
+
+    #[test]
+    fn marker_does_not_cross_an_attributed_intervening_statement() {
+        with_source_file(
+            "// SAFETY: belongs to the assignment.\n\
+             #[allow(unused_variables)]\n\
+             let unused = 0;\n\
+             unsafe { read(ptr) }\n",
+            |file| {
+                assert!(super::marker_block_at(file, 3, MarkerSyntax::Safety).is_none());
+            },
+        );
     }
 
     #[test]

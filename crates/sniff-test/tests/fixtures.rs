@@ -199,6 +199,9 @@ fixture_cases! {
     "safe_markers" => {
         safe_markers => Case::new().denied();
     }
+    "justification_above_attr" => {
+        justification_above_attr => Case::new();
+    }
     "panic_requirements" => {
         panic_requirements => Case::new();
     }
