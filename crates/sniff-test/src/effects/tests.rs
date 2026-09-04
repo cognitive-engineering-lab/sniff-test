@@ -2112,6 +2112,91 @@ fn ignored_macro_path_terminates_a_compiler_assert_source() {
 }
 
 #[test]
+fn ignored_macro_path_does_not_export_an_internal_panic_contract() {
+    let root = stable_function(0);
+    let helper = stable_function(1);
+    let (artifact, graph, annotations) = setup(vec![
+        body(
+            root,
+            "sample::root",
+            vec![call_from_macro(
+                0,
+                0,
+                target(
+                    helper,
+                    "core::ptr::const_ptr::<impl *const T>::is_aligned_to",
+                ),
+                "core::ub_checks::assert_unsafe_precondition",
+            )],
+            Vec::new(),
+            Vec::new(),
+        ),
+        body(
+            helper,
+            "core::ptr::const_ptr::<impl *const T>::is_aligned_to",
+            Vec::new(),
+            Vec::new(),
+            vec![contract(
+                0,
+                helper,
+                AnnotationFactKind::PanicContract,
+                &[("alignment", "the alignment is not a power of two")],
+            )],
+        ),
+    ]);
+
+    let comments = probe_comments(&artifact, &graph, &annotations, &SniffTestConfig::default());
+    let trace = EffectEngine::new(&graph.comment_graph()).trace(&comments);
+
+    assert_eq!(comments.contract_count(CommentDomain::Panic), 1);
+    assert_eq!(trace.nodes().count(), 1);
+    assert_eq!(trace.handled().count(), 0);
+    assert_eq!(trace.escaped().count(), 0);
+}
+
+#[test]
+fn disabling_unsafe_precondition_ignore_exports_internal_panic_contracts() {
+    let root = stable_function(0);
+    let helper = stable_function(1);
+    let (artifact, graph, annotations) = setup(vec![
+        body(
+            root,
+            "sample::root",
+            vec![call_from_macro(
+                0,
+                0,
+                target(
+                    helper,
+                    "core::ptr::const_ptr::<impl *const T>::is_aligned_to",
+                ),
+                "core::ub_checks::assert_unsafe_precondition",
+            )],
+            Vec::new(),
+            Vec::new(),
+        ),
+        body(
+            helper,
+            "core::ptr::const_ptr::<impl *const T>::is_aligned_to",
+            Vec::new(),
+            Vec::new(),
+            vec![contract(
+                0,
+                helper,
+                AnnotationFactKind::PanicContract,
+                &[("alignment", "the alignment is not a power of two")],
+            )],
+        ),
+    ]);
+    let config = SniffTestConfig::from_manifest_str("[panics]\nignored-namespaces = []\n")
+        .expect("empty ignored namespace list");
+
+    let comments = probe_comments(&artifact, &graph, &annotations, &config);
+    let trace = EffectEngine::new(&graph.comment_graph()).trace(&comments);
+
+    assert_eq!(trace.escaped().count(), 1);
+}
+
+#[test]
 fn explicit_empty_ignored_namespaces_restores_unsafe_precondition_panics() {
     let root = stable_function(0);
     let panic_sink = stable_function(1);

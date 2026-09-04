@@ -229,12 +229,14 @@ broad glob therefore asserts that the matched library documents every
 caller-visible panic condition.
 
 `[panics].ignored-namespaces` matches both definition namespaces and macro
-definition paths in a panic's expansion provenance. The default contains
+definition paths in panic-source, invocation, and documented-contract
+provenance. The default contains
 Rust's `core::ub_checks::assert_unsafe_precondition`, whose generated panics
 diagnose violated unsafe preconditions rather than caller-visible panic
-behavior. A macro match terminates only that PanicEffect path: unrelated
-panics in the same function remain reportable, and SafetyEffect still audits
-the underlying unsafe operation and its justification. An explicit list
+behavior. A macro match terminates only that panic path, including `# Panics`
+contracts of helpers called by the expansion: unrelated panics in the same
+function remain reportable, and safety analysis still audits the underlying
+unsafe operation and its justification. An explicit list
 replaces the default; use `ignored-namespaces = []` to trace these checks as
 ordinary panic behavior.
 

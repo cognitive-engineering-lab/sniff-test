@@ -34,10 +34,12 @@ checks—remains panic evidence, as do configured panic sinks.
 
 `[panics].ignored-namespaces` also matches macro definition paths recorded in
 panic-source and invocation provenance. A matching expansion terminates only
-that PanicEffect branch. It does not hide unrelated panics in the containing
-function and it has no effect on SafetyEffect. The built-in panic ignore for
-`core::ub_checks::assert_unsafe_precondition` uses this same rule; an explicit
-`ignored-namespaces` list replaces the built-in list, and `[]` disables it.
+that panic branch, including documented panic obligations introduced by a
+helper call inside the expansion. It does not hide unrelated panics in the
+containing function and it has no effect on safety analysis. The built-in panic
+ignore for `core::ub_checks::assert_unsafe_precondition` uses this same rule; an
+explicit `ignored-namespaces` list replaces the built-in list, and `[]` disables
+it.
 
 ### Trusted boundary documentation is assumed complete
 

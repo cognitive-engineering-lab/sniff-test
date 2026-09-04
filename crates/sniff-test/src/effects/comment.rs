@@ -161,6 +161,7 @@ pub(crate) struct CommentEffect<'annotations> {
     obligations: BTreeMap<ObligationId, Obligation>,
     trusted_panic_functions: BTreeSet<FunctionId>,
     trusted_safety_functions: BTreeSet<FunctionId>,
+    ignored_panic_invocations: BTreeSet<InvocationId>,
 }
 
 impl<'annotations> CommentEffect<'annotations> {
@@ -209,6 +210,16 @@ impl<'annotations> CommentEffect<'annotations> {
                 trusted_safety_functions.extend(graph.function_aliases(body.function));
             }
         }
+        let ignored_panic_invocations = graph
+            .invocations()
+            .filter(|invocation| {
+                invocation
+                    .macro_provenance()
+                    .iter()
+                    .any(|frame| panic_config.ignores_path(&frame.display_path))
+            })
+            .map(crate::compiler::invocations::Invocation::id)
+            .collect();
         Self {
             annotations,
             graph,
@@ -216,6 +227,7 @@ impl<'annotations> CommentEffect<'annotations> {
             obligations,
             trusted_panic_functions,
             trusted_safety_functions,
+            ignored_panic_invocations,
         }
     }
 
@@ -287,6 +299,11 @@ impl<'annotations> CommentEffect<'annotations> {
         invocation: InvocationId,
         node: Option<TraceNodeId>,
     ) -> Option<CommentInvocationTransition> {
+        if state.domain == CommentDomain::Panic
+            && self.ignored_panic_invocations.contains(&invocation)
+        {
+            return None;
+        }
         if state.domain == CommentDomain::Safety
             && self.graph.invocation(invocation).is_builtin_unsafe()
         {

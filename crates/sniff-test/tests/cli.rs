@@ -134,6 +134,39 @@ cli_cases! {
 }
 
 #[test]
+fn unsafe_precondition_helpers_do_not_export_panic_contracts() {
+    let repo = repo_root();
+    let binary = PathBuf::from(env!("CARGO_BIN_EXE_cargo-sniff-test"));
+    let (output, _) = run_case(
+        &repo,
+        &binary,
+        "unsafe_precondition_helpers_do_not_export_panic_contracts",
+        "assert_unsafe_precondition",
+        &Case::new(),
+    );
+
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "stdout:\n{}\nstderr:\n{}",
+        output.stdout,
+        output.stderr
+    );
+    assert!(
+        !output.stderr.contains("sniff-test::panics"),
+        "the standard library's unsafe-precondition implementation leaked a panic finding:\n{}",
+        output.stderr
+    );
+    assert!(
+        output
+            .stderr
+            .contains("sniff-test::safety::unsafe-call-missing-requirements"),
+        "the caller's independent unsafe obligation must remain audited:\n{}",
+        output.stderr
+    );
+}
+
+#[test]
 fn config_found_from_subdirectory() {
     let repo = repo_root();
     let binary = PathBuf::from(env!("CARGO_BIN_EXE_cargo-sniff-test"));
