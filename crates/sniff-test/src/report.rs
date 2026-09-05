@@ -2463,6 +2463,7 @@ unresolved-call-target = "warn"
         marker.satisfactions.push(AnnotationSatisfactionFact {
             requirement: None,
             reason: String::from("audited reason"),
+            structural_path: None,
         });
         marker
     }
@@ -3371,11 +3372,13 @@ unresolved-call-target = "warn"
             crate::artifact::ContractRequirementFact {
                 name: String::from("initialized"),
                 condition: String::from("state must be initialized"),
+                structural_path: vec![0],
                 source_range: None,
             },
             crate::artifact::ContractRequirementFact {
                 name: String::from("exclusive"),
                 condition: String::from("access must be exclusive"),
+                structural_path: vec![1],
                 source_range: None,
             },
         ];

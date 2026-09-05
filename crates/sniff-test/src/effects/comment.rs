@@ -151,6 +151,7 @@ impl CommentContract {
 #[derive(Clone, Debug, PartialEq, Eq)]
 enum Obligation {
     Named(String),
+    Structured(Vec<usize>),
     WholeContract,
 }
 
@@ -259,26 +260,29 @@ impl<'annotations> CommentEffect<'annotations> {
         if satisfaction.reason.trim().is_empty() {
             return;
         }
-        let matching = match satisfaction.requirement.as_deref() {
-            Some(requirement) => {
-                let normalized = normalize_requirement_name(requirement);
-                self.obligations
-                    .iter()
-                    .filter_map(|(id, obligation)| {
-                        (id.contract == state.contract
-                            && matches!(obligation, Obligation::Named(name) if name == &normalized))
-                        .then_some(*id)
-                    })
-                    .collect::<Vec<_>>()
-            }
-            None => self
-                .obligations
+        let matching = if let Some(requirement) = satisfaction.requirement.as_deref() {
+            let normalized = normalize_requirement_name(requirement);
+            self.obligations
                 .iter()
                 .filter_map(|(id, obligation)| {
-                    (id.contract == state.contract && obligation == &Obligation::WholeContract)
-                        .then_some(*id)
+                    (id.contract == state.contract
+                        && matches!(obligation, Obligation::Named(name) if name == &normalized))
+                    .then_some(*id)
                 })
-                .collect(),
+                .collect::<Vec<_>>()
+        } else {
+            let expected = satisfaction
+                .structural_path
+                .as_ref()
+                .map_or(Obligation::WholeContract, |path| {
+                    Obligation::Structured(path.clone())
+                });
+            self.obligations
+                .iter()
+                .filter_map(|(id, obligation)| {
+                    (id.contract == state.contract && obligation == &expected).then_some(*id)
+                })
+                .collect()
         };
         if let [obligation] = matching.as_slice() {
             state.remaining.remove(obligation);
@@ -513,10 +517,12 @@ fn collect_obligations(
         .enumerate()
         .map(|(index, requirement)| {
             let id = ObligationId { contract, index };
-            obligations.insert(
-                id,
-                Obligation::Named(normalize_requirement_name(&requirement.name)),
-            );
+            let obligation = if requirement.name.is_empty() {
+                Obligation::Structured(requirement.structural_path.clone())
+            } else {
+                Obligation::Named(normalize_requirement_name(&requirement.name))
+            };
+            obligations.insert(id, obligation);
             id
         })
         .collect()

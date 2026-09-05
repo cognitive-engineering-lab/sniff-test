@@ -1444,7 +1444,9 @@ const fn edge_kind_label(kind: CallKindFact) -> &'static str {
 }
 
 fn render_requirement(requirement: &ContractRequirementFact) -> String {
-    if requirement.condition.is_empty() {
+    if requirement.name.is_empty() {
+        requirement.condition.clone()
+    } else if requirement.condition.is_empty() {
         requirement.name.clone()
     } else {
         format!("{}: {}", requirement.name, requirement.condition)
@@ -1776,6 +1778,7 @@ mod tests {
             &[ContractRequirementFact {
                 name: String::from("valid"),
                 condition: String::from("the pointer remains valid"),
+                structural_path: vec![0],
                 source_range: None,
             }],
             "safety",

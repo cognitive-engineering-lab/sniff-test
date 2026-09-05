@@ -9,7 +9,7 @@ use rustc_span::{ExpnId, SourceFile, Span};
 
 use crate::artifact::UnverifiedMarkerProbeReason;
 use crate::config::MarkerProbing;
-use crate::contracts::{MarkerSatisfaction, markdown_list_item_body};
+use crate::contracts::{MarkerSatisfaction, markdown_list_item_body, structural_list_path};
 use crate::namespace::definition_backed_macro;
 
 #[derive(Debug, Clone, Copy)]
@@ -503,6 +503,7 @@ fn parse_marker(body: &str) -> MarkerSatisfaction {
     MarkerSatisfaction {
         requirement,
         reason: reason.to_owned(),
+        path: None,
     }
 }
 
@@ -710,33 +711,42 @@ fn line_is_standalone_comment(line: &str) -> bool {
 }
 
 fn comment_body(line: &str) -> Option<&str> {
+    comment_body_preserving_indentation(line).map(str::trim_start)
+}
+
+fn comment_body_preserving_indentation(line: &str) -> Option<&str> {
     let comment = line.trim_start().strip_prefix("//")?;
-    (!comment.starts_with('/') && !comment.starts_with('!')).then(|| comment.trim_start())
+    (!comment.starts_with('/') && !comment.starts_with('!'))
+        .then(|| comment.strip_prefix(' ').unwrap_or(comment))
 }
 
 fn comment_block_satisfactions(lines: &[String], syntax: MarkerSyntax) -> Vec<MarkerSatisfaction> {
     let mut satisfactions: Vec<MarkerSatisfaction> = Vec::new();
     let mut pending_header_reason: Option<String> = None;
     let mut in_marker_block = false;
+    let mut list_levels = Vec::new();
 
     for line in lines {
-        let Some(body) = comment_body(line) else {
+        let Some(body) = comment_body_preserving_indentation(line) else {
             continue;
         };
-        if let Some(marker_body) = body.strip_prefix(syntax.prefix()) {
+        let marker_line = body.trim_start();
+        if let Some(marker_body) = marker_line.strip_prefix(syntax.prefix()) {
             flush_pending_header(&mut satisfactions, &mut pending_header_reason);
             in_marker_block = true;
+            list_levels.clear();
             let parsed = parse_marker(marker_body);
             if parsed.requirement.is_none() && parsed.reason.is_empty() {
                 pending_header_reason = Some(String::new());
             } else {
                 satisfactions.push(parsed);
             }
-        } else if body.starts_with(syntax.other_prefix()) {
+        } else if marker_line.starts_with(syntax.other_prefix()) {
             flush_pending_header(&mut satisfactions, &mut pending_header_reason);
             in_marker_block = false;
+            list_levels.clear();
         } else if in_marker_block {
-            if let Some(satisfaction) = parse_satisfaction_bullet(body) {
+            if let Some(satisfaction) = parse_satisfaction_bullet(body, &mut list_levels) {
                 pending_header_reason = None;
                 satisfactions.push(satisfaction);
             } else if let Some(reason) = pending_header_reason.as_mut() {
@@ -761,6 +771,7 @@ fn flush_pending_header(
         satisfactions.push(MarkerSatisfaction {
             requirement: None,
             reason,
+            path: None,
         });
     }
 }
@@ -775,12 +786,19 @@ fn append_reason_line(reason: &mut String, line: &str) {
     reason.push_str(line);
 }
 
-fn parse_satisfaction_bullet(line: &str) -> Option<MarkerSatisfaction> {
+fn parse_satisfaction_bullet(
+    line: &str,
+    levels: &mut Vec<(usize, usize, usize)>,
+) -> Option<MarkerSatisfaction> {
     let body = markdown_list_item_body(line)?;
     let (name, reason) = parse_marker_body(body);
-    name.map(|requirement| MarkerSatisfaction {
-        requirement: Some(requirement),
+    Some(MarkerSatisfaction {
+        requirement: name,
         reason: reason.to_owned(),
+        path: Some(structural_list_path(
+            line.len() - line.trim_start().len(),
+            levels,
+        )),
     })
 }
 
@@ -824,6 +842,7 @@ mod tests {
             Some(MarkerSatisfaction {
                 requirement: Some(String::from("index in bounds")),
                 reason: String::from("checked by caller"),
+                path: None,
             })
         );
     }
@@ -844,10 +863,12 @@ mod tests {
                     reason: String::from(
                         "caller checked denominator.\nThe constructor rejects zero."
                     ),
+                    path: None,
                 },
                 MarkerSatisfaction {
                     requirement: Some(String::from("index in bounds")),
                     reason: String::from("caller checked the index."),
+                    path: None,
                 },
             ]
         );
@@ -875,14 +896,17 @@ mod tests {
                     reason: String::from(
                         "checked the first precondition.\nAdditional evidence for the first precondition."
                     ),
+                    path: Some(vec![0]),
                 },
                 MarkerSatisfaction {
                     requirement: Some(String::from("something2[var_1]")),
                     reason: String::from("checked the second precondition."),
+                    path: Some(vec![1]),
                 },
                 MarkerSatisfaction {
                     requirement: Some(String::from("something3")),
                     reason: String::from("checked the third precondition."),
+                    path: Some(vec![2]),
                 },
             ]
         );
@@ -908,6 +932,30 @@ mod tests {
     }
 
     #[test]
+    fn marker_preserves_paths_for_unnamed_nested_bullets() {
+        let lines = [
+            String::from("    // SAFETY:"),
+            String::from("    // * checked the allocation."),
+            String::from("    //   - checked initialization."),
+            String::from("    //   - checked alignment."),
+            String::from("    // * checked the lifetime."),
+        ];
+
+        assert_eq!(
+            super::comment_block_satisfactions(&lines, MarkerSyntax::Safety)
+                .into_iter()
+                .map(|satisfaction| (satisfaction.requirement, satisfaction.path))
+                .collect::<Vec<_>>(),
+            [
+                (None, Some(vec![0])),
+                (None, Some(vec![0, 0])),
+                (None, Some(vec![0, 1])),
+                (None, Some(vec![1])),
+            ]
+        );
+    }
+
+    #[test]
     fn empty_panic_marker_without_bullets_remains_an_unnamed_marker() {
         let lines = [
             String::from("    // PANIC:"),
@@ -919,6 +967,7 @@ mod tests {
             [MarkerSatisfaction {
                 requirement: None,
                 reason: String::from("caller checked the local invariant."),
+                path: None,
             }]
         );
     }
@@ -943,6 +992,7 @@ mod tests {
             Some(MarkerSatisfaction {
                 requirement: Some(String::from("initialized")),
                 reason: String::from("written above"),
+                path: None,
             })
         );
         assert!(!line_has_safety_marker("// PANIC: not safety"));
@@ -1059,6 +1109,7 @@ mod tests {
                 reason: String::from(
                     "pointer came from NonNull.\nThis should not become panic evidence."
                 ),
+                path: None,
             }]
         );
     }

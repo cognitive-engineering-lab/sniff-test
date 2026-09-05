@@ -396,6 +396,7 @@ fn push_override_contract_for_owner(
             .map(|requirement| ContractRequirementFact {
                 name: requirement.name,
                 condition: requirement.condition,
+                structural_path: requirement.path,
                 source_range: None,
             })
             .collect(),

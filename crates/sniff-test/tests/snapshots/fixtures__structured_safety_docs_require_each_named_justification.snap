@@ -25,14 +25,14 @@ expression: "report[\"findings\"]"
     ],
     "root": "ambiguous_markers::complex_panic_layouts",
     "root-kind": "concrete",
-    "root-span": "src/lib.rs:44:1: 44:31",
+    "root-span": "src/lib.rs:61:1: 61:31",
     "source-evidence": {
       "status": "present"
     },
-    "span": "src/lib.rs:53:5: 53:29",
+    "span": "src/lib.rs:70:5: 70:29",
     "target": "ambiguous_markers::complex_panic_contract",
     "trace": [
-      "src/lib.rs:53:5: 53:29: ambiguous_markers::complex_panic_layouts --direct-call-> ambiguous_markers::complex_panic_contract"
+      "src/lib.rs:70:5: 70:29: ambiguous_markers::complex_panic_layouts --direct-call-> ambiguous_markers::complex_panic_contract"
     ]
   },
   {
@@ -54,14 +54,14 @@ expression: "report[\"findings\"]"
     ],
     "root": "ambiguous_markers::complex_panic_layouts",
     "root-kind": "concrete",
-    "root-span": "src/lib.rs:44:1: 44:31",
+    "root-span": "src/lib.rs:61:1: 61:31",
     "source-evidence": {
       "status": "present"
     },
-    "span": "src/lib.rs:60:5: 60:29",
+    "span": "src/lib.rs:77:5: 77:29",
     "target": "ambiguous_markers::complex_panic_contract",
     "trace": [
-      "src/lib.rs:60:5: 60:29: ambiguous_markers::complex_panic_layouts --direct-call-> ambiguous_markers::complex_panic_contract"
+      "src/lib.rs:77:5: 77:29: ambiguous_markers::complex_panic_layouts --direct-call-> ambiguous_markers::complex_panic_contract"
     ]
   },
   {
@@ -85,14 +85,14 @@ expression: "report[\"findings\"]"
     ],
     "root": "ambiguous_markers::complex_safety_layouts",
     "root-kind": "concrete",
-    "root-span": "src/lib.rs:23:1: 23:32",
+    "root-span": "src/lib.rs:40:1: 40:32",
     "source-evidence": {
       "status": "present"
     },
-    "span": "src/lib.rs:40:9: 40:34",
+    "span": "src/lib.rs:57:9: 57:34",
     "target": "ambiguous_markers::complex_safety_contract",
     "trace": [
-      "src/lib.rs:40:9: 40:34: ambiguous_markers::complex_safety_layouts --direct-call-> ambiguous_markers::complex_safety_contract"
+      "src/lib.rs:57:9: 57:34: ambiguous_markers::complex_safety_layouts --direct-call-> ambiguous_markers::complex_safety_contract"
     ]
   },
   {
@@ -122,6 +122,185 @@ expression: "report[\"findings\"]"
     "target": "ambiguous_markers::multi_safety_requirements_with_asterisks_and_ident",
     "trace": [
       "src/lib.rs:18:9: 18:61: ambiguous_markers::foo --direct-call-> ambiguous_markers::multi_safety_requirements_with_asterisks_and_ident"
+    ]
+  },
+  {
+    "function": "ambiguous_markers::foo",
+    "kind": "unsafe-call-missing-requirements",
+    "level": "warn",
+    "missing-requirements": [
+      "requirement",
+      "requirement"
+    ],
+    "owner": {
+      "crate": "ambiguous_markers",
+      "scope": "workspace"
+    },
+    "reason": "recorded `// SAFETY:` evidence for unsafe call to `ambiguous_markers::multi_safety_requirements_with_no_sub_requirement_name` does not satisfy the remaining `# Safety` requirements",
+    "requirements": [
+      "requirement",
+      "requirement"
+    ],
+    "root": "ambiguous_markers::foo",
+    "root-kind": "concrete",
+    "root-span": "src/lib.rs:1:1: 1:13",
+    "source-evidence": {
+      "status": "present"
+    },
+    "span": "src/lib.rs:23:9: 23:65",
+    "target": "ambiguous_markers::multi_safety_requirements_with_no_sub_requirement_name",
+    "trace": [
+      "src/lib.rs:23:9: 23:65: ambiguous_markers::foo --direct-call-> ambiguous_markers::multi_safety_requirements_with_no_sub_requirement_name"
+    ]
+  },
+  {
+    "function": "ambiguous_markers::foo",
+    "kind": "unsafe-call-missing-requirements",
+    "level": "warn",
+    "missing-requirements": [
+      "requirement"
+    ],
+    "owner": {
+      "crate": "ambiguous_markers",
+      "scope": "workspace"
+    },
+    "reason": "recorded `// SAFETY:` evidence for unsafe call to `ambiguous_markers::multi_safety_requirements_with_no_sub_requirement_name` does not satisfy the remaining `# Safety` requirements",
+    "requirements": [
+      "requirement",
+      "requirement"
+    ],
+    "root": "ambiguous_markers::foo",
+    "root-kind": "concrete",
+    "root-span": "src/lib.rs:1:1: 1:13",
+    "source-evidence": {
+      "status": "present"
+    },
+    "span": "src/lib.rs:36:9: 36:65",
+    "target": "ambiguous_markers::multi_safety_requirements_with_no_sub_requirement_name",
+    "trace": [
+      "src/lib.rs:36:9: 36:65: ambiguous_markers::foo --direct-call-> ambiguous_markers::multi_safety_requirements_with_no_sub_requirement_name"
+    ]
+  },
+  {
+    "kind": "documented-panic",
+    "level": "warn",
+    "missing-requirements": [
+      "the divisor must not be zero.",
+      "the numerator must be within the supported range.",
+      "the backing state must remain stable."
+    ],
+    "owner": {
+      "crate": "ambiguous_markers",
+      "scope": "workspace"
+    },
+    "reason": "recorded `// PANIC:` evidence for call to `ambiguous_markers::unnamed_nested_panic_contract` with a `# Panics` contract does not satisfy the remaining `# Panics` requirements",
+    "requirements": [
+      "the divisor must not be zero.",
+      "the numerator must be within the supported range.",
+      "the backing state must remain stable."
+    ],
+    "root": "ambiguous_markers::unnamed_panic_layouts",
+    "root-kind": "concrete",
+    "root-span": "src/lib.rs:107:1: 107:31",
+    "source-evidence": {
+      "status": "present"
+    },
+    "span": "src/lib.rs:115:5: 115:36",
+    "target": "ambiguous_markers::unnamed_nested_panic_contract",
+    "trace": [
+      "src/lib.rs:115:5: 115:36: ambiguous_markers::unnamed_panic_layouts --direct-call-> ambiguous_markers::unnamed_nested_panic_contract"
+    ]
+  },
+  {
+    "kind": "documented-panic",
+    "level": "warn",
+    "missing-requirements": [
+      "the numerator must be within the supported range."
+    ],
+    "owner": {
+      "crate": "ambiguous_markers",
+      "scope": "workspace"
+    },
+    "reason": "recorded `// PANIC:` evidence for call to `ambiguous_markers::unnamed_nested_panic_contract` with a `# Panics` contract does not satisfy the remaining `# Panics` requirements",
+    "requirements": [
+      "the divisor must not be zero.",
+      "the numerator must be within the supported range.",
+      "the backing state must remain stable."
+    ],
+    "root": "ambiguous_markers::unnamed_panic_layouts",
+    "root-kind": "concrete",
+    "root-span": "src/lib.rs:107:1: 107:31",
+    "source-evidence": {
+      "status": "present"
+    },
+    "span": "src/lib.rs:122:5: 122:36",
+    "target": "ambiguous_markers::unnamed_nested_panic_contract",
+    "trace": [
+      "src/lib.rs:122:5: 122:36: ambiguous_markers::unnamed_panic_layouts --direct-call-> ambiguous_markers::unnamed_nested_panic_contract"
+    ]
+  },
+  {
+    "function": "ambiguous_markers::unnamed_safety_layouts",
+    "kind": "unsafe-call-missing-requirements",
+    "level": "warn",
+    "missing-requirements": [
+      "the caller must own the allocation.",
+      "every byte must be initialized.",
+      "the allocation must have the required alignment.",
+      "the allocation must remain live for the duration of the call."
+    ],
+    "owner": {
+      "crate": "ambiguous_markers",
+      "scope": "workspace"
+    },
+    "reason": "recorded `// SAFETY:` evidence for unsafe call to `ambiguous_markers::unnamed_nested_safety_contract` does not satisfy the remaining `# Safety` requirements",
+    "requirements": [
+      "the caller must own the allocation.",
+      "every byte must be initialized.",
+      "the allocation must have the required alignment.",
+      "the allocation must remain live for the duration of the call."
+    ],
+    "root": "ambiguous_markers::unnamed_safety_layouts",
+    "root-kind": "concrete",
+    "root-span": "src/lib.rs:80:1: 80:32",
+    "source-evidence": {
+      "status": "present"
+    },
+    "span": "src/lib.rs:92:9: 92:41",
+    "target": "ambiguous_markers::unnamed_nested_safety_contract",
+    "trace": [
+      "src/lib.rs:92:9: 92:41: ambiguous_markers::unnamed_safety_layouts --direct-call-> ambiguous_markers::unnamed_nested_safety_contract"
+    ]
+  },
+  {
+    "function": "ambiguous_markers::unnamed_safety_layouts",
+    "kind": "unsafe-call-missing-requirements",
+    "level": "warn",
+    "missing-requirements": [
+      "every byte must be initialized.",
+      "the allocation must have the required alignment."
+    ],
+    "owner": {
+      "crate": "ambiguous_markers",
+      "scope": "workspace"
+    },
+    "reason": "recorded `// SAFETY:` evidence for unsafe call to `ambiguous_markers::unnamed_nested_safety_contract` does not satisfy the remaining `# Safety` requirements",
+    "requirements": [
+      "the caller must own the allocation.",
+      "every byte must be initialized.",
+      "the allocation must have the required alignment.",
+      "the allocation must remain live for the duration of the call."
+    ],
+    "root": "ambiguous_markers::unnamed_safety_layouts",
+    "root-kind": "concrete",
+    "root-span": "src/lib.rs:80:1: 80:32",
+    "source-evidence": {
+      "status": "present"
+    },
+    "span": "src/lib.rs:103:9: 103:41",
+    "target": "ambiguous_markers::unnamed_nested_safety_contract",
+    "trace": [
+      "src/lib.rs:103:9: 103:41: ambiguous_markers::unnamed_safety_layouts --direct-call-> ambiguous_markers::unnamed_nested_safety_contract"
     ]
   }
 ]

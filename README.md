@@ -367,10 +367,13 @@ pub fn checked_ratio(total: usize, denominator: usize) -> usize {
 }
 ```
 
-The accepted requirement bullet format is `- name: condition`; rustdoc
-conditions may be empty when the name is enough, but call-site satisfaction
-bullets must include justification text. Names are matched case-insensitively,
-with punctuation and whitespace treated as separators, so `bounded[total]` and
+Requirement lists accept unordered (`-`, `*`, `+`) and ordered (`1.`, `1)`)
+Markdown items at any nesting depth. A `name: condition` item is matched by
+name; an item without a name is matched by its structural list path, so its
+call-site justification must reproduce the same nesting. Rustdoc conditions
+may be empty when the name is enough, but call-site satisfaction bullets must
+include justification text. Names are matched case-insensitively, with
+punctuation and whitespace treated as separators, so `bounded[total]` and
 `bounded total` match. Duplicate names inside one documentation section are
 ambiguous under the effect-specific
 `ambiguous-panic-requirement = "deny"` or

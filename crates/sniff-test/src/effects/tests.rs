@@ -121,6 +121,7 @@ fn contract(
             .map(|(name, condition)| ContractRequirementFact {
                 name: (*name).to_owned(),
                 condition: (*condition).to_owned(),
+                structural_path: Vec::new(),
                 source_range: None,
             })
             .collect(),
@@ -143,6 +144,7 @@ fn call_comment(
         satisfactions: vec![AnnotationSatisfactionFact {
             requirement: requirement.map(str::to_owned),
             reason: String::from("audited reason"),
+            structural_path: None,
         }],
         requirements: Vec::new(),
     }
@@ -159,6 +161,7 @@ fn effect_comment(id: u32, effect: u32, kind: AnnotationFactKind) -> AnnotationF
         satisfactions: vec![AnnotationSatisfactionFact {
             requirement: None,
             reason: String::from("audited reason"),
+            structural_path: None,
         }],
         requirements: Vec::new(),
     }

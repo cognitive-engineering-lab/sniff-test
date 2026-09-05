@@ -84,6 +84,7 @@ fn is_safety_heading(heading: &str) -> bool {
 pub struct ContractRequirement {
     pub name: String,
     pub condition: String,
+    pub path: Vec<usize>,
     #[serde(skip, default = "dummy_span")]
     pub span: Span,
 }
@@ -102,6 +103,7 @@ pub struct AmbiguousContractRequirements {
 pub struct MarkerSatisfaction {
     pub requirement: Option<String>,
     pub reason: String,
+    pub path: Option<Vec<usize>>,
 }
 
 impl MarkerSatisfaction {
@@ -245,9 +247,10 @@ fn parse_contract_doc_markdown_with_spans(
     let mut summary = ContractDocSummary::default();
     let mut in_contract_section = false;
     let mut heading = None::<String>;
-    let mut items = Vec::<(usize, MarkdownItem)>::new();
+    let mut items = Vec::<(usize, MarkdownItem, usize)>::new();
     let mut parsed_items = Vec::<(usize, ContractRequirement)>::new();
     let mut next_item = 0usize;
+    let mut next_root_item = 0usize;
     let mut indented_code_block = None::<(String, usize)>;
 
     for (event, range) in Parser::new(markdown).into_offset_iter() {
@@ -270,20 +273,32 @@ fn parse_contract_doc_markdown_with_spans(
                 }
             }
             Event::Start(Tag::Item) if in_contract_section => {
+                let path = if let Some((_, parent, next_child)) = items.last_mut() {
+                    let mut path = parent.path.clone();
+                    path.push(*next_child);
+                    *next_child += 1;
+                    path
+                } else {
+                    let path = vec![next_root_item];
+                    next_root_item += 1;
+                    path
+                };
                 items.push((
                     next_item,
                     MarkdownItem {
                         text: String::new(),
                         span: span_for_offset(line_spans, range.start),
+                        path,
                     },
+                    0,
                 ));
                 next_item += 1;
             }
             Event::End(TagEnd::Item) if in_contract_section => {
-                if let Some((ordinal, item)) = items.pop() {
+                if let Some((ordinal, item, _)) = items.pop() {
                     if let Some(requirement) = parse_requirement_text(&item) {
                         parsed_items.push((ordinal, requirement));
-                    } else if let Some((_, parent)) = items.last_mut() {
+                    } else if let Some((_, parent, _)) = items.last_mut() {
                         if !parent.text.is_empty() && !item.text.is_empty() {
                             parent.text.push(' ');
                         }
@@ -295,7 +310,7 @@ fn parse_contract_doc_markdown_with_spans(
                 if let Some(heading) = &mut heading {
                     heading.push_str(&text);
                 }
-                if let Some((_, item)) = items.last_mut() {
+                if let Some((_, item, _)) = items.last_mut() {
                     item.text.push_str(&text);
                 }
                 if let Some((block, _)) = &mut indented_code_block {
@@ -306,7 +321,7 @@ fn parse_contract_doc_markdown_with_spans(
                 if let Some(heading) = &mut heading {
                     heading.push(' ');
                 }
-                if let Some((_, item)) = items.last_mut() {
+                if let Some((_, item, _)) = items.last_mut() {
                     item.text.push(' ');
                 }
             }
@@ -343,15 +358,53 @@ fn parse_indented_requirement_block(
     };
 
     let span = span_for_offset(line_spans, offset);
+    let mut levels = Vec::new();
     items
         .into_iter()
-        .filter_map(|text| {
+        .enumerate()
+        .filter_map(|(index, text)| {
             parse_requirement_text(&MarkdownItem {
                 text: text.to_owned(),
                 span,
+                path: list_path_for_indented_line(block, index, &mut levels),
             })
         })
         .collect()
+}
+
+fn list_path_for_indented_line(
+    block: &str,
+    item_index: usize,
+    levels: &mut Vec<(usize, usize, usize)>,
+) -> Vec<usize> {
+    let line = block
+        .lines()
+        .filter(|line| !line.trim().is_empty())
+        .nth(item_index)
+        .expect("item index came from the same nonblank lines");
+    structural_list_path(line.len() - line.trim_start().len(), levels)
+}
+
+pub(crate) fn structural_list_path(
+    indentation: usize,
+    levels: &mut Vec<(usize, usize, usize)>,
+) -> Vec<usize> {
+    while levels
+        .last()
+        .is_some_and(|(indent, _, _)| *indent > indentation)
+    {
+        levels.pop();
+    }
+    if levels
+        .last()
+        .is_none_or(|(indent, _, _)| *indent < indentation)
+    {
+        levels.push((indentation, 0, 1));
+    } else if let Some((_, current, next)) = levels.last_mut() {
+        *current = *next;
+        *next += 1;
+    }
+    levels.iter().map(|(_, current, _)| *current).collect()
 }
 
 pub(crate) fn markdown_list_item_body(line: &str) -> Option<&str> {
@@ -377,6 +430,7 @@ pub(crate) fn markdown_list_item_body(line: &str) -> Option<&str> {
 struct MarkdownItem {
     text: String,
     span: Span,
+    path: Vec<usize>,
 }
 
 pub(crate) struct ContractDocLine {
@@ -407,6 +461,9 @@ fn ambiguous_requirements(
 
     for requirement in requirements {
         let normalized_name = normalize_requirement_name(&requirement.name);
+        if normalized_name.is_empty() {
+            continue;
+        }
         let index = *indexes.entry(normalized_name.clone()).or_insert_with(|| {
             groups.push(AmbiguousContractRequirements {
                 normalized_name,
@@ -453,13 +510,24 @@ fn doc_comment(attr: &Attribute) -> Option<(rustc_span::Symbol, Span)> {
 }
 
 fn parse_requirement_text(item: &MarkdownItem) -> Option<ContractRequirement> {
-    let (name, condition) = item.text.split_once(':')?;
-    let name = name.trim();
-    let condition = condition.trim();
+    let text = item.text.trim();
+    if text.is_empty() {
+        return None;
+    }
+    let (name, condition) = text
+        .split_once(':')
+        .map_or(("", text), |(name, condition)| {
+            if normalize_requirement_name(name).is_empty() {
+                ("", text)
+            } else {
+                (name.trim(), condition.trim())
+            }
+        });
 
-    (!normalize_requirement_name(name).is_empty()).then(|| ContractRequirement {
+    Some(ContractRequirement {
         name: name.to_owned(),
         condition: condition.to_owned(),
+        path: item.path.clone(),
         span: item.span,
     })
 }
@@ -594,7 +662,7 @@ mod tests {
     }
 
     #[test]
-    fn commonmark_nested_bullets_remain_part_of_parent_requirement() {
+    fn commonmark_nested_unnamed_bullets_become_structural_requirements() {
         let summary = parse_safety_contract_doc_lines([
             "# Safety",
             "",
@@ -606,10 +674,16 @@ mod tests {
             "- valid[data]: `data` must point to initialized values.",
         ]);
 
-        assert_eq!(summary.requirements.len(), 2);
+        assert_eq!(summary.requirements.len(), 4);
         assert_eq!(summary.requirements[0].name, "not-null[data]");
-        assert!(summary.requirements[0].condition.contains("one allocation"));
-        assert_eq!(summary.requirements[1].name, "valid[data]");
+        assert_eq!(summary.requirements[0].path, [0]);
+        assert!(summary.requirements[1].name.is_empty());
+        assert_eq!(summary.requirements[1].path, [0, 0]);
+        assert!(summary.requirements[1].condition.contains("one allocation"));
+        assert!(summary.requirements[2].name.is_empty());
+        assert_eq!(summary.requirements[2].path, [0, 1]);
+        assert_eq!(summary.requirements[3].name, "valid[data]");
+        assert_eq!(summary.requirements[3].path, [1]);
     }
 
     #[test]

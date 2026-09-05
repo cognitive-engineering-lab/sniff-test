@@ -1001,6 +1001,7 @@ fn contract_requirements(
             Ok(ContractRequirementFact {
                 name: requirement.name,
                 condition: requirement.condition,
+                structural_path: requirement.path,
                 source_range: sources.range(tcx, requirement.span)?,
             })
         })
@@ -1585,6 +1586,7 @@ fn push_effect_marker(
         .map(|satisfaction| AnnotationSatisfactionFact {
             requirement: satisfaction.requirement,
             reason: satisfaction.reason,
+            structural_path: satisfaction.path,
         })
         .collect::<Vec<_>>();
     let identity = format!("{kind:?}|{:?}", marker.key);
