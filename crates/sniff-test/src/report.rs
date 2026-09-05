@@ -154,6 +154,7 @@ pub(crate) fn trace_workspace(
         &graph,
         &annotations,
         &namespaces,
+        config.analysis.effect_doc_matching,
         &config.panics,
         &config.safety,
     );
@@ -3420,6 +3421,7 @@ unresolved-call-target = "warn"
             &graph,
             &annotations,
             &namespaces,
+            config.analysis.effect_doc_matching,
             &config.panics,
             &config.safety,
         );

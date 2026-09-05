@@ -10,7 +10,7 @@ use crate::annotations::{
 };
 use crate::artifact::{ArtifactFacts, CallId, DefinitionNamespaceIndex};
 use crate::compiler::invocations::InvocationGraph;
-use crate::config::{PanicConfig, SafetyConfig};
+use crate::config::{EffectDocMatching, PanicConfig, SafetyConfig};
 use crate::contracts::normalize_requirement_name;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -160,6 +160,7 @@ pub(crate) struct CommentEffect<'annotations> {
     graph: &'annotations InvocationGraph,
     contracts: Vec<CommentContract>,
     obligations: BTreeMap<ObligationId, Obligation>,
+    effect_doc_matching: EffectDocMatching,
     trusted_panic_functions: BTreeSet<FunctionId>,
     trusted_safety_functions: BTreeSet<FunctionId>,
     ignored_panic_invocations: BTreeSet<InvocationId>,
@@ -171,6 +172,7 @@ impl<'annotations> CommentEffect<'annotations> {
         graph: &'annotations InvocationGraph,
         annotations: &'annotations AnnotationIndex,
         namespaces: &DefinitionNamespaceIndex,
+        effect_doc_matching: EffectDocMatching,
         panic_config: &PanicConfig,
         safety_config: &SafetyConfig,
     ) -> Self {
@@ -226,6 +228,7 @@ impl<'annotations> CommentEffect<'annotations> {
             graph,
             contracts,
             obligations,
+            effect_doc_matching,
             trusted_panic_functions,
             trusted_safety_functions,
             ignored_panic_invocations,
@@ -258,6 +261,10 @@ impl<'annotations> CommentEffect<'annotations> {
         satisfaction: &crate::artifact::AnnotationSatisfactionFact,
     ) {
         if satisfaction.reason.trim().is_empty() {
+            return;
+        }
+        if self.effect_doc_matching == EffectDocMatching::AnyJustification {
+            state.remaining.clear();
             return;
         }
         let matching = if let Some(requirement) = satisfaction.requirement.as_deref() {

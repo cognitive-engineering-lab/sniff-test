@@ -28,6 +28,9 @@ report-roots = "public"
 # only the final source callsite.
 marker-probing = "macro-definition-first"
 
+# Preserve strict structured matching for this fixture's exact-mode case.
+effect-doc-matching = "exact"
+
 # Ambiguous requirement names and shared proof markers default to failing closed.
 #
 # Maximum propagation depth from one effect source, plus a separate budget for

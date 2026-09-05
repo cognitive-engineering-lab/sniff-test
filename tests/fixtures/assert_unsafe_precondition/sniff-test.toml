@@ -28,6 +28,10 @@ report-roots = "public"
 # only the final source callsite.
 marker-probing = "macro-definition-first"
 
+# This regression test audits the individual requirements of the standard
+# library contract rather than accepting the marker as a whole-contract proof.
+effect-doc-matching = "exact"
+
 # Ambiguous requirement names and shared proof markers default to failing closed.
 #
 # Maximum propagation depth from one effect source, plus a separate budget for

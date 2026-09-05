@@ -28,6 +28,11 @@ report-roots = "public"
 # only the final source callsite.
 marker-probing = "macro-definition-first"
 
+# By default, any nonempty call-site justification discharges the complete
+# effect contract. Use `exact` to require every named or anonymous documented
+# requirement to have a matching justification with the same list structure.
+effect-doc-matching = "any-justification"
+
 # Ambiguous requirement names and shared proof markers default to failing closed.
 #
 # Maximum propagation depth from one effect source, plus a separate budget for

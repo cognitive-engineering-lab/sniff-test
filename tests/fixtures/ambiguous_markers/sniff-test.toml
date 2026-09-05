@@ -1,4 +1,5 @@
 [analysis]
+effect-doc-matching = "exact"
 report-roots = [
     "ambiguous_markers::shared_block_marker",
     "ambiguous_markers::duplicate_name_marker",

@@ -11,7 +11,7 @@ use crate::artifact::{
     SafetyOpKind, SourceFileFact, SourceFileId, SourceRangeFact, StableInstanceHash,
 };
 use crate::compiler::invocations::InvocationGraph;
-use crate::config::{MarkerProbing, SniffTestConfig};
+use crate::config::{EffectDocMatching, MarkerProbing, SniffTestConfig};
 use crate::contracts::ContractDocOverrides;
 use crate::namespace::StableDefPathHash;
 
@@ -428,6 +428,9 @@ fn trusted_comment_config() -> SniffTestConfig {
 
             [safety]
             trusted-boundary-namespaces = ["trusted::**"]
+
+            [analysis]
+            effect-doc-matching = "exact"
         "#,
     )
     .expect("trusted comment boundary configuration")
@@ -445,6 +448,7 @@ fn probe_comments<'a>(
         graph,
         annotations,
         &namespaces,
+        config.analysis.effect_doc_matching,
         &config.panics,
         &config.safety,
     )
@@ -1022,7 +1026,8 @@ fn comment_obligations_are_satisfied_across_call_levels() {
         ),
     ]);
 
-    let config = SniffTestConfig::default();
+    let mut config = SniffTestConfig::default();
+    config.analysis.effect_doc_matching = EffectDocMatching::Exact;
     let comments = probe_comments(&artifact, &graph, &annotations, &config);
     let trace = EffectEngine::new(&graph.comment_graph()).trace(&comments);
     let source_invocation = graph

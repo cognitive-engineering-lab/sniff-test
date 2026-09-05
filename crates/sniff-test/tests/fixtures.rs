@@ -227,6 +227,9 @@ fixture_cases! {
     "structured_safety_doc" => {
         structured_safety_docs_require_each_named_justification => Case::new();
     }
+    "structured_effect_doc_default" => {
+        structured_effect_docs_allow_any_justification_by_default => Case::new();
+    }
     "safety_callable_sites" => {
         safety_callable_sites => Case::new();
     }

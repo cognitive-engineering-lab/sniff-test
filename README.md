@@ -55,6 +55,7 @@ inline-mir = "off"          # profile | on | off
 show-full-stack-trace = false
 report-roots = "public"     # public | all | ["crate::path"]
 marker-probing = "macro-definition-first" # macro-definition-first | source-callsite
+effect-doc-matching = "any-justification" # any-justification | exact
 max-trace-depth = 256
 trace-state-budget = 1000000
 
@@ -199,6 +200,12 @@ operations use `kind = "unsafe-op-missing-justification"` with
 markers inside macro definitions satisfy operations produced by that macro,
 then falls back through macro callsites to the outer source callsite.
 `source-callsite` keeps lookup at the final user callsite only.
+
+`effect-doc-matching = "any-justification"` (the default) lets any nonempty
+`// PANIC:` or `// SAFETY:` explanation discharge the corresponding complete
+effect contract, regardless of its requirement-list layout. Set it to `"exact"`
+to require each documented sub-obligation to be justified by name, or by the
+same nested list structure when it has no explicit name.
 
 `report-roots` controls workspace traversal and reporting, not artifact
 extraction. Effects propagate from each selected workspace root through local
@@ -367,15 +374,15 @@ pub fn checked_ratio(total: usize, denominator: usize) -> usize {
 }
 ```
 
-Requirement lists accept unordered (`-`, `*`, `+`) and ordered (`1.`, `1)`)
-Markdown items at any nesting depth. A `name: condition` item is matched by
-name; an item without a name is matched by its structural list path, so its
-call-site justification must reproduce the same nesting. Rustdoc conditions
-may be empty when the name is enough, but call-site satisfaction bullets must
-include justification text. Names are matched case-insensitively, with
-punctuation and whitespace treated as separators, so `bounded[total]` and
-`bounded total` match. Duplicate names inside one documentation section are
-ambiguous under the effect-specific
+In exact matching mode, requirement lists accept unordered (`-`, `*`, `+`) and
+ordered (`1.`, `1)`) Markdown items at any nesting depth. A `name: condition`
+item is matched by name; an item without a name is matched by its structural
+list path, so its call-site justification must reproduce the same nesting.
+Rustdoc conditions may be empty when the name is enough, but call-site
+satisfaction bullets must include justification text. Names are matched
+case-insensitively, with punctuation and whitespace treated as separators, so
+`bounded[total]` and `bounded total` match. Duplicate names inside one
+documentation section are ambiguous under the effect-specific
 `ambiguous-panic-requirement = "deny"` or
 `ambiguous-safety-requirement = "deny"` policy: a single marker bullet cannot
 prove two distinct requirements with the same normalized name. Prose and labels

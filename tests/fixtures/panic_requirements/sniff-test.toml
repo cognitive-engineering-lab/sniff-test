@@ -2,6 +2,7 @@
 inline-mir = "off"
 
 [analysis]
+effect-doc-matching = "exact"
 report-roots = [
     "panic_requirements::satisfied",
     "panic_requirements::partially_satisfied",
