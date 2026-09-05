@@ -224,6 +224,9 @@ fixture_cases! {
     "safety_contract_requirements" => {
         safety_contracts_preserve_call_and_obligation_requirements => Case::new();
     }
+    "structured_safety_doc" => {
+        structured_safety_docs_require_each_named_justification => Case::new();
+    }
     "safety_callable_sites" => {
         safety_callable_sites => Case::new();
     }

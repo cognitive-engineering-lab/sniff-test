@@ -1,0 +1,173 @@
+# sniff-test configuration.
+#
+# Namespace trust and panic-sink policies default to empty. Panic ignores contain
+# Rust's unsafe-precondition macro by default; this example repeats it alongside
+# optional project policy so an explicit replacement does not drop that behavior.
+
+[compiler]
+# Compiler settings affect extracted facts and therefore artifact-fact validity.
+# `profile` preserves Cargo/rustc's selected profile behavior.
+# `on` forces `-C overflow-checks=yes`; useful for checked release-mode audits.
+# `off` forces `-C overflow-checks=no`.
+overflow-checks = "profile"
+
+# MIR inlining can hide call edges that are useful in diagnostic traces.
+# `off` forces `-Z inline-mir=no` and disables MIR inline passes;
+# `on` forces `-Z inline-mir=yes`.
+inline-mir = "off"
+
+[analysis]
+# Analysis settings are workspace interpretation policy. Dependency rustc units
+# ignore report roots and lints while silently caching artifact facts for every
+# analyzable body.
+show-full-stack-trace = false
+report-roots = "public"
+
+# Marker lookup checks comments in macro definitions before walking outward to
+# macro callsites and the final source callsite. Use `source-callsite` to check
+# only the final source callsite.
+marker-probing = "macro-definition-first"
+
+# Ambiguous requirement names and shared proof markers default to failing closed.
+#
+# Maximum propagation depth from one effect source, plus a separate budget for
+# distinct `(origin, function, effect state)` trace nodes. Dependency facts are
+# extracted independently of these limits. Traversals that halt are reported
+# through the corresponding analysis-incomplete lint instead of passing.
+max-trace-depth = 256
+trace-state-budget = 1000000
+
+[analysis.lints]
+# Incomplete panic and safety traversals use their corresponding policy. Use
+# `warn` while auditing incomplete evidence, or `allow` to accept it.
+panic-analysis-incomplete = "deny"
+safety-analysis-incomplete = "deny"
+ambiguous-panic-marker = "deny"
+ambiguous-safety-marker = "deny"
+ambiguous-panic-requirement = "deny"
+ambiguous-safety-requirement = "deny"
+# Report-root selection problems warn by default.
+empty-report-roots = "warn"
+missing-report-root = "warn"
+
+[contracts]
+# Synthetic rustdoc markdown by namespace glob, loaded from TOML files relative
+# to this manifest. Useful while auditing external or generated APIs whose
+# documented behavior is known but not written in source yet.
+#
+# File format:
+# [overrides]
+# "crate::path::function" = """
+# # Panics
+# - requirement: condition
+# """
+override-files = []
+
+[panics]
+# Crates, fully-qualified functions, or macro expansion paths whose internals
+# should be treated as opaque analysis boundaries. Patterns use Rust crate/path
+# names: write `proc_macro2`, not the package name `proc-macro2`.
+#
+# Patterns match both owning definition paths and macro definition paths in a
+# panic's expansion provenance. Ignoring a macro is path-local: it does not
+# hide unrelated panics in the same function, and it does not affect
+# SafetyEffect.
+#
+# Use this list as the crate-local false-positive ledger too. When a reported
+# compiler assert is unreachable because this crate maintains an invariant,
+# ignore the function that introduces that assert and document the invariant
+# in a TOML comment next to the pattern. An explicit list replaces the built-in
+# default, so keep the core macro entry unless you want to audit those checks.
+ignored-namespaces = [
+    # Rust's unsafe-precondition checks are not caller-visible panic behavior.
+    "core::ub_checks::assert_unsafe_precondition",
+
+    # Build and compiler tooling trusted by this example policy.
+    "syn", "syn::**",
+    "quote", "quote::**",
+    "proc_macro2", "proc_macro2::**",
+    "rustc*", "rustc*::**",
+]
+
+# Trusted crates or fully-qualified functions whose panic implementations and
+# internal panic contracts should be opaque. A matched API's own `# Panics`
+# contract remains visible to non-trusted callers; an undocumented match is
+# trusted as non-panicking.
+#
+# Patterns match a definition's crate root, definition-site path, impl self-type
+# path, and rustc-rendered display path. A broad pattern such as `alloc::**`
+# asserts that the matched crate documents every caller-visible panic condition.
+trusted-boundary-namespaces = []
+
+# Callees that should be treated as direct panic sinks. When classifying a call
+# that also matches a trusted namespace, the more precise match wins; if
+# precision ties, panic sinks win. A winning sink classification does not also
+# make that implementation a trusted opaque boundary.
+panic-sink-namespaces = [
+    "core::panicking::**",
+    "std::panicking::**",
+    "core::std::rt::panic_fmt",
+    "std::rt::panic_fmt",
+    "core::{option,result}::unwrap_failed",
+    "std::{option,result}::unwrap_failed",
+]
+
+[panics.lints]
+# `deny` emits an error and makes `cargo sniff-test` fail.
+# `warn` emits a warning without failing the run.
+# `allow` suppresses the finding from diagnostics and JSON reports.
+# Group default for compiler-generated MIR assertions. Each exact override is
+# optional and takes precedence for its assertion subtype.
+compiler-assert = "deny"
+# compiler-assert-bounds-check = "deny"
+# compiler-assert-overflow = "deny"
+# compiler-assert-overflow-negation = "deny"
+# compiler-assert-division-by-zero = "deny"
+# compiler-assert-remainder-by-zero = "deny"
+# compiler-assert-resumed-after-return = "deny"
+# compiler-assert-resumed-after-panic = "deny"
+# compiler-assert-resumed-after-drop = "deny"
+# compiler-assert-misaligned-pointer-dereference = "deny"
+# compiler-assert-null-pointer-dereference = "deny"
+# compiler-assert-invalid-enum-construction = "deny"
+panic-invocation = "deny"
+documented-panic = "warn"
+# Calls with a remaining unresolved target. Known targets are still traced.
+unresolved-call-target = "allow"
+
+[safety]
+# Namespaces whose containing function bodies should not produce SafetyEffect
+# sources. This does not trust a called API or suppress its surface `# Safety`
+# contract; use `trusted-boundary-namespaces` for that API-boundary policy.
+ignored-namespaces = []
+
+# Trusted APIs whose safety implementations and internal safety contracts should
+# be opaque. A matched API's own `# Safety` contract remains visible to
+# non-trusted callers. Direct unsafe calls written outside the boundary still
+# need a local `// SAFETY:` justification.
+trusted-boundary-namespaces = []
+
+[safety.lints]
+# `deny` emits an error and makes `cargo sniff-test` fail.
+# `warn` emits a warning without failing the run.
+# `allow` suppresses the finding from diagnostics and JSON reports.
+missing-safety-docs = "warn"
+unresolved-call-target = "allow"
+unsafe-call-missing-justification = "warn"
+unsafe-call-missing-requirements = "warn"
+# Group default for non-call unsafe operations. Each exact override is optional
+# and takes precedence for its operation subtype.
+unsafe-op-missing-justification = "warn"
+# raw-pointer-dereference-missing-justification = "warn"
+# mutable-static-access-missing-justification = "warn"
+# extern-static-access-missing-justification = "warn"
+# union-field-access-missing-justification = "warn"
+# unsafe-field-access-missing-justification = "warn"
+# layout-constrained-type-initialization-missing-justification = "warn"
+# unsafe-field-initialization-missing-justification = "warn"
+# layout-constrained-field-mutation-missing-justification = "warn"
+# layout-constrained-field-borrow-missing-justification = "warn"
+# inline-assembly-missing-justification = "warn"
+# unsafe-binder-cast-missing-justification = "warn"
+safety-obligation-missing-justification = "warn"
+safety-obligation-missing-requirements = "warn"

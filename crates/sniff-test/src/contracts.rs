@@ -240,13 +240,15 @@ fn parse_contract_doc_markdown_with_spans(
     line_spans: &[(std::ops::Range<usize>, Span)],
     is_contract_heading: fn(&str) -> bool,
 ) -> ContractDocSummary {
-    use pulldown_cmark::{Event, Parser, Tag, TagEnd};
+    use pulldown_cmark::{CodeBlockKind, Event, Parser, Tag, TagEnd};
 
     let mut summary = ContractDocSummary::default();
     let mut in_contract_section = false;
     let mut heading = None::<String>;
-    let mut item = None::<MarkdownItem>;
-    let mut list_depth = 0usize;
+    let mut items = Vec::<(usize, MarkdownItem)>::new();
+    let mut parsed_items = Vec::<(usize, ContractRequirement)>::new();
+    let mut next_item = 0usize;
+    let mut indented_code_block = None::<(String, usize)>;
 
     for (event, range) in Parser::new(markdown).into_offset_iter() {
         match event {
@@ -257,43 +259,54 @@ fn parse_contract_doc_markdown_with_spans(
                     summary.has_docs |= in_contract_section;
                 }
             }
-            Event::Start(Tag::List(_)) if in_contract_section => {
-                list_depth += 1;
+            Event::Start(Tag::CodeBlock(CodeBlockKind::Indented)) if in_contract_section => {
+                indented_code_block = Some((String::new(), range.start));
             }
-            Event::End(TagEnd::List(_)) if in_contract_section => {
-                list_depth = list_depth.saturating_sub(1);
-            }
-            Event::Start(Tag::Item) if in_contract_section && list_depth == 1 => {
-                item = Some(MarkdownItem {
-                    text: String::new(),
-                    span: span_for_offset(line_spans, range.start),
-                });
-            }
-            Event::Start(Tag::Item) if in_contract_section && list_depth > 1 => {
-                if let Some(item) = &mut item {
-                    item.text.push(' ');
+            Event::End(TagEnd::CodeBlock) if in_contract_section => {
+                if let Some((block, offset)) = indented_code_block.take() {
+                    summary
+                        .requirements
+                        .extend(parse_indented_requirement_block(&block, offset, line_spans));
                 }
             }
-            Event::End(TagEnd::Item) if in_contract_section && list_depth == 1 => {
-                if let Some(item) = item.take()
-                    && let Some(requirement) = parse_requirement_text(&item)
-                {
-                    summary.requirements.push(requirement);
+            Event::Start(Tag::Item) if in_contract_section => {
+                items.push((
+                    next_item,
+                    MarkdownItem {
+                        text: String::new(),
+                        span: span_for_offset(line_spans, range.start),
+                    },
+                ));
+                next_item += 1;
+            }
+            Event::End(TagEnd::Item) if in_contract_section => {
+                if let Some((ordinal, item)) = items.pop() {
+                    if let Some(requirement) = parse_requirement_text(&item) {
+                        parsed_items.push((ordinal, requirement));
+                    } else if let Some((_, parent)) = items.last_mut() {
+                        if !parent.text.is_empty() && !item.text.is_empty() {
+                            parent.text.push(' ');
+                        }
+                        parent.text.push_str(&item.text);
+                    }
                 }
             }
             Event::Text(text) | Event::Code(text) => {
                 if let Some(heading) = &mut heading {
                     heading.push_str(&text);
                 }
-                if let Some(item) = &mut item {
+                if let Some((_, item)) = items.last_mut() {
                     item.text.push_str(&text);
+                }
+                if let Some((block, _)) = &mut indented_code_block {
+                    block.push_str(&text);
                 }
             }
             Event::SoftBreak | Event::HardBreak => {
                 if let Some(heading) = &mut heading {
                     heading.push(' ');
                 }
-                if let Some(item) = &mut item {
+                if let Some((_, item)) = items.last_mut() {
                     item.text.push(' ');
                 }
             }
@@ -301,8 +314,64 @@ fn parse_contract_doc_markdown_with_spans(
         }
     }
 
+    parsed_items.sort_by_key(|(ordinal, _)| *ordinal);
+    summary
+        .requirements
+        .extend(parsed_items.into_iter().map(|(_, requirement)| requirement));
+
     summary.ambiguous_requirements = ambiguous_requirements(&summary.requirements);
     summary
+}
+
+/// `CommonMark` interprets a four-space-indented bullet as an indented code
+/// block. Rustdoc authors nevertheless commonly indent requirement lists this
+/// way for source readability. Accept such a block only when every nonblank
+/// line is a requirement-list item, so actual code examples retain
+/// their normal meaning.
+fn parse_indented_requirement_block(
+    block: &str,
+    offset: usize,
+    line_spans: &[(std::ops::Range<usize>, Span)],
+) -> Vec<ContractRequirement> {
+    let items = block
+        .lines()
+        .filter(|line| !line.trim().is_empty())
+        .map(markdown_list_item_body)
+        .collect::<Option<Vec<_>>>();
+    let Some(items) = items else {
+        return Vec::new();
+    };
+
+    let span = span_for_offset(line_spans, offset);
+    items
+        .into_iter()
+        .filter_map(|text| {
+            parse_requirement_text(&MarkdownItem {
+                text: text.to_owned(),
+                span,
+            })
+        })
+        .collect()
+}
+
+pub(crate) fn markdown_list_item_body(line: &str) -> Option<&str> {
+    let line = line.trim_start();
+    if let Some(body) = line
+        .strip_prefix("- ")
+        .or_else(|| line.strip_prefix("* "))
+        .or_else(|| line.strip_prefix("+ "))
+    {
+        return Some(body);
+    }
+
+    let digits = line.bytes().take_while(u8::is_ascii_digit).count();
+    if digits == 0 || digits > 9 {
+        return None;
+    }
+    line[digits..]
+        .strip_prefix(['.', ')'])?
+        .strip_prefix(char::is_whitespace)
+        .map(str::trim_start)
 }
 
 struct MarkdownItem {
@@ -541,6 +610,56 @@ mod tests {
         assert_eq!(summary.requirements[0].name, "not-null[data]");
         assert!(summary.requirements[0].condition.contains("one allocation"));
         assert_eq!(summary.requirements[1].name, "valid[data]");
+    }
+
+    #[test]
+    fn named_requirements_are_extracted_at_every_list_depth() {
+        let summary = parse_safety_contract_doc_lines([
+            "# Safety",
+            "1. outer: outer condition",
+            "   - nested: nested condition",
+            "     + deep: deepest condition",
+            "2. final: final condition",
+        ]);
+
+        assert_eq!(
+            summary
+                .requirements
+                .iter()
+                .map(|requirement| requirement.name.as_str())
+                .collect::<Vec<_>>(),
+            ["outer", "nested", "deep", "final"]
+        );
+    }
+
+    #[test]
+    fn indented_requirement_bullets_are_not_mistaken_for_unstructured_code() {
+        let summary = parse_safety_contract_doc_lines([
+            "# Safety",
+            "    * req_1: first condition",
+            "    * req_2: second condition",
+        ]);
+
+        assert!(summary.has_docs);
+        assert_eq!(
+            summary
+                .requirements
+                .iter()
+                .map(|requirement| (requirement.name.as_str(), requirement.condition.as_str()))
+                .collect::<Vec<_>>(),
+            [("req_1", "first condition"), ("req_2", "second condition")]
+        );
+    }
+
+    #[test]
+    fn ordinary_indented_code_blocks_do_not_become_requirements() {
+        let summary = parse_safety_contract_doc_lines([
+            "# Safety",
+            "    let label = \"req_1: not a requirement\";",
+        ]);
+
+        assert!(summary.has_docs);
+        assert!(summary.requirements.is_empty());
     }
 
     #[test]

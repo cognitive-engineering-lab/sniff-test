@@ -1,0 +1,127 @@
+---
+source: crates/sniff-test/tests/fixtures.rs
+expression: "report[\"findings\"]"
+---
+[
+  {
+    "kind": "documented-panic",
+    "level": "warn",
+    "missing-requirements": [
+      "nonzero: the divisor must not be zero.",
+      "bounded: the input must be within the supported range.",
+      "audited: the call path must have been audited.",
+      "stable: the backing state must not change during the call."
+    ],
+    "owner": {
+      "crate": "ambiguous_markers",
+      "scope": "workspace"
+    },
+    "reason": "recorded `// PANIC:` evidence for call to `ambiguous_markers::complex_panic_contract` with a `# Panics` contract does not satisfy the remaining `# Panics` requirements",
+    "requirements": [
+      "nonzero: the divisor must not be zero.",
+      "bounded: the input must be within the supported range.",
+      "audited: the call path must have been audited.",
+      "stable: the backing state must not change during the call."
+    ],
+    "root": "ambiguous_markers::complex_panic_layouts",
+    "root-kind": "concrete",
+    "root-span": "src/lib.rs:44:1: 44:31",
+    "source-evidence": {
+      "status": "present"
+    },
+    "span": "src/lib.rs:53:5: 53:29",
+    "target": "ambiguous_markers::complex_panic_contract",
+    "trace": [
+      "src/lib.rs:53:5: 53:29: ambiguous_markers::complex_panic_layouts --direct-call-> ambiguous_markers::complex_panic_contract"
+    ]
+  },
+  {
+    "kind": "documented-panic",
+    "level": "warn",
+    "missing-requirements": [
+      "stable: the backing state must not change during the call."
+    ],
+    "owner": {
+      "crate": "ambiguous_markers",
+      "scope": "workspace"
+    },
+    "reason": "recorded `// PANIC:` evidence for call to `ambiguous_markers::complex_panic_contract` with a `# Panics` contract does not satisfy the remaining `# Panics` requirements",
+    "requirements": [
+      "nonzero: the divisor must not be zero.",
+      "bounded: the input must be within the supported range.",
+      "audited: the call path must have been audited.",
+      "stable: the backing state must not change during the call."
+    ],
+    "root": "ambiguous_markers::complex_panic_layouts",
+    "root-kind": "concrete",
+    "root-span": "src/lib.rs:44:1: 44:31",
+    "source-evidence": {
+      "status": "present"
+    },
+    "span": "src/lib.rs:60:5: 60:29",
+    "target": "ambiguous_markers::complex_panic_contract",
+    "trace": [
+      "src/lib.rs:60:5: 60:29: ambiguous_markers::complex_panic_layouts --direct-call-> ambiguous_markers::complex_panic_contract"
+    ]
+  },
+  {
+    "function": "ambiguous_markers::complex_safety_layouts",
+    "kind": "unsafe-call-missing-requirements",
+    "level": "warn",
+    "missing-requirements": [
+      "aligned: the buffer must satisfy the required alignment.",
+      "lifetime: the buffer must remain live for the duration of the call."
+    ],
+    "owner": {
+      "crate": "ambiguous_markers",
+      "scope": "workspace"
+    },
+    "reason": "recorded `// SAFETY:` evidence for unsafe call to `ambiguous_markers::complex_safety_contract` does not satisfy the remaining `# Safety` requirements",
+    "requirements": [
+      "allocation: the caller must own the buffer.",
+      "initialized: every byte must be initialized.",
+      "aligned: the buffer must satisfy the required alignment.",
+      "lifetime: the buffer must remain live for the duration of the call."
+    ],
+    "root": "ambiguous_markers::complex_safety_layouts",
+    "root-kind": "concrete",
+    "root-span": "src/lib.rs:23:1: 23:32",
+    "source-evidence": {
+      "status": "present"
+    },
+    "span": "src/lib.rs:40:9: 40:34",
+    "target": "ambiguous_markers::complex_safety_contract",
+    "trace": [
+      "src/lib.rs:40:9: 40:34: ambiguous_markers::complex_safety_layouts --direct-call-> ambiguous_markers::complex_safety_contract"
+    ]
+  },
+  {
+    "function": "ambiguous_markers::foo",
+    "kind": "unsafe-call-missing-requirements",
+    "level": "warn",
+    "missing-requirements": [
+      "req_1: content",
+      "req_2: content"
+    ],
+    "owner": {
+      "crate": "ambiguous_markers",
+      "scope": "workspace"
+    },
+    "reason": "recorded `// SAFETY:` evidence for unsafe call to `ambiguous_markers::multi_safety_requirements_with_asterisks_and_ident` does not satisfy the remaining `# Safety` requirements",
+    "requirements": [
+      "req_1: content",
+      "req_2: content"
+    ],
+    "root": "ambiguous_markers::foo",
+    "root-kind": "concrete",
+    "root-span": "src/lib.rs:1:1: 1:13",
+    "source-evidence": {
+      "status": "present"
+    },
+    "span": "src/lib.rs:18:9: 18:61",
+    "target": "ambiguous_markers::multi_safety_requirements_with_asterisks_and_ident",
+    "trace": [
+      "src/lib.rs:18:9: 18:61: ambiguous_markers::foo --direct-call-> ambiguous_markers::multi_safety_requirements_with_asterisks_and_ident"
+    ]
+  }
+]

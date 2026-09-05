@@ -9,7 +9,7 @@ use rustc_span::{ExpnId, SourceFile, Span};
 
 use crate::artifact::UnverifiedMarkerProbeReason;
 use crate::config::MarkerProbing;
-use crate::contracts::MarkerSatisfaction;
+use crate::contracts::{MarkerSatisfaction, markdown_list_item_body};
 use crate::namespace::definition_backed_macro;
 
 #[derive(Debug, Clone, Copy)]
@@ -776,11 +776,7 @@ fn append_reason_line(reason: &mut String, line: &str) {
 }
 
 fn parse_satisfaction_bullet(line: &str) -> Option<MarkerSatisfaction> {
-    let line = line.trim_start();
-    let body = line
-        .strip_prefix("- ")
-        .or_else(|| line.strip_prefix("* "))
-        .or_else(|| line.strip_prefix("+ "))?;
+    let body = markdown_list_item_body(line)?;
     let (name, reason) = parse_marker_body(body);
     name.map(|requirement| MarkerSatisfaction {
         requirement: Some(requirement),
@@ -889,6 +885,25 @@ mod tests {
                     reason: String::from("checked the third precondition."),
                 },
             ]
+        );
+    }
+
+    #[test]
+    fn marker_parses_ordered_and_mixed_nested_requirement_bullets() {
+        let lines = [
+            String::from("    // PANIC:"),
+            String::from("    // 1. outer: checked the outer condition."),
+            String::from("    //    - nested: checked the nested condition."),
+            String::from("    //      + deep: checked the deepest condition."),
+            String::from("    // 2) final: checked the final condition."),
+        ];
+
+        assert_eq!(
+            comment_block_satisfactions_for_panic(&lines)
+                .into_iter()
+                .map(|satisfaction| satisfaction.requirement.unwrap())
+                .collect::<Vec<_>>(),
+            ["outer", "nested", "deep", "final"]
         );
     }
 
