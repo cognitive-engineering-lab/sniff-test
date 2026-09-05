@@ -7,7 +7,7 @@ use std::process::{Command, Output};
 
 use common::{
     COMPILER_DEBUG_FRAGMENTS, CommandOutput, clean_cargo_package_env, copy_fixture_dir,
-    lock_nested_cargo, repo_root, rustc_sysroot,
+    lock_nested_cargo, normalize_path, repo_root, rustc_sysroot,
 };
 
 struct Case {
@@ -137,7 +137,7 @@ cli_cases! {
 fn unsafe_precondition_helpers_do_not_export_panic_contracts() {
     let repo = repo_root();
     let binary = PathBuf::from(env!("CARGO_BIN_EXE_cargo-sniff-test"));
-    let (output, _) = run_case(
+    let (output, _, _temp) = run_case(
         &repo,
         &binary,
         "unsafe_precondition_helpers_do_not_export_panic_contracts",
@@ -171,7 +171,7 @@ fn config_found_from_subdirectory() {
     let repo = repo_root();
     let binary = PathBuf::from(env!("CARGO_BIN_EXE_cargo-sniff-test"));
     let case = Case::new().working_dir("src").denied();
-    let (output, _) = run_case(
+    let (output, _, _temp) = run_case(
         &repo,
         &binary,
         "config_found_from_subdirectory",
@@ -200,7 +200,7 @@ fn rustflags_env_does_not_disable_analysis() {
     let case = Case::new()
         .rustflags("--cfg sniff_test_cli_user_flag")
         .denied();
-    let (output, _) = run_case(
+    let (output, _, _temp) = run_case(
         &repo,
         &binary,
         "rustflags_env_does_not_disable_analysis",
@@ -2046,7 +2046,7 @@ fn run_named_case(name: &'static str, fixture_name: &'static str, case: &Case) {
     let repo = repo_root();
     let sysroot = rustc_sysroot();
     let binary = PathBuf::from(env!("CARGO_BIN_EXE_cargo-sniff-test"));
-    let (output, fixture_root) = run_case(&repo, &binary, name, fixture_name, case);
+    let (output, fixture_root, _temp) = run_case(&repo, &binary, name, fixture_name, case);
 
     let expected_exit = if case.denied { 101 } else { 0 };
     assert_eq!(
@@ -2106,7 +2106,7 @@ fn run_case(
     name: &str,
     fixture_name: &str,
     case: &Case,
-) -> (CommandOutput, PathBuf) {
+) -> (CommandOutput, PathBuf, tempfile::TempDir) {
     let fixture = repo.join("tests/fixtures").join(fixture_name);
     assert!(
         fixture.exists(),
@@ -2134,7 +2134,7 @@ fn run_case(
     let working_dir = root.join(case.working_dir.unwrap_or(crate_dir));
     let _cargo_guard = lock_nested_cargo();
     let output = run_cargo_sniff_test(binary, &working_dir, name, case);
-    (output, root)
+    (output, root, temp)
 }
 
 fn run_cargo_sniff_test(
@@ -2198,13 +2198,12 @@ fn normalize_output(text: &str, fixture_root: &Path, sysroot: &str) -> String {
 }
 
 fn normalize_line(line: &str, fixture_root: &Path, sysroot: &str) -> String {
-    let mut line = line
-        .replace(&fixture_root.display().to_string(), "[FIXTURE]")
-        .replace(sysroot, "[SYSROOT]");
+    let mut line = normalize_path(line, fixture_root, "[FIXTURE]");
+    line = normalize_path(&line, Path::new(sysroot), "[SYSROOT]");
     // Cases running from the temp dir itself leak its per-run name, such as
     // the config-discovery notice.
     if let Some(parent) = fixture_root.parent() {
-        line = line.replace(&parent.display().to_string(), "[TEMP]");
+        line = normalize_path(&line, parent, "[TEMP]");
     }
 
     if let Some((prefix, _time)) = line.split_once(" target(s) in ") {

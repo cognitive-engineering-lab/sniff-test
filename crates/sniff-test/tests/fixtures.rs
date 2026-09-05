@@ -8,7 +8,7 @@ use serde_json::Value;
 
 use common::{
     COMPILER_DEBUG_FRAGMENTS, CommandOutput, clean_cargo_package_env, copy_fixture_dir,
-    lock_nested_cargo, repo_root, rustc_sysroot,
+    lock_nested_cargo, normalize_path, repo_root, rustc_sysroot,
 };
 
 struct Case {
@@ -418,9 +418,8 @@ fn normalize_json(value: &mut Value, fixture_root: &Path, sysroot: &str) {
             }
         }
         Value::String(text) => {
-            *text = text
-                .replace(&fixture_root.display().to_string(), "[FIXTURE]")
-                .replace(sysroot, "[SYSROOT]");
+            *text = normalize_path(text, fixture_root, "[FIXTURE]");
+            *text = normalize_path(text, Path::new(sysroot), "[SYSROOT]");
         }
         Value::Null | Value::Bool(_) | Value::Number(_) => {}
     }

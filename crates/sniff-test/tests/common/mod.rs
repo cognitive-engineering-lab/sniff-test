@@ -117,3 +117,51 @@ pub fn copy_fixture_dir(source: &Path, destination: &Path) -> io::Result<()> {
     }
     Ok(())
 }
+
+/// Replaces both the path as supplied and its filesystem-canonical form.
+///
+/// On macOS, temporary directories are commonly reported as `/var/...` by
+/// `tempfile` but canonicalized to `/private/var/...` by rustc. Replace the
+/// longer form first so replacing `/var/...` cannot leave a `/private` prefix.
+pub fn normalize_path(text: &str, path: &Path, replacement: &str) -> String {
+    let displayed = path.to_string_lossy().into_owned();
+    let canonical = path
+        .canonicalize()
+        .ok()
+        .map(|path| path.to_string_lossy().into_owned());
+
+    let mut forms = [canonical.as_deref(), Some(displayed.as_str())]
+        .into_iter()
+        .flatten()
+        .collect::<Vec<_>>();
+    forms.sort_unstable_by_key(|form| std::cmp::Reverse(form.len()));
+    forms.dedup();
+
+    forms.into_iter().fold(text.to_owned(), |text, form| {
+        text.replace(form, replacement)
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::normalize_path;
+
+    #[test]
+    fn path_normalization_handles_lexical_and_canonical_forms() {
+        let temp = tempfile::tempdir().expect("temporary directory should be created");
+        let fixture = temp.path().join("fixture");
+        std::fs::create_dir_all(&fixture).expect("fixture directory should be created");
+        let canonical = fixture
+            .canonicalize()
+            .expect("fixture directory should be canonicalized");
+
+        assert_eq!(
+            normalize_path(
+                &format!("{} and {}", fixture.display(), canonical.display()),
+                &fixture,
+                "[FIXTURE]",
+            ),
+            "[FIXTURE] and [FIXTURE]"
+        );
+    }
+}

@@ -17,7 +17,7 @@ expression: "report[\"findings\"]"
     "root-span": "src/lib.rs:51:1: 51:48",
     "span": "src/lib.rs:47:1: 48:1",
     "trace": [
-      "src/lib.rs:54:13: 54:29: ambiguous_safety::reused_marker_across_generic_instances --direct-call-> ambiguous_safety::read_copy",
+      "src/lib.rs:55:13: 55:29: ambiguous_safety::reused_marker_across_generic_instances --direct-call-> ambiguous_safety::read_copy",
       "src/lib.rs:48:14: 48:35: ambiguous_safety::read_copy --direct-call-> core::ptr::read"
     ]
   }

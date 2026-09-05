@@ -53,3 +53,12 @@ fn named_panic_contract() {}
 ///    2. The call path must have been audited.
 /// 2. The backing state must not change during the call.
 fn unnamed_panic_contract() {}
+
+
+pub fn std_lib_with_sub_obligations() {
+    let v = [1, 2, 3];
+    // SAFETY: ptr and len are valid for the lifetime of v.
+    let _ = unsafe {
+        std::slice::from_raw_parts(v.as_ptr(), v.len())
+    };
+} 
