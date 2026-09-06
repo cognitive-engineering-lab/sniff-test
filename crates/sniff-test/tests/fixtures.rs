@@ -166,6 +166,9 @@ fixture_cases! {
     "std_trait_impl_glob" => {
         std_trait_impl_glob => Case::new();
     }
+    "std_collection_init" => {
+        std_collection_init => Case::new();
+    }
     "unsafe_ops" => {
         unsafe_ops => Case::new();
     }

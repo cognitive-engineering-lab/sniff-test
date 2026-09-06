@@ -1278,6 +1278,42 @@ mod tests {
     }
 
     #[test]
+    fn example_manifest_trusts_standard_library_crates_while_empty_config_does_not() {
+        let initialized = SniffTestConfig::from_manifest_str(EXAMPLE_MANIFEST)
+            .expect("the example manifest should parse");
+        for candidates in [
+            candidates(&["core", "core::slice::raw::from_raw_parts"]),
+            candidates(&["std", "std::collections::hash::map::HashMap::<K, V>::new"]),
+        ] {
+            assert_eq!(
+                initialized
+                    .panics
+                    .panic_boundary_policy_candidates(&candidates),
+                PanicBoundaryPolicy::TrustedBoundary
+            );
+            assert!(
+                initialized
+                    .safety
+                    .trusts_safety_boundary_candidates(&candidates)
+            );
+        }
+
+        let empty = SniffTestConfig::default();
+        let std_candidates = candidates(&["std", "std::collections::HashMap::new"]);
+        assert_eq!(
+            empty
+                .panics
+                .panic_boundary_policy_candidates(&std_candidates),
+            PanicBoundaryPolicy::Normal
+        );
+        assert!(
+            !empty
+                .safety
+                .trusts_safety_boundary_candidates(&std_candidates)
+        );
+    }
+
+    #[test]
     fn default_safety_lints_keep_findings_visible_without_failing() {
         let lints = SafetyConfig::default().lints;
 

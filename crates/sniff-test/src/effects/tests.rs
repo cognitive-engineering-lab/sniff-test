@@ -2489,6 +2489,75 @@ fn trusted_target_does_not_suppress_local_unsafe_invocation_source() {
 }
 
 #[test]
+fn configured_std_boundary_keeps_direct_contracts_and_unsafe_calls_visible() {
+    let root = stable_function(0);
+    let std_api = stable_function(1);
+    let mut std_body = body(
+        std_api,
+        "std::api::documented_unsafe",
+        Vec::new(),
+        vec![assert_effect(0), unsafe_effect(1)],
+        vec![
+            contract(0, std_api, AnnotationFactKind::PanicContract, &[]),
+            contract(1, std_api, AnnotationFactKind::SafetyContract, &[]),
+        ],
+    );
+    std_body
+        .attributes
+        .namespace_candidates
+        .insert(0, String::from("std"));
+    let (artifact, graph, annotations) = setup(vec![
+        body(
+            root,
+            "sample::root",
+            vec![call(
+                0,
+                0,
+                target(std_api, "std::api::documented_unsafe"),
+                true,
+            )],
+            Vec::new(),
+            Vec::new(),
+        ),
+        std_body,
+    ]);
+    let config = SniffTestConfig::from_manifest_str(
+        r#"
+            [panics]
+            trusted-boundary-namespaces = ["core", "std"]
+
+            [safety]
+            trusted-boundary-namespaces = ["core", "std"]
+        "#,
+    )
+    .expect("standard-library trusted boundary configuration");
+
+    let panic = probe_panic(&artifact, &graph, &annotations, &config.panics);
+    let safety = probe_safety(&artifact, &graph, &annotations, &config.safety);
+    let comments = probe_comments(&artifact, &graph, &annotations, &config);
+    let panic_trace = EffectEngine::new(&graph).trace(&panic);
+    let safety_trace = EffectEngine::new(&graph).trace(&safety);
+    let comment_trace = EffectEngine::new(&graph.comment_graph()).trace(&comments);
+
+    assert_eq!(panic_trace.handled().count(), 1);
+    assert_eq!(panic_trace.escaped().count(), 0);
+    assert_eq!(safety_trace.handled().count(), 1);
+    assert_eq!(
+        safety_trace
+            .escaped()
+            .map(|(origin, _)| *origin)
+            .collect::<Vec<_>>(),
+        vec![SafetyOrigin::Invocation {
+            invocation: graph.invocation_for_raw_call(root, CallId::new(0)).unwrap(),
+            call: CallId::new(0),
+        }]
+    );
+    assert_eq!(comments.contract_count(CommentDomain::Panic), 1);
+    assert_eq!(comments.contract_count(CommentDomain::Safety), 1);
+    assert_eq!(comment_trace.escaped().count(), 2);
+}
+
+#[test]
 fn trusted_function_owner_terminates_internal_safety_operation() {
     let root = stable_function(0);
     let trusted_owner = stable_function(1);
