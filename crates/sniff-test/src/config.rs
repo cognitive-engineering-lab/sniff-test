@@ -1283,6 +1283,7 @@ mod tests {
             .expect("the example manifest should parse");
         for candidates in [
             candidates(&["core", "core::slice::raw::from_raw_parts"]),
+            candidates(&["alloc", "alloc::vec::Vec::<T>::new"]),
             candidates(&["std", "std::collections::hash::map::HashMap::<K, V>::new"]),
         ] {
             assert_eq!(
