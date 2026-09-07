@@ -11,6 +11,8 @@ expression: "report[\"findings\"]"
     ],
     "owner": {
       "crate": "contract_overrides",
+      "package-name": "contract-overrides",
+      "package-version": "0.1.0",
       "scope": "workspace"
     },
     "reason": "call to `contract_overrides::panic_contract` with a `# Panics` contract has no recorded `// PANIC:` evidence",
@@ -38,6 +40,8 @@ expression: "report[\"findings\"]"
     ],
     "owner": {
       "crate": "contract_overrides",
+      "package-name": "contract-overrides",
+      "package-version": "0.1.0",
       "scope": "workspace"
     },
     "reason": "recorded `// SAFETY:` evidence for unsafe call to `contract_overrides::synthetic_read` does not satisfy the remaining `# Safety` requirements",

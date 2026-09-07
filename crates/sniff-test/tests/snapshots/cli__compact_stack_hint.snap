@@ -7,24 +7,26 @@ stdout:
 <empty>
 stderr:
     Checking safe-markers v0.1.0 ([FIXTURE])
-error: [sniff-test::panics::panic-invocation] panic invocation to `core::panicking::panic` has no recorded `// PANIC:` evidence
-  --> src/lib.rs:21:5
-   |
-21 |     assert!(flag);
-   |     ^^^^^^^^^^^^^
-   |
-   = note: reachable from `safe_markers::unsafe_call` to `core::panicking::panic`
-   = note: set `show-full-stack-trace = true` under `[analysis]` in sniff-test.toml to show every reachability step
-   = help: add `// PANIC:` directly above this source after establishing the invariant that contains this panic path
-
-error: [sniff-test::panics::compiler-assert-division-by-zero] compiler assertion (division by zero) has no recorded `// PANIC:` evidence
+error: [sniff-test::panics::compiler-assert-division-by-zero] this division may panic
  --> src/lib.rs:8:5
   |
 8 |     total / denominator
-  |     ^^^^^^^^^^^^^^^^^^^
+  |     ^^^^^^^^^^^^^^^^^^^ the divisor may be zero
   |
-  = note: reachable from `safe_markers::unsafe_ratio` to `compiler assert division by zero`
-  = note: set `show-full-stack-trace = true` under `[analysis]` in sniff-test.toml to show every reachability step
-  = help: add `// PANIC:` directly above this source after establishing the invariant that contains this panic path
+  = help: document when this panic can occur under `# Panics`, or add `// PANIC:` if an invariant rules it out
+  = help: for the full explanation, run `'[SNIFF-TEST]' explain cz7w --cache-dir '[FIXTURE]/target/sniff-test/sniff-test-cache/v[FORMAT]'`
+
+error: [sniff-test::panics::panic-invocation] this panic is not accounted for on every path
+  --> src/lib.rs:21:5
+   |
+21 |     assert!(flag);
+   |     ^^^^^^^^^^^^^ the panic originates here
+   |
+help: account for this path at this call with `// PANIC:`, or document it under `# Panics`
+  --> src/lib.rs:17:5
+   |
+17 |     helper(flag);
+   |     ^^^^^^^^^^^^
+   = help: for the full explanation, run `'[SNIFF-TEST]' explain z759 --cache-dir '[FIXTURE]/target/sniff-test/sniff-test-cache/v[FORMAT]'`
 
 error: could not compile `safe-markers` (lib) due to 2 previous errors

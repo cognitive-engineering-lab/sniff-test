@@ -8,6 +8,8 @@ expression: "report[\"findings\"]"
     "level": "warn",
     "owner": {
       "crate": "dependency_app",
+      "package-name": "dependency-app",
+      "package-version": "0.1.0",
       "scope": "workspace"
     },
     "reason": "call to `dependency_obligation::documented` with a `# Panics` contract has no recorded `// PANIC:` evidence",

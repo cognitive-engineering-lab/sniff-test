@@ -12,6 +12,8 @@ expression: "report[\"findings\"]"
     ],
     "owner": {
       "crate": "partial_effect_requirements",
+      "package-name": "partial-effect-requirements",
+      "package-version": "0.1.0",
       "scope": "dependency"
     },
     "reason": "dependency crate `partial_effect_requirements` has no recorded `// SAFETY:` evidence for call to `partial_effect_requirements::requires_initialized_exclusive_state` with a `# Safety` contract",

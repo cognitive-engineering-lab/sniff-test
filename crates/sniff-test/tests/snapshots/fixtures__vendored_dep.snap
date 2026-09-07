@@ -8,6 +8,8 @@ expression: "report[\"findings\"]"
     "level": "warn",
     "owner": {
       "crate": "vendored_app",
+      "package-name": "vendored-app",
+      "package-version": "0.1.0",
       "scope": "workspace"
     },
     "reason": "call to `vendored::checked` with a `# Panics` contract has no recorded `// PANIC:` evidence",

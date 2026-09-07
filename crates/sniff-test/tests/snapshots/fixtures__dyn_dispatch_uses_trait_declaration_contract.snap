@@ -8,6 +8,8 @@ expression: "report[\"findings\"]"
     "level": "deny",
     "owner": {
       "crate": "dyn_dispatch_call_site",
+      "package-name": "dyn-dispatch-call-site",
+      "package-version": "0.1.0",
       "scope": "workspace"
     },
     "reason": "call to `dyn_dispatch_call_site::Runner::run` with a `# Panics` contract has no recorded `// PANIC:` evidence",
@@ -28,6 +30,8 @@ expression: "report[\"findings\"]"
     "level": "deny",
     "owner": {
       "crate": "dyn_dispatch_call_site",
+      "package-name": "dyn-dispatch-call-site",
+      "package-version": "0.1.0",
       "scope": "workspace"
     },
     "reason": "call to `dyn_dispatch_call_site::Runner::run` with a `# Panics` contract has no recorded `// PANIC:` evidence",

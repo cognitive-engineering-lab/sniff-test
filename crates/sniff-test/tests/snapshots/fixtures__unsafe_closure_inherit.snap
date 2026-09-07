@@ -9,6 +9,8 @@ expression: "report[\"findings\"]"
     "level": "warn",
     "owner": {
       "crate": "unsafe_closure_inherit",
+      "package-name": "unsafe-closure-inherit",
+      "package-version": "0.1.0",
       "scope": "workspace"
     },
     "reason": "could not verify `// SAFETY:` evidence for unsafe call to `unsafe_closure_inherit::dangerous` in workspace crate `unsafe_closure_inherit`: no usable span was available for marker association",

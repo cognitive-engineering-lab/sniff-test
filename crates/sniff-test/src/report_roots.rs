@@ -80,17 +80,19 @@ pub fn select_report_roots<'tcx>(
         }
         ReportRootSet::Explicit(configured_roots) => {
             let mut missing_roots = Vec::new();
+            let mut missing_paths = HashSet::new();
             for configured_root in configured_roots {
                 match find_local_fn_by_path(tcx, configured_root.path()) {
                     Some(local) => {
                         roots.insert(local);
                     }
-                    None => {
+                    None if missing_paths.insert(configured_root.path()) => {
                         missing_roots.push(MissingReportRoot {
                             path: configured_root.path().to_owned(),
                             source_span: configured_root.source_span(),
                         });
                     }
+                    None => {}
                 }
             }
 

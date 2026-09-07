@@ -9,6 +9,8 @@ expression: "report[\"findings\"]"
     "level": "warn",
     "owner": {
       "crate": "safety_callable_sites",
+      "package-name": "safety-callable-sites",
+      "package-version": "0.1.0",
       "scope": "workspace"
     },
     "reason": "unsafe call to `unsafe function pointer` has no recorded `// SAFETY:` evidence",

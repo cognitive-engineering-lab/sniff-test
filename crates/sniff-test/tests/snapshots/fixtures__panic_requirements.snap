@@ -12,6 +12,8 @@ expression: "report[\"findings\"]"
     ],
     "owner": {
       "crate": "panic_requirements",
+      "package-name": "panic_requirements",
+      "package-version": "0.1.0",
       "scope": "workspace"
     },
     "reason": "recorded `// PANIC:` evidence for call to `panic_requirements::documented_ratio` with a `# Panics` contract does not satisfy the remaining `# Panics` requirements",
@@ -37,6 +39,8 @@ expression: "report[\"findings\"]"
     "level": "warn",
     "owner": {
       "crate": "panic_requirements",
+      "package-name": "panic_requirements",
+      "package-version": "0.1.0",
       "scope": "workspace"
     },
     "reason": "call to `panic_requirements::documented_contract` with a `# Panics` contract has no recorded `// PANIC:` evidence",

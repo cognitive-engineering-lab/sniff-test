@@ -2686,6 +2686,6 @@ mod tests {
     #[test]
     fn current_artifact_facts_require_definition_sources() {
         serde_json::from_str::<ArtifactFacts>(r#"{"functions":[],"source-files":[]}"#)
-            .expect_err("cache v24 requires explicit definition provenance");
+            .expect_err("current caches require explicit definition provenance");
     }
 }

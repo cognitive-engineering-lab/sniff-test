@@ -9,6 +9,8 @@ expression: "report[\"findings\"]"
     "level": "deny",
     "owner": {
       "crate": "ambiguous_safety",
+      "package-name": "ambiguous-safety",
+      "package-version": "0.1.0",
       "scope": "workspace"
     },
     "reason": "`ambiguous_safety::read_duplicate` has multiple # Safety requirements named `valid ptr`",

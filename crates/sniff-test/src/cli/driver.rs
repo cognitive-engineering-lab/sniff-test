@@ -15,16 +15,21 @@ use anyhow::Context;
 use rustc_hir::def_id::{CrateNum, LOCAL_CRATE};
 use rustc_middle::ty::TyCtxt;
 use rustc_session::config::CrateType;
+use rustc_span::Span;
 use rustc_span::symbol::Symbol;
 
-use super::args::{CrateOutputScope, MessageFormat, SniffTestArgs};
+use super::args::{CrateOutputScope, LocalPackageProvenance, MessageFormat, SniffTestArgs};
 use super::diagnostics::emit_finding_diagnostic;
+use super::explanations::{
+    ArtifactExplanation, DiagnosticGroupHandle, ExplanationStore, StoredDiagnostic,
+};
 use super::findings::{
-    Finding, aggregate_human_findings, collect_report_root_findings, resolve_findings,
+    DiagnosticMessage, Finding, FindingDiagnostic, ResolvedFinding,
+    aggregate_human_findings_with_source_packages, collect_report_root_findings, resolve_findings,
 };
 use super::interpretation::interpret_workspace;
 use super::plugin::rustc_version;
-use super::report::{AnalysisArtifactReport, REPORT_FORMAT_VERSION, ReportArtifact};
+use super::report::{AnalysisArtifactReport, REPORT_FORMAT_VERSION, ReportArtifact, render_span};
 
 #[allow(
     clippy::too_many_lines,
@@ -78,11 +83,9 @@ pub(crate) fn analyze_crate(
             return;
         }
     };
-    let local_facts = if let Some(artifact) = local_cache_artifact_info(
-        tcx,
-        output_scope,
-        package_provenance.package_version.as_deref(),
-    ) {
+    let local_facts = if let Some(artifact) =
+        local_cache_artifact_info(tcx, output_scope, &package_provenance)
+    {
         let cache = match ArtifactAnalysisCache::new(
             env!("CARGO_PKG_VERSION"),
             rustc_version.clone(),
@@ -123,7 +126,7 @@ pub(crate) fn analyze_crate(
         &dependency_graph,
         &selection.roots,
         config,
-        package_provenance.package_version.as_deref(),
+        &package_provenance,
     ) {
         Ok(findings) => findings,
         Err(error) => {
@@ -143,41 +146,141 @@ pub(crate) fn analyze_crate(
     findings.extend(interpreted_findings);
     let report = build_report(tcx, config, findings);
     if emit_diagnostics {
-        for finding in aggregate_human_findings(&report.findings) {
+        let human_findings = aggregate_human_findings_with_source_packages(
+            &report.findings,
+            package_provenance.manifest_dir.as_deref(),
+            args.cargo_target_dir.as_deref(),
+            &args.source_packages,
+        );
+        let diagnostic_groups = match persist_diagnostic_explanations(tcx, args, &human_findings) {
+            Ok(diagnostic_groups) => diagnostic_groups,
+            Err(error) => {
+                let message = format!(
+                    "failed to persist diagnostic explanations; emitting full diagnostics instead: {error}"
+                );
+                emit_tool_warning(tcx, message);
+                None
+            }
+        };
+        let explanation_cache_dir = args.cache_dir();
+        for (index, finding) in human_findings.into_iter().enumerate() {
             emit_finding_diagnostic(
                 tcx,
                 finding.level,
                 &finding.finding.kind.lint_code(),
                 &finding.finding.diagnostic,
+                diagnostic_groups
+                    .as_ref()
+                    .and_then(|diagnostic_groups| diagnostic_groups.get(index)),
+                &explanation_cache_dir,
+                args.frontend_executable.as_deref(),
             );
         }
     }
     emit_report(args, &report);
 }
 
-#[derive(Debug, Default)]
-struct LocalPackageProvenance {
-    manifest_dir: Option<PathBuf>,
-    package_version: Option<String>,
+fn persist_diagnostic_explanations(
+    tcx: TyCtxt<'_>,
+    args: &SniffTestArgs,
+    findings: &[ResolvedFinding],
+) -> Result<Option<Vec<DiagnosticGroupHandle>>, super::explanations::ExplanationStoreError> {
+    let Some(staging_dir) = args.explanation_staging_dir.as_deref() else {
+        return Ok(None);
+    };
+    let mut group_handles = Vec::with_capacity(findings.len());
+    let mut diagnostics = Vec::with_capacity(findings.len());
+    for finding in findings {
+        let group = finding.finding.diagnostic_group_key();
+        let diagnostic = StoredDiagnostic::new(
+            group.clone(),
+            diagnostic_summary(finding),
+            diagnostic_explanation(&finding.finding.diagnostic, |span| render_span(tcx, span)),
+        );
+        group_handles.push(group.handle());
+        diagnostics.push(diagnostic);
+    }
+    let artifact = ArtifactExplanation::new(diagnostics)?;
+    ExplanationStore::write_sidecar(staging_dir, &artifact)?;
+    Ok(Some(group_handles))
 }
 
-impl LocalPackageProvenance {
-    fn from_args(args: &SniffTestArgs) -> Self {
-        if !args.under_cargo {
-            return Self::default();
+fn diagnostic_summary(finding: &ResolvedFinding) -> String {
+    format!(
+        "{}: [{}] {}",
+        lint_level_label(finding.level),
+        finding.finding.kind.lint_code(),
+        finding.finding.diagnostic.message
+    )
+}
+
+fn diagnostic_explanation(
+    diagnostic: &FindingDiagnostic,
+    render_location: impl Fn(Span) -> String,
+) -> String {
+    let mut lines = Vec::new();
+    let mut trace = Vec::new();
+    let mut help = Vec::new();
+    if let Some(span) = diagnostic.span {
+        lines.push(format!("--> {}", render_location(span)));
+    }
+    for message in &diagnostic.messages {
+        match message {
+            DiagnosticMessage::Note(note) => {
+                lines.push(format!("= note: {note}"));
+            }
+            DiagnosticMessage::SpanNote(span, note) => {
+                lines.push(format!("= note at {}: {note}", render_location(*span)));
+            }
+            DiagnosticMessage::SpanLabel(span, label) => {
+                lines.push(format!("= location {}: {label}", render_location(*span)));
+            }
+            DiagnosticMessage::SpanHelp(span, message) => {
+                help.push(format!("= help at {}: {message}", render_location(*span)));
+            }
+            DiagnosticMessage::Help(message) => {
+                help.push(format!("= help: {message}"));
+            }
+            DiagnosticMessage::TraceStep {
+                span,
+                index,
+                total,
+                description,
+            } => {
+                trace.push(format!("  {index}/{total} {description}"));
+                if let Some(span) = span {
+                    trace.push(format!("      at {}", render_location(*span)));
+                }
+            }
         }
-        Self {
-            manifest_dir: std::env::var_os("CARGO_MANIFEST_DIR").map(PathBuf::from),
-            package_version: std::env::var("CARGO_PKG_VERSION")
-                .ok()
-                .filter(|version| !version.trim().is_empty()),
-        }
+    }
+    if !trace.is_empty() {
+        lines.push(String::new());
+        lines.push(String::from("= trace (report root -> effect source):"));
+        lines.extend(trace);
+    }
+    if !help.is_empty() {
+        lines.push(String::new());
+        lines.extend(help);
+    }
+    lines.join("\n")
+}
+
+const fn lint_level_label(level: crate::config::LintLevel) -> &'static str {
+    match level {
+        crate::config::LintLevel::Allow => "allowed",
+        crate::config::LintLevel::Warn => "warning",
+        crate::config::LintLevel::Deny => "error",
     }
 }
 
 fn emit_tool_error(tcx: TyCtxt<'_>, message: impl Into<String>) {
     let diagnostic = tcx.dcx().struct_err(message.into());
     let _ = diagnostic.emit();
+}
+
+fn emit_tool_warning(tcx: TyCtxt<'_>, message: impl Into<String>) {
+    tcx.dcx().struct_warn(message.into()).emit();
 }
 
 fn verify_dependency_marker_sources(
@@ -292,7 +395,7 @@ pub(crate) fn is_proc_macro(tcx: TyCtxt<'_>) -> bool {
 fn local_cache_artifact_info(
     tcx: TyCtxt<'_>,
     output_scope: CrateOutputScope,
-    package_version: Option<&str>,
+    package: &LocalPackageProvenance,
 ) -> Option<ArtifactInfo> {
     // Only outputs rustc can later load as crates need sidecars. In particular,
     // `cargo check` asks executable units to emit metadata, but their crate
@@ -301,7 +404,8 @@ fn local_cache_artifact_info(
     has_loadable_crate_output(tcx.crate_types()).then(|| ArtifactInfo {
         id: rustc_artifact_id(tcx, LOCAL_CRATE),
         crate_name: tcx.crate_name(LOCAL_CRATE).to_string(),
-        package_version: package_version.map(str::to_owned),
+        package_name: package.package_name.clone(),
+        package_version: package.package_version.clone(),
         scope: output_scope.artifact_scope(),
     })
 }
@@ -445,11 +549,69 @@ pub(crate) fn load_config(
 mod tests {
     use std::path::{Path, PathBuf};
 
-    use rustc_session::config::CrateType;
-
     use crate::artifact_cache::ArtifactScope;
+    use rustc_session::config::CrateType;
+    use rustc_span::DUMMY_SP;
 
-    use super::{CrateOutputScope, describe_candidate_crates, has_loadable_crate_output};
+    use super::{
+        CrateOutputScope, DiagnosticMessage, FindingDiagnostic, describe_candidate_crates,
+        diagnostic_explanation, has_loadable_crate_output,
+    };
+
+    #[test]
+    fn explanation_separates_context_paths_and_help_without_losing_locations() {
+        let diagnostic = FindingDiagnostic {
+            span: Some(DUMMY_SP),
+            message: String::from("summary"),
+            messages: vec![
+                DiagnosticMessage::SpanLabel(DUMMY_SP, String::from("source")),
+                DiagnosticMessage::TraceStep {
+                    span: Some(DUMMY_SP),
+                    index: 1,
+                    total: 2,
+                    description: String::from("app::entry --direct-call-> app::parse"),
+                },
+                DiagnosticMessage::Help(String::from("fix the source")),
+                DiagnosticMessage::SpanNote(DUMMY_SP, String::from("contract")),
+                DiagnosticMessage::TraceStep {
+                    span: None,
+                    index: 2,
+                    total: 2,
+                    description: String::from("app::parse --assert-> bounds check"),
+                },
+                DiagnosticMessage::Note(String::from("additional evidence")),
+                DiagnosticMessage::SpanHelp(DUMMY_SP, String::from("fix this call")),
+            ],
+            compact_messages: None,
+        };
+        assert_eq!(
+            diagnostic_explanation(&diagnostic, |_| String::from("src/lib.rs:2:5")),
+            "--> src/lib.rs:2:5\n\
+             = location src/lib.rs:2:5: source\n\
+             = note at src/lib.rs:2:5: contract\n\
+             = note: additional evidence\n\n\
+             = trace (report root -> effect source):\n  \
+             1/2 app::entry --direct-call-> app::parse\n      \
+             at src/lib.rs:2:5\n  \
+             2/2 app::parse --assert-> bounds check\n\n\
+             = help: fix the source\n\
+             = help at src/lib.rs:2:5: fix this call"
+        );
+    }
+
+    #[test]
+    fn explanation_without_paths_does_not_add_an_empty_trace_section() {
+        let diagnostic = FindingDiagnostic {
+            span: None,
+            message: String::from("summary"),
+            messages: vec![DiagnosticMessage::Note(String::from("configuration issue"))],
+            compact_messages: None,
+        };
+        assert_eq!(
+            diagnostic_explanation(&diagnostic, |_| unreachable!("no source spans")),
+            "= note: configuration issue"
+        );
+    }
 
     #[test]
     fn ambiguous_loaded_crates_render_human_crate_names() {

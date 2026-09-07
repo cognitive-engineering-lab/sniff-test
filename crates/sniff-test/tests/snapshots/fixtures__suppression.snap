@@ -9,6 +9,8 @@ expression: "report[\"findings\"]"
     "level": "deny",
     "owner": {
       "crate": "suppression",
+      "package-name": "suppression",
+      "package-version": "0.1.0",
       "scope": "workspace"
     },
     "reason": "compiler assertion (index out of bounds) has no recorded `// PANIC:` evidence",

@@ -8,14 +8,16 @@ use crate::artifact::{
     UnverifiedMarkerProbeReason,
 };
 use crate::config::{LintLevel, ReportRootSet, SniffTestConfig};
-use crate::report_model::UnresolvedCallSite;
+use crate::report_model::{IncompleteTraceKind, UnresolvedCallMechanism, UnresolvedCallSite};
 use crate::report_roots::{MissingReportRoot, ReportRootKind};
 use rustc_middle::ty::TyCtxt;
 use rustc_span::Span;
 use serde::Serialize;
 use toml::Spanned;
 
+use super::args::SourcePackage;
 use super::diagnostics::{empty_report_roots_diagnostic, missing_report_root_diagnostic};
+use super::explanations::DiagnosticGroupKey;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "kebab-case")]
@@ -55,6 +57,12 @@ pub(crate) struct Finding {
     pub(crate) trace_order: Vec<FindingTraceStepOrder>,
     #[serde(skip)]
     pub(crate) effect_span: Option<Span>,
+    #[serde(skip)]
+    pub(crate) ambiguous_marker_effect_count: Option<usize>,
+    #[serde(skip)]
+    pub(crate) diagnostic_group_subtype: Option<FindingGroupSubtype>,
+    #[serde(skip)]
+    pub(crate) diagnostic_function_path: Option<String>,
 }
 
 impl Finding {
@@ -78,6 +86,9 @@ impl Finding {
             source_order: None,
             trace_order: Vec::new(),
             effect_span: None,
+            ambiguous_marker_effect_count: None,
+            diagnostic_group_subtype: None,
+            diagnostic_function_path: None,
         }
     }
 
@@ -94,6 +105,150 @@ impl Finding {
         self.trace_order = trace_order;
         self
     }
+
+    pub(crate) fn with_diagnostic_group_subtype(mut self, subtype: FindingGroupSubtype) -> Self {
+        self.diagnostic_group_subtype = Some(subtype);
+        self
+    }
+
+    #[cfg(test)]
+    pub(crate) fn with_diagnostic_function_path(mut self, function: impl Into<String>) -> Self {
+        self.diagnostic_function_path = Some(function.into());
+        self
+    }
+
+    /// Selects the small semantic group expanded by `cargo sniff-test explain`.
+    ///
+    /// This deliberately ignores the source site,
+    /// report root, trace, requirements, and current analysis-run details.
+    pub(crate) fn diagnostic_group_key(&self) -> DiagnosticGroupKey {
+        DiagnosticGroupKey::new(
+            self.kind.lint_code(),
+            stable_named_scope(self.diagnostic_group_scope()),
+            self.diagnostic_group_subtype_label(),
+        )
+    }
+
+    fn diagnostic_group_scope(&self) -> &str {
+        match self.kind {
+            FindingKind::EmptyReportRoots | FindingKind::MissingReportRoot => "<configuration>",
+            _ => self
+                .diagnostic_function_path
+                .as_deref()
+                .or(self.function.as_deref())
+                .unwrap_or("<unknown-function>"),
+        }
+    }
+
+    fn diagnostic_group_subtype_label(&self) -> String {
+        match self.kind {
+            FindingKind::UnresolvedPanicCallTarget | FindingKind::UnresolvedSafetyCallTarget => {
+                self.unresolved_call
+                    .map(|site| unresolved_call_mechanism_label(site.mechanism))
+                    .unwrap_or_default()
+                    .to_owned()
+            }
+            FindingKind::PanicAnalysisIncomplete | FindingKind::SafetyAnalysisIncomplete => self
+                .diagnostic_group_subtype
+                .as_ref()
+                .map(incomplete_group_subtype)
+                .unwrap_or_default(),
+            _ => String::new(),
+        }
+    }
+}
+
+fn stable_named_scope(path: &str) -> String {
+    let named = path
+        .split("::")
+        .filter(|segment| !is_anonymous_scope_segment(segment))
+        .map(normalize_embedded_anonymous_scopes)
+        .collect::<Vec<_>>()
+        .join("::");
+    if named.is_empty() {
+        String::from("<unknown-function>")
+    } else {
+        named
+    }
+}
+
+fn is_anonymous_scope_segment(segment: &str) -> bool {
+    segment
+        .strip_prefix('{')
+        .and_then(|segment| segment.strip_suffix('}'))
+        .and_then(anonymous_scope_kind)
+        .is_some()
+}
+
+fn normalize_embedded_anonymous_scopes(segment: &str) -> String {
+    let mut normalized = String::with_capacity(segment.len());
+    let mut remaining = segment;
+    while let Some(open) = remaining.find('{') {
+        normalized.push_str(&remaining[..open]);
+        let after_open = &remaining[open + 1..];
+        let Some(close) = after_open.find('}') else {
+            normalized.push_str(&remaining[open..]);
+            return normalized;
+        };
+        let body = &after_open[..close];
+        if let Some(kind) = anonymous_scope_kind(body) {
+            normalized.push('{');
+            normalized.push_str(kind);
+            normalized.push('}');
+        } else {
+            normalized.push_str(&remaining[open..=open + close + 1]);
+        }
+        remaining = &after_open[close + 1..];
+    }
+    normalized.push_str(remaining);
+    normalized
+}
+
+fn anonymous_scope_kind(segment: &str) -> Option<&'static str> {
+    if segment.starts_with("closure#") {
+        Some("closure")
+    } else if segment.starts_with("coroutine#") {
+        Some("coroutine")
+    } else if segment.starts_with("async") {
+        Some("async")
+    } else if segment.starts_with("constant#") {
+        Some("constant")
+    } else if segment.starts_with("impl#") {
+        Some("impl")
+    } else {
+        None
+    }
+}
+
+const fn unresolved_call_mechanism_label(mechanism: UnresolvedCallMechanism) -> &'static str {
+    match mechanism {
+        UnresolvedCallMechanism::FunctionPointer => "function-pointer",
+        UnresolvedCallMechanism::DynamicDispatch => "dynamic-dispatch",
+        UnresolvedCallMechanism::GenericDispatch => "generic-dispatch",
+        UnresolvedCallMechanism::Opaque => "opaque",
+    }
+}
+
+fn incomplete_group_subtype(subtype: &FindingGroupSubtype) -> String {
+    match subtype {
+        FindingGroupSubtype::TraceDepth { trace_kind } => {
+            format!("trace-depth:{}", incomplete_trace_kind_label(*trace_kind))
+        }
+        FindingGroupSubtype::TraceStateBudget { trace_kind } => format!(
+            "trace-state-budget:{}",
+            incomplete_trace_kind_label(*trace_kind)
+        ),
+        FindingGroupSubtype::MissingBody => String::from("missing-body"),
+    }
+}
+
+const fn incomplete_trace_kind_label(kind: IncompleteTraceKind) -> &'static str {
+    match kind {
+        IncompleteTraceKind::PanicEffect => "panic-effect",
+        IncompleteTraceKind::SafetyEffect => "safety-effect",
+        IncompleteTraceKind::PanicComment => "panic-comment",
+        IncompleteTraceKind::SafetyComment => "safety-comment",
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize)]
@@ -103,6 +258,10 @@ pub(crate) struct FindingOwner {
     #[serde(rename = "crate")]
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) crate_name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) package_name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) package_version: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize)]
@@ -122,6 +281,14 @@ pub(crate) enum SourceEvidence {
     Unverified { reason: UnverifiedMarkerProbeReason },
 }
 
+/// Low-cardinality cause used only to group incomplete-analysis diagnostics.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum FindingGroupSubtype {
+    TraceDepth { trace_kind: IncompleteTraceKind },
+    TraceStateBudget { trace_kind: IncompleteTraceKind },
+    MissingBody,
+}
+
 impl From<MarkerEvidenceState> for SourceEvidence {
     fn from(evidence: MarkerEvidenceState) -> Self {
         match evidence {
@@ -136,6 +303,7 @@ impl From<MarkerEvidenceState> for SourceEvidence {
 pub(crate) struct FindingSourceOrder {
     filename: String,
     source_file: String,
+    content_hash: Option<String>,
     byte_start: u64,
     byte_end: u64,
 }
@@ -148,9 +316,139 @@ impl FindingSourceOrder {
                 |source| source.filename.clone(),
             ),
             source_file: range.file.as_str().to_owned(),
+            content_hash: source.map(|source| source.content_hash.clone()),
             byte_start: range.byte_start,
             byte_end: range.byte_end,
         })
+    }
+
+    fn location_identity(
+        &self,
+        package_root: Option<&Path>,
+        cargo_target_dir: Option<&Path>,
+        source_packages: &[SourcePackage],
+    ) -> (Option<String>, String, Option<&str>, u64, u64) {
+        let (package_identity, filename) =
+            self.portable_source_identity(package_root, cargo_target_dir, source_packages);
+        (
+            package_identity,
+            filename,
+            self.content_hash.as_deref(),
+            self.byte_start,
+            self.byte_end,
+        )
+    }
+
+    fn portable_source_identity(
+        &self,
+        package_root: Option<&Path>,
+        cargo_target_dir: Option<&Path>,
+        source_packages: &[SourcePackage],
+    ) -> (Option<String>, String) {
+        let filename = Path::new(&self.filename);
+        let generated = cargo_target_dir.and_then(|target_dir| {
+            filename
+                .strip_prefix(target_dir)
+                .ok()
+                .map(portable_out_dir_path)
+        });
+        let package = source_packages
+            .iter()
+            .filter_map(|package| {
+                filename
+                    .strip_prefix(&package.root)
+                    .ok()
+                    .map(|relative| (package.root.components().count(), package, relative))
+            })
+            .max_by_key(|(depth, _, _)| *depth);
+        let package_identity = package.map(|(_, package, _)| package.identity.clone());
+        let filename = generated.unwrap_or_else(|| {
+            package.map_or_else(
+                || portable_source_filename(&self.filename, package_root),
+                |(_, _, relative)| portable_relative_path(relative),
+            )
+        });
+        (package_identity, filename)
+    }
+}
+
+fn portable_relative_path(path: &Path) -> String {
+    let components = path
+        .components()
+        .filter_map(|component| match component {
+            std::path::Component::Normal(component) => component.to_str(),
+            std::path::Component::ParentDir => Some(".."),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    let portable = components.join("/");
+    if portable.is_empty() {
+        path.to_string_lossy().into_owned()
+    } else {
+        portable
+    }
+}
+
+fn portable_out_dir_path(path: &Path) -> String {
+    let components = path
+        .components()
+        .filter_map(|component| match component {
+            std::path::Component::Normal(component) => component.to_str(),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    let out_index = components
+        .windows(3)
+        .rposition(|window| window[0] == "build" && window[2] == "out")
+        .map_or(0, |index| index + 2);
+    components[out_index..].join("/")
+}
+
+fn portable_source_filename(filename: &str, package_root: Option<&Path>) -> String {
+    // Cargo and snapshot tests may relocate an otherwise identical workspace.
+    // Keep the crate-relative suffix in the human-aggregation location; the
+    // caller combines it with the recorded content hash and byte range.
+    let filename = Path::new(filename);
+    let rooted_relative = package_root
+        .and_then(|root| filename.strip_prefix(root).ok())
+        .or_else(|| filename.is_relative().then_some(filename));
+    if let Some(relative) = rooted_relative {
+        return portable_relative_path(relative);
+    }
+    let components = filename
+        .components()
+        .filter_map(|component| match component {
+            std::path::Component::Normal(component) => component.to_str(),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    let stable_root = components
+        .iter()
+        .rposition(|component| matches!(*component, "src" | "tests" | "examples" | "benches"));
+    let portable = stable_root
+        .map_or_else(
+            || {
+                components
+                    .iter()
+                    .rev()
+                    .take(3)
+                    .rev()
+                    .copied()
+                    .collect::<Vec<_>>()
+            },
+            // External dependency paths are outside the current package root.
+            // Retain the package-directory component before the conventional
+            // source root so same-named files from two dependency packages do
+            // not collapse, while discarding the relocated workspace prefix.
+            |index| components[index.saturating_sub(1)..].to_vec(),
+        )
+        .join("/");
+    if portable.is_empty() {
+        // Virtual filenames have no normal path component. Preserve their
+        // compiler-provided spelling rather than collapsing all of them.
+        filename.to_string_lossy().into_owned()
+    } else {
+        portable
     }
 }
 
@@ -210,15 +508,32 @@ pub(crate) fn resolve_findings(
 /// one report root reaches it. Findings without a stable source identity,
 /// completeness reports, and report-root diagnostics remain separate because
 /// merging them could hide distinct analysis gaps.
+#[cfg(test)]
 pub(crate) fn aggregate_human_findings(findings: &[ResolvedFinding]) -> Vec<ResolvedFinding> {
-    let mut groups = Vec::<(ResolvedFinding, BTreeSet<String>)>::new();
+    aggregate_human_findings_with_source_packages(findings, None, None, &[])
+}
+
+pub(crate) fn aggregate_human_findings_with_source_packages(
+    findings: &[ResolvedFinding],
+    package_root: Option<&Path>,
+    cargo_target_dir: Option<&Path>,
+    source_packages: &[SourcePackage],
+) -> Vec<ResolvedFinding> {
+    let mut groups = Vec::<(ResolvedFinding, BTreeSet<String>, Vec<FindingDiagnostic>)>::new();
     for finding in findings {
-        let matching = groups
-            .iter_mut()
-            .find(|(representative, _)| same_human_source(representative, finding));
+        let matching = groups.iter_mut().find(|(representative, _, _)| {
+            same_human_source(
+                representative,
+                finding,
+                package_root,
+                cargo_target_dir,
+                source_packages,
+            )
+        });
         let roots = finding.finding.root.iter().cloned().collect();
-        if let Some((representative, group_roots)) = matching {
+        if let Some((representative, group_roots, diagnostics)) = matching {
             group_roots.extend(roots);
+            diagnostics.push(finding.finding.diagnostic.clone());
             let candidate_trace_length = finding.finding.trace.len();
             let representative_trace_length = representative.finding.trace.len();
             if candidate_trace_length < representative_trace_length
@@ -228,63 +543,111 @@ pub(crate) fn aggregate_human_findings(findings: &[ResolvedFinding]) -> Vec<Reso
                 *representative = finding.clone();
             }
         } else {
-            groups.push((finding.clone(), roots));
+            groups.push((
+                finding.clone(),
+                roots,
+                vec![finding.finding.diagnostic.clone()],
+            ));
         }
     }
 
-    groups
+    let mut findings = groups
         .into_iter()
-        .map(|(mut finding, roots)| {
+        .map(|(mut finding, roots, diagnostics)| {
             if is_source_finding(finding.finding.kind) {
+                merge_group_diagnostics(&mut finding.finding.diagnostic, &diagnostics);
                 make_source_centric(&mut finding.finding);
-                if roots.len() > 1 {
-                    finding
-                        .finding
-                        .diagnostic
-                        .messages
-                        .retain(|message| !is_compact_reachable_note(message));
-                }
-                let needs_root_note = match roots.len() {
-                    0 => false,
-                    1 => finding.finding.trace.is_empty(),
-                    _ => true,
-                };
+                let needs_root_note =
+                    roots.len() > 1 || roots.len() == 1 && finding.finding.trace.is_empty();
                 if needs_root_note {
                     let note = DiagnosticMessage::Note(reachable_roots_note(&roots));
                     if !finding.finding.diagnostic.messages.contains(&note) {
-                        finding.finding.diagnostic.messages.push(note);
+                        let insertion = finding
+                            .finding
+                            .diagnostic
+                            .messages
+                            .iter()
+                            .position(|message| {
+                                matches!(
+                                    message,
+                                    DiagnosticMessage::Help(_) | DiagnosticMessage::SpanHelp(_, _)
+                                )
+                            })
+                            .unwrap_or(finding.finding.diagnostic.messages.len());
+                        finding.finding.diagnostic.messages.insert(insertion, note);
                     }
                 }
             }
             finding
         })
-        .collect()
+        .collect::<Vec<_>>();
+    findings.sort_by(|left, right| {
+        left.finding
+            .source_order
+            .cmp(&right.finding.source_order)
+            .then_with(|| compare_findings(&left.finding, &right.finding))
+    });
+    findings
 }
 
-fn same_human_source(left: &ResolvedFinding, right: &ResolvedFinding) -> bool {
+fn merge_group_diagnostics(
+    representative: &mut FindingDiagnostic,
+    projections: &[FindingDiagnostic],
+) {
+    for projection in projections {
+        for message in &projection.messages {
+            if !representative.messages.contains(message) {
+                representative.messages.push(message.clone());
+            }
+        }
+    }
+
+    let Some(compact) = &mut representative.compact_messages else {
+        return;
+    };
+    for projection in projections {
+        let Some(messages) = &projection.compact_messages else {
+            continue;
+        };
+        for message in messages {
+            if !matches!(message, DiagnosticMessage::SpanLabel(_, _)) && !compact.contains(message)
+            {
+                compact.push(message.clone());
+            }
+        }
+    }
+}
+
+fn same_human_source(
+    left: &ResolvedFinding,
+    right: &ResolvedFinding,
+    package_root: Option<&Path>,
+    cargo_target_dir: Option<&Path>,
+    source_packages: &[SourcePackage],
+) -> bool {
+    let same_source = match (&left.finding.source_order, &right.finding.source_order) {
+        (Some(left), Some(right)) => {
+            left.location_identity(package_root, cargo_target_dir, source_packages)
+                == right.location_identity(package_root, cargo_target_dir, source_packages)
+        }
+        _ => false,
+    };
     is_source_finding(left.finding.kind)
         && is_source_finding(right.finding.kind)
-        && left.finding.source_order.is_some()
         && left.level == right.level
         && left.finding.kind == right.finding.kind
-        && left.finding.source_order == right.finding.source_order
+        && same_source
         && left.finding.function == right.finding.function
         && left.finding.target == right.finding.target
-        && left.finding.span == right.finding.span
         && left.finding.owner == right.finding.owner
         && left.finding.source_evidence == right.finding.source_evidence
-        && left.finding.reason == right.finding.reason
+        && left.finding.ambiguous_marker_effect_count == right.finding.ambiguous_marker_effect_count
         && left.finding.missing_requirements == right.finding.missing_requirements
         && left.finding.requirements == right.finding.requirements
 }
 
 fn make_source_centric(finding: &mut Finding) {
-    finding.diagnostic.message.clone_from(&finding.reason);
     finding.diagnostic.span = finding.effect_span;
-}
-
-fn is_compact_reachable_note(message: &DiagnosticMessage) -> bool {
-    matches!(message, DiagnosticMessage::Note(note) if note.starts_with("reachable from `"))
 }
 
 const fn is_source_finding(kind: FindingKind) -> bool {
@@ -308,7 +671,7 @@ fn reachable_roots_note(roots: &BTreeSet<String>) -> String {
         .join(", ");
     let remaining = roots.len().saturating_sub(3);
     if roots.len() == 1 {
-        format!("reachable from local report root: {shown}")
+        format!("reachable from local report root {shown}")
     } else if remaining == 0 {
         format!("reachable from {} local report roots: {shown}", roots.len())
     } else {
@@ -330,6 +693,10 @@ fn compare_findings(left: &Finding, right: &Finding) -> std::cmp::Ordering {
         .then_with(|| left.trace_order.cmp(&right.trace_order))
         .then_with(|| left.source_order.cmp(&right.source_order))
         .then_with(|| left.kind.cmp(&right.kind))
+        .then_with(|| {
+            left.ambiguous_marker_effect_count
+                .cmp(&right.ambiguous_marker_effect_count)
+        })
         .then_with(|| left.function.cmp(&right.function))
         .then_with(|| left.target.cmp(&right.target))
         .then_with(|| left.span.cmp(&right.span))
@@ -377,7 +744,19 @@ const fn report_root_kind_order(kind: Option<ReportRootKind>) -> u8 {
 pub(crate) struct FindingDiagnostic {
     pub(crate) span: Option<Span>,
     pub(crate) message: String,
+    /// The complete explanation retained for `explain` and explicit verbose
+    /// output.
     pub(crate) messages: Vec<DiagnosticMessage>,
+    /// A deliberately small, independently constructed default presentation.
+    /// `None` means the complete messages are already compact (for example,
+    /// configuration diagnostics).
+    pub(crate) compact_messages: Option<Vec<DiagnosticMessage>>,
+}
+
+impl FindingDiagnostic {
+    pub(crate) fn messages_for_default_output(&self) -> &[DiagnosticMessage] {
+        self.compact_messages.as_deref().unwrap_or(&self.messages)
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -387,6 +766,14 @@ pub(crate) enum DiagnosticMessage {
     SpanLabel(Span, String),
     SpanHelp(Span, String),
     Help(String),
+    /// Keep path steps distinct so inline diagnostics and `explain` can render
+    /// them independently without parsing each other's presentation strings.
+    TraceStep {
+        span: Option<Span>,
+        index: usize,
+        total: usize,
+        description: String,
+    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize)]
@@ -633,18 +1020,21 @@ pub(crate) fn collect_report_root_findings(
 
 #[cfg(test)]
 mod tests {
+    use std::path::Path;
+
     use super::{
-        DiagnosticMessage, Finding, FindingDiagnostic, FindingKind, FindingOwner, OwnerScope,
-        ResolvedFinding, SourceEvidence, aggregate_human_findings, is_compact_reachable_note,
-        resolve_findings,
+        DiagnosticMessage, Finding, FindingDiagnostic, FindingGroupSubtype, FindingKind,
+        FindingOwner, OwnerScope, ResolvedFinding, SourceEvidence, aggregate_human_findings,
+        aggregate_human_findings_with_source_packages, resolve_findings,
     };
     use crate::artifact::{
         CompilerAssertKind, SafetyOpKind, SourceFileFact, SourceFileId, SourceRangeFact,
         UnverifiedMarkerProbeReason,
     };
+    use crate::cli::args::SourcePackage;
     use crate::config::{LintLevel, SniffTestConfig};
     use crate::report_model::{
-        UnresolvedCallCoverage, UnresolvedCallMechanism, UnresolvedCallSite,
+        IncompleteTraceKind, UnresolvedCallCoverage, UnresolvedCallMechanism, UnresolvedCallSite,
     };
     use rustc_span::{BytePos, Span};
 
@@ -656,6 +1046,7 @@ mod tests {
                 span: None,
                 message: String::from("test finding"),
                 messages: Vec::new(),
+                compact_messages: None,
             },
         )
     }
@@ -730,6 +1121,8 @@ mod tests {
         compiler_assert.owner = Some(FindingOwner {
             scope: OwnerScope::Dependency,
             crate_name: Some(String::from("example-dependency")),
+            package_name: Some(String::from("example-package")),
+            package_version: Some(String::from("1.2.3")),
         });
         compiler_assert.source_evidence = Some(SourceEvidence::Unverified {
             reason: UnverifiedMarkerProbeReason::SourceUnavailable,
@@ -743,6 +1136,8 @@ mod tests {
                 "owner": {
                     "scope": "dependency",
                     "crate": "example-dependency",
+                    "package-name": "example-package",
+                    "package-version": "1.2.3",
                 },
                 "source-evidence": {
                     "status": "unverified",
@@ -756,6 +1151,8 @@ mod tests {
         unknown_owner.owner = Some(FindingOwner {
             scope: OwnerScope::Unknown,
             crate_name: None,
+            package_name: None,
+            package_version: None,
         });
         let unknown_owner =
             serde_json::to_value(unknown_owner).expect("serialize unknown source owner");
@@ -882,7 +1279,84 @@ mod tests {
     }
 
     #[test]
-    fn human_findings_aggregate_root_paths_at_one_effect_source() {
+    fn human_findings_are_ordered_by_their_primary_source_location() {
+        let source = SourceFileFact {
+            id: SourceFileId::new("source-id"),
+            filename: String::from("src/lib.rs"),
+            logical_path: None,
+            content_hash: String::from("content"),
+            byte_len: 200,
+        };
+        let at_source = |root: &str, byte_start, reason: &str| {
+            let range = SourceRangeFact {
+                file: source.id.clone(),
+                byte_start,
+                byte_end: byte_start + 1,
+            };
+            let mut finding = finding(FindingKind::PanicInvocation)
+                .with_source_order(Some(&source), Some(&range));
+            finding.root = Some(root.to_owned());
+            finding.reason = reason.to_owned();
+            ResolvedFinding {
+                level: LintLevel::Deny,
+                finding,
+            }
+        };
+        let later = at_source("sample::first_root", 100, "later source");
+        let earlier = at_source("sample::second_root", 40, "earlier source");
+
+        let aggregated = aggregate_human_findings(&[later, earlier]);
+
+        assert_eq!(
+            aggregated
+                .iter()
+                .map(|finding| finding.finding.reason.as_str())
+                .collect::<Vec<_>>(),
+            ["earlier source", "later source"]
+        );
+    }
+
+    #[test]
+    fn human_findings_do_not_merge_distinct_ambiguous_marker_counts() {
+        let source = SourceFileFact {
+            id: SourceFileId::new("source-id"),
+            filename: String::from("src/lib.rs"),
+            logical_path: None,
+            content_hash: String::from("content"),
+            byte_len: 200,
+        };
+        let range = SourceRangeFact {
+            file: source.id.clone(),
+            byte_start: 40,
+            byte_end: 50,
+        };
+        let at_count = |root: &str, count| {
+            let mut finding = finding(FindingKind::AmbiguousPanicMarker)
+                .with_source_order(Some(&source), Some(&range));
+            finding.root = Some(root.to_owned());
+            finding.ambiguous_marker_effect_count = Some(count);
+            ResolvedFinding {
+                level: LintLevel::Deny,
+                finding,
+            }
+        };
+
+        let aggregated = aggregate_human_findings(&[
+            at_count("sample::first", 2),
+            at_count("sample::second", 3),
+        ]);
+
+        assert_eq!(aggregated.len(), 2);
+        assert_eq!(
+            aggregated
+                .iter()
+                .map(|finding| finding.finding.ambiguous_marker_effect_count)
+                .collect::<Vec<_>>(),
+            [Some(2), Some(3)]
+        );
+    }
+
+    fn projected_panic_source(root: &str, trace: &[&str], action_start: u32) -> ResolvedFinding {
         let source = SourceFileFact {
             id: SourceFileId::new("source-id"),
             filename: String::from("dependency/src/lib.rs"),
@@ -897,56 +1371,121 @@ mod tests {
         };
         let effect_span = Span::with_root_ctxt(BytePos(40), BytePos(50));
         let root_span = Span::with_root_ctxt(BytePos(100), BytePos(120));
-        let at_root = |root: &str, trace: &[&str]| {
-            let mut finding = finding(FindingKind::PanicInvocation)
-                .with_source_order(Some(&source), Some(&range));
-            finding.root = Some(root.to_owned());
-            finding.trace = trace.iter().map(|step| (*step).to_owned()).collect();
-            finding.diagnostic.message = format!("representative for {root}");
-            finding.diagnostic.span = Some(root_span);
-            finding
-                .diagnostic
-                .messages
-                .push(DiagnosticMessage::Note(format!(
-                    "reachable from `{root}` to `core::panicking::panic_fmt`"
-                )));
-            finding.effect_span = Some(effect_span);
-            finding.target = Some(String::from("core::panicking::panic_fmt"));
-            finding.reason = String::from(
-                "panic invocation to `core::panicking::panic_fmt` is reachable through undocumented panic paths",
-            );
-            ResolvedFinding {
-                level: LintLevel::Deny,
-                finding,
-            }
-        };
-        let long = at_root("sample::first", &["one", "two"]);
-        let short = at_root("sample::second", &["one"]);
+        let action_span = Span::with_root_ctxt(BytePos(action_start), BytePos(action_start + 10));
+        let mut finding =
+            finding(FindingKind::PanicInvocation).with_source_order(Some(&source), Some(&range));
+        finding.root = Some(root.to_owned());
+        finding.trace = trace.iter().map(|step| (*step).to_owned()).collect();
+        finding.diagnostic.message = String::from("this panic path is not accounted for");
+        finding.diagnostic.span = Some(root_span);
+        finding.diagnostic.messages = vec![
+            DiagnosticMessage::Note(format!(
+                "reachable from `{root}` to `core::panicking::panic_fmt`"
+            )),
+            DiagnosticMessage::Help(String::from("remediate this finding")),
+            DiagnosticMessage::SpanNote(action_span, format!("this is the path from `{root}`")),
+        ];
+        finding.diagnostic.compact_messages = Some(vec![
+            DiagnosticMessage::SpanLabel(effect_span, String::from("the panic originates here")),
+            DiagnosticMessage::SpanHelp(
+                action_span,
+                String::from("account for this path at this call"),
+            ),
+        ]);
+        finding.effect_span = Some(effect_span);
+        finding.target = Some(String::from("core::panicking::panic_fmt"));
+        finding.reason = String::from(
+            "panic invocation to `core::panicking::panic_fmt` is reachable through undocumented panic paths",
+        );
+        ResolvedFinding {
+            level: LintLevel::Deny,
+            finding,
+        }
+    }
+
+    #[test]
+    fn human_findings_aggregate_root_paths_at_one_effect_source() {
+        let effect_span = Span::with_root_ctxt(BytePos(40), BytePos(50));
+        let long = projected_panic_source("sample::first", &["one", "two"], 130);
+        let short = projected_panic_source("sample::second", &["one"], 150);
 
         let aggregated = aggregate_human_findings(&[long, short]);
 
         assert_eq!(aggregated.len(), 1);
         assert_eq!(
             aggregated[0].finding.diagnostic.message,
-            "panic invocation to `core::panicking::panic_fmt` is reachable through undocumented panic paths"
+            "this panic path is not accounted for"
         );
         assert_eq!(aggregated[0].finding.diagnostic.span, Some(effect_span));
-        assert!(aggregated[0].finding.diagnostic.messages.iter().any(
-            |message| matches!(message, DiagnosticMessage::Note(note) if note ==
-                "reachable from 2 local report roots: `sample::first`, `sample::second`")
-        ));
+        let diagnostic = &aggregated[0].finding.diagnostic;
         assert!(
-            !aggregated[0]
-                .finding
-                .diagnostic
+            diagnostic
                 .messages
-                .iter()
-                .any(is_compact_reachable_note)
+                .contains(&DiagnosticMessage::Note(String::from(
+                    "reachable from 2 local report roots: `sample::first`, `sample::second`"
+                )))
         );
+        let full_path_spans = diagnostic
+            .messages
+            .iter()
+            .filter_map(|message| match message {
+                DiagnosticMessage::SpanNote(span, note) if note.starts_with("this is the path") => {
+                    Some(*span)
+                }
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            full_path_spans,
+            [
+                Span::with_root_ctxt(BytePos(150), BytePos(160)),
+                Span::with_root_ctxt(BytePos(130), BytePos(140)),
+            ]
+        );
+        let compact_path_spans = diagnostic
+            .compact_messages
+            .as_deref()
+            .expect("source finding has compact messages")
+            .iter()
+            .filter_map(|message| match message {
+                DiagnosticMessage::SpanHelp(span, _) => Some(*span),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(compact_path_spans, full_path_spans);
     }
 
     #[test]
-    fn human_single_root_source_finding_is_source_centric_without_changing_json() {
+    fn human_source_aggregation_keeps_source_and_invocation_actions() {
+        let effect_span = Span::with_root_ctxt(BytePos(40), BytePos(50));
+        let mut source_root = projected_panic_source("sample::source", &[], 130);
+        source_root.finding.diagnostic.compact_messages = Some(vec![
+            DiagnosticMessage::SpanLabel(effect_span, String::from("the panic originates here")),
+            DiagnosticMessage::Help(String::from(
+                "document the source function under `# Panics`",
+            )),
+        ]);
+        let caller_root = projected_panic_source("sample::caller", &["one"], 150);
+
+        let aggregated = aggregate_human_findings(&[source_root, caller_root]);
+
+        let compact = aggregated[0]
+            .finding
+            .diagnostic
+            .compact_messages
+            .as_deref()
+            .expect("source finding has compact messages");
+        assert!(compact.contains(&DiagnosticMessage::Help(String::from(
+            "document the source function under `# Panics`"
+        ))));
+        assert!(compact.contains(&DiagnosticMessage::SpanHelp(
+            Span::with_root_ctxt(BytePos(150), BytePos(160)),
+            String::from("account for this path at this call"),
+        )));
+    }
+
+    #[test]
+    fn human_single_root_source_finding_preserves_headline_without_changing_json() {
         let source = SourceFileFact {
             id: SourceFileId::new("source-id"),
             filename: String::from("src/lib.rs"),
@@ -964,8 +1503,7 @@ mod tests {
         let mut finding =
             finding(FindingKind::PanicInvocation).with_source_order(Some(&source), Some(&range));
         finding.root = Some(String::from("sample::api"));
-        finding.diagnostic.message =
-            String::from("function `sample::api` has an undocumented panic path");
+        finding.diagnostic.message = String::from("this panic path is not accounted for");
         finding.diagnostic.span = Some(root_span);
         finding.trace = vec![String::from(
             "sample::api --direct-call-> core::panicking::panic_fmt",
@@ -992,7 +1530,7 @@ mod tests {
         assert_eq!(aggregated.len(), 1);
         assert_eq!(
             aggregated[0].finding.diagnostic.message,
-            "panic invocation to `core::panicking::panic_fmt` is reachable through undocumented panic paths"
+            "this panic path is not accounted for"
         );
         assert_eq!(aggregated[0].finding.diagnostic.span, Some(effect_span));
         assert_eq!(
@@ -1010,6 +1548,213 @@ mod tests {
             serde_json::to_value(&aggregated[0]).expect("serialize human finding"),
             serialized
         );
+    }
+
+    #[test]
+    fn human_source_aggregation_identity_does_not_depend_on_reason_prose() {
+        let source = SourceFileFact {
+            id: SourceFileId::new("source-id"),
+            filename: String::from("src/lib.rs"),
+            logical_path: None,
+            content_hash: String::from("content"),
+            byte_len: 200,
+        };
+        let range = SourceRangeFact {
+            file: source.id.clone(),
+            byte_start: 40,
+            byte_end: 50,
+        };
+        let effect_span = Span::with_root_ctxt(BytePos(40), BytePos(50));
+        let at_root = |root: &str, reason: &str| {
+            let mut finding = finding(FindingKind::PanicInvocation)
+                .with_source_order(Some(&source), Some(&range));
+            finding.root = Some(root.to_owned());
+            finding.target = Some(String::from("core::panicking::panic_fmt"));
+            finding.effect_span = Some(effect_span);
+            finding.reason = reason.to_owned();
+            finding.diagnostic.message = String::from("this panic path is not accounted for");
+            ResolvedFinding {
+                level: LintLevel::Deny,
+                finding,
+            }
+        };
+        let first = at_root("sample::first", "legacy reason from the first projection");
+        let second = at_root(
+            "sample::second",
+            "reworded reason from the second projection",
+        );
+
+        let aggregated = aggregate_human_findings(&[first, second]);
+
+        assert_eq!(aggregated.len(), 1);
+        assert_eq!(
+            aggregated[0].finding.diagnostic.message,
+            "this panic path is not accounted for"
+        );
+    }
+
+    #[test]
+    fn diagnostic_groups_ignore_distinct_sites_in_the_same_named_function() {
+        let mut first =
+            finding(FindingKind::PanicInvocation).with_diagnostic_function_path("sample::parse");
+        first.span = Some(String::from("src/lib.rs:10:5"));
+        let mut second =
+            finding(FindingKind::PanicInvocation).with_diagnostic_function_path("sample::parse");
+        second.span = Some(String::from("src/lib.rs:40:5"));
+
+        assert_eq!(
+            first.diagnostic_group_key(),
+            second.diagnostic_group_key(),
+            "a diagnostic group selects the lint category in a function, not one source site"
+        );
+    }
+
+    #[test]
+    fn diagnostic_groups_fold_anonymous_runtime_bodies_into_the_named_owner() {
+        let at = |path| {
+            finding(FindingKind::PanicInvocation)
+                .with_diagnostic_function_path(path)
+                .diagnostic_group_key()
+        };
+
+        assert_eq!(at("sample::parse"), at("sample::parse::{closure#7}"));
+        assert_eq!(
+            at("sample::parse"),
+            at("sample::parse::{async_fn_body#3}::{coroutine#1}")
+        );
+        assert_eq!(
+            at("sample::parse"),
+            at("sample::{impl#2}::parse::{closure#4}"),
+            "rustc's anonymous impl and runtime-body ordinals must not rename the group"
+        );
+        assert_eq!(
+            at("sample::outer::inner"),
+            at("sample::outer::{closure#7}::inner"),
+            "a named item inside an anonymous body remains the nearest named scope"
+        );
+        assert_eq!(
+            at("<sample::Array<{constant#1}> as sample::Trait>::run"),
+            at("<sample::Array<{constant#9}> as sample::Trait>::run"),
+            "anonymous ordinals embedded in a self type must not rename the group"
+        );
+    }
+
+    #[test]
+    fn diagnostic_groups_distinguish_unresolved_mechanisms_but_not_coverage() {
+        let unresolved = |coverage, mechanism| {
+            let mut finding = finding(FindingKind::UnresolvedPanicCallTarget)
+                .with_diagnostic_function_path("sample::dispatch");
+            finding.unresolved_call = Some(UnresolvedCallSite {
+                coverage,
+                mechanism,
+            });
+            finding.diagnostic_group_key()
+        };
+
+        assert_eq!(
+            unresolved(
+                UnresolvedCallCoverage::None,
+                UnresolvedCallMechanism::DynamicDispatch,
+            ),
+            unresolved(
+                UnresolvedCallCoverage::Partial,
+                UnresolvedCallMechanism::DynamicDispatch,
+            ),
+            "resolution progress is not a diagnostic category"
+        );
+        assert_ne!(
+            unresolved(
+                UnresolvedCallCoverage::None,
+                UnresolvedCallMechanism::DynamicDispatch,
+            ),
+            unresolved(
+                UnresolvedCallCoverage::None,
+                UnresolvedCallMechanism::FunctionPointer,
+            ),
+            "different dispatch mechanisms have different remedies"
+        );
+    }
+
+    #[test]
+    fn diagnostic_groups_distinguish_incomplete_causes() {
+        let incomplete = |detail| {
+            finding(FindingKind::PanicAnalysisIncomplete)
+                .with_diagnostic_function_path("sample::frontier")
+                .with_diagnostic_group_subtype(detail)
+                .diagnostic_group_key()
+        };
+
+        assert_ne!(
+            incomplete(FindingGroupSubtype::TraceDepth {
+                trace_kind: IncompleteTraceKind::PanicEffect,
+            }),
+            incomplete(FindingGroupSubtype::TraceStateBudget {
+                trace_kind: IncompleteTraceKind::PanicEffect,
+            }),
+        );
+    }
+
+    #[test]
+    fn human_findings_merge_identical_sources_from_registry_mirrors() {
+        let source = |filename: &str| SourceFileFact {
+            id: SourceFileId::new(filename),
+            filename: filename.to_owned(),
+            logical_path: None,
+            content_hash: String::from("same-content"),
+            byte_len: 200,
+        };
+        let at = |source: &SourceFileFact, root: &str| {
+            let range = SourceRangeFact {
+                file: source.id.clone(),
+                byte_start: 40,
+                byte_end: 50,
+            };
+            let mut finding =
+                finding(FindingKind::PanicInvocation).with_source_order(Some(source), Some(&range));
+            finding.root = Some(root.to_owned());
+            finding.function = Some(String::from("mirrored_dependency::panics"));
+            finding.owner = Some(FindingOwner {
+                scope: OwnerScope::Dependency,
+                crate_name: Some(String::from("mirrored_dependency")),
+                package_name: Some(String::from("mirrored-dependency")),
+                package_version: Some(String::from("1.0.0")),
+            });
+            ResolvedFinding {
+                level: LintLevel::Deny,
+                finding,
+            }
+        };
+        let first = source("/cargo/registry-a/mirrored-dependency/src/lib.rs");
+        let second = source("/cargo/registry-b/mirrored-dependency/src/lib.rs");
+        let packages = [
+            SourcePackage {
+                root: Path::new("/cargo/registry-a/mirrored-dependency").to_owned(),
+                identity: String::from("mirrored-dependency@1.0.0:registry"),
+            },
+            SourcePackage {
+                root: Path::new("/cargo/registry-b/mirrored-dependency").to_owned(),
+                identity: String::from("mirrored-dependency@1.0.0:registry"),
+            },
+        ];
+
+        let aggregated = aggregate_human_findings_with_source_packages(
+            &[
+                at(&first, "consumer::through_registry_a"),
+                at(&second, "consumer::through_registry_b"),
+            ],
+            Some(Path::new("/workspace/consumer")),
+            None,
+            &packages,
+        );
+
+        assert_eq!(aggregated.len(), 1);
+        assert!(aggregated[0]
+            .finding
+            .diagnostic
+            .messages
+            .contains(&DiagnosticMessage::Note(String::from(
+                "reachable from 2 local report roots: `consumer::through_registry_a`, `consumer::through_registry_b`"
+            ))));
     }
 
     #[test]
@@ -1043,7 +1788,7 @@ mod tests {
         assert_eq!(
             aggregated[0].finding.diagnostic.messages,
             [DiagnosticMessage::Note(String::from(
-                "reachable from local report root: `sample::api`"
+                "reachable from local report root `sample::api`"
             ))]
         );
     }
@@ -1173,6 +1918,8 @@ mod tests {
             finding.owner = Some(FindingOwner {
                 scope,
                 crate_name: Some(String::from("shared")),
+                package_name: None,
+                package_version: None,
             });
             finding.source_evidence = Some(evidence);
             ResolvedFinding {

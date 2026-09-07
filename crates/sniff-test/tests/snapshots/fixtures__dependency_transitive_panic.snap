@@ -8,6 +8,8 @@ expression: "report[\"findings\"]"
     "level": "deny",
     "owner": {
       "crate": "dependency_transitive_panic_leaf",
+      "package-name": "dependency-transitive-panic-leaf",
+      "package-version": "0.1.0",
       "scope": "dependency"
     },
     "reason": "dependency crate `dependency_transitive_panic_leaf` has no recorded `// PANIC:` evidence for panic invocation to `core::panicking::panic_fmt`",

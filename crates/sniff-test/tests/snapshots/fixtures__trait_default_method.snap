@@ -8,6 +8,8 @@ expression: "report[\"findings\"]"
     "level": "deny",
     "owner": {
       "crate": "trait_default_method",
+      "package-name": "trait-default-method",
+      "package-version": "0.1.0",
       "scope": "workspace"
     },
     "reason": "panic invocation to `core::panicking::panic_fmt` has no recorded `// PANIC:` evidence",

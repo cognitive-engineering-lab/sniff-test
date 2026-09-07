@@ -8,6 +8,8 @@ expression: "report[\"findings\"]"
     "level": "deny",
     "owner": {
       "crate": "ambiguous_markers",
+      "package-name": "ambiguous-markers",
+      "package-version": "0.1.0",
       "scope": "workspace"
     },
     "reason": "`ambiguous_markers::duplicate_name_ratio` has 2 # Panics requirements named `nonzero`",
@@ -29,6 +31,8 @@ expression: "report[\"findings\"]"
     "level": "deny",
     "owner": {
       "crate": "ambiguous_markers",
+      "package-name": "ambiguous-markers",
+      "package-version": "0.1.0",
       "scope": "workspace"
     },
     "reason": "one `// PANIC:` marker applies to 2 panic effect groups",
@@ -46,6 +50,8 @@ expression: "report[\"findings\"]"
     "level": "deny",
     "owner": {
       "crate": "ambiguous_markers",
+      "package-name": "ambiguous-markers",
+      "package-version": "0.1.0",
       "scope": "workspace"
     },
     "reason": "one `// PANIC:` marker applies to 2 panic effect groups",
@@ -64,6 +70,8 @@ expression: "report[\"findings\"]"
     "level": "warn",
     "owner": {
       "crate": "ambiguous_markers",
+      "package-name": "ambiguous-markers",
+      "package-version": "0.1.0",
       "scope": "workspace"
     },
     "reason": "call to `ambiguous_markers::ratio` with a `# Panics` contract has no recorded `// PANIC:` evidence",
@@ -84,6 +92,8 @@ expression: "report[\"findings\"]"
     "level": "warn",
     "owner": {
       "crate": "ambiguous_markers",
+      "package-name": "ambiguous-markers",
+      "package-version": "0.1.0",
       "scope": "workspace"
     },
     "reason": "call to `ambiguous_markers::ratio` with a `# Panics` contract has no recorded `// PANIC:` evidence",
@@ -104,6 +114,8 @@ expression: "report[\"findings\"]"
     "level": "warn",
     "owner": {
       "crate": "ambiguous_markers",
+      "package-name": "ambiguous-markers",
+      "package-version": "0.1.0",
       "scope": "workspace"
     },
     "reason": "call to `ambiguous_markers::first_documented_source` with a `# Panics` contract has no recorded `// PANIC:` evidence",
@@ -125,6 +137,8 @@ expression: "report[\"findings\"]"
     "level": "warn",
     "owner": {
       "crate": "ambiguous_markers",
+      "package-name": "ambiguous-markers",
+      "package-version": "0.1.0",
       "scope": "workspace"
     },
     "reason": "call to `ambiguous_markers::second_documented_source` with a `# Panics` contract has no recorded `// PANIC:` evidence",

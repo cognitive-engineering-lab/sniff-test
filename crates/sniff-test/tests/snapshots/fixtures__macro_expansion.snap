@@ -8,6 +8,8 @@ expression: "report[\"findings\"]"
     "level": "deny",
     "owner": {
       "crate": "macro_expansion",
+      "package-name": "macro-expansion",
+      "package-version": "0.1.0",
       "scope": "workspace"
     },
     "reason": "panic invocation to `core::panicking::panic` has no recorded `// PANIC:` evidence",

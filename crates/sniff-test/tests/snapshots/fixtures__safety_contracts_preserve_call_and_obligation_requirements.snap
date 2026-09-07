@@ -12,6 +12,8 @@ expression: "report[\"findings\"]"
     ],
     "owner": {
       "crate": "safety_contract_requirements",
+      "package-name": "safety-contract-requirements",
+      "package-version": "0.1.0",
       "scope": "workspace"
     },
     "reason": "call to `safety_contract_requirements::documented_obligation` with a `# Safety` contract has no recorded `// SAFETY:` evidence",
@@ -36,6 +38,8 @@ expression: "report[\"findings\"]"
     "level": "warn",
     "owner": {
       "crate": "safety_contract_requirements",
+      "package-name": "safety-contract-requirements",
+      "package-version": "0.1.0",
       "scope": "workspace"
     },
     "reason": "unsafe call to `safety_contract_requirements::uncontracted_operation` has no recorded `// SAFETY:` evidence",
@@ -60,6 +64,8 @@ expression: "report[\"findings\"]"
     ],
     "owner": {
       "crate": "safety_contract_requirements",
+      "package-name": "safety-contract-requirements",
+      "package-version": "0.1.0",
       "scope": "workspace"
     },
     "reason": "recorded `// SAFETY:` evidence for unsafe call to `safety_contract_requirements::read_byte` does not satisfy the remaining `# Safety` requirements",

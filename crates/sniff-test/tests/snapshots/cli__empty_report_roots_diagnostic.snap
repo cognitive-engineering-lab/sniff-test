@@ -14,6 +14,7 @@ warning: [sniff-test::analysis::empty-report-roots] `[analysis].report-roots = 0
   |                ^^
   |
   = help: update `[analysis].report-roots` to include functions in the current crate
+  = help: for the full explanation, run `'[SNIFF-TEST]' explain ghva --cache-dir '[FIXTURE]/target/sniff-test/sniff-test-cache/v[FORMAT]'`
 
 warning: `report-roots` (lib) generated 1 warning
     Finished `release` profile [optimized] target(s) in [TIME]

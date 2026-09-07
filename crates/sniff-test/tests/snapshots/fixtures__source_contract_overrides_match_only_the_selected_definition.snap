@@ -11,6 +11,8 @@ expression: "report[\"findings\"]"
     ],
     "owner": {
       "crate": "source_contract_overrides",
+      "package-name": "source-contract-overrides",
+      "package-version": "0.1.0",
       "scope": "workspace"
     },
     "reason": "call to `source_contract_overrides::selected_panic` with a `# Panics` contract has no recorded `// PANIC:` evidence",
@@ -34,6 +36,8 @@ expression: "report[\"findings\"]"
     "level": "warn",
     "owner": {
       "crate": "source_contract_overrides",
+      "package-name": "source-contract-overrides",
+      "package-version": "0.1.0",
       "scope": "workspace"
     },
     "reason": "panic invocation to `core::panicking::panic_fmt` has no recorded `// PANIC:` evidence",
@@ -60,6 +64,8 @@ expression: "report[\"findings\"]"
     ],
     "owner": {
       "crate": "source_contract_overrides",
+      "package-name": "source-contract-overrides",
+      "package-version": "0.1.0",
       "scope": "workspace"
     },
     "reason": "call to `source_contract_dependency::dependency_panic` with a `# Panics` contract has no recorded `// PANIC:` evidence",
@@ -86,6 +92,8 @@ expression: "report[\"findings\"]"
     ],
     "owner": {
       "crate": "source_contract_overrides",
+      "package-name": "source-contract-overrides",
+      "package-version": "0.1.0",
       "scope": "workspace"
     },
     "reason": "call to `source_contract_overrides::trait_api::Operation::execute` with a `# Panics` contract has no recorded `// PANIC:` evidence",

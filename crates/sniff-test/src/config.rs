@@ -1819,7 +1819,6 @@ mod tests {
 
         let parsed =
             SniffTestConfig::from_manifest_path(&manifest_path).expect("manifest should load");
-
         assert_eq!(
             parsed.contracts.resolved_override_files(),
             std::slice::from_ref(&override_path)

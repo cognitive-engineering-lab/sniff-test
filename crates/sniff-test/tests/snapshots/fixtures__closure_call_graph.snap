@@ -8,6 +8,8 @@ expression: "report[\"findings\"]"
     "level": "deny",
     "owner": {
       "crate": "closure_call_graph",
+      "package-name": "closure-call-graph",
+      "package-version": "0.1.0",
       "scope": "workspace"
     },
     "reason": "panic invocation to `core::panicking::panic_fmt` has no recorded `// PANIC:` evidence",

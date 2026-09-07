@@ -8,6 +8,8 @@ expression: "report[\"findings\"]"
     "level": "warn",
     "owner": {
       "crate": "chain_markers",
+      "package-name": "chain-markers",
+      "package-version": "0.1.0",
       "scope": "workspace"
     },
     "reason": "call to `chain_markers::Widget::risky` with a `# Panics` contract has no recorded `// PANIC:` evidence",
@@ -28,6 +30,8 @@ expression: "report[\"findings\"]"
     "level": "warn",
     "owner": {
       "crate": "chain_markers",
+      "package-name": "chain-markers",
+      "package-version": "0.1.0",
       "scope": "workspace"
     },
     "reason": "one `// PANIC:` marker applies to 2 panic effect groups",

@@ -9,3 +9,10 @@ pub fn first_api() {
 pub fn second_api() {
     shared_panic_source();
 }
+
+/// # Panic
+///
+/// Panics because the shared source always panics.
+pub fn documented_api() {
+    shared_panic_source();
+}

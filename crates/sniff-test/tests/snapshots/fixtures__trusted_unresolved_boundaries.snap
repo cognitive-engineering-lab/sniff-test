@@ -8,6 +8,8 @@ expression: "report[\"findings\"]"
     "level": "warn",
     "owner": {
       "crate": "trusted_boundaries",
+      "package-name": "trusted-boundaries",
+      "package-version": "0.1.0",
       "scope": "workspace"
     },
     "reason": "panic coverage is incomplete for unresolved function-pointer call target",
@@ -29,6 +31,8 @@ expression: "report[\"findings\"]"
     "level": "warn",
     "owner": {
       "crate": "trusted_boundaries",
+      "package-name": "trusted-boundaries",
+      "package-version": "0.1.0",
       "scope": "workspace"
     },
     "reason": "safety coverage is incomplete for unresolved function-pointer call target",

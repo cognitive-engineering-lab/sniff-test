@@ -7,122 +7,78 @@ stdout:
 <empty>
 stderr:
     Checking ambiguous-markers v0.1.0 ([FIXTURE])
-error: [sniff-test::analysis::ambiguous-panic-requirement] `ambiguous_markers::duplicate_name_ratio` has 2 # Panics requirements named `nonzero`
+warning: [sniff-test::panics::documented-panic] this call's documented panic conditions are not accounted for
+  --> src/lib.rs:11:21
+   |
+11 |         let first = ratio(a, denominator);
+   |                     ^^^^^^^^^^^^^^^^^^^^^ `ambiguous_markers::ratio` documents when this call may panic
+   |
+   = help: address the documented panic conditions at each affected call with `// PANIC:`
+   = help: for the full explanation, run `'[SNIFF-TEST]' explain 5vp2 --cache-dir '[FIXTURE]/target/sniff-test/sniff-test-cache/v[FORMAT]'`
+
+warning: [sniff-test::panics::documented-panic] this call's documented panic conditions are not accounted for
+  --> src/lib.rs:12:22
+   |
+12 |         let second = ratio(b, denominator);
+   |                      ^^^^^^^^^^^^^^^^^^^^^ `ambiguous_markers::ratio` documents when this call may panic
+   |
+   = help: address the documented panic conditions at each affected call with `// PANIC:`
+   = help: for the full explanation, run `'[SNIFF-TEST]' explain 5vp2 --cache-dir '[FIXTURE]/target/sniff-test/sniff-test-cache/v[FORMAT]'`
+
+error: [sniff-test::analysis::ambiguous-panic-requirement] multiple `# Panics` requirements use the name `nonzero`
   --> src/lib.rs:21:1
    |
 21 | /// - nonzero: denominator must not be zero.
-   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `nonzero: denominator must not be zero.` normalizes to `nonzero`
-22 | /// - nonzero: total must be bounded by the caller.
-   | --------------------------------------------------- `nonzero: total must be bounded by the caller.` normalizes to `nonzero`
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ this requirement name is not unique
    |
-   = note: `ambiguous_markers::duplicate_name_ratio` has multiple `# Panics` requirements that normalize to `nonzero`
-   = note: reachable from `ambiguous_markers::duplicate_name_marker` to `ambiguous_markers::duplicate_name_ratio`
-   = note: set `show-full-stack-trace = true` under `[analysis]` in sniff-test.toml to show every reachability step
-   = help: give each requirement a unique name, or set `ambiguous-panic-requirement = "allow"` under `[analysis.lints]`
+   = help: give each documented requirement a unique name
+   = help: for the full explanation, run `'[SNIFF-TEST]' explain zq34 --cache-dir '[FIXTURE]/target/sniff-test/sniff-test-cache/v[FORMAT]'`
 
-error: [sniff-test::analysis::ambiguous-panic-marker] one `// PANIC:` marker applies to 2 panic effect groups
-  --> src/lib.rs:72:1
-   |
-72 | /     // PANIC: this path accepts both documented effects.
-73 | |     shared_documented_sources();
-   | |_^
-   |
-   = note: this marker applies to 2 possible panics
-   = note: reachable from `ambiguous_markers::marked_path_to_shared_sources` to `ambiguous_markers::first_documented_source`
-   = note: set `show-full-stack-trace = true` under `[analysis]` in sniff-test.toml to show every reachability step
-   = help: move the marker directly above one obligation, split it into separate markers, or set `ambiguous-panic-marker = "allow"` under `[analysis.lints]`
-
-error: [sniff-test::analysis::ambiguous-panic-marker] one `// PANIC:` marker applies to 2 panic effect groups
+error: [sniff-test::analysis::ambiguous-panic-marker] `// PANIC:` comment could apply to multiple panic paths
   --> src/lib.rs:47:1
    |
 47 | /         // PANIC: this fixture guards both operations.
 48 | |         call_documented_and_sink!()
-   | |_^
+   | |_^ this comment matches 2 possible panic paths
    |
-   = note: this marker applies to 2 possible panics
-   = note: reachable from `ambiguous_markers::marker_covers_documented_call_and_sink` to `ambiguous_markers::ratio`
-   = note: set `show-full-stack-trace = true` under `[analysis]` in sniff-test.toml to show every reachability step
-   = help: move the marker directly above one obligation, split it into separate markers, or set `ambiguous-panic-marker = "allow"` under `[analysis.lints]`
+   = help: place a separate `// PANIC:` marker on each panic path
+   = help: for the full explanation, run `'[SNIFF-TEST]' explain n2jf --cache-dir '[FIXTURE]/target/sniff-test/sniff-test-cache/v[FORMAT]'`
 
-warning: [sniff-test::panics::documented-panic] call to `ambiguous_markers::ratio` with a `# Panics` contract has no recorded `// PANIC:` evidence
-  --> src/lib.rs:11:21
-   |
-11 |         let first = ratio(a, denominator);
-   |                     ^^^^^^^^^^^^^^^^^^^^^
-   |
-note: `ambiguous_markers::ratio` documents `# Panics` here
-  --> src/lib.rs:4:1
-   |
- 4 | pub fn ratio(total: usize, denominator: usize) -> usize {
-   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-   = note: reachable from `ambiguous_markers::shared_block_marker` to `ambiguous_markers::ratio`
-   = note: set `show-full-stack-trace = true` under `[analysis]` in sniff-test.toml to show every reachability step
-   = help: add `// PANIC:` directly above this source after establishing the invariant that contains this panic path
-help: document when this function may panic with `/// # Panics` here
-  --> src/lib.rs:8:1
-   |
- 8 | pub fn shared_block_marker(a: usize, b: usize, denominator: usize) -> usize {
-   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-
-warning: [sniff-test::panics::documented-panic] call to `ambiguous_markers::ratio` with a `# Panics` contract has no recorded `// PANIC:` evidence
-  --> src/lib.rs:12:22
-   |
-12 |         let second = ratio(b, denominator);
-   |                      ^^^^^^^^^^^^^^^^^^^^^
-   |
-note: `ambiguous_markers::ratio` documents `# Panics` here
-  --> src/lib.rs:4:1
-   |
- 4 | pub fn ratio(total: usize, denominator: usize) -> usize {
-   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-   = note: reachable from `ambiguous_markers::shared_block_marker` to `ambiguous_markers::ratio`
-   = note: set `show-full-stack-trace = true` under `[analysis]` in sniff-test.toml to show every reachability step
-   = help: add `// PANIC:` directly above this source after establishing the invariant that contains this panic path
-help: document when this function may panic with `/// # Panics` here
-  --> src/lib.rs:8:1
-   |
- 8 | pub fn shared_block_marker(a: usize, b: usize, denominator: usize) -> usize {
-   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-
-warning: [sniff-test::panics::documented-panic] call to `ambiguous_markers::first_documented_source` with a `# Panics` contract has no recorded `// PANIC:` evidence
+warning: [sniff-test::panics::documented-panic] this call's documented panic conditions are not accounted for
   --> src/lib.rs:67:5
    |
 67 |     first_documented_source();
-   |     ^^^^^^^^^^^^^^^^^^^^^^^^^
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^ `ambiguous_markers::first_documented_source` documents when this call may panic
    |
-note: `ambiguous_markers::first_documented_source` documents `# Panics` here
-  --> src/lib.rs:59:1
+help: address the documented panic conditions at each affected call with `// PANIC:`
+  --> src/lib.rs:77:5
    |
-59 | pub fn first_documented_source() {}
-   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-   = note: reachable from `ambiguous_markers::unmarked_path_to_shared_sources` to `ambiguous_markers::first_documented_source`
-   = note: set `show-full-stack-trace = true` under `[analysis]` in sniff-test.toml to show every reachability step
-   = help: add `// PANIC:` directly above this source after establishing the invariant that contains this panic path
-help: document when this function may panic with `/// # Panics` here
-  --> src/lib.rs:76:1
-   |
-76 | pub fn unmarked_path_to_shared_sources() {
-   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+77 |     shared_documented_sources();
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   = help: for the full explanation, run `'[SNIFF-TEST]' explain ckp6 --cache-dir '[FIXTURE]/target/sniff-test/sniff-test-cache/v[FORMAT]'`
 
-warning: [sniff-test::panics::documented-panic] call to `ambiguous_markers::second_documented_source` with a `# Panics` contract has no recorded `// PANIC:` evidence
+warning: [sniff-test::panics::documented-panic] this call's documented panic conditions are not accounted for
   --> src/lib.rs:68:5
    |
 68 |     second_documented_source();
-   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^ `ambiguous_markers::second_documented_source` documents when this call may panic
    |
-note: `ambiguous_markers::second_documented_source` documents `# Panics` here
-  --> src/lib.rs:64:1
+help: address the documented panic conditions at each affected call with `// PANIC:`
+  --> src/lib.rs:77:5
    |
-64 | pub fn second_documented_source() {}
-   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-   = note: reachable from `ambiguous_markers::unmarked_path_to_shared_sources` to `ambiguous_markers::second_documented_source`
-   = note: set `show-full-stack-trace = true` under `[analysis]` in sniff-test.toml to show every reachability step
-   = help: add `// PANIC:` directly above this source after establishing the invariant that contains this panic path
-help: document when this function may panic with `/// # Panics` here
-  --> src/lib.rs:76:1
+77 |     shared_documented_sources();
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   = help: for the full explanation, run `'[SNIFF-TEST]' explain ckp6 --cache-dir '[FIXTURE]/target/sniff-test/sniff-test-cache/v[FORMAT]'`
+
+error: [sniff-test::analysis::ambiguous-panic-marker] `// PANIC:` comment could apply to multiple panic paths
+  --> src/lib.rs:72:1
    |
-76 | pub fn unmarked_path_to_shared_sources() {
-   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+72 | /     // PANIC: this path accepts both documented effects.
+73 | |     shared_documented_sources();
+   | |_^ this comment matches 2 possible panic paths
+   |
+   = help: place a separate `// PANIC:` marker on each panic path
+   = help: for the full explanation, run `'[SNIFF-TEST]' explain af6v --cache-dir '[FIXTURE]/target/sniff-test/sniff-test-cache/v[FORMAT]'`
 
 warning: `ambiguous-markers` (lib) generated 4 warnings
 error: could not compile `ambiguous-markers` (lib) due to 3 previous errors; 4 warnings emitted

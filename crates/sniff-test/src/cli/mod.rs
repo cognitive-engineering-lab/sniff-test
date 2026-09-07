@@ -4,6 +4,7 @@ mod args;
 mod cargo;
 mod diagnostics;
 mod driver;
+mod explanations;
 mod findings;
 mod interpretation;
 mod plugin;

@@ -8,6 +8,8 @@ expression: "report[\"findings\"]"
     "level": "deny",
     "owner": {
       "crate": "report_roots",
+      "package-name": "report-roots",
+      "package-version": "0.1.0",
       "scope": "workspace"
     },
     "reason": "panic invocation to `core::panicking::panic_fmt` has no recorded `// PANIC:` evidence",
@@ -30,6 +32,8 @@ expression: "report[\"findings\"]"
     "level": "deny",
     "owner": {
       "crate": "report_roots",
+      "package-name": "report-roots",
+      "package-version": "0.1.0",
       "scope": "workspace"
     },
     "reason": "panic invocation to `core::panicking::panic_fmt` has no recorded `// PANIC:` evidence",

@@ -9,6 +9,8 @@ expression: "report[\"findings\"]"
     "level": "deny",
     "owner": {
       "crate": "target_feature_call_safety",
+      "package-name": "target-feature-call-safety",
+      "package-version": "0.1.0",
       "scope": "workspace"
     },
     "reason": "unsafe call to `target_feature_call_safety::target_feature_callee` has no recorded `// SAFETY:` evidence",

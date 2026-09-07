@@ -7,14 +7,17 @@ stdout:
 <empty>
 stderr:
     Checking closure-call-graph v0.1.0 ([FIXTURE])
-error: [sniff-test::panics::panic-invocation] panic invocation to `core::panicking::panic_fmt` has no recorded `// PANIC:` evidence
- --> src/lib.rs:2:20
-  |
-2 |     let panic = || panic!("called closure");
-  |                    ^^^^^^^^^^^^^^^^^^^^^^^^
-  |
-  = note: reachable from `closure_call_graph::basic_closure_panics` to `core::panicking::panic_fmt`
-  = note: set `show-full-stack-trace = true` under `[analysis]` in sniff-test.toml to show every reachability step
-  = help: add `// PANIC:` directly above this source after establishing the invariant that contains this panic path
+error: [sniff-test::panics::panic-invocation] this panic is not accounted for on every path
+  --> src/lib.rs:2:20
+   |
+ 2 |     let panic = || panic!("called closure");
+   |                    ^^^^^^^^^^^^^^^^^^^^^^^^ the panic originates here
+   |
+help: account for this path at this call with `// PANIC:`, or document it under `# Panics`
+  --> src/lib.rs:12:5
+   |
+12 |     function()
+   |     ^^^^^^^^^^
+   = help: for the full explanation, run `'[SNIFF-TEST]' explain 8v07 --cache-dir '[FIXTURE]/target/sniff-test/sniff-test-cache/v[FORMAT]'`
 
 error: could not compile `closure-call-graph` (lib) due to 1 previous error

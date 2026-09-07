@@ -9,6 +9,8 @@ expression: "report[\"findings\"]"
     "level": "deny",
     "owner": {
       "crate": "panic_axioms",
+      "package-name": "panic-axioms",
+      "package-version": "0.1.0",
       "scope": "workspace"
     },
     "reason": "compiler assertion (division by zero) has no recorded `// PANIC:` evidence",
@@ -30,6 +32,8 @@ expression: "report[\"findings\"]"
     "level": "deny",
     "owner": {
       "crate": "panic_axioms",
+      "package-name": "panic-axioms",
+      "package-version": "0.1.0",
       "scope": "workspace"
     },
     "reason": "compiler assertion (index out of bounds) has no recorded `// PANIC:` evidence",
@@ -51,6 +55,8 @@ expression: "report[\"findings\"]"
     "level": "deny",
     "owner": {
       "crate": "panic_axioms",
+      "package-name": "panic-axioms",
+      "package-version": "0.1.0",
       "scope": "workspace"
     },
     "reason": "compiler assertion (remainder with a zero divisor) has no recorded `// PANIC:` evidence",

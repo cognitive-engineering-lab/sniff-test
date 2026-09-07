@@ -8,6 +8,8 @@ expression: "report[\"findings\"]"
     "level": "deny",
     "owner": {
       "crate": "effect_marker_paths",
+      "package-name": "effect-marker-paths",
+      "package-version": "0.1.0",
       "scope": "workspace"
     },
     "reason": "panic invocation to `core::panicking::panic_fmt` has no recorded `// PANIC:` evidence",
@@ -33,6 +35,8 @@ expression: "report[\"findings\"]"
     "level": "deny",
     "owner": {
       "crate": "effect_marker_paths",
+      "package-name": "effect-marker-paths",
+      "package-version": "0.1.0",
       "scope": "workspace"
     },
     "reason": "unsafe operation (raw pointer dereference) has no recorded `// SAFETY:` evidence",
@@ -56,6 +60,8 @@ expression: "report[\"findings\"]"
     "level": "warn",
     "owner": {
       "crate": "effect_marker_paths",
+      "package-name": "effect-marker-paths",
+      "package-version": "0.1.0",
       "scope": "workspace"
     },
     "reason": "unsafe call to `effect_marker_paths::multiline_unsafe_value` has no recorded `// SAFETY:` evidence",
@@ -77,6 +83,8 @@ expression: "report[\"findings\"]"
     "level": "warn",
     "owner": {
       "crate": "effect_marker_paths",
+      "package-name": "effect-marker-paths",
+      "package-version": "0.1.0",
       "scope": "workspace"
     },
     "reason": "unsafe call to `effect_marker_paths::multiline_unsafe_value` has no recorded `// SAFETY:` evidence",
@@ -98,6 +106,8 @@ expression: "report[\"findings\"]"
     "level": "warn",
     "owner": {
       "crate": "effect_marker_paths",
+      "package-name": "effect-marker-paths",
+      "package-version": "0.1.0",
       "scope": "workspace"
     },
     "reason": "unsafe call to `effect_marker_paths::multiline_unsafe_value` has no recorded `// SAFETY:` evidence",
@@ -118,6 +128,8 @@ expression: "report[\"findings\"]"
     "level": "deny",
     "owner": {
       "crate": "effect_marker_paths",
+      "package-name": "effect-marker-paths",
+      "package-version": "0.1.0",
       "scope": "workspace"
     },
     "reason": "panic invocation to `core::panicking::panic_fmt` has no recorded `// PANIC:` evidence",
@@ -142,6 +154,8 @@ expression: "report[\"findings\"]"
     "level": "deny",
     "owner": {
       "crate": "effect_marker_paths",
+      "package-name": "effect-marker-paths",
+      "package-version": "0.1.0",
       "scope": "workspace"
     },
     "reason": "unsafe operation (raw pointer dereference) has no recorded `// SAFETY:` evidence",

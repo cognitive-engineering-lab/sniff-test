@@ -8,6 +8,8 @@ expression: "report[\"findings\"]"
     "level": "warn",
     "owner": {
       "crate": "custom_index_impl",
+      "package-name": "custom-index-impl",
+      "package-version": "0.1.0",
       "scope": "workspace"
     },
     "reason": "call to `<custom_index_impl::Foo as core::ops::index::Index<usize>>::index` with a `# Panics` contract has no recorded `// PANIC:` evidence",

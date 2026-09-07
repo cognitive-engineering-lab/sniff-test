@@ -9,6 +9,8 @@ expression: "report[\"findings\"]"
     "level": "deny",
     "owner": {
       "crate": "dependency_safety",
+      "package-name": "dependency-safety",
+      "package-version": "0.1.0",
       "scope": "dependency"
     },
     "reason": "dependency crate `dependency_safety` has no recorded `// SAFETY:` evidence for unsafe operation (raw pointer dereference)",

@@ -7,14 +7,22 @@ stdout:
 <empty>
 stderr:
     Checking source-aggregation v0.1.0 ([FIXTURE])
-error: [sniff-test::panics::panic-invocation] panic invocation to `core::panicking::panic_fmt` has no recorded `// PANIC:` evidence
- --> src/lib.rs:2:5
-  |
-2 |     panic!("shared source");
-  |     ^^^^^^^^^^^^^^^^^^^^^^^
-  |
-  = note: set `show-full-stack-trace = true` under `[analysis]` in sniff-test.toml to show every reachability step
-  = help: add `// PANIC:` directly above this source after establishing the invariant that contains this panic path
-  = note: reachable from 2 local report roots: `source_aggregation::first_api`, `source_aggregation::second_api`
+error: [sniff-test::panics::panic-invocation] this panic is not accounted for on every path
+  --> src/lib.rs:2:5
+   |
+ 2 |     panic!("shared source");
+   |     ^^^^^^^^^^^^^^^^^^^^^^^ the panic originates here
+   |
+help: account for this path at this call with `// PANIC:`, or document it under `# Panics`
+  --> src/lib.rs:6:5
+   |
+ 6 |     shared_panic_source();
+   |     ^^^^^^^^^^^^^^^^^^^^^
+help: account for this path at this call with `// PANIC:`, or document it under `# Panics`
+  --> src/lib.rs:10:5
+   |
+10 |     shared_panic_source();
+   |     ^^^^^^^^^^^^^^^^^^^^^
+   = help: for the full explanation, run `'[SNIFF-TEST]' explain 8n6e --cache-dir '[FIXTURE]/target/sniff-test/sniff-test-cache/v[FORMAT]'`
 
 error: could not compile `source-aggregation` (lib) due to 1 previous error

@@ -7,34 +7,31 @@ stdout:
 <empty>
 stderr:
     Checking panic-axioms v0.1.0 ([FIXTURE])
-error: [sniff-test::panics::compiler-assert-division-by-zero] compiler assertion (division by zero) has no recorded `// PANIC:` evidence
+error: [sniff-test::panics::compiler-assert-division-by-zero] this division may panic
  --> src/lib.rs:2:5
   |
 2 |     total_size / block_count
-  |     ^^^^^^^^^^^^^^^^^^^^^^^^
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^ the divisor may be zero
   |
-  = note: reachable from `panic_axioms::division` to `compiler assert division by zero`
-  = note: set `show-full-stack-trace = true` under `[analysis]` in sniff-test.toml to show every reachability step
-  = help: add `// PANIC:` directly above this source after establishing the invariant that contains this panic path
+  = help: document when this panic can occur under `# Panics`, or add `// PANIC:` if an invariant rules it out
+  = help: for the full explanation, run `'[SNIFF-TEST]' explain sk03 --cache-dir '[FIXTURE]/target/sniff-test/sniff-test-cache/v[FORMAT]'`
 
-error: [sniff-test::panics::compiler-assert-bounds-check] compiler assertion (index out of bounds) has no recorded `// PANIC:` evidence
-  --> src/lib.rs:10:5
-   |
-10 |     values[index]
-   |     ^^^^^^^^^^^^^
-   |
-   = note: reachable from `panic_axioms::indexed` to `compiler assert index out of bounds`
-   = note: set `show-full-stack-trace = true` under `[analysis]` in sniff-test.toml to show every reachability step
-   = help: add `// PANIC:` directly above this source after establishing the invariant that contains this panic path
-
-error: [sniff-test::panics::compiler-assert-remainder-by-zero] compiler assertion (remainder with a zero divisor) has no recorded `// PANIC:` evidence
+error: [sniff-test::panics::compiler-assert-remainder-by-zero] this remainder operation may panic
  --> src/lib.rs:6:5
   |
 6 |     total_size % block_size
-  |     ^^^^^^^^^^^^^^^^^^^^^^^
+  |     ^^^^^^^^^^^^^^^^^^^^^^^ the divisor may be zero
   |
-  = note: reachable from `panic_axioms::remainder` to `compiler assert remainder with a zero divisor`
-  = note: set `show-full-stack-trace = true` under `[analysis]` in sniff-test.toml to show every reachability step
-  = help: add `// PANIC:` directly above this source after establishing the invariant that contains this panic path
+  = help: document when this panic can occur under `# Panics`, or add `// PANIC:` if an invariant rules it out
+  = help: for the full explanation, run `'[SNIFF-TEST]' explain 6t1y --cache-dir '[FIXTURE]/target/sniff-test/sniff-test-cache/v[FORMAT]'`
+
+error: [sniff-test::panics::compiler-assert-bounds-check] indexing may panic
+  --> src/lib.rs:10:5
+   |
+10 |     values[index]
+   |     ^^^^^^^^^^^^^ the index may be out of bounds
+   |
+   = help: document when this panic can occur under `# Panics`, or add `// PANIC:` if an invariant rules it out
+   = help: for the full explanation, run `'[SNIFF-TEST]' explain vee5 --cache-dir '[FIXTURE]/target/sniff-test/sniff-test-cache/v[FORMAT]'`
 
 error: could not compile `panic-axioms` (lib) due to 3 previous errors

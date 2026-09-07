@@ -8,19 +8,17 @@ stdout:
 stderr:
     Checking dependency-safety v0.1.0 ([FIXTURE]/dep)
     Checking dependency-safety-app v0.1.0 ([FIXTURE]/app)
-error: [sniff-test::safety::raw-pointer-dereference-missing-justification] dependency crate `dependency_safety` has no recorded `// SAFETY:` evidence for unsafe operation (raw pointer dereference)
+error: [sniff-test::safety::raw-pointer-dereference-missing-justification] raw pointer dereference requires a safety justification
  --> [FIXTURE]/dep/src/lib.rs:2:14
   |
 2 |     unsafe { *pointer }
-  |              ^^^^^^^^
+  |              ^^^^^^^^ dereferencing requires a valid and properly aligned pointer
   |
-  = note: reachable from `dependency_safety_app::read_dependency` to `unsafe operation (raw pointer dereference)`
-  = note: set `show-full-stack-trace = true` under `[analysis]` in sniff-test.toml to show every reachability step
-  = help: audit or upgrade dependency crate `dependency_safety`; it has no recorded `// SAFETY:` evidence for this source
-help: guard this local call or record a local `// SAFETY:` containment only after verifying the invariant; treating this boundary as trusted must be a deliberate trust decision backed by review
+help: explain at this call why this path's safety requirements hold with `// SAFETY:`
  --> src/lib.rs:2:5
   |
 2 |     dependency_safety::read_byte(pointer)
   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  = help: for the full explanation, run `'[SNIFF-TEST]' explain yakm --cache-dir '[FIXTURE]/app/target/sniff-test/sniff-test-cache/v[FORMAT]'`
 
 error: could not compile `dependency-safety-app` (lib) due to 1 previous error

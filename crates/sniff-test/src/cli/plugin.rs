@@ -17,7 +17,6 @@ use super::driver::{analyze_crate, is_build_script, is_proc_macro, load_config};
 
 pub(crate) const DRIVER_NAME: &str = "sniff-test-driver";
 pub(crate) const SNIFF_TEST_ARGS_ENV: &str = "SNIFF_TEST_ARGS";
-pub(crate) const SNIFF_TEST_RUN_ID_ENV: &str = "SNIFF_TEST_RUN_ID";
 
 pub(super) fn render_error_chain(error: &anyhow::Error) -> String {
     let mut rendered = error.to_string();
@@ -36,7 +35,6 @@ pub(super) fn render_error_chain(error: &anyhow::Error) -> String {
     }
     rendered
 }
-
 pub(crate) fn validate_manifest(path: &Path) -> Result<()> {
     if !path.exists() {
         bail!("manifest path `{}` does not exist", path.display());
@@ -363,11 +361,10 @@ impl Callbacks for SniffTestCallbacks {
             .opts
             .crate_types
             .contains(&rustc_session::config::CrateType::ProcMacro);
-        if !should_track_workspace_run(self.output_scope, is_build_script, is_proc_macro) {
+        if !should_track_driver_inputs(self.output_scope, is_build_script, is_proc_macro) {
             return;
         }
         let encoded_args = std::env::var(SNIFF_TEST_ARGS_ENV).ok();
-        let run_id = std::env::var(SNIFF_TEST_RUN_ID_ENV).ok();
         let config_files = tracked_config_files_from_config(&self.args, &self.config)
             .into_iter()
             .map(|path| path.display().to_string())
@@ -379,10 +376,6 @@ impl Callbacks for SniffTestCallbacks {
             sess.env_depinfo.borrow_mut().insert((
                 Symbol::intern(SNIFF_TEST_ARGS_ENV),
                 encoded_args.as_deref().map(Symbol::intern),
-            ));
-            sess.env_depinfo.borrow_mut().insert((
-                Symbol::intern(SNIFF_TEST_RUN_ID_ENV),
-                run_id.as_deref().map(Symbol::intern),
             ));
             for path in &config_files {
                 sess.file_depinfo.borrow_mut().insert(Symbol::intern(path));
@@ -400,7 +393,7 @@ impl Callbacks for SniffTestCallbacks {
     }
 }
 
-const fn should_track_workspace_run(
+const fn should_track_driver_inputs(
     output_scope: CrateOutputScope,
     is_build_script: bool,
     is_proc_macro: bool,
@@ -417,7 +410,7 @@ mod tests {
     use crate::config::SniffTestConfig;
 
     use super::{
-        analysis_rustflags, encode_rustflags, render_error_chain, should_track_workspace_run,
+        analysis_rustflags, encode_rustflags, render_error_chain, should_track_driver_inputs,
         tracked_config_files_from_config,
     };
     use crate::cli::args::{CrateOutputScope, SniffTestArgs};
@@ -451,23 +444,23 @@ mod tests {
     }
 
     #[test]
-    fn run_nonce_tracks_only_report_producing_workspace_units() {
-        assert!(should_track_workspace_run(
+    fn driver_inputs_are_tracked_only_for_report_producing_workspace_units() {
+        assert!(should_track_driver_inputs(
             CrateOutputScope::Workspace,
             false,
             false
         ));
-        assert!(!should_track_workspace_run(
+        assert!(!should_track_driver_inputs(
             CrateOutputScope::Dependency,
             false,
             false
         ));
-        assert!(!should_track_workspace_run(
+        assert!(!should_track_driver_inputs(
             CrateOutputScope::Workspace,
             true,
             false
         ));
-        assert!(!should_track_workspace_run(
+        assert!(!should_track_driver_inputs(
             CrateOutputScope::Workspace,
             false,
             true

@@ -2551,6 +2551,7 @@ unresolved-call-target = "warn"
             ArtifactInfo {
                 id: artifact_id.clone(),
                 crate_name: format!("dependency-{stable_crate_id}"),
+                package_name: Some(format!("dependency-{stable_crate_id}")),
                 package_version: None,
                 scope: ArtifactScope::Dependency,
             },

@@ -8,6 +8,8 @@ expression: "report[\"findings\"]"
     "level": "warn",
     "owner": {
       "crate": "std_trait_impl_glob",
+      "package-name": "std-trait-impl-glob",
+      "package-version": "0.1.0",
       "scope": "workspace"
     },
     "reason": "call to `alloc::vec::Vec::<T, A>::push` with a `# Panics` contract has no recorded `// PANIC:` evidence",

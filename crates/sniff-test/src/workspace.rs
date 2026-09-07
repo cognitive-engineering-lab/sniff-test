@@ -819,6 +819,7 @@ mod tests {
             ArtifactInfo {
                 id: artifact_id,
                 crate_name: crate_name.to_owned(),
+                package_name: Some(crate_name.to_owned()),
                 package_version: None,
                 scope,
             },

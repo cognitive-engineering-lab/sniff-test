@@ -9,6 +9,8 @@ expression: "report[\"findings\"]"
     "level": "warn",
     "owner": {
       "crate": "trusted_boundaries",
+      "package-name": "trusted-boundaries",
+      "package-version": "0.1.0",
       "scope": "workspace"
     },
     "reason": "unsafe call to `unsafe function pointer` has no recorded `// SAFETY:` evidence",
@@ -30,6 +32,8 @@ expression: "report[\"findings\"]"
     "level": "warn",
     "owner": {
       "crate": "trusted_boundaries",
+      "package-name": "trusted-boundaries",
+      "package-version": "0.1.0",
       "scope": "workspace"
     },
     "reason": "unsafe call to `trusted_boundaries::unsafe_helper` has no recorded `// SAFETY:` evidence",
@@ -50,6 +54,8 @@ expression: "report[\"findings\"]"
     "level": "warn",
     "owner": {
       "crate": "trusted_boundaries",
+      "package-name": "trusted-boundaries",
+      "package-version": "0.1.0",
       "scope": "workspace"
     },
     "reason": "call to `trusted_boundaries::trusted_doc_helper` with a `# Panics` contract has no recorded `// PANIC:` evidence",

@@ -9,6 +9,8 @@ expression: "report[\"findings\"]"
     "level": "deny",
     "owner": {
       "crate": "dependency_unsafe_trait_call_dep",
+      "package-name": "dependency-unsafe-trait-call-dep",
+      "package-version": "0.1.0",
       "scope": "dependency"
     },
     "reason": "`dependency_unsafe_trait_call_dep::ambiguous_obligation` has multiple # Safety requirements named `state`",
@@ -34,6 +36,8 @@ expression: "report[\"findings\"]"
     ],
     "owner": {
       "crate": "dependency_unsafe_trait_call_dep",
+      "package-name": "dependency-unsafe-trait-call-dep",
+      "package-version": "0.1.0",
       "scope": "dependency"
     },
     "reason": "dependency crate `dependency_unsafe_trait_call_dep` has no recorded `// SAFETY:` evidence for unsafe call to `<dependency_unsafe_trait_call_app::Local as dependency_unsafe_trait_call_dep::Action>::apply`",

@@ -9,6 +9,8 @@ expression: "report[\"findings\"]"
     "level": "deny",
     "owner": {
       "crate": "macro_marker_instances",
+      "package-name": "macro-marker-instances",
+      "package-version": "0.1.0",
       "scope": "workspace"
     },
     "reason": "unsafe call to `macro_marker_instances::perform` has no recorded `// SAFETY:` evidence",

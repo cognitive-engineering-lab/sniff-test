@@ -9,6 +9,8 @@ expression: "report[\"findings\"]"
     "level": "warn",
     "owner": {
       "crate": "unsafe_ops",
+      "package-name": "unsafe-ops",
+      "package-version": "0.1.0",
       "scope": "workspace"
     },
     "reason": "unsafe operation (inline assembly) has no recorded `// SAFETY:` evidence",
@@ -30,6 +32,8 @@ expression: "report[\"findings\"]"
     "level": "warn",
     "owner": {
       "crate": "unsafe_ops",
+      "package-name": "unsafe-ops",
+      "package-version": "0.1.0",
       "scope": "workspace"
     },
     "reason": "unsafe operation (raw pointer dereference) has no recorded `// SAFETY:` evidence",
@@ -51,6 +55,8 @@ expression: "report[\"findings\"]"
     "level": "warn",
     "owner": {
       "crate": "unsafe_ops",
+      "package-name": "unsafe-ops",
+      "package-version": "0.1.0",
       "scope": "workspace"
     },
     "reason": "unsafe operation (extern static access) has no recorded `// SAFETY:` evidence",
@@ -72,6 +78,8 @@ expression: "report[\"findings\"]"
     "level": "warn",
     "owner": {
       "crate": "unsafe_ops",
+      "package-name": "unsafe-ops",
+      "package-version": "0.1.0",
       "scope": "workspace"
     },
     "reason": "unsafe operation (mutable static access) has no recorded `// SAFETY:` evidence",
@@ -93,6 +101,8 @@ expression: "report[\"findings\"]"
     "level": "warn",
     "owner": {
       "crate": "unsafe_ops",
+      "package-name": "unsafe-ops",
+      "package-version": "0.1.0",
       "scope": "workspace"
     },
     "reason": "unsafe operation (union field access) has no recorded `// SAFETY:` evidence",

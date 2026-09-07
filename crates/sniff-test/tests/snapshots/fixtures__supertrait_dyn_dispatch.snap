@@ -8,6 +8,8 @@ expression: "report[\"findings\"]"
     "level": "deny",
     "owner": {
       "crate": "supertrait_dyn_dispatch",
+      "package-name": "supertrait-dyn-dispatch",
+      "package-version": "0.1.0",
       "scope": "workspace"
     },
     "reason": "call to `supertrait_dyn_dispatch::Super::risky` with a `# Panics` contract has no recorded `// PANIC:` evidence",

@@ -8,6 +8,8 @@ expression: "report[\"findings\"]"
     "level": "warn",
     "owner": {
       "crate": "optimizer_pruning",
+      "package-name": "optimizer-pruning",
+      "package-version": "0.1.0",
       "scope": "workspace"
     },
     "reason": "call to `optimizer_pruning::greater_than_zero` with a `# Panics` contract has no recorded `// PANIC:` evidence",

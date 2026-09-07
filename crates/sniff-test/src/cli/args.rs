@@ -76,6 +76,8 @@ pub(super) struct FrontendCli {
 enum FrontendCommand {
     /// Write a sample sniff-test.toml.
     Init(InitCliArgs),
+    /// Explain a diagnostic group from the current report.
+    Explain(ExplainCliArgs),
 }
 
 #[derive(Debug, Args)]
@@ -89,9 +91,25 @@ pub(super) struct InitCliArgs {
     pub(super) force: bool,
 }
 
+#[derive(Debug, Args)]
+pub(super) struct ExplainCliArgs {
+    /// Four-character diagnostic-group handle.
+    #[arg(value_name = "HANDLE")]
+    pub(super) handle: String,
+
+    /// Cargo manifest used to locate the workspace's sniff-test cache.
+    #[arg(long = "manifest-path", value_name = "PATH")]
+    pub(super) manifest_path: Option<PathBuf>,
+
+    /// Analysis cache directory containing the recorded diagnostic report.
+    #[arg(long, value_name = "DIR")]
+    pub(super) cache_dir: Option<PathBuf>,
+}
+
 pub(super) enum FrontendAction {
     Run(SniffTestArgs),
     Init(InitCliArgs),
+    Explain(ExplainCliArgs),
 }
 
 impl FrontendCli {
@@ -104,8 +122,11 @@ impl FrontendCli {
     }
 
     pub(super) fn into_action(self) -> FrontendAction {
-        if let Some(FrontendCommand::Init(args)) = self.command {
-            return FrontendAction::Init(args);
+        if let Some(command) = self.command {
+            return match command {
+                FrontendCommand::Init(args) => FrontendAction::Init(args),
+                FrontendCommand::Explain(args) => FrontendAction::Explain(args),
+            };
         }
 
         let mut args = self.common.into_sniff_test_args();
@@ -167,10 +188,50 @@ pub(crate) enum CrateOutputScope {
     Dependency,
 }
 
+/// Cargo package ownership used when canonicalizing human diagnostic sources.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub(crate) struct SourcePackage {
+    pub(crate) root: PathBuf,
+    pub(crate) identity: String,
+}
+
+/// Package metadata belongs to the current unit only when Cargo invoked it.
+/// Standalone rustc invocations must ignore ambient Cargo environment values.
+#[derive(Debug, Default)]
+pub(super) struct LocalPackageProvenance {
+    pub(super) manifest_dir: Option<PathBuf>,
+    pub(super) package_name: Option<String>,
+    pub(super) package_version: Option<String>,
+}
+
+impl LocalPackageProvenance {
+    pub(super) fn from_args(args: &SniffTestArgs) -> Self {
+        if !args.under_cargo {
+            return Self::default();
+        }
+        Self {
+            manifest_dir: std::env::var_os("CARGO_MANIFEST_DIR").map(PathBuf::from),
+            package_name: std::env::var("CARGO_PKG_NAME")
+                .ok()
+                .filter(|name| !name.trim().is_empty()),
+            package_version: std::env::var("CARGO_PKG_VERSION")
+                .ok()
+                .filter(|version| !version.trim().is_empty()),
+        }
+    }
+}
+
 #[derive(Debug, Default, Clone, Serialize, Deserialize)]
 pub struct SniffTestArgs {
+    /// Exact frontend binary used when the short `cargo sniff-test explain`
+    /// command cannot reliably rediscover this report. `None` selects the
+    /// ordinary Cargo subcommand form.
+    pub(crate) frontend_executable: Option<PathBuf>,
     pub(crate) manifest_path: Option<PathBuf>,
     pub(crate) cache_dir: Option<PathBuf>,
+    pub(crate) cargo_target_dir: Option<PathBuf>,
+    /// Temporary directory shared by rustc processes in one Cargo invocation.
+    pub(crate) explanation_staging_dir: Option<PathBuf>,
     pub(crate) color: ColorChoice,
     pub(crate) message_format: MessageFormat,
     pub(crate) overflow_checks: Option<OverflowChecks>,
@@ -181,6 +242,7 @@ pub struct SniffTestArgs {
     /// driver so crate scope uses real membership instead of path prefixes.
     /// Empty in direct driver mode.
     pub(crate) workspace_manifests: Vec<PathBuf>,
+    pub(crate) source_packages: Vec<SourcePackage>,
     /// True when the driver runs as cargo's `RUSTC_WRAPPER`; set by the
     /// driver itself, never carried through the environment.
     #[serde(skip)]
@@ -255,6 +317,21 @@ mod tests {
         };
         assert_eq!(args.message_format, MessageFormat::Json);
         assert_eq!(args.cargo_args, ["--locked"]);
+        assert_eq!(args.cache_dir, None);
+    }
+
+    #[test]
+    fn frontend_parses_an_explicit_cache_directory() {
+        let cli = FrontendCli::try_parse_from(["cargo-sniff-test", "--cache-dir", "custom cache"])
+            .expect("frontend arguments should parse");
+
+        let FrontendAction::Run(args) = cli.into_action() else {
+            panic!("expected frontend run action");
+        };
+        assert_eq!(
+            args.cache_dir,
+            Some(std::path::PathBuf::from("custom cache"))
+        );
     }
 
     #[test]
@@ -298,6 +375,44 @@ mod tests {
         };
         assert_eq!(args.manifest, PathBuf::from("policy.toml"));
         assert!(args.force);
+    }
+
+    #[test]
+    fn frontend_parses_explain_handle_with_cache_discovery_options() {
+        let cli = FrontendCli::try_parse_from([
+            "cargo-sniff-test",
+            "explain",
+            "7k3m",
+            "--manifest-path",
+            "workspace/Cargo.toml",
+            "--cache-dir",
+            "target/sniff-test/cache",
+        ])
+        .expect("explain arguments should parse");
+
+        let FrontendAction::Explain(args) = cli.into_action() else {
+            panic!("expected explain action");
+        };
+        assert_eq!(args.handle, "7k3m");
+        assert_eq!(
+            args.manifest_path,
+            Some(PathBuf::from("workspace/Cargo.toml"))
+        );
+        assert_eq!(
+            args.cache_dir,
+            Some(PathBuf::from("target/sniff-test/cache"))
+        );
+    }
+
+    #[test]
+    fn frontend_accepts_a_four_character_group_handle() {
+        let cli = FrontendCli::try_parse_from(["cargo-sniff-test", "explain", "7k3m"])
+            .expect("group handles should be valid explain queries");
+
+        let FrontendAction::Explain(args) = cli.into_action() else {
+            panic!("expected explain action");
+        };
+        assert_eq!(args.handle, "7k3m");
     }
 
     #[test]

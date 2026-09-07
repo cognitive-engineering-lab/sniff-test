@@ -7,47 +7,32 @@ stdout:
 <empty>
 stderr:
     Checking safety-contract-requirements v0.1.0 ([FIXTURE])
-warning: [sniff-test::safety::safety-obligation-missing-requirements] call to `safety_contract_requirements::documented_obligation` with a `# Safety` contract has no recorded `// SAFETY:` evidence
-  --> src/lib.rs:57:5
-   |
-57 |     documented_obligation(&raw const byte);
-   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-   |
-note: `safety_contract_requirements::documented_obligation` documents `# Safety` here
-  --> src/lib.rs:44:1
-   |
-44 | pub fn documented_obligation(_ptr: *const u8) {}
-   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-   = note: missing safety requirement `valid_ptr: pointer must be non-null.`
-   = note: reachable from `safety_contract_requirements::trusted_obligation_exposes_missing_requirement` to `safety_contract_requirements::documented_obligation`
-   = note: set `show-full-stack-trace = true` under `[analysis]` in sniff-test.toml to show every reachability step
-   = help: add `// SAFETY:` directly above this source after establishing the invariant that contains this safety obligation
-
-warning: [sniff-test::safety::unsafe-call-missing-justification] unsafe call to `safety_contract_requirements::uncontracted_operation` has no recorded `// SAFETY:` evidence
-  --> src/lib.rs:37:14
-   |
-37 |     unsafe { uncontracted_operation() }
-   |              ^^^^^^^^^^^^^^^^^^^^^^^^
-   |
-   = note: reachable from `safety_contract_requirements::unsafe_call_exposes_missing_justification` to `safety_contract_requirements::uncontracted_operation`
-   = note: set `show-full-stack-trace = true` under `[analysis]` in sniff-test.toml to show every reachability step
-   = help: add `// SAFETY:` directly above this source after establishing the invariant that contains this safety obligation
-
-warning: [sniff-test::safety::unsafe-call-missing-requirements] recorded `// SAFETY:` evidence for unsafe call to `safety_contract_requirements::read_byte` does not satisfy the remaining `# Safety` requirements
+warning: [sniff-test::safety::unsafe-call-missing-requirements] unsafe call has unaccounted safety requirements
   --> src/lib.rs:33:14
    |
 33 |     unsafe { read_byte(ptr.as_ptr()) }
-   |              ^^^^^^^^^^^^^^^^^^^^^^^
+   |              ^^^^^^^^^^^^^^^^^^^^^^^ this call has additional safety preconditions
    |
-note: `safety_contract_requirements::read_byte` documents `# Safety` here
-  --> src/lib.rs:8:1
+   = help: address the remaining `# Safety` requirements in `// SAFETY:`: `initialized`
+   = help: for the full explanation, run `'[SNIFF-TEST]' explain ceec --cache-dir '[FIXTURE]/target/sniff-test/sniff-test-cache/v[FORMAT]'`
+
+warning: [sniff-test::safety::unsafe-call-missing-justification] unsafe call requires a safety justification
+  --> src/lib.rs:37:14
    |
- 8 | pub unsafe fn read_byte(ptr: *const u8) -> u8 {
-   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-   = note: remaining unsatisfied safety requirement `initialized: pointer must reference initialized memory.`
-   = note: reachable from `safety_contract_requirements::unsafe_call_exposes_missing_requirement` to `safety_contract_requirements::read_byte`
-   = note: set `show-full-stack-trace = true` under `[analysis]` in sniff-test.toml to show every reachability step
-   = help: update the recorded `// SAFETY:` evidence to address each remaining `# Safety` requirement
+37 |     unsafe { uncontracted_operation() }
+   |              ^^^^^^^^^^^^^^^^^^^^^^^^ this call requires its safety preconditions to hold
+   |
+   = help: add a `// SAFETY:` comment explaining how the required safety invariant is upheld
+   = help: for the full explanation, run `'[SNIFF-TEST]' explain yv38 --cache-dir '[FIXTURE]/target/sniff-test/sniff-test-cache/v[FORMAT]'`
+
+warning: [sniff-test::safety::safety-obligation-missing-requirements] this call has unaccounted safety requirements
+  --> src/lib.rs:57:5
+   |
+57 |     documented_obligation(&raw const byte);
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ this call has additional documented safety requirements
+   |
+   = help: address the remaining `# Safety` requirements in `// SAFETY:`: `valid_ptr`
+   = help: for the full explanation, run `'[SNIFF-TEST]' explain ypcm --cache-dir '[FIXTURE]/target/sniff-test/sniff-test-cache/v[FORMAT]'`
 
 warning: `safety-contract-requirements` (lib) generated 3 warnings
     Finished `release` profile [optimized] target(s) in [TIME]
