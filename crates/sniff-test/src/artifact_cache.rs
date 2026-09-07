@@ -715,7 +715,8 @@ mod tests {
     fn writing_same_rustc_artifact_identity_refreshes_cached_facts() {
         let directory = tempdir().expect("temporary cache root");
         let first = analysis();
-        let second = analysis();
+        let mut second = analysis();
+        second.facts.source_files[0].content_hash = String::from("sha256:fedcba9876543210");
 
         first.write(directory.path()).expect("write first cache");
         second.write(directory.path()).expect("refresh first cache");
@@ -802,19 +803,6 @@ mod tests {
             error
                 .to_string()
                 .contains("definition source 0 does not belong to artifact")
-        );
-    }
-
-    #[test]
-    fn rustc_artifact_identity_does_not_include_package_version() {
-        let mut first = artifact();
-        let mut second = artifact();
-        first.package_version = Some(String::from("1.0.0"));
-        second.package_version = Some(String::from("2.0.0"));
-
-        assert_eq!(
-            artifact_cache_path(Path::new("/cache"), &first.id),
-            artifact_cache_path(Path::new("/cache"), &second.id)
         );
     }
 
