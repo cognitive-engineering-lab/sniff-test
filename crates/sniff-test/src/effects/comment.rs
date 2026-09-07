@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeSet;
 
 use effect_tracing::{
     Effect, EffectSeed, EffectTrace, FunctionId, InvocationId, Propagation, PropagationEdge,
@@ -29,12 +29,6 @@ impl ContractId {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
-struct ObligationId {
-    contract: ContractId,
-    index: usize,
-}
-
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub(crate) struct CommentState {
     domain: CommentDomain,
@@ -44,7 +38,7 @@ pub(crate) struct CommentState {
     current_function: FunctionId,
     source_invocation: Option<InvocationId>,
     source_calls: BTreeSet<CallId>,
-    remaining: BTreeSet<ObligationId>,
+    remaining: BTreeSet<usize>,
     termination: Option<CommentTermination>,
 }
 
@@ -57,7 +51,7 @@ pub(crate) enum CommentTermination {
 impl CommentState {
     #[must_use]
     pub(crate) fn remaining(&self) -> impl ExactSizeIterator<Item = usize> + '_ {
-        self.remaining.iter().map(|obligation| obligation.index)
+        self.remaining.iter().copied()
     }
 
     #[must_use]
@@ -133,7 +127,7 @@ pub(crate) struct CommentContract {
     id: ContractId,
     functions: BTreeSet<FunctionId>,
     domain: CommentDomain,
-    obligations: BTreeSet<ObligationId>,
+    obligations: Vec<Obligation>,
 }
 
 impl CommentContract {
@@ -158,7 +152,6 @@ pub(crate) struct CommentEffect<'annotations> {
     annotations: &'annotations AnnotationIndex,
     graph: &'annotations InvocationGraph,
     contracts: Vec<CommentContract>,
-    obligations: BTreeMap<ObligationId, Obligation>,
     trusted_panic_functions: BTreeSet<FunctionId>,
     trusted_safety_functions: BTreeSet<FunctionId>,
 }
@@ -173,7 +166,6 @@ impl<'annotations> CommentEffect<'annotations> {
         safety_config: &SafetyConfig,
     ) -> Self {
         let mut contracts = Vec::new();
-        let mut obligations = BTreeMap::new();
         for annotation in annotations.contracts() {
             let functions = graph
                 .contract_targets(annotation.owner())
@@ -188,12 +180,11 @@ impl<'annotations> CommentEffect<'annotations> {
                 continue;
             }
             let id = ContractId(annotation.id());
-            let contract_obligations = collect_obligations(annotation, id, &mut obligations);
             contracts.push(CommentContract {
                 id,
                 functions,
                 domain: annotation.domain().into(),
-                obligations: contract_obligations,
+                obligations: collect_obligations(annotation),
             });
         }
         let mut trusted_panic_functions = BTreeSet::new();
@@ -213,7 +204,6 @@ impl<'annotations> CommentEffect<'annotations> {
             annotations,
             graph,
             contracts,
-            obligations,
             trusted_panic_functions,
             trusted_safety_functions,
         }
@@ -247,29 +237,23 @@ impl<'annotations> CommentEffect<'annotations> {
         if satisfaction.reason.trim().is_empty() {
             return;
         }
-        let matching = match satisfaction.requirement.as_deref() {
-            Some(requirement) => {
-                let normalized = normalize_requirement_name(requirement);
-                self.obligations
-                    .iter()
-                    .filter_map(|(id, obligation)| {
-                        (id.contract == state.contract
-                            && matches!(obligation, Obligation::Named(name) if name == &normalized))
-                        .then_some(*id)
-                    })
-                    .collect::<Vec<_>>()
-            }
-            None => self
-                .obligations
-                .iter()
-                .filter_map(|(id, obligation)| {
-                    (id.contract == state.contract && obligation == &Obligation::WholeContract)
-                        .then_some(*id)
-                })
-                .collect(),
+        let Some(contract) = self.contract(state.contract) else {
+            return;
         };
-        if let [obligation] = matching.as_slice() {
-            state.remaining.remove(obligation);
+        let required = match satisfaction.requirement.as_deref() {
+            Some(requirement) => Obligation::Named(normalize_requirement_name(requirement)),
+            None => Obligation::WholeContract,
+        };
+        // Ambiguity depends on the complete contract, including satisfied requirements.
+        let mut matching = contract
+            .obligations
+            .iter()
+            .enumerate()
+            .filter_map(|(index, obligation)| (obligation == &required).then_some(index));
+        if let Some(index) = matching.next()
+            && matching.next().is_none()
+        {
+            state.remaining.remove(&index);
         }
     }
 
@@ -416,7 +400,7 @@ impl Effect for CommentEffect<'_> {
                         current_function: function,
                         source_invocation: None,
                         source_calls: BTreeSet::new(),
-                        remaining: contract.obligations.clone(),
+                        remaining: (0..contract.obligations.len()).collect(),
                         termination: None,
                     },
                 )
@@ -480,28 +464,14 @@ impl Effect for CommentEffect<'_> {
     }
 }
 
-fn collect_obligations(
-    annotation: &FunctionContractAnnotation,
-    contract: ContractId,
-    obligations: &mut BTreeMap<ObligationId, Obligation>,
-) -> BTreeSet<ObligationId> {
+fn collect_obligations(annotation: &FunctionContractAnnotation) -> Vec<Obligation> {
     if annotation.requirements().is_empty() {
-        let id = ObligationId { contract, index: 0 };
-        obligations.insert(id, Obligation::WholeContract);
-        return BTreeSet::from([id]);
+        return vec![Obligation::WholeContract];
     }
     annotation
         .requirements()
         .iter()
-        .enumerate()
-        .map(|(index, requirement)| {
-            let id = ObligationId { contract, index };
-            obligations.insert(
-                id,
-                Obligation::Named(normalize_requirement_name(&requirement.name)),
-            );
-            id
-        })
+        .map(|requirement| Obligation::Named(normalize_requirement_name(&requirement.name)))
         .collect()
 }
 
