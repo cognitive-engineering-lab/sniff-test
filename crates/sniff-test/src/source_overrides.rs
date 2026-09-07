@@ -1,6 +1,6 @@
 //! Resolution of source-located synthetic contract documentation.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 use std::fmt;
 
 use crate::artifact::{
@@ -132,24 +132,19 @@ fn candidates_for_source_override<'facts>(
         return Ok(Vec::new());
     }
 
-    let path_sources = matching_artifacts
-        .iter()
-        .flat_map(|artifact| {
-            artifact
-                .facts
-                .source_files
-                .iter()
-                .filter(|source| source.logical_path.as_deref() == Some(selector.path()))
-        })
-        .collect::<Vec<_>>();
-    if path_sources.is_empty() {
+    let mut path_sources = matching_artifacts.iter().flat_map(|artifact| {
+        artifact
+            .facts
+            .source_files
+            .iter()
+            .filter(|source| source.logical_path.as_deref() == Some(selector.path()))
+    });
+    let Some(first_source) = path_sources.next() else {
         return Ok(Vec::new());
-    }
-    let content_versions = path_sources
-        .iter()
-        .map(|source| (source.content_hash.clone(), source.byte_len))
-        .collect::<BTreeSet<_>>();
-    if content_versions.len() != 1 {
+    };
+    if path_sources.any(|source| {
+        source.content_hash != first_source.content_hash || source.byte_len != first_source.byte_len
+    }) {
         return Err(SourceOverrideError::new(format!(
             "source override {} matched different source contents",
             describe_selector(selector)
@@ -191,24 +186,20 @@ fn candidates_for_source_override<'facts>(
 }
 
 fn candidates_are_equivalent(candidates: &[DefinitionCandidate<'_>]) -> bool {
-    let equivalence_classes = candidates
-        .iter()
-        .map(DefinitionCandidate::equivalence_key)
-        .collect::<BTreeSet<_>>();
-    let definitions_per_artifact = candidates.iter().fold(
-        BTreeMap::<u64, BTreeSet<StableDefPathHash>>::new(),
-        |mut definitions, candidate| {
-            definitions
-                .entry(candidate.artifact.stable_crate_id)
-                .or_default()
-                .insert(candidate.definition.definition);
-            definitions
-        },
-    );
-    equivalence_classes.len() == 1
-        && definitions_per_artifact
-            .values()
-            .all(|definitions| definitions.len() == 1)
+    let Some(first) = candidates.first() else {
+        return false;
+    };
+    let equivalence_key = first.equivalence_key();
+    let mut definitions_per_artifact = BTreeMap::new();
+    candidates.iter().all(|candidate| {
+        candidate.equivalence_key() == equivalence_key
+            && definitions_per_artifact
+                .insert(
+                    candidate.artifact.stable_crate_id,
+                    candidate.definition.definition,
+                )
+                .is_none_or(|definition| definition == candidate.definition.definition)
+    })
 }
 
 fn definition_in_selector<'a>(
@@ -244,7 +235,7 @@ impl DefinitionCandidate<'_> {
     }
 }
 
-#[derive(PartialEq, Eq, PartialOrd, Ord)]
+#[derive(PartialEq, Eq)]
 struct DefinitionEquivalenceKey<'a> {
     display_path: &'a str,
     start_line: u32,
@@ -547,6 +538,17 @@ mod tests {
         assert!(ambiguous_error.to_string().contains("multiple definitions"));
         assert!(ambiguous_error.to_string().contains("sample::first"));
         assert!(ambiguous_error.to_string().contains("sample::second"));
+
+        let mut shared_source = source.clone();
+        let mut second = shared_source.definitions[0].clone();
+        second.definition = shared_source.definitions[1].definition;
+        shared_source.definitions[1] = second;
+        let shared_artifact =
+            ContractSourceArtifact::new(1, "sample", Some("1.0.0"), &shared_source);
+        let shared_error =
+            resolve_source_contract_overrides_for_artifacts(&ambiguous, &[shared_artifact])
+                .expect_err("distinct definitions sharing a source location are still ambiguous");
+        assert!(shared_error.to_string().contains("multiple definitions"));
     }
 
     #[test]
