@@ -471,7 +471,7 @@ fn same_kind_same_span_assertions_have_distinct_deterministic_mir_sites() {
 }
 
 #[test]
-fn expanded_leaf_is_not_a_frontier() {
+fn expanded_leaves_and_frontiers_have_distinct_expansion_outcomes() {
     let project = TempProject::new(EXPANDED_LEAF_SOURCE);
     let mut callbacks = LocalExpansionCallbacks { result: None };
     run_test_compiler(&project, &mut callbacks);
@@ -484,6 +484,18 @@ fn expanded_leaf_is_not_a_frontier() {
             result.leaf_is_frontier,
         ),
         (ReachabilityNodeExpansion::Expanded, 0, false)
+    );
+    assert_eq!(
+        (
+            result.policy_boundary,
+            result.node_limit,
+            result.unsupported_instance,
+        ),
+        (
+            ReachabilityNodeExpansion::PolicyBoundary,
+            ReachabilityNodeExpansion::NodeLimit,
+            ReachabilityNodeExpansion::UnsupportedInstance,
+        )
     );
 }
 
@@ -499,27 +511,6 @@ fn artifact_scope_distinguishes_crossings_from_unavailable_mir() {
             root_artifact: ReachabilityNodeExpansion::DifferentArtifact,
             all_artifacts: ReachabilityNodeExpansion::MirUnavailable,
         })
-    );
-}
-
-#[test]
-fn policy_boundary_and_node_limit_are_explicit_frontiers() {
-    let project = TempProject::new(EXPANDED_LEAF_SOURCE);
-    let mut callbacks = LocalExpansionCallbacks { result: None };
-    run_test_compiler(&project, &mut callbacks);
-    let result = callbacks.result.expect("compiler callback did not run");
-
-    assert_eq!(
-        (
-            result.policy_boundary,
-            result.node_limit,
-            result.unsupported_instance,
-        ),
-        (
-            ReachabilityNodeExpansion::PolicyBoundary,
-            ReachabilityNodeExpansion::NodeLimit,
-            ReachabilityNodeExpansion::UnsupportedInstance,
-        )
     );
 }
 
