@@ -1,5 +1,6 @@
 //! Helpers shared by the cli and fixtures harnesses.
 
+use std::fmt::Write as _;
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
@@ -116,4 +117,130 @@ pub fn copy_fixture_dir(source: &Path, destination: &Path) -> io::Result<()> {
         }
     }
     Ok(())
+}
+
+pub fn assert_public_output_uses_human_words(name: &str, output: &str) {
+    for fragment in COMPILER_DEBUG_FRAGMENTS {
+        assert!(
+            !output.contains(fragment),
+            "{name}: public diagnostic contains compiler debug output `{fragment}`:\n{output}"
+        );
+    }
+    assert!(
+        !output.contains("reachability root"),
+        "{name}: public diagnostic contains internal reachability jargon:\n{output}"
+    );
+}
+
+pub fn render_snapshot(
+    status: ExitStatus,
+    stdout: &str,
+    stderr: &str,
+    fixture_root: &Path,
+    sysroot: &str,
+) -> String {
+    let mut rendered = String::new();
+    writeln!(&mut rendered, "exit: {}", status.code().unwrap_or(-1)).unwrap();
+    writeln!(&mut rendered, "stdout:").unwrap();
+    rendered.push_str(&snapshot_section(stdout, fixture_root, sysroot));
+    writeln!(&mut rendered, "stderr:").unwrap();
+    rendered.push_str(&snapshot_section(stderr, fixture_root, sysroot));
+    rendered
+}
+
+fn snapshot_section(text: &str, fixture_root: &Path, sysroot: &str) -> String {
+    if text.is_empty() {
+        return String::from("<empty>\n");
+    }
+
+    let normalized = normalize_output(text, fixture_root, sysroot);
+    if normalized.is_empty() {
+        return String::from("<empty>\n");
+    }
+
+    let mut section = String::new();
+    for line in normalized.lines() {
+        writeln!(&mut section, "{line}").unwrap();
+    }
+    section
+}
+
+fn normalize_output(text: &str, fixture_root: &Path, sysroot: &str) -> String {
+    text.lines()
+        .map(|line| normalize_line(line, fixture_root, sysroot))
+        .filter(|line| !is_volatile_cargo_status(line))
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+pub fn normalize_line(line: &str, fixture_root: &Path, sysroot: &str) -> String {
+    let frontend = fs::canonicalize(env!("CARGO_BIN_EXE_cargo-sniff-test"))
+        .unwrap_or_else(|_| PathBuf::from(env!("CARGO_BIN_EXE_cargo-sniff-test")));
+    let mut line = line
+        .replace(&fixture_root.display().to_string(), "[FIXTURE]")
+        .replace(sysroot, "[SYSROOT]")
+        .replace(&frontend.display().to_string(), "[SNIFF-TEST]");
+    // Cases running from the temp dir itself leak its per-run name, such as
+    // the config-discovery notice.
+    if let Some(parent) = fixture_root.parent() {
+        line = line.replace(&parent.display().to_string(), "[TEMP]");
+    }
+
+    if let Some((prefix, _time)) = line.split_once(" target(s) in ") {
+        line = format!("{prefix} target(s) in [TIME]");
+    }
+
+    normalize_cache_format_version(line)
+}
+
+fn normalize_cache_format_version(mut line: String) -> String {
+    const MARKER: &str = "sniff-test-cache/v";
+    let Some(version_start) = line.find(MARKER).map(|start| start + MARKER.len()) else {
+        return line;
+    };
+    let version_end = line[version_start..]
+        .find(|character: char| !character.is_ascii_digit())
+        .map_or(line.len(), |end| version_start + end);
+    if version_end > version_start {
+        line.replace_range(version_start..version_end, "[FORMAT]");
+    }
+    line
+}
+
+fn is_volatile_cargo_status(line: &str) -> bool {
+    let line = line.trim_start();
+    line.starts_with("Locking ")
+        && line.contains(" package")
+        && line.contains(" compatible version")
+}
+
+pub fn extract_group_handle(output: &str) -> String {
+    extract_group_handles(output)
+        .into_iter()
+        .next()
+        .unwrap_or_else(|| panic!("diagnostic did not contain a group handle:\n{output}"))
+}
+
+pub fn extract_group_handles(output: &str) -> Vec<String> {
+    const COMMAND_PREFIX: &str = "run `";
+    const HANDLE_LEN: usize = 4;
+
+    let handles = output
+        .split(COMMAND_PREFIX)
+        .skip(1)
+        .filter_map(|command| command.split_once('`').map(|(command, _)| command))
+        .filter_map(|command| {
+            command
+                .split_once(" explain ")
+                .and_then(|(_, arguments)| arguments.split_whitespace().next())
+        })
+        .map(str::to_owned)
+        .collect::<Vec<_>>();
+    assert!(
+        handles.iter().all(|handle| handle.len() == HANDLE_LEN
+            && handle.bytes().all(|byte| byte.is_ascii_digit()
+                || matches!(byte, b'a'..=b'h' | b'j'..=b'k' | b'm'..=b'n' | b'p'..=b't' | b'v'..=b'z'))),
+        "diagnostic contained malformed group handles: {handles:?}"
+    );
+    handles
 }

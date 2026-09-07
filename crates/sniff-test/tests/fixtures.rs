@@ -7,8 +7,9 @@ use std::process::Command;
 use serde_json::Value;
 
 use common::{
-    COMPILER_DEBUG_FRAGMENTS, CommandOutput, clean_cargo_package_env, copy_fixture_dir,
-    lock_nested_cargo, repo_root, rustc_sysroot,
+    COMPILER_DEBUG_FRAGMENTS, CommandOutput, assert_public_output_uses_human_words,
+    clean_cargo_package_env, copy_fixture_dir, extract_group_handle, lock_nested_cargo,
+    render_snapshot, repo_root, rustc_sysroot,
 };
 
 struct Case {
@@ -16,6 +17,7 @@ struct Case {
     args: &'static [&'static str],
     denied: bool,
     full_report: bool,
+    human_snapshot: Option<&'static str>,
 }
 
 impl Case {
@@ -25,6 +27,7 @@ impl Case {
             args: &[],
             denied: false,
             full_report: false,
+            human_snapshot: None,
         }
     }
 
@@ -40,6 +43,11 @@ impl Case {
 
     fn denied(mut self) -> Self {
         self.denied = true;
+        self
+    }
+
+    fn human_snapshot(mut self, name: &'static str) -> Self {
+        self.human_snapshot = Some(name);
         self
     }
 
@@ -68,7 +76,8 @@ fixture_cases! {
             Case::new().full_report();
     }
     "panic_axioms" => {
-        panic_axioms => Case::new().denied();
+        panic_axioms => Case::new().denied()
+            .human_snapshot("compiler_assert_diagnostics");
     }
     "generic_roots" => {
         generic_roots => Case::new().denied();
@@ -125,12 +134,14 @@ fixture_cases! {
         suppression => Case::new().denied();
     }
     "dependency_obligation" => {
-        dependency_obligation => Case::new().in_app();
+        dependency_obligation => Case::new().in_app()
+            .human_snapshot("dependency_warning_footer");
     }
     "dependency_safety" => {
         dependency_safety => Case::new()
             .in_app()
-            .denied();
+            .denied()
+            .human_snapshot("dependency_safety_diagnostics");
     }
     "dependency_unsafe_trait_call" => {
         dependency_unsafe_trait_call =>
@@ -164,7 +175,8 @@ fixture_cases! {
     "dependency_transitive_panic" => {
         dependency_transitive_panic => Case::new()
             .in_app()
-            .denied();
+            .denied()
+            .human_snapshot("dependency_panic_diagnostics");
     }
     "std_trait_impl_glob" => {
         std_trait_impl_glob => Case::new();
@@ -183,12 +195,9 @@ fixture_cases! {
         state_budget => Case::new()
             .denied();
     }
-    "source_aggregation" => {
-        source_aggregation_json_retains_each_report_root => Case::new()
-            .denied();
-    }
     "indirect_calls" => {
-        indirect_calls => Case::new();
+        indirect_calls => Case::new()
+            .human_snapshot("unresolved_call_target_diagnostics");
     }
     "chain_markers" => {
         chain_markers => Case::new();
@@ -200,29 +209,34 @@ fixture_cases! {
         vendored_dep => Case::new();
     }
     "safe_markers" => {
-        safe_markers => Case::new().denied();
+        safe_markers => Case::new().denied()
+            .human_snapshot("compact_stack_hint");
     }
     "panic_requirements" => {
         panic_requirements => Case::new();
     }
     "ambiguous_markers" => {
         ambiguous_markers => Case::new()
-            .denied();
+            .denied()
+            .human_snapshot("ambiguous_marker_diagnostics");
     }
     "ambiguous_safety" => {
         ambiguous_safety => Case::new()
-            .denied();
+            .denied()
+            .human_snapshot("ambiguous_safety_diagnostics");
         ambiguous_safety_macro_shared =>
             Case::new()
                 .args(&["--manifest", "macro-shared.toml"])
-                .denied();
+                .denied()
+                .human_snapshot("ambiguous_safety_macro_shared_diagnostics");
         ambiguous_safety_generic_instances =>
             Case::new()
                 .args(&["--manifest", "generic-instances.toml"])
                 .denied();
     }
     "safety_contract_requirements" => {
-        safety_contracts_preserve_call_and_obligation_requirements => Case::new();
+        safety_contracts_preserve_call_and_obligation_requirements => Case::new()
+            .human_snapshot("safety_contract_requirement_diagnostics");
     }
     "safety_callable_sites" => {
         safety_callable_sites => Case::new();
@@ -239,7 +253,8 @@ fixture_cases! {
                 .denied();
     }
     "trusted_boundaries" => {
-        trusted_boundaries => Case::new();
+        trusted_boundaries => Case::new()
+            .human_snapshot("trusted_boundary_diagnostics");
         trusted_unresolved_boundaries => Case::new()
             .args(&["--manifest", "trusted-unresolved.toml"]);
     }
@@ -254,11 +269,64 @@ fixture_cases! {
     }
 }
 
-fn run_named_case(name: &'static str, fixture_name: &'static str, case: &Case) {
+#[test]
+fn source_aggregation_json_retains_each_report_root() {
+    let (analyzed, temp) = run_named_case(
+        "source_aggregation_json_retains_each_report_root",
+        "source_aggregation",
+        &Case::new()
+            .denied()
+            .human_snapshot("source_aggregation_collapses_only_human_diagnostics"),
+    );
+    if !cfg!(unix) {
+        return;
+    }
+    let root = temp.path().join("source_aggregation");
+    let binary = PathBuf::from(env!("CARGO_BIN_EXE_cargo-sniff-test"));
+    let handle = extract_group_handle(&analyzed.stderr);
+    let explained = Command::new(&binary)
+        .args(["explain", &handle])
+        .current_dir(&root)
+        .output()
+        .expect("explain shared source paths");
+    assert!(explained.status.success(), "{explained:?}");
+    let explanation = String::from_utf8(explained.stdout).expect("explanation should be utf-8");
+    let help = explanation.find("= help").expect("remediation help");
+    for root in ["first_api", "second_api"] {
+        let edge = format!("source_aggregation::{root} --direct-call->");
+        let path = explanation.find(&edge).expect("retain every root's path");
+        assert!(path < help, "all paths must precede help:\n{explanation}");
+    }
+    assert_eq!(
+        explanation.matches("report root -> effect source").count(),
+        1,
+        "the trace direction should appear once per diagnostic:\n{explanation}"
+    );
+    assert!(
+        !explanation.contains("effect trace step"),
+        "explain should use short numbered steps:\n{explanation}"
+    );
+}
+
+fn run_named_case(
+    name: &'static str,
+    fixture_name: &'static str,
+    case: &Case,
+) -> (CommandOutput, tempfile::TempDir) {
     let repo = repo_root();
     let cargo = PathBuf::from(env!("CARGO_BIN_EXE_cargo-sniff-test"));
     let sysroot = rustc_sysroot();
-    let messages = run_case(&repo, &cargo, &sysroot, name, fixture_name, case);
+    let (output, temp) = run_case(&repo, &cargo, name, fixture_name, case);
+    let root = temp.path().join(fixture_name);
+    let messages = parse_messages(&output, &root, &sysroot, name, fixture_name);
+    if let Some(name) = case.human_snapshot {
+        let snapshot = render_snapshot(output.status, "", &output.stderr, &root, &sysroot);
+        assert_public_output_uses_human_words(name, &snapshot);
+        // Keep the existing CLI snapshots while checking both streams in one run.
+        let mut settings = insta::Settings::clone_current();
+        settings.set_prepend_module_to_snapshot(false);
+        settings.bind(|| insta::assert_snapshot!(format!("cli__{name}"), snapshot));
+    }
     if case.full_report {
         insta::assert_json_snapshot!(name, messages);
     } else {
@@ -267,16 +335,16 @@ fn run_named_case(name: &'static str, fixture_name: &'static str, case: &Case) {
         };
         insta::assert_json_snapshot!(name, report["findings"]);
     }
+    (output, temp)
 }
 
 fn run_case(
     repo: &Path,
     cargo: &Path,
-    sysroot: &str,
     name: &str,
     fixture_name: &str,
     case: &Case,
-) -> Vec<Value> {
+) -> (CommandOutput, tempfile::TempDir) {
     let fixture = repo.join("tests/fixtures").join(fixture_name);
     assert!(
         fixture.exists(),
@@ -327,7 +395,7 @@ fn run_case(
         );
     }
 
-    parse_messages(&output, &root, sysroot, name, fixture_name)
+    (output, temp)
 }
 
 fn parse_messages(

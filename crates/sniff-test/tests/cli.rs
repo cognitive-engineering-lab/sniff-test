@@ -1,19 +1,18 @@
 mod common;
 
 use std::collections::BTreeSet;
-use std::fmt::Write as _;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 
 use common::{
-    COMPILER_DEBUG_FRAGMENTS, CommandOutput, clean_cargo_package_env, copy_fixture_dir,
-    lock_nested_cargo, repo_root, rustc_sysroot,
+    CommandOutput, assert_public_output_uses_human_words, clean_cargo_package_env,
+    copy_fixture_dir, extract_group_handle, extract_group_handles, lock_nested_cargo,
+    normalize_line, render_snapshot, repo_root, rustc_sysroot,
 };
 
 struct Case {
     denied: bool,
-    app_crate: bool,
     working_dir: Option<&'static str>,
     config_append: &'static str,
     args: &'static [&'static str],
@@ -38,45 +37,17 @@ cli_cases! {
         panic_invocation_can_be_allowed => Case::new()
             .config_append("\n[panics.lints]\npanic-invocation = \"allow\"\n");
     }
-    "source_aggregation" => {
-        source_aggregation_collapses_only_human_diagnostics => Case::new()
-            .denied();
-    }
     "safe_markers" => {
-        compact_stack_hint => Case::new().denied();
         full_stack_trace => Case::new()
             .denied()
             .config_append("\n[analysis]\nshow-full-stack-trace = true\n");
-    }
-    "dependency_obligation" => {
-        dependency_warning_footer => Case::new().in_app();
-    }
-    "dependency_transitive_panic" => {
-        dependency_panic_diagnostics => Case::new()
-            .in_app()
-            .denied();
-    }
-    "dependency_safety" => {
-        dependency_safety_diagnostics => Case::new()
-            .in_app()
-            .denied();
     }
     "closure_call_graph" => {
         closure_call_graph_diagnostics => Case::new()
             .args(&["--manifest", "basic.toml"])
             .denied();
     }
-    "indirect_calls" => {
-        unresolved_call_target_diagnostics => Case::new();
-    }
-    "trusted_boundaries" => {
-        trusted_boundary_diagnostics => Case::new();
-    }
-    "safety_contract_requirements" => {
-        safety_contract_requirement_diagnostics => Case::new();
-    }
     "panic_axioms" => {
-        compiler_assert_diagnostics => Case::new().denied();
         compiler_assert_division_override_uses_umbrella_fallback =>
             Case::new()
                 .config_append(
@@ -120,16 +91,6 @@ cli_cases! {
                      unsafe-op-missing-justification = \"allow\"\n\
                      inline-assembly-missing-justification = \"deny\"\n",
                 )
-                .denied();
-    }
-    "ambiguous_markers" => {
-        ambiguous_marker_diagnostics => Case::new().denied();
-    }
-    "ambiguous_safety" => {
-        ambiguous_safety_diagnostics => Case::new().denied();
-        ambiguous_safety_macro_shared_diagnostics =>
-            Case::new()
-                .args(&["--manifest", "macro-shared.toml"])
                 .denied();
     }
 }
@@ -228,17 +189,12 @@ fn every_cargo_run_emits_the_workspace_report() {
 #[test]
 fn compact_diagnostic_group_can_be_explained_from_the_explanation_report() {
     let fixture = repo_root().join("tests/fixtures/direct_panic");
-    let temp = tempfile::Builder::new()
-        .prefix("sniff-test-cli-explain-")
-        .tempdir()
-        .expect("create temporary fixture directory");
+    let temp = tempfile::tempdir().expect("create temporary fixture directory");
     let root = temp.path().join("direct_panic");
     copy_fixture_dir(&fixture, &root).expect("copy direct panic fixture");
-    fs::write(
-        root.join("src/lib.rs"),
-        "fn direct_panic() {\n    panic!(\"not documented\");\n}\n\npub fn entry_point() {\n    direct_panic();\n}\n",
-    )
-    .expect("write fixture source with an actionable invocation");
+    let source = "fn direct_panic() {\n    panic!(\"not documented\");\n}\n\npub fn entry_point() {\n    direct_panic();\n}\n";
+    fs::write(root.join("src/lib.rs"), source)
+        .expect("write fixture source with an actionable invocation");
     fs::write(
         root.join("sniff-test.toml"),
         "[analysis]\nreport-roots = [\"direct_panic::entry_point\"]\n\n[panics]\npanic-sink-namespaces = [\n    \"core::panicking::**\",\n    \"std::panicking::**\",\n    \"core::std::rt::panic_fmt\",\n    \"std::rt::panic_fmt\",\n]\n",
@@ -262,28 +218,21 @@ fn compact_diagnostic_group_can_be_explained_from_the_explanation_report() {
     let _cargo_guard = lock_nested_cargo();
     let first = run_analysis();
     assert_eq!(first.status.code(), Some(101), "stderr:\n{}", first.stderr);
+    for expected in [
+        "this panic is not accounted for on every path",
+        "src/lib.rs:2",
+        "src/lib.rs:6",
+        "account for this path at this call",
+    ] {
+        assert!(
+            first.stderr.contains(expected),
+            "the compact diagnostic must retain `{expected}`:\n{}",
+            first.stderr
+        );
+    }
+    let full_detail = "at least one path to this source is not fully accounted for";
     assert!(
-        first
-            .stderr
-            .contains("this panic is not accounted for on every path"),
-        "stderr:\n{}",
-        first.stderr
-    );
-    assert!(
-        first.stderr.contains("src/lib.rs:2"),
-        "the compact diagnostic must retain the panic source span:\n{}",
-        first.stderr
-    );
-    assert!(
-        first.stderr.contains("src/lib.rs:6")
-            && first.stderr.contains("account for this path at this call"),
-        "the compact diagnostic must retain an actionable invocation span:\n{}",
-        first.stderr
-    );
-    assert!(
-        !first
-            .stderr
-            .contains("at least one path to this source is not fully accounted for"),
+        !first.stderr.contains(full_detail),
         "full trace detail should not be printed inline:\n{}",
         first.stderr
     );
@@ -313,31 +262,23 @@ fn compact_diagnostic_group_can_be_explained_from_the_explanation_report() {
         .current_dir(&root)
         .output()
         .expect("execute the advertised explanation command exactly");
-    assert!(
-        explained.status.success(),
-        "stdout:\n{}\nstderr:\n{}",
-        String::from_utf8_lossy(&explained.stdout),
-        String::from_utf8_lossy(&explained.stderr)
-    );
+    assert_success(&explained, "execute the advertised explanation command");
     let explanation = String::from_utf8(explained.stdout).expect("explanation should be utf-8");
-    assert!(
-        explanation.contains(&first_handle),
-        "explanation:\n{explanation}"
-    );
-    assert!(
-        explanation.contains("at least one path to this source is not fully accounted for"),
-        "the explain command must restore the omitted detail:\n{explanation}"
-    );
-    assert!(
-        explanation.contains("report root -> effect source")
-            && explanation
-                .contains("direct_panic::entry_point --direct-call-> direct_panic::direct_panic",),
-        "the explain command must restore the affected path context:\n{explanation}"
-    );
+    for expected in [
+        &first_handle,
+        full_detail,
+        "report root -> effect source",
+        "direct_panic::entry_point --direct-call-> direct_panic::direct_panic",
+    ] {
+        assert!(
+            explanation.contains(expected),
+            "the explain command must restore `{expected}`:\n{explanation}"
+        );
+    }
 
     fs::write(
         root.join("src/lib.rs"),
-        "// An unrelated edit must not rename the panic below.\nfn direct_panic() {\n    panic!(\"not documented\");\n}\n\npub fn entry_point() {\n    direct_panic();\n}\n",
+        format!("// An unrelated edit must not rename the panic below.\n{source}"),
     )
     .expect("make an unrelated source edit before the recorded diagnostic");
 
@@ -352,56 +293,6 @@ fn compact_diagnostic_group_can_be_explained_from_the_explanation_report() {
         extract_group_handle(&second.stderr),
         first_handle,
         "an unchanged diagnostic group must keep its handle after unrelated source edits"
-    );
-}
-
-#[cfg(unix)]
-#[test]
-fn explanation_lists_all_paths_before_help_without_repeated_trace_prefixes() {
-    let temp = tempfile::tempdir().expect("create temporary fixture directory");
-    let root = temp.path().join("source_aggregation");
-    copy_fixture_dir(
-        &repo_root().join("tests/fixtures/source_aggregation"),
-        &root,
-    )
-    .expect("copy shared source fixture");
-    let binary = PathBuf::from(env!("CARGO_BIN_EXE_cargo-sniff-test"));
-    let cache_dir = temp.path().join("cache");
-    let mut analysis = Command::new(&binary);
-    clean_cargo_package_env(&mut analysis);
-    let _cargo_guard = lock_nested_cargo();
-    let analyzed = analysis
-        .arg("--cache-dir")
-        .arg(&cache_dir)
-        .args(["--color", "never"])
-        .current_dir(&root)
-        .output()
-        .expect("analyze shared source fixture");
-    let analyzed = CommandOutput::from_output(analyzed);
-    assert_eq!(analyzed.status.code(), Some(101), "{}", analyzed.stderr);
-    let handle = extract_group_handle(&analyzed.stderr);
-    let explained = Command::new(&binary)
-        .args(["explain", &handle, "--cache-dir"])
-        .arg(&cache_dir)
-        .current_dir(&root)
-        .output()
-        .expect("explain shared source paths");
-    assert!(explained.status.success(), "{explained:?}");
-    let explanation = String::from_utf8(explained.stdout).expect("explanation should be utf-8");
-    let help = explanation.find("= help").expect("remediation help");
-    for root in ["first_api", "second_api"] {
-        let edge = format!("source_aggregation::{root} --direct-call->");
-        let path = explanation.find(&edge).expect("retain every root's path");
-        assert!(path < help, "all paths must precede help:\n{explanation}");
-    }
-    assert_eq!(
-        explanation.matches("report root -> effect source").count(),
-        1,
-        "the trace direction should appear once per diagnostic:\n{explanation}"
-    );
-    assert!(
-        !explanation.contains("effect trace step"),
-        "explain should use short numbered steps:\n{explanation}"
     );
 }
 
@@ -694,45 +585,16 @@ fn repeated_identical_closure_invocations_share_one_diagnostic_group() {
     );
 }
 
-fn extract_group_handle(output: &str) -> String {
-    extract_group_handles(output)
-        .into_iter()
-        .next()
-        .unwrap_or_else(|| panic!("diagnostic did not contain a group handle:\n{output}"))
-}
-
-fn extract_group_handles(output: &str) -> Vec<String> {
-    const COMMAND_PREFIX: &str = "run `";
-    const HANDLE_LEN: usize = 4;
-
-    let handles = output
-        .split(COMMAND_PREFIX)
-        .skip(1)
-        .filter_map(|command| command.split_once('`').map(|(command, _)| command))
-        .filter_map(|command| {
-            command
-                .split_once(" explain ")
-                .and_then(|(_, arguments)| arguments.split_whitespace().next())
-        })
-        .map(str::to_owned)
-        .collect::<Vec<_>>();
-    assert!(
-        handles.iter().all(|handle| handle.len() == HANDLE_LEN
-            && handle.bytes().all(|byte| byte.is_ascii_digit()
-                || matches!(byte, b'a'..=b'h' | b'j'..=b'k' | b'm'..=b'n' | b'p'..=b't' | b'v'..=b'z'))),
-        "diagnostic contained malformed group handles: {handles:?}"
-    );
-    handles
-}
-
 fn extract_explain_command(output: &str) -> String {
     const PREFIX: &str = "run `";
 
     output
         .split_once(PREFIX)
         .and_then(|(_, command)| command.split_once('`'))
-        .map(|(command, _)| command.to_owned())
-        .unwrap_or_else(|| panic!("diagnostic did not contain an explain command:\n{output}"))
+        .map_or_else(
+            || panic!("diagnostic did not contain an explain command:\n{output}"),
+            |(command, _)| command.to_owned(),
+        )
 }
 
 #[test]
@@ -2132,73 +1994,70 @@ fn workspace_unit_fails_when_required_extern_artifact_facts_are_missing() {
 #[test]
 fn cargo_frontend_ignores_compile_time_proc_macro_artifacts() {
     let temp = tempfile::tempdir().expect("temp dir");
-    let app = temp.path().join("app");
-    let macros = temp.path().join("macros");
-    let empty_macros = temp.path().join("empty-macros");
-    let seed = temp.path().join("seed");
-    fs::create_dir_all(app.join("src")).expect("create app source directory");
-    fs::create_dir_all(macros.join("src")).expect("create proc-macro source directory");
-    fs::create_dir_all(empty_macros.join("src")).expect("create empty proc-macro source directory");
-    fs::create_dir_all(seed.join("src")).expect("create seed source directory");
-    fs::write(
-        temp.path().join("Cargo.toml"),
-        "[workspace]\nmembers = [\"app\", \"empty-macros\", \"macros\", \"seed\"]\nresolver = \"2\"\n",
-    )
-    .expect("write workspace manifest");
-    fs::write(
-        temp.path().join("sniff-test.toml"),
-        "[panics]\npanic-sink-namespaces = [\"core::panicking::**\", \"std::panicking::**\"]\n",
-    )
-    .expect("write sniff-test manifest");
-    fs::write(
-        app.join("Cargo.toml"),
-        "[package]\nname = \"proc-macro-consumer\"\nversion = \"0.1.0\"\nedition = \"2024\"\n\n[dependencies]\nempty-macros = { path = \"../empty-macros\" }\nworkspace-macros = { path = \"../macros\" }\n",
-    )
-    .expect("write app manifest");
-    fs::write(
-        app.join("src/lib.rs"),
-        "extern crate empty_macros;\nuse workspace_macros::passthrough;\n\n#[passthrough]\npub fn public_api() {}\n",
-    )
-    .expect("write app source");
-    fs::write(
-        macros.join("Cargo.toml"),
-        "[package]\nname = \"workspace-macros\"\nversion = \"0.1.0\"\nedition = \"2024\"\n\n[lib]\nproc-macro = true\n",
-    )
-    .expect("write proc-macro manifest");
-    fs::write(
-        macros.join("src/lib.rs"),
-        "use proc_macro::TokenStream;\n\n#[proc_macro_attribute]\npub fn passthrough(_: TokenStream, item: TokenStream) -> TokenStream { item }\n",
-    )
-    .expect("write proc-macro source");
-    fs::write(
-        empty_macros.join("Cargo.toml"),
-        "[package]\nname = \"empty-macros\"\nversion = \"0.1.0\"\nedition = \"2024\"\n\n[lib]\nproc-macro = true\n",
-    )
-    .expect("write empty proc-macro manifest");
-    fs::write(empty_macros.join("src/lib.rs"), "").expect("write empty proc-macro source");
-    fs::write(
-        seed.join("Cargo.toml"),
-        "[package]\nname = \"old-diagnostic-seed\"\nversion = \"0.1.0\"\nedition = \"2024\"\n",
-    )
-    .expect("write seed manifest");
-    fs::write(
-        seed.join("src/lib.rs"),
-        "pub fn old_diagnostic() { panic!(\"old\"); }\n",
-    )
-    .expect("write seed source");
+    for package in ["app", "macros", "empty-macros", "seed"] {
+        let source_dir = temp.path().join(package).join("src");
+        fs::create_dir_all(&source_dir)
+            .unwrap_or_else(|error| panic!("failed to create {}: {error}", source_dir.display()));
+    }
+    for (relative_path, contents) in [
+        (
+            "Cargo.toml",
+            "[workspace]\nmembers = [\"app\", \"empty-macros\", \"macros\", \"seed\"]\nresolver = \"2\"\n",
+        ),
+        (
+            "sniff-test.toml",
+            "[panics]\npanic-sink-namespaces = [\"core::panicking::**\", \"std::panicking::**\"]\n",
+        ),
+        (
+            "app/Cargo.toml",
+            "[package]\nname = \"proc-macro-consumer\"\nversion = \"0.1.0\"\nedition = \"2024\"\n\n[dependencies]\nempty-macros = { path = \"../empty-macros\" }\nworkspace-macros = { path = \"../macros\" }\n",
+        ),
+        (
+            "app/src/lib.rs",
+            "extern crate empty_macros;\nuse workspace_macros::passthrough;\n\n#[passthrough]\npub fn public_api() {}\n",
+        ),
+        (
+            "macros/Cargo.toml",
+            "[package]\nname = \"workspace-macros\"\nversion = \"0.1.0\"\nedition = \"2024\"\n\n[lib]\nproc-macro = true\n",
+        ),
+        (
+            "macros/src/lib.rs",
+            "use proc_macro::TokenStream;\n\n#[proc_macro_attribute]\npub fn passthrough(_: TokenStream, item: TokenStream) -> TokenStream { item }\n",
+        ),
+        (
+            "empty-macros/Cargo.toml",
+            "[package]\nname = \"empty-macros\"\nversion = \"0.1.0\"\nedition = \"2024\"\n\n[lib]\nproc-macro = true\n",
+        ),
+        ("empty-macros/src/lib.rs", ""),
+        (
+            "seed/Cargo.toml",
+            "[package]\nname = \"old-diagnostic-seed\"\nversion = \"0.1.0\"\nedition = \"2024\"\n",
+        ),
+        (
+            "seed/src/lib.rs",
+            "pub fn old_diagnostic() { panic!(\"old\"); }\n",
+        ),
+    ] {
+        let path = temp.path().join(relative_path);
+        fs::write(&path, contents)
+            .unwrap_or_else(|error| panic!("failed to write {}: {error}", path.display()));
+    }
 
     let binary = PathBuf::from(env!("CARGO_BIN_EXE_cargo-sniff-test"));
     let cache_dir = temp.path().join("cache");
     let _cargo_guard = lock_nested_cargo();
-    let mut seed_command = Command::new(&binary);
-    clean_cargo_package_env(&mut seed_command);
-    let seed_output = seed_command
-        .args(["--cache-dir"])
-        .arg(&cache_dir)
-        .args(["--color", "never", "--", "-p", "old-diagnostic-seed"])
-        .current_dir(temp.path())
-        .output()
-        .expect("seed the previous explanation report");
+    let run_package = |package| {
+        let mut command = Command::new(&binary);
+        clean_cargo_package_env(&mut command);
+        command
+            .arg("--cache-dir")
+            .arg(&cache_dir)
+            .args(["--color", "never", "--", "-p", package])
+            .current_dir(temp.path())
+            .output()
+            .unwrap_or_else(|error| panic!("failed to analyze {package}: {error}"))
+    };
+    let seed_output = run_package("old-diagnostic-seed");
     assert!(
         !seed_output.status.success(),
         "the seed panic should be denied:\n{}",
@@ -2207,22 +2066,9 @@ fn cargo_frontend_ignores_compile_time_proc_macro_artifacts() {
     let seed_stderr = String::from_utf8_lossy(&seed_output.stderr);
     let old_handle = extract_group_handle(&seed_stderr);
 
-    let mut command = Command::new(&binary);
-    clean_cargo_package_env(&mut command);
-    let output = command
-        .args(["--cache-dir"])
-        .arg(&cache_dir)
-        .args(["--color", "never", "--", "-p", "workspace-macros"])
-        .current_dir(temp.path())
-        .output()
-        .expect("run cargo frontend");
+    let output = run_package("workspace-macros");
 
-    assert!(
-        output.status.success(),
-        "stdout:\n{}\nstderr:\n{}",
-        String::from_utf8_lossy(&output.stdout),
-        String::from_utf8_lossy(&output.stderr)
-    );
+    assert_success(&output, "proc-macro-only analysis");
     let mut explain = Command::new(&binary);
     clean_cargo_package_env(&mut explain);
     let explained = explain
@@ -2237,21 +2083,8 @@ fn cargo_frontend_ignores_compile_time_proc_macro_artifacts() {
         String::from_utf8_lossy(&explained.stdout)
     );
 
-    let mut consumer = Command::new(&binary);
-    clean_cargo_package_env(&mut consumer);
-    let consumer_output = consumer
-        .args(["--cache-dir"])
-        .arg(&cache_dir)
-        .args(["--color", "never", "--", "-p", "proc-macro-consumer"])
-        .current_dir(temp.path())
-        .output()
-        .expect("run the proc-macro consumer");
-    assert!(
-        consumer_output.status.success(),
-        "stdout:\n{}\nstderr:\n{}",
-        String::from_utf8_lossy(&consumer_output.stdout),
-        String::from_utf8_lossy(&consumer_output.stderr)
-    );
+    let consumer_output = run_package("proc-macro-consumer");
+    assert_success(&consumer_output, "proc-macro consumer analysis");
     assert!(
         !String::from_utf8_lossy(&consumer_output.stderr)
             .contains("failed to load required dependency artifact facts"),
@@ -2873,7 +2706,6 @@ impl Case {
     fn new() -> Self {
         Self {
             denied: false,
-            app_crate: false,
             working_dir: None,
             config_append: "",
             args: &[],
@@ -2883,11 +2715,6 @@ impl Case {
 
     fn denied(mut self) -> Self {
         self.denied = true;
-        self
-    }
-
-    fn in_app(mut self) -> Self {
-        self.app_crate = true;
         self
     }
 
@@ -2929,7 +2756,13 @@ fn run_named_case(name: &'static str, fixture_name: &'static str, case: &Case) {
         output.stderr
     );
 
-    let snapshot = render_snapshot(&output, &fixture_root, sysroot.as_str());
+    let snapshot = render_snapshot(
+        output.status,
+        &output.stdout,
+        &output.stderr,
+        &fixture_root,
+        sysroot.as_str(),
+    );
     assert_public_output_uses_human_words(name, &snapshot);
     insta::assert_snapshot!(name, snapshot);
 }
@@ -2957,19 +2790,6 @@ fn assert_panic_axiom_lint_codes(stderr: &str) {
     );
 }
 
-fn assert_public_output_uses_human_words(name: &str, output: &str) {
-    for fragment in COMPILER_DEBUG_FRAGMENTS {
-        assert!(
-            !output.contains(fragment),
-            "{name}: public diagnostic contains compiler debug output `{fragment}`:\n{output}"
-        );
-    }
-    assert!(
-        !output.contains("reachability root"),
-        "{name}: public diagnostic contains internal reachability jargon:\n{output}"
-    );
-}
-
 fn run_case(
     repo: &Path,
     binary: &Path,
@@ -2992,16 +2812,15 @@ fn run_case(
     copy_fixture_dir(&fixture, &root)
         .unwrap_or_else(|error| panic!("{name}: failed to copy fixture: {error}"));
 
-    let crate_dir = if case.app_crate { "app" } else { "" };
     if !case.config_append.is_empty() {
-        let config = root.join(crate_dir).join("sniff-test.toml");
+        let config = root.join("sniff-test.toml");
         let existing = fs::read_to_string(&config)
             .unwrap_or_else(|error| panic!("{name}: failed to read config: {error}"));
         fs::write(config, existing + case.config_append)
             .unwrap_or_else(|error| panic!("{name}: failed to update config: {error}"));
     }
 
-    let working_dir = root.join(case.working_dir.unwrap_or(crate_dir));
+    let working_dir = root.join(case.working_dir.unwrap_or(""));
     let _cargo_guard = lock_nested_cargo();
     let output = run_cargo_sniff_test(binary, &working_dir, name, case);
     (output, root)
@@ -3027,80 +2846,6 @@ fn run_cargo_sniff_test(
     CommandOutput::from_output(output)
 }
 
-fn render_snapshot(output: &CommandOutput, fixture_root: &Path, sysroot: &str) -> String {
-    let mut rendered = String::new();
-    writeln!(
-        &mut rendered,
-        "exit: {}",
-        output.status.code().unwrap_or(-1)
-    )
-    .unwrap();
-    writeln!(&mut rendered, "stdout:").unwrap();
-    rendered.push_str(&snapshot_section(&output.stdout, fixture_root, sysroot));
-    writeln!(&mut rendered, "stderr:").unwrap();
-    rendered.push_str(&snapshot_section(&output.stderr, fixture_root, sysroot));
-    rendered
-}
-
-fn snapshot_section(text: &str, fixture_root: &Path, sysroot: &str) -> String {
-    if text.is_empty() {
-        return String::from("<empty>\n");
-    }
-
-    let normalized = normalize_output(text, fixture_root, sysroot);
-    if normalized.is_empty() {
-        return String::from("<empty>\n");
-    }
-
-    let mut section = String::new();
-    for line in normalized.lines() {
-        writeln!(&mut section, "{line}").unwrap();
-    }
-    section
-}
-
-fn normalize_output(text: &str, fixture_root: &Path, sysroot: &str) -> String {
-    text.lines()
-        .map(|line| normalize_line(line, fixture_root, sysroot))
-        .filter(|line| !is_volatile_cargo_status(line))
-        .collect::<Vec<_>>()
-        .join("\n")
-}
-
-fn normalize_line(line: &str, fixture_root: &Path, sysroot: &str) -> String {
-    let frontend = fs::canonicalize(env!("CARGO_BIN_EXE_cargo-sniff-test"))
-        .unwrap_or_else(|_| PathBuf::from(env!("CARGO_BIN_EXE_cargo-sniff-test")));
-    let mut line = line
-        .replace(&fixture_root.display().to_string(), "[FIXTURE]")
-        .replace(sysroot, "[SYSROOT]")
-        .replace(&frontend.display().to_string(), "[SNIFF-TEST]");
-    // Cases running from the temp dir itself leak its per-run name, such as
-    // the config-discovery notice.
-    if let Some(parent) = fixture_root.parent() {
-        line = line.replace(&parent.display().to_string(), "[TEMP]");
-    }
-
-    if let Some((prefix, _time)) = line.split_once(" target(s) in ") {
-        line = format!("{prefix} target(s) in [TIME]");
-    }
-
-    normalize_cache_format_version(line)
-}
-
-fn normalize_cache_format_version(mut line: String) -> String {
-    const MARKER: &str = "sniff-test-cache/v";
-    let Some(version_start) = line.find(MARKER).map(|start| start + MARKER.len()) else {
-        return line;
-    };
-    let version_end = line[version_start..]
-        .find(|character: char| !character.is_ascii_digit())
-        .map_or(line.len(), |end| version_start + end);
-    if version_end > version_start {
-        line.replace_range(version_start..version_end, "[FORMAT]");
-    }
-    line
-}
-
 #[test]
 fn snapshot_normalization_hides_the_internal_cache_format_version() {
     let normalized = normalize_line(
@@ -3113,13 +2858,6 @@ fn snapshot_normalization_hides_the_internal_cache_format_version() {
         normalized,
         "/workspace/target/sniff-test/sniff-test-cache/v[FORMAT]/explain.json"
     );
-}
-
-fn is_volatile_cargo_status(line: &str) -> bool {
-    let line = line.trim_start();
-    line.starts_with("Locking ")
-        && line.contains(" package")
-        && line.contains(" compatible version")
 }
 
 fn assert_json_keys_absent(value: &serde_json::Value, forbidden: &[&str]) {
