@@ -41,12 +41,7 @@ impl<'tcx> From<Instance<'tcx>> for ReachabilityRoot<'tcx> {
     }
 }
 
-/// Converts a query root into the function instance used for traversal.
-pub trait IntoInstance<'tcx> {
-    fn into_instance(self, tcx: TyCtxt<'tcx>) -> Instance<'tcx>;
-}
-
-impl<'tcx> IntoInstance<'tcx> for ReachabilityRoot<'tcx> {
+impl<'tcx> ReachabilityRoot<'tcx> {
     fn into_instance(self, tcx: TyCtxt<'tcx>) -> Instance<'tcx> {
         match self {
             Self::Instance(instance) => instance,
@@ -55,12 +50,6 @@ impl<'tcx> IntoInstance<'tcx> for ReachabilityRoot<'tcx> {
                 GenericArgs::identity_for_item(tcx, def_id.to_def_id()),
             ),
         }
-    }
-}
-
-impl<'tcx> IntoInstance<'tcx> for Instance<'tcx> {
-    fn into_instance(self, _tcx: TyCtxt<'tcx>) -> Instance<'tcx> {
-        self
     }
 }
 
@@ -173,10 +162,10 @@ impl<'tcx> ReachabilityIndex<'tcx> {
         options: ReachabilityOptions,
     ) -> ReachabilitySnapshot
     where
-        R: IntoInstance<'tcx>,
+        R: Into<ReachabilityRoot<'tcx>>,
         H: ReachabilityHooks<'tcx>,
     {
-        self.query_instances(&[root.into_instance(self.tcx)], hooks, options)
+        self.query_instances(&[root.into().into_instance(self.tcx)], hooks, options)
     }
 
     /// Runs one reachability query from every supplied root.
@@ -196,13 +185,13 @@ impl<'tcx> ReachabilityIndex<'tcx> {
     ) -> Option<ReachabilitySnapshot>
     where
         I: IntoIterator<Item = R>,
-        R: IntoInstance<'tcx>,
+        R: Into<ReachabilityRoot<'tcx>>,
         H: ReachabilityHooks<'tcx>,
     {
         let mut seen_roots = HashSet::new();
         let roots = roots
             .into_iter()
-            .map(|root| root.into_instance(self.tcx))
+            .map(|root| root.into().into_instance(self.tcx))
             .filter(|root| seen_roots.insert(*root))
             .collect::<Vec<_>>();
         if roots.is_empty() {

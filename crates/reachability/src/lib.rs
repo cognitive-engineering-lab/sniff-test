@@ -22,8 +22,9 @@
 //! monomorphized instance, or [`ReachabilityRoot::LocalBody`] to walk a local
 //! body structurally. Generic local bodies are walked with identity generic
 //! arguments; unresolved trait-dispatched calls are recorded as indirect
-//! boundaries instead of guessed implementations. [`ReachabilityHooks`] can
-//! prevent descending into selected callees.
+//! boundaries instead of guessed implementations. Both queries also accept
+//! `Instance` and `LocalDefId` directly through `Into<ReachabilityRoot>`.
+//! [`ReachabilityHooks`] can prevent descending into selected callees.
 //! [`ReachabilityOptions::artifact_scope`] can limit body expansion to crates
 //! containing query roots while retaining cross-artifact calls as explicit
 //! frontier nodes.
@@ -50,8 +51,8 @@ mod graph;
 mod hooks;
 
 pub use analysis::{
-    ArtifactScope, DynDispatchVTableEdges, FnPointerEdges, IntoInstance, ReachabilityIndex,
-    ReachabilityOptions, ReachabilityRoot,
+    ArtifactScope, DynDispatchVTableEdges, FnPointerEdges, ReachabilityIndex, ReachabilityOptions,
+    ReachabilityRoot,
 };
 pub use graph::{
     CallableEdgeInfo, CompilerAssertLocal, CompilerAssertLocalRole, MirBodyLocation,
