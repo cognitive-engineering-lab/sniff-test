@@ -56,6 +56,10 @@ its printed command, for example:
 cargo sniff-test explain 7k3m
 ```
 
+Explanations use rustc's native diagnostic rendering, including source snippets
+and colors. Use `--color always` to retain colors when piping output, or
+`--color never` to disable them. Auto mode respects `NO_COLOR`.
+
 That short form is used when Cargo can rediscover the default cache. For a
 custom or otherwise non-discoverable cache, the same help line includes the
 exact frontend and cache path needed to open it.
@@ -70,7 +74,8 @@ which one was intended.
 The cache retains only one explanation report at `<cache>/explain.json`. Each
 Cargo invocation collects its rustc outputs in a temporary directory and then
 atomically replaces that file, so no run history accumulates under `target`.
-The report deliberately stores no run ID, source snapshot, or staleness index.
+The rendered diagnostics include the source snippets seen at analysis time;
+rerun analysis to refresh them after editing source files.
 Set `[analysis].show-full-stack-trace = true` to print the full explanation
 inline instead of the compact form.
 

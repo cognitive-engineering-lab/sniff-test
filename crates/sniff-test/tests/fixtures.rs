@@ -308,7 +308,7 @@ fn source_aggregation_json_retains_each_report_root() {
     let binary = PathBuf::from(env!("CARGO_BIN_EXE_cargo-sniff-test"));
     let handle = extract_group_handle(&analyzed.stderr);
     let explained = Command::new(&binary)
-        .args(["explain", &handle])
+        .args(["explain", &handle, "--color", "never"])
         .current_dir(&root)
         .output()
         .expect("explain shared source paths");
@@ -320,14 +320,15 @@ fn source_aggregation_json_retains_each_report_root() {
         let path = explanation.find(&edge).expect("retain every root's path");
         assert!(path < help, "all paths must precede help:\n{explanation}");
     }
+    let trace_steps = explanation.matches("effect trace step ").count();
+    assert!(
+        trace_steps >= 2,
+        "explain should retain native trace notes for both roots:\n{explanation}"
+    );
     assert_eq!(
         explanation.matches("report root -> effect source").count(),
-        1,
-        "the trace direction should appear once per diagnostic:\n{explanation}"
-    );
-    assert!(
-        !explanation.contains("effect trace step"),
-        "explain should use short numbered steps:\n{explanation}"
+        trace_steps,
+        "each native trace note should retain its direction:\n{explanation}"
     );
 }
 

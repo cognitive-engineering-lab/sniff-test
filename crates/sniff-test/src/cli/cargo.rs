@@ -2,6 +2,7 @@
 
 use std::ffi::OsString;
 use std::fs;
+use std::io::{self, Write as _};
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitCode};
 
@@ -10,7 +11,8 @@ use crate::config::EXAMPLE_MANIFEST;
 use anyhow::{Context, Result, bail};
 
 use super::args::{
-    self, ExplainCliArgs, FrontendAction, FrontendCli, InitCliArgs, SniffTestArgs, SourcePackage,
+    self, ColorChoice, ExplainCliArgs, FrontendAction, FrontendCli, InitCliArgs, SniffTestArgs,
+    SourcePackage,
 };
 use super::explanations::{DiagnosticGroupHandle, ExplanationStore};
 use super::plugin::{
@@ -159,27 +161,30 @@ fn run_explain(args: &ExplainCliArgs) -> Result<ExitCode> {
     let groups = ExplanationStore::new(cache_dir)
         .explain(&handle)
         .with_context(|| format!("failed to explain diagnostic group `{handle}`"))?;
+    let color = match args.color {
+        ColorChoice::Auto => rustc_errors::ColorChoice::Auto,
+        ColorChoice::Always => rustc_errors::ColorChoice::Always,
+        ColorChoice::Never => rustc_errors::ColorChoice::Never,
+    };
+    let mut output = rustc_errors::AutoStream::new(io::stdout().lock(), color);
     let show_group_headers = groups.len() > 1;
     for (group_index, group) in groups.iter().enumerate() {
         if group_index > 0 {
-            println!();
+            writeln!(output)?;
         }
         if show_group_headers {
             let key = group.key();
             if key.subtype().is_empty() {
-                println!("{}", key.function());
+                writeln!(output, "{}", key.function())?;
             } else {
-                println!("{} ({})", key.function(), key.subtype());
+                writeln!(output, "{} ({})", key.function(), key.subtype())?;
             }
         }
         for (diagnostic_index, diagnostic) in group.diagnostics().iter().enumerate() {
             if diagnostic_index > 0 {
-                println!();
+                writeln!(output)?;
             }
-            println!("{} ({handle})", diagnostic.summary());
-            if !diagnostic.explanation().is_empty() {
-                println!("{}", diagnostic.explanation());
-            }
+            output.write_all(diagnostic.explanation().as_bytes())?;
         }
     }
     Ok(ExitCode::SUCCESS)
@@ -402,6 +407,7 @@ mod tests {
             handle: String::from("invalid"),
             manifest_path: Some(temporary.path().join("Cargo.toml")),
             cache_dir: None,
+            color: crate::cli::args::ColorChoice::Auto,
         };
 
         let error = run_explain(&args).expect_err("reject the malformed handle");

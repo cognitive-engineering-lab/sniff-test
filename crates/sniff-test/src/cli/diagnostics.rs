@@ -1,11 +1,16 @@
 //! Rustc diagnostic emission for interpreted workspace findings.
 
+use std::io::{self, Write};
 use std::path::Path;
+use std::sync::{Arc, Mutex};
 
 use crate::config::{LintLevel, ReportRootSet};
 use crate::report_roots::MissingReportRoot;
-use rustc_errors::{Diag, EmissionGuarantee};
+use rustc_errors::annotate_snippet_emitter_writer::AnnotateSnippetEmitter;
+use rustc_errors::emitter::Emitter;
+use rustc_errors::{AutoStream, ColorChoice, Diag, EmissionGuarantee, Level};
 use rustc_middle::ty::TyCtxt;
+use rustc_span::source_map::SourceMap;
 use rustc_span::{BytePos, Span};
 use toml::Spanned;
 
@@ -23,53 +28,97 @@ pub(super) fn emit_finding_diagnostic(
 ) {
     let message = lint_coded_message(lint_code, &diagnostic.message);
     let messages = messages_for_emission(diagnostic, group);
-    let explainable_group = group.map(|group| (group, frontend_executable));
+    let explanation_help = group.map(|group| explain_help(group, cache_dir, frontend_executable));
     match (level, diagnostic.span) {
         (LintLevel::Allow, _) => {}
         (LintLevel::Warn, Some(span)) => {
             let mut emitted = tcx.dcx().struct_span_warn(span, message.clone());
-            decorate(
-                &mut emitted,
-                lint_code,
-                messages,
-                explainable_group,
-                cache_dir,
-            );
+            decorate(&mut emitted, lint_code, messages, explanation_help);
             emitted.emit();
         }
         (LintLevel::Warn, None) => {
             let mut emitted = tcx.dcx().struct_warn(message.clone());
-            decorate(
-                &mut emitted,
-                lint_code,
-                messages,
-                explainable_group,
-                cache_dir,
-            );
+            decorate(&mut emitted, lint_code, messages, explanation_help);
             emitted.emit();
         }
         (LintLevel::Deny, Some(span)) => {
             let mut emitted = tcx.dcx().struct_span_err(span, message.clone());
-            decorate(
-                &mut emitted,
-                lint_code,
-                messages,
-                explainable_group,
-                cache_dir,
-            );
+            decorate(&mut emitted, lint_code, messages, explanation_help);
             let _ = emitted.emit();
         }
         (LintLevel::Deny, None) => {
             let mut emitted = tcx.dcx().struct_err(message);
-            decorate(
-                &mut emitted,
-                lint_code,
-                messages,
-                explainable_group,
-                cache_dir,
-            );
+            decorate(&mut emitted, lint_code, messages, explanation_help);
             let _ = emitted.emit();
         }
+    }
+}
+
+pub(super) fn render_finding_diagnostic(
+    tcx: TyCtxt<'_>,
+    level: LintLevel,
+    lint_code: &str,
+    diagnostic: &FindingDiagnostic,
+    group: &DiagnosticGroupHandle,
+) -> String {
+    let level = match level {
+        LintLevel::Allow => return String::new(),
+        LintLevel::Warn => Level::Warning,
+        LintLevel::Deny => Level::Error,
+    };
+    let message = format!(
+        "{} ({group})",
+        lint_coded_message(lint_code, &diagnostic.message)
+    );
+    let mut rendered = Diag::<()>::new(tcx.dcx(), level, message);
+    if let Some(span) = diagnostic.span {
+        rendered.span(span);
+    }
+    let mut messages = diagnostic.messages.clone();
+    messages.sort_by_key(|message| {
+        matches!(
+            message,
+            DiagnosticMessage::Help(_) | DiagnosticMessage::SpanHelp(..)
+        )
+    });
+    decorate(&mut rendered, lint_code, &messages, None);
+    render_diagnostic(
+        rendered,
+        tcx.sess.psess.clone_source_map(),
+        tcx.sess.opts.diagnostic_width,
+    )
+}
+
+fn render_diagnostic<G: EmissionGuarantee>(
+    diagnostic: Diag<'_, G>,
+    source_map: Arc<SourceMap>,
+    diagnostic_width: Option<usize>,
+) -> String {
+    let inner = (*diagnostic).clone();
+    // Rendering must not emit to the session or increment its error count.
+    diagnostic.cancel();
+    let buffer = DiagnosticBuffer::default();
+    AnnotateSnippetEmitter::new(AutoStream::new(
+        Box::new(buffer.clone()),
+        ColorChoice::AlwaysAnsi,
+    ))
+    .sm(Some(source_map))
+    .diagnostic_width(diagnostic_width)
+    .emit_diagnostic(inner);
+    let bytes = std::mem::take(&mut *buffer.0.lock().expect("diagnostic buffer lock"));
+    String::from_utf8(bytes).expect("rustc diagnostics are UTF-8")
+}
+
+#[derive(Clone, Default)]
+struct DiagnosticBuffer(Arc<Mutex<Vec<u8>>>);
+
+impl Write for DiagnosticBuffer {
+    fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+        self.0.lock().expect("diagnostic buffer lock").write(bytes)
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        Ok(())
     }
 }
 
@@ -92,8 +141,7 @@ fn decorate<G: EmissionGuarantee>(
     diagnostic: &mut Diag<'_, G>,
     lint_code: &str,
     messages: &[DiagnosticMessage],
-    group: Option<(&DiagnosticGroupHandle, Option<&Path>)>,
-    cache_dir: &Path,
+    explanation_help: Option<String>,
 ) {
     diagnostic.is_lint(lint_code.to_owned(), false);
     for message in messages {
@@ -130,8 +178,8 @@ fn decorate<G: EmissionGuarantee>(
             }
         }
     }
-    if let Some((group, frontend_executable)) = group {
-        diagnostic.help(explain_help(group, cache_dir, frontend_executable));
+    if let Some(help) = explanation_help {
+        diagnostic.help(help);
     }
 }
 
@@ -264,15 +312,19 @@ fn normalized_offset(file: &rustc_span::SourceFile, original: usize) -> Option<u
 #[cfg(test)]
 mod tests {
     use rustc_errors::emitter::SilentEmitter;
-    use rustc_errors::{DiagCtxt, Level};
+    use rustc_errors::{Diag, DiagCtxt, Level};
     use rustc_span::source_map::{FilePathMapping, SourceMap};
-    use rustc_span::{BytePos, FileName};
+    use rustc_span::{BytePos, FileName, Span};
     use std::path::Path;
+    use std::sync::Arc;
 
     use crate::cli::explanations::{DiagnosticGroupHandle, DiagnosticGroupKey};
     use crate::cli::findings::{DiagnosticMessage, FindingDiagnostic};
 
-    use super::{config_span, decorate, explain_help, lint_coded_message, messages_for_emission};
+    use super::{
+        config_span, decorate, explain_help, lint_coded_message, messages_for_emission,
+        render_diagnostic,
+    };
 
     fn with_source_file(source: &str, check: impl FnOnce(&rustc_span::SourceFile)) {
         rustc_span::create_default_session_globals_then(|| {
@@ -349,6 +401,62 @@ mod tests {
     }
 
     #[test]
+    fn native_rendering_preserves_color_source_and_details_without_emitting_errors() {
+        rustc_span::create_default_session_globals_then(|| {
+            #[expect(
+                clippy::arc_with_non_send_sync,
+                reason = "rustc's emitter requires Arc<SourceMap>, including in single-threaded tests"
+            )]
+            let source_map = Arc::new(SourceMap::new(FilePathMapping::empty()));
+            let source = "fn main() {\n    danger();\n}\n";
+            let file = source_map.new_source_file(
+                FileName::Custom(String::from("example.rs")),
+                source.to_owned(),
+            );
+            let start = u32::try_from(source.find("danger").expect("source call"))
+                .expect("source fits in a span");
+            let span = Span::with_root_ctxt(
+                file.start_pos + BytePos(start),
+                file.start_pos + BytePos(start + 8),
+            );
+            let dcx = DiagCtxt::new(Box::new(SilentEmitter));
+            for level in [Level::Warning, Level::Error] {
+                let mut diagnostic = Diag::<()>::new(dcx.handle(), level, "finding (abcd)");
+                diagnostic.span(span);
+                decorate(
+                    &mut diagnostic,
+                    "sniff-test::safety::unsafe-call",
+                    &[
+                        DiagnosticMessage::SpanLabel(span, String::from("audit this call")),
+                        DiagnosticMessage::TraceStep {
+                            span: Some(span),
+                            index: 1,
+                            total: 1,
+                            description: String::from("main calls danger"),
+                        },
+                        DiagnosticMessage::Help(String::from("justify the safety contract")),
+                    ],
+                    None,
+                );
+                let rendered = render_diagnostic(diagnostic, Arc::clone(&source_map), Some(100));
+
+                assert!(rendered.contains("\u{1b}["), "native ANSI styling");
+                assert!(rendered.contains("finding (abcd)"));
+                assert!(rendered.contains("example.rs"));
+                assert!(rendered.contains(":2:5"), "{rendered:?}");
+                assert!(rendered.contains("danger();"));
+                assert!(rendered.contains("audit this call"));
+                assert!(rendered.contains("effect trace step 1/1"));
+                assert!(rendered.contains("main calls danger"));
+                assert!(rendered.contains("justify the safety contract"));
+                assert!(!rendered.contains("run `cargo sniff-test explain"));
+                assert_eq!(dcx.handle().err_count(), 0);
+                assert!(dcx.handle().has_errors().is_none());
+            }
+        });
+    }
+
+    #[test]
     fn explain_metadata_is_one_help_without_a_separate_handle_line() {
         let group = group_handle();
         let messages = [DiagnosticMessage::Help(String::from(
@@ -361,8 +469,11 @@ mod tests {
             &mut diagnostic,
             "sniff-test::panics::panic-invocation",
             &messages,
-            Some((&group, Some(Path::new("/opt/sniff-test")))),
-            Path::new("/tmp/sniff-test-cache"),
+            Some(explain_help(
+                &group,
+                Path::new("/tmp/sniff-test-cache"),
+                Some(Path::new("/opt/sniff-test")),
+            )),
         );
 
         let children = diagnostic

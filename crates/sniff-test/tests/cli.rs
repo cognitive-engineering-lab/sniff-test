@@ -283,31 +283,26 @@ fn compact_diagnostic_group_can_be_explained_from_the_explanation_report() {
         "the diagnostic must identify the frontend binary and explanation store"
     );
 
-    assert!(
-        cache_dir.join("explain.json").exists(),
-        "a denied analysis must publish the explanations it advertised"
-    );
-
     let mut explain = Command::new("sh");
     clean_cargo_package_env(&mut explain);
     let explained = explain
+        .env_remove("NO_COLOR")
+        .env_remove("CLICOLOR_FORCE")
+        .env_remove("FORCE_COLOR")
         .args(["-c", &advertised_explain])
         .current_dir(&root)
         .output()
         .expect("execute the advertised explanation command exactly");
     assert_success(&explained, "execute the advertised explanation command");
     let explanation = String::from_utf8(explained.stdout).expect("explanation should be utf-8");
-    for expected in [
+    assert_native_explanation(
+        &binary,
+        &root,
+        &cache_dir,
         &first_handle,
+        &explanation,
         full_detail,
-        "report root -> effect source",
-        "direct_panic::entry_point --direct-call-> direct_panic::direct_panic",
-    ] {
-        assert!(
-            explanation.contains(expected),
-            "the explain command must restore `{expected}`:\n{explanation}"
-        );
-    }
+    );
 
     fs::write(
         root.join("src/lib.rs"),
@@ -326,6 +321,111 @@ fn compact_diagnostic_group_can_be_explained_from_the_explanation_report() {
         extract_group_handle(&second.stderr),
         first_handle,
         "an unchanged diagnostic group must keep its handle after unrelated source edits"
+    );
+}
+
+#[cfg(unix)]
+fn assert_native_explanation(
+    binary: &Path,
+    root: &Path,
+    cache_dir: &Path,
+    handle: &str,
+    explanation: &str,
+    reason: &str,
+) {
+    for expected in [
+        handle,
+        reason,
+        "report root -> effect source",
+        "direct_panic::entry_point --direct-call-> direct_panic::direct_panic",
+        "panic!(\"not documented\");",
+        "^^",
+    ] {
+        assert!(
+            explanation.contains(expected),
+            "the explain command must restore `{expected}`:\n{explanation}"
+        );
+    }
+    assert!(
+        explanation.starts_with("error:"),
+        "explain must retain the native diagnostic heading:\n{explanation}"
+    );
+    assert!(
+        !explanation.contains('\x1b'),
+        "default explain output must remain plain when piped: {explanation:?}"
+    );
+    let cached_explanations =
+        fs::read_to_string(cache_dir.join("explain.json")).expect("read the recorded explanations");
+    let cached_report: serde_json::Value =
+        serde_json::from_str(&cached_explanations).expect("explanation report should be JSON");
+    let cached_diagnostic = cached_report["diagnostics"][0]["explanation"]
+        .as_str()
+        .expect("the report should contain the recorded diagnostic");
+    assert!(
+        cached_diagnostic.contains("\x1b["),
+        "native colors must be recorded even when analysis uses --color never"
+    );
+    for color in ["auto", "never", "always"] {
+        let mut command = Command::new(binary);
+        command
+            .env_remove("NO_COLOR")
+            .env_remove("CLICOLOR_FORCE")
+            .env_remove("FORCE_COLOR");
+        if color == "always" {
+            command.env("NO_COLOR", "1");
+        }
+        let colored = command
+            .args(["explain", handle, "--color", color, "--cache-dir"])
+            .arg(cache_dir)
+            .current_dir(root)
+            .output()
+            .expect("explain the recorded diagnostic with an explicit color mode");
+        assert_success(&colored, &format!("explain --color {color}"));
+        let colored = String::from_utf8(colored.stdout).expect("explanation should be utf-8");
+        if color != "always" {
+            assert_eq!(
+                colored, explanation,
+                "piped --color {color} must stay plain"
+            );
+            continue;
+        }
+        assert_eq!(
+            colored, cached_diagnostic,
+            "forced-color explain must replay the cached native diagnostic exactly"
+        );
+        for line in [
+            colored.lines().next().expect("explanation title"),
+            colored
+                .lines()
+                .find(|line| line.contains(reason))
+                .expect("explanation reason"),
+        ] {
+            assert!(
+                line.contains("\x1b["),
+                "forced color must style the title and reason: {line:?}"
+            );
+        }
+        let mut segments = colored.split("\x1b[");
+        let mut plain = segments.next().unwrap_or_default().to_owned();
+        for segment in segments {
+            let (parameters, text) = segment.split_once('m').expect("complete ANSI style");
+            assert!(
+                parameters
+                    .chars()
+                    .all(|character| character.is_ascii_digit() || character == ';'),
+                "explain must only emit ANSI text styles: {parameters:?}"
+            );
+            plain.push_str(text);
+        }
+        assert_eq!(
+            plain, explanation,
+            "color must preserve the explanation text"
+        );
+    }
+    assert_eq!(
+        fs::read_to_string(cache_dir.join("explain.json")).expect("reread explanations"),
+        cached_explanations,
+        "rendering color must not rewrite the cached explanations"
     );
 }
 

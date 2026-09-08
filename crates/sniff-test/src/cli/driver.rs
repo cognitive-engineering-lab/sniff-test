@@ -15,21 +15,20 @@ use anyhow::Context;
 use rustc_hir::def_id::{CrateNum, LOCAL_CRATE};
 use rustc_middle::ty::TyCtxt;
 use rustc_session::config::CrateType;
-use rustc_span::Span;
 use rustc_span::symbol::Symbol;
 
 use super::args::{CrateOutputScope, LocalPackageProvenance, MessageFormat, SniffTestArgs};
-use super::diagnostics::emit_finding_diagnostic;
+use super::diagnostics::{emit_finding_diagnostic, render_finding_diagnostic};
 use super::explanations::{
     ArtifactExplanation, DiagnosticGroupHandle, ExplanationStore, StoredDiagnostic,
 };
 use super::findings::{
-    DiagnosticMessage, Finding, FindingDiagnostic, ResolvedFinding,
-    aggregate_human_findings_with_source_packages, collect_report_root_findings, resolve_findings,
+    Finding, ResolvedFinding, aggregate_human_findings_with_source_packages,
+    collect_report_root_findings, resolve_findings,
 };
 use super::interpretation::interpret_workspace;
 use super::plugin::rustc_version;
-use super::report::{AnalysisArtifactReport, REPORT_FORMAT_VERSION, ReportArtifact, render_span};
+use super::report::{AnalysisArtifactReport, REPORT_FORMAT_VERSION, ReportArtifact};
 
 #[allow(
     clippy::too_many_lines,
@@ -195,7 +194,13 @@ fn persist_diagnostic_explanations(
         let diagnostic = StoredDiagnostic::new(
             group.clone(),
             diagnostic_summary(finding),
-            diagnostic_explanation(&finding.finding.diagnostic, |span| render_span(tcx, span)),
+            render_finding_diagnostic(
+                tcx,
+                finding.level,
+                &finding.finding.kind.lint_code(),
+                &finding.finding.diagnostic,
+                &group.handle(),
+            ),
         );
         group_handles.push(group.handle());
         diagnostics.push(diagnostic);
@@ -212,58 +217,6 @@ fn diagnostic_summary(finding: &ResolvedFinding) -> String {
         finding.finding.kind.lint_code(),
         finding.finding.diagnostic.message
     )
-}
-
-fn diagnostic_explanation(
-    diagnostic: &FindingDiagnostic,
-    render_location: impl Fn(Span) -> String,
-) -> String {
-    let mut lines = Vec::new();
-    let mut trace = Vec::new();
-    let mut help = Vec::new();
-    if let Some(span) = diagnostic.span {
-        lines.push(format!("--> {}", render_location(span)));
-    }
-    for message in &diagnostic.messages {
-        match message {
-            DiagnosticMessage::Note(note) => {
-                lines.push(format!("= note: {note}"));
-            }
-            DiagnosticMessage::SpanNote(span, note) => {
-                lines.push(format!("= note at {}: {note}", render_location(*span)));
-            }
-            DiagnosticMessage::SpanLabel(span, label) => {
-                lines.push(format!("= location {}: {label}", render_location(*span)));
-            }
-            DiagnosticMessage::SpanHelp(span, message) => {
-                help.push(format!("= help at {}: {message}", render_location(*span)));
-            }
-            DiagnosticMessage::Help(message) => {
-                help.push(format!("= help: {message}"));
-            }
-            DiagnosticMessage::TraceStep {
-                span,
-                index,
-                total,
-                description,
-            } => {
-                trace.push(format!("  {index}/{total} {description}"));
-                if let Some(span) = span {
-                    trace.push(format!("      at {}", render_location(*span)));
-                }
-            }
-        }
-    }
-    if !trace.is_empty() {
-        lines.push(String::new());
-        lines.push(String::from("= trace (report root -> effect source):"));
-        lines.extend(trace);
-    }
-    if !help.is_empty() {
-        lines.push(String::new());
-        lines.extend(help);
-    }
-    lines.join("\n")
 }
 
 const fn lint_level_label(level: crate::config::LintLevel) -> &'static str {
@@ -549,69 +502,9 @@ pub(crate) fn load_config(
 mod tests {
     use std::path::{Path, PathBuf};
 
+    use super::{CrateOutputScope, describe_candidate_crates, has_loadable_crate_output};
     use crate::artifact_cache::ArtifactScope;
     use rustc_session::config::CrateType;
-    use rustc_span::DUMMY_SP;
-
-    use super::{
-        CrateOutputScope, DiagnosticMessage, FindingDiagnostic, describe_candidate_crates,
-        diagnostic_explanation, has_loadable_crate_output,
-    };
-
-    #[test]
-    fn explanation_separates_context_paths_and_help_without_losing_locations() {
-        let diagnostic = FindingDiagnostic {
-            span: Some(DUMMY_SP),
-            message: String::from("summary"),
-            messages: vec![
-                DiagnosticMessage::SpanLabel(DUMMY_SP, String::from("source")),
-                DiagnosticMessage::TraceStep {
-                    span: Some(DUMMY_SP),
-                    index: 1,
-                    total: 2,
-                    description: String::from("app::entry --direct-call-> app::parse"),
-                },
-                DiagnosticMessage::Help(String::from("fix the source")),
-                DiagnosticMessage::SpanNote(DUMMY_SP, String::from("contract")),
-                DiagnosticMessage::TraceStep {
-                    span: None,
-                    index: 2,
-                    total: 2,
-                    description: String::from("app::parse --assert-> bounds check"),
-                },
-                DiagnosticMessage::Note(String::from("additional evidence")),
-                DiagnosticMessage::SpanHelp(DUMMY_SP, String::from("fix this call")),
-            ],
-            compact_messages: None,
-        };
-        assert_eq!(
-            diagnostic_explanation(&diagnostic, |_| String::from("src/lib.rs:2:5")),
-            "--> src/lib.rs:2:5\n\
-             = location src/lib.rs:2:5: source\n\
-             = note at src/lib.rs:2:5: contract\n\
-             = note: additional evidence\n\n\
-             = trace (report root -> effect source):\n  \
-             1/2 app::entry --direct-call-> app::parse\n      \
-             at src/lib.rs:2:5\n  \
-             2/2 app::parse --assert-> bounds check\n\n\
-             = help: fix the source\n\
-             = help at src/lib.rs:2:5: fix this call"
-        );
-    }
-
-    #[test]
-    fn explanation_without_paths_does_not_add_an_empty_trace_section() {
-        let diagnostic = FindingDiagnostic {
-            span: None,
-            message: String::from("summary"),
-            messages: vec![DiagnosticMessage::Note(String::from("configuration issue"))],
-            compact_messages: None,
-        };
-        assert_eq!(
-            diagnostic_explanation(&diagnostic, |_| unreachable!("no source spans")),
-            "= note: configuration issue"
-        );
-    }
 
     #[test]
     fn ambiguous_loaded_crates_render_human_crate_names() {

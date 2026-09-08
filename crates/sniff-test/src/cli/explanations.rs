@@ -13,7 +13,7 @@ use std::str::FromStr;
 
 use serde::{Deserialize, Serialize};
 
-const EXPLANATION_FORMAT_VERSION: u32 = 1;
+const EXPLANATION_FORMAT_VERSION: u32 = 2;
 const EXPLANATION_FILE: &str = "explain.json";
 const DIAGNOSTIC_GROUP_HANDLE_LEN: usize = 4;
 const CROCKFORD_BASE32: &[u8; 32] = b"0123456789abcdefghjkmnpqrstvwxyz";
@@ -147,6 +147,7 @@ impl FromStr for DiagnosticGroupHandle {
 pub(crate) struct StoredDiagnostic {
     group: DiagnosticGroupKey,
     summary: String,
+    /// Complete native rustc diagnostic, including its ANSI styles and heading.
     explanation: String,
 }
 
@@ -162,11 +163,6 @@ impl StoredDiagnostic {
             summary: summary.into(),
             explanation: explanation.into(),
         }
-    }
-
-    #[must_use]
-    pub(crate) fn summary(&self) -> &str {
-        &self.summary
     }
 
     #[must_use]
@@ -229,7 +225,7 @@ impl ExplanationReport {
     fn validate(&self) -> Result<(), String> {
         if self.format_version != EXPLANATION_FORMAT_VERSION {
             return Err(format!(
-                "unsupported explanation format {}; expected {}",
+                "unsupported explanation format {}; expected {}; rerun cargo sniff-test to refresh it",
                 self.format_version, EXPLANATION_FORMAT_VERSION
             ));
         }
@@ -552,6 +548,23 @@ mod tests {
         assert_eq!(groups.len(), 1);
         assert_eq!(groups[0].diagnostics().len(), 2);
         assert!(directory.path().join("explain.json").is_file());
+    }
+
+    #[test]
+    fn old_explanations_require_refresh_before_native_replay() {
+        let directory = tempfile::tempdir().expect("tempdir");
+        let path = directory.path().join("explain.json");
+        fs::write(&path, r#"{"format-version":1,"diagnostics":[]}"#)
+            .expect("old explanation report");
+        let error = ExplanationStore::new(directory.path())
+            .explain(&DiagnosticGroupHandle::from_str("7k3m").expect("handle"))
+            .expect_err("old reports do not contain the complete rendered diagnostic");
+
+        assert!(matches!(
+            error,
+            ExplanationStoreError::Corrupt { path: actual, reason }
+                if actual == path && reason.contains("rerun cargo sniff-test")
+        ));
     }
 
     #[test]

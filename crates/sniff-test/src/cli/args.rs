@@ -104,6 +104,10 @@ pub(super) struct ExplainCliArgs {
     /// Analysis cache directory containing the recorded diagnostic report.
     #[arg(long, value_name = "DIR")]
     pub(super) cache_dir: Option<PathBuf>,
+
+    /// Explanation color mode.
+    #[arg(long, value_enum, default_value = "auto")]
+    pub(super) color: ColorChoice,
 }
 
 pub(super) enum FrontendAction {
