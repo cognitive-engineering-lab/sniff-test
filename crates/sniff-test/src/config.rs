@@ -490,7 +490,8 @@ impl LintLevel {
 #[serde(rename_all = "kebab-case", deny_unknown_fields)]
 #[serde(default)]
 pub struct SafetyConfig {
-    /// Namespaces whose safety findings should be suppressed.
+    /// Definition paths whose internals are suppressed, or macro definition
+    /// paths whose matching expansion branch terminates locally.
     pub ignored_namespaces: PathPatterns,
     /// Namespaces whose caller-visible safety contracts are trusted as complete.
     ///
@@ -595,6 +596,11 @@ impl PanicConfig {
 }
 
 impl SafetyConfig {
+    #[must_use]
+    pub(crate) fn ignores_path(&self, path: &str) -> bool {
+        self.ignored_namespaces.best_match(path).is_some()
+    }
+
     #[must_use]
     pub(crate) fn ignores_candidates(&self, candidates: &[String]) -> bool {
         self.ignored_namespaces

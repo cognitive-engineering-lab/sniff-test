@@ -183,6 +183,9 @@ fixture_cases! {
     "unsafe_ops" => {
         unsafe_ops => Case::new();
     }
+    "safety_macro_ignores" => {
+        safety_macro_ignores_are_path_local => Case::new().denied();
+    }
     "unsafe_closure_inherit" => {
         unsafe_closure_inherit => Case::new();
     }

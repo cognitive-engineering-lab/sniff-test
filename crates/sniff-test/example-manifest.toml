@@ -144,9 +144,12 @@ documented-panic = "warn"
 unresolved-call-target = "allow"
 
 [safety]
-# Namespaces whose containing function bodies should not produce SafetyEffect
-# sources. This does not trust a called API or suppress its surface `# Safety`
-# contract; use `trusted-boundary-namespaces` for that API-boundary policy.
+# Crates, fully-qualified functions, or macro expansion paths whose safety
+# internals should be ignored. A macro match terminates only that expansion
+# branch, including safety contracts introduced through calls in the expansion;
+# unrelated safety paths remain visible. This does not trust a called API or
+# suppress its surface `# Safety` contract; use `trusted-boundary-namespaces`
+# for that API-boundary policy.
 ignored-namespaces = []
 
 # Trusted APIs whose safety implementations and internal safety contracts should

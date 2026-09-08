@@ -41,6 +41,14 @@ ignore for `core::ub_checks::assert_unsafe_precondition` uses this same rule; an
 explicit `ignored-namespaces` list replaces the built-in list, and `[]` disables
 it.
 
+### Ignored safety macro paths are branch-local
+
+`[safety].ignored-namespaces` also matches macro definition paths recorded in
+safety-source and invocation provenance. A matching expansion terminates only
+that safety branch, including documented safety obligations introduced by a
+helper call inside the expansion. It does not hide unrelated safety behavior in
+the containing function and has no effect on panic analysis.
+
 ### Trusted boundary documentation is assumed complete
 
 `[panics].trusted-boundary-namespaces` and

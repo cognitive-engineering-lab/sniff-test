@@ -1,0 +1,27 @@
+---
+source: crates/sniff-test/tests/fixtures.rs
+expression: "report[\"findings\"]"
+---
+[
+  {
+    "function": "safety_macro_ignores::format_and_dereference",
+    "kind": "unsafe-op-missing-justification",
+    "level": "deny",
+    "owner": {
+      "crate": "safety_macro_ignores",
+      "scope": "workspace"
+    },
+    "reason": "unsafe operation (raw pointer dereference) has no recorded `// SAFETY:` evidence",
+    "root": "safety_macro_ignores::format_and_dereference",
+    "root-kind": "concrete",
+    "root-span": "src/lib.rs:3:1: 3:42",
+    "safety-op-kind": "raw-pointer-dereference",
+    "source-evidence": {
+      "status": "verified-absent"
+    },
+    "span": "src/lib.rs:10:17: 10:25",
+    "trace": [
+      "src/lib.rs:10:17: 10:25: safety_macro_ignores::format_and_dereference --unsafe-operation-> unsafe operation (raw pointer dereference)"
+    ]
+  }
+]

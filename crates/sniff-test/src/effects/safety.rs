@@ -60,6 +60,8 @@ pub(crate) struct SafetyEffect<'annotations> {
     seeds: Vec<EffectSeed<SafetyOrigin, SafetyState>>,
     trusted_functions: BTreeSet<FunctionId>,
     ignored_functions: BTreeSet<FunctionId>,
+    macro_ignored_sources: BTreeSet<SafetyOrigin>,
+    macro_ignored_invocations: BTreeSet<InvocationId>,
     invocation_sources: BTreeMap<InvocationId, Vec<InvocationSourceBranch>>,
 }
 
@@ -78,6 +80,7 @@ impl<'annotations> SafetyEffect<'annotations> {
         let mut seeds = Vec::new();
         let mut trusted_functions = BTreeSet::new();
         let mut ignored_functions = BTreeSet::new();
+        let mut macro_ignored_sources = BTreeSet::new();
         for body in &artifact.functions {
             let candidates = namespaces.candidates(body.function);
             if config.ignores_candidates(candidates) {
@@ -95,6 +98,17 @@ impl<'annotations> SafetyEffect<'annotations> {
             }
             for effect in &body.effects {
                 if let EffectFactKind::UnsafeOperation { kind } = effect.kind {
+                    let origin = SafetyOrigin::Operation {
+                        owner: body.function,
+                        effect: effect.id,
+                    };
+                    if effect
+                        .macro_expansions
+                        .iter()
+                        .any(|frame| config.ignores_path(&frame.display_path))
+                    {
+                        macro_ignored_sources.insert(origin);
+                    }
                     let owners = if body.function.instance_hash.is_none() {
                         graph
                             .function_aliases(body.function)
@@ -114,10 +128,7 @@ impl<'annotations> SafetyEffect<'annotations> {
                     };
                     seeds.extend(owners.into_iter().map(|owner| {
                         EffectSeed::new(
-                            SafetyOrigin::Operation {
-                                owner: body.function,
-                                effect: effect.id,
-                            },
+                            origin,
                             owner,
                             SafetyState {
                                 kind: SafetyKind::Operation(kind),
@@ -129,6 +140,17 @@ impl<'annotations> SafetyEffect<'annotations> {
                 }
             }
         }
+
+        let macro_ignored_invocations = graph
+            .invocations()
+            .filter(|invocation| {
+                invocation
+                    .macro_provenance()
+                    .iter()
+                    .any(|frame| config.ignores_path(&frame.display_path))
+            })
+            .map(crate::compiler::invocations::Invocation::id)
+            .collect::<BTreeSet<_>>();
 
         let mut invocation_sources = BTreeMap::<InvocationId, Vec<InvocationSourceBranch>>::new();
         for body in &artifact.functions {
@@ -150,20 +172,29 @@ impl<'annotations> SafetyEffect<'annotations> {
             }
         }
         for (&invocation, sources) in &invocation_sources {
-            seeds.extend(sources.iter().map(|source| {
-                EffectSeed::new(
-                    SafetyOrigin::Invocation {
-                        invocation,
-                        call: source.edge().id,
-                    },
+            for source in sources {
+                let origin = SafetyOrigin::Invocation {
+                    invocation,
+                    call: source.edge().id,
+                };
+                if source
+                    .edge()
+                    .macro_expansions
+                    .iter()
+                    .any(|frame| config.ignores_path(&frame.display_path))
+                {
+                    macro_ignored_sources.insert(origin);
+                }
+                seeds.push(EffectSeed::new(
+                    origin,
                     graph.invocation(invocation).caller(),
                     SafetyState {
                         kind: SafetyKind::Invocation,
                         current_function: graph.invocation(invocation).caller(),
                         invocation_justification: None,
                     },
-                )
-            }));
+                ));
+            }
         }
         Ok(Self {
             annotations,
@@ -171,6 +202,8 @@ impl<'annotations> SafetyEffect<'annotations> {
             seeds,
             trusted_functions,
             ignored_functions,
+            macro_ignored_sources,
+            macro_ignored_invocations,
             invocation_sources,
         })
     }
@@ -189,6 +222,11 @@ impl<'annotations> SafetyEffect<'annotations> {
     #[must_use]
     pub(crate) fn is_trusted_function(&self, function: FunctionId) -> bool {
         self.trusted_functions.contains(&function)
+    }
+
+    #[must_use]
+    pub(crate) fn is_ignored_invocation(&self, invocation: InvocationId) -> bool {
+        self.macro_ignored_invocations.contains(&invocation)
     }
 
     #[must_use]
@@ -288,9 +326,14 @@ impl Effect for SafetyEffect<'_> {
         site: TraceSite<'_, Self::Origin>,
     ) -> Option<Self::Termination> {
         match site {
-            TraceSite::Source(origin) => self
-                .source_justification(*origin)
-                .map(SafetyTermination::Justification),
+            TraceSite::Source(origin) => {
+                if self.macro_ignored_sources.contains(origin) {
+                    Some(SafetyTermination::IgnoredBoundary)
+                } else {
+                    self.source_justification(*origin)
+                        .map(SafetyTermination::Justification)
+                }
+            }
             TraceSite::Function(function) => self.function_contract(function).map_or_else(
                 || {
                     if self.ignored_functions.contains(&function) {
@@ -303,9 +346,15 @@ impl Effect for SafetyEffect<'_> {
                 },
                 |contract| Some(SafetyTermination::Contract(contract)),
             ),
-            TraceSite::Invocation(_) => state
-                .invocation_justification
-                .map(SafetyTermination::Justification),
+            TraceSite::Invocation(invocation) => {
+                if self.macro_ignored_invocations.contains(&invocation) {
+                    Some(SafetyTermination::IgnoredBoundary)
+                } else {
+                    state
+                        .invocation_justification
+                        .map(SafetyTermination::Justification)
+                }
+            }
         }
     }
 }

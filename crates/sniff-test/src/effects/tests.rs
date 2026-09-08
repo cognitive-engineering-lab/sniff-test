@@ -96,6 +96,17 @@ fn call_from_macro(id: u32, site: u32, target: CallTargetFact, macro_path: &str)
     call
 }
 
+fn unsafe_call_from_macro(
+    id: u32,
+    site: u32,
+    target: CallTargetFact,
+    macro_path: &str,
+) -> CallFact {
+    let mut call = call_from_macro(id, site, target, macro_path);
+    call.requires_unsafe = true;
+    call
+}
+
 fn transparent_body(id: u32, site: u32, target: CallTargetFact) -> CallFact {
     let mut call = call(id, site, target, false);
     call.kind = CallKindFact::ConstBody;
@@ -2117,6 +2128,137 @@ fn ignored_macro_path_terminates_a_compiler_assert_source() {
     assert_eq!(handled.node(), None);
     assert_eq!(handled.termination(), &PanicTermination::IgnoredBoundary);
     assert_eq!(trace.escaped().count(), 0);
+}
+
+#[test]
+fn ignored_macro_path_terminates_direct_safety_sources() {
+    let root = stable_function(0);
+    let unsafe_target = stable_function(1);
+    let macro_path = "sample::generated::unsafe_macro";
+    let (artifact, graph, annotations) = setup(vec![body(
+        root,
+        "sample::root",
+        vec![unsafe_call_from_macro(
+            0,
+            0,
+            target(unsafe_target, "sample::unsafe_target"),
+            macro_path,
+        )],
+        vec![unsafe_effect_from_macro(0, macro_path)],
+        Vec::new(),
+    )]);
+    let config = SniffTestConfig::from_manifest_str(
+        "[safety]\nignored-namespaces = [\"sample::generated::unsafe_macro\"]\n",
+    )
+    .expect("ignored safety macro configuration");
+
+    let safety = probe_safety(&artifact, &graph, &annotations, &config.safety);
+    let trace = EffectEngine::new(&graph).trace(&safety);
+
+    assert_eq!(safety.source_count(), 2);
+    assert_eq!(trace.handled().count(), 2);
+    assert_eq!(trace.escaped().count(), 0);
+    assert!(
+        trace
+            .handled()
+            .all(|handled| handled.termination() == &SafetyTermination::IgnoredBoundary)
+    );
+}
+
+#[test]
+fn ignored_macro_path_does_not_export_an_internal_safety_contract() {
+    let root = stable_function(0);
+    let helper = stable_function(1);
+    let macro_path = "sample::generated::unsafe_macro";
+    let (artifact, graph, annotations) = setup(vec![
+        body(
+            root,
+            "sample::root",
+            vec![call_from_macro(
+                0,
+                0,
+                target(helper, "sample::helper"),
+                macro_path,
+            )],
+            Vec::new(),
+            Vec::new(),
+        ),
+        body(
+            helper,
+            "sample::helper",
+            Vec::new(),
+            Vec::new(),
+            vec![contract(
+                0,
+                helper,
+                AnnotationFactKind::SafetyContract,
+                &[("initialized", "the value is initialized")],
+            )],
+        ),
+    ]);
+    let config = SniffTestConfig::from_manifest_str(
+        "[safety]\nignored-namespaces = [\"sample::generated::unsafe_macro\"]\n",
+    )
+    .expect("ignored safety macro configuration");
+
+    let comments = probe_comments(&artifact, &graph, &annotations, &config);
+    let trace = EffectEngine::new(&graph.comment_graph()).trace(&comments);
+
+    assert_eq!(comments.contract_count(CommentDomain::Safety), 1);
+    assert_eq!(trace.nodes().count(), 1);
+    assert_eq!(trace.handled().count(), 0);
+    assert_eq!(trace.escaped().count(), 0);
+}
+
+#[test]
+fn ignored_safety_macro_path_termination_is_path_local() {
+    let boundary_root = stable_function(0);
+    let ordinary_root = stable_function(1);
+    let helper = stable_function(2);
+    let macro_path = "sample::generated::unsafe_macro";
+    let (artifact, graph, annotations) = setup(vec![
+        body(
+            boundary_root,
+            "sample::boundary_root",
+            vec![call_from_macro(
+                0,
+                0,
+                target(helper, "sample::helper"),
+                macro_path,
+            )],
+            Vec::new(),
+            Vec::new(),
+        ),
+        body(
+            ordinary_root,
+            "sample::ordinary_root",
+            vec![call(0, 0, target(helper, "sample::helper"), false)],
+            Vec::new(),
+            Vec::new(),
+        ),
+        body(
+            helper,
+            "sample::helper",
+            Vec::new(),
+            vec![unsafe_effect(0)],
+            Vec::new(),
+        ),
+    ]);
+    let config = SniffTestConfig::from_manifest_str(
+        "[safety]\nignored-namespaces = [\"sample::generated::unsafe_macro\"]\n",
+    )
+    .expect("ignored safety macro configuration");
+
+    let safety = probe_safety(&artifact, &graph, &annotations, &config.safety);
+    let trace = EffectEngine::new(&graph).trace(&safety);
+
+    assert_eq!(trace.handled().count(), 1);
+    assert_eq!(trace.escaped().count(), 1);
+    assert!(
+        trace
+            .handled()
+            .all(|handled| handled.termination() == &SafetyTermination::IgnoredBoundary)
+    );
 }
 
 #[test]

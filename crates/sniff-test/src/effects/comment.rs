@@ -164,6 +164,7 @@ pub(crate) struct CommentEffect<'annotations> {
     trusted_panic_functions: BTreeSet<FunctionId>,
     trusted_safety_functions: BTreeSet<FunctionId>,
     ignored_panic_invocations: BTreeSet<InvocationId>,
+    ignored_safety_invocations: BTreeSet<InvocationId>,
 }
 
 impl<'annotations> CommentEffect<'annotations> {
@@ -223,6 +224,16 @@ impl<'annotations> CommentEffect<'annotations> {
             })
             .map(crate::compiler::invocations::Invocation::id)
             .collect();
+        let ignored_safety_invocations = graph
+            .invocations()
+            .filter(|invocation| {
+                invocation
+                    .macro_provenance()
+                    .iter()
+                    .any(|frame| safety_config.ignores_path(&frame.display_path))
+            })
+            .map(crate::compiler::invocations::Invocation::id)
+            .collect();
         Self {
             annotations,
             graph,
@@ -232,6 +243,7 @@ impl<'annotations> CommentEffect<'annotations> {
             trusted_panic_functions,
             trusted_safety_functions,
             ignored_panic_invocations,
+            ignored_safety_invocations,
         }
     }
 
@@ -304,15 +316,26 @@ impl<'annotations> CommentEffect<'annotations> {
         .contains(&function)
     }
 
+    #[must_use]
+    pub(crate) fn is_ignored_invocation(
+        &self,
+        domain: CommentDomain,
+        invocation: InvocationId,
+    ) -> bool {
+        match domain {
+            CommentDomain::Panic => &self.ignored_panic_invocations,
+            CommentDomain::Safety => &self.ignored_safety_invocations,
+        }
+        .contains(&invocation)
+    }
+
     fn invocation_transition(
         &self,
         state: &CommentState,
         invocation: InvocationId,
         node: Option<TraceNodeId>,
     ) -> Option<CommentInvocationTransition> {
-        if state.domain == CommentDomain::Panic
-            && self.ignored_panic_invocations.contains(&invocation)
-        {
+        if self.is_ignored_invocation(state.domain, invocation) {
             return None;
         }
         if state.domain == CommentDomain::Safety

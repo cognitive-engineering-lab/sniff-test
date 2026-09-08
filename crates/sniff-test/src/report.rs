@@ -233,7 +233,7 @@ pub(crate) fn trace_workspace(
                         config,
                         &namespaces,
                         |function| safety.is_opaque_function(function),
-                        |_| false,
+                        |invocation| safety.is_ignored_invocation(invocation),
                     ));
                 }
                 findings.extend(marker_ambiguities(
@@ -594,7 +594,7 @@ fn marker_projection(
                     root_function,
                     endpoint,
                     |function| safety.is_opaque_function(function),
-                    |_| false,
+                    |invocation| safety.is_ignored_invocation(invocation),
                 )?;
                 (graph.stable_function(endpoint), trace)
             }
@@ -607,7 +607,7 @@ fn marker_projection(
                 node,
                 MarkerTraversalPolicy {
                     is_opaque: |function| safety.is_opaque_function(function),
-                    is_ignored_invocation: |_| false,
+                    is_ignored_invocation: |candidate| safety.is_ignored_invocation(candidate),
                 },
             )?,
         },
@@ -624,7 +624,9 @@ fn marker_projection(
             node,
             MarkerTraversalPolicy {
                 is_opaque: |function| comments.trusts_function(domain, function),
-                is_ignored_invocation: |_| false,
+                is_ignored_invocation: |candidate| {
+                    comments.is_ignored_invocation(domain, candidate)
+                },
             },
         )?,
     };

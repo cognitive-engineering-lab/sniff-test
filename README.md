@@ -249,6 +249,12 @@ unsafe operation and its justification. An explicit list
 replaces the default; use `ignored-namespaces = []` to trace these checks as
 ordinary panic behavior.
 
+`[safety].ignored-namespaces` likewise matches both definition namespaces and
+macro definition paths in unsafe-source, invocation, and documented-contract
+provenance. A macro match terminates only that safety path, including `# Safety`
+contracts of helpers called by the expansion. Unrelated safety behavior in the
+same function remains reportable, and panic analysis is unaffected.
+
 Use `[safety].trusted-boundary-namespaces` for APIs whose caller-visible safety
 contract is authoritative. SafetyEffect operations owned by a matching
 implementation do not propagate out of it, and safety-domain CommentEffect
