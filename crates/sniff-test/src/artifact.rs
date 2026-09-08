@@ -788,6 +788,7 @@ pub(crate) struct ContractFact {
 pub(crate) struct ContractRequirementFact {
     pub(crate) name: String,
     pub(crate) condition: String,
+    pub(crate) structural_path: Vec<usize>,
     pub(crate) source_range: Option<SourceRangeFact>,
 }
 
@@ -1009,6 +1010,7 @@ pub(crate) struct UnverifiedMarkerProbeFact {
 pub(crate) struct AnnotationSatisfactionFact {
     pub(crate) requirement: Option<String>,
     pub(crate) reason: String,
+    pub(crate) structural_path: Option<Vec<usize>>,
 }
 
 fn canonicalize_attributes(attributes: &mut FunctionAttributesFact) {
@@ -1128,6 +1130,16 @@ fn validate_body(
                 require_nonempty(requirement, "marker satisfaction requirement")?;
             }
             require_nonempty(&satisfaction.reason, "marker satisfaction reason")?;
+            if satisfaction.requirement.is_none()
+                && satisfaction
+                    .structural_path
+                    .as_ref()
+                    .is_some_and(Vec::is_empty)
+            {
+                return Err(ArtifactValidationError::new(
+                    "marker satisfaction structural path is empty",
+                ));
+            }
         }
         validate_requirements(&marker.requirements, source_lengths)?;
     }
@@ -1276,7 +1288,14 @@ fn validate_requirements(
     source_lengths: &BTreeMap<&SourceFileId, u64>,
 ) -> Result<(), ArtifactValidationError> {
     for requirement in requirements {
-        require_nonempty(&requirement.name, "contract requirement name")?;
+        if requirement.name.is_empty() {
+            require_nonempty(&requirement.condition, "unnamed contract requirement")?;
+            if requirement.structural_path.is_empty() {
+                return Err(ArtifactValidationError::new(
+                    "unnamed contract requirement has no structural path",
+                ));
+            }
+        }
         validate_optional_range(requirement.source_range.as_ref(), source_lengths)?;
     }
     Ok(())
@@ -1782,6 +1801,7 @@ mod tests {
             satisfactions: vec![AnnotationSatisfactionFact {
                 requirement: None,
                 reason: String::from("checked immediately above"),
+                structural_path: None,
             }],
             requirements: Vec::new(),
         });
@@ -2329,6 +2349,7 @@ mod tests {
                     requirements: vec![ContractRequirementFact {
                         name: String::from("input-valid"),
                         condition: String::from("the input is valid"),
+                        structural_path: vec![0],
                         source_range: Some(range(165, 178)),
                     }],
                 }),
@@ -2355,6 +2376,7 @@ mod tests {
                     requirements: vec![ContractRequirementFact {
                         name: String::from("source-valid"),
                         condition: String::from("the source-level precondition holds"),
+                        structural_path: vec![0],
                         source_range: Some(range(185, 198)),
                     }],
                 }),
@@ -2363,6 +2385,7 @@ mod tests {
         let root_contract_requirement = ContractRequirementFact {
             name: String::from("capacity"),
             condition: String::from("the buffer has capacity"),
+            structural_path: vec![0],
             source_range: Some(range(8, 24)),
         };
         let body = FunctionFact {
@@ -2438,6 +2461,7 @@ mod tests {
                     satisfactions: vec![AnnotationSatisfactionFact {
                         requirement: None,
                         reason: String::from("the pointer was validated"),
+                        structural_path: None,
                     }],
                     requirements: Vec::new(),
                 },
@@ -2465,6 +2489,7 @@ mod tests {
                     satisfactions: vec![AnnotationSatisfactionFact {
                         requirement: Some(String::from("input-valid")),
                         reason: String::from("validated immediately above"),
+                        structural_path: Some(vec![0]),
                     }],
                     requirements: Vec::new(),
                 },

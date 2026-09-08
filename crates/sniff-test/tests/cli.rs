@@ -96,11 +96,44 @@ cli_cases! {
 }
 
 #[test]
+fn unsafe_precondition_helpers_do_not_export_panic_contracts() {
+    let repo = repo_root();
+    let binary = PathBuf::from(env!("CARGO_BIN_EXE_cargo-sniff-test"));
+    let (output, _, _temp) = run_case(
+        &repo,
+        &binary,
+        "unsafe_precondition_helpers_do_not_export_panic_contracts",
+        "assert_unsafe_precondition",
+        &Case::new(),
+    );
+
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "stdout:\n{}\nstderr:\n{}",
+        output.stdout,
+        output.stderr
+    );
+    assert!(
+        !output.stderr.contains("sniff-test::panics"),
+        "the standard library's unsafe-precondition implementation leaked a panic finding:\n{}",
+        output.stderr
+    );
+    assert!(
+        output
+            .stderr
+            .contains("sniff-test::safety::unsafe-call-missing-requirements"),
+        "the caller's independent unsafe obligation must remain audited:\n{}",
+        output.stderr
+    );
+}
+
+#[test]
 fn config_found_from_subdirectory() {
     let repo = repo_root();
     let binary = PathBuf::from(env!("CARGO_BIN_EXE_cargo-sniff-test"));
     let case = Case::new().working_dir("src").denied();
-    let (output, _) = run_case(
+    let (output, _, _temp) = run_case(
         &repo,
         &binary,
         "config_found_from_subdirectory",
@@ -129,7 +162,7 @@ fn rustflags_env_does_not_disable_analysis() {
     let case = Case::new()
         .rustflags("--cfg sniff_test_cli_user_flag")
         .denied();
-    let (output, _) = run_case(
+    let (output, _, _temp) = run_case(
         &repo,
         &binary,
         "rustflags_env_does_not_disable_analysis",
@@ -829,7 +862,7 @@ unsafe extern "C" {
         .unwrap_or_else(|error| panic!("failed to read {}: {error}", cache_path.display()));
     let cache: serde_json::Value =
         serde_json::from_str(&serialized).expect("cache should contain JSON");
-    assert_eq!(cache["format-version"], 25);
+    assert_eq!(cache["format-version"], 26);
     assert_eq!(cache["artifact"]["crate-name"], "artifact_facts_dependency");
     assert_eq!(cache["artifact"]["scope"], "dependency");
     assert!(cache["artifact"].get("package-version").is_none());
@@ -1269,7 +1302,7 @@ fn workspace_lint_policy_reinterprets_unchanged_dependency_facts() {
         .unwrap_or_else(|error| panic!("failed to read {}: {error}", dependency_cache.display()));
     let initial_document: serde_json::Value =
         serde_json::from_slice(&initial_bytes).expect("dependency cache should contain JSON");
-    assert_eq!(initial_document["format-version"], 25);
+    assert_eq!(initial_document["format-version"], 26);
     assert_eq!(initial_document["artifact"]["scope"], "dependency");
     assert!(initial_document["facts"].get("tables").is_none());
     assert!(initial_document.get("analysis-id").is_none());
@@ -1689,7 +1722,7 @@ fn fixed_name_dependency_cache_must_match_the_crate_rustc_actually_loaded() {
     assert_success(&analyzed_output, "analyzed dependency");
 
     // Replace the exact same output filename without running sniff-test, so
-    // The v25 cache deliberately contains only the previous rustc identity.
+    // the cache deliberately contains only the previous rustc identity.
     fs::write(
         &dependency_source,
         "pub fn dependency_value() -> u8 { 2 }\n",
@@ -2743,7 +2776,7 @@ fn run_named_case(name: &'static str, fixture_name: &'static str, case: &Case) {
     let repo = repo_root();
     let sysroot = rustc_sysroot();
     let binary = PathBuf::from(env!("CARGO_BIN_EXE_cargo-sniff-test"));
-    let (output, fixture_root) = run_case(&repo, &binary, name, fixture_name, case);
+    let (output, fixture_root, _temp) = run_case(&repo, &binary, name, fixture_name, case);
 
     let expected_exit = if case.denied { 101 } else { 0 };
     assert_eq!(
@@ -2796,7 +2829,7 @@ fn run_case(
     name: &str,
     fixture_name: &str,
     case: &Case,
-) -> (CommandOutput, PathBuf) {
+) -> (CommandOutput, PathBuf, tempfile::TempDir) {
     let fixture = repo.join("tests/fixtures").join(fixture_name);
     assert!(
         fixture.exists(),
@@ -2823,7 +2856,7 @@ fn run_case(
     let working_dir = root.join(case.working_dir.unwrap_or(""));
     let _cargo_guard = lock_nested_cargo();
     let output = run_cargo_sniff_test(binary, &working_dir, name, case);
-    (output, root)
+    (output, root, temp)
 }
 
 fn run_cargo_sniff_test(

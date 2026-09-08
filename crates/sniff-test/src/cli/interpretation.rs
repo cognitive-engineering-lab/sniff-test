@@ -1951,7 +1951,9 @@ const fn edge_kind_label(kind: CallKindFact) -> &'static str {
 }
 
 fn render_requirement(requirement: &ContractRequirementFact) -> String {
-    if requirement.condition.is_empty() {
+    if requirement.name.is_empty() {
+        requirement.condition.clone()
+    } else if requirement.condition.is_empty() {
         requirement.name.clone()
     } else {
         format!("{}: {}", requirement.name, requirement.condition)
@@ -2261,6 +2263,7 @@ mod tests {
         let requirement = ContractRequirementFact {
             name: String::from("documented"),
             condition: String::from("the documented condition holds"),
+            structural_path: vec![0],
             source_range: None,
         };
         let contract_action = documented_panic_action(&[requirement]);
@@ -2307,6 +2310,7 @@ mod tests {
         let initialized = ContractRequirementFact {
             name: String::from("initialized"),
             condition: String::from("state has been initialized"),
+            structural_path: vec![0],
             source_range: None,
         };
         let mut partial = finding(
@@ -2320,6 +2324,7 @@ mod tests {
             ContractRequirementFact {
                 name: String::from("exclusive"),
                 condition: String::from("access is exclusive"),
+                structural_path: vec![1],
                 source_range: None,
             },
         ];
@@ -2554,6 +2559,7 @@ mod tests {
             &[ContractRequirementFact {
                 name: String::from("valid"),
                 condition: String::from("the pointer remains valid"),
+                structural_path: vec![0],
                 source_range: None,
             }],
             "safety",

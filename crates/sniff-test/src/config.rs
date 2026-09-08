@@ -105,6 +105,9 @@ pub struct AnalysisConfig {
     /// How `// PANIC:` and `// SAFETY:` comments are found for spans produced
     /// by macro expansion.
     pub marker_probing: MarkerProbing,
+    /// How call-site comments are matched against documented effect
+    /// obligations.
+    pub effect_doc_matching: EffectDocMatching,
     /// User-facing severity for analyzer-wide finding classes.
     pub lints: AnalysisLintConfig,
     /// Maximum number of invocation or transparent-body edges followed from
@@ -261,11 +264,24 @@ impl Default for AnalysisConfig {
             show_full_stack_trace: false,
             report_roots: Spanned::new(0..0, ReportRootSet::Public),
             marker_probing: MarkerProbing::MacroDefinitionFirst,
+            effect_doc_matching: EffectDocMatching::AnyJustification,
             lints: AnalysisLintConfig::default(),
             max_trace_depth: 256,
             trace_state_budget: 1_000_000,
         }
     }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum EffectDocMatching {
+    /// Any nonempty justification discharges the complete documented effect
+    /// contract, regardless of its requirement names or list structure.
+    #[default]
+    AnyJustification,
+    /// Each documented requirement must have a corresponding justification,
+    /// matched by name or anonymous list structure.
+    Exact,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize, Serialize)]
@@ -881,8 +897,8 @@ mod tests {
 
     use super::{
         AnalysisConfig, AnalysisLintConfig, CompilerConfig, ConfigError, ContractDocOverrideFile,
-        ContractDocOverrides, EXAMPLE_MANIFEST, LintLevel, MarkerProbing, MirInlining,
-        OverflowChecks, PanicBoundaryPolicy, PanicConfig, PathPatterns, ReportRootSet,
+        ContractDocOverrides, EXAMPLE_MANIFEST, EffectDocMatching, LintLevel, MarkerProbing,
+        MirInlining, OverflowChecks, PanicBoundaryPolicy, PanicConfig, PathPatterns, ReportRootSet,
         SafetyConfig, SniffTestConfig,
     };
 
@@ -1073,6 +1089,7 @@ mod tests {
             show-full-stack-trace = true
             report-roots = "all"
             marker-probing = "source-callsite"
+            effect-doc-matching = "exact"
         "#;
 
         let parsed = SniffTestConfig::from_manifest_str(config).expect("manifest should parse");
@@ -1084,6 +1101,10 @@ mod tests {
         assert_eq!(
             parsed.analysis.marker_probing,
             MarkerProbing::SourceCallsite
+        );
+        assert_eq!(
+            parsed.analysis.effect_doc_matching,
+            EffectDocMatching::Exact
         );
     }
 
@@ -1303,6 +1324,10 @@ mod tests {
             AnalysisConfig::default().marker_probing,
             MarkerProbing::MacroDefinitionFirst
         );
+        assert_eq!(
+            AnalysisConfig::default().effect_doc_matching,
+            EffectDocMatching::AnyJustification
+        );
         let lints = AnalysisConfig::default().lints;
         assert_eq!(lints.ambiguous_panic_marker, LintLevel::Deny);
         assert_eq!(lints.ambiguous_safety_marker, LintLevel::Deny);
@@ -1367,6 +1392,43 @@ mod tests {
             !replacement
                 .panics
                 .ignores_path("core::ub_checks::assert_unsafe_precondition")
+        );
+    }
+
+    #[test]
+    fn example_manifest_trusts_standard_library_crates_while_empty_config_does_not() {
+        let initialized = SniffTestConfig::from_manifest_str(EXAMPLE_MANIFEST)
+            .expect("the example manifest should parse");
+        for candidates in [
+            candidates(&["core", "core::slice::raw::from_raw_parts"]),
+            candidates(&["alloc", "alloc::vec::Vec::<T>::new"]),
+            candidates(&["std", "std::collections::hash::map::HashMap::<K, V>::new"]),
+        ] {
+            assert_eq!(
+                initialized
+                    .panics
+                    .panic_boundary_policy_candidates(&candidates),
+                PanicBoundaryPolicy::TrustedBoundary
+            );
+            assert!(
+                initialized
+                    .safety
+                    .trusts_safety_boundary_candidates(&candidates)
+            );
+        }
+
+        let empty = SniffTestConfig::default();
+        let std_candidates = candidates(&["std", "std::collections::HashMap::new"]);
+        assert_eq!(
+            empty
+                .panics
+                .panic_boundary_policy_candidates(&std_candidates),
+            PanicBoundaryPolicy::Normal
+        );
+        assert!(
+            !empty
+                .safety
+                .trusts_safety_boundary_candidates(&std_candidates)
         );
     }
 

@@ -1,2 +1,5 @@
+[analysis]
+effect-doc-matching = "exact"
+
 [safety.lints]
 safety-obligation-missing-requirements = "deny"

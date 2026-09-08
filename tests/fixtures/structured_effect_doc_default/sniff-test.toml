@@ -1,0 +1,4 @@
+# Deliberately omit `analysis.effect-doc-matching` to exercise its permissive
+# `any-justification` default.
+[analysis]
+report-roots = "public"

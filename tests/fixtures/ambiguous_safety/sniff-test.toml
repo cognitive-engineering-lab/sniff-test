@@ -1,2 +1,3 @@
 [analysis]
+effect-doc-matching = "exact"
 report-roots = ["ambiguous_safety::duplicate_safety_marker"]

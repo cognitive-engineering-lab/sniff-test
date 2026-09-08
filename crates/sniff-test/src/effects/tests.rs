@@ -11,7 +11,7 @@ use crate::artifact::{
     SafetyOpKind, SourceFileFact, SourceFileId, SourceRangeFact, StableInstanceHash,
 };
 use crate::compiler::invocations::InvocationGraph;
-use crate::config::{MarkerProbing, SniffTestConfig};
+use crate::config::{EffectDocMatching, MarkerProbing, SniffTestConfig};
 use crate::contracts::ContractDocOverrides;
 use crate::namespace::StableDefPathHash;
 
@@ -121,6 +121,7 @@ fn contract(
             .map(|(name, condition)| ContractRequirementFact {
                 name: (*name).to_owned(),
                 condition: (*condition).to_owned(),
+                structural_path: Vec::new(),
                 source_range: None,
             })
             .collect(),
@@ -143,6 +144,7 @@ fn call_comment(
         satisfactions: vec![AnnotationSatisfactionFact {
             requirement: requirement.map(str::to_owned),
             reason: String::from("audited reason"),
+            structural_path: None,
         }],
         requirements: Vec::new(),
     }
@@ -159,6 +161,7 @@ fn effect_comment(id: u32, effect: u32, kind: AnnotationFactKind) -> AnnotationF
         satisfactions: vec![AnnotationSatisfactionFact {
             requirement: None,
             reason: String::from("audited reason"),
+            structural_path: None,
         }],
         requirements: Vec::new(),
     }
@@ -426,6 +429,9 @@ fn trusted_comment_config() -> SniffTestConfig {
 
             [safety]
             trusted-boundary-namespaces = ["trusted::**"]
+
+            [analysis]
+            effect-doc-matching = "exact"
         "#,
     )
     .expect("trusted comment boundary configuration")
@@ -443,6 +449,7 @@ fn probe_comments<'a>(
         graph,
         annotations,
         &namespaces,
+        config.analysis.effect_doc_matching,
         &config.panics,
         &config.safety,
     )
@@ -1022,7 +1029,8 @@ fn comment_obligations_are_satisfied_across_call_levels() {
         ),
     ]);
 
-    let config = SniffTestConfig::default();
+    let mut config = SniffTestConfig::default();
+    config.analysis.effect_doc_matching = EffectDocMatching::Exact;
     let comments = probe_comments(&artifact, &graph, &annotations, &config);
     let trace = EffectEngine::new(&graph.comment_graph()).trace(&comments);
     let source_invocation = graph
@@ -1074,6 +1082,83 @@ fn comment_obligations_are_satisfied_across_call_levels() {
     assert!(marker_uses.iter().any(|usage| {
         usage.annotation() == final_marker && usage.invocation() == final_invocation
     }));
+}
+
+#[test]
+fn structured_and_named_obligations_remain_independent_in_exact_mode() {
+    let root = stable_function(0);
+    let leaf = stable_function(1);
+    let mut requirements = contract(
+        0,
+        leaf,
+        AnnotationFactKind::SafetyContract,
+        &[
+            ("checked", "the named condition holds"),
+            ("", "the outer condition holds"),
+            ("", "the nested condition holds"),
+        ],
+    );
+    for (requirement, path) in
+        requirements
+            .requirements
+            .iter_mut()
+            .zip([vec![0], vec![1], vec![1, 0]])
+    {
+        requirement.structural_path = path;
+    }
+    let mut justification = call_comment(
+        0,
+        0,
+        AnnotationFactKind::SafetyJustification,
+        Some("checked"),
+    );
+    // A named justification matches by name even when its list position differs.
+    justification.satisfactions[0].structural_path = Some(vec![1]);
+    justification
+        .satisfactions
+        .push(AnnotationSatisfactionFact {
+            requirement: None,
+            reason: String::from("the nested condition was verified"),
+            structural_path: Some(vec![1, 0]),
+        });
+    let (artifact, graph, annotations) = setup(vec![
+        body(
+            root,
+            "sample::root",
+            vec![call(0, 0, target(leaf, "sample::leaf"), false)],
+            Vec::new(),
+            vec![justification],
+        ),
+        body(
+            leaf,
+            "sample::leaf",
+            Vec::new(),
+            Vec::new(),
+            vec![requirements],
+        ),
+    ]);
+
+    for mode in [
+        EffectDocMatching::Exact,
+        EffectDocMatching::AnyJustification,
+    ] {
+        let mut config = SniffTestConfig::default();
+        config.analysis.effect_doc_matching = mode;
+        let comments = probe_comments(&artifact, &graph, &annotations, &config);
+        let trace = EffectEngine::new(&graph.comment_graph()).trace(&comments);
+        if mode == EffectDocMatching::Exact {
+            assert_eq!(trace.handled().count(), 0);
+            let (_, escaped) = trace.escaped().next().expect("unmatched outer requirement");
+            let node = trace
+                .nodes()
+                .nth(escaped.index())
+                .expect("escaped trace node");
+            assert_eq!(node.state().remaining().collect::<Vec<_>>(), vec![1]);
+        } else {
+            assert_eq!(trace.handled().count(), 1);
+            assert_eq!(trace.escaped().count(), 0);
+        }
+    }
 }
 
 #[test]
@@ -2115,6 +2200,91 @@ fn ignored_macro_path_terminates_a_compiler_assert_source() {
 }
 
 #[test]
+fn ignored_macro_path_does_not_export_an_internal_panic_contract() {
+    let root = stable_function(0);
+    let helper = stable_function(1);
+    let (artifact, graph, annotations) = setup(vec![
+        body(
+            root,
+            "sample::root",
+            vec![call_from_macro(
+                0,
+                0,
+                target(
+                    helper,
+                    "core::ptr::const_ptr::<impl *const T>::is_aligned_to",
+                ),
+                "core::ub_checks::assert_unsafe_precondition",
+            )],
+            Vec::new(),
+            Vec::new(),
+        ),
+        body(
+            helper,
+            "core::ptr::const_ptr::<impl *const T>::is_aligned_to",
+            Vec::new(),
+            Vec::new(),
+            vec![contract(
+                0,
+                helper,
+                AnnotationFactKind::PanicContract,
+                &[("alignment", "the alignment is not a power of two")],
+            )],
+        ),
+    ]);
+
+    let comments = probe_comments(&artifact, &graph, &annotations, &SniffTestConfig::default());
+    let trace = EffectEngine::new(&graph.comment_graph()).trace(&comments);
+
+    assert_eq!(comments.contract_count(CommentDomain::Panic), 1);
+    assert_eq!(trace.nodes().count(), 1);
+    assert_eq!(trace.handled().count(), 0);
+    assert_eq!(trace.escaped().count(), 0);
+}
+
+#[test]
+fn disabling_unsafe_precondition_ignore_exports_internal_panic_contracts() {
+    let root = stable_function(0);
+    let helper = stable_function(1);
+    let (artifact, graph, annotations) = setup(vec![
+        body(
+            root,
+            "sample::root",
+            vec![call_from_macro(
+                0,
+                0,
+                target(
+                    helper,
+                    "core::ptr::const_ptr::<impl *const T>::is_aligned_to",
+                ),
+                "core::ub_checks::assert_unsafe_precondition",
+            )],
+            Vec::new(),
+            Vec::new(),
+        ),
+        body(
+            helper,
+            "core::ptr::const_ptr::<impl *const T>::is_aligned_to",
+            Vec::new(),
+            Vec::new(),
+            vec![contract(
+                0,
+                helper,
+                AnnotationFactKind::PanicContract,
+                &[("alignment", "the alignment is not a power of two")],
+            )],
+        ),
+    ]);
+    let config = SniffTestConfig::from_manifest_str("[panics]\nignored-namespaces = []\n")
+        .expect("empty ignored namespace list");
+
+    let comments = probe_comments(&artifact, &graph, &annotations, &config);
+    let trace = EffectEngine::new(&graph.comment_graph()).trace(&comments);
+
+    assert_eq!(trace.escaped().count(), 1);
+}
+
+#[test]
 fn explicit_empty_ignored_namespaces_restores_unsafe_precondition_panics() {
     let root = stable_function(0);
     let panic_sink = stable_function(1);
@@ -2396,6 +2566,75 @@ fn trusted_target_does_not_suppress_local_unsafe_invocation_source() {
             call: CallId::new(0),
         })]
     );
+}
+
+#[test]
+fn configured_std_boundary_keeps_direct_contracts_and_unsafe_calls_visible() {
+    let root = stable_function(0);
+    let std_api = stable_function(1);
+    let mut std_body = body(
+        std_api,
+        "std::api::documented_unsafe",
+        Vec::new(),
+        vec![assert_effect(0), unsafe_effect(1)],
+        vec![
+            contract(0, std_api, AnnotationFactKind::PanicContract, &[]),
+            contract(1, std_api, AnnotationFactKind::SafetyContract, &[]),
+        ],
+    );
+    std_body
+        .attributes
+        .namespace_candidates
+        .insert(0, String::from("std"));
+    let (artifact, graph, annotations) = setup(vec![
+        body(
+            root,
+            "sample::root",
+            vec![call(
+                0,
+                0,
+                target(std_api, "std::api::documented_unsafe"),
+                true,
+            )],
+            Vec::new(),
+            Vec::new(),
+        ),
+        std_body,
+    ]);
+    let config = SniffTestConfig::from_manifest_str(
+        r#"
+            [panics]
+            trusted-boundary-namespaces = ["core", "std"]
+
+            [safety]
+            trusted-boundary-namespaces = ["core", "std"]
+        "#,
+    )
+    .expect("standard-library trusted boundary configuration");
+
+    let panic = probe_panic(&artifact, &graph, &annotations, &config.panics);
+    let safety = probe_safety(&artifact, &graph, &annotations, &config.safety);
+    let comments = probe_comments(&artifact, &graph, &annotations, &config);
+    let panic_trace = EffectEngine::new(&graph).trace(&panic);
+    let safety_trace = EffectEngine::new(&graph).trace(&safety);
+    let comment_trace = EffectEngine::new(&graph.comment_graph()).trace(&comments);
+
+    assert_eq!(panic_trace.handled().count(), 1);
+    assert_eq!(panic_trace.escaped().count(), 0);
+    assert_eq!(safety_trace.handled().count(), 1);
+    assert_eq!(
+        safety_trace
+            .escaped()
+            .map(|(origin, _)| *origin)
+            .collect::<Vec<_>>(),
+        vec![SafetyOrigin::Invocation {
+            invocation: graph.invocation_for_raw_call(root, CallId::new(0)).unwrap(),
+            call: CallId::new(0),
+        }]
+    );
+    assert_eq!(comments.contract_count(CommentDomain::Panic), 1);
+    assert_eq!(comments.contract_count(CommentDomain::Safety), 1);
+    assert_eq!(comment_trace.escaped().count(), 2);
 }
 
 #[test]

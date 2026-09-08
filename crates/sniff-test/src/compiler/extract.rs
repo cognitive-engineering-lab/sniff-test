@@ -71,8 +71,8 @@ impl std::error::Error for ExtractError {}
 
 /// Extracts every analyzable local function and associated-function body.
 ///
-/// Reachable local closure, coroutine, and const bodies are retained as exact
-/// instance bodies so facts owned by those nested bodies do not disappear.
+/// Local closures retain generic defining bodies for cross-crate
+/// lookup. Specialized instances, coroutines, and const bodies remain exact.
 /// No report-root or lint configuration participates in extraction.
 pub(crate) fn extract_artifact_facts(
     tcx: TyCtxt<'_>,
@@ -100,7 +100,7 @@ pub(crate) fn extract_artifact_facts(
 
     collect_reachability_mode(
         tcx,
-        &required_owners,
+        &extraction_roots(tcx, &required_owners),
         extraction_options(),
         &mut sources,
         &mut bodies,
@@ -137,6 +137,41 @@ fn collect_local_definition_sources(
 fn analyzable_local_fn_defs(tcx: TyCtxt<'_>) -> impl Iterator<Item = LocalDefId> + '_ {
     tcx.hir_body_owners()
         .filter(move |owner| matches!(tcx.def_kind(*owner), DefKind::Fn | DefKind::AssocFn))
+}
+
+fn extraction_roots<'tcx>(tcx: TyCtxt<'tcx>, owners: &[LocalDefId]) -> Vec<Instance<'tcx>> {
+    let functions = owners.iter().map(|owner| {
+        Instance::new_raw(
+            owner.to_def_id(),
+            GenericArgs::identity_for_item(tcx, *owner),
+        )
+    });
+    // A generic parent's closure call can remain unresolved until downstream
+    // instantiation. Extract the source body independently so that consumer
+    // MIR can be joined with defining-artifact safety and marker evidence.
+    let closures = tcx.hir_body_owners().filter_map(|owner| {
+        defining_closure_args(tcx, owner.to_def_id())
+            .map(|args| Instance::new_raw(owner.to_def_id(), args))
+    });
+    functions.chain(closures).collect()
+}
+
+fn defining_closure_args(
+    tcx: TyCtxt<'_>,
+    def_id: DefId,
+) -> Option<rustc_middle::ty::GenericArgsRef<'_>> {
+    if tcx.def_kind(def_id) != DefKind::Closure {
+        return None;
+    }
+    match tcx
+        .type_of(def_id)
+        .instantiate_identity()
+        .skip_normalization()
+        .kind()
+    {
+        TyKind::Closure(_, args) => Some(args),
+        _ => None,
+    }
 }
 
 fn ensure_required_thir_is_available(
@@ -195,9 +230,9 @@ const fn reachability_edge_description(kind: ReachabilityEdgeKind) -> &'static s
     }
 }
 
-fn collect_reachability_mode(
-    tcx: TyCtxt<'_>,
-    roots: &[LocalDefId],
+fn collect_reachability_mode<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    roots: &[Instance<'tcx>],
     options: ReachabilityOptions,
     sources: &mut SourceTable,
     bodies: &mut BTreeMap<FunctionId, PendingBody>,
@@ -218,7 +253,7 @@ fn collect_reachability_mode(
         if reached_root.expansion() != Some(ReachabilityNodeExpansion::Expanded) {
             return Err(ExtractError::new(format!(
                 "required body `{}` could not be expanded",
-                canonical_namespace(tcx, root.to_def_id())
+                canonical_namespace(tcx, root.def_id())
             )));
         }
     }
@@ -258,8 +293,18 @@ fn body_id_for_instance<'tcx>(tcx: TyCtxt<'tcx>, instance: Instance<'tcx>) -> Fu
     let def_id = instance.def_id();
     if def_id.is_local()
         && matches!(instance.def, InstanceKind::Item(_))
-        && matches!(tcx.def_kind(def_id), DefKind::Fn | DefKind::AssocFn)
-        && instance == Instance::new_raw(def_id, GenericArgs::identity_for_item(tcx, def_id))
+        && match tcx.def_kind(def_id) {
+            DefKind::Fn | DefKind::AssocFn => {
+                instance.args == GenericArgs::identity_for_item(tcx, def_id)
+            }
+            // Closure arguments include synthetic parameters for the call
+            // signature and captures. Use the defining closure type, whose
+            // parent parameters are still generic, rather than identity args
+            // for those synthetic parameters. Concrete instantiations must
+            // keep their exact identities.
+            DefKind::Closure => defining_closure_args(tcx, def_id) == Some(instance.args),
+            _ => false,
+        }
     {
         FunctionId::generic(StableDefPathHash::from_def_id(tcx, def_id))
     } else {
@@ -1023,6 +1068,7 @@ fn contract_requirements(
             Ok(ContractRequirementFact {
                 name: requirement.name,
                 condition: requirement.condition,
+                structural_path: requirement.path,
                 source_range: sources.range(tcx, requirement.span)?,
             })
         })
@@ -1607,6 +1653,7 @@ fn push_effect_marker(
         .map(|satisfaction| AnnotationSatisfactionFact {
             requirement: satisfaction.requirement,
             reason: satisfaction.reason,
+            structural_path: satisfaction.path,
         })
         .collect::<Vec<_>>();
     let identity = format!("{kind:?}|{:?}", marker.key);

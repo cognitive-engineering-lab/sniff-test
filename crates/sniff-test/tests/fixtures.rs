@@ -9,7 +9,7 @@ use serde_json::Value;
 use common::{
     COMPILER_DEBUG_FRAGMENTS, CommandOutput, assert_public_output_uses_human_words,
     clean_cargo_package_env, copy_fixture_dir, extract_group_handle, lock_nested_cargo,
-    render_snapshot, repo_root, rustc_sysroot,
+    normalize_path, render_snapshot, repo_root, rustc_sysroot,
 };
 
 struct Case {
@@ -71,6 +71,17 @@ macro_rules! fixture_cases {
 }
 
 fixture_cases! {
+    "dependency_closure_bodies" => {
+        dependency_closure_bodies => Case::new().in_app().denied();
+        dependency_nested_closure_bodies => Case::new().in_app()
+            .args(&["--manifest", "nested.toml"]).denied();
+        dependency_returned_closure_bodies => Case::new().in_app()
+            .args(&["--manifest", "returned.toml"]).denied();
+        dependency_closure_concrete_dispatch => Case::new().in_app()
+            .args(&["--manifest", "dispatch.toml"]).denied();
+        dependency_closure_justifications => Case::new().in_app()
+            .args(&["--manifest", "justified.toml"]);
+    }
     "executable_artifact" => {
         executable_artifact =>
             Case::new().full_report();
@@ -181,6 +192,9 @@ fixture_cases! {
     "std_trait_impl_glob" => {
         std_trait_impl_glob => Case::new();
     }
+    "std_collection_init" => {
+        std_collection_init => Case::new();
+    }
     "unsafe_ops" => {
         unsafe_ops => Case::new();
     }
@@ -212,6 +226,9 @@ fixture_cases! {
         safe_markers => Case::new().denied()
             .human_snapshot("compact_stack_hint");
     }
+    "justification_above_attr" => {
+        justification_above_attr => Case::new();
+    }
     "panic_requirements" => {
         panic_requirements => Case::new();
     }
@@ -237,6 +254,12 @@ fixture_cases! {
     "safety_contract_requirements" => {
         safety_contracts_preserve_call_and_obligation_requirements => Case::new()
             .human_snapshot("safety_contract_requirement_diagnostics");
+    }
+    "structured_safety_doc" => {
+        structured_safety_docs_require_each_named_justification => Case::new();
+    }
+    "structured_effect_doc_default" => {
+        structured_effect_docs_allow_any_justification_by_default => Case::new();
     }
     "safety_callable_sites" => {
         safety_callable_sites => Case::new();
@@ -480,9 +503,8 @@ fn normalize_json(value: &mut Value, fixture_root: &Path, sysroot: &str) {
             }
         }
         Value::String(text) => {
-            *text = text
-                .replace(&fixture_root.display().to_string(), "[FIXTURE]")
-                .replace(sysroot, "[SYSROOT]");
+            *text = normalize_path(text, fixture_root, "[FIXTURE]");
+            *text = normalize_path(text, Path::new(sysroot), "[SYSROOT]");
         }
         Value::Null | Value::Bool(_) | Value::Number(_) => {}
     }

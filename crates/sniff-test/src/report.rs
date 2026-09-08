@@ -184,6 +184,7 @@ pub(crate) fn trace_workspace_with_source_overrides(
         &graph,
         &annotations,
         &namespaces,
+        config.analysis.effect_doc_matching,
         &config.panics,
         &config.safety,
     );
@@ -561,6 +562,30 @@ fn marker_projection_order(
         .len()
         .cmp(&right.trace.steps.len())
         .then_with(|| left.function_path.cmp(&right.function_path))
+        .then_with(|| {
+            // Instance identities can differ across builds; prefer the source trace.
+            left.trace
+                .steps
+                .iter()
+                .zip(&right.trace.steps)
+                .find_map(|(left, right)| {
+                    let ordering = left
+                        .source_range
+                        .as_ref()
+                        .map(|range| (&range.file, range.byte_start, range.byte_end))
+                        .cmp(
+                            &right
+                                .source_range
+                                .as_ref()
+                                .map(|range| (&range.file, range.byte_start, range.byte_end)),
+                        )
+                        .then_with(|| left.caller_path.cmp(&right.caller_path))
+                        .then_with(|| left.target_path.cmp(&right.target_path))
+                        .then_with(|| left.kind.cmp(&right.kind));
+                    ordering.is_ne().then_some(ordering)
+                })
+                .unwrap_or(std::cmp::Ordering::Equal)
+        })
 }
 
 #[allow(
@@ -2233,9 +2258,10 @@ fn interpreted_target(target: &FunctionTargetFact) -> InterpretedTarget {
 #[cfg(test)]
 mod tests {
     use super::{
-        EffectEngine, PanicEffect, SafetyEffect, annotation_probing_fact, append_call_trace,
-        comment_marker_evidence, effect_marker_evidence, invocation_source_has_contract,
-        raw_call_marker_evidence, same_source_finding, trace_workspace,
+        EffectEngine, MarkerProjection, PanicEffect, SafetyEffect, annotation_probing_fact,
+        append_call_trace, comment_marker_evidence, effect_marker_evidence,
+        invocation_source_has_contract, marker_projection_order, raw_call_marker_evidence,
+        same_source_finding, trace_workspace,
     };
     use crate::annotations::{AnnotationDomain, AnnotationIndex};
     use crate::artifact::{
@@ -2329,6 +2355,40 @@ mod tests {
             same_source_finding(&first, &second),
             "the same source call projected through two instances remains one finding"
         );
+    }
+
+    #[test]
+    fn ambiguous_marker_representative_is_stable_across_instance_and_witness_order() {
+        let definition = stable_function(91);
+        for instances in [[92, 93], [93, 92]] {
+            let early_finding =
+                source_finding_with_trace_call(exact_function(definition, instances[0]), 1);
+            let mut late_finding =
+                source_finding_with_trace_call(exact_function(definition, instances[1]), 2);
+            late_finding.trace.steps[0].source_range = Some(SourceRangeFact {
+                file: SourceFileId::new("normalized-source"),
+                byte_start: 30,
+                byte_end: 40,
+            });
+            let early = MarkerProjection {
+                function: early_finding.function,
+                function_path: early_finding.function_path,
+                trace: early_finding.trace,
+            };
+            let late = MarkerProjection {
+                function: late_finding.function,
+                function_path: late_finding.function_path,
+                trace: late_finding.trace,
+            };
+
+            for witnesses in [[&early, &late], [&late, &early]] {
+                let representative = witnesses
+                    .into_iter()
+                    .min_by(|left, right| marker_projection_order(left, right))
+                    .expect("two marker witnesses");
+                assert_eq!(representative.trace, early.trace);
+            }
+        }
     }
 
     fn attributes(path: &str) -> FunctionAttributesFact {
@@ -2493,6 +2553,7 @@ unresolved-call-target = "warn"
         marker.satisfactions.push(AnnotationSatisfactionFact {
             requirement: None,
             reason: String::from("audited reason"),
+            structural_path: None,
         });
         marker
     }
@@ -3404,11 +3465,13 @@ unresolved-call-target = "warn"
             crate::artifact::ContractRequirementFact {
                 name: String::from("initialized"),
                 condition: String::from("state must be initialized"),
+                structural_path: vec![0],
                 source_range: None,
             },
             crate::artifact::ContractRequirementFact {
                 name: String::from("exclusive"),
                 condition: String::from("access must be exclusive"),
+                structural_path: vec![1],
                 source_range: None,
             },
         ];
@@ -3450,6 +3513,7 @@ unresolved-call-target = "warn"
             &graph,
             &annotations,
             &namespaces,
+            config.analysis.effect_doc_matching,
             &config.panics,
             &config.safety,
         );

@@ -15,9 +15,9 @@ use serde::{Deserialize, Deserializer as _, Serialize};
 
 use crate::artifact::{ArtifactFacts, FunctionFactProvenance};
 
-pub(crate) const CACHE_FORMAT_VERSION: u32 = 25;
+pub(crate) const CACHE_FORMAT_VERSION: u32 = 26;
 pub(crate) const CACHE_DIR_NAME: &str = "sniff-test-cache";
-pub(crate) const CACHE_VERSION_DIR: &str = "v25";
+pub(crate) const CACHE_VERSION_DIR: &str = "v26";
 
 /// Cached policy-neutral analysis for one exact rustc output artifact.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -104,7 +104,7 @@ impl ArtifactAnalysisCache {
         write_atomic(&path, &source)
     }
 
-    /// Reads and validates one v25 cache file against the active extraction
+    /// Reads and validates one v26 cache file against the active extraction
     /// environment.
     pub(crate) fn read(path: &Path, expected: &CacheExpectations<'_>) -> Result<Self, CacheError> {
         let source = std::fs::read_to_string(path).map_err(|source| CacheError::Io {
@@ -608,8 +608,8 @@ mod tests {
         let json: serde_json::Value = serde_json::from_str(&source).expect("valid JSON");
         let object = json.as_object().expect("cache object");
 
-        assert_eq!(CACHE_FORMAT_VERSION, 25);
-        assert_eq!(json["format-version"], 25);
+        assert_eq!(CACHE_FORMAT_VERSION, 26);
+        assert_eq!(json["format-version"], 26);
         let mut fields = object.keys().map(String::as_str).collect::<Vec<_>>();
         fields.sort_unstable();
         assert_eq!(
@@ -830,7 +830,7 @@ mod tests {
     fn read_rejects_older_formats_before_deserializing() {
         let directory = tempdir().expect("temporary cache root");
 
-        for version in [14, 20, 21, 22, 23, 24] {
+        for version in [14, 20, 21, 22, 23, 24, 25] {
             let path = directory.path().join(format!("v{version}.json"));
             fs::write(&path, format!(r#"{{"format-version":{version},"facts":"#))
                 .expect("write incompatible cache header");
@@ -852,11 +852,11 @@ mod tests {
 
         assert_eq!(
             root.to_string_lossy(),
-            "/target/plugin-nightly/sniff-test-cache/v25"
+            "/target/plugin-nightly/sniff-test-cache/v26"
         );
         assert_eq!(
             artifact_cache_path(&root, &identity).to_string_lossy(),
-            "/target/plugin-nightly/sniff-test-cache/v25/artifacts/0000000000000001-0123456789abcdef0123456789abcdef.json"
+            "/target/plugin-nightly/sniff-test-cache/v26/artifacts/0000000000000001-0123456789abcdef0123456789abcdef.json"
         );
     }
 }

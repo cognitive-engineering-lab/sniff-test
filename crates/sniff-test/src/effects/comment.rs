@@ -10,7 +10,7 @@ use crate::annotations::{
 };
 use crate::artifact::{ArtifactFacts, CallId, DefinitionNamespaceIndex};
 use crate::compiler::invocations::InvocationGraph;
-use crate::config::{PanicConfig, SafetyConfig};
+use crate::config::{EffectDocMatching, PanicConfig, SafetyConfig};
 use crate::contracts::normalize_requirement_name;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -145,6 +145,7 @@ impl CommentContract {
 #[derive(Clone, Debug, PartialEq, Eq)]
 enum Obligation {
     Named(String),
+    Structured(Vec<usize>),
     WholeContract,
 }
 
@@ -152,8 +153,10 @@ pub(crate) struct CommentEffect<'annotations> {
     annotations: &'annotations AnnotationIndex,
     graph: &'annotations InvocationGraph,
     contracts: Vec<CommentContract>,
+    effect_doc_matching: EffectDocMatching,
     trusted_panic_functions: BTreeSet<FunctionId>,
     trusted_safety_functions: BTreeSet<FunctionId>,
+    ignored_panic_invocations: BTreeSet<InvocationId>,
 }
 
 impl<'annotations> CommentEffect<'annotations> {
@@ -162,6 +165,7 @@ impl<'annotations> CommentEffect<'annotations> {
         graph: &'annotations InvocationGraph,
         annotations: &'annotations AnnotationIndex,
         namespaces: &DefinitionNamespaceIndex,
+        effect_doc_matching: EffectDocMatching,
         panic_config: &PanicConfig,
         safety_config: &SafetyConfig,
     ) -> Self {
@@ -200,12 +204,24 @@ impl<'annotations> CommentEffect<'annotations> {
                 trusted_safety_functions.extend(graph.function_aliases(body.function));
             }
         }
+        let ignored_panic_invocations = graph
+            .invocations()
+            .filter(|invocation| {
+                invocation
+                    .macro_provenance()
+                    .iter()
+                    .any(|frame| panic_config.ignores_path(&frame.display_path))
+            })
+            .map(crate::compiler::invocations::Invocation::id)
+            .collect();
         Self {
             annotations,
             graph,
             contracts,
+            effect_doc_matching,
             trusted_panic_functions,
             trusted_safety_functions,
+            ignored_panic_invocations,
         }
     }
 
@@ -237,12 +253,21 @@ impl<'annotations> CommentEffect<'annotations> {
         if satisfaction.reason.trim().is_empty() {
             return;
         }
+        if self.effect_doc_matching == EffectDocMatching::AnyJustification {
+            state.remaining.clear();
+            return;
+        }
         let Some(contract) = self.contract(state.contract) else {
             return;
         };
         let required = match satisfaction.requirement.as_deref() {
             Some(requirement) => Obligation::Named(normalize_requirement_name(requirement)),
-            None => Obligation::WholeContract,
+            None => satisfaction
+                .structural_path
+                .as_ref()
+                .map_or(Obligation::WholeContract, |path| {
+                    Obligation::Structured(path.clone())
+                }),
         };
         // Ambiguity depends on the complete contract, including satisfied requirements.
         let mut matching = contract
@@ -271,6 +296,11 @@ impl<'annotations> CommentEffect<'annotations> {
         invocation: InvocationId,
         node: Option<TraceNodeId>,
     ) -> Option<CommentInvocationTransition> {
+        if state.domain == CommentDomain::Panic
+            && self.ignored_panic_invocations.contains(&invocation)
+        {
+            return None;
+        }
         if state.domain == CommentDomain::Safety
             && self.graph.invocation(invocation).is_builtin_unsafe()
         {
@@ -471,7 +501,13 @@ fn collect_obligations(annotation: &FunctionContractAnnotation) -> Vec<Obligatio
     annotation
         .requirements()
         .iter()
-        .map(|requirement| Obligation::Named(normalize_requirement_name(&requirement.name)))
+        .map(|requirement| {
+            if requirement.name.is_empty() {
+                Obligation::Structured(requirement.structural_path.clone())
+            } else {
+                Obligation::Named(normalize_requirement_name(&requirement.name))
+            }
+        })
         .collect()
 }
 

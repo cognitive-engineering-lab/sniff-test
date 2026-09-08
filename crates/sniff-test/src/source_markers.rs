@@ -9,7 +9,7 @@ use rustc_span::{ExpnId, SourceFile, Span};
 
 use crate::artifact::UnverifiedMarkerProbeReason;
 use crate::config::MarkerProbing;
-use crate::contracts::MarkerSatisfaction;
+use crate::contracts::{MarkerSatisfaction, markdown_list_item_body, structural_list_path};
 use crate::namespace::definition_backed_macro;
 
 #[derive(Debug, Clone, Copy)]
@@ -503,6 +503,7 @@ fn parse_marker(body: &str) -> MarkerSatisfaction {
     MarkerSatisfaction {
         requirement,
         reason: reason.to_owned(),
+        path: None,
     }
 }
 
@@ -573,7 +574,8 @@ struct CommentBlock {
 
 fn preceding_comment_block(file: &SourceFile, line_index: usize) -> Option<CommentBlock> {
     let mut block = Vec::new();
-    let mut current = line_index;
+    let mut current = preceding_outer_attributes_start(file, line_index);
+    let end_line = current.checked_sub(1)?;
     while let Some(previous) = current.checked_sub(1) {
         let Some(line) = file.get_line(previous) else {
             break;
@@ -593,9 +595,98 @@ fn preceding_comment_block(file: &SourceFile, line_index: usize) -> Option<Comme
     block.reverse();
     Some(CommentBlock {
         start_line: current,
-        end_line: line_index - 1,
+        end_line,
         lines: block,
     })
+}
+
+/// Returns the first line of the contiguous outer attributes immediately
+/// preceding `line_index`, or `line_index` when there are none.
+///
+/// rustc's expression and statement spans begin at the expression itself, so
+/// an outer attribute is not part of the span used for marker probing. Treat
+/// those attributes as transparent: the comment still directly documents the
+/// attributed source construct.
+fn preceding_outer_attributes_start(file: &SourceFile, mut line_index: usize) -> usize {
+    while let Some(start_line) = preceding_outer_attribute_start(file, line_index) {
+        line_index = start_line;
+    }
+    line_index
+}
+
+fn preceding_outer_attribute_start(file: &SourceFile, line_index: usize) -> Option<usize> {
+    let end_line = line_index.checked_sub(1)?;
+    let end = file.get_line(end_line)?;
+    let end = end.trim();
+
+    // A complete outer attribute must finish on the line directly above the
+    // attributed construct. Avoid searching backwards through ordinary code
+    // when that line cannot possibly close an attribute.
+    if !end.ends_with(']') {
+        return None;
+    }
+
+    for start_line in (0..=end_line).rev() {
+        let line = file.get_line(start_line)?;
+        let trimmed = line.trim_start();
+        if trimmed.starts_with("#[") {
+            let source = (start_line..=end_line)
+                .filter_map(|line_index| file.get_line(line_index))
+                .map(|line| line.to_string())
+                .collect::<Vec<_>>()
+                .join("\n");
+            return outer_attribute_occupies_source(&source).then_some(start_line);
+        }
+        if trimmed.is_empty() || line_is_standalone_comment(trimmed) {
+            return None;
+        }
+    }
+    None
+}
+
+fn outer_attribute_occupies_source(source: &str) -> bool {
+    let source = source.trim();
+    let Some(body) = source.strip_prefix("#[") else {
+        return false;
+    };
+
+    let mut square_depth = 1_u32;
+    let mut characters = body.char_indices().peekable();
+    while let Some((index, character)) = characters.next() {
+        match character {
+            '[' => square_depth += 1,
+            ']' => {
+                square_depth -= 1;
+                if square_depth == 0 {
+                    return body[index + character.len_utf8()..].trim().is_empty();
+                }
+            }
+            '"' => skip_quoted(&mut characters, '"'),
+            '\'' => skip_quoted(&mut characters, '\''),
+            '/' if characters.peek().is_some_and(|(_, next)| *next == '/') => {
+                characters.next();
+                while characters.next().is_some_and(|(_, next)| next != '\n') {}
+            }
+            _ => {}
+        }
+    }
+    false
+}
+
+fn skip_quoted(
+    characters: &mut std::iter::Peekable<impl Iterator<Item = (usize, char)>>,
+    delimiter: char,
+) {
+    let mut escaped = false;
+    for (_, character) in characters.by_ref() {
+        if escaped {
+            escaped = false;
+        } else if character == '\\' {
+            escaped = true;
+        } else if character == delimiter {
+            break;
+        }
+    }
 }
 
 fn comment_block_span(file: &SourceFile, start_line: usize, end_line: usize) -> Span {
@@ -620,33 +711,42 @@ fn line_is_standalone_comment(line: &str) -> bool {
 }
 
 fn comment_body(line: &str) -> Option<&str> {
+    comment_body_preserving_indentation(line).map(str::trim_start)
+}
+
+fn comment_body_preserving_indentation(line: &str) -> Option<&str> {
     let comment = line.trim_start().strip_prefix("//")?;
-    (!comment.starts_with('/') && !comment.starts_with('!')).then(|| comment.trim_start())
+    (!comment.starts_with('/') && !comment.starts_with('!'))
+        .then(|| comment.strip_prefix(' ').unwrap_or(comment))
 }
 
 fn comment_block_satisfactions(lines: &[String], syntax: MarkerSyntax) -> Vec<MarkerSatisfaction> {
     let mut satisfactions: Vec<MarkerSatisfaction> = Vec::new();
     let mut pending_header_reason: Option<String> = None;
     let mut in_marker_block = false;
+    let mut list_levels = Vec::new();
 
     for line in lines {
-        let Some(body) = comment_body(line) else {
+        let Some(body) = comment_body_preserving_indentation(line) else {
             continue;
         };
-        if let Some(marker_body) = body.strip_prefix(syntax.prefix()) {
+        let marker_line = body.trim_start();
+        if let Some(marker_body) = marker_line.strip_prefix(syntax.prefix()) {
             flush_pending_header(&mut satisfactions, &mut pending_header_reason);
             in_marker_block = true;
+            list_levels.clear();
             let parsed = parse_marker(marker_body);
             if parsed.requirement.is_none() && parsed.reason.is_empty() {
                 pending_header_reason = Some(String::new());
             } else {
                 satisfactions.push(parsed);
             }
-        } else if body.starts_with(syntax.other_prefix()) {
+        } else if marker_line.starts_with(syntax.other_prefix()) {
             flush_pending_header(&mut satisfactions, &mut pending_header_reason);
             in_marker_block = false;
+            list_levels.clear();
         } else if in_marker_block {
-            if let Some(satisfaction) = parse_satisfaction_bullet(body) {
+            if let Some(satisfaction) = parse_satisfaction_bullet(body, &mut list_levels) {
                 pending_header_reason = None;
                 satisfactions.push(satisfaction);
             } else if let Some(reason) = pending_header_reason.as_mut() {
@@ -671,6 +771,7 @@ fn flush_pending_header(
         satisfactions.push(MarkerSatisfaction {
             requirement: None,
             reason,
+            path: None,
         });
     }
 }
@@ -685,26 +786,42 @@ fn append_reason_line(reason: &mut String, line: &str) {
     reason.push_str(line);
 }
 
-fn parse_satisfaction_bullet(line: &str) -> Option<MarkerSatisfaction> {
-    let line = line.trim_start();
-    let body = line
-        .strip_prefix("- ")
-        .or_else(|| line.strip_prefix("* "))
-        .or_else(|| line.strip_prefix("+ "))?;
+fn parse_satisfaction_bullet(
+    line: &str,
+    levels: &mut Vec<(usize, usize, usize)>,
+) -> Option<MarkerSatisfaction> {
+    let body = markdown_list_item_body(line)?;
     let (name, reason) = parse_marker_body(body);
-    name.map(|requirement| MarkerSatisfaction {
-        requirement: Some(requirement),
+    Some(MarkerSatisfaction {
+        requirement: name,
         reason: reason.to_owned(),
+        path: Some(structural_list_path(
+            line.len() - line.trim_start().len(),
+            levels,
+        )),
     })
 }
 
 #[cfg(test)]
 mod tests {
     use rustc_span::DUMMY_SP;
+    use rustc_span::FileName;
+    use rustc_span::source_map::{FilePathMapping, SourceMap};
 
     use super::{MarkerProbe, MarkerSatisfaction, MarkerSyntax, normalize_requirement_name};
     use crate::artifact::UnverifiedMarkerProbeReason;
     use crate::config::MarkerProbing;
+
+    fn with_source_file(source: &str, check: impl FnOnce(&rustc_span::SourceFile)) {
+        rustc_span::create_default_session_globals_then(|| {
+            let source_map = SourceMap::new(FilePathMapping::empty());
+            let file = source_map.new_source_file(
+                FileName::Custom(String::from("markers.rs")),
+                source.to_owned(),
+            );
+            check(&file);
+        });
+    }
 
     fn line_has_panic_marker(line: &str) -> bool {
         super::line_satisfaction(line, MarkerSyntax::Panic).is_some()
@@ -725,6 +842,7 @@ mod tests {
             Some(MarkerSatisfaction {
                 requirement: Some(String::from("index in bounds")),
                 reason: String::from("checked by caller"),
+                path: None,
             })
         );
     }
@@ -745,10 +863,12 @@ mod tests {
                     reason: String::from(
                         "caller checked denominator.\nThe constructor rejects zero."
                     ),
+                    path: None,
                 },
                 MarkerSatisfaction {
                     requirement: Some(String::from("index in bounds")),
                     reason: String::from("caller checked the index."),
+                    path: None,
                 },
             ]
         );
@@ -776,15 +896,61 @@ mod tests {
                     reason: String::from(
                         "checked the first precondition.\nAdditional evidence for the first precondition."
                     ),
+                    path: Some(vec![0]),
                 },
                 MarkerSatisfaction {
                     requirement: Some(String::from("something2[var_1]")),
                     reason: String::from("checked the second precondition."),
+                    path: Some(vec![1]),
                 },
                 MarkerSatisfaction {
                     requirement: Some(String::from("something3")),
                     reason: String::from("checked the third precondition."),
+                    path: Some(vec![2]),
                 },
+            ]
+        );
+    }
+
+    #[test]
+    fn marker_parses_ordered_and_mixed_nested_requirement_bullets() {
+        let lines = [
+            String::from("    // PANIC:"),
+            String::from("    // 1. outer: checked the outer condition."),
+            String::from("    //    - nested: checked the nested condition."),
+            String::from("    //      + deep: checked the deepest condition."),
+            String::from("    // 2) final: checked the final condition."),
+        ];
+
+        assert_eq!(
+            comment_block_satisfactions_for_panic(&lines)
+                .into_iter()
+                .map(|satisfaction| satisfaction.requirement.unwrap())
+                .collect::<Vec<_>>(),
+            ["outer", "nested", "deep", "final"]
+        );
+    }
+
+    #[test]
+    fn marker_preserves_paths_for_unnamed_nested_bullets() {
+        let lines = [
+            String::from("    // SAFETY:"),
+            String::from("    // * checked the allocation."),
+            String::from("    //   - checked initialization."),
+            String::from("    //   - checked alignment."),
+            String::from("    // * checked the lifetime."),
+        ];
+
+        assert_eq!(
+            super::comment_block_satisfactions(&lines, MarkerSyntax::Safety)
+                .into_iter()
+                .map(|satisfaction| (satisfaction.requirement, satisfaction.path))
+                .collect::<Vec<_>>(),
+            [
+                (None, Some(vec![0])),
+                (None, Some(vec![0, 0])),
+                (None, Some(vec![0, 1])),
+                (None, Some(vec![1])),
             ]
         );
     }
@@ -801,6 +967,7 @@ mod tests {
             [MarkerSatisfaction {
                 requirement: None,
                 reason: String::from("caller checked the local invariant."),
+                path: None,
             }]
         );
     }
@@ -825,9 +992,62 @@ mod tests {
             Some(MarkerSatisfaction {
                 requirement: Some(String::from("initialized")),
                 reason: String::from("written above"),
+                path: None,
             })
         );
         assert!(!line_has_safety_marker("// PANIC: not safety"));
+    }
+
+    #[test]
+    fn safety_marker_applies_across_an_outer_attribute() {
+        with_source_file(
+            "// SAFETY: pointer is valid.\n#[allow(unused_variables)]\nunsafe { read(ptr) }\n",
+            |file| {
+                let marker = super::marker_block_at(file, 2, MarkerSyntax::Safety)
+                    .expect("marker above the attribute should apply");
+
+                assert_eq!(marker.key.start_line, 0);
+                assert_eq!(marker.key.end_line, 0);
+                assert_eq!(marker.satisfactions[0].reason, "pointer is valid.");
+            },
+        );
+    }
+
+    #[test]
+    fn panic_marker_applies_across_multiple_and_multiline_outer_attributes() {
+        with_source_file(
+            "// PANIC: invariant checked by caller.\n\
+             #[cfg_attr(\n\
+                 all(),\n\
+                 allow(dead_code)\n\
+             )]\n\
+             #[allow(unused_variables)]\n\
+             panic!(\"boom\");\n",
+            |file| {
+                let marker = super::marker_block_at(file, 6, MarkerSyntax::Panic)
+                    .expect("marker above the attributes should apply");
+
+                assert_eq!(marker.key.start_line, 0);
+                assert_eq!(marker.key.end_line, 0);
+                assert_eq!(
+                    marker.satisfactions[0].reason,
+                    "invariant checked by caller."
+                );
+            },
+        );
+    }
+
+    #[test]
+    fn marker_does_not_cross_an_attributed_intervening_statement() {
+        with_source_file(
+            "// SAFETY: belongs to the assignment.\n\
+             #[allow(unused_variables)]\n\
+             let unused = 0;\n\
+             unsafe { read(ptr) }\n",
+            |file| {
+                assert!(super::marker_block_at(file, 3, MarkerSyntax::Safety).is_none());
+            },
+        );
     }
 
     #[test]
@@ -889,6 +1109,7 @@ mod tests {
                 reason: String::from(
                     "pointer came from NonNull.\nThis should not become panic evidence."
                 ),
+                path: None,
             }]
         );
     }

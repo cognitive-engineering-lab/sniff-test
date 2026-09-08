@@ -469,6 +469,8 @@ pub struct ReachabilitySnapshot {
 
 impl ReachabilitySnapshot {
     fn new(roots: &[ReachabilityNodeId], graph_node_count: usize, graph_edge_count: usize) -> Self {
+        // PANIC: single-root queries always supply one root, and multi-root queries return before
+        // an empty root set reaches this constructor.
         let root = roots[0];
         let mut snapshot = Self {
             root,

@@ -1,4 +1,5 @@
 [analysis]
+effect-doc-matching = "exact"
 report-roots = [
     "source_contract_overrides::caller",
     "source_contract_overrides::trait_api::caller",
