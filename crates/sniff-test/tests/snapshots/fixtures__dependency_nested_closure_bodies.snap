@@ -1,0 +1,31 @@
+---
+source: crates/sniff-test/tests/fixtures.rs
+expression: "report[\"findings\"]"
+---
+[
+  {
+    "kind": "panic-invocation",
+    "level": "deny",
+    "owner": {
+      "crate": "dependency_closure_dep",
+      "scope": "dependency"
+    },
+    "reason": "dependency crate `dependency_closure_dep` has no recorded `// PANIC:` evidence for panic invocation to `core::panicking::panic_fmt`",
+    "root": "dependency_closure_app::nested",
+    "root-kind": "concrete",
+    "root-span": "src/lib.rs:13:1: 13:47",
+    "source-evidence": {
+      "status": "verified-absent"
+    },
+    "span": "[FIXTURE]/dep/src/lib.rs:31:13: 31:66",
+    "target": "core::panicking::panic_fmt",
+    "trace": [
+      "src/lib.rs:14:5: 14:42: dependency_closure_app::nested --direct-call-> dependency_closure_dep::nested",
+      "[FIXTURE]/dep/src/lib.rs:36:5: 36:12: dependency_closure_dep::nested --direct-call-> dependency_closure_dep::nested::{closure#0}",
+      "[FIXTURE]/dep/src/lib.rs:34:9: 34:16: dependency_closure_dep::nested::{closure#0} --direct-call-> dependency_closure_dep::nested::{closure#0}::{closure#0}",
+      "[FIXTURE]/dep/src/lib.rs:31:13: 31:66: dependency_closure_dep::nested::{closure#0}::{closure#0} --macro-expansion-> macro core::macros::builtin::assert",
+      "[FIXTURE]/dep/src/lib.rs:31:13: 31:66: macro core::macros::builtin::assert --macro-expansion-> macro core::panic::panic_2021",
+      "[SYSROOT]/lib/rustlib/src/rust/library/core/src/panic.rs:62:9: 62:73: macro core::panic::panic_2021 --direct-call-> core::panicking::panic_fmt"
+    ]
+  }
+]

@@ -63,6 +63,17 @@ macro_rules! fixture_cases {
 }
 
 fixture_cases! {
+    "dependency_closure_bodies" => {
+        dependency_closure_bodies => Case::new().in_app().denied();
+        dependency_nested_closure_bodies => Case::new().in_app()
+            .args(&["--manifest", "nested.toml"]).denied();
+        dependency_returned_closure_bodies => Case::new().in_app()
+            .args(&["--manifest", "returned.toml"]).denied();
+        dependency_closure_concrete_dispatch => Case::new().in_app()
+            .args(&["--manifest", "dispatch.toml"]).denied();
+        dependency_closure_justifications => Case::new().in_app()
+            .args(&["--manifest", "justified.toml"]);
+    }
     "executable_artifact" => {
         executable_artifact =>
             Case::new().full_report();

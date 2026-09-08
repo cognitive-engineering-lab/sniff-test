@@ -1,0 +1,12 @@
+[analysis]
+report-roots = ["dependency_closure_app::nested"]
+
+[compiler]
+inline-mir = "off"
+
+[panics]
+trusted-boundary-namespaces = ["core", "std"]
+panic-sink-namespaces = ["core::panicking::**"]
+
+[safety]
+trusted-boundary-namespaces = ["core", "std"]

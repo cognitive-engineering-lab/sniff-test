@@ -1,0 +1,53 @@
+---
+source: crates/sniff-test/tests/fixtures.rs
+expression: "report[\"findings\"]"
+---
+[
+  {
+    "kind": "panic-invocation",
+    "level": "deny",
+    "owner": {
+      "crate": "dependency_closure_dep",
+      "scope": "dependency"
+    },
+    "reason": "dependency crate `dependency_closure_dep` has no recorded `// PANIC:` evidence for panic invocation to `core::panicking::panic_fmt`",
+    "root": "dependency_closure_app::root",
+    "root-kind": "concrete",
+    "root-span": "src/lib.rs:1:1: 1:45",
+    "source-evidence": {
+      "status": "verified-absent"
+    },
+    "span": "[FIXTURE]/dep/src/lib.rs:5:9: 5:55",
+    "target": "core::panicking::panic_fmt",
+    "trace": [
+      "src/lib.rs:2:5: 2:47: dependency_closure_app::root --direct-call-> dependency_closure_dep::check_value",
+      "[FIXTURE]/dep/src/lib.rs:8:5: 8:14: dependency_closure_dep::check_value --direct-call-> dependency_closure_dep::check_value::{closure#0}",
+      "[FIXTURE]/dep/src/lib.rs:5:9: 5:55: dependency_closure_dep::check_value::{closure#0} --macro-expansion-> macro core::macros::builtin::assert",
+      "[FIXTURE]/dep/src/lib.rs:5:9: 5:55: macro core::macros::builtin::assert --macro-expansion-> macro core::panic::panic_2021",
+      "[SYSROOT]/lib/rustlib/src/rust/library/core/src/panic.rs:62:9: 62:73: macro core::panic::panic_2021 --direct-call-> core::panicking::panic_fmt"
+    ]
+  },
+  {
+    "function": "dependency_closure_dep::read_pointer::{closure#0}",
+    "kind": "unsafe-op-missing-justification",
+    "level": "warn",
+    "owner": {
+      "crate": "dependency_closure_dep",
+      "scope": "dependency"
+    },
+    "reason": "dependency crate `dependency_closure_dep` has no recorded `// SAFETY:` evidence for unsafe operation (raw pointer dereference)",
+    "root": "dependency_closure_app::unsafe_body",
+    "root-kind": "concrete",
+    "root-span": "src/lib.rs:9:1: 9:45",
+    "safety-op-kind": "raw-pointer-dereference",
+    "source-evidence": {
+      "status": "verified-absent"
+    },
+    "span": "[FIXTURE]/dep/src/lib.rs:22:18: 22:26",
+    "trace": [
+      "src/lib.rs:10:5: 10:50: dependency_closure_app::unsafe_body --direct-call-> dependency_closure_dep::read_pointer",
+      "[FIXTURE]/dep/src/lib.rs:24:5: 24:14: dependency_closure_dep::read_pointer --direct-call-> dependency_closure_dep::read_pointer::{closure#0}",
+      "[FIXTURE]/dep/src/lib.rs:22:18: 22:26: dependency_closure_dep::read_pointer::{closure#0} --unsafe-operation-> unsafe operation (raw pointer dereference)"
+    ]
+  }
+]

@@ -1,0 +1,30 @@
+---
+source: crates/sniff-test/tests/fixtures.rs
+expression: "report[\"findings\"]"
+---
+[
+  {
+    "kind": "panic-invocation",
+    "level": "deny",
+    "owner": {
+      "crate": "dependency_closure_app",
+      "scope": "workspace"
+    },
+    "reason": "panic invocation to `core::panicking::panic_fmt` has no recorded `// PANIC:` evidence",
+    "root": "dependency_closure_app::panicking_dispatch",
+    "root-kind": "concrete",
+    "root-span": "src/lib.rs:39:1: 39:28",
+    "source-evidence": {
+      "status": "verified-absent"
+    },
+    "span": "src/lib.rs:31:9: 31:44",
+    "target": "core::panicking::panic_fmt",
+    "trace": [
+      "src/lib.rs:40:5: 40:50: dependency_closure_app::panicking_dispatch --direct-call-> dependency_closure_dep::dispatch::{closure#0}",
+      "[FIXTURE]/dep/src/lib.rs:53:13: 53:24: dependency_closure_dep::dispatch::{closure#0} --direct-call-> <dependency_closure_app::Panicking as dependency_closure_dep::Action>::run",
+      "src/lib.rs:31:9: 31:44: <dependency_closure_app::Panicking as dependency_closure_dep::Action>::run --macro-expansion-> macro std::macros::panic",
+      "src/lib.rs:31:9: 31:44: macro std::macros::panic --macro-expansion-> macro core::panic::panic_2021",
+      "[SYSROOT]/lib/rustlib/src/rust/library/core/src/panic.rs:62:9: 62:73: macro core::panic::panic_2021 --direct-call-> core::panicking::panic_fmt"
+    ]
+  }
+]

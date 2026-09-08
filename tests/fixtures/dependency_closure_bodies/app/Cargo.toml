@@ -1,0 +1,9 @@
+[package]
+name = "dependency-closure-app"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+dependency-closure-dep = { path = "../dep" }
+
+[workspace]
