@@ -271,6 +271,11 @@ fn effect_site_marker_block_with(
 }
 
 fn immediate_statement_span(tcx: TyCtxt<'_>, owner: LocalDefId, target: Span) -> Option<Span> {
+    // Reachability can use a required trait method as the origin of a
+    // synthetic edge even though the method has no source body. Asking for
+    // THIR in that case ICEs in `hir_body_owned_by` before `thir_body` can
+    // return its usual error.
+    tcx.hir_maybe_body_owned_by(owner)?;
     let Ok((thir, root)) = tcx.thir_body(owner) else {
         return None;
     };
