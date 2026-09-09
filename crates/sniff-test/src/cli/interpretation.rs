@@ -10,8 +10,9 @@ use crate::artifact::{
 use crate::artifact_cache::ArtifactScope;
 use crate::compiler::source::CachedSourceMap;
 use crate::config::SniffTestConfig;
+use crate::effects::EffectSelection;
 use crate::namespace::canonical_namespace;
-use crate::report::{EffectReportError, trace_workspace};
+use crate::report::{EffectReportError, trace_selected_workspace};
 use crate::report_model::{
     IncompleteReason, IncompleteTraceKind, InterpretationRoot, InterpretedFinding,
     InterpretedFindingKind, InterpretedSafetyCallKind, InterpretedTrace, InterpretedTraceStep,
@@ -37,13 +38,21 @@ pub(super) fn interpret_workspace<'tcx>(
     dependencies: &ArtifactAnalysisGraph,
     report_roots: &[ReportRoot<'tcx>],
     config: &SniffTestConfig,
+    effects: EffectSelection,
 ) -> Result<Vec<Finding>, EffectReportError> {
     let roots = report_roots
         .iter()
         .copied()
         .map(|root| interpretation_root(tcx, root))
         .collect::<Vec<_>>();
-    let result = trace_workspace(local, local_stable_crate_id, dependencies, &roots, config)?;
+    let result = trace_selected_workspace(
+        local,
+        local_stable_crate_id,
+        dependencies,
+        &roots,
+        config,
+        effects,
+    )?;
     let sources = SourceResolver {
         tcx,
         cache: CachedSourceMap::new(tcx.sess.source_map()),

@@ -134,6 +134,48 @@ cli_cases! {
 }
 
 #[test]
+fn effect_flag_tracks_only_selected_domain() {
+    let repo = repo_root();
+    let binary = PathBuf::from(env!("CARGO_BIN_EXE_cargo-sniff-test"));
+
+    for (name, effect, args, included, excluded) in [
+        (
+            "effect_flag_selects_safety",
+            "safety",
+            &["--effect", "safety"][..],
+            "sniff-test::safety",
+            "sniff-test::panics",
+        ),
+        (
+            "effect_flag_selects_panic",
+            "panic",
+            &["--effect", "panic"][..],
+            "sniff-test::panics",
+            "sniff-test::safety",
+        ),
+    ] {
+        let case = Case::new().args(args).denied();
+        let (output, _, _temp) = run_case(&repo, &binary, name, "effect_marker_paths", &case);
+        assert_eq!(
+            output.status.code(),
+            Some(101),
+            "stderr:\n{}",
+            output.stderr
+        );
+        assert!(
+            output.stderr.contains(included),
+            "selected `{effect}` diagnostics were absent:\n{}",
+            output.stderr,
+        );
+        assert!(
+            !output.stderr.contains(excluded),
+            "deselected diagnostics were emitted for `{effect}`:\n{}",
+            output.stderr,
+        );
+    }
+}
+
+#[test]
 fn unsafe_precondition_helpers_do_not_export_panic_contracts() {
     let repo = repo_root();
     let binary = PathBuf::from(env!("CARGO_BIN_EXE_cargo-sniff-test"));
@@ -1570,8 +1612,9 @@ fn invalid_config_is_rendered_once_by_cargo_frontend() {
     let load_context = stderr
         .find("error: failed to load configuration")
         .expect("outer load context should be rendered");
+    let resolved_manifest = manifest.canonicalize().expect("canonicalize manifest");
     let path_context = stderr
-        .find(&format!("failed to parse {}", manifest.display()))
+        .find(&format!("failed to parse {}", resolved_manifest.display()))
         .expect("manifest path context should be rendered");
     let parser_source = stderr
         .find("TOML parse error")

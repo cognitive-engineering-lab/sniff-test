@@ -190,11 +190,12 @@ fn direct_args(mut args: SniffTestArgs) -> Result<SniffTestArgs> {
 
 fn run_driver(compiler_args: &[String], args: SniffTestArgs) -> Result<ExitCode> {
     let mut compiler_args = compiler_args.to_owned();
-    // The safety analysis reads THIR in `after_analysis`, after MIR building
-    // would normally have stolen it. Appending here covers cargo mode, direct
-    // mode, and user-RUSTFLAGS scenarios alike; the flag is UNTRACKED, so it
-    // never perturbs cargo fingerprints. Cost: THIR stays allocated for the
-    // whole compilation of each unit.
+    // Safety extraction and source-marker association read THIR in
+    // `after_analysis`, after MIR building would normally have stolen it.
+    // Appending here covers cargo mode, direct mode, and user-RUSTFLAGS
+    // scenarios alike; the flag is UNTRACKED, so it never perturbs cargo
+    // fingerprints. Cost: THIR stays allocated for the whole compilation of
+    // each unit.
     let has_no_steal_thir = compiler_args.iter().any(|arg| arg == "-Zno-steal-thir")
         || compiler_args
             .windows(2)
@@ -254,6 +255,8 @@ fn analysis_rustflags(args: &SniffTestArgs, config: &SniffTestConfig) -> Vec<Str
         format!("sniff_test_cache_{cache_location_hash:016x}"),
         "--cfg".to_owned(),
         format!("sniff_test_tool_{}", env!("SNIFF_TEST_SOURCE_STAMP")),
+        "--cfg".to_owned(),
+        format!("sniff_test_effects_{}", args.effects.fingerprint()),
         // Workspace consumers need upstream MIR to materialize exact
         // monomorphization overlays (for example, trait dispatch selected by
         // a workspace-local type).
@@ -483,6 +486,28 @@ mod tests {
                 .windows(2)
                 .any(|pair| pair == ["-Z", "always-encode-mir"])
         );
+    }
+
+    #[test]
+    fn effect_selection_changes_dependency_fingerprints() {
+        let all = analysis_rustflags(&SniffTestArgs::default(), &SniffTestConfig::default());
+        let safety = analysis_rustflags(
+            &SniffTestArgs {
+                effects: crate::effects::EffectSelection::from_effects(&[
+                    crate::effects::EffectDomain::Safety,
+                ]),
+                ..SniffTestArgs::default()
+            },
+            &SniffTestConfig::default(),
+        );
+
+        assert!(all.iter().any(|flag| flag == "sniff_test_effects_all"));
+        assert!(
+            safety
+                .iter()
+                .any(|flag| flag == "sniff_test_effects_safety")
+        );
+        assert_ne!(all, safety);
     }
 
     #[test]

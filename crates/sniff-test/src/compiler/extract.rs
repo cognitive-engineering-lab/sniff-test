@@ -1,9 +1,10 @@
 //! Policy-neutral extraction of rustc bodies into artifact facts.
 //!
-//! Extraction deliberately enumerates local bodies without consulting report
-//! roots, namespace policy, lint levels, or documentation overrides. Indirect
-//! calls retain only invocation-local dispatch classification; compatible
-//! callables observed elsewhere are never persisted as target evidence.
+//! Extraction deliberately enumerates local bodies for only the selected
+//! domains, without consulting report roots, namespace policy, lint levels, or
+//! documentation overrides. Indirect calls retain only invocation-local
+//! dispatch classification; compatible callables observed elsewhere are never
+//! persisted as target evidence.
 
 use std::collections::{BTreeMap, HashMap};
 use std::fmt;
@@ -39,6 +40,7 @@ use crate::contracts::{
     ContractDocSummary, panic_contract_doc_summary_from_attrs,
     safety_contract_doc_summary_from_attrs,
 };
+use crate::effects::EffectSelection;
 use crate::namespace::{canonical_namespace, namespace_candidates};
 use crate::source_markers::{
     EffectMarkerBlock, MarkerProbe, panic_effect_edge_marker_block, probe_marker_candidates,
@@ -71,14 +73,24 @@ impl std::error::Error for ExtractError {}
 ///
 /// Local closures retain generic defining bodies for cross-crate
 /// lookup. Specialized instances, coroutines, and const bodies remain exact.
-/// No report-root or lint configuration participates in extraction.
-pub(crate) fn extract_artifact_facts(tcx: TyCtxt<'_>) -> Result<ArtifactFacts, ExtractError> {
+/// Effect selection participates in extraction; report-root and lint
+/// configuration do not.
+pub(crate) fn extract_artifact_facts(
+    tcx: TyCtxt<'_>,
+    effects: EffectSelection,
+) -> Result<ArtifactFacts, ExtractError> {
     let required_owners = analyzable_local_fn_defs(tcx).collect::<Vec<_>>();
-    ensure_required_thir_is_available(tcx, &required_owners)?;
+    if effects.tracks_safety() {
+        ensure_required_thir_is_available(tcx, &required_owners)?;
+    }
 
     let mut sources = SourceTable::default();
     let mut bodies = BTreeMap::<FunctionId, PendingBody>::new();
-    let raw_safety_facts = collect_raw_safety_facts(tcx);
+    let raw_safety_facts = if effects.tracks_safety() {
+        collect_raw_safety_facts(tcx)
+    } else {
+        RawSafetyFacts::default()
+    };
     let mut safety_groups = RawSafetyGroupResolver::new(&raw_safety_facts);
 
     for owner in &required_owners {
@@ -90,6 +102,7 @@ pub(crate) fn extract_artifact_facts(tcx: TyCtxt<'_>) -> Result<ArtifactFacts, E
             function,
             owner.to_def_id(),
             FunctionFactProvenance::DefiningArtifact,
+            effects,
         )?;
     }
 
@@ -100,9 +113,18 @@ pub(crate) fn extract_artifact_facts(tcx: TyCtxt<'_>) -> Result<ArtifactFacts, E
         &mut sources,
         &mut bodies,
         &mut safety_groups,
+        effects,
     )?;
 
-    attach_raw_unsafe_operations(tcx, raw_safety_facts.operations, &mut sources, &mut bodies)?;
+    if effects.tracks_safety() {
+        attach_raw_unsafe_operations(
+            tcx,
+            raw_safety_facts.operations,
+            &mut sources,
+            &mut bodies,
+            effects,
+        )?;
+    }
 
     let functions = bodies
         .into_values()
@@ -215,6 +237,7 @@ fn collect_reachability_mode<'tcx>(
     sources: &mut SourceTable,
     bodies: &mut BTreeMap<FunctionId, PendingBody>,
     safety_groups: &mut RawSafetyGroupResolver,
+    effects: EffectSelection,
 ) -> Result<(), ExtractError> {
     let mut reachability = ReachabilityIndex::new(tcx);
     let hooks = NoopReachabilityHooks;
@@ -255,6 +278,7 @@ fn collect_reachability_mode<'tcx>(
             function,
             def_id,
             body_provenance(tcx, def_id),
+            effects,
         )?;
     }
 
@@ -262,7 +286,15 @@ fn collect_reachability_mode<'tcx>(
         if reached.kind() == ReachabilityEdgeKind::MacroExpansion {
             continue;
         }
-        collect_edge(tcx, view.graph(), reached, sources, bodies, safety_groups)?;
+        collect_edge(
+            tcx,
+            view.graph(),
+            reached,
+            sources,
+            bodies,
+            safety_groups,
+            effects,
+        )?;
     }
     Ok(())
 }
@@ -303,6 +335,10 @@ fn body_provenance(tcx: TyCtxt<'_>, def_id: DefId) -> FunctionFactProvenance {
     }
 }
 
+#[allow(
+    clippy::too_many_lines,
+    reason = "edge extraction keeps shared call facts and selected domain facts synchronized"
+)]
 fn collect_edge<'tcx>(
     tcx: TyCtxt<'tcx>,
     graph: &ReachabilityGraph<'tcx>,
@@ -310,6 +346,7 @@ fn collect_edge<'tcx>(
     sources: &mut SourceTable,
     bodies: &mut BTreeMap<FunctionId, PendingBody>,
     safety_groups: &mut RawSafetyGroupResolver,
+    effects: EffectSelection,
 ) -> Result<(), ExtractError> {
     let edge = reached.edge();
     let Some(call_kind) = call_edge_kind(reached) else {
@@ -329,6 +366,7 @@ fn collect_edge<'tcx>(
         body_id,
         origin_def_id,
         body_provenance(tcx, origin_def_id),
+        effects,
     )?;
 
     let expanded_range = sources.range(tcx, edge.span)?;
@@ -341,8 +379,9 @@ fn collect_edge<'tcx>(
         .map(|span| sources.range(tcx, span))
         .transpose()?
         .flatten();
-    let target = call_target(tcx, graph, edge, sources)?;
-    let requires_unsafe = edge_requires_unsafe(tcx, graph, reached, &target);
+    let target = call_target(tcx, graph, edge, sources, effects)?;
+    let requires_unsafe =
+        effects.tracks_safety() && edge_requires_unsafe(tcx, graph, reached, &target);
     let groups = if is_reachability_call(edge.kind) {
         safety_groups.group_for_call(
             origin.def_id(),
@@ -353,7 +392,8 @@ fn collect_edge<'tcx>(
         safety_groups.group_for_structural_edge(origin.def_id(), edge.span)
     }
     .map_err(|error| edge_grouping_error(tcx, origin.def_id(), edge, &error))?;
-    let declaration_target = declaration_call_target(tcx, groups.declaration_callee, sources)?;
+    let declaration_target =
+        declaration_call_target(tcx, groups.declaration_callee, sources, effects)?;
     let key = edge_key(
         tcx,
         graph,
@@ -388,15 +428,20 @@ fn collect_edge<'tcx>(
     let call_target = body.calls[call_index].call.target.clone();
     let declaration_target = body.calls[call_index].call.declaration_target.clone();
 
-    let effect_key = collect_compiler_assert_effect(
-        graph,
-        edge,
-        body,
-        &key,
-        source_range.as_ref(),
-        expanded_range.as_ref(),
-        &macro_expansions,
-    );
+    let effect_key = effects
+        .tracks_panic()
+        .then(|| {
+            collect_compiler_assert_effect(
+                graph,
+                edge,
+                body,
+                &key,
+                source_range.as_ref(),
+                expanded_range.as_ref(),
+                &macro_expansions,
+            )
+        })
+        .flatten();
 
     collect_edge_markers(
         tcx,
@@ -409,6 +454,7 @@ fn collect_edge<'tcx>(
         effect_key.as_deref(),
         declaration_target.as_ref(),
         &call_target,
+        effects,
     )
 }
 
@@ -416,9 +462,10 @@ fn declaration_call_target(
     tcx: TyCtxt<'_>,
     declaration_callee: Option<DefId>,
     sources: &mut SourceTable,
+    effects: EffectSelection,
 ) -> Result<Option<FunctionTargetFact>, ExtractError> {
     declaration_callee
-        .map(|def_id| function_target_for_def(tcx, def_id, sources))
+        .map(|def_id| function_target_for_def(tcx, def_id, sources, effects))
         .transpose()
 }
 
@@ -577,6 +624,7 @@ fn collect_edge_markers(
     effect_key: Option<&str>,
     declaration_target: Option<&FunctionTargetFact>,
     call_target: &CallTargetFact,
+    effects: EffectSelection,
 ) -> Result<(), ExtractError> {
     for (probing, applicable_probing) in probing_modes() {
         let (panic_target, panic_requirements) = if let Some(effect_key) = effect_key {
@@ -590,26 +638,30 @@ fn collect_edge_markers(
                 panic_requirements(declaration_target, call_target),
             )
         };
-        record_effect_marker_probe(
-            tcx,
-            sources,
-            body,
-            AnnotationFactKind::PanicJustification,
-            panic_target,
-            panic_effect_edge_marker_block(tcx, graph, edge, probing),
-            applicable_probing,
-            panic_requirements,
-        )?;
-        record_effect_marker_probe(
-            tcx,
-            sources,
-            body,
-            AnnotationFactKind::SafetyJustification,
-            PendingMarkerTarget::Call(call_key.to_owned()),
-            safety_effect_edge_marker_block(tcx, graph, edge, safety_scope_span, probing),
-            applicable_probing,
-            safety_requirements(declaration_target, call_target),
-        )?;
+        if effects.tracks_panic() {
+            record_effect_marker_probe(
+                tcx,
+                sources,
+                body,
+                AnnotationFactKind::PanicJustification,
+                panic_target,
+                panic_effect_edge_marker_block(tcx, graph, edge, probing),
+                applicable_probing,
+                panic_requirements,
+            )?;
+        }
+        if effects.tracks_safety() {
+            record_effect_marker_probe(
+                tcx,
+                sources,
+                body,
+                AnnotationFactKind::SafetyJustification,
+                PendingMarkerTarget::Call(call_key.to_owned()),
+                safety_effect_edge_marker_block(tcx, graph, edge, safety_scope_span, probing),
+                applicable_probing,
+                safety_requirements(declaration_target, call_target),
+            )?;
+        }
     }
     Ok(())
 }
@@ -843,6 +895,7 @@ fn call_target<'tcx>(
     graph: &ReachabilityGraph<'tcx>,
     edge: &ReachabilityEdge,
     sources: &mut SourceTable,
+    effects: EffectSelection,
 ) -> Result<CallTargetFact, ExtractError> {
     match &graph.node(edge.target).kind {
         ReachabilityNodeKind::Instance(instance) => {
@@ -853,11 +906,12 @@ fn call_target<'tcx>(
                         tcx,
                         instance.def_id(),
                         sources,
+                        effects,
                     )?)),
                 })
             } else {
                 Ok(CallTargetFact::Function(function_target_for_instance(
-                    tcx, *instance, sources,
+                    tcx, *instance, sources, effects,
                 )?))
             }
         }
@@ -873,12 +927,12 @@ fn call_target<'tcx>(
         ReachabilityNodeKind::MacroExpansion { def_id } => Ok(CallTargetFact::OpaqueBoundary {
             description: format!("macro expansion {}", canonical_namespace(tcx, *def_id)),
             target: Some(OpaqueTargetFact::Function(function_target_for_def(
-                tcx, *def_id, sources,
+                tcx, *def_id, sources, effects,
             )?)),
         }),
         ReachabilityNodeKind::IndirectCall { callee_ty } => {
             let target = indirect_target_def_id(tcx, *callee_ty).map(|(def_id, is_trait)| {
-                function_target_for_def(tcx, def_id, sources).map(|target| {
+                function_target_for_def(tcx, def_id, sources, effects).map(|target| {
                     if is_trait {
                         OpaqueTargetFact::Trait(target)
                     } else {
@@ -899,7 +953,8 @@ fn call_target<'tcx>(
                 TyKind::Dynamic(predicates, _) => predicates
                     .principal_def_id()
                     .map(|def_id| {
-                        function_target_for_def(tcx, def_id, sources).map(OpaqueTargetFact::Trait)
+                        function_target_for_def(tcx, def_id, sources, effects)
+                            .map(OpaqueTargetFact::Trait)
                     })
                     .transpose()?,
                 _ => None,
@@ -929,6 +984,7 @@ fn function_target_for_instance<'tcx>(
     tcx: TyCtxt<'tcx>,
     instance: Instance<'tcx>,
     sources: &mut SourceTable,
+    effects: EffectSelection,
 ) -> Result<FunctionTargetFact, ExtractError> {
     let def_id = instance.def_id();
     Ok(FunctionTargetFact {
@@ -937,8 +993,8 @@ fn function_target_for_instance<'tcx>(
             StableInstanceHash::from_instance(tcx, instance),
         ),
         display_path: canonical_namespace(tcx, def_id),
-        attributes: function_attributes(tcx, def_id),
-        contracts: function_contracts(tcx, def_id, sources)?,
+        attributes: function_attributes(tcx, def_id, effects),
+        contracts: function_contracts(tcx, def_id, sources, effects)?,
     })
 }
 
@@ -946,12 +1002,13 @@ fn function_target_for_def(
     tcx: TyCtxt<'_>,
     def_id: DefId,
     sources: &mut SourceTable,
+    effects: EffectSelection,
 ) -> Result<FunctionTargetFact, ExtractError> {
     Ok(FunctionTargetFact {
         function: FunctionId::generic(StableDefPathHash::from_def_id(tcx, def_id)),
         display_path: canonical_namespace(tcx, def_id),
-        attributes: function_attributes(tcx, def_id),
-        contracts: function_contracts(tcx, def_id, sources)?,
+        attributes: function_attributes(tcx, def_id, effects),
+        contracts: function_contracts(tcx, def_id, sources, effects)?,
     })
 }
 
@@ -959,14 +1016,19 @@ fn contract_declaration_for_def(
     tcx: TyCtxt<'_>,
     def_id: DefId,
     sources: &mut SourceTable,
+    effects: EffectSelection,
 ) -> Result<Option<FunctionTargetFact>, ExtractError> {
     tcx.trait_item_of(def_id)
         .filter(|declaration| *declaration != def_id)
-        .map(|declaration| function_target_for_def(tcx, declaration, sources))
+        .map(|declaration| function_target_for_def(tcx, declaration, sources, effects))
         .transpose()
 }
 
-fn function_attributes(tcx: TyCtxt<'_>, def_id: DefId) -> FunctionAttributesFact {
+fn function_attributes(
+    tcx: TyCtxt<'_>,
+    def_id: DefId,
+    effects: EffectSelection,
+) -> FunctionAttributesFact {
     let candidates = namespace_candidates(tcx, def_id);
     let is_foreign = tcx.is_foreign_item(def_id);
     let def_kind = tcx.def_kind(def_id);
@@ -988,7 +1050,7 @@ fn function_attributes(tcx: TyCtxt<'_>, def_id: DefId) -> FunctionAttributesFact
             |local| tcx.effective_visibilities(()).is_exported(local),
         );
     FunctionAttributesFact {
-        is_unsafe: fn_def_is_unsafe(tcx, def_id),
+        is_unsafe: effects.tracks_safety() && fn_def_is_unsafe(tcx, def_id),
         is_exported,
         has_rust_body,
         is_foreign,
@@ -1000,23 +1062,36 @@ fn function_contracts(
     tcx: TyCtxt<'_>,
     def_id: DefId,
     sources: &mut SourceTable,
+    effects: EffectSelection,
 ) -> Result<FunctionContractsFact, ExtractError> {
     if !matches!(tcx.def_kind(def_id), DefKind::Fn | DefKind::AssocFn) {
         return Ok(FunctionContractsFact::default());
     }
     Ok(FunctionContractsFact {
-        panic: raw_contract(
-            tcx,
-            def_id,
-            panic_contract_doc_summary_from_attrs(tcx, def_id),
-            sources,
-        )?,
-        safety: raw_contract(
-            tcx,
-            def_id,
-            safety_contract_doc_summary_from_attrs(tcx, def_id),
-            sources,
-        )?,
+        panic: effects
+            .tracks_panic()
+            .then(|| {
+                raw_contract(
+                    tcx,
+                    def_id,
+                    panic_contract_doc_summary_from_attrs(tcx, def_id),
+                    sources,
+                )
+            })
+            .transpose()?
+            .flatten(),
+        safety: effects
+            .tracks_safety()
+            .then(|| {
+                raw_contract(
+                    tcx,
+                    def_id,
+                    safety_contract_doc_summary_from_attrs(tcx, def_id),
+                    sources,
+                )
+            })
+            .transpose()?
+            .flatten(),
     })
 }
 
@@ -1060,6 +1135,7 @@ fn ensure_body(
     function: FunctionId,
     def_id: DefId,
     provenance: FunctionFactProvenance,
+    effects: EffectSelection,
 ) -> Result<(), ExtractError> {
     if let Some(body) = bodies.get(&function) {
         return if body.provenance == provenance {
@@ -1071,9 +1147,9 @@ fn ensure_body(
             )))
         };
     }
-    let contracts = function_contracts(tcx, def_id, sources)?;
-    let contract_declaration = contract_declaration_for_def(tcx, def_id, sources)?;
-    let mut attributes = function_attributes(tcx, def_id);
+    let contracts = function_contracts(tcx, def_id, sources, effects)?;
+    let contract_declaration = contract_declaration_for_def(tcx, def_id, sources, effects)?;
+    let mut attributes = function_attributes(tcx, def_id, effects);
     // `ensure_body` is used only for required HIR bodies and expanded rustc
     // instances. That proves this facts entry has a body even when its defining
     // `DefId` is an abstract callable trait method backed by a compiler-
@@ -1091,10 +1167,14 @@ fn ensure_body(
         markers: Vec::new(),
         unverified_marker_probes: Vec::new(),
     };
-    if let Some(contract) = contracts.panic {
+    if effects.tracks_panic()
+        && let Some(contract) = contracts.panic
+    {
         body.push_contract_marker(AnnotationFactKind::PanicContract, contract);
     }
-    if let Some(contract) = contracts.safety {
+    if effects.tracks_safety()
+        && let Some(contract) = contracts.safety
+    {
         body.push_contract_marker(AnnotationFactKind::SafetyContract, contract);
     }
     bodies.insert(function, body);
@@ -1457,6 +1537,7 @@ fn attach_raw_unsafe_operations(
     facts: Vec<RawSafetyOpFact>,
     sources: &mut SourceTable,
     bodies: &mut BTreeMap<FunctionId, PendingBody>,
+    effects: EffectSelection,
 ) -> Result<(), ExtractError> {
     for (ordinal, fact) in facts.into_iter().enumerate() {
         let Some(local) = fact.owner.as_local() else {
@@ -1479,6 +1560,7 @@ fn attach_raw_unsafe_operations(
                 function,
                 local.to_def_id(),
                 FunctionFactProvenance::DefiningArtifact,
+                effects,
             )?;
             body_ids.push(function);
         }

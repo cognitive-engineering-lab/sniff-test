@@ -5,6 +5,63 @@ pub(crate) mod safety;
 use std::fmt;
 
 use crate::artifact::{CallFact, FunctionTargetFact};
+use clap::ValueEnum;
+use serde::{Deserialize, Serialize};
+
+/// Effect domains enabled for one sniff-test invocation.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub(crate) struct EffectSelection {
+    panic: bool,
+    safety: bool,
+}
+
+impl EffectSelection {
+    #[must_use]
+    pub(crate) fn from_effects(effects: &[EffectDomain]) -> Self {
+        if effects.is_empty() {
+            return Self::default();
+        }
+        Self {
+            panic: effects.contains(&EffectDomain::Panic),
+            safety: effects.contains(&EffectDomain::Safety),
+        }
+    }
+
+    #[must_use]
+    pub(crate) const fn tracks_panic(self) -> bool {
+        self.panic
+    }
+
+    #[must_use]
+    pub(crate) const fn tracks_safety(self) -> bool {
+        self.safety
+    }
+
+    #[must_use]
+    pub(crate) const fn fingerprint(self) -> &'static str {
+        match (self.panic, self.safety) {
+            (true, true) => "all",
+            (true, false) => "panic",
+            (false, true) => "safety",
+            (false, false) => "none",
+        }
+    }
+}
+
+impl Default for EffectSelection {
+    fn default() -> Self {
+        Self {
+            panic: true,
+            safety: true,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, ValueEnum)]
+pub(crate) enum EffectDomain {
+    Panic,
+    Safety,
+}
 
 /// One raw call branch that actually produced an invocation-level effect.
 ///

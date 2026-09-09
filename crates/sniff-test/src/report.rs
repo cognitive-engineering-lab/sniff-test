@@ -26,6 +26,7 @@ use crate::compiler::invocations::{
 };
 use crate::config::{MarkerProbing, PanicBoundaryPolicy, SniffTestConfig};
 use crate::contracts::normalize_requirement_name;
+use crate::effects::EffectSelection;
 use crate::effects::InvocationSourceBranch;
 use crate::effects::comment::{CommentDomain, CommentEffect, CommentState, CommentTermination};
 use crate::effects::panic::{PanicEffect, PanicKind, PanicOrigin, PanicState};
@@ -121,16 +122,35 @@ impl fmt::Display for EffectReportError {
 
 impl std::error::Error for EffectReportError {}
 
-#[allow(
-    clippy::too_many_lines,
-    reason = "the three explicit effect probes and traces stay visible in one production entry point"
-)]
+#[cfg(test)]
 pub(crate) fn trace_workspace(
     local: &ArtifactFacts,
     local_stable_crate_id: u64,
     dependencies: &ArtifactAnalysisGraph,
     roots: &[InterpretationRoot],
     config: &SniffTestConfig,
+) -> Result<Vec<RootInterpretation>, EffectReportError> {
+    trace_selected_workspace(
+        local,
+        local_stable_crate_id,
+        dependencies,
+        roots,
+        config,
+        EffectSelection::default(),
+    )
+}
+
+#[allow(
+    clippy::too_many_lines,
+    reason = "the selected effect probes and traces stay visible in one production entry point"
+)]
+pub(crate) fn trace_selected_workspace(
+    local: &ArtifactFacts,
+    local_stable_crate_id: u64,
+    dependencies: &ArtifactAnalysisGraph,
+    roots: &[InterpretationRoot],
+    config: &SniffTestConfig,
+    effects: EffectSelection,
 ) -> Result<Vec<RootInterpretation>, EffectReportError> {
     let artifact = compose_workspace_artifact(local, dependencies)?;
     let artifact = &artifact;
@@ -145,9 +165,15 @@ pub(crate) fn trace_workspace(
         config.analysis.marker_probing,
     )
     .map_err(|error| EffectReportError::new(error.to_string()))?;
-    let panic = PanicEffect::probe(artifact, &graph, &annotations, &namespaces, &config.panics)
+    let panic = effects
+        .tracks_panic()
+        .then(|| PanicEffect::probe(artifact, &graph, &annotations, &namespaces, &config.panics))
+        .transpose()
         .map_err(|error| EffectReportError::new(error.to_string()))?;
-    let safety = SafetyEffect::probe(artifact, &graph, &annotations, &namespaces, &config.safety)
+    let safety = effects
+        .tracks_safety()
+        .then(|| SafetyEffect::probe(artifact, &graph, &annotations, &namespaces, &config.safety))
+        .transpose()
         .map_err(|error| EffectReportError::new(error.to_string()))?;
     let comments = CommentEffect::probe(
         artifact,
@@ -157,6 +183,7 @@ pub(crate) fn trace_workspace(
         config.analysis.effect_doc_matching,
         &config.panics,
         &config.safety,
+        effects,
     );
     let trace_options = TraceOptions {
         max_depth: config.analysis.max_trace_depth,
@@ -165,15 +192,15 @@ pub(crate) fn trace_workspace(
     let engine = EffectEngine::with_options(&graph, trace_options);
     let comment_graph = graph.comment_graph();
     let comment_engine = EffectEngine::with_options(&comment_graph, trace_options);
-    let panic_trace = engine.trace(&panic);
-    let safety_trace = engine.trace(&safety);
+    let panic_trace = panic.as_ref().map(|panic| engine.trace(panic));
+    let safety_trace = safety.as_ref().map(|safety| engine.trace(safety));
     let comment_trace = comment_engine.trace(&comments);
     let marker_claims = collect_marker_claims(
         artifact,
         &graph,
-        &panic_trace,
-        &safety,
-        &safety_trace,
+        panic_trace.as_ref(),
+        safety.as_ref(),
+        safety_trace.as_ref(),
         &comments,
         &comment_trace,
     );
@@ -192,25 +219,31 @@ pub(crate) fn trace_workspace(
             }
             let mut findings = Vec::new();
             for root_function in root_functions.iter().copied() {
-                findings.extend(panic_findings(
-                    artifact,
-                    &graph,
-                    &annotations,
-                    &panic,
-                    &panic_trace,
-                    root_function,
-                    marker_probing,
-                ));
-                findings.extend(safety_findings(
-                    artifact,
-                    &graph,
-                    &annotations,
-                    &safety,
-                    &safety_trace,
-                    root_function,
-                    marker_probing,
-                ));
-                if !config.panics.lints.unresolved_call_target.is_allow() {
+                if let (Some(panic), Some(panic_trace)) = (&panic, &panic_trace) {
+                    findings.extend(panic_findings(
+                        artifact,
+                        &graph,
+                        &annotations,
+                        panic,
+                        panic_trace,
+                        root_function,
+                        marker_probing,
+                    ));
+                }
+                if let (Some(safety), Some(safety_trace)) = (&safety, &safety_trace) {
+                    findings.extend(safety_findings(
+                        artifact,
+                        &graph,
+                        &annotations,
+                        safety,
+                        safety_trace,
+                        root_function,
+                        marker_probing,
+                    ));
+                }
+                if let Some(panic) = &panic
+                    && !config.panics.lints.unresolved_call_target.is_allow()
+                {
                     findings.extend(unresolved_call_target_findings(
                         artifact,
                         &graph,
@@ -223,7 +256,9 @@ pub(crate) fn trace_workspace(
                         |invocation| panic.is_ignored_invocation(invocation),
                     ));
                 }
-                if !config.safety.lints.unresolved_call_target.is_allow() {
+                if let Some(safety) = &safety
+                    && !config.safety.lints.unresolved_call_target.is_allow()
+                {
                     findings.extend(unresolved_call_target_findings(
                         artifact,
                         &graph,
@@ -240,10 +275,10 @@ pub(crate) fn trace_workspace(
                     artifact,
                     &graph,
                     &annotations,
-                    &panic,
-                    &panic_trace,
-                    &safety,
-                    &safety_trace,
+                    panic.as_ref(),
+                    panic_trace.as_ref(),
+                    safety.as_ref(),
+                    safety_trace.as_ref(),
                     &comments,
                     &comment_trace,
                     &marker_claims,
@@ -260,8 +295,9 @@ pub(crate) fn trace_workspace(
                     marker_probing,
                 ));
             }
-            if let Some(finding) =
-                missing_safety_docs(artifact, &graph, &annotations, &root, &root_functions)
+            if effects.tracks_safety()
+                && let Some(finding) =
+                    missing_safety_docs(artifact, &graph, &annotations, &root, &root_functions)
             {
                 findings.push(finding);
             }
@@ -278,63 +314,95 @@ pub(crate) fn trace_workspace(
                     unique.push(finding);
                 }
             }
-            let mut panic_additional = comment_completeness(
-                artifact,
-                &comment_trace,
-                &graph,
-                &root_functions,
-                CommentDomain::Panic,
-                trace_options,
-            );
-            panic_additional.reasons.extend(missing_body_reasons(
-                artifact,
-                &graph,
-                &namespaces,
-                dependencies,
-                local_stable_crate_id,
-                &root_functions,
-                AnnotationDomain::Panic,
-                config,
-            ));
-            let mut safety_additional = comment_completeness(
-                artifact,
-                &comment_trace,
-                &graph,
-                &root_functions,
-                CommentDomain::Safety,
-                trace_options,
-            );
-            safety_additional.reasons.extend(missing_body_reasons(
-                artifact,
-                &graph,
-                &namespaces,
-                dependencies,
-                local_stable_crate_id,
-                &root_functions,
-                AnnotationDomain::Safety,
-                config,
-            ));
+            let mut panic_additional = if effects.tracks_panic() {
+                comment_completeness(
+                    artifact,
+                    &comment_trace,
+                    &graph,
+                    &root_functions,
+                    CommentDomain::Panic,
+                    trace_options,
+                )
+            } else {
+                AdditionalCompleteness {
+                    reasons: Vec::new(),
+                }
+            };
+            if effects.tracks_panic() {
+                panic_additional.reasons.extend(missing_body_reasons(
+                    artifact,
+                    &graph,
+                    &namespaces,
+                    dependencies,
+                    local_stable_crate_id,
+                    &root_functions,
+                    AnnotationDomain::Panic,
+                    config,
+                ));
+            }
+            let mut safety_additional = if effects.tracks_safety() {
+                comment_completeness(
+                    artifact,
+                    &comment_trace,
+                    &graph,
+                    &root_functions,
+                    CommentDomain::Safety,
+                    trace_options,
+                )
+            } else {
+                AdditionalCompleteness {
+                    reasons: Vec::new(),
+                }
+            };
+            if effects.tracks_safety() {
+                safety_additional.reasons.extend(missing_body_reasons(
+                    artifact,
+                    &graph,
+                    &namespaces,
+                    dependencies,
+                    local_stable_crate_id,
+                    &root_functions,
+                    AnnotationDomain::Safety,
+                    config,
+                ));
+            }
             Ok(RootInterpretation {
                 root,
                 findings: unique,
                 completeness: EffectCompleteness {
-                    panic: completeness(
-                        artifact,
-                        &panic_trace,
-                        &graph,
-                        &root_functions,
-                        trace_options,
-                        IncompleteTraceKind::PanicEffect,
-                        panic_additional,
+                    panic: panic_trace.as_ref().map_or(
+                        DomainCompleteness {
+                            complete: true,
+                            reasons: Vec::new(),
+                        },
+                        |panic_trace| {
+                            completeness(
+                                artifact,
+                                panic_trace,
+                                &graph,
+                                &root_functions,
+                                trace_options,
+                                IncompleteTraceKind::PanicEffect,
+                                panic_additional,
+                            )
+                        },
                     ),
-                    safety: completeness(
-                        artifact,
-                        &safety_trace,
-                        &graph,
-                        &root_functions,
-                        trace_options,
-                        IncompleteTraceKind::SafetyEffect,
-                        safety_additional,
+                    safety: safety_trace.as_ref().map_or(
+                        DomainCompleteness {
+                            complete: true,
+                            reasons: Vec::new(),
+                        },
+                        |safety_trace| {
+                            completeness(
+                                artifact,
+                                safety_trace,
+                                &graph,
+                                &root_functions,
+                                trace_options,
+                                IncompleteTraceKind::SafetyEffect,
+                                safety_additional,
+                            )
+                        },
                     ),
                 },
             })
@@ -350,13 +418,13 @@ fn marker_ambiguities(
     artifact: &ArtifactFacts,
     graph: &InvocationGraph,
     annotations: &AnnotationIndex,
-    panic: &PanicEffect<'_>,
-    panic_trace: &EffectTrace<PanicOrigin, PanicState, crate::effects::panic::PanicTermination>,
-    safety: &SafetyEffect<'_>,
-    safety_trace: &EffectTrace<
-        SafetyOrigin,
-        SafetyState,
-        crate::effects::safety::SafetyTermination,
+    panic: Option<&PanicEffect<'_>>,
+    panic_trace: Option<
+        &EffectTrace<PanicOrigin, PanicState, crate::effects::panic::PanicTermination>,
+    >,
+    safety: Option<&SafetyEffect<'_>>,
+    safety_trace: Option<
+        &EffectTrace<SafetyOrigin, SafetyState, crate::effects::safety::SafetyTermination>,
     >,
     comments: &CommentEffect<'_>,
     comment_trace: &EffectTrace<
@@ -428,12 +496,12 @@ fn marker_ambiguities(
 fn collect_marker_claims(
     artifact: &ArtifactFacts,
     graph: &InvocationGraph,
-    panic_trace: &EffectTrace<PanicOrigin, PanicState, crate::effects::panic::PanicTermination>,
-    safety: &SafetyEffect<'_>,
-    safety_trace: &EffectTrace<
-        SafetyOrigin,
-        SafetyState,
-        crate::effects::safety::SafetyTermination,
+    panic_trace: Option<
+        &EffectTrace<PanicOrigin, PanicState, crate::effects::panic::PanicTermination>,
+    >,
+    safety: Option<&SafetyEffect<'_>>,
+    safety_trace: Option<
+        &EffectTrace<SafetyOrigin, SafetyState, crate::effects::safety::SafetyTermination>,
     >,
     comments: &CommentEffect<'_>,
     comment_trace: &EffectTrace<
@@ -443,7 +511,7 @@ fn collect_marker_claims(
     >,
 ) -> MarkerClaims {
     let mut uses = Vec::new();
-    for handled in panic_trace.handled() {
+    for handled in panic_trace.into_iter().flat_map(EffectTrace::handled) {
         if let crate::effects::panic::PanicTermination::Justification(annotation) =
             handled.termination()
         {
@@ -458,7 +526,10 @@ fn collect_marker_claims(
             });
         }
     }
-    for handled in safety_trace.handled() {
+    for handled in safety_trace.into_iter().flat_map(EffectTrace::handled) {
+        let Some(safety) = safety else {
+            continue;
+        };
         if let crate::effects::safety::SafetyTermination::Justification(annotation) =
             handled.termination()
         {
@@ -487,6 +558,9 @@ fn collect_marker_claims(
                 })
                 .collect(),
             CommentDomain::Safety => {
+                let Some(safety) = safety else {
+                    continue;
+                };
                 comment_safety_effect_groups(graph, safety, source_invocation, usage.source_calls())
                     .into_iter()
                     .map(MarkerEffectGroup::Safety)
@@ -541,14 +615,14 @@ fn marker_projection_order(
 fn marker_projection(
     artifact: &ArtifactFacts,
     graph: &InvocationGraph,
-    panic: &PanicEffect<'_>,
-    safety: &SafetyEffect<'_>,
+    panic: Option<&PanicEffect<'_>>,
+    safety: Option<&SafetyEffect<'_>>,
     comments: &CommentEffect<'_>,
-    panic_trace: &EffectTrace<PanicOrigin, PanicState, crate::effects::panic::PanicTermination>,
-    safety_trace: &EffectTrace<
-        SafetyOrigin,
-        SafetyState,
-        crate::effects::safety::SafetyTermination,
+    panic_trace: Option<
+        &EffectTrace<PanicOrigin, PanicState, crate::effects::panic::PanicTermination>,
+    >,
+    safety_trace: Option<
+        &EffectTrace<SafetyOrigin, SafetyState, crate::effects::safety::SafetyTermination>,
     >,
     comment_trace: &EffectTrace<
         crate::effects::comment::ContractId,
@@ -561,6 +635,7 @@ fn marker_projection(
     let (function, mut trace) = match witness {
         MarkerWitness::PanicEffect { origin, site } => match site {
             MarkerTraceSite::Source => {
+                let panic = panic?;
                 let endpoint = panic_origin_owner(graph, origin)?;
                 let trace = audited_path_from_root(
                     artifact,
@@ -572,21 +647,25 @@ fn marker_projection(
                 )?;
                 (graph.stable_function(endpoint), trace)
             }
-            MarkerTraceSite::Invocation { invocation, node } => marker_invocation_projection(
-                artifact,
-                graph,
-                panic_trace,
-                root_function,
-                invocation,
-                node,
-                MarkerTraversalPolicy {
-                    is_opaque: |function| panic.is_opaque_function(function),
-                    is_ignored_invocation: |candidate| panic.is_ignored_invocation(candidate),
-                },
-            )?,
+            MarkerTraceSite::Invocation { invocation, node } => {
+                let panic = panic?;
+                marker_invocation_projection(
+                    artifact,
+                    graph,
+                    panic_trace?,
+                    root_function,
+                    invocation,
+                    node,
+                    MarkerTraversalPolicy {
+                        is_opaque: |function| panic.is_opaque_function(function),
+                        is_ignored_invocation: |candidate| panic.is_ignored_invocation(candidate),
+                    },
+                )?
+            }
         },
         MarkerWitness::SafetyEffect { origin, site } => match site {
             MarkerTraceSite::Source => {
+                let safety = safety?;
                 let endpoint = safety_origin_owner(graph, origin)?;
                 let trace = audited_path_from_root(
                     artifact,
@@ -598,18 +677,21 @@ fn marker_projection(
                 )?;
                 (graph.stable_function(endpoint), trace)
             }
-            MarkerTraceSite::Invocation { invocation, node } => marker_invocation_projection(
-                artifact,
-                graph,
-                safety_trace,
-                root_function,
-                invocation,
-                node,
-                MarkerTraversalPolicy {
-                    is_opaque: |function| safety.is_opaque_function(function),
-                    is_ignored_invocation: |candidate| safety.is_ignored_invocation(candidate),
-                },
-            )?,
+            MarkerTraceSite::Invocation { invocation, node } => {
+                let safety = safety?;
+                marker_invocation_projection(
+                    artifact,
+                    graph,
+                    safety_trace?,
+                    root_function,
+                    invocation,
+                    node,
+                    MarkerTraversalPolicy {
+                        is_opaque: |function| safety.is_opaque_function(function),
+                        is_ignored_invocation: |candidate| safety.is_ignored_invocation(candidate),
+                    },
+                )?
+            }
         },
         MarkerWitness::Comment {
             domain,
@@ -632,10 +714,10 @@ fn marker_projection(
     };
     match witness {
         MarkerWitness::PanicEffect { origin, .. } => {
-            append_panic_origin(artifact, graph, panic, origin, &mut trace);
+            append_panic_origin(artifact, graph, panic?, origin, &mut trace);
         }
         MarkerWitness::SafetyEffect { origin, .. } => {
-            append_safety_origin(artifact, graph, safety, origin, &mut trace);
+            append_safety_origin(artifact, graph, safety?, origin, &mut trace);
         }
         MarkerWitness::Comment { .. } => {}
     }
@@ -3426,6 +3508,7 @@ unresolved-call-target = "warn"
             config.analysis.effect_doc_matching,
             &config.panics,
             &config.safety,
+            crate::effects::EffectSelection::default(),
         );
         let trace = EffectEngine::new(&graph.comment_graph()).trace(&comments);
         let uses = comments.marker_uses(&trace);
@@ -3464,9 +3547,9 @@ unresolved-call-target = "warn"
         let claims = super::collect_marker_claims(
             &artifact,
             &graph,
-            &panic_trace,
-            &safety,
-            &safety_trace,
+            Some(&panic_trace),
+            Some(&safety),
+            Some(&safety_trace),
             &comments,
             &trace,
         );
@@ -3480,10 +3563,10 @@ unresolved-call-target = "warn"
             &artifact,
             &graph,
             &annotations,
-            &panic,
-            &panic_trace,
-            &safety,
-            &safety_trace,
+            Some(&panic),
+            Some(&panic_trace),
+            Some(&safety),
+            Some(&safety_trace),
             &comments,
             &trace,
             &claims,

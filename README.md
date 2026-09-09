@@ -28,12 +28,16 @@ Commands and common options:
 
 - `init`: write a sample `sniff-test.toml`
 - `--manifest PATH`: path to `sniff-test.toml`
+- `-e EFFECT`, `--effect EFFECT`: track only `panic` or `safety`; repeat to select both
 - `--cache-dir DIR`: analysis cache directory
 - `--color auto|always|never`
 - `--message-format human|json`
 - `--overflow-checks profile|on|off`
 - `--build-std`
 - `--debug`: analyze debug-profile MIR instead of the default release profile
+
+Without `--effect`, sniff-test tracks both panic and safety effects. Selecting
+one domain skips extraction, probing, tracing, and diagnostics for the other.
 
 An explicit Cargo `--profile` argument after `--` overrides the default release
 profile.
@@ -418,6 +422,7 @@ sniff-test-driver [SNIFF-TEST-ARGS] -- [RUSTC-ARGS]
 
 Direct-mode sniff-test arguments:
 
+- `-e EFFECT`, `--effect EFFECT`: track only `panic` or `safety`; repeat to select both
 - `--manifest PATH`
 - `--cache-dir DIR`
 - `--color auto|always|never`

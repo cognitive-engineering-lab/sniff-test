@@ -462,6 +462,7 @@ fn probe_comments<'a>(
         config.analysis.effect_doc_matching,
         &config.panics,
         &config.safety,
+        crate::effects::EffectSelection::default(),
     )
 }
 

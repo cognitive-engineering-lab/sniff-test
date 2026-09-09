@@ -70,7 +70,7 @@ pub(crate) fn analyze_crate(
         emit_tool_error(tcx, error);
         return;
     }
-    let facts = match extract_artifact_facts(tcx) {
+    let facts = match extract_artifact_facts(tcx, args.effects) {
         Ok(facts) => facts,
         Err(error) => {
             emit_tool_error(tcx, format!("failed to extract artifact facts: {error}"));
@@ -118,6 +118,7 @@ pub(crate) fn analyze_crate(
         &dependency_graph,
         &selection.roots,
         config,
+        args.effects,
     ) {
         Ok(findings) => findings,
         Err(error) => {
