@@ -319,6 +319,7 @@ pub(crate) fn trace_workspace_with_source_overrides(
             panic_additional.reasons.extend(missing_body_reasons(
                 artifact,
                 &graph,
+                &annotations,
                 &namespaces,
                 dependencies,
                 local_stable_crate_id,
@@ -337,6 +338,7 @@ pub(crate) fn trace_workspace_with_source_overrides(
             safety_additional.reasons.extend(missing_body_reasons(
                 artifact,
                 &graph,
+                &annotations,
                 &namespaces,
                 dependencies,
                 local_stable_crate_id,
@@ -1317,10 +1319,16 @@ fn unresolved_call_target_findings(
     is_opaque: impl Fn(FunctionId) -> bool + Copy,
     is_ignored_invocation: impl Fn(effect_tracing::InvocationId) -> bool + Copy,
 ) -> Vec<InterpretedFinding> {
+    let is_opaque_invocation = |invocation| {
+        is_ignored_invocation(invocation)
+            || annotations
+                .macro_contract(graph.invocation(invocation).macro_provenance(), domain)
+                .is_some()
+    };
     graph
         .invocations()
         .filter(|invocation| invocation.is_unresolved())
-        .filter(|invocation| !is_ignored_invocation(invocation.id()))
+        .filter(|invocation| !is_opaque_invocation(invocation.id()))
         .flat_map(|invocation| {
             let resolution = invocation.resolution();
             let partially_resolved = match resolution {
@@ -1349,7 +1357,7 @@ fn unresolved_call_target_findings(
                 root_function,
                 invocation.caller(),
                 is_opaque,
-                is_ignored_invocation,
+                is_opaque_invocation,
             ) else {
                 return Vec::new();
             };
@@ -1780,6 +1788,7 @@ impl MissingBodyBoundary {
 fn missing_body_reasons(
     artifact: &ArtifactFacts,
     graph: &InvocationGraph,
+    annotations: &AnnotationIndex,
     namespaces: &DefinitionNamespaceIndex,
     dependencies: &ArtifactAnalysisGraph,
     local_stable_crate_id: u64,
@@ -1790,13 +1799,22 @@ fn missing_body_reasons(
     let is_trusted = |function: FunctionId| {
         trusted_boundary(graph.stable_function(function), domain, namespaces, config)
     };
+    let is_macro_boundary = |invocation| {
+        annotations
+            .macro_contract(graph.invocation(invocation).macro_provenance(), domain)
+            .is_some()
+    };
     let mut boundaries = BTreeMap::<StableFunctionId, MissingBodyBoundary>::new();
     for body in &artifact.functions {
         let Some(caller) = graph.function(body.function) else {
             continue;
         };
         for call in &body.calls {
-            if !call_reaches_function_body(call.kind) {
+            if !call_reaches_function_body(call.kind)
+                || annotations
+                    .macro_contract(&call.macro_expansions, domain)
+                    .is_some()
+            {
                 continue;
             }
             let CallTargetFact::Function(target) = &call.target else {
@@ -1822,7 +1840,14 @@ fn missing_body_reasons(
                 .iter()
                 .copied()
                 .filter_map(|root| {
-                    audited_path_from_root(artifact, graph, root, caller, is_trusted, |_| false)
+                    audited_path_from_root(
+                        artifact,
+                        graph,
+                        root,
+                        caller,
+                        is_trusted,
+                        is_macro_boundary,
+                    )
                 })
                 .min_by_key(|trace| trace.steps.len())
             else {
@@ -2102,7 +2127,19 @@ fn append_call_trace(
     trace: &mut InterpretedTrace,
 ) {
     let mut caller_path = display_path(artifact, caller);
-    for frame in &edge.macro_expansions {
+    let macro_contract_frame = edge.macro_expansions.last().filter(|frame| {
+        edge.kind == crate::artifact::CallKindFact::MacroExpansion
+            && edge
+                .target
+                .function_target()
+                .is_some_and(|target| frame.macro_def == target.function.def_path_hash)
+    });
+    let frames = if macro_contract_frame.is_some() {
+        &edge.macro_expansions[..edge.macro_expansions.len() - 1]
+    } else {
+        &edge.macro_expansions
+    };
+    for frame in frames {
         let target_path = format!("macro {}", frame.display_path);
         trace.steps.push(InterpretedTraceStep {
             caller,
@@ -2127,7 +2164,11 @@ fn append_call_trace(
         call: edge.id,
         marker_call: Some(edge.id),
         kind: InterpretedTraceStepKind::Reachability(edge.kind),
-        source_range: if edge.macro_expansions.is_empty() {
+        source_range: if edge.kind == crate::artifact::CallKindFact::MacroExpansion {
+            macro_contract_frame
+                .and_then(|frame| frame.source_range.clone())
+                .or_else(|| edge.source_range.clone())
+        } else if edge.macro_expansions.is_empty() {
             edge.source_range.clone()
         } else {
             edge.expanded_range
@@ -2843,6 +2884,64 @@ unresolved-call-target = "warn"
 
         assert_eq!(trace.steps.len(), 2);
         assert_eq!(trace.steps[0].marker_call, None);
+        assert_eq!(trace.steps[1].marker_call, Some(CallId::new(7)));
+    }
+
+    #[test]
+    fn macro_contract_trace_ends_at_its_invocation_without_repeating_its_own_frame() {
+        let owner = stable_function(0);
+        let macro_function = stable_function(1);
+        let CallTargetFact::Function(mut surface) = target(macro_function, "sample::documented")
+        else {
+            unreachable!("function target helper");
+        };
+        surface.attributes.has_rust_body = false;
+        let mut edge = call(
+            7,
+            CallTargetFact::OpaqueBoundary {
+                description: String::from("macro contract"),
+                target: Some(OpaqueTargetFact::Function(surface)),
+            },
+        );
+        edge.kind = CallKindFact::MacroExpansion;
+        let invocation = SourceRangeFact {
+            file: SourceFileId::new("macro-source"),
+            byte_start: 10,
+            byte_end: 20,
+        };
+        edge.source_range = Some(invocation.clone());
+        edge.expanded_range = Some(SourceRangeFact {
+            byte_start: 100,
+            byte_end: 120,
+            ..invocation.clone()
+        });
+        // Recursive expansions may share a definition; only the final frame
+        // is represented by the synthetic contract edge itself.
+        edge.macro_expansions = vec![
+            MacroExpansionFact {
+                macro_def: macro_function.def_path_hash,
+                display_path: String::from("sample::documented"),
+                source_range: None,
+            },
+            MacroExpansionFact {
+                macro_def: macro_function.def_path_hash,
+                display_path: String::from("sample::documented"),
+                source_range: Some(invocation.clone()),
+            },
+        ];
+        let artifact = ArtifactFacts::new(Vec::new(), Vec::new()).expect("empty artifact");
+        let mut trace = InterpretedTrace { steps: Vec::new() };
+
+        append_call_trace(&artifact, owner, &edge, &mut trace);
+
+        assert_eq!(trace.steps.len(), 2);
+        assert_eq!(
+            trace.steps[0].target_path.as_deref(),
+            Some("macro sample::documented")
+        );
+        assert_eq!(trace.steps[0].marker_call, None);
+        assert_eq!(trace.steps[1].target, Some(macro_function));
+        assert_eq!(trace.steps[1].source_range, Some(invocation));
         assert_eq!(trace.steps[1].marker_call, Some(CallId::new(7)));
     }
 
@@ -4683,5 +4782,162 @@ unresolved-call-target = "warn"
 
         assert_eq!(unresolved_panic_count(&reports, boundary_root), 0);
         assert_eq!(unresolved_panic_count(&reports, helper_root), 1);
+    }
+
+    fn macro_contract_coverage_fixture() -> (ArtifactFacts, [InterpretationRoot; 2], [FunctionId; 2])
+    {
+        let root = function_in_crate(1, 1);
+        let helper = function_in_crate(1, 2);
+        let macro_function = function_in_crate(1, 3);
+        let hidden_missing = function_in_crate(1, 4);
+        let visible_missing = function_in_crate(1, 5);
+        let nested_missing = function_in_crate(1, 6);
+        let frame = MacroExpansionFact {
+            macro_def: macro_function.def_path_hash,
+            display_path: String::from("sample::documented"),
+            source_range: None,
+        };
+        let in_macro = |mut call: CallFact| {
+            call.macro_expansions.push(frame.clone());
+            call
+        };
+        let mut macro_call = call(
+            5,
+            CallTargetFact::OpaqueBoundary {
+                description: String::from("macro expansion"),
+                target: Some(OpaqueTargetFact::Function(FunctionTargetFact {
+                    function: macro_function,
+                    display_path: frame.display_path.clone(),
+                    attributes: FunctionAttributesFact {
+                        has_rust_body: false,
+                        ..attributes(&frame.display_path)
+                    },
+                    contracts: FunctionContractsFact {
+                        panic: Some(whole_contract()),
+                        safety: Some(whole_contract()),
+                    },
+                })),
+            },
+        );
+        macro_call.kind = CallKindFact::MacroExpansion;
+        let mut uncontracted = targetless_call(1, 1, "uncontracted macro call");
+        uncontracted.macro_expansions.push(MacroExpansionFact {
+            macro_def: function_in_crate(1, 7).def_path_hash,
+            display_path: String::from("sample::undocumented"),
+            source_range: None,
+        });
+        let mut root_calls = vec![
+            in_macro(targetless_call(0, 0, "documented macro call")),
+            uncontracted,
+            in_macro(call(2, target(helper, "sample::helper"))),
+            in_macro(call(3, target(hidden_missing, "sample::hidden_missing"))),
+            call(4, target(visible_missing, "sample::visible_missing")),
+            in_macro(macro_call),
+        ];
+        for call in &mut root_calls {
+            call.call_site = CallSiteId::new(call.id.index());
+        }
+        let mut nested_call = call(1, target(nested_missing, "sample::nested_missing"));
+        nested_call.call_site = CallSiteId::new(1);
+        let artifact = ArtifactFacts::new(
+            vec![
+                body(
+                    root,
+                    "sample::root",
+                    root_calls,
+                    Vec::new(),
+                    Vec::new(),
+                    Vec::new(),
+                ),
+                body(
+                    helper,
+                    "sample::helper",
+                    vec![targetless_call(0, 0, "nested unresolved call"), nested_call],
+                    Vec::new(),
+                    Vec::new(),
+                    Vec::new(),
+                ),
+            ],
+            Vec::new(),
+        )
+        .expect("macro boundary coverage fixture");
+        (
+            artifact,
+            [
+                InterpretationRoot {
+                    function: root,
+                    path: String::from("sample::root"),
+                    kind: ReportRootKind::Concrete,
+                },
+                InterpretationRoot {
+                    function: helper,
+                    path: String::from("sample::helper"),
+                    kind: ReportRootKind::Concrete,
+                },
+            ],
+            [visible_missing, nested_missing],
+        )
+    }
+
+    #[test]
+    fn macro_contracts_bound_unresolved_calls_and_missing_bodies_in_each_domain() {
+        let (artifact, roots, missing_targets) = macro_contract_coverage_fixture();
+        let config = SniffTestConfig::from_manifest_str(
+            r#"
+                [panics.lints]
+                unresolved-call-target = "warn"
+                [safety.lints]
+                unresolved-call-target = "warn"
+            "#,
+        )
+        .unwrap();
+        let reports = trace_workspace(
+            &artifact,
+            1,
+            &ArtifactAnalysisGraph::default(),
+            &roots,
+            &config,
+        )
+        .expect("effect report");
+        let unresolved_site = super::UnresolvedCallSite {
+            coverage: super::UnresolvedCallCoverage::None,
+            mechanism: super::UnresolvedCallMechanism::FunctionPointer,
+        };
+        for (report, missing) in reports.iter().zip(missing_targets) {
+            for kind in [
+                InterpretedFindingKind::UnresolvedPanicCallTarget {
+                    site: unresolved_site,
+                },
+                InterpretedFindingKind::UnresolvedSafetyCallTarget {
+                    site: unresolved_site,
+                },
+            ] {
+                assert_eq!(
+                    report
+                        .findings
+                        .iter()
+                        .filter(|finding| finding.kind == kind)
+                        .count(),
+                    1
+                );
+            }
+            assert_eq!(missing_body_targets(&report.completeness.panic), [missing]);
+            assert_eq!(missing_body_targets(&report.completeness.safety), [missing]);
+        }
+        for kind in [
+            InterpretedFindingKind::DocumentedPanic,
+            InterpretedFindingKind::SafetyCall {
+                kind: InterpretedSafetyCallKind::Obligation,
+            },
+        ] {
+            assert_eq!(
+                reports[0]
+                    .findings
+                    .iter()
+                    .filter(|finding| finding.kind == kind)
+                    .count(),
+                1
+            );
+        }
     }
 }

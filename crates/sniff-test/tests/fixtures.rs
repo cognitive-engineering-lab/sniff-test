@@ -270,6 +270,9 @@ fixture_cases! {
             .args(&["--manifest", "source-callsite.toml"])
             .denied();
     }
+    "macro_contracts" => {
+        documented_macro_contracts => Case::new().denied();
+    }
     "macro_marker_instances" => {
         macro_marker_instances =>
             Case::new()

@@ -44,7 +44,7 @@ pub(crate) struct Invocation {
     id: InvocationId,
     caller: FunctionId,
     targets: Vec<CallTarget>,
-    /// Callable surface declarations represented by this source-level site.
+    /// Callable or macro surface declarations represented by this source-level site.
     /// Compiler desugarings such as `for` may place several declaration calls
     /// at one source site; these are contract metadata, not runtime targets.
     declarations: Vec<FunctionId>,
@@ -325,7 +325,9 @@ impl InvocationGraph {
                 source_edge
                     .zip(candidate.raw_edges.first())
                     .is_some_and(|(left, right)| {
-                        left.source_range == right.source_range
+                        (left.kind == CallKindFact::MacroExpansion)
+                            == (right.kind == CallKindFact::MacroExpansion)
+                            && left.source_range == right.source_range
                             && left.expanded_range == right.expanded_range
                             && left.callee_range == right.callee_range
                             && same_macro_provenance(
@@ -486,6 +488,18 @@ impl InvocationGraph {
             )));
         }
         invocation.raw_calls.push(call.id);
+        if call.kind == CallKindFact::MacroExpansion {
+            let declaration = declaration_target(&call)
+                .and_then(|target| self.function(target))
+                .ok_or_else(|| {
+                    InvocationGraphError::new("macro expansion has no contract declaration")
+                })?;
+            // Macros expose contracts at their expansion sites without a
+            // runtime callee or an unresolved implementation to investigate.
+            invocation.declarations.insert(declaration);
+            invocation.raw_edges.push(call);
+            return Ok(());
+        }
         match (
             &call.target,
             concrete_target(&call),
@@ -798,7 +812,10 @@ fn graph_target(call: &CallFact) -> Option<StableFunctionId> {
 const fn is_invocation(kind: CallKindFact) -> bool {
     matches!(
         kind,
-        CallKindFact::DirectCall | CallKindFact::TailCall | CallKindFact::IndirectCall
+        CallKindFact::DirectCall
+            | CallKindFact::TailCall
+            | CallKindFact::IndirectCall
+            | CallKindFact::MacroExpansion
     )
 }
 
@@ -1177,25 +1194,143 @@ mod tests {
     }
 
     #[test]
-    fn macro_edges_do_not_propagate_and_call_macro_frames_remain_provenance() {
+    fn macro_contract_sites_are_comment_only_and_keep_runtime_calls_separate() {
         let caller = stable_function(0);
         let invoked_function = stable_function(1);
-        let macro_definition = stable_function(3).def_path_hash;
+        let macro_definition = stable_function(3);
         let mut invoked = call(0, 0, CallKindFact::DirectCall, target(invoked_function));
-        invoked.macro_expansions.push(MacroExpansionFact {
-            macro_def: macro_definition,
+        let frame = MacroExpansionFact {
+            macro_def: macro_definition.def_path_hash,
             display_path: String::from("sample::wrapper"),
             source_range: None,
+        };
+        invoked.macro_expansions.push(frame.clone());
+        let CallTargetFact::Function(mut macro_target) = target(macro_definition) else {
+            unreachable!("target helper creates a function target")
+        };
+        macro_target.attributes.has_rust_body = false;
+        let macro_calls = [1, 2].map(|id| {
+            let mut expansion = call(
+                id,
+                id,
+                CallKindFact::MacroExpansion,
+                CallTargetFact::OpaqueBoundary {
+                    description: String::from("macro expansion"),
+                    target: Some(OpaqueTargetFact::Function(macro_target.clone())),
+                },
+            );
+            expansion.macro_expansions.push(frame.clone());
+            expansion
         });
         let facts = artifact(vec![
-            body(caller, vec![invoked]),
+            body(
+                caller,
+                vec![invoked, macro_calls[0].clone(), macro_calls[1].clone()],
+            ),
             body(invoked_function, Vec::new()),
         ]);
 
         let graph = InvocationGraph::from_artifact(&facts).expect("invocation graph");
-        let invocation = graph.incoming_invocations(graph.function(invoked_function).unwrap())[0];
+        let invoked_function = graph.function(invoked_function).unwrap();
+        let invocation = graph.incoming_invocations(invoked_function)[0];
+        let macro_definition = graph.function(macro_definition).unwrap();
+        let macro_sites = graph
+            .comment_graph()
+            .incoming_invocations(macro_definition)
+            .to_vec();
 
         assert_eq!(graph.invocation(invocation).macro_provenance().len(), 1);
+        assert_eq!(graph.incoming_invocations(invoked_function), &[invocation]);
+        assert!(graph.incoming_invocations(macro_definition).is_empty());
+        assert!(graph.contract_declaration(invoked_function).is_none());
+        assert_eq!(macro_sites.len(), 2);
+        for (site, call) in macro_sites
+            .into_iter()
+            .zip([CallId::new(1), CallId::new(2)])
+        {
+            let expansion = graph.invocation(site);
+            assert!(expansion.function_targets().next().is_none());
+            assert!(!expansion.is_unresolved());
+            assert_eq!(
+                expansion.declaration_targets().collect::<Vec<_>>(),
+                vec![macro_definition]
+            );
+            assert_eq!(graph.invocation_for_raw_call(caller, call), Some(site));
+            assert_eq!(
+                graph
+                    .raw_calls_reaching(site, macro_definition)
+                    .collect::<Vec<_>>(),
+                vec![call]
+            );
+            assert!(
+                graph
+                    .raw_calls_reaching(site, invoked_function)
+                    .next()
+                    .is_none()
+            );
+        }
+    }
+
+    #[test]
+    fn macro_site_aliases_project_across_instances_without_aliasing_runtime_calls() {
+        let generic_caller = stable_function(0);
+        let exact_caller = exact_function(generic_caller, 1);
+        let macro_definition = stable_function(2);
+        let helper = stable_function(3);
+        let CallTargetFact::Function(mut macro_target) = target(macro_definition) else {
+            unreachable!("target helper creates a function target")
+        };
+        macro_target.attributes.has_rust_body = false;
+        let mut defining = call(
+            0,
+            7,
+            CallKindFact::MacroExpansion,
+            CallTargetFact::OpaqueBoundary {
+                description: String::from("macro expansion"),
+                target: Some(OpaqueTargetFact::Function(macro_target)),
+            },
+        );
+        defining.source_range = Some(source_range(10, 20));
+        defining.expanded_range = Some(source_range(10, 20));
+        defining.macro_expansions.push(MacroExpansionFact {
+            macro_def: macro_definition.def_path_hash,
+            display_path: String::from("sample::wrapper"),
+            source_range: Some(source_range(10, 20)),
+        });
+        let mut consumer = defining.clone();
+        consumer.id = CallId::new(1);
+        consumer.call_site = CallSiteId::new(98);
+        let mut runtime = consumer.clone();
+        runtime.id = CallId::new(0);
+        runtime.call_site = CallSiteId::new(99);
+        runtime.kind = CallKindFact::DirectCall;
+        runtime.target = target(helper);
+        let facts = ArtifactFacts::new(
+            vec![
+                body(generic_caller, vec![defining]),
+                body(exact_caller, vec![runtime, consumer]),
+                body(helper, Vec::new()),
+            ],
+            vec![source_file()],
+        )
+        .expect("valid macro projection facts");
+        let graph = InvocationGraph::from_artifact(&facts).expect("invocation graph");
+        let defining = graph
+            .invocation_for_raw_call(generic_caller, CallId::new(0))
+            .expect("defining macro site");
+        let consumer = graph
+            .invocation_for_raw_call(exact_caller, CallId::new(1))
+            .expect("consumer macro site");
+        let runtime = graph
+            .invocation_for_raw_call(exact_caller, CallId::new(0))
+            .expect("runtime call");
+
+        assert_eq!(graph.invocation_aliases(defining), vec![defining, consumer]);
+        assert_eq!(graph.invocation_aliases(runtime), vec![runtime]);
+        assert_eq!(
+            graph.projected_raw_call(defining, CallId::new(0), consumer),
+            Some(CallId::new(1))
+        );
     }
 
     #[test]

@@ -13,7 +13,7 @@ use effect_tracing::InvocationId;
 use crate::artifact::{
     AnnotationFactKind, AnnotationProbingFact, AnnotationSatisfactionFact, AnnotationTargetFact,
     ArtifactFacts, CallId, ContractFact, ContractRequirementFact, DefinitionNamespaceIndex,
-    EffectId, FunctionId, FunctionTargetFact, SourceRangeFact,
+    EffectId, FunctionId, FunctionTargetFact, MacroExpansionFact, SourceRangeFact,
 };
 use crate::compiler::invocations::InvocationGraph;
 use crate::config::MarkerProbing;
@@ -362,6 +362,19 @@ impl AnnotationIndex {
                     .contract_declaration(function)
                     .and_then(|declaration| self.function_contracts(declaration, domain).next())
             })
+    }
+
+    /// An expansion's innermost documented macro owns its runtime effects.
+    pub(crate) fn macro_contract(
+        &self,
+        expansions: &[MacroExpansionFact],
+        domain: AnnotationDomain,
+    ) -> Option<AnnotationId> {
+        expansions.iter().rev().find_map(|frame| {
+            self.function_contracts(FunctionId::generic(frame.macro_def), domain)
+                .next()
+                .map(FunctionContractAnnotation::id)
+        })
     }
 
     pub(crate) fn comments_at_raw_call(

@@ -165,7 +165,7 @@ traces closer to the source call structure. Compiler settings are applied
 literally and independently from lint policy. For example, disabling overflow
 checks does not change or reject `[panics.lints].compiler-assert-overflow`.
 
-The analysis cache uses format version 26 and stores one direct,
+The analysis cache uses format version 27 and stores one direct,
 policy-neutral fact schema: function identities, source-level invocations,
 compiler-assert kinds, unsafe operations, annotations, contracts, and verified
 file-relative source ranges, extraction-time definition locations, plus
@@ -242,6 +242,12 @@ then falls back through macro callsites to the outer source callsite.
 effect contract, regardless of its requirement-list layout. Set it to `"exact"`
 to require each documented sub-obligation to be justified by name, or by the
 same nested list structure when it has no explicit name.
+
+Macro `# Panics` and `# Safety` contracts are checked at each expansion site,
+including standard-library macros such as `println!`. A callsite justification
+applies to the macro's contract; the contract is not attributed to helper
+functions used by its expansion. Local THIR preserves these obligations when
+MIR removes every runtime call, for example when a macro yields a literal.
 
 `report-roots` controls workspace traversal and reporting, not artifact
 extraction. Effects propagate from each selected workspace root through local

@@ -8,7 +8,9 @@ use effect_tracing::{
 use crate::annotations::{
     AnnotationDomain, AnnotationId, AnnotationIndex, FunctionContractAnnotation,
 };
-use crate::artifact::{ArtifactFacts, CallId, DefinitionNamespaceIndex};
+use crate::artifact::{
+    ArtifactFacts, CallId, CallKindFact, DefinitionNamespaceIndex, FunctionId as StableFunctionId,
+};
 use crate::compiler::invocations::InvocationGraph;
 use crate::config::{EffectDocMatching, PanicConfig, SafetyConfig};
 use crate::contracts::normalize_requirement_name;
@@ -156,6 +158,8 @@ pub(crate) struct CommentEffect<'annotations> {
     effect_doc_matching: EffectDocMatching,
     trusted_panic_functions: BTreeSet<FunctionId>,
     trusted_safety_functions: BTreeSet<FunctionId>,
+    trusted_panic_invocations: BTreeSet<InvocationId>,
+    trusted_safety_invocations: BTreeSet<InvocationId>,
     ignored_panic_invocations: BTreeSet<InvocationId>,
 }
 
@@ -204,6 +208,35 @@ impl<'annotations> CommentEffect<'annotations> {
                 trusted_safety_functions.extend(graph.function_aliases(body.function));
             }
         }
+        let mut trusted_panic_invocations = BTreeSet::new();
+        let mut trusted_safety_invocations = BTreeSet::new();
+        for invocation in graph.invocations() {
+            for edge in graph.source_edges(invocation.id()) {
+                // A macro's own public contract remains visible. Only its
+                // ancestors can make this invocation an implementation detail.
+                let ancestor_count = edge
+                    .macro_expansions
+                    .len()
+                    .saturating_sub(usize::from(edge.kind == CallKindFact::MacroExpansion));
+                for frame in &edge.macro_expansions[..ancestor_count] {
+                    let candidates =
+                        namespaces.candidates(StableFunctionId::generic(frame.macro_def));
+                    let candidates = if candidates.is_empty() {
+                        std::slice::from_ref(&frame.display_path)
+                    } else {
+                        candidates
+                    };
+                    if panic_config.panic_boundary_policy_candidates(candidates)
+                        == crate::config::PanicBoundaryPolicy::TrustedBoundary
+                    {
+                        trusted_panic_invocations.insert(invocation.id());
+                    }
+                    if safety_config.trusts_safety_boundary_candidates(candidates) {
+                        trusted_safety_invocations.insert(invocation.id());
+                    }
+                }
+            }
+        }
         let ignored_panic_invocations = graph
             .invocations()
             .filter(|invocation| {
@@ -221,6 +254,8 @@ impl<'annotations> CommentEffect<'annotations> {
             effect_doc_matching,
             trusted_panic_functions,
             trusted_safety_functions,
+            trusted_panic_invocations,
+            trusted_safety_invocations,
             ignored_panic_invocations,
         }
     }
@@ -288,6 +323,14 @@ impl<'annotations> CommentEffect<'annotations> {
             CommentDomain::Safety => &self.trusted_safety_functions,
         }
         .contains(&function)
+    }
+
+    fn trusts_invocation(&self, domain: CommentDomain, invocation: InvocationId) -> bool {
+        match domain {
+            CommentDomain::Panic => &self.trusted_panic_invocations,
+            CommentDomain::Safety => &self.trusted_safety_invocations,
+        }
+        .contains(&invocation)
     }
 
     fn invocation_transition(
@@ -483,6 +526,11 @@ impl Effect for CommentEffect<'_> {
                 if matches!(state.termination, Some(CommentTermination::Satisfaction(_))) =>
             {
                 state.termination
+            }
+            TraceSite::Invocation(invocation)
+                if self.trusts_invocation(state.domain, invocation) =>
+            {
+                Some(CommentTermination::TrustedBoundary)
             }
             TraceSite::Function(_)
                 if state.termination == Some(CommentTermination::TrustedBoundary) =>

@@ -167,6 +167,16 @@ impl ParsedMarkerBlock {
 }
 
 #[must_use]
+pub(crate) fn panic_span_marker_block(
+    tcx: TyCtxt<'_>,
+    owner: LocalDefId,
+    span: Span,
+    probing: MarkerProbing,
+) -> MarkerProbe<EffectMarkerBlock> {
+    effect_site_marker_block_with(tcx, owner, span, MarkerSyntax::Panic, probing)
+}
+
+#[must_use]
 pub(crate) fn safety_span_marker_block(
     tcx: TyCtxt<'_>,
     owner: LocalDefId,
@@ -327,15 +337,16 @@ fn select_unique_innermost_statement(mut spans: Vec<Span>, target: Span) -> Opti
         .copied()
         .filter(|span| span_contains_exact(*span, target))
         .collect::<Vec<_>>();
-    if !exact.is_empty() {
+    if exact.is_empty() {
+        // Several expansion statements can belong to the same source macro
+        // invocation. Compare and deduplicate them in that source context.
+        for span in &mut spans {
+            *span = span.source_callsite();
+        }
+    } else {
         spans = exact;
     }
     spans.sort_by_key(|span| {
-        let span = if span_contains_exact(*span, target) {
-            *span
-        } else {
-            span.source_callsite()
-        };
         (
             span.hi().0.saturating_sub(span.lo().0),
             span.lo().0,
@@ -345,21 +356,11 @@ fn select_unique_innermost_statement(mut spans: Vec<Span>, target: Span) -> Opti
     spans.dedup_by(|left, right| left.source_equal(*right));
 
     let first = *spans.first()?;
-    let first = if span_contains_exact(first, target) {
-        first
-    } else {
-        first.source_callsite()
-    };
     let first_length = first.hi().0.saturating_sub(first.lo().0);
-    let ambiguous = spans.iter().skip(1).any(|span| {
-        let span = if span_contains_exact(*span, target) {
-            *span
-        } else {
-            span.source_callsite()
-        };
-        span.hi().0.saturating_sub(span.lo().0) == first_length
-    });
-    (!ambiguous).then_some(spans[0])
+    let ambiguous = spans
+        .get(1)
+        .is_some_and(|span| span.hi().0.saturating_sub(span.lo().0) == first_length);
+    (!ambiguous).then_some(first)
 }
 
 fn span_contains_exact(outer: Span, inner: Span) -> bool {
@@ -1195,6 +1196,78 @@ mod tests {
             }),
             MarkerProbe::VerifiedAbsent
         );
+    }
+
+    #[test]
+    fn statement_selection_deduplicates_macro_callsites_but_preserves_definition_spans() {
+        use std::hash::Hash;
+
+        use rustc_data_structures::stable_hasher::{
+            HashStableContext, HashingControls, RawDefId, RawDefPathHash, RawSpan, StableHasher,
+        };
+        use rustc_span::{BytePos, ExpnData, ExpnKind, LocalExpnId, MacroKind, Span, Symbol};
+
+        // Expansion registration needs hashes, but this test only uses span hygiene.
+        struct ExpansionHashingContext;
+        impl HashStableContext for ExpansionHashingContext {
+            fn span_hash_stable(&mut self, span: RawSpan, hasher: &mut StableHasher) {
+                (span.0, span.1, span.2).hash(hasher);
+            }
+
+            fn def_path_hash(&self, _: RawDefId) -> RawDefPathHash {
+                RawDefPathHash([0; 16])
+            }
+
+            fn hashing_controls(&self) -> HashingControls {
+                HashingControls { hash_spans: true }
+            }
+
+            fn assert_default_hashing_controls(&self, _: &str) {}
+        }
+
+        rustc_span::create_default_session_globals_then(|| {
+            let source_span = |lo, hi| Span::with_root_ctxt(BytePos(lo), BytePos(hi));
+            let callsite = source_span(100, 110);
+            let expansion = LocalExpnId::fresh(
+                ExpnData::default(
+                    ExpnKind::Macro(MacroKind::Bang, Symbol::intern("documented")),
+                    callsite,
+                    rustc_span::edition::Edition::Edition2024,
+                    None,
+                    None,
+                ),
+                ExpansionHashingContext,
+            )
+            .to_expn_id();
+            let first = source_span(10, 15).with_def_site_ctxt(expansion);
+            let second = source_span(20, 25).with_def_site_ctxt(expansion);
+
+            for statements in [vec![first, second], vec![second, first]] {
+                assert_eq!(
+                    super::select_unique_innermost_statement(statements, callsite),
+                    Some(callsite)
+                );
+            }
+
+            let selected = super::select_unique_innermost_statement(
+                vec![callsite, second, first],
+                source_span(11, 12).with_def_site_ctxt(expansion),
+            )
+            .unwrap();
+            assert_eq!(selected, first);
+            assert_eq!(
+                super::marker_probe_spans(selected, MarkerProbing::MacroDefinitionFirst),
+                vec![first, callsite]
+            );
+
+            assert_eq!(
+                super::select_unique_innermost_statement(
+                    vec![source_span(99, 110), source_span(100, 111)],
+                    source_span(105, 106)
+                ),
+                None
+            );
+        });
     }
 
     fn comment_block_satisfactions_for_panic(lines: &[String]) -> Vec<MarkerSatisfaction> {

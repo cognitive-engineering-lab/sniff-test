@@ -5,7 +5,7 @@
 //! calls retain only invocation-local dispatch classification; compatible
 //! callables observed elsewhere are never persisted as target evidence.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fmt;
 use std::path::{Component, Path, PathBuf};
 
@@ -43,8 +43,8 @@ use crate::contracts::{
 };
 use crate::namespace::{canonical_namespace, namespace_candidates};
 use crate::source_markers::{
-    EffectMarkerBlock, MarkerProbe, panic_effect_edge_marker_block, probe_marker_candidates,
-    safety_effect_edge_marker_block, safety_span_marker_block,
+    EffectMarkerBlock, MarkerProbe, panic_effect_edge_marker_block, panic_span_marker_block,
+    probe_marker_candidates, safety_effect_edge_marker_block, safety_span_marker_block,
 };
 
 /// Failure to produce complete, structurally valid artifact facts for a required body.
@@ -107,6 +107,8 @@ pub(crate) fn extract_artifact_facts(
         &mut safety_groups,
     )?;
 
+    collect_local_macro_calls(tcx, &mut sources, &mut bodies, &mut safety_groups)?;
+
     attach_raw_unsafe_operations(tcx, raw_safety_facts.operations, &mut sources, &mut bodies)?;
     collect_local_definition_sources(tcx, &mut sources)?;
     sources.record_loaded_package_sources(tcx);
@@ -118,6 +120,133 @@ pub(crate) fn extract_artifact_facts(
     let (source_files, definitions) = sources.into_facts();
     ArtifactFacts::with_definitions(functions, source_files, definitions)
         .map_err(|error| ExtractError::new(format!("extracted artifact facts is invalid: {error}")))
+}
+
+/// MIR can erase every operation in a macro expansion. Keep its public
+/// contract at the THIR invocation site even when no runtime edge survives.
+fn collect_local_macro_calls(
+    tcx: TyCtxt<'_>,
+    sources: &mut SourceTable,
+    bodies: &mut BTreeMap<FunctionId, PendingBody>,
+    safety_groups: &mut RawSafetyGroupResolver,
+) -> Result<(), ExtractError> {
+    for owner in tcx.hir_body_owners() {
+        let definition = StableDefPathHash::from_def_id(tcx, owner.to_def_id());
+        let mut owner_bodies = bodies
+            .values_mut()
+            .filter(|body| body.function.def_path_hash == definition)
+            .collect::<Vec<_>>();
+        if owner_bodies.is_empty() {
+            continue;
+        }
+        let Ok((thir, _)) = tcx.thir_body(owner) else {
+            continue;
+        };
+        let thir = thir.borrow();
+        let mut seen = HashSet::new();
+        for expansion in thir
+            .exprs
+            .iter()
+            .flat_map(|expr| expr.span.macro_backtrace())
+        {
+            let Some(macro_def) = expansion.macro_def_id else {
+                continue;
+            };
+            let span = expansion.call_site;
+            if !seen.insert((macro_def, span)) {
+                continue;
+            }
+            let groups = safety_groups.group_for_standalone_site(
+                owner.to_def_id(),
+                span,
+                StandaloneSiteKind::MacroExpansion(macro_def),
+            )?;
+            for body in &mut owner_bodies {
+                if body
+                    .calls
+                    .iter()
+                    .any(|pending| pending.call.call_site == groups.call_site)
+                {
+                    continue;
+                }
+                collect_local_macro_call(tcx, owner, macro_def, span, groups, sources, body)?;
+            }
+        }
+    }
+    Ok(())
+}
+
+fn collect_local_macro_call(
+    tcx: TyCtxt<'_>,
+    owner: LocalDefId,
+    macro_def: DefId,
+    span: Span,
+    groups: ResolvedCallGroups,
+    sources: &mut SourceTable,
+    body: &mut PendingBody,
+) -> Result<(), ExtractError> {
+    let target = CallTargetFact::OpaqueBoundary {
+        description: format!("macro expansion {}", canonical_namespace(tcx, macro_def)),
+        target: Some(OpaqueTargetFact::Function(function_target_for_def(
+            tcx, macro_def, sources,
+        )?)),
+    };
+    let expanded_range = sources.range(tcx, span)?;
+    let mut macro_expansions = span_macro_expansions(tcx, span, sources)?;
+    macro_expansions.push(MacroExpansionFact {
+        macro_def: StableDefPathHash::from_def_id(tcx, macro_def),
+        display_path: canonical_namespace(tcx, macro_def),
+        source_range: expanded_range.clone(),
+    });
+    let key = format!("macro:{}", groups.call_site.index());
+    for (probing, applicable_probing) in probing_modes() {
+        record_effect_marker_probe(
+            tcx,
+            sources,
+            body,
+            AnnotationFactKind::PanicJustification,
+            PendingMarkerTarget::Call(key.clone()),
+            panic_span_marker_block(tcx, owner, span, probing),
+            applicable_probing,
+            panic_requirements(None, &target),
+        )?;
+        let safety_probe = probe_marker_candidates(
+            std::iter::once(span).chain(groups.safety_scope_span),
+            |candidate| safety_span_marker_block(tcx, owner, candidate, probing),
+        );
+        record_effect_marker_probe(
+            tcx,
+            sources,
+            body,
+            AnnotationFactKind::SafetyJustification,
+            PendingMarkerTarget::Call(key.clone()),
+            safety_probe,
+            applicable_probing,
+            safety_requirements(None, &target),
+        )?;
+    }
+    insert_or_merge_call(
+        body,
+        key,
+        CallFact {
+            id: CallId::new(0),
+            call_site: groups.call_site,
+            kind: CallKindFact::MacroExpansion,
+            safety_effect_group: Some(groups.safety_effect_group),
+            requires_unsafe: false,
+            inside_builtin_unsafe: false,
+            source_range: sources
+                .range(tcx, span.source_callsite())?
+                .or_else(|| expanded_range.clone()),
+            expanded_range,
+            macro_expansions,
+            callee_range: None,
+            indirect_kind: None,
+            declaration_target: None,
+            target,
+        },
+    )?;
+    Ok(())
 }
 
 fn collect_local_definition_sources(
@@ -281,9 +410,6 @@ fn collect_reachability_mode<'tcx>(
     }
 
     for reached in view.edges() {
-        if reached.kind() == ReachabilityEdgeKind::MacroExpansion {
-            continue;
-        }
         collect_edge(tcx, view.graph(), reached, sources, bodies, safety_groups)?;
     }
     Ok(())
@@ -364,12 +490,17 @@ fn collect_edge<'tcx>(
         .transpose()?
         .flatten();
     let target = call_target(tcx, graph, edge, sources)?;
-    let requires_unsafe = edge_requires_unsafe(tcx, graph, reached, &target);
     let groups = if is_reachability_call(edge.kind) {
         safety_groups.group_for_call(
             origin.def_id(),
             edge.span,
             reachability_call_identity(tcx, reached),
+        )
+    } else if let ReachabilityNodeKind::MacroExpansion { def_id } = reached.target().kind() {
+        safety_groups.group_for_standalone_site(
+            origin.def_id(),
+            edge.span,
+            StandaloneSiteKind::MacroExpansion(*def_id),
         )
     } else {
         safety_groups.group_for_structural_edge(origin.def_id(), edge.span)
@@ -396,7 +527,7 @@ fn collect_edge<'tcx>(
             call_site: groups.call_site,
             kind: call_kind,
             safety_effect_group: Some(groups.safety_effect_group),
-            requires_unsafe,
+            requires_unsafe: edge_requires_unsafe(tcx, graph, reached, &target),
             inside_builtin_unsafe: groups.inside_builtin_unsafe,
             source_range: source_range.clone(),
             expanded_range: expanded_range.clone(),
@@ -557,6 +688,13 @@ fn edge_macro_expansions(
         source = predecessor.source();
     }
     frames.reverse();
+    if let ReachabilityNodeKind::MacroExpansion { def_id } = reached.target().kind() {
+        frames.push(MacroExpansionFact {
+            macro_def: StableDefPathHash::from_def_id(tcx, *def_id),
+            display_path: canonical_namespace(tcx, *def_id),
+            source_range: sources.range(tcx, reached.span())?,
+        });
+    }
     Ok(frames)
 }
 
@@ -850,13 +988,13 @@ fn call_edge_kind(reached: ReachedEdge<'_, '_>) -> Option<CallKindFact> {
         ReachabilityEdgeKind::CoroutineBody => Some(CallKindFact::CoroutineBody),
         ReachabilityEdgeKind::Assert => Some(CallKindFact::Assert),
         ReachabilityEdgeKind::IndirectCall => Some(CallKindFact::IndirectCall),
+        ReachabilityEdgeKind::MacroExpansion => Some(CallKindFact::MacroExpansion),
         ReachabilityEdgeKind::FnPointerReify
         | ReachabilityEdgeKind::ClosureFnPointerReify
         | ReachabilityEdgeKind::FnPointerCallTarget
         | ReachabilityEdgeKind::DynObjectCast
         | ReachabilityEdgeKind::VTableEntry
-        | ReachabilityEdgeKind::DynDispatchVTableEntry
-        | ReachabilityEdgeKind::MacroExpansion => None,
+        | ReachabilityEdgeKind::DynDispatchVTableEntry => None,
     }
 }
 
@@ -1023,7 +1161,10 @@ fn function_contracts(
     def_id: DefId,
     sources: &mut SourceTable,
 ) -> Result<FunctionContractsFact, ExtractError> {
-    if !matches!(tcx.def_kind(def_id), DefKind::Fn | DefKind::AssocFn) {
+    if !matches!(
+        tcx.def_kind(def_id),
+        DefKind::Fn | DefKind::AssocFn | DefKind::Macro(..)
+    ) {
         return Ok(FunctionContractsFact::default());
     }
     Ok(FunctionContractsFact {
@@ -1144,10 +1285,11 @@ struct RawStandaloneSite {
     call_site: usize,
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 enum StandaloneSiteKind {
     Call,
     StructuralEdge,
+    MacroExpansion(DefId),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1168,8 +1310,7 @@ struct ResolvedCallGroups {
 struct RawSafetyGroupResolver {
     calls_by_span: HashMap<(DefId, Span), Vec<RawCallSite>>,
     scopes_by_owner: HashMap<DefId, Vec<RawSafetyGroupSite>>,
-    standalone_calls: HashMap<(DefId, Span), RawStandaloneSite>,
-    standalone_structural_edges: HashMap<(DefId, Span), RawStandaloneSite>,
+    standalone_sites: HashMap<(DefId, Span, StandaloneSiteKind), RawStandaloneSite>,
     next_group: Option<usize>,
     next_call_site: Option<usize>,
 }
@@ -1216,8 +1357,7 @@ impl RawSafetyGroupResolver {
         Self {
             calls_by_span,
             scopes_by_owner,
-            standalone_calls: HashMap::new(),
-            standalone_structural_edges: HashMap::new(),
+            standalone_sites: HashMap::new(),
             next_group,
             next_call_site,
         }
@@ -1283,11 +1423,7 @@ impl RawSafetyGroupResolver {
         span: Span,
         kind: StandaloneSiteKind,
     ) -> Result<ResolvedCallGroups, ExtractError> {
-        let existing = match kind {
-            StandaloneSiteKind::Call => &self.standalone_calls,
-            StandaloneSiteKind::StructuralEdge => &self.standalone_structural_edges,
-        }
-        .get(&(owner, span));
+        let existing = self.standalone_sites.get(&(owner, span, kind));
         if let Some(site) = existing {
             return resolved_call_groups(
                 site.safety_group,
@@ -1315,14 +1451,7 @@ impl RawSafetyGroupResolver {
             safety_group,
             call_site,
         };
-        match kind {
-            StandaloneSiteKind::Call => {
-                self.standalone_calls.insert((owner, span), site);
-            }
-            StandaloneSiteKind::StructuralEdge => {
-                self.standalone_structural_edges.insert((owner, span), site);
-            }
-        }
+        self.standalone_sites.insert((owner, span, kind), site);
         resolved_call_groups(
             safety_group,
             call_site,

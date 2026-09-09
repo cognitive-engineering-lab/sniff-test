@@ -7,6 +7,15 @@ entry states the mechanism, when it bites, and its current status.
 
 ## Deliberate under-approximation
 
+### Macro contracts require a retained expansion site
+
+Macro contracts are recovered from reachability edges and local THIR expansion
+spans. This includes literal and empty-block expansions whose runtime calls
+were removed. An invocation that expands to no AST nodes can leave no retained
+site, so its documentation may not be checked. Dependency expansions whose
+calls were erased need the defining artifact's local THIR facts; consumer MIR
+alone cannot recover such sites.
+
 ### Trait declaration contracts summarize unresolved dispatch
 
 When rustc resolves a concrete trait implementation, sniff-test traces that

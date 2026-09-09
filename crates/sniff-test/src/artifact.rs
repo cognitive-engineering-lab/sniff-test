@@ -320,7 +320,8 @@ fn aggregate_marker_evidence(
 }
 
 pub(crate) fn same_call_source_site(left: &CallFact, right: &CallFact) -> bool {
-    has_stable_call_source_site(left)
+    (left.kind == CallKindFact::MacroExpansion) == (right.kind == CallKindFact::MacroExpansion)
+        && has_stable_call_source_site(left)
         && has_stable_call_source_site(right)
         && left.source_range == right.source_range
         && left.expanded_range == right.expanded_range

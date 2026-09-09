@@ -96,6 +96,33 @@ fn call_from_macro(id: u32, site: u32, target: CallTargetFact, macro_path: &str)
     call
 }
 
+fn documented_macro_call(id: u32, function: StableFunctionId, path: &str) -> CallFact {
+    let mut declaration = function_target(function, path);
+    declaration.attributes.has_rust_body = false;
+    let contract = ContractFact {
+        source_range: None,
+        requirements: Vec::new(),
+    };
+    declaration.contracts.panic = Some(contract.clone());
+    declaration.contracts.safety = Some(contract);
+    let mut call = call(
+        id,
+        id,
+        CallTargetFact::OpaqueBoundary {
+            description: String::from("macro expansion"),
+            target: Some(OpaqueTargetFact::Function(declaration)),
+        },
+        false,
+    );
+    call.kind = CallKindFact::MacroExpansion;
+    call.macro_expansions.push(MacroExpansionFact {
+        macro_def: function.def_path_hash,
+        display_path: path.to_owned(),
+        source_range: None,
+    });
+    call
+}
+
 fn transparent_body(id: u32, site: u32, target: CallTargetFact) -> CallFact {
     let mut call = call(id, site, target, false);
     call.kind = CallKindFact::ConstBody;
@@ -519,6 +546,195 @@ fn function_contract_is_panic_termination_and_comment_source() {
         comment_trace.outcomes().collect::<Vec<_>>(),
         vec![TraceOutcome::Escaped(comments.contracts()[0].id())]
     );
+}
+
+#[test]
+fn macro_contract_declarations_do_not_become_runtime_panic_sinks() {
+    let config =
+        SniffTestConfig::from_manifest_str("[panics]\npanic-sink-namespaces = [\"sample::**\"]")
+            .unwrap();
+    for (kind, sources) in [
+        (CallKindFact::MacroExpansion, 0),
+        (CallKindFact::DirectCall, 1),
+    ] {
+        let mut declaration = documented_macro_call(0, stable_function(1), "sample::documented");
+        declaration.kind = kind;
+        let (artifact, graph, annotations) = setup(vec![body(
+            stable_function(0),
+            "sample::root",
+            vec![declaration],
+            Vec::new(),
+            Vec::new(),
+        )]);
+        let panic = probe_panic(&artifact, &graph, &annotations, &config.panics);
+        assert_eq!(panic.source_count(), sources);
+    }
+}
+
+#[test]
+fn macro_contracts_own_runtime_sources_before_callsite_markers() {
+    let root = stable_function(0);
+    let sink = stable_function(1);
+    let macro_function = stable_function(2);
+    let macro_call = documented_macro_call(0, macro_function, "sample::documented");
+    let mut runtime_call = call(1, 1, target(sink, "core::panicking::panic_fmt"), true);
+    runtime_call
+        .macro_expansions
+        .clone_from(&macro_call.macro_expansions);
+    let mut uncontracted = call_from_macro(
+        2,
+        2,
+        target(sink, "core::panicking::panic_fmt"),
+        "sample::undocumented",
+    );
+    uncontracted.requires_unsafe = true;
+    let mut assertion = assert_effect(0);
+    assertion
+        .macro_expansions
+        .clone_from(&macro_call.macro_expansions);
+    let mut operation = unsafe_effect(1);
+    operation
+        .macro_expansions
+        .clone_from(&macro_call.macro_expansions);
+    let (artifact, graph, annotations) = setup(vec![body(
+        root,
+        "sample::root",
+        vec![
+            macro_call,
+            runtime_call,
+            uncontracted,
+            // A caller argument keeps its own provenance, outside the macro.
+            call(3, 3, target(sink, "core::panicking::panic_fmt"), true),
+        ],
+        vec![assertion, operation],
+        vec![
+            call_comment(0, 0, AnnotationFactKind::PanicJustification, None),
+            call_comment(1, 0, AnnotationFactKind::SafetyJustification, None),
+            call_comment(2, 1, AnnotationFactKind::PanicJustification, None),
+            call_comment(3, 1, AnnotationFactKind::SafetyJustification, None),
+            effect_comment(4, 0, AnnotationFactKind::PanicJustification),
+            effect_comment(5, 1, AnnotationFactKind::SafetyJustification),
+        ],
+    )]);
+    let config = SniffTestConfig::from_manifest_str(
+        "[panics]\npanic-sink-namespaces = [\"core::panicking::**\"]",
+    )
+    .unwrap();
+    let panic = probe_panic(&artifact, &graph, &annotations, &config.panics);
+    let safety = probe_safety(&artifact, &graph, &annotations, &config.safety);
+    let comments = probe_comments(&artifact, &graph, &annotations, &config);
+    let panic_trace = EffectEngine::new(&graph).trace(&panic);
+    let safety_trace = EffectEngine::new(&graph).trace(&safety);
+    let comment_trace = EffectEngine::new(&graph.comment_graph()).trace(&comments);
+    let panic_contract = annotations
+        .function_contracts(macro_function, crate::annotations::AnnotationDomain::Panic)
+        .next()
+        .unwrap()
+        .id();
+    let safety_contract = annotations
+        .function_contracts(macro_function, crate::annotations::AnnotationDomain::Safety)
+        .next()
+        .unwrap()
+        .id();
+
+    assert_eq!(panic.source_count(), 4);
+    assert_eq!(panic_trace.handled().count(), 2);
+    assert_eq!(panic_trace.escaped().count(), 2);
+    assert!(panic_trace.handled().all(|handled| {
+        handled.node().is_none()
+            && handled.termination() == &PanicTermination::Contract(panic_contract)
+    }));
+    assert_eq!(safety.source_count(), 4);
+    assert_eq!(safety_trace.handled().count(), 2);
+    assert_eq!(safety_trace.escaped().count(), 2);
+    assert!(safety_trace.handled().all(|handled| {
+        handled.node().is_none()
+            && handled.termination() == &SafetyTermination::Contract(safety_contract)
+    }));
+    assert_eq!(comment_trace.handled().count(), 2);
+    assert_eq!(comment_trace.escaped().count(), 0);
+    let uses = comments.marker_uses(&comment_trace);
+    let macro_invocation = graph.invocation_for_raw_call(root, CallId::new(0)).unwrap();
+    assert_eq!(uses.len(), 2);
+    assert!(
+        uses.iter()
+            .all(|usage| usage.invocation() == macro_invocation)
+    );
+}
+
+#[test]
+fn macro_contract_boundaries_on_helper_calls_are_path_local() {
+    let root = stable_function(0);
+    let ordinary_root = stable_function(1);
+    let uncontracted_root = stable_function(2);
+    let helper = stable_function(3);
+    let macro_function = stable_function(4);
+    let macro_call = documented_macro_call(1, macro_function, "sample::documented");
+    let mut helper_call = call(0, 0, target(helper, "sample::helper"), false);
+    helper_call
+        .macro_expansions
+        .clone_from(&macro_call.macro_expansions);
+    let (artifact, graph, annotations) = setup(vec![
+        body(
+            root,
+            "sample::documented_root",
+            vec![helper_call, macro_call],
+            Vec::new(),
+            vec![
+                call_comment(0, 0, AnnotationFactKind::PanicJustification, None),
+                call_comment(1, 0, AnnotationFactKind::SafetyJustification, None),
+            ],
+        ),
+        body(
+            ordinary_root,
+            "sample::argument_root",
+            vec![call(0, 0, target(helper, "sample::helper"), false)],
+            Vec::new(),
+            Vec::new(),
+        ),
+        body(
+            uncontracted_root,
+            "sample::uncontracted_root",
+            vec![call_from_macro(
+                0,
+                0,
+                target(helper, "sample::helper"),
+                "sample::undocumented",
+            )],
+            Vec::new(),
+            Vec::new(),
+        ),
+        body(
+            helper,
+            "sample::helper",
+            Vec::new(),
+            vec![assert_effect(0), unsafe_effect(1)],
+            Vec::new(),
+        ),
+    ]);
+    let config = SniffTestConfig::default();
+    let panic = probe_panic(&artifact, &graph, &annotations, &config.panics);
+    let safety = probe_safety(&artifact, &graph, &annotations, &config.safety);
+    let panic_trace = EffectEngine::new(&graph).trace(&panic);
+    let safety_trace = EffectEngine::new(&graph).trace(&safety);
+    let invocation = graph.invocation_for_raw_call(root, CallId::new(0)).unwrap();
+
+    assert_eq!(panic_trace.handled().count(), 1);
+    assert_eq!(panic_trace.escaped().count(), 2);
+    let handled = panic_trace.handled().next().unwrap();
+    assert_eq!(handled.site(), &TerminationSite::Invocation(invocation));
+    assert!(matches!(
+        handled.termination(),
+        PanicTermination::Contract(_)
+    ));
+    assert_eq!(safety_trace.handled().count(), 1);
+    assert_eq!(safety_trace.escaped().count(), 2);
+    let handled = safety_trace.handled().next().unwrap();
+    assert_eq!(handled.site(), &TerminationSite::Invocation(invocation));
+    assert!(matches!(
+        handled.termination(),
+        SafetyTermination::Contract(_)
+    ));
 }
 
 #[test]
@@ -2135,17 +2351,26 @@ fn panic_sink_declaration_seeds_opaque_invocation() {
 fn ignored_macro_path_terminates_a_direct_panic_source() {
     let root = stable_function(0);
     let panic_sink = stable_function(1);
+    let macro_path = "core::ub_checks::assert_unsafe_precondition";
     let (artifact, graph, annotations) = setup(vec![body(
         root,
         "sample::root",
-        vec![call_from_macro(
+        vec![
+            call_from_macro(
+                0,
+                0,
+                target(panic_sink, "core::panicking::panic_nounwind_fmt"),
+                macro_path,
+            ),
+            documented_macro_call(1, stable_function(10_000), macro_path),
+        ],
+        Vec::new(),
+        vec![call_comment(
             0,
             0,
-            target(panic_sink, "core::panicking::panic_nounwind_fmt"),
-            "core::ub_checks::assert_unsafe_precondition",
+            AnnotationFactKind::PanicJustification,
+            None,
         )],
-        Vec::new(),
-        Vec::new(),
     )]);
     let config = SniffTestConfig::from_manifest_str(
         "[panics]\npanic-sink-namespaces = [\"core::panicking::**\"]\n",
@@ -2415,12 +2640,19 @@ fn ignored_macro_path_termination_is_path_local() {
         body(
             boundary_root,
             "sample::boundary_root",
-            vec![call_from_macro(
-                0,
-                0,
-                target(helper, "sample::helper"),
-                "core::ub_checks::assert_unsafe_precondition",
-            )],
+            vec![
+                call_from_macro(
+                    0,
+                    0,
+                    target(helper, "sample::helper"),
+                    "core::ub_checks::assert_unsafe_precondition",
+                ),
+                documented_macro_call(
+                    1,
+                    stable_function(10_000),
+                    "core::ub_checks::assert_unsafe_precondition",
+                ),
+            ],
             Vec::new(),
             Vec::new(),
         ),

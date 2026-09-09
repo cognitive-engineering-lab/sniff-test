@@ -36,6 +36,7 @@ pub(crate) enum SafetyKind {
 pub(crate) struct SafetyState {
     kind: SafetyKind,
     current_function: FunctionId,
+    macro_contract: Option<AnnotationId>,
     invocation_justification: Option<AnnotationId>,
 }
 
@@ -122,6 +123,10 @@ impl<'annotations> SafetyEffect<'annotations> {
                             SafetyState {
                                 kind: SafetyKind::Operation(kind),
                                 current_function: owner,
+                                macro_contract: annotations.macro_contract(
+                                    &effect.macro_expansions,
+                                    AnnotationDomain::Safety,
+                                ),
                                 invocation_justification: None,
                             },
                         )
@@ -160,6 +165,10 @@ impl<'annotations> SafetyEffect<'annotations> {
                     SafetyState {
                         kind: SafetyKind::Invocation,
                         current_function: graph.invocation(invocation).caller(),
+                        macro_contract: annotations.macro_contract(
+                            &source.edge().macro_expansions,
+                            AnnotationDomain::Safety,
+                        ),
                         invocation_justification: None,
                     },
                 )
@@ -269,11 +278,18 @@ impl Effect for SafetyEffect<'_> {
         edge: PropagationEdge,
     ) -> Propagation<Self::State> {
         let mut next = *state;
+        next.macro_contract = None;
         next.invocation_justification = None;
         next.current_function = match edge {
             PropagationEdge::Invocation(invocation) => {
-                next.invocation_justification =
-                    self.invocation_justification(invocation, state.current_function);
+                next.macro_contract = self.annotations.macro_contract(
+                    self.graph.invocation(invocation).macro_provenance(),
+                    AnnotationDomain::Safety,
+                );
+                if next.macro_contract.is_none() {
+                    next.invocation_justification =
+                        self.invocation_justification(invocation, state.current_function);
+                }
                 self.graph.invocation(invocation).caller()
             }
             PropagationEdge::TransparentBody(edge) => cx.graph().transparent_parent(edge),
@@ -288,9 +304,13 @@ impl Effect for SafetyEffect<'_> {
         site: TraceSite<'_, Self::Origin>,
     ) -> Option<Self::Termination> {
         match site {
-            TraceSite::Source(origin) => self
-                .source_justification(*origin)
-                .map(SafetyTermination::Justification),
+            TraceSite::Source(origin) => state
+                .macro_contract
+                .map(SafetyTermination::Contract)
+                .or_else(|| {
+                    self.source_justification(*origin)
+                        .map(SafetyTermination::Justification)
+                }),
             TraceSite::Function(function) => self.function_contract(function).map_or_else(
                 || {
                     if self.ignored_functions.contains(&function) {
@@ -304,8 +324,13 @@ impl Effect for SafetyEffect<'_> {
                 |contract| Some(SafetyTermination::Contract(contract)),
             ),
             TraceSite::Invocation(_) => state
-                .invocation_justification
-                .map(SafetyTermination::Justification),
+                .macro_contract
+                .map(SafetyTermination::Contract)
+                .or_else(|| {
+                    state
+                        .invocation_justification
+                        .map(SafetyTermination::Justification)
+                }),
         }
     }
 }

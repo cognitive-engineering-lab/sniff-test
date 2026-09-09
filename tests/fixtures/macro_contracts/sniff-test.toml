@@ -1,0 +1,17 @@
+[analysis]
+report-roots = "public"
+
+[panics]
+trusted-boundary-namespaces = ["core", "core::**", "std", "std::**"]
+ignored-namespaces = [
+    "core::ub_checks::assert_unsafe_precondition",
+    "macro_contracts::ignored_call",
+]
+
+[panics.lints]
+documented-panic = "deny"
+panic-invocation = "allow"
+compiler-assert = "allow"
+
+[safety.lints]
+safety-obligation-missing-justification = "deny"

@@ -36,6 +36,7 @@ pub(crate) enum PanicKind {
 pub(crate) struct PanicState {
     kind: PanicKind,
     current_function: FunctionId,
+    macro_contract: Option<AnnotationId>,
     invocation_justification: Option<AnnotationId>,
 }
 
@@ -117,6 +118,8 @@ impl<'annotations> PanicEffect<'annotations> {
                         PanicState {
                             kind: PanicKind::CompilerAssert(kind),
                             current_function: owner,
+                            macro_contract: annotations
+                                .macro_contract(&effect.macro_expansions, AnnotationDomain::Panic),
                             invocation_justification: None,
                         },
                     ));
@@ -170,6 +173,10 @@ impl<'annotations> PanicEffect<'annotations> {
                     PanicState {
                         kind: PanicKind::Invocation,
                         current_function: graph.invocation(invocation).caller(),
+                        macro_contract: annotations.macro_contract(
+                            &source.edge().macro_expansions,
+                            AnnotationDomain::Panic,
+                        ),
                         invocation_justification: None,
                     },
                 ));
@@ -275,6 +282,9 @@ fn panic_sink_target<'call>(
     namespaces: &DefinitionNamespaceIndex,
     config: &PanicConfig,
 ) -> Option<&'call FunctionTargetFact> {
+    if call.kind == crate::artifact::CallKindFact::MacroExpansion {
+        return None;
+    }
     call.target
         .function_target()
         .filter(|target| {
@@ -305,11 +315,18 @@ impl Effect for PanicEffect<'_> {
         edge: PropagationEdge,
     ) -> Propagation<Self::State> {
         let mut next = *state;
+        next.macro_contract = None;
         next.invocation_justification = None;
         next.current_function = match edge {
             PropagationEdge::Invocation(invocation) => {
-                next.invocation_justification =
-                    self.invocation_justification(invocation, state.current_function);
+                next.macro_contract = self.annotations.macro_contract(
+                    self.graph.invocation(invocation).macro_provenance(),
+                    AnnotationDomain::Panic,
+                );
+                if next.macro_contract.is_none() {
+                    next.invocation_justification =
+                        self.invocation_justification(invocation, state.current_function);
+                }
                 self.graph.invocation(invocation).caller()
             }
             PropagationEdge::TransparentBody(edge) => cx.graph().transparent_parent(edge),
@@ -328,8 +345,13 @@ impl Effect for PanicEffect<'_> {
                 if self.macro_ignored_sources.contains(origin) {
                     Some(PanicTermination::IgnoredBoundary)
                 } else {
-                    self.source_justification(*origin)
-                        .map(PanicTermination::Justification)
+                    state
+                        .macro_contract
+                        .map(PanicTermination::Contract)
+                        .or_else(|| {
+                            self.source_justification(*origin)
+                                .map(PanicTermination::Justification)
+                        })
                 }
             }
             TraceSite::Function(function) => self.function_contract(function).map_or_else(
@@ -349,8 +371,13 @@ impl Effect for PanicEffect<'_> {
                     Some(PanicTermination::IgnoredBoundary)
                 } else {
                     state
-                        .invocation_justification
-                        .map(PanicTermination::Justification)
+                        .macro_contract
+                        .map(PanicTermination::Contract)
+                        .or_else(|| {
+                            state
+                                .invocation_justification
+                                .map(PanicTermination::Justification)
+                        })
                 }
             }
         }
