@@ -16,7 +16,6 @@ error: [sniff-test::analysis::ambiguous-safety-marker] one `// SAFETY:` marker a
    |
    = note: this marker applies to 2 safety obligations
    = note: reachable from `ambiguous_safety::reused_marker_within_one_macro_expansion` to `ambiguous_safety::perform`
-   = note: set `show-full-stack-trace = true` under `[analysis]` in sniff-test.toml to show every reachability step
    = help: give each unsafe block or operation its own marker, or set `ambiguous-safety-marker = "allow"` under `[analysis.lints]`
 
 error: [sniff-test::analysis::ambiguous-safety-marker] one `// SAFETY:` marker applies to 2 safety effect groups
@@ -29,7 +28,6 @@ error: [sniff-test::analysis::ambiguous-safety-marker] one `// SAFETY:` marker a
    |
    = note: this marker applies to 2 safety obligations
    = note: reachable from `ambiguous_safety::reused_partial_marker_for_safe_obligations` to `ambiguous_safety::safe_obligation`
-   = note: set `show-full-stack-trace = true` under `[analysis]` in sniff-test.toml to show every reachability step
    = help: give each unsafe block or operation its own marker, or set `ambiguous-safety-marker = "allow"` under `[analysis.lints]`
 
 error: [sniff-test::analysis::ambiguous-safety-marker] one `// SAFETY:` marker applies to 2 safety effect groups
@@ -42,7 +40,8 @@ error: [sniff-test::analysis::ambiguous-safety-marker] one `// SAFETY:` marker a
    |
    = note: this marker applies to 2 safety obligations
    = note: reachable from `ambiguous_safety::reused_partial_marker_for_safe_obligations_inside_unsafe_block` to `ambiguous_safety::safe_obligation`
-   = note: set `show-full-stack-trace = true` under `[analysis]` in sniff-test.toml to show every reachability step
    = help: give each unsafe block or operation its own marker, or set `ambiguous-safety-marker = "allow"` under `[analysis.lints]`
+
+note: set `show-full-stack-trace = true` under `[analysis]` in sniff-test.toml to show every reachability step
 
 error: could not compile `ambiguous-safety` (lib) due to 3 previous errors

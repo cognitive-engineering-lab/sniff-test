@@ -17,6 +17,8 @@ use toml::Spanned;
 
 use super::diagnostics::{empty_report_roots_diagnostic, missing_report_root_diagnostic};
 
+pub(super) const FULL_STACK_TRACE_HINT: &str = "set `show-full-stack-trace = true` under `[analysis]` in sniff-test.toml to show every reachability step";
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "kebab-case")]
 pub(crate) struct Finding {
@@ -259,6 +261,21 @@ pub(crate) fn aggregate_human_findings(findings: &[ResolvedFinding]) -> Vec<Reso
             finding
         })
         .collect()
+}
+
+/// Removes per-finding stack trace hints so the caller can emit one footer after
+/// all human diagnostics.
+pub(crate) fn take_full_stack_trace_hint(findings: &mut [ResolvedFinding]) -> bool {
+    let mut removed = false;
+    for finding in findings {
+        finding.finding.diagnostic.messages.retain(|message| {
+            let is_hint =
+                matches!(message, DiagnosticMessage::Note(note) if note == FULL_STACK_TRACE_HINT);
+            removed |= is_hint;
+            !is_hint
+        });
+    }
+    removed
 }
 
 fn same_human_source(left: &ResolvedFinding, right: &ResolvedFinding) -> bool {
@@ -634,9 +651,9 @@ pub(crate) fn collect_report_root_findings(
 #[cfg(test)]
 mod tests {
     use super::{
-        DiagnosticMessage, Finding, FindingDiagnostic, FindingKind, FindingOwner, OwnerScope,
-        ResolvedFinding, SourceEvidence, aggregate_human_findings, is_compact_reachable_note,
-        resolve_findings,
+        DiagnosticMessage, FULL_STACK_TRACE_HINT, Finding, FindingDiagnostic, FindingKind,
+        FindingOwner, OwnerScope, ResolvedFinding, SourceEvidence, aggregate_human_findings,
+        is_compact_reachable_note, resolve_findings, take_full_stack_trace_hint,
     };
     use crate::artifact::{
         CompilerAssertKind, SafetyOpKind, SourceFileFact, SourceFileId, SourceRangeFact,
@@ -1066,6 +1083,32 @@ mod tests {
         let aggregated = aggregate_human_findings(&resolved);
 
         assert_eq!(aggregated, resolved);
+    }
+
+    #[test]
+    fn full_stack_trace_hint_is_removed_from_every_human_finding() {
+        let hint = DiagnosticMessage::Note(String::from(FULL_STACK_TRACE_HINT));
+        let other = DiagnosticMessage::Note(String::from("other note"));
+        let resolved = |messages| ResolvedFinding {
+            level: LintLevel::Warn,
+            finding: Finding {
+                diagnostic: FindingDiagnostic {
+                    span: None,
+                    message: String::from("test finding"),
+                    messages,
+                },
+                ..finding(FindingKind::PanicInvocation)
+            },
+        };
+        let mut findings = [
+            resolved(vec![hint.clone(), other.clone()]),
+            resolved(vec![hint]),
+        ];
+
+        assert!(take_full_stack_trace_hint(&mut findings));
+        assert_eq!(findings[0].finding.diagnostic.messages, [other]);
+        assert!(findings[1].finding.diagnostic.messages.is_empty());
+        assert!(!take_full_stack_trace_hint(&mut findings));
     }
 
     #[test]

@@ -14,7 +14,6 @@ error: [sniff-test::panics::panic-invocation] panic invocation to `core::panicki
    |     ^^^^^^^^^^^^^
    |
    = note: reachable from `safe_markers::unsafe_call` to `core::panicking::panic`
-   = note: set `show-full-stack-trace = true` under `[analysis]` in sniff-test.toml to show every reachability step
    = help: add `// PANIC:` directly above this source after establishing the invariant that contains this panic path
 
 error: [sniff-test::panics::compiler-assert-division-by-zero] compiler assertion (division by zero) has no recorded `// PANIC:` evidence
@@ -24,7 +23,8 @@ error: [sniff-test::panics::compiler-assert-division-by-zero] compiler assertion
   |     ^^^^^^^^^^^^^^^^^^^
   |
   = note: reachable from `safe_markers::unsafe_ratio` to `compiler assert division by zero`
-  = note: set `show-full-stack-trace = true` under `[analysis]` in sniff-test.toml to show every reachability step
   = help: add `// PANIC:` directly above this source after establishing the invariant that contains this panic path
+
+note: set `show-full-stack-trace = true` under `[analysis]` in sniff-test.toml to show every reachability step
 
 error: could not compile `safe-markers` (lib) due to 2 previous errors

@@ -15,7 +15,6 @@ warning: [sniff-test::panics::documented-panic] call to `indirect_calls::Risky::
    |
    = note: `indirect_calls::Risky::documented` documents `# Panics` here
    = note: reachable from `indirect_calls::call_documented` to `indirect_calls::Risky::documented`
-   = note: set `show-full-stack-trace = true` under `[analysis]` in sniff-test.toml to show every reachability step
    = help: add `// PANIC:` directly above this source after establishing the invariant that contains this panic path
 help: document when this function may panic with `/// # Panics` here
   --> src/lib.rs:10:1
@@ -36,7 +35,6 @@ note: safety coverage is incomplete here: unresolved generic-dispatch call targe
    |     ^^^^^^^^^^^^^^^^^^^^^^
    = note: the call to `indirect_calls::Risky::documented` uses generic dispatch
    = note: reachable from `indirect_calls::call_documented` to `indirect_calls::Risky::documented`
-   = note: set `show-full-stack-trace = true` under `[analysis]` in sniff-test.toml to show every reachability step
    = help: document caller safety requirements under `# Safety` on the trait method declaration; otherwise configure `[safety.lints].unresolved-call-target` if the uncertainty is acceptable
 
 warning: [sniff-test::panics::unresolved-call-target] function `indirect_calls::call_dyn` has incomplete panic coverage
@@ -52,7 +50,6 @@ note: panic coverage is incomplete here: unresolved dynamic-dispatch call target
    |     ^^^^^^^^^^^^^^^^^^^^^^^^
    = note: the call to `indirect_calls::Risky::undocumented` uses dynamic dispatch
    = note: reachable from `indirect_calls::call_dyn` to `indirect_calls::Risky::undocumented`
-   = note: set `show-full-stack-trace = true` under `[analysis]` in sniff-test.toml to show every reachability step
    = help: document caller-visible panic behavior under `# Panics` on the trait method declaration; otherwise configure `[panics.lints].unresolved-call-target` if the uncertainty is acceptable
 
 warning: [sniff-test::safety::unresolved-call-target] function `indirect_calls::call_dyn` has incomplete safety coverage
@@ -68,7 +65,6 @@ note: safety coverage is incomplete here: unresolved dynamic-dispatch call targe
    |     ^^^^^^^^^^^^^^^^^^^^^^^^
    = note: the call to `indirect_calls::Risky::undocumented` uses dynamic dispatch
    = note: reachable from `indirect_calls::call_dyn` to `indirect_calls::Risky::undocumented`
-   = note: set `show-full-stack-trace = true` under `[analysis]` in sniff-test.toml to show every reachability step
    = help: document caller safety requirements under `# Safety` on the trait method declaration; otherwise configure `[safety.lints].unresolved-call-target` if the uncertainty is acceptable
 
 warning: [sniff-test::panics::unresolved-call-target] function `indirect_calls::call_pointer` has incomplete panic coverage
@@ -84,7 +80,6 @@ note: panic coverage is incomplete here: unresolved function-pointer call target
    |     ^^^^^^^^^^^^
    = note: this call uses a function pointer
    = note: reachable from `indirect_calls::call_pointer` to `indirect call through a function pointer`
-   = note: set `show-full-stack-trace = true` under `[analysis]` in sniff-test.toml to show every reachability step
    = help: make the callee concrete or make its possible implementations available to analysis; otherwise configure `[panics.lints].unresolved-call-target` if the uncertainty is acceptable
 
 warning: [sniff-test::safety::unresolved-call-target] function `indirect_calls::call_pointer` has incomplete safety coverage
@@ -100,7 +95,6 @@ note: safety coverage is incomplete here: unresolved function-pointer call targe
    |     ^^^^^^^^^^^^
    = note: this call uses a function pointer
    = note: reachable from `indirect_calls::call_pointer` to `indirect call through a function pointer`
-   = note: set `show-full-stack-trace = true` under `[analysis]` in sniff-test.toml to show every reachability step
    = help: make the callee concrete or make its possible implementations available to analysis; otherwise configure `[safety.lints].unresolved-call-target` if the uncertainty is acceptable
 
 warning: [sniff-test::panics::unresolved-call-target] function `indirect_calls::call_undocumented` has incomplete panic coverage
@@ -116,7 +110,6 @@ note: panic coverage is incomplete here: unresolved generic-dispatch call target
    |     ^^^^^^^^^^^^^^^^^^^^^^^^
    = note: the call to `indirect_calls::Risky::undocumented` uses generic dispatch
    = note: reachable from `indirect_calls::call_undocumented` to `indirect_calls::Risky::undocumented`
-   = note: set `show-full-stack-trace = true` under `[analysis]` in sniff-test.toml to show every reachability step
    = help: document caller-visible panic behavior under `# Panics` on the trait method declaration; otherwise configure `[panics.lints].unresolved-call-target` if the uncertainty is acceptable
 
 warning: [sniff-test::safety::unresolved-call-target] function `indirect_calls::call_undocumented` has incomplete safety coverage
@@ -132,8 +125,9 @@ note: safety coverage is incomplete here: unresolved generic-dispatch call targe
    |     ^^^^^^^^^^^^^^^^^^^^^^^^
    = note: the call to `indirect_calls::Risky::undocumented` uses generic dispatch
    = note: reachable from `indirect_calls::call_undocumented` to `indirect_calls::Risky::undocumented`
-   = note: set `show-full-stack-trace = true` under `[analysis]` in sniff-test.toml to show every reachability step
    = help: document caller safety requirements under `# Safety` on the trait method declaration; otherwise configure `[safety.lints].unresolved-call-target` if the uncertainty is acceptable
+
+note: set `show-full-stack-trace = true` under `[analysis]` in sniff-test.toml to show every reachability step
 
 warning: `indirect-calls` (lib) generated 8 warnings
     Finished `release` profile [optimized] target(s) in [TIME]

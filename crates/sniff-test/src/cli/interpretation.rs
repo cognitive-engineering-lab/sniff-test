@@ -26,8 +26,8 @@ use rustc_middle::ty::TyCtxt;
 use rustc_span::Span;
 
 use super::findings::{
-    DiagnosticMessage, Finding, FindingDiagnostic, FindingKind, FindingOwner,
-    FindingTraceStepOrder, OwnerScope, SourceEvidence,
+    DiagnosticMessage, FULL_STACK_TRACE_HINT, Finding, FindingDiagnostic, FindingKind,
+    FindingOwner, FindingTraceStepOrder, OwnerScope, SourceEvidence,
 };
 use super::report::render_span;
 
@@ -1389,9 +1389,9 @@ fn add_trace_notes(
             "reachable from `{}` to `{target}`",
             first.caller_path
         )));
-        diagnostic.messages.push(DiagnosticMessage::Note(String::from(
-            "set `show-full-stack-trace = true` under `[analysis]` in sniff-test.toml to show every reachability step",
-        )));
+        diagnostic
+            .messages
+            .push(DiagnosticMessage::Note(String::from(FULL_STACK_TRACE_HINT)));
     }
 }
 

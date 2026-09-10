@@ -17,7 +17,6 @@ error: [sniff-test::analysis::ambiguous-panic-requirement] `ambiguous_markers::d
    |
    = note: `ambiguous_markers::duplicate_name_ratio` has multiple `# Panics` requirements that normalize to `nonzero`
    = note: reachable from `ambiguous_markers::duplicate_name_marker` to `ambiguous_markers::duplicate_name_ratio`
-   = note: set `show-full-stack-trace = true` under `[analysis]` in sniff-test.toml to show every reachability step
    = help: give each requirement a unique name, or set `ambiguous-panic-requirement = "allow"` under `[analysis.lints]`
 
 error: [sniff-test::analysis::ambiguous-panic-marker] one `// PANIC:` marker applies to 2 panic effect groups
@@ -29,7 +28,6 @@ error: [sniff-test::analysis::ambiguous-panic-marker] one `// PANIC:` marker app
    |
    = note: this marker applies to 2 possible panics
    = note: reachable from `ambiguous_markers::marked_path_to_shared_sources` to `ambiguous_markers::first_documented_source`
-   = note: set `show-full-stack-trace = true` under `[analysis]` in sniff-test.toml to show every reachability step
    = help: move the marker directly above one obligation, split it into separate markers, or set `ambiguous-panic-marker = "allow"` under `[analysis.lints]`
 
 error: [sniff-test::analysis::ambiguous-panic-marker] one `// PANIC:` marker applies to 2 panic effect groups
@@ -41,7 +39,6 @@ error: [sniff-test::analysis::ambiguous-panic-marker] one `// PANIC:` marker app
    |
    = note: this marker applies to 2 possible panics
    = note: reachable from `ambiguous_markers::marker_covers_documented_call_and_sink` to `ambiguous_markers::ratio`
-   = note: set `show-full-stack-trace = true` under `[analysis]` in sniff-test.toml to show every reachability step
    = help: move the marker directly above one obligation, split it into separate markers, or set `ambiguous-panic-marker = "allow"` under `[analysis.lints]`
 
 warning: [sniff-test::panics::documented-panic] call to `ambiguous_markers::ratio` with a `# Panics` contract has no recorded `// PANIC:` evidence
@@ -56,7 +53,6 @@ note: `ambiguous_markers::ratio` documents `# Panics` here
  4 | pub fn ratio(total: usize, denominator: usize) -> usize {
    | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
    = note: reachable from `ambiguous_markers::shared_block_marker` to `ambiguous_markers::ratio`
-   = note: set `show-full-stack-trace = true` under `[analysis]` in sniff-test.toml to show every reachability step
    = help: add `// PANIC:` directly above this source after establishing the invariant that contains this panic path
 help: document when this function may panic with `/// # Panics` here
   --> src/lib.rs:8:1
@@ -76,7 +72,6 @@ note: `ambiguous_markers::ratio` documents `# Panics` here
  4 | pub fn ratio(total: usize, denominator: usize) -> usize {
    | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
    = note: reachable from `ambiguous_markers::shared_block_marker` to `ambiguous_markers::ratio`
-   = note: set `show-full-stack-trace = true` under `[analysis]` in sniff-test.toml to show every reachability step
    = help: add `// PANIC:` directly above this source after establishing the invariant that contains this panic path
 help: document when this function may panic with `/// # Panics` here
   --> src/lib.rs:8:1
@@ -96,7 +91,6 @@ note: `ambiguous_markers::first_documented_source` documents `# Panics` here
 59 | pub fn first_documented_source() {}
    | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
    = note: reachable from `ambiguous_markers::unmarked_path_to_shared_sources` to `ambiguous_markers::first_documented_source`
-   = note: set `show-full-stack-trace = true` under `[analysis]` in sniff-test.toml to show every reachability step
    = help: add `// PANIC:` directly above this source after establishing the invariant that contains this panic path
 help: document when this function may panic with `/// # Panics` here
   --> src/lib.rs:76:1
@@ -116,13 +110,14 @@ note: `ambiguous_markers::second_documented_source` documents `# Panics` here
 64 | pub fn second_documented_source() {}
    | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
    = note: reachable from `ambiguous_markers::unmarked_path_to_shared_sources` to `ambiguous_markers::second_documented_source`
-   = note: set `show-full-stack-trace = true` under `[analysis]` in sniff-test.toml to show every reachability step
    = help: add `// PANIC:` directly above this source after establishing the invariant that contains this panic path
 help: document when this function may panic with `/// # Panics` here
   --> src/lib.rs:76:1
    |
 76 | pub fn unmarked_path_to_shared_sources() {
    | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+note: set `show-full-stack-trace = true` under `[analysis]` in sniff-test.toml to show every reachability step
 
 warning: `ambiguous-markers` (lib) generated 4 warnings
 error: could not compile `ambiguous-markers` (lib) due to 3 previous errors; 4 warnings emitted

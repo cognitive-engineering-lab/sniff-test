@@ -14,7 +14,8 @@ error: [sniff-test::panics::compiler-assert-division-by-zero] compiler assertion
   |     ^^^^^^^^^^^^^^^^^^^^^^^^
   |
   = note: reachable from `panic_axioms::division` to `compiler assert division by zero`
-  = note: set `show-full-stack-trace = true` under `[analysis]` in sniff-test.toml to show every reachability step
   = help: add `// PANIC:` directly above this source after establishing the invariant that contains this panic path
+
+note: set `show-full-stack-trace = true` under `[analysis]` in sniff-test.toml to show every reachability step
 
 error: could not compile `panic-axioms` (lib) due to 1 previous error

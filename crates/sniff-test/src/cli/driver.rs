@@ -18,9 +18,10 @@ use rustc_session::config::CrateType;
 use rustc_span::symbol::Symbol;
 
 use super::args::{CrateOutputScope, MessageFormat, SniffTestArgs};
-use super::diagnostics::emit_finding_diagnostic;
+use super::diagnostics::{emit_finding_diagnostic, emit_note};
 use super::findings::{
-    Finding, aggregate_human_findings, collect_report_root_findings, resolve_findings,
+    FULL_STACK_TRACE_HINT, Finding, aggregate_human_findings, collect_report_root_findings,
+    resolve_findings, take_full_stack_trace_hint,
 };
 use super::interpretation::interpret_workspace;
 use super::plugin::rustc_version;
@@ -138,13 +139,18 @@ pub(crate) fn analyze_crate(
     findings.extend(interpreted_findings);
     let report = build_report(tcx, config, findings);
     if emit_diagnostics {
-        for finding in aggregate_human_findings(&report.findings) {
+        let mut human_findings = aggregate_human_findings(&report.findings);
+        let show_full_stack_trace_hint = take_full_stack_trace_hint(&mut human_findings);
+        for finding in human_findings {
             emit_finding_diagnostic(
                 tcx,
                 finding.level,
                 &finding.finding.kind.lint_code(),
                 &finding.finding.diagnostic,
             );
+        }
+        if show_full_stack_trace_hint {
+            emit_note(tcx, FULL_STACK_TRACE_HINT);
         }
     }
     emit_report(args, &report);

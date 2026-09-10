@@ -43,6 +43,10 @@ pub(super) fn emit_finding_diagnostic(
     }
 }
 
+pub(super) fn emit_note(tcx: TyCtxt<'_>, message: &str) {
+    tcx.dcx().note(message.to_owned());
+}
+
 fn lint_coded_message(lint_code: &str, message: &str) -> String {
     format!("[{lint_code}] {message}")
 }

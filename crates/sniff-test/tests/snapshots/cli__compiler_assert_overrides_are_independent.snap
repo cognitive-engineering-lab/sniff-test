@@ -14,7 +14,6 @@ error: [sniff-test::panics::compiler-assert-bounds-check] compiler assertion (in
    |     ^^^^^^^^^^^^^
    |
    = note: reachable from `panic_axioms::indexed` to `compiler assert index out of bounds`
-   = note: set `show-full-stack-trace = true` under `[analysis]` in sniff-test.toml to show every reachability step
    = help: add `// PANIC:` directly above this source after establishing the invariant that contains this panic path
 
 warning: [sniff-test::panics::compiler-assert-remainder-by-zero] compiler assertion (remainder with a zero divisor) has no recorded `// PANIC:` evidence
@@ -24,8 +23,9 @@ warning: [sniff-test::panics::compiler-assert-remainder-by-zero] compiler assert
   |     ^^^^^^^^^^^^^^^^^^^^^^^
   |
   = note: reachable from `panic_axioms::remainder` to `compiler assert remainder with a zero divisor`
-  = note: set `show-full-stack-trace = true` under `[analysis]` in sniff-test.toml to show every reachability step
   = help: add `// PANIC:` directly above this source after establishing the invariant that contains this panic path
+
+note: set `show-full-stack-trace = true` under `[analysis]` in sniff-test.toml to show every reachability step
 
 warning: `panic-axioms` (lib) generated 1 warning
 error: could not compile `panic-axioms` (lib) due to 1 previous error; 1 warning emitted
