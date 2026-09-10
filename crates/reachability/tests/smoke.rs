@@ -8,6 +8,7 @@ extern crate rustc_middle;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use reachability::{
     ArtifactScope, DynDispatchVTableEdges, FnPointerEdges, MirBodyLocation, NoopReachabilityHooks,
@@ -988,11 +989,14 @@ impl Drop for TempProject {
 }
 
 fn unique_temp_dir() -> PathBuf {
+    static NEXT_ID: AtomicU64 = AtomicU64::new(0);
+
     let mut base = std::env::temp_dir();
     base.push(format!(
-        "reachability-smoke-{}-{}",
+        "reachability-smoke-{}-{}-{}",
         std::process::id(),
-        nanos_since_epoch()
+        nanos_since_epoch(),
+        NEXT_ID.fetch_add(1, Ordering::Relaxed),
     ));
     ensure_not_exists(&base);
     base
