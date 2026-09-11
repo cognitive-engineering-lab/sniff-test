@@ -10,7 +10,7 @@ expression: "report[\"findings\"]"
       "crate": "dependency_generic_private_panic",
       "scope": "dependency"
     },
-    "reason": "dependency crate `dependency_generic_private_panic` has no recorded `// PANIC:` evidence for panic invocation to `core::panicking::panic_fmt`",
+    "reason": "dependency crate `dependency_generic_private_panic` has no recorded `// PANIC:` justification for panic invocation to `core::panicking::panic_fmt`",
     "root": "dependency_generic_private_panic_app::caller",
     "root-kind": "concrete",
     "root-span": "src/lib.rs:1:1: 1:26",

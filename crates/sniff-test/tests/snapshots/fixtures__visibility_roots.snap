@@ -10,7 +10,7 @@ expression: "report[\"findings\"]"
       "crate": "visibility_roots",
       "scope": "workspace"
     },
-    "reason": "panic invocation to `core::panicking::panic_fmt` has no recorded `// PANIC:` evidence",
+    "reason": "panic invocation to `core::panicking::panic_fmt` has no recorded `// PANIC:` justification",
     "root": "visibility_roots::imp::exported",
     "root-kind": "concrete",
     "root-span": "src/lib.rs:6:5: 6:32",
@@ -32,7 +32,7 @@ expression: "report[\"findings\"]"
       "crate": "visibility_roots",
       "scope": "workspace"
     },
-    "reason": "panic invocation to `core::panicking::panic_fmt` has no recorded `// PANIC:` evidence",
+    "reason": "panic invocation to `core::panicking::panic_fmt` has no recorded `// PANIC:` justification",
     "root": "visibility_roots::public_entry",
     "root-kind": "concrete",
     "root-span": "src/lib.rs:13:1: 13:32",

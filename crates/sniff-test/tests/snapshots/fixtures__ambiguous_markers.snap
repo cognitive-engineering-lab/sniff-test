@@ -66,7 +66,7 @@ expression: "report[\"findings\"]"
       "crate": "ambiguous_markers",
       "scope": "workspace"
     },
-    "reason": "call to `ambiguous_markers::ratio` with a `# Panics` contract has no recorded `// PANIC:` evidence",
+    "reason": "call to `ambiguous_markers::ratio` with a `# Panics` obligation has no recorded `// PANIC:` justification",
     "root": "ambiguous_markers::shared_block_marker",
     "root-kind": "concrete",
     "root-span": "src/lib.rs:8:1: 8:76",
@@ -86,7 +86,7 @@ expression: "report[\"findings\"]"
       "crate": "ambiguous_markers",
       "scope": "workspace"
     },
-    "reason": "call to `ambiguous_markers::ratio` with a `# Panics` contract has no recorded `// PANIC:` evidence",
+    "reason": "call to `ambiguous_markers::ratio` with a `# Panics` obligation has no recorded `// PANIC:` justification",
     "root": "ambiguous_markers::shared_block_marker",
     "root-kind": "concrete",
     "root-span": "src/lib.rs:8:1: 8:76",
@@ -106,7 +106,7 @@ expression: "report[\"findings\"]"
       "crate": "ambiguous_markers",
       "scope": "workspace"
     },
-    "reason": "call to `ambiguous_markers::first_documented_source` with a `# Panics` contract has no recorded `// PANIC:` evidence",
+    "reason": "call to `ambiguous_markers::first_documented_source` with a `# Panics` obligation has no recorded `// PANIC:` justification",
     "root": "ambiguous_markers::unmarked_path_to_shared_sources",
     "root-kind": "concrete",
     "root-span": "src/lib.rs:76:1: 76:41",
@@ -127,7 +127,7 @@ expression: "report[\"findings\"]"
       "crate": "ambiguous_markers",
       "scope": "workspace"
     },
-    "reason": "call to `ambiguous_markers::second_documented_source` with a `# Panics` contract has no recorded `// PANIC:` evidence",
+    "reason": "call to `ambiguous_markers::second_documented_source` with a `# Panics` obligation has no recorded `// PANIC:` justification",
     "root": "ambiguous_markers::unmarked_path_to_shared_sources",
     "root-kind": "concrete",
     "root-span": "src/lib.rs:76:1: 76:41",

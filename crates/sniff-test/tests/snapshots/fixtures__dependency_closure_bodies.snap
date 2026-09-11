@@ -10,7 +10,7 @@ expression: "report[\"findings\"]"
       "crate": "dependency_closure_dep",
       "scope": "dependency"
     },
-    "reason": "dependency crate `dependency_closure_dep` has no recorded `// PANIC:` evidence for panic invocation to `core::panicking::panic_fmt`",
+    "reason": "dependency crate `dependency_closure_dep` has no recorded `// PANIC:` justification for panic invocation to `core::panicking::panic_fmt`",
     "root": "dependency_closure_app::root",
     "root-kind": "concrete",
     "root-span": "src/lib.rs:1:1: 1:45",
@@ -35,7 +35,7 @@ expression: "report[\"findings\"]"
       "crate": "dependency_closure_dep",
       "scope": "dependency"
     },
-    "reason": "dependency crate `dependency_closure_dep` has no recorded `// SAFETY:` evidence for unsafe operation (raw pointer dereference)",
+    "reason": "dependency crate `dependency_closure_dep` has no recorded `// SAFETY:` justification for unsafe operation (raw pointer dereference)",
     "root": "dependency_closure_app::unsafe_body",
     "root-kind": "concrete",
     "root-span": "src/lib.rs:9:1: 9:45",

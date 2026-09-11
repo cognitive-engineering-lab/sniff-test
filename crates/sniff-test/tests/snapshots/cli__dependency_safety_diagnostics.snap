@@ -8,20 +8,92 @@ stdout:
 stderr:
     Checking dependency-safety v0.1.0 ([FIXTURE]/dep)
     Checking dependency-safety-app v0.1.0 ([FIXTURE]/app)
-error: [sniff-test::safety::raw-pointer-dereference-missing-justification] dependency crate `dependency_safety` has no recorded `// SAFETY:` evidence for unsafe operation (raw pointer dereference)
- --> [FIXTURE]/dep/src/lib.rs:2:14
-  |
-2 |     unsafe { *pointer }
-  |              ^^^^^^^^
-  |
-  = note: reachable from `read_dependency` to `unsafe operation (raw pointer dereference)`
-  = help: audit or upgrade dependency crate `dependency_safety`; it has no recorded `// SAFETY:` evidence for this source
-help: guard this local call or record a local `// SAFETY:` containment only after verifying the invariant; treating this boundary as trusted must be a deliberate trust decision backed by review
+error: [sniff-test::safety::raw-pointer-dereference-missing-justification] `read_dependency` can reach unsafe operation (raw pointer dereference) with effect obligation in dependency crate `dependency_safety`.
  --> src/lib.rs:2:5
   |
 2 |     dependency_safety::read_byte(pointer)
   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  |
+ ::: [FIXTURE]/dep/src/lib.rs:2:14
+  |
+2 |     unsafe { *pointer }
+  |              ^^^^^^^^ no recorded `// SAFETY:` justification
+  |
+help: add a local `// SAFETY:` justification after verifying safety obligations
+ --> src/lib.rs:2:5
+  |
+2 |     dependency_safety::read_byte(pointer)
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: document this function's obligations with `/// # Safety` here
+ --> src/lib.rs:1:1
+  |
+1 | pub fn read_dependency(pointer: *const u8) -> u8 {
+  | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: audit dependency crate `dependency_safety` to justify this effect
+ --> [FIXTURE]/dep/src/lib.rs:2:14
+  |
+2 |     unsafe { *pointer }
+  |              ^^^^^^^^
+
+error: [sniff-test::safety::raw-pointer-dereference-missing-justification] `read_dependency_again` can reach unsafe operation (raw pointer dereference) with effect obligation in dependency crate `dependency_safety`.
+ --> src/lib.rs:6:5
+  |
+6 |     dependency_safety::read_byte(pointer)
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  |
+ ::: [FIXTURE]/dep/src/lib.rs:2:14
+  |
+2 |     unsafe { *pointer }
+  |              ^^^^^^^^ no recorded `// SAFETY:` justification
+  |
+help: add a local `// SAFETY:` justification after verifying safety obligations
+ --> src/lib.rs:6:5
+  |
+6 |     dependency_safety::read_byte(pointer)
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: document this function's obligations with `/// # Safety` here
+ --> src/lib.rs:5:1
+  |
+5 | pub fn read_dependency_again(pointer: *const u8) -> u8 {
+  | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: audit dependency crate `dependency_safety` to justify this effect
+ --> [FIXTURE]/dep/src/lib.rs:2:14
+  |
+2 |     unsafe { *pointer }
+  |              ^^^^^^^^
+
+warning: [sniff-test::safety::unsafe-call-missing-justification] `read_documented_dependency` can reach `documented_read` with effect obligation in dependency crate `dependency_safety`.
+  --> src/lib.rs:10:5
+   |
+10 |     dependency_safety::read_documented(pointer)
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   |
+  ::: [FIXTURE]/dep/src/lib.rs:14:14
+   |
+14 |     unsafe { documented_read(pointer) }
+   |              ^^^^^^^^^^^^^^^^^^^^^^^^ no recorded `// SAFETY:` justification
+   |
+help: add a local `// SAFETY:` justification after verifying safety obligations
+  --> src/lib.rs:10:5
+   |
+10 |     dependency_safety::read_documented(pointer)
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: document this function's obligations with `/// # Safety` here
+  --> src/lib.rs:9:1
+   |
+ 9 | pub fn read_documented_dependency(pointer: *const u8) -> u8 {
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: audit dependency crate `dependency_safety` to justify this effect
+  --> [FIXTURE]/dep/src/lib.rs:14:14
+   |
+14 |     unsafe { documented_read(pointer) }
+   |              ^^^^^^^^^^^^^^^^^^^^^^^^
+note: `documented_read` documents `# Safety` here
+  --> [FIXTURE]/dep/src/lib.rs:8:1
+   |
+ 8 | unsafe fn documented_read(pointer: *const u8) -> u8 {
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
 note: set `show-full-stack-trace = true` under `[analysis]` in sniff-test.toml to show every reachability step
-
-error: could not compile `dependency-safety-app` (lib) due to 1 previous error
+warning: `dependency-safety-app` (lib) generated 1 warning
+error: could not compile `dependency-safety-app` (lib) due to 2 previous errors; 1 warning emitted

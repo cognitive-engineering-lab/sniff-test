@@ -11,7 +11,7 @@ expression: "report[\"findings\"]"
       "crate": "unsafe_ops",
       "scope": "workspace"
     },
-    "reason": "unsafe operation (inline assembly) has no recorded `// SAFETY:` evidence",
+    "reason": "unsafe operation (inline assembly) has no recorded `// SAFETY:` justification",
     "root": "unsafe_ops::asm_unjustified",
     "root-kind": "concrete",
     "root-span": "src/lib.rs:32:1: 32:25",
@@ -32,7 +32,7 @@ expression: "report[\"findings\"]"
       "crate": "unsafe_ops",
       "scope": "workspace"
     },
-    "reason": "unsafe operation (raw pointer dereference) has no recorded `// SAFETY:` evidence",
+    "reason": "unsafe operation (raw pointer dereference) has no recorded `// SAFETY:` justification",
     "root": "unsafe_ops::deref_unjustified",
     "root-kind": "concrete",
     "root-span": "src/lib.rs:16:1: 16:49",
@@ -53,7 +53,7 @@ expression: "report[\"findings\"]"
       "crate": "unsafe_ops",
       "scope": "workspace"
     },
-    "reason": "unsafe operation (extern static access) has no recorded `// SAFETY:` evidence",
+    "reason": "unsafe operation (extern static access) has no recorded `// SAFETY:` justification",
     "root": "unsafe_ops::extern_static_unjustified",
     "root-kind": "concrete",
     "root-span": "src/lib.rs:24:1: 24:42",
@@ -74,7 +74,7 @@ expression: "report[\"findings\"]"
       "crate": "unsafe_ops",
       "scope": "workspace"
     },
-    "reason": "unsafe operation (mutable static access) has no recorded `// SAFETY:` evidence",
+    "reason": "unsafe operation (mutable static access) has no recorded `// SAFETY:` justification",
     "root": "unsafe_ops::mutable_static_unjustified",
     "root-kind": "concrete",
     "root-span": "src/lib.rs:20:1: 20:43",
@@ -95,7 +95,7 @@ expression: "report[\"findings\"]"
       "crate": "unsafe_ops",
       "scope": "workspace"
     },
-    "reason": "unsafe operation (union field access) has no recorded `// SAFETY:` evidence",
+    "reason": "unsafe operation (union field access) has no recorded `// SAFETY:` justification",
     "root": "unsafe_ops::union_read_unjustified",
     "root-kind": "concrete",
     "root-span": "src/lib.rs:28:1: 28:50",

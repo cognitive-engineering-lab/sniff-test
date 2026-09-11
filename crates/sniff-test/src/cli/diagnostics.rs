@@ -4,7 +4,7 @@ use std::path::Path;
 
 use crate::config::{LintLevel, ReportRootSet};
 use crate::report_roots::MissingReportRoot;
-use rustc_errors::{Diag, EmissionGuarantee};
+use rustc_errors::{Diag, DiagInner, EmissionGuarantee, Level, MultiSpan, Style};
 use rustc_middle::ty::TyCtxt;
 use rustc_span::{BytePos, Span};
 use toml::Spanned;
@@ -18,7 +18,14 @@ pub(super) fn emit_finding_diagnostic(
     diagnostic: &FindingDiagnostic,
 ) {
     let message = lint_coded_message(lint_code, &diagnostic.message);
-    match (level, diagnostic.span) {
+    let spans = diagnostic.span.map(|primary| {
+        let mut spans = MultiSpan::from_span(primary);
+        if let Some(second) = diagnostic.second_primary_span {
+            spans.push_primary_span(second);
+        }
+        spans
+    });
+    match (level, spans) {
         (LintLevel::Allow, _) => {}
         (LintLevel::Warn, Some(span)) => {
             let mut emitted = tcx.dcx().struct_span_warn(span, message.clone());
@@ -43,8 +50,17 @@ pub(super) fn emit_finding_diagnostic(
     }
 }
 
-pub(super) fn emit_note(tcx: TyCtxt<'_>, message: &str) {
-    tcx.dcx().note(message.to_owned());
+/// `FailureNote` is the one rustc diagnostic level that omits the trailing
+/// blank separator. Supply the ordinary note label and style explicitly so a
+/// footer keeps rustc's green `note:` presentation without an empty line.
+pub(super) fn emit_footer_note(tcx: TyCtxt<'_>, message: &str) {
+    tcx.dcx().emit_diagnostic(DiagInner::new_with_messages(
+        Level::FailureNote,
+        vec![
+            ("note".into(), Style::Level(Level::Note)),
+            ((": ".to_owned() + message).into(), Style::NoStyle),
+        ],
+    ));
 }
 
 fn lint_coded_message(lint_code: &str, message: &str) -> String {
@@ -99,6 +115,7 @@ pub(super) fn empty_report_roots_diagnostic(
         });
     FindingDiagnostic {
         span,
+        second_primary_span: None,
         message,
         messages: vec![DiagnosticMessage::Help(String::from(
             "update `[analysis].report-roots` to include functions in the current crate",
@@ -121,6 +138,7 @@ pub(super) fn missing_report_root_diagnostic(
     );
     FindingDiagnostic {
         span,
+        second_primary_span: None,
         message,
         messages: vec![
             DiagnosticMessage::Note(String::from("configured under `[analysis].report-roots`")),

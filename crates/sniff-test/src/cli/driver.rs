@@ -18,7 +18,7 @@ use rustc_session::config::CrateType;
 use rustc_span::symbol::Symbol;
 
 use super::args::{CrateOutputScope, MessageFormat, SniffTestArgs};
-use super::diagnostics::{emit_finding_diagnostic, emit_note};
+use super::diagnostics::{emit_finding_diagnostic, emit_footer_note};
 use super::findings::{
     FULL_STACK_TRACE_HINT, Finding, aggregate_human_findings, collect_report_root_findings,
     resolve_findings, take_full_stack_trace_hint,
@@ -150,7 +150,7 @@ pub(crate) fn analyze_crate(
             );
         }
         if show_full_stack_trace_hint {
-            emit_note(tcx, FULL_STACK_TRACE_HINT);
+            emit_footer_note(tcx, FULL_STACK_TRACE_HINT);
         }
     }
     emit_report(args, &report);

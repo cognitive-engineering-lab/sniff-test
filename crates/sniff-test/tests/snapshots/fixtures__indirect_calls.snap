@@ -10,7 +10,7 @@ expression: "report[\"findings\"]"
       "crate": "indirect_calls",
       "scope": "workspace"
     },
-    "reason": "call to `indirect_calls::Risky::documented` with a `# Panics` contract has no recorded `// PANIC:` evidence",
+    "reason": "call to `indirect_calls::Risky::documented` with a `# Panics` obligation has no recorded `// PANIC:` justification",
     "root": "indirect_calls::call_documented",
     "root-kind": "generic",
     "root-span": "src/lib.rs:10:1: 10:56",

@@ -15,10 +15,9 @@ error: [sniff-test::analysis::ambiguous-safety-requirement] `read_duplicate` has
 8 | /// - valid_ptr: pointer must reference initialized memory.
   | ----------------------------------------------------------- `valid_ptr: pointer must reference initialized memory.` normalizes to `valid ptr`
   |
+  = help: give each requirement a unique name, or set `ambiguous-safety-requirement = "allow"` under `[analysis.lints]`
   = note: `read_duplicate` has multiple `# Safety` requirements that normalize to `valid ptr`
   = note: reachable from `duplicate_safety_marker` to `read_duplicate`
-  = help: give each requirement a unique name, or set `ambiguous-safety-requirement = "allow"` under `[analysis.lints]`
 
 note: set `show-full-stack-trace = true` under `[analysis]` in sniff-test.toml to show every reachability step
-
 error: could not compile `ambiguous-safety` (lib) due to 1 previous error

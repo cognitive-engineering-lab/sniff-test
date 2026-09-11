@@ -11,7 +11,7 @@ expression: "report[\"findings\"]"
       "crate": "macro_marker_instances",
       "scope": "workspace"
     },
-    "reason": "unsafe call to `macro_marker_instances::perform` has no recorded `// SAFETY:` evidence",
+    "reason": "unsafe call to `macro_marker_instances::perform` has no recorded `// SAFETY:` justification",
     "root": "macro_marker_instances::direct_call_requires_justification",
     "root-kind": "concrete",
     "root-span": "src/lib.rs:15:1: 15:44",

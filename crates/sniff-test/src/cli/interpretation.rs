@@ -180,6 +180,7 @@ fn adapt_finding(
     };
     let mut diagnostic = FindingDiagnostic {
         span: diagnostic_span,
+        second_primary_span: None,
         message,
         messages: Vec::new(),
     };
@@ -188,7 +189,7 @@ fn adapt_finding(
             "the recorded source location was unavailable: {error}"
         )));
     }
-    decorate_finding(
+    let justification_marker = decorate_finding(
         sources,
         &mut diagnostic,
         root,
@@ -198,6 +199,15 @@ fn adapt_finding(
         effect_span,
         show_full_stack_trace,
     );
+    let effect_display = match &finding.kind {
+        InterpretedFindingKind::UnsafeOperation { kind } => {
+            Some(format!("unsafe operation ({})", kind.label()))
+        }
+        _ => None,
+    };
+    let local_boundary_span = (owner.scope == OwnerScope::Dependency)
+        .then(|| report_root_containment_span(sources, &finding.trace))
+        .flatten();
 
     Finding {
         root: Some(root.path.clone()),
@@ -213,6 +223,9 @@ fn adapt_finding(
         missing_requirements,
         requirements,
         effect_span,
+        local_boundary_span,
+        justification_marker,
+        effect_display,
         ..Finding::new(kind, reason, diagnostic)
     }
     .with_source_order(
@@ -300,7 +313,7 @@ fn finding_description(
             let target = target.unwrap_or("documented panic boundary");
             source_marker_description(
                 FindingKind::DocumentedPanic,
-                &format!("call to `{target}` with a `# Panics` contract"),
+                &format!("call to `{target}` with a `# Panics` obligation"),
                 MarkerDomain::Panic,
                 owner,
                 source_evidence,
@@ -340,11 +353,11 @@ fn finding_description(
                 ),
                 (InterpretedSafetyCallKind::Obligation, false) => (
                     FindingKind::SafetyObligationMissingJustification,
-                    format!("call to `{target}` with a `# Safety` contract"),
+                    format!("call to `{target}` with a `# Safety` obligation"),
                 ),
                 (InterpretedSafetyCallKind::Obligation, true) => (
                     FindingKind::SafetyObligationMissingRequirements,
-                    format!("call to `{target}` with a `# Safety` contract"),
+                    format!("call to `{target}` with a `# Safety` obligation"),
                 ),
             };
             source_marker_description(
@@ -443,6 +456,49 @@ impl MarkerDomain {
             Self::Safety => "safety obligation",
         }
     }
+
+    const fn noun(self) -> &'static str {
+        match self {
+            Self::Panic => "panic",
+            Self::Safety => "safety",
+        }
+    }
+
+    const fn config_table(self) -> &'static str {
+        match self {
+            Self::Panic => "panics",
+            Self::Safety => "safety",
+        }
+    }
+
+    const fn ambiguous_effects(self) -> &'static str {
+        match self {
+            Self::Panic => "possible panics",
+            Self::Safety => "safety obligations",
+        }
+    }
+
+    fn ambiguous_marker_help(self) -> String {
+        match self {
+            Self::Panic => String::from(
+                "move the marker directly above one obligation, split it into separate markers, or set `ambiguous-panic-marker = \"allow\"` under `[analysis.lints]`",
+            ),
+            Self::Safety => String::from(
+                "give each unsafe block or operation its own marker, or set `ambiguous-safety-marker = \"allow\"` under `[analysis.lints]`",
+            ),
+        }
+    }
+
+    fn root_documentation_help(self) -> String {
+        match self {
+            Self::Panic => {
+                String::from("document when this function may panic with `/// # Panics` here")
+            }
+            Self::Safety => {
+                String::from("document this function's safety obligations with `/// # Safety` here")
+            }
+        }
+    }
 }
 
 fn source_marker_description(
@@ -473,32 +529,32 @@ fn source_evidence_reason(
     match evidence {
         SourceEvidence::VerifiedAbsent => match owner.scope {
             OwnerScope::Workspace => {
-                format!("{subject} has no recorded `// {marker}:` evidence")
+                format!("{subject} has no recorded `// {marker}:` justification")
             }
             OwnerScope::Dependency => format!(
-                "dependency crate {} has no recorded `// {marker}:` evidence for {subject}",
+                "dependency crate {} has no recorded `// {marker}:` justification for {subject}",
                 owner_crate_label(owner)
             ),
             OwnerScope::Toolchain => format!(
-                "toolchain crate {} has no recorded `// {marker}:` evidence for {subject}",
+                "toolchain crate {} has no recorded `// {marker}:` justification for {subject}",
                 owner_crate_label(owner)
             ),
             OwnerScope::Unknown => format!(
-                "source owner {} has no recorded `// {marker}:` evidence for {subject}",
+                "source owner {} has no recorded `// {marker}:` justification for {subject}",
                 owner_crate_label(owner)
             ),
         },
         SourceEvidence::Unverified { reason } => format!(
-            "could not verify `// {marker}:` evidence for {subject} in {}: {}",
+            "could not verify `// {marker}:` justification for {subject} in {}: {}",
             owner_location(owner),
             unverified_reason(reason)
         ),
         SourceEvidence::Present if has_remaining_requirements => format!(
-            "recorded `// {marker}:` evidence for {subject} does not satisfy the remaining `# {}` requirements",
+            "recorded `// {marker}:` justification for {subject} does not satisfy the remaining `# {}` requirements",
             domain.heading()
         ),
         SourceEvidence::Present => {
-            format!("recorded `// {marker}:` evidence for {subject} is unusable")
+            format!("recorded `// {marker}:` justification for {subject} is unusable")
         }
     }
 }
@@ -512,52 +568,52 @@ fn source_evidence_help(
     let marker = domain.marker();
     match (owner.scope, evidence) {
         (OwnerScope::Workspace, SourceEvidence::VerifiedAbsent) => format!(
-            "add `// {marker}:` directly above this source after establishing the invariant that contains this {}",
-            domain.effect()
+            "add a local `// {marker}:` justification after verifying {} obligations",
+            domain.noun()
         ),
         (OwnerScope::Workspace, SourceEvidence::Unverified { .. }) => format!(
-            "restore usable source evidence, then rerun analysis before deciding how to contain this {}",
+            "restore usable source justification, then rerun analysis before deciding how to contain this {}",
             domain.effect()
         ),
         (OwnerScope::Workspace, SourceEvidence::Present) if has_remaining_requirements => format!(
-            "update the recorded `// {marker}:` evidence to address each remaining `# {}` requirement",
+            "update the recorded `// {marker}:` justification to address each remaining `# {}` requirement",
             domain.heading()
         ),
         (OwnerScope::Workspace, SourceEvidence::Present) => format!(
-            "replace the unusable recorded `// {marker}:` evidence with a concrete invariant"
+            "replace the unusable recorded `// {marker}:` justification with a concrete invariant"
         ),
         (OwnerScope::Dependency, SourceEvidence::VerifiedAbsent) => format!(
-            "audit or upgrade dependency crate {}; it has no recorded `// {marker}:` evidence for this source",
+            "audit dependency crate {}; it has no recorded `// {marker}:` justification for this source",
             owner_crate_label(owner)
         ),
         (OwnerScope::Dependency, SourceEvidence::Unverified { .. }) => format!(
-            "audit or upgrade dependency crate {}; its `// {marker}:` evidence could not be verified",
+            "audit dependency crate {}; its `// {marker}:` justification could not be verified",
             owner_crate_label(owner)
         ),
         (OwnerScope::Dependency, SourceEvidence::Present) => format!(
-            "audit or upgrade dependency crate {}; its recorded `// {marker}:` evidence does not discharge this finding",
+            "audit dependency crate {}; its recorded `// {marker}:` justification does not discharge this finding",
             owner_crate_label(owner)
         ),
         (OwnerScope::Toolchain, SourceEvidence::VerifiedAbsent) => format!(
-            "treat this as toolchain audit and coverage information for crate {}; no local source edit can add its `// {marker}:` evidence",
+            "treat this as toolchain audit and coverage information for crate {}; no local source edit can add its `// {marker}:` justification",
             owner_crate_label(owner)
         ),
         (OwnerScope::Toolchain, SourceEvidence::Unverified { .. }) => format!(
-            "treat this as toolchain audit and coverage information for crate {}; its `// {marker}:` evidence could not be verified",
+            "treat this as toolchain audit and coverage information for crate {}; its `// {marker}:` justification could not be verified",
             owner_crate_label(owner)
         ),
         (OwnerScope::Toolchain, SourceEvidence::Present) => format!(
-            "review toolchain audit and coverage for crate {}; its recorded `// {marker}:` evidence does not discharge this finding",
+            "review toolchain audit and coverage for crate {}; its recorded `// {marker}:` justification does not discharge this finding",
             owner_crate_label(owner)
         ),
         (OwnerScope::Unknown, SourceEvidence::VerifiedAbsent) => format!(
-            "inspect the source owner before deciding where to record `// {marker}:` evidence"
+            "inspect the source owner before deciding where to record `// {marker}:` justification"
         ),
         (OwnerScope::Unknown, SourceEvidence::Unverified { .. }) => format!(
-            "inspect the source owner and restore verifiable `// {marker}:` evidence before choosing a remediation"
+            "inspect the source owner and restore verifiable `// {marker}:` justification before choosing a remediation"
         ),
         (OwnerScope::Unknown, SourceEvidence::Present) => format!(
-            "inspect the source owner's recorded `// {marker}:` evidence; it does not discharge this finding"
+            "inspect the source owner's recorded `// {marker}:` justification; it does not discharge this finding"
         ),
     }
 }
@@ -567,19 +623,18 @@ fn external_containment_help(
     evidence: SourceEvidence,
     has_partial_path_evidence: bool,
 ) -> String {
-    let action = if has_partial_path_evidence {
+    if has_partial_path_evidence {
         format!(
             "this trace already discharges some `# {}` requirements; at this local call, record only the remaining requirements after verifying them",
             domain.heading()
         )
     } else {
         match evidence {
-            SourceEvidence::VerifiedAbsent => format!(
-                "guard this local call or record a local `// {}:` containment only after verifying the invariant",
-                domain.marker()
-            ),
+            SourceEvidence::VerifiedAbsent => {
+                format!("justify this local call with `// {}:`", domain.marker())
+            }
             SourceEvidence::Unverified { .. } => format!(
-                "inspect or guard this local call while the external {} evidence remains unverified",
+                "inspect or guard this local call while the external {} justification remains unverified",
                 domain.marker()
             ),
             SourceEvidence::Present => format!(
@@ -587,10 +642,7 @@ fn external_containment_help(
                 domain.marker()
             ),
         }
-    };
-    format!(
-        "{action}; treating this boundary as trusted must be a deliberate trust decision backed by review"
-    )
+    }
 }
 
 fn owner_crate_label(owner: &FindingOwner) -> String {
@@ -624,6 +676,177 @@ fn diagnostic_primary_span(root_span: Option<Span>, effect_span: Option<Span>) -
     effect_span.or(root_span)
 }
 
+struct EffectDiagnosticWriter<'a, 'tcx, 'analysis> {
+    sources: &'a SourceResolver<'tcx, 'analysis>,
+    diagnostic: &'a mut FindingDiagnostic,
+    root: &'a InterpretationRoot,
+    finding: &'a InterpretedFinding,
+    owner: &'a FindingOwner,
+    source_evidence: Option<SourceEvidence>,
+    effect_span: Option<Span>,
+    show_full_stack_trace: bool,
+    justification_marker: Option<String>,
+}
+
+impl EffectDiagnosticWriter<'_, '_, '_> {
+    fn source(&mut self, domain: MarkerDomain, contract: bool) {
+        self.justification_marker = Some(domain.marker().to_owned());
+        let dependency_effect = self
+            .source_evidence
+            .is_some_and(|evidence| is_unjustified_dependency_effect(self.owner, evidence));
+        if dependency_effect {
+            add_external_containment_guidance(
+                self.sources,
+                self.diagnostic,
+                self.finding,
+                self.owner,
+                self.source_evidence,
+                domain,
+            );
+        }
+        if !dependency_effect {
+            self.source_help(domain);
+        }
+        if contract {
+            add_contract_note(
+                self.sources,
+                self.diagnostic,
+                self.finding,
+                domain.heading(),
+            );
+        }
+        add_missing_requirement_notes(
+            self.diagnostic,
+            &self.finding.missing_requirements,
+            domain.noun(),
+            self.source_evidence,
+        );
+        add_finding_trace_notes(
+            self.sources,
+            self.diagnostic,
+            self.finding,
+            self.show_full_stack_trace,
+        );
+        if !dependency_effect {
+            add_external_containment_guidance(
+                self.sources,
+                self.diagnostic,
+                self.finding,
+                self.owner,
+                self.source_evidence,
+                domain,
+            );
+        }
+        self.document_root(domain);
+        if dependency_effect {
+            self.source_help(domain);
+        }
+    }
+
+    fn source_help(&mut self, domain: MarkerDomain) {
+        add_source_evidence_help(
+            self.diagnostic,
+            self.finding,
+            self.owner,
+            self.source_evidence,
+            domain,
+            self.effect_span,
+        );
+    }
+
+    fn unresolved(&mut self, domain: MarkerDomain, site: UnresolvedCallSite) {
+        let target = self
+            .finding
+            .target
+            .as_ref()
+            .filter(|target| target.function.is_some())
+            .map(|target| target.path.as_str());
+        add_effect_note(
+            self.diagnostic,
+            self.effect_span,
+            format!(
+                "{} coverage is incomplete here: {}",
+                domain.noun(),
+                unresolved_target_summary(site, target)
+            ),
+        );
+        self.diagnostic
+            .messages
+            .push(DiagnosticMessage::Note(unresolved_coverage_note(
+                site, target,
+            )));
+        add_finding_trace_notes(
+            self.sources,
+            self.diagnostic,
+            self.finding,
+            self.show_full_stack_trace,
+        );
+        self.diagnostic
+            .messages
+            .push(DiagnosticMessage::Help(format!(
+                "{}; otherwise configure `[{}.lints].unresolved-call-target` if the uncertainty is acceptable",
+                unresolved_action(domain, site.mechanism),
+                domain.config_table()
+            )));
+    }
+
+    fn ambiguous_requirement(&mut self, domain: MarkerDomain, normalized_name: &str) {
+        add_ambiguous_requirement_notes(
+            self.sources,
+            self.diagnostic,
+            self.finding,
+            domain.heading(),
+            normalized_name,
+        );
+        add_finding_trace_notes(
+            self.sources,
+            self.diagnostic,
+            self.finding,
+            self.show_full_stack_trace,
+        );
+        self.diagnostic
+            .messages
+            .push(DiagnosticMessage::Help(format!(
+                "give each requirement a unique name, or set `ambiguous-{}-requirement = \"allow\"` under `[analysis.lints]`",
+                domain.noun()
+            )));
+    }
+
+    fn ambiguous_marker(&mut self, domain: MarkerDomain, effect_count: usize) {
+        self.diagnostic
+            .messages
+            .push(DiagnosticMessage::Note(format!(
+                "this marker applies to {effect_count} {}",
+                domain.ambiguous_effects()
+            )));
+        add_finding_trace_notes(
+            self.sources,
+            self.diagnostic,
+            self.finding,
+            self.show_full_stack_trace,
+        );
+        self.diagnostic
+            .messages
+            .push(DiagnosticMessage::Help(domain.ambiguous_marker_help()));
+    }
+
+    fn document_root(&mut self, domain: MarkerDomain) {
+        if let Some(span) = self.sources.function_span(self.root.function) {
+            let help = if self.owner.scope == OwnerScope::Dependency {
+                format!(
+                    "document this function's obligations with `/// # {}` here",
+                    domain.heading()
+                )
+            } else {
+                domain.root_documentation_help()
+            };
+            self.diagnostic
+                .messages
+                .push(DiagnosticMessage::SpanHelp(span, help));
+        }
+    }
+}
+
 #[allow(
     clippy::too_many_arguments,
     clippy::too_many_lines,
@@ -638,176 +861,58 @@ fn decorate_finding(
     source_evidence: Option<SourceEvidence>,
     effect_span: Option<Span>,
     show_full_stack_trace: bool,
-) {
+) -> Option<String> {
+    let mut writer = EffectDiagnosticWriter {
+        sources,
+        diagnostic,
+        root,
+        finding,
+        owner,
+        source_evidence,
+        effect_span,
+        show_full_stack_trace,
+        justification_marker: None,
+    };
     match &finding.kind {
         InterpretedFindingKind::CompilerAssert { .. } | InterpretedFindingKind::PanicSink => {
-            add_finding_trace_notes(sources, diagnostic, finding, show_full_stack_trace);
-            add_source_evidence_guidance(
-                sources,
-                diagnostic,
-                finding,
-                owner,
-                source_evidence,
-                MarkerDomain::Panic,
-            );
+            writer.source(MarkerDomain::Panic, false);
         }
         InterpretedFindingKind::DocumentedPanic => {
-            add_contract_note(sources, diagnostic, finding, "Panics");
-            add_missing_requirement_notes(
-                diagnostic,
-                &finding.missing_requirements,
-                "panic",
-                source_evidence,
-            );
-            add_finding_trace_notes(sources, diagnostic, finding, show_full_stack_trace);
-            add_source_evidence_guidance(
-                sources,
-                diagnostic,
-                finding,
-                owner,
-                source_evidence,
-                MarkerDomain::Panic,
-            );
-            if let Some(span) = sources.function_span(root.function) {
-                diagnostic.messages.push(DiagnosticMessage::SpanHelp(
-                    span,
-                    "document when this function may panic with `/// # Panics` here".into(),
-                ));
-            }
+            writer.source(MarkerDomain::Panic, true);
         }
         InterpretedFindingKind::UnresolvedPanicCallTarget { site } => {
-            let target = finding
-                .target
-                .as_ref()
-                .filter(|target| target.function.is_some())
-                .map(|target| target.path.as_str());
-            add_effect_note(
-                diagnostic,
-                effect_span,
-                format!(
-                    "panic coverage is incomplete here: {}",
-                    unresolved_target_summary(*site, target)
-                ),
-            );
-            diagnostic
-                .messages
-                .push(DiagnosticMessage::Note(unresolved_coverage_note(
-                    *site, target,
-                )));
-            add_finding_trace_notes(sources, diagnostic, finding, show_full_stack_trace);
-            diagnostic.messages.push(DiagnosticMessage::Help(format!(
-                "{}; otherwise configure `[panics.lints].unresolved-call-target` if the uncertainty is acceptable",
-                unresolved_action(MarkerDomain::Panic, site.mechanism)
-            )));
+            writer.unresolved(MarkerDomain::Panic, *site);
         }
         InterpretedFindingKind::MissingSafetyDocs => {
-            diagnostic.messages.push(DiagnosticMessage::Help(
+            writer.diagnostic.messages.push(DiagnosticMessage::Help(
                 "document the caller obligations under a `# Safety` section".into(),
             ));
         }
         InterpretedFindingKind::UnresolvedSafetyCallTarget { site } => {
-            let target = finding
-                .target
-                .as_ref()
-                .filter(|target| target.function.is_some())
-                .map(|target| target.path.as_str());
-            add_effect_note(
-                diagnostic,
-                effect_span,
-                format!(
-                    "safety coverage is incomplete here: {}",
-                    unresolved_target_summary(*site, target)
-                ),
-            );
-            diagnostic
-                .messages
-                .push(DiagnosticMessage::Note(unresolved_coverage_note(
-                    *site, target,
-                )));
-            add_finding_trace_notes(sources, diagnostic, finding, show_full_stack_trace);
-            diagnostic.messages.push(DiagnosticMessage::Help(format!(
-                "{}; otherwise configure `[safety.lints].unresolved-call-target` if the uncertainty is acceptable",
-                unresolved_action(MarkerDomain::Safety, site.mechanism)
-            )));
+            writer.unresolved(MarkerDomain::Safety, *site);
         }
-        InterpretedFindingKind::SafetyCall { kind, .. } => {
-            if matches!(kind, InterpretedSafetyCallKind::Obligation)
-                || !finding.requirements.is_empty()
-            {
-                add_contract_note(sources, diagnostic, finding, "Safety");
-            }
-            add_missing_requirement_notes(
-                diagnostic,
-                &finding.missing_requirements,
-                "safety",
-                source_evidence,
-            );
-            add_finding_trace_notes(sources, diagnostic, finding, show_full_stack_trace);
-            add_source_evidence_guidance(
-                sources,
-                diagnostic,
-                finding,
-                owner,
-                source_evidence,
-                MarkerDomain::Safety,
-            );
+        InterpretedFindingKind::SafetyCall {
+            documents_contract, ..
+        } => {
+            writer.source(MarkerDomain::Safety, *documents_contract);
         }
         InterpretedFindingKind::UnsafeOperation { .. } => {
-            add_finding_trace_notes(sources, diagnostic, finding, show_full_stack_trace);
-            add_source_evidence_guidance(
-                sources,
-                diagnostic,
-                finding,
-                owner,
-                source_evidence,
-                MarkerDomain::Safety,
-            );
+            writer.source(MarkerDomain::Safety, false);
         }
         InterpretedFindingKind::AmbiguousPanicRequirement { normalized_name } => {
-            add_ambiguous_requirement_notes(
-                sources,
-                diagnostic,
-                finding,
-                "Panics",
-                normalized_name,
-            );
-            add_finding_trace_notes(sources, diagnostic, finding, show_full_stack_trace);
-            diagnostic.messages.push(DiagnosticMessage::Help(
-                "give each requirement a unique name, or set `ambiguous-panic-requirement = \"allow\"` under `[analysis.lints]`".into(),
-            ));
+            writer.ambiguous_requirement(MarkerDomain::Panic, normalized_name);
         }
         InterpretedFindingKind::AmbiguousSafetyRequirement { normalized_name } => {
-            add_ambiguous_requirement_notes(
-                sources,
-                diagnostic,
-                finding,
-                "Safety",
-                normalized_name,
-            );
-            add_finding_trace_notes(sources, diagnostic, finding, show_full_stack_trace);
-            diagnostic.messages.push(DiagnosticMessage::Help(
-                "give each requirement a unique name, or set `ambiguous-safety-requirement = \"allow\"` under `[analysis.lints]`".into(),
-            ));
+            writer.ambiguous_requirement(MarkerDomain::Safety, normalized_name);
         }
         InterpretedFindingKind::AmbiguousPanicMarker { effect_count } => {
-            diagnostic.messages.push(DiagnosticMessage::Note(format!(
-                "this marker applies to {effect_count} possible panics"
-            )));
-            add_finding_trace_notes(sources, diagnostic, finding, show_full_stack_trace);
-            diagnostic.messages.push(DiagnosticMessage::Help(
-                "move the marker directly above one obligation, split it into separate markers, or set `ambiguous-panic-marker = \"allow\"` under `[analysis.lints]`".into(),
-            ));
+            writer.ambiguous_marker(MarkerDomain::Panic, *effect_count);
         }
         InterpretedFindingKind::AmbiguousSafetyMarker { effect_count } => {
-            diagnostic.messages.push(DiagnosticMessage::Note(format!(
-                "this marker applies to {effect_count} safety obligations"
-            )));
-            add_finding_trace_notes(sources, diagnostic, finding, show_full_stack_trace);
-            diagnostic.messages.push(DiagnosticMessage::Help(
-                "give each unsafe block or operation its own marker, or set `ambiguous-safety-marker = \"allow\"` under `[analysis.lints]`".into(),
-            ));
+            writer.ambiguous_marker(MarkerDomain::Safety, *effect_count);
         }
     }
+    writer.justification_marker
 }
 
 fn add_effect_note(diagnostic: &mut FindingDiagnostic, effect_span: Option<Span>, message: String) {
@@ -820,7 +925,42 @@ fn add_effect_note(diagnostic: &mut FindingDiagnostic, effect_span: Option<Span>
     }
 }
 
-fn add_source_evidence_guidance(
+fn add_source_evidence_help(
+    diagnostic: &mut FindingDiagnostic,
+    finding: &InterpretedFinding,
+    owner: &FindingOwner,
+    evidence: Option<SourceEvidence>,
+    domain: MarkerDomain,
+    effect_span: Option<Span>,
+) {
+    let Some(evidence) = evidence else {
+        return;
+    };
+    if is_unjustified_dependency_effect(owner, evidence) {
+        let help = format!("audit dependency crate {} to justify this effect", owner_crate_label(owner),);
+        diagnostic.messages.push(match effect_span {
+            Some(span) => DiagnosticMessage::SpanHelp(span, help),
+            None => DiagnosticMessage::Help(help),
+        });
+    } else {
+        let source_help = source_evidence_help(
+            domain,
+            owner,
+            evidence,
+            !finding.missing_requirements.is_empty(),
+        );
+        diagnostic
+            .messages
+            .push(match (owner.scope, evidence, effect_span) {
+                (OwnerScope::Workspace, SourceEvidence::VerifiedAbsent, Some(span)) => {
+                    DiagnosticMessage::SpanHelp(span, source_help)
+                }
+                _ => DiagnosticMessage::Help(source_help),
+            });
+    }
+}
+
+fn add_external_containment_guidance(
     sources: &SourceResolver<'_, '_>,
     diagnostic: &mut FindingDiagnostic,
     finding: &InterpretedFinding,
@@ -831,26 +971,22 @@ fn add_source_evidence_guidance(
     let Some(evidence) = evidence else {
         return;
     };
-    let source_help = source_evidence_help(
-        domain,
-        owner,
-        evidence,
-        !finding.missing_requirements.is_empty(),
-    );
     if owner.scope == OwnerScope::Workspace {
-        diagnostic
-            .messages
-            .push(DiagnosticMessage::Help(source_help));
         return;
     }
-
-    diagnostic
-        .messages
-        .push(DiagnosticMessage::Help(source_help));
     let has_partial_path_evidence = !finding.requirements.is_empty()
         && finding.missing_requirements.len() < finding.requirements.len();
-    let containment_help = external_containment_help(domain, evidence, has_partial_path_evidence);
-    if let Some(span) = nearest_workspace_containment_span(sources, &finding.trace) {
+    let containment_help =
+        if is_unjustified_dependency_effect(owner, evidence) && !has_partial_path_evidence {
+            format!(
+                "add a local `// {}:` justification after verifying {} obligations",
+                domain.marker(),
+                domain.noun()
+            )
+        } else {
+            external_containment_help(domain, evidence, has_partial_path_evidence)
+        };
+    if let Some(span) = report_root_containment_span(sources, &finding.trace) {
         diagnostic
             .messages
             .push(DiagnosticMessage::SpanHelp(span, containment_help));
@@ -861,11 +997,15 @@ fn add_source_evidence_guidance(
     }
 }
 
-fn nearest_workspace_containment_span(
+fn is_unjustified_dependency_effect(owner: &FindingOwner, evidence: SourceEvidence) -> bool {
+    owner.scope == OwnerScope::Dependency && evidence == SourceEvidence::VerifiedAbsent
+}
+
+fn report_root_containment_span(
     sources: &SourceResolver<'_, '_>,
     trace: &InterpretedTrace,
 ) -> Option<Span> {
-    trace.steps.iter().rev().find_map(|step| {
+    trace.steps.iter().find_map(|step| {
         (step.marker_call.is_some() && sources.owner(step.caller).scope == OwnerScope::Workspace)
             .then(|| sources.marker_call_span(step))
             .flatten()
@@ -885,6 +1025,7 @@ fn add_contract_note(
     if let Some(span) = target
         .function
         .and_then(|function| sources.function_span(function))
+        .or_else(|| sources.resolve(finding.contract_source_range.as_ref()).0)
         .or_else(|| {
             finding
                 .requirements
@@ -1041,6 +1182,7 @@ fn adapt_incomplete(
         } else {
             root_span.or(effect_span)
         },
+        second_primary_span: None,
         message,
         messages: Vec::new(),
     };
@@ -1780,6 +1922,7 @@ mod tests {
 
         let mut diagnostic = FindingDiagnostic {
             span: None,
+            second_primary_span: None,
             message: String::new(),
             messages: Vec::new(),
         };
@@ -1803,7 +1946,7 @@ mod tests {
     }
 
     #[test]
-    fn dependency_absence_recommends_audit_and_local_deliberate_containment() {
+    fn dependency_absence_recommends_audit_and_local_justification() {
         let owner = FindingOwner {
             scope: OwnerScope::Dependency,
             crate_name: Some(String::from("dependency-panic")),
@@ -1825,10 +1968,9 @@ mod tests {
             external_containment_help(MarkerDomain::Panic, SourceEvidence::VerifiedAbsent, false);
 
         assert!(reason.contains("dependency crate `dependency-panic`"));
-        assert!(reason.contains("no recorded `// PANIC:` evidence"));
-        assert!(help.contains("audit or upgrade"));
-        assert!(containment.contains("local call"));
-        assert!(containment.contains("deliberate trust decision"));
+        assert!(reason.contains("no recorded `// PANIC:` justification"));
+        assert!(help.contains("audit"));
+        assert_eq!(containment, "justify this local call with `// PANIC:`");
     }
 
     #[test]
@@ -1839,7 +1981,6 @@ mod tests {
         assert!(containment.contains("already discharges some `# Safety` requirements"));
         assert!(containment.contains("record only the remaining requirements"));
         assert!(!containment.contains("record a local `// SAFETY:` containment"));
-        assert!(containment.contains("deliberate trust decision"));
     }
 
     #[test]
@@ -1878,6 +2019,7 @@ mod tests {
             function_path: String::from("app::root"),
             target: None,
             source_range: None,
+            contract_source_range: None,
             marker_evidence: None,
             trace: InterpretedTrace { steps: Vec::new() },
             missing_requirements: Vec::new(),
@@ -1899,7 +2041,7 @@ mod tests {
         assert_eq!(kind, FindingKind::DocumentedPanic);
         assert_eq!(
             message,
-            "call to `core::slice::first` with a `# Panics` contract has no recorded `// PANIC:` evidence"
+            "call to `core::slice::first` with a `# Panics` obligation has no recorded `// PANIC:` justification"
         );
     }
 

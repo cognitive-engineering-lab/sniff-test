@@ -13,10 +13,48 @@ use common::{
 struct Case {
     denied: bool,
     app_crate: bool,
+    color: &'static str,
     working_dir: Option<&'static str>,
     config_append: &'static str,
     args: &'static [&'static str],
     rustflags: Option<&'static str>,
+}
+
+#[test]
+fn full_stack_trace_footer_uses_rustc_note_color_without_a_trailing_blank_line() {
+    const HINT: &str = "set `show-full-stack-trace = true` under `[analysis]` in sniff-test.toml to show every reachability step";
+
+    let repo = repo_root();
+    let binary = PathBuf::from(env!("CARGO_BIN_EXE_cargo-sniff-test"));
+    let case = Case::new().in_app().color("always");
+    let (output, _, _temp) = run_case(
+        &repo,
+        &binary,
+        "full_stack_trace_footer_color",
+        "dependency_obligation",
+        &case,
+    );
+
+    assert_eq!(output.status.code(), Some(0), "stderr:\n{}", output.stderr);
+    let hint_line = output
+        .stderr
+        .lines()
+        .find(|line| line.contains(HINT))
+        .expect("full-stack-trace hint should be emitted");
+    assert!(
+        hint_line.contains("\u{1b}[92mnote\u{1b}[0m"),
+        "the note label should use rustc's green diagnostic style:\n{}",
+        output.stderr,
+    );
+    let (_, after_hint) = output
+        .stderr
+        .split_once(HINT)
+        .expect("full-stack-trace hint should be emitted");
+    assert!(
+        after_hint.starts_with('\n') && !after_hint.starts_with("\n\n"),
+        "the Cargo warning footer should follow without a blank line:\n{}",
+        output.stderr,
+    );
 }
 
 macro_rules! cli_cases {
@@ -38,8 +76,10 @@ cli_cases! {
             .config_append("\n[panics.lints]\npanic-invocation = \"allow\"\n");
     }
     "source_aggregation" => {
-        source_aggregation_collapses_only_human_diagnostics => Case::new()
+        source_aggregation_emits_one_diagnostic_per_root => Case::new()
             .denied();
+        source_aggregation_emits_one_warning_per_root => Case::new()
+            .config_append("\n[panics.lints]\npanic-invocation = \"warn\"\n");
     }
     "safe_markers" => {
         compact_stack_hint => Case::new().denied();
@@ -1411,15 +1451,13 @@ fn cached_dependency_source_is_verified_before_rendering_a_snippet() {
         .lines()
         .filter(|line| line.trim_start().starts_with("-->"))
         .collect::<Vec<_>>();
-    assert_eq!(
-        span_locations.len(),
-        1,
-        "only the verified workspace root may be spanned when the cached effect source is unavailable:\n{unavailable_stderr}"
-    );
     let workspace_source_path = workspace_source.display().to_string();
     assert!(
-        span_locations[0].contains(&workspace_source_path),
-        "the remaining span must identify the verified workspace root:\n{unavailable_stderr}"
+        !span_locations.is_empty()
+            && span_locations
+                .iter()
+                .all(|location| location.contains(&workspace_source_path)),
+        "only verified workspace locations may be spanned when the cached effect source is unavailable:\n{unavailable_stderr}"
     );
 }
 
@@ -2047,6 +2085,7 @@ impl Case {
         Self {
             denied: false,
             app_crate: false,
+            color: "never",
             working_dir: None,
             config_append: "",
             args: &[],
@@ -2061,6 +2100,11 @@ impl Case {
 
     fn in_app(mut self) -> Self {
         self.app_crate = true;
+        self
+    }
+
+    fn color(mut self, color: &'static str) -> Self {
+        self.color = color;
         self
     }
 
@@ -2192,7 +2236,7 @@ fn run_cargo_sniff_test(
         command.env("RUSTFLAGS", rustflags);
     }
     let output = command
-        .args(["--color", "never"])
+        .args(["--color", case.color])
         .args(case.args)
         .current_dir(working_dir)
         .output()

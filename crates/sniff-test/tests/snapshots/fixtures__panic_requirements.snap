@@ -14,7 +14,7 @@ expression: "report[\"findings\"]"
       "crate": "panic_requirements",
       "scope": "workspace"
     },
-    "reason": "recorded `// PANIC:` evidence for call to `panic_requirements::documented_ratio` with a `# Panics` contract does not satisfy the remaining `# Panics` requirements",
+    "reason": "recorded `// PANIC:` justification for call to `panic_requirements::documented_ratio` with a `# Panics` obligation does not satisfy the remaining `# Panics` requirements",
     "requirements": [
       "nonzero: denominator must not be zero.",
       "bounded[total]: total must be bounded by the caller.",
@@ -39,7 +39,7 @@ expression: "report[\"findings\"]"
       "crate": "panic_requirements",
       "scope": "workspace"
     },
-    "reason": "call to `panic_requirements::documented_contract` with a `# Panics` contract has no recorded `// PANIC:` evidence",
+    "reason": "call to `panic_requirements::documented_contract` with a `# Panics` obligation has no recorded `// PANIC:` justification",
     "root": "panic_requirements::reaches_documented_contract",
     "root-kind": "concrete",
     "root-span": "src/lib.rs:36:1: 36:47",

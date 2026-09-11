@@ -2,9 +2,15 @@
 report-roots = ["custom_index_impl::custom_index_panics"]
 
 [panics]
+# The standard-library Index declaration is trusted, but this implementation
+# belongs to the local crate and must still expose its panic.
+trusted-boundary-namespaces = ["core", "alloc", "std"]
 panic-sink-namespaces = [
     "core::panicking::**",
     "std::panicking::**",
     "core::std::rt::panic_fmt",
     "std::rt::panic_fmt",
 ]
+
+[safety]
+trusted-boundary-namespaces = ["core", "alloc", "std"]

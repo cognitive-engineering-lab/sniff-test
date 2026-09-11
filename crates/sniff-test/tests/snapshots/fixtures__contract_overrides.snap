@@ -13,7 +13,7 @@ expression: "report[\"findings\"]"
       "crate": "contract_overrides",
       "scope": "workspace"
     },
-    "reason": "call to `contract_overrides::panic_contract` with a `# Panics` contract has no recorded `// PANIC:` evidence",
+    "reason": "call to `contract_overrides::panic_contract` with a `# Panics` obligation has no recorded `// PANIC:` justification",
     "requirements": [
       "flag: flag must be true."
     ],
@@ -40,7 +40,7 @@ expression: "report[\"findings\"]"
       "crate": "contract_overrides",
       "scope": "workspace"
     },
-    "reason": "recorded `// SAFETY:` evidence for unsafe call to `contract_overrides::synthetic_read` does not satisfy the remaining `# Safety` requirements",
+    "reason": "recorded `// SAFETY:` justification for unsafe call to `contract_overrides::synthetic_read` does not satisfy the remaining `# Safety` requirements",
     "requirements": [
       "valid_ptr: pointer must be non-null.",
       "initialized: pointer must reference initialized memory."

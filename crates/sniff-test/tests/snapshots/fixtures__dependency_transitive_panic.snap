@@ -10,7 +10,7 @@ expression: "report[\"findings\"]"
       "crate": "dependency_transitive_panic_leaf",
       "scope": "dependency"
     },
-    "reason": "dependency crate `dependency_transitive_panic_leaf` has no recorded `// PANIC:` evidence for panic invocation to `core::panicking::panic_fmt`",
+    "reason": "dependency crate `dependency_transitive_panic_leaf` has no recorded `// PANIC:` justification for panic invocation to `core::panicking::panic_fmt`",
     "root": "dependency_transitive_panic_app::app",
     "root-kind": "concrete",
     "root-span": "src/lib.rs:1:1: 1:23",
@@ -21,6 +21,30 @@ expression: "report[\"findings\"]"
     "target": "core::panicking::panic_fmt",
     "trace": [
       "src/lib.rs:2:5: 2:53: dependency_transitive_panic_app::app --direct-call-> dependency_transitive_panic_middle::middle",
+      "[FIXTURE]/middle/src/lib.rs:2:5: 2:49: dependency_transitive_panic_middle::middle --direct-call-> dependency_transitive_panic_leaf::leaf",
+      "[FIXTURE]/leaf/src/lib.rs:2:5: 2:46: dependency_transitive_panic_leaf::leaf --macro-expansion-> macro core::macros::builtin::assert",
+      "[FIXTURE]/leaf/src/lib.rs:2:5: 2:46: macro core::macros::builtin::assert --macro-expansion-> macro core::panic::panic_2021",
+      "[SYSROOT]/lib/rustlib/src/rust/library/core/src/panic.rs:62:9: 62:73: macro core::panic::panic_2021 --direct-call-> core::panicking::panic_fmt"
+    ]
+  },
+  {
+    "kind": "panic-invocation",
+    "level": "deny",
+    "owner": {
+      "crate": "dependency_transitive_panic_leaf",
+      "scope": "dependency"
+    },
+    "reason": "dependency crate `dependency_transitive_panic_leaf` has no recorded `// PANIC:` justification for panic invocation to `core::panicking::panic_fmt`",
+    "root": "dependency_transitive_panic_app::app_again",
+    "root-kind": "concrete",
+    "root-span": "src/lib.rs:5:1: 5:29",
+    "source-evidence": {
+      "status": "verified-absent"
+    },
+    "span": "[FIXTURE]/leaf/src/lib.rs:2:5: 2:46",
+    "target": "core::panicking::panic_fmt",
+    "trace": [
+      "src/lib.rs:6:5: 6:53: dependency_transitive_panic_app::app_again --direct-call-> dependency_transitive_panic_middle::middle",
       "[FIXTURE]/middle/src/lib.rs:2:5: 2:49: dependency_transitive_panic_middle::middle --direct-call-> dependency_transitive_panic_leaf::leaf",
       "[FIXTURE]/leaf/src/lib.rs:2:5: 2:46: dependency_transitive_panic_leaf::leaf --macro-expansion-> macro core::macros::builtin::assert",
       "[FIXTURE]/leaf/src/lib.rs:2:5: 2:46: macro core::macros::builtin::assert --macro-expansion-> macro core::panic::panic_2021",

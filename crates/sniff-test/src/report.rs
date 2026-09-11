@@ -484,6 +484,7 @@ fn marker_ambiguities(
                 function_path: representative.function_path,
                 target: None,
                 source_range: comment.source_range().cloned(),
+                contract_source_range: None,
                 marker_evidence: None,
                 trace: representative.trace,
                 missing_requirements: Vec::new(),
@@ -1193,6 +1194,7 @@ fn panic_findings(
                         function_path: body.display_path.clone(),
                         target: None,
                         source_range: fact.source_range.clone(),
+                        contract_source_range: None,
                         marker_evidence: Some(effect_marker_evidence(
                             artifact,
                             owner,
@@ -1225,6 +1227,7 @@ fn panic_findings(
                         function_path: body.display_path.clone(),
                         target: source.target().map(interpreted_target),
                         source_range: edge.source_range.clone(),
+                        contract_source_range: None,
                         marker_evidence: Some(raw_call_marker_evidence(
                             artifact,
                             graph,
@@ -1271,6 +1274,7 @@ fn safety_findings(
                         function_path: body.display_path.clone(),
                         target: None,
                         source_range: fact.source_range.clone(),
+                        contract_source_range: None,
                         marker_evidence: Some(effect_marker_evidence(
                             artifact,
                             owner,
@@ -1302,6 +1306,7 @@ fn safety_findings(
                     Some(InterpretedFinding {
                         kind: InterpretedFindingKind::SafetyCall {
                             kind: InterpretedSafetyCallKind::Unsafe,
+                            documents_contract: false,
                         },
                         function: owner,
                         function_path: body.display_path.clone(),
@@ -1314,6 +1319,7 @@ fn safety_findings(
                                 })
                         }),
                         source_range: edge.source_range.clone(),
+                        contract_source_range: None,
                         marker_evidence: Some(raw_call_marker_evidence(
                             artifact,
                             graph,
@@ -1430,6 +1436,7 @@ fn unresolved_call_target_findings(
                         function_path: body.display_path.clone(),
                         target: invocation_surface(edge).map(interpreted_target),
                         source_range: edge.source_range.clone(),
+                        contract_source_range: None,
                         marker_evidence: None,
                         trace,
                         missing_requirements: Vec::new(),
@@ -1581,6 +1588,7 @@ fn comment_findings(
                     } else {
                         InterpretedSafetyCallKind::Obligation
                     },
+                    documents_contract: true,
                 },
             };
             let marker_evidence = comment_marker_evidence(
@@ -1613,6 +1621,7 @@ fn comment_findings(
                     path: target_path,
                 }),
                 source_range,
+                contract_source_range: annotation.source_range().cloned(),
                 marker_evidence,
                 trace: path,
                 missing_requirements,
@@ -1754,6 +1763,7 @@ fn missing_safety_docs(
         function_path: body.display_path.clone(),
         target: None,
         source_range: body.source_range.clone(),
+        contract_source_range: None,
         marker_evidence: None,
         trace: InterpretedTrace { steps: Vec::new() },
         missing_requirements: Vec::new(),
@@ -2344,6 +2354,7 @@ mod tests {
             function_path: String::from("sample::panic_source"),
             target: None,
             source_range: None,
+            contract_source_range: None,
             marker_evidence: None,
             trace: InterpretedTrace {
                 steps: vec![InterpretedTraceStep {
@@ -2513,6 +2524,7 @@ unresolved-call-target = "warn"
                     finding.kind,
                     InterpretedFindingKind::SafetyCall {
                         kind: InterpretedSafetyCallKind::Obligation,
+                        ..
                     }
                 ))
                 .count(),
@@ -3205,6 +3217,7 @@ unresolved-call-target = "warn"
                     finding.kind,
                     InterpretedFindingKind::SafetyCall {
                         kind: InterpretedSafetyCallKind::Unsafe,
+                        ..
                     }
                 )
             })
@@ -3696,6 +3709,7 @@ unresolved-call-target = "warn"
                     finding.kind,
                     InterpretedFindingKind::SafetyCall {
                         kind: InterpretedSafetyCallKind::Obligation,
+                        ..
                     }
                 ) && finding
                     .target
@@ -4332,6 +4346,7 @@ unresolved-call-target = "warn"
                     finding.kind,
                     InterpretedFindingKind::SafetyCall {
                         kind: InterpretedSafetyCallKind::Obligation,
+                        ..
                     }
                 ))
                 .count(),
