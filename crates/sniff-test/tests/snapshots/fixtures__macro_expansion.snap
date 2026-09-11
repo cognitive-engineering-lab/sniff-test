@@ -10,7 +10,7 @@ expression: "report[\"findings\"]"
       "crate": "macro_expansion",
       "scope": "workspace"
     },
-    "reason": "panic invocation to `core::panicking::panic` has no recorded `// PANIC:` evidence",
+    "reason": "panic invocation to `core::panicking::panic` has no recorded `// PANIC:` justification",
     "root": "macro_expansion::macro_wrapped",
     "root-kind": "concrete",
     "root-span": "src/lib.rs:13:1: 13:33",

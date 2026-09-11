@@ -10,7 +10,7 @@ expression: "report[\"findings\"]"
       "crate": "feature_gated",
       "scope": "workspace"
     },
-    "reason": "panic invocation to `core::panicking::panic` has no recorded `// PANIC:` evidence",
+    "reason": "panic invocation to `core::panicking::panic` has no recorded `// PANIC:` justification",
     "root": "feature_gated::feature_root",
     "root-kind": "concrete",
     "root-span": "src/lib.rs:2:1: 2:32",

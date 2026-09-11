@@ -10,7 +10,7 @@ expression: "report[\"findings\"]"
       "crate": "std_trait_impl_glob",
       "scope": "workspace"
     },
-    "reason": "call to `alloc::vec::Vec::<T, A>::push` with a `# Panics` contract has no recorded `// PANIC:` evidence",
+    "reason": "call to `alloc::vec::Vec::<T, A>::push` with a `# Panics` obligation has no recorded `// PANIC:` justification",
     "root": "std_trait_impl_glob::put",
     "root-kind": "concrete",
     "root-span": "src/lib.rs:9:1: 9:44",

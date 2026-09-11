@@ -10,7 +10,7 @@ expression: "report[\"findings\"]"
       "crate": "release_pruning",
       "scope": "workspace"
     },
-    "reason": "panic invocation to `core::panicking::panic` has no recorded `// PANIC:` evidence",
+    "reason": "panic invocation to `core::panicking::panic` has no recorded `// PANIC:` justification",
     "root": "release_pruning::checked_in_release",
     "root-kind": "concrete",
     "root-span": "src/lib.rs:5:1: 5:38",

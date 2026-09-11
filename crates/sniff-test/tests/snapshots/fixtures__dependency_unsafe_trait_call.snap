@@ -36,7 +36,7 @@ expression: "report[\"findings\"]"
       "crate": "dependency_unsafe_trait_call_dep",
       "scope": "dependency"
     },
-    "reason": "dependency crate `dependency_unsafe_trait_call_dep` has no recorded `// SAFETY:` evidence for unsafe call to `<dependency_unsafe_trait_call_app::Local as dependency_unsafe_trait_call_dep::Action>::apply`",
+    "reason": "dependency crate `dependency_unsafe_trait_call_dep` has no recorded `// SAFETY:` justification for unsafe call to `<dependency_unsafe_trait_call_app::Local as dependency_unsafe_trait_call_dep::Action>::apply`",
     "requirements": [
       "invariant: the private test invariant must hold."
     ],

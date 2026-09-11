@@ -11,7 +11,7 @@ expression: "report[\"findings\"]"
       "crate": "safety_callable_sites",
       "scope": "workspace"
     },
-    "reason": "unsafe call to `unsafe function pointer` has no recorded `// SAFETY:` evidence",
+    "reason": "unsafe call to `unsafe function pointer` has no recorded `// SAFETY:` justification",
     "root": "safety_callable_sites::independently_marked_calls",
     "root-kind": "concrete",
     "root-span": "src/lib.rs:15:1: 15:36",

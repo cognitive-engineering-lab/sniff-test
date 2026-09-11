@@ -7,44 +7,65 @@ stdout:
 <empty>
 stderr:
     Checking trusted-boundaries v0.1.0 ([FIXTURE])
-warning: [sniff-test::safety::unsafe-call-missing-justification] unsafe call to `unsafe function pointer` has no recorded `// SAFETY:` evidence
+warning: [sniff-test::safety::unsafe-call-missing-justification] unsafe call to `unsafe function pointer` has no recorded `// SAFETY:` justification
   --> src/lib.rs:33:14
    |
 33 |     unsafe { helper() }
    |              ^^^^^^^^
    |
+help: add a local `// SAFETY:` justification after verifying safety obligations
+  --> src/lib.rs:33:14
+   |
+33 |     unsafe { helper() }
+   |              ^^^^^^^^
+help: document this function's safety obligations with `/// # Safety` here
+  --> src/lib.rs:31:1
+   |
+31 | pub fn trusted_unsafe_through_fn_pointer(use_trusted: bool, unknown: unsafe fn()) {
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
    = note: reachable from `trusted_unsafe_through_fn_pointer` to `indirect call through an unsafe function pointer`
-   = help: add `// SAFETY:` directly above this source after establishing the invariant that contains this safety obligation
 
-warning: [sniff-test::safety::unsafe-call-missing-justification] unsafe call to `unsafe_helper` has no recorded `// SAFETY:` evidence
+warning: [sniff-test::safety::unsafe-call-missing-justification] unsafe call to `unsafe_helper` has no recorded `// SAFETY:` justification
   --> src/lib.rs:28:14
    |
 28 |     unsafe { unsafe_helper() }
    |              ^^^^^^^^^^^^^^^
    |
+help: add a local `// SAFETY:` justification after verifying safety obligations
+  --> src/lib.rs:28:14
+   |
+28 |     unsafe { unsafe_helper() }
+   |              ^^^^^^^^^^^^^^^
+help: document this function's safety obligations with `/// # Safety` here
+  --> src/lib.rs:27:1
+   |
+27 | pub fn trusted_unsafe_without_docs() {
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
    = note: reachable from `trusted_unsafe_without_docs` to `unsafe_helper`
-   = help: add `// SAFETY:` directly above this source after establishing the invariant that contains this safety obligation
 
-warning: [sniff-test::panics::documented-panic] call to `trusted_doc_helper` with a `# Panics` contract has no recorded `// PANIC:` evidence
+warning: [sniff-test::panics::documented-panic] call to `trusted_doc_helper` with a `# Panics` obligation has no recorded `// PANIC:` justification
   --> src/lib.rs:6:5
    |
  6 |     trusted_doc_helper(flag);
    |     ^^^^^^^^^^^^^^^^^^^^^^^^
    |
+help: add a local `// PANIC:` justification after verifying panic obligations
+  --> src/lib.rs:6:5
+   |
+ 6 |     trusted_doc_helper(flag);
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^
+help: document when this function may panic with `/// # Panics` here
+  --> src/lib.rs:5:1
+   |
+ 5 | pub fn trusted_with_docs(flag: bool) {
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 note: `trusted_doc_helper` documents `# Panics` here
   --> src/lib.rs:16:1
    |
 16 | fn trusted_doc_helper(flag: bool) {
    | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
    = note: reachable from `trusted_with_docs` to `trusted_doc_helper`
-   = help: add `// PANIC:` directly above this source after establishing the invariant that contains this panic path
-help: document when this function may panic with `/// # Panics` here
-  --> src/lib.rs:5:1
-   |
- 5 | pub fn trusted_with_docs(flag: bool) {
-   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
 note: set `show-full-stack-trace = true` under `[analysis]` in sniff-test.toml to show every reachability step
-
 warning: `trusted-boundaries` (lib) generated 3 warnings
     Finished `release` profile [optimized] target(s) in [TIME]

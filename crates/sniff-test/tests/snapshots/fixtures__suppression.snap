@@ -11,7 +11,7 @@ expression: "report[\"findings\"]"
       "crate": "suppression",
       "scope": "workspace"
     },
-    "reason": "compiler assertion (index out of bounds) has no recorded `// PANIC:` evidence",
+    "reason": "compiler assertion (index out of bounds) has no recorded `// PANIC:` justification",
     "root": "suppression::reported_index",
     "root-kind": "concrete",
     "root-span": "src/lib.rs:5:1: 5:63",

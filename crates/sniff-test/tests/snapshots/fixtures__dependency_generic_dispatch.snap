@@ -10,7 +10,7 @@ expression: "report[\"findings\"]"
       "crate": "dependency_generic_local_impl_app",
       "scope": "workspace"
     },
-    "reason": "panic invocation to `core::panicking::panic_fmt` has no recorded `// PANIC:` evidence",
+    "reason": "panic invocation to `core::panicking::panic_fmt` has no recorded `// PANIC:` justification",
     "root": "dependency_generic_local_impl_app::caller",
     "root-kind": "concrete",
     "root-span": "src/lib.rs:11:1: 11:26",

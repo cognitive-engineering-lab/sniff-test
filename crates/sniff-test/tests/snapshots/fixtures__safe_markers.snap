@@ -10,7 +10,7 @@ expression: "report[\"findings\"]"
       "crate": "safe_markers",
       "scope": "workspace"
     },
-    "reason": "panic invocation to `core::panicking::panic` has no recorded `// PANIC:` evidence",
+    "reason": "panic invocation to `core::panicking::panic` has no recorded `// PANIC:` justification",
     "root": "safe_markers::unsafe_call",
     "root-kind": "concrete",
     "root-span": "src/lib.rs:16:1: 16:31",
@@ -33,7 +33,7 @@ expression: "report[\"findings\"]"
       "crate": "safe_markers",
       "scope": "workspace"
     },
-    "reason": "compiler assertion (division by zero) has no recorded `// PANIC:` evidence",
+    "reason": "compiler assertion (division by zero) has no recorded `// PANIC:` justification",
     "root": "safe_markers::unsafe_ratio",
     "root-kind": "concrete",
     "root-span": "src/lib.rs:7:1: 7:63",

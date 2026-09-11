@@ -10,7 +10,7 @@ expression: "report[\"findings\"]"
       "crate": "trait_default_method",
       "scope": "workspace"
     },
-    "reason": "panic invocation to `core::panicking::panic_fmt` has no recorded `// PANIC:` evidence",
+    "reason": "panic invocation to `core::panicking::panic_fmt` has no recorded `// PANIC:` justification",
     "root": "trait_default_method::TraitDefaultMethod::default_panic",
     "root-kind": "generic",
     "root-span": "src/lib.rs:2:5: 2:28",

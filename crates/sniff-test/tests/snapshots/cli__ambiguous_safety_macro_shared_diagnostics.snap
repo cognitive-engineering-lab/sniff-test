@@ -14,9 +14,9 @@ error: [sniff-test::analysis::ambiguous-safety-marker] one `// SAFETY:` marker a
 38 | |         perform_twice_without_marker!()
    | |_^
    |
+   = help: give each unsafe block or operation its own marker, or set `ambiguous-safety-marker = "allow"` under `[analysis.lints]`
    = note: this marker applies to 2 safety obligations
    = note: reachable from `reused_marker_within_one_macro_expansion` to `perform`
-   = help: give each unsafe block or operation its own marker, or set `ambiguous-safety-marker = "allow"` under `[analysis.lints]`
 
 error: [sniff-test::analysis::ambiguous-safety-marker] one `// SAFETY:` marker applies to 2 safety effect groups
   --> src/lib.rs:75:1
@@ -26,9 +26,9 @@ error: [sniff-test::analysis::ambiguous-safety-marker] one `// SAFETY:` marker a
 77 | |         call_safe_obligation_twice!()
    | |_^
    |
+   = help: give each unsafe block or operation its own marker, or set `ambiguous-safety-marker = "allow"` under `[analysis.lints]`
    = note: this marker applies to 2 safety obligations
    = note: reachable from `reused_partial_marker_for_safe_obligations` to `safe_obligation`
-   = help: give each unsafe block or operation its own marker, or set `ambiguous-safety-marker = "allow"` under `[analysis.lints]`
 
 error: [sniff-test::analysis::ambiguous-safety-marker] one `// SAFETY:` marker applies to 2 safety effect groups
   --> src/lib.rs:87:1
@@ -38,10 +38,9 @@ error: [sniff-test::analysis::ambiguous-safety-marker] one `// SAFETY:` marker a
 89 | |     unsafe {
    | |_^
    |
+   = help: give each unsafe block or operation its own marker, or set `ambiguous-safety-marker = "allow"` under `[analysis.lints]`
    = note: this marker applies to 2 safety obligations
    = note: reachable from `reused_partial_marker_for_safe_obligations_inside_unsafe_block` to `safe_obligation`
-   = help: give each unsafe block or operation its own marker, or set `ambiguous-safety-marker = "allow"` under `[analysis.lints]`
 
 note: set `show-full-stack-trace = true` under `[analysis]` in sniff-test.toml to show every reachability step
-
 error: could not compile `ambiguous-safety` (lib) due to 3 previous errors

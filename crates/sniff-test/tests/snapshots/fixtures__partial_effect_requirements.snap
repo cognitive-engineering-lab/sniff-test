@@ -14,7 +14,7 @@ expression: "report[\"findings\"]"
       "crate": "partial_effect_requirements",
       "scope": "dependency"
     },
-    "reason": "dependency crate `partial_effect_requirements` has no recorded `// SAFETY:` evidence for call to `partial_effect_requirements::requires_initialized_exclusive_state` with a `# Safety` contract",
+    "reason": "dependency crate `partial_effect_requirements` has no recorded `// SAFETY:` justification for call to `partial_effect_requirements::requires_initialized_exclusive_state` with a `# Safety` obligation",
     "requirements": [
       "initialized: global state must be initialized",
       "exclusive: no other thread may access the global state"
