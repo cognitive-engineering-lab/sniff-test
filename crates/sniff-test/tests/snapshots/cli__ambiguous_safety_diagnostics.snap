@@ -7,7 +7,7 @@ stdout:
 <empty>
 stderr:
     Checking ambiguous-safety v0.1.0 ([FIXTURE])
-error: [sniff-test::analysis::ambiguous-safety-requirement] `ambiguous_safety::read_duplicate` has multiple # Safety requirements named `valid ptr`
+error: [sniff-test::analysis::ambiguous-safety-requirement] `read_duplicate` has multiple # Safety requirements named `valid ptr`
  --> src/lib.rs:7:1
   |
 7 | /// - valid_ptr: pointer must be non-null.
@@ -15,8 +15,8 @@ error: [sniff-test::analysis::ambiguous-safety-requirement] `ambiguous_safety::r
 8 | /// - valid_ptr: pointer must reference initialized memory.
   | ----------------------------------------------------------- `valid_ptr: pointer must reference initialized memory.` normalizes to `valid ptr`
   |
-  = note: `ambiguous_safety::read_duplicate` has multiple `# Safety` requirements that normalize to `valid ptr`
-  = note: reachable from `ambiguous_safety::duplicate_safety_marker` to `ambiguous_safety::read_duplicate`
+  = note: `read_duplicate` has multiple `# Safety` requirements that normalize to `valid ptr`
+  = note: reachable from `duplicate_safety_marker` to `read_duplicate`
   = help: give each requirement a unique name, or set `ambiguous-safety-requirement = "allow"` under `[analysis.lints]`
 
 note: set `show-full-stack-trace = true` under `[analysis]` in sniff-test.toml to show every reachability step

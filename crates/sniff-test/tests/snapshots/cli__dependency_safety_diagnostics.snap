@@ -14,7 +14,7 @@ error: [sniff-test::safety::raw-pointer-dereference-missing-justification] depen
 2 |     unsafe { *pointer }
   |              ^^^^^^^^
   |
-  = note: reachable from `dependency_safety_app::read_dependency` to `unsafe operation (raw pointer dereference)`
+  = note: reachable from `read_dependency` to `unsafe operation (raw pointer dereference)`
   = help: audit or upgrade dependency crate `dependency_safety`; it has no recorded `// SAFETY:` evidence for this source
 help: guard this local call or record a local `// SAFETY:` containment only after verifying the invariant; treating this boundary as trusted must be a deliberate trust decision backed by review
  --> src/lib.rs:2:5

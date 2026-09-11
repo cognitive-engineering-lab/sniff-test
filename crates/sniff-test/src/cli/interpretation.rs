@@ -27,7 +27,7 @@ use rustc_span::Span;
 
 use super::findings::{
     DiagnosticMessage, FULL_STACK_TRACE_HINT, Finding, FindingDiagnostic, FindingKind,
-    FindingOwner, FindingTraceStepOrder, OwnerScope, SourceEvidence,
+    FindingOwner, FindingTraceStepOrder, OwnerScope, SourceEvidence, compact_function_name,
 };
 use super::report::render_span;
 
@@ -1386,8 +1386,9 @@ fn add_trace_notes(
             .as_deref()
             .unwrap_or("an opaque call boundary");
         diagnostic.messages.push(DiagnosticMessage::Note(format!(
-            "reachable from `{}` to `{target}`",
-            first.caller_path
+            "reachable from `{}` to `{}`",
+            compact_function_name(&first.caller_path),
+            compact_function_name(target)
         )));
         diagnostic
             .messages

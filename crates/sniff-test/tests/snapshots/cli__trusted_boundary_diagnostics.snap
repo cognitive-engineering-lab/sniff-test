@@ -13,30 +13,30 @@ warning: [sniff-test::safety::unsafe-call-missing-justification] unsafe call to 
 33 |     unsafe { helper() }
    |              ^^^^^^^^
    |
-   = note: reachable from `trusted_boundaries::trusted_unsafe_through_fn_pointer` to `indirect call through an unsafe function pointer`
+   = note: reachable from `trusted_unsafe_through_fn_pointer` to `indirect call through an unsafe function pointer`
    = help: add `// SAFETY:` directly above this source after establishing the invariant that contains this safety obligation
 
-warning: [sniff-test::safety::unsafe-call-missing-justification] unsafe call to `trusted_boundaries::unsafe_helper` has no recorded `// SAFETY:` evidence
+warning: [sniff-test::safety::unsafe-call-missing-justification] unsafe call to `unsafe_helper` has no recorded `// SAFETY:` evidence
   --> src/lib.rs:28:14
    |
 28 |     unsafe { unsafe_helper() }
    |              ^^^^^^^^^^^^^^^
    |
-   = note: reachable from `trusted_boundaries::trusted_unsafe_without_docs` to `trusted_boundaries::unsafe_helper`
+   = note: reachable from `trusted_unsafe_without_docs` to `unsafe_helper`
    = help: add `// SAFETY:` directly above this source after establishing the invariant that contains this safety obligation
 
-warning: [sniff-test::panics::documented-panic] call to `trusted_boundaries::trusted_doc_helper` with a `# Panics` contract has no recorded `// PANIC:` evidence
+warning: [sniff-test::panics::documented-panic] call to `trusted_doc_helper` with a `# Panics` contract has no recorded `// PANIC:` evidence
   --> src/lib.rs:6:5
    |
  6 |     trusted_doc_helper(flag);
    |     ^^^^^^^^^^^^^^^^^^^^^^^^
    |
-note: `trusted_boundaries::trusted_doc_helper` documents `# Panics` here
+note: `trusted_doc_helper` documents `# Panics` here
   --> src/lib.rs:16:1
    |
 16 | fn trusted_doc_helper(flag: bool) {
    | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-   = note: reachable from `trusted_boundaries::trusted_with_docs` to `trusted_boundaries::trusted_doc_helper`
+   = note: reachable from `trusted_with_docs` to `trusted_doc_helper`
    = help: add `// PANIC:` directly above this source after establishing the invariant that contains this panic path
 help: document when this function may panic with `/// # Panics` here
   --> src/lib.rs:5:1

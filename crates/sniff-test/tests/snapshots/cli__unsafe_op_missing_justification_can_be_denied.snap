@@ -13,7 +13,7 @@ error: [sniff-test::safety::inline-assembly-missing-justification] unsafe operat
 34 |         asm!("nop");
    |         ^^^^^^^^^^^
    |
-   = note: reachable from `unsafe_ops::asm_unjustified` to `unsafe operation (inline assembly)`
+   = note: reachable from `asm_unjustified` to `unsafe operation (inline assembly)`
    = help: add `// SAFETY:` directly above this source after establishing the invariant that contains this safety obligation
 
 error: [sniff-test::safety::raw-pointer-dereference-missing-justification] unsafe operation (raw pointer dereference) has no recorded `// SAFETY:` evidence
@@ -22,7 +22,7 @@ error: [sniff-test::safety::raw-pointer-dereference-missing-justification] unsaf
 17 |     unsafe { *ptr }
    |              ^^^^
    |
-   = note: reachable from `unsafe_ops::deref_unjustified` to `unsafe operation (raw pointer dereference)`
+   = note: reachable from `deref_unjustified` to `unsafe operation (raw pointer dereference)`
    = help: add `// SAFETY:` directly above this source after establishing the invariant that contains this safety obligation
 
 error: [sniff-test::safety::extern-static-access-missing-justification] unsafe operation (extern static access) has no recorded `// SAFETY:` evidence
@@ -31,7 +31,7 @@ error: [sniff-test::safety::extern-static-access-missing-justification] unsafe o
 25 |     unsafe { ENV_FLAG }
    |              ^^^^^^^^
    |
-   = note: reachable from `unsafe_ops::extern_static_unjustified` to `unsafe operation (extern static access)`
+   = note: reachable from `extern_static_unjustified` to `unsafe operation (extern static access)`
    = help: add `// SAFETY:` directly above this source after establishing the invariant that contains this safety obligation
 
 error: [sniff-test::safety::mutable-static-access-missing-justification] unsafe operation (mutable static access) has no recorded `// SAFETY:` evidence
@@ -40,7 +40,7 @@ error: [sniff-test::safety::mutable-static-access-missing-justification] unsafe 
 21 |     unsafe { COUNTER }
    |              ^^^^^^^
    |
-   = note: reachable from `unsafe_ops::mutable_static_unjustified` to `unsafe operation (mutable static access)`
+   = note: reachable from `mutable_static_unjustified` to `unsafe operation (mutable static access)`
    = help: add `// SAFETY:` directly above this source after establishing the invariant that contains this safety obligation
 
 error: [sniff-test::safety::union-field-access-missing-justification] unsafe operation (union field access) has no recorded `// SAFETY:` evidence
@@ -49,7 +49,7 @@ error: [sniff-test::safety::union-field-access-missing-justification] unsafe ope
 29 |     unsafe { bits.word }
    |              ^^^^^^^^^
    |
-   = note: reachable from `unsafe_ops::union_read_unjustified` to `unsafe operation (union field access)`
+   = note: reachable from `union_read_unjustified` to `unsafe operation (union field access)`
    = help: add `// SAFETY:` directly above this source after establishing the invariant that contains this safety obligation
 
 note: set `show-full-stack-trace = true` under `[analysis]` in sniff-test.toml to show every reachability step

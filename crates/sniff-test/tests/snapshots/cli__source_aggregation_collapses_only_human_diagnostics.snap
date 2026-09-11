@@ -7,14 +7,14 @@ stdout:
 <empty>
 stderr:
     Checking source-aggregation v0.1.0 ([FIXTURE])
-error: [sniff-test::panics::panic-invocation] panic invocation to `core::panicking::panic_fmt` has no recorded `// PANIC:` evidence
+error: [sniff-test::panics::panic-invocation] panic invocation to `panic_fmt` has no recorded `// PANIC:` evidence
  --> src/lib.rs:2:5
   |
 2 |     panic!("shared source");
   |     ^^^^^^^^^^^^^^^^^^^^^^^
   |
   = help: add `// PANIC:` directly above this source after establishing the invariant that contains this panic path
-  = note: reachable from 2 local report roots: `source_aggregation::first_api`, `source_aggregation::second_api`
+  = note: reachable from 2 local report roots: `first_api`, `second_api`
 
 note: set `show-full-stack-trace = true` under `[analysis]` in sniff-test.toml to show every reachability step
 

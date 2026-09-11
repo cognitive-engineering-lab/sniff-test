@@ -9,13 +9,13 @@ stderr:
     Checking dependency-transitive-panic-leaf v0.1.0 ([FIXTURE]/leaf)
     Checking dependency-transitive-panic-middle v0.1.0 ([FIXTURE]/middle)
     Checking dependency-transitive-panic-app v0.1.0 ([FIXTURE]/app)
-error: [sniff-test::panics::panic-invocation] dependency crate `dependency_transitive_panic_leaf` has no recorded `// PANIC:` evidence for panic invocation to `core::panicking::panic_fmt`
+error: [sniff-test::panics::panic-invocation] dependency crate `dependency_transitive_panic_leaf` has no recorded `// PANIC:` evidence for panic invocation to `panic_fmt`
  --> [FIXTURE]/leaf/src/lib.rs:2:5
   |
 2 |     assert!(flag, "leaf expected a set flag");
   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
   |
-  = note: reachable from `dependency_transitive_panic_app::app` to `core::panicking::panic_fmt`
+  = note: reachable from `app` to `panic_fmt`
   = help: audit or upgrade dependency crate `dependency_transitive_panic_leaf`; it has no recorded `// PANIC:` evidence for this source
 help: guard this local call or record a local `// PANIC:` containment only after verifying the invariant; treating this boundary as trusted must be a deliberate trust decision backed by review
  --> src/lib.rs:2:5

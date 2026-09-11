@@ -7,43 +7,43 @@ stdout:
 <empty>
 stderr:
     Checking safety-contract-requirements v0.1.0 ([FIXTURE])
-warning: [sniff-test::safety::safety-obligation-missing-requirements] call to `safety_contract_requirements::documented_obligation` with a `# Safety` contract has no recorded `// SAFETY:` evidence
+warning: [sniff-test::safety::safety-obligation-missing-requirements] call to `documented_obligation` with a `# Safety` contract has no recorded `// SAFETY:` evidence
   --> src/lib.rs:57:5
    |
 57 |     documented_obligation(&raw const byte);
    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
    |
-note: `safety_contract_requirements::documented_obligation` documents `# Safety` here
+note: `documented_obligation` documents `# Safety` here
   --> src/lib.rs:44:1
    |
 44 | pub fn documented_obligation(_ptr: *const u8) {}
    | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
    = note: missing safety requirement `valid_ptr: pointer must be non-null.`
-   = note: reachable from `safety_contract_requirements::trusted_obligation_exposes_missing_requirement` to `safety_contract_requirements::documented_obligation`
+   = note: reachable from `trusted_obligation_exposes_missing_requirement` to `documented_obligation`
    = help: add `// SAFETY:` directly above this source after establishing the invariant that contains this safety obligation
 
-warning: [sniff-test::safety::unsafe-call-missing-justification] unsafe call to `safety_contract_requirements::uncontracted_operation` has no recorded `// SAFETY:` evidence
+warning: [sniff-test::safety::unsafe-call-missing-justification] unsafe call to `uncontracted_operation` has no recorded `// SAFETY:` evidence
   --> src/lib.rs:37:14
    |
 37 |     unsafe { uncontracted_operation() }
    |              ^^^^^^^^^^^^^^^^^^^^^^^^
    |
-   = note: reachable from `safety_contract_requirements::unsafe_call_exposes_missing_justification` to `safety_contract_requirements::uncontracted_operation`
+   = note: reachable from `unsafe_call_exposes_missing_justification` to `uncontracted_operation`
    = help: add `// SAFETY:` directly above this source after establishing the invariant that contains this safety obligation
 
-warning: [sniff-test::safety::unsafe-call-missing-requirements] recorded `// SAFETY:` evidence for unsafe call to `safety_contract_requirements::read_byte` does not satisfy the remaining `# Safety` requirements
+warning: [sniff-test::safety::unsafe-call-missing-requirements] recorded `// SAFETY:` evidence for unsafe call to `read_byte` does not satisfy the remaining `# Safety` requirements
   --> src/lib.rs:33:14
    |
 33 |     unsafe { read_byte(ptr.as_ptr()) }
    |              ^^^^^^^^^^^^^^^^^^^^^^^
    |
-note: `safety_contract_requirements::read_byte` documents `# Safety` here
+note: `read_byte` documents `# Safety` here
   --> src/lib.rs:8:1
    |
  8 | pub unsafe fn read_byte(ptr: *const u8) -> u8 {
    | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
    = note: remaining unsatisfied safety requirement `initialized: pointer must reference initialized memory.`
-   = note: reachable from `safety_contract_requirements::unsafe_call_exposes_missing_requirement` to `safety_contract_requirements::read_byte`
+   = note: reachable from `unsafe_call_exposes_missing_requirement` to `read_byte`
    = help: update the recorded `// SAFETY:` evidence to address each remaining `# Safety` requirement
 
 note: set `show-full-stack-trace = true` under `[analysis]` in sniff-test.toml to show every reachability step

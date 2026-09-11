@@ -239,6 +239,7 @@ pub(crate) fn aggregate_human_findings(findings: &[ResolvedFinding]) -> Vec<Reso
         .map(|(mut finding, roots)| {
             if is_source_finding(finding.finding.kind) {
                 make_source_centric(&mut finding.finding);
+                compact_human_diagnostic_paths(&mut finding.finding, &roots);
                 if roots.len() > 1 {
                     finding
                         .finding
@@ -300,6 +301,68 @@ fn make_source_centric(finding: &mut Finding) {
     finding.diagnostic.span = finding.effect_span;
 }
 
+fn compact_human_diagnostic_paths(finding: &mut Finding, roots: &BTreeSet<String>) {
+    let paths = finding
+        .target
+        .iter()
+        .chain(finding.function.iter())
+        .chain(roots.iter())
+        .map(|path| (path.as_str(), compact_function_name(path)))
+        .filter(|(path, compact)| *path != *compact)
+        .collect::<Vec<_>>();
+
+    compact_quoted_paths(&mut finding.diagnostic.message, &paths);
+    for message in &mut finding.diagnostic.messages {
+        let text = match message {
+            DiagnosticMessage::Note(text)
+            | DiagnosticMessage::SpanNote(_, text)
+            | DiagnosticMessage::SpanLabel(_, text)
+            | DiagnosticMessage::SpanHelp(_, text)
+            | DiagnosticMessage::Help(text) => text,
+        };
+        if text.starts_with("effect trace step ") {
+            continue;
+        }
+        compact_quoted_paths(text, &paths);
+    }
+}
+
+fn compact_quoted_paths(text: &mut String, paths: &[(&str, &str)]) {
+    for (path, compact) in paths {
+        *text = text.replace(&format!("`{path}`"), &format!("`{compact}`"));
+    }
+}
+
+pub(super) fn compact_function_name(path: &str) -> &str {
+    top_level_path_segments(path)
+        .last()
+        .copied()
+        .unwrap_or(path)
+}
+
+fn top_level_path_segments(path: &str) -> Vec<&str> {
+    let mut segments = Vec::new();
+    let mut start = 0;
+    let mut angle_depth = 0_u32;
+    let bytes = path.as_bytes();
+    let mut index = 0;
+    while index < bytes.len() {
+        match bytes[index] {
+            b'<' => angle_depth += 1,
+            b'>' => angle_depth = angle_depth.saturating_sub(1),
+            b':' if angle_depth == 0 && bytes.get(index + 1) == Some(&b':') => {
+                segments.push(&path[start..index]);
+                index += 1;
+                start = index + 1;
+            }
+            _ => {}
+        }
+        index += 1;
+    }
+    segments.push(&path[start..]);
+    segments
+}
+
 fn is_compact_reachable_note(message: &DiagnosticMessage) -> bool {
     matches!(message, DiagnosticMessage::Note(note) if note.starts_with("reachable from `"))
 }
@@ -317,7 +380,8 @@ const fn is_source_finding(kind: FindingKind) -> bool {
 }
 
 fn reachable_roots_note(roots: &BTreeSet<String>) -> String {
-    let shown = roots
+    let labels = shortest_distinguishing_root_labels(roots);
+    let shown = labels
         .iter()
         .take(3)
         .map(|root| format!("`{root}`"))
@@ -334,6 +398,32 @@ fn reachable_roots_note(roots: &BTreeSet<String>) -> String {
             roots.len()
         )
     }
+}
+
+fn shortest_distinguishing_root_labels(roots: &BTreeSet<String>) -> Vec<String> {
+    let split = roots
+        .iter()
+        .map(|root| top_level_path_segments(root))
+        .collect::<Vec<_>>();
+    split
+        .iter()
+        .enumerate()
+        .map(|(index, segments)| {
+            for suffix_len in 1..=segments.len() {
+                let start = segments.len() - suffix_len;
+                let candidate = segments[start..].join("::");
+                let unique = split.iter().enumerate().all(|(other_index, other)| {
+                    other_index == index
+                        || other.len() < suffix_len
+                        || other[other.len() - suffix_len..].join("::") != candidate
+                });
+                if unique {
+                    return candidate;
+                }
+            }
+            segments.join("::")
+        })
+        .collect()
 }
 
 fn compare_findings(left: &Finding, right: &Finding) -> std::cmp::Ordering {
@@ -653,7 +743,8 @@ mod tests {
     use super::{
         DiagnosticMessage, FULL_STACK_TRACE_HINT, Finding, FindingDiagnostic, FindingKind,
         FindingOwner, OwnerScope, ResolvedFinding, SourceEvidence, aggregate_human_findings,
-        is_compact_reachable_note, resolve_findings, take_full_stack_trace_hint,
+        is_compact_reachable_note, reachable_roots_note, resolve_findings,
+        take_full_stack_trace_hint,
     };
     use crate::artifact::{
         CompilerAssertKind, SafetyOpKind, SourceFileFact, SourceFileId, SourceRangeFact,
@@ -664,6 +755,7 @@ mod tests {
         UnresolvedCallCoverage, UnresolvedCallMechanism, UnresolvedCallSite,
     };
     use rustc_span::{BytePos, Span};
+    use std::collections::BTreeSet;
 
     fn finding(kind: FindingKind) -> Finding {
         Finding::new(
@@ -943,12 +1035,12 @@ mod tests {
         assert_eq!(aggregated.len(), 1);
         assert_eq!(
             aggregated[0].finding.diagnostic.message,
-            "panic invocation to `core::panicking::panic_fmt` is reachable through undocumented panic paths"
+            "panic invocation to `panic_fmt` is reachable through undocumented panic paths"
         );
         assert_eq!(aggregated[0].finding.diagnostic.span, Some(effect_span));
         assert!(aggregated[0].finding.diagnostic.messages.iter().any(
             |message| matches!(message, DiagnosticMessage::Note(note) if note ==
-                "reachable from 2 local report roots: `sample::first`, `sample::second`")
+                "reachable from 2 local report roots: `first`, `second`")
         ));
         assert!(
             !aggregated[0]
@@ -1006,7 +1098,7 @@ mod tests {
         assert_eq!(aggregated.len(), 1);
         assert_eq!(
             aggregated[0].finding.diagnostic.message,
-            "panic invocation to `core::panicking::panic_fmt` is reachable through undocumented panic paths"
+            "panic invocation to `panic_fmt` is reachable through undocumented panic paths"
         );
         assert_eq!(aggregated[0].finding.diagnostic.span, Some(effect_span));
         assert_eq!(
@@ -1016,7 +1108,7 @@ mod tests {
                 .messages
                 .iter()
                 .filter(|message| matches!(message, DiagnosticMessage::Note(note) if
-                    note.contains("`sample::api`")))
+                    note.contains("`api`")))
                 .count(),
             1
         );
@@ -1056,8 +1148,111 @@ mod tests {
         assert_eq!(
             aggregated[0].finding.diagnostic.messages,
             [DiagnosticMessage::Note(String::from(
-                "reachable from local report root: `sample::api`"
+                "reachable from local report root: `api`"
             ))]
+        );
+    }
+
+    #[test]
+    fn human_paths_use_callable_names_without_changing_serialized_paths() {
+        let mut finding = finding(FindingKind::DocumentedPanic);
+        let target = String::from(
+            "<bitvec::slice::BitSlice<T, bitvec::order::Msb0> as bitvec::field::BitField>::load_be",
+        );
+        finding.root = Some(String::from(
+            "indexical::bitset::bitvec::<impl indexical::bitset::BitSet for bitvec::vec::BitVec>::intersect",
+        ));
+        finding.target = Some(target.clone());
+        finding.trace = vec![String::from("canonical trace")];
+        finding.reason = format!(
+            "dependency crate `bitvec` has no recorded `// PANIC:` evidence for call to `{target}` with a `# Panics` contract"
+        );
+        finding
+            .diagnostic
+            .messages
+            .push(DiagnosticMessage::Note(format!(
+                "`{target}` documents `# Panics` here"
+            )));
+        finding
+            .diagnostic
+            .messages
+            .push(DiagnosticMessage::Note(format!(
+                "reachable from `{}` to `{target}`",
+                finding.root.as_deref().expect("root")
+            )));
+        let resolved = ResolvedFinding {
+            level: LintLevel::Warn,
+            finding,
+        };
+        let serialized = serde_json::to_value(&resolved).expect("serialize source finding");
+
+        let aggregated = aggregate_human_findings(std::slice::from_ref(&resolved));
+
+        assert_eq!(
+            aggregated[0].finding.diagnostic.message,
+            "dependency crate `bitvec` has no recorded `// PANIC:` evidence for call to `load_be` with a `# Panics` contract"
+        );
+        assert_eq!(
+            aggregated[0].finding.diagnostic.messages,
+            [
+                DiagnosticMessage::Note(String::from("`load_be` documents `# Panics` here")),
+                DiagnosticMessage::Note(String::from("reachable from `intersect` to `load_be`")),
+            ]
+        );
+        assert_eq!(
+            serde_json::to_value(&aggregated[0]).expect("serialize human finding"),
+            serialized
+        );
+    }
+
+    #[test]
+    fn colliding_root_names_use_the_shortest_distinguishing_suffix() {
+        let roots = BTreeSet::from([
+            String::from("sample::left::run"),
+            String::from("sample::right::run"),
+            String::from("sample::right::stop"),
+        ]);
+
+        assert_eq!(
+            reachable_roots_note(&roots),
+            "reachable from 3 local report roots: `left::run`, `right::run`, `stop`"
+        );
+    }
+
+    #[test]
+    fn full_trace_steps_keep_canonical_paths() {
+        let mut finding = finding(FindingKind::PanicInvocation);
+        finding.root = Some(String::from("sample::api"));
+        finding.target = Some(String::from("core::panicking::panic_fmt"));
+        finding.trace = vec![String::from("canonical trace")];
+        finding.reason = String::from(
+            "panic invocation to `core::panicking::panic_fmt` has no recorded evidence",
+        );
+        let trace_span = Span::with_root_ctxt(BytePos(20), BytePos(30));
+        finding
+            .diagnostic
+            .messages
+            .push(DiagnosticMessage::SpanNote(
+                trace_span,
+                String::from(
+                    "effect trace step 1/1 (public root -> effect source): sample::api --direct-call-> core::panicking::panic_fmt",
+                ),
+            ));
+        let resolved = ResolvedFinding {
+            level: LintLevel::Deny,
+            finding,
+        };
+
+        let aggregated = aggregate_human_findings(&[resolved]);
+
+        assert_eq!(
+            aggregated[0].finding.diagnostic.messages,
+            [DiagnosticMessage::SpanNote(
+                trace_span,
+                String::from(
+                    "effect trace step 1/1 (public root -> effect source): sample::api --direct-call-> core::panicking::panic_fmt"
+                )
+            )]
         );
     }
 

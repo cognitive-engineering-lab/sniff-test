@@ -13,7 +13,7 @@ error: [sniff-test::panics::compiler-assert-division-by-zero] compiler assertion
 2 |     total_size / block_count
   |     ^^^^^^^^^^^^^^^^^^^^^^^^
   |
-  = note: reachable from `panic_axioms::division` to `compiler assert division by zero`
+  = note: reachable from `division` to `compiler assert division by zero`
   = help: add `// PANIC:` directly above this source after establishing the invariant that contains this panic path
 
 note: set `show-full-stack-trace = true` under `[analysis]` in sniff-test.toml to show every reachability step

@@ -7,13 +7,13 @@ stdout:
 <empty>
 stderr:
     Checking closure-call-graph v0.1.0 ([FIXTURE])
-error: [sniff-test::panics::panic-invocation] panic invocation to `core::panicking::panic_fmt` has no recorded `// PANIC:` evidence
+error: [sniff-test::panics::panic-invocation] panic invocation to `panic_fmt` has no recorded `// PANIC:` evidence
  --> src/lib.rs:2:20
   |
 2 |     let panic = || panic!("called closure");
   |                    ^^^^^^^^^^^^^^^^^^^^^^^^
   |
-  = note: reachable from `closure_call_graph::basic_closure_panics` to `core::panicking::panic_fmt`
+  = note: reachable from `basic_closure_panics` to `panic_fmt`
   = help: add `// PANIC:` directly above this source after establishing the invariant that contains this panic path
 
 note: set `show-full-stack-trace = true` under `[analysis]` in sniff-test.toml to show every reachability step

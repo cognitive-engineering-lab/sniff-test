@@ -7,13 +7,13 @@ stdout:
 <empty>
 stderr:
     Checking safe-markers v0.1.0 ([FIXTURE])
-error: [sniff-test::panics::panic-invocation] panic invocation to `core::panicking::panic` has no recorded `// PANIC:` evidence
+error: [sniff-test::panics::panic-invocation] panic invocation to `panic` has no recorded `// PANIC:` evidence
   --> src/lib.rs:21:5
    |
 21 |     assert!(flag);
    |     ^^^^^^^^^^^^^
    |
-   = note: reachable from `safe_markers::unsafe_call` to `core::panicking::panic`
+   = note: reachable from `unsafe_call` to `panic`
    = help: add `// PANIC:` directly above this source after establishing the invariant that contains this panic path
 
 error: [sniff-test::panics::compiler-assert-division-by-zero] compiler assertion (division by zero) has no recorded `// PANIC:` evidence
@@ -22,7 +22,7 @@ error: [sniff-test::panics::compiler-assert-division-by-zero] compiler assertion
 8 |     total / denominator
   |     ^^^^^^^^^^^^^^^^^^^
   |
-  = note: reachable from `safe_markers::unsafe_ratio` to `compiler assert division by zero`
+  = note: reachable from `unsafe_ratio` to `compiler assert division by zero`
   = help: add `// PANIC:` directly above this source after establishing the invariant that contains this panic path
 
 note: set `show-full-stack-trace = true` under `[analysis]` in sniff-test.toml to show every reachability step

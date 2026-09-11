@@ -14,7 +14,7 @@ error: [sniff-test::panics::compiler-assert-division-by-zero] compiler assertion
 2 |     total_size / block_count
   |     ^^^^^^^^^^^^^^^^^^^^^^^^
   |
-  = note: reachable from `panic_axioms::division` to `compiler assert division by zero`
+  = note: reachable from `division` to `compiler assert division by zero`
   = help: add `// PANIC:` directly above this source after establishing the invariant that contains this panic path
 
 error: [sniff-test::panics::compiler-assert-bounds-check] compiler assertion (index out of bounds) has no recorded `// PANIC:` evidence
@@ -23,7 +23,7 @@ error: [sniff-test::panics::compiler-assert-bounds-check] compiler assertion (in
 10 |     values[index]
    |     ^^^^^^^^^^^^^
    |
-   = note: reachable from `panic_axioms::indexed` to `compiler assert index out of bounds`
+   = note: reachable from `indexed` to `compiler assert index out of bounds`
    = help: add `// PANIC:` directly above this source after establishing the invariant that contains this panic path
 
 error: [sniff-test::panics::compiler-assert-remainder-by-zero] compiler assertion (remainder with a zero divisor) has no recorded `// PANIC:` evidence
@@ -32,7 +32,7 @@ error: [sniff-test::panics::compiler-assert-remainder-by-zero] compiler assertio
 6 |     total_size % block_size
   |     ^^^^^^^^^^^^^^^^^^^^^^^
   |
-  = note: reachable from `panic_axioms::remainder` to `compiler assert remainder with a zero divisor`
+  = note: reachable from `remainder` to `compiler assert remainder with a zero divisor`
   = help: add `// PANIC:` directly above this source after establishing the invariant that contains this panic path
 
 note: set `show-full-stack-trace = true` under `[analysis]` in sniff-test.toml to show every reachability step
