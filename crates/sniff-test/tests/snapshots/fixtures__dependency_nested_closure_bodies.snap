@@ -12,7 +12,7 @@ expression: "report[\"findings\"]"
       "package-version": "0.1.0",
       "scope": "dependency"
     },
-    "reason": "dependency crate `dependency_closure_dep` has no recorded `// PANIC:` evidence for panic invocation to `core::panicking::panic_fmt`",
+    "reason": "dependency crate `dependency_closure_dep` has no recorded `// PANIC:` justification for panic invocation to `core::panicking::panic_fmt`",
     "root": "dependency_closure_app::nested",
     "root-kind": "concrete",
     "root-span": "src/lib.rs:13:1: 13:47",

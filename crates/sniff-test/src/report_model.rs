@@ -79,6 +79,7 @@ pub(crate) struct InterpretedFinding {
     pub(crate) function_path: String,
     pub(crate) target: Option<InterpretedTarget>,
     pub(crate) source_range: Option<SourceRangeFact>,
+    pub(crate) contract_source_range: Option<SourceRangeFact>,
     pub(crate) marker_evidence: Option<MarkerEvidenceState>,
     pub(crate) trace: InterpretedTrace,
     pub(crate) missing_requirements: Vec<ContractRequirementFact>,
@@ -148,16 +149,37 @@ pub(crate) struct UnresolvedCallSite {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum InterpretedFindingKind {
-    CompilerAssert { kind: CompilerAssertKind },
+    CompilerAssert {
+        kind: CompilerAssertKind,
+    },
     PanicSink,
     DocumentedPanic,
-    UnresolvedPanicCallTarget { site: UnresolvedCallSite },
+    UnresolvedPanicCallTarget {
+        site: UnresolvedCallSite,
+    },
     MissingSafetyDocs,
-    SafetyCall { kind: InterpretedSafetyCallKind },
-    UnresolvedSafetyCallTarget { site: UnresolvedCallSite },
-    UnsafeOperation { kind: SafetyOpKind },
-    AmbiguousPanicRequirement { normalized_name: String },
-    AmbiguousSafetyRequirement { normalized_name: String },
-    AmbiguousPanicMarker { effect_count: usize },
-    AmbiguousSafetyMarker { effect_count: usize },
+    SafetyCall {
+        kind: InterpretedSafetyCallKind,
+        /// Retains a bare `# Safety` contract even when it has no structured
+        /// requirements to carry that provenance into diagnostics.
+        documents_contract: bool,
+    },
+    UnresolvedSafetyCallTarget {
+        site: UnresolvedCallSite,
+    },
+    UnsafeOperation {
+        kind: SafetyOpKind,
+    },
+    AmbiguousPanicRequirement {
+        normalized_name: String,
+    },
+    AmbiguousSafetyRequirement {
+        normalized_name: String,
+    },
+    AmbiguousPanicMarker {
+        effect_count: usize,
+    },
+    AmbiguousSafetyMarker {
+        effect_count: usize,
+    },
 }

@@ -13,10 +13,49 @@ use common::{
 
 struct Case {
     denied: bool,
+    app_crate: bool,
+    color: &'static str,
     working_dir: Option<&'static str>,
     config_append: &'static str,
     args: &'static [&'static str],
     rustflags: Option<&'static str>,
+}
+
+#[test]
+fn full_stack_trace_footer_uses_rustc_note_color_without_a_trailing_blank_line() {
+    const HINT: &str = "set `show-full-stack-trace = true` under `[analysis]` in sniff-test.toml to show every reachability step";
+
+    let repo = repo_root();
+    let binary = PathBuf::from(env!("CARGO_BIN_EXE_cargo-sniff-test"));
+    let case = Case::new().in_app().color("always");
+    let (output, _, _temp) = run_case(
+        &repo,
+        &binary,
+        "full_stack_trace_footer_color",
+        "dependency_obligation",
+        &case,
+    );
+
+    assert_eq!(output.status.code(), Some(0), "stderr:\n{}", output.stderr);
+    let hint_line = output
+        .stderr
+        .lines()
+        .find(|line| line.contains(HINT))
+        .expect("full-stack-trace hint should be emitted");
+    assert!(
+        hint_line.contains("\u{1b}[92mnote\u{1b}[0m"),
+        "the note label should use rustc's green diagnostic style:\n{}",
+        output.stderr,
+    );
+    let (_, after_hint) = output
+        .stderr
+        .split_once(HINT)
+        .expect("full-stack-trace hint should be emitted");
+    assert!(
+        after_hint.starts_with('\n') && !after_hint.starts_with("\n\n"),
+        "the Cargo warning footer should follow without a blank line:\n{}",
+        output.stderr,
+    );
 }
 
 macro_rules! cli_cases {
@@ -36,6 +75,12 @@ cli_cases! {
     "direct_panic" => {
         panic_invocation_can_be_allowed => Case::new()
             .config_append("\n[panics.lints]\npanic-invocation = \"allow\"\n");
+    }
+    "source_aggregation" => {
+        source_aggregation_emits_one_diagnostic_per_root => Case::new()
+            .denied();
+        source_aggregation_emits_one_warning_per_root => Case::new()
+            .config_append("\n[panics.lints]\npanic-invocation = \"warn\"\n");
     }
     "safe_markers" => {
         full_stack_trace => Case::new()
@@ -92,6 +137,50 @@ cli_cases! {
                      inline-assembly-missing-justification = \"deny\"\n",
                 )
                 .denied();
+    }
+}
+
+#[test]
+fn effect_flag_tracks_only_selected_domain() {
+    let repo = repo_root();
+    let binary = PathBuf::from(env!("CARGO_BIN_EXE_cargo-sniff-test"));
+
+    for (name, effect, args, included, excluded) in [
+        (
+            "effect_flag_selects_safety",
+            "safety",
+            &["--effect", "safety"][..],
+            "sniff-test::safety",
+            "sniff-test::panics",
+        ),
+        (
+            "effect_flag_selects_panic",
+            "panic",
+            &["--effect", "panic"][..],
+            "sniff-test::panics",
+            "sniff-test::safety",
+        ),
+    ] {
+        for fixture in ["effect_marker_paths", "macro_contracts"] {
+            let case = Case::new().args(args).denied();
+            let (output, _, _temp) = run_case(&repo, &binary, name, fixture, &case);
+            assert_eq!(
+                output.status.code(),
+                Some(101),
+                "stderr:\n{}",
+                output.stderr
+            );
+            assert!(
+                output.stderr.contains(included),
+                "selected `{effect}` diagnostics were absent:\n{}",
+                output.stderr,
+            );
+            assert!(
+                !output.stderr.contains(excluded),
+                "deselected diagnostics were emitted for `{effect}`:\n{}",
+                output.stderr,
+            );
+        }
     }
 }
 
@@ -263,7 +352,7 @@ fn compact_diagnostic_group_can_be_explained_from_the_explanation_report() {
             first.stderr
         );
     }
-    let full_detail = "at least one path to this source is not fully accounted for";
+    let full_detail = "no `// PANIC:` justification was found for this source";
     assert!(
         !first.stderr.contains(full_detail),
         "full trace detail should not be printed inline:\n{}",
@@ -2037,15 +2126,13 @@ fn cached_dependency_source_is_verified_before_rendering_a_snippet() {
         .lines()
         .filter(|line| line.trim_start().starts_with("-->"))
         .collect::<Vec<_>>();
-    assert_eq!(
-        span_locations.len(),
-        1,
-        "only the verified workspace root may be spanned when the cached effect source is unavailable:\n{unavailable_stderr}"
-    );
     let workspace_source_path = workspace_source.display().to_string();
     assert!(
-        span_locations[0].contains(&workspace_source_path),
-        "the remaining span must identify the verified workspace root:\n{unavailable_stderr}"
+        !span_locations.is_empty()
+            && span_locations
+                .iter()
+                .all(|location| location.contains(&workspace_source_path)),
+        "only verified workspace locations may be spanned when the cached effect source is unavailable:\n{unavailable_stderr}"
     );
 }
 
@@ -2340,8 +2427,9 @@ fn invalid_config_is_rendered_once_by_cargo_frontend() {
     let load_context = stderr
         .find("error: failed to load configuration")
         .expect("outer load context should be rendered");
+    let resolved_manifest = manifest.canonicalize().expect("canonicalize manifest");
     let path_context = stderr
-        .find(&format!("failed to parse {}", manifest.display()))
+        .find(&format!("failed to parse {}", resolved_manifest.display()))
         .expect("manifest path context should be rendered");
     let parser_source = stderr
         .find("TOML parse error")
@@ -2839,6 +2927,8 @@ impl Case {
     fn new() -> Self {
         Self {
             denied: false,
+            app_crate: false,
+            color: "never",
             working_dir: None,
             config_append: "",
             args: &[],
@@ -2848,6 +2938,16 @@ impl Case {
 
     fn denied(mut self) -> Self {
         self.denied = true;
+        self
+    }
+
+    fn in_app(mut self) -> Self {
+        self.app_crate = true;
+        self
+    }
+
+    fn color(mut self, color: &'static str) -> Self {
+        self.color = color;
         self
     }
 
@@ -2945,15 +3045,16 @@ fn run_case(
     copy_fixture_dir(&fixture, &root)
         .unwrap_or_else(|error| panic!("{name}: failed to copy fixture: {error}"));
 
+    let crate_dir = if case.app_crate { "app" } else { "" };
     if !case.config_append.is_empty() {
-        let config = root.join("sniff-test.toml");
+        let config = root.join(crate_dir).join("sniff-test.toml");
         let existing = fs::read_to_string(&config)
             .unwrap_or_else(|error| panic!("{name}: failed to read config: {error}"));
         fs::write(config, existing + case.config_append)
             .unwrap_or_else(|error| panic!("{name}: failed to update config: {error}"));
     }
 
-    let working_dir = root.join(case.working_dir.unwrap_or(""));
+    let working_dir = root.join(case.working_dir.unwrap_or(crate_dir));
     let _cargo_guard = lock_nested_cargo();
     let output = run_cargo_sniff_test(binary, &working_dir, name, case);
     (output, root, temp)
@@ -2971,7 +3072,7 @@ fn run_cargo_sniff_test(
         command.env("RUSTFLAGS", rustflags);
     }
     let output = command
-        .args(["--color", "never"])
+        .args(["--color", case.color])
         .args(case.args)
         .current_dir(working_dir)
         .output()

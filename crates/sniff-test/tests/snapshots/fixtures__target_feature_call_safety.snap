@@ -13,7 +13,7 @@ expression: "report[\"findings\"]"
       "package-version": "0.1.0",
       "scope": "workspace"
     },
-    "reason": "unsafe call to `target_feature_call_safety::target_feature_callee` has no recorded `// SAFETY:` evidence",
+    "reason": "unsafe call to `target_feature_call_safety::target_feature_callee` has no recorded `// SAFETY:` justification",
     "root": "target_feature_call_safety::ordinary_caller",
     "root-kind": "concrete",
     "root-span": "src/lib.rs:23:1: 23:25",

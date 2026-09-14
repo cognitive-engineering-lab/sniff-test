@@ -15,7 +15,7 @@ expression: "report[\"findings\"]"
       "package-version": "0.1.0",
       "scope": "workspace"
     },
-    "reason": "call to `source_contract_overrides::selected_panic` with a `# Panics` contract has no recorded `// PANIC:` evidence",
+    "reason": "call to `source_contract_overrides::selected_panic` with a `# Panics` obligation has no recorded `// PANIC:` justification",
     "requirements": [
       "selected: flag must be true."
     ],
@@ -40,7 +40,7 @@ expression: "report[\"findings\"]"
       "package-version": "0.1.0",
       "scope": "workspace"
     },
-    "reason": "panic invocation to `core::panicking::panic_fmt` has no recorded `// PANIC:` evidence",
+    "reason": "panic invocation to `core::panicking::panic_fmt` has no recorded `// PANIC:` justification",
     "root": "source_contract_overrides::caller",
     "root-kind": "concrete",
     "root-span": "src/lib.rs:9:1: 9:26",
@@ -68,7 +68,7 @@ expression: "report[\"findings\"]"
       "package-version": "0.1.0",
       "scope": "workspace"
     },
-    "reason": "call to `source_contract_dependency::dependency_panic` with a `# Panics` contract has no recorded `// PANIC:` evidence",
+    "reason": "call to `source_contract_dependency::dependency_panic` with a `# Panics` obligation has no recorded `// PANIC:` justification",
     "requirements": [
       "dependency: flag must be true."
     ],
@@ -96,7 +96,7 @@ expression: "report[\"findings\"]"
       "package-version": "0.1.0",
       "scope": "workspace"
     },
-    "reason": "call to `source_contract_overrides::trait_api::Operation::execute` with a `# Panics` contract has no recorded `// PANIC:` evidence",
+    "reason": "call to `source_contract_overrides::trait_api::Operation::execute` with a `# Panics` obligation has no recorded `// PANIC:` justification",
     "requirements": [
       "implemented: the implementation must satisfy its panic contract."
     ],

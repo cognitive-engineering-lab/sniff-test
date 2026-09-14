@@ -13,7 +13,7 @@ expression: "report[\"findings\"]"
       "package-version": "0.1.0",
       "scope": "workspace"
     },
-    "reason": "unsafe call to `unsafe function pointer` has no recorded `// SAFETY:` evidence",
+    "reason": "unsafe call to `unsafe function pointer` has no recorded `// SAFETY:` justification",
     "root": "trusted_boundaries::trusted_unsafe_through_fn_pointer",
     "root-kind": "concrete",
     "root-span": "src/lib.rs:31:1: 31:82",
@@ -36,7 +36,7 @@ expression: "report[\"findings\"]"
       "package-version": "0.1.0",
       "scope": "workspace"
     },
-    "reason": "unsafe call to `trusted_boundaries::unsafe_helper` has no recorded `// SAFETY:` evidence",
+    "reason": "unsafe call to `trusted_boundaries::unsafe_helper` has no recorded `// SAFETY:` justification",
     "root": "trusted_boundaries::trusted_unsafe_without_docs",
     "root-kind": "concrete",
     "root-span": "src/lib.rs:27:1: 27:37",
@@ -58,7 +58,7 @@ expression: "report[\"findings\"]"
       "package-version": "0.1.0",
       "scope": "workspace"
     },
-    "reason": "call to `trusted_boundaries::trusted_doc_helper` with a `# Panics` contract has no recorded `// PANIC:` evidence",
+    "reason": "call to `trusted_boundaries::trusted_doc_helper` with a `# Panics` obligation has no recorded `// PANIC:` justification",
     "root": "trusted_boundaries::trusted_with_docs",
     "root-kind": "concrete",
     "root-span": "src/lib.rs:5:1: 5:37",

@@ -198,6 +198,9 @@ fixture_cases! {
     "unsafe_ops" => {
         unsafe_ops => Case::new();
     }
+    "safety_macro_ignores" => {
+        safety_macro_ignores_are_path_local => Case::new().denied();
+    }
     "unsafe_closure_inherit" => {
         unsafe_closure_inherit => Case::new();
     }
@@ -302,7 +305,7 @@ fn source_aggregation_json_retains_each_report_root() {
         "source_aggregation",
         &Case::new()
             .denied()
-            .human_snapshot("source_aggregation_collapses_only_human_diagnostics"),
+            .human_snapshot("source_aggregation_emits_one_diagnostic_per_root"),
     );
     if !cfg!(unix) {
         return;
@@ -317,11 +320,20 @@ fn source_aggregation_json_retains_each_report_root() {
         .expect("explain shared source paths");
     assert!(explained.status.success(), "{explained:?}");
     let explanation = String::from_utf8(explained.stdout).expect("explanation should be utf-8");
-    let help = explanation.find("= help").expect("remediation help");
     for root in ["first_api", "second_api"] {
         let edge = format!("source_aggregation::{root} --direct-call->");
         let path = explanation.find(&edge).expect("retain every root's path");
-        assert!(path < help, "all paths must precede help:\n{explanation}");
+        let diagnostic_start = explanation[..path]
+            .rfind("error:")
+            .expect("diagnostic heading");
+        let help = explanation[diagnostic_start..]
+            .find("help:")
+            .map(|offset| diagnostic_start + offset)
+            .expect("remediation help for this root");
+        assert!(
+            path < help,
+            "each root's path must precede its help:\n{explanation}"
+        );
     }
     let trace_steps = explanation.matches("effect trace step ").count();
     assert!(

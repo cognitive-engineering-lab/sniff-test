@@ -8,7 +8,9 @@ use crate::config::{LintLevel, ReportRootSet};
 use crate::report_roots::MissingReportRoot;
 use rustc_errors::annotate_snippet_emitter_writer::AnnotateSnippetEmitter;
 use rustc_errors::emitter::Emitter;
-use rustc_errors::{AutoStream, ColorChoice, Diag, EmissionGuarantee, Level};
+use rustc_errors::{
+    AutoStream, ColorChoice, Diag, DiagInner, EmissionGuarantee, Level, MultiSpan, Style,
+};
 use rustc_middle::ty::TyCtxt;
 use rustc_span::source_map::SourceMap;
 use rustc_span::{BytePos, Span};
@@ -29,7 +31,14 @@ pub(super) fn emit_finding_diagnostic(
     let message = lint_coded_message(lint_code, &diagnostic.message);
     let messages = messages_for_emission(diagnostic, group);
     let explanation_help = group.map(|group| explain_help(group, cache_dir, frontend_executable));
-    match (level, diagnostic.span) {
+    let spans = diagnostic.span.map(|primary| {
+        let mut spans = MultiSpan::from_span(primary);
+        if let Some(second) = diagnostic.second_primary_span {
+            spans.push_primary_span(second);
+        }
+        spans
+    });
+    match (level, spans) {
         (LintLevel::Allow, _) => {}
         (LintLevel::Warn, Some(span)) => {
             let mut emitted = tcx.dcx().struct_span_warn(span, message.clone());
@@ -71,8 +80,12 @@ pub(super) fn render_finding_diagnostic(
         lint_coded_message(lint_code, &diagnostic.message)
     );
     let mut rendered = Diag::<()>::new(tcx.dcx(), level, message);
-    if let Some(span) = diagnostic.span {
-        rendered.span(span);
+    if let Some(primary) = diagnostic.span {
+        let mut spans = MultiSpan::from_span(primary);
+        if let Some(second) = diagnostic.second_primary_span {
+            spans.push_primary_span(second);
+        }
+        rendered.span(spans);
     }
     let mut messages = diagnostic.messages.clone();
     messages.sort_by_key(|message| {
@@ -131,6 +144,19 @@ fn messages_for_emission<'a>(
     } else {
         &diagnostic.messages
     }
+}
+
+/// `FailureNote` is the one rustc diagnostic level that omits the trailing
+/// blank separator. Supply the ordinary note label and style explicitly so a
+/// footer keeps rustc's green `note:` presentation without an empty line.
+pub(super) fn emit_footer_note(tcx: TyCtxt<'_>, message: &str) {
+    tcx.dcx().emit_diagnostic(DiagInner::new_with_messages(
+        Level::FailureNote,
+        vec![
+            ("note".into(), Style::Level(Level::Note)),
+            ((": ".to_owned() + message).into(), Style::NoStyle),
+        ],
+    ));
 }
 
 fn lint_coded_message(lint_code: &str, message: &str) -> String {
@@ -255,6 +281,7 @@ pub(super) fn empty_report_roots_diagnostic(
         });
     FindingDiagnostic {
         span,
+        second_primary_span: None,
         message,
         messages: vec![DiagnosticMessage::Help(String::from(
             "update `[analysis].report-roots` to include functions in the current crate",
@@ -278,6 +305,7 @@ pub(super) fn missing_report_root_diagnostic(
     );
     FindingDiagnostic {
         span,
+        second_primary_span: None,
         message,
         messages: vec![
             DiagnosticMessage::Note(String::from("configured under `[analysis].report-roots`")),
@@ -390,6 +418,7 @@ mod tests {
         let compact = DiagnosticMessage::Help(String::from("compact action"));
         let diagnostic = FindingDiagnostic {
             span: None,
+            second_primary_span: None,
             message: String::from("finding"),
             messages: vec![full.clone()],
             compact_messages: Some(vec![compact.clone()]),

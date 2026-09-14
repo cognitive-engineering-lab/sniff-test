@@ -1,5 +1,5 @@
 ---
-source: crates/sniff-test/tests/cli.rs
+source: crates/sniff-test/tests/fixtures.rs
 expression: snapshot
 ---
 exit: 101
@@ -11,7 +11,7 @@ warning: [sniff-test::panics::documented-panic] this call's documented panic con
   --> src/lib.rs:11:21
    |
 11 |         let first = ratio(a, denominator);
-   |                     ^^^^^^^^^^^^^^^^^^^^^ `ambiguous_markers::ratio` documents when this call may panic
+   |                     ^^^^^^^^^^^^^^^^^^^^^ `ratio` documents when this call may panic
    |
    = help: address the documented panic conditions at each affected call with `// PANIC:`
    = help: for the full explanation, run `'[SNIFF-TEST]' explain 5vp2 --cache-dir '[FIXTURE]/target/sniff-test/sniff-test-cache/v[FORMAT]'`
@@ -20,7 +20,7 @@ warning: [sniff-test::panics::documented-panic] this call's documented panic con
   --> src/lib.rs:12:22
    |
 12 |         let second = ratio(b, denominator);
-   |                      ^^^^^^^^^^^^^^^^^^^^^ `ambiguous_markers::ratio` documents when this call may panic
+   |                      ^^^^^^^^^^^^^^^^^^^^^ `ratio` documents when this call may panic
    |
    = help: address the documented panic conditions at each affected call with `// PANIC:`
    = help: for the full explanation, run `'[SNIFF-TEST]' explain 5vp2 --cache-dir '[FIXTURE]/target/sniff-test/sniff-test-cache/v[FORMAT]'`
@@ -48,7 +48,7 @@ warning: [sniff-test::panics::documented-panic] this call's documented panic con
   --> src/lib.rs:67:5
    |
 67 |     first_documented_source();
-   |     ^^^^^^^^^^^^^^^^^^^^^^^^^ `ambiguous_markers::first_documented_source` documents when this call may panic
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^ `first_documented_source` documents when this call may panic
    |
 help: address the documented panic conditions at each affected call with `// PANIC:`
   --> src/lib.rs:77:5
@@ -61,7 +61,7 @@ warning: [sniff-test::panics::documented-panic] this call's documented panic con
   --> src/lib.rs:68:5
    |
 68 |     second_documented_source();
-   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^ `ambiguous_markers::second_documented_source` documents when this call may panic
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^ `second_documented_source` documents when this call may panic
    |
 help: address the documented panic conditions at each affected call with `// PANIC:`
   --> src/lib.rs:77:5
@@ -80,5 +80,6 @@ error: [sniff-test::analysis::ambiguous-panic-marker] `// PANIC:` comment could 
    = help: place a separate `// PANIC:` marker on each panic path
    = help: for the full explanation, run `'[SNIFF-TEST]' explain af6v --cache-dir '[FIXTURE]/target/sniff-test/sniff-test-cache/v[FORMAT]'`
 
+note: set `show-full-stack-trace = true` under `[analysis]` in sniff-test.toml to show every reachability step
 warning: `ambiguous-markers` (lib) generated 4 warnings
 error: could not compile `ambiguous-markers` (lib) due to 3 previous errors; 4 warnings emitted

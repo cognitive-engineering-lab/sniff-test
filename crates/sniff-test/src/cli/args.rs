@@ -3,6 +3,7 @@ use std::path::PathBuf;
 
 use crate::artifact_cache::default_cache_dir;
 use crate::config::{DEFAULT_MANIFEST_FILE, OverflowChecks};
+use crate::effects::{EffectDomain, EffectSelection};
 use clap::{Args, Parser, Subcommand, ValueEnum};
 use serde::{Deserialize, Serialize};
 
@@ -10,6 +11,10 @@ pub(crate) const MANIFEST_PATH_ENV: &str = "SNIFF_TEST_MANIFEST";
 
 #[derive(Debug, Args)]
 struct CommonCliArgs {
+    /// Effect to track. May be repeated; defaults to all effects.
+    #[arg(short = 'e', long = "effect", value_enum, value_name = "EFFECT")]
+    effects: Vec<EffectDomain>,
+
     /// Path to sniff-test.toml.
     #[arg(long, value_name = "PATH")]
     manifest: Option<PathBuf>,
@@ -30,6 +35,7 @@ struct CommonCliArgs {
 impl CommonCliArgs {
     fn into_sniff_test_args(self) -> SniffTestArgs {
         SniffTestArgs {
+            effects: EffectSelection::from_effects(&self.effects),
             manifest_path: self.manifest,
             cache_dir: self.cache_dir,
             color: self.color,
@@ -231,6 +237,8 @@ pub struct SniffTestArgs {
     /// command cannot reliably rediscover this report. `None` selects the
     /// ordinary Cargo subcommand form.
     pub(crate) frontend_executable: Option<PathBuf>,
+    #[serde(default)]
+    pub(crate) effects: EffectSelection,
     pub(crate) manifest_path: Option<PathBuf>,
     pub(crate) cache_dir: Option<PathBuf>,
     pub(crate) cargo_target_dir: Option<PathBuf>,
@@ -305,6 +313,7 @@ mod tests {
     use clap::Parser as _;
 
     use super::{CrateOutputScope, DriverCli, FrontendAction, FrontendCli, MessageFormat};
+    use crate::effects::EffectSelection;
 
     #[test]
     fn frontend_parses_equals_options_and_cargo_args_after_separator() {
@@ -336,6 +345,39 @@ mod tests {
             args.cache_dir,
             Some(std::path::PathBuf::from("custom cache"))
         );
+    }
+
+    #[test]
+    fn frontend_selects_one_or_multiple_effects() {
+        for (argv, tracks_panic, tracks_safety) in [
+            (&["cargo-sniff-test"][..], true, true),
+            (&["cargo-sniff-test", "-e", "safety"][..], false, true),
+            (
+                &["cargo-sniff-test", "--effect", "panic", "--effect=safety"][..],
+                true,
+                true,
+            ),
+        ] {
+            let cli = FrontendCli::try_parse_from(argv).expect("effect selection should parse");
+            let FrontendAction::Run(args) = cli.into_action() else {
+                panic!("expected frontend run action");
+            };
+            assert_eq!(args.effects.tracks_panic(), tracks_panic);
+            assert_eq!(args.effects.tracks_safety(), tracks_safety);
+        }
+    }
+
+    #[test]
+    fn effect_selection_defaults_to_all_when_deserialized_from_older_arguments() {
+        let mut encoded = serde_json::to_value(super::SniffTestArgs::default())
+            .expect("default arguments should encode");
+        encoded
+            .as_object_mut()
+            .expect("arguments should encode as an object")
+            .remove("effects");
+        let args: super::SniffTestArgs =
+            serde_json::from_value(encoded).expect("older arguments should parse");
+        assert_eq!(args.effects, EffectSelection::default());
     }
 
     #[test]
@@ -425,6 +467,8 @@ mod tests {
             [
                 "sniff-test-driver",
                 "--message-format=json",
+                "-e",
+                "safety",
                 "--dependency",
                 "--",
                 "--crate-name",
@@ -436,6 +480,8 @@ mod tests {
         let (rustc_args, args) = cli.into_parts(String::from("sniff-test-driver"));
 
         assert_eq!(args.message_format, MessageFormat::Json);
+        assert!(!args.effects.tracks_panic());
+        assert!(args.effects.tracks_safety());
         assert_eq!(args.direct_scope, CrateOutputScope::Dependency);
         assert_eq!(rustc_args, ["sniff-test-driver", "--crate-name", "demo"]);
     }

@@ -1,5 +1,5 @@
 ---
-source: crates/sniff-test/tests/cli.rs
+source: crates/sniff-test/tests/fixtures.rs
 expression: snapshot
 ---
 exit: 0
@@ -12,10 +12,11 @@ warning: [sniff-test::panics::documented-panic] this call's documented panic con
  --> src/lib.rs:2:5
   |
 2 |     dependency_obligation::documented(flag);
-  |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `dependency_obligation::documented` documents when this call may panic
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `documented` documents when this call may panic
   |
   = help: address the documented panic conditions at each affected call with `// PANIC:`
   = help: for the full explanation, run `'[SNIFF-TEST]' explain rwqw --cache-dir '[FIXTURE]/app/target/sniff-test/sniff-test-cache/v[FORMAT]'`
 
+note: set `show-full-stack-trace = true` under `[analysis]` in sniff-test.toml to show every reachability step
 warning: `dependency-app` (lib) generated 1 warning
     Finished `release` profile [optimized] target(s) in [TIME]

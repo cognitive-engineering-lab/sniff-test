@@ -1,5 +1,5 @@
 ---
-source: crates/sniff-test/tests/cli.rs
+source: crates/sniff-test/tests/fixtures.rs
 expression: snapshot
 ---
 exit: 101
@@ -29,4 +29,5 @@ help: account for this path at this call with `// PANIC:`, or document it under 
    |     ^^^^^^^^^^^^
    = help: for the full explanation, run `'[SNIFF-TEST]' explain z759 --cache-dir '[FIXTURE]/target/sniff-test/sniff-test-cache/v[FORMAT]'`
 
+note: set `show-full-stack-trace = true` under `[analysis]` in sniff-test.toml to show every reachability step
 error: could not compile `safe-markers` (lib) due to 2 previous errors

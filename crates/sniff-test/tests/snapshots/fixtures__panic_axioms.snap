@@ -13,7 +13,7 @@ expression: "report[\"findings\"]"
       "package-version": "0.1.0",
       "scope": "workspace"
     },
-    "reason": "compiler assertion (division by zero) has no recorded `// PANIC:` evidence",
+    "reason": "compiler assertion (division by zero) has no recorded `// PANIC:` justification",
     "root": "panic_axioms::division",
     "root-kind": "concrete",
     "root-span": "src/lib.rs:1:1: 1:64",
@@ -36,7 +36,7 @@ expression: "report[\"findings\"]"
       "package-version": "0.1.0",
       "scope": "workspace"
     },
-    "reason": "compiler assertion (index out of bounds) has no recorded `// PANIC:` evidence",
+    "reason": "compiler assertion (index out of bounds) has no recorded `// PANIC:` justification",
     "root": "panic_axioms::indexed",
     "root-kind": "concrete",
     "root-span": "src/lib.rs:9:1: 9:56",
@@ -59,7 +59,7 @@ expression: "report[\"findings\"]"
       "package-version": "0.1.0",
       "scope": "workspace"
     },
-    "reason": "compiler assertion (remainder with a zero divisor) has no recorded `// PANIC:` evidence",
+    "reason": "compiler assertion (remainder with a zero divisor) has no recorded `// PANIC:` justification",
     "root": "panic_axioms::remainder",
     "root-kind": "concrete",
     "root-span": "src/lib.rs:5:1: 5:64",

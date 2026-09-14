@@ -1,5 +1,5 @@
 ---
-source: crates/sniff-test/tests/cli.rs
+source: crates/sniff-test/tests/fixtures.rs
 expression: snapshot
 ---
 exit: 0
@@ -11,7 +11,7 @@ warning: [sniff-test::panics::documented-panic] this call's documented panic con
   --> src/lib.rs:11:5
    |
 11 |     value.documented(flag);
-   |     ^^^^^^^^^^^^^^^^^^^^^^ `indirect_calls::Risky::documented` documents when this call may panic
+   |     ^^^^^^^^^^^^^^^^^^^^^^ `documented` documents when this call may panic
    |
    = help: address the documented panic conditions at each affected call with `// PANIC:`
    = help: for the full explanation, run `'[SNIFF-TEST]' explain 9yhp --cache-dir '[FIXTURE]/target/sniff-test/sniff-test-cache/v[FORMAT]'`
@@ -79,5 +79,6 @@ warning: [sniff-test::safety::unresolved-call-target] cannot determine whether t
    = help: make the callee concrete or make its possible implementations available to analysis
    = help: for the full explanation, run `'[SNIFF-TEST]' explain gaxh --cache-dir '[FIXTURE]/target/sniff-test/sniff-test-cache/v[FORMAT]'`
 
+note: set `show-full-stack-trace = true` under `[analysis]` in sniff-test.toml to show every reachability step
 warning: `indirect-calls` (lib) generated 8 warnings
     Finished `release` profile [optimized] target(s) in [TIME]

@@ -14,6 +14,7 @@ use crate::artifact::{
 use crate::compiler::invocations::InvocationGraph;
 use crate::config::{EffectDocMatching, PanicConfig, SafetyConfig};
 use crate::contracts::normalize_requirement_name;
+use crate::effects::EffectSelection;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub(crate) enum CommentDomain {
@@ -161,9 +162,15 @@ pub(crate) struct CommentEffect<'annotations> {
     trusted_panic_invocations: BTreeSet<InvocationId>,
     trusted_safety_invocations: BTreeSet<InvocationId>,
     ignored_panic_invocations: BTreeSet<InvocationId>,
+    ignored_safety_invocations: BTreeSet<InvocationId>,
 }
 
 impl<'annotations> CommentEffect<'annotations> {
+    #[allow(
+        clippy::too_many_arguments,
+        clippy::too_many_lines,
+        reason = "comment probing joins both domain policies with the invocation selection"
+    )]
     pub(crate) fn probe(
         artifact: &ArtifactFacts,
         graph: &'annotations InvocationGraph,
@@ -172,9 +179,15 @@ impl<'annotations> CommentEffect<'annotations> {
         effect_doc_matching: EffectDocMatching,
         panic_config: &PanicConfig,
         safety_config: &SafetyConfig,
+        effects: EffectSelection,
     ) -> Self {
         let mut contracts = Vec::new();
         for annotation in annotations.contracts() {
+            if (annotation.domain() == AnnotationDomain::Panic && !effects.tracks_panic())
+                || (annotation.domain() == AnnotationDomain::Safety && !effects.tracks_safety())
+            {
+                continue;
+            }
             let functions = graph
                 .contract_targets(annotation.owner())
                 .into_iter()
@@ -199,12 +212,15 @@ impl<'annotations> CommentEffect<'annotations> {
         let mut trusted_safety_functions = BTreeSet::new();
         for body in &artifact.functions {
             let candidates = namespaces.candidates(body.function);
-            if panic_config.panic_boundary_policy_candidates(candidates)
-                == crate::config::PanicBoundaryPolicy::TrustedBoundary
+            if effects.tracks_panic()
+                && panic_config.panic_boundary_policy_candidates(candidates)
+                    == crate::config::PanicBoundaryPolicy::TrustedBoundary
             {
                 trusted_panic_functions.extend(graph.function_aliases(body.function));
             }
-            if safety_config.trusts_safety_boundary_candidates(candidates) {
+            if effects.tracks_safety()
+                && safety_config.trusts_safety_boundary_candidates(candidates)
+            {
                 trusted_safety_functions.extend(graph.function_aliases(body.function));
             }
         }
@@ -239,11 +255,23 @@ impl<'annotations> CommentEffect<'annotations> {
         }
         let ignored_panic_invocations = graph
             .invocations()
+            .filter(|_| effects.tracks_panic())
             .filter(|invocation| {
                 invocation
                     .macro_provenance()
                     .iter()
                     .any(|frame| panic_config.ignores_path(&frame.display_path))
+            })
+            .map(crate::compiler::invocations::Invocation::id)
+            .collect();
+        let ignored_safety_invocations = graph
+            .invocations()
+            .filter(|_| effects.tracks_safety())
+            .filter(|invocation| {
+                invocation
+                    .macro_provenance()
+                    .iter()
+                    .any(|frame| safety_config.ignores_path(&frame.display_path))
             })
             .map(crate::compiler::invocations::Invocation::id)
             .collect();
@@ -257,6 +285,7 @@ impl<'annotations> CommentEffect<'annotations> {
             trusted_panic_invocations,
             trusted_safety_invocations,
             ignored_panic_invocations,
+            ignored_safety_invocations,
         }
     }
 
@@ -333,15 +362,26 @@ impl<'annotations> CommentEffect<'annotations> {
         .contains(&invocation)
     }
 
+    #[must_use]
+    pub(crate) fn is_ignored_invocation(
+        &self,
+        domain: CommentDomain,
+        invocation: InvocationId,
+    ) -> bool {
+        match domain {
+            CommentDomain::Panic => &self.ignored_panic_invocations,
+            CommentDomain::Safety => &self.ignored_safety_invocations,
+        }
+        .contains(&invocation)
+    }
+
     fn invocation_transition(
         &self,
         state: &CommentState,
         invocation: InvocationId,
         node: Option<TraceNodeId>,
     ) -> Option<CommentInvocationTransition> {
-        if state.domain == CommentDomain::Panic
-            && self.ignored_panic_invocations.contains(&invocation)
-        {
+        if self.is_ignored_invocation(state.domain, invocation) {
             return None;
         }
         if state.domain == CommentDomain::Safety

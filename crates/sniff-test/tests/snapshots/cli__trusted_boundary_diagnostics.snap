@@ -1,5 +1,5 @@
 ---
-source: crates/sniff-test/tests/cli.rs
+source: crates/sniff-test/tests/fixtures.rs
 expression: snapshot
 ---
 exit: 0
@@ -11,7 +11,7 @@ warning: [sniff-test::panics::documented-panic] this call's documented panic con
  --> src/lib.rs:6:5
   |
 6 |     trusted_doc_helper(flag);
-  |     ^^^^^^^^^^^^^^^^^^^^^^^^ `trusted_boundaries::trusted_doc_helper` documents when this call may panic
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^ `trusted_doc_helper` documents when this call may panic
   |
   = help: address the documented panic conditions at each affected call with `// PANIC:`
   = help: for the full explanation, run `'[SNIFF-TEST]' explain 87vz --cache-dir '[FIXTURE]/target/sniff-test/sniff-test-cache/v[FORMAT]'`
@@ -34,5 +34,6 @@ warning: [sniff-test::safety::unsafe-call-missing-justification] unsafe call req
    = help: add a `// SAFETY:` comment explaining how the required safety invariant is upheld
    = help: for the full explanation, run `'[SNIFF-TEST]' explain f136 --cache-dir '[FIXTURE]/target/sniff-test/sniff-test-cache/v[FORMAT]'`
 
+note: set `show-full-stack-trace = true` under `[analysis]` in sniff-test.toml to show every reachability step
 warning: `trusted-boundaries` (lib) generated 3 warnings
     Finished `release` profile [optimized] target(s) in [TIME]

@@ -1,5 +1,5 @@
 ---
-source: crates/sniff-test/tests/cli.rs
+source: crates/sniff-test/tests/fixtures.rs
 expression: snapshot
 ---
 exit: 101
@@ -8,8 +8,13 @@ stdout:
 stderr:
     Checking dependency-safety v0.1.0 ([FIXTURE]/dep)
     Checking dependency-safety-app v0.1.0 ([FIXTURE]/app)
-error: [sniff-test::safety::raw-pointer-dereference-missing-justification] raw pointer dereference requires a safety justification
- --> [FIXTURE]/dep/src/lib.rs:2:14
+error: [sniff-test::safety::raw-pointer-dereference-missing-justification] `read_dependency` can reach unsafe operation (raw pointer dereference) with effect obligation in dependency crate `dependency_safety`.
+ --> src/lib.rs:2:5
+  |
+2 |     dependency_safety::read_byte(pointer)
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  |
+ ::: [FIXTURE]/dep/src/lib.rs:2:14
   |
 2 |     unsafe { *pointer }
   |              ^^^^^^^^ dereferencing requires a valid and properly aligned pointer
@@ -21,4 +26,42 @@ help: explain at this call why this path's safety requirements hold with `// SAF
   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
   = help: for the full explanation, run `'[SNIFF-TEST]' explain yakm --cache-dir '[FIXTURE]/app/target/sniff-test/sniff-test-cache/v[FORMAT]'`
 
-error: could not compile `dependency-safety-app` (lib) due to 1 previous error
+error: [sniff-test::safety::raw-pointer-dereference-missing-justification] `read_dependency_again` can reach unsafe operation (raw pointer dereference) with effect obligation in dependency crate `dependency_safety`.
+ --> src/lib.rs:6:5
+  |
+6 |     dependency_safety::read_byte(pointer)
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  |
+ ::: [FIXTURE]/dep/src/lib.rs:2:14
+  |
+2 |     unsafe { *pointer }
+  |              ^^^^^^^^ dereferencing requires a valid and properly aligned pointer
+  |
+help: explain at this call why this path's safety requirements hold with `// SAFETY:`
+ --> src/lib.rs:6:5
+  |
+6 |     dependency_safety::read_byte(pointer)
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  = help: for the full explanation, run `'[SNIFF-TEST]' explain yakm --cache-dir '[FIXTURE]/app/target/sniff-test/sniff-test-cache/v[FORMAT]'`
+
+warning: [sniff-test::safety::unsafe-call-missing-justification] `read_documented_dependency` can reach `documented_read` with effect obligation in dependency crate `dependency_safety`.
+  --> src/lib.rs:10:5
+   |
+10 |     dependency_safety::read_documented(pointer)
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   |
+  ::: [FIXTURE]/dep/src/lib.rs:14:14
+   |
+14 |     unsafe { documented_read(pointer) }
+   |              ^^^^^^^^^^^^^^^^^^^^^^^^ this call requires its safety preconditions to hold
+   |
+help: explain at this call why this path's safety requirements hold with `// SAFETY:`
+  --> src/lib.rs:10:5
+   |
+10 |     dependency_safety::read_documented(pointer)
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   = help: for the full explanation, run `'[SNIFF-TEST]' explain 174s --cache-dir '[FIXTURE]/app/target/sniff-test/sniff-test-cache/v[FORMAT]'`
+
+note: set `show-full-stack-trace = true` under `[analysis]` in sniff-test.toml to show every reachability step
+warning: `dependency-safety-app` (lib) generated 1 warning
+error: could not compile `dependency-safety-app` (lib) due to 2 previous errors; 1 warning emitted

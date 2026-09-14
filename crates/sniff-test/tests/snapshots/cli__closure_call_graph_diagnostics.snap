@@ -20,4 +20,5 @@ help: account for this path at this call with `// PANIC:`, or document it under 
    |     ^^^^^^^^^^
    = help: for the full explanation, run `'[SNIFF-TEST]' explain 8v07 --cache-dir '[FIXTURE]/target/sniff-test/sniff-test-cache/v[FORMAT]'`
 
+note: set `show-full-stack-trace = true` under `[analysis]` in sniff-test.toml to show every reachability step
 error: could not compile `closure-call-graph` (lib) due to 1 previous error

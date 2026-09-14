@@ -1,5 +1,5 @@
 ---
-source: crates/sniff-test/tests/cli.rs
+source: crates/sniff-test/tests/fixtures.rs
 expression: snapshot
 ---
 exit: 101
@@ -39,4 +39,5 @@ error: [sniff-test::analysis::ambiguous-safety-marker] `// SAFETY:` comment coul
    = help: give each safety obligation its own `// SAFETY:` marker
    = help: for the full explanation, run `'[SNIFF-TEST]' explain ch58 --cache-dir '[FIXTURE]/target/sniff-test/sniff-test-cache/v[FORMAT]'`
 
+note: set `show-full-stack-trace = true` under `[analysis]` in sniff-test.toml to show every reachability step
 error: could not compile `ambiguous-safety` (lib) due to 3 previous errors

@@ -52,4 +52,5 @@ error: [sniff-test::safety::inline-assembly-missing-justification] inline assemb
    = help: add a `// SAFETY:` comment explaining how the required safety invariant is upheld
    = help: for the full explanation, run `'[SNIFF-TEST]' explain qppw --cache-dir '[FIXTURE]/target/sniff-test/sniff-test-cache/v[FORMAT]'`
 
+note: set `show-full-stack-trace = true` under `[analysis]` in sniff-test.toml to show every reachability step
 error: could not compile `unsafe-ops` (lib) due to 5 previous errors

@@ -13,15 +13,22 @@ error: [sniff-test::panics::compiler-assert-division-by-zero] this division may 
 8 |     total / denominator
   |     ^^^^^^^^^^^^^^^^^^^ the divisor may be zero
   |
-  = note: at least one path to this source is not fully accounted for by a usable `// PANIC:` justification or `# Panics` contract
+help: if this panic cannot occur, add `// PANIC:` explaining the invariant that rules it out
+ --> src/lib.rs:8:5
+  |
+8 |     total / denominator
+  |     ^^^^^^^^^^^^^^^^^^^
+help: document when this function may panic with `/// # Panics` here
+ --> src/lib.rs:7:1
+  |
+7 | pub fn unsafe_ratio(total: usize, denominator: usize) -> usize {
+  | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  = note: no `// PANIC:` justification was found for this source
 note: effect trace step 1/1 (report root -> effect source): safe_markers::unsafe_ratio --assert-> compiler assert division by zero
  --> src/lib.rs:8:5
   |
 8 |     total / denominator
   |     ^^^^^^^^^^^^^^^^^^^
-  = note: no `// PANIC:` justification was found for this source
-  = help: if this panic cannot occur, add `// PANIC:` explaining the invariant that rules it out
-  = help: otherwise, document the panic condition under `# Panics` on the appropriate function
   = help: for the full explanation, run `'[SNIFF-TEST]' explain cz7w --cache-dir '[FIXTURE]/target/sniff-test/sniff-test-cache/v[FORMAT]'`
 
 error: [sniff-test::panics::panic-invocation] this panic is not accounted for on every path
@@ -30,7 +37,17 @@ error: [sniff-test::panics::panic-invocation] this panic is not accounted for on
 21 |     assert!(flag);
    |     ^^^^^^^^^^^^^ the panic originates here
    |
-   = note: at least one path to this source is not fully accounted for by a usable `// PANIC:` justification or `# Panics` contract
+help: if this panic cannot occur, add `// PANIC:` explaining the invariant that rules it out
+  --> src/lib.rs:21:5
+   |
+21 |     assert!(flag);
+   |     ^^^^^^^^^^^^^
+help: document when this function may panic with `/// # Panics` here
+  --> src/lib.rs:16:1
+   |
+16 | pub fn unsafe_call(flag: bool) {
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   = note: no `// PANIC:` justification was found for this source
 note: effect trace step 1/3 (report root -> effect source): safe_markers::unsafe_call --direct-call-> safe_markers::helper
   --> src/lib.rs:17:5
    |
@@ -46,9 +63,6 @@ note: effect trace step 3/3 (report root -> effect source): macro core::macros::
    |
 21 |     assert!(flag);
    |     ^^^^^^^^^^^^^
-   = note: no `// PANIC:` justification was found for this source
-   = help: if this panic cannot occur, add `// PANIC:` explaining the invariant that rules it out
-   = help: otherwise, document the panic condition under `# Panics` on the appropriate function
    = help: for the full explanation, run `'[SNIFF-TEST]' explain z759 --cache-dir '[FIXTURE]/target/sniff-test/sniff-test-cache/v[FORMAT]'`
 
 error: could not compile `safe-markers` (lib) due to 2 previous errors

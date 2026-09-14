@@ -1,5 +1,5 @@
 ---
-source: crates/sniff-test/tests/cli.rs
+source: crates/sniff-test/tests/fixtures.rs
 expression: snapshot
 ---
 exit: 0
@@ -34,5 +34,6 @@ warning: [sniff-test::safety::safety-obligation-missing-requirements] this call 
    = help: address the remaining `# Safety` requirements in `// SAFETY:`: `valid_ptr`
    = help: for the full explanation, run `'[SNIFF-TEST]' explain ypcm --cache-dir '[FIXTURE]/target/sniff-test/sniff-test-cache/v[FORMAT]'`
 
+note: set `show-full-stack-trace = true` under `[analysis]` in sniff-test.toml to show every reachability step
 warning: `safety-contract-requirements` (lib) generated 3 warnings
     Finished `release` profile [optimized] target(s) in [TIME]

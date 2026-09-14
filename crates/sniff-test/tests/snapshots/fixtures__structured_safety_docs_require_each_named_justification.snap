@@ -18,7 +18,7 @@ expression: "report[\"findings\"]"
       "package-version": "0.1.0",
       "scope": "workspace"
     },
-    "reason": "recorded `// PANIC:` evidence for call to `ambiguous_markers::complex_panic_contract` with a `# Panics` contract does not satisfy the remaining `# Panics` requirements",
+    "reason": "recorded `// PANIC:` justification for call to `ambiguous_markers::complex_panic_contract` with a `# Panics` obligation does not satisfy the remaining `# Panics` requirements",
     "requirements": [
       "nonzero: the divisor must not be zero.",
       "bounded: the input must be within the supported range.",
@@ -49,7 +49,7 @@ expression: "report[\"findings\"]"
       "package-version": "0.1.0",
       "scope": "workspace"
     },
-    "reason": "recorded `// PANIC:` evidence for call to `ambiguous_markers::complex_panic_contract` with a `# Panics` contract does not satisfy the remaining `# Panics` requirements",
+    "reason": "recorded `// PANIC:` justification for call to `ambiguous_markers::complex_panic_contract` with a `# Panics` obligation does not satisfy the remaining `# Panics` requirements",
     "requirements": [
       "nonzero: the divisor must not be zero.",
       "bounded: the input must be within the supported range.",
@@ -82,7 +82,7 @@ expression: "report[\"findings\"]"
       "package-version": "0.1.0",
       "scope": "workspace"
     },
-    "reason": "recorded `// SAFETY:` evidence for unsafe call to `ambiguous_markers::complex_safety_contract` does not satisfy the remaining `# Safety` requirements",
+    "reason": "recorded `// SAFETY:` justification for unsafe call to `ambiguous_markers::complex_safety_contract` does not satisfy the remaining `# Safety` requirements",
     "requirements": [
       "allocation: the caller must own the buffer.",
       "initialized: every byte must be initialized.",
@@ -115,7 +115,7 @@ expression: "report[\"findings\"]"
       "package-version": "0.1.0",
       "scope": "workspace"
     },
-    "reason": "recorded `// SAFETY:` evidence for unsafe call to `ambiguous_markers::multi_safety_requirements_with_asterisks_and_ident` does not satisfy the remaining `# Safety` requirements",
+    "reason": "recorded `// SAFETY:` justification for unsafe call to `ambiguous_markers::multi_safety_requirements_with_asterisks_and_ident` does not satisfy the remaining `# Safety` requirements",
     "requirements": [
       "req_1: content",
       "req_2: content"
@@ -146,7 +146,7 @@ expression: "report[\"findings\"]"
       "package-version": "0.1.0",
       "scope": "workspace"
     },
-    "reason": "recorded `// SAFETY:` evidence for unsafe call to `ambiguous_markers::multi_safety_requirements_with_no_sub_requirement_name` does not satisfy the remaining `# Safety` requirements",
+    "reason": "recorded `// SAFETY:` justification for unsafe call to `ambiguous_markers::multi_safety_requirements_with_no_sub_requirement_name` does not satisfy the remaining `# Safety` requirements",
     "requirements": [
       "requirement",
       "requirement"
@@ -176,7 +176,7 @@ expression: "report[\"findings\"]"
       "package-version": "0.1.0",
       "scope": "workspace"
     },
-    "reason": "recorded `// SAFETY:` evidence for unsafe call to `ambiguous_markers::multi_safety_requirements_with_no_sub_requirement_name` does not satisfy the remaining `# Safety` requirements",
+    "reason": "recorded `// SAFETY:` justification for unsafe call to `ambiguous_markers::multi_safety_requirements_with_no_sub_requirement_name` does not satisfy the remaining `# Safety` requirements",
     "requirements": [
       "requirement",
       "requirement"
@@ -207,7 +207,7 @@ expression: "report[\"findings\"]"
       "package-version": "0.1.0",
       "scope": "workspace"
     },
-    "reason": "recorded `// PANIC:` evidence for call to `ambiguous_markers::unnamed_nested_panic_contract` with a `# Panics` contract does not satisfy the remaining `# Panics` requirements",
+    "reason": "recorded `// PANIC:` justification for call to `ambiguous_markers::unnamed_nested_panic_contract` with a `# Panics` obligation does not satisfy the remaining `# Panics` requirements",
     "requirements": [
       "the divisor must not be zero.",
       "the numerator must be within the supported range.",
@@ -237,7 +237,7 @@ expression: "report[\"findings\"]"
       "package-version": "0.1.0",
       "scope": "workspace"
     },
-    "reason": "recorded `// PANIC:` evidence for call to `ambiguous_markers::unnamed_nested_panic_contract` with a `# Panics` contract does not satisfy the remaining `# Panics` requirements",
+    "reason": "recorded `// PANIC:` justification for call to `ambiguous_markers::unnamed_nested_panic_contract` with a `# Panics` obligation does not satisfy the remaining `# Panics` requirements",
     "requirements": [
       "the divisor must not be zero.",
       "the numerator must be within the supported range.",
@@ -271,7 +271,7 @@ expression: "report[\"findings\"]"
       "package-version": "0.1.0",
       "scope": "workspace"
     },
-    "reason": "recorded `// SAFETY:` evidence for unsafe call to `ambiguous_markers::unnamed_nested_safety_contract` does not satisfy the remaining `# Safety` requirements",
+    "reason": "recorded `// SAFETY:` justification for unsafe call to `ambiguous_markers::unnamed_nested_safety_contract` does not satisfy the remaining `# Safety` requirements",
     "requirements": [
       "the caller must own the allocation.",
       "every byte must be initialized.",
@@ -304,7 +304,7 @@ expression: "report[\"findings\"]"
       "package-version": "0.1.0",
       "scope": "workspace"
     },
-    "reason": "recorded `// SAFETY:` evidence for unsafe call to `ambiguous_markers::unnamed_nested_safety_contract` does not satisfy the remaining `# Safety` requirements",
+    "reason": "recorded `// SAFETY:` justification for unsafe call to `ambiguous_markers::unnamed_nested_safety_contract` does not satisfy the remaining `# Safety` requirements",
     "requirements": [
       "the caller must own the allocation.",
       "every byte must be initialized.",

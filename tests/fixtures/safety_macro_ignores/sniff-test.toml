@@ -1,0 +1,17 @@
+[analysis]
+show-full-stack-trace = true
+
+[panics]
+trusted-boundary-namespaces = ["core", "alloc", "std"]
+
+[safety]
+# These paths name macro definitions, not the functions containing their
+# expansions. Each ignore terminates only the matching expansion branch.
+ignored-namespaces = [
+    "core::macros::write",
+    "alloc::macros::format",
+]
+trusted-boundary-namespaces = ["core", "alloc", "std"]
+
+[safety.lints]
+unsafe-op-missing-justification = "deny"

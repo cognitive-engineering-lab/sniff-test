@@ -13,7 +13,7 @@ expression: "report[\"findings\"]"
       "package-version": "0.1.0",
       "scope": "workspace"
     },
-    "reason": "compiler assertion (index out of bounds) has no recorded `// PANIC:` evidence",
+    "reason": "compiler assertion (index out of bounds) has no recorded `// PANIC:` justification",
     "root": "generic_roots::generic_index",
     "root-kind": "generic",
     "root-span": "src/lib.rs:1:1: 1:58",

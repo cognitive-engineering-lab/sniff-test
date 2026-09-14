@@ -25,5 +25,6 @@ error: [sniff-test::panics::compiler-assert-bounds-check] indexing may panic
    = help: document when this panic can occur under `# Panics`, or add `// PANIC:` if an invariant rules it out
    = help: for the full explanation, run `'[SNIFF-TEST]' explain vee5 --cache-dir '[FIXTURE]/target/sniff-test/sniff-test-cache/v[FORMAT]'`
 
+note: set `show-full-stack-trace = true` under `[analysis]` in sniff-test.toml to show every reachability step
 warning: `panic-axioms` (lib) generated 1 warning
 error: could not compile `panic-axioms` (lib) due to 1 previous error; 1 warning emitted

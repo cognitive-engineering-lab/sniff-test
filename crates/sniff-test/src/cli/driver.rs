@@ -18,13 +18,13 @@ use rustc_session::config::CrateType;
 use rustc_span::symbol::Symbol;
 
 use super::args::{CrateOutputScope, LocalPackageProvenance, MessageFormat, SniffTestArgs};
-use super::diagnostics::{emit_finding_diagnostic, render_finding_diagnostic};
+use super::diagnostics::{emit_finding_diagnostic, emit_footer_note, render_finding_diagnostic};
 use super::explanations::{
     ArtifactExplanation, DiagnosticGroupHandle, ExplanationStore, StoredDiagnostic,
 };
 use super::findings::{
-    Finding, ResolvedFinding, aggregate_human_findings_with_source_packages,
-    collect_report_root_findings, resolve_findings,
+    FULL_STACK_TRACE_HINT, Finding, ResolvedFinding, aggregate_human_findings_with_source_packages,
+    collect_report_root_findings, resolve_findings, take_full_stack_trace_hint,
 };
 use super::interpretation::interpret_workspace;
 use super::plugin::rustc_version;
@@ -75,7 +75,11 @@ pub(crate) fn analyze_crate(
         emit_tool_error(tcx, error);
         return;
     }
-    let facts = match extract_artifact_facts(tcx, package_provenance.manifest_dir.as_deref()) {
+    let facts = match extract_artifact_facts(
+        tcx,
+        package_provenance.manifest_dir.as_deref(),
+        args.effects,
+    ) {
         Ok(facts) => facts,
         Err(error) => {
             emit_tool_error(tcx, format!("failed to extract artifact facts: {error}"));
@@ -126,6 +130,7 @@ pub(crate) fn analyze_crate(
         &selection.roots,
         config,
         &package_provenance,
+        args.effects,
     ) {
         Ok(findings) => findings,
         Err(error) => {
@@ -145,12 +150,13 @@ pub(crate) fn analyze_crate(
     findings.extend(interpreted_findings);
     let report = build_report(tcx, config, findings);
     if emit_diagnostics {
-        let human_findings = aggregate_human_findings_with_source_packages(
+        let mut human_findings = aggregate_human_findings_with_source_packages(
             &report.findings,
             package_provenance.manifest_dir.as_deref(),
             args.cargo_target_dir.as_deref(),
             &args.source_packages,
         );
+        let show_full_stack_trace_hint = take_full_stack_trace_hint(&mut human_findings);
         let diagnostic_groups = match persist_diagnostic_explanations(tcx, args, &human_findings) {
             Ok(diagnostic_groups) => diagnostic_groups,
             Err(error) => {
@@ -174,6 +180,9 @@ pub(crate) fn analyze_crate(
                 &explanation_cache_dir,
                 args.frontend_executable.as_deref(),
             );
+        }
+        if show_full_stack_trace_hint {
+            emit_footer_note(tcx, FULL_STACK_TRACE_HINT);
         }
     }
     emit_report(args, &report);
