@@ -85,6 +85,13 @@ namespace overrides. Artifacts without the selected crate/version/path are
 unaffected; once the source path is present, an absent or ambiguous definition
 fails closed rather than silently attaching a contract to multiple definitions.
 
+Compiler-generated `ClosureOnceShim` and `FnPtrShim` adapters are excluded from
+trusted boundaries, even when their definition belongs to a trusted crate.
+Their exact instance identity and shim classification are recorded in artifact
+facts. A broad `core` trust rule therefore cannot hide effects from the user
+callable behind those adapters. This exclusion applies to panic sources, safety
+sources, and documentation obligations; ordinary API boundaries remain trusted.
+
 ### Build scripts and proc macros are skipped
 
 Units whose crate name is Cargo's `build_script_build` and units whose crate

@@ -1978,6 +1978,9 @@ fn trusted_boundary(
     namespaces: &DefinitionNamespaceIndex,
     config: &SniffTestConfig,
 ) -> bool {
+    if namespaces.is_callable_shim(function) {
+        return false;
+    }
     let candidates = namespaces.candidates(function);
     match domain {
         AnnotationDomain::Panic => {
@@ -2512,6 +2515,7 @@ mod tests {
 
     fn attributes(path: &str) -> FunctionAttributesFact {
         FunctionAttributesFact {
+            is_callable_shim: false,
             is_unsafe: false,
             is_exported: true,
             has_rust_body: true,

@@ -95,7 +95,9 @@ impl<'annotations> SafetyEffect<'annotations> {
                 ))
             })?;
             if config.trusts_safety_boundary_candidates(candidates) {
-                trusted_functions.extend(graph.function_aliases(body.function));
+                trusted_functions.extend(graph.function_aliases(body.function).filter(
+                    |function| !namespaces.is_callable_shim(graph.stable_function(*function)),
+                ));
             }
             for effect in &body.effects {
                 if let EffectFactKind::UnsafeOperation { kind } = effect.kind {

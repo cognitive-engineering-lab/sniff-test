@@ -2610,6 +2610,7 @@ mod tests {
             provenance,
             display_path: String::from("sample::callable"),
             attributes: FunctionAttributesFact {
+                is_callable_shim: false,
                 is_unsafe: false,
                 is_exported: false,
                 has_rust_body: true,

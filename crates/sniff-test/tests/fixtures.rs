@@ -299,6 +299,63 @@ fixture_cases! {
 }
 
 #[test]
+fn fnonce_closures_retain_panics_across_trusted_core_shims() {
+    let name = "fnonce_closures_retain_panics_across_trusted_core_shims";
+    let fixture = "fnonce_call_shims";
+    let cargo = PathBuf::from(env!("CARGO_BIN_EXE_cargo-sniff-test"));
+    let (output, temp) = run_case(&repo_root(), &cargo, name, fixture, &Case::new().denied());
+    let messages = parse_messages(
+        &output,
+        &temp.path().join(fixture),
+        &rustc_sysroot(),
+        name,
+        fixture,
+    );
+    let [report] = messages.as_slice() else {
+        panic!("expected one workspace report, got {messages:?}");
+    };
+    let findings = report["findings"].as_array().expect("findings array");
+    let mut panic_roots = findings
+        .iter()
+        .filter(|finding| finding["kind"] == "panic-invocation")
+        .map(|finding| finding["root"].as_str().expect("finding root"))
+        .collect::<Vec<_>>();
+    panic_roots.sort_unstable();
+    assert_eq!(
+        panic_roots,
+        [
+            "fnonce_call_shims::consuming_capture_panics",
+            "fnonce_call_shims::fn_control_panics",
+            "fnonce_call_shims::mutable_capture_panics",
+            "fnonce_call_shims::no_capture_panics",
+        ],
+        "all panicking closures must remain reachable through FnOnce and Fn calls"
+    );
+    assert!(
+        findings.iter().any(|finding| {
+            finding["root"] == "fnonce_call_shims::unsafe_closure"
+                && finding["kind"] == "unsafe-op-missing-justification"
+                && finding["safety-op-kind"] == "raw-pointer-dereference"
+        }),
+        "unsafe closure operations must propagate through FnOnce shims: {findings:?}"
+    );
+    assert!(
+        findings.iter().any(|finding| {
+            finding["root"] == "fnonce_call_shims::documented_closure"
+                && finding["kind"] == "documented-panic"
+                && finding["target"] == "fnonce_call_shims::documented_panic"
+        }),
+        "documented panic obligations must propagate through FnOnce shims: {findings:?}"
+    );
+    assert!(
+        findings
+            .iter()
+            .all(|finding| finding["root"] != "fnonce_call_shims::quiet_closure"),
+        "calling a non-panicking closure must not produce findings: {findings:?}"
+    );
+}
+
+#[test]
 fn source_aggregation_json_retains_each_report_root() {
     let (analyzed, temp) = run_named_case(
         "source_aggregation_json_retains_each_report_root",

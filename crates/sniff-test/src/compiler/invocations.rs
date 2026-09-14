@@ -879,6 +879,7 @@ mod tests {
 
     fn attributes() -> FunctionAttributesFact {
         FunctionAttributesFact {
+            is_callable_shim: false,
             is_unsafe: false,
             is_exported: true,
             has_rust_body: true,

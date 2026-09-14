@@ -1,0 +1,12 @@
+[compiler]
+inline-mir = "off"
+
+[analysis]
+report-roots = "public"
+
+[panics]
+trusted-boundary-namespaces = ["core", "alloc", "std"]
+panic-sink-namespaces = ["core::panicking::**", "std::panicking::**"]
+
+[safety]
+trusted-boundary-namespaces = ["core", "alloc", "std"]

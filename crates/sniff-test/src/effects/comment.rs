@@ -216,12 +216,16 @@ impl<'annotations> CommentEffect<'annotations> {
                 && panic_config.panic_boundary_policy_candidates(candidates)
                     == crate::config::PanicBoundaryPolicy::TrustedBoundary
             {
-                trusted_panic_functions.extend(graph.function_aliases(body.function));
+                trusted_panic_functions.extend(graph.function_aliases(body.function).filter(
+                    |function| !namespaces.is_callable_shim(graph.stable_function(*function)),
+                ));
             }
             if effects.tracks_safety()
                 && safety_config.trusts_safety_boundary_candidates(candidates)
             {
-                trusted_safety_functions.extend(graph.function_aliases(body.function));
+                trusted_safety_functions.extend(graph.function_aliases(body.function).filter(
+                    |function| !namespaces.is_callable_shim(graph.stable_function(*function)),
+                ));
             }
         }
         let mut trusted_panic_invocations = BTreeSet::new();

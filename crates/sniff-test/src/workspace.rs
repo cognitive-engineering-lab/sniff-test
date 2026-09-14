@@ -842,6 +842,7 @@ mod tests {
             provenance: FunctionFactProvenance::DefiningArtifact,
             display_path: display_path.clone(),
             attributes: FunctionAttributesFact {
+                is_callable_shim: false,
                 is_unsafe: false,
                 is_exported: false,
                 has_rust_body: true,

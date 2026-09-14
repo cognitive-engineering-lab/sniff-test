@@ -441,6 +441,11 @@ fn collect_reachability_mode<'tcx>(
             body_provenance(tcx, def_id),
             effects,
         )?;
+        bodies
+            .get_mut(&function)
+            .expect("expanded body was inserted")
+            .attributes
+            .is_callable_shim = is_callable_shim(instance);
     }
 
     for reached in view.edges() {
@@ -1151,6 +1156,16 @@ fn indirect_target_def_id<'tcx>(
     }
 }
 
+// rustc gives these forwarding shims the Fn/FnMut/FnOnce trait method's DefId.
+// Trusting that core path must not hide the callable supplied by the user.
+// Source: https://github.com/rust-lang/rust/blob/f53b654a8882fd5fc036c4ca7a4ff41ce32497a6/compiler/rustc_middle/src/ty/instance.rs#L103-L125
+fn is_callable_shim(instance: Instance<'_>) -> bool {
+    matches!(
+        instance.def,
+        InstanceKind::ClosureOnceShim { .. } | InstanceKind::FnPtrShim(..)
+    )
+}
+
 fn function_target_for_instance<'tcx>(
     tcx: TyCtxt<'tcx>,
     instance: Instance<'tcx>,
@@ -1158,13 +1173,15 @@ fn function_target_for_instance<'tcx>(
     effects: EffectSelection,
 ) -> Result<FunctionTargetFact, ExtractError> {
     let def_id = instance.def_id();
+    let mut attributes = function_attributes(tcx, def_id, effects);
+    attributes.is_callable_shim = is_callable_shim(instance);
     Ok(FunctionTargetFact {
         function: FunctionId::exact(
             StableDefPathHash::from_def_id(tcx, def_id),
             StableInstanceHash::from_instance(tcx, instance),
         ),
         display_path: canonical_namespace(tcx, def_id),
-        attributes: function_attributes(tcx, def_id, effects),
+        attributes,
         contracts: function_contracts(tcx, def_id, sources, effects)?,
     })
 }
@@ -1221,6 +1238,7 @@ fn function_attributes(
             |local| tcx.effective_visibilities(()).is_exported(local),
         );
     FunctionAttributesFact {
+        is_callable_shim: false,
         is_unsafe: effects.tracks_safety() && fn_def_is_unsafe(tcx, def_id),
         is_exported,
         has_rust_body,

@@ -35,6 +35,7 @@ fn exact_function(definition: StableFunctionId, index: u64) -> StableFunctionId 
 
 fn attributes(path: &str) -> FunctionAttributesFact {
     FunctionAttributesFact {
+        is_callable_shim: false,
         is_unsafe: false,
         is_exported: true,
         has_rust_body: true,

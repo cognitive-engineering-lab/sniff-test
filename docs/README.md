@@ -173,7 +173,7 @@ traces closer to the source call structure. Compiler settings are applied
 literally and independently from lint policy. For example, disabling overflow
 checks does not change or reject `[panics.lints].compiler-assert-overflow`.
 
-The analysis cache uses format version 27 and stores one direct,
+The analysis cache uses format version 28 and stores one direct,
 policy-neutral fact schema: function identities, source-level invocations,
 compiler-assert kinds, unsafe operations, annotations, contracts, and verified
 file-relative source ranges, extraction-time definition locations, plus
@@ -330,6 +330,13 @@ trusted-boundary-namespaces = ["core", "alloc", "std"]
 `std` does not implicitly include `core` or `alloc`; crate-root candidates
 already cover every definition in the named crate, so `core::**` is not also
 required. The same namespace rules apply to panic boundaries.
+
+Compiler-generated `ClosureOnceShim` and `FnPtrShim` call adapters are excluded
+from trusted boundaries in both domains. Their rustc definition may belong to
+`core::ops::function::FnOnce::call_once` even when they invoke a user closure.
+The exclusion uses the exact compiler instance kind, is stored in the analysis
+cache, and keeps panic, safety, and documentation effects flowing through the
+adapter. Ordinary standard-library APIs still follow the configured trust policy.
 
 `[panics.lints].unresolved-call-target` and
 `[safety.lints].unresolved-call-target` control calls whose remaining concrete
