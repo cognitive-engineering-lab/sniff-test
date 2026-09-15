@@ -171,8 +171,10 @@ fixture_cases! {
     }
     "dependency_transitive_panic" => {
         dependency_transitive_panic => Case::new()
-            .in_app()
-            .denied();
+            .in_app();
+    }
+    "dependency_transitive_safety" => {
+        dependency_transitive_safety => Case::new().in_app();
     }
     "std_trait_impl_glob" => {
         std_trait_impl_glob => Case::new();

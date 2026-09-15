@@ -1,0 +1,9 @@
+[package]
+name = "dependency-transitive-safety-middle"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+dependency-transitive-safety-leaf = { path = "../leaf" }
+
+[workspace]

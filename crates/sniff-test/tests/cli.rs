@@ -92,8 +92,7 @@ cli_cases! {
     }
     "dependency_transitive_panic" => {
         dependency_panic_diagnostics => Case::new()
-            .in_app()
-            .denied();
+            .in_app();
     }
     "dependency_safety" => {
         dependency_safety_diagnostics => Case::new()

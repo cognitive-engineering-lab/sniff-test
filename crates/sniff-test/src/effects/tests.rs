@@ -487,6 +487,68 @@ fn probe_safety<'a>(
 }
 
 #[test]
+fn caller_panic_contract_replaces_transitive_panic_obligations() {
+    for leaf_documented in [false, true] {
+        let root = stable_function(0);
+        let middle = stable_function(1);
+        let leaf = stable_function(2);
+        let (artifact, graph, annotations) = setup(vec![
+            body(
+                root,
+                "sample::root",
+                vec![call(0, 0, target(middle, "sample::middle"), false)],
+                Vec::new(),
+                Vec::new(),
+            ),
+            body(
+                middle,
+                "sample::middle",
+                vec![call(0, 0, target(leaf, "sample::leaf"), false)],
+                Vec::new(),
+                vec![contract(0, middle, AnnotationFactKind::PanicContract, &[])],
+            ),
+            body(
+                leaf,
+                "sample::leaf",
+                Vec::new(),
+                vec![assert_effect(0)],
+                if leaf_documented {
+                    vec![contract(0, leaf, AnnotationFactKind::PanicContract, &[])]
+                } else {
+                    Vec::new()
+                },
+            ),
+        ]);
+        let config = SniffTestConfig::default();
+        let panic = probe_panic(&artifact, &graph, &annotations, &config.panics);
+        assert_eq!(EffectEngine::new(&graph).trace(&panic).escaped().count(), 0);
+        let comments = probe_comments(&artifact, &graph, &annotations, &config);
+        let trace = EffectEngine::new(&graph.comment_graph()).trace(&comments);
+        let middle_contract = comments
+            .contracts()
+            .iter()
+            .find(|contract| contract.applies_to(graph.function(middle).unwrap()))
+            .unwrap()
+            .id();
+        assert_eq!(
+            trace
+                .escaped()
+                .map(|(origin, _)| *origin)
+                .collect::<Vec<_>>(),
+            vec![middle_contract]
+        );
+        if leaf_documented {
+            let handled = trace.handled().collect::<Vec<_>>();
+            assert_eq!(handled.len(), 1);
+            assert_eq!(
+                handled[0].termination(),
+                &CommentTermination::Contract(middle_contract.annotation())
+            );
+        }
+    }
+}
+
+#[test]
 fn function_contract_is_panic_termination_and_comment_source() {
     let root = stable_function(0);
     let leaf = stable_function(1);
@@ -855,9 +917,18 @@ fn declaration_edge_exports_only_its_own_surface_contract() {
             .id();
         assert_eq!(comments.contract_count(domain), 2, "domain {domain:?}");
         assert_eq!(
-            trace.outcomes().collect::<Vec<_>>(),
-            vec![TraceOutcome::Escaped(surface)],
+            trace
+                .escaped()
+                .map(|(origin, _)| *origin)
+                .collect::<Vec<_>>(),
+            vec![surface],
             "only the declaration's own contract may cross its unresolved edge in {domain:?}",
+        );
+        let handled = trace.handled().collect::<Vec<_>>();
+        assert_eq!(handled.len(), 1);
+        assert_eq!(
+            handled[0].termination(),
+            &CommentTermination::Contract(surface.annotation())
         );
     }
 }

@@ -52,6 +52,7 @@ pub(crate) struct CommentState {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub(crate) enum CommentTermination {
     Satisfaction(AnnotationId),
+    Contract(AnnotationId),
     TrustedBoundary,
 }
 
@@ -542,7 +543,17 @@ impl Effect for CommentEffect<'_> {
             {
                 state.termination
             }
-            TraceSite::Source(_) | TraceSite::Function(_) | TraceSite::Invocation(_) => None,
+            TraceSite::Function(function) => self
+                .annotations
+                .effective_contract(self.graph, function, state.domain.into())
+                .filter(|contract| {
+                    // Export the source contract itself, but let a caller's
+                    // contract replace obligations arriving from its body.
+                    contract.id() != state.contract.annotation()
+                        || state.source_invocation.is_some()
+                })
+                .map(|contract| CommentTermination::Contract(contract.id())),
+            TraceSite::Source(_) | TraceSite::Invocation(_) => None,
         }
     }
 }

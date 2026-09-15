@@ -1,0 +1,69 @@
+---
+source: crates/sniff-test/tests/fixtures.rs
+expression: "report[\"findings\"]"
+---
+[
+  {
+    "function": "dependency_transitive_safety_app::documented_leaf",
+    "kind": "safety-obligation-missing-justification",
+    "level": "warn",
+    "owner": {
+      "crate": "dependency_transitive_safety_app",
+      "scope": "workspace"
+    },
+    "reason": "call to `dependency_transitive_safety_middle::documented_leaf` with a `# Safety` obligation has no recorded `// SAFETY:` justification",
+    "root": "dependency_transitive_safety_app::documented_leaf",
+    "root-kind": "concrete",
+    "root-span": "src/lib.rs:6:1: 6:31",
+    "source-evidence": {
+      "status": "verified-absent"
+    },
+    "span": "src/lib.rs:8:5: 8:64",
+    "target": "dependency_transitive_safety_middle::documented_leaf",
+    "trace": [
+      "src/lib.rs:8:5: 8:64: dependency_transitive_safety_app::documented_leaf --direct-call-> dependency_transitive_safety_middle::documented_leaf"
+    ]
+  },
+  {
+    "function": "dependency_transitive_safety_app::justified_leaf",
+    "kind": "safety-obligation-missing-justification",
+    "level": "warn",
+    "owner": {
+      "crate": "dependency_transitive_safety_app",
+      "scope": "workspace"
+    },
+    "reason": "call to `dependency_transitive_safety_middle::justified_leaf` with a `# Safety` obligation has no recorded `// SAFETY:` justification",
+    "root": "dependency_transitive_safety_app::justified_leaf",
+    "root-kind": "concrete",
+    "root-span": "src/lib.rs:11:1: 11:30",
+    "source-evidence": {
+      "status": "verified-absent"
+    },
+    "span": "src/lib.rs:13:5: 13:63",
+    "target": "dependency_transitive_safety_middle::justified_leaf",
+    "trace": [
+      "src/lib.rs:13:5: 13:63: dependency_transitive_safety_app::justified_leaf --direct-call-> dependency_transitive_safety_middle::justified_leaf"
+    ]
+  },
+  {
+    "function": "dependency_transitive_safety_app::undocumented_leaf",
+    "kind": "safety-obligation-missing-justification",
+    "level": "warn",
+    "owner": {
+      "crate": "dependency_transitive_safety_app",
+      "scope": "workspace"
+    },
+    "reason": "call to `dependency_transitive_safety_middle::undocumented_leaf` with a `# Safety` obligation has no recorded `// SAFETY:` justification",
+    "root": "dependency_transitive_safety_app::undocumented_leaf",
+    "root-kind": "concrete",
+    "root-span": "src/lib.rs:1:1: 1:33",
+    "source-evidence": {
+      "status": "verified-absent"
+    },
+    "span": "src/lib.rs:3:5: 3:66",
+    "target": "dependency_transitive_safety_middle::undocumented_leaf",
+    "trace": [
+      "src/lib.rs:3:5: 3:66: dependency_transitive_safety_app::undocumented_leaf --direct-call-> dependency_transitive_safety_middle::undocumented_leaf"
+    ]
+  }
+]
