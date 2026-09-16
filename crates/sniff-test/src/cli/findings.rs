@@ -214,8 +214,9 @@ pub(crate) fn resolve_findings(
 }
 
 /// Normalizes source findings for human diagnostic emission. Repeated paths
-/// from one report root are collapsed, while workspace- and dependency-owned
-/// effects retain a separate diagnostic for each reaching report root.
+/// from one report root are collapsed only when their canonical traces match,
+/// while distinct paths and workspace- or dependency-owned report roots retain
+/// separate diagnostics.
 ///
 /// The serialized report retains every root and path. Human findings always
 /// use their semantic effect source as the primary location for local effects.
@@ -382,6 +383,7 @@ fn same_human_source(left: &ResolvedFinding, right: &ResolvedFinding) -> bool {
         }) || left.finding.root == right.finding.root)
         && left.finding.source_evidence == right.finding.source_evidence
         && left.finding.reason == right.finding.reason
+        && left.finding.trace_order == right.finding.trace_order
         && left.finding.missing_requirements == right.finding.missing_requirements
         && left.finding.requirements == right.finding.requirements
 }
@@ -862,9 +864,9 @@ pub(crate) fn collect_report_root_findings(
 mod tests {
     use super::{
         DiagnosticMessage, FULL_STACK_TRACE_HINT, Finding, FindingDiagnostic, FindingKind,
-        FindingOwner, OwnerScope, ResolvedFinding, SourceEvidence, aggregate_human_findings,
-        compact_human_diagnostic_paths, resolve_findings, shortest_distinguishing_root_labels,
-        take_full_stack_trace_hint,
+        FindingOwner, FindingTraceStepOrder, OwnerScope, ResolvedFinding, SourceEvidence,
+        aggregate_human_findings, compact_human_diagnostic_paths, resolve_findings,
+        shortest_distinguishing_root_labels, take_full_stack_trace_hint,
     };
     use crate::artifact::{
         CompilerAssertKind, SafetyOpKind, SourceFileFact, SourceFileId, SourceRangeFact,
@@ -1347,6 +1349,69 @@ mod tests {
                 ),
             ]
         );
+    }
+
+    #[test]
+    fn dependency_effect_keeps_distinct_paths_from_the_same_root() {
+        let source = SourceFileFact {
+            id: SourceFileId::new("dependency-source"),
+            filename: String::from("dependency/src/lib.rs"),
+            content_hash: String::from("content"),
+            byte_len: 200,
+        };
+        let range = SourceRangeFact {
+            file: source.id.clone(),
+            byte_start: 40,
+            byte_end: 50,
+        };
+        let effect_span = Span::with_root_ctxt(BytePos(40), BytePos(50));
+        let at_call = |call: u32, local_span: Span, label: &str| {
+            let mut finding = finding(FindingKind::DocumentedPanic)
+                .with_source_order(Some(&source), Some(&range))
+                .with_trace_order(vec![FindingTraceStepOrder::new(
+                    None,
+                    None,
+                    call,
+                    (0, 0),
+                    "sample::root",
+                )]);
+            finding.owner = Some(FindingOwner {
+                scope: OwnerScope::Dependency,
+                crate_name: Some(String::from("dependency")),
+            });
+            finding.root = Some(String::from("sample::root"));
+            finding.target = Some(String::from("dependency::effect"));
+            finding.reason = String::from("dependency effect is reachable");
+            finding.effect_span = Some(effect_span);
+            finding.local_boundary_span = Some(local_span);
+            finding.source_evidence = Some(SourceEvidence::VerifiedAbsent);
+            finding.justification_marker = Some(String::from("PANIC"));
+            finding.diagnostic.messages = vec![DiagnosticMessage::SpanAlternativeHelp(
+                local_span,
+                format!("guard {label}"),
+            )];
+            ResolvedFinding {
+                level: LintLevel::Warn,
+                finding,
+            }
+        };
+        let first_span = Span::with_root_ctxt(BytePos(100), BytePos(110));
+        let second_span = Span::with_root_ctxt(BytePos(120), BytePos(130));
+
+        let diagnostics = aggregate_human_findings(&[
+            at_call(1, first_span, "first call"),
+            at_call(2, second_span, "second call"),
+        ]);
+
+        assert_eq!(diagnostics.len(), 2);
+        assert_eq!(diagnostics[0].finding.diagnostic.span, Some(first_span));
+        assert_eq!(diagnostics[1].finding.diagnostic.span, Some(second_span));
+        assert!(diagnostics[0].finding.diagnostic.messages.contains(
+            &DiagnosticMessage::SpanAlternativeHelp(first_span, String::from("guard first call"),)
+        ));
+        assert!(diagnostics[1].finding.diagnostic.messages.contains(
+            &DiagnosticMessage::SpanAlternativeHelp(second_span, String::from("guard second call"),)
+        ));
     }
 
     #[test]
