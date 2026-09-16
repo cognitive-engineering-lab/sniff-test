@@ -1,0 +1,102 @@
+---
+source: crates/sniff-test/tests/fixtures.rs
+expression: "report[\"findings\"]"
+---
+[
+  {
+    "kind": "panic-invocation",
+    "level": "deny",
+    "owner": {
+      "crate": "app",
+      "scope": "workspace"
+    },
+    "reason": "panic invocation to `core::panicking::panic_fmt` has no recorded `// PANIC:` justification",
+    "root": "app::higher_order_closure_effect",
+    "root-kind": "concrete",
+    "root-span": "src/lib.rs:12:1: 12:37",
+    "source-evidence": {
+      "status": "verified-absent"
+    },
+    "span": "src/lib.rs:13:21: 13:35",
+    "target": "core::panicking::panic_fmt",
+    "trace": [
+      "src/lib.rs:14:5: 14:42: app::higher_order_closure_effect --direct-call-> trusted::consume_maybe_untrusted_closure",
+      "[FIXTURE]/trusted/src/lib.rs:3:5: 3:14: trusted::consume_maybe_untrusted_closure --direct-call-> app::higher_order_closure_effect::{closure#0}",
+      "src/lib.rs:13:21: 13:35: app::higher_order_closure_effect::{closure#0} --macro-expansion-> macro std::macros::panic",
+      "src/lib.rs:13:21: 13:35: macro std::macros::panic --macro-expansion-> macro core::panic::panic_2021",
+      "[SYSROOT]/lib/rustlib/src/rust/library/core/src/panic.rs:62:9: 62:73: macro core::panic::panic_2021 --direct-call-> core::panicking::panic_fmt"
+    ]
+  },
+  {
+    "kind": "panic-invocation",
+    "level": "deny",
+    "owner": {
+      "crate": "app",
+      "scope": "workspace"
+    },
+    "reason": "panic invocation to `core::panicking::panic_fmt` has no recorded `// PANIC:` justification",
+    "root": "app::higher_order_function_impl_effect",
+    "root-kind": "concrete",
+    "root-span": "src/lib.rs:17:1: 17:43",
+    "source-evidence": {
+      "status": "verified-absent"
+    },
+    "span": "src/lib.rs:8:9: 8:23",
+    "target": "core::panicking::panic_fmt",
+    "trace": [
+      "src/lib.rs:19:5: 19:42: app::higher_order_function_impl_effect --direct-call-> trusted::BlanketFromUntrustedParty::boom",
+      "[FIXTURE]/trusted/src/lib.rs:9:9: 9:36: trusted::BlanketFromUntrustedParty::boom --direct-call-> <app::Bar as trusted::BlanketFromUntrustedParty>::maybe_untrusted_impl",
+      "src/lib.rs:8:9: 8:23: <app::Bar as trusted::BlanketFromUntrustedParty>::maybe_untrusted_impl --macro-expansion-> macro std::macros::panic",
+      "src/lib.rs:8:9: 8:23: macro std::macros::panic --macro-expansion-> macro core::panic::panic_2021",
+      "[SYSROOT]/lib/rustlib/src/rust/library/core/src/panic.rs:62:9: 62:73: macro core::panic::panic_2021 --direct-call-> core::panicking::panic_fmt"
+    ]
+  },
+  {
+    "kind": "panic-invocation",
+    "level": "deny",
+    "owner": {
+      "crate": "app",
+      "scope": "workspace"
+    },
+    "reason": "panic invocation to `core::panicking::panic_fmt` has no recorded `// PANIC:` justification",
+    "root": "app::option_and_then_callback_effect",
+    "root-kind": "concrete",
+    "root-span": "src/lib.rs:42:1: 42:41",
+    "source-evidence": {
+      "status": "verified-absent"
+    },
+    "span": "src/lib.rs:43:42: 43:77",
+    "target": "core::panicking::panic_fmt",
+    "trace": [
+      "src/lib.rs:43:5: 43:80: app::option_and_then_callback_effect --direct-call-> core::option::Option::<T>::and_then",
+      "[SYSROOT]/lib/rustlib/src/rust/library/core/src/option.rs:1543:24: 1543:28: core::option::Option::<T>::and_then --direct-call-> app::option_and_then_callback_effect::{closure#0}",
+      "src/lib.rs:43:42: 43:77: app::option_and_then_callback_effect::{closure#0} --macro-expansion-> macro std::macros::panic",
+      "src/lib.rs:43:42: 43:77: macro std::macros::panic --macro-expansion-> macro core::panic::panic_2021",
+      "[SYSROOT]/lib/rustlib/src/rust/library/core/src/panic.rs:62:9: 62:73: macro core::panic::panic_2021 --direct-call-> core::panicking::panic_fmt"
+    ]
+  },
+  {
+    "kind": "panic-invocation",
+    "level": "deny",
+    "owner": {
+      "crate": "app",
+      "scope": "workspace"
+    },
+    "reason": "panic invocation to `core::panicking::panic_fmt` has no recorded `// PANIC:` justification",
+    "root": "app::option_map_callback_effect",
+    "root-kind": "concrete",
+    "root-span": "src/lib.rs:38:1: 38:36",
+    "source-evidence": {
+      "status": "verified-absent"
+    },
+    "span": "src/lib.rs:39:21: 39:51",
+    "target": "core::panicking::panic_fmt",
+    "trace": [
+      "src/lib.rs:39:5: 39:52: app::option_map_callback_effect --direct-call-> core::option::Option::<T>::map",
+      "[SYSROOT]/lib/rustlib/src/rust/library/core/src/option.rs:1162:29: 1162:33: core::option::Option::<T>::map --direct-call-> app::option_map_callback_effect::{closure#0}",
+      "src/lib.rs:39:21: 39:51: app::option_map_callback_effect::{closure#0} --macro-expansion-> macro std::macros::panic",
+      "src/lib.rs:39:21: 39:51: macro std::macros::panic --macro-expansion-> macro core::panic::panic_2021",
+      "[SYSROOT]/lib/rustlib/src/rust/library/core/src/panic.rs:62:9: 62:73: macro core::panic::panic_2021 --direct-call-> core::panicking::panic_fmt"
+    ]
+  }
+]

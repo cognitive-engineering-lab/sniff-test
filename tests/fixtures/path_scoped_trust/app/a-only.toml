@@ -1,0 +1,14 @@
+[analysis]
+report-roots = [
+    "path_scoped_app::dependency_effects_through_a_are_trusted",
+    "path_scoped_app::a_callback_through_b_is_trusted",
+    "path_scoped_app::safety_through_a_is_trusted",
+    "path_scoped_app::implicit_std_dependencies_through_a_are_trusted",
+]
+
+[panics]
+trusted-boundary-namespaces = ["trusted_a"]
+panic-sink-namespaces = ["core::panicking::**", "std::panicking::**"]
+
+[safety]
+trusted-boundary-namespaces = ["trusted_a"]

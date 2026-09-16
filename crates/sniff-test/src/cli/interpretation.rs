@@ -31,11 +31,16 @@ use super::findings::{
 };
 use super::report::render_span;
 
+#[allow(
+    clippy::too_many_arguments,
+    reason = "rustc context and its metadata loader accompany the workspace interpretation inputs"
+)]
 pub(super) fn interpret_workspace<'tcx>(
     tcx: TyCtxt<'tcx>,
     local: &ArtifactFacts,
     local_stable_crate_id: u64,
     dependencies: &ArtifactAnalysisGraph,
+    metadata_loader: &dyn rustc_metadata::creader::MetadataLoader,
     report_roots: &[ReportRoot<'tcx>],
     config: &SniffTestConfig,
     effects: EffectSelection,
@@ -45,10 +50,18 @@ pub(super) fn interpret_workspace<'tcx>(
         .copied()
         .map(|root| interpretation_root(tcx, root))
         .collect::<Vec<_>>();
+    let crate_dependencies = crate::compiler::dependencies::load_crate_dependencies(
+        tcx,
+        local,
+        dependencies,
+        metadata_loader,
+    )
+    .map_err(EffectReportError::new)?;
     let result = trace_selected_workspace(
         local,
         local_stable_crate_id,
         dependencies,
+        &crate_dependencies,
         &roots,
         config,
         effects,
@@ -937,7 +950,10 @@ fn add_source_evidence_help(
         return;
     };
     if is_unjustified_dependency_effect(owner, evidence) {
-        let help = format!("audit dependency crate {} to justify this effect", owner_crate_label(owner),);
+        let help = format!(
+            "audit dependency crate {} to justify this effect",
+            owner_crate_label(owner),
+        );
         diagnostic.messages.push(match effect_span {
             Some(span) => DiagnosticMessage::SpanAlternativeHelp(span, help),
             None => DiagnosticMessage::AlternativeHelp(help),

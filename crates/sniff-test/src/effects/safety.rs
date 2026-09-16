@@ -12,6 +12,7 @@ use crate::artifact::{
 use crate::compiler::invocations::InvocationGraph;
 use crate::config::SafetyConfig;
 
+use super::trust::TrustPath;
 use super::{InvocationSourceBranch, ProbeError};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -32,16 +33,21 @@ pub(crate) enum SafetyKind {
     Operation(SafetyOpKind),
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub(crate) struct SafetyState {
     kind: SafetyKind,
     current_function: FunctionId,
     invocation_justification: Option<AnnotationId>,
+    trust_path: TrustPath,
 }
 
 impl SafetyState {
     #[must_use]
-    pub(crate) const fn kind(self) -> SafetyKind {
+    pub(crate) fn trust_path(&self) -> &TrustPath {
+        &self.trust_path
+    }
+
+    pub(crate) const fn kind(&self) -> SafetyKind {
         self.kind
     }
 }
@@ -134,6 +140,7 @@ impl<'annotations> SafetyEffect<'annotations> {
                                 kind: SafetyKind::Operation(kind),
                                 current_function: owner,
                                 invocation_justification: None,
+                                trust_path: TrustPath::new(graph, owner),
                             },
                         )
                     }));
@@ -192,8 +199,14 @@ impl<'annotations> SafetyEffect<'annotations> {
                         kind: SafetyKind::Invocation,
                         current_function: graph.invocation(invocation).caller(),
                         invocation_justification: None,
+                        trust_path: TrustPath::new(graph, graph.invocation(invocation).caller()),
                     },
                 ));
+            }
+        }
+        for seed in &mut seeds {
+            if trusted_functions.contains(&seed.owner) {
+                seed.state.trust_path = TrustPath::default();
             }
         }
         Ok(Self {
@@ -214,9 +227,9 @@ impl<'annotations> SafetyEffect<'annotations> {
         self.seeds.len()
     }
 
-    #[must_use]
-    pub(crate) fn is_opaque_function(&self, function: FunctionId) -> bool {
-        self.is_trusted_function(function) || self.ignored_functions.contains(&function)
+    pub(crate) fn is_opaque_on_path(&self, function: FunctionId, path: &TrustPath) -> bool {
+        self.ignored_functions.contains(&function)
+            || (self.is_trusted_function(function) && path.allows_boundary(self.graph, function))
     }
 
     #[must_use]
@@ -306,7 +319,7 @@ impl Effect for SafetyEffect<'_> {
         state: &Self::State,
         edge: PropagationEdge,
     ) -> Propagation<Self::State> {
-        let mut next = *state;
+        let mut next = state.clone();
         next.invocation_justification = None;
         next.current_function = match edge {
             PropagationEdge::Invocation(invocation) => {
@@ -316,6 +329,9 @@ impl Effect for SafetyEffect<'_> {
             }
             PropagationEdge::TransparentBody(edge) => cx.graph().transparent_parent(edge),
         };
+        if !self.is_trusted_function(next.current_function) {
+            next.trust_path.enter(self.graph, next.current_function);
+        }
         Propagation::Follow(next)
     }
 
@@ -339,9 +355,9 @@ impl Effect for SafetyEffect<'_> {
                     if self.ignored_functions.contains(&function) {
                         Some(SafetyTermination::IgnoredBoundary)
                     } else {
-                        self.trusted_functions
-                            .contains(&function)
-                            .then_some(SafetyTermination::TrustedBoundary)
+                        (self.trusted_functions.contains(&function)
+                            && state.trust_path.allows_boundary(self.graph, function))
+                        .then_some(SafetyTermination::TrustedBoundary)
                     }
                 },
                 |contract| Some(SafetyTermination::Contract(contract)),

@@ -97,15 +97,15 @@ ignored-namespaces = [
 ]
 
 # Trusted crates or fully-qualified functions whose panic implementations and
-# dependency effects are trusted only on paths through that API. Effects from
-# untrusted callbacks cross undocumented APIs. A matched API's own `# Panics`
-# contract remains visible to non-trusted callers.
+# internal panic contracts should be opaque. A matched API's own `# Panics`
+# contract remains visible to non-trusted callers; an undocumented match is
+# trusted as non-panicking.
 #
 # Patterns match a definition's crate root, definition-site path, impl self-type
 # path, and rustc-rendered display path. The crate-root entries below cover all
 # definitions in `core`, `alloc`, and `std`; remove an entry to audit that crate's
 # internals.
-trusted-boundary-namespaces = ["core", "alloc", "std"]
+trusted-boundary-namespaces = ["core", "alloc", "std", "trusted"]
 
 # Callees that should be treated as direct panic sinks. When classifying a call
 # that also matches a trusted namespace, the more precise match wins; if
@@ -153,9 +153,7 @@ unresolved-call-target = "allow"
 ignored-namespaces = []
 
 # Trusted APIs whose safety implementations and internal safety contracts should
-# be trusted, including dependencies on paths through that API. Untrusted
-# callback effects cross undocumented APIs. A matched API's own `# Safety`
-# contract remains visible to
+# be opaque. A matched API's own `# Safety` contract remains visible to
 # non-trusted callers. Direct unsafe calls written outside the boundary still
 # need a local `// SAFETY:` justification. Remove an entry below to audit
 # that crate's internals.

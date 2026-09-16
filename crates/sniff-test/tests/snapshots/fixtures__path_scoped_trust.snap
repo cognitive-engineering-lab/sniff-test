@@ -1,0 +1,128 @@
+---
+source: crates/sniff-test/tests/fixtures.rs
+expression: "report[\"findings\"]"
+---
+[
+  {
+    "kind": "panic-invocation",
+    "level": "deny",
+    "owner": {
+      "crate": "path_scoped_app",
+      "scope": "workspace"
+    },
+    "reason": "panic invocation to `core::panicking::panic_fmt` has no recorded `// PANIC:` justification",
+    "root": "path_scoped_app::app_callback_through_b_is_untrusted",
+    "root-kind": "concrete",
+    "root-span": "src/lib.rs:13:1: 13:45",
+    "source-evidence": {
+      "status": "verified-absent"
+    },
+    "span": "src/lib.rs:14:36: 14:66",
+    "target": "core::panicking::panic_fmt",
+    "trace": [
+      "src/lib.rs:14:5: 14:67: path_scoped_app::app_callback_through_b_is_untrusted --direct-call-> trusted_a::forward_callback",
+      "[FIXTURE]/trusted_a/src/lib.rs:10:5: 10:29: trusted_a::forward_callback --direct-call-> dep_b::consume",
+      "[FIXTURE]/dep_b/src/lib.rs:6:5: 6:15: dep_b::consume --direct-call-> path_scoped_app::app_callback_through_b_is_untrusted::{closure#0}",
+      "src/lib.rs:14:36: 14:66: path_scoped_app::app_callback_through_b_is_untrusted::{closure#0} --macro-expansion-> macro std::macros::panic",
+      "src/lib.rs:14:36: 14:66: macro std::macros::panic --macro-expansion-> macro core::panic::panic_2021",
+      "[SYSROOT]/lib/rustlib/src/rust/library/core/src/panic.rs:62:9: 62:73: macro core::panic::panic_2021 --direct-call-> core::panicking::panic_fmt"
+    ]
+  },
+  {
+    "function": "path_scoped_app::app_safety_callback_is_untrusted::{closure#0}",
+    "kind": "unsafe-op-missing-justification",
+    "level": "warn",
+    "owner": {
+      "crate": "path_scoped_app",
+      "scope": "workspace"
+    },
+    "reason": "unsafe operation (raw pointer dereference) has no recorded `// SAFETY:` justification",
+    "root": "path_scoped_app::app_safety_callback_is_untrusted",
+    "root-kind": "concrete",
+    "root-span": "src/lib.rs:29:1: 29:42",
+    "safety-op-kind": "raw-pointer-dereference",
+    "source-evidence": {
+      "status": "verified-absent"
+    },
+    "span": "src/lib.rs:32:31: 32:39",
+    "trace": [
+      "src/lib.rs:30:5: 33:7: path_scoped_app::app_safety_callback_is_untrusted --direct-call-> trusted_a::forward_callback",
+      "[FIXTURE]/trusted_a/src/lib.rs:10:5: 10:29: trusted_a::forward_callback --direct-call-> dep_b::consume",
+      "[FIXTURE]/dep_b/src/lib.rs:6:5: 6:15: dep_b::consume --direct-call-> path_scoped_app::app_safety_callback_is_untrusted::{closure#0}",
+      "src/lib.rs:32:31: 32:39: path_scoped_app::app_safety_callback_is_untrusted::{closure#0} --unsafe-operation-> unsafe operation (raw pointer dereference)"
+    ]
+  },
+  {
+    "kind": "panic-invocation",
+    "level": "deny",
+    "owner": {
+      "crate": "dep_c",
+      "scope": "dependency"
+    },
+    "reason": "dependency crate `dep_c` has no recorded `// PANIC:` justification for panic invocation to `core::panicking::panic_fmt`",
+    "root": "path_scoped_app::callback_reentering_dependency_is_untrusted",
+    "root-kind": "concrete",
+    "root-span": "src/lib.rs:17:1: 17:53",
+    "source-evidence": {
+      "status": "verified-absent"
+    },
+    "span": "[FIXTURE]/dep_c/src/lib.rs:2:5: 2:42",
+    "target": "core::panicking::panic_fmt",
+    "trace": [
+      "src/lib.rs:18:5: 18:58: path_scoped_app::callback_reentering_dependency_is_untrusted --direct-call-> trusted_a::forward_callback",
+      "[FIXTURE]/trusted_a/src/lib.rs:10:5: 10:29: trusted_a::forward_callback --direct-call-> dep_b::consume",
+      "[FIXTURE]/dep_b/src/lib.rs:6:5: 6:15: dep_b::consume --direct-call-> path_scoped_app::callback_reentering_dependency_is_untrusted::{closure#0}",
+      "src/lib.rs:18:36: 18:57: path_scoped_app::callback_reentering_dependency_is_untrusted::{closure#0} --direct-call-> dep_c::panic_effect",
+      "[FIXTURE]/dep_c/src/lib.rs:2:5: 2:42: dep_c::panic_effect --macro-expansion-> macro std::macros::panic",
+      "[FIXTURE]/dep_c/src/lib.rs:2:5: 2:42: macro std::macros::panic --macro-expansion-> macro core::panic::panic_2021",
+      "[SYSROOT]/lib/rustlib/src/rust/library/core/src/panic.rs:62:9: 62:73: macro core::panic::panic_2021 --direct-call-> core::panicking::panic_fmt"
+    ]
+  },
+  {
+    "kind": "panic-invocation",
+    "level": "deny",
+    "owner": {
+      "crate": "dep_c",
+      "scope": "dependency"
+    },
+    "reason": "dependency crate `dep_c` has no recorded `// PANIC:` justification for panic invocation to `core::panicking::panic_fmt`",
+    "root": "path_scoped_app::direct_dependency_effect_is_untrusted",
+    "root-kind": "concrete",
+    "root-span": "src/lib.rs:9:1: 9:47",
+    "source-evidence": {
+      "status": "verified-absent"
+    },
+    "span": "[FIXTURE]/dep_c/src/lib.rs:2:5: 2:42",
+    "target": "core::panicking::panic_fmt",
+    "trace": [
+      "src/lib.rs:10:5: 10:31: path_scoped_app::direct_dependency_effect_is_untrusted --direct-call-> dep_b::dependency_effect",
+      "[FIXTURE]/dep_b/src/lib.rs:2:5: 2:26: dep_b::dependency_effect --direct-call-> dep_c::panic_effect",
+      "[FIXTURE]/dep_c/src/lib.rs:2:5: 2:42: dep_c::panic_effect --macro-expansion-> macro std::macros::panic",
+      "[FIXTURE]/dep_c/src/lib.rs:2:5: 2:42: macro std::macros::panic --macro-expansion-> macro core::panic::panic_2021",
+      "[SYSROOT]/lib/rustlib/src/rust/library/core/src/panic.rs:62:9: 62:73: macro core::panic::panic_2021 --direct-call-> core::panicking::panic_fmt"
+    ]
+  },
+  {
+    "function": "dep_c::safety_effect",
+    "kind": "unsafe-op-missing-justification",
+    "level": "warn",
+    "owner": {
+      "crate": "dep_c",
+      "scope": "dependency"
+    },
+    "reason": "dependency crate `dep_c` has no recorded `// SAFETY:` justification for unsafe operation (raw pointer dereference)",
+    "root": "path_scoped_app::direct_dependency_safety_is_untrusted",
+    "root-kind": "concrete",
+    "root-span": "src/lib.rs:25:1: 25:47",
+    "safety-op-kind": "raw-pointer-dereference",
+    "source-evidence": {
+      "status": "verified-absent"
+    },
+    "span": "[FIXTURE]/dep_c/src/lib.rs:7:27: 7:35",
+    "trace": [
+      "src/lib.rs:26:5: 26:27: path_scoped_app::direct_dependency_safety_is_untrusted --direct-call-> dep_b::safety_effect",
+      "[FIXTURE]/dep_b/src/lib.rs:10:5: 10:27: dep_b::safety_effect --direct-call-> dep_c::safety_effect",
+      "[FIXTURE]/dep_c/src/lib.rs:7:27: 7:35: dep_c::safety_effect --unsafe-operation-> unsafe operation (raw pointer dereference)"
+    ]
+  }
+]

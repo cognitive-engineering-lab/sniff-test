@@ -26,6 +26,17 @@ fn stable_function(index: u64) -> StableFunctionId {
     StableFunctionId::generic(hash)
 }
 
+fn set_dependencies(graph: &mut InvocationGraph, edges: &[(StableFunctionId, StableFunctionId)]) {
+    let mut direct = std::collections::BTreeMap::<_, std::collections::BTreeSet<_>>::new();
+    for (owner, dependency) in edges {
+        direct
+            .entry(owner.def_path_hash.stable_crate_id())
+            .or_default()
+            .insert(dependency.def_path_hash.stable_crate_id());
+    }
+    graph.set_dependencies(&direct);
+}
+
 fn exact_function(definition: StableFunctionId, index: u64) -> StableFunctionId {
     let value = format!("{index:016x}{:016x}", index + 200);
     let instance = serde_json::from_str::<StableInstanceHash>(&format!("\"{value}\""))
@@ -1267,7 +1278,7 @@ fn callsite_satisfaction_precedes_a_trusted_comment_boundary() {
 fn partial_satisfaction_is_retained_when_the_trusted_parent_terminates() {
     let wrapper = stable_function(0);
     let leaf = stable_function(1);
-    let (artifact, graph, annotations) = setup(vec![
+    let (artifact, mut graph, annotations) = setup(vec![
         body(
             wrapper,
             "trusted::wrapper",
@@ -1296,6 +1307,7 @@ fn partial_satisfaction_is_retained_when_the_trusted_parent_terminates() {
             )],
         ),
     ]);
+    set_dependencies(&mut graph, &[(wrapper, leaf)]);
     let config = trusted_comment_config();
     let comments = probe_comments(&artifact, &graph, &annotations, &config);
     let trace = EffectEngine::new(&graph.comment_graph()).trace(&comments);
@@ -1351,7 +1363,7 @@ fn comment_boundaries_keep_panic_and_safety_configuration_separate() {
     let panic_leaf = stable_function(1);
     let safety_wrapper = stable_function(2);
     let safety_leaf = stable_function(3);
-    let (artifact, graph, annotations) = setup(vec![
+    let (artifact, mut graph, annotations) = setup(vec![
         body(
             panic_wrapper,
             "panic_boundary::wrapper",
@@ -1401,6 +1413,10 @@ fn comment_boundaries_keep_panic_and_safety_configuration_separate() {
             )],
         ),
     ]);
+    set_dependencies(
+        &mut graph,
+        &[(panic_wrapper, panic_leaf), (safety_wrapper, safety_leaf)],
+    );
     let config = SniffTestConfig::from_manifest_str(
         r#"
             [panics]
@@ -1453,7 +1469,7 @@ fn comment_boundaries_use_stable_candidates_and_cover_function_aliases() {
     exact_body.provenance = FunctionFactProvenance::ConsumerInstantiation {
         consumer_stable_crate_id: 7,
     };
-    let (artifact, graph, annotations) = setup(vec![
+    let (artifact, mut graph, annotations) = setup(vec![
         generic_body,
         exact_body,
         body(
@@ -1464,6 +1480,7 @@ fn comment_boundaries_use_stable_candidates_and_cover_function_aliases() {
             vec![contract(0, leaf, AnnotationFactKind::PanicContract, &[])],
         ),
     ]);
+    set_dependencies(&mut graph, &[(generic_wrapper, leaf)]);
     let config = SniffTestConfig::from_manifest_str(
         "[panics]\ntrusted-boundary-namespaces = [\"trusted::**\"]\n",
     )
@@ -1486,7 +1503,7 @@ fn target_only_alias_makes_definition_opaque_for_all_effect_domains() {
     let root = stable_function(0);
     let boundary = stable_function(1);
     let documented_leaf = stable_function(2);
-    let (artifact, graph, annotations) = setup(vec![
+    let (artifact, mut graph, annotations) = setup(vec![
         body(
             root,
             "sample::root",
@@ -1517,6 +1534,7 @@ fn target_only_alias_makes_definition_opaque_for_all_effect_domains() {
             ],
         ),
     ]);
+    set_dependencies(&mut graph, &[(boundary, documented_leaf)]);
     let config = SniffTestConfig::from_manifest_str(
         r#"
             [panics]
@@ -1600,7 +1618,7 @@ fn target_only_alias_ignores_raw_effect_owners_in_both_domains() {
 }
 
 #[test]
-fn untrusted_contracts_do_not_cross_trusted_wrappers_in_either_domain() {
+fn untrusted_contracts_cross_undocumented_trusted_wrappers_in_either_domain() {
     for (domain, kind) in [
         (CommentDomain::Panic, AnnotationFactKind::PanicContract),
         (CommentDomain::Safety, AnnotationFactKind::SafetyContract),
@@ -1637,8 +1655,13 @@ fn untrusted_contracts_do_not_cross_trusted_wrappers_in_either_domain() {
         let trace = EffectEngine::new(&graph.comment_graph()).trace(&comments);
 
         assert_eq!(comments.contract_count(domain), 1, "domain {domain:?}");
-        assert_eq!(trace.handled().count(), 1, "domain {domain:?}");
-        assert_eq!(trace.escaped().count(), 0, "domain {domain:?}");
+        assert_eq!(trace.handled().count(), 0, "domain {domain:?}");
+        assert_eq!(trace.escaped().count(), 1, "domain {domain:?}");
+        assert!(
+            trace
+                .nodes()
+                .any(|node| node.function() == graph.function(root).unwrap())
+        );
     }
 }
 
@@ -1648,7 +1671,7 @@ fn comment_trusted_boundary_handles_transparent_body_parent() {
     let parent = stable_function(1);
     let transparent = stable_function(2);
     let leaf = stable_function(3);
-    let (artifact, graph, annotations) = setup(vec![
+    let (artifact, mut graph, annotations) = setup(vec![
         body(
             root,
             "sample::root",
@@ -1682,6 +1705,7 @@ fn comment_trusted_boundary_handles_transparent_body_parent() {
             vec![contract(0, leaf, AnnotationFactKind::PanicContract, &[])],
         ),
     ]);
+    set_dependencies(&mut graph, &[(parent, transparent), (transparent, leaf)]);
     let config = trusted_comment_config();
 
     let comments = probe_comments(&artifact, &graph, &annotations, &config);
@@ -2856,4 +2880,159 @@ fn unresolved_safe_calls_are_not_effect_sources_and_unsafe_calls_are_not_duplica
         EffectEngine::new(&graph).trace(&safety).outcomes().next(),
         Some(TraceOutcome::Escaped(SafetyOrigin::Invocation { .. }))
     ));
+}
+
+fn dependency_trust_graph(documented: bool) -> (ArtifactFacts, InvocationGraph, AnnotationIndex) {
+    let root = stable_function(0);
+    let boundary = stable_function(1);
+    let dependency = stable_function(2);
+    let callback = stable_function(3);
+    let leaf = stable_function(4);
+    let direct_root = stable_function(5);
+    let (artifact, mut graph, annotations) = setup(vec![
+        body(
+            root,
+            "app::through_boundary",
+            vec![call(0, 0, target(boundary, "trusted::boundary"), false)],
+            Vec::new(),
+            Vec::new(),
+        ),
+        body(
+            boundary,
+            "trusted::boundary",
+            vec![call(0, 0, target(dependency, "dependency::consume"), false)],
+            Vec::new(),
+            Vec::new(),
+        ),
+        body(
+            dependency,
+            "dependency::consume",
+            vec![
+                call(0, 0, target(leaf, "leaf::effect"), false),
+                call(1, 1, target(callback, "app::callback"), false),
+            ],
+            Vec::new(),
+            Vec::new(),
+        ),
+        body(
+            callback,
+            "app::callback",
+            vec![call(0, 0, target(leaf, "leaf::effect"), false)],
+            Vec::new(),
+            Vec::new(),
+        ),
+        body(
+            leaf,
+            "leaf::effect",
+            Vec::new(),
+            vec![assert_effect(0), unsafe_effect(1)],
+            if documented {
+                vec![
+                    contract(0, leaf, AnnotationFactKind::PanicContract, &[]),
+                    contract(1, leaf, AnnotationFactKind::SafetyContract, &[]),
+                ]
+            } else {
+                Vec::new()
+            },
+        ),
+        body(
+            direct_root,
+            "app::direct_dependency",
+            vec![call(0, 0, target(dependency, "dependency::consume"), false)],
+            Vec::new(),
+            Vec::new(),
+        ),
+    ]);
+    set_dependencies(&mut graph, &[(boundary, dependency), (dependency, leaf)]);
+    (artifact, graph, annotations)
+}
+
+#[test]
+fn dependency_trust_is_path_scoped_and_survives_callback_reentry() {
+    for documented in [false, true] {
+        let root = stable_function(0);
+        let boundary = stable_function(1);
+        let direct_root = stable_function(5);
+        let (artifact, graph, annotations) = dependency_trust_graph(documented);
+        let config = trusted_comment_config();
+        let check = |functions: Vec<effect_tracing::FunctionId>,
+                     handled: Vec<effect_tracing::FunctionId>| {
+            assert!(
+                functions.contains(&graph.function(root).unwrap()),
+                "callback path must reach caller"
+            );
+            assert!(
+                functions.contains(&graph.function(direct_root).unwrap()),
+                "direct dependency call must be audited"
+            );
+            assert!(
+                handled.contains(&graph.function(boundary).unwrap()),
+                "pure dependency path must be trusted"
+            );
+        };
+        if documented {
+            let comments = probe_comments(&artifact, &graph, &annotations, &config);
+            let trace = EffectEngine::new(&graph.comment_graph()).trace(&comments);
+            for domain in [CommentDomain::Panic, CommentDomain::Safety] {
+                check(
+                    trace
+                        .nodes()
+                        .filter(|node| node.state().domain() == domain)
+                        .map(effect_tracing::TraceNode::function)
+                        .collect(),
+                    trace
+                        .handled()
+                        .filter_map(|handled| match handled.site() {
+                            TerminationSite::Function(function)
+                                if handled.termination()
+                                    == &CommentTermination::TrustedBoundary =>
+                            {
+                                Some(*function)
+                            }
+                            _ => None,
+                        })
+                        .collect(),
+                );
+            }
+        } else {
+            let panic = probe_panic(&artifact, &graph, &annotations, &config.panics);
+            let safety = probe_safety(&artifact, &graph, &annotations, &config.safety);
+            let panic_trace = EffectEngine::new(&graph).trace(&panic);
+            let safety_trace = EffectEngine::new(&graph).trace(&safety);
+            check(
+                panic_trace
+                    .nodes()
+                    .map(effect_tracing::TraceNode::function)
+                    .collect(),
+                panic_trace
+                    .handled()
+                    .filter_map(|handled| match handled.site() {
+                        TerminationSite::Function(function)
+                            if handled.termination() == &PanicTermination::TrustedBoundary =>
+                        {
+                            Some(*function)
+                        }
+                        _ => None,
+                    })
+                    .collect(),
+            );
+            check(
+                safety_trace
+                    .nodes()
+                    .map(effect_tracing::TraceNode::function)
+                    .collect(),
+                safety_trace
+                    .handled()
+                    .filter_map(|handled| match handled.site() {
+                        TerminationSite::Function(function)
+                            if handled.termination() == &SafetyTermination::TrustedBoundary =>
+                        {
+                            Some(*function)
+                        }
+                        _ => None,
+                    })
+                    .collect(),
+            );
+        }
+    }
 }

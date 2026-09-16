@@ -1,0 +1,6 @@
+[package]
+name = "trusted_a"
+version = "0.1.0"
+edition = "2024"
+[dependencies]
+dep_b = { path = "../dep_b" }

@@ -396,9 +396,9 @@ pub struct PanicConfig {
     pub ignored_namespaces: PathPatterns,
     /// Namespaces whose caller-visible panic contracts are trusted as complete.
     ///
-    /// Matching implementations and their internal panic contracts are opaque.
+    /// Trust implementation effects and dependencies on paths through matched APIs.
     /// A matching API's own `# Panics` contract remains visible to non-trusted
-    /// callers; an undocumented API is trusted as non-panicking.
+    /// callers; effects from untrusted callbacks cross undocumented APIs.
     pub trusted_boundary_namespaces: PathPatterns,
     /// Callee paths treated as direct panic sinks.
     pub panic_sink_namespaces: PathPatterns,
@@ -495,7 +495,7 @@ pub struct SafetyConfig {
     pub ignored_namespaces: PathPatterns,
     /// Namespaces whose caller-visible safety contracts are trusted as complete.
     ///
-    /// Matching implementations and their internal safety contracts are opaque.
+    /// Trust implementation effects and dependencies on paths through matched APIs.
     /// A matching API's own `# Safety` contract remains visible to non-trusted
     /// callers. A direct local unsafe invocation is not suppressed by the
     /// target's membership in this list.

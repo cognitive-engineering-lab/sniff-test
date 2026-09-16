@@ -163,6 +163,7 @@ pub(crate) struct InvocationGraph {
     transparent_parent: Vec<FunctionId>,
     transparent_source: Vec<CallFact>,
     raw_call_invocations: BTreeMap<(StableFunctionId, CallId), InvocationId>,
+    dependency_crates: BTreeMap<u64, BTreeSet<u64>>,
 }
 
 impl InvocationGraph {
@@ -200,6 +201,7 @@ impl InvocationGraph {
             transparent_parent: Vec::new(),
             transparent_source: Vec::new(),
             raw_call_invocations: BTreeMap::new(),
+            dependency_crates: BTreeMap::new(),
         };
 
         for body in &artifact.functions {
@@ -219,6 +221,29 @@ impl InvocationGraph {
             graph.collect_body(body.function, &calls)?;
         }
         Ok(graph)
+    }
+
+    /// Attach policy-neutral artifact dependency relationships. Compute the
+    /// transitive closure without making any dependency globally trusted.
+    pub(crate) fn set_dependencies(&mut self, direct: &BTreeMap<u64, BTreeSet<u64>>) {
+        for owner in direct.keys().copied() {
+            let mut dependencies = BTreeSet::new();
+            let mut queue = direct[&owner].iter().copied().collect::<Vec<_>>();
+            while let Some(dependency) = queue.pop() {
+                if dependencies.insert(dependency)
+                    && let Some(children) = direct.get(&dependency)
+                {
+                    queue.extend(children.iter().copied());
+                }
+            }
+            self.dependency_crates.insert(owner, dependencies);
+        }
+    }
+
+    pub(crate) fn is_dependency(&self, owner: u64, dependency: u64) -> bool {
+        self.dependency_crates
+            .get(&owner)
+            .is_some_and(|dependencies| dependencies.contains(&dependency))
     }
 
     #[must_use]

@@ -393,12 +393,19 @@ impl Callbacks for SniffTestCallbacks {
         }));
     }
 
-    fn after_analysis(&mut self, _compiler: &interface::Compiler, tcx: TyCtxt<'_>) -> Compilation {
+    fn after_analysis(&mut self, compiler: &interface::Compiler, tcx: TyCtxt<'_>) -> Compilation {
         if is_build_script(tcx) || is_proc_macro(tcx) {
             return Compilation::Continue;
         }
 
-        analyze_crate(tcx, &self.args, &self.config, self.output_scope);
+        let metadata_loader = compiler.codegen_backend.metadata_loader();
+        analyze_crate(
+            tcx,
+            &self.args,
+            &self.config,
+            self.output_scope,
+            &*metadata_loader,
+        );
         Compilation::Continue
     }
 }

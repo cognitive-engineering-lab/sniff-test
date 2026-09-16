@@ -1,6 +1,7 @@
 pub(crate) mod comment;
 pub(crate) mod panic;
 pub(crate) mod safety;
+pub(crate) mod trust;
 
 use std::fmt;
 

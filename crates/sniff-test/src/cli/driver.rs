@@ -36,6 +36,7 @@ pub(crate) fn analyze_crate(
     args: &SniffTestArgs,
     config: &SniffTestConfig,
     output_scope: CrateOutputScope,
+    metadata_loader: &dyn rustc_metadata::creader::MetadataLoader,
 ) {
     let crate_name = tcx.crate_name(LOCAL_CRATE).to_string();
     let local_stable_crate_id = tcx.stable_crate_id(LOCAL_CRATE).as_u64();
@@ -117,6 +118,7 @@ pub(crate) fn analyze_crate(
         &local_facts,
         local_stable_crate_id,
         &dependency_graph,
+        metadata_loader,
         &selection.roots,
         config,
         args.effects,

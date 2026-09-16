@@ -63,6 +63,14 @@ macro_rules! fixture_cases {
 }
 
 fixture_cases! {
+    "untrusted_higher_order" => {
+        untrusted_higher_order => Case::new().in_app().denied();
+    }
+    "path_scoped_trust" => {
+        path_scoped_trust => Case::new().in_app().denied();
+        trusted_crate_covers_implicit_dependencies => Case::new().in_app()
+            .args(&["--manifest", "a-only.toml"]);
+    }
     "dependency_closure_bodies" => {
         dependency_closure_bodies => Case::new().in_app().denied();
         dependency_nested_closure_bodies => Case::new().in_app()
