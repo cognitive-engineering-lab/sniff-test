@@ -14,12 +14,12 @@ warning: [sniff-test::panics::documented-panic] call to `documented` with a `# P
 2 |     dependency_obligation::documented(flag);
   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
   |
-help: add a local `// PANIC:` justification after verifying panic obligations
+help: [option 1] add a local `// PANIC:` justification after verifying panic obligations
  --> src/lib.rs:2:5
   |
 2 |     dependency_obligation::documented(flag);
   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-help: document when this function may panic with `/// # Panics` here
+help: [option 2] document when this function may panic with `/// # Panics` here
  --> src/lib.rs:1:1
   |
 1 | pub fn call_dependency(flag: bool) {

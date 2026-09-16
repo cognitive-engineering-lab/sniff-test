@@ -19,17 +19,17 @@ error: [sniff-test::safety::raw-pointer-dereference-missing-justification] `read
 2 |     unsafe { *pointer }
   |              ^^^^^^^^ no recorded `// SAFETY:` justification
   |
-help: add a local `// SAFETY:` justification after verifying safety obligations
+help: [option 1] add a local `// SAFETY:` justification after verifying safety obligations
  --> src/lib.rs:2:5
   |
 2 |     dependency_safety::read_byte(pointer)
   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-help: document this function's obligations with `/// # Safety` here
+help: [option 2] document this function's obligations with `/// # Safety` here
  --> src/lib.rs:1:1
   |
 1 | pub fn read_dependency(pointer: *const u8) -> u8 {
   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-help: audit dependency crate `dependency_safety` to justify this effect
+help: [option 3] audit dependency crate `dependency_safety` to justify this effect
  --> [FIXTURE]/dep/src/lib.rs:2:14
   |
 2 |     unsafe { *pointer }
@@ -46,17 +46,17 @@ error: [sniff-test::safety::raw-pointer-dereference-missing-justification] `read
 2 |     unsafe { *pointer }
   |              ^^^^^^^^ no recorded `// SAFETY:` justification
   |
-help: add a local `// SAFETY:` justification after verifying safety obligations
+help: [option 1] add a local `// SAFETY:` justification after verifying safety obligations
  --> src/lib.rs:6:5
   |
 6 |     dependency_safety::read_byte(pointer)
   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-help: document this function's obligations with `/// # Safety` here
+help: [option 2] document this function's obligations with `/// # Safety` here
  --> src/lib.rs:5:1
   |
 5 | pub fn read_dependency_again(pointer: *const u8) -> u8 {
   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-help: audit dependency crate `dependency_safety` to justify this effect
+help: [option 3] audit dependency crate `dependency_safety` to justify this effect
  --> [FIXTURE]/dep/src/lib.rs:2:14
   |
 2 |     unsafe { *pointer }
@@ -73,17 +73,17 @@ warning: [sniff-test::safety::unsafe-call-missing-justification] `read_documente
 14 |     unsafe { documented_read(pointer) }
    |              ^^^^^^^^^^^^^^^^^^^^^^^^ no recorded `// SAFETY:` justification
    |
-help: add a local `// SAFETY:` justification after verifying safety obligations
+help: [option 1] add a local `// SAFETY:` justification after verifying safety obligations
   --> src/lib.rs:10:5
    |
 10 |     dependency_safety::read_documented(pointer)
    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-help: document this function's obligations with `/// # Safety` here
+help: [option 2] document this function's obligations with `/// # Safety` here
   --> src/lib.rs:9:1
    |
  9 | pub fn read_documented_dependency(pointer: *const u8) -> u8 {
    | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-help: audit dependency crate `dependency_safety` to justify this effect
+help: [option 3] audit dependency crate `dependency_safety` to justify this effect
   --> [FIXTURE]/dep/src/lib.rs:14:14
    |
 14 |     unsafe { documented_read(pointer) }

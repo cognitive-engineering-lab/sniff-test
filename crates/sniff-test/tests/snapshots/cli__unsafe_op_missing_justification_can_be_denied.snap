@@ -13,12 +13,12 @@ error: [sniff-test::safety::inline-assembly-missing-justification] unsafe operat
 34 |         asm!("nop");
    |         ^^^^^^^^^^^
    |
-help: add a local `// SAFETY:` justification after verifying safety obligations
+help: [option 1] add a local `// SAFETY:` justification after verifying safety obligations
   --> src/lib.rs:34:9
    |
 34 |         asm!("nop");
    |         ^^^^^^^^^^^
-help: document this function's safety obligations with `/// # Safety` here
+help: [option 2] document this function's safety obligations with `/// # Safety` here
   --> src/lib.rs:32:1
    |
 32 | pub fn asm_unjustified() {
@@ -31,12 +31,12 @@ error: [sniff-test::safety::raw-pointer-dereference-missing-justification] unsaf
 17 |     unsafe { *ptr }
    |              ^^^^
    |
-help: add a local `// SAFETY:` justification after verifying safety obligations
+help: [option 1] add a local `// SAFETY:` justification after verifying safety obligations
   --> src/lib.rs:17:14
    |
 17 |     unsafe { *ptr }
    |              ^^^^
-help: document this function's safety obligations with `/// # Safety` here
+help: [option 2] document this function's safety obligations with `/// # Safety` here
   --> src/lib.rs:16:1
    |
 16 | pub fn deref_unjustified(ptr: *const u32) -> u32 {
@@ -49,12 +49,12 @@ error: [sniff-test::safety::extern-static-access-missing-justification] unsafe o
 25 |     unsafe { ENV_FLAG }
    |              ^^^^^^^^
    |
-help: add a local `// SAFETY:` justification after verifying safety obligations
+help: [option 1] add a local `// SAFETY:` justification after verifying safety obligations
   --> src/lib.rs:25:14
    |
 25 |     unsafe { ENV_FLAG }
    |              ^^^^^^^^
-help: document this function's safety obligations with `/// # Safety` here
+help: [option 2] document this function's safety obligations with `/// # Safety` here
   --> src/lib.rs:24:1
    |
 24 | pub fn extern_static_unjustified() -> u32 {
@@ -67,12 +67,12 @@ error: [sniff-test::safety::mutable-static-access-missing-justification] unsafe 
 21 |     unsafe { COUNTER }
    |              ^^^^^^^
    |
-help: add a local `// SAFETY:` justification after verifying safety obligations
+help: [option 1] add a local `// SAFETY:` justification after verifying safety obligations
   --> src/lib.rs:21:14
    |
 21 |     unsafe { COUNTER }
    |              ^^^^^^^
-help: document this function's safety obligations with `/// # Safety` here
+help: [option 2] document this function's safety obligations with `/// # Safety` here
   --> src/lib.rs:20:1
    |
 20 | pub fn mutable_static_unjustified() -> u32 {
@@ -85,12 +85,12 @@ error: [sniff-test::safety::union-field-access-missing-justification] unsafe ope
 29 |     unsafe { bits.word }
    |              ^^^^^^^^^
    |
-help: add a local `// SAFETY:` justification after verifying safety obligations
+help: [option 1] add a local `// SAFETY:` justification after verifying safety obligations
   --> src/lib.rs:29:14
    |
 29 |     unsafe { bits.word }
    |              ^^^^^^^^^
-help: document this function's safety obligations with `/// # Safety` here
+help: [option 2] document this function's safety obligations with `/// # Safety` here
   --> src/lib.rs:28:1
    |
 28 | pub fn union_read_unjustified(bits: &Bits) -> u32 {

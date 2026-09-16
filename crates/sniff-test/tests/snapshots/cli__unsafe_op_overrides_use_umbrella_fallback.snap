@@ -13,12 +13,12 @@ error: [sniff-test::safety::inline-assembly-missing-justification] unsafe operat
 34 |         asm!("nop");
    |         ^^^^^^^^^^^
    |
-help: add a local `// SAFETY:` justification after verifying safety obligations
+help: [option 1] add a local `// SAFETY:` justification after verifying safety obligations
   --> src/lib.rs:34:9
    |
 34 |         asm!("nop");
    |         ^^^^^^^^^^^
-help: document this function's safety obligations with `/// # Safety` here
+help: [option 2] document this function's safety obligations with `/// # Safety` here
   --> src/lib.rs:32:1
    |
 32 | pub fn asm_unjustified() {
@@ -31,12 +31,12 @@ warning: [sniff-test::safety::raw-pointer-dereference-missing-justification] uns
 17 |     unsafe { *ptr }
    |              ^^^^
    |
-help: add a local `// SAFETY:` justification after verifying safety obligations
+help: [option 1] add a local `// SAFETY:` justification after verifying safety obligations
   --> src/lib.rs:17:14
    |
 17 |     unsafe { *ptr }
    |              ^^^^
-help: document this function's safety obligations with `/// # Safety` here
+help: [option 2] document this function's safety obligations with `/// # Safety` here
   --> src/lib.rs:16:1
    |
 16 | pub fn deref_unjustified(ptr: *const u32) -> u32 {

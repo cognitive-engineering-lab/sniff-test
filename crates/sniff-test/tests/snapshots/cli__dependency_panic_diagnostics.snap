@@ -15,12 +15,12 @@ warning: [sniff-test::panics::documented-panic] call to `middle` with a `# Panic
 2 |     dependency_transitive_panic_middle::middle(flag);
   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
   |
-help: add a local `// PANIC:` justification after verifying panic obligations
+help: [option 1] add a local `// PANIC:` justification after verifying panic obligations
  --> src/lib.rs:2:5
   |
 2 |     dependency_transitive_panic_middle::middle(flag);
   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-help: document when this function may panic with `/// # Panics` here
+help: [option 2] document when this function may panic with `/// # Panics` here
  --> src/lib.rs:1:1
   |
 1 | pub fn app(flag: bool) {

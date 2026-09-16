@@ -47,12 +47,12 @@ warning: [sniff-test::panics::documented-panic] call to `ratio` with a `# Panics
 11 |         let first = ratio(a, denominator);
    |                     ^^^^^^^^^^^^^^^^^^^^^
    |
-help: add a local `// PANIC:` justification after verifying panic obligations
+help: [option 1] add a local `// PANIC:` justification after verifying panic obligations
   --> src/lib.rs:11:21
    |
 11 |         let first = ratio(a, denominator);
    |                     ^^^^^^^^^^^^^^^^^^^^^
-help: document when this function may panic with `/// # Panics` here
+help: [option 2] document when this function may panic with `/// # Panics` here
   --> src/lib.rs:8:1
    |
  8 | pub fn shared_block_marker(a: usize, b: usize, denominator: usize) -> usize {
@@ -70,12 +70,12 @@ warning: [sniff-test::panics::documented-panic] call to `ratio` with a `# Panics
 12 |         let second = ratio(b, denominator);
    |                      ^^^^^^^^^^^^^^^^^^^^^
    |
-help: add a local `// PANIC:` justification after verifying panic obligations
+help: [option 1] add a local `// PANIC:` justification after verifying panic obligations
   --> src/lib.rs:12:22
    |
 12 |         let second = ratio(b, denominator);
    |                      ^^^^^^^^^^^^^^^^^^^^^
-help: document when this function may panic with `/// # Panics` here
+help: [option 2] document when this function may panic with `/// # Panics` here
   --> src/lib.rs:8:1
    |
  8 | pub fn shared_block_marker(a: usize, b: usize, denominator: usize) -> usize {
@@ -93,12 +93,12 @@ warning: [sniff-test::panics::documented-panic] call to `first_documented_source
 67 |     first_documented_source();
    |     ^^^^^^^^^^^^^^^^^^^^^^^^^
    |
-help: add a local `// PANIC:` justification after verifying panic obligations
+help: [option 1] add a local `// PANIC:` justification after verifying panic obligations
   --> src/lib.rs:67:5
    |
 67 |     first_documented_source();
    |     ^^^^^^^^^^^^^^^^^^^^^^^^^
-help: document when this function may panic with `/// # Panics` here
+help: [option 2] document when this function may panic with `/// # Panics` here
   --> src/lib.rs:76:1
    |
 76 | pub fn unmarked_path_to_shared_sources() {
@@ -116,12 +116,12 @@ warning: [sniff-test::panics::documented-panic] call to `second_documented_sourc
 68 |     second_documented_source();
    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^
    |
-help: add a local `// PANIC:` justification after verifying panic obligations
+help: [option 1] add a local `// PANIC:` justification after verifying panic obligations
   --> src/lib.rs:68:5
    |
 68 |     second_documented_source();
    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^
-help: document when this function may panic with `/// # Panics` here
+help: [option 2] document when this function may panic with `/// # Panics` here
   --> src/lib.rs:76:1
    |
 76 | pub fn unmarked_path_to_shared_sources() {

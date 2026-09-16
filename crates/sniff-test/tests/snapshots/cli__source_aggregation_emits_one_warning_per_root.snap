@@ -13,12 +13,12 @@ warning: [sniff-test::panics::panic-invocation] panic invocation to `panic_fmt` 
 2 |     panic!("shared source");
   |     ^^^^^^^^^^^^^^^^^^^^^^^
   |
-help: add a local `// PANIC:` justification after verifying panic obligations
+help: [option 1] add a local `// PANIC:` justification after verifying panic obligations
  --> src/lib.rs:2:5
   |
 2 |     panic!("shared source");
   |     ^^^^^^^^^^^^^^^^^^^^^^^
-help: document when this function may panic with `/// # Panics` here
+help: [option 2] document when this function may panic with `/// # Panics` here
  --> src/lib.rs:5:1
   |
 5 | pub fn first_api() {
@@ -31,12 +31,12 @@ warning: [sniff-test::panics::panic-invocation] panic invocation to `panic_fmt` 
 2 |     panic!("shared source");
   |     ^^^^^^^^^^^^^^^^^^^^^^^
   |
-help: add a local `// PANIC:` justification after verifying panic obligations
+help: [option 1] add a local `// PANIC:` justification after verifying panic obligations
  --> src/lib.rs:2:5
   |
 2 |     panic!("shared source");
   |     ^^^^^^^^^^^^^^^^^^^^^^^
-help: document when this function may panic with `/// # Panics` here
+help: [option 2] document when this function may panic with `/// # Panics` here
  --> src/lib.rs:9:1
   |
 9 | pub fn second_api() {

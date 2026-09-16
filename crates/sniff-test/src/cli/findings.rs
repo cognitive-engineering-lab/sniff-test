@@ -285,7 +285,9 @@ pub(crate) fn aggregate_human_findings(findings: &[ResolvedFinding]) -> Vec<Reso
                     finding.finding.diagnostic.messages.sort_by_key(|message| {
                         !matches!(
                             message,
-                            DiagnosticMessage::Help(_) | DiagnosticMessage::SpanHelp(_, _)
+                            DiagnosticMessage::Help(_)
+                                | DiagnosticMessage::AlternativeHelp(_)
+                                | DiagnosticMessage::SpanAlternativeHelp(_, _)
                         )
                     });
                 }
@@ -457,8 +459,9 @@ fn compact_human_diagnostic_paths(finding: &mut Finding, roots: &BTreeSet<String
             DiagnosticMessage::Note(text)
             | DiagnosticMessage::SpanNote(_, text)
             | DiagnosticMessage::SpanLabel(_, text)
-            | DiagnosticMessage::SpanHelp(_, text)
-            | DiagnosticMessage::Help(text) => text,
+            | DiagnosticMessage::Help(text)
+            | DiagnosticMessage::AlternativeHelp(text)
+            | DiagnosticMessage::SpanAlternativeHelp(_, text) => text,
         };
         if text.starts_with("effect trace step ") {
             continue;
@@ -608,8 +611,9 @@ pub(crate) enum DiagnosticMessage {
     Note(String),
     SpanNote(Span, String),
     SpanLabel(Span, String),
-    SpanHelp(Span, String),
     Help(String),
+    AlternativeHelp(String),
+    SpanAlternativeHelp(Span, String),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize)]
@@ -1138,7 +1142,7 @@ mod tests {
             finding
                 .diagnostic
                 .messages
-                .push(DiagnosticMessage::SpanHelp(
+                .push(DiagnosticMessage::SpanAlternativeHelp(
                     root_span,
                     format!("document `{root}`"),
                 ));
@@ -1169,8 +1173,14 @@ mod tests {
                 DiagnosticMessage::Note(String::from(
                     "reachable from `first`, `second` to `panic_fmt`"
                 )),
-                DiagnosticMessage::SpanHelp(first_root_span, String::from("document `first`")),
-                DiagnosticMessage::SpanHelp(second_root_span, String::from("document `second`")),
+                DiagnosticMessage::SpanAlternativeHelp(
+                    first_root_span,
+                    String::from("document `first`"),
+                ),
+                DiagnosticMessage::SpanAlternativeHelp(
+                    second_root_span,
+                    String::from("document `second`"),
+                ),
             ]
         );
     }
@@ -1202,7 +1212,7 @@ mod tests {
             finding.effect_span = Some(effect_span);
             finding.diagnostic.messages = vec![
                 DiagnosticMessage::Note(format!("reachable from `{root}` to `unwrap`")),
-                DiagnosticMessage::SpanHelp(root_span, format!("document `{root}`")),
+                DiagnosticMessage::SpanAlternativeHelp(root_span, format!("document `{root}`")),
             ];
             ResolvedFinding {
                 level: LintLevel::Warn,
@@ -1223,7 +1233,7 @@ mod tests {
         assert_eq!(
             diagnostics[0].finding.diagnostic.messages,
             [
-                DiagnosticMessage::SpanHelp(
+                DiagnosticMessage::SpanAlternativeHelp(
                     first_span,
                     String::from("document `read_bytes_to_end`")
                 ),
@@ -1235,7 +1245,10 @@ mod tests {
         assert_eq!(
             diagnostics[1].finding.diagnostic.messages,
             [
-                DiagnosticMessage::SpanHelp(second_span, String::from("document `skip_to_end`")),
+                DiagnosticMessage::SpanAlternativeHelp(
+                    second_span,
+                    String::from("document `skip_to_end`"),
+                ),
                 DiagnosticMessage::Note(String::from("reachable from `skip_to_end` to `unwrap`")),
             ]
         );
@@ -1272,7 +1285,7 @@ mod tests {
             finding.trace = trace.iter().map(|step| (*step).to_owned()).collect();
             finding.diagnostic.messages = vec![
                 DiagnosticMessage::Note(format!("reachable from `{root}` to `push`")),
-                DiagnosticMessage::SpanHelp(local_span, format!("guard `{root}`")),
+                DiagnosticMessage::SpanAlternativeHelp(local_span, format!("guard `{root}`")),
             ];
             ResolvedFinding {
                 level: LintLevel::Warn,
@@ -1317,7 +1330,7 @@ mod tests {
         assert_eq!(
             diagnostics[0].finding.diagnostic.messages,
             [
-                DiagnosticMessage::SpanHelp(first_span, String::from("guard `ensure`")),
+                DiagnosticMessage::SpanAlternativeHelp(first_span, String::from("guard `ensure`"),),
                 DiagnosticMessage::SpanLabel(
                     effect_span,
                     String::from("no recorded `// PANIC:` justification")
@@ -1327,7 +1340,7 @@ mod tests {
         assert_eq!(
             diagnostics[1].finding.diagnostic.messages,
             [
-                DiagnosticMessage::SpanHelp(second_span, String::from("guard `insert`")),
+                DiagnosticMessage::SpanAlternativeHelp(second_span, String::from("guard `insert`"),),
                 DiagnosticMessage::SpanLabel(
                     effect_span,
                     String::from("no recorded `// PANIC:` justification")
@@ -1429,7 +1442,7 @@ mod tests {
             DiagnosticMessage::Help(String::from("justify this call")),
             DiagnosticMessage::SpanNote(root_span, String::from("callee contract")),
             DiagnosticMessage::Note(String::from("reachable from `sample::api` to `unwrap`")),
-            DiagnosticMessage::SpanHelp(root_span, String::from("document this root")),
+            DiagnosticMessage::SpanAlternativeHelp(root_span, String::from("document this root")),
         ];
 
         let aggregated = aggregate_human_findings(&[ResolvedFinding {
@@ -1441,7 +1454,10 @@ mod tests {
             aggregated[0].finding.diagnostic.messages,
             [
                 DiagnosticMessage::Help(String::from("justify this call")),
-                DiagnosticMessage::SpanHelp(root_span, String::from("document this root")),
+                DiagnosticMessage::SpanAlternativeHelp(
+                    root_span,
+                    String::from("document this root"),
+                ),
                 DiagnosticMessage::SpanNote(root_span, String::from("callee contract")),
                 DiagnosticMessage::Note(String::from("reachable from `api` to `unwrap`")),
             ]

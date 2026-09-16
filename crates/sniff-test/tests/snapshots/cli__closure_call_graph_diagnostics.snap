@@ -13,12 +13,12 @@ error: [sniff-test::panics::panic-invocation] panic invocation to `panic_fmt` ha
 2 |     let panic = || panic!("called closure");
   |                    ^^^^^^^^^^^^^^^^^^^^^^^^
   |
-help: add a local `// PANIC:` justification after verifying panic obligations
+help: [option 1] add a local `// PANIC:` justification after verifying panic obligations
  --> src/lib.rs:2:20
   |
 2 |     let panic = || panic!("called closure");
   |                    ^^^^^^^^^^^^^^^^^^^^^^^^
-help: document when this function may panic with `/// # Panics` here
+help: [option 2] document when this function may panic with `/// # Panics` here
  --> src/lib.rs:1:1
   |
 1 | pub fn basic_closure_panics() {

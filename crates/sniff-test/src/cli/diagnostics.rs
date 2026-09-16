@@ -73,6 +73,17 @@ fn decorate<G: EmissionGuarantee>(
     messages: &[DiagnosticMessage],
 ) {
     diagnostic.is_lint(lint_code.to_owned(), false);
+    let alternative_count = messages
+        .iter()
+        .filter(|message| {
+            matches!(
+                message,
+                DiagnosticMessage::AlternativeHelp(_)
+                    | DiagnosticMessage::SpanAlternativeHelp(_, _)
+            )
+        })
+        .count();
+    let mut alternative_index = 0;
     for message in messages {
         match message {
             DiagnosticMessage::Note(note) => {
@@ -84,13 +95,29 @@ fn decorate<G: EmissionGuarantee>(
             DiagnosticMessage::SpanLabel(span, label) => {
                 diagnostic.span_label(*span, label.clone());
             }
-            DiagnosticMessage::SpanHelp(span, help) => {
-                diagnostic.span_help(*span, help.clone());
-            }
             DiagnosticMessage::Help(help) => {
                 diagnostic.help(help.clone());
             }
+            DiagnosticMessage::AlternativeHelp(help) => {
+                alternative_index += 1;
+                diagnostic.help(alternative_help(help, alternative_count, alternative_index));
+            }
+            DiagnosticMessage::SpanAlternativeHelp(span, help) => {
+                alternative_index += 1;
+                diagnostic.span_help(
+                    *span,
+                    alternative_help(help, alternative_count, alternative_index),
+                );
+            }
         }
+    }
+}
+
+fn alternative_help(help: &str, alternative_count: usize, alternative_index: usize) -> String {
+    if alternative_count > 1 {
+        format!("[option {alternative_index}] {help}")
+    } else {
+        help.to_owned()
     }
 }
 
@@ -174,7 +201,7 @@ mod tests {
     use rustc_span::source_map::{FilePathMapping, SourceMap};
     use rustc_span::{BytePos, FileName};
 
-    use super::{config_span, lint_coded_message};
+    use super::{alternative_help, config_span, lint_coded_message};
 
     fn with_source_file(source: &str, check: impl FnOnce(&rustc_span::SourceFile)) {
         rustc_span::create_default_session_globals_then(|| {
@@ -222,6 +249,22 @@ mod tests {
                 "unsafe operation lacks a justification",
             ),
             "[sniff-test::safety::raw-pointer-dereference-missing-justification] unsafe operation lacks a justification"
+        );
+    }
+
+    #[test]
+    fn multiple_alternative_fixes_receive_bracketed_option_labels() {
+        assert_eq!(
+            alternative_help("add a local justification", 3, 1),
+            "[option 1] add a local justification"
+        );
+        assert_eq!(
+            alternative_help("audit the dependency", 3, 3),
+            "[option 3] audit the dependency"
+        );
+        assert_eq!(
+            alternative_help("add the only available justification", 1, 1),
+            "add the only available justification"
         );
     }
 }
