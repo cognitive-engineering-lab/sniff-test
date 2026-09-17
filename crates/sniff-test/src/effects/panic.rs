@@ -4,15 +4,14 @@ use effect_tracing::InvocationId;
 
 use crate::annotations::{AnnotationDomain, AnnotationIndex};
 use crate::artifact::{
-    ArtifactFacts, CallFact, CallId, CompilerAssertKind, DefinitionNamespaceIndex, EffectFactKind,
-    EffectId, FunctionId as StableFunctionId, FunctionTargetFact,
+    ArtifactFacts, CallFact, DefinitionNamespaceIndex, EffectFactKind, FunctionTargetFact,
 };
 use crate::compiler::invocations::InvocationGraph;
 use crate::compiler::{effect_passes::EffectPassRegistry, panic::CompilerAssertPass};
 use crate::config::{PanicBoundaryPolicy, PanicConfig};
 
 use super::concrete::{
-    ConcreteEffect, ConcreteEffectSeed, ConcreteEffectState, ConcreteTermination, JustificationSite,
+    ConcreteEffect, ConcreteEffectSeed, ConcreteEffectState, ConcreteSource, ConcreteTermination,
 };
 use super::{InvocationSourceBranch, ProbeError};
 
@@ -28,29 +27,11 @@ impl super::Effect for Panic {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub(crate) enum PanicOrigin {
-    Invocation {
-        invocation: InvocationId,
-        call: CallId,
-    },
-    CompilerAssert {
-        owner: StableFunctionId,
-        effect: EffectId,
-    },
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub(crate) enum PanicKind {
-    Invocation,
-    CompilerAssert(CompilerAssertKind),
-}
-
-pub(crate) type PanicState = ConcreteEffectState<PanicKind>;
+pub(crate) type PanicState = ConcreteEffectState;
 pub(crate) type PanicTermination = ConcreteTermination;
-pub(crate) type PanicEffect<'annotations> = ConcreteEffect<'annotations, PanicOrigin, PanicKind>;
+pub(crate) type PanicEffect<'annotations> = ConcreteEffect<'annotations, Panic>;
 
-impl<'annotations> ConcreteEffect<'annotations, PanicOrigin, PanicKind> {
+impl<'annotations> ConcreteEffect<'annotations, Panic> {
     #[allow(
         clippy::too_many_lines,
         reason = "panic probing remains effect-specific instead of introducing a compiler visitor registry"
@@ -84,8 +65,8 @@ impl<'annotations> ConcreteEffect<'annotations, PanicOrigin, PanicKind> {
                 trusted_functions.extend(graph.function_aliases(body.function));
             }
             for effect in &body.effects {
-                if let EffectFactKind::CompilerAssert { kind } = effect.kind {
-                    let origin = PanicOrigin::CompilerAssert {
+                if let EffectFactKind::CompilerAssert { .. } = effect.kind {
+                    let source = ConcreteSource::Effect {
                         owner: body.function,
                         effect: effect.id,
                     };
@@ -94,17 +75,9 @@ impl<'annotations> ConcreteEffect<'annotations, PanicOrigin, PanicKind> {
                         .iter()
                         .any(|frame| config.ignores_path(&frame.display_path))
                     {
-                        macro_ignored_sources.insert(origin);
+                        macro_ignored_sources.insert(source);
                     }
-                    seeds.push(ConcreteEffectSeed::new(
-                        origin,
-                        owner,
-                        PanicKind::CompilerAssert(kind),
-                        JustificationSite::Effect {
-                            owner: body.function,
-                            effect: effect.id,
-                        },
-                    ));
+                    seeds.push(ConcreteEffectSeed::new(source, owner));
                 }
             }
         }
@@ -136,27 +109,22 @@ impl<'annotations> ConcreteEffect<'annotations, PanicOrigin, PanicKind> {
             }
         }
         for (&invocation, sources) in &invocation_sources {
-            for source in sources {
-                let origin = PanicOrigin::Invocation {
+            for branch in sources {
+                let source = ConcreteSource::Invocation {
                     invocation,
-                    call: source.edge().id,
+                    call: branch.edge().id,
                 };
-                if source
+                if branch
                     .edge()
                     .macro_expansions
                     .iter()
                     .any(|frame| config.ignores_path(&frame.display_path))
                 {
-                    macro_ignored_sources.insert(origin);
+                    macro_ignored_sources.insert(source);
                 }
                 seeds.push(ConcreteEffectSeed::new(
-                    origin,
+                    source,
                     graph.invocation(invocation).caller(),
-                    PanicKind::Invocation,
-                    JustificationSite::Invocation {
-                        invocation,
-                        call: source.edge().id,
-                    },
                 ));
             }
         }

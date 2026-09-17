@@ -17,9 +17,9 @@ use effect_tracing::{
 use crate::annotations::{AnnotationDomain, AnnotationId, AnnotationIndex};
 use crate::artifact::{
     AnnotationFactKind, AnnotationProbingFact, AnnotationTargetFact, ArtifactFacts, CallTargetFact,
-    CompilerAssertKind, DefinitionNamespaceIndex, EffectFact, EffectId, FunctionFact,
-    FunctionId as StableFunctionId, FunctionTargetFact, MarkerEvidenceState, SafetyOpKind,
-    UnverifiedMarkerProbeReason,
+    CompilerAssertKind, DefinitionNamespaceIndex, EffectFact, EffectFactKind, EffectId,
+    FunctionFact, FunctionId as StableFunctionId, FunctionTargetFact, MarkerEvidenceState,
+    SafetyOpKind, UnverifiedMarkerProbeReason,
 };
 use crate::compiler::invocations::{
     InvocationGraph, InvocationResolution, UnresolvedCallTargetReason,
@@ -28,12 +28,13 @@ use crate::config::{MarkerProbing, PanicBoundaryPolicy, SniffTestConfig};
 use crate::contracts::normalize_requirement_name;
 use crate::effects::EffectSelection;
 use crate::effects::InvocationSourceBranch;
+use crate::effects::concrete::ConcreteSource;
 use crate::effects::obligation::{
     ObligationDomain, ObligationTracker, TrackedEffect, TrackedOrigin, TrackedState,
     TrackedTermination,
 };
-use crate::effects::panic::{PanicEffect, PanicKind, PanicOrigin, PanicState};
-use crate::effects::safety::{SafetyEffect, SafetyKind, SafetyOrigin, SafetyState};
+use crate::effects::panic::{PanicEffect, PanicState};
+use crate::effects::safety::{SafetyEffect, SafetyState};
 use crate::effects::trust::TrustPath;
 use crate::report_model::{
     DomainCompleteness, EffectCompleteness, IncompleteReason, IncompleteTraceKind,
@@ -72,11 +73,11 @@ enum MarkerEffectGroup {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 enum MarkerWitness {
     PanicEffect {
-        origin: PanicOrigin,
+        origin: ConcreteSource,
         site: MarkerTraceSite,
     },
     SafetyEffect {
-        origin: SafetyOrigin,
+        origin: ConcreteSource,
         site: MarkerTraceSite,
     },
     Obligation {
@@ -105,12 +106,12 @@ struct MarkerUse {
 type MarkerClaims = BTreeMap<AnnotationId, BTreeMap<MarkerEffectGroup, Vec<MarkerWitness>>>;
 
 type PanicTrace = EffectTrace<
-    TrackedOrigin<PanicOrigin>,
+    TrackedOrigin<ConcreteSource>,
     TrackedState<PanicState>,
     TrackedTermination<crate::effects::panic::PanicTermination>,
 >;
 type SafetyTrace = EffectTrace<
-    TrackedOrigin<SafetyOrigin>,
+    TrackedOrigin<ConcreteSource>,
     TrackedState<SafetyState>,
     TrackedTermination<crate::effects::safety::SafetyTermination>,
 >;
@@ -676,7 +677,7 @@ fn marker_projection(
         MarkerWitness::PanicEffect { origin, site } => match site {
             MarkerTraceSite::Source => {
                 let panic = panic?;
-                let endpoint = panic_origin_owner(graph, origin)?;
+                let endpoint = concrete_source_owner(graph, origin)?;
                 let trace = audited_path_from_root(
                     artifact,
                     graph,
@@ -712,7 +713,7 @@ fn marker_projection(
         MarkerWitness::SafetyEffect { origin, site } => match site {
             MarkerTraceSite::Source => {
                 let safety = safety?;
-                let endpoint = safety_origin_owner(graph, origin)?;
+                let endpoint = concrete_source_owner(graph, origin)?;
                 let trace = audited_path_from_root(
                     artifact,
                     graph,
@@ -877,14 +878,12 @@ struct MarkerTraversalPolicy<Opaque, Ignored> {
     is_ignored_invocation: Ignored,
 }
 
-fn panic_effect_group(origin: PanicOrigin) -> PanicEffectGroup {
+fn panic_effect_group(origin: ConcreteSource) -> PanicEffectGroup {
     match origin {
-        PanicOrigin::Invocation { invocation, call } => {
+        ConcreteSource::Invocation { invocation, call } => {
             PanicEffectGroup::Invocation(invocation, call)
         }
-        PanicOrigin::CompilerAssert { owner, effect } => {
-            PanicEffectGroup::CompilerAssert(owner, effect)
-        }
+        ConcreteSource::Effect { owner, effect } => PanicEffectGroup::CompilerAssert(owner, effect),
     }
 }
 
@@ -892,10 +891,10 @@ fn safety_effect_groups(
     artifact: &ArtifactFacts,
     graph: &InvocationGraph,
     safety: &SafetyEffect<'_>,
-    origin: SafetyOrigin,
+    origin: ConcreteSource,
 ) -> Vec<SafetyEffectGroup> {
     match origin {
-        SafetyOrigin::Invocation { invocation, call } => {
+        ConcreteSource::Invocation { invocation, call } => {
             let owner = graph.stable_function(graph.invocation(invocation).caller());
             let group = safety
                 .invocation_source(invocation, call)
@@ -905,7 +904,7 @@ fn safety_effect_groups(
                 });
             vec![group]
         }
-        SafetyOrigin::Operation { owner, effect } => vec![
+        ConcreteSource::Effect { owner, effect } => vec![
             effect_fact(artifact, owner, effect)
                 .and_then(|(_, fact)| fact.safety_effect_group)
                 .map_or(
@@ -943,17 +942,12 @@ fn obligation_safety_effect_groups(
         .collect()
 }
 
-fn panic_origin_owner(graph: &InvocationGraph, origin: PanicOrigin) -> Option<FunctionId> {
+fn concrete_source_owner(graph: &InvocationGraph, origin: ConcreteSource) -> Option<FunctionId> {
     match origin {
-        PanicOrigin::Invocation { invocation, .. } => Some(graph.invocation(invocation).caller()),
-        PanicOrigin::CompilerAssert { owner, .. } => graph.function(owner),
-    }
-}
-
-fn safety_origin_owner(graph: &InvocationGraph, origin: SafetyOrigin) -> Option<FunctionId> {
-    match origin {
-        SafetyOrigin::Invocation { invocation, .. } => Some(graph.invocation(invocation).caller()),
-        SafetyOrigin::Operation { owner, .. } => graph.function(owner),
+        ConcreteSource::Invocation { invocation, .. } => {
+            Some(graph.invocation(invocation).caller())
+        }
+        ConcreteSource::Effect { owner, .. } => graph.function(owner),
     }
 }
 
@@ -961,16 +955,16 @@ fn append_panic_origin(
     artifact: &ArtifactFacts,
     graph: &InvocationGraph,
     panic: &PanicEffect<'_>,
-    origin: PanicOrigin,
+    origin: ConcreteSource,
     trace: &mut InterpretedTrace,
 ) {
     match origin {
-        PanicOrigin::Invocation { invocation, call } => {
+        ConcreteSource::Invocation { invocation, call } => {
             if let Some(source) = panic.invocation_source(invocation, call) {
                 append_invocation_source(artifact, graph, invocation, source, trace);
             }
         }
-        PanicOrigin::CompilerAssert { owner, effect } => {
+        ConcreteSource::Effect { owner, effect } => {
             if let Some((body, fact)) = effect_fact(artifact, owner, effect) {
                 append_effect_provenance(body, fact, trace);
             }
@@ -982,16 +976,16 @@ fn append_safety_origin(
     artifact: &ArtifactFacts,
     graph: &InvocationGraph,
     safety: &SafetyEffect<'_>,
-    origin: SafetyOrigin,
+    origin: ConcreteSource,
     trace: &mut InterpretedTrace,
 ) {
     match origin {
-        SafetyOrigin::Invocation { invocation, call } => {
+        ConcreteSource::Invocation { invocation, call } => {
             if let Some(source) = safety.invocation_source(invocation, call) {
                 append_invocation_source(artifact, graph, invocation, source, trace);
             }
         }
-        SafetyOrigin::Operation { owner, effect } => {
+        ConcreteSource::Effect { owner, effect } => {
             if let Some((body, fact)) = effect_fact(artifact, owner, effect) {
                 append_effect_provenance(body, fact, trace);
             }
@@ -1297,18 +1291,19 @@ fn panic_findings(
         .filter_map(|node| {
             let trace_path = trace_path(artifact, graph, trace, node);
             let trace_node = trace.nodes().nth(node)?;
-            let TrackedState::Concrete(state) = trace_node.state() else {
+            let TrackedState::Concrete(_) = trace_node.state() else {
                 return None;
             };
             let TrackedOrigin::Concrete(origin) = *trace_node.origin() else {
                 return None;
             };
             match origin {
-                PanicOrigin::CompilerAssert { owner, effect } => {
+                ConcreteSource::Effect { owner, effect } => {
                     let (body, fact) = effect_fact(artifact, owner, effect)?;
-                    let PanicKind::CompilerAssert(kind) = state.kind() else {
+                    let EffectFactKind::CompilerAssert { kind } = &fact.kind else {
                         return None;
                     };
+                    let kind = *kind;
                     let mut trace_path = trace_path;
                     append_effect_provenance(body, fact, &mut trace_path);
                     append_compiler_assert(body, fact, kind, &mut trace_path);
@@ -1331,7 +1326,7 @@ fn panic_findings(
                         requirements: Vec::new(),
                     })
                 }
-                PanicOrigin::Invocation { invocation, call } => {
+                ConcreteSource::Invocation { invocation, call } => {
                     let source = panic.invocation_source(invocation, call).filter(|source| {
                         !invocation_source_has_contract(
                             graph,
@@ -1383,18 +1378,19 @@ fn safety_findings(
         .filter_map(|node| {
             let trace_path = trace_path(artifact, graph, trace, node);
             let trace_node = trace.nodes().nth(node)?;
-            let TrackedState::Concrete(state) = trace_node.state() else {
+            let TrackedState::Concrete(_) = trace_node.state() else {
                 return None;
             };
             let TrackedOrigin::Concrete(origin) = *trace_node.origin() else {
                 return None;
             };
             match origin {
-                SafetyOrigin::Operation { owner, effect } => {
+                ConcreteSource::Effect { owner, effect } => {
                     let (body, fact) = effect_fact(artifact, owner, effect)?;
-                    let SafetyKind::Operation(kind) = state.kind() else {
+                    let EffectFactKind::UnsafeOperation { kind } = &fact.kind else {
                         return None;
                     };
+                    let kind = *kind;
                     let mut trace_path = trace_path;
                     append_effect_provenance(body, fact, &mut trace_path);
                     append_unsafe_operation(body, fact, kind, &mut trace_path);
@@ -1417,7 +1413,7 @@ fn safety_findings(
                         requirements: Vec::new(),
                     })
                 }
-                SafetyOrigin::Invocation { invocation, call } => {
+                ConcreteSource::Invocation { invocation, call } => {
                     let source = safety
                         .invocation_source(invocation, call)
                         .filter(|source| {

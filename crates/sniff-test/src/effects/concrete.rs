@@ -1,7 +1,7 @@
 //! Shared tracking for compiler-discovered concrete effect seeds.
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::hash::Hash;
+use std::marker::PhantomData;
 
 use effect_tracing::{
     EffectSeed, FunctionId, InvocationId, Propagation, PropagationEdge, TraceCx, TracePolicy,
@@ -16,8 +16,13 @@ use super::InvocationSourceBranch;
 use super::obligation::ConcreteState;
 use super::trust::TrustPath;
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum JustificationSite {
+/// Stable location of one compiler-discovered effect source.
+///
+/// The active tracker supplies the effect domain. The source itself only
+/// needs enough identity to keep traces distinct and resolve source evidence
+/// and diagnostics back to compiler facts.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub(crate) enum ConcreteSource {
     Invocation {
         invocation: InvocationId,
         call: CallId,
@@ -29,43 +34,29 @@ pub(crate) enum JustificationSite {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) struct ConcreteEffectSeed<O, K> {
-    origin: O,
+pub(crate) struct ConcreteEffectSeed {
+    source: ConcreteSource,
     owner: FunctionId,
-    kind: K,
-    justification_site: JustificationSite,
 }
 
-impl<O, K> ConcreteEffectSeed<O, K> {
+impl ConcreteEffectSeed {
     #[must_use]
-    pub(crate) const fn new(
-        origin: O,
-        owner: FunctionId,
-        kind: K,
-        justification_site: JustificationSite,
-    ) -> Self {
-        Self {
-            origin,
-            owner,
-            kind,
-            justification_site,
-        }
+    pub(crate) const fn new(source: ConcreteSource, owner: FunctionId) -> Self {
+        Self { source, owner }
     }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
-pub(crate) struct ConcreteEffectState<K> {
-    kind: K,
+pub(crate) struct ConcreteEffectState {
     current_function: FunctionId,
     invocation_justification: Option<AnnotationId>,
     trust_path: TrustPath,
 }
 
-impl<K> ConcreteEffectState<K> {
+impl ConcreteEffectState {
     #[must_use]
-    pub(crate) fn new(kind: K, owner: FunctionId, graph: &InvocationGraph) -> Self {
+    pub(crate) fn new(owner: FunctionId, graph: &InvocationGraph) -> Self {
         Self {
-            kind,
             current_function: owner,
             invocation_justification: None,
             trust_path: TrustPath::new(graph, owner),
@@ -77,19 +68,12 @@ impl<K> ConcreteEffectState<K> {
         &self.trust_path
     }
 
-    pub(crate) const fn kind(&self) -> K
-    where
-        K: Copy,
-    {
-        self.kind
-    }
-
     pub(crate) fn trust_from_boundary(&mut self) {
         self.trust_path = TrustPath::default();
     }
 }
 
-impl<K> ConcreteState for ConcreteEffectState<K> {
+impl ConcreteState for ConcreteEffectState {
     fn current_function(&self) -> FunctionId {
         self.current_function
     }
@@ -106,47 +90,40 @@ pub(crate) enum ConcreteTermination {
 ///
 /// Effect definitions construct seeds and boundary sets. This type provides
 /// the common graph propagation and justification termination semantics.
-pub(crate) struct ConcreteEffect<'annotations, O, K> {
+pub(crate) struct ConcreteEffect<'annotations, D> {
     annotations: &'annotations AnnotationIndex,
     graph: &'annotations InvocationGraph,
     domain: AnnotationDomain,
-    seeds: Vec<EffectSeed<O, ConcreteEffectState<K>>>,
-    source_sites: BTreeMap<O, JustificationSite>,
+    seeds: Vec<EffectSeed<ConcreteSource, ConcreteEffectState>>,
     trusted_functions: BTreeSet<FunctionId>,
     ignored_functions: BTreeSet<FunctionId>,
-    macro_ignored_sources: BTreeSet<O>,
+    macro_ignored_sources: BTreeSet<ConcreteSource>,
     macro_ignored_invocations: BTreeSet<InvocationId>,
     invocation_sources: BTreeMap<InvocationId, Vec<InvocationSourceBranch>>,
+    domain_marker: PhantomData<D>,
 }
 
-impl<'annotations, O, K> ConcreteEffect<'annotations, O, K>
-where
-    O: Copy + Ord,
-{
+impl<'annotations, D> ConcreteEffect<'annotations, D> {
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn new(
         annotations: &'annotations AnnotationIndex,
         graph: &'annotations InvocationGraph,
         domain: AnnotationDomain,
-        seeds: Vec<ConcreteEffectSeed<O, K>>,
+        seeds: Vec<ConcreteEffectSeed>,
         trusted_functions: BTreeSet<FunctionId>,
         ignored_functions: BTreeSet<FunctionId>,
-        macro_ignored_sources: BTreeSet<O>,
+        macro_ignored_sources: BTreeSet<ConcreteSource>,
         macro_ignored_invocations: BTreeSet<InvocationId>,
         invocation_sources: BTreeMap<InvocationId, Vec<InvocationSourceBranch>>,
     ) -> Self {
-        let source_sites = seeds
-            .iter()
-            .map(|seed| (seed.origin, seed.justification_site))
-            .collect();
         let seeds = seeds
             .into_iter()
             .map(|seed| {
-                let mut state = ConcreteEffectState::new(seed.kind, seed.owner, graph);
+                let mut state = ConcreteEffectState::new(seed.owner, graph);
                 if trusted_functions.contains(&seed.owner) {
                     state.trust_from_boundary();
                 }
-                EffectSeed::new(seed.origin, seed.owner, state)
+                EffectSeed::new(seed.source, seed.owner, state)
             })
             .collect();
         Self {
@@ -154,12 +131,12 @@ where
             graph,
             domain,
             seeds,
-            source_sites,
             trusted_functions,
             ignored_functions,
             macro_ignored_sources,
             macro_ignored_invocations,
             invocation_sources,
+            domain_marker: PhantomData,
         }
     }
 
@@ -227,13 +204,13 @@ where
     }
 }
 
-impl<O: Copy + Ord, K> ConcreteEffect<'_, O, K> {
-    fn source_justification(&self, origin: O) -> Option<AnnotationId> {
-        match *self.source_sites.get(&origin)? {
-            JustificationSite::Invocation { invocation, call } => {
+impl<D> ConcreteEffect<'_, D> {
+    fn source_justification(&self, source: ConcreteSource) -> Option<AnnotationId> {
+        match source {
+            ConcreteSource::Invocation { invocation, call } => {
                 self.raw_call_justification(invocation, call)
             }
-            JustificationSite::Effect { owner, effect } => self
+            ConcreteSource::Effect { owner, effect } => self
                 .annotations
                 .comments_at_effect(owner, effect, self.domain)
                 .find(|comment| comment.has_justification())
@@ -242,13 +219,9 @@ impl<O: Copy + Ord, K> ConcreteEffect<'_, O, K> {
     }
 }
 
-impl<O, K> TracePolicy for ConcreteEffect<'_, O, K>
-where
-    O: Copy + Eq + Ord + Hash,
-    K: Copy + Eq + Hash,
-{
-    type Origin = O;
-    type State = ConcreteEffectState<K>;
+impl<D> TracePolicy for ConcreteEffect<'_, D> {
+    type Origin = ConcreteSource;
+    type State = ConcreteEffectState;
     type Termination = ConcreteTermination;
 
     fn sources(&self) -> impl Iterator<Item = EffectSeed<Self::Origin, Self::State>> + '_ {

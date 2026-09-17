@@ -4,15 +4,14 @@ use effect_tracing::InvocationId;
 
 use crate::annotations::{AnnotationDomain, AnnotationIndex};
 use crate::artifact::{
-    ArtifactFacts, CallId, DefinitionNamespaceIndex, EffectFactKind, EffectId,
-    FunctionId as StableFunctionId, SafetyOpKind, same_macro_provenance,
+    ArtifactFacts, DefinitionNamespaceIndex, EffectFactKind, same_macro_provenance,
 };
 use crate::compiler::invocations::InvocationGraph;
 use crate::compiler::{effect_passes::EffectPassRegistry, safety::SafetyThirPass};
 use crate::config::SafetyConfig;
 
 use super::concrete::{
-    ConcreteEffect, ConcreteEffectSeed, ConcreteEffectState, ConcreteTermination, JustificationSite,
+    ConcreteEffect, ConcreteEffectSeed, ConcreteEffectState, ConcreteSource, ConcreteTermination,
 };
 use super::{InvocationSourceBranch, ProbeError};
 
@@ -28,29 +27,11 @@ impl super::Effect for Safety {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub(crate) enum SafetyOrigin {
-    Invocation {
-        invocation: InvocationId,
-        call: CallId,
-    },
-    Operation {
-        owner: StableFunctionId,
-        effect: EffectId,
-    },
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub(crate) enum SafetyKind {
-    Invocation,
-    Operation(SafetyOpKind),
-}
-
-pub(crate) type SafetyState = ConcreteEffectState<SafetyKind>;
+pub(crate) type SafetyState = ConcreteEffectState;
 pub(crate) type SafetyTermination = ConcreteTermination;
-pub(crate) type SafetyEffect<'annotations> = ConcreteEffect<'annotations, SafetyOrigin, SafetyKind>;
+pub(crate) type SafetyEffect<'annotations> = ConcreteEffect<'annotations, Safety>;
 
-impl<'annotations> ConcreteEffect<'annotations, SafetyOrigin, SafetyKind> {
+impl<'annotations> ConcreteEffect<'annotations, Safety> {
     #[allow(
         clippy::too_many_lines,
         reason = "safety probing remains effect-specific instead of introducing a compiler visitor registry"
@@ -82,8 +63,8 @@ impl<'annotations> ConcreteEffect<'annotations, SafetyOrigin, SafetyKind> {
                 trusted_functions.extend(graph.function_aliases(body.function));
             }
             for effect in &body.effects {
-                if let EffectFactKind::UnsafeOperation { kind } = effect.kind {
-                    let origin = SafetyOrigin::Operation {
+                if let EffectFactKind::UnsafeOperation { .. } = effect.kind {
+                    let source = ConcreteSource::Effect {
                         owner: body.function,
                         effect: effect.id,
                     };
@@ -92,7 +73,7 @@ impl<'annotations> ConcreteEffect<'annotations, SafetyOrigin, SafetyKind> {
                         .iter()
                         .any(|frame| config.ignores_path(&frame.display_path))
                     {
-                        macro_ignored_sources.insert(origin);
+                        macro_ignored_sources.insert(source);
                     }
                     let owners = if body.function.instance_hash.is_none() {
                         graph
@@ -111,17 +92,11 @@ impl<'annotations> ConcreteEffect<'annotations, SafetyOrigin, SafetyKind> {
                     } else {
                         vec![owner]
                     };
-                    seeds.extend(owners.into_iter().map(|owner| {
-                        ConcreteEffectSeed::new(
-                            origin,
-                            owner,
-                            SafetyKind::Operation(kind),
-                            JustificationSite::Effect {
-                                owner: body.function,
-                                effect: effect.id,
-                            },
-                        )
-                    }));
+                    seeds.extend(
+                        owners
+                            .into_iter()
+                            .map(|owner| ConcreteEffectSeed::new(source, owner)),
+                    );
                 }
             }
         }
@@ -157,27 +132,22 @@ impl<'annotations> ConcreteEffect<'annotations, SafetyOrigin, SafetyKind> {
             }
         }
         for (&invocation, sources) in &invocation_sources {
-            for source in sources {
-                let origin = SafetyOrigin::Invocation {
+            for branch in sources {
+                let source = ConcreteSource::Invocation {
                     invocation,
-                    call: source.edge().id,
+                    call: branch.edge().id,
                 };
-                if source
+                if branch
                     .edge()
                     .macro_expansions
                     .iter()
                     .any(|frame| config.ignores_path(&frame.display_path))
                 {
-                    macro_ignored_sources.insert(origin);
+                    macro_ignored_sources.insert(source);
                 }
                 seeds.push(ConcreteEffectSeed::new(
-                    origin,
+                    source,
                     graph.invocation(invocation).caller(),
-                    SafetyKind::Invocation,
-                    JustificationSite::Invocation {
-                        invocation,
-                        call: source.edge().id,
-                    },
                 ));
             }
         }

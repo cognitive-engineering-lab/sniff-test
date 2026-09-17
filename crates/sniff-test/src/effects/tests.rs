@@ -15,9 +15,10 @@ use crate::config::{EffectDocMatching, MarkerProbing, SniffTestConfig};
 use crate::contracts::ContractDocOverrides;
 use crate::namespace::StableDefPathHash;
 
+use super::concrete::ConcreteSource;
 use super::obligation::{ObligationDomain, ObligationTermination, ObligationTracker};
-use super::panic::{PanicEffect, PanicOrigin, PanicTermination};
-use super::safety::{SafetyEffect, SafetyOrigin, SafetyTermination};
+use super::panic::{PanicEffect, PanicTermination};
+use super::safety::{SafetyEffect, SafetyTermination};
 
 fn stable_function(index: u64) -> StableFunctionId {
     let value = format!("{index:016x}{:016x}", index + 100);
@@ -1943,7 +1944,7 @@ fn panic_sink_declaration_seeds_opaque_invocation() {
     assert_eq!(panic.source_count(), 1);
     assert_eq!(
         trace.outcomes().collect::<Vec<_>>(),
-        vec![TraceOutcome::Escaped(PanicOrigin::Invocation {
+        vec![TraceOutcome::Escaped(ConcreteSource::Invocation {
             invocation,
             call: CallId::new(0),
         })]
@@ -1978,7 +1979,7 @@ fn ignored_macro_path_terminates_a_direct_panic_source() {
         .expect("panic sink invocation");
     assert_eq!(
         trace.outcomes().collect::<Vec<_>>(),
-        vec![TraceOutcome::Handled(PanicOrigin::Invocation {
+        vec![TraceOutcome::Handled(ConcreteSource::Invocation {
             invocation,
             call: CallId::new(0),
         })]
@@ -2475,7 +2476,7 @@ fn safety_probe_collects_operations_and_unsafe_invocations_with_source_markers()
     assert_eq!(trace.handled().count(), 2);
     assert!(trace.outcomes().all(|outcome| matches!(
         outcome,
-        TraceOutcome::Handled(SafetyOrigin::Operation { .. } | SafetyOrigin::Invocation { .. })
+        TraceOutcome::Handled(ConcreteSource::Effect { .. } | ConcreteSource::Invocation { .. })
     )));
 }
 
@@ -2511,7 +2512,7 @@ fn trusted_target_does_not_suppress_local_unsafe_invocation_source() {
     assert_eq!(trace.handled().count(), 0);
     assert_eq!(
         trace.outcomes().collect::<Vec<_>>(),
-        vec![TraceOutcome::Escaped(SafetyOrigin::Invocation {
+        vec![TraceOutcome::Escaped(ConcreteSource::Invocation {
             invocation: graph.invocation_for_raw_call(root, CallId::new(0)).unwrap(),
             call: CallId::new(0),
         })]
@@ -2577,7 +2578,7 @@ fn configured_std_boundary_keeps_direct_contracts_and_unsafe_calls_visible() {
             .escaped()
             .map(|(origin, _)| *origin)
             .collect::<Vec<_>>(),
-        vec![SafetyOrigin::Invocation {
+        vec![ConcreteSource::Invocation {
             invocation: graph.invocation_for_raw_call(root, CallId::new(0)).unwrap(),
             call: CallId::new(0),
         }]
@@ -2670,7 +2671,7 @@ fn unresolved_safe_calls_are_not_effect_sources_and_unsafe_calls_are_not_duplica
     assert_eq!(safety.source_count(), 1);
     assert!(matches!(
         EffectEngine::new(&graph).trace(&safety).outcomes().next(),
-        Some(TraceOutcome::Escaped(SafetyOrigin::Invocation { .. }))
+        Some(TraceOutcome::Escaped(ConcreteSource::Invocation { .. }))
     ));
 }
 
