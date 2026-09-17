@@ -6,7 +6,7 @@ use crate::trace::{
     TraceOutcome, UnknownTrace,
 };
 use crate::{
-    Effect, EffectGraph, FunctionId, Propagation, PropagationEdge, TraceCx, TraceSite,
+    EffectGraph, FunctionId, Propagation, PropagationEdge, TraceCx, TracePolicy, TraceSite,
     UnknownBoundary, UnknownBoundaryKind,
 };
 
@@ -54,7 +54,10 @@ impl<'graph> EffectEngine<'graph> {
         clippy::too_many_lines,
         reason = "the work queue and the three effect callbacks remain visible as one traversal loop"
     )]
-    pub fn trace<E: Effect>(&self, effect: &E) -> EffectTrace<E::Origin, E::State, E::Termination> {
+    pub fn trace<E: TracePolicy>(
+        &self,
+        effect: &E,
+    ) -> EffectTrace<E::Origin, E::State, E::Termination> {
         let cx = TraceCx::new(self.graph);
         let mut trace = EffectTrace::default();
         let mut queue = VecDeque::new();
@@ -106,6 +109,21 @@ impl<'graph> EffectEngine<'graph> {
             let origin = trace.nodes[node_id.index()].origin.clone();
             let function = trace.nodes[node_id.index()].function;
             let state = trace.nodes[node_id.index()].state.clone();
+
+            if let Some(next) = effect.handoff(&cx, &state, function) {
+                self.follow(
+                    &mut trace,
+                    &mut queue,
+                    &mut visited,
+                    origin,
+                    node_id,
+                    function,
+                    next,
+                    PropagationEdge::ContractHandoff,
+                    depth,
+                );
+                continue;
+            }
 
             if let Some(termination) = effect.terminate(&cx, &state, TraceSite::Function(function))
             {

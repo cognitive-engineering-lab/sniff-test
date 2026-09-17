@@ -15,7 +15,7 @@ use crate::config::{EffectDocMatching, MarkerProbing, SniffTestConfig};
 use crate::contracts::ContractDocOverrides;
 use crate::namespace::StableDefPathHash;
 
-use super::comment::{CommentDomain, CommentEffect, CommentTermination};
+use super::obligation::{ObligationDomain, ObligationTermination, ObligationTracker};
 use super::panic::{PanicEffect, PanicOrigin, PanicTermination};
 use super::safety::{SafetyEffect, SafetyOrigin, SafetyTermination};
 
@@ -463,9 +463,9 @@ fn probe_comments<'a>(
     graph: &'a InvocationGraph,
     annotations: &'a AnnotationIndex,
     config: &SniffTestConfig,
-) -> CommentEffect<'a> {
+) -> ObligationTracker<'a> {
     let namespaces = artifact.definition_namespace_index();
-    CommentEffect::probe(
+    ObligationTracker::probe(
         artifact,
         graph,
         annotations,
@@ -498,114 +498,6 @@ fn probe_safety<'a>(
 }
 
 #[test]
-fn caller_panic_contract_replaces_transitive_panic_obligations() {
-    for leaf_documented in [false, true] {
-        let root = stable_function(0);
-        let middle = stable_function(1);
-        let leaf = stable_function(2);
-        let (artifact, graph, annotations) = setup(vec![
-            body(
-                root,
-                "sample::root",
-                vec![call(0, 0, target(middle, "sample::middle"), false)],
-                Vec::new(),
-                Vec::new(),
-            ),
-            body(
-                middle,
-                "sample::middle",
-                vec![call(0, 0, target(leaf, "sample::leaf"), false)],
-                Vec::new(),
-                vec![contract(0, middle, AnnotationFactKind::PanicContract, &[])],
-            ),
-            body(
-                leaf,
-                "sample::leaf",
-                Vec::new(),
-                vec![assert_effect(0)],
-                if leaf_documented {
-                    vec![contract(0, leaf, AnnotationFactKind::PanicContract, &[])]
-                } else {
-                    Vec::new()
-                },
-            ),
-        ]);
-        let config = SniffTestConfig::default();
-        let panic = probe_panic(&artifact, &graph, &annotations, &config.panics);
-        assert_eq!(EffectEngine::new(&graph).trace(&panic).escaped().count(), 0);
-        let comments = probe_comments(&artifact, &graph, &annotations, &config);
-        let trace = EffectEngine::new(&graph.comment_graph()).trace(&comments);
-        let middle_contract = comments
-            .contracts()
-            .iter()
-            .find(|contract| contract.applies_to(graph.function(middle).unwrap()))
-            .unwrap()
-            .id();
-        assert_eq!(
-            trace
-                .escaped()
-                .map(|(origin, _)| *origin)
-                .collect::<Vec<_>>(),
-            vec![middle_contract]
-        );
-        if leaf_documented {
-            let handled = trace.handled().collect::<Vec<_>>();
-            assert_eq!(handled.len(), 1);
-            assert_eq!(
-                handled[0].termination(),
-                &CommentTermination::Contract(middle_contract.annotation())
-            );
-        }
-    }
-}
-
-#[test]
-fn function_contract_is_panic_termination_and_comment_source() {
-    let root = stable_function(0);
-    let leaf = stable_function(1);
-    let (artifact, graph, annotations) = setup(vec![
-        body(
-            root,
-            "sample::root",
-            vec![call(0, 0, target(leaf, "sample::leaf"), false)],
-            Vec::new(),
-            Vec::new(),
-        ),
-        body(
-            leaf,
-            "sample::leaf",
-            Vec::new(),
-            vec![assert_effect(0)],
-            vec![contract(
-                0,
-                leaf,
-                AnnotationFactKind::PanicContract,
-                &[("bounds", "the index is out of range")],
-            )],
-        ),
-    ]);
-    let config = SniffTestConfig::default();
-
-    let panic = probe_panic(&artifact, &graph, &annotations, &config.panics);
-    let comments = probe_comments(&artifact, &graph, &annotations, &config);
-    let panic_trace = EffectEngine::new(&graph).trace(&panic);
-    let comment_trace = EffectEngine::new(&graph.comment_graph()).trace(&comments);
-
-    assert_eq!(
-        panic_trace.outcomes().collect::<Vec<_>>(),
-        vec![TraceOutcome::Handled(PanicOrigin::CompilerAssert {
-            owner: leaf,
-            effect: EffectId::new(0),
-        })]
-    );
-    assert_eq!(comments.contract_count(CommentDomain::Panic), 1);
-    assert_eq!(
-        comment_trace.outcomes().collect::<Vec<_>>(),
-        vec![TraceOutcome::Escaped(comments.contracts()[0].id())]
-    );
-}
-
-#[test]
 fn concrete_impl_without_contract_falls_back_to_trait_contract_per_domain() {
     let implementation = stable_function(0);
     let declaration = stable_function(1);
@@ -618,7 +510,7 @@ fn concrete_impl_without_contract_falls_back_to_trait_contract_per_domain() {
     );
     implementation_body.contract_declaration =
         Some(function_target(declaration, "sample::Trait::operation"));
-    let (artifact, graph, annotations) = setup(vec![
+    let (_artifact, graph, annotations) = setup(vec![
         implementation_body,
         body(
             declaration,
@@ -631,7 +523,6 @@ fn concrete_impl_without_contract_falls_back_to_trait_contract_per_domain() {
             ],
         ),
     ]);
-    let config = SniffTestConfig::default();
     let implementation = graph.function(implementation).expect("concrete impl");
 
     for domain in [
@@ -646,39 +537,6 @@ fn concrete_impl_without_contract_falls_back_to_trait_contract_per_domain() {
             declaration
         );
     }
-
-    let panic = probe_panic(&artifact, &graph, &annotations, &config.panics);
-    let safety = probe_safety(&artifact, &graph, &annotations, &config.safety);
-    let panic_trace = EffectEngine::new(&graph).trace(&panic);
-    let safety_trace = EffectEngine::new(&graph).trace(&safety);
-
-    assert_eq!(
-        panic_trace.outcomes().collect::<Vec<_>>(),
-        vec![TraceOutcome::Handled(PanicOrigin::CompilerAssert {
-            owner: graph.stable_function(implementation),
-            effect: EffectId::new(0),
-        })]
-    );
-    let panic_handled = panic_trace.handled().collect::<Vec<_>>();
-    assert_eq!(panic_handled.len(), 1);
-    assert!(matches!(
-        panic_handled[0].termination(),
-        PanicTermination::Contract(_)
-    ));
-
-    assert_eq!(
-        safety_trace.outcomes().collect::<Vec<_>>(),
-        vec![TraceOutcome::Handled(SafetyOrigin::Operation {
-            owner: graph.stable_function(implementation),
-            effect: EffectId::new(1),
-        })]
-    );
-    let safety_handled = safety_trace.handled().collect::<Vec<_>>();
-    assert_eq!(safety_handled.len(), 1);
-    assert!(matches!(
-        safety_handled[0].termination(),
-        SafetyTermination::Contract(_)
-    ));
 }
 
 #[test]
@@ -870,85 +728,10 @@ fn declaration_override_uses_union_of_all_occurrence_aliases() {
 }
 
 #[test]
-fn declaration_edge_exports_only_its_own_surface_contract() {
-    for (domain, kind) in [
-        (CommentDomain::Panic, AnnotationFactKind::PanicContract),
-        (CommentDomain::Safety, AnnotationFactKind::SafetyContract),
-    ] {
-        let root = stable_function(0);
-        let declaration = stable_function(1);
-        let helper = stable_function(2);
-        let mut dynamic_call = call(
-            0,
-            0,
-            CallTargetFact::OpaqueBoundary {
-                description: String::from("unresolved dynamic dispatch"),
-                target: Some(OpaqueTargetFact::Trait(function_target(
-                    declaration,
-                    "sample::Trait::operation",
-                ))),
-            },
-            false,
-        );
-        dynamic_call.kind = CallKindFact::IndirectCall;
-        dynamic_call.indirect_kind = Some(IndirectCallKindFact::DynamicDispatch);
-        let (artifact, graph, annotations) = setup(vec![
-            body(
-                root,
-                "sample::root",
-                vec![dynamic_call],
-                Vec::new(),
-                Vec::new(),
-            ),
-            body(
-                declaration,
-                "sample::Trait::operation",
-                vec![call(0, 0, target(helper, "sample::helper"), false)],
-                Vec::new(),
-                vec![contract(0, declaration, kind, &[])],
-            ),
-            body(
-                helper,
-                "sample::helper",
-                Vec::new(),
-                Vec::new(),
-                vec![contract(1, helper, kind, &[])],
-            ),
-        ]);
-        let config = SniffTestConfig::default();
-        let comments = probe_comments(&artifact, &graph, &annotations, &config);
-        let trace = EffectEngine::new(&graph.comment_graph()).trace(&comments);
-
-        let declaration_node = graph.function(declaration).expect("declaration node");
-        let surface = comments
-            .contracts()
-            .iter()
-            .find(|contract| contract.applies_to(declaration_node))
-            .expect("declaration surface contract")
-            .id();
-        assert_eq!(comments.contract_count(domain), 2, "domain {domain:?}");
-        assert_eq!(
-            trace
-                .escaped()
-                .map(|(origin, _)| *origin)
-                .collect::<Vec<_>>(),
-            vec![surface],
-            "only the declaration's own contract may cross its unresolved edge in {domain:?}",
-        );
-        let handled = trace.handled().collect::<Vec<_>>();
-        assert_eq!(handled.len(), 1);
-        assert_eq!(
-            handled[0].termination(),
-            &CommentTermination::Contract(surface.annotation())
-        );
-    }
-}
-
-#[test]
 fn mixed_invocation_keeps_its_concrete_comment_edge() {
     for (domain, kind) in [
-        (CommentDomain::Panic, AnnotationFactKind::PanicContract),
-        (CommentDomain::Safety, AnnotationFactKind::SafetyContract),
+        (ObligationDomain::Panic, AnnotationFactKind::PanicContract),
+        (ObligationDomain::Safety, AnnotationFactKind::SafetyContract),
     ] {
         let root = stable_function(0);
         let implementation = stable_function(1);
@@ -1029,7 +812,7 @@ fn mixed_invocation_keeps_its_concrete_comment_edge() {
                 .collect::<Vec<_>>(),
             vec![graph.function(declaration).expect("declaration")]
         );
-        let trace = EffectEngine::new(&graph.comment_graph()).trace(&comments);
+        let trace = EffectEngine::new(&graph.obligation_graph()).trace(&comments);
 
         assert_eq!(comments.contract_count(domain), 1, "domain {domain:?}");
         assert_eq!(trace.escaped().count(), 1, "domain {domain:?}");
@@ -1066,9 +849,9 @@ fn standalone_declaration_target_exports_its_surface_contract() {
     )]);
 
     let comments = probe_comments(&artifact, &graph, &annotations, &SniffTestConfig::default());
-    let trace = EffectEngine::new(&graph.comment_graph()).trace(&comments);
+    let trace = EffectEngine::new(&graph.obligation_graph()).trace(&comments);
 
-    assert_eq!(comments.contract_count(CommentDomain::Panic), 1);
+    assert_eq!(comments.contract_count(ObligationDomain::Panic), 1);
     assert_eq!(trace.handled().count(), 0);
     assert_eq!(trace.escaped().count(), 1);
 }
@@ -1123,7 +906,7 @@ fn comment_obligations_are_satisfied_across_call_levels() {
     let mut config = SniffTestConfig::default();
     config.analysis.effect_doc_matching = EffectDocMatching::Exact;
     let comments = probe_comments(&artifact, &graph, &annotations, &config);
-    let trace = EffectEngine::new(&graph.comment_graph()).trace(&comments);
+    let trace = EffectEngine::new(&graph.obligation_graph()).trace(&comments);
     let source_invocation = graph
         .invocation_for_raw_call(middle, CallId::new(0))
         .expect("documented safety call");
@@ -1151,7 +934,7 @@ fn comment_obligations_are_satisfied_across_call_levels() {
         .id();
     let marker_uses = comments.marker_uses(&trace);
 
-    assert_eq!(comments.contract_count(CommentDomain::Safety), 1);
+    assert_eq!(comments.contract_count(ObligationDomain::Safety), 1);
     assert_eq!(
         trace.outcomes().collect::<Vec<_>>(),
         vec![TraceOutcome::Handled(comments.contracts()[0].id())]
@@ -1178,8 +961,8 @@ fn comment_obligations_are_satisfied_across_call_levels() {
 #[test]
 fn trusted_comment_boundaries_are_path_local_in_each_domain() {
     for (domain, kind) in [
-        (CommentDomain::Panic, AnnotationFactKind::PanicContract),
-        (CommentDomain::Safety, AnnotationFactKind::SafetyContract),
+        (ObligationDomain::Panic, AnnotationFactKind::PanicContract),
+        (ObligationDomain::Safety, AnnotationFactKind::SafetyContract),
     ] {
         let outer_root = stable_function(0);
         let direct_root = stable_function(1);
@@ -1218,13 +1001,13 @@ fn trusted_comment_boundaries_are_path_local_in_each_domain() {
         let config = trusted_comment_config();
 
         let comments = probe_comments(&artifact, &graph, &annotations, &config);
-        let trace = EffectEngine::new(&graph.comment_graph()).trace(&comments);
+        let trace = EffectEngine::new(&graph.obligation_graph()).trace(&comments);
 
         assert_eq!(comments.contract_count(domain), 1, "domain {domain:?}");
         let handled = trace.handled().next().expect("trusted boundary handling");
         assert_eq!(
             handled.termination(),
-            &CommentTermination::TrustedBoundary,
+            &ObligationTermination::TrustedBoundary,
             "domain {domain:?}"
         );
         assert_eq!(
@@ -1264,12 +1047,12 @@ fn callsite_satisfaction_precedes_a_trusted_comment_boundary() {
     ]);
     let config = trusted_comment_config();
     let comments = probe_comments(&artifact, &graph, &annotations, &config);
-    let trace = EffectEngine::new(&graph.comment_graph()).trace(&comments);
+    let trace = EffectEngine::new(&graph.obligation_graph()).trace(&comments);
     let handled = trace.handled().next().expect("callsite satisfaction");
 
     assert!(matches!(
         handled.termination(),
-        CommentTermination::Satisfaction(_)
+        ObligationTermination::Satisfaction(_)
     ));
     assert!(matches!(handled.site(), TerminationSite::Invocation(_)));
 }
@@ -1310,14 +1093,17 @@ fn partial_satisfaction_is_retained_when_the_trusted_parent_terminates() {
     set_dependencies(&mut graph, &[(wrapper, leaf)]);
     let config = trusted_comment_config();
     let comments = probe_comments(&artifact, &graph, &annotations, &config);
-    let trace = EffectEngine::new(&graph.comment_graph()).trace(&comments);
+    let trace = EffectEngine::new(&graph.obligation_graph()).trace(&comments);
     let handled = trace.handled().next().expect("trusted parent termination");
     let node = trace
         .nodes()
         .nth(handled.node().expect("parent node").index())
         .expect("handled trace node");
 
-    assert_eq!(handled.termination(), &CommentTermination::TrustedBoundary);
+    assert_eq!(
+        handled.termination(),
+        &ObligationTermination::TrustedBoundary
+    );
     assert_eq!(
         handled.site(),
         &TerminationSite::Function(graph.function(wrapper).unwrap())
@@ -1349,9 +1135,9 @@ fn builtin_unsafe_comment_edges_remain_ignored_inside_a_trusted_parent() {
     ]);
     let config = trusted_comment_config();
     let comments = probe_comments(&artifact, &graph, &annotations, &config);
-    let trace = EffectEngine::new(&graph.comment_graph()).trace(&comments);
+    let trace = EffectEngine::new(&graph.obligation_graph()).trace(&comments);
 
-    assert_eq!(comments.contract_count(CommentDomain::Safety), 1);
+    assert_eq!(comments.contract_count(ObligationDomain::Safety), 1);
     assert_eq!(trace.nodes().count(), 1);
     assert_eq!(trace.handled().count(), 0);
     assert_eq!(trace.escaped().count(), 0);
@@ -1429,14 +1215,14 @@ fn comment_boundaries_keep_panic_and_safety_configuration_separate() {
     .expect("separate domain boundaries");
 
     let comments = probe_comments(&artifact, &graph, &annotations, &config);
-    let trace = EffectEngine::new(&graph.comment_graph()).trace(&comments);
-    assert_eq!(comments.contract_count(CommentDomain::Panic), 1);
-    assert_eq!(comments.contract_count(CommentDomain::Safety), 1);
+    let trace = EffectEngine::new(&graph.obligation_graph()).trace(&comments);
+    assert_eq!(comments.contract_count(ObligationDomain::Panic), 1);
+    assert_eq!(comments.contract_count(ObligationDomain::Safety), 1);
     assert_eq!(trace.handled().count(), 2);
     assert!(
         trace
             .handled()
-            .all(|handled| handled.termination() == &CommentTermination::TrustedBoundary)
+            .all(|handled| handled.termination() == &ObligationTermination::TrustedBoundary)
     );
     assert_eq!(trace.escaped().count(), 0);
 }
@@ -1487,10 +1273,13 @@ fn comment_boundaries_use_stable_candidates_and_cover_function_aliases() {
     .expect("stable candidate boundary");
 
     let comments = probe_comments(&artifact, &graph, &annotations, &config);
-    let trace = EffectEngine::new(&graph.comment_graph()).trace(&comments);
+    let trace = EffectEngine::new(&graph.obligation_graph()).trace(&comments);
     let handled = trace.handled().next().expect("exact alias termination");
 
-    assert_eq!(handled.termination(), &CommentTermination::TrustedBoundary);
+    assert_eq!(
+        handled.termination(),
+        &ObligationTermination::TrustedBoundary
+    );
     assert_eq!(
         handled.site(),
         &TerminationSite::Function(graph.function(exact_wrapper).unwrap())
@@ -1551,7 +1340,7 @@ fn target_only_alias_makes_definition_opaque_for_all_effect_domains() {
     let comments = probe_comments(&artifact, &graph, &annotations, &config);
     let panic_trace = EffectEngine::new(&graph).trace(&panic);
     let safety_trace = EffectEngine::new(&graph).trace(&safety);
-    let comment_trace = EffectEngine::new(&graph.comment_graph()).trace(&comments);
+    let comment_trace = EffectEngine::new(&graph.obligation_graph()).trace(&comments);
     let boundary_node = graph.function(boundary).expect("boundary node");
 
     assert_eq!(panic_trace.handled().count(), 1);
@@ -1569,7 +1358,7 @@ fn target_only_alias_makes_definition_opaque_for_all_effect_domains() {
     assert_eq!(comment_trace.handled().count(), 2);
     assert!(comment_trace.handled().all(|handled| {
         handled.site() == &TerminationSite::Function(boundary_node)
-            && handled.termination() == &CommentTermination::TrustedBoundary
+            && handled.termination() == &ObligationTermination::TrustedBoundary
     }));
     assert_eq!(comment_trace.escaped().count(), 0);
 }
@@ -1620,8 +1409,8 @@ fn target_only_alias_ignores_raw_effect_owners_in_both_domains() {
 #[test]
 fn untrusted_contracts_cross_undocumented_trusted_wrappers_in_either_domain() {
     for (domain, kind) in [
-        (CommentDomain::Panic, AnnotationFactKind::PanicContract),
-        (CommentDomain::Safety, AnnotationFactKind::SafetyContract),
+        (ObligationDomain::Panic, AnnotationFactKind::PanicContract),
+        (ObligationDomain::Safety, AnnotationFactKind::SafetyContract),
     ] {
         let root = stable_function(0);
         let wrapper = stable_function(1);
@@ -1652,7 +1441,7 @@ fn untrusted_contracts_cross_undocumented_trusted_wrappers_in_either_domain() {
         let config = trusted_comment_config();
 
         let comments = probe_comments(&artifact, &graph, &annotations, &config);
-        let trace = EffectEngine::new(&graph.comment_graph()).trace(&comments);
+        let trace = EffectEngine::new(&graph.obligation_graph()).trace(&comments);
 
         assert_eq!(comments.contract_count(domain), 1, "domain {domain:?}");
         assert_eq!(trace.handled().count(), 0, "domain {domain:?}");
@@ -1709,13 +1498,16 @@ fn comment_trusted_boundary_handles_transparent_body_parent() {
     let config = trusted_comment_config();
 
     let comments = probe_comments(&artifact, &graph, &annotations, &config);
-    let trace = EffectEngine::new(&graph.comment_graph()).trace(&comments);
+    let trace = EffectEngine::new(&graph.obligation_graph()).trace(&comments);
 
     let handled = trace
         .handled()
         .next()
         .expect("transparent boundary handling");
-    assert_eq!(handled.termination(), &CommentTermination::TrustedBoundary);
+    assert_eq!(
+        handled.termination(),
+        &ObligationTermination::TrustedBoundary
+    );
     assert_eq!(
         handled.site(),
         &TerminationSite::Function(graph.function(parent).unwrap())
@@ -1867,9 +1659,9 @@ fn marker_on_a_grouped_sibling_does_not_satisfy_a_comment_contract() {
     ]);
 
     let comments = probe_comments(&artifact, &graph, &annotations, &SniffTestConfig::default());
-    let trace = EffectEngine::new(&graph.comment_graph()).trace(&comments);
+    let trace = EffectEngine::new(&graph.obligation_graph()).trace(&comments);
 
-    assert_eq!(comments.contract_count(CommentDomain::Panic), 1);
+    assert_eq!(comments.contract_count(ObligationDomain::Panic), 1);
     assert_eq!(trace.handled().count(), 0);
     assert_eq!(trace.escaped().count(), 1);
 }
@@ -2298,9 +2090,9 @@ fn ignored_macro_path_does_not_export_an_internal_safety_contract() {
     .expect("ignored safety macro configuration");
 
     let comments = probe_comments(&artifact, &graph, &annotations, &config);
-    let trace = EffectEngine::new(&graph.comment_graph()).trace(&comments);
+    let trace = EffectEngine::new(&graph.obligation_graph()).trace(&comments);
 
-    assert_eq!(comments.contract_count(CommentDomain::Safety), 1);
+    assert_eq!(comments.contract_count(ObligationDomain::Safety), 1);
     assert_eq!(trace.nodes().count(), 1);
     assert_eq!(trace.handled().count(), 0);
     assert_eq!(trace.escaped().count(), 0);
@@ -2392,9 +2184,9 @@ fn ignored_macro_path_does_not_export_an_internal_panic_contract() {
     ]);
 
     let comments = probe_comments(&artifact, &graph, &annotations, &SniffTestConfig::default());
-    let trace = EffectEngine::new(&graph.comment_graph()).trace(&comments);
+    let trace = EffectEngine::new(&graph.obligation_graph()).trace(&comments);
 
-    assert_eq!(comments.contract_count(CommentDomain::Panic), 1);
+    assert_eq!(comments.contract_count(ObligationDomain::Panic), 1);
     assert_eq!(trace.nodes().count(), 1);
     assert_eq!(trace.handled().count(), 0);
     assert_eq!(trace.escaped().count(), 0);
@@ -2437,7 +2229,7 @@ fn disabling_unsafe_precondition_ignore_exports_internal_panic_contracts() {
         .expect("empty ignored namespace list");
 
     let comments = probe_comments(&artifact, &graph, &annotations, &config);
-    let trace = EffectEngine::new(&graph.comment_graph()).trace(&comments);
+    let trace = EffectEngine::new(&graph.obligation_graph()).trace(&comments);
 
     assert_eq!(trace.escaped().count(), 1);
 }
@@ -2775,7 +2567,7 @@ fn configured_std_boundary_keeps_direct_contracts_and_unsafe_calls_visible() {
     let comments = probe_comments(&artifact, &graph, &annotations, &config);
     let panic_trace = EffectEngine::new(&graph).trace(&panic);
     let safety_trace = EffectEngine::new(&graph).trace(&safety);
-    let comment_trace = EffectEngine::new(&graph.comment_graph()).trace(&comments);
+    let comment_trace = EffectEngine::new(&graph.obligation_graph()).trace(&comments);
 
     assert_eq!(panic_trace.handled().count(), 1);
     assert_eq!(panic_trace.escaped().count(), 0);
@@ -2790,8 +2582,8 @@ fn configured_std_boundary_keeps_direct_contracts_and_unsafe_calls_visible() {
             call: CallId::new(0),
         }]
     );
-    assert_eq!(comments.contract_count(CommentDomain::Panic), 1);
-    assert_eq!(comments.contract_count(CommentDomain::Safety), 1);
+    assert_eq!(comments.contract_count(ObligationDomain::Panic), 1);
+    assert_eq!(comments.contract_count(ObligationDomain::Safety), 1);
     assert_eq!(comment_trace.escaped().count(), 2);
 }
 
@@ -2972,8 +2764,8 @@ fn dependency_trust_is_path_scoped_and_survives_callback_reentry() {
         };
         if documented {
             let comments = probe_comments(&artifact, &graph, &annotations, &config);
-            let trace = EffectEngine::new(&graph.comment_graph()).trace(&comments);
-            for domain in [CommentDomain::Panic, CommentDomain::Safety] {
+            let trace = EffectEngine::new(&graph.obligation_graph()).trace(&comments);
+            for domain in [ObligationDomain::Panic, ObligationDomain::Safety] {
                 check(
                     trace
                         .nodes()
@@ -2985,7 +2777,7 @@ fn dependency_trust_is_path_scoped_and_survives_callback_reentry() {
                         .filter_map(|handled| match handled.site() {
                             TerminationSite::Function(function)
                                 if handled.termination()
-                                    == &CommentTermination::TrustedBoundary =>
+                                    == &ObligationTermination::TrustedBoundary =>
                             {
                                 Some(*function)
                             }

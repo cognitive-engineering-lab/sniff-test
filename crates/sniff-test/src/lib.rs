@@ -1,16 +1,14 @@
-//! Rust compiler probing and reporting for first-class panic, safety, and
-//! comment effects.
+//! Rust compiler probing and reporting for first-class panic and safety
+//! effects.
 //!
 //! This crate owns sniff-test's panic and safety policies, rustc/Cargo
 //! integration, reporting, and versioned on-disk artifact facts. Shared graph
 //! traversal lives in the compiler-independent `effect-tracing` crate.
 //!
-//! [`effects::panic::PanicEffect`], [`effects::safety::SafetyEffect`], and
-//! [`effects::comment::CommentEffect`] are equal, first-class effects. Each
-//! probes the compiler and annotation facts it needs, then defines its own
-//! sources, propagation, and termination. The shared engine knows none of
-//! their domain rules and traces each effect over incoming source-level
-//! invocations.
+//! HIR, THIR, and MIR passes discover concrete seeds. Shared obligation
+//! tracking then parses contracts and justifications, replaces concrete
+//! carriers with contract carriers at documented boundaries, and traces both
+//! through incoming source-level invocations.
 //!
 //! Artifact facts store policy-neutral semantic facts, such as call edges,
 //! compiler-assert kinds, unsafe operations, contracts, and source markers,

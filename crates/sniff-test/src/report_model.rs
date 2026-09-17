@@ -40,8 +40,6 @@ pub(crate) struct DomainCompleteness {
 pub(crate) enum IncompleteTraceKind {
     PanicEffect,
     SafetyEffect,
-    PanicComment,
-    SafetyComment,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

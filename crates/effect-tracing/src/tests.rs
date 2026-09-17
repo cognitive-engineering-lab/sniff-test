@@ -1,8 +1,8 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use crate::{
-    Effect, EffectEngine, EffectGraph, EffectSeed, FunctionId, InvocationId, Propagation,
-    PropagationEdge, TraceCx, TraceOptions, TraceOutcome, TraceSite, TransparentBodyEdgeId,
+    EffectEngine, EffectGraph, EffectSeed, FunctionId, InvocationId, Propagation, PropagationEdge,
+    TraceCx, TraceOptions, TraceOutcome, TracePolicy, TraceSite, TransparentBodyEdgeId,
     UnknownBoundary, UnknownBoundaryKind,
 };
 
@@ -72,6 +72,7 @@ struct TestEffect {
     invocation_satisfies: BTreeMap<InvocationId, &'static str>,
     invocation_terminates: BTreeSet<InvocationId>,
     function_terminates: BTreeSet<FunctionId>,
+    function_handoffs: BTreeMap<FunctionId, BTreeSet<&'static str>>,
 }
 
 impl TestEffect {
@@ -86,17 +87,30 @@ impl TestEffect {
             invocation_satisfies: BTreeMap::new(),
             invocation_terminates: BTreeSet::new(),
             function_terminates: BTreeSet::new(),
+            function_handoffs: BTreeMap::new(),
         }
     }
 }
 
-impl Effect for TestEffect {
+impl TracePolicy for TestEffect {
     type Origin = &'static str;
     type State = BTreeSet<&'static str>;
     type Termination = &'static str;
 
     fn sources(&self) -> impl Iterator<Item = EffectSeed<Self::Origin, Self::State>> + '_ {
         self.seeds.iter().cloned()
+    }
+
+    fn handoff(
+        &self,
+        _cx: &TraceCx<'_>,
+        state: &Self::State,
+        function: FunctionId,
+    ) -> Option<Self::State> {
+        self.function_handoffs
+            .get(&function)
+            .filter(|next| *next != state)
+            .cloned()
     }
 
     fn propagate(
@@ -150,6 +164,28 @@ fn single_source_escapes_through_its_only_caller() {
     let outcomes = outcomes(&graph, &TestEffect::seeded(1, &["risk"]));
 
     assert_eq!(outcomes, vec![TraceOutcome::Escaped("origin")]);
+}
+
+#[test]
+fn function_handoff_replaces_state_and_preserves_causal_trace() {
+    let mut graph = Graph::with_functions(2);
+    graph.invoke(0, 1);
+    let mut effect = TestEffect::seeded(1, &["concrete"]);
+    effect
+        .function_handoffs
+        .insert(FunctionId::from_index(1), BTreeSet::from(["contract"]));
+
+    let trace = EffectEngine::new(&graph).trace(&effect);
+    let (_, escaped) = trace.escaped().next().expect("contract escapes to caller");
+    assert_eq!(
+        trace.nodes().nth(escaped.index()).unwrap().state(),
+        &BTreeSet::from(["contract"]),
+    );
+    assert!(
+        trace
+            .edges()
+            .any(|edge| edge.propagation() == PropagationEdge::ContractHandoff),
+    );
 }
 
 #[test]

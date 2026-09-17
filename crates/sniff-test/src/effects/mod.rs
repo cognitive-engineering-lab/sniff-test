@@ -1,4 +1,4 @@
-pub(crate) mod comment;
+pub(crate) mod obligation;
 pub(crate) mod panic;
 pub(crate) mod safety;
 pub(crate) mod trust;
@@ -8,6 +8,18 @@ use std::fmt;
 use crate::artifact::{CallFact, FunctionTargetFact};
 use clap::ValueEnum;
 use serde::{Deserialize, Serialize};
+
+use crate::compiler::effect_passes::EffectPassRegistry;
+
+/// Built-in effect definition. Compiler passes only discover concrete seeds;
+/// obligation and justification semantics are supplied by shared tracking.
+pub(crate) trait Effect {
+    const EFFECT_NAME: &'static str;
+    const OBLIGATION: &'static str;
+    const JUSTIFICATION: &'static str;
+
+    fn register_passes(registry: &mut EffectPassRegistry);
+}
 
 /// Effect domains enabled for one sniff-test invocation.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]

@@ -33,6 +33,7 @@ use rustc_middle::ty::{self, Ty, TyCtxt};
 use rustc_span::Span;
 
 use crate::artifact::SafetyOpKind;
+use crate::compiler::effect_passes::{EffectPassOutput, ThirEffectPass};
 
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct SafetyEffectGroup {
@@ -142,29 +143,39 @@ pub(crate) fn fn_def_is_unsafe(tcx: TyCtxt<'_>, def_id: DefId) -> bool {
             .is_unsafe()
 }
 
-/// Collects call grouping and unsafe-operation facts for every analyzable
-/// local function and associated function body without applying safety policy.
-pub(super) fn collect_raw_safety_facts(tcx: TyCtxt<'_>) -> RawSafetyFacts {
-    let mut sink = RawSafetyFactSink::default();
-    for owner in tcx
-        .hir_body_owners()
-        .filter(|owner| matches!(tcx.def_kind(*owner), DefKind::Fn | DefKind::AssocFn))
-    {
-        collect_body(tcx, owner, &mut sink);
-    }
-    sink.into_facts()
+#[derive(Default)]
+pub(crate) struct SafetyThirPass {
+    sink: RawSafetyFactSink,
 }
 
-fn collect_body(tcx: TyCtxt<'_>, owner: LocalDefId, sink: &mut RawSafetyFactSink) {
-    let Ok((thir, root)) = tcx.thir_body(owner) else {
-        return;
-    };
-    let thir = thir.borrow();
+impl ThirEffectPass for SafetyThirPass {
+    fn check_body<'tcx>(
+        &mut self,
+        tcx: TyCtxt<'tcx>,
+        owner: LocalDefId,
+        thir: &Thir<'tcx>,
+        root: ExprId,
+    ) {
+        collect_body(tcx, owner, thir, root, &mut self.sink);
+    }
+
+    fn take_output(&mut self, output: &mut EffectPassOutput) {
+        output.safety = std::mem::take(&mut self.sink).into_facts();
+    }
+}
+
+fn collect_body<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    owner: LocalDefId,
+    thir: &Thir<'tcx>,
+    root: ExprId,
+    sink: &mut RawSafetyFactSink,
+) {
     let mut safety_scopes = Vec::new();
     let mut effect_groups = Vec::new();
     let mut visitor = UnsafeOpVisitor {
         tcx,
-        thir: &thir,
+        thir,
         owner,
         typing_env: ty::TypingEnv::non_body_analysis(tcx, owner),
         assignment_info: None,

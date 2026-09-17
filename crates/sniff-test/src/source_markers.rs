@@ -10,6 +10,9 @@ use rustc_span::{ExpnId, SourceFile, Span};
 use crate::artifact::UnverifiedMarkerProbeReason;
 use crate::config::MarkerProbing;
 use crate::contracts::{MarkerSatisfaction, markdown_list_item_body, structural_list_path};
+use crate::effects::Effect;
+use crate::effects::panic::Panic;
+use crate::effects::safety::Safety;
 use crate::namespace::definition_backed_macro;
 
 #[derive(Debug, Clone, Copy)]
@@ -21,9 +24,13 @@ enum MarkerSyntax {
 impl MarkerSyntax {
     fn prefix(self) -> &'static str {
         match self {
-            Self::Panic => "PANIC:",
-            Self::Safety => "SAFETY:",
+            Self::Panic => Panic::JUSTIFICATION,
+            Self::Safety => Safety::JUSTIFICATION,
         }
+    }
+
+    fn strip_prefix<'line>(self, line: &'line str) -> Option<&'line str> {
+        line.strip_prefix(self.prefix())?.strip_prefix(':')
     }
 
     fn other_prefix(self) -> &'static str {
@@ -471,7 +478,7 @@ fn span_marker_block_at(
 #[must_use]
 fn line_satisfaction(line: &str, syntax: MarkerSyntax) -> Option<MarkerSatisfaction> {
     comment_body(line)
-        .and_then(|body| body.strip_prefix(syntax.prefix()))
+        .and_then(|body| syntax.strip_prefix(body))
         .map(parse_marker)
         .filter(MarkerSatisfaction::has_justification)
 }
@@ -736,7 +743,7 @@ fn comment_block_satisfactions(lines: &[String], syntax: MarkerSyntax) -> Vec<Ma
             continue;
         };
         let marker_line = body.trim_start();
-        if let Some(marker_body) = marker_line.strip_prefix(syntax.prefix()) {
+        if let Some(marker_body) = syntax.strip_prefix(marker_line) {
             flush_pending_header(&mut satisfactions, &mut pending_header_reason);
             in_marker_block = true;
             list_levels.clear();
@@ -746,7 +753,10 @@ fn comment_block_satisfactions(lines: &[String], syntax: MarkerSyntax) -> Vec<Ma
             } else {
                 satisfactions.push(parsed);
             }
-        } else if marker_line.starts_with(syntax.other_prefix()) {
+        } else if marker_line
+            .strip_prefix(syntax.other_prefix())
+            .is_some_and(|line| line.starts_with(':'))
+        {
             flush_pending_header(&mut satisfactions, &mut pending_header_reason);
             in_marker_block = false;
             list_levels.clear();

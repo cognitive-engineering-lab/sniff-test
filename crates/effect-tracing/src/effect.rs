@@ -3,12 +3,24 @@ use std::hash::Hash;
 use crate::{EffectGraph, FunctionId, InvocationId, TransparentBodyEdgeId, UnknownBoundary};
 
 /// Domain semantics consumed by the generic tracing engine.
-pub trait Effect {
+pub trait TracePolicy {
     type Origin: Clone + Eq + Hash;
     type State: Clone + Eq + Hash;
     type Termination: Clone;
 
     fn sources(&self) -> impl Iterator<Item = EffectSeed<Self::Origin, Self::State>> + '_;
+
+    /// Replaces one carrier at a function boundary while retaining its causal
+    /// trace. Concrete effects use this to become documentation-derived
+    /// contract obligations before propagation continues to callers.
+    fn handoff(
+        &self,
+        _cx: &TraceCx<'_>,
+        _state: &Self::State,
+        _function: FunctionId,
+    ) -> Option<Self::State> {
+        None
+    }
 
     fn propagate(
         &self,
@@ -54,6 +66,7 @@ pub enum TraceSite<'a, O> {
 pub enum PropagationEdge {
     Invocation(InvocationId),
     TransparentBody(TransparentBodyEdgeId),
+    ContractHandoff,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]

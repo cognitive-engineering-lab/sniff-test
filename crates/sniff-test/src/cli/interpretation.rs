@@ -1334,8 +1334,6 @@ fn incomplete_limit_presentation(
     let subject = match trace_kind {
         IncompleteTraceKind::PanicEffect => "panic effect tracing",
         IncompleteTraceKind::SafetyEffect => "safety effect tracing",
-        IncompleteTraceKind::PanicComment => "panic CommentEffect tracing",
-        IncompleteTraceKind::SafetyComment => "safety CommentEffect tracing",
     };
     let (reason, message, help) = match limit {
         TraceLimit::Depth(max_depth) => (
@@ -2089,21 +2087,21 @@ mod tests {
     }
 
     #[test]
-    fn trace_state_budget_diagnostic_identifies_comment_effect_domain() {
+    fn trace_state_budget_diagnostic_identifies_unified_effect_domain() {
         let presentation = incomplete_limit_presentation(
             "app::root",
             "app::helper",
-            IncompleteTraceKind::SafetyComment,
+            IncompleteTraceKind::SafetyEffect,
             TraceLimit::StateBudget(32),
         );
 
         assert_eq!(
             presentation.reason,
-            "safety CommentEffect tracing exhausted `[analysis].trace-state-budget` (32) at frontier `app::helper`"
+            "safety effect tracing exhausted `[analysis].trace-state-budget` (32) at frontier `app::helper`"
         );
         assert_eq!(
             presentation.message,
-            "safety CommentEffect tracing for function `app::root` exhausted the configured state budget (32) at `app::helper`"
+            "safety effect tracing for function `app::root` exhausted the configured state budget (32) at `app::helper`"
         );
         assert_eq!(
             presentation.help,

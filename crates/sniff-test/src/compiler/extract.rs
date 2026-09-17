@@ -20,6 +20,7 @@ use rustc_hir::def_id::{DefId, LOCAL_CRATE, LocalDefId};
 use rustc_middle::ty::{AssocContainer, GenericArgs, Instance, InstanceKind, TyCtxt, TyKind};
 use rustc_span::{Pos, Span, StableSourceFileId};
 
+use super::effect_passes::EffectPassRegistry;
 use super::source::{source_filename, stable_source_file_id};
 use crate::artifact::{
     AnnotationFact, AnnotationFactKind, AnnotationProbingFact, AnnotationSatisfactionFact,
@@ -32,8 +33,7 @@ use crate::artifact::{
     UnverifiedMarkerProbeFact, UnverifiedMarkerProbeReason, same_macro_provenance,
 };
 use crate::compiler::safety::{
-    RawSafetyFacts, RawSafetyOpFact, call_identity_def_id, collect_raw_safety_facts,
-    fn_def_is_unsafe,
+    RawSafetyFacts, RawSafetyOpFact, call_identity_def_id, fn_def_is_unsafe,
 };
 use crate::config::MarkerProbing;
 use crate::contracts::{
@@ -41,6 +41,8 @@ use crate::contracts::{
     safety_contract_doc_summary_from_attrs,
 };
 use crate::effects::EffectSelection;
+use crate::effects::panic::Panic;
+use crate::effects::safety::Safety;
 use crate::namespace::{canonical_namespace, namespace_candidates};
 use crate::source_markers::{
     EffectMarkerBlock, MarkerProbe, panic_effect_edge_marker_block, probe_marker_candidates,
@@ -84,13 +86,18 @@ pub(crate) fn extract_artifact_facts(
         ensure_required_thir_is_available(tcx, &required_owners)?;
     }
 
+    let mut pass_registry = EffectPassRegistry::default();
+    if effects.tracks_panic() {
+        pass_registry.register_effect::<Panic>();
+    }
+    if effects.tracks_safety() {
+        pass_registry.register_effect::<Safety>();
+    }
+    let pass_output = pass_registry.collect_bodies(tcx, &required_owners);
+
     let mut sources = SourceTable::default();
     let mut bodies = BTreeMap::<FunctionId, PendingBody>::new();
-    let raw_safety_facts = if effects.tracks_safety() {
-        collect_raw_safety_facts(tcx)
-    } else {
-        RawSafetyFacts::default()
-    };
+    let raw_safety_facts = pass_output.safety;
     let mut safety_groups = RawSafetyGroupResolver::new(&raw_safety_facts);
 
     for owner in &required_owners {
@@ -113,6 +120,7 @@ pub(crate) fn extract_artifact_facts(
         &mut sources,
         &mut bodies,
         &mut safety_groups,
+        &mut pass_registry,
         effects,
     )?;
 
@@ -237,6 +245,7 @@ fn collect_reachability_mode<'tcx>(
     sources: &mut SourceTable,
     bodies: &mut BTreeMap<FunctionId, PendingBody>,
     safety_groups: &mut RawSafetyGroupResolver,
+    pass_registry: &mut EffectPassRegistry,
     effects: EffectSelection,
 ) -> Result<(), ExtractError> {
     let mut reachability = ReachabilityIndex::new(tcx);
@@ -293,6 +302,7 @@ fn collect_reachability_mode<'tcx>(
             sources,
             bodies,
             safety_groups,
+            pass_registry,
             effects,
         )?;
     }
@@ -346,6 +356,7 @@ fn collect_edge<'tcx>(
     sources: &mut SourceTable,
     bodies: &mut BTreeMap<FunctionId, PendingBody>,
     safety_groups: &mut RawSafetyGroupResolver,
+    pass_registry: &mut EffectPassRegistry,
     effects: EffectSelection,
 ) -> Result<(), ExtractError> {
     let edge = reached.edge();
@@ -428,20 +439,18 @@ fn collect_edge<'tcx>(
     let call_target = body.calls[call_index].call.target.clone();
     let declaration_target = body.calls[call_index].call.declaration_target.clone();
 
-    let effect_key = effects
-        .tracks_panic()
-        .then(|| {
+    let effect_key = pass_registry
+        .compiler_assert_kind(graph, edge)
+        .and_then(|kind| {
             collect_compiler_assert_effect(
-                graph,
-                edge,
+                kind,
                 body,
                 &key,
                 source_range.as_ref(),
                 expanded_range.as_ref(),
                 &macro_expansions,
             )
-        })
-        .flatten();
+        });
 
     collect_edge_markers(
         tcx,
@@ -525,17 +534,13 @@ fn insert_or_merge_call(
 }
 
 fn collect_compiler_assert_effect(
-    graph: &ReachabilityGraph<'_>,
-    edge: &ReachabilityEdge,
+    kind: CompilerAssertKind,
     body: &mut PendingBody,
     call_key: &str,
     source_range: Option<&SourceRangeFact>,
     expanded_range: Option<&SourceRangeFact>,
     macro_expansions: &[MacroExpansionFact],
 ) -> Option<String> {
-    let ReachabilityNodeKind::CompilerAssert { message, .. } = &graph.node(edge.target).kind else {
-        return None;
-    };
     let effect_key = format!("compiler-assert:{call_key}");
     if !body.effects.iter().any(|effect| effect.key == effect_key) {
         body.effects.push(PendingEffect {
@@ -546,9 +551,7 @@ fn collect_compiler_assert_effect(
                 source_range: source_range.cloned(),
                 expanded_range: expanded_range.cloned(),
                 macro_expansions: macro_expansions.to_vec(),
-                kind: EffectFactKind::CompilerAssert {
-                    kind: CompilerAssertKind::from(message.as_ref()),
-                },
+                kind: EffectFactKind::CompilerAssert { kind },
             },
         });
     }

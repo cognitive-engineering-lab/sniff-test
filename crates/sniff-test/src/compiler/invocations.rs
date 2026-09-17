@@ -327,11 +327,11 @@ impl InvocationGraph {
         Ok(())
     }
 
-    /// A graph view that additionally lets `CommentEffect` cross a declaration
-    /// edge. Concrete Panic/Safety effects deliberately use the base graph.
+    /// A graph view that lets documentation-derived obligation carriers cross
+    /// declaration edges. Concrete carriers reject declaration-only edges.
     #[must_use]
-    pub(crate) const fn comment_graph(&self) -> CommentInvocationGraph<'_> {
-        CommentInvocationGraph { graph: self }
+    pub(crate) const fn obligation_graph(&self) -> ObligationInvocationGraph<'_> {
+        ObligationInvocationGraph { graph: self }
     }
 
     /// Finds monomorphized/defining projections of one physical source call.
@@ -659,12 +659,12 @@ impl EffectGraph for InvocationGraph {
     }
 }
 
-/// `CommentEffect`'s contract-only extension of the minimal invocation graph.
-pub(crate) struct CommentInvocationGraph<'graph> {
+/// Contract-visible extension of the minimal invocation graph.
+pub(crate) struct ObligationInvocationGraph<'graph> {
     graph: &'graph InvocationGraph,
 }
 
-impl EffectGraph for CommentInvocationGraph<'_> {
+impl EffectGraph for ObligationInvocationGraph<'_> {
     fn incoming_invocations(&self, function: FunctionId) -> &[InvocationId] {
         &self.graph.comment_incoming[function.index()]
     }
@@ -1108,9 +1108,9 @@ mod tests {
             "a declaration is not an implementation edge for PanicEffect or SafetyEffect"
         );
         assert_eq!(
-            graph.comment_graph().incoming_invocations(trait_method),
+            graph.obligation_graph().incoming_invocations(trait_method),
             &[dyn_call],
-            "CommentEffect may propagate the declaration's surface contract"
+            "obligation tracking may propagate the declaration's surface contract"
         );
         for unrelated_target in unrelated_callees {
             let target = graph.function(unrelated_target).unwrap();
@@ -1163,9 +1163,9 @@ mod tests {
             "a declaration is not a PanicEffect or SafetyEffect target"
         );
         assert_eq!(
-            graph.comment_graph().incoming_invocations(declaration),
+            graph.obligation_graph().incoming_invocations(declaration),
             &[invocation],
-            "CommentEffect may propagate the standalone declaration contract"
+            "obligation tracking may propagate the standalone declaration contract"
         );
     }
 

@@ -1,7 +1,8 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use effect_tracing::{
-    Effect, EffectSeed, FunctionId, InvocationId, Propagation, PropagationEdge, TraceCx, TraceSite,
+    EffectSeed, FunctionId, InvocationId, Propagation, PropagationEdge, TraceCx, TracePolicy,
+    TraceSite,
 };
 
 use crate::annotations::{AnnotationDomain, AnnotationId, AnnotationIndex, SiteCommentAnnotation};
@@ -10,10 +11,24 @@ use crate::artifact::{
     EffectId, FunctionId as StableFunctionId, FunctionTargetFact,
 };
 use crate::compiler::invocations::InvocationGraph;
+use crate::compiler::{effect_passes::EffectPassRegistry, panic::CompilerAssertPass};
 use crate::config::{PanicBoundaryPolicy, PanicConfig};
 
+use super::obligation::ConcreteState;
 use super::trust::TrustPath;
 use super::{InvocationSourceBranch, ProbeError};
+
+pub(crate) struct Panic;
+
+impl super::Effect for Panic {
+    const EFFECT_NAME: &'static str = "panic";
+    const OBLIGATION: &'static str = "Panics";
+    const JUSTIFICATION: &'static str = "PANIC";
+
+    fn register_passes(registry: &mut EffectPassRegistry) {
+        registry.register_mir_pass(Box::new(CompilerAssertPass));
+    }
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub(crate) enum PanicOrigin {
@@ -52,9 +67,14 @@ impl PanicState {
     }
 }
 
+impl ConcreteState for PanicState {
+    fn current_function(&self) -> FunctionId {
+        self.current_function
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub(crate) enum PanicTermination {
-    Contract(AnnotationId),
     Justification(AnnotationId),
     TrustedBoundary,
     IgnoredBoundary,
@@ -275,12 +295,6 @@ impl<'annotations> PanicEffect<'annotations> {
             .find(|comment| comment.has_justification())
             .map(SiteCommentAnnotation::id)
     }
-
-    fn function_contract(&self, function: FunctionId) -> Option<AnnotationId> {
-        self.annotations
-            .effective_contract(self.graph, function, AnnotationDomain::Panic)
-            .map(crate::annotations::FunctionContractAnnotation::id)
-    }
 }
 
 fn panic_sink_target<'call>(
@@ -302,7 +316,7 @@ fn panic_sink_target<'call>(
         })
 }
 
-impl Effect for PanicEffect<'_> {
+impl TracePolicy for PanicEffect<'_> {
     type Origin = PanicOrigin;
     type State = PanicState;
     type Termination = PanicTermination;
@@ -326,6 +340,9 @@ impl Effect for PanicEffect<'_> {
                 self.graph.invocation(invocation).caller()
             }
             PropagationEdge::TransparentBody(edge) => cx.graph().transparent_parent(edge),
+            PropagationEdge::ContractHandoff => {
+                unreachable!("contract handoffs are created by the tracing engine")
+            }
         };
         if !self.is_trusted_function(next.current_function) {
             next.trust_path.enter(self.graph, next.current_function);
@@ -348,18 +365,15 @@ impl Effect for PanicEffect<'_> {
                         .map(PanicTermination::Justification)
                 }
             }
-            TraceSite::Function(function) => self.function_contract(function).map_or_else(
-                || {
-                    if self.ignored_functions.contains(&function) {
-                        Some(PanicTermination::IgnoredBoundary)
-                    } else {
-                        (self.trusted_functions.contains(&function)
-                            && state.trust_path.allows_boundary(self.graph, function))
-                        .then_some(PanicTermination::TrustedBoundary)
-                    }
-                },
-                |contract| Some(PanicTermination::Contract(contract)),
-            ),
+            TraceSite::Function(function) => {
+                if self.ignored_functions.contains(&function) {
+                    Some(PanicTermination::IgnoredBoundary)
+                } else {
+                    (self.trusted_functions.contains(&function)
+                        && state.trust_path.allows_boundary(self.graph, function))
+                    .then_some(PanicTermination::TrustedBoundary)
+                }
+            }
             TraceSite::Invocation(invocation) => {
                 if self.macro_ignored_invocations.contains(&invocation) {
                     Some(PanicTermination::IgnoredBoundary)

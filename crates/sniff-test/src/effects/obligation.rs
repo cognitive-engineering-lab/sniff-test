@@ -1,8 +1,11 @@
+//! Shared obligation tracking for every concrete effect domain.
+
 use std::collections::{BTreeMap, BTreeSet};
+use std::hash::Hash;
 
 use effect_tracing::{
-    Effect, EffectSeed, EffectTrace, FunctionId, InvocationId, Propagation, PropagationEdge,
-    TerminationSite, TraceCx, TraceNodeId, TraceSite,
+    EffectSeed, EffectTrace, FunctionId, InvocationId, Propagation, PropagationEdge,
+    TerminationSite, TraceCx, TraceNodeId, TracePolicy, TraceSite,
 };
 
 use crate::annotations::{
@@ -17,7 +20,7 @@ use crate::effects::EffectSelection;
 use super::trust::TrustPath;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub(crate) enum CommentDomain {
+pub(crate) enum ObligationDomain {
     Panic,
     Safety,
 }
@@ -39,8 +42,8 @@ struct ObligationId {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
-pub(crate) struct CommentState {
-    domain: CommentDomain,
+pub(crate) struct ObligationState {
+    domain: ObligationDomain,
     contract: ContractId,
     // One invocation may contain concrete and declaration targets. Retaining
     // the current target lets propagation gate only the declaration edge.
@@ -48,18 +51,17 @@ pub(crate) struct CommentState {
     source_invocation: Option<InvocationId>,
     source_calls: BTreeSet<CallId>,
     remaining: BTreeSet<ObligationId>,
-    termination: Option<CommentTermination>,
+    termination: Option<ObligationTermination>,
     trust_path: TrustPath,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub(crate) enum CommentTermination {
+pub(crate) enum ObligationTermination {
     Satisfaction(AnnotationId),
-    Contract(AnnotationId),
     TrustedBoundary,
 }
 
-impl CommentState {
+impl ObligationState {
     #[must_use]
     pub(crate) fn trust_path(&self) -> &TrustPath {
         &self.trust_path
@@ -70,7 +72,7 @@ impl CommentState {
     }
 
     #[must_use]
-    pub(crate) const fn domain(&self) -> CommentDomain {
+    pub(crate) const fn domain(&self) -> ObligationDomain {
         self.domain
     }
 
@@ -91,23 +93,23 @@ impl CommentState {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
-pub(crate) struct CommentMarkerUse {
+pub(crate) struct ObligationMarkerUse {
     annotation: AnnotationId,
-    domain: CommentDomain,
+    domain: ObligationDomain,
     invocation: InvocationId,
     source_invocation: InvocationId,
     source_calls: BTreeSet<CallId>,
     node: TraceNodeId,
 }
 
-impl CommentMarkerUse {
+impl ObligationMarkerUse {
     #[must_use]
     pub(crate) const fn annotation(&self) -> AnnotationId {
         self.annotation
     }
 
     #[must_use]
-    pub(crate) const fn domain(&self) -> CommentDomain {
+    pub(crate) const fn domain(&self) -> ObligationDomain {
         self.domain
     }
 
@@ -132,20 +134,20 @@ impl CommentMarkerUse {
     }
 }
 
-struct CommentInvocationTransition {
-    state: CommentState,
-    marker_uses: Vec<CommentMarkerUse>,
+struct ObligationInvocationTransition {
+    state: ObligationState,
+    marker_uses: Vec<ObligationMarkerUse>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) struct CommentContract {
+pub(crate) struct ObligationContract {
     id: ContractId,
     functions: BTreeSet<FunctionId>,
-    domain: CommentDomain,
+    domain: ObligationDomain,
     obligations: BTreeSet<ObligationId>,
 }
 
-impl CommentContract {
+impl ObligationContract {
     #[must_use]
     pub(crate) const fn id(&self) -> ContractId {
         self.id
@@ -164,10 +166,10 @@ enum Obligation {
     WholeContract,
 }
 
-pub(crate) struct CommentEffect<'annotations> {
+pub(crate) struct ObligationTracker<'annotations> {
     annotations: &'annotations AnnotationIndex,
     graph: &'annotations InvocationGraph,
-    contracts: Vec<CommentContract>,
+    contracts: Vec<ObligationContract>,
     obligations: BTreeMap<ObligationId, Obligation>,
     effect_doc_matching: EffectDocMatching,
     trusted_panic_functions: BTreeSet<FunctionId>,
@@ -176,7 +178,7 @@ pub(crate) struct CommentEffect<'annotations> {
     ignored_safety_invocations: BTreeSet<InvocationId>,
 }
 
-impl<'annotations> CommentEffect<'annotations> {
+impl<'annotations> ObligationTracker<'annotations> {
     #[allow(
         clippy::too_many_arguments,
         reason = "comment probing joins both domain policies with the invocation selection"
@@ -213,7 +215,7 @@ impl<'annotations> CommentEffect<'annotations> {
             }
             let id = ContractId(annotation.id());
             let contract_obligations = collect_obligations(annotation, id, &mut obligations);
-            contracts.push(CommentContract {
+            contracts.push(ObligationContract {
                 id,
                 functions,
                 domain: annotation.domain().into(),
@@ -273,18 +275,49 @@ impl<'annotations> CommentEffect<'annotations> {
 
     #[must_use]
     #[cfg(test)]
-    pub(crate) fn contracts(&self) -> &[CommentContract] {
+    pub(crate) fn contracts(&self) -> &[ObligationContract] {
         &self.contracts
     }
 
     #[must_use]
-    pub(crate) fn contract(&self, id: ContractId) -> Option<&CommentContract> {
+    pub(crate) fn contract(&self, id: ContractId) -> Option<&ObligationContract> {
         self.contracts.iter().find(|contract| contract.id == id)
+    }
+
+    fn contract_state(
+        &self,
+        function: FunctionId,
+        domain: ObligationDomain,
+        current: Option<&ObligationState>,
+    ) -> Option<ObligationState> {
+        let contract = self
+            .contracts
+            .iter()
+            .find(|contract| contract.domain == domain && contract.applies_to(function))?;
+        if current
+            .is_some_and(|state| state.contract == contract.id && state.source_invocation.is_none())
+        {
+            return None;
+        }
+        Some(ObligationState {
+            domain,
+            contract: contract.id,
+            current_function: function,
+            source_invocation: None,
+            source_calls: BTreeSet::new(),
+            remaining: contract.obligations.clone(),
+            termination: None,
+            trust_path: if self.trusts_function(domain, function) {
+                TrustPath::default()
+            } else {
+                TrustPath::new(self.graph, function)
+            },
+        })
     }
 
     #[must_use]
     #[cfg(test)]
-    pub(crate) fn contract_count(&self, domain: CommentDomain) -> usize {
+    pub(crate) fn contract_count(&self, domain: ObligationDomain) -> usize {
         self.contracts
             .iter()
             .filter(|contract| contract.domain == domain)
@@ -293,7 +326,7 @@ impl<'annotations> CommentEffect<'annotations> {
 
     fn apply_satisfaction(
         &self,
-        state: &mut CommentState,
+        state: &mut ObligationState,
         satisfaction: &crate::artifact::AnnotationSatisfactionFact,
     ) {
         if satisfaction.reason.trim().is_empty() {
@@ -332,10 +365,10 @@ impl<'annotations> CommentEffect<'annotations> {
         }
     }
 
-    pub(crate) fn trusts_function(&self, domain: CommentDomain, function: FunctionId) -> bool {
+    pub(crate) fn trusts_function(&self, domain: ObligationDomain, function: FunctionId) -> bool {
         match domain {
-            CommentDomain::Panic => &self.trusted_panic_functions,
-            CommentDomain::Safety => &self.trusted_safety_functions,
+            ObligationDomain::Panic => &self.trusted_panic_functions,
+            ObligationDomain::Safety => &self.trusted_safety_functions,
         }
         .contains(&function)
     }
@@ -343,26 +376,26 @@ impl<'annotations> CommentEffect<'annotations> {
     #[must_use]
     pub(crate) fn is_ignored_invocation(
         &self,
-        domain: CommentDomain,
+        domain: ObligationDomain,
         invocation: InvocationId,
     ) -> bool {
         match domain {
-            CommentDomain::Panic => &self.ignored_panic_invocations,
-            CommentDomain::Safety => &self.ignored_safety_invocations,
+            ObligationDomain::Panic => &self.ignored_panic_invocations,
+            ObligationDomain::Safety => &self.ignored_safety_invocations,
         }
         .contains(&invocation)
     }
 
     fn invocation_transition(
         &self,
-        state: &CommentState,
+        state: &ObligationState,
         invocation: InvocationId,
         node: Option<TraceNodeId>,
-    ) -> Option<CommentInvocationTransition> {
+    ) -> Option<ObligationInvocationTransition> {
         if self.is_ignored_invocation(state.domain, invocation) {
             return None;
         }
-        if state.domain == CommentDomain::Safety
+        if state.domain == ObligationDomain::Safety
             && self.graph.invocation(invocation).is_builtin_unsafe()
         {
             return None;
@@ -394,7 +427,7 @@ impl<'annotations> CommentEffect<'annotations> {
                 if next.remaining.len() < before
                     && let Some(node) = node
                 {
-                    marker_uses.push(CommentMarkerUse {
+                    marker_uses.push(ObligationMarkerUse {
                         annotation: comment.id(),
                         domain: state.domain,
                         invocation,
@@ -404,11 +437,11 @@ impl<'annotations> CommentEffect<'annotations> {
                     });
                 }
                 if before > 0 && next.remaining.is_empty() {
-                    next.termination = Some(CommentTermination::Satisfaction(comment.id()));
+                    next.termination = Some(ObligationTermination::Satisfaction(comment.id()));
                 }
             }
         }
-        Some(CommentInvocationTransition {
+        Some(ObligationInvocationTransition {
             state: next,
             marker_uses,
         })
@@ -416,7 +449,7 @@ impl<'annotations> CommentEffect<'annotations> {
 
     fn crosses_non_applicable_declaration(
         &self,
-        state: &CommentState,
+        state: &ObligationState,
         invocation: InvocationId,
     ) -> bool {
         let invocation = self.graph.invocation(invocation);
@@ -435,13 +468,11 @@ impl<'annotations> CommentEffect<'annotations> {
                 .is_some_and(|contract| contract.applies_to(current))
     }
 
-    /// Returns every marker that actually removed at least one remaining
-    /// obligation on a traced invocation transition. This includes partial
-    /// satisfactions that do not terminate the comment effect.
+    #[cfg(test)]
     pub(crate) fn marker_uses(
         &self,
-        trace: &EffectTrace<ContractId, CommentState, CommentTermination>,
-    ) -> Vec<CommentMarkerUse> {
+        trace: &EffectTrace<ContractId, ObligationState, ObligationTermination>,
+    ) -> Vec<ObligationMarkerUse> {
         let nodes = trace.nodes().collect::<Vec<_>>();
         let mut uses = Vec::new();
         for edge in trace.edges() {
@@ -474,10 +505,10 @@ impl<'annotations> CommentEffect<'annotations> {
     }
 }
 
-impl Effect for CommentEffect<'_> {
+impl TracePolicy for ObligationTracker<'_> {
     type Origin = ContractId;
-    type State = CommentState;
-    type Termination = CommentTermination;
+    type State = ObligationState;
+    type Termination = ObligationTermination;
 
     fn sources(&self) -> impl Iterator<Item = EffectSeed<Self::Origin, Self::State>> + '_ {
         self.contracts.iter().flat_map(move |contract| {
@@ -485,7 +516,7 @@ impl Effect for CommentEffect<'_> {
                 EffectSeed::new(
                     contract.id,
                     function,
-                    CommentState {
+                    ObligationState {
                         domain: contract.domain,
                         contract: contract.id,
                         current_function: function,
@@ -502,6 +533,15 @@ impl Effect for CommentEffect<'_> {
                 )
             })
         })
+    }
+
+    fn handoff(
+        &self,
+        _cx: &TraceCx<'_>,
+        state: &Self::State,
+        function: FunctionId,
+    ) -> Option<Self::State> {
+        self.contract_state(function, state.domain, Some(state))
     }
 
     fn propagate(
@@ -523,13 +563,19 @@ impl Effect for CommentEffect<'_> {
             // The callsite belongs to the trusted implementation, so its
             // explicit evidence is interpreted before opacity stops any
             // remaining obligations at the parent function boundary.
-            if matches!(next.termination, Some(CommentTermination::Satisfaction(_))) {
+            if matches!(
+                next.termination,
+                Some(ObligationTermination::Satisfaction(_))
+            ) {
                 return Propagation::Follow(next);
             }
         }
         let parent = match edge {
             PropagationEdge::Invocation(invocation) => self.graph.invocation(invocation).caller(),
             PropagationEdge::TransparentBody(edge) => cx.graph().transparent_parent(edge),
+            PropagationEdge::ContractHandoff => {
+                unreachable!("contract handoffs are created by the tracing engine")
+            }
         };
         next.current_function = parent;
         if !self.trusts_function(state.domain, parent) {
@@ -538,7 +584,7 @@ impl Effect for CommentEffect<'_> {
         if self.trusts_function(state.domain, parent)
             && next.trust_path.allows_boundary(self.graph, parent)
         {
-            next.termination = Some(CommentTermination::TrustedBoundary);
+            next.termination = Some(ObligationTermination::TrustedBoundary);
         }
         Propagation::Follow(next)
     }
@@ -551,26 +597,19 @@ impl Effect for CommentEffect<'_> {
     ) -> Option<Self::Termination> {
         match site {
             TraceSite::Invocation(_)
-                if matches!(state.termination, Some(CommentTermination::Satisfaction(_))) =>
+                if matches!(
+                    state.termination,
+                    Some(ObligationTermination::Satisfaction(_))
+                ) =>
             {
                 state.termination
             }
             TraceSite::Function(_)
-                if state.termination == Some(CommentTermination::TrustedBoundary) =>
+                if state.termination == Some(ObligationTermination::TrustedBoundary) =>
             {
                 state.termination
             }
-            TraceSite::Function(function) => self
-                .annotations
-                .effective_contract(self.graph, function, state.domain.into())
-                .filter(|contract| {
-                    // Export the source contract itself, but let a caller's
-                    // contract replace obligations arriving from its body.
-                    contract.id() != state.contract.annotation()
-                        || state.source_invocation.is_some()
-                })
-                .map(|contract| CommentTermination::Contract(contract.id())),
-            TraceSite::Source(_) | TraceSite::Invocation(_) => None,
+            TraceSite::Function(_) | TraceSite::Source(_) | TraceSite::Invocation(_) => None,
         }
     }
 }
@@ -602,7 +641,7 @@ fn collect_obligations(
         .collect()
 }
 
-impl From<AnnotationDomain> for CommentDomain {
+impl From<AnnotationDomain> for ObligationDomain {
     fn from(value: AnnotationDomain) -> Self {
         match value {
             AnnotationDomain::Panic => Self::Panic,
@@ -611,11 +650,244 @@ impl From<AnnotationDomain> for CommentDomain {
     }
 }
 
-impl From<CommentDomain> for AnnotationDomain {
-    fn from(value: CommentDomain) -> Self {
+impl From<ObligationDomain> for AnnotationDomain {
+    fn from(value: ObligationDomain) -> Self {
         match value {
-            CommentDomain::Panic => Self::Panic,
-            CommentDomain::Safety => Self::Safety,
+            ObligationDomain::Panic => Self::Panic,
+            ObligationDomain::Safety => Self::Safety,
+        }
+    }
+}
+
+/// Concrete propagation state exposes only its current runtime target. This
+/// lets the shared tracker reject declaration-only edges while contract
+/// carriers deliberately traverse those edges.
+pub(crate) trait ConcreteState {
+    fn current_function(&self) -> FunctionId;
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub(crate) enum TrackedOrigin<O> {
+    Concrete(O),
+    Contract(ContractId),
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub(crate) enum TrackedState<S> {
+    Concrete(S),
+    Obligation(ObligationState),
+}
+
+impl<S> TrackedState<S> {
+    #[must_use]
+    pub(crate) const fn obligation(&self) -> Option<&ObligationState> {
+        match self {
+            Self::Concrete(_) => None,
+            Self::Obligation(state) => Some(state),
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum TrackedTermination<T> {
+    Concrete(T),
+    Obligation(ObligationTermination),
+}
+
+/// One effect-domain trace containing both compiler-discovered operations and
+/// documentation-derived contract carriers. `ObligationTracker` supplies the
+/// shared contract semantics; the concrete policy supplies only seed-specific
+/// source handling.
+pub(crate) struct TrackedEffect<'effect, 'annotations, C> {
+    concrete: &'effect C,
+    obligations: &'effect ObligationTracker<'annotations>,
+    domain: ObligationDomain,
+}
+
+impl<'effect, 'annotations, C> TrackedEffect<'effect, 'annotations, C> {
+    #[must_use]
+    pub(crate) const fn new(
+        concrete: &'effect C,
+        obligations: &'effect ObligationTracker<'annotations>,
+        domain: ObligationDomain,
+    ) -> Self {
+        Self {
+            concrete,
+            obligations,
+            domain,
+        }
+    }
+
+    #[must_use]
+    pub(crate) const fn obligations(&self) -> &ObligationTracker<'annotations> {
+        self.obligations
+    }
+
+    /// Returns every justification that consumed at least one contract
+    /// requirement in this domain's unified trace.
+    pub(crate) fn obligation_marker_uses<O: Clone, S, T>(
+        &self,
+        trace: &EffectTrace<TrackedOrigin<O>, TrackedState<S>, TrackedTermination<T>>,
+    ) -> Vec<ObligationMarkerUse> {
+        let nodes = trace.nodes().collect::<Vec<_>>();
+        let mut uses = Vec::new();
+        for edge in trace.edges() {
+            let PropagationEdge::Invocation(invocation) = edge.propagation() else {
+                continue;
+            };
+            let TrackedState::Obligation(state) = nodes[edge.from().index()].state() else {
+                continue;
+            };
+            if let Some(transition) =
+                self.obligations
+                    .invocation_transition(state, invocation, Some(edge.from()))
+            {
+                uses.extend(transition.marker_uses);
+            }
+        }
+        for handled in trace.handled() {
+            let (Some(node), TerminationSite::Invocation(invocation)) =
+                (handled.node(), handled.site())
+            else {
+                continue;
+            };
+            let TrackedState::Obligation(state) = nodes[node.index()].state() else {
+                continue;
+            };
+            if let Some(transition) =
+                self.obligations
+                    .invocation_transition(state, *invocation, Some(node))
+            {
+                uses.extend(transition.marker_uses);
+            }
+        }
+        uses.sort();
+        uses.dedup();
+        uses
+    }
+}
+
+impl<C> TracePolicy for TrackedEffect<'_, '_, C>
+where
+    C: TracePolicy,
+    C::Origin: Clone + Eq + Hash,
+    C::State: ConcreteState + Clone + Eq + Hash,
+{
+    type Origin = TrackedOrigin<C::Origin>;
+    type State = TrackedState<C::State>;
+    type Termination = TrackedTermination<C::Termination>;
+
+    fn sources(&self) -> impl Iterator<Item = EffectSeed<Self::Origin, Self::State>> + '_ {
+        self.concrete
+            .sources()
+            .map(|seed| {
+                EffectSeed::new(
+                    TrackedOrigin::Concrete(seed.origin),
+                    seed.owner,
+                    TrackedState::Concrete(seed.state),
+                )
+            })
+            .chain(
+                self.obligations
+                    .sources()
+                    .filter(|seed| seed.state.domain == self.domain)
+                    .map(|seed| {
+                        EffectSeed::new(
+                            TrackedOrigin::Contract(seed.origin),
+                            seed.owner,
+                            TrackedState::Obligation(seed.state),
+                        )
+                    }),
+            )
+    }
+
+    fn handoff(
+        &self,
+        _cx: &TraceCx<'_>,
+        state: &Self::State,
+        function: FunctionId,
+    ) -> Option<Self::State> {
+        match state {
+            TrackedState::Concrete(_) => self
+                .obligations
+                .contract_state(function, self.domain, None)
+                .map(TrackedState::Obligation),
+            TrackedState::Obligation(state) => self
+                .obligations
+                .contract_state(function, self.domain, Some(state))
+                .map(TrackedState::Obligation),
+        }
+    }
+
+    fn propagate(
+        &self,
+        cx: &TraceCx<'_>,
+        state: &Self::State,
+        edge: PropagationEdge,
+    ) -> Propagation<Self::State> {
+        match state {
+            TrackedState::Concrete(state) => {
+                if let PropagationEdge::Invocation(invocation) = edge
+                    && !self
+                        .obligations
+                        .graph
+                        .invocation(invocation)
+                        .function_targets()
+                        .any(|target| target == state.current_function())
+                {
+                    return Propagation::Ignore;
+                }
+                match self.concrete.propagate(cx, state, edge) {
+                    Propagation::Follow(next) => Propagation::Follow(TrackedState::Concrete(next)),
+                    Propagation::Ignore => Propagation::Ignore,
+                    Propagation::Unknown(boundary) => Propagation::Unknown(boundary),
+                }
+            }
+            TrackedState::Obligation(state) => match self.obligations.propagate(cx, state, edge) {
+                Propagation::Follow(next) => Propagation::Follow(TrackedState::Obligation(next)),
+                Propagation::Ignore => Propagation::Ignore,
+                Propagation::Unknown(boundary) => Propagation::Unknown(boundary),
+            },
+        }
+    }
+
+    fn terminate(
+        &self,
+        cx: &TraceCx<'_>,
+        state: &Self::State,
+        site: TraceSite<'_, Self::Origin>,
+    ) -> Option<Self::Termination> {
+        match (state, site) {
+            (TrackedState::Concrete(state), TraceSite::Source(TrackedOrigin::Concrete(origin))) => {
+                self.concrete
+                    .terminate(cx, state, TraceSite::Source(origin))
+                    .map(TrackedTermination::Concrete)
+            }
+            (TrackedState::Concrete(state), TraceSite::Function(function)) => self
+                .concrete
+                .terminate(cx, state, TraceSite::Function(function))
+                .map(TrackedTermination::Concrete),
+            (TrackedState::Concrete(state), TraceSite::Invocation(invocation)) => self
+                .concrete
+                .terminate(cx, state, TraceSite::Invocation(invocation))
+                .map(TrackedTermination::Concrete),
+            (
+                TrackedState::Obligation(state),
+                TraceSite::Source(TrackedOrigin::Contract(origin)),
+            ) => self
+                .obligations
+                .terminate(cx, state, TraceSite::Source(origin))
+                .map(TrackedTermination::Obligation),
+            (TrackedState::Obligation(state), TraceSite::Function(function)) => self
+                .obligations
+                .terminate(cx, state, TraceSite::Function(function))
+                .map(TrackedTermination::Obligation),
+            (TrackedState::Obligation(state), TraceSite::Invocation(invocation)) => self
+                .obligations
+                .terminate(cx, state, TraceSite::Invocation(invocation))
+                .map(TrackedTermination::Obligation),
+            (TrackedState::Concrete(_), TraceSite::Source(TrackedOrigin::Contract(_)))
+            | (TrackedState::Obligation(_), TraceSite::Source(TrackedOrigin::Concrete(_))) => None,
         }
     }
 }

@@ -28,7 +28,10 @@ use crate::config::{MarkerProbing, PanicBoundaryPolicy, SniffTestConfig};
 use crate::contracts::normalize_requirement_name;
 use crate::effects::EffectSelection;
 use crate::effects::InvocationSourceBranch;
-use crate::effects::comment::{CommentDomain, CommentEffect, CommentState, CommentTermination};
+use crate::effects::obligation::{
+    ObligationDomain, ObligationTracker, TrackedEffect, TrackedOrigin, TrackedState,
+    TrackedTermination,
+};
 use crate::effects::panic::{PanicEffect, PanicKind, PanicOrigin, PanicState};
 use crate::effects::safety::{SafetyEffect, SafetyKind, SafetyOrigin, SafetyState};
 use crate::effects::trust::TrustPath;
@@ -76,8 +79,8 @@ enum MarkerWitness {
         origin: SafetyOrigin,
         site: MarkerTraceSite,
     },
-    Comment {
-        domain: CommentDomain,
+    Obligation {
+        domain: ObligationDomain,
         invocation: effect_tracing::InvocationId,
         node: TraceNodeId,
     },
@@ -100,6 +103,17 @@ struct MarkerUse {
 }
 
 type MarkerClaims = BTreeMap<AnnotationId, BTreeMap<MarkerEffectGroup, Vec<MarkerWitness>>>;
+
+type PanicTrace = EffectTrace<
+    TrackedOrigin<PanicOrigin>,
+    TrackedState<PanicState>,
+    TrackedTermination<crate::effects::panic::PanicTermination>,
+>;
+type SafetyTrace = EffectTrace<
+    TrackedOrigin<SafetyOrigin>,
+    TrackedState<SafetyState>,
+    TrackedTermination<crate::effects::safety::SafetyTermination>,
+>;
 
 struct MarkerProjection {
     function: StableFunctionId,
@@ -204,7 +218,7 @@ pub(crate) fn trace_selected_workspace(
         .then(|| SafetyEffect::probe(artifact, &graph, &annotations, &namespaces, &config.safety))
         .transpose()
         .map_err(|error| EffectReportError::new(error.to_string()))?;
-    let comments = CommentEffect::probe(
+    let obligations = ObligationTracker::probe(
         artifact,
         &graph,
         &annotations,
@@ -218,20 +232,24 @@ pub(crate) fn trace_selected_workspace(
         max_depth: config.analysis.max_trace_depth,
         state_budget: config.analysis.trace_state_budget,
     };
-    let engine = EffectEngine::with_options(&graph, trace_options);
-    let comment_graph = graph.comment_graph();
-    let comment_engine = EffectEngine::with_options(&comment_graph, trace_options);
-    let panic_trace = panic.as_ref().map(|panic| engine.trace(panic));
-    let safety_trace = safety.as_ref().map(|safety| engine.trace(safety));
-    let comment_trace = comment_engine.trace(&comments);
+    let obligation_graph = graph.obligation_graph();
+    let engine = EffectEngine::with_options(&obligation_graph, trace_options);
+    let tracked_panic = panic
+        .as_ref()
+        .map(|panic| TrackedEffect::new(panic, &obligations, ObligationDomain::Panic));
+    let tracked_safety = safety
+        .as_ref()
+        .map(|safety| TrackedEffect::new(safety, &obligations, ObligationDomain::Safety));
+    let panic_trace = tracked_panic.as_ref().map(|panic| engine.trace(panic));
+    let safety_trace = tracked_safety.as_ref().map(|safety| engine.trace(safety));
     let marker_claims = collect_marker_claims(
         artifact,
         &graph,
         panic_trace.as_ref(),
         safety.as_ref(),
         safety_trace.as_ref(),
-        &comments,
-        &comment_trace,
+        tracked_panic.as_ref(),
+        tracked_safety.as_ref(),
     );
     let marker_probing = annotation_probing_fact(config.analysis.marker_probing);
 
@@ -308,21 +326,35 @@ pub(crate) fn trace_selected_workspace(
                     panic_trace.as_ref(),
                     safety.as_ref(),
                     safety_trace.as_ref(),
-                    &comments,
-                    &comment_trace,
+                    tracked_panic.as_ref(),
+                    tracked_safety.as_ref(),
                     &marker_claims,
                     root_function,
                 ));
-                findings.extend(comment_findings(
-                    artifact,
-                    &graph,
-                    &annotations,
-                    &comments,
-                    &comment_trace,
-                    root_function,
-                    &root,
-                    marker_probing,
-                ));
+                if let (Some(tracked), Some(trace)) = (&tracked_panic, &panic_trace) {
+                    findings.extend(obligation_findings(
+                        artifact,
+                        &graph,
+                        &annotations,
+                        tracked,
+                        trace,
+                        root_function,
+                        &root,
+                        marker_probing,
+                    ));
+                }
+                if let (Some(tracked), Some(trace)) = (&tracked_safety, &safety_trace) {
+                    findings.extend(obligation_findings(
+                        artifact,
+                        &graph,
+                        &annotations,
+                        tracked,
+                        trace,
+                        root_function,
+                        &root,
+                        marker_probing,
+                    ));
+                }
             }
             if effects.tracks_safety()
                 && let Some(finding) =
@@ -343,19 +375,8 @@ pub(crate) fn trace_selected_workspace(
                     unique.push(finding);
                 }
             }
-            let mut panic_additional = if effects.tracks_panic() {
-                comment_completeness(
-                    artifact,
-                    &comment_trace,
-                    &graph,
-                    &root_functions,
-                    CommentDomain::Panic,
-                    trace_options,
-                )
-            } else {
-                AdditionalCompleteness {
-                    reasons: Vec::new(),
-                }
+            let mut panic_additional = AdditionalCompleteness {
+                reasons: Vec::new(),
             };
             if effects.tracks_panic() {
                 panic_additional.reasons.extend(missing_body_reasons(
@@ -369,19 +390,8 @@ pub(crate) fn trace_selected_workspace(
                     config,
                 ));
             }
-            let mut safety_additional = if effects.tracks_safety() {
-                comment_completeness(
-                    artifact,
-                    &comment_trace,
-                    &graph,
-                    &root_functions,
-                    CommentDomain::Safety,
-                    trace_options,
-                )
-            } else {
-                AdditionalCompleteness {
-                    reasons: Vec::new(),
-                }
+            let mut safety_additional = AdditionalCompleteness {
+                reasons: Vec::new(),
             };
             if effects.tracks_safety() {
                 safety_additional.reasons.extend(missing_body_reasons(
@@ -448,19 +458,11 @@ fn marker_ambiguities(
     graph: &InvocationGraph,
     annotations: &AnnotationIndex,
     panic: Option<&PanicEffect<'_>>,
-    panic_trace: Option<
-        &EffectTrace<PanicOrigin, PanicState, crate::effects::panic::PanicTermination>,
-    >,
+    panic_trace: Option<&PanicTrace>,
     safety: Option<&SafetyEffect<'_>>,
-    safety_trace: Option<
-        &EffectTrace<SafetyOrigin, SafetyState, crate::effects::safety::SafetyTermination>,
-    >,
-    comments: &CommentEffect<'_>,
-    comment_trace: &EffectTrace<
-        crate::effects::comment::ContractId,
-        CommentState,
-        CommentTermination,
-    >,
+    safety_trace: Option<&SafetyTrace>,
+    tracked_panic: Option<&TrackedEffect<'_, '_, PanicEffect<'_>>>,
+    tracked_safety: Option<&TrackedEffect<'_, '_, SafetyEffect<'_>>>,
     claims: &MarkerClaims,
     root_function: FunctionId,
 ) -> Vec<InterpretedFinding> {
@@ -482,10 +484,10 @@ fn marker_ambiguities(
                                 graph,
                                 panic,
                                 safety,
-                                comments,
+                                tracked_panic,
+                                tracked_safety,
                                 panic_trace,
                                 safety_trace,
-                                comment_trace,
                                 root_function,
                                 witness,
                             )
@@ -526,26 +528,22 @@ fn marker_ambiguities(
 fn collect_marker_claims(
     artifact: &ArtifactFacts,
     graph: &InvocationGraph,
-    panic_trace: Option<
-        &EffectTrace<PanicOrigin, PanicState, crate::effects::panic::PanicTermination>,
-    >,
+    panic_trace: Option<&PanicTrace>,
     safety: Option<&SafetyEffect<'_>>,
-    safety_trace: Option<
-        &EffectTrace<SafetyOrigin, SafetyState, crate::effects::safety::SafetyTermination>,
-    >,
-    comments: &CommentEffect<'_>,
-    comment_trace: &EffectTrace<
-        crate::effects::comment::ContractId,
-        CommentState,
-        CommentTermination,
-    >,
+    safety_trace: Option<&SafetyTrace>,
+    tracked_panic: Option<&TrackedEffect<'_, '_, PanicEffect<'_>>>,
+    tracked_safety: Option<&TrackedEffect<'_, '_, SafetyEffect<'_>>>,
 ) -> MarkerClaims {
     let mut uses = Vec::new();
     for handled in panic_trace.into_iter().flat_map(EffectTrace::handled) {
-        if let crate::effects::panic::PanicTermination::Justification(annotation) =
-            handled.termination()
+        if let (
+            TrackedOrigin::Concrete(origin),
+            TrackedTermination::Concrete(crate::effects::panic::PanicTermination::Justification(
+                annotation,
+            )),
+        ) = (handled.origin(), handled.termination())
         {
-            let origin = *handled.origin();
+            let origin = *origin;
             let Some(site) = marker_trace_site(handled.site(), handled.node()) else {
                 continue;
             };
@@ -560,10 +558,14 @@ fn collect_marker_claims(
         let Some(safety) = safety else {
             continue;
         };
-        if let crate::effects::safety::SafetyTermination::Justification(annotation) =
-            handled.termination()
+        if let (
+            TrackedOrigin::Concrete(origin),
+            TrackedTermination::Concrete(crate::effects::safety::SafetyTermination::Justification(
+                annotation,
+            )),
+        ) = (handled.origin(), handled.termination())
         {
-            let origin = *handled.origin();
+            let origin = *origin;
             let Some(site) = marker_trace_site(handled.site(), handled.node()) else {
                 continue;
             };
@@ -578,26 +580,41 @@ fn collect_marker_claims(
             );
         }
     }
-    for usage in comments.marker_uses(comment_trace) {
+    let obligation_uses = tracked_panic
+        .zip(panic_trace)
+        .into_iter()
+        .flat_map(|(tracked, trace)| tracked.obligation_marker_uses(trace))
+        .chain(
+            tracked_safety
+                .zip(safety_trace)
+                .into_iter()
+                .flat_map(|(tracked, trace)| tracked.obligation_marker_uses(trace)),
+        );
+    for usage in obligation_uses {
         let source_invocation = usage.source_invocation();
         let groups: Vec<MarkerEffectGroup> = match usage.domain() {
-            CommentDomain::Panic => usage
+            ObligationDomain::Panic => usage
                 .source_calls()
                 .map(|call| {
                     MarkerEffectGroup::Panic(PanicEffectGroup::Invocation(source_invocation, call))
                 })
                 .collect(),
-            CommentDomain::Safety => {
+            ObligationDomain::Safety => {
                 let Some(safety) = safety else {
                     continue;
                 };
-                comment_safety_effect_groups(graph, safety, source_invocation, usage.source_calls())
-                    .into_iter()
-                    .map(MarkerEffectGroup::Safety)
-                    .collect()
+                obligation_safety_effect_groups(
+                    graph,
+                    safety,
+                    source_invocation,
+                    usage.source_calls(),
+                )
+                .into_iter()
+                .map(MarkerEffectGroup::Safety)
+                .collect()
             }
         };
-        let witness = MarkerWitness::Comment {
+        let witness = MarkerWitness::Obligation {
             domain: usage.domain(),
             invocation: usage.invocation(),
             node: usage.node(),
@@ -648,18 +665,10 @@ fn marker_projection(
     graph: &InvocationGraph,
     panic: Option<&PanicEffect<'_>>,
     safety: Option<&SafetyEffect<'_>>,
-    comments: &CommentEffect<'_>,
-    panic_trace: Option<
-        &EffectTrace<PanicOrigin, PanicState, crate::effects::panic::PanicTermination>,
-    >,
-    safety_trace: Option<
-        &EffectTrace<SafetyOrigin, SafetyState, crate::effects::safety::SafetyTermination>,
-    >,
-    comment_trace: &EffectTrace<
-        crate::effects::comment::ContractId,
-        CommentState,
-        CommentTermination,
-    >,
+    tracked_panic: Option<&TrackedEffect<'_, '_, PanicEffect<'_>>>,
+    tracked_safety: Option<&TrackedEffect<'_, '_, SafetyEffect<'_>>>,
+    panic_trace: Option<&PanicTrace>,
+    safety_trace: Option<&SafetyTrace>,
     root_function: FunctionId,
     witness: MarkerWitness,
 ) -> Option<MarkerProjection> {
@@ -688,12 +697,10 @@ fn marker_projection(
                     invocation,
                     node,
                     MarkerTraversalPolicy {
-                        trust_path: panic_trace?
-                            .nodes()
-                            .nth(node.index())?
-                            .state()
-                            .trust_path()
-                            .clone(),
+                        trust_path: match panic_trace?.nodes().nth(node.index())?.state() {
+                            TrackedState::Concrete(state) => state.trust_path().clone(),
+                            TrackedState::Obligation(_) => return None,
+                        },
                         is_opaque: |function, path: &TrustPath| {
                             panic.is_opaque_on_path(function, path)
                         },
@@ -726,12 +733,10 @@ fn marker_projection(
                     invocation,
                     node,
                     MarkerTraversalPolicy {
-                        trust_path: safety_trace?
-                            .nodes()
-                            .nth(node.index())?
-                            .state()
-                            .trust_path()
-                            .clone(),
+                        trust_path: match safety_trace?.nodes().nth(node.index())?.state() {
+                            TrackedState::Concrete(state) => state.trust_path().clone(),
+                            TrackedState::Obligation(_) => return None,
+                        },
                         is_opaque: |function, path: &TrustPath| {
                             safety.is_opaque_on_path(function, path)
                         },
@@ -740,33 +745,32 @@ fn marker_projection(
                 )?
             }
         },
-        MarkerWitness::Comment {
+        MarkerWitness::Obligation {
             domain,
             invocation,
             node,
-        } => marker_invocation_projection(
-            artifact,
-            graph,
-            comment_trace,
-            root_function,
-            invocation,
-            node,
-            MarkerTraversalPolicy {
-                trust_path: comment_trace
-                    .nodes()
-                    .nth(node.index())?
-                    .state()
-                    .trust_path()
-                    .clone(),
-                is_opaque: |function, path: &TrustPath| {
-                    comments.trusts_function(domain, function)
-                        && path.allows_boundary(graph, function)
-                },
-                is_ignored_invocation: |candidate| {
-                    comments.is_ignored_invocation(domain, candidate)
-                },
-            },
-        )?,
+        } => match domain {
+            ObligationDomain::Panic => obligation_marker_projection(
+                artifact,
+                graph,
+                tracked_panic?.obligations(),
+                panic_trace?,
+                root_function,
+                invocation,
+                node,
+                domain,
+            )?,
+            ObligationDomain::Safety => obligation_marker_projection(
+                artifact,
+                graph,
+                tracked_safety?.obligations(),
+                safety_trace?,
+                root_function,
+                invocation,
+                node,
+                domain,
+            )?,
+        },
     };
     match witness {
         MarkerWitness::PanicEffect { origin, .. } => {
@@ -775,7 +779,7 @@ fn marker_projection(
         MarkerWitness::SafetyEffect { origin, .. } => {
             append_safety_origin(artifact, graph, safety?, origin, &mut trace);
         }
-        MarkerWitness::Comment { .. } => {}
+        MarkerWitness::Obligation { .. } => {}
     }
     Some(MarkerProjection {
         function,
@@ -796,6 +800,41 @@ fn marker_trace_site<O>(
         }),
         TerminationSite::Function(_) => None,
     }
+}
+
+fn obligation_marker_projection<O: Clone, S, T>(
+    artifact: &ArtifactFacts,
+    graph: &InvocationGraph,
+    obligations: &ObligationTracker<'_>,
+    trace: &EffectTrace<TrackedOrigin<O>, TrackedState<S>, TrackedTermination<T>>,
+    root_function: FunctionId,
+    invocation: effect_tracing::InvocationId,
+    node: TraceNodeId,
+    domain: ObligationDomain,
+) -> Option<(StableFunctionId, InterpretedTrace)> {
+    let trust_path = trace
+        .nodes()
+        .nth(node.index())?
+        .state()
+        .obligation()?
+        .trust_path()
+        .clone();
+    marker_invocation_projection(
+        artifact,
+        graph,
+        trace,
+        root_function,
+        invocation,
+        node,
+        MarkerTraversalPolicy {
+            trust_path,
+            is_opaque: |function, path: &TrustPath| {
+                obligations.trusts_function(domain, function)
+                    && path.allows_boundary(graph, function)
+            },
+            is_ignored_invocation: |candidate| obligations.is_ignored_invocation(domain, candidate),
+        },
+    )
 }
 
 fn marker_invocation_projection<O: Clone, S, T>(
@@ -877,7 +916,7 @@ fn safety_effect_groups(
     }
 }
 
-fn comment_safety_effect_groups(
+fn obligation_safety_effect_groups(
     graph: &InvocationGraph,
     safety: &SafetyEffect<'_>,
     invocation: effect_tracing::InvocationId,
@@ -1107,6 +1146,7 @@ fn project_reverse_path(
                     target_path: Some(display_path(artifact, graph.stable_function(child))),
                 });
             }
+            PropagationEdge::ContractHandoff => {}
         }
     }
     trace
@@ -1226,7 +1266,7 @@ fn raw_call_marker_evidence(
         .unwrap_or_else(unavailable_marker_evidence)
 }
 
-fn comment_marker_evidence(
+fn obligation_marker_evidence(
     artifact: &ArtifactFacts,
     graph: &InvocationGraph,
     source_invocation: Option<effect_tracing::InvocationId>,
@@ -1249,15 +1289,21 @@ fn panic_findings(
     graph: &InvocationGraph,
     annotations: &AnnotationIndex,
     panic: &PanicEffect<'_>,
-    trace: &EffectTrace<PanicOrigin, PanicState, crate::effects::panic::PanicTermination>,
+    trace: &PanicTrace,
     root_function: effect_tracing::FunctionId,
     marker_probing: AnnotationProbingFact,
 ) -> Vec<InterpretedFinding> {
     active_root_nodes(trace, root_function)
         .filter_map(|node| {
             let trace_path = trace_path(artifact, graph, trace, node);
-            let state = trace.nodes().nth(node)?.state();
-            match *trace.nodes().nth(node)?.origin() {
+            let trace_node = trace.nodes().nth(node)?;
+            let TrackedState::Concrete(state) = trace_node.state() else {
+                return None;
+            };
+            let TrackedOrigin::Concrete(origin) = *trace_node.origin() else {
+                return None;
+            };
+            match origin {
                 PanicOrigin::CompilerAssert { owner, effect } => {
                     let (body, fact) = effect_fact(artifact, owner, effect)?;
                     let PanicKind::CompilerAssert(kind) = state.kind() else {
@@ -1329,15 +1375,21 @@ fn safety_findings(
     graph: &InvocationGraph,
     annotations: &AnnotationIndex,
     safety: &SafetyEffect<'_>,
-    trace: &EffectTrace<SafetyOrigin, SafetyState, crate::effects::safety::SafetyTermination>,
+    trace: &SafetyTrace,
     root_function: effect_tracing::FunctionId,
     marker_probing: AnnotationProbingFact,
 ) -> Vec<InterpretedFinding> {
     active_root_nodes(trace, root_function)
         .filter_map(|node| {
             let trace_path = trace_path(artifact, graph, trace, node);
-            let state = trace.nodes().nth(node)?.state();
-            match *trace.nodes().nth(node)?.origin() {
+            let trace_node = trace.nodes().nth(node)?;
+            let TrackedState::Concrete(state) = trace_node.state() else {
+                return None;
+            };
+            let TrackedOrigin::Concrete(origin) = *trace_node.origin() else {
+                return None;
+            };
+            match origin {
                 SafetyOrigin::Operation { owner, effect } => {
                     let (body, fact) = effect_fact(artifact, owner, effect)?;
                     let SafetyKind::Operation(kind) = state.kind() else {
@@ -1614,14 +1666,14 @@ fn unresolved_call_site(
 #[allow(clippy::too_many_arguments)]
 #[allow(
     clippy::too_many_lines,
-    reason = "comment findings project one stateful obligation domain without a second contract engine"
+    reason = "obligation findings project one stateful domain from the unified effect trace"
 )]
-fn comment_findings(
+fn obligation_findings<C, O: Clone, S, T>(
     artifact: &ArtifactFacts,
     graph: &InvocationGraph,
     annotations: &AnnotationIndex,
-    comments: &CommentEffect<'_>,
-    trace: &EffectTrace<crate::effects::comment::ContractId, CommentState, CommentTermination>,
+    tracked: &TrackedEffect<'_, '_, C>,
+    trace: &EffectTrace<TrackedOrigin<O>, TrackedState<S>, TrackedTermination<T>>,
     root_function: effect_tracing::FunctionId,
     root: &InterpretationRoot,
     marker_probing: AnnotationProbingFact,
@@ -1629,7 +1681,8 @@ fn comment_findings(
     active_root_nodes(trace, root_function)
         .filter_map(|node| {
             let trace_node = trace.nodes().nth(node)?;
-            let contract = comments.contract(trace_node.state().contract())?;
+            let state = trace_node.state().obligation()?;
+            let contract = tracked.obligations().contract(state.contract())?;
             let annotation = annotations.contract(contract.id().annotation())?;
             if contract.applies_to(root_function) {
                 return None;
@@ -1637,6 +1690,7 @@ fn comment_findings(
             let path = trace_path(artifact, graph, trace, node);
             let missing_requirements = trace_node
                 .state()
+                .obligation()?
                 .remaining()
                 .filter_map(|index| annotation.requirements().get(index).cloned())
                 .collect::<Vec<_>>();
@@ -1657,10 +1711,10 @@ fn comment_findings(
                 .unwrap_or_else(|| format!("{:?}", annotation.owner()));
             let target_is_unsafe = function_presentation(artifact, target_function)
                 .is_some_and(|presentation| presentation.is_unsafe);
-            let domain = trace_node.state().domain();
+            let domain = state.domain();
             let kind = match domain {
-                CommentDomain::Panic => InterpretedFindingKind::DocumentedPanic,
-                CommentDomain::Safety => InterpretedFindingKind::SafetyCall {
+                ObligationDomain::Panic => InterpretedFindingKind::DocumentedPanic,
+                ObligationDomain::Safety => InterpretedFindingKind::SafetyCall {
                     kind: if target_is_unsafe {
                         InterpretedSafetyCallKind::Unsafe
                     } else {
@@ -1669,14 +1723,14 @@ fn comment_findings(
                     documents_contract: true,
                 },
             };
-            let marker_evidence = comment_marker_evidence(
+            let marker_evidence = obligation_marker_evidence(
                 artifact,
                 graph,
-                trace_node.state().source_invocation(),
-                trace_node.state().source_calls(),
+                state.source_invocation(),
+                state.source_calls(),
                 match domain {
-                    CommentDomain::Panic => AnnotationFactKind::PanicJustification,
-                    CommentDomain::Safety => AnnotationFactKind::SafetyJustification,
+                    ObligationDomain::Panic => AnnotationFactKind::PanicJustification,
+                    ObligationDomain::Safety => AnnotationFactKind::SafetyJustification,
                 },
                 marker_probing,
             );
@@ -1726,13 +1780,13 @@ fn comment_findings(
                 ambiguous
                     .into_iter()
                     .map(|(normalized_name, requirements)| InterpretedFinding {
-                        kind: match trace_node.state().domain() {
-                            CommentDomain::Panic => {
+                        kind: match state.domain() {
+                            ObligationDomain::Panic => {
                                 InterpretedFindingKind::AmbiguousPanicRequirement {
                                     normalized_name,
                                 }
                             }
-                            CommentDomain::Safety => {
+                            ObligationDomain::Safety => {
                                 InterpretedFindingKind::AmbiguousSafetyRequirement {
                                     normalized_name,
                                 }
@@ -1862,10 +1916,19 @@ fn active_root_nodes<O: Clone, S, T>(
             _ => None,
         })
         .collect::<BTreeSet<_>>();
+    let handed_off = trace
+        .edges()
+        .filter(|edge| edge.propagation() == PropagationEdge::ContractHandoff)
+        .map(|edge| edge.from().index())
+        .collect::<BTreeSet<_>>();
     trace
         .nodes()
         .enumerate()
-        .filter(move |(index, node)| node.function() == root && !handled_at_root.contains(index))
+        .filter(move |(index, node)| {
+            node.function() == root
+                && !handled_at_root.contains(index)
+                && !handed_off.contains(index)
+        })
         .map(|(index, _)| index)
 }
 
@@ -2120,31 +2183,6 @@ enum TraceLimitValue {
     StateBudget(usize),
 }
 
-fn comment_completeness(
-    artifact: &ArtifactFacts,
-    trace: &EffectTrace<crate::effects::comment::ContractId, CommentState, CommentTermination>,
-    graph: &InvocationGraph,
-    roots: &[FunctionId],
-    domain: CommentDomain,
-    options: TraceOptions,
-) -> AdditionalCompleteness {
-    let trace_kind = match domain {
-        CommentDomain::Panic => IncompleteTraceKind::PanicComment,
-        CommentDomain::Safety => IncompleteTraceKind::SafetyComment,
-    };
-    AdditionalCompleteness {
-        reasons: trace_limit_reasons(
-            artifact,
-            trace,
-            graph,
-            roots,
-            options,
-            trace_kind,
-            |state| state.domain() == domain,
-        ),
-    }
-}
-
 fn trace_frontier<O: Clone, S, T>(
     artifact: &ArtifactFacts,
     graph: &InvocationGraph,
@@ -2217,6 +2255,11 @@ fn trace_path<O: Clone, S, T>(
                 target: Some(child),
                 target_path: Some(display_path(artifact, child)),
             });
+        } else if matches!(edge.propagation(), PropagationEdge::ContractHandoff) {
+            // The contract at this boundary replaces the lower-level effect.
+            // Keep the causal edge in the trace model, but present the
+            // obligation from the point where its current carrier begins.
+            break;
         }
         node = edge.from().index();
     }
@@ -2387,7 +2430,7 @@ fn interpreted_target(target: &FunctionTargetFact) -> InterpretedTarget {
 mod tests {
     use super::{
         EffectEngine, PanicEffect, SafetyEffect, annotation_probing_fact, append_call_trace,
-        comment_marker_evidence, effect_marker_evidence, invocation_source_has_contract,
+        effect_marker_evidence, invocation_source_has_contract, obligation_marker_evidence,
         raw_call_marker_evidence, same_source_finding, trace_workspace,
     };
     use crate::annotations::{AnnotationDomain, AnnotationIndex};
@@ -2603,7 +2646,7 @@ unresolved-call-target = "warn"
                 .filter(|finding| matches!(finding.kind, InterpretedFindingKind::DocumentedPanic))
                 .count(),
             2,
-            "the declaration's panic contract must remain a CommentEffect source",
+            "the declaration's panic contract must remain a ObligationTracker source",
         );
         assert_eq!(
             findings
@@ -2617,7 +2660,7 @@ unresolved-call-target = "warn"
                 ))
                 .count(),
             2,
-            "the declaration's safety contract must remain a CommentEffect source",
+            "the declaration's safety contract must remain a ObligationTracker source",
         );
     }
 
@@ -3019,14 +3062,14 @@ unresolved-call-target = "warn"
     }
 
     #[test]
-    fn comment_marker_evidence_uses_only_contract_carrying_raw_calls() {
+    fn obligation_marker_evidence_uses_only_contract_carrying_raw_calls() {
         let (artifact, graph, owner) = marker_evidence_fixture();
         let invocation = graph
             .invocation_for_raw_call(owner, CallId::new(0))
             .expect("recorded source invocation");
 
         assert_eq!(
-            comment_marker_evidence(
+            obligation_marker_evidence(
                 &artifact,
                 &graph,
                 Some(invocation),
@@ -3038,7 +3081,7 @@ unresolved-call-target = "warn"
             "a marker on a grouped sibling must not become source evidence"
         );
         assert_eq!(
-            comment_marker_evidence(
+            obligation_marker_evidence(
                 &artifact,
                 &graph,
                 Some(invocation),
@@ -3050,7 +3093,7 @@ unresolved-call-target = "warn"
             "the raw branch carrying the marker retains its evidence"
         );
         assert_eq!(
-            comment_marker_evidence(
+            obligation_marker_evidence(
                 &artifact,
                 &graph,
                 Some(invocation),
@@ -3063,7 +3106,7 @@ unresolved-call-target = "warn"
             ))
         );
         assert_eq!(
-            comment_marker_evidence(
+            obligation_marker_evidence(
                 &artifact,
                 &graph,
                 None,
@@ -3601,7 +3644,7 @@ unresolved-call-target = "warn"
         let annotations = AnnotationIndex::from_artifact(&artifact, &graph).expect("annotations");
         let config = SniffTestConfig::default();
         let namespaces = artifact.definition_namespace_index();
-        let comments = super::CommentEffect::probe(
+        let comments = super::ObligationTracker::probe(
             &artifact,
             &graph,
             &annotations,
@@ -3611,22 +3654,29 @@ unresolved-call-target = "warn"
             &config.safety,
             crate::effects::EffectSelection::default(),
         );
-        let trace = EffectEngine::new(&graph.comment_graph()).trace(&comments);
-        let uses = comments.marker_uses(&trace);
         let panic =
             PanicEffect::probe(&artifact, &graph, &annotations, &namespaces, &config.panics)
                 .expect("panic effect");
         let safety =
             SafetyEffect::probe(&artifact, &graph, &annotations, &namespaces, &config.safety)
                 .expect("safety effect");
-        assert_eq!(comments.contract_count(super::CommentDomain::Safety), 1);
+        let tracked_panic =
+            super::TrackedEffect::new(&panic, &comments, super::ObligationDomain::Panic);
+        let tracked_safety =
+            super::TrackedEffect::new(&safety, &comments, super::ObligationDomain::Safety);
+        let obligation_graph = graph.obligation_graph();
+        let engine = EffectEngine::new(&obligation_graph);
+        let panic_trace = engine.trace(&tracked_panic);
+        let safety_trace = engine.trace(&tracked_safety);
+        let uses = tracked_safety.obligation_marker_uses(&safety_trace);
+        assert_eq!(comments.contract_count(super::ObligationDomain::Safety), 1);
         assert_eq!(uses.len(), 1, "marker uses: {uses:#?}");
         assert_eq!(
             uses[0].source_calls().collect::<Vec<_>>(),
             vec![CallId::new(0), CallId::new(1)],
         );
         assert_eq!(
-            super::comment_safety_effect_groups(
+            super::obligation_safety_effect_groups(
                 &graph,
                 &safety,
                 uses[0].source_invocation(),
@@ -3643,16 +3693,14 @@ unresolved-call-target = "warn"
                 ),
             ],
         );
-        let panic_trace = EffectEngine::new(&graph).trace(&panic);
-        let safety_trace = EffectEngine::new(&graph).trace(&safety);
         let claims = super::collect_marker_claims(
             &artifact,
             &graph,
             Some(&panic_trace),
             Some(&safety),
             Some(&safety_trace),
-            &comments,
-            &trace,
+            Some(&tracked_panic),
+            Some(&tracked_safety),
         );
         assert_eq!(
             claims.values().next().map(std::collections::BTreeMap::len),
@@ -3668,8 +3716,8 @@ unresolved-call-target = "warn"
             Some(&panic_trace),
             Some(&safety),
             Some(&safety_trace),
-            &comments,
-            &trace,
+            Some(&tracked_panic),
+            Some(&tracked_safety),
             &claims,
             root_function,
         );
@@ -4196,13 +4244,6 @@ unresolved-call-target = "warn"
         );
         let mut config = SniffTestConfig::default();
         config.analysis.marker_probing = MarkerProbing::SourceCallsite;
-        let namespaces = artifact.definition_namespace_index();
-        let panic =
-            PanicEffect::probe(&artifact, &graph, &annotations, &namespaces, &config.panics)
-                .expect("panic effect");
-        let panic_trace = EffectEngine::new(&graph).trace(&panic);
-        assert_eq!(panic_trace.handled().count(), 1);
-        assert_eq!(panic_trace.escaped().count(), 0);
 
         let reports = trace_workspace(
             &artifact,

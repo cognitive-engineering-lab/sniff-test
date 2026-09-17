@@ -11,6 +11,9 @@ use rustc_middle::ty::TyCtxt;
 use rustc_span::{DUMMY_SP, Span};
 use serde::{Deserialize, Serialize};
 
+use crate::effects::Effect;
+use crate::effects::panic::Panic;
+use crate::effects::safety::Safety;
 use crate::path_patterns::PathPatterns;
 
 /// Synthetic rustdoc markdown matched by Rust namespace glob.
@@ -72,12 +75,12 @@ impl Debug for ContractDocOverrides {
 
 fn is_panic_heading(heading: &str) -> bool {
     heading.eq_ignore_ascii_case("panic")
-        || heading.eq_ignore_ascii_case("panics")
+        || heading.eq_ignore_ascii_case(Panic::OBLIGATION)
         || heading.eq_ignore_ascii_case("panic(s)")
 }
 
 fn is_safety_heading(heading: &str) -> bool {
-    heading.eq_ignore_ascii_case("safety")
+    heading.eq_ignore_ascii_case(Safety::OBLIGATION)
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
