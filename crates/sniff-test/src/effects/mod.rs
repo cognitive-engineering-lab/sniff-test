@@ -6,20 +6,54 @@ pub(crate) mod trust;
 
 use std::fmt;
 
-use crate::artifact::{CallFact, FunctionTargetFact};
+use crate::annotations::AnnotationDomain;
+use crate::artifact::{CallFact, DefinitionNamespaceIndex, EffectFact, FunctionTargetFact};
 use clap::ValueEnum;
 use serde::{Deserialize, Serialize};
 
 use crate::compiler::effect_passes::EffectPassRegistry;
+use crate::path_patterns::PathPatterns;
+
+use self::concrete::{InvocationSourceMatch, OwnerProjection};
 
 /// Built-in effect definition. Compiler passes only discover concrete seeds;
 /// obligation and justification semantics are supplied by shared tracking.
 pub(crate) trait Effect {
+    type Config: EffectConfig;
+
     const EFFECT_NAME: &'static str;
+    const DOMAIN: AnnotationDomain;
     const OBLIGATION: &'static str;
     const JUSTIFICATION: &'static str;
 
     fn register_passes(registry: &mut EffectPassRegistry);
+
+    /// Classifies an extracted operation as a source for this effect and
+    /// selects how its artifact owner maps onto invocation-graph functions.
+    fn operation_source(effect: &EffectFact) -> Option<OwnerProjection>;
+
+    /// Classifies one extracted call as an invocation-level source.
+    fn invocation_source(
+        config: &Self::Config,
+        call: &CallFact,
+        namespaces: &DefinitionNamespaceIndex,
+    ) -> Option<InvocationSourceMatch>;
+}
+
+/// Common, read-only configuration exposed to framework-owned seed probing.
+///
+/// Concrete probe policy is derived from this view; it is not embedded in an
+/// effect's user-facing configuration.
+pub(crate) trait EffectConfig {
+    fn ignored_namespaces(&self) -> &PathPatterns;
+    fn trusted_boundary_namespaces(&self) -> &PathPatterns;
+
+    /// Namespace-classified concrete sources which compete with trusted
+    /// boundaries. A more precise source match wins, preserving the existing
+    /// panic-sink/trusted-boundary precedence rule.
+    fn source_boundary_namespaces(&self) -> Option<&PathPatterns> {
+        None
+    }
 }
 
 /// Effect domains enabled for one sniff-test invocation.

@@ -866,7 +866,8 @@ mod tests {
         SourceRangeFact, StableInstanceHash,
     };
     use crate::config::PanicConfig;
-    use crate::effects::panic::{PanicEffect, PanicTermination};
+    use crate::effects::concrete::probe_concrete_effect;
+    use crate::effects::panic::{Panic, PanicTermination};
     use crate::namespace::StableDefPathHash;
 
     use super::{CallTarget, InvocationGraph, InvocationResolution, UnresolvedCallTargetReason};
@@ -1302,7 +1303,7 @@ mod tests {
         let graph = InvocationGraph::from_artifact(&facts).expect("invocation graph");
         let annotations = AnnotationIndex::from_artifact(&facts, &graph).expect("annotation index");
         let namespaces = facts.definition_namespace_index();
-        let panic = PanicEffect::probe(
+        let panic = probe_concrete_effect::<Panic>(
             &facts,
             &graph,
             &annotations,

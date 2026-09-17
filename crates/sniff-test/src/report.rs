@@ -28,13 +28,13 @@ use crate::config::{MarkerProbing, PanicBoundaryPolicy, SniffTestConfig};
 use crate::contracts::normalize_requirement_name;
 use crate::effects::EffectSelection;
 use crate::effects::InvocationSourceBranch;
-use crate::effects::concrete::ConcreteSource;
+use crate::effects::concrete::{ConcreteSource, probe_concrete_effect};
 use crate::effects::obligation::{
     ObligationDomain, ObligationTracker, TrackedEffect, TrackedOrigin, TrackedState,
     TrackedTermination,
 };
-use crate::effects::panic::{PanicEffect, PanicState};
-use crate::effects::safety::{SafetyEffect, SafetyState};
+use crate::effects::panic::{Panic, PanicEffect, PanicState};
+use crate::effects::safety::{Safety, SafetyEffect, SafetyState};
 use crate::effects::trust::TrustPath;
 use crate::report_model::{
     DomainCompleteness, EffectCompleteness, IncompleteReason, IncompleteTraceKind,
@@ -211,12 +211,28 @@ pub(crate) fn trace_selected_workspace(
     .map_err(|error| EffectReportError::new(error.to_string()))?;
     let panic = effects
         .tracks_panic()
-        .then(|| PanicEffect::probe(artifact, &graph, &annotations, &namespaces, &config.panics))
+        .then(|| {
+            probe_concrete_effect::<Panic>(
+                artifact,
+                &graph,
+                &annotations,
+                &namespaces,
+                &config.panics,
+            )
+        })
         .transpose()
         .map_err(|error| EffectReportError::new(error.to_string()))?;
     let safety = effects
         .tracks_safety()
-        .then(|| SafetyEffect::probe(artifact, &graph, &annotations, &namespaces, &config.safety))
+        .then(|| {
+            probe_concrete_effect::<Safety>(
+                artifact,
+                &graph,
+                &annotations,
+                &namespaces,
+                &config.safety,
+            )
+        })
         .transpose()
         .map_err(|error| EffectReportError::new(error.to_string()))?;
     let obligations = ObligationTracker::probe(
@@ -2425,9 +2441,9 @@ fn interpreted_target(target: &FunctionTargetFact) -> InterpretedTarget {
 #[cfg(test)]
 mod tests {
     use super::{
-        EffectEngine, PanicEffect, SafetyEffect, annotation_probing_fact, append_call_trace,
+        EffectEngine, Panic, Safety, annotation_probing_fact, append_call_trace,
         effect_marker_evidence, invocation_source_has_contract, obligation_marker_evidence,
-        raw_call_marker_evidence, same_source_finding, trace_workspace,
+        probe_concrete_effect, raw_call_marker_evidence, same_source_finding, trace_workspace,
     };
     use crate::annotations::{AnnotationDomain, AnnotationIndex};
     use crate::artifact::{
@@ -3192,9 +3208,14 @@ unresolved-call-target = "warn"
             .expect("second invocation");
         let config = SniffTestConfig::default();
         let namespaces = artifact.definition_namespace_index();
-        let safety =
-            SafetyEffect::probe(&artifact, &graph, &annotations, &namespaces, &config.safety)
-                .expect("safety effect");
+        let safety = probe_concrete_effect::<Safety>(
+            &artifact,
+            &graph,
+            &annotations,
+            &namespaces,
+            &config.safety,
+        )
+        .expect("safety effect");
 
         assert!(invocation_source_has_contract(
             &graph,
@@ -3650,12 +3671,22 @@ unresolved-call-target = "warn"
             &config.safety,
             crate::effects::EffectSelection::default(),
         );
-        let panic =
-            PanicEffect::probe(&artifact, &graph, &annotations, &namespaces, &config.panics)
-                .expect("panic effect");
-        let safety =
-            SafetyEffect::probe(&artifact, &graph, &annotations, &namespaces, &config.safety)
-                .expect("safety effect");
+        let panic = probe_concrete_effect::<Panic>(
+            &artifact,
+            &graph,
+            &annotations,
+            &namespaces,
+            &config.panics,
+        )
+        .expect("panic effect");
+        let safety = probe_concrete_effect::<Safety>(
+            &artifact,
+            &graph,
+            &annotations,
+            &namespaces,
+            &config.safety,
+        )
+        .expect("safety effect");
         let tracked_panic =
             super::TrackedEffect::new(&panic, &comments, super::ObligationDomain::Panic);
         let tracked_safety =
@@ -4689,9 +4720,14 @@ unresolved-call-target = "warn"
         let graph = InvocationGraph::from_artifact(&artifact).expect("invocation graph");
         let namespaces = artifact.definition_namespace_index();
         let annotations = AnnotationIndex::from_artifact(&artifact, &graph).expect("annotations");
-        let panic =
-            PanicEffect::probe(&artifact, &graph, &annotations, &namespaces, &config.panics)
-                .expect("panic effect");
+        let panic = probe_concrete_effect::<Panic>(
+            &artifact,
+            &graph,
+            &annotations,
+            &namespaces,
+            &config.panics,
+        )
+        .expect("panic effect");
         let trace = EffectEngine::new(&graph).trace(&panic);
 
         assert_eq!(trace.handled().count(), 1);

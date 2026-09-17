@@ -616,6 +616,30 @@ impl SafetyConfig {
     }
 }
 
+impl crate::effects::EffectConfig for PanicConfig {
+    fn ignored_namespaces(&self) -> &PathPatterns {
+        &self.ignored_namespaces
+    }
+
+    fn trusted_boundary_namespaces(&self) -> &PathPatterns {
+        &self.trusted_boundary_namespaces
+    }
+
+    fn source_boundary_namespaces(&self) -> Option<&PathPatterns> {
+        Some(&self.panic_sink_namespaces)
+    }
+}
+
+impl crate::effects::EffectConfig for SafetyConfig {
+    fn ignored_namespaces(&self) -> &PathPatterns {
+        &self.ignored_namespaces
+    }
+
+    fn trusted_boundary_namespaces(&self) -> &PathPatterns {
+        &self.trusted_boundary_namespaces
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PanicBoundaryPolicy {
     PanicSink,

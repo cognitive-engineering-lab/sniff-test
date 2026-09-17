@@ -33,7 +33,10 @@ use rustc_middle::ty::{self, Ty, TyCtxt};
 use rustc_span::Span;
 
 use crate::artifact::SafetyOpKind;
-use crate::compiler::effect_passes::{EffectPassOutput, ThirEffectPass};
+use crate::compiler::effect_passes::{
+    EffectPassOutput, PreliminaryEffectSeed, PreliminarySafetyCallSeed, PreliminarySafetyGroup,
+    PreliminarySafetyOperationSeed, ThirEffectPass,
+};
 
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct SafetyEffectGroup {
@@ -41,66 +44,18 @@ pub(crate) struct SafetyEffectGroup {
     pub(crate) span: Span,
 }
 
-/// Policy-neutral identity for operations that share one source-level unsafe
-/// scope. The numeric identity is stable only within one collection run; the
-/// span is the source anchor for that group.
+// Legacy-shaped test fixture helpers keep low-level grouping tests concise;
+// production extraction consumes `EffectPassOutput` directly.
+#[cfg(test)]
 pub(crate) type RawSafetyEffectGroup = SafetyEffectGroup;
+#[cfg(test)]
+pub(crate) type RawSafetyOpFact = PreliminarySafetyOperationSeed;
+#[cfg(test)]
+pub(crate) type RawSafetyCallFact = PreliminarySafetyCallSeed;
+#[cfg(test)]
+pub(crate) type RawSafetyGroupFact = PreliminarySafetyGroup;
 
-/// One runtime operation that rustc requires to occur in an unsafe context.
-///
-/// `owner` is the exact THIR body owner. Operations in nested closures retain
-/// the closure's `DefId`, even though collection is seeded from local
-/// functions and associated functions. Consumers whose facts only model those
-/// outer items must explicitly attach or remap closure-owned facts.
-#[derive(Debug, Clone)]
-pub(crate) struct RawSafetyOpFact {
-    pub(crate) owner: DefId,
-    pub(crate) op: SafetyOpKind,
-    pub(crate) span: Span,
-    pub(crate) marker_anchor_spans: Vec<Span>,
-    pub(crate) effect_group: RawSafetyEffectGroup,
-}
-
-/// One THIR call site that can participate in safety interpretation.
-///
-/// The call's unsafe/obligation meaning is deliberately absent: extraction
-/// records only its source-level effect group, while the interpreter combines
-/// call metadata and the active safety policy later.
-#[derive(Debug, Clone)]
-pub(crate) struct RawSafetyCallFact {
-    pub(crate) owner: DefId,
-    /// Callee identity normalized to the declared trait item when applicable.
-    /// Desugared expressions such as `value?` can contain several calls with
-    /// one exact span, so this identity joins THIR calls to MIR reachability
-    /// edges after MIR resolves a concrete impl.
-    pub(crate) callee: Option<DefId>,
-    /// Declared trait/interface method used only as a contract fallback.
-    /// Runtime implementation identity remains on the reachability edge.
-    pub(crate) declaration_callee: Option<DefId>,
-    /// The call occurs inside a compiler-generated `BuiltinUnsafe` block.
-    /// rustc treats that unsafe context as the compiler's responsibility, so
-    /// the call must not become a user-facing safety obligation.
-    pub(crate) inside_builtin_unsafe: bool,
-    /// Artifact-local identity of this THIR source call. Compiler-generated
-    /// branches with the same owner, exact span, callee, and unsafe context
-    /// reuse this identity, as do derived reachability endpoints for an
-    /// indirect call.
-    pub(crate) call_site: usize,
-    /// Exact THIR call span, including expansion context. Source-callsite
-    /// ranges alone can collapse two macro expansions onto the same text.
-    pub(crate) span: Span,
-    pub(crate) effect_group: RawSafetyEffectGroup,
-}
-
-/// One source-level unsafe scope, including scopes with no direct THIR
-/// operation and scopes inherited lexically by a nested closure body.
-#[derive(Debug, Clone)]
-pub(crate) struct RawSafetyGroupFact {
-    pub(crate) owner: DefId,
-    pub(crate) effect_group: RawSafetyEffectGroup,
-}
-
-/// Policy-neutral safety facts collected in one THIR walk.
+#[cfg(test)]
 #[derive(Debug, Default)]
 pub(crate) struct RawSafetyFacts {
     pub(crate) groups: Vec<RawSafetyGroupFact>,
@@ -145,7 +100,7 @@ pub(crate) fn fn_def_is_unsafe(tcx: TyCtxt<'_>, def_id: DefId) -> bool {
 
 #[derive(Default)]
 pub(crate) struct SafetyThirPass {
-    sink: RawSafetyFactSink,
+    sink: PreliminarySafetySeedSink,
 }
 
 impl ThirEffectPass for SafetyThirPass {
@@ -160,7 +115,12 @@ impl ThirEffectPass for SafetyThirPass {
     }
 
     fn take_output(&mut self, output: &mut EffectPassOutput) {
-        output.safety = std::mem::take(&mut self.sink).into_facts();
+        let collected = std::mem::take(&mut self.sink).into_output();
+        output.seeds.extend(collected.seeds);
+        output
+            .auxiliary
+            .safety_groups
+            .extend(collected.auxiliary.safety_groups);
     }
 }
 
@@ -169,7 +129,7 @@ fn collect_body<'tcx>(
     owner: LocalDefId,
     thir: &Thir<'tcx>,
     root: ExprId,
-    sink: &mut RawSafetyFactSink,
+    sink: &mut PreliminarySafetySeedSink,
 ) {
     let mut safety_scopes = Vec::new();
     let mut effect_groups = Vec::new();
@@ -197,8 +157,8 @@ fn collect_body<'tcx>(
 }
 
 #[derive(Default)]
-struct RawSafetyFactSink {
-    facts: RawSafetyFacts,
+struct PreliminarySafetySeedSink {
+    output: EffectPassOutput,
     call_identities: HashSet<RawCallIdentity>,
     group_identities: HashSet<(DefId, SafetyEffectGroup)>,
     next_effect_group: usize,
@@ -215,7 +175,7 @@ struct RawCallIdentity {
     inside_builtin_unsafe: bool,
 }
 
-impl RawSafetyFactSink {
+impl PreliminarySafetySeedSink {
     fn new_effect_group(&mut self, span: Span) -> SafetyEffectGroup {
         let group = SafetyEffectGroup {
             id: self.next_effect_group,
@@ -225,27 +185,48 @@ impl RawSafetyFactSink {
         group
     }
 
+    fn into_output(self) -> EffectPassOutput {
+        self.output
+    }
+
+    #[cfg(test)]
     fn into_facts(self) -> RawSafetyFacts {
-        self.facts
+        let mut facts = RawSafetyFacts {
+            groups: self.output.auxiliary.safety_groups,
+            ..RawSafetyFacts::default()
+        };
+        for seed in self.output.seeds {
+            match seed {
+                PreliminaryEffectSeed::SafetyOperation(seed) => facts.operations.push(seed),
+                PreliminaryEffectSeed::SafetyCall(seed) => facts.calls.push(seed),
+            }
+        }
+        facts
     }
 
     fn new_safety_scope(&mut self, owner: DefId, span: Span) -> SafetyEffectGroup {
         let effect_group = self.new_effect_group(span);
         self.group_identities.insert((owner, effect_group));
-        self.facts.groups.push(RawSafetyGroupFact {
-            owner,
-            effect_group,
-        });
+        self.output
+            .auxiliary
+            .safety_groups
+            .push(PreliminarySafetyGroup {
+                owner,
+                effect_group,
+            });
         effect_group
     }
 
     fn inherit_effect_scopes(&mut self, owner: DefId, inherited: &[SafetyEffectGroup]) {
         for effect_group in inherited {
             if self.group_identities.insert((owner, *effect_group)) {
-                self.facts.groups.push(RawSafetyGroupFact {
-                    owner,
-                    effect_group: *effect_group,
-                });
+                self.output
+                    .auxiliary
+                    .safety_groups
+                    .push(PreliminarySafetyGroup {
+                        owner,
+                        effect_group: *effect_group,
+                    });
             }
         }
     }
@@ -275,15 +256,17 @@ impl RawSafetyFactSink {
             return;
         }
         let effect_group = active_group.unwrap_or_else(|| self.new_effect_group(span));
-        self.facts.calls.push(RawSafetyCallFact {
-            owner,
-            callee,
-            declaration_callee,
-            inside_builtin_unsafe,
-            call_site: self.next_call_site,
-            span,
-            effect_group,
-        });
+        self.output.seeds.push(PreliminaryEffectSeed::SafetyCall(
+            PreliminarySafetyCallSeed {
+                owner,
+                callee,
+                declaration_callee,
+                inside_builtin_unsafe,
+                call_site: self.next_call_site,
+                span,
+                effect_group,
+            },
+        ));
         self.next_call_site += 1;
     }
 
@@ -296,13 +279,17 @@ impl RawSafetyFactSink {
         active_group: Option<SafetyEffectGroup>,
     ) {
         let effect_group = active_group.unwrap_or_else(|| self.new_effect_group(span));
-        self.facts.operations.push(RawSafetyOpFact {
-            owner,
-            op,
-            span,
-            marker_anchor_spans,
-            effect_group,
-        });
+        self.output
+            .seeds
+            .push(PreliminaryEffectSeed::SafetyOperation(
+                PreliminarySafetyOperationSeed {
+                    owner,
+                    op,
+                    span,
+                    marker_anchor_spans,
+                    effect_group,
+                },
+            ));
     }
 }
 
@@ -330,7 +317,7 @@ struct UnsafeOpVisitor<'a, 'tcx> {
     /// bodies so closures inherit enclosing scopes lexically.
     safety_scopes: &'a mut Vec<SafetyScope>,
     effect_groups: &'a mut Vec<SafetyEffectGroup>,
-    sink: &'a mut RawSafetyFactSink,
+    sink: &'a mut PreliminarySafetySeedSink,
 }
 
 impl<'a, 'tcx> UnsafeOpVisitor<'a, 'tcx> {
@@ -883,7 +870,7 @@ mod tests {
     use rustc_hir::def_id::CRATE_DEF_ID;
     use rustc_span::{BytePos, Span};
 
-    use super::RawSafetyFactSink;
+    use super::PreliminarySafetySeedSink;
     use crate::artifact::SafetyOpKind;
 
     fn span(start: u32, end: u32) -> Span {
@@ -891,11 +878,11 @@ mod tests {
     }
 
     #[test]
-    fn raw_sink_records_policy_neutral_calls_and_operations() {
+    fn preliminary_sink_records_call_and_operation_candidates() {
         let owner = CRATE_DEF_ID.to_def_id();
         let scope_span = span(10, 40);
         let operation_span = span(20, 21);
-        let mut sink = RawSafetyFactSink::default();
+        let mut sink = PreliminarySafetySeedSink::default();
         let group = sink.new_safety_scope(owner, scope_span);
 
         sink.record_operation(
@@ -936,10 +923,10 @@ mod tests {
     }
 
     #[test]
-    fn raw_sink_coalesces_compiler_generated_calls_with_one_source_identity() {
+    fn preliminary_sink_coalesces_compiler_generated_calls_with_one_source_identity() {
         let owner = CRATE_DEF_ID.to_def_id();
         let generated_span = span(30, 31);
-        let mut sink = RawSafetyFactSink::default();
+        let mut sink = PreliminarySafetySeedSink::default();
 
         sink.record_call(owner, Some(owner), Some(owner), generated_span, None, false);
         sink.record_call(owner, Some(owner), Some(owner), generated_span, None, false);
@@ -950,10 +937,10 @@ mod tests {
     }
 
     #[test]
-    fn raw_sink_keeps_same_source_call_in_distinct_unsafe_scopes() {
+    fn preliminary_sink_keeps_same_source_call_in_distinct_unsafe_scopes() {
         let owner = CRATE_DEF_ID.to_def_id();
         let generated_span = span(30, 31);
-        let mut sink = RawSafetyFactSink::default();
+        let mut sink = PreliminarySafetySeedSink::default();
         let first_scope = sink.new_safety_scope(owner, span(10, 20));
         let second_scope = sink.new_safety_scope(owner, span(40, 50));
 
@@ -981,10 +968,10 @@ mod tests {
     }
 
     #[test]
-    fn raw_sink_retains_calls_inside_builtin_unsafe_blocks() {
+    fn preliminary_sink_retains_calls_inside_builtin_unsafe_blocks() {
         let owner = CRATE_DEF_ID.to_def_id();
         let generated_span = span(30, 31);
-        let mut sink = RawSafetyFactSink::default();
+        let mut sink = PreliminarySafetySeedSink::default();
 
         sink.record_call(owner, Some(owner), Some(owner), generated_span, None, true);
 
@@ -994,10 +981,10 @@ mod tests {
     }
 
     #[test]
-    fn raw_sink_retains_an_empty_unsafe_scope() {
+    fn preliminary_sink_retains_an_empty_unsafe_scope() {
         let owner = CRATE_DEF_ID.to_def_id();
         let scope_span = span(10, 40);
-        let mut sink = RawSafetyFactSink::default();
+        let mut sink = PreliminarySafetySeedSink::default();
         let group = sink.new_safety_scope(owner, scope_span);
 
         let facts = sink.into_facts();
@@ -1011,13 +998,13 @@ mod tests {
     }
 
     #[test]
-    fn raw_sink_preserves_shared_and_standalone_effect_groups() {
+    fn preliminary_sink_preserves_shared_and_standalone_effect_groups() {
         let owner = CRATE_DEF_ID.to_def_id();
         let scope_span = span(10, 40);
         let first_span = span(20, 21);
         let second_span = span(30, 31);
         let standalone_span = span(50, 51);
-        let mut sink = RawSafetyFactSink::default();
+        let mut sink = PreliminarySafetySeedSink::default();
         let shared_group = sink.new_safety_scope(owner, scope_span);
 
         for operation_span in [first_span, second_span] {

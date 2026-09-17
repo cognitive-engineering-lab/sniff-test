@@ -9,12 +9,16 @@ use effect_tracing::{
 };
 
 use crate::annotations::{AnnotationDomain, AnnotationId, AnnotationIndex, SiteCommentAnnotation};
-use crate::artifact::{CallId, EffectId, FunctionId as StableFunctionId};
+use crate::artifact::{
+    ArtifactFacts, CallId, DefinitionNamespaceIndex, EffectFact, EffectId,
+    FunctionId as StableFunctionId, FunctionTargetFact, MacroExpansionFact, same_macro_provenance,
+};
 use crate::compiler::invocations::InvocationGraph;
+use crate::path_patterns::PathPatterns;
 
-use super::InvocationSourceBranch;
 use super::obligation::ConcreteState;
 use super::trust::TrustPath;
+use super::{Effect, EffectConfig, InvocationSourceBranch, ProbeError};
 
 /// Stable location of one compiler-discovered effect source.
 ///
@@ -43,6 +47,327 @@ impl ConcreteEffectSeed {
     #[must_use]
     pub(crate) const fn new(source: ConcreteSource, owner: FunctionId) -> Self {
         Self { source, owner }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum BodyPolicy {
+    Include,
+    TrustedBoundary,
+    Ignore,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum OwnerProjection {
+    Exact,
+    GenericAliasesUnlessMaterialized,
+}
+
+pub(crate) struct InvocationSourceMatch {
+    pub(crate) target: Option<FunctionTargetFact>,
+}
+
+/// Framework-derived view of the common effect configuration.
+struct ConcreteProbePolicy<'config> {
+    ignored: &'config PathPatterns,
+    trusted: &'config PathPatterns,
+    source_boundaries: Option<&'config PathPatterns>,
+}
+
+impl<'config> ConcreteProbePolicy<'config> {
+    fn from_config(config: &'config impl EffectConfig) -> Self {
+        Self {
+            ignored: config.ignored_namespaces(),
+            trusted: config.trusted_boundary_namespaces(),
+            source_boundaries: config.source_boundary_namespaces(),
+        }
+    }
+
+    fn body_policy(&self, candidates: &[String]) -> BodyPolicy {
+        if self.ignored.best_candidates_match(candidates).is_some() {
+            return BodyPolicy::Ignore;
+        }
+        let trusted = self.trusted.best_candidates_match(candidates);
+        let source = self
+            .source_boundaries
+            .and_then(|patterns| patterns.best_candidates_match(candidates));
+        match (trusted, source) {
+            (Some(trusted), Some(source)) if trusted.precision > source.precision => {
+                BodyPolicy::TrustedBoundary
+            }
+            (Some(_), None) => BodyPolicy::TrustedBoundary,
+            _ => BodyPolicy::Include,
+        }
+    }
+
+    fn ignores_macro_path(&self, path: &str) -> bool {
+        self.ignored.best_match(path).is_some()
+    }
+}
+
+/// Resolves preliminary sources through shared function, macro, and boundary
+/// policy before constructing a domain's concrete effect tracker.
+struct ConcreteSeedCollector<'a, 'policy> {
+    graph: &'a InvocationGraph,
+    policy: ConcreteProbePolicy<'policy>,
+    seeds: Vec<ConcreteEffectSeed>,
+    trusted_functions: BTreeSet<FunctionId>,
+    ignored_functions: BTreeSet<FunctionId>,
+    macro_ignored_sources: BTreeSet<ConcreteSource>,
+    macro_ignored_invocations: BTreeSet<InvocationId>,
+    invocation_sources: BTreeMap<InvocationId, Vec<InvocationSourceBranch>>,
+}
+
+impl<'a, 'policy> ConcreteSeedCollector<'a, 'policy> {
+    fn new(graph: &'a InvocationGraph, config: &'policy impl EffectConfig) -> Self {
+        let policy = ConcreteProbePolicy::from_config(config);
+        let macro_ignored_invocations = graph
+            .invocations()
+            .filter(|invocation| {
+                invocation
+                    .macro_provenance()
+                    .iter()
+                    .any(|frame| policy.ignores_macro_path(&frame.display_path))
+            })
+            .map(crate::compiler::invocations::Invocation::id)
+            .collect();
+        Self {
+            graph,
+            policy,
+            seeds: Vec::new(),
+            trusted_functions: BTreeSet::new(),
+            ignored_functions: BTreeSet::new(),
+            macro_ignored_sources: BTreeSet::new(),
+            macro_ignored_invocations,
+            invocation_sources: BTreeMap::new(),
+        }
+    }
+
+    fn filter_owner(
+        &mut self,
+        function: StableFunctionId,
+        candidates: &[String],
+        domain_name: &str,
+    ) -> Result<Option<FunctionId>, ProbeError> {
+        let body_policy = self.policy.body_policy(candidates);
+        if body_policy == BodyPolicy::Ignore {
+            self.ignored_functions
+                .extend(self.graph.function_aliases(function));
+            return Ok(None);
+        }
+        let owner = self.graph.function(function).ok_or_else(|| {
+            ProbeError::new(format!(
+                "{domain_name} source owner {function:?} is missing from the invocation graph"
+            ))
+        })?;
+        if body_policy == BodyPolicy::TrustedBoundary {
+            self.trusted_functions
+                .extend(self.graph.function_aliases(function));
+        }
+        Ok(Some(owner))
+    }
+
+    fn push_effect(
+        &mut self,
+        function: StableFunctionId,
+        effect: EffectId,
+        owner: FunctionId,
+        macro_expansions: &[MacroExpansionFact],
+    ) {
+        let source = ConcreteSource::Effect {
+            owner: function,
+            effect,
+        };
+        self.push_source(source, owner, macro_expansions);
+    }
+
+    fn push_invocation(&mut self, invocation: InvocationId, branch: InvocationSourceBranch) {
+        let source = ConcreteSource::Invocation {
+            invocation,
+            call: branch.edge().id,
+        };
+        self.push_source(
+            source,
+            self.graph.invocation(invocation).caller(),
+            &branch.edge().macro_expansions,
+        );
+        self.invocation_sources
+            .entry(invocation)
+            .or_default()
+            .push(branch);
+    }
+
+    fn push_source(
+        &mut self,
+        source: ConcreteSource,
+        owner: FunctionId,
+        macro_expansions: &[MacroExpansionFact],
+    ) {
+        if macro_expansions
+            .iter()
+            .any(|frame| self.policy.ignores_macro_path(&frame.display_path))
+        {
+            self.macro_ignored_sources.insert(source);
+        }
+        self.seeds.push(ConcreteEffectSeed::new(source, owner));
+    }
+
+    fn finish<D>(
+        self,
+        annotations: &'a AnnotationIndex,
+        domain: AnnotationDomain,
+    ) -> ConcreteEffect<'a, D> {
+        ConcreteEffect::new(
+            annotations,
+            self.graph,
+            domain,
+            self.seeds,
+            self.trusted_functions,
+            self.ignored_functions,
+            self.macro_ignored_sources,
+            self.macro_ignored_invocations,
+            self.invocation_sources,
+        )
+    }
+}
+
+/// Discovers concrete sources for any effect using one framework-owned walk.
+pub(crate) fn probe_concrete_effect<'annotations, E: Effect>(
+    artifact: &ArtifactFacts,
+    graph: &'annotations InvocationGraph,
+    annotations: &'annotations AnnotationIndex,
+    namespaces: &DefinitionNamespaceIndex,
+    config: &E::Config,
+) -> Result<ConcreteEffect<'annotations, E>, ProbeError> {
+    let mut seeds = ConcreteSeedCollector::new(graph, config);
+    for body in &artifact.functions {
+        let Some(owner) = seeds.filter_owner(
+            body.function,
+            namespaces.candidates(body.function),
+            E::EFFECT_NAME,
+        )?
+        else {
+            continue;
+        };
+
+        for effect in &body.effects {
+            let Some(projection) = E::operation_source(effect) else {
+                continue;
+            };
+            for projected_owner in
+                projected_owners(projection, artifact, graph, body.function, owner, effect)
+            {
+                seeds.push_effect(
+                    body.function,
+                    effect.id,
+                    projected_owner,
+                    &effect.macro_expansions,
+                );
+            }
+        }
+
+        for call in &body.calls {
+            let Some(source) = E::invocation_source(config, call, namespaces) else {
+                continue;
+            };
+            if let Some(invocation) = graph.invocation_for_raw_call(body.function, call.id) {
+                seeds.push_invocation(
+                    invocation,
+                    InvocationSourceBranch::new(call.clone(), source.target),
+                );
+            }
+        }
+    }
+    Ok(seeds.finish(annotations, E::DOMAIN))
+}
+
+fn projected_owners(
+    projection: OwnerProjection,
+    artifact: &ArtifactFacts,
+    graph: &InvocationGraph,
+    function: StableFunctionId,
+    owner: FunctionId,
+    effect: &EffectFact,
+) -> Vec<FunctionId> {
+    if projection == OwnerProjection::Exact || function.instance_hash.is_some() {
+        return vec![owner];
+    }
+    graph
+        .function_aliases(function)
+        .filter(|alias| {
+            *alias == owner
+                || !artifact
+                    .function_body(graph.stable_function(*alias))
+                    .is_some_and(|candidate| {
+                        candidate
+                            .effects
+                            .iter()
+                            .any(|candidate| same_materialized_effect(candidate, effect))
+                    })
+        })
+        .collect()
+}
+
+fn same_materialized_effect(left: &EffectFact, right: &EffectFact) -> bool {
+    left.kind == right.kind
+        && left.safety_effect_group == right.safety_effect_group
+        && left.source_range == right.source_range
+        && left.expanded_range == right.expanded_range
+        && same_macro_provenance(&left.macro_expansions, &right.macro_expansions)
+}
+
+#[cfg(test)]
+mod probe_policy_tests {
+    use crate::config::{PanicConfig, SafetyConfig};
+    use crate::path_patterns::PathPatterns;
+
+    use super::{BodyPolicy, ConcreteProbePolicy};
+
+    fn patterns(values: &[&str]) -> PathPatterns {
+        PathPatterns::new(values.iter().map(|value| (*value).to_owned()).collect())
+            .expect("test paths should be valid")
+    }
+
+    #[test]
+    fn common_body_policy_is_derived_from_effect_config() {
+        let safety = SafetyConfig {
+            ignored_namespaces: patterns(&["ignored::**"]),
+            trusted_boundary_namespaces: patterns(&["trusted::**"]),
+            ..SafetyConfig::default()
+        };
+        let policy = ConcreteProbePolicy::from_config(&safety);
+
+        assert_eq!(
+            policy.body_policy(&[String::from("ordinary::function")]),
+            BodyPolicy::Include
+        );
+        assert_eq!(
+            policy.body_policy(&[String::from("trusted::function")]),
+            BodyPolicy::TrustedBoundary
+        );
+        assert_eq!(
+            policy.body_policy(&[String::from("ignored::function")]),
+            BodyPolicy::Ignore
+        );
+    }
+
+    #[test]
+    fn source_boundary_precision_is_resolved_by_the_framework() {
+        let mut panic = PanicConfig::default();
+        panic.trusted_boundary_namespaces = patterns(&["runtime::**", "runtime::trusted"]);
+        panic.panic_sink_namespaces = patterns(&["runtime::**"]);
+        let policy = ConcreteProbePolicy::from_config(&panic);
+
+        assert_eq!(
+            policy.body_policy(&[String::from("runtime::panic")]),
+            BodyPolicy::Include,
+            "equal-precision source rules win over trust"
+        );
+        assert_eq!(
+            policy.body_policy(&[String::from("runtime::trusted")]),
+            BodyPolicy::TrustedBoundary,
+            "a more precise trusted rule wins"
+        );
     }
 }
 

@@ -15,10 +15,10 @@ use crate::config::{EffectDocMatching, MarkerProbing, SniffTestConfig};
 use crate::contracts::ContractDocOverrides;
 use crate::namespace::StableDefPathHash;
 
-use super::concrete::ConcreteSource;
+use super::concrete::{ConcreteSource, probe_concrete_effect};
 use super::obligation::{ObligationDomain, ObligationTermination, ObligationTracker};
-use super::panic::{PanicEffect, PanicTermination};
-use super::safety::{SafetyEffect, SafetyTermination};
+use super::panic::{Panic, PanicEffect, PanicTermination};
+use super::safety::{Safety, SafetyEffect, SafetyTermination};
 
 fn stable_function(index: u64) -> StableFunctionId {
     let value = format!("{index:016x}{:016x}", index + 100);
@@ -485,7 +485,8 @@ fn probe_panic<'a>(
     config: &crate::config::PanicConfig,
 ) -> PanicEffect<'a> {
     let namespaces = artifact.definition_namespace_index();
-    PanicEffect::probe(artifact, graph, annotations, &namespaces, config).expect("panic effect")
+    probe_concrete_effect::<Panic>(artifact, graph, annotations, &namespaces, config)
+        .expect("panic effect")
 }
 
 fn probe_safety<'a>(
@@ -495,7 +496,8 @@ fn probe_safety<'a>(
     config: &crate::config::SafetyConfig,
 ) -> SafetyEffect<'a> {
     let namespaces = artifact.definition_namespace_index();
-    SafetyEffect::probe(artifact, graph, annotations, &namespaces, config).expect("safety effect")
+    probe_concrete_effect::<Safety>(artifact, graph, annotations, &namespaces, config)
+        .expect("safety effect")
 }
 
 #[test]
