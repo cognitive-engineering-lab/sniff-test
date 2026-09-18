@@ -157,21 +157,21 @@ impl EffectPassRegistry {
     )]
     pub(crate) fn register_hir_pass<E: Effect>(&mut self, pass: Box<dyn HirEffectPass>) {
         self.hir_passes.push(RegisteredHirPass {
-            effect: EffectKey::new(E::EFFECT_KEY),
+            effect: EffectKey::new(E::EFFECT_NAME),
             pass,
         });
     }
 
     pub(crate) fn register_thir_pass<E: Effect>(&mut self, pass: Box<dyn ThirEffectPass>) {
         self.thir_passes.push(RegisteredThirPass {
-            effect: EffectKey::new(E::EFFECT_KEY),
+            effect: EffectKey::new(E::EFFECT_NAME),
             pass,
         });
     }
 
     pub(crate) fn register_mir_pass<E: Effect>(&mut self, pass: Box<dyn MirEffectPass>) {
         self.mir_passes.push(RegisteredMirPass {
-            effect: EffectKey::new(E::EFFECT_KEY),
+            effect: EffectKey::new(E::EFFECT_NAME),
             pass,
         });
     }

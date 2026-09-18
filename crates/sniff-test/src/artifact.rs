@@ -448,12 +448,18 @@ impl FunctionFact {
                 .effects
                 .iter()
                 .find(|effect| effect.id == id)
-                .is_some_and(|effect| effect.effect.as_str() == EffectKey::PANIC),
+                .is_some_and(|effect| {
+                    effect.effect.as_str()
+                        == <crate::effects::panic::Panic as crate::effects::Effect>::EFFECT_NAME
+                }),
             (AnnotationFactKind::SafetyJustification, AnnotationTargetFact::Effect(id)) => self
                 .effects
                 .iter()
                 .find(|effect| effect.id == id)
-                .is_some_and(|effect| effect.effect.as_str() == EffectKey::SAFETY),
+                .is_some_and(|effect| {
+                    effect.effect.as_str()
+                        == <crate::effects::safety::Safety as crate::effects::Effect>::EFFECT_NAME
+                }),
             (
                 AnnotationFactKind::PanicContract
                 | AnnotationFactKind::SafetyContract
@@ -762,15 +768,12 @@ pub(crate) struct EffectFact {
     pub(crate) kind: EffectKind,
 }
 
-/// Stable identity of one effect domain across compiler processes and crates.
+/// Owned effect name persisted across compiler processes and crates.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(transparent)]
 pub(crate) struct EffectKey(String);
 
 impl EffectKey {
-    pub(crate) const PANIC: &'static str = "sniff-test/panic";
-    pub(crate) const SAFETY: &'static str = "sniff-test/safety";
-
     #[must_use]
     pub(crate) fn new(value: impl Into<String>) -> Self {
         Self(value.into())
@@ -1148,7 +1151,7 @@ fn validate_body(
 
     validate_sorted_unique(&body.effects, |effect| effect.id, "effect ID")?;
     for effect in &body.effects {
-        require_nonempty(effect.effect.as_str(), "effect key")?;
+        require_nonempty(effect.effect.as_str(), "effect name")?;
         require_nonempty(effect.kind.as_str(), "effect kind")?;
         validate_optional_range(effect.source_range.as_ref(), source_lengths)?;
         validate_optional_range(effect.expanded_range.as_ref(), source_lengths)?;
@@ -1762,7 +1765,7 @@ mod tests {
     fn compiler_assert_effect(id: u32) -> EffectFact {
         EffectFact {
             id: EffectId::new(id),
-            effect: EffectKey::new(EffectKey::PANIC),
+            effect: EffectKey::new("panic"),
             effect_group: None,
             source_range: None,
             expanded_range: None,
@@ -1811,7 +1814,7 @@ mod tests {
     fn unsafe_effect(id: u32, group: u32, source_range: SourceRangeFact) -> EffectFact {
         EffectFact {
             id: EffectId::new(id),
-            effect: EffectKey::new(EffectKey::SAFETY),
+            effect: EffectKey::new("safety"),
             effect_group: Some(SafetyEffectGroupId::new(group)),
             source_range: Some(source_range.clone()),
             expanded_range: Some(source_range),
@@ -2463,7 +2466,7 @@ mod tests {
             effects: vec![
                 EffectFact {
                     id: EffectId::new(9),
-                    effect: EffectKey::new(EffectKey::SAFETY),
+                    effect: EffectKey::new("safety"),
                     effect_group: Some(SafetyEffectGroupId::new(6)),
                     source_range: Some(range(110, 115)),
                     expanded_range: Some(range(120, 130)),
@@ -2476,7 +2479,7 @@ mod tests {
                 },
                 EffectFact {
                     id: EffectId::new(2),
-                    effect: EffectKey::new(EffectKey::PANIC),
+                    effect: EffectKey::new("panic"),
                     effect_group: None,
                     source_range: Some(range(108, 118)),
                     expanded_range: Some(range(108, 118)),

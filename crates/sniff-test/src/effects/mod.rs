@@ -22,7 +22,6 @@ use self::visit::EffectPassRegistry;
 pub(crate) trait Effect {
     type Config: EffectConfig;
 
-    const EFFECT_KEY: &'static str;
     const EFFECT_NAME: &'static str;
     const DOMAIN: AnnotationDomain;
     const OBLIGATION: &'static str;

@@ -17,7 +17,7 @@ use effect_tracing::{
 use crate::annotations::{AnnotationDomain, AnnotationId, AnnotationIndex};
 use crate::artifact::{
     AnnotationFactKind, AnnotationProbingFact, AnnotationTargetFact, ArtifactFacts, CallTargetFact,
-    CompilerAssertKind, DefinitionNamespaceIndex, EffectFact, EffectId, EffectKey, FunctionFact,
+    CompilerAssertKind, DefinitionNamespaceIndex, EffectFact, EffectId, FunctionFact,
     FunctionId as StableFunctionId, FunctionTargetFact, MarkerEvidenceState, SafetyOpKind,
     UnverifiedMarkerProbeReason,
 };
@@ -1316,7 +1316,7 @@ fn panic_findings(
             match origin {
                 ConcreteSource::Effect { owner, effect } => {
                     let (body, fact) = effect_fact(artifact, owner, effect)?;
-                    if fact.effect.as_str() != EffectKey::PANIC {
+                    if fact.effect.as_str() != <Panic as crate::effects::Effect>::EFFECT_NAME {
                         return None;
                     }
                     let kind = CompilerAssertKind::from_effect_kind(&fact.kind)?;
@@ -1403,7 +1403,7 @@ fn safety_findings(
             match origin {
                 ConcreteSource::Effect { owner, effect } => {
                     let (body, fact) = effect_fact(artifact, owner, effect)?;
-                    if fact.effect.as_str() != EffectKey::SAFETY {
+                    if fact.effect.as_str() != <Safety as crate::effects::Effect>::EFFECT_NAME {
                         return None;
                     }
                     let kind = SafetyOpKind::from_effect_kind(&fact.kind)?;
@@ -2711,7 +2711,7 @@ unresolved-call-target = "warn"
     fn unsafe_operation_with_provenance(id: u32, group: u32, macro_index: u64) -> EffectFact {
         EffectFact {
             id: EffectId::new(id),
-            effect: EffectKey::new(EffectKey::SAFETY),
+            effect: EffectKey::new("safety"),
             effect_group: Some(SafetyEffectGroupId::new(group)),
             source_range: None,
             expanded_range: None,
@@ -2873,7 +2873,7 @@ unresolved-call-target = "warn"
                     vec![
                         EffectFact {
                             id: EffectId::new(0),
-                            effect: EffectKey::new(EffectKey::PANIC),
+                            effect: EffectKey::new("panic"),
                             effect_group: None,
                             source_range: None,
                             expanded_range: None,
@@ -2884,7 +2884,7 @@ unresolved-call-target = "warn"
                         },
                         EffectFact {
                             id: EffectId::new(1),
-                            effect: EffectKey::new(EffectKey::SAFETY),
+                            effect: EffectKey::new("safety"),
                             effect_group: Some(SafetyEffectGroupId::new(1)),
                             source_range: None,
                             expanded_range: None,
@@ -3405,7 +3405,7 @@ unresolved-call-target = "warn"
         sink_call.call_site = CallSiteId::new(0);
         let compiler_assert = EffectFact {
             id: EffectId::new(0),
-            effect: EffectKey::new(EffectKey::PANIC),
+            effect: EffectKey::new("panic"),
             effect_group: None,
             source_range: None,
             expanded_range: None,
@@ -4206,7 +4206,7 @@ unresolved-call-target = "warn"
             Vec::new(),
             vec![EffectFact {
                 id: EffectId::new(0),
-                effect: EffectKey::new(EffectKey::PANIC),
+                effect: EffectKey::new("panic"),
                 effect_group: None,
                 source_range: None,
                 expanded_range: None,
@@ -4683,7 +4683,7 @@ unresolved-call-target = "warn"
         let helper_call = ignored_macro_call(helper_root, stable_function(102));
         let compiler_assert = EffectFact {
             id: EffectId::new(0),
-            effect: EffectKey::new(EffectKey::PANIC),
+            effect: EffectKey::new("panic"),
             effect_group: None,
             source_range: None,
             expanded_range: None,
@@ -4769,7 +4769,7 @@ unresolved-call-target = "warn"
         let helper_call = ignored_macro_call(helper_root, stable_function(112));
         let compiler_assert = |id| EffectFact {
             id: EffectId::new(id),
-            effect: EffectKey::new(EffectKey::PANIC),
+            effect: EffectKey::new("panic"),
             effect_group: None,
             source_range: None,
             expanded_range: None,

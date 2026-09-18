@@ -1287,7 +1287,7 @@ mod tests {
         let mut panicking_body = body(panicking, Vec::new());
         panicking_body.effects.push(EffectFact {
             id: EffectId::new(0),
-            effect: EffectKey::new(EffectKey::PANIC),
+            effect: EffectKey::new("panic"),
             effect_group: None,
             source_range: None,
             expanded_range: None,

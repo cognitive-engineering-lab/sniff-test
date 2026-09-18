@@ -214,7 +214,7 @@ fn body(
 fn assert_effect(id: u32) -> EffectFact {
     EffectFact {
         id: EffectId::new(id),
-        effect: EffectKey::new(EffectKey::PANIC),
+        effect: EffectKey::new("panic"),
         effect_group: None,
         source_range: None,
         expanded_range: None,
@@ -236,7 +236,7 @@ fn assert_effect_from_macro(id: u32, macro_path: &str) -> EffectFact {
 fn unsafe_effect(id: u32) -> EffectFact {
     EffectFact {
         id: EffectId::new(id),
-        effect: EffectKey::new(EffectKey::SAFETY),
+        effect: EffectKey::new("safety"),
         effect_group: Some(SafetyEffectGroupId::new(id)),
         source_range: None,
         expanded_range: None,

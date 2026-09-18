@@ -1,5 +1,5 @@
 use crate::annotations::AnnotationDomain;
-use crate::artifact::{CallFact, DefinitionNamespaceIndex, EffectKey, FunctionTargetFact};
+use crate::artifact::{CallFact, DefinitionNamespaceIndex, FunctionTargetFact};
 use crate::config::{PanicBoundaryPolicy, PanicConfig};
 
 use self::visit::CompilerAssertPass;
@@ -15,7 +15,6 @@ pub(crate) struct Panic;
 impl super::Effect for Panic {
     type Config = PanicConfig;
 
-    const EFFECT_KEY: &'static str = EffectKey::PANIC;
     const EFFECT_NAME: &'static str = "panic";
     const DOMAIN: AnnotationDomain = AnnotationDomain::Panic;
     const OBLIGATION: &'static str = "Panics";

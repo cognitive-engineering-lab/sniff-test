@@ -1,5 +1,5 @@
 use crate::annotations::AnnotationDomain;
-use crate::artifact::{CallFact, DefinitionNamespaceIndex, EffectKey};
+use crate::artifact::{CallFact, DefinitionNamespaceIndex};
 use crate::config::SafetyConfig;
 
 use self::visit::SafetyThirPass;
@@ -15,7 +15,6 @@ pub(crate) struct Safety;
 impl super::Effect for Safety {
     type Config = SafetyConfig;
 
-    const EFFECT_KEY: &'static str = EffectKey::SAFETY;
     const EFFECT_NAME: &'static str = "safety";
     const DOMAIN: AnnotationDomain = AnnotationDomain::Safety;
     const OBLIGATION: &'static str = "Safety";

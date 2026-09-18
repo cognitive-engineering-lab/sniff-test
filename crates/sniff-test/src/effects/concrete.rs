@@ -245,7 +245,7 @@ pub(crate) fn probe_concrete_effect<'annotations, E: Effect>(
         };
 
         for effect in &body.effects {
-            if effect.effect.as_str() != E::EFFECT_KEY {
+            if effect.effect.as_str() != E::EFFECT_NAME {
                 continue;
             }
             for projected_owner in projected_owners(artifact, graph, body.function, owner, effect) {

@@ -629,7 +629,7 @@ fn collect_edge_markers(
 ) -> Result<(), ExtractError> {
     for (probing, applicable_probing) in probing_modes() {
         let (panic_target, panic_requirements) = if let Some((effect_key, effect)) = detected_effect
-            && effect.as_str() == EffectKey::PANIC
+            && effect.as_str() == <Panic as crate::effects::Effect>::EFFECT_NAME
         {
             (
                 PendingMarkerTarget::Effect(effect_key.to_owned()),
@@ -655,7 +655,9 @@ fn collect_edge_markers(
         }
         if effects.tracks_safety() {
             let safety_target = detected_effect
-                .filter(|(_, effect)| effect.as_str() == EffectKey::SAFETY)
+                .filter(|(_, effect)| {
+                    effect.as_str() == <Safety as crate::effects::Effect>::EFFECT_NAME
+                })
                 .map_or_else(
                     || PendingMarkerTarget::Call(call_key.to_owned()),
                     |(effect_key, _)| PendingMarkerTarget::Effect(effect_key.to_owned()),
@@ -1266,7 +1268,7 @@ impl SafetySeedInput for RegisteredEffectPassOutput {
     fn safety_operations(&self) -> impl Iterator<Item = &PreliminaryEffectSeed> {
         self.seeds
             .iter()
-            .filter(|seed| seed.effect.as_str() == EffectKey::SAFETY)
+            .filter(|seed| seed.effect.as_str() == <Safety as crate::effects::Effect>::EFFECT_NAME)
             .map(|seed| &seed.seed)
     }
 }
@@ -1657,7 +1659,7 @@ fn attach_preliminary_operations(
                 },
             });
 
-            if registered.effect.as_str() != EffectKey::SAFETY {
+            if registered.effect.as_str() != <Safety as crate::effects::Effect>::EFFECT_NAME {
                 continue;
             }
             for (probing, applicable_probing) in probing_modes() {
