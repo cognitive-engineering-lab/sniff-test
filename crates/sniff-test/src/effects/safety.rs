@@ -5,7 +5,6 @@ use crate::config::SafetyConfig;
 
 use super::concrete::{
     ConcreteEffect, ConcreteEffectState, ConcreteTermination, InvocationSourceMatch,
-    OwnerProjection,
 };
 
 pub(crate) struct Safety;
@@ -22,9 +21,8 @@ impl super::Effect for Safety {
         registry.register_thir_pass(Box::new(SafetyThirPass::default()));
     }
 
-    fn operation_source(effect: &EffectFact) -> Option<OwnerProjection> {
+    fn is_operation_source(effect: &EffectFact) -> bool {
         matches!(effect.kind, EffectFactKind::UnsafeOperation { .. })
-            .then_some(OwnerProjection::GenericAliasesUnlessMaterialized)
     }
 
     fn invocation_source(

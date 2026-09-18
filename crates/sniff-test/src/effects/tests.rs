@@ -288,14 +288,14 @@ fn exact_body_effects_are_seeded_only_in_their_own_instance() {
 }
 
 #[test]
-fn generic_safety_operations_project_to_exact_consumer_bodies() {
+fn generic_operations_project_to_exact_consumer_bodies_in_every_domain() {
     let generic = stable_function(0);
     let exact = exact_function(generic, 1);
     let generic_body = body(
         generic,
         "sample::generic",
         Vec::new(),
-        vec![unsafe_effect(0)],
+        vec![assert_effect(0), unsafe_effect(1)],
         Vec::new(),
     );
     let mut consumer_body = body(
@@ -310,13 +310,11 @@ fn generic_safety_operations_project_to_exact_consumer_bodies() {
     };
     let (artifact, graph, annotations) = setup(vec![generic_body, consumer_body]);
 
-    let safety = probe_safety(
-        &artifact,
-        &graph,
-        &annotations,
-        &crate::config::SafetyConfig::default(),
-    );
+    let config = SniffTestConfig::default();
+    let panic = probe_panic(&artifact, &graph, &annotations, &config.panics);
+    let safety = probe_safety(&artifact, &graph, &annotations, &config.safety);
 
+    assert_eq!(panic.source_count(), 2);
     assert_eq!(safety.source_count(), 2);
 }
 

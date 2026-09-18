@@ -7,7 +7,6 @@ use crate::config::{PanicBoundaryPolicy, PanicConfig};
 
 use super::concrete::{
     ConcreteEffect, ConcreteEffectState, ConcreteTermination, InvocationSourceMatch,
-    OwnerProjection,
 };
 
 pub(crate) struct Panic;
@@ -24,9 +23,8 @@ impl super::Effect for Panic {
         registry.register_mir_pass(Box::new(CompilerAssertPass));
     }
 
-    fn operation_source(effect: &EffectFact) -> Option<OwnerProjection> {
+    fn is_operation_source(effect: &EffectFact) -> bool {
         matches!(effect.kind, EffectFactKind::CompilerAssert { .. })
-            .then_some(OwnerProjection::Exact)
     }
 
     fn invocation_source(

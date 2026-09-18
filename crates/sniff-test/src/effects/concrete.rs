@@ -57,12 +57,6 @@ pub(crate) enum BodyPolicy {
     Ignore,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum OwnerProjection {
-    Exact,
-    GenericAliasesUnlessMaterialized,
-}
-
 pub(crate) struct InvocationSourceMatch {
     pub(crate) target: Option<FunctionTargetFact>,
 }
@@ -251,12 +245,10 @@ pub(crate) fn probe_concrete_effect<'annotations, E: Effect>(
         };
 
         for effect in &body.effects {
-            let Some(projection) = E::operation_source(effect) else {
+            if !E::is_operation_source(effect) {
                 continue;
-            };
-            for projected_owner in
-                projected_owners(projection, artifact, graph, body.function, owner, effect)
-            {
+            }
+            for projected_owner in projected_owners(artifact, graph, body.function, owner, effect) {
                 seeds.push_effect(
                     body.function,
                     effect.id,
@@ -282,14 +274,13 @@ pub(crate) fn probe_concrete_effect<'annotations, E: Effect>(
 }
 
 fn projected_owners(
-    projection: OwnerProjection,
     artifact: &ArtifactFacts,
     graph: &InvocationGraph,
     function: StableFunctionId,
     owner: FunctionId,
     effect: &EffectFact,
 ) -> Vec<FunctionId> {
-    if projection == OwnerProjection::Exact || function.instance_hash.is_some() {
+    if function.instance_hash.is_some() {
         return vec![owner];
     }
     graph

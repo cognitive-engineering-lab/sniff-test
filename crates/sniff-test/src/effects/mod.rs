@@ -14,7 +14,7 @@ use serde::{Deserialize, Serialize};
 use crate::compiler::effect_passes::EffectPassRegistry;
 use crate::path_patterns::PathPatterns;
 
-use self::concrete::{InvocationSourceMatch, OwnerProjection};
+use self::concrete::InvocationSourceMatch;
 
 /// Built-in effect definition. Compiler passes only discover concrete seeds;
 /// obligation and justification semantics are supplied by shared tracking.
@@ -28,9 +28,8 @@ pub(crate) trait Effect {
 
     fn register_passes(registry: &mut EffectPassRegistry);
 
-    /// Classifies an extracted operation as a source for this effect and
-    /// selects how its artifact owner maps onto invocation-graph functions.
-    fn operation_source(effect: &EffectFact) -> Option<OwnerProjection>;
+    /// Returns whether an extracted operation is a source for this effect.
+    fn is_operation_source(effect: &EffectFact) -> bool;
 
     /// Classifies one extracted call as an invocation-level source.
     fn invocation_source(
