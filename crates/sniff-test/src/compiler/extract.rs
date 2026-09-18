@@ -22,31 +22,28 @@ use rustc_span::{Pos, Span, StableSourceFileId};
 
 use super::source::{source_filename, stable_source_file_id};
 use crate::artifact::{
-    AnnotationFact, AnnotationFactKind, AnnotationProbingFact, AnnotationSatisfactionFact,
-    AnnotationTargetFact, ArtifactFacts, CallFact, CallId, CallKindFact, CallSiteId,
-    CallTargetFact, ContractFact, ContractRequirementFact, EffectFact, EffectId, EffectKey,
-    EffectKind, FunctionAttributesFact, FunctionContractsFact, FunctionFact,
-    FunctionFactProvenance, FunctionId, FunctionTargetFact, IndirectCallKindFact,
-    MacroExpansionFact, MarkerId, OpaqueTargetFact, SafetyEffectGroupId, SourceFileFact,
-    SourceFileId, SourceRangeFact, StableDefPathHash, StableInstanceHash,
+    AnnotationFact, AnnotationFactKind, AnnotationProbingFact, AnnotationRole,
+    AnnotationSatisfactionFact, AnnotationTargetFact, ArtifactFacts, CallFact, CallId,
+    CallKindFact, CallSiteId, CallTargetFact, ContractFact, ContractRequirementFact,
+    EffectContractFact, EffectFact, EffectId, EffectKey, EffectKind, FunctionAttributesFact,
+    FunctionContractsFact, FunctionFact, FunctionFactProvenance, FunctionId, FunctionTargetFact,
+    IndirectCallKindFact, MacroExpansionFact, MarkerId, OpaqueTargetFact, SafetyEffectGroupId,
+    SourceFileFact, SourceFileId, SourceRangeFact, StableDefPathHash, StableInstanceHash,
     UnverifiedMarkerProbeFact, UnverifiedMarkerProbeReason, same_macro_provenance,
 };
 use crate::config::MarkerProbing;
-use crate::contracts::{
-    ContractDocSummary, panic_contract_doc_summary_from_attrs,
-    safety_contract_doc_summary_from_attrs,
-};
-use crate::effects::EffectSelection;
+use crate::contracts::{ContractDocSummary, contract_doc_summary_from_attrs};
 use crate::effects::panic::Panic;
 use crate::effects::safety::Safety;
 use crate::effects::safety::visit::{call_identity_def_id, fn_def_is_unsafe};
 use crate::effects::visit::{
     EffectPassRegistry, PreliminaryEffectSeed, RegisteredEffectPassOutput, RegisteredEffectSeed,
 };
+use crate::effects::{Effect, EffectSelection, selected_effects};
 use crate::namespace::{canonical_namespace, namespace_candidates};
 use crate::source_markers::{
-    EffectMarkerBlock, MarkerProbe, panic_effect_edge_marker_block, probe_marker_candidates,
-    safety_effect_edge_marker_block, safety_span_marker_block,
+    EffectMarkerBlock, MarkerProbe, effect_edge_marker_block, effect_site_marker_block,
+    probe_marker_candidates,
 };
 
 /// Failure to produce complete, structurally valid artifact facts for a required body.
@@ -627,50 +624,49 @@ fn collect_edge_markers(
     call_target: &CallTargetFact,
     effects: EffectSelection,
 ) -> Result<(), ExtractError> {
+    let registered = selected_effects(effects);
+    let competing = registered
+        .iter()
+        .map(|effect| effect.justification)
+        .collect::<Vec<_>>();
     for (probing, applicable_probing) in probing_modes() {
-        let (panic_target, panic_requirements) = if let Some((effect_key, effect)) = detected_effect
-            && effect.as_str() == <Panic as crate::effects::Effect>::EFFECT_NAME
-        {
-            (
-                PendingMarkerTarget::Effect(effect_key.to_owned()),
-                Vec::new(),
-            )
-        } else {
-            (
-                PendingMarkerTarget::Call(call_key.to_owned()),
-                panic_requirements(declaration_target, call_target),
-            )
-        };
-        if effects.tracks_panic() {
-            record_effect_marker_probe(
-                tcx,
-                sources,
-                body,
-                AnnotationFactKind::PanicJustification,
-                panic_target,
-                panic_effect_edge_marker_block(tcx, graph, edge, probing),
-                applicable_probing,
-                panic_requirements,
-            )?;
-        }
-        if effects.tracks_safety() {
-            let safety_target = detected_effect
-                .filter(|(_, effect)| {
-                    effect.as_str() == <Safety as crate::effects::Effect>::EFFECT_NAME
-                })
+        for effect in &registered {
+            let (target, requirements) = detected_effect
+                .filter(|(_, detected)| *detected == &effect.key)
                 .map_or_else(
-                    || PendingMarkerTarget::Call(call_key.to_owned()),
-                    |(effect_key, _)| PendingMarkerTarget::Effect(effect_key.to_owned()),
+                    || {
+                        (
+                            PendingMarkerTarget::Call(call_key.to_owned()),
+                            effect_requirements(declaration_target, call_target, &effect.key),
+                        )
+                    },
+                    |(effect_key, _)| {
+                        (
+                            PendingMarkerTarget::Effect(effect_key.to_owned()),
+                            Vec::new(),
+                        )
+                    },
                 );
+            let fallback_scope = (effect.key.as_str() == Safety::EFFECT_NAME)
+                .then_some(safety_scope_span)
+                .flatten();
             record_effect_marker_probe(
                 tcx,
                 sources,
                 body,
-                AnnotationFactKind::SafetyJustification,
-                safety_target,
-                safety_effect_edge_marker_block(tcx, graph, edge, safety_scope_span, probing),
+                AnnotationFactKind::new(effect.key.clone(), AnnotationRole::Justification),
+                target,
+                effect_edge_marker_block(
+                    tcx,
+                    graph,
+                    edge,
+                    fallback_scope,
+                    effect.justification,
+                    &competing,
+                    probing,
+                ),
                 applicable_probing,
-                safety_requirements(declaration_target, call_target),
+                requirements,
             )?;
         }
     }
@@ -1078,32 +1074,21 @@ fn function_contracts(
     if !matches!(tcx.def_kind(def_id), DefKind::Fn | DefKind::AssocFn) {
         return Ok(FunctionContractsFact::default());
     }
-    Ok(FunctionContractsFact {
-        panic: effects
-            .tracks_panic()
-            .then(|| {
-                raw_contract(
-                    tcx,
-                    def_id,
-                    panic_contract_doc_summary_from_attrs(tcx, def_id),
-                    sources,
-                )
-            })
-            .transpose()?
-            .flatten(),
-        safety: effects
-            .tracks_safety()
-            .then(|| {
-                raw_contract(
-                    tcx,
-                    def_id,
-                    safety_contract_doc_summary_from_attrs(tcx, def_id),
-                    sources,
-                )
-            })
-            .transpose()?
-            .flatten(),
-    })
+    let mut contracts = Vec::new();
+    for effect in selected_effects(effects) {
+        if let Some(contract) = raw_contract(
+            tcx,
+            def_id,
+            contract_doc_summary_from_attrs(tcx, def_id, effect.obligation),
+            sources,
+        )? {
+            contracts.push(EffectContractFact {
+                effect: effect.key,
+                contract,
+            });
+        }
+    }
+    Ok(FunctionContractsFact { effects: contracts })
 }
 
 fn raw_contract(
@@ -1178,15 +1163,11 @@ fn ensure_body(
         markers: Vec::new(),
         unverified_marker_probes: Vec::new(),
     };
-    if effects.tracks_panic()
-        && let Some(contract) = contracts.panic
-    {
-        body.push_contract_marker(AnnotationFactKind::PanicContract, contract);
-    }
-    if effects.tracks_safety()
-        && let Some(contract) = contracts.safety
-    {
-        body.push_contract_marker(AnnotationFactKind::SafetyContract, contract);
+    for effect_contract in contracts.effects {
+        body.push_contract_marker(
+            AnnotationFactKind::new(effect_contract.effect, AnnotationRole::Contract),
+            effect_contract.contract,
+        );
     }
     bodies.insert(function, body);
     Ok(())
@@ -1659,19 +1640,34 @@ fn attach_preliminary_operations(
                 },
             });
 
-            if registered.effect.as_str() != <Safety as crate::effects::Effect>::EFFECT_NAME {
-                continue;
-            }
+            let metadata = selected_effects(effects)
+                .into_iter()
+                .find(|effect| effect.key == registered.effect)
+                .expect("effect seed was emitted by a registered effect");
+            let competing = selected_effects(effects)
+                .iter()
+                .map(|effect| effect.justification)
+                .collect::<Vec<_>>();
             for (probing, applicable_probing) in probing_modes() {
                 let probe =
                     probe_marker_candidates(fact.marker_anchor_spans.iter().copied(), |span| {
-                        safety_span_marker_block(tcx, local, span, probing)
+                        effect_site_marker_block(
+                            tcx,
+                            local,
+                            span,
+                            metadata.justification,
+                            &competing,
+                            probing,
+                        )
                     });
                 record_effect_marker_probe(
                     tcx,
                     sources,
                     body,
-                    AnnotationFactKind::SafetyJustification,
+                    AnnotationFactKind::new(
+                        registered.effect.clone(),
+                        AnnotationRole::Justification,
+                    ),
                     PendingMarkerTarget::Effect(key.clone()),
                     probe,
                     applicable_probing,
@@ -1745,7 +1741,7 @@ fn record_effect_marker_probe(
     requirements: Vec<ContractRequirementFact>,
 ) -> Result<(), ExtractError> {
     if let Some(unverified) =
-        pending_unverified_marker_probe(kind, target.clone(), applicable_probing, &probe)
+        pending_unverified_marker_probe(kind.clone(), target.clone(), applicable_probing, &probe)
     {
         push_unverified_marker_probe(body, unverified);
     }
@@ -1807,25 +1803,15 @@ fn push_effect_marker(
     Ok(())
 }
 
-fn panic_requirements(
+fn effect_requirements(
     declaration_target: Option<&FunctionTargetFact>,
     runtime_target: &CallTargetFact,
+    effect: &EffectKey,
 ) -> Vec<ContractRequirementFact> {
     runtime_target
         .function_target()
-        .and_then(|target| target.contracts.panic.as_ref())
-        .or_else(|| declaration_target.and_then(|target| target.contracts.panic.as_ref()))
-        .map_or_else(Vec::new, |contract| contract.requirements.clone())
-}
-
-fn safety_requirements(
-    declaration_target: Option<&FunctionTargetFact>,
-    runtime_target: &CallTargetFact,
-) -> Vec<ContractRequirementFact> {
-    runtime_target
-        .function_target()
-        .and_then(|target| target.contracts.safety.as_ref())
-        .or_else(|| declaration_target.and_then(|target| target.contracts.safety.as_ref()))
+        .and_then(|target| target.contracts.get(effect))
+        .or_else(|| declaration_target.and_then(|target| target.contracts.get(effect)))
         .map_or_else(Vec::new, |contract| contract.requirements.clone())
 }
 
@@ -2089,8 +2075,7 @@ mod tests {
     };
     use crate::artifact::UnverifiedMarkerProbeReason;
     use crate::artifact::{
-        AnnotationFactKind, AnnotationProbingFact, CallSiteId, EffectKind, SafetyEffectGroupId,
-        SafetyOpKind,
+        AnnotationProbingFact, CallSiteId, EffectKind, SafetyEffectGroupId, SafetyOpKind,
     };
     use crate::effects::safety::visit::{
         RawSafetyCallFact, RawSafetyEffectGroup, RawSafetyFacts, RawSafetyGroupFact,
@@ -2137,7 +2122,9 @@ mod tests {
 
         assert!(
             super::pending_unverified_marker_probe(
-                AnnotationFactKind::PanicJustification,
+                crate::effects::annotation_kind::<crate::effects::panic::Panic>(
+                    crate::artifact::AnnotationRole::Justification
+                ),
                 target.clone(),
                 AnnotationProbingFact::SourceCallsite,
                 &MarkerProbe::Present(()),
@@ -2146,7 +2133,9 @@ mod tests {
         );
         assert!(
             super::pending_unverified_marker_probe::<()>(
-                AnnotationFactKind::PanicJustification,
+                crate::effects::annotation_kind::<crate::effects::panic::Panic>(
+                    crate::artifact::AnnotationRole::Justification
+                ),
                 target.clone(),
                 AnnotationProbingFact::SourceCallsite,
                 &MarkerProbe::VerifiedAbsent,
@@ -2154,14 +2143,21 @@ mod tests {
             .is_none()
         );
         let unverified = super::pending_unverified_marker_probe::<()>(
-            AnnotationFactKind::PanicJustification,
+            crate::effects::annotation_kind::<crate::effects::panic::Panic>(
+                crate::artifact::AnnotationRole::Justification,
+            ),
             target,
             AnnotationProbingFact::SourceCallsite,
             &MarkerProbe::Unverified(UnverifiedMarkerProbeReason::SourceUnavailable),
         )
         .expect("unverified probes need one sparse artifact fact");
 
-        assert_eq!(unverified.kind, AnnotationFactKind::PanicJustification);
+        assert_eq!(
+            unverified.kind,
+            crate::effects::annotation_kind::<crate::effects::panic::Panic>(
+                crate::artifact::AnnotationRole::Justification
+            )
+        );
         assert_eq!(unverified.probing, AnnotationProbingFact::SourceCallsite);
         assert_eq!(
             unverified.reason,

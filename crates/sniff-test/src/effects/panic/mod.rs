@@ -1,4 +1,3 @@
-use crate::annotations::AnnotationDomain;
 use crate::artifact::{CallFact, DefinitionNamespaceIndex, FunctionTargetFact};
 use crate::config::{PanicBoundaryPolicy, PanicConfig};
 
@@ -16,7 +15,6 @@ impl super::Effect for Panic {
     type Config = PanicConfig;
 
     const EFFECT_NAME: &'static str = "panic";
-    const DOMAIN: AnnotationDomain = AnnotationDomain::Panic;
     const OBLIGATION: &'static str = "Panics";
     const JUSTIFICATION: &'static str = "PANIC";
 

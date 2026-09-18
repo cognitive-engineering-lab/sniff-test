@@ -11,31 +11,25 @@ use std::fmt;
 use effect_tracing::InvocationId;
 
 use crate::artifact::{
-    AnnotationFactKind, AnnotationProbingFact, AnnotationSatisfactionFact, AnnotationTargetFact,
+    AnnotationProbingFact, AnnotationRole, AnnotationSatisfactionFact, AnnotationTargetFact,
     ArtifactFacts, CallId, ContractFact, ContractRequirementFact, DefinitionNamespaceIndex,
-    EffectId, FunctionId, FunctionTargetFact, SourceRangeFact,
+    EffectId, EffectKey, FunctionId, FunctionTargetFact, SourceRangeFact,
 };
 use crate::compiler::invocations::InvocationGraph;
 use crate::config::MarkerProbing;
 use crate::contracts::{
-    ContractDocOverrides, ContractDocSummary, panic_contract_doc_summary_from_markdown,
-    safety_contract_doc_summary_from_markdown,
+    ContractDocOverrides, ContractDocSummary, contract_doc_summary_from_markdown,
 };
+use crate::effects::EffectMetadata;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub(crate) struct AnnotationId(usize);
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub(crate) enum AnnotationDomain {
-    Panic,
-    Safety,
-}
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct FunctionContractAnnotation {
     id: AnnotationId,
     owner: FunctionId,
-    domain: AnnotationDomain,
+    effect: EffectKey,
     source_range: Option<SourceRangeFact>,
     requirements: Vec<ContractRequirementFact>,
 }
@@ -52,8 +46,8 @@ impl FunctionContractAnnotation {
     }
 
     #[must_use]
-    pub(crate) const fn domain(&self) -> AnnotationDomain {
-        self.domain
+    pub(crate) const fn effect(&self) -> &EffectKey {
+        &self.effect
     }
 
     #[must_use]
@@ -70,7 +64,7 @@ impl FunctionContractAnnotation {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct SiteCommentAnnotation {
     id: AnnotationId,
-    domain: AnnotationDomain,
+    effect: EffectKey,
     target: AnnotationTarget,
     source_range: Option<SourceRangeFact>,
     satisfactions: Vec<AnnotationSatisfactionFact>,
@@ -83,8 +77,8 @@ impl SiteCommentAnnotation {
     }
 
     #[must_use]
-    pub(crate) const fn domain(&self) -> AnnotationDomain {
-        self.domain
+    pub(crate) const fn effect(&self) -> &EffectKey {
+        &self.effect
     }
 
     #[must_use]
@@ -137,6 +131,7 @@ impl AnnotationIndex {
             &namespaces,
             &ContractDocOverrides::default(),
             MarkerProbing::SourceCallsite,
+            &crate::effects::selected_effects(crate::effects::EffectSelection::default()),
         )
     }
 
@@ -150,6 +145,7 @@ impl AnnotationIndex {
         namespaces: &DefinitionNamespaceIndex,
         overrides: &ContractDocOverrides,
         marker_probing: MarkerProbing,
+        effects: &[EffectMetadata],
     ) -> Result<Self, AnnotationIndexError> {
         let mut ids = BTreeMap::<String, AnnotationId>::new();
         let mut contracts = Vec::new();
@@ -176,8 +172,8 @@ impl AnnotationIndex {
                 }
                 let next_id = AnnotationId(ids.len());
                 let id = *ids.entry(marker.identity.clone()).or_insert(next_id);
-                match marker.kind {
-                    AnnotationFactKind::PanicContract | AnnotationFactKind::SafetyContract => {
+                match marker.kind.role {
+                    AnnotationRole::Contract => {
                         let AnnotationTargetFact::Function(owner) = marker.target else {
                             return Err(AnnotationIndexError::new(
                                 "function contract annotation has a non-function target",
@@ -186,7 +182,7 @@ impl AnnotationIndex {
                         let annotation = FunctionContractAnnotation {
                             id,
                             owner,
-                            domain: contract_domain(marker.kind),
+                            effect: marker.kind.effect.clone(),
                             source_range: marker.source_range.clone(),
                             requirements: marker.requirements.clone(),
                         };
@@ -194,8 +190,7 @@ impl AnnotationIndex {
                             contracts.push(annotation);
                         }
                     }
-                    AnnotationFactKind::PanicJustification
-                    | AnnotationFactKind::SafetyJustification => {
+                    AnnotationRole::Justification => {
                         let target = match marker.target {
                             AnnotationTargetFact::Function(function) => {
                                 AnnotationTarget::Function(function)
@@ -219,7 +214,7 @@ impl AnnotationIndex {
                         };
                         let annotation = SiteCommentAnnotation {
                             id,
-                            domain: justification_domain(marker.kind),
+                            effect: marker.kind.effect.clone(),
                             target,
                             source_range: marker.source_range.clone(),
                             satisfactions: marker.satisfactions.clone(),
@@ -259,22 +254,16 @@ impl AnnotationIndex {
                 .min_by_key(|body| body.function)
                 .and_then(|body| body.source_range.clone());
             let owner = FunctionId::generic(definition);
-            push_override_contract_for_owner(
-                &mut ids,
-                &mut contracts,
-                owner,
-                source_range.clone(),
-                panic_contract_doc_summary_from_markdown(markdown),
-                AnnotationDomain::Panic,
-            );
-            push_override_contract_for_owner(
-                &mut ids,
-                &mut contracts,
-                owner,
-                source_range,
-                safety_contract_doc_summary_from_markdown(markdown),
-                AnnotationDomain::Safety,
-            );
+            for effect in effects {
+                push_override_contract_for_owner(
+                    &mut ids,
+                    &mut contracts,
+                    owner,
+                    source_range.clone(),
+                    contract_doc_summary_from_markdown(markdown, effect.obligation),
+                    &effect.key,
+                );
+            }
         }
 
         let original_comments = site_comments.clone();
@@ -320,10 +309,10 @@ impl AnnotationIndex {
     pub(crate) fn function_contracts(
         &self,
         function: FunctionId,
-        domain: AnnotationDomain,
+        effect: &EffectKey,
     ) -> impl Iterator<Item = &FunctionContractAnnotation> {
         self.contracts.iter().filter(move |contract| {
-            contract.owner.def_path_hash == function.def_path_hash && contract.domain == domain
+            contract.owner.def_path_hash == function.def_path_hash && &contract.effect == effect
         })
     }
 
@@ -335,15 +324,15 @@ impl AnnotationIndex {
         &self,
         graph: &InvocationGraph,
         function: effect_tracing::FunctionId,
-        domain: AnnotationDomain,
+        effect: &EffectKey,
     ) -> Option<&FunctionContractAnnotation> {
         let stable_function = graph.stable_function(function);
-        self.function_contracts(stable_function, domain)
+        self.function_contracts(stable_function, effect)
             .next()
             .or_else(|| {
                 graph
                     .contract_declaration(function)
-                    .and_then(|declaration| self.function_contracts(declaration, domain).next())
+                    .and_then(|declaration| self.function_contracts(declaration, effect).next())
             })
     }
 
@@ -351,10 +340,10 @@ impl AnnotationIndex {
         &self,
         invocation: InvocationId,
         call: CallId,
-        domain: AnnotationDomain,
+        effect: &EffectKey,
     ) -> impl Iterator<Item = &SiteCommentAnnotation> {
         self.site_comments.iter().filter(move |comment| {
-            comment.domain == domain
+            &comment.effect == effect
                 && comment.target == AnnotationTarget::Invocation { invocation, call }
         })
     }
@@ -363,10 +352,11 @@ impl AnnotationIndex {
         &self,
         owner: FunctionId,
         effect: EffectId,
-        domain: AnnotationDomain,
+        effect_key: &EffectKey,
     ) -> impl Iterator<Item = &SiteCommentAnnotation> {
         self.site_comments.iter().filter(move |comment| {
-            comment.domain == domain && comment.target == AnnotationTarget::Effect { owner, effect }
+            &comment.effect == effect_key
+                && comment.target == AnnotationTarget::Effect { owner, effect }
         })
     }
 }
@@ -377,18 +367,18 @@ fn push_override_contract_for_owner(
     owner: FunctionId,
     source_range: Option<SourceRangeFact>,
     summary: ContractDocSummary,
-    domain: AnnotationDomain,
+    effect: &EffectKey,
 ) {
     if !summary.has_docs {
         return;
     }
-    let identity = format!("override-contract:{domain:?}:{owner:?}");
+    let identity = format!("override-contract:{effect:?}:{owner:?}");
     let next_id = AnnotationId(ids.len());
     let id = *ids.entry(identity).or_insert(next_id);
     let annotation = FunctionContractAnnotation {
         id,
         owner,
-        domain,
+        effect: effect.clone(),
         source_range,
         requirements: summary
             .requirements
@@ -411,10 +401,10 @@ fn push_call_contract(
     contracts: &mut Vec<FunctionContractAnnotation>,
     target: &FunctionTargetFact,
     contract: &ContractFact,
-    domain: AnnotationDomain,
+    effect: &EffectKey,
 ) {
     let identity = format!(
-        "call-contract:{domain:?}:{:?}:{:?}",
+        "call-contract:{effect:?}:{:?}:{:?}",
         target.function, contract.source_range
     );
     let next_id = AnnotationId(ids.len());
@@ -422,7 +412,7 @@ fn push_call_contract(
     let annotation = FunctionContractAnnotation {
         id,
         owner: target.function,
-        domain,
+        effect: effect.clone(),
         source_range: contract.source_range.clone(),
         requirements: contract.requirements.clone(),
     };
@@ -436,31 +426,14 @@ fn push_target_contracts(
     contracts: &mut Vec<FunctionContractAnnotation>,
     target: &FunctionTargetFact,
 ) {
-    if let Some(contract) = &target.contracts.panic {
-        push_call_contract(ids, contracts, target, contract, AnnotationDomain::Panic);
-    }
-    if let Some(contract) = &target.contracts.safety {
-        push_call_contract(ids, contracts, target, contract, AnnotationDomain::Safety);
-    }
-}
-
-fn contract_domain(kind: AnnotationFactKind) -> AnnotationDomain {
-    match kind {
-        AnnotationFactKind::PanicContract => AnnotationDomain::Panic,
-        AnnotationFactKind::SafetyContract => AnnotationDomain::Safety,
-        AnnotationFactKind::PanicJustification | AnnotationFactKind::SafetyJustification => {
-            unreachable!("justifications are not contracts")
-        }
-    }
-}
-
-fn justification_domain(kind: AnnotationFactKind) -> AnnotationDomain {
-    match kind {
-        AnnotationFactKind::PanicJustification => AnnotationDomain::Panic,
-        AnnotationFactKind::SafetyJustification => AnnotationDomain::Safety,
-        AnnotationFactKind::PanicContract | AnnotationFactKind::SafetyContract => {
-            unreachable!("contracts are not justifications")
-        }
+    for effect_contract in &target.contracts.effects {
+        push_call_contract(
+            ids,
+            contracts,
+            target,
+            &effect_contract.contract,
+            &effect_contract.effect,
+        );
     }
 }
 

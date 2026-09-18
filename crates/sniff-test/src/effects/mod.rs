@@ -7,8 +7,10 @@ pub(crate) mod visit;
 
 use std::fmt;
 
-use crate::annotations::AnnotationDomain;
-use crate::artifact::{CallFact, DefinitionNamespaceIndex, FunctionTargetFact};
+use crate::artifact::{
+    AnnotationFactKind, AnnotationRole, CallFact, DefinitionNamespaceIndex, EffectKey,
+    FunctionTargetFact,
+};
 use clap::ValueEnum;
 use serde::{Deserialize, Serialize};
 
@@ -23,7 +25,6 @@ pub(crate) trait Effect {
     type Config: EffectConfig;
 
     const EFFECT_NAME: &'static str;
-    const DOMAIN: AnnotationDomain;
     const OBLIGATION: &'static str;
     const JUSTIFICATION: &'static str;
 
@@ -35,6 +36,41 @@ pub(crate) trait Effect {
         call: &CallFact,
         namespaces: &DefinitionNamespaceIndex,
     ) -> Option<InvocationSourceMatch>;
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct EffectMetadata {
+    pub(crate) key: EffectKey,
+    pub(crate) obligation: &'static str,
+    pub(crate) justification: &'static str,
+}
+
+impl EffectMetadata {
+    #[must_use]
+    pub(crate) fn of<E: Effect>() -> Self {
+        Self {
+            key: EffectKey::new(E::EFFECT_NAME),
+            obligation: E::OBLIGATION,
+            justification: E::JUSTIFICATION,
+        }
+    }
+}
+
+#[must_use]
+pub(crate) fn selected_effects(selection: EffectSelection) -> Vec<EffectMetadata> {
+    let mut effects = Vec::new();
+    if selection.tracks_panic() {
+        effects.push(EffectMetadata::of::<panic::Panic>());
+    }
+    if selection.tracks_safety() {
+        effects.push(EffectMetadata::of::<safety::Safety>());
+    }
+    effects
+}
+
+#[must_use]
+pub(crate) fn annotation_kind<E: Effect>(role: AnnotationRole) -> AnnotationFactKind {
+    AnnotationFactKind::new(EffectKey::new(E::EFFECT_NAME), role)
 }
 
 /// Common, read-only configuration exposed to framework-owned seed probing.

@@ -14,25 +14,52 @@ use effect_tracing::{
     TraceNodeId, TraceOptions,
 };
 
-use crate::annotations::{AnnotationDomain, AnnotationId, AnnotationIndex};
+use crate::annotations::{AnnotationId, AnnotationIndex};
 use crate::artifact::{
-    AnnotationFactKind, AnnotationProbingFact, AnnotationTargetFact, ArtifactFacts, CallTargetFact,
-    CompilerAssertKind, DefinitionNamespaceIndex, EffectFact, EffectId, FunctionFact,
-    FunctionId as StableFunctionId, FunctionTargetFact, MarkerEvidenceState, SafetyOpKind,
-    UnverifiedMarkerProbeReason,
+    AnnotationFactKind, AnnotationProbingFact, AnnotationRole, AnnotationTargetFact, ArtifactFacts,
+    CallTargetFact, CompilerAssertKind, DefinitionNamespaceIndex, EffectFact, EffectId, EffectKey,
+    FunctionFact, FunctionId as StableFunctionId, FunctionTargetFact, MarkerEvidenceState,
+    SafetyOpKind, UnverifiedMarkerProbeReason,
 };
 use crate::compiler::invocations::{
     InvocationGraph, InvocationResolution, UnresolvedCallTargetReason,
 };
 use crate::config::{MarkerProbing, PanicBoundaryPolicy, SniffTestConfig};
 use crate::contracts::normalize_requirement_name;
-use crate::effects::EffectSelection;
 use crate::effects::InvocationSourceBranch;
 use crate::effects::concrete::{ConcreteSource, probe_concrete_effect};
 use crate::effects::obligation::{
-    ObligationDomain, ObligationTracker, TrackedEffect, TrackedOrigin, TrackedState,
-    TrackedTermination,
+    ObligationTracker, TrackedEffect, TrackedOrigin, TrackedState, TrackedTermination,
 };
+use crate::effects::{Effect, EffectSelection, annotation_kind, selected_effects};
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+enum ReportEffect {
+    Panic,
+    Safety,
+}
+
+impl ReportEffect {
+    fn key(self) -> EffectKey {
+        match self {
+            Self::Panic => EffectKey::new(Panic::EFFECT_NAME),
+            Self::Safety => EffectKey::new(Safety::EFFECT_NAME),
+        }
+    }
+
+    fn from_key(effect: &EffectKey) -> Self {
+        if effect.as_str() == Panic::EFFECT_NAME {
+            Self::Panic
+        } else if effect.as_str() == Safety::EFFECT_NAME {
+            Self::Safety
+        } else {
+            panic!(
+                "built-in report received unknown effect `{}`",
+                effect.as_str()
+            );
+        }
+    }
+}
 use crate::effects::panic::{Panic, PanicEffect, PanicState};
 use crate::effects::safety::{Safety, SafetyEffect, SafetyState};
 use crate::effects::trust::TrustPath;
@@ -81,7 +108,7 @@ enum MarkerWitness {
         site: MarkerTraceSite,
     },
     Obligation {
-        domain: ObligationDomain,
+        domain: ReportEffect,
         invocation: effect_tracing::InvocationId,
         node: TraceNodeId,
     },
@@ -207,6 +234,7 @@ pub(crate) fn trace_selected_workspace(
         &namespaces,
         &config.contracts.overrides,
         config.analysis.marker_probing,
+        &selected_effects(effects),
     )
     .map_err(|error| EffectReportError::new(error.to_string()))?;
     let panic = effects
@@ -253,10 +281,10 @@ pub(crate) fn trace_selected_workspace(
     let engine = EffectEngine::with_options(&obligation_graph, trace_options);
     let tracked_panic = panic
         .as_ref()
-        .map(|panic| TrackedEffect::new(panic, &obligations, ObligationDomain::Panic));
+        .map(|panic| TrackedEffect::new(panic, &obligations, ReportEffect::Panic.key()));
     let tracked_safety = safety
         .as_ref()
-        .map(|safety| TrackedEffect::new(safety, &obligations, ObligationDomain::Safety));
+        .map(|safety| TrackedEffect::new(safety, &obligations, ReportEffect::Safety.key()));
     let panic_trace = tracked_panic.as_ref().map(|panic| engine.trace(panic));
     let safety_trace = tracked_safety.as_ref().map(|safety| engine.trace(safety));
     let marker_claims = collect_marker_claims(
@@ -313,7 +341,7 @@ pub(crate) fn trace_selected_workspace(
                         &graph,
                         &annotations,
                         root_function,
-                        AnnotationDomain::Panic,
+                        ReportEffect::Panic,
                         config,
                         &namespaces,
                         |function, path: &TrustPath| panic.is_opaque_on_path(function, path),
@@ -328,7 +356,7 @@ pub(crate) fn trace_selected_workspace(
                         &graph,
                         &annotations,
                         root_function,
-                        AnnotationDomain::Safety,
+                        ReportEffect::Safety,
                         config,
                         &namespaces,
                         |function, path: &TrustPath| safety.is_opaque_on_path(function, path),
@@ -403,7 +431,7 @@ pub(crate) fn trace_selected_workspace(
                     dependencies,
                     local_stable_crate_id,
                     &root_functions,
-                    AnnotationDomain::Panic,
+                    ReportEffect::Panic,
                     config,
                 ));
             }
@@ -418,7 +446,7 @@ pub(crate) fn trace_selected_workspace(
                     dependencies,
                     local_stable_crate_id,
                     &root_functions,
-                    AnnotationDomain::Safety,
+                    ReportEffect::Safety,
                     config,
                 ));
             }
@@ -518,11 +546,11 @@ fn marker_ambiguities(
             let effect_count = projections.len();
             let comment = annotations.site_comment(*annotation)?;
             let representative = projections.into_iter().min_by(marker_projection_order)?;
-            let kind = match comment.domain() {
-                AnnotationDomain::Panic => {
+            let kind = match ReportEffect::from_key(comment.effect()) {
+                ReportEffect::Panic => {
                     InterpretedFindingKind::AmbiguousPanicMarker { effect_count }
                 }
-                AnnotationDomain::Safety => {
+                ReportEffect::Safety => {
                     InterpretedFindingKind::AmbiguousSafetyMarker { effect_count }
                 }
             };
@@ -609,14 +637,15 @@ fn collect_marker_claims(
         );
     for usage in obligation_uses {
         let source_invocation = usage.source_invocation();
-        let groups: Vec<MarkerEffectGroup> = match usage.domain() {
-            ObligationDomain::Panic => usage
+        let effect = ReportEffect::from_key(usage.effect());
+        let groups: Vec<MarkerEffectGroup> = match effect {
+            ReportEffect::Panic => usage
                 .source_calls()
                 .map(|call| {
                     MarkerEffectGroup::Panic(PanicEffectGroup::Invocation(source_invocation, call))
                 })
                 .collect(),
-            ObligationDomain::Safety => {
+            ReportEffect::Safety => {
                 let Some(safety) = safety else {
                     continue;
                 };
@@ -632,7 +661,7 @@ fn collect_marker_claims(
             }
         };
         let witness = MarkerWitness::Obligation {
-            domain: usage.domain(),
+            domain: effect,
             invocation: usage.invocation(),
             node: usage.node(),
         };
@@ -767,7 +796,7 @@ fn marker_projection(
             invocation,
             node,
         } => match domain {
-            ObligationDomain::Panic => obligation_marker_projection(
+            ReportEffect::Panic => obligation_marker_projection(
                 artifact,
                 graph,
                 tracked_panic?.obligations(),
@@ -777,7 +806,7 @@ fn marker_projection(
                 node,
                 domain,
             )?,
-            ObligationDomain::Safety => obligation_marker_projection(
+            ReportEffect::Safety => obligation_marker_projection(
                 artifact,
                 graph,
                 tracked_safety?.obligations(),
@@ -827,7 +856,7 @@ fn obligation_marker_projection<O: Clone, S, T>(
     root_function: FunctionId,
     invocation: effect_tracing::InvocationId,
     node: TraceNodeId,
-    domain: ObligationDomain,
+    domain: ReportEffect,
 ) -> Option<(StableFunctionId, InterpretedTrace)> {
     let trust_path = trace
         .nodes()
@@ -846,10 +875,12 @@ fn obligation_marker_projection<O: Clone, S, T>(
         MarkerTraversalPolicy {
             trust_path,
             is_opaque: |function, path: &TrustPath| {
-                obligations.trusts_function(domain, function)
+                obligations.trusts_function(&domain.key(), function)
                     && path.allows_boundary(graph, function)
             },
-            is_ignored_invocation: |candidate| obligations.is_ignored_invocation(domain, candidate),
+            is_ignored_invocation: |candidate| {
+                obligations.is_ignored_invocation(&domain.key(), candidate)
+            },
         },
     )
 }
@@ -1288,7 +1319,9 @@ fn obligation_marker_evidence(
     Some(
         source_calls
             .into_iter()
-            .map(|call| raw_call_marker_evidence(artifact, graph, invocation, call, kind, probing))
+            .map(|call| {
+                raw_call_marker_evidence(artifact, graph, invocation, call, kind.clone(), probing)
+            })
             .reduce(merge_marker_evidence)
             .unwrap_or_else(unavailable_marker_evidence),
     )
@@ -1334,7 +1367,7 @@ fn panic_findings(
                             artifact,
                             owner,
                             effect,
-                            AnnotationFactKind::PanicJustification,
+                            annotation_kind::<Panic>(AnnotationRole::Justification),
                             marker_probing,
                         )),
                         trace: trace_path,
@@ -1348,7 +1381,7 @@ fn panic_findings(
                             graph,
                             annotations,
                             source,
-                            AnnotationDomain::Panic,
+                            ReportEffect::Panic,
                         )
                     })?;
                     let edge = source.edge();
@@ -1368,7 +1401,7 @@ fn panic_findings(
                             graph,
                             invocation,
                             call,
-                            AnnotationFactKind::PanicJustification,
+                            annotation_kind::<Panic>(AnnotationRole::Justification),
                             marker_probing,
                         )),
                         trace: trace_path,
@@ -1421,7 +1454,7 @@ fn safety_findings(
                             artifact,
                             owner,
                             effect,
-                            AnnotationFactKind::SafetyJustification,
+                            annotation_kind::<Safety>(AnnotationRole::Justification),
                             marker_probing,
                         )),
                         trace: trace_path,
@@ -1437,7 +1470,7 @@ fn safety_findings(
                                 graph,
                                 annotations,
                                 source,
-                                AnnotationDomain::Safety,
+                                ReportEffect::Safety,
                             )
                         })?;
                     let edge = source.edge();
@@ -1467,7 +1500,7 @@ fn safety_findings(
                             graph,
                             invocation,
                             call,
-                            AnnotationFactKind::SafetyJustification,
+                            annotation_kind::<Safety>(AnnotationRole::Justification),
                             marker_probing,
                         )),
                         trace: trace_path,
@@ -1489,7 +1522,7 @@ fn unresolved_call_target_findings(
     graph: &InvocationGraph,
     annotations: &AnnotationIndex,
     root_function: effect_tracing::FunctionId,
-    domain: AnnotationDomain,
+    domain: ReportEffect,
     config: &SniffTestConfig,
     namespaces: &DefinitionNamespaceIndex,
     is_opaque: impl Fn(FunctionId, &TrustPath) -> bool + Copy,
@@ -1511,10 +1544,10 @@ fn unresolved_call_target_findings(
                 return Vec::new();
             };
             let ignored = match domain {
-                AnnotationDomain::Panic => config
+                ReportEffect::Panic => config
                     .panics
                     .ignores_candidates(namespaces.candidates(owner)),
-                AnnotationDomain::Safety => config
+                ReportEffect::Safety => config
                     .safety
                     .ignores_candidates(namespaces.candidates(owner)),
             };
@@ -1567,10 +1600,10 @@ fn unresolved_call_target_findings(
                     append_call_trace(artifact, owner, edge, &mut trace);
                     InterpretedFinding {
                         kind: match domain {
-                            AnnotationDomain::Panic => {
+                            ReportEffect::Panic => {
                                 InterpretedFindingKind::UnresolvedPanicCallTarget { site }
                             }
-                            AnnotationDomain::Safety => {
+                            ReportEffect::Safety => {
                                 InterpretedFindingKind::UnresolvedSafetyCallTarget { site }
                             }
                         },
@@ -1618,7 +1651,7 @@ fn unresolved_source_reason(
 fn unresolved_source_is_covered(
     edge: &crate::artifact::CallFact,
     annotations: &AnnotationIndex,
-    domain: AnnotationDomain,
+    domain: ReportEffect,
     config: &SniffTestConfig,
     namespaces: &DefinitionNamespaceIndex,
 ) -> bool {
@@ -1626,7 +1659,7 @@ fn unresolved_source_is_covered(
         return false;
     };
     if annotations
-        .function_contracts(declaration.function, domain)
+        .function_contracts(declaration.function, &domain.key())
         .next()
         .is_some()
     {
@@ -1635,12 +1668,12 @@ fn unresolved_source_is_covered(
 
     let candidates = namespaces.candidates(declaration.function);
     match domain {
-        AnnotationDomain::Panic => {
+        ReportEffect::Panic => {
             config.panics.ignores_candidates(candidates)
                 || config.panics.panic_boundary_policy_candidates(candidates)
                     != PanicBoundaryPolicy::Normal
         }
-        AnnotationDomain::Safety => {
+        ReportEffect::Safety => {
             config.safety.ignores_candidates(candidates)
                 || config.safety.trusts_safety_boundary_candidates(candidates)
         }
@@ -1723,10 +1756,10 @@ fn obligation_findings<C, O: Clone, S, T>(
                 .unwrap_or_else(|| format!("{:?}", annotation.owner()));
             let target_is_unsafe = function_presentation(artifact, target_function)
                 .is_some_and(|presentation| presentation.is_unsafe);
-            let domain = state.domain();
+            let domain = ReportEffect::from_key(state.effect());
             let kind = match domain {
-                ObligationDomain::Panic => InterpretedFindingKind::DocumentedPanic,
-                ObligationDomain::Safety => InterpretedFindingKind::SafetyCall {
+                ReportEffect::Panic => InterpretedFindingKind::DocumentedPanic,
+                ReportEffect::Safety => InterpretedFindingKind::SafetyCall {
                     kind: if target_is_unsafe {
                         InterpretedSafetyCallKind::Unsafe
                     } else {
@@ -1741,8 +1774,10 @@ fn obligation_findings<C, O: Clone, S, T>(
                 state.source_invocation(),
                 state.source_calls(),
                 match domain {
-                    ObligationDomain::Panic => AnnotationFactKind::PanicJustification,
-                    ObligationDomain::Safety => AnnotationFactKind::SafetyJustification,
+                    ReportEffect::Panic => annotation_kind::<Panic>(AnnotationRole::Justification),
+                    ReportEffect::Safety => {
+                        annotation_kind::<Safety>(AnnotationRole::Justification)
+                    }
                 },
                 marker_probing,
             );
@@ -1792,13 +1827,13 @@ fn obligation_findings<C, O: Clone, S, T>(
                 ambiguous
                     .into_iter()
                     .map(|(normalized_name, requirements)| InterpretedFinding {
-                        kind: match state.domain() {
-                            ObligationDomain::Panic => {
+                        kind: match ReportEffect::from_key(state.effect()) {
+                            ReportEffect::Panic => {
                                 InterpretedFindingKind::AmbiguousPanicRequirement {
                                     normalized_name,
                                 }
                             }
-                            ObligationDomain::Safety => {
+                            ReportEffect::Safety => {
                                 InterpretedFindingKind::AmbiguousSafetyRequirement {
                                     normalized_name,
                                 }
@@ -1864,20 +1899,20 @@ fn invocation_source_has_contract(
     graph: &InvocationGraph,
     annotations: &AnnotationIndex,
     source: &InvocationSourceBranch,
-    domain: AnnotationDomain,
+    domain: ReportEffect,
 ) -> bool {
     let edge = source.edge();
     if let CallTargetFact::Function(target) = &edge.target {
         return graph.function(target.function).is_some_and(|function| {
             annotations
-                .effective_contract(graph, function, domain)
+                .effective_contract(graph, function, &domain.key())
                 .is_some()
         });
     }
 
     invocation_surface(edge).is_some_and(|declaration| {
         annotations
-            .function_contracts(declaration.function, domain)
+            .function_contracts(declaration.function, &domain.key())
             .next()
             .is_some()
     })
@@ -1895,7 +1930,7 @@ fn missing_safety_docs(
         || !body.attributes.is_exported
         || root_functions.iter().any(|function| {
             annotations
-                .effective_contract(graph, *function, AnnotationDomain::Safety)
+                .effective_contract(graph, *function, &ReportEffect::Safety.key())
                 .is_some()
         })
     {
@@ -1977,7 +2012,7 @@ fn missing_body_reasons(
     dependencies: &ArtifactAnalysisGraph,
     local_stable_crate_id: u64,
     roots: &[FunctionId],
-    domain: AnnotationDomain,
+    domain: ReportEffect,
     config: &SniffTestConfig,
 ) -> Vec<IncompleteReason> {
     let is_trusted = |function: FunctionId, path: &TrustPath| {
@@ -2004,10 +2039,8 @@ fn missing_body_reasons(
                 continue;
             }
             let body_is_available = match domain {
-                AnnotationDomain::Panic => artifact.function_body(target.function).is_some(),
-                AnnotationDomain::Safety => {
-                    artifact.defining_function_body(target.function).is_some()
-                }
+                ReportEffect::Panic => artifact.function_body(target.function).is_some(),
+                ReportEffect::Safety => artifact.defining_function_body(target.function).is_some(),
             };
             if body_is_available {
                 continue;
@@ -2075,17 +2108,17 @@ fn missing_body_boundary_is_shorter(
 
 fn trusted_boundary(
     function: StableFunctionId,
-    domain: AnnotationDomain,
+    domain: ReportEffect,
     namespaces: &DefinitionNamespaceIndex,
     config: &SniffTestConfig,
 ) -> bool {
     let candidates = namespaces.candidates(function);
     match domain {
-        AnnotationDomain::Panic => {
+        ReportEffect::Panic => {
             config.panics.panic_boundary_policy_candidates(candidates)
                 == PanicBoundaryPolicy::TrustedBoundary
         }
-        AnnotationDomain::Safety => config.safety.trusts_safety_boundary_candidates(candidates),
+        ReportEffect::Safety => config.safety.trusts_safety_boundary_candidates(candidates),
     }
 }
 
@@ -2440,27 +2473,30 @@ fn interpreted_target(target: &FunctionTargetFact) -> InterpretedTarget {
 
 #[cfg(test)]
 mod tests {
+    use super::ReportEffect;
     use super::{
         EffectEngine, Panic, Safety, annotation_probing_fact, append_call_trace,
         effect_marker_evidence, invocation_source_has_contract, obligation_marker_evidence,
         probe_concrete_effect, raw_call_marker_evidence, same_source_finding, trace_workspace,
     };
-    use crate::annotations::{AnnotationDomain, AnnotationIndex};
+    use crate::annotations::AnnotationIndex;
     use crate::artifact::{
-        AnnotationFact, AnnotationFactKind, AnnotationProbingFact, AnnotationSatisfactionFact,
-        AnnotationTargetFact, ArtifactFacts, CallFact, CallId, CallKindFact, CallSiteId,
-        CallTargetFact, CompilerAssertKind, ContractFact, EffectFact, EffectId, EffectKey,
-        EffectKind, FunctionAttributesFact, FunctionContractsFact, FunctionFact,
-        FunctionFactProvenance, FunctionId, FunctionTargetFact, IndirectCallKindFact,
-        MacroExpansionFact, MarkerEvidenceState, MarkerId, OpaqueTargetFact, SafetyEffectGroupId,
-        SafetyOpKind, SourceFileFact, SourceFileId, SourceRangeFact, StableDefPathHash,
-        StableInstanceHash, UnverifiedMarkerProbeFact, UnverifiedMarkerProbeReason,
+        AnnotationFact, AnnotationFactKind, AnnotationProbingFact, AnnotationRole,
+        AnnotationSatisfactionFact, AnnotationTargetFact, ArtifactFacts, CallFact, CallId,
+        CallKindFact, CallSiteId, CallTargetFact, CompilerAssertKind, ContractFact,
+        EffectContractFact, EffectFact, EffectId, EffectKey, EffectKind, FunctionAttributesFact,
+        FunctionContractsFact, FunctionFact, FunctionFactProvenance, FunctionId,
+        FunctionTargetFact, IndirectCallKindFact, MacroExpansionFact, MarkerEvidenceState,
+        MarkerId, OpaqueTargetFact, SafetyEffectGroupId, SafetyOpKind, SourceFileFact,
+        SourceFileId, SourceRangeFact, StableDefPathHash, StableInstanceHash,
+        UnverifiedMarkerProbeFact, UnverifiedMarkerProbeReason,
     };
     use crate::artifact_cache::{
         ArtifactAnalysisCache, ArtifactInfo, ArtifactScope, CacheExpectations, RustcArtifactId,
     };
     use crate::compiler::invocations::InvocationGraph;
     use crate::config::{MarkerProbing, SniffTestConfig};
+    use crate::effects::annotation_kind;
     use crate::report_model::{
         DomainCompleteness, IncompleteReason, InterpretationRoot, InterpretedFinding,
         InterpretedFindingKind, InterpretedSafetyCallKind, InterpretedTrace, InterpretedTraceStep,
@@ -2582,6 +2618,26 @@ mod tests {
             source_range: None,
             requirements: Vec::new(),
         }
+    }
+
+    fn effect_contracts(
+        panic: Option<ContractFact>,
+        safety: Option<ContractFact>,
+    ) -> FunctionContractsFact {
+        let mut effects = Vec::new();
+        if let Some(contract) = panic {
+            effects.push(EffectContractFact {
+                effect: ReportEffect::Panic.key(),
+                contract,
+            });
+        }
+        if let Some(contract) = safety {
+            effects.push(EffectContractFact {
+                effect: ReportEffect::Safety.key(),
+                contract,
+            });
+        }
+        FunctionContractsFact { effects }
     }
 
     fn call(id: u32, target: CallTargetFact) -> CallFact {
@@ -2809,10 +2865,7 @@ unresolved-call-target = "warn"
         second_path: &str,
     ) -> FunctionFact {
         let first_contracts = if first_has_contract {
-            FunctionContractsFact {
-                panic: Some(whole_contract()),
-                safety: None,
-            }
+            effect_contracts(Some(whole_contract()), None)
         } else {
             FunctionContractsFact::default()
         };
@@ -2895,22 +2948,22 @@ unresolved-call-target = "warn"
                     vec![
                         marker(
                             0,
-                            AnnotationFactKind::PanicJustification,
+                            annotation_kind::<Panic>(AnnotationRole::Justification),
                             AnnotationTargetFact::Call(CallId::new(1)),
                         ),
                         marker(
                             1,
-                            AnnotationFactKind::PanicJustification,
+                            annotation_kind::<Panic>(AnnotationRole::Justification),
                             AnnotationTargetFact::Effect(EffectId::new(0)),
                         ),
                         marker(
                             2,
-                            AnnotationFactKind::SafetyJustification,
+                            annotation_kind::<Safety>(AnnotationRole::Justification),
                             AnnotationTargetFact::Effect(EffectId::new(1)),
                         ),
                     ],
                     vec![UnverifiedMarkerProbeFact {
-                        kind: AnnotationFactKind::SafetyJustification,
+                        kind: annotation_kind::<Safety>(AnnotationRole::Justification),
                         target: AnnotationTargetFact::Call(CallId::new(0)),
                         probing: AnnotationProbingFact::SourceCallsite,
                         reason: UnverifiedMarkerProbeReason::SourceUnavailable,
@@ -3006,7 +3059,7 @@ unresolved-call-target = "warn"
                 &artifact,
                 owner,
                 EffectId::new(0),
-                AnnotationFactKind::PanicJustification,
+                annotation_kind::<Panic>(AnnotationRole::Justification),
                 AnnotationProbingFact::SourceCallsite,
             ),
             MarkerEvidenceState::Present,
@@ -3017,7 +3070,7 @@ unresolved-call-target = "warn"
                 &artifact,
                 owner,
                 EffectId::new(1),
-                AnnotationFactKind::SafetyJustification,
+                annotation_kind::<Safety>(AnnotationRole::Justification),
                 AnnotationProbingFact::SourceCallsite,
             ),
             MarkerEvidenceState::Present,
@@ -3029,7 +3082,7 @@ unresolved-call-target = "warn"
                 &graph,
                 invocation,
                 CallId::new(0),
-                AnnotationFactKind::PanicJustification,
+                annotation_kind::<Panic>(AnnotationRole::Justification),
                 AnnotationProbingFact::SourceCallsite,
             ),
             MarkerEvidenceState::VerifiedAbsent,
@@ -3041,7 +3094,7 @@ unresolved-call-target = "warn"
                 &graph,
                 invocation,
                 CallId::new(1),
-                AnnotationFactKind::PanicJustification,
+                annotation_kind::<Panic>(AnnotationRole::Justification),
                 AnnotationProbingFact::SourceCallsite,
             ),
             MarkerEvidenceState::Present,
@@ -3053,7 +3106,7 @@ unresolved-call-target = "warn"
                 &graph,
                 invocation,
                 CallId::new(0),
-                AnnotationFactKind::SafetyJustification,
+                annotation_kind::<Safety>(AnnotationRole::Justification),
                 AnnotationProbingFact::SourceCallsite,
             ),
             MarkerEvidenceState::Unverified(UnverifiedMarkerProbeReason::SourceUnavailable),
@@ -3064,7 +3117,7 @@ unresolved-call-target = "warn"
                 &artifact,
                 owner,
                 EffectId::new(99),
-                AnnotationFactKind::PanicJustification,
+                annotation_kind::<Panic>(AnnotationRole::Justification),
                 AnnotationProbingFact::SourceCallsite,
             ),
             MarkerEvidenceState::Unverified(UnverifiedMarkerProbeReason::NoUsableSourceSpan),
@@ -3085,7 +3138,7 @@ unresolved-call-target = "warn"
                 &graph,
                 Some(invocation),
                 [CallId::new(0)],
-                AnnotationFactKind::PanicJustification,
+                annotation_kind::<Panic>(AnnotationRole::Justification),
                 AnnotationProbingFact::SourceCallsite,
             ),
             Some(MarkerEvidenceState::VerifiedAbsent),
@@ -3097,7 +3150,7 @@ unresolved-call-target = "warn"
                 &graph,
                 Some(invocation),
                 [CallId::new(1)],
-                AnnotationFactKind::PanicJustification,
+                annotation_kind::<Panic>(AnnotationRole::Justification),
                 AnnotationProbingFact::SourceCallsite,
             ),
             Some(MarkerEvidenceState::Present),
@@ -3109,7 +3162,7 @@ unresolved-call-target = "warn"
                 &graph,
                 Some(invocation),
                 [CallId::new(0)],
-                AnnotationFactKind::SafetyJustification,
+                annotation_kind::<Safety>(AnnotationRole::Justification),
                 AnnotationProbingFact::SourceCallsite,
             ),
             Some(MarkerEvidenceState::Unverified(
@@ -3122,7 +3175,7 @@ unresolved-call-target = "warn"
                 &graph,
                 None,
                 [],
-                AnnotationFactKind::PanicJustification,
+                annotation_kind::<Panic>(AnnotationRole::Justification),
                 AnnotationProbingFact::SourceCallsite,
             ),
             None,
@@ -3175,7 +3228,7 @@ unresolved-call-target = "warn"
                     Vec::new(),
                     vec![marker(
                         0,
-                        AnnotationFactKind::SafetyContract,
+                        annotation_kind::<Safety>(AnnotationRole::Contract),
                         AnnotationTargetFact::Function(first_target),
                     )],
                     Vec::new(),
@@ -3220,13 +3273,13 @@ unresolved-call-target = "warn"
             &graph,
             &annotations,
             &safety.invocation_sources(first)[0],
-            AnnotationDomain::Safety,
+            ReportEffect::Safety,
         ));
         assert!(!invocation_source_has_contract(
             &graph,
             &annotations,
             &safety.invocation_sources(second)[0],
-            AnnotationDomain::Safety,
+            ReportEffect::Safety,
         ));
     }
 
@@ -3258,7 +3311,7 @@ unresolved-call-target = "warn"
                     Vec::new(),
                     vec![marker(
                         0,
-                        AnnotationFactKind::PanicContract,
+                        annotation_kind::<Panic>(AnnotationRole::Contract),
                         AnnotationTargetFact::Function(contracted),
                     )],
                     Vec::new(),
@@ -3331,7 +3384,7 @@ unresolved-call-target = "warn"
                     Vec::new(),
                     vec![marker(
                         0,
-                        AnnotationFactKind::SafetyContract,
+                        annotation_kind::<Safety>(AnnotationRole::Contract),
                         AnnotationTargetFact::Function(contracted_safe),
                     )],
                     Vec::new(),
@@ -3434,13 +3487,13 @@ unresolved-call-target = "warn"
                         shared_justification_marker(
                             0,
                             "shared-panic-marker",
-                            AnnotationFactKind::PanicJustification,
+                            annotation_kind::<Panic>(AnnotationRole::Justification),
                             AnnotationTargetFact::Call(CallId::new(1)),
                         ),
                         shared_justification_marker(
                             1,
                             "shared-panic-marker",
-                            AnnotationFactKind::PanicJustification,
+                            annotation_kind::<Panic>(AnnotationRole::Justification),
                             AnnotationTargetFact::Effect(EffectId::new(0)),
                         ),
                     ],
@@ -3517,19 +3570,19 @@ unresolved-call-target = "warn"
                         shared_justification_marker(
                             0,
                             "shared-safety-marker",
-                            AnnotationFactKind::SafetyJustification,
+                            annotation_kind::<Safety>(AnnotationRole::Justification),
                             AnnotationTargetFact::Call(CallId::new(1)),
                         ),
                         shared_justification_marker(
                             1,
                             "shared-safety-marker",
-                            AnnotationFactKind::SafetyJustification,
+                            annotation_kind::<Safety>(AnnotationRole::Justification),
                             AnnotationTargetFact::Effect(EffectId::new(0)),
                         ),
                         shared_justification_marker(
                             2,
                             "shared-safety-marker",
-                            AnnotationFactKind::SafetyJustification,
+                            annotation_kind::<Safety>(AnnotationRole::Justification),
                             AnnotationTargetFact::Effect(EffectId::new(1)),
                         ),
                     ],
@@ -3596,20 +3649,20 @@ unresolved-call-target = "warn"
         let mut first_marker = shared_justification_marker(
             0,
             "shared-contract-marker",
-            AnnotationFactKind::SafetyJustification,
+            annotation_kind::<Safety>(AnnotationRole::Justification),
             AnnotationTargetFact::Call(CallId::new(0)),
         );
         first_marker.satisfactions[0].requirement = Some(String::from("initialized"));
         let mut second_marker = shared_justification_marker(
             1,
             "shared-contract-marker",
-            AnnotationFactKind::SafetyJustification,
+            annotation_kind::<Safety>(AnnotationRole::Justification),
             AnnotationTargetFact::Call(CallId::new(1)),
         );
         second_marker.satisfactions[0].requirement = Some(String::from("initialized"));
         let mut contract = marker(
             2,
-            AnnotationFactKind::SafetyContract,
+            annotation_kind::<Safety>(AnnotationRole::Contract),
             AnnotationTargetFact::Function(obligation),
         );
         contract.requirements = vec![
@@ -3686,15 +3739,18 @@ unresolved-call-target = "warn"
         )
         .expect("safety effect");
         let tracked_panic =
-            super::TrackedEffect::new(&panic, &comments, super::ObligationDomain::Panic);
+            super::TrackedEffect::new(&panic, &comments, super::ReportEffect::Panic.key());
         let tracked_safety =
-            super::TrackedEffect::new(&safety, &comments, super::ObligationDomain::Safety);
+            super::TrackedEffect::new(&safety, &comments, super::ReportEffect::Safety.key());
         let obligation_graph = graph.obligation_graph();
         let engine = EffectEngine::new(&obligation_graph);
         let panic_trace = engine.trace(&tracked_panic);
         let safety_trace = engine.trace(&tracked_safety);
         let uses = tracked_safety.obligation_marker_uses(&safety_trace);
-        assert_eq!(comments.contract_count(super::ObligationDomain::Safety), 1);
+        assert_eq!(
+            comments.contract_count(&super::ReportEffect::Safety.key()),
+            1
+        );
         assert_eq!(uses.len(), 1, "marker uses: {uses:#?}");
         assert_eq!(
             uses[0].source_calls().collect::<Vec<_>>(),
@@ -3769,18 +3825,18 @@ unresolved-call-target = "warn"
                 shared_justification_marker(
                     0,
                     "trusted-shared-safety-marker",
-                    AnnotationFactKind::SafetyJustification,
+                    annotation_kind::<Safety>(AnnotationRole::Justification),
                     AnnotationTargetFact::Effect(EffectId::new(0)),
                 ),
                 shared_justification_marker(
                     1,
                     "trusted-shared-safety-marker",
-                    AnnotationFactKind::SafetyJustification,
+                    annotation_kind::<Safety>(AnnotationRole::Justification),
                     AnnotationTargetFact::Effect(EffectId::new(1)),
                 ),
                 marker(
                     2,
-                    AnnotationFactKind::SafetyContract,
+                    annotation_kind::<Safety>(AnnotationRole::Contract),
                     AnnotationTargetFact::Function(trusted),
                 ),
             ],
@@ -4126,10 +4182,8 @@ unresolved-call-target = "warn"
                 CallTargetFact::Function(target) => target,
                 CallTargetFact::OpaqueBoundary { .. } => unreachable!("concrete target helper"),
             };
-        contracted_target.contracts = FunctionContractsFact {
-            panic: Some(whole_contract()),
-            safety: Some(whole_contract()),
-        };
+        contracted_target.contracts =
+            effect_contracts(Some(whole_contract()), Some(whole_contract()));
         let local = ArtifactFacts::new(
             vec![body(
                 root,
@@ -4234,12 +4288,12 @@ unresolved-call-target = "warn"
                     vec![
                         marker(
                             0,
-                            AnnotationFactKind::PanicContract,
+                            annotation_kind::<Panic>(AnnotationRole::Contract),
                             AnnotationTargetFact::Function(declaration),
                         ),
                         marker(
                             1,
-                            AnnotationFactKind::SafetyContract,
+                            annotation_kind::<Safety>(AnnotationRole::Contract),
                             AnnotationTargetFact::Function(declaration),
                         ),
                     ],
@@ -4254,14 +4308,14 @@ unresolved-call-target = "warn"
         let implementation_graph = graph.function(implementation).expect("implementation");
         assert_eq!(
             annotations
-                .effective_contract(&graph, implementation_graph, AnnotationDomain::Panic)
+                .effective_contract(&graph, implementation_graph, &ReportEffect::Panic.key())
                 .expect("effective panic contract")
                 .owner(),
             declaration,
         );
         assert_eq!(
             annotations
-                .effective_contract(&graph, implementation_graph, AnnotationDomain::Safety)
+                .effective_contract(&graph, implementation_graph, &ReportEffect::Safety.key())
                 .expect("effective safety contract")
                 .owner(),
             declaration,
@@ -4414,10 +4468,7 @@ unresolved-call-target = "warn"
     fn covered_declaration_does_not_hide_targetless_unknown_sibling() {
         let root = stable_function(70);
         let declaration = stable_function(71);
-        let contracts = FunctionContractsFact {
-            panic: Some(whole_contract()),
-            safety: Some(whole_contract()),
-        };
+        let contracts = effect_contracts(Some(whole_contract()), Some(whole_contract()));
         let artifact = ArtifactFacts::new(
             vec![body(
                 root,
@@ -4500,10 +4551,7 @@ unresolved-call-target = "warn"
             function: declaration,
             display_path: String::from("sample::Callable::call"),
             attributes: declaration_attributes,
-            contracts: FunctionContractsFact {
-                panic: Some(whole_contract()),
-                safety: Some(whole_contract()),
-            },
+            contracts: effect_contracts(Some(whole_contract()), Some(whole_contract())),
         });
         let artifact = ArtifactFacts::new(
             vec![body(
@@ -4600,10 +4648,7 @@ unresolved-call-target = "warn"
             bodyless_declaration(
                 panic_declaration,
                 "trusted::PanicSurface::call",
-                FunctionContractsFact {
-                    panic: Some(whole_contract()),
-                    safety: None,
-                },
+                effect_contracts(Some(whole_contract()), None),
             ),
         );
 
@@ -4613,10 +4658,7 @@ unresolved-call-target = "warn"
             bodyless_declaration(
                 safety_declaration,
                 "trusted::SafetySurface::call",
-                FunctionContractsFact {
-                    panic: None,
-                    safety: Some(whole_contract()),
-                },
+                effect_contracts(None, Some(whole_contract())),
             ),
         );
 
@@ -4795,13 +4837,13 @@ unresolved-call-target = "warn"
                         shared_justification_marker(
                             0,
                             "shared-panic-marker",
-                            AnnotationFactKind::PanicJustification,
+                            annotation_kind::<Panic>(AnnotationRole::Justification),
                             AnnotationTargetFact::Effect(EffectId::new(0)),
                         ),
                         shared_justification_marker(
                             1,
                             "shared-panic-marker",
-                            AnnotationFactKind::PanicJustification,
+                            annotation_kind::<Panic>(AnnotationRole::Justification),
                             AnnotationTargetFact::Effect(EffectId::new(1)),
                         ),
                     ],

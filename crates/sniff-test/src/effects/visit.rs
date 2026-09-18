@@ -8,8 +8,8 @@ use rustc_span::Span;
 
 use crate::artifact::{EffectKey, EffectKind};
 
-use super::Effect;
 use super::safety::visit::SafetyEffectGroup;
+use super::{Effect, EffectMetadata};
 
 /// One compiler-local operation reported by an effect pass.
 #[derive(Debug, Clone)]
@@ -132,6 +132,7 @@ pub(crate) struct RegisteredEffectPassOutput {
 
 #[derive(Default)]
 pub(crate) struct EffectPassRegistry {
+    effects: Vec<EffectMetadata>,
     hir_passes: Vec<RegisteredHirPass>,
     thir_passes: Vec<RegisteredThirPass>,
     mir_passes: Vec<RegisteredMirPass>,
@@ -148,6 +149,14 @@ impl EffectPassRegistry {
             !E::JUSTIFICATION.is_empty(),
             "justification marker must not be empty"
         );
+        let effect = EffectMetadata::of::<E>();
+        assert!(
+            self.effects
+                .iter()
+                .all(|registered| registered.key != effect.key),
+            "effect names must be unique"
+        );
+        self.effects.push(effect);
         E::register_passes(self);
     }
 

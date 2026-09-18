@@ -10,34 +10,33 @@ use rustc_span::{ExpnId, SourceFile, Span};
 use crate::artifact::UnverifiedMarkerProbeReason;
 use crate::config::MarkerProbing;
 use crate::contracts::{MarkerSatisfaction, markdown_list_item_body, structural_list_path};
-use crate::effects::Effect;
-use crate::effects::panic::Panic;
-use crate::effects::safety::Safety;
 use crate::namespace::definition_backed_macro;
 
 #[derive(Debug, Clone, Copy)]
-enum MarkerSyntax {
-    Panic,
-    Safety,
+struct MarkerSyntax<'a> {
+    prefix: &'a str,
+    competing_prefixes: &'a [&'a str],
 }
 
-impl MarkerSyntax {
-    fn prefix(self) -> &'static str {
-        match self {
-            Self::Panic => Panic::JUSTIFICATION,
-            Self::Safety => Safety::JUSTIFICATION,
+impl<'a> MarkerSyntax<'a> {
+    const fn new(prefix: &'a str, competing_prefixes: &'a [&'a str]) -> Self {
+        Self {
+            prefix,
+            competing_prefixes,
         }
     }
 
     fn strip_prefix<'line>(self, line: &'line str) -> Option<&'line str> {
-        line.strip_prefix(self.prefix())?.strip_prefix(':')
+        line.strip_prefix(self.prefix)?.strip_prefix(':')
     }
 
-    fn other_prefix(self) -> &'static str {
-        match self {
-            Self::Panic => Self::Safety.prefix(),
-            Self::Safety => Self::Panic.prefix(),
-        }
+    fn starts_competing_marker(self, line: &str) -> bool {
+        self.competing_prefixes.iter().any(|prefix| {
+            *prefix != self.prefix
+                && line
+                    .strip_prefix(prefix)
+                    .is_some_and(|line| line.starts_with(':'))
+        })
     }
 }
 
@@ -174,19 +173,27 @@ impl ParsedMarkerBlock {
 }
 
 #[must_use]
-pub(crate) fn safety_span_marker_block(
+pub(crate) fn effect_site_marker_block(
     tcx: TyCtxt<'_>,
     owner: LocalDefId,
     span: Span,
+    justification: &'static str,
+    competing_justifications: &[&str],
     probing: MarkerProbing,
 ) -> MarkerProbe<EffectMarkerBlock> {
-    effect_site_marker_block_with(tcx, owner, span, MarkerSyntax::Safety, probing)
+    effect_site_marker_block_with(
+        tcx,
+        owner,
+        span,
+        MarkerSyntax::new(justification, competing_justifications),
+        probing,
+    )
 }
 
 fn span_marker_block_with(
     tcx: TyCtxt<'_>,
     span: Span,
-    syntax: MarkerSyntax,
+    syntax: MarkerSyntax<'_>,
     probing: MarkerProbing,
 ) -> MarkerProbe<EffectMarkerBlock> {
     probe_marker_candidates(marker_probe_spans(span, probing), |span| {
@@ -201,30 +208,22 @@ fn span_marker_block_with(
 /// source site wins, followed by the unique immediate THIR statement-like
 /// unit. Arbitrary enclosing blocks do not own markers.
 #[must_use]
-pub(crate) fn panic_effect_edge_marker_block(
+pub(crate) fn effect_edge_marker_block(
     tcx: TyCtxt<'_>,
     graph: &ReachabilityGraph<'_>,
     edge: &ReachabilityEdge,
+    fallback_scope_span: Option<Span>,
+    justification: &'static str,
+    competing_justifications: &[&str],
     probing: MarkerProbing,
 ) -> MarkerProbe<EffectMarkerBlock> {
-    effect_edge_marker_block_with(tcx, graph, edge, MarkerSyntax::Panic, probing)
-}
-
-/// Marker block that justifies one safety-bearing reachability edge.
-#[must_use]
-pub(crate) fn safety_effect_edge_marker_block(
-    tcx: TyCtxt<'_>,
-    graph: &ReachabilityGraph<'_>,
-    edge: &ReachabilityEdge,
-    safety_scope_span: Option<Span>,
-    probing: MarkerProbing,
-) -> MarkerProbe<EffectMarkerBlock> {
-    effect_edge_marker_block_with(tcx, graph, edge, MarkerSyntax::Safety, probing).or_else(|| {
-        let Some(span) = safety_scope_span else {
+    let syntax = MarkerSyntax::new(justification, competing_justifications);
+    effect_edge_marker_block_with(tcx, graph, edge, syntax, probing).or_else(|| {
+        let Some(span) = fallback_scope_span else {
             return MarkerProbe::VerifiedAbsent;
         };
         probe_required_marker_candidate(edge_owner(graph, edge), |owner| {
-            effect_site_marker_block_with(tcx, owner, span, MarkerSyntax::Safety, probing)
+            effect_site_marker_block_with(tcx, owner, span, syntax, probing)
         })
     })
 }
@@ -233,7 +232,7 @@ fn effect_edge_marker_block_with(
     tcx: TyCtxt<'_>,
     graph: &ReachabilityGraph<'_>,
     edge: &ReachabilityEdge,
-    syntax: MarkerSyntax,
+    syntax: MarkerSyntax<'_>,
     probing: MarkerProbing,
 ) -> MarkerProbe<EffectMarkerBlock> {
     probe_marker_candidates(
@@ -267,7 +266,7 @@ fn effect_site_marker_block_with(
     tcx: TyCtxt<'_>,
     owner: LocalDefId,
     span: Span,
-    syntax: MarkerSyntax,
+    syntax: MarkerSyntax<'_>,
     probing: MarkerProbing,
 ) -> MarkerProbe<EffectMarkerBlock> {
     span_marker_block_with(tcx, span, syntax, probing).or_else(|| {
@@ -393,11 +392,8 @@ pub(crate) fn span_contains(outer: Span, inner: Span) -> bool {
 // start plus line index identifies a marker lookup. Every edge of every
 // per-root traversal re-scans its lines without this.
 thread_local! {
-    static PANIC_MARKER_BLOCK_CACHE: std::cell::RefCell<
-        std::collections::HashMap<(u32, usize), Option<ParsedMarkerBlock>>,
-    > = std::cell::RefCell::new(std::collections::HashMap::new());
-    static SAFETY_MARKER_BLOCK_CACHE: std::cell::RefCell<
-        std::collections::HashMap<(u32, usize), Option<ParsedMarkerBlock>>,
+    static MARKER_BLOCK_CACHE: std::cell::RefCell<
+        std::collections::HashMap<(u32, usize, String), Option<ParsedMarkerBlock>>,
     > = std::cell::RefCell::new(std::collections::HashMap::new());
 }
 
@@ -446,7 +442,7 @@ fn marker_origin(probe_span: Span) -> MarkerOrigin {
 fn span_marker_block_at(
     tcx: TyCtxt<'_>,
     span: Span,
-    syntax: MarkerSyntax,
+    syntax: MarkerSyntax<'_>,
 ) -> MarkerProbe<EffectMarkerBlock> {
     let source_map = tcx.sess.source_map();
     let location = source_map.lookup_char_pos(span.lo());
@@ -454,21 +450,17 @@ fn span_marker_block_at(
         return MarkerProbe::Unverified(UnverifiedMarkerProbeReason::SourceUnavailable);
     }
     let line_index = location.line.saturating_sub(1);
-    let key = (location.file.start_pos.0, line_index);
-    let parsed = match syntax {
-        MarkerSyntax::Panic => PANIC_MARKER_BLOCK_CACHE.with_borrow_mut(|cache| {
-            cache
-                .entry(key)
-                .or_insert_with(|| marker_block_at(&location.file, line_index, syntax))
-                .clone()
-        }),
-        MarkerSyntax::Safety => SAFETY_MARKER_BLOCK_CACHE.with_borrow_mut(|cache| {
-            cache
-                .entry(key)
-                .or_insert_with(|| marker_block_at(&location.file, line_index, syntax))
-                .clone()
-        }),
-    };
+    let key = (
+        location.file.start_pos.0,
+        line_index,
+        syntax.prefix.to_owned(),
+    );
+    let parsed = MARKER_BLOCK_CACHE.with_borrow_mut(|cache| {
+        cache
+            .entry(key)
+            .or_insert_with(|| marker_block_at(&location.file, line_index, syntax))
+            .clone()
+    });
     marker_probe_from_source(
         true,
         parsed.map(|block| block.instantiate(marker_origin(span))),
@@ -476,7 +468,7 @@ fn span_marker_block_at(
 }
 
 #[must_use]
-fn line_satisfaction(line: &str, syntax: MarkerSyntax) -> Option<MarkerSatisfaction> {
+fn line_satisfaction(line: &str, syntax: MarkerSyntax<'_>) -> Option<MarkerSatisfaction> {
     comment_body(line)
         .and_then(|body| syntax.strip_prefix(body))
         .map(parse_marker)
@@ -532,7 +524,7 @@ fn looks_like_requirement_name(name: &str) -> bool {
 fn marker_block_at(
     file: &SourceFile,
     line_index: usize,
-    syntax: MarkerSyntax,
+    syntax: MarkerSyntax<'_>,
 ) -> Option<ParsedMarkerBlock> {
     let mut block = preceding_marker_block(file, line_index, syntax);
     let line_satisfactions = source_line_satisfactions(file, line_index, syntax);
@@ -559,7 +551,7 @@ fn marker_block_at(
 fn preceding_marker_block(
     file: &SourceFile,
     line_index: usize,
-    syntax: MarkerSyntax,
+    syntax: MarkerSyntax<'_>,
 ) -> Option<ParsedMarkerBlock> {
     let block = preceding_comment_block(file, line_index)?;
     let satisfactions = comment_block_satisfactions(&block.lines, syntax);
@@ -710,7 +702,7 @@ fn comment_block_span(file: &SourceFile, start_line: usize, end_line: usize) -> 
 fn source_line_satisfactions(
     file: &SourceFile,
     line_index: usize,
-    syntax: MarkerSyntax,
+    syntax: MarkerSyntax<'_>,
 ) -> Vec<MarkerSatisfaction> {
     file.get_line(line_index)
         .and_then(|line| line_satisfaction(line.as_ref(), syntax))
@@ -732,7 +724,10 @@ fn comment_body_preserving_indentation(line: &str) -> Option<&str> {
         .then(|| comment.strip_prefix(' ').unwrap_or(comment))
 }
 
-fn comment_block_satisfactions(lines: &[String], syntax: MarkerSyntax) -> Vec<MarkerSatisfaction> {
+fn comment_block_satisfactions(
+    lines: &[String],
+    syntax: MarkerSyntax<'_>,
+) -> Vec<MarkerSatisfaction> {
     let mut satisfactions: Vec<MarkerSatisfaction> = Vec::new();
     let mut pending_header_reason: Option<String> = None;
     let mut in_marker_block = false;
@@ -753,10 +748,7 @@ fn comment_block_satisfactions(lines: &[String], syntax: MarkerSyntax) -> Vec<Ma
             } else {
                 satisfactions.push(parsed);
             }
-        } else if marker_line
-            .strip_prefix(syntax.other_prefix())
-            .is_some_and(|line| line.starts_with(':'))
-        {
+        } else if syntax.starts_competing_marker(marker_line) {
             flush_pending_header(&mut satisfactions, &mut pending_header_reason);
             in_marker_block = false;
             list_levels.clear();
@@ -827,6 +819,14 @@ mod tests {
     use crate::artifact::UnverifiedMarkerProbeReason;
     use crate::config::MarkerProbing;
 
+    fn panic_syntax() -> MarkerSyntax<'static> {
+        MarkerSyntax::new("PANIC", &["PANIC", "SAFETY"])
+    }
+
+    fn safety_syntax() -> MarkerSyntax<'static> {
+        MarkerSyntax::new("SAFETY", &["PANIC", "SAFETY"])
+    }
+
     fn with_source_file(source: &str, check: impl FnOnce(&rustc_span::SourceFile)) {
         rustc_span::create_default_session_globals_then(|| {
             let source_map = SourceMap::new(FilePathMapping::empty());
@@ -839,11 +839,11 @@ mod tests {
     }
 
     fn line_has_panic_marker(line: &str) -> bool {
-        super::line_satisfaction(line, MarkerSyntax::Panic).is_some()
+        super::line_satisfaction(line, panic_syntax()).is_some()
     }
 
     fn line_has_safety_marker(line: &str) -> bool {
-        super::line_satisfaction(line, MarkerSyntax::Safety).is_some()
+        super::line_satisfaction(line, safety_syntax()).is_some()
     }
 
     #[test]
@@ -852,7 +852,7 @@ mod tests {
         assert_eq!(
             super::line_satisfaction(
                 "// PANIC: index in bounds: checked by caller",
-                MarkerSyntax::Panic,
+                panic_syntax(),
             ),
             Some(MarkerSatisfaction {
                 requirement: Some(String::from("index in bounds")),
@@ -957,7 +957,7 @@ mod tests {
         ];
 
         assert_eq!(
-            super::comment_block_satisfactions(&lines, MarkerSyntax::Safety)
+            super::comment_block_satisfactions(&lines, safety_syntax())
                 .into_iter()
                 .map(|satisfaction| (satisfaction.requirement, satisfaction.path))
                 .collect::<Vec<_>>(),
@@ -1000,10 +1000,7 @@ mod tests {
             "// SAFETY: pointer came from NonNull"
         ));
         assert_eq!(
-            super::line_satisfaction(
-                "// SAFETY: initialized: written above",
-                MarkerSyntax::Safety,
-            ),
+            super::line_satisfaction("// SAFETY: initialized: written above", safety_syntax(),),
             Some(MarkerSatisfaction {
                 requirement: Some(String::from("initialized")),
                 reason: String::from("written above"),
@@ -1018,7 +1015,7 @@ mod tests {
         with_source_file(
             "// SAFETY: pointer is valid.\n#[allow(unused_variables)]\nunsafe { read(ptr) }\n",
             |file| {
-                let marker = super::marker_block_at(file, 2, MarkerSyntax::Safety)
+                let marker = super::marker_block_at(file, 2, safety_syntax())
                     .expect("marker above the attribute should apply");
 
                 assert_eq!(marker.key.start_line, 0);
@@ -1039,7 +1036,7 @@ mod tests {
              #[allow(unused_variables)]\n\
              panic!(\"boom\");\n",
             |file| {
-                let marker = super::marker_block_at(file, 6, MarkerSyntax::Panic)
+                let marker = super::marker_block_at(file, 6, panic_syntax())
                     .expect("marker above the attributes should apply");
 
                 assert_eq!(marker.key.start_line, 0);
@@ -1060,7 +1057,7 @@ mod tests {
              let unused = 0;\n\
              unsafe { read(ptr) }\n",
             |file| {
-                assert!(super::marker_block_at(file, 3, MarkerSyntax::Safety).is_none());
+                assert!(super::marker_block_at(file, 3, safety_syntax()).is_none());
             },
         );
     }
@@ -1099,9 +1096,8 @@ mod tests {
                 "checked by the caller",
             ),
         ] {
-            let parsed =
-                super::line_satisfaction(&format!("// SAFETY: {body}"), MarkerSyntax::Safety)
-                    .expect("marker should contain a justification");
+            let parsed = super::line_satisfaction(&format!("// SAFETY: {body}"), safety_syntax())
+                .expect("marker should contain a justification");
 
             assert_eq!(parsed.requirement.as_deref(), expected_requirement);
             assert_eq!(parsed.reason, expected_reason);
@@ -1118,7 +1114,7 @@ mod tests {
 
         assert_eq!(comment_block_satisfactions_for_panic(&lines), []);
         assert_eq!(
-            super::comment_block_satisfactions(&lines, MarkerSyntax::Safety),
+            super::comment_block_satisfactions(&lines, safety_syntax()),
             [super::MarkerSatisfaction {
                 requirement: None,
                 reason: String::from(
@@ -1213,6 +1209,6 @@ mod tests {
     }
 
     fn comment_block_satisfactions_for_panic(lines: &[String]) -> Vec<MarkerSatisfaction> {
-        super::comment_block_satisfactions(lines, MarkerSyntax::Panic)
+        super::comment_block_satisfactions(lines, panic_syntax())
     }
 }

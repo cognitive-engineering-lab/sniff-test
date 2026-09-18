@@ -152,7 +152,7 @@ impl ArtifactFacts {
                 return defining.marker_evidence_state(kind, target, probing);
             }
             let (matched, evidence) =
-                projected_marker_evidence(selected, defining, kind, target, probing);
+                projected_marker_evidence(selected, defining, &kind, target, probing);
             if matched {
                 return evidence;
             }
@@ -226,7 +226,7 @@ fn extend_definition_namespace_candidates(
 fn projected_marker_evidence(
     selected: &FunctionFact,
     defining: &FunctionFact,
-    kind: AnnotationFactKind,
+    kind: &AnnotationFactKind,
     target: AnnotationTargetFact,
     probing: AnnotationProbingFact,
 ) -> (bool, Option<MarkerEvidenceState>) {
@@ -268,14 +268,14 @@ fn projected_marker_evidence(
 
 fn aggregate_marker_evidence(
     body: &FunctionFact,
-    kind: AnnotationFactKind,
+    kind: &AnnotationFactKind,
     targets: impl Iterator<Item = AnnotationTargetFact>,
     probing: AnnotationProbingFact,
 ) -> (bool, Option<MarkerEvidenceState>) {
     let mut matched = false;
     let mut aggregate: Option<MarkerEvidenceState> = None;
     for target in targets {
-        if let Some(evidence) = body.marker_evidence_state(kind, target, probing) {
+        if let Some(evidence) = body.marker_evidence_state(kind.clone(), target, probing) {
             matched = true;
             aggregate = Some(match aggregate {
                 Some(prior) => prior.merge(evidence),
@@ -414,7 +414,7 @@ impl FunctionFact {
         target: AnnotationTargetFact,
         probing: AnnotationProbingFact,
     ) -> Option<MarkerEvidenceState> {
-        if !self.has_marker_probe_key(kind, target) {
+        if !self.has_marker_probe_key(&kind, target) {
             return None;
         }
         if self.markers.iter().any(|marker| {
@@ -434,43 +434,22 @@ impl FunctionFact {
         }
     }
 
-    fn has_marker_probe_key(&self, kind: AnnotationFactKind, target: AnnotationTargetFact) -> bool {
-        match (kind, target) {
-            (AnnotationFactKind::PanicJustification, AnnotationTargetFact::Call(id)) => self
-                .calls
-                .iter()
-                .find(|call| call.id == id)
-                .is_some_and(|call| call.kind != CallKindFact::Assert),
-            (AnnotationFactKind::SafetyJustification, AnnotationTargetFact::Call(id)) => {
-                self.calls.iter().any(|call| call.id == id)
-            }
-            (AnnotationFactKind::PanicJustification, AnnotationTargetFact::Effect(id)) => self
+    fn has_marker_probe_key(
+        &self,
+        kind: &AnnotationFactKind,
+        target: AnnotationTargetFact,
+    ) -> bool {
+        if kind.role != AnnotationRole::Justification {
+            return false;
+        }
+        match target {
+            AnnotationTargetFact::Call(id) => self.calls.iter().any(|call| call.id == id),
+            AnnotationTargetFact::Effect(id) => self
                 .effects
                 .iter()
                 .find(|effect| effect.id == id)
-                .is_some_and(|effect| {
-                    effect.effect.as_str()
-                        == <crate::effects::panic::Panic as crate::effects::Effect>::EFFECT_NAME
-                }),
-            (AnnotationFactKind::SafetyJustification, AnnotationTargetFact::Effect(id)) => self
-                .effects
-                .iter()
-                .find(|effect| effect.id == id)
-                .is_some_and(|effect| {
-                    effect.effect.as_str()
-                        == <crate::effects::safety::Safety as crate::effects::Effect>::EFFECT_NAME
-                }),
-            (
-                AnnotationFactKind::PanicContract
-                | AnnotationFactKind::SafetyContract
-                | AnnotationFactKind::PanicJustification
-                | AnnotationFactKind::SafetyJustification,
-                AnnotationTargetFact::Function(_),
-            )
-            | (
-                AnnotationFactKind::PanicContract | AnnotationFactKind::SafetyContract,
-                AnnotationTargetFact::Call(_) | AnnotationTargetFact::Effect(_),
-            ) => false,
+                .is_some_and(|effect| effect.effect == kind.effect),
+            AnnotationTargetFact::Function(_) => false,
         }
     }
 }
@@ -726,8 +705,24 @@ pub(crate) struct FunctionTargetFact {
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub(crate) struct FunctionContractsFact {
-    pub(crate) panic: Option<ContractFact>,
-    pub(crate) safety: Option<ContractFact>,
+    pub(crate) effects: Vec<EffectContractFact>,
+}
+
+impl FunctionContractsFact {
+    #[must_use]
+    pub(crate) fn get(&self, effect: &EffectKey) -> Option<&ContractFact> {
+        self.effects
+            .iter()
+            .find(|candidate| &candidate.effect == effect)
+            .map(|candidate| &candidate.contract)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub(crate) struct EffectContractFact {
+    pub(crate) effect: EffectKey,
+    pub(crate) contract: ContractFact,
 }
 
 /// Raw documented contract, before any requirement satisfaction is interpreted.
@@ -978,13 +973,25 @@ pub(crate) struct AnnotationFact {
     pub(crate) requirements: Vec<ContractRequirementFact>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub(crate) struct AnnotationFactKind {
+    pub(crate) effect: EffectKey,
+    pub(crate) role: AnnotationRole,
+}
+
+impl AnnotationFactKind {
+    #[must_use]
+    pub(crate) const fn new(effect: EffectKey, role: AnnotationRole) -> Self {
+        Self { effect, role }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
-pub(crate) enum AnnotationFactKind {
-    PanicJustification,
-    SafetyJustification,
-    PanicContract,
-    SafetyContract,
+pub(crate) enum AnnotationRole {
+    Contract,
+    Justification,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
@@ -1050,7 +1057,7 @@ impl MarkerEvidenceState {
 ///
 /// This is deliberately sparse: successful markers live in [`AnnotationFact`]
 /// and verified absence is inferred when neither kind of record exists.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub(crate) struct UnverifiedMarkerProbeFact {
     pub(crate) kind: AnnotationFactKind,
@@ -1191,20 +1198,17 @@ fn validate_body(
 fn validate_unverified_marker_probes(body: &FunctionFact) -> Result<(), ArtifactValidationError> {
     validate_sorted_unique(
         &body.unverified_marker_probes,
-        |probe| (probe.kind, probe.target, probe.probing),
+        |probe| (probe.kind.clone(), probe.target, probe.probing),
         "unverified marker probe",
     )?;
     for probe in &body.unverified_marker_probes {
-        if !matches!(
-            probe.kind,
-            AnnotationFactKind::PanicJustification | AnnotationFactKind::SafetyJustification
-        ) {
+        if probe.kind.role != AnnotationRole::Justification {
             return Err(ArtifactValidationError::new(
                 "unverified marker probe must describe a justification",
             ));
         }
         validate_unverified_marker_probe_target(body, probe)?;
-        if !body.has_marker_probe_key(probe.kind, probe.target) {
+        if !body.has_marker_probe_key(&probe.kind, probe.target) {
             return Err(ArtifactValidationError::new(
                 "unverified marker probe does not describe an extracted probe key",
             ));
@@ -1305,11 +1309,14 @@ fn validate_function_target(
 ) -> Result<(), ArtifactValidationError> {
     require_nonempty(&target.display_path, "function target display path")?;
     validate_attributes(&target.attributes)?;
-    if let Some(contract) = &target.contracts.panic {
-        validate_contract(contract, source_lengths)?;
-    }
-    if let Some(contract) = &target.contracts.safety {
-        validate_contract(contract, source_lengths)?;
+    validate_sorted_unique(
+        &target.contracts.effects,
+        |contract| contract.effect.clone(),
+        "effect contract",
+    )?;
+    for contract in &target.contracts.effects {
+        require_nonempty(contract.effect.as_str(), "contract effect name")?;
+        validate_contract(&contract.contract, source_lengths)?;
     }
     Ok(())
 }
@@ -1704,6 +1711,23 @@ mod tests {
             macro_expansions: Vec::new(),
             kind: EffectKind::new("blocking-read"),
         });
+        body.markers.push(AnnotationFact {
+            id: MarkerId::new(0),
+            identity: String::from("network-marker"),
+            kind: AnnotationFactKind::new(
+                EffectKey::new("example.com/network"),
+                AnnotationRole::Justification,
+            ),
+            source_range: None,
+            target: AnnotationTargetFact::Effect(EffectId::new(0)),
+            applicable_probing: vec![AnnotationProbingFact::SourceCallsite],
+            satisfactions: vec![AnnotationSatisfactionFact {
+                requirement: None,
+                reason: String::from("request is bounded"),
+                structural_path: None,
+            }],
+            requirements: Vec::new(),
+        });
 
         let artifact = ArtifactFacts::new(vec![body], Vec::new()).expect("valid plugin effect");
         let encoded = serde_json::to_string(&artifact).expect("serialize plugin effect");
@@ -1714,6 +1738,10 @@ mod tests {
         let effect = &decoded.functions[0].effects[0];
         assert_eq!(effect.effect.as_str(), "example.com/network");
         assert_eq!(effect.kind.as_str(), "blocking-read");
+        assert_eq!(
+            decoded.functions[0].markers[0].kind.effect.as_str(),
+            "example.com/network"
+        );
     }
 
     #[test]
@@ -1836,7 +1864,9 @@ mod tests {
         body.markers.push(AnnotationFact {
             id: MarkerId::new(0),
             identity: String::from("panic-marker"),
-            kind: AnnotationFactKind::PanicJustification,
+            kind: crate::effects::annotation_kind::<crate::effects::panic::Panic>(
+                crate::artifact::AnnotationRole::Justification,
+            ),
             source_range: None,
             target: AnnotationTargetFact::Effect(EffectId::new(0)),
             applicable_probing: vec![AnnotationProbingFact::SourceCallsite],
@@ -1849,7 +1879,9 @@ mod tests {
         });
         body.unverified_marker_probes
             .push(UnverifiedMarkerProbeFact {
-                kind: AnnotationFactKind::PanicJustification,
+                kind: crate::effects::annotation_kind::<crate::effects::panic::Panic>(
+                    crate::artifact::AnnotationRole::Justification,
+                ),
                 target: AnnotationTargetFact::Effect(EffectId::new(0)),
                 probing: AnnotationProbingFact::MacroDefinitionFirst,
                 reason: UnverifiedMarkerProbeReason::SourceUnavailable,
@@ -1869,7 +1901,9 @@ mod tests {
 
         assert_eq!(
             body.marker_evidence_state(
-                AnnotationFactKind::PanicJustification,
+                crate::effects::annotation_kind::<crate::effects::panic::Panic>(
+                    crate::artifact::AnnotationRole::Justification
+                ),
                 AnnotationTargetFact::Effect(EffectId::new(0)),
                 AnnotationProbingFact::SourceCallsite,
             ),
@@ -1877,7 +1911,9 @@ mod tests {
         );
         assert_eq!(
             body.marker_evidence_state(
-                AnnotationFactKind::PanicJustification,
+                crate::effects::annotation_kind::<crate::effects::panic::Panic>(
+                    crate::artifact::AnnotationRole::Justification
+                ),
                 AnnotationTargetFact::Effect(EffectId::new(0)),
                 AnnotationProbingFact::MacroDefinitionFirst,
             ),
@@ -1887,7 +1923,9 @@ mod tests {
         );
         assert_eq!(
             body.marker_evidence_state(
-                AnnotationFactKind::PanicJustification,
+                crate::effects::annotation_kind::<crate::effects::panic::Panic>(
+                    crate::artifact::AnnotationRole::Justification
+                ),
                 AnnotationTargetFact::Effect(EffectId::new(1)),
                 AnnotationProbingFact::SourceCallsite,
             ),
@@ -1895,7 +1933,9 @@ mod tests {
         );
         assert_eq!(
             body.marker_evidence_state(
-                AnnotationFactKind::SafetyJustification,
+                crate::effects::annotation_kind::<crate::effects::safety::Safety>(
+                    crate::artifact::AnnotationRole::Justification
+                ),
                 AnnotationTargetFact::Effect(EffectId::new(1)),
                 AnnotationProbingFact::SourceCallsite,
             ),
@@ -1927,7 +1967,7 @@ mod tests {
     fn validation_rejects_multiple_unverified_reasons_for_the_same_probe_key() {
         let function = FunctionId::generic(def_hash("00000000000000210000000000000022"));
         let mut body = marker_probe_body(function, "sample::probe");
-        let mut duplicate = body.unverified_marker_probes[0];
+        let mut duplicate = body.unverified_marker_probes[0].clone();
         duplicate.reason = UnverifiedMarkerProbeReason::NoUsableSourceSpan;
         body.unverified_marker_probes.push(duplicate);
 
@@ -1965,7 +2005,9 @@ mod tests {
         overlay
             .unverified_marker_probes
             .push(UnverifiedMarkerProbeFact {
-                kind: AnnotationFactKind::PanicJustification,
+                kind: crate::effects::annotation_kind::<crate::effects::panic::Panic>(
+                    crate::artifact::AnnotationRole::Justification,
+                ),
                 target: AnnotationTargetFact::Effect(EffectId::new(0)),
                 probing: AnnotationProbingFact::SourceCallsite,
                 reason: UnverifiedMarkerProbeReason::SourceUnavailable,
@@ -1976,7 +2018,9 @@ mod tests {
         assert_eq!(
             artifact.source_marker_evidence_state(
                 exact,
-                AnnotationFactKind::PanicJustification,
+                crate::effects::annotation_kind::<crate::effects::panic::Panic>(
+                    crate::artifact::AnnotationRole::Justification
+                ),
                 AnnotationTargetFact::Effect(EffectId::new(0)),
                 AnnotationProbingFact::SourceCallsite,
             ),
@@ -2001,7 +2045,9 @@ mod tests {
         overlay
             .unverified_marker_probes
             .push(UnverifiedMarkerProbeFact {
-                kind: AnnotationFactKind::PanicJustification,
+                kind: crate::effects::annotation_kind::<crate::effects::panic::Panic>(
+                    crate::artifact::AnnotationRole::Justification,
+                ),
                 target: AnnotationTargetFact::Effect(EffectId::new(0)),
                 probing: AnnotationProbingFact::SourceCallsite,
                 reason: UnverifiedMarkerProbeReason::SourceUnavailable,
@@ -2012,7 +2058,9 @@ mod tests {
         assert_eq!(
             artifact.source_marker_evidence_state(
                 exact,
-                AnnotationFactKind::PanicJustification,
+                crate::effects::annotation_kind::<crate::effects::panic::Panic>(
+                    crate::artifact::AnnotationRole::Justification
+                ),
                 AnnotationTargetFact::Effect(EffectId::new(0)),
                 AnnotationProbingFact::SourceCallsite,
             ),
@@ -2040,7 +2088,9 @@ mod tests {
         defining.markers.push(AnnotationFact {
             id: MarkerId::new(0),
             identity: String::from("panic-call-marker"),
-            kind: AnnotationFactKind::PanicJustification,
+            kind: crate::effects::annotation_kind::<crate::effects::panic::Panic>(
+                crate::artifact::AnnotationRole::Justification,
+            ),
             source_range: Some(range(30, 40)),
             target: AnnotationTargetFact::Call(CallId::new(1)),
             applicable_probing: vec![AnnotationProbingFact::SourceCallsite],
@@ -2049,13 +2099,17 @@ mod tests {
         });
         defining.unverified_marker_probes.extend([
             UnverifiedMarkerProbeFact {
-                kind: AnnotationFactKind::PanicJustification,
+                kind: crate::effects::annotation_kind::<crate::effects::panic::Panic>(
+                    crate::artifact::AnnotationRole::Justification,
+                ),
                 target: AnnotationTargetFact::Call(CallId::new(1)),
                 probing: AnnotationProbingFact::MacroDefinitionFirst,
                 reason: UnverifiedMarkerProbeReason::NoUsableSourceSpan,
             },
             UnverifiedMarkerProbeFact {
-                kind: AnnotationFactKind::PanicJustification,
+                kind: crate::effects::annotation_kind::<crate::effects::panic::Panic>(
+                    crate::artifact::AnnotationRole::Justification,
+                ),
                 target: AnnotationTargetFact::Call(CallId::new(2)),
                 probing: AnnotationProbingFact::MacroDefinitionFirst,
                 reason: UnverifiedMarkerProbeReason::SourceUnavailable,
@@ -2072,7 +2126,9 @@ mod tests {
         assert_eq!(
             artifact.source_marker_evidence_state(
                 exact,
-                AnnotationFactKind::PanicJustification,
+                crate::effects::annotation_kind::<crate::effects::panic::Panic>(
+                    crate::artifact::AnnotationRole::Justification
+                ),
                 AnnotationTargetFact::Call(CallId::new(0)),
                 AnnotationProbingFact::SourceCallsite,
             ),
@@ -2081,7 +2137,9 @@ mod tests {
         assert_eq!(
             artifact.source_marker_evidence_state(
                 exact,
-                AnnotationFactKind::PanicJustification,
+                crate::effects::annotation_kind::<crate::effects::panic::Panic>(
+                    crate::artifact::AnnotationRole::Justification
+                ),
                 AnnotationTargetFact::Call(CallId::new(0)),
                 AnnotationProbingFact::MacroDefinitionFirst,
             ),
@@ -2104,7 +2162,9 @@ mod tests {
         defining.markers.push(AnnotationFact {
             id: MarkerId::new(0),
             identity: String::from("unmappable-panic-call-marker"),
-            kind: AnnotationFactKind::PanicJustification,
+            kind: crate::effects::annotation_kind::<crate::effects::panic::Panic>(
+                crate::artifact::AnnotationRole::Justification,
+            ),
             source_range: None,
             target: AnnotationTargetFact::Call(CallId::new(1)),
             applicable_probing: vec![AnnotationProbingFact::SourceCallsite],
@@ -2119,7 +2179,9 @@ mod tests {
         overlay
             .unverified_marker_probes
             .push(UnverifiedMarkerProbeFact {
-                kind: AnnotationFactKind::PanicJustification,
+                kind: crate::effects::annotation_kind::<crate::effects::panic::Panic>(
+                    crate::artifact::AnnotationRole::Justification,
+                ),
                 target: AnnotationTargetFact::Call(CallId::new(0)),
                 probing: AnnotationProbingFact::SourceCallsite,
                 reason: UnverifiedMarkerProbeReason::SourceUnavailable,
@@ -2130,7 +2192,9 @@ mod tests {
         assert_eq!(
             artifact.source_marker_evidence_state(
                 exact,
-                AnnotationFactKind::PanicJustification,
+                crate::effects::annotation_kind::<crate::effects::panic::Panic>(
+                    crate::artifact::AnnotationRole::Justification
+                ),
                 AnnotationTargetFact::Call(CallId::new(0)),
                 AnnotationProbingFact::SourceCallsite,
             ),
@@ -2156,7 +2220,9 @@ mod tests {
         defining.markers.push(AnnotationFact {
             id: MarkerId::new(0),
             identity: String::from("unmappable-macro-call-marker"),
-            kind: AnnotationFactKind::PanicJustification,
+            kind: crate::effects::annotation_kind::<crate::effects::panic::Panic>(
+                crate::artifact::AnnotationRole::Justification,
+            ),
             source_range: None,
             target: AnnotationTargetFact::Call(CallId::new(1)),
             applicable_probing: vec![AnnotationProbingFact::SourceCallsite],
@@ -2175,7 +2241,9 @@ mod tests {
         overlay
             .unverified_marker_probes
             .push(UnverifiedMarkerProbeFact {
-                kind: AnnotationFactKind::PanicJustification,
+                kind: crate::effects::annotation_kind::<crate::effects::panic::Panic>(
+                    crate::artifact::AnnotationRole::Justification,
+                ),
                 target: AnnotationTargetFact::Call(CallId::new(0)),
                 probing: AnnotationProbingFact::SourceCallsite,
                 reason: UnverifiedMarkerProbeReason::SourceUnavailable,
@@ -2186,7 +2254,9 @@ mod tests {
         assert_eq!(
             artifact.source_marker_evidence_state(
                 exact,
-                AnnotationFactKind::PanicJustification,
+                crate::effects::annotation_kind::<crate::effects::panic::Panic>(
+                    crate::artifact::AnnotationRole::Justification
+                ),
                 AnnotationTargetFact::Call(CallId::new(0)),
                 AnnotationProbingFact::SourceCallsite,
             ),
@@ -2212,7 +2282,9 @@ mod tests {
         defining.markers.push(AnnotationFact {
             id: MarkerId::new(0),
             identity: String::from("safety-effect-marker"),
-            kind: AnnotationFactKind::SafetyJustification,
+            kind: crate::effects::annotation_kind::<crate::effects::safety::Safety>(
+                crate::artifact::AnnotationRole::Justification,
+            ),
             source_range: Some(range(70, 80)),
             target: AnnotationTargetFact::Effect(EffectId::new(1)),
             applicable_probing: vec![AnnotationProbingFact::SourceCallsite],
@@ -2230,7 +2302,9 @@ mod tests {
         assert_eq!(
             artifact.source_marker_evidence_state(
                 exact,
-                AnnotationFactKind::SafetyJustification,
+                crate::effects::annotation_kind::<crate::effects::safety::Safety>(
+                    crate::artifact::AnnotationRole::Justification
+                ),
                 AnnotationTargetFact::Effect(EffectId::new(0)),
                 AnnotationProbingFact::SourceCallsite,
             ),
@@ -2255,7 +2329,9 @@ mod tests {
         defining.markers.push(AnnotationFact {
             id: MarkerId::new(0),
             identity: String::from("unmappable-macro-effect-marker"),
-            kind: AnnotationFactKind::SafetyJustification,
+            kind: crate::effects::annotation_kind::<crate::effects::safety::Safety>(
+                crate::artifact::AnnotationRole::Justification,
+            ),
             source_range: None,
             target: AnnotationTargetFact::Effect(EffectId::new(1)),
             applicable_probing: vec![AnnotationProbingFact::SourceCallsite],
@@ -2274,7 +2350,9 @@ mod tests {
         overlay
             .unverified_marker_probes
             .push(UnverifiedMarkerProbeFact {
-                kind: AnnotationFactKind::SafetyJustification,
+                kind: crate::effects::annotation_kind::<crate::effects::safety::Safety>(
+                    crate::artifact::AnnotationRole::Justification,
+                ),
                 target: AnnotationTargetFact::Effect(EffectId::new(0)),
                 probing: AnnotationProbingFact::SourceCallsite,
                 reason: UnverifiedMarkerProbeReason::SourceUnavailable,
@@ -2285,7 +2363,9 @@ mod tests {
         assert_eq!(
             artifact.source_marker_evidence_state(
                 exact,
-                AnnotationFactKind::SafetyJustification,
+                crate::effects::annotation_kind::<crate::effects::safety::Safety>(
+                    crate::artifact::AnnotationRole::Justification
+                ),
                 AnnotationTargetFact::Effect(EffectId::new(0)),
                 AnnotationProbingFact::SourceCallsite,
             ),
@@ -2386,16 +2466,18 @@ mod tests {
                 ],
             },
             contracts: FunctionContractsFact {
-                panic: Some(ContractFact {
-                    source_range: Some(range(160, 180)),
-                    requirements: vec![ContractRequirementFact {
-                        name: String::from("input-valid"),
-                        condition: String::from("the input is valid"),
-                        structural_path: vec![0],
-                        source_range: Some(range(165, 178)),
-                    }],
-                }),
-                safety: None,
+                effects: vec![EffectContractFact {
+                    effect: EffectKey::new("panic"),
+                    contract: ContractFact {
+                        source_range: Some(range(160, 180)),
+                        requirements: vec![ContractRequirementFact {
+                            name: String::from("input-valid"),
+                            condition: String::from("the input is valid"),
+                            structural_path: vec![0],
+                            source_range: Some(range(165, 178)),
+                        }],
+                    },
+                }],
             },
         };
         let declaration_target = FunctionTargetFact {
@@ -2412,16 +2494,18 @@ mod tests {
                 ],
             },
             contracts: FunctionContractsFact {
-                panic: None,
-                safety: Some(ContractFact {
-                    source_range: Some(range(181, 200)),
-                    requirements: vec![ContractRequirementFact {
-                        name: String::from("source-valid"),
-                        condition: String::from("the source-level precondition holds"),
-                        structural_path: vec![0],
-                        source_range: Some(range(185, 198)),
-                    }],
-                }),
+                effects: vec![EffectContractFact {
+                    effect: EffectKey::new("safety"),
+                    contract: ContractFact {
+                        source_range: Some(range(181, 200)),
+                        requirements: vec![ContractRequirementFact {
+                            name: String::from("source-valid"),
+                            condition: String::from("the source-level precondition holds"),
+                            structural_path: vec![0],
+                            source_range: Some(range(185, 198)),
+                        }],
+                    },
+                }],
             },
         };
         let root_contract_requirement = ContractRequirementFact {
@@ -2491,7 +2575,9 @@ mod tests {
                 AnnotationFact {
                     id: MarkerId::new(8),
                     identity: String::from("safety-marker"),
-                    kind: AnnotationFactKind::SafetyJustification,
+                    kind: crate::effects::annotation_kind::<crate::effects::safety::Safety>(
+                        crate::artifact::AnnotationRole::Justification,
+                    ),
                     source_range: Some(range(106, 108)),
                     target: AnnotationTargetFact::Effect(EffectId::new(9)),
                     applicable_probing: vec![
@@ -2508,7 +2594,9 @@ mod tests {
                 AnnotationFact {
                     id: MarkerId::new(1),
                     identity: String::from("panic-contract"),
-                    kind: AnnotationFactKind::PanicContract,
+                    kind: crate::effects::annotation_kind::<crate::effects::panic::Panic>(
+                        crate::artifact::AnnotationRole::Contract,
+                    ),
                     source_range: Some(range(0, 30)),
                     target: AnnotationTargetFact::Function(root),
                     applicable_probing: vec![
@@ -2522,7 +2610,9 @@ mod tests {
                 AnnotationFact {
                     id: MarkerId::new(3),
                     identity: String::from("panic-marker"),
-                    kind: AnnotationFactKind::PanicJustification,
+                    kind: crate::effects::annotation_kind::<crate::effects::panic::Panic>(
+                        crate::artifact::AnnotationRole::Justification,
+                    ),
                     source_range: Some(range(70, 79)),
                     target: AnnotationTargetFact::Call(CallId::new(4)),
                     applicable_probing: vec![AnnotationProbingFact::SourceCallsite],
@@ -2572,8 +2662,7 @@ mod tests {
         assert_eq!(
             declaration_target
                 .contracts
-                .safety
-                .as_ref()
+                .get(&EffectKey::new("safety"))
                 .expect("source safety contract")
                 .requirements[0]
                 .name,

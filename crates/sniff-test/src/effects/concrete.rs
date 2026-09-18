@@ -8,9 +8,9 @@ use effect_tracing::{
     TraceSite,
 };
 
-use crate::annotations::{AnnotationDomain, AnnotationId, AnnotationIndex, SiteCommentAnnotation};
+use crate::annotations::{AnnotationId, AnnotationIndex, SiteCommentAnnotation};
 use crate::artifact::{
-    ArtifactFacts, CallId, DefinitionNamespaceIndex, EffectFact, EffectId,
+    ArtifactFacts, CallId, DefinitionNamespaceIndex, EffectFact, EffectId, EffectKey,
     FunctionId as StableFunctionId, FunctionTargetFact, MacroExpansionFact, same_macro_provenance,
 };
 use crate::compiler::invocations::InvocationGraph;
@@ -209,12 +209,12 @@ impl<'a, 'policy> ConcreteSeedCollector<'a, 'policy> {
     fn finish<D>(
         self,
         annotations: &'a AnnotationIndex,
-        domain: AnnotationDomain,
+        effect: EffectKey,
     ) -> ConcreteEffect<'a, D> {
         ConcreteEffect::new(
             annotations,
             self.graph,
-            domain,
+            effect,
             self.seeds,
             self.trusted_functions,
             self.ignored_functions,
@@ -270,7 +270,7 @@ pub(crate) fn probe_concrete_effect<'annotations, E: Effect>(
             }
         }
     }
-    Ok(seeds.finish(annotations, E::DOMAIN))
+    Ok(seeds.finish(annotations, EffectKey::new(E::EFFECT_NAME)))
 }
 
 fn projected_owners(
@@ -410,7 +410,7 @@ pub(crate) enum ConcreteTermination {
 pub(crate) struct ConcreteEffect<'annotations, D> {
     annotations: &'annotations AnnotationIndex,
     graph: &'annotations InvocationGraph,
-    domain: AnnotationDomain,
+    effect: EffectKey,
     seeds: Vec<EffectSeed<ConcreteSource, ConcreteEffectState>>,
     trusted_functions: BTreeSet<FunctionId>,
     ignored_functions: BTreeSet<FunctionId>,
@@ -425,7 +425,7 @@ impl<'annotations, D> ConcreteEffect<'annotations, D> {
     pub(crate) fn new(
         annotations: &'annotations AnnotationIndex,
         graph: &'annotations InvocationGraph,
-        domain: AnnotationDomain,
+        effect: EffectKey,
         seeds: Vec<ConcreteEffectSeed>,
         trusted_functions: BTreeSet<FunctionId>,
         ignored_functions: BTreeSet<FunctionId>,
@@ -446,7 +446,7 @@ impl<'annotations, D> ConcreteEffect<'annotations, D> {
         Self {
             annotations,
             graph,
-            domain,
+            effect,
             seeds,
             trusted_functions,
             ignored_functions,
@@ -502,7 +502,7 @@ impl<'annotations, D> ConcreteEffect<'annotations, D> {
         call: CallId,
     ) -> Option<AnnotationId> {
         self.annotations
-            .comments_at_raw_call(invocation, call, self.domain)
+            .comments_at_raw_call(invocation, call, &self.effect)
             .find(|comment| comment.has_justification())
             .map(SiteCommentAnnotation::id)
     }
@@ -529,7 +529,7 @@ impl<D> ConcreteEffect<'_, D> {
             }
             ConcreteSource::Effect { owner, effect } => self
                 .annotations
-                .comments_at_effect(owner, effect, self.domain)
+                .comments_at_effect(owner, effect, &self.effect)
                 .find(|comment| comment.has_justification())
                 .map(SiteCommentAnnotation::id),
         }

@@ -8,22 +8,16 @@ use effect_tracing::{
     TerminationSite, TraceCx, TraceNodeId, TracePolicy, TraceSite,
 };
 
-use crate::annotations::{
-    AnnotationDomain, AnnotationId, AnnotationIndex, FunctionContractAnnotation,
-};
-use crate::artifact::{ArtifactFacts, CallId, DefinitionNamespaceIndex};
+use crate::annotations::{AnnotationId, AnnotationIndex, FunctionContractAnnotation};
+use crate::artifact::{ArtifactFacts, CallId, DefinitionNamespaceIndex, EffectKey};
 use crate::compiler::invocations::InvocationGraph;
 use crate::config::{EffectDocMatching, PanicConfig, SafetyConfig};
 use crate::contracts::normalize_requirement_name;
-use crate::effects::EffectSelection;
+use crate::effects::panic::Panic;
+use crate::effects::safety::Safety;
+use crate::effects::{Effect, EffectSelection};
 
 use super::trust::TrustPath;
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub(crate) enum ObligationDomain {
-    Panic,
-    Safety,
-}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub(crate) struct ContractId(AnnotationId);
@@ -43,7 +37,7 @@ struct ObligationId {
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub(crate) struct ObligationState {
-    domain: ObligationDomain,
+    effect: EffectKey,
     contract: ContractId,
     // One invocation may contain concrete and declaration targets. Retaining
     // the current target lets propagation gate only the declaration edge.
@@ -72,8 +66,8 @@ impl ObligationState {
     }
 
     #[must_use]
-    pub(crate) const fn domain(&self) -> ObligationDomain {
-        self.domain
+    pub(crate) const fn effect(&self) -> &EffectKey {
+        &self.effect
     }
 
     #[must_use]
@@ -95,7 +89,7 @@ impl ObligationState {
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub(crate) struct ObligationMarkerUse {
     annotation: AnnotationId,
-    domain: ObligationDomain,
+    effect: EffectKey,
     invocation: InvocationId,
     source_invocation: InvocationId,
     source_calls: BTreeSet<CallId>,
@@ -109,8 +103,8 @@ impl ObligationMarkerUse {
     }
 
     #[must_use]
-    pub(crate) const fn domain(&self) -> ObligationDomain {
-        self.domain
+    pub(crate) const fn effect(&self) -> &EffectKey {
+        &self.effect
     }
 
     #[must_use]
@@ -143,7 +137,7 @@ struct ObligationInvocationTransition {
 pub(crate) struct ObligationContract {
     id: ContractId,
     functions: BTreeSet<FunctionId>,
-    domain: ObligationDomain,
+    effect: EffectKey,
     obligations: BTreeSet<ObligationId>,
 }
 
@@ -172,10 +166,8 @@ pub(crate) struct ObligationTracker<'annotations> {
     contracts: Vec<ObligationContract>,
     obligations: BTreeMap<ObligationId, Obligation>,
     effect_doc_matching: EffectDocMatching,
-    trusted_panic_functions: BTreeSet<FunctionId>,
-    trusted_safety_functions: BTreeSet<FunctionId>,
-    ignored_panic_invocations: BTreeSet<InvocationId>,
-    ignored_safety_invocations: BTreeSet<InvocationId>,
+    trusted_functions: BTreeMap<EffectKey, BTreeSet<FunctionId>>,
+    ignored_invocations: BTreeMap<EffectKey, BTreeSet<InvocationId>>,
 }
 
 impl<'annotations> ObligationTracker<'annotations> {
@@ -195,9 +187,11 @@ impl<'annotations> ObligationTracker<'annotations> {
     ) -> Self {
         let mut contracts = Vec::new();
         let mut obligations = BTreeMap::new();
+        let panic_key = EffectKey::new(Panic::EFFECT_NAME);
+        let safety_key = EffectKey::new(Safety::EFFECT_NAME);
         for annotation in annotations.contracts() {
-            if (annotation.domain() == AnnotationDomain::Panic && !effects.tracks_panic())
-                || (annotation.domain() == AnnotationDomain::Safety && !effects.tracks_safety())
+            if (annotation.effect() == &panic_key && !effects.tracks_panic())
+                || (annotation.effect() == &safety_key && !effects.tracks_safety())
             {
                 continue;
             }
@@ -206,7 +200,7 @@ impl<'annotations> ObligationTracker<'annotations> {
                 .into_iter()
                 .filter(|function| {
                     annotations
-                        .effective_contract(graph, *function, annotation.domain())
+                        .effective_contract(graph, *function, annotation.effect())
                         .is_some_and(|selected| selected.id() == annotation.id())
                 })
                 .collect::<BTreeSet<_>>();
@@ -218,24 +212,29 @@ impl<'annotations> ObligationTracker<'annotations> {
             contracts.push(ObligationContract {
                 id,
                 functions,
-                domain: annotation.domain().into(),
+                effect: annotation.effect().clone(),
                 obligations: contract_obligations,
             });
         }
-        let mut trusted_panic_functions = BTreeSet::new();
-        let mut trusted_safety_functions = BTreeSet::new();
+        let mut trusted_functions = BTreeMap::<EffectKey, BTreeSet<FunctionId>>::new();
         for body in &artifact.functions {
             let candidates = namespaces.candidates(body.function);
             if effects.tracks_panic()
                 && panic_config.panic_boundary_policy_candidates(candidates)
                     == crate::config::PanicBoundaryPolicy::TrustedBoundary
             {
-                trusted_panic_functions.extend(graph.function_aliases(body.function));
+                trusted_functions
+                    .entry(panic_key.clone())
+                    .or_default()
+                    .extend(graph.function_aliases(body.function));
             }
             if effects.tracks_safety()
                 && safety_config.trusts_safety_boundary_candidates(candidates)
             {
-                trusted_safety_functions.extend(graph.function_aliases(body.function));
+                trusted_functions
+                    .entry(safety_key.clone())
+                    .or_default()
+                    .extend(graph.function_aliases(body.function));
             }
         }
         let ignored_panic_invocations = graph
@@ -260,16 +259,17 @@ impl<'annotations> ObligationTracker<'annotations> {
             })
             .map(crate::compiler::invocations::Invocation::id)
             .collect();
+        let mut ignored_invocations = BTreeMap::new();
+        ignored_invocations.insert(panic_key, ignored_panic_invocations);
+        ignored_invocations.insert(safety_key, ignored_safety_invocations);
         Self {
             annotations,
             graph,
             contracts,
             obligations,
             effect_doc_matching,
-            trusted_panic_functions,
-            trusted_safety_functions,
-            ignored_panic_invocations,
-            ignored_safety_invocations,
+            trusted_functions,
+            ignored_invocations,
         }
     }
 
@@ -287,27 +287,27 @@ impl<'annotations> ObligationTracker<'annotations> {
     fn contract_state(
         &self,
         function: FunctionId,
-        domain: ObligationDomain,
+        effect: &EffectKey,
         current: Option<&ObligationState>,
     ) -> Option<ObligationState> {
         let contract = self
             .contracts
             .iter()
-            .find(|contract| contract.domain == domain && contract.applies_to(function))?;
+            .find(|contract| &contract.effect == effect && contract.applies_to(function))?;
         if current
             .is_some_and(|state| state.contract == contract.id && state.source_invocation.is_none())
         {
             return None;
         }
         Some(ObligationState {
-            domain,
+            effect: effect.clone(),
             contract: contract.id,
             current_function: function,
             source_invocation: None,
             source_calls: BTreeSet::new(),
             remaining: contract.obligations.clone(),
             termination: None,
-            trust_path: if self.trusts_function(domain, function) {
+            trust_path: if self.trusts_function(effect, function) {
                 TrustPath::default()
             } else {
                 TrustPath::new(self.graph, function)
@@ -317,10 +317,10 @@ impl<'annotations> ObligationTracker<'annotations> {
 
     #[must_use]
     #[cfg(test)]
-    pub(crate) fn contract_count(&self, domain: ObligationDomain) -> usize {
+    pub(crate) fn contract_count(&self, effect: &EffectKey) -> usize {
         self.contracts
             .iter()
-            .filter(|contract| contract.domain == domain)
+            .filter(|contract| &contract.effect == effect)
             .count()
     }
 
@@ -365,25 +365,21 @@ impl<'annotations> ObligationTracker<'annotations> {
         }
     }
 
-    pub(crate) fn trusts_function(&self, domain: ObligationDomain, function: FunctionId) -> bool {
-        match domain {
-            ObligationDomain::Panic => &self.trusted_panic_functions,
-            ObligationDomain::Safety => &self.trusted_safety_functions,
-        }
-        .contains(&function)
+    pub(crate) fn trusts_function(&self, effect: &EffectKey, function: FunctionId) -> bool {
+        self.trusted_functions
+            .get(effect)
+            .is_some_and(|functions| functions.contains(&function))
     }
 
     #[must_use]
     pub(crate) fn is_ignored_invocation(
         &self,
-        domain: ObligationDomain,
+        effect: &EffectKey,
         invocation: InvocationId,
     ) -> bool {
-        match domain {
-            ObligationDomain::Panic => &self.ignored_panic_invocations,
-            ObligationDomain::Safety => &self.ignored_safety_invocations,
-        }
-        .contains(&invocation)
+        self.ignored_invocations
+            .get(effect)
+            .is_some_and(|invocations| invocations.contains(&invocation))
     }
 
     fn invocation_transition(
@@ -392,10 +388,10 @@ impl<'annotations> ObligationTracker<'annotations> {
         invocation: InvocationId,
         node: Option<TraceNodeId>,
     ) -> Option<ObligationInvocationTransition> {
-        if self.is_ignored_invocation(state.domain, invocation) {
+        if self.is_ignored_invocation(&state.effect, invocation) {
             return None;
         }
-        if state.domain == ObligationDomain::Safety
+        if state.effect.as_str() == Safety::EFFECT_NAME
             && self.graph.invocation(invocation).is_builtin_unsafe()
         {
             return None;
@@ -413,12 +409,11 @@ impl<'annotations> ObligationTracker<'annotations> {
         let source_invocation = next
             .source_invocation
             .expect("an invocation transition records its source invocation");
-        let domain = AnnotationDomain::from(state.domain);
         let mut marker_uses = Vec::new();
         for call in relevant_calls {
             for comment in self
                 .annotations
-                .comments_at_raw_call(invocation, call, domain)
+                .comments_at_raw_call(invocation, call, &state.effect)
             {
                 let before = next.remaining.len();
                 for satisfaction in comment.satisfactions() {
@@ -429,7 +424,7 @@ impl<'annotations> ObligationTracker<'annotations> {
                 {
                     marker_uses.push(ObligationMarkerUse {
                         annotation: comment.id(),
-                        domain: state.domain,
+                        effect: state.effect.clone(),
                         invocation,
                         source_invocation,
                         source_calls: next.source_calls.clone(),
@@ -517,14 +512,14 @@ impl TracePolicy for ObligationTracker<'_> {
                     contract.id,
                     function,
                     ObligationState {
-                        domain: contract.domain,
+                        effect: contract.effect.clone(),
                         contract: contract.id,
                         current_function: function,
                         source_invocation: None,
                         source_calls: BTreeSet::new(),
                         remaining: contract.obligations.clone(),
                         termination: None,
-                        trust_path: if self.trusts_function(contract.domain, function) {
+                        trust_path: if self.trusts_function(&contract.effect, function) {
                             TrustPath::default()
                         } else {
                             TrustPath::new(self.graph, function)
@@ -541,7 +536,7 @@ impl TracePolicy for ObligationTracker<'_> {
         state: &Self::State,
         function: FunctionId,
     ) -> Option<Self::State> {
-        self.contract_state(function, state.domain, Some(state))
+        self.contract_state(function, &state.effect, Some(state))
     }
 
     fn propagate(
@@ -578,10 +573,10 @@ impl TracePolicy for ObligationTracker<'_> {
             }
         };
         next.current_function = parent;
-        if !self.trusts_function(state.domain, parent) {
+        if !self.trusts_function(&state.effect, parent) {
             next.trust_path.enter(self.graph, parent);
         }
-        if self.trusts_function(state.domain, parent)
+        if self.trusts_function(&state.effect, parent)
             && next.trust_path.allows_boundary(self.graph, parent)
         {
             next.termination = Some(ObligationTermination::TrustedBoundary);
@@ -641,24 +636,6 @@ fn collect_obligations(
         .collect()
 }
 
-impl From<AnnotationDomain> for ObligationDomain {
-    fn from(value: AnnotationDomain) -> Self {
-        match value {
-            AnnotationDomain::Panic => Self::Panic,
-            AnnotationDomain::Safety => Self::Safety,
-        }
-    }
-}
-
-impl From<ObligationDomain> for AnnotationDomain {
-    fn from(value: ObligationDomain) -> Self {
-        match value {
-            ObligationDomain::Panic => Self::Panic,
-            ObligationDomain::Safety => Self::Safety,
-        }
-    }
-}
-
 /// Concrete propagation state exposes only its current runtime target. This
 /// lets the shared tracker reject declaration-only edges while contract
 /// carriers deliberately traverse those edges.
@@ -701,20 +678,20 @@ pub(crate) enum TrackedTermination<T> {
 pub(crate) struct TrackedEffect<'effect, 'annotations, C> {
     concrete: &'effect C,
     obligations: &'effect ObligationTracker<'annotations>,
-    domain: ObligationDomain,
+    effect: EffectKey,
 }
 
 impl<'effect, 'annotations, C> TrackedEffect<'effect, 'annotations, C> {
     #[must_use]
-    pub(crate) const fn new(
+    pub(crate) fn new(
         concrete: &'effect C,
         obligations: &'effect ObligationTracker<'annotations>,
-        domain: ObligationDomain,
+        effect: EffectKey,
     ) -> Self {
         Self {
             concrete,
             obligations,
-            domain,
+            effect,
         }
     }
 
@@ -790,7 +767,7 @@ where
             .chain(
                 self.obligations
                     .sources()
-                    .filter(|seed| seed.state.domain == self.domain)
+                    .filter(|seed| seed.state.effect == self.effect)
                     .map(|seed| {
                         EffectSeed::new(
                             TrackedOrigin::Contract(seed.origin),
@@ -810,11 +787,11 @@ where
         match state {
             TrackedState::Concrete(_) => self
                 .obligations
-                .contract_state(function, self.domain, None)
+                .contract_state(function, &self.effect, None)
                 .map(TrackedState::Obligation),
             TrackedState::Obligation(state) => self
                 .obligations
-                .contract_state(function, self.domain, Some(state))
+                .contract_state(function, &self.effect, Some(state))
                 .map(TrackedState::Obligation),
         }
     }

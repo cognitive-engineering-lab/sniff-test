@@ -11,9 +11,6 @@ use rustc_middle::ty::TyCtxt;
 use rustc_span::{DUMMY_SP, Span};
 use serde::{Deserialize, Serialize};
 
-use crate::effects::Effect;
-use crate::effects::panic::Panic;
-use crate::effects::safety::Safety;
 use crate::path_patterns::PathPatterns;
 
 /// Synthetic rustdoc markdown matched by Rust namespace glob.
@@ -73,16 +70,6 @@ impl Debug for ContractDocOverrides {
     }
 }
 
-fn is_panic_heading(heading: &str) -> bool {
-    heading.eq_ignore_ascii_case("panic")
-        || heading.eq_ignore_ascii_case(Panic::OBLIGATION)
-        || heading.eq_ignore_ascii_case("panic(s)")
-}
-
-fn is_safety_heading(heading: &str) -> bool {
-    heading.eq_ignore_ascii_case(Safety::OBLIGATION)
-}
-
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ContractRequirement {
     pub name: String,
@@ -126,46 +113,33 @@ pub(crate) struct ContractDocSummary {
 // caching is sound. Doc attributes are re-read and re-parsed for every edge
 // classification without this.
 thread_local! {
-    static PANIC_SUMMARY_CACHE: std::cell::RefCell<
-        std::collections::HashMap<DefId, ContractDocSummary>,
-    > = std::cell::RefCell::new(std::collections::HashMap::new());
-    static SAFETY_SUMMARY_CACHE: std::cell::RefCell<
-        std::collections::HashMap<DefId, ContractDocSummary>,
+    static SUMMARY_CACHE: std::cell::RefCell<
+        std::collections::HashMap<(DefId, String), ContractDocSummary>,
     > = std::cell::RefCell::new(std::collections::HashMap::new());
 }
 
-/// Parses a panic contract directly from rustdoc attributes.
 #[must_use]
-pub(crate) fn panic_contract_doc_summary_from_attrs(
+pub(crate) fn contract_doc_summary_from_attrs(
     tcx: TyCtxt<'_>,
     def_id: DefId,
+    obligation: &str,
 ) -> ContractDocSummary {
-    PANIC_SUMMARY_CACHE.with_borrow_mut(|cache| {
+    SUMMARY_CACHE.with_borrow_mut(|cache| {
         cache
-            .entry(def_id)
-            .or_insert_with(|| contract_doc_summary_from_attrs(tcx, def_id, is_panic_heading))
+            .entry((def_id, obligation.to_owned()))
+            .or_insert_with(|| {
+                contract_doc_summary_from_attrs_with(tcx, def_id, |heading| {
+                    heading.eq_ignore_ascii_case(obligation)
+                })
+            })
             .clone()
     })
 }
 
-/// Parses a safety contract directly from rustdoc attributes.
-#[must_use]
-pub(crate) fn safety_contract_doc_summary_from_attrs(
+fn contract_doc_summary_from_attrs_with(
     tcx: TyCtxt<'_>,
     def_id: DefId,
-) -> ContractDocSummary {
-    SAFETY_SUMMARY_CACHE.with_borrow_mut(|cache| {
-        cache
-            .entry(def_id)
-            .or_insert_with(|| contract_doc_summary_from_attrs(tcx, def_id, is_safety_heading))
-            .clone()
-    })
-}
-
-fn contract_doc_summary_from_attrs(
-    tcx: TyCtxt<'_>,
-    def_id: DefId,
-    is_contract_heading: fn(&str) -> bool,
+    is_contract_heading: impl Fn(&str) -> bool,
 ) -> ContractDocSummary {
     parse_contract_doc_lines_with(
         def_id
@@ -189,7 +163,7 @@ fn contract_doc_summary_from_attrs(
 fn parse_panic_contract_doc_lines(
     lines: impl IntoIterator<Item = impl Into<ContractDocLine>>,
 ) -> ContractDocSummary {
-    parse_contract_doc_lines_with(lines, is_panic_heading)
+    parse_contract_doc_lines_with(lines, |heading| heading.eq_ignore_ascii_case("Panics"))
 }
 
 #[must_use]
@@ -197,12 +171,12 @@ fn parse_panic_contract_doc_lines(
 fn parse_safety_contract_doc_lines(
     lines: impl IntoIterator<Item = impl Into<ContractDocLine>>,
 ) -> ContractDocSummary {
-    parse_contract_doc_lines_with(lines, is_safety_heading)
+    parse_contract_doc_lines_with(lines, |heading| heading.eq_ignore_ascii_case("Safety"))
 }
 
 fn parse_contract_doc_lines_with(
     lines: impl IntoIterator<Item = impl Into<ContractDocLine>>,
-    is_contract_heading: fn(&str) -> bool,
+    is_contract_heading: impl Fn(&str) -> bool,
 ) -> ContractDocSummary {
     let lines = lines.into_iter().map(Into::into).collect::<Vec<_>>();
     let mut markdown = String::new();
@@ -221,7 +195,7 @@ fn parse_contract_doc_lines_with(
 fn parse_contract_doc_markdown(
     markdown: &str,
     span: Span,
-    is_contract_heading: fn(&str) -> bool,
+    is_contract_heading: impl Fn(&str) -> bool,
 ) -> ContractDocSummary {
     parse_contract_doc_markdown_with_spans(
         markdown,
@@ -231,19 +205,19 @@ fn parse_contract_doc_markdown(
 }
 
 #[must_use]
-pub(crate) fn panic_contract_doc_summary_from_markdown(markdown: &str) -> ContractDocSummary {
-    parse_contract_doc_markdown(markdown, DUMMY_SP, is_panic_heading)
-}
-
-#[must_use]
-pub(crate) fn safety_contract_doc_summary_from_markdown(markdown: &str) -> ContractDocSummary {
-    parse_contract_doc_markdown(markdown, DUMMY_SP, is_safety_heading)
+pub(crate) fn contract_doc_summary_from_markdown(
+    markdown: &str,
+    obligation: &str,
+) -> ContractDocSummary {
+    parse_contract_doc_markdown(markdown, DUMMY_SP, |heading| {
+        heading.eq_ignore_ascii_case(obligation)
+    })
 }
 
 fn parse_contract_doc_markdown_with_spans(
     markdown: &str,
     line_spans: &[(std::ops::Range<usize>, Span)],
-    is_contract_heading: fn(&str) -> bool,
+    is_contract_heading: impl Fn(&str) -> bool,
 ) -> ContractDocSummary {
     use pulldown_cmark::{CodeBlockKind, Event, Parser, Tag, TagEnd};
 
@@ -552,13 +526,7 @@ mod tests {
 
     #[test]
     fn contract_parsers_accept_supported_heading_styles() {
-        for heading in [
-            "# Panic",
-            "# Panics",
-            "   ## Panics   ",
-            "### PANICS",
-            "#### Panic(s)",
-        ] {
+        for heading in ["# Panics", "   ## Panics   ", "### PANICS"] {
             assert!(parse_panic_contract_doc_lines([heading]).has_docs);
         }
         for heading in ["# Safety", "   ## SAFETY   ", "### Safety:"] {
@@ -569,6 +537,8 @@ mod tests {
     #[test]
     fn contract_parsers_ignore_malformed_headings() {
         assert!(!parse_panic_contract_doc_lines(["# Panics in rare cases"]).has_docs);
+        assert!(!parse_panic_contract_doc_lines(["# Panic"]).has_docs);
+        assert!(!parse_panic_contract_doc_lines(["# Panic(s)"]).has_docs);
         assert!(!parse_safety_contract_doc_lines(["# Safety notes"]).has_docs);
     }
 

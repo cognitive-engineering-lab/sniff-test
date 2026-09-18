@@ -16,9 +16,17 @@ use crate::contracts::ContractDocOverrides;
 use crate::namespace::StableDefPathHash;
 
 use super::concrete::{ConcreteSource, probe_concrete_effect};
-use super::obligation::{ObligationDomain, ObligationTermination, ObligationTracker};
+use super::obligation::{ObligationTermination, ObligationTracker};
 use super::panic::{Panic, PanicEffect, PanicTermination};
 use super::safety::{Safety, SafetyEffect, SafetyTermination};
+
+fn panic_key() -> EffectKey {
+    EffectKey::new(<Panic as super::Effect>::EFFECT_NAME)
+}
+
+fn safety_key() -> EffectKey {
+    EffectKey::new(<Safety as super::Effect>::EFFECT_NAME)
+}
 
 fn stable_function(index: u64) -> StableFunctionId {
     let value = format!("{index:016x}{:016x}", index + 100);
@@ -360,7 +368,9 @@ fn source_callsite_marker_projects_when_exact_call_id_differs() {
                 vec![call_comment(
                     0,
                     1,
-                    AnnotationFactKind::PanicJustification,
+                    crate::effects::annotation_kind::<crate::effects::panic::Panic>(
+                        crate::artifact::AnnotationRole::Justification,
+                    ),
                     None,
                 )],
             ),
@@ -391,11 +401,7 @@ fn source_callsite_marker_projects_when_exact_call_id_differs() {
     );
     assert_eq!(
         annotations
-            .comments_at_raw_call(
-                exact_invocation,
-                CallId::new(0),
-                crate::annotations::AnnotationDomain::Panic,
-            )
+            .comments_at_raw_call(exact_invocation, CallId::new(0), &panic_key(),)
             .count(),
         1
     );
@@ -417,7 +423,9 @@ fn marker_on_a_non_invocation_raw_edge_does_not_break_annotation_indexing() {
             vec![call_comment(
                 0,
                 0,
-                AnnotationFactKind::SafetyJustification,
+                crate::effects::annotation_kind::<crate::effects::safety::Safety>(
+                    crate::artifact::AnnotationRole::Justification,
+                ),
                 None,
             )],
         ),
@@ -517,20 +525,31 @@ fn concrete_impl_without_contract_falls_back_to_trait_contract_per_domain() {
             Vec::new(),
             Vec::new(),
             vec![
-                contract(0, declaration, AnnotationFactKind::PanicContract, &[]),
-                contract(1, declaration, AnnotationFactKind::SafetyContract, &[]),
+                contract(
+                    0,
+                    declaration,
+                    crate::effects::annotation_kind::<crate::effects::panic::Panic>(
+                        crate::artifact::AnnotationRole::Contract,
+                    ),
+                    &[],
+                ),
+                contract(
+                    1,
+                    declaration,
+                    crate::effects::annotation_kind::<crate::effects::safety::Safety>(
+                        crate::artifact::AnnotationRole::Contract,
+                    ),
+                    &[],
+                ),
             ],
         ),
     ]);
     let implementation = graph.function(implementation).expect("concrete impl");
 
-    for domain in [
-        crate::annotations::AnnotationDomain::Panic,
-        crate::annotations::AnnotationDomain::Safety,
-    ] {
+    for domain in [panic_key(), safety_key()] {
         assert_eq!(
             annotations
-                .effective_contract(&graph, implementation, domain)
+                .effective_contract(&graph, implementation, &domain)
                 .expect("trait fallback")
                 .owner(),
             declaration
@@ -566,7 +585,9 @@ fn concrete_impl_contract_overrides_trait_contract_only_in_its_domain() {
             vec![contract(
                 0,
                 implementation,
-                AnnotationFactKind::PanicContract,
+                crate::effects::annotation_kind::<crate::effects::panic::Panic>(
+                    crate::artifact::AnnotationRole::Contract,
+                ),
                 &[],
             )],
         ),
@@ -576,8 +597,22 @@ fn concrete_impl_contract_overrides_trait_contract_only_in_its_domain() {
             Vec::new(),
             Vec::new(),
             vec![
-                contract(1, declaration, AnnotationFactKind::PanicContract, &[]),
-                contract(2, declaration, AnnotationFactKind::SafetyContract, &[]),
+                contract(
+                    1,
+                    declaration,
+                    crate::effects::annotation_kind::<crate::effects::panic::Panic>(
+                        crate::artifact::AnnotationRole::Contract,
+                    ),
+                    &[],
+                ),
+                contract(
+                    2,
+                    declaration,
+                    crate::effects::annotation_kind::<crate::effects::safety::Safety>(
+                        crate::artifact::AnnotationRole::Contract,
+                    ),
+                    &[],
+                ),
             ],
         ),
     ]);
@@ -585,22 +620,14 @@ fn concrete_impl_contract_overrides_trait_contract_only_in_its_domain() {
 
     assert_eq!(
         annotations
-            .effective_contract(
-                &graph,
-                implementation,
-                crate::annotations::AnnotationDomain::Panic,
-            )
+            .effective_contract(&graph, implementation, &panic_key(),)
             .expect("impl panic contract")
             .owner(),
         stable_function(0)
     );
     assert_eq!(
         annotations
-            .effective_contract(
-                &graph,
-                implementation,
-                crate::annotations::AnnotationDomain::Safety,
-            )
+            .effective_contract(&graph, implementation, &safety_key(),)
             .expect("trait safety fallback")
             .owner(),
         declaration
@@ -634,17 +661,14 @@ fn declaration_contract_overrides_apply_without_a_declaration_body_or_call() {
         &namespaces,
         &overrides,
         MarkerProbing::SourceCallsite,
+        &super::selected_effects(super::EffectSelection::default()),
     )
     .expect("annotations");
     let implementation = graph.function(implementation).expect("implementation");
 
     assert_eq!(
         annotations
-            .effective_contract(
-                &graph,
-                implementation,
-                crate::annotations::AnnotationDomain::Panic,
-            )
+            .effective_contract(&graph, implementation, &panic_key(),)
             .expect("declaration override")
             .owner(),
         declaration,
@@ -703,11 +727,12 @@ fn declaration_override_uses_union_of_all_occurrence_aliases() {
             &namespaces,
             &overrides,
             MarkerProbing::SourceCallsite,
+            &super::selected_effects(super::EffectSelection::default()),
         )
         .expect("annotations");
 
         annotations
-            .function_contracts(declaration, crate::annotations::AnnotationDomain::Panic)
+            .function_contracts(declaration, &panic_key())
             .flat_map(crate::annotations::FunctionContractAnnotation::requirements)
             .map(|requirement| requirement.name.clone())
             .collect()
@@ -729,8 +754,18 @@ fn declaration_override_uses_union_of_all_occurrence_aliases() {
 #[test]
 fn mixed_invocation_keeps_its_concrete_comment_edge() {
     for (domain, kind) in [
-        (ObligationDomain::Panic, AnnotationFactKind::PanicContract),
-        (ObligationDomain::Safety, AnnotationFactKind::SafetyContract),
+        (
+            panic_key(),
+            crate::effects::annotation_kind::<crate::effects::panic::Panic>(
+                crate::artifact::AnnotationRole::Contract,
+            ),
+        ),
+        (
+            safety_key(),
+            crate::effects::annotation_kind::<crate::effects::safety::Safety>(
+                crate::artifact::AnnotationRole::Contract,
+            ),
+        ),
     ] {
         let root = stable_function(0);
         let implementation = stable_function(1);
@@ -813,7 +848,7 @@ fn mixed_invocation_keeps_its_concrete_comment_edge() {
         );
         let trace = EffectEngine::new(&graph.obligation_graph()).trace(&comments);
 
-        assert_eq!(comments.contract_count(domain), 1, "domain {domain:?}");
+        assert_eq!(comments.contract_count(&domain), 1, "domain {domain:?}");
         assert_eq!(trace.escaped().count(), 1, "domain {domain:?}");
     }
 }
@@ -824,10 +859,16 @@ fn standalone_declaration_target_exports_its_surface_contract() {
     let declaration = stable_function(1);
     let mut declaration_target = function_target(declaration, "sample::Trait::operation");
     declaration_target.attributes.has_rust_body = false;
-    declaration_target.contracts.panic = Some(ContractFact {
-        source_range: None,
-        requirements: Vec::new(),
-    });
+    declaration_target
+        .contracts
+        .effects
+        .push(crate::artifact::EffectContractFact {
+            effect: panic_key(),
+            contract: ContractFact {
+                source_range: None,
+                requirements: Vec::new(),
+            },
+        });
     let mut unresolved = call(
         0,
         0,
@@ -850,7 +891,7 @@ fn standalone_declaration_target_exports_its_surface_contract() {
     let comments = probe_comments(&artifact, &graph, &annotations, &SniffTestConfig::default());
     let trace = EffectEngine::new(&graph.obligation_graph()).trace(&comments);
 
-    assert_eq!(comments.contract_count(ObligationDomain::Panic), 1);
+    assert_eq!(comments.contract_count(&panic_key()), 1);
     assert_eq!(trace.handled().count(), 0);
     assert_eq!(trace.escaped().count(), 1);
 }
@@ -869,7 +910,9 @@ fn comment_obligations_are_satisfied_across_call_levels() {
             vec![call_comment(
                 0,
                 0,
-                AnnotationFactKind::SafetyJustification,
+                crate::effects::annotation_kind::<crate::effects::safety::Safety>(
+                    crate::artifact::AnnotationRole::Justification,
+                ),
                 Some("exclusive"),
             )],
         ),
@@ -881,7 +924,9 @@ fn comment_obligations_are_satisfied_across_call_levels() {
             vec![call_comment(
                 0,
                 0,
-                AnnotationFactKind::SafetyJustification,
+                crate::effects::annotation_kind::<crate::effects::safety::Safety>(
+                    crate::artifact::AnnotationRole::Justification,
+                ),
                 Some("initialized"),
             )],
         ),
@@ -893,7 +938,9 @@ fn comment_obligations_are_satisfied_across_call_levels() {
             vec![contract(
                 0,
                 leaf,
-                AnnotationFactKind::SafetyContract,
+                crate::effects::annotation_kind::<crate::effects::safety::Safety>(
+                    crate::artifact::AnnotationRole::Contract,
+                ),
                 &[
                     ("initialized", "global state is initialized"),
                     ("exclusive", "no concurrent access"),
@@ -914,26 +961,18 @@ fn comment_obligations_are_satisfied_across_call_levels() {
         .invocation_for_raw_call(root, CallId::new(0))
         .expect("outer safety call");
     let partial_marker = annotations
-        .comments_at_raw_call(
-            partial_invocation,
-            CallId::new(0),
-            crate::annotations::AnnotationDomain::Safety,
-        )
+        .comments_at_raw_call(partial_invocation, CallId::new(0), &safety_key())
         .next()
         .expect("partial marker")
         .id();
     let final_marker = annotations
-        .comments_at_raw_call(
-            final_invocation,
-            CallId::new(0),
-            crate::annotations::AnnotationDomain::Safety,
-        )
+        .comments_at_raw_call(final_invocation, CallId::new(0), &safety_key())
         .next()
         .expect("final marker")
         .id();
     let marker_uses = comments.marker_uses(&trace);
 
-    assert_eq!(comments.contract_count(ObligationDomain::Safety), 1);
+    assert_eq!(comments.contract_count(&safety_key()), 1);
     assert_eq!(
         trace.outcomes().collect::<Vec<_>>(),
         vec![TraceOutcome::Handled(comments.contracts()[0].id())]
@@ -960,8 +999,18 @@ fn comment_obligations_are_satisfied_across_call_levels() {
 #[test]
 fn trusted_comment_boundaries_are_path_local_in_each_domain() {
     for (domain, kind) in [
-        (ObligationDomain::Panic, AnnotationFactKind::PanicContract),
-        (ObligationDomain::Safety, AnnotationFactKind::SafetyContract),
+        (
+            panic_key(),
+            crate::effects::annotation_kind::<crate::effects::panic::Panic>(
+                crate::artifact::AnnotationRole::Contract,
+            ),
+        ),
+        (
+            safety_key(),
+            crate::effects::annotation_kind::<crate::effects::safety::Safety>(
+                crate::artifact::AnnotationRole::Contract,
+            ),
+        ),
     ] {
         let outer_root = stable_function(0);
         let direct_root = stable_function(1);
@@ -1002,7 +1051,7 @@ fn trusted_comment_boundaries_are_path_local_in_each_domain() {
         let comments = probe_comments(&artifact, &graph, &annotations, &config);
         let trace = EffectEngine::new(&graph.obligation_graph()).trace(&comments);
 
-        assert_eq!(comments.contract_count(domain), 1, "domain {domain:?}");
+        assert_eq!(comments.contract_count(&domain), 1, "domain {domain:?}");
         let handled = trace.handled().next().expect("trusted boundary handling");
         assert_eq!(
             handled.termination(),
@@ -1032,7 +1081,9 @@ fn callsite_satisfaction_precedes_a_trusted_comment_boundary() {
             vec![call_comment(
                 0,
                 0,
-                AnnotationFactKind::SafetyJustification,
+                crate::effects::annotation_kind::<crate::effects::safety::Safety>(
+                    crate::artifact::AnnotationRole::Justification,
+                ),
                 None,
             )],
         ),
@@ -1041,7 +1092,14 @@ fn callsite_satisfaction_precedes_a_trusted_comment_boundary() {
             "dependency::leaf",
             Vec::new(),
             Vec::new(),
-            vec![contract(1, leaf, AnnotationFactKind::SafetyContract, &[])],
+            vec![contract(
+                1,
+                leaf,
+                crate::effects::annotation_kind::<crate::effects::safety::Safety>(
+                    crate::artifact::AnnotationRole::Contract,
+                ),
+                &[],
+            )],
         ),
     ]);
     let config = trusted_comment_config();
@@ -1069,7 +1127,9 @@ fn partial_satisfaction_is_retained_when_the_trusted_parent_terminates() {
             vec![call_comment(
                 0,
                 0,
-                AnnotationFactKind::SafetyJustification,
+                crate::effects::annotation_kind::<crate::effects::safety::Safety>(
+                    crate::artifact::AnnotationRole::Justification,
+                ),
                 Some("initialized"),
             )],
         ),
@@ -1081,7 +1141,9 @@ fn partial_satisfaction_is_retained_when_the_trusted_parent_terminates() {
             vec![contract(
                 1,
                 leaf,
-                AnnotationFactKind::SafetyContract,
+                crate::effects::annotation_kind::<crate::effects::safety::Safety>(
+                    crate::artifact::AnnotationRole::Contract,
+                ),
                 &[
                     ("initialized", "global state is initialized"),
                     ("exclusive", "no concurrent access"),
@@ -1129,14 +1191,21 @@ fn builtin_unsafe_comment_edges_remain_ignored_inside_a_trusted_parent() {
             "dependency::leaf",
             Vec::new(),
             Vec::new(),
-            vec![contract(0, leaf, AnnotationFactKind::SafetyContract, &[])],
+            vec![contract(
+                0,
+                leaf,
+                crate::effects::annotation_kind::<crate::effects::safety::Safety>(
+                    crate::artifact::AnnotationRole::Contract,
+                ),
+                &[],
+            )],
         ),
     ]);
     let config = trusted_comment_config();
     let comments = probe_comments(&artifact, &graph, &annotations, &config);
     let trace = EffectEngine::new(&graph.obligation_graph()).trace(&comments);
 
-    assert_eq!(comments.contract_count(ObligationDomain::Safety), 1);
+    assert_eq!(comments.contract_count(&safety_key()), 1);
     assert_eq!(trace.nodes().count(), 1);
     assert_eq!(trace.handled().count(), 0);
     assert_eq!(trace.escaped().count(), 0);
@@ -1169,7 +1238,9 @@ fn comment_boundaries_keep_panic_and_safety_configuration_separate() {
             vec![contract(
                 0,
                 panic_leaf,
-                AnnotationFactKind::PanicContract,
+                crate::effects::annotation_kind::<crate::effects::panic::Panic>(
+                    crate::artifact::AnnotationRole::Contract,
+                ),
                 &[],
             )],
         ),
@@ -1193,7 +1264,9 @@ fn comment_boundaries_keep_panic_and_safety_configuration_separate() {
             vec![contract(
                 1,
                 safety_leaf,
-                AnnotationFactKind::SafetyContract,
+                crate::effects::annotation_kind::<crate::effects::safety::Safety>(
+                    crate::artifact::AnnotationRole::Contract,
+                ),
                 &[],
             )],
         ),
@@ -1215,8 +1288,8 @@ fn comment_boundaries_keep_panic_and_safety_configuration_separate() {
 
     let comments = probe_comments(&artifact, &graph, &annotations, &config);
     let trace = EffectEngine::new(&graph.obligation_graph()).trace(&comments);
-    assert_eq!(comments.contract_count(ObligationDomain::Panic), 1);
-    assert_eq!(comments.contract_count(ObligationDomain::Safety), 1);
+    assert_eq!(comments.contract_count(&panic_key()), 1);
+    assert_eq!(comments.contract_count(&safety_key()), 1);
     assert_eq!(trace.handled().count(), 2);
     assert!(
         trace
@@ -1262,7 +1335,14 @@ fn comment_boundaries_use_stable_candidates_and_cover_function_aliases() {
             "dependency::documented_leaf",
             Vec::new(),
             Vec::new(),
-            vec![contract(0, leaf, AnnotationFactKind::PanicContract, &[])],
+            vec![contract(
+                0,
+                leaf,
+                crate::effects::annotation_kind::<crate::effects::panic::Panic>(
+                    crate::artifact::AnnotationRole::Contract,
+                ),
+                &[],
+            )],
         ),
     ]);
     set_dependencies(&mut graph, &[(generic_wrapper, leaf)]);
@@ -1317,8 +1397,22 @@ fn target_only_alias_makes_definition_opaque_for_all_effect_domains() {
             Vec::new(),
             Vec::new(),
             vec![
-                contract(0, documented_leaf, AnnotationFactKind::PanicContract, &[]),
-                contract(1, documented_leaf, AnnotationFactKind::SafetyContract, &[]),
+                contract(
+                    0,
+                    documented_leaf,
+                    crate::effects::annotation_kind::<crate::effects::panic::Panic>(
+                        crate::artifact::AnnotationRole::Contract,
+                    ),
+                    &[],
+                ),
+                contract(
+                    1,
+                    documented_leaf,
+                    crate::effects::annotation_kind::<crate::effects::safety::Safety>(
+                        crate::artifact::AnnotationRole::Contract,
+                    ),
+                    &[],
+                ),
             ],
         ),
     ]);
@@ -1408,8 +1502,18 @@ fn target_only_alias_ignores_raw_effect_owners_in_both_domains() {
 #[test]
 fn untrusted_contracts_cross_undocumented_trusted_wrappers_in_either_domain() {
     for (domain, kind) in [
-        (ObligationDomain::Panic, AnnotationFactKind::PanicContract),
-        (ObligationDomain::Safety, AnnotationFactKind::SafetyContract),
+        (
+            panic_key(),
+            crate::effects::annotation_kind::<crate::effects::panic::Panic>(
+                crate::artifact::AnnotationRole::Contract,
+            ),
+        ),
+        (
+            safety_key(),
+            crate::effects::annotation_kind::<crate::effects::safety::Safety>(
+                crate::artifact::AnnotationRole::Contract,
+            ),
+        ),
     ] {
         let root = stable_function(0);
         let wrapper = stable_function(1);
@@ -1442,7 +1546,7 @@ fn untrusted_contracts_cross_undocumented_trusted_wrappers_in_either_domain() {
         let comments = probe_comments(&artifact, &graph, &annotations, &config);
         let trace = EffectEngine::new(&graph.obligation_graph()).trace(&comments);
 
-        assert_eq!(comments.contract_count(domain), 1, "domain {domain:?}");
+        assert_eq!(comments.contract_count(&domain), 1, "domain {domain:?}");
         assert_eq!(trace.handled().count(), 0, "domain {domain:?}");
         assert_eq!(trace.escaped().count(), 1, "domain {domain:?}");
         assert!(
@@ -1490,7 +1594,14 @@ fn comment_trusted_boundary_handles_transparent_body_parent() {
             "dependency::leaf",
             Vec::new(),
             Vec::new(),
-            vec![contract(0, leaf, AnnotationFactKind::PanicContract, &[])],
+            vec![contract(
+                0,
+                leaf,
+                crate::effects::annotation_kind::<crate::effects::panic::Panic>(
+                    crate::artifact::AnnotationRole::Contract,
+                ),
+                &[],
+            )],
         ),
     ]);
     set_dependencies(&mut graph, &[(parent, transparent), (transparent, leaf)]);
@@ -1529,8 +1640,21 @@ fn panic_probe_collects_asserts_and_sink_invocations_with_source_markers() {
         )],
         vec![assert_effect(0)],
         vec![
-            call_comment(0, 0, AnnotationFactKind::PanicJustification, None),
-            effect_comment(1, 0, AnnotationFactKind::PanicJustification),
+            call_comment(
+                0,
+                0,
+                crate::effects::annotation_kind::<crate::effects::panic::Panic>(
+                    crate::artifact::AnnotationRole::Justification,
+                ),
+                None,
+            ),
+            effect_comment(
+                1,
+                0,
+                crate::effects::annotation_kind::<crate::effects::panic::Panic>(
+                    crate::artifact::AnnotationRole::Justification,
+                ),
+            ),
         ],
     )]);
     let config = SniffTestConfig::from_manifest_str(
@@ -1571,7 +1695,9 @@ fn marker_on_a_grouped_sibling_does_not_justify_a_panic_sink() {
         vec![call_comment(
             0,
             0,
-            AnnotationFactKind::PanicJustification,
+            crate::effects::annotation_kind::<crate::effects::panic::Panic>(
+                crate::artifact::AnnotationRole::Justification,
+            ),
             None,
         )],
     )]);
@@ -1604,7 +1730,9 @@ fn marker_on_a_grouped_sibling_does_not_justify_an_unsafe_call() {
         vec![call_comment(
             0,
             0,
-            AnnotationFactKind::SafetyJustification,
+            crate::effects::annotation_kind::<crate::effects::safety::Safety>(
+                crate::artifact::AnnotationRole::Justification,
+            ),
             None,
         )],
     )]);
@@ -1639,7 +1767,9 @@ fn marker_on_a_grouped_sibling_does_not_satisfy_a_comment_contract() {
             vec![call_comment(
                 0,
                 0,
-                AnnotationFactKind::PanicJustification,
+                crate::effects::annotation_kind::<crate::effects::panic::Panic>(
+                    crate::artifact::AnnotationRole::Justification,
+                ),
                 None,
             )],
         ),
@@ -1651,7 +1781,9 @@ fn marker_on_a_grouped_sibling_does_not_satisfy_a_comment_contract() {
             vec![contract(
                 1,
                 documented,
-                AnnotationFactKind::PanicContract,
+                crate::effects::annotation_kind::<crate::effects::panic::Panic>(
+                    crate::artifact::AnnotationRole::Contract,
+                ),
                 &[],
             )],
         ),
@@ -1660,7 +1792,7 @@ fn marker_on_a_grouped_sibling_does_not_satisfy_a_comment_contract() {
     let comments = probe_comments(&artifact, &graph, &annotations, &SniffTestConfig::default());
     let trace = EffectEngine::new(&graph.obligation_graph()).trace(&comments);
 
-    assert_eq!(comments.contract_count(ObligationDomain::Panic), 1);
+    assert_eq!(comments.contract_count(&panic_key()), 1);
     assert_eq!(trace.handled().count(), 0);
     assert_eq!(trace.escaped().count(), 1);
 }
@@ -1668,8 +1800,18 @@ fn marker_on_a_grouped_sibling_does_not_satisfy_a_comment_contract() {
 #[test]
 fn marker_on_a_grouped_sibling_does_not_terminate_propagated_effects() {
     for (is_panic, marker_kind) in [
-        (true, AnnotationFactKind::PanicJustification),
-        (false, AnnotationFactKind::SafetyJustification),
+        (
+            true,
+            crate::effects::annotation_kind::<crate::effects::panic::Panic>(
+                crate::artifact::AnnotationRole::Justification,
+            ),
+        ),
+        (
+            false,
+            crate::effects::annotation_kind::<crate::effects::safety::Safety>(
+                crate::artifact::AnnotationRole::Justification,
+            ),
+        ),
     ] {
         let root = stable_function(0);
         let ordinary = stable_function(1);
@@ -1731,8 +1873,22 @@ fn distinct_markers_justify_each_grouped_panic_branch() {
             ],
             Vec::new(),
             vec![
-                call_comment(0, 0, AnnotationFactKind::PanicJustification, None),
-                call_comment(1, 1, AnnotationFactKind::PanicJustification, None),
+                call_comment(
+                    0,
+                    0,
+                    crate::effects::annotation_kind::<crate::effects::panic::Panic>(
+                        crate::artifact::AnnotationRole::Justification,
+                    ),
+                    None,
+                ),
+                call_comment(
+                    1,
+                    1,
+                    crate::effects::annotation_kind::<crate::effects::panic::Panic>(
+                        crate::artifact::AnnotationRole::Justification,
+                    ),
+                    None,
+                ),
             ],
         ),
         body(
@@ -1753,11 +1909,7 @@ fn distinct_markers_justify_each_grouped_panic_branch() {
     );
     let markers = [CallId::new(0), CallId::new(1)].map(|call| {
         annotations
-            .comments_at_raw_call(
-                invocation,
-                call,
-                crate::annotations::AnnotationDomain::Panic,
-            )
+            .comments_at_raw_call(invocation, call, &panic_key())
             .next()
             .expect("valid panic justification")
             .id()
@@ -1791,8 +1943,22 @@ fn distinct_markers_justify_each_grouped_safety_branch() {
             ],
             Vec::new(),
             vec![
-                call_comment(0, 0, AnnotationFactKind::SafetyJustification, None),
-                call_comment(1, 1, AnnotationFactKind::SafetyJustification, None),
+                call_comment(
+                    0,
+                    0,
+                    crate::effects::annotation_kind::<crate::effects::safety::Safety>(
+                        crate::artifact::AnnotationRole::Justification,
+                    ),
+                    None,
+                ),
+                call_comment(
+                    1,
+                    1,
+                    crate::effects::annotation_kind::<crate::effects::safety::Safety>(
+                        crate::artifact::AnnotationRole::Justification,
+                    ),
+                    None,
+                ),
             ],
         ),
         body(
@@ -1813,11 +1979,7 @@ fn distinct_markers_justify_each_grouped_safety_branch() {
     );
     let markers = [CallId::new(0), CallId::new(1)].map(|call| {
         annotations
-            .comments_at_raw_call(
-                invocation,
-                call,
-                crate::annotations::AnnotationDomain::Safety,
-            )
+            .comments_at_raw_call(invocation, call, &safety_key())
             .next()
             .expect("valid safety justification")
             .id()
@@ -1858,7 +2020,9 @@ fn grouped_effect_sources_are_terminated_per_raw_branch() {
         vec![call_comment(
             0,
             0,
-            AnnotationFactKind::PanicJustification,
+            crate::effects::annotation_kind::<crate::effects::panic::Panic>(
+                crate::artifact::AnnotationRole::Justification,
+            ),
             None,
         )],
     )]);
@@ -1889,7 +2053,9 @@ fn grouped_effect_sources_are_terminated_per_raw_branch() {
         vec![call_comment(
             0,
             0,
-            AnnotationFactKind::SafetyJustification,
+            crate::effects::annotation_kind::<crate::effects::safety::Safety>(
+                crate::artifact::AnnotationRole::Justification,
+            ),
             None,
         )],
     )]);
@@ -2078,7 +2244,9 @@ fn ignored_macro_path_does_not_export_an_internal_safety_contract() {
             vec![contract(
                 0,
                 helper,
-                AnnotationFactKind::SafetyContract,
+                crate::effects::annotation_kind::<crate::effects::safety::Safety>(
+                    crate::artifact::AnnotationRole::Contract,
+                ),
                 &[("initialized", "the value is initialized")],
             )],
         ),
@@ -2091,7 +2259,7 @@ fn ignored_macro_path_does_not_export_an_internal_safety_contract() {
     let comments = probe_comments(&artifact, &graph, &annotations, &config);
     let trace = EffectEngine::new(&graph.obligation_graph()).trace(&comments);
 
-    assert_eq!(comments.contract_count(ObligationDomain::Safety), 1);
+    assert_eq!(comments.contract_count(&safety_key()), 1);
     assert_eq!(trace.nodes().count(), 1);
     assert_eq!(trace.handled().count(), 0);
     assert_eq!(trace.escaped().count(), 0);
@@ -2176,7 +2344,9 @@ fn ignored_macro_path_does_not_export_an_internal_panic_contract() {
             vec![contract(
                 0,
                 helper,
-                AnnotationFactKind::PanicContract,
+                crate::effects::annotation_kind::<crate::effects::panic::Panic>(
+                    crate::artifact::AnnotationRole::Contract,
+                ),
                 &[("alignment", "the alignment is not a power of two")],
             )],
         ),
@@ -2185,7 +2355,7 @@ fn ignored_macro_path_does_not_export_an_internal_panic_contract() {
     let comments = probe_comments(&artifact, &graph, &annotations, &SniffTestConfig::default());
     let trace = EffectEngine::new(&graph.obligation_graph()).trace(&comments);
 
-    assert_eq!(comments.contract_count(ObligationDomain::Panic), 1);
+    assert_eq!(comments.contract_count(&panic_key()), 1);
     assert_eq!(trace.nodes().count(), 1);
     assert_eq!(trace.handled().count(), 0);
     assert_eq!(trace.escaped().count(), 0);
@@ -2219,7 +2389,9 @@ fn disabling_unsafe_precondition_ignore_exports_internal_panic_contracts() {
             vec![contract(
                 0,
                 helper,
-                AnnotationFactKind::PanicContract,
+                crate::effects::annotation_kind::<crate::effects::panic::Panic>(
+                    crate::artifact::AnnotationRole::Contract,
+                ),
                 &[("alignment", "the alignment is not a power of two")],
             )],
         ),
@@ -2457,8 +2629,21 @@ fn safety_probe_collects_operations_and_unsafe_invocations_with_source_markers()
         vec![call(0, 0, target(unsafe_target, "sample::danger"), true)],
         vec![unsafe_effect(0)],
         vec![
-            call_comment(0, 0, AnnotationFactKind::SafetyJustification, None),
-            effect_comment(1, 0, AnnotationFactKind::SafetyJustification),
+            call_comment(
+                0,
+                0,
+                crate::effects::annotation_kind::<crate::effects::safety::Safety>(
+                    crate::artifact::AnnotationRole::Justification,
+                ),
+                None,
+            ),
+            effect_comment(
+                1,
+                0,
+                crate::effects::annotation_kind::<crate::effects::safety::Safety>(
+                    crate::artifact::AnnotationRole::Justification,
+                ),
+            ),
         ],
     )]);
 
@@ -2527,8 +2712,22 @@ fn configured_std_boundary_keeps_direct_contracts_and_unsafe_calls_visible() {
         Vec::new(),
         vec![assert_effect(0), unsafe_effect(1)],
         vec![
-            contract(0, std_api, AnnotationFactKind::PanicContract, &[]),
-            contract(1, std_api, AnnotationFactKind::SafetyContract, &[]),
+            contract(
+                0,
+                std_api,
+                crate::effects::annotation_kind::<crate::effects::panic::Panic>(
+                    crate::artifact::AnnotationRole::Contract,
+                ),
+                &[],
+            ),
+            contract(
+                1,
+                std_api,
+                crate::effects::annotation_kind::<crate::effects::safety::Safety>(
+                    crate::artifact::AnnotationRole::Contract,
+                ),
+                &[],
+            ),
         ],
     );
     std_body
@@ -2581,8 +2780,8 @@ fn configured_std_boundary_keeps_direct_contracts_and_unsafe_calls_visible() {
             call: CallId::new(0),
         }]
     );
-    assert_eq!(comments.contract_count(ObligationDomain::Panic), 1);
-    assert_eq!(comments.contract_count(ObligationDomain::Safety), 1);
+    assert_eq!(comments.contract_count(&panic_key()), 1);
+    assert_eq!(comments.contract_count(&safety_key()), 1);
     assert_eq!(comment_trace.escaped().count(), 2);
 }
 
@@ -2719,8 +2918,22 @@ fn dependency_trust_graph(documented: bool) -> (ArtifactFacts, InvocationGraph, 
             vec![assert_effect(0), unsafe_effect(1)],
             if documented {
                 vec![
-                    contract(0, leaf, AnnotationFactKind::PanicContract, &[]),
-                    contract(1, leaf, AnnotationFactKind::SafetyContract, &[]),
+                    contract(
+                        0,
+                        leaf,
+                        crate::effects::annotation_kind::<crate::effects::panic::Panic>(
+                            crate::artifact::AnnotationRole::Contract,
+                        ),
+                        &[],
+                    ),
+                    contract(
+                        1,
+                        leaf,
+                        crate::effects::annotation_kind::<crate::effects::safety::Safety>(
+                            crate::artifact::AnnotationRole::Contract,
+                        ),
+                        &[],
+                    ),
                 ]
             } else {
                 Vec::new()
@@ -2764,11 +2977,11 @@ fn dependency_trust_is_path_scoped_and_survives_callback_reentry() {
         if documented {
             let comments = probe_comments(&artifact, &graph, &annotations, &config);
             let trace = EffectEngine::new(&graph.obligation_graph()).trace(&comments);
-            for domain in [ObligationDomain::Panic, ObligationDomain::Safety] {
+            for domain in [panic_key(), safety_key()] {
                 check(
                     trace
                         .nodes()
-                        .filter(|node| node.state().domain() == domain)
+                        .filter(|node| node.state().effect() == &domain)
                         .map(effect_tracing::TraceNode::function)
                         .collect(),
                     trace

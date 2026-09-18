@@ -1,4 +1,3 @@
-use crate::annotations::AnnotationDomain;
 use crate::artifact::{CallFact, DefinitionNamespaceIndex};
 use crate::config::SafetyConfig;
 
@@ -16,7 +15,6 @@ impl super::Effect for Safety {
     type Config = SafetyConfig;
 
     const EFFECT_NAME: &'static str = "safety";
-    const DOMAIN: AnnotationDomain = AnnotationDomain::Safety;
     const OBLIGATION: &'static str = "Safety";
     const JUSTIFICATION: &'static str = "SAFETY";
 
