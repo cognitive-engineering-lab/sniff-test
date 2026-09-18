@@ -17,9 +17,9 @@ use effect_tracing::{
 use crate::annotations::{AnnotationDomain, AnnotationId, AnnotationIndex};
 use crate::artifact::{
     AnnotationFactKind, AnnotationProbingFact, AnnotationTargetFact, ArtifactFacts, CallTargetFact,
-    CompilerAssertKind, DefinitionNamespaceIndex, EffectFact, EffectFactKind, EffectId,
-    FunctionFact, FunctionId as StableFunctionId, FunctionTargetFact, MarkerEvidenceState,
-    SafetyOpKind, UnverifiedMarkerProbeReason,
+    CompilerAssertKind, DefinitionNamespaceIndex, EffectFact, EffectId, EffectKey, FunctionFact,
+    FunctionId as StableFunctionId, FunctionTargetFact, MarkerEvidenceState, SafetyOpKind,
+    UnverifiedMarkerProbeReason,
 };
 use crate::compiler::invocations::{
     InvocationGraph, InvocationResolution, UnresolvedCallTargetReason,
@@ -922,7 +922,7 @@ fn safety_effect_groups(
         }
         ConcreteSource::Effect { owner, effect } => vec![
             effect_fact(artifact, owner, effect)
-                .and_then(|(_, fact)| fact.safety_effect_group)
+                .and_then(|(_, fact)| fact.effect_group)
                 .map_or(
                     SafetyEffectGroup::StandaloneOperation(owner, effect),
                     |group| SafetyEffectGroup::Operation(owner, group),
@@ -1316,10 +1316,10 @@ fn panic_findings(
             match origin {
                 ConcreteSource::Effect { owner, effect } => {
                     let (body, fact) = effect_fact(artifact, owner, effect)?;
-                    let EffectFactKind::CompilerAssert { kind } = &fact.kind else {
+                    if fact.effect.as_str() != EffectKey::PANIC {
                         return None;
-                    };
-                    let kind = *kind;
+                    }
+                    let kind = CompilerAssertKind::from_effect_kind(&fact.kind)?;
                     let mut trace_path = trace_path;
                     append_effect_provenance(body, fact, &mut trace_path);
                     append_compiler_assert(body, fact, kind, &mut trace_path);
@@ -1403,10 +1403,10 @@ fn safety_findings(
             match origin {
                 ConcreteSource::Effect { owner, effect } => {
                     let (body, fact) = effect_fact(artifact, owner, effect)?;
-                    let EffectFactKind::UnsafeOperation { kind } = &fact.kind else {
+                    if fact.effect.as_str() != EffectKey::SAFETY {
                         return None;
-                    };
-                    let kind = *kind;
+                    }
+                    let kind = SafetyOpKind::from_effect_kind(&fact.kind)?;
                     let mut trace_path = trace_path;
                     append_effect_provenance(body, fact, &mut trace_path);
                     append_unsafe_operation(body, fact, kind, &mut trace_path);
@@ -2449,12 +2449,12 @@ mod tests {
     use crate::artifact::{
         AnnotationFact, AnnotationFactKind, AnnotationProbingFact, AnnotationSatisfactionFact,
         AnnotationTargetFact, ArtifactFacts, CallFact, CallId, CallKindFact, CallSiteId,
-        CallTargetFact, CompilerAssertKind, ContractFact, EffectFact, EffectFactKind, EffectId,
-        FunctionAttributesFact, FunctionContractsFact, FunctionFact, FunctionFactProvenance,
-        FunctionId, FunctionTargetFact, IndirectCallKindFact, MacroExpansionFact,
-        MarkerEvidenceState, MarkerId, OpaqueTargetFact, SafetyEffectGroupId, SafetyOpKind,
-        SourceFileFact, SourceFileId, SourceRangeFact, StableDefPathHash, StableInstanceHash,
-        UnverifiedMarkerProbeFact, UnverifiedMarkerProbeReason,
+        CallTargetFact, CompilerAssertKind, ContractFact, EffectFact, EffectId, EffectKey,
+        EffectKind, FunctionAttributesFact, FunctionContractsFact, FunctionFact,
+        FunctionFactProvenance, FunctionId, FunctionTargetFact, IndirectCallKindFact,
+        MacroExpansionFact, MarkerEvidenceState, MarkerId, OpaqueTargetFact, SafetyEffectGroupId,
+        SafetyOpKind, SourceFileFact, SourceFileId, SourceRangeFact, StableDefPathHash,
+        StableInstanceHash, UnverifiedMarkerProbeFact, UnverifiedMarkerProbeReason,
     };
     use crate::artifact_cache::{
         ArtifactAnalysisCache, ArtifactInfo, ArtifactScope, CacheExpectations, RustcArtifactId,
@@ -2711,7 +2711,8 @@ unresolved-call-target = "warn"
     fn unsafe_operation_with_provenance(id: u32, group: u32, macro_index: u64) -> EffectFact {
         EffectFact {
             id: EffectId::new(id),
-            safety_effect_group: Some(SafetyEffectGroupId::new(group)),
+            effect: EffectKey::new(EffectKey::SAFETY),
+            effect_group: Some(SafetyEffectGroupId::new(group)),
             source_range: None,
             expanded_range: None,
             macro_expansions: ["outer", "inner"]
@@ -2723,9 +2724,7 @@ unresolved-call-target = "warn"
                     source_range: None,
                 })
                 .collect(),
-            kind: EffectFactKind::UnsafeOperation {
-                kind: SafetyOpKind::DerefRawPointer,
-            },
+            kind: EffectKind::new(SafetyOpKind::DerefRawPointer.effect_kind_name()),
         }
     }
 
@@ -2874,23 +2873,23 @@ unresolved-call-target = "warn"
                     vec![
                         EffectFact {
                             id: EffectId::new(0),
-                            safety_effect_group: None,
+                            effect: EffectKey::new(EffectKey::PANIC),
+                            effect_group: None,
                             source_range: None,
                             expanded_range: None,
                             macro_expansions: Vec::new(),
-                            kind: EffectFactKind::CompilerAssert {
-                                kind: CompilerAssertKind::BoundsCheck,
-                            },
+                            kind: EffectKind::new(
+                                CompilerAssertKind::BoundsCheck.effect_kind_name(),
+                            ),
                         },
                         EffectFact {
                             id: EffectId::new(1),
-                            safety_effect_group: Some(SafetyEffectGroupId::new(1)),
+                            effect: EffectKey::new(EffectKey::SAFETY),
+                            effect_group: Some(SafetyEffectGroupId::new(1)),
                             source_range: None,
                             expanded_range: None,
                             macro_expansions: Vec::new(),
-                            kind: EffectFactKind::UnsafeOperation {
-                                kind: SafetyOpKind::DerefRawPointer,
-                            },
+                            kind: EffectKind::new(SafetyOpKind::DerefRawPointer.effect_kind_name()),
                         },
                     ],
                     vec![
@@ -3406,7 +3405,8 @@ unresolved-call-target = "warn"
         sink_call.call_site = CallSiteId::new(0);
         let compiler_assert = EffectFact {
             id: EffectId::new(0),
-            safety_effect_group: None,
+            effect: EffectKey::new(EffectKey::PANIC),
+            effect_group: None,
             source_range: None,
             expanded_range: None,
             macro_expansions: vec![
@@ -3421,9 +3421,7 @@ unresolved-call-target = "warn"
                     source_range: None,
                 },
             ],
-            kind: EffectFactKind::CompilerAssert {
-                kind: CompilerAssertKind::BoundsCheck,
-            },
+            kind: EffectKind::new(CompilerAssertKind::BoundsCheck.effect_kind_name()),
         };
         let artifact = ArtifactFacts::new(
             vec![
@@ -4208,13 +4206,12 @@ unresolved-call-target = "warn"
             Vec::new(),
             vec![EffectFact {
                 id: EffectId::new(0),
-                safety_effect_group: None,
+                effect: EffectKey::new(EffectKey::PANIC),
+                effect_group: None,
                 source_range: None,
                 expanded_range: None,
                 macro_expansions: Vec::new(),
-                kind: EffectFactKind::CompilerAssert {
-                    kind: CompilerAssertKind::BoundsCheck,
-                },
+                kind: EffectKind::new(CompilerAssertKind::BoundsCheck.effect_kind_name()),
             }],
             Vec::new(),
             Vec::new(),
@@ -4686,13 +4683,12 @@ unresolved-call-target = "warn"
         let helper_call = ignored_macro_call(helper_root, stable_function(102));
         let compiler_assert = EffectFact {
             id: EffectId::new(0),
-            safety_effect_group: None,
+            effect: EffectKey::new(EffectKey::PANIC),
+            effect_group: None,
             source_range: None,
             expanded_range: None,
             macro_expansions: Vec::new(),
-            kind: EffectFactKind::CompilerAssert {
-                kind: CompilerAssertKind::BoundsCheck,
-            },
+            kind: EffectKind::new(CompilerAssertKind::BoundsCheck.effect_kind_name()),
         };
         let artifact = ArtifactFacts::new(
             vec![
@@ -4773,13 +4769,12 @@ unresolved-call-target = "warn"
         let helper_call = ignored_macro_call(helper_root, stable_function(112));
         let compiler_assert = |id| EffectFact {
             id: EffectId::new(id),
-            safety_effect_group: None,
+            effect: EffectKey::new(EffectKey::PANIC),
+            effect_group: None,
             source_range: None,
             expanded_range: None,
             macro_expansions: Vec::new(),
-            kind: EffectFactKind::CompilerAssert {
-                kind: CompilerAssertKind::BoundsCheck,
-            },
+            kind: EffectKind::new(CompilerAssertKind::BoundsCheck.effect_kind_name()),
         };
         let artifact = ArtifactFacts::new(
             vec![

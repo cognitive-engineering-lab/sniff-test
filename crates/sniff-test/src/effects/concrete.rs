@@ -245,7 +245,7 @@ pub(crate) fn probe_concrete_effect<'annotations, E: Effect>(
         };
 
         for effect in &body.effects {
-            if !E::is_operation_source(effect) {
+            if effect.effect.as_str() != E::EFFECT_KEY {
                 continue;
             }
             for projected_owner in projected_owners(artifact, graph, body.function, owner, effect) {
@@ -300,8 +300,9 @@ fn projected_owners(
 }
 
 fn same_materialized_effect(left: &EffectFact, right: &EffectFact) -> bool {
-    left.kind == right.kind
-        && left.safety_effect_group == right.safety_effect_group
+    left.effect == right.effect
+        && left.kind == right.kind
+        && left.effect_group == right.effect_group
         && left.source_range == right.source_range
         && left.expanded_range == right.expanded_range
         && same_macro_provenance(&left.macro_expansions, &right.macro_expansions)

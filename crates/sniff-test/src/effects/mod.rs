@@ -7,7 +7,7 @@ pub(crate) mod trust;
 use std::fmt;
 
 use crate::annotations::AnnotationDomain;
-use crate::artifact::{CallFact, DefinitionNamespaceIndex, EffectFact, FunctionTargetFact};
+use crate::artifact::{CallFact, DefinitionNamespaceIndex, FunctionTargetFact};
 use clap::ValueEnum;
 use serde::{Deserialize, Serialize};
 
@@ -21,15 +21,13 @@ use self::concrete::InvocationSourceMatch;
 pub(crate) trait Effect {
     type Config: EffectConfig;
 
+    const EFFECT_KEY: &'static str;
     const EFFECT_NAME: &'static str;
     const DOMAIN: AnnotationDomain;
     const OBLIGATION: &'static str;
     const JUSTIFICATION: &'static str;
 
     fn register_passes(registry: &mut EffectPassRegistry);
-
-    /// Returns whether an extracted operation is a source for this effect.
-    fn is_operation_source(effect: &EffectFact) -> bool;
 
     /// Classifies one extracted call as an invocation-level source.
     fn invocation_source(

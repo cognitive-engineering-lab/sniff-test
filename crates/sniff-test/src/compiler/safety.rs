@@ -32,10 +32,10 @@ use rustc_middle::thir::{
 use rustc_middle::ty::{self, Ty, TyCtxt};
 use rustc_span::Span;
 
-use crate::artifact::SafetyOpKind;
+use crate::artifact::{EffectKind, SafetyOpKind};
 use crate::compiler::effect_passes::{
     EffectPassOutput, PreliminaryEffectSeed, PreliminarySafetyCallSeed, PreliminarySafetyGroup,
-    PreliminarySafetyOperationSeed, ThirEffectPass,
+    ThirEffectPass,
 };
 
 #[derive(Debug, Clone, Copy)]
@@ -49,7 +49,7 @@ pub(crate) struct SafetyEffectGroup {
 #[cfg(test)]
 pub(crate) type RawSafetyEffectGroup = SafetyEffectGroup;
 #[cfg(test)]
-pub(crate) type RawSafetyOpFact = PreliminarySafetyOperationSeed;
+pub(crate) type RawSafetyOpFact = PreliminaryEffectSeed;
 #[cfg(test)]
 pub(crate) type RawSafetyCallFact = PreliminarySafetyCallSeed;
 #[cfg(test)]
@@ -121,6 +121,10 @@ impl ThirEffectPass for SafetyThirPass {
             .auxiliary
             .safety_groups
             .extend(collected.auxiliary.safety_groups);
+        output
+            .auxiliary
+            .safety_calls
+            .extend(collected.auxiliary.safety_calls);
     }
 }
 
@@ -193,14 +197,10 @@ impl PreliminarySafetySeedSink {
     fn into_facts(self) -> RawSafetyFacts {
         let mut facts = RawSafetyFacts {
             groups: self.output.auxiliary.safety_groups,
+            calls: self.output.auxiliary.safety_calls,
             ..RawSafetyFacts::default()
         };
-        for seed in self.output.seeds {
-            match seed {
-                PreliminaryEffectSeed::SafetyOperation(seed) => facts.operations.push(seed),
-                PreliminaryEffectSeed::SafetyCall(seed) => facts.calls.push(seed),
-            }
-        }
+        facts.operations = self.output.seeds;
         facts
     }
 
@@ -256,8 +256,10 @@ impl PreliminarySafetySeedSink {
             return;
         }
         let effect_group = active_group.unwrap_or_else(|| self.new_effect_group(span));
-        self.output.seeds.push(PreliminaryEffectSeed::SafetyCall(
-            PreliminarySafetyCallSeed {
+        self.output
+            .auxiliary
+            .safety_calls
+            .push(PreliminarySafetyCallSeed {
                 owner,
                 callee,
                 declaration_callee,
@@ -265,8 +267,7 @@ impl PreliminarySafetySeedSink {
                 call_site: self.next_call_site,
                 span,
                 effect_group,
-            },
-        ));
+            });
         self.next_call_site += 1;
     }
 
@@ -279,17 +280,13 @@ impl PreliminarySafetySeedSink {
         active_group: Option<SafetyEffectGroup>,
     ) {
         let effect_group = active_group.unwrap_or_else(|| self.new_effect_group(span));
-        self.output
-            .seeds
-            .push(PreliminaryEffectSeed::SafetyOperation(
-                PreliminarySafetyOperationSeed {
-                    owner,
-                    op,
-                    span,
-                    marker_anchor_spans,
-                    effect_group,
-                },
-            ));
+        self.output.seeds.push(PreliminaryEffectSeed {
+            owner,
+            kind: EffectKind::new(op.effect_kind_name()),
+            span,
+            marker_anchor_spans,
+            effect_group: Some(effect_group),
+        });
     }
 }
 
@@ -870,8 +867,9 @@ mod tests {
     use rustc_hir::def_id::CRATE_DEF_ID;
     use rustc_span::{BytePos, Span};
 
-    use super::PreliminarySafetySeedSink;
+    use super::{PreliminarySafetySeedSink, SafetyThirPass};
     use crate::artifact::SafetyOpKind;
+    use crate::compiler::effect_passes::{EffectPassOutput, ThirEffectPass};
 
     fn span(start: u32, end: u32) -> Span {
         Span::with_root_ctxt(BytePos(start), BytePos(end))
@@ -907,19 +905,36 @@ mod tests {
         assert_eq!(facts.groups[0].effect_group, group);
         assert_eq!(facts.operations.len(), 1);
         assert_eq!(facts.operations[0].owner, owner);
-        assert_eq!(facts.operations[0].op, SafetyOpKind::DerefRawPointer);
+        assert_eq!(
+            facts.operations[0].kind.as_str(),
+            SafetyOpKind::DerefRawPointer.effect_kind_name()
+        );
         assert_eq!(facts.operations[0].span, operation_span);
         assert_eq!(
             facts.operations[0].marker_anchor_spans,
             [scope_span, operation_span]
         );
-        assert_eq!(facts.operations[0].effect_group, group);
+        assert_eq!(facts.operations[0].effect_group, Some(group));
         assert_eq!(facts.calls.len(), 1);
         assert_eq!(facts.calls[0].owner, owner);
         assert_eq!(facts.calls[0].callee, Some(owner));
         assert_eq!(facts.calls[0].declaration_callee, Some(owner));
         assert_eq!(facts.calls[0].span, span(30, 31));
         assert_eq!(facts.calls[0].effect_group, group);
+    }
+
+    #[test]
+    fn thir_pass_publishes_safety_call_metadata() {
+        let owner = CRATE_DEF_ID.to_def_id();
+        let mut sink = PreliminarySafetySeedSink::default();
+        sink.record_call(owner, Some(owner), Some(owner), span(30, 31), None, false);
+        let mut pass = SafetyThirPass { sink };
+        let mut output = EffectPassOutput::default();
+
+        pass.take_output(&mut output);
+
+        assert_eq!(output.auxiliary.safety_calls.len(), 1);
+        assert_eq!(output.auxiliary.safety_calls[0].owner, owner);
     }
 
     #[test]
@@ -1026,9 +1041,12 @@ mod tests {
 
         let facts = sink.into_facts().operations;
         assert_eq!(facts.len(), 3);
-        assert_eq!(facts[0].effect_group.id, facts[1].effect_group.id);
-        assert_eq!(facts[0].effect_group.span, scope_span);
-        assert_ne!(facts[0].effect_group.id, facts[2].effect_group.id);
-        assert_eq!(facts[2].effect_group.span, standalone_span);
+        let first_group = facts[0].effect_group.expect("first safety group");
+        let second_group = facts[1].effect_group.expect("second safety group");
+        let third_group = facts[2].effect_group.expect("third safety group");
+        assert_eq!(first_group.id, second_group.id);
+        assert_eq!(first_group.span, scope_span);
+        assert_ne!(first_group.id, third_group.id);
+        assert_eq!(third_group.span, standalone_span);
     }
 }

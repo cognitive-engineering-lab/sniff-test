@@ -1,7 +1,5 @@
 use crate::annotations::AnnotationDomain;
-use crate::artifact::{
-    CallFact, DefinitionNamespaceIndex, EffectFact, EffectFactKind, FunctionTargetFact,
-};
+use crate::artifact::{CallFact, DefinitionNamespaceIndex, EffectKey, FunctionTargetFact};
 use crate::compiler::{effect_passes::EffectPassRegistry, panic::CompilerAssertPass};
 use crate::config::{PanicBoundaryPolicy, PanicConfig};
 
@@ -14,17 +12,14 @@ pub(crate) struct Panic;
 impl super::Effect for Panic {
     type Config = PanicConfig;
 
+    const EFFECT_KEY: &'static str = EffectKey::PANIC;
     const EFFECT_NAME: &'static str = "panic";
     const DOMAIN: AnnotationDomain = AnnotationDomain::Panic;
     const OBLIGATION: &'static str = "Panics";
     const JUSTIFICATION: &'static str = "PANIC";
 
     fn register_passes(registry: &mut EffectPassRegistry) {
-        registry.register_mir_pass(Box::new(CompilerAssertPass));
-    }
-
-    fn is_operation_source(effect: &EffectFact) -> bool {
-        matches!(effect.kind, EffectFactKind::CompilerAssert { .. })
+        registry.register_mir_pass::<Self>(Box::new(CompilerAssertPass));
     }
 
     fn invocation_source(

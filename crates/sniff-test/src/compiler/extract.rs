@@ -21,15 +21,14 @@ use rustc_middle::ty::{AssocContainer, GenericArgs, Instance, InstanceKind, TyCt
 use rustc_span::{Pos, Span, StableSourceFileId};
 
 use super::effect_passes::{
-    EffectPassOutput, EffectPassRegistry, PreliminaryEffectSeed, PreliminaryMirEffectSeed,
-    PreliminarySafetyOperationSeed,
+    EffectPassRegistry, PreliminaryEffectSeed, RegisteredEffectPassOutput, RegisteredEffectSeed,
 };
 use super::source::{source_filename, stable_source_file_id};
 use crate::artifact::{
     AnnotationFact, AnnotationFactKind, AnnotationProbingFact, AnnotationSatisfactionFact,
     AnnotationTargetFact, ArtifactFacts, CallFact, CallId, CallKindFact, CallSiteId,
-    CallTargetFact, CompilerAssertKind, ContractFact, ContractRequirementFact, EffectFact,
-    EffectFactKind, EffectId, FunctionAttributesFact, FunctionContractsFact, FunctionFact,
+    CallTargetFact, ContractFact, ContractRequirementFact, EffectFact, EffectId, EffectKey,
+    EffectKind, FunctionAttributesFact, FunctionContractsFact, FunctionFact,
     FunctionFactProvenance, FunctionId, FunctionTargetFact, IndirectCallKindFact,
     MacroExpansionFact, MarkerId, OpaqueTargetFact, SafetyEffectGroupId, SourceFileFact,
     SourceFileId, SourceRangeFact, StableDefPathHash, StableInstanceHash,
@@ -124,22 +123,7 @@ pub(crate) fn extract_artifact_facts(
         effects,
     )?;
 
-    if effects.tracks_safety() {
-        attach_preliminary_unsafe_operations(
-            tcx,
-            pass_output
-                .seeds
-                .into_iter()
-                .filter_map(|seed| match seed {
-                    PreliminaryEffectSeed::SafetyOperation(seed) => Some(seed),
-                    PreliminaryEffectSeed::SafetyCall(_) => None,
-                })
-                .collect(),
-            &mut sources,
-            &mut bodies,
-            effects,
-        )?;
-    }
+    attach_preliminary_operations(tcx, pass_output.seeds, &mut sources, &mut bodies, effects)?;
 
     let functions = bodies
         .into_values()
@@ -446,17 +430,20 @@ fn collect_edge<'tcx>(
     let call_target = body.calls[call_index].call.target.clone();
     let declaration_target = body.calls[call_index].call.declaration_target.clone();
 
-    let effect_key = pass_registry
+    let detected_effect = pass_registry
         .preliminary_mir_seed(graph, edge)
-        .and_then(|seed| match seed {
-            PreliminaryMirEffectSeed::CompilerAssert(kind) => collect_compiler_assert_effect(
-                kind,
+        .and_then(|seed| {
+            let effect = seed.effect;
+            collect_mir_effect(
+                effect.clone(),
+                seed.kind,
                 body,
                 &key,
                 source_range.as_ref(),
                 expanded_range.as_ref(),
                 &macro_expansions,
-            ),
+            )
+            .map(|key| (key, effect))
         });
 
     collect_edge_markers(
@@ -467,7 +454,9 @@ fn collect_edge<'tcx>(
         sources,
         body,
         &key,
-        effect_key.as_deref(),
+        detected_effect
+            .as_ref()
+            .map(|(key, effect)| (key.as_str(), effect)),
         declaration_target.as_ref(),
         &call_target,
         effects,
@@ -540,25 +529,27 @@ fn insert_or_merge_call(
     Ok(index)
 }
 
-fn collect_compiler_assert_effect(
-    kind: CompilerAssertKind,
+fn collect_mir_effect(
+    effect: EffectKey,
+    kind: EffectKind,
     body: &mut PendingBody,
     call_key: &str,
     source_range: Option<&SourceRangeFact>,
     expanded_range: Option<&SourceRangeFact>,
     macro_expansions: &[MacroExpansionFact],
 ) -> Option<String> {
-    let effect_key = format!("compiler-assert:{call_key}");
+    let effect_key = format!("effect:{}:{}:{call_key}", effect.as_str(), kind.as_str());
     if !body.effects.iter().any(|effect| effect.key == effect_key) {
         body.effects.push(PendingEffect {
             key: effect_key.clone(),
             effect: EffectFact {
                 id: EffectId::new(0),
-                safety_effect_group: None,
+                effect,
+                effect_group: None,
                 source_range: source_range.cloned(),
                 expanded_range: expanded_range.cloned(),
                 macro_expansions: macro_expansions.to_vec(),
-                kind: EffectFactKind::CompilerAssert { kind },
+                kind,
             },
         });
     }
@@ -631,13 +622,15 @@ fn collect_edge_markers(
     sources: &mut SourceTable,
     body: &mut PendingBody,
     call_key: &str,
-    effect_key: Option<&str>,
+    detected_effect: Option<(&str, &EffectKey)>,
     declaration_target: Option<&FunctionTargetFact>,
     call_target: &CallTargetFact,
     effects: EffectSelection,
 ) -> Result<(), ExtractError> {
     for (probing, applicable_probing) in probing_modes() {
-        let (panic_target, panic_requirements) = if let Some(effect_key) = effect_key {
+        let (panic_target, panic_requirements) = if let Some((effect_key, effect)) = detected_effect
+            && effect.as_str() == EffectKey::PANIC
+        {
             (
                 PendingMarkerTarget::Effect(effect_key.to_owned()),
                 Vec::new(),
@@ -661,12 +654,18 @@ fn collect_edge_markers(
             )?;
         }
         if effects.tracks_safety() {
+            let safety_target = detected_effect
+                .filter(|(_, effect)| effect.as_str() == EffectKey::SAFETY)
+                .map_or_else(
+                    || PendingMarkerTarget::Call(call_key.to_owned()),
+                    |(effect_key, _)| PendingMarkerTarget::Effect(effect_key.to_owned()),
+                );
             record_effect_marker_probe(
                 tcx,
                 sources,
                 body,
                 AnnotationFactKind::SafetyJustification,
-                PendingMarkerTarget::Call(call_key.to_owned()),
+                safety_target,
                 safety_effect_edge_marker_block(tcx, graph, edge, safety_scope_span, probing),
                 applicable_probing,
                 safety_requirements(declaration_target, call_target),
@@ -1247,12 +1246,10 @@ trait SafetySeedInput {
     fn safety_calls(
         &self,
     ) -> impl Iterator<Item = &super::effect_passes::PreliminarySafetyCallSeed>;
-    fn safety_operations(
-        &self,
-    ) -> impl Iterator<Item = &super::effect_passes::PreliminarySafetyOperationSeed>;
+    fn safety_operations(&self) -> impl Iterator<Item = &PreliminaryEffectSeed>;
 }
 
-impl SafetySeedInput for EffectPassOutput {
+impl SafetySeedInput for RegisteredEffectPassOutput {
     fn safety_groups(&self) -> impl Iterator<Item = &super::effect_passes::PreliminarySafetyGroup> {
         self.auxiliary.safety_groups.iter()
     }
@@ -1260,19 +1257,14 @@ impl SafetySeedInput for EffectPassOutput {
     fn safety_calls(
         &self,
     ) -> impl Iterator<Item = &super::effect_passes::PreliminarySafetyCallSeed> {
-        self.seeds.iter().filter_map(|seed| match seed {
-            PreliminaryEffectSeed::SafetyCall(seed) => Some(seed),
-            PreliminaryEffectSeed::SafetyOperation(_) => None,
-        })
+        self.auxiliary.safety_calls.iter()
     }
 
-    fn safety_operations(
-        &self,
-    ) -> impl Iterator<Item = &super::effect_passes::PreliminarySafetyOperationSeed> {
-        self.seeds.iter().filter_map(|seed| match seed {
-            PreliminaryEffectSeed::SafetyOperation(seed) => Some(seed),
-            PreliminaryEffectSeed::SafetyCall(_) => None,
-        })
+    fn safety_operations(&self) -> impl Iterator<Item = &PreliminaryEffectSeed> {
+        self.seeds
+            .iter()
+            .filter(|seed| seed.effect.as_str() == EffectKey::SAFETY)
+            .map(|seed| &seed.seed)
     }
 }
 
@@ -1288,9 +1280,7 @@ impl SafetySeedInput for super::safety::RawSafetyFacts {
         self.calls.iter()
     }
 
-    fn safety_operations(
-        &self,
-    ) -> impl Iterator<Item = &super::effect_passes::PreliminarySafetyOperationSeed> {
+    fn safety_operations(&self) -> impl Iterator<Item = &PreliminaryEffectSeed> {
         self.operations.iter()
     }
 }
@@ -1324,7 +1314,11 @@ impl RawSafetyGroupResolver {
             .safety_groups()
             .map(|fact| fact.effect_group.id)
             .chain(output.safety_calls().map(|seed| seed.effect_group.id))
-            .chain(output.safety_operations().map(|seed| seed.effect_group.id))
+            .chain(
+                output
+                    .safety_operations()
+                    .filter_map(|seed| seed.effect_group.map(|group| group.id)),
+            )
             .max()
             .map_or(Some(0), |group| group.checked_add(1));
         let next_call_site = output
@@ -1593,17 +1587,18 @@ fn raw_safety_group_id(group: usize) -> Result<SafetyEffectGroupId, ExtractError
         .map_err(|_| ExtractError::new("too many raw safety effect groups in one artifact"))
 }
 
-fn attach_preliminary_unsafe_operations(
+fn attach_preliminary_operations(
     tcx: TyCtxt<'_>,
-    facts: Vec<PreliminarySafetyOperationSeed>,
+    facts: Vec<RegisteredEffectSeed>,
     sources: &mut SourceTable,
     bodies: &mut BTreeMap<FunctionId, PendingBody>,
     effects: EffectSelection,
 ) -> Result<(), ExtractError> {
-    for (ordinal, fact) in facts.into_iter().enumerate() {
+    for (ordinal, registered) in facts.into_iter().enumerate() {
+        let fact = registered.seed;
         let Some(local) = fact.owner.as_local() else {
             return Err(ExtractError::new(
-                "preliminary unsafe operation is not owned by the local artifact",
+                "preliminary effect operation is not owned by the local artifact",
             ));
         };
         let definition = StableDefPathHash::from_def_id(tcx, fact.owner);
@@ -1633,8 +1628,10 @@ fn attach_preliminary_unsafe_operations(
             .or_else(|| expanded_range.clone());
         for body_id in body_ids {
             let key = format!(
-                "unsafe:{ordinal}:{:?}:{source_range:?}:{}",
-                fact.op, fact.effect_group.id
+                "effect:{}:{ordinal}:{}:{source_range:?}:{:?}",
+                registered.effect.as_str(),
+                fact.kind.as_str(),
+                fact.effect_group.map(|group| group.id),
             );
             let body = bodies
                 .get_mut(&body_id)
@@ -1643,14 +1640,21 @@ fn attach_preliminary_unsafe_operations(
                 key: key.clone(),
                 effect: EffectFact {
                     id: EffectId::new(0),
-                    safety_effect_group: Some(raw_safety_group_id(fact.effect_group.id)?),
+                    effect: registered.effect.clone(),
+                    effect_group: fact
+                        .effect_group
+                        .map(|group| raw_safety_group_id(group.id))
+                        .transpose()?,
                     source_range: source_range.clone(),
                     expanded_range: expanded_range.clone(),
                     macro_expansions: macro_expansions.clone(),
-                    kind: EffectFactKind::UnsafeOperation { kind: fact.op },
+                    kind: fact.kind.clone(),
                 },
             });
 
+            if registered.effect.as_str() != EffectKey::SAFETY {
+                continue;
+            }
             for (probing, applicable_probing) in probing_modes() {
                 let probe =
                     probe_marker_candidates(fact.marker_anchor_spans.iter().copied(), |span| {
@@ -2078,7 +2082,8 @@ mod tests {
     };
     use crate::artifact::UnverifiedMarkerProbeReason;
     use crate::artifact::{
-        AnnotationFactKind, AnnotationProbingFact, CallSiteId, SafetyEffectGroupId, SafetyOpKind,
+        AnnotationFactKind, AnnotationProbingFact, CallSiteId, EffectKind, SafetyEffectGroupId,
+        SafetyOpKind,
     };
     use crate::compiler::safety::{
         RawSafetyCallFact, RawSafetyEffectGroup, RawSafetyFacts, RawSafetyGroupFact,
@@ -2202,10 +2207,10 @@ mod tests {
             calls: Vec::new(),
             operations: vec![RawSafetyOpFact {
                 owner,
-                op: SafetyOpKind::DerefRawPointer,
+                kind: EffectKind::new(SafetyOpKind::DerefRawPointer.effect_kind_name()),
                 span: span(30, 31),
                 marker_anchor_spans: vec![span(20, 40), span(30, 31)],
-                effect_group: inner,
+                effect_group: Some(inner),
             }],
         };
         let mut resolver = RawSafetyGroupResolver::new(&facts);
@@ -2462,13 +2467,13 @@ mod tests {
             calls: Vec::new(),
             operations: vec![RawSafetyOpFact {
                 owner,
-                op: SafetyOpKind::DerefRawPointer,
+                kind: EffectKind::new(SafetyOpKind::DerefRawPointer.effect_kind_name()),
                 span: span(10, 40),
                 marker_anchor_spans: vec![span(10, 40)],
-                effect_group: RawSafetyEffectGroup {
+                effect_group: Some(RawSafetyEffectGroup {
                     id: 0,
                     span: span(10, 40),
-                },
+                }),
             }],
         };
         let mut resolver = RawSafetyGroupResolver::new(&facts);
@@ -2478,7 +2483,12 @@ mod tests {
             .expect("structural edge gets a standalone identity");
         assert_ne!(
             edge_groups.safety_effect_group,
-            safety_group_id(facts.operations[0].effect_group.id)
+            safety_group_id(
+                facts.operations[0]
+                    .effect_group
+                    .expect("safety operation group")
+                    .id,
+            )
         );
         assert!(!edge_groups.inside_builtin_unsafe);
         assert_eq!(edge_groups.declaration_callee, None);

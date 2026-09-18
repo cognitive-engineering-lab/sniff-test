@@ -448,14 +448,12 @@ impl FunctionFact {
                 .effects
                 .iter()
                 .find(|effect| effect.id == id)
-                .is_some_and(|effect| matches!(effect.kind, EffectFactKind::CompilerAssert { .. })),
+                .is_some_and(|effect| effect.effect.as_str() == EffectKey::PANIC),
             (AnnotationFactKind::SafetyJustification, AnnotationTargetFact::Effect(id)) => self
                 .effects
                 .iter()
                 .find(|effect| effect.id == id)
-                .is_some_and(|effect| {
-                    matches!(effect.kind, EffectFactKind::UnsafeOperation { .. })
-                }),
+                .is_some_and(|effect| effect.effect.as_str() == EffectKey::SAFETY),
             (
                 AnnotationFactKind::PanicContract
                 | AnnotationFactKind::SafetyContract
@@ -748,9 +746,10 @@ pub(crate) struct ContractRequirementFact {
 #[serde(rename_all = "kebab-case")]
 pub(crate) struct EffectFact {
     pub(crate) id: EffectId,
-    /// Present exactly for safety effects, where multiple runtime operations
-    /// can belong to one source-level unsafe scope.
-    pub(crate) safety_effect_group: Option<SafetyEffectGroupId>,
+    /// Stable identity of the registered effect which emitted this fact.
+    pub(crate) effect: EffectKey,
+    /// Optional source-level group shared by related effect operations.
+    pub(crate) effect_group: Option<SafetyEffectGroupId>,
     /// Preferred presentation location, normally the outermost macro
     /// invocation when the effect was expanded from a macro.
     pub(crate) source_range: Option<SourceRangeFact>,
@@ -759,7 +758,45 @@ pub(crate) struct EffectFact {
     /// Ordered outermost-to-innermost macro expansions that produced the
     /// semantic effect.
     pub(crate) macro_expansions: Vec<MacroExpansionFact>,
-    pub(crate) kind: EffectFactKind,
+    /// Stable, effect-local name of this concrete operation.
+    pub(crate) kind: EffectKind,
+}
+
+/// Stable identity of one effect domain across compiler processes and crates.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[serde(transparent)]
+pub(crate) struct EffectKey(String);
+
+impl EffectKey {
+    pub(crate) const PANIC: &'static str = "sniff-test/panic";
+    pub(crate) const SAFETY: &'static str = "sniff-test/safety";
+
+    #[must_use]
+    pub(crate) fn new(value: impl Into<String>) -> Self {
+        Self(value.into())
+    }
+
+    #[must_use]
+    pub(crate) fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+/// Stable name of one operation kind within an effect domain.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[serde(transparent)]
+pub(crate) struct EffectKind(String);
+
+impl EffectKind {
+    #[must_use]
+    pub(crate) fn new(value: impl Into<String>) -> Self {
+        Self(value.into())
+    }
+
+    #[must_use]
+    pub(crate) fn as_str(&self) -> &str {
+        &self.0
+    }
 }
 
 /// Stable semantic subtype for a compiler-generated MIR assertion.
@@ -783,6 +820,41 @@ pub(crate) enum CompilerAssertKind {
 }
 
 impl CompilerAssertKind {
+    #[must_use]
+    pub(crate) const fn effect_kind_name(self) -> &'static str {
+        match self {
+            Self::BoundsCheck => "bounds-check",
+            Self::Overflow => "overflow",
+            Self::OverflowNegation => "overflow-negation",
+            Self::DivisionByZero => "division-by-zero",
+            Self::RemainderByZero => "remainder-by-zero",
+            Self::ResumedAfterReturn => "resumed-after-return",
+            Self::ResumedAfterPanic => "resumed-after-panic",
+            Self::ResumedAfterDrop => "resumed-after-drop",
+            Self::MisalignedPointerDereference => "misaligned-pointer-dereference",
+            Self::NullPointerDereference => "null-pointer-dereference",
+            Self::InvalidEnumConstruction => "invalid-enum-construction",
+        }
+    }
+
+    #[must_use]
+    pub(crate) fn from_effect_kind(kind: &EffectKind) -> Option<Self> {
+        Some(match kind.as_str() {
+            "bounds-check" => Self::BoundsCheck,
+            "overflow" => Self::Overflow,
+            "overflow-negation" => Self::OverflowNegation,
+            "division-by-zero" => Self::DivisionByZero,
+            "remainder-by-zero" => Self::RemainderByZero,
+            "resumed-after-return" => Self::ResumedAfterReturn,
+            "resumed-after-panic" => Self::ResumedAfterPanic,
+            "resumed-after-drop" => Self::ResumedAfterDrop,
+            "misaligned-pointer-dereference" => Self::MisalignedPointerDereference,
+            "null-pointer-dereference" => Self::NullPointerDereference,
+            "invalid-enum-construction" => Self::InvalidEnumConstruction,
+            _ => return None,
+        })
+    }
+
     /// Stable human-facing description of this compiler assertion.
     #[must_use]
     pub(crate) const fn human_description(self) -> &'static str {
@@ -834,6 +906,41 @@ pub(crate) enum SafetyOpKind {
 
 impl SafetyOpKind {
     #[must_use]
+    pub(crate) const fn effect_kind_name(self) -> &'static str {
+        match self {
+            Self::DerefRawPointer => "raw-pointer-dereference",
+            Self::UseOfMutableStatic => "mutable-static-access",
+            Self::UseOfExternStatic => "extern-static-access",
+            Self::AccessToUnionField => "union-field-access",
+            Self::UseOfUnsafeField => "unsafe-field-access",
+            Self::InitializingLayoutConstrainedType => "layout-constrained-type-initialization",
+            Self::InitializingTypeWithUnsafeField => "unsafe-field-initialization",
+            Self::MutationOfLayoutConstrainedField => "layout-constrained-field-mutation",
+            Self::BorrowOfLayoutConstrainedField => "layout-constrained-field-borrow",
+            Self::InlineAssembly => "inline-assembly",
+            Self::UnsafeBinderCast => "unsafe-binder-cast",
+        }
+    }
+
+    #[must_use]
+    pub(crate) fn from_effect_kind(kind: &EffectKind) -> Option<Self> {
+        Some(match kind.as_str() {
+            "raw-pointer-dereference" => Self::DerefRawPointer,
+            "mutable-static-access" => Self::UseOfMutableStatic,
+            "extern-static-access" => Self::UseOfExternStatic,
+            "union-field-access" => Self::AccessToUnionField,
+            "unsafe-field-access" => Self::UseOfUnsafeField,
+            "layout-constrained-type-initialization" => Self::InitializingLayoutConstrainedType,
+            "unsafe-field-initialization" => Self::InitializingTypeWithUnsafeField,
+            "layout-constrained-field-mutation" => Self::MutationOfLayoutConstrainedField,
+            "layout-constrained-field-borrow" => Self::BorrowOfLayoutConstrainedField,
+            "inline-assembly" => Self::InlineAssembly,
+            "unsafe-binder-cast" => Self::UnsafeBinderCast,
+            _ => return None,
+        })
+    }
+
+    #[must_use]
     pub(crate) const fn label(self) -> &'static str {
         match self {
             Self::DerefRawPointer => "raw pointer dereference",
@@ -849,13 +956,6 @@ impl SafetyOpKind {
             Self::UnsafeBinderCast => "unsafe binder cast",
         }
     }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "kebab-case", tag = "effect")]
-pub(crate) enum EffectFactKind {
-    CompilerAssert { kind: CompilerAssertKind },
-    UnsafeOperation { kind: SafetyOpKind },
 }
 
 /// One source marker and the fact it was associated with.
@@ -1048,26 +1148,11 @@ fn validate_body(
 
     validate_sorted_unique(&body.effects, |effect| effect.id, "effect ID")?;
     for effect in &body.effects {
+        require_nonempty(effect.effect.as_str(), "effect key")?;
+        require_nonempty(effect.kind.as_str(), "effect kind")?;
         validate_optional_range(effect.source_range.as_ref(), source_lengths)?;
         validate_optional_range(effect.expanded_range.as_ref(), source_lengths)?;
         validate_macro_expansions(&effect.macro_expansions, source_lengths)?;
-        match &effect.kind {
-            EffectFactKind::CompilerAssert { .. } => {
-                if effect.safety_effect_group.is_some() {
-                    return Err(ArtifactValidationError::new(format!(
-                        "compiler assertion effect {} has a safety effect group",
-                        effect.id.index()
-                    )));
-                }
-            }
-            EffectFactKind::UnsafeOperation { .. } if effect.safety_effect_group.is_none() => {
-                return Err(ArtifactValidationError::new(format!(
-                    "unsafe operation effect {} has no safety effect group",
-                    effect.id.index()
-                )));
-            }
-            EffectFactKind::UnsafeOperation { .. } => {}
-        }
     }
 
     validate_sorted_unique(&body.markers, |marker| marker.id, "marker ID")?;
@@ -1604,6 +1689,31 @@ mod tests {
     }
 
     #[test]
+    fn effect_facts_accept_plugin_defined_effect_and_kind_names() {
+        let function = FunctionId::generic(def_hash("00000000000000010000000000000002"));
+        let mut body = empty_body(function, "sample::plugin_effect");
+        body.effects.push(EffectFact {
+            id: EffectId::new(0),
+            effect: EffectKey::new("example.com/network"),
+            effect_group: None,
+            source_range: None,
+            expanded_range: None,
+            macro_expansions: Vec::new(),
+            kind: EffectKind::new("blocking-read"),
+        });
+
+        let artifact = ArtifactFacts::new(vec![body], Vec::new()).expect("valid plugin effect");
+        let encoded = serde_json::to_string(&artifact).expect("serialize plugin effect");
+        let decoded: ArtifactFacts =
+            serde_json::from_str(&encoded).expect("deserialize plugin effect");
+        decoded.validate().expect("round-tripped plugin effect");
+
+        let effect = &decoded.functions[0].effects[0];
+        assert_eq!(effect.effect.as_str(), "example.com/network");
+        assert_eq!(effect.kind.as_str(), "blocking-read");
+    }
+
+    #[test]
     fn namespace_candidates_union_every_occurrence_of_a_stable_definition() {
         let shared = FunctionId::generic(def_hash("00000000000000010000000000000002"));
         let root = FunctionId::generic(def_hash("00000000000000030000000000000004"));
@@ -1652,13 +1762,12 @@ mod tests {
     fn compiler_assert_effect(id: u32) -> EffectFact {
         EffectFact {
             id: EffectId::new(id),
-            safety_effect_group: None,
+            effect: EffectKey::new(EffectKey::PANIC),
+            effect_group: None,
             source_range: None,
             expanded_range: None,
             macro_expansions: Vec::new(),
-            kind: EffectFactKind::CompilerAssert {
-                kind: CompilerAssertKind::BoundsCheck,
-            },
+            kind: EffectKind::new(CompilerAssertKind::BoundsCheck.effect_kind_name()),
         }
     }
 
@@ -1702,13 +1811,12 @@ mod tests {
     fn unsafe_effect(id: u32, group: u32, source_range: SourceRangeFact) -> EffectFact {
         EffectFact {
             id: EffectId::new(id),
-            safety_effect_group: Some(SafetyEffectGroupId::new(group)),
+            effect: EffectKey::new(EffectKey::SAFETY),
+            effect_group: Some(SafetyEffectGroupId::new(group)),
             source_range: Some(source_range.clone()),
             expanded_range: Some(source_range),
             macro_expansions: Vec::new(),
-            kind: EffectFactKind::UnsafeOperation {
-                kind: SafetyOpKind::DerefRawPointer,
-            },
+            kind: EffectKind::new(SafetyOpKind::DerefRawPointer.effect_kind_name()),
         }
     }
 
@@ -2355,7 +2463,8 @@ mod tests {
             effects: vec![
                 EffectFact {
                     id: EffectId::new(9),
-                    safety_effect_group: Some(SafetyEffectGroupId::new(6)),
+                    effect: EffectKey::new(EffectKey::SAFETY),
+                    effect_group: Some(SafetyEffectGroupId::new(6)),
                     source_range: Some(range(110, 115)),
                     expanded_range: Some(range(120, 130)),
                     macro_expansions: vec![MacroExpansionFact {
@@ -2363,19 +2472,16 @@ mod tests {
                         display_path: String::from("sample::unsafe_macro"),
                         source_range: Some(range(110, 115)),
                     }],
-                    kind: EffectFactKind::UnsafeOperation {
-                        kind: SafetyOpKind::DerefRawPointer,
-                    },
+                    kind: EffectKind::new(SafetyOpKind::DerefRawPointer.effect_kind_name()),
                 },
                 EffectFact {
                     id: EffectId::new(2),
-                    safety_effect_group: None,
+                    effect: EffectKey::new(EffectKey::PANIC),
+                    effect_group: None,
                     source_range: Some(range(108, 118)),
                     expanded_range: Some(range(108, 118)),
                     macro_expansions: Vec::new(),
-                    kind: EffectFactKind::CompilerAssert {
-                        kind: CompilerAssertKind::BoundsCheck,
-                    },
+                    kind: EffectKind::new(CompilerAssertKind::BoundsCheck.effect_kind_name()),
                 },
             ],
             markers: vec![
@@ -2494,7 +2600,7 @@ mod tests {
             Some(range(110, 115))
         );
         assert_eq!(
-            decoded.functions[0].effects[1].safety_effect_group,
+            decoded.functions[0].effects[1].effect_group,
             Some(SafetyEffectGroupId::new(6))
         );
         assert_eq!(

@@ -859,7 +859,7 @@ mod tests {
     use crate::annotations::AnnotationIndex;
     use crate::artifact::{
         ArtifactFacts, CallFact, CallId, CallKindFact, CallSiteId, CallTargetFact,
-        CompilerAssertKind, EffectFact, EffectFactKind, EffectId, FunctionAttributesFact,
+        CompilerAssertKind, EffectFact, EffectId, EffectKey, EffectKind, FunctionAttributesFact,
         FunctionContractsFact, FunctionFact, FunctionFactProvenance,
         FunctionId as StableFunctionId, FunctionTargetFact, IndirectCallKindFact,
         MacroExpansionFact, OpaqueTargetFact, SafetyEffectGroupId, SourceFileFact, SourceFileId,
@@ -1287,13 +1287,12 @@ mod tests {
         let mut panicking_body = body(panicking, Vec::new());
         panicking_body.effects.push(EffectFact {
             id: EffectId::new(0),
-            safety_effect_group: None,
+            effect: EffectKey::new(EffectKey::PANIC),
+            effect_group: None,
             source_range: None,
             expanded_range: None,
             macro_expansions: Vec::new(),
-            kind: EffectFactKind::CompilerAssert {
-                kind: CompilerAssertKind::BoundsCheck,
-            },
+            kind: EffectKind::new(CompilerAssertKind::BoundsCheck.effect_kind_name()),
         });
         let facts = artifact(vec![
             body(caller, vec![panicking_call, sibling_call]),

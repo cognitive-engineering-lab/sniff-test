@@ -5,7 +5,7 @@ use crate::artifact::{
     AnnotationFact, AnnotationFactKind, AnnotationProbingFact, AnnotationSatisfactionFact,
     AnnotationTargetFact, ArtifactFacts, CallFact, CallId, CallKindFact, CallSiteId,
     CallTargetFact, CompilerAssertKind, ContractFact, ContractRequirementFact, EffectFact,
-    EffectFactKind, EffectId, FunctionAttributesFact, FunctionContractsFact, FunctionFact,
+    EffectId, EffectKey, EffectKind, FunctionAttributesFact, FunctionContractsFact, FunctionFact,
     FunctionFactProvenance, FunctionId as StableFunctionId, FunctionTargetFact,
     IndirectCallKindFact, MacroExpansionFact, MarkerId, OpaqueTargetFact, SafetyEffectGroupId,
     SafetyOpKind, SourceFileFact, SourceFileId, SourceRangeFact, StableInstanceHash,
@@ -214,13 +214,12 @@ fn body(
 fn assert_effect(id: u32) -> EffectFact {
     EffectFact {
         id: EffectId::new(id),
-        safety_effect_group: None,
+        effect: EffectKey::new(EffectKey::PANIC),
+        effect_group: None,
         source_range: None,
         expanded_range: None,
         macro_expansions: Vec::new(),
-        kind: EffectFactKind::CompilerAssert {
-            kind: CompilerAssertKind::BoundsCheck,
-        },
+        kind: EffectKind::new(CompilerAssertKind::BoundsCheck.effect_kind_name()),
     }
 }
 
@@ -237,13 +236,12 @@ fn assert_effect_from_macro(id: u32, macro_path: &str) -> EffectFact {
 fn unsafe_effect(id: u32) -> EffectFact {
     EffectFact {
         id: EffectId::new(id),
-        safety_effect_group: Some(SafetyEffectGroupId::new(id)),
+        effect: EffectKey::new(EffectKey::SAFETY),
+        effect_group: Some(SafetyEffectGroupId::new(id)),
         source_range: None,
         expanded_range: None,
         macro_expansions: Vec::new(),
-        kind: EffectFactKind::UnsafeOperation {
-            kind: SafetyOpKind::DerefRawPointer,
-        },
+        kind: EffectKind::new(SafetyOpKind::DerefRawPointer.effect_kind_name()),
     }
 }
 
