@@ -3,6 +3,7 @@ pub(crate) mod obligation;
 pub(crate) mod panic;
 pub(crate) mod safety;
 pub(crate) mod trust;
+pub(crate) mod visit;
 
 use std::fmt;
 
@@ -11,10 +12,10 @@ use crate::artifact::{CallFact, DefinitionNamespaceIndex, FunctionTargetFact};
 use clap::ValueEnum;
 use serde::{Deserialize, Serialize};
 
-use crate::compiler::effect_passes::EffectPassRegistry;
 use crate::path_patterns::PathPatterns;
 
 use self::concrete::InvocationSourceMatch;
+use self::visit::EffectPassRegistry;
 
 /// Built-in effect definition. Compiler passes only discover concrete seeds;
 /// obligation and justification semantics are supplied by shared tracking.

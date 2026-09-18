@@ -3,7 +3,7 @@
 //! Operation detection mirrors rustc's own THIR unsafety checker. This module
 //! records raw calls, unsafe operations, and source-level unsafe scopes; lint
 //! policy and contract interpretation belong to
-//! [`crate::effects::safety::SafetyEffect`].
+//! [`super::SafetyEffect`].
 //!
 //! The operation set is pinned to
 //! `rustc_mir_build/src/check_unsafety.rs`; source line references remain near
@@ -33,7 +33,7 @@ use rustc_middle::ty::{self, Ty, TyCtxt};
 use rustc_span::Span;
 
 use crate::artifact::{EffectKind, SafetyOpKind};
-use crate::compiler::effect_passes::{
+use crate::effects::visit::{
     EffectPassOutput, PreliminaryEffectSeed, PreliminarySafetyCallSeed, PreliminarySafetyGroup,
     ThirEffectPass,
 };
@@ -869,7 +869,7 @@ mod tests {
 
     use super::{PreliminarySafetySeedSink, SafetyThirPass};
     use crate::artifact::SafetyOpKind;
-    use crate::compiler::effect_passes::{EffectPassOutput, ThirEffectPass};
+    use crate::effects::visit::{EffectPassOutput, ThirEffectPass};
 
     fn span(start: u32, end: u32) -> Span {
         Span::with_root_ctxt(BytePos(start), BytePos(end))

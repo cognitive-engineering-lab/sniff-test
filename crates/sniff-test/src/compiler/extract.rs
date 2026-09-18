@@ -20,9 +20,6 @@ use rustc_hir::def_id::{DefId, LOCAL_CRATE, LocalDefId};
 use rustc_middle::ty::{AssocContainer, GenericArgs, Instance, InstanceKind, TyCtxt, TyKind};
 use rustc_span::{Pos, Span, StableSourceFileId};
 
-use super::effect_passes::{
-    EffectPassRegistry, PreliminaryEffectSeed, RegisteredEffectPassOutput, RegisteredEffectSeed,
-};
 use super::source::{source_filename, stable_source_file_id};
 use crate::artifact::{
     AnnotationFact, AnnotationFactKind, AnnotationProbingFact, AnnotationSatisfactionFact,
@@ -34,7 +31,6 @@ use crate::artifact::{
     SourceFileId, SourceRangeFact, StableDefPathHash, StableInstanceHash,
     UnverifiedMarkerProbeFact, UnverifiedMarkerProbeReason, same_macro_provenance,
 };
-use crate::compiler::safety::{call_identity_def_id, fn_def_is_unsafe};
 use crate::config::MarkerProbing;
 use crate::contracts::{
     ContractDocSummary, panic_contract_doc_summary_from_attrs,
@@ -43,6 +39,10 @@ use crate::contracts::{
 use crate::effects::EffectSelection;
 use crate::effects::panic::Panic;
 use crate::effects::safety::Safety;
+use crate::effects::safety::visit::{call_identity_def_id, fn_def_is_unsafe};
+use crate::effects::visit::{
+    EffectPassRegistry, PreliminaryEffectSeed, RegisteredEffectPassOutput, RegisteredEffectSeed,
+};
 use crate::namespace::{canonical_namespace, namespace_candidates};
 use crate::source_markers::{
     EffectMarkerBlock, MarkerProbe, panic_effect_edge_marker_block, probe_marker_candidates,
@@ -1242,21 +1242,24 @@ struct RawSafetyGroupResolver {
 }
 
 trait SafetySeedInput {
-    fn safety_groups(&self) -> impl Iterator<Item = &super::effect_passes::PreliminarySafetyGroup>;
+    fn safety_groups(&self)
+    -> impl Iterator<Item = &crate::effects::visit::PreliminarySafetyGroup>;
     fn safety_calls(
         &self,
-    ) -> impl Iterator<Item = &super::effect_passes::PreliminarySafetyCallSeed>;
+    ) -> impl Iterator<Item = &crate::effects::visit::PreliminarySafetyCallSeed>;
     fn safety_operations(&self) -> impl Iterator<Item = &PreliminaryEffectSeed>;
 }
 
 impl SafetySeedInput for RegisteredEffectPassOutput {
-    fn safety_groups(&self) -> impl Iterator<Item = &super::effect_passes::PreliminarySafetyGroup> {
+    fn safety_groups(
+        &self,
+    ) -> impl Iterator<Item = &crate::effects::visit::PreliminarySafetyGroup> {
         self.auxiliary.safety_groups.iter()
     }
 
     fn safety_calls(
         &self,
-    ) -> impl Iterator<Item = &super::effect_passes::PreliminarySafetyCallSeed> {
+    ) -> impl Iterator<Item = &crate::effects::visit::PreliminarySafetyCallSeed> {
         self.auxiliary.safety_calls.iter()
     }
 
@@ -1269,14 +1272,16 @@ impl SafetySeedInput for RegisteredEffectPassOutput {
 }
 
 #[cfg(test)]
-impl SafetySeedInput for super::safety::RawSafetyFacts {
-    fn safety_groups(&self) -> impl Iterator<Item = &super::effect_passes::PreliminarySafetyGroup> {
+impl SafetySeedInput for crate::effects::safety::visit::RawSafetyFacts {
+    fn safety_groups(
+        &self,
+    ) -> impl Iterator<Item = &crate::effects::visit::PreliminarySafetyGroup> {
         self.groups.iter()
     }
 
     fn safety_calls(
         &self,
-    ) -> impl Iterator<Item = &super::effect_passes::PreliminarySafetyCallSeed> {
+    ) -> impl Iterator<Item = &crate::effects::visit::PreliminarySafetyCallSeed> {
         self.calls.iter()
     }
 
@@ -2085,7 +2090,7 @@ mod tests {
         AnnotationFactKind, AnnotationProbingFact, CallSiteId, EffectKind, SafetyEffectGroupId,
         SafetyOpKind,
     };
-    use crate::compiler::safety::{
+    use crate::effects::safety::visit::{
         RawSafetyCallFact, RawSafetyEffectGroup, RawSafetyFacts, RawSafetyGroupFact,
         RawSafetyOpFact,
     };

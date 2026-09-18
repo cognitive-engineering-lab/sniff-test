@@ -6,9 +6,10 @@ use rustc_middle::thir::{ExprId, Thir};
 use rustc_middle::ty::TyCtxt;
 use rustc_span::Span;
 
-use super::safety::SafetyEffectGroup;
 use crate::artifact::{EffectKey, EffectKind};
-use crate::effects::Effect;
+
+use super::Effect;
+use super::safety::visit::SafetyEffectGroup;
 
 /// One compiler-local operation reported by an effect pass.
 #[derive(Debug, Clone)]

@@ -1,11 +1,14 @@
 use crate::annotations::AnnotationDomain;
 use crate::artifact::{CallFact, DefinitionNamespaceIndex, EffectKey};
-use crate::compiler::{effect_passes::EffectPassRegistry, safety::SafetyThirPass};
 use crate::config::SafetyConfig;
 
+use self::visit::SafetyThirPass;
 use super::concrete::{
     ConcreteEffect, ConcreteEffectState, ConcreteTermination, InvocationSourceMatch,
 };
+use super::visit::EffectPassRegistry;
+
+pub(crate) mod visit;
 
 pub(crate) struct Safety;
 

@@ -1,11 +1,14 @@
 use crate::annotations::AnnotationDomain;
 use crate::artifact::{CallFact, DefinitionNamespaceIndex, EffectKey, FunctionTargetFact};
-use crate::compiler::{effect_passes::EffectPassRegistry, panic::CompilerAssertPass};
 use crate::config::{PanicBoundaryPolicy, PanicConfig};
 
+use self::visit::CompilerAssertPass;
 use super::concrete::{
     ConcreteEffect, ConcreteEffectState, ConcreteTermination, InvocationSourceMatch,
 };
+use super::visit::EffectPassRegistry;
+
+pub(crate) mod visit;
 
 pub(crate) struct Panic;
 

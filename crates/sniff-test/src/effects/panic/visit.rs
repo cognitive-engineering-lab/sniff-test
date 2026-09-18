@@ -1,7 +1,7 @@
 //! Converts rustc MIR assertions into stable artifact classifications.
 
 use crate::artifact::{CompilerAssertKind, EffectKind};
-use crate::compiler::effect_passes::{MirEffectPass, PreliminaryMirEffectSeed};
+use crate::effects::visit::{MirEffectPass, PreliminaryMirEffectSeed};
 use reachability::{ReachabilityEdge, ReachabilityGraph, ReachabilityNodeKind};
 use rustc_middle::mir::AssertKind;
 
