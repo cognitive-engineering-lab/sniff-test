@@ -544,7 +544,7 @@ local_id!(CallId);
 local_id!(CallSiteId);
 local_id!(EffectId);
 local_id!(MarkerId);
-local_id!(SafetyEffectGroupId);
+local_id!(EffectGroupId);
 
 macro_rules! local_index {
     ($name:ident) => {
@@ -571,21 +571,19 @@ pub(crate) struct CallFact {
     /// edges for the same invocation share this value.
     pub(crate) call_site: CallSiteId,
     pub(crate) kind: CallKindFact,
-    /// Artifact-local identity of the source-level THIR unsafe scope (or
-    /// standalone call site) that owns this potential safety effect.
-    pub(crate) safety_effect_group: Option<SafetyEffectGroupId>,
-    /// Whether invoking this call target requires an unsafe context.
+    /// Artifact-local identity of the source-level effect scope (or standalone
+    /// call site) reported by the selected extraction passes.
+    pub(crate) effect_group: Option<EffectGroupId>,
+    /// Whether an effect pass classified this invocation as requiring an
+    /// explicit user-owned context.
     ///
     /// This remains explicit even for opaque function-pointer calls, where no
     /// concrete [`FunctionTargetFact`] exists to carry the function signature.
-    pub(crate) requires_unsafe: bool,
-    /// Whether rustc inserted the call inside a `BuiltinUnsafe` block.
-    ///
-    /// Such a call can still target an unsafe function, but its unsafe context
-    /// is the compiler's responsibility rather than a user justification
-    /// obligation. Consumer-instantiation overlays reconcile this fact from
-    /// the defining artifact.
-    pub(crate) inside_builtin_unsafe: bool,
+    pub(crate) requires_explicit_context: bool,
+    /// Whether the compiler owns the relevant context, suppressing a
+    /// user-authored justification obligation. Consumer-instantiation overlays
+    /// reconcile this fact from the defining artifact.
+    pub(crate) suppressed_by_compiler_context: bool,
     /// Preferred presentation location. For macro-expanded calls this is the
     /// outermost available invocation site.
     pub(crate) source_range: Option<SourceRangeFact>,
@@ -750,7 +748,7 @@ pub(crate) struct EffectFact {
     /// Stable identity of the registered effect which emitted this fact.
     pub(crate) effect: EffectKey,
     /// Optional source-level group shared by related effect operations.
-    pub(crate) effect_group: Option<SafetyEffectGroupId>,
+    pub(crate) effect_group: Option<EffectGroupId>,
     /// Preferred presentation location, normally the outermost macro
     /// invocation when the effect was expanded from a macro.
     pub(crate) source_range: Option<SourceRangeFact>,
@@ -1134,7 +1132,7 @@ fn validate_body(
 
     validate_sorted_unique(&body.calls, |call| call.id, "call ID")?;
     for call in &body.calls {
-        if call.safety_effect_group.is_none() {
+        if call.effect_group.is_none() {
             return Err(ArtifactValidationError::new(format!(
                 "call {} has no safety effect group",
                 call.id.index()
@@ -1765,9 +1763,9 @@ mod tests {
             id: CallId::new(0),
             call_site: CallSiteId::new(0),
             kind: CallKindFact::DirectCall,
-            safety_effect_group: Some(SafetyEffectGroupId::new(0)),
-            requires_unsafe: false,
-            inside_builtin_unsafe: false,
+            effect_group: Some(EffectGroupId::new(0)),
+            requires_explicit_context: false,
+            suppressed_by_compiler_context: false,
             source_range: None,
             expanded_range: None,
             macro_expansions: Vec::new(),
@@ -1807,9 +1805,9 @@ mod tests {
             id: CallId::new(id),
             call_site: CallSiteId::new(id),
             kind: CallKindFact::DirectCall,
-            safety_effect_group: Some(SafetyEffectGroupId::new(group)),
-            requires_unsafe: false,
-            inside_builtin_unsafe: false,
+            effect_group: Some(EffectGroupId::new(group)),
+            requires_explicit_context: false,
+            suppressed_by_compiler_context: false,
             source_range: Some(source_range.clone()),
             expanded_range: Some(source_range.clone()),
             macro_expansions: Vec::new(),
@@ -1843,7 +1841,7 @@ mod tests {
         EffectFact {
             id: EffectId::new(id),
             effect: EffectKey::new("safety"),
-            effect_group: Some(SafetyEffectGroupId::new(group)),
+            effect_group: Some(EffectGroupId::new(group)),
             source_range: Some(source_range.clone()),
             expanded_range: Some(source_range),
             macro_expansions: Vec::new(),
@@ -2525,9 +2523,9 @@ mod tests {
                 id: CallId::new(4),
                 call_site: CallSiteId::new(4),
                 kind: CallKindFact::DirectCall,
-                safety_effect_group: Some(SafetyEffectGroupId::new(6)),
-                requires_unsafe: true,
-                inside_builtin_unsafe: true,
+                effect_group: Some(EffectGroupId::new(6)),
+                requires_explicit_context: true,
+                suppressed_by_compiler_context: true,
                 source_range: Some(range(40, 50)),
                 expanded_range: Some(range(80, 105)),
                 macro_expansions: vec![
@@ -2551,7 +2549,7 @@ mod tests {
                 EffectFact {
                     id: EffectId::new(9),
                     effect: EffectKey::new("safety"),
-                    effect_group: Some(SafetyEffectGroupId::new(6)),
+                    effect_group: Some(EffectGroupId::new(6)),
                     source_range: Some(range(110, 115)),
                     expanded_range: Some(range(120, 130)),
                     macro_expansions: vec![MacroExpansionFact {
@@ -2641,11 +2639,11 @@ mod tests {
             decoded.functions[0].attributes.namespace_candidates,
             ["sample", "sample::root"]
         );
-        assert!(decoded.functions[0].calls[0].requires_unsafe);
-        assert!(decoded.functions[0].calls[0].inside_builtin_unsafe);
+        assert!(decoded.functions[0].calls[0].requires_explicit_context);
+        assert!(decoded.functions[0].calls[0].suppressed_by_compiler_context);
         assert_eq!(
-            decoded.functions[0].calls[0].safety_effect_group,
-            Some(SafetyEffectGroupId::new(6))
+            decoded.functions[0].calls[0].effect_group,
+            Some(EffectGroupId::new(6))
         );
         let declaration_target = decoded.functions[0].calls[0]
             .declaration_target
@@ -2693,7 +2691,7 @@ mod tests {
         );
         assert_eq!(
             decoded.functions[0].effects[1].effect_group,
-            Some(SafetyEffectGroupId::new(6))
+            Some(EffectGroupId::new(6))
         );
         assert_eq!(
             decoded.functions[0].markers[2].source_range,

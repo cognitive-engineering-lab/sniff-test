@@ -1771,8 +1771,8 @@ fn select_marker_call<'a>(
 mod tests {
     use crate::artifact::{
         ArtifactFacts, CallFact, CallId, CallKindFact, CallSiteId, CallTargetFact,
-        ContractRequirementFact, FunctionAttributesFact, FunctionFact, FunctionFactProvenance,
-        FunctionId, SafetyEffectGroupId, SourceFileId, SourceRangeFact, StableDefPathHash,
+        ContractRequirementFact, EffectGroupId, FunctionAttributesFact, FunctionFact,
+        FunctionFactProvenance, FunctionId, SourceFileId, SourceRangeFact, StableDefPathHash,
         StableInstanceHash, UnverifiedMarkerProbeReason,
     };
     use crate::cli::findings::{
@@ -1887,9 +1887,9 @@ mod tests {
                     id: CallId::new(id),
                     call_site: CallSiteId::new(id),
                     kind: CallKindFact::DirectCall,
-                    safety_effect_group: Some(SafetyEffectGroupId::new(id)),
-                    requires_unsafe: false,
-                    inside_builtin_unsafe: false,
+                    effect_group: Some(EffectGroupId::new(id)),
+                    requires_explicit_context: false,
+                    suppressed_by_compiler_context: false,
                     source_range: Some(SourceRangeFact {
                         file: SourceFileId::new("sample-source"),
                         byte_start,

@@ -29,20 +29,20 @@ use rustc_middle::thir::visit::{self, Visitor};
 use rustc_middle::thir::{
     Block, BlockSafety, Expr, ExprId, ExprKind, InlineAsmExpr, Pat, PatKind, Thir,
 };
-use rustc_middle::ty::{self, Ty, TyCtxt};
+use rustc_middle::ty::{self, Instance, Ty, TyCtxt, TyKind};
 use rustc_span::Span;
 
-use crate::artifact::{EffectKind, SafetyOpKind};
-use crate::effects::visit::{
-    EffectPassOutput, PreliminaryEffectSeed, PreliminarySafetyCallSeed, PreliminarySafetyGroup,
-    ThirEffectPass,
+use reachability::{
+    CallableEdgeInfo, ReachabilityEdgeKind, ReachabilityGraph, ReachabilityNodeKind, ReachedEdge,
 };
 
-#[derive(Debug, Clone, Copy)]
-pub(crate) struct SafetyEffectGroup {
-    pub(crate) id: usize,
-    pub(crate) span: Span,
-}
+use crate::artifact::{CallTargetFact, EffectKind, SafetyOpKind};
+use crate::effects::visit::{
+    EffectPassOutput, PreliminaryCallSeed, PreliminaryEffectGroup, PreliminaryEffectGroupSeed,
+    PreliminaryEffectSeed, ThirEffectPass,
+};
+
+pub(crate) type SafetyEffectGroup = PreliminaryEffectGroup;
 
 // Legacy-shaped test fixture helpers keep low-level grouping tests concise;
 // production extraction consumes `EffectPassOutput` directly.
@@ -51,9 +51,9 @@ pub(crate) type RawSafetyEffectGroup = SafetyEffectGroup;
 #[cfg(test)]
 pub(crate) type RawSafetyOpFact = PreliminaryEffectSeed;
 #[cfg(test)]
-pub(crate) type RawSafetyCallFact = PreliminarySafetyCallSeed;
+pub(crate) type RawSafetyCallFact = PreliminaryCallSeed;
 #[cfg(test)]
-pub(crate) type RawSafetyGroupFact = PreliminarySafetyGroup;
+pub(crate) type RawSafetyGroupFact = PreliminaryEffectGroupSeed;
 
 #[cfg(test)]
 #[derive(Debug, Default)]
@@ -98,6 +98,148 @@ pub(crate) fn fn_def_is_unsafe(tcx: TyCtxt<'_>, def_id: DefId) -> bool {
             .is_unsafe()
 }
 
+#[must_use]
+pub(crate) fn edge_requires_explicit_context<'view, 'tcx>(
+    tcx: TyCtxt<'tcx>,
+    graph: &'view ReachabilityGraph<'tcx>,
+    reached: ReachedEdge<'view, 'tcx>,
+    target: &CallTargetFact,
+) -> bool {
+    let signature_requires_explicit_context = target
+        .function_target()
+        .is_some_and(|target| target.attributes.is_unsafe);
+    let caller = reached.origin().instance();
+    let target_requires_explicit_context = if edge_uses_target_unsafe_requirement(reached.kind()) {
+        reached
+            .target()
+            .instance()
+            .map_or(signature_requires_explicit_context, |callee| {
+                fn_def_call_requires_explicit_context(
+                    tcx,
+                    callee.def_id(),
+                    signature_requires_explicit_context,
+                    caller,
+                )
+            })
+    } else {
+        false
+    };
+    let callable_requires_explicit_context =
+        if edge_uses_callable_unsafe_requirement(reached.kind()) {
+            match graph.edge_callable(reached.id()) {
+                Some(CallableEdgeInfo::FnPointer { fn_ptr_ty }) => {
+                    callable_ty_requires_explicit_context(tcx, fn_ptr_ty, caller)
+                }
+                Some(CallableEdgeInfo::DynDispatch { .. }) | None => {
+                    match reached.target().kind() {
+                        ReachabilityNodeKind::IndirectCall { callee_ty } => {
+                            callable_ty_requires_explicit_context(tcx, *callee_ty, caller)
+                        }
+                        ReachabilityNodeKind::Instance(_)
+                        | ReachabilityNodeKind::CompilerAssert { .. }
+                        | ReachabilityNodeKind::MacroExpansion { .. }
+                        | ReachabilityNodeKind::DynObjectCast { .. } => false,
+                    }
+                }
+            }
+        } else {
+            false
+        };
+    unsafe_requirement_for_edge(
+        reached.kind(),
+        target_requires_explicit_context,
+        callable_requires_explicit_context,
+    )
+}
+
+pub(crate) const fn edge_uses_target_unsafe_requirement(kind: ReachabilityEdgeKind) -> bool {
+    matches!(
+        kind,
+        ReachabilityEdgeKind::DirectCall
+            | ReachabilityEdgeKind::TailCall
+            | ReachabilityEdgeKind::DynDispatchVTableEntry
+    )
+}
+
+pub(crate) const fn edge_uses_callable_unsafe_requirement(kind: ReachabilityEdgeKind) -> bool {
+    matches!(
+        kind,
+        ReachabilityEdgeKind::IndirectCall | ReachabilityEdgeKind::FnPointerCallTarget
+    )
+}
+
+pub(crate) const fn compiler_call_requires_explicit_context(
+    signature_requires_explicit_context: bool,
+    safe_target_features: bool,
+    target_features_are_safe: bool,
+) -> bool {
+    (signature_requires_explicit_context && !safe_target_features) || !target_features_are_safe
+}
+
+fn fn_def_call_requires_explicit_context<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    callee_def_id: DefId,
+    signature_requires_explicit_context: bool,
+    caller_instance: Option<Instance<'tcx>>,
+) -> bool {
+    let Some(caller_instance) = caller_instance else {
+        return signature_requires_explicit_context;
+    };
+    let callee_attributes = tcx.codegen_fn_attrs(callee_def_id);
+    let caller_body = tcx.typeck_root_def_id(caller_instance.def_id());
+    let caller_features = &tcx.body_codegen_attrs(caller_body).target_features;
+    let target_features_are_safe =
+        tcx.is_target_feature_call_safe(&callee_attributes.target_features, caller_features);
+    compiler_call_requires_explicit_context(
+        signature_requires_explicit_context,
+        callee_attributes.safe_target_features,
+        target_features_are_safe,
+    )
+}
+
+fn callable_ty_requires_explicit_context<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    ty: rustc_middle::ty::Ty<'tcx>,
+    caller: Option<Instance<'tcx>>,
+) -> bool {
+    let signature_requires_explicit_context =
+        matches!(ty.kind(), TyKind::FnDef(..) | TyKind::FnPtr(..))
+            && ty.fn_sig(tcx).skip_binder().safety().is_unsafe();
+    match ty.kind() {
+        TyKind::FnDef(def_id, _) => fn_def_call_requires_explicit_context(
+            tcx,
+            *def_id,
+            signature_requires_explicit_context,
+            caller,
+        ),
+        TyKind::FnPtr(..) => signature_requires_explicit_context,
+        _ => false,
+    }
+}
+
+pub(crate) const fn unsafe_requirement_for_edge(
+    kind: ReachabilityEdgeKind,
+    target_requires_explicit_context: bool,
+    callable_requires_explicit_context: bool,
+) -> bool {
+    match kind {
+        ReachabilityEdgeKind::DirectCall
+        | ReachabilityEdgeKind::TailCall
+        | ReachabilityEdgeKind::DynDispatchVTableEntry => target_requires_explicit_context,
+        ReachabilityEdgeKind::IndirectCall | ReachabilityEdgeKind::FnPointerCallTarget => {
+            callable_requires_explicit_context
+        }
+        ReachabilityEdgeKind::FnPointerReify
+        | ReachabilityEdgeKind::ClosureFnPointerReify
+        | ReachabilityEdgeKind::DynObjectCast
+        | ReachabilityEdgeKind::VTableEntry
+        | ReachabilityEdgeKind::MacroExpansion
+        | ReachabilityEdgeKind::ConstBody
+        | ReachabilityEdgeKind::CoroutineBody
+        | ReachabilityEdgeKind::Assert => false,
+    }
+}
+
 #[derive(Default)]
 pub(crate) struct SafetyThirPass {
     sink: PreliminarySafetySeedSink,
@@ -117,14 +259,8 @@ impl ThirEffectPass for SafetyThirPass {
     fn take_output(&mut self, output: &mut EffectPassOutput) {
         let collected = std::mem::take(&mut self.sink).into_output();
         output.seeds.extend(collected.seeds);
-        output
-            .auxiliary
-            .safety_groups
-            .extend(collected.auxiliary.safety_groups);
-        output
-            .auxiliary
-            .safety_calls
-            .extend(collected.auxiliary.safety_calls);
+        output.auxiliary.groups.extend(collected.auxiliary.groups);
+        output.auxiliary.calls.extend(collected.auxiliary.calls);
     }
 }
 
@@ -176,7 +312,7 @@ struct RawCallIdentity {
     declaration_callee: Option<DefId>,
     span: Span,
     enclosing_group: Option<SafetyEffectGroup>,
-    inside_builtin_unsafe: bool,
+    suppressed_by_compiler_context: bool,
 }
 
 impl PreliminarySafetySeedSink {
@@ -196,8 +332,8 @@ impl PreliminarySafetySeedSink {
     #[cfg(test)]
     fn into_facts(self) -> RawSafetyFacts {
         let mut facts = RawSafetyFacts {
-            groups: self.output.auxiliary.safety_groups,
-            calls: self.output.auxiliary.safety_calls,
+            groups: self.output.auxiliary.groups,
+            calls: self.output.auxiliary.calls,
             ..RawSafetyFacts::default()
         };
         facts.operations = self.output.seeds;
@@ -209,8 +345,8 @@ impl PreliminarySafetySeedSink {
         self.group_identities.insert((owner, effect_group));
         self.output
             .auxiliary
-            .safety_groups
-            .push(PreliminarySafetyGroup {
+            .groups
+            .push(PreliminaryEffectGroupSeed {
                 owner,
                 effect_group,
             });
@@ -222,8 +358,8 @@ impl PreliminarySafetySeedSink {
             if self.group_identities.insert((owner, *effect_group)) {
                 self.output
                     .auxiliary
-                    .safety_groups
-                    .push(PreliminarySafetyGroup {
+                    .groups
+                    .push(PreliminaryEffectGroupSeed {
                         owner,
                         effect_group: *effect_group,
                     });
@@ -238,7 +374,7 @@ impl PreliminarySafetySeedSink {
         declaration_callee: Option<DefId>,
         span: Span,
         active_group: Option<SafetyEffectGroup>,
-        inside_builtin_unsafe: bool,
+        suppressed_by_compiler_context: bool,
     ) {
         let identity = RawCallIdentity {
             owner,
@@ -246,7 +382,7 @@ impl PreliminarySafetySeedSink {
             declaration_callee,
             span,
             enclosing_group: active_group,
-            inside_builtin_unsafe,
+            suppressed_by_compiler_context,
         };
         // Derive and desugaring expansion can lower multiple control-flow
         // branches from one compiler-generated source expression. MIR
@@ -256,18 +392,15 @@ impl PreliminarySafetySeedSink {
             return;
         }
         let effect_group = active_group.unwrap_or_else(|| self.new_effect_group(span));
-        self.output
-            .auxiliary
-            .safety_calls
-            .push(PreliminarySafetyCallSeed {
-                owner,
-                callee,
-                declaration_callee,
-                inside_builtin_unsafe,
-                call_site: self.next_call_site,
-                span,
-                effect_group,
-            });
+        self.output.auxiliary.calls.push(PreliminaryCallSeed {
+            owner,
+            callee,
+            declaration_callee,
+            suppressed_by_compiler_context,
+            call_site: self.next_call_site,
+            span,
+            effect_group,
+        });
         self.next_call_site += 1;
     }
 
@@ -933,8 +1066,8 @@ mod tests {
 
         pass.take_output(&mut output);
 
-        assert_eq!(output.auxiliary.safety_calls.len(), 1);
-        assert_eq!(output.auxiliary.safety_calls[0].owner, owner);
+        assert_eq!(output.auxiliary.calls.len(), 1);
+        assert_eq!(output.auxiliary.calls[0].owner, owner);
     }
 
     #[test]
@@ -983,7 +1116,7 @@ mod tests {
     }
 
     #[test]
-    fn preliminary_sink_retains_calls_inside_builtin_unsafe_blocks() {
+    fn preliminary_sink_retains_calls_suppressed_by_compiler_context_blocks() {
         let owner = CRATE_DEF_ID.to_def_id();
         let generated_span = span(30, 31);
         let mut sink = PreliminarySafetySeedSink::default();
@@ -992,7 +1125,7 @@ mod tests {
 
         let facts = sink.into_facts();
         assert_eq!(facts.calls.len(), 1);
-        assert!(facts.calls[0].inside_builtin_unsafe);
+        assert!(facts.calls[0].suppressed_by_compiler_context);
     }
 
     #[test]

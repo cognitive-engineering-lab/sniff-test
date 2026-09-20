@@ -81,7 +81,7 @@ pub(crate) struct EffectReportError {
 enum SafetyEffectGroup {
     Invocation(effect_tracing::InvocationId, crate::artifact::CallId),
     ContractInvocation(effect_tracing::InvocationId, crate::artifact::CallId),
-    Operation(StableFunctionId, crate::artifact::SafetyEffectGroupId),
+    Operation(StableFunctionId, crate::artifact::EffectGroupId),
     StandaloneOperation(StableFunctionId, EffectId),
 }
 
@@ -615,7 +615,7 @@ fn collect_marker_claims(
                 continue;
             };
             uses.extend(
-                safety_effect_groups(artifact, graph, safety, origin)
+                effect_groups(artifact, graph, safety, origin)
                     .into_iter()
                     .map(|group| MarkerUse {
                         annotation: *annotation,
@@ -649,15 +649,10 @@ fn collect_marker_claims(
                 let Some(safety) = safety else {
                     continue;
                 };
-                obligation_safety_effect_groups(
-                    graph,
-                    safety,
-                    source_invocation,
-                    usage.source_calls(),
-                )
-                .into_iter()
-                .map(MarkerEffectGroup::Safety)
-                .collect()
+                obligation_effect_groups(graph, safety, source_invocation, usage.source_calls())
+                    .into_iter()
+                    .map(MarkerEffectGroup::Safety)
+                    .collect()
             }
         };
         let witness = MarkerWitness::Obligation {
@@ -934,7 +929,7 @@ fn panic_effect_group(origin: ConcreteSource) -> PanicEffectGroup {
     }
 }
 
-fn safety_effect_groups(
+fn effect_groups(
     artifact: &ArtifactFacts,
     graph: &InvocationGraph,
     safety: &SafetyEffect<'_>,
@@ -945,7 +940,7 @@ fn safety_effect_groups(
             let owner = graph.stable_function(graph.invocation(invocation).caller());
             let group = safety
                 .invocation_source(invocation, call)
-                .and_then(|source| source.edge().safety_effect_group)
+                .and_then(|source| source.edge().effect_group)
                 .map_or(SafetyEffectGroup::Invocation(invocation, call), |group| {
                     SafetyEffectGroup::Operation(owner, group)
                 });
@@ -962,7 +957,7 @@ fn safety_effect_groups(
     }
 }
 
-fn obligation_safety_effect_groups(
+fn obligation_effect_groups(
     graph: &InvocationGraph,
     safety: &SafetyEffect<'_>,
     invocation: effect_tracing::InvocationId,
@@ -981,7 +976,7 @@ fn obligation_safety_effect_groups(
             if safety.invocation_source(invocation, edge.id).is_none() {
                 return SafetyEffectGroup::ContractInvocation(invocation, edge.id);
             }
-            edge.safety_effect_group.map_or(
+            edge.effect_group.map_or(
                 SafetyEffectGroup::Invocation(invocation, edge.id),
                 |group| SafetyEffectGroup::Operation(owner, group),
             )
@@ -1486,7 +1481,7 @@ fn safety_findings(
                         function: owner,
                         function_path: body.display_path.clone(),
                         target: source.target().map(interpreted_target).or_else(|| {
-                            (edge.requires_unsafe
+                            (edge.requires_explicit_context
                                 && edge.kind == crate::artifact::CallKindFact::IndirectCall)
                                 .then(|| InterpretedTarget {
                                     function: None,
@@ -2451,7 +2446,7 @@ fn boundary_description(edge: &crate::artifact::CallFact) -> String {
     if edge.kind == crate::artifact::CallKindFact::IndirectCall
         && edge.target.function_target().is_none()
     {
-        if edge.requires_unsafe {
+        if edge.requires_explicit_context {
             String::from("indirect call through an unsafe function pointer")
         } else {
             String::from("indirect call through a function pointer")
@@ -2484,10 +2479,10 @@ mod tests {
         AnnotationFact, AnnotationFactKind, AnnotationProbingFact, AnnotationRole,
         AnnotationSatisfactionFact, AnnotationTargetFact, ArtifactFacts, CallFact, CallId,
         CallKindFact, CallSiteId, CallTargetFact, CompilerAssertKind, ContractFact,
-        EffectContractFact, EffectFact, EffectId, EffectKey, EffectKind, FunctionAttributesFact,
-        FunctionContractsFact, FunctionFact, FunctionFactProvenance, FunctionId,
-        FunctionTargetFact, IndirectCallKindFact, MacroExpansionFact, MarkerEvidenceState,
-        MarkerId, OpaqueTargetFact, SafetyEffectGroupId, SafetyOpKind, SourceFileFact,
+        EffectContractFact, EffectFact, EffectGroupId, EffectId, EffectKey, EffectKind,
+        FunctionAttributesFact, FunctionContractsFact, FunctionFact, FunctionFactProvenance,
+        FunctionId, FunctionTargetFact, IndirectCallKindFact, MacroExpansionFact,
+        MarkerEvidenceState, MarkerId, OpaqueTargetFact, SafetyOpKind, SourceFileFact,
         SourceFileId, SourceRangeFact, StableDefPathHash, StableInstanceHash,
         UnverifiedMarkerProbeFact, UnverifiedMarkerProbeReason,
     };
@@ -2645,9 +2640,9 @@ mod tests {
             id: CallId::new(id),
             call_site: CallSiteId::new(0),
             kind: CallKindFact::DirectCall,
-            safety_effect_group: Some(SafetyEffectGroupId::new(0)),
-            requires_unsafe: false,
-            inside_builtin_unsafe: false,
+            effect_group: Some(EffectGroupId::new(0)),
+            requires_explicit_context: false,
+            suppressed_by_compiler_context: false,
             source_range: None,
             expanded_range: None,
             macro_expansions: Vec::new(),
@@ -2768,7 +2763,7 @@ unresolved-call-target = "warn"
         EffectFact {
             id: EffectId::new(id),
             effect: EffectKey::new("safety"),
-            effect_group: Some(SafetyEffectGroupId::new(group)),
+            effect_group: Some(EffectGroupId::new(group)),
             source_range: None,
             expanded_range: None,
             macro_expansions: ["outer", "inner"]
@@ -2938,7 +2933,7 @@ unresolved-call-target = "warn"
                         EffectFact {
                             id: EffectId::new(1),
                             effect: EffectKey::new("safety"),
-                            effect_group: Some(SafetyEffectGroupId::new(1)),
+                            effect_group: Some(EffectGroupId::new(1)),
                             source_range: None,
                             expanded_range: None,
                             macro_expansions: Vec::new(),
@@ -3196,11 +3191,11 @@ unresolved-call-target = "warn"
             byte_end: 20,
         };
         let mut first_call = call(0, target(first_target, "sample::First::run"));
-        first_call.requires_unsafe = true;
+        first_call.requires_explicit_context = true;
         first_call.source_range = Some(range.clone());
         first_call.expanded_range = Some(range.clone());
         let mut second_call = call(0, target(second_target, "sample::Second::run"));
-        second_call.requires_unsafe = true;
+        second_call.requires_explicit_context = true;
         second_call.source_range = Some(range.clone());
         second_call.expanded_range = Some(range);
         let artifact = ArtifactFacts::new(
@@ -3363,7 +3358,7 @@ unresolved-call-target = "warn"
         unsafe_pointer.call_site = CallSiteId::new(0);
         unsafe_pointer.kind = CallKindFact::IndirectCall;
         unsafe_pointer.indirect_kind = Some(IndirectCallKindFact::FunctionPointer);
-        unsafe_pointer.requires_unsafe = true;
+        unsafe_pointer.requires_explicit_context = true;
         let artifact = ArtifactFacts::new(
             vec![
                 body(
@@ -3554,8 +3549,8 @@ unresolved-call-target = "warn"
         let unsafe_target = stable_function(42);
         let mut unsafe_call = call(1, target(unsafe_target, "sample::unsafe_target"));
         unsafe_call.call_site = CallSiteId::new(0);
-        unsafe_call.requires_unsafe = true;
-        unsafe_call.safety_effect_group = Some(SafetyEffectGroupId::new(1));
+        unsafe_call.requires_explicit_context = true;
+        unsafe_call.effect_group = Some(EffectGroupId::new(1));
         let artifact = ArtifactFacts::new(
             vec![
                 body(
@@ -3643,9 +3638,9 @@ unresolved-call-target = "warn"
 
     fn grouped_comment_claim_artifact(root: FunctionId, obligation: FunctionId) -> ArtifactFacts {
         let mut first_call = call(0, target(obligation, "sample::safe_obligation"));
-        first_call.safety_effect_group = Some(SafetyEffectGroupId::new(1));
+        first_call.effect_group = Some(EffectGroupId::new(1));
         let mut second_call = call(1, target(obligation, "sample::safe_obligation"));
-        second_call.safety_effect_group = Some(SafetyEffectGroupId::new(1));
+        second_call.effect_group = Some(EffectGroupId::new(1));
         let mut first_marker = shared_justification_marker(
             0,
             "shared-contract-marker",
@@ -3757,7 +3752,7 @@ unresolved-call-target = "warn"
             vec![CallId::new(0), CallId::new(1)],
         );
         assert_eq!(
-            super::obligation_safety_effect_groups(
+            super::obligation_effect_groups(
                 &graph,
                 &safety,
                 uses[0].source_invocation(),

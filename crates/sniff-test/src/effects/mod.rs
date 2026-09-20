@@ -8,10 +8,13 @@ pub(crate) mod visit;
 use std::fmt;
 
 use crate::artifact::{
-    AnnotationFactKind, AnnotationRole, CallFact, DefinitionNamespaceIndex, EffectKey,
-    FunctionTargetFact,
+    AnnotationFactKind, AnnotationRole, CallFact, CallTargetFact, DefinitionNamespaceIndex,
+    EffectKey, FunctionTargetFact,
 };
 use clap::ValueEnum;
+use reachability::{ReachabilityGraph, ReachedEdge};
+use rustc_hir::def_id::DefId;
+use rustc_middle::ty::TyCtxt;
 use serde::{Deserialize, Serialize};
 
 use crate::path_patterns::PathPatterns;
@@ -27,6 +30,7 @@ pub(crate) trait Effect {
     const EFFECT_NAME: &'static str;
     const OBLIGATION: &'static str;
     const JUSTIFICATION: &'static str;
+    const USES_ENCLOSING_SCOPE_MARKER: bool = false;
 
     fn register_passes(registry: &mut EffectPassRegistry);
 
@@ -43,6 +47,7 @@ pub(crate) struct EffectMetadata {
     pub(crate) key: EffectKey,
     pub(crate) obligation: &'static str,
     pub(crate) justification: &'static str,
+    pub(crate) uses_enclosing_scope_marker: bool,
 }
 
 impl EffectMetadata {
@@ -52,6 +57,7 @@ impl EffectMetadata {
             key: EffectKey::new(E::EFFECT_NAME),
             obligation: E::OBLIGATION,
             justification: E::JUSTIFICATION,
+            uses_enclosing_scope_marker: E::USES_ENCLOSING_SCOPE_MARKER,
         }
     }
 }
@@ -116,6 +122,41 @@ impl EffectSelection {
     #[must_use]
     pub(crate) const fn tracks_safety(self) -> bool {
         self.safety
+    }
+
+    /// Registers every selected effect through the common effect interface.
+    ///
+    /// Compiler extraction deliberately does not know the built-in effect
+    /// types. This is the compatibility bridge for the current fixed
+    /// selection representation; a plugin registry can replace the body
+    /// without changing extraction.
+    pub(crate) fn register_passes(self, registry: &mut EffectPassRegistry) {
+        if self.tracks_panic() {
+            registry.register_effect::<panic::Panic>();
+        }
+        if self.tracks_safety() {
+            registry.register_effect::<safety::Safety>();
+        }
+    }
+
+    /// Whether this selected set needs Rust unsafe-signature facts. Kept on
+    /// the selection boundary so compiler extraction does not name the effect
+    /// which owns that interpretation.
+    #[must_use]
+    pub(crate) fn function_requires_explicit_context(self, tcx: TyCtxt<'_>, def_id: DefId) -> bool {
+        self.tracks_safety() && safety::visit::fn_def_is_unsafe(tcx, def_id)
+    }
+
+    #[must_use]
+    pub(crate) fn invocation_requires_explicit_context<'view, 'tcx>(
+        self,
+        tcx: TyCtxt<'tcx>,
+        graph: &'view ReachabilityGraph<'tcx>,
+        reached: ReachedEdge<'view, 'tcx>,
+        target: &CallTargetFact,
+    ) -> bool {
+        self.tracks_safety()
+            && safety::visit::edge_requires_explicit_context(tcx, graph, reached, target)
     }
 
     #[must_use]

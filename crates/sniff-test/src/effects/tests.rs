@@ -5,10 +5,10 @@ use crate::artifact::{
     AnnotationFact, AnnotationFactKind, AnnotationProbingFact, AnnotationSatisfactionFact,
     AnnotationTargetFact, ArtifactFacts, CallFact, CallId, CallKindFact, CallSiteId,
     CallTargetFact, CompilerAssertKind, ContractFact, ContractRequirementFact, EffectFact,
-    EffectId, EffectKey, EffectKind, FunctionAttributesFact, FunctionContractsFact, FunctionFact,
-    FunctionFactProvenance, FunctionId as StableFunctionId, FunctionTargetFact,
-    IndirectCallKindFact, MacroExpansionFact, MarkerId, OpaqueTargetFact, SafetyEffectGroupId,
-    SafetyOpKind, SourceFileFact, SourceFileId, SourceRangeFact, StableInstanceHash,
+    EffectGroupId, EffectId, EffectKey, EffectKind, FunctionAttributesFact, FunctionContractsFact,
+    FunctionFact, FunctionFactProvenance, FunctionId as StableFunctionId, FunctionTargetFact,
+    IndirectCallKindFact, MacroExpansionFact, MarkerId, OpaqueTargetFact, SafetyOpKind,
+    SourceFileFact, SourceFileId, SourceRangeFact, StableInstanceHash,
 };
 use crate::compiler::invocations::InvocationGraph;
 use crate::config::{EffectDocMatching, MarkerProbing, SniffTestConfig};
@@ -88,14 +88,14 @@ fn unresolved_target(function: StableFunctionId, path: &str) -> CallTargetFact {
     }
 }
 
-fn call(id: u32, site: u32, target: CallTargetFact, requires_unsafe: bool) -> CallFact {
+fn call(id: u32, site: u32, target: CallTargetFact, requires_explicit_context: bool) -> CallFact {
     CallFact {
         id: CallId::new(id),
         call_site: CallSiteId::new(site),
         kind: CallKindFact::DirectCall,
-        safety_effect_group: Some(SafetyEffectGroupId::new(site)),
-        requires_unsafe,
-        inside_builtin_unsafe: false,
+        effect_group: Some(EffectGroupId::new(site)),
+        requires_explicit_context,
+        suppressed_by_compiler_context: false,
         source_range: None,
         expanded_range: None,
         macro_expansions: Vec::new(),
@@ -123,7 +123,7 @@ fn unsafe_call_from_macro(
     macro_path: &str,
 ) -> CallFact {
     let mut call = call_from_macro(id, site, target, macro_path);
-    call.requires_unsafe = true;
+    call.requires_explicit_context = true;
     call
 }
 
@@ -245,7 +245,7 @@ fn unsafe_effect(id: u32) -> EffectFact {
     EffectFact {
         id: EffectId::new(id),
         effect: EffectKey::new("safety"),
-        effect_group: Some(SafetyEffectGroupId::new(id)),
+        effect_group: Some(EffectGroupId::new(id)),
         source_range: None,
         expanded_range: None,
         macro_expansions: Vec::new(),
@@ -1177,7 +1177,7 @@ fn builtin_unsafe_comment_edges_remain_ignored_inside_a_trusted_parent() {
     let wrapper = stable_function(0);
     let leaf = stable_function(1);
     let mut builtin_call = call(0, 0, target(leaf, "dependency::leaf"), false);
-    builtin_call.inside_builtin_unsafe = true;
+    builtin_call.suppressed_by_compiler_context = true;
     let (artifact, graph, annotations) = setup(vec![
         body(
             wrapper,

@@ -90,7 +90,11 @@ impl Invocation {
 
     #[must_use]
     pub(crate) fn is_builtin_unsafe(&self) -> bool {
-        !self.raw_edges.is_empty() && self.raw_edges.iter().all(|edge| edge.inside_builtin_unsafe)
+        !self.raw_edges.is_empty()
+            && self
+                .raw_edges
+                .iter()
+                .all(|edge| edge.suppressed_by_compiler_context)
     }
 
     #[must_use]
@@ -859,11 +863,11 @@ mod tests {
     use crate::annotations::AnnotationIndex;
     use crate::artifact::{
         ArtifactFacts, CallFact, CallId, CallKindFact, CallSiteId, CallTargetFact,
-        CompilerAssertKind, EffectFact, EffectId, EffectKey, EffectKind, FunctionAttributesFact,
-        FunctionContractsFact, FunctionFact, FunctionFactProvenance,
+        CompilerAssertKind, EffectFact, EffectGroupId, EffectId, EffectKey, EffectKind,
+        FunctionAttributesFact, FunctionContractsFact, FunctionFact, FunctionFactProvenance,
         FunctionId as StableFunctionId, FunctionTargetFact, IndirectCallKindFact,
-        MacroExpansionFact, OpaqueTargetFact, SafetyEffectGroupId, SourceFileFact, SourceFileId,
-        SourceRangeFact, StableInstanceHash,
+        MacroExpansionFact, OpaqueTargetFact, SourceFileFact, SourceFileId, SourceRangeFact,
+        StableInstanceHash,
     };
     use crate::config::PanicConfig;
     use crate::effects::concrete::probe_concrete_effect;
@@ -932,9 +936,9 @@ mod tests {
             id: CallId::new(id),
             call_site: CallSiteId::new(site),
             kind,
-            safety_effect_group: Some(SafetyEffectGroupId::new(site)),
-            requires_unsafe: false,
-            inside_builtin_unsafe: false,
+            effect_group: Some(EffectGroupId::new(site)),
+            requires_explicit_context: false,
+            suppressed_by_compiler_context: false,
             source_range: None,
             expanded_range: None,
             macro_expansions: Vec::new(),
