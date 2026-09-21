@@ -1,12 +1,17 @@
 //! Compiler-pass registration and orchestration for concrete effect seeds.
 
-use reachability::{ReachabilityGraph, ReachedEdge};
+use std::collections::{HashMap, HashSet};
+
+use reachability::MirBodyLocation;
 use rustc_hir::def_id::{DefId, LocalDefId};
+use rustc_middle::mir::{Body, Location, Operand};
 use rustc_middle::thir::{ExprId, Thir};
-use rustc_middle::ty::TyCtxt;
+use rustc_middle::ty::{
+    self, EarlyBinder, GenericArgsRef, Instance, Ty, TyCtxt, TypeFoldable, TypeVisitableExt,
+};
 use rustc_span::Span;
 
-use crate::artifact::{CallTargetFact, EffectKey, EffectKind};
+use crate::artifact::{EffectKey, EffectKind};
 
 use super::{Effect, EffectMetadata};
 
@@ -63,12 +68,13 @@ pub(crate) struct PreliminaryEffectGroupSeed {
     pub(crate) effect_group: PreliminaryEffectGroup,
 }
 
-/// A source classification emitted while visiting an already-normalized MIR
-/// reachability edge. Extraction supplies the edge's owner and source site.
+/// A source classification emitted while visiting a MIR body.
 #[derive(Debug, Clone)]
 pub(crate) struct PreliminaryMirEffectSeed {
+    pub(crate) location: Location,
     pub(crate) kind: EffectKind,
     pub(crate) source: PreliminaryMirEffectSource,
+    pub(crate) suppress_in_compiler_context: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -82,6 +88,29 @@ pub(crate) struct RegisteredMirEffectSeed {
     pub(crate) effect: EffectKey,
     pub(crate) kind: EffectKind,
     pub(crate) source: PreliminaryMirEffectSource,
+    pub(crate) suppress_in_compiler_context: bool,
+}
+
+#[derive(Default)]
+pub(crate) struct RegisteredMirEffectPassOutput<'tcx> {
+    seeds: HashMap<(Instance<'tcx>, MirBodyLocation), Vec<RegisteredMirEffectSeed>>,
+}
+
+impl<'tcx> RegisteredMirEffectPassOutput<'tcx> {
+    pub(crate) fn take(
+        &mut self,
+        instance: Instance<'tcx>,
+        location: Option<MirBodyLocation>,
+    ) -> Vec<RegisteredMirEffectSeed> {
+        location
+            .and_then(|location| self.seeds.remove(&(instance, location)))
+            .unwrap_or_default()
+    }
+
+    #[must_use]
+    pub(crate) fn is_empty(&self) -> bool {
+        self.seeds.is_empty()
+    }
 }
 
 /// HIR seed pass. The framework owns body enumeration and invokes every
@@ -106,19 +135,80 @@ pub(crate) trait ThirEffectPass {
     fn take_output(&mut self, _output: &mut EffectPassOutput) {}
 }
 
-/// MIR-derived seed pass. Reachability exposes compiler assertions as graph
-/// nodes, so the callback receives the normalized edge rather than repeating a
-/// second MIR traversal.
+/// Context for inspecting one exact MIR instance without exposing extraction's
+/// reachability graph to the effect implementation.
+#[derive(Clone, Copy)]
+pub(crate) struct MirEffectCx<'tcx> {
+    tcx: TyCtxt<'tcx>,
+    instance: Instance<'tcx>,
+    body: &'tcx Body<'tcx>,
+}
+
+impl<'tcx> MirEffectCx<'tcx> {
+    #[must_use]
+    pub(crate) const fn tcx(self) -> TyCtxt<'tcx> {
+        self.tcx
+    }
+
+    #[must_use]
+    pub(crate) const fn instance(self) -> Instance<'tcx> {
+        self.instance
+    }
+
+    #[must_use]
+    pub(crate) const fn body(self) -> &'tcx Body<'tcx> {
+        self.body
+    }
+
+    #[must_use]
+    pub(crate) fn monomorphize<T>(self, value: T) -> T
+    where
+        T: TypeFoldable<TyCtxt<'tcx>>,
+    {
+        let value = EarlyBinder::bind(value);
+        if self.instance.args.has_param() {
+            value
+                .instantiate(self.tcx, self.instance.args)
+                .skip_norm_wip()
+        } else {
+            self.instance.instantiate_mir_and_normalize_erasing_regions(
+                self.tcx,
+                ty::TypingEnv::fully_monomorphized(),
+                value,
+            )
+        }
+    }
+
+    #[must_use]
+    pub(crate) fn operand_ty(self, operand: &Operand<'tcx>) -> Ty<'tcx> {
+        self.monomorphize(operand.ty(&self.body.local_decls, self.tcx))
+    }
+
+    #[must_use]
+    pub(crate) fn resolve_callable_instance(
+        self,
+        def_id: DefId,
+        args: GenericArgsRef<'tcx>,
+    ) -> Option<Instance<'tcx>> {
+        if args.has_param() {
+            if self.tcx.trait_of_assoc(def_id).is_some() {
+                None
+            } else {
+                Some(Instance::new_raw(def_id, args))
+            }
+        } else {
+            Instance::try_resolve(self.tcx, ty::TypingEnv::fully_monomorphized(), def_id, args)
+                .ok()
+                .flatten()
+        }
+    }
+}
+
+/// MIR-derived seed pass. The framework enumerates every exact function
+/// instance expanded by reachability and invokes the pass directly on its MIR.
 pub(crate) trait MirEffectPass {
-    fn check_reachability_edge<'view, 'tcx>(
-        &mut self,
-        _tcx: TyCtxt<'tcx>,
-        _graph: &'view ReachabilityGraph<'tcx>,
-        _reached: ReachedEdge<'view, 'tcx>,
-        _target: &CallTargetFact,
-        _suppressed_by_compiler_context: bool,
-    ) -> Option<PreliminaryMirEffectSeed> {
-        None
+    fn check_body(&mut self, _cx: MirEffectCx<'_>) -> Vec<PreliminaryMirEffectSeed> {
+        Vec::new()
     }
 }
 
@@ -246,32 +336,39 @@ impl EffectPassRegistry {
         output
     }
 
-    pub(crate) fn preliminary_mir_seeds<'view, 'tcx>(
+    pub(crate) fn collect_mir_bodies<'tcx>(
         &mut self,
         tcx: TyCtxt<'tcx>,
-        graph: &'view ReachabilityGraph<'tcx>,
-        reached: ReachedEdge<'view, 'tcx>,
-        target: &CallTargetFact,
-        suppressed_by_compiler_context: bool,
-    ) -> Vec<RegisteredMirEffectSeed> {
-        self.mir_passes
-            .iter_mut()
-            .filter_map(|pass| {
-                pass.pass
-                    .check_reachability_edge(
-                        tcx,
-                        graph,
-                        reached,
-                        target,
-                        suppressed_by_compiler_context,
-                    )
-                    .map(|seed| RegisteredMirEffectSeed {
-                        effect: pass.effect.clone(),
-                        kind: seed.kind,
-                        source: seed.source,
-                    })
-            })
-            .collect()
+        instances: impl IntoIterator<Item = Instance<'tcx>>,
+    ) -> RegisteredMirEffectPassOutput<'tcx> {
+        let mut output = RegisteredMirEffectPassOutput::default();
+        let mut visited = HashSet::new();
+        for instance in instances {
+            if !visited.insert(instance) {
+                continue;
+            }
+            let body = tcx.instance_mir(instance.def);
+            let cx = MirEffectCx {
+                tcx,
+                instance,
+                body,
+            };
+            for pass in &mut self.mir_passes {
+                for seed in pass.pass.check_body(cx) {
+                    output
+                        .seeds
+                        .entry((instance, seed.location.into()))
+                        .or_default()
+                        .push(RegisteredMirEffectSeed {
+                            effect: pass.effect.clone(),
+                            kind: seed.kind,
+                            source: seed.source,
+                            suppress_in_compiler_context: seed.suppress_in_compiler_context,
+                        });
+                }
+            }
+        }
+        output
     }
 }
 

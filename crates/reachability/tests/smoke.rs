@@ -572,6 +572,7 @@ fn compiler_assert_sites(tcx: TyCtxt<'_>) -> Vec<MirBodyLocation> {
             else {
                 return None;
             };
+            assert_eq!(edge.edge().mir_location, Some(*site));
             Some((*site, edge.span(), std::mem::discriminant(message.as_ref())))
         })
         .collect::<Vec<_>>();

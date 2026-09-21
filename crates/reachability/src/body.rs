@@ -38,6 +38,7 @@ pub(crate) fn collect_body_edges<'tcx>(
         body,
         edges: Vec::new(),
         callee_span: None,
+        mir_location: None,
     };
 
     visitor.visit_hir_definitions();
@@ -49,6 +50,7 @@ pub(crate) struct BodyEdge<'tcx> {
     pub target: ReachabilityNodeKind<'tcx>,
     pub kind: ReachabilityEdgeKind,
     pub span: Span,
+    pub mir_location: Option<MirBodyLocation>,
     /// Callee-segment span for edges emitted while handling a call terminator.
     pub callee_span: Option<Span>,
     pub callable: Option<CallableEdgeInfo<'tcx>>,
@@ -61,6 +63,9 @@ struct BodyEdgeCollector<'tcx> {
     edges: Vec<BodyEdge<'tcx>>,
     /// Callee-segment span of the call terminator currently being handled.
     callee_span: Option<Span>,
+    /// MIR location currently being visited. HIR-discovered edges have no
+    /// corresponding MIR location.
+    mir_location: Option<MirBodyLocation>,
 }
 
 impl<'tcx> BodyEdgeCollector<'tcx> {
@@ -105,6 +110,7 @@ impl<'tcx> BodyEdgeCollector<'tcx> {
             target,
             kind,
             span,
+            mir_location: self.mir_location,
             callee_span: self.callee_span,
             callable,
         });
@@ -540,10 +546,12 @@ impl<'tcx> rustc_middle::mir::visit::Visitor<'tcx> for BodyEdgeCollector<'tcx> {
         statement: &rustc_middle::mir::Statement<'tcx>,
         location: rustc_middle::mir::Location,
     ) {
+        self.mir_location = Some(location.into());
         if let StatementKind::Assign(assignment) = &statement.kind {
             let (_, rvalue) = &**assignment;
             self.visit_assignment(rvalue, statement.source_info.span);
         }
+        self.mir_location = None;
 
         self.super_statement(statement, location);
     }
@@ -553,6 +561,7 @@ impl<'tcx> rustc_middle::mir::visit::Visitor<'tcx> for BodyEdgeCollector<'tcx> {
         terminator: &rustc_middle::mir::Terminator<'tcx>,
         location: rustc_middle::mir::Location,
     ) {
+        self.mir_location = Some(location.into());
         match &terminator.kind {
             TerminatorKind::Call { func, fn_span, .. } => {
                 self.callee_span = Some(*fn_span);
@@ -577,6 +586,7 @@ impl<'tcx> rustc_middle::mir::visit::Visitor<'tcx> for BodyEdgeCollector<'tcx> {
             }
             _ => {}
         }
+        self.mir_location = None;
 
         self.super_terminator(terminator, location);
     }

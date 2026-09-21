@@ -276,6 +276,7 @@ impl<'tcx> ReachabilityIndex<'tcx> {
                 ReachabilityEdgeKind::MacroExpansion,
                 frame.call_site,
                 None,
+                None,
             ));
             current = macro_node;
         }
@@ -288,6 +289,7 @@ impl<'tcx> ReachabilityIndex<'tcx> {
                 source,
                 body_edge.kind,
                 body_edge.span,
+                body_edge.mir_location,
                 body_edge.callee_span,
             ),
             body_edge.callable,
@@ -601,6 +603,7 @@ where
                 call_edge.origin,
                 kind,
                 call_edge.span,
+                call_edge.mir_location,
                 call_edge.callee_span,
             ),
             Some(callable),

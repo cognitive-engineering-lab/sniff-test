@@ -727,6 +727,9 @@ pub struct ReachabilityEdge {
     pub kind: ReachabilityEdgeKind,
     /// Source span responsible for the edge.
     pub span: Span,
+    /// MIR location responsible for this edge. Edges discovered only through
+    /// HIR, such as inline const bodies, do not have one.
+    pub mir_location: Option<MirBodyLocation>,
     /// Span of the callee segment for call edges — `foo` in `x.foo(a)`.
     pub callee_span: Option<Span>,
 }
@@ -738,6 +741,7 @@ impl ReachabilityEdge {
         origin: ReachabilityNodeId,
         kind: ReachabilityEdgeKind,
         span: Span,
+        mir_location: Option<MirBodyLocation>,
         callee_span: Option<Span>,
     ) -> Self {
         Self {
@@ -746,6 +750,7 @@ impl ReachabilityEdge {
             origin,
             kind,
             span,
+            mir_location,
             callee_span,
         }
     }
@@ -846,6 +851,7 @@ mod tests {
                 ReachabilityEdgeKind::ConstBody,
                 DUMMY_SP,
                 None,
+                None,
             ),
             Some(callable),
         );
@@ -856,6 +862,7 @@ mod tests {
                 root_node,
                 ReachabilityEdgeKind::FnPointerCallTarget,
                 DUMMY_SP,
+                None,
                 None,
             ),
             Some(callable),

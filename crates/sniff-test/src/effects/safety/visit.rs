@@ -24,7 +24,7 @@ use rustc_data_structures::stack::ensure_sufficient_stack;
 use rustc_hir::def::DefKind;
 use rustc_hir::def_id::{DefId, LocalDefId};
 use rustc_hir::{self as hir, BindingMode, ByRef, Mutability};
-use rustc_middle::mir::BorrowKind;
+use rustc_middle::mir::{BorrowKind, Location, TerminatorKind};
 use rustc_middle::thir::visit::{self, Visitor};
 use rustc_middle::thir::{
     Block, BlockSafety, Expr, ExprId, ExprKind, InlineAsmExpr, Pat, PatKind, Thir,
@@ -32,13 +32,9 @@ use rustc_middle::thir::{
 use rustc_middle::ty::{self, Instance, Ty, TyCtxt, TyKind};
 use rustc_span::Span;
 
-use reachability::{
-    CallableEdgeInfo, ReachabilityEdgeKind, ReachabilityGraph, ReachabilityNodeKind, ReachedEdge,
-};
-
-use crate::artifact::{CallTargetFact, EffectKind, SafetyOpKind};
+use crate::artifact::{EffectKind, SafetyOpKind};
 use crate::effects::visit::{
-    EffectPassOutput, MirEffectPass, PreliminaryCallSeed, PreliminaryEffectGroup,
+    EffectPassOutput, MirEffectCx, MirEffectPass, PreliminaryCallSeed, PreliminaryEffectGroup,
     PreliminaryEffectGroupSeed, PreliminaryEffectSeed, PreliminaryMirEffectSeed,
     PreliminaryMirEffectSource, ThirEffectPass,
 };
@@ -48,20 +44,28 @@ pub(crate) type SafetyEffectGroup = PreliminaryEffectGroup;
 pub(crate) struct SafetyInvocationPass;
 
 impl MirEffectPass for SafetyInvocationPass {
-    fn check_reachability_edge<'view, 'tcx>(
-        &mut self,
-        tcx: TyCtxt<'tcx>,
-        graph: &'view ReachabilityGraph<'tcx>,
-        reached: ReachedEdge<'view, 'tcx>,
-        target: &CallTargetFact,
-        suppressed_by_compiler_context: bool,
-    ) -> Option<PreliminaryMirEffectSeed> {
-        (!suppressed_by_compiler_context
-            && edge_requires_explicit_context(tcx, graph, reached, target))
-        .then(|| PreliminaryMirEffectSeed {
-            kind: EffectKind::new("unsafe-call"),
-            source: PreliminaryMirEffectSource::Invocation,
-        })
+    fn check_body(&mut self, cx: MirEffectCx<'_>) -> Vec<PreliminaryMirEffectSeed> {
+        cx.body()
+            .basic_blocks
+            .iter_enumerated()
+            .filter_map(|(block, data)| {
+                let terminator = data.terminator();
+                let (TerminatorKind::Call { func, .. } | TerminatorKind::TailCall { func, .. }) =
+                    &terminator.kind
+                else {
+                    return None;
+                };
+                mir_call_requires_explicit_context(cx, func).then(|| PreliminaryMirEffectSeed {
+                    location: Location {
+                        block,
+                        statement_index: data.statements.len(),
+                    },
+                    kind: EffectKind::new("unsafe-call"),
+                    source: PreliminaryMirEffectSource::Invocation,
+                    suppress_in_compiler_context: true,
+                })
+            })
+            .collect()
     }
 }
 
@@ -119,74 +123,33 @@ pub(crate) fn fn_def_is_unsafe(tcx: TyCtxt<'_>, def_id: DefId) -> bool {
             .is_unsafe()
 }
 
-#[must_use]
-pub(crate) fn edge_requires_explicit_context<'view, 'tcx>(
-    tcx: TyCtxt<'tcx>,
-    graph: &'view ReachabilityGraph<'tcx>,
-    reached: ReachedEdge<'view, 'tcx>,
-    target: &CallTargetFact,
+fn mir_call_requires_explicit_context<'tcx>(
+    cx: MirEffectCx<'tcx>,
+    func: &rustc_middle::mir::Operand<'tcx>,
 ) -> bool {
-    let signature_requires_explicit_context = target
-        .function_target()
-        .is_some_and(|target| target.attributes.is_unsafe);
-    let caller = reached.origin().instance();
-    let target_requires_explicit_context = if edge_uses_target_unsafe_requirement(reached.kind()) {
-        reached
-            .target()
-            .instance()
-            .map_or(signature_requires_explicit_context, |callee| {
-                fn_def_call_requires_explicit_context(
-                    tcx,
-                    callee.def_id(),
-                    signature_requires_explicit_context,
-                    caller,
-                )
-            })
-    } else {
-        false
-    };
-    let callable_requires_explicit_context =
-        if edge_uses_callable_unsafe_requirement(reached.kind()) {
-            match graph.edge_callable(reached.id()) {
-                Some(CallableEdgeInfo::FnPointer { fn_ptr_ty }) => {
-                    callable_ty_requires_explicit_context(tcx, fn_ptr_ty, caller)
-                }
-                Some(CallableEdgeInfo::DynDispatch { .. }) | None => {
-                    match reached.target().kind() {
-                        ReachabilityNodeKind::IndirectCall { callee_ty } => {
-                            callable_ty_requires_explicit_context(tcx, *callee_ty, caller)
-                        }
-                        ReachabilityNodeKind::Instance(_)
-                        | ReachabilityNodeKind::CompilerAssert { .. }
-                        | ReachabilityNodeKind::MacroExpansion { .. }
-                        | ReachabilityNodeKind::DynObjectCast { .. } => false,
-                    }
-                }
-            }
-        } else {
-            false
-        };
-    unsafe_requirement_for_edge(
-        reached.kind(),
-        target_requires_explicit_context,
-        callable_requires_explicit_context,
-    )
-}
-
-pub(crate) const fn edge_uses_target_unsafe_requirement(kind: ReachabilityEdgeKind) -> bool {
-    matches!(
-        kind,
-        ReachabilityEdgeKind::DirectCall
-            | ReachabilityEdgeKind::TailCall
-            | ReachabilityEdgeKind::DynDispatchVTableEntry
-    )
-}
-
-pub(crate) const fn edge_uses_callable_unsafe_requirement(kind: ReachabilityEdgeKind) -> bool {
-    matches!(
-        kind,
-        ReachabilityEdgeKind::IndirectCall | ReachabilityEdgeKind::FnPointerCallTarget
-    )
+    let callee_ty = cx.operand_ty(func);
+    let signature_requires_explicit_context =
+        matches!(callee_ty.kind(), TyKind::FnDef(..) | TyKind::FnPtr(..))
+            && callee_ty
+                .fn_sig(cx.tcx())
+                .skip_binder()
+                .safety()
+                .is_unsafe();
+    match *callee_ty.kind() {
+        TyKind::FnDef(def_id, args) => {
+            let callee_def_id = cx
+                .resolve_callable_instance(def_id, args)
+                .map_or(def_id, |instance| instance.def_id());
+            fn_def_call_requires_explicit_context(
+                cx.tcx(),
+                callee_def_id,
+                signature_requires_explicit_context,
+                Some(cx.instance()),
+            )
+        }
+        TyKind::FnPtr(..) => signature_requires_explicit_context,
+        _ => false,
+    }
 }
 
 pub(crate) const fn compiler_call_requires_explicit_context(
@@ -216,49 +179,6 @@ fn fn_def_call_requires_explicit_context<'tcx>(
         callee_attributes.safe_target_features,
         target_features_are_safe,
     )
-}
-
-fn callable_ty_requires_explicit_context<'tcx>(
-    tcx: TyCtxt<'tcx>,
-    ty: rustc_middle::ty::Ty<'tcx>,
-    caller: Option<Instance<'tcx>>,
-) -> bool {
-    let signature_requires_explicit_context =
-        matches!(ty.kind(), TyKind::FnDef(..) | TyKind::FnPtr(..))
-            && ty.fn_sig(tcx).skip_binder().safety().is_unsafe();
-    match ty.kind() {
-        TyKind::FnDef(def_id, _) => fn_def_call_requires_explicit_context(
-            tcx,
-            *def_id,
-            signature_requires_explicit_context,
-            caller,
-        ),
-        TyKind::FnPtr(..) => signature_requires_explicit_context,
-        _ => false,
-    }
-}
-
-pub(crate) const fn unsafe_requirement_for_edge(
-    kind: ReachabilityEdgeKind,
-    target_requires_explicit_context: bool,
-    callable_requires_explicit_context: bool,
-) -> bool {
-    match kind {
-        ReachabilityEdgeKind::DirectCall
-        | ReachabilityEdgeKind::TailCall
-        | ReachabilityEdgeKind::DynDispatchVTableEntry => target_requires_explicit_context,
-        ReachabilityEdgeKind::IndirectCall | ReachabilityEdgeKind::FnPointerCallTarget => {
-            callable_requires_explicit_context
-        }
-        ReachabilityEdgeKind::FnPointerReify
-        | ReachabilityEdgeKind::ClosureFnPointerReify
-        | ReachabilityEdgeKind::DynObjectCast
-        | ReachabilityEdgeKind::VTableEntry
-        | ReachabilityEdgeKind::MacroExpansion
-        | ReachabilityEdgeKind::ConstBody
-        | ReachabilityEdgeKind::CoroutineBody
-        | ReachabilityEdgeKind::Assert => false,
-    }
 }
 
 #[derive(Default)]

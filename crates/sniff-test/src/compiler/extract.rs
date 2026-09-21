@@ -36,7 +36,7 @@ use crate::config::MarkerProbing;
 use crate::contracts::{ContractDocSummary, contract_doc_summary_from_attrs};
 use crate::effects::visit::{
     EffectPassRegistry, PreliminaryEffectSeed, PreliminaryMirEffectSource,
-    RegisteredEffectPassOutput, RegisteredEffectSeed,
+    RegisteredEffectPassOutput, RegisteredEffectSeed, RegisteredMirEffectPassOutput,
 };
 use crate::effects::{EffectSelection, selected_effects};
 use crate::namespace::{canonical_namespace, namespace_candidates};
@@ -252,6 +252,13 @@ fn collect_reachability_mode<'tcx>(
         return Err(ExtractError::new(reachability_halt_description(halt)));
     }
 
+    let expanded_instances = view
+        .nodes()
+        .filter(|node| node.expansion() == Some(ReachabilityNodeExpansion::Expanded))
+        .filter_map(reachability::ReachedNode::instance)
+        .collect::<Vec<_>>();
+    let mut mir_output = pass_registry.collect_mir_bodies(tcx, expanded_instances.iter().copied());
+
     for node in view.nodes() {
         let Some(instance) = node.instance() else {
             continue;
@@ -283,9 +290,14 @@ fn collect_reachability_mode<'tcx>(
             sources,
             bodies,
             effect_groups,
-            pass_registry,
+            &mut mir_output,
             effects,
         )?;
+    }
+    if !mir_output.is_empty() {
+        return Err(ExtractError::new(
+            "MIR effect pass emitted a seed that did not match a reached operation",
+        ));
     }
     Ok(())
 }
@@ -337,7 +349,7 @@ fn collect_edge<'tcx>(
     sources: &mut SourceTable,
     bodies: &mut BTreeMap<FunctionId, PendingBody>,
     effect_groups: &mut RawEffectGroupResolver,
-    pass_registry: &mut EffectPassRegistry,
+    mir_output: &mut RegisteredMirEffectPassOutput<'tcx>,
     effects: EffectSelection,
 ) -> Result<(), ExtractError> {
     let edge = reached.edge();
@@ -419,13 +431,10 @@ fn collect_edge<'tcx>(
     let declaration_target = body.calls[call_index].call.declaration_target.clone();
 
     let mut detected_effects = Vec::new();
-    for seed in pass_registry.preliminary_mir_seeds(
-        tcx,
-        graph,
-        reached,
-        &call_target,
-        groups.suppressed_by_compiler_context,
-    ) {
+    for seed in mir_output.take(origin, edge.mir_location) {
+        if seed.suppress_in_compiler_context && groups.suppressed_by_compiler_context {
+            continue;
+        }
         match seed.source {
             PreliminaryMirEffectSource::Operation => {
                 if let Some(effect_key) = collect_mir_effect(
@@ -1945,8 +1954,6 @@ mod tests {
     use crate::effects::safety::visit::{
         RawSafetyCallFact, RawSafetyEffectGroup, RawSafetyFacts, RawSafetyGroupFact,
         RawSafetyOpFact, compiler_call_requires_explicit_context,
-        edge_uses_callable_unsafe_requirement, edge_uses_target_unsafe_requirement,
-        unsafe_requirement_for_edge,
     };
     use crate::source_markers::MarkerProbe;
 
@@ -2398,47 +2405,11 @@ mod tests {
     }
 
     #[test]
-    fn opaque_unsafe_function_pointer_call_retains_unsafe_requirement() {
-        assert!(unsafe_requirement_for_edge(
-            reachability::ReachabilityEdgeKind::IndirectCall,
-            false,
-            true,
-        ));
-    }
-
-    #[test]
-    fn unsafe_function_reification_is_safe_until_invoked() {
-        assert!(!unsafe_requirement_for_edge(
-            reachability::ReachabilityEdgeKind::FnPointerReify,
-            true,
-            true,
-        ));
-    }
-
-    #[test]
     fn target_feature_safety_is_caller_relative() {
         assert!(compiler_call_requires_explicit_context(false, false, false));
         assert!(!compiler_call_requires_explicit_context(false, false, true));
         assert!(compiler_call_requires_explicit_context(true, false, true));
         assert!(!compiler_call_requires_explicit_context(true, true, true));
         assert!(compiler_call_requires_explicit_context(true, true, false));
-    }
-
-    #[test]
-    fn edge_kinds_select_their_unsafe_requirement_source() {
-        use reachability::ReachabilityEdgeKind;
-
-        assert!(!edge_uses_target_unsafe_requirement(
-            ReachabilityEdgeKind::ConstBody
-        ));
-        assert!(!edge_uses_callable_unsafe_requirement(
-            ReachabilityEdgeKind::ConstBody
-        ));
-        assert!(edge_uses_target_unsafe_requirement(
-            ReachabilityEdgeKind::DirectCall
-        ));
-        assert!(edge_uses_callable_unsafe_requirement(
-            ReachabilityEdgeKind::IndirectCall
-        ));
     }
 }
