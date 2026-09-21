@@ -27,7 +27,8 @@ use rustc_span::Span;
 
 use super::findings::{
     DiagnosticMessage, FULL_STACK_TRACE_HINT, Finding, FindingDiagnostic, FindingKind,
-    FindingOwner, FindingTraceStepOrder, OwnerScope, SourceEvidence, compact_function_name,
+    FindingOwner, FindingTraceStepOrder, GenericEffectFindingKind, OwnerScope, SourceEvidence,
+    compact_function_name,
 };
 use super::report::render_span;
 
@@ -128,6 +129,22 @@ fn adapt_result(
                 show_full_stack_trace,
             ));
         }
+        for (effect, completeness) in root.completeness.effects {
+            for reason in completeness.reasons {
+                findings.push(adapt_incomplete(
+                    sources,
+                    &root.root,
+                    FindingKind::Effect {
+                        effect: effect.as_str().to_owned(),
+                        finding: GenericEffectFindingKind::AnalysisIncomplete,
+                        operation: None,
+                    },
+                    effect.as_str(),
+                    reason,
+                    show_full_stack_trace,
+                ));
+            }
+        }
     }
     findings
 }
@@ -216,6 +233,11 @@ fn adapt_finding(
         InterpretedFindingKind::UnsafeOperation { kind } => {
             Some(format!("unsafe operation ({})", kind.label()))
         }
+        InterpretedFindingKind::EffectOperation { effect, operation } => Some(format!(
+            "{} operation ({})",
+            effect.as_str(),
+            operation.as_str().replace('-', " ")
+        )),
         _ => None,
     };
     let local_boundary_span = (owner.scope == OwnerScope::Dependency)
@@ -250,7 +272,8 @@ fn adapt_finding(
 
 fn public_function_path(finding: &InterpretedFinding) -> Option<String> {
     match &finding.kind {
-        InterpretedFindingKind::AmbiguousSafetyRequirement { .. } => finding
+        InterpretedFindingKind::AmbiguousSafetyRequirement { .. }
+        | InterpretedFindingKind::AmbiguousEffectRequirement { .. } => finding
             .target
             .as_ref()
             .map(|target| target.path.clone())
@@ -259,7 +282,11 @@ fn public_function_path(finding: &InterpretedFinding) -> Option<String> {
         | InterpretedFindingKind::SafetyCall { .. }
         | InterpretedFindingKind::UnresolvedSafetyCallTarget { .. }
         | InterpretedFindingKind::UnsafeOperation { .. }
-        | InterpretedFindingKind::AmbiguousSafetyMarker { .. } => {
+        | InterpretedFindingKind::AmbiguousSafetyMarker { .. }
+        | InterpretedFindingKind::EffectOperation { .. }
+        | InterpretedFindingKind::EffectInvocation { .. }
+        | InterpretedFindingKind::DocumentedEffect { .. }
+        | InterpretedFindingKind::AmbiguousEffectMarker { .. } => {
             Some(finding.function_path.clone())
         }
         InterpretedFindingKind::CompilerAssert { .. }
@@ -276,6 +303,7 @@ fn ambiguity_primary_range(finding: &InterpretedFinding) -> Option<&SourceRangeF
         &finding.kind,
         InterpretedFindingKind::AmbiguousPanicRequirement { .. }
             | InterpretedFindingKind::AmbiguousSafetyRequirement { .. }
+            | InterpretedFindingKind::AmbiguousEffectRequirement { .. }
     )
     .then(|| {
         finding
@@ -298,6 +326,83 @@ fn finding_description(
     source_evidence: Option<SourceEvidence>,
 ) -> (FindingKind, String, String) {
     match &finding.kind {
+        InterpretedFindingKind::EffectOperation { effect, operation } => {
+            let subject = format!(
+                "{} operation ({})",
+                effect.as_str(),
+                operation.as_str().replace('-', " ")
+            );
+            let kind = FindingKind::Effect {
+                effect: effect.as_str().to_owned(),
+                finding: GenericEffectFindingKind::ConcreteOperation,
+                operation: Some(operation.as_str().to_owned()),
+            };
+            (kind, subject.clone(), subject)
+        }
+        InterpretedFindingKind::EffectInvocation { effect, operation } => {
+            let subject = target.map_or_else(
+                || format!("{} invocation", effect.as_str()),
+                |target| format!("{} invocation to `{target}`", effect.as_str()),
+            );
+            let kind = FindingKind::Effect {
+                effect: effect.as_str().to_owned(),
+                finding: GenericEffectFindingKind::ConcreteInvocation,
+                operation: Some(operation.as_str().to_owned()),
+            };
+            (kind, subject.clone(), subject)
+        }
+        InterpretedFindingKind::DocumentedEffect { effect } => {
+            let subject = format!(
+                "call to `{}` with a documented {} obligation",
+                target.unwrap_or("effect boundary"),
+                effect.as_str()
+            );
+            let kind = FindingKind::Effect {
+                effect: effect.as_str().to_owned(),
+                finding: GenericEffectFindingKind::DocumentedObligation,
+                operation: None,
+            };
+            (kind, subject.clone(), subject)
+        }
+        InterpretedFindingKind::AmbiguousEffectRequirement {
+            effect,
+            normalized_name,
+        } => (
+            FindingKind::Effect {
+                effect: effect.as_str().to_owned(),
+                finding: GenericEffectFindingKind::AmbiguousRequirement,
+                operation: None,
+            },
+            format!(
+                "`{}` has multiple {} requirements named `{normalized_name}`",
+                target.unwrap_or(&finding.function_path),
+                effect.as_str()
+            ),
+            format!(
+                "`{}` has an ambiguous {} requirement name",
+                target.unwrap_or(&finding.function_path),
+                effect.as_str()
+            ),
+        ),
+        InterpretedFindingKind::AmbiguousEffectMarker {
+            effect,
+            effect_count,
+        } => (
+            FindingKind::Effect {
+                effect: effect.as_str().to_owned(),
+                finding: GenericEffectFindingKind::AmbiguousMarker,
+                operation: None,
+            },
+            format!(
+                "one {} marker applies to {effect_count} effect groups",
+                effect.as_str()
+            ),
+            format!(
+                "function `{}` has an ambiguous {} marker",
+                finding.function_path,
+                effect.as_str()
+            ),
+        ),
         InterpretedFindingKind::CompilerAssert { kind } => source_marker_description(
             FindingKind::CompilerAssert {
                 compiler_assert_kind: *kind,
@@ -887,6 +992,11 @@ fn decorate_finding(
         justification_marker: None,
     };
     match &finding.kind {
+        InterpretedFindingKind::EffectOperation { .. }
+        | InterpretedFindingKind::EffectInvocation { .. }
+        | InterpretedFindingKind::DocumentedEffect { .. }
+        | InterpretedFindingKind::AmbiguousEffectRequirement { .. }
+        | InterpretedFindingKind::AmbiguousEffectMarker { .. } => {}
         InterpretedFindingKind::CompilerAssert { .. } | InterpretedFindingKind::PanicSink => {
             writer.source(MarkerDomain::Panic, false);
         }
@@ -1334,6 +1444,7 @@ fn incomplete_limit_presentation(
     let subject = match trace_kind {
         IncompleteTraceKind::PanicEffect => "panic effect tracing",
         IncompleteTraceKind::SafetyEffect => "safety effect tracing",
+        IncompleteTraceKind::Effect => "effect tracing",
     };
     let (reason, message, help) = match limit {
         TraceLimit::Depth(max_depth) => (

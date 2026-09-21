@@ -260,7 +260,7 @@ pub(crate) fn aggregate_human_findings(findings: &[ResolvedFinding]) -> Vec<Reso
     groups
         .into_iter()
         .map(|(mut finding, roots, roots_without_trace)| {
-            if is_source_finding(finding.finding.kind) {
+            if is_source_finding(&finding.finding.kind) {
                 let has_local_primary = place_source_diagnostic(&mut finding.finding);
                 let has_reachability_note =
                     combine_root_reachability_note(&mut finding.finding, &roots);
@@ -368,8 +368,8 @@ pub(crate) fn take_full_stack_trace_hint(findings: &mut [ResolvedFinding]) -> bo
 }
 
 fn same_human_source(left: &ResolvedFinding, right: &ResolvedFinding) -> bool {
-    is_source_finding(left.finding.kind)
-        && is_source_finding(right.finding.kind)
+    is_source_finding(&left.finding.kind)
+        && is_source_finding(&right.finding.kind)
         && left.finding.source_order.is_some()
         && left.level == right.level
         && left.finding.kind == right.finding.kind
@@ -508,7 +508,7 @@ fn top_level_path_segments(path: &str) -> Vec<&str> {
     segments
 }
 
-const fn is_source_finding(kind: FindingKind) -> bool {
+fn is_source_finding(kind: &FindingKind) -> bool {
     !matches!(
         kind,
         FindingKind::PanicAnalysisIncomplete
@@ -553,7 +553,7 @@ fn compare_findings(left: &Finding, right: &Finding) -> std::cmp::Ordering {
             report_root_kind_order(left.root_kind).cmp(&report_root_kind_order(right.root_kind))
         })
         .then_with(|| left.root_span.cmp(&right.root_span))
-        .then_with(|| finding_domain_order(left.kind).cmp(&finding_domain_order(right.kind)))
+        .then_with(|| finding_domain_order(&left.kind).cmp(&finding_domain_order(&right.kind)))
         .then_with(|| left.trace_order.cmp(&right.trace_order))
         .then_with(|| left.source_order.cmp(&right.source_order))
         .then_with(|| left.kind.cmp(&right.kind))
@@ -569,7 +569,7 @@ fn compare_findings(left: &Finding, right: &Finding) -> std::cmp::Ordering {
         .then_with(|| left.requirements.cmp(&right.requirements))
 }
 
-const fn finding_domain_order(kind: FindingKind) -> u8 {
+fn finding_domain_order(kind: &FindingKind) -> u8 {
     match kind {
         FindingKind::CompilerAssert { .. }
         | FindingKind::PanicInvocation
@@ -588,7 +588,8 @@ const fn finding_domain_order(kind: FindingKind) -> u8 {
         | FindingKind::UnsafeOpMissingJustification { .. }
         | FindingKind::SafetyObligationMissingJustification
         | FindingKind::SafetyObligationMissingRequirements => 1,
-        FindingKind::EmptyReportRoots | FindingKind::MissingReportRoot => 2,
+        FindingKind::Effect { .. } => 2,
+        FindingKind::EmptyReportRoots | FindingKind::MissingReportRoot => 3,
     }
 }
 
@@ -619,12 +620,29 @@ pub(crate) enum DiagnosticMessage {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub(crate) enum GenericEffectFindingKind {
+    ConcreteOperation,
+    ConcreteInvocation,
+    DocumentedObligation,
+    AmbiguousMarker,
+    AmbiguousRequirement,
+    AnalysisIncomplete,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize)]
 #[serde(
     rename_all = "kebab-case",
     rename_all_fields = "kebab-case",
     tag = "kind"
 )]
 pub(crate) enum FindingKind {
+    Effect {
+        effect: String,
+        finding: GenericEffectFindingKind,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        operation: Option<String>,
+    },
     CompilerAssert {
         compiler_assert_kind: CompilerAssertKind,
     },
@@ -651,15 +669,36 @@ pub(crate) enum FindingKind {
 }
 
 impl FindingKind {
-    pub(crate) fn lint_code(self) -> String {
+    pub(crate) fn lint_code(&self) -> String {
         let (domain, lint) = match self {
+            Self::Effect {
+                effect,
+                finding,
+                operation,
+            } => {
+                let lint = operation.clone().unwrap_or_else(|| match finding {
+                    GenericEffectFindingKind::ConcreteOperation => String::from("operation"),
+                    GenericEffectFindingKind::ConcreteInvocation => String::from("invocation"),
+                    GenericEffectFindingKind::DocumentedObligation => {
+                        String::from("documented-obligation")
+                    }
+                    GenericEffectFindingKind::AmbiguousMarker => String::from("ambiguous-marker"),
+                    GenericEffectFindingKind::AmbiguousRequirement => {
+                        String::from("ambiguous-requirement")
+                    }
+                    GenericEffectFindingKind::AnalysisIncomplete => {
+                        String::from("analysis-incomplete")
+                    }
+                });
+                (effect.as_str(), lint)
+            }
             Self::CompilerAssert {
                 compiler_assert_kind,
             } => (
                 "panics",
                 format!(
                     "compiler-assert-{}",
-                    compiler_assert_lint_suffix(compiler_assert_kind)
+                    compiler_assert_lint_suffix(*compiler_assert_kind)
                 ),
             ),
             Self::PanicInvocation => ("panics", String::from("panic-invocation")),
@@ -693,7 +732,7 @@ impl FindingKind {
                 "safety",
                 format!(
                     "{}-missing-justification",
-                    safety_op_lint_suffix(safety_op_kind)
+                    safety_op_lint_suffix(*safety_op_kind)
                 ),
             ),
             Self::SafetyObligationMissingJustification => (
@@ -708,11 +747,12 @@ impl FindingKind {
         format!("sniff-test::{domain}::{lint}")
     }
 
-    fn lint_level(self, config: &SniffTestConfig) -> LintLevel {
+    fn lint_level(&self, config: &SniffTestConfig) -> LintLevel {
         match self {
+            Self::Effect { .. } => LintLevel::Warn,
             Self::CompilerAssert {
                 compiler_assert_kind,
-            } => compiler_assert_lint_override(compiler_assert_kind, config)
+            } => compiler_assert_lint_override(*compiler_assert_kind, config)
                 .unwrap_or(config.panics.lints.compiler_assert),
             Self::PanicInvocation => config.panics.lints.panic_invocation,
             Self::DocumentedPanic => config.panics.lints.documented_panic,
@@ -734,7 +774,7 @@ impl FindingKind {
                 config.safety.lints.unsafe_call_missing_requirements
             }
             Self::UnsafeOpMissingJustification { safety_op_kind } => {
-                safety_op_lint_override(safety_op_kind, config)
+                safety_op_lint_override(*safety_op_kind, config)
                     .unwrap_or(config.safety.lints.unsafe_op_missing_justification)
             }
             Self::SafetyObligationMissingJustification => {

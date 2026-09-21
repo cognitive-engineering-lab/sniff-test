@@ -1,11 +1,12 @@
 //! Policy-neutral finding values shared by effect tracing and report adapters.
 
 use crate::artifact::{
-    CallId, CallKindFact, CompilerAssertKind, ContractRequirementFact, FunctionId,
-    MarkerEvidenceState, SafetyOpKind, SourceRangeFact,
+    CallId, CallKindFact, CompilerAssertKind, ContractRequirementFact, EffectKey, EffectKind,
+    FunctionId, MarkerEvidenceState, SafetyOpKind, SourceRangeFact,
 };
 use crate::report_roots::ReportRootKind;
 use serde::Serialize;
+use std::collections::BTreeMap;
 
 /// Selected workspace report root and stable reporting metadata.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -27,6 +28,7 @@ pub(crate) struct RootInterpretation {
 pub(crate) struct EffectCompleteness {
     pub(crate) panic: DomainCompleteness,
     pub(crate) safety: DomainCompleteness,
+    pub(crate) effects: BTreeMap<EffectKey, DomainCompleteness>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -40,6 +42,7 @@ pub(crate) struct DomainCompleteness {
 pub(crate) enum IncompleteTraceKind {
     PanicEffect,
     SafetyEffect,
+    Effect,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -147,6 +150,25 @@ pub(crate) struct UnresolvedCallSite {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum InterpretedFindingKind {
+    EffectOperation {
+        effect: EffectKey,
+        operation: EffectKind,
+    },
+    EffectInvocation {
+        effect: EffectKey,
+        operation: EffectKind,
+    },
+    DocumentedEffect {
+        effect: EffectKey,
+    },
+    AmbiguousEffectRequirement {
+        effect: EffectKey,
+        normalized_name: String,
+    },
+    AmbiguousEffectMarker {
+        effect: EffectKey,
+        effect_count: usize,
+    },
     CompilerAssert {
         kind: CompilerAssertKind,
     },

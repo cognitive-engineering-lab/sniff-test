@@ -18,8 +18,8 @@ use crate::annotations::{AnnotationId, AnnotationIndex};
 use crate::artifact::{
     AnnotationFactKind, AnnotationProbingFact, AnnotationRole, AnnotationTargetFact, ArtifactFacts,
     CallTargetFact, CompilerAssertKind, DefinitionNamespaceIndex, EffectFact, EffectId, EffectKey,
-    FunctionFact, FunctionId as StableFunctionId, FunctionTargetFact, MarkerEvidenceState,
-    SafetyOpKind, UnverifiedMarkerProbeReason,
+    EffectKind, FunctionFact, FunctionId as StableFunctionId, FunctionTargetFact,
+    MarkerEvidenceState, SafetyOpKind, UnverifiedMarkerProbeReason,
 };
 use crate::compiler::invocations::{
     InvocationGraph, InvocationResolution, UnresolvedCallTargetReason,
@@ -47,21 +47,18 @@ impl ReportEffect {
         }
     }
 
-    fn from_key(effect: &EffectKey) -> Self {
+    fn try_from_key(effect: &EffectKey) -> Option<Self> {
         if effect.as_str() == Panic::EFFECT_NAME {
-            Self::Panic
+            Some(Self::Panic)
         } else if effect.as_str() == Safety::EFFECT_NAME {
-            Self::Safety
+            Some(Self::Safety)
         } else {
-            panic!(
-                "built-in report received unknown effect `{}`",
-                effect.as_str()
-            );
+            None
         }
     }
 }
-use crate::effects::panic::{Panic, PanicEffect, PanicState};
-use crate::effects::safety::{Safety, SafetyEffect, SafetyState};
+use crate::effects::panic::{Panic, PanicEffect};
+use crate::effects::safety::{Safety, SafetyEffect};
 use crate::effects::trust::TrustPath;
 use crate::report_model::{
     DomainCompleteness, EffectCompleteness, IncompleteReason, IncompleteTraceKind,
@@ -78,37 +75,27 @@ pub(crate) struct EffectReportError {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
-enum SafetyEffectGroup {
+enum SourceEffectGroup {
     Invocation(effect_tracing::InvocationId, crate::artifact::CallId),
-    ContractInvocation(effect_tracing::InvocationId, crate::artifact::CallId),
     Operation(StableFunctionId, crate::artifact::EffectGroupId),
     StandaloneOperation(StableFunctionId, EffectId),
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
-enum PanicEffectGroup {
-    Invocation(effect_tracing::InvocationId, crate::artifact::CallId),
-    CompilerAssert(StableFunctionId, EffectId),
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
+struct MarkerEffectGroup {
+    effect: EffectKey,
+    source: SourceEffectGroup,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
-enum MarkerEffectGroup {
-    Panic(PanicEffectGroup),
-    Safety(SafetyEffectGroup),
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
 enum MarkerWitness {
-    PanicEffect {
-        origin: ConcreteSource,
-        site: MarkerTraceSite,
-    },
-    SafetyEffect {
+    Concrete {
+        effect: EffectKey,
         origin: ConcreteSource,
         site: MarkerTraceSite,
     },
     Obligation {
-        domain: ReportEffect,
+        effect: EffectKey,
         invocation: effect_tracing::InvocationId,
         node: TraceNodeId,
     },
@@ -123,7 +110,7 @@ enum MarkerTraceSite {
     },
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 struct MarkerUse {
     annotation: AnnotationId,
     group: MarkerEffectGroup,
@@ -132,15 +119,10 @@ struct MarkerUse {
 
 type MarkerClaims = BTreeMap<AnnotationId, BTreeMap<MarkerEffectGroup, Vec<MarkerWitness>>>;
 
-type PanicTrace = EffectTrace<
+type ConcreteTrace = EffectTrace<
     TrackedOrigin<ConcreteSource>,
-    TrackedState<PanicState>,
-    TrackedTermination<crate::effects::panic::PanicTermination>,
->;
-type SafetyTrace = EffectTrace<
-    TrackedOrigin<ConcreteSource>,
-    TrackedState<SafetyState>,
-    TrackedTermination<crate::effects::safety::SafetyTermination>,
+    TrackedState<crate::effects::concrete::ConcreteEffectState>,
+    TrackedTermination<crate::effects::concrete::ConcreteTermination>,
 >;
 
 struct MarkerProjection {
@@ -263,8 +245,6 @@ pub(crate) fn trace_selected_workspace(
             Ok((effect.key().clone(), concrete))
         })
         .collect::<Result<BTreeMap<_, _>, EffectReportError>>()?;
-    let panic = concrete_effects.get(&ReportEffect::Panic.key());
-    let safety = concrete_effects.get(&ReportEffect::Safety.key());
     let obligations = ObligationTracker::probe(
         artifact,
         &graph,
@@ -281,20 +261,34 @@ pub(crate) fn trace_selected_workspace(
     };
     let obligation_graph = graph.obligation_graph();
     let engine = EffectEngine::with_options(&obligation_graph, trace_options);
-    let tracked_panic =
-        panic.map(|panic| TrackedEffect::new(panic, &obligations, ReportEffect::Panic.key()));
-    let tracked_safety =
-        safety.map(|safety| TrackedEffect::new(safety, &obligations, ReportEffect::Safety.key()));
-    let panic_trace = tracked_panic.as_ref().map(|panic| engine.trace(panic));
-    let safety_trace = tracked_safety.as_ref().map(|safety| engine.trace(safety));
+    // Tracing is entirely effect-independent. Keep runs keyed by their stable
+    // effect identity so registering another effect does not require another
+    // typed local, trace alias, or engine invocation here.
+    let tracked_effects = concrete_effects
+        .iter()
+        .map(|(effect, concrete)| {
+            (
+                effect.clone(),
+                TrackedEffect::new(concrete, &obligations, effect.clone()),
+            )
+        })
+        .collect::<BTreeMap<_, _>>();
+    let effect_traces = tracked_effects
+        .iter()
+        .map(|(effect, tracked)| (effect.clone(), engine.trace(tracked)))
+        .collect::<BTreeMap<_, ConcreteTrace>>();
+    let panic_key = ReportEffect::Panic.key();
+    let safety_key = ReportEffect::Safety.key();
+    let panic = concrete_effects.get(&panic_key);
+    let safety = concrete_effects.get(&safety_key);
+    let panic_trace = effect_traces.get(&panic_key);
+    let safety_trace = effect_traces.get(&safety_key);
     let marker_claims = collect_marker_claims(
         artifact,
         &graph,
-        panic_trace.as_ref(),
-        safety,
-        safety_trace.as_ref(),
-        tracked_panic.as_ref(),
-        tracked_safety.as_ref(),
+        &concrete_effects,
+        &effect_traces,
+        &tracked_effects,
     );
     let marker_probing = annotation_probing_fact(config.analysis.marker_probing);
 
@@ -333,6 +327,22 @@ pub(crate) fn trace_selected_workspace(
                         marker_probing,
                     ));
                 }
+                for (effect, concrete) in &concrete_effects {
+                    if ReportEffect::try_from_key(effect).is_some() {
+                        continue;
+                    }
+                    if let Some(trace) = effect_traces.get(effect) {
+                        findings.extend(generic_concrete_findings(
+                            artifact,
+                            &graph,
+                            effect,
+                            concrete,
+                            trace,
+                            root_function,
+                            marker_probing,
+                        ));
+                    }
+                }
                 if let Some(panic) = &panic
                     && !config.panics.lints.unresolved_call_target.is_allow()
                 {
@@ -367,38 +377,25 @@ pub(crate) fn trace_selected_workspace(
                     artifact,
                     &graph,
                     &annotations,
-                    panic,
-                    panic_trace.as_ref(),
-                    safety,
-                    safety_trace.as_ref(),
-                    tracked_panic.as_ref(),
-                    tracked_safety.as_ref(),
+                    &concrete_effects,
+                    &effect_traces,
+                    &tracked_effects,
                     &marker_claims,
                     root_function,
                 ));
-                if let (Some(tracked), Some(trace)) = (&tracked_panic, &panic_trace) {
-                    findings.extend(obligation_findings(
-                        artifact,
-                        &graph,
-                        &annotations,
-                        tracked,
-                        trace,
-                        root_function,
-                        &root,
-                        marker_probing,
-                    ));
-                }
-                if let (Some(tracked), Some(trace)) = (&tracked_safety, &safety_trace) {
-                    findings.extend(obligation_findings(
-                        artifact,
-                        &graph,
-                        &annotations,
-                        tracked,
-                        trace,
-                        root_function,
-                        &root,
-                        marker_probing,
-                    ));
+                for (effect, tracked) in &tracked_effects {
+                    if let Some(trace) = effect_traces.get(effect) {
+                        findings.extend(obligation_findings(
+                            artifact,
+                            &graph,
+                            &annotations,
+                            tracked,
+                            trace,
+                            root_function,
+                            &root,
+                            marker_probing,
+                        ));
+                    }
                 }
             }
             if effects.tracks_safety()
@@ -488,26 +485,42 @@ pub(crate) fn trace_selected_workspace(
                             )
                         },
                     ),
+                    effects: effect_traces
+                        .iter()
+                        .filter(|(effect, _)| ReportEffect::try_from_key(effect).is_none())
+                        .map(|(effect, trace)| {
+                            (
+                                effect.clone(),
+                                completeness(
+                                    artifact,
+                                    trace,
+                                    &graph,
+                                    &root_functions,
+                                    trace_options,
+                                    IncompleteTraceKind::Effect,
+                                    AdditionalCompleteness {
+                                        reasons: Vec::new(),
+                                    },
+                                ),
+                            )
+                        })
+                        .collect(),
                 },
             })
         })
         .collect()
 }
 
-#[allow(
-    clippy::too_many_arguments,
-    reason = "one projection joins the three typed effect traces without an effect registry"
-)]
 fn marker_ambiguities(
     artifact: &ArtifactFacts,
     graph: &InvocationGraph,
     annotations: &AnnotationIndex,
-    panic: Option<&PanicEffect<'_>>,
-    panic_trace: Option<&PanicTrace>,
-    safety: Option<&SafetyEffect<'_>>,
-    safety_trace: Option<&SafetyTrace>,
-    tracked_panic: Option<&TrackedEffect<'_, '_, PanicEffect<'_>>>,
-    tracked_safety: Option<&TrackedEffect<'_, '_, SafetyEffect<'_>>>,
+    concrete_effects: &BTreeMap<EffectKey, crate::effects::concrete::ConcreteEffect<'_>>,
+    traces: &BTreeMap<EffectKey, ConcreteTrace>,
+    tracked_effects: &BTreeMap<
+        EffectKey,
+        TrackedEffect<'_, '_, crate::effects::concrete::ConcreteEffect<'_>>,
+    >,
     claims: &MarkerClaims,
     root_function: FunctionId,
 ) -> Vec<InterpretedFinding> {
@@ -522,17 +535,14 @@ fn marker_ambiguities(
                 .filter_map(|witnesses| {
                     witnesses
                         .iter()
-                        .copied()
+                        .cloned()
                         .filter_map(|witness| {
                             marker_projection(
                                 artifact,
                                 graph,
-                                panic,
-                                safety,
-                                tracked_panic,
-                                tracked_safety,
-                                panic_trace,
-                                safety_trace,
+                                concrete_effects,
+                                tracked_effects,
+                                traces,
                                 root_function,
                                 witness,
                             )
@@ -546,13 +556,17 @@ fn marker_ambiguities(
             let effect_count = projections.len();
             let comment = annotations.site_comment(*annotation)?;
             let representative = projections.into_iter().min_by(marker_projection_order)?;
-            let kind = match ReportEffect::from_key(comment.effect()) {
-                ReportEffect::Panic => {
+            let kind = match ReportEffect::try_from_key(comment.effect()) {
+                Some(ReportEffect::Panic) => {
                     InterpretedFindingKind::AmbiguousPanicMarker { effect_count }
                 }
-                ReportEffect::Safety => {
+                Some(ReportEffect::Safety) => {
                     InterpretedFindingKind::AmbiguousSafetyMarker { effect_count }
                 }
+                None => InterpretedFindingKind::AmbiguousEffectMarker {
+                    effect: comment.effect().clone(),
+                    effect_count,
+                },
             };
             Some(InterpretedFinding {
                 kind,
@@ -573,98 +587,77 @@ fn marker_ambiguities(
 fn collect_marker_claims(
     artifact: &ArtifactFacts,
     graph: &InvocationGraph,
-    panic_trace: Option<&PanicTrace>,
-    safety: Option<&SafetyEffect<'_>>,
-    safety_trace: Option<&SafetyTrace>,
-    tracked_panic: Option<&TrackedEffect<'_, '_, PanicEffect<'_>>>,
-    tracked_safety: Option<&TrackedEffect<'_, '_, SafetyEffect<'_>>>,
+    concrete_effects: &BTreeMap<EffectKey, crate::effects::concrete::ConcreteEffect<'_>>,
+    traces: &BTreeMap<EffectKey, ConcreteTrace>,
+    tracked_effects: &BTreeMap<
+        EffectKey,
+        TrackedEffect<'_, '_, crate::effects::concrete::ConcreteEffect<'_>>,
+    >,
 ) -> MarkerClaims {
     let mut uses = Vec::new();
-    for handled in panic_trace.into_iter().flat_map(EffectTrace::handled) {
-        if let (
-            TrackedOrigin::Concrete(origin),
-            TrackedTermination::Concrete(crate::effects::panic::PanicTermination::Justification(
-                annotation,
-            )),
-        ) = (handled.origin(), handled.termination())
-        {
-            let origin = *origin;
-            let Some(site) = marker_trace_site(handled.site(), handled.node()) else {
-                continue;
-            };
-            uses.push(MarkerUse {
-                annotation: *annotation,
-                group: MarkerEffectGroup::Panic(panic_effect_group(origin)),
-                witness: MarkerWitness::PanicEffect { origin, site },
-            });
-        }
-    }
-    for handled in safety_trace.into_iter().flat_map(EffectTrace::handled) {
-        let Some(safety) = safety else {
+    for (effect, trace) in traces {
+        let Some(concrete) = concrete_effects.get(effect) else {
             continue;
         };
-        if let (
-            TrackedOrigin::Concrete(origin),
-            TrackedTermination::Concrete(crate::effects::safety::SafetyTermination::Justification(
-                annotation,
-            )),
-        ) = (handled.origin(), handled.termination())
-        {
+        for handled in trace.handled() {
+            let (
+                TrackedOrigin::Concrete(origin),
+                TrackedTermination::Concrete(
+                    crate::effects::concrete::ConcreteTermination::Justification(annotation),
+                ),
+            ) = (handled.origin(), handled.termination())
+            else {
+                continue;
+            };
             let origin = *origin;
             let Some(site) = marker_trace_site(handled.site(), handled.node()) else {
                 continue;
             };
             uses.extend(
-                effect_groups(artifact, graph, safety, origin)
+                effect_groups(artifact, graph, concrete, effect, origin)
                     .into_iter()
                     .map(|group| MarkerUse {
                         annotation: *annotation,
-                        group: MarkerEffectGroup::Safety(group),
-                        witness: MarkerWitness::SafetyEffect { origin, site },
+                        group: MarkerEffectGroup {
+                            effect: effect.clone(),
+                            source: group,
+                        },
+                        witness: MarkerWitness::Concrete {
+                            effect: effect.clone(),
+                            origin,
+                            site,
+                        },
                     }),
             );
         }
     }
-    let obligation_uses = tracked_panic
-        .zip(panic_trace)
-        .into_iter()
-        .flat_map(|(tracked, trace)| tracked.obligation_marker_uses(trace))
-        .chain(
-            tracked_safety
-                .zip(safety_trace)
-                .into_iter()
-                .flat_map(|(tracked, trace)| tracked.obligation_marker_uses(trace)),
-        );
-    for usage in obligation_uses {
-        let source_invocation = usage.source_invocation();
-        let effect = ReportEffect::from_key(usage.effect());
-        let groups: Vec<MarkerEffectGroup> = match effect {
-            ReportEffect::Panic => usage
-                .source_calls()
-                .map(|call| {
-                    MarkerEffectGroup::Panic(PanicEffectGroup::Invocation(source_invocation, call))
-                })
-                .collect(),
-            ReportEffect::Safety => {
-                let Some(safety) = safety else {
-                    continue;
-                };
-                obligation_effect_groups(graph, safety, source_invocation, usage.source_calls())
-                    .into_iter()
-                    .map(MarkerEffectGroup::Safety)
-                    .collect()
-            }
+    for (effect, tracked) in tracked_effects {
+        let Some(trace) = traces.get(effect) else {
+            continue;
         };
-        let witness = MarkerWitness::Obligation {
-            domain: effect,
-            invocation: usage.invocation(),
-            node: usage.node(),
-        };
-        uses.extend(groups.into_iter().map(|group| MarkerUse {
-            annotation: usage.annotation(),
-            group,
-            witness,
-        }));
+        for usage in tracked.obligation_marker_uses(trace) {
+            let source_invocation = usage.source_invocation();
+            let groups = obligation_effect_groups(
+                graph,
+                concrete_effects.get(effect),
+                effect,
+                source_invocation,
+                usage.source_calls(),
+            );
+            let witness = MarkerWitness::Obligation {
+                effect: effect.clone(),
+                invocation: usage.invocation(),
+                node: usage.node(),
+            };
+            uses.extend(groups.into_iter().map(|source| MarkerUse {
+                annotation: usage.annotation(),
+                group: MarkerEffectGroup {
+                    effect: effect.clone(),
+                    source,
+                },
+                witness: witness.clone(),
+            }));
+        }
     }
 
     let mut claims = MarkerClaims::new();
@@ -696,131 +689,84 @@ fn marker_projection_order(
         .then_with(|| left.function_path.cmp(&right.function_path))
 }
 
-#[allow(
-    clippy::too_many_arguments,
-    clippy::too_many_lines,
-    reason = "typed witnesses retain their effect-specific reachability policy"
-)]
 fn marker_projection(
     artifact: &ArtifactFacts,
     graph: &InvocationGraph,
-    panic: Option<&PanicEffect<'_>>,
-    safety: Option<&SafetyEffect<'_>>,
-    tracked_panic: Option<&TrackedEffect<'_, '_, PanicEffect<'_>>>,
-    tracked_safety: Option<&TrackedEffect<'_, '_, SafetyEffect<'_>>>,
-    panic_trace: Option<&PanicTrace>,
-    safety_trace: Option<&SafetyTrace>,
+    concrete_effects: &BTreeMap<EffectKey, crate::effects::concrete::ConcreteEffect<'_>>,
+    tracked_effects: &BTreeMap<
+        EffectKey,
+        TrackedEffect<'_, '_, crate::effects::concrete::ConcreteEffect<'_>>,
+    >,
+    traces: &BTreeMap<EffectKey, ConcreteTrace>,
     root_function: FunctionId,
     witness: MarkerWitness,
 ) -> Option<MarkerProjection> {
-    let (function, mut trace) = match witness {
-        MarkerWitness::PanicEffect { origin, site } => match site {
+    let (function, mut trace) = match &witness {
+        MarkerWitness::Concrete {
+            effect,
+            origin,
+            site,
+        } => match site {
             MarkerTraceSite::Source => {
-                let panic = panic?;
-                let endpoint = concrete_source_owner(graph, origin)?;
+                let concrete = concrete_effects.get(effect)?;
+                let endpoint = concrete_source_owner(graph, *origin)?;
                 let trace = audited_path_from_root(
                     artifact,
                     graph,
                     root_function,
                     endpoint,
-                    |function, path: &TrustPath| panic.is_opaque_on_path(function, path),
-                    |invocation| panic.is_ignored_invocation(invocation),
+                    |function, path: &TrustPath| concrete.is_opaque_on_path(function, path),
+                    |invocation| concrete.is_ignored_invocation(invocation),
                 )?;
                 (graph.stable_function(endpoint), trace)
             }
             MarkerTraceSite::Invocation { invocation, node } => {
-                let panic = panic?;
+                let concrete = concrete_effects.get(effect)?;
+                let effect_trace = traces.get(effect)?;
                 marker_invocation_projection(
                     artifact,
                     graph,
-                    panic_trace?,
+                    effect_trace,
                     root_function,
-                    invocation,
-                    node,
+                    *invocation,
+                    *node,
                     MarkerTraversalPolicy {
-                        trust_path: match panic_trace?.nodes().nth(node.index())?.state() {
+                        trust_path: match effect_trace.nodes().nth(node.index())?.state() {
                             TrackedState::Concrete(state) => state.trust_path().clone(),
                             TrackedState::Obligation(_) => return None,
                         },
                         is_opaque: |function, path: &TrustPath| {
-                            panic.is_opaque_on_path(function, path)
+                            concrete.is_opaque_on_path(function, path)
                         },
-                        is_ignored_invocation: |candidate| panic.is_ignored_invocation(candidate),
-                    },
-                )?
-            }
-        },
-        MarkerWitness::SafetyEffect { origin, site } => match site {
-            MarkerTraceSite::Source => {
-                let safety = safety?;
-                let endpoint = concrete_source_owner(graph, origin)?;
-                let trace = audited_path_from_root(
-                    artifact,
-                    graph,
-                    root_function,
-                    endpoint,
-                    |function, path: &TrustPath| safety.is_opaque_on_path(function, path),
-                    |invocation| safety.is_ignored_invocation(invocation),
-                )?;
-                (graph.stable_function(endpoint), trace)
-            }
-            MarkerTraceSite::Invocation { invocation, node } => {
-                let safety = safety?;
-                marker_invocation_projection(
-                    artifact,
-                    graph,
-                    safety_trace?,
-                    root_function,
-                    invocation,
-                    node,
-                    MarkerTraversalPolicy {
-                        trust_path: match safety_trace?.nodes().nth(node.index())?.state() {
-                            TrackedState::Concrete(state) => state.trust_path().clone(),
-                            TrackedState::Obligation(_) => return None,
+                        is_ignored_invocation: |candidate| {
+                            concrete.is_ignored_invocation(candidate)
                         },
-                        is_opaque: |function, path: &TrustPath| {
-                            safety.is_opaque_on_path(function, path)
-                        },
-                        is_ignored_invocation: |candidate| safety.is_ignored_invocation(candidate),
                     },
                 )?
             }
         },
         MarkerWitness::Obligation {
-            domain,
+            effect,
             invocation,
             node,
-        } => match domain {
-            ReportEffect::Panic => obligation_marker_projection(
+        } => {
+            let tracked = tracked_effects.get(effect)?;
+            obligation_marker_projection(
                 artifact,
                 graph,
-                tracked_panic?.obligations(),
-                panic_trace?,
+                tracked.obligations(),
+                traces.get(effect)?,
                 root_function,
-                invocation,
-                node,
-                domain,
-            )?,
-            ReportEffect::Safety => obligation_marker_projection(
-                artifact,
-                graph,
-                tracked_safety?.obligations(),
-                safety_trace?,
-                root_function,
-                invocation,
-                node,
-                domain,
-            )?,
-        },
+                *invocation,
+                *node,
+                effect,
+            )?
+        }
     };
-    match witness {
-        MarkerWitness::PanicEffect { origin, .. } => {
-            append_panic_origin(artifact, graph, panic?, origin, &mut trace);
+    if let MarkerWitness::Concrete { effect, origin, .. } = witness {
+        if let Some(concrete) = concrete_effects.get(&effect) {
+            append_concrete_origin(artifact, graph, concrete, origin, &mut trace);
         }
-        MarkerWitness::SafetyEffect { origin, .. } => {
-            append_safety_origin(artifact, graph, safety?, origin, &mut trace);
-        }
-        MarkerWitness::Obligation { .. } => {}
     }
     Some(MarkerProjection {
         function,
@@ -851,7 +797,7 @@ fn obligation_marker_projection<O: Clone, S, T>(
     root_function: FunctionId,
     invocation: effect_tracing::InvocationId,
     node: TraceNodeId,
-    domain: ReportEffect,
+    effect: &EffectKey,
 ) -> Option<(StableFunctionId, InterpretedTrace)> {
     let trust_path = trace
         .nodes()
@@ -870,12 +816,10 @@ fn obligation_marker_projection<O: Clone, S, T>(
         MarkerTraversalPolicy {
             trust_path,
             is_opaque: |function, path: &TrustPath| {
-                obligations.trusts_function(&domain.key(), function)
+                obligations.trusts_function(effect, function)
                     && path.allows_boundary(graph, function)
             },
-            is_ignored_invocation: |candidate| {
-                obligations.is_ignored_invocation(&domain.key(), candidate)
-            },
+            is_ignored_invocation: |candidate| obligations.is_ignored_invocation(effect, candidate),
         },
     )
 }
@@ -920,36 +864,28 @@ struct MarkerTraversalPolicy<Opaque, Ignored> {
     is_ignored_invocation: Ignored,
 }
 
-fn panic_effect_group(origin: ConcreteSource) -> PanicEffectGroup {
-    match origin {
-        ConcreteSource::Invocation { invocation, call } => {
-            PanicEffectGroup::Invocation(invocation, call)
-        }
-        ConcreteSource::Effect { owner, effect } => PanicEffectGroup::CompilerAssert(owner, effect),
-    }
-}
-
 fn effect_groups(
     artifact: &ArtifactFacts,
     graph: &InvocationGraph,
-    safety: &SafetyEffect<'_>,
+    concrete: &crate::effects::concrete::ConcreteEffect<'_>,
+    effect_key: &EffectKey,
     origin: ConcreteSource,
-) -> Vec<SafetyEffectGroup> {
+) -> Vec<SourceEffectGroup> {
     match origin {
         ConcreteSource::Invocation { invocation, call } => {
             let owner = graph.stable_function(graph.invocation(invocation).caller());
-            let group = safety
+            let group = concrete
                 .invocation_source(invocation, call)
                 .and_then(|source| {
                     source
                         .edge()
                         .invocation_effects
                         .iter()
-                        .find(|fact| fact.effect == ReportEffect::Safety.key())
+                        .find(|fact| &fact.effect == effect_key)
                         .and_then(|fact| fact.effect_group)
                 })
-                .map_or(SafetyEffectGroup::Invocation(invocation, call), |group| {
-                    SafetyEffectGroup::Operation(owner, group)
+                .map_or(SourceEffectGroup::Invocation(invocation, call), |group| {
+                    SourceEffectGroup::Operation(owner, group)
                 });
             vec![group]
         }
@@ -957,8 +893,8 @@ fn effect_groups(
             effect_fact(artifact, owner, effect)
                 .and_then(|(_, fact)| fact.effect_group)
                 .map_or(
-                    SafetyEffectGroup::StandaloneOperation(owner, effect),
-                    |group| SafetyEffectGroup::Operation(owner, group),
+                    SourceEffectGroup::StandaloneOperation(owner, effect),
+                    |group| SourceEffectGroup::Operation(owner, group),
                 ),
         ],
     }
@@ -966,10 +902,11 @@ fn effect_groups(
 
 fn obligation_effect_groups(
     graph: &InvocationGraph,
-    safety: &SafetyEffect<'_>,
+    concrete: Option<&crate::effects::concrete::ConcreteEffect<'_>>,
+    effect_key: &EffectKey,
     invocation: effect_tracing::InvocationId,
     calls: impl IntoIterator<Item = crate::artifact::CallId>,
-) -> Vec<SafetyEffectGroup> {
+) -> Vec<SourceEffectGroup> {
     let owner = graph.stable_function(graph.invocation(invocation).caller());
     calls
         .into_iter()
@@ -980,16 +917,18 @@ fn obligation_effect_groups(
                 .find(|edge| edge.id == call)
         })
         .map(|edge| {
-            if safety.invocation_source(invocation, edge.id).is_none() {
-                return SafetyEffectGroup::ContractInvocation(invocation, edge.id);
+            let is_concrete = concrete
+                .is_some_and(|concrete| concrete.invocation_source(invocation, edge.id).is_some());
+            if !is_concrete {
+                return SourceEffectGroup::Invocation(invocation, edge.id);
             }
             edge.invocation_effects
                 .iter()
-                .find(|fact| fact.effect == ReportEffect::Safety.key())
+                .find(|fact| &fact.effect == effect_key)
                 .and_then(|fact| fact.effect_group)
                 .map_or(
-                    SafetyEffectGroup::Invocation(invocation, edge.id),
-                    |group| SafetyEffectGroup::Operation(owner, group),
+                    SourceEffectGroup::Invocation(invocation, edge.id),
+                    |group| SourceEffectGroup::Operation(owner, group),
                 )
         })
         .collect()
@@ -1004,37 +943,16 @@ fn concrete_source_owner(graph: &InvocationGraph, origin: ConcreteSource) -> Opt
     }
 }
 
-fn append_panic_origin(
+fn append_concrete_origin(
     artifact: &ArtifactFacts,
     graph: &InvocationGraph,
-    panic: &PanicEffect<'_>,
+    concrete: &crate::effects::concrete::ConcreteEffect<'_>,
     origin: ConcreteSource,
     trace: &mut InterpretedTrace,
 ) {
     match origin {
         ConcreteSource::Invocation { invocation, call } => {
-            if let Some(source) = panic.invocation_source(invocation, call) {
-                append_invocation_source(artifact, graph, invocation, source, trace);
-            }
-        }
-        ConcreteSource::Effect { owner, effect } => {
-            if let Some((body, fact)) = effect_fact(artifact, owner, effect) {
-                append_effect_provenance(body, fact, trace);
-            }
-        }
-    }
-}
-
-fn append_safety_origin(
-    artifact: &ArtifactFacts,
-    graph: &InvocationGraph,
-    safety: &SafetyEffect<'_>,
-    origin: ConcreteSource,
-    trace: &mut InterpretedTrace,
-) {
-    match origin {
-        ConcreteSource::Invocation { invocation, call } => {
-            if let Some(source) = safety.invocation_source(invocation, call) {
+            if let Some(source) = concrete.invocation_source(invocation, call) {
                 append_invocation_source(artifact, graph, invocation, source, trace);
             }
         }
@@ -1338,7 +1256,7 @@ fn panic_findings(
     graph: &InvocationGraph,
     annotations: &AnnotationIndex,
     panic: &PanicEffect<'_>,
-    trace: &PanicTrace,
+    trace: &ConcreteTrace,
     root_function: effect_tracing::FunctionId,
     marker_probing: AnnotationProbingFact,
 ) -> Vec<InterpretedFinding> {
@@ -1425,7 +1343,7 @@ fn safety_findings(
     graph: &InvocationGraph,
     annotations: &AnnotationIndex,
     safety: &SafetyEffect<'_>,
-    trace: &SafetyTrace,
+    trace: &ConcreteTrace,
     root_function: effect_tracing::FunctionId,
     marker_probing: AnnotationProbingFact,
 ) -> Vec<InterpretedFinding> {
@@ -1507,6 +1425,106 @@ fn safety_findings(
                             invocation,
                             call,
                             annotation_kind::<Safety>(AnnotationRole::Justification),
+                            marker_probing,
+                        )),
+                        trace: trace_path,
+                        missing_requirements: Vec::new(),
+                        requirements: Vec::new(),
+                    })
+                }
+            }
+        })
+        .collect()
+}
+
+/// Projects a registered effect without requiring an effect-owned reporting
+/// implementation. Built-in effects keep their compatibility presentation in
+/// the specialized adapters above; every other effect is reported directly
+/// from the common fact vocabulary emitted by its compiler passes.
+fn generic_concrete_findings(
+    artifact: &ArtifactFacts,
+    graph: &InvocationGraph,
+    effect_key: &EffectKey,
+    concrete: &crate::effects::concrete::ConcreteEffect<'_>,
+    trace: &ConcreteTrace,
+    root_function: effect_tracing::FunctionId,
+    marker_probing: AnnotationProbingFact,
+) -> Vec<InterpretedFinding> {
+    active_root_nodes(trace, root_function)
+        .filter_map(|node| {
+            let mut trace_path = trace_path(artifact, graph, trace, node);
+            let trace_node = trace.nodes().nth(node)?;
+            let TrackedState::Concrete(_) = trace_node.state() else {
+                return None;
+            };
+            let TrackedOrigin::Concrete(origin) = *trace_node.origin() else {
+                return None;
+            };
+            match origin {
+                ConcreteSource::Effect { owner, effect } => {
+                    let (body, fact) = effect_fact(artifact, owner, effect)?;
+                    if &fact.effect != effect_key {
+                        return None;
+                    }
+                    append_effect_provenance(body, fact, &mut trace_path);
+                    Some(InterpretedFinding {
+                        kind: InterpretedFindingKind::EffectOperation {
+                            effect: effect_key.clone(),
+                            operation: fact.kind.clone(),
+                        },
+                        function: owner,
+                        function_path: body.display_path.clone(),
+                        target: None,
+                        source_range: fact.source_range.clone(),
+                        contract_source_range: None,
+                        marker_evidence: Some(effect_marker_evidence(
+                            artifact,
+                            owner,
+                            effect,
+                            AnnotationFactKind::new(
+                                effect_key.clone(),
+                                AnnotationRole::Justification,
+                            ),
+                            marker_probing,
+                        )),
+                        trace: trace_path,
+                        missing_requirements: Vec::new(),
+                        requirements: Vec::new(),
+                    })
+                }
+                ConcreteSource::Invocation { invocation, call } => {
+                    let source = concrete.invocation_source(invocation, call)?;
+                    let edge = source.edge();
+                    let operation = edge
+                        .invocation_effects
+                        .iter()
+                        .find(|fact| &fact.effect == effect_key)
+                        .map_or_else(
+                            || EffectKind::new("configured-invocation"),
+                            |fact| fact.kind.clone(),
+                        );
+                    let owner = graph.stable_function(graph.invocation(invocation).caller());
+                    let body = artifact.function_body(owner)?;
+                    append_call_trace(artifact, owner, edge, &mut trace_path);
+                    Some(InterpretedFinding {
+                        kind: InterpretedFindingKind::EffectInvocation {
+                            effect: effect_key.clone(),
+                            operation,
+                        },
+                        function: owner,
+                        function_path: body.display_path.clone(),
+                        target: source.target().map(interpreted_target),
+                        source_range: edge.source_range.clone(),
+                        contract_source_range: None,
+                        marker_evidence: Some(raw_call_marker_evidence(
+                            artifact,
+                            graph,
+                            invocation,
+                            call,
+                            AnnotationFactKind::new(
+                                effect_key.clone(),
+                                AnnotationRole::Justification,
+                            ),
                             marker_probing,
                         )),
                         trace: trace_path,
@@ -1762,16 +1780,19 @@ fn obligation_findings<C, O: Clone, S, T>(
                 .unwrap_or_else(|| format!("{:?}", annotation.owner()));
             let target_is_unsafe = function_presentation(artifact, target_function)
                 .is_some_and(|presentation| presentation.is_unsafe);
-            let domain = ReportEffect::from_key(state.effect());
+            let domain = ReportEffect::try_from_key(state.effect());
             let kind = match domain {
-                ReportEffect::Panic => InterpretedFindingKind::DocumentedPanic,
-                ReportEffect::Safety => InterpretedFindingKind::SafetyCall {
+                Some(ReportEffect::Panic) => InterpretedFindingKind::DocumentedPanic,
+                Some(ReportEffect::Safety) => InterpretedFindingKind::SafetyCall {
                     kind: if target_is_unsafe {
                         InterpretedSafetyCallKind::Unsafe
                     } else {
                         InterpretedSafetyCallKind::Obligation
                     },
                     documents_contract: true,
+                },
+                None => InterpretedFindingKind::DocumentedEffect {
+                    effect: state.effect().clone(),
                 },
             };
             let marker_evidence = obligation_marker_evidence(
@@ -1780,10 +1801,16 @@ fn obligation_findings<C, O: Clone, S, T>(
                 state.source_invocation(),
                 state.source_calls(),
                 match domain {
-                    ReportEffect::Panic => annotation_kind::<Panic>(AnnotationRole::Justification),
-                    ReportEffect::Safety => {
+                    Some(ReportEffect::Panic) => {
+                        annotation_kind::<Panic>(AnnotationRole::Justification)
+                    }
+                    Some(ReportEffect::Safety) => {
                         annotation_kind::<Safety>(AnnotationRole::Justification)
                     }
+                    None => AnnotationFactKind::new(
+                        state.effect().clone(),
+                        AnnotationRole::Justification,
+                    ),
                 },
                 marker_probing,
             );
@@ -1833,17 +1860,21 @@ fn obligation_findings<C, O: Clone, S, T>(
                 ambiguous
                     .into_iter()
                     .map(|(normalized_name, requirements)| InterpretedFinding {
-                        kind: match ReportEffect::from_key(state.effect()) {
-                            ReportEffect::Panic => {
+                        kind: match ReportEffect::try_from_key(state.effect()) {
+                            Some(ReportEffect::Panic) => {
                                 InterpretedFindingKind::AmbiguousPanicRequirement {
                                     normalized_name,
                                 }
                             }
-                            ReportEffect::Safety => {
+                            Some(ReportEffect::Safety) => {
                                 InterpretedFindingKind::AmbiguousSafetyRequirement {
                                     normalized_name,
                                 }
                             }
+                            None => InterpretedFindingKind::AmbiguousEffectRequirement {
+                                effect: state.effect().clone(),
+                                normalized_name,
+                            },
                         },
                         function: annotation.owner(),
                         function_path: function_presentation(artifact, annotation.owner())
@@ -2505,9 +2536,9 @@ mod tests {
         ArtifactAnalysisCache, ArtifactInfo, ArtifactScope, CacheExpectations, RustcArtifactId,
     };
     use crate::compiler::invocations::InvocationGraph;
-    use crate::config::{MarkerProbing, SniffTestConfig};
-    use crate::effects::annotation_kind;
-    use crate::effects::concrete::probe_concrete_effect_for;
+    use crate::config::{MarkerProbing, PanicConfig, SniffTestConfig};
+    use crate::effects::concrete::{probe_concrete_effect, probe_concrete_effect_for};
+    use crate::effects::{EffectSpec, annotation_kind, effect};
     use crate::report_model::{
         DomainCompleteness, IncompleteReason, InterpretationRoot, InterpretedFinding,
         InterpretedFindingKind, InterpretedSafetyCallKind, InterpretedTrace, InterpretedTraceStep,
@@ -2516,11 +2547,96 @@ mod tests {
     use crate::report_roots::ReportRootKind;
     use crate::workspace::{ArtifactAnalysisGraph, ExternArtifactInput};
 
+    struct Allocation;
+
+    impl EffectSpec for Allocation {
+        type Config = PanicConfig;
+
+        const EFFECT_NAME: &'static str = "allocation";
+        const OBLIGATION: &'static str = "Allocations";
+        const JUSTIFICATION: &'static str = "ALLOCATION";
+
+        fn register_passes(_: &mut crate::effects::visit::EffectPassRegistry) {}
+    }
+
     fn stable_function(index: u64) -> FunctionId {
         let value = format!("{index:016x}{:016x}", index + 100);
         let hash = serde_json::from_str::<StableDefPathHash>(&format!("\"{value}\""))
             .expect("valid stable hash");
         FunctionId::generic(hash)
+    }
+
+    #[test]
+    fn registered_effect_gets_default_concrete_reporting_without_an_adapter() {
+        let root = stable_function(9_900);
+        let artifact = ArtifactFacts::new(
+            vec![body(
+                root,
+                "sample::allocates",
+                Vec::new(),
+                vec![EffectFact {
+                    id: EffectId::new(0),
+                    effect: EffectKey::new(Allocation::EFFECT_NAME),
+                    effect_group: None,
+                    source_range: None,
+                    expanded_range: None,
+                    macro_expansions: Vec::new(),
+                    kind: EffectKind::new("heap-allocation"),
+                }],
+                Vec::new(),
+                Vec::new(),
+            )],
+            Vec::new(),
+        )
+        .expect("custom effect artifact");
+        let graph = InvocationGraph::from_artifact(&artifact).expect("invocation graph");
+        let annotations = AnnotationIndex::from_artifact(&artifact, &graph).expect("annotations");
+        let namespaces = artifact.definition_namespace_index();
+        let allocation = effect::<Allocation>();
+        let concrete = probe_concrete_effect(
+            &artifact,
+            &graph,
+            &annotations,
+            &namespaces,
+            allocation.as_ref(),
+            &PanicConfig::default(),
+        )
+        .expect("custom concrete effect");
+        let config = SniffTestConfig::default();
+        let obligations = super::ObligationTracker::probe(
+            &artifact,
+            &graph,
+            &annotations,
+            &namespaces,
+            config.analysis.effect_doc_matching,
+            &config.panics,
+            &config.safety,
+            crate::effects::EffectSelection::default(),
+        );
+        let tracked = super::TrackedEffect::new(
+            &concrete,
+            &obligations,
+            EffectKey::new(Allocation::EFFECT_NAME),
+        );
+        let obligation_graph = graph.obligation_graph();
+        let trace = EffectEngine::new(&obligation_graph).trace(&tracked);
+        let findings = super::generic_concrete_findings(
+            &artifact,
+            &graph,
+            &EffectKey::new(Allocation::EFFECT_NAME),
+            &concrete,
+            &trace,
+            graph.function(root).expect("root function"),
+            AnnotationProbingFact::SourceCallsite,
+        );
+
+        assert!(matches!(
+            findings.as_slice(),
+            [InterpretedFinding {
+                kind: InterpretedFindingKind::EffectOperation { effect, operation },
+                ..
+            }] if effect.as_str() == "allocation" && operation.as_str() == "heap-allocation"
+        ));
     }
 
     fn function_in_crate(stable_crate_id: u64, index: u64) -> FunctionId {
@@ -3757,14 +3873,29 @@ unresolved-call-target = "warn"
             &config.safety,
             crate::effects::EffectSelection::default(),
         );
-        let tracked_panic =
-            super::TrackedEffect::new(&panic, &comments, super::ReportEffect::Panic.key());
-        let tracked_safety =
-            super::TrackedEffect::new(&safety, &comments, super::ReportEffect::Safety.key());
+        let panic_key = super::ReportEffect::Panic.key();
+        let safety_key = super::ReportEffect::Safety.key();
+        let concrete_effects = std::collections::BTreeMap::from([
+            (panic_key.clone(), panic),
+            (safety_key.clone(), safety),
+        ]);
+        let tracked_effects = concrete_effects
+            .iter()
+            .map(|(effect, concrete)| {
+                (
+                    effect.clone(),
+                    super::TrackedEffect::new(concrete, &comments, effect.clone()),
+                )
+            })
+            .collect::<std::collections::BTreeMap<_, _>>();
         let obligation_graph = graph.obligation_graph();
         let engine = EffectEngine::new(&obligation_graph);
-        let panic_trace = engine.trace(&tracked_panic);
-        let safety_trace = engine.trace(&tracked_safety);
+        let traces = tracked_effects
+            .iter()
+            .map(|(effect, tracked)| (effect.clone(), engine.trace(tracked)))
+            .collect::<std::collections::BTreeMap<_, super::ConcreteTrace>>();
+        let tracked_safety = tracked_effects.get(&safety_key).expect("tracked safety");
+        let safety_trace = traces.get(&safety_key).expect("safety trace");
         let uses = tracked_safety.obligation_marker_uses(&safety_trace);
         assert_eq!(
             comments.contract_count(&super::ReportEffect::Safety.key()),
@@ -3778,29 +3909,22 @@ unresolved-call-target = "warn"
         assert_eq!(
             super::obligation_effect_groups(
                 &graph,
-                &safety,
+                concrete_effects.get(&safety_key),
+                &safety_key,
                 uses[0].source_invocation(),
                 uses[0].source_calls(),
             ),
             vec![
-                super::SafetyEffectGroup::ContractInvocation(
-                    uses[0].source_invocation(),
-                    CallId::new(0),
-                ),
-                super::SafetyEffectGroup::ContractInvocation(
-                    uses[0].source_invocation(),
-                    CallId::new(1),
-                ),
+                super::SourceEffectGroup::Invocation(uses[0].source_invocation(), CallId::new(0),),
+                super::SourceEffectGroup::Invocation(uses[0].source_invocation(), CallId::new(1),),
             ],
         );
         let claims = super::collect_marker_claims(
             &artifact,
             &graph,
-            Some(&panic_trace),
-            Some(&safety),
-            Some(&safety_trace),
-            Some(&tracked_panic),
-            Some(&tracked_safety),
+            &concrete_effects,
+            &traces,
+            &tracked_effects,
         );
         assert_eq!(
             claims.values().next().map(std::collections::BTreeMap::len),
@@ -3812,12 +3936,9 @@ unresolved-call-target = "warn"
             &artifact,
             &graph,
             &annotations,
-            Some(&panic),
-            Some(&panic_trace),
-            Some(&safety),
-            Some(&safety_trace),
-            Some(&tracked_panic),
-            Some(&tracked_safety),
+            &concrete_effects,
+            &traces,
+            &tracked_effects,
             &claims,
             root_function,
         );

@@ -104,11 +104,6 @@ impl ObligationMarkerUse {
     }
 
     #[must_use]
-    pub(crate) const fn effect(&self) -> &EffectKey {
-        &self.effect
-    }
-
-    #[must_use]
     pub(crate) const fn invocation(&self) -> InvocationId {
         self.invocation
     }

@@ -1,7 +1,9 @@
 use crate::config::SafetyConfig;
 
 use self::visit::{SafetyInvocationPass, SafetyThirPass};
-use super::concrete::{ConcreteEffect, ConcreteEffectState, ConcreteTermination};
+use super::concrete::ConcreteEffect;
+#[cfg(test)]
+use super::concrete::ConcreteTermination;
 use super::visit::EffectPassRegistry;
 
 pub(crate) mod visit;
@@ -22,6 +24,6 @@ impl super::EffectSpec for Safety {
     }
 }
 
-pub(crate) type SafetyState = ConcreteEffectState;
-pub(crate) type SafetyTermination = ConcreteTermination;
 pub(crate) type SafetyEffect<'annotations> = ConcreteEffect<'annotations>;
+#[cfg(test)]
+pub(crate) type SafetyTermination = ConcreteTermination;
