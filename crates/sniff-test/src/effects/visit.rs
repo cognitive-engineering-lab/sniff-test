@@ -13,7 +13,7 @@ use rustc_span::Span;
 
 use crate::artifact::{EffectKey, EffectKind};
 
-use super::{Effect, EffectMetadata};
+use super::{Effect, EffectSpec, effect};
 
 /// Pass-local identity shared by concrete sources that use one justification.
 #[derive(Debug, Clone, Copy)]
@@ -241,7 +241,7 @@ pub(crate) struct RegisteredEffectPassOutput {
 
 #[derive(Default)]
 pub(crate) struct EffectPassRegistry {
-    effects: Vec<EffectMetadata>,
+    effects: Vec<Box<dyn Effect>>,
     hir_passes: Vec<RegisteredHirPass>,
     thir_passes: Vec<RegisteredThirPass>,
     mir_passes: Vec<RegisteredMirPass>,
@@ -256,7 +256,7 @@ impl EffectPassRegistry {
         !self.thir_passes.is_empty()
     }
 
-    pub(crate) fn register_effect<E: Effect>(&mut self) {
+    pub(crate) fn register_effect<E: EffectSpec>(&mut self) {
         assert!(!E::EFFECT_NAME.is_empty(), "effect name must not be empty");
         assert!(
             !E::OBLIGATION.is_empty(),
@@ -266,36 +266,36 @@ impl EffectPassRegistry {
             !E::JUSTIFICATION.is_empty(),
             "justification marker must not be empty"
         );
-        let effect = EffectMetadata::of::<E>();
+        let effect = effect::<E>();
         assert!(
             self.effects
                 .iter()
-                .all(|registered| registered.key != effect.key),
+                .all(|registered| registered.key() != effect.key()),
             "effect names must be unique"
         );
+        effect.register_passes(self);
         self.effects.push(effect);
-        E::register_passes(self);
     }
 
     #[allow(
         dead_code,
         reason = "no built-in effect currently requires a HIR seed pass"
     )]
-    pub(crate) fn register_hir_pass<E: Effect>(&mut self, pass: Box<dyn HirEffectPass>) {
+    pub(crate) fn register_hir_pass<E: EffectSpec>(&mut self, pass: Box<dyn HirEffectPass>) {
         self.hir_passes.push(RegisteredHirPass {
             effect: EffectKey::new(E::EFFECT_NAME),
             pass,
         });
     }
 
-    pub(crate) fn register_thir_pass<E: Effect>(&mut self, pass: Box<dyn ThirEffectPass>) {
+    pub(crate) fn register_thir_pass<E: EffectSpec>(&mut self, pass: Box<dyn ThirEffectPass>) {
         self.thir_passes.push(RegisteredThirPass {
             effect: EffectKey::new(E::EFFECT_NAME),
             pass,
         });
     }
 
-    pub(crate) fn register_mir_pass<E: Effect>(&mut self, pass: Box<dyn MirEffectPass>) {
+    pub(crate) fn register_mir_pass<E: EffectSpec>(&mut self, pass: Box<dyn MirEffectPass>) {
         self.mir_passes.push(RegisteredMirPass {
             effect: EffectKey::new(E::EFFECT_NAME),
             pass,

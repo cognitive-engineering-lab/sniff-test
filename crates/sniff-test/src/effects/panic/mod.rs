@@ -8,7 +8,7 @@ pub(crate) mod visit;
 
 pub(crate) struct Panic;
 
-impl super::Effect for Panic {
+impl super::EffectSpec for Panic {
     type Config = PanicConfig;
 
     const EFFECT_NAME: &'static str = "panic";
@@ -22,4 +22,4 @@ impl super::Effect for Panic {
 
 pub(crate) type PanicState = ConcreteEffectState;
 pub(crate) type PanicTermination = ConcreteTermination;
-pub(crate) type PanicEffect<'annotations> = ConcreteEffect<'annotations, Panic>;
+pub(crate) type PanicEffect<'annotations> = ConcreteEffect<'annotations>;

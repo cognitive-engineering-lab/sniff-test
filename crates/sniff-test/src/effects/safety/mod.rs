@@ -8,7 +8,7 @@ pub(crate) mod visit;
 
 pub(crate) struct Safety;
 
-impl super::Effect for Safety {
+impl super::EffectSpec for Safety {
     type Config = SafetyConfig;
 
     const EFFECT_NAME: &'static str = "safety";
@@ -24,4 +24,4 @@ impl super::Effect for Safety {
 
 pub(crate) type SafetyState = ConcreteEffectState;
 pub(crate) type SafetyTermination = ConcreteTermination;
-pub(crate) type SafetyEffect<'annotations> = ConcreteEffect<'annotations, Safety>;
+pub(crate) type SafetyEffect<'annotations> = ConcreteEffect<'annotations>;

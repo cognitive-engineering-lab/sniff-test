@@ -13,9 +13,10 @@ use crate::artifact::{ArtifactFacts, CallId, DefinitionNamespaceIndex, EffectKey
 use crate::compiler::invocations::InvocationGraph;
 use crate::config::{EffectDocMatching, PanicConfig, SafetyConfig};
 use crate::contracts::normalize_requirement_name;
+use crate::effects::EffectSelection;
+use crate::effects::EffectSpec;
 use crate::effects::panic::Panic;
 use crate::effects::safety::Safety;
-use crate::effects::{Effect, EffectSelection};
 
 use super::trust::TrustPath;
 

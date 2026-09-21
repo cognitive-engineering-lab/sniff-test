@@ -6,6 +6,7 @@ pub(crate) mod trust;
 pub(crate) mod visit;
 
 use std::fmt;
+use std::marker::PhantomData;
 
 use crate::artifact::{
     AnnotationFactKind, AnnotationRole, CallFact, EffectKey, FunctionTargetFact,
@@ -21,7 +22,7 @@ use self::visit::EffectPassRegistry;
 
 /// Built-in effect definition. Compiler passes only discover concrete seeds;
 /// obligation and justification semantics are supplied by shared tracking.
-pub(crate) trait Effect {
+pub(crate) trait EffectSpec: 'static {
     type Config: EffectConfig;
 
     const EFFECT_NAME: &'static str;
@@ -30,6 +31,49 @@ pub(crate) trait Effect {
     const USES_ENCLOSING_SCOPE_MARKER: bool = false;
 
     fn register_passes(registry: &mut EffectPassRegistry);
+}
+
+/// Object-safe, type-erased representation of an effect specification.
+///
+/// Framework code uses this interface after registration so adding an effect
+/// does not require another type-directed branch in extraction or reporting.
+pub(crate) trait Effect: Send + Sync {
+    fn metadata(&self) -> &EffectMetadata;
+
+    fn register_passes(&self, registry: &mut EffectPassRegistry);
+
+    fn key(&self) -> &EffectKey {
+        &self.metadata().key
+    }
+}
+
+struct EffectAdapter<E> {
+    metadata: EffectMetadata,
+    marker: PhantomData<fn() -> E>,
+}
+
+impl<E: EffectSpec> EffectAdapter<E> {
+    fn new() -> Self {
+        Self {
+            metadata: EffectMetadata::of::<E>(),
+            marker: PhantomData,
+        }
+    }
+}
+
+impl<E: EffectSpec> Effect for EffectAdapter<E> {
+    fn metadata(&self) -> &EffectMetadata {
+        &self.metadata
+    }
+
+    fn register_passes(&self, registry: &mut EffectPassRegistry) {
+        E::register_passes(registry);
+    }
+}
+
+#[must_use]
+pub(crate) fn effect<E: EffectSpec>() -> Box<dyn Effect> {
+    Box::new(EffectAdapter::<E>::new())
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -42,7 +86,7 @@ pub(crate) struct EffectMetadata {
 
 impl EffectMetadata {
     #[must_use]
-    pub(crate) fn of<E: Effect>() -> Self {
+    pub(crate) fn of<E: EffectSpec>() -> Self {
         Self {
             key: EffectKey::new(E::EFFECT_NAME),
             obligation: E::OBLIGATION,
@@ -54,18 +98,26 @@ impl EffectMetadata {
 
 #[must_use]
 pub(crate) fn selected_effects(selection: EffectSelection) -> Vec<EffectMetadata> {
-    let mut effects = Vec::new();
+    selected_effect_objects(selection)
+        .into_iter()
+        .map(|effect| effect.metadata().clone())
+        .collect()
+}
+
+#[must_use]
+pub(crate) fn selected_effect_objects(selection: EffectSelection) -> Vec<Box<dyn Effect>> {
+    let mut effects = Vec::<Box<dyn Effect>>::new();
     if selection.tracks_panic() {
-        effects.push(EffectMetadata::of::<panic::Panic>());
+        effects.push(effect::<panic::Panic>());
     }
     if selection.tracks_safety() {
-        effects.push(EffectMetadata::of::<safety::Safety>());
+        effects.push(effect::<safety::Safety>());
     }
     effects
 }
 
 #[must_use]
-pub(crate) fn annotation_kind<E: Effect>(role: AnnotationRole) -> AnnotationFactKind {
+pub(crate) fn annotation_kind<E: EffectSpec>(role: AnnotationRole) -> AnnotationFactKind {
     AnnotationFactKind::new(EffectKey::new(E::EFFECT_NAME), role)
 }
 

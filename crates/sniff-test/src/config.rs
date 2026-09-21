@@ -44,6 +44,21 @@ pub struct SniffTestConfig {
 }
 
 impl SniffTestConfig {
+    pub(crate) fn effect_config(
+        &self,
+        effect: &crate::artifact::EffectKey,
+    ) -> Option<&dyn crate::effects::EffectConfig> {
+        match effect.as_str() {
+            <crate::effects::panic::Panic as crate::effects::EffectSpec>::EFFECT_NAME => {
+                Some(&self.panics)
+            }
+            <crate::effects::safety::Safety as crate::effects::EffectSpec>::EFFECT_NAME => {
+                Some(&self.safety)
+            }
+            _ => None,
+        }
+    }
+
     /// Loads a sniff-test manifest from disk.
     ///
     /// # Errors

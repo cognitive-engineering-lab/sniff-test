@@ -1,7 +1,6 @@
 //! Shared tracking for compiler-discovered concrete effect seeds.
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::marker::PhantomData;
 
 use effect_tracing::{
     EffectSeed, FunctionId, InvocationId, Propagation, PropagationEdge, TraceCx, TracePolicy,
@@ -69,7 +68,7 @@ struct ConcreteProbePolicy<'config> {
 }
 
 impl<'config> ConcreteProbePolicy<'config> {
-    fn from_config(config: &'config impl EffectConfig) -> Self {
+    fn from_config(config: &'config (impl EffectConfig + ?Sized)) -> Self {
         Self {
             ignored: config.ignored_namespaces(),
             trusted: config.trusted_boundary_namespaces(),
@@ -143,7 +142,7 @@ struct ConcreteSeedCollector<'a, 'policy> {
 }
 
 impl<'a, 'policy> ConcreteSeedCollector<'a, 'policy> {
-    fn new(graph: &'a InvocationGraph, config: &'policy impl EffectConfig) -> Self {
+    fn new(graph: &'a InvocationGraph, config: &'policy (impl EffectConfig + ?Sized)) -> Self {
         let policy = ConcreteProbePolicy::from_config(config);
         let macro_ignored_invocations = graph
             .invocations()
@@ -236,11 +235,7 @@ impl<'a, 'policy> ConcreteSeedCollector<'a, 'policy> {
         self.seeds.push(ConcreteEffectSeed::new(source, owner));
     }
 
-    fn finish<D>(
-        self,
-        annotations: &'a AnnotationIndex,
-        effect: EffectKey,
-    ) -> ConcreteEffect<'a, D> {
+    fn finish(self, annotations: &'a AnnotationIndex, effect: EffectKey) -> ConcreteEffect<'a> {
         ConcreteEffect::new(
             annotations,
             self.graph,
@@ -256,26 +251,27 @@ impl<'a, 'policy> ConcreteSeedCollector<'a, 'policy> {
 }
 
 /// Discovers concrete sources for any effect using one framework-owned walk.
-pub(crate) fn probe_concrete_effect<'annotations, E: Effect>(
+pub(crate) fn probe_concrete_effect<'annotations>(
     artifact: &ArtifactFacts,
     graph: &'annotations InvocationGraph,
     annotations: &'annotations AnnotationIndex,
     namespaces: &DefinitionNamespaceIndex,
-    config: &E::Config,
-) -> Result<ConcreteEffect<'annotations, E>, ProbeError> {
+    domain: &dyn Effect,
+    config: &dyn EffectConfig,
+) -> Result<ConcreteEffect<'annotations>, ProbeError> {
     let mut seeds = ConcreteSeedCollector::new(graph, config);
     for body in &artifact.functions {
         let Some(owner) = seeds.filter_owner(
             body.function,
             namespaces.candidates(body.function),
-            E::EFFECT_NAME,
+            domain.key().as_str(),
         )?
         else {
             continue;
         };
 
         for effect in &body.effects {
-            if effect.effect.as_str() != E::EFFECT_NAME {
+            if effect.effect != *domain.key() {
                 continue;
             }
             for projected_owner in projected_owners(artifact, graph, body.function, owner, effect) {
@@ -292,7 +288,7 @@ pub(crate) fn probe_concrete_effect<'annotations, E: Effect>(
             let compiler_source = call
                 .invocation_effects
                 .iter()
-                .any(|source| source.effect.as_str() == E::EFFECT_NAME)
+                .any(|source| source.effect == *domain.key())
                 .then(|| InvocationSourceMatch {
                     target: call.target.function_target().cloned(),
                 });
@@ -308,7 +304,26 @@ pub(crate) fn probe_concrete_effect<'annotations, E: Effect>(
             }
         }
     }
-    Ok(seeds.finish(annotations, EffectKey::new(E::EFFECT_NAME)))
+    Ok(seeds.finish(annotations, domain.key().clone()))
+}
+
+#[cfg(test)]
+pub(crate) fn probe_concrete_effect_for<'annotations, E: super::EffectSpec>(
+    artifact: &ArtifactFacts,
+    graph: &'annotations InvocationGraph,
+    annotations: &'annotations AnnotationIndex,
+    namespaces: &DefinitionNamespaceIndex,
+    config: &E::Config,
+) -> Result<ConcreteEffect<'annotations>, ProbeError> {
+    let effect = super::effect::<E>();
+    probe_concrete_effect(
+        artifact,
+        graph,
+        annotations,
+        namespaces,
+        effect.as_ref(),
+        config,
+    )
 }
 
 fn projected_owners(
@@ -445,7 +460,7 @@ pub(crate) enum ConcreteTermination {
 ///
 /// Effect definitions construct seeds and boundary sets. This type provides
 /// the common graph propagation and justification termination semantics.
-pub(crate) struct ConcreteEffect<'annotations, D> {
+pub(crate) struct ConcreteEffect<'annotations> {
     annotations: &'annotations AnnotationIndex,
     graph: &'annotations InvocationGraph,
     effect: EffectKey,
@@ -455,10 +470,9 @@ pub(crate) struct ConcreteEffect<'annotations, D> {
     macro_ignored_sources: BTreeSet<ConcreteSource>,
     macro_ignored_invocations: BTreeSet<InvocationId>,
     invocation_sources: BTreeMap<InvocationId, Vec<InvocationSourceBranch>>,
-    domain_marker: PhantomData<D>,
 }
 
-impl<'annotations, D> ConcreteEffect<'annotations, D> {
+impl<'annotations> ConcreteEffect<'annotations> {
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn new(
         annotations: &'annotations AnnotationIndex,
@@ -491,7 +505,6 @@ impl<'annotations, D> ConcreteEffect<'annotations, D> {
             macro_ignored_sources,
             macro_ignored_invocations,
             invocation_sources,
-            domain_marker: PhantomData,
         }
     }
 
@@ -559,7 +572,7 @@ impl<'annotations, D> ConcreteEffect<'annotations, D> {
     }
 }
 
-impl<D> ConcreteEffect<'_, D> {
+impl ConcreteEffect<'_> {
     fn source_justification(&self, source: ConcreteSource) -> Option<AnnotationId> {
         match source {
             ConcreteSource::Invocation { invocation, call } => {
@@ -574,7 +587,7 @@ impl<D> ConcreteEffect<'_, D> {
     }
 }
 
-impl<D> TracePolicy for ConcreteEffect<'_, D> {
+impl TracePolicy for ConcreteEffect<'_> {
     type Origin = ConcreteSource;
     type State = ConcreteEffectState;
     type Termination = ConcreteTermination;
