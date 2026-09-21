@@ -4,18 +4,20 @@ expression: "report[\"findings\"]"
 ---
 [
   {
+    "effect": "safety",
+    "finding": "concrete-operation",
     "function": "dependency_safety::read_byte",
-    "kind": "unsafe-op-missing-justification",
+    "kind": "effect",
     "level": "deny",
+    "operation": "raw-pointer-dereference",
     "owner": {
       "crate": "dependency_safety",
       "scope": "dependency"
     },
-    "reason": "dependency crate `dependency_safety` has no recorded `// SAFETY:` justification for unsafe operation (raw pointer dereference)",
+    "reason": "dependency crate `dependency_safety` has no recorded `// SAFETY:` justification for safety operation (raw pointer dereference)",
     "root": "dependency_safety_app::read_dependency",
     "root-kind": "concrete",
     "root-span": "src/lib.rs:1:1: 1:49",
-    "safety-op-kind": "raw-pointer-dereference",
     "source-evidence": {
       "status": "verified-absent"
     },
@@ -26,18 +28,20 @@ expression: "report[\"findings\"]"
     ]
   },
   {
+    "effect": "safety",
+    "finding": "concrete-operation",
     "function": "dependency_safety::read_byte",
-    "kind": "unsafe-op-missing-justification",
+    "kind": "effect",
     "level": "deny",
+    "operation": "raw-pointer-dereference",
     "owner": {
       "crate": "dependency_safety",
       "scope": "dependency"
     },
-    "reason": "dependency crate `dependency_safety` has no recorded `// SAFETY:` justification for unsafe operation (raw pointer dereference)",
+    "reason": "dependency crate `dependency_safety` has no recorded `// SAFETY:` justification for safety operation (raw pointer dereference)",
     "root": "dependency_safety_app::read_dependency_again",
     "root-kind": "concrete",
     "root-span": "src/lib.rs:5:1: 5:55",
-    "safety-op-kind": "raw-pointer-dereference",
     "source-evidence": {
       "status": "verified-absent"
     },
@@ -48,14 +52,16 @@ expression: "report[\"findings\"]"
     ]
   },
   {
+    "effect": "safety",
+    "finding": "documented-obligation",
     "function": "dependency_safety::read_documented",
-    "kind": "unsafe-call-missing-justification",
+    "kind": "effect",
     "level": "warn",
     "owner": {
       "crate": "dependency_safety",
       "scope": "dependency"
     },
-    "reason": "dependency crate `dependency_safety` has no recorded `// SAFETY:` justification for unsafe call to `dependency_safety::documented_read`",
+    "reason": "dependency crate `dependency_safety` has no recorded `// SAFETY:` justification for call to `dependency_safety::documented_read` with a documented `# Safety` obligation",
     "root": "dependency_safety_app::read_documented_dependency",
     "root-kind": "concrete",
     "root-span": "src/lib.rs:9:1: 9:60",

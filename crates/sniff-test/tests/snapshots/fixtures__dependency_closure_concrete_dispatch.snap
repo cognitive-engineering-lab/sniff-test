@@ -4,8 +4,12 @@ expression: "report[\"findings\"]"
 ---
 [
   {
-    "kind": "panic-invocation",
+    "effect": "panic",
+    "finding": "concrete-invocation",
+    "function": "<dependency_closure_app::Panicking as dependency_closure_dep::Action>::run",
+    "kind": "effect",
     "level": "deny",
+    "operation": "configured-invocation",
     "owner": {
       "crate": "dependency_closure_app",
       "scope": "workspace"

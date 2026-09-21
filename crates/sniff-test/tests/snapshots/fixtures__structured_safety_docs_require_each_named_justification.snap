@@ -4,7 +4,10 @@ expression: "report[\"findings\"]"
 ---
 [
   {
-    "kind": "documented-panic",
+    "effect": "panic",
+    "finding": "documented-obligation",
+    "function": "ambiguous_markers::complex_panic_layouts",
+    "kind": "effect",
     "level": "warn",
     "missing-requirements": [
       "nonzero: the divisor must not be zero.",
@@ -16,7 +19,7 @@ expression: "report[\"findings\"]"
       "crate": "ambiguous_markers",
       "scope": "workspace"
     },
-    "reason": "recorded `// PANIC:` justification for call to `ambiguous_markers::complex_panic_contract` with a `# Panics` obligation does not satisfy the remaining `# Panics` requirements",
+    "reason": "recorded `// PANIC:` justification for call to `ambiguous_markers::complex_panic_contract` with a documented `# Panics` obligation does not satisfy the remaining `# Panics` requirements",
     "requirements": [
       "nonzero: the divisor must not be zero.",
       "bounded: the input must be within the supported range.",
@@ -36,7 +39,10 @@ expression: "report[\"findings\"]"
     ]
   },
   {
-    "kind": "documented-panic",
+    "effect": "panic",
+    "finding": "documented-obligation",
+    "function": "ambiguous_markers::complex_panic_layouts",
+    "kind": "effect",
     "level": "warn",
     "missing-requirements": [
       "stable: the backing state must not change during the call."
@@ -45,7 +51,7 @@ expression: "report[\"findings\"]"
       "crate": "ambiguous_markers",
       "scope": "workspace"
     },
-    "reason": "recorded `// PANIC:` justification for call to `ambiguous_markers::complex_panic_contract` with a `# Panics` obligation does not satisfy the remaining `# Panics` requirements",
+    "reason": "recorded `// PANIC:` justification for call to `ambiguous_markers::complex_panic_contract` with a documented `# Panics` obligation does not satisfy the remaining `# Panics` requirements",
     "requirements": [
       "nonzero: the divisor must not be zero.",
       "bounded: the input must be within the supported range.",
@@ -65,8 +71,10 @@ expression: "report[\"findings\"]"
     ]
   },
   {
+    "effect": "safety",
+    "finding": "documented-obligation",
     "function": "ambiguous_markers::complex_safety_layouts",
-    "kind": "unsafe-call-missing-requirements",
+    "kind": "effect",
     "level": "warn",
     "missing-requirements": [
       "aligned: the buffer must satisfy the required alignment.",
@@ -76,7 +84,7 @@ expression: "report[\"findings\"]"
       "crate": "ambiguous_markers",
       "scope": "workspace"
     },
-    "reason": "recorded `// SAFETY:` justification for unsafe call to `ambiguous_markers::complex_safety_contract` does not satisfy the remaining `# Safety` requirements",
+    "reason": "recorded `// SAFETY:` justification for call to `ambiguous_markers::complex_safety_contract` with a documented `# Safety` obligation does not satisfy the remaining `# Safety` requirements",
     "requirements": [
       "allocation: the caller must own the buffer.",
       "initialized: every byte must be initialized.",
@@ -96,8 +104,10 @@ expression: "report[\"findings\"]"
     ]
   },
   {
+    "effect": "safety",
+    "finding": "documented-obligation",
     "function": "ambiguous_markers::foo",
-    "kind": "unsafe-call-missing-requirements",
+    "kind": "effect",
     "level": "warn",
     "missing-requirements": [
       "req_1: content",
@@ -107,7 +117,7 @@ expression: "report[\"findings\"]"
       "crate": "ambiguous_markers",
       "scope": "workspace"
     },
-    "reason": "recorded `// SAFETY:` justification for unsafe call to `ambiguous_markers::multi_safety_requirements_with_asterisks_and_ident` does not satisfy the remaining `# Safety` requirements",
+    "reason": "recorded `// SAFETY:` justification for call to `ambiguous_markers::multi_safety_requirements_with_asterisks_and_ident` with a documented `# Safety` obligation does not satisfy the remaining `# Safety` requirements",
     "requirements": [
       "req_1: content",
       "req_2: content"
@@ -125,8 +135,10 @@ expression: "report[\"findings\"]"
     ]
   },
   {
+    "effect": "safety",
+    "finding": "documented-obligation",
     "function": "ambiguous_markers::foo",
-    "kind": "unsafe-call-missing-requirements",
+    "kind": "effect",
     "level": "warn",
     "missing-requirements": [
       "requirement",
@@ -136,7 +148,7 @@ expression: "report[\"findings\"]"
       "crate": "ambiguous_markers",
       "scope": "workspace"
     },
-    "reason": "recorded `// SAFETY:` justification for unsafe call to `ambiguous_markers::multi_safety_requirements_with_no_sub_requirement_name` does not satisfy the remaining `# Safety` requirements",
+    "reason": "recorded `// SAFETY:` justification for call to `ambiguous_markers::multi_safety_requirements_with_no_sub_requirement_name` with a documented `# Safety` obligation does not satisfy the remaining `# Safety` requirements",
     "requirements": [
       "requirement",
       "requirement"
@@ -154,8 +166,10 @@ expression: "report[\"findings\"]"
     ]
   },
   {
+    "effect": "safety",
+    "finding": "documented-obligation",
     "function": "ambiguous_markers::foo",
-    "kind": "unsafe-call-missing-requirements",
+    "kind": "effect",
     "level": "warn",
     "missing-requirements": [
       "requirement"
@@ -164,7 +178,7 @@ expression: "report[\"findings\"]"
       "crate": "ambiguous_markers",
       "scope": "workspace"
     },
-    "reason": "recorded `// SAFETY:` justification for unsafe call to `ambiguous_markers::multi_safety_requirements_with_no_sub_requirement_name` does not satisfy the remaining `# Safety` requirements",
+    "reason": "recorded `// SAFETY:` justification for call to `ambiguous_markers::multi_safety_requirements_with_no_sub_requirement_name` with a documented `# Safety` obligation does not satisfy the remaining `# Safety` requirements",
     "requirements": [
       "requirement",
       "requirement"
@@ -182,7 +196,10 @@ expression: "report[\"findings\"]"
     ]
   },
   {
-    "kind": "documented-panic",
+    "effect": "panic",
+    "finding": "documented-obligation",
+    "function": "ambiguous_markers::unnamed_panic_layouts",
+    "kind": "effect",
     "level": "warn",
     "missing-requirements": [
       "the divisor must not be zero.",
@@ -193,7 +210,7 @@ expression: "report[\"findings\"]"
       "crate": "ambiguous_markers",
       "scope": "workspace"
     },
-    "reason": "recorded `// PANIC:` justification for call to `ambiguous_markers::unnamed_nested_panic_contract` with a `# Panics` obligation does not satisfy the remaining `# Panics` requirements",
+    "reason": "recorded `// PANIC:` justification for call to `ambiguous_markers::unnamed_nested_panic_contract` with a documented `# Panics` obligation does not satisfy the remaining `# Panics` requirements",
     "requirements": [
       "the divisor must not be zero.",
       "the numerator must be within the supported range.",
@@ -212,7 +229,10 @@ expression: "report[\"findings\"]"
     ]
   },
   {
-    "kind": "documented-panic",
+    "effect": "panic",
+    "finding": "documented-obligation",
+    "function": "ambiguous_markers::unnamed_panic_layouts",
+    "kind": "effect",
     "level": "warn",
     "missing-requirements": [
       "the numerator must be within the supported range."
@@ -221,7 +241,7 @@ expression: "report[\"findings\"]"
       "crate": "ambiguous_markers",
       "scope": "workspace"
     },
-    "reason": "recorded `// PANIC:` justification for call to `ambiguous_markers::unnamed_nested_panic_contract` with a `# Panics` obligation does not satisfy the remaining `# Panics` requirements",
+    "reason": "recorded `// PANIC:` justification for call to `ambiguous_markers::unnamed_nested_panic_contract` with a documented `# Panics` obligation does not satisfy the remaining `# Panics` requirements",
     "requirements": [
       "the divisor must not be zero.",
       "the numerator must be within the supported range.",
@@ -240,8 +260,10 @@ expression: "report[\"findings\"]"
     ]
   },
   {
+    "effect": "safety",
+    "finding": "documented-obligation",
     "function": "ambiguous_markers::unnamed_safety_layouts",
-    "kind": "unsafe-call-missing-requirements",
+    "kind": "effect",
     "level": "warn",
     "missing-requirements": [
       "the caller must own the allocation.",
@@ -253,7 +275,7 @@ expression: "report[\"findings\"]"
       "crate": "ambiguous_markers",
       "scope": "workspace"
     },
-    "reason": "recorded `// SAFETY:` justification for unsafe call to `ambiguous_markers::unnamed_nested_safety_contract` does not satisfy the remaining `# Safety` requirements",
+    "reason": "recorded `// SAFETY:` justification for call to `ambiguous_markers::unnamed_nested_safety_contract` with a documented `# Safety` obligation does not satisfy the remaining `# Safety` requirements",
     "requirements": [
       "the caller must own the allocation.",
       "every byte must be initialized.",
@@ -273,8 +295,10 @@ expression: "report[\"findings\"]"
     ]
   },
   {
+    "effect": "safety",
+    "finding": "documented-obligation",
     "function": "ambiguous_markers::unnamed_safety_layouts",
-    "kind": "unsafe-call-missing-requirements",
+    "kind": "effect",
     "level": "warn",
     "missing-requirements": [
       "every byte must be initialized.",
@@ -284,7 +308,7 @@ expression: "report[\"findings\"]"
       "crate": "ambiguous_markers",
       "scope": "workspace"
     },
-    "reason": "recorded `// SAFETY:` justification for unsafe call to `ambiguous_markers::unnamed_nested_safety_contract` does not satisfy the remaining `# Safety` requirements",
+    "reason": "recorded `// SAFETY:` justification for call to `ambiguous_markers::unnamed_nested_safety_contract` with a documented `# Safety` obligation does not satisfy the remaining `# Safety` requirements",
     "requirements": [
       "the caller must own the allocation.",
       "every byte must be initialized.",

@@ -4,8 +4,10 @@ expression: "report[\"findings\"]"
 ---
 [
   {
+    "effect": "safety",
+    "finding": "documented-obligation",
     "function": "safety_contract_requirements::trusted_obligation_exposes_missing_requirement",
-    "kind": "safety-obligation-missing-requirements",
+    "kind": "effect",
     "level": "warn",
     "missing-requirements": [
       "valid_ptr: pointer must be non-null."
@@ -14,7 +16,7 @@ expression: "report[\"findings\"]"
       "crate": "safety_contract_requirements",
       "scope": "workspace"
     },
-    "reason": "call to `safety_contract_requirements::documented_obligation` with a `# Safety` obligation has no recorded `// SAFETY:` justification",
+    "reason": "call to `safety_contract_requirements::documented_obligation` with a documented `# Safety` obligation has no recorded `// SAFETY:` justification",
     "requirements": [
       "valid_ptr: pointer must be non-null."
     ],
@@ -31,14 +33,17 @@ expression: "report[\"findings\"]"
     ]
   },
   {
+    "effect": "safety",
+    "finding": "concrete-invocation",
     "function": "safety_contract_requirements::unsafe_call_exposes_missing_justification",
-    "kind": "unsafe-call-missing-justification",
+    "kind": "effect",
     "level": "warn",
+    "operation": "unsafe-call",
     "owner": {
       "crate": "safety_contract_requirements",
       "scope": "workspace"
     },
-    "reason": "unsafe call to `safety_contract_requirements::uncontracted_operation` has no recorded `// SAFETY:` justification",
+    "reason": "safety invocation to `safety_contract_requirements::uncontracted_operation` has no recorded `// SAFETY:` justification",
     "root": "safety_contract_requirements::unsafe_call_exposes_missing_justification",
     "root-kind": "concrete",
     "root-span": "src/lib.rs:36:1: 36:51",
@@ -52,8 +57,10 @@ expression: "report[\"findings\"]"
     ]
   },
   {
+    "effect": "safety",
+    "finding": "documented-obligation",
     "function": "safety_contract_requirements::unsafe_call_exposes_missing_requirement",
-    "kind": "unsafe-call-missing-requirements",
+    "kind": "effect",
     "level": "warn",
     "missing-requirements": [
       "initialized: pointer must reference initialized memory."
@@ -62,7 +69,7 @@ expression: "report[\"findings\"]"
       "crate": "safety_contract_requirements",
       "scope": "workspace"
     },
-    "reason": "recorded `// SAFETY:` justification for unsafe call to `safety_contract_requirements::read_byte` does not satisfy the remaining `# Safety` requirements",
+    "reason": "recorded `// SAFETY:` justification for call to `safety_contract_requirements::read_byte` with a documented `# Safety` obligation does not satisfy the remaining `# Safety` requirements",
     "requirements": [
       "valid_ptr: pointer must be non-null.",
       "initialized: pointer must reference initialized memory."

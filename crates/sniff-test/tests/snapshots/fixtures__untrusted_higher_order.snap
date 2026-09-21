@@ -4,56 +4,58 @@ expression: "report[\"findings\"]"
 ---
 [
   {
-    "kind": "panic-invocation",
-    "level": "deny",
+    "effect": "panic",
+    "finding": "documented-obligation",
+    "function": "app::higher_order_closure_effect",
+    "kind": "effect",
+    "level": "warn",
     "owner": {
       "crate": "app",
       "scope": "workspace"
     },
-    "reason": "panic invocation to `core::panicking::panic_fmt` has no recorded `// PANIC:` justification",
+    "reason": "call to `trusted::consume_maybe_untrusted_closure` with a documented `# Panics` obligation has no recorded `// PANIC:` justification",
     "root": "app::higher_order_closure_effect",
     "root-kind": "concrete",
     "root-span": "src/lib.rs:12:1: 12:37",
     "source-evidence": {
       "status": "verified-absent"
     },
-    "span": "src/lib.rs:13:21: 13:35",
-    "target": "core::panicking::panic_fmt",
+    "span": "src/lib.rs:14:5: 14:42",
+    "target": "trusted::consume_maybe_untrusted_closure",
     "trace": [
-      "src/lib.rs:14:5: 14:42: app::higher_order_closure_effect --direct-call-> trusted::consume_maybe_untrusted_closure",
-      "[FIXTURE]/trusted/src/lib.rs:3:5: 3:14: trusted::consume_maybe_untrusted_closure --direct-call-> app::higher_order_closure_effect::{closure#0}",
-      "src/lib.rs:13:21: 13:35: app::higher_order_closure_effect::{closure#0} --macro-expansion-> macro std::macros::panic",
-      "src/lib.rs:13:21: 13:35: macro std::macros::panic --macro-expansion-> macro core::panic::panic_2021",
-      "[SYSROOT]/lib/rustlib/src/rust/library/core/src/panic.rs:62:9: 62:73: macro core::panic::panic_2021 --direct-call-> core::panicking::panic_fmt"
+      "src/lib.rs:14:5: 14:42: app::higher_order_closure_effect --direct-call-> trusted::consume_maybe_untrusted_closure"
     ]
   },
   {
-    "kind": "panic-invocation",
-    "level": "deny",
+    "effect": "panic",
+    "finding": "documented-obligation",
+    "function": "app::higher_order_function_impl_effect",
+    "kind": "effect",
+    "level": "warn",
     "owner": {
       "crate": "app",
       "scope": "workspace"
     },
-    "reason": "panic invocation to `core::panicking::panic_fmt` has no recorded `// PANIC:` justification",
+    "reason": "call to `trusted::BlanketFromUntrustedParty::boom` with a documented `# Panics` obligation has no recorded `// PANIC:` justification",
     "root": "app::higher_order_function_impl_effect",
     "root-kind": "concrete",
     "root-span": "src/lib.rs:17:1: 17:43",
     "source-evidence": {
       "status": "verified-absent"
     },
-    "span": "src/lib.rs:8:9: 8:23",
-    "target": "core::panicking::panic_fmt",
+    "span": "src/lib.rs:19:5: 19:42",
+    "target": "trusted::BlanketFromUntrustedParty::boom",
     "trace": [
-      "src/lib.rs:19:5: 19:42: app::higher_order_function_impl_effect --direct-call-> trusted::BlanketFromUntrustedParty::boom",
-      "[FIXTURE]/trusted/src/lib.rs:9:9: 9:36: trusted::BlanketFromUntrustedParty::boom --direct-call-> <app::Bar as trusted::BlanketFromUntrustedParty>::maybe_untrusted_impl",
-      "src/lib.rs:8:9: 8:23: <app::Bar as trusted::BlanketFromUntrustedParty>::maybe_untrusted_impl --macro-expansion-> macro std::macros::panic",
-      "src/lib.rs:8:9: 8:23: macro std::macros::panic --macro-expansion-> macro core::panic::panic_2021",
-      "[SYSROOT]/lib/rustlib/src/rust/library/core/src/panic.rs:62:9: 62:73: macro core::panic::panic_2021 --direct-call-> core::panicking::panic_fmt"
+      "src/lib.rs:19:5: 19:42: app::higher_order_function_impl_effect --direct-call-> trusted::BlanketFromUntrustedParty::boom"
     ]
   },
   {
-    "kind": "panic-invocation",
+    "effect": "panic",
+    "finding": "concrete-invocation",
+    "function": "app::option_and_then_callback_effect::{closure#0}",
+    "kind": "effect",
     "level": "deny",
+    "operation": "configured-invocation",
     "owner": {
       "crate": "app",
       "scope": "workspace"
@@ -76,8 +78,12 @@ expression: "report[\"findings\"]"
     ]
   },
   {
-    "kind": "panic-invocation",
+    "effect": "panic",
+    "finding": "concrete-invocation",
+    "function": "app::option_map_callback_effect::{closure#0}",
+    "kind": "effect",
     "level": "deny",
+    "operation": "configured-invocation",
     "owner": {
       "crate": "app",
       "scope": "workspace"

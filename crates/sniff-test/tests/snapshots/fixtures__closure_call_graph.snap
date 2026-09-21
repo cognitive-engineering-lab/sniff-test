@@ -4,8 +4,12 @@ expression: "report[\"findings\"]"
 ---
 [
   {
-    "kind": "panic-invocation",
+    "effect": "panic",
+    "finding": "concrete-invocation",
+    "function": "closure_call_graph::basic_closure_panics::{closure#0}",
+    "kind": "effect",
     "level": "deny",
+    "operation": "configured-invocation",
     "owner": {
       "crate": "closure_call_graph",
       "scope": "workspace"

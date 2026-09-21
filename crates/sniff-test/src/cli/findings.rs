@@ -4,11 +4,10 @@ use std::collections::BTreeSet;
 use std::path::Path;
 
 use crate::artifact::{
-    CompilerAssertKind, MarkerEvidenceState, SafetyOpKind, SourceFileFact, SourceRangeFact,
-    UnverifiedMarkerProbeReason,
+    MarkerEvidenceState, SourceFileFact, SourceRangeFact, UnverifiedMarkerProbeReason,
 };
 use crate::config::{LintLevel, ReportRootSet, SniffTestConfig};
-use crate::report_model::UnresolvedCallSite;
+use crate::report_model::{EffectFindingClass, UnresolvedCallSite};
 use crate::report_roots::{MissingReportRoot, ReportRootKind};
 use rustc_middle::ty::TyCtxt;
 use rustc_span::Span;
@@ -511,11 +510,11 @@ fn top_level_path_segments(path: &str) -> Vec<&str> {
 fn is_source_finding(kind: &FindingKind) -> bool {
     !matches!(
         kind,
-        FindingKind::PanicAnalysisIncomplete
-            | FindingKind::SafetyAnalysisIncomplete
-            | FindingKind::UnresolvedPanicCallTarget
-            | FindingKind::UnresolvedSafetyCallTarget
-            | FindingKind::EmptyReportRoots
+        FindingKind::Effect {
+            finding: EffectFindingClass::AnalysisIncomplete
+                | EffectFindingClass::UnresolvedCallTarget,
+            ..
+        } | FindingKind::EmptyReportRoots
             | FindingKind::MissingReportRoot
     )
 }
@@ -571,23 +570,6 @@ fn compare_findings(left: &Finding, right: &Finding) -> std::cmp::Ordering {
 
 fn finding_domain_order(kind: &FindingKind) -> u8 {
     match kind {
-        FindingKind::CompilerAssert { .. }
-        | FindingKind::PanicInvocation
-        | FindingKind::DocumentedPanic
-        | FindingKind::UnresolvedPanicCallTarget
-        | FindingKind::AmbiguousPanicMarker
-        | FindingKind::AmbiguousPanicRequirement
-        | FindingKind::PanicAnalysisIncomplete => 0,
-        FindingKind::AmbiguousSafetyMarker
-        | FindingKind::AmbiguousSafetyRequirement
-        | FindingKind::SafetyAnalysisIncomplete
-        | FindingKind::MissingSafetyDocs
-        | FindingKind::UnresolvedSafetyCallTarget
-        | FindingKind::UnsafeCallMissingJustification
-        | FindingKind::UnsafeCallMissingRequirements
-        | FindingKind::UnsafeOpMissingJustification { .. }
-        | FindingKind::SafetyObligationMissingJustification
-        | FindingKind::SafetyObligationMissingRequirements => 1,
         FindingKind::Effect { .. } => 2,
         FindingKind::EmptyReportRoots | FindingKind::MissingReportRoot => 3,
     }
@@ -619,17 +601,6 @@ pub(crate) enum DiagnosticMessage {
     SpanAlternativeHelp(Span, String),
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize)]
-#[serde(rename_all = "kebab-case")]
-pub(crate) enum GenericEffectFindingKind {
-    ConcreteOperation,
-    ConcreteInvocation,
-    DocumentedObligation,
-    AmbiguousMarker,
-    AmbiguousRequirement,
-    AnalysisIncomplete,
-}
-
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize)]
 #[serde(
     rename_all = "kebab-case",
@@ -639,33 +610,14 @@ pub(crate) enum GenericEffectFindingKind {
 pub(crate) enum FindingKind {
     Effect {
         effect: String,
-        finding: GenericEffectFindingKind,
+        finding: EffectFindingClass,
         #[serde(skip_serializing_if = "Option::is_none")]
         operation: Option<String>,
+        #[serde(skip)]
+        missing_requirements: bool,
     },
-    CompilerAssert {
-        compiler_assert_kind: CompilerAssertKind,
-    },
-    PanicInvocation,
-    DocumentedPanic,
-    UnresolvedPanicCallTarget,
-    AmbiguousPanicMarker,
-    AmbiguousSafetyMarker,
-    AmbiguousPanicRequirement,
-    AmbiguousSafetyRequirement,
-    PanicAnalysisIncomplete,
-    SafetyAnalysisIncomplete,
     EmptyReportRoots,
     MissingReportRoot,
-    MissingSafetyDocs,
-    UnresolvedSafetyCallTarget,
-    UnsafeCallMissingJustification,
-    UnsafeCallMissingRequirements,
-    UnsafeOpMissingJustification {
-        safety_op_kind: SafetyOpKind,
-    },
-    SafetyObligationMissingJustification,
-    SafetyObligationMissingRequirements,
 }
 
 impl FindingKind {
@@ -675,198 +627,85 @@ impl FindingKind {
                 effect,
                 finding,
                 operation,
+                ..
             } => {
                 let lint = operation.clone().unwrap_or_else(|| match finding {
-                    GenericEffectFindingKind::ConcreteOperation => String::from("operation"),
-                    GenericEffectFindingKind::ConcreteInvocation => String::from("invocation"),
-                    GenericEffectFindingKind::DocumentedObligation => {
+                    EffectFindingClass::ConcreteOperation => String::from("operation"),
+                    EffectFindingClass::ConcreteInvocation => String::from("invocation"),
+                    EffectFindingClass::DocumentedObligation => {
                         String::from("documented-obligation")
                     }
-                    GenericEffectFindingKind::AmbiguousMarker => String::from("ambiguous-marker"),
-                    GenericEffectFindingKind::AmbiguousRequirement => {
+                    EffectFindingClass::UnresolvedCallTarget => {
+                        String::from("unresolved-call-target")
+                    }
+                    EffectFindingClass::AmbiguousMarker => String::from("ambiguous-marker"),
+                    EffectFindingClass::AmbiguousRequirement => {
                         String::from("ambiguous-requirement")
                     }
-                    GenericEffectFindingKind::AnalysisIncomplete => {
-                        String::from("analysis-incomplete")
-                    }
+                    EffectFindingClass::AnalysisIncomplete => String::from("analysis-incomplete"),
                 });
                 (effect.as_str(), lint)
             }
-            Self::CompilerAssert {
-                compiler_assert_kind,
-            } => (
-                "panics",
-                format!(
-                    "compiler-assert-{}",
-                    compiler_assert_lint_suffix(*compiler_assert_kind)
-                ),
-            ),
-            Self::PanicInvocation => ("panics", String::from("panic-invocation")),
-            Self::DocumentedPanic => ("panics", String::from("documented-panic")),
-            Self::UnresolvedPanicCallTarget => ("panics", String::from("unresolved-call-target")),
-            Self::AmbiguousPanicMarker => ("analysis", String::from("ambiguous-panic-marker")),
-            Self::AmbiguousSafetyMarker => ("analysis", String::from("ambiguous-safety-marker")),
-            Self::AmbiguousPanicRequirement => {
-                ("analysis", String::from("ambiguous-panic-requirement"))
-            }
-            Self::AmbiguousSafetyRequirement => {
-                ("analysis", String::from("ambiguous-safety-requirement"))
-            }
-            Self::PanicAnalysisIncomplete => {
-                ("analysis", String::from("panic-analysis-incomplete"))
-            }
-            Self::SafetyAnalysisIncomplete => {
-                ("analysis", String::from("safety-analysis-incomplete"))
-            }
             Self::EmptyReportRoots => ("analysis", String::from("empty-report-roots")),
             Self::MissingReportRoot => ("analysis", String::from("missing-report-root")),
-            Self::MissingSafetyDocs => ("safety", String::from("missing-safety-docs")),
-            Self::UnresolvedSafetyCallTarget => ("safety", String::from("unresolved-call-target")),
-            Self::UnsafeCallMissingJustification => {
-                ("safety", String::from("unsafe-call-missing-justification"))
-            }
-            Self::UnsafeCallMissingRequirements => {
-                ("safety", String::from("unsafe-call-missing-requirements"))
-            }
-            Self::UnsafeOpMissingJustification { safety_op_kind } => (
-                "safety",
-                format!(
-                    "{}-missing-justification",
-                    safety_op_lint_suffix(*safety_op_kind)
-                ),
-            ),
-            Self::SafetyObligationMissingJustification => (
-                "safety",
-                String::from("safety-obligation-missing-justification"),
-            ),
-            Self::SafetyObligationMissingRequirements => (
-                "safety",
-                String::from("safety-obligation-missing-requirements"),
-            ),
         };
         format!("sniff-test::{domain}::{lint}")
     }
 
     fn lint_level(&self, config: &SniffTestConfig) -> LintLevel {
         match self {
+            Self::Effect {
+                effect, finding, ..
+            } if effect == "panic" => match finding {
+                EffectFindingClass::ConcreteOperation => config.panics.lints.compiler_assert,
+                EffectFindingClass::ConcreteInvocation => config.panics.lints.panic_invocation,
+                EffectFindingClass::DocumentedObligation => config.panics.lints.documented_panic,
+                EffectFindingClass::UnresolvedCallTarget => {
+                    config.panics.lints.unresolved_call_target
+                }
+                EffectFindingClass::AmbiguousMarker => config.analysis.lints.ambiguous_panic_marker,
+                EffectFindingClass::AmbiguousRequirement => {
+                    config.analysis.lints.ambiguous_panic_requirement
+                }
+                EffectFindingClass::AnalysisIncomplete => {
+                    config.analysis.lints.panic_analysis_incomplete
+                }
+            },
+            Self::Effect {
+                effect,
+                finding,
+                missing_requirements,
+                ..
+            } if effect == "safety" => match finding {
+                EffectFindingClass::ConcreteOperation => {
+                    config.safety.lints.unsafe_op_missing_justification
+                }
+                EffectFindingClass::ConcreteInvocation => {
+                    config.safety.lints.unsafe_call_missing_justification
+                }
+                EffectFindingClass::DocumentedObligation if *missing_requirements => {
+                    config.safety.lints.safety_obligation_missing_requirements
+                }
+                EffectFindingClass::DocumentedObligation => {
+                    config.safety.lints.safety_obligation_missing_justification
+                }
+                EffectFindingClass::UnresolvedCallTarget => {
+                    config.safety.lints.unresolved_call_target
+                }
+                EffectFindingClass::AmbiguousMarker => {
+                    config.analysis.lints.ambiguous_safety_marker
+                }
+                EffectFindingClass::AmbiguousRequirement => {
+                    config.analysis.lints.ambiguous_safety_requirement
+                }
+                EffectFindingClass::AnalysisIncomplete => {
+                    config.analysis.lints.safety_analysis_incomplete
+                }
+            },
             Self::Effect { .. } => LintLevel::Warn,
-            Self::CompilerAssert {
-                compiler_assert_kind,
-            } => compiler_assert_lint_override(*compiler_assert_kind, config)
-                .unwrap_or(config.panics.lints.compiler_assert),
-            Self::PanicInvocation => config.panics.lints.panic_invocation,
-            Self::DocumentedPanic => config.panics.lints.documented_panic,
-            Self::UnresolvedPanicCallTarget => config.panics.lints.unresolved_call_target,
-            Self::AmbiguousPanicMarker => config.analysis.lints.ambiguous_panic_marker,
-            Self::AmbiguousSafetyMarker => config.analysis.lints.ambiguous_safety_marker,
-            Self::AmbiguousPanicRequirement => config.analysis.lints.ambiguous_panic_requirement,
-            Self::AmbiguousSafetyRequirement => config.analysis.lints.ambiguous_safety_requirement,
-            Self::PanicAnalysisIncomplete => config.analysis.lints.panic_analysis_incomplete,
-            Self::SafetyAnalysisIncomplete => config.analysis.lints.safety_analysis_incomplete,
             Self::EmptyReportRoots => config.analysis.lints.empty_report_roots,
             Self::MissingReportRoot => config.analysis.lints.missing_report_root,
-            Self::MissingSafetyDocs => config.safety.lints.missing_safety_docs,
-            Self::UnresolvedSafetyCallTarget => config.safety.lints.unresolved_call_target,
-            Self::UnsafeCallMissingJustification => {
-                config.safety.lints.unsafe_call_missing_justification
-            }
-            Self::UnsafeCallMissingRequirements => {
-                config.safety.lints.unsafe_call_missing_requirements
-            }
-            Self::UnsafeOpMissingJustification { safety_op_kind } => {
-                safety_op_lint_override(*safety_op_kind, config)
-                    .unwrap_or(config.safety.lints.unsafe_op_missing_justification)
-            }
-            Self::SafetyObligationMissingJustification => {
-                config.safety.lints.safety_obligation_missing_justification
-            }
-            Self::SafetyObligationMissingRequirements => {
-                config.safety.lints.safety_obligation_missing_requirements
-            }
         }
-    }
-}
-
-const fn compiler_assert_lint_suffix(kind: CompilerAssertKind) -> &'static str {
-    match kind {
-        CompilerAssertKind::BoundsCheck => "bounds-check",
-        CompilerAssertKind::Overflow => "overflow",
-        CompilerAssertKind::OverflowNegation => "overflow-negation",
-        CompilerAssertKind::DivisionByZero => "division-by-zero",
-        CompilerAssertKind::RemainderByZero => "remainder-by-zero",
-        CompilerAssertKind::ResumedAfterReturn => "resumed-after-return",
-        CompilerAssertKind::ResumedAfterPanic => "resumed-after-panic",
-        CompilerAssertKind::ResumedAfterDrop => "resumed-after-drop",
-        CompilerAssertKind::MisalignedPointerDereference => "misaligned-pointer-dereference",
-        CompilerAssertKind::NullPointerDereference => "null-pointer-dereference",
-        CompilerAssertKind::InvalidEnumConstruction => "invalid-enum-construction",
-    }
-}
-
-const fn safety_op_lint_suffix(kind: SafetyOpKind) -> &'static str {
-    match kind {
-        SafetyOpKind::DerefRawPointer => "raw-pointer-dereference",
-        SafetyOpKind::UseOfMutableStatic => "mutable-static-access",
-        SafetyOpKind::UseOfExternStatic => "extern-static-access",
-        SafetyOpKind::AccessToUnionField => "union-field-access",
-        SafetyOpKind::UseOfUnsafeField => "unsafe-field-access",
-        SafetyOpKind::InitializingLayoutConstrainedType => "layout-constrained-type-initialization",
-        SafetyOpKind::InitializingTypeWithUnsafeField => "unsafe-field-initialization",
-        SafetyOpKind::MutationOfLayoutConstrainedField => "layout-constrained-field-mutation",
-        SafetyOpKind::BorrowOfLayoutConstrainedField => "layout-constrained-field-borrow",
-        SafetyOpKind::InlineAssembly => "inline-assembly",
-        SafetyOpKind::UnsafeBinderCast => "unsafe-binder-cast",
-    }
-}
-
-fn compiler_assert_lint_override(
-    kind: CompilerAssertKind,
-    config: &SniffTestConfig,
-) -> Option<LintLevel> {
-    let lints = &config.panics.lints;
-    match kind {
-        CompilerAssertKind::BoundsCheck => lints.compiler_assert_bounds_check,
-        CompilerAssertKind::Overflow => lints.compiler_assert_overflow,
-        CompilerAssertKind::OverflowNegation => lints.compiler_assert_overflow_negation,
-        CompilerAssertKind::DivisionByZero => lints.compiler_assert_division_by_zero,
-        CompilerAssertKind::RemainderByZero => lints.compiler_assert_remainder_by_zero,
-        CompilerAssertKind::ResumedAfterReturn => lints.compiler_assert_resumed_after_return,
-        CompilerAssertKind::ResumedAfterPanic => lints.compiler_assert_resumed_after_panic,
-        CompilerAssertKind::ResumedAfterDrop => lints.compiler_assert_resumed_after_drop,
-        CompilerAssertKind::MisalignedPointerDereference => {
-            lints.compiler_assert_misaligned_pointer_dereference
-        }
-        CompilerAssertKind::NullPointerDereference => {
-            lints.compiler_assert_null_pointer_dereference
-        }
-        CompilerAssertKind::InvalidEnumConstruction => {
-            lints.compiler_assert_invalid_enum_construction
-        }
-    }
-}
-
-fn safety_op_lint_override(kind: SafetyOpKind, config: &SniffTestConfig) -> Option<LintLevel> {
-    let lints = &config.safety.lints;
-    match kind {
-        SafetyOpKind::DerefRawPointer => lints.raw_pointer_dereference_missing_justification,
-        SafetyOpKind::UseOfMutableStatic => lints.mutable_static_access_missing_justification,
-        SafetyOpKind::UseOfExternStatic => lints.extern_static_access_missing_justification,
-        SafetyOpKind::AccessToUnionField => lints.union_field_access_missing_justification,
-        SafetyOpKind::UseOfUnsafeField => lints.unsafe_field_access_missing_justification,
-        SafetyOpKind::InitializingLayoutConstrainedType => {
-            lints.layout_constrained_type_initialization_missing_justification
-        }
-        SafetyOpKind::InitializingTypeWithUnsafeField => {
-            lints.unsafe_field_initialization_missing_justification
-        }
-        SafetyOpKind::MutationOfLayoutConstrainedField => {
-            lints.layout_constrained_field_mutation_missing_justification
-        }
-        SafetyOpKind::BorrowOfLayoutConstrainedField => {
-            lints.layout_constrained_field_borrow_missing_justification
-        }
-        SafetyOpKind::InlineAssembly => lints.inline_assembly_missing_justification,
-        SafetyOpKind::UnsafeBinderCast => lints.unsafe_binder_cast_missing_justification,
     }
 }
 
@@ -908,13 +747,10 @@ mod tests {
         aggregate_human_findings, compact_human_diagnostic_paths, resolve_findings,
         shortest_distinguishing_root_labels, take_full_stack_trace_hint,
     };
-    use crate::artifact::{
-        CompilerAssertKind, SafetyOpKind, SourceFileFact, SourceFileId, SourceRangeFact,
-        UnverifiedMarkerProbeReason,
-    };
+    use crate::artifact::{SourceFileFact, SourceFileId, SourceRangeFact};
     use crate::config::{LintLevel, SniffTestConfig};
     use crate::report_model::{
-        UnresolvedCallCoverage, UnresolvedCallMechanism, UnresolvedCallSite,
+        EffectFindingClass, UnresolvedCallCoverage, UnresolvedCallMechanism, UnresolvedCallSite,
     };
     use rustc_span::{BytePos, Span};
     use std::collections::BTreeSet;
@@ -932,6 +768,19 @@ mod tests {
         )
     }
 
+    fn effect(
+        effect: &str,
+        finding: EffectFindingClass,
+        missing_requirements: bool,
+    ) -> FindingKind {
+        FindingKind::Effect {
+            effect: effect.to_owned(),
+            finding,
+            operation: None,
+            missing_requirements,
+        }
+    }
+
     #[test]
     fn resolves_policy_and_filters_allowed_findings_once() {
         let mut config = SniffTestConfig::default();
@@ -941,11 +790,27 @@ mod tests {
 
         let resolved = resolve_findings(
             vec![
-                finding(FindingKind::PanicInvocation),
-                finding(FindingKind::MissingSafetyDocs),
+                finding(effect(
+                    "panic",
+                    EffectFindingClass::ConcreteInvocation,
+                    false,
+                )),
+                finding(effect(
+                    "safety",
+                    EffectFindingClass::DocumentedObligation,
+                    false,
+                )),
                 finding(FindingKind::EmptyReportRoots),
-                finding(FindingKind::UnresolvedPanicCallTarget),
-                finding(FindingKind::UnresolvedSafetyCallTarget),
+                finding(effect(
+                    "panic",
+                    EffectFindingClass::UnresolvedCallTarget,
+                    false,
+                )),
+                finding(effect(
+                    "safety",
+                    EffectFindingClass::UnresolvedCallTarget,
+                    false,
+                )),
             ],
             &config,
         );
@@ -959,7 +824,11 @@ mod tests {
     fn safety_contracts_use_ordinary_obligation_policy() {
         let mut config = SniffTestConfig::default();
         config.safety.lints.safety_obligation_missing_requirements = LintLevel::Deny;
-        let obligation = finding(FindingKind::SafetyObligationMissingRequirements);
+        let obligation = finding(effect(
+            "safety",
+            EffectFindingClass::DocumentedObligation,
+            true,
+        ));
 
         let resolved = resolve_findings(vec![obligation], &config);
         let [remaining] = resolved.as_slice() else {
@@ -967,7 +836,7 @@ mod tests {
         };
         assert_eq!(
             remaining.finding.kind,
-            FindingKind::SafetyObligationMissingRequirements
+            effect("safety", EffectFindingClass::DocumentedObligation, true)
         );
         assert_eq!(remaining.level, LintLevel::Deny);
     }
@@ -980,8 +849,16 @@ mod tests {
 
         let resolved = resolve_findings(
             vec![
-                finding(FindingKind::PanicAnalysisIncomplete),
-                finding(FindingKind::SafetyAnalysisIncomplete),
+                finding(effect(
+                    "panic",
+                    EffectFindingClass::AnalysisIncomplete,
+                    false,
+                )),
+                finding(effect(
+                    "safety",
+                    EffectFindingClass::AnalysisIncomplete,
+                    false,
+                )),
             ],
             &config,
         );
@@ -990,86 +867,27 @@ mod tests {
         assert_eq!(resolved[0].level, LintLevel::Warn);
         assert_eq!(
             resolved[0].finding.kind,
-            FindingKind::PanicAnalysisIncomplete
+            effect("panic", EffectFindingClass::AnalysisIncomplete, false)
         );
     }
 
     #[test]
-    fn findings_serialize_their_public_semantic_fields() {
-        let mut compiler_assert = finding(FindingKind::CompilerAssert {
-            compiler_assert_kind: CompilerAssertKind::DivisionByZero,
-        });
-        compiler_assert.owner = Some(FindingOwner {
-            scope: OwnerScope::Dependency,
-            crate_name: Some(String::from("example-dependency")),
-        });
-        compiler_assert.source_evidence = Some(SourceEvidence::Unverified {
-            reason: UnverifiedMarkerProbeReason::SourceUnavailable,
-        });
-        let assert = serde_json::to_value(compiler_assert).expect("serialize compiler assert");
-        assert_eq!(
-            assert,
-            serde_json::json!({
-                "kind": "compiler-assert",
-                "compiler-assert-kind": "division-by-zero",
-                "owner": {
-                    "scope": "dependency",
-                    "crate": "example-dependency",
-                },
-                "source-evidence": {
-                    "status": "unverified",
-                    "reason": "source-unavailable",
-                },
-                "reason": "test finding",
-            })
-        );
-
-        let mut unknown_owner = finding(FindingKind::PanicInvocation);
-        unknown_owner.owner = Some(FindingOwner {
-            scope: OwnerScope::Unknown,
-            crate_name: None,
-        });
-        let unknown_owner =
-            serde_json::to_value(unknown_owner).expect("serialize unknown source owner");
-        assert_eq!(
-            unknown_owner["owner"],
-            serde_json::json!({ "scope": "unknown" })
-        );
-
-        let safety = serde_json::to_value(finding(FindingKind::UnsafeOpMissingJustification {
-            safety_op_kind: SafetyOpKind::DerefRawPointer,
-        }))
-        .expect("serialize safety operation");
-        assert_eq!(
-            safety,
-            serde_json::json!({
-                "kind": "unsafe-op-missing-justification",
-                "safety-op-kind": "raw-pointer-dereference",
-                "reason": "test finding",
-            })
-        );
-
-        for (kind, expected) in [
-            (
-                FindingKind::UnresolvedPanicCallTarget,
-                "unresolved-panic-call-target",
-            ),
-            (
-                FindingKind::UnresolvedSafetyCallTarget,
-                "unresolved-safety-call-target",
-            ),
-        ] {
-            let serialized = serde_json::to_value(finding(kind)).expect("serialize target finding");
-            assert_eq!(serialized["kind"], expected);
-        }
-
-        let mut unresolved = finding(FindingKind::UnresolvedPanicCallTarget);
+    fn findings_serialize_generic_effect_fields() {
+        let mut unresolved = finding(effect(
+            "panic",
+            EffectFindingClass::UnresolvedCallTarget,
+            false,
+        ));
         unresolved.unresolved_call = Some(UnresolvedCallSite {
             coverage: UnresolvedCallCoverage::Partial,
             mechanism: UnresolvedCallMechanism::DynamicDispatch,
         });
+        let serialized = serde_json::to_value(unresolved).expect("serialize unresolved call");
+        assert_eq!(serialized["kind"], "effect");
+        assert_eq!(serialized["effect"], "panic");
+        assert_eq!(serialized["finding"], "unresolved-call-target");
         assert_eq!(
-            serde_json::to_value(unresolved).expect("serialize unresolved call")["unresolved-call"],
+            serialized["unresolved-call"],
             serde_json::json!({
                 "coverage": "partial",
                 "mechanism": "dynamic-dispatch",
@@ -1078,41 +896,11 @@ mod tests {
     }
 
     #[test]
-    fn finding_kinds_expose_exact_domain_qualified_lint_codes() {
+    fn finding_kinds_expose_generic_effect_lint_codes() {
         assert_eq!(
-            FindingKind::CompilerAssert {
-                compiler_assert_kind: CompilerAssertKind::DivisionByZero,
-            }
-            .lint_code(),
-            "sniff-test::panics::compiler-assert-division-by-zero"
+            effect("panic", EffectFindingClass::ConcreteInvocation, false).lint_code(),
+            "sniff-test::panic::invocation"
         );
-        assert_eq!(
-            FindingKind::UnsafeOpMissingJustification {
-                safety_op_kind: SafetyOpKind::DerefRawPointer,
-            }
-            .lint_code(),
-            "sniff-test::safety::raw-pointer-dereference-missing-justification"
-        );
-        assert_eq!(
-            FindingKind::UnresolvedSafetyCallTarget.lint_code(),
-            "sniff-test::safety::unresolved-call-target"
-        );
-    }
-
-    #[test]
-    fn exact_compiler_assert_override_wins_for_every_artifact() {
-        let mut config = SniffTestConfig::default();
-        config.panics.lints.compiler_assert = LintLevel::Allow;
-        config.panics.lints.compiler_assert_overflow = Some(LintLevel::Warn);
-
-        let resolved = resolve_findings(
-            vec![finding(FindingKind::CompilerAssert {
-                compiler_assert_kind: CompilerAssertKind::Overflow,
-            })],
-            &config,
-        );
-
-        assert_eq!(resolved[0].level, LintLevel::Warn);
     }
 
     #[test]
@@ -1134,10 +922,18 @@ mod tests {
             byte_start: 100,
             byte_end: 110,
         };
-        let documented = finding(FindingKind::DocumentedPanic)
-            .with_source_order(Some(&source), Some(&documented_range));
-        let invocation = finding(FindingKind::PanicInvocation)
-            .with_source_order(Some(&source), Some(&invocation_range));
+        let documented = finding(effect(
+            "panic",
+            EffectFindingClass::DocumentedObligation,
+            false,
+        ))
+        .with_source_order(Some(&source), Some(&documented_range));
+        let invocation = finding(effect(
+            "panic",
+            EffectFindingClass::ConcreteInvocation,
+            false,
+        ))
+        .with_source_order(Some(&source), Some(&invocation_range));
 
         let forward = serde_json::to_value(resolve_findings(
             vec![documented.clone(), invocation.clone()],
@@ -1148,8 +944,10 @@ mod tests {
             .expect("serialize findings");
 
         assert_eq!(forward, reverse);
-        assert_eq!(forward[0]["kind"], "documented-panic");
-        assert_eq!(forward[1]["kind"], "panic-invocation");
+        assert_eq!(forward[0]["kind"], "effect");
+        assert_eq!(forward[0]["finding"], "documented-obligation");
+        assert_eq!(forward[1]["kind"], "effect");
+        assert_eq!(forward[1]["finding"], "concrete-invocation");
     }
 
     #[test]
@@ -1169,8 +967,12 @@ mod tests {
         let first_root_span = Span::with_root_ctxt(BytePos(100), BytePos(120));
         let second_root_span = Span::with_root_ctxt(BytePos(130), BytePos(150));
         let at_root = |root: &str, root_span: Span, trace: &[&str]| {
-            let mut finding = finding(FindingKind::PanicInvocation)
-                .with_source_order(Some(&source), Some(&range));
+            let mut finding = finding(effect(
+                "panic",
+                EffectFindingClass::ConcreteInvocation,
+                false,
+            ))
+            .with_source_order(Some(&source), Some(&range));
             finding.root = Some(root.to_owned());
             finding.trace = trace.iter().map(|step| (*step).to_owned()).collect();
             finding.diagnostic.message = format!("representative for {root}");
@@ -1242,8 +1044,12 @@ mod tests {
         };
         let effect_span = Span::with_root_ctxt(BytePos(40), BytePos(50));
         let at_root = |root: &str, root_span: Span| {
-            let mut finding = finding(FindingKind::DocumentedPanic)
-                .with_source_order(Some(&source), Some(&range));
+            let mut finding = finding(effect(
+                "panic",
+                EffectFindingClass::DocumentedObligation,
+                false,
+            ))
+            .with_source_order(Some(&source), Some(&range));
             finding.owner = Some(FindingOwner {
                 scope: OwnerScope::Workspace,
                 crate_name: Some(String::from("sample")),
@@ -1311,8 +1117,12 @@ mod tests {
         };
         let effect_span = Span::with_root_ctxt(BytePos(40), BytePos(50));
         let at_root = |root: &str, local_span: Span, trace: &[&str]| {
-            let mut finding = finding(FindingKind::DocumentedPanic)
-                .with_source_order(Some(&source), Some(&range));
+            let mut finding = finding(effect(
+                "panic",
+                EffectFindingClass::DocumentedObligation,
+                false,
+            ))
+            .with_source_order(Some(&source), Some(&range));
             finding.owner = Some(FindingOwner {
                 scope: OwnerScope::Dependency,
                 crate_name: Some(String::from("dependency")),
@@ -1406,15 +1216,19 @@ mod tests {
         };
         let effect_span = Span::with_root_ctxt(BytePos(40), BytePos(50));
         let at_call = |call: u32, local_span: Span, label: &str| {
-            let mut finding = finding(FindingKind::DocumentedPanic)
-                .with_source_order(Some(&source), Some(&range))
-                .with_trace_order(vec![FindingTraceStepOrder::new(
-                    None,
-                    None,
-                    call,
-                    (0, 0),
-                    "sample::root",
-                )]);
+            let mut finding = finding(effect(
+                "panic",
+                EffectFindingClass::DocumentedObligation,
+                false,
+            ))
+            .with_source_order(Some(&source), Some(&range))
+            .with_trace_order(vec![FindingTraceStepOrder::new(
+                None,
+                None,
+                call,
+                (0, 0),
+                "sample::root",
+            )]);
             finding.owner = Some(FindingOwner {
                 scope: OwnerScope::Dependency,
                 crate_name: Some(String::from("dependency")),
@@ -1469,8 +1283,12 @@ mod tests {
         };
         let effect_span = Span::with_root_ctxt(BytePos(40), BytePos(50));
         let root_span = Span::with_root_ctxt(BytePos(100), BytePos(120));
-        let mut finding =
-            finding(FindingKind::PanicInvocation).with_source_order(Some(&source), Some(&range));
+        let mut finding = finding(effect(
+            "panic",
+            EffectFindingClass::ConcreteInvocation,
+            false,
+        ))
+        .with_source_order(Some(&source), Some(&range));
         finding.root = Some(String::from("sample::api"));
         finding.diagnostic.message =
             String::from("function `sample::api` has an undocumented panic path");
@@ -1534,8 +1352,12 @@ mod tests {
             byte_end: 50,
         };
         let root_span = Span::with_root_ctxt(BytePos(100), BytePos(120));
-        let mut finding =
-            finding(FindingKind::DocumentedPanic).with_source_order(Some(&source), Some(&range));
+        let mut finding = finding(effect(
+            "panic",
+            EffectFindingClass::DocumentedObligation,
+            false,
+        ))
+        .with_source_order(Some(&source), Some(&range));
         finding.owner = Some(FindingOwner {
             scope: OwnerScope::Workspace,
             crate_name: Some(String::from("sample")),
@@ -1583,8 +1405,12 @@ mod tests {
             byte_end: 50,
         };
         let root_span = Span::with_root_ctxt(BytePos(100), BytePos(120));
-        let mut finding =
-            finding(FindingKind::PanicInvocation).with_source_order(Some(&source), Some(&range));
+        let mut finding = finding(effect(
+            "panic",
+            EffectFindingClass::ConcreteInvocation,
+            false,
+        ))
+        .with_source_order(Some(&source), Some(&range));
         finding.root = Some(String::from("sample::api"));
         finding.diagnostic.span = Some(root_span);
         finding.effect_span = None;
@@ -1606,7 +1432,11 @@ mod tests {
 
     #[test]
     fn human_paths_use_callable_names_without_changing_serialized_paths() {
-        let mut finding = finding(FindingKind::DocumentedPanic);
+        let mut finding = finding(effect(
+            "panic",
+            EffectFindingClass::DocumentedObligation,
+            false,
+        ));
         let target = String::from(
             "<bitvec::slice::BitSlice<T, bitvec::order::Msb0> as bitvec::field::BitField>::load_be",
         );
@@ -1669,7 +1499,11 @@ mod tests {
             ["left::run", "right::run", "stop"]
         );
 
-        let mut finding = finding(FindingKind::PanicInvocation);
+        let mut finding = finding(effect(
+            "panic",
+            EffectFindingClass::ConcreteInvocation,
+            false,
+        ));
         finding.diagnostic.messages = vec![
             DiagnosticMessage::Note(String::from(
                 "reachable from `sample::left::run` to `panic_fmt`",
@@ -1690,7 +1524,11 @@ mod tests {
 
     #[test]
     fn full_trace_steps_keep_canonical_paths() {
-        let mut finding = finding(FindingKind::PanicInvocation);
+        let mut finding = finding(effect(
+            "panic",
+            EffectFindingClass::ConcreteInvocation,
+            false,
+        ));
         finding.root = Some(String::from("sample::api"));
         finding.target = Some(String::from("core::panicking::panic_fmt"));
         finding.trace = vec![String::from("canonical trace")];
@@ -1739,7 +1577,11 @@ mod tests {
             }
         };
         let resolved = [
-            at_root(FindingKind::PanicAnalysisIncomplete),
+            at_root(effect(
+                "panic",
+                EffectFindingClass::AnalysisIncomplete,
+                false,
+            )),
             at_root(FindingKind::EmptyReportRoots),
             at_root(FindingKind::MissingReportRoot),
         ];
@@ -1762,7 +1604,11 @@ mod tests {
                     message: String::from("test finding"),
                     messages,
                 },
-                ..finding(FindingKind::PanicInvocation)
+                ..finding(effect(
+                    "panic",
+                    EffectFindingClass::ConcreteInvocation,
+                    false,
+                ))
             },
         };
         let mut findings = [
@@ -1791,8 +1637,12 @@ mod tests {
         };
         let effect_span = Span::with_root_ctxt(BytePos(40), BytePos(50));
         let at_root = |root: &str, root_span: Span| {
-            let mut finding = finding(FindingKind::UnresolvedSafetyCallTarget)
-                .with_source_order(Some(&source), Some(&range));
+            let mut finding = finding(effect(
+                "safety",
+                EffectFindingClass::UnresolvedCallTarget,
+                false,
+            ))
+            .with_source_order(Some(&source), Some(&range));
             finding.root = Some(root.to_owned());
             finding.diagnostic.message = format!("coverage gap from `{root}`");
             finding.diagnostic.span = Some(root_span);
@@ -1831,13 +1681,25 @@ mod tests {
             byte_start: 40,
             byte_end: 50,
         };
-        let mut missing_first = finding(FindingKind::SafetyObligationMissingRequirements)
-            .with_source_order(Some(&source), Some(&range));
+        let mut missing_first = finding(effect(
+            "safety",
+            EffectFindingClass::DocumentedObligation,
+            true,
+        ))
+        .with_source_order(Some(&source), Some(&range));
         missing_first.missing_requirements = vec![String::from("initialized")];
-        let mut missing_second = finding(FindingKind::SafetyObligationMissingRequirements)
-            .with_source_order(Some(&source), Some(&range));
+        let mut missing_second = finding(effect(
+            "safety",
+            EffectFindingClass::DocumentedObligation,
+            true,
+        ))
+        .with_source_order(Some(&source), Some(&range));
         missing_second.missing_requirements = vec![String::from("exclusive")];
-        let incomplete = finding(FindingKind::SafetyAnalysisIncomplete);
+        let incomplete = finding(effect(
+            "safety",
+            EffectFindingClass::AnalysisIncomplete,
+            false,
+        ));
         let resolved = [
             missing_first,
             missing_second,
@@ -1867,8 +1729,12 @@ mod tests {
             byte_start: 40,
             byte_end: 50,
         };
-        let base =
-            finding(FindingKind::PanicInvocation).with_source_order(Some(&source), Some(&range));
+        let base = finding(effect(
+            "panic",
+            EffectFindingClass::ConcreteInvocation,
+            false,
+        ))
+        .with_source_order(Some(&source), Some(&range));
         let with = |scope, evidence| {
             let mut finding = base.clone();
             finding.owner = Some(FindingOwner {

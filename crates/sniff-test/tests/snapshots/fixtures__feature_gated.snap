@@ -4,8 +4,12 @@ expression: "report[\"findings\"]"
 ---
 [
   {
-    "kind": "panic-invocation",
+    "effect": "panic",
+    "finding": "concrete-invocation",
+    "function": "feature_gated::feature_root",
+    "kind": "effect",
     "level": "deny",
+    "operation": "configured-invocation",
     "owner": {
       "crate": "feature_gated",
       "scope": "workspace"

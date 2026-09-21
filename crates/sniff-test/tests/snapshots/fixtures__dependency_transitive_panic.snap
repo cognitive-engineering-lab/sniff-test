@@ -4,13 +4,16 @@ expression: "report[\"findings\"]"
 ---
 [
   {
-    "kind": "documented-panic",
+    "effect": "panic",
+    "finding": "documented-obligation",
+    "function": "dependency_transitive_panic_app::app",
+    "kind": "effect",
     "level": "warn",
     "owner": {
       "crate": "dependency_transitive_panic_app",
       "scope": "workspace"
     },
-    "reason": "call to `dependency_transitive_panic_middle::middle` with a `# Panics` obligation has no recorded `// PANIC:` justification",
+    "reason": "call to `dependency_transitive_panic_middle::middle` with a documented `# Panics` obligation has no recorded `// PANIC:` justification",
     "root": "dependency_transitive_panic_app::app",
     "root-kind": "concrete",
     "root-span": "src/lib.rs:1:1: 1:23",

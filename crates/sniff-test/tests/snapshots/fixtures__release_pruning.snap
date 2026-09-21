@@ -4,8 +4,12 @@ expression: "report[\"findings\"]"
 ---
 [
   {
-    "kind": "panic-invocation",
+    "effect": "panic",
+    "finding": "concrete-invocation",
+    "function": "release_pruning::checked_in_release",
+    "kind": "effect",
     "level": "deny",
+    "operation": "configured-invocation",
     "owner": {
       "crate": "release_pruning",
       "scope": "workspace"

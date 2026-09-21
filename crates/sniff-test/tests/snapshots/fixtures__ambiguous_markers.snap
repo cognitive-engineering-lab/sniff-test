@@ -4,13 +4,16 @@ expression: "report[\"findings\"]"
 ---
 [
   {
-    "kind": "ambiguous-panic-requirement",
+    "effect": "panic",
+    "finding": "ambiguous-requirement",
+    "function": "ambiguous_markers::duplicate_name_ratio",
+    "kind": "effect",
     "level": "deny",
     "owner": {
       "crate": "ambiguous_markers",
       "scope": "workspace"
     },
-    "reason": "`ambiguous_markers::duplicate_name_ratio` has 2 # Panics requirements named `nonzero`",
+    "reason": "`ambiguous_markers::duplicate_name_ratio` has multiple # Panics requirements named `nonzero`",
     "requirements": [
       "nonzero: denominator must not be zero.",
       "nonzero: total must be bounded by the caller."
@@ -25,7 +28,10 @@ expression: "report[\"findings\"]"
     ]
   },
   {
-    "kind": "ambiguous-panic-marker",
+    "effect": "panic",
+    "finding": "ambiguous-marker",
+    "function": "ambiguous_markers::marked_path_to_shared_sources",
+    "kind": "effect",
     "level": "deny",
     "owner": {
       "crate": "ambiguous_markers",
@@ -42,7 +48,10 @@ expression: "report[\"findings\"]"
     ]
   },
   {
-    "kind": "ambiguous-panic-marker",
+    "effect": "panic",
+    "finding": "ambiguous-marker",
+    "function": "ambiguous_markers::marker_covers_documented_call_and_sink",
+    "kind": "effect",
     "level": "deny",
     "owner": {
       "crate": "ambiguous_markers",
@@ -60,13 +69,16 @@ expression: "report[\"findings\"]"
     ]
   },
   {
-    "kind": "documented-panic",
+    "effect": "panic",
+    "finding": "documented-obligation",
+    "function": "ambiguous_markers::shared_block_marker",
+    "kind": "effect",
     "level": "warn",
     "owner": {
       "crate": "ambiguous_markers",
       "scope": "workspace"
     },
-    "reason": "call to `ambiguous_markers::ratio` with a `# Panics` obligation has no recorded `// PANIC:` justification",
+    "reason": "call to `ambiguous_markers::ratio` with a documented `# Panics` obligation has no recorded `// PANIC:` justification",
     "root": "ambiguous_markers::shared_block_marker",
     "root-kind": "concrete",
     "root-span": "src/lib.rs:8:1: 8:76",
@@ -80,13 +92,16 @@ expression: "report[\"findings\"]"
     ]
   },
   {
-    "kind": "documented-panic",
+    "effect": "panic",
+    "finding": "documented-obligation",
+    "function": "ambiguous_markers::shared_block_marker",
+    "kind": "effect",
     "level": "warn",
     "owner": {
       "crate": "ambiguous_markers",
       "scope": "workspace"
     },
-    "reason": "call to `ambiguous_markers::ratio` with a `# Panics` obligation has no recorded `// PANIC:` justification",
+    "reason": "call to `ambiguous_markers::ratio` with a documented `# Panics` obligation has no recorded `// PANIC:` justification",
     "root": "ambiguous_markers::shared_block_marker",
     "root-kind": "concrete",
     "root-span": "src/lib.rs:8:1: 8:76",
@@ -100,13 +115,16 @@ expression: "report[\"findings\"]"
     ]
   },
   {
-    "kind": "documented-panic",
+    "effect": "panic",
+    "finding": "documented-obligation",
+    "function": "ambiguous_markers::shared_documented_sources",
+    "kind": "effect",
     "level": "warn",
     "owner": {
       "crate": "ambiguous_markers",
       "scope": "workspace"
     },
-    "reason": "call to `ambiguous_markers::first_documented_source` with a `# Panics` obligation has no recorded `// PANIC:` justification",
+    "reason": "call to `ambiguous_markers::first_documented_source` with a documented `# Panics` obligation has no recorded `// PANIC:` justification",
     "root": "ambiguous_markers::unmarked_path_to_shared_sources",
     "root-kind": "concrete",
     "root-span": "src/lib.rs:76:1: 76:41",
@@ -121,13 +139,16 @@ expression: "report[\"findings\"]"
     ]
   },
   {
-    "kind": "documented-panic",
+    "effect": "panic",
+    "finding": "documented-obligation",
+    "function": "ambiguous_markers::shared_documented_sources",
+    "kind": "effect",
     "level": "warn",
     "owner": {
       "crate": "ambiguous_markers",
       "scope": "workspace"
     },
-    "reason": "call to `ambiguous_markers::second_documented_source` with a `# Panics` obligation has no recorded `// PANIC:` justification",
+    "reason": "call to `ambiguous_markers::second_documented_source` with a documented `# Panics` obligation has no recorded `// PANIC:` justification",
     "root": "ambiguous_markers::unmarked_path_to_shared_sources",
     "root-kind": "concrete",
     "root-span": "src/lib.rs:76:1: 76:41",

@@ -4,8 +4,10 @@ expression: "report[\"findings\"]"
 ---
 [
   {
+    "effect": "safety",
+    "finding": "ambiguous-requirement",
     "function": "ambiguous_safety::read_duplicate",
-    "kind": "ambiguous-safety-requirement",
+    "kind": "effect",
     "level": "deny",
     "owner": {
       "crate": "ambiguous_safety",

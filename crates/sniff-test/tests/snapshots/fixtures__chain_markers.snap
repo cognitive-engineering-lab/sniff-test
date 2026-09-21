@@ -4,13 +4,16 @@ expression: "report[\"findings\"]"
 ---
 [
   {
-    "kind": "documented-panic",
+    "effect": "panic",
+    "finding": "documented-obligation",
+    "function": "chain_markers::marked_and_unmarked_chain_links",
+    "kind": "effect",
     "level": "warn",
     "owner": {
       "crate": "chain_markers",
       "scope": "workspace"
     },
-    "reason": "call to `chain_markers::Widget::risky` with a `# Panics` obligation has no recorded `// PANIC:` justification",
+    "reason": "call to `chain_markers::Widget::risky` with a documented `# Panics` obligation has no recorded `// PANIC:` justification",
     "root": "chain_markers::marked_and_unmarked_chain_links",
     "root-kind": "concrete",
     "root-span": "src/lib.rs:17:1: 17:64",
@@ -24,7 +27,10 @@ expression: "report[\"findings\"]"
     ]
   },
   {
-    "kind": "ambiguous-panic-marker",
+    "effect": "panic",
+    "finding": "ambiguous-marker",
+    "function": "chain_markers::whole_statement_marker_is_ambiguous",
+    "kind": "effect",
     "level": "warn",
     "owner": {
       "crate": "chain_markers",

@@ -4,7 +4,10 @@ expression: "report[\"findings\"]"
 ---
 [
   {
-    "kind": "documented-panic",
+    "effect": "panic",
+    "finding": "documented-obligation",
+    "function": "contract_overrides::panic_override_missing_marker",
+    "kind": "effect",
     "level": "warn",
     "missing-requirements": [
       "flag: flag must be true."
@@ -13,7 +16,7 @@ expression: "report[\"findings\"]"
       "crate": "contract_overrides",
       "scope": "workspace"
     },
-    "reason": "call to `contract_overrides::panic_contract` with a `# Panics` obligation has no recorded `// PANIC:` justification",
+    "reason": "call to `contract_overrides::panic_contract` with a documented `# Panics` obligation has no recorded `// PANIC:` justification",
     "requirements": [
       "flag: flag must be true."
     ],
@@ -30,8 +33,10 @@ expression: "report[\"findings\"]"
     ]
   },
   {
+    "effect": "safety",
+    "finding": "documented-obligation",
     "function": "contract_overrides::safety_override_missing_requirement",
-    "kind": "unsafe-call-missing-requirements",
+    "kind": "effect",
     "level": "warn",
     "missing-requirements": [
       "initialized: pointer must reference initialized memory."
@@ -40,7 +45,7 @@ expression: "report[\"findings\"]"
       "crate": "contract_overrides",
       "scope": "workspace"
     },
-    "reason": "recorded `// SAFETY:` justification for unsafe call to `contract_overrides::synthetic_read` does not satisfy the remaining `# Safety` requirements",
+    "reason": "recorded `// SAFETY:` justification for call to `contract_overrides::synthetic_read` with a documented `# Safety` obligation does not satisfy the remaining `# Safety` requirements",
     "requirements": [
       "valid_ptr: pointer must be non-null.",
       "initialized: pointer must reference initialized memory."

@@ -4,13 +4,16 @@ expression: "report[\"findings\"]"
 ---
 [
   {
-    "kind": "documented-panic",
+    "effect": "panic",
+    "finding": "documented-obligation",
+    "function": "custom_index_impl::custom_index_panics",
+    "kind": "effect",
     "level": "warn",
     "owner": {
       "crate": "custom_index_impl",
       "scope": "workspace"
     },
-    "reason": "call to `<custom_index_impl::Foo as core::ops::index::Index<usize>>::index` with a `# Panics` obligation has no recorded `// PANIC:` justification",
+    "reason": "call to `<custom_index_impl::Foo as core::ops::index::Index<usize>>::index` with a documented `# Panics` obligation has no recorded `// PANIC:` justification",
     "root": "custom_index_impl::custom_index_panics",
     "root-kind": "concrete",
     "root-span": "src/lib.rs:3:1: 3:29",

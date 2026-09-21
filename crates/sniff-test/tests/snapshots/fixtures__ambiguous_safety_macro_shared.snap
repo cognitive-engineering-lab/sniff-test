@@ -4,8 +4,10 @@ expression: "report[\"findings\"]"
 ---
 [
   {
+    "effect": "safety",
+    "finding": "ambiguous-marker",
     "function": "ambiguous_safety::reused_marker_within_one_macro_expansion",
-    "kind": "ambiguous-safety-marker",
+    "kind": "effect",
     "level": "deny",
     "owner": {
       "crate": "ambiguous_safety",
@@ -23,8 +25,10 @@ expression: "report[\"findings\"]"
     ]
   },
   {
+    "effect": "safety",
+    "finding": "ambiguous-marker",
     "function": "ambiguous_safety::reused_partial_marker_for_safe_obligations",
-    "kind": "ambiguous-safety-marker",
+    "kind": "effect",
     "level": "deny",
     "owner": {
       "crate": "ambiguous_safety",
@@ -42,8 +46,10 @@ expression: "report[\"findings\"]"
     ]
   },
   {
+    "effect": "safety",
+    "finding": "ambiguous-marker",
     "function": "ambiguous_safety::reused_partial_marker_for_safe_obligations_inside_unsafe_block",
-    "kind": "ambiguous-safety-marker",
+    "kind": "effect",
     "level": "deny",
     "owner": {
       "crate": "ambiguous_safety",

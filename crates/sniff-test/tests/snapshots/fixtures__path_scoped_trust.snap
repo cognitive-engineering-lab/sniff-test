@@ -4,8 +4,12 @@ expression: "report[\"findings\"]"
 ---
 [
   {
-    "kind": "panic-invocation",
+    "effect": "panic",
+    "finding": "concrete-invocation",
+    "function": "path_scoped_app::app_callback_through_b_is_untrusted::{closure#0}",
+    "kind": "effect",
     "level": "deny",
+    "operation": "configured-invocation",
     "owner": {
       "crate": "path_scoped_app",
       "scope": "workspace"
@@ -29,18 +33,20 @@ expression: "report[\"findings\"]"
     ]
   },
   {
+    "effect": "safety",
+    "finding": "concrete-operation",
     "function": "path_scoped_app::app_safety_callback_is_untrusted::{closure#0}",
-    "kind": "unsafe-op-missing-justification",
+    "kind": "effect",
     "level": "warn",
+    "operation": "raw-pointer-dereference",
     "owner": {
       "crate": "path_scoped_app",
       "scope": "workspace"
     },
-    "reason": "unsafe operation (raw pointer dereference) has no recorded `// SAFETY:` justification",
+    "reason": "safety operation (raw pointer dereference) has no recorded `// SAFETY:` justification",
     "root": "path_scoped_app::app_safety_callback_is_untrusted",
     "root-kind": "concrete",
     "root-span": "src/lib.rs:29:1: 29:42",
-    "safety-op-kind": "raw-pointer-dereference",
     "source-evidence": {
       "status": "verified-absent"
     },
@@ -53,8 +59,12 @@ expression: "report[\"findings\"]"
     ]
   },
   {
-    "kind": "panic-invocation",
+    "effect": "panic",
+    "finding": "concrete-invocation",
+    "function": "dep_c::panic_effect",
+    "kind": "effect",
     "level": "deny",
+    "operation": "configured-invocation",
     "owner": {
       "crate": "dep_c",
       "scope": "dependency"
@@ -79,8 +89,12 @@ expression: "report[\"findings\"]"
     ]
   },
   {
-    "kind": "panic-invocation",
+    "effect": "panic",
+    "finding": "concrete-invocation",
+    "function": "dep_c::panic_effect",
+    "kind": "effect",
     "level": "deny",
+    "operation": "configured-invocation",
     "owner": {
       "crate": "dep_c",
       "scope": "dependency"
@@ -103,18 +117,20 @@ expression: "report[\"findings\"]"
     ]
   },
   {
+    "effect": "safety",
+    "finding": "concrete-operation",
     "function": "dep_c::safety_effect",
-    "kind": "unsafe-op-missing-justification",
+    "kind": "effect",
     "level": "warn",
+    "operation": "raw-pointer-dereference",
     "owner": {
       "crate": "dep_c",
       "scope": "dependency"
     },
-    "reason": "dependency crate `dep_c` has no recorded `// SAFETY:` justification for unsafe operation (raw pointer dereference)",
+    "reason": "dependency crate `dep_c` has no recorded `// SAFETY:` justification for safety operation (raw pointer dereference)",
     "root": "path_scoped_app::direct_dependency_safety_is_untrusted",
     "root-kind": "concrete",
     "root-span": "src/lib.rs:25:1: 25:47",
-    "safety-op-kind": "raw-pointer-dereference",
     "source-evidence": {
       "status": "verified-absent"
     },

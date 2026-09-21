@@ -4,8 +4,12 @@ expression: "report[\"findings\"]"
 ---
 [
   {
-    "kind": "panic-invocation",
+    "effect": "panic",
+    "finding": "concrete-invocation",
+    "function": "<dependency_generic_local_impl_app::Local as dependency_generic_local_impl::Action>::apply",
+    "kind": "effect",
     "level": "deny",
+    "operation": "configured-invocation",
     "owner": {
       "crate": "dependency_generic_local_impl_app",
       "scope": "workspace"

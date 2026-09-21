@@ -4,8 +4,12 @@ expression: "report[\"findings\"]"
 ---
 [
   {
-    "kind": "panic-invocation",
+    "effect": "panic",
+    "finding": "concrete-invocation",
+    "function": "async_runtime_bodies::async_root::{closure#0}",
+    "kind": "effect",
     "level": "deny",
+    "operation": "configured-invocation",
     "owner": {
       "crate": "async_runtime_bodies",
       "scope": "workspace"
@@ -27,8 +31,12 @@ expression: "report[\"findings\"]"
     ]
   },
   {
-    "kind": "panic-invocation",
+    "effect": "panic",
+    "finding": "concrete-invocation",
+    "function": "async_runtime_bodies::invoked_async_closure::{closure#0}::{closure#0}::{closure#0}",
+    "kind": "effect",
     "level": "deny",
+    "operation": "configured-invocation",
     "owner": {
       "crate": "async_runtime_bodies",
       "scope": "workspace"

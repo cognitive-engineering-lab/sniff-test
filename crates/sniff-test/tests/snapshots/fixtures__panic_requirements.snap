@@ -4,7 +4,10 @@ expression: "report[\"findings\"]"
 ---
 [
   {
-    "kind": "documented-panic",
+    "effect": "panic",
+    "finding": "documented-obligation",
+    "function": "panic_requirements::partially_satisfied",
+    "kind": "effect",
     "level": "warn",
     "missing-requirements": [
       "bounded[total]: total must be bounded by the caller.",
@@ -14,7 +17,7 @@ expression: "report[\"findings\"]"
       "crate": "panic_requirements",
       "scope": "workspace"
     },
-    "reason": "recorded `// PANIC:` justification for call to `panic_requirements::documented_ratio` with a `# Panics` obligation does not satisfy the remaining `# Panics` requirements",
+    "reason": "recorded `// PANIC:` justification for call to `panic_requirements::documented_ratio` with a documented `# Panics` obligation does not satisfy the remaining `# Panics` requirements",
     "requirements": [
       "nonzero: denominator must not be zero.",
       "bounded[total]: total must be bounded by the caller.",
@@ -33,13 +36,16 @@ expression: "report[\"findings\"]"
     ]
   },
   {
-    "kind": "documented-panic",
+    "effect": "panic",
+    "finding": "documented-obligation",
+    "function": "panic_requirements::reaches_documented_contract",
+    "kind": "effect",
     "level": "warn",
     "owner": {
       "crate": "panic_requirements",
       "scope": "workspace"
     },
-    "reason": "call to `panic_requirements::documented_contract` with a `# Panics` obligation has no recorded `// PANIC:` justification",
+    "reason": "call to `panic_requirements::documented_contract` with a documented `# Panics` obligation has no recorded `// PANIC:` justification",
     "root": "panic_requirements::reaches_documented_contract",
     "root-kind": "concrete",
     "root-span": "src/lib.rs:36:1: 36:47",

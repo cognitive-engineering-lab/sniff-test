@@ -4,13 +4,16 @@ expression: "report[\"findings\"]"
 ---
 [
   {
-    "kind": "documented-panic",
+    "effect": "panic",
+    "finding": "documented-obligation",
+    "function": "std_trait_impl_glob::put",
+    "kind": "effect",
     "level": "warn",
     "owner": {
       "crate": "std_trait_impl_glob",
       "scope": "workspace"
     },
-    "reason": "call to `alloc::vec::Vec::<T, A>::push` with a `# Panics` obligation has no recorded `// PANIC:` justification",
+    "reason": "call to `alloc::vec::Vec::<T, A>::push` with a documented `# Panics` obligation has no recorded `// PANIC:` justification",
     "root": "std_trait_impl_glob::put",
     "root-kind": "concrete",
     "root-span": "src/lib.rs:9:1: 9:44",

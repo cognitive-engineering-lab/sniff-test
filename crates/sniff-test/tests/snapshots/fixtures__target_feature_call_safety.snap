@@ -4,14 +4,33 @@ expression: "report[\"findings\"]"
 ---
 [
   {
-    "function": "target_feature_call_safety::ordinary_caller",
-    "kind": "unsafe-call-missing-justification",
-    "level": "deny",
+    "effect": "safety",
+    "finding": "documented-obligation",
+    "function": "target_feature_call_safety::matching_feature_caller",
+    "kind": "effect",
+    "level": "warn",
     "owner": {
       "crate": "target_feature_call_safety",
       "scope": "workspace"
     },
-    "reason": "unsafe call to `target_feature_call_safety::target_feature_callee` has no recorded `// SAFETY:` justification",
+    "reason": "function `target_feature_call_safety::matching_feature_caller` is missing a documented `# Safety` contract",
+    "root": "target_feature_call_safety::matching_feature_caller",
+    "root-kind": "concrete",
+    "root-span": "src/lib.rs:34:1: 34:33",
+    "span": "src/lib.rs:34:1: 34:33"
+  },
+  {
+    "effect": "safety",
+    "finding": "concrete-invocation",
+    "function": "target_feature_call_safety::ordinary_caller",
+    "kind": "effect",
+    "level": "deny",
+    "operation": "unsafe-call",
+    "owner": {
+      "crate": "target_feature_call_safety",
+      "scope": "workspace"
+    },
+    "reason": "safety invocation to `target_feature_call_safety::target_feature_callee` has no recorded `// SAFETY:` justification",
     "root": "target_feature_call_safety::ordinary_caller",
     "root-kind": "concrete",
     "root-span": "src/lib.rs:23:1: 23:25",

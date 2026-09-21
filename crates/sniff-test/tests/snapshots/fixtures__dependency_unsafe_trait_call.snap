@@ -4,8 +4,10 @@ expression: "report[\"findings\"]"
 ---
 [
   {
+    "effect": "safety",
+    "finding": "ambiguous-requirement",
     "function": "dependency_unsafe_trait_call_dep::ambiguous_obligation",
-    "kind": "ambiguous-safety-requirement",
+    "kind": "effect",
     "level": "deny",
     "owner": {
       "crate": "dependency_unsafe_trait_call_dep",
@@ -26,9 +28,11 @@ expression: "report[\"findings\"]"
     ]
   },
   {
+    "effect": "safety",
+    "finding": "documented-obligation",
     "function": "dependency_unsafe_trait_call_dep::invoke_unjustified",
-    "kind": "unsafe-call-missing-requirements",
-    "level": "deny",
+    "kind": "effect",
+    "level": "warn",
     "missing-requirements": [
       "invariant: the private test invariant must hold."
     ],
@@ -36,7 +40,7 @@ expression: "report[\"findings\"]"
       "crate": "dependency_unsafe_trait_call_dep",
       "scope": "dependency"
     },
-    "reason": "dependency crate `dependency_unsafe_trait_call_dep` has no recorded `// SAFETY:` justification for unsafe call to `<dependency_unsafe_trait_call_app::Local as dependency_unsafe_trait_call_dep::Action>::apply`",
+    "reason": "dependency crate `dependency_unsafe_trait_call_dep` has no recorded `// SAFETY:` justification for call to `<dependency_unsafe_trait_call_app::Local as dependency_unsafe_trait_call_dep::Action>::apply` with a documented `# Safety` obligation",
     "requirements": [
       "invariant: the private test invariant must hold."
     ],

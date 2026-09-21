@@ -4,13 +4,16 @@ expression: "report[\"findings\"]"
 ---
 [
   {
-    "kind": "unresolved-panic-call-target",
+    "effect": "panic",
+    "finding": "unresolved-call-target",
+    "function": "trusted_boundaries::untrusted_unresolved_wrapper",
+    "kind": "effect",
     "level": "warn",
     "owner": {
       "crate": "trusted_boundaries",
       "scope": "workspace"
     },
-    "reason": "panic coverage is incomplete for unresolved function-pointer call target",
+    "reason": "panic effect coverage is incomplete for unresolved function-pointer call target",
     "root": "trusted_boundaries::untrusted_unresolved_wrapper",
     "root-kind": "concrete",
     "root-span": "src/lib.rs:80:1: 80:52",
@@ -24,14 +27,16 @@ expression: "report[\"findings\"]"
     }
   },
   {
+    "effect": "safety",
+    "finding": "unresolved-call-target",
     "function": "trusted_boundaries::untrusted_unresolved_wrapper",
-    "kind": "unresolved-safety-call-target",
+    "kind": "effect",
     "level": "warn",
     "owner": {
       "crate": "trusted_boundaries",
       "scope": "workspace"
     },
-    "reason": "safety coverage is incomplete for unresolved function-pointer call target",
+    "reason": "safety effect coverage is incomplete for unresolved function-pointer call target",
     "root": "trusted_boundaries::untrusted_unresolved_wrapper",
     "root-kind": "concrete",
     "root-span": "src/lib.rs:80:1: 80:52",

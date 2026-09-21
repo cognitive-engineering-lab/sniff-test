@@ -4,8 +4,10 @@ expression: "report[\"findings\"]"
 ---
 [
   {
+    "effect": "safety",
+    "finding": "ambiguous-marker",
     "function": "ambiguous_safety::read_copy",
-    "kind": "ambiguous-safety-marker",
+    "kind": "effect",
     "level": "deny",
     "owner": {
       "crate": "ambiguous_safety",

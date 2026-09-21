@@ -4,8 +4,12 @@ expression: "report[\"findings\"]"
 ---
 [
   {
-    "kind": "panic-invocation",
+    "effect": "panic",
+    "finding": "concrete-invocation",
+    "function": "dependency_closure_dep::check_value::{closure#0}",
+    "kind": "effect",
     "level": "deny",
+    "operation": "configured-invocation",
     "owner": {
       "crate": "dependency_closure_dep",
       "scope": "dependency"
@@ -28,18 +32,20 @@ expression: "report[\"findings\"]"
     ]
   },
   {
+    "effect": "safety",
+    "finding": "concrete-operation",
     "function": "dependency_closure_dep::read_pointer::{closure#0}",
-    "kind": "unsafe-op-missing-justification",
+    "kind": "effect",
     "level": "warn",
+    "operation": "raw-pointer-dereference",
     "owner": {
       "crate": "dependency_closure_dep",
       "scope": "dependency"
     },
-    "reason": "dependency crate `dependency_closure_dep` has no recorded `// SAFETY:` justification for unsafe operation (raw pointer dereference)",
+    "reason": "dependency crate `dependency_closure_dep` has no recorded `// SAFETY:` justification for safety operation (raw pointer dereference)",
     "root": "dependency_closure_app::unsafe_body",
     "root-kind": "concrete",
     "root-span": "src/lib.rs:9:1: 9:45",
-    "safety-op-kind": "raw-pointer-dereference",
     "source-evidence": {
       "status": "verified-absent"
     },

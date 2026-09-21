@@ -402,11 +402,6 @@ fn assert_finding_discriminators(report: &Value) {
             .as_str()
             .expect("finding kind should be a string");
         assert!(
-            finding.get("effect").is_none(),
-            "finding `{kind}` should be discriminated by kind, not a redundant effect field: \
-             {finding}"
-        );
-        assert!(
             !matches!(
                 kind,
                 "cached-dependency-panic"

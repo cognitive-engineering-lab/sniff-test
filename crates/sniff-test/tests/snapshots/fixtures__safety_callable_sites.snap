@@ -4,14 +4,17 @@ expression: "report[\"findings\"]"
 ---
 [
   {
+    "effect": "safety",
+    "finding": "concrete-invocation",
     "function": "safety_callable_sites::independently_marked_calls",
-    "kind": "unsafe-call-missing-justification",
+    "kind": "effect",
     "level": "warn",
+    "operation": "unsafe-call",
     "owner": {
       "crate": "safety_callable_sites",
       "scope": "workspace"
     },
-    "reason": "unsafe call to `unsafe function pointer` has no recorded `// SAFETY:` justification",
+    "reason": "safety invocation to `unsafe function pointer` has no recorded `// SAFETY:` justification",
     "root": "safety_callable_sites::independently_marked_calls",
     "root-kind": "concrete",
     "root-span": "src/lib.rs:15:1: 15:36",

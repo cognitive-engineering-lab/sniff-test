@@ -31,7 +31,9 @@ use crate::effects::concrete::{ConcreteSource, probe_concrete_effect};
 use crate::effects::obligation::{
     ObligationTracker, TrackedEffect, TrackedOrigin, TrackedState, TrackedTermination,
 };
-use crate::effects::{EffectSelection, EffectSpec, annotation_kind, selected_effect_objects};
+use crate::effects::{
+    EffectMetadata, EffectSelection, EffectSpec, annotation_kind, selected_effect_objects,
+};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 enum ReportEffect {
@@ -57,15 +59,14 @@ impl ReportEffect {
         }
     }
 }
-use crate::effects::panic::{Panic, PanicEffect};
-use crate::effects::safety::{Safety, SafetyEffect};
+use crate::effects::panic::Panic;
+use crate::effects::safety::Safety;
 use crate::effects::trust::TrustPath;
 use crate::report_model::{
     DomainCompleteness, EffectCompleteness, IncompleteReason, IncompleteTraceKind,
-    InterpretationRoot, InterpretedFinding, InterpretedFindingKind, InterpretedSafetyCallKind,
-    InterpretedTarget, InterpretedTrace, InterpretedTraceStep, InterpretedTraceStepKind,
-    RootInterpretation, TraceFrontier, UnresolvedCallCoverage, UnresolvedCallMechanism,
-    UnresolvedCallSite,
+    InterpretationRoot, InterpretedCallee, InterpretedFinding, InterpretedFindingKind,
+    InterpretedTrace, InterpretedTraceStep, InterpretedTraceStepKind, RootInterpretation,
+    TraceFrontier, UnresolvedCallCoverage, UnresolvedCallMechanism, UnresolvedCallSite,
 };
 use crate::workspace::ArtifactAnalysisGraph;
 
@@ -305,37 +306,17 @@ pub(crate) fn trace_selected_workspace(
             }
             let mut findings = Vec::new();
             for root_function in root_functions.iter().copied() {
-                if let (Some(panic), Some(panic_trace)) = (&panic, &panic_trace) {
-                    findings.extend(panic_findings(
-                        artifact,
-                        &graph,
-                        &annotations,
-                        panic,
-                        panic_trace,
-                        root_function,
-                        marker_probing,
-                    ));
-                }
-                if let (Some(safety), Some(safety_trace)) = (&safety, &safety_trace) {
-                    findings.extend(safety_findings(
-                        artifact,
-                        &graph,
-                        &annotations,
-                        safety,
-                        safety_trace,
-                        root_function,
-                        marker_probing,
-                    ));
-                }
                 for (effect, concrete) in &concrete_effects {
-                    if ReportEffect::try_from_key(effect).is_some() {
-                        continue;
-                    }
                     if let Some(trace) = effect_traces.get(effect) {
-                        findings.extend(generic_concrete_findings(
+                        let metadata = selected_metadata
+                            .iter()
+                            .find(|metadata| &metadata.key == effect)
+                            .expect("every probed effect has selected metadata");
+                        findings.extend(concrete_findings(
                             artifact,
                             &graph,
-                            effect,
+                            &annotations,
+                            metadata,
                             concrete,
                             trace,
                             root_function,
@@ -352,6 +333,10 @@ pub(crate) fn trace_selected_workspace(
                         &annotations,
                         root_function,
                         ReportEffect::Panic,
+                        selected_metadata
+                            .iter()
+                            .find(|metadata| metadata.key == panic_key)
+                            .expect("selected panic metadata"),
                         config,
                         &namespaces,
                         |function, path: &TrustPath| panic.is_opaque_on_path(function, path),
@@ -367,6 +352,10 @@ pub(crate) fn trace_selected_workspace(
                         &annotations,
                         root_function,
                         ReportEffect::Safety,
+                        selected_metadata
+                            .iter()
+                            .find(|metadata| metadata.key == safety_key)
+                            .expect("selected safety metadata"),
                         config,
                         &namespaces,
                         |function, path: &TrustPath| safety.is_opaque_on_path(function, path),
@@ -381,6 +370,7 @@ pub(crate) fn trace_selected_workspace(
                     &effect_traces,
                     &tracked_effects,
                     &marker_claims,
+                    &selected_metadata,
                     root_function,
                 ));
                 for (effect, tracked) in &tracked_effects {
@@ -390,6 +380,10 @@ pub(crate) fn trace_selected_workspace(
                             &graph,
                             &annotations,
                             tracked,
+                            selected_metadata
+                                .iter()
+                                .find(|metadata| &metadata.key == effect)
+                                .expect("every tracked effect has selected metadata"),
                             trace,
                             root_function,
                             &root,
@@ -399,8 +393,17 @@ pub(crate) fn trace_selected_workspace(
                 }
             }
             if effects.tracks_safety()
-                && let Some(finding) =
-                    missing_safety_docs(artifact, &graph, &annotations, &root, &root_functions)
+                && let Some(finding) = missing_safety_docs(
+                    artifact,
+                    &graph,
+                    &annotations,
+                    selected_metadata
+                        .iter()
+                        .find(|metadata| metadata.key == safety_key)
+                        .expect("selected safety metadata"),
+                    &root,
+                    &root_functions,
+                )
             {
                 findings.push(finding);
             }
@@ -522,6 +525,7 @@ fn marker_ambiguities(
         TrackedEffect<'_, '_, crate::effects::concrete::ConcreteEffect<'_>>,
     >,
     claims: &MarkerClaims,
+    metadata: &[EffectMetadata],
     root_function: FunctionId,
 ) -> Vec<InterpretedFinding> {
     claims
@@ -556,23 +560,15 @@ fn marker_ambiguities(
             let effect_count = projections.len();
             let comment = annotations.site_comment(*annotation)?;
             let representative = projections.into_iter().min_by(marker_projection_order)?;
-            let kind = match ReportEffect::try_from_key(comment.effect()) {
-                Some(ReportEffect::Panic) => {
-                    InterpretedFindingKind::AmbiguousPanicMarker { effect_count }
-                }
-                Some(ReportEffect::Safety) => {
-                    InterpretedFindingKind::AmbiguousSafetyMarker { effect_count }
-                }
-                None => InterpretedFindingKind::AmbiguousEffectMarker {
-                    effect: comment.effect().clone(),
-                    effect_count,
-                },
-            };
             Some(InterpretedFinding {
-                kind,
+                effect: metadata
+                    .iter()
+                    .find(|metadata| metadata.key == *comment.effect())?
+                    .clone(),
+                kind: InterpretedFindingKind::AmbiguousMarker { effect_count },
                 function: representative.function,
                 function_path: representative.function_path,
-                target: None,
+                callee: None,
                 source_range: comment.source_range().cloned(),
                 contract_source_range: None,
                 marker_evidence: None,
@@ -1118,10 +1114,11 @@ fn project_reverse_path(
 }
 
 fn same_source_finding(left: &InterpretedFinding, right: &InterpretedFinding) -> bool {
-    left.kind == right.kind
+    left.effect == right.effect
+        && left.kind == right.kind
         && left.function_path == right.function_path
-        && left.target.as_ref().map(|target| &target.path)
-            == right.target.as_ref().map(|target| &target.path)
+        && left.callee.as_ref().map(|callee| &callee.path)
+            == right.callee.as_ref().map(|callee| &callee.path)
         && left.source_range == right.source_range
         && left.marker_evidence == right.marker_evidence
         && left.missing_requirements == right.missing_requirements
@@ -1251,205 +1248,19 @@ fn obligation_marker_evidence(
     )
 }
 
-fn panic_findings(
+/// Projects every registered effect from the common fact vocabulary emitted
+/// by its compiler passes; presentation compatibility is applied later.
+fn concrete_findings(
     artifact: &ArtifactFacts,
     graph: &InvocationGraph,
     annotations: &AnnotationIndex,
-    panic: &PanicEffect<'_>,
-    trace: &ConcreteTrace,
-    root_function: effect_tracing::FunctionId,
-    marker_probing: AnnotationProbingFact,
-) -> Vec<InterpretedFinding> {
-    active_root_nodes(trace, root_function)
-        .filter_map(|node| {
-            let trace_path = trace_path(artifact, graph, trace, node);
-            let trace_node = trace.nodes().nth(node)?;
-            let TrackedState::Concrete(_) = trace_node.state() else {
-                return None;
-            };
-            let TrackedOrigin::Concrete(origin) = *trace_node.origin() else {
-                return None;
-            };
-            match origin {
-                ConcreteSource::Effect { owner, effect } => {
-                    let (body, fact) = effect_fact(artifact, owner, effect)?;
-                    if fact.effect.as_str() != <Panic as crate::effects::EffectSpec>::EFFECT_NAME {
-                        return None;
-                    }
-                    let kind = CompilerAssertKind::from_effect_kind(&fact.kind)?;
-                    let mut trace_path = trace_path;
-                    append_effect_provenance(body, fact, &mut trace_path);
-                    append_compiler_assert(body, fact, kind, &mut trace_path);
-                    Some(InterpretedFinding {
-                        kind: InterpretedFindingKind::CompilerAssert { kind },
-                        function: owner,
-                        function_path: body.display_path.clone(),
-                        target: None,
-                        source_range: fact.source_range.clone(),
-                        contract_source_range: None,
-                        marker_evidence: Some(effect_marker_evidence(
-                            artifact,
-                            owner,
-                            effect,
-                            annotation_kind::<Panic>(AnnotationRole::Justification),
-                            marker_probing,
-                        )),
-                        trace: trace_path,
-                        missing_requirements: Vec::new(),
-                        requirements: Vec::new(),
-                    })
-                }
-                ConcreteSource::Invocation { invocation, call } => {
-                    let source = panic.invocation_source(invocation, call).filter(|source| {
-                        !invocation_source_has_contract(
-                            graph,
-                            annotations,
-                            source,
-                            ReportEffect::Panic,
-                        )
-                    })?;
-                    let edge = source.edge();
-                    let owner = graph.stable_function(graph.invocation(invocation).caller());
-                    let body = artifact.function_body(owner)?;
-                    let mut trace_path = trace_path;
-                    append_call_trace(artifact, owner, edge, &mut trace_path);
-                    Some(InterpretedFinding {
-                        kind: InterpretedFindingKind::PanicSink,
-                        function: owner,
-                        function_path: body.display_path.clone(),
-                        target: source.target().map(interpreted_target),
-                        source_range: edge.source_range.clone(),
-                        contract_source_range: None,
-                        marker_evidence: Some(raw_call_marker_evidence(
-                            artifact,
-                            graph,
-                            invocation,
-                            call,
-                            annotation_kind::<Panic>(AnnotationRole::Justification),
-                            marker_probing,
-                        )),
-                        trace: trace_path,
-                        missing_requirements: Vec::new(),
-                        requirements: Vec::new(),
-                    })
-                }
-            }
-        })
-        .collect()
-}
-
-fn safety_findings(
-    artifact: &ArtifactFacts,
-    graph: &InvocationGraph,
-    annotations: &AnnotationIndex,
-    safety: &SafetyEffect<'_>,
-    trace: &ConcreteTrace,
-    root_function: effect_tracing::FunctionId,
-    marker_probing: AnnotationProbingFact,
-) -> Vec<InterpretedFinding> {
-    active_root_nodes(trace, root_function)
-        .filter_map(|node| {
-            let trace_path = trace_path(artifact, graph, trace, node);
-            let trace_node = trace.nodes().nth(node)?;
-            let TrackedState::Concrete(_) = trace_node.state() else {
-                return None;
-            };
-            let TrackedOrigin::Concrete(origin) = *trace_node.origin() else {
-                return None;
-            };
-            match origin {
-                ConcreteSource::Effect { owner, effect } => {
-                    let (body, fact) = effect_fact(artifact, owner, effect)?;
-                    if fact.effect.as_str() != <Safety as crate::effects::EffectSpec>::EFFECT_NAME {
-                        return None;
-                    }
-                    let kind = SafetyOpKind::from_effect_kind(&fact.kind)?;
-                    let mut trace_path = trace_path;
-                    append_effect_provenance(body, fact, &mut trace_path);
-                    append_unsafe_operation(body, fact, kind, &mut trace_path);
-                    Some(InterpretedFinding {
-                        kind: InterpretedFindingKind::UnsafeOperation { kind },
-                        function: owner,
-                        function_path: body.display_path.clone(),
-                        target: None,
-                        source_range: fact.source_range.clone(),
-                        contract_source_range: None,
-                        marker_evidence: Some(effect_marker_evidence(
-                            artifact,
-                            owner,
-                            effect,
-                            annotation_kind::<Safety>(AnnotationRole::Justification),
-                            marker_probing,
-                        )),
-                        trace: trace_path,
-                        missing_requirements: Vec::new(),
-                        requirements: Vec::new(),
-                    })
-                }
-                ConcreteSource::Invocation { invocation, call } => {
-                    let source = safety
-                        .invocation_source(invocation, call)
-                        .filter(|source| {
-                            !invocation_source_has_contract(
-                                graph,
-                                annotations,
-                                source,
-                                ReportEffect::Safety,
-                            )
-                        })?;
-                    let edge = source.edge();
-                    let owner = graph.stable_function(graph.invocation(invocation).caller());
-                    let body = artifact.function_body(owner)?;
-                    let mut trace_path = trace_path;
-                    append_call_trace(artifact, owner, edge, &mut trace_path);
-                    Some(InterpretedFinding {
-                        kind: InterpretedFindingKind::SafetyCall {
-                            kind: InterpretedSafetyCallKind::Unsafe,
-                            documents_contract: false,
-                        },
-                        function: owner,
-                        function_path: body.display_path.clone(),
-                        target: source.target().map(interpreted_target).or_else(|| {
-                            (edge.kind == crate::artifact::CallKindFact::IndirectCall).then(|| {
-                                InterpretedTarget {
-                                    function: None,
-                                    path: String::from("unsafe function pointer"),
-                                }
-                            })
-                        }),
-                        source_range: edge.source_range.clone(),
-                        contract_source_range: None,
-                        marker_evidence: Some(raw_call_marker_evidence(
-                            artifact,
-                            graph,
-                            invocation,
-                            call,
-                            annotation_kind::<Safety>(AnnotationRole::Justification),
-                            marker_probing,
-                        )),
-                        trace: trace_path,
-                        missing_requirements: Vec::new(),
-                        requirements: Vec::new(),
-                    })
-                }
-            }
-        })
-        .collect()
-}
-
-/// Projects a registered effect without requiring an effect-owned reporting
-/// implementation. Built-in effects keep their compatibility presentation in
-/// the specialized adapters above; every other effect is reported directly
-/// from the common fact vocabulary emitted by its compiler passes.
-fn generic_concrete_findings(
-    artifact: &ArtifactFacts,
-    graph: &InvocationGraph,
-    effect_key: &EffectKey,
+    metadata: &EffectMetadata,
     concrete: &crate::effects::concrete::ConcreteEffect<'_>,
     trace: &ConcreteTrace,
     root_function: effect_tracing::FunctionId,
     marker_probing: AnnotationProbingFact,
 ) -> Vec<InterpretedFinding> {
+    let effect_key = &metadata.key;
     active_root_nodes(trace, root_function)
         .filter_map(|node| {
             let mut trace_path = trace_path(artifact, graph, trace, node);
@@ -1467,14 +1278,27 @@ fn generic_concrete_findings(
                         return None;
                     }
                     append_effect_provenance(body, fact, &mut trace_path);
+                    match ReportEffect::try_from_key(effect_key) {
+                        Some(ReportEffect::Panic) => {
+                            if let Some(kind) = CompilerAssertKind::from_effect_kind(&fact.kind) {
+                                append_compiler_assert(body, fact, kind, &mut trace_path);
+                            }
+                        }
+                        Some(ReportEffect::Safety) => {
+                            if let Some(kind) = SafetyOpKind::from_effect_kind(&fact.kind) {
+                                append_unsafe_operation(body, fact, kind, &mut trace_path);
+                            }
+                        }
+                        None => {}
+                    }
                     Some(InterpretedFinding {
-                        kind: InterpretedFindingKind::EffectOperation {
-                            effect: effect_key.clone(),
+                        effect: metadata.clone(),
+                        kind: InterpretedFindingKind::Operation {
                             operation: fact.kind.clone(),
                         },
                         function: owner,
                         function_path: body.display_path.clone(),
-                        target: None,
+                        callee: None,
                         source_range: fact.source_range.clone(),
                         contract_source_range: None,
                         marker_evidence: Some(effect_marker_evidence(
@@ -1494,6 +1318,9 @@ fn generic_concrete_findings(
                 }
                 ConcreteSource::Invocation { invocation, call } => {
                     let source = concrete.invocation_source(invocation, call)?;
+                    if invocation_source_has_contract(graph, annotations, &source, effect_key) {
+                        return None;
+                    }
                     let edge = source.edge();
                     let operation = edge
                         .invocation_effects
@@ -1507,13 +1334,19 @@ fn generic_concrete_findings(
                     let body = artifact.function_body(owner)?;
                     append_call_trace(artifact, owner, edge, &mut trace_path);
                     Some(InterpretedFinding {
-                        kind: InterpretedFindingKind::EffectInvocation {
-                            effect: effect_key.clone(),
-                            operation,
-                        },
+                        effect: metadata.clone(),
+                        kind: InterpretedFindingKind::Invocation { operation },
                         function: owner,
                         function_path: body.display_path.clone(),
-                        target: source.target().map(interpreted_target),
+                        callee: source.target().map(interpreted_callee).or_else(|| {
+                            (effect_key == &ReportEffect::Safety.key()
+                                && edge.kind == crate::artifact::CallKindFact::IndirectCall)
+                                .then(|| InterpretedCallee {
+                                    function: None,
+                                    path: String::from("unsafe function pointer"),
+                                    requires_explicit_context: true,
+                                })
+                        }),
                         source_range: edge.source_range.clone(),
                         contract_source_range: None,
                         marker_evidence: Some(raw_call_marker_evidence(
@@ -1547,6 +1380,7 @@ fn unresolved_call_target_findings(
     annotations: &AnnotationIndex,
     root_function: effect_tracing::FunctionId,
     domain: ReportEffect,
+    metadata: &EffectMetadata,
     config: &SniffTestConfig,
     namespaces: &DefinitionNamespaceIndex,
     is_opaque: impl Fn(FunctionId, &TrustPath) -> bool + Copy,
@@ -1623,17 +1457,11 @@ fn unresolved_call_target_findings(
                     let mut trace = base_trace.clone();
                     append_call_trace(artifact, owner, edge, &mut trace);
                     InterpretedFinding {
-                        kind: match domain {
-                            ReportEffect::Panic => {
-                                InterpretedFindingKind::UnresolvedPanicCallTarget { site }
-                            }
-                            ReportEffect::Safety => {
-                                InterpretedFindingKind::UnresolvedSafetyCallTarget { site }
-                            }
-                        },
+                        effect: metadata.clone(),
+                        kind: InterpretedFindingKind::UnresolvedCallTarget { site },
                         function: owner,
                         function_path: body.display_path.clone(),
-                        target: invocation_surface(edge).map(interpreted_target),
+                        callee: invocation_surface(edge).map(interpreted_callee),
                         source_range: edge.source_range.clone(),
                         contract_source_range: None,
                         marker_evidence: None,
@@ -1742,6 +1570,7 @@ fn obligation_findings<C, O: Clone, S, T>(
     graph: &InvocationGraph,
     annotations: &AnnotationIndex,
     tracked: &TrackedEffect<'_, '_, C>,
+    metadata: &EffectMetadata,
     trace: &EffectTrace<TrackedOrigin<O>, TrackedState<S>, TrackedTermination<T>>,
     root_function: effect_tracing::FunctionId,
     root: &InterpretationRoot,
@@ -1781,20 +1610,6 @@ fn obligation_findings<C, O: Clone, S, T>(
             let target_is_unsafe = function_presentation(artifact, target_function)
                 .is_some_and(|presentation| presentation.is_unsafe);
             let domain = ReportEffect::try_from_key(state.effect());
-            let kind = match domain {
-                Some(ReportEffect::Panic) => InterpretedFindingKind::DocumentedPanic,
-                Some(ReportEffect::Safety) => InterpretedFindingKind::SafetyCall {
-                    kind: if target_is_unsafe {
-                        InterpretedSafetyCallKind::Unsafe
-                    } else {
-                        InterpretedSafetyCallKind::Obligation
-                    },
-                    documents_contract: true,
-                },
-                None => InterpretedFindingKind::DocumentedEffect {
-                    effect: state.effect().clone(),
-                },
-            };
             let marker_evidence = obligation_marker_evidence(
                 artifact,
                 graph,
@@ -1825,12 +1640,14 @@ fn obligation_findings<C, O: Clone, S, T>(
                         )
                     });
             let finding = InterpretedFinding {
-                kind,
+                effect: metadata.clone(),
+                kind: InterpretedFindingKind::DocumentedObligation,
                 function,
                 function_path,
-                target: Some(InterpretedTarget {
+                callee: Some(InterpretedCallee {
                     function: Some(target_function),
                     path: target_path,
+                    requires_explicit_context: target_is_unsafe,
                 }),
                 source_range,
                 contract_source_range: annotation.source_range().cloned(),
@@ -1860,22 +1677,7 @@ fn obligation_findings<C, O: Clone, S, T>(
                 ambiguous
                     .into_iter()
                     .map(|(normalized_name, requirements)| InterpretedFinding {
-                        kind: match ReportEffect::try_from_key(state.effect()) {
-                            Some(ReportEffect::Panic) => {
-                                InterpretedFindingKind::AmbiguousPanicRequirement {
-                                    normalized_name,
-                                }
-                            }
-                            Some(ReportEffect::Safety) => {
-                                InterpretedFindingKind::AmbiguousSafetyRequirement {
-                                    normalized_name,
-                                }
-                            }
-                            None => InterpretedFindingKind::AmbiguousEffectRequirement {
-                                effect: state.effect().clone(),
-                                normalized_name,
-                            },
-                        },
+                        kind: InterpretedFindingKind::AmbiguousRequirement { normalized_name },
                         function: annotation.owner(),
                         function_path: function_presentation(artifact, annotation.owner())
                             .map_or_else(
@@ -1936,20 +1738,20 @@ fn invocation_source_has_contract(
     graph: &InvocationGraph,
     annotations: &AnnotationIndex,
     source: &InvocationSourceBranch,
-    domain: ReportEffect,
+    effect: &EffectKey,
 ) -> bool {
     let edge = source.edge();
     if let CallTargetFact::Function(target) = &edge.target {
         return graph.function(target.function).is_some_and(|function| {
             annotations
-                .effective_contract(graph, function, &domain.key())
+                .effective_contract(graph, function, effect)
                 .is_some()
         });
     }
 
     invocation_surface(edge).is_some_and(|declaration| {
         annotations
-            .function_contracts(declaration.function, &domain.key())
+            .function_contracts(declaration.function, effect)
             .next()
             .is_some()
     })
@@ -1959,6 +1761,7 @@ fn missing_safety_docs(
     artifact: &ArtifactFacts,
     graph: &InvocationGraph,
     annotations: &AnnotationIndex,
+    metadata: &EffectMetadata,
     root: &InterpretationRoot,
     root_functions: &[effect_tracing::FunctionId],
 ) -> Option<InterpretedFinding> {
@@ -1974,10 +1777,11 @@ fn missing_safety_docs(
         return None;
     }
     Some(InterpretedFinding {
-        kind: InterpretedFindingKind::MissingSafetyDocs,
+        effect: metadata.clone(),
+        kind: InterpretedFindingKind::MissingContract,
         function: root.function,
         function_path: body.display_path.clone(),
-        target: None,
+        callee: None,
         source_range: body.source_range.clone(),
         contract_source_range: None,
         marker_evidence: None,
@@ -2505,10 +2309,11 @@ fn boundary_description(edge: &crate::artifact::CallFact) -> String {
     }
 }
 
-fn interpreted_target(target: &FunctionTargetFact) -> InterpretedTarget {
-    InterpretedTarget {
+fn interpreted_callee(target: &FunctionTargetFact) -> InterpretedCallee {
+    InterpretedCallee {
         function: Some(target.function),
         path: target.display_path.clone(),
+        requires_explicit_context: target.attributes.is_unsafe,
     }
 }
 
@@ -2538,11 +2343,11 @@ mod tests {
     use crate::compiler::invocations::InvocationGraph;
     use crate::config::{MarkerProbing, PanicConfig, SniffTestConfig};
     use crate::effects::concrete::{probe_concrete_effect, probe_concrete_effect_for};
-    use crate::effects::{EffectSpec, annotation_kind, effect};
+    use crate::effects::{EffectMetadata, EffectSpec, annotation_kind, effect};
     use crate::report_model::{
         DomainCompleteness, IncompleteReason, InterpretationRoot, InterpretedFinding,
-        InterpretedFindingKind, InterpretedSafetyCallKind, InterpretedTrace, InterpretedTraceStep,
-        InterpretedTraceStepKind, RootInterpretation,
+        InterpretedFindingKind, InterpretedTrace, InterpretedTraceStep, InterpretedTraceStepKind,
+        RootInterpretation,
     };
     use crate::report_roots::ReportRootKind;
     use crate::workspace::{ArtifactAnalysisGraph, ExternArtifactInput};
@@ -2620,10 +2425,11 @@ mod tests {
         );
         let obligation_graph = graph.obligation_graph();
         let trace = EffectEngine::new(&obligation_graph).trace(&tracked);
-        let findings = super::generic_concrete_findings(
+        let findings = super::concrete_findings(
             &artifact,
             &graph,
-            &EffectKey::new(Allocation::EFFECT_NAME),
+            &annotations,
+            &EffectMetadata::of::<Allocation>(),
             &concrete,
             &trace,
             graph.function(root).expect("root function"),
@@ -2633,9 +2439,10 @@ mod tests {
         assert!(matches!(
             findings.as_slice(),
             [InterpretedFinding {
-                kind: InterpretedFindingKind::EffectOperation { effect, operation },
+                effect,
+                kind: InterpretedFindingKind::Operation { operation },
                 ..
-            }] if effect.as_str() == "allocation" && operation.as_str() == "heap-allocation"
+            }] if effect.key.as_str() == "allocation" && operation.as_str() == "heap-allocation"
         ));
     }
 
@@ -2655,10 +2462,13 @@ mod tests {
 
     fn source_finding_with_trace_call(caller: FunctionId, call: u32) -> InterpretedFinding {
         InterpretedFinding {
-            kind: InterpretedFindingKind::PanicSink,
+            effect: EffectMetadata::of::<Panic>(),
+            kind: InterpretedFindingKind::Invocation {
+                operation: EffectKind::new("configured-invocation"),
+            },
             function: stable_function(90),
             function_path: String::from("sample::panic_source"),
-            target: None,
+            callee: None,
             source_range: None,
             contract_source_range: None,
             marker_evidence: None,
@@ -2838,15 +2648,17 @@ unresolved-call-target = "warn"
         assert!(
             findings.iter().all(|finding| !matches!(
                 finding.kind,
-                InterpretedFindingKind::UnresolvedPanicCallTarget { .. }
-                    | InterpretedFindingKind::UnresolvedSafetyCallTarget { .. }
+                InterpretedFindingKind::UnresolvedCallTarget { .. }
             )),
             "trusted declaration surfaces should suppress unresolved coverage: {findings:#?}",
         );
         assert_eq!(
             findings
                 .iter()
-                .filter(|finding| matches!(finding.kind, InterpretedFindingKind::DocumentedPanic))
+                .filter(|finding| {
+                    finding.effect.justification == "PANIC"
+                        && matches!(finding.kind, InterpretedFindingKind::DocumentedObligation)
+                })
                 .count(),
             2,
             "the declaration's panic contract must remain a ObligationTracker source",
@@ -2854,13 +2666,10 @@ unresolved-call-target = "warn"
         assert_eq!(
             findings
                 .iter()
-                .filter(|finding| matches!(
-                    finding.kind,
-                    InterpretedFindingKind::SafetyCall {
-                        kind: InterpretedSafetyCallKind::Obligation,
-                        ..
-                    }
-                ))
+                .filter(|finding| {
+                    finding.effect.justification == "SAFETY"
+                        && matches!(finding.kind, InterpretedFindingKind::DocumentedObligation)
+                })
                 .count(),
             2,
             "the declaration's safety contract must remain a ObligationTracker source",
@@ -3039,7 +2848,7 @@ unresolved-call-target = "warn"
             .filter(|finding| {
                 matches!(
                     finding.kind,
-                    InterpretedFindingKind::UnresolvedPanicCallTarget { .. }
+                    InterpretedFindingKind::UnresolvedCallTarget { .. }
                 )
             })
             .count()
@@ -3408,13 +3217,13 @@ unresolved-call-target = "warn"
             &graph,
             &annotations,
             &safety.invocation_sources(first)[0],
-            ReportEffect::Safety,
+            &ReportEffect::Safety.key(),
         ));
         assert!(!invocation_source_has_contract(
             &graph,
             &annotations,
             &safety.invocation_sources(second)[0],
-            ReportEffect::Safety,
+            &ReportEffect::Safety.key(),
         ));
     }
 
@@ -3474,12 +3283,15 @@ unresolved-call-target = "warn"
         let sinks = reports[0]
             .findings
             .iter()
-            .filter(|finding| matches!(finding.kind, InterpretedFindingKind::PanicSink))
+            .filter(|finding| {
+                finding.effect.justification == "PANIC"
+                    && matches!(finding.kind, InterpretedFindingKind::Invocation { .. })
+            })
             .collect::<Vec<_>>();
 
         assert_eq!(sinks.len(), 1);
         assert_eq!(
-            sinks[0].target.as_ref().map(|target| target.path.as_str()),
+            sinks[0].callee.as_ref().map(|callee| callee.path.as_str()),
             Some("sink::panic")
         );
     }
@@ -3548,20 +3360,15 @@ unresolved-call-target = "warn"
             .findings
             .iter()
             .filter(|finding| {
-                matches!(
-                    finding.kind,
-                    InterpretedFindingKind::SafetyCall {
-                        kind: InterpretedSafetyCallKind::Unsafe,
-                        ..
-                    }
-                )
+                finding.effect.justification == "SAFETY"
+                    && matches!(finding.kind, InterpretedFindingKind::Invocation { .. })
             })
             .collect::<Vec<_>>();
 
         assert_eq!(unsafe_calls.len(), 1);
         assert_eq!(
             unsafe_calls[0]
-                .target
+                .callee
                 .as_ref()
                 .map(|target| target.path.as_str()),
             Some("unsafe function pointer")
@@ -3572,7 +3379,7 @@ unresolved-call-target = "warn"
                 .iter()
                 .filter(|finding| matches!(
                     finding.kind,
-                    InterpretedFindingKind::UnresolvedSafetyCallTarget { .. }
+                    InterpretedFindingKind::UnresolvedCallTarget { .. }
                 ))
                 .count(),
             1,
@@ -3665,16 +3472,11 @@ unresolved-call-target = "warn"
         let ambiguity = reports[0]
             .findings
             .iter()
-            .find(|finding| {
-                matches!(
-                    finding.kind,
-                    InterpretedFindingKind::AmbiguousPanicMarker { .. }
-                )
-            })
+            .find(|finding| matches!(finding.kind, InterpretedFindingKind::AmbiguousMarker { .. }))
             .unwrap_or_else(|| panic!("ambiguous panic marker: {:#?}", reports[0].findings));
         assert!(matches!(
             ambiguity.kind,
-            InterpretedFindingKind::AmbiguousPanicMarker { effect_count: 2 }
+            InterpretedFindingKind::AmbiguousMarker { effect_count: 2 }
         ));
         let source = ambiguity.trace.steps.last().expect("source trace step");
 
@@ -3759,16 +3561,11 @@ unresolved-call-target = "warn"
         let ambiguity = reports[0]
             .findings
             .iter()
-            .find(|finding| {
-                matches!(
-                    finding.kind,
-                    InterpretedFindingKind::AmbiguousSafetyMarker { .. }
-                )
-            })
+            .find(|finding| matches!(finding.kind, InterpretedFindingKind::AmbiguousMarker { .. }))
             .unwrap_or_else(|| panic!("ambiguous safety marker: {:#?}", reports[0].findings));
         assert!(matches!(
             ambiguity.kind,
-            InterpretedFindingKind::AmbiguousSafetyMarker { effect_count: 2 }
+            InterpretedFindingKind::AmbiguousMarker { effect_count: 2 }
         ));
         let source = ambiguity.trace.steps.last().expect("source trace step");
 
@@ -3940,13 +3737,14 @@ unresolved-call-target = "warn"
             &traces,
             &tracked_effects,
             &claims,
+            &[EffectMetadata::of::<Safety>()],
             root_function,
         );
 
         assert!(matches!(
             ambiguities.as_slice(),
             [InterpretedFinding {
-                kind: InterpretedFindingKind::AmbiguousSafetyMarker { effect_count: 2 },
+                kind: InterpretedFindingKind::AmbiguousMarker { effect_count: 2 },
                 ..
             }]
         ));
@@ -4027,7 +3825,7 @@ unresolved-call-target = "warn"
         assert!(untrusted_reports[0].findings.iter().any(|finding| {
             matches!(
                 finding.kind,
-                InterpretedFindingKind::AmbiguousSafetyMarker { effect_count: 2 }
+                InterpretedFindingKind::AmbiguousMarker { effect_count: 2 }
             )
         }));
 
@@ -4055,23 +3853,19 @@ unresolved-call-target = "warn"
         assert!(
             findings.iter().all(|finding| !matches!(
                 finding.kind,
-                InterpretedFindingKind::AmbiguousSafetyMarker { .. }
+                InterpretedFindingKind::AmbiguousMarker { .. }
             )),
             "trusted implementation details must not project marker ambiguity: {findings:#?}",
         );
         let surface = findings
             .iter()
             .filter(|finding| {
-                matches!(
-                    finding.kind,
-                    InterpretedFindingKind::SafetyCall {
-                        kind: InterpretedSafetyCallKind::Obligation,
-                        ..
-                    }
-                ) && finding
-                    .target
-                    .as_ref()
-                    .is_some_and(|target| target.path == "trusted::api")
+                finding.effect.justification == "SAFETY"
+                    && matches!(finding.kind, InterpretedFindingKind::DocumentedObligation)
+                    && finding
+                        .callee
+                        .as_ref()
+                        .is_some_and(|target| target.path == "trusted::api")
             })
             .collect::<Vec<_>>();
         assert_eq!(
@@ -4586,12 +4380,12 @@ unresolved-call-target = "warn"
             .find(|finding| {
                 matches!(
                     finding.kind,
-                    InterpretedFindingKind::UnresolvedPanicCallTarget { .. }
+                    InterpretedFindingKind::UnresolvedCallTarget { .. }
                 )
             })
             .expect("uncovered second declaration");
         assert_eq!(
-            uncovered.target.as_ref().map(|target| target.path.as_str()),
+            uncovered.callee.as_ref().map(|callee| callee.path.as_str()),
             Some("other::IntoIterator::into_iter")
         );
         assert_eq!(
@@ -4656,15 +4450,14 @@ unresolved-call-target = "warn"
             .filter(|finding| {
                 matches!(
                     finding.kind,
-                    InterpretedFindingKind::UnresolvedPanicCallTarget { .. }
-                        | InterpretedFindingKind::UnresolvedSafetyCallTarget { .. }
+                    InterpretedFindingKind::UnresolvedCallTarget { .. }
                 )
             })
             .collect::<Vec<_>>();
 
         assert_eq!(unresolved.len(), 2, "one finding per effect domain");
         for finding in unresolved {
-            assert_eq!(finding.target, None);
+            assert_eq!(finding.callee, None);
             assert_eq!(
                 finding.trace.steps.last().map(|step| step.call),
                 Some(CallId::new(1))
@@ -4731,26 +4524,25 @@ unresolved-call-target = "warn"
 
         assert!(findings.iter().all(|finding| !matches!(
             finding.kind,
-            InterpretedFindingKind::UnresolvedPanicCallTarget { .. }
-                | InterpretedFindingKind::UnresolvedSafetyCallTarget { .. }
+            InterpretedFindingKind::UnresolvedCallTarget { .. }
         )));
         assert_eq!(
             findings
                 .iter()
-                .filter(|finding| matches!(finding.kind, InterpretedFindingKind::DocumentedPanic))
+                .filter(|finding| {
+                    finding.effect.justification == "PANIC"
+                        && matches!(finding.kind, InterpretedFindingKind::DocumentedObligation)
+                })
                 .count(),
             1,
         );
         assert_eq!(
             findings
                 .iter()
-                .filter(|finding| matches!(
-                    finding.kind,
-                    InterpretedFindingKind::SafetyCall {
-                        kind: InterpretedSafetyCallKind::Obligation,
-                        ..
-                    }
-                ))
+                .filter(|finding| {
+                    finding.effect.justification == "SAFETY"
+                        && matches!(finding.kind, InterpretedFindingKind::DocumentedObligation)
+                })
                 .count(),
             1,
         );
@@ -4934,9 +4726,7 @@ unresolved-call-target = "warn"
             report
                 .findings
                 .iter()
-                .filter(|finding| {
-                    matches!(finding.kind, InterpretedFindingKind::CompilerAssert { .. })
-                })
+                .filter(|finding| matches!(finding.kind, InterpretedFindingKind::Operation { .. }))
                 .count()
         };
 
@@ -5021,10 +4811,7 @@ unresolved-call-target = "warn"
                 .findings
                 .iter()
                 .filter(|finding| {
-                    matches!(
-                        finding.kind,
-                        InterpretedFindingKind::AmbiguousPanicMarker { .. }
-                    )
+                    matches!(finding.kind, InterpretedFindingKind::AmbiguousMarker { .. })
                 })
                 .count()
         };

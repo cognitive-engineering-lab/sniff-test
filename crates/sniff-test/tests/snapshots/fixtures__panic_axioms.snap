@@ -4,14 +4,17 @@ expression: "report[\"findings\"]"
 ---
 [
   {
-    "compiler-assert-kind": "division-by-zero",
-    "kind": "compiler-assert",
+    "effect": "panic",
+    "finding": "concrete-operation",
+    "function": "panic_axioms::division",
+    "kind": "effect",
     "level": "deny",
+    "operation": "division-by-zero",
     "owner": {
       "crate": "panic_axioms",
       "scope": "workspace"
     },
-    "reason": "compiler assertion (division by zero) has no recorded `// PANIC:` justification",
+    "reason": "panic operation (division by zero) has no recorded `// PANIC:` justification",
     "root": "panic_axioms::division",
     "root-kind": "concrete",
     "root-span": "src/lib.rs:1:1: 1:64",
@@ -19,20 +22,22 @@ expression: "report[\"findings\"]"
       "status": "verified-absent"
     },
     "span": "src/lib.rs:2:5: 2:29",
-    "target": "compiler assert division by zero",
     "trace": [
       "src/lib.rs:2:5: 2:29: panic_axioms::division --assert-> compiler assert division by zero"
     ]
   },
   {
-    "compiler-assert-kind": "bounds-check",
-    "kind": "compiler-assert",
+    "effect": "panic",
+    "finding": "concrete-operation",
+    "function": "panic_axioms::indexed",
+    "kind": "effect",
     "level": "deny",
+    "operation": "bounds-check",
     "owner": {
       "crate": "panic_axioms",
       "scope": "workspace"
     },
-    "reason": "compiler assertion (index out of bounds) has no recorded `// PANIC:` justification",
+    "reason": "panic operation (bounds check) has no recorded `// PANIC:` justification",
     "root": "panic_axioms::indexed",
     "root-kind": "concrete",
     "root-span": "src/lib.rs:9:1: 9:56",
@@ -40,20 +45,22 @@ expression: "report[\"findings\"]"
       "status": "verified-absent"
     },
     "span": "src/lib.rs:10:5: 10:18",
-    "target": "compiler assert index out of bounds",
     "trace": [
       "src/lib.rs:10:5: 10:18: panic_axioms::indexed --assert-> compiler assert index out of bounds"
     ]
   },
   {
-    "compiler-assert-kind": "remainder-by-zero",
-    "kind": "compiler-assert",
+    "effect": "panic",
+    "finding": "concrete-operation",
+    "function": "panic_axioms::remainder",
+    "kind": "effect",
     "level": "deny",
+    "operation": "remainder-by-zero",
     "owner": {
       "crate": "panic_axioms",
       "scope": "workspace"
     },
-    "reason": "compiler assertion (remainder with a zero divisor) has no recorded `// PANIC:` justification",
+    "reason": "panic operation (remainder by zero) has no recorded `// PANIC:` justification",
     "root": "panic_axioms::remainder",
     "root-kind": "concrete",
     "root-span": "src/lib.rs:5:1: 5:64",
@@ -61,7 +68,6 @@ expression: "report[\"findings\"]"
       "status": "verified-absent"
     },
     "span": "src/lib.rs:6:5: 6:28",
-    "target": "compiler assert remainder with a zero divisor",
     "trace": [
       "src/lib.rs:6:5: 6:28: panic_axioms::remainder --assert-> compiler assert remainder with a zero divisor"
     ]

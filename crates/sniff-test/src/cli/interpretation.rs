@@ -14,8 +14,8 @@ use crate::effects::EffectSelection;
 use crate::namespace::canonical_namespace;
 use crate::report::{EffectReportError, trace_selected_workspace};
 use crate::report_model::{
-    IncompleteReason, IncompleteTraceKind, InterpretationRoot, InterpretedFinding,
-    InterpretedFindingKind, InterpretedSafetyCallKind, InterpretedTrace, InterpretedTraceStep,
+    EffectFindingClass, IncompleteReason, IncompleteTraceKind, InterpretationRoot,
+    InterpretedFinding, InterpretedFindingKind, InterpretedTrace, InterpretedTraceStep,
     InterpretedTraceStepKind, RootInterpretation, TraceFrontier, UnresolvedCallCoverage,
     UnresolvedCallMechanism, UnresolvedCallSite,
 };
@@ -27,8 +27,7 @@ use rustc_span::Span;
 
 use super::findings::{
     DiagnosticMessage, FULL_STACK_TRACE_HINT, Finding, FindingDiagnostic, FindingKind,
-    FindingOwner, FindingTraceStepOrder, GenericEffectFindingKind, OwnerScope, SourceEvidence,
-    compact_function_name,
+    FindingOwner, FindingTraceStepOrder, OwnerScope, SourceEvidence, compact_function_name,
 };
 use super::report::render_span;
 
@@ -113,7 +112,12 @@ fn adapt_result(
             findings.push(adapt_incomplete(
                 sources,
                 &root.root,
-                FindingKind::PanicAnalysisIncomplete,
+                FindingKind::Effect {
+                    effect: "panic".to_owned(),
+                    finding: EffectFindingClass::AnalysisIncomplete,
+                    operation: None,
+                    missing_requirements: false,
+                },
                 "panic",
                 reason,
                 show_full_stack_trace,
@@ -123,7 +127,12 @@ fn adapt_result(
             findings.push(adapt_incomplete(
                 sources,
                 &root.root,
-                FindingKind::SafetyAnalysisIncomplete,
+                FindingKind::Effect {
+                    effect: "safety".to_owned(),
+                    finding: EffectFindingClass::AnalysisIncomplete,
+                    operation: None,
+                    missing_requirements: false,
+                },
                 "safety",
                 reason,
                 show_full_stack_trace,
@@ -136,8 +145,9 @@ fn adapt_result(
                     &root.root,
                     FindingKind::Effect {
                         effect: effect.as_str().to_owned(),
-                        finding: GenericEffectFindingKind::AnalysisIncomplete,
+                        finding: EffectFindingClass::AnalysisIncomplete,
                         operation: None,
+                        missing_requirements: false,
                     },
                     effect.as_str(),
                     reason,
@@ -155,24 +165,15 @@ fn adapt_finding(
     finding: &InterpretedFinding,
     show_full_stack_trace: bool,
 ) -> Finding {
-    let target = match (&finding.kind, finding.target.as_ref()) {
-        (InterpretedFindingKind::SafetyCall { .. }, Some(target)) if target.function.is_none() => {
-            Some(String::from("unsafe function pointer"))
+    let target = match (&finding.kind, finding.callee.as_ref()) {
+        (InterpretedFindingKind::UnresolvedCallTarget { .. }, Some(callee))
+            if callee.function.is_none() =>
+        {
+            None
         }
-        (
-            InterpretedFindingKind::UnresolvedPanicCallTarget { .. }
-            | InterpretedFindingKind::UnresolvedSafetyCallTarget { .. },
-            Some(target),
-        ) if target.function.is_none() => None,
-        (_, Some(target)) => Some(target.path.clone()),
+        (_, Some(callee)) => Some(callee.path.clone()),
         (_, None) => None,
-    }
-    .or_else(|| match &finding.kind {
-        InterpretedFindingKind::CompilerAssert { kind } => {
-            Some(format!("compiler assert {}", kind.human_description()))
-        }
-        _ => None,
-    });
+    };
     let missing_requirements = finding
         .missing_requirements
         .iter()
@@ -203,9 +204,8 @@ fn adapt_finding(
     };
     let trace = render_trace(sources, &finding.trace);
     let function = public_function_path(finding);
-    let unresolved_call = match &finding.kind {
-        InterpretedFindingKind::UnresolvedPanicCallTarget { site }
-        | InterpretedFindingKind::UnresolvedSafetyCallTarget { site } => Some(*site),
+    let unresolved_call = match finding.kind {
+        InterpretedFindingKind::UnresolvedCallTarget { site } => Some(site),
         _ => None,
     };
     let mut diagnostic = FindingDiagnostic {
@@ -230,12 +230,9 @@ fn adapt_finding(
         show_full_stack_trace,
     );
     let effect_display = match &finding.kind {
-        InterpretedFindingKind::UnsafeOperation { kind } => {
-            Some(format!("unsafe operation ({})", kind.label()))
-        }
-        InterpretedFindingKind::EffectOperation { effect, operation } => Some(format!(
+        InterpretedFindingKind::Operation { operation } => Some(format!(
             "{} operation ({})",
-            effect.as_str(),
+            finding.effect.key.as_str(),
             operation.as_str().replace('-', " ")
         )),
         _ => None,
@@ -271,39 +268,20 @@ fn adapt_finding(
 }
 
 fn public_function_path(finding: &InterpretedFinding) -> Option<String> {
-    match &finding.kind {
-        InterpretedFindingKind::AmbiguousSafetyRequirement { .. }
-        | InterpretedFindingKind::AmbiguousEffectRequirement { .. } => finding
-            .target
+    match finding.kind {
+        InterpretedFindingKind::AmbiguousRequirement { .. } => finding
+            .callee
             .as_ref()
-            .map(|target| target.path.clone())
+            .map(|callee| callee.path.clone())
             .or_else(|| Some(finding.function_path.clone())),
-        InterpretedFindingKind::MissingSafetyDocs
-        | InterpretedFindingKind::SafetyCall { .. }
-        | InterpretedFindingKind::UnresolvedSafetyCallTarget { .. }
-        | InterpretedFindingKind::UnsafeOperation { .. }
-        | InterpretedFindingKind::AmbiguousSafetyMarker { .. }
-        | InterpretedFindingKind::EffectOperation { .. }
-        | InterpretedFindingKind::EffectInvocation { .. }
-        | InterpretedFindingKind::DocumentedEffect { .. }
-        | InterpretedFindingKind::AmbiguousEffectMarker { .. } => {
-            Some(finding.function_path.clone())
-        }
-        InterpretedFindingKind::CompilerAssert { .. }
-        | InterpretedFindingKind::PanicSink
-        | InterpretedFindingKind::DocumentedPanic
-        | InterpretedFindingKind::UnresolvedPanicCallTarget { .. }
-        | InterpretedFindingKind::AmbiguousPanicRequirement { .. }
-        | InterpretedFindingKind::AmbiguousPanicMarker { .. } => None,
+        _ => Some(finding.function_path.clone()),
     }
 }
 
 fn ambiguity_primary_range(finding: &InterpretedFinding) -> Option<&SourceRangeFact> {
     matches!(
         &finding.kind,
-        InterpretedFindingKind::AmbiguousPanicRequirement { .. }
-            | InterpretedFindingKind::AmbiguousSafetyRequirement { .. }
-            | InterpretedFindingKind::AmbiguousEffectRequirement { .. }
+        InterpretedFindingKind::AmbiguousRequirement { .. }
     )
     .then(|| {
         finding
@@ -314,10 +292,6 @@ fn ambiguity_primary_range(finding: &InterpretedFinding) -> Option<&SourceRangeF
     .flatten()
 }
 
-#[allow(
-    clippy::too_many_lines,
-    reason = "keeping all finding variants together makes their output mapping easier to compare"
-)]
 fn finding_description(
     finding: &InterpretedFinding,
     root: &InterpretationRoot,
@@ -325,225 +299,112 @@ fn finding_description(
     owner: &FindingOwner,
     source_evidence: Option<SourceEvidence>,
 ) -> (FindingKind, String, String) {
+    let effect = &finding.effect;
+    let effect_name = effect.key.as_str();
+    let obligation = effect.obligation;
+    let class = |operation: Option<String>, missing_requirements| FindingKind::Effect {
+        effect: effect_name.to_owned(),
+        finding: finding.kind.class(),
+        operation,
+        missing_requirements,
+    };
+
     match &finding.kind {
-        InterpretedFindingKind::EffectOperation { effect, operation } => {
+        InterpretedFindingKind::Operation { operation } => {
             let subject = format!(
                 "{} operation ({})",
-                effect.as_str(),
+                effect_name,
                 operation.as_str().replace('-', " ")
             );
-            let kind = FindingKind::Effect {
-                effect: effect.as_str().to_owned(),
-                finding: GenericEffectFindingKind::ConcreteOperation,
-                operation: Some(operation.as_str().to_owned()),
-            };
-            (kind, subject.clone(), subject)
-        }
-        InterpretedFindingKind::EffectInvocation { effect, operation } => {
-            let subject = target.map_or_else(
-                || format!("{} invocation", effect.as_str()),
-                |target| format!("{} invocation to `{target}`", effect.as_str()),
-            );
-            let kind = FindingKind::Effect {
-                effect: effect.as_str().to_owned(),
-                finding: GenericEffectFindingKind::ConcreteInvocation,
-                operation: Some(operation.as_str().to_owned()),
-            };
-            (kind, subject.clone(), subject)
-        }
-        InterpretedFindingKind::DocumentedEffect { effect } => {
-            let subject = format!(
-                "call to `{}` with a documented {} obligation",
-                target.unwrap_or("effect boundary"),
-                effect.as_str()
-            );
-            let kind = FindingKind::Effect {
-                effect: effect.as_str().to_owned(),
-                finding: GenericEffectFindingKind::DocumentedObligation,
-                operation: None,
-            };
-            (kind, subject.clone(), subject)
-        }
-        InterpretedFindingKind::AmbiguousEffectRequirement {
-            effect,
-            normalized_name,
-        } => (
-            FindingKind::Effect {
-                effect: effect.as_str().to_owned(),
-                finding: GenericEffectFindingKind::AmbiguousRequirement,
-                operation: None,
-            },
-            format!(
-                "`{}` has multiple {} requirements named `{normalized_name}`",
-                target.unwrap_or(&finding.function_path),
-                effect.as_str()
-            ),
-            format!(
-                "`{}` has an ambiguous {} requirement name",
-                target.unwrap_or(&finding.function_path),
-                effect.as_str()
-            ),
-        ),
-        InterpretedFindingKind::AmbiguousEffectMarker {
-            effect,
-            effect_count,
-        } => (
-            FindingKind::Effect {
-                effect: effect.as_str().to_owned(),
-                finding: GenericEffectFindingKind::AmbiguousMarker,
-                operation: None,
-            },
-            format!(
-                "one {} marker applies to {effect_count} effect groups",
-                effect.as_str()
-            ),
-            format!(
-                "function `{}` has an ambiguous {} marker",
-                finding.function_path,
-                effect.as_str()
-            ),
-        ),
-        InterpretedFindingKind::CompilerAssert { kind } => source_marker_description(
-            FindingKind::CompilerAssert {
-                compiler_assert_kind: *kind,
-            },
-            &format!("compiler assertion ({})", kind.human_description()),
-            MarkerDomain::Panic,
-            owner,
-            source_evidence,
-            false,
-        ),
-        InterpretedFindingKind::PanicSink => {
-            let subject = target.map_or_else(
-                || String::from("panic invocation"),
-                |target| format!("panic invocation to `{target}`"),
-            );
             source_marker_description(
-                FindingKind::PanicInvocation,
+                class(Some(operation.as_str().to_owned()), false),
                 &subject,
-                MarkerDomain::Panic,
+                marker_domain(effect),
                 owner,
                 source_evidence,
                 false,
             )
         }
-        InterpretedFindingKind::DocumentedPanic => {
-            let target = target.unwrap_or("documented panic boundary");
+        InterpretedFindingKind::Invocation { operation } => {
+            let subject = target.map_or_else(
+                || format!("{} invocation", effect_name),
+                |target| format!("{} invocation to `{target}`", effect_name),
+            );
             source_marker_description(
-                FindingKind::DocumentedPanic,
-                &format!("call to `{target}` with a `# Panics` obligation"),
-                MarkerDomain::Panic,
+                class(Some(operation.as_str().to_owned()), false),
+                &subject,
+                marker_domain(effect),
+                owner,
+                source_evidence,
+                false,
+            )
+        }
+        InterpretedFindingKind::DocumentedObligation => {
+            let subject = format!(
+                "call to `{}` with a documented `# {}` obligation",
+                target.unwrap_or("effect boundary"),
+                obligation
+            );
+            source_marker_description(
+                class(None, !finding.missing_requirements.is_empty()),
+                &subject,
+                marker_domain(effect),
                 owner,
                 source_evidence,
                 !finding.missing_requirements.is_empty(),
             )
         }
-        InterpretedFindingKind::UnresolvedPanicCallTarget { site } => {
+        InterpretedFindingKind::UnresolvedCallTarget { site } => {
             let boundary = unresolved_target_summary(*site, target).replace('`', "");
+            let subject = format!(
+                "{} effect coverage is incomplete for {boundary}",
+                effect_name
+            );
             (
-                FindingKind::UnresolvedPanicCallTarget,
-                format!("panic coverage is incomplete for {boundary}"),
-                format!("function `{}` has incomplete panic coverage", root.path),
+                class(None, false),
+                subject.clone(),
+                format!(
+                    "function `{}` has incomplete {} coverage",
+                    root.path, effect_name
+                ),
             )
         }
-        InterpretedFindingKind::MissingSafetyDocs => (
-            FindingKind::MissingSafetyDocs,
-            format!(
-                "public unsafe function `{}` is missing # Safety docs",
-                finding.function_path
-            ),
-            format!(
-                "public unsafe function `{}` is missing `# Safety` docs",
-                finding.function_path
-            ),
-        ),
-        InterpretedFindingKind::SafetyCall { kind, .. } => {
-            let target = target.unwrap_or("unsafe function pointer");
-            let requirements_missing = !finding.missing_requirements.is_empty();
-            let (kind, subject) = match (kind, requirements_missing) {
-                (InterpretedSafetyCallKind::Unsafe, false) => (
-                    FindingKind::UnsafeCallMissingJustification,
-                    format!("unsafe call to `{target}`"),
-                ),
-                (InterpretedSafetyCallKind::Unsafe, true) => (
-                    FindingKind::UnsafeCallMissingRequirements,
-                    format!("unsafe call to `{target}`"),
-                ),
-                (InterpretedSafetyCallKind::Obligation, false) => (
-                    FindingKind::SafetyObligationMissingJustification,
-                    format!("call to `{target}` with a `# Safety` obligation"),
-                ),
-                (InterpretedSafetyCallKind::Obligation, true) => (
-                    FindingKind::SafetyObligationMissingRequirements,
-                    format!("call to `{target}` with a `# Safety` obligation"),
-                ),
-            };
-            source_marker_description(
-                kind,
-                &subject,
-                MarkerDomain::Safety,
-                owner,
-                source_evidence,
-                requirements_missing,
-            )
+        InterpretedFindingKind::MissingContract => {
+            let subject = format!(
+                "function `{}` is missing a documented `# {}` contract",
+                finding.function_path, obligation
+            );
+            (class(None, false), subject.clone(), subject)
         }
-        InterpretedFindingKind::UnresolvedSafetyCallTarget { site } => {
-            let boundary = unresolved_target_summary(*site, target).replace('`', "");
+        InterpretedFindingKind::AmbiguousRequirement { normalized_name } => {
+            let subject = format!(
+                "`{}` has multiple # {obligation} requirements named `{normalized_name}`",
+                target.unwrap_or(&finding.function_path)
+            );
             (
-                FindingKind::UnresolvedSafetyCallTarget,
-                format!("safety coverage is incomplete for {boundary}"),
-                format!("function `{}` has incomplete safety coverage", root.path),
+                class(None, false),
+                format!("{}", subject),
+                format!(
+                    "`{}` has an ambiguous `# {}` requirement name",
+                    target.unwrap_or(&finding.function_path),
+                    obligation
+                ),
             )
         }
-        InterpretedFindingKind::UnsafeOperation { kind } => source_marker_description(
-            FindingKind::UnsafeOpMissingJustification {
-                safety_op_kind: *kind,
-            },
-            &format!("unsafe operation ({})", kind.label()),
-            MarkerDomain::Safety,
-            owner,
-            source_evidence,
-            false,
-        ),
-        InterpretedFindingKind::AmbiguousPanicRequirement { normalized_name } => (
-            FindingKind::AmbiguousPanicRequirement,
-            format!(
-                "`{}` has {} # Panics requirements named `{normalized_name}`",
-                target.unwrap_or(&finding.function_path),
-                finding.requirements.len()
-            ),
-            format!(
-                "function `{}` reaches an ambiguous `# Panics` requirement name",
-                root.path
-            ),
-        ),
-        InterpretedFindingKind::AmbiguousSafetyRequirement { normalized_name } => (
-            FindingKind::AmbiguousSafetyRequirement,
-            format!(
-                "`{}` has multiple # Safety requirements named `{normalized_name}`",
-                target.unwrap_or(&finding.function_path)
-            ),
-            format!(
-                "`{}` has an ambiguous `# Safety` requirement name",
-                target.unwrap_or(&finding.function_path)
-            ),
-        ),
-        InterpretedFindingKind::AmbiguousPanicMarker { effect_count } => (
-            FindingKind::AmbiguousPanicMarker,
-            format!("one `// PANIC:` marker applies to {effect_count} panic effect groups"),
-            format!(
-                "function `{}` has an ambiguous `// PANIC:` marker",
-                finding.function_path
-            ),
-        ),
-        InterpretedFindingKind::AmbiguousSafetyMarker { effect_count } => (
-            FindingKind::AmbiguousSafetyMarker,
-            format!("one `// SAFETY:` marker applies to {effect_count} safety effect groups"),
-            format!(
-                "function `{}` has an ambiguous `// SAFETY:` marker",
-                finding.function_path
-            ),
-        ),
+        InterpretedFindingKind::AmbiguousMarker { effect_count } => {
+            let subject = format!(
+                "one `// {}:` marker applies to {effect_count} {} effect groups",
+                effect.justification, effect_name
+            );
+            (
+                class(None, false),
+                format!("{}", subject),
+                format!(
+                    "function `{}` has an ambiguous `// {}:` marker",
+                    finding.function_path, effect.justification
+                ),
+            )
+        }
     }
 }
 
@@ -551,6 +412,15 @@ fn finding_description(
 enum MarkerDomain {
     Panic,
     Safety,
+    Generic,
+}
+
+fn marker_domain(effect: &crate::effects::EffectMetadata) -> MarkerDomain {
+    match effect.justification {
+        "PANIC" => MarkerDomain::Panic,
+        "SAFETY" => MarkerDomain::Safety,
+        _ => MarkerDomain::Generic,
+    }
 }
 
 impl MarkerDomain {
@@ -558,6 +428,7 @@ impl MarkerDomain {
         match self {
             Self::Panic => "PANIC",
             Self::Safety => "SAFETY",
+            Self::Generic => "EFFECT",
         }
     }
 
@@ -565,6 +436,7 @@ impl MarkerDomain {
         match self {
             Self::Panic => "Panics",
             Self::Safety => "Safety",
+            Self::Generic => "Effect",
         }
     }
 
@@ -572,6 +444,7 @@ impl MarkerDomain {
         match self {
             Self::Panic => "panic path",
             Self::Safety => "safety obligation",
+            Self::Generic => "effect path",
         }
     }
 
@@ -579,6 +452,7 @@ impl MarkerDomain {
         match self {
             Self::Panic => "panic",
             Self::Safety => "safety",
+            Self::Generic => "effect",
         }
     }
 
@@ -586,6 +460,7 @@ impl MarkerDomain {
         match self {
             Self::Panic => "panics",
             Self::Safety => "safety",
+            Self::Generic => "analysis",
         }
     }
 
@@ -593,6 +468,7 @@ impl MarkerDomain {
         match self {
             Self::Panic => "possible panics",
             Self::Safety => "safety obligations",
+            Self::Generic => "effects",
         }
     }
 
@@ -603,6 +479,9 @@ impl MarkerDomain {
             ),
             Self::Safety => String::from(
                 "give each unsafe block or operation its own marker, or set `ambiguous-safety-marker = \"allow\"` under `[analysis.lints]`",
+            ),
+            Self::Generic => String::from(
+                "move the marker directly above one obligation, or configure the corresponding analysis lint",
             ),
         }
     }
@@ -615,6 +494,7 @@ impl MarkerDomain {
             Self::Safety => {
                 String::from("document this function's safety obligations with `/// # Safety` here")
             }
+            Self::Generic => String::from("document this function's obligations here"),
         }
     }
 }
@@ -875,7 +755,7 @@ impl EffectDiagnosticWriter<'_, '_, '_> {
     fn unresolved(&mut self, domain: MarkerDomain, site: UnresolvedCallSite) {
         let target = self
             .finding
-            .target
+            .callee
             .as_ref()
             .filter(|target| target.function.is_some())
             .map(|target| target.path.as_str());
@@ -991,48 +871,27 @@ fn decorate_finding(
         show_full_stack_trace,
         justification_marker: None,
     };
+    let domain = marker_domain(&finding.effect);
     match &finding.kind {
-        InterpretedFindingKind::EffectOperation { .. }
-        | InterpretedFindingKind::EffectInvocation { .. }
-        | InterpretedFindingKind::DocumentedEffect { .. }
-        | InterpretedFindingKind::AmbiguousEffectRequirement { .. }
-        | InterpretedFindingKind::AmbiguousEffectMarker { .. } => {}
-        InterpretedFindingKind::CompilerAssert { .. } | InterpretedFindingKind::PanicSink => {
-            writer.source(MarkerDomain::Panic, false);
+        InterpretedFindingKind::Operation { .. } | InterpretedFindingKind::Invocation { .. } => {
+            writer.source(domain, false)
         }
-        InterpretedFindingKind::DocumentedPanic => {
-            writer.source(MarkerDomain::Panic, true);
+        InterpretedFindingKind::DocumentedObligation => writer.source(domain, true),
+        InterpretedFindingKind::UnresolvedCallTarget { site } => writer.unresolved(domain, *site),
+        InterpretedFindingKind::MissingContract => {
+            writer
+                .diagnostic
+                .messages
+                .push(DiagnosticMessage::Help(format!(
+                    "document the caller obligations under a `# {}` section",
+                    domain.heading()
+                )));
         }
-        InterpretedFindingKind::UnresolvedPanicCallTarget { site } => {
-            writer.unresolved(MarkerDomain::Panic, *site);
+        InterpretedFindingKind::AmbiguousRequirement { normalized_name } => {
+            writer.ambiguous_requirement(domain, normalized_name);
         }
-        InterpretedFindingKind::MissingSafetyDocs => {
-            writer.diagnostic.messages.push(DiagnosticMessage::Help(
-                "document the caller obligations under a `# Safety` section".into(),
-            ));
-        }
-        InterpretedFindingKind::UnresolvedSafetyCallTarget { site } => {
-            writer.unresolved(MarkerDomain::Safety, *site);
-        }
-        InterpretedFindingKind::SafetyCall {
-            documents_contract, ..
-        } => {
-            writer.source(MarkerDomain::Safety, *documents_contract);
-        }
-        InterpretedFindingKind::UnsafeOperation { .. } => {
-            writer.source(MarkerDomain::Safety, false);
-        }
-        InterpretedFindingKind::AmbiguousPanicRequirement { normalized_name } => {
-            writer.ambiguous_requirement(MarkerDomain::Panic, normalized_name);
-        }
-        InterpretedFindingKind::AmbiguousSafetyRequirement { normalized_name } => {
-            writer.ambiguous_requirement(MarkerDomain::Safety, normalized_name);
-        }
-        InterpretedFindingKind::AmbiguousPanicMarker { effect_count } => {
-            writer.ambiguous_marker(MarkerDomain::Panic, *effect_count);
-        }
-        InterpretedFindingKind::AmbiguousSafetyMarker { effect_count } => {
-            writer.ambiguous_marker(MarkerDomain::Safety, *effect_count);
+        InterpretedFindingKind::AmbiguousMarker { effect_count } => {
+            writer.ambiguous_marker(domain, *effect_count);
         }
     }
     writer.justification_marker
@@ -1147,7 +1006,7 @@ fn add_contract_note(
     finding: &InterpretedFinding,
     heading: &str,
 ) {
-    let Some(target) = &finding.target else {
+    let Some(target) = &finding.callee else {
         return;
     };
     let note = format!("`{}` documents `# {heading}` here", target.path);
@@ -1202,7 +1061,7 @@ fn add_ambiguous_requirement_notes(
     normalized_name: &str,
 ) {
     let target = finding
-        .target
+        .callee
         .as_ref()
         .map_or(finding.function_path.as_str(), |target| {
             target.path.as_str()
@@ -1277,6 +1136,9 @@ fn unresolved_action(domain: MarkerDomain, mechanism: UnresolvedCallMechanism) -
             MarkerDomain::Safety => String::from(
                 "document caller safety requirements under `# Safety` on the trait method declaration",
             ),
+            MarkerDomain::Generic => {
+                String::from("document caller-visible obligations on the trait method declaration")
+            }
         };
     }
     String::from(
@@ -1890,9 +1752,9 @@ mod tests {
         DiagnosticMessage, FindingDiagnostic, FindingKind, FindingOwner, OwnerScope, SourceEvidence,
     };
     use crate::report_model::{
-        IncompleteTraceKind, InterpretationRoot, InterpretedFinding, InterpretedFindingKind,
-        InterpretedTrace, InterpretedTraceStep, InterpretedTraceStepKind, UnresolvedCallCoverage,
-        UnresolvedCallMechanism, UnresolvedCallSite,
+        EffectFindingClass, IncompleteTraceKind, InterpretationRoot, InterpretedFinding,
+        InterpretedFindingKind, InterpretedTrace, InterpretedTraceStep, InterpretedTraceStepKind,
+        UnresolvedCallCoverage, UnresolvedCallMechanism, UnresolvedCallSite,
     };
     use crate::report_roots::ReportRootKind;
 
@@ -2142,10 +2004,11 @@ mod tests {
             kind: ReportRootKind::Concrete,
         };
         let finding = InterpretedFinding {
-            kind: InterpretedFindingKind::DocumentedPanic,
+            effect: crate::effects::EffectMetadata::of::<crate::effects::panic::Panic>(),
+            kind: InterpretedFindingKind::DocumentedObligation,
             function,
             function_path: String::from("app::root"),
-            target: None,
+            callee: None,
             source_range: None,
             contract_source_range: None,
             marker_evidence: None,
@@ -2166,10 +2029,18 @@ mod tests {
             Some(SourceEvidence::VerifiedAbsent),
         );
 
-        assert_eq!(kind, FindingKind::DocumentedPanic);
+        assert_eq!(
+            kind,
+            FindingKind::Effect {
+                effect: String::from("panic"),
+                finding: EffectFindingClass::DocumentedObligation,
+                operation: None,
+                missing_requirements: false,
+            }
+        );
         assert_eq!(
             message,
-            "call to `core::slice::first` with a `# Panics` obligation has no recorded `// PANIC:` justification"
+            "call to `core::slice::first` with a documented `# Panics` obligation has no recorded `// PANIC:` justification"
         );
     }
 

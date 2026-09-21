@@ -4,14 +4,17 @@ expression: "report[\"findings\"]"
 ---
 [
   {
+    "effect": "safety",
+    "finding": "concrete-invocation",
     "function": "unsafe_closure_inherit::unjustified_closure::{closure#0}",
-    "kind": "unsafe-call-missing-justification",
+    "kind": "effect",
     "level": "warn",
+    "operation": "unsafe-call",
     "owner": {
       "crate": "unsafe_closure_inherit",
       "scope": "workspace"
     },
-    "reason": "could not verify `// SAFETY:` justification for unsafe call to `unsafe_closure_inherit::dangerous` in workspace crate `unsafe_closure_inherit`: no usable span was available for marker association",
+    "reason": "could not verify `// SAFETY:` justification for safety invocation to `unsafe_closure_inherit::dangerous` in workspace crate `unsafe_closure_inherit`: no usable span was available for marker association",
     "root": "unsafe_closure_inherit::unjustified_closure",
     "root-kind": "concrete",
     "root-span": "src/lib.rs:10:1: 10:29",

@@ -4,13 +4,16 @@ expression: "report[\"findings\"]"
 ---
 [
   {
-    "kind": "documented-panic",
+    "effect": "panic",
+    "finding": "documented-obligation",
+    "function": "indirect_calls::call_documented",
+    "kind": "effect",
     "level": "warn",
     "owner": {
       "crate": "indirect_calls",
       "scope": "workspace"
     },
-    "reason": "call to `indirect_calls::Risky::documented` with a `# Panics` obligation has no recorded `// PANIC:` justification",
+    "reason": "call to `indirect_calls::Risky::documented` with a documented `# Panics` obligation has no recorded `// PANIC:` justification",
     "root": "indirect_calls::call_documented",
     "root-kind": "generic",
     "root-span": "src/lib.rs:10:1: 10:56",
@@ -24,14 +27,16 @@ expression: "report[\"findings\"]"
     ]
   },
   {
+    "effect": "safety",
+    "finding": "unresolved-call-target",
     "function": "indirect_calls::call_documented",
-    "kind": "unresolved-safety-call-target",
+    "kind": "effect",
     "level": "warn",
     "owner": {
       "crate": "indirect_calls",
       "scope": "workspace"
     },
-    "reason": "safety coverage is incomplete for unresolved generic-dispatch call target (indirect_calls::Risky::documented)",
+    "reason": "safety effect coverage is incomplete for unresolved generic-dispatch call target (indirect_calls::Risky::documented)",
     "root": "indirect_calls::call_documented",
     "root-kind": "generic",
     "root-span": "src/lib.rs:10:1: 10:56",
@@ -46,35 +51,16 @@ expression: "report[\"findings\"]"
     }
   },
   {
-    "kind": "unresolved-panic-call-target",
-    "level": "warn",
-    "owner": {
-      "crate": "indirect_calls",
-      "scope": "workspace"
-    },
-    "reason": "panic coverage is incomplete for unresolved dynamic-dispatch call target (indirect_calls::Risky::undocumented)",
-    "root": "indirect_calls::call_dyn",
-    "root-kind": "concrete",
-    "root-span": "src/lib.rs:18:1: 18:47",
-    "span": "src/lib.rs:19:5: 19:29",
-    "target": "indirect_calls::Risky::undocumented",
-    "trace": [
-      "src/lib.rs:19:5: 19:29: indirect_calls::call_dyn --indirect-call-> indirect_calls::Risky::undocumented"
-    ],
-    "unresolved-call": {
-      "coverage": "none",
-      "mechanism": "dynamic-dispatch"
-    }
-  },
-  {
+    "effect": "panic",
+    "finding": "unresolved-call-target",
     "function": "indirect_calls::call_dyn",
-    "kind": "unresolved-safety-call-target",
+    "kind": "effect",
     "level": "warn",
     "owner": {
       "crate": "indirect_calls",
       "scope": "workspace"
     },
-    "reason": "safety coverage is incomplete for unresolved dynamic-dispatch call target (indirect_calls::Risky::undocumented)",
+    "reason": "panic effect coverage is incomplete for unresolved dynamic-dispatch call target (indirect_calls::Risky::undocumented)",
     "root": "indirect_calls::call_dyn",
     "root-kind": "concrete",
     "root-span": "src/lib.rs:18:1: 18:47",
@@ -89,34 +75,40 @@ expression: "report[\"findings\"]"
     }
   },
   {
-    "kind": "unresolved-panic-call-target",
+    "effect": "safety",
+    "finding": "unresolved-call-target",
+    "function": "indirect_calls::call_dyn",
+    "kind": "effect",
     "level": "warn",
     "owner": {
       "crate": "indirect_calls",
       "scope": "workspace"
     },
-    "reason": "panic coverage is incomplete for unresolved function-pointer call target",
-    "root": "indirect_calls::call_pointer",
+    "reason": "safety effect coverage is incomplete for unresolved dynamic-dispatch call target (indirect_calls::Risky::undocumented)",
+    "root": "indirect_calls::call_dyn",
     "root-kind": "concrete",
-    "root-span": "src/lib.rs:22:1: 22:50",
-    "span": "src/lib.rs:23:5: 23:17",
+    "root-span": "src/lib.rs:18:1: 18:47",
+    "span": "src/lib.rs:19:5: 19:29",
+    "target": "indirect_calls::Risky::undocumented",
     "trace": [
-      "src/lib.rs:23:5: 23:17: indirect_calls::call_pointer --indirect-call-> indirect call through a function pointer"
+      "src/lib.rs:19:5: 19:29: indirect_calls::call_dyn --indirect-call-> indirect_calls::Risky::undocumented"
     ],
     "unresolved-call": {
       "coverage": "none",
-      "mechanism": "function-pointer"
+      "mechanism": "dynamic-dispatch"
     }
   },
   {
+    "effect": "panic",
+    "finding": "unresolved-call-target",
     "function": "indirect_calls::call_pointer",
-    "kind": "unresolved-safety-call-target",
+    "kind": "effect",
     "level": "warn",
     "owner": {
       "crate": "indirect_calls",
       "scope": "workspace"
     },
-    "reason": "safety coverage is incomplete for unresolved function-pointer call target",
+    "reason": "panic effect coverage is incomplete for unresolved function-pointer call target",
     "root": "indirect_calls::call_pointer",
     "root-kind": "concrete",
     "root-span": "src/lib.rs:22:1: 22:50",
@@ -130,13 +122,39 @@ expression: "report[\"findings\"]"
     }
   },
   {
-    "kind": "unresolved-panic-call-target",
+    "effect": "safety",
+    "finding": "unresolved-call-target",
+    "function": "indirect_calls::call_pointer",
+    "kind": "effect",
     "level": "warn",
     "owner": {
       "crate": "indirect_calls",
       "scope": "workspace"
     },
-    "reason": "panic coverage is incomplete for unresolved generic-dispatch call target (indirect_calls::Risky::undocumented)",
+    "reason": "safety effect coverage is incomplete for unresolved function-pointer call target",
+    "root": "indirect_calls::call_pointer",
+    "root-kind": "concrete",
+    "root-span": "src/lib.rs:22:1: 22:50",
+    "span": "src/lib.rs:23:5: 23:17",
+    "trace": [
+      "src/lib.rs:23:5: 23:17: indirect_calls::call_pointer --indirect-call-> indirect call through a function pointer"
+    ],
+    "unresolved-call": {
+      "coverage": "none",
+      "mechanism": "function-pointer"
+    }
+  },
+  {
+    "effect": "panic",
+    "finding": "unresolved-call-target",
+    "function": "indirect_calls::call_undocumented",
+    "kind": "effect",
+    "level": "warn",
+    "owner": {
+      "crate": "indirect_calls",
+      "scope": "workspace"
+    },
+    "reason": "panic effect coverage is incomplete for unresolved generic-dispatch call target (indirect_calls::Risky::undocumented)",
     "root": "indirect_calls::call_undocumented",
     "root-kind": "generic",
     "root-span": "src/lib.rs:14:1: 14:58",
@@ -151,14 +169,16 @@ expression: "report[\"findings\"]"
     }
   },
   {
+    "effect": "safety",
+    "finding": "unresolved-call-target",
     "function": "indirect_calls::call_undocumented",
-    "kind": "unresolved-safety-call-target",
+    "kind": "effect",
     "level": "warn",
     "owner": {
       "crate": "indirect_calls",
       "scope": "workspace"
     },
-    "reason": "safety coverage is incomplete for unresolved generic-dispatch call target (indirect_calls::Risky::undocumented)",
+    "reason": "safety effect coverage is incomplete for unresolved generic-dispatch call target (indirect_calls::Risky::undocumented)",
     "root": "indirect_calls::call_undocumented",
     "root-kind": "generic",
     "root-span": "src/lib.rs:14:1: 14:58",

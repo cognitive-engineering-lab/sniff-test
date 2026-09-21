@@ -4,13 +4,16 @@ expression: "report[\"findings\"]"
 ---
 [
   {
-    "kind": "documented-panic",
+    "effect": "panic",
+    "finding": "documented-obligation",
+    "function": "optimizer_pruning::documented_inlinable_call",
+    "kind": "effect",
     "level": "warn",
     "owner": {
       "crate": "optimizer_pruning",
       "scope": "workspace"
     },
-    "reason": "call to `optimizer_pruning::greater_than_zero` with a `# Panics` obligation has no recorded `// PANIC:` justification",
+    "reason": "call to `optimizer_pruning::greater_than_zero` with a documented `# Panics` obligation has no recorded `// PANIC:` justification",
     "root": "optimizer_pruning::documented_inlinable_call",
     "root-kind": "concrete",
     "root-span": "src/lib.rs:7:1: 7:44",

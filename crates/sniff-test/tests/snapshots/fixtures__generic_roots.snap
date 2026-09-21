@@ -4,14 +4,17 @@ expression: "report[\"findings\"]"
 ---
 [
   {
-    "compiler-assert-kind": "bounds-check",
-    "kind": "compiler-assert",
+    "effect": "panic",
+    "finding": "concrete-operation",
+    "function": "generic_roots::generic_index",
+    "kind": "effect",
     "level": "deny",
+    "operation": "bounds-check",
     "owner": {
       "crate": "generic_roots",
       "scope": "workspace"
     },
-    "reason": "compiler assertion (index out of bounds) has no recorded `// PANIC:` justification",
+    "reason": "panic operation (bounds check) has no recorded `// PANIC:` justification",
     "root": "generic_roots::generic_index",
     "root-kind": "generic",
     "root-span": "src/lib.rs:1:1: 1:58",
@@ -19,7 +22,6 @@ expression: "report[\"findings\"]"
       "status": "verified-absent"
     },
     "span": "src/lib.rs:2:6: 2:19",
-    "target": "compiler assert index out of bounds",
     "trace": [
       "src/lib.rs:2:6: 2:19: generic_roots::generic_index --assert-> compiler assert index out of bounds"
     ]

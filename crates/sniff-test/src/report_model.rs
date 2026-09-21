@@ -1,9 +1,10 @@
 //! Policy-neutral finding values shared by effect tracing and report adapters.
 
 use crate::artifact::{
-    CallId, CallKindFact, CompilerAssertKind, ContractRequirementFact, EffectKey, EffectKind,
-    FunctionId, MarkerEvidenceState, SafetyOpKind, SourceRangeFact,
+    CallId, CallKindFact, ContractRequirementFact, EffectKey, EffectKind, FunctionId,
+    MarkerEvidenceState, SafetyOpKind, SourceRangeFact,
 };
+use crate::effects::EffectMetadata;
 use crate::report_roots::ReportRootKind;
 use serde::Serialize;
 use std::collections::BTreeMap;
@@ -75,10 +76,11 @@ pub(crate) enum IncompleteReason {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct InterpretedFinding {
+    pub(crate) effect: EffectMetadata,
     pub(crate) kind: InterpretedFindingKind,
     pub(crate) function: FunctionId,
     pub(crate) function_path: String,
-    pub(crate) target: Option<InterpretedTarget>,
+    pub(crate) callee: Option<InterpretedCallee>,
     pub(crate) source_range: Option<SourceRangeFact>,
     pub(crate) contract_source_range: Option<SourceRangeFact>,
     pub(crate) marker_evidence: Option<MarkerEvidenceState>,
@@ -88,9 +90,12 @@ pub(crate) struct InterpretedFinding {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct InterpretedTarget {
+pub(crate) struct InterpretedCallee {
     pub(crate) function: Option<FunctionId>,
     pub(crate) path: String,
+    /// Whether the callee's signature itself requires an explicit effect
+    /// context, independently of a documented obligation on that callee.
+    pub(crate) requires_explicit_context: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -119,12 +124,6 @@ pub(crate) enum InterpretedTraceStepKind {
     UnsafeOperation(SafetyOpKind),
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub(crate) enum InterpretedSafetyCallKind {
-    Unsafe,
-    Obligation,
-}
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize)]
 #[serde(rename_all = "kebab-case")]
 pub(crate) enum UnresolvedCallCoverage {
@@ -148,58 +147,40 @@ pub(crate) struct UnresolvedCallSite {
     pub(crate) mechanism: UnresolvedCallMechanism,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub(crate) enum EffectFindingClass {
+    ConcreteOperation,
+    ConcreteInvocation,
+    DocumentedObligation,
+    UnresolvedCallTarget,
+    AmbiguousMarker,
+    AmbiguousRequirement,
+    AnalysisIncomplete,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum InterpretedFindingKind {
-    EffectOperation {
-        effect: EffectKey,
-        operation: EffectKind,
-    },
-    EffectInvocation {
-        effect: EffectKey,
-        operation: EffectKind,
-    },
-    DocumentedEffect {
-        effect: EffectKey,
-    },
-    AmbiguousEffectRequirement {
-        effect: EffectKey,
-        normalized_name: String,
-    },
-    AmbiguousEffectMarker {
-        effect: EffectKey,
-        effect_count: usize,
-    },
-    CompilerAssert {
-        kind: CompilerAssertKind,
-    },
-    PanicSink,
-    DocumentedPanic,
-    UnresolvedPanicCallTarget {
-        site: UnresolvedCallSite,
-    },
-    MissingSafetyDocs,
-    SafetyCall {
-        kind: InterpretedSafetyCallKind,
-        /// Retains a bare `# Safety` contract even when it has no structured
-        /// requirements to carry that provenance into diagnostics.
-        documents_contract: bool,
-    },
-    UnresolvedSafetyCallTarget {
-        site: UnresolvedCallSite,
-    },
-    UnsafeOperation {
-        kind: SafetyOpKind,
-    },
-    AmbiguousPanicRequirement {
-        normalized_name: String,
-    },
-    AmbiguousSafetyRequirement {
-        normalized_name: String,
-    },
-    AmbiguousPanicMarker {
-        effect_count: usize,
-    },
-    AmbiguousSafetyMarker {
-        effect_count: usize,
-    },
+    Operation { operation: EffectKind },
+    Invocation { operation: EffectKind },
+    DocumentedObligation,
+    UnresolvedCallTarget { site: UnresolvedCallSite },
+    MissingContract,
+    AmbiguousRequirement { normalized_name: String },
+    AmbiguousMarker { effect_count: usize },
+}
+
+impl InterpretedFindingKind {
+    pub(crate) const fn class(&self) -> EffectFindingClass {
+        match self {
+            Self::Operation { .. } => EffectFindingClass::ConcreteOperation,
+            Self::Invocation { .. } => EffectFindingClass::ConcreteInvocation,
+            Self::DocumentedObligation | Self::MissingContract => {
+                EffectFindingClass::DocumentedObligation
+            }
+            Self::UnresolvedCallTarget { .. } => EffectFindingClass::UnresolvedCallTarget,
+            Self::AmbiguousRequirement { .. } => EffectFindingClass::AmbiguousRequirement,
+            Self::AmbiguousMarker { .. } => EffectFindingClass::AmbiguousMarker,
+        }
+    }
 }

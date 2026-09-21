@@ -4,13 +4,16 @@ expression: "report[\"findings\"]"
 ---
 [
   {
-    "kind": "documented-panic",
+    "effect": "panic",
+    "finding": "documented-obligation",
+    "function": "vendored_app::use_vendored",
+    "kind": "effect",
     "level": "warn",
     "owner": {
       "crate": "vendored_app",
       "scope": "workspace"
     },
-    "reason": "call to `vendored::checked` with a `# Panics` obligation has no recorded `// PANIC:` justification",
+    "reason": "call to `vendored::checked` with a documented `# Panics` obligation has no recorded `// PANIC:` justification",
     "root": "vendored_app::use_vendored",
     "root-kind": "concrete",
     "root-span": "src/lib.rs:1:1: 1:32",

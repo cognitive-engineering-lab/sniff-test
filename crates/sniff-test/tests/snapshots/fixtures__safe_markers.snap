@@ -4,8 +4,12 @@ expression: "report[\"findings\"]"
 ---
 [
   {
-    "kind": "panic-invocation",
+    "effect": "panic",
+    "finding": "concrete-invocation",
+    "function": "safe_markers::helper",
+    "kind": "effect",
     "level": "deny",
+    "operation": "configured-invocation",
     "owner": {
       "crate": "safe_markers",
       "scope": "workspace"
@@ -26,14 +30,17 @@ expression: "report[\"findings\"]"
     ]
   },
   {
-    "compiler-assert-kind": "division-by-zero",
-    "kind": "compiler-assert",
+    "effect": "panic",
+    "finding": "concrete-operation",
+    "function": "safe_markers::unsafe_ratio",
+    "kind": "effect",
     "level": "deny",
+    "operation": "division-by-zero",
     "owner": {
       "crate": "safe_markers",
       "scope": "workspace"
     },
-    "reason": "compiler assertion (division by zero) has no recorded `// PANIC:` justification",
+    "reason": "panic operation (division by zero) has no recorded `// PANIC:` justification",
     "root": "safe_markers::unsafe_ratio",
     "root-kind": "concrete",
     "root-span": "src/lib.rs:7:1: 7:63",
@@ -41,7 +48,6 @@ expression: "report[\"findings\"]"
       "status": "verified-absent"
     },
     "span": "src/lib.rs:8:5: 8:24",
-    "target": "compiler assert division by zero",
     "trace": [
       "src/lib.rs:8:5: 8:24: safe_markers::unsafe_ratio --assert-> compiler assert division by zero"
     ]

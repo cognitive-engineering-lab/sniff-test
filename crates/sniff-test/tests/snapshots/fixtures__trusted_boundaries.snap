@@ -4,14 +4,17 @@ expression: "report[\"findings\"]"
 ---
 [
   {
+    "effect": "safety",
+    "finding": "concrete-invocation",
     "function": "trusted_boundaries::trusted_unsafe_through_fn_pointer",
-    "kind": "unsafe-call-missing-justification",
+    "kind": "effect",
     "level": "warn",
+    "operation": "unsafe-call",
     "owner": {
       "crate": "trusted_boundaries",
       "scope": "workspace"
     },
-    "reason": "unsafe call to `unsafe function pointer` has no recorded `// SAFETY:` justification",
+    "reason": "safety invocation to `unsafe function pointer` has no recorded `// SAFETY:` justification",
     "root": "trusted_boundaries::trusted_unsafe_through_fn_pointer",
     "root-kind": "concrete",
     "root-span": "src/lib.rs:31:1: 31:82",
@@ -25,14 +28,17 @@ expression: "report[\"findings\"]"
     ]
   },
   {
+    "effect": "safety",
+    "finding": "concrete-invocation",
     "function": "trusted_boundaries::trusted_unsafe_without_docs",
-    "kind": "unsafe-call-missing-justification",
+    "kind": "effect",
     "level": "warn",
+    "operation": "unsafe-call",
     "owner": {
       "crate": "trusted_boundaries",
       "scope": "workspace"
     },
-    "reason": "unsafe call to `trusted_boundaries::unsafe_helper` has no recorded `// SAFETY:` justification",
+    "reason": "safety invocation to `trusted_boundaries::unsafe_helper` has no recorded `// SAFETY:` justification",
     "root": "trusted_boundaries::trusted_unsafe_without_docs",
     "root-kind": "concrete",
     "root-span": "src/lib.rs:27:1: 27:37",
@@ -46,13 +52,16 @@ expression: "report[\"findings\"]"
     ]
   },
   {
-    "kind": "documented-panic",
+    "effect": "panic",
+    "finding": "documented-obligation",
+    "function": "trusted_boundaries::trusted_with_docs",
+    "kind": "effect",
     "level": "warn",
     "owner": {
       "crate": "trusted_boundaries",
       "scope": "workspace"
     },
-    "reason": "call to `trusted_boundaries::trusted_doc_helper` with a `# Panics` obligation has no recorded `// PANIC:` justification",
+    "reason": "call to `trusted_boundaries::trusted_doc_helper` with a documented `# Panics` obligation has no recorded `// PANIC:` justification",
     "root": "trusted_boundaries::trusted_with_docs",
     "root-kind": "concrete",
     "root-span": "src/lib.rs:5:1: 5:37",

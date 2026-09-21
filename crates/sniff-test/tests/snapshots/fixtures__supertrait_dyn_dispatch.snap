@@ -4,13 +4,16 @@ expression: "report[\"findings\"]"
 ---
 [
   {
-    "kind": "documented-panic",
+    "effect": "panic",
+    "finding": "documented-obligation",
+    "function": "supertrait_dyn_dispatch::call_supertrait_method",
+    "kind": "effect",
     "level": "deny",
     "owner": {
       "crate": "supertrait_dyn_dispatch",
       "scope": "workspace"
     },
-    "reason": "call to `supertrait_dyn_dispatch::Super::risky` with a `# Panics` obligation has no recorded `// PANIC:` justification",
+    "reason": "call to `supertrait_dyn_dispatch::Super::risky` with a documented `# Panics` obligation has no recorded `// PANIC:` justification",
     "root": "supertrait_dyn_dispatch::call_supertrait_method",
     "root-kind": "concrete",
     "root-span": "src/lib.rs:22:1: 22:42",

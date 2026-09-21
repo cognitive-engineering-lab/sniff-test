@@ -1,9 +1,8 @@
 use crate::config::PanicConfig;
 
 use self::visit::CompilerAssertPass;
-use super::concrete::ConcreteEffect;
 #[cfg(test)]
-use super::concrete::ConcreteTermination;
+use super::concrete::{ConcreteEffect, ConcreteTermination};
 use super::visit::EffectPassRegistry;
 
 pub(crate) mod visit;
@@ -22,6 +21,7 @@ impl super::EffectSpec for Panic {
     }
 }
 
+#[cfg(test)]
 pub(crate) type PanicEffect<'annotations> = ConcreteEffect<'annotations>;
 #[cfg(test)]
 pub(crate) type PanicTermination = ConcreteTermination;

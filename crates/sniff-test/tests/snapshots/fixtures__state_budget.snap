@@ -4,7 +4,9 @@ expression: "report[\"findings\"]"
 ---
 [
   {
-    "kind": "panic-analysis-incomplete",
+    "effect": "panic",
+    "finding": "analysis-incomplete",
+    "kind": "effect",
     "level": "deny",
     "reason": "panic effect tracing exhausted `[analysis].trace-state-budget` (2) at frontier `state_budget::step_one`",
     "root": "state_budget::deep_chain",
