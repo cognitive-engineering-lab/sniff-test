@@ -97,6 +97,36 @@ impl<'config> ConcreteProbePolicy<'config> {
     fn ignores_macro_path(&self, path: &str) -> bool {
         self.ignored.best_match(path).is_some()
     }
+
+    fn invocation_source(
+        &self,
+        call: &crate::artifact::CallFact,
+        namespaces: &DefinitionNamespaceIndex,
+    ) -> Option<InvocationSourceMatch> {
+        let sources = self.source_boundaries?;
+        call.target
+            .function_target()
+            .filter(|target| self.target_is_source(sources, namespaces.candidates(target.function)))
+            .or_else(|| {
+                call.declaration_target.as_ref().filter(|target| {
+                    self.target_is_source(sources, namespaces.candidates(target.function))
+                })
+            })
+            .cloned()
+            .map(|target| InvocationSourceMatch {
+                target: Some(target),
+            })
+    }
+
+    fn target_is_source(&self, sources: &PathPatterns, candidates: &[String]) -> bool {
+        let Some(source) = sources.best_candidates_match(candidates) else {
+            return false;
+        };
+        !self
+            .trusted
+            .best_candidates_match(candidates)
+            .is_some_and(|trusted| trusted.precision > source.precision)
+    }
 }
 
 /// Resolves preliminary sources through shared function, macro, and boundary
@@ -259,7 +289,15 @@ pub(crate) fn probe_concrete_effect<'annotations, E: Effect>(
         }
 
         for call in &body.calls {
-            let Some(source) = E::invocation_source(config, call, namespaces) else {
+            let compiler_source = call
+                .invocation_effects
+                .iter()
+                .any(|source| source.effect.as_str() == E::EFFECT_NAME)
+                .then(|| InvocationSourceMatch {
+                    target: call.target.function_target().cloned(),
+                });
+            let configured_source = seeds.policy.invocation_source(call, namespaces);
+            let Some(source) = compiler_source.or(configured_source) else {
                 continue;
             };
             if let Some(invocation) = graph.invocation_for_raw_call(body.function, call.id) {

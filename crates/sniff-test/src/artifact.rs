@@ -49,6 +49,7 @@ impl ArtifactFacts {
             body.unverified_marker_probes.sort();
 
             for call in &mut body.calls {
+                sort_and_deduplicate(&mut call.invocation_effects);
                 if let Some(target) = &mut call.declaration_target {
                     canonicalize_function_target(target);
                 }
@@ -574,12 +575,13 @@ pub(crate) struct CallFact {
     /// Artifact-local identity of the source-level effect scope (or standalone
     /// call site) reported by the selected extraction passes.
     pub(crate) effect_group: Option<EffectGroupId>,
-    /// Whether an effect pass classified this invocation as requiring an
-    /// explicit user-owned context.
+    /// Concrete invocation effects emitted by registered compiler passes.
     ///
-    /// This remains explicit even for opaque function-pointer calls, where no
-    /// concrete [`FunctionTargetFact`] exists to carry the function signature.
-    pub(crate) requires_explicit_context: bool,
+    /// The call remains policy-neutral: each fact records the effect that
+    /// classified this edge as a source, while shared tracking owns graph
+    /// lookup, filtering, propagation, and diagnostics.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub(crate) invocation_effects: Vec<InvocationEffectFact>,
     /// Whether the compiler owns the relevant context, suppressing a
     /// user-authored justification obligation. Consumer-instantiation overlays
     /// reconcile this fact from the defining artifact.
@@ -609,6 +611,14 @@ pub(crate) struct CallFact {
     /// traversal.
     pub(crate) declaration_target: Option<FunctionTargetFact>,
     pub(crate) target: CallTargetFact,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub(crate) struct InvocationEffectFact {
+    pub(crate) effect: EffectKey,
+    pub(crate) kind: EffectKind,
+    pub(crate) effect_group: Option<EffectGroupId>,
 }
 
 /// One macro definition and source invocation on the path to a semantic fact.
@@ -1137,6 +1147,11 @@ fn validate_body(
                 "call {} has no safety effect group",
                 call.id.index()
             )));
+        }
+        validate_sorted_unique(&call.invocation_effects, Clone::clone, "invocation effect")?;
+        for source in &call.invocation_effects {
+            require_nonempty(source.effect.as_str(), "invocation effect name")?;
+            require_nonempty(source.kind.as_str(), "invocation effect kind")?;
         }
         validate_optional_range(call.source_range.as_ref(), source_lengths)?;
         validate_optional_range(call.expanded_range.as_ref(), source_lengths)?;
@@ -1764,7 +1779,7 @@ mod tests {
             call_site: CallSiteId::new(0),
             kind: CallKindFact::DirectCall,
             effect_group: Some(EffectGroupId::new(0)),
-            requires_explicit_context: false,
+            invocation_effects: Vec::new(),
             suppressed_by_compiler_context: false,
             source_range: None,
             expanded_range: None,
@@ -1806,7 +1821,7 @@ mod tests {
             call_site: CallSiteId::new(id),
             kind: CallKindFact::DirectCall,
             effect_group: Some(EffectGroupId::new(group)),
-            requires_explicit_context: false,
+            invocation_effects: Vec::new(),
             suppressed_by_compiler_context: false,
             source_range: Some(source_range.clone()),
             expanded_range: Some(source_range.clone()),
@@ -2524,7 +2539,7 @@ mod tests {
                 call_site: CallSiteId::new(4),
                 kind: CallKindFact::DirectCall,
                 effect_group: Some(EffectGroupId::new(6)),
-                requires_explicit_context: true,
+                invocation_effects: Vec::new(),
                 suppressed_by_compiler_context: true,
                 source_range: Some(range(40, 50)),
                 expanded_range: Some(range(80, 105)),
@@ -2639,7 +2654,6 @@ mod tests {
             decoded.functions[0].attributes.namespace_candidates,
             ["sample", "sample::root"]
         );
-        assert!(decoded.functions[0].calls[0].requires_explicit_context);
         assert!(decoded.functions[0].calls[0].suppressed_by_compiler_context);
         assert_eq!(
             decoded.functions[0].calls[0].effect_group,

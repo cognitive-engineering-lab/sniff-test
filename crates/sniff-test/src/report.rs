@@ -940,7 +940,14 @@ fn effect_groups(
             let owner = graph.stable_function(graph.invocation(invocation).caller());
             let group = safety
                 .invocation_source(invocation, call)
-                .and_then(|source| source.edge().effect_group)
+                .and_then(|source| {
+                    source
+                        .edge()
+                        .invocation_effects
+                        .iter()
+                        .find(|fact| fact.effect == ReportEffect::Safety.key())
+                        .and_then(|fact| fact.effect_group)
+                })
                 .map_or(SafetyEffectGroup::Invocation(invocation, call), |group| {
                     SafetyEffectGroup::Operation(owner, group)
                 });
@@ -976,10 +983,14 @@ fn obligation_effect_groups(
             if safety.invocation_source(invocation, edge.id).is_none() {
                 return SafetyEffectGroup::ContractInvocation(invocation, edge.id);
             }
-            edge.effect_group.map_or(
-                SafetyEffectGroup::Invocation(invocation, edge.id),
-                |group| SafetyEffectGroup::Operation(owner, group),
-            )
+            edge.invocation_effects
+                .iter()
+                .find(|fact| fact.effect == ReportEffect::Safety.key())
+                .and_then(|fact| fact.effect_group)
+                .map_or(
+                    SafetyEffectGroup::Invocation(invocation, edge.id),
+                    |group| SafetyEffectGroup::Operation(owner, group),
+                )
         })
         .collect()
 }
@@ -1481,12 +1492,12 @@ fn safety_findings(
                         function: owner,
                         function_path: body.display_path.clone(),
                         target: source.target().map(interpreted_target).or_else(|| {
-                            (edge.requires_explicit_context
-                                && edge.kind == crate::artifact::CallKindFact::IndirectCall)
-                                .then(|| InterpretedTarget {
+                            (edge.kind == crate::artifact::CallKindFact::IndirectCall).then(|| {
+                                InterpretedTarget {
                                     function: None,
                                     path: String::from("unsafe function pointer"),
-                                })
+                                }
+                            })
                         }),
                         source_range: edge.source_range.clone(),
                         contract_source_range: None,
@@ -2446,7 +2457,11 @@ fn boundary_description(edge: &crate::artifact::CallFact) -> String {
     if edge.kind == crate::artifact::CallKindFact::IndirectCall
         && edge.target.function_target().is_none()
     {
-        if edge.requires_explicit_context {
+        if edge
+            .invocation_effects
+            .iter()
+            .any(|source| source.effect == ReportEffect::Safety.key())
+        {
             String::from("indirect call through an unsafe function pointer")
         } else {
             String::from("indirect call through a function pointer")
@@ -2481,9 +2496,9 @@ mod tests {
         CallKindFact, CallSiteId, CallTargetFact, CompilerAssertKind, ContractFact,
         EffectContractFact, EffectFact, EffectGroupId, EffectId, EffectKey, EffectKind,
         FunctionAttributesFact, FunctionContractsFact, FunctionFact, FunctionFactProvenance,
-        FunctionId, FunctionTargetFact, IndirectCallKindFact, MacroExpansionFact,
-        MarkerEvidenceState, MarkerId, OpaqueTargetFact, SafetyOpKind, SourceFileFact,
-        SourceFileId, SourceRangeFact, StableDefPathHash, StableInstanceHash,
+        FunctionId, FunctionTargetFact, IndirectCallKindFact, InvocationEffectFact,
+        MacroExpansionFact, MarkerEvidenceState, MarkerId, OpaqueTargetFact, SafetyOpKind,
+        SourceFileFact, SourceFileId, SourceRangeFact, StableDefPathHash, StableInstanceHash,
         UnverifiedMarkerProbeFact, UnverifiedMarkerProbeReason,
     };
     use crate::artifact_cache::{
@@ -2641,7 +2656,7 @@ mod tests {
             call_site: CallSiteId::new(0),
             kind: CallKindFact::DirectCall,
             effect_group: Some(EffectGroupId::new(0)),
-            requires_explicit_context: false,
+            invocation_effects: Vec::new(),
             suppressed_by_compiler_context: false,
             source_range: None,
             expanded_range: None,
@@ -2651,6 +2666,14 @@ mod tests {
             declaration_target: None,
             target,
         }
+    }
+
+    fn mark_safety_invocation(call: &mut CallFact) {
+        call.invocation_effects.push(InvocationEffectFact {
+            effect: ReportEffect::Safety.key(),
+            kind: EffectKind::new("unsafe-call"),
+            effect_group: call.effect_group,
+        });
     }
 
     fn indirect_call(id: u32, site: u32, target: CallTargetFact) -> CallFact {
@@ -3191,11 +3214,11 @@ unresolved-call-target = "warn"
             byte_end: 20,
         };
         let mut first_call = call(0, target(first_target, "sample::First::run"));
-        first_call.requires_explicit_context = true;
+        mark_safety_invocation(&mut first_call);
         first_call.source_range = Some(range.clone());
         first_call.expanded_range = Some(range.clone());
         let mut second_call = call(0, target(second_target, "sample::Second::run"));
-        second_call.requires_explicit_context = true;
+        mark_safety_invocation(&mut second_call);
         second_call.source_range = Some(range.clone());
         second_call.expanded_range = Some(range);
         let artifact = ArtifactFacts::new(
@@ -3358,7 +3381,7 @@ unresolved-call-target = "warn"
         unsafe_pointer.call_site = CallSiteId::new(0);
         unsafe_pointer.kind = CallKindFact::IndirectCall;
         unsafe_pointer.indirect_kind = Some(IndirectCallKindFact::FunctionPointer);
-        unsafe_pointer.requires_explicit_context = true;
+        mark_safety_invocation(&mut unsafe_pointer);
         let artifact = ArtifactFacts::new(
             vec![
                 body(
@@ -3549,8 +3572,8 @@ unresolved-call-target = "warn"
         let unsafe_target = stable_function(42);
         let mut unsafe_call = call(1, target(unsafe_target, "sample::unsafe_target"));
         unsafe_call.call_site = CallSiteId::new(0);
-        unsafe_call.requires_explicit_context = true;
         unsafe_call.effect_group = Some(EffectGroupId::new(1));
+        mark_safety_invocation(&mut unsafe_call);
         let artifact = ArtifactFacts::new(
             vec![
                 body(

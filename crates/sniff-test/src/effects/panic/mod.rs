@@ -1,10 +1,7 @@
-use crate::artifact::{CallFact, DefinitionNamespaceIndex, FunctionTargetFact};
-use crate::config::{PanicBoundaryPolicy, PanicConfig};
+use crate::config::PanicConfig;
 
 use self::visit::CompilerAssertPass;
-use super::concrete::{
-    ConcreteEffect, ConcreteEffectState, ConcreteTermination, InvocationSourceMatch,
-};
+use super::concrete::{ConcreteEffect, ConcreteEffectState, ConcreteTermination};
 use super::visit::EffectPassRegistry;
 
 pub(crate) mod visit;
@@ -21,37 +18,8 @@ impl super::Effect for Panic {
     fn register_passes(registry: &mut EffectPassRegistry) {
         registry.register_mir_pass::<Self>(Box::new(CompilerAssertPass));
     }
-
-    fn invocation_source(
-        config: &Self::Config,
-        call: &CallFact,
-        namespaces: &DefinitionNamespaceIndex,
-    ) -> Option<InvocationSourceMatch> {
-        panic_sink_target(call, namespaces, config).map(|target| InvocationSourceMatch {
-            target: Some(target.clone()),
-        })
-    }
 }
 
 pub(crate) type PanicState = ConcreteEffectState;
 pub(crate) type PanicTermination = ConcreteTermination;
 pub(crate) type PanicEffect<'annotations> = ConcreteEffect<'annotations, Panic>;
-
-fn panic_sink_target<'call>(
-    call: &'call CallFact,
-    namespaces: &DefinitionNamespaceIndex,
-    config: &PanicConfig,
-) -> Option<&'call FunctionTargetFact> {
-    call.target
-        .function_target()
-        .filter(|target| {
-            config.panic_boundary_policy_candidates(namespaces.candidates(target.function))
-                == PanicBoundaryPolicy::PanicSink
-        })
-        .or_else(|| {
-            call.declaration_target.as_ref().filter(|target| {
-                config.panic_boundary_policy_candidates(namespaces.candidates(target.function))
-                    == PanicBoundaryPolicy::PanicSink
-            })
-        })
-}

@@ -94,7 +94,14 @@ fn call(id: u32, site: u32, target: CallTargetFact, requires_explicit_context: b
         call_site: CallSiteId::new(site),
         kind: CallKindFact::DirectCall,
         effect_group: Some(EffectGroupId::new(site)),
-        requires_explicit_context,
+        invocation_effects: requires_explicit_context
+            .then(|| crate::artifact::InvocationEffectFact {
+                effect: EffectKey::new("safety"),
+                kind: EffectKind::new("unsafe-call"),
+                effect_group: Some(EffectGroupId::new(site)),
+            })
+            .into_iter()
+            .collect(),
         suppressed_by_compiler_context: false,
         source_range: None,
         expanded_range: None,
@@ -123,7 +130,12 @@ fn unsafe_call_from_macro(
     macro_path: &str,
 ) -> CallFact {
     let mut call = call_from_macro(id, site, target, macro_path);
-    call.requires_explicit_context = true;
+    call.invocation_effects
+        .push(crate::artifact::InvocationEffectFact {
+            effect: safety_key(),
+            kind: EffectKind::new("unsafe-call"),
+            effect_group: Some(EffectGroupId::new(site)),
+        });
     call
 }
 

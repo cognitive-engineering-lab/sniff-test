@@ -1888,7 +1888,7 @@ mod tests {
                     call_site: CallSiteId::new(id),
                     kind: CallKindFact::DirectCall,
                     effect_group: Some(EffectGroupId::new(id)),
-                    requires_explicit_context: false,
+                    invocation_effects: Vec::new(),
                     suppressed_by_compiler_context: false,
                     source_range: Some(SourceRangeFact {
                         file: SourceFileId::new("sample-source"),

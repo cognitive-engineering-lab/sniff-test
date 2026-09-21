@@ -1,10 +1,7 @@
-use crate::artifact::{CallFact, DefinitionNamespaceIndex};
 use crate::config::SafetyConfig;
 
-use self::visit::SafetyThirPass;
-use super::concrete::{
-    ConcreteEffect, ConcreteEffectState, ConcreteTermination, InvocationSourceMatch,
-};
+use self::visit::{SafetyInvocationPass, SafetyThirPass};
+use super::concrete::{ConcreteEffect, ConcreteEffectState, ConcreteTermination};
 use super::visit::EffectPassRegistry;
 
 pub(crate) mod visit;
@@ -21,18 +18,7 @@ impl super::Effect for Safety {
 
     fn register_passes(registry: &mut EffectPassRegistry) {
         registry.register_thir_pass::<Self>(Box::new(SafetyThirPass::default()));
-    }
-
-    fn invocation_source(
-        _config: &Self::Config,
-        call: &CallFact,
-        _namespaces: &DefinitionNamespaceIndex,
-    ) -> Option<InvocationSourceMatch> {
-        (call.requires_explicit_context && !call.suppressed_by_compiler_context).then_some(
-            InvocationSourceMatch {
-                target: call.target.function_target().cloned(),
-            },
-        )
+        registry.register_mir_pass::<Self>(Box::new(SafetyInvocationPass));
     }
 }
 

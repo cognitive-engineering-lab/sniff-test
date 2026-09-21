@@ -27,15 +27,16 @@ use crate::artifact::{
     CallKindFact, CallSiteId, CallTargetFact, ContractFact, ContractRequirementFact,
     EffectContractFact, EffectFact, EffectGroupId, EffectId, EffectKey, EffectKind,
     FunctionAttributesFact, FunctionContractsFact, FunctionFact, FunctionFactProvenance,
-    FunctionId, FunctionTargetFact, IndirectCallKindFact, MacroExpansionFact, MarkerId,
-    OpaqueTargetFact, SourceFileFact, SourceFileId, SourceRangeFact, StableDefPathHash,
+    FunctionId, FunctionTargetFact, IndirectCallKindFact, InvocationEffectFact, MacroExpansionFact,
+    MarkerId, OpaqueTargetFact, SourceFileFact, SourceFileId, SourceRangeFact, StableDefPathHash,
     StableInstanceHash, UnverifiedMarkerProbeFact, UnverifiedMarkerProbeReason,
     same_macro_provenance,
 };
 use crate::config::MarkerProbing;
 use crate::contracts::{ContractDocSummary, contract_doc_summary_from_attrs};
 use crate::effects::visit::{
-    EffectPassRegistry, PreliminaryEffectSeed, RegisteredEffectPassOutput, RegisteredEffectSeed,
+    EffectPassRegistry, PreliminaryEffectSeed, PreliminaryMirEffectSource,
+    RegisteredEffectPassOutput, RegisteredEffectSeed,
 };
 use crate::effects::{EffectSelection, selected_effects};
 use crate::namespace::{canonical_namespace, namespace_candidates};
@@ -371,8 +372,6 @@ fn collect_edge<'tcx>(
         .transpose()?
         .flatten();
     let target = call_target(tcx, graph, edge, sources, effects)?;
-    let requires_explicit_context =
-        effects.invocation_requires_explicit_context(tcx, graph, reached, &target);
     let groups = if is_reachability_call(edge.kind) {
         effect_groups.group_for_call(
             origin.def_id(),
@@ -405,7 +404,7 @@ fn collect_edge<'tcx>(
             call_site: groups.call_site,
             kind: call_kind,
             effect_group: Some(groups.effect_group),
-            requires_explicit_context: requires_explicit_context,
+            invocation_effects: Vec::new(),
             suppressed_by_compiler_context: groups.suppressed_by_compiler_context,
             source_range: source_range.clone(),
             expanded_range: expanded_range.clone(),
@@ -419,23 +418,40 @@ fn collect_edge<'tcx>(
     let call_target = body.calls[call_index].call.target.clone();
     let declaration_target = body.calls[call_index].call.declaration_target.clone();
 
-    let detected_effects = pass_registry
-        .preliminary_mir_seeds(graph, edge)
-        .into_iter()
-        .filter_map(|seed| {
-            let effect = seed.effect;
-            collect_mir_effect(
-                effect.clone(),
-                seed.kind,
-                body,
-                &key,
-                source_range.as_ref(),
-                expanded_range.as_ref(),
-                &macro_expansions,
-            )
-            .map(|key| (key, effect))
-        })
-        .collect::<Vec<_>>();
+    let mut detected_effects = Vec::new();
+    for seed in pass_registry.preliminary_mir_seeds(
+        tcx,
+        graph,
+        reached,
+        &call_target,
+        groups.suppressed_by_compiler_context,
+    ) {
+        match seed.source {
+            PreliminaryMirEffectSource::Operation => {
+                if let Some(effect_key) = collect_mir_effect(
+                    seed.effect.clone(),
+                    seed.kind,
+                    body,
+                    &key,
+                    source_range.as_ref(),
+                    expanded_range.as_ref(),
+                    &macro_expansions,
+                ) {
+                    detected_effects.push((effect_key, seed.effect));
+                }
+            }
+            PreliminaryMirEffectSource::Invocation => {
+                body.calls[call_index]
+                    .call
+                    .invocation_effects
+                    .push(InvocationEffectFact {
+                        effect: seed.effect,
+                        kind: seed.kind,
+                        effect_group: Some(groups.effect_group),
+                    });
+            }
+        }
+    }
 
     collect_edge_markers(
         tcx,
@@ -503,7 +519,6 @@ fn insert_or_merge_call(
         || existing.source_range != call.source_range
         || existing.expanded_range != call.expanded_range
         || !same_macro_provenance(&existing.macro_expansions, &call.macro_expansions)
-        || existing.requires_explicit_context != call.requires_explicit_context
         || existing.suppressed_by_compiler_context != call.suppressed_by_compiler_context
         || existing.callee_range != call.callee_range
         || existing.indirect_kind != call.indirect_kind

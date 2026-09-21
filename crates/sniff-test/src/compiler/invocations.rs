@@ -937,7 +937,7 @@ mod tests {
             call_site: CallSiteId::new(site),
             kind,
             effect_group: Some(EffectGroupId::new(site)),
-            requires_explicit_context: false,
+            invocation_effects: Vec::new(),
             suppressed_by_compiler_context: false,
             source_range: None,
             expanded_range: None,

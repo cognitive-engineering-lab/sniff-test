@@ -1,12 +1,12 @@
 //! Compiler-pass registration and orchestration for concrete effect seeds.
 
-use reachability::{ReachabilityEdge, ReachabilityGraph};
+use reachability::{ReachabilityGraph, ReachedEdge};
 use rustc_hir::def_id::{DefId, LocalDefId};
 use rustc_middle::thir::{ExprId, Thir};
 use rustc_middle::ty::TyCtxt;
 use rustc_span::Span;
 
-use crate::artifact::{EffectKey, EffectKind};
+use crate::artifact::{CallTargetFact, EffectKey, EffectKind};
 
 use super::{Effect, EffectMetadata};
 
@@ -68,12 +68,20 @@ pub(crate) struct PreliminaryEffectGroupSeed {
 #[derive(Debug, Clone)]
 pub(crate) struct PreliminaryMirEffectSeed {
     pub(crate) kind: EffectKind,
+    pub(crate) source: PreliminaryMirEffectSource,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum PreliminaryMirEffectSource {
+    Operation,
+    Invocation,
 }
 
 #[derive(Debug, Clone)]
 pub(crate) struct RegisteredMirEffectSeed {
     pub(crate) effect: EffectKey,
     pub(crate) kind: EffectKind,
+    pub(crate) source: PreliminaryMirEffectSource,
 }
 
 /// HIR seed pass. The framework owns body enumeration and invokes every
@@ -102,10 +110,13 @@ pub(crate) trait ThirEffectPass {
 /// nodes, so the callback receives the normalized edge rather than repeating a
 /// second MIR traversal.
 pub(crate) trait MirEffectPass {
-    fn check_reachability_edge(
+    fn check_reachability_edge<'view, 'tcx>(
         &mut self,
-        _graph: &ReachabilityGraph<'_>,
-        _edge: &ReachabilityEdge,
+        _tcx: TyCtxt<'tcx>,
+        _graph: &'view ReachabilityGraph<'tcx>,
+        _reached: ReachedEdge<'view, 'tcx>,
+        _target: &CallTargetFact,
+        _suppressed_by_compiler_context: bool,
     ) -> Option<PreliminaryMirEffectSeed> {
         None
     }
@@ -235,19 +246,29 @@ impl EffectPassRegistry {
         output
     }
 
-    pub(crate) fn preliminary_mir_seeds(
+    pub(crate) fn preliminary_mir_seeds<'view, 'tcx>(
         &mut self,
-        graph: &ReachabilityGraph<'_>,
-        edge: &ReachabilityEdge,
+        tcx: TyCtxt<'tcx>,
+        graph: &'view ReachabilityGraph<'tcx>,
+        reached: ReachedEdge<'view, 'tcx>,
+        target: &CallTargetFact,
+        suppressed_by_compiler_context: bool,
     ) -> Vec<RegisteredMirEffectSeed> {
         self.mir_passes
             .iter_mut()
             .filter_map(|pass| {
                 pass.pass
-                    .check_reachability_edge(graph, edge)
+                    .check_reachability_edge(
+                        tcx,
+                        graph,
+                        reached,
+                        target,
+                        suppressed_by_compiler_context,
+                    )
                     .map(|seed| RegisteredMirEffectSeed {
                         effect: pass.effect.clone(),
                         kind: seed.kind,
+                        source: seed.source,
                     })
             })
             .collect()

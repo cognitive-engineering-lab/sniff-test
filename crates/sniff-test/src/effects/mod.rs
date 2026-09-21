@@ -8,18 +8,15 @@ pub(crate) mod visit;
 use std::fmt;
 
 use crate::artifact::{
-    AnnotationFactKind, AnnotationRole, CallFact, CallTargetFact, DefinitionNamespaceIndex,
-    EffectKey, FunctionTargetFact,
+    AnnotationFactKind, AnnotationRole, CallFact, EffectKey, FunctionTargetFact,
 };
 use clap::ValueEnum;
-use reachability::{ReachabilityGraph, ReachedEdge};
 use rustc_hir::def_id::DefId;
 use rustc_middle::ty::TyCtxt;
 use serde::{Deserialize, Serialize};
 
 use crate::path_patterns::PathPatterns;
 
-use self::concrete::InvocationSourceMatch;
 use self::visit::EffectPassRegistry;
 
 /// Built-in effect definition. Compiler passes only discover concrete seeds;
@@ -33,13 +30,6 @@ pub(crate) trait Effect {
     const USES_ENCLOSING_SCOPE_MARKER: bool = false;
 
     fn register_passes(registry: &mut EffectPassRegistry);
-
-    /// Classifies one extracted call as an invocation-level source.
-    fn invocation_source(
-        config: &Self::Config,
-        call: &CallFact,
-        namespaces: &DefinitionNamespaceIndex,
-    ) -> Option<InvocationSourceMatch>;
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -145,18 +135,6 @@ impl EffectSelection {
     #[must_use]
     pub(crate) fn function_requires_explicit_context(self, tcx: TyCtxt<'_>, def_id: DefId) -> bool {
         self.tracks_safety() && safety::visit::fn_def_is_unsafe(tcx, def_id)
-    }
-
-    #[must_use]
-    pub(crate) fn invocation_requires_explicit_context<'view, 'tcx>(
-        self,
-        tcx: TyCtxt<'tcx>,
-        graph: &'view ReachabilityGraph<'tcx>,
-        reached: ReachedEdge<'view, 'tcx>,
-        target: &CallTargetFact,
-    ) -> bool {
-        self.tracks_safety()
-            && safety::visit::edge_requires_explicit_context(tcx, graph, reached, target)
     }
 
     #[must_use]

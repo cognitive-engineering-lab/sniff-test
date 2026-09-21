@@ -38,11 +38,32 @@ use reachability::{
 
 use crate::artifact::{CallTargetFact, EffectKind, SafetyOpKind};
 use crate::effects::visit::{
-    EffectPassOutput, PreliminaryCallSeed, PreliminaryEffectGroup, PreliminaryEffectGroupSeed,
-    PreliminaryEffectSeed, ThirEffectPass,
+    EffectPassOutput, MirEffectPass, PreliminaryCallSeed, PreliminaryEffectGroup,
+    PreliminaryEffectGroupSeed, PreliminaryEffectSeed, PreliminaryMirEffectSeed,
+    PreliminaryMirEffectSource, ThirEffectPass,
 };
 
 pub(crate) type SafetyEffectGroup = PreliminaryEffectGroup;
+
+pub(crate) struct SafetyInvocationPass;
+
+impl MirEffectPass for SafetyInvocationPass {
+    fn check_reachability_edge<'view, 'tcx>(
+        &mut self,
+        tcx: TyCtxt<'tcx>,
+        graph: &'view ReachabilityGraph<'tcx>,
+        reached: ReachedEdge<'view, 'tcx>,
+        target: &CallTargetFact,
+        suppressed_by_compiler_context: bool,
+    ) -> Option<PreliminaryMirEffectSeed> {
+        (!suppressed_by_compiler_context
+            && edge_requires_explicit_context(tcx, graph, reached, target))
+        .then(|| PreliminaryMirEffectSeed {
+            kind: EffectKind::new("unsafe-call"),
+            source: PreliminaryMirEffectSource::Invocation,
+        })
+    }
+}
 
 // Legacy-shaped test fixture helpers keep low-level grouping tests concise;
 // production extraction consumes `EffectPassOutput` directly.
