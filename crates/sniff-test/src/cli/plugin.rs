@@ -500,19 +500,22 @@ mod tests {
         let all = analysis_rustflags(&SniffTestArgs::default(), &SniffTestConfig::default());
         let safety = analysis_rustflags(
             &SniffTestArgs {
-                effects: crate::effects::EffectSelection::from_effects(&[
-                    crate::effects::EffectDomain::Safety,
-                ]),
+                effects: crate::effects::EffectSelection::only([crate::artifact::EffectKey::new(
+                    "safety",
+                )]),
                 ..SniffTestArgs::default()
             },
             &SniffTestConfig::default(),
         );
 
-        assert!(all.iter().any(|flag| flag == "sniff_test_effects_all"));
+        assert!(
+            all.iter()
+                .any(|flag| flag.starts_with("sniff_test_effects_"))
+        );
         assert!(
             safety
                 .iter()
-                .any(|flag| flag == "sniff_test_effects_safety")
+                .any(|flag| flag.starts_with("sniff_test_effects_"))
         );
         assert_ne!(all, safety);
     }

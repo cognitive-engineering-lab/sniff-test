@@ -5,15 +5,13 @@ pub(crate) mod safety;
 pub(crate) mod trust;
 pub(crate) mod visit;
 
+use std::collections::BTreeSet;
 use std::fmt;
 use std::marker::PhantomData;
 
 use crate::artifact::{
     AnnotationFactKind, AnnotationRole, CallFact, EffectKey, FunctionTargetFact,
 };
-use clap::ValueEnum;
-use rustc_hir::def_id::DefId;
-use rustc_middle::ty::TyCtxt;
 use serde::{Deserialize, Serialize};
 
 use crate::path_patterns::PathPatterns;
@@ -87,6 +85,15 @@ pub(crate) struct EffectMetadata {
 impl EffectMetadata {
     #[must_use]
     pub(crate) fn of<E: EffectSpec>() -> Self {
+        assert!(!E::EFFECT_NAME.is_empty(), "effect name must not be empty");
+        assert!(
+            !E::OBLIGATION.is_empty(),
+            "obligation heading must not be empty"
+        );
+        assert!(
+            !E::JUSTIFICATION.is_empty(),
+            "justification marker must not be empty"
+        );
         Self {
             key: EffectKey::new(E::EFFECT_NAME),
             obligation: E::OBLIGATION,
@@ -97,7 +104,19 @@ impl EffectMetadata {
 }
 
 #[must_use]
-pub(crate) fn selected_effects(selection: EffectSelection) -> Vec<EffectMetadata> {
+pub(crate) fn registered_effects() -> Vec<Box<dyn Effect>> {
+    let effects = vec![effect::<panic::Panic>(), effect::<safety::Safety>()];
+    let unique = effects
+        .iter()
+        .map(|effect| effect.key())
+        .collect::<BTreeSet<_>>();
+    assert_eq!(unique.len(), effects.len(), "effect names must be unique");
+    effects
+}
+
+#[must_use]
+#[cfg(test)]
+pub(crate) fn selected_effects(selection: &EffectSelection) -> Vec<EffectMetadata> {
     selected_effect_objects(selection)
         .into_iter()
         .map(|effect| effect.metadata().clone())
@@ -105,15 +124,11 @@ pub(crate) fn selected_effects(selection: EffectSelection) -> Vec<EffectMetadata
 }
 
 #[must_use]
-pub(crate) fn selected_effect_objects(selection: EffectSelection) -> Vec<Box<dyn Effect>> {
-    let mut effects = Vec::<Box<dyn Effect>>::new();
-    if selection.tracks_panic() {
-        effects.push(effect::<panic::Panic>());
-    }
-    if selection.tracks_safety() {
-        effects.push(effect::<safety::Safety>());
-    }
-    effects
+pub(crate) fn selected_effect_objects(selection: &EffectSelection) -> Vec<Box<dyn Effect>> {
+    registered_effects()
+        .into_iter()
+        .filter(|effect| selection.selects(effect.key()))
+        .collect()
 }
 
 #[must_use]
@@ -137,82 +152,86 @@ pub(crate) trait EffectConfig {
     }
 }
 
-/// Effect domains enabled for one sniff-test invocation.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+/// Effects enabled for one sniff-test invocation.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub(crate) struct EffectSelection {
-    panic: bool,
-    safety: bool,
+    /// `None` selects every registered effect.
+    #[serde(default)]
+    only: Option<BTreeSet<EffectKey>>,
 }
 
 impl EffectSelection {
     #[must_use]
-    pub(crate) fn from_effects(effects: &[EffectDomain]) -> Self {
-        if effects.is_empty() {
-            return Self::default();
-        }
+    pub(crate) const fn all() -> Self {
+        Self { only: None }
+    }
+
+    #[must_use]
+    pub(crate) fn only(effects: impl IntoIterator<Item = EffectKey>) -> Self {
         Self {
-            panic: effects.contains(&EffectDomain::Panic),
-            safety: effects.contains(&EffectDomain::Safety),
+            only: Some(effects.into_iter().collect()),
         }
     }
 
     #[must_use]
-    pub(crate) const fn tracks_panic(self) -> bool {
-        self.panic
-    }
-
-    #[must_use]
-    pub(crate) const fn tracks_safety(self) -> bool {
-        self.safety
-    }
-
-    /// Registers every selected effect through the common effect interface.
-    ///
-    /// Compiler extraction deliberately does not know the built-in effect
-    /// types. This is the compatibility bridge for the current fixed
-    /// selection representation; a plugin registry can replace the body
-    /// without changing extraction.
-    pub(crate) fn register_passes(self, registry: &mut EffectPassRegistry) {
-        if self.tracks_panic() {
-            registry.register_effect::<panic::Panic>();
-        }
-        if self.tracks_safety() {
-            registry.register_effect::<safety::Safety>();
+    pub(crate) fn from_keys(effects: Vec<EffectKey>) -> Self {
+        if effects.is_empty() {
+            Self::all()
+        } else {
+            Self::only(effects)
         }
     }
 
-    /// Whether this selected set needs Rust unsafe-signature facts. Kept on
-    /// the selection boundary so compiler extraction does not name the effect
-    /// which owns that interpretation.
     #[must_use]
-    pub(crate) fn function_requires_explicit_context(self, tcx: TyCtxt<'_>, def_id: DefId) -> bool {
-        self.tracks_safety() && safety::visit::fn_def_is_unsafe(tcx, def_id)
+    pub(crate) fn selects(&self, effect: &EffectKey) -> bool {
+        self.only
+            .as_ref()
+            .is_none_or(|selected| selected.contains(effect))
     }
 
     #[must_use]
-    pub(crate) const fn fingerprint(self) -> &'static str {
-        match (self.panic, self.safety) {
-            (true, true) => "all",
-            (true, false) => "panic",
-            (false, true) => "safety",
-            (false, false) => "none",
-        }
+    pub(crate) fn tracks_panic(&self) -> bool {
+        self.selects(&EffectKey::new(panic::Panic::EFFECT_NAME))
+    }
+
+    #[must_use]
+    pub(crate) fn tracks_safety(&self) -> bool {
+        self.selects(&EffectKey::new(safety::Safety::EFFECT_NAME))
+    }
+
+    #[must_use]
+    pub(crate) fn fingerprint(&self) -> String {
+        const FNV_OFFSET_BASIS: u64 = 0xcbf2_9ce4_8422_2325;
+        const FNV_PRIME: u64 = 0x0000_0100_0000_01b3;
+
+        let mut selected = registered_effects()
+            .into_iter()
+            .filter(|effect| self.selects(effect.key()))
+            .map(|effect| effect.key().as_str().to_owned())
+            .collect::<Vec<_>>();
+        selected.sort_unstable();
+        let hash = selected.iter().fold(FNV_OFFSET_BASIS, |mut hash, effect| {
+            for byte in effect.len().to_le_bytes().iter().chain(effect.as_bytes()) {
+                hash = (hash ^ u64::from(*byte)).wrapping_mul(FNV_PRIME);
+            }
+            hash
+        });
+        format!("{hash:016x}")
+    }
+
+    #[must_use]
+    pub(crate) fn registered_keys() -> Vec<EffectKey> {
+        registered_effects()
+            .into_iter()
+            .map(|effect| effect.key().clone())
+            .collect()
     }
 }
 
 impl Default for EffectSelection {
     fn default() -> Self {
-        Self {
-            panic: true,
-            safety: true,
-        }
+        Self::all()
     }
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq, ValueEnum)]
-pub(crate) enum EffectDomain {
-    Panic,
-    Safety,
 }
 
 /// One raw call branch that actually produced an invocation-level effect.

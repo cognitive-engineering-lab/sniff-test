@@ -13,7 +13,7 @@ use rustc_span::Span;
 
 use crate::artifact::{EffectKey, EffectKind};
 
-use super::{Effect, EffectSpec, effect};
+use super::EffectSpec;
 
 /// Pass-local identity shared by concrete sources that use one justification.
 #[derive(Debug, Clone, Copy)]
@@ -241,10 +241,9 @@ pub(crate) struct RegisteredEffectPassOutput {
 
 #[derive(Default)]
 pub(crate) struct EffectPassRegistry {
-    effects: Vec<Box<dyn Effect>>,
-    hir_passes: Vec<RegisteredHirPass>,
-    thir_passes: Vec<RegisteredThirPass>,
-    mir_passes: Vec<RegisteredMirPass>,
+    hir: Vec<RegisteredHirPass>,
+    thir: Vec<RegisteredThirPass>,
+    mir: Vec<RegisteredMirPass>,
 }
 
 impl EffectPassRegistry {
@@ -253,28 +252,7 @@ impl EffectPassRegistry {
     /// effect name.
     #[must_use]
     pub(crate) fn requires_complete_thir(&self) -> bool {
-        !self.thir_passes.is_empty()
-    }
-
-    pub(crate) fn register_effect<E: EffectSpec>(&mut self) {
-        assert!(!E::EFFECT_NAME.is_empty(), "effect name must not be empty");
-        assert!(
-            !E::OBLIGATION.is_empty(),
-            "obligation heading must not be empty"
-        );
-        assert!(
-            !E::JUSTIFICATION.is_empty(),
-            "justification marker must not be empty"
-        );
-        let effect = effect::<E>();
-        assert!(
-            self.effects
-                .iter()
-                .all(|registered| registered.key() != effect.key()),
-            "effect names must be unique"
-        );
-        effect.register_passes(self);
-        self.effects.push(effect);
+        !self.thir.is_empty()
     }
 
     #[allow(
@@ -282,21 +260,21 @@ impl EffectPassRegistry {
         reason = "no built-in effect currently requires a HIR seed pass"
     )]
     pub(crate) fn register_hir_pass<E: EffectSpec>(&mut self, pass: Box<dyn HirEffectPass>) {
-        self.hir_passes.push(RegisteredHirPass {
+        self.hir.push(RegisteredHirPass {
             effect: EffectKey::new(E::EFFECT_NAME),
             pass,
         });
     }
 
     pub(crate) fn register_thir_pass<E: EffectSpec>(&mut self, pass: Box<dyn ThirEffectPass>) {
-        self.thir_passes.push(RegisteredThirPass {
+        self.thir.push(RegisteredThirPass {
             effect: EffectKey::new(E::EFFECT_NAME),
             pass,
         });
     }
 
     pub(crate) fn register_mir_pass<E: EffectSpec>(&mut self, pass: Box<dyn MirEffectPass>) {
-        self.mir_passes.push(RegisteredMirPass {
+        self.mir.push(RegisteredMirPass {
             effect: EffectKey::new(E::EFFECT_NAME),
             pass,
         });
@@ -308,27 +286,27 @@ impl EffectPassRegistry {
         owners: &[LocalDefId],
     ) -> RegisteredEffectPassOutput {
         for &owner in owners {
-            for pass in &mut self.hir_passes {
+            for pass in &mut self.hir {
                 pass.pass.check_body(tcx, owner);
             }
-            if self.thir_passes.is_empty() {
+            if self.thir.is_empty() {
                 continue;
             }
             let Ok((thir, root)) = tcx.thir_body(owner) else {
                 continue;
             };
             let thir = thir.borrow();
-            for pass in &mut self.thir_passes {
+            for pass in &mut self.thir {
                 pass.pass.check_body(tcx, owner, &thir, root);
             }
         }
         let mut output = RegisteredEffectPassOutput::default();
-        for pass in &mut self.hir_passes {
+        for pass in &mut self.hir {
             let mut local = EffectPassOutput::default();
             pass.pass.take_output(&mut local);
             append_registered_output(&pass.effect, local, &mut output);
         }
-        for pass in &mut self.thir_passes {
+        for pass in &mut self.thir {
             let mut local = EffectPassOutput::default();
             pass.pass.take_output(&mut local);
             append_registered_output(&pass.effect, local, &mut output);
@@ -353,7 +331,7 @@ impl EffectPassRegistry {
                 instance,
                 body,
             };
-            for pass in &mut self.mir_passes {
+            for pass in &mut self.mir {
                 for seed in pass.pass.check_body(cx) {
                     output
                         .seeds

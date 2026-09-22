@@ -131,7 +131,7 @@ impl AnnotationIndex {
             &namespaces,
             &ContractDocOverrides::default(),
             MarkerProbing::SourceCallsite,
-            &crate::effects::selected_effects(crate::effects::EffectSelection::default()),
+            &crate::effects::selected_effects(&crate::effects::EffectSelection::default()),
         )
     }
 

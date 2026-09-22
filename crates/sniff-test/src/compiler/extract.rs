@@ -38,7 +38,7 @@ use crate::effects::visit::{
     EffectPassRegistry, PreliminaryEffectSeed, PreliminaryMirEffectSource,
     RegisteredEffectPassOutput, RegisteredEffectSeed, RegisteredMirEffectPassOutput,
 };
-use crate::effects::{EffectSelection, selected_effects};
+use crate::effects::{EffectMetadata, EffectSelection, selected_effect_objects};
 use crate::namespace::{canonical_namespace, namespace_candidates};
 use crate::source_markers::{
     EffectMarkerBlock, MarkerProbe, effect_edge_marker_block, effect_site_marker_block,
@@ -75,11 +75,18 @@ impl std::error::Error for ExtractError {}
 /// configuration do not.
 pub(crate) fn extract_artifact_facts(
     tcx: TyCtxt<'_>,
-    effects: EffectSelection,
+    selection: &EffectSelection,
 ) -> Result<ArtifactFacts, ExtractError> {
     let required_owners = analyzable_local_fn_defs(tcx).collect::<Vec<_>>();
+    let selected_effects = selected_effect_objects(selection);
+    let effects = selected_effects
+        .iter()
+        .map(|effect| effect.metadata().clone())
+        .collect::<Vec<_>>();
     let mut pass_registry = EffectPassRegistry::default();
-    effects.register_passes(&mut pass_registry);
+    for effect in &selected_effects {
+        effect.register_passes(&mut pass_registry);
+    }
     if pass_registry.requires_complete_thir() {
         ensure_required_thir_is_available(tcx, &required_owners)?;
     }
@@ -98,7 +105,7 @@ pub(crate) fn extract_artifact_facts(
             function,
             owner.to_def_id(),
             FunctionFactProvenance::DefiningArtifact,
-            effects,
+            &effects,
         )?;
     }
 
@@ -110,10 +117,10 @@ pub(crate) fn extract_artifact_facts(
         &mut bodies,
         &mut effect_groups,
         &mut pass_registry,
-        effects,
+        &effects,
     )?;
 
-    attach_preliminary_operations(tcx, pass_output.seeds, &mut sources, &mut bodies, effects)?;
+    attach_preliminary_operations(tcx, pass_output.seeds, &mut sources, &mut bodies, &effects)?;
 
     let functions = bodies
         .into_values()
@@ -227,7 +234,7 @@ fn collect_reachability_mode<'tcx>(
     bodies: &mut BTreeMap<FunctionId, PendingBody>,
     effect_groups: &mut RawEffectGroupResolver,
     pass_registry: &mut EffectPassRegistry,
-    effects: EffectSelection,
+    effects: &[EffectMetadata],
 ) -> Result<(), ExtractError> {
     let mut reachability = ReachabilityIndex::new(tcx);
     let hooks = NoopReachabilityHooks;
@@ -350,7 +357,7 @@ fn collect_edge<'tcx>(
     bodies: &mut BTreeMap<FunctionId, PendingBody>,
     effect_groups: &mut RawEffectGroupResolver,
     mir_output: &mut RegisteredMirEffectPassOutput<'tcx>,
-    effects: EffectSelection,
+    effects: &[EffectMetadata],
 ) -> Result<(), ExtractError> {
     let edge = reached.edge();
     let Some(call_kind) = call_edge_kind(reached) else {
@@ -481,7 +488,7 @@ fn declaration_call_target(
     tcx: TyCtxt<'_>,
     declaration_callee: Option<DefId>,
     sources: &mut SourceTable,
-    effects: EffectSelection,
+    effects: &[EffectMetadata],
 ) -> Result<Option<FunctionTargetFact>, ExtractError> {
     declaration_callee
         .map(|def_id| function_target_for_def(tcx, def_id, sources, effects))
@@ -638,15 +645,14 @@ fn collect_edge_markers(
     detected_effects: &[(String, EffectKey)],
     declaration_target: Option<&FunctionTargetFact>,
     call_target: &CallTargetFact,
-    effects: EffectSelection,
+    effects: &[EffectMetadata],
 ) -> Result<(), ExtractError> {
-    let registered = selected_effects(effects);
-    let competing = registered
+    let competing = effects
         .iter()
         .map(|effect| effect.justification)
         .collect::<Vec<_>>();
     for (probing, applicable_probing) in probing_modes() {
-        for effect in &registered {
+        for effect in effects {
             let (target, requirements) = detected_effects
                 .iter()
                 .find(|(_, detected)| detected == &effect.key)
@@ -784,7 +790,7 @@ fn call_target<'tcx>(
     graph: &ReachabilityGraph<'tcx>,
     edge: &ReachabilityEdge,
     sources: &mut SourceTable,
-    effects: EffectSelection,
+    effects: &[EffectMetadata],
 ) -> Result<CallTargetFact, ExtractError> {
     match &graph.node(edge.target).kind {
         ReachabilityNodeKind::Instance(instance) => {
@@ -873,7 +879,7 @@ fn function_target_for_instance<'tcx>(
     tcx: TyCtxt<'tcx>,
     instance: Instance<'tcx>,
     sources: &mut SourceTable,
-    effects: EffectSelection,
+    effects: &[EffectMetadata],
 ) -> Result<FunctionTargetFact, ExtractError> {
     let def_id = instance.def_id();
     Ok(FunctionTargetFact {
@@ -882,7 +888,7 @@ fn function_target_for_instance<'tcx>(
             StableInstanceHash::from_instance(tcx, instance),
         ),
         display_path: canonical_namespace(tcx, def_id),
-        attributes: function_attributes(tcx, def_id, effects),
+        attributes: function_attributes(tcx, def_id),
         contracts: function_contracts(tcx, def_id, sources, effects)?,
     })
 }
@@ -891,12 +897,12 @@ fn function_target_for_def(
     tcx: TyCtxt<'_>,
     def_id: DefId,
     sources: &mut SourceTable,
-    effects: EffectSelection,
+    effects: &[EffectMetadata],
 ) -> Result<FunctionTargetFact, ExtractError> {
     Ok(FunctionTargetFact {
         function: FunctionId::generic(StableDefPathHash::from_def_id(tcx, def_id)),
         display_path: canonical_namespace(tcx, def_id),
-        attributes: function_attributes(tcx, def_id, effects),
+        attributes: function_attributes(tcx, def_id),
         contracts: function_contracts(tcx, def_id, sources, effects)?,
     })
 }
@@ -905,7 +911,7 @@ fn contract_declaration_for_def(
     tcx: TyCtxt<'_>,
     def_id: DefId,
     sources: &mut SourceTable,
-    effects: EffectSelection,
+    effects: &[EffectMetadata],
 ) -> Result<Option<FunctionTargetFact>, ExtractError> {
     tcx.trait_item_of(def_id)
         .filter(|declaration| *declaration != def_id)
@@ -913,11 +919,7 @@ fn contract_declaration_for_def(
         .transpose()
 }
 
-fn function_attributes(
-    tcx: TyCtxt<'_>,
-    def_id: DefId,
-    effects: EffectSelection,
-) -> FunctionAttributesFact {
+fn function_attributes(tcx: TyCtxt<'_>, def_id: DefId) -> FunctionAttributesFact {
     let candidates = namespace_candidates(tcx, def_id);
     let is_foreign = tcx.is_foreign_item(def_id);
     let def_kind = tcx.def_kind(def_id);
@@ -939,7 +941,7 @@ fn function_attributes(
             |local| tcx.effective_visibilities(()).is_exported(local),
         );
     FunctionAttributesFact {
-        is_unsafe: effects.function_requires_explicit_context(tcx, def_id),
+        is_unsafe: function_is_unsafe(tcx, def_id),
         is_exported,
         has_rust_body,
         is_foreign,
@@ -947,17 +949,27 @@ fn function_attributes(
     }
 }
 
+fn function_is_unsafe(tcx: TyCtxt<'_>, def_id: DefId) -> bool {
+    matches!(tcx.def_kind(def_id), DefKind::Fn | DefKind::AssocFn)
+        && tcx
+            .fn_sig(def_id)
+            .instantiate_identity()
+            .skip_binder()
+            .safety()
+            .is_unsafe()
+}
+
 fn function_contracts(
     tcx: TyCtxt<'_>,
     def_id: DefId,
     sources: &mut SourceTable,
-    effects: EffectSelection,
+    effects: &[EffectMetadata],
 ) -> Result<FunctionContractsFact, ExtractError> {
     if !matches!(tcx.def_kind(def_id), DefKind::Fn | DefKind::AssocFn) {
         return Ok(FunctionContractsFact::default());
     }
     let mut contracts = Vec::new();
-    for effect in selected_effects(effects) {
+    for effect in effects {
         if let Some(contract) = raw_contract(
             tcx,
             def_id,
@@ -965,7 +977,7 @@ fn function_contracts(
             sources,
         )? {
             contracts.push(EffectContractFact {
-                effect: effect.key,
+                effect: effect.key.clone(),
                 contract,
             });
         }
@@ -1013,7 +1025,7 @@ fn ensure_body(
     function: FunctionId,
     def_id: DefId,
     provenance: FunctionFactProvenance,
-    effects: EffectSelection,
+    effects: &[EffectMetadata],
 ) -> Result<(), ExtractError> {
     if let Some(body) = bodies.get(&function) {
         return if body.provenance == provenance {
@@ -1027,7 +1039,7 @@ fn ensure_body(
     }
     let contracts = function_contracts(tcx, def_id, sources, effects)?;
     let contract_declaration = contract_declaration_for_def(tcx, def_id, sources, effects)?;
-    let mut attributes = function_attributes(tcx, def_id, effects);
+    let mut attributes = function_attributes(tcx, def_id);
     // `ensure_body` is used only for required HIR bodies and expanded rustc
     // instances. That proves this facts entry has a body even when its defining
     // `DefId` is an abstract callable trait method backed by a compiler-
@@ -1454,7 +1466,7 @@ fn attach_preliminary_operations(
     facts: Vec<RegisteredEffectSeed>,
     sources: &mut SourceTable,
     bodies: &mut BTreeMap<FunctionId, PendingBody>,
-    effects: EffectSelection,
+    effects: &[EffectMetadata],
 ) -> Result<(), ExtractError> {
     for (ordinal, registered) in facts.into_iter().enumerate() {
         let fact = registered.seed;
@@ -1514,11 +1526,11 @@ fn attach_preliminary_operations(
                 },
             });
 
-            let metadata = selected_effects(effects)
-                .into_iter()
+            let metadata = effects
+                .iter()
                 .find(|effect| effect.key == registered.effect)
                 .expect("effect seed was emitted by a registered effect");
-            let competing = selected_effects(effects)
+            let competing = effects
                 .iter()
                 .map(|effect| effect.justification)
                 .collect::<Vec<_>>();

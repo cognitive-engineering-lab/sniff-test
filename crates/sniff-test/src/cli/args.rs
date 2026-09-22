@@ -1,9 +1,10 @@
 //! User-facing CLI parsing for the Cargo frontend and direct driver.
 use std::path::PathBuf;
 
+use crate::artifact::EffectKey;
 use crate::artifact_cache::default_cache_dir;
 use crate::config::{DEFAULT_MANIFEST_FILE, OverflowChecks};
-use crate::effects::{EffectDomain, EffectSelection};
+use crate::effects::EffectSelection;
 use clap::{Args, Parser, Subcommand, ValueEnum};
 use serde::{Deserialize, Serialize};
 
@@ -12,8 +13,13 @@ pub(crate) const MANIFEST_PATH_ENV: &str = "SNIFF_TEST_MANIFEST";
 #[derive(Debug, Args)]
 struct CommonCliArgs {
     /// Effect to track. May be repeated; defaults to all effects.
-    #[arg(short = 'e', long = "effect", value_enum, value_name = "EFFECT")]
-    effects: Vec<EffectDomain>,
+    #[arg(
+        short = 'e',
+        long = "effect",
+        value_parser = parse_effect,
+        value_name = "EFFECT"
+    )]
+    effects: Vec<EffectKey>,
 
     /// Path to sniff-test.toml.
     #[arg(long, value_name = "PATH")]
@@ -35,7 +41,7 @@ struct CommonCliArgs {
 impl CommonCliArgs {
     fn into_sniff_test_args(self) -> SniffTestArgs {
         SniffTestArgs {
-            effects: EffectSelection::from_effects(&self.effects),
+            effects: EffectSelection::from_keys(self.effects),
             manifest_path: self.manifest,
             cache_dir: self.cache_dir,
             color: self.color,
@@ -43,6 +49,22 @@ impl CommonCliArgs {
             ..SniffTestArgs::default()
         }
     }
+}
+
+fn parse_effect(value: &str) -> Result<EffectKey, String> {
+    let effect = EffectKey::new(value);
+    let available = EffectSelection::registered_keys();
+    if available.contains(&effect) {
+        return Ok(effect);
+    }
+    Err(format!(
+        "unknown effect `{value}`; available effects: {}",
+        available
+            .iter()
+            .map(EffectKey::as_str)
+            .collect::<Vec<_>>()
+            .join(", ")
+    ))
 }
 
 #[derive(Debug, Parser)]
@@ -284,6 +306,16 @@ mod tests {
             assert_eq!(args.effects.tracks_panic(), tracks_panic);
             assert_eq!(args.effects.tracks_safety(), tracks_safety);
         }
+    }
+
+    #[test]
+    fn frontend_rejects_an_unregistered_effect() {
+        let error = FrontendCli::try_parse_from(["cargo-sniff-test", "-e", "allocation"])
+            .expect_err("unregistered effect should fail during argument parsing");
+
+        let rendered = error.to_string();
+        assert!(rendered.contains("unknown effect `allocation`"));
+        assert!(rendered.contains("panic, safety"));
     }
 
     #[test]

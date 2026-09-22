@@ -112,17 +112,6 @@ pub(crate) fn call_identity_def_id(tcx: TyCtxt<'_>, def_id: DefId) -> DefId {
     tcx.trait_item_of(def_id).unwrap_or(def_id)
 }
 
-#[must_use]
-pub(crate) fn fn_def_is_unsafe(tcx: TyCtxt<'_>, def_id: DefId) -> bool {
-    matches!(tcx.def_kind(def_id), DefKind::Fn | DefKind::AssocFn)
-        && tcx
-            .fn_sig(def_id)
-            .instantiate_identity()
-            .skip_binder()
-            .safety()
-            .is_unsafe()
-}
-
 fn mir_call_requires_explicit_context<'tcx>(
     cx: MirEffectCx<'tcx>,
     func: &rustc_middle::mir::Operand<'tcx>,

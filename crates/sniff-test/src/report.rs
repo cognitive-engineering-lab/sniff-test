@@ -157,6 +157,7 @@ pub(crate) fn trace_workspace(
     roots: &[InterpretationRoot],
     config: &SniffTestConfig,
 ) -> Result<Vec<RootInterpretation>, EffectReportError> {
+    let effects = EffectSelection::default();
     trace_selected_workspace(
         local,
         local_stable_crate_id,
@@ -164,7 +165,7 @@ pub(crate) fn trace_workspace(
         &BTreeMap::new(),
         roots,
         config,
-        EffectSelection::default(),
+        &effects,
     )
 }
 
@@ -179,7 +180,7 @@ pub(crate) fn trace_selected_workspace(
     rustc_dependencies: &BTreeMap<u64, BTreeSet<u64>>,
     roots: &[InterpretationRoot],
     config: &SniffTestConfig,
-    effects: EffectSelection,
+    effects: &EffectSelection,
 ) -> Result<Vec<RootInterpretation>, EffectReportError> {
     let artifact = compose_workspace_artifact(local, dependencies)?;
     let artifact = &artifact;

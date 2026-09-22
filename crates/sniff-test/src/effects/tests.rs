@@ -28,6 +28,18 @@ fn safety_key() -> EffectKey {
     EffectKey::new(<Safety as super::EffectSpec>::EFFECT_NAME)
 }
 
+#[test]
+fn effect_selection_uses_registered_keys_generically() {
+    let all = super::EffectSelection::all();
+    let explicit_all = super::EffectSelection::only(super::EffectSelection::registered_keys());
+    let safety = super::EffectSelection::only([safety_key()]);
+
+    assert!(all.selects(&panic_key()));
+    assert!(all.selects(&safety_key()));
+    assert_eq!(all.fingerprint(), explicit_all.fingerprint());
+    assert_ne!(all.fingerprint(), safety.fingerprint());
+}
+
 fn stable_function(index: u64) -> StableFunctionId {
     let value = format!("{index:016x}{:016x}", index + 100);
     let hash = serde_json::from_str::<StableDefPathHash>(&format!("\"{value}\""))
@@ -681,7 +693,7 @@ fn declaration_contract_overrides_apply_without_a_declaration_body_or_call() {
         &namespaces,
         &overrides,
         MarkerProbing::SourceCallsite,
-        &super::selected_effects(super::EffectSelection::default()),
+        &super::selected_effects(&super::EffectSelection::default()),
     )
     .expect("annotations");
     let implementation = graph.function(implementation).expect("implementation");
@@ -747,7 +759,7 @@ fn declaration_override_uses_union_of_all_occurrence_aliases() {
             &namespaces,
             &overrides,
             MarkerProbing::SourceCallsite,
-            &super::selected_effects(super::EffectSelection::default()),
+            &super::selected_effects(&super::EffectSelection::default()),
         )
         .expect("annotations");
 

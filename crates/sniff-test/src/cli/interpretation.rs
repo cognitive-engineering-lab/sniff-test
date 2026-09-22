@@ -43,7 +43,7 @@ pub(super) fn interpret_workspace<'tcx>(
     metadata_loader: &dyn rustc_metadata::creader::MetadataLoader,
     report_roots: &[ReportRoot<'tcx>],
     config: &SniffTestConfig,
-    effects: EffectSelection,
+    effects: &EffectSelection,
 ) -> Result<Vec<Finding>, EffectReportError> {
     let roots = report_roots
         .iter()
