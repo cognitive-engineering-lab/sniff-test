@@ -1,6 +1,6 @@
 use crate::config::PanicConfig;
 
-use self::visit::CompilerAssertPass;
+use self::visit::{BuiltinPanicInvocationPass, CompilerAssertPass};
 #[cfg(test)]
 use super::concrete::{ConcreteEffect, ConcreteTermination};
 use super::visit::EffectPassRegistry;
@@ -18,6 +18,7 @@ impl super::EffectSpec for Panic {
 
     fn register_passes(registry: &mut EffectPassRegistry) {
         registry.register_mir_pass::<Self>(Box::new(CompilerAssertPass));
+        registry.register_mir_pass::<Self>(Box::new(BuiltinPanicInvocationPass));
     }
 }
 

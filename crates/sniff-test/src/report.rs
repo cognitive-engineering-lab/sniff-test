@@ -24,7 +24,7 @@ use crate::artifact::{
 use crate::compiler::invocations::{
     InvocationGraph, InvocationResolution, UnresolvedCallTargetReason,
 };
-use crate::config::{MarkerProbing, PanicBoundaryPolicy, SniffTestConfig};
+use crate::config::{MarkerProbing, SniffTestConfig};
 use crate::contracts::normalize_requirement_name;
 use crate::effects::InvocationSourceBranch;
 use crate::effects::concrete::{ConcreteSource, probe_concrete_effect};
@@ -1527,8 +1527,7 @@ fn unresolved_source_is_covered(
     match domain {
         ReportEffect::Panic => {
             config.panics.ignores_candidates(candidates)
-                || config.panics.panic_boundary_policy_candidates(candidates)
-                    != PanicBoundaryPolicy::Normal
+                || config.panics.trusts_panic_boundary_candidates(candidates)
         }
         ReportEffect::Safety => {
             config.safety.ignores_candidates(candidates)
@@ -1960,10 +1959,7 @@ fn trusted_boundary(
 ) -> bool {
     let candidates = namespaces.candidates(function);
     match domain {
-        ReportEffect::Panic => {
-            config.panics.panic_boundary_policy_candidates(candidates)
-                == PanicBoundaryPolicy::TrustedBoundary
-        }
+        ReportEffect::Panic => config.panics.trusts_panic_boundary_candidates(candidates),
         ReportEffect::Safety => config.safety.trusts_safety_boundary_candidates(candidates),
     }
 }
@@ -2608,6 +2604,14 @@ mod tests {
         });
     }
 
+    fn mark_panic_invocation(call: &mut CallFact) {
+        call.invocation_effects.push(InvocationEffectFact {
+            effect: ReportEffect::Panic.key(),
+            kind: EffectKind::new("configured-invocation"),
+            effect_group: call.effect_group,
+        });
+    }
+
     fn indirect_call(id: u32, site: u32, target: CallTargetFact) -> CallFact {
         let mut call = call(id, target);
         call.call_site = CallSiteId::new(site);
@@ -3242,6 +3246,7 @@ unresolved-call-target = "warn"
             0,
             bodyless_declaration(sink, "sink::panic", FunctionContractsFact::default()),
         );
+        mark_panic_invocation(&mut sink_call);
         sink_call.call_site = CallSiteId::new(0);
         let artifact = ArtifactFacts::new(
             vec![
@@ -3269,9 +3274,7 @@ unresolved-call-target = "warn"
             Vec::new(),
         )
         .expect("grouped panic sink artifact");
-        let config =
-            SniffTestConfig::from_manifest_str("[panics]\npanic-sink-namespaces = [\"sink::**\"]")
-                .expect("panic sink configuration");
+        let config = SniffTestConfig::default();
 
         let reports = trace_workspace(
             &artifact,
@@ -3402,6 +3405,7 @@ unresolved-call-target = "warn"
             0,
             bodyless_declaration(sink, "sink::panic", FunctionContractsFact::default()),
         );
+        mark_panic_invocation(&mut sink_call);
         sink_call.call_site = CallSiteId::new(0);
         let compiler_assert = EffectFact {
             id: EffectId::new(0),
@@ -3458,9 +3462,7 @@ unresolved-call-target = "warn"
             Vec::new(),
         )
         .expect("grouped panic marker artifact");
-        let config =
-            SniffTestConfig::from_manifest_str("[panics]\npanic-sink-namespaces = [\"sink::**\"]")
-                .expect("panic sink configuration");
+        let config = SniffTestConfig::default();
 
         let reports = trace_workspace(
             &artifact,
@@ -4322,7 +4324,7 @@ unresolved-call-target = "warn"
                 "other::Iterator::next",
                 true,
                 "sink::IntoIterator::into_iter",
-                0,
+                1,
             ),
             // A representative ignored edge must not hide its uncovered
             // sibling merely because rustc grouped them at one source site.
@@ -4351,7 +4353,6 @@ unresolved-call-target = "warn"
                 [panics]
                 trusted-boundary-namespaces = ["trusted::**"]
                 ignored-namespaces = ["ignored::**"]
-                panic-sink-namespaces = ["sink::**"]
                 [panics.lints]
                 unresolved-call-target = "warn"
             "#,

@@ -135,6 +135,27 @@ fn call_from_macro(id: u32, site: u32, target: CallTargetFact, macro_path: &str)
     call
 }
 
+fn panic_call(id: u32, site: u32, target: CallTargetFact) -> CallFact {
+    let mut call = call(id, site, target, false);
+    mark_panic_invocation(&mut call);
+    call
+}
+
+fn panic_call_from_macro(id: u32, site: u32, target: CallTargetFact, macro_path: &str) -> CallFact {
+    let mut call = call_from_macro(id, site, target, macro_path);
+    mark_panic_invocation(&mut call);
+    call
+}
+
+fn mark_panic_invocation(call: &mut CallFact) {
+    call.invocation_effects
+        .push(crate::artifact::InvocationEffectFact {
+            effect: panic_key(),
+            kind: EffectKind::new("configured-invocation"),
+            effect_group: call.effect_group,
+        });
+}
+
 fn unsafe_call_from_macro(
     id: u32,
     site: u32,
@@ -1625,11 +1646,10 @@ fn panic_probe_collects_asserts_and_sink_invocations_with_source_markers() {
     let (artifact, graph, annotations) = setup(vec![body(
         root,
         "sample::root",
-        vec![call(
+        vec![panic_call(
             0,
             0,
             target(panic_sink, "core::panicking::panic_fmt"),
-            false,
         )],
         vec![assert_effect(0)],
         vec![
@@ -1677,12 +1697,7 @@ fn marker_on_a_grouped_sibling_does_not_justify_a_panic_sink() {
         "sample::root",
         vec![
             call(0, 0, target(ordinary, "sample::ordinary"), false),
-            call(
-                1,
-                0,
-                target(panic_sink, "core::panicking::panic_fmt"),
-                false,
-            ),
+            panic_call(1, 0, target(panic_sink, "core::panicking::panic_fmt")),
         ],
         Vec::new(),
         vec![call_comment(
@@ -2001,13 +2016,8 @@ fn grouped_effect_sources_are_terminated_per_raw_branch() {
         root,
         "sample::panic_root",
         vec![
-            call(0, 0, target(first, "core::panicking::panic_fmt"), false),
-            call(
-                1,
-                0,
-                target(second, "core::panicking::panic_nounwind"),
-                false,
-            ),
+            panic_call(0, 0, target(first, "core::panicking::panic_fmt")),
+            panic_call(1, 0, target(second, "core::panicking::panic_nounwind")),
         ],
         Vec::new(),
         vec![call_comment(
@@ -2066,7 +2076,7 @@ fn grouped_effect_sources_are_terminated_per_raw_branch() {
 }
 
 #[test]
-fn panic_sink_declaration_seeds_opaque_invocation() {
+fn opaque_panic_declaration_is_not_inferred_as_a_builtin_invocation() {
     let root = stable_function(0);
     let runtime_target = stable_function(1);
     let declaration = stable_function(2);
@@ -2093,19 +2103,7 @@ fn panic_sink_declaration_seeds_opaque_invocation() {
     .expect("panic sink configuration");
 
     let panic = probe_panic(&artifact, &graph, &annotations, &config.panics);
-    let trace = EffectEngine::new(&graph).trace(&panic);
-    let invocation = graph
-        .invocation_for_raw_call(root, CallId::new(0))
-        .expect("opaque invocation");
-
-    assert_eq!(panic.source_count(), 1);
-    assert_eq!(
-        trace.outcomes().collect::<Vec<_>>(),
-        vec![TraceOutcome::Escaped(ConcreteSource::Invocation {
-            invocation,
-            call: CallId::new(0),
-        })]
-    );
+    assert_eq!(panic.source_count(), 0);
 }
 
 #[test]
@@ -2115,7 +2113,7 @@ fn ignored_macro_path_terminates_a_direct_panic_source() {
     let (artifact, graph, annotations) = setup(vec![body(
         root,
         "sample::root",
-        vec![call_from_macro(
+        vec![panic_call_from_macro(
             0,
             0,
             target(panic_sink, "core::panicking::panic_nounwind_fmt"),
@@ -2405,7 +2403,7 @@ fn explicit_empty_ignored_namespaces_restores_unsafe_precondition_panics() {
     let (artifact, graph, annotations) = setup(vec![body(
         root,
         "sample::root",
-        vec![call_from_macro(
+        vec![panic_call_from_macro(
             0,
             0,
             target(panic_sink, "core::panicking::panic_nounwind_fmt"),
@@ -2438,18 +2436,13 @@ fn ignored_macro_path_does_not_hide_an_unrelated_panic_in_the_same_function() {
         root,
         "sample::root",
         vec![
-            call_from_macro(
+            panic_call_from_macro(
                 0,
                 0,
                 target(panic_sink, "core::panicking::panic_nounwind_fmt"),
                 "core::ub_checks::assert_unsafe_precondition",
             ),
-            call(
-                1,
-                1,
-                target(panic_sink, "core::panicking::panic_fmt"),
-                false,
-            ),
+            panic_call(1, 1, target(panic_sink, "core::panicking::panic_fmt")),
         ],
         Vec::new(),
         Vec::new(),
@@ -2472,51 +2465,6 @@ fn ignored_macro_path_does_not_hide_an_unrelated_panic_in_the_same_function() {
             .termination(),
         &PanicTermination::IgnoredBoundary
     );
-}
-
-#[test]
-fn more_specific_panic_sink_policy_prevents_trusted_owner_opacity() {
-    let root = stable_function(0);
-    let trusted_sink_owner = stable_function(1);
-    let (artifact, graph, annotations) = setup(vec![
-        body(
-            root,
-            "sample::root",
-            vec![call(
-                0,
-                0,
-                target(trusted_sink_owner, "trusted::panic_sink"),
-                false,
-            )],
-            Vec::new(),
-            Vec::new(),
-        ),
-        body(
-            trusted_sink_owner,
-            "trusted::panic_sink",
-            Vec::new(),
-            vec![assert_effect(0)],
-            Vec::new(),
-        ),
-    ]);
-    let config = SniffTestConfig::from_manifest_str(
-        r#"
-            [panics]
-            trusted-boundary-namespaces = ["trusted::**"]
-            panic-sink-namespaces = ["trusted::panic_sink"]
-        "#,
-    )
-    .expect("overlapping panic policies");
-
-    let panic = probe_panic(&artifact, &graph, &annotations, &config.panics);
-    let trace = EffectEngine::new(&graph).trace(&panic);
-
-    assert_eq!(panic.source_count(), 2);
-    assert!(
-        !panic.is_trusted_function(graph.function(trusted_sink_owner).expect("sink owner node"))
-    );
-    assert_eq!(trace.handled().count(), 0);
-    assert_eq!(trace.escaped().count(), 2);
 }
 
 #[test]
@@ -2548,11 +2496,10 @@ fn ignored_macro_path_termination_is_path_local() {
         body(
             helper,
             "sample::helper",
-            vec![call(
+            vec![panic_call(
                 0,
                 0,
                 target(panic_sink, "core::panicking::panic_nounwind"),
-                false,
             )],
             Vec::new(),
             Vec::new(),

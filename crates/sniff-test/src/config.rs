@@ -415,7 +415,9 @@ pub struct PanicConfig {
     /// A matching API's own `# Panics` contract remains visible to non-trusted
     /// callers; effects from untrusted callbacks cross undocumented APIs.
     pub trusted_boundary_namespaces: PathPatterns,
-    /// Callee paths treated as direct panic sinks.
+    /// Legacy compatibility field. Built-in panic sources are identified by
+    /// the panic compiler pass; configured invocation sinks are no longer
+    /// consulted by analysis.
     pub panic_sink_namespaces: PathPatterns,
 }
 
@@ -586,22 +588,10 @@ impl PanicConfig {
     }
 
     #[must_use]
-    pub(crate) fn panic_boundary_policy_candidates(
-        &self,
-        candidates: &[String],
-    ) -> PanicBoundaryPolicy {
-        let sink = self.panic_sink_namespaces.best_candidates_match(candidates);
-        let trusted = self
-            .trusted_boundary_namespaces
-            .best_candidates_match(candidates);
-        match (sink, trusted) {
-            (Some(sink), Some(trusted)) if trusted.precision > sink.precision => {
-                PanicBoundaryPolicy::TrustedBoundary
-            }
-            (Some(_), Some(_) | None) => PanicBoundaryPolicy::PanicSink,
-            (None, Some(_)) => PanicBoundaryPolicy::TrustedBoundary,
-            (None, None) => PanicBoundaryPolicy::Normal,
-        }
+    pub(crate) fn trusts_panic_boundary_candidates(&self, candidates: &[String]) -> bool {
+        self.trusted_boundary_namespaces
+            .best_candidates_match(candidates)
+            .is_some()
     }
 }
 
@@ -629,10 +619,6 @@ impl crate::effects::EffectConfig for PanicConfig {
     fn trusted_boundary_namespaces(&self) -> &PathPatterns {
         &self.trusted_boundary_namespaces
     }
-
-    fn source_boundary_namespaces(&self) -> Option<&PathPatterns> {
-        Some(&self.panic_sink_namespaces)
-    }
 }
 
 impl crate::effects::EffectConfig for SafetyConfig {
@@ -643,13 +629,6 @@ impl crate::effects::EffectConfig for SafetyConfig {
     fn trusted_boundary_namespaces(&self) -> &PathPatterns {
         &self.trusted_boundary_namespaces
     }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum PanicBoundaryPolicy {
-    PanicSink,
-    TrustedBoundary,
-    Normal,
 }
 
 /// Current-crate functions whose reachable effect paths should be reported.
@@ -839,8 +818,8 @@ mod tests {
     use super::{
         AnalysisConfig, AnalysisLintConfig, CompilerConfig, ConfigError, ContractDocOverrideFile,
         ContractDocOverrides, EXAMPLE_MANIFEST, EffectDocMatching, LintLevel, MarkerProbing,
-        MirInlining, OverflowChecks, PanicBoundaryPolicy, PanicConfig, PathPatterns, ReportRootSet,
-        SafetyConfig, SniffTestConfig,
+        MirInlining, OverflowChecks, PanicConfig, PathPatterns, ReportRootSet, SafetyConfig,
+        SniffTestConfig,
     };
 
     fn path_patterns(patterns: &[&str]) -> PathPatterns {
@@ -982,11 +961,10 @@ mod tests {
 
         let parsed = SniffTestConfig::from_manifest_str(config).expect("manifest should parse");
 
-        assert_eq!(
+        assert!(
             parsed
                 .panics
-                .panic_boundary_policy_candidates(&candidates(&["core::fmt::write"])),
-            PanicBoundaryPolicy::TrustedBoundary
+                .trusts_panic_boundary_candidates(&candidates(&["core::fmt::write"]))
         );
         assert!(
             parsed
@@ -1337,11 +1315,10 @@ mod tests {
             candidates(&["alloc", "alloc::vec::Vec::<T>::new"]),
             candidates(&["std", "std::collections::hash::map::HashMap::<K, V>::new"]),
         ] {
-            assert_eq!(
+            assert!(
                 initialized
                     .panics
-                    .panic_boundary_policy_candidates(&candidates),
-                PanicBoundaryPolicy::TrustedBoundary
+                    .trusts_panic_boundary_candidates(&candidates)
             );
             assert!(
                 initialized
@@ -1352,11 +1329,10 @@ mod tests {
 
         let empty = SniffTestConfig::default();
         let std_candidates = candidates(&["std", "std::collections::HashMap::new"]);
-        assert_eq!(
-            empty
+        assert!(
+            !empty
                 .panics
-                .panic_boundary_policy_candidates(&std_candidates),
-            PanicBoundaryPolicy::Normal
+                .trusts_panic_boundary_candidates(&std_candidates)
         );
         assert!(
             !empty
@@ -1646,30 +1622,21 @@ mod tests {
         };
 
         assert!(config.ignores_candidates(&candidates(&["app::wrapper", "generated::helper",])));
-        assert_eq!(
-            config.panic_boundary_policy_candidates(&candidates(&["core::fmt::write"])),
-            PanicBoundaryPolicy::TrustedBoundary
+        assert!(config.trusts_panic_boundary_candidates(&candidates(&["core::fmt::write"])));
+        assert!(
+            config.trusts_panic_boundary_candidates(&candidates(&["core::panicking::panic_fmt"]))
         );
-        assert_eq!(
-            config.panic_boundary_policy_candidates(&candidates(&["core::panicking::panic_fmt"])),
-            PanicBoundaryPolicy::PanicSink
-        );
-        assert_eq!(
-            config.panic_boundary_policy_candidates(&candidates(&[
+        assert!(
+            config.trusts_panic_boundary_candidates(&candidates(&[
                 "compat::panic",
                 "canonical::panic",
-            ])),
-            PanicBoundaryPolicy::PanicSink,
-            "equally precise sink and trusted aliases must resolve to the sink"
+            ]))
         );
-        assert_eq!(
-            config.panic_boundary_policy_candidates(&candidates(&["app::run"])),
-            PanicBoundaryPolicy::Normal
-        );
+        assert!(!config.trusts_panic_boundary_candidates(&candidates(&["app::run"])));
     }
 
     #[test]
-    fn example_manifest_matches_direct_panic_and_ignored_macro_paths() {
+    fn example_manifest_preserves_legacy_panic_sinks_and_ignored_macro_paths() {
         let config = SniffTestConfig::from_manifest_str(EXAMPLE_MANIFEST)
             .expect("example manifest should parse");
 
@@ -1680,11 +1647,12 @@ mod tests {
                 .best_match("core::ub_checks::assert_unsafe_precondition")
                 .is_some()
         );
-        assert_eq!(
+        assert!(
             config
                 .panics
-                .panic_boundary_policy_candidates(&candidates(&["core::std::rt::panic_fmt"])),
-            PanicBoundaryPolicy::PanicSink
+                .panic_sink_namespaces
+                .best_candidates_match(&candidates(&["core::std::rt::panic_fmt"]))
+                .is_some()
         );
     }
 

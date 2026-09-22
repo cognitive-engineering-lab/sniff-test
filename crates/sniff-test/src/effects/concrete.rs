@@ -10,7 +10,7 @@ use effect_tracing::{
 use crate::annotations::{AnnotationId, AnnotationIndex, SiteCommentAnnotation};
 use crate::artifact::{
     ArtifactFacts, CallId, DefinitionNamespaceIndex, EffectFact, EffectId, EffectKey,
-    FunctionId as StableFunctionId, FunctionTargetFact, MacroExpansionFact, same_macro_provenance,
+    FunctionId as StableFunctionId, MacroExpansionFact, same_macro_provenance,
 };
 use crate::compiler::invocations::InvocationGraph;
 use crate::path_patterns::PathPatterns;
@@ -56,15 +56,10 @@ pub(crate) enum BodyPolicy {
     Ignore,
 }
 
-pub(crate) struct InvocationSourceMatch {
-    pub(crate) target: Option<FunctionTargetFact>,
-}
-
 /// Framework-derived view of the common effect configuration.
 struct ConcreteProbePolicy<'config> {
     ignored: &'config PathPatterns,
     trusted: &'config PathPatterns,
-    source_boundaries: Option<&'config PathPatterns>,
 }
 
 impl<'config> ConcreteProbePolicy<'config> {
@@ -72,7 +67,6 @@ impl<'config> ConcreteProbePolicy<'config> {
         Self {
             ignored: config.ignored_namespaces(),
             trusted: config.trusted_boundary_namespaces(),
-            source_boundaries: config.source_boundary_namespaces(),
         }
     }
 
@@ -80,51 +74,15 @@ impl<'config> ConcreteProbePolicy<'config> {
         if self.ignored.best_candidates_match(candidates).is_some() {
             return BodyPolicy::Ignore;
         }
-        let trusted = self.trusted.best_candidates_match(candidates);
-        let source = self
-            .source_boundaries
-            .and_then(|patterns| patterns.best_candidates_match(candidates));
-        match (trusted, source) {
-            (Some(trusted), Some(source)) if trusted.precision > source.precision => {
-                BodyPolicy::TrustedBoundary
-            }
-            (Some(_), None) => BodyPolicy::TrustedBoundary,
-            _ => BodyPolicy::Include,
+        if self.trusted.best_candidates_match(candidates).is_some() {
+            BodyPolicy::TrustedBoundary
+        } else {
+            BodyPolicy::Include
         }
     }
 
     fn ignores_macro_path(&self, path: &str) -> bool {
         self.ignored.best_match(path).is_some()
-    }
-
-    fn invocation_source(
-        &self,
-        call: &crate::artifact::CallFact,
-        namespaces: &DefinitionNamespaceIndex,
-    ) -> Option<InvocationSourceMatch> {
-        let sources = self.source_boundaries?;
-        call.target
-            .function_target()
-            .filter(|target| self.target_is_source(sources, namespaces.candidates(target.function)))
-            .or_else(|| {
-                call.declaration_target.as_ref().filter(|target| {
-                    self.target_is_source(sources, namespaces.candidates(target.function))
-                })
-            })
-            .cloned()
-            .map(|target| InvocationSourceMatch {
-                target: Some(target),
-            })
-    }
-
-    fn target_is_source(&self, sources: &PathPatterns, candidates: &[String]) -> bool {
-        let Some(source) = sources.best_candidates_match(candidates) else {
-            return false;
-        };
-        !self
-            .trusted
-            .best_candidates_match(candidates)
-            .is_some_and(|trusted| trusted.precision > source.precision)
     }
 }
 
@@ -286,21 +244,20 @@ pub(crate) fn probe_concrete_effect<'annotations>(
         }
 
         for call in &body.calls {
-            let compiler_source = call
+            if !call
                 .invocation_effects
                 .iter()
                 .any(|source| source.effect == *domain.key())
-                .then(|| InvocationSourceMatch {
-                    target: call.target.function_target().cloned(),
-                });
-            let configured_source = seeds.policy.invocation_source(call, namespaces);
-            let Some(source) = compiler_source.or(configured_source) else {
+            {
                 continue;
-            };
+            }
             if let Some(invocation) = graph.invocation_for_raw_call(body.function, call.id) {
                 seeds.push_invocation(
                     invocation,
-                    InvocationSourceBranch::new(call.clone(), source.target),
+                    InvocationSourceBranch::new(
+                        call.clone(),
+                        call.target.function_target().cloned(),
+                    ),
                 );
             }
         }
@@ -364,7 +321,7 @@ fn same_materialized_effect(left: &EffectFact, right: &EffectFact) -> bool {
 
 #[cfg(test)]
 mod probe_policy_tests {
-    use crate::config::{PanicConfig, SafetyConfig};
+    use crate::config::SafetyConfig;
     use crate::path_patterns::PathPatterns;
 
     use super::{BodyPolicy, ConcreteProbePolicy};
@@ -394,25 +351,6 @@ mod probe_policy_tests {
         assert_eq!(
             policy.body_policy(&[String::from("ignored::function")]),
             BodyPolicy::Ignore
-        );
-    }
-
-    #[test]
-    fn source_boundary_precision_is_resolved_by_the_framework() {
-        let mut panic = PanicConfig::default();
-        panic.trusted_boundary_namespaces = patterns(&["runtime::**", "runtime::trusted"]);
-        panic.panic_sink_namespaces = patterns(&["runtime::**"]);
-        let policy = ConcreteProbePolicy::from_config(&panic);
-
-        assert_eq!(
-            policy.body_policy(&[String::from("runtime::panic")]),
-            BodyPolicy::Include,
-            "equal-precision source rules win over trust"
-        );
-        assert_eq!(
-            policy.body_policy(&[String::from("runtime::trusted")]),
-            BodyPolicy::TrustedBoundary,
-            "a more precise trusted rule wins"
         );
     }
 }

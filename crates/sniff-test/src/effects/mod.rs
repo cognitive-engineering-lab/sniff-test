@@ -143,13 +143,6 @@ pub(crate) fn annotation_kind<E: EffectSpec>(role: AnnotationRole) -> Annotation
 pub(crate) trait EffectConfig {
     fn ignored_namespaces(&self) -> &PathPatterns;
     fn trusted_boundary_namespaces(&self) -> &PathPatterns;
-
-    /// Namespace-classified concrete sources which compete with trusted
-    /// boundaries. A more precise source match wins, preserving the existing
-    /// panic-sink/trusted-boundary precedence rule.
-    fn source_boundary_namespaces(&self) -> Option<&PathPatterns> {
-        None
-    }
 }
 
 /// Effects enabled for one sniff-test invocation.
