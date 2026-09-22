@@ -183,13 +183,13 @@ fn effect_flag_tracks_only_selected_domain() {
             "safety",
             &["--effect", "safety"][..],
             "sniff-test::safety",
-            "sniff-test::panics",
+            "sniff-test::panic",
         ),
         (
             "effect_flag_selects_panic",
             "panic",
             &["--effect", "panic"][..],
-            "sniff-test::panics",
+            "sniff-test::panic",
             "sniff-test::safety",
         ),
     ] {
@@ -234,14 +234,14 @@ fn unsafe_precondition_helpers_do_not_export_panic_contracts() {
         output.stderr
     );
     assert!(
-        !output.stderr.contains("sniff-test::panics"),
+        !output.stderr.contains("sniff-test::panic"),
         "the standard library's unsafe-precondition implementation leaked a panic finding:\n{}",
         output.stderr
     );
     assert!(
         output
             .stderr
-            .contains("sniff-test::safety::unsafe-call-missing-requirements"),
+            .contains("sniff-test::safety::documented-obligation"),
         "the caller's independent unsafe obligation must remain audited:\n{}",
         output.stderr
     );
@@ -572,7 +572,7 @@ impl Probe {
         .unwrap_or_else(|error| panic!("failed to read {}: {error}", cache_path.display()));
     let cache: serde_json::Value =
         serde_json::from_str(&serialized).expect("cache should contain JSON");
-    assert_eq!(cache["format-version"], 27);
+    assert_eq!(cache["format-version"], 31);
     assert_eq!(cache["artifact"]["crate-name"], "artifact_facts_dependency");
     assert_eq!(cache["artifact"]["scope"], "dependency");
     assert!(cache["artifact"]["id"]["stable-crate-id"].is_u64());
@@ -816,7 +816,7 @@ fn workspace_lint_policy_reinterprets_unchanged_dependency_facts() {
         .unwrap_or_else(|error| panic!("failed to read {}: {error}", dependency_cache.display()));
     let initial_document: serde_json::Value =
         serde_json::from_slice(&initial_bytes).expect("dependency cache should contain JSON");
-    assert_eq!(initial_document["format-version"], 27);
+    assert_eq!(initial_document["format-version"], 31);
     assert_eq!(initial_document["artifact"]["scope"], "dependency");
     assert!(initial_document["facts"].get("tables").is_none());
     assert!(initial_document.get("analysis-id").is_none());
@@ -2067,8 +2067,10 @@ fn assert_denied_dependency_bounds_check(report: &serde_json::Value) {
     assert!(
         findings.iter().any(|finding| {
             finding["level"] == "deny"
-                && finding["kind"] == "compiler-assert"
-                && finding["compiler-assert-kind"] == "bounds-check"
+                && finding["kind"] == "effect"
+                && finding["effect"] == "panic"
+                && finding["finding"] == "concrete-operation"
+                && finding["operation"] == "bounds-check"
                 && finding["trace"].as_array().is_some_and(|trace| {
                     trace.iter().any(|step| {
                         step.as_str()
@@ -2153,9 +2155,9 @@ fn run_named_case(name: &'static str, fixture_name: &'static str, case: &Case) {
 
 fn assert_panic_axiom_lint_codes(stderr: &str) {
     const EXPECTED: [&str; 3] = [
-        "[sniff-test::panics::compiler-assert-division-by-zero]",
-        "[sniff-test::panics::compiler-assert-bounds-check]",
-        "[sniff-test::panics::compiler-assert-remainder-by-zero]",
+        "[sniff-test::panic::division-by-zero]",
+        "[sniff-test::panic::bounds-check]",
+        "[sniff-test::panic::remainder-by-zero]",
     ];
 
     for lint_code in EXPECTED {
@@ -2166,9 +2168,7 @@ fn assert_panic_axiom_lint_codes(stderr: &str) {
         );
     }
     assert_eq!(
-        stderr
-            .matches("[sniff-test::panics::compiler-assert-")
-            .count(),
+        stderr.matches("[sniff-test::panic::").count(),
         EXPECTED.len(),
         "unexpected compiler-assert lint code:\n{stderr}"
     );

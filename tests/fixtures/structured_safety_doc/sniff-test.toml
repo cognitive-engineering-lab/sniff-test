@@ -41,6 +41,7 @@ max-trace-depth = 256
 trace-state-budget = 1000000
 
 [analysis.lints]
+undocumented-effect-invocation = "warn"
 # Incomplete panic and safety traversals use their corresponding policy. Use
 # `warn` while auditing incomplete evidence, or `allow` to accept it.
 panic-analysis-incomplete = "deny"
@@ -154,7 +155,6 @@ trusted-boundary-namespaces = []
 # `deny` emits an error and makes `cargo sniff-test` fail.
 # `warn` emits a warning without failing the run.
 # `allow` suppresses the finding from diagnostics and JSON reports.
-missing-safety-docs = "warn"
 unresolved-call-target = "allow"
 unsafe-call-missing-justification = "warn"
 unsafe-call-missing-requirements = "warn"

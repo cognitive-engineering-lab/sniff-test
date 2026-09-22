@@ -263,6 +263,7 @@ pub enum MarkerProbing {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "kebab-case")]
 pub struct AnalysisLintConfig {
+    pub undocumented_effect_invocation: LintLevel,
     pub ambiguous_panic_marker: LintLevel,
     pub ambiguous_safety_marker: LintLevel,
     pub ambiguous_panic_requirement: LintLevel,
@@ -276,6 +277,7 @@ pub struct AnalysisLintConfig {
 impl Default for AnalysisLintConfig {
     fn default() -> Self {
         Self {
+            undocumented_effect_invocation: LintLevel::Warn,
             ambiguous_panic_marker: LintLevel::Deny,
             ambiguous_safety_marker: LintLevel::Deny,
             ambiguous_panic_requirement: LintLevel::Deny,
@@ -292,6 +294,7 @@ impl Default for AnalysisLintConfig {
 #[derive(Debug, Default, Deserialize)]
 #[serde(rename_all = "kebab-case", deny_unknown_fields, default)]
 struct RawAnalysisLintConfig {
+    undocumented_effect_invocation: Option<LintLevel>,
     ambiguous_panic_marker: Option<LintLevel>,
     ambiguous_safety_marker: Option<LintLevel>,
     ambiguous_panic_requirement: Option<LintLevel>,
@@ -314,6 +317,9 @@ impl<'de> Deserialize<'de> for AnalysisLintConfig {
         let raw = RawAnalysisLintConfig::deserialize(deserializer)?;
         let defaults = Self::default();
         Ok(Self {
+            undocumented_effect_invocation: raw
+                .undocumented_effect_invocation
+                .unwrap_or(defaults.undocumented_effect_invocation),
             ambiguous_panic_marker: raw
                 .ambiguous_panic_marker
                 .or(raw.ambiguous_effect_marker)
@@ -523,7 +529,6 @@ pub struct SafetyConfig {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "kebab-case", deny_unknown_fields, default)]
 pub struct SafetyLintConfig {
-    pub missing_safety_docs: LintLevel,
     pub unresolved_call_target: LintLevel,
     pub unsafe_call_missing_justification: LintLevel,
     pub unsafe_call_missing_requirements: LintLevel,
@@ -557,7 +562,6 @@ pub struct SafetyLintConfig {
 impl Default for SafetyLintConfig {
     fn default() -> Self {
         Self {
-            missing_safety_docs: LintLevel::Warn,
             unresolved_call_target: LintLevel::Allow,
             unsafe_call_missing_justification: LintLevel::Warn,
             unsafe_call_missing_requirements: LintLevel::Warn,
@@ -1180,17 +1184,20 @@ mod tests {
         let config = r#"
             [analysis.lints]
             empty-report-roots = "deny"
+            undocumented-effect-invocation = "deny"
 
             [panics.lints]
             panic-invocation = "allow"
 
-            [safety.lints]
-            missing-safety-docs = "deny"
         "#;
 
         let parsed = SniffTestConfig::from_manifest_str(config).expect("manifest should parse");
 
         assert_eq!(parsed.analysis.lints.empty_report_roots, LintLevel::Deny);
+        assert_eq!(
+            parsed.analysis.lints.undocumented_effect_invocation,
+            LintLevel::Deny
+        );
         assert_eq!(
             parsed.analysis.lints.ambiguous_panic_marker,
             LintLevel::Deny
@@ -1201,7 +1208,6 @@ mod tests {
         );
         assert_eq!(parsed.panics.lints.panic_invocation, LintLevel::Allow);
         assert_eq!(parsed.panics.lints.compiler_assert, LintLevel::Deny);
-        assert_eq!(parsed.safety.lints.missing_safety_docs, LintLevel::Deny);
         assert_eq!(
             parsed.safety.lints.unsafe_call_missing_justification,
             LintLevel::Warn
@@ -1345,7 +1351,6 @@ mod tests {
     fn default_safety_lints_keep_findings_visible_without_failing() {
         let lints = SafetyConfig::default().lints;
 
-        assert_eq!(lints.missing_safety_docs, LintLevel::Warn);
         assert_eq!(lints.unresolved_call_target, LintLevel::Allow);
         assert_eq!(lints.unsafe_call_missing_justification, LintLevel::Warn);
         assert_eq!(lints.unsafe_call_missing_requirements, LintLevel::Warn);
@@ -1447,7 +1452,6 @@ mod tests {
             trusted-boundary-namespaces = ["ffi::safe_contract", "ffi::safe_method"]
 
             [safety.lints]
-            missing-safety-docs = "allow"
             unsafe-call-missing-justification = "deny"
             unsafe-call-missing-requirements = "allow"
             unsafe-op-missing-justification = "deny"
@@ -1477,7 +1481,6 @@ mod tests {
                 .safety
                 .trusts_safety_boundary_candidates(&candidates(&["ffi::plain_safe"]))
         );
-        assert_eq!(parsed.safety.lints.missing_safety_docs, LintLevel::Allow);
         assert_eq!(
             parsed.safety.lints.unsafe_call_missing_justification,
             LintLevel::Deny

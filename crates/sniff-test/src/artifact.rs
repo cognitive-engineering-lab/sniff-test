@@ -619,6 +619,7 @@ pub(crate) struct InvocationEffectFact {
     pub(crate) effect: EffectKey,
     pub(crate) kind: EffectKind,
     pub(crate) effect_group: Option<EffectGroupId>,
+    pub(crate) requires_documented_obligation: bool,
 }
 
 /// One macro definition and source invocation on the path to a semantic fact.

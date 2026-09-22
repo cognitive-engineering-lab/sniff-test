@@ -7,7 +7,7 @@ stdout:
 <empty>
 stderr:
     Checking ambiguous-safety v0.1.0 ([FIXTURE])
-error: [sniff-test::analysis::ambiguous-safety-marker] one `// SAFETY:` marker applies to 2 safety effect groups
+error: [sniff-test::safety::ambiguous-marker] one `// SAFETY:` marker applies to 2 safety effect groups
   --> src/lib.rs:37:1
    |
 37 | /         // SAFETY: this fixture's operations have no additional requirements.
@@ -18,7 +18,7 @@ error: [sniff-test::analysis::ambiguous-safety-marker] one `// SAFETY:` marker a
    = note: this marker applies to 2 safety obligations
    = note: reachable from `reused_marker_within_one_macro_expansion` to `perform`
 
-error: [sniff-test::analysis::ambiguous-safety-marker] one `// SAFETY:` marker applies to 2 safety effect groups
+error: [sniff-test::safety::ambiguous-marker] one `// SAFETY:` marker applies to 2 safety effect groups
   --> src/lib.rs:75:1
    |
 75 | /         // SAFETY:
@@ -30,7 +30,7 @@ error: [sniff-test::analysis::ambiguous-safety-marker] one `// SAFETY:` marker a
    = note: this marker applies to 2 safety obligations
    = note: reachable from `reused_partial_marker_for_safe_obligations` to `safe_obligation`
 
-error: [sniff-test::analysis::ambiguous-safety-marker] one `// SAFETY:` marker applies to 2 safety effect groups
+error: [sniff-test::safety::ambiguous-marker] one `// SAFETY:` marker applies to 2 safety effect groups
   --> src/lib.rs:87:1
    |
 87 | /     // SAFETY:

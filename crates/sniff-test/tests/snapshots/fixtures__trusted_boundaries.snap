@@ -29,22 +29,18 @@ expression: "report[\"findings\"]"
   },
   {
     "effect": "safety",
-    "finding": "concrete-invocation",
+    "finding": "undocumented-invocation",
     "function": "trusted_boundaries::trusted_unsafe_without_docs",
     "kind": "effect",
     "level": "warn",
-    "operation": "unsafe-call",
     "owner": {
       "crate": "trusted_boundaries",
       "scope": "workspace"
     },
-    "reason": "safety invocation to `trusted_boundaries::unsafe_helper` has no recorded `// SAFETY:` justification",
+    "reason": "call to `trusted_boundaries::unsafe_helper` may produce the safety effect, but `trusted_boundaries::unsafe_helper` has no documented `# Safety` obligation",
     "root": "trusted_boundaries::trusted_unsafe_without_docs",
     "root-kind": "concrete",
     "root-span": "src/lib.rs:27:1: 27:37",
-    "source-evidence": {
-      "status": "verified-absent"
-    },
     "span": "src/lib.rs:28:14: 28:29",
     "target": "trusted_boundaries::unsafe_helper",
     "trace": [

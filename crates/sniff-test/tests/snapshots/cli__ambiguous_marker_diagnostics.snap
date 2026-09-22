@@ -7,7 +7,7 @@ stdout:
 <empty>
 stderr:
     Checking ambiguous-markers v0.1.0 ([FIXTURE])
-error: [sniff-test::analysis::ambiguous-panic-requirement] `duplicate_name_ratio` has 2 # Panics requirements named `nonzero`
+error: [sniff-test::panic::ambiguous-requirement] `duplicate_name_ratio` has multiple # Panics requirements named `nonzero`
   --> src/lib.rs:21:1
    |
 21 | /// - nonzero: denominator must not be zero.
@@ -19,7 +19,7 @@ error: [sniff-test::analysis::ambiguous-panic-requirement] `duplicate_name_ratio
    = note: `duplicate_name_ratio` has multiple `# Panics` requirements that normalize to `nonzero`
    = note: reachable from `duplicate_name_marker` to `duplicate_name_ratio`
 
-error: [sniff-test::analysis::ambiguous-panic-marker] one `// PANIC:` marker applies to 2 panic effect groups
+error: [sniff-test::panic::ambiguous-marker] one `// PANIC:` marker applies to 2 panic effect groups
   --> src/lib.rs:72:1
    |
 72 | /     // PANIC: this path accepts both documented effects.
@@ -30,7 +30,7 @@ error: [sniff-test::analysis::ambiguous-panic-marker] one `// PANIC:` marker app
    = note: this marker applies to 2 possible panics
    = note: reachable from `marked_path_to_shared_sources` to `first_documented_source`
 
-error: [sniff-test::analysis::ambiguous-panic-marker] one `// PANIC:` marker applies to 2 panic effect groups
+error: [sniff-test::panic::ambiguous-marker] one `// PANIC:` marker applies to 2 panic effect groups
   --> src/lib.rs:47:1
    |
 47 | /         // PANIC: this fixture guards both operations.
@@ -41,7 +41,7 @@ error: [sniff-test::analysis::ambiguous-panic-marker] one `// PANIC:` marker app
    = note: this marker applies to 2 possible panics
    = note: reachable from `marker_covers_documented_call_and_sink` to `ratio`
 
-warning: [sniff-test::panics::documented-panic] call to `ratio` with a `# Panics` obligation has no recorded `// PANIC:` justification
+warning: [sniff-test::panic::documented-obligation] call to `ratio` with a documented `# Panics` obligation has no recorded `// PANIC:` justification
   --> src/lib.rs:11:21
    |
 11 |         let first = ratio(a, denominator);
@@ -64,7 +64,7 @@ note: `ratio` documents `# Panics` here
    | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
    = note: reachable from `shared_block_marker` to `ratio`
 
-warning: [sniff-test::panics::documented-panic] call to `ratio` with a `# Panics` obligation has no recorded `// PANIC:` justification
+warning: [sniff-test::panic::documented-obligation] call to `ratio` with a documented `# Panics` obligation has no recorded `// PANIC:` justification
   --> src/lib.rs:12:22
    |
 12 |         let second = ratio(b, denominator);
@@ -87,7 +87,7 @@ note: `ratio` documents `# Panics` here
    | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
    = note: reachable from `shared_block_marker` to `ratio`
 
-warning: [sniff-test::panics::documented-panic] call to `first_documented_source` with a `# Panics` obligation has no recorded `// PANIC:` justification
+warning: [sniff-test::panic::documented-obligation] call to `first_documented_source` with a documented `# Panics` obligation has no recorded `// PANIC:` justification
   --> src/lib.rs:67:5
    |
 67 |     first_documented_source();
@@ -110,7 +110,7 @@ note: `first_documented_source` documents `# Panics` here
    | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
    = note: reachable from `unmarked_path_to_shared_sources` to `first_documented_source`
 
-warning: [sniff-test::panics::documented-panic] call to `second_documented_source` with a `# Panics` obligation has no recorded `// PANIC:` justification
+warning: [sniff-test::panic::documented-obligation] call to `second_documented_source` with a documented `# Panics` obligation has no recorded `// PANIC:` justification
   --> src/lib.rs:68:5
    |
 68 |     second_documented_source();

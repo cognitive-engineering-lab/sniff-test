@@ -339,6 +339,13 @@ fn finding_description(
                 false,
             )
         }
+        InterpretedFindingKind::UndocumentedInvocation { .. } => {
+            let callee = target.unwrap_or("effect boundary");
+            let subject = format!(
+                "call to `{callee}` may produce the {effect_name} effect, but `{callee}` has no documented `# {obligation}` obligation"
+            );
+            (class(None, false), subject.clone(), subject)
+        }
         InterpretedFindingKind::DocumentedObligation => {
             let subject = format!(
                 "call to `{}` with a documented `# {}` obligation",
@@ -368,13 +375,6 @@ fn finding_description(
                     root.path, effect_name
                 ),
             )
-        }
-        InterpretedFindingKind::MissingContract => {
-            let subject = format!(
-                "function `{}` is missing a documented `# {}` contract",
-                finding.function_path, obligation
-            );
-            (class(None, false), subject.clone(), subject)
         }
         InterpretedFindingKind::AmbiguousRequirement { normalized_name } => {
             let subject = format!(
@@ -876,17 +876,17 @@ fn decorate_finding(
         InterpretedFindingKind::Operation { .. } | InterpretedFindingKind::Invocation { .. } => {
             writer.source(domain, false)
         }
-        InterpretedFindingKind::DocumentedObligation => writer.source(domain, true),
-        InterpretedFindingKind::UnresolvedCallTarget { site } => writer.unresolved(domain, *site),
-        InterpretedFindingKind::MissingContract => {
+        InterpretedFindingKind::UndocumentedInvocation { .. } => {
             writer
                 .diagnostic
                 .messages
                 .push(DiagnosticMessage::Help(format!(
-                    "document the caller obligations under a `# {}` section",
+                    "document the callee's caller obligations under a `# {}` section",
                     domain.heading()
                 )));
         }
+        InterpretedFindingKind::DocumentedObligation => writer.source(domain, true),
+        InterpretedFindingKind::UnresolvedCallTarget { site } => writer.unresolved(domain, *site),
         InterpretedFindingKind::AmbiguousRequirement { normalized_name } => {
             writer.ambiguous_requirement(domain, normalized_name);
         }

@@ -34,22 +34,18 @@ expression: "report[\"findings\"]"
   },
   {
     "effect": "safety",
-    "finding": "concrete-invocation",
+    "finding": "undocumented-invocation",
     "function": "safety_contract_requirements::unsafe_call_exposes_missing_justification",
     "kind": "effect",
     "level": "warn",
-    "operation": "unsafe-call",
     "owner": {
       "crate": "safety_contract_requirements",
       "scope": "workspace"
     },
-    "reason": "safety invocation to `safety_contract_requirements::uncontracted_operation` has no recorded `// SAFETY:` justification",
+    "reason": "call to `safety_contract_requirements::uncontracted_operation` may produce the safety effect, but `safety_contract_requirements::uncontracted_operation` has no documented `# Safety` obligation",
     "root": "safety_contract_requirements::unsafe_call_exposes_missing_justification",
     "root-kind": "concrete",
     "root-span": "src/lib.rs:36:1: 36:51",
-    "source-evidence": {
-      "status": "verified-absent"
-    },
     "span": "src/lib.rs:37:14: 37:38",
     "target": "safety_contract_requirements::uncontracted_operation",
     "trace": [

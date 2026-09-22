@@ -152,6 +152,7 @@ pub(crate) struct UnresolvedCallSite {
 pub(crate) enum EffectFindingClass {
     ConcreteOperation,
     ConcreteInvocation,
+    UndocumentedInvocation,
     DocumentedObligation,
     UnresolvedCallTarget,
     AmbiguousMarker,
@@ -163,9 +164,9 @@ pub(crate) enum EffectFindingClass {
 pub(crate) enum InterpretedFindingKind {
     Operation { operation: EffectKind },
     Invocation { operation: EffectKind },
+    UndocumentedInvocation { operation: EffectKind },
     DocumentedObligation,
     UnresolvedCallTarget { site: UnresolvedCallSite },
-    MissingContract,
     AmbiguousRequirement { normalized_name: String },
     AmbiguousMarker { effect_count: usize },
 }
@@ -175,9 +176,8 @@ impl InterpretedFindingKind {
         match self {
             Self::Operation { .. } => EffectFindingClass::ConcreteOperation,
             Self::Invocation { .. } => EffectFindingClass::ConcreteInvocation,
-            Self::DocumentedObligation | Self::MissingContract => {
-                EffectFindingClass::DocumentedObligation
-            }
+            Self::UndocumentedInvocation { .. } => EffectFindingClass::UndocumentedInvocation,
+            Self::DocumentedObligation => EffectFindingClass::DocumentedObligation,
             Self::UnresolvedCallTarget { .. } => EffectFindingClass::UnresolvedCallTarget,
             Self::AmbiguousRequirement { .. } => EffectFindingClass::AmbiguousRequirement,
             Self::AmbiguousMarker { .. } => EffectFindingClass::AmbiguousMarker,

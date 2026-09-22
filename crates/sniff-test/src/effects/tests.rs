@@ -111,6 +111,7 @@ fn call(id: u32, site: u32, target: CallTargetFact, requires_explicit_context: b
                 effect: EffectKey::new("safety"),
                 kind: EffectKind::new("unsafe-call"),
                 effect_group: Some(EffectGroupId::new(site)),
+                requires_documented_obligation: true,
             })
             .into_iter()
             .collect(),
@@ -153,6 +154,7 @@ fn mark_panic_invocation(call: &mut CallFact) {
             effect: panic_key(),
             kind: EffectKind::new("configured-invocation"),
             effect_group: call.effect_group,
+            requires_documented_obligation: false,
         });
 }
 
@@ -168,6 +170,7 @@ fn unsafe_call_from_macro(
             effect: safety_key(),
             kind: EffectKind::new("unsafe-call"),
             effect_group: Some(EffectGroupId::new(site)),
+            requires_documented_obligation: true,
         });
     call
 }

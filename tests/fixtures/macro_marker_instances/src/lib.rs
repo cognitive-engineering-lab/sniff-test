@@ -1,3 +1,6 @@
+/// # Safety
+///
+/// This fixture operation has no preconditions.
 unsafe fn perform() {}
 
 macro_rules! perform_once {

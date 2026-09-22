@@ -5,23 +5,39 @@ expression: "report[\"findings\"]"
 [
   {
     "effect": "safety",
-    "finding": "concrete-invocation",
-    "function": "unsafe_closure_inherit::unjustified_closure::{closure#0}",
+    "finding": "undocumented-invocation",
+    "function": "unsafe_closure_inherit::justified_closure::{closure#0}",
     "kind": "effect",
     "level": "warn",
-    "operation": "unsafe-call",
     "owner": {
       "crate": "unsafe_closure_inherit",
       "scope": "workspace"
     },
-    "reason": "could not verify `// SAFETY:` justification for safety invocation to `unsafe_closure_inherit::dangerous` in workspace crate `unsafe_closure_inherit`: no usable span was available for marker association",
+    "reason": "call to `unsafe_closure_inherit::dangerous` may produce the safety effect, but `unsafe_closure_inherit::dangerous` has no documented `# Safety` obligation",
+    "root": "unsafe_closure_inherit::justified_closure",
+    "root-kind": "concrete",
+    "root-span": "src/lib.rs:3:1: 3:27",
+    "span": "src/lib.rs:6:13: 6:24",
+    "target": "unsafe_closure_inherit::dangerous",
+    "trace": [
+      "src/lib.rs:6:9: 6:27: unsafe_closure_inherit::justified_closure --direct-call-> unsafe_closure_inherit::justified_closure::{closure#0}",
+      "src/lib.rs:6:13: 6:24: unsafe_closure_inherit::justified_closure::{closure#0} --direct-call-> unsafe_closure_inherit::dangerous"
+    ]
+  },
+  {
+    "effect": "safety",
+    "finding": "undocumented-invocation",
+    "function": "unsafe_closure_inherit::unjustified_closure::{closure#0}",
+    "kind": "effect",
+    "level": "warn",
+    "owner": {
+      "crate": "unsafe_closure_inherit",
+      "scope": "workspace"
+    },
+    "reason": "call to `unsafe_closure_inherit::dangerous` may produce the safety effect, but `unsafe_closure_inherit::dangerous` has no documented `# Safety` obligation",
     "root": "unsafe_closure_inherit::unjustified_closure",
     "root-kind": "concrete",
     "root-span": "src/lib.rs:10:1: 10:29",
-    "source-evidence": {
-      "reason": "no-usable-source-span",
-      "status": "unverified"
-    },
     "span": "src/lib.rs:12:13: 12:24",
     "target": "unsafe_closure_inherit::dangerous",
     "trace": [

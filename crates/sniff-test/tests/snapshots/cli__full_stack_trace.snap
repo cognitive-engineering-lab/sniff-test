@@ -7,7 +7,7 @@ stdout:
 <empty>
 stderr:
     Checking safe-markers v0.1.0 ([FIXTURE])
-error: [sniff-test::panics::panic-invocation] panic invocation to `panic` has no recorded `// PANIC:` justification
+error: [sniff-test::panic::configured-invocation] panic invocation to `panic` has no recorded `// PANIC:` justification
   --> src/lib.rs:21:5
    |
 21 |     assert!(flag);
@@ -39,7 +39,7 @@ note: effect trace step 3/3 (public root -> effect source): macro core::macros::
 21 |     assert!(flag);
    |     ^^^^^^^^^^^^^
 
-error: [sniff-test::panics::compiler-assert-division-by-zero] compiler assertion (division by zero) has no recorded `// PANIC:` justification
+error: [sniff-test::panic::division-by-zero] panic operation (division by zero) has no recorded `// PANIC:` justification
  --> src/lib.rs:8:5
   |
 8 |     total / denominator

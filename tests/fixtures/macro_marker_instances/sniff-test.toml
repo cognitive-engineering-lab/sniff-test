@@ -5,5 +5,5 @@ report-roots = [
 ]
 
 [safety.lints]
-missing-safety-docs = "allow"
 unsafe-call-missing-justification = "deny"
+safety-obligation-missing-justification = "deny"

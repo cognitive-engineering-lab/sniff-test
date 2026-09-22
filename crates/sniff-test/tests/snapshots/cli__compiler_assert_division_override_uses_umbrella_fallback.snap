@@ -7,7 +7,7 @@ stdout:
 <empty>
 stderr:
     Checking panic-axioms v0.1.0 ([FIXTURE])
-error: [sniff-test::panics::compiler-assert-division-by-zero] compiler assertion (division by zero) has no recorded `// PANIC:` justification
+error: [sniff-test::panic::division-by-zero] panic operation (division by zero) has no recorded `// PANIC:` justification
  --> src/lib.rs:2:5
   |
 2 |     total_size / block_count

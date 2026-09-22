@@ -5,6 +5,9 @@ report-roots = [
     "contract_overrides::safety_override_missing_requirement",
 ]
 
+[analysis.lints]
+undocumented-effect-invocation = "deny"
+
 [contracts]
 override-files = ["override.toml"]
 
@@ -20,5 +23,4 @@ panic-sink-namespaces = [
 documented-panic = "warn"
 
 [safety.lints]
-missing-safety-docs = "deny"
 unsafe-call-missing-requirements = "warn"

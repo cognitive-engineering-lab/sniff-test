@@ -8,6 +8,9 @@
     target_feature(enable = "avx2")
 )]
 #[cfg_attr(target_arch = "aarch64", target_feature(enable = "sve"))]
+/// # Safety
+///
+/// The caller must enable the target feature selected above.
 pub fn target_feature_callee() {}
 
 // Keep the fixture and its snapshot runnable on architectures without one of
@@ -18,6 +21,9 @@ pub fn target_feature_callee() {}
     target_arch = "x86_64",
     target_arch = "aarch64"
 )))]
+/// # Safety
+///
+/// This fallback models the caller-relative target-feature requirement.
 pub unsafe fn target_feature_callee() {}
 
 pub fn ordinary_caller() {
@@ -37,5 +43,6 @@ pub fn matching_feature_caller() {
         target_arch = "x86_64",
         target_arch = "aarch64"
     ))]
+    // SAFETY: this caller enables the same target feature as the callee.
     target_feature_callee();
 }

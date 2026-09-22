@@ -8,7 +8,7 @@ stdout:
 stderr:
     Checking dependency-obligation v0.1.0 ([FIXTURE]/dep)
     Checking dependency-app v0.1.0 ([FIXTURE]/app)
-warning: [sniff-test::panics::documented-panic] call to `documented` with a `# Panics` obligation has no recorded `// PANIC:` justification
+warning: [sniff-test::panic::documented-obligation] call to `documented` with a documented `# Panics` obligation has no recorded `// PANIC:` justification
  --> src/lib.rs:2:5
   |
 2 |     dependency_obligation::documented(flag);

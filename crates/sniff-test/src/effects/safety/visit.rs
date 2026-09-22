@@ -61,7 +61,9 @@ impl MirEffectPass for SafetyInvocationPass {
                         statement_index: data.statements.len(),
                     },
                     kind: EffectKind::new("unsafe-call"),
-                    source: PreliminaryMirEffectSource::Invocation,
+                    source: PreliminaryMirEffectSource::Invocation {
+                        requires_documented_obligation: true,
+                    },
                     suppress_in_compiler_context: true,
                 })
             })

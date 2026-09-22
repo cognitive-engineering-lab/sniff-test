@@ -8,7 +8,7 @@ stdout:
 stderr:
 sniff-test: no sniff-test.toml found between [TEMP] and [FIXTURE]; using built-in defaults (public report roots, panic findings denied, safety findings warned)
     Checking panic-axioms v0.1.0 ([FIXTURE])
-error: [sniff-test::panics::compiler-assert-division-by-zero] compiler assertion (division by zero) has no recorded `// PANIC:` justification
+error: [sniff-test::panic::division-by-zero] panic operation (division by zero) has no recorded `// PANIC:` justification
  --> src/lib.rs:2:5
   |
 2 |     total_size / block_count
@@ -26,7 +26,7 @@ help: [option 2] document when this function may panic with `/// # Panics` here
   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
   = note: reachable from `division` to `compiler assert division by zero`
 
-error: [sniff-test::panics::compiler-assert-bounds-check] compiler assertion (index out of bounds) has no recorded `// PANIC:` justification
+error: [sniff-test::panic::bounds-check] panic operation (bounds check) has no recorded `// PANIC:` justification
   --> src/lib.rs:10:5
    |
 10 |     values[index]
@@ -44,7 +44,7 @@ help: [option 2] document when this function may panic with `/// # Panics` here
    | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
    = note: reachable from `indexed` to `compiler assert index out of bounds`
 
-error: [sniff-test::panics::compiler-assert-remainder-by-zero] compiler assertion (remainder with a zero divisor) has no recorded `// PANIC:` justification
+error: [sniff-test::panic::remainder-by-zero] panic operation (remainder by zero) has no recorded `// PANIC:` justification
  --> src/lib.rs:6:5
   |
 6 |     total_size % block_size

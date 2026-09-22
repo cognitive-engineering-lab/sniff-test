@@ -18,8 +18,8 @@ use crate::annotations::{AnnotationId, AnnotationIndex};
 use crate::artifact::{
     AnnotationFactKind, AnnotationProbingFact, AnnotationRole, AnnotationTargetFact, ArtifactFacts,
     CallTargetFact, CompilerAssertKind, DefinitionNamespaceIndex, EffectFact, EffectId, EffectKey,
-    EffectKind, FunctionFact, FunctionId as StableFunctionId, FunctionTargetFact,
-    MarkerEvidenceState, SafetyOpKind, UnverifiedMarkerProbeReason,
+    FunctionFact, FunctionId as StableFunctionId, FunctionTargetFact, MarkerEvidenceState,
+    SafetyOpKind, UnverifiedMarkerProbeReason,
 };
 use crate::compiler::invocations::{
     InvocationGraph, InvocationResolution, UnresolvedCallTargetReason,
@@ -327,6 +327,15 @@ pub(crate) fn trace_selected_workspace(
                             root_function,
                             marker_probing,
                         ));
+                        findings.extend(justified_undocumented_invocation_findings(
+                            artifact,
+                            &graph,
+                            &annotations,
+                            metadata,
+                            concrete,
+                            trace,
+                            root_function,
+                        ));
                     }
                 }
                 if let Some(panic) = &panic
@@ -396,21 +405,6 @@ pub(crate) fn trace_selected_workspace(
                         ));
                     }
                 }
-            }
-            if effects.tracks_safety()
-                && let Some(finding) = missing_safety_docs(
-                    artifact,
-                    &graph,
-                    &annotations,
-                    selected_metadata
-                        .iter()
-                        .find(|metadata| metadata.key == safety_key)
-                        .expect("selected safety metadata"),
-                    &root,
-                    &root_functions,
-                )
-            {
-                findings.push(finding);
             }
             // A source definition can have both generic and monomorphized graph
             // identities. They are deliberately traced independently, but they
@@ -1327,17 +1321,22 @@ fn concrete_findings(
                         return None;
                     }
                     let edge = source.edge();
-                    let operation = edge
+                    let invocation_effect = edge
                         .invocation_effects
                         .iter()
-                        .find(|fact| &fact.effect == effect_key)
-                        .map_or_else(
-                            || EffectKind::new("configured-invocation"),
-                            |fact| fact.kind.clone(),
-                        );
+                        .find(|fact| &fact.effect == effect_key)?;
+                    let operation = invocation_effect.kind.clone();
+                    let missing_required_documentation = invocation_effect
+                        .requires_documented_obligation
+                        && source.target().is_some();
                     let owner = graph.stable_function(graph.invocation(invocation).caller());
                     let body = artifact.function_body(owner)?;
                     append_call_trace(artifact, owner, edge, &mut trace_path);
+                    if missing_required_documentation {
+                        return undocumented_invocation_finding(
+                            artifact, graph, metadata, source, invocation, trace_path,
+                        );
+                    }
                     Some(InterpretedFinding {
                         effect: metadata.clone(),
                         kind: InterpretedFindingKind::Invocation { operation },
@@ -1373,6 +1372,91 @@ fn concrete_findings(
             }
         })
         .collect()
+}
+
+fn justified_undocumented_invocation_findings(
+    artifact: &ArtifactFacts,
+    graph: &InvocationGraph,
+    annotations: &AnnotationIndex,
+    metadata: &EffectMetadata,
+    concrete: &crate::effects::concrete::ConcreteEffect<'_>,
+    trace: &ConcreteTrace,
+    root_function: effect_tracing::FunctionId,
+) -> Vec<InterpretedFinding> {
+    trace
+        .handled()
+        .filter_map(|handled| {
+            let (
+                TrackedOrigin::Concrete(ConcreteSource::Invocation { invocation, call }),
+                TrackedTermination::Concrete(
+                    crate::effects::concrete::ConcreteTermination::Justification(_),
+                ),
+            ) = (handled.origin(), handled.termination())
+            else {
+                return None;
+            };
+            let source = concrete.invocation_source(*invocation, *call)?;
+            let invocation_effect = source
+                .edge()
+                .invocation_effects
+                .iter()
+                .find(|fact| fact.effect == metadata.key)?;
+            if !invocation_effect.requires_documented_obligation
+                || source.target().is_none()
+                || invocation_source_has_contract(graph, annotations, source, &metadata.key)
+            {
+                return None;
+            }
+            let owner = graph.invocation(*invocation).caller();
+            let mut path = audited_path_from_root(
+                artifact,
+                graph,
+                root_function,
+                owner,
+                |function, trust_path| concrete.is_opaque_on_path(function, trust_path),
+                |candidate| concrete.is_ignored_invocation(candidate),
+            )?;
+            append_call_trace(
+                artifact,
+                graph.stable_function(owner),
+                source.edge(),
+                &mut path,
+            );
+            undocumented_invocation_finding(artifact, graph, metadata, source, *invocation, path)
+        })
+        .collect()
+}
+
+fn undocumented_invocation_finding(
+    artifact: &ArtifactFacts,
+    graph: &InvocationGraph,
+    metadata: &EffectMetadata,
+    source: &InvocationSourceBranch,
+    invocation: effect_tracing::InvocationId,
+    trace: InterpretedTrace,
+) -> Option<InterpretedFinding> {
+    let edge = source.edge();
+    let invocation_effect = edge
+        .invocation_effects
+        .iter()
+        .find(|fact| fact.effect == metadata.key)?;
+    let owner = graph.stable_function(graph.invocation(invocation).caller());
+    let body = artifact.function_body(owner)?;
+    Some(InterpretedFinding {
+        effect: metadata.clone(),
+        kind: InterpretedFindingKind::UndocumentedInvocation {
+            operation: invocation_effect.kind.clone(),
+        },
+        function: owner,
+        function_path: body.display_path.clone(),
+        callee: source.target().map(interpreted_callee),
+        source_range: edge.source_range.clone(),
+        contract_source_range: None,
+        marker_evidence: None,
+        trace,
+        missing_requirements: Vec::new(),
+        requirements: Vec::new(),
+    })
 }
 
 #[allow(
@@ -1758,40 +1842,6 @@ fn invocation_source_has_contract(
             .function_contracts(declaration.function, effect)
             .next()
             .is_some()
-    })
-}
-
-fn missing_safety_docs(
-    artifact: &ArtifactFacts,
-    graph: &InvocationGraph,
-    annotations: &AnnotationIndex,
-    metadata: &EffectMetadata,
-    root: &InterpretationRoot,
-    root_functions: &[effect_tracing::FunctionId],
-) -> Option<InterpretedFinding> {
-    let body = artifact.function_body(root.function)?;
-    if !body.attributes.is_unsafe
-        || !body.attributes.is_exported
-        || root_functions.iter().any(|function| {
-            annotations
-                .effective_contract(graph, *function, &ReportEffect::Safety.key())
-                .is_some()
-        })
-    {
-        return None;
-    }
-    Some(InterpretedFinding {
-        effect: metadata.clone(),
-        kind: InterpretedFindingKind::MissingContract,
-        function: root.function,
-        function_path: body.display_path.clone(),
-        callee: None,
-        source_range: body.source_range.clone(),
-        contract_source_range: None,
-        marker_evidence: None,
-        trace: InterpretedTrace { steps: Vec::new() },
-        missing_requirements: Vec::new(),
-        requirements: Vec::new(),
     })
 }
 
@@ -2447,6 +2497,158 @@ mod tests {
         ));
     }
 
+    #[test]
+    fn invocation_fact_controls_documentation_policy_for_a_registered_effect() {
+        fn findings(requires_documented_obligation: bool) -> Vec<InterpretedFinding> {
+            let root = stable_function(9_910);
+            let callee = stable_function(9_911);
+            let mut invocation = call(0, target(callee, "sample::allocator"));
+            invocation.invocation_effects.push(InvocationEffectFact {
+                effect: EffectKey::new(Allocation::EFFECT_NAME),
+                kind: EffectKind::new("heap-allocation-call"),
+                effect_group: invocation.effect_group,
+                requires_documented_obligation,
+            });
+            let artifact = ArtifactFacts::new(
+                vec![
+                    body(
+                        root,
+                        "sample::root",
+                        vec![invocation],
+                        Vec::new(),
+                        Vec::new(),
+                        Vec::new(),
+                    ),
+                    body(
+                        callee,
+                        "sample::allocator",
+                        Vec::new(),
+                        Vec::new(),
+                        Vec::new(),
+                        Vec::new(),
+                    ),
+                ],
+                Vec::new(),
+            )
+            .expect("custom invocation artifact");
+            let graph = InvocationGraph::from_artifact(&artifact).expect("invocation graph");
+            let annotations =
+                AnnotationIndex::from_artifact(&artifact, &graph).expect("annotations");
+            let namespaces = artifact.definition_namespace_index();
+            let allocation = effect::<Allocation>();
+            let concrete = probe_concrete_effect(
+                &artifact,
+                &graph,
+                &annotations,
+                &namespaces,
+                allocation.as_ref(),
+                &PanicConfig::default(),
+            )
+            .expect("allocation effect");
+            let config = SniffTestConfig::default();
+            let obligations = super::ObligationTracker::probe(
+                &graph,
+                &annotations,
+                config.analysis.effect_doc_matching,
+                [super::ObligationEffectPolicy::new(
+                    EffectKey::new(Allocation::EFFECT_NAME),
+                    concrete.trusted_functions(),
+                    concrete.ignored_invocations(),
+                )],
+            );
+            let tracked = super::TrackedEffect::new(
+                &concrete,
+                &obligations,
+                EffectKey::new(Allocation::EFFECT_NAME),
+            );
+            let obligation_graph = graph.obligation_graph();
+            let trace = EffectEngine::new(&obligation_graph).trace(&tracked);
+            super::concrete_findings(
+                &artifact,
+                &graph,
+                &annotations,
+                &EffectMetadata::of::<Allocation>(),
+                &concrete,
+                &trace,
+                graph.function(root).expect("root function"),
+                AnnotationProbingFact::SourceCallsite,
+            )
+        }
+
+        assert!(matches!(
+            findings(true).as_slice(),
+            [InterpretedFinding {
+                kind: InterpretedFindingKind::UndocumentedInvocation { operation },
+                marker_evidence: None,
+                ..
+            }] if operation.as_str() == "heap-allocation-call"
+        ));
+        assert!(matches!(
+            findings(false).as_slice(),
+            [InterpretedFinding {
+                kind: InterpretedFindingKind::Invocation { operation },
+                marker_evidence: Some(_),
+                ..
+            }] if operation.as_str() == "heap-allocation-call"
+        ));
+    }
+
+    #[test]
+    fn local_justification_does_not_hide_required_invocation_documentation() {
+        let root = stable_function(9_920);
+        let callee = stable_function(9_921);
+        let mut invocation = call(0, target(callee, "sample::unsafe_callee"));
+        mark_safety_invocation(&mut invocation);
+        let artifact = ArtifactFacts::new(
+            vec![
+                body(
+                    root,
+                    "sample::root",
+                    vec![invocation],
+                    Vec::new(),
+                    vec![shared_justification_marker(
+                        0,
+                        "local-safety-justification",
+                        annotation_kind::<Safety>(AnnotationRole::Justification),
+                        AnnotationTargetFact::Call(CallId::new(0)),
+                    )],
+                    Vec::new(),
+                ),
+                body(
+                    callee,
+                    "sample::unsafe_callee",
+                    Vec::new(),
+                    Vec::new(),
+                    Vec::new(),
+                    Vec::new(),
+                ),
+            ],
+            Vec::new(),
+        )
+        .expect("justified unsafe invocation artifact");
+        let reports = trace_workspace(
+            &artifact,
+            root.def_path_hash.stable_crate_id(),
+            &ArtifactAnalysisGraph::default(),
+            &[InterpretationRoot {
+                function: root,
+                path: String::from("sample::root"),
+                kind: ReportRootKind::Concrete,
+            }],
+            &SniffTestConfig::default(),
+        )
+        .expect("effect report");
+
+        assert!(
+            reports[0].findings.iter().any(|finding| matches!(
+                finding.kind,
+                InterpretedFindingKind::UndocumentedInvocation { .. }
+            )),
+            "findings: {:#?}",
+            reports[0].findings
+        );
+    }
+
     fn function_in_crate(stable_crate_id: u64, index: u64) -> FunctionId {
         let value = format!("{stable_crate_id:016x}{index:016x}");
         let hash = serde_json::from_str::<StableDefPathHash>(&format!("\"{value}\""))
@@ -2601,6 +2803,7 @@ mod tests {
             effect: ReportEffect::Safety.key(),
             kind: EffectKind::new("unsafe-call"),
             effect_group: call.effect_group,
+            requires_documented_obligation: true,
         });
     }
 
@@ -2609,6 +2812,7 @@ mod tests {
             effect: ReportEffect::Panic.key(),
             kind: EffectKind::new("configured-invocation"),
             effect_group: call.effect_group,
+            requires_documented_obligation: false,
         });
     }
 

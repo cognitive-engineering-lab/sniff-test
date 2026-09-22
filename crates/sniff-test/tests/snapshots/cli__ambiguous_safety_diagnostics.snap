@@ -7,7 +7,7 @@ stdout:
 <empty>
 stderr:
     Checking ambiguous-safety v0.1.0 ([FIXTURE])
-error: [sniff-test::analysis::ambiguous-safety-requirement] `read_duplicate` has multiple # Safety requirements named `valid ptr`
+error: [sniff-test::safety::ambiguous-requirement] `read_duplicate` has multiple # Safety requirements named `valid ptr`
  --> src/lib.rs:7:1
   |
 7 | /// - valid_ptr: pointer must be non-null.

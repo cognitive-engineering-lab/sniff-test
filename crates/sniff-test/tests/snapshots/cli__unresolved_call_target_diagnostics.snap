@@ -7,7 +7,7 @@ stdout:
 <empty>
 stderr:
     Checking indirect-calls v0.1.0 ([FIXTURE])
-warning: [sniff-test::panics::documented-panic] call to `documented` with a `# Panics` obligation has no recorded `// PANIC:` justification
+warning: [sniff-test::panic::documented-obligation] call to `documented` with a documented `# Panics` obligation has no recorded `// PANIC:` justification
   --> src/lib.rs:11:5
    |
 11 |     value.documented(flag);
@@ -45,7 +45,7 @@ note: safety coverage is incomplete here: unresolved generic-dispatch call targe
    = note: reachable from `call_documented` to `documented`
    = help: document caller safety requirements under `# Safety` on the trait method declaration; otherwise configure `[safety.lints].unresolved-call-target` if the uncertainty is acceptable
 
-warning: [sniff-test::panics::unresolved-call-target] function `indirect_calls::call_dyn` has incomplete panic coverage
+warning: [sniff-test::panic::unresolved-call-target] function `indirect_calls::call_dyn` has incomplete panic coverage
   --> src/lib.rs:19:5
    |
 19 |     value.undocumented(flag);
@@ -75,7 +75,7 @@ note: safety coverage is incomplete here: unresolved dynamic-dispatch call targe
    = note: reachable from `call_dyn` to `undocumented`
    = help: document caller safety requirements under `# Safety` on the trait method declaration; otherwise configure `[safety.lints].unresolved-call-target` if the uncertainty is acceptable
 
-warning: [sniff-test::panics::unresolved-call-target] function `indirect_calls::call_pointer` has incomplete panic coverage
+warning: [sniff-test::panic::unresolved-call-target] function `indirect_calls::call_pointer` has incomplete panic coverage
   --> src/lib.rs:23:5
    |
 23 |     callee(flag);
@@ -105,7 +105,7 @@ note: safety coverage is incomplete here: unresolved function-pointer call targe
    = note: reachable from `call_pointer` to `indirect call through a function pointer`
    = help: make the callee concrete or make its possible implementations available to analysis; otherwise configure `[safety.lints].unresolved-call-target` if the uncertainty is acceptable
 
-warning: [sniff-test::panics::unresolved-call-target] function `indirect_calls::call_undocumented` has incomplete panic coverage
+warning: [sniff-test::panic::unresolved-call-target] function `indirect_calls::call_undocumented` has incomplete panic coverage
   --> src/lib.rs:15:5
    |
 15 |     value.undocumented(flag);

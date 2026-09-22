@@ -6,41 +6,24 @@ expression: "report[\"findings\"]"
   {
     "effect": "safety",
     "finding": "documented-obligation",
-    "function": "target_feature_call_safety::matching_feature_caller",
-    "kind": "effect",
-    "level": "warn",
-    "owner": {
-      "crate": "target_feature_call_safety",
-      "scope": "workspace"
-    },
-    "reason": "function `target_feature_call_safety::matching_feature_caller` is missing a documented `# Safety` contract",
-    "root": "target_feature_call_safety::matching_feature_caller",
-    "root-kind": "concrete",
-    "root-span": "src/lib.rs:34:1: 34:33",
-    "span": "src/lib.rs:34:1: 34:33"
-  },
-  {
-    "effect": "safety",
-    "finding": "concrete-invocation",
     "function": "target_feature_call_safety::ordinary_caller",
     "kind": "effect",
     "level": "deny",
-    "operation": "unsafe-call",
     "owner": {
       "crate": "target_feature_call_safety",
       "scope": "workspace"
     },
-    "reason": "safety invocation to `target_feature_call_safety::target_feature_callee` has no recorded `// SAFETY:` justification",
+    "reason": "call to `target_feature_call_safety::target_feature_callee` with a documented `# Safety` obligation has no recorded `// SAFETY:` justification",
     "root": "target_feature_call_safety::ordinary_caller",
     "root-kind": "concrete",
-    "root-span": "src/lib.rs:23:1: 23:25",
+    "root-span": "src/lib.rs:29:1: 29:25",
     "source-evidence": {
       "status": "verified-absent"
     },
-    "span": "src/lib.rs:25:9: 25:32",
+    "span": "src/lib.rs:31:9: 31:32",
     "target": "target_feature_call_safety::target_feature_callee",
     "trace": [
-      "src/lib.rs:25:9: 25:32: target_feature_call_safety::ordinary_caller --direct-call-> target_feature_call_safety::target_feature_callee"
+      "src/lib.rs:31:9: 31:32: target_feature_call_safety::ordinary_caller --direct-call-> target_feature_call_safety::target_feature_callee"
     ]
   }
 ]

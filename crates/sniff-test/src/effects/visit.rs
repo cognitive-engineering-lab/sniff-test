@@ -80,7 +80,9 @@ pub(crate) struct PreliminaryMirEffectSeed {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum PreliminaryMirEffectSource {
     Operation,
-    Invocation,
+    Invocation {
+        requires_documented_obligation: bool,
+    },
 }
 
 #[derive(Debug, Clone)]

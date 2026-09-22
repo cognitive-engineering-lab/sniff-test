@@ -456,7 +456,9 @@ fn collect_edge<'tcx>(
                     detected_effects.push((effect_key, seed.effect));
                 }
             }
-            PreliminaryMirEffectSource::Invocation => {
+            PreliminaryMirEffectSource::Invocation {
+                requires_documented_obligation,
+            } => {
                 body.calls[call_index]
                     .call
                     .invocation_effects
@@ -464,6 +466,7 @@ fn collect_edge<'tcx>(
                         effect: seed.effect,
                         kind: seed.kind,
                         effect_group: Some(groups.effect_group),
+                        requires_documented_obligation,
                     });
             }
         }

@@ -37,7 +37,9 @@ impl MirEffectPass for BuiltinPanicInvocationPass {
                     // Preserve the existing report kind while source discovery
                     // moves from configured probing into compiler extraction.
                     kind: EffectKind::new("configured-invocation"),
-                    source: PreliminaryMirEffectSource::Invocation,
+                    source: PreliminaryMirEffectSource::Invocation {
+                        requires_documented_obligation: false,
+                    },
                     suppress_in_compiler_context: false,
                 })
             })

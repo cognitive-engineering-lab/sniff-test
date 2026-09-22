@@ -7,7 +7,7 @@ stdout:
 <empty>
 stderr:
     Checking safety-contract-requirements v0.1.0 ([FIXTURE])
-warning: [sniff-test::safety::safety-obligation-missing-requirements] call to `documented_obligation` with a `# Safety` obligation has no recorded `// SAFETY:` justification
+warning: [sniff-test::safety::documented-obligation] call to `documented_obligation` with a documented `# Safety` obligation has no recorded `// SAFETY:` justification
   --> src/lib.rs:57:5
    |
 57 |     documented_obligation(&raw const byte);
@@ -31,25 +31,15 @@ note: `documented_obligation` documents `# Safety` here
    = note: missing safety requirement `valid_ptr: pointer must be non-null.`
    = note: reachable from `trusted_obligation_exposes_missing_requirement` to `documented_obligation`
 
-warning: [sniff-test::safety::unsafe-call-missing-justification] unsafe call to `uncontracted_operation` has no recorded `// SAFETY:` justification
+warning: [sniff-test::safety::undocumented-invocation] call to `uncontracted_operation` may produce the safety effect, but `uncontracted_operation` has no documented `# Safety` obligation
   --> src/lib.rs:37:14
    |
 37 |     unsafe { uncontracted_operation() }
    |              ^^^^^^^^^^^^^^^^^^^^^^^^
    |
-help: [option 1] add a local `// SAFETY:` justification after verifying safety obligations
-  --> src/lib.rs:37:14
-   |
-37 |     unsafe { uncontracted_operation() }
-   |              ^^^^^^^^^^^^^^^^^^^^^^^^
-help: [option 2] document this function's safety obligations with `/// # Safety` here
-  --> src/lib.rs:36:1
-   |
-36 | pub fn unsafe_call_exposes_missing_justification() {
-   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-   = note: reachable from `unsafe_call_exposes_missing_justification` to `uncontracted_operation`
+   = help: document the callee's caller obligations under a `# Safety` section
 
-warning: [sniff-test::safety::unsafe-call-missing-requirements] recorded `// SAFETY:` justification for unsafe call to `read_byte` does not satisfy the remaining `# Safety` requirements
+warning: [sniff-test::safety::documented-obligation] recorded `// SAFETY:` justification for call to `read_byte` with a documented `# Safety` obligation does not satisfy the remaining `# Safety` requirements
   --> src/lib.rs:33:14
    |
 33 |     unsafe { read_byte(ptr.as_ptr()) }

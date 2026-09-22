@@ -7,7 +7,7 @@ stdout:
 <empty>
 stderr:
     Checking unsafe-ops v0.1.0 ([FIXTURE])
-error: [sniff-test::safety::inline-assembly-missing-justification] unsafe operation (inline assembly) has no recorded `// SAFETY:` justification
+error: [sniff-test::safety::inline-assembly] safety operation (inline assembly) has no recorded `// SAFETY:` justification
   --> src/lib.rs:34:9
    |
 34 |         asm!("nop");
@@ -25,7 +25,7 @@ help: [option 2] document this function's safety obligations with `/// # Safety`
    | ^^^^^^^^^^^^^^^^^^^^^^^^
    = note: reachable from `asm_unjustified` to `unsafe operation (inline assembly)`
 
-warning: [sniff-test::safety::raw-pointer-dereference-missing-justification] unsafe operation (raw pointer dereference) has no recorded `// SAFETY:` justification
+warning: [sniff-test::safety::raw-pointer-dereference] safety operation (raw pointer dereference) has no recorded `// SAFETY:` justification
   --> src/lib.rs:17:14
    |
 17 |     unsafe { *ptr }

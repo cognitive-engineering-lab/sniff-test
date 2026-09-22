@@ -15,7 +15,7 @@ use serde::{Deserialize, Deserializer as _, Serialize};
 
 use crate::artifact::{ArtifactFacts, FunctionFactProvenance};
 
-pub(crate) const CACHE_FORMAT_VERSION: u32 = 30;
+pub(crate) const CACHE_FORMAT_VERSION: u32 = 31;
 pub(crate) const CACHE_DIR_NAME: &str = "sniff-test-cache";
 pub(crate) const CACHE_VERSION_DIR: &str = "v30";
 
@@ -563,8 +563,8 @@ mod tests {
         let json: serde_json::Value = serde_json::from_str(&source).expect("valid JSON");
         let object = json.as_object().expect("cache object");
 
-        assert_eq!(CACHE_FORMAT_VERSION, 30);
-        assert_eq!(json["format-version"], 30);
+        assert_eq!(CACHE_FORMAT_VERSION, 31);
+        assert_eq!(json["format-version"], 31);
         let mut fields = object.keys().map(String::as_str).collect::<Vec<_>>();
         fields.sort_unstable();
         assert_eq!(
