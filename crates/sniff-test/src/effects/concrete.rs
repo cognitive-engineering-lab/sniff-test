@@ -137,20 +137,21 @@ struct ConcreteSeedCollector<'a, 'policy> {
     trusted_functions: BTreeSet<FunctionId>,
     ignored_functions: BTreeSet<FunctionId>,
     macro_ignored_sources: BTreeSet<ConcreteSource>,
-    macro_ignored_invocations: BTreeSet<InvocationId>,
+    ignored_invocations: BTreeSet<InvocationId>,
     invocation_sources: BTreeMap<InvocationId, Vec<InvocationSourceBranch>>,
 }
 
 impl<'a, 'policy> ConcreteSeedCollector<'a, 'policy> {
     fn new(graph: &'a InvocationGraph, config: &'policy (impl EffectConfig + ?Sized)) -> Self {
         let policy = ConcreteProbePolicy::from_config(config);
-        let macro_ignored_invocations = graph
+        let ignored_invocations = graph
             .invocations()
             .filter(|invocation| {
-                invocation
-                    .macro_provenance()
-                    .iter()
-                    .any(|frame| policy.ignores_macro_path(&frame.display_path))
+                invocation.is_suppressed_by_compiler_context()
+                    || invocation
+                        .macro_provenance()
+                        .iter()
+                        .any(|frame| policy.ignores_macro_path(&frame.display_path))
             })
             .map(crate::compiler::invocations::Invocation::id)
             .collect();
@@ -161,7 +162,7 @@ impl<'a, 'policy> ConcreteSeedCollector<'a, 'policy> {
             trusted_functions: BTreeSet::new(),
             ignored_functions: BTreeSet::new(),
             macro_ignored_sources: BTreeSet::new(),
-            macro_ignored_invocations,
+            ignored_invocations,
             invocation_sources: BTreeMap::new(),
         }
     }
@@ -244,7 +245,7 @@ impl<'a, 'policy> ConcreteSeedCollector<'a, 'policy> {
             self.trusted_functions,
             self.ignored_functions,
             self.macro_ignored_sources,
-            self.macro_ignored_invocations,
+            self.ignored_invocations,
             self.invocation_sources,
         )
     }
@@ -468,7 +469,7 @@ pub(crate) struct ConcreteEffect<'annotations> {
     trusted_functions: BTreeSet<FunctionId>,
     ignored_functions: BTreeSet<FunctionId>,
     macro_ignored_sources: BTreeSet<ConcreteSource>,
-    macro_ignored_invocations: BTreeSet<InvocationId>,
+    ignored_invocations: BTreeSet<InvocationId>,
     invocation_sources: BTreeMap<InvocationId, Vec<InvocationSourceBranch>>,
 }
 
@@ -482,7 +483,7 @@ impl<'annotations> ConcreteEffect<'annotations> {
         trusted_functions: BTreeSet<FunctionId>,
         ignored_functions: BTreeSet<FunctionId>,
         macro_ignored_sources: BTreeSet<ConcreteSource>,
-        macro_ignored_invocations: BTreeSet<InvocationId>,
+        ignored_invocations: BTreeSet<InvocationId>,
         invocation_sources: BTreeMap<InvocationId, Vec<InvocationSourceBranch>>,
     ) -> Self {
         let seeds = seeds
@@ -503,7 +504,7 @@ impl<'annotations> ConcreteEffect<'annotations> {
             trusted_functions,
             ignored_functions,
             macro_ignored_sources,
-            macro_ignored_invocations,
+            ignored_invocations,
             invocation_sources,
         }
     }
@@ -524,9 +525,17 @@ impl<'annotations> ConcreteEffect<'annotations> {
         self.trusted_functions.contains(&function)
     }
 
+    pub(crate) fn trusted_functions(&self) -> impl Iterator<Item = FunctionId> + '_ {
+        self.trusted_functions.iter().copied()
+    }
+
     #[must_use]
     pub(crate) fn is_ignored_invocation(&self, invocation: InvocationId) -> bool {
-        self.macro_ignored_invocations.contains(&invocation)
+        self.ignored_invocations.contains(&invocation)
+    }
+
+    pub(crate) fn ignored_invocations(&self) -> impl Iterator<Item = InvocationId> + '_ {
+        self.ignored_invocations.iter().copied()
     }
 
     #[must_use]
@@ -646,7 +655,7 @@ impl TracePolicy for ConcreteEffect<'_> {
                 }
             }
             TraceSite::Invocation(invocation) => {
-                if self.macro_ignored_invocations.contains(&invocation) {
+                if self.ignored_invocations.contains(&invocation) {
                     Some(ConcreteTermination::IgnoredBoundary)
                 } else {
                     state

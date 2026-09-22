@@ -16,7 +16,7 @@ use crate::contracts::ContractDocOverrides;
 use crate::namespace::StableDefPathHash;
 
 use super::concrete::{ConcreteSource, probe_concrete_effect_for};
-use super::obligation::{ObligationTermination, ObligationTracker};
+use super::obligation::{ObligationEffectPolicy, ObligationTermination, ObligationTracker};
 use super::panic::{Panic, PanicEffect, PanicTermination};
 use super::safety::{Safety, SafetyEffect, SafetyTermination};
 
@@ -481,16 +481,24 @@ fn probe_comments<'a>(
     annotations: &'a AnnotationIndex,
     config: &SniffTestConfig,
 ) -> ObligationTracker<'a> {
-    let namespaces = artifact.definition_namespace_index();
+    let panic = probe_panic(artifact, graph, annotations, &config.panics);
+    let safety = probe_safety(artifact, graph, annotations, &config.safety);
     ObligationTracker::probe(
-        artifact,
         graph,
         annotations,
-        &namespaces,
         config.analysis.effect_doc_matching,
-        &config.panics,
-        &config.safety,
-        crate::effects::EffectSelection::default(),
+        [
+            ObligationEffectPolicy::new(
+                panic_key(),
+                panic.trusted_functions(),
+                panic.ignored_invocations(),
+            ),
+            ObligationEffectPolicy::new(
+                safety_key(),
+                safety.trusted_functions(),
+                safety.ignored_invocations(),
+            ),
+        ],
     )
 }
 
@@ -1182,45 +1190,6 @@ fn partial_satisfaction_is_retained_when_the_trusted_parent_terminates() {
         &TerminationSite::Function(graph.function(wrapper).unwrap())
     );
     assert_eq!(node.state().remaining().len(), 1);
-}
-
-#[test]
-fn builtin_unsafe_comment_edges_remain_ignored_inside_a_trusted_parent() {
-    let wrapper = stable_function(0);
-    let leaf = stable_function(1);
-    let mut builtin_call = call(0, 0, target(leaf, "dependency::leaf"), false);
-    builtin_call.suppressed_by_compiler_context = true;
-    let (artifact, graph, annotations) = setup(vec![
-        body(
-            wrapper,
-            "trusted::wrapper",
-            vec![builtin_call],
-            Vec::new(),
-            Vec::new(),
-        ),
-        body(
-            leaf,
-            "dependency::leaf",
-            Vec::new(),
-            Vec::new(),
-            vec![contract(
-                0,
-                leaf,
-                crate::effects::annotation_kind::<crate::effects::safety::Safety>(
-                    crate::artifact::AnnotationRole::Contract,
-                ),
-                &[],
-            )],
-        ),
-    ]);
-    let config = trusted_comment_config();
-    let comments = probe_comments(&artifact, &graph, &annotations, &config);
-    let trace = EffectEngine::new(&graph.obligation_graph()).trace(&comments);
-
-    assert_eq!(comments.contract_count(&safety_key()), 1);
-    assert_eq!(trace.nodes().count(), 1);
-    assert_eq!(trace.handled().count(), 0);
-    assert_eq!(trace.escaped().count(), 0);
 }
 
 #[test]

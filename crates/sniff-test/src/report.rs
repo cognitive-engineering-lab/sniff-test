@@ -29,7 +29,8 @@ use crate::contracts::normalize_requirement_name;
 use crate::effects::InvocationSourceBranch;
 use crate::effects::concrete::{ConcreteSource, probe_concrete_effect};
 use crate::effects::obligation::{
-    ObligationTracker, TrackedEffect, TrackedOrigin, TrackedState, TrackedTermination,
+    ObligationEffectPolicy, ObligationTracker, TrackedEffect, TrackedOrigin, TrackedState,
+    TrackedTermination,
 };
 use crate::effects::{
     EffectMetadata, EffectSelection, EffectSpec, annotation_kind, selected_effect_objects,
@@ -246,15 +247,18 @@ pub(crate) fn trace_selected_workspace(
             Ok((effect.key().clone(), concrete))
         })
         .collect::<Result<BTreeMap<_, _>, EffectReportError>>()?;
+    let obligation_policies = concrete_effects.iter().map(|(effect, concrete)| {
+        ObligationEffectPolicy::new(
+            effect.clone(),
+            concrete.trusted_functions(),
+            concrete.ignored_invocations(),
+        )
+    });
     let obligations = ObligationTracker::probe(
-        artifact,
         &graph,
         &annotations,
-        &namespaces,
         config.analysis.effect_doc_matching,
-        &config.panics,
-        &config.safety,
-        effects,
+        obligation_policies,
     );
     let trace_options = TraceOptions {
         max_depth: config.analysis.max_trace_depth,
@@ -2409,14 +2413,14 @@ mod tests {
         .expect("custom concrete effect");
         let config = SniffTestConfig::default();
         let obligations = super::ObligationTracker::probe(
-            &artifact,
             &graph,
             &annotations,
-            &namespaces,
             config.analysis.effect_doc_matching,
-            &config.panics,
-            &config.safety,
-            crate::effects::EffectSelection::default(),
+            [super::ObligationEffectPolicy::new(
+                EffectKey::new(Allocation::EFFECT_NAME),
+                concrete.trusted_functions(),
+                concrete.ignored_invocations(),
+            )],
         );
         let tracked = super::TrackedEffect::new(
             &concrete,
@@ -3661,14 +3665,21 @@ unresolved-call-target = "warn"
         )
         .expect("safety effect");
         let comments = super::ObligationTracker::probe(
-            &artifact,
             &graph,
             &annotations,
-            &namespaces,
             config.analysis.effect_doc_matching,
-            &config.panics,
-            &config.safety,
-            crate::effects::EffectSelection::default(),
+            [
+                super::ObligationEffectPolicy::new(
+                    super::ReportEffect::Panic.key(),
+                    panic.trusted_functions(),
+                    panic.ignored_invocations(),
+                ),
+                super::ObligationEffectPolicy::new(
+                    super::ReportEffect::Safety.key(),
+                    safety.trusted_functions(),
+                    safety.ignored_invocations(),
+                ),
+            ],
         );
         let panic_key = super::ReportEffect::Panic.key();
         let safety_key = super::ReportEffect::Safety.key();

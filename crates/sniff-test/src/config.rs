@@ -579,11 +579,6 @@ impl Default for SafetyLintConfig {
 
 impl PanicConfig {
     #[must_use]
-    pub(crate) fn ignores_path(&self, path: &str) -> bool {
-        self.ignored_namespaces.best_match(path).is_some()
-    }
-
-    #[must_use]
     pub(crate) fn ignores_candidates(&self, candidates: &[String]) -> bool {
         self.ignored_namespaces
             .best_candidates_match(candidates)
@@ -611,11 +606,6 @@ impl PanicConfig {
 }
 
 impl SafetyConfig {
-    #[must_use]
-    pub(crate) fn ignores_path(&self, path: &str) -> bool {
-        self.ignored_namespaces.best_match(path).is_some()
-    }
-
     #[must_use]
     pub(crate) fn ignores_candidates(&self, candidates: &[String]) -> bool {
         self.ignored_namespaces
@@ -1295,16 +1285,28 @@ mod tests {
     #[test]
     fn unsafe_precondition_macro_is_a_user_overridable_default_ignore() {
         let defaults = PanicConfig::default();
-        assert!(defaults.ignores_path("core::ub_checks::assert_unsafe_precondition"));
+        assert!(
+            defaults
+                .ignored_namespaces
+                .best_match("core::ub_checks::assert_unsafe_precondition")
+                .is_some()
+        );
 
         let disabled = SniffTestConfig::from_manifest_str("[panics]\nignored-namespaces = []\n")
             .expect("an empty ignore list should be accepted");
         assert!(
-            !disabled
+            disabled
                 .panics
-                .ignores_path("core::ub_checks::assert_unsafe_precondition")
+                .ignored_namespaces
+                .best_match("core::ub_checks::assert_unsafe_precondition")
+                .is_none()
         );
-        assert!(!defaults.ignores_path("sample::assert_unsafe_precondition"));
+        assert!(
+            defaults
+                .ignored_namespaces
+                .best_match("sample::assert_unsafe_precondition")
+                .is_none()
+        );
 
         let replacement = SniffTestConfig::from_manifest_str(
             "[panics]\nignored-namespaces = [\"sample::generated::**\"]\n",
@@ -1313,12 +1315,16 @@ mod tests {
         assert!(
             replacement
                 .panics
-                .ignores_path("sample::generated::assert_invariant")
+                .ignored_namespaces
+                .best_match("sample::generated::assert_invariant")
+                .is_some()
         );
         assert!(
-            !replacement
+            replacement
                 .panics
-                .ignores_path("core::ub_checks::assert_unsafe_precondition")
+                .ignored_namespaces
+                .best_match("core::ub_checks::assert_unsafe_precondition")
+                .is_none()
         );
     }
 
@@ -1670,7 +1676,9 @@ mod tests {
         assert!(
             config
                 .panics
-                .ignores_path("core::ub_checks::assert_unsafe_precondition")
+                .ignored_namespaces
+                .best_match("core::ub_checks::assert_unsafe_precondition")
+                .is_some()
         );
         assert_eq!(
             config

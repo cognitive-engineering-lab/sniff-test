@@ -9,14 +9,10 @@ use effect_tracing::{
 };
 
 use crate::annotations::{AnnotationId, AnnotationIndex, FunctionContractAnnotation};
-use crate::artifact::{ArtifactFacts, CallId, DefinitionNamespaceIndex, EffectKey};
+use crate::artifact::{CallId, EffectKey};
 use crate::compiler::invocations::InvocationGraph;
-use crate::config::{EffectDocMatching, PanicConfig, SafetyConfig};
+use crate::config::EffectDocMatching;
 use crate::contracts::normalize_requirement_name;
-use crate::effects::EffectSelection;
-use crate::effects::EffectSpec;
-use crate::effects::panic::Panic;
-use crate::effects::safety::Safety;
 
 use super::trust::TrustPath;
 
@@ -162,33 +158,49 @@ pub(crate) struct ObligationTracker<'annotations> {
     contracts: Vec<ObligationContract>,
     obligations: BTreeMap<ObligationId, Obligation>,
     effect_doc_matching: EffectDocMatching,
-    trusted_functions: BTreeMap<EffectKey, BTreeSet<FunctionId>>,
-    ignored_invocations: BTreeMap<EffectKey, BTreeSet<InvocationId>>,
+    policies: BTreeMap<EffectKey, ObligationEffectPolicy>,
+}
+
+/// Effect-provided boundary facts consumed by shared obligation propagation.
+///
+/// Concrete probing resolves namespace configuration into graph identities.
+/// Obligation tracking reuses those identities and remains independent of the
+/// concrete effect kind and its user-facing configuration.
+pub(crate) struct ObligationEffectPolicy {
+    effect: EffectKey,
+    trusted_functions: BTreeSet<FunctionId>,
+    ignored_invocations: BTreeSet<InvocationId>,
+}
+
+impl ObligationEffectPolicy {
+    pub(crate) fn new(
+        effect: EffectKey,
+        trusted_functions: impl IntoIterator<Item = FunctionId>,
+        ignored_invocations: impl IntoIterator<Item = InvocationId>,
+    ) -> Self {
+        Self {
+            effect,
+            trusted_functions: trusted_functions.into_iter().collect(),
+            ignored_invocations: ignored_invocations.into_iter().collect(),
+        }
+    }
 }
 
 impl<'annotations> ObligationTracker<'annotations> {
-    #[allow(
-        clippy::too_many_arguments,
-        reason = "comment probing joins both domain policies with the invocation selection"
-    )]
     pub(crate) fn probe(
-        artifact: &ArtifactFacts,
         graph: &'annotations InvocationGraph,
         annotations: &'annotations AnnotationIndex,
-        namespaces: &DefinitionNamespaceIndex,
         effect_doc_matching: EffectDocMatching,
-        panic_config: &PanicConfig,
-        safety_config: &SafetyConfig,
-        effects: EffectSelection,
+        policies: impl IntoIterator<Item = ObligationEffectPolicy>,
     ) -> Self {
+        let policies = policies
+            .into_iter()
+            .map(|policy| (policy.effect.clone(), policy))
+            .collect::<BTreeMap<_, _>>();
         let mut contracts = Vec::new();
         let mut obligations = BTreeMap::new();
-        let panic_key = EffectKey::new(Panic::EFFECT_NAME);
-        let safety_key = EffectKey::new(Safety::EFFECT_NAME);
         for annotation in annotations.contracts() {
-            if (annotation.effect() == &panic_key && !effects.tracks_panic())
-                || (annotation.effect() == &safety_key && !effects.tracks_safety())
-            {
+            if !policies.contains_key(annotation.effect()) {
                 continue;
             }
             let functions = graph
@@ -212,60 +224,13 @@ impl<'annotations> ObligationTracker<'annotations> {
                 obligations: contract_obligations,
             });
         }
-        let mut trusted_functions = BTreeMap::<EffectKey, BTreeSet<FunctionId>>::new();
-        for body in &artifact.functions {
-            let candidates = namespaces.candidates(body.function);
-            if effects.tracks_panic()
-                && panic_config.panic_boundary_policy_candidates(candidates)
-                    == crate::config::PanicBoundaryPolicy::TrustedBoundary
-            {
-                trusted_functions
-                    .entry(panic_key.clone())
-                    .or_default()
-                    .extend(graph.function_aliases(body.function));
-            }
-            if effects.tracks_safety()
-                && safety_config.trusts_safety_boundary_candidates(candidates)
-            {
-                trusted_functions
-                    .entry(safety_key.clone())
-                    .or_default()
-                    .extend(graph.function_aliases(body.function));
-            }
-        }
-        let ignored_panic_invocations = graph
-            .invocations()
-            .filter(|_| effects.tracks_panic())
-            .filter(|invocation| {
-                invocation
-                    .macro_provenance()
-                    .iter()
-                    .any(|frame| panic_config.ignores_path(&frame.display_path))
-            })
-            .map(crate::compiler::invocations::Invocation::id)
-            .collect();
-        let ignored_safety_invocations = graph
-            .invocations()
-            .filter(|_| effects.tracks_safety())
-            .filter(|invocation| {
-                invocation
-                    .macro_provenance()
-                    .iter()
-                    .any(|frame| safety_config.ignores_path(&frame.display_path))
-            })
-            .map(crate::compiler::invocations::Invocation::id)
-            .collect();
-        let mut ignored_invocations = BTreeMap::new();
-        ignored_invocations.insert(panic_key, ignored_panic_invocations);
-        ignored_invocations.insert(safety_key, ignored_safety_invocations);
         Self {
             annotations,
             graph,
             contracts,
             obligations,
             effect_doc_matching,
-            trusted_functions,
-            ignored_invocations,
+            policies,
         }
     }
 
@@ -362,9 +327,9 @@ impl<'annotations> ObligationTracker<'annotations> {
     }
 
     pub(crate) fn trusts_function(&self, effect: &EffectKey, function: FunctionId) -> bool {
-        self.trusted_functions
+        self.policies
             .get(effect)
-            .is_some_and(|functions| functions.contains(&function))
+            .is_some_and(|policy| policy.trusted_functions.contains(&function))
     }
 
     #[must_use]
@@ -373,9 +338,9 @@ impl<'annotations> ObligationTracker<'annotations> {
         effect: &EffectKey,
         invocation: InvocationId,
     ) -> bool {
-        self.ignored_invocations
+        self.policies
             .get(effect)
-            .is_some_and(|invocations| invocations.contains(&invocation))
+            .is_some_and(|policy| policy.ignored_invocations.contains(&invocation))
     }
 
     fn invocation_transition(
@@ -385,11 +350,6 @@ impl<'annotations> ObligationTracker<'annotations> {
         node: Option<TraceNodeId>,
     ) -> Option<ObligationInvocationTransition> {
         if self.is_ignored_invocation(&state.effect, invocation) {
-            return None;
-        }
-        if state.effect.as_str() == Safety::EFFECT_NAME
-            && self.graph.invocation(invocation).is_builtin_unsafe()
-        {
             return None;
         }
         let mut next = state.clone();

@@ -88,8 +88,10 @@ impl Invocation {
         &self.macro_provenance
     }
 
+    /// Whether every raw branch at this source invocation belongs to a
+    /// compiler-generated context which cannot require user-authored evidence.
     #[must_use]
-    pub(crate) fn is_builtin_unsafe(&self) -> bool {
+    pub(crate) fn is_suppressed_by_compiler_context(&self) -> bool {
         !self.raw_edges.is_empty()
             && self
                 .raw_edges
