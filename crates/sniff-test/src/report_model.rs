@@ -2,7 +2,7 @@
 
 use crate::artifact::{
     CallId, CallKindFact, ContractRequirementFact, EffectKey, EffectKind, FunctionId,
-    MarkerEvidenceState, SafetyOpKind, SourceRangeFact,
+    MarkerEvidenceState, SourceRangeFact,
 };
 use crate::effects::EffectMetadata;
 use crate::report_roots::ReportRootKind;
@@ -121,7 +121,7 @@ pub(crate) struct InterpretedTraceStep {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub(crate) enum InterpretedTraceStepKind {
     Reachability(CallKindFact),
-    UnsafeOperation(SafetyOpKind),
+    EffectOperation,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize)]

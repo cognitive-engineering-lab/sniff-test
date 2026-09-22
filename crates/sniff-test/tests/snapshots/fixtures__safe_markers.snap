@@ -40,7 +40,7 @@ expression: "report[\"findings\"]"
       "crate": "safe_markers",
       "scope": "workspace"
     },
-    "reason": "panic operation (division by zero) has no recorded `// PANIC:` justification",
+    "reason": "division by zero has no recorded `// PANIC:` justification",
     "root": "safe_markers::unsafe_ratio",
     "root-kind": "concrete",
     "root-span": "src/lib.rs:7:1: 7:63",
@@ -49,7 +49,7 @@ expression: "report[\"findings\"]"
     },
     "span": "src/lib.rs:8:5: 8:24",
     "trace": [
-      "src/lib.rs:8:5: 8:24: safe_markers::unsafe_ratio --assert-> compiler assert division by zero"
+      "src/lib.rs:8:5: 8:24: safe_markers::unsafe_ratio --effect-operation-> division by zero"
     ]
   }
 ]

@@ -17,9 +17,9 @@ use effect_tracing::{
 use crate::annotations::{AnnotationId, AnnotationIndex};
 use crate::artifact::{
     AnnotationFactKind, AnnotationProbingFact, AnnotationRole, AnnotationTargetFact, ArtifactFacts,
-    CallTargetFact, CompilerAssertKind, DefinitionNamespaceIndex, EffectFact, EffectId, EffectKey,
-    FunctionFact, FunctionId as StableFunctionId, FunctionTargetFact, MarkerEvidenceState,
-    SafetyOpKind, UnverifiedMarkerProbeReason,
+    CallTargetFact, DefinitionNamespaceIndex, EffectFact, EffectId, EffectKey, FunctionFact,
+    FunctionId as StableFunctionId, FunctionTargetFact, MarkerEvidenceState,
+    UnverifiedMarkerProbeReason,
 };
 use crate::compiler::invocations::{
     InvocationGraph, InvocationResolution, UnresolvedCallTargetReason,
@@ -1277,19 +1277,7 @@ fn concrete_findings(
                         return None;
                     }
                     append_effect_provenance(body, fact, &mut trace_path);
-                    match ReportEffect::try_from_key(effect_key) {
-                        Some(ReportEffect::Panic) => {
-                            if let Some(kind) = CompilerAssertKind::from_effect_kind(&fact.kind) {
-                                append_compiler_assert(body, fact, kind, &mut trace_path);
-                            }
-                        }
-                        Some(ReportEffect::Safety) => {
-                            if let Some(kind) = SafetyOpKind::from_effect_kind(&fact.kind) {
-                                append_unsafe_operation(body, fact, kind, &mut trace_path);
-                            }
-                        }
-                        None => {}
-                    }
+                    append_effect_operation(body, fact, &mut trace_path);
                     Some(InterpretedFinding {
                         effect: metadata.clone(),
                         kind: InterpretedFindingKind::Operation {
@@ -2281,45 +2269,19 @@ fn effect_caller_path(body: &FunctionFact, fact: &EffectFact) -> String {
     )
 }
 
-fn append_compiler_assert(
-    body: &FunctionFact,
-    fact: &EffectFact,
-    kind: CompilerAssertKind,
-    trace: &mut InterpretedTrace,
-) {
+fn append_effect_operation(body: &FunctionFact, fact: &EffectFact, trace: &mut InterpretedTrace) {
     trace.steps.push(InterpretedTraceStep {
         caller: body.function,
         caller_path: effect_caller_path(body, fact),
         call: crate::artifact::CallId::new(fact.id.index()),
         marker_call: None,
-        kind: InterpretedTraceStepKind::Reachability(crate::artifact::CallKindFact::Assert),
+        kind: InterpretedTraceStepKind::EffectOperation,
         source_range: fact
             .expanded_range
             .clone()
             .or_else(|| fact.source_range.clone()),
         target: None,
-        target_path: Some(format!("compiler assert {}", kind.human_description())),
-    });
-}
-
-fn append_unsafe_operation(
-    body: &FunctionFact,
-    fact: &EffectFact,
-    kind: SafetyOpKind,
-    trace: &mut InterpretedTrace,
-) {
-    trace.steps.push(InterpretedTraceStep {
-        caller: body.function,
-        caller_path: effect_caller_path(body, fact),
-        call: crate::artifact::CallId::new(fact.id.index()),
-        marker_call: None,
-        kind: InterpretedTraceStepKind::UnsafeOperation(kind),
-        source_range: fact
-            .expanded_range
-            .clone()
-            .or_else(|| fact.source_range.clone()),
-        target: None,
-        target_path: Some(format!("unsafe operation ({})", kind.label())),
+        target_path: Some(fact.kind.as_str().replace('-', " ")),
     });
 }
 
@@ -2494,6 +2456,14 @@ mod tests {
                 kind: InterpretedFindingKind::Operation { operation },
                 ..
             }] if effect.key.as_str() == "allocation" && operation.as_str() == "heap-allocation"
+        ));
+        assert!(matches!(
+            findings[0].trace.steps.last(),
+            Some(InterpretedTraceStep {
+                kind: InterpretedTraceStepKind::EffectOperation,
+                target_path: Some(target),
+                ..
+            }) if target == "heap allocation"
         ));
     }
 

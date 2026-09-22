@@ -14,7 +14,7 @@ expression: "report[\"findings\"]"
       "crate": "suppression",
       "scope": "workspace"
     },
-    "reason": "panic operation (bounds check) has no recorded `// PANIC:` justification",
+    "reason": "bounds check has no recorded `// PANIC:` justification",
     "root": "suppression::reported_index",
     "root-kind": "concrete",
     "root-span": "src/lib.rs:5:1: 5:63",
@@ -23,7 +23,7 @@ expression: "report[\"findings\"]"
     },
     "span": "src/lib.rs:6:5: 6:18",
     "trace": [
-      "src/lib.rs:6:5: 6:18: suppression::reported_index --assert-> compiler assert index out of bounds"
+      "src/lib.rs:6:5: 6:18: suppression::reported_index --effect-operation-> bounds check"
     ]
   }
 ]

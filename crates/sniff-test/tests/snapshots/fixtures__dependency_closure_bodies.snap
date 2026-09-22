@@ -42,7 +42,7 @@ expression: "report[\"findings\"]"
       "crate": "dependency_closure_dep",
       "scope": "dependency"
     },
-    "reason": "dependency crate `dependency_closure_dep` has no recorded `// SAFETY:` justification for safety operation (raw pointer dereference)",
+    "reason": "dependency crate `dependency_closure_dep` has no recorded `// SAFETY:` justification for raw pointer dereference",
     "root": "dependency_closure_app::unsafe_body",
     "root-kind": "concrete",
     "root-span": "src/lib.rs:9:1: 9:45",
@@ -53,7 +53,7 @@ expression: "report[\"findings\"]"
     "trace": [
       "src/lib.rs:10:5: 10:50: dependency_closure_app::unsafe_body --direct-call-> dependency_closure_dep::read_pointer",
       "[FIXTURE]/dep/src/lib.rs:24:5: 24:14: dependency_closure_dep::read_pointer --direct-call-> dependency_closure_dep::read_pointer::{closure#0}",
-      "[FIXTURE]/dep/src/lib.rs:22:18: 22:26: dependency_closure_dep::read_pointer::{closure#0} --unsafe-operation-> unsafe operation (raw pointer dereference)"
+      "[FIXTURE]/dep/src/lib.rs:22:18: 22:26: dependency_closure_dep::read_pointer::{closure#0} --effect-operation-> raw pointer dereference"
     ]
   }
 ]

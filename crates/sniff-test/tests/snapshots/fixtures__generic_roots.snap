@@ -14,7 +14,7 @@ expression: "report[\"findings\"]"
       "crate": "generic_roots",
       "scope": "workspace"
     },
-    "reason": "panic operation (bounds check) has no recorded `// PANIC:` justification",
+    "reason": "bounds check has no recorded `// PANIC:` justification",
     "root": "generic_roots::generic_index",
     "root-kind": "generic",
     "root-span": "src/lib.rs:1:1: 1:58",
@@ -23,7 +23,7 @@ expression: "report[\"findings\"]"
     },
     "span": "src/lib.rs:2:6: 2:19",
     "trace": [
-      "src/lib.rs:2:6: 2:19: generic_roots::generic_index --assert-> compiler assert index out of bounds"
+      "src/lib.rs:2:6: 2:19: generic_roots::generic_index --effect-operation-> bounds check"
     ]
   }
 ]

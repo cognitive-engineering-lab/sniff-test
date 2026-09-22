@@ -14,7 +14,7 @@ expression: "report[\"findings\"]"
       "crate": "dependency_safety",
       "scope": "dependency"
     },
-    "reason": "dependency crate `dependency_safety` has no recorded `// SAFETY:` justification for safety operation (raw pointer dereference)",
+    "reason": "dependency crate `dependency_safety` has no recorded `// SAFETY:` justification for raw pointer dereference",
     "root": "dependency_safety_app::read_dependency",
     "root-kind": "concrete",
     "root-span": "src/lib.rs:1:1: 1:49",
@@ -24,7 +24,7 @@ expression: "report[\"findings\"]"
     "span": "[FIXTURE]/dep/src/lib.rs:2:14: 2:22",
     "trace": [
       "src/lib.rs:2:5: 2:42: dependency_safety_app::read_dependency --direct-call-> dependency_safety::read_byte",
-      "[FIXTURE]/dep/src/lib.rs:2:14: 2:22: dependency_safety::read_byte --unsafe-operation-> unsafe operation (raw pointer dereference)"
+      "[FIXTURE]/dep/src/lib.rs:2:14: 2:22: dependency_safety::read_byte --effect-operation-> raw pointer dereference"
     ]
   },
   {
@@ -38,7 +38,7 @@ expression: "report[\"findings\"]"
       "crate": "dependency_safety",
       "scope": "dependency"
     },
-    "reason": "dependency crate `dependency_safety` has no recorded `// SAFETY:` justification for safety operation (raw pointer dereference)",
+    "reason": "dependency crate `dependency_safety` has no recorded `// SAFETY:` justification for raw pointer dereference",
     "root": "dependency_safety_app::read_dependency_again",
     "root-kind": "concrete",
     "root-span": "src/lib.rs:5:1: 5:55",
@@ -48,7 +48,7 @@ expression: "report[\"findings\"]"
     "span": "[FIXTURE]/dep/src/lib.rs:2:14: 2:22",
     "trace": [
       "src/lib.rs:6:5: 6:42: dependency_safety_app::read_dependency_again --direct-call-> dependency_safety::read_byte",
-      "[FIXTURE]/dep/src/lib.rs:2:14: 2:22: dependency_safety::read_byte --unsafe-operation-> unsafe operation (raw pointer dereference)"
+      "[FIXTURE]/dep/src/lib.rs:2:14: 2:22: dependency_safety::read_byte --effect-operation-> raw pointer dereference"
     ]
   },
   {

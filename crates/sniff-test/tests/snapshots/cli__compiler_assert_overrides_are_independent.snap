@@ -7,7 +7,7 @@ stdout:
 <empty>
 stderr:
     Checking panic-axioms v0.1.0 ([FIXTURE])
-error: [sniff-test::panic::bounds-check] panic operation (bounds check) has no recorded `// PANIC:` justification
+error: [sniff-test::panic::bounds-check] bounds check has no recorded `// PANIC:` justification
   --> src/lib.rs:10:5
    |
 10 |     values[index]
@@ -23,9 +23,9 @@ help: [option 2] document when this function may panic with `/// # Panics` here
    |
  9 | pub fn indexed(values: &[usize], index: usize) -> usize {
    | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-   = note: reachable from `indexed` to `compiler assert index out of bounds`
+   = note: reachable from `indexed` to `bounds check`
 
-warning: [sniff-test::panic::remainder-by-zero] panic operation (remainder by zero) has no recorded `// PANIC:` justification
+warning: [sniff-test::panic::remainder-by-zero] remainder by zero has no recorded `// PANIC:` justification
  --> src/lib.rs:6:5
   |
 6 |     total_size % block_size
@@ -41,7 +41,7 @@ help: [option 2] document when this function may panic with `/// # Panics` here
   |
 5 | pub fn remainder(total_size: usize, block_size: usize) -> usize {
   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  = note: reachable from `remainder` to `compiler assert remainder with a zero divisor`
+  = note: reachable from `remainder` to `remainder by zero`
 
 note: set `show-full-stack-trace = true` under `[analysis]` in sniff-test.toml to show every reachability step
 warning: `panic-axioms` (lib) generated 1 warning

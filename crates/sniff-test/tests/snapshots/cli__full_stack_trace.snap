@@ -39,7 +39,7 @@ note: effect trace step 3/3 (public root -> effect source): macro core::macros::
 21 |     assert!(flag);
    |     ^^^^^^^^^^^^^
 
-error: [sniff-test::panic::division-by-zero] panic operation (division by zero) has no recorded `// PANIC:` justification
+error: [sniff-test::panic::division-by-zero] division by zero has no recorded `// PANIC:` justification
  --> src/lib.rs:8:5
   |
 8 |     total / denominator
@@ -55,7 +55,7 @@ help: [option 2] document when this function may panic with `/// # Panics` here
   |
 7 | pub fn unsafe_ratio(total: usize, denominator: usize) -> usize {
   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-note: effect trace step 1/1 (public root -> effect source): safe_markers::unsafe_ratio --assert-> compiler assert division by zero
+note: effect trace step 1/1 (public root -> effect source): safe_markers::unsafe_ratio --effect-operation-> division by zero
  --> src/lib.rs:8:5
   |
 8 |     total / denominator

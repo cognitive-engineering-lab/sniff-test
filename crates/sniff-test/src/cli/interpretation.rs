@@ -4,8 +4,7 @@ use std::path::{Path, PathBuf};
 
 use crate::artifact::{
     ArtifactFacts, CallFact, CallId, CallKindFact, ContractRequirementFact, FunctionFact,
-    FunctionId, SafetyOpKind, SourceFileFact, SourceRangeFact, StableDefPathHash,
-    StableInstanceHash,
+    FunctionId, SourceFileFact, SourceRangeFact, StableDefPathHash, StableInstanceHash,
 };
 use crate::artifact_cache::ArtifactScope;
 use crate::compiler::source::CachedSourceMap;
@@ -230,11 +229,9 @@ fn adapt_finding(
         show_full_stack_trace,
     );
     let effect_display = match &finding.kind {
-        InterpretedFindingKind::Operation { operation } => Some(format!(
-            "{} operation ({})",
-            finding.effect.key.as_str(),
-            operation.as_str().replace('-', " ")
-        )),
+        InterpretedFindingKind::Operation { operation } => {
+            Some(operation.as_str().replace('-', " "))
+        }
         _ => None,
     };
     let local_boundary_span = (owner.scope == OwnerScope::Dependency)
@@ -311,11 +308,7 @@ fn finding_description(
 
     match &finding.kind {
         InterpretedFindingKind::Operation { operation } => {
-            let subject = format!(
-                "{} operation ({})",
-                effect_name,
-                operation.as_str().replace('-', " ")
-            );
+            let subject = operation.as_str().replace('-', " ");
             source_marker_description(
                 class(Some(operation.as_str().to_owned()), false),
                 &subject,
@@ -1432,7 +1425,7 @@ fn finding_trace_order(
 const fn trace_step_kind_order(kind: InterpretedTraceStepKind) -> (u8, u8) {
     match kind {
         InterpretedTraceStepKind::Reachability(kind) => (0, edge_kind_order(kind)),
-        InterpretedTraceStepKind::UnsafeOperation(kind) => (1, safety_op_kind_order(kind)),
+        InterpretedTraceStepKind::EffectOperation => (1, 0),
     }
 }
 
@@ -1445,22 +1438,6 @@ const fn edge_kind_order(kind: CallKindFact) -> u8 {
         CallKindFact::CoroutineBody => 4,
         CallKindFact::Assert => 5,
         CallKindFact::IndirectCall => 6,
-    }
-}
-
-const fn safety_op_kind_order(kind: SafetyOpKind) -> u8 {
-    match kind {
-        SafetyOpKind::DerefRawPointer => 0,
-        SafetyOpKind::UseOfMutableStatic => 1,
-        SafetyOpKind::UseOfExternStatic => 2,
-        SafetyOpKind::AccessToUnionField => 3,
-        SafetyOpKind::UseOfUnsafeField => 4,
-        SafetyOpKind::InitializingLayoutConstrainedType => 5,
-        SafetyOpKind::InitializingTypeWithUnsafeField => 6,
-        SafetyOpKind::MutationOfLayoutConstrainedField => 7,
-        SafetyOpKind::BorrowOfLayoutConstrainedField => 8,
-        SafetyOpKind::InlineAssembly => 9,
-        SafetyOpKind::UnsafeBinderCast => 10,
     }
 }
 
@@ -1569,7 +1546,7 @@ fn render_trace_step(step: &InterpretedTraceStep) -> String {
 const fn trace_step_kind_label(kind: InterpretedTraceStepKind) -> &'static str {
     match kind {
         InterpretedTraceStepKind::Reachability(kind) => edge_kind_label(kind),
-        InterpretedTraceStepKind::UnsafeOperation(_) => "unsafe-operation",
+        InterpretedTraceStepKind::EffectOperation => "effect-operation",
     }
 }
 

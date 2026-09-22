@@ -42,7 +42,7 @@ expression: "report[\"findings\"]"
       "crate": "effect_marker_paths",
       "scope": "workspace"
     },
-    "reason": "safety operation (raw pointer dereference) has no recorded `// SAFETY:` justification",
+    "reason": "raw pointer dereference has no recorded `// SAFETY:` justification",
     "root": "effect_marker_paths::converging_safety_paths_preserve_uncovered_route",
     "root-kind": "concrete",
     "root-span": "src/lib.rs:23:1: 23:82",
@@ -53,7 +53,7 @@ expression: "report[\"findings\"]"
     "trace": [
       "src/lib.rs:26:14: 26:46: effect_marker_paths::converging_safety_paths_preserve_uncovered_route --direct-call-> effect_marker_paths::uncovered_safety_branch",
       "src/lib.rs:20:5: 20:38: effect_marker_paths::uncovered_safety_branch --direct-call-> effect_marker_paths::converging_safety_effect",
-      "src/lib.rs:16:14: 16:22: effect_marker_paths::converging_safety_effect --unsafe-operation-> unsafe operation (raw pointer dereference)"
+      "src/lib.rs:16:14: 16:22: effect_marker_paths::converging_safety_effect --effect-operation-> raw pointer dereference"
     ]
   },
   {
@@ -174,7 +174,7 @@ expression: "report[\"findings\"]"
       "crate": "effect_marker_paths",
       "scope": "workspace"
     },
-    "reason": "safety operation (raw pointer dereference) has no recorded `// SAFETY:` justification",
+    "reason": "raw pointer dereference has no recorded `// SAFETY:` justification",
     "root": "effect_marker_paths::transitive_safety_path_exposes_uncovered_effect",
     "root-kind": "concrete",
     "root-span": "src/lib.rs:59:1: 59:81",
@@ -184,7 +184,7 @@ expression: "report[\"findings\"]"
     "span": "src/lib.rs:56:14: 56:22",
     "trace": [
       "src/lib.rs:60:5: 60:36: effect_marker_paths::transitive_safety_path_exposes_uncovered_effect --direct-call-> effect_marker_paths::uncovered_safety_inner",
-      "src/lib.rs:56:14: 56:22: effect_marker_paths::uncovered_safety_inner --unsafe-operation-> unsafe operation (raw pointer dereference)"
+      "src/lib.rs:56:14: 56:22: effect_marker_paths::uncovered_safety_inner --effect-operation-> raw pointer dereference"
     ]
   }
 ]

@@ -43,7 +43,7 @@ expression: "report[\"findings\"]"
       "crate": "path_scoped_app",
       "scope": "workspace"
     },
-    "reason": "safety operation (raw pointer dereference) has no recorded `// SAFETY:` justification",
+    "reason": "raw pointer dereference has no recorded `// SAFETY:` justification",
     "root": "path_scoped_app::app_safety_callback_is_untrusted",
     "root-kind": "concrete",
     "root-span": "src/lib.rs:29:1: 29:42",
@@ -55,7 +55,7 @@ expression: "report[\"findings\"]"
       "src/lib.rs:30:5: 33:7: path_scoped_app::app_safety_callback_is_untrusted --direct-call-> trusted_a::forward_callback",
       "[FIXTURE]/trusted_a/src/lib.rs:10:5: 10:29: trusted_a::forward_callback --direct-call-> dep_b::consume",
       "[FIXTURE]/dep_b/src/lib.rs:6:5: 6:15: dep_b::consume --direct-call-> path_scoped_app::app_safety_callback_is_untrusted::{closure#0}",
-      "src/lib.rs:32:31: 32:39: path_scoped_app::app_safety_callback_is_untrusted::{closure#0} --unsafe-operation-> unsafe operation (raw pointer dereference)"
+      "src/lib.rs:32:31: 32:39: path_scoped_app::app_safety_callback_is_untrusted::{closure#0} --effect-operation-> raw pointer dereference"
     ]
   },
   {
@@ -127,7 +127,7 @@ expression: "report[\"findings\"]"
       "crate": "dep_c",
       "scope": "dependency"
     },
-    "reason": "dependency crate `dep_c` has no recorded `// SAFETY:` justification for safety operation (raw pointer dereference)",
+    "reason": "dependency crate `dep_c` has no recorded `// SAFETY:` justification for raw pointer dereference",
     "root": "path_scoped_app::direct_dependency_safety_is_untrusted",
     "root-kind": "concrete",
     "root-span": "src/lib.rs:25:1: 25:47",
@@ -138,7 +138,7 @@ expression: "report[\"findings\"]"
     "trace": [
       "src/lib.rs:26:5: 26:27: path_scoped_app::direct_dependency_safety_is_untrusted --direct-call-> dep_b::safety_effect",
       "[FIXTURE]/dep_b/src/lib.rs:10:5: 10:27: dep_b::safety_effect --direct-call-> dep_c::safety_effect",
-      "[FIXTURE]/dep_c/src/lib.rs:7:27: 7:35: dep_c::safety_effect --unsafe-operation-> unsafe operation (raw pointer dereference)"
+      "[FIXTURE]/dep_c/src/lib.rs:7:27: 7:35: dep_c::safety_effect --effect-operation-> raw pointer dereference"
     ]
   }
 ]

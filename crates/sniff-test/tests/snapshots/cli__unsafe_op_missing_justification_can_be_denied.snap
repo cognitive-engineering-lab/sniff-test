@@ -7,7 +7,7 @@ stdout:
 <empty>
 stderr:
     Checking unsafe-ops v0.1.0 ([FIXTURE])
-error: [sniff-test::safety::inline-assembly] safety operation (inline assembly) has no recorded `// SAFETY:` justification
+error: [sniff-test::safety::inline-assembly] inline assembly has no recorded `// SAFETY:` justification
   --> src/lib.rs:34:9
    |
 34 |         asm!("nop");
@@ -23,9 +23,9 @@ help: [option 2] document this function's safety obligations with `/// # Safety`
    |
 32 | pub fn asm_unjustified() {
    | ^^^^^^^^^^^^^^^^^^^^^^^^
-   = note: reachable from `asm_unjustified` to `unsafe operation (inline assembly)`
+   = note: reachable from `asm_unjustified` to `inline assembly`
 
-error: [sniff-test::safety::raw-pointer-dereference] safety operation (raw pointer dereference) has no recorded `// SAFETY:` justification
+error: [sniff-test::safety::raw-pointer-dereference] raw pointer dereference has no recorded `// SAFETY:` justification
   --> src/lib.rs:17:14
    |
 17 |     unsafe { *ptr }
@@ -41,9 +41,9 @@ help: [option 2] document this function's safety obligations with `/// # Safety`
    |
 16 | pub fn deref_unjustified(ptr: *const u32) -> u32 {
    | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-   = note: reachable from `deref_unjustified` to `unsafe operation (raw pointer dereference)`
+   = note: reachable from `deref_unjustified` to `raw pointer dereference`
 
-error: [sniff-test::safety::extern-static-access] safety operation (extern static access) has no recorded `// SAFETY:` justification
+error: [sniff-test::safety::extern-static-access] extern static access has no recorded `// SAFETY:` justification
   --> src/lib.rs:25:14
    |
 25 |     unsafe { ENV_FLAG }
@@ -59,9 +59,9 @@ help: [option 2] document this function's safety obligations with `/// # Safety`
    |
 24 | pub fn extern_static_unjustified() -> u32 {
    | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-   = note: reachable from `extern_static_unjustified` to `unsafe operation (extern static access)`
+   = note: reachable from `extern_static_unjustified` to `extern static access`
 
-error: [sniff-test::safety::mutable-static-access] safety operation (mutable static access) has no recorded `// SAFETY:` justification
+error: [sniff-test::safety::mutable-static-access] mutable static access has no recorded `// SAFETY:` justification
   --> src/lib.rs:21:14
    |
 21 |     unsafe { COUNTER }
@@ -77,9 +77,9 @@ help: [option 2] document this function's safety obligations with `/// # Safety`
    |
 20 | pub fn mutable_static_unjustified() -> u32 {
    | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-   = note: reachable from `mutable_static_unjustified` to `unsafe operation (mutable static access)`
+   = note: reachable from `mutable_static_unjustified` to `mutable static access`
 
-error: [sniff-test::safety::union-field-access] safety operation (union field access) has no recorded `// SAFETY:` justification
+error: [sniff-test::safety::union-field-access] union field access has no recorded `// SAFETY:` justification
   --> src/lib.rs:29:14
    |
 29 |     unsafe { bits.word }
@@ -95,7 +95,7 @@ help: [option 2] document this function's safety obligations with `/// # Safety`
    |
 28 | pub fn union_read_unjustified(bits: &Bits) -> u32 {
    | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-   = note: reachable from `union_read_unjustified` to `unsafe operation (union field access)`
+   = note: reachable from `union_read_unjustified` to `union field access`
 
 note: set `show-full-stack-trace = true` under `[analysis]` in sniff-test.toml to show every reachability step
 error: could not compile `unsafe-ops` (lib) due to 5 previous errors

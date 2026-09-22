@@ -8,7 +8,7 @@ stdout:
 stderr:
     Checking dependency-safety v0.1.0 ([FIXTURE]/dep)
     Checking dependency-safety-app v0.1.0 ([FIXTURE]/app)
-error: [sniff-test::safety::raw-pointer-dereference] `read_dependency` can reach safety operation (raw pointer dereference) with effect obligation in dependency crate `dependency_safety`.
+error: [sniff-test::safety::raw-pointer-dereference] `read_dependency` can reach raw pointer dereference with effect obligation in dependency crate `dependency_safety`.
  --> src/lib.rs:2:5
   |
 2 |     dependency_safety::read_byte(pointer)
@@ -35,7 +35,7 @@ help: [option 3] audit dependency crate `dependency_safety` to justify this effe
 2 |     unsafe { *pointer }
   |              ^^^^^^^^
 
-error: [sniff-test::safety::raw-pointer-dereference] `read_dependency_again` can reach safety operation (raw pointer dereference) with effect obligation in dependency crate `dependency_safety`.
+error: [sniff-test::safety::raw-pointer-dereference] `read_dependency_again` can reach raw pointer dereference with effect obligation in dependency crate `dependency_safety`.
  --> src/lib.rs:6:5
   |
 6 |     dependency_safety::read_byte(pointer)

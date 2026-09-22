@@ -843,42 +843,6 @@ impl CompilerAssertKind {
             Self::InvalidEnumConstruction => "invalid-enum-construction",
         }
     }
-
-    #[must_use]
-    pub(crate) fn from_effect_kind(kind: &EffectKind) -> Option<Self> {
-        Some(match kind.as_str() {
-            "bounds-check" => Self::BoundsCheck,
-            "overflow" => Self::Overflow,
-            "overflow-negation" => Self::OverflowNegation,
-            "division-by-zero" => Self::DivisionByZero,
-            "remainder-by-zero" => Self::RemainderByZero,
-            "resumed-after-return" => Self::ResumedAfterReturn,
-            "resumed-after-panic" => Self::ResumedAfterPanic,
-            "resumed-after-drop" => Self::ResumedAfterDrop,
-            "misaligned-pointer-dereference" => Self::MisalignedPointerDereference,
-            "null-pointer-dereference" => Self::NullPointerDereference,
-            "invalid-enum-construction" => Self::InvalidEnumConstruction,
-            _ => return None,
-        })
-    }
-
-    /// Stable human-facing description of this compiler assertion.
-    #[must_use]
-    pub(crate) const fn human_description(self) -> &'static str {
-        match self {
-            Self::BoundsCheck => "index out of bounds",
-            Self::Overflow => "arithmetic overflow",
-            Self::OverflowNegation => "negation overflow",
-            Self::DivisionByZero => "division by zero",
-            Self::RemainderByZero => "remainder with a zero divisor",
-            Self::ResumedAfterReturn => "coroutine resumed after returning",
-            Self::ResumedAfterPanic => "coroutine resumed after panicking",
-            Self::ResumedAfterDrop => "coroutine resumed after being dropped",
-            Self::MisalignedPointerDereference => "misaligned pointer dereference",
-            Self::NullPointerDereference => "null pointer dereference",
-            Self::InvalidEnumConstruction => "invalid enum construction",
-        }
-    }
 }
 
 /// Stable subtype for a non-call operation that rustc requires to occur in an
@@ -926,41 +890,6 @@ impl SafetyOpKind {
             Self::BorrowOfLayoutConstrainedField => "layout-constrained-field-borrow",
             Self::InlineAssembly => "inline-assembly",
             Self::UnsafeBinderCast => "unsafe-binder-cast",
-        }
-    }
-
-    #[must_use]
-    pub(crate) fn from_effect_kind(kind: &EffectKind) -> Option<Self> {
-        Some(match kind.as_str() {
-            "raw-pointer-dereference" => Self::DerefRawPointer,
-            "mutable-static-access" => Self::UseOfMutableStatic,
-            "extern-static-access" => Self::UseOfExternStatic,
-            "union-field-access" => Self::AccessToUnionField,
-            "unsafe-field-access" => Self::UseOfUnsafeField,
-            "layout-constrained-type-initialization" => Self::InitializingLayoutConstrainedType,
-            "unsafe-field-initialization" => Self::InitializingTypeWithUnsafeField,
-            "layout-constrained-field-mutation" => Self::MutationOfLayoutConstrainedField,
-            "layout-constrained-field-borrow" => Self::BorrowOfLayoutConstrainedField,
-            "inline-assembly" => Self::InlineAssembly,
-            "unsafe-binder-cast" => Self::UnsafeBinderCast,
-            _ => return None,
-        })
-    }
-
-    #[must_use]
-    pub(crate) const fn label(self) -> &'static str {
-        match self {
-            Self::DerefRawPointer => "raw pointer dereference",
-            Self::UseOfMutableStatic => "mutable static access",
-            Self::UseOfExternStatic => "extern static access",
-            Self::AccessToUnionField => "union field access",
-            Self::UseOfUnsafeField => "unsafe field access",
-            Self::InitializingLayoutConstrainedType => "layout-constrained type initialization",
-            Self::InitializingTypeWithUnsafeField => "unsafe field initialization",
-            Self::MutationOfLayoutConstrainedField => "layout-constrained field mutation",
-            Self::BorrowOfLayoutConstrainedField => "layout-constrained field borrow",
-            Self::InlineAssembly => "inline assembly",
-            Self::UnsafeBinderCast => "unsafe binder cast",
         }
     }
 }
@@ -1502,145 +1431,81 @@ mod tests {
 
     #[test]
     fn compiler_assert_kinds_have_stable_names() {
-        for (kind, serialized, description) in [
-            (
-                CompilerAssertKind::BoundsCheck,
-                "bounds-check",
-                "index out of bounds",
-            ),
-            (
-                CompilerAssertKind::Overflow,
-                "overflow",
-                "arithmetic overflow",
-            ),
-            (
-                CompilerAssertKind::OverflowNegation,
-                "overflow-negation",
-                "negation overflow",
-            ),
-            (
-                CompilerAssertKind::DivisionByZero,
-                "division-by-zero",
-                "division by zero",
-            ),
-            (
-                CompilerAssertKind::RemainderByZero,
-                "remainder-by-zero",
-                "remainder with a zero divisor",
-            ),
+        for (kind, serialized) in [
+            (CompilerAssertKind::BoundsCheck, "bounds-check"),
+            (CompilerAssertKind::Overflow, "overflow"),
+            (CompilerAssertKind::OverflowNegation, "overflow-negation"),
+            (CompilerAssertKind::DivisionByZero, "division-by-zero"),
+            (CompilerAssertKind::RemainderByZero, "remainder-by-zero"),
             (
                 CompilerAssertKind::ResumedAfterReturn,
                 "resumed-after-return",
-                "coroutine resumed after returning",
             ),
-            (
-                CompilerAssertKind::ResumedAfterPanic,
-                "resumed-after-panic",
-                "coroutine resumed after panicking",
-            ),
-            (
-                CompilerAssertKind::ResumedAfterDrop,
-                "resumed-after-drop",
-                "coroutine resumed after being dropped",
-            ),
+            (CompilerAssertKind::ResumedAfterPanic, "resumed-after-panic"),
+            (CompilerAssertKind::ResumedAfterDrop, "resumed-after-drop"),
             (
                 CompilerAssertKind::MisalignedPointerDereference,
                 "misaligned-pointer-dereference",
-                "misaligned pointer dereference",
             ),
             (
                 CompilerAssertKind::NullPointerDereference,
                 "null-pointer-dereference",
-                "null pointer dereference",
             ),
             (
                 CompilerAssertKind::InvalidEnumConstruction,
                 "invalid-enum-construction",
-                "invalid enum construction",
             ),
         ] {
-            let serialized = format!("\"{serialized}\"");
+            let encoded = format!("\"{serialized}\"");
             assert_eq!(
                 serde_json::to_string(&kind).expect("serialize compiler assert kind"),
-                serialized
+                encoded
             );
             assert_eq!(
-                serde_json::from_str::<CompilerAssertKind>(&serialized)
+                serde_json::from_str::<CompilerAssertKind>(&encoded)
                     .expect("deserialize compiler assert kind"),
                 kind
             );
-            assert_eq!(kind.human_description(), description);
+            assert_eq!(kind.effect_kind_name(), serialized);
         }
     }
 
     #[test]
-    fn safety_op_kinds_have_stable_user_facing_names() {
+    fn safety_op_kinds_have_stable_names() {
         let cases = [
-            (
-                SafetyOpKind::DerefRawPointer,
-                "raw-pointer-dereference",
-                "raw pointer dereference",
-            ),
-            (
-                SafetyOpKind::UseOfMutableStatic,
-                "mutable-static-access",
-                "mutable static access",
-            ),
-            (
-                SafetyOpKind::UseOfExternStatic,
-                "extern-static-access",
-                "extern static access",
-            ),
-            (
-                SafetyOpKind::AccessToUnionField,
-                "union-field-access",
-                "union field access",
-            ),
-            (
-                SafetyOpKind::UseOfUnsafeField,
-                "unsafe-field-access",
-                "unsafe field access",
-            ),
+            (SafetyOpKind::DerefRawPointer, "raw-pointer-dereference"),
+            (SafetyOpKind::UseOfMutableStatic, "mutable-static-access"),
+            (SafetyOpKind::UseOfExternStatic, "extern-static-access"),
+            (SafetyOpKind::AccessToUnionField, "union-field-access"),
+            (SafetyOpKind::UseOfUnsafeField, "unsafe-field-access"),
             (
                 SafetyOpKind::InitializingLayoutConstrainedType,
                 "layout-constrained-type-initialization",
-                "layout-constrained type initialization",
             ),
             (
                 SafetyOpKind::InitializingTypeWithUnsafeField,
                 "unsafe-field-initialization",
-                "unsafe field initialization",
             ),
             (
                 SafetyOpKind::MutationOfLayoutConstrainedField,
                 "layout-constrained-field-mutation",
-                "layout-constrained field mutation",
             ),
             (
                 SafetyOpKind::BorrowOfLayoutConstrainedField,
                 "layout-constrained-field-borrow",
-                "layout-constrained field borrow",
             ),
-            (
-                SafetyOpKind::InlineAssembly,
-                "inline-assembly",
-                "inline assembly",
-            ),
-            (
-                SafetyOpKind::UnsafeBinderCast,
-                "unsafe-binder-cast",
-                "unsafe binder cast",
-            ),
+            (SafetyOpKind::InlineAssembly, "inline-assembly"),
+            (SafetyOpKind::UnsafeBinderCast, "unsafe-binder-cast"),
         ];
 
-        for (kind, expected, label) in cases {
+        for (kind, expected) in cases {
             let serialized = serde_json::to_string(&kind).expect("serialize safety op kind");
             assert_eq!(serialized, format!("\"{expected}\""));
             assert_eq!(
                 serde_json::from_str::<SafetyOpKind>(&serialized).expect("deserialize safety op"),
                 kind
             );
-            assert_eq!(kind.label(), label);
+            assert_eq!(kind.effect_kind_name(), expected);
         }
     }
 

@@ -25,7 +25,7 @@ help: [option 2] document when this function may panic with `/// # Panics` here
    | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
    = note: reachable from `unsafe_call` to `panic`
 
-error: [sniff-test::panic::division-by-zero] panic operation (division by zero) has no recorded `// PANIC:` justification
+error: [sniff-test::panic::division-by-zero] division by zero has no recorded `// PANIC:` justification
  --> src/lib.rs:8:5
   |
 8 |     total / denominator
@@ -41,7 +41,7 @@ help: [option 2] document when this function may panic with `/// # Panics` here
   |
 7 | pub fn unsafe_ratio(total: usize, denominator: usize) -> usize {
   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  = note: reachable from `unsafe_ratio` to `compiler assert division by zero`
+  = note: reachable from `unsafe_ratio` to `division by zero`
 
 note: set `show-full-stack-trace = true` under `[analysis]` in sniff-test.toml to show every reachability step
 error: could not compile `safe-markers` (lib) due to 2 previous errors

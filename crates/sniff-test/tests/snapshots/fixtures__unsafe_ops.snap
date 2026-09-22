@@ -14,7 +14,7 @@ expression: "report[\"findings\"]"
       "crate": "unsafe_ops",
       "scope": "workspace"
     },
-    "reason": "safety operation (inline assembly) has no recorded `// SAFETY:` justification",
+    "reason": "inline assembly has no recorded `// SAFETY:` justification",
     "root": "unsafe_ops::asm_unjustified",
     "root-kind": "concrete",
     "root-span": "src/lib.rs:32:1: 32:25",
@@ -23,7 +23,7 @@ expression: "report[\"findings\"]"
     },
     "span": "src/lib.rs:34:9: 34:20",
     "trace": [
-      "src/lib.rs:34:9: 34:20: unsafe_ops::asm_unjustified --unsafe-operation-> unsafe operation (inline assembly)"
+      "src/lib.rs:34:9: 34:20: unsafe_ops::asm_unjustified --effect-operation-> inline assembly"
     ]
   },
   {
@@ -37,7 +37,7 @@ expression: "report[\"findings\"]"
       "crate": "unsafe_ops",
       "scope": "workspace"
     },
-    "reason": "safety operation (raw pointer dereference) has no recorded `// SAFETY:` justification",
+    "reason": "raw pointer dereference has no recorded `// SAFETY:` justification",
     "root": "unsafe_ops::deref_unjustified",
     "root-kind": "concrete",
     "root-span": "src/lib.rs:16:1: 16:49",
@@ -46,7 +46,7 @@ expression: "report[\"findings\"]"
     },
     "span": "src/lib.rs:17:14: 17:18",
     "trace": [
-      "src/lib.rs:17:14: 17:18: unsafe_ops::deref_unjustified --unsafe-operation-> unsafe operation (raw pointer dereference)"
+      "src/lib.rs:17:14: 17:18: unsafe_ops::deref_unjustified --effect-operation-> raw pointer dereference"
     ]
   },
   {
@@ -60,7 +60,7 @@ expression: "report[\"findings\"]"
       "crate": "unsafe_ops",
       "scope": "workspace"
     },
-    "reason": "safety operation (extern static access) has no recorded `// SAFETY:` justification",
+    "reason": "extern static access has no recorded `// SAFETY:` justification",
     "root": "unsafe_ops::extern_static_unjustified",
     "root-kind": "concrete",
     "root-span": "src/lib.rs:24:1: 24:42",
@@ -69,7 +69,7 @@ expression: "report[\"findings\"]"
     },
     "span": "src/lib.rs:25:14: 25:22",
     "trace": [
-      "src/lib.rs:25:14: 25:22: unsafe_ops::extern_static_unjustified --unsafe-operation-> unsafe operation (extern static access)"
+      "src/lib.rs:25:14: 25:22: unsafe_ops::extern_static_unjustified --effect-operation-> extern static access"
     ]
   },
   {
@@ -83,7 +83,7 @@ expression: "report[\"findings\"]"
       "crate": "unsafe_ops",
       "scope": "workspace"
     },
-    "reason": "safety operation (mutable static access) has no recorded `// SAFETY:` justification",
+    "reason": "mutable static access has no recorded `// SAFETY:` justification",
     "root": "unsafe_ops::mutable_static_unjustified",
     "root-kind": "concrete",
     "root-span": "src/lib.rs:20:1: 20:43",
@@ -92,7 +92,7 @@ expression: "report[\"findings\"]"
     },
     "span": "src/lib.rs:21:14: 21:21",
     "trace": [
-      "src/lib.rs:21:14: 21:21: unsafe_ops::mutable_static_unjustified --unsafe-operation-> unsafe operation (mutable static access)"
+      "src/lib.rs:21:14: 21:21: unsafe_ops::mutable_static_unjustified --effect-operation-> mutable static access"
     ]
   },
   {
@@ -106,7 +106,7 @@ expression: "report[\"findings\"]"
       "crate": "unsafe_ops",
       "scope": "workspace"
     },
-    "reason": "safety operation (union field access) has no recorded `// SAFETY:` justification",
+    "reason": "union field access has no recorded `// SAFETY:` justification",
     "root": "unsafe_ops::union_read_unjustified",
     "root-kind": "concrete",
     "root-span": "src/lib.rs:28:1: 28:50",
@@ -115,7 +115,7 @@ expression: "report[\"findings\"]"
     },
     "span": "src/lib.rs:29:14: 29:23",
     "trace": [
-      "src/lib.rs:29:14: 29:23: unsafe_ops::union_read_unjustified --unsafe-operation-> unsafe operation (union field access)"
+      "src/lib.rs:29:14: 29:23: unsafe_ops::union_read_unjustified --effect-operation-> union field access"
     ]
   }
 ]

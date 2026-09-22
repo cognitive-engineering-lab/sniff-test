@@ -7,7 +7,7 @@ stdout:
 <empty>
 stderr:
     Checking unsafe-ops v0.1.0 ([FIXTURE])
-error: [sniff-test::safety::inline-assembly] safety operation (inline assembly) has no recorded `// SAFETY:` justification
+error: [sniff-test::safety::inline-assembly] inline assembly has no recorded `// SAFETY:` justification
   --> src/lib.rs:34:9
    |
 34 |         asm!("nop");
@@ -23,9 +23,9 @@ help: [option 2] document this function's safety obligations with `/// # Safety`
    |
 32 | pub fn asm_unjustified() {
    | ^^^^^^^^^^^^^^^^^^^^^^^^
-   = note: reachable from `asm_unjustified` to `unsafe operation (inline assembly)`
+   = note: reachable from `asm_unjustified` to `inline assembly`
 
-warning: [sniff-test::safety::raw-pointer-dereference] safety operation (raw pointer dereference) has no recorded `// SAFETY:` justification
+warning: [sniff-test::safety::raw-pointer-dereference] raw pointer dereference has no recorded `// SAFETY:` justification
   --> src/lib.rs:17:14
    |
 17 |     unsafe { *ptr }
@@ -41,7 +41,7 @@ help: [option 2] document this function's safety obligations with `/// # Safety`
    |
 16 | pub fn deref_unjustified(ptr: *const u32) -> u32 {
    | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-   = note: reachable from `deref_unjustified` to `unsafe operation (raw pointer dereference)`
+   = note: reachable from `deref_unjustified` to `raw pointer dereference`
 
 note: set `show-full-stack-trace = true` under `[analysis]` in sniff-test.toml to show every reachability step
 warning: `unsafe-ops` (lib) generated 1 warning
