@@ -399,9 +399,9 @@ pub(crate) fn trace_selected_workspace(
             let mut panic_additional = AdditionalCompleteness {
                 reasons: Vec::new(),
             };
-            if effects
+            if let Some(effect) = effects
                 .iter()
-                .any(|effect| effect.key() == &ReportEffect::Panic.key())
+                .find(|effect| effect.key() == &ReportEffect::Panic.key())
             {
                 panic_additional.reasons.extend(missing_body_reasons(
                     artifact,
@@ -411,15 +411,15 @@ pub(crate) fn trace_selected_workspace(
                     local_stable_crate_id,
                     &root_functions,
                     ReportEffect::Panic,
-                    config,
+                    effect.config(),
                 ));
             }
             let mut safety_additional = AdditionalCompleteness {
                 reasons: Vec::new(),
             };
-            if effects
+            if let Some(effect) = effects
                 .iter()
-                .any(|effect| effect.key() == &ReportEffect::Safety.key())
+                .find(|effect| effect.key() == &ReportEffect::Safety.key())
             {
                 safety_additional.reasons.extend(missing_body_reasons(
                     artifact,
@@ -429,7 +429,7 @@ pub(crate) fn trace_selected_workspace(
                     local_stable_crate_id,
                     &root_functions,
                     ReportEffect::Safety,
-                    config,
+                    effect.config(),
                 ));
             }
             Ok(RootInterpretation {
@@ -1872,10 +1872,10 @@ fn missing_body_reasons(
     local_stable_crate_id: u64,
     roots: &[FunctionId],
     domain: ReportEffect,
-    config: &SniffTestConfig,
+    effect_config: &dyn EffectConfig,
 ) -> Vec<IncompleteReason> {
     let is_trusted = |function: FunctionId, path: &TrustPath| {
-        trusted_boundary(graph.stable_function(function), domain, namespaces, config)
+        trusted_boundary(graph.stable_function(function), namespaces, effect_config)
             && path.allows_boundary(graph, function)
     };
     let mut boundaries = BTreeMap::<StableFunctionId, MissingBodyBoundary>::new();
@@ -1893,7 +1893,7 @@ fn missing_body_reasons(
             if target.attributes.is_foreign
                 || !target.attributes.has_rust_body
                 || !is_managed_function(target.function, local_stable_crate_id, dependencies)
-                || trusted_boundary(target.function, domain, namespaces, config)
+                || trusted_boundary(target.function, namespaces, effect_config)
             {
                 continue;
             }
@@ -1967,15 +1967,14 @@ fn missing_body_boundary_is_shorter(
 
 fn trusted_boundary(
     function: StableFunctionId,
-    domain: ReportEffect,
     namespaces: &DefinitionNamespaceIndex,
-    config: &SniffTestConfig,
+    effect_config: &dyn EffectConfig,
 ) -> bool {
     let candidates = namespaces.candidates(function);
-    match domain {
-        ReportEffect::Panic => config.panics.trusts_panic_boundary_candidates(candidates),
-        ReportEffect::Safety => config.safety.trusts_safety_boundary_candidates(candidates),
-    }
+    effect_config
+        .trusted_boundary_namespaces()
+        .best_candidates_match(candidates)
+        .is_some()
 }
 
 fn is_managed_function(

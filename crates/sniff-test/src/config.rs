@@ -607,13 +607,6 @@ impl PanicConfig {
             .best_candidates_match(candidates)
             .is_some()
     }
-
-    #[must_use]
-    pub(crate) fn trusts_panic_boundary_candidates(&self, candidates: &[String]) -> bool {
-        self.trusted_boundary_namespaces
-            .best_candidates_match(candidates)
-            .is_some()
-    }
 }
 
 impl SafetyConfig {
@@ -621,13 +614,6 @@ impl SafetyConfig {
     #[cfg(test)]
     pub(crate) fn ignores_candidates(&self, candidates: &[String]) -> bool {
         self.ignored_namespaces
-            .best_candidates_match(candidates)
-            .is_some()
-    }
-
-    #[must_use]
-    pub(crate) fn trusts_safety_boundary_candidates(&self, candidates: &[String]) -> bool {
-        self.trusted_boundary_namespaces
             .best_candidates_match(candidates)
             .is_some()
     }
@@ -961,6 +947,13 @@ mod tests {
         paths.iter().map(|path| (*path).to_owned()).collect()
     }
 
+    fn trusts_boundary(config: &dyn EffectConfig, candidates: &[String]) -> bool {
+        config
+            .trusted_boundary_namespaces()
+            .best_candidates_match(candidates)
+            .is_some()
+    }
+
     #[test]
     fn config_errors_preserve_context_and_their_source() {
         let path = PathBuf::from("sniff-test.toml");
@@ -1086,16 +1079,14 @@ mod tests {
 
         let parsed = SniffTestConfig::from_manifest_str(config).expect("manifest should parse");
 
-        assert!(
-            parsed
-                .panics
-                .trusts_panic_boundary_candidates(&candidates(&["core::fmt::write"]))
-        );
-        assert!(
-            parsed
-                .safety
-                .trusts_safety_boundary_candidates(&candidates(&["ffi::safe_contract"]))
-        );
+        assert!(trusts_boundary(
+            &parsed.panics,
+            &candidates(&["core::fmt::write"])
+        ));
+        assert!(trusts_boundary(
+            &parsed.safety,
+            &candidates(&["ffi::safe_contract"])
+        ));
     }
 
     #[test]
@@ -1449,30 +1440,14 @@ mod tests {
             candidates(&["alloc", "alloc::vec::Vec::<T>::new"]),
             candidates(&["std", "std::collections::hash::map::HashMap::<K, V>::new"]),
         ] {
-            assert!(
-                initialized
-                    .panics
-                    .trusts_panic_boundary_candidates(&candidates)
-            );
-            assert!(
-                initialized
-                    .safety
-                    .trusts_safety_boundary_candidates(&candidates)
-            );
+            assert!(trusts_boundary(&initialized.panics, &candidates));
+            assert!(trusts_boundary(&initialized.safety, &candidates));
         }
 
         let empty = SniffTestConfig::default();
         let std_candidates = candidates(&["std", "std::collections::HashMap::new"]);
-        assert!(
-            !empty
-                .panics
-                .trusts_panic_boundary_candidates(&std_candidates)
-        );
-        assert!(
-            !empty
-                .safety
-                .trusts_safety_boundary_candidates(&std_candidates)
-        );
+        assert!(!trusts_boundary(&empty.panics, &std_candidates));
+        assert!(!trusts_boundary(&empty.safety, &std_candidates));
     }
 
     #[test]
@@ -1636,16 +1611,14 @@ mod tests {
                 .safety
                 .ignores_candidates(&candidates(&["my_crate::safe"]))
         );
-        assert!(
-            parsed
-                .safety
-                .trusts_safety_boundary_candidates(&candidates(&["ffi::safe_contract"]))
-        );
-        assert!(
-            !parsed
-                .safety
-                .trusts_safety_boundary_candidates(&candidates(&["ffi::plain_safe"]))
-        );
+        assert!(trusts_boundary(
+            &parsed.safety,
+            &candidates(&["ffi::safe_contract"])
+        ));
+        assert!(!trusts_boundary(
+            &parsed.safety,
+            &candidates(&["ffi::plain_safe"])
+        ));
         assert_eq!(
             parsed.safety.lints.unsafe_call_missing_justification,
             LintLevel::Deny
@@ -1793,17 +1766,16 @@ mod tests {
         };
 
         assert!(config.ignores_candidates(&candidates(&["app::wrapper", "generated::helper",])));
-        assert!(config.trusts_panic_boundary_candidates(&candidates(&["core::fmt::write"])));
-        assert!(
-            config.trusts_panic_boundary_candidates(&candidates(&["core::panicking::panic_fmt"]))
-        );
-        assert!(
-            config.trusts_panic_boundary_candidates(&candidates(&[
-                "compat::panic",
-                "canonical::panic",
-            ]))
-        );
-        assert!(!config.trusts_panic_boundary_candidates(&candidates(&["app::run"])));
+        assert!(trusts_boundary(&config, &candidates(&["core::fmt::write"])));
+        assert!(trusts_boundary(
+            &config,
+            &candidates(&["core::panicking::panic_fmt"])
+        ));
+        assert!(trusts_boundary(
+            &config,
+            &candidates(&["compat::panic", "canonical::panic"])
+        ));
+        assert!(!trusts_boundary(&config, &candidates(&["app::run"])));
     }
 
     #[test]
