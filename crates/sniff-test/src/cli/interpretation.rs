@@ -1055,8 +1055,7 @@ fn adapt_incomplete(
             if trace_limit {
                 format!("the {domain} trace frontier at function `{target}`")
             } else {
-                let subject = incomplete_analysis_subject(domain);
-                format!("the function `{target}`, whose body could not be inspected for {subject}")
+                format!("the function `{target}`, whose body could not be inspected for {domain} effects")
             }
         },
     );
@@ -1160,11 +1159,7 @@ fn incomplete_limit_presentation(
     domain: &str,
     limit: TraceLimit,
 ) -> IncompleteLimitPresentation {
-    let subject = match domain {
-        "panic" => "panic effect tracing",
-        "safety" => "safety effect tracing",
-        _ => "effect tracing",
-    };
+    let subject = format!("{domain} effect tracing");
     let (reason, message, help) = match limit {
         TraceLimit::Depth(max_depth) => (
             format!(
@@ -1232,16 +1227,9 @@ fn add_incomplete_reason_note(
 }
 
 fn missing_body_diagnostic_message(root: &str, target: &str, domain: &str) -> String {
-    let subject = incomplete_analysis_subject(domain);
-    format!("function `{root}` reaches `{target}`, whose body could not be checked for {subject}")
-}
-
-fn incomplete_analysis_subject(domain: &str) -> &'static str {
-    match domain {
-        "panic" => "possible panics",
-        "safety" => "unsafe operations",
-        _ => "the reported effects",
-    }
+    format!(
+        "function `{root}` reaches `{target}`, whose body could not be checked for {domain} effects"
+    )
 }
 
 fn render_trace(sources: &SourceResolver<'_, '_>, trace: &InterpretedTrace) -> Vec<String> {
@@ -1976,7 +1964,11 @@ mod tests {
     fn missing_body_diagnostics_name_the_reachable_target() {
         assert_eq!(
             missing_body_diagnostic_message("app::root", "dep::helper", "safety"),
-            "function `app::root` reaches `dep::helper`, whose body could not be checked for unsafe operations"
+            "function `app::root` reaches `dep::helper`, whose body could not be checked for safety effects"
+        );
+        assert_eq!(
+            missing_body_diagnostic_message("app::root", "dep::helper", "allocation"),
+            "function `app::root` reaches `dep::helper`, whose body could not be checked for allocation effects"
         );
     }
 
