@@ -14,7 +14,7 @@ use crate::artifact::{
 };
 use serde::{Deserialize, Serialize};
 
-use crate::config::CoverageConfig;
+use crate::config::{AnalysisLintConfig, CoverageConfig, EffectFindingLints, LintLevel};
 use crate::path_patterns::PathPatterns;
 
 use self::visit::EffectPassRegistry;
@@ -145,6 +145,8 @@ pub(crate) trait EffectConfig {
     fn coverage(&self) -> &CoverageConfig;
     fn ignored_namespaces(&self) -> &PathPatterns;
     fn trusted_boundary_namespaces(&self) -> &PathPatterns;
+    fn finding_lints(&self, analysis: &AnalysisLintConfig) -> EffectFindingLints;
+    fn operation_lint(&self, operation: Option<&str>) -> LintLevel;
 }
 
 /// Effects enabled for one sniff-test invocation.

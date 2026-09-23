@@ -548,6 +548,16 @@ pub(crate) struct EffectiveCoverageConfig {
     pub(crate) analysis_incomplete: LintLevel,
 }
 
+/// Lint levels shared by every effect finding, after legacy config keys are resolved.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct EffectFindingLints {
+    pub(crate) concrete_invocation: LintLevel,
+    pub(crate) documented_obligation: LintLevel,
+    pub(crate) documented_obligation_missing_requirements: LintLevel,
+    pub(crate) ambiguous_marker: LintLevel,
+    pub(crate) ambiguous_requirement: LintLevel,
+}
+
 impl LintLevel {
     #[must_use]
     pub fn is_allow(self) -> bool {
@@ -678,6 +688,37 @@ impl crate::effects::EffectConfig for PanicConfig {
     fn trusted_boundary_namespaces(&self) -> &PathPatterns {
         &self.trusted_boundary_namespaces
     }
+
+    fn finding_lints(&self, analysis: &AnalysisLintConfig) -> EffectFindingLints {
+        EffectFindingLints {
+            concrete_invocation: self.lints.panic_invocation,
+            documented_obligation: self.lints.documented_panic,
+            documented_obligation_missing_requirements: self.lints.documented_panic,
+            ambiguous_marker: analysis.ambiguous_panic_marker,
+            ambiguous_requirement: analysis.ambiguous_panic_requirement,
+        }
+    }
+
+    fn operation_lint(&self, operation: Option<&str>) -> LintLevel {
+        let lints = &self.lints;
+        match operation {
+            Some("bounds-check") => lints.compiler_assert_bounds_check,
+            Some("overflow") => lints.compiler_assert_overflow,
+            Some("overflow-negation") => lints.compiler_assert_overflow_negation,
+            Some("division-by-zero") => lints.compiler_assert_division_by_zero,
+            Some("remainder-by-zero") => lints.compiler_assert_remainder_by_zero,
+            Some("resumed-after-return") => lints.compiler_assert_resumed_after_return,
+            Some("resumed-after-panic") => lints.compiler_assert_resumed_after_panic,
+            Some("resumed-after-drop") => lints.compiler_assert_resumed_after_drop,
+            Some("misaligned-pointer-dereference") => {
+                lints.compiler_assert_misaligned_pointer_dereference
+            }
+            Some("null-pointer-dereference") => lints.compiler_assert_null_pointer_dereference,
+            Some("invalid-enum-construction") => lints.compiler_assert_invalid_enum_construction,
+            _ => None,
+        }
+        .unwrap_or(lints.compiler_assert)
+    }
 }
 
 impl crate::effects::EffectConfig for SafetyConfig {
@@ -691,6 +732,45 @@ impl crate::effects::EffectConfig for SafetyConfig {
 
     fn trusted_boundary_namespaces(&self) -> &PathPatterns {
         &self.trusted_boundary_namespaces
+    }
+
+    fn finding_lints(&self, analysis: &AnalysisLintConfig) -> EffectFindingLints {
+        EffectFindingLints {
+            concrete_invocation: self.lints.unsafe_call_missing_justification,
+            documented_obligation: self.lints.safety_obligation_missing_justification,
+            documented_obligation_missing_requirements: self
+                .lints
+                .safety_obligation_missing_requirements,
+            ambiguous_marker: analysis.ambiguous_safety_marker,
+            ambiguous_requirement: analysis.ambiguous_safety_requirement,
+        }
+    }
+
+    fn operation_lint(&self, operation: Option<&str>) -> LintLevel {
+        let lints = &self.lints;
+        match operation {
+            Some("raw-pointer-dereference") => lints.raw_pointer_dereference_missing_justification,
+            Some("mutable-static-access") => lints.mutable_static_access_missing_justification,
+            Some("extern-static-access") => lints.extern_static_access_missing_justification,
+            Some("union-field-access") => lints.union_field_access_missing_justification,
+            Some("unsafe-field-access") => lints.unsafe_field_access_missing_justification,
+            Some("layout-constrained-type-initialization") => {
+                lints.layout_constrained_type_initialization_missing_justification
+            }
+            Some("unsafe-field-initialization") => {
+                lints.unsafe_field_initialization_missing_justification
+            }
+            Some("layout-constrained-field-mutation") => {
+                lints.layout_constrained_field_mutation_missing_justification
+            }
+            Some("layout-constrained-field-borrow") => {
+                lints.layout_constrained_field_borrow_missing_justification
+            }
+            Some("inline-assembly") => lints.inline_assembly_missing_justification,
+            Some("unsafe-binder-cast") => lints.unsafe_binder_cast_missing_justification,
+            _ => None,
+        }
+        .unwrap_or(lints.unsafe_op_missing_justification)
     }
 }
 

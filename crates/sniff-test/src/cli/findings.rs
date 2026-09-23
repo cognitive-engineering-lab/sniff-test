@@ -678,116 +678,35 @@ impl FindingKind {
             Self::Effect {
                 effect,
                 finding,
-                operation,
-                ..
-            } if effect == "panic" => match finding {
-                EffectFindingClass::ConcreteOperation => {
-                    panic_operation_lint(config, operation.as_deref())
-                }
-                EffectFindingClass::ConcreteInvocation => config.panics.lints.panic_invocation,
-                EffectFindingClass::UndocumentedInvocation => unreachable!(
-                    "undocumented invocation policy is resolved before effect-specific policy"
-                ),
-                EffectFindingClass::DocumentedObligation => config.panics.lints.documented_panic,
-                EffectFindingClass::UnresolvedCallTarget => {
-                    unreachable!("coverage policy resolved first")
-                }
-                EffectFindingClass::AmbiguousMarker => config.analysis.lints.ambiguous_panic_marker,
-                EffectFindingClass::AmbiguousRequirement => {
-                    config.analysis.lints.ambiguous_panic_requirement
-                }
-                EffectFindingClass::AnalysisIncomplete => {
-                    unreachable!("coverage policy resolved first")
-                }
-            },
-            Self::Effect {
-                effect,
-                finding,
                 missing_requirements,
                 operation,
                 ..
-            } if effect == "safety" => match finding {
-                EffectFindingClass::ConcreteOperation => {
-                    safety_operation_lint(config, operation.as_deref())
-                }
-                EffectFindingClass::ConcreteInvocation => {
-                    config.safety.lints.unsafe_call_missing_justification
-                }
-                EffectFindingClass::UndocumentedInvocation => unreachable!(
-                    "undocumented invocation policy is resolved before effect-specific policy"
-                ),
-                EffectFindingClass::DocumentedObligation if *missing_requirements => {
-                    config.safety.lints.safety_obligation_missing_requirements
-                }
-                EffectFindingClass::DocumentedObligation => {
-                    config.safety.lints.safety_obligation_missing_justification
-                }
-                EffectFindingClass::UnresolvedCallTarget => {
-                    unreachable!("coverage policy resolved first")
-                }
-                EffectFindingClass::AmbiguousMarker => {
-                    config.analysis.lints.ambiguous_safety_marker
-                }
-                EffectFindingClass::AmbiguousRequirement => {
-                    config.analysis.lints.ambiguous_safety_requirement
-                }
-                EffectFindingClass::AnalysisIncomplete => {
-                    unreachable!("coverage policy resolved first")
-                }
-            },
-            Self::Effect { .. } => LintLevel::Warn,
+            } => config
+                .effect_config(&EffectKey::new(effect))
+                .map_or(LintLevel::Warn, |effect| {
+                    let lints = effect.finding_lints(&config.analysis.lints);
+                    match finding {
+                        EffectFindingClass::ConcreteOperation => {
+                            effect.operation_lint(operation.as_deref())
+                        }
+                        EffectFindingClass::ConcreteInvocation => lints.concrete_invocation,
+                        EffectFindingClass::DocumentedObligation if *missing_requirements => {
+                            lints.documented_obligation_missing_requirements
+                        }
+                        EffectFindingClass::DocumentedObligation => lints.documented_obligation,
+                        EffectFindingClass::AmbiguousMarker => lints.ambiguous_marker,
+                        EffectFindingClass::AmbiguousRequirement => lints.ambiguous_requirement,
+                        EffectFindingClass::UndocumentedInvocation
+                        | EffectFindingClass::UnresolvedCallTarget
+                        | EffectFindingClass::AnalysisIncomplete => {
+                            unreachable!("shared analysis policy is resolved first")
+                        }
+                    }
+                }),
             Self::EmptyReportRoots => config.analysis.lints.empty_report_roots,
             Self::MissingReportRoot => config.analysis.lints.missing_report_root,
         }
     }
-}
-
-fn panic_operation_lint(config: &SniffTestConfig, operation: Option<&str>) -> LintLevel {
-    let lints = &config.panics.lints;
-    match operation {
-        Some("bounds-check") => lints.compiler_assert_bounds_check,
-        Some("overflow") => lints.compiler_assert_overflow,
-        Some("overflow-negation") => lints.compiler_assert_overflow_negation,
-        Some("division-by-zero") => lints.compiler_assert_division_by_zero,
-        Some("remainder-by-zero") => lints.compiler_assert_remainder_by_zero,
-        Some("resumed-after-return") => lints.compiler_assert_resumed_after_return,
-        Some("resumed-after-panic") => lints.compiler_assert_resumed_after_panic,
-        Some("resumed-after-drop") => lints.compiler_assert_resumed_after_drop,
-        Some("misaligned-pointer-dereference") => {
-            lints.compiler_assert_misaligned_pointer_dereference
-        }
-        Some("null-pointer-dereference") => lints.compiler_assert_null_pointer_dereference,
-        Some("invalid-enum-construction") => lints.compiler_assert_invalid_enum_construction,
-        _ => None,
-    }
-    .unwrap_or(lints.compiler_assert)
-}
-
-fn safety_operation_lint(config: &SniffTestConfig, operation: Option<&str>) -> LintLevel {
-    let lints = &config.safety.lints;
-    match operation {
-        Some("raw-pointer-dereference") => lints.raw_pointer_dereference_missing_justification,
-        Some("mutable-static-access") => lints.mutable_static_access_missing_justification,
-        Some("extern-static-access") => lints.extern_static_access_missing_justification,
-        Some("union-field-access") => lints.union_field_access_missing_justification,
-        Some("unsafe-field-access") => lints.unsafe_field_access_missing_justification,
-        Some("layout-constrained-type-initialization") => {
-            lints.layout_constrained_type_initialization_missing_justification
-        }
-        Some("unsafe-field-initialization") => {
-            lints.unsafe_field_initialization_missing_justification
-        }
-        Some("layout-constrained-field-mutation") => {
-            lints.layout_constrained_field_mutation_missing_justification
-        }
-        Some("layout-constrained-field-borrow") => {
-            lints.layout_constrained_field_borrow_missing_justification
-        }
-        Some("inline-assembly") => lints.inline_assembly_missing_justification,
-        Some("unsafe-binder-cast") => lints.unsafe_binder_cast_missing_justification,
-        _ => None,
-    }
-    .unwrap_or(lints.unsafe_op_missing_justification)
 }
 
 pub(crate) fn collect_report_root_findings(
