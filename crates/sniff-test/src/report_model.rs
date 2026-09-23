@@ -27,8 +27,6 @@ pub(crate) struct RootInterpretation {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct EffectCompleteness {
-    pub(crate) panic: DomainCompleteness,
-    pub(crate) safety: DomainCompleteness,
     pub(crate) effects: BTreeMap<EffectKey, DomainCompleteness>,
 }
 
@@ -36,14 +34,6 @@ pub(crate) struct EffectCompleteness {
 pub(crate) struct DomainCompleteness {
     pub(crate) complete: bool,
     pub(crate) reasons: Vec<IncompleteReason>,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
-#[serde(rename_all = "kebab-case")]
-pub(crate) enum IncompleteTraceKind {
-    PanicEffect,
-    SafetyEffect,
-    Effect,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -58,12 +48,10 @@ pub(crate) struct TraceFrontier {
 pub(crate) enum IncompleteReason {
     TraceDepth {
         max_depth: usize,
-        trace_kind: IncompleteTraceKind,
         frontier: TraceFrontier,
     },
     TraceStateBudget {
         budget: usize,
-        trace_kind: IncompleteTraceKind,
         frontier: TraceFrontier,
     },
     MissingBody {

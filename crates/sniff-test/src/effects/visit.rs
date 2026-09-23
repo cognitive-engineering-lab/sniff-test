@@ -257,6 +257,14 @@ impl EffectPassRegistry {
         !self.thir.is_empty()
     }
 
+    /// Source-level HIR and THIR passes only visit bodies in their defining
+    /// artifact. MIR passes can also inspect consumer instantiations.
+    #[must_use]
+    pub(crate) fn requires_defining_body(&self, effect: &EffectKey) -> bool {
+        self.hir.iter().any(|pass| &pass.effect == effect)
+            || self.thir.iter().any(|pass| &pass.effect == effect)
+    }
+
     #[allow(
         dead_code,
         reason = "no built-in effect currently requires a HIR seed pass"

@@ -13,10 +13,10 @@ use crate::effects::Effect;
 use crate::namespace::canonical_namespace;
 use crate::report::{EffectReportError, trace_selected_workspace};
 use crate::report_model::{
-    EffectFindingClass, IncompleteReason, IncompleteTraceKind, InterpretationRoot,
-    InterpretedFinding, InterpretedFindingKind, InterpretedTrace, InterpretedTraceStep,
-    InterpretedTraceStepKind, RootInterpretation, TraceFrontier, UnresolvedCallCoverage,
-    UnresolvedCallMechanism, UnresolvedCallSite,
+    EffectFindingClass, IncompleteReason, InterpretationRoot, InterpretedFinding,
+    InterpretedFindingKind, InterpretedTrace, InterpretedTraceStep, InterpretedTraceStepKind,
+    RootInterpretation, TraceFrontier, UnresolvedCallCoverage, UnresolvedCallMechanism,
+    UnresolvedCallSite,
 };
 use crate::report_roots::ReportRoot;
 use crate::workspace::ArtifactAnalysisGraph;
@@ -107,34 +107,6 @@ fn adapt_result(
                 .into_iter()
                 .map(|finding| adapt_finding(sources, &root.root, &finding, show_full_stack_trace)),
         );
-        for reason in root.completeness.panic.reasons {
-            findings.push(adapt_incomplete(
-                sources,
-                &root.root,
-                FindingKind::Effect {
-                    effect: "panic".to_owned(),
-                    finding: EffectFindingClass::AnalysisIncomplete,
-                    operation: None,
-                },
-                "panic",
-                reason,
-                show_full_stack_trace,
-            ));
-        }
-        for reason in root.completeness.safety.reasons {
-            findings.push(adapt_incomplete(
-                sources,
-                &root.root,
-                FindingKind::Effect {
-                    effect: "safety".to_owned(),
-                    finding: EffectFindingClass::AnalysisIncomplete,
-                    operation: None,
-                },
-                "safety",
-                reason,
-                show_full_stack_trace,
-            ));
-        }
         for (effect, completeness) in root.completeness.effects {
             for reason in completeness.reasons {
                 findings.push(adapt_incomplete(
@@ -1230,26 +1202,21 @@ fn incomplete_finding_parts(
     match reason {
         IncompleteReason::TraceDepth {
             max_depth,
-            trace_kind,
             frontier,
         } => {
             let presentation = incomplete_limit_presentation(
                 &root.path,
                 &frontier.path,
-                trace_kind,
+                domain,
                 TraceLimit::Depth(max_depth),
             );
             limit_finding_parts(frontier, presentation)
         }
-        IncompleteReason::TraceStateBudget {
-            budget,
-            trace_kind,
-            frontier,
-        } => {
+        IncompleteReason::TraceStateBudget { budget, frontier } => {
             let presentation = incomplete_limit_presentation(
                 &root.path,
                 &frontier.path,
-                trace_kind,
+                domain,
                 TraceLimit::StateBudget(budget),
             );
             limit_finding_parts(frontier, presentation)
@@ -1289,13 +1256,13 @@ struct IncompleteLimitPresentation {
 fn incomplete_limit_presentation(
     root: &str,
     frontier: &str,
-    trace_kind: IncompleteTraceKind,
+    domain: &str,
     limit: TraceLimit,
 ) -> IncompleteLimitPresentation {
-    let subject = match trace_kind {
-        IncompleteTraceKind::PanicEffect => "panic effect tracing",
-        IncompleteTraceKind::SafetyEffect => "safety effect tracing",
-        IncompleteTraceKind::Effect => "effect tracing",
+    let subject = match domain {
+        "panic" => "panic effect tracing",
+        "safety" => "safety effect tracing",
+        _ => "effect tracing",
     };
     let (reason, message, help) = match limit {
         TraceLimit::Depth(max_depth) => (
@@ -1725,9 +1692,9 @@ mod tests {
         DiagnosticMessage, FindingDiagnostic, FindingKind, FindingOwner, OwnerScope, SourceEvidence,
     };
     use crate::report_model::{
-        EffectFindingClass, IncompleteTraceKind, InterpretationRoot, InterpretedFinding,
-        InterpretedFindingKind, InterpretedTrace, InterpretedTraceStep, InterpretedTraceStepKind,
-        UnresolvedCallCoverage, UnresolvedCallMechanism, UnresolvedCallSite,
+        EffectFindingClass, InterpretationRoot, InterpretedFinding, InterpretedFindingKind,
+        InterpretedTrace, InterpretedTraceStep, InterpretedTraceStepKind, UnresolvedCallCoverage,
+        UnresolvedCallMechanism, UnresolvedCallSite,
     };
     use crate::report_roots::ReportRootKind;
 
@@ -2021,7 +1988,7 @@ mod tests {
         let presentation = incomplete_limit_presentation(
             "app::root",
             "app::step_one",
-            IncompleteTraceKind::PanicEffect,
+            "panic",
             TraceLimit::Depth(4),
         );
 
@@ -2045,7 +2012,7 @@ mod tests {
         let presentation = incomplete_limit_presentation(
             "app::root",
             "app::helper",
-            IncompleteTraceKind::SafetyEffect,
+            "safety",
             TraceLimit::StateBudget(32),
         );
 

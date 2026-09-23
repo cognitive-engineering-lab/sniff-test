@@ -32,16 +32,19 @@ use crate::effects::obligation::{
     ObligationEffectPolicy, ObligationTracker, TrackedEffect, TrackedOrigin, TrackedState,
     TrackedTermination,
 };
+use crate::effects::visit::EffectPassRegistry;
 use crate::effects::{Effect, EffectConfig, EffectMetadata, EffectSpec};
 #[cfg(test)]
 use crate::effects::{EffectSelection, selected_effect_objects};
 
+#[cfg(test)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 enum ReportEffect {
     Panic,
     Safety,
 }
 
+#[cfg(test)]
 impl ReportEffect {
     fn key(self) -> EffectKey {
         match self {
@@ -49,25 +52,16 @@ impl ReportEffect {
             Self::Safety => EffectKey::new(Safety::EFFECT_NAME),
         }
     }
-
-    fn try_from_key(effect: &EffectKey) -> Option<Self> {
-        if effect.as_str() == Panic::EFFECT_NAME {
-            Some(Self::Panic)
-        } else if effect.as_str() == Safety::EFFECT_NAME {
-            Some(Self::Safety)
-        } else {
-            None
-        }
-    }
 }
+#[cfg(test)]
 use crate::effects::panic::Panic;
 use crate::effects::safety::Safety;
 use crate::effects::trust::TrustPath;
 use crate::report_model::{
-    DomainCompleteness, EffectCompleteness, IncompleteReason, IncompleteTraceKind,
-    InterpretationRoot, InterpretedCallee, InterpretedFinding, InterpretedFindingKind,
-    InterpretedTrace, InterpretedTraceStep, InterpretedTraceStepKind, RootInterpretation,
-    TraceFrontier, UnresolvedCallCoverage, UnresolvedCallMechanism, UnresolvedCallSite,
+    DomainCompleteness, EffectCompleteness, IncompleteReason, InterpretationRoot,
+    InterpretedCallee, InterpretedFinding, InterpretedFindingKind, InterpretedTrace,
+    InterpretedTraceStep, InterpretedTraceStepKind, RootInterpretation, TraceFrontier,
+    UnresolvedCallCoverage, UnresolvedCallMechanism, UnresolvedCallSite,
 };
 use crate::workspace::ArtifactAnalysisGraph;
 
@@ -218,6 +212,10 @@ pub(crate) fn trace_selected_workspace(
         .iter()
         .map(|effect| effect.metadata().clone())
         .collect::<Vec<_>>();
+    let mut pass_registry = EffectPassRegistry::default();
+    for effect in effects {
+        effect.register_passes(&mut pass_registry);
+    }
     let annotations = AnnotationIndex::from_artifact_with_overrides(
         artifact,
         &graph,
@@ -271,10 +269,6 @@ pub(crate) fn trace_selected_workspace(
         .iter()
         .map(|(effect, tracked)| (effect.clone(), engine.trace(tracked)))
         .collect::<BTreeMap<_, ConcreteTrace>>();
-    let panic_key = ReportEffect::Panic.key();
-    let safety_key = ReportEffect::Safety.key();
-    let panic_trace = effect_traces.get(&panic_key);
-    let safety_trace = effect_traces.get(&safety_key);
     let marker_claims = collect_marker_claims(
         artifact,
         &graph,
@@ -396,100 +390,40 @@ pub(crate) fn trace_selected_workspace(
                     unique.push(finding);
                 }
             }
-            let mut panic_additional = AdditionalCompleteness {
-                reasons: Vec::new(),
-            };
-            if let Some(effect) = effects
+            let completeness_by_effect = effects
                 .iter()
-                .find(|effect| effect.key() == &ReportEffect::Panic.key())
-            {
-                panic_additional.reasons.extend(missing_body_reasons(
-                    artifact,
-                    &graph,
-                    &namespaces,
-                    dependencies,
-                    local_stable_crate_id,
-                    &root_functions,
-                    ReportEffect::Panic,
-                    effect.config(),
-                ));
-            }
-            let mut safety_additional = AdditionalCompleteness {
-                reasons: Vec::new(),
-            };
-            if let Some(effect) = effects
-                .iter()
-                .find(|effect| effect.key() == &ReportEffect::Safety.key())
-            {
-                safety_additional.reasons.extend(missing_body_reasons(
-                    artifact,
-                    &graph,
-                    &namespaces,
-                    dependencies,
-                    local_stable_crate_id,
-                    &root_functions,
-                    ReportEffect::Safety,
-                    effect.config(),
-                ));
-            }
+                .map(|effect| {
+                    let trace = effect_traces
+                        .get(effect.key())
+                        .expect("selected effect was traced");
+                    let reasons = missing_body_reasons(
+                        artifact,
+                        &graph,
+                        &namespaces,
+                        dependencies,
+                        local_stable_crate_id,
+                        &root_functions,
+                        pass_registry.requires_defining_body(effect.key()),
+                        effect.config(),
+                    );
+                    (
+                        effect.key().clone(),
+                        completeness(
+                            artifact,
+                            trace,
+                            &graph,
+                            &root_functions,
+                            trace_options,
+                            AdditionalCompleteness { reasons },
+                        ),
+                    )
+                })
+                .collect::<BTreeMap<_, _>>();
             Ok(RootInterpretation {
                 root,
                 findings: unique,
                 completeness: EffectCompleteness {
-                    panic: panic_trace.as_ref().map_or(
-                        DomainCompleteness {
-                            complete: true,
-                            reasons: Vec::new(),
-                        },
-                        |panic_trace| {
-                            completeness(
-                                artifact,
-                                panic_trace,
-                                &graph,
-                                &root_functions,
-                                trace_options,
-                                IncompleteTraceKind::PanicEffect,
-                                panic_additional,
-                            )
-                        },
-                    ),
-                    safety: safety_trace.as_ref().map_or(
-                        DomainCompleteness {
-                            complete: true,
-                            reasons: Vec::new(),
-                        },
-                        |safety_trace| {
-                            completeness(
-                                artifact,
-                                safety_trace,
-                                &graph,
-                                &root_functions,
-                                trace_options,
-                                IncompleteTraceKind::SafetyEffect,
-                                safety_additional,
-                            )
-                        },
-                    ),
-                    effects: effect_traces
-                        .iter()
-                        .filter(|(effect, _)| ReportEffect::try_from_key(effect).is_none())
-                        .map(|(effect, trace)| {
-                            (
-                                effect.clone(),
-                                completeness(
-                                    artifact,
-                                    trace,
-                                    &graph,
-                                    &root_functions,
-                                    trace_options,
-                                    IncompleteTraceKind::Effect,
-                                    AdditionalCompleteness {
-                                        reasons: Vec::new(),
-                                    },
-                                ),
-                            )
-                        })
-                        .collect(),
+                    effects: completeness_by_effect,
                 },
             })
         })
@@ -1314,7 +1248,7 @@ fn concrete_findings(
                         function: owner,
                         function_path: body.display_path.clone(),
                         callee: source.target().map(interpreted_callee).or_else(|| {
-                            (effect_key == &ReportEffect::Safety.key()
+                            (effect_key == &EffectKey::new(Safety::EFFECT_NAME)
                                 && edge.kind == crate::artifact::CallKindFact::IndirectCall)
                                 .then(|| InterpretedCallee {
                                     function: None,
@@ -1859,7 +1793,7 @@ fn missing_body_reasons(
     dependencies: &ArtifactAnalysisGraph,
     local_stable_crate_id: u64,
     roots: &[FunctionId],
-    domain: ReportEffect,
+    requires_defining_body: bool,
     effect_config: &dyn EffectConfig,
 ) -> Vec<IncompleteReason> {
     let is_trusted = |function: FunctionId, path: &TrustPath| {
@@ -1885,9 +1819,10 @@ fn missing_body_reasons(
             {
                 continue;
             }
-            let body_is_available = match domain {
-                ReportEffect::Panic => artifact.function_body(target.function).is_some(),
-                ReportEffect::Safety => artifact.defining_function_body(target.function).is_some(),
+            let body_is_available = if requires_defining_body {
+                artifact.defining_function_body(target.function).is_some()
+            } else {
+                artifact.function_body(target.function).is_some()
             };
             if body_is_available {
                 continue;
@@ -1994,11 +1929,9 @@ fn completeness<O: Clone, S, T>(
     graph: &InvocationGraph,
     roots: &[FunctionId],
     options: TraceOptions,
-    trace_kind: IncompleteTraceKind,
     additional: AdditionalCompleteness,
 ) -> DomainCompleteness {
-    let mut reasons =
-        trace_limit_reasons(artifact, trace, graph, roots, options, trace_kind, |_| true);
+    let mut reasons = trace_limit_reasons(artifact, trace, graph, roots, options, |_| true);
     reasons.extend(additional.reasons);
     DomainCompleteness {
         complete: reasons.is_empty(),
@@ -2012,7 +1945,6 @@ fn trace_limit_reasons<O: Clone, S, T>(
     graph: &InvocationGraph,
     roots: &[FunctionId],
     options: TraceOptions,
-    trace_kind: IncompleteTraceKind,
     includes_state: impl Fn(&S) -> bool,
 ) -> Vec<IncompleteReason> {
     [
@@ -2052,14 +1984,11 @@ fn trace_limit_reasons<O: Clone, S, T>(
             .map(|frontier| match limit {
                 TraceLimitValue::Depth(max_depth) => IncompleteReason::TraceDepth {
                     max_depth,
-                    trace_kind,
                     frontier,
                 },
-                TraceLimitValue::StateBudget(budget) => IncompleteReason::TraceStateBudget {
-                    budget,
-                    trace_kind,
-                    frontier,
-                },
+                TraceLimitValue::StateBudget(budget) => {
+                    IncompleteReason::TraceStateBudget { budget, frontier }
+                }
             })
     })
     .collect()
@@ -2271,7 +2200,7 @@ fn boundary_description(edge: &crate::artifact::CallFact) -> String {
         if edge
             .invocation_effects
             .iter()
-            .any(|source| source.effect == ReportEffect::Safety.key())
+            .any(|source| source.effect == EffectKey::new(Safety::EFFECT_NAME))
         {
             String::from("indirect call through an unsafe function pointer")
         } else {
@@ -2330,6 +2259,10 @@ mod tests {
 
     struct Allocation;
 
+    struct AllocationPass;
+
+    impl crate::effects::visit::MirEffectPass for AllocationPass {}
+
     impl EffectSpec for Allocation {
         type Config = PanicConfig;
 
@@ -2337,7 +2270,27 @@ mod tests {
         const OBLIGATION: &'static str = "Allocations";
         const JUSTIFICATION: &'static str = "ALLOCATION";
 
-        fn register_passes(_: &mut crate::effects::visit::EffectPassRegistry) {}
+        fn register_passes(registry: &mut crate::effects::visit::EffectPassRegistry) {
+            registry.register_mir_pass::<Self>(Box::new(AllocationPass));
+        }
+    }
+
+    struct SourceAllocation;
+
+    struct SourceAllocationPass;
+
+    impl crate::effects::visit::HirEffectPass for SourceAllocationPass {}
+
+    impl EffectSpec for SourceAllocation {
+        type Config = PanicConfig;
+
+        const EFFECT_NAME: &'static str = "source-allocation";
+        const OBLIGATION: &'static str = "Allocations";
+        const JUSTIFICATION: &'static str = "ALLOCATION";
+
+        fn register_passes(registry: &mut crate::effects::visit::EffectPassRegistry) {
+            registry.register_hir_pass::<Self>(Box::new(SourceAllocationPass));
+        }
     }
 
     fn stable_function(index: u64) -> FunctionId {
@@ -2946,6 +2899,10 @@ unresolved-call-target = "warn"
                 }
             })
             .collect()
+    }
+
+    fn completeness_for(report: &RootInterpretation, effect: ReportEffect) -> &DomainCompleteness {
+        &report.completeness.effects[&effect.key()]
     }
 
     fn desugared_declaration_body(
@@ -4080,11 +4037,11 @@ unresolved-call-target = "warn"
         )
         .expect("callback missing-body report");
         assert_eq!(
-            missing_body_targets(&reports[0].completeness.panic),
+            missing_body_targets(completeness_for(&reports[0], ReportEffect::Panic)),
             [callback]
         );
         assert_eq!(
-            missing_body_targets(&reports[0].completeness.safety),
+            missing_body_targets(completeness_for(&reports[0], ReportEffect::Safety)),
             [callback]
         );
     }
@@ -4153,19 +4110,17 @@ unresolved-call-target = "warn"
 
         let root_report = &reports[0];
         assert_eq!(
-            missing_body_targets(&root_report.completeness.panic),
+            missing_body_targets(completeness_for(root_report, ReportEffect::Panic)),
             [local_missing, dependency_missing]
         );
         assert_eq!(
-            missing_body_targets(&root_report.completeness.safety),
+            missing_body_targets(completeness_for(root_report, ReportEffect::Safety)),
             [local_missing, dependency_missing]
         );
-        for reason in root_report
-            .completeness
-            .panic
+        for reason in completeness_for(root_report, ReportEffect::Panic)
             .reasons
             .iter()
-            .chain(&root_report.completeness.safety.reasons)
+            .chain(&completeness_for(root_report, ReportEffect::Safety).reasons)
         {
             let IncompleteReason::MissingBody {
                 function, trace, ..
@@ -4178,8 +4133,8 @@ unresolved-call-target = "warn"
                 Some(*function)
             );
         }
-        assert!(reports[1].completeness.panic.complete);
-        assert!(reports[1].completeness.safety.complete);
+        assert!(completeness_for(&reports[1], ReportEffect::Panic).complete);
+        assert!(completeness_for(&reports[1], ReportEffect::Safety).complete);
     }
 
     #[test]
@@ -4249,9 +4204,73 @@ unresolved-call-target = "warn"
         )
         .expect("effect report");
 
-        assert!(reports[0].completeness.panic.complete);
+        assert!(completeness_for(&reports[0], ReportEffect::Panic).complete);
         assert_eq!(
-            missing_body_targets(&reports[0].completeness.safety),
+            missing_body_targets(completeness_for(&reports[0], ReportEffect::Safety)),
+            [overlay]
+        );
+    }
+
+    #[test]
+    fn registered_passes_determine_missing_body_completeness_for_new_effects() {
+        let root = function_in_crate(1, 1);
+        let definition = function_in_crate(2, 1);
+        let overlay = exact_function(definition, 10);
+        let mut overlay_body = body(
+            overlay,
+            "dependency::overlay::<App>",
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+        );
+        overlay_body.provenance = FunctionFactProvenance::ConsumerInstantiation {
+            consumer_stable_crate_id: 1,
+        };
+        let local = ArtifactFacts::new(
+            vec![
+                body(
+                    root,
+                    "app::root",
+                    vec![call(0, target(overlay, "dependency::overlay::<App>"))],
+                    Vec::new(),
+                    Vec::new(),
+                    Vec::new(),
+                ),
+                overlay_body,
+            ],
+            Vec::new(),
+        )
+        .expect("consumer overlay fixture");
+        let dependencies = loaded_dependency(
+            2,
+            ArtifactFacts::new(Vec::new(), Vec::new()).expect("empty dependency facts"),
+        );
+        let config = SniffTestConfig::default();
+        let effects = [
+            effect::<Allocation>(&config.panics),
+            effect::<SourceAllocation>(&config.panics),
+        ];
+        let reports = super::trace_selected_workspace(
+            &local,
+            1,
+            &dependencies,
+            &std::collections::BTreeMap::new(),
+            &[InterpretationRoot {
+                function: root,
+                path: String::from("app::root"),
+                kind: ReportRootKind::Concrete,
+            }],
+            &config,
+            &effects,
+        )
+        .expect("effect report");
+
+        assert!(reports[0].completeness.effects[&EffectKey::new("allocation")].complete);
+        assert_eq!(
+            missing_body_targets(
+                &reports[0].completeness.effects[&EffectKey::new("source-allocation")]
+            ),
             [overlay]
         );
     }
@@ -4327,12 +4346,12 @@ unresolved-call-target = "warn"
         .expect("effect report");
 
         assert_eq!(
-            missing_body_targets(&reports[0].completeness.panic),
+            missing_body_targets(completeness_for(&reports[0], ReportEffect::Panic)),
             [ignored_contracted_missing],
             "ignored namespaces and ordinary contracts are not completeness boundaries"
         );
         assert_eq!(
-            missing_body_targets(&reports[0].completeness.safety),
+            missing_body_targets(completeness_for(&reports[0], ReportEffect::Safety)),
             [trusted_missing, ignored_contracted_missing]
         );
     }
