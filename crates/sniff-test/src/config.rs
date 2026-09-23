@@ -44,49 +44,6 @@ pub struct SniffTestConfig {
 }
 
 impl SniffTestConfig {
-    pub(crate) fn effect_config(
-        &self,
-        effect: &crate::artifact::EffectKey,
-    ) -> Option<&dyn crate::effects::EffectConfig> {
-        match effect.as_str() {
-            <crate::effects::panic::Panic as crate::effects::EffectSpec>::EFFECT_NAME => {
-                Some(&self.panics)
-            }
-            <crate::effects::safety::Safety as crate::effects::EffectSpec>::EFFECT_NAME => {
-                Some(&self.safety)
-            }
-            _ => None,
-        }
-    }
-
-    pub(crate) fn effect_coverage(
-        &self,
-        effect: &crate::artifact::EffectKey,
-    ) -> Option<EffectiveCoverageConfig> {
-        let coverage = self.effect_config(effect)?.coverage();
-        // New per-effect coverage settings win over the historical lint keys.
-        // Keep the older locations readable so existing manifests retain their
-        // selected severities while an omitted setting takes the new default.
-        let (legacy_unresolved, legacy_incomplete) = match effect.as_str() {
-            <crate::effects::panic::Panic as crate::effects::EffectSpec>::EFFECT_NAME => (
-                self.panics.lints.unresolved_call_target,
-                self.analysis.lints.panic_analysis_incomplete,
-            ),
-            <crate::effects::safety::Safety as crate::effects::EffectSpec>::EFFECT_NAME => (
-                self.safety.lints.unresolved_call_target,
-                self.analysis.lints.safety_analysis_incomplete,
-            ),
-            _ => (None, LintLevel::Deny),
-        };
-        Some(EffectiveCoverageConfig {
-            unresolved_call_target: coverage
-                .unresolved_call_target
-                .or(legacy_unresolved)
-                .unwrap_or(LintLevel::Warn),
-            analysis_incomplete: coverage.analysis_incomplete.unwrap_or(legacy_incomplete),
-        })
-    }
-
     /// Loads a sniff-test manifest from disk.
     ///
     /// # Errors
@@ -677,10 +634,6 @@ impl SafetyConfig {
 }
 
 impl crate::effects::EffectConfig for PanicConfig {
-    fn coverage(&self) -> &CoverageConfig {
-        &self.coverage
-    }
-
     fn ignored_namespaces(&self) -> &PathPatterns {
         &self.ignored_namespaces
     }
@@ -719,13 +672,17 @@ impl crate::effects::EffectConfig for PanicConfig {
         }
         .unwrap_or(lints.compiler_assert)
     }
+
+    fn effective_coverage(&self, analysis: &AnalysisLintConfig) -> EffectiveCoverageConfig {
+        effective_coverage(
+            self.coverage,
+            self.lints.unresolved_call_target,
+            analysis.panic_analysis_incomplete,
+        )
+    }
 }
 
 impl crate::effects::EffectConfig for SafetyConfig {
-    fn coverage(&self) -> &CoverageConfig {
-        &self.coverage
-    }
-
     fn ignored_namespaces(&self) -> &PathPatterns {
         &self.ignored_namespaces
     }
@@ -771,6 +728,29 @@ impl crate::effects::EffectConfig for SafetyConfig {
             _ => None,
         }
         .unwrap_or(lints.unsafe_op_missing_justification)
+    }
+
+    fn effective_coverage(&self, analysis: &AnalysisLintConfig) -> EffectiveCoverageConfig {
+        effective_coverage(
+            self.coverage,
+            self.lints.unresolved_call_target,
+            analysis.safety_analysis_incomplete,
+        )
+    }
+}
+
+fn effective_coverage(
+    coverage: CoverageConfig,
+    legacy_unresolved: Option<LintLevel>,
+    legacy_incomplete: LintLevel,
+) -> EffectiveCoverageConfig {
+    // New per-effect coverage settings take precedence over historical lint keys.
+    EffectiveCoverageConfig {
+        unresolved_call_target: coverage
+            .unresolved_call_target
+            .or(legacy_unresolved)
+            .unwrap_or(LintLevel::Warn),
+        analysis_incomplete: coverage.analysis_incomplete.unwrap_or(legacy_incomplete),
     }
 }
 
@@ -957,6 +937,8 @@ impl std::error::Error for ConfigError {
 #[cfg(test)]
 mod tests {
     use std::path::PathBuf;
+
+    use crate::effects::EffectConfig;
 
     use super::{
         AnalysisConfig, AnalysisLintConfig, CompilerConfig, ConfigError, ContractDocOverrideFile,
@@ -1405,9 +1387,8 @@ mod tests {
         assert_eq!(lints.unresolved_call_target, None);
         assert_eq!(PanicConfig::default().coverage, CoverageConfig::default());
         assert_eq!(
-            SniffTestConfig::default()
-                .effect_coverage(&crate::artifact::EffectKey::new("panic"))
-                .expect("panic coverage")
+            PanicConfig::default()
+                .effective_coverage(&AnalysisLintConfig::default())
                 .unresolved_call_target,
             LintLevel::Warn
         );
@@ -1500,9 +1481,8 @@ mod tests {
 
         assert_eq!(lints.unresolved_call_target, None);
         assert_eq!(
-            SniffTestConfig::default()
-                .effect_coverage(&crate::artifact::EffectKey::new("safety"))
-                .expect("safety coverage")
+            SafetyConfig::default()
+                .effective_coverage(&AnalysisLintConfig::default())
                 .unresolved_call_target,
             LintLevel::Warn
         );
@@ -1555,14 +1535,10 @@ mod tests {
             "#,
         )
         .expect("coverage configuration");
-        let panic = config
-            .effect_coverage(&crate::artifact::EffectKey::new("panic"))
-            .expect("panic coverage");
+        let panic = config.panics.effective_coverage(&config.analysis.lints);
         assert_eq!(panic.unresolved_call_target, LintLevel::Deny);
         assert_eq!(panic.analysis_incomplete, LintLevel::Deny);
-        let safety = config
-            .effect_coverage(&crate::artifact::EffectKey::new("safety"))
-            .expect("safety coverage");
+        let safety = config.safety.effective_coverage(&config.analysis.lints);
         assert_eq!(safety.unresolved_call_target, LintLevel::Allow);
         assert_eq!(safety.analysis_incomplete, LintLevel::Warn);
     }

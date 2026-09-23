@@ -1,12 +1,13 @@
 //! Canonical findings and the single lint-policy resolution boundary.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
 use crate::artifact::{
-    EffectKey, MarkerEvidenceState, SourceFileFact, SourceRangeFact, UnverifiedMarkerProbeReason,
+    MarkerEvidenceState, SourceFileFact, SourceRangeFact, UnverifiedMarkerProbeReason,
 };
 use crate::config::{LintLevel, ReportRootSet, SniffTestConfig};
+use crate::effects::Effect;
 use crate::report_model::{EffectFindingClass, UnresolvedCallSite};
 use crate::report_roots::{MissingReportRoot, ReportRootKind};
 use rustc_middle::ty::TyCtxt;
@@ -200,11 +201,16 @@ pub(crate) struct ResolvedFinding {
 pub(crate) fn resolve_findings(
     findings: Vec<Finding>,
     config: &SniffTestConfig,
+    effects: &[Box<dyn Effect + '_>],
 ) -> Vec<ResolvedFinding> {
+    let effect_index = effects
+        .iter()
+        .map(|effect| (effect.key().as_str(), effect.as_ref()))
+        .collect::<BTreeMap<_, _>>();
     let mut resolved = findings
         .into_iter()
         .filter_map(|finding| {
-            let level = finding.kind.lint_level(config);
+            let level = finding.kind.lint_level(config, &effect_index);
             (!level.is_allow()).then_some(ResolvedFinding { level, finding })
         })
         .collect::<Vec<_>>();
@@ -655,7 +661,11 @@ impl FindingKind {
         format!("sniff-test::{domain}::{lint}")
     }
 
-    fn lint_level(&self, config: &SniffTestConfig) -> LintLevel {
+    fn lint_level(
+        &self,
+        config: &SniffTestConfig,
+        effects: &BTreeMap<&str, &dyn Effect>,
+    ) -> LintLevel {
         match self {
             Self::Effect {
                 finding: EffectFindingClass::UndocumentedInvocation,
@@ -665,29 +675,40 @@ impl FindingKind {
                 effect,
                 finding: EffectFindingClass::UnresolvedCallTarget,
                 ..
-            } => config
-                .effect_coverage(&EffectKey::new(effect))
-                .map_or(LintLevel::Warn, |coverage| coverage.unresolved_call_target),
+            } => effects
+                .get(effect.as_str())
+                .map_or(LintLevel::Warn, |domain| {
+                    domain
+                        .config()
+                        .effective_coverage(&config.analysis.lints)
+                        .unresolved_call_target
+                }),
             Self::Effect {
                 effect,
                 finding: EffectFindingClass::AnalysisIncomplete,
                 ..
-            } => config
-                .effect_coverage(&EffectKey::new(effect))
-                .map_or(LintLevel::Warn, |coverage| coverage.analysis_incomplete),
+            } => effects
+                .get(effect.as_str())
+                .map_or(LintLevel::Warn, |domain| {
+                    domain
+                        .config()
+                        .effective_coverage(&config.analysis.lints)
+                        .analysis_incomplete
+                }),
             Self::Effect {
                 effect,
                 finding,
                 missing_requirements,
                 operation,
                 ..
-            } => config
-                .effect_config(&EffectKey::new(effect))
-                .map_or(LintLevel::Warn, |effect| {
-                    let lints = effect.finding_lints(&config.analysis.lints);
+            } => effects
+                .get(effect.as_str())
+                .map_or(LintLevel::Warn, |domain| {
+                    let policy = domain.config();
+                    let lints = policy.finding_lints(&config.analysis.lints);
                     match finding {
                         EffectFindingClass::ConcreteOperation => {
-                            effect.operation_lint(operation.as_deref())
+                            policy.operation_lint(operation.as_deref())
                         }
                         EffectFindingClass::ConcreteInvocation => lints.concrete_invocation,
                         EffectFindingClass::DocumentedObligation if *missing_requirements => {
@@ -744,7 +765,7 @@ mod tests {
     use super::{
         DiagnosticMessage, FULL_STACK_TRACE_HINT, Finding, FindingDiagnostic, FindingKind,
         FindingOwner, FindingTraceStepOrder, OwnerScope, ResolvedFinding, SourceEvidence,
-        aggregate_human_findings, compact_human_diagnostic_paths, resolve_findings,
+        aggregate_human_findings, compact_human_diagnostic_paths,
         shortest_distinguishing_root_labels, take_full_stack_trace_hint,
     };
     use crate::artifact::{SourceFileFact, SourceFileId, SourceRangeFact};
@@ -754,6 +775,11 @@ mod tests {
     };
     use rustc_span::{BytePos, Span};
     use std::collections::BTreeSet;
+
+    fn resolve_findings(findings: Vec<Finding>, config: &SniffTestConfig) -> Vec<ResolvedFinding> {
+        let effects = crate::effects::registered_effects(config);
+        super::resolve_findings(findings, config, &effects)
+    }
 
     fn finding(kind: FindingKind) -> Finding {
         Finding::new(

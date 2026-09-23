@@ -14,7 +14,9 @@ use crate::artifact::{
 };
 use serde::{Deserialize, Serialize};
 
-use crate::config::{AnalysisLintConfig, CoverageConfig, EffectFindingLints, LintLevel};
+use crate::config::{
+    AnalysisLintConfig, EffectFindingLints, EffectiveCoverageConfig, LintLevel, SniffTestConfig,
+};
 use crate::path_patterns::PathPatterns;
 
 use self::visit::EffectPassRegistry;
@@ -32,12 +34,13 @@ pub(crate) trait EffectSpec: 'static {
     fn register_passes(registry: &mut EffectPassRegistry);
 }
 
-/// Object-safe, type-erased representation of an effect specification.
+/// Object-safe effect definition with its invocation's read-only configuration.
 ///
 /// Framework code uses this interface after registration so adding an effect
 /// does not require another type-directed branch in extraction or reporting.
 pub(crate) trait Effect: Send + Sync {
     fn metadata(&self) -> &EffectMetadata;
+    fn config(&self) -> &dyn EffectConfig;
 
     fn register_passes(&self, registry: &mut EffectPassRegistry);
 
@@ -46,23 +49,29 @@ pub(crate) trait Effect: Send + Sync {
     }
 }
 
-struct EffectAdapter<E> {
+struct EffectAdapter<'config, E: EffectSpec> {
     metadata: EffectMetadata,
+    config: &'config E::Config,
     marker: PhantomData<fn() -> E>,
 }
 
-impl<E: EffectSpec> EffectAdapter<E> {
-    fn new() -> Self {
+impl<'config, E: EffectSpec> EffectAdapter<'config, E> {
+    fn new(config: &'config E::Config) -> Self {
         Self {
             metadata: EffectMetadata::of::<E>(),
+            config,
             marker: PhantomData,
         }
     }
 }
 
-impl<E: EffectSpec> Effect for EffectAdapter<E> {
+impl<E: EffectSpec> Effect for EffectAdapter<'_, E> {
     fn metadata(&self) -> &EffectMetadata {
         &self.metadata
+    }
+
+    fn config(&self) -> &dyn EffectConfig {
+        self.config
     }
 
     fn register_passes(&self, registry: &mut EffectPassRegistry) {
@@ -71,8 +80,8 @@ impl<E: EffectSpec> Effect for EffectAdapter<E> {
 }
 
 #[must_use]
-pub(crate) fn effect<E: EffectSpec>() -> Box<dyn Effect> {
-    Box::new(EffectAdapter::<E>::new())
+pub(crate) fn effect<E: EffectSpec>(config: &E::Config) -> Box<dyn Effect + '_> {
+    Box::new(EffectAdapter::<E>::new(config))
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -105,8 +114,11 @@ impl EffectMetadata {
 }
 
 #[must_use]
-pub(crate) fn registered_effects() -> Vec<Box<dyn Effect>> {
-    let effects = vec![effect::<panic::Panic>(), effect::<safety::Safety>()];
+pub(crate) fn registered_effects(config: &SniffTestConfig) -> Vec<Box<dyn Effect + '_>> {
+    let effects = vec![
+        effect::<panic::Panic>(&config.panics),
+        effect::<safety::Safety>(&config.safety),
+    ];
     let unique = effects
         .iter()
         .map(|effect| effect.key())
@@ -118,15 +130,18 @@ pub(crate) fn registered_effects() -> Vec<Box<dyn Effect>> {
 #[must_use]
 #[cfg(test)]
 pub(crate) fn selected_effects(selection: &EffectSelection) -> Vec<EffectMetadata> {
-    selected_effect_objects(selection)
+    selected_effect_objects(selection, &SniffTestConfig::default())
         .into_iter()
         .map(|effect| effect.metadata().clone())
         .collect()
 }
 
 #[must_use]
-pub(crate) fn selected_effect_objects(selection: &EffectSelection) -> Vec<Box<dyn Effect>> {
-    registered_effects()
+pub(crate) fn selected_effect_objects<'config>(
+    selection: &EffectSelection,
+    config: &'config SniffTestConfig,
+) -> Vec<Box<dyn Effect + 'config>> {
+    registered_effects(config)
         .into_iter()
         .filter(|effect| selection.selects(effect.key()))
         .collect()
@@ -137,16 +152,13 @@ pub(crate) fn annotation_kind<E: EffectSpec>(role: AnnotationRole) -> Annotation
     AnnotationFactKind::new(EffectKey::new(E::EFFECT_NAME), role)
 }
 
-/// Common, read-only configuration exposed to framework-owned seed probing.
-///
-/// Concrete probe policy is derived from this view; it is not embedded in an
-/// effect's user-facing configuration.
-pub(crate) trait EffectConfig {
-    fn coverage(&self) -> &CoverageConfig;
+/// Common, read-only policy exposed to probing and reporting.
+pub(crate) trait EffectConfig: Sync {
     fn ignored_namespaces(&self) -> &PathPatterns;
     fn trusted_boundary_namespaces(&self) -> &PathPatterns;
     fn finding_lints(&self, analysis: &AnalysisLintConfig) -> EffectFindingLints;
     fn operation_lint(&self, operation: Option<&str>) -> LintLevel;
+    fn effective_coverage(&self, analysis: &AnalysisLintConfig) -> EffectiveCoverageConfig;
 }
 
 /// Effects enabled for one sniff-test invocation.
@@ -187,11 +199,13 @@ impl EffectSelection {
     }
 
     #[must_use]
+    #[cfg(test)]
     pub(crate) fn tracks_panic(&self) -> bool {
         self.selects(&EffectKey::new(panic::Panic::EFFECT_NAME))
     }
 
     #[must_use]
+    #[cfg(test)]
     pub(crate) fn tracks_safety(&self) -> bool {
         self.selects(&EffectKey::new(safety::Safety::EFFECT_NAME))
     }
@@ -201,7 +215,8 @@ impl EffectSelection {
         const FNV_OFFSET_BASIS: u64 = 0xcbf2_9ce4_8422_2325;
         const FNV_PRIME: u64 = 0x0000_0100_0000_01b3;
 
-        let mut selected = registered_effects()
+        let config = SniffTestConfig::default();
+        let mut selected = registered_effects(&config)
             .into_iter()
             .filter(|effect| self.selects(effect.key()))
             .map(|effect| effect.key().as_str().to_owned())
@@ -218,7 +233,8 @@ impl EffectSelection {
 
     #[must_use]
     pub(crate) fn registered_keys() -> Vec<EffectKey> {
-        registered_effects()
+        let config = SniffTestConfig::default();
+        registered_effects(&config)
             .into_iter()
             .map(|effect| effect.key().clone())
             .collect()

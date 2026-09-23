@@ -216,9 +216,8 @@ pub(crate) fn probe_concrete_effect<'annotations>(
     annotations: &'annotations AnnotationIndex,
     namespaces: &DefinitionNamespaceIndex,
     domain: &dyn Effect,
-    config: &dyn EffectConfig,
 ) -> Result<ConcreteEffect<'annotations>, ProbeError> {
-    let mut seeds = ConcreteSeedCollector::new(graph, config);
+    let mut seeds = ConcreteSeedCollector::new(graph, domain.config());
     for body in &artifact.functions {
         let Some(owner) = seeds.filter_owner(
             body.function,
@@ -273,15 +272,8 @@ pub(crate) fn probe_concrete_effect_for<'annotations, E: super::EffectSpec>(
     namespaces: &DefinitionNamespaceIndex,
     config: &E::Config,
 ) -> Result<ConcreteEffect<'annotations>, ProbeError> {
-    let effect = super::effect::<E>();
-    probe_concrete_effect(
-        artifact,
-        graph,
-        annotations,
-        namespaces,
-        effect.as_ref(),
-        config,
-    )
+    let effect = super::effect::<E>(config);
+    probe_concrete_effect(artifact, graph, annotations, namespaces, effect.as_ref())
 }
 
 fn projected_owners(

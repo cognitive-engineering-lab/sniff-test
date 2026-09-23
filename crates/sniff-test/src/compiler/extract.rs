@@ -34,11 +34,11 @@ use crate::artifact::{
 };
 use crate::config::MarkerProbing;
 use crate::contracts::{ContractDocSummary, contract_doc_summary_from_attrs};
+use crate::effects::EffectMetadata;
 use crate::effects::visit::{
     EffectPassRegistry, PreliminaryEffectSeed, PreliminaryMirEffectSource,
     RegisteredEffectPassOutput, RegisteredEffectSeed, RegisteredMirEffectPassOutput,
 };
-use crate::effects::{EffectMetadata, EffectSelection, selected_effect_objects};
 use crate::namespace::{canonical_namespace, namespace_candidates};
 use crate::source_markers::{
     EffectMarkerBlock, MarkerProbe, effect_edge_marker_block, effect_site_marker_block,
@@ -71,20 +71,19 @@ impl std::error::Error for ExtractError {}
 ///
 /// Local closures retain generic defining bodies for cross-crate
 /// lookup. Specialized instances, coroutines, and const bodies remain exact.
-/// Effect selection participates in extraction; report-root and lint
-/// configuration do not.
+/// Effect selection participates in extraction. Pass registration uses the
+/// static effect definition and does not read the bound reporting config.
 pub(crate) fn extract_artifact_facts(
     tcx: TyCtxt<'_>,
-    selection: &EffectSelection,
+    selected_effects: &[Box<dyn crate::effects::Effect + '_>],
 ) -> Result<ArtifactFacts, ExtractError> {
     let required_owners = analyzable_local_fn_defs(tcx).collect::<Vec<_>>();
-    let selected_effects = selected_effect_objects(selection);
     let effects = selected_effects
         .iter()
         .map(|effect| effect.metadata().clone())
         .collect::<Vec<_>>();
     let mut pass_registry = EffectPassRegistry::default();
-    for effect in &selected_effects {
+    for effect in selected_effects {
         effect.register_passes(&mut pass_registry);
     }
     if pass_registry.requires_complete_thir() {

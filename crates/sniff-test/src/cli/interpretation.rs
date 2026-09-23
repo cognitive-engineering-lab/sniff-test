@@ -9,7 +9,7 @@ use crate::artifact::{
 use crate::artifact_cache::ArtifactScope;
 use crate::compiler::source::CachedSourceMap;
 use crate::config::SniffTestConfig;
-use crate::effects::EffectSelection;
+use crate::effects::Effect;
 use crate::namespace::canonical_namespace;
 use crate::report::{EffectReportError, trace_selected_workspace};
 use crate::report_model::{
@@ -42,7 +42,7 @@ pub(super) fn interpret_workspace<'tcx>(
     metadata_loader: &dyn rustc_metadata::creader::MetadataLoader,
     report_roots: &[ReportRoot<'tcx>],
     config: &SniffTestConfig,
-    effects: &EffectSelection,
+    effects: &[Box<dyn Effect + '_>],
 ) -> Result<Vec<Finding>, EffectReportError> {
     let roots = report_roots
         .iter()

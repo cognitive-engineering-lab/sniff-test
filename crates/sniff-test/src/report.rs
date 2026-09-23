@@ -32,10 +32,9 @@ use crate::effects::obligation::{
     ObligationEffectPolicy, ObligationTracker, TrackedEffect, TrackedOrigin, TrackedState,
     TrackedTermination,
 };
-use crate::effects::{
-    EffectConfig, EffectMetadata, EffectSelection, EffectSpec, annotation_kind,
-    selected_effect_objects,
-};
+use crate::effects::{Effect, EffectConfig, EffectMetadata, EffectSpec, annotation_kind};
+#[cfg(test)]
+use crate::effects::{EffectSelection, selected_effect_objects};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 enum ReportEffect {
@@ -159,6 +158,7 @@ pub(crate) fn trace_workspace(
     config: &SniffTestConfig,
 ) -> Result<Vec<RootInterpretation>, EffectReportError> {
     let effects = EffectSelection::default();
+    let selected_effects = selected_effect_objects(&effects, config);
     trace_selected_workspace(
         local,
         local_stable_crate_id,
@@ -166,7 +166,7 @@ pub(crate) fn trace_workspace(
         &BTreeMap::new(),
         roots,
         config,
-        &effects,
+        &selected_effects,
     )
 }
 
@@ -181,7 +181,7 @@ pub(crate) fn trace_selected_workspace(
     rustc_dependencies: &BTreeMap<u64, BTreeSet<u64>>,
     roots: &[InterpretationRoot],
     config: &SniffTestConfig,
-    effects: &EffectSelection,
+    effects: &[Box<dyn Effect + '_>],
 ) -> Result<Vec<RootInterpretation>, EffectReportError> {
     let artifact = compose_workspace_artifact(local, dependencies)?;
     let artifact = &artifact;
@@ -214,8 +214,7 @@ pub(crate) fn trace_selected_workspace(
     );
     graph.set_dependencies(&crate_dependencies);
     let namespaces = artifact.definition_namespace_index();
-    let selected_effects = selected_effect_objects(effects);
-    let selected_metadata = selected_effects
+    let selected_metadata = effects
         .iter()
         .map(|effect| effect.metadata().clone())
         .collect::<Vec<_>>();
@@ -228,24 +227,12 @@ pub(crate) fn trace_selected_workspace(
         &selected_metadata,
     )
     .map_err(|error| EffectReportError::new(error.to_string()))?;
-    let concrete_effects = selected_effects
+    let concrete_effects = effects
         .iter()
         .map(|effect| {
-            let effect_config = config.effect_config(effect.key()).ok_or_else(|| {
-                EffectReportError::new(format!(
-                    "selected effect `{}` has no configuration",
-                    effect.key().as_str()
-                ))
-            })?;
-            let concrete = probe_concrete_effect(
-                artifact,
-                &graph,
-                &annotations,
-                &namespaces,
-                effect.as_ref(),
-                effect_config,
-            )
-            .map_err(|error| EffectReportError::new(error.to_string()))?;
+            let concrete =
+                probe_concrete_effect(artifact, &graph, &annotations, &namespaces, effect.as_ref())
+                    .map_err(|error| EffectReportError::new(error.to_string()))?;
             Ok((effect.key().clone(), concrete))
         })
         .collect::<Result<BTreeMap<_, _>, EffectReportError>>()?;
@@ -337,13 +324,14 @@ pub(crate) fn trace_selected_workspace(
                         ));
                     }
                 }
-                for (effect, concrete) in &concrete_effects {
-                    let effect_config = config
-                        .effect_config(effect)
-                        .expect("selected effect config");
-                    if config
-                        .effect_coverage(effect)
-                        .expect("selected effect coverage")
+                for domain in effects {
+                    let effect = domain.key();
+                    let concrete = concrete_effects
+                        .get(effect)
+                        .expect("selected effect was probed");
+                    if domain
+                        .config()
+                        .effective_coverage(&config.analysis.lints)
                         .unresolved_call_target
                         .is_allow()
                     {
@@ -359,7 +347,7 @@ pub(crate) fn trace_selected_workspace(
                         &annotations,
                         root_function,
                         metadata,
-                        effect_config,
+                        domain.config(),
                         &namespaces,
                         |function, path: &TrustPath| concrete.is_opaque_on_path(function, path),
                         |invocation| concrete.is_ignored_invocation(invocation),
@@ -411,7 +399,10 @@ pub(crate) fn trace_selected_workspace(
             let mut panic_additional = AdditionalCompleteness {
                 reasons: Vec::new(),
             };
-            if effects.tracks_panic() {
+            if effects
+                .iter()
+                .any(|effect| effect.key() == &ReportEffect::Panic.key())
+            {
                 panic_additional.reasons.extend(missing_body_reasons(
                     artifact,
                     &graph,
@@ -426,7 +417,10 @@ pub(crate) fn trace_selected_workspace(
             let mut safety_additional = AdditionalCompleteness {
                 reasons: Vec::new(),
             };
-            if effects.tracks_safety() {
+            if effects
+                .iter()
+                .any(|effect| effect.key() == &ReportEffect::Safety.key())
+            {
                 safety_additional.reasons.extend(missing_body_reasons(
                     artifact,
                     &graph,
@@ -2392,14 +2386,14 @@ mod tests {
         let graph = InvocationGraph::from_artifact(&artifact).expect("invocation graph");
         let annotations = AnnotationIndex::from_artifact(&artifact, &graph).expect("annotations");
         let namespaces = artifact.definition_namespace_index();
-        let allocation = effect::<Allocation>();
+        let allocation_config = PanicConfig::default();
+        let allocation = effect::<Allocation>(&allocation_config);
         let concrete = probe_concrete_effect(
             &artifact,
             &graph,
             &annotations,
             &namespaces,
             allocation.as_ref(),
-            &PanicConfig::default(),
         )
         .expect("custom concrete effect");
         let config = SniffTestConfig::default();
@@ -2487,14 +2481,14 @@ mod tests {
             let annotations =
                 AnnotationIndex::from_artifact(&artifact, &graph).expect("annotations");
             let namespaces = artifact.definition_namespace_index();
-            let allocation = effect::<Allocation>();
+            let allocation_config = PanicConfig::default();
+            let allocation = effect::<Allocation>(&allocation_config);
             let concrete = probe_concrete_effect(
                 &artifact,
                 &graph,
                 &annotations,
                 &namespaces,
                 allocation.as_ref(),
-                &PanicConfig::default(),
             )
             .expect("allocation effect");
             let config = SniffTestConfig::default();

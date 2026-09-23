@@ -9,6 +9,7 @@ use crate::artifact_cache::{
 use crate::compiler::extract::extract_artifact_facts;
 use crate::compiler::source::verify_cached_marker_sources;
 use crate::config::SniffTestConfig;
+use crate::effects::{Effect, selected_effect_objects};
 use crate::report_roots::select_report_roots;
 use crate::workspace::{ArtifactAnalysisGraph, ExternArtifactInput};
 use anyhow::Context;
@@ -72,7 +73,8 @@ pub(crate) fn analyze_crate(
         emit_tool_error(tcx, error);
         return;
     }
-    let facts = match extract_artifact_facts(tcx, &args.effects) {
+    let effects = selected_effect_objects(&args.effects, config);
+    let facts = match extract_artifact_facts(tcx, &effects) {
         Ok(facts) => facts,
         Err(error) => {
             emit_tool_error(tcx, format!("failed to extract artifact facts: {error}"));
@@ -121,7 +123,7 @@ pub(crate) fn analyze_crate(
         metadata_loader,
         &selection.roots,
         config,
-        &args.effects,
+        &effects,
     ) {
         Ok(findings) => findings,
         Err(error) => {
@@ -139,7 +141,7 @@ pub(crate) fn analyze_crate(
         &crate_name,
     );
     findings.extend(interpreted_findings);
-    let report = build_report(tcx, config, findings);
+    let report = build_report(tcx, config, &effects, findings);
     if emit_diagnostics {
         let mut human_findings = aggregate_human_findings(&report.findings);
         let show_full_stack_trace_hint = take_full_stack_trace_hint(&mut human_findings);
@@ -193,6 +195,7 @@ fn emit_report(args: &SniffTestArgs, report: &AnalysisArtifactReport) {
 fn build_report(
     tcx: TyCtxt<'_>,
     config: &SniffTestConfig,
+    effects: &[Box<dyn Effect + '_>],
     findings: Vec<Finding>,
 ) -> AnalysisArtifactReport {
     AnalysisArtifactReport {
@@ -203,7 +206,7 @@ fn build_report(
         artifact: ReportArtifact {
             crate_name: tcx.crate_name(LOCAL_CRATE).to_string(),
         },
-        findings: resolve_findings(findings, config),
+        findings: resolve_findings(findings, config, effects),
     }
 }
 
