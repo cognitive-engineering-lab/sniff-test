@@ -18,7 +18,7 @@ help: [option 1] add a local `// SAFETY:` justification after verifying safety o
    |
 33 |     unsafe { helper() }
    |              ^^^^^^^^
-help: [option 2] document this function's safety obligations with `/// # Safety` here
+help: [option 2] document this function's obligations with `/// # Safety` here
   --> src/lib.rs:31:1
    |
 31 | pub fn trusted_unsafe_through_fn_pointer(use_trusted: bool, unknown: unsafe fn()) {
@@ -44,7 +44,7 @@ help: [option 1] add a local `// PANIC:` justification after verifying panic obl
    |
  6 |     trusted_doc_helper(flag);
    |     ^^^^^^^^^^^^^^^^^^^^^^^^
-help: [option 2] document when this function may panic with `/// # Panics` here
+help: [option 2] document this function's obligations with `/// # Panics` here
   --> src/lib.rs:5:1
    |
  5 | pub fn trusted_with_docs(flag: bool) {

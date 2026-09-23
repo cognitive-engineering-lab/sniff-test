@@ -18,7 +18,7 @@ help: [option 1] add a local `// SAFETY:` justification after verifying safety o
    |
 57 |     documented_obligation(&raw const byte);
    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-help: [option 2] document this function's safety obligations with `/// # Safety` here
+help: [option 2] document this function's obligations with `/// # Safety` here
   --> src/lib.rs:55:1
    |
 55 | pub fn trusted_obligation_exposes_missing_requirement() {
@@ -46,7 +46,7 @@ warning: [sniff-test::safety::documented-obligation] recorded `// SAFETY:` justi
    |              ^^^^^^^^^^^^^^^^^^^^^^^
    |
    = help: [option 1] update the recorded `// SAFETY:` justification to address each remaining `# Safety` requirement
-help: [option 2] document this function's safety obligations with `/// # Safety` here
+help: [option 2] document this function's obligations with `/// # Safety` here
   --> src/lib.rs:27:1
    |
 27 | pub fn unsafe_call_exposes_missing_requirement() -> u8 {

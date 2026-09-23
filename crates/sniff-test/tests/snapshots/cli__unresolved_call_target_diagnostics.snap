@@ -18,7 +18,7 @@ help: [option 1] add a local `// PANIC:` justification after verifying panic obl
    |
 11 |     value.documented(flag);
    |     ^^^^^^^^^^^^^^^^^^^^^^
-help: [option 2] document when this function may panic with `/// # Panics` here
+help: [option 2] document this function's obligations with `/// # Panics` here
   --> src/lib.rs:10:1
    |
 10 | pub fn call_documented<T: Risky>(value: &T, flag: bool) {
@@ -43,7 +43,7 @@ note: safety coverage is incomplete here: unresolved generic-dispatch call targe
    |     ^^^^^^^^^^^^^^^^^^^^^^
    = note: the call to `indirect_calls::Risky::documented` uses generic dispatch
    = note: reachable from `call_documented` to `documented`
-   = help: document caller safety requirements under `# Safety` on the trait method declaration; otherwise configure `[safety.lints].unresolved-call-target` if the uncertainty is acceptable
+   = help: document caller-visible `# Safety` obligations on the trait method declaration
 
 warning: [sniff-test::panic::unresolved-call-target] function `indirect_calls::call_dyn` has incomplete panic coverage
   --> src/lib.rs:19:5
@@ -58,7 +58,7 @@ note: panic coverage is incomplete here: unresolved dynamic-dispatch call target
    |     ^^^^^^^^^^^^^^^^^^^^^^^^
    = note: the call to `indirect_calls::Risky::undocumented` uses dynamic dispatch
    = note: reachable from `call_dyn` to `undocumented`
-   = help: document caller-visible panic behavior under `# Panics` on the trait method declaration; otherwise configure `[panics.lints].unresolved-call-target` if the uncertainty is acceptable
+   = help: document caller-visible `# Panics` obligations on the trait method declaration
 
 warning: [sniff-test::safety::unresolved-call-target] function `indirect_calls::call_dyn` has incomplete safety coverage
   --> src/lib.rs:19:5
@@ -73,7 +73,7 @@ note: safety coverage is incomplete here: unresolved dynamic-dispatch call targe
    |     ^^^^^^^^^^^^^^^^^^^^^^^^
    = note: the call to `indirect_calls::Risky::undocumented` uses dynamic dispatch
    = note: reachable from `call_dyn` to `undocumented`
-   = help: document caller safety requirements under `# Safety` on the trait method declaration; otherwise configure `[safety.lints].unresolved-call-target` if the uncertainty is acceptable
+   = help: document caller-visible `# Safety` obligations on the trait method declaration
 
 warning: [sniff-test::panic::unresolved-call-target] function `indirect_calls::call_pointer` has incomplete panic coverage
   --> src/lib.rs:23:5
@@ -88,7 +88,7 @@ note: panic coverage is incomplete here: unresolved function-pointer call target
    |     ^^^^^^^^^^^^
    = note: this call uses a function pointer
    = note: reachable from `call_pointer` to `indirect call through a function pointer`
-   = help: make the callee concrete or make its possible implementations available to analysis; otherwise configure `[panics.lints].unresolved-call-target` if the uncertainty is acceptable
+   = help: make the callee concrete or make its possible implementations available to analysis
 
 warning: [sniff-test::safety::unresolved-call-target] function `indirect_calls::call_pointer` has incomplete safety coverage
   --> src/lib.rs:23:5
@@ -103,7 +103,7 @@ note: safety coverage is incomplete here: unresolved function-pointer call targe
    |     ^^^^^^^^^^^^
    = note: this call uses a function pointer
    = note: reachable from `call_pointer` to `indirect call through a function pointer`
-   = help: make the callee concrete or make its possible implementations available to analysis; otherwise configure `[safety.lints].unresolved-call-target` if the uncertainty is acceptable
+   = help: make the callee concrete or make its possible implementations available to analysis
 
 warning: [sniff-test::panic::unresolved-call-target] function `indirect_calls::call_undocumented` has incomplete panic coverage
   --> src/lib.rs:15:5
@@ -118,7 +118,7 @@ note: panic coverage is incomplete here: unresolved generic-dispatch call target
    |     ^^^^^^^^^^^^^^^^^^^^^^^^
    = note: the call to `indirect_calls::Risky::undocumented` uses generic dispatch
    = note: reachable from `call_undocumented` to `undocumented`
-   = help: document caller-visible panic behavior under `# Panics` on the trait method declaration; otherwise configure `[panics.lints].unresolved-call-target` if the uncertainty is acceptable
+   = help: document caller-visible `# Panics` obligations on the trait method declaration
 
 warning: [sniff-test::safety::unresolved-call-target] function `indirect_calls::call_undocumented` has incomplete safety coverage
   --> src/lib.rs:15:5
@@ -133,7 +133,7 @@ note: safety coverage is incomplete here: unresolved generic-dispatch call targe
    |     ^^^^^^^^^^^^^^^^^^^^^^^^
    = note: the call to `indirect_calls::Risky::undocumented` uses generic dispatch
    = note: reachable from `call_undocumented` to `undocumented`
-   = help: document caller safety requirements under `# Safety` on the trait method declaration; otherwise configure `[safety.lints].unresolved-call-target` if the uncertainty is acceptable
+   = help: document caller-visible `# Safety` obligations on the trait method declaration
 
 note: set `show-full-stack-trace = true` under `[analysis]` in sniff-test.toml to show every reachability step
 warning: `indirect-calls` (lib) generated 8 warnings

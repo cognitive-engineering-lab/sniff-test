@@ -9,7 +9,7 @@ use crate::artifact::{
 use crate::artifact_cache::ArtifactScope;
 use crate::compiler::source::CachedSourceMap;
 use crate::config::SniffTestConfig;
-use crate::effects::Effect;
+use crate::effects::{Effect, EffectMetadata};
 use crate::namespace::canonical_namespace;
 use crate::report::{EffectReportError, trace_selected_workspace};
 use crate::report_model::{
@@ -280,7 +280,7 @@ fn finding_description(
             source_marker_description(
                 class(Some(operation.as_str().to_owned())),
                 &subject,
-                marker_domain(effect),
+                effect,
                 owner,
                 source_evidence,
                 false,
@@ -294,7 +294,7 @@ fn finding_description(
             source_marker_description(
                 class(Some(operation.as_str().to_owned())),
                 &subject,
-                marker_domain(effect),
+                effect,
                 owner,
                 source_evidence,
                 false,
@@ -316,7 +316,7 @@ fn finding_description(
             source_marker_description(
                 class(None),
                 &subject,
-                marker_domain(effect),
+                effect,
                 owner,
                 source_evidence,
                 !finding.missing_requirements.is_empty(),
@@ -369,101 +369,10 @@ fn finding_description(
     }
 }
 
-#[derive(Clone, Copy)]
-enum MarkerDomain {
-    Panic,
-    Safety,
-    Generic,
-}
-
-fn marker_domain(effect: &crate::effects::EffectMetadata) -> MarkerDomain {
-    match effect.justification {
-        "PANIC" => MarkerDomain::Panic,
-        "SAFETY" => MarkerDomain::Safety,
-        _ => MarkerDomain::Generic,
-    }
-}
-
-impl MarkerDomain {
-    const fn marker(self) -> &'static str {
-        match self {
-            Self::Panic => "PANIC",
-            Self::Safety => "SAFETY",
-            Self::Generic => "EFFECT",
-        }
-    }
-
-    const fn heading(self) -> &'static str {
-        match self {
-            Self::Panic => "Panics",
-            Self::Safety => "Safety",
-            Self::Generic => "Effect",
-        }
-    }
-
-    const fn effect(self) -> &'static str {
-        match self {
-            Self::Panic => "panic path",
-            Self::Safety => "safety obligation",
-            Self::Generic => "effect path",
-        }
-    }
-
-    const fn noun(self) -> &'static str {
-        match self {
-            Self::Panic => "panic",
-            Self::Safety => "safety",
-            Self::Generic => "effect",
-        }
-    }
-
-    const fn config_table(self) -> &'static str {
-        match self {
-            Self::Panic => "panics",
-            Self::Safety => "safety",
-            Self::Generic => "analysis",
-        }
-    }
-
-    const fn ambiguous_effects(self) -> &'static str {
-        match self {
-            Self::Panic => "possible panics",
-            Self::Safety => "safety obligations",
-            Self::Generic => "effects",
-        }
-    }
-
-    fn ambiguous_marker_help(self) -> String {
-        match self {
-            Self::Panic => String::from(
-                "move the marker directly above one obligation, split it into separate markers, or set `ambiguous-panic-marker = \"allow\"` under `[analysis.lints]`",
-            ),
-            Self::Safety => String::from(
-                "give each unsafe block or operation its own marker, or set `ambiguous-safety-marker = \"allow\"` under `[analysis.lints]`",
-            ),
-            Self::Generic => String::from(
-                "move the marker directly above one obligation, or configure the corresponding analysis lint",
-            ),
-        }
-    }
-
-    fn root_documentation_help(self) -> String {
-        match self {
-            Self::Panic => {
-                String::from("document when this function may panic with `/// # Panics` here")
-            }
-            Self::Safety => {
-                String::from("document this function's safety obligations with `/// # Safety` here")
-            }
-            Self::Generic => String::from("document this function's obligations here"),
-        }
-    }
-}
-
 fn source_marker_description(
     kind: FindingKind,
     subject: &str,
-    domain: MarkerDomain,
+    effect: &EffectMetadata,
     owner: &FindingOwner,
     evidence: Option<SourceEvidence>,
     has_remaining_requirements: bool,
@@ -471,7 +380,7 @@ fn source_marker_description(
     let reason = evidence.map_or_else(
         || subject.to_owned(),
         |evidence| {
-            source_evidence_reason(subject, domain, owner, evidence, has_remaining_requirements)
+            source_evidence_reason(subject, effect, owner, evidence, has_remaining_requirements)
         },
     );
     (kind, reason.clone(), reason)
@@ -479,12 +388,12 @@ fn source_marker_description(
 
 fn source_evidence_reason(
     subject: &str,
-    domain: MarkerDomain,
+    effect: &EffectMetadata,
     owner: &FindingOwner,
     evidence: SourceEvidence,
     has_remaining_requirements: bool,
 ) -> String {
-    let marker = domain.marker();
+    let marker = effect.justification;
     match evidence {
         SourceEvidence::VerifiedAbsent => match owner.scope {
             OwnerScope::Workspace => {
@@ -510,7 +419,7 @@ fn source_evidence_reason(
         ),
         SourceEvidence::Present if has_remaining_requirements => format!(
             "recorded `// {marker}:` justification for {subject} does not satisfy the remaining `# {}` requirements",
-            domain.heading()
+            effect.obligation
         ),
         SourceEvidence::Present => {
             format!("recorded `// {marker}:` justification for {subject} is unusable")
@@ -519,24 +428,24 @@ fn source_evidence_reason(
 }
 
 fn source_evidence_help(
-    domain: MarkerDomain,
+    effect: &EffectMetadata,
     owner: &FindingOwner,
     evidence: SourceEvidence,
     has_remaining_requirements: bool,
 ) -> String {
-    let marker = domain.marker();
+    let marker = effect.justification;
     match (owner.scope, evidence) {
         (OwnerScope::Workspace, SourceEvidence::VerifiedAbsent) => format!(
             "add a local `// {marker}:` justification after verifying {} obligations",
-            domain.noun()
+            effect.key.as_str()
         ),
         (OwnerScope::Workspace, SourceEvidence::Unverified { .. }) => format!(
             "restore usable source justification, then rerun analysis before deciding how to contain this {}",
-            domain.effect()
+            effect.key.as_str()
         ),
         (OwnerScope::Workspace, SourceEvidence::Present) if has_remaining_requirements => format!(
             "update the recorded `// {marker}:` justification to address each remaining `# {}` requirement",
-            domain.heading()
+            effect.obligation
         ),
         (OwnerScope::Workspace, SourceEvidence::Present) => format!(
             "replace the unusable recorded `// {marker}:` justification with a concrete invariant"
@@ -578,27 +487,30 @@ fn source_evidence_help(
 }
 
 fn external_containment_help(
-    domain: MarkerDomain,
+    effect: &EffectMetadata,
     evidence: SourceEvidence,
     has_partial_path_evidence: bool,
 ) -> String {
     if has_partial_path_evidence {
         format!(
             "this trace already discharges some `# {}` requirements; at this local call, record only the remaining requirements after verifying them",
-            domain.heading()
+            effect.obligation
         )
     } else {
         match evidence {
             SourceEvidence::VerifiedAbsent => {
-                format!("justify this local call with `// {}:`", domain.marker())
+                format!(
+                    "justify this local call with `// {}:`",
+                    effect.justification
+                )
             }
             SourceEvidence::Unverified { .. } => format!(
                 "inspect or guard this local call while the external {} justification remains unverified",
-                domain.marker()
+                effect.justification
             ),
             SourceEvidence::Present => format!(
                 "address the remaining external {} obligation at this local call",
-                domain.marker()
+                effect.justification
             ),
         }
     }
@@ -648,8 +560,8 @@ struct EffectDiagnosticWriter<'a, 'tcx, 'analysis> {
 }
 
 impl EffectDiagnosticWriter<'_, '_, '_> {
-    fn source(&mut self, domain: MarkerDomain, contract: bool) {
-        self.justification_marker = Some(domain.marker().to_owned());
+    fn source(&mut self, effect: &EffectMetadata, contract: bool) {
+        self.justification_marker = Some(effect.justification.to_owned());
         let dependency_effect = self
             .source_evidence
             .is_some_and(|evidence| is_unjustified_dependency_effect(self.owner, evidence));
@@ -660,24 +572,24 @@ impl EffectDiagnosticWriter<'_, '_, '_> {
                 self.finding,
                 self.owner,
                 self.source_evidence,
-                domain,
+                effect,
             );
         }
         if !dependency_effect {
-            self.source_help(domain);
+            self.source_help(effect);
         }
         if contract {
             add_contract_note(
                 self.sources,
                 self.diagnostic,
                 self.finding,
-                domain.heading(),
+                effect.obligation,
             );
         }
         add_missing_requirement_notes(
             self.diagnostic,
             &self.finding.missing_requirements,
-            domain.noun(),
+            effect.key.as_str(),
             self.source_evidence,
         );
         add_finding_trace_notes(
@@ -693,27 +605,27 @@ impl EffectDiagnosticWriter<'_, '_, '_> {
                 self.finding,
                 self.owner,
                 self.source_evidence,
-                domain,
+                effect,
             );
         }
-        self.document_root(domain);
+        self.document_root(effect);
         if dependency_effect {
-            self.source_help(domain);
+            self.source_help(effect);
         }
     }
 
-    fn source_help(&mut self, domain: MarkerDomain) {
+    fn source_help(&mut self, effect: &EffectMetadata) {
         add_source_evidence_help(
             self.diagnostic,
             self.finding,
             self.owner,
             self.source_evidence,
-            domain,
+            effect,
             self.effect_span,
         );
     }
 
-    fn unresolved(&mut self, domain: MarkerDomain, site: UnresolvedCallSite) {
+    fn unresolved(&mut self, effect: &EffectMetadata, site: UnresolvedCallSite) {
         let target = self
             .finding
             .callee
@@ -725,7 +637,7 @@ impl EffectDiagnosticWriter<'_, '_, '_> {
             self.effect_span,
             format!(
                 "{} coverage is incomplete here: {}",
-                domain.noun(),
+                effect.key.as_str(),
                 unresolved_target_summary(site, target)
             ),
         );
@@ -742,19 +654,18 @@ impl EffectDiagnosticWriter<'_, '_, '_> {
         );
         self.diagnostic
             .messages
-            .push(DiagnosticMessage::Help(format!(
-                "{}; otherwise configure `[{}.lints].unresolved-call-target` if the uncertainty is acceptable",
-                unresolved_action(domain, site.mechanism),
-                domain.config_table()
+            .push(DiagnosticMessage::Help(unresolved_action(
+                effect,
+                site.mechanism,
             )));
     }
 
-    fn ambiguous_requirement(&mut self, domain: MarkerDomain, normalized_name: &str) {
+    fn ambiguous_requirement(&mut self, effect: &EffectMetadata, normalized_name: &str) {
         add_ambiguous_requirement_notes(
             self.sources,
             self.diagnostic,
             self.finding,
-            domain.heading(),
+            effect.obligation,
             normalized_name,
         );
         add_finding_trace_notes(
@@ -765,18 +676,17 @@ impl EffectDiagnosticWriter<'_, '_, '_> {
         );
         self.diagnostic
             .messages
-            .push(DiagnosticMessage::Help(format!(
-                "give each requirement a unique name, or set `ambiguous-{}-requirement = \"allow\"` under `[analysis.lints]`",
-                domain.noun()
+            .push(DiagnosticMessage::Help(String::from(
+                "give each requirement a unique name",
             )));
     }
 
-    fn ambiguous_marker(&mut self, domain: MarkerDomain, effect_count: usize) {
+    fn ambiguous_marker(&mut self, effect: &EffectMetadata, effect_count: usize) {
         self.diagnostic
             .messages
             .push(DiagnosticMessage::Note(format!(
-                "this marker applies to {effect_count} {}",
-                domain.ambiguous_effects()
+                "this marker applies to {effect_count} {} effect groups",
+                effect.key.as_str()
             )));
         add_finding_trace_notes(
             self.sources,
@@ -786,19 +696,17 @@ impl EffectDiagnosticWriter<'_, '_, '_> {
         );
         self.diagnostic
             .messages
-            .push(DiagnosticMessage::Help(domain.ambiguous_marker_help()));
+            .push(DiagnosticMessage::Help(String::from(
+                "move the marker directly above one obligation or split it into separate markers",
+            )));
     }
 
-    fn document_root(&mut self, domain: MarkerDomain) {
+    fn document_root(&mut self, effect: &EffectMetadata) {
         if let Some(span) = self.sources.function_span(self.root.function) {
-            let help = if self.owner.scope == OwnerScope::Dependency {
-                format!(
-                    "document this function's obligations with `/// # {}` here",
-                    domain.heading()
-                )
-            } else {
-                domain.root_documentation_help()
-            };
+            let help = format!(
+                "document this function's obligations with `/// # {}` here",
+                effect.obligation
+            );
             self.diagnostic
                 .messages
                 .push(DiagnosticMessage::SpanAlternativeHelp(span, help));
@@ -832,10 +740,10 @@ fn decorate_finding(
         show_full_stack_trace,
         justification_marker: None,
     };
-    let domain = marker_domain(&finding.effect);
+    let effect = &finding.effect;
     match &finding.kind {
         InterpretedFindingKind::Operation { .. } | InterpretedFindingKind::Invocation { .. } => {
-            writer.source(domain, false)
+            writer.source(effect, false)
         }
         InterpretedFindingKind::UndocumentedInvocation { .. } => {
             writer
@@ -843,16 +751,16 @@ fn decorate_finding(
                 .messages
                 .push(DiagnosticMessage::Help(format!(
                     "document the callee's caller obligations under a `# {}` section",
-                    domain.heading()
+                    effect.obligation
                 )));
         }
-        InterpretedFindingKind::DocumentedObligation => writer.source(domain, true),
-        InterpretedFindingKind::UnresolvedCallTarget { site } => writer.unresolved(domain, *site),
+        InterpretedFindingKind::DocumentedObligation => writer.source(effect, true),
+        InterpretedFindingKind::UnresolvedCallTarget { site } => writer.unresolved(effect, *site),
         InterpretedFindingKind::AmbiguousRequirement { normalized_name } => {
-            writer.ambiguous_requirement(domain, normalized_name);
+            writer.ambiguous_requirement(effect, normalized_name);
         }
         InterpretedFindingKind::AmbiguousMarker { effect_count } => {
-            writer.ambiguous_marker(domain, *effect_count);
+            writer.ambiguous_marker(effect, *effect_count);
         }
     }
     writer.justification_marker
@@ -873,7 +781,7 @@ fn add_source_evidence_help(
     finding: &InterpretedFinding,
     owner: &FindingOwner,
     evidence: Option<SourceEvidence>,
-    domain: MarkerDomain,
+    effect: &EffectMetadata,
     effect_span: Option<Span>,
 ) {
     let Some(evidence) = evidence else {
@@ -890,7 +798,7 @@ fn add_source_evidence_help(
         });
     } else {
         let source_help = source_evidence_help(
-            domain,
+            effect,
             owner,
             evidence,
             !finding.missing_requirements.is_empty(),
@@ -912,7 +820,7 @@ fn add_external_containment_guidance(
     finding: &InterpretedFinding,
     owner: &FindingOwner,
     evidence: Option<SourceEvidence>,
-    domain: MarkerDomain,
+    effect: &EffectMetadata,
 ) {
     let Some(evidence) = evidence else {
         return;
@@ -926,11 +834,11 @@ fn add_external_containment_guidance(
         if is_unjustified_dependency_effect(owner, evidence) && !has_partial_path_evidence {
             format!(
                 "add a local `// {}:` justification after verifying {} obligations",
-                domain.marker(),
-                domain.noun()
+                effect.justification,
+                effect.key.as_str()
             )
         } else {
-            external_containment_help(domain, evidence, has_partial_path_evidence)
+            external_containment_help(effect, evidence, has_partial_path_evidence)
         };
     if let Some(span) = report_root_containment_span(sources, &finding.trace) {
         diagnostic
@@ -1085,22 +993,15 @@ fn unresolved_coverage_note(site: UnresolvedCallSite, target: Option<&str>) -> S
     }
 }
 
-fn unresolved_action(domain: MarkerDomain, mechanism: UnresolvedCallMechanism) -> String {
+fn unresolved_action(effect: &EffectMetadata, mechanism: UnresolvedCallMechanism) -> String {
     if matches!(
         mechanism,
         UnresolvedCallMechanism::DynamicDispatch | UnresolvedCallMechanism::GenericDispatch
     ) {
-        return match domain {
-            MarkerDomain::Panic => String::from(
-                "document caller-visible panic behavior under `# Panics` on the trait method declaration",
-            ),
-            MarkerDomain::Safety => String::from(
-                "document caller safety requirements under `# Safety` on the trait method declaration",
-            ),
-            MarkerDomain::Generic => {
-                String::from("document caller-visible obligations on the trait method declaration")
-            }
-        };
+        return format!(
+            "document caller-visible `# {}` obligations on the trait method declaration",
+            effect.obligation
+        );
     }
     String::from(
         "make the callee concrete or make its possible implementations available to analysis",
@@ -1684,13 +1585,14 @@ fn select_marker_call<'a>(
 mod tests {
     use crate::artifact::{
         ArtifactFacts, CallFact, CallId, CallKindFact, CallSiteId, CallTargetFact,
-        ContractRequirementFact, EffectGroupId, FunctionAttributesFact, FunctionFact,
+        ContractRequirementFact, EffectGroupId, EffectKey, FunctionAttributesFact, FunctionFact,
         FunctionFactProvenance, FunctionId, SourceFileId, SourceRangeFact, StableDefPathHash,
         StableInstanceHash, UnverifiedMarkerProbeReason,
     };
     use crate::cli::findings::{
         DiagnosticMessage, FindingDiagnostic, FindingKind, FindingOwner, OwnerScope, SourceEvidence,
     };
+    use crate::effects::{EffectMetadata, panic::Panic, safety::Safety};
     use crate::report_model::{
         EffectFindingClass, InterpretationRoot, InterpretedFinding, InterpretedFindingKind,
         InterpretedTrace, InterpretedTraceStep, InterpretedTraceStepKind, UnresolvedCallCoverage,
@@ -1699,7 +1601,7 @@ mod tests {
     use crate::report_roots::ReportRootKind;
 
     use super::{
-        MarkerDomain, TraceLimit, add_missing_requirement_notes, exact_function_body_in,
+        TraceLimit, add_missing_requirement_notes, exact_function_body_in,
         extern_paths_are_toolchain, external_containment_help, finding_description,
         full_trace_steps, incomplete_limit_presentation, missing_body_diagnostic_message,
         select_marker_call, source_evidence_help, source_evidence_reason, unresolved_action,
@@ -1836,12 +1738,12 @@ mod tests {
         };
         let reason = source_evidence_reason(
             "unsafe operation (raw pointer dereference)",
-            MarkerDomain::Safety,
+            &EffectMetadata::of::<Safety>(),
             &owner,
             evidence,
             false,
         );
-        let help = source_evidence_help(MarkerDomain::Safety, &owner, evidence, false);
+        let help = source_evidence_help(&EffectMetadata::of::<Safety>(), &owner, evidence, false);
         let rendered = format!("{reason} {help}");
 
         assert!(rendered.contains("could not verify"));
@@ -1883,19 +1785,22 @@ mod tests {
         };
         let reason = source_evidence_reason(
             "panic invocation to `dependency_panic::leaf`",
-            MarkerDomain::Panic,
+            &EffectMetadata::of::<Panic>(),
             &owner,
             SourceEvidence::VerifiedAbsent,
             false,
         );
         let help = source_evidence_help(
-            MarkerDomain::Panic,
+            &EffectMetadata::of::<Panic>(),
             &owner,
             SourceEvidence::VerifiedAbsent,
             false,
         );
-        let containment =
-            external_containment_help(MarkerDomain::Panic, SourceEvidence::VerifiedAbsent, false);
+        let containment = external_containment_help(
+            &EffectMetadata::of::<Panic>(),
+            SourceEvidence::VerifiedAbsent,
+            false,
+        );
 
         assert!(reason.contains("dependency crate `dependency-panic`"));
         assert!(reason.contains("no recorded `// PANIC:` justification"));
@@ -1905,8 +1810,11 @@ mod tests {
 
     #[test]
     fn partial_path_evidence_only_recommends_recording_remaining_requirements() {
-        let containment =
-            external_containment_help(MarkerDomain::Safety, SourceEvidence::VerifiedAbsent, true);
+        let containment = external_containment_help(
+            &EffectMetadata::of::<Safety>(),
+            SourceEvidence::VerifiedAbsent,
+            true,
+        );
 
         assert!(containment.contains("already discharges some `# Safety` requirements"));
         assert!(containment.contains("record only the remaining requirements"));
@@ -1923,12 +1831,45 @@ mod tests {
         assert!(
             source_evidence_reason(
                 "safety-obligation call to `app::obligation`",
-                MarkerDomain::Safety,
+                &EffectMetadata::of::<Safety>(),
                 &owner,
                 SourceEvidence::Present,
                 true,
             )
             .contains("remaining `# Safety` requirements")
+        );
+    }
+
+    #[test]
+    fn arbitrary_effect_metadata_drives_report_wording() {
+        let effect = EffectMetadata {
+            key: EffectKey::new("allocation"),
+            obligation: "Allocations",
+            justification: "ALLOCATION",
+            uses_enclosing_scope_marker: false,
+        };
+        let owner = FindingOwner {
+            scope: OwnerScope::Workspace,
+            crate_name: Some(String::from("app")),
+        };
+
+        assert_eq!(
+            source_evidence_reason(
+                "heap allocation",
+                &effect,
+                &owner,
+                SourceEvidence::VerifiedAbsent,
+                false,
+            ),
+            "heap allocation has no recorded `// ALLOCATION:` justification"
+        );
+        assert_eq!(
+            source_evidence_help(&effect, &owner, SourceEvidence::VerifiedAbsent, false),
+            "add a local `// ALLOCATION:` justification after verifying allocation obligations"
+        );
+        assert_eq!(
+            unresolved_action(&effect, UnresolvedCallMechanism::DynamicDispatch),
+            "document caller-visible `# Allocations` obligations on the trait method declaration"
         );
     }
 
@@ -2108,8 +2049,8 @@ mod tests {
             "the call to `app::Runner::run` uses generic dispatch; resolved implementations are checked separately"
         );
         assert_eq!(
-            unresolved_action(MarkerDomain::Safety, dynamic.mechanism),
-            "document caller safety requirements under `# Safety` on the trait method declaration"
+            unresolved_action(&EffectMetadata::of::<Safety>(), dynamic.mechanism),
+            "document caller-visible `# Safety` obligations on the trait method declaration"
         );
     }
 }

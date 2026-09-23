@@ -18,7 +18,7 @@ help: [option 1] add a local `// PANIC:` justification after verifying panic obl
    |
 21 |     assert!(flag);
    |     ^^^^^^^^^^^^^
-help: [option 2] document when this function may panic with `/// # Panics` here
+help: [option 2] document this function's obligations with `/// # Panics` here
   --> src/lib.rs:16:1
    |
 16 | pub fn unsafe_call(flag: bool) {
@@ -36,7 +36,7 @@ help: [option 1] add a local `// PANIC:` justification after verifying panic obl
   |
 8 |     total / denominator
   |     ^^^^^^^^^^^^^^^^^^^
-help: [option 2] document when this function may panic with `/// # Panics` here
+help: [option 2] document this function's obligations with `/// # Panics` here
  --> src/lib.rs:7:1
   |
 7 | pub fn unsafe_ratio(total: usize, denominator: usize) -> usize {

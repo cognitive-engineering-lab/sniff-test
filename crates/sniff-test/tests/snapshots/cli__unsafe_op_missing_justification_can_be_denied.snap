@@ -18,7 +18,7 @@ help: [option 1] add a local `// SAFETY:` justification after verifying safety o
    |
 34 |         asm!("nop");
    |         ^^^^^^^^^^^
-help: [option 2] document this function's safety obligations with `/// # Safety` here
+help: [option 2] document this function's obligations with `/// # Safety` here
   --> src/lib.rs:32:1
    |
 32 | pub fn asm_unjustified() {
@@ -36,7 +36,7 @@ help: [option 1] add a local `// SAFETY:` justification after verifying safety o
    |
 17 |     unsafe { *ptr }
    |              ^^^^
-help: [option 2] document this function's safety obligations with `/// # Safety` here
+help: [option 2] document this function's obligations with `/// # Safety` here
   --> src/lib.rs:16:1
    |
 16 | pub fn deref_unjustified(ptr: *const u32) -> u32 {
@@ -54,7 +54,7 @@ help: [option 1] add a local `// SAFETY:` justification after verifying safety o
    |
 25 |     unsafe { ENV_FLAG }
    |              ^^^^^^^^
-help: [option 2] document this function's safety obligations with `/// # Safety` here
+help: [option 2] document this function's obligations with `/// # Safety` here
   --> src/lib.rs:24:1
    |
 24 | pub fn extern_static_unjustified() -> u32 {
@@ -72,7 +72,7 @@ help: [option 1] add a local `// SAFETY:` justification after verifying safety o
    |
 21 |     unsafe { COUNTER }
    |              ^^^^^^^
-help: [option 2] document this function's safety obligations with `/// # Safety` here
+help: [option 2] document this function's obligations with `/// # Safety` here
   --> src/lib.rs:20:1
    |
 20 | pub fn mutable_static_unjustified() -> u32 {
@@ -90,7 +90,7 @@ help: [option 1] add a local `// SAFETY:` justification after verifying safety o
    |
 29 |     unsafe { bits.word }
    |              ^^^^^^^^^
-help: [option 2] document this function's safety obligations with `/// # Safety` here
+help: [option 2] document this function's obligations with `/// # Safety` here
   --> src/lib.rs:28:1
    |
 28 | pub fn union_read_unjustified(bits: &Bits) -> u32 {

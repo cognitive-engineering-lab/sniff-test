@@ -15,7 +15,7 @@ error: [sniff-test::panic::ambiguous-requirement] `duplicate_name_ratio` has mul
 22 | /// - nonzero: total must be bounded by the caller.
    | --------------------------------------------------- `nonzero: total must be bounded by the caller.` normalizes to `nonzero`
    |
-   = help: give each requirement a unique name, or set `ambiguous-panic-requirement = "allow"` under `[analysis.lints]`
+   = help: give each requirement a unique name
    = note: `duplicate_name_ratio` has multiple `# Panics` requirements that normalize to `nonzero`
    = note: reachable from `duplicate_name_marker` to `duplicate_name_ratio`
 
@@ -26,8 +26,8 @@ error: [sniff-test::panic::ambiguous-marker] one `// PANIC:` marker applies to 2
 73 | |     shared_documented_sources();
    | |_^
    |
-   = help: move the marker directly above one obligation, split it into separate markers, or set `ambiguous-panic-marker = "allow"` under `[analysis.lints]`
-   = note: this marker applies to 2 possible panics
+   = help: move the marker directly above one obligation or split it into separate markers
+   = note: this marker applies to 2 panic effect groups
    = note: reachable from `marked_path_to_shared_sources` to `first_documented_source`
 
 error: [sniff-test::panic::ambiguous-marker] one `// PANIC:` marker applies to 2 panic effect groups
@@ -37,8 +37,8 @@ error: [sniff-test::panic::ambiguous-marker] one `// PANIC:` marker applies to 2
 48 | |         call_documented_and_sink!()
    | |_^
    |
-   = help: move the marker directly above one obligation, split it into separate markers, or set `ambiguous-panic-marker = "allow"` under `[analysis.lints]`
-   = note: this marker applies to 2 possible panics
+   = help: move the marker directly above one obligation or split it into separate markers
+   = note: this marker applies to 2 panic effect groups
    = note: reachable from `marker_covers_documented_call_and_sink` to `ratio`
 
 warning: [sniff-test::panic::documented-obligation] call to `ratio` with a documented `# Panics` obligation has no recorded `// PANIC:` justification
@@ -52,7 +52,7 @@ help: [option 1] add a local `// PANIC:` justification after verifying panic obl
    |
 11 |         let first = ratio(a, denominator);
    |                     ^^^^^^^^^^^^^^^^^^^^^
-help: [option 2] document when this function may panic with `/// # Panics` here
+help: [option 2] document this function's obligations with `/// # Panics` here
   --> src/lib.rs:8:1
    |
  8 | pub fn shared_block_marker(a: usize, b: usize, denominator: usize) -> usize {
@@ -75,7 +75,7 @@ help: [option 1] add a local `// PANIC:` justification after verifying panic obl
    |
 12 |         let second = ratio(b, denominator);
    |                      ^^^^^^^^^^^^^^^^^^^^^
-help: [option 2] document when this function may panic with `/// # Panics` here
+help: [option 2] document this function's obligations with `/// # Panics` here
   --> src/lib.rs:8:1
    |
  8 | pub fn shared_block_marker(a: usize, b: usize, denominator: usize) -> usize {
@@ -98,7 +98,7 @@ help: [option 1] add a local `// PANIC:` justification after verifying panic obl
    |
 67 |     first_documented_source();
    |     ^^^^^^^^^^^^^^^^^^^^^^^^^
-help: [option 2] document when this function may panic with `/// # Panics` here
+help: [option 2] document this function's obligations with `/// # Panics` here
   --> src/lib.rs:76:1
    |
 76 | pub fn unmarked_path_to_shared_sources() {
@@ -121,7 +121,7 @@ help: [option 1] add a local `// PANIC:` justification after verifying panic obl
    |
 68 |     second_documented_source();
    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^
-help: [option 2] document when this function may panic with `/// # Panics` here
+help: [option 2] document this function's obligations with `/// # Panics` here
   --> src/lib.rs:76:1
    |
 76 | pub fn unmarked_path_to_shared_sources() {

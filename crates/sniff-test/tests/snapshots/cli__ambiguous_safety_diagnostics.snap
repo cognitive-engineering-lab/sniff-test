@@ -15,7 +15,7 @@ error: [sniff-test::safety::ambiguous-requirement] `read_duplicate` has multiple
 8 | /// - valid_ptr: pointer must reference initialized memory.
   | ----------------------------------------------------------- `valid_ptr: pointer must reference initialized memory.` normalizes to `valid ptr`
   |
-  = help: give each requirement a unique name, or set `ambiguous-safety-requirement = "allow"` under `[analysis.lints]`
+  = help: give each requirement a unique name
   = note: `read_duplicate` has multiple `# Safety` requirements that normalize to `valid ptr`
   = note: reachable from `duplicate_safety_marker` to `read_duplicate`
 

@@ -18,7 +18,7 @@ help: [option 1] add a local `// PANIC:` justification after verifying panic obl
   |
 2 |     total_size / block_count
   |     ^^^^^^^^^^^^^^^^^^^^^^^^
-help: [option 2] document when this function may panic with `/// # Panics` here
+help: [option 2] document this function's obligations with `/// # Panics` here
  --> src/lib.rs:1:1
   |
 1 | pub fn division(total_size: usize, block_count: usize) -> usize {
@@ -36,7 +36,7 @@ help: [option 1] add a local `// PANIC:` justification after verifying panic obl
    |
 10 |     values[index]
    |     ^^^^^^^^^^^^^
-help: [option 2] document when this function may panic with `/// # Panics` here
+help: [option 2] document this function's obligations with `/// # Panics` here
   --> src/lib.rs:9:1
    |
  9 | pub fn indexed(values: &[usize], index: usize) -> usize {
@@ -54,7 +54,7 @@ help: [option 1] add a local `// PANIC:` justification after verifying panic obl
   |
 6 |     total_size % block_size
   |     ^^^^^^^^^^^^^^^^^^^^^^^
-help: [option 2] document when this function may panic with `/// # Panics` here
+help: [option 2] document this function's obligations with `/// # Panics` here
  --> src/lib.rs:5:1
   |
 5 | pub fn remainder(total_size: usize, block_size: usize) -> usize {

@@ -14,8 +14,8 @@ error: [sniff-test::safety::ambiguous-marker] one `// SAFETY:` marker applies to
 38 | |         perform_twice_without_marker!()
    | |_^
    |
-   = help: give each unsafe block or operation its own marker, or set `ambiguous-safety-marker = "allow"` under `[analysis.lints]`
-   = note: this marker applies to 2 safety obligations
+   = help: move the marker directly above one obligation or split it into separate markers
+   = note: this marker applies to 2 safety effect groups
    = note: reachable from `reused_marker_within_one_macro_expansion` to `perform`
 
 error: [sniff-test::safety::ambiguous-marker] one `// SAFETY:` marker applies to 2 safety effect groups
@@ -26,8 +26,8 @@ error: [sniff-test::safety::ambiguous-marker] one `// SAFETY:` marker applies to
 77 | |         call_safe_obligation_twice!()
    | |_^
    |
-   = help: give each unsafe block or operation its own marker, or set `ambiguous-safety-marker = "allow"` under `[analysis.lints]`
-   = note: this marker applies to 2 safety obligations
+   = help: move the marker directly above one obligation or split it into separate markers
+   = note: this marker applies to 2 safety effect groups
    = note: reachable from `reused_partial_marker_for_safe_obligations` to `safe_obligation`
 
 error: [sniff-test::safety::ambiguous-marker] one `// SAFETY:` marker applies to 2 safety effect groups
@@ -38,8 +38,8 @@ error: [sniff-test::safety::ambiguous-marker] one `// SAFETY:` marker applies to
 89 | |     unsafe {
    | |_^
    |
-   = help: give each unsafe block or operation its own marker, or set `ambiguous-safety-marker = "allow"` under `[analysis.lints]`
-   = note: this marker applies to 2 safety obligations
+   = help: move the marker directly above one obligation or split it into separate markers
+   = note: this marker applies to 2 safety effect groups
    = note: reachable from `reused_partial_marker_for_safe_obligations_inside_unsafe_block` to `safe_obligation`
 
 note: set `show-full-stack-trace = true` under `[analysis]` in sniff-test.toml to show every reachability step
