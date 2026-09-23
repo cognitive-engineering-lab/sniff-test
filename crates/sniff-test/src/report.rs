@@ -32,7 +32,7 @@ use crate::effects::obligation::{
     ObligationEffectPolicy, ObligationTracker, TrackedEffect, TrackedOrigin, TrackedState,
     TrackedTermination,
 };
-use crate::effects::{Effect, EffectConfig, EffectMetadata, EffectSpec, annotation_kind};
+use crate::effects::{Effect, EffectConfig, EffectMetadata, EffectSpec};
 #[cfg(test)]
 use crate::effects::{EffectSelection, selected_effect_objects};
 
@@ -1661,24 +1661,12 @@ fn obligation_findings<C, O: Clone, S, T>(
                 .unwrap_or_else(|| format!("{:?}", annotation.owner()));
             let target_is_unsafe = function_presentation(artifact, target_function)
                 .is_some_and(|presentation| presentation.is_unsafe);
-            let domain = ReportEffect::try_from_key(state.effect());
             let marker_evidence = obligation_marker_evidence(
                 artifact,
                 graph,
                 state.source_invocation(),
                 state.source_calls(),
-                match domain {
-                    Some(ReportEffect::Panic) => {
-                        annotation_kind::<Panic>(AnnotationRole::Justification)
-                    }
-                    Some(ReportEffect::Safety) => {
-                        annotation_kind::<Safety>(AnnotationRole::Justification)
-                    }
-                    None => AnnotationFactKind::new(
-                        state.effect().clone(),
-                        AnnotationRole::Justification,
-                    ),
-                },
+                AnnotationFactKind::new(state.effect().clone(), AnnotationRole::Justification),
                 marker_probing,
             );
             let (function, function_path, source_range) =

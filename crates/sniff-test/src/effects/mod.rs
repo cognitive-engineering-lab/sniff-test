@@ -9,9 +9,9 @@ use std::collections::BTreeSet;
 use std::fmt;
 use std::marker::PhantomData;
 
-use crate::artifact::{
-    AnnotationFactKind, AnnotationRole, CallFact, EffectKey, FunctionTargetFact,
-};
+#[cfg(test)]
+use crate::artifact::{AnnotationFactKind, AnnotationRole};
+use crate::artifact::{CallFact, EffectKey, FunctionTargetFact};
 use serde::{Deserialize, Serialize};
 
 use crate::config::{
@@ -148,6 +148,7 @@ pub(crate) fn selected_effect_objects<'config>(
 }
 
 #[must_use]
+#[cfg(test)]
 pub(crate) fn annotation_kind<E: EffectSpec>(role: AnnotationRole) -> AnnotationFactKind {
     AnnotationFactKind::new(EffectKey::new(E::EFFECT_NAME), role)
 }
