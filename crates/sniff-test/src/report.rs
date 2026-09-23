@@ -2219,13 +2219,13 @@ mod tests {
     use crate::artifact::{
         AnnotationFact, AnnotationFactKind, AnnotationProbingFact, AnnotationRole,
         AnnotationSatisfactionFact, AnnotationTargetFact, ArtifactFacts, CallFact, CallId,
-        CallKindFact, CallSiteId, CallTargetFact, CompilerAssertKind, ContractFact,
-        EffectContractFact, EffectFact, EffectGroupId, EffectId, EffectKey, EffectKind,
-        FunctionAttributesFact, FunctionContractsFact, FunctionFact, FunctionFactProvenance,
-        FunctionId, FunctionTargetFact, IndirectCallKindFact, InvocationEffectFact,
-        MacroExpansionFact, MarkerEvidenceState, MarkerId, OpaqueTargetFact, SafetyOpKind,
-        SourceFileFact, SourceFileId, SourceRangeFact, StableDefPathHash, StableInstanceHash,
-        UnverifiedMarkerProbeFact, UnverifiedMarkerProbeReason,
+        CallKindFact, CallSiteId, CallTargetFact, ContractFact, EffectContractFact, EffectFact,
+        EffectGroupId, EffectId, EffectKey, EffectKind, FunctionAttributesFact,
+        FunctionContractsFact, FunctionFact, FunctionFactProvenance, FunctionId,
+        FunctionTargetFact, IndirectCallKindFact, InvocationEffectFact, MacroExpansionFact,
+        MarkerEvidenceState, MarkerId, OpaqueTargetFact, SourceFileFact, SourceFileId,
+        SourceRangeFact, StableDefPathHash, StableInstanceHash, UnverifiedMarkerProbeFact,
+        UnverifiedMarkerProbeReason,
     };
     use crate::artifact_cache::{
         ArtifactAnalysisCache, ArtifactInfo, ArtifactScope, CacheExpectations, RustcArtifactId,
@@ -2808,7 +2808,7 @@ unresolved-call-target = "warn"
                     source_range: None,
                 })
                 .collect(),
-            kind: EffectKind::new(SafetyOpKind::DerefRawPointer.effect_kind_name()),
+            kind: EffectKind::new("raw-pointer-dereference"),
         }
     }
 
@@ -2964,9 +2964,7 @@ unresolved-call-target = "warn"
                             source_range: None,
                             expanded_range: None,
                             macro_expansions: Vec::new(),
-                            kind: EffectKind::new(
-                                CompilerAssertKind::BoundsCheck.effect_kind_name(),
-                            ),
+                            kind: EffectKind::new("bounds-check"),
                         },
                         EffectFact {
                             id: EffectId::new(1),
@@ -2975,7 +2973,7 @@ unresolved-call-target = "warn"
                             source_range: None,
                             expanded_range: None,
                             macro_expansions: Vec::new(),
-                            kind: EffectKind::new(SafetyOpKind::DerefRawPointer.effect_kind_name()),
+                            kind: EffectKind::new("raw-pointer-dereference"),
                         },
                     ],
                     vec![
@@ -3506,7 +3504,7 @@ unresolved-call-target = "warn"
                     source_range: None,
                 },
             ],
-            kind: EffectKind::new(CompilerAssertKind::BoundsCheck.effect_kind_name()),
+            kind: EffectKind::new("bounds-check"),
         };
         let artifact = ArtifactFacts::new(
             vec![
@@ -4356,7 +4354,7 @@ unresolved-call-target = "warn"
                 source_range: None,
                 expanded_range: None,
                 macro_expansions: Vec::new(),
-                kind: EffectKind::new(CompilerAssertKind::BoundsCheck.effect_kind_name()),
+                kind: EffectKind::new("bounds-check"),
             }],
             Vec::new(),
             Vec::new(),
@@ -4818,7 +4816,7 @@ unresolved-call-target = "warn"
             source_range: None,
             expanded_range: None,
             macro_expansions: Vec::new(),
-            kind: EffectKind::new(CompilerAssertKind::BoundsCheck.effect_kind_name()),
+            kind: EffectKind::new("bounds-check"),
         };
         let artifact = ArtifactFacts::new(
             vec![
@@ -4902,7 +4900,7 @@ unresolved-call-target = "warn"
             source_range: None,
             expanded_range: None,
             macro_expansions: Vec::new(),
-            kind: EffectKind::new(CompilerAssertKind::BoundsCheck.effect_kind_name()),
+            kind: EffectKind::new("bounds-check"),
         };
         let artifact = ArtifactFacts::new(
             vec![

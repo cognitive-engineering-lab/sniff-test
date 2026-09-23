@@ -1962,9 +1962,7 @@ mod tests {
         reachability_edge_description, reachability_halt_description,
     };
     use crate::artifact::UnverifiedMarkerProbeReason;
-    use crate::artifact::{
-        AnnotationProbingFact, CallSiteId, EffectGroupId, EffectKind, SafetyOpKind,
-    };
+    use crate::artifact::{AnnotationProbingFact, CallSiteId, EffectGroupId, EffectKind};
     use crate::effects::safety::visit::{
         RawSafetyCallFact, RawSafetyEffectGroup, RawSafetyFacts, RawSafetyGroupFact,
         RawSafetyOpFact, compiler_call_requires_explicit_context,
@@ -2098,7 +2096,7 @@ mod tests {
             calls: Vec::new(),
             operations: vec![RawSafetyOpFact {
                 owner,
-                kind: EffectKind::new(SafetyOpKind::DerefRawPointer.effect_kind_name()),
+                kind: EffectKind::new("raw-pointer-dereference"),
                 span: span(30, 31),
                 marker_anchor_spans: vec![span(20, 40), span(30, 31)],
                 effect_group: Some(inner),
@@ -2352,7 +2350,7 @@ mod tests {
             calls: Vec::new(),
             operations: vec![RawSafetyOpFact {
                 owner,
-                kind: EffectKind::new(SafetyOpKind::DerefRawPointer.effect_kind_name()),
+                kind: EffectKind::new("raw-pointer-dereference"),
                 span: span(10, 40),
                 marker_anchor_spans: vec![span(10, 40)],
                 effect_group: Some(RawSafetyEffectGroup {

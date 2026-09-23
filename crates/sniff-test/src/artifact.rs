@@ -806,94 +806,6 @@ impl EffectKind {
     }
 }
 
-/// Stable semantic subtype for a compiler-generated MIR assertion.
-///
-/// The variant set mirrors rustc's assertion kinds without persisting MIR
-/// operands or applying lint policy.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
-#[serde(rename_all = "kebab-case")]
-pub(crate) enum CompilerAssertKind {
-    BoundsCheck,
-    Overflow,
-    OverflowNegation,
-    DivisionByZero,
-    RemainderByZero,
-    ResumedAfterReturn,
-    ResumedAfterPanic,
-    ResumedAfterDrop,
-    MisalignedPointerDereference,
-    NullPointerDereference,
-    InvalidEnumConstruction,
-}
-
-impl CompilerAssertKind {
-    #[must_use]
-    pub(crate) const fn effect_kind_name(self) -> &'static str {
-        match self {
-            Self::BoundsCheck => "bounds-check",
-            Self::Overflow => "overflow",
-            Self::OverflowNegation => "overflow-negation",
-            Self::DivisionByZero => "division-by-zero",
-            Self::RemainderByZero => "remainder-by-zero",
-            Self::ResumedAfterReturn => "resumed-after-return",
-            Self::ResumedAfterPanic => "resumed-after-panic",
-            Self::ResumedAfterDrop => "resumed-after-drop",
-            Self::MisalignedPointerDereference => "misaligned-pointer-dereference",
-            Self::NullPointerDereference => "null-pointer-dereference",
-            Self::InvalidEnumConstruction => "invalid-enum-construction",
-        }
-    }
-}
-
-/// Stable subtype for a non-call operation that rustc requires to occur in an
-/// unsafe context.
-///
-/// The variant set is pinned to the toolchain's unsafety checker. Compiler
-/// probing maps rustc operations into this versioned artifact vocabulary.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
-#[serde(rename_all = "kebab-case")]
-pub(crate) enum SafetyOpKind {
-    #[serde(rename = "raw-pointer-dereference")]
-    DerefRawPointer,
-    #[serde(rename = "mutable-static-access")]
-    UseOfMutableStatic,
-    #[serde(rename = "extern-static-access")]
-    UseOfExternStatic,
-    #[serde(rename = "union-field-access")]
-    AccessToUnionField,
-    #[serde(rename = "unsafe-field-access")]
-    UseOfUnsafeField,
-    #[serde(rename = "layout-constrained-type-initialization")]
-    InitializingLayoutConstrainedType,
-    #[serde(rename = "unsafe-field-initialization")]
-    InitializingTypeWithUnsafeField,
-    #[serde(rename = "layout-constrained-field-mutation")]
-    MutationOfLayoutConstrainedField,
-    #[serde(rename = "layout-constrained-field-borrow")]
-    BorrowOfLayoutConstrainedField,
-    InlineAssembly,
-    UnsafeBinderCast,
-}
-
-impl SafetyOpKind {
-    #[must_use]
-    pub(crate) const fn effect_kind_name(self) -> &'static str {
-        match self {
-            Self::DerefRawPointer => "raw-pointer-dereference",
-            Self::UseOfMutableStatic => "mutable-static-access",
-            Self::UseOfExternStatic => "extern-static-access",
-            Self::AccessToUnionField => "union-field-access",
-            Self::UseOfUnsafeField => "unsafe-field-access",
-            Self::InitializingLayoutConstrainedType => "layout-constrained-type-initialization",
-            Self::InitializingTypeWithUnsafeField => "unsafe-field-initialization",
-            Self::MutationOfLayoutConstrainedField => "layout-constrained-field-mutation",
-            Self::BorrowOfLayoutConstrainedField => "layout-constrained-field-borrow",
-            Self::InlineAssembly => "inline-assembly",
-            Self::UnsafeBinderCast => "unsafe-binder-cast",
-        }
-    }
-}
-
 /// One source marker and the fact it was associated with.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
@@ -1429,86 +1341,6 @@ fn require_nonempty(value: &str, label: &str) -> Result<(), ArtifactValidationEr
 mod tests {
     use super::*;
 
-    #[test]
-    fn compiler_assert_kinds_have_stable_names() {
-        for (kind, serialized) in [
-            (CompilerAssertKind::BoundsCheck, "bounds-check"),
-            (CompilerAssertKind::Overflow, "overflow"),
-            (CompilerAssertKind::OverflowNegation, "overflow-negation"),
-            (CompilerAssertKind::DivisionByZero, "division-by-zero"),
-            (CompilerAssertKind::RemainderByZero, "remainder-by-zero"),
-            (
-                CompilerAssertKind::ResumedAfterReturn,
-                "resumed-after-return",
-            ),
-            (CompilerAssertKind::ResumedAfterPanic, "resumed-after-panic"),
-            (CompilerAssertKind::ResumedAfterDrop, "resumed-after-drop"),
-            (
-                CompilerAssertKind::MisalignedPointerDereference,
-                "misaligned-pointer-dereference",
-            ),
-            (
-                CompilerAssertKind::NullPointerDereference,
-                "null-pointer-dereference",
-            ),
-            (
-                CompilerAssertKind::InvalidEnumConstruction,
-                "invalid-enum-construction",
-            ),
-        ] {
-            let encoded = format!("\"{serialized}\"");
-            assert_eq!(
-                serde_json::to_string(&kind).expect("serialize compiler assert kind"),
-                encoded
-            );
-            assert_eq!(
-                serde_json::from_str::<CompilerAssertKind>(&encoded)
-                    .expect("deserialize compiler assert kind"),
-                kind
-            );
-            assert_eq!(kind.effect_kind_name(), serialized);
-        }
-    }
-
-    #[test]
-    fn safety_op_kinds_have_stable_names() {
-        let cases = [
-            (SafetyOpKind::DerefRawPointer, "raw-pointer-dereference"),
-            (SafetyOpKind::UseOfMutableStatic, "mutable-static-access"),
-            (SafetyOpKind::UseOfExternStatic, "extern-static-access"),
-            (SafetyOpKind::AccessToUnionField, "union-field-access"),
-            (SafetyOpKind::UseOfUnsafeField, "unsafe-field-access"),
-            (
-                SafetyOpKind::InitializingLayoutConstrainedType,
-                "layout-constrained-type-initialization",
-            ),
-            (
-                SafetyOpKind::InitializingTypeWithUnsafeField,
-                "unsafe-field-initialization",
-            ),
-            (
-                SafetyOpKind::MutationOfLayoutConstrainedField,
-                "layout-constrained-field-mutation",
-            ),
-            (
-                SafetyOpKind::BorrowOfLayoutConstrainedField,
-                "layout-constrained-field-borrow",
-            ),
-            (SafetyOpKind::InlineAssembly, "inline-assembly"),
-            (SafetyOpKind::UnsafeBinderCast, "unsafe-binder-cast"),
-        ];
-
-        for (kind, expected) in cases {
-            let serialized = serde_json::to_string(&kind).expect("serialize safety op kind");
-            assert_eq!(serialized, format!("\"{expected}\""));
-            assert_eq!(
-                serde_json::from_str::<SafetyOpKind>(&serialized).expect("deserialize safety op"),
-                kind
-            );
-            assert_eq!(kind.effect_kind_name(), expected);
-        }
-    }
-
     fn def_hash(value: &str) -> StableDefPathHash {
         serde_json::from_str(&format!("\"{value}\"")).expect("valid definition hash")
     }
@@ -1677,7 +1509,7 @@ mod tests {
             source_range: None,
             expanded_range: None,
             macro_expansions: Vec::new(),
-            kind: EffectKind::new(CompilerAssertKind::BoundsCheck.effect_kind_name()),
+            kind: EffectKind::new("bounds-check"),
         }
     }
 
@@ -1726,7 +1558,7 @@ mod tests {
             source_range: Some(source_range.clone()),
             expanded_range: Some(source_range),
             macro_expansions: Vec::new(),
-            kind: EffectKind::new(SafetyOpKind::DerefRawPointer.effect_kind_name()),
+            kind: EffectKind::new("raw-pointer-dereference"),
         }
     }
 
@@ -2438,7 +2270,7 @@ mod tests {
                         display_path: String::from("sample::unsafe_macro"),
                         source_range: Some(range(110, 115)),
                     }],
-                    kind: EffectKind::new(SafetyOpKind::DerefRawPointer.effect_kind_name()),
+                    kind: EffectKind::new("raw-pointer-dereference"),
                 },
                 EffectFact {
                     id: EffectId::new(2),
@@ -2447,7 +2279,7 @@ mod tests {
                     source_range: Some(range(108, 118)),
                     expanded_range: Some(range(108, 118)),
                     macro_expansions: Vec::new(),
-                    kind: EffectKind::new(CompilerAssertKind::BoundsCheck.effect_kind_name()),
+                    kind: EffectKind::new("bounds-check"),
                 },
             ],
             markers: vec![

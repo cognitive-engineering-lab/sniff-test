@@ -1,6 +1,6 @@
 //! Converts rustc MIR assertions into stable artifact classifications.
 
-use crate::artifact::{CompilerAssertKind, EffectKind};
+use crate::artifact::EffectKind;
 use crate::effects::visit::{
     MirEffectCx, MirEffectPass, PreliminaryMirEffectSeed, PreliminaryMirEffectSource,
 };
@@ -80,13 +80,12 @@ impl MirEffectPass for CompilerAssertPass {
                 let TerminatorKind::Assert { msg, .. } = &terminator.kind else {
                     return None;
                 };
-                let kind = CompilerAssertKind::from(msg.as_ref());
                 Some(PreliminaryMirEffectSeed {
                     location: Location {
                         block,
                         statement_index: data.statements.len(),
                     },
-                    kind: EffectKind::new(kind.effect_kind_name()),
+                    kind: EffectKind::new(compiler_assert_kind_name(msg.as_ref())),
                     source: PreliminaryMirEffectSource::Operation,
                     suppress_in_compiler_context: false,
                 })
@@ -95,20 +94,18 @@ impl MirEffectPass for CompilerAssertPass {
     }
 }
 
-impl<O> From<&AssertKind<O>> for CompilerAssertKind {
-    fn from(kind: &AssertKind<O>) -> Self {
-        match kind {
-            AssertKind::BoundsCheck { .. } => Self::BoundsCheck,
-            AssertKind::Overflow(..) => Self::Overflow,
-            AssertKind::OverflowNeg(..) => Self::OverflowNegation,
-            AssertKind::DivisionByZero(..) => Self::DivisionByZero,
-            AssertKind::RemainderByZero(..) => Self::RemainderByZero,
-            AssertKind::ResumedAfterReturn(..) => Self::ResumedAfterReturn,
-            AssertKind::ResumedAfterPanic(..) => Self::ResumedAfterPanic,
-            AssertKind::ResumedAfterDrop(..) => Self::ResumedAfterDrop,
-            AssertKind::MisalignedPointerDereference { .. } => Self::MisalignedPointerDereference,
-            AssertKind::NullPointerDereference => Self::NullPointerDereference,
-            AssertKind::InvalidEnumConstruction(..) => Self::InvalidEnumConstruction,
-        }
+fn compiler_assert_kind_name<O>(kind: &AssertKind<O>) -> &'static str {
+    match kind {
+        AssertKind::BoundsCheck { .. } => "bounds-check",
+        AssertKind::Overflow(..) => "overflow",
+        AssertKind::OverflowNeg(..) => "overflow-negation",
+        AssertKind::DivisionByZero(..) => "division-by-zero",
+        AssertKind::RemainderByZero(..) => "remainder-by-zero",
+        AssertKind::ResumedAfterReturn(..) => "resumed-after-return",
+        AssertKind::ResumedAfterPanic(..) => "resumed-after-panic",
+        AssertKind::ResumedAfterDrop(..) => "resumed-after-drop",
+        AssertKind::MisalignedPointerDereference { .. } => "misaligned-pointer-dereference",
+        AssertKind::NullPointerDereference => "null-pointer-dereference",
+        AssertKind::InvalidEnumConstruction(..) => "invalid-enum-construction",
     }
 }

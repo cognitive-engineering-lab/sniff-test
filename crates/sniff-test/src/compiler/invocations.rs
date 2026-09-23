@@ -864,9 +864,9 @@ mod tests {
 
     use crate::annotations::AnnotationIndex;
     use crate::artifact::{
-        ArtifactFacts, CallFact, CallId, CallKindFact, CallSiteId, CallTargetFact,
-        CompilerAssertKind, EffectFact, EffectGroupId, EffectId, EffectKey, EffectKind,
-        FunctionAttributesFact, FunctionContractsFact, FunctionFact, FunctionFactProvenance,
+        ArtifactFacts, CallFact, CallId, CallKindFact, CallSiteId, CallTargetFact, EffectFact,
+        EffectGroupId, EffectId, EffectKey, EffectKind, FunctionAttributesFact,
+        FunctionContractsFact, FunctionFact, FunctionFactProvenance,
         FunctionId as StableFunctionId, FunctionTargetFact, IndirectCallKindFact,
         MacroExpansionFact, OpaqueTargetFact, SourceFileFact, SourceFileId, SourceRangeFact,
         StableInstanceHash,
@@ -1298,7 +1298,7 @@ mod tests {
             source_range: None,
             expanded_range: None,
             macro_expansions: Vec::new(),
-            kind: EffectKind::new(CompilerAssertKind::BoundsCheck.effect_kind_name()),
+            kind: EffectKind::new("bounds-check"),
         });
         let facts = artifact(vec![
             body(caller, vec![panicking_call, sibling_call]),

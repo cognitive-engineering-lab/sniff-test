@@ -4,11 +4,11 @@ use crate::annotations::AnnotationIndex;
 use crate::artifact::{
     AnnotationFact, AnnotationFactKind, AnnotationProbingFact, AnnotationSatisfactionFact,
     AnnotationTargetFact, ArtifactFacts, CallFact, CallId, CallKindFact, CallSiteId,
-    CallTargetFact, CompilerAssertKind, ContractFact, ContractRequirementFact, EffectFact,
-    EffectGroupId, EffectId, EffectKey, EffectKind, FunctionAttributesFact, FunctionContractsFact,
-    FunctionFact, FunctionFactProvenance, FunctionId as StableFunctionId, FunctionTargetFact,
-    IndirectCallKindFact, MacroExpansionFact, MarkerId, OpaqueTargetFact, SafetyOpKind,
-    SourceFileFact, SourceFileId, SourceRangeFact, StableInstanceHash,
+    CallTargetFact, ContractFact, ContractRequirementFact, EffectFact, EffectGroupId, EffectId,
+    EffectKey, EffectKind, FunctionAttributesFact, FunctionContractsFact, FunctionFact,
+    FunctionFactProvenance, FunctionId as StableFunctionId, FunctionTargetFact,
+    IndirectCallKindFact, MacroExpansionFact, MarkerId, OpaqueTargetFact, SourceFileFact,
+    SourceFileId, SourceRangeFact, StableInstanceHash,
 };
 use crate::compiler::invocations::InvocationGraph;
 use crate::config::{EffectDocMatching, MarkerProbing, SniffTestConfig};
@@ -275,7 +275,7 @@ fn assert_effect(id: u32) -> EffectFact {
         source_range: None,
         expanded_range: None,
         macro_expansions: Vec::new(),
-        kind: EffectKind::new(CompilerAssertKind::BoundsCheck.effect_kind_name()),
+        kind: EffectKind::new("bounds-check"),
     }
 }
 
@@ -297,7 +297,7 @@ fn unsafe_effect(id: u32) -> EffectFact {
         source_range: None,
         expanded_range: None,
         macro_expansions: Vec::new(),
-        kind: EffectKind::new(SafetyOpKind::DerefRawPointer.effect_kind_name()),
+        kind: EffectKind::new("raw-pointer-dereference"),
     }
 }
 
