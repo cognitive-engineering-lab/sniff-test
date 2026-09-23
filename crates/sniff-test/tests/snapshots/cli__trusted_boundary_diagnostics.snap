@@ -7,7 +7,7 @@ stdout:
 <empty>
 stderr:
     Checking trusted-boundaries v0.1.0 ([FIXTURE])
-warning: [sniff-test::safety::unsafe-call] safety invocation to `unsafe function pointer` has no recorded `// SAFETY:` justification
+warning: [sniff-test::safety::unsafe-call] safety invocation to `opaque function pointer` has no recorded `// SAFETY:` justification
   --> src/lib.rs:33:14
    |
 33 |     unsafe { helper() }
@@ -23,7 +23,7 @@ help: [option 2] document this function's obligations with `/// # Safety` here
    |
 31 | pub fn trusted_unsafe_through_fn_pointer(use_trusted: bool, unknown: unsafe fn()) {
    | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-   = note: reachable from `trusted_unsafe_through_fn_pointer` to `indirect call through an unsafe function pointer`
+   = note: reachable from `trusted_unsafe_through_fn_pointer` to `indirect call through a function pointer`
 
 warning: [sniff-test::safety::undocumented-invocation] call to `unsafe_helper` may produce the safety effect, but `unsafe_helper` has no documented `# Safety` obligation
   --> src/lib.rs:28:14

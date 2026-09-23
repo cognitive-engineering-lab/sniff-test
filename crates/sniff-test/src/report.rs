@@ -33,9 +33,9 @@ use crate::effects::obligation::{
     TrackedTermination,
 };
 use crate::effects::visit::EffectPassRegistry;
-use crate::effects::{Effect, EffectConfig, EffectMetadata, EffectSpec};
+use crate::effects::{Effect, EffectConfig, EffectMetadata};
 #[cfg(test)]
-use crate::effects::{EffectSelection, selected_effect_objects};
+use crate::effects::{EffectSelection, EffectSpec, selected_effect_objects};
 
 #[cfg(test)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -55,6 +55,7 @@ impl ReportEffect {
 }
 #[cfg(test)]
 use crate::effects::panic::Panic;
+#[cfg(test)]
 use crate::effects::safety::Safety;
 use crate::effects::trust::TrustPath;
 use crate::report_model::{
@@ -1248,13 +1249,12 @@ fn concrete_findings(
                         function: owner,
                         function_path: body.display_path.clone(),
                         callee: source.target().map(interpreted_callee).or_else(|| {
-                            (effect_key == &EffectKey::new(Safety::EFFECT_NAME)
-                                && edge.kind == crate::artifact::CallKindFact::IndirectCall)
-                                .then(|| InterpretedCallee {
-                                    function: None,
-                                    path: String::from("unsafe function pointer"),
-                                    requires_explicit_context: true,
-                                })
+                            (edge.indirect_kind
+                                == Some(crate::artifact::IndirectCallKindFact::FunctionPointer))
+                            .then(|| InterpretedCallee {
+                                function: None,
+                                path: String::from("opaque function pointer"),
+                            })
                         }),
                         source_range: edge.source_range.clone(),
                         contract_source_range: None,
@@ -1593,8 +1593,6 @@ fn obligation_findings<C, O: Clone, S, T>(
                         .map(|presentation| presentation.path.to_owned())
                 })
                 .unwrap_or_else(|| format!("{:?}", annotation.owner()));
-            let target_is_unsafe = function_presentation(artifact, target_function)
-                .is_some_and(|presentation| presentation.is_unsafe);
             let marker_evidence = obligation_marker_evidence(
                 artifact,
                 graph,
@@ -1621,7 +1619,6 @@ fn obligation_findings<C, O: Clone, S, T>(
                 callee: Some(InterpretedCallee {
                     function: Some(target_function),
                     path: target_path,
-                    requires_explicit_context: target_is_unsafe,
                 }),
                 source_range,
                 contract_source_range: annotation.source_range().cloned(),
@@ -1673,7 +1670,6 @@ fn obligation_findings<C, O: Clone, S, T>(
 
 struct FunctionPresentation<'artifact> {
     path: &'artifact str,
-    is_unsafe: bool,
 }
 
 fn function_presentation(
@@ -1683,7 +1679,6 @@ fn function_presentation(
     if let Some(body) = artifact.function_body(function) {
         return Some(FunctionPresentation {
             path: &body.display_path,
-            is_unsafe: body.attributes.is_unsafe,
         });
     }
     artifact
@@ -1704,7 +1699,6 @@ fn function_presentation(
         .find(|target| target.function.def_path_hash == function.def_path_hash)
         .map(|target| FunctionPresentation {
             path: &target.display_path,
-            is_unsafe: target.attributes.is_unsafe,
         })
 }
 
@@ -2194,18 +2188,10 @@ fn effect_fact(
 }
 
 fn boundary_description(edge: &crate::artifact::CallFact) -> String {
-    if edge.kind == crate::artifact::CallKindFact::IndirectCall
+    if edge.indirect_kind == Some(crate::artifact::IndirectCallKindFact::FunctionPointer)
         && edge.target.function_target().is_none()
     {
-        if edge
-            .invocation_effects
-            .iter()
-            .any(|source| source.effect == EffectKey::new(Safety::EFFECT_NAME))
-        {
-            String::from("indirect call through an unsafe function pointer")
-        } else {
-            String::from("indirect call through a function pointer")
-        }
+        String::from("indirect call through a function pointer")
     } else {
         match &edge.target {
             CallTargetFact::OpaqueBoundary { description, .. } => description.clone(),
@@ -2218,7 +2204,6 @@ fn interpreted_callee(target: &FunctionTargetFact) -> InterpretedCallee {
     InterpretedCallee {
         function: Some(target.function),
         path: target.display_path.clone(),
-        requires_explicit_context: target.attributes.is_unsafe,
     }
 }
 
@@ -3475,7 +3460,7 @@ unresolved-call-target = "warn"
                 .callee
                 .as_ref()
                 .map(|target| target.path.as_str()),
-            Some("unsafe function pointer")
+            Some("opaque function pointer")
         );
         assert_eq!(
             reports[0]

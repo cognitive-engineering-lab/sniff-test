@@ -81,9 +81,6 @@ pub(crate) struct InterpretedFinding {
 pub(crate) struct InterpretedCallee {
     pub(crate) function: Option<FunctionId>,
     pub(crate) path: String,
-    /// Whether the callee's signature itself requires an explicit effect
-    /// context, independently of a documented obligation on that callee.
-    pub(crate) requires_explicit_context: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

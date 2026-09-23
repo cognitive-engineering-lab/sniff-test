@@ -19,7 +19,7 @@ expression: "report[\"findings\"]"
     "root-span": "src/lib.rs:15:1: 15:36",
     "span": "src/lib.rs:21:14: 21:21",
     "trace": [
-      "src/lib.rs:21:14: 21:21: safety_callable_sites::independently_marked_calls --indirect-call-> indirect call through an unsafe function pointer"
+      "src/lib.rs:21:14: 21:21: safety_callable_sites::independently_marked_calls --indirect-call-> indirect call through a function pointer"
     ],
     "unresolved-call": {
       "coverage": "none",
@@ -37,7 +37,7 @@ expression: "report[\"findings\"]"
       "crate": "safety_callable_sites",
       "scope": "workspace"
     },
-    "reason": "safety invocation to `unsafe function pointer` has no recorded `// SAFETY:` justification",
+    "reason": "safety invocation to `opaque function pointer` has no recorded `// SAFETY:` justification",
     "root": "safety_callable_sites::independently_marked_calls",
     "root-kind": "concrete",
     "root-span": "src/lib.rs:15:1: 15:36",
@@ -45,9 +45,9 @@ expression: "report[\"findings\"]"
       "status": "verified-absent"
     },
     "span": "src/lib.rs:23:14: 23:22",
-    "target": "unsafe function pointer",
+    "target": "opaque function pointer",
     "trace": [
-      "src/lib.rs:23:14: 23:22: safety_callable_sites::independently_marked_calls --indirect-call-> indirect call through an unsafe function pointer"
+      "src/lib.rs:23:14: 23:22: safety_callable_sites::independently_marked_calls --indirect-call-> indirect call through a function pointer"
     ]
   },
   {
@@ -66,7 +66,7 @@ expression: "report[\"findings\"]"
     "root-span": "src/lib.rs:15:1: 15:36",
     "span": "src/lib.rs:23:14: 23:22",
     "trace": [
-      "src/lib.rs:23:14: 23:22: safety_callable_sites::independently_marked_calls --indirect-call-> indirect call through an unsafe function pointer"
+      "src/lib.rs:23:14: 23:22: safety_callable_sites::independently_marked_calls --indirect-call-> indirect call through a function pointer"
     ],
     "unresolved-call": {
       "coverage": "none",
