@@ -59,6 +59,34 @@ impl SniffTestConfig {
         }
     }
 
+    pub(crate) fn effect_coverage(
+        &self,
+        effect: &crate::artifact::EffectKey,
+    ) -> Option<EffectiveCoverageConfig> {
+        let coverage = self.effect_config(effect)?.coverage();
+        // New per-effect coverage settings win over the historical lint keys.
+        // Keep the older locations readable so existing manifests retain their
+        // selected severities while an omitted setting takes the new default.
+        let (legacy_unresolved, legacy_incomplete) = match effect.as_str() {
+            <crate::effects::panic::Panic as crate::effects::EffectSpec>::EFFECT_NAME => (
+                self.panics.lints.unresolved_call_target,
+                self.analysis.lints.panic_analysis_incomplete,
+            ),
+            <crate::effects::safety::Safety as crate::effects::EffectSpec>::EFFECT_NAME => (
+                self.safety.lints.unresolved_call_target,
+                self.analysis.lints.safety_analysis_incomplete,
+            ),
+            _ => (None, LintLevel::Deny),
+        };
+        Some(EffectiveCoverageConfig {
+            unresolved_call_target: coverage
+                .unresolved_call_target
+                .or(legacy_unresolved)
+                .unwrap_or(LintLevel::Warn),
+            analysis_incomplete: coverage.analysis_incomplete.unwrap_or(legacy_incomplete),
+        })
+    }
+
     /// Loads a sniff-test manifest from disk.
     ///
     /// # Errors
@@ -412,6 +440,8 @@ impl MirInlining {
 pub struct PanicConfig {
     /// User-facing severity for panic finding classes.
     pub lints: PanicLintConfig,
+    /// Severity overrides for unresolved calls and incomplete analysis.
+    pub coverage: CoverageConfig,
     /// Definition paths whose internals are suppressed, or macro definition
     /// paths whose matching expansion branch terminates locally.
     pub ignored_namespaces: PathPatterns,
@@ -431,6 +461,7 @@ impl Default for PanicConfig {
     fn default() -> Self {
         Self {
             lints: PanicLintConfig::default(),
+            coverage: CoverageConfig::default(),
             ignored_namespaces: PathPatterns::new(vec![String::from(
                 "core::ub_checks::assert_unsafe_precondition",
             )])
@@ -469,7 +500,8 @@ pub struct PanicLintConfig {
     pub compiler_assert_invalid_enum_construction: Option<LintLevel>,
     pub panic_invocation: LintLevel,
     pub documented_panic: LintLevel,
-    pub unresolved_call_target: LintLevel,
+    /// Legacy location; prefer `[panics.coverage]`.
+    pub unresolved_call_target: Option<LintLevel>,
 }
 
 impl Default for PanicLintConfig {
@@ -489,7 +521,7 @@ impl Default for PanicLintConfig {
             compiler_assert_invalid_enum_construction: None,
             panic_invocation: LintLevel::Deny,
             documented_panic: LintLevel::Warn,
-            unresolved_call_target: LintLevel::Allow,
+            unresolved_call_target: None,
         }
     }
 }
@@ -500,6 +532,20 @@ pub enum LintLevel {
     Allow,
     Warn,
     Deny,
+}
+
+/// Per-effect severity overrides for gaps in analysis coverage.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "kebab-case", deny_unknown_fields)]
+pub struct CoverageConfig {
+    pub unresolved_call_target: Option<LintLevel>,
+    pub analysis_incomplete: Option<LintLevel>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct EffectiveCoverageConfig {
+    pub(crate) unresolved_call_target: LintLevel,
+    pub(crate) analysis_incomplete: LintLevel,
 }
 
 impl LintLevel {
@@ -524,12 +570,15 @@ pub struct SafetyConfig {
     /// target's membership in this list.
     pub trusted_boundary_namespaces: PathPatterns,
     pub lints: SafetyLintConfig,
+    /// Severity overrides for unresolved calls and incomplete analysis.
+    pub coverage: CoverageConfig,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "kebab-case", deny_unknown_fields, default)]
 pub struct SafetyLintConfig {
-    pub unresolved_call_target: LintLevel,
+    /// Legacy location; prefer `[safety.coverage]`.
+    pub unresolved_call_target: Option<LintLevel>,
     pub unsafe_call_missing_justification: LintLevel,
     pub unsafe_call_missing_requirements: LintLevel,
     pub unsafe_op_missing_justification: LintLevel,
@@ -562,7 +611,7 @@ pub struct SafetyLintConfig {
 impl Default for SafetyLintConfig {
     fn default() -> Self {
         Self {
-            unresolved_call_target: LintLevel::Allow,
+            unresolved_call_target: None,
             unsafe_call_missing_justification: LintLevel::Warn,
             unsafe_call_missing_requirements: LintLevel::Warn,
             unsafe_op_missing_justification: LintLevel::Warn,
@@ -585,6 +634,7 @@ impl Default for SafetyLintConfig {
 
 impl PanicConfig {
     #[must_use]
+    #[cfg(test)]
     pub(crate) fn ignores_candidates(&self, candidates: &[String]) -> bool {
         self.ignored_namespaces
             .best_candidates_match(candidates)
@@ -601,6 +651,7 @@ impl PanicConfig {
 
 impl SafetyConfig {
     #[must_use]
+    #[cfg(test)]
     pub(crate) fn ignores_candidates(&self, candidates: &[String]) -> bool {
         self.ignored_namespaces
             .best_candidates_match(candidates)
@@ -616,6 +667,10 @@ impl SafetyConfig {
 }
 
 impl crate::effects::EffectConfig for PanicConfig {
+    fn coverage(&self) -> &CoverageConfig {
+        &self.coverage
+    }
+
     fn ignored_namespaces(&self) -> &PathPatterns {
         &self.ignored_namespaces
     }
@@ -626,6 +681,10 @@ impl crate::effects::EffectConfig for PanicConfig {
 }
 
 impl crate::effects::EffectConfig for SafetyConfig {
+    fn coverage(&self) -> &CoverageConfig {
+        &self.coverage
+    }
+
     fn ignored_namespaces(&self) -> &PathPatterns {
         &self.ignored_namespaces
     }
@@ -821,9 +880,9 @@ mod tests {
 
     use super::{
         AnalysisConfig, AnalysisLintConfig, CompilerConfig, ConfigError, ContractDocOverrideFile,
-        ContractDocOverrides, EXAMPLE_MANIFEST, EffectDocMatching, LintLevel, MarkerProbing,
-        MirInlining, OverflowChecks, PanicConfig, PathPatterns, ReportRootSet, SafetyConfig,
-        SniffTestConfig,
+        ContractDocOverrides, CoverageConfig, EXAMPLE_MANIFEST, EffectDocMatching, LintLevel,
+        MarkerProbing, MirInlining, OverflowChecks, PanicConfig, PathPatterns, ReportRootSet,
+        SafetyConfig, SniffTestConfig,
     };
 
     fn path_patterns(patterns: &[&str]) -> PathPatterns {
@@ -1263,7 +1322,15 @@ mod tests {
         );
         assert_eq!(lints.panic_invocation, LintLevel::Deny);
         assert_eq!(lints.documented_panic, LintLevel::Warn);
-        assert_eq!(lints.unresolved_call_target, LintLevel::Allow);
+        assert_eq!(lints.unresolved_call_target, None);
+        assert_eq!(PanicConfig::default().coverage, CoverageConfig::default());
+        assert_eq!(
+            SniffTestConfig::default()
+                .effect_coverage(&crate::artifact::EffectKey::new("panic"))
+                .expect("panic coverage")
+                .unresolved_call_target,
+            LintLevel::Warn
+        );
     }
 
     #[test]
@@ -1351,7 +1418,14 @@ mod tests {
     fn default_safety_lints_keep_findings_visible_without_failing() {
         let lints = SafetyConfig::default().lints;
 
-        assert_eq!(lints.unresolved_call_target, LintLevel::Allow);
+        assert_eq!(lints.unresolved_call_target, None);
+        assert_eq!(
+            SniffTestConfig::default()
+                .effect_coverage(&crate::artifact::EffectKey::new("safety"))
+                .expect("safety coverage")
+                .unresolved_call_target,
+            LintLevel::Warn
+        );
         assert_eq!(lints.unsafe_call_missing_justification, LintLevel::Warn);
         assert_eq!(lints.unsafe_call_missing_requirements, LintLevel::Warn);
         assert_eq!(lints.unsafe_op_missing_justification, LintLevel::Warn);
@@ -1379,6 +1453,38 @@ mod tests {
             lints.safety_obligation_missing_requirements,
             LintLevel::Warn
         );
+    }
+
+    #[test]
+    fn coverage_sections_override_legacy_lints_and_preserve_fallbacks() {
+        let config = SniffTestConfig::from_manifest_str(
+            r#"
+            [analysis.lints]
+            analysis-incomplete = "warn"
+            panic-analysis-incomplete = "allow"
+
+            [panics.lints]
+            unresolved-call-target = "allow"
+
+            [panics.coverage]
+            unresolved-call-target = "deny"
+            analysis-incomplete = "deny"
+
+            [safety.lints]
+            unresolved-call-target = "allow"
+            "#,
+        )
+        .expect("coverage configuration");
+        let panic = config
+            .effect_coverage(&crate::artifact::EffectKey::new("panic"))
+            .expect("panic coverage");
+        assert_eq!(panic.unresolved_call_target, LintLevel::Deny);
+        assert_eq!(panic.analysis_incomplete, LintLevel::Deny);
+        let safety = config
+            .effect_coverage(&crate::artifact::EffectKey::new("safety"))
+            .expect("safety coverage");
+        assert_eq!(safety.unresolved_call_target, LintLevel::Allow);
+        assert_eq!(safety.analysis_incomplete, LintLevel::Warn);
     }
 
     #[test]
@@ -1441,7 +1547,10 @@ mod tests {
         );
         assert_eq!(parsed.panics.lints.panic_invocation, LintLevel::Allow);
         assert_eq!(parsed.panics.lints.documented_panic, LintLevel::Allow);
-        assert_eq!(parsed.panics.lints.unresolved_call_target, LintLevel::Deny);
+        assert_eq!(
+            parsed.panics.lints.unresolved_call_target,
+            Some(LintLevel::Deny)
+        );
     }
 
     #[test]
@@ -1501,7 +1610,10 @@ mod tests {
             parsed.safety.lints.safety_obligation_missing_requirements,
             LintLevel::Deny
         );
-        assert_eq!(parsed.safety.lints.unresolved_call_target, LintLevel::Deny);
+        assert_eq!(
+            parsed.safety.lints.unresolved_call_target,
+            Some(LintLevel::Deny)
+        );
     }
 
     #[test]

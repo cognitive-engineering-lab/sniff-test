@@ -47,10 +47,6 @@ trace-state-budget = 1000000
 [analysis.lints]
 # Invocations whose effect writer requires caller-obligation documentation.
 undocumented-effect-invocation = "warn"
-# Incomplete panic and safety traversals use their corresponding policy. Use
-# `warn` while auditing incomplete evidence, or `allow` to accept it.
-panic-analysis-incomplete = "deny"
-safety-analysis-incomplete = "deny"
 ambiguous-panic-marker = "deny"
 ambiguous-safety-marker = "deny"
 ambiguous-panic-requirement = "deny"
@@ -142,8 +138,13 @@ compiler-assert = "deny"
 # compiler-assert-invalid-enum-construction = "deny"
 panic-invocation = "deny"
 documented-panic = "warn"
+
+[panics.coverage]
 # Calls with a remaining unresolved target. Known targets are still traced.
-unresolved-call-target = "allow"
+# Defaults to `warn`; set `allow` to accept the gap silently.
+unresolved-call-target = "warn"
+# Trace limits and reachable managed bodies missing from the artifact graph.
+analysis-incomplete = "deny"
 
 [safety]
 # Crates, fully-qualified functions, or macro expansion paths whose safety
@@ -167,7 +168,6 @@ trusted-boundary-namespaces = ["core", "alloc", "std"]
 # `deny` emits an error and makes `cargo sniff-test` fail.
 # `warn` emits a warning without failing the run.
 # `allow` suppresses the finding from diagnostics and JSON reports.
-unresolved-call-target = "allow"
 unsafe-call-missing-justification = "warn"
 unsafe-call-missing-requirements = "warn"
 # Group default for non-call unsafe operations. Each exact override is optional
@@ -186,3 +186,7 @@ unsafe-op-missing-justification = "warn"
 # unsafe-binder-cast-missing-justification = "warn"
 safety-obligation-missing-justification = "warn"
 safety-obligation-missing-requirements = "warn"
+
+[safety.coverage]
+unresolved-call-target = "warn"
+analysis-incomplete = "deny"

@@ -5,6 +5,29 @@ expression: "report[\"findings\"]"
 [
   {
     "effect": "safety",
+    "finding": "unresolved-call-target",
+    "function": "safety_callable_sites::independently_marked_calls",
+    "kind": "effect",
+    "level": "warn",
+    "owner": {
+      "crate": "safety_callable_sites",
+      "scope": "workspace"
+    },
+    "reason": "safety effect coverage is incomplete for unresolved function-pointer call target",
+    "root": "safety_callable_sites::independently_marked_calls",
+    "root-kind": "concrete",
+    "root-span": "src/lib.rs:15:1: 15:36",
+    "span": "src/lib.rs:21:14: 21:21",
+    "trace": [
+      "src/lib.rs:21:14: 21:21: safety_callable_sites::independently_marked_calls --indirect-call-> indirect call through an unsafe function pointer"
+    ],
+    "unresolved-call": {
+      "coverage": "none",
+      "mechanism": "function-pointer"
+    }
+  },
+  {
+    "effect": "safety",
     "finding": "concrete-invocation",
     "function": "safety_callable_sites::independently_marked_calls",
     "kind": "effect",
@@ -26,5 +49,28 @@ expression: "report[\"findings\"]"
     "trace": [
       "src/lib.rs:23:14: 23:22: safety_callable_sites::independently_marked_calls --indirect-call-> indirect call through an unsafe function pointer"
     ]
+  },
+  {
+    "effect": "safety",
+    "finding": "unresolved-call-target",
+    "function": "safety_callable_sites::independently_marked_calls",
+    "kind": "effect",
+    "level": "warn",
+    "owner": {
+      "crate": "safety_callable_sites",
+      "scope": "workspace"
+    },
+    "reason": "safety effect coverage is incomplete for unresolved function-pointer call target",
+    "root": "safety_callable_sites::independently_marked_calls",
+    "root-kind": "concrete",
+    "root-span": "src/lib.rs:15:1: 15:36",
+    "span": "src/lib.rs:23:14: 23:22",
+    "trace": [
+      "src/lib.rs:23:14: 23:22: safety_callable_sites::independently_marked_calls --indirect-call-> indirect call through an unsafe function pointer"
+    ],
+    "unresolved-call": {
+      "coverage": "none",
+      "mechanism": "function-pointer"
+    }
   }
 ]

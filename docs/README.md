@@ -69,8 +69,6 @@ trace-state-budget = 1000000
 
 [analysis.lints]
 # These policies apply regardless of which artifact supplied the reached body.
-panic-analysis-incomplete = "deny"
-safety-analysis-incomplete = "deny"
 ambiguous-panic-marker = "deny" # deny | warn | allow
 ambiguous-safety-marker = "deny"
 ambiguous-panic-requirement = "deny"
@@ -104,7 +102,10 @@ compiler-assert = "deny"
 # compiler-assert-invalid-enum-construction = "deny"
 panic-invocation = "deny"
 documented-panic = "warn"
-unresolved-call-target = "allow"
+
+[panics.coverage]
+unresolved-call-target = "warn"
+analysis-incomplete = "deny"
 
 [safety]
 ignored-namespaces = []
@@ -112,7 +113,6 @@ trusted-boundary-namespaces = ["core", "alloc", "std"]
 
 [safety.lints]
 missing-safety-docs = "warn"
-unresolved-call-target = "allow"
 unsafe-call-missing-justification = "warn"
 unsafe-call-missing-requirements = "warn"
 # Group default for non-call unsafe operations.
@@ -131,6 +131,10 @@ unsafe-op-missing-justification = "warn"
 # unsafe-binder-cast-missing-justification = "warn"
 safety-obligation-missing-justification = "warn"
 safety-obligation-missing-requirements = "warn"
+
+[safety.coverage]
+unresolved-call-target = "warn"
+analysis-incomplete = "deny"
 ```
 
 `[compiler].inline-mir = "off"` passes `-Z inline-mir=no`, which keeps panic
@@ -185,14 +189,15 @@ function-pointer calls have no declaration fallback and remain coverage gaps.
 Sniff-test does not guess either kind of target by joining unrelated call sites
 that happen to share an erased type.
 
-`ambiguous-effect-marker`, `ambiguous-effect-requirement`, and
-`analysis-incomplete` set group defaults for both effect domains. An explicit
+`ambiguous-effect-marker`, `ambiguous-effect-requirement`, and the legacy
+`analysis-incomplete` key set group defaults for both effect domains. An explicit
 panic- or safety-specific key takes precedence over its group default
 regardless of TOML ordering. `warn` accepts the ambiguity but reports it;
 `allow` accepts it silently.
 
-`panic-analysis-incomplete` controls incomplete panic traversals, and
-`safety-analysis-incomplete` controls incomplete safety traversals. These
+`[panics.coverage].analysis-incomplete` controls incomplete panic traversals,
+and `[safety.coverage].analysis-incomplete` controls incomplete safety traversals.
+The older `[analysis.lints]` keys remain accepted as fallbacks. These
 findings distinguish paths truncated by `max-trace-depth`, effect traces that
 exhaust `trace-state-budget`, and reachable managed bodies that are absent from
 the linked artifact graph.
@@ -293,9 +298,10 @@ trusted-boundary-namespaces = ["core", "alloc", "std"]
 already cover every definition in the named crate, so `core::**` is not also
 required. The same namespace rules apply to panic boundaries.
 
-`[panics.lints].unresolved-call-target` and
-`[safety.lints].unresolved-call-target` control calls whose remaining concrete
-targets cannot be resolved. Both default to `allow`; known targets still
+`[panics.coverage].unresolved-call-target` and
+`[safety.coverage].unresolved-call-target` control calls whose remaining concrete
+targets cannot be resolved. Both default to `warn`; the older effect lint keys
+remain accepted as fallbacks. Known targets still
 participate in effect tracing, and calls that are actually unsafe remain
 SafetyEffect sources. Structured reports distinguish
 `unresolved-panic-call-target` from `unresolved-safety-call-target`.

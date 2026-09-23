@@ -14,6 +14,7 @@ use crate::artifact::{
 };
 use serde::{Deserialize, Serialize};
 
+use crate::config::CoverageConfig;
 use crate::path_patterns::PathPatterns;
 
 use self::visit::EffectPassRegistry;
@@ -141,6 +142,7 @@ pub(crate) fn annotation_kind<E: EffectSpec>(role: AnnotationRole) -> Annotation
 /// Concrete probe policy is derived from this view; it is not embedded in an
 /// effect's user-facing configuration.
 pub(crate) trait EffectConfig {
+    fn coverage(&self) -> &CoverageConfig;
     fn ignored_namespaces(&self) -> &PathPatterns;
     fn trusted_boundary_namespaces(&self) -> &PathPatterns;
 }

@@ -33,7 +33,8 @@ use crate::effects::obligation::{
     TrackedTermination,
 };
 use crate::effects::{
-    EffectMetadata, EffectSelection, EffectSpec, annotation_kind, selected_effect_objects,
+    EffectConfig, EffectMetadata, EffectSelection, EffectSpec, annotation_kind,
+    selected_effect_objects,
 };
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -285,8 +286,6 @@ pub(crate) fn trace_selected_workspace(
         .collect::<BTreeMap<_, ConcreteTrace>>();
     let panic_key = ReportEffect::Panic.key();
     let safety_key = ReportEffect::Safety.key();
-    let panic = concrete_effects.get(&panic_key);
-    let safety = concrete_effects.get(&safety_key);
     let panic_trace = effect_traces.get(&panic_key);
     let safety_trace = effect_traces.get(&safety_key);
     let marker_claims = collect_marker_claims(
@@ -338,42 +337,32 @@ pub(crate) fn trace_selected_workspace(
                         ));
                     }
                 }
-                if let Some(panic) = &panic
-                    && !config.panics.lints.unresolved_call_target.is_allow()
-                {
+                for (effect, concrete) in &concrete_effects {
+                    let effect_config = config
+                        .effect_config(effect)
+                        .expect("selected effect config");
+                    if config
+                        .effect_coverage(effect)
+                        .expect("selected effect coverage")
+                        .unresolved_call_target
+                        .is_allow()
+                    {
+                        continue;
+                    }
+                    let metadata = selected_metadata
+                        .iter()
+                        .find(|metadata| &metadata.key == effect)
+                        .expect("selected effect metadata");
                     findings.extend(unresolved_call_target_findings(
                         artifact,
                         &graph,
                         &annotations,
                         root_function,
-                        ReportEffect::Panic,
-                        selected_metadata
-                            .iter()
-                            .find(|metadata| metadata.key == panic_key)
-                            .expect("selected panic metadata"),
-                        config,
+                        metadata,
+                        effect_config,
                         &namespaces,
-                        |function, path: &TrustPath| panic.is_opaque_on_path(function, path),
-                        |invocation| panic.is_ignored_invocation(invocation),
-                    ));
-                }
-                if let Some(safety) = &safety
-                    && !config.safety.lints.unresolved_call_target.is_allow()
-                {
-                    findings.extend(unresolved_call_target_findings(
-                        artifact,
-                        &graph,
-                        &annotations,
-                        root_function,
-                        ReportEffect::Safety,
-                        selected_metadata
-                            .iter()
-                            .find(|metadata| metadata.key == safety_key)
-                            .expect("selected safety metadata"),
-                        config,
-                        &namespaces,
-                        |function, path: &TrustPath| safety.is_opaque_on_path(function, path),
-                        |invocation| safety.is_ignored_invocation(invocation),
+                        |function, path: &TrustPath| concrete.is_opaque_on_path(function, path),
+                        |invocation| concrete.is_ignored_invocation(invocation),
                     ));
                 }
                 findings.extend(marker_ambiguities(
@@ -1456,9 +1445,8 @@ fn unresolved_call_target_findings(
     graph: &InvocationGraph,
     annotations: &AnnotationIndex,
     root_function: effect_tracing::FunctionId,
-    domain: ReportEffect,
     metadata: &EffectMetadata,
-    config: &SniffTestConfig,
+    config: &dyn EffectConfig,
     namespaces: &DefinitionNamespaceIndex,
     is_opaque: impl Fn(FunctionId, &TrustPath) -> bool + Copy,
     is_ignored_invocation: impl Fn(effect_tracing::InvocationId) -> bool + Copy,
@@ -1478,14 +1466,10 @@ fn unresolved_call_target_findings(
             let Some(body) = artifact.function_body(owner) else {
                 return Vec::new();
             };
-            let ignored = match domain {
-                ReportEffect::Panic => config
-                    .panics
-                    .ignores_candidates(namespaces.candidates(owner)),
-                ReportEffect::Safety => config
-                    .safety
-                    .ignores_candidates(namespaces.candidates(owner)),
-            };
+            let ignored = config
+                .ignored_namespaces()
+                .best_candidates_match(namespaces.candidates(owner))
+                .is_some();
             if ignored {
                 return Vec::new();
             }
@@ -1509,7 +1493,7 @@ fn unresolved_call_target_findings(
                         || unresolved_source_is_covered(
                             edge,
                             annotations,
-                            domain,
+                            &metadata.key,
                             config,
                             namespaces,
                         )
@@ -1580,15 +1564,15 @@ fn unresolved_source_reason(
 fn unresolved_source_is_covered(
     edge: &crate::artifact::CallFact,
     annotations: &AnnotationIndex,
-    domain: ReportEffect,
-    config: &SniffTestConfig,
+    effect: &EffectKey,
+    config: &dyn EffectConfig,
     namespaces: &DefinitionNamespaceIndex,
 ) -> bool {
     let Some(declaration) = invocation_surface(edge) else {
         return false;
     };
     if annotations
-        .function_contracts(declaration.function, &domain.key())
+        .function_contracts(declaration.function, effect)
         .next()
         .is_some()
     {
@@ -1596,16 +1580,14 @@ fn unresolved_source_is_covered(
     }
 
     let candidates = namespaces.candidates(declaration.function);
-    match domain {
-        ReportEffect::Panic => {
-            config.panics.ignores_candidates(candidates)
-                || config.panics.trusts_panic_boundary_candidates(candidates)
-        }
-        ReportEffect::Safety => {
-            config.safety.ignores_candidates(candidates)
-                || config.safety.trusts_safety_boundary_candidates(candidates)
-        }
-    }
+    config
+        .ignored_namespaces()
+        .best_candidates_match(candidates)
+        .is_some()
+        || config
+            .trusted_boundary_namespaces()
+            .best_candidates_match(candidates)
+            .is_some()
 }
 
 fn invocation_surface(edge: &crate::artifact::CallFact) -> Option<&FunctionTargetFact> {
@@ -3029,10 +3011,11 @@ unresolved-call-target = "warn"
             .findings
             .iter()
             .filter(|finding| {
-                matches!(
-                    finding.kind,
-                    InterpretedFindingKind::UnresolvedCallTarget { .. }
-                )
+                finding.effect.key == ReportEffect::Panic.key()
+                    && matches!(
+                        finding.kind,
+                        InterpretedFindingKind::UnresolvedCallTarget { .. }
+                    )
             })
             .count()
     }
@@ -3522,9 +3505,10 @@ unresolved-call-target = "warn"
             Vec::new(),
         )
         .expect("grouped unsafe call artifact");
-        let config =
-            SniffTestConfig::from_manifest_str("[safety.lints]\nunresolved-call-target = \"warn\"")
-                .expect("unresolved safety coverage configuration");
+        let config = SniffTestConfig::from_manifest_str(
+            "[safety.coverage]\nunresolved-call-target = \"warn\"",
+        )
+        .expect("unresolved safety coverage configuration");
 
         let reports = trace_workspace(
             &artifact,
@@ -3562,7 +3546,7 @@ unresolved-call-target = "warn"
                 .filter(|finding| matches!(
                     finding.kind,
                     InterpretedFindingKind::UnresolvedCallTarget { .. }
-                ))
+                ) && finding.effect.key == ReportEffect::Safety.key())
                 .count(),
             1,
             "the unsafe signature is a local SafetyEffect source, but it does not make the unknown implementation complete"
@@ -4527,7 +4511,7 @@ unresolved-call-target = "warn"
                 [panics]
                 trusted-boundary-namespaces = ["trusted::**"]
                 ignored-namespaces = ["ignored::**"]
-                [panics.lints]
+                [panics.coverage]
                 unresolved-call-target = "warn"
             "#,
         )
@@ -4611,7 +4595,7 @@ unresolved-call-target = "warn"
         .expect("covered declaration with targetless sibling artifact");
         let config = SniffTestConfig::from_manifest_str(
             r#"
-                [panics.lints]
+                [panics.coverage]
                 unresolved-call-target = "warn"
                 [safety.lints]
                 unresolved-call-target = "warn"

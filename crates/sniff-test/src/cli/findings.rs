@@ -4,7 +4,7 @@ use std::collections::BTreeSet;
 use std::path::Path;
 
 use crate::artifact::{
-    MarkerEvidenceState, SourceFileFact, SourceRangeFact, UnverifiedMarkerProbeReason,
+    EffectKey, MarkerEvidenceState, SourceFileFact, SourceRangeFact, UnverifiedMarkerProbeReason,
 };
 use crate::config::{LintLevel, ReportRootSet, SniffTestConfig};
 use crate::report_model::{EffectFindingClass, UnresolvedCallSite};
@@ -663,6 +663,20 @@ impl FindingKind {
             } => config.analysis.lints.undocumented_effect_invocation,
             Self::Effect {
                 effect,
+                finding: EffectFindingClass::UnresolvedCallTarget,
+                ..
+            } => config
+                .effect_coverage(&EffectKey::new(effect))
+                .map_or(LintLevel::Warn, |coverage| coverage.unresolved_call_target),
+            Self::Effect {
+                effect,
+                finding: EffectFindingClass::AnalysisIncomplete,
+                ..
+            } => config
+                .effect_coverage(&EffectKey::new(effect))
+                .map_or(LintLevel::Warn, |coverage| coverage.analysis_incomplete),
+            Self::Effect {
+                effect,
                 finding,
                 operation,
                 ..
@@ -676,14 +690,14 @@ impl FindingKind {
                 ),
                 EffectFindingClass::DocumentedObligation => config.panics.lints.documented_panic,
                 EffectFindingClass::UnresolvedCallTarget => {
-                    config.panics.lints.unresolved_call_target
+                    unreachable!("coverage policy resolved first")
                 }
                 EffectFindingClass::AmbiguousMarker => config.analysis.lints.ambiguous_panic_marker,
                 EffectFindingClass::AmbiguousRequirement => {
                     config.analysis.lints.ambiguous_panic_requirement
                 }
                 EffectFindingClass::AnalysisIncomplete => {
-                    config.analysis.lints.panic_analysis_incomplete
+                    unreachable!("coverage policy resolved first")
                 }
             },
             Self::Effect {
@@ -709,7 +723,7 @@ impl FindingKind {
                     config.safety.lints.safety_obligation_missing_justification
                 }
                 EffectFindingClass::UnresolvedCallTarget => {
-                    config.safety.lints.unresolved_call_target
+                    unreachable!("coverage policy resolved first")
                 }
                 EffectFindingClass::AmbiguousMarker => {
                     config.analysis.lints.ambiguous_safety_marker
@@ -718,7 +732,7 @@ impl FindingKind {
                     config.analysis.lints.ambiguous_safety_requirement
                 }
                 EffectFindingClass::AnalysisIncomplete => {
-                    config.analysis.lints.safety_analysis_incomplete
+                    unreachable!("coverage policy resolved first")
                 }
             },
             Self::Effect { .. } => LintLevel::Warn,
@@ -852,6 +866,8 @@ mod tests {
     fn resolves_policy_and_filters_allowed_findings_once() {
         let mut config = SniffTestConfig::default();
         config.panics.lints.panic_invocation = LintLevel::Allow;
+        config.panics.lints.unresolved_call_target = Some(LintLevel::Allow);
+        config.safety.lints.unresolved_call_target = Some(LintLevel::Allow);
         config.analysis.lints.undocumented_effect_invocation = LintLevel::Warn;
         config.analysis.lints.empty_report_roots = LintLevel::Deny;
 
