@@ -115,7 +115,6 @@ fn adapt_result(
                     effect: "panic".to_owned(),
                     finding: EffectFindingClass::AnalysisIncomplete,
                     operation: None,
-                    missing_requirements: false,
                 },
                 "panic",
                 reason,
@@ -130,7 +129,6 @@ fn adapt_result(
                     effect: "safety".to_owned(),
                     finding: EffectFindingClass::AnalysisIncomplete,
                     operation: None,
-                    missing_requirements: false,
                 },
                 "safety",
                 reason,
@@ -146,7 +144,6 @@ fn adapt_result(
                         effect: effect.as_str().to_owned(),
                         finding: EffectFindingClass::AnalysisIncomplete,
                         operation: None,
-                        missing_requirements: false,
                     },
                     effect.as_str(),
                     reason,
@@ -299,18 +296,17 @@ fn finding_description(
     let effect = &finding.effect;
     let effect_name = effect.key.as_str();
     let obligation = effect.obligation;
-    let class = |operation: Option<String>, missing_requirements| FindingKind::Effect {
+    let class = |operation: Option<String>| FindingKind::Effect {
         effect: effect_name.to_owned(),
         finding: finding.kind.class(),
         operation,
-        missing_requirements,
     };
 
     match &finding.kind {
         InterpretedFindingKind::Operation { operation } => {
             let subject = operation.as_str().replace('-', " ");
             source_marker_description(
-                class(Some(operation.as_str().to_owned()), false),
+                class(Some(operation.as_str().to_owned())),
                 &subject,
                 marker_domain(effect),
                 owner,
@@ -324,7 +320,7 @@ fn finding_description(
                 |target| format!("{} invocation to `{target}`", effect_name),
             );
             source_marker_description(
-                class(Some(operation.as_str().to_owned()), false),
+                class(Some(operation.as_str().to_owned())),
                 &subject,
                 marker_domain(effect),
                 owner,
@@ -337,7 +333,7 @@ fn finding_description(
             let subject = format!(
                 "call to `{callee}` may produce the {effect_name} effect, but `{callee}` has no documented `# {obligation}` obligation"
             );
-            (class(None, false), subject.clone(), subject)
+            (class(None), subject.clone(), subject)
         }
         InterpretedFindingKind::DocumentedObligation => {
             let subject = format!(
@@ -346,7 +342,7 @@ fn finding_description(
                 obligation
             );
             source_marker_description(
-                class(None, !finding.missing_requirements.is_empty()),
+                class(None),
                 &subject,
                 marker_domain(effect),
                 owner,
@@ -361,7 +357,7 @@ fn finding_description(
                 effect_name
             );
             (
-                class(None, false),
+                class(None),
                 subject.clone(),
                 format!(
                     "function `{}` has incomplete {} coverage",
@@ -375,7 +371,7 @@ fn finding_description(
                 target.unwrap_or(&finding.function_path)
             );
             (
-                class(None, false),
+                class(None),
                 format!("{}", subject),
                 format!(
                     "`{}` has an ambiguous `# {}` requirement name",
@@ -390,7 +386,7 @@ fn finding_description(
                 effect.justification, effect_name
             );
             (
-                class(None, false),
+                class(None),
                 format!("{}", subject),
                 format!(
                     "function `{}` has an ambiguous `// {}:` marker",
@@ -2012,7 +2008,6 @@ mod tests {
                 effect: String::from("panic"),
                 finding: EffectFindingClass::DocumentedObligation,
                 operation: None,
-                missing_requirements: false,
             }
         );
         assert_eq!(

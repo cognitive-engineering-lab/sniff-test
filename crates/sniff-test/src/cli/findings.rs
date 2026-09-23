@@ -210,7 +210,7 @@ pub(crate) fn resolve_findings(
     let mut resolved = findings
         .into_iter()
         .filter_map(|finding| {
-            let level = finding.kind.lint_level(config, &effect_index);
+            let level = finding.lint_level(config, &effect_index);
             (!level.is_allow()).then_some(ResolvedFinding { level, finding })
         })
         .collect::<Vec<_>>();
@@ -619,8 +619,6 @@ pub(crate) enum FindingKind {
         finding: EffectFindingClass,
         #[serde(skip_serializing_if = "Option::is_none")]
         operation: Option<String>,
-        #[serde(skip)]
-        missing_requirements: bool,
     },
     EmptyReportRoots,
     MissingReportRoot,
@@ -660,72 +658,68 @@ impl FindingKind {
         };
         format!("sniff-test::{domain}::{lint}")
     }
+}
 
+impl Finding {
     fn lint_level(
         &self,
         config: &SniffTestConfig,
         effects: &BTreeMap<&str, &dyn Effect>,
     ) -> LintLevel {
-        match self {
-            Self::Effect {
-                finding: EffectFindingClass::UndocumentedInvocation,
-                ..
-            } => config.analysis.lints.undocumented_effect_invocation,
-            Self::Effect {
-                effect,
-                finding: EffectFindingClass::UnresolvedCallTarget,
-                ..
-            } => effects
-                .get(effect.as_str())
-                .map_or(LintLevel::Warn, |domain| {
-                    domain
-                        .config()
-                        .effective_coverage(&config.analysis.lints)
-                        .unresolved_call_target
-                }),
-            Self::Effect {
-                effect,
-                finding: EffectFindingClass::AnalysisIncomplete,
-                ..
-            } => effects
-                .get(effect.as_str())
-                .map_or(LintLevel::Warn, |domain| {
-                    domain
-                        .config()
-                        .effective_coverage(&config.analysis.lints)
-                        .analysis_incomplete
-                }),
-            Self::Effect {
+        match &self.kind {
+            FindingKind::Effect {
                 effect,
                 finding,
-                missing_requirements,
                 operation,
-                ..
-            } => effects
-                .get(effect.as_str())
-                .map_or(LintLevel::Warn, |domain| {
-                    let policy = domain.config();
-                    let lints = policy.finding_lints(&config.analysis.lints);
-                    match finding {
-                        EffectFindingClass::ConcreteOperation => {
-                            policy.operation_lint(operation.as_deref())
-                        }
-                        EffectFindingClass::ConcreteInvocation => lints.concrete_invocation,
-                        EffectFindingClass::DocumentedObligation if *missing_requirements => {
+            } => {
+                let domain = effects
+                    .get(effect.as_str())
+                    .unwrap_or_else(|| panic!("finding references unselected effect `{effect}`"));
+                let policy = domain.config();
+                match finding {
+                    EffectFindingClass::ConcreteOperation => {
+                        policy.operation_lint(operation.as_deref())
+                    }
+                    EffectFindingClass::ConcreteInvocation => {
+                        policy
+                            .finding_lints(&config.analysis.lints)
+                            .concrete_invocation
+                    }
+                    EffectFindingClass::UndocumentedInvocation => {
+                        config.analysis.lints.undocumented_effect_invocation
+                    }
+                    EffectFindingClass::DocumentedObligation => {
+                        let lints = policy.finding_lints(&config.analysis.lints);
+                        if self.missing_requirements.is_empty() {
+                            lints.documented_obligation
+                        } else {
                             lints.documented_obligation_missing_requirements
                         }
-                        EffectFindingClass::DocumentedObligation => lints.documented_obligation,
-                        EffectFindingClass::AmbiguousMarker => lints.ambiguous_marker,
-                        EffectFindingClass::AmbiguousRequirement => lints.ambiguous_requirement,
-                        EffectFindingClass::UndocumentedInvocation
-                        | EffectFindingClass::UnresolvedCallTarget
-                        | EffectFindingClass::AnalysisIncomplete => {
-                            unreachable!("shared analysis policy is resolved first")
-                        }
                     }
-                }),
-            Self::EmptyReportRoots => config.analysis.lints.empty_report_roots,
-            Self::MissingReportRoot => config.analysis.lints.missing_report_root,
+                    EffectFindingClass::UnresolvedCallTarget => {
+                        policy
+                            .effective_coverage(&config.analysis.lints)
+                            .unresolved_call_target
+                    }
+                    EffectFindingClass::AmbiguousMarker => {
+                        policy
+                            .finding_lints(&config.analysis.lints)
+                            .ambiguous_marker
+                    }
+                    EffectFindingClass::AmbiguousRequirement => {
+                        policy
+                            .finding_lints(&config.analysis.lints)
+                            .ambiguous_requirement
+                    }
+                    EffectFindingClass::AnalysisIncomplete => {
+                        policy
+                            .effective_coverage(&config.analysis.lints)
+                            .analysis_incomplete
+                    }
+                }
+            }
+            FindingKind::EmptyReportRoots => config.analysis.lints.empty_report_roots,
+            FindingKind::MissingReportRoot => config.analysis.lints.missing_report_root,
         }
     }
 }
@@ -794,16 +788,11 @@ mod tests {
         )
     }
 
-    fn effect(
-        effect: &str,
-        finding: EffectFindingClass,
-        missing_requirements: bool,
-    ) -> FindingKind {
+    fn effect(effect: &str, finding: EffectFindingClass) -> FindingKind {
         FindingKind::Effect {
             effect: effect.to_owned(),
             finding,
             operation: None,
-            missing_requirements,
         }
     }
 
@@ -818,27 +807,11 @@ mod tests {
 
         let resolved = resolve_findings(
             vec![
-                finding(effect(
-                    "panic",
-                    EffectFindingClass::ConcreteInvocation,
-                    false,
-                )),
-                finding(effect(
-                    "safety",
-                    EffectFindingClass::DocumentedObligation,
-                    false,
-                )),
+                finding(effect("panic", EffectFindingClass::ConcreteInvocation)),
+                finding(effect("safety", EffectFindingClass::DocumentedObligation)),
                 finding(FindingKind::EmptyReportRoots),
-                finding(effect(
-                    "panic",
-                    EffectFindingClass::UnresolvedCallTarget,
-                    false,
-                )),
-                finding(effect(
-                    "safety",
-                    EffectFindingClass::UnresolvedCallTarget,
-                    false,
-                )),
+                finding(effect("panic", EffectFindingClass::UnresolvedCallTarget)),
+                finding(effect("safety", EffectFindingClass::UnresolvedCallTarget)),
             ],
             &config,
         );
@@ -849,24 +822,18 @@ mod tests {
     }
 
     #[test]
-    fn safety_contracts_use_ordinary_obligation_policy() {
+    fn obligation_lint_depends_on_missing_requirements() {
         let mut config = SniffTestConfig::default();
+        config.safety.lints.safety_obligation_missing_justification = LintLevel::Warn;
         config.safety.lints.safety_obligation_missing_requirements = LintLevel::Deny;
-        let obligation = finding(effect(
-            "safety",
-            EffectFindingClass::DocumentedObligation,
-            true,
-        ));
+        let ordinary = finding(effect("safety", EffectFindingClass::DocumentedObligation));
+        let mut obligation = finding(effect("safety", EffectFindingClass::DocumentedObligation));
+        obligation.missing_requirements = vec![String::from("caller holds the lock")];
 
-        let resolved = resolve_findings(vec![obligation], &config);
-        let [remaining] = resolved.as_slice() else {
-            panic!("the safety obligation should use its ordinary lint policy");
-        };
-        assert_eq!(
-            remaining.finding.kind,
-            effect("safety", EffectFindingClass::DocumentedObligation, true)
-        );
-        assert_eq!(remaining.level, LintLevel::Deny);
+        let resolved = resolve_findings(vec![ordinary, obligation], &config);
+        assert_eq!(resolved.len(), 2);
+        assert_eq!(resolved[0].level, LintLevel::Warn);
+        assert_eq!(resolved[1].level, LintLevel::Deny);
     }
 
     #[test]
@@ -877,16 +844,8 @@ mod tests {
 
         let resolved = resolve_findings(
             vec![
-                finding(effect(
-                    "panic",
-                    EffectFindingClass::AnalysisIncomplete,
-                    false,
-                )),
-                finding(effect(
-                    "safety",
-                    EffectFindingClass::AnalysisIncomplete,
-                    false,
-                )),
+                finding(effect("panic", EffectFindingClass::AnalysisIncomplete)),
+                finding(effect("safety", EffectFindingClass::AnalysisIncomplete)),
             ],
             &config,
         );
@@ -895,17 +854,13 @@ mod tests {
         assert_eq!(resolved[0].level, LintLevel::Warn);
         assert_eq!(
             resolved[0].finding.kind,
-            effect("panic", EffectFindingClass::AnalysisIncomplete, false)
+            effect("panic", EffectFindingClass::AnalysisIncomplete)
         );
     }
 
     #[test]
     fn findings_serialize_generic_effect_fields() {
-        let mut unresolved = finding(effect(
-            "panic",
-            EffectFindingClass::UnresolvedCallTarget,
-            false,
-        ));
+        let mut unresolved = finding(effect("panic", EffectFindingClass::UnresolvedCallTarget));
         unresolved.unresolved_call = Some(UnresolvedCallSite {
             coverage: UnresolvedCallCoverage::Partial,
             mechanism: UnresolvedCallMechanism::DynamicDispatch,
@@ -926,16 +881,11 @@ mod tests {
     #[test]
     fn finding_kinds_expose_generic_effect_lint_codes() {
         assert_eq!(
-            effect("panic", EffectFindingClass::ConcreteInvocation, false).lint_code(),
+            effect("panic", EffectFindingClass::ConcreteInvocation).lint_code(),
             "sniff-test::panic::invocation"
         );
         assert_eq!(
-            effect(
-                "allocation",
-                EffectFindingClass::UndocumentedInvocation,
-                false
-            )
-            .lint_code(),
+            effect("allocation", EffectFindingClass::UndocumentedInvocation).lint_code(),
             "sniff-test::allocation::undocumented-invocation"
         );
     }
@@ -959,18 +909,10 @@ mod tests {
             byte_start: 100,
             byte_end: 110,
         };
-        let documented = finding(effect(
-            "panic",
-            EffectFindingClass::DocumentedObligation,
-            false,
-        ))
-        .with_source_order(Some(&source), Some(&documented_range));
-        let invocation = finding(effect(
-            "panic",
-            EffectFindingClass::ConcreteInvocation,
-            false,
-        ))
-        .with_source_order(Some(&source), Some(&invocation_range));
+        let documented = finding(effect("panic", EffectFindingClass::DocumentedObligation))
+            .with_source_order(Some(&source), Some(&documented_range));
+        let invocation = finding(effect("panic", EffectFindingClass::ConcreteInvocation))
+            .with_source_order(Some(&source), Some(&invocation_range));
 
         let forward = serde_json::to_value(resolve_findings(
             vec![documented.clone(), invocation.clone()],
@@ -1004,12 +946,8 @@ mod tests {
         let first_root_span = Span::with_root_ctxt(BytePos(100), BytePos(120));
         let second_root_span = Span::with_root_ctxt(BytePos(130), BytePos(150));
         let at_root = |root: &str, root_span: Span, trace: &[&str]| {
-            let mut finding = finding(effect(
-                "panic",
-                EffectFindingClass::ConcreteInvocation,
-                false,
-            ))
-            .with_source_order(Some(&source), Some(&range));
+            let mut finding = finding(effect("panic", EffectFindingClass::ConcreteInvocation))
+                .with_source_order(Some(&source), Some(&range));
             finding.root = Some(root.to_owned());
             finding.trace = trace.iter().map(|step| (*step).to_owned()).collect();
             finding.diagnostic.message = format!("representative for {root}");
@@ -1081,12 +1019,8 @@ mod tests {
         };
         let effect_span = Span::with_root_ctxt(BytePos(40), BytePos(50));
         let at_root = |root: &str, root_span: Span| {
-            let mut finding = finding(effect(
-                "panic",
-                EffectFindingClass::DocumentedObligation,
-                false,
-            ))
-            .with_source_order(Some(&source), Some(&range));
+            let mut finding = finding(effect("panic", EffectFindingClass::DocumentedObligation))
+                .with_source_order(Some(&source), Some(&range));
             finding.owner = Some(FindingOwner {
                 scope: OwnerScope::Workspace,
                 crate_name: Some(String::from("sample")),
@@ -1154,12 +1088,8 @@ mod tests {
         };
         let effect_span = Span::with_root_ctxt(BytePos(40), BytePos(50));
         let at_root = |root: &str, local_span: Span, trace: &[&str]| {
-            let mut finding = finding(effect(
-                "panic",
-                EffectFindingClass::DocumentedObligation,
-                false,
-            ))
-            .with_source_order(Some(&source), Some(&range));
+            let mut finding = finding(effect("panic", EffectFindingClass::DocumentedObligation))
+                .with_source_order(Some(&source), Some(&range));
             finding.owner = Some(FindingOwner {
                 scope: OwnerScope::Dependency,
                 crate_name: Some(String::from("dependency")),
@@ -1253,19 +1183,15 @@ mod tests {
         };
         let effect_span = Span::with_root_ctxt(BytePos(40), BytePos(50));
         let at_call = |call: u32, local_span: Span, label: &str| {
-            let mut finding = finding(effect(
-                "panic",
-                EffectFindingClass::DocumentedObligation,
-                false,
-            ))
-            .with_source_order(Some(&source), Some(&range))
-            .with_trace_order(vec![FindingTraceStepOrder::new(
-                None,
-                None,
-                call,
-                (0, 0),
-                "sample::root",
-            )]);
+            let mut finding = finding(effect("panic", EffectFindingClass::DocumentedObligation))
+                .with_source_order(Some(&source), Some(&range))
+                .with_trace_order(vec![FindingTraceStepOrder::new(
+                    None,
+                    None,
+                    call,
+                    (0, 0),
+                    "sample::root",
+                )]);
             finding.owner = Some(FindingOwner {
                 scope: OwnerScope::Dependency,
                 crate_name: Some(String::from("dependency")),
@@ -1320,12 +1246,8 @@ mod tests {
         };
         let effect_span = Span::with_root_ctxt(BytePos(40), BytePos(50));
         let root_span = Span::with_root_ctxt(BytePos(100), BytePos(120));
-        let mut finding = finding(effect(
-            "panic",
-            EffectFindingClass::ConcreteInvocation,
-            false,
-        ))
-        .with_source_order(Some(&source), Some(&range));
+        let mut finding = finding(effect("panic", EffectFindingClass::ConcreteInvocation))
+            .with_source_order(Some(&source), Some(&range));
         finding.root = Some(String::from("sample::api"));
         finding.diagnostic.message =
             String::from("function `sample::api` has an undocumented panic path");
@@ -1389,12 +1311,8 @@ mod tests {
             byte_end: 50,
         };
         let root_span = Span::with_root_ctxt(BytePos(100), BytePos(120));
-        let mut finding = finding(effect(
-            "panic",
-            EffectFindingClass::DocumentedObligation,
-            false,
-        ))
-        .with_source_order(Some(&source), Some(&range));
+        let mut finding = finding(effect("panic", EffectFindingClass::DocumentedObligation))
+            .with_source_order(Some(&source), Some(&range));
         finding.owner = Some(FindingOwner {
             scope: OwnerScope::Workspace,
             crate_name: Some(String::from("sample")),
@@ -1442,12 +1360,8 @@ mod tests {
             byte_end: 50,
         };
         let root_span = Span::with_root_ctxt(BytePos(100), BytePos(120));
-        let mut finding = finding(effect(
-            "panic",
-            EffectFindingClass::ConcreteInvocation,
-            false,
-        ))
-        .with_source_order(Some(&source), Some(&range));
+        let mut finding = finding(effect("panic", EffectFindingClass::ConcreteInvocation))
+            .with_source_order(Some(&source), Some(&range));
         finding.root = Some(String::from("sample::api"));
         finding.diagnostic.span = Some(root_span);
         finding.effect_span = None;
@@ -1469,11 +1383,7 @@ mod tests {
 
     #[test]
     fn human_paths_use_callable_names_without_changing_serialized_paths() {
-        let mut finding = finding(effect(
-            "panic",
-            EffectFindingClass::DocumentedObligation,
-            false,
-        ));
+        let mut finding = finding(effect("panic", EffectFindingClass::DocumentedObligation));
         let target = String::from(
             "<bitvec::slice::BitSlice<T, bitvec::order::Msb0> as bitvec::field::BitField>::load_be",
         );
@@ -1536,11 +1446,7 @@ mod tests {
             ["left::run", "right::run", "stop"]
         );
 
-        let mut finding = finding(effect(
-            "panic",
-            EffectFindingClass::ConcreteInvocation,
-            false,
-        ));
+        let mut finding = finding(effect("panic", EffectFindingClass::ConcreteInvocation));
         finding.diagnostic.messages = vec![
             DiagnosticMessage::Note(String::from(
                 "reachable from `sample::left::run` to `panic_fmt`",
@@ -1561,11 +1467,7 @@ mod tests {
 
     #[test]
     fn full_trace_steps_keep_canonical_paths() {
-        let mut finding = finding(effect(
-            "panic",
-            EffectFindingClass::ConcreteInvocation,
-            false,
-        ));
+        let mut finding = finding(effect("panic", EffectFindingClass::ConcreteInvocation));
         finding.root = Some(String::from("sample::api"));
         finding.target = Some(String::from("core::panicking::panic_fmt"));
         finding.trace = vec![String::from("canonical trace")];
@@ -1614,11 +1516,7 @@ mod tests {
             }
         };
         let resolved = [
-            at_root(effect(
-                "panic",
-                EffectFindingClass::AnalysisIncomplete,
-                false,
-            )),
+            at_root(effect("panic", EffectFindingClass::AnalysisIncomplete)),
             at_root(FindingKind::EmptyReportRoots),
             at_root(FindingKind::MissingReportRoot),
         ];
@@ -1641,11 +1539,7 @@ mod tests {
                     message: String::from("test finding"),
                     messages,
                 },
-                ..finding(effect(
-                    "panic",
-                    EffectFindingClass::ConcreteInvocation,
-                    false,
-                ))
+                ..finding(effect("panic", EffectFindingClass::ConcreteInvocation))
             },
         };
         let mut findings = [
@@ -1674,12 +1568,8 @@ mod tests {
         };
         let effect_span = Span::with_root_ctxt(BytePos(40), BytePos(50));
         let at_root = |root: &str, root_span: Span| {
-            let mut finding = finding(effect(
-                "safety",
-                EffectFindingClass::UnresolvedCallTarget,
-                false,
-            ))
-            .with_source_order(Some(&source), Some(&range));
+            let mut finding = finding(effect("safety", EffectFindingClass::UnresolvedCallTarget))
+                .with_source_order(Some(&source), Some(&range));
             finding.root = Some(root.to_owned());
             finding.diagnostic.message = format!("coverage gap from `{root}`");
             finding.diagnostic.span = Some(root_span);
@@ -1718,25 +1608,14 @@ mod tests {
             byte_start: 40,
             byte_end: 50,
         };
-        let mut missing_first = finding(effect(
-            "safety",
-            EffectFindingClass::DocumentedObligation,
-            true,
-        ))
-        .with_source_order(Some(&source), Some(&range));
+        let mut missing_first = finding(effect("safety", EffectFindingClass::DocumentedObligation))
+            .with_source_order(Some(&source), Some(&range));
         missing_first.missing_requirements = vec![String::from("initialized")];
-        let mut missing_second = finding(effect(
-            "safety",
-            EffectFindingClass::DocumentedObligation,
-            true,
-        ))
-        .with_source_order(Some(&source), Some(&range));
+        let mut missing_second =
+            finding(effect("safety", EffectFindingClass::DocumentedObligation))
+                .with_source_order(Some(&source), Some(&range));
         missing_second.missing_requirements = vec![String::from("exclusive")];
-        let incomplete = finding(effect(
-            "safety",
-            EffectFindingClass::AnalysisIncomplete,
-            false,
-        ));
+        let incomplete = finding(effect("safety", EffectFindingClass::AnalysisIncomplete));
         let resolved = [
             missing_first,
             missing_second,
@@ -1766,12 +1645,8 @@ mod tests {
             byte_start: 40,
             byte_end: 50,
         };
-        let base = finding(effect(
-            "panic",
-            EffectFindingClass::ConcreteInvocation,
-            false,
-        ))
-        .with_source_order(Some(&source), Some(&range));
+        let base = finding(effect("panic", EffectFindingClass::ConcreteInvocation))
+            .with_source_order(Some(&source), Some(&range));
         let with = |scope, evidence| {
             let mut finding = base.clone();
             finding.owner = Some(FindingOwner {
