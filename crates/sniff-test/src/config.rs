@@ -354,7 +354,8 @@ impl Default for PanicConfig {
 pub struct PanicLintConfig {
     pub ambiguous_marker: LintLevel,
     pub ambiguous_requirement: LintLevel,
-    pub compiler_assert: LintLevel,
+    /// Default severity for concrete panic operations, including compiler assertions.
+    pub operation: LintLevel,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub compiler_assert_bounds_check: Option<LintLevel>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -378,7 +379,7 @@ pub struct PanicLintConfig {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub compiler_assert_invalid_enum_construction: Option<LintLevel>,
     /// Severity for unjustified panic invocations and documented obligations.
-    pub panic_invocation: LintLevel,
+    pub invocation: LintLevel,
     /// Legacy location; prefer `[panics.coverage]`.
     pub unresolved_call_target: Option<LintLevel>,
 }
@@ -388,7 +389,7 @@ impl Default for PanicLintConfig {
         Self {
             ambiguous_marker: LintLevel::Deny,
             ambiguous_requirement: LintLevel::Deny,
-            compiler_assert: LintLevel::Deny,
+            operation: LintLevel::Deny,
             compiler_assert_bounds_check: None,
             compiler_assert_overflow: None,
             compiler_assert_overflow_negation: None,
@@ -400,7 +401,7 @@ impl Default for PanicLintConfig {
             compiler_assert_misaligned_pointer_dereference: None,
             compiler_assert_null_pointer_dereference: None,
             compiler_assert_invalid_enum_construction: None,
-            panic_invocation: LintLevel::Deny,
+            invocation: LintLevel::Deny,
             unresolved_call_target: None,
         }
     }
@@ -470,8 +471,9 @@ pub struct SafetyLintConfig {
     /// Legacy location; prefer `[safety.coverage]`.
     pub unresolved_call_target: Option<LintLevel>,
     /// Severity for unjustified unsafe calls and documented obligations.
-    pub unsafe_call_missing_justification: LintLevel,
-    pub unsafe_op_missing_justification: LintLevel,
+    pub invocation: LintLevel,
+    /// Default severity for non-call unsafe operations.
+    pub operation: LintLevel,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub raw_pointer_dereference_missing_justification: Option<LintLevel>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -502,8 +504,8 @@ impl Default for SafetyLintConfig {
             ambiguous_marker: LintLevel::Deny,
             ambiguous_requirement: LintLevel::Deny,
             unresolved_call_target: None,
-            unsafe_call_missing_justification: LintLevel::Warn,
-            unsafe_op_missing_justification: LintLevel::Warn,
+            invocation: LintLevel::Warn,
+            operation: LintLevel::Warn,
             raw_pointer_dereference_missing_justification: None,
             mutable_static_access_missing_justification: None,
             extern_static_access_missing_justification: None,
@@ -550,7 +552,7 @@ impl crate::effects::EffectConfig for PanicConfig {
 
     fn finding_lints(&self) -> EffectFindingLints {
         EffectFindingLints {
-            concrete_invocation: self.lints.panic_invocation,
+            concrete_invocation: self.lints.invocation,
             ambiguous_marker: self.lints.ambiguous_marker,
             ambiguous_requirement: self.lints.ambiguous_requirement,
         }
@@ -574,7 +576,7 @@ impl crate::effects::EffectConfig for PanicConfig {
             Some("invalid-enum-construction") => lints.compiler_assert_invalid_enum_construction,
             _ => None,
         }
-        .unwrap_or(lints.compiler_assert)
+        .unwrap_or(lints.operation)
     }
 
     fn effective_coverage(&self) -> EffectiveCoverageConfig {
@@ -593,7 +595,7 @@ impl crate::effects::EffectConfig for SafetyConfig {
 
     fn finding_lints(&self) -> EffectFindingLints {
         EffectFindingLints {
-            concrete_invocation: self.lints.unsafe_call_missing_justification,
+            concrete_invocation: self.lints.invocation,
             ambiguous_marker: self.lints.ambiguous_marker,
             ambiguous_requirement: self.lints.ambiguous_requirement,
         }
@@ -623,7 +625,7 @@ impl crate::effects::EffectConfig for SafetyConfig {
             Some("unsafe-binder-cast") => lints.unsafe_binder_cast_missing_justification,
             _ => None,
         }
-        .unwrap_or(lints.unsafe_op_missing_justification)
+        .unwrap_or(lints.operation)
     }
 
     fn effective_coverage(&self) -> EffectiveCoverageConfig {
@@ -1125,7 +1127,7 @@ mod tests {
             undocumented-effect-invocation = "deny"
 
             [panics.lints]
-            panic-invocation = "allow"
+            invocation = "allow"
 
         "#;
 
@@ -1137,12 +1139,9 @@ mod tests {
         );
         assert_eq!(parsed.panics.lints.ambiguous_marker, LintLevel::Deny);
         assert_eq!(parsed.safety.lints.ambiguous_marker, LintLevel::Deny);
-        assert_eq!(parsed.panics.lints.panic_invocation, LintLevel::Allow);
-        assert_eq!(parsed.panics.lints.compiler_assert, LintLevel::Deny);
-        assert_eq!(
-            parsed.safety.lints.unsafe_call_missing_justification,
-            LintLevel::Warn
-        );
+        assert_eq!(parsed.panics.lints.invocation, LintLevel::Allow);
+        assert_eq!(parsed.panics.lints.operation, LintLevel::Deny);
+        assert_eq!(parsed.safety.lints.invocation, LintLevel::Warn);
     }
 
     #[test]
@@ -1194,7 +1193,7 @@ mod tests {
     fn default_panic_lints_deny_unjustified_invocations() {
         let lints = PanicConfig::default().lints;
 
-        assert_eq!(lints.compiler_assert, LintLevel::Deny);
+        assert_eq!(lints.operation, LintLevel::Deny);
         assert_eq!(
             [
                 lints.compiler_assert_bounds_check,
@@ -1211,7 +1210,7 @@ mod tests {
             ],
             [None; 11]
         );
-        assert_eq!(lints.panic_invocation, LintLevel::Deny);
+        assert_eq!(lints.invocation, LintLevel::Deny);
         assert_eq!(lints.unresolved_call_target, None);
         assert_eq!(PanicConfig::default().coverage, CoverageConfig::default());
         assert_eq!(
@@ -1298,8 +1297,8 @@ mod tests {
                 .unresolved_call_target,
             LintLevel::Warn
         );
-        assert_eq!(lints.unsafe_call_missing_justification, LintLevel::Warn);
-        assert_eq!(lints.unsafe_op_missing_justification, LintLevel::Warn);
+        assert_eq!(lints.invocation, LintLevel::Warn);
+        assert_eq!(lints.operation, LintLevel::Warn);
         assert_eq!(
             [
                 lints.raw_pointer_dereference_missing_justification,
@@ -1332,6 +1331,21 @@ mod tests {
     }
 
     #[test]
+    fn effect_specific_base_lint_keys_are_rejected() {
+        for (effect, key) in [
+            ("panics", "panic-invocation"),
+            ("panics", "compiler-assert"),
+            ("safety", "unsafe-call-missing-justification"),
+            ("safety", "unsafe-op-missing-justification"),
+        ] {
+            let manifest = format!("[{effect}.lints]\n{key} = \"warn\"");
+            let error = SniffTestConfig::from_manifest_str(&manifest)
+                .expect_err("effect-specific base lint keys should not parse");
+            assert!(error.to_string().contains(key));
+        }
+    }
+
+    #[test]
     fn coverage_sections_override_legacy_unresolved_lints_and_preserve_defaults() {
         let config = SniffTestConfig::from_manifest_str(
             r#"
@@ -1359,7 +1373,7 @@ mod tests {
     fn parses_panic_lint_levels() {
         let config = r#"
             [panics.lints]
-            compiler-assert = "warn"
+            operation = "warn"
             compiler-assert-bounds-check = "allow"
             compiler-assert-overflow = "warn"
             compiler-assert-overflow-negation = "deny"
@@ -1371,13 +1385,13 @@ mod tests {
             compiler-assert-misaligned-pointer-dereference = "deny"
             compiler-assert-null-pointer-dereference = "allow"
             compiler-assert-invalid-enum-construction = "warn"
-            panic-invocation = "allow"
+            invocation = "allow"
             unresolved-call-target = "deny"
         "#;
 
         let parsed = SniffTestConfig::from_manifest_str(config).expect("manifest should parse");
 
-        assert_eq!(parsed.panics.lints.compiler_assert, LintLevel::Warn);
+        assert_eq!(parsed.panics.lints.operation, LintLevel::Warn);
         assert_eq!(
             [
                 parsed.panics.lints.compiler_assert_bounds_check,
@@ -1412,7 +1426,7 @@ mod tests {
                 Some(LintLevel::Warn),
             ]
         );
-        assert_eq!(parsed.panics.lints.panic_invocation, LintLevel::Allow);
+        assert_eq!(parsed.panics.lints.invocation, LintLevel::Allow);
         assert_eq!(
             parsed.panics.lints.unresolved_call_target,
             Some(LintLevel::Deny)
@@ -1427,8 +1441,8 @@ mod tests {
             trusted-boundary-namespaces = ["ffi::safe_contract", "ffi::safe_method"]
 
             [safety.lints]
-            unsafe-call-missing-justification = "deny"
-            unsafe-op-missing-justification = "deny"
+            invocation = "deny"
+            operation = "deny"
             unresolved-call-target = "deny"
         "#;
 
@@ -1451,14 +1465,8 @@ mod tests {
             &parsed.safety,
             &candidates(&["ffi::plain_safe"])
         ));
-        assert_eq!(
-            parsed.safety.lints.unsafe_call_missing_justification,
-            LintLevel::Deny
-        );
-        assert_eq!(
-            parsed.safety.lints.unsafe_op_missing_justification,
-            LintLevel::Deny
-        );
+        assert_eq!(parsed.safety.lints.invocation, LintLevel::Deny);
+        assert_eq!(parsed.safety.lints.operation, LintLevel::Deny);
         assert_eq!(
             parsed.safety.lints.unresolved_call_target,
             Some(LintLevel::Deny)

@@ -73,13 +73,13 @@ macro_rules! cli_cases {
 cli_cases! {
     "direct_panic" => {
         panic_invocation_can_be_allowed => Case::new()
-            .config_append("\n[panics.lints]\npanic-invocation = \"allow\"\n");
+            .config_append("\n[panics.lints]\ninvocation = \"allow\"\n");
     }
     "source_aggregation" => {
         source_aggregation_emits_one_diagnostic_per_root => Case::new()
             .denied();
         source_aggregation_emits_one_warning_per_root => Case::new()
-            .config_append("\n[panics.lints]\npanic-invocation = \"warn\"\n");
+            .config_append("\n[panics.lints]\ninvocation = \"warn\"\n");
     }
     "safe_markers" => {
         compact_stack_hint => Case::new().denied();
@@ -120,18 +120,18 @@ cli_cases! {
                 .config_append(
                     "\n[panics.lints]\n\
                      compiler-assert-division-by-zero = \"deny\"\n\
-                     compiler-assert = \"allow\"\n\
-                     panic-invocation = \"allow\"\n",
+                     operation = \"allow\"\n\
+                     invocation = \"allow\"\n",
                 )
                 .denied();
         compiler_assert_overrides_are_independent =>
             Case::new()
                 .config_append(
                     "\n[panics.lints]\n\
-                     compiler-assert = \"allow\"\n\
+                     operation = \"allow\"\n\
                      compiler-assert-remainder-by-zero = \"warn\"\n\
                      compiler-assert-bounds-check = \"deny\"\n\
-                     panic-invocation = \"allow\"\n",
+                     invocation = \"allow\"\n",
                 )
                 .denied();
         cargo_manifest_path_forwarding => Case::new()
@@ -147,14 +147,14 @@ cli_cases! {
     }
     "unsafe_ops" => {
         unsafe_op_missing_justification_can_be_denied => Case::new()
-            .config_append("\n[safety.lints]\nunsafe-op-missing-justification = \"deny\"\n")
+            .config_append("\n[safety.lints]\noperation = \"deny\"\n")
             .denied();
         unsafe_op_overrides_use_umbrella_fallback =>
             Case::new()
                 .config_append(
                     "\n[safety.lints]\n\
                      raw-pointer-dereference-missing-justification = \"warn\"\n\
-                     unsafe-op-missing-justification = \"allow\"\n\
+                     operation = \"allow\"\n\
                      inline-assembly-missing-justification = \"deny\"\n",
                 )
                 .denied();
@@ -753,8 +753,8 @@ pub fn exported(values: &[u8], index: usize) -> u8 {
          report-roots = [\"definition_path_consumer::exported\"]\n\
          \n\
          [panics.lints]\n\
-         compiler-assert = \"allow\"\n\
-         panic-invocation = \"deny\"\n",
+         operation = \"allow\"\n\
+         invocation = \"deny\"\n",
     )
     .expect("write manifest");
     let workspace = run_workspace_unit(
@@ -1178,7 +1178,7 @@ fn stale_source_marker_facts_are_rejected_even_when_rustc_identity_is_unchanged(
          report-roots = [\"stale_marker_workspace::workspace_root\"]\n\
          \n\
          [safety.lints]\n\
-         unsafe-op-missing-justification = \"deny\"\n",
+         operation = \"deny\"\n",
     )
     .expect("write manifest");
     let output = run_workspace_unit(
@@ -1380,8 +1380,8 @@ fn cached_dependency_source_is_verified_before_rendering_a_snippet() {
          report-roots = [\"cached_source_workspace::workspace_root\"]\n\
          \n\
          [panics.lints]\n\
-         compiler-assert = \"warn\"\n\
-         panic-invocation = \"allow\"\n",
+         operation = \"warn\"\n\
+         invocation = \"allow\"\n",
     )
     .expect("write manifest");
 
@@ -1917,7 +1917,7 @@ impl PolicyReinterpretationFixture {
              report-roots = [\"policy_workspace::workspace_root\"]\n\
              \n\
              [panics.lints]\n\
-             compiler-assert = \"allow\"\n",
+             operation = \"allow\"\n",
         )
         .expect("write allow manifest");
         let deny_manifest = root.join("deny.toml");
@@ -1927,7 +1927,7 @@ impl PolicyReinterpretationFixture {
              report-roots = [\"policy_workspace::workspace_root\"]\n\
              \n\
              [panics.lints]\n\
-             compiler-assert = \"deny\"\n",
+             operation = \"deny\"\n",
         )
         .expect("write deny manifest");
 

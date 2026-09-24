@@ -7,5 +7,5 @@ report-roots = "all"
 [panics.lints]
 # This fixture exercises safety-comment coverage. Raw pointer/static MIR
 # assertions are covered by panic-focused fixtures.
-compiler-assert = "allow"
-panic-invocation = "allow"
+operation = "allow"
+invocation = "allow"

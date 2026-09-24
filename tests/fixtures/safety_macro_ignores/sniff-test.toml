@@ -14,4 +14,4 @@ ignored-namespaces = [
 trusted-boundary-namespaces = ["core", "alloc", "std"]
 
 [safety.lints]
-unsafe-op-missing-justification = "deny"
+operation = "deny"

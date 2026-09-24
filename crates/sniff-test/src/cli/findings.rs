@@ -779,7 +779,7 @@ mod tests {
     #[test]
     fn resolves_policy_and_filters_allowed_findings_once() {
         let mut config = SniffTestConfig::default();
-        config.panics.lints.panic_invocation = LintLevel::Allow;
+        config.panics.lints.invocation = LintLevel::Allow;
         config.panics.lints.unresolved_call_target = Some(LintLevel::Allow);
         config.safety.lints.unresolved_call_target = Some(LintLevel::Allow);
         config.analysis.lints.undocumented_effect_invocation = LintLevel::Warn;
@@ -804,8 +804,8 @@ mod tests {
     fn documented_obligations_use_invocation_lint_with_or_without_requirements() {
         let mut config = SniffTestConfig::default();
         config.analysis.effect_doc_matching = EffectDocMatching::Exact;
-        config.safety.lints.unsafe_call_missing_justification = LintLevel::Deny;
-        config.panics.lints.panic_invocation = LintLevel::Allow;
+        config.safety.lints.invocation = LintLevel::Deny;
+        config.panics.lints.invocation = LintLevel::Allow;
         let ordinary = finding(effect("safety", EffectFindingClass::DocumentedObligation));
         let mut obligation = finding(effect("safety", EffectFindingClass::DocumentedObligation));
         obligation.missing_requirements = vec![String::from("caller holds the lock")];

@@ -10,7 +10,7 @@ panic-sink-namespaces = [
 ]
 
 [panics.lints]
-panic-invocation = "warn"
+invocation = "warn"
 unresolved-call-target = "warn"
 
 [safety.lints]

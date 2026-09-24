@@ -16,7 +16,7 @@ panic-sink-namespaces = [
 ]
 
 [panics.lints]
-compiler-assert = "allow"
+operation = "allow"
 
 [safety.lints]
-unsafe-call-missing-justification = "deny"
+invocation = "deny"

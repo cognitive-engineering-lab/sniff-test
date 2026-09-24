@@ -119,7 +119,7 @@ ambiguous-requirement = "deny"
 # `allow` suppresses the finding from diagnostics and JSON reports.
 # Group default for compiler-generated MIR assertions. Each exact override is
 # optional and takes precedence for its assertion subtype.
-compiler-assert = "deny"
+operation = "deny"
 # compiler-assert-bounds-check = "deny"
 # compiler-assert-overflow = "deny"
 # compiler-assert-overflow-negation = "deny"
@@ -132,7 +132,7 @@ compiler-assert = "deny"
 # compiler-assert-null-pointer-dereference = "deny"
 # compiler-assert-invalid-enum-construction = "deny"
 # Also controls unmet documented `# Panics` obligations.
-panic-invocation = "deny"
+invocation = "deny"
 
 [panics.coverage]
 # Calls with a remaining unresolved target. Known targets are still traced.
@@ -166,10 +166,10 @@ ambiguous-requirement = "deny"
 # `warn` emits a warning without failing the run.
 # `allow` suppresses the finding from diagnostics and JSON reports.
 # Also controls unmet documented `# Safety` obligations.
-unsafe-call-missing-justification = "warn"
+invocation = "warn"
 # Group default for non-call unsafe operations. Each exact override is optional
 # and takes precedence for its operation subtype.
-unsafe-op-missing-justification = "warn"
+operation = "warn"
 # raw-pointer-dereference-missing-justification = "warn"
 # mutable-static-access-missing-justification = "warn"
 # extern-static-access-missing-justification = "warn"

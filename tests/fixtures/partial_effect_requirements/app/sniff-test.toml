@@ -2,4 +2,4 @@
 effect-doc-matching = "exact"
 
 [safety.lints]
-unsafe-call-missing-justification = "deny"
+invocation = "deny"

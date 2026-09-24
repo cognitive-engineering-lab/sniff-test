@@ -5,4 +5,4 @@ report-roots = [
 
 [safety.lints]
 ambiguous-marker = "deny"
-unsafe-call-missing-justification = "deny"
+invocation = "deny"

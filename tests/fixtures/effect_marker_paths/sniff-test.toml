@@ -21,7 +21,7 @@ panic-sink-namespaces = [
 ]
 
 [panics.lints]
-panic-invocation = "deny"
+invocation = "deny"
 
 [safety.lints]
-unsafe-op-missing-justification = "deny"
+operation = "deny"

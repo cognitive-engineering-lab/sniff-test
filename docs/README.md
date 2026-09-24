@@ -80,7 +80,7 @@ trusted-boundary-namespaces = ["core", "alloc", "std"]
 ambiguous-marker = "deny" # deny | warn | allow
 ambiguous-requirement = "deny"
 # Group default for compiler-generated MIR assertions.
-compiler-assert = "deny"
+operation = "deny"
 # Optional exact overrides:
 # compiler-assert-bounds-check = "deny"
 # compiler-assert-overflow = "deny"
@@ -93,7 +93,7 @@ compiler-assert = "deny"
 # compiler-assert-misaligned-pointer-dereference = "deny"
 # compiler-assert-null-pointer-dereference = "deny"
 # compiler-assert-invalid-enum-construction = "deny"
-panic-invocation = "deny"
+invocation = "deny"
 
 [panics.coverage]
 unresolved-call-target = "warn"
@@ -107,9 +107,9 @@ trusted-boundary-namespaces = ["core", "alloc", "std"]
 ambiguous-marker = "deny"
 ambiguous-requirement = "deny"
 missing-safety-docs = "warn"
-unsafe-call-missing-justification = "warn"
+invocation = "warn"
 # Group default for non-call unsafe operations.
-unsafe-op-missing-justification = "warn"
+operation = "warn"
 # Optional exact overrides:
 # raw-pointer-dereference-missing-justification = "warn"
 # mutable-static-access-missing-justification = "warn"
@@ -193,9 +193,9 @@ findings distinguish paths truncated by `max-trace-depth`, effect traces that
 exhaust `trace-state-budget`, and reachable managed bodies that are absent from
 the linked artifact graph.
 
-Exact `compiler-assert-*` keys override `compiler-assert` for their assertion
-subtypes. Exact non-call unsafe-operation keys override
-`unsafe-op-missing-justification` for their operation subtypes. Compiler-assert
+Exact `compiler-assert-*` keys override `[panics.lints].operation` for their
+assertion subtypes. Exact non-call unsafe-operation keys override
+`[safety.lints].operation` for their operation subtypes. Compiler-assert
 findings use `kind = "compiler-assert"` with `compiler-assert-kind`; unsafe
 operations use `kind = "unsafe-op-missing-justification"` with
 `safety-op-kind`.
@@ -210,8 +210,8 @@ then falls back through macro callsites to the outer source callsite.
 effect contract, regardless of its requirement-list layout. Set it to `"exact"`
 to require each documented sub-obligation to be justified by name, or by the
 same nested list structure when it has no explicit name.
-An unmet documented obligation uses the effect's invocation lint level:
-`panic-invocation` or `unsafe-call-missing-justification`.
+An unmet documented obligation uses the effect's `[panics.lints].invocation`
+or `[safety.lints].invocation` level.
 This also applies when `exact` matching finds a justification that leaves some
 documented requirements unsatisfied.
 

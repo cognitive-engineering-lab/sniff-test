@@ -19,4 +19,4 @@ trusted-boundary-namespaces = [
 ]
 
 [panics.lints]
-panic-invocation = "warn"
+invocation = "warn"
