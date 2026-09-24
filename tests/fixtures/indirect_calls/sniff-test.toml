@@ -1,10 +1,14 @@
 # Calls through generic bounds and function pointers must surface as either
 # documented obligations or unverifiable boundaries, never as silence.
 
-[panics]
-[panics.lints]
+[panic]
+[panic.lints]
 invocation = "warn"
-unresolved-call-target = "warn"
 
 [safety.lints]
+
+[panic.coverage]
+unresolved-call-target = "warn"
+
+[safety.coverage]
 unresolved-call-target = "warn"

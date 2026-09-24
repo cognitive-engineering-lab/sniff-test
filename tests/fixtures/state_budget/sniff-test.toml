@@ -1,4 +1,4 @@
 [analysis]
 trace-state-budget = 2
 
-[panics]
+[panic]

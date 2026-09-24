@@ -61,7 +61,7 @@ undocumented-effect-invocation = "warn"
 # """
 override-files = []
 
-[panics]
+[panic]
 # Crates, fully-qualified functions, or macro expansion paths whose internals
 # should be treated as opaque analysis boundaries. Patterns use Rust crate/path
 # names: write `proc_macro2`, not the package name `proc-macro2`.
@@ -98,7 +98,7 @@ ignored-namespaces = [
 # internals.
 trusted-boundary-namespaces = ["core", "alloc", "std"]
 
-[panics.lints]
+[panic.lints]
 ambiguous-marker = "deny"
 ambiguous-requirement = "deny"
 # `deny` emits an error and makes `cargo sniff-test` fail.
@@ -110,7 +110,7 @@ operation = "warn"
 # Also controls unmet documented `# Panics` obligations.
 invocation = "warn"
 
-[panics.lints.operations]
+[panic.lints.operations]
 # bounds-check = "deny"
 # overflow = "deny"
 # overflow-negation = "deny"
@@ -123,7 +123,7 @@ invocation = "warn"
 # null-pointer-dereference = "deny"
 # invalid-enum-construction = "deny"
 
-[panics.coverage]
+[panic.coverage]
 # Calls with a remaining unresolved target. Known targets are still traced.
 # Defaults to `warn`; set `allow` to accept the gap silently.
 unresolved-call-target = "warn"

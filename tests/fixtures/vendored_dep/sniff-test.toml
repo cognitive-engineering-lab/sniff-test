@@ -1,6 +1,6 @@
 # Vendored code under the config directory is not a workspace member and must
 # not be held to workspace deny gating.
 
-[panics]
-[panics.lints]
+[panic]
+[panic.lints]
 invocation = "warn"

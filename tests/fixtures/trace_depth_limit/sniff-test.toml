@@ -4,4 +4,4 @@
 [analysis]
 max-trace-depth = 4
 
-[panics]
+[panic]

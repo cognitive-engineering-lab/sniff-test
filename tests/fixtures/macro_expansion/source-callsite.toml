@@ -2,7 +2,7 @@
 show-full-stack-trace = true
 marker-probing = "source-callsite"
 
-[panics]
-[panics.lints]
+[panic]
+[panic.lints]
 operation = "deny"
 invocation = "deny"

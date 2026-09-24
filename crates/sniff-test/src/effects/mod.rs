@@ -5,7 +5,7 @@ pub(crate) mod safety;
 pub(crate) mod trust;
 pub(crate) mod visit;
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::marker::PhantomData;
 
@@ -14,21 +14,19 @@ use crate::artifact::{AnnotationFactKind, AnnotationRole};
 use crate::artifact::{CallFact, EffectKey, FunctionTargetFact};
 use serde::{Deserialize, Serialize};
 
-use crate::config::{EffectFindingLints, EffectiveCoverageConfig, LintLevel, SniffTestConfig};
-use crate::path_patterns::PathPatterns;
+use crate::config::{EffectConfig, SniffTestConfig};
 
 use self::visit::EffectPassRegistry;
 
 /// Built-in effect definition. Compiler passes only discover concrete seeds;
 /// obligation and justification semantics are supplied by shared tracking.
 pub(crate) trait EffectSpec: 'static {
-    type Config: EffectConfig;
-
     const EFFECT_NAME: &'static str;
     const OBLIGATION: &'static str;
     const JUSTIFICATION: &'static str;
     const USES_ENCLOSING_SCOPE_MARKER: bool = false;
 
+    fn default_config() -> EffectConfig;
     fn register_passes(registry: &mut EffectPassRegistry);
 }
 
@@ -38,7 +36,7 @@ pub(crate) trait EffectSpec: 'static {
 /// does not require another type-directed branch in extraction or reporting.
 pub(crate) trait Effect: Send + Sync {
     fn metadata(&self) -> &EffectMetadata;
-    fn config(&self) -> &dyn EffectConfig;
+    fn config(&self) -> &EffectConfig;
 
     fn register_passes(&self, registry: &mut EffectPassRegistry);
 
@@ -49,12 +47,12 @@ pub(crate) trait Effect: Send + Sync {
 
 struct EffectAdapter<'config, E: EffectSpec> {
     metadata: EffectMetadata,
-    config: &'config E::Config,
+    config: &'config EffectConfig,
     marker: PhantomData<fn() -> E>,
 }
 
 impl<'config, E: EffectSpec> EffectAdapter<'config, E> {
-    fn new(config: &'config E::Config) -> Self {
+    fn new(config: &'config EffectConfig) -> Self {
         Self {
             metadata: EffectMetadata::of::<E>(),
             config,
@@ -68,7 +66,7 @@ impl<E: EffectSpec> Effect for EffectAdapter<'_, E> {
         &self.metadata
     }
 
-    fn config(&self) -> &dyn EffectConfig {
+    fn config(&self) -> &EffectConfig {
         self.config
     }
 
@@ -78,7 +76,7 @@ impl<E: EffectSpec> Effect for EffectAdapter<'_, E> {
 }
 
 #[must_use]
-pub(crate) fn effect<E: EffectSpec>(config: &E::Config) -> Box<dyn Effect + '_> {
+pub(crate) fn effect<E: EffectSpec>(config: &EffectConfig) -> Box<dyn Effect + '_> {
     Box::new(EffectAdapter::<E>::new(config))
 }
 
@@ -112,17 +110,29 @@ impl EffectMetadata {
 }
 
 #[must_use]
-pub(crate) fn registered_effects(config: &SniffTestConfig) -> Vec<Box<dyn Effect + '_>> {
-    let effects = vec![
-        effect::<panic::Panic>(&config.panics),
-        effect::<safety::Safety>(&config.safety),
+pub(crate) fn registered_effect_configs() -> BTreeMap<String, EffectConfig> {
+    let defaults = [
+        (panic::Panic::EFFECT_NAME, panic::Panic::default_config()),
+        (
+            safety::Safety::EFFECT_NAME,
+            safety::Safety::default_config(),
+        ),
     ];
-    let unique = effects
-        .iter()
-        .map(|effect| effect.key())
-        .collect::<BTreeSet<_>>();
-    assert_eq!(unique.len(), effects.len(), "effect names must be unique");
-    effects
+    let count = defaults.len();
+    let configs = defaults
+        .into_iter()
+        .map(|(name, config)| (name.to_owned(), config))
+        .collect::<BTreeMap<_, _>>();
+    assert_eq!(configs.len(), count, "effect names must be unique");
+    configs
+}
+
+#[must_use]
+pub(crate) fn registered_effects(config: &SniffTestConfig) -> Vec<Box<dyn Effect + '_>> {
+    vec![
+        effect::<panic::Panic>(config.effect(panic::Panic::EFFECT_NAME)),
+        effect::<safety::Safety>(config.effect(safety::Safety::EFFECT_NAME)),
+    ]
 }
 
 #[must_use]
@@ -149,15 +159,6 @@ pub(crate) fn selected_effect_objects<'config>(
 #[cfg(test)]
 pub(crate) fn annotation_kind<E: EffectSpec>(role: AnnotationRole) -> AnnotationFactKind {
     AnnotationFactKind::new(EffectKey::new(E::EFFECT_NAME), role)
-}
-
-/// Common, read-only policy exposed to probing and reporting.
-pub(crate) trait EffectConfig: Sync {
-    fn ignored_namespaces(&self) -> &PathPatterns;
-    fn trusted_boundary_namespaces(&self) -> &PathPatterns;
-    fn finding_lints(&self) -> EffectFindingLints;
-    fn operation_lint(&self, operation: Option<&str>) -> LintLevel;
-    fn effective_coverage(&self) -> EffectiveCoverageConfig;
 }
 
 /// Effects enabled for one sniff-test invocation.

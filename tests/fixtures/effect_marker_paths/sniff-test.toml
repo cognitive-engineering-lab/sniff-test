@@ -12,8 +12,8 @@ report-roots = [
     "effect_marker_paths::marker_on_an_ordinary_enclosing_block_does_not_cover_its_tail",
 ]
 
-[panics]
-[panics.lints]
+[panic]
+[panic.lints]
 invocation = "deny"
 
 [safety.lints]

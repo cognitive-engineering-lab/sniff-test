@@ -1,11 +1,11 @@
 # Trait-impl methods such as `<Vec<T> as Index<usize>>::index` must match the
 # configured trusted globs the same way inherent methods like `Vec::push` do.
 
-[panics]
+[panic]
 trusted-boundary-namespaces = ["std::**", "core::**", "alloc::**"]
 [safety]
 # This fixture isolates panic-boundary glob matching, not allocator internals.
 trusted-boundary-namespaces = ["std::**", "core::**", "alloc::**"]
 
-[panics.lints]
+[panic.lints]
 invocation = "warn"

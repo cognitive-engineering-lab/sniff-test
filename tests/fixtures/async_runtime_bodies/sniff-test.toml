@@ -7,8 +7,8 @@ report-roots = [
     "async_runtime_bodies::invoked_async_closure",
 ]
 
-[panics]
-[panics.lints]
+[panic]
+[panic.lints]
 operation = "allow"
 invocation = "deny"
 

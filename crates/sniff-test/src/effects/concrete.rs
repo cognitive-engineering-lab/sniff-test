@@ -17,7 +17,8 @@ use crate::path_patterns::PathPatterns;
 
 use super::obligation::ConcreteState;
 use super::trust::TrustPath;
-use super::{Effect, EffectConfig, InvocationSourceBranch, ProbeError};
+use super::{Effect, InvocationSourceBranch, ProbeError};
+use crate::config::EffectConfig;
 
 /// Stable location of one compiler-discovered effect source.
 ///
@@ -63,7 +64,7 @@ struct ConcreteProbePolicy<'config> {
 }
 
 impl<'config> ConcreteProbePolicy<'config> {
-    fn from_config(config: &'config (impl EffectConfig + ?Sized)) -> Self {
+    fn from_config(config: &'config EffectConfig) -> Self {
         Self {
             ignored: config.ignored_namespaces(),
             trusted: config.trusted_boundary_namespaces(),
@@ -100,7 +101,7 @@ struct ConcreteSeedCollector<'a, 'policy> {
 }
 
 impl<'a, 'policy> ConcreteSeedCollector<'a, 'policy> {
-    fn new(graph: &'a InvocationGraph, config: &'policy (impl EffectConfig + ?Sized)) -> Self {
+    fn new(graph: &'a InvocationGraph, config: &'policy EffectConfig) -> Self {
         let policy = ConcreteProbePolicy::from_config(config);
         let ignored_invocations = graph
             .invocations()
@@ -270,7 +271,7 @@ pub(crate) fn probe_concrete_effect_for<'annotations, E: super::EffectSpec>(
     graph: &'annotations InvocationGraph,
     annotations: &'annotations AnnotationIndex,
     namespaces: &DefinitionNamespaceIndex,
-    config: &E::Config,
+    config: &EffectConfig,
 ) -> Result<ConcreteEffect<'annotations>, ProbeError> {
     let effect = super::effect::<E>(config);
     probe_concrete_effect(artifact, graph, annotations, namespaces, effect.as_ref())
@@ -313,7 +314,7 @@ fn same_materialized_effect(left: &EffectFact, right: &EffectFact) -> bool {
 
 #[cfg(test)]
 mod probe_policy_tests {
-    use crate::config::SafetyConfig;
+    use crate::config::EffectConfig;
     use crate::path_patterns::PathPatterns;
 
     use super::{BodyPolicy, ConcreteProbePolicy};
@@ -325,10 +326,12 @@ mod probe_policy_tests {
 
     #[test]
     fn common_body_policy_is_derived_from_effect_config() {
-        let safety = SafetyConfig {
+        let safety = EffectConfig {
             ignored_namespaces: patterns(&["ignored::**"]),
             trusted_boundary_namespaces: patterns(&["trusted::**"]),
-            ..SafetyConfig::default()
+            ..crate::config::SniffTestConfig::default()
+                .effect("safety")
+                .clone()
         };
         let policy = ConcreteProbePolicy::from_config(&safety);
 

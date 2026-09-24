@@ -1,4 +1,4 @@
-[panics]
-[panics.lints]
+[panic]
+[panic.lints]
 operation = "deny"
 invocation = "deny"

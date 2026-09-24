@@ -1,2 +1,4 @@
-[panics.lints]
+[panic.lints]
+
+[panic.coverage]
 unresolved-call-target = "allow"

@@ -4,10 +4,10 @@ report-roots = ["dependency_closure_app::root", "dependency_closure_app::justifi
 [compiler]
 inline-mir = "off"
 
-[panics]
+[panic]
 trusted-boundary-namespaces = ["core", "std"]
 [safety]
 trusted-boundary-namespaces = ["core", "std"]
-[panics.lints]
+[panic.lints]
 operation = "deny"
 invocation = "deny"

@@ -1,7 +1,7 @@
 # A marker between method-chain links justifies that link without covering a
 # separate unmarked chain.
 
-[panics]
-[panics.lints]
+[panic]
+[panic.lints]
 ambiguous-marker = "warn"
 invocation = "warn"

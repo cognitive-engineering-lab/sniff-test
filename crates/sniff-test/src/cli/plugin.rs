@@ -76,6 +76,7 @@ pub(crate) fn modify_cargo(cargo: &mut Command, args: &SniffTestArgs) -> Result<
     }
 
     let config = load_config(args).context("failed to load configuration")?;
+    config.emit_warnings(&args.manifest_path());
     let rustflags = analysis_rustflags(args, &config);
 
     // Cargo's rustflags sources are mutually exclusive, checked in order:
@@ -204,6 +205,9 @@ fn run_driver(compiler_args: &[String], args: SniffTestArgs) -> Result<ExitCode>
         compiler_args.push(String::from("-Zno-steal-thir"));
     }
     let config = load_config(&args).context("failed to load configuration")?;
+    if !args.under_cargo {
+        config.emit_warnings(&args.manifest_path());
+    }
     let output_scope =
         CrateOutputScope::current(&args).context("failed to determine crate output scope")?;
     let mut callbacks = SniffTestCallbacks {

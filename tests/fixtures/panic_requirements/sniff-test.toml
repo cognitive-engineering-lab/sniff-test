@@ -10,6 +10,6 @@ report-roots = [
     "panic_requirements::reaches_documented_contract",
 ]
 
-[panics]
-[panics.lints]
+[panic]
+[panic.lints]
 invocation = "warn"

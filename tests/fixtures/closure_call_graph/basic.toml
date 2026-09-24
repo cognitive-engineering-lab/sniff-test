@@ -6,7 +6,7 @@ report-roots = [
     "closure_call_graph::basic_closure_panics",
 ]
 
-[panics]
-[panics.lints]
+[panic]
+[panic.lints]
 operation = "deny"
 invocation = "deny"

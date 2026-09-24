@@ -7,12 +7,12 @@ report-roots = [
     "closure_call_graph::dyn_box_closure_boundary",
 ]
 
-[panics]
+[panic]
 # This fixture is about closure reachability, not allocator internals from Box::new.
 ignored-namespaces = ["alloc::**"]
 [safety]
 # Keep the safety traversal scoped to the closure behavior under test too.
 ignored-namespaces = ["alloc::**"]
-[panics.lints]
+[panic.lints]
 operation = "deny"
 invocation = "deny"

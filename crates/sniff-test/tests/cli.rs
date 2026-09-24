@@ -120,7 +120,7 @@ cli_cases! {
             Case::new()
                 .config_replace("operation = \"deny\"", "operation = \"allow\"")
                 .config_append(
-                    "\n[panics.lints.operations]\n\
+                    "\n[panic.lints.operations]\n\
                      division-by-zero = \"deny\"\n",
                 )
                 .denied();
@@ -128,7 +128,7 @@ cli_cases! {
             Case::new()
                 .config_replace("operation = \"deny\"", "operation = \"allow\"")
                 .config_append(
-                    "\n[panics.lints.operations]\n\
+                    "\n[panic.lints.operations]\n\
                      remainder-by-zero = \"warn\"\n\
                      bounds-check = \"deny\"\n",
                 )
@@ -751,7 +751,7 @@ pub fn exported(values: &[u8], index: usize) -> u8 {
         "[analysis]\n\
          report-roots = [\"definition_path_consumer::exported\"]\n\
          \n\
-         [panics.lints]\n\
+         [panic.lints]\n\
          operation = \"allow\"\n\
          invocation = \"deny\"\n",
     )
@@ -1378,7 +1378,7 @@ fn cached_dependency_source_is_verified_before_rendering_a_snippet() {
         "[analysis]\n\
          report-roots = [\"cached_source_workspace::workspace_root\"]\n\
          \n\
-         [panics.lints]\n\
+         [panic.lints]\n\
          operation = \"warn\"\n\
          invocation = \"allow\"\n",
     )
@@ -1915,7 +1915,7 @@ impl PolicyReinterpretationFixture {
             "[analysis]\n\
              report-roots = [\"policy_workspace::workspace_root\"]\n\
              \n\
-             [panics.lints]\n\
+             [panic.lints]\n\
              operation = \"allow\"\n",
         )
         .expect("write allow manifest");
@@ -1925,7 +1925,7 @@ impl PolicyReinterpretationFixture {
             "[analysis]\n\
              report-roots = [\"policy_workspace::workspace_root\"]\n\
              \n\
-             [panics.lints]\n\
+             [panic.lints]\n\
              operation = \"deny\"\n",
         )
         .expect("write deny manifest");

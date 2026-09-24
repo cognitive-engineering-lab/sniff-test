@@ -5,6 +5,6 @@ report-roots = [
     "panic_axioms::indexed",
 ]
 
-[panics]
-[panics.lints]
+[panic]
+[panic.lints]
 operation = "deny"

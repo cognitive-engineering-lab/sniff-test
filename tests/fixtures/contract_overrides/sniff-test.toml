@@ -11,6 +11,6 @@ undocumented-effect-invocation = "deny"
 [contracts]
 override-files = ["override.toml"]
 
-[panics]
-[panics.lints]
+[panic]
+[panic.lints]
 invocation = "warn"

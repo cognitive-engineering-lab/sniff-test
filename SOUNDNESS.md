@@ -32,7 +32,7 @@ checks—remains panic evidence, as do configured panic sinks.
 
 ### Ignored panic macro paths are branch-local
 
-`[panics].ignored-namespaces` also matches macro definition paths recorded in
+`[panic].ignored-namespaces` also matches macro definition paths recorded in
 panic-source and invocation provenance. A matching expansion terminates only
 that panic branch, including documented panic obligations introduced by a
 helper call inside the expansion. It does not hide unrelated panics in the
@@ -51,7 +51,7 @@ the containing function and has no effect on panic analysis.
 
 ### Trusted boundary documentation is assumed complete
 
-`[panics].trusted-boundary-namespaces` and
+`[panic].trusted-boundary-namespaces` and
 `[safety].trusted-boundary-namespaces` make matching implementations opaque in
 their respective domains. PanicEffect or SafetyEffect sources owned by the
 implementation do not escape, and same-domain CommentEffect contracts reached
@@ -120,7 +120,7 @@ default; the unvisited region remains unknown.
 Failure to produce, validate, or persist required artifact facts is a tool error.
 During interpretation, an absent reached body emits an incomplete finding only
 when its stable crate ID is owned by the local facts or a loaded artifact.
-`[panics.coverage].analysis-incomplete` controls panic missing-body, trace-depth,
+`[panic.coverage].analysis-incomplete` controls panic missing-body, trace-depth,
 and state-budget findings; `[safety.coverage].analysis-incomplete` controls the
 corresponding safety findings.
 Unmanaged compiler-crate bodies have the behavior described above.
@@ -150,7 +150,7 @@ or unrelated statements. Explicit unsafe-scope markers are associated through
 SafetyEffect's compiler-derived effect groups rather than generic AST ascent.
 Requirement names are normalized; duplicates produce
 `ambiguous-panic-requirement` or `ambiguous-safety-requirement`, both denied by
-default through `[panics.lints].ambiguous-requirement` and
+default through `[panic.lints].ambiguous-requirement` and
 `[safety.lints].ambiguous-requirement`, respectively.
 
 ## Toolchain-pinned assumptions

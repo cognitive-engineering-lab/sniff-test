@@ -56,7 +56,7 @@ undocumented-effect-invocation = "warn"
 # """
 override-files = []
 
-[panics]
+[panic]
 # Crates, fully-qualified functions, or macro expansion paths whose internals
 # should be treated as opaque analysis boundaries. Patterns use Rust crate/path
 # names: write `proc_macro2`, not the package name `proc-macro2`.
@@ -92,7 +92,7 @@ ignored-namespaces = [
 # asserts that the matched crate documents every caller-visible panic condition.
 trusted-boundary-namespaces = []
 
-[panics.lints]
+[panic.lints]
 ambiguous-marker = "deny"
 ambiguous-requirement = "deny"
 # `deny` emits an error and makes `cargo sniff-test` fail.
@@ -103,9 +103,8 @@ ambiguous-requirement = "deny"
 operation = "deny"
 invocation = "warn"
 # Calls with a remaining unresolved target. Known targets are still traced.
-unresolved-call-target = "allow"
 
-[panics.lints.operations]
+[panic.lints.operations]
 # bounds-check = "deny"
 # overflow = "deny"
 # overflow-negation = "deny"
@@ -118,7 +117,8 @@ unresolved-call-target = "allow"
 # null-pointer-dereference = "deny"
 # invalid-enum-construction = "deny"
 
-[panics.coverage]
+[panic.coverage]
+unresolved-call-target = "allow"
 analysis-incomplete = "deny"
 
 [safety]
@@ -139,7 +139,6 @@ ambiguous-requirement = "deny"
 # `deny` emits an error and makes `cargo sniff-test` fail.
 # `warn` emits a warning without failing the run.
 # `allow` suppresses the finding from diagnostics and JSON reports.
-unresolved-call-target = "allow"
 invocation = "warn"
 # Group default for non-call unsafe operations. Each exact override is optional
 # and takes precedence for its operation subtype.
@@ -159,4 +158,5 @@ operation = "warn"
 # unsafe-binder-cast = "warn"
 
 [safety.coverage]
+unresolved-call-target = "allow"
 analysis-incomplete = "deny"

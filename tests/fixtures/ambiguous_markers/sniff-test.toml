@@ -8,7 +8,7 @@ report-roots = [
     "ambiguous_markers::unmarked_path_to_shared_sources",
 ]
 
-[panics]
-[panics.lints]
+[panic]
+[panic.lints]
 operation = "deny"
 invocation = "deny"

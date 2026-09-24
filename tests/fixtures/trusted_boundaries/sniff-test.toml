@@ -1,4 +1,4 @@
-[panics]
+[panic]
 trusted-boundary-namespaces = [
     "trusted_boundaries::trusted_comment_wrapper",
     "trusted_boundaries::trusted_helper",
@@ -11,5 +11,5 @@ trusted-boundary-namespaces = [
     "trusted_boundaries::unsafe_helper",
 ]
 
-[panics.lints]
+[panic.lints]
 invocation = "warn"

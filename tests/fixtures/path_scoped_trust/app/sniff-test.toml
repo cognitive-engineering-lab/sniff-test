@@ -1,7 +1,7 @@
-[panics]
+[panic]
 trusted-boundary-namespaces = ["core", "alloc", "std", "trusted_a"]
 [safety]
 trusted-boundary-namespaces = ["core", "alloc", "std", "trusted_a"]
-[panics.lints]
+[panic.lints]
 operation = "deny"
 invocation = "deny"

@@ -871,7 +871,6 @@ mod tests {
         MacroExpansionFact, OpaqueTargetFact, SourceFileFact, SourceFileId, SourceRangeFact,
         StableInstanceHash,
     };
-    use crate::config::PanicConfig;
     use crate::effects::concrete::probe_concrete_effect_for;
     use crate::effects::panic::{Panic, PanicTermination};
     use crate::namespace::StableDefPathHash;
@@ -1313,7 +1312,7 @@ mod tests {
             &graph,
             &annotations,
             &namespaces,
-            &PanicConfig::default(),
+            &crate::config::SniffTestConfig::default().effect("panic"),
         )
         .expect("panic effect");
         let trace = EffectEngine::new(&graph).trace(&panic);

@@ -334,8 +334,8 @@ fn exact_body_effects_are_seeded_only_in_their_own_instance() {
     ]);
     let config = SniffTestConfig::default();
 
-    let panic = probe_panic(&artifact, &graph, &annotations, &config.panics);
-    let safety = probe_safety(&artifact, &graph, &annotations, &config.safety);
+    let panic = probe_panic(&artifact, &graph, &annotations, &config.effect("panic"));
+    let safety = probe_safety(&artifact, &graph, &annotations, &config.effect("safety"));
 
     assert_eq!(panic.source_count(), 1);
     assert_eq!(safety.source_count(), 1);
@@ -365,8 +365,8 @@ fn generic_operations_project_to_exact_consumer_bodies_in_every_domain() {
     let (artifact, graph, annotations) = setup(vec![generic_body, consumer_body]);
 
     let config = SniffTestConfig::default();
-    let panic = probe_panic(&artifact, &graph, &annotations, &config.panics);
-    let safety = probe_safety(&artifact, &graph, &annotations, &config.safety);
+    let panic = probe_panic(&artifact, &graph, &annotations, &config.effect("panic"));
+    let safety = probe_safety(&artifact, &graph, &annotations, &config.effect("safety"));
 
     assert_eq!(panic.source_count(), 2);
     assert_eq!(safety.source_count(), 2);
@@ -498,7 +498,7 @@ fn marker_on_a_non_invocation_raw_edge_does_not_break_annotation_indexing() {
 fn trusted_comment_config() -> SniffTestConfig {
     SniffTestConfig::from_manifest_str(
         r#"
-            [panics]
+            [panic]
             trusted-boundary-namespaces = ["trusted::**"]
 
             [safety]
@@ -517,8 +517,8 @@ fn probe_comments<'a>(
     annotations: &'a AnnotationIndex,
     config: &SniffTestConfig,
 ) -> ObligationTracker<'a> {
-    let panic = probe_panic(artifact, graph, annotations, &config.panics);
-    let safety = probe_safety(artifact, graph, annotations, &config.safety);
+    let panic = probe_panic(artifact, graph, annotations, &config.effect("panic"));
+    let safety = probe_safety(artifact, graph, annotations, &config.effect("safety"));
     ObligationTracker::probe(
         graph,
         annotations,
@@ -542,7 +542,7 @@ fn probe_panic<'a>(
     artifact: &ArtifactFacts,
     graph: &'a InvocationGraph,
     annotations: &'a AnnotationIndex,
-    config: &crate::config::PanicConfig,
+    config: &crate::config::EffectConfig,
 ) -> PanicEffect<'a> {
     let namespaces = artifact.definition_namespace_index();
     probe_concrete_effect_for::<Panic>(artifact, graph, annotations, &namespaces, config)
@@ -553,7 +553,7 @@ fn probe_safety<'a>(
     artifact: &ArtifactFacts,
     graph: &'a InvocationGraph,
     annotations: &'a AnnotationIndex,
-    config: &crate::config::SafetyConfig,
+    config: &crate::config::EffectConfig,
 ) -> SafetyEffect<'a> {
     let namespaces = artifact.definition_namespace_index();
     probe_concrete_effect_for::<Safety>(artifact, graph, annotations, &namespaces, config)
@@ -1294,7 +1294,7 @@ fn comment_boundaries_keep_panic_and_safety_configuration_separate() {
     );
     let config = SniffTestConfig::from_manifest_str(
         r#"
-            [panics]
+            [panic]
             trusted-boundary-namespaces = ["panic_boundary::**"]
 
             [safety]
@@ -1364,7 +1364,7 @@ fn comment_boundaries_use_stable_candidates_and_cover_function_aliases() {
     ]);
     set_dependencies(&mut graph, &[(generic_wrapper, leaf)]);
     let config = SniffTestConfig::from_manifest_str(
-        "[panics]\ntrusted-boundary-namespaces = [\"trusted::**\"]\n",
+        "[panic]\ntrusted-boundary-namespaces = [\"trusted::**\"]\n",
     )
     .expect("stable candidate boundary");
 
@@ -1436,7 +1436,7 @@ fn target_only_alias_makes_definition_opaque_for_all_effect_domains() {
     set_dependencies(&mut graph, &[(boundary, documented_leaf)]);
     let config = SniffTestConfig::from_manifest_str(
         r#"
-            [panics]
+            [panic]
             trusted-boundary-namespaces = ["trusted::**"]
 
             [safety]
@@ -1445,8 +1445,8 @@ fn target_only_alias_makes_definition_opaque_for_all_effect_domains() {
     )
     .expect("trusted boundary configuration");
 
-    let panic = probe_panic(&artifact, &graph, &annotations, &config.panics);
-    let safety = probe_safety(&artifact, &graph, &annotations, &config.safety);
+    let panic = probe_panic(&artifact, &graph, &annotations, &config.effect("panic"));
+    let safety = probe_safety(&artifact, &graph, &annotations, &config.effect("safety"));
     let comments = probe_comments(&artifact, &graph, &annotations, &config);
     let panic_trace = EffectEngine::new(&graph).trace(&panic);
     let safety_trace = EffectEngine::new(&graph).trace(&safety);
@@ -1500,7 +1500,7 @@ fn target_only_alias_ignores_raw_effect_owners_in_both_domains() {
     ]);
     let config = SniffTestConfig::from_manifest_str(
         r#"
-            [panics]
+            [panic]
             ignored-namespaces = ["ignored::**"]
 
             [safety]
@@ -1509,8 +1509,8 @@ fn target_only_alias_ignores_raw_effect_owners_in_both_domains() {
     )
     .expect("ignored namespace configuration");
 
-    let panic = probe_panic(&artifact, &graph, &annotations, &config.panics);
-    let safety = probe_safety(&artifact, &graph, &annotations, &config.safety);
+    let panic = probe_panic(&artifact, &graph, &annotations, &config.effect("panic"));
+    let safety = probe_safety(&artifact, &graph, &annotations, &config.effect("safety"));
 
     assert_eq!(panic.source_count(), 0);
     assert_eq!(safety.source_count(), 0);
@@ -1675,7 +1675,7 @@ fn panic_probe_collects_asserts_and_sink_invocations_with_source_markers() {
     )]);
     let config = SniffTestConfig::default();
 
-    let panic = probe_panic(&artifact, &graph, &annotations, &config.panics);
+    let panic = probe_panic(&artifact, &graph, &annotations, &config.effect("panic"));
     let trace = EffectEngine::new(&graph).trace(&panic);
 
     assert_eq!(panic.source_count(), 2);
@@ -1711,7 +1711,7 @@ fn marker_on_a_grouped_sibling_does_not_justify_a_panic_sink() {
     )]);
     let config = SniffTestConfig::default();
 
-    let panic = probe_panic(&artifact, &graph, &annotations, &config.panics);
+    let panic = probe_panic(&artifact, &graph, &annotations, &config.effect("panic"));
     let trace = EffectEngine::new(&graph).trace(&panic);
 
     assert_eq!(panic.source_count(), 1);
@@ -1746,7 +1746,7 @@ fn marker_on_a_grouped_sibling_does_not_justify_an_unsafe_call() {
         &artifact,
         &graph,
         &annotations,
-        &crate::config::SafetyConfig::default(),
+        &crate::config::EffectConfig::default(),
     );
     let trace = EffectEngine::new(&graph).trace(&safety);
 
@@ -1845,7 +1845,7 @@ fn marker_on_a_grouped_sibling_does_not_terminate_propagated_effects() {
                 &artifact,
                 &graph,
                 &annotations,
-                &crate::config::PanicConfig::default(),
+                &SniffTestConfig::default().effect("panic"),
             );
             let trace = EffectEngine::new(&graph).trace(&effect);
             assert_eq!(trace.handled().count(), 0, "panic sibling marker");
@@ -1855,7 +1855,7 @@ fn marker_on_a_grouped_sibling_does_not_terminate_propagated_effects() {
                 &artifact,
                 &graph,
                 &annotations,
-                &crate::config::SafetyConfig::default(),
+                &crate::config::EffectConfig::default(),
             );
             let trace = EffectEngine::new(&graph).trace(&effect);
             assert_eq!(trace.handled().count(), 0, "safety sibling marker");
@@ -1925,7 +1925,7 @@ fn distinct_markers_justify_each_grouped_panic_branch() {
         &artifact,
         &graph,
         &annotations,
-        &crate::config::PanicConfig::default(),
+        &SniffTestConfig::default().effect("panic"),
     );
     let trace = EffectEngine::new(&graph).trace(&panic);
 
@@ -1995,7 +1995,7 @@ fn distinct_markers_justify_each_grouped_safety_branch() {
         &artifact,
         &graph,
         &annotations,
-        &crate::config::SafetyConfig::default(),
+        &crate::config::EffectConfig::default(),
     );
     let trace = EffectEngine::new(&graph).trace(&safety);
 
@@ -2031,7 +2031,7 @@ fn grouped_effect_sources_are_terminated_per_raw_branch() {
         &panic_artifact,
         &panic_graph,
         &panic_annotations,
-        &panic_config.panics,
+        &panic_config.effect("panic"),
     );
     let panic_trace = EffectEngine::new(&panic_graph).trace(&panic);
 
@@ -2060,7 +2060,7 @@ fn grouped_effect_sources_are_terminated_per_raw_branch() {
         &safety_artifact,
         &safety_graph,
         &safety_annotations,
-        &crate::config::SafetyConfig::default(),
+        &crate::config::EffectConfig::default(),
     );
     let safety_trace = EffectEngine::new(&safety_graph).trace(&safety);
 
@@ -2093,7 +2093,7 @@ fn opaque_panic_declaration_is_not_inferred_as_a_builtin_invocation() {
     )]);
     let config = SniffTestConfig::default();
 
-    let panic = probe_panic(&artifact, &graph, &annotations, &config.panics);
+    let panic = probe_panic(&artifact, &graph, &annotations, &config.effect("panic"));
     assert_eq!(panic.source_count(), 0);
 }
 
@@ -2115,7 +2115,7 @@ fn ignored_macro_path_terminates_a_direct_panic_source() {
     )]);
     let config = SniffTestConfig::default();
 
-    let panic = probe_panic(&artifact, &graph, &annotations, &config.panics);
+    let panic = probe_panic(&artifact, &graph, &annotations, &config.effect("panic"));
     let trace = EffectEngine::new(&graph).trace(&panic);
     let invocation = graph
         .invocation_for_raw_call(root, CallId::new(0))
@@ -2152,7 +2152,7 @@ fn ignored_macro_path_terminates_a_compiler_assert_source() {
         &artifact,
         &graph,
         &annotations,
-        &crate::config::PanicConfig::default(),
+        &SniffTestConfig::default().effect("panic"),
     );
     let trace = EffectEngine::new(&graph).trace(&panic);
     let handled = trace.handled().next().expect("source should terminate");
@@ -2184,7 +2184,7 @@ fn ignored_macro_path_terminates_direct_safety_sources() {
     )
     .expect("ignored safety macro configuration");
 
-    let safety = probe_safety(&artifact, &graph, &annotations, &config.safety);
+    let safety = probe_safety(&artifact, &graph, &annotations, &config.effect("safety"));
     let trace = EffectEngine::new(&graph).trace(&safety);
 
     assert_eq!(safety.source_count(), 2);
@@ -2283,7 +2283,7 @@ fn ignored_safety_macro_path_termination_is_path_local() {
     )
     .expect("ignored safety macro configuration");
 
-    let safety = probe_safety(&artifact, &graph, &annotations, &config.safety);
+    let safety = probe_safety(&artifact, &graph, &annotations, &config.effect("safety"));
     let trace = EffectEngine::new(&graph).trace(&safety);
 
     assert_eq!(trace.handled().count(), 1);
@@ -2375,7 +2375,7 @@ fn disabling_unsafe_precondition_ignore_exports_internal_panic_contracts() {
             )],
         ),
     ]);
-    let config = SniffTestConfig::from_manifest_str("[panics]\nignored-namespaces = []\n")
+    let config = SniffTestConfig::from_manifest_str("[panic]\nignored-namespaces = []\n")
         .expect("empty ignored namespace list");
 
     let comments = probe_comments(&artifact, &graph, &annotations, &config);
@@ -2402,13 +2402,13 @@ fn explicit_empty_ignored_namespaces_restores_unsafe_precondition_panics() {
     )]);
     let config = SniffTestConfig::from_manifest_str(
         r#"
-            [panics]
+            [panic]
             ignored-namespaces = []
         "#,
     )
     .expect("empty ignored namespace list");
 
-    let panic = probe_panic(&artifact, &graph, &annotations, &config.panics);
+    let panic = probe_panic(&artifact, &graph, &annotations, &config.effect("panic"));
     let trace = EffectEngine::new(&graph).trace(&panic);
 
     assert_eq!(trace.handled().count(), 0);
@@ -2436,7 +2436,7 @@ fn ignored_macro_path_does_not_hide_an_unrelated_panic_in_the_same_function() {
     )]);
     let config = SniffTestConfig::default();
 
-    let panic = probe_panic(&artifact, &graph, &annotations, &config.panics);
+    let panic = probe_panic(&artifact, &graph, &annotations, &config.effect("panic"));
     let trace = EffectEngine::new(&graph).trace(&panic);
 
     assert_eq!(trace.handled().count(), 1);
@@ -2491,7 +2491,7 @@ fn ignored_macro_path_termination_is_path_local() {
     ]);
     let config = SniffTestConfig::default();
 
-    let panic = probe_panic(&artifact, &graph, &annotations, &config.panics);
+    let panic = probe_panic(&artifact, &graph, &annotations, &config.effect("panic"));
     let trace = EffectEngine::new(&graph).trace(&panic);
 
     assert_eq!(trace.handled().count(), 1);
@@ -2522,13 +2522,13 @@ fn panic_ignored_macro_path_does_not_suppress_safety_effects() {
         &artifact,
         &graph,
         &annotations,
-        &crate::config::PanicConfig::default(),
+        &SniffTestConfig::default().effect("panic"),
     );
     let safety = probe_safety(
         &artifact,
         &graph,
         &annotations,
-        &crate::config::SafetyConfig::default(),
+        &crate::config::EffectConfig::default(),
     );
     let panic_trace = EffectEngine::new(&graph).trace(&panic);
     let safety_trace = EffectEngine::new(&graph).trace(&safety);
@@ -2572,7 +2572,7 @@ fn safety_probe_collects_operations_and_unsafe_invocations_with_source_markers()
         &artifact,
         &graph,
         &annotations,
-        &crate::config::SafetyConfig::default(),
+        &crate::config::EffectConfig::default(),
     );
     let trace = EffectEngine::new(&graph).trace(&safety);
 
@@ -2609,7 +2609,7 @@ fn trusted_target_does_not_suppress_local_unsafe_invocation_source() {
     )
     .expect("trusted safety boundary configuration");
 
-    let safety = probe_safety(&artifact, &graph, &annotations, &config.safety);
+    let safety = probe_safety(&artifact, &graph, &annotations, &config.effect("safety"));
     let trace = EffectEngine::new(&graph).trace(&safety);
 
     assert_eq!(safety.source_count(), 1);
@@ -2672,7 +2672,7 @@ fn configured_std_boundary_keeps_direct_contracts_and_unsafe_calls_visible() {
     ]);
     let config = SniffTestConfig::from_manifest_str(
         r#"
-            [panics]
+            [panic]
             trusted-boundary-namespaces = ["core", "std"]
 
             [safety]
@@ -2681,8 +2681,8 @@ fn configured_std_boundary_keeps_direct_contracts_and_unsafe_calls_visible() {
     )
     .expect("standard-library trusted boundary configuration");
 
-    let panic = probe_panic(&artifact, &graph, &annotations, &config.panics);
-    let safety = probe_safety(&artifact, &graph, &annotations, &config.safety);
+    let panic = probe_panic(&artifact, &graph, &annotations, &config.effect("panic"));
+    let safety = probe_safety(&artifact, &graph, &annotations, &config.effect("safety"));
     let comments = probe_comments(&artifact, &graph, &annotations, &config);
     let panic_trace = EffectEngine::new(&graph).trace(&panic);
     let safety_trace = EffectEngine::new(&graph).trace(&safety);
@@ -2736,7 +2736,7 @@ fn trusted_function_owner_terminates_internal_safety_operation() {
     )
     .expect("trusted safety boundary configuration");
 
-    let safety = probe_safety(&artifact, &graph, &annotations, &config.safety);
+    let safety = probe_safety(&artifact, &graph, &annotations, &config.effect("safety"));
     let trace = EffectEngine::new(&graph).trace(&safety);
 
     assert_eq!(safety.source_count(), 1);
@@ -2782,8 +2782,8 @@ fn unresolved_safe_calls_are_not_effect_sources_and_unsafe_calls_are_not_duplica
     ]);
     let config = SniffTestConfig::default();
 
-    let panic = probe_panic(&artifact, &graph, &annotations, &config.panics);
-    let safety = probe_safety(&artifact, &graph, &annotations, &config.safety);
+    let panic = probe_panic(&artifact, &graph, &annotations, &config.effect("panic"));
+    let safety = probe_safety(&artifact, &graph, &annotations, &config.effect("safety"));
 
     assert_eq!(panic.source_count(), 0);
     assert_eq!(safety.source_count(), 1);
@@ -2920,8 +2920,8 @@ fn dependency_trust_is_path_scoped_and_survives_callback_reentry() {
                 );
             }
         } else {
-            let panic = probe_panic(&artifact, &graph, &annotations, &config.panics);
-            let safety = probe_safety(&artifact, &graph, &annotations, &config.safety);
+            let panic = probe_panic(&artifact, &graph, &annotations, &config.effect("panic"));
+            let safety = probe_safety(&artifact, &graph, &annotations, &config.effect("safety"));
             let panic_trace = EffectEngine::new(&graph).trace(&panic);
             let safety_trace = EffectEngine::new(&graph).trace(&safety);
             check(

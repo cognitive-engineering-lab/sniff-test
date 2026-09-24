@@ -4,6 +4,6 @@ report-roots = [
     "dyn_dispatch_call_site::unrelated_vtable_creation_does_not_select_an_implementation",
 ]
 
-[panics]
-[panics.lints]
+[panic]
+[panic.lints]
 invocation = "deny"

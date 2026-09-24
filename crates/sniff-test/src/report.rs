@@ -24,6 +24,7 @@ use crate::artifact::{
 use crate::compiler::invocations::{
     InvocationGraph, InvocationResolution, UnresolvedCallTargetReason,
 };
+use crate::config::EffectConfig;
 use crate::config::{MarkerProbing, SniffTestConfig};
 use crate::contracts::normalize_requirement_name;
 use crate::effects::InvocationSourceBranch;
@@ -33,7 +34,7 @@ use crate::effects::obligation::{
     TrackedTermination,
 };
 use crate::effects::visit::EffectPassRegistry;
-use crate::effects::{Effect, EffectConfig, EffectMetadata};
+use crate::effects::{Effect, EffectMetadata};
 #[cfg(test)]
 use crate::effects::{EffectSelection, EffectSpec, selected_effect_objects};
 
@@ -1374,7 +1375,7 @@ fn unresolved_call_target_findings(
     annotations: &AnnotationIndex,
     root_function: effect_tracing::FunctionId,
     metadata: &EffectMetadata,
-    config: &dyn EffectConfig,
+    config: &EffectConfig,
     namespaces: &DefinitionNamespaceIndex,
     is_opaque: impl Fn(FunctionId, &TrustPath) -> bool + Copy,
     is_ignored_invocation: impl Fn(effect_tracing::InvocationId) -> bool + Copy,
@@ -1493,7 +1494,7 @@ fn unresolved_source_is_covered(
     edge: &crate::artifact::CallFact,
     annotations: &AnnotationIndex,
     effect: &EffectKey,
-    config: &dyn EffectConfig,
+    config: &EffectConfig,
     namespaces: &DefinitionNamespaceIndex,
 ) -> bool {
     let Some(declaration) = invocation_surface(edge) else {
@@ -1788,7 +1789,7 @@ fn missing_body_reasons(
     local_stable_crate_id: u64,
     roots: &[FunctionId],
     requires_defining_body: bool,
-    effect_config: &dyn EffectConfig,
+    effect_config: &EffectConfig,
 ) -> Vec<IncompleteReason> {
     let is_trusted = |function: FunctionId, path: &TrustPath| {
         trusted_boundary(graph.stable_function(function), namespaces, effect_config)
@@ -1885,7 +1886,7 @@ fn missing_body_boundary_is_shorter(
 fn trusted_boundary(
     function: StableFunctionId,
     namespaces: &DefinitionNamespaceIndex,
-    effect_config: &dyn EffectConfig,
+    effect_config: &EffectConfig,
 ) -> bool {
     let candidates = namespaces.candidates(function);
     effect_config
@@ -2231,7 +2232,7 @@ mod tests {
         ArtifactAnalysisCache, ArtifactInfo, ArtifactScope, CacheExpectations, RustcArtifactId,
     };
     use crate::compiler::invocations::InvocationGraph;
-    use crate::config::{MarkerProbing, PanicConfig, SniffTestConfig};
+    use crate::config::{EffectConfig, MarkerProbing, SniffTestConfig};
     use crate::effects::concrete::{probe_concrete_effect, probe_concrete_effect_for};
     use crate::effects::{EffectMetadata, EffectSpec, annotation_kind, effect};
     use crate::report_model::{
@@ -2249,11 +2250,13 @@ mod tests {
     impl crate::effects::visit::MirEffectPass for AllocationPass {}
 
     impl EffectSpec for Allocation {
-        type Config = PanicConfig;
-
         const EFFECT_NAME: &'static str = "allocation";
         const OBLIGATION: &'static str = "Allocations";
         const JUSTIFICATION: &'static str = "ALLOCATION";
+
+        fn default_config() -> EffectConfig {
+            EffectConfig::default()
+        }
 
         fn register_passes(registry: &mut crate::effects::visit::EffectPassRegistry) {
             registry.register_mir_pass::<Self>(Box::new(AllocationPass));
@@ -2267,11 +2270,13 @@ mod tests {
     impl crate::effects::visit::HirEffectPass for SourceAllocationPass {}
 
     impl EffectSpec for SourceAllocation {
-        type Config = PanicConfig;
-
         const EFFECT_NAME: &'static str = "source-allocation";
         const OBLIGATION: &'static str = "Allocations";
         const JUSTIFICATION: &'static str = "ALLOCATION";
+
+        fn default_config() -> EffectConfig {
+            EffectConfig::default()
+        }
 
         fn register_passes(registry: &mut crate::effects::visit::EffectPassRegistry) {
             registry.register_hir_pass::<Self>(Box::new(SourceAllocationPass));
@@ -2311,7 +2316,7 @@ mod tests {
         let graph = InvocationGraph::from_artifact(&artifact).expect("invocation graph");
         let annotations = AnnotationIndex::from_artifact(&artifact, &graph).expect("annotations");
         let namespaces = artifact.definition_namespace_index();
-        let allocation_config = PanicConfig::default();
+        let allocation_config = SniffTestConfig::default().effect("panic").clone();
         let allocation = effect::<Allocation>(&allocation_config);
         let concrete = probe_concrete_effect(
             &artifact,
@@ -2406,7 +2411,7 @@ mod tests {
             let annotations =
                 AnnotationIndex::from_artifact(&artifact, &graph).expect("annotations");
             let namespaces = artifact.definition_namespace_index();
-            let allocation_config = PanicConfig::default();
+            let allocation_config = SniffTestConfig::default().effect("panic").clone();
             let allocation = effect::<Allocation>(&allocation_config);
             let concrete = probe_concrete_effect(
                 &artifact,
@@ -2711,13 +2716,13 @@ mod tests {
     fn trusted_declaration_config() -> SniffTestConfig {
         toml::from_str(
             r#"
-[panics]
+[panic]
 trusted-boundary-namespaces = ["trusted::**"]
-[panics.lints]
+[panic.coverage]
 unresolved-call-target = "warn"
 [safety]
 trusted-boundary-namespaces = ["trusted::**"]
-[safety.lints]
+[safety.coverage]
 unresolved-call-target = "warn"
 "#,
         )
@@ -3296,7 +3301,7 @@ unresolved-call-target = "warn"
             &graph,
             &annotations,
             &namespaces,
-            &config.safety,
+            &config.effect("safety"),
         )
         .expect("safety effect");
 
@@ -3735,7 +3740,7 @@ unresolved-call-target = "warn"
             &graph,
             &annotations,
             &namespaces,
-            &config.panics,
+            &config.effect("panic"),
         )
         .expect("panic effect");
         let safety = probe_concrete_effect_for::<Safety>(
@@ -3743,7 +3748,7 @@ unresolved-call-target = "warn"
             &graph,
             &annotations,
             &namespaces,
-            &config.safety,
+            &config.effect("safety"),
         )
         .expect("safety effect");
         let comments = super::ObligationTracker::probe(
@@ -4231,8 +4236,8 @@ unresolved-call-target = "warn"
         );
         let config = SniffTestConfig::default();
         let effects = [
-            effect::<Allocation>(&config.panics),
-            effect::<SourceAllocation>(&config.panics),
+            effect::<Allocation>(&config.effect("panic")),
+            effect::<SourceAllocation>(&config.effect("panic")),
         ];
         let reports = super::trace_selected_workspace(
             &local,
@@ -4306,7 +4311,7 @@ unresolved-call-target = "warn"
         );
         let config = SniffTestConfig::from_manifest_str(
             r#"
-                [panics]
+                [panic]
                 trusted-boundary-namespaces = ["visible::**"]
                 ignored-namespaces = ["ignored::**"]
                 [safety]
@@ -4491,10 +4496,10 @@ unresolved-call-target = "warn"
             ArtifactFacts::new(bodies, Vec::new()).expect("desugared declaration artifact");
         let config = SniffTestConfig::from_manifest_str(
             r#"
-                [panics]
+                [panic]
                 trusted-boundary-namespaces = ["trusted::**"]
                 ignored-namespaces = ["ignored::**"]
-                [panics.coverage]
+                [panic.coverage]
                 unresolved-call-target = "warn"
             "#,
         )
@@ -4578,9 +4583,9 @@ unresolved-call-target = "warn"
         .expect("covered declaration with targetless sibling artifact");
         let config = SniffTestConfig::from_manifest_str(
             r#"
-                [panics.coverage]
+                [panic.coverage]
                 unresolved-call-target = "warn"
-                [safety.lints]
+                [safety.coverage]
                 unresolved-call-target = "warn"
             "#,
         )
@@ -4654,9 +4659,9 @@ unresolved-call-target = "warn"
         .expect("targetless call with independent declaration surface");
         let config = SniffTestConfig::from_manifest_str(
             r#"
-                [panics.lints]
+                [panic.coverage]
                 unresolved-call-target = "warn"
-                [safety.lints]
+                [safety.coverage]
                 unresolved-call-target = "warn"
             "#,
         )
@@ -4849,7 +4854,7 @@ unresolved-call-target = "warn"
             &graph,
             &annotations,
             &namespaces,
-            &config.panics,
+            &config.effect("panic"),
         )
         .expect("panic effect");
         let trace = EffectEngine::new(&graph).trace(&panic);
@@ -5003,7 +5008,7 @@ unresolved-call-target = "warn"
         .expect("ignored-macro unresolved-call fixture");
         let config = SniffTestConfig::from_manifest_str(
             r#"
-                [panics.lints]
+                [panic.coverage]
                 unresolved-call-target = "warn"
             "#,
         )

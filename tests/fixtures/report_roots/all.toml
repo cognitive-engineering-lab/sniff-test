@@ -1,7 +1,7 @@
 [analysis]
 report-roots = "all"
 
-[panics]
-[panics.lints]
+[panic]
+[panic.lints]
 operation = "deny"
 invocation = "deny"

@@ -7,6 +7,6 @@ report-roots = [
     "optimizer_pruning::documented_inlinable_call",
 ]
 
-[panics]
-[panics.lints]
+[panic]
+[panic.lints]
 invocation = "warn"

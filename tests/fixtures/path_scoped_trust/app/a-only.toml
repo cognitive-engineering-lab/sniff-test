@@ -6,7 +6,7 @@ report-roots = [
     "path_scoped_app::implicit_std_dependencies_through_a_are_trusted",
 ]
 
-[panics]
+[panic]
 trusted-boundary-namespaces = ["trusted_a"]
 [safety]
 trusted-boundary-namespaces = ["trusted_a"]

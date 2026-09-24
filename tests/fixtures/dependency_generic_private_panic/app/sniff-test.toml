@@ -1,5 +1,5 @@
-[panics]
-[panics.lints]
+[panic]
+[panic.lints]
 invocation = "deny"
 
 [safety]

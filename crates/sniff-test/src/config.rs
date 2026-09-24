@@ -28,22 +28,80 @@ use crate::path_patterns::PathPatterns;
 pub const DEFAULT_MANIFEST_FILE: &str = "sniff-test.toml";
 pub const EXAMPLE_MANIFEST: &str = include_str!("../example-manifest.toml");
 
-#[derive(Debug, Default, Clone, PartialEq, Eq, Deserialize)]
-#[serde(deny_unknown_fields)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SniffTestConfig {
-    #[serde(default)]
     pub compiler: CompilerConfig,
-    #[serde(default)]
     pub analysis: AnalysisConfig,
-    #[serde(default)]
     pub contracts: ContractsConfig,
+    pub effects: BTreeMap<String, EffectConfig>,
+    pub warnings: Vec<ConfigWarning>,
+}
+
+impl Default for SniffTestConfig {
+    fn default() -> Self {
+        Self {
+            compiler: CompilerConfig::default(),
+            analysis: AnalysisConfig::default(),
+            contracts: ContractsConfig::default(),
+            effects: crate::effects::registered_effect_configs(),
+            warnings: Vec::new(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ConfigWarning {
+    pub field: String,
+    pub message: String,
+}
+
+#[derive(Deserialize, Default)]
+struct RawSniffTestConfig {
     #[serde(default)]
-    pub panics: PanicConfig,
+    compiler: CompilerConfig,
     #[serde(default)]
-    pub safety: SafetyConfig,
+    analysis: AnalysisConfig,
+    #[serde(default)]
+    contracts: ContractsConfig,
+    #[serde(flatten)]
+    effects: BTreeMap<String, RawEffectConfig>,
+}
+
+impl<'de> Deserialize<'de> for SniffTestConfig {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let raw = RawSniffTestConfig::deserialize(deserializer)?;
+        let mut config = Self::default();
+        config.compiler = raw.compiler;
+        config.analysis = raw.analysis;
+        config.contracts = raw.contracts;
+        for (name, effect) in raw.effects {
+            let Some(default) = config.effects.get_mut(&name) else {
+                return Err(serde::de::Error::custom(format!(
+                    "unknown effect section `{name}`"
+                )));
+            };
+            effect.apply(&name, default, &mut config.warnings);
+        }
+        Ok(config)
+    }
 }
 
 impl SniffTestConfig {
+    #[must_use]
+    pub fn effect(&self, name: &str) -> &EffectConfig {
+        self.effects
+            .get(name)
+            .unwrap_or_else(|| panic!("unregistered effect `{name}`"))
+    }
+
+    #[must_use]
+    #[cfg(test)]
+    pub fn effect_mut(&mut self, name: &str) -> &mut EffectConfig {
+        self.effects
+            .get_mut(name)
+            .unwrap_or_else(|| panic!("unregistered effect `{name}`"))
+    }
+
     /// Loads a sniff-test manifest from disk.
     ///
     /// # Errors
@@ -72,6 +130,17 @@ impl SniffTestConfig {
     /// Returns an error when the manifest contains unsupported syntax.
     pub fn from_manifest_str(source: &str) -> Result<Self, toml::de::Error> {
         toml::from_str(source)
+    }
+
+    pub(crate) fn emit_warnings(&self, path: &Path) {
+        for warning in &self.warnings {
+            eprintln!(
+                "warning: {}: {}: {}",
+                path.display(),
+                warning.field,
+                warning.message
+            );
+        }
     }
 }
 
@@ -311,133 +380,147 @@ impl MirInlining {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
-#[serde(rename_all = "kebab-case", deny_unknown_fields)]
-#[serde(default)]
-pub struct PanicConfig {
-    /// User-facing severity for panic finding classes.
-    pub lints: PanicLintConfig,
-    /// Severity overrides for unresolved calls and incomplete analysis.
-    pub coverage: CoverageConfig,
-    /// Definition paths whose internals are suppressed, or macro definition
-    /// paths whose matching expansion branch terminates locally.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EffectConfig {
     pub ignored_namespaces: PathPatterns,
-    /// Namespaces whose caller-visible panic contracts are trusted as complete.
-    ///
-    /// Trust implementation effects and dependencies on paths through matched APIs.
-    /// A matching API's own `# Panics` contract remains visible to non-trusted
-    /// callers; effects from untrusted callbacks cross undocumented APIs.
     pub trusted_boundary_namespaces: PathPatterns,
+    pub lints: EffectLintConfig,
+    pub coverage: CoverageConfig,
 }
 
-impl Default for PanicConfig {
+impl Default for EffectConfig {
     fn default() -> Self {
         Self {
-            lints: PanicLintConfig::default(),
-            coverage: CoverageConfig::default(),
-            ignored_namespaces: PathPatterns::new(vec![String::from(
-                "core::ub_checks::assert_unsafe_precondition",
-            )])
-            .expect("the built-in panic ignore path is valid"),
+            ignored_namespaces: PathPatterns::default(),
             trusted_boundary_namespaces: PathPatterns::default(),
+            lints: EffectLintConfig::default(),
+            coverage: CoverageConfig::default(),
         }
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
-#[serde(rename_all = "kebab-case", deny_unknown_fields, default)]
-pub struct PanicLintConfig {
-    pub ambiguous_marker: LintLevel,
-    pub ambiguous_requirement: LintLevel,
-    /// Default severity for concrete panic operations, including compiler assertions.
-    pub operation: LintLevel,
-    /// Exact severity overrides by panic operation kind.
-    #[serde(
-        default,
-        deserialize_with = "deserialize_panic_operations",
-        skip_serializing_if = "BTreeMap::is_empty"
-    )]
-    pub operations: BTreeMap<String, LintLevel>,
-    /// Severity for unjustified panic invocations and documented obligations.
-    pub invocation: LintLevel,
-    /// Legacy location; prefer `[panics.coverage]`.
-    pub unresolved_call_target: Option<LintLevel>,
+impl EffectConfig {
+    #[must_use]
+    pub fn builder() -> EffectConfigBuilder {
+        EffectConfigBuilder::default()
+    }
+
+    #[must_use]
+    pub(crate) fn ignored_namespaces(&self) -> &PathPatterns {
+        &self.ignored_namespaces
+    }
+
+    #[must_use]
+    pub(crate) fn trusted_boundary_namespaces(&self) -> &PathPatterns {
+        &self.trusted_boundary_namespaces
+    }
+
+    #[must_use]
+    pub(crate) fn finding_lints(&self) -> EffectFindingLints {
+        EffectFindingLints {
+            concrete_invocation: self.lints.invocation,
+            ambiguous_marker: self.lints.ambiguous_marker,
+            ambiguous_requirement: self.lints.ambiguous_requirement,
+        }
+    }
+
+    #[must_use]
+    pub(crate) fn operation_lint(&self, operation: Option<&str>) -> LintLevel {
+        operation
+            .and_then(|kind| self.lints.operations.get(kind))
+            .copied()
+            .unwrap_or(self.lints.operation)
+    }
+
+    #[must_use]
+    pub(crate) fn effective_coverage(&self) -> EffectiveCoverageConfig {
+        EffectiveCoverageConfig {
+            unresolved_call_target: self.coverage.unresolved_call_target,
+            analysis_incomplete: self.coverage.analysis_incomplete,
+        }
+    }
+
+    #[must_use]
+    #[cfg(test)]
+    pub(crate) fn ignores_candidates(&self, candidates: &[String]) -> bool {
+        self.ignored_namespaces
+            .best_candidates_match(candidates)
+            .is_some()
+    }
 }
 
-impl Default for PanicLintConfig {
+#[derive(Debug, Default)]
+pub struct EffectConfigBuilder {
+    config: EffectConfig,
+}
+
+impl EffectConfigBuilder {
+    #[must_use]
+    pub fn ignored_namespaces(mut self, paths: PathPatterns) -> Self {
+        self.config.ignored_namespaces = paths;
+        self
+    }
+
+    #[must_use]
+    #[allow(dead_code)]
+    pub fn trusted_boundary_namespaces(mut self, paths: PathPatterns) -> Self {
+        self.config.trusted_boundary_namespaces = paths;
+        self
+    }
+
+    #[must_use]
+    pub fn operation(mut self, name: impl Into<String>, level: LintLevel) -> Self {
+        let name = name.into();
+        assert!(
+            self.config
+                .lints
+                .operations
+                .insert(name.clone(), level)
+                .is_none(),
+            "duplicate effect operation `{name}`"
+        );
+        self
+    }
+
+    #[must_use]
+    pub fn operations(
+        mut self,
+        level: LintLevel,
+        names: impl IntoIterator<Item = &'static str>,
+    ) -> Self {
+        for name in names {
+            self = self.operation(name, level);
+        }
+        self
+    }
+
+    #[must_use]
+    pub fn build(self) -> EffectConfig {
+        self.config
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub struct EffectLintConfig {
+    pub ambiguous_marker: LintLevel,
+    pub ambiguous_requirement: LintLevel,
+    pub invocation: LintLevel,
+    pub operation: LintLevel,
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    pub operations: BTreeMap<String, LintLevel>,
+}
+
+impl Default for EffectLintConfig {
     fn default() -> Self {
         Self {
             ambiguous_marker: LintLevel::Deny,
             ambiguous_requirement: LintLevel::Deny,
+            invocation: LintLevel::Warn,
             operation: LintLevel::Warn,
             operations: BTreeMap::new(),
-            invocation: LintLevel::Warn,
-            unresolved_call_target: None,
         }
     }
-}
-
-const PANIC_OPERATIONS: &[&str] = &[
-    "bounds-check",
-    "overflow",
-    "overflow-negation",
-    "division-by-zero",
-    "remainder-by-zero",
-    "resumed-after-return",
-    "resumed-after-panic",
-    "resumed-after-drop",
-    "misaligned-pointer-dereference",
-    "null-pointer-dereference",
-    "invalid-enum-construction",
-];
-
-const SAFETY_OPERATIONS: &[&str] = &[
-    "raw-pointer-dereference",
-    "mutable-static-access",
-    "extern-static-access",
-    "union-field-access",
-    "unsafe-field-access",
-    "layout-constrained-type-initialization",
-    "unsafe-field-initialization",
-    "layout-constrained-field-mutation",
-    "layout-constrained-field-borrow",
-    "inline-assembly",
-    "unsafe-binder-cast",
-];
-
-fn deserialize_panic_operations<'de, D>(
-    deserializer: D,
-) -> Result<BTreeMap<String, LintLevel>, D::Error>
-where
-    D: serde::Deserializer<'de>,
-{
-    deserialize_operation_levels(deserializer, "panic", PANIC_OPERATIONS)
-}
-
-fn deserialize_safety_operations<'de, D>(
-    deserializer: D,
-) -> Result<BTreeMap<String, LintLevel>, D::Error>
-where
-    D: serde::Deserializer<'de>,
-{
-    deserialize_operation_levels(deserializer, "safety", SAFETY_OPERATIONS)
-}
-
-fn deserialize_operation_levels<'de, D>(
-    deserializer: D,
-    effect: &str,
-    allowed: &[&str],
-) -> Result<BTreeMap<String, LintLevel>, D::Error>
-where
-    D: serde::Deserializer<'de>,
-{
-    let levels = BTreeMap::<String, LintLevel>::deserialize(deserializer)?;
-    if let Some(operation) = levels.keys().find(|key| !allowed.contains(&key.as_str())) {
-        return Err(serde::de::Error::custom(format!(
-            "unknown {effect} operation `{operation}`"
-        )));
-    }
-    Ok(levels)
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
@@ -448,12 +531,27 @@ pub enum LintLevel {
     Deny,
 }
 
-/// Per-effect severity overrides for gaps in analysis coverage.
-#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
-#[serde(rename_all = "kebab-case", deny_unknown_fields)]
+impl LintLevel {
+    #[must_use]
+    pub fn is_allow(self) -> bool {
+        self == Self::Allow
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "kebab-case", deny_unknown_fields, default)]
 pub struct CoverageConfig {
-    pub unresolved_call_target: Option<LintLevel>,
-    pub analysis_incomplete: Option<LintLevel>,
+    pub unresolved_call_target: LintLevel,
+    pub analysis_incomplete: LintLevel,
+}
+
+impl Default for CoverageConfig {
+    fn default() -> Self {
+        Self {
+            unresolved_call_target: LintLevel::Warn,
+            analysis_incomplete: LintLevel::Deny,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -462,7 +560,6 @@ pub(crate) struct EffectiveCoverageConfig {
     pub(crate) analysis_incomplete: LintLevel,
 }
 
-/// Lint levels shared by every effect finding, after legacy config keys are resolved.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct EffectFindingLints {
     pub(crate) concrete_invocation: LintLevel,
@@ -470,157 +567,99 @@ pub(crate) struct EffectFindingLints {
     pub(crate) ambiguous_requirement: LintLevel,
 }
 
-impl LintLevel {
-    #[must_use]
-    pub fn is_allow(self) -> bool {
-        self == Self::Allow
+#[derive(Debug, Default, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+struct RawEffectConfig {
+    ignored_namespaces: Option<PathPatterns>,
+    trusted_boundary_namespaces: Option<PathPatterns>,
+    lints: Option<RawEffectLints>,
+    coverage: Option<RawCoverage>,
+    #[serde(flatten)]
+    unknown: BTreeMap<String, toml::Value>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+struct RawEffectLints {
+    ambiguous_marker: Option<LintLevel>,
+    ambiguous_requirement: Option<LintLevel>,
+    invocation: Option<LintLevel>,
+    operation: Option<LintLevel>,
+    #[serde(default)]
+    operations: BTreeMap<String, LintLevel>,
+    #[serde(flatten)]
+    unknown: BTreeMap<String, toml::Value>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+struct RawCoverage {
+    unresolved_call_target: Option<LintLevel>,
+    analysis_incomplete: Option<LintLevel>,
+    #[serde(flatten)]
+    unknown: BTreeMap<String, toml::Value>,
+}
+
+fn warn_unknown_fields(
+    prefix: &str,
+    fields: BTreeMap<String, toml::Value>,
+    warnings: &mut Vec<ConfigWarning>,
+) {
+    for name in fields.keys() {
+        warnings.push(ConfigWarning {
+            field: format!("{prefix}.{name}"),
+            message: String::from("unknown configuration field; ignored"),
+        });
     }
 }
 
-#[derive(Debug, Default, Clone, PartialEq, Eq, Deserialize)]
-#[serde(rename_all = "kebab-case", deny_unknown_fields)]
-#[serde(default)]
-pub struct SafetyConfig {
-    /// Definition paths whose internals are suppressed, or macro definition
-    /// paths whose matching expansion branch terminates locally.
-    pub ignored_namespaces: PathPatterns,
-    /// Namespaces whose caller-visible safety contracts are trusted as complete.
-    ///
-    /// Trust implementation effects and dependencies on paths through matched APIs.
-    /// A matching API's own `# Safety` contract remains visible to non-trusted
-    /// callers. A direct local unsafe invocation is not suppressed by the
-    /// target's membership in this list.
-    pub trusted_boundary_namespaces: PathPatterns,
-    pub lints: SafetyLintConfig,
-    /// Severity overrides for unresolved calls and incomplete analysis.
-    pub coverage: CoverageConfig,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
-#[serde(rename_all = "kebab-case", deny_unknown_fields, default)]
-pub struct SafetyLintConfig {
-    pub ambiguous_marker: LintLevel,
-    pub ambiguous_requirement: LintLevel,
-    /// Legacy location; prefer `[safety.coverage]`.
-    pub unresolved_call_target: Option<LintLevel>,
-    /// Severity for unjustified unsafe calls and documented obligations.
-    pub invocation: LintLevel,
-    /// Default severity for non-call unsafe operations.
-    pub operation: LintLevel,
-    /// Exact severity overrides by safety operation kind.
-    #[serde(
-        default,
-        deserialize_with = "deserialize_safety_operations",
-        skip_serializing_if = "BTreeMap::is_empty"
-    )]
-    pub operations: BTreeMap<String, LintLevel>,
-}
-
-impl Default for SafetyLintConfig {
-    fn default() -> Self {
-        Self {
-            ambiguous_marker: LintLevel::Deny,
-            ambiguous_requirement: LintLevel::Deny,
-            unresolved_call_target: None,
-            invocation: LintLevel::Warn,
-            operation: LintLevel::Warn,
-            operations: BTreeMap::new(),
+impl RawEffectConfig {
+    fn apply(self, effect: &str, config: &mut EffectConfig, warnings: &mut Vec<ConfigWarning>) {
+        if let Some(paths) = self.ignored_namespaces {
+            config.ignored_namespaces = paths;
         }
-    }
-}
-
-impl PanicConfig {
-    #[must_use]
-    #[cfg(test)]
-    pub(crate) fn ignores_candidates(&self, candidates: &[String]) -> bool {
-        self.ignored_namespaces
-            .best_candidates_match(candidates)
-            .is_some()
-    }
-}
-
-impl SafetyConfig {
-    #[must_use]
-    #[cfg(test)]
-    pub(crate) fn ignores_candidates(&self, candidates: &[String]) -> bool {
-        self.ignored_namespaces
-            .best_candidates_match(candidates)
-            .is_some()
-    }
-}
-
-impl crate::effects::EffectConfig for PanicConfig {
-    fn ignored_namespaces(&self) -> &PathPatterns {
-        &self.ignored_namespaces
-    }
-
-    fn trusted_boundary_namespaces(&self) -> &PathPatterns {
-        &self.trusted_boundary_namespaces
-    }
-
-    fn finding_lints(&self) -> EffectFindingLints {
-        EffectFindingLints {
-            concrete_invocation: self.lints.invocation,
-            ambiguous_marker: self.lints.ambiguous_marker,
-            ambiguous_requirement: self.lints.ambiguous_requirement,
+        if let Some(paths) = self.trusted_boundary_namespaces {
+            config.trusted_boundary_namespaces = paths;
         }
-    }
-
-    fn operation_lint(&self, operation: Option<&str>) -> LintLevel {
-        let lints = &self.lints;
-        operation
-            .and_then(|kind| lints.operations.get(kind))
-            .copied()
-            .unwrap_or(lints.operation)
-    }
-
-    fn effective_coverage(&self) -> EffectiveCoverageConfig {
-        effective_coverage(self.coverage, self.lints.unresolved_call_target)
-    }
-}
-
-impl crate::effects::EffectConfig for SafetyConfig {
-    fn ignored_namespaces(&self) -> &PathPatterns {
-        &self.ignored_namespaces
-    }
-
-    fn trusted_boundary_namespaces(&self) -> &PathPatterns {
-        &self.trusted_boundary_namespaces
-    }
-
-    fn finding_lints(&self) -> EffectFindingLints {
-        EffectFindingLints {
-            concrete_invocation: self.lints.invocation,
-            ambiguous_marker: self.lints.ambiguous_marker,
-            ambiguous_requirement: self.lints.ambiguous_requirement,
+        warn_unknown_fields(effect, self.unknown, warnings);
+        if let Some(lints) = self.lints {
+            let prefix = format!("{effect}.lints");
+            if let Some(level) = lints.ambiguous_marker {
+                config.lints.ambiguous_marker = level;
+            }
+            if let Some(level) = lints.ambiguous_requirement {
+                config.lints.ambiguous_requirement = level;
+            }
+            if let Some(level) = lints.invocation {
+                config.lints.invocation = level;
+            }
+            if let Some(level) = lints.operation {
+                config.lints.operation = level;
+                for operation_level in config.lints.operations.values_mut() {
+                    *operation_level = level;
+                }
+            }
+            warn_unknown_fields(&prefix, lints.unknown, warnings);
+            for (name, level) in lints.operations {
+                if let Some(default) = config.lints.operations.get_mut(&name) {
+                    *default = level;
+                } else {
+                    warnings.push(ConfigWarning {
+                        field: format!("{prefix}.operations.{name}"),
+                        message: String::from("unsupported effect operation; ignored"),
+                    });
+                }
+            }
         }
-    }
-
-    fn operation_lint(&self, operation: Option<&str>) -> LintLevel {
-        let lints = &self.lints;
-        operation
-            .and_then(|kind| lints.operations.get(kind))
-            .copied()
-            .unwrap_or(lints.operation)
-    }
-
-    fn effective_coverage(&self) -> EffectiveCoverageConfig {
-        effective_coverage(self.coverage, self.lints.unresolved_call_target)
-    }
-}
-
-fn effective_coverage(
-    coverage: CoverageConfig,
-    legacy_unresolved: Option<LintLevel>,
-) -> EffectiveCoverageConfig {
-    // New per-effect coverage settings take precedence over historical lint keys.
-    EffectiveCoverageConfig {
-        unresolved_call_target: coverage
-            .unresolved_call_target
-            .or(legacy_unresolved)
-            .unwrap_or(LintLevel::Warn),
-        // A truncated traversal proves nothing about the missing region.
-        analysis_incomplete: coverage.analysis_incomplete.unwrap_or(LintLevel::Deny),
+        if let Some(coverage) = self.coverage {
+            if let Some(level) = coverage.unresolved_call_target {
+                config.coverage.unresolved_call_target = level;
+            }
+            if let Some(level) = coverage.analysis_incomplete {
+                config.coverage.analysis_incomplete = level;
+            }
+            warn_unknown_fields(&format!("{effect}.coverage"), coverage.unknown, warnings);
+        }
     }
 }
 
@@ -808,13 +847,10 @@ impl std::error::Error for ConfigError {
 mod tests {
     use std::path::PathBuf;
 
-    use crate::effects::EffectConfig;
-
     use super::{
         AnalysisConfig, CompilerConfig, ConfigError, ContractDocOverrideFile, ContractDocOverrides,
-        CoverageConfig, EXAMPLE_MANIFEST, EffectDocMatching, LintLevel, MarkerProbing, MirInlining,
-        OverflowChecks, PANIC_OPERATIONS, PanicConfig, PathPatterns, ReportRootSet,
-        SAFETY_OPERATIONS, SafetyConfig, SniffTestConfig,
+        CoverageConfig, EXAMPLE_MANIFEST, EffectConfig, EffectDocMatching, LintLevel,
+        MarkerProbing, MirInlining, OverflowChecks, PathPatterns, ReportRootSet, SniffTestConfig,
     };
 
     fn path_patterns(patterns: &[&str]) -> PathPatterns {
@@ -831,7 +867,7 @@ mod tests {
         paths.iter().map(|path| (*path).to_owned()).collect()
     }
 
-    fn trusts_boundary(config: &dyn EffectConfig, candidates: &[String]) -> bool {
+    fn trusts_boundary(config: &EffectConfig, candidates: &[String]) -> bool {
         config
             .trusted_boundary_namespaces()
             .best_candidates_match(candidates)
@@ -907,7 +943,7 @@ mod tests {
     }
 
     #[test]
-    fn manifest_rejects_unknown_fields_including_removed_names() {
+    fn manifest_warns_on_unknown_effect_fields_and_rejects_other_unknown_fields() {
         for (manifest, field) in [
             ("[analysis]\nnode-limt = 10", "node-limt"),
             ("[documentation]\noverride-files = []", "documentation"),
@@ -916,14 +952,14 @@ mod tests {
                 "callable-edge-attribution",
             ),
             (
-                "[panics]\ntrusted-panic-boundary-namespaces = []",
+                "[panic]\ntrusted-panic-boundary-namespaces = []",
                 "trusted-panic-boundary-namespaces",
             ),
             (
                 "[safety]\ntrusted-safety-boundary-namespaces = []",
                 "trusted-safety-boundary-namespaces",
             ),
-            ("[panics.lints]\ntrusted-panic = \"allow\"", "trusted-panic"),
+            ("[panic.lints]\ntrusted-panic = \"allow\"", "trusted-panic"),
             (
                 "[safety.lints]\ntrusted-safety = \"allow\"",
                 "trusted-safety",
@@ -933,7 +969,7 @@ mod tests {
                 "safety-obligation-missing-requirements",
             ),
             (
-                "[panics.lints]\ndocumented-panic = \"warn\"",
+                "[panic.lints]\ndocumented-panic = \"warn\"",
                 "documented-panic",
             ),
             (
@@ -949,22 +985,29 @@ mod tests {
                 "missing-report-root",
             ),
             (
-                "[panics.lints]\nindirect-call-boundary = \"warn\"",
+                "[panic.lints]\nindirect-call-boundary = \"warn\"",
                 "indirect-call-boundary",
             ),
             (
-                "[panics]\nunsafe-precondition-boundary-macros = []",
+                "[panic]\nunsafe-precondition-boundary-macros = []",
                 "unsafe-precondition-boundary-macros",
             ),
         ] {
-            let error = SniffTestConfig::from_manifest_str(manifest)
-                .expect_err("unknown config fields should be rejected");
-            let message = error.to_string();
-
-            assert!(
-                message.contains("unknown field") && message.contains(field),
-                "unexpected parse error for `{field}`: {message}"
-            );
+            if manifest.starts_with("[panic") || manifest.starts_with("[safety") {
+                let config = SniffTestConfig::from_manifest_str(manifest)
+                    .expect("unknown effect fields produce warnings");
+                assert!(config.warnings[0].field.contains(field));
+            } else {
+                let error = SniffTestConfig::from_manifest_str(manifest)
+                    .expect_err("unknown global fields should be rejected");
+                let message = error.to_string();
+                assert!(
+                    (message.contains("unknown field")
+                        || message.contains("unknown effect section"))
+                        && message.contains(field),
+                    "unexpected error for `{field}`: {message}"
+                );
+            }
         }
     }
 
@@ -974,7 +1017,7 @@ mod tests {
             [contracts]
             override-files = []
 
-            [panics]
+            [panic]
             trusted-boundary-namespaces = ["core::**"]
 
             [safety]
@@ -984,11 +1027,11 @@ mod tests {
         let parsed = SniffTestConfig::from_manifest_str(config).expect("manifest should parse");
 
         assert!(trusts_boundary(
-            &parsed.panics,
+            &parsed.effect("panic"),
             &candidates(&["core::fmt::write"])
         ));
         assert!(trusts_boundary(
-            &parsed.safety,
+            &parsed.effect("safety"),
             &candidates(&["ffi::safe_contract"])
         ));
     }
@@ -1032,14 +1075,14 @@ mod tests {
         ] {
             let config = format!(
                 "[compiler]\noverflow-checks = \"{overflow}\"\n\
-                 [panics.lints.operations]\noverflow = \"deny\"\n"
+                 [panic.lints.operations]\noverflow = \"deny\"\n"
             );
             let parsed = SniffTestConfig::from_manifest_str(&config)
                 .expect("compiler behavior and lint policy should be independent");
 
             assert_eq!(parsed.compiler.overflow_checks, expected_overflow);
             assert_eq!(
-                parsed.panics.lints.operations.get("overflow"),
+                parsed.effect("panic").lints.operations.get("overflow"),
                 Some(&LintLevel::Deny)
             );
         }
@@ -1048,11 +1091,11 @@ mod tests {
     #[test]
     fn parses_effect_specific_lints_and_coverage() {
         let config = r#"
-            [panics.lints]
+            [panic.lints]
             ambiguous-marker = "allow"
             ambiguous-requirement = "warn"
 
-            [panics.coverage]
+            [panic.coverage]
             analysis-incomplete = "warn"
 
             [safety.lints]
@@ -1063,16 +1106,34 @@ mod tests {
             analysis-incomplete = "allow"
         "#;
         let parsed = SniffTestConfig::from_manifest_str(config).expect("manifest should parse");
-        assert_eq!(parsed.panics.lints.ambiguous_marker, LintLevel::Allow);
-        assert_eq!(parsed.panics.lints.ambiguous_requirement, LintLevel::Warn);
         assert_eq!(
-            parsed.panics.effective_coverage().analysis_incomplete,
+            parsed.effect("panic").lints.ambiguous_marker,
+            LintLevel::Allow
+        );
+        assert_eq!(
+            parsed.effect("panic").lints.ambiguous_requirement,
             LintLevel::Warn
         );
-        assert_eq!(parsed.safety.lints.ambiguous_marker, LintLevel::Warn);
-        assert_eq!(parsed.safety.lints.ambiguous_requirement, LintLevel::Allow);
         assert_eq!(
-            parsed.safety.effective_coverage().analysis_incomplete,
+            parsed
+                .effect("panic")
+                .effective_coverage()
+                .analysis_incomplete,
+            LintLevel::Warn
+        );
+        assert_eq!(
+            parsed.effect("safety").lints.ambiguous_marker,
+            LintLevel::Warn
+        );
+        assert_eq!(
+            parsed.effect("safety").lints.ambiguous_requirement,
+            LintLevel::Allow
+        );
+        assert_eq!(
+            parsed
+                .effect("safety")
+                .effective_coverage()
+                .analysis_incomplete,
             LintLevel::Allow
         );
     }
@@ -1103,7 +1164,7 @@ mod tests {
             [analysis.lints]
             undocumented-effect-invocation = "deny"
 
-            [panics.lints]
+            [panic.lints]
             invocation = "allow"
 
         "#;
@@ -1114,11 +1175,17 @@ mod tests {
             parsed.analysis.lints.undocumented_effect_invocation,
             LintLevel::Deny
         );
-        assert_eq!(parsed.panics.lints.ambiguous_marker, LintLevel::Deny);
-        assert_eq!(parsed.safety.lints.ambiguous_marker, LintLevel::Deny);
-        assert_eq!(parsed.panics.lints.invocation, LintLevel::Allow);
-        assert_eq!(parsed.panics.lints.operation, LintLevel::Warn);
-        assert_eq!(parsed.safety.lints.invocation, LintLevel::Warn);
+        assert_eq!(
+            parsed.effect("panic").lints.ambiguous_marker,
+            LintLevel::Deny
+        );
+        assert_eq!(
+            parsed.effect("safety").lints.ambiguous_marker,
+            LintLevel::Deny
+        );
+        assert_eq!(parsed.effect("panic").lints.invocation, LintLevel::Allow);
+        assert_eq!(parsed.effect("panic").lints.operation, LintLevel::Warn);
+        assert_eq!(parsed.effect("safety").lints.invocation, LintLevel::Warn);
     }
 
     #[test]
@@ -1137,29 +1204,43 @@ mod tests {
             EffectDocMatching::AnyJustification
         );
         assert_eq!(
-            PanicConfig::default().lints.ambiguous_marker,
+            SniffTestConfig::default()
+                .effect("panic")
+                .lints
+                .ambiguous_marker,
             LintLevel::Deny
         );
         assert_eq!(
-            SafetyConfig::default().lints.ambiguous_marker,
+            SniffTestConfig::default()
+                .effect("safety")
+                .lints
+                .ambiguous_marker,
             LintLevel::Deny
         );
         assert_eq!(
-            PanicConfig::default().lints.ambiguous_requirement,
+            SniffTestConfig::default()
+                .effect("panic")
+                .lints
+                .ambiguous_requirement,
             LintLevel::Deny
         );
         assert_eq!(
-            SafetyConfig::default().lints.ambiguous_requirement,
+            SniffTestConfig::default()
+                .effect("safety")
+                .lints
+                .ambiguous_requirement,
             LintLevel::Deny
         );
         assert_eq!(
-            PanicConfig::default()
+            SniffTestConfig::default()
+                .effect("panic")
                 .effective_coverage()
                 .analysis_incomplete,
             LintLevel::Deny
         );
         assert_eq!(
-            SafetyConfig::default()
+            SniffTestConfig::default()
+                .effect("safety")
                 .effective_coverage()
                 .analysis_incomplete,
             LintLevel::Deny
@@ -1168,15 +1249,18 @@ mod tests {
 
     #[test]
     fn default_panic_lints_warn_on_unjustified_invocations_and_operations() {
-        let lints = PanicConfig::default().lints;
+        let lints = SniffTestConfig::default().effect("panic").lints.clone();
 
         assert_eq!(lints.operation, LintLevel::Warn);
-        assert!(lints.operations.is_empty());
+        assert_eq!(lints.operations.len(), 11);
         assert_eq!(lints.invocation, LintLevel::Warn);
-        assert_eq!(lints.unresolved_call_target, None);
-        assert_eq!(PanicConfig::default().coverage, CoverageConfig::default());
         assert_eq!(
-            PanicConfig::default()
+            SniffTestConfig::default().effect("panic").coverage,
+            CoverageConfig::default()
+        );
+        assert_eq!(
+            SniffTestConfig::default()
+                .effect("panic")
                 .effective_coverage()
                 .unresolved_call_target,
             LintLevel::Warn
@@ -1185,7 +1269,7 @@ mod tests {
 
     #[test]
     fn unsafe_precondition_macro_is_a_user_overridable_default_ignore() {
-        let defaults = PanicConfig::default();
+        let defaults = SniffTestConfig::default().effect("panic").clone();
         assert!(
             defaults
                 .ignored_namespaces
@@ -1193,11 +1277,11 @@ mod tests {
                 .is_some()
         );
 
-        let disabled = SniffTestConfig::from_manifest_str("[panics]\nignored-namespaces = []\n")
+        let disabled = SniffTestConfig::from_manifest_str("[panic]\nignored-namespaces = []\n")
             .expect("an empty ignore list should be accepted");
         assert!(
             disabled
-                .panics
+                .effect("panic")
                 .ignored_namespaces
                 .best_match("core::ub_checks::assert_unsafe_precondition")
                 .is_none()
@@ -1210,19 +1294,19 @@ mod tests {
         );
 
         let replacement = SniffTestConfig::from_manifest_str(
-            "[panics]\nignored-namespaces = [\"sample::generated::**\"]\n",
+            "[panic]\nignored-namespaces = [\"sample::generated::**\"]\n",
         )
         .expect("a custom ignore list should replace the default");
         assert!(
             replacement
-                .panics
+                .effect("panic")
                 .ignored_namespaces
                 .best_match("sample::generated::assert_invariant")
                 .is_some()
         );
         assert!(
             replacement
-                .panics
+                .effect("panic")
                 .ignored_namespaces
                 .best_match("core::ub_checks::assert_unsafe_precondition")
                 .is_none()
@@ -1238,95 +1322,161 @@ mod tests {
             candidates(&["alloc", "alloc::vec::Vec::<T>::new"]),
             candidates(&["std", "std::collections::hash::map::HashMap::<K, V>::new"]),
         ] {
-            assert!(trusts_boundary(&initialized.panics, &candidates));
-            assert!(trusts_boundary(&initialized.safety, &candidates));
+            assert!(trusts_boundary(&initialized.effect("panic"), &candidates));
+            assert!(trusts_boundary(&initialized.effect("safety"), &candidates));
         }
 
         let empty = SniffTestConfig::default();
         let std_candidates = candidates(&["std", "std::collections::HashMap::new"]);
-        assert!(!trusts_boundary(&empty.panics, &std_candidates));
-        assert!(!trusts_boundary(&empty.safety, &std_candidates));
+        assert!(!trusts_boundary(&empty.effect("panic"), &std_candidates));
+        assert!(!trusts_boundary(&empty.effect("safety"), &std_candidates));
     }
 
     #[test]
     fn default_safety_lints_keep_findings_visible_without_failing() {
-        let lints = SafetyConfig::default().lints;
+        let lints = SniffTestConfig::default().effect("safety").lints.clone();
 
-        assert_eq!(lints.unresolved_call_target, None);
         assert_eq!(
-            SafetyConfig::default()
+            SniffTestConfig::default()
+                .effect("safety")
                 .effective_coverage()
                 .unresolved_call_target,
             LintLevel::Warn
         );
         assert_eq!(lints.invocation, LintLevel::Warn);
         assert_eq!(lints.operation, LintLevel::Warn);
-        assert!(lints.operations.is_empty());
+        assert_eq!(lints.operations.len(), 11);
     }
 
     #[test]
-    fn removed_safety_missing_requirements_lint_is_rejected() {
-        let error = SniffTestConfig::from_manifest_str(
+    fn removed_safety_missing_requirements_lint_warns() {
+        let config = SniffTestConfig::from_manifest_str(
             "[safety.lints]\nunsafe-call-missing-requirements = \"warn\"",
         )
-        .expect_err("the removed lint should not be accepted");
+        .expect("unknown fields produce warnings");
         assert!(
-            error
-                .to_string()
+            config.warnings[0]
+                .field
                 .contains("unsafe-call-missing-requirements")
         );
     }
 
     #[test]
-    fn effect_specific_base_lint_keys_are_rejected() {
+    fn effect_specific_base_lint_keys_warn() {
         for (effect, key) in [
-            ("panics", "panic-invocation"),
-            ("panics", "compiler-assert"),
+            ("panic", "panic-invocation"),
+            ("panic", "compiler-assert"),
             ("safety", "unsafe-call-missing-justification"),
             ("safety", "unsafe-op-missing-justification"),
         ] {
             let manifest = format!("[{effect}.lints]\n{key} = \"warn\"");
-            let error = SniffTestConfig::from_manifest_str(&manifest)
-                .expect_err("effect-specific base lint keys should not parse");
-            assert!(error.to_string().contains(key));
+            let config = SniffTestConfig::from_manifest_str(&manifest)
+                .expect("unknown fields produce warnings");
+            assert!(config.warnings[0].field.contains(key));
         }
     }
 
     #[test]
-    fn operation_lint_tables_reject_unknown_and_flat_keys() {
+    fn operation_lint_tables_warn_on_unknown_and_flat_keys() {
         for source in [
-            "[panics.lints.operations]\nunknown-assert = \"warn\"",
+            "[panic.lints.operations]\nunknown-assert = \"warn\"",
             "[safety.lints.operations]\nunknown-unsafe-op = \"warn\"",
-            "[panics.lints]\ncompiler-assert-overflow = \"warn\"",
+            "[panic.lints]\ncompiler-assert-overflow = \"warn\"",
             "[safety.lints]\ninline-assembly-missing-justification = \"warn\"",
         ] {
-            assert!(
-                SniffTestConfig::from_manifest_str(source).is_err(),
-                "unexpectedly accepted {source}"
-            );
+            let config = SniffTestConfig::from_manifest_str(source)
+                .expect("unknown fields produce warnings");
+            assert_eq!(config.warnings.len(), 1, "{source}");
         }
     }
 
     #[test]
-    fn coverage_sections_override_legacy_unresolved_lints_and_preserve_defaults() {
+    fn operation_overrides_merge_with_writer_defaults_and_warn_on_typos() {
         let config = SniffTestConfig::from_manifest_str(
             r#"
-            [panics.lints]
-            unresolved-call-target = "allow"
+            [safety.lints]
+            operation = "deny"
+            [safety.lints.operations]
+            raw-pointer-dereference = "allow"
+            raw-pointer-derefernece = "allow"
+            "#,
+        )
+        .expect("valid fields should still load");
 
-            [panics.coverage]
+        assert_eq!(
+            config
+                .effect("safety")
+                .operation_lint(Some("raw-pointer-dereference")),
+            LintLevel::Allow
+        );
+        assert_eq!(
+            config
+                .effect("safety")
+                .operation_lint(Some("inline-assembly")),
+            LintLevel::Deny
+        );
+        assert_eq!(config.warnings.len(), 1);
+        assert_eq!(
+            config.warnings[0].field,
+            "safety.lints.operations.raw-pointer-derefernece"
+        );
+        assert!(
+            !config
+                .effect("safety")
+                .lints
+                .operations
+                .contains_key("raw-pointer-derefernece")
+        );
+    }
+
+    #[test]
+    fn effect_sections_are_keyed_by_registered_effect_name() {
+        let config = SniffTestConfig::from_manifest_str(
+            "[panic.lints.operations]\nbounds-check = \"deny\"\n[safety.lints.operations]\ninline-assembly = \"allow\"",
+        )
+        .expect("registered effect sections should parse");
+        assert_eq!(config.effects.len(), 2);
+        assert_eq!(
+            config.effect("panic").operation_lint(Some("bounds-check")),
+            LintLevel::Deny
+        );
+        assert_eq!(
+            config
+                .effect("safety")
+                .operation_lint(Some("inline-assembly")),
+            LintLevel::Allow
+        );
+        assert!(SniffTestConfig::from_manifest_str("[panics]").is_err());
+        assert!(SniffTestConfig::from_manifest_str("[allocation]").is_err());
+    }
+
+    #[test]
+    fn invalid_level_remains_a_parse_error() {
+        assert!(
+            SniffTestConfig::from_manifest_str(
+                "[safety.lints.operations]\nraw-pointer-dereference = \"severe\""
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn coverage_sections_set_levels_and_preserve_defaults() {
+        let config = SniffTestConfig::from_manifest_str(
+            r#"
+            [panic.coverage]
             unresolved-call-target = "deny"
             analysis-incomplete = "deny"
 
-            [safety.lints]
+            [safety.coverage]
             unresolved-call-target = "allow"
             "#,
         )
         .expect("coverage configuration");
-        let panic = config.panics.effective_coverage();
+        let panic = config.effect("panic").effective_coverage();
         assert_eq!(panic.unresolved_call_target, LintLevel::Deny);
         assert_eq!(panic.analysis_incomplete, LintLevel::Deny);
-        let safety = config.safety.effective_coverage();
+        let safety = config.effect("safety").effective_coverage();
         assert_eq!(safety.unresolved_call_target, LintLevel::Allow);
         assert_eq!(safety.analysis_incomplete, LintLevel::Deny);
     }
@@ -1334,12 +1484,14 @@ mod tests {
     #[test]
     fn parses_panic_lint_levels() {
         let config = r#"
-            [panics.lints]
+            [panic.lints]
             operation = "warn"
             invocation = "allow"
+
+            [panic.coverage]
             unresolved-call-target = "deny"
 
-            [panics.lints.operations]
+            [panic.lints.operations]
             bounds-check = "allow"
             overflow = "warn"
             overflow-negation = "deny"
@@ -1355,9 +1507,9 @@ mod tests {
 
         let parsed = SniffTestConfig::from_manifest_str(config).expect("manifest should parse");
 
-        assert_eq!(parsed.panics.lints.operation, LintLevel::Warn);
-        let overrides = &parsed.panics.lints.operations;
-        assert_eq!(overrides.len(), PANIC_OPERATIONS.len());
+        assert_eq!(parsed.effect("panic").lints.operation, LintLevel::Warn);
+        let overrides = &parsed.effect("panic").lints.operations;
+        assert_eq!(overrides.len(), 11);
         for (kind, level) in [
             ("bounds-check", LintLevel::Allow),
             ("overflow", LintLevel::Warn),
@@ -1373,15 +1525,15 @@ mod tests {
         ] {
             assert_eq!(overrides.get(kind), Some(&level));
         }
-        assert_eq!(parsed.panics.lints.invocation, LintLevel::Allow);
+        assert_eq!(parsed.effect("panic").lints.invocation, LintLevel::Allow);
         assert_eq!(
-            parsed.panics.operation_lint(Some("bounds-check")),
+            parsed.effect("panic").operation_lint(Some("bounds-check")),
             LintLevel::Allow
         );
-        assert_eq!(parsed.panics.operation_lint(None), LintLevel::Warn);
+        assert_eq!(parsed.effect("panic").operation_lint(None), LintLevel::Warn);
         assert_eq!(
-            parsed.panics.lints.unresolved_call_target,
-            Some(LintLevel::Deny)
+            parsed.effect("panic").coverage.unresolved_call_target,
+            LintLevel::Deny
         );
     }
 
@@ -1395,33 +1547,35 @@ mod tests {
             [safety.lints]
             invocation = "deny"
             operation = "deny"
+
+            [safety.coverage]
             unresolved-call-target = "deny"
         "#;
 
         let parsed = SniffTestConfig::from_manifest_str(config).expect("manifest should parse");
 
-        assert!(parsed.safety.ignores_candidates(&candidates(&[
+        assert!(parsed.effect("safety").ignores_candidates(&candidates(&[
             "my_crate::caller",
             "bindgen::root::unsafe_fn",
         ])));
         assert!(
             !parsed
-                .safety
+                .effect("safety")
                 .ignores_candidates(&candidates(&["my_crate::safe"]))
         );
         assert!(trusts_boundary(
-            &parsed.safety,
+            &parsed.effect("safety"),
             &candidates(&["ffi::safe_contract"])
         ));
         assert!(!trusts_boundary(
-            &parsed.safety,
+            &parsed.effect("safety"),
             &candidates(&["ffi::plain_safe"])
         ));
-        assert_eq!(parsed.safety.lints.invocation, LintLevel::Deny);
-        assert_eq!(parsed.safety.lints.operation, LintLevel::Deny);
+        assert_eq!(parsed.effect("safety").lints.invocation, LintLevel::Deny);
+        assert_eq!(parsed.effect("safety").lints.operation, LintLevel::Deny);
         assert_eq!(
-            parsed.safety.lints.unresolved_call_target,
-            Some(LintLevel::Deny)
+            parsed.effect("safety").coverage.unresolved_call_target,
+            LintLevel::Deny
         );
     }
 
@@ -1446,8 +1600,8 @@ mod tests {
         "#;
 
         let parsed = SniffTestConfig::from_manifest_str(config).expect("manifest should parse");
-        let overrides = &parsed.safety.lints.operations;
-        assert_eq!(overrides.len(), SAFETY_OPERATIONS.len());
+        let overrides = &parsed.effect("safety").lints.operations;
+        assert_eq!(overrides.len(), 11);
         for (kind, level) in [
             ("raw-pointer-dereference", LintLevel::Allow),
             ("mutable-static-access", LintLevel::Warn),
@@ -1465,34 +1619,37 @@ mod tests {
         }
         assert_eq!(
             parsed
-                .safety
+                .effect("safety")
                 .operation_lint(Some("raw-pointer-dereference")),
             LintLevel::Allow
         );
-        assert_eq!(parsed.safety.operation_lint(None), LintLevel::Deny);
+        assert_eq!(
+            parsed.effect("safety").operation_lint(None),
+            LintLevel::Deny
+        );
     }
 
     #[test]
-    fn operation_lint_overrides_serialize_only_when_set() {
-        let mut panic_lints = PanicConfig::default().lints;
+    fn operation_defaults_serialize_with_overrides() {
+        let mut panic_lints = SniffTestConfig::default().effect("panic").lints.clone();
         panic_lints
             .operations
             .insert(String::from("bounds-check"), LintLevel::Warn);
         let serialized = toml::to_string(&panic_lints).expect("panic lint config should serialize");
         assert!(serialized.contains("[operations]\nbounds-check = \"warn\""));
-        assert!(!serialized.contains("overflow ="));
+        assert!(serialized.contains("overflow = \"warn\""));
 
-        let mut safety_lints = SafetyConfig::default().lints;
+        let mut safety_lints = SniffTestConfig::default().effect("safety").lints.clone();
         safety_lints
             .operations
             .insert(String::from("inline-assembly"), LintLevel::Deny);
         let serialized =
             toml::to_string(&safety_lints).expect("safety lint config should serialize");
-        assert!(serialized.contains("[operations]\ninline-assembly = \"deny\""));
-        assert!(!serialized.contains("raw-pointer-dereference ="));
+        assert!(serialized.contains("inline-assembly = \"deny\""));
+        assert!(serialized.contains("raw-pointer-dereference = \"warn\""));
 
         assert!(
-            !toml::to_string(&PanicConfig::default().lints)
+            toml::to_string(&SniffTestConfig::default().effect("panic").lints)
                 .expect("default panic lints serialize")
                 .contains("[operations]")
         );
@@ -1514,10 +1671,10 @@ mod tests {
 
     #[test]
     fn panic_namespace_policies_use_stable_candidate_sets() {
-        let config = PanicConfig {
+        let config = EffectConfig {
             ignored_namespaces: path_patterns(&["generated::**"]),
             trusted_boundary_namespaces: path_patterns(&["core::**", "compat::panic"]),
-            ..PanicConfig::default()
+            ..SniffTestConfig::default().effect("panic").clone()
         };
 
         assert!(config.ignores_candidates(&candidates(&["app::wrapper", "generated::helper",])));
@@ -1540,7 +1697,7 @@ mod tests {
 
         assert!(
             config
-                .panics
+                .effect("panic")
                 .ignored_namespaces
                 .best_match("core::ub_checks::assert_unsafe_precondition")
                 .is_some()
@@ -1550,7 +1707,7 @@ mod tests {
     #[test]
     fn manifest_validates_namespace_globs() {
         let config = r#"
-            [panics]
+            [panic]
             ignored-namespaces = ["std::ops::{Index"]
         "#;
 
@@ -1561,13 +1718,13 @@ mod tests {
     }
 
     #[test]
-    fn manifest_rejects_removed_panic_sink_namespaces() {
-        let error = SniffTestConfig::from_manifest_str(
-            "[panics]\npanic-sink-namespaces = [\"core::panicking::**\"]",
+    fn manifest_warns_on_removed_panic_sink_namespaces() {
+        let config = SniffTestConfig::from_manifest_str(
+            "[panic]\npanic-sink-namespaces = [\"core::panicking::**\"]",
         )
-        .expect_err("panic sinks are no longer configurable");
+        .expect("removed fields produce warnings");
 
-        assert!(error.to_string().contains("panic-sink-namespaces"));
+        assert!(config.warnings[0].field.contains("panic-sink-namespaces"));
     }
 
     #[test]

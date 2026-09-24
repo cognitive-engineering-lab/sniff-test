@@ -4,13 +4,12 @@ report-roots = [
     "trusted_boundaries::untrusted_unresolved_wrapper",
 ]
 
-[panics]
+[panic]
 trusted-boundary-namespaces = [
     "trusted_boundaries::trusted_unresolved_wrapper",
 ]
 
-[panics.lints]
-unresolved-call-target = "warn"
+[panic.lints]
 
 [safety]
 trusted-boundary-namespaces = [
@@ -18,4 +17,9 @@ trusted-boundary-namespaces = [
 ]
 
 [safety.lints]
+
+[panic.coverage]
+unresolved-call-target = "warn"
+
+[safety.coverage]
 unresolved-call-target = "warn"

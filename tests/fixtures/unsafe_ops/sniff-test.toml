@@ -4,7 +4,7 @@
 [analysis]
 report-roots = "all"
 
-[panics.lints]
+[panic.lints]
 # This fixture exercises safety-comment coverage. Raw pointer/static MIR
 # assertions are covered by panic-focused fixtures.
 operation = "allow"

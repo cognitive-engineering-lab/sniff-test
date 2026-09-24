@@ -1,7 +1,7 @@
 # report-roots = "public" selects effective visibility: a `pub fn` in a
 # private module is not part of the public API unless re-exported.
 
-[panics]
-[panics.lints]
+[panic]
+[panic.lints]
 operation = "deny"
 invocation = "deny"

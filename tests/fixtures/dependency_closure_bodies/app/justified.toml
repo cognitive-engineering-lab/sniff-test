@@ -4,7 +4,7 @@ report-roots = ["dependency_closure_app::justified", "dependency_closure_app::qu
 [compiler]
 inline-mir = "off"
 
-[panics]
+[panic]
 trusted-boundary-namespaces = ["core", "std"]
 [safety]
 trusted-boundary-namespaces = ["core", "std"]
