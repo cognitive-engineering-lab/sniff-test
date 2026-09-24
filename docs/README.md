@@ -108,7 +108,6 @@ ambiguous-marker = "deny"
 ambiguous-requirement = "deny"
 missing-safety-docs = "warn"
 unsafe-call-missing-justification = "warn"
-unsafe-call-missing-requirements = "warn"
 # Group default for non-call unsafe operations.
 unsafe-op-missing-justification = "warn"
 # Optional exact overrides:
@@ -213,6 +212,8 @@ to require each documented sub-obligation to be justified by name, or by the
 same nested list structure when it has no explicit name.
 An unmet documented obligation uses the effect's invocation lint level:
 `panic-invocation` or `unsafe-call-missing-justification`.
+This also applies when `exact` matching finds a justification that leaves some
+documented requirements unsatisfied.
 
 `report-roots` controls workspace traversal and reporting, not artifact
 extraction. Effects propagate from each selected workspace root through local

@@ -21,6 +21,3 @@ panic-sink-namespaces = [
 
 [panics.lints]
 panic-invocation = "warn"
-
-[safety.lints]
-unsafe-call-missing-requirements = "warn"

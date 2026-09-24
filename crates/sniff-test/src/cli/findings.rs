@@ -743,7 +743,7 @@ mod tests {
         shortest_distinguishing_root_labels, take_full_stack_trace_hint,
     };
     use crate::artifact::{SourceFileFact, SourceFileId, SourceRangeFact};
-    use crate::config::{LintLevel, SniffTestConfig};
+    use crate::config::{EffectDocMatching, LintLevel, SniffTestConfig};
     use crate::report_model::{
         EffectFindingClass, UnresolvedCallCoverage, UnresolvedCallMechanism, UnresolvedCallSite,
     };
@@ -803,11 +803,13 @@ mod tests {
     #[test]
     fn documented_obligations_use_invocation_lint_with_or_without_requirements() {
         let mut config = SniffTestConfig::default();
+        config.analysis.effect_doc_matching = EffectDocMatching::Exact;
         config.safety.lints.unsafe_call_missing_justification = LintLevel::Deny;
         config.panics.lints.panic_invocation = LintLevel::Allow;
         let ordinary = finding(effect("safety", EffectFindingClass::DocumentedObligation));
         let mut obligation = finding(effect("safety", EffectFindingClass::DocumentedObligation));
         obligation.missing_requirements = vec![String::from("caller holds the lock")];
+        obligation.source_evidence = Some(SourceEvidence::Present);
         let invocation = finding(effect("safety", EffectFindingClass::ConcreteInvocation));
         let panic_obligation = finding(effect("panic", EffectFindingClass::DocumentedObligation));
 

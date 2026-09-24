@@ -471,7 +471,6 @@ pub struct SafetyLintConfig {
     pub unresolved_call_target: Option<LintLevel>,
     /// Severity for unjustified unsafe calls and documented obligations.
     pub unsafe_call_missing_justification: LintLevel,
-    pub unsafe_call_missing_requirements: LintLevel,
     pub unsafe_op_missing_justification: LintLevel,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub raw_pointer_dereference_missing_justification: Option<LintLevel>,
@@ -504,7 +503,6 @@ impl Default for SafetyLintConfig {
             ambiguous_requirement: LintLevel::Deny,
             unresolved_call_target: None,
             unsafe_call_missing_justification: LintLevel::Warn,
-            unsafe_call_missing_requirements: LintLevel::Warn,
             unsafe_op_missing_justification: LintLevel::Warn,
             raw_pointer_dereference_missing_justification: None,
             mutable_static_access_missing_justification: None,
@@ -1301,7 +1299,6 @@ mod tests {
             LintLevel::Warn
         );
         assert_eq!(lints.unsafe_call_missing_justification, LintLevel::Warn);
-        assert_eq!(lints.unsafe_call_missing_requirements, LintLevel::Warn);
         assert_eq!(lints.unsafe_op_missing_justification, LintLevel::Warn);
         assert_eq!(
             [
@@ -1318,6 +1315,19 @@ mod tests {
                 lints.unsafe_binder_cast_missing_justification,
             ],
             [None; 11]
+        );
+    }
+
+    #[test]
+    fn removed_safety_missing_requirements_lint_is_rejected() {
+        let error = SniffTestConfig::from_manifest_str(
+            "[safety.lints]\nunsafe-call-missing-requirements = \"warn\"",
+        )
+        .expect_err("the removed lint should not be accepted");
+        assert!(
+            error
+                .to_string()
+                .contains("unsafe-call-missing-requirements")
         );
     }
 
@@ -1418,7 +1428,6 @@ mod tests {
 
             [safety.lints]
             unsafe-call-missing-justification = "deny"
-            unsafe-call-missing-requirements = "allow"
             unsafe-op-missing-justification = "deny"
             unresolved-call-target = "deny"
         "#;
@@ -1445,10 +1454,6 @@ mod tests {
         assert_eq!(
             parsed.safety.lints.unsafe_call_missing_justification,
             LintLevel::Deny
-        );
-        assert_eq!(
-            parsed.safety.lints.unsafe_call_missing_requirements,
-            LintLevel::Allow
         );
         assert_eq!(
             parsed.safety.lints.unsafe_op_missing_justification,

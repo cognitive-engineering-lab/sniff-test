@@ -153,7 +153,6 @@ ambiguous-requirement = "deny"
 # `allow` suppresses the finding from diagnostics and JSON reports.
 unresolved-call-target = "allow"
 unsafe-call-missing-justification = "warn"
-unsafe-call-missing-requirements = "warn"
 # Group default for non-call unsafe operations. Each exact override is optional
 # and takes precedence for its operation subtype.
 unsafe-op-missing-justification = "warn"
