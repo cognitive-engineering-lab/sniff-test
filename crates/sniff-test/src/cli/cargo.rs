@@ -132,7 +132,7 @@ fn discover_manifest(mut args: SniffTestArgs, workspace_root: &Path) -> Result<S
     }
 
     eprintln!(
-        "sniff-test: no {} found between {} and {}; using built-in defaults (public report roots, panic findings denied, safety findings warned)",
+        "sniff-test: no {} found between {} and {}; using built-in defaults (public report roots, panic and safety findings warned)",
         crate::config::DEFAULT_MANIFEST_FILE,
         cwd.display(),
         workspace_root.display(),

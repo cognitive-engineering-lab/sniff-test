@@ -12,3 +12,6 @@ panic-sink-namespaces = [
     "core::std::rt::panic_fmt",
     "std::rt::panic_fmt",
 ]
+
+[panics.lints]
+operation = "deny"

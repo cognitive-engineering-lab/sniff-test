@@ -2,13 +2,13 @@
 source: crates/sniff-test/tests/cli.rs
 expression: snapshot
 ---
-exit: 101
+exit: 0
 stdout:
 <empty>
 stderr:
-sniff-test: no sniff-test.toml found between [TEMP] and [FIXTURE]; using built-in defaults (public report roots, panic findings denied, safety findings warned)
+sniff-test: no sniff-test.toml found between [TEMP] and [FIXTURE]; using built-in defaults (public report roots, panic and safety findings warned)
     Checking panic-axioms v0.1.0 ([FIXTURE])
-error: [sniff-test::panic::division-by-zero] division by zero has no recorded `// PANIC:` justification
+warning: [sniff-test::panic::division-by-zero] division by zero has no recorded `// PANIC:` justification
  --> src/lib.rs:2:5
   |
 2 |     total_size / block_count
@@ -26,7 +26,7 @@ help: [option 2] document this function's obligations with `/// # Panics` here
   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
   = note: reachable from `division` to `division by zero`
 
-error: [sniff-test::panic::bounds-check] bounds check has no recorded `// PANIC:` justification
+warning: [sniff-test::panic::bounds-check] bounds check has no recorded `// PANIC:` justification
   --> src/lib.rs:10:5
    |
 10 |     values[index]
@@ -44,7 +44,7 @@ help: [option 2] document this function's obligations with `/// # Panics` here
    | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
    = note: reachable from `indexed` to `bounds check`
 
-error: [sniff-test::panic::remainder-by-zero] remainder by zero has no recorded `// PANIC:` justification
+warning: [sniff-test::panic::remainder-by-zero] remainder by zero has no recorded `// PANIC:` justification
  --> src/lib.rs:6:5
   |
 6 |     total_size % block_size
@@ -63,4 +63,5 @@ help: [option 2] document this function's obligations with `/// # Panics` here
   = note: reachable from `remainder` to `remainder by zero`
 
 note: set `show-full-stack-trace = true` under `[analysis]` in sniff-test.toml to show every reachability step
-error: could not compile `panic-axioms` (lib) due to 3 previous errors
+warning: `panic-axioms` (lib) generated 3 warnings
+    Finished `release` profile [optimized] target(s) in [TIME]

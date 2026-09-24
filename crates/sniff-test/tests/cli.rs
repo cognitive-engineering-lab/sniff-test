@@ -16,6 +16,7 @@ struct Case {
     color: &'static str,
     working_dir: Option<&'static str>,
     config_append: &'static str,
+    config_replacement: Option<(&'static str, &'static str)>,
     args: &'static [&'static str],
     rustflags: Option<&'static str>,
 }
@@ -73,13 +74,13 @@ macro_rules! cli_cases {
 cli_cases! {
     "direct_panic" => {
         panic_invocation_can_be_allowed => Case::new()
-            .config_append("\n[panics.lints]\ninvocation = \"allow\"\n");
+            .config_replace("invocation = \"deny\"", "invocation = \"allow\"");
     }
     "source_aggregation" => {
         source_aggregation_emits_one_diagnostic_per_root => Case::new()
             .denied();
         source_aggregation_emits_one_warning_per_root => Case::new()
-            .config_append("\n[panics.lints]\ninvocation = \"warn\"\n");
+            .config_replace("invocation = \"deny\"", "invocation = \"warn\"");
     }
     "safe_markers" => {
         compact_stack_hint => Case::new().denied();
@@ -117,29 +118,24 @@ cli_cases! {
         compiler_assert_diagnostics => Case::new().denied();
         compiler_assert_division_override_uses_umbrella_fallback =>
             Case::new()
+                .config_replace("operation = \"deny\"", "operation = \"allow\"")
                 .config_append(
-                    "\n[panics.lints]\n\
-                     operation = \"allow\"\n\
-                     invocation = \"allow\"\n\
-                     [panics.lints.operations]\n\
+                    "\n[panics.lints.operations]\n\
                      division-by-zero = \"deny\"\n",
                 )
                 .denied();
         compiler_assert_overrides_are_independent =>
             Case::new()
+                .config_replace("operation = \"deny\"", "operation = \"allow\"")
                 .config_append(
-                    "\n[panics.lints]\n\
-                     operation = \"allow\"\n\
-                     invocation = \"allow\"\n\
-                     [panics.lints.operations]\n\
+                    "\n[panics.lints.operations]\n\
                      remainder-by-zero = \"warn\"\n\
                      bounds-check = \"deny\"\n",
                 )
                 .denied();
         cargo_manifest_path_forwarding => Case::new()
             .working_dir("..")
-            .args(&["--", "--manifest-path", "panic_axioms/Cargo.toml"])
-            .denied();
+            .args(&["--", "--manifest-path", "panic_axioms/Cargo.toml"]);
     }
     "report_roots" => {
         missing_report_root_diagnostic => Case::new()
@@ -2092,6 +2088,7 @@ impl Case {
             color: "never",
             working_dir: None,
             config_append: "",
+            config_replacement: None,
             args: &[],
             rustflags: None,
         }
@@ -2119,6 +2116,11 @@ impl Case {
 
     fn config_append(mut self, config_append: &'static str) -> Self {
         self.config_append = config_append;
+        self
+    }
+
+    fn config_replace(mut self, from: &'static str, to: &'static str) -> Self {
+        self.config_replacement = Some((from, to));
         self
     }
 
@@ -2212,11 +2214,20 @@ fn run_case(
         .unwrap_or_else(|error| panic!("{name}: failed to copy fixture: {error}"));
 
     let crate_dir = if case.app_crate { "app" } else { "" };
-    if !case.config_append.is_empty() {
+    if !case.config_append.is_empty() || case.config_replacement.is_some() {
         let config = root.join(crate_dir).join("sniff-test.toml");
         let existing = fs::read_to_string(&config)
             .unwrap_or_else(|error| panic!("{name}: failed to read config: {error}"));
-        fs::write(config, existing + case.config_append)
+        let replaced = if let Some((from, to)) = case.config_replacement {
+            assert!(
+                existing.contains(from),
+                "{name}: config does not contain {from}"
+            );
+            existing.replacen(from, to, 1)
+        } else {
+            existing
+        };
+        fs::write(config, replaced + case.config_append)
             .unwrap_or_else(|error| panic!("{name}: failed to update config: {error}"));
     }
 

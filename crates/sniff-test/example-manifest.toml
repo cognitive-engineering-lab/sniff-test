@@ -119,9 +119,9 @@ ambiguous-requirement = "deny"
 # `allow` suppresses the finding from diagnostics and JSON reports.
 # Group default for compiler-generated MIR assertions. Each exact override is
 # optional and takes precedence for its assertion subtype.
-operation = "deny"
+operation = "warn"
 # Also controls unmet documented `# Panics` obligations.
-invocation = "deny"
+invocation = "warn"
 
 [panics.lints.operations]
 # bounds-check = "deny"

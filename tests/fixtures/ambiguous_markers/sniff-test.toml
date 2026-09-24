@@ -16,3 +16,6 @@ panic-sink-namespaces = [
     "std::rt::panic_fmt",
     "ambiguous_markers::configured_sink",
 ]
+[panics.lints]
+operation = "deny"
+invocation = "deny"

@@ -80,8 +80,8 @@ trusted-boundary-namespaces = ["core", "alloc", "std"]
 ambiguous-marker = "deny" # deny | warn | allow
 ambiguous-requirement = "deny"
 # Group default for compiler-generated MIR assertions.
-operation = "deny"
-invocation = "deny"
+operation = "warn"
+invocation = "warn"
 
 [panics.lints.operations]
 # Optional exact overrides:

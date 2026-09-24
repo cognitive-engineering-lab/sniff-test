@@ -1,0 +1,3 @@
+[panics.lints]
+operation = "deny"
+invocation = "deny"

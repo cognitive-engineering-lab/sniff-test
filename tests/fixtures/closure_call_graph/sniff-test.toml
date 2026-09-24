@@ -20,3 +20,6 @@ panic-sink-namespaces = [
 [safety]
 # Keep the safety traversal scoped to the closure behavior under test too.
 ignored-namespaces = ["alloc::**"]
+[panics.lints]
+operation = "deny"
+invocation = "deny"

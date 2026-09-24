@@ -17,6 +17,7 @@ panic-sink-namespaces = [
 
 [panics.lints]
 operation = "allow"
+invocation = "deny"
 
 [safety.lints]
 invocation = "deny"

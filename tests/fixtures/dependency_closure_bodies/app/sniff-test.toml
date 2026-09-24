@@ -10,3 +10,6 @@ panic-sink-namespaces = ["core::panicking::**"]
 
 [safety]
 trusted-boundary-namespaces = ["core", "std"]
+[panics.lints]
+operation = "deny"
+invocation = "deny"

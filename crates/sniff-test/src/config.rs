@@ -374,9 +374,9 @@ impl Default for PanicLintConfig {
         Self {
             ambiguous_marker: LintLevel::Deny,
             ambiguous_requirement: LintLevel::Deny,
-            operation: LintLevel::Deny,
+            operation: LintLevel::Warn,
             operations: BTreeMap::new(),
-            invocation: LintLevel::Deny,
+            invocation: LintLevel::Warn,
             unresolved_call_target: None,
         }
     }
@@ -1122,7 +1122,7 @@ mod tests {
         assert_eq!(parsed.panics.lints.ambiguous_marker, LintLevel::Deny);
         assert_eq!(parsed.safety.lints.ambiguous_marker, LintLevel::Deny);
         assert_eq!(parsed.panics.lints.invocation, LintLevel::Allow);
-        assert_eq!(parsed.panics.lints.operation, LintLevel::Deny);
+        assert_eq!(parsed.panics.lints.operation, LintLevel::Warn);
         assert_eq!(parsed.safety.lints.invocation, LintLevel::Warn);
     }
 
@@ -1172,12 +1172,12 @@ mod tests {
     }
 
     #[test]
-    fn default_panic_lints_deny_unjustified_invocations() {
+    fn default_panic_lints_warn_on_unjustified_invocations_and_operations() {
         let lints = PanicConfig::default().lints;
 
-        assert_eq!(lints.operation, LintLevel::Deny);
+        assert_eq!(lints.operation, LintLevel::Warn);
         assert!(lints.operations.is_empty());
-        assert_eq!(lints.invocation, LintLevel::Deny);
+        assert_eq!(lints.invocation, LintLevel::Warn);
         assert_eq!(lints.unresolved_call_target, None);
         assert_eq!(PanicConfig::default().coverage, CoverageConfig::default());
         assert_eq!(

@@ -3,3 +3,6 @@ panic-sink-namespaces = [
     "core::panicking::**",
     "std::panicking::**",
 ]
+[panics.lints]
+operation = "deny"
+invocation = "deny"
