@@ -39,14 +39,6 @@ trace-state-budget = 1000000
 
 [analysis.lints]
 undocumented-effect-invocation = "warn"
-# Incomplete panic and safety traversals use their corresponding policy. Use
-# `warn` while auditing incomplete evidence, or `allow` to accept it.
-panic-analysis-incomplete = "deny"
-safety-analysis-incomplete = "deny"
-ambiguous-panic-marker = "deny"
-ambiguous-safety-marker = "deny"
-ambiguous-panic-requirement = "deny"
-ambiguous-safety-requirement = "deny"
 
 [contracts]
 # Synthetic rustdoc markdown by namespace glob, loaded from TOML files relative
@@ -111,6 +103,8 @@ panic-sink-namespaces = [
 ]
 
 [panics.lints]
+ambiguous-marker = "deny"
+ambiguous-requirement = "deny"
 # `deny` emits an error and makes `cargo sniff-test` fail.
 # `warn` emits a warning without failing the run.
 # `allow` suppresses the finding from diagnostics and JSON reports.
@@ -132,6 +126,9 @@ panic-invocation = "deny"
 # Calls with a remaining unresolved target. Known targets are still traced.
 unresolved-call-target = "allow"
 
+[panics.coverage]
+analysis-incomplete = "deny"
+
 [safety]
 # Namespaces whose containing function bodies should not produce SafetyEffect
 # sources. This does not trust a called API or suppress its surface `# Safety`
@@ -147,6 +144,8 @@ trusted-boundary-namespaces = [
 ]
 
 [safety.lints]
+ambiguous-marker = "deny"
+ambiguous-requirement = "deny"
 # `deny` emits an error and makes `cargo sniff-test` fail.
 # `warn` emits a warning without failing the run.
 # `allow` suppresses the finding from diagnostics and JSON reports.
@@ -167,3 +166,6 @@ unsafe-op-missing-justification = "warn"
 # layout-constrained-field-borrow-missing-justification = "warn"
 # inline-assembly-missing-justification = "warn"
 # unsafe-binder-cast-missing-justification = "warn"
+
+[safety.coverage]
+analysis-incomplete = "deny"

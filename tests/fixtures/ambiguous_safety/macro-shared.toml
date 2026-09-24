@@ -5,8 +5,6 @@ report-roots = [
     "ambiguous_safety::reused_partial_marker_for_safe_obligations_inside_unsafe_block",
 ]
 
-[analysis.lints]
-ambiguous-safety-marker = "deny"
-
 [safety.lints]
+ambiguous-marker = "deny"
 unsafe-call-missing-justification = "deny"

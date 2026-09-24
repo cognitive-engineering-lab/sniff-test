@@ -47,10 +47,6 @@ trace-state-budget = 1000000
 [analysis.lints]
 # Invocations whose effect writer requires caller-obligation documentation.
 undocumented-effect-invocation = "warn"
-ambiguous-panic-marker = "deny"
-ambiguous-safety-marker = "deny"
-ambiguous-panic-requirement = "deny"
-ambiguous-safety-requirement = "deny"
 
 [contracts]
 # Synthetic rustdoc markdown by namespace glob, loaded from TOML files relative
@@ -116,6 +112,8 @@ panic-sink-namespaces = [
 ]
 
 [panics.lints]
+ambiguous-marker = "deny"
+ambiguous-requirement = "deny"
 # `deny` emits an error and makes `cargo sniff-test` fail.
 # `warn` emits a warning without failing the run.
 # `allow` suppresses the finding from diagnostics and JSON reports.
@@ -162,6 +160,8 @@ ignored-namespaces = []
 trusted-boundary-namespaces = ["core", "alloc", "std"]
 
 [safety.lints]
+ambiguous-marker = "deny"
+ambiguous-requirement = "deny"
 # `deny` emits an error and makes `cargo sniff-test` fail.
 # `warn` emits a warning without failing the run.
 # `allow` suppresses the finding from diagnostics and JSON reports.

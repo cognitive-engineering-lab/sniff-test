@@ -44,16 +44,6 @@ effect-doc-matching = "any-justification"
 max-trace-depth = 256
 trace-state-budget = 1000000
 
-[analysis.lints]
-# Incomplete panic and safety traversals use their corresponding policy. Use
-# `warn` while auditing incomplete evidence, or `allow` to accept it.
-panic-analysis-incomplete = "deny"
-safety-analysis-incomplete = "deny"
-ambiguous-panic-marker = "deny"
-ambiguous-safety-marker = "allow"
-ambiguous-panic-requirement = "deny"
-ambiguous-safety-requirement = "deny"
-
 [contracts]
 # Synthetic rustdoc markdown by namespace glob, loaded from TOML files relative
 # to this manifest. Useful while auditing external or generated APIs whose
@@ -118,6 +108,8 @@ panic-sink-namespaces = [
 ]
 
 [panics.lints]
+ambiguous-marker = "deny"
+ambiguous-requirement = "deny"
 # `deny` emits an error and makes `cargo sniff-test` fail.
 # `warn` emits a warning without failing the run.
 # `allow` suppresses the finding from diagnostics and JSON reports.
@@ -138,6 +130,10 @@ compiler-assert = "deny"
 panic-invocation = "deny"
 # Calls with a remaining unresolved target. Known targets are still traced.
 unresolved-call-target = "allow"
+
+[panics.coverage]
+# A halted traversal leaves the effect unknown.
+analysis-incomplete = "deny"
 
 [safety]
 # Crates, fully-qualified functions, or macro expansion paths whose safety
@@ -161,6 +157,8 @@ ignored-namespaces = [
 trusted-boundary-namespaces = ["core", "alloc", "std"]
 
 [safety.lints]
+ambiguous-marker = "allow"
+ambiguous-requirement = "deny"
 # `deny` emits an error and makes `cargo sniff-test` fail.
 # `warn` emits a warning without failing the run.
 # `allow` suppresses the finding from diagnostics and JSON reports.
@@ -182,3 +180,6 @@ unsafe-op-missing-justification = "warn"
 # layout-constrained-field-borrow-missing-justification = "warn"
 # inline-assembly-missing-justification = "warn"
 # unsafe-binder-cast-missing-justification = "warn"
+
+[safety.coverage]
+analysis-incomplete = "deny"

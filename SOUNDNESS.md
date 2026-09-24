@@ -120,9 +120,9 @@ default; the unvisited region remains unknown.
 Failure to produce, validate, or persist required artifact facts is a tool error.
 During interpretation, an absent reached body emits an incomplete finding only
 when its stable crate ID is owned by the local facts or a loaded artifact.
-`panic-analysis-incomplete` controls panic missing-body, trace-depth, and
-state-budget findings;
-`safety-analysis-incomplete` controls the corresponding safety findings.
+`[panics.coverage].analysis-incomplete` controls panic missing-body, trace-depth,
+and state-budget findings; `[safety.coverage].analysis-incomplete` controls the
+corresponding safety findings.
 Unmanaged compiler-crate bodies have the behavior described above.
 
 ### Unresolved callable targets remain unknown
@@ -150,7 +150,8 @@ or unrelated statements. Explicit unsafe-scope markers are associated through
 SafetyEffect's compiler-derived effect groups rather than generic AST ascent.
 Requirement names are normalized; duplicates produce
 `ambiguous-panic-requirement` or `ambiguous-safety-requirement`, both denied by
-default.
+default through `[panics.lints].ambiguous-requirement` and
+`[safety.lints].ambiguous-requirement`, respectively.
 
 ## Toolchain-pinned assumptions
 

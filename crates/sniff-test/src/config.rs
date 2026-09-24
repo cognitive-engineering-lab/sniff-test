@@ -19,7 +19,7 @@ use std::fmt::{Debug, Display, Formatter};
 use std::ops::Range;
 use std::path::{Path, PathBuf};
 
-use serde::{Deserialize, Deserializer, Serialize};
+use serde::{Deserialize, Serialize};
 use toml::Spanned;
 
 use crate::contracts::ContractDocOverrides;
@@ -245,85 +245,17 @@ pub enum MarkerProbing {
     MacroDefinitionFirst,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "kebab-case")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "kebab-case", deny_unknown_fields, default)]
 pub struct AnalysisLintConfig {
     pub undocumented_effect_invocation: LintLevel,
-    pub ambiguous_panic_marker: LintLevel,
-    pub ambiguous_safety_marker: LintLevel,
-    pub ambiguous_panic_requirement: LintLevel,
-    pub ambiguous_safety_requirement: LintLevel,
-    pub panic_analysis_incomplete: LintLevel,
-    pub safety_analysis_incomplete: LintLevel,
 }
 
 impl Default for AnalysisLintConfig {
     fn default() -> Self {
         Self {
             undocumented_effect_invocation: LintLevel::Warn,
-            ambiguous_panic_marker: LintLevel::Deny,
-            ambiguous_safety_marker: LintLevel::Deny,
-            ambiguous_panic_requirement: LintLevel::Deny,
-            ambiguous_safety_requirement: LintLevel::Deny,
-            // A truncated traversal proves nothing about the missing region.
-            panic_analysis_incomplete: LintLevel::Deny,
-            safety_analysis_incomplete: LintLevel::Deny,
         }
-    }
-}
-
-#[derive(Debug, Default, Deserialize)]
-#[serde(rename_all = "kebab-case", deny_unknown_fields, default)]
-struct RawAnalysisLintConfig {
-    undocumented_effect_invocation: Option<LintLevel>,
-    ambiguous_panic_marker: Option<LintLevel>,
-    ambiguous_safety_marker: Option<LintLevel>,
-    ambiguous_panic_requirement: Option<LintLevel>,
-    ambiguous_safety_requirement: Option<LintLevel>,
-    panic_analysis_incomplete: Option<LintLevel>,
-    safety_analysis_incomplete: Option<LintLevel>,
-    // Group defaults used when exact effect-specific values are absent.
-    ambiguous_effect_marker: Option<LintLevel>,
-    ambiguous_effect_requirement: Option<LintLevel>,
-    analysis_incomplete: Option<LintLevel>,
-}
-
-impl<'de> Deserialize<'de> for AnalysisLintConfig {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        let raw = RawAnalysisLintConfig::deserialize(deserializer)?;
-        let defaults = Self::default();
-        Ok(Self {
-            undocumented_effect_invocation: raw
-                .undocumented_effect_invocation
-                .unwrap_or(defaults.undocumented_effect_invocation),
-            ambiguous_panic_marker: raw
-                .ambiguous_panic_marker
-                .or(raw.ambiguous_effect_marker)
-                .unwrap_or(defaults.ambiguous_panic_marker),
-            ambiguous_safety_marker: raw
-                .ambiguous_safety_marker
-                .or(raw.ambiguous_effect_marker)
-                .unwrap_or(defaults.ambiguous_safety_marker),
-            ambiguous_panic_requirement: raw
-                .ambiguous_panic_requirement
-                .or(raw.ambiguous_effect_requirement)
-                .unwrap_or(defaults.ambiguous_panic_requirement),
-            ambiguous_safety_requirement: raw
-                .ambiguous_safety_requirement
-                .or(raw.ambiguous_effect_requirement)
-                .unwrap_or(defaults.ambiguous_safety_requirement),
-            panic_analysis_incomplete: raw
-                .panic_analysis_incomplete
-                .or(raw.analysis_incomplete)
-                .unwrap_or(defaults.panic_analysis_incomplete),
-            safety_analysis_incomplete: raw
-                .safety_analysis_incomplete
-                .or(raw.analysis_incomplete)
-                .unwrap_or(defaults.safety_analysis_incomplete),
-        })
     }
 }
 
@@ -420,6 +352,8 @@ impl Default for PanicConfig {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "kebab-case", deny_unknown_fields, default)]
 pub struct PanicLintConfig {
+    pub ambiguous_marker: LintLevel,
+    pub ambiguous_requirement: LintLevel,
     pub compiler_assert: LintLevel,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub compiler_assert_bounds_check: Option<LintLevel>,
@@ -452,6 +386,8 @@ pub struct PanicLintConfig {
 impl Default for PanicLintConfig {
     fn default() -> Self {
         Self {
+            ambiguous_marker: LintLevel::Deny,
+            ambiguous_requirement: LintLevel::Deny,
             compiler_assert: LintLevel::Deny,
             compiler_assert_bounds_check: None,
             compiler_assert_overflow: None,
@@ -529,6 +465,8 @@ pub struct SafetyConfig {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "kebab-case", deny_unknown_fields, default)]
 pub struct SafetyLintConfig {
+    pub ambiguous_marker: LintLevel,
+    pub ambiguous_requirement: LintLevel,
     /// Legacy location; prefer `[safety.coverage]`.
     pub unresolved_call_target: Option<LintLevel>,
     /// Severity for unjustified unsafe calls and documented obligations.
@@ -562,6 +500,8 @@ pub struct SafetyLintConfig {
 impl Default for SafetyLintConfig {
     fn default() -> Self {
         Self {
+            ambiguous_marker: LintLevel::Deny,
+            ambiguous_requirement: LintLevel::Deny,
             unresolved_call_target: None,
             unsafe_call_missing_justification: LintLevel::Warn,
             unsafe_call_missing_requirements: LintLevel::Warn,
@@ -610,11 +550,11 @@ impl crate::effects::EffectConfig for PanicConfig {
         &self.trusted_boundary_namespaces
     }
 
-    fn finding_lints(&self, analysis: &AnalysisLintConfig) -> EffectFindingLints {
+    fn finding_lints(&self) -> EffectFindingLints {
         EffectFindingLints {
             concrete_invocation: self.lints.panic_invocation,
-            ambiguous_marker: analysis.ambiguous_panic_marker,
-            ambiguous_requirement: analysis.ambiguous_panic_requirement,
+            ambiguous_marker: self.lints.ambiguous_marker,
+            ambiguous_requirement: self.lints.ambiguous_requirement,
         }
     }
 
@@ -639,12 +579,8 @@ impl crate::effects::EffectConfig for PanicConfig {
         .unwrap_or(lints.compiler_assert)
     }
 
-    fn effective_coverage(&self, analysis: &AnalysisLintConfig) -> EffectiveCoverageConfig {
-        effective_coverage(
-            self.coverage,
-            self.lints.unresolved_call_target,
-            analysis.panic_analysis_incomplete,
-        )
+    fn effective_coverage(&self) -> EffectiveCoverageConfig {
+        effective_coverage(self.coverage, self.lints.unresolved_call_target)
     }
 }
 
@@ -657,11 +593,11 @@ impl crate::effects::EffectConfig for SafetyConfig {
         &self.trusted_boundary_namespaces
     }
 
-    fn finding_lints(&self, analysis: &AnalysisLintConfig) -> EffectFindingLints {
+    fn finding_lints(&self) -> EffectFindingLints {
         EffectFindingLints {
             concrete_invocation: self.lints.unsafe_call_missing_justification,
-            ambiguous_marker: analysis.ambiguous_safety_marker,
-            ambiguous_requirement: analysis.ambiguous_safety_requirement,
+            ambiguous_marker: self.lints.ambiguous_marker,
+            ambiguous_requirement: self.lints.ambiguous_requirement,
         }
     }
 
@@ -692,19 +628,14 @@ impl crate::effects::EffectConfig for SafetyConfig {
         .unwrap_or(lints.unsafe_op_missing_justification)
     }
 
-    fn effective_coverage(&self, analysis: &AnalysisLintConfig) -> EffectiveCoverageConfig {
-        effective_coverage(
-            self.coverage,
-            self.lints.unresolved_call_target,
-            analysis.safety_analysis_incomplete,
-        )
+    fn effective_coverage(&self) -> EffectiveCoverageConfig {
+        effective_coverage(self.coverage, self.lints.unresolved_call_target)
     }
 }
 
 fn effective_coverage(
     coverage: CoverageConfig,
     legacy_unresolved: Option<LintLevel>,
-    legacy_incomplete: LintLevel,
 ) -> EffectiveCoverageConfig {
     // New per-effect coverage settings take precedence over historical lint keys.
     EffectiveCoverageConfig {
@@ -712,7 +643,8 @@ fn effective_coverage(
             .unresolved_call_target
             .or(legacy_unresolved)
             .unwrap_or(LintLevel::Warn),
-        analysis_incomplete: coverage.analysis_incomplete.unwrap_or(legacy_incomplete),
+        // A truncated traversal proves nothing about the missing region.
+        analysis_incomplete: coverage.analysis_incomplete.unwrap_or(LintLevel::Deny),
     }
 }
 
@@ -903,10 +835,9 @@ mod tests {
     use crate::effects::EffectConfig;
 
     use super::{
-        AnalysisConfig, AnalysisLintConfig, CompilerConfig, ConfigError, ContractDocOverrideFile,
-        ContractDocOverrides, CoverageConfig, EXAMPLE_MANIFEST, EffectDocMatching, LintLevel,
-        MarkerProbing, MirInlining, OverflowChecks, PanicConfig, PathPatterns, ReportRootSet,
-        SafetyConfig, SniffTestConfig,
+        AnalysisConfig, CompilerConfig, ConfigError, ContractDocOverrideFile, ContractDocOverrides,
+        CoverageConfig, EXAMPLE_MANIFEST, EffectDocMatching, LintLevel, MarkerProbing, MirInlining,
+        OverflowChecks, PanicConfig, PathPatterns, ReportRootSet, SafetyConfig, SniffTestConfig,
     };
 
     fn path_patterns(patterns: &[&str]) -> PathPatterns {
@@ -1138,127 +1069,39 @@ mod tests {
     }
 
     #[test]
-    fn parses_granular_analysis_lint_levels() {
+    fn parses_effect_specific_lints_and_coverage() {
         let config = r#"
-            [analysis.lints]
-            ambiguous-panic-marker = "allow"
-            ambiguous-safety-marker = "warn"
-            ambiguous-panic-requirement = "deny"
-            ambiguous-safety-requirement = "allow"
-            panic-analysis-incomplete = "warn"
-            safety-analysis-incomplete = "deny"
-        "#;
+            [panics.lints]
+            ambiguous-marker = "allow"
+            ambiguous-requirement = "warn"
 
-        let parsed = SniffTestConfig::from_manifest_str(config).expect("manifest should parse");
-
-        assert_eq!(
-            parsed.analysis.lints.ambiguous_panic_marker,
-            LintLevel::Allow
-        );
-        assert_eq!(
-            parsed.analysis.lints.ambiguous_safety_marker,
-            LintLevel::Warn
-        );
-        assert_eq!(
-            parsed.analysis.lints.ambiguous_panic_requirement,
-            LintLevel::Deny
-        );
-        assert_eq!(
-            parsed.analysis.lints.ambiguous_safety_requirement,
-            LintLevel::Allow
-        );
-        assert_eq!(
-            parsed.analysis.lints.panic_analysis_incomplete,
-            LintLevel::Warn
-        );
-        assert_eq!(
-            parsed.analysis.lints.safety_analysis_incomplete,
-            LintLevel::Deny
-        );
-    }
-
-    #[test]
-    fn legacy_analysis_lint_umbrellas_seed_granular_levels() {
-        let config = r#"
-            [analysis.lints]
-            ambiguous-effect-marker = "warn"
-            ambiguous-effect-requirement = "allow"
+            [panics.coverage]
             analysis-incomplete = "warn"
-        "#;
 
-        let parsed = SniffTestConfig::from_manifest_str(config).expect("manifest should parse");
+            [safety.lints]
+            ambiguous-marker = "warn"
+            ambiguous-requirement = "allow"
 
-        assert_eq!(
-            parsed.analysis.lints.ambiguous_panic_marker,
-            LintLevel::Warn
-        );
-        assert_eq!(
-            parsed.analysis.lints.ambiguous_safety_marker,
-            LintLevel::Warn
-        );
-        assert_eq!(
-            parsed.analysis.lints.ambiguous_panic_requirement,
-            LintLevel::Allow
-        );
-        assert_eq!(
-            parsed.analysis.lints.ambiguous_safety_requirement,
-            LintLevel::Allow
-        );
-        assert_eq!(
-            parsed.analysis.lints.panic_analysis_incomplete,
-            LintLevel::Warn
-        );
-        assert_eq!(
-            parsed.analysis.lints.safety_analysis_incomplete,
-            LintLevel::Warn
-        );
-    }
-
-    #[test]
-    fn granular_analysis_lints_override_legacy_umbrellas() {
-        let config = r#"
-            [analysis.lints]
-            ambiguous-effect-marker = "allow"
-            ambiguous-panic-marker = "deny"
-            ambiguous-effect-requirement = "deny"
-            ambiguous-safety-requirement = "warn"
+            [safety.coverage]
             analysis-incomplete = "allow"
-            safety-analysis-incomplete = "deny"
         "#;
-
         let parsed = SniffTestConfig::from_manifest_str(config).expect("manifest should parse");
-
+        assert_eq!(parsed.panics.lints.ambiguous_marker, LintLevel::Allow);
+        assert_eq!(parsed.panics.lints.ambiguous_requirement, LintLevel::Warn);
         assert_eq!(
-            parsed.analysis.lints.ambiguous_panic_marker,
-            LintLevel::Deny
-        );
-        assert_eq!(
-            parsed.analysis.lints.ambiguous_safety_marker,
-            LintLevel::Allow
-        );
-        assert_eq!(
-            parsed.analysis.lints.ambiguous_panic_requirement,
-            LintLevel::Deny
-        );
-        assert_eq!(
-            parsed.analysis.lints.ambiguous_safety_requirement,
+            parsed.panics.effective_coverage().analysis_incomplete,
             LintLevel::Warn
         );
+        assert_eq!(parsed.safety.lints.ambiguous_marker, LintLevel::Warn);
+        assert_eq!(parsed.safety.lints.ambiguous_requirement, LintLevel::Allow);
         assert_eq!(
-            parsed.analysis.lints.panic_analysis_incomplete,
+            parsed.safety.effective_coverage().analysis_incomplete,
             LintLevel::Allow
-        );
-        assert_eq!(
-            parsed.analysis.lints.safety_analysis_incomplete,
-            LintLevel::Deny
         );
     }
 
     #[test]
-    fn serializes_only_canonical_analysis_lint_keys() {
-        let serialized =
-            toml::to_string(&AnalysisLintConfig::default()).expect("lint config should serialize");
-
+    fn analysis_lints_reject_effect_specific_keys() {
         for key in [
             "ambiguous-panic-marker",
             "ambiguous-safety-marker",
@@ -1266,20 +1109,14 @@ mod tests {
             "ambiguous-safety-requirement",
             "panic-analysis-incomplete",
             "safety-analysis-incomplete",
-        ] {
-            assert!(serialized.contains(key), "missing canonical key `{key}`");
-        }
-        for legacy in [
             "ambiguous-effect-marker",
             "ambiguous-effect-requirement",
             "analysis-incomplete",
         ] {
-            assert!(
-                !serialized
-                    .lines()
-                    .any(|line| line.starts_with(&format!("{legacy} ="))),
-                "serialized legacy key `{legacy}`"
-            );
+            let source = format!("[analysis.lints]\n{key} = \"warn\"\n");
+            let error = SniffTestConfig::from_manifest_str(&source)
+                .expect_err("old location must be rejected");
+            assert!(error.to_string().contains(key), "{error}");
         }
     }
 
@@ -1300,14 +1137,8 @@ mod tests {
             parsed.analysis.lints.undocumented_effect_invocation,
             LintLevel::Deny
         );
-        assert_eq!(
-            parsed.analysis.lints.ambiguous_panic_marker,
-            LintLevel::Deny
-        );
-        assert_eq!(
-            parsed.analysis.lints.ambiguous_safety_marker,
-            LintLevel::Deny
-        );
+        assert_eq!(parsed.panics.lints.ambiguous_marker, LintLevel::Deny);
+        assert_eq!(parsed.safety.lints.ambiguous_marker, LintLevel::Deny);
         assert_eq!(parsed.panics.lints.panic_invocation, LintLevel::Allow);
         assert_eq!(parsed.panics.lints.compiler_assert, LintLevel::Deny);
         assert_eq!(
@@ -1331,13 +1162,34 @@ mod tests {
             AnalysisConfig::default().effect_doc_matching,
             EffectDocMatching::AnyJustification
         );
-        let lints = AnalysisConfig::default().lints;
-        assert_eq!(lints.ambiguous_panic_marker, LintLevel::Deny);
-        assert_eq!(lints.ambiguous_safety_marker, LintLevel::Deny);
-        assert_eq!(lints.ambiguous_panic_requirement, LintLevel::Deny);
-        assert_eq!(lints.ambiguous_safety_requirement, LintLevel::Deny);
-        assert_eq!(lints.panic_analysis_incomplete, LintLevel::Deny);
-        assert_eq!(lints.safety_analysis_incomplete, LintLevel::Deny);
+        assert_eq!(
+            PanicConfig::default().lints.ambiguous_marker,
+            LintLevel::Deny
+        );
+        assert_eq!(
+            SafetyConfig::default().lints.ambiguous_marker,
+            LintLevel::Deny
+        );
+        assert_eq!(
+            PanicConfig::default().lints.ambiguous_requirement,
+            LintLevel::Deny
+        );
+        assert_eq!(
+            SafetyConfig::default().lints.ambiguous_requirement,
+            LintLevel::Deny
+        );
+        assert_eq!(
+            PanicConfig::default()
+                .effective_coverage()
+                .analysis_incomplete,
+            LintLevel::Deny
+        );
+        assert_eq!(
+            SafetyConfig::default()
+                .effective_coverage()
+                .analysis_incomplete,
+            LintLevel::Deny
+        );
     }
 
     #[test]
@@ -1366,7 +1218,7 @@ mod tests {
         assert_eq!(PanicConfig::default().coverage, CoverageConfig::default());
         assert_eq!(
             PanicConfig::default()
-                .effective_coverage(&AnalysisLintConfig::default())
+                .effective_coverage()
                 .unresolved_call_target,
             LintLevel::Warn
         );
@@ -1444,7 +1296,7 @@ mod tests {
         assert_eq!(lints.unresolved_call_target, None);
         assert_eq!(
             SafetyConfig::default()
-                .effective_coverage(&AnalysisLintConfig::default())
+                .effective_coverage()
                 .unresolved_call_target,
             LintLevel::Warn
         );
@@ -1470,13 +1322,9 @@ mod tests {
     }
 
     #[test]
-    fn coverage_sections_override_legacy_lints_and_preserve_fallbacks() {
+    fn coverage_sections_override_legacy_unresolved_lints_and_preserve_defaults() {
         let config = SniffTestConfig::from_manifest_str(
             r#"
-            [analysis.lints]
-            analysis-incomplete = "warn"
-            panic-analysis-incomplete = "allow"
-
             [panics.lints]
             unresolved-call-target = "allow"
 
@@ -1489,12 +1337,12 @@ mod tests {
             "#,
         )
         .expect("coverage configuration");
-        let panic = config.panics.effective_coverage(&config.analysis.lints);
+        let panic = config.panics.effective_coverage();
         assert_eq!(panic.unresolved_call_target, LintLevel::Deny);
         assert_eq!(panic.analysis_incomplete, LintLevel::Deny);
-        let safety = config.safety.effective_coverage(&config.analysis.lints);
+        let safety = config.safety.effective_coverage();
         assert_eq!(safety.unresolved_call_target, LintLevel::Allow);
-        assert_eq!(safety.analysis_incomplete, LintLevel::Warn);
+        assert_eq!(safety.analysis_incomplete, LintLevel::Deny);
     }
 
     #[test]

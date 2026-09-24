@@ -326,7 +326,7 @@ pub(crate) fn trace_selected_workspace(
                         .expect("selected effect was probed");
                     if domain
                         .config()
-                        .effective_coverage(&config.analysis.lints)
+                        .effective_coverage()
                         .unresolved_call_target
                         .is_allow()
                     {

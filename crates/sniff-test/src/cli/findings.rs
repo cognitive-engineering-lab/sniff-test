@@ -685,29 +685,17 @@ impl Finding {
                     }
                     EffectFindingClass::ConcreteInvocation
                     | EffectFindingClass::DocumentedObligation => {
-                        policy
-                            .finding_lints(&config.analysis.lints)
-                            .concrete_invocation
+                        policy.finding_lints().concrete_invocation
                     }
                     EffectFindingClass::UnresolvedCallTarget => {
-                        policy
-                            .effective_coverage(&config.analysis.lints)
-                            .unresolved_call_target
+                        policy.effective_coverage().unresolved_call_target
                     }
-                    EffectFindingClass::AmbiguousMarker => {
-                        policy
-                            .finding_lints(&config.analysis.lints)
-                            .ambiguous_marker
-                    }
+                    EffectFindingClass::AmbiguousMarker => policy.finding_lints().ambiguous_marker,
                     EffectFindingClass::AmbiguousRequirement => {
-                        policy
-                            .finding_lints(&config.analysis.lints)
-                            .ambiguous_requirement
+                        policy.finding_lints().ambiguous_requirement
                     }
                     EffectFindingClass::AnalysisIncomplete => {
-                        policy
-                            .effective_coverage(&config.analysis.lints)
-                            .analysis_incomplete
+                        policy.effective_coverage().analysis_incomplete
                     }
                 }
             }
@@ -836,8 +824,8 @@ mod tests {
     #[test]
     fn incomplete_findings_use_their_effect_policy() {
         let mut config = SniffTestConfig::default();
-        config.analysis.lints.panic_analysis_incomplete = LintLevel::Warn;
-        config.analysis.lints.safety_analysis_incomplete = LintLevel::Allow;
+        config.panics.coverage.analysis_incomplete = Some(LintLevel::Warn);
+        config.safety.coverage.analysis_incomplete = Some(LintLevel::Allow);
 
         let resolved = resolve_findings(
             vec![

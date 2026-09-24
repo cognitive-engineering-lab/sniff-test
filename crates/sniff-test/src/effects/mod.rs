@@ -14,9 +14,7 @@ use crate::artifact::{AnnotationFactKind, AnnotationRole};
 use crate::artifact::{CallFact, EffectKey, FunctionTargetFact};
 use serde::{Deserialize, Serialize};
 
-use crate::config::{
-    AnalysisLintConfig, EffectFindingLints, EffectiveCoverageConfig, LintLevel, SniffTestConfig,
-};
+use crate::config::{EffectFindingLints, EffectiveCoverageConfig, LintLevel, SniffTestConfig};
 use crate::path_patterns::PathPatterns;
 
 use self::visit::EffectPassRegistry;
@@ -157,9 +155,9 @@ pub(crate) fn annotation_kind<E: EffectSpec>(role: AnnotationRole) -> Annotation
 pub(crate) trait EffectConfig: Sync {
     fn ignored_namespaces(&self) -> &PathPatterns;
     fn trusted_boundary_namespaces(&self) -> &PathPatterns;
-    fn finding_lints(&self, analysis: &AnalysisLintConfig) -> EffectFindingLints;
+    fn finding_lints(&self) -> EffectFindingLints;
     fn operation_lint(&self, operation: Option<&str>) -> LintLevel;
-    fn effective_coverage(&self, analysis: &AnalysisLintConfig) -> EffectiveCoverageConfig;
+    fn effective_coverage(&self) -> EffectiveCoverageConfig;
 }
 
 /// Effects enabled for one sniff-test invocation.

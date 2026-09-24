@@ -67,13 +67,6 @@ effect-doc-matching = "any-justification" # any-justification | exact
 max-trace-depth = 256
 trace-state-budget = 1000000
 
-[analysis.lints]
-# These policies apply regardless of which artifact supplied the reached body.
-ambiguous-panic-marker = "deny" # deny | warn | allow
-ambiguous-safety-marker = "deny"
-ambiguous-panic-requirement = "deny"
-ambiguous-safety-requirement = "deny"
-
 [contracts]
 override-files = [] # TOML files relative to sniff-test.toml
 
@@ -84,6 +77,8 @@ ignored-namespaces = [
 trusted-boundary-namespaces = ["core", "alloc", "std"]
 
 [panics.lints]
+ambiguous-marker = "deny" # deny | warn | allow
+ambiguous-requirement = "deny"
 # Group default for compiler-generated MIR assertions.
 compiler-assert = "deny"
 # Optional exact overrides:
@@ -109,6 +104,8 @@ ignored-namespaces = []
 trusted-boundary-namespaces = ["core", "alloc", "std"]
 
 [safety.lints]
+ambiguous-marker = "deny"
+ambiguous-requirement = "deny"
 missing-safety-docs = "warn"
 unsafe-call-missing-justification = "warn"
 unsafe-call-missing-requirements = "warn"
@@ -408,8 +405,8 @@ satisfaction bullets must include justification text. Names are matched
 case-insensitively, with punctuation and whitespace treated as separators, so
 `bounded[total]` and `bounded total` match. Duplicate names inside one
 documentation section are ambiguous under the effect-specific
-`ambiguous-panic-requirement = "deny"` or
-`ambiguous-safety-requirement = "deny"` policy: a single marker bullet cannot
+`[panics.lints] ambiguous-requirement = "deny"` or
+`[safety.lints] ambiguous-requirement = "deny"` policy: a single marker bullet cannot
 prove two distinct requirements with the same normalized name. Prose and labels
 such as `Requirements:` are allowed before the first bullet. Plain comment lines
 following a requirement bullet in the same contiguous block are kept as
