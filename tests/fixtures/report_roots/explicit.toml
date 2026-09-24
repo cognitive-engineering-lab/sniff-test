@@ -2,12 +2,6 @@
 report-roots = ["report_roots::private_panic"]
 
 [panics]
-panic-sink-namespaces = [
-    "core::panicking::**",
-    "std::panicking::**",
-    "core::std::rt::panic_fmt",
-    "std::rt::panic_fmt",
-]
 [panics.lints]
 operation = "deny"
 invocation = "deny"

@@ -3,12 +3,6 @@ show-full-stack-trace = true
 marker-probing = "source-callsite"
 
 [panics]
-panic-sink-namespaces = [
-    "core::panicking::**",
-    "std::panicking::**",
-    "core::std::rt::panic_fmt",
-    "std::rt::panic_fmt",
-]
 [panics.lints]
 operation = "deny"
 invocation = "deny"

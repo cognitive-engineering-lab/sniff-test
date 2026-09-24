@@ -1673,10 +1673,7 @@ fn panic_probe_collects_asserts_and_sink_invocations_with_source_markers() {
             ),
         ],
     )]);
-    let config = SniffTestConfig::from_manifest_str(
-        "[panics]\npanic-sink-namespaces = [\"core::panicking::**\"]",
-    )
-    .unwrap();
+    let config = SniffTestConfig::default();
 
     let panic = probe_panic(&artifact, &graph, &annotations, &config.panics);
     let trace = EffectEngine::new(&graph).trace(&panic);
@@ -1712,10 +1709,7 @@ fn marker_on_a_grouped_sibling_does_not_justify_a_panic_sink() {
             None,
         )],
     )]);
-    let config = SniffTestConfig::from_manifest_str(
-        "[panics]\npanic-sink-namespaces = [\"core::panicking::**\"]",
-    )
-    .expect("panic sink configuration");
+    let config = SniffTestConfig::default();
 
     let panic = probe_panic(&artifact, &graph, &annotations, &config.panics);
     let trace = EffectEngine::new(&graph).trace(&panic);
@@ -2032,10 +2026,7 @@ fn grouped_effect_sources_are_terminated_per_raw_branch() {
             None,
         )],
     )]);
-    let panic_config = SniffTestConfig::from_manifest_str(
-        "[panics]\npanic-sink-namespaces = [\"core::panicking::**\"]",
-    )
-    .expect("panic sink configuration");
+    let panic_config = SniffTestConfig::default();
     let panic = probe_panic(
         &panic_artifact,
         &panic_graph,
@@ -2100,10 +2091,7 @@ fn opaque_panic_declaration_is_not_inferred_as_a_builtin_invocation() {
         Vec::new(),
         Vec::new(),
     )]);
-    let config = SniffTestConfig::from_manifest_str(
-        "[panics]\npanic-sink-namespaces = [\"core::panicking::**\"]",
-    )
-    .expect("panic sink configuration");
+    let config = SniffTestConfig::default();
 
     let panic = probe_panic(&artifact, &graph, &annotations, &config.panics);
     assert_eq!(panic.source_count(), 0);
@@ -2125,10 +2113,7 @@ fn ignored_macro_path_terminates_a_direct_panic_source() {
         Vec::new(),
         Vec::new(),
     )]);
-    let config = SniffTestConfig::from_manifest_str(
-        "[panics]\npanic-sink-namespaces = [\"core::panicking::**\"]\n",
-    )
-    .unwrap();
+    let config = SniffTestConfig::default();
 
     let panic = probe_panic(&artifact, &graph, &annotations, &config.panics);
     let trace = EffectEngine::new(&graph).trace(&panic);
@@ -2419,7 +2404,6 @@ fn explicit_empty_ignored_namespaces_restores_unsafe_precondition_panics() {
         r#"
             [panics]
             ignored-namespaces = []
-            panic-sink-namespaces = ["core::panicking::**"]
         "#,
     )
     .expect("empty ignored namespace list");
@@ -2450,10 +2434,7 @@ fn ignored_macro_path_does_not_hide_an_unrelated_panic_in_the_same_function() {
         Vec::new(),
         Vec::new(),
     )]);
-    let config = SniffTestConfig::from_manifest_str(
-        "[panics]\npanic-sink-namespaces = [\"core::panicking::**\"]\n",
-    )
-    .expect("panic sink configuration");
+    let config = SniffTestConfig::default();
 
     let panic = probe_panic(&artifact, &graph, &annotations, &config.panics);
     let trace = EffectEngine::new(&graph).trace(&panic);
@@ -2508,10 +2489,7 @@ fn ignored_macro_path_termination_is_path_local() {
             Vec::new(),
         ),
     ]);
-    let config = SniffTestConfig::from_manifest_str(
-        "[panics]\npanic-sink-namespaces = [\"core::panicking::**\"]\n",
-    )
-    .unwrap();
+    let config = SniffTestConfig::default();
 
     let panic = probe_panic(&artifact, &graph, &annotations, &config.panics);
     let trace = EffectEngine::new(&graph).trace(&panic);

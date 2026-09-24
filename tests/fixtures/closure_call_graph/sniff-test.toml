@@ -10,13 +10,6 @@ report-roots = [
 [panics]
 # This fixture is about closure reachability, not allocator internals from Box::new.
 ignored-namespaces = ["alloc::**"]
-panic-sink-namespaces = [
-    "core::panicking::**",
-    "std::panicking::**",
-    "core::std::rt::panic_fmt",
-    "std::rt::panic_fmt",
-]
-
 [safety]
 # Keep the safety traversal scoped to the closure behavior under test too.
 ignored-namespaces = ["alloc::**"]

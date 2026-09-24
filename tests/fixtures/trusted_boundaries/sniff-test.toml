@@ -4,13 +4,6 @@ trusted-boundary-namespaces = [
     "trusted_boundaries::trusted_helper",
     "trusted_boundaries::trusted_doc_helper",
 ]
-panic-sink-namespaces = [
-    "core::panicking::**",
-    "std::panicking::**",
-    "core::std::rt::panic_fmt",
-    "std::rt::panic_fmt",
-]
-
 [safety]
 trusted-boundary-namespaces = [
     "trusted_boundaries::trusted_helper",

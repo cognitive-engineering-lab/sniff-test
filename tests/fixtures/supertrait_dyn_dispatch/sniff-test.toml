@@ -1,5 +1,3 @@
 [panics]
-panic-sink-namespaces = ["core::panicking::**", "std::rt::panic_fmt", "core::std::rt::panic_fmt"]
-
 [panics.lints]
 invocation = "deny"

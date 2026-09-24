@@ -1,6 +1,6 @@
 # sniff-test configuration.
 #
-# Namespace trust and panic-sink policies default to empty. Panic ignores contain
+# Namespace trust defaults to empty. Panic ignores contain
 # Rust's unsafe-precondition macro by default; this example repeats it alongside
 # optional project policy so an explicit replacement does not drop that behavior.
 
@@ -88,19 +88,6 @@ ignored-namespaces = [
 # path, and rustc-rendered display path. A broad pattern such as `alloc::**`
 # asserts that the matched crate documents every caller-visible panic condition.
 trusted-boundary-namespaces = []
-
-# Callees that should be treated as direct panic sinks. When classifying a call
-# that also matches a trusted namespace, the more precise match wins; if
-# precision ties, panic sinks win. A winning sink classification does not also
-# make that implementation a trusted opaque boundary.
-panic-sink-namespaces = [
-    "core::panicking::**",
-    "std::panicking::**",
-    "core::std::rt::panic_fmt",
-    "std::rt::panic_fmt",
-    "core::{option,result}::unwrap_failed",
-    "std::{option,result}::unwrap_failed",
-]
 
 [panics.lints]
 ambiguous-marker = "deny"

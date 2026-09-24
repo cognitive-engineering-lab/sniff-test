@@ -328,10 +328,6 @@ pub struct PanicConfig {
     /// A matching API's own `# Panics` contract remains visible to non-trusted
     /// callers; effects from untrusted callbacks cross undocumented APIs.
     pub trusted_boundary_namespaces: PathPatterns,
-    /// Legacy compatibility field. Built-in panic sources are identified by
-    /// the panic compiler pass; configured invocation sinks are no longer
-    /// consulted by analysis.
-    pub panic_sink_namespaces: PathPatterns,
 }
 
 impl Default for PanicConfig {
@@ -344,7 +340,6 @@ impl Default for PanicConfig {
             )])
             .expect("the built-in panic ignore path is valid"),
             trusted_boundary_namespaces: PathPatterns::default(),
-            panic_sink_namespaces: PathPatterns::default(),
         }
     }
 }
@@ -1522,7 +1517,6 @@ mod tests {
         let config = PanicConfig {
             ignored_namespaces: path_patterns(&["generated::**"]),
             trusted_boundary_namespaces: path_patterns(&["core::**", "compat::panic"]),
-            panic_sink_namespaces: path_patterns(&["core::panicking::**", "canonical::panic"]),
             ..PanicConfig::default()
         };
 
@@ -1540,7 +1534,7 @@ mod tests {
     }
 
     #[test]
-    fn example_manifest_preserves_legacy_panic_sinks_and_ignored_macro_paths() {
+    fn example_manifest_preserves_ignored_macro_paths() {
         let config = SniffTestConfig::from_manifest_str(EXAMPLE_MANIFEST)
             .expect("example manifest should parse");
 
@@ -1551,26 +1545,29 @@ mod tests {
                 .best_match("core::ub_checks::assert_unsafe_precondition")
                 .is_some()
         );
-        assert!(
-            config
-                .panics
-                .panic_sink_namespaces
-                .best_candidates_match(&candidates(&["core::std::rt::panic_fmt"]))
-                .is_some()
-        );
     }
 
     #[test]
     fn manifest_validates_namespace_globs() {
         let config = r#"
             [panics]
-            panic-sink-namespaces = ["std::ops::{Index"]
+            ignored-namespaces = ["std::ops::{Index"]
         "#;
 
         let error = SniffTestConfig::from_manifest_str(config)
             .expect_err("invalid glob patterns should be rejected");
 
         assert!(error.to_string().contains("error parsing glob"));
+    }
+
+    #[test]
+    fn manifest_rejects_removed_panic_sink_namespaces() {
+        let error = SniffTestConfig::from_manifest_str(
+            "[panics]\npanic-sink-namespaces = [\"core::panicking::**\"]",
+        )
+        .expect_err("panic sinks are no longer configurable");
+
+        assert!(error.to_string().contains("panic-sink-namespaces"));
     }
 
     #[test]

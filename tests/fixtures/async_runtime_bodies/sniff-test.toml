@@ -8,13 +8,6 @@ report-roots = [
 ]
 
 [panics]
-panic-sink-namespaces = [
-    "core::panicking::**",
-    "std::panicking::**",
-    "core::std::rt::panic_fmt",
-    "std::rt::panic_fmt",
-]
-
 [panics.lints]
 operation = "allow"
 invocation = "deny"

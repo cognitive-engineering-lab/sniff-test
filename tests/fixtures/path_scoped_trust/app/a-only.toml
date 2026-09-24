@@ -8,7 +8,5 @@ report-roots = [
 
 [panics]
 trusted-boundary-namespaces = ["trusted_a"]
-panic-sink-namespaces = ["core::panicking::**", "std::panicking::**"]
-
 [safety]
 trusted-boundary-namespaces = ["trusted_a"]

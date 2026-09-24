@@ -34,8 +34,7 @@ impl MirEffectPass for BuiltinPanicInvocationPass {
                         block,
                         statement_index: data.statements.len(),
                     },
-                    // Preserve the existing report kind while source discovery
-                    // moves from configured probing into compiler extraction.
+                    // Preserve the existing report kind for panic invocations.
                     kind: EffectKind::new("configured-invocation"),
                     source: PreliminaryMirEffectSource::Invocation {
                         requires_documented_obligation: false,
@@ -62,12 +61,46 @@ fn builtin_panic_callee<'tcx>(
 
 fn is_builtin_panic_sink(cx: MirEffectCx<'_>, callee: rustc_hir::def_id::DefId) -> bool {
     let path = canonical_namespace(cx.tcx(), callee);
+    is_builtin_panic_sink_path(&path)
+}
+
+fn is_builtin_panic_sink_path(path: &str) -> bool {
     path.starts_with("core::panicking::")
         || path.starts_with("std::panicking::")
         || matches!(
-            path.as_str(),
-            "core::std::rt::panic_fmt" | "std::rt::panic_fmt"
+            path,
+            "core::std::rt::panic_fmt"
+                | "std::rt::panic_fmt"
+                | "core::option::unwrap_failed"
+                | "core::result::unwrap_failed"
+                | "std::option::unwrap_failed"
+                | "std::result::unwrap_failed"
         )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::is_builtin_panic_sink_path;
+
+    #[test]
+    fn recognizes_every_former_builtin_panic_sink() {
+        for path in [
+            "core::panicking::panic_fmt",
+            "std::panicking::panic_fmt",
+            "core::std::rt::panic_fmt",
+            "std::rt::panic_fmt",
+            "core::option::unwrap_failed",
+            "core::result::unwrap_failed",
+            "std::option::unwrap_failed",
+            "std::result::unwrap_failed",
+        ] {
+            assert!(is_builtin_panic_sink_path(path), "{path}");
+        }
+        assert!(!is_builtin_panic_sink_path(
+            "ambiguous_markers::configured_sink"
+        ));
+        assert!(!is_builtin_panic_sink_path("core::option::unwrap"));
+    }
 }
 
 impl MirEffectPass for CompilerAssertPass {

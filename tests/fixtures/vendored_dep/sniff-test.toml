@@ -2,12 +2,5 @@
 # not be held to workspace deny gating.
 
 [panics]
-panic-sink-namespaces = [
-    "core::panicking::**",
-    "std::panicking::**",
-    "core::std::rt::panic_fmt",
-    "std::rt::panic_fmt",
-]
-
 [panics.lints]
 invocation = "warn"

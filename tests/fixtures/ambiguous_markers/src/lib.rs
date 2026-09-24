@@ -32,7 +32,7 @@ pub fn duplicate_name_marker(total: usize, denominator: usize) -> usize {
 
 /// # Panics
 ///
-/// This configured sink always terminates abnormally in production.
+/// This fixture call has an independent panic obligation.
 pub fn configured_sink() {}
 
 macro_rules! call_documented_and_sink {
