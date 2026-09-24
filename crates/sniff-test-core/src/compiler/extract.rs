@@ -1157,19 +1157,19 @@ impl EffectSeedInput for RegisteredEffectPassOutput {
 }
 
 #[cfg(test)]
-impl EffectSeedInput for crate::effects::safety::visit::RawSafetyFacts {
+impl EffectSeedInput for crate::effects::visit::EffectPassOutput {
     fn effect_groups(
         &self,
     ) -> impl Iterator<Item = &crate::effects::visit::PreliminaryEffectGroupSeed> {
-        self.groups.iter()
+        self.auxiliary.groups.iter()
     }
 
     fn call_seeds(&self) -> impl Iterator<Item = &crate::effects::visit::PreliminaryCallSeed> {
-        self.calls.iter()
+        self.auxiliary.calls.iter()
     }
 
     fn operations(&self) -> impl Iterator<Item = &PreliminaryEffectSeed> {
-        self.operations.iter()
+        self.seeds.iter()
     }
 }
 
@@ -1975,9 +1975,10 @@ mod tests {
     };
     use crate::artifact::UnverifiedMarkerProbeReason;
     use crate::artifact::{AnnotationProbingFact, CallSiteId, EffectGroupId, EffectKind};
-    use crate::effects::safety::visit::{
-        RawSafetyCallFact, RawSafetyEffectGroup, RawSafetyFacts, RawSafetyGroupFact,
-        RawSafetyOpFact, compiler_call_requires_explicit_context,
+    use crate::effects::safety::visit::compiler_call_requires_explicit_context;
+    use crate::effects::visit::{
+        EffectPassAuxiliary, EffectPassOutput, PreliminaryCallSeed, PreliminaryEffectGroup,
+        PreliminaryEffectGroupSeed, PreliminaryEffectSeed,
     };
     use crate::source_markers::MarkerProbe;
 
@@ -2086,27 +2087,29 @@ mod tests {
     #[test]
     fn call_grouping_prefers_the_innermost_thir_scope_and_reuses_standalone_sites() {
         let owner = CRATE_DEF_ID.to_def_id();
-        let outer = RawSafetyEffectGroup {
+        let outer = PreliminaryEffectGroup {
             id: 0,
             span: span(10, 50),
         };
-        let inner = RawSafetyEffectGroup {
+        let inner = PreliminaryEffectGroup {
             id: 1,
             span: span(20, 40),
         };
-        let facts = RawSafetyFacts {
-            groups: vec![
-                RawSafetyGroupFact {
-                    owner,
-                    effect_group: outer,
-                },
-                RawSafetyGroupFact {
-                    owner,
-                    effect_group: inner,
-                },
-            ],
-            calls: Vec::new(),
-            operations: vec![RawSafetyOpFact {
+        let facts = EffectPassOutput {
+            auxiliary: EffectPassAuxiliary {
+                groups: vec![
+                    PreliminaryEffectGroupSeed {
+                        owner,
+                        effect_group: outer,
+                    },
+                    PreliminaryEffectGroupSeed {
+                        owner,
+                        effect_group: inner,
+                    },
+                ],
+                calls: Vec::new(),
+            },
+            seeds: vec![PreliminaryEffectSeed {
                 owner,
                 kind: EffectKind::new("raw-pointer-dereference"),
                 span: span(30, 31),
@@ -2157,35 +2160,37 @@ mod tests {
         let unmatched_callee = DefId::local(DefIndex::from_u32(3));
         let second_declaration_callee = DefId::local(DefIndex::from_u32(4));
         let shared_span = span(10, 40);
-        let facts = RawSafetyFacts {
-            groups: Vec::new(),
-            calls: vec![
-                RawSafetyCallFact {
-                    owner,
-                    callee: Some(first_callee),
-                    declaration_callee: Some(first_callee),
-                    suppressed_by_compiler_context: false,
-                    call_site: 0,
-                    span: shared_span,
-                    effect_group: RawSafetyEffectGroup {
-                        id: 0,
+        let facts = EffectPassOutput {
+            auxiliary: EffectPassAuxiliary {
+                groups: Vec::new(),
+                calls: vec![
+                    PreliminaryCallSeed {
+                        owner,
+                        callee: Some(first_callee),
+                        declaration_callee: Some(first_callee),
+                        suppressed_by_compiler_context: false,
+                        call_site: 0,
                         span: shared_span,
+                        effect_group: PreliminaryEffectGroup {
+                            id: 0,
+                            span: shared_span,
+                        },
                     },
-                },
-                RawSafetyCallFact {
-                    owner,
-                    callee: Some(second_callee),
-                    declaration_callee: Some(second_declaration_callee),
-                    suppressed_by_compiler_context: true,
-                    call_site: 1,
-                    span: shared_span,
-                    effect_group: RawSafetyEffectGroup {
-                        id: 1,
+                    PreliminaryCallSeed {
+                        owner,
+                        callee: Some(second_callee),
+                        declaration_callee: Some(second_declaration_callee),
+                        suppressed_by_compiler_context: true,
+                        call_site: 1,
                         span: shared_span,
+                        effect_group: PreliminaryEffectGroup {
+                            id: 1,
+                            span: shared_span,
+                        },
                     },
-                },
-            ],
-            operations: Vec::new(),
+                ],
+            },
+            seeds: Vec::new(),
         };
         let mut resolver = RawEffectGroupResolver::new(&facts);
 
@@ -2194,16 +2199,19 @@ mod tests {
             .expect("callee identifies one desugared call");
         assert_eq!(
             matched.effect_group,
-            effect_group_id(facts.calls[1].effect_group.id)
+            effect_group_id(facts.auxiliary.calls[1].effect_group.id)
         );
-        assert_eq!(matched.call_site, call_site_id(facts.calls[1].call_site));
+        assert_eq!(
+            matched.call_site,
+            call_site_id(facts.auxiliary.calls[1].call_site)
+        );
         assert!(matched.suppressed_by_compiler_context);
         assert_eq!(matched.declaration_callee, Some(second_declaration_callee));
 
         let unmatched = resolver
             .group_for_call(owner, shared_span, Some(unmatched_callee))
             .expect("unmatched compiler edge gets a standalone identity");
-        for call in &facts.calls {
+        for call in &facts.auxiliary.calls {
             assert_ne!(
                 unmatched.effect_group,
                 effect_group_id(call.effect_group.id)
@@ -2220,33 +2228,35 @@ mod tests {
         let first_callee = DefId::local(DefIndex::from_u32(1));
         let second_callee = DefId::local(DefIndex::from_u32(2));
         let shared_span = span(10, 40);
-        let shared_group = RawSafetyEffectGroup {
+        let shared_group = PreliminaryEffectGroup {
             id: 0,
             span: shared_span,
         };
-        let facts = RawSafetyFacts {
-            groups: Vec::new(),
-            calls: vec![
-                RawSafetyCallFact {
-                    owner,
-                    callee: Some(first_callee),
-                    declaration_callee: Some(first_callee),
-                    suppressed_by_compiler_context: false,
-                    call_site: 0,
-                    span: shared_span,
-                    effect_group: shared_group,
-                },
-                RawSafetyCallFact {
-                    owner,
-                    callee: Some(second_callee),
-                    declaration_callee: Some(second_callee),
-                    suppressed_by_compiler_context: false,
-                    call_site: 0,
-                    span: shared_span,
-                    effect_group: shared_group,
-                },
-            ],
-            operations: Vec::new(),
+        let facts = EffectPassOutput {
+            auxiliary: EffectPassAuxiliary {
+                groups: Vec::new(),
+                calls: vec![
+                    PreliminaryCallSeed {
+                        owner,
+                        callee: Some(first_callee),
+                        declaration_callee: Some(first_callee),
+                        suppressed_by_compiler_context: false,
+                        call_site: 0,
+                        span: shared_span,
+                        effect_group: shared_group,
+                    },
+                    PreliminaryCallSeed {
+                        owner,
+                        callee: Some(second_callee),
+                        declaration_callee: Some(second_callee),
+                        suppressed_by_compiler_context: false,
+                        call_site: 0,
+                        span: shared_span,
+                        effect_group: shared_group,
+                    },
+                ],
+            },
+            seeds: Vec::new(),
         };
         let mut resolver = RawEffectGroupResolver::new(&facts);
 
@@ -2256,7 +2266,7 @@ mod tests {
         assert_eq!(call_groups.effect_group, effect_group_id(shared_group.id));
         assert_eq!(
             call_groups.call_site,
-            call_site_id(facts.calls[0].call_site)
+            call_site_id(facts.auxiliary.calls[0].call_site)
         );
         assert!(!call_groups.suppressed_by_compiler_context);
         assert_eq!(call_groups.declaration_callee, None);
@@ -2268,21 +2278,23 @@ mod tests {
         let declaration_callee = DefId::local(DefIndex::from_u32(1));
         let requested_callee = DefId::local(DefIndex::from_u32(2));
         let shared_span = span(10, 40);
-        let facts = RawSafetyFacts {
-            groups: Vec::new(),
-            calls: vec![RawSafetyCallFact {
-                owner,
-                callee: Some(declaration_callee),
-                declaration_callee: Some(declaration_callee),
-                suppressed_by_compiler_context: true,
-                call_site: 0,
-                span: shared_span,
-                effect_group: RawSafetyEffectGroup {
-                    id: 0,
+        let facts = EffectPassOutput {
+            auxiliary: EffectPassAuxiliary {
+                groups: Vec::new(),
+                calls: vec![PreliminaryCallSeed {
+                    owner,
+                    callee: Some(declaration_callee),
+                    declaration_callee: Some(declaration_callee),
+                    suppressed_by_compiler_context: true,
+                    call_site: 0,
                     span: shared_span,
-                },
-            }],
-            operations: Vec::new(),
+                    effect_group: PreliminaryEffectGroup {
+                        id: 0,
+                        span: shared_span,
+                    },
+                }],
+            },
+            seeds: Vec::new(),
         };
         let mut resolver = RawEffectGroupResolver::new(&facts);
 
@@ -2291,11 +2303,11 @@ mod tests {
             .expect("a different known callee gets a standalone identity");
         assert_ne!(
             call_groups.effect_group,
-            effect_group_id(facts.calls[0].effect_group.id)
+            effect_group_id(facts.auxiliary.calls[0].effect_group.id)
         );
         assert_ne!(
             call_groups.call_site,
-            call_site_id(facts.calls[0].call_site)
+            call_site_id(facts.auxiliary.calls[0].call_site)
         );
         assert!(!call_groups.suppressed_by_compiler_context);
         assert_eq!(call_groups.declaration_callee, None);
@@ -2307,35 +2319,37 @@ mod tests {
         let first_callee = DefId::local(DefIndex::from_u32(1));
         let second_callee = DefId::local(DefIndex::from_u32(2));
         let shared_span = span(10, 40);
-        let facts = RawSafetyFacts {
-            groups: Vec::new(),
-            calls: vec![
-                RawSafetyCallFact {
-                    owner,
-                    callee: Some(first_callee),
-                    declaration_callee: Some(first_callee),
-                    suppressed_by_compiler_context: false,
-                    call_site: 0,
-                    span: shared_span,
-                    effect_group: RawSafetyEffectGroup {
-                        id: 0,
+        let facts = EffectPassOutput {
+            auxiliary: EffectPassAuxiliary {
+                groups: Vec::new(),
+                calls: vec![
+                    PreliminaryCallSeed {
+                        owner,
+                        callee: Some(first_callee),
+                        declaration_callee: Some(first_callee),
+                        suppressed_by_compiler_context: false,
+                        call_site: 0,
                         span: shared_span,
+                        effect_group: PreliminaryEffectGroup {
+                            id: 0,
+                            span: shared_span,
+                        },
                     },
-                },
-                RawSafetyCallFact {
-                    owner,
-                    callee: Some(second_callee),
-                    declaration_callee: Some(second_callee),
-                    suppressed_by_compiler_context: false,
-                    call_site: 1,
-                    span: shared_span,
-                    effect_group: RawSafetyEffectGroup {
-                        id: 1,
+                    PreliminaryCallSeed {
+                        owner,
+                        callee: Some(second_callee),
+                        declaration_callee: Some(second_callee),
+                        suppressed_by_compiler_context: false,
+                        call_site: 1,
                         span: shared_span,
+                        effect_group: PreliminaryEffectGroup {
+                            id: 1,
+                            span: shared_span,
+                        },
                     },
-                },
-            ],
-            operations: Vec::new(),
+                ],
+            },
+            seeds: Vec::new(),
         };
         let mut resolver = RawEffectGroupResolver::new(&facts);
 
@@ -2345,7 +2359,7 @@ mod tests {
         let second = resolver
             .group_for_structural_edge(owner, shared_span)
             .expect("same structural edge reuses its identity");
-        for call in &facts.calls {
+        for call in &facts.auxiliary.calls {
             assert_ne!(first.effect_group, effect_group_id(call.effect_group.id));
             assert_ne!(first.call_site, call_site_id(call.call_site));
         }
@@ -2357,15 +2371,17 @@ mod tests {
     #[test]
     fn standalone_operation_anchors_leave_structural_edges_independent() {
         let owner = CRATE_DEF_ID.to_def_id();
-        let facts = RawSafetyFacts {
-            groups: Vec::new(),
-            calls: Vec::new(),
-            operations: vec![RawSafetyOpFact {
+        let facts = EffectPassOutput {
+            auxiliary: EffectPassAuxiliary {
+                groups: Vec::new(),
+                calls: Vec::new(),
+            },
+            seeds: vec![PreliminaryEffectSeed {
                 owner,
                 kind: EffectKind::new("raw-pointer-dereference"),
                 span: span(10, 40),
                 marker_anchor_spans: vec![span(10, 40)],
-                effect_group: Some(RawSafetyEffectGroup {
+                effect_group: Some(PreliminaryEffectGroup {
                     id: 0,
                     span: span(10, 40),
                 }),
@@ -2379,7 +2395,7 @@ mod tests {
         assert_ne!(
             edge_groups.effect_group,
             effect_group_id(
-                facts.operations[0]
+                facts.seeds[0]
                     .effect_group
                     .expect("safety operation group")
                     .id,
@@ -2393,32 +2409,34 @@ mod tests {
     fn ambiguous_containing_unsafe_scopes_use_a_fresh_group() {
         let owner = CRATE_DEF_ID.to_def_id();
         let shared_scope = span(10, 40);
-        let facts = RawSafetyFacts {
-            groups: vec![
-                RawSafetyGroupFact {
-                    owner,
-                    effect_group: RawSafetyEffectGroup {
-                        id: 0,
-                        span: shared_scope,
+        let facts = EffectPassOutput {
+            auxiliary: EffectPassAuxiliary {
+                groups: vec![
+                    PreliminaryEffectGroupSeed {
+                        owner,
+                        effect_group: PreliminaryEffectGroup {
+                            id: 0,
+                            span: shared_scope,
+                        },
                     },
-                },
-                RawSafetyGroupFact {
-                    owner,
-                    effect_group: RawSafetyEffectGroup {
-                        id: 1,
-                        span: shared_scope,
+                    PreliminaryEffectGroupSeed {
+                        owner,
+                        effect_group: PreliminaryEffectGroup {
+                            id: 1,
+                            span: shared_scope,
+                        },
                     },
-                },
-            ],
-            calls: Vec::new(),
-            operations: Vec::new(),
+                ],
+                calls: Vec::new(),
+            },
+            seeds: Vec::new(),
         };
         let mut resolver = RawEffectGroupResolver::new(&facts);
 
         let edge_groups = resolver
             .group_for_structural_edge(owner, span(20, 21))
             .expect("ambiguous containment degrades to a fresh group");
-        for group in &facts.groups {
+        for group in &facts.auxiliary.groups {
             assert_ne!(
                 edge_groups.effect_group,
                 effect_group_id(group.effect_group.id)

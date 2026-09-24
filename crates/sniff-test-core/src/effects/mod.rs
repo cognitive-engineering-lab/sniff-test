@@ -121,17 +121,6 @@ pub mod safety {
             (signature_requires_explicit_context && !safe_target_features)
                 || !target_features_are_safe
         }
-        pub type RawSafetyEffectGroup = super::super::visit::PreliminaryEffectGroup;
-        pub type RawSafetyOpFact = super::super::visit::PreliminaryEffectSeed;
-        pub type RawSafetyCallFact = super::super::visit::PreliminaryCallSeed;
-        pub type RawSafetyGroupFact = super::super::visit::PreliminaryEffectGroupSeed;
-
-        #[derive(Debug, Default)]
-        pub struct RawSafetyFacts {
-            pub groups: Vec<RawSafetyGroupFact>,
-            pub calls: Vec<RawSafetyCallFact>,
-            pub operations: Vec<RawSafetyOpFact>,
-        }
     }
 }
 

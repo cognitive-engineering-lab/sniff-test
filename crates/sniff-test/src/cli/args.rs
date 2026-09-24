@@ -197,7 +197,6 @@ pub(crate) enum CrateOutputScope {
 
 #[derive(Debug, Default, Clone, Serialize, Deserialize)]
 pub struct SniffTestArgs {
-    #[serde(default)]
     pub(crate) effects: EffectSelection,
     pub(crate) manifest_path: Option<PathBuf>,
     pub(crate) cache_dir: Option<PathBuf>,
@@ -320,19 +319,6 @@ mod tests {
         let rendered = error.to_string();
         assert!(rendered.contains("unknown effect `allocation`"));
         assert!(rendered.contains("panic, safety"));
-    }
-
-    #[test]
-    fn effect_selection_defaults_to_all_when_deserialized_from_older_arguments() {
-        let mut encoded = serde_json::to_value(super::SniffTestArgs::default())
-            .expect("default arguments should encode");
-        encoded
-            .as_object_mut()
-            .expect("arguments should encode as an object")
-            .remove("effects");
-        let args: super::SniffTestArgs =
-            serde_json::from_value(encoded).expect("older arguments should parse");
-        assert_eq!(args.effects, EffectSelection::default());
     }
 
     #[test]

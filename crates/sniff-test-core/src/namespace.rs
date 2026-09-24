@@ -4,9 +4,8 @@
 //! forms of a definition: the crate root, such as `serde`, the definition-site
 //! path, such as `serde::de::from_str`, and for impl items the self-type path,
 //! such as `alloc::vec::Vec::index`. A human-oriented definition-backed form
-//! is also a match candidate. The compiler session's visible re-export form is
-//! retained only as a compatibility alias for existing policy patterns. Rust
-//! crate names use underscores, not package-name hyphens, so users should
+//! is also a match candidate. Rust crate names use underscores, not
+//! package-name hyphens, so users should
 //! write `proc_macro2`, not `proc-macro2`.
 //!
 //! Cache identity uses [`StableDefPathHash`] instead of rendered paths:
@@ -169,7 +168,7 @@ impl<'de> Deserialize<'de> for StableHash {
 ///
 /// The primary forms are definition-backed and stable against
 /// consumer-session re-exports. `display` retains rustc's human-oriented
-/// impl/type rendering; `visible_alias` exists only for config compatibility.
+/// impl/type rendering.
 #[derive(Debug, Clone)]
 pub struct NamespaceCandidates {
     /// The defining crate root, such as `alloc`.
@@ -183,12 +182,6 @@ pub struct NamespaceCandidates {
     pub self_type: Option<String>,
     /// rustc's definition-backed, pretty-printed form.
     pub display: String,
-    /// rustc's consumer-session visible path when it differs from `display`.
-    ///
-    /// This is never used for presentation or identity. It remains a policy
-    /// match candidate so existing namespace configuration does not silently
-    /// change meaning when display rendering becomes definition-backed.
-    pub visible_alias: Option<String>,
 }
 
 impl NamespaceCandidates {
@@ -198,7 +191,6 @@ impl NamespaceCandidates {
             Some(self.def_site.as_str()),
             self.self_type.as_deref(),
             Some(self.display.as_str()),
-            self.visible_alias.as_deref(),
         ]
         .into_iter()
         .flatten()
@@ -217,10 +209,8 @@ pub fn namespace_candidates(tcx: TyCtxt<'_>, def_id: DefId) -> NamespaceCandidat
                     tcx.def_path(def_id).to_string_no_crate_verbose()
                 );
                 let display = canonical_namespace(tcx, def_id);
-                let session_visible = canonicalize_def_path(&crate_name, &tcx.def_path_str(def_id));
                 NamespaceCandidates {
                     self_type: impl_self_type_path(tcx, def_id, &crate_name),
-                    visible_alias: (session_visible != display).then_some(session_visible),
                     display,
                     crate_name,
                     def_site,

@@ -3,7 +3,7 @@
 //! Operation detection mirrors rustc's own THIR unsafety checker. This module
 //! records raw calls, unsafe operations, and source-level unsafe scopes; lint
 //! policy and contract interpretation belong to
-//! [`super::SafetyEffect`].
+//! the safety effect registration.
 //!
 //! The operation set is pinned to
 //! `rustc_mir_build/src/check_unsafety.rs`; source line references remain near
@@ -69,25 +69,6 @@ impl MirEffectPass for SafetyInvocationPass {
             })
             .collect()
     }
-}
-
-// Legacy-shaped test fixture helpers keep low-level grouping tests concise;
-// production extraction consumes `EffectPassOutput` directly.
-#[cfg(test)]
-pub type RawSafetyEffectGroup = SafetyEffectGroup;
-#[cfg(test)]
-pub type RawSafetyOpFact = PreliminaryEffectSeed;
-#[cfg(test)]
-pub type RawSafetyCallFact = PreliminaryCallSeed;
-#[cfg(test)]
-pub type RawSafetyGroupFact = PreliminaryEffectGroupSeed;
-
-#[cfg(test)]
-#[derive(Debug, Default)]
-pub struct RawSafetyFacts {
-    pub groups: Vec<RawSafetyGroupFact>,
-    pub calls: Vec<RawSafetyCallFact>,
-    pub operations: Vec<RawSafetyOpFact>,
 }
 
 /// Normalizes an impl method to the trait item named by THIR.
@@ -246,17 +227,6 @@ impl PreliminarySafetySeedSink {
 
     fn into_output(self) -> EffectPassOutput {
         self.output
-    }
-
-    #[cfg(test)]
-    fn into_facts(self) -> RawSafetyFacts {
-        let mut facts = RawSafetyFacts {
-            groups: self.output.auxiliary.groups,
-            calls: self.output.auxiliary.calls,
-            ..RawSafetyFacts::default()
-        };
-        facts.operations = self.output.seeds;
-        facts
     }
 
     fn new_safety_scope(&mut self, owner: DefId, span: Span) -> SafetyEffectGroup {
@@ -941,25 +911,25 @@ mod tests {
             false,
         );
 
-        let facts = sink.into_facts();
-        assert_eq!(facts.groups.len(), 1);
-        assert_eq!(facts.groups[0].owner, owner);
-        assert_eq!(facts.groups[0].effect_group, group);
-        assert_eq!(facts.operations.len(), 1);
-        assert_eq!(facts.operations[0].owner, owner);
-        assert_eq!(facts.operations[0].kind.as_str(), "raw-pointer-dereference");
-        assert_eq!(facts.operations[0].span, operation_span);
+        let facts = sink.into_output();
+        assert_eq!(facts.auxiliary.groups.len(), 1);
+        assert_eq!(facts.auxiliary.groups[0].owner, owner);
+        assert_eq!(facts.auxiliary.groups[0].effect_group, group);
+        assert_eq!(facts.seeds.len(), 1);
+        assert_eq!(facts.seeds[0].owner, owner);
+        assert_eq!(facts.seeds[0].kind.as_str(), "raw-pointer-dereference");
+        assert_eq!(facts.seeds[0].span, operation_span);
         assert_eq!(
-            facts.operations[0].marker_anchor_spans,
+            facts.seeds[0].marker_anchor_spans,
             [scope_span, operation_span]
         );
-        assert_eq!(facts.operations[0].effect_group, Some(group));
-        assert_eq!(facts.calls.len(), 1);
-        assert_eq!(facts.calls[0].owner, owner);
-        assert_eq!(facts.calls[0].callee, Some(owner));
-        assert_eq!(facts.calls[0].declaration_callee, Some(owner));
-        assert_eq!(facts.calls[0].span, span(30, 31));
-        assert_eq!(facts.calls[0].effect_group, group);
+        assert_eq!(facts.seeds[0].effect_group, Some(group));
+        assert_eq!(facts.auxiliary.calls.len(), 1);
+        assert_eq!(facts.auxiliary.calls[0].owner, owner);
+        assert_eq!(facts.auxiliary.calls[0].callee, Some(owner));
+        assert_eq!(facts.auxiliary.calls[0].declaration_callee, Some(owner));
+        assert_eq!(facts.auxiliary.calls[0].span, span(30, 31));
+        assert_eq!(facts.auxiliary.calls[0].effect_group, group);
     }
 
     #[test]
@@ -985,9 +955,9 @@ mod tests {
         sink.record_call(owner, Some(owner), Some(owner), generated_span, None, false);
         sink.record_call(owner, Some(owner), Some(owner), generated_span, None, false);
 
-        let facts = sink.into_facts();
-        assert_eq!(facts.calls.len(), 1);
-        assert_eq!(facts.calls[0].span, generated_span);
+        let facts = sink.into_output();
+        assert_eq!(facts.auxiliary.calls.len(), 1);
+        assert_eq!(facts.auxiliary.calls[0].span, generated_span);
     }
 
     #[test]
@@ -1015,10 +985,10 @@ mod tests {
             false,
         );
 
-        let facts = sink.into_facts();
-        assert_eq!(facts.calls.len(), 2);
-        assert_eq!(facts.calls[0].effect_group, first_scope);
-        assert_eq!(facts.calls[1].effect_group, second_scope);
+        let facts = sink.into_output();
+        assert_eq!(facts.auxiliary.calls.len(), 2);
+        assert_eq!(facts.auxiliary.calls[0].effect_group, first_scope);
+        assert_eq!(facts.auxiliary.calls[1].effect_group, second_scope);
     }
 
     #[test]
@@ -1029,9 +999,9 @@ mod tests {
 
         sink.record_call(owner, Some(owner), Some(owner), generated_span, None, true);
 
-        let facts = sink.into_facts();
-        assert_eq!(facts.calls.len(), 1);
-        assert!(facts.calls[0].suppressed_by_compiler_context);
+        let facts = sink.into_output();
+        assert_eq!(facts.auxiliary.calls.len(), 1);
+        assert!(facts.auxiliary.calls[0].suppressed_by_compiler_context);
     }
 
     #[test]
@@ -1041,14 +1011,14 @@ mod tests {
         let mut sink = PreliminarySafetySeedSink::default();
         let group = sink.new_safety_scope(owner, scope_span);
 
-        let facts = sink.into_facts();
+        let facts = sink.into_output();
 
-        assert!(facts.calls.is_empty());
-        assert!(facts.operations.is_empty());
-        assert_eq!(facts.groups.len(), 1);
-        assert_eq!(facts.groups[0].owner, owner);
-        assert_eq!(facts.groups[0].effect_group.id, group.id);
-        assert_eq!(facts.groups[0].effect_group.span, scope_span);
+        assert!(facts.auxiliary.calls.is_empty());
+        assert!(facts.seeds.is_empty());
+        assert_eq!(facts.auxiliary.groups.len(), 1);
+        assert_eq!(facts.auxiliary.groups[0].owner, owner);
+        assert_eq!(facts.auxiliary.groups[0].effect_group.id, group.id);
+        assert_eq!(facts.auxiliary.groups[0].effect_group.span, scope_span);
     }
 
     #[test]
@@ -1078,7 +1048,7 @@ mod tests {
             None,
         );
 
-        let facts = sink.into_facts().operations;
+        let facts = sink.into_output().seeds;
         assert_eq!(facts.len(), 3);
         let first_group = facts[0].effect_group.expect("first safety group");
         let second_group = facts[1].effect_group.expect("second safety group");
