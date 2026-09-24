@@ -119,9 +119,10 @@ cli_cases! {
             Case::new()
                 .config_append(
                     "\n[panics.lints]\n\
-                     compiler-assert-division-by-zero = \"deny\"\n\
                      operation = \"allow\"\n\
-                     invocation = \"allow\"\n",
+                     invocation = \"allow\"\n\
+                     [panics.lints.operations]\n\
+                     division-by-zero = \"deny\"\n",
                 )
                 .denied();
         compiler_assert_overrides_are_independent =>
@@ -129,9 +130,10 @@ cli_cases! {
                 .config_append(
                     "\n[panics.lints]\n\
                      operation = \"allow\"\n\
-                     compiler-assert-remainder-by-zero = \"warn\"\n\
-                     compiler-assert-bounds-check = \"deny\"\n\
-                     invocation = \"allow\"\n",
+                     invocation = \"allow\"\n\
+                     [panics.lints.operations]\n\
+                     remainder-by-zero = \"warn\"\n\
+                     bounds-check = \"deny\"\n",
                 )
                 .denied();
         cargo_manifest_path_forwarding => Case::new()
@@ -153,9 +155,10 @@ cli_cases! {
             Case::new()
                 .config_append(
                     "\n[safety.lints]\n\
-                     raw-pointer-dereference-missing-justification = \"warn\"\n\
                      operation = \"allow\"\n\
-                     inline-assembly-missing-justification = \"deny\"\n",
+                     [safety.lints.operations]\n\
+                     raw-pointer-dereference = \"warn\"\n\
+                     inline-assembly = \"deny\"\n",
                 )
                 .denied();
     }

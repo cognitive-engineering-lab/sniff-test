@@ -81,19 +81,21 @@ ambiguous-marker = "deny" # deny | warn | allow
 ambiguous-requirement = "deny"
 # Group default for compiler-generated MIR assertions.
 operation = "deny"
-# Optional exact overrides:
-# compiler-assert-bounds-check = "deny"
-# compiler-assert-overflow = "deny"
-# compiler-assert-overflow-negation = "deny"
-# compiler-assert-division-by-zero = "deny"
-# compiler-assert-remainder-by-zero = "deny"
-# compiler-assert-resumed-after-return = "deny"
-# compiler-assert-resumed-after-panic = "deny"
-# compiler-assert-resumed-after-drop = "deny"
-# compiler-assert-misaligned-pointer-dereference = "deny"
-# compiler-assert-null-pointer-dereference = "deny"
-# compiler-assert-invalid-enum-construction = "deny"
 invocation = "deny"
+
+[panics.lints.operations]
+# Optional exact overrides:
+# bounds-check = "deny"
+# overflow = "deny"
+# overflow-negation = "deny"
+# division-by-zero = "deny"
+# remainder-by-zero = "deny"
+# resumed-after-return = "deny"
+# resumed-after-panic = "deny"
+# resumed-after-drop = "deny"
+# misaligned-pointer-dereference = "deny"
+# null-pointer-dereference = "deny"
+# invalid-enum-construction = "deny"
 
 [panics.coverage]
 unresolved-call-target = "warn"
@@ -110,18 +112,20 @@ missing-safety-docs = "warn"
 invocation = "warn"
 # Group default for non-call unsafe operations.
 operation = "warn"
+
+[safety.lints.operations]
 # Optional exact overrides:
-# raw-pointer-dereference-missing-justification = "warn"
-# mutable-static-access-missing-justification = "warn"
-# extern-static-access-missing-justification = "warn"
-# union-field-access-missing-justification = "warn"
-# unsafe-field-access-missing-justification = "warn"
-# layout-constrained-type-initialization-missing-justification = "warn"
-# unsafe-field-initialization-missing-justification = "warn"
-# layout-constrained-field-mutation-missing-justification = "warn"
-# layout-constrained-field-borrow-missing-justification = "warn"
-# inline-assembly-missing-justification = "warn"
-# unsafe-binder-cast-missing-justification = "warn"
+# raw-pointer-dereference = "warn"
+# mutable-static-access = "warn"
+# extern-static-access = "warn"
+# union-field-access = "warn"
+# unsafe-field-access = "warn"
+# layout-constrained-type-initialization = "warn"
+# unsafe-field-initialization = "warn"
+# layout-constrained-field-mutation = "warn"
+# layout-constrained-field-borrow = "warn"
+# inline-assembly = "warn"
+# unsafe-binder-cast = "warn"
 
 [safety.coverage]
 unresolved-call-target = "warn"
@@ -131,7 +135,7 @@ analysis-incomplete = "deny"
 `[compiler].inline-mir = "off"` passes `-Z inline-mir=no`, which keeps panic
 traces closer to the source call structure. Compiler settings are applied
 literally and independently from lint policy. For example, disabling overflow
-checks does not change or reject `[panics.lints].compiler-assert-overflow`.
+checks does not change or reject `[panics.lints.operations].overflow`.
 
 The analysis cache uses format version 23 and stores one direct,
 policy-neutral fact schema: function identities, source-level invocations,
@@ -193,9 +197,9 @@ findings distinguish paths truncated by `max-trace-depth`, effect traces that
 exhaust `trace-state-budget`, and reachable managed bodies that are absent from
 the linked artifact graph.
 
-Exact `compiler-assert-*` keys override `[panics.lints].operation` for their
-assertion subtypes. Exact non-call unsafe-operation keys override
-`[safety.lints].operation` for their operation subtypes. Compiler-assert
+Exact keys under `[panics.lints.operations]` override `[panics.lints].operation`
+for their assertion subtypes. Exact keys under `[safety.lints.operations]`
+override `[safety.lints].operation` for their operation subtypes. Compiler-assert
 findings use `kind = "compiler-assert"` with `compiler-assert-kind`; unsafe
 operations use `kind = "unsafe-op-missing-justification"` with
 `safety-op-kind`.
