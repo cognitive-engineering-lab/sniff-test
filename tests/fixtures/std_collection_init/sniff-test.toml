@@ -54,9 +54,6 @@ ambiguous-panic-marker = "deny"
 ambiguous-safety-marker = "deny"
 ambiguous-panic-requirement = "deny"
 ambiguous-safety-requirement = "deny"
-# Report-root selection problems warn by default.
-empty-report-roots = "warn"
-missing-report-root = "warn"
 
 [contracts]
 # Synthetic rustdoc markdown by namespace glob, loaded from TOML files relative

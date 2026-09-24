@@ -141,8 +141,7 @@ cli_cases! {
     }
     "report_roots" => {
         missing_report_root_diagnostic => Case::new()
-            .args(&["--manifest", "deny-missing.toml"])
-            .denied();
+            .args(&["--manifest", "missing.toml"]);
         empty_report_roots_diagnostic => Case::new()
             .args(&["--manifest", "empty.toml"]);
     }

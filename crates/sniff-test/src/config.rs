@@ -255,8 +255,6 @@ pub struct AnalysisLintConfig {
     pub ambiguous_safety_requirement: LintLevel,
     pub panic_analysis_incomplete: LintLevel,
     pub safety_analysis_incomplete: LintLevel,
-    pub empty_report_roots: LintLevel,
-    pub missing_report_root: LintLevel,
 }
 
 impl Default for AnalysisLintConfig {
@@ -270,8 +268,6 @@ impl Default for AnalysisLintConfig {
             // A truncated traversal proves nothing about the missing region.
             panic_analysis_incomplete: LintLevel::Deny,
             safety_analysis_incomplete: LintLevel::Deny,
-            empty_report_roots: LintLevel::Warn,
-            missing_report_root: LintLevel::Warn,
         }
     }
 }
@@ -286,8 +282,6 @@ struct RawAnalysisLintConfig {
     ambiguous_safety_requirement: Option<LintLevel>,
     panic_analysis_incomplete: Option<LintLevel>,
     safety_analysis_incomplete: Option<LintLevel>,
-    empty_report_roots: Option<LintLevel>,
-    missing_report_root: Option<LintLevel>,
     // Group defaults used when exact effect-specific values are absent.
     ambiguous_effect_marker: Option<LintLevel>,
     ambiguous_effect_requirement: Option<LintLevel>,
@@ -329,12 +323,6 @@ impl<'de> Deserialize<'de> for AnalysisLintConfig {
                 .safety_analysis_incomplete
                 .or(raw.analysis_incomplete)
                 .unwrap_or(defaults.safety_analysis_incomplete),
-            empty_report_roots: raw
-                .empty_report_roots
-                .unwrap_or(defaults.empty_report_roots),
-            missing_report_root: raw
-                .missing_report_root
-                .unwrap_or(defaults.missing_report_root),
         })
     }
 }
@@ -1042,6 +1030,14 @@ mod tests {
                 "safety-obligation-missing-requirements",
             ),
             (
+                "[analysis.lints]\nempty-report-roots = \"allow\"",
+                "empty-report-roots",
+            ),
+            (
+                "[analysis.lints]\nmissing-report-root = \"deny\"",
+                "missing-report-root",
+            ),
+            (
                 "[panics.lints]\nindirect-call-boundary = \"warn\"",
                 "indirect-call-boundary",
             ),
@@ -1148,8 +1144,6 @@ mod tests {
             ambiguous-safety-requirement = "allow"
             panic-analysis-incomplete = "warn"
             safety-analysis-incomplete = "deny"
-            empty-report-roots = "deny"
-            missing-report-root = "allow"
         "#;
 
         let parsed = SniffTestConfig::from_manifest_str(config).expect("manifest should parse");
@@ -1178,8 +1172,6 @@ mod tests {
             parsed.analysis.lints.safety_analysis_incomplete,
             LintLevel::Deny
         );
-        assert_eq!(parsed.analysis.lints.empty_report_roots, LintLevel::Deny);
-        assert_eq!(parsed.analysis.lints.missing_report_root, LintLevel::Allow);
     }
 
     #[test]
@@ -1292,7 +1284,6 @@ mod tests {
     fn partial_lint_tables_use_direct_field_defaults() {
         let config = r#"
             [analysis.lints]
-            empty-report-roots = "deny"
             undocumented-effect-invocation = "deny"
 
             [panics.lints]
@@ -1302,7 +1293,6 @@ mod tests {
 
         let parsed = SniffTestConfig::from_manifest_str(config).expect("manifest should parse");
 
-        assert_eq!(parsed.analysis.lints.empty_report_roots, LintLevel::Deny);
         assert_eq!(
             parsed.analysis.lints.undocumented_effect_invocation,
             LintLevel::Deny
@@ -1345,8 +1335,6 @@ mod tests {
         assert_eq!(lints.ambiguous_safety_requirement, LintLevel::Deny);
         assert_eq!(lints.panic_analysis_incomplete, LintLevel::Deny);
         assert_eq!(lints.safety_analysis_incomplete, LintLevel::Deny);
-        assert_eq!(lints.empty_report_roots, LintLevel::Warn);
-        assert_eq!(lints.missing_report_root, LintLevel::Warn);
     }
 
     #[test]

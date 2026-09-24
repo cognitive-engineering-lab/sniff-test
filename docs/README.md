@@ -73,8 +73,6 @@ ambiguous-panic-marker = "deny" # deny | warn | allow
 ambiguous-safety-marker = "deny"
 ambiguous-panic-requirement = "deny"
 ambiguous-safety-requirement = "deny"
-empty-report-roots = "warn"
-missing-report-root = "warn"
 
 [contracts]
 override-files = [] # TOML files relative to sniff-test.toml
@@ -225,6 +223,7 @@ and cached dependency functions until a documented contract, trusted boundary,
 or ignored namespace stops the path. With `"public"`, a private helper is
 reported through the public root that reaches it; with `"all"`, the helper can
 also receive its own finding.
+Selecting no functions or naming a missing explicit root always produces a warning.
 Safety probing covers runtime function, method, closure, and coroutine bodies;
 const, static, and inline-const initializers are intentionally outside this
 runtime effect graph. Coroutine construction conservatively makes its stored

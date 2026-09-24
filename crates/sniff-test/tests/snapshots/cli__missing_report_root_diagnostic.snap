@@ -2,13 +2,13 @@
 source: crates/sniff-test/tests/cli.rs
 expression: snapshot
 ---
-exit: 101
+exit: 0
 stdout:
 <empty>
 stderr:
     Checking report-roots v0.1.0 ([FIXTURE])
-error: [sniff-test::analysis::missing-report-root] configured report root was not found
- --> [FIXTURE]/deny-missing.toml:2:17
+warning: [sniff-test::analysis::missing-report-root] configured report root was not found
+ --> [FIXTURE]/missing.toml:2:17
   |
 2 | report-roots = ["report_roots::missing_root"]
   |                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
@@ -16,4 +16,5 @@ error: [sniff-test::analysis::missing-report-root] configured report root was no
   = note: configured under `[analysis].report-roots`
   = help: remove it or update it to a function in the current crate
 
-error: could not compile `report-roots` (lib) due to 1 previous error
+warning: `report-roots` (lib) generated 1 warning
+    Finished `release` profile [optimized] target(s) in [TIME]

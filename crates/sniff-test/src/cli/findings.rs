@@ -715,8 +715,7 @@ impl Finding {
                     }
                 }
             }
-            FindingKind::EmptyReportRoots => config.analysis.lints.empty_report_roots,
-            FindingKind::MissingReportRoot => config.analysis.lints.missing_report_root,
+            FindingKind::EmptyReportRoots | FindingKind::MissingReportRoot => LintLevel::Warn,
         }
     }
 }
@@ -800,7 +799,6 @@ mod tests {
         config.panics.lints.unresolved_call_target = Some(LintLevel::Allow);
         config.safety.lints.unresolved_call_target = Some(LintLevel::Allow);
         config.analysis.lints.undocumented_effect_invocation = LintLevel::Warn;
-        config.analysis.lints.empty_report_roots = LintLevel::Deny;
 
         let resolved = resolve_findings(
             vec![
@@ -815,7 +813,7 @@ mod tests {
 
         assert_eq!(resolved.len(), 2);
         assert_eq!(resolved[0].level, LintLevel::Warn);
-        assert_eq!(resolved[1].level, LintLevel::Deny);
+        assert_eq!(resolved[1].level, LintLevel::Warn);
     }
 
     #[test]
