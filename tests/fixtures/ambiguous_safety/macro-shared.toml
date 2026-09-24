@@ -10,4 +10,3 @@ ambiguous-safety-marker = "deny"
 
 [safety.lints]
 unsafe-call-missing-justification = "deny"
-safety-obligation-missing-justification = "allow"

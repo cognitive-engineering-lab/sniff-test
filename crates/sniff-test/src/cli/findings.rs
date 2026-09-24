@@ -680,18 +680,14 @@ impl Finding {
                     EffectFindingClass::ConcreteOperation => {
                         policy.operation_lint(operation.as_deref())
                     }
-                    EffectFindingClass::ConcreteInvocation => {
-                        policy
-                            .finding_lints(&config.analysis.lints)
-                            .concrete_invocation
-                    }
                     EffectFindingClass::UndocumentedInvocation => {
                         config.analysis.lints.undocumented_effect_invocation
                     }
-                    EffectFindingClass::DocumentedObligation => {
+                    EffectFindingClass::ConcreteInvocation
+                    | EffectFindingClass::DocumentedObligation => {
                         policy
                             .finding_lints(&config.analysis.lints)
-                            .documented_obligation
+                            .concrete_invocation
                     }
                     EffectFindingClass::UnresolvedCallTarget => {
                         policy
@@ -817,17 +813,24 @@ mod tests {
     }
 
     #[test]
-    fn obligation_lint_is_independent_of_missing_requirements() {
+    fn documented_obligations_use_invocation_lint_with_or_without_requirements() {
         let mut config = SniffTestConfig::default();
-        config.safety.lints.safety_obligation_missing_justification = LintLevel::Deny;
+        config.safety.lints.unsafe_call_missing_justification = LintLevel::Deny;
+        config.panics.lints.panic_invocation = LintLevel::Allow;
         let ordinary = finding(effect("safety", EffectFindingClass::DocumentedObligation));
         let mut obligation = finding(effect("safety", EffectFindingClass::DocumentedObligation));
         obligation.missing_requirements = vec![String::from("caller holds the lock")];
+        let invocation = finding(effect("safety", EffectFindingClass::ConcreteInvocation));
+        let panic_obligation = finding(effect("panic", EffectFindingClass::DocumentedObligation));
 
-        let resolved = resolve_findings(vec![ordinary, obligation], &config);
-        assert_eq!(resolved.len(), 2);
+        let resolved = resolve_findings(
+            vec![ordinary, obligation, invocation, panic_obligation],
+            &config,
+        );
+        assert_eq!(resolved.len(), 3);
         assert_eq!(resolved[0].level, LintLevel::Deny);
         assert_eq!(resolved[1].level, LintLevel::Deny);
+        assert_eq!(resolved[2].level, LintLevel::Deny);
     }
 
     #[test]

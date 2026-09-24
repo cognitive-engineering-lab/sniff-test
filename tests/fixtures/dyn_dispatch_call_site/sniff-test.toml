@@ -13,4 +13,4 @@ panic-sink-namespaces = [
 ]
 
 [panics.lints]
-documented-panic = "deny"
+panic-invocation = "deny"

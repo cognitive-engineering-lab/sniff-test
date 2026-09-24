@@ -17,3 +17,6 @@ trusted-boundary-namespaces = [
     "trusted_boundaries::trusted_marker_wrapper",
     "trusted_boundaries::unsafe_helper",
 ]
+
+[panics.lints]
+panic-invocation = "warn"

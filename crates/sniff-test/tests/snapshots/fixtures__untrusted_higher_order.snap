@@ -8,7 +8,7 @@ expression: "report[\"findings\"]"
     "finding": "documented-obligation",
     "function": "app::higher_order_closure_effect",
     "kind": "effect",
-    "level": "warn",
+    "level": "deny",
     "owner": {
       "crate": "app",
       "scope": "workspace"
@@ -31,7 +31,7 @@ expression: "report[\"findings\"]"
     "finding": "documented-obligation",
     "function": "app::higher_order_function_impl_effect",
     "kind": "effect",
-    "level": "warn",
+    "level": "deny",
     "owner": {
       "crate": "app",
       "scope": "workspace"

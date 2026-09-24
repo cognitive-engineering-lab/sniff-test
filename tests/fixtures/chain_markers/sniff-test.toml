@@ -11,3 +11,6 @@ panic-sink-namespaces = [
 
 [analysis.lints]
 ambiguous-panic-marker = "warn"
+
+[panics.lints]
+panic-invocation = "warn"

@@ -13,3 +13,6 @@ panic-sink-namespaces = [
 [safety]
 # This fixture isolates panic-boundary glob matching, not allocator internals.
 trusted-boundary-namespaces = ["std::**", "core::**", "alloc::**"]
+
+[panics.lints]
+panic-invocation = "warn"

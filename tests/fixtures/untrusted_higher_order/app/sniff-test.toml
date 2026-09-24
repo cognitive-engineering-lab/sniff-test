@@ -137,7 +137,6 @@ compiler-assert = "deny"
 # compiler-assert-null-pointer-dereference = "deny"
 # compiler-assert-invalid-enum-construction = "deny"
 panic-invocation = "deny"
-documented-panic = "warn"
 # Calls with a remaining unresolved target. Known targets are still traced.
 unresolved-call-target = "allow"
 
@@ -178,4 +177,3 @@ unsafe-op-missing-justification = "warn"
 # layout-constrained-field-borrow-missing-justification = "warn"
 # inline-assembly-missing-justification = "warn"
 # unsafe-binder-cast-missing-justification = "warn"
-safety-obligation-missing-justification = "warn"

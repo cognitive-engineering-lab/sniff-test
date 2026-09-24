@@ -133,8 +133,8 @@ compiler-assert = "deny"
 # compiler-assert-misaligned-pointer-dereference = "deny"
 # compiler-assert-null-pointer-dereference = "deny"
 # compiler-assert-invalid-enum-construction = "deny"
+# Also controls unmet documented `# Panics` obligations.
 panic-invocation = "deny"
-documented-panic = "warn"
 
 [panics.coverage]
 # Calls with a remaining unresolved target. Known targets are still traced.
@@ -165,6 +165,7 @@ trusted-boundary-namespaces = ["core", "alloc", "std"]
 # `deny` emits an error and makes `cargo sniff-test` fail.
 # `warn` emits a warning without failing the run.
 # `allow` suppresses the finding from diagnostics and JSON reports.
+# Also controls unmet documented `# Safety` obligations.
 unsafe-call-missing-justification = "warn"
 unsafe-call-missing-requirements = "warn"
 # Group default for non-call unsafe operations. Each exact override is optional
@@ -181,7 +182,6 @@ unsafe-op-missing-justification = "warn"
 # layout-constrained-field-borrow-missing-justification = "warn"
 # inline-assembly-missing-justification = "warn"
 # unsafe-binder-cast-missing-justification = "warn"
-safety-obligation-missing-justification = "warn"
 
 [safety.coverage]
 unresolved-call-target = "warn"

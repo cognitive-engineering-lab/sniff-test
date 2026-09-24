@@ -41,7 +41,7 @@ error: [sniff-test::panic::ambiguous-marker] one `// PANIC:` marker applies to 2
    = note: this marker applies to 2 panic effect groups
    = note: reachable from `marker_covers_documented_call_and_sink` to `ratio`
 
-warning: [sniff-test::panic::documented-obligation] call to `ratio` with a documented `# Panics` obligation has no recorded `// PANIC:` justification
+error: [sniff-test::panic::documented-obligation] call to `ratio` with a documented `# Panics` obligation has no recorded `// PANIC:` justification
   --> src/lib.rs:11:21
    |
 11 |         let first = ratio(a, denominator);
@@ -64,7 +64,7 @@ note: `ratio` documents `# Panics` here
    | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
    = note: reachable from `shared_block_marker` to `ratio`
 
-warning: [sniff-test::panic::documented-obligation] call to `ratio` with a documented `# Panics` obligation has no recorded `// PANIC:` justification
+error: [sniff-test::panic::documented-obligation] call to `ratio` with a documented `# Panics` obligation has no recorded `// PANIC:` justification
   --> src/lib.rs:12:22
    |
 12 |         let second = ratio(b, denominator);
@@ -87,7 +87,7 @@ note: `ratio` documents `# Panics` here
    | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
    = note: reachable from `shared_block_marker` to `ratio`
 
-warning: [sniff-test::panic::documented-obligation] call to `first_documented_source` with a documented `# Panics` obligation has no recorded `// PANIC:` justification
+error: [sniff-test::panic::documented-obligation] call to `first_documented_source` with a documented `# Panics` obligation has no recorded `// PANIC:` justification
   --> src/lib.rs:67:5
    |
 67 |     first_documented_source();
@@ -110,7 +110,7 @@ note: `first_documented_source` documents `# Panics` here
    | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
    = note: reachable from `unmarked_path_to_shared_sources` to `first_documented_source`
 
-warning: [sniff-test::panic::documented-obligation] call to `second_documented_source` with a documented `# Panics` obligation has no recorded `// PANIC:` justification
+error: [sniff-test::panic::documented-obligation] call to `second_documented_source` with a documented `# Panics` obligation has no recorded `// PANIC:` justification
   --> src/lib.rs:68:5
    |
 68 |     second_documented_source();
@@ -134,5 +134,4 @@ note: `second_documented_source` documents `# Panics` here
    = note: reachable from `unmarked_path_to_shared_sources` to `second_documented_source`
 
 note: set `show-full-stack-trace = true` under `[analysis]` in sniff-test.toml to show every reachability step
-warning: `ambiguous-markers` (lib) generated 4 warnings
-error: could not compile `ambiguous-markers` (lib) due to 3 previous errors; 4 warnings emitted
+error: could not compile `ambiguous-markers` (lib) due to 7 previous errors

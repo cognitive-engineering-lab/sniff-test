@@ -14,3 +14,6 @@ panic-sink-namespaces = [
 
 [safety]
 trusted-boundary-namespaces = ["core", "alloc", "std"]
+
+[panics.lints]
+panic-invocation = "warn"

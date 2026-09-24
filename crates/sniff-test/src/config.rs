@@ -443,8 +443,8 @@ pub struct PanicLintConfig {
     pub compiler_assert_null_pointer_dereference: Option<LintLevel>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub compiler_assert_invalid_enum_construction: Option<LintLevel>,
+    /// Severity for unjustified panic invocations and documented obligations.
     pub panic_invocation: LintLevel,
-    pub documented_panic: LintLevel,
     /// Legacy location; prefer `[panics.coverage]`.
     pub unresolved_call_target: Option<LintLevel>,
 }
@@ -465,7 +465,6 @@ impl Default for PanicLintConfig {
             compiler_assert_null_pointer_dereference: None,
             compiler_assert_invalid_enum_construction: None,
             panic_invocation: LintLevel::Deny,
-            documented_panic: LintLevel::Warn,
             unresolved_call_target: None,
         }
     }
@@ -497,7 +496,6 @@ pub(crate) struct EffectiveCoverageConfig {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct EffectFindingLints {
     pub(crate) concrete_invocation: LintLevel,
-    pub(crate) documented_obligation: LintLevel,
     pub(crate) ambiguous_marker: LintLevel,
     pub(crate) ambiguous_requirement: LintLevel,
 }
@@ -533,6 +531,7 @@ pub struct SafetyConfig {
 pub struct SafetyLintConfig {
     /// Legacy location; prefer `[safety.coverage]`.
     pub unresolved_call_target: Option<LintLevel>,
+    /// Severity for unjustified unsafe calls and documented obligations.
     pub unsafe_call_missing_justification: LintLevel,
     pub unsafe_call_missing_requirements: LintLevel,
     pub unsafe_op_missing_justification: LintLevel,
@@ -558,7 +557,6 @@ pub struct SafetyLintConfig {
     pub inline_assembly_missing_justification: Option<LintLevel>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub unsafe_binder_cast_missing_justification: Option<LintLevel>,
-    pub safety_obligation_missing_justification: LintLevel,
 }
 
 impl Default for SafetyLintConfig {
@@ -579,7 +577,6 @@ impl Default for SafetyLintConfig {
             layout_constrained_field_borrow_missing_justification: None,
             inline_assembly_missing_justification: None,
             unsafe_binder_cast_missing_justification: None,
-            safety_obligation_missing_justification: LintLevel::Warn,
         }
     }
 }
@@ -616,7 +613,6 @@ impl crate::effects::EffectConfig for PanicConfig {
     fn finding_lints(&self, analysis: &AnalysisLintConfig) -> EffectFindingLints {
         EffectFindingLints {
             concrete_invocation: self.lints.panic_invocation,
-            documented_obligation: self.lints.documented_panic,
             ambiguous_marker: analysis.ambiguous_panic_marker,
             ambiguous_requirement: analysis.ambiguous_panic_requirement,
         }
@@ -664,7 +660,6 @@ impl crate::effects::EffectConfig for SafetyConfig {
     fn finding_lints(&self, analysis: &AnalysisLintConfig) -> EffectFindingLints {
         EffectFindingLints {
             concrete_invocation: self.lints.unsafe_call_missing_justification,
-            documented_obligation: self.lints.safety_obligation_missing_justification,
             ambiguous_marker: analysis.ambiguous_safety_marker,
             ambiguous_requirement: analysis.ambiguous_safety_requirement,
         }
@@ -1030,6 +1025,14 @@ mod tests {
                 "safety-obligation-missing-requirements",
             ),
             (
+                "[panics.lints]\ndocumented-panic = \"warn\"",
+                "documented-panic",
+            ),
+            (
+                "[safety.lints]\nsafety-obligation-missing-justification = \"warn\"",
+                "safety-obligation-missing-justification",
+            ),
+            (
                 "[analysis.lints]\nempty-report-roots = \"allow\"",
                 "empty-report-roots",
             ),
@@ -1338,7 +1341,7 @@ mod tests {
     }
 
     #[test]
-    fn default_panic_lints_keep_documented_panics_visible() {
+    fn default_panic_lints_deny_unjustified_invocations() {
         let lints = PanicConfig::default().lints;
 
         assert_eq!(lints.compiler_assert, LintLevel::Deny);
@@ -1359,7 +1362,6 @@ mod tests {
             [None; 11]
         );
         assert_eq!(lints.panic_invocation, LintLevel::Deny);
-        assert_eq!(lints.documented_panic, LintLevel::Warn);
         assert_eq!(lints.unresolved_call_target, None);
         assert_eq!(PanicConfig::default().coverage, CoverageConfig::default());
         assert_eq!(
@@ -1465,10 +1467,6 @@ mod tests {
             ],
             [None; 11]
         );
-        assert_eq!(
-            lints.safety_obligation_missing_justification,
-            LintLevel::Warn
-        );
     }
 
     #[test]
@@ -1516,7 +1514,6 @@ mod tests {
             compiler-assert-null-pointer-dereference = "allow"
             compiler-assert-invalid-enum-construction = "warn"
             panic-invocation = "allow"
-            documented-panic = "allow"
             unresolved-call-target = "deny"
         "#;
 
@@ -1558,7 +1555,6 @@ mod tests {
             ]
         );
         assert_eq!(parsed.panics.lints.panic_invocation, LintLevel::Allow);
-        assert_eq!(parsed.panics.lints.documented_panic, LintLevel::Allow);
         assert_eq!(
             parsed.panics.lints.unresolved_call_target,
             Some(LintLevel::Deny)
@@ -1576,7 +1572,6 @@ mod tests {
             unsafe-call-missing-justification = "deny"
             unsafe-call-missing-requirements = "allow"
             unsafe-op-missing-justification = "deny"
-            safety-obligation-missing-justification = "allow"
             unresolved-call-target = "deny"
         "#;
 
@@ -1610,10 +1605,6 @@ mod tests {
         assert_eq!(
             parsed.safety.lints.unsafe_op_missing_justification,
             LintLevel::Deny
-        );
-        assert_eq!(
-            parsed.safety.lints.safety_obligation_missing_justification,
-            LintLevel::Allow
         );
         assert_eq!(
             parsed.safety.lints.unresolved_call_target,

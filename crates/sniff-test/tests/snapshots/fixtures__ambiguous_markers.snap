@@ -73,7 +73,7 @@ expression: "report[\"findings\"]"
     "finding": "documented-obligation",
     "function": "ambiguous_markers::shared_block_marker",
     "kind": "effect",
-    "level": "warn",
+    "level": "deny",
     "owner": {
       "crate": "ambiguous_markers",
       "scope": "workspace"
@@ -96,7 +96,7 @@ expression: "report[\"findings\"]"
     "finding": "documented-obligation",
     "function": "ambiguous_markers::shared_block_marker",
     "kind": "effect",
-    "level": "warn",
+    "level": "deny",
     "owner": {
       "crate": "ambiguous_markers",
       "scope": "workspace"
@@ -119,7 +119,7 @@ expression: "report[\"findings\"]"
     "finding": "documented-obligation",
     "function": "ambiguous_markers::shared_documented_sources",
     "kind": "effect",
-    "level": "warn",
+    "level": "deny",
     "owner": {
       "crate": "ambiguous_markers",
       "scope": "workspace"
@@ -143,7 +143,7 @@ expression: "report[\"findings\"]"
     "finding": "documented-obligation",
     "function": "ambiguous_markers::shared_documented_sources",
     "kind": "effect",
-    "level": "warn",
+    "level": "deny",
     "owner": {
       "crate": "ambiguous_markers",
       "scope": "workspace"

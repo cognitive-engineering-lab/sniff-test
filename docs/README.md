@@ -99,7 +99,6 @@ compiler-assert = "deny"
 # compiler-assert-null-pointer-dereference = "deny"
 # compiler-assert-invalid-enum-construction = "deny"
 panic-invocation = "deny"
-documented-panic = "warn"
 
 [panics.coverage]
 unresolved-call-target = "warn"
@@ -127,7 +126,6 @@ unsafe-op-missing-justification = "warn"
 # layout-constrained-field-borrow-missing-justification = "warn"
 # inline-assembly-missing-justification = "warn"
 # unsafe-binder-cast-missing-justification = "warn"
-safety-obligation-missing-justification = "warn"
 
 [safety.coverage]
 unresolved-call-target = "warn"
@@ -216,6 +214,8 @@ then falls back through macro callsites to the outer source callsite.
 effect contract, regardless of its requirement-list layout. Set it to `"exact"`
 to require each documented sub-obligation to be justified by name, or by the
 same nested list structure when it has no explicit name.
+An unmet documented obligation uses the effect's invocation lint level:
+`panic-invocation` or `unsafe-call-missing-justification`.
 
 `report-roots` controls workspace traversal and reporting, not artifact
 extraction. Effects propagate from each selected workspace root through local
@@ -346,9 +346,8 @@ later in a trace are represented by the effect's remaining requirements; they
 do not change the source site's evidence status. Human diagnostics keep the
 effect source as the primary location; for external sources, a reachable
 workspace call may be shown separately as a place to contain that path. A
-matched API's surface contract uses an ordinary domain finding kind such as
-`documented-panic`, `unsafe-call-*`, or `safety-obligation-*`; the boundary does
-not create a separate finding class.
+matched API's surface contract uses the ordinary `documented-obligation`
+finding; the boundary does not create a separate finding class.
 sniff-test records an invocation token only in workspace dep-info, so Cargo
 reruns report-producing workspace units on every invocation to reinterpret and
 validate cached facts while leaving otherwise-fresh dependency units untouched.

@@ -20,7 +20,7 @@ panic-sink-namespaces = [
 ]
 
 [panics.lints]
-documented-panic = "warn"
+panic-invocation = "warn"
 
 [safety.lints]
 unsafe-call-missing-requirements = "warn"

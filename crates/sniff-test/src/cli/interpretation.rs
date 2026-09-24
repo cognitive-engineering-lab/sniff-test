@@ -1862,7 +1862,7 @@ mod tests {
     }
 
     #[test]
-    fn panic_contracts_use_documented_panic_lint() {
+    fn panic_contracts_keep_documented_obligation_finding_kind() {
         let hash =
             serde_json::from_str::<StableDefPathHash>("\"00000000000000000000000000000001\"")
                 .expect("test hash should deserialize");
