@@ -689,12 +689,9 @@ impl Finding {
                         config.analysis.lints.undocumented_effect_invocation
                     }
                     EffectFindingClass::DocumentedObligation => {
-                        let lints = policy.finding_lints(&config.analysis.lints);
-                        if self.missing_requirements.is_empty() {
-                            lints.documented_obligation
-                        } else {
-                            lints.documented_obligation_missing_requirements
-                        }
+                        policy
+                            .finding_lints(&config.analysis.lints)
+                            .documented_obligation
                     }
                     EffectFindingClass::UnresolvedCallTarget => {
                         policy
@@ -822,17 +819,16 @@ mod tests {
     }
 
     #[test]
-    fn obligation_lint_depends_on_missing_requirements() {
+    fn obligation_lint_is_independent_of_missing_requirements() {
         let mut config = SniffTestConfig::default();
-        config.safety.lints.safety_obligation_missing_justification = LintLevel::Warn;
-        config.safety.lints.safety_obligation_missing_requirements = LintLevel::Deny;
+        config.safety.lints.safety_obligation_missing_justification = LintLevel::Deny;
         let ordinary = finding(effect("safety", EffectFindingClass::DocumentedObligation));
         let mut obligation = finding(effect("safety", EffectFindingClass::DocumentedObligation));
         obligation.missing_requirements = vec![String::from("caller holds the lock")];
 
         let resolved = resolve_findings(vec![ordinary, obligation], &config);
         assert_eq!(resolved.len(), 2);
-        assert_eq!(resolved[0].level, LintLevel::Warn);
+        assert_eq!(resolved[0].level, LintLevel::Deny);
         assert_eq!(resolved[1].level, LintLevel::Deny);
     }
 

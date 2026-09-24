@@ -510,7 +510,6 @@ pub(crate) struct EffectiveCoverageConfig {
 pub(crate) struct EffectFindingLints {
     pub(crate) concrete_invocation: LintLevel,
     pub(crate) documented_obligation: LintLevel,
-    pub(crate) documented_obligation_missing_requirements: LintLevel,
     pub(crate) ambiguous_marker: LintLevel,
     pub(crate) ambiguous_requirement: LintLevel,
 }
@@ -572,7 +571,6 @@ pub struct SafetyLintConfig {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub unsafe_binder_cast_missing_justification: Option<LintLevel>,
     pub safety_obligation_missing_justification: LintLevel,
-    pub safety_obligation_missing_requirements: LintLevel,
 }
 
 impl Default for SafetyLintConfig {
@@ -594,7 +592,6 @@ impl Default for SafetyLintConfig {
             inline_assembly_missing_justification: None,
             unsafe_binder_cast_missing_justification: None,
             safety_obligation_missing_justification: LintLevel::Warn,
-            safety_obligation_missing_requirements: LintLevel::Warn,
         }
     }
 }
@@ -632,7 +629,6 @@ impl crate::effects::EffectConfig for PanicConfig {
         EffectFindingLints {
             concrete_invocation: self.lints.panic_invocation,
             documented_obligation: self.lints.documented_panic,
-            documented_obligation_missing_requirements: self.lints.documented_panic,
             ambiguous_marker: analysis.ambiguous_panic_marker,
             ambiguous_requirement: analysis.ambiguous_panic_requirement,
         }
@@ -681,9 +677,6 @@ impl crate::effects::EffectConfig for SafetyConfig {
         EffectFindingLints {
             concrete_invocation: self.lints.unsafe_call_missing_justification,
             documented_obligation: self.lints.safety_obligation_missing_justification,
-            documented_obligation_missing_requirements: self
-                .lints
-                .safety_obligation_missing_requirements,
             ambiguous_marker: analysis.ambiguous_safety_marker,
             ambiguous_requirement: analysis.ambiguous_safety_requirement,
         }
@@ -1043,6 +1036,10 @@ mod tests {
             (
                 "[safety.lints]\ntrusted-safety = \"allow\"",
                 "trusted-safety",
+            ),
+            (
+                "[safety.lints]\nsafety-obligation-missing-requirements = \"deny\"",
+                "safety-obligation-missing-requirements",
             ),
             (
                 "[panics.lints]\nindirect-call-boundary = \"warn\"",
@@ -1484,10 +1481,6 @@ mod tests {
             lints.safety_obligation_missing_justification,
             LintLevel::Warn
         );
-        assert_eq!(
-            lints.safety_obligation_missing_requirements,
-            LintLevel::Warn
-        );
     }
 
     #[test]
@@ -1596,7 +1589,6 @@ mod tests {
             unsafe-call-missing-requirements = "allow"
             unsafe-op-missing-justification = "deny"
             safety-obligation-missing-justification = "allow"
-            safety-obligation-missing-requirements = "deny"
             unresolved-call-target = "deny"
         "#;
 
@@ -1634,10 +1626,6 @@ mod tests {
         assert_eq!(
             parsed.safety.lints.safety_obligation_missing_justification,
             LintLevel::Allow
-        );
-        assert_eq!(
-            parsed.safety.lints.safety_obligation_missing_requirements,
-            LintLevel::Deny
         );
         assert_eq!(
             parsed.safety.lints.unresolved_call_target,

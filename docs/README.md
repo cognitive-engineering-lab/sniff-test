@@ -130,7 +130,6 @@ unsafe-op-missing-justification = "warn"
 # inline-assembly-missing-justification = "warn"
 # unsafe-binder-cast-missing-justification = "warn"
 safety-obligation-missing-justification = "warn"
-safety-obligation-missing-requirements = "warn"
 
 [safety.coverage]
 unresolved-call-target = "warn"
