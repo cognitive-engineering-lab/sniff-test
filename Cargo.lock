@@ -454,6 +454,20 @@ dependencies = [
  "anyhow",
  "cargo_metadata",
  "clap",
+ "insta",
+ "serde",
+ "serde_json",
+ "sniff-test-core",
+ "sniff-test-diagnostics",
+ "sniff-test-effects",
+ "tempfile",
+]
+
+[[package]]
+name = "sniff-test-core"
+version = "0.1.0"
+dependencies = [
+ "clap",
  "effect-tracing",
  "globset",
  "insta",
@@ -463,6 +477,24 @@ dependencies = [
  "serde_json",
  "tempfile",
  "toml",
+]
+
+[[package]]
+name = "sniff-test-diagnostics"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "sniff-test-core",
+ "sniff-test-effects",
+ "toml",
+]
+
+[[package]]
+name = "sniff-test-effects"
+version = "0.1.0"
+dependencies = [
+ "sniff-test-core",
 ]
 
 [[package]]

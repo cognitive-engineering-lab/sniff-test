@@ -4,8 +4,8 @@ use std::path::Path;
 use std::process::{Command, ExitCode};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use crate::config::EXAMPLE_MANIFEST;
 use anyhow::{Context, Result, bail};
+use sniff_test_core::config::EXAMPLE_MANIFEST;
 
 use super::args::{self, FrontendAction, FrontendCli, InitCliArgs, SniffTestArgs};
 use super::plugin::{
@@ -117,7 +117,7 @@ fn discover_manifest(mut args: SniffTestArgs, workspace_root: &Path) -> Result<S
     let cwd = std::env::current_dir().context("failed to read current directory")?;
     let mut dir = cwd.as_path();
     loop {
-        let candidate = dir.join(crate::config::DEFAULT_MANIFEST_FILE);
+        let candidate = dir.join(sniff_test_core::config::DEFAULT_MANIFEST_FILE);
         if candidate.is_file() {
             args.manifest_path = Some(candidate);
             return Ok(args);
@@ -133,7 +133,7 @@ fn discover_manifest(mut args: SniffTestArgs, workspace_root: &Path) -> Result<S
 
     eprintln!(
         "sniff-test: no {} found between {} and {}; using built-in defaults (public report roots, panic and safety findings warned)",
-        crate::config::DEFAULT_MANIFEST_FILE,
+        sniff_test_core::config::DEFAULT_MANIFEST_FILE,
         cwd.display(),
         workspace_root.display(),
     );

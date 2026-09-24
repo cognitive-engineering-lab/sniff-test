@@ -11,6 +11,9 @@ fn main() {
         &[
             "build.rs",
             "src",
+            "../sniff-test-core/src",
+            "../sniff-test-effects/src",
+            "../sniff-test-diagnostics/src",
             "../reachability/build.rs",
             "../reachability/src",
         ],

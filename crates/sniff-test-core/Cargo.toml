@@ -1,21 +1,21 @@
 [package]
-name = "sniff-test"
+name = "sniff-test-core"
 version.workspace = true
 edition.workspace = true
 
 [dependencies]
-anyhow = "1"
-cargo_metadata = "0.19"
 clap = { version = "4.6", features = ["derive"] }
-sniff-test-core = { path = "../sniff-test-core" }
-sniff-test-effects = { path = "../sniff-test-effects" }
-sniff-test-diagnostics = { path = "../sniff-test-diagnostics" }
+effect-tracing = { path = "../effect-tracing" }
+globset = { version = "0.4", default-features = false }
+pulldown-cmark = { version = "0.11", default-features = false }
+reachability = { path = "../reachability" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+tempfile = "3"
+toml = "0.7"
 
 [dev-dependencies]
 insta = { version = "1", features = ["json"] }
-tempfile = "3"
 
 [package.metadata.rust-analyzer]
 rustc_private = true

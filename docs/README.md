@@ -456,6 +456,21 @@ rustc succeeds, even if sniff-test emits findings. Required fact extraction or
 cache persistence failures are tool errors. Use the Cargo frontend for
 deny-level effect gating.
 
+## Crate boundaries
+
+- `effect-tracing` propagates effects through a compiler-independent graph.
+- `reachability` extracts rustc reachability edges.
+- `sniff-test-core` extracts and caches artifact facts, tracks obligations, and
+  produces structured effect interpretations. It defines the interfaces that
+  effect implementations use and does not depend on built-in effects or output
+  rendering.
+- `sniff-test-effects` supplies the panic and safety definitions and rustc
+  detection passes.
+- `sniff-test-diagnostics` turns core interpretations into findings, rustc
+  diagnostics, and JSON reports.
+- `sniff-test` provides the Cargo command and rustc driver that connect the
+  other crates.
+
 ## Checks
 
 Run the local verification suite with:

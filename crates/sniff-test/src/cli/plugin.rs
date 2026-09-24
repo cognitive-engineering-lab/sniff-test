@@ -3,14 +3,14 @@ use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitCode};
 
-use crate::artifact_cache::default_cache_dir;
-use crate::config::SniffTestConfig;
 use anyhow::{Context, Result, bail};
 use clap::Parser as _;
 use rustc_driver::{Callbacks, Compilation};
 use rustc_interface::interface;
 use rustc_middle::ty::TyCtxt;
 use rustc_span::symbol::Symbol;
+use sniff_test_core::artifact_cache::default_cache_dir;
+use sniff_test_core::config::SniffTestConfig;
 
 use super::args::{ColorChoice, CrateOutputScope, DriverCli, MANIFEST_PATH_ENV, SniffTestArgs};
 use super::driver::{analyze_crate, is_build_script, is_proc_macro, load_config};
@@ -260,7 +260,11 @@ fn analysis_rustflags(args: &SniffTestArgs, config: &SniffTestConfig) -> Vec<Str
         "--cfg".to_owned(),
         format!("sniff_test_tool_{}", env!("SNIFF_TEST_SOURCE_STAMP")),
         "--cfg".to_owned(),
-        format!("sniff_test_effects_{}", args.effects.fingerprint()),
+        format!(
+            "sniff_test_effects_{}",
+            args.effects
+                .fingerprint(&sniff_test_effects::registered_keys())
+        ),
         // Workspace consumers need upstream MIR to materialize exact
         // monomorphization overlays (for example, trait dispatch selected by
         // a workspace-local type).
@@ -428,7 +432,7 @@ mod tests {
 
     use anyhow::Context as _;
 
-    use crate::config::SniffTestConfig;
+    use sniff_test_core::config::SniffTestConfig;
 
     use super::{
         analysis_rustflags, encode_rustflags, render_error_chain, should_track_workspace_run,
@@ -504,9 +508,9 @@ mod tests {
         let all = analysis_rustflags(&SniffTestArgs::default(), &SniffTestConfig::default());
         let safety = analysis_rustflags(
             &SniffTestArgs {
-                effects: crate::effects::EffectSelection::only([crate::artifact::EffectKey::new(
-                    "safety",
-                )]),
+                effects: sniff_test_core::effects::EffectSelection::only([
+                    sniff_test_core::artifact::EffectKey::new("safety"),
+                ]),
                 ..SniffTestArgs::default()
             },
             &SniffTestConfig::default(),

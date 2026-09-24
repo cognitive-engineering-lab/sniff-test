@@ -1769,7 +1769,7 @@ fn init_subcommand_writes_example_manifest() {
     );
     assert_eq!(
         fs::read_to_string(manifest).expect("read generated manifest"),
-        include_str!("../example-manifest.toml")
+        include_str!("../../sniff-test-core/example-manifest.toml")
     );
 }
 

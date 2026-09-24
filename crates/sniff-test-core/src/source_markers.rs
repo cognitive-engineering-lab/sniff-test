@@ -1,0 +1,1215 @@
+//! Source-local analysis markers.
+
+use reachability::{ReachabilityEdge, ReachabilityGraph, ReachabilityNodeKind};
+use rustc_hir::def_id::LocalDefId;
+use rustc_middle::thir::visit::{self, Visitor};
+use rustc_middle::thir::{Block, Stmt, StmtKind, Thir};
+use rustc_middle::ty::TyCtxt;
+use rustc_span::{ExpnId, SourceFile, Span};
+
+use crate::artifact::UnverifiedMarkerProbeReason;
+use crate::config::MarkerProbing;
+use crate::contracts::{MarkerSatisfaction, markdown_list_item_body, structural_list_path};
+use crate::namespace::definition_backed_macro;
+
+#[derive(Debug, Clone, Copy)]
+struct MarkerSyntax<'a> {
+    prefix: &'a str,
+    competing_prefixes: &'a [&'a str],
+}
+
+impl<'a> MarkerSyntax<'a> {
+    const fn new(prefix: &'a str, competing_prefixes: &'a [&'a str]) -> Self {
+        Self {
+            prefix,
+            competing_prefixes,
+        }
+    }
+
+    fn strip_prefix(self, line: &str) -> Option<&str> {
+        line.strip_prefix(self.prefix)?.strip_prefix(':')
+    }
+
+    fn starts_competing_marker(self, line: &str) -> bool {
+        self.competing_prefixes.iter().any(|prefix| {
+            *prefix != self.prefix
+                && line
+                    .strip_prefix(prefix)
+                    .is_some_and(|line| line.starts_with(':'))
+        })
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct MarkerBlockKey {
+    pub file_start: u32,
+    pub start_line: usize,
+    pub end_line: usize,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum MarkerOrigin {
+    Source,
+    Macro(ExpnId),
+}
+
+/// Identity of one logical marker occurrence.
+///
+/// A physical comment block in a macro definition becomes a distinct marker
+/// each time that macro is expanded.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct MarkerInstanceKey {
+    pub physical_block: MarkerBlockKey,
+    pub origin: MarkerOrigin,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EffectMarkerBlock {
+    pub key: MarkerInstanceKey,
+    pub span: Span,
+    /// Complete physical source-ordered claim inventory.
+    pub satisfactions: Vec<MarkerSatisfaction>,
+    /// Original source ordinals applicable to the selected semantic target.
+    pub applicable_satisfactions: Vec<usize>,
+}
+
+/// Result of inspecting every source location that can own one marker.
+///
+/// Absence is verified only when all usable candidates were readable. A
+/// marker found at any candidate is conclusive even when another candidate
+/// could not be inspected.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MarkerProbe<T> {
+    Present(T),
+    VerifiedAbsent,
+    Unverified(UnverifiedMarkerProbeReason),
+}
+
+impl<T> MarkerProbe<T> {
+    fn or_else(self, probe: impl FnOnce() -> Self) -> Self {
+        match self {
+            Self::Present(_) => self,
+            Self::VerifiedAbsent => probe(),
+            Self::Unverified(reason) => match probe() {
+                present @ Self::Present(_) => present,
+                Self::VerifiedAbsent => Self::Unverified(reason),
+                Self::Unverified(other) => Self::Unverified(reason.merge(other)),
+            },
+        }
+    }
+}
+
+/// Probes ordered candidates while retaining uncertainty from every candidate
+/// that could have owned the marker. An empty candidate set is unverified.
+pub fn probe_marker_candidates<C, T, U>(
+    candidates: C,
+    mut probe: impl FnMut(T) -> MarkerProbe<U>,
+) -> MarkerProbe<U>
+where
+    C: IntoIterator<Item = T>,
+{
+    let mut saw_candidate = false;
+    let mut unverified_reason: Option<UnverifiedMarkerProbeReason> = None;
+    for candidate in candidates {
+        saw_candidate = true;
+        match probe(candidate) {
+            present @ MarkerProbe::Present(_) => return present,
+            MarkerProbe::VerifiedAbsent => {}
+            MarkerProbe::Unverified(reason) => {
+                unverified_reason =
+                    Some(unverified_reason.map_or(reason, |prior| prior.merge(reason)));
+            }
+        }
+    }
+    if let Some(reason) = unverified_reason {
+        MarkerProbe::Unverified(reason)
+    } else if saw_candidate {
+        MarkerProbe::VerifiedAbsent
+    } else {
+        MarkerProbe::Unverified(UnverifiedMarkerProbeReason::NoUsableSourceSpan)
+    }
+}
+
+fn probe_required_marker_candidate<T, U>(
+    candidate: Option<T>,
+    probe: impl FnOnce(T) -> MarkerProbe<U>,
+) -> MarkerProbe<U> {
+    candidate.map_or(
+        MarkerProbe::Unverified(UnverifiedMarkerProbeReason::NoUsableSourceSpan),
+        probe,
+    )
+}
+
+fn marker_probe_from_source<T>(source_available: bool, marker: Option<T>) -> MarkerProbe<T> {
+    if !source_available {
+        MarkerProbe::Unverified(UnverifiedMarkerProbeReason::SourceUnavailable)
+    } else if let Some(marker) = marker {
+        MarkerProbe::Present(marker)
+    } else {
+        MarkerProbe::VerifiedAbsent
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ParsedMarkerBlock {
+    key: MarkerBlockKey,
+    span: Span,
+    satisfactions: Vec<MarkerSatisfaction>,
+}
+
+impl ParsedMarkerBlock {
+    fn instantiate(self, origin: MarkerOrigin) -> EffectMarkerBlock {
+        let applicable_satisfactions = (0..self.satisfactions.len()).collect();
+        EffectMarkerBlock {
+            key: MarkerInstanceKey {
+                physical_block: self.key,
+                origin,
+            },
+            span: self.span,
+            satisfactions: self.satisfactions,
+            applicable_satisfactions,
+        }
+    }
+}
+
+#[must_use]
+pub fn effect_site_marker_block(
+    tcx: TyCtxt<'_>,
+    owner: LocalDefId,
+    span: Span,
+    justification: &'static str,
+    competing_justifications: &[&str],
+    probing: MarkerProbing,
+) -> MarkerProbe<EffectMarkerBlock> {
+    effect_site_marker_block_with(
+        tcx,
+        owner,
+        span,
+        MarkerSyntax::new(justification, competing_justifications),
+        probing,
+    )
+}
+
+fn span_marker_block_with(
+    tcx: TyCtxt<'_>,
+    span: Span,
+    syntax: MarkerSyntax<'_>,
+    probing: MarkerProbing,
+) -> MarkerProbe<EffectMarkerBlock> {
+    probe_marker_candidates(marker_probe_spans(span, probing), |span| {
+        span_marker_block_at(tcx, span, syntax)
+    })
+}
+
+/// Marker block that justifies one effect-bearing reachability edge.
+///
+/// A marker directly above a callee segment wins, so a marker between links of
+/// a multi-line method chain applies only to that link. Otherwise the edge's
+/// source site wins, followed by the unique immediate THIR statement-like
+/// unit. Arbitrary enclosing blocks do not own markers.
+#[must_use]
+pub fn effect_edge_marker_block(
+    tcx: TyCtxt<'_>,
+    graph: &ReachabilityGraph<'_>,
+    edge: &ReachabilityEdge,
+    fallback_scope_span: Option<Span>,
+    justification: &'static str,
+    competing_justifications: &[&str],
+    probing: MarkerProbing,
+) -> MarkerProbe<EffectMarkerBlock> {
+    let syntax = MarkerSyntax::new(justification, competing_justifications);
+    effect_edge_marker_block_with(tcx, graph, edge, syntax, probing).or_else(|| {
+        let Some(span) = fallback_scope_span else {
+            return MarkerProbe::VerifiedAbsent;
+        };
+        probe_required_marker_candidate(edge_owner(graph, edge), |owner| {
+            effect_site_marker_block_with(tcx, owner, span, syntax, probing)
+        })
+    })
+}
+
+fn effect_edge_marker_block_with(
+    tcx: TyCtxt<'_>,
+    graph: &ReachabilityGraph<'_>,
+    edge: &ReachabilityEdge,
+    syntax: MarkerSyntax<'_>,
+    probing: MarkerProbing,
+) -> MarkerProbe<EffectMarkerBlock> {
+    probe_marker_candidates(
+        edge.callee_span
+            .into_iter()
+            .chain(std::iter::once(edge.span)),
+        |span| span_marker_block_with(tcx, span, syntax, probing),
+    )
+    .or_else(|| {
+        probe_required_marker_candidate(edge_owner(graph, edge), |owner| {
+            probe_required_marker_candidate(
+                immediate_statement_span(tcx, owner, edge.span),
+                |span| span_marker_block_with(tcx, span, syntax, probing),
+            )
+        })
+    })
+}
+
+fn edge_owner(graph: &ReachabilityGraph<'_>, edge: &ReachabilityEdge) -> Option<LocalDefId> {
+    match &graph.node(edge.origin).kind {
+        ReachabilityNodeKind::Instance(instance) => instance.def_id().as_local()?,
+        ReachabilityNodeKind::CompilerAssert { .. }
+        | ReachabilityNodeKind::MacroExpansion { .. }
+        | ReachabilityNodeKind::IndirectCall { .. }
+        | ReachabilityNodeKind::DynObjectCast { .. } => return None,
+    }
+    .into()
+}
+
+fn effect_site_marker_block_with(
+    tcx: TyCtxt<'_>,
+    owner: LocalDefId,
+    span: Span,
+    syntax: MarkerSyntax<'_>,
+    probing: MarkerProbing,
+) -> MarkerProbe<EffectMarkerBlock> {
+    span_marker_block_with(tcx, span, syntax, probing).or_else(|| {
+        probe_required_marker_candidate(immediate_statement_span(tcx, owner, span), |statement| {
+            span_marker_block_with(tcx, statement, syntax, probing)
+        })
+    })
+}
+
+fn immediate_statement_span(tcx: TyCtxt<'_>, owner: LocalDefId, target: Span) -> Option<Span> {
+    // Reachability can use a required trait method as the origin of a
+    // synthetic edge even though the method has no source body. Asking for
+    // THIR in that case ICEs in `hir_body_owned_by` before `thir_body` can
+    // return its usual error.
+    tcx.hir_maybe_body_owned_by(owner)?;
+    let Ok((thir, root)) = tcx.thir_body(owner) else {
+        return None;
+    };
+    let thir = thir.borrow();
+    let mut visitor = ContainingStatementVisitor {
+        thir: &thir,
+        target,
+        spans: Vec::new(),
+    };
+    visitor.visit_expr(&thir[root]);
+    select_unique_innermost_statement(visitor.spans, target)
+}
+
+struct ContainingStatementVisitor<'a, 'tcx> {
+    thir: &'a Thir<'tcx>,
+    target: Span,
+    spans: Vec<Span>,
+}
+
+impl<'a, 'tcx> Visitor<'a, 'tcx> for ContainingStatementVisitor<'a, 'tcx> {
+    fn thir(&self) -> &'a Thir<'tcx> {
+        self.thir
+    }
+
+    fn visit_stmt(&mut self, statement: &'a Stmt<'tcx>) {
+        let span = match statement.kind {
+            StmtKind::Expr { expr, .. } => self.thir[expr].span,
+            StmtKind::Let { span, .. } => span,
+        };
+        if span_contains_exact(span, self.target) || span_contains(span, self.target) {
+            self.spans.push(span);
+        }
+        visit::walk_stmt(self, statement);
+    }
+
+    fn visit_block(&mut self, block: &'a Block) {
+        // THIR stores a block's trailing expression outside `stmts`. Treat it
+        // as the block's statement-like unit so adding a semicolon cannot
+        // change marker ownership. The innermost-span selection below keeps
+        // this from becoming an enclosing-block walk.
+        if let Some(expression) = block.expr {
+            let span = self.thir[expression].span;
+            if span_contains_exact(span, self.target) || span_contains(span, self.target) {
+                self.spans.push(span);
+            }
+        }
+        visit::walk_block(self, block);
+    }
+}
+
+fn select_unique_innermost_statement(mut spans: Vec<Span>, target: Span) -> Option<Span> {
+    let exact = spans
+        .iter()
+        .copied()
+        .filter(|span| span_contains_exact(*span, target))
+        .collect::<Vec<_>>();
+    if !exact.is_empty() {
+        spans = exact;
+    }
+    spans.sort_by_key(|span| {
+        let span = if span_contains_exact(*span, target) {
+            *span
+        } else {
+            span.source_callsite()
+        };
+        (
+            span.hi().0.saturating_sub(span.lo().0),
+            span.lo().0,
+            span.hi().0,
+        )
+    });
+    spans.dedup_by(|left, right| left.source_equal(*right));
+
+    let first = *spans.first()?;
+    let first = if span_contains_exact(first, target) {
+        first
+    } else {
+        first.source_callsite()
+    };
+    let first_length = first.hi().0.saturating_sub(first.lo().0);
+    let ambiguous = spans.iter().skip(1).any(|span| {
+        let span = if span_contains_exact(*span, target) {
+            *span
+        } else {
+            span.source_callsite()
+        };
+        span.hi().0.saturating_sub(span.lo().0) == first_length
+    });
+    (!ambiguous).then_some(spans[0])
+}
+
+fn span_contains_exact(outer: Span, inner: Span) -> bool {
+    !outer.is_dummy()
+        && !inner.is_dummy()
+        && outer.ctxt() == inner.ctxt()
+        && outer.lo() <= inner.lo()
+        && inner.hi() <= outer.hi()
+}
+
+#[must_use]
+pub fn span_contains(outer: Span, inner: Span) -> bool {
+    let outer = outer.source_callsite();
+    let inner = inner.source_callsite();
+    !outer.is_dummy() && !inner.is_dummy() && outer.lo() <= inner.lo() && inner.hi() <= outer.hi()
+}
+
+// One rustc session per process and single-threaded analysis; source files
+// keep disjoint start offsets within a session's source map, so the file
+// start plus line index identifies a marker lookup. Every edge of every
+// per-root traversal re-scans its lines without this.
+thread_local! {
+    static MARKER_BLOCK_CACHE: std::cell::RefCell<
+        std::collections::HashMap<(u32, usize, String), Option<ParsedMarkerBlock>>,
+    > = std::cell::RefCell::new(std::collections::HashMap::new());
+}
+
+fn marker_probe_spans(span: Span, probing: MarkerProbing) -> Vec<Span> {
+    let mut spans = Vec::new();
+    match probing {
+        MarkerProbing::SourceCallsite => {
+            push_unique_probe_span(&mut spans, span.source_callsite());
+        }
+        MarkerProbing::MacroDefinitionFirst => {
+            // For macro-expanded code, prefer markers in the macro body that
+            // produced the operation, then walk callsites outward before the
+            // usual fallback.
+            push_unique_probe_span(&mut spans, span);
+            for expansion in span.macro_backtrace() {
+                push_unique_probe_span(&mut spans, expansion.call_site);
+            }
+            push_unique_probe_span(&mut spans, span.source_callsite());
+        }
+    }
+    spans
+}
+
+fn push_unique_probe_span(spans: &mut Vec<Span>, span: Span) {
+    // A dummy span would resolve to byte 0 — line 1 of an arbitrary file —
+    // where a stray marker could suppress every dummy-span edge crate-wide.
+    if span.is_dummy() || spans.iter().any(|existing| existing.source_equal(span)) {
+        return;
+    }
+    spans.push(span);
+}
+
+fn marker_origin(probe_span: Span) -> MarkerOrigin {
+    // Use the nearest definition-backed macro expansion on the span that found
+    // the marker. Compiler passes, desugarings, and inert tool attributes do
+    // not instantiate source comments.
+    probe_span
+        .ctxt()
+        .marks()
+        .into_iter()
+        .rev()
+        .find_map(|(expn_id, _)| definition_backed_macro(expn_id).map(|_| expn_id))
+        .map_or(MarkerOrigin::Source, MarkerOrigin::Macro)
+}
+
+fn span_marker_block_at(
+    tcx: TyCtxt<'_>,
+    span: Span,
+    syntax: MarkerSyntax<'_>,
+) -> MarkerProbe<EffectMarkerBlock> {
+    let source_map = tcx.sess.source_map();
+    let location = source_map.lookup_char_pos(span.lo());
+    if !source_map.ensure_source_file_source_present(&location.file) {
+        return MarkerProbe::Unverified(UnverifiedMarkerProbeReason::SourceUnavailable);
+    }
+    let line_index = location.line.saturating_sub(1);
+    let key = (
+        location.file.start_pos.0,
+        line_index,
+        syntax.prefix.to_owned(),
+    );
+    let parsed = MARKER_BLOCK_CACHE.with_borrow_mut(|cache| {
+        cache
+            .entry(key)
+            .or_insert_with(|| marker_block_at(&location.file, line_index, syntax))
+            .clone()
+    });
+    marker_probe_from_source(
+        true,
+        parsed.map(|block| block.instantiate(marker_origin(span))),
+    )
+}
+
+#[must_use]
+fn line_satisfaction(line: &str, syntax: MarkerSyntax<'_>) -> Option<MarkerSatisfaction> {
+    comment_body(line)
+        .and_then(|body| syntax.strip_prefix(body))
+        .map(parse_marker)
+        .filter(MarkerSatisfaction::has_justification)
+}
+
+#[must_use]
+fn normalize_requirement_name(name: &str) -> String {
+    crate::contracts::normalize_requirement_name(name)
+}
+
+fn parse_marker_body(body: &str) -> (Option<String>, &str) {
+    let Some(separator) = body.char_indices().find_map(|(index, character)| {
+        let previous = body[..index].chars().next_back();
+        let remainder = &body[index + character.len_utf8()..];
+        let next = remainder.chars().next();
+        // Neither half of a Rust path separator nor a URL scheme colon is a
+        // named marker delimiter.
+        (character == ':' && previous != Some(':') && next != Some(':') && next != Some('/'))
+            .then_some(index)
+    }) else {
+        return (None, body);
+    };
+    let (name, reason) = body.split_at(separator);
+    let name = name.trim();
+    if looks_like_requirement_name(name) {
+        (Some(name.to_owned()), reason[1..].trim())
+    } else {
+        (None, body)
+    }
+}
+
+fn parse_marker(body: &str) -> MarkerSatisfaction {
+    let body = body.trim();
+    let (requirement, reason) = parse_marker_body(body);
+    MarkerSatisfaction {
+        requirement,
+        reason: reason.to_owned(),
+        path: None,
+    }
+}
+
+fn looks_like_requirement_name(name: &str) -> bool {
+    let backticks_are_a_single_wrapper = name
+        .strip_prefix('`')
+        .and_then(|name| name.strip_suffix('`'))
+        .is_some_and(|name| !name.is_empty() && !name.contains('`'));
+    (!name.contains('`') || backticks_are_a_single_wrapper)
+        && !name.contains("://")
+        && !normalize_requirement_name(name).is_empty()
+}
+
+fn marker_block_at(
+    file: &SourceFile,
+    line_index: usize,
+    syntax: MarkerSyntax<'_>,
+) -> Option<ParsedMarkerBlock> {
+    let mut block = preceding_marker_block(file, line_index, syntax);
+    let line_satisfactions = source_line_satisfactions(file, line_index, syntax);
+    if line_satisfactions.is_empty() {
+        return block;
+    }
+
+    if let Some(block) = &mut block {
+        block.satisfactions.extend(line_satisfactions);
+        return Some(block.clone());
+    }
+
+    Some(ParsedMarkerBlock {
+        key: MarkerBlockKey {
+            file_start: file.start_pos.0,
+            start_line: line_index,
+            end_line: line_index,
+        },
+        span: comment_block_span(file, line_index, line_index),
+        satisfactions: line_satisfactions,
+    })
+}
+
+fn preceding_marker_block(
+    file: &SourceFile,
+    line_index: usize,
+    syntax: MarkerSyntax<'_>,
+) -> Option<ParsedMarkerBlock> {
+    let block = preceding_comment_block(file, line_index)?;
+    let satisfactions = comment_block_satisfactions(&block.lines, syntax);
+    if satisfactions.is_empty() {
+        return None;
+    }
+
+    Some(ParsedMarkerBlock {
+        key: MarkerBlockKey {
+            file_start: file.start_pos.0,
+            start_line: block.start_line,
+            end_line: block.end_line,
+        },
+        span: comment_block_span(file, block.start_line, block.end_line),
+        satisfactions,
+    })
+}
+
+struct CommentBlock {
+    start_line: usize,
+    end_line: usize,
+    lines: Vec<String>,
+}
+
+fn preceding_comment_block(file: &SourceFile, line_index: usize) -> Option<CommentBlock> {
+    let mut block = Vec::new();
+    let mut current = preceding_outer_attributes_start(file, line_index);
+    let end_line = current.checked_sub(1)?;
+    while let Some(previous) = current.checked_sub(1) {
+        let Some(line) = file.get_line(previous) else {
+            break;
+        };
+        let line = line.as_ref();
+        if !line_is_standalone_comment(line) {
+            break;
+        }
+        block.push(line.to_owned());
+        current = previous;
+    }
+
+    if block.is_empty() {
+        return None;
+    }
+
+    block.reverse();
+    Some(CommentBlock {
+        start_line: current,
+        end_line,
+        lines: block,
+    })
+}
+
+/// Returns the first line of the contiguous outer attributes immediately
+/// preceding `line_index`, or `line_index` when there are none.
+///
+/// rustc's expression and statement spans begin at the expression itself, so
+/// an outer attribute is not part of the span used for marker probing. Treat
+/// those attributes as transparent: the comment still directly documents the
+/// attributed source construct.
+fn preceding_outer_attributes_start(file: &SourceFile, mut line_index: usize) -> usize {
+    while let Some(start_line) = preceding_outer_attribute_start(file, line_index) {
+        line_index = start_line;
+    }
+    line_index
+}
+
+fn preceding_outer_attribute_start(file: &SourceFile, line_index: usize) -> Option<usize> {
+    let end_line = line_index.checked_sub(1)?;
+    let end = file.get_line(end_line)?;
+    let end = end.trim();
+
+    // A complete outer attribute must finish on the line directly above the
+    // attributed construct. Avoid searching backwards through ordinary code
+    // when that line cannot possibly close an attribute.
+    if !end.ends_with(']') {
+        return None;
+    }
+
+    for start_line in (0..=end_line).rev() {
+        let line = file.get_line(start_line)?;
+        let trimmed = line.trim_start();
+        if trimmed.starts_with("#[") {
+            let source = (start_line..=end_line)
+                .filter_map(|line_index| file.get_line(line_index))
+                .map(|line| line.to_string())
+                .collect::<Vec<_>>()
+                .join("\n");
+            return outer_attribute_occupies_source(&source).then_some(start_line);
+        }
+        if trimmed.is_empty() || line_is_standalone_comment(trimmed) {
+            return None;
+        }
+    }
+    None
+}
+
+fn outer_attribute_occupies_source(source: &str) -> bool {
+    let source = source.trim();
+    let Some(body) = source.strip_prefix("#[") else {
+        return false;
+    };
+
+    let mut square_depth = 1_u32;
+    let mut characters = body.char_indices().peekable();
+    while let Some((index, character)) = characters.next() {
+        match character {
+            '[' => square_depth += 1,
+            ']' => {
+                square_depth -= 1;
+                if square_depth == 0 {
+                    return body[index + character.len_utf8()..].trim().is_empty();
+                }
+            }
+            '"' => skip_quoted(&mut characters, '"'),
+            '\'' => skip_quoted(&mut characters, '\''),
+            '/' if characters.peek().is_some_and(|(_, next)| *next == '/') => {
+                characters.next();
+                while characters.next().is_some_and(|(_, next)| next != '\n') {}
+            }
+            _ => {}
+        }
+    }
+    false
+}
+
+fn skip_quoted(
+    characters: &mut std::iter::Peekable<impl Iterator<Item = (usize, char)>>,
+    delimiter: char,
+) {
+    let mut escaped = false;
+    for (_, character) in characters.by_ref() {
+        if escaped {
+            escaped = false;
+        } else if character == '\\' {
+            escaped = true;
+        } else if character == delimiter {
+            break;
+        }
+    }
+}
+
+fn comment_block_span(file: &SourceFile, start_line: usize, end_line: usize) -> Span {
+    let lo = file.line_bounds(start_line).start;
+    let hi = file.line_bounds(end_line).end;
+    Span::with_root_ctxt(lo, hi)
+}
+
+fn source_line_satisfactions(
+    file: &SourceFile,
+    line_index: usize,
+    syntax: MarkerSyntax<'_>,
+) -> Vec<MarkerSatisfaction> {
+    file.get_line(line_index)
+        .and_then(|line| line_satisfaction(line.as_ref(), syntax))
+        .into_iter()
+        .collect()
+}
+
+fn line_is_standalone_comment(line: &str) -> bool {
+    comment_body(line).is_some()
+}
+
+fn comment_body(line: &str) -> Option<&str> {
+    comment_body_preserving_indentation(line).map(str::trim_start)
+}
+
+fn comment_body_preserving_indentation(line: &str) -> Option<&str> {
+    let comment = line.trim_start().strip_prefix("//")?;
+    (!comment.starts_with('/') && !comment.starts_with('!'))
+        .then(|| comment.strip_prefix(' ').unwrap_or(comment))
+}
+
+fn comment_block_satisfactions(
+    lines: &[String],
+    syntax: MarkerSyntax<'_>,
+) -> Vec<MarkerSatisfaction> {
+    let mut satisfactions: Vec<MarkerSatisfaction> = Vec::new();
+    let mut pending_header_reason: Option<String> = None;
+    let mut in_marker_block = false;
+    let mut list_levels = Vec::new();
+
+    for line in lines {
+        let Some(body) = comment_body_preserving_indentation(line) else {
+            continue;
+        };
+        let marker_line = body.trim_start();
+        if let Some(marker_body) = syntax.strip_prefix(marker_line) {
+            flush_pending_header(&mut satisfactions, &mut pending_header_reason);
+            in_marker_block = true;
+            list_levels.clear();
+            let parsed = parse_marker(marker_body);
+            if parsed.requirement.is_none() && parsed.reason.is_empty() {
+                pending_header_reason = Some(String::new());
+            } else {
+                satisfactions.push(parsed);
+            }
+        } else if syntax.starts_competing_marker(marker_line) {
+            flush_pending_header(&mut satisfactions, &mut pending_header_reason);
+            in_marker_block = false;
+            list_levels.clear();
+        } else if in_marker_block {
+            if let Some(satisfaction) = parse_satisfaction_bullet(body, &mut list_levels) {
+                pending_header_reason = None;
+                satisfactions.push(satisfaction);
+            } else if let Some(reason) = pending_header_reason.as_mut() {
+                append_reason_line(reason, body.trim());
+            } else if let Some(satisfaction) = satisfactions.last_mut() {
+                let continuation = body.trim();
+                append_reason_line(&mut satisfaction.reason, continuation);
+            }
+        }
+    }
+    flush_pending_header(&mut satisfactions, &mut pending_header_reason);
+    satisfactions.retain(MarkerSatisfaction::has_justification);
+
+    satisfactions
+}
+
+fn flush_pending_header(
+    satisfactions: &mut Vec<MarkerSatisfaction>,
+    pending_header_reason: &mut Option<String>,
+) {
+    if let Some(reason) = pending_header_reason.take() {
+        satisfactions.push(MarkerSatisfaction {
+            requirement: None,
+            reason,
+            path: None,
+        });
+    }
+}
+
+fn append_reason_line(reason: &mut String, line: &str) {
+    if line.is_empty() {
+        return;
+    }
+    if !reason.is_empty() {
+        reason.push('\n');
+    }
+    reason.push_str(line);
+}
+
+fn parse_satisfaction_bullet(
+    line: &str,
+    levels: &mut Vec<(usize, usize, usize)>,
+) -> Option<MarkerSatisfaction> {
+    let body = markdown_list_item_body(line)?;
+    let (name, reason) = parse_marker_body(body);
+    Some(MarkerSatisfaction {
+        requirement: name,
+        reason: reason.to_owned(),
+        path: Some(structural_list_path(
+            line.len() - line.trim_start().len(),
+            levels,
+        )),
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use rustc_span::DUMMY_SP;
+    use rustc_span::FileName;
+    use rustc_span::source_map::{FilePathMapping, SourceMap};
+
+    use super::{MarkerProbe, MarkerSatisfaction, MarkerSyntax, normalize_requirement_name};
+    use crate::artifact::UnverifiedMarkerProbeReason;
+    use crate::config::MarkerProbing;
+
+    fn panic_syntax() -> MarkerSyntax<'static> {
+        MarkerSyntax::new("PANIC", &["PANIC", "SAFETY"])
+    }
+
+    fn safety_syntax() -> MarkerSyntax<'static> {
+        MarkerSyntax::new("SAFETY", &["PANIC", "SAFETY"])
+    }
+
+    fn with_source_file(source: &str, check: impl FnOnce(&rustc_span::SourceFile)) {
+        rustc_span::create_default_session_globals_then(|| {
+            let source_map = SourceMap::new(FilePathMapping::empty());
+            let file = source_map.new_source_file(
+                FileName::Custom(String::from("markers.rs")),
+                source.to_owned(),
+            );
+            check(&file);
+        });
+    }
+
+    fn line_has_panic_marker(line: &str) -> bool {
+        super::line_satisfaction(line, panic_syntax()).is_some()
+    }
+
+    fn line_has_safety_marker(line: &str) -> bool {
+        super::line_satisfaction(line, safety_syntax()).is_some()
+    }
+
+    #[test]
+    fn line_satisfaction_parses_plain_and_named_markers() {
+        assert!(line_has_panic_marker("    // PANIC: inspected"));
+        assert_eq!(
+            super::line_satisfaction(
+                "// PANIC: index in bounds: checked by caller",
+                panic_syntax(),
+            ),
+            Some(MarkerSatisfaction {
+                requirement: Some(String::from("index in bounds")),
+                reason: String::from("checked by caller"),
+                path: None,
+            })
+        );
+    }
+
+    #[test]
+    fn panic_marker_keeps_following_comment_lines_as_reason_context() {
+        let lines = [
+            String::from("    // PANIC: nonzero: caller checked denominator."),
+            String::from("    // The constructor rejects zero."),
+            String::from("    // PANIC: index in bounds: caller checked the index."),
+        ];
+
+        assert_eq!(
+            comment_block_satisfactions_for_panic(&lines),
+            [
+                MarkerSatisfaction {
+                    requirement: Some(String::from("nonzero")),
+                    reason: String::from(
+                        "caller checked denominator.\nThe constructor rejects zero."
+                    ),
+                    path: None,
+                },
+                MarkerSatisfaction {
+                    requirement: Some(String::from("index in bounds")),
+                    reason: String::from("caller checked the index."),
+                    path: None,
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn panic_marker_parses_requirement_bullets_after_header() {
+        let lines = [
+            String::from("    // PANIC:"),
+            String::from("    //"),
+            String::from("    // The call site validates the callee contract."),
+            String::from("    // Requirements:"),
+            String::from("    // - something[var_1]: checked the first precondition."),
+            String::from("    //   Additional evidence for the first precondition."),
+            String::from("    // - something2[var_1]: checked the second precondition."),
+            String::from("    // - something3:"),
+            String::from("    //   checked the third precondition."),
+        ];
+
+        assert_eq!(
+            comment_block_satisfactions_for_panic(&lines),
+            [
+                MarkerSatisfaction {
+                    requirement: Some(String::from("something[var_1]")),
+                    reason: String::from(
+                        "checked the first precondition.\nAdditional evidence for the first precondition."
+                    ),
+                    path: Some(vec![0]),
+                },
+                MarkerSatisfaction {
+                    requirement: Some(String::from("something2[var_1]")),
+                    reason: String::from("checked the second precondition."),
+                    path: Some(vec![1]),
+                },
+                MarkerSatisfaction {
+                    requirement: Some(String::from("something3")),
+                    reason: String::from("checked the third precondition."),
+                    path: Some(vec![2]),
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn marker_parses_ordered_and_mixed_nested_requirement_bullets() {
+        let lines = [
+            String::from("    // PANIC:"),
+            String::from("    // 1. outer: checked the outer condition."),
+            String::from("    //    - nested: checked the nested condition."),
+            String::from("    //      + deep: checked the deepest condition."),
+            String::from("    // 2) final: checked the final condition."),
+        ];
+
+        assert_eq!(
+            comment_block_satisfactions_for_panic(&lines)
+                .into_iter()
+                .map(|satisfaction| satisfaction.requirement.unwrap())
+                .collect::<Vec<_>>(),
+            ["outer", "nested", "deep", "final"]
+        );
+    }
+
+    #[test]
+    fn marker_preserves_paths_for_unnamed_nested_bullets() {
+        let lines = [
+            String::from("    // SAFETY:"),
+            String::from("    // * checked the allocation."),
+            String::from("    //   - checked initialization."),
+            String::from("    //   - checked alignment."),
+            String::from("    // * checked the lifetime."),
+        ];
+
+        assert_eq!(
+            super::comment_block_satisfactions(&lines, safety_syntax())
+                .into_iter()
+                .map(|satisfaction| (satisfaction.requirement, satisfaction.path))
+                .collect::<Vec<_>>(),
+            [
+                (None, Some(vec![0])),
+                (None, Some(vec![0, 0])),
+                (None, Some(vec![0, 1])),
+                (None, Some(vec![1])),
+            ]
+        );
+    }
+
+    #[test]
+    fn empty_panic_marker_without_bullets_remains_an_unnamed_marker() {
+        let lines = [
+            String::from("    // PANIC:"),
+            String::from("    // caller checked the local invariant."),
+        ];
+
+        assert_eq!(
+            comment_block_satisfactions_for_panic(&lines),
+            [MarkerSatisfaction {
+                requirement: None,
+                reason: String::from("caller checked the local invariant."),
+                path: None,
+            }]
+        );
+    }
+
+    #[test]
+    fn comment_blocks_without_a_justified_marker_produce_no_satisfactions() {
+        let lines = [String::from("    // PANIC:")];
+
+        assert_eq!(comment_block_satisfactions_for_panic(&lines), []);
+    }
+
+    #[test]
+    fn safety_marker_uses_same_comment_syntax() {
+        assert!(line_has_safety_marker(
+            "// SAFETY: pointer came from NonNull"
+        ));
+        assert_eq!(
+            super::line_satisfaction("// SAFETY: initialized: written above", safety_syntax(),),
+            Some(MarkerSatisfaction {
+                requirement: Some(String::from("initialized")),
+                reason: String::from("written above"),
+                path: None,
+            })
+        );
+        assert!(!line_has_safety_marker("// PANIC: not safety"));
+    }
+
+    #[test]
+    fn safety_marker_applies_across_an_outer_attribute() {
+        with_source_file(
+            "// SAFETY: pointer is valid.\n#[allow(unused_variables)]\nunsafe { read(ptr) }\n",
+            |file| {
+                let marker = super::marker_block_at(file, 2, safety_syntax())
+                    .expect("marker above the attribute should apply");
+
+                assert_eq!(marker.key.start_line, 0);
+                assert_eq!(marker.key.end_line, 0);
+                assert_eq!(marker.satisfactions[0].reason, "pointer is valid.");
+            },
+        );
+    }
+
+    #[test]
+    fn panic_marker_applies_across_multiple_and_multiline_outer_attributes() {
+        with_source_file(
+            "// PANIC: invariant checked by caller.\n\
+             #[cfg_attr(\n\
+                 all(),\n\
+                 allow(dead_code)\n\
+             )]\n\
+             #[allow(unused_variables)]\n\
+             panic!(\"boom\");\n",
+            |file| {
+                let marker = super::marker_block_at(file, 6, panic_syntax())
+                    .expect("marker above the attributes should apply");
+
+                assert_eq!(marker.key.start_line, 0);
+                assert_eq!(marker.key.end_line, 0);
+                assert_eq!(
+                    marker.satisfactions[0].reason,
+                    "invariant checked by caller."
+                );
+            },
+        );
+    }
+
+    #[test]
+    fn marker_does_not_cross_an_attributed_intervening_statement() {
+        with_source_file(
+            "// SAFETY: belongs to the assignment.\n\
+             #[allow(unused_variables)]\n\
+             let unused = 0;\n\
+             unsafe { read(ptr) }\n",
+            |file| {
+                assert!(super::marker_block_at(file, 3, safety_syntax()).is_none());
+            },
+        );
+    }
+
+    #[test]
+    fn marker_bodies_distinguish_named_requirements_from_prose() {
+        for (body, expected_requirement, expected_reason) in [
+            (
+                "`KnownLayout::size_of_val_raw` guarantees: the size fits.",
+                None,
+                "`KnownLayout::size_of_val_raw` guarantees: the size fits.",
+            ),
+            (
+                "See https://example.com/safety: the invariant is documented.",
+                None,
+                "See https://example.com/safety: the invariant is documented.",
+            ),
+            (
+                "KnownLayout:: size_of_val_raw guarantees the result.",
+                None,
+                "KnownLayout:: size_of_val_raw guarantees the result.",
+            ),
+            (
+                "module::condition: checked by the caller",
+                Some("module::condition"),
+                "checked by the caller",
+            ),
+            (
+                "initialized:written above",
+                Some("initialized"),
+                "written above",
+            ),
+            (
+                "`valid_ptr`: checked by the caller",
+                Some("`valid_ptr`"),
+                "checked by the caller",
+            ),
+        ] {
+            let parsed = super::line_satisfaction(&format!("// SAFETY: {body}"), safety_syntax())
+                .expect("marker should contain a justification");
+
+            assert_eq!(parsed.requirement.as_deref(), expected_requirement);
+            assert_eq!(parsed.reason, expected_reason);
+        }
+    }
+
+    #[test]
+    fn different_marker_header_stops_current_marker_block() {
+        let lines = [
+            String::from("    // PANIC:"),
+            String::from("    // SAFETY: pointer came from NonNull."),
+            String::from("    // This should not become panic evidence."),
+        ];
+
+        assert_eq!(comment_block_satisfactions_for_panic(&lines), []);
+        assert_eq!(
+            super::comment_block_satisfactions(&lines, safety_syntax()),
+            [super::MarkerSatisfaction {
+                requirement: None,
+                reason: String::from(
+                    "pointer came from NonNull.\nThis should not become panic evidence."
+                ),
+                path: None,
+            }]
+        );
+    }
+
+    #[test]
+    fn requirement_names_are_normalized_for_matching() {
+        assert_eq!(
+            normalize_requirement_name(" Index_In-Bounds  "),
+            "index in bounds"
+        );
+        assert_eq!(
+            normalize_requirement_name("something[var_1]"),
+            "something var 1"
+        );
+    }
+
+    #[test]
+    fn marker_probe_distinguishes_presence_verified_absence_and_unavailable_source() {
+        assert_eq!(
+            super::marker_probe_from_source(true, Some(7_u8)),
+            MarkerProbe::Present(7)
+        );
+        assert_eq!(
+            super::marker_probe_from_source(true, None::<u8>),
+            MarkerProbe::VerifiedAbsent
+        );
+        assert_eq!(
+            super::marker_probe_from_source(false, None::<u8>),
+            MarkerProbe::Unverified(UnverifiedMarkerProbeReason::SourceUnavailable)
+        );
+    }
+
+    #[test]
+    fn marker_probe_candidates_propagate_uncertainty_unless_a_marker_is_present() {
+        assert_eq!(
+            super::probe_marker_candidates([0_u8, 1], |candidate| match candidate {
+                0 => MarkerProbe::VerifiedAbsent,
+                _ => MarkerProbe::Unverified(UnverifiedMarkerProbeReason::NoUsableSourceSpan,),
+            }),
+            MarkerProbe::<u8>::Unverified(UnverifiedMarkerProbeReason::NoUsableSourceSpan)
+        );
+        assert_eq!(
+            super::probe_marker_candidates([0_u8, 1], |candidate| match candidate {
+                0 => MarkerProbe::Unverified(UnverifiedMarkerProbeReason::SourceUnavailable),
+                _ => MarkerProbe::Present(9),
+            }),
+            MarkerProbe::Present(9)
+        );
+        assert_eq!(
+            super::probe_marker_candidates([0_u8, 1], |candidate| match candidate {
+                0 => MarkerProbe::Unverified(UnverifiedMarkerProbeReason::NoUsableSourceSpan,),
+                _ => MarkerProbe::Unverified(UnverifiedMarkerProbeReason::SourceUnavailable),
+            }),
+            MarkerProbe::<u8>::Unverified(UnverifiedMarkerProbeReason::SourceUnavailable)
+        );
+    }
+
+    #[test]
+    fn dummy_span_without_a_usable_probe_candidate_is_unverified() {
+        for probing in [
+            MarkerProbing::SourceCallsite,
+            MarkerProbing::MacroDefinitionFirst,
+        ] {
+            assert_eq!(
+                super::probe_marker_candidates(
+                    super::marker_probe_spans(DUMMY_SP, probing),
+                    |_| MarkerProbe::Present(())
+                ),
+                MarkerProbe::Unverified(UnverifiedMarkerProbeReason::NoUsableSourceSpan)
+            );
+        }
+    }
+
+    #[test]
+    fn structural_fallback_distinguishes_unavailable_enumeration_from_readable_absence() {
+        assert_eq!(
+            super::probe_required_marker_candidate(None::<()>, |()| MarkerProbe::Present(7_u8)),
+            MarkerProbe::Unverified(UnverifiedMarkerProbeReason::NoUsableSourceSpan)
+        );
+        assert_eq!(
+            MarkerProbe::<u8>::VerifiedAbsent.or_else(|| {
+                super::probe_required_marker_candidate(Some(()), |()| MarkerProbe::VerifiedAbsent)
+            }),
+            MarkerProbe::VerifiedAbsent
+        );
+    }
+
+    fn comment_block_satisfactions_for_panic(lines: &[String]) -> Vec<MarkerSatisfaction> {
+        super::comment_block_satisfactions(lines, panic_syntax())
+    }
+}

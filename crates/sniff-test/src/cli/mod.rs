@@ -2,12 +2,8 @@
 
 mod args;
 mod cargo;
-mod diagnostics;
 mod driver;
-mod findings;
-mod interpretation;
 mod plugin;
-mod report;
 
 pub use self::plugin::driver_main;
 

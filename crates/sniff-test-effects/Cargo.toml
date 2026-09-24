@@ -1,0 +1,10 @@
+[package]
+name = "sniff-test-effects"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+sniff-test-core = { path = "../sniff-test-core" }
+
+[package.metadata.rust-analyzer]
+rustc_private = true

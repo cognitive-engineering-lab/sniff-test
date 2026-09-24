@@ -1,12 +1,12 @@
 //! User-facing CLI parsing for the Cargo frontend and direct driver.
 use std::path::PathBuf;
 
-use crate::artifact::EffectKey;
-use crate::artifact_cache::default_cache_dir;
-use crate::config::{DEFAULT_MANIFEST_FILE, OverflowChecks};
-use crate::effects::EffectSelection;
 use clap::{Args, Parser, Subcommand, ValueEnum};
 use serde::{Deserialize, Serialize};
+use sniff_test_core::artifact::EffectKey;
+use sniff_test_core::artifact_cache::default_cache_dir;
+use sniff_test_core::config::{DEFAULT_MANIFEST_FILE, OverflowChecks};
+use sniff_test_core::effects::EffectSelection;
 
 pub(crate) const MANIFEST_PATH_ENV: &str = "SNIFF_TEST_MANIFEST";
 
@@ -53,7 +53,7 @@ impl CommonCliArgs {
 
 fn parse_effect(value: &str) -> Result<EffectKey, String> {
     let effect = EffectKey::new(value);
-    let available = EffectSelection::registered_keys();
+    let available = sniff_test_effects::registered_keys();
     if available.contains(&effect) {
         return Ok(effect);
     }
@@ -269,7 +269,8 @@ mod tests {
     use clap::Parser as _;
 
     use super::{CrateOutputScope, DriverCli, FrontendAction, FrontendCli, MessageFormat};
-    use crate::effects::EffectSelection;
+    use sniff_test_core::artifact::EffectKey;
+    use sniff_test_core::effects::EffectSelection;
 
     #[test]
     fn frontend_parses_equals_options_and_cargo_args_after_separator() {
@@ -303,8 +304,11 @@ mod tests {
             let FrontendAction::Run(args) = cli.into_action() else {
                 panic!("expected frontend run action");
             };
-            assert_eq!(args.effects.tracks_panic(), tracks_panic);
-            assert_eq!(args.effects.tracks_safety(), tracks_safety);
+            assert_eq!(args.effects.selects(&EffectKey::new("panic")), tracks_panic);
+            assert_eq!(
+                args.effects.selects(&EffectKey::new("safety")),
+                tracks_safety
+            );
         }
     }
 
@@ -393,8 +397,8 @@ mod tests {
         let (rustc_args, args) = cli.into_parts(String::from("sniff-test-driver"));
 
         assert_eq!(args.message_format, MessageFormat::Json);
-        assert!(!args.effects.tracks_panic());
-        assert!(args.effects.tracks_safety());
+        assert!(!args.effects.selects(&EffectKey::new("panic")));
+        assert!(args.effects.selects(&EffectKey::new("safety")));
         assert_eq!(args.direct_scope, CrateOutputScope::Dependency);
         assert_eq!(rustc_args, ["sniff-test-driver", "--crate-name", "demo"]);
     }
