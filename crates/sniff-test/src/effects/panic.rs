@@ -12,6 +12,7 @@ use crate::artifact::{
 use crate::compiler::invocations::InvocationGraph;
 use crate::config::{PanicBoundaryPolicy, PanicConfig};
 
+use super::trust::TrustPath;
 use super::{InvocationSourceBranch, ProbeError};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -32,17 +33,23 @@ pub(crate) enum PanicKind {
     CompilerAssert(CompilerAssertKind),
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub(crate) struct PanicState {
     kind: PanicKind,
     current_function: FunctionId,
     macro_contract: Option<AnnotationId>,
     invocation_justification: Option<AnnotationId>,
+    trust_path: TrustPath,
 }
 
 impl PanicState {
     #[must_use]
-    pub(crate) const fn kind(self) -> PanicKind {
+    pub(crate) fn trust_path(&self) -> &TrustPath {
+        &self.trust_path
+    }
+
+    #[must_use]
+    pub(crate) const fn kind(&self) -> PanicKind {
         self.kind
     }
 }
@@ -97,9 +104,7 @@ impl<'annotations> PanicEffect<'annotations> {
             if config.panic_boundary_policy_candidates(candidates)
                 == PanicBoundaryPolicy::TrustedBoundary
             {
-                trusted_functions.extend(graph.function_aliases(body.function).filter(
-                    |function| !namespaces.is_callable_shim(graph.stable_function(*function)),
-                ));
+                trusted_functions.extend(graph.function_aliases(body.function));
             }
             for effect in &body.effects {
                 if let EffectFactKind::CompilerAssert { kind } = effect.kind {
@@ -120,6 +125,7 @@ impl<'annotations> PanicEffect<'annotations> {
                         PanicState {
                             kind: PanicKind::CompilerAssert(kind),
                             current_function: owner,
+                            trust_path: TrustPath::new(graph, owner),
                             macro_contract: annotations
                                 .macro_contract(&effect.macro_expansions, AnnotationDomain::Panic),
                             invocation_justification: None,
@@ -175,6 +181,7 @@ impl<'annotations> PanicEffect<'annotations> {
                     PanicState {
                         kind: PanicKind::Invocation,
                         current_function: graph.invocation(invocation).caller(),
+                        trust_path: TrustPath::new(graph, graph.invocation(invocation).caller()),
                         macro_contract: annotations.macro_contract(
                             &source.edge().macro_expansions,
                             AnnotationDomain::Panic,
@@ -182,6 +189,11 @@ impl<'annotations> PanicEffect<'annotations> {
                         invocation_justification: None,
                     },
                 ));
+            }
+        }
+        for seed in &mut seeds {
+            if trusted_functions.contains(&seed.owner) {
+                seed.state.trust_path = TrustPath::default();
             }
         }
         Ok(Self {
@@ -202,9 +214,9 @@ impl<'annotations> PanicEffect<'annotations> {
         self.seeds.len()
     }
 
-    #[must_use]
-    pub(crate) fn is_opaque_function(&self, function: FunctionId) -> bool {
-        self.is_trusted_function(function) || self.ignored_functions.contains(&function)
+    pub(crate) fn is_opaque_on_path(&self, function: FunctionId, path: &TrustPath) -> bool {
+        self.ignored_functions.contains(&function)
+            || (self.is_trusted_function(function) && path.allows_boundary(self.graph, function))
     }
 
     #[must_use]
@@ -316,7 +328,7 @@ impl Effect for PanicEffect<'_> {
         state: &Self::State,
         edge: PropagationEdge,
     ) -> Propagation<Self::State> {
-        let mut next = *state;
+        let mut next = state.clone();
         next.macro_contract = None;
         next.invocation_justification = None;
         next.current_function = match edge {
@@ -333,6 +345,9 @@ impl Effect for PanicEffect<'_> {
             }
             PropagationEdge::TransparentBody(edge) => cx.graph().transparent_parent(edge),
         };
+        if !self.is_trusted_function(next.current_function) {
+            next.trust_path.enter(self.graph, next.current_function);
+        }
         Propagation::Follow(next)
     }
 
@@ -361,9 +376,9 @@ impl Effect for PanicEffect<'_> {
                     if self.ignored_functions.contains(&function) {
                         Some(PanicTermination::IgnoredBoundary)
                     } else {
-                        self.trusted_functions
-                            .contains(&function)
-                            .then_some(PanicTermination::TrustedBoundary)
+                        (self.trusted_functions.contains(&function)
+                            && state.trust_path.allows_boundary(self.graph, function))
+                        .then_some(PanicTermination::TrustedBoundary)
                     }
                 },
                 |contract| Some(PanicTermination::Contract(contract)),

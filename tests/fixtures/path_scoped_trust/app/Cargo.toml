@@ -1,0 +1,9 @@
+[package]
+name = "path_scoped_app"
+version = "0.1.0"
+edition = "2024"
+[dependencies]
+trusted_a = { path = "../trusted_a" }
+dep_b = { path = "../dep_b" }
+dep_c = { path = "../dep_c" }
+[workspace]

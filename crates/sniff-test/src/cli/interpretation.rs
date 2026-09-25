@@ -42,6 +42,7 @@ pub(super) fn interpret_workspace<'tcx>(
     local: &ArtifactFacts,
     local_stable_crate_id: u64,
     dependencies: &ArtifactAnalysisGraph,
+    metadata_loader: &dyn rustc_metadata::creader::MetadataLoader,
     report_roots: &[ReportRoot<'tcx>],
     config: &SniffTestConfig,
     package: &LocalPackageProvenance,
@@ -61,10 +62,18 @@ pub(super) fn interpret_workspace<'tcx>(
     );
     let source_overrides =
         resolve_source_contract_overrides(&config.contracts.overrides, local_source, dependencies)?;
+    let crate_dependencies = crate::compiler::dependencies::load_crate_dependencies(
+        tcx,
+        local,
+        dependencies,
+        metadata_loader,
+    )
+    .map_err(EffectReportError::new)?;
     let result = trace_selected_workspace(
         local,
         local_stable_crate_id,
         dependencies,
+        &crate_dependencies,
         &roots,
         config,
         &source_overrides,
@@ -2613,7 +2622,6 @@ mod tests {
             provenance,
             display_path: String::from("sample::callable"),
             attributes: FunctionAttributesFact {
-                is_callable_shim: false,
                 is_unsafe: false,
                 is_exported: false,
                 has_rust_body: true,

@@ -142,11 +142,7 @@ impl ArtifactFacts {
     #[must_use]
     pub(crate) fn definition_namespace_index(&self) -> DefinitionNamespaceIndex {
         let mut candidates = BTreeMap::<StableDefPathHash, BTreeSet<String>>::new();
-        let mut callable_shims = BTreeSet::new();
         for body in &self.functions {
-            if body.attributes.is_callable_shim {
-                callable_shims.insert(body.function);
-            }
             extend_definition_namespace_candidates(
                 &mut candidates,
                 body.function,
@@ -157,9 +153,6 @@ impl ArtifactFacts {
             }
             for call in &body.calls {
                 if let Some(target) = call.target.function_target() {
-                    if target.attributes.is_callable_shim {
-                        callable_shims.insert(target.function);
-                    }
                     extend_target_namespace_candidates(&mut candidates, target);
                 }
                 if let Some(declaration) = &call.declaration_target {
@@ -168,7 +161,6 @@ impl ArtifactFacts {
             }
         }
         DefinitionNamespaceIndex {
-            callable_shims,
             candidates: candidates
                 .into_iter()
                 .map(|(definition, candidates)| (definition, candidates.into_iter().collect()))
@@ -224,16 +216,10 @@ impl ArtifactFacts {
 /// so an arbitrary body or call-target occurrence cannot decide the boundary.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub(crate) struct DefinitionNamespaceIndex {
-    callable_shims: BTreeSet<FunctionId>,
     candidates: BTreeMap<StableDefPathHash, Vec<String>>,
 }
 
 impl DefinitionNamespaceIndex {
-    /// Trust exclusions use exact instance facts, independent of namespace aliases.
-    pub(crate) fn is_callable_shim(&self, function: FunctionId) -> bool {
-        self.callable_shims.contains(&function)
-    }
-
     #[must_use]
     pub(crate) fn candidates(&self, function: FunctionId) -> &[String] {
         self.candidates
@@ -540,8 +526,6 @@ pub(crate) enum FunctionFactProvenance {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub(crate) struct FunctionAttributesFact {
-    /// A compiler-generated callable adapter, not an independently trusted API.
-    pub(crate) is_callable_shim: bool,
     pub(crate) is_unsafe: bool,
     pub(crate) is_exported: bool,
     /// Whether the definition provides a Rust body that an owning artifact facts
@@ -1662,7 +1646,6 @@ mod tests {
 
     fn attributes() -> FunctionAttributesFact {
         FunctionAttributesFact {
-            is_callable_shim: false,
             is_unsafe: false,
             is_exported: true,
             has_rust_body: true,
@@ -1688,31 +1671,6 @@ mod tests {
             markers: Vec::new(),
             unverified_marker_probes: Vec::new(),
         }
-    }
-
-    #[test]
-    fn callable_shim_trust_exclusions_survive_cache_round_trip_per_instance() {
-        let definition = def_hash("00000000000000010000000000000002");
-        let shim = FunctionId::exact(
-            definition,
-            instance_hash("00000000000000030000000000000004"),
-        );
-        let ordinary = FunctionId::exact(
-            definition,
-            instance_hash("00000000000000050000000000000006"),
-        );
-        let mut shim_body = empty_body(shim, "core::ops::function::FnOnce::call_once");
-        shim_body.attributes.is_callable_shim = true;
-        let ordinary_body = empty_body(ordinary, "core::ops::function::FnOnce::call_once");
-        let facts = ArtifactFacts::new(vec![shim_body, ordinary_body], Vec::new())
-            .expect("valid instance facts");
-        let cached = serde_json::to_vec(&facts).expect("serialize facts");
-        let restored: ArtifactFacts = serde_json::from_slice(&cached).expect("restore facts");
-        let namespaces = restored.definition_namespace_index();
-        assert!(namespaces.is_callable_shim(shim));
-        assert!(!namespaces.is_callable_shim(ordinary));
-        assert!(!namespaces.is_callable_shim(FunctionId::generic(definition)));
-        assert_eq!(namespaces.candidates(shim), namespaces.candidates(ordinary));
     }
 
     #[test]
@@ -2377,7 +2335,6 @@ mod tests {
             function: callee,
             display_path: String::from("dependency::callee::<u8>"),
             attributes: FunctionAttributesFact {
-                is_callable_shim: false,
                 is_unsafe: true,
                 is_exported: false,
                 has_rust_body: true,
@@ -2404,7 +2361,6 @@ mod tests {
             function: FunctionId::generic(def_hash("00000000000000110000000000000012")),
             display_path: String::from("dependency::Action::call"),
             attributes: FunctionAttributesFact {
-                is_callable_shim: false,
                 is_unsafe: true,
                 is_exported: true,
                 has_rust_body: false,

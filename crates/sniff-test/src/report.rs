@@ -31,6 +31,7 @@ use crate::effects::InvocationSourceBranch;
 use crate::effects::comment::{CommentDomain, CommentEffect, CommentState, CommentTermination};
 use crate::effects::panic::{PanicEffect, PanicKind, PanicOrigin, PanicState};
 use crate::effects::safety::{SafetyEffect, SafetyKind, SafetyOrigin, SafetyState};
+use crate::effects::trust::TrustPath;
 use crate::report_model::{
     DomainCompleteness, EffectCompleteness, IncompleteReason, IncompleteTraceKind,
     InterpretationRoot, InterpretedFinding, InterpretedFindingKind, InterpretedSafetyCallKind,
@@ -108,7 +109,7 @@ struct MarkerProjection {
 }
 
 impl EffectReportError {
-    fn new(message: impl Into<String>) -> Self {
+    pub(crate) fn new(message: impl Into<String>) -> Self {
         Self {
             message: message.into(),
         }
@@ -141,6 +142,7 @@ pub(crate) fn trace_workspace(
         local,
         local_stable_crate_id,
         dependencies,
+        &BTreeMap::new(),
         roots,
         config,
         &std::collections::BTreeMap::new(),
@@ -149,6 +151,7 @@ pub(crate) fn trace_workspace(
 }
 
 #[allow(
+    clippy::too_many_arguments,
     clippy::too_many_lines,
     reason = "the selected effect probes and traces stay visible in one production entry point"
 )]
@@ -156,6 +159,7 @@ pub(crate) fn trace_selected_workspace(
     local: &ArtifactFacts,
     local_stable_crate_id: u64,
     dependencies: &ArtifactAnalysisGraph,
+    rustc_dependencies: &BTreeMap<u64, BTreeSet<u64>>,
     roots: &[InterpretationRoot],
     config: &SniffTestConfig,
     source_overrides: &std::collections::BTreeMap<
@@ -166,8 +170,34 @@ pub(crate) fn trace_selected_workspace(
 ) -> Result<Vec<RootInterpretation>, EffectReportError> {
     let artifact = compose_workspace_artifact(local, dependencies)?;
     let artifact = &artifact;
-    let graph = InvocationGraph::from_artifact(artifact)
+    let mut graph = InvocationGraph::from_artifact(artifact)
         .map_err(|error| EffectReportError::new(error.to_string()))?;
+    let mut crate_dependencies = dependencies
+        .artifacts()
+        .map(|artifact| {
+            (
+                artifact.artifact.id.stable_crate_id,
+                artifact
+                    .dependencies
+                    .iter()
+                    .map(|id| id.stable_crate_id)
+                    .collect(),
+            )
+        })
+        .collect::<BTreeMap<_, BTreeSet<_>>>();
+    crate_dependencies.insert(
+        local_stable_crate_id,
+        dependencies
+            .direct_dependency_ids()
+            .map(|id| id.stable_crate_id)
+            .collect(),
+    );
+    crate_dependencies.extend(
+        rustc_dependencies
+            .iter()
+            .map(|(&owner, children)| (owner, children.clone())),
+    );
+    graph.set_dependencies(&crate_dependencies);
     let namespaces = artifact.definition_namespace_index();
     let annotations = AnnotationIndex::from_artifact_with_overrides(
         artifact,
@@ -265,7 +295,7 @@ pub(crate) fn trace_selected_workspace(
                         AnnotationDomain::Panic,
                         config,
                         &namespaces,
-                        |function| panic.is_opaque_function(function),
+                        |function, path: &TrustPath| panic.is_opaque_on_path(function, path),
                         |invocation| panic.is_ignored_invocation(invocation),
                     ));
                 }
@@ -280,7 +310,7 @@ pub(crate) fn trace_selected_workspace(
                         AnnotationDomain::Safety,
                         config,
                         &namespaces,
-                        |function| safety.is_opaque_function(function),
+                        |function, path: &TrustPath| safety.is_opaque_on_path(function, path),
                         |invocation| safety.is_ignored_invocation(invocation),
                     ));
                 }
@@ -650,6 +680,7 @@ fn marker_projection_order(
 
 #[allow(
     clippy::too_many_arguments,
+    clippy::too_many_lines,
     reason = "typed witnesses retain their effect-specific reachability policy"
 )]
 fn marker_projection(
@@ -682,7 +713,7 @@ fn marker_projection(
                     graph,
                     root_function,
                     endpoint,
-                    |function| panic.is_opaque_function(function),
+                    |function, path: &TrustPath| panic.is_opaque_on_path(function, path),
                     |invocation| panic.is_ignored_invocation(invocation),
                 )?;
                 (graph.stable_function(endpoint), trace)
@@ -697,7 +728,15 @@ fn marker_projection(
                     invocation,
                     node,
                     MarkerTraversalPolicy {
-                        is_opaque: |function| panic.is_opaque_function(function),
+                        trust_path: panic_trace?
+                            .nodes()
+                            .nth(node.index())?
+                            .state()
+                            .trust_path()
+                            .clone(),
+                        is_opaque: |function, path: &TrustPath| {
+                            panic.is_opaque_on_path(function, path)
+                        },
                         is_ignored_invocation: |candidate| panic.is_ignored_invocation(candidate),
                     },
                 )?
@@ -712,7 +751,7 @@ fn marker_projection(
                     graph,
                     root_function,
                     endpoint,
-                    |function| safety.is_opaque_function(function),
+                    |function, path: &TrustPath| safety.is_opaque_on_path(function, path),
                     |invocation| safety.is_ignored_invocation(invocation),
                 )?;
                 (graph.stable_function(endpoint), trace)
@@ -727,7 +766,15 @@ fn marker_projection(
                     invocation,
                     node,
                     MarkerTraversalPolicy {
-                        is_opaque: |function| safety.is_opaque_function(function),
+                        trust_path: safety_trace?
+                            .nodes()
+                            .nth(node.index())?
+                            .state()
+                            .trust_path()
+                            .clone(),
+                        is_opaque: |function, path: &TrustPath| {
+                            safety.is_opaque_on_path(function, path)
+                        },
                         is_ignored_invocation: |candidate| safety.is_ignored_invocation(candidate),
                     },
                 )?
@@ -745,7 +792,16 @@ fn marker_projection(
             invocation,
             node,
             MarkerTraversalPolicy {
-                is_opaque: |function| comments.trusts_function(domain, function),
+                trust_path: comment_trace
+                    .nodes()
+                    .nth(node.index())?
+                    .state()
+                    .trust_path()
+                    .clone(),
+                is_opaque: |function, path: &TrustPath| {
+                    comments.trusts_function(domain, function)
+                        && path.allows_boundary(graph, function)
+                },
                 is_ignored_invocation: |candidate| {
                     comments.is_ignored_invocation(domain, candidate)
                 },
@@ -790,16 +846,17 @@ fn marker_invocation_projection<O: Clone, S, T>(
     invocation: effect_tracing::InvocationId,
     node: TraceNodeId,
     policy: MarkerTraversalPolicy<
-        impl Fn(FunctionId) -> bool,
+        impl Fn(FunctionId, &TrustPath) -> bool,
         impl Fn(effect_tracing::InvocationId) -> bool,
     >,
 ) -> Option<(StableFunctionId, InterpretedTrace)> {
     let function = graph.invocation(invocation).caller();
-    let mut trace = audited_path_from_root(
+    let mut trace = path_from_root_until(
         artifact,
         graph,
         root_function,
         function,
+        policy.trust_path,
         policy.is_opaque,
         policy.is_ignored_invocation,
     )?;
@@ -816,6 +873,7 @@ fn marker_invocation_projection<O: Clone, S, T>(
 }
 
 struct MarkerTraversalPolicy<Opaque, Ignored> {
+    trust_path: TrustPath,
     is_opaque: Opaque,
     is_ignored_invocation: Ignored,
 }
@@ -967,7 +1025,15 @@ fn path_from_root(
     root: FunctionId,
     target: FunctionId,
 ) -> Option<InterpretedTrace> {
-    path_from_root_until(artifact, graph, root, target, |_| false, |_| false)
+    path_from_root_until(
+        artifact,
+        graph,
+        root,
+        target,
+        TrustPath::default(),
+        |_, _| false,
+        |_| false,
+    )
 }
 
 fn audited_path_from_root(
@@ -975,7 +1041,7 @@ fn audited_path_from_root(
     graph: &InvocationGraph,
     root: FunctionId,
     target: FunctionId,
-    is_opaque: impl Fn(FunctionId) -> bool,
+    is_opaque: impl Fn(FunctionId, &TrustPath) -> bool,
     is_ignored_invocation: impl Fn(effect_tracing::InvocationId) -> bool,
 ) -> Option<InterpretedTrace> {
     path_from_root_until(
@@ -983,6 +1049,7 @@ fn audited_path_from_root(
         graph,
         root,
         target,
+        TrustPath::default(),
         is_opaque,
         is_ignored_invocation,
     )
@@ -993,24 +1060,32 @@ fn path_from_root_until(
     graph: &InvocationGraph,
     root: FunctionId,
     target: FunctionId,
-    is_opaque: impl Fn(FunctionId) -> bool,
+    mut trust_path: TrustPath,
+    is_opaque: impl Fn(FunctionId, &TrustPath) -> bool,
     is_ignored_invocation: impl Fn(effect_tracing::InvocationId) -> bool,
 ) -> Option<InterpretedTrace> {
-    if is_opaque(target) {
+    if !is_opaque(target, &TrustPath::default()) {
+        trust_path.enter(graph, target);
+    }
+    if is_opaque(target, &trust_path) {
         return None;
     }
     if root == target {
         return Some(InterpretedTrace { steps: Vec::new() });
     }
-    let mut queue = std::collections::VecDeque::from([(target, Vec::new())]);
-    let mut visited = BTreeSet::from([target]);
-    while let Some((function, path)) = queue.pop_front() {
+    let mut queue = std::collections::VecDeque::from([(target, Vec::new(), trust_path.clone())]);
+    let mut visited = BTreeSet::from([(target, trust_path)]);
+    while let Some((function, path, trust_path)) = queue.pop_front() {
         for invocation in graph.incoming_invocations(function) {
             if is_ignored_invocation(*invocation) {
                 continue;
             }
             let parent = graph.caller(*invocation);
-            if is_opaque(parent) || !visited.insert(parent) {
+            let mut next_trust = trust_path.clone();
+            if !is_opaque(parent, &TrustPath::default()) {
+                next_trust.enter(graph, parent);
+            }
+            if is_opaque(parent, &next_trust) || !visited.insert((parent, next_trust.clone())) {
                 continue;
             }
             let mut next = path.clone();
@@ -1018,11 +1093,15 @@ fn path_from_root_until(
             if parent == root {
                 return Some(project_reverse_path(artifact, graph, next));
             }
-            queue.push_back((parent, next));
+            queue.push_back((parent, next, next_trust));
         }
         for transparent in graph.transparent_parents(function) {
             let parent = graph.transparent_parent(*transparent);
-            if is_opaque(parent) || !visited.insert(parent) {
+            let mut next_trust = trust_path.clone();
+            if !is_opaque(parent, &TrustPath::default()) {
+                next_trust.enter(graph, parent);
+            }
+            if is_opaque(parent, &next_trust) || !visited.insert((parent, next_trust.clone())) {
                 continue;
             }
             let mut next = path.clone();
@@ -1030,7 +1109,7 @@ fn path_from_root_until(
             if parent == root {
                 return Some(project_reverse_path(artifact, graph, next));
             }
-            queue.push_back((parent, next));
+            queue.push_back((parent, next, next_trust));
         }
     }
     None
@@ -1389,7 +1468,7 @@ fn unresolved_call_target_findings(
     domain: AnnotationDomain,
     config: &SniffTestConfig,
     namespaces: &DefinitionNamespaceIndex,
-    is_opaque: impl Fn(FunctionId) -> bool + Copy,
+    is_opaque: impl Fn(FunctionId, &TrustPath) -> bool + Copy,
     is_ignored_invocation: impl Fn(effect_tracing::InvocationId) -> bool + Copy,
 ) -> Vec<InterpretedFinding> {
     let is_opaque_invocation = |invocation| {
@@ -1873,8 +1952,9 @@ fn missing_body_reasons(
     domain: AnnotationDomain,
     config: &SniffTestConfig,
 ) -> Vec<IncompleteReason> {
-    let is_trusted = |function: FunctionId| {
+    let is_trusted = |function: FunctionId, path: &TrustPath| {
         trusted_boundary(graph.stable_function(function), domain, namespaces, config)
+            && path.allows_boundary(graph, function)
     };
     let is_macro_boundary = |invocation| {
         annotations
@@ -1917,11 +1997,13 @@ fn missing_body_reasons(
                 .iter()
                 .copied()
                 .filter_map(|root| {
-                    audited_path_from_root(
+                    let source = graph.function(target.function)?;
+                    path_from_root_until(
                         artifact,
                         graph,
                         root,
                         caller,
+                        TrustPath::new(graph, source),
                         is_trusted,
                         is_macro_boundary,
                     )
@@ -1978,9 +2060,6 @@ fn trusted_boundary(
     namespaces: &DefinitionNamespaceIndex,
     config: &SniffTestConfig,
 ) -> bool {
-    if namespaces.is_callable_shim(function) {
-        return false;
-    }
     let candidates = namespaces.candidates(function);
     match domain {
         AnnotationDomain::Panic => {
@@ -2515,7 +2594,6 @@ mod tests {
 
     fn attributes(path: &str) -> FunctionAttributesFact {
         FunctionAttributesFact {
-            is_callable_shim: false,
             is_unsafe: false,
             is_exported: true,
             has_rust_body: true,
@@ -3899,6 +3977,67 @@ unresolved-call-target = "warn"
             surface.len(),
             1,
             "the trusted API's own # Safety contract must remain visible: {findings:#?}",
+        );
+    }
+
+    #[test]
+    fn managed_callback_missing_body_crosses_trusted_boundary() {
+        let root = function_in_crate(1, 1);
+        let callback = function_in_crate(1, 2);
+        let consumer = function_in_crate(2, 1);
+        let declaration = function_in_crate(2, 2);
+        let mut callback_call = call(0, target(callback, "app::callback"));
+        let CallTargetFact::Function(surface) = target(declaration, "trusted::Callback::call")
+        else {
+            unreachable!();
+        };
+        callback_call.declaration_target = Some(surface);
+        let local = ArtifactFacts::new(
+            vec![body(
+                root,
+                "app::root",
+                vec![call(0, target(consumer, "trusted::consume"))],
+                Vec::new(),
+                Vec::new(),
+                Vec::new(),
+            )],
+            Vec::new(),
+        )
+        .expect("local callback fixture");
+        let dependencies = loaded_dependency(
+            2,
+            ArtifactFacts::new(
+                vec![body(
+                    consumer,
+                    "trusted::consume",
+                    vec![callback_call],
+                    Vec::new(),
+                    Vec::new(),
+                    Vec::new(),
+                )],
+                Vec::new(),
+            )
+            .expect("trusted consumer fixture"),
+        );
+        let reports = trace_workspace(
+            &local,
+            1,
+            &dependencies,
+            &[InterpretationRoot {
+                function: root,
+                path: String::from("app::root"),
+                kind: ReportRootKind::Concrete,
+            }],
+            &trusted_declaration_config(),
+        )
+        .expect("callback missing-body report");
+        assert_eq!(
+            missing_body_targets(&reports[0].completeness.panic),
+            [callback]
+        );
+        assert_eq!(
+            missing_body_targets(&reports[0].completeness.safety),
+            [callback]
         );
     }
 

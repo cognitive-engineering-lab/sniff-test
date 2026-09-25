@@ -85,12 +85,14 @@ namespace overrides. Artifacts without the selected crate/version/path are
 unaffected; once the source path is present, an absent or ambiguous definition
 fails closed rather than silently attaching a contract to multiple definitions.
 
-Compiler-generated `ClosureOnceShim` and `FnPtrShim` adapters are excluded from
-trusted boundaries, even when their definition belongs to a trusted crate.
-Their exact instance identity and shim classification are recorded in artifact
-facts. A broad `core` trust rule therefore cannot hide effects from the user
-callable behind those adapters. This exclusion applies to panic sources, safety
-sources, and documentation obligations; ordinary API boundaries remain trusted.
+Trusted boundaries are path-sensitive: a matching API may cover its own
+implementation and its transitive dependencies, but not effects that traverse
+an untrusted caller-supplied callback or trait implementation. Dependency
+relationships are loaded from the exact rustc artifacts, including implicit
+standard-library dependencies. Calling a dependency directly still requires
+analysis. This applies to panic sources, safety sources, documentation
+obligations, and missing-body coverage. Compiler-generated callable adapters
+use this policy without a separate shim exclusion list.
 
 ### Build scripts and proc macros are skipped
 

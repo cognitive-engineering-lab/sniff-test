@@ -16,6 +16,8 @@ use crate::config::{EffectDocMatching, PanicConfig, SafetyConfig};
 use crate::contracts::normalize_requirement_name;
 use crate::effects::EffectSelection;
 
+use super::trust::TrustPath;
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub(crate) enum CommentDomain {
     Panic,
@@ -43,6 +45,7 @@ pub(crate) struct CommentState {
     source_calls: BTreeSet<CallId>,
     remaining: BTreeSet<usize>,
     termination: Option<CommentTermination>,
+    trust_path: TrustPath,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -53,6 +56,11 @@ pub(crate) enum CommentTermination {
 }
 
 impl CommentState {
+    #[must_use]
+    pub(crate) fn trust_path(&self) -> &TrustPath {
+        &self.trust_path
+    }
+
     #[must_use]
     pub(crate) fn remaining(&self) -> impl ExactSizeIterator<Item = usize> + '_ {
         self.remaining.iter().copied()
@@ -217,16 +225,12 @@ impl<'annotations> CommentEffect<'annotations> {
                 && panic_config.panic_boundary_policy_candidates(candidates)
                     == crate::config::PanicBoundaryPolicy::TrustedBoundary
             {
-                trusted_panic_functions.extend(graph.function_aliases(body.function).filter(
-                    |function| !namespaces.is_callable_shim(graph.stable_function(*function)),
-                ));
+                trusted_panic_functions.extend(graph.function_aliases(body.function));
             }
             if effects.tracks_safety()
                 && safety_config.trusts_safety_boundary_candidates(candidates)
             {
-                trusted_safety_functions.extend(graph.function_aliases(body.function).filter(
-                    |function| !namespaces.is_callable_shim(graph.stable_function(*function)),
-                ));
+                trusted_safety_functions.extend(graph.function_aliases(body.function));
             }
         }
         let mut trusted_panic_invocations = BTreeSet::new();
@@ -507,7 +511,7 @@ impl Effect for CommentEffect<'_> {
     type Termination = CommentTermination;
 
     fn sources(&self) -> impl Iterator<Item = EffectSeed<Self::Origin, Self::State>> + '_ {
-        self.contracts.iter().flat_map(|contract| {
+        self.contracts.iter().flat_map(move |contract| {
             contract.functions.iter().copied().map(move |function| {
                 EffectSeed::new(
                     contract.id,
@@ -520,6 +524,11 @@ impl Effect for CommentEffect<'_> {
                         source_calls: BTreeSet::new(),
                         remaining: (0..contract.obligations.len()).collect(),
                         termination: None,
+                        trust_path: if self.trusts_function(contract.domain, function) {
+                            TrustPath::default()
+                        } else {
+                            TrustPath::new(self.graph, function)
+                        },
                     },
                 )
             })
@@ -554,7 +563,12 @@ impl Effect for CommentEffect<'_> {
             PropagationEdge::TransparentBody(edge) => cx.graph().transparent_parent(edge),
         };
         next.current_function = parent;
-        if self.trusts_function(state.domain, parent) {
+        if !self.trusts_function(state.domain, parent) {
+            next.trust_path.enter(self.graph, parent);
+        }
+        if self.trusts_function(state.domain, parent)
+            && next.trust_path.allows_boundary(self.graph, parent)
+        {
             next.termination = Some(CommentTermination::TrustedBoundary);
         }
         Propagation::Follow(next)
