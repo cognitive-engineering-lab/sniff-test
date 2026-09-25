@@ -2,48 +2,31 @@
 source: crates/sniff-test/tests/fixtures.rs
 expression: snapshot
 ---
-exit: 101
+exit: 0
 stdout:
 <empty>
 stderr:
     Checking dependency-transitive-panic-leaf v0.1.0 ([FIXTURE]/leaf)
     Checking dependency-transitive-panic-middle v0.1.0 ([FIXTURE]/middle)
     Checking dependency-transitive-panic-app v0.1.0 ([FIXTURE]/app)
-error: [sniff-test::panics::panic-invocation] `app` can reach `panic_fmt` with effect obligation in dependency crate `dependency_transitive_panic_leaf`.
+warning: [sniff-test::panics::documented-panic] this call's documented panic conditions are not accounted for
  --> src/lib.rs:2:5
   |
 2 |     dependency_transitive_panic_middle::middle(flag);
-  |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `middle` documents when this call may panic
   |
- ::: [FIXTURE]/leaf/src/lib.rs:2:5
-  |
-2 |     assert!(flag, "leaf expected a set flag");
-  |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ the panic originates here
-  |
-help: account for this path at this call with `// PANIC:`, or document it under `# Panics`
- --> src/lib.rs:2:5
-  |
-2 |     dependency_transitive_panic_middle::middle(flag);
-  |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  = help: for the full explanation, run `'[SNIFF-TEST]' explain 4x7b --cache-dir '[FIXTURE]/app/target/sniff-test/sniff-test-cache/v[FORMAT]'`
+  = help: address the documented panic conditions at each affected call with `// PANIC:`
+  = help: for the full explanation, run `'[SNIFF-TEST]' explain caz8 --cache-dir '[FIXTURE]/app/target/sniff-test/sniff-test-cache/v[FORMAT]'`
 
-error: [sniff-test::panics::panic-invocation] `app_again` can reach `panic_fmt` with effect obligation in dependency crate `dependency_transitive_panic_leaf`.
+warning: [sniff-test::panics::documented-panic] this call's documented panic conditions are not accounted for
  --> src/lib.rs:6:5
   |
 6 |     dependency_transitive_panic_middle::middle(flag);
-  |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `middle` documents when this call may panic
   |
- ::: [FIXTURE]/leaf/src/lib.rs:2:5
-  |
-2 |     assert!(flag, "leaf expected a set flag");
-  |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ the panic originates here
-  |
-help: account for this path at this call with `// PANIC:`, or document it under `# Panics`
- --> src/lib.rs:6:5
-  |
-6 |     dependency_transitive_panic_middle::middle(flag);
-  |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  = help: for the full explanation, run `'[SNIFF-TEST]' explain 4x7b --cache-dir '[FIXTURE]/app/target/sniff-test/sniff-test-cache/v[FORMAT]'`
+  = help: address the documented panic conditions at each affected call with `// PANIC:`
+  = help: for the full explanation, run `'[SNIFF-TEST]' explain jfy6 --cache-dir '[FIXTURE]/app/target/sniff-test/sniff-test-cache/v[FORMAT]'`
 
 note: set `show-full-stack-trace = true` under `[analysis]` in sniff-test.toml to show every reachability step
-error: could not compile `dependency-transitive-panic-app` (lib) due to 2 previous errors
+warning: `dependency-transitive-panic-app` (lib) generated 2 warnings
+    Finished `release` profile [optimized] target(s) in [TIME]

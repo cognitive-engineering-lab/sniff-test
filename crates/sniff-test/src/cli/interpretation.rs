@@ -1327,7 +1327,7 @@ impl EffectDiagnosticWriter<'_, '_, '_> {
             };
             self.diagnostic
                 .messages
-                .push(DiagnosticMessage::SpanHelp(span, help));
+                .push(DiagnosticMessage::SpanAlternativeHelp(span, help));
         }
     }
 }
@@ -1425,8 +1425,8 @@ fn add_source_evidence_help(
             owner_crate_label(owner),
         );
         diagnostic.messages.push(match effect_span {
-            Some(span) => DiagnosticMessage::SpanHelp(span, help),
-            None => DiagnosticMessage::Help(help),
+            Some(span) => DiagnosticMessage::SpanAlternativeHelp(span, help),
+            None => DiagnosticMessage::AlternativeHelp(help),
         });
     } else {
         let source_help = source_evidence_help(
@@ -1439,9 +1439,9 @@ fn add_source_evidence_help(
             .messages
             .push(match (owner.scope, evidence, effect_span) {
                 (OwnerScope::Workspace, SourceEvidence::VerifiedAbsent, Some(span)) => {
-                    DiagnosticMessage::SpanHelp(span, source_help)
+                    DiagnosticMessage::SpanAlternativeHelp(span, source_help)
                 }
-                _ => DiagnosticMessage::Help(source_help),
+                _ => DiagnosticMessage::AlternativeHelp(source_help),
             });
     }
 }
@@ -1475,11 +1475,14 @@ fn add_external_containment_guidance(
     if let Some(span) = report_root_containment_span(sources, &finding.trace) {
         diagnostic
             .messages
-            .push(DiagnosticMessage::SpanHelp(span, containment_help));
+            .push(DiagnosticMessage::SpanAlternativeHelp(
+                span,
+                containment_help,
+            ));
     } else {
         diagnostic
             .messages
-            .push(DiagnosticMessage::Help(containment_help));
+            .push(DiagnosticMessage::AlternativeHelp(containment_help));
     }
 }
 

@@ -91,7 +91,10 @@ pub(super) fn render_finding_diagnostic(
     messages.sort_by_key(|message| {
         matches!(
             message,
-            DiagnosticMessage::Help(_) | DiagnosticMessage::SpanHelp(..)
+            DiagnosticMessage::Help(_)
+                | DiagnosticMessage::SpanHelp(..)
+                | DiagnosticMessage::AlternativeHelp(_)
+                | DiagnosticMessage::SpanAlternativeHelp(..)
         )
     });
     decorate(&mut rendered, lint_code, &messages, None);
@@ -170,6 +173,17 @@ fn decorate<G: EmissionGuarantee>(
     explanation_help: Option<String>,
 ) {
     diagnostic.is_lint(lint_code.to_owned(), false);
+    let alternative_count = messages
+        .iter()
+        .filter(|message| {
+            matches!(
+                message,
+                DiagnosticMessage::AlternativeHelp(_)
+                    | DiagnosticMessage::SpanAlternativeHelp(_, _)
+            )
+        })
+        .count();
+    let mut alternative_index = 0;
     for message in messages {
         match message {
             DiagnosticMessage::Note(note) => {
@@ -186,6 +200,17 @@ fn decorate<G: EmissionGuarantee>(
             }
             DiagnosticMessage::Help(help) => {
                 diagnostic.help(help.clone());
+            }
+            DiagnosticMessage::AlternativeHelp(help) => {
+                alternative_index += 1;
+                diagnostic.help(alternative_help(help, alternative_count, alternative_index));
+            }
+            DiagnosticMessage::SpanAlternativeHelp(span, help) => {
+                alternative_index += 1;
+                diagnostic.span_help(
+                    *span,
+                    alternative_help(help, alternative_count, alternative_index),
+                );
             }
             DiagnosticMessage::TraceStep {
                 span,
@@ -206,6 +231,14 @@ fn decorate<G: EmissionGuarantee>(
     }
     if let Some(help) = explanation_help {
         diagnostic.help(help);
+    }
+}
+
+fn alternative_help(help: &str, alternative_count: usize, alternative_index: usize) -> String {
+    if alternative_count > 1 {
+        format!("[option {alternative_index}] {help}")
+    } else {
+        help.to_owned()
     }
 }
 
@@ -350,8 +383,8 @@ mod tests {
     use crate::cli::findings::{DiagnosticMessage, FindingDiagnostic};
 
     use super::{
-        config_span, decorate, explain_help, lint_coded_message, messages_for_emission,
-        render_diagnostic,
+        alternative_help, config_span, decorate, explain_help, lint_coded_message,
+        messages_for_emission, render_diagnostic,
     };
 
     fn with_source_file(source: &str, check: impl FnOnce(&rustc_span::SourceFile)) {
@@ -400,6 +433,22 @@ mod tests {
                 "unsafe operation lacks a justification",
             ),
             "[sniff-test::safety::raw-pointer-dereference-missing-justification] unsafe operation lacks a justification"
+        );
+    }
+
+    #[test]
+    fn multiple_alternative_fixes_receive_bracketed_option_labels() {
+        assert_eq!(
+            alternative_help("add a local justification", 3, 1),
+            "[option 1] add a local justification"
+        );
+        assert_eq!(
+            alternative_help("audit the dependency", 3, 3),
+            "[option 3] audit the dependency"
+        );
+        assert_eq!(
+            alternative_help("add the only available justification", 1, 1),
+            "add the only available justification"
         );
     }
 
@@ -464,6 +513,11 @@ mod tests {
                             description: String::from("main calls danger"),
                         },
                         DiagnosticMessage::Help(String::from("justify the safety contract")),
+                        DiagnosticMessage::SpanAlternativeHelp(
+                            span,
+                            String::from("justify this call"),
+                        ),
+                        DiagnosticMessage::AlternativeHelp(String::from("audit the dependency")),
                     ],
                     None,
                 );
@@ -478,6 +532,8 @@ mod tests {
                 assert!(rendered.contains("effect trace step 1/1"));
                 assert!(rendered.contains("main calls danger"));
                 assert!(rendered.contains("justify the safety contract"));
+                assert!(rendered.contains("[option 1] justify this call"));
+                assert!(rendered.contains("[option 2] audit the dependency"));
                 assert!(!rendered.contains("run `cargo sniff-test explain"));
                 assert_eq!(dcx.handle().err_count(), 0);
                 assert!(dcx.handle().has_errors().is_none());
