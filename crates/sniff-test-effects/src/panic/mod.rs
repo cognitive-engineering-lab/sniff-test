@@ -1,5 +1,8 @@
+use serde::{Deserialize, Serialize};
+use sniff_test_core::artifact::EffectKind;
 use sniff_test_core::config::{EffectConfig, LintLevel};
 use sniff_test_core::path_patterns::PathPatterns;
+use strum::IntoStaticStr;
 
 use self::visit::{BuiltinPanicInvocationPass, CompilerAssertPass};
 #[cfg(test)]
@@ -9,6 +12,52 @@ use sniff_test_core::effects::visit::EffectPassRegistry;
 pub mod visit;
 
 pub struct Panic;
+
+/// Stable operation names emitted by the built-in panic effect.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, IntoStaticStr)]
+#[serde(rename_all = "kebab-case")]
+#[strum(serialize_all = "kebab-case")]
+pub enum PanicOperation {
+    BoundsCheck,
+    Overflow,
+    OverflowNegation,
+    DivisionByZero,
+    RemainderByZero,
+    ResumedAfterReturn,
+    ResumedAfterPanic,
+    ResumedAfterDrop,
+    MisalignedPointerDereference,
+    NullPointerDereference,
+    InvalidEnumConstruction,
+    ConfiguredInvocation,
+}
+
+impl PanicOperation {
+    const OPERATIONS: [Self; 11] = [
+        Self::BoundsCheck,
+        Self::Overflow,
+        Self::OverflowNegation,
+        Self::DivisionByZero,
+        Self::RemainderByZero,
+        Self::ResumedAfterReturn,
+        Self::ResumedAfterPanic,
+        Self::ResumedAfterDrop,
+        Self::MisalignedPointerDereference,
+        Self::NullPointerDereference,
+        Self::InvalidEnumConstruction,
+    ];
+
+    #[must_use]
+    pub fn as_str(self) -> &'static str {
+        self.into()
+    }
+}
+
+impl From<PanicOperation> for EffectKind {
+    fn from(operation: PanicOperation) -> Self {
+        Self::new(operation.as_str())
+    }
+}
 
 impl sniff_test_core::effects::EffectSpec for Panic {
     const EFFECT_NAME: &'static str = "panic";
@@ -25,19 +74,7 @@ impl sniff_test_core::effects::EffectSpec for Panic {
             )
             .operations(
                 LintLevel::Warn,
-                [
-                    "bounds-check",
-                    "overflow",
-                    "overflow-negation",
-                    "division-by-zero",
-                    "remainder-by-zero",
-                    "resumed-after-return",
-                    "resumed-after-panic",
-                    "resumed-after-drop",
-                    "misaligned-pointer-dereference",
-                    "null-pointer-dereference",
-                    "invalid-enum-construction",
-                ],
+                PanicOperation::OPERATIONS.map(PanicOperation::as_str),
             )
             .build()
     }

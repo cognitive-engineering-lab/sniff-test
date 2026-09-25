@@ -1,4 +1,7 @@
+use serde::{Deserialize, Serialize};
+use sniff_test_core::artifact::EffectKind;
 use sniff_test_core::config::{EffectConfig, LintLevel};
+use strum::IntoStaticStr;
 
 use self::visit::{SafetyInvocationPass, SafetyThirPass};
 #[cfg(test)]
@@ -8,6 +11,52 @@ use sniff_test_core::effects::visit::EffectPassRegistry;
 pub mod visit;
 
 pub struct Safety;
+
+/// Stable operation names emitted by the built-in safety effect.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, IntoStaticStr)]
+#[serde(rename_all = "kebab-case")]
+#[strum(serialize_all = "kebab-case")]
+pub enum SafetyOperation {
+    RawPointerDereference,
+    MutableStaticAccess,
+    ExternStaticAccess,
+    UnionFieldAccess,
+    UnsafeFieldAccess,
+    LayoutConstrainedTypeInitialization,
+    UnsafeFieldInitialization,
+    LayoutConstrainedFieldMutation,
+    LayoutConstrainedFieldBorrow,
+    InlineAssembly,
+    UnsafeBinderCast,
+    UnsafeCall,
+}
+
+impl SafetyOperation {
+    const OPERATIONS: [Self; 11] = [
+        Self::RawPointerDereference,
+        Self::MutableStaticAccess,
+        Self::ExternStaticAccess,
+        Self::UnionFieldAccess,
+        Self::UnsafeFieldAccess,
+        Self::LayoutConstrainedTypeInitialization,
+        Self::UnsafeFieldInitialization,
+        Self::LayoutConstrainedFieldMutation,
+        Self::LayoutConstrainedFieldBorrow,
+        Self::InlineAssembly,
+        Self::UnsafeBinderCast,
+    ];
+
+    #[must_use]
+    pub fn as_str(self) -> &'static str {
+        self.into()
+    }
+}
+
+impl From<SafetyOperation> for EffectKind {
+    fn from(operation: SafetyOperation) -> Self {
+        Self::new(operation.as_str())
+    }
+}
 
 impl sniff_test_core::effects::EffectSpec for Safety {
     const EFFECT_NAME: &'static str = "safety";
@@ -19,19 +68,7 @@ impl sniff_test_core::effects::EffectSpec for Safety {
         EffectConfig::builder()
             .operations(
                 LintLevel::Warn,
-                [
-                    "raw-pointer-dereference",
-                    "mutable-static-access",
-                    "extern-static-access",
-                    "union-field-access",
-                    "unsafe-field-access",
-                    "layout-constrained-type-initialization",
-                    "unsafe-field-initialization",
-                    "layout-constrained-field-mutation",
-                    "layout-constrained-field-borrow",
-                    "inline-assembly",
-                    "unsafe-binder-cast",
-                ],
+                SafetyOperation::OPERATIONS.map(SafetyOperation::as_str),
             )
             .build()
     }

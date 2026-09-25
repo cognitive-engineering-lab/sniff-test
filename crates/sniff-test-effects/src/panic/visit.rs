@@ -2,11 +2,12 @@
 
 use rustc_middle::mir::{AssertKind, Location, TerminatorKind};
 use rustc_middle::ty::TyKind;
-use sniff_test_core::artifact::EffectKind;
 use sniff_test_core::effects::visit::{
     MirEffectCx, MirEffectPass, PreliminaryMirEffectSeed, PreliminaryMirEffectSource,
 };
 use sniff_test_core::namespace::canonical_namespace;
+
+use super::PanicOperation;
 
 pub struct CompilerAssertPass;
 
@@ -35,7 +36,7 @@ impl MirEffectPass for BuiltinPanicInvocationPass {
                         statement_index: data.statements.len(),
                     },
                     // Preserve the existing report kind for panic invocations.
-                    kind: EffectKind::new("configured-invocation"),
+                    kind: PanicOperation::ConfiguredInvocation.into(),
                     source: PreliminaryMirEffectSource::Invocation {
                         requires_documented_obligation: false,
                     },
@@ -93,7 +94,7 @@ impl MirEffectPass for CompilerAssertPass {
                         block,
                         statement_index: data.statements.len(),
                     },
-                    kind: EffectKind::new(compiler_assert_kind_name(msg.as_ref())),
+                    kind: compiler_assert_kind(msg.as_ref()).into(),
                     source: PreliminaryMirEffectSource::Operation,
                     suppress_in_compiler_context: false,
                 })
@@ -102,19 +103,21 @@ impl MirEffectPass for CompilerAssertPass {
     }
 }
 
-fn compiler_assert_kind_name<O>(kind: &AssertKind<O>) -> &'static str {
+fn compiler_assert_kind<O>(kind: &AssertKind<O>) -> PanicOperation {
     match kind {
-        AssertKind::BoundsCheck { .. } => "bounds-check",
-        AssertKind::Overflow(..) => "overflow",
-        AssertKind::OverflowNeg(..) => "overflow-negation",
-        AssertKind::DivisionByZero(..) => "division-by-zero",
-        AssertKind::RemainderByZero(..) => "remainder-by-zero",
-        AssertKind::ResumedAfterReturn(..) => "resumed-after-return",
-        AssertKind::ResumedAfterPanic(..) => "resumed-after-panic",
-        AssertKind::ResumedAfterDrop(..) => "resumed-after-drop",
-        AssertKind::MisalignedPointerDereference { .. } => "misaligned-pointer-dereference",
-        AssertKind::NullPointerDereference => "null-pointer-dereference",
-        AssertKind::InvalidEnumConstruction(..) => "invalid-enum-construction",
+        AssertKind::BoundsCheck { .. } => PanicOperation::BoundsCheck,
+        AssertKind::Overflow(..) => PanicOperation::Overflow,
+        AssertKind::OverflowNeg(..) => PanicOperation::OverflowNegation,
+        AssertKind::DivisionByZero(..) => PanicOperation::DivisionByZero,
+        AssertKind::RemainderByZero(..) => PanicOperation::RemainderByZero,
+        AssertKind::ResumedAfterReturn(..) => PanicOperation::ResumedAfterReturn,
+        AssertKind::ResumedAfterPanic(..) => PanicOperation::ResumedAfterPanic,
+        AssertKind::ResumedAfterDrop(..) => PanicOperation::ResumedAfterDrop,
+        AssertKind::MisalignedPointerDereference { .. } => {
+            PanicOperation::MisalignedPointerDereference
+        }
+        AssertKind::NullPointerDereference => PanicOperation::NullPointerDereference,
+        AssertKind::InvalidEnumConstruction(..) => PanicOperation::InvalidEnumConstruction,
     }
 }
 

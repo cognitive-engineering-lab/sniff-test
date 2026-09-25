@@ -5,6 +5,8 @@ edition.workspace = true
 
 [dependencies]
 sniff-test-core = { path = "../sniff-test-core" }
+serde = { version = "1", features = ["derive"] }
+strum = { version = "0.28", features = ["derive"] }
 
 [package.metadata.rust-analyzer]
 rustc_private = true

@@ -32,12 +32,13 @@ use rustc_middle::thir::{
 use rustc_middle::ty::{self, Instance, Ty, TyCtxt, TyKind};
 use rustc_span::Span;
 
-use sniff_test_core::artifact::EffectKind;
 use sniff_test_core::effects::visit::{
     EffectPassOutput, MirEffectCx, MirEffectPass, PreliminaryCallSeed, PreliminaryEffectGroup,
     PreliminaryEffectGroupSeed, PreliminaryEffectSeed, PreliminaryMirEffectSeed,
     PreliminaryMirEffectSource, ThirEffectPass,
 };
+
+use super::SafetyOperation;
 
 pub type SafetyEffectGroup = PreliminaryEffectGroup;
 
@@ -60,7 +61,7 @@ impl MirEffectPass for SafetyInvocationPass {
                         block,
                         statement_index: data.statements.len(),
                     },
-                    kind: EffectKind::new("unsafe-call"),
+                    kind: SafetyOperation::UnsafeCall.into(),
                     source: PreliminaryMirEffectSource::Invocation {
                         requires_documented_obligation: true,
                     },
@@ -297,14 +298,14 @@ impl PreliminarySafetySeedSink {
         &mut self,
         owner: DefId,
         span: Span,
-        op: &'static str,
+        op: SafetyOperation,
         marker_anchor_spans: Vec<Span>,
         active_group: Option<SafetyEffectGroup>,
     ) {
         let effect_group = active_group.unwrap_or_else(|| self.new_effect_group(span));
         self.output.seeds.push(PreliminaryEffectSeed {
             owner,
-            kind: EffectKind::new(op),
+            kind: op.into(),
             span,
             marker_anchor_spans,
             effect_group: Some(effect_group),
@@ -340,7 +341,7 @@ struct UnsafeOpVisitor<'a, 'tcx> {
 }
 
 impl<'a, 'tcx> UnsafeOpVisitor<'a, 'tcx> {
-    fn unsafe_op(&mut self, span: Span, op: &'static str) {
+    fn unsafe_op(&mut self, span: Span, op: SafetyOperation) {
         if self.builtin_unsafe_depth > 0 {
             return;
         }
@@ -441,7 +442,7 @@ impl<'a, 'tcx> UnsafeOpVisitor<'a, 'tcx> {
             | PatKind::Guard { .. }
             // Never constitutes a witness of uninhabitedness.
             | PatKind::Never => {
-                self.unsafe_op(pat.span, "union-field-access");
+                self.unsafe_op(pat.span, SafetyOperation::UnionFieldAccess);
                 true
             }
             // wildcard doesn't read anything; the others just wrap patterns
@@ -499,7 +500,7 @@ impl<'a, 'tcx> UnsafeOpVisitor<'a, 'tcx> {
         // `naked_asm!` forms one atomic unit of unsafety with its `#[naked]`
         // attribute and needs no unsafe block itself.
         if matches!(asm.asm_macro, AsmMacro::Asm) {
-            self.unsafe_op(expr.span, "inline-assembly");
+            self.unsafe_op(expr.span, SafetyOperation::InlineAssembly);
         }
 
         for op in &*asm.operands {
@@ -534,18 +535,18 @@ impl<'a, 'tcx> UnsafeOpVisitor<'a, 'tcx> {
             self.thir[arg].kind
         {
             if self.tcx.is_mutable_static(def_id) {
-                self.unsafe_op(expr.span, "mutable-static-access");
+                self.unsafe_op(expr.span, SafetyOperation::MutableStaticAccess);
             } else if self.tcx.is_foreign_item(def_id) {
                 match self.tcx.def_kind(def_id) {
                     DefKind::Static {
                         safety: hir::Safety::Safe,
                         ..
                     } => {}
-                    _ => self.unsafe_op(expr.span, "extern-static-access"),
+                    _ => self.unsafe_op(expr.span, SafetyOperation::ExternStaticAccess),
                 }
             }
         } else if self.thir[arg].ty.is_raw_ptr() {
-            self.unsafe_op(expr.span, "raw-pointer-dereference");
+            self.unsafe_op(expr.span, SafetyOperation::RawPointerDereference);
         }
     }
 
@@ -558,7 +559,7 @@ impl<'a, 'tcx> UnsafeOpVisitor<'a, 'tcx> {
         let mut visitor = LayoutConstrainedPlaceVisitor::new(self.thir, self.tcx);
         visit::walk_expr(&mut visitor, lhs);
         if visitor.found {
-            self.unsafe_op(expr.span, "layout-constrained-field-mutation");
+            self.unsafe_op(expr.span, SafetyOperation::LayoutConstrainedFieldMutation);
         }
 
         // Second, check for accesses to union fields. AssignOp reads *and*
@@ -587,14 +588,14 @@ impl<'a, 'tcx> UnsafeOpVisitor<'a, 'tcx> {
                 .safety
                 .is_unsafe()
             {
-                self.unsafe_op(expr.span, "unsafe-field-access");
+                self.unsafe_op(expr.span, SafetyOperation::UnsafeFieldAccess);
             } else if adt_def.is_union() {
                 if self.assignment_info.is_some() {
                     // Write-only assignment to a union field is safe; union
                     // fields that need dropping are rejected during
                     // wf-checking.
                 } else {
-                    self.unsafe_op(expr.span, "union-field-access");
+                    self.unsafe_op(expr.span, SafetyOperation::UnionFieldAccess);
                 }
             }
         }
@@ -647,7 +648,7 @@ impl<'a, 'tcx> Visitor<'a, 'tcx> for UnsafeOpVisitor<'a, 'tcx> {
                             .safety
                             .is_unsafe()
                         {
-                            self.unsafe_op(pat.pattern.span, "unsafe-field-access");
+                            self.unsafe_op(pat.pattern.span, SafetyOperation::UnsafeFieldAccess);
                         }
                     }
                     if adt_def.is_union() {
@@ -680,7 +681,7 @@ impl<'a, 'tcx> Visitor<'a, 'tcx> for UnsafeOpVisitor<'a, 'tcx> {
                         .safety
                         .is_unsafe()
                     {
-                        self.unsafe_op(pat.pattern.span, "unsafe-field-access");
+                        self.unsafe_op(pat.pattern.span, SafetyOperation::UnsafeFieldAccess);
                     }
                 }
                 visit::walk_pat(self, pat);
@@ -696,11 +697,17 @@ impl<'a, 'tcx> Visitor<'a, 'tcx> for UnsafeOpVisitor<'a, 'tcx> {
                     match rm {
                         Mutability::Not => {
                             if !ty.is_freeze(self.tcx, self.typing_env) {
-                                self.unsafe_op(pat.span, "layout-constrained-field-borrow");
+                                self.unsafe_op(
+                                    pat.span,
+                                    SafetyOperation::LayoutConstrainedFieldBorrow,
+                                );
                             }
                         }
                         Mutability::Mut => {
-                            self.unsafe_op(pat.span, "layout-constrained-field-mutation");
+                            self.unsafe_op(
+                                pat.span,
+                                SafetyOperation::LayoutConstrainedFieldMutation,
+                            );
                         }
                     }
                 }
@@ -763,12 +770,15 @@ impl<'a, 'tcx> Visitor<'a, 'tcx> for UnsafeOpVisitor<'a, 'tcx> {
             // check_unsafety.rs:609-625
             ExprKind::Adt(ref adt) => {
                 if adt.adt_def.variant(adt.variant_index).has_unsafe_fields() {
-                    self.unsafe_op(expr.span, "unsafe-field-initialization");
+                    self.unsafe_op(expr.span, SafetyOperation::UnsafeFieldInitialization);
                 }
                 match self.tcx.layout_scalar_valid_range(adt.adt_def.did()) {
                     (Bound::Unbounded, Bound::Unbounded) => {}
                     _ => {
-                        self.unsafe_op(expr.span, "layout-constrained-type-initialization");
+                        self.unsafe_op(
+                            expr.span,
+                            SafetyOperation::LayoutConstrainedTypeInitialization,
+                        );
                     }
                 }
             }
@@ -803,10 +813,16 @@ impl<'a, 'tcx> Visitor<'a, 'tcx> for UnsafeOpVisitor<'a, 'tcx> {
                         BorrowKind::Fake(_) | BorrowKind::Shared
                             if !self.thir[arg].ty.is_freeze(self.tcx, self.typing_env) =>
                         {
-                            self.unsafe_op(expr.span, "layout-constrained-field-borrow");
+                            self.unsafe_op(
+                                expr.span,
+                                SafetyOperation::LayoutConstrainedFieldBorrow,
+                            );
                         }
                         BorrowKind::Mut { .. } => {
-                            self.unsafe_op(expr.span, "layout-constrained-field-mutation");
+                            self.unsafe_op(
+                                expr.span,
+                                SafetyOperation::LayoutConstrainedFieldMutation,
+                            );
                         }
                         BorrowKind::Fake(_) | BorrowKind::Shared => {}
                     }
@@ -815,7 +831,7 @@ impl<'a, 'tcx> Visitor<'a, 'tcx> for UnsafeOpVisitor<'a, 'tcx> {
             ExprKind::PlaceUnwrapUnsafeBinder { .. }
             | ExprKind::ValueUnwrapUnsafeBinder { .. }
             | ExprKind::WrapUnsafeBinder { .. } => {
-                self.unsafe_op(expr.span, "unsafe-binder-cast");
+                self.unsafe_op(expr.span, SafetyOperation::UnsafeBinderCast);
             }
             _ => {}
         }
@@ -880,7 +896,7 @@ mod tests {
     use rustc_hir::def_id::CRATE_DEF_ID;
     use rustc_span::{BytePos, Span};
 
-    use super::{PreliminarySafetySeedSink, SafetyThirPass};
+    use super::{PreliminarySafetySeedSink, SafetyOperation, SafetyThirPass};
     use sniff_test_core::effects::visit::{EffectPassOutput, ThirEffectPass};
 
     fn span(start: u32, end: u32) -> Span {
@@ -898,7 +914,7 @@ mod tests {
         sink.record_operation(
             owner,
             operation_span,
-            "raw-pointer-dereference",
+            SafetyOperation::RawPointerDereference,
             vec![scope_span, operation_span],
             Some(group),
         );
@@ -1035,7 +1051,7 @@ mod tests {
             sink.record_operation(
                 owner,
                 operation_span,
-                "raw-pointer-dereference",
+                SafetyOperation::RawPointerDereference,
                 vec![scope_span, operation_span],
                 Some(shared_group),
             );
@@ -1043,7 +1059,7 @@ mod tests {
         sink.record_operation(
             owner,
             standalone_span,
-            "inline-assembly",
+            SafetyOperation::InlineAssembly,
             vec![standalone_span],
             None,
         );
