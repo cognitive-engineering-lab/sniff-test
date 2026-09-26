@@ -77,6 +77,258 @@ fn stable_function(index: u64) -> FunctionId {
     FunctionId::generic(hash)
 }
 
+#[derive(Clone, Copy)]
+enum ContractBoundaryScenario {
+    Operation,
+    JustifiedOperation,
+    NestedOperation,
+    DocumentationOnly,
+    CallerContract,
+}
+
+#[allow(
+    clippy::too_many_lines,
+    reason = "the fixture graph and both tracing policies are built together"
+)]
+fn contract_boundary_trace(
+    scenario: ContractBoundaryScenario,
+) -> (super::ConcreteTrace, ArtifactFacts) {
+    let source_in_callee = matches!(scenario, ContractBoundaryScenario::NestedOperation);
+    let include_operation = !matches!(scenario, ContractBoundaryScenario::DocumentationOnly);
+    let justify_source = matches!(scenario, ContractBoundaryScenario::JustifiedOperation);
+    let document_caller = matches!(scenario, ContractBoundaryScenario::CallerContract);
+    let max_depth = if source_in_callee { 1 } else { 3 };
+    let root = stable_function(9_970);
+    let documented = stable_function(9_971);
+    let source = if source_in_callee {
+        stable_function(9_972)
+    } else {
+        documented
+    };
+    let operation = EffectFact {
+        id: EffectId::new(0),
+        effect: ReportEffect::Safety.key(),
+        effect_group: None,
+        source_range: None,
+        expanded_range: None,
+        macro_expansions: Vec::new(),
+        kind: EffectKind::new("raw-pointer-dereference"),
+    };
+    let mut source_markers = Vec::new();
+    if justify_source {
+        source_markers.push(shared_justification_marker(
+            1,
+            "local-safety",
+            annotation_kind::<Safety>(AnnotationRole::Justification),
+            AnnotationTargetFact::Effect(EffectId::new(0)),
+        ));
+    }
+    let contract = marker(
+        0,
+        annotation_kind::<Safety>(AnnotationRole::Contract),
+        AnnotationTargetFact::Function(documented),
+    );
+    let mut functions = vec![body(
+        root,
+        "sample::root",
+        vec![call(0, target(documented, "sample::documented"))],
+        Vec::new(),
+        if document_caller {
+            vec![marker(
+                2,
+                annotation_kind::<Safety>(AnnotationRole::Contract),
+                AnnotationTargetFact::Function(root),
+            )]
+        } else {
+            Vec::new()
+        },
+        Vec::new(),
+    )];
+    functions.push(body(
+        documented,
+        "sample::documented",
+        if source_in_callee {
+            vec![call(1, target(source, "sample::source"))]
+        } else {
+            Vec::new()
+        },
+        if source_in_callee || !include_operation {
+            Vec::new()
+        } else {
+            vec![operation.clone()]
+        },
+        if source_in_callee {
+            vec![contract]
+        } else {
+            let mut markers = vec![contract];
+            markers.extend(source_markers.clone());
+            markers
+        },
+        Vec::new(),
+    ));
+    if source_in_callee {
+        functions.push(body(
+            source,
+            "sample::source",
+            Vec::new(),
+            if include_operation {
+                vec![operation]
+            } else {
+                Vec::new()
+            },
+            source_markers,
+            Vec::new(),
+        ));
+    }
+    let artifact = ArtifactFacts::new(functions, Vec::new()).expect("valid contract artifact");
+    let graph = InvocationGraph::from_artifact(&artifact).expect("invocation graph");
+    let annotations = AnnotationIndex::from_artifact(&artifact, &graph).expect("annotations");
+    let namespaces = artifact.definition_namespace_index();
+    let config = crate::config::test_config();
+    let safety = effect::<Safety>(config.effect("safety"));
+    let concrete = probe_concrete_effect(
+        &artifact,
+        &graph,
+        &annotations,
+        &namespaces,
+        safety.as_ref(),
+    )
+    .expect("safety sources");
+    let obligations = super::ObligationTracker::probe(
+        &graph,
+        &annotations,
+        config.analysis.effect_doc_matching,
+        [super::ObligationEffectPolicy::new(
+            ReportEffect::Safety.key(),
+            concrete.trusted_functions(),
+            concrete.ignored_invocations(),
+        )],
+    );
+    let obligation_graph = graph.obligation_graph();
+    let engine = EffectEngine::with_options(
+        &obligation_graph,
+        effect_tracing::TraceOptions {
+            max_depth,
+            state_budget: 100,
+        },
+    );
+    let tracked = super::TrackedEffect::new(&concrete, &obligations, ReportEffect::Safety.key());
+    (engine.trace(&tracked), artifact)
+}
+
+#[test]
+fn documented_operation_stops_at_contract_and_only_obligation_reaches_caller() {
+    let (trace, artifact) = contract_boundary_trace(ContractBoundaryScenario::Operation);
+    assert!(trace.handled().any(|handled| matches!(
+        (handled.origin(), handled.termination()),
+        (
+            super::TrackedOrigin::Concrete(_),
+            super::TrackedTermination::ContractBoundary
+        )
+    )));
+    assert_eq!(
+        trace
+            .nodes()
+            .filter(|node| matches!(node.origin(), super::TrackedOrigin::Contract(_)))
+            .count(),
+        2,
+    );
+    let root = stable_function(9_970);
+    let reports = trace_workspace(
+        &artifact,
+        root.def_path_hash.stable_crate_id(),
+        &ArtifactAnalysisGraph::default(),
+        &[InterpretationRoot {
+            function: root,
+            path: String::from("sample::root"),
+            kind: ReportRootKind::Concrete,
+        }],
+        &{
+            let mut config = crate::config::test_config();
+            config.analysis.marker_probing = MarkerProbing::SourceCallsite;
+            config
+        },
+    )
+    .expect("effect report");
+    let safety_findings = reports[0]
+        .findings
+        .iter()
+        .filter(|finding| finding.effect.key == ReportEffect::Safety.key())
+        .collect::<Vec<_>>();
+    assert!(
+        matches!(
+            safety_findings.as_slice(),
+            [InterpretedFinding {
+                kind: InterpretedFindingKind::DocumentedObligation,
+                ..
+            }]
+        ),
+        "safety findings: {safety_findings:#?}"
+    );
+}
+
+#[test]
+fn locally_justified_operation_still_exposes_documented_contract() {
+    let (trace, _) = contract_boundary_trace(ContractBoundaryScenario::JustifiedOperation);
+    assert!(!trace.handled().any(|handled| matches!(
+        handled.termination(),
+        super::TrackedTermination::ContractBoundary
+    )));
+    assert_eq!(
+        trace
+            .nodes()
+            .filter(|node| matches!(node.origin(), super::TrackedOrigin::Contract(_)))
+            .count(),
+        2
+    );
+}
+
+#[test]
+fn contract_seed_has_its_own_depth_when_operation_is_nested() {
+    let (trace, _) = contract_boundary_trace(ContractBoundaryScenario::NestedOperation);
+    assert!(trace.handled().any(|handled| matches!(
+        handled.termination(),
+        super::TrackedTermination::ContractBoundary
+    )));
+    assert_eq!(
+        trace
+            .nodes()
+            .filter(|node| matches!(node.origin(), super::TrackedOrigin::Contract(_)))
+            .count(),
+        2
+    );
+}
+
+#[test]
+fn documented_contract_without_an_operation_still_gets_a_seed() {
+    let (trace, _) = contract_boundary_trace(ContractBoundaryScenario::DocumentationOnly);
+    assert_eq!(
+        trace
+            .nodes()
+            .filter(|node| matches!(node.origin(), super::TrackedOrigin::Contract(_)))
+            .count(),
+        2
+    );
+}
+
+#[test]
+fn caller_contract_stops_prior_obligation_and_starts_its_own() {
+    let (trace, _) = contract_boundary_trace(ContractBoundaryScenario::CallerContract);
+    assert!(trace.handled().any(|handled| matches!(
+        handled.termination(),
+        super::TrackedTermination::Obligation(
+            crate::effects::obligation::ObligationTermination::ContractBoundary
+        )
+    )));
+    assert_eq!(
+        trace
+            .nodes()
+            .filter(|node| matches!(node.origin(), super::TrackedOrigin::Contract(_)))
+            .count(),
+        3
+    );
+}
+
 #[test]
 fn registered_effect_gets_default_concrete_reporting_without_an_adapter() {
     let root = stable_function(9_900);

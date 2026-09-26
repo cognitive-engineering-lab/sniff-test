@@ -110,21 +110,6 @@ impl<'graph> EffectEngine<'graph> {
             let function = trace.nodes[node_id.index()].function;
             let state = trace.nodes[node_id.index()].state.clone();
 
-            if let Some(next) = effect.handoff(&cx, &state, function) {
-                self.follow(
-                    &mut trace,
-                    &mut queue,
-                    &mut visited,
-                    origin,
-                    node_id,
-                    function,
-                    next,
-                    PropagationEdge::ContractHandoff,
-                    depth,
-                );
-                continue;
-            }
-
             if let Some(termination) = effect.terminate(&cx, &state, TraceSite::Function(function))
             {
                 record_handled(

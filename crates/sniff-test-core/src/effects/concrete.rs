@@ -553,9 +553,6 @@ impl TracePolicy for ConcreteEffect<'_> {
                 self.graph.invocation(invocation).caller()
             }
             PropagationEdge::TransparentBody(edge) => cx.graph().transparent_parent(edge),
-            PropagationEdge::ContractHandoff => {
-                unreachable!("contract handoffs are created by the tracing engine")
-            }
         };
         if !self.is_trusted_function(next.current_function) {
             next.trust_path.enter(self.graph, next.current_function);

@@ -514,7 +514,6 @@ fn project_reverse_path(
                     target_path: Some(display_path(artifact, graph.stable_function(child))),
                 });
             }
-            PropagationEdge::ContractHandoff => {}
         }
     }
     trace
@@ -1233,19 +1232,10 @@ fn active_root_nodes<O: Clone, S, T>(
             _ => None,
         })
         .collect::<BTreeSet<_>>();
-    let handed_off = trace
-        .edges()
-        .filter(|edge| edge.propagation() == PropagationEdge::ContractHandoff)
-        .map(|edge| edge.from().index())
-        .collect::<BTreeSet<_>>();
     trace
         .nodes()
         .enumerate()
-        .filter(move |(index, node)| {
-            node.function() == root
-                && !handled_at_root.contains(index)
-                && !handed_off.contains(index)
-        })
+        .filter(move |(index, node)| node.function() == root && !handled_at_root.contains(index))
         .map(|(index, _)| index)
 }
 
@@ -1561,11 +1551,6 @@ fn trace_path<O: Clone, S, T>(
                 target: Some(child),
                 target_path: Some(display_path(artifact, child)),
             });
-        } else if matches!(edge.propagation(), PropagationEdge::ContractHandoff) {
-            // The contract at this boundary replaces the lower-level effect.
-            // Keep the causal edge in the trace model, but present the
-            // obligation from the point where its current carrier begins.
-            break;
         }
         node = edge.from().index();
     }

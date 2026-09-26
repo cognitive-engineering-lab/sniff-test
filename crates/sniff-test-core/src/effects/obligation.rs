@@ -50,6 +50,7 @@ pub struct ObligationState {
 pub enum ObligationTermination {
     Satisfaction(AnnotationId),
     TrustedBoundary,
+    ContractBoundary,
 }
 
 impl ObligationState {
@@ -246,35 +247,25 @@ impl<'annotations> ObligationTracker<'annotations> {
         self.contracts.iter().find(|contract| contract.id == id)
     }
 
-    fn contract_state(
+    fn contract_boundary(
         &self,
         function: FunctionId,
         effect: &EffectKey,
         current: Option<&ObligationState>,
-    ) -> Option<ObligationState> {
+    ) -> bool {
         let contract = self
             .contracts
             .iter()
-            .find(|contract| &contract.effect == effect && contract.applies_to(function))?;
+            .find(|contract| &contract.effect == effect && contract.applies_to(function));
+        let Some(contract) = contract else {
+            return false;
+        };
         if current
             .is_some_and(|state| state.contract == contract.id && state.source_invocation.is_none())
         {
-            return None;
+            return false;
         }
-        Some(ObligationState {
-            effect: effect.clone(),
-            contract: contract.id,
-            current_function: function,
-            source_invocation: None,
-            source_calls: BTreeSet::new(),
-            remaining: contract.obligations.clone(),
-            termination: None,
-            trust_path: if self.trusts_function(effect, function) {
-                TrustPath::default()
-            } else {
-                TrustPath::new(self.graph, function)
-            },
-        })
+        true
     }
 
     #[must_use]
@@ -485,15 +476,6 @@ impl TracePolicy for ObligationTracker<'_> {
         })
     }
 
-    fn handoff(
-        &self,
-        _cx: &TraceCx<'_>,
-        state: &Self::State,
-        function: FunctionId,
-    ) -> Option<Self::State> {
-        self.contract_state(function, &state.effect, Some(state))
-    }
-
     fn propagate(
         &self,
         cx: &TraceCx<'_>,
@@ -523,9 +505,6 @@ impl TracePolicy for ObligationTracker<'_> {
         let parent = match edge {
             PropagationEdge::Invocation(invocation) => self.graph.invocation(invocation).caller(),
             PropagationEdge::TransparentBody(edge) => cx.graph().transparent_parent(edge),
-            PropagationEdge::ContractHandoff => {
-                unreachable!("contract handoffs are created by the tracing engine")
-            }
         };
         next.current_function = parent;
         if !self.trusts_function(&state.effect, parent) {
@@ -546,6 +525,11 @@ impl TracePolicy for ObligationTracker<'_> {
         site: TraceSite<'_, Self::Origin>,
     ) -> Option<Self::Termination> {
         match site {
+            TraceSite::Function(function)
+                if self.contract_boundary(function, &state.effect, Some(state)) =>
+            {
+                Some(ObligationTermination::ContractBoundary)
+            }
             TraceSite::Invocation(_)
                 if matches!(
                     state.termination,
@@ -624,6 +608,7 @@ impl<S> TrackedState<S> {
 pub enum TrackedTermination<T> {
     Concrete(T),
     Obligation(ObligationTermination),
+    ContractBoundary,
 }
 
 /// One effect-domain trace containing both compiler-discovered operations and
@@ -734,24 +719,6 @@ where
             )
     }
 
-    fn handoff(
-        &self,
-        _cx: &TraceCx<'_>,
-        state: &Self::State,
-        function: FunctionId,
-    ) -> Option<Self::State> {
-        match state {
-            TrackedState::Concrete(_) => self
-                .obligations
-                .contract_state(function, &self.effect, None)
-                .map(TrackedState::Obligation),
-            TrackedState::Obligation(state) => self
-                .obligations
-                .contract_state(function, &self.effect, Some(state))
-                .map(TrackedState::Obligation),
-        }
-    }
-
     fn propagate(
         &self,
         cx: &TraceCx<'_>,
@@ -796,10 +763,18 @@ where
                     .terminate(cx, state, TraceSite::Source(origin))
                     .map(TrackedTermination::Concrete)
             }
-            (TrackedState::Concrete(state), TraceSite::Function(function)) => self
-                .concrete
-                .terminate(cx, state, TraceSite::Function(function))
-                .map(TrackedTermination::Concrete),
+            (TrackedState::Concrete(state), TraceSite::Function(function)) => {
+                if self
+                    .obligations
+                    .contract_boundary(function, &self.effect, None)
+                {
+                    Some(TrackedTermination::ContractBoundary)
+                } else {
+                    self.concrete
+                        .terminate(cx, state, TraceSite::Function(function))
+                        .map(TrackedTermination::Concrete)
+                }
+            }
             (TrackedState::Concrete(state), TraceSite::Invocation(invocation)) => self
                 .concrete
                 .terminate(cx, state, TraceSite::Invocation(invocation))

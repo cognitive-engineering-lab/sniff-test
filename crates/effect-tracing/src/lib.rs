@@ -1,8 +1,8 @@
 //! Shared, compiler-independent effect tracing.
 //!
-//! A [`TracePolicy`] defines where an effect starts, how carriers hand off at
-//! function boundaries, how state changes across propagation edges, and where
-//! a path terminates. [`EffectEngine`] supplies reverse-invocation traversal,
+//! A [`TracePolicy`] defines where an effect starts, how its state changes
+//! across propagation edges, and where a path terminates. [`EffectEngine`]
+//! supplies reverse-invocation traversal,
 //! transparent-body traversal, path splitting and convergence, state-aware
 //! cycle detection, resource limits, and trace recording. Panic and safety
 //! seed semantics deliberately live outside this crate.
