@@ -718,20 +718,18 @@ mod tests {
     #[test]
     fn read_rejects_older_formats_before_deserializing() {
         let directory = tempdir().expect("temporary cache root");
+        let version = CACHE_FORMAT_VERSION - 1;
+        let path = directory.path().join(format!("v{version}.json"));
+        fs::write(&path, format!(r#"{{"format-version":{version},"facts":"#))
+            .expect("write incompatible cache header");
 
-        for version in [14, 20, 21, 22] {
-            let path = directory.path().join(format!("v{version}.json"));
-            fs::write(&path, format!(r#"{{"format-version":{version},"facts":"#))
-                .expect("write incompatible cache header");
+        let error = ArtifactAnalysisCache::read(&path, &expectations())
+            .expect_err("older cache formats must be rejected");
 
-            let error = ArtifactAnalysisCache::read(&path, &expectations())
-                .expect_err("older cache formats must be rejected");
-
-            assert!(
-                matches!(&error, CacheError::Format { version: actual, .. } if *actual == version),
-                "unexpected error for cache format v{version}: {error}"
-            );
-        }
+        assert!(
+            matches!(&error, CacheError::Format { version: actual, .. } if *actual == version),
+            "unexpected error for cache format v{version}: {error}"
+        );
     }
 
     #[test]

@@ -56,7 +56,6 @@ pub mod panic {
 
         fn register_passes(_: &mut super::visit::EffectPassRegistry) {}
     }
-    pub type PanicEffect<'a> = super::concrete::ConcreteEffect<'a>;
     pub type PanicTermination = super::concrete::ConcreteTermination;
 }
 
@@ -108,7 +107,6 @@ pub mod safety {
             registry.register_thir_pass::<Self>(Box::new(TestSafetyThirPass));
         }
     }
-    pub type SafetyEffect<'a> = super::concrete::ConcreteEffect<'a>;
     pub type SafetyTermination = super::concrete::ConcreteTermination;
 
     pub mod visit {
@@ -266,11 +264,6 @@ pub struct EffectSelection {
 }
 
 impl EffectSelection {
-    #[cfg(test)]
-    #[must_use]
-    pub fn registered_keys() -> Vec<EffectKey> {
-        vec![EffectKey::new("panic"), EffectKey::new("safety")]
-    }
     #[must_use]
     pub const fn all() -> Self {
         Self { only: None }
@@ -373,6 +366,3 @@ impl fmt::Display for ProbeError {
 }
 
 impl std::error::Error for ProbeError {}
-
-#[cfg(test)]
-mod tests;

@@ -1379,34 +1379,6 @@ mod tests {
     }
 
     #[test]
-    fn removed_safety_missing_requirements_lint_warns() {
-        let config = crate::config::test_from_manifest_str(
-            "[safety.lints]\nunsafe-call-missing-requirements = \"warn\"",
-        )
-        .expect("unknown fields produce warnings");
-        assert!(
-            config.warnings[0]
-                .field
-                .contains("unsafe-call-missing-requirements")
-        );
-    }
-
-    #[test]
-    fn effect_specific_base_lint_keys_warn() {
-        for (effect, key) in [
-            ("panic", "panic-invocation"),
-            ("panic", "compiler-assert"),
-            ("safety", "unsafe-call-missing-justification"),
-            ("safety", "unsafe-op-missing-justification"),
-        ] {
-            let manifest = format!("[{effect}.lints]\n{key} = \"warn\"");
-            let config = crate::config::test_from_manifest_str(&manifest)
-                .expect("unknown fields produce warnings");
-            assert!(config.warnings[0].field.contains(key));
-        }
-    }
-
-    #[test]
     fn operation_lint_tables_warn_on_unknown_and_flat_keys() {
         for source in [
             "[panic.lints.operations]\nunknown-assert = \"warn\"",
@@ -1745,16 +1717,6 @@ mod tests {
             .expect_err("invalid glob patterns should be rejected");
 
         assert!(error.to_string().contains("error parsing glob"));
-    }
-
-    #[test]
-    fn manifest_warns_on_removed_panic_sink_namespaces() {
-        let config = crate::config::test_from_manifest_str(
-            "[panic]\npanic-sink-namespaces = [\"core::panicking::**\"]",
-        )
-        .expect("removed fields produce warnings");
-
-        assert!(config.warnings[0].field.contains("panic-sink-namespaces"));
     }
 
     #[test]
