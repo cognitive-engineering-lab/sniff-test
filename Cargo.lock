@@ -179,10 +179,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "effect-tracing"
-version = "0.1.0"
-
-[[package]]
 name = "encode_unicode"
 version = "1.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -468,7 +464,6 @@ name = "sniff-test-core"
 version = "0.1.0"
 dependencies = [
  "clap",
- "effect-tracing",
  "globset",
  "insta",
  "pulldown-cmark",

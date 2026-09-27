@@ -1,6 +1,6 @@
 use std::collections::BTreeSet;
 
-use effect_tracing::FunctionId;
+use crate::trace::FunctionId;
 
 use crate::compiler::invocations::InvocationGraph;
 

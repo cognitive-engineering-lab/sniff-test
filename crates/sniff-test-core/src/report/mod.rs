@@ -1,6 +1,6 @@
 //! Projection of compiler facts and effect traces into policy-neutral findings.
 //!
-//! It probes the three concrete effects, asks `effect-tracing` to trace them,
+//! It probes concrete effects, traces them through the shared core worklists,
 //! and projects trace outcomes for configured report roots. A narrow,
 //! effect-provided boundary-aware path lookup associates ambiguous annotations
 //! with audited roots; effect propagation itself is exclusively performed by
@@ -9,10 +9,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 
-use effect_tracing::{
-    EffectEngine, EffectGraph, EffectTrace, FunctionId, PropagationEdge, TerminationSite,
-    TraceOptions,
-};
+use crate::trace::{EffectTrace, FunctionId, PropagationEdge, TerminationSite, TraceOptions};
 
 use crate::annotations::AnnotationIndex;
 use crate::artifact::{
@@ -77,11 +74,7 @@ pub struct EffectReportError {
     message: String,
 }
 
-type ConcreteTrace = EffectTrace<
-    TrackedOrigin<ConcreteSource>,
-    TrackedState<crate::effects::concrete::ConcreteEffectState>,
-    TrackedTermination<crate::effects::concrete::ConcreteTermination>,
->;
+type ConcreteTrace = crate::trace::DomainTrace;
 
 impl EffectReportError {
     pub fn new(message: impl Into<String>) -> Self {
@@ -207,8 +200,6 @@ pub fn trace_selected_workspace(
         max_depth: config.analysis.max_trace_depth,
         state_budget: config.analysis.trace_state_budget,
     };
-    let obligation_graph = graph.obligation_graph();
-    let engine = EffectEngine::with_options(&obligation_graph, trace_options);
     // Tracing is entirely effect-independent. Keep runs keyed by their stable
     // effect identity so registering another effect does not require another
     // typed local, trace alias, or engine invocation here.
@@ -223,7 +214,12 @@ pub fn trace_selected_workspace(
         .collect::<BTreeMap<_, _>>();
     let effect_traces = tracked_effects
         .iter()
-        .map(|(effect, tracked)| (effect.clone(), engine.trace(tracked)))
+        .map(|(effect, tracked)| {
+            (
+                effect.clone(),
+                crate::trace::trace_effect(&graph, tracked, effect, trace_options),
+            )
+        })
         .collect::<BTreeMap<_, ConcreteTrace>>();
     let marker_claims = collect_marker_claims(
         artifact,
@@ -409,7 +405,7 @@ fn audited_path_from_root(
     root: FunctionId,
     target: FunctionId,
     is_opaque: impl Fn(FunctionId, &TrustPath) -> bool,
-    is_ignored_invocation: impl Fn(effect_tracing::InvocationId) -> bool,
+    is_ignored_invocation: impl Fn(crate::trace::InvocationId) -> bool,
 ) -> Option<InterpretedTrace> {
     path_from_root_until(
         artifact,
@@ -429,7 +425,7 @@ fn path_from_root_until(
     target: FunctionId,
     mut trust_path: TrustPath,
     is_opaque: impl Fn(FunctionId, &TrustPath) -> bool,
-    is_ignored_invocation: impl Fn(effect_tracing::InvocationId) -> bool,
+    is_ignored_invocation: impl Fn(crate::trace::InvocationId) -> bool,
 ) -> Option<InterpretedTrace> {
     if !is_opaque(target, &TrustPath::default()) {
         trust_path.enter(graph, target);
@@ -514,6 +510,7 @@ fn project_reverse_path(
                     target_path: Some(display_path(artifact, graph.stable_function(child))),
                 });
             }
+            PropagationEdge::Handoff => unreachable!("handoff edges are not graph paths"),
         }
     }
     trace
@@ -623,7 +620,7 @@ fn effect_marker_evidence(
 fn raw_call_marker_evidence(
     artifact: &ArtifactFacts,
     graph: &InvocationGraph,
-    invocation: effect_tracing::InvocationId,
+    invocation: crate::trace::InvocationId,
     call: crate::artifact::CallId,
     kind: AnnotationFactKind,
     probing: AnnotationProbingFact,
@@ -641,7 +638,7 @@ fn raw_call_marker_evidence(
 fn obligation_marker_evidence(
     artifact: &ArtifactFacts,
     graph: &InvocationGraph,
-    source_invocation: Option<effect_tracing::InvocationId>,
+    source_invocation: Option<crate::trace::InvocationId>,
     source_calls: impl IntoIterator<Item = crate::artifact::CallId>,
     kind: AnnotationFactKind,
     probing: AnnotationProbingFact,
@@ -668,7 +665,7 @@ fn concrete_findings(
     metadata: &EffectMetadata,
     concrete: &crate::effects::concrete::ConcreteEffect<'_>,
     trace: &ConcreteTrace,
-    root_function: effect_tracing::FunctionId,
+    root_function: crate::trace::FunctionId,
     marker_probing: AnnotationProbingFact,
 ) -> Vec<InterpretedFinding> {
     let effect_key = &metadata.key;
@@ -780,7 +777,7 @@ fn justified_undocumented_invocation_findings(
     metadata: &EffectMetadata,
     concrete: &crate::effects::concrete::ConcreteEffect<'_>,
     trace: &ConcreteTrace,
-    root_function: effect_tracing::FunctionId,
+    root_function: crate::trace::FunctionId,
 ) -> Vec<InterpretedFinding> {
     trace
         .handled()
@@ -831,7 +828,7 @@ fn undocumented_invocation_finding(
     graph: &InvocationGraph,
     metadata: &EffectMetadata,
     source: &InvocationSourceBranch,
-    invocation: effect_tracing::InvocationId,
+    invocation: crate::trace::InvocationId,
     trace: InterpretedTrace,
 ) -> Option<InterpretedFinding> {
     let edge = source.edge();
@@ -866,12 +863,12 @@ fn unresolved_call_target_findings(
     artifact: &ArtifactFacts,
     graph: &InvocationGraph,
     annotations: &AnnotationIndex,
-    root_function: effect_tracing::FunctionId,
+    root_function: crate::trace::FunctionId,
     metadata: &EffectMetadata,
     config: &EffectConfig,
     namespaces: &DefinitionNamespaceIndex,
     is_opaque: impl Fn(FunctionId, &TrustPath) -> bool + Copy,
-    is_ignored_invocation: impl Fn(effect_tracing::InvocationId) -> bool + Copy,
+    is_ignored_invocation: impl Fn(crate::trace::InvocationId) -> bool + Copy,
 ) -> Vec<InterpretedFinding> {
     graph
         .invocations()
@@ -1052,7 +1049,7 @@ fn obligation_findings<C, O: Clone, S, T>(
     tracked: &TrackedEffect<'_, '_, C>,
     metadata: &EffectMetadata,
     trace: &EffectTrace<TrackedOrigin<O>, TrackedState<S>, TrackedTermination<T>>,
-    root_function: effect_tracing::FunctionId,
+    root_function: crate::trace::FunctionId,
     root: &InterpretationRoot,
     marker_probing: AnnotationProbingFact,
 ) -> Vec<InterpretedFinding> {
@@ -1221,7 +1218,7 @@ fn invocation_source_has_contract(
 
 fn active_root_nodes<O: Clone, S, T>(
     trace: &EffectTrace<O, S, T>,
-    root: effect_tracing::FunctionId,
+    root: crate::trace::FunctionId,
 ) -> impl Iterator<Item = usize> + '_ {
     let handled_at_root = trace
         .handled()
@@ -1428,11 +1425,11 @@ fn trace_limit_reasons<O: Clone, S, T>(
 ) -> Vec<IncompleteReason> {
     [
         (
-            effect_tracing::UnknownBoundaryKind::TraceDepth,
+            crate::trace::UnknownBoundaryKind::TraceDepth,
             TraceLimitValue::Depth(options.max_depth),
         ),
         (
-            effect_tracing::UnknownBoundaryKind::TraceStateBudget,
+            crate::trace::UnknownBoundaryKind::TraceStateBudget,
             TraceLimitValue::StateBudget(options.state_budget),
         ),
     ]
@@ -1484,7 +1481,7 @@ fn trace_frontier<O: Clone, S, T>(
     graph: &InvocationGraph,
     trace: &EffectTrace<O, S, T>,
     roots: &[FunctionId],
-    node: Option<effect_tracing::TraceNodeId>,
+    node: Option<crate::trace::TraceNodeId>,
     function: FunctionId,
 ) -> Option<TraceFrontier> {
     let mut path = roots
@@ -1518,13 +1515,12 @@ fn trace_path<O: Clone, S, T>(
     let mut steps = Vec::new();
     let mut seen = BTreeSet::new();
     while seen.insert(node) {
-        let Some(edge) = nodes[node]
-            .predecessors()
-            .min_by_key(|edge| edge.index())
-            .map(|edge| edges[edge.index()])
-        else {
+        let Some(edge) = nodes[node].predecessor().map(|edge| edges[edge.index()]) else {
             break;
         };
+        if edge.propagation() == PropagationEdge::Handoff {
+            break;
+        }
         if let PropagationEdge::Invocation(invocation) = edge.propagation() {
             let target = nodes[edge.from().index()].function();
             if let Some(source) = graph.source_edge(invocation, target) {

@@ -2,7 +2,7 @@
 
 use std::collections::BTreeMap;
 
-use effect_tracing::{EffectTrace, FunctionId, TerminationSite, TraceNodeId};
+use crate::trace::{EffectTrace, FunctionId, TerminationSite, TraceNodeId};
 
 use crate::annotations::{AnnotationId, AnnotationIndex};
 use crate::artifact::{ArtifactFacts, EffectId, EffectKey, FunctionId as StableFunctionId};
@@ -23,7 +23,7 @@ use super::{
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub(super) enum SourceEffectGroup {
-    Invocation(effect_tracing::InvocationId, crate::artifact::CallId),
+    Invocation(crate::trace::InvocationId, crate::artifact::CallId),
     Operation(StableFunctionId, crate::artifact::EffectGroupId),
     StandaloneOperation(StableFunctionId, EffectId),
 }
@@ -43,7 +43,7 @@ pub(super) enum MarkerWitness {
     },
     Obligation {
         effect: EffectKey,
-        invocation: effect_tracing::InvocationId,
+        invocation: crate::trace::InvocationId,
         node: TraceNodeId,
     },
 }
@@ -52,7 +52,7 @@ pub(super) enum MarkerWitness {
 pub(super) enum MarkerTraceSite {
     Source,
     Invocation {
-        invocation: effect_tracing::InvocationId,
+        invocation: crate::trace::InvocationId,
         node: TraceNodeId,
     },
 }
@@ -355,7 +355,7 @@ fn obligation_marker_projection<O: Clone, S, T>(
     obligations: &ObligationTracker<'_>,
     trace: &EffectTrace<TrackedOrigin<O>, TrackedState<S>, TrackedTermination<T>>,
     root_function: FunctionId,
-    invocation: effect_tracing::InvocationId,
+    invocation: crate::trace::InvocationId,
     node: TraceNodeId,
     effect: &EffectKey,
 ) -> Option<(StableFunctionId, InterpretedTrace)> {
@@ -389,11 +389,11 @@ fn marker_invocation_projection<O: Clone, S, T>(
     graph: &InvocationGraph,
     effect_trace: &EffectTrace<O, S, T>,
     root_function: FunctionId,
-    invocation: effect_tracing::InvocationId,
+    invocation: crate::trace::InvocationId,
     node: TraceNodeId,
     policy: MarkerTraversalPolicy<
         impl Fn(FunctionId, &TrustPath) -> bool,
-        impl Fn(effect_tracing::InvocationId) -> bool,
+        impl Fn(crate::trace::InvocationId) -> bool,
     >,
 ) -> Option<(StableFunctionId, InterpretedTrace)> {
     let function = graph.invocation(invocation).caller();
@@ -464,7 +464,7 @@ pub(super) fn obligation_effect_groups(
     graph: &InvocationGraph,
     concrete: Option<&crate::effects::concrete::ConcreteEffect<'_>>,
     effect_key: &EffectKey,
-    invocation: effect_tracing::InvocationId,
+    invocation: crate::trace::InvocationId,
     calls: impl IntoIterator<Item = crate::artifact::CallId>,
 ) -> Vec<SourceEffectGroup> {
     let owner = graph.stable_function(graph.invocation(invocation).caller());
@@ -527,7 +527,7 @@ fn append_concrete_origin(
 fn append_invocation_source(
     artifact: &ArtifactFacts,
     graph: &InvocationGraph,
-    invocation: effect_tracing::InvocationId,
+    invocation: crate::trace::InvocationId,
     source: &InvocationSourceBranch,
     trace: &mut InterpretedTrace,
 ) {

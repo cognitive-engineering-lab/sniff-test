@@ -321,7 +321,7 @@ impl Default for EffectSelection {
 
 /// One raw call branch that actually produced an invocation-level effect.
 ///
-/// Several rustc edges can share one source [`effect_tracing::InvocationId`].
+/// Several rustc edges can share one source [`crate::trace::InvocationId`].
 /// The engine keeps that source identity grouped, while reporting uses these
 /// branches to avoid borrowing an unrelated target, span, or contract.
 #[derive(Clone, Debug)]

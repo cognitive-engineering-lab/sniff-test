@@ -1,8 +1,8 @@
 use super::ReportEffect;
 use super::{
-    EffectEngine, Panic, Safety, annotation_probing_fact, append_call_trace,
-    effect_marker_evidence, invocation_source_has_contract, obligation_marker_evidence,
-    raw_call_marker_evidence, same_source_finding, trace_workspace,
+    Panic, Safety, annotation_probing_fact, append_call_trace, effect_marker_evidence,
+    invocation_source_has_contract, obligation_marker_evidence, raw_call_marker_evidence,
+    same_source_finding, trace_workspace,
 };
 use crate::annotations::AnnotationIndex;
 use crate::artifact::{
@@ -84,6 +84,10 @@ enum ContractBoundaryScenario {
     NestedOperation,
     DocumentationOnly,
     CallerContract,
+    DocumentationChain,
+    DistinctOperations,
+    ContractCycle,
+    BudgetAcrossHandoff,
 }
 
 #[allow(
@@ -94,13 +98,23 @@ fn contract_boundary_trace(
     scenario: ContractBoundaryScenario,
 ) -> (super::ConcreteTrace, ArtifactFacts) {
     let source_in_callee = matches!(scenario, ContractBoundaryScenario::NestedOperation);
-    let include_operation = !matches!(scenario, ContractBoundaryScenario::DocumentationOnly);
+    let include_operation = !matches!(
+        scenario,
+        ContractBoundaryScenario::DocumentationOnly | ContractBoundaryScenario::DocumentationChain
+    );
     let justify_source = matches!(scenario, ContractBoundaryScenario::JustifiedOperation);
-    let document_caller = matches!(scenario, ContractBoundaryScenario::CallerContract);
+    let document_caller = matches!(
+        scenario,
+        ContractBoundaryScenario::CallerContract
+            | ContractBoundaryScenario::DocumentationChain
+            | ContractBoundaryScenario::ContractCycle
+    );
     let max_depth = if source_in_callee { 1 } else { 3 };
     let root = stable_function(9_970);
     let documented = stable_function(9_971);
-    let source = if source_in_callee {
+    let source = if matches!(scenario, ContractBoundaryScenario::ContractCycle) {
+        root
+    } else if source_in_callee {
         stable_function(9_972)
     } else {
         documented
@@ -147,13 +161,17 @@ fn contract_boundary_trace(
     functions.push(body(
         documented,
         "sample::documented",
-        if source_in_callee {
+        if source_in_callee || matches!(scenario, ContractBoundaryScenario::ContractCycle) {
             vec![call(1, target(source, "sample::source"))]
         } else {
             Vec::new()
         },
         if source_in_callee || !include_operation {
             Vec::new()
+        } else if matches!(scenario, ContractBoundaryScenario::DistinctOperations) {
+            let mut second = operation.clone();
+            second.id = EffectId::new(1);
+            vec![operation.clone(), second]
         } else {
             vec![operation.clone()]
         },
@@ -204,16 +222,23 @@ fn contract_boundary_trace(
             concrete.ignored_invocations(),
         )],
     );
-    let obligation_graph = graph.obligation_graph();
-    let engine = EffectEngine::with_options(
-        &obligation_graph,
-        effect_tracing::TraceOptions {
-            max_depth,
-            state_budget: 100,
-        },
-    );
     let tracked = super::TrackedEffect::new(&concrete, &obligations, ReportEffect::Safety.key());
-    (engine.trace(&tracked), artifact)
+    (
+        crate::trace::trace_effect(
+            &graph,
+            &tracked,
+            &ReportEffect::Safety.key(),
+            crate::trace::TraceOptions {
+                max_depth,
+                state_budget: if matches!(scenario, ContractBoundaryScenario::BudgetAcrossHandoff) {
+                    1
+                } else {
+                    100
+                },
+            },
+        ),
+        artifact,
+    )
 }
 
 #[test]
@@ -284,7 +309,7 @@ fn locally_justified_operation_still_exposes_documented_contract() {
 }
 
 #[test]
-fn contract_seed_has_its_own_depth_when_operation_is_nested() {
+fn handoff_inherits_depth_when_operation_is_nested() {
     let (trace, _) = contract_boundary_trace(ContractBoundaryScenario::NestedOperation);
     assert!(trace.handled().any(|handled| matches!(
         handled.termination(),
@@ -295,7 +320,23 @@ fn contract_seed_has_its_own_depth_when_operation_is_nested() {
             .nodes()
             .filter(|node| matches!(node.origin(), super::TrackedOrigin::Contract(_)))
             .count(),
-        2
+        1
+    );
+    assert!(
+        trace
+            .unknown()
+            .any(|unknown| unknown.boundary().kind()
+                == crate::trace::UnknownBoundaryKind::TraceDepth)
+    );
+}
+
+#[test]
+fn state_budget_is_shared_by_concrete_and_obligation_passes() {
+    let (trace, _) = contract_boundary_trace(ContractBoundaryScenario::BudgetAcrossHandoff);
+    assert_eq!(trace.nodes().count(), 1);
+    assert!(
+        trace.unknown().any(|unknown| unknown.boundary().kind()
+            == crate::trace::UnknownBoundaryKind::TraceStateBudget)
     );
 }
 
@@ -327,6 +368,66 @@ fn caller_contract_stops_prior_obligation_and_starts_its_own() {
             .count(),
         3
     );
+}
+
+#[test]
+fn independent_contract_reaches_caller_contract_before_its_seed() {
+    let (trace, _) = contract_boundary_trace(ContractBoundaryScenario::DocumentationChain);
+    assert_eq!(
+        trace
+            .nodes()
+            .filter(|node| matches!(node.origin(), super::TrackedOrigin::Contract(_)))
+            .count(),
+        3,
+    );
+    assert!(trace.handled().any(|handled| matches!(
+        handled.termination(),
+        super::TrackedTermination::Obligation(
+            crate::effects::obligation::ObligationTermination::ContractBoundary
+        )
+    )));
+}
+
+#[test]
+fn distinct_operations_keep_distinct_contract_handoffs() {
+    let (trace, _) = contract_boundary_trace(ContractBoundaryScenario::DistinctOperations);
+    assert_eq!(
+        trace
+            .handled()
+            .filter(|handled| matches!(
+                handled.termination(),
+                super::TrackedTermination::ContractBoundary
+            ))
+            .count(),
+        2
+    );
+    assert_eq!(
+        trace
+            .nodes()
+            .filter(
+                |node| matches!(node.origin(), super::TrackedOrigin::Contract(_))
+                    && node.predecessor().is_some_and(|edge| trace
+                        .edges()
+                        .nth(edge.index())
+                        .is_some_and(
+                            |edge| edge.propagation() == crate::trace::PropagationEdge::Handoff
+                        ))
+            )
+            .count(),
+        2
+    );
+}
+
+#[test]
+fn contract_handoffs_stop_at_a_contract_cycle() {
+    let (trace, _) = contract_boundary_trace(ContractBoundaryScenario::ContractCycle);
+    assert!(trace.handled().any(|handled| matches!(
+        handled.termination(),
+        super::TrackedTermination::Obligation(
+            crate::effects::obligation::ObligationTermination::ContractBoundary
+        )
+    )));
+    assert!(trace.nodes().count() < 100);
 }
 
 #[test]
@@ -381,8 +482,12 @@ fn registered_effect_gets_default_concrete_reporting_without_an_adapter() {
         &obligations,
         EffectKey::new(Allocation::EFFECT_NAME),
     );
-    let obligation_graph = graph.obligation_graph();
-    let trace = EffectEngine::new(&obligation_graph).trace(&tracked);
+    let trace = crate::trace::trace_effect(
+        &graph,
+        &tracked,
+        &EffectKey::new(Allocation::EFFECT_NAME),
+        crate::trace::TraceOptions::default(),
+    );
     let findings = super::concrete_findings(
         &artifact,
         &graph,
@@ -475,8 +580,12 @@ fn invocation_fact_controls_documentation_policy_for_a_registered_effect() {
             &obligations,
             EffectKey::new(Allocation::EFFECT_NAME),
         );
-        let obligation_graph = graph.obligation_graph();
-        let trace = EffectEngine::new(&obligation_graph).trace(&tracked);
+        let trace = crate::trace::trace_effect(
+            &graph,
+            &tracked,
+            &EffectKey::new(Allocation::EFFECT_NAME),
+            crate::trace::TraceOptions::default(),
+        );
         super::concrete_findings(
             &artifact,
             &graph,
@@ -1823,11 +1932,19 @@ fn grouped_comment_marker_claims_each_relevant_contract_branch() {
             )
         })
         .collect::<std::collections::BTreeMap<_, _>>();
-    let obligation_graph = graph.obligation_graph();
-    let engine = EffectEngine::new(&obligation_graph);
     let traces = tracked_effects
         .iter()
-        .map(|(effect, tracked)| (effect.clone(), engine.trace(tracked)))
+        .map(|(effect, tracked)| {
+            (
+                effect.clone(),
+                crate::trace::trace_effect(
+                    &graph,
+                    tracked,
+                    effect,
+                    crate::trace::TraceOptions::default(),
+                ),
+            )
+        })
         .collect::<std::collections::BTreeMap<_, super::ConcreteTrace>>();
     let tracked_safety = tracked_effects.get(&safety_key).expect("tracked safety");
     let safety_trace = traces.get(&safety_key).expect("safety trace");
@@ -2893,7 +3010,23 @@ fn ignored_macro_invocation_is_local_to_the_caller_report_root() {
         config.effect("panic"),
     )
     .expect("panic effect");
-    let trace = EffectEngine::new(&graph).trace(&panic);
+    let obligations = super::ObligationTracker::probe(
+        &graph,
+        &annotations,
+        config.analysis.effect_doc_matching,
+        [super::ObligationEffectPolicy::new(
+            ReportEffect::Panic.key(),
+            panic.trusted_functions(),
+            panic.ignored_invocations(),
+        )],
+    );
+    let tracked = super::TrackedEffect::new(&panic, &obligations, ReportEffect::Panic.key());
+    let trace = crate::trace::trace_effect(
+        &graph,
+        &tracked,
+        &ReportEffect::Panic.key(),
+        crate::trace::TraceOptions::default(),
+    );
 
     assert_eq!(trace.handled().count(), 1);
     assert_eq!(trace.escaped().count(), 0);

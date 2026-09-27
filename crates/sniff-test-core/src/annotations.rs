@@ -8,7 +8,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 
-use effect_tracing::InvocationId;
+use crate::trace::InvocationId;
 
 use crate::artifact::{
     AnnotationProbingFact, AnnotationRole, AnnotationSatisfactionFact, AnnotationTargetFact,
@@ -325,7 +325,7 @@ impl AnnotationIndex {
     pub fn effective_contract(
         &self,
         graph: &InvocationGraph,
-        function: effect_tracing::FunctionId,
+        function: crate::trace::FunctionId,
         effect: &EffectKey,
     ) -> Option<&FunctionContractAnnotation> {
         let stable_function = graph.stable_function(function);

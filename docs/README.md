@@ -458,7 +458,7 @@ deny-level effect gating.
 
 ## Crate boundaries
 
-- `effect-tracing` propagates effects through a compiler-independent graph.
+- `sniff-test-core` propagates concrete effects and documentation obligations through two worklists over its invocation graph.
 - `reachability` extracts rustc reachability edges.
 - `sniff-test-core` extracts and caches artifact facts, tracks obligations, and
   produces structured effect interpretations. It defines the interfaces that

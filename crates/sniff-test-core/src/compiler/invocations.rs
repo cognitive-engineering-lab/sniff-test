@@ -1,9 +1,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 
-use effect_tracing::{
-    EffectGraph, FunctionId, InvocationId, TransparentBodyEdgeId, UnknownBoundary,
-};
+use crate::trace::{FunctionId, InvocationId, TransparentBodyEdgeId};
 
 use crate::artifact::same_call_source_site;
 use crate::artifact::{
@@ -154,7 +152,7 @@ impl Invocation {
     }
 }
 
-/// Minimal reverse invocation view consumed by [`effect_tracing::EffectEngine`].
+/// Reverse invocation view used by the concrete and obligation worklists.
 pub struct InvocationGraph {
     stable_functions: Vec<StableFunctionId>,
     body_functions: BTreeSet<StableFunctionId>,
@@ -163,7 +161,7 @@ pub struct InvocationGraph {
     invocations: Vec<Invocation>,
     invocations_by_caller_definition: BTreeMap<StableDefPathHash, Vec<InvocationId>>,
     incoming: Vec<Vec<InvocationId>>,
-    comment_incoming: Vec<Vec<InvocationId>>,
+    contract_visible_incoming: Vec<Vec<InvocationId>>,
     declaration_fallbacks: Vec<Option<StableFunctionId>>,
     transparent_parents: Vec<Vec<TransparentBodyEdgeId>>,
     transparent_parent: Vec<FunctionId>,
@@ -191,7 +189,7 @@ impl InvocationGraph {
         }
         let mut graph = Self {
             incoming: vec![Vec::new(); stable_functions.len()],
-            comment_incoming: vec![Vec::new(); stable_functions.len()],
+            contract_visible_incoming: vec![Vec::new(); stable_functions.len()],
             declaration_fallbacks: vec![None; stable_functions.len()],
             transparent_parents: vec![Vec::new(); stable_functions.len()],
             stable_functions,
@@ -331,13 +329,6 @@ impl InvocationGraph {
             }
         }
         Ok(())
-    }
-
-    /// A graph view that lets documentation-derived obligation carriers cross
-    /// declaration edges. Concrete carriers reject declaration-only edges.
-    #[must_use]
-    pub const fn obligation_graph(&self) -> ObligationInvocationGraph<'_> {
-        ObligationInvocationGraph { graph: self }
     }
 
     /// Finds monomorphized/defining projections of one physical source call.
@@ -585,14 +576,14 @@ impl InvocationGraph {
                 self.incoming[function.index()].push(id);
             }
             if let CallTarget::Function(function) = target
-                && !self.comment_incoming[function.index()].contains(&id)
+                && !self.contract_visible_incoming[function.index()].contains(&id)
             {
-                self.comment_incoming[function.index()].push(id);
+                self.contract_visible_incoming[function.index()].push(id);
             }
         }
         for declaration in &invocation.declarations {
-            if !self.comment_incoming[declaration.index()].contains(&id) {
-                self.comment_incoming[declaration.index()].push(id);
+            if !self.contract_visible_incoming[declaration.index()].contains(&id) {
+                self.contract_visible_incoming[declaration.index()].push(id);
             }
         }
         for call in &invocation.raw_calls {
@@ -641,52 +632,31 @@ fn collect_macro_provenance_aliases(raw_edges: &[CallFact]) -> Vec<MacroExpansio
     provenance
 }
 
-impl EffectGraph for InvocationGraph {
-    fn incoming_invocations(&self, function: FunctionId) -> &[InvocationId] {
+impl InvocationGraph {
+    #[must_use]
+    pub fn incoming_invocations(&self, function: FunctionId) -> &[InvocationId] {
         &self.incoming[function.index()]
     }
 
-    fn caller(&self, invocation: InvocationId) -> FunctionId {
+    /// Includes calls to concrete targets and calls through contract declarations.
+    #[must_use]
+    pub fn incoming_contract_visible_invocations(&self, function: FunctionId) -> &[InvocationId] {
+        &self.contract_visible_incoming[function.index()]
+    }
+
+    #[must_use]
+    pub fn caller(&self, invocation: InvocationId) -> FunctionId {
         self.invocation(invocation).caller
     }
 
-    fn transparent_parents(&self, function: FunctionId) -> &[TransparentBodyEdgeId] {
+    #[must_use]
+    pub fn transparent_parents(&self, function: FunctionId) -> &[TransparentBodyEdgeId] {
         &self.transparent_parents[function.index()]
     }
 
-    fn transparent_parent(&self, edge: TransparentBodyEdgeId) -> FunctionId {
+    #[must_use]
+    pub fn transparent_parent(&self, edge: TransparentBodyEdgeId) -> FunctionId {
         self.transparent_parent[edge.index()]
-    }
-
-    fn unknown_boundaries(&self, _function: FunctionId) -> &[UnknownBoundary] {
-        &[]
-    }
-}
-
-/// Contract-visible extension of the minimal invocation graph.
-pub struct ObligationInvocationGraph<'graph> {
-    graph: &'graph InvocationGraph,
-}
-
-impl EffectGraph for ObligationInvocationGraph<'_> {
-    fn incoming_invocations(&self, function: FunctionId) -> &[InvocationId] {
-        &self.graph.comment_incoming[function.index()]
-    }
-
-    fn caller(&self, invocation: InvocationId) -> FunctionId {
-        self.graph.caller(invocation)
-    }
-
-    fn transparent_parents(&self, function: FunctionId) -> &[TransparentBodyEdgeId] {
-        self.graph.transparent_parents(function)
-    }
-
-    fn transparent_parent(&self, edge: TransparentBodyEdgeId) -> FunctionId {
-        self.graph.transparent_parent(edge)
-    }
-
-    fn unknown_boundaries(&self, function: FunctionId) -> &[UnknownBoundary] {
-        self.graph.unknown_boundaries(function)
     }
 }
 
@@ -858,7 +828,6 @@ impl std::error::Error for InvocationGraphError {}
 
 #[cfg(test)]
 mod tests {
-    use effect_tracing::{EffectEngine, EffectGraph};
 
     use crate::annotations::AnnotationIndex;
     use crate::artifact::{
@@ -1112,7 +1081,7 @@ mod tests {
             "a declaration is not an implementation edge for PanicEffect or SafetyEffect"
         );
         assert_eq!(
-            graph.obligation_graph().incoming_invocations(trait_method),
+            graph.incoming_contract_visible_invocations(trait_method),
             &[dyn_call],
             "obligation tracking may propagate the declaration's surface contract"
         );
@@ -1167,7 +1136,7 @@ mod tests {
             "a declaration is not a PanicEffect or SafetyEffect target"
         );
         assert_eq!(
-            graph.obligation_graph().incoming_invocations(declaration),
+            graph.incoming_contract_visible_invocations(declaration),
             &[invocation],
             "obligation tracking may propagate the standalone declaration contract"
         );
@@ -1313,9 +1282,38 @@ mod tests {
             crate::config::test_config().effect("panic"),
         )
         .expect("panic effect");
-        let trace = EffectEngine::new(&graph).trace(&panic);
+        let config = crate::config::test_config();
+        let obligations = crate::effects::obligation::ObligationTracker::probe(
+            &graph,
+            &annotations,
+            config.analysis.effect_doc_matching,
+            [crate::effects::obligation::ObligationEffectPolicy::new(
+                EffectKey::new("panic"),
+                panic.trusted_functions(),
+                panic.ignored_invocations(),
+            )],
+        );
+        let tracked = crate::effects::obligation::TrackedEffect::new(
+            &panic,
+            &obligations,
+            EffectKey::new("panic"),
+        );
+        let trace = crate::trace::trace_effect(
+            &graph,
+            &tracked,
+            &EffectKey::new("panic"),
+            crate::trace::TraceOptions::default(),
+        );
 
-        trace.handled().next().map(|handled| *handled.termination())
+        trace
+            .handled()
+            .next()
+            .and_then(|handled| match handled.termination() {
+                crate::effects::obligation::TrackedTermination::Concrete(termination) => {
+                    Some(*termination)
+                }
+                _ => None,
+            })
     }
 
     #[test]

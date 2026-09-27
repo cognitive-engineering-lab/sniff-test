@@ -2,10 +2,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use effect_tracing::{
-    EffectSeed, FunctionId, InvocationId, Propagation, PropagationEdge, TraceCx, TracePolicy,
-    TraceSite,
-};
+use crate::trace::{EffectSeed, FunctionId, InvocationId, Propagation, PropagationEdge, TraceSite};
 
 use crate::annotations::{AnnotationId, AnnotationIndex, SiteCommentAnnotation};
 use crate::artifact::{
@@ -15,7 +12,6 @@ use crate::artifact::{
 use crate::compiler::invocations::InvocationGraph;
 use crate::path_patterns::PathPatterns;
 
-use super::obligation::ConcreteState;
 use super::trust::TrustPath;
 use super::{Effect, InvocationSourceBranch, ProbeError};
 use crate::config::EffectConfig;
@@ -375,12 +371,6 @@ impl ConcreteEffectState {
     }
 }
 
-impl ConcreteState for ConcreteEffectState {
-    fn current_function(&self) -> FunctionId {
-        self.current_function
-    }
-}
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum ConcreteTermination {
     Justification(AnnotationId),
@@ -529,21 +519,19 @@ impl ConcreteEffect<'_> {
     }
 }
 
-impl TracePolicy for ConcreteEffect<'_> {
-    type Origin = ConcreteSource;
-    type State = ConcreteEffectState;
-    type Termination = ConcreteTermination;
-
-    fn sources(&self) -> impl Iterator<Item = EffectSeed<Self::Origin, Self::State>> + '_ {
+impl ConcreteEffect<'_> {
+    pub fn sources(
+        &self,
+    ) -> impl Iterator<Item = EffectSeed<ConcreteSource, ConcreteEffectState>> + '_ {
         self.seeds.iter().cloned()
     }
 
-    fn propagate(
+    #[must_use]
+    pub fn propagate(
         &self,
-        cx: &TraceCx<'_>,
-        state: &Self::State,
+        state: &ConcreteEffectState,
         edge: PropagationEdge,
-    ) -> Propagation<Self::State> {
+    ) -> Propagation<ConcreteEffectState> {
         let mut next = state.clone();
         next.invocation_justification = None;
         next.current_function = match edge {
@@ -552,7 +540,8 @@ impl TracePolicy for ConcreteEffect<'_> {
                     self.invocation_justification(invocation, state.current_function);
                 self.graph.invocation(invocation).caller()
             }
-            PropagationEdge::TransparentBody(edge) => cx.graph().transparent_parent(edge),
+            PropagationEdge::TransparentBody(edge) => self.graph.transparent_parent(edge),
+            PropagationEdge::Handoff => unreachable!("handoff edges are not propagated"),
         };
         if !self.is_trusted_function(next.current_function) {
             next.trust_path.enter(self.graph, next.current_function);
@@ -560,12 +549,11 @@ impl TracePolicy for ConcreteEffect<'_> {
         Propagation::Follow(next)
     }
 
-    fn terminate(
+    pub fn terminate(
         &self,
-        _cx: &TraceCx<'_>,
-        state: &Self::State,
-        site: TraceSite<'_, Self::Origin>,
-    ) -> Option<Self::Termination> {
+        state: &ConcreteEffectState,
+        site: TraceSite<'_, ConcreteSource>,
+    ) -> Option<ConcreteTermination> {
         match site {
             TraceSite::Source(origin) => {
                 if self.macro_ignored_sources.contains(origin) {

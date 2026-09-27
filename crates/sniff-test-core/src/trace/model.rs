@@ -1,4 +1,4 @@
-use crate::{FunctionId, PropagationEdge, UnknownBoundary};
+use crate::trace::{FunctionId, PropagationEdge, UnknownBoundary};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct TraceNodeId(pub(crate) usize);
@@ -25,7 +25,8 @@ pub struct TraceNode<O, S> {
     pub(crate) origin: O,
     pub(crate) function: FunctionId,
     pub(crate) state: S,
-    pub(crate) predecessors: Vec<TraceEdgeId>,
+    pub(crate) depth: usize,
+    pub(crate) predecessor: Option<TraceEdgeId>,
 }
 
 impl<O, S> TraceNode<O, S> {
@@ -44,8 +45,14 @@ impl<O, S> TraceNode<O, S> {
         &self.state
     }
 
-    pub fn predecessors(&self) -> impl ExactSizeIterator<Item = TraceEdgeId> + '_ {
-        self.predecessors.iter().copied()
+    #[must_use]
+    pub const fn depth(&self) -> usize {
+        self.depth
+    }
+
+    #[must_use]
+    pub const fn predecessor(&self) -> Option<TraceEdgeId> {
+        self.predecessor
     }
 }
 
@@ -77,7 +84,7 @@ impl TraceEdge {
 pub enum TerminationSite<O> {
     Source(O),
     Function(FunctionId),
-    Invocation(crate::InvocationId),
+    Invocation(crate::trace::InvocationId),
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]

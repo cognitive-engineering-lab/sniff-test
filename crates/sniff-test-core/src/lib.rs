@@ -2,8 +2,7 @@
 //!
 //! The core extracts versioned facts from rustc, tracks obligations through
 //! invocations, and returns structured findings. Effect definitions are
-//! supplied by callers. Graph propagation remains in `effect-tracing`, and
-//! output rendering remains in `sniff-test-diagnostics`.
+//! supplied by callers. Output rendering remains in `sniff-test-diagnostics`.
 //!
 //! Artifact facts store policy-neutral semantic facts, such as call edges,
 //! compiler-assert kinds, unsafe operations, contracts, and source markers,
@@ -42,4 +41,5 @@ pub mod report;
 pub mod report_model;
 pub mod report_roots;
 pub mod source_markers;
+pub mod trace;
 pub mod workspace;
