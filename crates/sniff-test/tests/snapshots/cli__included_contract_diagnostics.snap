@@ -25,6 +25,12 @@ note: `checked` has documented `# Panics` obligation
    |
  1 | # Panics
    | ^^^^^^^^
+note: `checked` is declared here
+  --> src/lib.rs:2:5
+   |
+ 2 | /     #[doc = include_str!("../doc/panic.md")]
+ 3 | |     fn checked(&self, valid: bool);
+   | |___________________________________^
 note: the called implementation of `checked` is here
   --> src/lib.rs:9:5
    |

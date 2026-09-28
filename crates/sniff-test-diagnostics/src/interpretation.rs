@@ -1012,20 +1012,27 @@ fn add_contract_note(
                 ));
             }
         }
-        Some(ObligationDocSource::External(span)) => {
+        Some(ObligationDocSource::External {
+            heading: span,
+            declaration,
+        }) => {
             diagnostic
                 .messages
                 .push(DiagnosticMessage::SpanNote(span, note));
-            if let Some(prototype) = invoked_span.or(declaration_span) {
-                let name = compact_function_name(&target.path);
-                let location = if Some(prototype) != declaration_span {
-                    format!("the called implementation of `{name}` is here")
-                } else {
-                    format!("`{name}` is declared here")
-                };
-                diagnostic
-                    .messages
-                    .push(DiagnosticMessage::SpanNote(prototype, location));
+            let name = compact_function_name(&target.path);
+            if let Some(prototype) = declaration.or(declaration_span) {
+                diagnostic.messages.push(DiagnosticMessage::SpanNote(
+                    prototype,
+                    format!("`{name}` is declared here"),
+                ));
+            }
+            if let Some(implementation) =
+                invoked_span.filter(|invoked| Some(*invoked) != declaration_span)
+            {
+                diagnostic.messages.push(DiagnosticMessage::SpanNote(
+                    implementation,
+                    format!("the called implementation of `{name}` is here"),
+                ));
             }
         }
         None => {
@@ -1047,7 +1054,10 @@ fn add_contract_note(
 
 enum ObligationDocSource {
     Inline(Span),
-    External(Span),
+    External {
+        heading: Span,
+        declaration: Option<Span>,
+    },
 }
 
 fn obligation_doc_source(
@@ -1072,13 +1082,14 @@ fn obligation_doc_source(
             break;
         }
     }
-    let docs = before.get(start..)?;
+    let docs_start = start;
+    let docs = before.get(docs_start..)?;
     for (offset, line) in lines_with_offsets(docs) {
         let trimmed = line.trim_start();
         if let Some(comment) = trimmed.strip_prefix("///") {
             if let Some(heading_offset) = markdown_heading_offset(comment, heading) {
                 let prefix_len = line.len() - trimmed.len() + 3;
-                let heading_start = start + offset + prefix_len + heading_offset;
+                let heading_start = docs_start + offset + prefix_len + heading_offset;
                 return Some(ObligationDocSource::Inline(Span::with_root_ctxt(
                     file.start_pos + BytePos(u32::try_from(heading_start).ok()?),
                     function_span.hi(),
@@ -1087,8 +1098,8 @@ fn obligation_doc_source(
         }
     }
     let declaration_file = declaration_file?;
-    for (_, line) in lines_with_offsets(docs) {
-        if let Some(relative) = literal_include_str_path(line) {
+    for (attribute_offset, attribute_line) in lines_with_offsets(docs) {
+        if let Some(relative) = literal_include_str_path(attribute_line) {
             let path = declaration_file
                 .parent()?
                 .join(relative)
@@ -1105,10 +1116,19 @@ fn obligation_doc_source(
                 if let Some(heading_offset) = markdown_heading_offset(line, heading) {
                     let start = offset + heading_offset;
                     let end = offset + line.trim_end_matches(['\r', '\n']).len();
-                    return Some(ObligationDocSource::External(Span::with_root_ctxt(
+                    let heading = Span::with_root_ctxt(
                         included.start_pos + BytePos(u32::try_from(start).ok()?),
                         included.start_pos + BytePos(u32::try_from(end).ok()?),
-                    )));
+                    );
+                    let attribute_start = docs_start + attribute_offset + attribute_line.len()
+                        - attribute_line.trim_start().len();
+                    let declaration = u32::try_from(attribute_start).ok().map(|offset| {
+                        Span::with_root_ctxt(file.start_pos + BytePos(offset), function_span.hi())
+                    });
+                    return Some(ObligationDocSource::External {
+                        heading,
+                        declaration,
+                    });
                 }
             }
         }
