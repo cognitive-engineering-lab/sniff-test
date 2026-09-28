@@ -1,5 +1,6 @@
 //! Adapts effect-trace results to diagnostics and JSON findings.
 
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
 use rustc_hir::def_id::LOCAL_CRATE;
@@ -27,6 +28,7 @@ use sniff_test_core::workspace::ArtifactAnalysisGraph;
 use super::findings::{
     DiagnosticMessage, FULL_STACK_TRACE_HINT, Finding, FindingDiagnostic, FindingKind,
     FindingOwner, FindingTraceStepOrder, OwnerScope, SourceEvidence, compact_function_name,
+    top_level_path_segments,
 };
 use super::report::render_span;
 
@@ -592,7 +594,10 @@ impl EffectDiagnosticWriter<'_, '_, '_> {
                 format!("this may have {} effect", effect.key.as_str()),
             ));
         }
-        self.source_endpoint_note(effect);
+        if !self.show_full_stack_trace || self.finding.trace.steps.is_empty() {
+            self.source_endpoint_note(effect);
+        }
+        self.source_trace_notes();
         if contract {
             add_contract_note(
                 self.sources,
@@ -614,7 +619,6 @@ impl EffectDiagnosticWriter<'_, '_, '_> {
                 effect.key.as_str(),
                 self.source_evidence,
             );
-            self.source_trace_notes();
             return;
         }
         let dependency_effect = self
@@ -639,7 +643,6 @@ impl EffectDiagnosticWriter<'_, '_, '_> {
             effect.key.as_str(),
             self.source_evidence,
         );
-        self.source_trace_notes();
         if !dependency_effect {
             add_external_containment_guidance(
                 self.sources,
@@ -1599,10 +1602,11 @@ fn add_trace_notes(
     }
 
     if show_full_stack_trace {
+        let labels = trace_path_labels(trace);
         for (index, total, step) in full_trace_steps(trace) {
             let note = format!(
-                "effect trace step {index}/{total} (public root -> effect source): {}",
-                render_trace_step(step)
+                "effect trace step {index}/{total}: {}",
+                render_trace_step(step, &labels)
             );
             if let Some(span) = sources.resolve(step.source_range.as_ref()).0 {
                 diagnostic
@@ -1659,11 +1663,186 @@ fn full_trace_steps(
         .map(move |(index, step)| (index + 1, total, step))
 }
 
-fn render_trace_step(step: &InterpretedTraceStep) -> String {
+fn trace_path_labels(trace: &InterpretedTrace) -> BTreeMap<String, String> {
+    let displayed_paths = trace
+        .steps
+        .iter()
+        .flat_map(|step| {
+            std::iter::once(step.caller_path.as_str()).chain(
+                step.target_path
+                    .as_deref()
+                    .filter(|_| !matches!(step.kind, InterpretedTraceStepKind::EffectOperation)),
+            )
+        })
+        .map(str::to_owned)
+        .collect::<BTreeSet<_>>();
+    let candidates = displayed_paths
+        .iter()
+        .map(|path| (path.clone(), trace_label_candidates(path)))
+        .collect::<BTreeMap<_, _>>();
+    let mut selected = candidates
+        .keys()
+        .map(|path| (path.clone(), 0_usize))
+        .collect::<BTreeMap<_, _>>();
+    loop {
+        let mut counts = BTreeMap::<&str, usize>::new();
+        for (path, options) in &candidates {
+            let index = selected[path];
+            *counts.entry(&options[index]).or_default() += 1;
+        }
+        let mut changed = false;
+        for (path, options) in &candidates {
+            let index = &mut selected.get_mut(path).expect("every path has a selection");
+            if counts[options[**index].as_str()] > 1 && **index + 1 < options.len() {
+                **index += 1;
+                changed = true;
+            }
+        }
+        if !changed {
+            break;
+        }
+    }
+    candidates
+        .into_iter()
+        .map(|(path, options)| {
+            let label = options[selected[&path]].clone();
+            (path, label)
+        })
+        .collect()
+}
+
+fn trace_label_candidates(path: &str) -> Vec<String> {
+    let (prefix, bare_path) = path
+        .strip_prefix("macro ")
+        .map_or(("", path), |bare_path| ("macro ", bare_path));
+    let mut options = if let Some((receiver, trait_path, method)) = impl_method_parts(bare_path) {
+        let receiver = compact_type_path(receiver);
+        let method = method.to_owned();
+        let mut options = vec![
+            method.clone(),
+            format!("{receiver}::{method}"),
+            format!("{} for {receiver}::{method}", compact_type_path(trait_path)),
+        ];
+        options.push(bare_path.to_owned());
+        options
+    } else {
+        let segments = top_level_path_segments(bare_path);
+        (1..=segments.len())
+            .map(|length| segments[segments.len() - length..].join("::"))
+            .collect()
+    };
+    options = options
+        .into_iter()
+        .map(|option| format!("{prefix}{option}"))
+        .collect();
+    options.dedup();
+    options
+}
+
+fn impl_method_parts(path: &str) -> Option<(&str, &str, &str)> {
+    let start = if path.starts_with('<') {
+        0
+    } else {
+        path.find("::<impl ")? + 2
+    };
+    let end = matching_angle_end(path, start)?;
+    let method = path.get(end + 1..)?.strip_prefix("::")?;
+    let inner = path.get(start + 1..end)?;
+    if let Some(rest) = inner.strip_prefix("impl ") {
+        let split = top_level_keyword(rest, " for ")?;
+        Some((&rest[split + 5..], &rest[..split], method))
+    } else {
+        let split = top_level_keyword(inner, " as ")?;
+        Some((&inner[..split], &inner[split + 4..], method))
+    }
+}
+
+fn matching_angle_end(text: &str, start: usize) -> Option<usize> {
+    let mut depth = 0_usize;
+    for (offset, byte) in text.as_bytes().iter().enumerate().skip(start) {
+        match byte {
+            b'<' => depth += 1,
+            b'>' => {
+                depth = depth.checked_sub(1)?;
+                if depth == 0 {
+                    return Some(offset);
+                }
+            }
+            _ => {}
+        }
+    }
+    None
+}
+
+fn top_level_keyword(text: &str, keyword: &str) -> Option<usize> {
+    let mut depth = 0_usize;
+    for (offset, byte) in text.as_bytes().iter().enumerate() {
+        match byte {
+            b'<' => depth += 1,
+            b'>' => depth = depth.saturating_sub(1),
+            _ if depth == 0 && text.as_bytes()[offset..].starts_with(keyword.as_bytes()) => {
+                return Some(offset);
+            }
+            _ => {}
+        }
+    }
+    None
+}
+
+fn compact_type_path(path: &str) -> String {
+    let path = path.trim();
+    let (prefix, body) = ["&mut ", "&", "*const ", "*mut "]
+        .into_iter()
+        .find_map(|prefix| path.strip_prefix(prefix).map(|body| (prefix, body)))
+        .unwrap_or(("", path));
+    let Some(start) = body.find('<') else {
+        return format!(
+            "{prefix}{}",
+            top_level_path_segments(body).last().unwrap_or(&body)
+        );
+    };
+    let Some(end) = matching_angle_end(body, start) else {
+        return path.to_owned();
+    };
+    let base = body[..start].trim_end_matches("::");
+    let base = top_level_path_segments(base)
+        .last()
+        .copied()
+        .unwrap_or(base);
+    let arguments = &body[start + 1..end];
+    let mut parts = Vec::new();
+    let mut previous = 0;
+    let mut depth = 0_usize;
+    for (index, byte) in arguments.as_bytes().iter().enumerate() {
+        match byte {
+            b'<' => depth += 1,
+            b'>' => depth = depth.saturating_sub(1),
+            b',' if depth == 0 => {
+                parts.push(compact_type_path(&arguments[previous..index]));
+                previous = index + 1;
+            }
+            _ => {}
+        }
+    }
+    parts.push(compact_type_path(&arguments[previous..]));
+    format!("{prefix}{base}<{}>{}", parts.join(", "), &body[end + 1..])
+}
+
+fn compact_trace_path<'a>(path: &'a str, labels: &'a BTreeMap<String, String>) -> &'a str {
+    labels.get(path).map_or(path, String::as_str)
+}
+
+fn render_trace_step(step: &InterpretedTraceStep, labels: &BTreeMap<String, String>) -> String {
     let target = step.target_path.as_deref().unwrap_or("opaque boundary");
+    let caller = compact_trace_path(&step.caller_path, labels);
+    let target = if matches!(step.kind, InterpretedTraceStepKind::EffectOperation) {
+        target
+    } else {
+        compact_trace_path(target, labels)
+    };
     format!(
         "{} --{}-> {target}",
-        step.caller_path,
+        caller,
         trace_step_kind_label(step.kind)
     )
 }
@@ -1866,8 +2045,8 @@ mod tests {
         TraceLimit, add_missing_requirement_notes, exact_function_body_in,
         extern_paths_are_toolchain, external_containment_help, finding_description,
         full_trace_steps, incomplete_limit_presentation, missing_body_diagnostic_message,
-        select_marker_call, source_evidence_help, source_evidence_reason, unresolved_action,
-        unresolved_coverage_note,
+        render_trace_step, select_marker_call, source_evidence_help, source_evidence_reason,
+        trace_label_candidates, trace_path_labels, unresolved_action, unresolved_coverage_note,
     };
 
     #[test]
@@ -2286,6 +2465,114 @@ mod tests {
             .collect::<Vec<_>>();
 
         assert_eq!(steps, [(1, 2, "app::root"), (2, 2, "app::helper")]);
+    }
+
+    #[test]
+    fn trace_paths_keep_same_named_methods_distinct() {
+        let function = |value: u128| {
+            let hash = serde_json::from_str::<StableDefPathHash>(&format!("\"{value:032x}\""))
+                .expect("test hash should deserialize");
+            FunctionId::generic(hash)
+        };
+        let trace = InterpretedTrace {
+            steps: vec![
+                InterpretedTraceStep {
+                    caller: function(1),
+                    caller_path: String::from("indexical::domain::IndexedDomain::<T>::insert"),
+                    call: CallId::new(0),
+                    marker_call: Some(CallId::new(0)),
+                    kind: InterpretedTraceStepKind::Reachability(CallKindFact::DirectCall),
+                    source_range: None,
+                    target: Some(function(2)),
+                    target_path: Some(String::from("index_vec::IndexVec::<I, T>::push")),
+                },
+                InterpretedTraceStep {
+                    caller: function(2),
+                    caller_path: String::from("index_vec::IndexVec::<I, T>::push"),
+                    call: CallId::new(1),
+                    marker_call: Some(CallId::new(1)),
+                    kind: InterpretedTraceStepKind::Reachability(CallKindFact::DirectCall),
+                    source_range: None,
+                    target: Some(function(3)),
+                    target_path: Some(String::from("alloc::vec::Vec::<T, A>::push")),
+                },
+            ],
+        };
+        let labels = trace_path_labels(&trace);
+        let steps = trace
+            .steps
+            .iter()
+            .map(|step| render_trace_step(step, &labels))
+            .collect::<Vec<_>>();
+        assert_eq!(
+            steps,
+            [
+                "insert --direct-call-> IndexVec::<I, T>::push",
+                "IndexVec::<I, T>::push --direct-call-> Vec::<T, A>::push",
+            ]
+        );
+    }
+
+    #[test]
+    fn impl_trace_paths_use_receiver_then_trait_to_disambiguate() {
+        let function = |value: u128| {
+            let hash = serde_json::from_str::<StableDefPathHash>(&format!("\"{value:032x}\""))
+                .expect("test hash should deserialize");
+            FunctionId::generic(hash)
+        };
+        let paths = [
+            "ops::<impl core::ops::bit::BitOrAssign<Rhs> for bitvec::vec::BitVec<T, O>>::bitor_assign",
+            "ops::<impl core::ops::bit::BitOrAssign<&bitvec::vec::BitVec<T, O>> for bitvec::slice::BitSlice<T, O>>::bitor_assign",
+            "ops::<impl core::ops::bit::BitOrAssign<&bitvec::slice::BitSlice<T2, O2>> for bitvec::slice::BitSlice<T1, O1>>::bitor_assign",
+        ];
+        let trace = InterpretedTrace {
+            steps: paths
+                .iter()
+                .enumerate()
+                .map(|(index, path)| InterpretedTraceStep {
+                    caller: function(index as u128 + 1),
+                    caller_path: (*path).to_owned(),
+                    call: CallId::new(index as u32),
+                    marker_call: None,
+                    kind: InterpretedTraceStepKind::Reachability(CallKindFact::DirectCall),
+                    source_range: None,
+                    target: Some(function(index as u128 + 2)),
+                    target_path: paths.get(index + 1).map(|path| (*path).to_owned()),
+                })
+                .collect(),
+        };
+        let labels = trace_path_labels(&trace);
+        assert_eq!(labels[paths[0]], "BitVec<T, O>::bitor_assign");
+        assert_eq!(labels[paths[1]], "BitSlice<T, O>::bitor_assign");
+        assert_eq!(labels[paths[2]], "BitSlice<T1, O1>::bitor_assign");
+
+        let first = "x::<impl a::TraitA for x::Foo<T>>::run";
+        let second = "x::<impl b::TraitB for x::Foo<T>>::run";
+        let collision = InterpretedTrace {
+            steps: [first, second]
+                .into_iter()
+                .enumerate()
+                .map(|(index, path)| InterpretedTraceStep {
+                    caller: function(index as u128 + 1),
+                    caller_path: path.to_owned(),
+                    call: CallId::new(index as u32),
+                    marker_call: None,
+                    kind: InterpretedTraceStepKind::Reachability(CallKindFact::DirectCall),
+                    source_range: None,
+                    target: None,
+                    target_path: None,
+                })
+                .collect(),
+        };
+        let labels = trace_path_labels(&collision);
+        assert_eq!(labels[first], "TraitA for Foo<T>::run");
+        assert_eq!(labels[second], "TraitB for Foo<T>::run");
+
+        let qualified =
+            "<bitvec::slice::BitSlice<T, bitvec::order::Msb0> as bitvec::field::BitField>::load_be";
+        assert!(
+            trace_label_candidates(qualified).contains(&String::from("BitSlice<T, Msb0>::load_be"))
+        );
     }
 
     #[test]

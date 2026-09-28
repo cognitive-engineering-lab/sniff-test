@@ -458,7 +458,7 @@ pub fn compact_function_name(path: &str) -> &str {
         .unwrap_or(path)
 }
 
-fn top_level_path_segments(path: &str) -> Vec<&str> {
+pub(crate) fn top_level_path_segments(path: &str) -> Vec<&str> {
     let mut segments = Vec::new();
     let mut start = 0;
     let mut angle_depth = 0_u32;
@@ -468,7 +468,10 @@ fn top_level_path_segments(path: &str) -> Vec<&str> {
         match bytes[index] {
             b'<' => angle_depth += 1,
             b'>' => angle_depth = angle_depth.saturating_sub(1),
-            b':' if angle_depth == 0 && bytes.get(index + 1) == Some(&b':') => {
+            b':' if angle_depth == 0
+                && bytes.get(index + 1) == Some(&b':')
+                && bytes.get(index + 2) != Some(&b'<') =>
+            {
                 segments.push(&path[start..index]);
                 index += 1;
                 start = index + 1;
@@ -505,7 +508,7 @@ pub(crate) fn is_effect_source_finding(kind: &FindingKind) -> bool {
     )
 }
 
-fn shortest_distinguishing_root_labels(roots: &BTreeSet<String>) -> Vec<String> {
+pub(crate) fn shortest_distinguishing_root_labels(roots: &BTreeSet<String>) -> Vec<String> {
     let split = roots
         .iter()
         .map(|root| top_level_path_segments(root))
