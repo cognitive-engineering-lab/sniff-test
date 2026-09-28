@@ -289,6 +289,68 @@ cli_cases! {
 }
 
 #[test]
+fn closure_expression_call_has_verified_marker_evidence() {
+    let repo = repo_root();
+    let binary = PathBuf::from(env!("CARGO_BIN_EXE_cargo-sniff-test"));
+    let case = Case::new()
+        .in_app()
+        .args(&["-e", "panic", "--message-format", "json"]);
+    let (output, _, _temp) = run_case(
+        &repo,
+        &binary,
+        "closure_expression_call_has_verified_marker_evidence",
+        "closure_dependency_obligation",
+        &case,
+    );
+
+    assert!(output.status.success(), "{}", output.stderr);
+    let report: serde_json::Value = serde_json::from_str(&output.stdout).expect("JSON report");
+    let findings = report["findings"].as_array().expect("findings array");
+    assert_eq!(findings.len(), 2, "{}", output.stdout);
+    let closure = findings
+        .iter()
+        .find(|finding| {
+            finding["function"] == "closure_dependency_app::call_through_closure::{closure#0}"
+        })
+        .expect("closure finding");
+    assert_eq!(closure["source-evidence"]["status"], "verified-absent");
+    let function_item = findings
+        .iter()
+        .find(|finding| finding["function"] == "core::ops::function::Fn::call")
+        .expect("function-item shim finding");
+    assert_eq!(function_item["source-evidence"]["status"], "unverified");
+    assert!(
+        output.stderr.contains(
+            "if this call cannot have panic effect, explain why with a `// PANIC:` comment"
+        ),
+        "{}",
+        output.stderr,
+    );
+    assert!(
+        output
+            .stderr
+            .contains("if `call_through_closure` can have panic effect, add a `# Panics` section"),
+        "{}",
+        output.stderr,
+    );
+    assert!(
+        output.stderr.contains(
+            "if `call_through_function_item` can have panic effect, add a `# Panics` section"
+        ),
+        "{}",
+        output.stderr,
+    );
+    assert!(
+        output
+            .stderr
+            .contains("could not verify `// PANIC:` justification in toolchain crate `core`"),
+        "{}",
+        output.stderr,
+    );
+    assert!(!output.stderr.contains("[option "), "{}", output.stderr);
+}
+
+#[test]
 fn effect_flag_tracks_only_selected_domain() {
     let repo = repo_root();
     let binary = PathBuf::from(env!("CARGO_BIN_EXE_cargo-sniff-test"));

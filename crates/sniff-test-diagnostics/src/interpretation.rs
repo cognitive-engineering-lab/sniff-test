@@ -606,6 +606,24 @@ impl EffectDiagnosticWriter<'_, '_, '_> {
                 effect.obligation,
             );
         }
+        if let Some(SourceEvidence::Unverified { reason }) = self.source_evidence {
+            self.diagnostic
+                .messages
+                .push(DiagnosticMessage::Note(format!(
+                    "could not verify `// {}:` justification in {}: {}",
+                    effect.justification,
+                    owner_location(self.owner),
+                    unverified_reason(reason),
+                )));
+            add_missing_requirement_notes(
+                self.diagnostic,
+                &self.finding.missing_requirements,
+                effect.key.as_str(),
+                self.source_evidence,
+            );
+            self.available_source_help(effect);
+            return;
+        }
         if self.source_evidence == Some(SourceEvidence::VerifiedAbsent)
             && matches!(
                 self.owner.scope,
@@ -706,6 +724,25 @@ impl EffectDiagnosticWriter<'_, '_, '_> {
                 "if the dependency satisfies this obligation internally, audit its source and record the justification there",
             )));
         }
+    }
+
+    fn available_source_help(&mut self, effect: &EffectMetadata) {
+        let local_span =
+            report_root_containment_span(self.sources, &self.finding.trace).or_else(|| {
+                (self.owner.scope == OwnerScope::Workspace
+                    && matches!(self.finding.kind, InterpretedFindingKind::Operation { .. }))
+                .then_some(self.effect_span)
+                .flatten()
+            });
+        self.diagnostic
+            .messages
+            .extend(available_source_help_messages(
+                effect,
+                &self.finding.kind,
+                &self.root.path,
+                local_span,
+                self.sources.function_span(self.root.function),
+            ));
     }
 
     fn source_trace_notes(&mut self) {
@@ -878,6 +915,37 @@ fn add_effect_note(diagnostic: &mut FindingDiagnostic, effect_span: Option<Span>
     } else {
         diagnostic.messages.push(DiagnosticMessage::Note(message));
     }
+}
+
+fn available_source_help_messages(
+    effect: &EffectMetadata,
+    kind: &InterpretedFindingKind,
+    root_path: &str,
+    local_span: Option<Span>,
+    root_span: Option<Span>,
+) -> Vec<DiagnosticMessage> {
+    let mut messages = Vec::new();
+    if local_span.is_some() {
+        let seed = if matches!(kind, InterpretedFindingKind::Operation { .. }) {
+            "operation"
+        } else {
+            "call"
+        };
+        messages.push(DiagnosticMessage::Help(format!(
+            "if this {seed} cannot have {} effect, explain why with a `// {}:` comment",
+            effect.key.as_str(),
+            effect.justification,
+        )));
+    }
+    if root_span.is_some() {
+        messages.push(DiagnosticMessage::Help(format!(
+            "if `{}` can have {} effect, add a `# {}` section",
+            compact_function_name(root_path),
+            effect.key.as_str(),
+            effect.obligation,
+        )));
+    }
+    messages
 }
 
 fn add_source_evidence_help(
@@ -2026,6 +2094,7 @@ mod tests {
     use crate::findings::{
         DiagnosticMessage, FindingDiagnostic, FindingKind, FindingOwner, OwnerScope, SourceEvidence,
     };
+    use rustc_span::DUMMY_SP;
     use sniff_test_core::artifact::{
         ArtifactFacts, CallFact, CallId, CallKindFact, CallSiteId, CallTargetFact,
         ContractRequirementFact, EffectGroupId, EffectKey, FunctionAttributesFact, FunctionFact,
@@ -2042,11 +2111,12 @@ mod tests {
     use sniff_test_effects::{panic::Panic, safety::Safety};
 
     use super::{
-        TraceLimit, add_missing_requirement_notes, exact_function_body_in,
-        extern_paths_are_toolchain, external_containment_help, finding_description,
-        full_trace_steps, incomplete_limit_presentation, missing_body_diagnostic_message,
-        render_trace_step, select_marker_call, source_evidence_help, source_evidence_reason,
-        trace_label_candidates, trace_path_labels, unresolved_action, unresolved_coverage_note,
+        TraceLimit, add_missing_requirement_notes, available_source_help_messages,
+        exact_function_body_in, extern_paths_are_toolchain, external_containment_help,
+        finding_description, full_trace_steps, incomplete_limit_presentation,
+        missing_body_diagnostic_message, render_trace_step, select_marker_call,
+        source_evidence_help, source_evidence_reason, trace_label_candidates, trace_path_labels,
+        unresolved_action, unresolved_coverage_note,
     };
 
     #[test]
@@ -2215,6 +2285,26 @@ mod tests {
             vec![DiagnosticMessage::Note(String::from(
                 "could not verify satisfaction of safety requirement `valid: the pointer remains valid`"
             ))]
+        );
+    }
+
+    #[test]
+    fn unavailable_edit_locations_do_not_produce_source_edit_help() {
+        let effect = EffectMetadata::of::<Panic>();
+        let kind = InterpretedFindingKind::DocumentedObligation;
+        let root = "app::root";
+        assert!(available_source_help_messages(&effect, &kind, root, None, None).is_empty(),);
+        assert_eq!(
+            available_source_help_messages(&effect, &kind, root, None, Some(DUMMY_SP)),
+            vec![DiagnosticMessage::Help(String::from(
+                "if `root` can have panic effect, add a `# Panics` section"
+            ))],
+        );
+        assert_eq!(
+            available_source_help_messages(&effect, &kind, root, Some(DUMMY_SP), None),
+            vec![DiagnosticMessage::Help(String::from(
+                "if this call cannot have panic effect, explain why with a `// PANIC:` comment"
+            ))],
         );
     }
 

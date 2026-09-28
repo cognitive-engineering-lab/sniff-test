@@ -243,10 +243,7 @@ fn effect_edge_marker_block_with(
     )
     .or_else(|| {
         probe_required_marker_candidate(edge_owner(graph, edge), |owner| {
-            probe_required_marker_candidate(
-                immediate_statement_span(tcx, owner, edge.span),
-                |span| span_marker_block_with(tcx, span, syntax, probing),
-            )
+            immediate_statement_marker_block(tcx, owner, edge.span, syntax, probing)
         })
     })
 }
@@ -269,30 +266,54 @@ fn effect_site_marker_block_with(
     syntax: MarkerSyntax<'_>,
     probing: MarkerProbing,
 ) -> MarkerProbe<EffectMarkerBlock> {
-    span_marker_block_with(tcx, span, syntax, probing).or_else(|| {
-        probe_required_marker_candidate(immediate_statement_span(tcx, owner, span), |statement| {
-            span_marker_block_with(tcx, statement, syntax, probing)
-        })
-    })
+    span_marker_block_with(tcx, span, syntax, probing)
+        .or_else(|| immediate_statement_marker_block(tcx, owner, span, syntax, probing))
 }
 
-fn immediate_statement_span(tcx: TyCtxt<'_>, owner: LocalDefId, target: Span) -> Option<Span> {
+fn immediate_statement_marker_block(
+    tcx: TyCtxt<'_>,
+    owner: LocalDefId,
+    target: Span,
+    syntax: MarkerSyntax<'_>,
+    probing: MarkerProbing,
+) -> MarkerProbe<EffectMarkerBlock> {
+    match immediate_statement_span(tcx, owner, target) {
+        MarkerProbe::Present(span) => span_marker_block_with(tcx, span, syntax, probing),
+        MarkerProbe::VerifiedAbsent => MarkerProbe::VerifiedAbsent,
+        MarkerProbe::Unverified(reason) => MarkerProbe::Unverified(reason),
+    }
+}
+
+fn immediate_statement_span(tcx: TyCtxt<'_>, owner: LocalDefId, target: Span) -> MarkerProbe<Span> {
     // Reachability can use a required trait method as the origin of a
     // synthetic edge even though the method has no source body. Asking for
     // THIR in that case ICEs in `hir_body_owned_by` before `thir_body` can
     // return its usual error.
-    tcx.hir_maybe_body_owned_by(owner)?;
+    if tcx.hir_maybe_body_owned_by(owner).is_none() {
+        return MarkerProbe::Unverified(UnverifiedMarkerProbeReason::NoUsableSourceSpan);
+    }
     let Ok((thir, root)) = tcx.thir_body(owner) else {
-        return None;
+        return MarkerProbe::Unverified(UnverifiedMarkerProbeReason::NoUsableSourceSpan);
     };
     let thir = thir.borrow();
+    if !span_contains(thir[root].span, target) {
+        return MarkerProbe::Unverified(UnverifiedMarkerProbeReason::NoUsableSourceSpan);
+    }
     let mut visitor = ContainingStatementVisitor {
         thir: &thir,
         target,
         spans: Vec::new(),
     };
     visitor.visit_expr(&thir[root]);
-    select_unique_innermost_statement(visitor.spans, target)
+    if visitor.spans.is_empty() {
+        // A bare expression body, such as a closure's return expression, has
+        // no enclosing statement where another marker could be recorded.
+        return MarkerProbe::VerifiedAbsent;
+    }
+    select_unique_innermost_statement(visitor.spans, target).map_or(
+        MarkerProbe::Unverified(UnverifiedMarkerProbeReason::NoUsableSourceSpan),
+        MarkerProbe::Present,
+    )
 }
 
 struct ContainingStatementVisitor<'a, 'tcx> {
