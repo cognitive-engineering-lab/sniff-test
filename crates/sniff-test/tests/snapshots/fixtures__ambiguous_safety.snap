@@ -25,6 +25,7 @@ expression: "report[\"findings\"]"
     "target": "ambiguous_safety::read_duplicate",
     "trace": [
       "src/lib.rs:20:14: 20:42: ambiguous_safety::duplicate_safety_marker --direct-call-> ambiguous_safety::read_duplicate"
-    ]
+    ],
+    "trace-id": "ac953e27"
   }
 ]

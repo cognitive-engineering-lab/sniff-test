@@ -24,7 +24,8 @@ expression: "report[\"findings\"]"
     "target": "chain_markers::Widget::risky",
     "trace": [
       "src/lib.rs:22:20: 22:41: chain_markers::marked_and_unmarked_chain_links --direct-call-> chain_markers::Widget::risky"
-    ]
+    ],
+    "trace-id": "02021f52"
   },
   {
     "effect": "panic",
@@ -43,6 +44,7 @@ expression: "report[\"findings\"]"
     "span": "src/lib.rs:27:1: 28:1",
     "trace": [
       "src/lib.rs:28:20: 28:34: chain_markers::whole_statement_marker_is_ambiguous --direct-call-> chain_markers::Widget::risky"
-    ]
+    ],
+    "trace-id": "8cdc3b89"
   }
 ]

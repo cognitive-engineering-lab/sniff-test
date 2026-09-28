@@ -21,6 +21,7 @@ expression: "report[\"findings\"]"
     "trace": [
       "src/lib.rs:81:5: 81:15: trusted_boundaries::untrusted_unresolved_wrapper --indirect-call-> indirect call through a function pointer"
     ],
+    "trace-id": "73b23ca4",
     "unresolved-call": {
       "coverage": "none",
       "mechanism": "function-pointer"
@@ -44,6 +45,7 @@ expression: "report[\"findings\"]"
     "trace": [
       "src/lib.rs:81:5: 81:15: trusted_boundaries::untrusted_unresolved_wrapper --indirect-call-> indirect call through a function pointer"
     ],
+    "trace-id": "0e9e21f2",
     "unresolved-call": {
       "coverage": "none",
       "mechanism": "function-pointer"

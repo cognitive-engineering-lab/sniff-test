@@ -29,6 +29,7 @@ expression: "report[\"findings\"]"
       "src/lib.rs:7:9: 7:70: <dependency_generic_local_impl_app::Local as dependency_generic_local_impl::Action>::apply --macro-expansion-> macro core::macros::builtin::assert",
       "src/lib.rs:7:9: 7:70: macro core::macros::builtin::assert --macro-expansion-> macro core::panic::panic_2021",
       "[SYSROOT]/lib/rustlib/src/rust/library/core/src/panic.rs:62:9: 62:73: macro core::panic::panic_2021 --direct-call-> core::panicking::panic_fmt"
-    ]
+    ],
+    "trace-id": "31589383"
   }
 ]

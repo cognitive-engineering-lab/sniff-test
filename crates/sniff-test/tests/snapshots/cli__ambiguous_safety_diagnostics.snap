@@ -7,7 +7,7 @@ stdout:
 <empty>
 stderr:
     Checking ambiguous-safety v0.1.0 ([FIXTURE])
-error: [sniff-test::safety::ambiguous-requirement] `read_duplicate` has an ambiguous `# Safety` requirement name
+error: [ac953e27] [sniff-test::safety::ambiguous-requirement] `read_duplicate` has an ambiguous `# Safety` requirement name
  --> src/lib.rs:7:1
   |
 7 | /// - valid_ptr: pointer must be non-null.
@@ -19,5 +19,6 @@ error: [sniff-test::safety::ambiguous-requirement] `read_duplicate` has an ambig
   = note: reachable from `duplicate_safety_marker` to `read_duplicate`
   = help: give each requirement a unique name
 
+note: run `cargo sniff-test --explain <trace-id>` to see more details
 note: set `show-full-stack-trace = true` under `[analysis]` in sniff-test.toml to show every reachability step
 error: could not compile `ambiguous-safety` (lib) due to 1 previous error

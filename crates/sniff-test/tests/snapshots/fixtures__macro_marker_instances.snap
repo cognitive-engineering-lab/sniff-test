@@ -24,6 +24,7 @@ expression: "report[\"findings\"]"
     "target": "macro_marker_instances::perform",
     "trace": [
       "src/lib.rs:19:14: 19:23: macro_marker_instances::direct_call_requires_justification --direct-call-> macro_marker_instances::perform"
-    ]
+    ],
+    "trace-id": "3dd4c23a"
   }
 ]

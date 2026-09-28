@@ -7,7 +7,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use anyhow::{Context, Result, bail};
 use sniff_test_core::config::EXAMPLE_MANIFEST;
 
-use super::args::{self, FrontendAction, FrontendCli, InitCliArgs, SniffTestArgs};
+use super::args::{self, FrontendAction, FrontendCli, InitCliArgs, MessageFormat, SniffTestArgs};
 use super::plugin::{
     SNIFF_TEST_ARGS_ENV, SNIFF_TEST_RUN_ID_ENV, frontend_args, modify_cargo, render_error_chain,
     validate_manifest,
@@ -37,6 +37,9 @@ fn try_cargo_frontend() -> Result<ExitCode> {
         FrontendAction::Run(args) => args,
         FrontendAction::Init(args) => return run_init(&args),
     };
+    if parsed_args.explain.is_some() && parsed_args.message_format == MessageFormat::Json {
+        bail!("--explain requires human diagnostic output");
+    }
     if parsed_args.manifest_path.is_none() {
         parsed_args.manifest_path =
             std::env::var_os(args::MANIFEST_PATH_ENV).map(std::path::PathBuf::from);
@@ -53,6 +56,9 @@ fn try_cargo_frontend() -> Result<ExitCode> {
     let parsed_args = discover_manifest(parsed_args, metadata.workspace_root.as_std_path())?;
     let target_dir = metadata.target_directory.join("sniff-test");
     let mut args = frontend_args(parsed_args, target_dir.as_std_path())?;
+    let run_id = workspace_run_id();
+    let match_marker = target_dir.join(format!(".sniff-test-explain-{run_id}"));
+    args.explain_match_marker = Some(match_marker.as_std_path().to_path_buf());
     args.workspace_manifests = metadata
         .packages
         .iter()
@@ -78,9 +84,17 @@ fn try_cargo_frontend() -> Result<ExitCode> {
     // The workspace callback records this value in rustc dep-info. Changing it
     // makes Cargo rerun report-producing workspace units so each invocation
     // validates and reinterprets cached facts; dependency units never record it.
-    cargo.env(SNIFF_TEST_RUN_ID_ENV, workspace_run_id());
+    cargo.env(SNIFF_TEST_RUN_ID_ENV, run_id);
     modify_cargo(&mut cargo, &args)?;
     let status = cargo.status().context("failed to run Cargo")?;
+    let found_explanation = match_marker.exists();
+    let _ = std::fs::remove_file(match_marker.as_std_path());
+    if let Some(trace_id) = &args.explain {
+        if status.success() && !found_explanation {
+            eprintln!("error: trace ID `{trace_id}` was not found in this analysis");
+            return Ok(ExitCode::FAILURE);
+        }
+    }
     let Some(code) = status.code() else {
         return Ok(ExitCode::FAILURE);
     };

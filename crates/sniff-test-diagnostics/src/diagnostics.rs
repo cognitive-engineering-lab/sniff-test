@@ -17,12 +17,15 @@ pub fn emit_finding_diagnostic(
     lint_code: &str,
     diagnostic: &FindingDiagnostic,
     show_lint_code: bool,
+    trace_id: Option<&str>,
+    explanation: bool,
 ) {
     let message = if show_lint_code {
         lint_coded_message(lint_code, &diagnostic.message)
     } else {
         diagnostic.message.clone()
     };
+    let message = trace_id.map_or(message.clone(), |id| format!("[{id}] {message}"));
     let spans = diagnostic.span.map(|primary| {
         let mut spans = MultiSpan::from_span(primary);
         if let Some(second) = diagnostic.second_primary_span {
@@ -30,6 +33,18 @@ pub fn emit_finding_diagnostic(
         }
         spans
     });
+    if explanation {
+        if let Some(span) = spans {
+            let mut emitted = tcx.dcx().struct_span_note(span, message);
+            decorate(&mut emitted, lint_code, &diagnostic.messages);
+            emitted.emit();
+        } else {
+            let mut emitted = tcx.dcx().struct_note(message);
+            decorate(&mut emitted, lint_code, &diagnostic.messages);
+            emitted.emit();
+        }
+        return;
+    }
     match (level, spans) {
         (LintLevel::Allow, _) => {}
         (LintLevel::Warn, Some(span)) => {

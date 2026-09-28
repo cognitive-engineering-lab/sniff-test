@@ -7,7 +7,7 @@ stdout:
 <empty>
 stderr:
     Checking trusted-boundaries v0.1.0 ([FIXTURE])
-warning: [sniff-test::panic::unresolved-call-target] function `trusted_boundaries::trusted_through_fn_pointer` has incomplete panic coverage
+warning: [355a46e9] [sniff-test::panic::unresolved-call-target] function `trusted_boundaries::trusted_through_fn_pointer` has incomplete panic coverage
   --> src/lib.rs:24:5
    |
 24 |     helper(flag);
@@ -22,7 +22,7 @@ note: panic coverage is incomplete here: unresolved function-pointer call target
    = note: reachable from `trusted_through_fn_pointer` to `indirect call through a function pointer`
    = help: make the callee concrete or make its possible implementations available to analysis
 
-warning: [sniff-test::safety::unresolved-call-target] function `trusted_boundaries::trusted_through_fn_pointer` has incomplete safety coverage
+warning: [f62b64e5] [sniff-test::safety::unresolved-call-target] function `trusted_boundaries::trusted_through_fn_pointer` has incomplete safety coverage
   --> src/lib.rs:24:5
    |
 24 |     helper(flag);
@@ -37,7 +37,7 @@ note: safety coverage is incomplete here: unresolved function-pointer call targe
    = note: reachable from `trusted_through_fn_pointer` to `indirect call through a function pointer`
    = help: make the callee concrete or make its possible implementations available to analysis
 
-warning: [sniff-test::panic::unresolved-call-target] function `trusted_boundaries::trusted_unresolved_wrapper` has incomplete panic coverage
+warning: [c84da002] [sniff-test::panic::unresolved-call-target] function `trusted_boundaries::trusted_unresolved_wrapper` has incomplete panic coverage
   --> src/lib.rs:77:5
    |
 77 |     callback();
@@ -52,7 +52,7 @@ note: panic coverage is incomplete here: unresolved function-pointer call target
    = note: reachable from `trusted_unresolved_wrapper` to `indirect call through a function pointer`
    = help: make the callee concrete or make its possible implementations available to analysis
 
-warning: [sniff-test::safety::unresolved-call-target] function `trusted_boundaries::trusted_unresolved_wrapper` has incomplete safety coverage
+warning: [aad118dc] [sniff-test::safety::unresolved-call-target] function `trusted_boundaries::trusted_unresolved_wrapper` has incomplete safety coverage
   --> src/lib.rs:77:5
    |
 77 |     callback();
@@ -67,7 +67,7 @@ note: safety coverage is incomplete here: unresolved function-pointer call targe
    = note: reachable from `trusted_unresolved_wrapper` to `indirect call through a function pointer`
    = help: make the callee concrete or make its possible implementations available to analysis
 
-warning: [sniff-test::panic::unresolved-call-target] function `trusted_boundaries::trusted_unsafe_through_fn_pointer` has incomplete panic coverage
+warning: [62b696a8] [sniff-test::panic::unresolved-call-target] function `trusted_boundaries::trusted_unsafe_through_fn_pointer` has incomplete panic coverage
   --> src/lib.rs:33:14
    |
 33 |     unsafe { helper() }
@@ -82,7 +82,7 @@ note: panic coverage is incomplete here: unresolved function-pointer call target
    = note: reachable from `trusted_unsafe_through_fn_pointer` to `indirect call through a function pointer`
    = help: make the callee concrete or make its possible implementations available to analysis
 
-warning: function `trusted_unsafe_through_fn_pointer` may have safety effect
+warning: [2a0e1673] function `trusted_unsafe_through_fn_pointer` may have safety effect
   --> src/lib.rs:31:1
    |
 31 | pub fn trusted_unsafe_through_fn_pointer(use_trusted: bool, unknown: unsafe fn()) {
@@ -99,7 +99,7 @@ note: `trusted_unsafe_through_fn_pointer` reaches `opaque function pointer` here
    = help: if this call cannot have safety effect, explain why with a `// SAFETY:` comment
    = help: if `trusted_unsafe_through_fn_pointer` can have safety effect, add a `# Safety` section
 
-warning: [sniff-test::safety::unresolved-call-target] function `trusted_boundaries::trusted_unsafe_through_fn_pointer` has incomplete safety coverage
+warning: [e11a5c18] [sniff-test::safety::unresolved-call-target] function `trusted_boundaries::trusted_unsafe_through_fn_pointer` has incomplete safety coverage
   --> src/lib.rs:33:14
    |
 33 |     unsafe { helper() }
@@ -114,7 +114,7 @@ note: safety coverage is incomplete here: unresolved function-pointer call targe
    = note: reachable from `trusted_unsafe_through_fn_pointer` to `indirect call through a function pointer`
    = help: make the callee concrete or make its possible implementations available to analysis
 
-warning: [sniff-test::safety::undocumented-invocation] call to `unsafe_helper` may produce the safety effect, but `unsafe_helper` has no documented `# Safety` obligation
+warning: [24f73151] [sniff-test::safety::undocumented-invocation] call to `unsafe_helper` may produce the safety effect, but `unsafe_helper` has no documented `# Safety` obligation
   --> src/lib.rs:28:14
    |
 28 |     unsafe { unsafe_helper() }
@@ -122,7 +122,7 @@ warning: [sniff-test::safety::undocumented-invocation] call to `unsafe_helper` m
    |
    = help: document the callee's caller obligations under a `# Safety` section
 
-warning: function `trusted_with_docs` may have panic effect
+warning: [88e7e18e] function `trusted_with_docs` may have panic effect
   --> src/lib.rs:5:1
    |
  5 | pub fn trusted_with_docs(flag: bool) {
@@ -146,7 +146,7 @@ note: `trusted_doc_helper` has documented `# Panics` obligation
    = help: if this call cannot have panic effect, explain why with a `// PANIC:` comment
    = help: if `trusted_with_docs` can have panic effect, add a `# Panics` section
 
-warning: [sniff-test::panic::unresolved-call-target] function `trusted_boundaries::untrusted_unresolved_wrapper` has incomplete panic coverage
+warning: [73b23ca4] [sniff-test::panic::unresolved-call-target] function `trusted_boundaries::untrusted_unresolved_wrapper` has incomplete panic coverage
   --> src/lib.rs:81:5
    |
 81 |     callback();
@@ -161,7 +161,7 @@ note: panic coverage is incomplete here: unresolved function-pointer call target
    = note: reachable from `untrusted_unresolved_wrapper` to `indirect call through a function pointer`
    = help: make the callee concrete or make its possible implementations available to analysis
 
-warning: [sniff-test::safety::unresolved-call-target] function `trusted_boundaries::untrusted_unresolved_wrapper` has incomplete safety coverage
+warning: [0e9e21f2] [sniff-test::safety::unresolved-call-target] function `trusted_boundaries::untrusted_unresolved_wrapper` has incomplete safety coverage
   --> src/lib.rs:81:5
    |
 81 |     callback();
@@ -176,6 +176,7 @@ note: safety coverage is incomplete here: unresolved function-pointer call targe
    = note: reachable from `untrusted_unresolved_wrapper` to `indirect call through a function pointer`
    = help: make the callee concrete or make its possible implementations available to analysis
 
+note: run `cargo sniff-test --explain <trace-id>` to see more details
 note: set `show-full-stack-trace = true` under `[analysis]` in sniff-test.toml to show every reachability step
 warning: `trusted-boundaries` (lib) generated 11 warnings
     Finished `release` profile [optimized] target(s) in [TIME]

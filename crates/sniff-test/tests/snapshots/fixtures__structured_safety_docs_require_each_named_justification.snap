@@ -36,7 +36,8 @@ expression: "report[\"findings\"]"
     "target": "ambiguous_markers::complex_panic_contract",
     "trace": [
       "src/lib.rs:70:5: 70:29: ambiguous_markers::complex_panic_layouts --direct-call-> ambiguous_markers::complex_panic_contract"
-    ]
+    ],
+    "trace-id": "011e466a"
   },
   {
     "effect": "panic",
@@ -68,7 +69,8 @@ expression: "report[\"findings\"]"
     "target": "ambiguous_markers::complex_panic_contract",
     "trace": [
       "src/lib.rs:77:5: 77:29: ambiguous_markers::complex_panic_layouts --direct-call-> ambiguous_markers::complex_panic_contract"
-    ]
+    ],
+    "trace-id": "5d012791"
   },
   {
     "effect": "safety",
@@ -101,7 +103,8 @@ expression: "report[\"findings\"]"
     "target": "ambiguous_markers::complex_safety_contract",
     "trace": [
       "src/lib.rs:57:9: 57:34: ambiguous_markers::complex_safety_layouts --direct-call-> ambiguous_markers::complex_safety_contract"
-    ]
+    ],
+    "trace-id": "78bdf526"
   },
   {
     "effect": "safety",
@@ -132,7 +135,8 @@ expression: "report[\"findings\"]"
     "target": "ambiguous_markers::multi_safety_requirements_with_asterisks_and_ident",
     "trace": [
       "src/lib.rs:18:9: 18:61: ambiguous_markers::foo --direct-call-> ambiguous_markers::multi_safety_requirements_with_asterisks_and_ident"
-    ]
+    ],
+    "trace-id": "9f75b68b"
   },
   {
     "effect": "safety",
@@ -163,7 +167,8 @@ expression: "report[\"findings\"]"
     "target": "ambiguous_markers::multi_safety_requirements_with_no_sub_requirement_name",
     "trace": [
       "src/lib.rs:23:9: 23:65: ambiguous_markers::foo --direct-call-> ambiguous_markers::multi_safety_requirements_with_no_sub_requirement_name"
-    ]
+    ],
+    "trace-id": "70d911c1"
   },
   {
     "effect": "safety",
@@ -193,7 +198,8 @@ expression: "report[\"findings\"]"
     "target": "ambiguous_markers::multi_safety_requirements_with_no_sub_requirement_name",
     "trace": [
       "src/lib.rs:36:9: 36:65: ambiguous_markers::foo --direct-call-> ambiguous_markers::multi_safety_requirements_with_no_sub_requirement_name"
-    ]
+    ],
+    "trace-id": "ebd32467"
   },
   {
     "effect": "panic",
@@ -226,7 +232,8 @@ expression: "report[\"findings\"]"
     "target": "ambiguous_markers::unnamed_nested_panic_contract",
     "trace": [
       "src/lib.rs:115:5: 115:36: ambiguous_markers::unnamed_panic_layouts --direct-call-> ambiguous_markers::unnamed_nested_panic_contract"
-    ]
+    ],
+    "trace-id": "6ed04a23"
   },
   {
     "effect": "panic",
@@ -257,7 +264,8 @@ expression: "report[\"findings\"]"
     "target": "ambiguous_markers::unnamed_nested_panic_contract",
     "trace": [
       "src/lib.rs:122:5: 122:36: ambiguous_markers::unnamed_panic_layouts --direct-call-> ambiguous_markers::unnamed_nested_panic_contract"
-    ]
+    ],
+    "trace-id": "692d53bc"
   },
   {
     "effect": "safety",
@@ -292,7 +300,8 @@ expression: "report[\"findings\"]"
     "target": "ambiguous_markers::unnamed_nested_safety_contract",
     "trace": [
       "src/lib.rs:92:9: 92:41: ambiguous_markers::unnamed_safety_layouts --direct-call-> ambiguous_markers::unnamed_nested_safety_contract"
-    ]
+    ],
+    "trace-id": "45c42212"
   },
   {
     "effect": "safety",
@@ -325,6 +334,7 @@ expression: "report[\"findings\"]"
     "target": "ambiguous_markers::unnamed_nested_safety_contract",
     "trace": [
       "src/lib.rs:103:9: 103:41: ambiguous_markers::unnamed_safety_layouts --direct-call-> ambiguous_markers::unnamed_nested_safety_contract"
-    ]
+    ],
+    "trace-id": "59f73e1c"
   }
 ]

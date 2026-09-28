@@ -7,7 +7,7 @@ stdout:
 <empty>
 stderr:
     Checking unsafe-ops v0.1.0 ([FIXTURE])
-error: function `asm_unjustified` may have safety effect
+error: [60d3628d] function `asm_unjustified` may have safety effect
   --> src/lib.rs:32:1
    |
 32 | pub fn asm_unjustified() {
@@ -24,7 +24,7 @@ note: `asm_unjustified` reaches safety effect operation here
    = help: if this operation cannot have safety effect, explain why with a `// SAFETY:` comment
    = help: if `asm_unjustified` can have safety effect, add a `# Safety` section
 
-error: function `deref_unjustified` may have safety effect
+error: [80758cf2] function `deref_unjustified` may have safety effect
   --> src/lib.rs:16:1
    |
 16 | pub fn deref_unjustified(ptr: *const u32) -> u32 {
@@ -40,7 +40,7 @@ note: `deref_unjustified` reaches safety effect operation here
    = help: if this operation cannot have safety effect, explain why with a `// SAFETY:` comment
    = help: if `deref_unjustified` can have safety effect, add a `# Safety` section
 
-error: function `extern_static_unjustified` may have safety effect
+error: [0ff76e76] function `extern_static_unjustified` may have safety effect
   --> src/lib.rs:24:1
    |
 24 | pub fn extern_static_unjustified() -> u32 {
@@ -56,7 +56,7 @@ note: `extern_static_unjustified` reaches safety effect operation here
    = help: if this operation cannot have safety effect, explain why with a `// SAFETY:` comment
    = help: if `extern_static_unjustified` can have safety effect, add a `# Safety` section
 
-error: function `mutable_static_unjustified` may have safety effect
+error: [6a6919a4] function `mutable_static_unjustified` may have safety effect
   --> src/lib.rs:20:1
    |
 20 | pub fn mutable_static_unjustified() -> u32 {
@@ -72,7 +72,7 @@ note: `mutable_static_unjustified` reaches safety effect operation here
    = help: if this operation cannot have safety effect, explain why with a `// SAFETY:` comment
    = help: if `mutable_static_unjustified` can have safety effect, add a `# Safety` section
 
-error: function `union_read_unjustified` may have safety effect
+error: [f487827c] function `union_read_unjustified` may have safety effect
   --> src/lib.rs:28:1
    |
 28 | pub fn union_read_unjustified(bits: &Bits) -> u32 {
@@ -88,5 +88,6 @@ note: `union_read_unjustified` reaches safety effect operation here
    = help: if this operation cannot have safety effect, explain why with a `// SAFETY:` comment
    = help: if `union_read_unjustified` can have safety effect, add a `# Safety` section
 
+note: run `cargo sniff-test --explain <trace-id>` to see more details
 note: set `show-full-stack-trace = true` under `[analysis]` in sniff-test.toml to show every reachability step
 error: could not compile `unsafe-ops` (lib) due to 5 previous errors

@@ -25,7 +25,8 @@ expression: "report[\"findings\"]"
     "trace": [
       "src/lib.rs:2:5: 2:42: dependency_safety_app::read_dependency --direct-call-> dependency_safety::read_byte",
       "[FIXTURE]/dep/src/lib.rs:2:14: 2:22: dependency_safety::read_byte --effect-operation-> raw pointer dereference"
-    ]
+    ],
+    "trace-id": "fb1c9dd3"
   },
   {
     "effect": "safety",
@@ -49,7 +50,8 @@ expression: "report[\"findings\"]"
     "trace": [
       "src/lib.rs:6:5: 6:42: dependency_safety_app::read_dependency_again --direct-call-> dependency_safety::read_byte",
       "[FIXTURE]/dep/src/lib.rs:2:14: 2:22: dependency_safety::read_byte --effect-operation-> raw pointer dereference"
-    ]
+    ],
+    "trace-id": "4cdef8fd"
   },
   {
     "effect": "safety",
@@ -73,6 +75,7 @@ expression: "report[\"findings\"]"
     "trace": [
       "src/lib.rs:10:5: 10:48: dependency_safety_app::read_documented_dependency --direct-call-> dependency_safety::read_documented",
       "[FIXTURE]/dep/src/lib.rs:14:14: 14:38: dependency_safety::read_documented --direct-call-> dependency_safety::documented_read"
-    ]
+    ],
+    "trace-id": "2ed4dea2"
   }
 ]

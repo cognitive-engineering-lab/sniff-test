@@ -26,6 +26,7 @@ expression: "report[\"findings\"]"
     "trace": [
       "src/lib.rs:3:5: 3:18: feature_gated::feature_root --macro-expansion-> macro core::macros::builtin::assert",
       "src/lib.rs:3:5: 3:18: macro core::macros::builtin::assert --direct-call-> core::panicking::panic"
-    ]
+    ],
+    "trace-id": "32adc6fe"
   }
 ]

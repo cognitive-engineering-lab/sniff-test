@@ -27,7 +27,8 @@ expression: "report[\"findings\"]"
       "src/lib.rs:7:9: 7:53: visibility_roots::imp::exported --macro-expansion-> macro core::macros::builtin::assert",
       "src/lib.rs:7:9: 7:53: macro core::macros::builtin::assert --macro-expansion-> macro core::panic::panic_2021",
       "[SYSROOT]/lib/rustlib/src/rust/library/core/src/panic.rs:62:9: 62:73: macro core::panic::panic_2021 --direct-call-> core::panicking::panic_fmt"
-    ]
+    ],
+    "trace-id": "dc7eccd5"
   },
   {
     "effect": "panic",
@@ -54,6 +55,7 @@ expression: "report[\"findings\"]"
       "src/lib.rs:3:9: 3:51: visibility_roots::imp::hidden --macro-expansion-> macro core::macros::builtin::assert",
       "src/lib.rs:3:9: 3:51: macro core::macros::builtin::assert --macro-expansion-> macro core::panic::panic_2021",
       "[SYSROOT]/lib/rustlib/src/rust/library/core/src/panic.rs:62:9: 62:73: macro core::panic::panic_2021 --direct-call-> core::panicking::panic_fmt"
-    ]
+    ],
+    "trace-id": "c6505e17"
   }
 ]

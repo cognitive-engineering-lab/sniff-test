@@ -17,6 +17,7 @@ expression: "report[\"findings\"]"
     "trace": [
       "src/lib.rs:13:5: 13:19: state_budget::deep_chain --direct-call-> state_budget::step_one",
       "src/lib.rs:5:5: 5:19: state_budget::step_one --direct-call-> state_budget::step_two"
-    ]
+    ],
+    "trace-id": "16608380"
   }
 ]

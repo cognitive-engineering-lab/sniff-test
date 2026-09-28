@@ -24,7 +24,8 @@ expression: "report[\"findings\"]"
     "target": "indirect_calls::Risky::documented",
     "trace": [
       "src/lib.rs:11:5: 11:27: indirect_calls::call_documented --indirect-call-> indirect_calls::Risky::documented"
-    ]
+    ],
+    "trace-id": "c25d5d08"
   },
   {
     "effect": "safety",
@@ -45,6 +46,7 @@ expression: "report[\"findings\"]"
     "trace": [
       "src/lib.rs:11:5: 11:27: indirect_calls::call_documented --indirect-call-> indirect_calls::Risky::documented"
     ],
+    "trace-id": "801700b0",
     "unresolved-call": {
       "coverage": "none",
       "mechanism": "generic-dispatch"
@@ -69,6 +71,7 @@ expression: "report[\"findings\"]"
     "trace": [
       "src/lib.rs:19:5: 19:29: indirect_calls::call_dyn --indirect-call-> indirect_calls::Risky::undocumented"
     ],
+    "trace-id": "33e750af",
     "unresolved-call": {
       "coverage": "none",
       "mechanism": "dynamic-dispatch"
@@ -93,6 +96,7 @@ expression: "report[\"findings\"]"
     "trace": [
       "src/lib.rs:19:5: 19:29: indirect_calls::call_dyn --indirect-call-> indirect_calls::Risky::undocumented"
     ],
+    "trace-id": "c950ac54",
     "unresolved-call": {
       "coverage": "none",
       "mechanism": "dynamic-dispatch"
@@ -116,6 +120,7 @@ expression: "report[\"findings\"]"
     "trace": [
       "src/lib.rs:23:5: 23:17: indirect_calls::call_pointer --indirect-call-> indirect call through a function pointer"
     ],
+    "trace-id": "ab5fca06",
     "unresolved-call": {
       "coverage": "none",
       "mechanism": "function-pointer"
@@ -139,6 +144,7 @@ expression: "report[\"findings\"]"
     "trace": [
       "src/lib.rs:23:5: 23:17: indirect_calls::call_pointer --indirect-call-> indirect call through a function pointer"
     ],
+    "trace-id": "c3cd71f9",
     "unresolved-call": {
       "coverage": "none",
       "mechanism": "function-pointer"
@@ -163,6 +169,7 @@ expression: "report[\"findings\"]"
     "trace": [
       "src/lib.rs:15:5: 15:29: indirect_calls::call_undocumented --indirect-call-> indirect_calls::Risky::undocumented"
     ],
+    "trace-id": "24ae6af4",
     "unresolved-call": {
       "coverage": "none",
       "mechanism": "generic-dispatch"
@@ -187,6 +194,7 @@ expression: "report[\"findings\"]"
     "trace": [
       "src/lib.rs:15:5: 15:29: indirect_calls::call_undocumented --indirect-call-> indirect_calls::Risky::undocumented"
     ],
+    "trace-id": "85732e54",
     "unresolved-call": {
       "coverage": "none",
       "mechanism": "generic-dispatch"

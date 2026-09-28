@@ -7,7 +7,7 @@ stdout:
 <empty>
 stderr:
     Checking safety-contract-requirements v0.1.0 ([FIXTURE])
-warning: function `trusted_obligation_exposes_missing_requirement` may have safety effect
+warning: [ee004960] function `trusted_obligation_exposes_missing_requirement` may have safety effect
   --> src/lib.rs:55:1
    |
 55 | pub fn trusted_obligation_exposes_missing_requirement() {
@@ -35,7 +35,7 @@ note: `documented_obligation` has documented `# Safety` obligation
    = help: if this call cannot have safety effect, explain why with a `// SAFETY:` comment
    = help: if `trusted_obligation_exposes_missing_requirement` can have safety effect, add a `# Safety` section
 
-warning: [sniff-test::safety::undocumented-invocation] call to `uncontracted_operation` may produce the safety effect, but `uncontracted_operation` has no documented `# Safety` obligation
+warning: [27f36e7b] [sniff-test::safety::undocumented-invocation] call to `uncontracted_operation` may produce the safety effect, but `uncontracted_operation` has no documented `# Safety` obligation
   --> src/lib.rs:37:14
    |
 37 |     unsafe { uncontracted_operation() }
@@ -43,7 +43,7 @@ warning: [sniff-test::safety::undocumented-invocation] call to `uncontracted_ope
    |
    = help: document the callee's caller obligations under a `# Safety` section
 
-warning: function `unsafe_call_exposes_missing_requirement` may have safety effect
+warning: [bf732108] function `unsafe_call_exposes_missing_requirement` may have safety effect
   --> src/lib.rs:27:1
    |
 27 | pub fn unsafe_call_exposes_missing_requirement() -> u8 {
@@ -76,6 +76,7 @@ help: [option 2] document this function's obligations with `/// # Safety` here
 27 | pub fn unsafe_call_exposes_missing_requirement() -> u8 {
    | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
+note: run `cargo sniff-test --explain <trace-id>` to see more details
 note: set `show-full-stack-trace = true` under `[analysis]` in sniff-test.toml to show every reachability step
 warning: `safety-contract-requirements` (lib) generated 3 warnings
     Finished `release` profile [optimized] target(s) in [TIME]

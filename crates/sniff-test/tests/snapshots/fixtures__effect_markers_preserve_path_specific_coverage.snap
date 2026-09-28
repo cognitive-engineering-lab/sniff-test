@@ -29,7 +29,8 @@ expression: "report[\"findings\"]"
       "src/lib.rs:2:5: 2:19: effect_marker_paths::converging_panic_effect --macro-expansion-> macro std::macros::panic",
       "src/lib.rs:2:5: 2:19: macro std::macros::panic --macro-expansion-> macro core::panic::panic_2021",
       "[SYSROOT]/lib/rustlib/src/rust/library/core/src/panic.rs:62:9: 62:73: macro core::panic::panic_2021 --direct-call-> core::panicking::panic_fmt"
-    ]
+    ],
+    "trace-id": "933d446c"
   },
   {
     "effect": "safety",
@@ -54,7 +55,8 @@ expression: "report[\"findings\"]"
       "src/lib.rs:26:14: 26:46: effect_marker_paths::converging_safety_paths_preserve_uncovered_route --direct-call-> effect_marker_paths::uncovered_safety_branch",
       "src/lib.rs:20:5: 20:38: effect_marker_paths::uncovered_safety_branch --direct-call-> effect_marker_paths::converging_safety_effect",
       "src/lib.rs:16:14: 16:22: effect_marker_paths::converging_safety_effect --effect-operation-> raw pointer dereference"
-    ]
+    ],
+    "trace-id": "a3a3bf57"
   },
   {
     "effect": "safety",
@@ -74,7 +76,8 @@ expression: "report[\"findings\"]"
     "target": "effect_marker_paths::multiline_unsafe_value",
     "trace": [
       "src/lib.rs:93:25: 93:49: effect_marker_paths::let_else_marker_does_not_cover_the_else_body --direct-call-> effect_marker_paths::multiline_unsafe_value"
-    ]
+    ],
+    "trace-id": "20a58ad2"
   },
   {
     "effect": "safety",
@@ -94,7 +97,8 @@ expression: "report[\"findings\"]"
     "target": "effect_marker_paths::multiline_unsafe_value",
     "trace": [
       "src/lib.rs:83:19: 83:43: effect_marker_paths::marker_does_not_cross_an_intervening_statement --direct-call-> effect_marker_paths::multiline_unsafe_value"
-    ]
+    ],
+    "trace-id": "d127a31d"
   },
   {
     "effect": "safety",
@@ -114,7 +118,8 @@ expression: "report[\"findings\"]"
     "target": "effect_marker_paths::multiline_unsafe_value",
     "trace": [
       "src/lib.rs:102:18: 102:42: effect_marker_paths::marker_on_an_ordinary_enclosing_block_does_not_cover_its_tail --direct-call-> effect_marker_paths::multiline_unsafe_value"
-    ]
+    ],
+    "trace-id": "129285cc"
   },
   {
     "effect": "safety",
@@ -134,7 +139,8 @@ expression: "report[\"findings\"]"
     "target": "effect_marker_paths::multiline_unsafe_value",
     "trace": [
       "src/lib.rs:71:19: 71:43: effect_marker_paths::multiline_let_else_marker_applies_to_containing_statement --direct-call-> effect_marker_paths::multiline_unsafe_value"
-    ]
+    ],
+    "trace-id": "52af6fe1"
   },
   {
     "effect": "panic",
@@ -161,7 +167,8 @@ expression: "report[\"findings\"]"
       "src/lib.rs:39:5: 39:56: effect_marker_paths::uncovered_panic_inner --macro-expansion-> macro std::macros::panic",
       "src/lib.rs:39:5: 39:56: macro std::macros::panic --macro-expansion-> macro core::panic::panic_2021",
       "[SYSROOT]/lib/rustlib/src/rust/library/core/src/panic.rs:62:9: 62:73: macro core::panic::panic_2021 --direct-call-> core::panicking::panic_fmt"
-    ]
+    ],
+    "trace-id": "568bd939"
   },
   {
     "effect": "safety",
@@ -185,6 +192,7 @@ expression: "report[\"findings\"]"
     "trace": [
       "src/lib.rs:60:5: 60:36: effect_marker_paths::transitive_safety_path_exposes_uncovered_effect --direct-call-> effect_marker_paths::uncovered_safety_inner",
       "src/lib.rs:56:14: 56:22: effect_marker_paths::uncovered_safety_inner --effect-operation-> raw pointer dereference"
-    ]
+    ],
+    "trace-id": "9b1a119b"
   }
 ]

@@ -14,6 +14,7 @@ use sniff_test_core::effects::Effect;
 use sniff_test_core::report_model::{EffectFindingClass, UnresolvedCallSite};
 use sniff_test_core::report_roots::{MissingReportRoot, ReportRootKind};
 use toml::Spanned;
+use uuid::Uuid;
 
 use super::diagnostics::{empty_report_roots_diagnostic, missing_report_root_diagnostic};
 
@@ -24,6 +25,8 @@ pub const FULL_STACK_TRACE_HINT: &str = "set `show-full-stack-trace = true` unde
 pub struct Finding {
     #[serde(flatten)]
     pub kind: FindingKind,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub trace_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub root: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -70,6 +73,7 @@ impl Finding {
     pub fn new(kind: FindingKind, reason: String, diagnostic: FindingDiagnostic) -> Self {
         Self {
             kind,
+            trace_id: None,
             root: None,
             root_kind: None,
             root_span: None,
@@ -220,7 +224,76 @@ pub fn resolve_findings(
         })
         .collect::<Vec<_>>();
     resolved.sort_by(|left, right| compare_findings(&left.finding, &right.finding));
+    assign_trace_ids(&mut resolved);
     resolved
+}
+
+fn assign_trace_ids(findings: &mut [ResolvedFinding]) {
+    // Hash semantic report data, not the compact/full diagnostic presentation.
+    let namespace = Uuid::new_v5(&Uuid::NAMESPACE_DNS, b"sniff-test.trace");
+    let hashes = findings
+        .iter()
+        .map(|resolved| {
+            let finding = &resolved.finding;
+            if finding.trace_order.is_empty() {
+                return None;
+            }
+            let edges = finding
+                .trace
+                .iter()
+                .map(|step| {
+                    step.as_bytes()
+                        .windows(2)
+                        .position(|pair| pair[0] == b':' && pair[1].is_ascii_digit())
+                        .map_or(step.as_str(), |index| &step[index..])
+                })
+                .collect::<Vec<_>>();
+            let source_bytes = finding
+                .source_order
+                .as_ref()
+                .map(|source| (source.byte_start, source.byte_end));
+            let identity = format!(
+                "{}|{:?}|{:?}|{:?}|{:?}|{:?}|{:?}|{:?}|{:?}|{:?}|{:?}|{:?}|{:?}",
+                finding.root.as_deref().unwrap_or_default(),
+                finding.root_kind,
+                finding.kind,
+                finding.root_span,
+                source_bytes,
+                edges,
+                finding.function,
+                finding.target,
+                finding.requirements,
+                finding.missing_requirements,
+                finding.unresolved_call,
+                finding.source_evidence,
+                finding.reason,
+            );
+            Some(
+                Uuid::new_v5(&namespace, identity.as_bytes())
+                    .simple()
+                    .to_string(),
+            )
+        })
+        .collect::<Vec<_>>();
+    for (index, finding) in findings.iter_mut().enumerate() {
+        let Some(hash) = &hashes[index] else { continue };
+        finding.finding.trace_id = Some(short_trace_id(hash, &hashes, index));
+    }
+}
+
+fn short_trace_id(hash: &str, hashes: &[Option<String>], index: usize) -> String {
+    let mut len = 8;
+    while len < hash.len()
+        && hashes.iter().enumerate().any(|(other_index, other)| {
+            other_index != index
+                && other
+                    .as_ref()
+                    .is_some_and(|other| other != hash && other.starts_with(&hash[..len]))
+        })
+    {
+        len += 2;
+    }
+    hash[..len].to_owned()
 }
 
 /// Normalizes source findings for human diagnostic emission. Repeated paths
@@ -724,7 +797,7 @@ mod tests {
     use super::{
         DiagnosticMessage, FULL_STACK_TRACE_HINT, Finding, FindingDiagnostic, FindingKind,
         FindingOwner, FindingTraceStepOrder, OwnerScope, ResolvedFinding, SourceEvidence,
-        aggregate_human_findings, compact_human_diagnostic_paths,
+        aggregate_human_findings, compact_human_diagnostic_paths, short_trace_id,
         shortest_distinguishing_root_labels, take_full_stack_trace_hint,
     };
     use rustc_span::{BytePos, Span};
@@ -733,6 +806,27 @@ mod tests {
     use sniff_test_core::report_model::{
         EffectFindingClass, UnresolvedCallCoverage, UnresolvedCallMechanism, UnresolvedCallSite,
     };
+
+    #[test]
+    fn colliding_short_trace_ids_extend_only_as_needed() {
+        let hashes = [
+            Some(String::from("12345678aaaabbbb")),
+            Some(String::from("12345678ccccdddd")),
+            Some(String::from("87654321aaaabbbb")),
+        ];
+        assert_eq!(
+            short_trace_id(hashes[0].as_deref().unwrap(), &hashes, 0),
+            "12345678aa"
+        );
+        assert_eq!(
+            short_trace_id(hashes[1].as_deref().unwrap(), &hashes, 1),
+            "12345678cc"
+        );
+        assert_eq!(
+            short_trace_id(hashes[2].as_deref().unwrap(), &hashes, 2),
+            "87654321"
+        );
+    }
     use std::collections::BTreeSet;
 
     fn test_config() -> SniffTestConfig {

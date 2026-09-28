@@ -21,6 +21,7 @@ expression: "report[\"findings\"]"
     "trace": [
       "src/lib.rs:55:13: 55:29: ambiguous_safety::reused_marker_across_generic_instances --direct-call-> ambiguous_safety::read_copy",
       "src/lib.rs:48:14: 48:35: ambiguous_safety::read_copy --direct-call-> core::ptr::read"
-    ]
+    ],
+    "trace-id": "cc848cc9"
   }
 ]

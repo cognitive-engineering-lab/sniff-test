@@ -24,6 +24,7 @@ expression: "report[\"findings\"]"
     "span": "src/lib.rs:6:5: 6:18",
     "trace": [
       "src/lib.rs:6:5: 6:18: suppression::reported_index --effect-operation-> bounds check"
-    ]
+    ],
+    "trace-id": "f29a83e8"
   }
 ]

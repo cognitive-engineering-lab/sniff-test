@@ -34,8 +34,15 @@ pub fn build_report(
     }
 }
 
-pub fn emit_human_diagnostics(tcx: TyCtxt<'_>, report: &AnalysisArtifactReport) {
+pub fn emit_human_diagnostics(
+    tcx: TyCtxt<'_>,
+    report: &AnalysisArtifactReport,
+    effect_flags: &[String],
+) {
     let mut human_findings = aggregate_human_findings(&report.findings);
+    let has_trace_id = human_findings
+        .iter()
+        .any(|finding| finding.finding.trace_id.is_some());
     let show_full_stack_trace_hint = take_full_stack_trace_hint(&mut human_findings);
     for finding in human_findings {
         emit_finding_diagnostic(
@@ -44,11 +51,48 @@ pub fn emit_human_diagnostics(tcx: TyCtxt<'_>, report: &AnalysisArtifactReport) 
             &finding.finding.kind.lint_code(),
             &finding.finding.diagnostic,
             !is_effect_source_finding(&finding.finding.kind),
+            finding.finding.trace_id.as_deref(),
+            false,
+        );
+    }
+    if has_trace_id {
+        let flags = effect_flags
+            .iter()
+            .map(|effect| format!(" -e {effect}"))
+            .collect::<String>();
+        emit_footer_note(
+            tcx,
+            &format!("run `cargo sniff-test{flags} --explain <trace-id>` to see more details"),
         );
     }
     if show_full_stack_trace_hint {
         emit_footer_note(tcx, FULL_STACK_TRACE_HINT);
     }
+}
+
+#[must_use]
+pub fn emit_explanation(tcx: TyCtxt<'_>, report: &AnalysisArtifactReport, trace_id: &str) -> bool {
+    let selected = report
+        .findings
+        .iter()
+        .filter(|finding| finding.finding.trace_id.as_deref() == Some(trace_id))
+        .cloned()
+        .collect::<Vec<_>>();
+    if selected.is_empty() {
+        return false;
+    }
+    for finding in aggregate_human_findings(&selected) {
+        emit_finding_diagnostic(
+            tcx,
+            finding.level,
+            &finding.finding.kind.lint_code(),
+            &finding.finding.diagnostic,
+            !is_effect_source_finding(&finding.finding.kind),
+            finding.finding.trace_id.as_deref(),
+            true,
+        );
+    }
+    true
 }
 
 pub fn emit_json_report(report: &AnalysisArtifactReport) {

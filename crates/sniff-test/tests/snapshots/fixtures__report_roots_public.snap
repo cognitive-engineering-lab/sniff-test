@@ -27,6 +27,7 @@ expression: "report[\"findings\"]"
       "src/lib.rs:4:5: 4:26: report_roots::public_panic --macro-expansion-> macro std::macros::panic",
       "src/lib.rs:4:5: 4:26: macro std::macros::panic --macro-expansion-> macro core::panic::panic_2021",
       "[SYSROOT]/lib/rustlib/src/rust/library/core/src/panic.rs:62:9: 62:73: macro core::panic::panic_2021 --direct-call-> core::panicking::panic_fmt"
-    ]
+    ],
+    "trace-id": "61dc4e2e"
   }
 ]

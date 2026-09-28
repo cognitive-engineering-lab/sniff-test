@@ -24,7 +24,8 @@ expression: "report[\"findings\"]"
     "target": "dependency_transitive_safety_middle::documented_leaf",
     "trace": [
       "src/lib.rs:8:5: 8:64: dependency_transitive_safety_app::documented_leaf --direct-call-> dependency_transitive_safety_middle::documented_leaf"
-    ]
+    ],
+    "trace-id": "5a1df143"
   },
   {
     "effect": "safety",
@@ -47,7 +48,8 @@ expression: "report[\"findings\"]"
     "target": "dependency_transitive_safety_middle::justified_leaf",
     "trace": [
       "src/lib.rs:13:5: 13:63: dependency_transitive_safety_app::justified_leaf --direct-call-> dependency_transitive_safety_middle::justified_leaf"
-    ]
+    ],
+    "trace-id": "9a5ad077"
   },
   {
     "effect": "safety",
@@ -70,6 +72,7 @@ expression: "report[\"findings\"]"
     "target": "dependency_transitive_safety_middle::undocumented_leaf",
     "trace": [
       "src/lib.rs:3:5: 3:66: dependency_transitive_safety_app::undocumented_leaf --direct-call-> dependency_transitive_safety_middle::undocumented_leaf"
-    ]
+    ],
+    "trace-id": "34f4e787"
   }
 ]

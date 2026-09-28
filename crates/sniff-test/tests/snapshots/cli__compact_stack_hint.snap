@@ -7,7 +7,7 @@ stdout:
 <empty>
 stderr:
     Checking safe-markers v0.1.0 ([FIXTURE])
-error: function `unsafe_call` may have panic effect
+error: [fe797569] function `unsafe_call` may have panic effect
   --> src/lib.rs:16:1
    |
 16 | pub fn unsafe_call(flag: bool) {
@@ -23,7 +23,7 @@ note: `unsafe_call` reaches `panic` here
    = help: if this call cannot have panic effect, explain why with a `// PANIC:` comment
    = help: if `unsafe_call` can have panic effect, add a `# Panics` section
 
-error: function `unsafe_ratio` may have panic effect
+error: [9451dc4d] function `unsafe_ratio` may have panic effect
  --> src/lib.rs:7:1
   |
 7 | pub fn unsafe_ratio(total: usize, denominator: usize) -> usize {
@@ -39,5 +39,6 @@ note: `unsafe_ratio` reaches panic effect operation here
   = help: if this operation cannot have panic effect, explain why with a `// PANIC:` comment
   = help: if `unsafe_ratio` can have panic effect, add a `# Panics` section
 
+note: run `cargo sniff-test --explain <trace-id>` to see more details
 note: set `show-full-stack-trace = true` under `[analysis]` in sniff-test.toml to show every reachability step
 error: could not compile `safe-markers` (lib) due to 2 previous errors

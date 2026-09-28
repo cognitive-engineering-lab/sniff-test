@@ -27,6 +27,7 @@ expression: "report[\"findings\"]"
       "src/lib.rs:3:9: 3:45: trait_default_method::TraitDefaultMethod::default_panic --macro-expansion-> macro std::macros::panic",
       "src/lib.rs:3:9: 3:45: macro std::macros::panic --macro-expansion-> macro core::panic::panic_2021",
       "[SYSROOT]/lib/rustlib/src/rust/library/core/src/panic.rs:62:9: 62:73: macro core::panic::panic_2021 --direct-call-> core::panicking::panic_fmt"
-    ]
+    ],
+    "trace-id": "c1d6b649"
   }
 ]

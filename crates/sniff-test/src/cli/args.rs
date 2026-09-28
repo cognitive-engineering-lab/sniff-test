@@ -36,16 +36,27 @@ struct CommonCliArgs {
     /// Diagnostic output format.
     #[arg(long, value_enum, default_value = "human")]
     message_format: MessageFormat,
+
+    /// Show the full trace identified by a diagnostic's trace ID.
+    #[arg(long, value_name = "TRACE-ID", value_parser = parse_trace_id)]
+    explain: Option<String>,
 }
 
 impl CommonCliArgs {
     fn into_sniff_test_args(self) -> SniffTestArgs {
+        let effect_flags = self
+            .effects
+            .iter()
+            .map(|effect| effect.as_str().to_owned())
+            .collect();
         SniffTestArgs {
             effects: EffectSelection::from_keys(self.effects),
+            effect_flags,
             manifest_path: self.manifest,
             cache_dir: self.cache_dir,
             color: self.color,
             message_format: self.message_format,
+            explain: self.explain,
             ..SniffTestArgs::default()
         }
     }
@@ -65,6 +76,19 @@ fn parse_effect(value: &str) -> Result<EffectKey, String> {
             .collect::<Vec<_>>()
             .join(", ")
     ))
+}
+
+fn parse_trace_id(value: &str) -> Result<String, String> {
+    if (8..=32).contains(&value.len())
+        && value.len().is_multiple_of(2)
+        && value.bytes().all(|byte| byte.is_ascii_hexdigit())
+    {
+        Ok(value.to_ascii_lowercase())
+    } else {
+        Err(String::from(
+            "trace ID must be 8 to 32 hexadecimal characters",
+        ))
+    }
 }
 
 #[derive(Debug, Parser)]
@@ -198,6 +222,9 @@ pub(crate) enum CrateOutputScope {
 #[derive(Debug, Default, Clone, Serialize, Deserialize)]
 pub struct SniffTestArgs {
     pub(crate) effects: EffectSelection,
+    pub(crate) effect_flags: Vec<String>,
+    pub(crate) explain: Option<String>,
+    pub(crate) explain_match_marker: Option<PathBuf>,
     pub(crate) manifest_path: Option<PathBuf>,
     pub(crate) cache_dir: Option<PathBuf>,
     pub(crate) color: ColorChoice,

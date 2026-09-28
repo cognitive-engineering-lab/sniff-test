@@ -24,6 +24,7 @@ expression: "report[\"findings\"]"
     "span": "src/lib.rs:10:17: 10:25",
     "trace": [
       "src/lib.rs:10:17: 10:25: safety_macro_ignores::format_and_dereference --effect-operation-> raw pointer dereference"
-    ]
+    ],
+    "trace-id": "01a71cdb"
   }
 ]

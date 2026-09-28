@@ -16,7 +16,7 @@ use super::plugin::rustc_version;
 use sniff_test_diagnostics::findings::collect_report_root_findings;
 use sniff_test_diagnostics::interpretation::interpret_workspace;
 use sniff_test_diagnostics::output::{
-    build_report, emit_human_diagnostics, emit_json_report, emit_tool_error,
+    build_report, emit_explanation, emit_human_diagnostics, emit_json_report, emit_tool_error,
 };
 
 #[allow(
@@ -49,6 +49,10 @@ pub(crate) fn analyze_crate(
     let crate_name = analysis.crate_name.clone();
     let selection = select_report_roots(tcx, &config.analysis);
     let emit_diagnostics = args.under_cargo || args.message_format == MessageFormat::Human;
+    let mut trace_config = config.clone();
+    if args.explain.is_some() {
+        trace_config.analysis.show_full_stack_trace = true;
+    }
     let interpreted_findings = match interpret_workspace(
         tcx,
         &analysis.facts,
@@ -56,7 +60,7 @@ pub(crate) fn analyze_crate(
         &analysis.dependencies,
         metadata_loader,
         &selection.roots,
-        config,
+        &trace_config,
         &effects,
     ) {
         Ok(findings) => findings,
@@ -76,8 +80,18 @@ pub(crate) fn analyze_crate(
     );
     findings.extend(interpreted_findings);
     let report = build_report(crate_name, rustc_version, config, &effects, findings);
+    if let Some(trace_id) = &args.explain {
+        if emit_explanation(tcx, &report, trace_id) {
+            if let Some(marker) = &args.explain_match_marker {
+                if let Err(error) = std::fs::write(marker, "matched") {
+                    emit_tool_error(tcx, format!("failed to record explained trace: {error}"));
+                }
+            }
+        }
+        return;
+    }
     if emit_diagnostics {
-        emit_human_diagnostics(tcx, &report);
+        emit_human_diagnostics(tcx, &report, &args.effect_flags);
     }
     if args.message_format == MessageFormat::Json {
         emit_json_report(&report);

@@ -27,7 +27,8 @@ expression: "report[\"findings\"]"
       "src/lib.rs:17:5: 17:17: safe_markers::unsafe_call --direct-call-> safe_markers::helper",
       "src/lib.rs:21:5: 21:18: safe_markers::helper --macro-expansion-> macro core::macros::builtin::assert",
       "src/lib.rs:21:5: 21:18: macro core::macros::builtin::assert --direct-call-> core::panicking::panic"
-    ]
+    ],
+    "trace-id": "fe797569"
   },
   {
     "effect": "panic",
@@ -50,6 +51,7 @@ expression: "report[\"findings\"]"
     "span": "src/lib.rs:8:5: 8:24",
     "trace": [
       "src/lib.rs:8:5: 8:24: safe_markers::unsafe_ratio --effect-operation-> division by zero"
-    ]
+    ],
+    "trace-id": "9451dc4d"
   }
 ]

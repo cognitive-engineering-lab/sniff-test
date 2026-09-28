@@ -25,7 +25,8 @@ expression: "report[\"findings\"]"
     "target": "dependency_unsafe_trait_call_dep::ambiguous_obligation",
     "trace": [
       "src/lib.rs:18:5: 18:61: dependency_unsafe_trait_call_app::ambiguous_dependency_contract --direct-call-> dependency_unsafe_trait_call_dep::ambiguous_obligation"
-    ]
+    ],
+    "trace-id": "bba6e1d9"
   },
   {
     "effect": "safety",
@@ -55,6 +56,7 @@ expression: "report[\"findings\"]"
     "trace": [
       "src/lib.rs:14:5: 14:68: dependency_unsafe_trait_call_app::unjustified_caller --direct-call-> dependency_unsafe_trait_call_dep::invoke_unjustified",
       "[FIXTURE]/dep/src/lib.rs:28:9: 28:19: dependency_unsafe_trait_call_dep::invoke_unjustified --direct-call-> <dependency_unsafe_trait_call_app::Local as dependency_unsafe_trait_call_dep::Action>::apply"
-    ]
+    ],
+    "trace-id": "f0a01c1e"
   }
 ]

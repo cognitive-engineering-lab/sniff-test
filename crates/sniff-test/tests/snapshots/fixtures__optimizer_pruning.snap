@@ -24,6 +24,7 @@ expression: "report[\"findings\"]"
     "target": "optimizer_pruning::greater_than_zero",
     "trace": [
       "src/lib.rs:8:5: 8:26: optimizer_pruning::documented_inlinable_call --direct-call-> optimizer_pruning::greater_than_zero"
-    ]
+    ],
+    "trace-id": "8a59e426"
   }
 ]

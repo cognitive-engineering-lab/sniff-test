@@ -28,6 +28,7 @@ expression: "report[\"findings\"]"
       "src/lib.rs:9:9: 9:34: macro macro_expansion::static_assert --macro-expansion-> macro macro_expansion::const_assert",
       "src/lib.rs:3:9: 3:28: macro macro_expansion::const_assert --macro-expansion-> macro core::macros::builtin::assert",
       "src/lib.rs:3:9: 3:28: macro core::macros::builtin::assert --direct-call-> core::panicking::panic"
-    ]
+    ],
+    "trace-id": "315416e0"
   }
 ]

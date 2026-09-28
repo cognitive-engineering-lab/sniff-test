@@ -24,7 +24,8 @@ expression: "report[\"findings\"]"
     "target": "trusted::consume_maybe_untrusted_closure",
     "trace": [
       "src/lib.rs:14:5: 14:42: app::higher_order_closure_effect --direct-call-> trusted::consume_maybe_untrusted_closure"
-    ]
+    ],
+    "trace-id": "9cb014c7"
   },
   {
     "effect": "panic",
@@ -47,7 +48,8 @@ expression: "report[\"findings\"]"
     "target": "trusted::BlanketFromUntrustedParty::boom",
     "trace": [
       "src/lib.rs:19:5: 19:42: app::higher_order_function_impl_effect --direct-call-> trusted::BlanketFromUntrustedParty::boom"
-    ]
+    ],
+    "trace-id": "f8834437"
   },
   {
     "effect": "panic",
@@ -75,7 +77,8 @@ expression: "report[\"findings\"]"
       "src/lib.rs:43:42: 43:77: app::option_and_then_callback_effect::{closure#0} --macro-expansion-> macro std::macros::panic",
       "src/lib.rs:43:42: 43:77: macro std::macros::panic --macro-expansion-> macro core::panic::panic_2021",
       "[SYSROOT]/lib/rustlib/src/rust/library/core/src/panic.rs:62:9: 62:73: macro core::panic::panic_2021 --direct-call-> core::panicking::panic_fmt"
-    ]
+    ],
+    "trace-id": "1469c3d3"
   },
   {
     "effect": "panic",
@@ -103,6 +106,7 @@ expression: "report[\"findings\"]"
       "src/lib.rs:39:21: 39:51: app::option_map_callback_effect::{closure#0} --macro-expansion-> macro std::macros::panic",
       "src/lib.rs:39:21: 39:51: macro std::macros::panic --macro-expansion-> macro core::panic::panic_2021",
       "[SYSROOT]/lib/rustlib/src/rust/library/core/src/panic.rs:62:9: 62:73: macro core::panic::panic_2021 --direct-call-> core::panicking::panic_fmt"
-    ]
+    ],
+    "trace-id": "0c7f6e76"
   }
 ]

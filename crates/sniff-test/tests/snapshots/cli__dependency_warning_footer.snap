@@ -8,7 +8,7 @@ stdout:
 stderr:
     Checking dependency-obligation v0.1.0 ([FIXTURE]/dep)
     Checking dependency-app v0.1.0 ([FIXTURE]/app)
-warning: function `call_dependency` may have panic effect
+warning: [bfb09763] function `call_dependency` may have panic effect
  --> src/lib.rs:1:1
   |
 1 | pub fn call_dependency(flag: bool) {
@@ -32,6 +32,7 @@ note: `documented` has documented `# Panics` obligation
   = help: if this call cannot have panic effect, explain why with a `// PANIC:` comment
   = help: if `call_dependency` can have panic effect, add a `# Panics` section
 
+note: run `cargo sniff-test --explain <trace-id>` to see more details
 note: set `show-full-stack-trace = true` under `[analysis]` in sniff-test.toml to show every reachability step
 warning: `dependency-app` (lib) generated 1 warning
     Finished `release` profile [optimized] target(s) in [TIME]

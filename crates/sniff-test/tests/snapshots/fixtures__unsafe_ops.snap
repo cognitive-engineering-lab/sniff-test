@@ -24,7 +24,8 @@ expression: "report[\"findings\"]"
     "span": "src/lib.rs:34:9: 34:20",
     "trace": [
       "src/lib.rs:34:9: 34:20: unsafe_ops::asm_unjustified --effect-operation-> inline assembly"
-    ]
+    ],
+    "trace-id": "60d3628d"
   },
   {
     "effect": "safety",
@@ -47,7 +48,8 @@ expression: "report[\"findings\"]"
     "span": "src/lib.rs:17:14: 17:18",
     "trace": [
       "src/lib.rs:17:14: 17:18: unsafe_ops::deref_unjustified --effect-operation-> raw pointer dereference"
-    ]
+    ],
+    "trace-id": "80758cf2"
   },
   {
     "effect": "safety",
@@ -70,7 +72,8 @@ expression: "report[\"findings\"]"
     "span": "src/lib.rs:25:14: 25:22",
     "trace": [
       "src/lib.rs:25:14: 25:22: unsafe_ops::extern_static_unjustified --effect-operation-> extern static access"
-    ]
+    ],
+    "trace-id": "0ff76e76"
   },
   {
     "effect": "safety",
@@ -93,7 +96,8 @@ expression: "report[\"findings\"]"
     "span": "src/lib.rs:21:14: 21:21",
     "trace": [
       "src/lib.rs:21:14: 21:21: unsafe_ops::mutable_static_unjustified --effect-operation-> mutable static access"
-    ]
+    ],
+    "trace-id": "6a6919a4"
   },
   {
     "effect": "safety",
@@ -116,6 +120,7 @@ expression: "report[\"findings\"]"
     "span": "src/lib.rs:29:14: 29:23",
     "trace": [
       "src/lib.rs:29:14: 29:23: unsafe_ops::union_read_unjustified --effect-operation-> union field access"
-    ]
+    ],
+    "trace-id": "f487827c"
   }
 ]

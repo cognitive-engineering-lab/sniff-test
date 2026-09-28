@@ -12,7 +12,9 @@ use rustc_span::symbol::Symbol;
 use sniff_test_core::artifact_cache::default_cache_dir;
 use sniff_test_core::config::SniffTestConfig;
 
-use super::args::{ColorChoice, CrateOutputScope, DriverCli, MANIFEST_PATH_ENV, SniffTestArgs};
+use super::args::{
+    ColorChoice, CrateOutputScope, DriverCli, MANIFEST_PATH_ENV, MessageFormat, SniffTestArgs,
+};
 use super::driver::{analyze_crate, is_build_script, is_proc_macro, load_config};
 
 pub(crate) const DRIVER_NAME: &str = "sniff-test-driver";
@@ -190,6 +192,9 @@ fn direct_args(mut args: SniffTestArgs) -> Result<SniffTestArgs> {
 }
 
 fn run_driver(compiler_args: &[String], args: SniffTestArgs) -> Result<ExitCode> {
+    if args.explain.is_some() && args.message_format == MessageFormat::Json {
+        bail!("--explain requires human diagnostic output");
+    }
     let mut compiler_args = compiler_args.to_owned();
     // Safety extraction and source-marker association read THIR in
     // `after_analysis`, after MIR building would normally have stolen it.

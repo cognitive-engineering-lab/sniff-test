@@ -24,6 +24,7 @@ expression: "report[\"findings\"]"
     "target": "dependency_obligation::documented",
     "trace": [
       "src/lib.rs:2:5: 2:44: dependency_app::call_dependency --direct-call-> dependency_obligation::documented"
-    ]
+    ],
+    "trace-id": "bfb09763"
   }
 ]

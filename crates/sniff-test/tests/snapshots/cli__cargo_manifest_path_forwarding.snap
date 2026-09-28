@@ -8,7 +8,7 @@ stdout:
 stderr:
 sniff-test: no sniff-test.toml found between [TEMP] and [FIXTURE]; using built-in defaults (public report roots, panic and safety findings warned)
     Checking panic-axioms v0.1.0 ([FIXTURE])
-warning: function `division` may have panic effect
+warning: [8edbbf5d] function `division` may have panic effect
  --> src/lib.rs:1:1
   |
 1 | pub fn division(total_size: usize, block_count: usize) -> usize {
@@ -24,7 +24,7 @@ note: `division` reaches panic effect operation here
   = help: if this operation cannot have panic effect, explain why with a `// PANIC:` comment
   = help: if `division` can have panic effect, add a `# Panics` section
 
-warning: function `indexed` may have panic effect
+warning: [5c13c1d0] function `indexed` may have panic effect
   --> src/lib.rs:9:1
    |
  9 | pub fn indexed(values: &[usize], index: usize) -> usize {
@@ -40,7 +40,7 @@ note: `indexed` reaches panic effect operation here
    = help: if this operation cannot have panic effect, explain why with a `// PANIC:` comment
    = help: if `indexed` can have panic effect, add a `# Panics` section
 
-warning: function `remainder` may have panic effect
+warning: [d8384e8e] function `remainder` may have panic effect
  --> src/lib.rs:5:1
   |
 5 | pub fn remainder(total_size: usize, block_size: usize) -> usize {
@@ -56,6 +56,7 @@ note: `remainder` reaches panic effect operation here
   = help: if this operation cannot have panic effect, explain why with a `// PANIC:` comment
   = help: if `remainder` can have panic effect, add a `# Panics` section
 
+note: run `cargo sniff-test --explain <trace-id>` to see more details
 note: set `show-full-stack-trace = true` under `[analysis]` in sniff-test.toml to show every reachability step
 warning: `panic-axioms` (lib) generated 3 warnings
     Finished `release` profile [optimized] target(s) in [TIME]

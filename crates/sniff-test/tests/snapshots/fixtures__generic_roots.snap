@@ -24,6 +24,7 @@ expression: "report[\"findings\"]"
     "span": "src/lib.rs:2:6: 2:19",
     "trace": [
       "src/lib.rs:2:6: 2:19: generic_roots::generic_index --effect-operation-> bounds check"
-    ]
+    ],
+    "trace-id": "93b75c30"
   }
 ]

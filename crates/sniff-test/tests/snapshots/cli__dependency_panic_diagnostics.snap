@@ -9,7 +9,7 @@ stderr:
     Checking dependency-transitive-panic-leaf v0.1.0 ([FIXTURE]/leaf)
     Checking dependency-transitive-panic-middle v0.1.0 ([FIXTURE]/middle)
     Checking dependency-transitive-panic-app v0.1.0 ([FIXTURE]/app)
-warning: function `app` may have panic effect
+warning: [b9f1f2cf] function `app` may have panic effect
  --> src/lib.rs:1:1
   |
 1 | pub fn app(flag: bool) {
@@ -33,6 +33,7 @@ note: `middle` has documented `# Panics` obligation
   = help: if this call cannot have panic effect, explain why with a `// PANIC:` comment
   = help: if `app` can have panic effect, add a `# Panics` section
 
+note: run `cargo sniff-test --explain <trace-id>` to see more details
 note: set `show-full-stack-trace = true` under `[analysis]` in sniff-test.toml to show every reachability step
 warning: `dependency-transitive-panic-app` (lib) generated 1 warning
     Finished `release` profile [optimized] target(s) in [TIME]

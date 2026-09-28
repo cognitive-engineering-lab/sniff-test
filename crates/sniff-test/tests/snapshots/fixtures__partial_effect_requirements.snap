@@ -32,6 +32,7 @@ expression: "report[\"findings\"]"
     "trace": [
       "src/lib.rs:4:5: 4:60: partial_effect_requirements_app::partially_satisfies_requirements --direct-call-> partial_effect_requirements::misses_both_requirements",
       "[FIXTURE]/dep/src/lib.rs:9:5: 9:43: partial_effect_requirements::misses_both_requirements --direct-call-> partial_effect_requirements::requires_initialized_exclusive_state"
-    ]
+    ],
+    "trace-id": "b9c98635"
   }
 ]

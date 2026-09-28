@@ -28,7 +28,8 @@ expression: "report[\"findings\"]"
       "src/lib.rs:2:5: 2:46: async_runtime_bodies::async_root::{closure#0} --macro-expansion-> macro std::macros::panic",
       "src/lib.rs:2:5: 2:46: macro std::macros::panic --macro-expansion-> macro core::panic::panic_2021",
       "[SYSROOT]/lib/rustlib/src/rust/library/core/src/panic.rs:62:9: 62:73: macro core::panic::panic_2021 --direct-call-> core::panicking::panic_fmt"
-    ]
+    ],
+    "trace-id": "f63e9f56"
   },
   {
     "effect": "panic",
@@ -57,6 +58,7 @@ expression: "report[\"findings\"]"
       "src/lib.rs:9:9: 9:52: async_runtime_bodies::invoked_async_closure::{closure#0}::{closure#0}::{closure#0} --macro-expansion-> macro std::macros::panic",
       "src/lib.rs:9:9: 9:52: macro std::macros::panic --macro-expansion-> macro core::panic::panic_2021",
       "[SYSROOT]/lib/rustlib/src/rust/library/core/src/panic.rs:62:9: 62:73: macro core::panic::panic_2021 --direct-call-> core::panicking::panic_fmt"
-    ]
+    ],
+    "trace-id": "67bf18e0"
   }
 ]

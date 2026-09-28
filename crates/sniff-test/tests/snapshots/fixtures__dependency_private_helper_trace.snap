@@ -29,6 +29,7 @@ expression: "report[\"findings\"]"
       "[FIXTURE]/dep/src/lib.rs:8:5: 8:67: dependency_generic_private_panic::hidden --macro-expansion-> macro core::macros::builtin::assert",
       "[FIXTURE]/dep/src/lib.rs:8:5: 8:67: macro core::macros::builtin::assert --macro-expansion-> macro core::panic::panic_2021",
       "[SYSROOT]/lib/rustlib/src/rust/library/core/src/panic.rs:62:9: 62:73: macro core::panic::panic_2021 --direct-call-> core::panicking::panic_fmt"
-    ]
+    ],
+    "trace-id": "aca1c9ae"
   }
 ]

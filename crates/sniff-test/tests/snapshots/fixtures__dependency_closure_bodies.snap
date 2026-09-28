@@ -29,7 +29,8 @@ expression: "report[\"findings\"]"
       "[FIXTURE]/dep/src/lib.rs:5:9: 5:55: dependency_closure_dep::check_value::{closure#0} --macro-expansion-> macro core::macros::builtin::assert",
       "[FIXTURE]/dep/src/lib.rs:5:9: 5:55: macro core::macros::builtin::assert --macro-expansion-> macro core::panic::panic_2021",
       "[SYSROOT]/lib/rustlib/src/rust/library/core/src/panic.rs:62:9: 62:73: macro core::panic::panic_2021 --direct-call-> core::panicking::panic_fmt"
-    ]
+    ],
+    "trace-id": "75c3640a"
   },
   {
     "effect": "safety",
@@ -54,6 +55,7 @@ expression: "report[\"findings\"]"
       "src/lib.rs:10:5: 10:50: dependency_closure_app::unsafe_body --direct-call-> dependency_closure_dep::read_pointer",
       "[FIXTURE]/dep/src/lib.rs:24:5: 24:14: dependency_closure_dep::read_pointer --direct-call-> dependency_closure_dep::read_pointer::{closure#0}",
       "[FIXTURE]/dep/src/lib.rs:22:18: 22:26: dependency_closure_dep::read_pointer::{closure#0} --effect-operation-> raw pointer dereference"
-    ]
+    ],
+    "trace-id": "5d45901e"
   }
 ]

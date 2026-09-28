@@ -7,7 +7,7 @@ stdout:
 <empty>
 stderr:
     Checking source-aggregation v0.1.0 ([FIXTURE])
-error: function `first_api` may have panic effect
+error: [fe2d497b] function `first_api` may have panic effect
  --> src/lib.rs:5:1
   |
 5 | pub fn first_api() {
@@ -23,7 +23,7 @@ note: `first_api` reaches `panic_fmt` here
   = help: if this call cannot have panic effect, explain why with a `// PANIC:` comment
   = help: if `first_api` can have panic effect, add a `# Panics` section
 
-error: function `second_api` may have panic effect
+error: [92322aa9] function `second_api` may have panic effect
   --> src/lib.rs:9:1
    |
  9 | pub fn second_api() {
@@ -39,5 +39,6 @@ note: `second_api` reaches `panic_fmt` here
    = help: if this call cannot have panic effect, explain why with a `// PANIC:` comment
    = help: if `second_api` can have panic effect, add a `# Panics` section
 
+note: run `cargo sniff-test --explain <trace-id>` to see more details
 note: set `show-full-stack-trace = true` under `[analysis]` in sniff-test.toml to show every reachability step
 error: could not compile `source-aggregation` (lib) due to 2 previous errors

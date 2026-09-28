@@ -8,7 +8,7 @@ stdout:
 stderr:
     Checking dependency-safety v0.1.0 ([FIXTURE]/dep)
     Checking dependency-safety-app v0.1.0 ([FIXTURE]/app)
-error: function `read_dependency` may have safety effect
+error: [fb1c9dd3] function `read_dependency` may have safety effect
  --> src/lib.rs:1:1
   |
 1 | pub fn read_dependency(pointer: *const u8) -> u8 {
@@ -25,7 +25,7 @@ note: `read_byte` reaches safety effect operation here
   = help: if `read_dependency` can have safety effect, add a `# Safety` section
   = help: if the dependency satisfies this obligation internally, audit its source and record the justification there
 
-error: function `read_dependency_again` may have safety effect
+error: [4cdef8fd] function `read_dependency_again` may have safety effect
  --> src/lib.rs:5:1
   |
 5 | pub fn read_dependency_again(pointer: *const u8) -> u8 {
@@ -42,7 +42,7 @@ note: `read_byte` reaches safety effect operation here
   = help: if `read_dependency_again` can have safety effect, add a `# Safety` section
   = help: if the dependency satisfies this obligation internally, audit its source and record the justification there
 
-warning: function `read_documented_dependency` may have safety effect
+warning: [2ed4dea2] function `read_documented_dependency` may have safety effect
   --> src/lib.rs:9:1
    |
  9 | pub fn read_documented_dependency(pointer: *const u8) -> u8 {
@@ -68,6 +68,7 @@ note: `documented_read` has documented `# Safety` obligation
    = help: if `read_documented_dependency` can have safety effect, add a `# Safety` section
    = help: if the dependency satisfies this obligation internally, audit its source and record the justification there
 
+note: run `cargo sniff-test --explain <trace-id>` to see more details
 note: set `show-full-stack-trace = true` under `[analysis]` in sniff-test.toml to show every reachability step
 warning: `dependency-safety-app` (lib) generated 1 warning
 error: could not compile `dependency-safety-app` (lib) due to 2 previous errors; 1 warning emitted

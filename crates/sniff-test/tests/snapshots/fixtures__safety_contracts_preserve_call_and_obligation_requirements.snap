@@ -30,7 +30,8 @@ expression: "report[\"findings\"]"
     "target": "safety_contract_requirements::documented_obligation",
     "trace": [
       "src/lib.rs:57:5: 57:43: safety_contract_requirements::trusted_obligation_exposes_missing_requirement --direct-call-> safety_contract_requirements::documented_obligation"
-    ]
+    ],
+    "trace-id": "ee004960"
   },
   {
     "effect": "safety",
@@ -50,7 +51,8 @@ expression: "report[\"findings\"]"
     "target": "safety_contract_requirements::uncontracted_operation",
     "trace": [
       "src/lib.rs:37:14: 37:38: safety_contract_requirements::unsafe_call_exposes_missing_justification --direct-call-> safety_contract_requirements::uncontracted_operation"
-    ]
+    ],
+    "trace-id": "27f36e7b"
   },
   {
     "effect": "safety",
@@ -80,6 +82,7 @@ expression: "report[\"findings\"]"
     "target": "safety_contract_requirements::read_byte",
     "trace": [
       "src/lib.rs:33:14: 33:37: safety_contract_requirements::unsafe_call_exposes_missing_requirement --direct-call-> safety_contract_requirements::read_byte"
-    ]
+    ],
+    "trace-id": "bf732108"
   }
 ]

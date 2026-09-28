@@ -7,7 +7,7 @@ stdout:
 <empty>
 stderr:
     Checking included-contract v0.1.0 ([FIXTURE])
-warning: function `run` may have panic effect
+warning: [74e7957b] function `run` may have panic effect
   --> src/lib.rs:14:1
    |
 14 | pub fn run(valid: bool) {
@@ -39,6 +39,7 @@ note: the called implementation of `checked` is here
    = help: if this call cannot have panic effect, explain why with a `// PANIC:` comment
    = help: if `run` can have panic effect, add a `# Panics` section
 
+note: run `cargo sniff-test --explain <trace-id>` to see more details
 note: set `show-full-stack-trace = true` under `[analysis]` in sniff-test.toml to show every reachability step
 warning: `included-contract` (lib) generated 1 warning
     Finished `release` profile [optimized] target(s) in [TIME]

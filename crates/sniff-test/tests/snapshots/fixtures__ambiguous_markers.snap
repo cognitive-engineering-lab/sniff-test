@@ -25,7 +25,8 @@ expression: "report[\"findings\"]"
     "target": "ambiguous_markers::duplicate_name_ratio",
     "trace": [
       "src/lib.rs:30:5: 30:45: ambiguous_markers::duplicate_name_marker --direct-call-> ambiguous_markers::duplicate_name_ratio"
-    ]
+    ],
+    "trace-id": "3ea7baba"
   },
   {
     "effect": "panic",
@@ -45,7 +46,8 @@ expression: "report[\"findings\"]"
     "trace": [
       "src/lib.rs:73:5: 73:32: ambiguous_markers::marked_path_to_shared_sources --direct-call-> ambiguous_markers::shared_documented_sources",
       "src/lib.rs:67:5: 67:30: ambiguous_markers::shared_documented_sources --direct-call-> ambiguous_markers::first_documented_source"
-    ]
+    ],
+    "trace-id": "30f0f7e5"
   },
   {
     "effect": "panic",
@@ -66,7 +68,8 @@ expression: "report[\"findings\"]"
       "src/lib.rs:53:5: 53:48: ambiguous_markers::marker_covers_documented_call_and_sink --macro-expansion-> macro ambiguous_markers::call_documented_and_sink_with_one_marker",
       "src/lib.rs:48:9: 48:36: macro ambiguous_markers::call_documented_and_sink_with_one_marker --macro-expansion-> macro ambiguous_markers::call_documented_and_sink",
       "src/lib.rs:40:17: 40:28: macro ambiguous_markers::call_documented_and_sink --direct-call-> ambiguous_markers::ratio"
-    ]
+    ],
+    "trace-id": "2a0e0861"
   },
   {
     "effect": "panic",
@@ -89,7 +92,8 @@ expression: "report[\"findings\"]"
     "target": "ambiguous_markers::ratio",
     "trace": [
       "src/lib.rs:11:21: 11:42: ambiguous_markers::shared_block_marker --direct-call-> ambiguous_markers::ratio"
-    ]
+    ],
+    "trace-id": "f0ea14c2"
   },
   {
     "effect": "panic",
@@ -112,7 +116,8 @@ expression: "report[\"findings\"]"
     "target": "ambiguous_markers::ratio",
     "trace": [
       "src/lib.rs:12:22: 12:43: ambiguous_markers::shared_block_marker --direct-call-> ambiguous_markers::ratio"
-    ]
+    ],
+    "trace-id": "8bd98cf1"
   },
   {
     "effect": "panic",
@@ -136,7 +141,8 @@ expression: "report[\"findings\"]"
     "trace": [
       "src/lib.rs:77:5: 77:32: ambiguous_markers::unmarked_path_to_shared_sources --direct-call-> ambiguous_markers::shared_documented_sources",
       "src/lib.rs:67:5: 67:30: ambiguous_markers::shared_documented_sources --direct-call-> ambiguous_markers::first_documented_source"
-    ]
+    ],
+    "trace-id": "544fa99c"
   },
   {
     "effect": "panic",
@@ -160,6 +166,7 @@ expression: "report[\"findings\"]"
     "trace": [
       "src/lib.rs:77:5: 77:32: ambiguous_markers::unmarked_path_to_shared_sources --direct-call-> ambiguous_markers::shared_documented_sources",
       "src/lib.rs:68:5: 68:31: ambiguous_markers::shared_documented_sources --direct-call-> ambiguous_markers::second_documented_source"
-    ]
+    ],
+    "trace-id": "e3559dce"
   }
 ]

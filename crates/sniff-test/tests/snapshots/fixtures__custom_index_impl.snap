@@ -24,6 +24,7 @@ expression: "report[\"findings\"]"
     "target": "<custom_index_impl::Foo as core::ops::index::Index<usize>>::index",
     "trace": [
       "src/lib.rs:5:16: 5:20: custom_index_impl::custom_index_panics --direct-call-> <custom_index_impl::Foo as core::ops::index::Index<usize>>::index"
-    ]
+    ],
+    "trace-id": "808f2730"
   }
 ]

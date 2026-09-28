@@ -24,6 +24,7 @@ expression: "report[\"findings\"]"
     "target": "alloc::vec::Vec::<T, A>::push",
     "trace": [
       "src/lib.rs:10:5: 10:23: std_trait_impl_glob::put --direct-call-> alloc::vec::Vec::<T, A>::push"
-    ]
+    ],
+    "trace-id": "0b293c90"
   }
 ]

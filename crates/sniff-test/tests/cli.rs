@@ -24,6 +24,7 @@ struct Case {
 #[test]
 fn full_stack_trace_footer_uses_rustc_note_color_without_a_trailing_blank_line() {
     const HINT: &str = "set `show-full-stack-trace = true` under `[analysis]` in sniff-test.toml to show every reachability step";
+    const EXPLAIN: &str = "run `cargo sniff-test --explain <trace-id>` to see more details";
 
     let repo = repo_root();
     let binary = PathBuf::from(env!("CARGO_BIN_EXE_cargo-sniff-test"));
@@ -37,6 +38,12 @@ fn full_stack_trace_footer_uses_rustc_note_color_without_a_trailing_blank_line()
     );
 
     assert_eq!(output.status.code(), Some(0), "stderr:\n{}", output.stderr);
+    let explain_line = output
+        .stderr
+        .lines()
+        .find(|line| line.contains(EXPLAIN))
+        .expect("explain note should be emitted");
+    assert!(explain_line.contains("\u{1b}[92mnote\u{1b}[0m"));
     let hint_line = output
         .stderr
         .lines()
@@ -47,6 +54,9 @@ fn full_stack_trace_footer_uses_rustc_note_color_without_a_trailing_blank_line()
         "the note label should use rustc's green diagnostic style:\n{}",
         output.stderr,
     );
+    assert!(output.stderr.find(EXPLAIN).unwrap() < output.stderr.find(HINT).unwrap());
+    let (_, after_explain) = output.stderr.split_once(EXPLAIN).unwrap();
+    assert!(after_explain.starts_with('\n') && !after_explain.starts_with("\n\n"));
     let (_, after_hint) = output
         .stderr
         .split_once(HINT)
@@ -56,6 +66,73 @@ fn full_stack_trace_footer_uses_rustc_note_color_without_a_trailing_blank_line()
         "the Cargo warning footer should follow without a blank line:\n{}",
         output.stderr,
     );
+}
+
+#[test]
+fn trace_id_explains_only_one_finding_with_single_rustc_note() {
+    let repo = repo_root();
+    let binary = PathBuf::from(env!("CARGO_BIN_EXE_cargo-sniff-test"));
+    let case = Case::new()
+        .args(&["-e", "panic"])
+        .config_replace("invocation = \"deny\"", "invocation = \"warn\"");
+    let (first, root, _temp) = run_case(
+        &repo,
+        &binary,
+        "trace_id_explains_only_one_finding_with_single_rustc_note",
+        "source_aggregation",
+        &case,
+    );
+    assert!(first.status.success(), "{}", first.stderr);
+    let id = first
+        .stderr
+        .split_once("warning: [")
+        .expect("trace headline")
+        .1
+        .split_once(']')
+        .expect("trace ID delimiter")
+        .0;
+    assert_eq!(id.len(), 8);
+    assert!(id.bytes().all(|byte| byte.is_ascii_hexdigit()));
+    let explain_note =
+        "note: run `cargo sniff-test -e panic --explain <trace-id>` to see more details";
+    assert_eq!(first.stderr.matches(explain_note).count(), 1);
+    assert!(
+        first.stderr.find(explain_note).unwrap()
+            < first
+                .stderr
+                .find("note: set `show-full-stack-trace")
+                .unwrap()
+    );
+
+    let run = |trace_id: &str| {
+        let mut command = Command::new(&binary);
+        clean_cargo_package_env(&mut command);
+        CommandOutput::from_output(
+            command
+                .args(["-e", "panic", "--explain", trace_id, "--color", "never"])
+                .current_dir(&root)
+                .output()
+                .expect("run focused explanation"),
+        )
+    };
+    let _cargo_guard = lock_nested_cargo();
+    let explained = run(id);
+    assert!(explained.status.success(), "{}", explained.stderr);
+    assert!(explained.stderr.contains("effect trace step 1/"));
+    assert!(explained.stderr.contains(&format!("note: [{id}]")));
+    assert!(
+        !explained
+            .stderr
+            .contains("function `second_api` may have panic effect")
+    );
+    assert!(!explained.stderr.contains("--explain <trace-id>"));
+
+    let unknown = run("deadbeef");
+    assert!(!unknown.status.success());
+    assert!(unknown.stderr.contains("trace ID `deadbeef` was not found"));
+
+    let second = run_cargo_sniff_test(&binary, &root, "repeat trace IDs", &case);
+    assert!(second.stderr.contains(&format!("warning: [{id}]")));
 }
 
 macro_rules! cli_cases {
@@ -2160,20 +2237,34 @@ fn run_named_case(name: &'static str, fixture_name: &'static str, case: &Case) {
 
 fn assert_panic_axiom_diagnostics(stderr: &str) {
     const EXPECTED: [&str; 3] = [
-        "error: function `division` may have panic effect",
-        "error: function `indexed` may have panic effect",
-        "error: function `remainder` may have panic effect",
+        "function `division` may have panic effect",
+        "function `indexed` may have panic effect",
+        "function `remainder` may have panic effect",
     ];
 
+    let headlines = stderr
+        .lines()
+        .filter_map(|line| {
+            line.strip_prefix("error: [")?
+                .split_once("] ")
+                .map(|(_, message)| message)
+        })
+        .collect::<Vec<_>>();
     for headline in EXPECTED {
         assert_eq!(
-            stderr.matches(headline).count(),
+            headlines
+                .iter()
+                .filter(|message| **message == headline)
+                .count(),
             1,
             "expected exactly one `{headline}` diagnostic:\n{stderr}"
         );
     }
     assert_eq!(
-        stderr.matches("error: function `").count(),
+        headlines
+            .iter()
+            .filter(|message| message.starts_with("function `"))
+            .count(),
         EXPECTED.len(),
         "unexpected panic-effect headline:\n{stderr}"
     );

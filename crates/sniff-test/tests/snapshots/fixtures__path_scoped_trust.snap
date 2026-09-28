@@ -30,7 +30,8 @@ expression: "report[\"findings\"]"
       "src/lib.rs:14:36: 14:66: path_scoped_app::app_callback_through_b_is_untrusted::{closure#0} --macro-expansion-> macro std::macros::panic",
       "src/lib.rs:14:36: 14:66: macro std::macros::panic --macro-expansion-> macro core::panic::panic_2021",
       "[SYSROOT]/lib/rustlib/src/rust/library/core/src/panic.rs:62:9: 62:73: macro core::panic::panic_2021 --direct-call-> core::panicking::panic_fmt"
-    ]
+    ],
+    "trace-id": "ed64d3eb"
   },
   {
     "effect": "safety",
@@ -56,7 +57,8 @@ expression: "report[\"findings\"]"
       "[FIXTURE]/trusted_a/src/lib.rs:10:5: 10:29: trusted_a::forward_callback --direct-call-> dep_b::consume",
       "[FIXTURE]/dep_b/src/lib.rs:6:5: 6:15: dep_b::consume --direct-call-> path_scoped_app::app_safety_callback_is_untrusted::{closure#0}",
       "src/lib.rs:32:31: 32:39: path_scoped_app::app_safety_callback_is_untrusted::{closure#0} --effect-operation-> raw pointer dereference"
-    ]
+    ],
+    "trace-id": "31579440"
   },
   {
     "effect": "panic",
@@ -86,7 +88,8 @@ expression: "report[\"findings\"]"
       "[FIXTURE]/dep_c/src/lib.rs:2:5: 2:42: dep_c::panic_effect --macro-expansion-> macro std::macros::panic",
       "[FIXTURE]/dep_c/src/lib.rs:2:5: 2:42: macro std::macros::panic --macro-expansion-> macro core::panic::panic_2021",
       "[SYSROOT]/lib/rustlib/src/rust/library/core/src/panic.rs:62:9: 62:73: macro core::panic::panic_2021 --direct-call-> core::panicking::panic_fmt"
-    ]
+    ],
+    "trace-id": "3cd1b297"
   },
   {
     "effect": "panic",
@@ -114,7 +117,8 @@ expression: "report[\"findings\"]"
       "[FIXTURE]/dep_c/src/lib.rs:2:5: 2:42: dep_c::panic_effect --macro-expansion-> macro std::macros::panic",
       "[FIXTURE]/dep_c/src/lib.rs:2:5: 2:42: macro std::macros::panic --macro-expansion-> macro core::panic::panic_2021",
       "[SYSROOT]/lib/rustlib/src/rust/library/core/src/panic.rs:62:9: 62:73: macro core::panic::panic_2021 --direct-call-> core::panicking::panic_fmt"
-    ]
+    ],
+    "trace-id": "8791515d"
   },
   {
     "effect": "safety",
@@ -139,6 +143,7 @@ expression: "report[\"findings\"]"
       "src/lib.rs:26:5: 26:27: path_scoped_app::direct_dependency_safety_is_untrusted --direct-call-> dep_b::safety_effect",
       "[FIXTURE]/dep_b/src/lib.rs:10:5: 10:27: dep_b::safety_effect --direct-call-> dep_c::safety_effect",
       "[FIXTURE]/dep_c/src/lib.rs:7:27: 7:35: dep_c::safety_effect --effect-operation-> raw pointer dereference"
-    ]
+    ],
+    "trace-id": "519e8d34"
   }
 ]

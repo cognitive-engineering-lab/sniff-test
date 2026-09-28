@@ -7,7 +7,7 @@ stdout:
 <empty>
 stderr:
     Checking closure-call-graph v0.1.0 ([FIXTURE])
-error: function `basic_closure_panics` may have panic effect
+error: [6b98be8c] function `basic_closure_panics` may have panic effect
  --> src/lib.rs:1:1
   |
 1 | pub fn basic_closure_panics() {
@@ -24,5 +24,6 @@ note: `basic_closure_panics` reaches `panic_fmt` here
   = help: if this call cannot have panic effect, explain why with a `// PANIC:` comment
   = help: if `basic_closure_panics` can have panic effect, add a `# Panics` section
 
+note: run `cargo sniff-test --explain <trace-id>` to see more details
 note: set `show-full-stack-trace = true` under `[analysis]` in sniff-test.toml to show every reachability step
 error: could not compile `closure-call-graph` (lib) due to 1 previous error

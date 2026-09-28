@@ -29,6 +29,7 @@ expression: "report[\"findings\"]"
       "src/lib.rs:2:20: 2:44: closure_call_graph::basic_closure_panics::{closure#0} --macro-expansion-> macro std::macros::panic",
       "src/lib.rs:2:20: 2:44: macro std::macros::panic --macro-expansion-> macro core::panic::panic_2021",
       "[SYSROOT]/lib/rustlib/src/rust/library/core/src/panic.rs:62:9: 62:73: macro core::panic::panic_2021 --direct-call-> core::panicking::panic_fmt"
-    ]
+    ],
+    "trace-id": "6b98be8c"
   }
 ]
