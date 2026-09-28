@@ -34,11 +34,7 @@ pub fn build_report(
     }
 }
 
-pub fn emit_human_diagnostics(
-    tcx: TyCtxt<'_>,
-    report: &AnalysisArtifactReport,
-    effect_flags: &[String],
-) {
+pub fn emit_human_diagnostics(tcx: TyCtxt<'_>, report: &AnalysisArtifactReport) {
     let mut human_findings = aggregate_human_findings(&report.findings);
     let has_trace_id = human_findings
         .iter()
@@ -55,13 +51,9 @@ pub fn emit_human_diagnostics(
         );
     }
     if has_trace_id {
-        let flags = effect_flags
-            .iter()
-            .map(|effect| format!(" -e {effect}"))
-            .collect::<String>();
         emit_footer_note(
             tcx,
-            &format!("run `cargo sniff-test{flags} --explain <trace-id>` to see more details"),
+            "run `cargo sniff-test --explain <trace-id>` to see more details",
         );
     }
     if show_full_stack_trace_hint {

@@ -44,14 +44,8 @@ struct CommonCliArgs {
 
 impl CommonCliArgs {
     fn into_sniff_test_args(self) -> SniffTestArgs {
-        let effect_flags = self
-            .effects
-            .iter()
-            .map(|effect| effect.as_str().to_owned())
-            .collect();
         SniffTestArgs {
             effects: EffectSelection::from_keys(self.effects),
-            effect_flags,
             manifest_path: self.manifest,
             cache_dir: self.cache_dir,
             color: self.color,
@@ -222,7 +216,6 @@ pub(crate) enum CrateOutputScope {
 #[derive(Debug, Default, Clone, Serialize, Deserialize)]
 pub struct SniffTestArgs {
     pub(crate) effects: EffectSelection,
-    pub(crate) effect_flags: Vec<String>,
     pub(crate) explain: Option<String>,
     pub(crate) explain_match_marker: Option<PathBuf>,
     pub(crate) manifest_path: Option<PathBuf>,

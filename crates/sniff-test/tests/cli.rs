@@ -93,8 +93,7 @@ fn trace_id_explains_only_one_warning_with_full_trace() {
         .0;
     assert_eq!(id.len(), 8);
     assert!(id.bytes().all(|byte| byte.is_ascii_hexdigit()));
-    let explain_note =
-        "note: run `cargo sniff-test -e panic --explain <trace-id>` to see more details";
+    let explain_note = "note: run `cargo sniff-test --explain <trace-id>` to see more details";
     assert_eq!(first.stderr.matches(explain_note).count(), 1);
     assert!(
         first.stderr.find(explain_note).unwrap()
@@ -109,7 +108,7 @@ fn trace_id_explains_only_one_warning_with_full_trace() {
         clean_cargo_package_env(&mut command);
         CommandOutput::from_output(
             command
-                .args(["-e", "panic", "--explain", trace_id, "--color", "never"])
+                .args(["--explain", trace_id, "--color", "never"])
                 .current_dir(&root)
                 .output()
                 .expect("run focused explanation"),
@@ -162,7 +161,7 @@ fn trace_id_explanation_preserves_denied_lint_level() {
     clean_cargo_package_env(&mut command);
     let explained = CommandOutput::from_output(
         command
-            .args(["-e", "panic", "--explain", id, "--color", "never"])
+            .args(["--explain", id, "--color", "never"])
             .current_dir(&root)
             .output()
             .expect("run denied explanation"),
