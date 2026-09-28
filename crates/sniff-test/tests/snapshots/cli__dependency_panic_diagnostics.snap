@@ -9,28 +9,29 @@ stderr:
     Checking dependency-transitive-panic-leaf v0.1.0 ([FIXTURE]/leaf)
     Checking dependency-transitive-panic-middle v0.1.0 ([FIXTURE]/middle)
     Checking dependency-transitive-panic-app v0.1.0 ([FIXTURE]/app)
-warning: [sniff-test::panic::documented-obligation] call to `middle` with a documented `# Panics` obligation has no recorded `// PANIC:` justification
- --> src/lib.rs:2:5
-  |
-2 |     dependency_transitive_panic_middle::middle(flag);
-  |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  |
-help: [option 1] add a local `// PANIC:` justification after verifying panic obligations
- --> src/lib.rs:2:5
-  |
-2 |     dependency_transitive_panic_middle::middle(flag);
-  |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-help: [option 2] document this function's obligations with `/// # Panics` here
+warning: function `app` may have panic effect
  --> src/lib.rs:1:1
   |
 1 | pub fn app(flag: bool) {
-  | ^^^^^^^^^^^^^^^^^^^^^^
-note: `middle` documents `# Panics` here
- --> [FIXTURE]/middle/src/lib.rs:3:1
+  | ^^^^^^^^^^^^^^^^^^^^^^ this is a public item
+2 |     dependency_transitive_panic_middle::middle(flag);
+  |     ------------------------------------------------ this may have panic effect
   |
-3 | pub fn middle(flag: bool) {
-  | ^^^^^^^^^^^^^^^^^^^^^^^^^
-  = note: reachable from `app` to `middle`
+note: `app` calls `middle` here
+ --> src/lib.rs:2:5
+  |
+2 |     dependency_transitive_panic_middle::middle(flag);
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+note: `middle` has documented `# Panics` obligation
+ --> [FIXTURE]/middle/src/lib.rs:1:5
+  |
+1 |   /// # Panics
+  |  _____^
+2 | | /// leaf panics if `flag` is true
+3 | | pub fn middle(flag: bool) {
+  | |_________________________^
+  = help: if this call cannot have panic effect, explain why with a `// PANIC:` comment
+  = help: if `app` can have panic effect, add a `# Panics` section
 
 note: set `show-full-stack-trace = true` under `[analysis]` in sniff-test.toml to show every reachability step
 warning: `dependency-transitive-panic-app` (lib) generated 1 warning

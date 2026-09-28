@@ -7,41 +7,37 @@ stdout:
 <empty>
 stderr:
     Checking safe-markers v0.1.0 ([FIXTURE])
-error: [sniff-test::panic::configured-invocation] panic invocation to `panic` has no recorded `// PANIC:` justification
-  --> src/lib.rs:21:5
-   |
-21 |     assert!(flag);
-   |     ^^^^^^^^^^^^^
-   |
-help: [option 1] add a local `// PANIC:` justification after verifying panic obligations
-  --> src/lib.rs:21:5
-   |
-21 |     assert!(flag);
-   |     ^^^^^^^^^^^^^
-help: [option 2] document this function's obligations with `/// # Panics` here
+error: function `unsafe_call` may have panic effect
   --> src/lib.rs:16:1
    |
 16 | pub fn unsafe_call(flag: bool) {
-   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-   = note: reachable from `unsafe_call` to `panic`
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ this is a public item
+17 |     helper(flag);
+   |     ------------ this may have panic effect
+   |
+note: `helper` calls `panic` here
+  --> src/lib.rs:21:5
+   |
+21 |     assert!(flag);
+   |     ^^^^^^^^^^^^^
+   = help: if this call cannot have panic effect, explain why with a `// PANIC:` comment
+   = help: if `unsafe_call` can have panic effect, add a `# Panics` section
 
-error: [sniff-test::panic::division-by-zero] division by zero has no recorded `// PANIC:` justification
- --> src/lib.rs:8:5
-  |
-8 |     total / denominator
-  |     ^^^^^^^^^^^^^^^^^^^
-  |
-help: [option 1] add a local `// PANIC:` justification after verifying panic obligations
- --> src/lib.rs:8:5
-  |
-8 |     total / denominator
-  |     ^^^^^^^^^^^^^^^^^^^
-help: [option 2] document this function's obligations with `/// # Panics` here
+error: function `unsafe_ratio` may have panic effect
  --> src/lib.rs:7:1
   |
 7 | pub fn unsafe_ratio(total: usize, denominator: usize) -> usize {
-  | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  = note: reachable from `unsafe_ratio` to `division by zero`
+  | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ this is a public item
+8 |     total / denominator
+  |     ------------------- this may have panic effect
+  |
+note: `unsafe_ratio` reaches panic effect operation here
+ --> src/lib.rs:8:5
+  |
+8 |     total / denominator
+  |     ^^^^^^^^^^^^^^^^^^^
+  = help: if this operation cannot have panic effect, explain why with a `// PANIC:` comment
+  = help: if `unsafe_ratio` can have panic effect, add a `# Panics` section
 
 note: set `show-full-stack-trace = true` under `[analysis]` in sniff-test.toml to show every reachability step
 error: could not compile `safe-markers` (lib) due to 2 previous errors

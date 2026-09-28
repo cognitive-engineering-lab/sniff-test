@@ -7,59 +7,53 @@ stdout:
 <empty>
 stderr:
     Checking panic-axioms v0.1.0 ([FIXTURE])
-error: [sniff-test::panic::division-by-zero] division by zero has no recorded `// PANIC:` justification
- --> src/lib.rs:2:5
-  |
-2 |     total_size / block_count
-  |     ^^^^^^^^^^^^^^^^^^^^^^^^
-  |
-help: [option 1] add a local `// PANIC:` justification after verifying panic obligations
- --> src/lib.rs:2:5
-  |
-2 |     total_size / block_count
-  |     ^^^^^^^^^^^^^^^^^^^^^^^^
-help: [option 2] document this function's obligations with `/// # Panics` here
+error: function `division` may have panic effect
  --> src/lib.rs:1:1
   |
 1 | pub fn division(total_size: usize, block_count: usize) -> usize {
-  | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  = note: reachable from `division` to `division by zero`
+  | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ this is a public item
+2 |     total_size / block_count
+  |     ------------------------ this may have panic effect
+  |
+note: `division` reaches panic effect operation here
+ --> src/lib.rs:2:5
+  |
+2 |     total_size / block_count
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^
+  = help: if this operation cannot have panic effect, explain why with a `// PANIC:` comment
+  = help: if `division` can have panic effect, add a `# Panics` section
 
-error: [sniff-test::panic::bounds-check] bounds check has no recorded `// PANIC:` justification
-  --> src/lib.rs:10:5
-   |
-10 |     values[index]
-   |     ^^^^^^^^^^^^^
-   |
-help: [option 1] add a local `// PANIC:` justification after verifying panic obligations
-  --> src/lib.rs:10:5
-   |
-10 |     values[index]
-   |     ^^^^^^^^^^^^^
-help: [option 2] document this function's obligations with `/// # Panics` here
+error: function `indexed` may have panic effect
   --> src/lib.rs:9:1
    |
  9 | pub fn indexed(values: &[usize], index: usize) -> usize {
-   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-   = note: reachable from `indexed` to `bounds check`
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ this is a public item
+10 |     values[index]
+   |     ------------- this may have panic effect
+   |
+note: `indexed` reaches panic effect operation here
+  --> src/lib.rs:10:5
+   |
+10 |     values[index]
+   |     ^^^^^^^^^^^^^
+   = help: if this operation cannot have panic effect, explain why with a `// PANIC:` comment
+   = help: if `indexed` can have panic effect, add a `# Panics` section
 
-error: [sniff-test::panic::remainder-by-zero] remainder by zero has no recorded `// PANIC:` justification
- --> src/lib.rs:6:5
-  |
-6 |     total_size % block_size
-  |     ^^^^^^^^^^^^^^^^^^^^^^^
-  |
-help: [option 1] add a local `// PANIC:` justification after verifying panic obligations
- --> src/lib.rs:6:5
-  |
-6 |     total_size % block_size
-  |     ^^^^^^^^^^^^^^^^^^^^^^^
-help: [option 2] document this function's obligations with `/// # Panics` here
+error: function `remainder` may have panic effect
  --> src/lib.rs:5:1
   |
 5 | pub fn remainder(total_size: usize, block_size: usize) -> usize {
-  | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  = note: reachable from `remainder` to `remainder by zero`
+  | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ this is a public item
+6 |     total_size % block_size
+  |     ----------------------- this may have panic effect
+  |
+note: `remainder` reaches panic effect operation here
+ --> src/lib.rs:6:5
+  |
+6 |     total_size % block_size
+  |     ^^^^^^^^^^^^^^^^^^^^^^^
+  = help: if this operation cannot have panic effect, explain why with a `// PANIC:` comment
+  = help: if `remainder` can have panic effect, add a `# Panics` section
 
 note: set `show-full-stack-trace = true` under `[analysis]` in sniff-test.toml to show every reachability step
 error: could not compile `panic-axioms` (lib) due to 3 previous errors

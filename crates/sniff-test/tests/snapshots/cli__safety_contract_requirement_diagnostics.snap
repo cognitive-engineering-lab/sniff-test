@@ -7,29 +7,33 @@ stdout:
 <empty>
 stderr:
     Checking safety-contract-requirements v0.1.0 ([FIXTURE])
-warning: [sniff-test::safety::documented-obligation] call to `documented_obligation` with a documented `# Safety` obligation has no recorded `// SAFETY:` justification
-  --> src/lib.rs:57:5
-   |
-57 |     documented_obligation(&raw const byte);
-   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-   |
-help: [option 1] add a local `// SAFETY:` justification after verifying safety obligations
-  --> src/lib.rs:57:5
-   |
-57 |     documented_obligation(&raw const byte);
-   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-help: [option 2] document this function's obligations with `/// # Safety` here
+warning: function `trusted_obligation_exposes_missing_requirement` may have safety effect
   --> src/lib.rs:55:1
    |
 55 | pub fn trusted_obligation_exposes_missing_requirement() {
-   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-note: `documented_obligation` documents `# Safety` here
-  --> src/lib.rs:44:1
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ this is a public item
+56 |     let byte = 7;
+57 |     documented_obligation(&raw const byte);
+   |     -------------------------------------- this may have safety effect
    |
-44 | pub fn documented_obligation(_ptr: *const u8) {}
-   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+note: `trusted_obligation_exposes_missing_requirement` calls `documented_obligation` here
+  --> src/lib.rs:57:5
+   |
+57 |     documented_obligation(&raw const byte);
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+note: `documented_obligation` has documented `# Safety` obligation
+  --> src/lib.rs:40:5
+   |
+40 |   /// # Safety
+   |  _____^
+41 | | ///
+42 | | /// Requirements:
+43 | | /// - valid_ptr: pointer must be non-null.
+44 | | pub fn documented_obligation(_ptr: *const u8) {}
+   | |_____________________________________________^
    = note: missing safety requirement `valid_ptr: pointer must be non-null.`
-   = note: reachable from `trusted_obligation_exposes_missing_requirement` to `documented_obligation`
+   = help: if this call cannot have safety effect, explain why with a `// SAFETY:` comment
+   = help: if `trusted_obligation_exposes_missing_requirement` can have safety effect, add a `# Safety` section
 
 warning: [sniff-test::safety::undocumented-invocation] call to `uncontracted_operation` may produce the safety effect, but `uncontracted_operation` has no documented `# Safety` obligation
   --> src/lib.rs:37:14
@@ -39,25 +43,38 @@ warning: [sniff-test::safety::undocumented-invocation] call to `uncontracted_ope
    |
    = help: document the callee's caller obligations under a `# Safety` section
 
-warning: [sniff-test::safety::documented-obligation] recorded `// SAFETY:` justification for call to `read_byte` with a documented `# Safety` obligation does not satisfy the remaining `# Safety` requirements
+warning: function `unsafe_call_exposes_missing_requirement` may have safety effect
+  --> src/lib.rs:27:1
+   |
+27 | pub fn unsafe_call_exposes_missing_requirement() -> u8 {
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ this is a public item
+...
+33 |     unsafe { read_byte(ptr.as_ptr()) }
+   |              ----------------------- this may have safety effect
+   |
+note: `unsafe_call_exposes_missing_requirement` calls `read_byte` here
   --> src/lib.rs:33:14
    |
 33 |     unsafe { read_byte(ptr.as_ptr()) }
    |              ^^^^^^^^^^^^^^^^^^^^^^^
+note: `read_byte` has documented `# Safety` obligation
+  --> src/lib.rs:3:5
    |
+ 3 |   /// # Safety
+   |  _____^
+ 4 | | ///
+ 5 | | /// Requirements:
+ 6 | | /// - valid_ptr: pointer must be non-null.
+ 7 | | /// - initialized: pointer must reference initialized memory.
+ 8 | | pub unsafe fn read_byte(ptr: *const u8) -> u8 {
+   | |_____________________________________________^
+   = note: remaining unsatisfied safety requirement `initialized: pointer must reference initialized memory.`
    = help: [option 1] update the recorded `// SAFETY:` justification to address each remaining `# Safety` requirement
 help: [option 2] document this function's obligations with `/// # Safety` here
   --> src/lib.rs:27:1
    |
 27 | pub fn unsafe_call_exposes_missing_requirement() -> u8 {
    | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-note: `read_byte` documents `# Safety` here
-  --> src/lib.rs:8:1
-   |
- 8 | pub unsafe fn read_byte(ptr: *const u8) -> u8 {
-   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-   = note: remaining unsatisfied safety requirement `initialized: pointer must reference initialized memory.`
-   = note: reachable from `unsafe_call_exposes_missing_requirement` to `read_byte`
 
 note: set `show-full-stack-trace = true` under `[analysis]` in sniff-test.toml to show every reachability step
 warning: `safety-contract-requirements` (lib) generated 3 warnings

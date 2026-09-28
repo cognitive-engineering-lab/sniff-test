@@ -7,95 +7,86 @@ stdout:
 <empty>
 stderr:
     Checking unsafe-ops v0.1.0 ([FIXTURE])
-error: [sniff-test::safety::inline-assembly] inline assembly has no recorded `// SAFETY:` justification
-  --> src/lib.rs:34:9
-   |
-34 |         asm!("nop");
-   |         ^^^^^^^^^^^
-   |
-help: [option 1] add a local `// SAFETY:` justification after verifying safety obligations
-  --> src/lib.rs:34:9
-   |
-34 |         asm!("nop");
-   |         ^^^^^^^^^^^
-help: [option 2] document this function's obligations with `/// # Safety` here
+error: function `asm_unjustified` may have safety effect
   --> src/lib.rs:32:1
    |
 32 | pub fn asm_unjustified() {
-   | ^^^^^^^^^^^^^^^^^^^^^^^^
-   = note: reachable from `asm_unjustified` to `inline assembly`
+   | ^^^^^^^^^^^^^^^^^^^^^^^^ this is a public item
+33 |     unsafe {
+34 |         asm!("nop");
+   |         ----------- this may have safety effect
+   |
+note: `asm_unjustified` reaches safety effect operation here
+  --> src/lib.rs:34:9
+   |
+34 |         asm!("nop");
+   |         ^^^^^^^^^^^
+   = help: if this operation cannot have safety effect, explain why with a `// SAFETY:` comment
+   = help: if `asm_unjustified` can have safety effect, add a `# Safety` section
 
-error: [sniff-test::safety::raw-pointer-dereference] raw pointer dereference has no recorded `// SAFETY:` justification
-  --> src/lib.rs:17:14
-   |
-17 |     unsafe { *ptr }
-   |              ^^^^
-   |
-help: [option 1] add a local `// SAFETY:` justification after verifying safety obligations
-  --> src/lib.rs:17:14
-   |
-17 |     unsafe { *ptr }
-   |              ^^^^
-help: [option 2] document this function's obligations with `/// # Safety` here
+error: function `deref_unjustified` may have safety effect
   --> src/lib.rs:16:1
    |
 16 | pub fn deref_unjustified(ptr: *const u32) -> u32 {
-   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-   = note: reachable from `deref_unjustified` to `raw pointer dereference`
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ this is a public item
+17 |     unsafe { *ptr }
+   |              ---- this may have safety effect
+   |
+note: `deref_unjustified` reaches safety effect operation here
+  --> src/lib.rs:17:14
+   |
+17 |     unsafe { *ptr }
+   |              ^^^^
+   = help: if this operation cannot have safety effect, explain why with a `// SAFETY:` comment
+   = help: if `deref_unjustified` can have safety effect, add a `# Safety` section
 
-error: [sniff-test::safety::extern-static-access] extern static access has no recorded `// SAFETY:` justification
-  --> src/lib.rs:25:14
-   |
-25 |     unsafe { ENV_FLAG }
-   |              ^^^^^^^^
-   |
-help: [option 1] add a local `// SAFETY:` justification after verifying safety obligations
-  --> src/lib.rs:25:14
-   |
-25 |     unsafe { ENV_FLAG }
-   |              ^^^^^^^^
-help: [option 2] document this function's obligations with `/// # Safety` here
+error: function `extern_static_unjustified` may have safety effect
   --> src/lib.rs:24:1
    |
 24 | pub fn extern_static_unjustified() -> u32 {
-   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-   = note: reachable from `extern_static_unjustified` to `extern static access`
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ this is a public item
+25 |     unsafe { ENV_FLAG }
+   |              -------- this may have safety effect
+   |
+note: `extern_static_unjustified` reaches safety effect operation here
+  --> src/lib.rs:25:14
+   |
+25 |     unsafe { ENV_FLAG }
+   |              ^^^^^^^^
+   = help: if this operation cannot have safety effect, explain why with a `// SAFETY:` comment
+   = help: if `extern_static_unjustified` can have safety effect, add a `# Safety` section
 
-error: [sniff-test::safety::mutable-static-access] mutable static access has no recorded `// SAFETY:` justification
-  --> src/lib.rs:21:14
-   |
-21 |     unsafe { COUNTER }
-   |              ^^^^^^^
-   |
-help: [option 1] add a local `// SAFETY:` justification after verifying safety obligations
-  --> src/lib.rs:21:14
-   |
-21 |     unsafe { COUNTER }
-   |              ^^^^^^^
-help: [option 2] document this function's obligations with `/// # Safety` here
+error: function `mutable_static_unjustified` may have safety effect
   --> src/lib.rs:20:1
    |
 20 | pub fn mutable_static_unjustified() -> u32 {
-   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-   = note: reachable from `mutable_static_unjustified` to `mutable static access`
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ this is a public item
+21 |     unsafe { COUNTER }
+   |              ------- this may have safety effect
+   |
+note: `mutable_static_unjustified` reaches safety effect operation here
+  --> src/lib.rs:21:14
+   |
+21 |     unsafe { COUNTER }
+   |              ^^^^^^^
+   = help: if this operation cannot have safety effect, explain why with a `// SAFETY:` comment
+   = help: if `mutable_static_unjustified` can have safety effect, add a `# Safety` section
 
-error: [sniff-test::safety::union-field-access] union field access has no recorded `// SAFETY:` justification
-  --> src/lib.rs:29:14
-   |
-29 |     unsafe { bits.word }
-   |              ^^^^^^^^^
-   |
-help: [option 1] add a local `// SAFETY:` justification after verifying safety obligations
-  --> src/lib.rs:29:14
-   |
-29 |     unsafe { bits.word }
-   |              ^^^^^^^^^
-help: [option 2] document this function's obligations with `/// # Safety` here
+error: function `union_read_unjustified` may have safety effect
   --> src/lib.rs:28:1
    |
 28 | pub fn union_read_unjustified(bits: &Bits) -> u32 {
-   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-   = note: reachable from `union_read_unjustified` to `union field access`
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ this is a public item
+29 |     unsafe { bits.word }
+   |              --------- this may have safety effect
+   |
+note: `union_read_unjustified` reaches safety effect operation here
+  --> src/lib.rs:29:14
+   |
+29 |     unsafe { bits.word }
+   |              ^^^^^^^^^
+   = help: if this operation cannot have safety effect, explain why with a `// SAFETY:` comment
+   = help: if `union_read_unjustified` can have safety effect, add a `# Safety` section
 
 note: set `show-full-stack-trace = true` under `[analysis]` in sniff-test.toml to show every reachability step
 error: could not compile `unsafe-ops` (lib) due to 5 previous errors

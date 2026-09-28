@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 
 use rustc_hir::def_id::LOCAL_CRATE;
 use rustc_middle::ty::TyCtxt;
-use rustc_span::Span;
+use rustc_span::{BytePos, Span};
 use sniff_test_core::artifact::{
     ArtifactFacts, CallFact, CallId, CallKindFact, ContractRequirementFact, FunctionFact,
     FunctionId, SourceFileFact, SourceRangeFact, StableDefPathHash, StableInstanceHash,
@@ -166,11 +166,9 @@ fn adapt_finding(
     let effect_span = sources.resolve(ambiguity_range).0.or(recorded_span);
     let source_order_range = ambiguity_range.or(finding.source_range.as_ref());
     let root_span = sources.function_span(root.function);
-    // A recorded cached location is only diagnostic evidence after source
-    // verification succeeds. If it fails, keep reporting the interpreted
-    // finding but do not substitute the workspace root as a misleading
-    // primary location for an unavailable dependency effect.
-    let diagnostic_span = if source_error.is_some() {
+    let diagnostic_span = if is_source_kind(&finding.kind) {
+        root_span.or(effect_span)
+    } else if source_error.is_some() {
         None
     } else {
         diagnostic_primary_span(root_span, effect_span)
@@ -551,6 +549,15 @@ fn diagnostic_primary_span(root_span: Option<Span>, effect_span: Option<Span>) -
     effect_span.or(root_span)
 }
 
+const fn is_source_kind(kind: &InterpretedFindingKind) -> bool {
+    matches!(
+        kind,
+        InterpretedFindingKind::Operation { .. }
+            | InterpretedFindingKind::Invocation { .. }
+            | InterpretedFindingKind::DocumentedObligation
+    )
+}
+
 struct EffectDiagnosticWriter<'a, 'tcx, 'analysis> {
     sources: &'a SourceResolver<'tcx, 'analysis>,
     diagnostic: &'a mut FindingDiagnostic,
@@ -566,6 +573,50 @@ struct EffectDiagnosticWriter<'a, 'tcx, 'analysis> {
 impl EffectDiagnosticWriter<'_, '_, '_> {
     fn source(&mut self, effect: &EffectMetadata, contract: bool) {
         self.justification_marker = Some(effect.justification.to_owned());
+        if let Some(span) = self.sources.function_span(self.root.function) {
+            self.diagnostic.messages.push(DiagnosticMessage::SpanLabel(
+                span,
+                String::from("this is a public item"),
+            ));
+        }
+        if let Some(span) = self
+            .finding
+            .trace
+            .steps
+            .first()
+            .and_then(|step| self.sources.resolve(step.source_range.as_ref()).0)
+            .or(self.effect_span)
+        {
+            self.diagnostic.messages.push(DiagnosticMessage::SpanLabel(
+                span,
+                format!("this may have {} effect", effect.key.as_str()),
+            ));
+        }
+        self.source_endpoint_note(effect);
+        if contract {
+            add_contract_note(
+                self.sources,
+                self.diagnostic,
+                self.finding,
+                effect.obligation,
+            );
+        }
+        if self.source_evidence == Some(SourceEvidence::VerifiedAbsent)
+            && matches!(
+                self.owner.scope,
+                OwnerScope::Workspace | OwnerScope::Dependency
+            )
+        {
+            self.standard_source_help(effect);
+            add_missing_requirement_notes(
+                self.diagnostic,
+                &self.finding.missing_requirements,
+                effect.key.as_str(),
+                self.source_evidence,
+            );
+            self.source_trace_notes();
+            return;
+        }
         let dependency_effect = self
             .source_evidence
             .is_some_and(|evidence| is_unjustified_dependency_effect(self.owner, evidence));
@@ -582,26 +633,13 @@ impl EffectDiagnosticWriter<'_, '_, '_> {
         if !dependency_effect {
             self.source_help(effect);
         }
-        if contract {
-            add_contract_note(
-                self.sources,
-                self.diagnostic,
-                self.finding,
-                effect.obligation,
-            );
-        }
         add_missing_requirement_notes(
             self.diagnostic,
             &self.finding.missing_requirements,
             effect.key.as_str(),
             self.source_evidence,
         );
-        add_finding_trace_notes(
-            self.sources,
-            self.diagnostic,
-            self.finding,
-            self.show_full_stack_trace,
-        );
+        self.source_trace_notes();
         if !dependency_effect {
             add_external_containment_guidance(
                 self.sources,
@@ -615,6 +653,64 @@ impl EffectDiagnosticWriter<'_, '_, '_> {
         self.document_root(effect);
         if dependency_effect {
             self.source_help(effect);
+        }
+    }
+
+    fn source_endpoint_note(&mut self, effect: &EffectMetadata) {
+        let caller = compact_function_name(&self.finding.function_path);
+        let note = if matches!(self.finding.kind, InterpretedFindingKind::Operation { .. }) {
+            format!(
+                "`{caller}` reaches {} effect operation here",
+                effect.key.as_str()
+            )
+        } else {
+            let callee = self
+                .finding
+                .callee
+                .as_ref()
+                .map_or("an unknown target", |callee| {
+                    compact_function_name(&callee.path)
+                });
+            format!("`{caller}` calls `{callee}` here")
+        };
+        add_effect_note(self.diagnostic, self.effect_span, note);
+    }
+
+    fn standard_source_help(&mut self, effect: &EffectMetadata) {
+        let seed = if matches!(self.finding.kind, InterpretedFindingKind::Operation { .. }) {
+            "operation"
+        } else {
+            "call"
+        };
+        self.diagnostic
+            .messages
+            .push(DiagnosticMessage::Help(format!(
+                "if this {seed} cannot have {} effect, explain why with a `// {}:` comment",
+                effect.key.as_str(),
+                effect.justification
+            )));
+        self.diagnostic
+            .messages
+            .push(DiagnosticMessage::Help(format!(
+                "if `{}` can have {} effect, add a `# {}` section",
+                compact_function_name(&self.root.path),
+                effect.key.as_str(),
+                effect.obligation
+            )));
+        if self.owner.scope == OwnerScope::Dependency {
+            self.diagnostic.messages.push(DiagnosticMessage::Help(String::from(
+                "if the dependency satisfies this obligation internally, audit its source and record the justification there",
+            )));
+        }
+    }
+
+    fn source_trace_notes(&mut self) {
+        if self.show_full_stack_trace {
+            add_finding_trace_notes(self.sources, self.diagnostic, self.finding, true);
+        } else if !self.finding.trace.steps.is_empty() {
+            self.diagnostic
+                .messages
+                .push(DiagnosticMessage::Note(String::from(FULL_STACK_TRACE_HINT)));
         }
     }
 
@@ -882,24 +978,176 @@ fn add_contract_note(
     let Some(target) = &finding.callee else {
         return;
     };
-    let note = format!("`{}` documents `# {heading}` here", target.path);
-    if let Some(span) = target
+    let note = format!(
+        "`{}` has documented `# {heading}` obligation",
+        compact_function_name(&target.path)
+    );
+    let invoked_span = target
         .function
-        .and_then(|function| sources.function_span(function))
-        .or_else(|| sources.resolve(finding.contract_source_range.as_ref()).0)
-        .or_else(|| {
-            finding
-                .requirements
-                .first()
-                .and_then(|requirement| sources.resolve(requirement.source_range.as_ref()).0)
-        })
+        .and_then(|function| sources.function_span(function));
+    let declaration_span = sources
+        .resolve(finding.contract_source_range.as_ref())
+        .0
+        .or(invoked_span);
+    let declaration_file = finding
+        .contract_source_range
+        .as_ref()
+        .and_then(|range| sources.source_file(range))
+        .map(|file| Path::new(&file.filename));
+    match declaration_span
+        .and_then(|span| obligation_doc_source(sources, span, declaration_file, heading))
     {
-        diagnostic
-            .messages
-            .push(DiagnosticMessage::SpanNote(span, note));
-    } else {
-        diagnostic.messages.push(DiagnosticMessage::Note(note));
+        Some(ObligationDocSource::Inline(span)) => {
+            diagnostic
+                .messages
+                .push(DiagnosticMessage::SpanNote(span, note));
+            if let Some(invoked) = invoked_span.filter(|invoked| Some(*invoked) != declaration_span)
+            {
+                diagnostic.messages.push(DiagnosticMessage::SpanNote(
+                    invoked,
+                    format!(
+                        "the called implementation of `{}` is here",
+                        compact_function_name(&target.path)
+                    ),
+                ));
+            }
+        }
+        Some(ObligationDocSource::External(span)) => {
+            diagnostic
+                .messages
+                .push(DiagnosticMessage::SpanNote(span, note));
+            if let Some(prototype) = invoked_span.or(declaration_span) {
+                let name = compact_function_name(&target.path);
+                let location = if Some(prototype) != declaration_span {
+                    format!("the called implementation of `{name}` is here")
+                } else {
+                    format!("`{name}` is declared here")
+                };
+                diagnostic
+                    .messages
+                    .push(DiagnosticMessage::SpanNote(prototype, location));
+            }
+        }
+        None => {
+            if let Some(span) = invoked_span.or(declaration_span).or_else(|| {
+                finding
+                    .requirements
+                    .first()
+                    .and_then(|requirement| sources.resolve(requirement.source_range.as_ref()).0)
+            }) {
+                diagnostic
+                    .messages
+                    .push(DiagnosticMessage::SpanNote(span, note));
+            } else {
+                diagnostic.messages.push(DiagnosticMessage::Note(note));
+            }
+        }
     }
+}
+
+enum ObligationDocSource {
+    Inline(Span),
+    External(Span),
+}
+
+fn obligation_doc_source(
+    sources: &SourceResolver<'_, '_>,
+    function_span: Span,
+    declaration_file: Option<&Path>,
+    heading: &str,
+) -> Option<ObligationDocSource> {
+    let source_map = sources.tcx.sess.source_map();
+    let file = source_map.lookup_source_file(function_span.lo());
+    let prefix = source_map
+        .span_to_snippet(Span::with_root_ctxt(file.start_pos, function_span.lo()))
+        .ok()?;
+    let line_start = prefix.rfind('\n').map_or(0, |index| index + 1);
+    let before = &prefix[..line_start];
+    let mut start = before.len();
+    for line in before.split_inclusive('\n').rev() {
+        let trimmed = line.trim_start();
+        if trimmed.starts_with("///") || trimmed.starts_with("#[") || trimmed.trim().is_empty() {
+            start -= line.len();
+        } else {
+            break;
+        }
+    }
+    let docs = before.get(start..)?;
+    for (offset, line) in lines_with_offsets(docs) {
+        let trimmed = line.trim_start();
+        if let Some(comment) = trimmed.strip_prefix("///") {
+            if let Some(heading_offset) = markdown_heading_offset(comment, heading) {
+                let prefix_len = line.len() - trimmed.len() + 3;
+                let heading_start = start + offset + prefix_len + heading_offset;
+                return Some(ObligationDocSource::Inline(Span::with_root_ctxt(
+                    file.start_pos + BytePos(u32::try_from(heading_start).ok()?),
+                    function_span.hi(),
+                )));
+            }
+        }
+    }
+    let declaration_file = declaration_file?;
+    for (_, line) in lines_with_offsets(docs) {
+        if let Some(relative) = literal_include_str_path(line) {
+            let path = declaration_file
+                .parent()?
+                .join(relative)
+                .canonicalize()
+                .ok()?;
+            let included = source_map.load_file(&path).ok()?;
+            let source = source_map
+                .span_to_snippet(Span::with_root_ctxt(
+                    included.start_pos,
+                    included.end_position(),
+                ))
+                .ok()?;
+            for (offset, line) in lines_with_offsets(&source) {
+                if let Some(heading_offset) = markdown_heading_offset(line, heading) {
+                    let start = offset + heading_offset;
+                    let end = offset + line.trim_end_matches(['\r', '\n']).len();
+                    return Some(ObligationDocSource::External(Span::with_root_ctxt(
+                        included.start_pos + BytePos(u32::try_from(start).ok()?),
+                        included.start_pos + BytePos(u32::try_from(end).ok()?),
+                    )));
+                }
+            }
+        }
+    }
+    None
+}
+
+fn lines_with_offsets(source: &str) -> impl Iterator<Item = (usize, &str)> {
+    let mut offset = 0;
+    source.split_inclusive('\n').map(move |line| {
+        let current = offset;
+        offset += line.len();
+        (current, line)
+    })
+}
+
+fn markdown_heading_offset(line: &str, heading: &str) -> Option<usize> {
+    let indentation = line.len() - line.trim_start().len();
+    let trimmed = line.trim_start();
+    let markers = trimmed.bytes().take_while(|byte| *byte == b'#').count();
+    if !(1..=6).contains(&markers) {
+        return None;
+    }
+    if !trimmed.get(markers..)?.starts_with(char::is_whitespace) {
+        return None;
+    }
+    let title = trimmed.get(markers..)?.trim();
+    (title.eq_ignore_ascii_case(heading)).then_some(indentation)
+}
+
+fn literal_include_str_path(line: &str) -> Option<&str> {
+    let trimmed = line.trim();
+    if !trimmed.starts_with("#[doc") {
+        return None;
+    }
+    let argument = trimmed.split_once("include_str!(")?.1.trim_start();
+    let quoted = argument.strip_prefix('"')?;
+    let end = quoted.find('"')?;
+    quoted.get(..end)
 }
 
 fn add_missing_requirement_notes(

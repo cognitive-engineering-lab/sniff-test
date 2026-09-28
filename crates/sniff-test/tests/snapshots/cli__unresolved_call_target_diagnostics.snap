@@ -7,28 +7,30 @@ stdout:
 <empty>
 stderr:
     Checking indirect-calls v0.1.0 ([FIXTURE])
-warning: [sniff-test::panic::documented-obligation] call to `documented` with a documented `# Panics` obligation has no recorded `// PANIC:` justification
-  --> src/lib.rs:11:5
-   |
-11 |     value.documented(flag);
-   |     ^^^^^^^^^^^^^^^^^^^^^^
-   |
-help: [option 1] add a local `// PANIC:` justification after verifying panic obligations
-  --> src/lib.rs:11:5
-   |
-11 |     value.documented(flag);
-   |     ^^^^^^^^^^^^^^^^^^^^^^
-help: [option 2] document this function's obligations with `/// # Panics` here
+warning: function `call_documented` may have panic effect
   --> src/lib.rs:10:1
    |
 10 | pub fn call_documented<T: Risky>(value: &T, flag: bool) {
-   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-note: `documented` documents `# Panics` here
-  --> src/lib.rs:5:5
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ this is a public item
+11 |     value.documented(flag);
+   |     ---------------------- this may have panic effect
    |
- 5 |     fn documented(&self, flag: bool);
-   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-   = note: reachable from `call_documented` to `documented`
+note: `call_documented` calls `documented` here
+  --> src/lib.rs:11:5
+   |
+11 |     value.documented(flag);
+   |     ^^^^^^^^^^^^^^^^^^^^^^
+note: `documented` has documented `# Panics` obligation
+  --> src/lib.rs:2:9
+   |
+ 2 |       /// # Panics
+   |  _________^
+ 3 | |     ///
+ 4 | |     /// Panics when `flag` is false.
+ 5 | |     fn documented(&self, flag: bool);
+   | |_____________________________________^
+   = help: if this call cannot have panic effect, explain why with a `// PANIC:` comment
+   = help: if `call_documented` can have panic effect, add a `# Panics` section
 
 warning: [sniff-test::safety::unresolved-call-target] function `indirect_calls::call_documented` has incomplete safety coverage
   --> src/lib.rs:11:5

@@ -108,6 +108,9 @@ cli_cases! {
     "indirect_calls" => {
         unresolved_call_target_diagnostics => Case::new();
     }
+    "included_contract" => {
+        included_contract_diagnostics => Case::new();
+    }
     "trusted_boundaries" => {
         trusted_boundary_diagnostics => Case::new();
     }
@@ -180,15 +183,15 @@ fn effect_flag_tracks_only_selected_domain() {
             "effect_flag_selects_safety",
             "safety",
             &["--effect", "safety"][..],
-            "sniff-test::safety",
-            "sniff-test::panic",
+            "may have safety effect",
+            "may have panic effect",
         ),
         (
             "effect_flag_selects_panic",
             "panic",
             &["--effect", "panic"][..],
-            "sniff-test::panic",
-            "sniff-test::safety",
+            "may have panic effect",
+            "may have safety effect",
         ),
     ] {
         let case = Case::new().args(args).denied();
@@ -232,14 +235,12 @@ fn unsafe_precondition_helpers_do_not_export_panic_contracts() {
         output.stderr
     );
     assert!(
-        !output.stderr.contains("sniff-test::panic"),
+        !output.stderr.contains("may have panic effect"),
         "the standard library's unsafe-precondition implementation leaked a panic finding:\n{}",
         output.stderr
     );
     assert!(
-        output
-            .stderr
-            .contains("sniff-test::safety::documented-obligation"),
+        output.stderr.contains("may have safety effect"),
         "the caller's independent unsafe obligation must remain audited:\n{}",
         output.stderr
     );
@@ -264,7 +265,7 @@ fn config_found_from_subdirectory() {
         "stderr:\n{}",
         output.stderr
     );
-    assert_panic_axiom_lint_codes(&output.stderr);
+    assert_panic_axiom_diagnostics(&output.stderr);
     assert!(
         !output.stderr.contains("no sniff-test.toml found"),
         "the manifest should be discovered from the fixture root:\n{}",
@@ -293,7 +294,7 @@ fn rustflags_env_does_not_disable_analysis() {
         "stderr:\n{}",
         output.stderr
     );
-    assert_panic_axiom_lint_codes(&output.stderr);
+    assert_panic_axiom_diagnostics(&output.stderr);
 }
 
 #[test]
@@ -2157,24 +2158,24 @@ fn run_named_case(name: &'static str, fixture_name: &'static str, case: &Case) {
     insta::assert_snapshot!(name, snapshot);
 }
 
-fn assert_panic_axiom_lint_codes(stderr: &str) {
+fn assert_panic_axiom_diagnostics(stderr: &str) {
     const EXPECTED: [&str; 3] = [
-        "[sniff-test::panic::division-by-zero]",
-        "[sniff-test::panic::bounds-check]",
-        "[sniff-test::panic::remainder-by-zero]",
+        "error: function `division` may have panic effect",
+        "error: function `indexed` may have panic effect",
+        "error: function `remainder` may have panic effect",
     ];
 
-    for lint_code in EXPECTED {
+    for headline in EXPECTED {
         assert_eq!(
-            stderr.matches(lint_code).count(),
+            stderr.matches(headline).count(),
             1,
-            "expected exactly one `{lint_code}` diagnostic:\n{stderr}"
+            "expected exactly one `{headline}` diagnostic:\n{stderr}"
         );
     }
     assert_eq!(
-        stderr.matches("[sniff-test::panic::").count(),
+        stderr.matches("error: function `").count(),
         EXPECTED.len(),
-        "unexpected compiler-assert lint code:\n{stderr}"
+        "unexpected panic-effect headline:\n{stderr}"
     );
 }
 

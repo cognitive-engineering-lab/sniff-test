@@ -228,10 +228,9 @@ pub fn resolve_findings(
 /// while distinct paths and workspace- or dependency-owned report roots retain
 /// separate diagnostics.
 ///
-/// The serialized report retains every root and path. Human findings always
-/// use their semantic effect source as the primary location for local effects.
-/// Dependency findings with a reachable local call use that call as the
-/// primary location. Findings without a stable source identity,
+/// The serialized report retains every root and path. Human source findings
+/// use the report root as their primary location and show the effect source
+/// in a note. Findings without a stable source identity,
 /// completeness reports, and report-root diagnostics remain separate because
 /// merging them could hide distinct analysis gaps.
 #[must_use]
@@ -289,21 +288,17 @@ pub fn aggregate_human_findings(findings: &[ResolvedFinding]) -> Vec<ResolvedFin
                         finding.finding.diagnostic.messages.push(note);
                     }
                 }
-                if finding.finding.owner.as_ref().is_some_and(|owner| {
-                    matches!(owner.scope, OwnerScope::Workspace | OwnerScope::Dependency)
-                }) {
-                    // Preserve the order within each group while presenting local
-                    // actions before contract and reachability context.
-                    finding.finding.diagnostic.messages.sort_by_key(|message| {
-                        !matches!(
-                            message,
-                            DiagnosticMessage::Help(_)
-                                | DiagnosticMessage::AlternativeHelp(_)
-                                | DiagnosticMessage::SpanAlternativeHelp(_, _)
-                        )
-                    });
-                }
             }
+            // Keep the relative order of notes and of suggested actions, but
+            // let readers follow the source trail before choosing a fix.
+            finding.finding.diagnostic.messages.sort_by_key(|message| {
+                matches!(
+                    message,
+                    DiagnosticMessage::Help(_)
+                        | DiagnosticMessage::AlternativeHelp(_)
+                        | DiagnosticMessage::SpanAlternativeHelp(_, _)
+                )
+            });
             finding
         })
         .collect()
@@ -385,6 +380,7 @@ fn same_human_source(left: &ResolvedFinding, right: &ResolvedFinding) -> bool {
         && left.level == right.level
         && left.finding.kind == right.finding.kind
         && left.finding.source_order == right.finding.source_order
+        && left.finding.root == right.finding.root
         && left.finding.function == right.finding.function
         && left.finding.target == right.finding.target
         && left.finding.span == right.finding.span
@@ -400,51 +396,16 @@ fn same_human_source(left: &ResolvedFinding, right: &ResolvedFinding) -> bool {
 }
 
 fn place_source_diagnostic(finding: &mut Finding) -> bool {
-    let destination = finding
-        .target
-        .as_deref()
-        .map(|target| format!("`{target}`"))
-        .or_else(|| finding.effect_display.clone());
-    if let (
-        Some(FindingOwner {
-            scope: OwnerScope::Dependency,
-            crate_name: Some(crate_name),
-        }),
-        Some(root),
-        Some(destination),
-        Some(local_span),
-    ) = (
-        finding.owner.as_ref(),
-        finding.root.as_deref(),
-        destination,
-        finding.local_boundary_span,
-    ) {
-        let missing_marker = (finding.source_evidence == Some(SourceEvidence::VerifiedAbsent))
-            .then_some(finding.justification_marker.as_deref())
-            .flatten();
-        finding.diagnostic.message = format!(
-            "`{root}` can reach {destination} with effect obligation in dependency crate `{crate_name}`."
-        );
-        finding.diagnostic.span = Some(local_span);
-        finding.diagnostic.second_primary_span =
-            finding.effect_span.filter(|span| *span != local_span);
-        finding
-            .diagnostic
-            .messages
-            .retain(|message| !is_compact_reachability_note(message));
-        let source_note = missing_marker.map_or_else(
-            || finding.reason.clone(),
-            |marker| format!("no recorded `// {marker}:` justification"),
-        );
-        let source_note = match finding.effect_span {
-            Some(span) => DiagnosticMessage::SpanLabel(span, source_note),
-            None => DiagnosticMessage::Note(source_note),
-        };
-        finding.diagnostic.messages.insert(0, source_note);
-        return true;
+    if let (Some(root), FindingKind::Effect { effect, .. }) =
+        (finding.root.as_deref(), &finding.kind)
+    {
+        if !is_effect_source_finding(&finding.kind) {
+            return false;
+        }
+        finding.diagnostic.message = format!("function `{root}` may have {effect} effect");
+        finding.diagnostic.second_primary_span = None;
+        return finding.diagnostic.span.is_some();
     }
-    finding.diagnostic.message.clone_from(&finding.reason);
-    finding.diagnostic.span = finding.effect_span;
     false
 }
 
@@ -520,7 +481,7 @@ fn top_level_path_segments(path: &str) -> Vec<&str> {
     segments
 }
 
-fn is_source_finding(kind: &FindingKind) -> bool {
+pub(crate) fn is_source_finding(kind: &FindingKind) -> bool {
     !matches!(
         kind,
         FindingKind::Effect {
@@ -529,6 +490,18 @@ fn is_source_finding(kind: &FindingKind) -> bool {
             ..
         } | FindingKind::EmptyReportRoots
             | FindingKind::MissingReportRoot
+    )
+}
+
+pub(crate) fn is_effect_source_finding(kind: &FindingKind) -> bool {
+    matches!(
+        kind,
+        FindingKind::Effect {
+            finding: EffectFindingClass::ConcreteOperation
+                | EffectFindingClass::ConcreteInvocation
+                | EffectFindingClass::DocumentedObligation,
+            ..
+        }
     )
 }
 
@@ -936,7 +909,7 @@ mod tests {
     }
 
     #[test]
-    fn human_findings_aggregate_one_effect_source_and_retain_every_root_message() {
+    fn human_findings_keep_a_diagnostic_for_each_report_root() {
         let source = SourceFileFact {
             id: SourceFileId::new("source-id"),
             filename: String::from("dependency/src/lib.rs"),
@@ -986,22 +959,34 @@ mod tests {
 
         let aggregated = aggregate_human_findings(&[long, short]);
 
-        assert_eq!(aggregated.len(), 1);
+        assert_eq!(aggregated.len(), 2);
         assert_eq!(
             aggregated[0].finding.diagnostic.message,
-            "panic invocation to `panic_fmt` is reachable through undocumented panic paths"
+            "function `first` may have panic effect"
         );
-        assert_eq!(aggregated[0].finding.diagnostic.span, Some(effect_span));
+        assert_eq!(aggregated[0].finding.diagnostic.span, Some(first_root_span));
         assert_eq!(
             aggregated[0].finding.diagnostic.messages,
             [
-                DiagnosticMessage::Note(String::from(
-                    "reachable from `first`, `second` to `panic_fmt`"
-                )),
+                DiagnosticMessage::Note(String::from("reachable from `first` to `panic_fmt`")),
                 DiagnosticMessage::SpanAlternativeHelp(
                     first_root_span,
                     String::from("document `first`"),
                 ),
+            ]
+        );
+        assert_eq!(
+            aggregated[1].finding.diagnostic.message,
+            "function `second` may have panic effect"
+        );
+        assert_eq!(
+            aggregated[1].finding.diagnostic.span,
+            Some(second_root_span)
+        );
+        assert_eq!(
+            aggregated[1].finding.diagnostic.messages,
+            [
+                DiagnosticMessage::Note(String::from("reachable from `second` to `panic_fmt`")),
                 DiagnosticMessage::SpanAlternativeHelp(
                     second_root_span,
                     String::from("document `second`"),
@@ -1035,6 +1020,7 @@ mod tests {
             finding.target = Some(String::from("core::result::Result::unwrap"));
             finding.reason = String::from("call to `core::result::Result::unwrap` may panic");
             finding.effect_span = Some(effect_span);
+            finding.diagnostic.span = Some(root_span);
             finding.diagnostic.messages = vec![
                 DiagnosticMessage::Note(format!("reachable from `{root}` to `unwrap`")),
                 DiagnosticMessage::SpanAlternativeHelp(root_span, format!("document `{root}`")),
@@ -1053,28 +1039,28 @@ mod tests {
         ]);
 
         assert_eq!(diagnostics.len(), 2);
-        assert_eq!(diagnostics[0].finding.diagnostic.span, Some(effect_span));
-        assert_eq!(diagnostics[1].finding.diagnostic.span, Some(effect_span));
+        assert_eq!(diagnostics[0].finding.diagnostic.span, Some(first_span));
+        assert_eq!(diagnostics[1].finding.diagnostic.span, Some(second_span));
         assert_eq!(
             diagnostics[0].finding.diagnostic.messages,
             [
+                DiagnosticMessage::Note(String::from(
+                    "reachable from `read_bytes_to_end` to `unwrap`"
+                )),
                 DiagnosticMessage::SpanAlternativeHelp(
                     first_span,
                     String::from("document `read_bytes_to_end`")
                 ),
-                DiagnosticMessage::Note(String::from(
-                    "reachable from `read_bytes_to_end` to `unwrap`"
-                )),
             ]
         );
         assert_eq!(
             diagnostics[1].finding.diagnostic.messages,
             [
+                DiagnosticMessage::Note(String::from("reachable from `skip_to_end` to `unwrap`")),
                 DiagnosticMessage::SpanAlternativeHelp(
                     second_span,
                     String::from("document `skip_to_end`"),
                 ),
-                DiagnosticMessage::Note(String::from("reachable from `skip_to_end` to `unwrap`")),
             ]
         );
     }
@@ -1105,6 +1091,7 @@ mod tests {
             finding.reason = String::from("dependency call to `alloc::vec::Vec::push` may panic");
             finding.effect_span = Some(effect_span);
             finding.local_boundary_span = Some(local_span);
+            finding.diagnostic.span = Some(local_span);
             finding.source_evidence = Some(SourceEvidence::VerifiedAbsent);
             finding.justification_marker = Some(String::from("PANIC"));
             finding.trace = trace.iter().map(|step| (*step).to_owned()).collect();
@@ -1136,40 +1123,28 @@ mod tests {
         );
         assert_eq!(diagnostics[0].finding.diagnostic.span, Some(first_span));
         assert_eq!(diagnostics[1].finding.diagnostic.span, Some(second_span));
-        assert_eq!(
-            diagnostics[0].finding.diagnostic.second_primary_span,
-            Some(effect_span)
-        );
-        assert_eq!(
-            diagnostics[1].finding.diagnostic.second_primary_span,
-            Some(effect_span)
-        );
+        assert_eq!(diagnostics[0].finding.diagnostic.second_primary_span, None);
+        assert_eq!(diagnostics[1].finding.diagnostic.second_primary_span, None);
         assert_eq!(
             diagnostics[0].finding.diagnostic.message,
-            "`ensure` can reach `push` with effect obligation in dependency crate `dependency`."
+            "function `ensure` may have panic effect"
         );
         assert_eq!(
             diagnostics[1].finding.diagnostic.message,
-            "`insert` can reach `push` with effect obligation in dependency crate `dependency`."
+            "function `insert` may have panic effect"
         );
         assert_eq!(
             diagnostics[0].finding.diagnostic.messages,
             [
+                DiagnosticMessage::Note(String::from("reachable from `ensure` to `push`")),
                 DiagnosticMessage::SpanAlternativeHelp(first_span, String::from("guard `ensure`"),),
-                DiagnosticMessage::SpanLabel(
-                    effect_span,
-                    String::from("no recorded `// PANIC:` justification")
-                ),
             ]
         );
         assert_eq!(
             diagnostics[1].finding.diagnostic.messages,
             [
+                DiagnosticMessage::Note(String::from("reachable from `insert` to `push`")),
                 DiagnosticMessage::SpanAlternativeHelp(second_span, String::from("guard `insert`"),),
-                DiagnosticMessage::SpanLabel(
-                    effect_span,
-                    String::from("no recorded `// PANIC:` justification")
-                ),
             ]
         );
     }
@@ -1207,6 +1182,7 @@ mod tests {
             finding.reason = String::from("dependency effect is reachable");
             finding.effect_span = Some(effect_span);
             finding.local_boundary_span = Some(local_span);
+            finding.diagnostic.span = Some(local_span);
             finding.source_evidence = Some(SourceEvidence::VerifiedAbsent);
             finding.justification_marker = Some(String::from("PANIC"));
             finding.diagnostic.messages = vec![DiagnosticMessage::SpanAlternativeHelp(
@@ -1238,7 +1214,7 @@ mod tests {
     }
 
     #[test]
-    fn human_single_root_source_finding_is_source_centric_without_changing_json() {
+    fn human_single_root_source_finding_is_root_centric_without_changing_json() {
         let source = SourceFileFact {
             id: SourceFileId::new("source-id"),
             filename: String::from("src/lib.rs"),
@@ -1283,9 +1259,9 @@ mod tests {
         assert_eq!(aggregated.len(), 1);
         assert_eq!(
             aggregated[0].finding.diagnostic.message,
-            "panic invocation to `panic_fmt` is reachable through undocumented panic paths"
+            "function `api` may have panic effect"
         );
-        assert_eq!(aggregated[0].finding.diagnostic.span, Some(effect_span));
+        assert_eq!(aggregated[0].finding.diagnostic.span, Some(root_span));
         assert_eq!(
             aggregated[0]
                 .finding
@@ -1304,7 +1280,7 @@ mod tests {
     }
 
     #[test]
-    fn local_source_diagnostic_puts_all_help_before_notes() {
+    fn local_source_diagnostic_puts_all_help_after_notes() {
         let source = SourceFileFact {
             id: SourceFileId::new("source-id"),
             filename: String::from("src/lib.rs"),
@@ -1341,19 +1317,19 @@ mod tests {
         assert_eq!(
             aggregated[0].finding.diagnostic.messages,
             [
+                DiagnosticMessage::SpanNote(root_span, String::from("callee contract")),
+                DiagnosticMessage::Note(String::from("reachable from `api` to `unwrap`")),
                 DiagnosticMessage::Help(String::from("justify this call")),
                 DiagnosticMessage::SpanAlternativeHelp(
                     root_span,
                     String::from("document this root"),
                 ),
-                DiagnosticMessage::SpanNote(root_span, String::from("callee contract")),
-                DiagnosticMessage::Note(String::from("reachable from `api` to `unwrap`")),
             ]
         );
     }
 
     #[test]
-    fn human_source_finding_without_displayable_source_has_no_primary_span() {
+    fn human_source_finding_without_displayable_source_keeps_root_span() {
         let source = SourceFileFact {
             id: SourceFileId::new("source-id"),
             filename: String::from("dependency/src/lib.rs"),
@@ -1378,13 +1354,8 @@ mod tests {
 
         let aggregated = aggregate_human_findings(&[resolved]);
 
-        assert_eq!(aggregated[0].finding.diagnostic.span, None);
-        assert_eq!(
-            aggregated[0].finding.diagnostic.messages,
-            [DiagnosticMessage::Note(String::from(
-                "reachable from local report root: `api`"
-            ))]
-        );
+        assert_eq!(aggregated[0].finding.diagnostic.span, Some(root_span));
+        assert_eq!(aggregated[0].finding.diagnostic.messages, []);
     }
 
     #[test]
@@ -1424,7 +1395,7 @@ mod tests {
 
         assert_eq!(
             aggregated[0].finding.diagnostic.message,
-            "dependency crate `bitvec` has no recorded `// PANIC:` justification for call to `load_be` with a `# Panics` obligation"
+            "function `intersect` may have panic effect"
         );
         assert_eq!(
             aggregated[0].finding.diagnostic.messages,

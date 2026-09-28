@@ -1,0 +1,38 @@
+---
+source: crates/sniff-test/tests/cli.rs
+expression: snapshot
+---
+exit: 0
+stdout:
+<empty>
+stderr:
+    Checking included-contract v0.1.0 ([FIXTURE])
+warning: function `run` may have panic effect
+  --> src/lib.rs:14:1
+   |
+14 | pub fn run(valid: bool) {
+   | ^^^^^^^^^^^^^^^^^^^^^^^ this is a public item
+15 |     Worker.checked(valid);
+   |     --------------------- this may have panic effect
+   |
+note: `run` calls `checked` here
+  --> src/lib.rs:15:5
+   |
+15 |     Worker.checked(valid);
+   |     ^^^^^^^^^^^^^^^^^^^^^
+note: `checked` has documented `# Panics` obligation
+  --> [FIXTURE]/doc/panic.md:1:1
+   |
+ 1 | # Panics
+   | ^^^^^^^^
+note: the called implementation of `checked` is here
+  --> src/lib.rs:9:5
+   |
+ 9 |     fn checked(&self, valid: bool) {
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   = help: if this call cannot have panic effect, explain why with a `// PANIC:` comment
+   = help: if `run` can have panic effect, add a `# Panics` section
+
+note: set `show-full-stack-trace = true` under `[analysis]` in sniff-test.toml to show every reachability step
+warning: `included-contract` (lib) generated 1 warning
+    Finished `release` profile [optimized] target(s) in [TIME]

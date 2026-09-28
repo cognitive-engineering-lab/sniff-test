@@ -7,41 +7,37 @@ stdout:
 <empty>
 stderr:
     Checking source-aggregation v0.1.0 ([FIXTURE])
-error: [sniff-test::panic::configured-invocation] panic invocation to `panic_fmt` has no recorded `// PANIC:` justification
- --> src/lib.rs:2:5
-  |
-2 |     panic!("shared source");
-  |     ^^^^^^^^^^^^^^^^^^^^^^^
-  |
-help: [option 1] add a local `// PANIC:` justification after verifying panic obligations
- --> src/lib.rs:2:5
-  |
-2 |     panic!("shared source");
-  |     ^^^^^^^^^^^^^^^^^^^^^^^
-help: [option 2] document this function's obligations with `/// # Panics` here
+error: function `first_api` may have panic effect
  --> src/lib.rs:5:1
   |
 5 | pub fn first_api() {
-  | ^^^^^^^^^^^^^^^^^^
-  = note: reachable from `first_api` to `panic_fmt`
+  | ^^^^^^^^^^^^^^^^^^ this is a public item
+6 |     shared_panic_source();
+  |     --------------------- this may have panic effect
+  |
+note: `shared_panic_source` calls `panic_fmt` here
+ --> src/lib.rs:2:5
+  |
+2 |     panic!("shared source");
+  |     ^^^^^^^^^^^^^^^^^^^^^^^
+  = help: if this call cannot have panic effect, explain why with a `// PANIC:` comment
+  = help: if `first_api` can have panic effect, add a `# Panics` section
 
-error: [sniff-test::panic::configured-invocation] panic invocation to `panic_fmt` has no recorded `// PANIC:` justification
- --> src/lib.rs:2:5
-  |
-2 |     panic!("shared source");
-  |     ^^^^^^^^^^^^^^^^^^^^^^^
-  |
-help: [option 1] add a local `// PANIC:` justification after verifying panic obligations
- --> src/lib.rs:2:5
-  |
-2 |     panic!("shared source");
-  |     ^^^^^^^^^^^^^^^^^^^^^^^
-help: [option 2] document this function's obligations with `/// # Panics` here
- --> src/lib.rs:9:1
-  |
-9 | pub fn second_api() {
-  | ^^^^^^^^^^^^^^^^^^^
-  = note: reachable from `second_api` to `panic_fmt`
+error: function `second_api` may have panic effect
+  --> src/lib.rs:9:1
+   |
+ 9 | pub fn second_api() {
+   | ^^^^^^^^^^^^^^^^^^^ this is a public item
+10 |     shared_panic_source();
+   |     --------------------- this may have panic effect
+   |
+note: `shared_panic_source` calls `panic_fmt` here
+  --> src/lib.rs:2:5
+   |
+ 2 |     panic!("shared source");
+   |     ^^^^^^^^^^^^^^^^^^^^^^^
+   = help: if this call cannot have panic effect, explain why with a `// PANIC:` comment
+   = help: if `second_api` can have panic effect, add a `# Panics` section
 
 note: set `show-full-stack-trace = true` under `[analysis]` in sniff-test.toml to show every reachability step
 error: could not compile `source-aggregation` (lib) due to 2 previous errors

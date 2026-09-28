@@ -16,8 +16,13 @@ pub fn emit_finding_diagnostic(
     level: LintLevel,
     lint_code: &str,
     diagnostic: &FindingDiagnostic,
+    show_lint_code: bool,
 ) {
-    let message = lint_coded_message(lint_code, &diagnostic.message);
+    let message = if show_lint_code {
+        lint_coded_message(lint_code, &diagnostic.message)
+    } else {
+        diagnostic.message.clone()
+    };
     let spans = diagnostic.span.map(|primary| {
         let mut spans = MultiSpan::from_span(primary);
         if let Some(second) = diagnostic.second_primary_span {

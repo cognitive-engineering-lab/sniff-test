@@ -6,8 +6,8 @@ use sniff_test_core::effects::Effect;
 
 use crate::diagnostics::{emit_finding_diagnostic, emit_footer_note};
 use crate::findings::{
-    FULL_STACK_TRACE_HINT, Finding, aggregate_human_findings, resolve_findings,
-    take_full_stack_trace_hint,
+    FULL_STACK_TRACE_HINT, Finding, aggregate_human_findings, is_effect_source_finding,
+    resolve_findings, take_full_stack_trace_hint,
 };
 use crate::report::{AnalysisArtifactReport, REPORT_FORMAT_VERSION, ReportArtifact};
 
@@ -43,6 +43,7 @@ pub fn emit_human_diagnostics(tcx: TyCtxt<'_>, report: &AnalysisArtifactReport) 
             finding.level,
             &finding.finding.kind.lint_code(),
             &finding.finding.diagnostic,
+            !is_effect_source_finding(&finding.finding.kind),
         );
     }
     if show_full_stack_trace_hint {

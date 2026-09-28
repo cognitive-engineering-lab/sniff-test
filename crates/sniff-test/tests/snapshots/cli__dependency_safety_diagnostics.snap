@@ -8,91 +8,65 @@ stdout:
 stderr:
     Checking dependency-safety v0.1.0 ([FIXTURE]/dep)
     Checking dependency-safety-app v0.1.0 ([FIXTURE]/app)
-error: [sniff-test::safety::raw-pointer-dereference] `read_dependency` can reach raw pointer dereference with effect obligation in dependency crate `dependency_safety`.
- --> src/lib.rs:2:5
-  |
-2 |     dependency_safety::read_byte(pointer)
-  |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  |
- ::: [FIXTURE]/dep/src/lib.rs:2:14
-  |
-2 |     unsafe { *pointer }
-  |              ^^^^^^^^ no recorded `// SAFETY:` justification
-  |
-help: [option 1] add a local `// SAFETY:` justification after verifying safety obligations
- --> src/lib.rs:2:5
-  |
-2 |     dependency_safety::read_byte(pointer)
-  |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-help: [option 2] document this function's obligations with `/// # Safety` here
+error: function `read_dependency` may have safety effect
  --> src/lib.rs:1:1
   |
 1 | pub fn read_dependency(pointer: *const u8) -> u8 {
-  | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-help: [option 3] audit dependency crate `dependency_safety` to justify this effect
+  | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ this is a public item
+2 |     dependency_safety::read_byte(pointer)
+  |     ------------------------------------- this may have safety effect
+  |
+note: `read_byte` reaches safety effect operation here
  --> [FIXTURE]/dep/src/lib.rs:2:14
   |
 2 |     unsafe { *pointer }
   |              ^^^^^^^^
+  = help: if this operation cannot have safety effect, explain why with a `// SAFETY:` comment
+  = help: if `read_dependency` can have safety effect, add a `# Safety` section
+  = help: if the dependency satisfies this obligation internally, audit its source and record the justification there
 
-error: [sniff-test::safety::raw-pointer-dereference] `read_dependency_again` can reach raw pointer dereference with effect obligation in dependency crate `dependency_safety`.
- --> src/lib.rs:6:5
-  |
-6 |     dependency_safety::read_byte(pointer)
-  |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  |
- ::: [FIXTURE]/dep/src/lib.rs:2:14
-  |
-2 |     unsafe { *pointer }
-  |              ^^^^^^^^ no recorded `// SAFETY:` justification
-  |
-help: [option 1] add a local `// SAFETY:` justification after verifying safety obligations
- --> src/lib.rs:6:5
-  |
-6 |     dependency_safety::read_byte(pointer)
-  |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-help: [option 2] document this function's obligations with `/// # Safety` here
+error: function `read_dependency_again` may have safety effect
  --> src/lib.rs:5:1
   |
 5 | pub fn read_dependency_again(pointer: *const u8) -> u8 {
-  | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-help: [option 3] audit dependency crate `dependency_safety` to justify this effect
+  | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ this is a public item
+6 |     dependency_safety::read_byte(pointer)
+  |     ------------------------------------- this may have safety effect
+  |
+note: `read_byte` reaches safety effect operation here
  --> [FIXTURE]/dep/src/lib.rs:2:14
   |
 2 |     unsafe { *pointer }
   |              ^^^^^^^^
+  = help: if this operation cannot have safety effect, explain why with a `// SAFETY:` comment
+  = help: if `read_dependency_again` can have safety effect, add a `# Safety` section
+  = help: if the dependency satisfies this obligation internally, audit its source and record the justification there
 
-warning: [sniff-test::safety::documented-obligation] `read_documented_dependency` can reach `documented_read` with effect obligation in dependency crate `dependency_safety`.
-  --> src/lib.rs:10:5
-   |
-10 |     dependency_safety::read_documented(pointer)
-   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-   |
-  ::: [FIXTURE]/dep/src/lib.rs:14:14
-   |
-14 |     unsafe { documented_read(pointer) }
-   |              ^^^^^^^^^^^^^^^^^^^^^^^^ no recorded `// SAFETY:` justification
-   |
-help: [option 1] add a local `// SAFETY:` justification after verifying safety obligations
-  --> src/lib.rs:10:5
-   |
-10 |     dependency_safety::read_documented(pointer)
-   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-help: [option 2] document this function's obligations with `/// # Safety` here
+warning: function `read_documented_dependency` may have safety effect
   --> src/lib.rs:9:1
    |
  9 | pub fn read_documented_dependency(pointer: *const u8) -> u8 {
-   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-help: [option 3] audit dependency crate `dependency_safety` to justify this effect
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ this is a public item
+10 |     dependency_safety::read_documented(pointer)
+   |     ------------------------------------------- this may have safety effect
+   |
+note: `read_documented` calls `documented_read` here
   --> [FIXTURE]/dep/src/lib.rs:14:14
    |
 14 |     unsafe { documented_read(pointer) }
    |              ^^^^^^^^^^^^^^^^^^^^^^^^
-note: `documented_read` documents `# Safety` here
-  --> [FIXTURE]/dep/src/lib.rs:8:1
+note: `documented_read` has documented `# Safety` obligation
+  --> [FIXTURE]/dep/src/lib.rs:5:5
    |
- 8 | unsafe fn documented_read(pointer: *const u8) -> u8 {
-   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+ 5 |   /// # Safety
+   |  _____^
+ 6 | | ///
+ 7 | | /// `pointer` must be valid to read for one byte.
+ 8 | | unsafe fn documented_read(pointer: *const u8) -> u8 {
+   | |___________________________________________________^
+   = help: if this call cannot have safety effect, explain why with a `// SAFETY:` comment
+   = help: if `read_documented_dependency` can have safety effect, add a `# Safety` section
+   = help: if the dependency satisfies this obligation internally, audit its source and record the justification there
 
 note: set `show-full-stack-trace = true` under `[analysis]` in sniff-test.toml to show every reachability step
 warning: `dependency-safety-app` (lib) generated 1 warning

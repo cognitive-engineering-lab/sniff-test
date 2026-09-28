@@ -7,41 +7,38 @@ stdout:
 <empty>
 stderr:
     Checking unsafe-ops v0.1.0 ([FIXTURE])
-error: [sniff-test::safety::inline-assembly] inline assembly has no recorded `// SAFETY:` justification
-  --> src/lib.rs:34:9
-   |
-34 |         asm!("nop");
-   |         ^^^^^^^^^^^
-   |
-help: [option 1] add a local `// SAFETY:` justification after verifying safety obligations
-  --> src/lib.rs:34:9
-   |
-34 |         asm!("nop");
-   |         ^^^^^^^^^^^
-help: [option 2] document this function's obligations with `/// # Safety` here
+error: function `asm_unjustified` may have safety effect
   --> src/lib.rs:32:1
    |
 32 | pub fn asm_unjustified() {
-   | ^^^^^^^^^^^^^^^^^^^^^^^^
-   = note: reachable from `asm_unjustified` to `inline assembly`
+   | ^^^^^^^^^^^^^^^^^^^^^^^^ this is a public item
+33 |     unsafe {
+34 |         asm!("nop");
+   |         ----------- this may have safety effect
+   |
+note: `asm_unjustified` reaches safety effect operation here
+  --> src/lib.rs:34:9
+   |
+34 |         asm!("nop");
+   |         ^^^^^^^^^^^
+   = help: if this operation cannot have safety effect, explain why with a `// SAFETY:` comment
+   = help: if `asm_unjustified` can have safety effect, add a `# Safety` section
 
-warning: [sniff-test::safety::raw-pointer-dereference] raw pointer dereference has no recorded `// SAFETY:` justification
-  --> src/lib.rs:17:14
-   |
-17 |     unsafe { *ptr }
-   |              ^^^^
-   |
-help: [option 1] add a local `// SAFETY:` justification after verifying safety obligations
-  --> src/lib.rs:17:14
-   |
-17 |     unsafe { *ptr }
-   |              ^^^^
-help: [option 2] document this function's obligations with `/// # Safety` here
+warning: function `deref_unjustified` may have safety effect
   --> src/lib.rs:16:1
    |
 16 | pub fn deref_unjustified(ptr: *const u32) -> u32 {
-   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-   = note: reachable from `deref_unjustified` to `raw pointer dereference`
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ this is a public item
+17 |     unsafe { *ptr }
+   |              ---- this may have safety effect
+   |
+note: `deref_unjustified` reaches safety effect operation here
+  --> src/lib.rs:17:14
+   |
+17 |     unsafe { *ptr }
+   |              ^^^^
+   = help: if this operation cannot have safety effect, explain why with a `// SAFETY:` comment
+   = help: if `deref_unjustified` can have safety effect, add a `# Safety` section
 
 note: set `show-full-stack-trace = true` under `[analysis]` in sniff-test.toml to show every reachability step
 warning: `unsafe-ops` (lib) generated 1 warning

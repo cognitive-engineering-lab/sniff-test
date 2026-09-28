@@ -7,23 +7,112 @@ stdout:
 <empty>
 stderr:
     Checking trusted-boundaries v0.1.0 ([FIXTURE])
-warning: [sniff-test::safety::unsafe-call] safety invocation to `opaque function pointer` has no recorded `// SAFETY:` justification
+warning: [sniff-test::panic::unresolved-call-target] function `trusted_boundaries::trusted_through_fn_pointer` has incomplete panic coverage
+  --> src/lib.rs:24:5
+   |
+24 |     helper(flag);
+   |     ^^^^^^^^^^^^
+   |
+note: panic coverage is incomplete here: unresolved function-pointer call target
+  --> src/lib.rs:24:5
+   |
+24 |     helper(flag);
+   |     ^^^^^^^^^^^^
+   = note: this call uses a function pointer
+   = note: reachable from `trusted_through_fn_pointer` to `indirect call through a function pointer`
+   = help: make the callee concrete or make its possible implementations available to analysis
+
+warning: [sniff-test::safety::unresolved-call-target] function `trusted_boundaries::trusted_through_fn_pointer` has incomplete safety coverage
+  --> src/lib.rs:24:5
+   |
+24 |     helper(flag);
+   |     ^^^^^^^^^^^^
+   |
+note: safety coverage is incomplete here: unresolved function-pointer call target
+  --> src/lib.rs:24:5
+   |
+24 |     helper(flag);
+   |     ^^^^^^^^^^^^
+   = note: this call uses a function pointer
+   = note: reachable from `trusted_through_fn_pointer` to `indirect call through a function pointer`
+   = help: make the callee concrete or make its possible implementations available to analysis
+
+warning: [sniff-test::panic::unresolved-call-target] function `trusted_boundaries::trusted_unresolved_wrapper` has incomplete panic coverage
+  --> src/lib.rs:77:5
+   |
+77 |     callback();
+   |     ^^^^^^^^^^
+   |
+note: panic coverage is incomplete here: unresolved function-pointer call target
+  --> src/lib.rs:77:5
+   |
+77 |     callback();
+   |     ^^^^^^^^^^
+   = note: this call uses a function pointer
+   = note: reachable from `trusted_unresolved_wrapper` to `indirect call through a function pointer`
+   = help: make the callee concrete or make its possible implementations available to analysis
+
+warning: [sniff-test::safety::unresolved-call-target] function `trusted_boundaries::trusted_unresolved_wrapper` has incomplete safety coverage
+  --> src/lib.rs:77:5
+   |
+77 |     callback();
+   |     ^^^^^^^^^^
+   |
+note: safety coverage is incomplete here: unresolved function-pointer call target
+  --> src/lib.rs:77:5
+   |
+77 |     callback();
+   |     ^^^^^^^^^^
+   = note: this call uses a function pointer
+   = note: reachable from `trusted_unresolved_wrapper` to `indirect call through a function pointer`
+   = help: make the callee concrete or make its possible implementations available to analysis
+
+warning: [sniff-test::panic::unresolved-call-target] function `trusted_boundaries::trusted_unsafe_through_fn_pointer` has incomplete panic coverage
   --> src/lib.rs:33:14
    |
 33 |     unsafe { helper() }
    |              ^^^^^^^^
    |
-help: [option 1] add a local `// SAFETY:` justification after verifying safety obligations
+note: panic coverage is incomplete here: unresolved function-pointer call target
   --> src/lib.rs:33:14
    |
 33 |     unsafe { helper() }
    |              ^^^^^^^^
-help: [option 2] document this function's obligations with `/// # Safety` here
+   = note: this call uses a function pointer
+   = note: reachable from `trusted_unsafe_through_fn_pointer` to `indirect call through a function pointer`
+   = help: make the callee concrete or make its possible implementations available to analysis
+
+warning: function `trusted_unsafe_through_fn_pointer` may have safety effect
   --> src/lib.rs:31:1
    |
 31 | pub fn trusted_unsafe_through_fn_pointer(use_trusted: bool, unknown: unsafe fn()) {
-   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ this is a public item
+32 |     let helper: unsafe fn() = if use_trusted { unsafe_helper } else { unknown };
+33 |     unsafe { helper() }
+   |              -------- this may have safety effect
+   |
+note: `trusted_unsafe_through_fn_pointer` calls `opaque function pointer` here
+  --> src/lib.rs:33:14
+   |
+33 |     unsafe { helper() }
+   |              ^^^^^^^^
+   = help: if this call cannot have safety effect, explain why with a `// SAFETY:` comment
+   = help: if `trusted_unsafe_through_fn_pointer` can have safety effect, add a `# Safety` section
+
+warning: [sniff-test::safety::unresolved-call-target] function `trusted_boundaries::trusted_unsafe_through_fn_pointer` has incomplete safety coverage
+  --> src/lib.rs:33:14
+   |
+33 |     unsafe { helper() }
+   |              ^^^^^^^^
+   |
+note: safety coverage is incomplete here: unresolved function-pointer call target
+  --> src/lib.rs:33:14
+   |
+33 |     unsafe { helper() }
+   |              ^^^^^^^^
+   = note: this call uses a function pointer
    = note: reachable from `trusted_unsafe_through_fn_pointer` to `indirect call through a function pointer`
+   = help: make the callee concrete or make its possible implementations available to analysis
 
 warning: [sniff-test::safety::undocumented-invocation] call to `unsafe_helper` may produce the safety effect, but `unsafe_helper` has no documented `# Safety` obligation
   --> src/lib.rs:28:14
@@ -33,29 +122,60 @@ warning: [sniff-test::safety::undocumented-invocation] call to `unsafe_helper` m
    |
    = help: document the callee's caller obligations under a `# Safety` section
 
-warning: [sniff-test::panic::documented-obligation] call to `trusted_doc_helper` with a documented `# Panics` obligation has no recorded `// PANIC:` justification
-  --> src/lib.rs:6:5
-   |
- 6 |     trusted_doc_helper(flag);
-   |     ^^^^^^^^^^^^^^^^^^^^^^^^
-   |
-help: [option 1] add a local `// PANIC:` justification after verifying panic obligations
-  --> src/lib.rs:6:5
-   |
- 6 |     trusted_doc_helper(flag);
-   |     ^^^^^^^^^^^^^^^^^^^^^^^^
-help: [option 2] document this function's obligations with `/// # Panics` here
+warning: function `trusted_with_docs` may have panic effect
   --> src/lib.rs:5:1
    |
  5 | pub fn trusted_with_docs(flag: bool) {
-   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-note: `trusted_doc_helper` documents `# Panics` here
-  --> src/lib.rs:16:1
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ this is a public item
+ 6 |     trusted_doc_helper(flag);
+   |     ------------------------ this may have panic effect
    |
-16 | fn trusted_doc_helper(flag: bool) {
-   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-   = note: reachable from `trusted_with_docs` to `trusted_doc_helper`
+note: `trusted_with_docs` calls `trusted_doc_helper` here
+  --> src/lib.rs:6:5
+   |
+ 6 |     trusted_doc_helper(flag);
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^
+note: `trusted_doc_helper` has documented `# Panics` obligation
+  --> src/lib.rs:14:5
+   |
+14 |   /// # Panics
+   |  _____^
+15 | | /// Panics when `flag` is false.
+16 | | fn trusted_doc_helper(flag: bool) {
+   | |_________________________________^
+   = help: if this call cannot have panic effect, explain why with a `// PANIC:` comment
+   = help: if `trusted_with_docs` can have panic effect, add a `# Panics` section
+
+warning: [sniff-test::panic::unresolved-call-target] function `trusted_boundaries::untrusted_unresolved_wrapper` has incomplete panic coverage
+  --> src/lib.rs:81:5
+   |
+81 |     callback();
+   |     ^^^^^^^^^^
+   |
+note: panic coverage is incomplete here: unresolved function-pointer call target
+  --> src/lib.rs:81:5
+   |
+81 |     callback();
+   |     ^^^^^^^^^^
+   = note: this call uses a function pointer
+   = note: reachable from `untrusted_unresolved_wrapper` to `indirect call through a function pointer`
+   = help: make the callee concrete or make its possible implementations available to analysis
+
+warning: [sniff-test::safety::unresolved-call-target] function `trusted_boundaries::untrusted_unresolved_wrapper` has incomplete safety coverage
+  --> src/lib.rs:81:5
+   |
+81 |     callback();
+   |     ^^^^^^^^^^
+   |
+note: safety coverage is incomplete here: unresolved function-pointer call target
+  --> src/lib.rs:81:5
+   |
+81 |     callback();
+   |     ^^^^^^^^^^
+   = note: this call uses a function pointer
+   = note: reachable from `untrusted_unresolved_wrapper` to `indirect call through a function pointer`
+   = help: make the callee concrete or make its possible implementations available to analysis
 
 note: set `show-full-stack-trace = true` under `[analysis]` in sniff-test.toml to show every reachability step
-warning: `trusted-boundaries` (lib) generated 3 warnings
+warning: `trusted-boundaries` (lib) generated 11 warnings
     Finished `release` profile [optimized] target(s) in [TIME]

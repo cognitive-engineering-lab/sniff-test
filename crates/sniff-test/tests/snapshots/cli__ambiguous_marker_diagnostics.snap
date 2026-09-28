@@ -7,7 +7,7 @@ stdout:
 <empty>
 stderr:
     Checking ambiguous-markers v0.1.0 ([FIXTURE])
-error: [sniff-test::panic::ambiguous-requirement] `duplicate_name_ratio` has multiple # Panics requirements named `nonzero`
+error: [sniff-test::panic::ambiguous-requirement] `duplicate_name_ratio` has an ambiguous `# Panics` requirement name
   --> src/lib.rs:21:1
    |
 21 | /// - nonzero: denominator must not be zero.
@@ -15,123 +15,133 @@ error: [sniff-test::panic::ambiguous-requirement] `duplicate_name_ratio` has mul
 22 | /// - nonzero: total must be bounded by the caller.
    | --------------------------------------------------- `nonzero: total must be bounded by the caller.` normalizes to `nonzero`
    |
-   = help: give each requirement a unique name
    = note: `duplicate_name_ratio` has multiple `# Panics` requirements that normalize to `nonzero`
    = note: reachable from `duplicate_name_marker` to `duplicate_name_ratio`
+   = help: give each requirement a unique name
 
-error: [sniff-test::panic::ambiguous-marker] one `// PANIC:` marker applies to 2 panic effect groups
+error: [sniff-test::panic::ambiguous-marker] function `marked_path_to_shared_sources` has an ambiguous `// PANIC:` marker
   --> src/lib.rs:72:1
    |
 72 | /     // PANIC: this path accepts both documented effects.
 73 | |     shared_documented_sources();
    | |_^
    |
-   = help: move the marker directly above one obligation or split it into separate markers
    = note: this marker applies to 2 panic effect groups
    = note: reachable from `marked_path_to_shared_sources` to `first_documented_source`
+   = help: move the marker directly above one obligation or split it into separate markers
 
-error: [sniff-test::panic::ambiguous-marker] one `// PANIC:` marker applies to 2 panic effect groups
+error: [sniff-test::panic::ambiguous-marker] function `marker_covers_documented_call_and_sink` has an ambiguous `// PANIC:` marker
   --> src/lib.rs:47:1
    |
 47 | /         // PANIC: this fixture guards both operations.
 48 | |         call_documented_and_sink!()
    | |_^
    |
-   = help: move the marker directly above one obligation or split it into separate markers
    = note: this marker applies to 2 panic effect groups
    = note: reachable from `marker_covers_documented_call_and_sink` to `ratio`
+   = help: move the marker directly above one obligation or split it into separate markers
 
-error: [sniff-test::panic::documented-obligation] call to `ratio` with a documented `# Panics` obligation has no recorded `// PANIC:` justification
+error: function `shared_block_marker` may have panic effect
+  --> src/lib.rs:8:1
+   |
+ 8 | pub fn shared_block_marker(a: usize, b: usize, denominator: usize) -> usize {
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ this is a public item
+...
+11 |         let first = ratio(a, denominator);
+   |                     --------------------- this may have panic effect
+   |
+note: `shared_block_marker` calls `ratio` here
   --> src/lib.rs:11:21
    |
 11 |         let first = ratio(a, denominator);
    |                     ^^^^^^^^^^^^^^^^^^^^^
+note: `ratio` has documented `# Panics` obligation
+  --> src/lib.rs:1:5
    |
-help: [option 1] add a local `// PANIC:` justification after verifying panic obligations
-  --> src/lib.rs:11:21
-   |
-11 |         let first = ratio(a, denominator);
-   |                     ^^^^^^^^^^^^^^^^^^^^^
-help: [option 2] document this function's obligations with `/// # Panics` here
+ 1 |   /// # Panics
+   |  _____^
+ 2 | | ///
+ 3 | | /// Panics when `denominator` is zero.
+ 4 | | pub fn ratio(total: usize, denominator: usize) -> usize {
+   | |_______________________________________________________^
+   = help: if this call cannot have panic effect, explain why with a `// PANIC:` comment
+   = help: if `shared_block_marker` can have panic effect, add a `# Panics` section
+
+error: function `shared_block_marker` may have panic effect
   --> src/lib.rs:8:1
    |
  8 | pub fn shared_block_marker(a: usize, b: usize, denominator: usize) -> usize {
-   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-note: `ratio` documents `# Panics` here
-  --> src/lib.rs:4:1
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ this is a public item
+...
+12 |         let second = ratio(b, denominator);
+   |                      --------------------- this may have panic effect
    |
- 4 | pub fn ratio(total: usize, denominator: usize) -> usize {
-   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-   = note: reachable from `shared_block_marker` to `ratio`
-
-error: [sniff-test::panic::documented-obligation] call to `ratio` with a documented `# Panics` obligation has no recorded `// PANIC:` justification
+note: `shared_block_marker` calls `ratio` here
   --> src/lib.rs:12:22
    |
 12 |         let second = ratio(b, denominator);
    |                      ^^^^^^^^^^^^^^^^^^^^^
+note: `ratio` has documented `# Panics` obligation
+  --> src/lib.rs:1:5
    |
-help: [option 1] add a local `// PANIC:` justification after verifying panic obligations
-  --> src/lib.rs:12:22
-   |
-12 |         let second = ratio(b, denominator);
-   |                      ^^^^^^^^^^^^^^^^^^^^^
-help: [option 2] document this function's obligations with `/// # Panics` here
-  --> src/lib.rs:8:1
-   |
- 8 | pub fn shared_block_marker(a: usize, b: usize, denominator: usize) -> usize {
-   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-note: `ratio` documents `# Panics` here
-  --> src/lib.rs:4:1
-   |
- 4 | pub fn ratio(total: usize, denominator: usize) -> usize {
-   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-   = note: reachable from `shared_block_marker` to `ratio`
+ 1 |   /// # Panics
+   |  _____^
+ 2 | | ///
+ 3 | | /// Panics when `denominator` is zero.
+ 4 | | pub fn ratio(total: usize, denominator: usize) -> usize {
+   | |_______________________________________________________^
+   = help: if this call cannot have panic effect, explain why with a `// PANIC:` comment
+   = help: if `shared_block_marker` can have panic effect, add a `# Panics` section
 
-error: [sniff-test::panic::documented-obligation] call to `first_documented_source` with a documented `# Panics` obligation has no recorded `// PANIC:` justification
+error: function `unmarked_path_to_shared_sources` may have panic effect
+  --> src/lib.rs:76:1
+   |
+76 | pub fn unmarked_path_to_shared_sources() {
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ this is a public item
+77 |     shared_documented_sources();
+   |     --------------------------- this may have panic effect
+   |
+note: `shared_documented_sources` calls `first_documented_source` here
   --> src/lib.rs:67:5
    |
 67 |     first_documented_source();
    |     ^^^^^^^^^^^^^^^^^^^^^^^^^
+note: `first_documented_source` has documented `# Panics` obligation
+  --> src/lib.rs:56:5
    |
-help: [option 1] add a local `// PANIC:` justification after verifying panic obligations
-  --> src/lib.rs:67:5
-   |
-67 |     first_documented_source();
-   |     ^^^^^^^^^^^^^^^^^^^^^^^^^
-help: [option 2] document this function's obligations with `/// # Panics` here
-  --> src/lib.rs:76:1
-   |
-76 | pub fn unmarked_path_to_shared_sources() {
-   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-note: `first_documented_source` documents `# Panics` here
-  --> src/lib.rs:59:1
-   |
-59 | pub fn first_documented_source() {}
-   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-   = note: reachable from `unmarked_path_to_shared_sources` to `first_documented_source`
+56 |   /// # Panics
+   |  _____^
+57 | | ///
+58 | | /// This fixture contract represents the first independent effect source.
+59 | | pub fn first_documented_source() {}
+   | |________________________________^
+   = help: if this call cannot have panic effect, explain why with a `// PANIC:` comment
+   = help: if `unmarked_path_to_shared_sources` can have panic effect, add a `# Panics` section
 
-error: [sniff-test::panic::documented-obligation] call to `second_documented_source` with a documented `# Panics` obligation has no recorded `// PANIC:` justification
-  --> src/lib.rs:68:5
-   |
-68 |     second_documented_source();
-   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^
-   |
-help: [option 1] add a local `// PANIC:` justification after verifying panic obligations
-  --> src/lib.rs:68:5
-   |
-68 |     second_documented_source();
-   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^
-help: [option 2] document this function's obligations with `/// # Panics` here
+error: function `unmarked_path_to_shared_sources` may have panic effect
   --> src/lib.rs:76:1
    |
 76 | pub fn unmarked_path_to_shared_sources() {
-   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-note: `second_documented_source` documents `# Panics` here
-  --> src/lib.rs:64:1
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ this is a public item
+77 |     shared_documented_sources();
+   |     --------------------------- this may have panic effect
    |
-64 | pub fn second_documented_source() {}
-   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-   = note: reachable from `unmarked_path_to_shared_sources` to `second_documented_source`
+note: `shared_documented_sources` calls `second_documented_source` here
+  --> src/lib.rs:68:5
+   |
+68 |     second_documented_source();
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^
+note: `second_documented_source` has documented `# Panics` obligation
+  --> src/lib.rs:61:5
+   |
+61 |   /// # Panics
+   |  _____^
+62 | | ///
+63 | | /// This fixture contract represents the second independent effect source.
+64 | | pub fn second_documented_source() {}
+   | |_________________________________^
+   = help: if this call cannot have panic effect, explain why with a `// PANIC:` comment
+   = help: if `unmarked_path_to_shared_sources` can have panic effect, add a `# Panics` section
 
 note: set `show-full-stack-trace = true` under `[analysis]` in sniff-test.toml to show every reachability step
 error: could not compile `ambiguous-markers` (lib) due to 7 previous errors
