@@ -14,10 +14,6 @@ expression: "report[\"findings\"]"
       "scope": "dependency"
     },
     "reason": "`dependency_unsafe_trait_call_dep::ambiguous_obligation` has multiple # Safety requirements named `state`",
-    "requirements": [
-      "state: the first dependency invariant must hold.",
-      "state: the second dependency invariant must hold."
-    ],
     "root": "dependency_unsafe_trait_call_app::ambiguous_dependency_contract",
     "root-kind": "concrete",
     "root-span": "src/lib.rs:17:1: 17:39",
@@ -26,7 +22,7 @@ expression: "report[\"findings\"]"
     "trace": [
       "src/lib.rs:18:5: 18:61: dependency_unsafe_trait_call_app::ambiguous_dependency_contract --direct-call-> dependency_unsafe_trait_call_dep::ambiguous_obligation"
     ],
-    "trace-id": "bba6e1d9"
+    "trace-id": "c7e24e89"
   },
   {
     "effect": "safety",
@@ -34,17 +30,11 @@ expression: "report[\"findings\"]"
     "function": "dependency_unsafe_trait_call_dep::invoke_unjustified",
     "kind": "effect",
     "level": "deny",
-    "missing-requirements": [
-      "invariant: the private test invariant must hold."
-    ],
     "owner": {
       "crate": "dependency_unsafe_trait_call_dep",
       "scope": "dependency"
     },
     "reason": "dependency crate `dependency_unsafe_trait_call_dep` has no recorded `// SAFETY:` justification for call to `<dependency_unsafe_trait_call_app::Local as dependency_unsafe_trait_call_dep::Action>::apply` with a documented `# Safety` obligation",
-    "requirements": [
-      "invariant: the private test invariant must hold."
-    ],
     "root": "dependency_unsafe_trait_call_app::unjustified_caller",
     "root-kind": "concrete",
     "root-span": "src/lib.rs:13:1: 13:28",
@@ -57,6 +47,6 @@ expression: "report[\"findings\"]"
       "src/lib.rs:14:5: 14:68: dependency_unsafe_trait_call_app::unjustified_caller --direct-call-> dependency_unsafe_trait_call_dep::invoke_unjustified",
       "[FIXTURE]/dep/src/lib.rs:28:9: 28:19: dependency_unsafe_trait_call_dep::invoke_unjustified --direct-call-> <dependency_unsafe_trait_call_app::Local as dependency_unsafe_trait_call_dep::Action>::apply"
     ],
-    "trace-id": "f0a01c1e"
+    "trace-id": "93e6092a"
   }
 ]

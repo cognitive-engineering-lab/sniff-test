@@ -12,7 +12,7 @@ use sniff_test_core::artifact::{
 };
 use sniff_test_core::artifact_cache::ArtifactScope;
 use sniff_test_core::compiler::source::CachedSourceMap;
-use sniff_test_core::config::SniffTestConfig;
+use sniff_test_core::config::{EffectDocMatching, SniffTestConfig};
 use sniff_test_core::effects::{Effect, EffectMetadata};
 use sniff_test_core::namespace::canonical_namespace;
 use sniff_test_core::report::{EffectReportError, trace_selected_workspace};
@@ -84,6 +84,7 @@ pub fn interpret_workspace<'tcx>(
         &sources,
         result,
         config.analysis.show_full_stack_trace,
+        config.analysis.effect_doc_matching,
     ))
 }
 
@@ -106,14 +107,19 @@ fn adapt_result(
     sources: &SourceResolver<'_, '_>,
     result: Vec<RootInterpretation>,
     show_full_stack_trace: bool,
+    effect_doc_matching: EffectDocMatching,
 ) -> Vec<Finding> {
     let mut findings = Vec::new();
     for root in result {
-        findings.extend(
-            root.findings
-                .into_iter()
-                .map(|finding| adapt_finding(sources, &root.root, &finding, show_full_stack_trace)),
-        );
+        findings.extend(root.findings.into_iter().map(|finding| {
+            adapt_finding(
+                sources,
+                &root.root,
+                &finding,
+                show_full_stack_trace,
+                effect_doc_matching,
+            )
+        }));
         for (effect, completeness) in root.completeness.effects {
             for reason in completeness.reasons {
                 findings.push(adapt_incomplete(
@@ -139,6 +145,7 @@ fn adapt_finding(
     root: &InterpretationRoot,
     finding: &InterpretedFinding,
     show_full_stack_trace: bool,
+    effect_doc_matching: EffectDocMatching,
 ) -> Finding {
     let target = match (&finding.kind, finding.callee.as_ref()) {
         (InterpretedFindingKind::UnresolvedCallTarget { .. }, Some(callee))
@@ -149,13 +156,12 @@ fn adapt_finding(
         (_, Some(callee)) => Some(callee.path.clone()),
         (_, None) => None,
     };
-    let missing_requirements = finding
-        .missing_requirements
-        .iter()
-        .map(render_requirement)
-        .collect::<Vec<_>>();
-    let requirements = finding
-        .requirements
+    let missing_requirements =
+        displayed_requirements(&finding.missing_requirements, effect_doc_matching)
+            .iter()
+            .map(render_requirement)
+            .collect::<Vec<_>>();
+    let requirements = displayed_requirements(&finding.requirements, effect_doc_matching)
         .iter()
         .map(render_requirement)
         .collect::<Vec<_>>();
@@ -201,6 +207,7 @@ fn adapt_finding(
         source_evidence,
         effect_span,
         show_full_stack_trace,
+        effect_doc_matching,
     );
     let effect_display = match &finding.kind {
         InterpretedFindingKind::Operation { operation } => {
@@ -569,6 +576,7 @@ struct EffectDiagnosticWriter<'a, 'tcx, 'analysis> {
     source_evidence: Option<SourceEvidence>,
     effect_span: Option<Span>,
     show_full_stack_trace: bool,
+    effect_doc_matching: EffectDocMatching,
     justification_marker: Option<String>,
 }
 
@@ -617,7 +625,10 @@ impl EffectDiagnosticWriter<'_, '_, '_> {
                 )));
             add_missing_requirement_notes(
                 self.diagnostic,
-                &self.finding.missing_requirements,
+                displayed_requirements(
+                    &self.finding.missing_requirements,
+                    self.effect_doc_matching,
+                ),
                 effect.key.as_str(),
                 self.source_evidence,
             );
@@ -633,7 +644,10 @@ impl EffectDiagnosticWriter<'_, '_, '_> {
             self.standard_source_help(effect);
             add_missing_requirement_notes(
                 self.diagnostic,
-                &self.finding.missing_requirements,
+                displayed_requirements(
+                    &self.finding.missing_requirements,
+                    self.effect_doc_matching,
+                ),
                 effect.key.as_str(),
                 self.source_evidence,
             );
@@ -657,7 +671,7 @@ impl EffectDiagnosticWriter<'_, '_, '_> {
         }
         add_missing_requirement_notes(
             self.diagnostic,
-            &self.finding.missing_requirements,
+            displayed_requirements(&self.finding.missing_requirements, self.effect_doc_matching),
             effect.key.as_str(),
             self.source_evidence,
         );
@@ -810,13 +824,15 @@ impl EffectDiagnosticWriter<'_, '_, '_> {
     }
 
     fn ambiguous_requirement(&mut self, effect: &EffectMetadata, normalized_name: &str) {
-        add_ambiguous_requirement_notes(
-            self.sources,
-            self.diagnostic,
-            self.finding,
-            effect.obligation,
-            normalized_name,
-        );
+        if self.effect_doc_matching == EffectDocMatching::Exact {
+            add_ambiguous_requirement_notes(
+                self.sources,
+                self.diagnostic,
+                self.finding,
+                effect.obligation,
+                normalized_name,
+            );
+        }
         add_finding_trace_notes(
             self.sources,
             self.diagnostic,
@@ -877,6 +893,7 @@ fn decorate_finding(
     source_evidence: Option<SourceEvidence>,
     effect_span: Option<Span>,
     show_full_stack_trace: bool,
+    effect_doc_matching: EffectDocMatching,
 ) -> Option<String> {
     let mut writer = EffectDiagnosticWriter {
         sources,
@@ -887,6 +904,7 @@ fn decorate_finding(
         source_evidence,
         effect_span,
         show_full_stack_trace,
+        effect_doc_matching,
         justification_marker: None,
     };
     let effect = &finding.effect;
@@ -1248,6 +1266,17 @@ fn literal_include_str_path(line: &str) -> Option<&str> {
     let quoted = argument.strip_prefix('"')?;
     let end = quoted.find('"')?;
     quoted.get(..end)
+}
+
+fn displayed_requirements(
+    requirements: &[ContractRequirementFact],
+    effect_doc_matching: EffectDocMatching,
+) -> &[ContractRequirementFact] {
+    if effect_doc_matching == EffectDocMatching::Exact {
+        requirements
+    } else {
+        &[]
+    }
 }
 
 fn add_missing_requirement_notes(
@@ -2109,6 +2138,7 @@ mod tests {
         FunctionFactProvenance, FunctionId, SourceFileId, SourceRangeFact, StableDefPathHash,
         StableInstanceHash, UnverifiedMarkerProbeReason,
     };
+    use sniff_test_core::config::EffectDocMatching;
     use sniff_test_core::effects::EffectMetadata;
     use sniff_test_core::report_model::{
         EffectFindingClass, InterpretationRoot, InterpretedFinding, InterpretedFindingKind,
@@ -2120,12 +2150,63 @@ mod tests {
 
     use super::{
         TraceLimit, add_missing_requirement_notes, available_source_help_messages,
-        exact_function_body_in, extern_paths_are_toolchain, external_containment_help,
-        finding_description, full_trace_steps, incomplete_limit_presentation,
-        missing_body_diagnostic_message, render_trace_step, select_marker_call,
-        source_evidence_help, source_evidence_reason, trace_label_candidates, trace_path_labels,
-        unresolved_action, unresolved_coverage_note,
+        displayed_requirements, exact_function_body_in, extern_paths_are_toolchain,
+        external_containment_help, finding_description, full_trace_steps,
+        incomplete_limit_presentation, missing_body_diagnostic_message, render_trace_step,
+        select_marker_call, source_evidence_help, source_evidence_reason, trace_label_candidates,
+        trace_path_labels, unresolved_action, unresolved_coverage_note,
     };
+
+    #[test]
+    fn requirement_details_are_displayed_only_for_exact_matching() {
+        let requirements = [
+            ContractRequirementFact {
+                name: String::from("valid"),
+                condition: String::from("pointer is valid"),
+                structural_path: vec![0],
+                source_range: None,
+            },
+            ContractRequirementFact {
+                name: String::from("aligned"),
+                condition: String::from("pointer is aligned"),
+                structural_path: vec![1],
+                source_range: None,
+            },
+        ];
+        let remaining = &requirements[1..];
+
+        for (mode, expected_count) in [
+            (EffectDocMatching::AnyJustification, 0),
+            (EffectDocMatching::Exact, 1),
+        ] {
+            let visible = displayed_requirements(remaining, mode);
+            assert_eq!(visible.len(), expected_count);
+            let serialized = visible
+                .iter()
+                .map(super::render_requirement)
+                .collect::<Vec<_>>();
+            assert_eq!(serialized.len(), expected_count);
+
+            let mut diagnostic = FindingDiagnostic {
+                span: None,
+                second_primary_span: None,
+                message: String::new(),
+                messages: Vec::new(),
+            };
+            add_missing_requirement_notes(
+                &mut diagnostic,
+                visible,
+                "safety",
+                Some(SourceEvidence::Present),
+            );
+            assert_eq!(diagnostic.messages.len(), expected_count);
+        }
+
+        assert_eq!(
+            displayed_requirements(&requirements, EffectDocMatching::Exact).len(),
+            2
+        );
+    }
 
     #[test]
     fn toolchain_owner_requires_nonempty_extern_paths_all_under_target_tlib() {
