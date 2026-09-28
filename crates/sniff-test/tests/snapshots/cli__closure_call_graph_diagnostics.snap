@@ -16,7 +16,7 @@ error: function `basic_closure_panics` may have panic effect
 3 |     calls_fn(panic);
   |     --------------- this may have panic effect
   |
-note: `{closure#0}` calls `panic_fmt` here
+note: `basic_closure_panics` reaches `panic_fmt` here
  --> src/lib.rs:2:20
   |
 2 |     let panic = || panic!("called closure");

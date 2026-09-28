@@ -664,6 +664,7 @@ impl EffectDiagnosticWriter<'_, '_, '_> {
                 effect.key.as_str()
             )
         } else {
+            let root = compact_function_name(&self.root.path);
             let callee = self
                 .finding
                 .callee
@@ -671,7 +672,7 @@ impl EffectDiagnosticWriter<'_, '_, '_> {
                 .map_or("an unknown target", |callee| {
                     compact_function_name(&callee.path)
                 });
-            format!("`{caller}` calls `{callee}` here")
+            format!("`{root}` reaches `{callee}` here")
         };
         add_effect_note(self.diagnostic, self.effect_span, note);
     }

@@ -15,7 +15,7 @@ warning: function `first_api` may have panic effect
 6 |     shared_panic_source();
   |     --------------------- this may have panic effect
   |
-note: `shared_panic_source` calls `panic_fmt` here
+note: `first_api` reaches `panic_fmt` here
  --> src/lib.rs:2:5
   |
 2 |     panic!("shared source");
@@ -31,7 +31,7 @@ warning: function `second_api` may have panic effect
 10 |     shared_panic_source();
    |     --------------------- this may have panic effect
    |
-note: `shared_panic_source` calls `panic_fmt` here
+note: `second_api` reaches `panic_fmt` here
   --> src/lib.rs:2:5
    |
  2 |     panic!("shared source");

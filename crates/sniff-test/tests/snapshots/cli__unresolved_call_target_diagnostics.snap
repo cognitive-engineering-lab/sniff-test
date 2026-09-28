@@ -15,7 +15,7 @@ warning: function `call_documented` may have panic effect
 11 |     value.documented(flag);
    |     ---------------------- this may have panic effect
    |
-note: `call_documented` calls `documented` here
+note: `call_documented` reaches `documented` here
   --> src/lib.rs:11:5
    |
 11 |     value.documented(flag);

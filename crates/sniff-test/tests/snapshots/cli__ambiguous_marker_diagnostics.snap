@@ -50,7 +50,7 @@ error: function `shared_block_marker` may have panic effect
 11 |         let first = ratio(a, denominator);
    |                     --------------------- this may have panic effect
    |
-note: `shared_block_marker` calls `ratio` here
+note: `shared_block_marker` reaches `ratio` here
   --> src/lib.rs:11:21
    |
 11 |         let first = ratio(a, denominator);
@@ -76,7 +76,7 @@ error: function `shared_block_marker` may have panic effect
 12 |         let second = ratio(b, denominator);
    |                      --------------------- this may have panic effect
    |
-note: `shared_block_marker` calls `ratio` here
+note: `shared_block_marker` reaches `ratio` here
   --> src/lib.rs:12:22
    |
 12 |         let second = ratio(b, denominator);
@@ -101,7 +101,7 @@ error: function `unmarked_path_to_shared_sources` may have panic effect
 77 |     shared_documented_sources();
    |     --------------------------- this may have panic effect
    |
-note: `shared_documented_sources` calls `first_documented_source` here
+note: `unmarked_path_to_shared_sources` reaches `first_documented_source` here
   --> src/lib.rs:67:5
    |
 67 |     first_documented_source();
@@ -126,7 +126,7 @@ error: function `unmarked_path_to_shared_sources` may have panic effect
 77 |     shared_documented_sources();
    |     --------------------------- this may have panic effect
    |
-note: `shared_documented_sources` calls `second_documented_source` here
+note: `unmarked_path_to_shared_sources` reaches `second_documented_source` here
   --> src/lib.rs:68:5
    |
 68 |     second_documented_source();

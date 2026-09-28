@@ -91,7 +91,7 @@ warning: function `trusted_unsafe_through_fn_pointer` may have safety effect
 33 |     unsafe { helper() }
    |              -------- this may have safety effect
    |
-note: `trusted_unsafe_through_fn_pointer` calls `opaque function pointer` here
+note: `trusted_unsafe_through_fn_pointer` reaches `opaque function pointer` here
   --> src/lib.rs:33:14
    |
 33 |     unsafe { helper() }
@@ -130,7 +130,7 @@ warning: function `trusted_with_docs` may have panic effect
  6 |     trusted_doc_helper(flag);
    |     ------------------------ this may have panic effect
    |
-note: `trusted_with_docs` calls `trusted_doc_helper` here
+note: `trusted_with_docs` reaches `trusted_doc_helper` here
   --> src/lib.rs:6:5
    |
  6 |     trusted_doc_helper(flag);

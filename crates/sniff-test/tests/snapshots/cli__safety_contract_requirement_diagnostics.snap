@@ -16,7 +16,7 @@ warning: function `trusted_obligation_exposes_missing_requirement` may have safe
 57 |     documented_obligation(&raw const byte);
    |     -------------------------------------- this may have safety effect
    |
-note: `trusted_obligation_exposes_missing_requirement` calls `documented_obligation` here
+note: `trusted_obligation_exposes_missing_requirement` reaches `documented_obligation` here
   --> src/lib.rs:57:5
    |
 57 |     documented_obligation(&raw const byte);
@@ -52,7 +52,7 @@ warning: function `unsafe_call_exposes_missing_requirement` may have safety effe
 33 |     unsafe { read_byte(ptr.as_ptr()) }
    |              ----------------------- this may have safety effect
    |
-note: `unsafe_call_exposes_missing_requirement` calls `read_byte` here
+note: `unsafe_call_exposes_missing_requirement` reaches `read_byte` here
   --> src/lib.rs:33:14
    |
 33 |     unsafe { read_byte(ptr.as_ptr()) }

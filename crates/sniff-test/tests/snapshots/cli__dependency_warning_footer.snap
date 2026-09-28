@@ -16,7 +16,7 @@ warning: function `call_dependency` may have panic effect
 2 |     dependency_obligation::documented(flag);
   |     --------------------------------------- this may have panic effect
   |
-note: `call_dependency` calls `documented` here
+note: `call_dependency` reaches `documented` here
  --> src/lib.rs:2:5
   |
 2 |     dependency_obligation::documented(flag);

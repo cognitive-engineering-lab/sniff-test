@@ -50,7 +50,7 @@ warning: function `read_documented_dependency` may have safety effect
 10 |     dependency_safety::read_documented(pointer)
    |     ------------------------------------------- this may have safety effect
    |
-note: `read_documented` calls `documented_read` here
+note: `read_documented_dependency` reaches `documented_read` here
   --> [FIXTURE]/dep/src/lib.rs:14:14
    |
 14 |     unsafe { documented_read(pointer) }

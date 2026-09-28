@@ -15,7 +15,7 @@ error: function `unsafe_call` may have panic effect
 17 |     helper(flag);
    |     ------------ this may have panic effect
    |
-note: `helper` calls `panic` here
+note: `unsafe_call` reaches `panic` here
   --> src/lib.rs:21:5
    |
 21 |     assert!(flag);

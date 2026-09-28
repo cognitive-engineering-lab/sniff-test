@@ -15,7 +15,7 @@ warning: function `run` may have panic effect
 15 |     Worker.checked(valid);
    |     --------------------- this may have panic effect
    |
-note: `run` calls `checked` here
+note: `run` reaches `checked` here
   --> src/lib.rs:15:5
    |
 15 |     Worker.checked(valid);

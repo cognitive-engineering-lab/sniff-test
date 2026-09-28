@@ -17,7 +17,7 @@ warning: function `app` may have panic effect
 2 |     dependency_transitive_panic_middle::middle(flag);
   |     ------------------------------------------------ this may have panic effect
   |
-note: `app` calls `middle` here
+note: `app` reaches `middle` here
  --> src/lib.rs:2:5
   |
 2 |     dependency_transitive_panic_middle::middle(flag);
