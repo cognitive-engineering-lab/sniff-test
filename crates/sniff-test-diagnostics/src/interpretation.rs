@@ -693,7 +693,15 @@ impl EffectDiagnosticWriter<'_, '_, '_> {
                 .map_or("an unknown target", |callee| {
                     compact_function_name(&callee.path)
                 });
-            format!("`{root}` reaches `{callee}` here")
+            if self.owner.scope == OwnerScope::Dependency {
+                if let Some(crate_name) = self.owner.crate_name.as_deref() {
+                    format!("`{root}` reaches `{callee}` here in dependency `{crate_name}`")
+                } else {
+                    format!("`{root}` reaches `{callee}` here")
+                }
+            } else {
+                format!("`{root}` reaches `{callee}` here")
+            }
         };
         add_effect_note(self.diagnostic, self.effect_span, note);
     }
