@@ -52,7 +52,6 @@ pub fn emit_human_diagnostics(
             &finding.finding.diagnostic,
             !is_effect_source_finding(&finding.finding.kind),
             finding.finding.trace_id.as_deref(),
-            false,
         );
     }
     if has_trace_id {
@@ -89,7 +88,6 @@ pub fn emit_explanation(tcx: TyCtxt<'_>, report: &AnalysisArtifactReport, trace_
             &finding.finding.diagnostic,
             !is_effect_source_finding(&finding.finding.kind),
             finding.finding.trace_id.as_deref(),
-            true,
         );
     }
     true

@@ -18,7 +18,6 @@ pub fn emit_finding_diagnostic(
     diagnostic: &FindingDiagnostic,
     show_lint_code: bool,
     trace_id: Option<&str>,
-    explanation: bool,
 ) {
     let message = if show_lint_code {
         lint_coded_message(lint_code, &diagnostic.message)
@@ -33,18 +32,6 @@ pub fn emit_finding_diagnostic(
         }
         spans
     });
-    if explanation {
-        if let Some(span) = spans {
-            let mut emitted = tcx.dcx().struct_span_note(span, message);
-            decorate(&mut emitted, lint_code, &diagnostic.messages);
-            emitted.emit();
-        } else {
-            let mut emitted = tcx.dcx().struct_note(message);
-            decorate(&mut emitted, lint_code, &diagnostic.messages);
-            emitted.emit();
-        }
-        return;
-    }
     match (level, spans) {
         (LintLevel::Allow, _) => {}
         (LintLevel::Warn, Some(span)) => {

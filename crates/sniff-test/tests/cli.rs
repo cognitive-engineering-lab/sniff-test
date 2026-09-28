@@ -69,7 +69,7 @@ fn full_stack_trace_footer_uses_rustc_note_color_without_a_trailing_blank_line()
 }
 
 #[test]
-fn trace_id_explains_only_one_finding_with_single_rustc_note() {
+fn trace_id_explains_only_one_warning_with_full_trace() {
     let repo = repo_root();
     let binary = PathBuf::from(env!("CARGO_BIN_EXE_cargo-sniff-test"));
     let case = Case::new()
@@ -78,7 +78,7 @@ fn trace_id_explains_only_one_finding_with_single_rustc_note() {
     let (first, root, _temp) = run_case(
         &repo,
         &binary,
-        "trace_id_explains_only_one_finding_with_single_rustc_note",
+        "trace_id_explains_only_one_warning_with_full_trace",
         "source_aggregation",
         &case,
     );
@@ -119,7 +119,7 @@ fn trace_id_explains_only_one_finding_with_single_rustc_note() {
     let explained = run(id);
     assert!(explained.status.success(), "{}", explained.stderr);
     assert!(explained.stderr.contains("effect trace step 1/"));
-    assert!(explained.stderr.contains(&format!("note: [{id}]")));
+    assert!(explained.stderr.contains(&format!("warning: [{id}]")));
     assert!(
         !explained
             .stderr
@@ -133,6 +133,44 @@ fn trace_id_explains_only_one_finding_with_single_rustc_note() {
 
     let second = run_cargo_sniff_test(&binary, &root, "repeat trace IDs", &case);
     assert!(second.stderr.contains(&format!("warning: [{id}]")));
+}
+
+#[test]
+fn trace_id_explanation_preserves_denied_lint_level() {
+    let repo = repo_root();
+    let binary = PathBuf::from(env!("CARGO_BIN_EXE_cargo-sniff-test"));
+    let case = Case::new().args(&["-e", "panic"]).denied();
+    let (first, root, _temp) = run_case(
+        &repo,
+        &binary,
+        "trace_id_explanation_preserves_denied_lint_level",
+        "source_aggregation",
+        &case,
+    );
+    assert_eq!(first.status.code(), Some(101), "{}", first.stderr);
+    let id = first
+        .stderr
+        .split_once("error: [")
+        .expect("error trace headline")
+        .1
+        .split_once(']')
+        .expect("trace ID delimiter")
+        .0;
+
+    let _cargo_guard = lock_nested_cargo();
+    let mut command = Command::new(&binary);
+    clean_cargo_package_env(&mut command);
+    let explained = CommandOutput::from_output(
+        command
+            .args(["-e", "panic", "--explain", id, "--color", "never"])
+            .current_dir(&root)
+            .output()
+            .expect("run denied explanation"),
+    );
+    assert_eq!(explained.status.code(), Some(101), "{}", explained.stderr);
+    assert!(explained.stderr.contains(&format!("error: [{id}]")));
+    assert!(explained.stderr.contains("effect trace step 1/"));
+    assert!(!explained.stderr.contains("--explain <trace-id>"));
 }
 
 macro_rules! cli_cases {
