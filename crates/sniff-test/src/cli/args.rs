@@ -47,10 +47,11 @@ impl CommonCliArgs {
         let effects = if self.effects.is_empty() {
             EffectSelection::only([EffectKey::new("panic"), EffectKey::new("safety")])
         } else {
-            EffectSelection::from_keys(self.effects)
+            EffectSelection::from_keys(self.effects.clone())
         };
         SniffTestArgs {
             effects,
+            explicit_effects: self.effects,
             manifest_path: self.manifest,
             cache_dir: self.cache_dir,
             color: self.color,
@@ -221,6 +222,8 @@ pub(crate) enum CrateOutputScope {
 #[derive(Debug, Default, Clone, Serialize, Deserialize)]
 pub struct SniffTestArgs {
     pub(crate) effects: EffectSelection,
+    /// Effect flags supplied by the user, retained for the explanation hint.
+    pub(crate) explicit_effects: Vec<EffectKey>,
     pub(crate) explain: Option<String>,
     pub(crate) explain_match_marker: Option<PathBuf>,
     pub(crate) manifest_path: Option<PathBuf>,

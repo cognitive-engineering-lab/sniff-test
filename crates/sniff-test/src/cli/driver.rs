@@ -91,7 +91,7 @@ pub(crate) fn analyze_crate(
         return;
     }
     if emit_diagnostics {
-        emit_human_diagnostics(tcx, &report);
+        emit_human_diagnostics(tcx, &report, &args.explicit_effects);
     }
     if args.message_format == MessageFormat::Json {
         emit_json_report(&report);

@@ -1,6 +1,7 @@
 //! Render and emit one analyzed artifact's results.
 
 use rustc_middle::ty::TyCtxt;
+use sniff_test_core::artifact::EffectKey;
 use sniff_test_core::config::SniffTestConfig;
 use sniff_test_core::effects::Effect;
 
@@ -34,7 +35,11 @@ pub fn build_report(
     }
 }
 
-pub fn emit_human_diagnostics(tcx: TyCtxt<'_>, report: &AnalysisArtifactReport) {
+pub fn emit_human_diagnostics(
+    tcx: TyCtxt<'_>,
+    report: &AnalysisArtifactReport,
+    explicit_effects: &[EffectKey],
+) {
     let mut human_findings = aggregate_human_findings(&report.findings);
     let has_trace_id = human_findings
         .iter()
@@ -51,14 +56,19 @@ pub fn emit_human_diagnostics(tcx: TyCtxt<'_>, report: &AnalysisArtifactReport) 
         );
     }
     if has_trace_id {
-        emit_footer_note(
-            tcx,
-            "run `cargo sniff-test --explain <trace-id>` to see more details",
-        );
+        emit_footer_note(tcx, &explain_hint(explicit_effects));
     }
     if show_full_stack_trace_hint {
         emit_footer_note(tcx, FULL_STACK_TRACE_HINT);
     }
+}
+
+fn explain_hint(explicit_effects: &[EffectKey]) -> String {
+    let flags = explicit_effects
+        .iter()
+        .map(|effect| format!(" -e {}", effect.as_str()))
+        .collect::<String>();
+    format!("run `cargo sniff-test{flags} --explain <trace-id>` to see more details")
 }
 
 #[must_use]
@@ -89,5 +99,28 @@ pub fn emit_json_report(report: &AnalysisArtifactReport) {
     match serde_json::to_string(report) {
         Ok(report) => println!("{report}"),
         Err(error) => eprintln!("sniff-test: failed to encode JSON report: {error}"),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use sniff_test_core::artifact::EffectKey;
+
+    use super::explain_hint;
+
+    #[test]
+    fn explain_hint_preserves_explicit_effect_flags() {
+        assert_eq!(
+            explain_hint(&[]),
+            "run `cargo sniff-test --explain <trace-id>` to see more details"
+        );
+        assert_eq!(
+            explain_hint(&[EffectKey::new("panic")]),
+            "run `cargo sniff-test -e panic --explain <trace-id>` to see more details"
+        );
+        assert_eq!(
+            explain_hint(&[EffectKey::new("safety"), EffectKey::new("panic")]),
+            "run `cargo sniff-test -e safety -e panic --explain <trace-id>` to see more details"
+        );
     }
 }
