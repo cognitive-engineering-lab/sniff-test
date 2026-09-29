@@ -5,10 +5,10 @@ and contributor workflows. For the normal user workflow, start with the
 [project README](../README.md).
 
 `sniff-test` checks source-level effects through Cargo. It wraps `cargo check`
-and traces three equal, first-class effects: panic sources from rustc MIR,
-safety sources from rustc THIR, and documentation obligations from
-`# Panics`/`# Safety` contracts. Each effect propagates toward callers over
-source-level invocations and terminates according to its own contract or
+and traces panic sources from rustc MIR, safety sources from rustc THIR, and
+opt-in allocation sources from allocator calls. Documentation obligations come
+from `# Panics`, `# Safety`, and `# Allocations` contracts. Each effect propagates
+toward callers over source-level invocations and terminates according to its own contract or
 justification rules.
 
 ## Cargo Frontend
@@ -32,7 +32,7 @@ Commands and common options:
 
 - `init`: write a sample `sniff-test.toml`
 - `--manifest PATH`: path to `sniff-test.toml`
-- `-e EFFECT`, `--effect EFFECT`: track only `panic` or `safety`; repeat to select both
+- `-e EFFECT`, `--effect EFFECT`: track `panic`, `safety`, or `allocation`; repeat to select several
 - `--cache-dir DIR`: analysis cache directory
 - `--color auto|always|never`
 - `--message-format human|json`
@@ -40,8 +40,19 @@ Commands and common options:
 - `--build-std`
 - `--debug`: analyze debug-profile MIR instead of the default release profile
 
-Without `--effect`, sniff-test tracks both panic and safety effects. Selecting
-one domain skips extraction, probing, tracing, and diagnostics for the other.
+Without `--effect`, sniff-test tracks panic and safety effects. Allocation must
+be selected explicitly with `-e allocation`. Selecting specific effects skips
+extraction, probing, tracing, and diagnostics for unselected effects.
+
+Allocation detection marks calls to Rust's global allocation and zeroed
+allocation entry points, plus `Allocator::allocate`,
+`Allocator::allocate_zeroed`, `GlobalAlloc::alloc`, and
+`GlobalAlloc::alloc_zeroed`. It excludes resize and deallocation entry points.
+Calls such as `Vec::push` may be reported when a reachable path invokes a fresh
+allocation API; the analysis does not prove that a given input will allocate.
+Use `# Allocations` to document a caller-visible effect or
+`// ALLOCATION:` above a call to justify it locally. The allocation effect has
+no trusted standard-library boundary by default so those paths remain visible.
 
 An explicit Cargo `--profile` argument after `--` overrides the default release
 profile.
@@ -128,6 +139,16 @@ operation = "warn"
 # unsafe-binder-cast = "warn"
 
 [safety.coverage]
+unresolved-call-target = "warn"
+analysis-incomplete = "deny"
+
+[allocation]
+trusted-boundary-namespaces = [] # trace through standard library collections
+
+[allocation.lints]
+invocation = "warn"
+
+[allocation.coverage]
 unresolved-call-target = "warn"
 analysis-incomplete = "deny"
 ```
@@ -305,10 +326,10 @@ SafetyEffect sources. Structured reports distinguish
 Use `[contracts].override-files` while auditing generated or third-party APIs
 whose documented behavior is known but not written in source yet. This section
 only configures where contract evidence comes from; it does not make a
-namespace trusted or opaque. Domain boundaries remain under `[panic]` and
-`[safety]`. Override files are TOML files keyed by Rust namespace globs; the
-value replaces that function's rustdoc markdown for both panic and safety
-contract parsing. The markdown is parsed as CommonMark, so normal headings,
+namespace trusted or opaque. Domain boundaries remain under `[panic]`,
+`[safety]`, and `[allocation]`. Override files are TOML files keyed by Rust
+namespace globs; the value replaces that function's rustdoc markdown for panic,
+safety, and allocation contract parsing. The markdown is parsed as CommonMark, so normal headings,
 setext headings, inline code, and formatted list text work as expected.
 
 ```toml
@@ -431,7 +452,7 @@ sniff-test-driver [SNIFF-TEST-ARGS] -- [RUSTC-ARGS]
 
 Direct-mode sniff-test arguments:
 
-- `-e EFFECT`, `--effect EFFECT`: track only `panic` or `safety`; repeat to select both
+- `-e EFFECT`, `--effect EFFECT`: track `panic`, `safety`, or `allocation`; repeat to select several
 - `--manifest PATH`
 - `--cache-dir DIR`
 - `--color auto|always|never`
@@ -464,8 +485,8 @@ deny-level effect gating.
   produces structured effect interpretations. It defines the interfaces that
   effect implementations use and does not depend on built-in effects or output
   rendering.
-- `sniff-test-effects` supplies the panic and safety definitions and rustc
-  detection passes.
+- `sniff-test-effects` supplies the panic, safety, and allocation definitions
+  and rustc detection passes.
 - `sniff-test-diagnostics` turns core interpretations into findings, rustc
   diagnostics, and JSON reports.
 - `sniff-test` provides the Cargo command and rustc driver that connect the

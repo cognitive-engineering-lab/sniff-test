@@ -19,10 +19,12 @@ cargo sniff-test init
 cargo sniff-test
 ```
 
-Use `-e` to select effect you want to check. Current supported options are `panic` and `safety` effects. By default, without `-e`, all supported effects wil be checked.
+Use `-e` to select `panic`, `safety`, or `allocation`. By default, without
+`-e`, panic and safety are checked; allocation is opt-in.
 
 ```sh
 cargo sniff-test -e panic
+cargo sniff-test -e allocation
 ```
 
 Pass Cargo arguments after `--`:
@@ -39,6 +41,7 @@ contributor commands.
 ## Effect Example
 Use a `# Panics` section to document when callers may observe a panic, and a
 `# Safety` section to document the requirements of a public unsafe API.
+Use `# Allocations` to document a function that may allocate heap storage.
 
 
 When a panic or unsafe operation is intentional, place a justification comment directly above it:

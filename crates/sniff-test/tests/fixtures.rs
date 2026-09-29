@@ -287,6 +287,70 @@ fixture_cases! {
     }
 }
 
+#[test]
+fn allocation_effect() {
+    let repo = repo_root();
+    let cargo = PathBuf::from(env!("CARGO_BIN_EXE_cargo-sniff-test"));
+    let sysroot = rustc_sysroot();
+    let messages = run_case(
+        &repo,
+        &cargo,
+        &sysroot,
+        "allocation_effect",
+        "allocation_effect",
+        &Case::new().args(&["--effect", "allocation"]),
+    );
+    let [report] = messages.as_slice() else {
+        panic!("expected one allocation report: {messages:?}");
+    };
+    let findings = report["findings"].as_array().expect("findings array");
+    let roots = findings
+        .iter()
+        .filter_map(|finding| finding["root"].as_str())
+        .collect::<std::collections::BTreeSet<_>>();
+    for root in [
+        "boxed",
+        "vector",
+        "text",
+        "direct",
+        "direct_zeroed",
+        "custom",
+        "custom_allocator",
+    ] {
+        assert!(
+            roots.contains(format!("allocation_effect::{root}").as_str()),
+            "{root}: {roots:?}"
+        );
+    }
+    for root in [
+        "reallocated",
+        "only_grow",
+        "only_grow_zeroed",
+        "only_shrink",
+        "only_custom_realloc",
+        "stack_only",
+        "only_dealloc",
+        "documented",
+        "justified",
+    ] {
+        assert!(
+            !roots.contains(format!("allocation_effect::{root}").as_str()),
+            "{root}"
+        );
+    }
+    assert!(
+        findings
+            .iter()
+            .all(|finding| finding["effect"] == "allocation")
+    );
+    assert!(findings.iter().any(|finding| {
+        finding["root"] == "allocation_effect::custom"
+            && finding["target"]
+                .as_str()
+                .is_some_and(|target| target.contains("Custom as core::alloc::global::GlobalAlloc"))
+    }));
+}
+
 fn run_named_case(name: &'static str, fixture_name: &'static str, case: &Case) {
     let repo = repo_root();
     let cargo = PathBuf::from(env!("CARGO_BIN_EXE_cargo-sniff-test"));

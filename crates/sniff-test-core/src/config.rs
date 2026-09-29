@@ -1437,7 +1437,7 @@ mod tests {
             "[panic.lints.operations]\nbounds-check = \"deny\"\n[safety.lints.operations]\ninline-assembly = \"allow\"",
         )
         .expect("registered effect sections should parse");
-        assert_eq!(config.effects.len(), 2);
+        assert_eq!(config.effects.len(), 3);
         assert_eq!(
             config.effect("panic").operation_lint(Some("bounds-check")),
             LintLevel::Deny
@@ -1449,7 +1449,7 @@ mod tests {
             LintLevel::Allow
         );
         assert!(crate::config::test_from_manifest_str("[panics]").is_err());
-        assert!(crate::config::test_from_manifest_str("[allocation]").is_err());
+        assert!(crate::config::test_from_manifest_str("[allocation]").is_ok());
     }
 
     #[test]

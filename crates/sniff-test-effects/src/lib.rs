@@ -1,4 +1,4 @@
-//! Built-in panic and safety effect definitions and rustc detection passes.
+//! Built-in effect definitions and rustc detection passes.
 #![feature(rustc_private)]
 #![deny(warnings)]
 #![warn(clippy::pedantic)]
@@ -10,6 +10,7 @@ extern crate rustc_hir;
 extern crate rustc_middle;
 extern crate rustc_span;
 
+pub mod allocation;
 pub mod panic;
 pub mod safety;
 
@@ -26,6 +27,10 @@ use std::collections::BTreeMap;
 /// Panics if two built-in effects register the same name.
 pub fn registered_effect_configs() -> BTreeMap<String, EffectConfig> {
     let defaults = [
+        (
+            allocation::Allocation::EFFECT_NAME,
+            allocation::Allocation::default_config(),
+        ),
         (panic::Panic::EFFECT_NAME, panic::Panic::default_config()),
         (
             safety::Safety::EFFECT_NAME,
@@ -46,6 +51,7 @@ pub fn registered_keys() -> Vec<EffectKey> {
     vec![
         EffectKey::new(panic::Panic::EFFECT_NAME),
         EffectKey::new(safety::Safety::EFFECT_NAME),
+        EffectKey::new(allocation::Allocation::EFFECT_NAME),
     ]
 }
 
@@ -57,6 +63,7 @@ pub fn selected_effect_objects<'config>(
     [
         effect::<panic::Panic>(config.effect(panic::Panic::EFFECT_NAME)),
         effect::<safety::Safety>(config.effect(safety::Safety::EFFECT_NAME)),
+        effect::<allocation::Allocation>(config.effect(allocation::Allocation::EFFECT_NAME)),
     ]
     .into_iter()
     .filter(|effect| selection.selects(effect.key()))

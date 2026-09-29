@@ -12,7 +12,7 @@ pub(crate) const MANIFEST_PATH_ENV: &str = "SNIFF_TEST_MANIFEST";
 
 #[derive(Debug, Args)]
 struct CommonCliArgs {
-    /// Effect to track. May be repeated; defaults to all effects.
+    /// Effect to track. May be repeated; defaults to panic and safety.
     #[arg(
         short = 'e',
         long = "effect",
@@ -44,8 +44,13 @@ struct CommonCliArgs {
 
 impl CommonCliArgs {
     fn into_sniff_test_args(self) -> SniffTestArgs {
+        let effects = if self.effects.is_empty() {
+            EffectSelection::only([EffectKey::new("panic"), EffectKey::new("safety")])
+        } else {
+            EffectSelection::from_keys(self.effects)
+        };
         SniffTestArgs {
-            effects: EffectSelection::from_keys(self.effects),
+            effects,
             manifest_path: self.manifest,
             cache_dir: self.cache_dir,
             color: self.color,
@@ -90,7 +95,7 @@ fn parse_trace_id(value: &str) -> Result<String, String> {
     name = "cargo-sniff-test",
     bin_name = "cargo sniff-test",
     version,
-    about = "Check panic and safety effect contracts through Cargo",
+    about = "Check panic, safety, and allocation effect contracts through Cargo",
     args_conflicts_with_subcommands = true,
     after_help = "Cargo arguments after `--` are passed to `cargo check`."
 )]
@@ -289,7 +294,6 @@ mod tests {
 
     use super::{CrateOutputScope, DriverCli, FrontendAction, FrontendCli, MessageFormat};
     use sniff_test_core::artifact::EffectKey;
-    use sniff_test_core::effects::EffectSelection;
 
     #[test]
     fn frontend_parses_equals_options_and_cargo_args_after_separator() {
@@ -310,12 +314,24 @@ mod tests {
 
     #[test]
     fn frontend_selects_one_or_multiple_effects() {
-        for (argv, tracks_panic, tracks_safety) in [
-            (&["cargo-sniff-test"][..], true, true),
-            (&["cargo-sniff-test", "-e", "safety"][..], false, true),
+        for (argv, tracks_panic, tracks_safety, tracks_allocation) in [
+            (&["cargo-sniff-test"][..], true, true, false),
+            (
+                &["cargo-sniff-test", "-e", "safety"][..],
+                false,
+                true,
+                false,
+            ),
             (
                 &["cargo-sniff-test", "--effect", "panic", "--effect=safety"][..],
                 true,
+                true,
+                false,
+            ),
+            (
+                &["cargo-sniff-test", "-e", "allocation"][..],
+                false,
+                false,
                 true,
             ),
         ] {
@@ -328,17 +344,21 @@ mod tests {
                 args.effects.selects(&EffectKey::new("safety")),
                 tracks_safety
             );
+            assert_eq!(
+                args.effects.selects(&EffectKey::new("allocation")),
+                tracks_allocation
+            );
         }
     }
 
     #[test]
     fn frontend_rejects_an_unregistered_effect() {
-        let error = FrontendCli::try_parse_from(["cargo-sniff-test", "-e", "allocation"])
+        let error = FrontendCli::try_parse_from(["cargo-sniff-test", "-e", "unknown"])
             .expect_err("unregistered effect should fail during argument parsing");
 
         let rendered = error.to_string();
-        assert!(rendered.contains("unknown effect `allocation`"));
-        assert!(rendered.contains("panic, safety"));
+        assert!(rendered.contains("unknown effect `unknown`"));
+        assert!(rendered.contains("panic, safety, allocation"));
     }
 
     #[test]
