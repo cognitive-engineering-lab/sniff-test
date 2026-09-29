@@ -1,3 +1,9 @@
 [panic]
 [panic.lints]
 invocation = "deny"
+
+[panic.coverage]
+unresolved-call-target = "warn"
+
+[safety.coverage]
+unresolved-call-target = "warn"

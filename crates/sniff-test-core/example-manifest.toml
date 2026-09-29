@@ -126,10 +126,11 @@ invocation = "warn"
 
 [panic.coverage]
 # Calls with a remaining unresolved target. Known targets are still traced.
-# Defaults to `warn`; set `allow` to accept the gap silently.
-unresolved-call-target = "warn"
+# Defaults to `allow`; set `warn` or `deny` to report the gap.
+unresolved-call-target = "allow"
 # Trace limits and reachable managed bodies missing from the artifact graph.
-analysis-incomplete = "deny"
+# Defaults to `allow`; set `warn` or `deny` to report the gap.
+analysis-incomplete = "allow"
 
 [safety]
 # Crates, fully-qualified functions, or macro expansion paths whose safety
@@ -175,8 +176,8 @@ operation = "warn"
 # unsafe-binder-cast = "warn"
 
 [safety.coverage]
-unresolved-call-target = "warn"
-analysis-incomplete = "deny"
+unresolved-call-target = "allow"
+analysis-incomplete = "allow"
 
 [allocation]
 # Keep these empty to trace allocations through Box, Vec, String, and other
@@ -194,8 +195,8 @@ operation = "warn"
 # heap-allocation = "deny"
 
 [allocation.coverage]
-unresolved-call-target = "warn"
-analysis-incomplete = "deny"
+unresolved-call-target = "allow"
+analysis-incomplete = "allow"
 
 [file]
 # File mutations propagate through standard-library helpers and user wrappers.
@@ -215,5 +216,5 @@ operation = "warn"
 # delete = "deny"
 
 [file.coverage]
-unresolved-call-target = "warn"
-analysis-incomplete = "deny"
+unresolved-call-target = "allow"
+analysis-incomplete = "allow"

@@ -109,8 +109,8 @@ invocation = "warn"
 # invalid-enum-construction = "deny"
 
 [panic.coverage]
-unresolved-call-target = "warn"
-analysis-incomplete = "deny"
+unresolved-call-target = "allow"
+analysis-incomplete = "allow"
 
 [safety]
 ignored-namespaces = []
@@ -139,8 +139,8 @@ operation = "warn"
 # unsafe-binder-cast = "warn"
 
 [safety.coverage]
-unresolved-call-target = "warn"
-analysis-incomplete = "deny"
+unresolved-call-target = "allow"
+analysis-incomplete = "allow"
 
 [allocation]
 trusted-boundary-namespaces = [] # trace through standard library collections
@@ -149,8 +149,12 @@ trusted-boundary-namespaces = [] # trace through standard library collections
 invocation = "warn"
 
 [allocation.coverage]
-unresolved-call-target = "warn"
-analysis-incomplete = "deny"
+unresolved-call-target = "allow"
+analysis-incomplete = "allow"
+
+[file.coverage]
+unresolved-call-target = "allow"
+analysis-incomplete = "allow"
 ```
 
 `[compiler].inline-mir = "off"` passes `-Z inline-mir=no`, which keeps panic
@@ -209,8 +213,8 @@ that happen to share an erased type.
 `ambiguous-requirement` independently. `warn` reports the ambiguity;
 `allow` accepts it silently.
 
-`[panic.coverage].analysis-incomplete` controls incomplete panic traversals,
-and `[safety.coverage].analysis-incomplete` controls incomplete safety traversals.
+The `analysis-incomplete` key under each effect's `.coverage` section controls
+incomplete traversals and defaults to `allow`.
 These findings distinguish paths truncated by `max-trace-depth`, effect traces that
 exhaust `trace-state-budget`, and reachable managed bodies that are absent from
 the linked artifact graph.
@@ -316,9 +320,10 @@ trusted-boundary-namespaces = ["core", "alloc", "std"]
 already cover every definition in the named crate, so `core::**` is not also
 required. The same namespace rules apply to panic boundaries.
 
-`[panic.coverage].unresolved-call-target` and
-`[safety.coverage].unresolved-call-target` control calls whose remaining concrete
-targets cannot be resolved. Both default to `warn`. Known targets still
+The `unresolved-call-target` key under each effect's `.coverage` section controls
+calls whose remaining concrete targets cannot be resolved and defaults to
+`allow`. Set either coverage key to `warn` or `deny` in a specific effect
+section to report it. Known targets still
 participate in effect tracing, and calls that are actually unsafe remain
 SafetyEffect sources. Structured reports distinguish
 `unresolved-panic-call-target` from `unresolved-safety-call-target`.

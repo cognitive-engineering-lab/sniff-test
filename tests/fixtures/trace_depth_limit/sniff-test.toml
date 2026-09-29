@@ -5,3 +5,6 @@
 max-trace-depth = 4
 
 [panic]
+
+[panic.coverage]
+analysis-incomplete = "deny"

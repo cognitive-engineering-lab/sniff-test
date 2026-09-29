@@ -13,3 +13,9 @@ trusted-boundary-namespaces = [
 
 [panic.lints]
 invocation = "warn"
+
+[panic.coverage]
+unresolved-call-target = "warn"
+
+[safety.coverage]
+unresolved-call-target = "warn"

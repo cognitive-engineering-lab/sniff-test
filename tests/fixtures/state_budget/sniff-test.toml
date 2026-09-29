@@ -2,3 +2,6 @@
 trace-state-budget = 2
 
 [panic]
+
+[panic.coverage]
+analysis-incomplete = "deny"

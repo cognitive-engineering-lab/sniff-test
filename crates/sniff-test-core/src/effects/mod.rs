@@ -147,6 +147,7 @@ pub fn registered_effect_configs() -> std::collections::BTreeMap<String, EffectC
                 .operation("heap-allocation", crate::config::LintLevel::Warn)
                 .build(),
         ),
+        ("file", EffectConfig::default()),
         ("panic", panic::Panic::default_config()),
         ("safety", safety::Safety::default_config()),
     ]

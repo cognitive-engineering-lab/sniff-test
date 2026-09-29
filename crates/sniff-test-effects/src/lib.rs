@@ -73,3 +73,27 @@ pub fn selected_effect_objects<'config>(
     .filter(|effect| selection.selects(effect.key()))
     .collect()
 }
+
+#[cfg(test)]
+mod tests {
+    use super::registered_effect_configs;
+    use sniff_test_core::config::{EXAMPLE_MANIFEST, LintLevel, SniffTestConfig};
+
+    #[test]
+    fn all_effects_allow_coverage_by_default_and_after_init() {
+        let defaults = registered_effect_configs();
+        let initialized =
+            SniffTestConfig::from_manifest_str_with_effects(EXAMPLE_MANIFEST, defaults.clone())
+                .expect("generated manifest should parse");
+
+        for (name, config) in defaults {
+            for coverage in [
+                config.effective_coverage(),
+                initialized.effect(&name).effective_coverage(),
+            ] {
+                assert_eq!(coverage.unresolved_call_target, LintLevel::Allow, "{name}");
+                assert_eq!(coverage.analysis_incomplete, LintLevel::Allow, "{name}");
+            }
+        }
+    }
+}

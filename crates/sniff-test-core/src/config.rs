@@ -574,8 +574,8 @@ pub struct CoverageConfig {
 impl Default for CoverageConfig {
     fn default() -> Self {
         Self {
-            unresolved_call_target: LintLevel::Warn,
-            analysis_incomplete: LintLevel::Deny,
+            unresolved_call_target: LintLevel::Allow,
+            analysis_incomplete: LintLevel::Allow,
         }
     }
 }
@@ -1266,14 +1266,14 @@ mod tests {
                 .effect("panic")
                 .effective_coverage()
                 .analysis_incomplete,
-            LintLevel::Deny
+            LintLevel::Allow
         );
         assert_eq!(
             crate::config::test_config()
                 .effect("safety")
                 .effective_coverage()
                 .analysis_incomplete,
-            LintLevel::Deny
+            LintLevel::Allow
         );
     }
 
@@ -1293,7 +1293,7 @@ mod tests {
                 .effect("panic")
                 .effective_coverage()
                 .unresolved_call_target,
-            LintLevel::Warn
+            LintLevel::Allow
         );
     }
 
@@ -1371,7 +1371,7 @@ mod tests {
                 .effect("safety")
                 .effective_coverage()
                 .unresolved_call_target,
-            LintLevel::Warn
+            LintLevel::Allow
         );
         assert_eq!(lints.invocation, LintLevel::Warn);
         assert_eq!(lints.operation, LintLevel::Warn);
@@ -1437,7 +1437,7 @@ mod tests {
             "[panic.lints.operations]\nbounds-check = \"deny\"\n[safety.lints.operations]\ninline-assembly = \"allow\"",
         )
         .expect("registered effect sections should parse");
-        assert_eq!(config.effects.len(), 3);
+        assert_eq!(config.effects.len(), 4);
         assert_eq!(
             config.effect("panic").operation_lint(Some("bounds-check")),
             LintLevel::Deny
@@ -1480,7 +1480,7 @@ mod tests {
         assert_eq!(panic.analysis_incomplete, LintLevel::Deny);
         let safety = config.effect("safety").effective_coverage();
         assert_eq!(safety.unresolved_call_target, LintLevel::Allow);
-        assert_eq!(safety.analysis_incomplete, LintLevel::Deny);
+        assert_eq!(safety.analysis_incomplete, LintLevel::Allow);
     }
 
     #[test]

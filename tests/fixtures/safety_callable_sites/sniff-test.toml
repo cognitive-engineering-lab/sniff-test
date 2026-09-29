@@ -2,3 +2,6 @@
 
 [panic.coverage]
 unresolved-call-target = "allow"
+
+[safety.coverage]
+unresolved-call-target = "warn"
