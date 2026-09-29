@@ -351,6 +351,81 @@ fn allocation_effect() {
     }));
 }
 
+#[test]
+fn file_effect() {
+    let repo = repo_root();
+    let cargo = PathBuf::from(env!("CARGO_BIN_EXE_cargo-sniff-test"));
+    let sysroot = rustc_sysroot();
+    let messages = run_case(
+        &repo,
+        &cargo,
+        &sysroot,
+        "file_effect",
+        "file_fs_calls",
+        &Case::new().args(&["--effect", "file"]).denied(),
+    );
+    let [report] = messages.as_slice() else {
+        panic!("expected one file report: {messages:?}");
+    };
+    let findings = report["findings"].as_array().expect("findings array");
+    let operations_for = |root: &str| {
+        findings
+            .iter()
+            .filter(|finding| finding["root"] == format!("file_fs_calls::{root}"))
+            .filter_map(|finding| finding["operation"].as_str())
+            .collect::<Vec<_>>()
+    };
+    for (root, operation) in [
+        ("write", "write"),
+        ("create", "create"),
+        ("create_new", "create"),
+        ("truncate", "truncate"),
+        ("delete", "delete"),
+        ("write_all", "write"),
+        ("write_direct", "write"),
+        ("write_shared", "write"),
+        ("through_write_wrapper", "write"),
+        ("write_vectored", "write"),
+        ("write_all_vectored", "write"),
+        ("write_fmt", "write"),
+    ] {
+        assert!(
+            operations_for(root).contains(&operation),
+            "{root} did not report {operation}: {findings:?}"
+        );
+    }
+    for root in [
+        "read",
+        "metadata",
+        "through_wrapper",
+        "justified",
+        "documented",
+        "excluded_method",
+        "write_to_vec",
+        "documented_write",
+        "justified_write",
+        "justified_fs_write",
+    ] {
+        assert!(operations_for(root).is_empty(), "{root}: {findings:?}");
+    }
+    for root in [
+        "write",
+        "write_direct",
+        "write_shared",
+        "write_all",
+        "write_vectored",
+        "write_all_vectored",
+        "write_fmt",
+    ] {
+        assert_eq!(
+            operations_for(root).len(),
+            1,
+            "{root} has duplicate file sources: {findings:?}"
+        );
+    }
+    assert!(findings.iter().all(|finding| finding["effect"] == "file"));
+}
+
 fn run_named_case(name: &'static str, fixture_name: &'static str, case: &Case) {
     let repo = repo_root();
     let cargo = PathBuf::from(env!("CARGO_BIN_EXE_cargo-sniff-test"));

@@ -196,3 +196,24 @@ operation = "warn"
 [allocation.coverage]
 unresolved-call-target = "warn"
 analysis-incomplete = "deny"
+
+[file]
+# File mutations propagate through standard-library helpers and user wrappers.
+ignored-namespaces = []
+trusted-boundary-namespaces = []
+
+[file.lints]
+ambiguous-marker = "deny"
+ambiguous-requirement = "deny"
+invocation = "warn"
+operation = "warn"
+
+[file.lints.operations]
+# write = "deny"
+# create = "deny"
+# truncate = "deny"
+# delete = "deny"
+
+[file.coverage]
+unresolved-call-target = "warn"
+analysis-incomplete = "deny"

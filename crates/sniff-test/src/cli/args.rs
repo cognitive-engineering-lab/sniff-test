@@ -95,7 +95,7 @@ fn parse_trace_id(value: &str) -> Result<String, String> {
     name = "cargo-sniff-test",
     bin_name = "cargo sniff-test",
     version,
-    about = "Check panic, safety, and allocation effect contracts through Cargo",
+    about = "Check panic, safety, allocation, and file effect contracts through Cargo",
     args_conflicts_with_subcommands = true,
     after_help = "Cargo arguments after `--` are passed to `cargo check`."
 )]
@@ -314,12 +314,13 @@ mod tests {
 
     #[test]
     fn frontend_selects_one_or_multiple_effects() {
-        for (argv, tracks_panic, tracks_safety, tracks_allocation) in [
-            (&["cargo-sniff-test"][..], true, true, false),
+        for (argv, tracks_panic, tracks_safety, tracks_allocation, tracks_file) in [
+            (&["cargo-sniff-test"][..], true, true, false, false),
             (
                 &["cargo-sniff-test", "-e", "safety"][..],
                 false,
                 true,
+                false,
                 false,
             ),
             (
@@ -327,9 +328,18 @@ mod tests {
                 true,
                 true,
                 false,
+                false,
             ),
             (
                 &["cargo-sniff-test", "-e", "allocation"][..],
+                false,
+                false,
+                true,
+                false,
+            ),
+            (
+                &["cargo-sniff-test", "-e", "file"][..],
+                false,
                 false,
                 false,
                 true,
@@ -348,6 +358,7 @@ mod tests {
                 args.effects.selects(&EffectKey::new("allocation")),
                 tracks_allocation
             );
+            assert_eq!(args.effects.selects(&EffectKey::new("file")), tracks_file);
         }
     }
 
@@ -358,7 +369,7 @@ mod tests {
 
         let rendered = error.to_string();
         assert!(rendered.contains("unknown effect `unknown`"));
-        assert!(rendered.contains("panic, safety, allocation"));
+        assert!(rendered.contains("panic, safety, allocation, file"));
     }
 
     #[test]

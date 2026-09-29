@@ -11,6 +11,7 @@ extern crate rustc_middle;
 extern crate rustc_span;
 
 pub mod allocation;
+pub mod file;
 pub mod panic;
 pub mod safety;
 
@@ -31,6 +32,7 @@ pub fn registered_effect_configs() -> BTreeMap<String, EffectConfig> {
             allocation::Allocation::EFFECT_NAME,
             allocation::Allocation::default_config(),
         ),
+        (file::File::EFFECT_NAME, file::File::default_config()),
         (panic::Panic::EFFECT_NAME, panic::Panic::default_config()),
         (
             safety::Safety::EFFECT_NAME,
@@ -52,6 +54,7 @@ pub fn registered_keys() -> Vec<EffectKey> {
         EffectKey::new(panic::Panic::EFFECT_NAME),
         EffectKey::new(safety::Safety::EFFECT_NAME),
         EffectKey::new(allocation::Allocation::EFFECT_NAME),
+        EffectKey::new(file::File::EFFECT_NAME),
     ]
 }
 
@@ -64,6 +67,7 @@ pub fn selected_effect_objects<'config>(
         effect::<panic::Panic>(config.effect(panic::Panic::EFFECT_NAME)),
         effect::<safety::Safety>(config.effect(safety::Safety::EFFECT_NAME)),
         effect::<allocation::Allocation>(config.effect(allocation::Allocation::EFFECT_NAME)),
+        effect::<file::File>(config.effect(file::File::EFFECT_NAME)),
     ]
     .into_iter()
     .filter(|effect| selection.selects(effect.key()))
