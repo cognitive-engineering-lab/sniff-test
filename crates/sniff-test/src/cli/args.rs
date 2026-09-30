@@ -219,6 +219,13 @@ pub(crate) enum CrateOutputScope {
     Dependency,
 }
 
+/// A Cargo `custom-build` target, identified without crate-name heuristics.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub(crate) struct BuildScriptTarget {
+    pub(crate) source_path: PathBuf,
+    pub(crate) crate_name: String,
+}
+
 #[derive(Debug, Default, Clone, Serialize, Deserialize)]
 pub struct SniffTestArgs {
     pub(crate) effects: EffectSelection,
@@ -238,6 +245,9 @@ pub struct SniffTestArgs {
     /// driver so crate scope uses real membership instead of path prefixes.
     /// Empty in direct driver mode.
     pub(crate) workspace_manifests: Vec<PathBuf>,
+    /// Build scripts from workspace and dependency package metadata.
+    #[serde(default)]
+    pub(crate) build_scripts: Vec<BuildScriptTarget>,
     /// True when the driver runs as cargo's `RUSTC_WRAPPER`; set by the
     /// driver itself, never carried through the environment.
     #[serde(skip)]

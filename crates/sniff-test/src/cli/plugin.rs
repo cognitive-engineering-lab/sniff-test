@@ -15,7 +15,7 @@ use sniff_test_core::config::SniffTestConfig;
 use super::args::{
     ColorChoice, CrateOutputScope, DriverCli, MANIFEST_PATH_ENV, MessageFormat, SniffTestArgs,
 };
-use super::driver::{analyze_crate, is_build_script, is_proc_macro, load_config};
+use super::driver::{analyze_crate, is_proc_macro, load_config};
 
 pub(crate) const DRIVER_NAME: &str = "sniff-test-driver";
 pub(crate) const SNIFF_TEST_ARGS_ENV: &str = "SNIFF_TEST_ARGS";
@@ -219,6 +219,7 @@ fn run_driver(compiler_args: &[String], args: SniffTestArgs) -> Result<ExitCode>
         args,
         config,
         output_scope,
+        is_build_script: false,
     };
     // Fatal compile errors unwind with `FatalErrorMarker`; catching them here
     // turns that into rustc's ordinary exit status, matching the direct-mode
@@ -367,6 +368,7 @@ struct SniffTestCallbacks {
     args: SniffTestArgs,
     config: SniffTestConfig,
     output_scope: CrateOutputScope,
+    is_build_script: bool,
 }
 
 impl Callbacks for SniffTestCallbacks {
@@ -374,12 +376,22 @@ impl Callbacks for SniffTestCallbacks {
         // Direct driver invocations do not pass through `modify_cargo`, but
         // their artifacts must still expose MIR to downstream consumers.
         config.opts.unstable_opts.always_encode_mir = true;
-        let is_build_script = config.opts.crate_name.as_deref() == Some("build_script_build");
+        self.is_build_script = match &config.input {
+            rustc_session::config::Input::File(path) => {
+                path.canonicalize().ok().is_some_and(|path| {
+                    self.args.build_scripts.iter().any(|target| {
+                        target.source_path == path
+                            && config.opts.crate_name.as_deref() == Some(target.crate_name.as_str())
+                    })
+                })
+            }
+            rustc_session::config::Input::Str { .. } => false,
+        };
         let is_proc_macro = config
             .opts
             .crate_types
             .contains(&rustc_session::config::CrateType::ProcMacro);
-        if !should_track_workspace_run(self.output_scope, is_build_script, is_proc_macro) {
+        if !should_track_workspace_run(self.output_scope, self.is_build_script, is_proc_macro) {
             return;
         }
         let encoded_args = std::env::var(SNIFF_TEST_ARGS_ENV).ok();
@@ -407,7 +419,7 @@ impl Callbacks for SniffTestCallbacks {
     }
 
     fn after_analysis(&mut self, compiler: &interface::Compiler, tcx: TyCtxt<'_>) -> Compilation {
-        if is_build_script(tcx) || is_proc_macro(tcx) {
+        if self.is_build_script || is_proc_macro(tcx) {
             return Compilation::Continue;
         }
 

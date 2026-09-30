@@ -3,7 +3,6 @@
 use std::path::{Path, PathBuf};
 
 use anyhow::Context;
-use rustc_hir::def_id::LOCAL_CRATE;
 use rustc_middle::ty::TyCtxt;
 use rustc_session::config::CrateType;
 use sniff_test_core::artifact_cache::ArtifactScope;
@@ -148,13 +147,6 @@ impl CrateOutputScope {
             Self::Dependency
         }
     }
-}
-
-pub(crate) fn is_build_script(tcx: TyCtxt<'_>) -> bool {
-    // Match rustc's own best-effort Cargo build-script detection in
-    // `rustc_attr_parsing/attributes/diagnostic/check_cfg.rs`: Cargo invokes
-    // these targets with `--crate-name build_script_build`.
-    tcx.crate_name(LOCAL_CRATE).as_str() == "build_script_build"
 }
 
 pub(crate) fn is_proc_macro(tcx: TyCtxt<'_>) -> bool {

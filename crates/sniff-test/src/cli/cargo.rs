@@ -7,7 +7,9 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use anyhow::{Context, Result, bail};
 use sniff_test_core::config::EXAMPLE_MANIFEST;
 
-use super::args::{self, FrontendAction, FrontendCli, InitCliArgs, MessageFormat, SniffTestArgs};
+use super::args::{
+    self, BuildScriptTarget, FrontendAction, FrontendCli, InitCliArgs, MessageFormat, SniffTestArgs,
+};
 use super::plugin::{
     SNIFF_TEST_ARGS_ENV, SNIFF_TEST_RUN_ID_ENV, frontend_args, modify_cargo, render_error_chain,
     validate_manifest,
@@ -48,7 +50,6 @@ fn try_cargo_frontend() -> Result<ExitCode> {
         validate_manifest(path)?;
     }
     let mut metadata_command = cargo_metadata::MetadataCommand::new();
-    metadata_command.no_deps();
     metadata_command.other_options(metadata_cargo_args(&parsed_args.cargo_args));
     let metadata = metadata_command
         .exec()
@@ -62,12 +63,27 @@ fn try_cargo_frontend() -> Result<ExitCode> {
     args.workspace_manifests = metadata
         .packages
         .iter()
+        .filter(|package| metadata.workspace_members.contains(&package.id))
         .map(|package| -> Result<_> {
             package.manifest_path.canonicalize().with_context(|| {
                 format!(
                     "failed to canonicalize workspace manifest {}",
                     package.manifest_path
                 )
+            })
+        })
+        .collect::<Result<_>>()?;
+    args.build_scripts = metadata
+        .packages
+        .iter()
+        .flat_map(|package| &package.targets)
+        .filter(|target| target.is_custom_build())
+        .map(|target| -> Result<_> {
+            Ok(BuildScriptTarget {
+                source_path: target.src_path.canonicalize().with_context(|| {
+                    format!("failed to canonicalize build script {}", target.src_path)
+                })?,
+                crate_name: target.name.replace('-', "_"),
             })
         })
         .collect::<Result<_>>()?;

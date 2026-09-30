@@ -515,30 +515,67 @@ fn every_cargo_run_emits_the_workspace_report() {
 
 #[test]
 fn cargo_frontend_skips_build_scripts() {
+    check_build_script_scope("build.rs", false);
+}
+
+#[test]
+fn cargo_frontend_skips_custom_build_scripts() {
+    check_build_script_scope("builder/main.rs", false);
+}
+
+#[test]
+fn cargo_frontend_skips_dependency_build_scripts() {
+    check_build_script_scope("build.rs", true);
+}
+
+#[test]
+fn cargo_frontend_skips_custom_dependency_build_scripts() {
+    check_build_script_scope("builder/main.rs", true);
+}
+
+fn check_build_script_scope(script_path: &str, dependency: bool) {
     let temp = tempfile::tempdir().expect("temp dir");
     fs::create_dir(temp.path().join("src")).expect("create source directory");
-    fs::write(
-        temp.path().join("Cargo.toml"),
-        "[package]\nname = \"build-script-scope\"\nversion = \"0.1.0\"\nedition = \"2024\"\nbuild = \"build.rs\"\n\n[workspace]\n",
-    )
-    .expect("write Cargo manifest");
-    fs::write(
-        temp.path().join("build.rs"),
-        "pub fn unused_panic() { panic!(\"build helper\"); }\nfn main() {}\n",
-    )
-    .expect("write build script");
-    fs::write(
-        temp.path().join("src/lib.rs"),
-        "pub fn library_target() {}\n",
-    )
-    .expect("write library source");
+    let mut manifest = format!(
+        "[package]\nname = \"build-script-scope\"\nversion = \"0.1.0\"\nedition = \"2024\"\nbuild = {script_path:?}\n\n[workspace]\nexclude = [\"dependency\"]\n\n[[bin]]\nname = \"build_script_example\"\npath = \"src/main.rs\"\n"
+    );
+    if dependency {
+        manifest
+            .push_str("\n[dependencies]\nbuild-helper-dependency = { path = \"dependency\" }\n");
+        let dep = temp.path().join("dependency");
+        fs::create_dir_all(dep.join("src")).expect("create dependency source directory");
+        fs::write(
+            dep.join("Cargo.toml"),
+            format!("[package]\nname = \"build-helper-dependency\"\nversion = \"0.1.0\"\nedition = \"2024\"\nbuild = {script_path:?}\n"),
+        )
+        .expect("write dependency manifest");
+        write_scope_build_script(&dep, script_path);
+        fs::write(
+            dep.join("src/lib.rs"),
+            "const _: &str = env!(\"BUILD_SCRIPT_RAN\");\npub fn dependency_api() {}\n",
+        )
+        .expect("write dependency source");
+    }
+    fs::write(temp.path().join("Cargo.toml"), manifest).expect("write Cargo manifest");
+    write_scope_build_script(temp.path(), script_path);
+    let library = if dependency {
+        "const _: &str = env!(\"BUILD_SCRIPT_RAN\");\npub fn library_target() { build_helper_dependency::dependency_api(); }\n"
+    } else {
+        "const _: &str = env!(\"BUILD_SCRIPT_RAN\");\npub fn library_target() {}\n"
+    };
+    fs::write(temp.path().join("src/lib.rs"), library).expect("write library source");
+    fs::write(temp.path().join("src/main.rs"), "fn main() {}\n")
+        .expect("write ordinary binary with a build_script_ name");
 
     let binary = PathBuf::from(env!("CARGO_BIN_EXE_cargo-sniff-test"));
+    let cache_dir = temp.path().join("cache");
     let mut command = Command::new(binary);
     clean_cargo_package_env(&mut command);
     let _cargo_guard = lock_nested_cargo();
     let output = command
         .args(["--message-format", "json", "--color", "never"])
+        .arg("--cache-dir")
+        .arg(&cache_dir)
         .current_dir(temp.path())
         .output()
         .expect("run cargo frontend");
@@ -554,8 +591,30 @@ fn cargo_frontend_skips_build_scripts() {
         .filter(|report| report["reason"] == "sniff-test-artifact")
         .filter_map(|report| report["artifact"]["crate-name"].as_str().map(str::to_owned))
         .collect::<Vec<_>>();
+    assert_eq!(crate_names.len(), 2, "reports: {crate_names:?}");
     assert!(crate_names.iter().any(|name| name == "build_script_scope"));
-    assert!(!crate_names.iter().any(|name| name == "build_script_build"));
+    assert!(
+        crate_names
+            .iter()
+            .any(|name| name == "build_script_example")
+    );
+    if dependency {
+        let cache_path = artifact_cache_for_crate(&cache_dir, "build_helper_dependency");
+        let cache: serde_json::Value =
+            serde_json::from_slice(&fs::read(cache_path).expect("read dependency cache"))
+                .expect("parse dependency cache");
+        assert_eq!(cache["artifact"]["scope"], "dependency");
+    }
+}
+
+fn write_scope_build_script(root: &Path, script_path: &str) {
+    let path = root.join(script_path);
+    fs::create_dir_all(path.parent().expect("script directory")).expect("create script directory");
+    fs::write(
+        path,
+        "pub fn unused_panic() { panic!(\"build helper\"); }\nfn main() { println!(\"cargo::rustc-env=BUILD_SCRIPT_RAN=yes\"); }\n",
+    )
+    .expect("write build script");
 }
 
 #[test]
