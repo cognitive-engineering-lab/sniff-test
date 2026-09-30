@@ -1,0 +1,9 @@
+[package]
+name = "binary-report-roots"
+version = "0.1.0"
+edition = "2024"
+
+[features]
+public-main = []
+
+[workspace]

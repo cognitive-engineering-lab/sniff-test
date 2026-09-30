@@ -74,6 +74,11 @@ pub fn select_report_roots<'tcx>(
     match analysis_config.report_roots.get_ref() {
         ReportRootSet::Public => {
             roots.extend(public_local_fn_defs(tcx));
+            if let Some((entry, _)) = tcx.entry_fn(()) {
+                if let Some(local) = entry.as_local() {
+                    roots.insert(local);
+                }
+            }
         }
         ReportRootSet::All => {
             roots.extend(analyzable_local_fn_defs(tcx));

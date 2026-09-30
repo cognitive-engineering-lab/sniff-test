@@ -696,7 +696,7 @@ impl RawEffectConfig {
 /// Current-crate functions whose reachable effect paths should be reported.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub enum ReportRootSet {
-    /// Report from public exported functions.
+    /// Report from public exported functions and the local executable entry point.
     #[default]
     Public,
     /// Report from every analyzable local function item.

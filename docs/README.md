@@ -244,9 +244,14 @@ documented requirements unsatisfied.
 `report-roots` controls workspace traversal and reporting, not artifact
 extraction. Effects propagate from each selected workspace root through local
 and cached dependency functions until a documented contract, trusted boundary,
-or ignored namespace stops the path. With `"public"`, a private helper is
-reported through the public root that reaches it; with `"all"`, the helper can
+or ignored namespace stops the path. The default `"public"` selects exported
+public functions plus the compiler-selected executable entry point, even when
+`main` is private. Libraries without an entry point select only exported public
+functions. A private helper is reported through the public root or entry point
+that reaches it; with `"all"`, the helper can
 also receive its own finding.
+Explicit root lists select only the named functions and do not implicitly add
+the entry point.
 Selecting no functions or naming a missing explicit root always produces a warning.
 Safety probing covers runtime function, method, closure, and coroutine bodies;
 const, static, and inline-const initializers are intentionally outside this

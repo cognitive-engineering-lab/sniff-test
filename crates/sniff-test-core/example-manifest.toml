@@ -24,6 +24,7 @@ inline-mir = "off"
 # ignore report roots and lints while silently caching artifact facts for every
 # analyzable body.
 show-full-stack-trace = false
+# Exported public functions plus the executable entry point, even when private.
 report-roots = "public"
 
 # Marker lookup checks comments in macro definitions before walking outward to

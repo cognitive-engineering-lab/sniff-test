@@ -6,7 +6,7 @@ exit: 0
 stdout:
 <empty>
 stderr:
-sniff-test: no sniff-test.toml found between [TEMP] and [FIXTURE]; using built-in defaults (public report roots, panic and safety findings warned)
+sniff-test: no sniff-test.toml found between [TEMP] and [FIXTURE]; using built-in defaults (public functions plus executable entry point as report roots, panic and safety findings warned)
     Checking panic-axioms v0.1.0 ([FIXTURE])
 warning: [8edbbf5d] function `division` may have panic effect
  --> src/lib.rs:1:1

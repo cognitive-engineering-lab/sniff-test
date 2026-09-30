@@ -288,6 +288,70 @@ fixture_cases! {
 }
 
 #[test]
+fn binary_report_roots_include_entry_point() {
+    let repo = repo_root();
+    let cargo = PathBuf::from(env!("CARGO_BIN_EXE_cargo-sniff-test"));
+    let sysroot = rustc_sysroot();
+    for (name, args, expected_roots) in [
+        (
+            "binary_roots_default",
+            &[][..],
+            &[
+                "binary_report_roots::main",
+                "binary_report_roots::unused_public",
+            ][..],
+        ),
+        (
+            "binary_roots_public",
+            &["--manifest", "public.toml"][..],
+            &[
+                "binary_report_roots::main",
+                "binary_report_roots::unused_public",
+            ][..],
+        ),
+        (
+            "binary_roots_public_main",
+            &[
+                "--manifest",
+                "public.toml",
+                "--",
+                "--features",
+                "public-main",
+            ][..],
+            &[
+                "binary_report_roots::main",
+                "binary_report_roots::unused_public",
+            ][..],
+        ),
+        (
+            "binary_roots_explicit",
+            &["--manifest", "explicit.toml"][..],
+            &["binary_report_roots::unused_public"][..],
+        ),
+    ] {
+        let messages = run_case(
+            &repo,
+            &cargo,
+            &sysroot,
+            name,
+            "binary_report_roots",
+            &Case::new().args(args),
+        );
+        let [report] = messages.as_slice() else {
+            panic!("{name}: expected one binary report: {messages:?}");
+        };
+        let findings = report["findings"].as_array().expect("findings array");
+        let mut roots = findings
+            .iter()
+            .map(|finding| finding["root"].as_str().expect("finding root"))
+            .collect::<Vec<_>>();
+        roots.sort_unstable();
+        assert_eq!(roots, expected_roots, "{name}: {findings:?}");
+        assert!(findings.iter().all(|finding| finding["effect"] == "panic"));
+    }
+}
+
+#[test]
 fn allocation_effect() {
     let repo = repo_root();
     let cargo = PathBuf::from(env!("CARGO_BIN_EXE_cargo-sniff-test"));
