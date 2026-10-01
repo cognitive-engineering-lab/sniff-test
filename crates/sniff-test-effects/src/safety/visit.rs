@@ -33,14 +33,13 @@ use rustc_middle::ty::{self, Instance, Ty, TyCtxt, TyKind};
 use rustc_span::Span;
 
 use sniff_test_core::effects::visit::{
-    EffectPassOutput, MirEffectCx, MirEffectPass, PreliminaryCallSeed, PreliminaryEffectGroup,
-    PreliminaryEffectGroupSeed, PreliminaryEffectSeed, PreliminaryMirEffectSeed,
-    PreliminaryMirEffectSource, ThirEffectPass,
+    CallSeed, EffectGroup, EffectGroupSeed, EffectPassOutput, EffectSeed, MirEffectCx,
+    MirEffectPass, MirEffectSeed, MirEffectSource, ThirEffectPass,
 };
 
 use super::SafetyOperation;
 
-pub type SafetyEffectGroup = PreliminaryEffectGroup;
+pub type SafetyEffectGroup = EffectGroup;
 
 pub struct SafetyInvocationPass;
 
@@ -51,14 +50,14 @@ impl MirEffectPass for SafetyInvocationPass {
         callee: Option<DefId>,
         callable_ty: Ty<'tcx>,
         location: Location,
-    ) -> Option<PreliminaryMirEffectSeed> {
+    ) -> Option<MirEffectSeed> {
         if !mir_call_requires_explicit_context(cx, callee, callable_ty) {
             return None;
         }
-        Some(PreliminaryMirEffectSeed {
+        Some(MirEffectSeed {
             location,
             kind: SafetyOperation::UnsafeCall.into(),
-            source: PreliminaryMirEffectSource::Invocation {
+            source: MirEffectSource::Invocation {
                 requires_documented_obligation: true,
             },
             suppress_in_compiler_context: true,
@@ -132,7 +131,7 @@ fn fn_def_call_requires_explicit_context<'tcx>(
 
 #[derive(Default)]
 pub struct SafetyThirPass {
-    sink: PreliminarySafetySeedSink,
+    sink: SafetySeedSink,
 }
 
 impl ThirEffectPass for SafetyThirPass {
@@ -159,7 +158,7 @@ fn collect_body<'tcx>(
     owner: LocalDefId,
     thir: &Thir<'tcx>,
     root: ExprId,
-    sink: &mut PreliminarySafetySeedSink,
+    sink: &mut SafetySeedSink,
 ) {
     let mut safety_scopes = Vec::new();
     let mut effect_groups = Vec::new();
@@ -187,7 +186,7 @@ fn collect_body<'tcx>(
 }
 
 #[derive(Default)]
-struct PreliminarySafetySeedSink {
+struct SafetySeedSink {
     output: EffectPassOutput,
     call_identities: HashSet<RawCallIdentity>,
     group_identities: HashSet<(DefId, SafetyEffectGroup)>,
@@ -205,7 +204,7 @@ struct RawCallIdentity {
     suppressed_by_compiler_context: bool,
 }
 
-impl PreliminarySafetySeedSink {
+impl SafetySeedSink {
     fn new_effect_group(&mut self, span: Span) -> SafetyEffectGroup {
         let group = SafetyEffectGroup {
             id: self.next_effect_group,
@@ -222,26 +221,20 @@ impl PreliminarySafetySeedSink {
     fn new_safety_scope(&mut self, owner: DefId, span: Span) -> SafetyEffectGroup {
         let effect_group = self.new_effect_group(span);
         self.group_identities.insert((owner, effect_group));
-        self.output
-            .auxiliary
-            .groups
-            .push(PreliminaryEffectGroupSeed {
-                owner,
-                effect_group,
-            });
+        self.output.auxiliary.groups.push(EffectGroupSeed {
+            owner,
+            effect_group,
+        });
         effect_group
     }
 
     fn inherit_effect_scopes(&mut self, owner: DefId, inherited: &[SafetyEffectGroup]) {
         for effect_group in inherited {
             if self.group_identities.insert((owner, *effect_group)) {
-                self.output
-                    .auxiliary
-                    .groups
-                    .push(PreliminaryEffectGroupSeed {
-                        owner,
-                        effect_group: *effect_group,
-                    });
+                self.output.auxiliary.groups.push(EffectGroupSeed {
+                    owner,
+                    effect_group: *effect_group,
+                });
             }
         }
     }
@@ -271,7 +264,7 @@ impl PreliminarySafetySeedSink {
             return;
         }
         let effect_group = active_group.unwrap_or_else(|| self.new_effect_group(span));
-        self.output.auxiliary.calls.push(PreliminaryCallSeed {
+        self.output.auxiliary.calls.push(CallSeed {
             owner,
             callee,
             declaration_callee,
@@ -292,7 +285,7 @@ impl PreliminarySafetySeedSink {
         active_group: Option<SafetyEffectGroup>,
     ) {
         let effect_group = active_group.unwrap_or_else(|| self.new_effect_group(span));
-        self.output.seeds.push(PreliminaryEffectSeed {
+        self.output.seeds.push(EffectSeed {
             owner,
             kind: op.into(),
             span,
@@ -326,7 +319,7 @@ struct UnsafeOpVisitor<'a, 'tcx> {
     /// bodies so closures inherit enclosing scopes lexically.
     safety_scopes: &'a mut Vec<SafetyScope>,
     effect_groups: &'a mut Vec<SafetyEffectGroup>,
-    sink: &'a mut PreliminarySafetySeedSink,
+    sink: &'a mut SafetySeedSink,
 }
 
 impl<'a, 'tcx> UnsafeOpVisitor<'a, 'tcx> {
@@ -885,7 +878,7 @@ mod tests {
     use rustc_hir::def_id::CRATE_DEF_ID;
     use rustc_span::{BytePos, Span};
 
-    use super::{PreliminarySafetySeedSink, SafetyOperation, SafetyThirPass};
+    use super::{SafetyOperation, SafetySeedSink, SafetyThirPass};
     use sniff_test_core::effects::visit::{EffectPassOutput, ThirEffectPass};
 
     fn span(start: u32, end: u32) -> Span {
@@ -893,11 +886,11 @@ mod tests {
     }
 
     #[test]
-    fn preliminary_sink_records_call_and_operation_candidates() {
+    fn sink_records_call_and_operation_candidates() {
         let owner = CRATE_DEF_ID.to_def_id();
         let scope_span = span(10, 40);
         let operation_span = span(20, 21);
-        let mut sink = PreliminarySafetySeedSink::default();
+        let mut sink = SafetySeedSink::default();
         let group = sink.new_safety_scope(owner, scope_span);
 
         sink.record_operation(
@@ -940,7 +933,7 @@ mod tests {
     #[test]
     fn thir_pass_publishes_safety_call_metadata() {
         let owner = CRATE_DEF_ID.to_def_id();
-        let mut sink = PreliminarySafetySeedSink::default();
+        let mut sink = SafetySeedSink::default();
         sink.record_call(owner, Some(owner), Some(owner), span(30, 31), None, false);
         let mut pass = SafetyThirPass { sink };
         let mut output = EffectPassOutput::default();
@@ -952,10 +945,10 @@ mod tests {
     }
 
     #[test]
-    fn preliminary_sink_coalesces_compiler_generated_calls_with_one_source_identity() {
+    fn sink_coalesces_compiler_generated_calls_with_one_source_identity() {
         let owner = CRATE_DEF_ID.to_def_id();
         let generated_span = span(30, 31);
-        let mut sink = PreliminarySafetySeedSink::default();
+        let mut sink = SafetySeedSink::default();
 
         sink.record_call(owner, Some(owner), Some(owner), generated_span, None, false);
         sink.record_call(owner, Some(owner), Some(owner), generated_span, None, false);
@@ -966,10 +959,10 @@ mod tests {
     }
 
     #[test]
-    fn preliminary_sink_keeps_same_source_call_in_distinct_unsafe_scopes() {
+    fn sink_keeps_same_source_call_in_distinct_unsafe_scopes() {
         let owner = CRATE_DEF_ID.to_def_id();
         let generated_span = span(30, 31);
-        let mut sink = PreliminarySafetySeedSink::default();
+        let mut sink = SafetySeedSink::default();
         let first_scope = sink.new_safety_scope(owner, span(10, 20));
         let second_scope = sink.new_safety_scope(owner, span(40, 50));
 
@@ -997,10 +990,10 @@ mod tests {
     }
 
     #[test]
-    fn preliminary_sink_retains_calls_suppressed_by_compiler_context_blocks() {
+    fn sink_retains_calls_suppressed_by_compiler_context_blocks() {
         let owner = CRATE_DEF_ID.to_def_id();
         let generated_span = span(30, 31);
-        let mut sink = PreliminarySafetySeedSink::default();
+        let mut sink = SafetySeedSink::default();
 
         sink.record_call(owner, Some(owner), Some(owner), generated_span, None, true);
 
@@ -1010,10 +1003,10 @@ mod tests {
     }
 
     #[test]
-    fn preliminary_sink_retains_an_empty_unsafe_scope() {
+    fn sink_retains_an_empty_unsafe_scope() {
         let owner = CRATE_DEF_ID.to_def_id();
         let scope_span = span(10, 40);
-        let mut sink = PreliminarySafetySeedSink::default();
+        let mut sink = SafetySeedSink::default();
         let group = sink.new_safety_scope(owner, scope_span);
 
         let facts = sink.into_output();
@@ -1027,13 +1020,13 @@ mod tests {
     }
 
     #[test]
-    fn preliminary_sink_preserves_shared_and_standalone_effect_groups() {
+    fn sink_preserves_shared_and_standalone_effect_groups() {
         let owner = CRATE_DEF_ID.to_def_id();
         let scope_span = span(10, 40);
         let first_span = span(20, 21);
         let second_span = span(30, 31);
         let standalone_span = span(50, 51);
-        let mut sink = PreliminarySafetySeedSink::default();
+        let mut sink = SafetySeedSink::default();
         let shared_group = sink.new_safety_scope(owner, scope_span);
 
         for operation_span in [first_span, second_span] {

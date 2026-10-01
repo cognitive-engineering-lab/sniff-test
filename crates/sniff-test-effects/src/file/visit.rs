@@ -4,9 +4,7 @@ use rustc_hir::def_id::DefId;
 use rustc_middle::mir::Location;
 use rustc_middle::ty::{TyCtxt, TyKind};
 use rustc_span::Symbol;
-use sniff_test_core::effects::visit::{
-    MirEffectCx, MirEffectPass, PreliminaryMirEffectSeed, PreliminaryMirEffectSource,
-};
+use sniff_test_core::effects::visit::{MirEffectCx, MirEffectPass, MirEffectSeed, MirEffectSource};
 
 use super::FileOperation;
 
@@ -19,14 +17,14 @@ impl MirEffectPass for FileMutationPass {
         callee: Option<DefId>,
         _callable_ty: rustc_middle::ty::Ty<'tcx>,
         location: Location,
-    ) -> Option<PreliminaryMirEffectSeed> {
+    ) -> Option<MirEffectSeed> {
         let Some(operation) = callee.and_then(|callee| file_operation(cx.tcx(), callee)) else {
             return None;
         };
-        Some(PreliminaryMirEffectSeed {
+        Some(MirEffectSeed {
             location,
             kind: operation.into(),
-            source: PreliminaryMirEffectSource::Invocation {
+            source: MirEffectSource::Invocation {
                 requires_documented_obligation: false,
             },
             suppress_in_compiler_context: false,

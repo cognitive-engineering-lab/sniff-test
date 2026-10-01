@@ -36,7 +36,7 @@ use crate::config::MarkerProbing;
 use crate::contracts::{ContractDocSummary, contract_doc_summary_from_attrs};
 use crate::effects::EffectMetadata;
 use crate::effects::visit::{
-    EffectPassRegistry, PreliminaryEffectSeed, PreliminaryMirEffectSource,
+    CallSeed, EffectGroupSeed, EffectPassRegistry, EffectSeed, MirEffectSource,
     RegisteredEffectPassOutput, RegisteredEffectSeed, RegisteredMirEffectPassOutput,
 };
 use crate::namespace::{canonical_namespace, namespace_candidates};
@@ -119,7 +119,7 @@ pub fn extract_artifact_facts(
         &effects,
     )?;
 
-    attach_preliminary_operations(tcx, pass_output.seeds, &mut sources, &mut bodies, &effects)?;
+    attach_source_operations(tcx, pass_output.seeds, &mut sources, &mut bodies, &effects)?;
 
     let functions = bodies
         .into_values()
@@ -450,7 +450,7 @@ fn collect_edge<'tcx>(
             continue;
         }
         match seed.source {
-            PreliminaryMirEffectSource::Operation => {
+            MirEffectSource::Operation => {
                 if let Some(effect_key) = collect_mir_effect(
                     seed.effect.clone(),
                     seed.kind,
@@ -463,7 +463,7 @@ fn collect_edge<'tcx>(
                     detected_effects.push((effect_key, seed.effect));
                 }
             }
-            PreliminaryMirEffectSource::Invocation {
+            MirEffectSource::Invocation {
                 requires_documented_obligation,
             } => {
                 body.calls[call_index]
@@ -1133,42 +1133,36 @@ struct RawEffectGroupResolver {
 }
 
 trait EffectSeedInput {
-    fn effect_groups(
-        &self,
-    ) -> impl Iterator<Item = &crate::effects::visit::PreliminaryEffectGroupSeed>;
-    fn call_seeds(&self) -> impl Iterator<Item = &crate::effects::visit::PreliminaryCallSeed>;
-    fn operations(&self) -> impl Iterator<Item = &PreliminaryEffectSeed>;
+    fn effect_groups(&self) -> impl Iterator<Item = &EffectGroupSeed>;
+    fn call_seeds(&self) -> impl Iterator<Item = &CallSeed>;
+    fn operations(&self) -> impl Iterator<Item = &EffectSeed>;
 }
 
 impl EffectSeedInput for RegisteredEffectPassOutput {
-    fn effect_groups(
-        &self,
-    ) -> impl Iterator<Item = &crate::effects::visit::PreliminaryEffectGroupSeed> {
+    fn effect_groups(&self) -> impl Iterator<Item = &EffectGroupSeed> {
         self.auxiliary.groups.iter()
     }
 
-    fn call_seeds(&self) -> impl Iterator<Item = &crate::effects::visit::PreliminaryCallSeed> {
+    fn call_seeds(&self) -> impl Iterator<Item = &CallSeed> {
         self.auxiliary.calls.iter()
     }
 
-    fn operations(&self) -> impl Iterator<Item = &PreliminaryEffectSeed> {
+    fn operations(&self) -> impl Iterator<Item = &EffectSeed> {
         self.seeds.iter().map(|seed| &seed.seed)
     }
 }
 
 #[cfg(test)]
 impl EffectSeedInput for crate::effects::visit::EffectPassOutput {
-    fn effect_groups(
-        &self,
-    ) -> impl Iterator<Item = &crate::effects::visit::PreliminaryEffectGroupSeed> {
+    fn effect_groups(&self) -> impl Iterator<Item = &EffectGroupSeed> {
         self.auxiliary.groups.iter()
     }
 
-    fn call_seeds(&self) -> impl Iterator<Item = &crate::effects::visit::PreliminaryCallSeed> {
+    fn call_seeds(&self) -> impl Iterator<Item = &CallSeed> {
         self.auxiliary.calls.iter()
     }
 
-    fn operations(&self) -> impl Iterator<Item = &PreliminaryEffectSeed> {
+    fn operations(&self) -> impl Iterator<Item = &EffectSeed> {
         self.seeds.iter()
     }
 }
@@ -1475,7 +1469,7 @@ fn raw_effect_group_id(group: usize) -> Result<EffectGroupId, ExtractError> {
         .map_err(|_| ExtractError::new("too many raw effect groups in one artifact"))
 }
 
-fn attach_preliminary_operations(
+fn attach_source_operations(
     tcx: TyCtxt<'_>,
     facts: Vec<RegisteredEffectSeed>,
     sources: &mut SourceTable,
@@ -1486,7 +1480,7 @@ fn attach_preliminary_operations(
         let fact = registered.seed;
         let Some(local) = fact.owner.as_local() else {
             return Err(ExtractError::new(
-                "preliminary effect operation is not owned by the local artifact",
+                "source-level effect operation is not owned by the local artifact",
             ));
         };
         let definition = StableDefPathHash::from_def_id(tcx, fact.owner);
@@ -1977,8 +1971,7 @@ mod tests {
     use crate::artifact::{AnnotationProbingFact, CallSiteId, EffectGroupId, EffectKind};
     use crate::effects::safety::visit::compiler_call_requires_explicit_context;
     use crate::effects::visit::{
-        EffectPassAuxiliary, EffectPassOutput, PreliminaryCallSeed, PreliminaryEffectGroup,
-        PreliminaryEffectGroupSeed, PreliminaryEffectSeed,
+        CallSeed, EffectGroup, EffectGroupSeed, EffectPassAuxiliary, EffectPassOutput, EffectSeed,
     };
     use crate::source_markers::MarkerProbe;
 
@@ -2087,29 +2080,29 @@ mod tests {
     #[test]
     fn call_grouping_prefers_the_innermost_thir_scope_and_reuses_standalone_sites() {
         let owner = CRATE_DEF_ID.to_def_id();
-        let outer = PreliminaryEffectGroup {
+        let outer = EffectGroup {
             id: 0,
             span: span(10, 50),
         };
-        let inner = PreliminaryEffectGroup {
+        let inner = EffectGroup {
             id: 1,
             span: span(20, 40),
         };
         let facts = EffectPassOutput {
             auxiliary: EffectPassAuxiliary {
                 groups: vec![
-                    PreliminaryEffectGroupSeed {
+                    EffectGroupSeed {
                         owner,
                         effect_group: outer,
                     },
-                    PreliminaryEffectGroupSeed {
+                    EffectGroupSeed {
                         owner,
                         effect_group: inner,
                     },
                 ],
                 calls: Vec::new(),
             },
-            seeds: vec![PreliminaryEffectSeed {
+            seeds: vec![EffectSeed {
                 owner,
                 kind: EffectKind::new("raw-pointer-dereference"),
                 span: span(30, 31),
@@ -2164,26 +2157,26 @@ mod tests {
             auxiliary: EffectPassAuxiliary {
                 groups: Vec::new(),
                 calls: vec![
-                    PreliminaryCallSeed {
+                    CallSeed {
                         owner,
                         callee: Some(first_callee),
                         declaration_callee: Some(first_callee),
                         suppressed_by_compiler_context: false,
                         call_site: 0,
                         span: shared_span,
-                        effect_group: PreliminaryEffectGroup {
+                        effect_group: EffectGroup {
                             id: 0,
                             span: shared_span,
                         },
                     },
-                    PreliminaryCallSeed {
+                    CallSeed {
                         owner,
                         callee: Some(second_callee),
                         declaration_callee: Some(second_declaration_callee),
                         suppressed_by_compiler_context: true,
                         call_site: 1,
                         span: shared_span,
-                        effect_group: PreliminaryEffectGroup {
+                        effect_group: EffectGroup {
                             id: 1,
                             span: shared_span,
                         },
@@ -2228,7 +2221,7 @@ mod tests {
         let first_callee = DefId::local(DefIndex::from_u32(1));
         let second_callee = DefId::local(DefIndex::from_u32(2));
         let shared_span = span(10, 40);
-        let shared_group = PreliminaryEffectGroup {
+        let shared_group = EffectGroup {
             id: 0,
             span: shared_span,
         };
@@ -2236,7 +2229,7 @@ mod tests {
             auxiliary: EffectPassAuxiliary {
                 groups: Vec::new(),
                 calls: vec![
-                    PreliminaryCallSeed {
+                    CallSeed {
                         owner,
                         callee: Some(first_callee),
                         declaration_callee: Some(first_callee),
@@ -2245,7 +2238,7 @@ mod tests {
                         span: shared_span,
                         effect_group: shared_group,
                     },
-                    PreliminaryCallSeed {
+                    CallSeed {
                         owner,
                         callee: Some(second_callee),
                         declaration_callee: Some(second_callee),
@@ -2281,14 +2274,14 @@ mod tests {
         let facts = EffectPassOutput {
             auxiliary: EffectPassAuxiliary {
                 groups: Vec::new(),
-                calls: vec![PreliminaryCallSeed {
+                calls: vec![CallSeed {
                     owner,
                     callee: Some(declaration_callee),
                     declaration_callee: Some(declaration_callee),
                     suppressed_by_compiler_context: true,
                     call_site: 0,
                     span: shared_span,
-                    effect_group: PreliminaryEffectGroup {
+                    effect_group: EffectGroup {
                         id: 0,
                         span: shared_span,
                     },
@@ -2323,26 +2316,26 @@ mod tests {
             auxiliary: EffectPassAuxiliary {
                 groups: Vec::new(),
                 calls: vec![
-                    PreliminaryCallSeed {
+                    CallSeed {
                         owner,
                         callee: Some(first_callee),
                         declaration_callee: Some(first_callee),
                         suppressed_by_compiler_context: false,
                         call_site: 0,
                         span: shared_span,
-                        effect_group: PreliminaryEffectGroup {
+                        effect_group: EffectGroup {
                             id: 0,
                             span: shared_span,
                         },
                     },
-                    PreliminaryCallSeed {
+                    CallSeed {
                         owner,
                         callee: Some(second_callee),
                         declaration_callee: Some(second_callee),
                         suppressed_by_compiler_context: false,
                         call_site: 1,
                         span: shared_span,
-                        effect_group: PreliminaryEffectGroup {
+                        effect_group: EffectGroup {
                             id: 1,
                             span: shared_span,
                         },
@@ -2376,12 +2369,12 @@ mod tests {
                 groups: Vec::new(),
                 calls: Vec::new(),
             },
-            seeds: vec![PreliminaryEffectSeed {
+            seeds: vec![EffectSeed {
                 owner,
                 kind: EffectKind::new("raw-pointer-dereference"),
                 span: span(10, 40),
                 marker_anchor_spans: vec![span(10, 40)],
-                effect_group: Some(PreliminaryEffectGroup {
+                effect_group: Some(EffectGroup {
                     id: 0,
                     span: span(10, 40),
                 }),
@@ -2412,16 +2405,16 @@ mod tests {
         let facts = EffectPassOutput {
             auxiliary: EffectPassAuxiliary {
                 groups: vec![
-                    PreliminaryEffectGroupSeed {
+                    EffectGroupSeed {
                         owner,
-                        effect_group: PreliminaryEffectGroup {
+                        effect_group: EffectGroup {
                             id: 0,
                             span: shared_scope,
                         },
                     },
-                    PreliminaryEffectGroupSeed {
+                    EffectGroupSeed {
                         owner,
-                        effect_group: PreliminaryEffectGroup {
+                        effect_group: EffectGroup {
                             id: 1,
                             span: shared_scope,
                         },

@@ -17,20 +17,20 @@ use super::EffectSpec;
 
 /// Pass-local identity shared by concrete sources that use one justification.
 #[derive(Debug, Clone, Copy)]
-pub struct PreliminaryEffectGroup {
+pub struct EffectGroup {
     pub id: usize,
     pub span: Span,
 }
 
-impl PartialEq for PreliminaryEffectGroup {
+impl PartialEq for EffectGroup {
     fn eq(&self, other: &Self) -> bool {
         self.id == other.id
     }
 }
 
-impl Eq for PreliminaryEffectGroup {}
+impl Eq for EffectGroup {}
 
-impl std::hash::Hash for PreliminaryEffectGroup {
+impl std::hash::Hash for EffectGroup {
     fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
         self.id.hash(state);
     }
@@ -38,25 +38,25 @@ impl std::hash::Hash for PreliminaryEffectGroup {
 
 /// One compiler-local operation reported by an effect pass.
 #[derive(Debug, Clone)]
-pub struct PreliminaryEffectSeed {
+pub struct EffectSeed {
     pub owner: DefId,
     pub kind: EffectKind,
     pub span: Span,
     pub marker_anchor_spans: Vec<Span>,
-    pub effect_group: Option<PreliminaryEffectGroup>,
+    pub effect_group: Option<EffectGroup>,
 }
 
 /// A detected operation stamped with the effect that registered its pass.
 #[derive(Debug, Clone)]
 pub struct RegisteredEffectSeed {
     pub effect: EffectKey,
-    pub seed: PreliminaryEffectSeed,
+    pub seed: EffectSeed,
 }
 
 /// One source call reported by an effect pass, before it is joined with the
 /// corresponding normalized reachability edge.
 #[derive(Debug, Clone)]
-pub struct PreliminaryCallSeed {
+pub struct CallSeed {
     pub owner: DefId,
     pub callee: Option<DefId>,
     pub declaration_callee: Option<DefId>,
@@ -65,34 +65,34 @@ pub struct PreliminaryCallSeed {
     pub suppressed_by_compiler_context: bool,
     pub call_site: usize,
     pub span: Span,
-    pub effect_group: PreliminaryEffectGroup,
+    pub effect_group: EffectGroup,
 }
 
-/// Facts required to resolve preliminary seeds but which are not themselves
+/// Facts required to resolve source-level seeds but which are not themselves
 /// potential effect sources.
 #[derive(Debug, Default)]
 pub struct EffectPassAuxiliary {
-    pub groups: Vec<PreliminaryEffectGroupSeed>,
-    pub calls: Vec<PreliminaryCallSeed>,
+    pub groups: Vec<EffectGroupSeed>,
+    pub calls: Vec<CallSeed>,
 }
 
 #[derive(Debug, Clone)]
-pub struct PreliminaryEffectGroupSeed {
+pub struct EffectGroupSeed {
     pub owner: DefId,
-    pub effect_group: PreliminaryEffectGroup,
+    pub effect_group: EffectGroup,
 }
 
 /// A source classification emitted while visiting a MIR body.
 #[derive(Debug, Clone)]
-pub struct PreliminaryMirEffectSeed {
+pub struct MirEffectSeed {
     pub location: Location,
     pub kind: EffectKind,
-    pub source: PreliminaryMirEffectSource,
+    pub source: MirEffectSource,
     pub suppress_in_compiler_context: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum PreliminaryMirEffectSource {
+pub enum MirEffectSource {
     Operation,
     Invocation {
         requires_documented_obligation: bool,
@@ -103,7 +103,7 @@ pub enum PreliminaryMirEffectSource {
 pub struct RegisteredMirEffectSeed {
     pub effect: EffectKey,
     pub kind: EffectKind,
-    pub source: PreliminaryMirEffectSource,
+    pub source: MirEffectSource,
     pub suppress_in_compiler_context: bool,
 }
 
@@ -223,7 +223,7 @@ impl<'tcx> MirEffectCx<'tcx> {
 /// MIR-derived seed pass. The framework enumerates every exact function
 /// instance expanded by reachability and invokes the pass directly on its MIR.
 pub trait MirEffectPass {
-    fn check_body(&mut self, _cx: MirEffectCx<'_>) -> Vec<PreliminaryMirEffectSeed> {
+    fn check_body(&mut self, _cx: MirEffectCx<'_>) -> Vec<MirEffectSeed> {
         Vec::new()
     }
 
@@ -236,14 +236,14 @@ pub trait MirEffectPass {
         _callee: Option<DefId>,
         _callable_ty: Ty<'tcx>,
         _location: Location,
-    ) -> Option<PreliminaryMirEffectSeed> {
+    ) -> Option<MirEffectSeed> {
         None
     }
 }
 
 #[derive(Default)]
 pub struct EffectPassOutput {
-    pub seeds: Vec<PreliminaryEffectSeed>,
+    pub seeds: Vec<EffectSeed>,
     pub auxiliary: EffectPassAuxiliary,
 }
 
@@ -412,7 +412,7 @@ fn register_mir_seed<'tcx>(
     output: &mut RegisteredMirEffectPassOutput<'tcx>,
     instance: Instance<'tcx>,
     effect: &EffectKey,
-    seed: Option<PreliminaryMirEffectSeed>,
+    seed: Option<MirEffectSeed>,
 ) {
     register_mir_seeds(output, instance, effect, seed);
 }
@@ -421,7 +421,7 @@ fn register_mir_seeds<'tcx>(
     output: &mut RegisteredMirEffectPassOutput<'tcx>,
     instance: Instance<'tcx>,
     effect: &EffectKey,
-    seeds: impl IntoIterator<Item = PreliminaryMirEffectSeed>,
+    seeds: impl IntoIterator<Item = MirEffectSeed>,
 ) {
     for seed in seeds {
         output
@@ -465,9 +465,7 @@ fn append_registered_output(
         )
         .max()
         .map_or(0, |group| {
-            group
-                .checked_add(1)
-                .expect("too many preliminary effect groups")
+            group.checked_add(1).expect("too many effect groups")
         });
     let call_offset = output
         .auxiliary
@@ -475,34 +473,31 @@ fn append_registered_output(
         .iter()
         .map(|seed| seed.call_site)
         .max()
-        .map_or(0, |call| {
-            call.checked_add(1)
-                .expect("too many preliminary call sites")
-        });
+        .map_or(0, |call| call.checked_add(1).expect("too many call sites"));
     for seed in &mut local.auxiliary.groups {
         seed.effect_group.id = seed
             .effect_group
             .id
             .checked_add(group_offset)
-            .expect("too many preliminary effect groups");
+            .expect("too many effect groups");
     }
     for seed in &mut local.auxiliary.calls {
         seed.effect_group.id = seed
             .effect_group
             .id
             .checked_add(group_offset)
-            .expect("too many preliminary effect groups");
+            .expect("too many effect groups");
         seed.call_site = seed
             .call_site
             .checked_add(call_offset)
-            .expect("too many preliminary call sites");
+            .expect("too many call sites");
     }
     for seed in &mut local.seeds {
         if let Some(group) = &mut seed.effect_group {
             group.id = group
                 .id
                 .checked_add(group_offset)
-                .expect("too many preliminary effect groups");
+                .expect("too many effect groups");
         }
     }
     output
@@ -521,24 +516,24 @@ mod tests {
     use rustc_span::DUMMY_SP;
 
     use super::{
-        EffectPassAuxiliary, EffectPassOutput, PreliminaryCallSeed, PreliminaryEffectGroup,
-        PreliminaryEffectGroupSeed, RegisteredEffectPassOutput, append_registered_output,
+        CallSeed, EffectGroup, EffectGroupSeed, EffectPassAuxiliary, EffectPassOutput,
+        RegisteredEffectPassOutput, append_registered_output,
     };
     use crate::artifact::EffectKey;
 
     fn output(owner: DefId) -> EffectPassOutput {
-        let effect_group = PreliminaryEffectGroup {
+        let effect_group = EffectGroup {
             id: 0,
             span: DUMMY_SP,
         };
         EffectPassOutput {
             seeds: Vec::new(),
             auxiliary: EffectPassAuxiliary {
-                groups: vec![PreliminaryEffectGroupSeed {
+                groups: vec![EffectGroupSeed {
                     owner,
                     effect_group,
                 }],
-                calls: vec![PreliminaryCallSeed {
+                calls: vec![CallSeed {
                     owner,
                     callee: None,
                     declaration_callee: None,

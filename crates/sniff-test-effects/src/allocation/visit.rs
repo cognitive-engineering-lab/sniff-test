@@ -7,9 +7,7 @@ use rustc_middle::middle::codegen_fn_attrs::CodegenFnAttrFlags;
 use rustc_middle::mir::Location;
 use rustc_middle::ty::{TyCtxt, TyKind};
 use rustc_span::Symbol;
-use sniff_test_core::effects::visit::{
-    MirEffectCx, MirEffectPass, PreliminaryMirEffectSeed, PreliminaryMirEffectSource,
-};
+use sniff_test_core::effects::visit::{MirEffectCx, MirEffectPass, MirEffectSeed, MirEffectSource};
 
 use super::AllocationOperation;
 
@@ -22,14 +20,14 @@ impl MirEffectPass for AllocationInvocationPass {
         callee: Option<DefId>,
         _callable_ty: rustc_middle::ty::Ty<'tcx>,
         location: Location,
-    ) -> Option<PreliminaryMirEffectSeed> {
+    ) -> Option<MirEffectSeed> {
         if !callee.is_some_and(|callee| is_allocation_entry(cx, callee)) {
             return None;
         }
-        Some(PreliminaryMirEffectSeed {
+        Some(MirEffectSeed {
             location,
             kind: AllocationOperation::HeapAllocation.into(),
-            source: PreliminaryMirEffectSource::Invocation {
+            source: MirEffectSource::Invocation {
                 requires_documented_obligation: false,
             },
             suppress_in_compiler_context: false,

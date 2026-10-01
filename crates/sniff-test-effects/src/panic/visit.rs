@@ -3,9 +3,7 @@
 use rustc_hir::def_id::DefId;
 use rustc_middle::mir::{AssertKind, Location, TerminatorKind};
 use rustc_middle::ty::Ty;
-use sniff_test_core::effects::visit::{
-    MirEffectCx, MirEffectPass, PreliminaryMirEffectSeed, PreliminaryMirEffectSource,
-};
+use sniff_test_core::effects::visit::{MirEffectCx, MirEffectPass, MirEffectSeed, MirEffectSource};
 use sniff_test_core::namespace::canonical_namespace;
 
 use super::PanicOperation;
@@ -26,15 +24,15 @@ impl MirEffectPass for BuiltinPanicInvocationPass {
         callee: Option<DefId>,
         _callable_ty: Ty<'tcx>,
         location: Location,
-    ) -> Option<PreliminaryMirEffectSeed> {
+    ) -> Option<MirEffectSeed> {
         if !callee.is_some_and(|callee| is_builtin_panic_sink(cx, callee)) {
             return None;
         }
-        Some(PreliminaryMirEffectSeed {
+        Some(MirEffectSeed {
             location,
             // Preserve the existing report kind for panic invocations.
             kind: PanicOperation::ConfiguredInvocation.into(),
-            source: PreliminaryMirEffectSource::Invocation {
+            source: MirEffectSource::Invocation {
                 requires_documented_obligation: false,
             },
             suppress_in_compiler_context: false,
@@ -62,7 +60,7 @@ fn is_builtin_panic_sink_path(path: &str) -> bool {
 }
 
 impl MirEffectPass for CompilerAssertPass {
-    fn check_body(&mut self, cx: MirEffectCx<'_>) -> Vec<PreliminaryMirEffectSeed> {
+    fn check_body(&mut self, cx: MirEffectCx<'_>) -> Vec<MirEffectSeed> {
         cx.body()
             .basic_blocks
             .iter_enumerated()
@@ -71,13 +69,13 @@ impl MirEffectPass for CompilerAssertPass {
                 let TerminatorKind::Assert { msg, .. } = &terminator.kind else {
                     return None;
                 };
-                Some(PreliminaryMirEffectSeed {
+                Some(MirEffectSeed {
                     location: Location {
                         block,
                         statement_index: data.statements.len(),
                     },
                     kind: compiler_assert_kind(msg.as_ref()).into(),
-                    source: PreliminaryMirEffectSource::Operation,
+                    source: MirEffectSource::Operation,
                     suppress_in_compiler_context: false,
                 })
             })
