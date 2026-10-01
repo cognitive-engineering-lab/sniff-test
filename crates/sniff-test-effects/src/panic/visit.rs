@@ -1,7 +1,8 @@
 //! Converts rustc MIR assertions into stable artifact classifications.
 
+use rustc_hir::def_id::DefId;
 use rustc_middle::mir::{AssertKind, Location, TerminatorKind};
-use rustc_middle::ty::TyKind;
+use rustc_middle::ty::Ty;
 use sniff_test_core::effects::visit::{
     MirEffectCx, MirEffectPass, PreliminaryMirEffectSeed, PreliminaryMirEffectSource,
 };
@@ -19,48 +20,29 @@ pub struct CompilerAssertPass;
 pub struct BuiltinPanicInvocationPass;
 
 impl MirEffectPass for BuiltinPanicInvocationPass {
-    fn check_body(&mut self, cx: MirEffectCx<'_>) -> Vec<PreliminaryMirEffectSeed> {
-        cx.body()
-            .basic_blocks
-            .iter_enumerated()
-            .filter_map(|(block, data)| {
-                let terminator = data.terminator();
-                let (TerminatorKind::Call { func, .. } | TerminatorKind::TailCall { func, .. }) =
-                    &terminator.kind
-                else {
-                    return None;
-                };
-                builtin_panic_callee(cx, func).map(|_| PreliminaryMirEffectSeed {
-                    location: Location {
-                        block,
-                        statement_index: data.statements.len(),
-                    },
-                    // Preserve the existing report kind for panic invocations.
-                    kind: PanicOperation::ConfiguredInvocation.into(),
-                    source: PreliminaryMirEffectSource::Invocation {
-                        requires_documented_obligation: false,
-                    },
-                    suppress_in_compiler_context: false,
-                })
-            })
-            .collect()
+    fn check_call<'tcx>(
+        &mut self,
+        cx: MirEffectCx<'tcx>,
+        callee: Option<DefId>,
+        _callable_ty: Ty<'tcx>,
+        location: Location,
+    ) -> Option<PreliminaryMirEffectSeed> {
+        if !callee.is_some_and(|callee| is_builtin_panic_sink(cx, callee)) {
+            return None;
+        }
+        Some(PreliminaryMirEffectSeed {
+            location,
+            // Preserve the existing report kind for panic invocations.
+            kind: PanicOperation::ConfiguredInvocation.into(),
+            source: PreliminaryMirEffectSource::Invocation {
+                requires_documented_obligation: false,
+            },
+            suppress_in_compiler_context: false,
+        })
     }
 }
 
-fn builtin_panic_callee<'tcx>(
-    cx: MirEffectCx<'tcx>,
-    func: &rustc_middle::mir::Operand<'tcx>,
-) -> Option<rustc_hir::def_id::DefId> {
-    let TyKind::FnDef(def_id, args) = *cx.operand_ty(func).kind() else {
-        return None;
-    };
-    let callee = cx
-        .resolve_callable_instance(def_id, args)
-        .map_or(def_id, |instance| instance.def_id());
-    is_builtin_panic_sink(cx, callee).then_some(callee)
-}
-
-fn is_builtin_panic_sink(cx: MirEffectCx<'_>, callee: rustc_hir::def_id::DefId) -> bool {
+fn is_builtin_panic_sink(cx: MirEffectCx<'_>, callee: DefId) -> bool {
     let path = canonical_namespace(cx.tcx(), callee);
     is_builtin_panic_sink_path(&path)
 }

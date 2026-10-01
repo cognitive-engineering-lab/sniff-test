@@ -4,7 +4,7 @@ use std::collections::{HashMap, HashSet};
 
 use reachability::MirBodyLocation;
 use rustc_hir::def_id::{DefId, LocalDefId};
-use rustc_middle::mir::{Body, Location, Operand};
+use rustc_middle::mir::{Body, Location, Operand, TerminatorKind};
 use rustc_middle::thir::{ExprId, Thir};
 use rustc_middle::ty::{
     self, EarlyBinder, GenericArgsRef, Instance, Ty, TyCtxt, TypeFoldable, TypeVisitableExt,
@@ -226,6 +226,19 @@ pub trait MirEffectPass {
     fn check_body(&mut self, _cx: MirEffectCx<'_>) -> Vec<PreliminaryMirEffectSeed> {
         Vec::new()
     }
+
+    /// Classifies one MIR call or tail call as at most one operation for this
+    /// pass. Direct callees are resolved for the current instance; indirect
+    /// calls have no `callee` but retain their monomorphized callable type.
+    fn check_call<'tcx>(
+        &mut self,
+        _cx: MirEffectCx<'tcx>,
+        _callee: Option<DefId>,
+        _callable_ty: Ty<'tcx>,
+        _location: Location,
+    ) -> Option<PreliminaryMirEffectSeed> {
+        None
+    }
 }
 
 #[derive(Default)]
@@ -356,21 +369,71 @@ impl EffectPassRegistry {
                 body,
             };
             for pass in &mut self.mir {
-                for seed in pass.pass.check_body(cx) {
-                    output
-                        .seeds
-                        .entry((instance, seed.location.into()))
-                        .or_default()
-                        .push(RegisteredMirEffectSeed {
-                            effect: pass.effect.clone(),
-                            kind: seed.kind,
-                            source: seed.source,
-                            suppress_in_compiler_context: seed.suppress_in_compiler_context,
-                        });
+                register_mir_seeds(
+                    &mut output,
+                    instance,
+                    &pass.effect,
+                    pass.pass.check_body(cx),
+                );
+            }
+            for (block, data) in body.basic_blocks.iter_enumerated() {
+                let (TerminatorKind::Call { func, .. } | TerminatorKind::TailCall { func, .. }) =
+                    &data.terminator().kind
+                else {
+                    continue;
+                };
+                let location = Location {
+                    block,
+                    statement_index: data.statements.len(),
+                };
+                let callable_ty = cx.operand_ty(func);
+                let callee = match *callable_ty.kind() {
+                    ty::FnDef(def_id, args) => Some(
+                        cx.resolve_callable_instance(def_id, args)
+                            .map_or(def_id, |instance| instance.def_id()),
+                    ),
+                    _ => None,
+                };
+                for pass in &mut self.mir {
+                    register_mir_seed(
+                        &mut output,
+                        instance,
+                        &pass.effect,
+                        pass.pass.check_call(cx, callee, callable_ty, location),
+                    );
                 }
             }
         }
         output
+    }
+}
+
+fn register_mir_seed<'tcx>(
+    output: &mut RegisteredMirEffectPassOutput<'tcx>,
+    instance: Instance<'tcx>,
+    effect: &EffectKey,
+    seed: Option<PreliminaryMirEffectSeed>,
+) {
+    register_mir_seeds(output, instance, effect, seed);
+}
+
+fn register_mir_seeds<'tcx>(
+    output: &mut RegisteredMirEffectPassOutput<'tcx>,
+    instance: Instance<'tcx>,
+    effect: &EffectKey,
+    seeds: impl IntoIterator<Item = PreliminaryMirEffectSeed>,
+) {
+    for seed in seeds {
+        output
+            .seeds
+            .entry((instance, seed.location.into()))
+            .or_default()
+            .push(RegisteredMirEffectSeed {
+                effect: effect.clone(),
+                kind: seed.kind,
+                source: seed.source,
+                suppress_in_compiler_context: seed.suppress_in_compiler_context,
+            });
     }
 }
 

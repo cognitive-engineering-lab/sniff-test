@@ -1,7 +1,7 @@
 //! File mutation seeds at the calls that perform writes, creation, truncation, or deletion.
 
 use rustc_hir::def_id::DefId;
-use rustc_middle::mir::{Location, TerminatorKind};
+use rustc_middle::mir::Location;
 use rustc_middle::ty::{TyCtxt, TyKind};
 use rustc_span::Symbol;
 use sniff_test_core::effects::visit::{
@@ -13,36 +13,24 @@ use super::FileOperation;
 pub struct FileMutationPass;
 
 impl MirEffectPass for FileMutationPass {
-    fn check_body(&mut self, cx: MirEffectCx<'_>) -> Vec<PreliminaryMirEffectSeed> {
-        cx.body()
-            .basic_blocks
-            .iter_enumerated()
-            .filter_map(|(block, data)| {
-                let (TerminatorKind::Call { func, .. } | TerminatorKind::TailCall { func, .. }) =
-                    &data.terminator().kind
-                else {
-                    return None;
-                };
-                let TyKind::FnDef(def_id, args) = *cx.operand_ty(func).kind() else {
-                    return None;
-                };
-                let callee = cx
-                    .resolve_callable_instance(def_id, args)
-                    .map_or(def_id, |instance| instance.def_id());
-                let operation = file_operation(cx.tcx(), callee)?;
-                Some(PreliminaryMirEffectSeed {
-                    location: Location {
-                        block,
-                        statement_index: data.statements.len(),
-                    },
-                    kind: operation.into(),
-                    source: PreliminaryMirEffectSource::Invocation {
-                        requires_documented_obligation: false,
-                    },
-                    suppress_in_compiler_context: false,
-                })
-            })
-            .collect()
+    fn check_call<'tcx>(
+        &mut self,
+        cx: MirEffectCx<'tcx>,
+        callee: Option<DefId>,
+        _callable_ty: rustc_middle::ty::Ty<'tcx>,
+        location: Location,
+    ) -> Option<PreliminaryMirEffectSeed> {
+        let Some(operation) = callee.and_then(|callee| file_operation(cx.tcx(), callee)) else {
+            return None;
+        };
+        Some(PreliminaryMirEffectSeed {
+            location,
+            kind: operation.into(),
+            source: PreliminaryMirEffectSource::Invocation {
+                requires_documented_obligation: false,
+            },
+            suppress_in_compiler_context: false,
+        })
     }
 }
 

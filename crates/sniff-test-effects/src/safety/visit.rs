@@ -24,7 +24,7 @@ use rustc_data_structures::stack::ensure_sufficient_stack;
 use rustc_hir::def::DefKind;
 use rustc_hir::def_id::{DefId, LocalDefId};
 use rustc_hir::{self as hir, BindingMode, ByRef, Mutability};
-use rustc_middle::mir::{BorrowKind, Location, TerminatorKind};
+use rustc_middle::mir::{BorrowKind, Location};
 use rustc_middle::thir::visit::{self, Visitor};
 use rustc_middle::thir::{
     Block, BlockSafety, Expr, ExprId, ExprKind, InlineAsmExpr, Pat, PatKind, Thir,
@@ -45,30 +45,24 @@ pub type SafetyEffectGroup = PreliminaryEffectGroup;
 pub struct SafetyInvocationPass;
 
 impl MirEffectPass for SafetyInvocationPass {
-    fn check_body(&mut self, cx: MirEffectCx<'_>) -> Vec<PreliminaryMirEffectSeed> {
-        cx.body()
-            .basic_blocks
-            .iter_enumerated()
-            .filter_map(|(block, data)| {
-                let terminator = data.terminator();
-                let (TerminatorKind::Call { func, .. } | TerminatorKind::TailCall { func, .. }) =
-                    &terminator.kind
-                else {
-                    return None;
-                };
-                mir_call_requires_explicit_context(cx, func).then(|| PreliminaryMirEffectSeed {
-                    location: Location {
-                        block,
-                        statement_index: data.statements.len(),
-                    },
-                    kind: SafetyOperation::UnsafeCall.into(),
-                    source: PreliminaryMirEffectSource::Invocation {
-                        requires_documented_obligation: true,
-                    },
-                    suppress_in_compiler_context: true,
-                })
-            })
-            .collect()
+    fn check_call<'tcx>(
+        &mut self,
+        cx: MirEffectCx<'tcx>,
+        callee: Option<DefId>,
+        callable_ty: Ty<'tcx>,
+        location: Location,
+    ) -> Option<PreliminaryMirEffectSeed> {
+        if !mir_call_requires_explicit_context(cx, callee, callable_ty) {
+            return None;
+        }
+        Some(PreliminaryMirEffectSeed {
+            location,
+            kind: SafetyOperation::UnsafeCall.into(),
+            source: PreliminaryMirEffectSource::Invocation {
+                requires_documented_obligation: true,
+            },
+            suppress_in_compiler_context: true,
+        })
     }
 }
 
@@ -84,29 +78,24 @@ pub fn call_identity_def_id(tcx: TyCtxt<'_>, def_id: DefId) -> DefId {
 
 fn mir_call_requires_explicit_context<'tcx>(
     cx: MirEffectCx<'tcx>,
-    func: &rustc_middle::mir::Operand<'tcx>,
+    callee: Option<DefId>,
+    callable_ty: Ty<'tcx>,
 ) -> bool {
-    let callee_ty = cx.operand_ty(func);
     let signature_requires_explicit_context =
-        matches!(callee_ty.kind(), TyKind::FnDef(..) | TyKind::FnPtr(..))
-            && callee_ty
+        matches!(callable_ty.kind(), TyKind::FnDef(..) | TyKind::FnPtr(..))
+            && callable_ty
                 .fn_sig(cx.tcx())
                 .skip_binder()
                 .safety()
                 .is_unsafe();
-    match *callee_ty.kind() {
-        TyKind::FnDef(def_id, args) => {
-            let callee_def_id = cx
-                .resolve_callable_instance(def_id, args)
-                .map_or(def_id, |instance| instance.def_id());
-            fn_def_call_requires_explicit_context(
-                cx.tcx(),
-                callee_def_id,
-                signature_requires_explicit_context,
-                Some(cx.instance()),
-            )
-        }
-        TyKind::FnPtr(..) => signature_requires_explicit_context,
+    match (*callable_ty.kind(), callee) {
+        (TyKind::FnDef(..), Some(callee)) => fn_def_call_requires_explicit_context(
+            cx.tcx(),
+            callee,
+            signature_requires_explicit_context,
+            Some(cx.instance()),
+        ),
+        (TyKind::FnPtr(..), _) => signature_requires_explicit_context,
         _ => false,
     }
 }

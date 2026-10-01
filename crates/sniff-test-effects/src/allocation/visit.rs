@@ -4,7 +4,7 @@ use rustc_hir::LangItem;
 use rustc_hir::def_id::DefId;
 use rustc_hir::definitions::DefPathData;
 use rustc_middle::middle::codegen_fn_attrs::CodegenFnAttrFlags;
-use rustc_middle::mir::{Location, TerminatorKind};
+use rustc_middle::mir::Location;
 use rustc_middle::ty::{TyCtxt, TyKind};
 use rustc_span::Symbol;
 use sniff_test_core::effects::visit::{
@@ -16,35 +16,24 @@ use super::AllocationOperation;
 pub struct AllocationInvocationPass;
 
 impl MirEffectPass for AllocationInvocationPass {
-    fn check_body(&mut self, cx: MirEffectCx<'_>) -> Vec<PreliminaryMirEffectSeed> {
-        cx.body()
-            .basic_blocks
-            .iter_enumerated()
-            .filter_map(|(block, data)| {
-                let (TerminatorKind::Call { func, .. } | TerminatorKind::TailCall { func, .. }) =
-                    &data.terminator().kind
-                else {
-                    return None;
-                };
-                let TyKind::FnDef(def_id, args) = *cx.operand_ty(func).kind() else {
-                    return None;
-                };
-                let callee = cx
-                    .resolve_callable_instance(def_id, args)
-                    .map_or(def_id, |instance| instance.def_id());
-                is_allocation_entry(cx, callee).then(|| PreliminaryMirEffectSeed {
-                    location: Location {
-                        block,
-                        statement_index: data.statements.len(),
-                    },
-                    kind: AllocationOperation::HeapAllocation.into(),
-                    source: PreliminaryMirEffectSource::Invocation {
-                        requires_documented_obligation: false,
-                    },
-                    suppress_in_compiler_context: false,
-                })
-            })
-            .collect()
+    fn check_call<'tcx>(
+        &mut self,
+        cx: MirEffectCx<'tcx>,
+        callee: Option<DefId>,
+        _callable_ty: rustc_middle::ty::Ty<'tcx>,
+        location: Location,
+    ) -> Option<PreliminaryMirEffectSeed> {
+        if !callee.is_some_and(|callee| is_allocation_entry(cx, callee)) {
+            return None;
+        }
+        Some(PreliminaryMirEffectSeed {
+            location,
+            kind: AllocationOperation::HeapAllocation.into(),
+            source: PreliminaryMirEffectSource::Invocation {
+                requires_documented_obligation: false,
+            },
+            suppress_in_compiler_context: false,
+        })
     }
 }
 
