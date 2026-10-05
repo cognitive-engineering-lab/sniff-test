@@ -584,9 +584,18 @@ impl EffectDiagnosticWriter<'_, '_, '_> {
     fn source(&mut self, effect: &EffectMetadata, contract: bool) {
         self.justification_marker = Some(effect.justification.to_owned());
         if let Some(span) = self.sources.function_span(self.root.function) {
+            let label = if self
+                .sources
+                .function_body(self.root.function)
+                .is_some_and(|body| body.attributes.is_exported)
+            {
+                "this is a public item"
+            } else {
+                "this is a report root"
+            };
             self.diagnostic.messages.push(DiagnosticMessage::SpanLabel(
                 span,
-                String::from("this is a public item"),
+                String::from(label),
             ));
         }
         if let Some(span) = self

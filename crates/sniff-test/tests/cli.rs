@@ -22,6 +22,38 @@ struct Case {
 }
 
 #[test]
+fn report_root_span_labels_reflect_visibility() {
+    let repo = repo_root();
+    let binary = PathBuf::from(env!("CARGO_BIN_EXE_cargo-sniff-test"));
+    for (name, args, public_labels, root_labels) in [
+        ("public", &[][..], 1, 0),
+        ("all", &["--manifest", "all.toml"][..], 1, 1),
+        ("explicit", &["--manifest", "explicit.toml"][..], 0, 1),
+    ] {
+        let (output, _, _temp) = run_case(
+            &repo,
+            &binary,
+            &format!("report_root_span_labels_{name}"),
+            "report_roots",
+            &Case::new().args(args),
+        );
+        assert_eq!(output.status.code(), Some(101), "{name}: {}", output.stderr);
+        assert_eq!(
+            output.stderr.matches("this is a public item").count(),
+            public_labels,
+            "{name}: {}",
+            output.stderr
+        );
+        assert_eq!(
+            output.stderr.matches("this is a report root").count(),
+            root_labels,
+            "{name}: {}",
+            output.stderr
+        );
+    }
+}
+
+#[test]
 fn enclosing_item_lints_select_descendants_and_follow_rust_levels() {
     let repo = repo_root();
     let binary = PathBuf::from(env!("CARGO_BIN_EXE_cargo-sniff-test"));
