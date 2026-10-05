@@ -15,6 +15,7 @@ use crate::artifact_cache::{
 use crate::compiler::extract::extract_artifact_facts;
 use crate::compiler::source::verify_cached_marker_sources;
 use crate::effects::Effect;
+use crate::report_roots::ReportRoot;
 use crate::workspace::{ArtifactAnalysisGraph, ExternArtifactInput};
 
 pub struct AnalyzedArtifact {
@@ -26,12 +27,13 @@ pub struct AnalyzedArtifact {
 }
 
 /// Extract and cache one rustc unit. Dependency units produce facts but no report.
-pub fn analyze_artifact(
-    tcx: TyCtxt<'_>,
+pub fn analyze_artifact<'tcx>(
+    tcx: TyCtxt<'tcx>,
     cache_dir: &Path,
     output_scope: ArtifactScope,
     rustc_version: &str,
     effects: &[Box<dyn Effect + '_>],
+    report_roots: &[ReportRoot<'tcx>],
 ) -> Result<Option<AnalyzedArtifact>, String> {
     let externs = dependency_inputs(tcx)?;
     let dependencies = ArtifactAnalysisGraph::load(
@@ -53,7 +55,10 @@ pub fn analyze_artifact(
         ));
     }
     verify_dependency_marker_sources(tcx, &dependencies)?;
-    let facts = extract_artifact_facts(tcx, effects)
+    let roots_for_extraction = (output_scope == ArtifactScope::Workspace
+        && !has_loadable_crate_output(tcx.crate_types()))
+    .then_some(report_roots);
+    let facts = extract_artifact_facts(tcx, effects, roots_for_extraction)
         .map_err(|error| format!("failed to extract artifact facts: {error}"))?;
     let facts = if let Some(artifact) = local_cache_artifact_info(tcx, output_scope) {
         let cache = ArtifactAnalysisCache::new(

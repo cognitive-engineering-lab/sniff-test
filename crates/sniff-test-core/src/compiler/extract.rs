@@ -1,12 +1,13 @@
 //! Policy-neutral extraction of rustc bodies into artifact facts.
 //!
-//! Extraction deliberately enumerates local bodies for only the selected
-//! domains, without consulting report roots, namespace policy, lint levels, or
-//! documentation overrides. Indirect calls retain only invocation-local
+//! Reusable artifact extraction enumerates all local bodies for the selected
+//! domains. Executable-only extraction starts at report roots. Neither mode
+//! consults namespace policy, lint levels, or documentation overrides.
+//! Indirect calls retain only invocation-local
 //! dispatch classification; compatible callables observed elsewhere are never
 //! persisted as target evidence.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fmt;
 
 use reachability::{
@@ -40,6 +41,7 @@ use crate::effects::visit::{
     RegisteredEffectPassOutput, RegisteredEffectSeed, RegisteredMirEffectPassOutput,
 };
 use crate::namespace::{canonical_namespace, namespace_candidates};
+use crate::report_roots::ReportRoot;
 use crate::source_markers::{
     EffectMarkerBlock, MarkerProbe, effect_edge_marker_block, effect_site_marker_block,
     probe_marker_candidates,
@@ -67,17 +69,37 @@ impl fmt::Display for ExtractError {
 
 impl std::error::Error for ExtractError {}
 
-/// Extracts every analyzable local function and associated-function body.
+/// Extracts every analyzable local function for reusable artifacts, or only
+/// root-reachable bodies for executable-only reporting.
 ///
 /// Local closures retain generic defining bodies for cross-crate
 /// lookup. Specialized instances, coroutines, and const bodies remain exact.
 /// Effect selection participates in extraction. Pass registration uses the
 /// static effect definition and does not read the bound reporting config.
-pub fn extract_artifact_facts(
-    tcx: TyCtxt<'_>,
+pub fn extract_artifact_facts<'tcx>(
+    tcx: TyCtxt<'tcx>,
     selected_effects: &[Box<dyn crate::effects::Effect + '_>],
+    report_roots: Option<&[ReportRoot<'tcx>]>,
 ) -> Result<ArtifactFacts, ExtractError> {
-    let required_owners = analyzable_local_fn_defs(tcx).collect::<Vec<_>>();
+    let roots = report_roots.map(|roots| {
+        roots
+            .iter()
+            .copied()
+            .map(|root| match root {
+                ReportRoot::Concrete { instance } => instance,
+                ReportRoot::Generic { local } => Instance::new_raw(
+                    local.to_def_id(),
+                    GenericArgs::identity_for_item(tcx, local),
+                ),
+            })
+            .collect::<Vec<_>>()
+    });
+    let mut reachability = ReachabilityIndex::new(tcx);
+    let required_owners = if let Some(roots) = roots.as_deref() {
+        reachable_local_fn_defs(tcx, &mut reachability, roots)?
+    } else {
+        analyzable_local_fn_defs(tcx).collect::<Vec<_>>()
+    };
     let effects = selected_effects
         .iter()
         .map(|effect| effect.metadata().clone())
@@ -110,7 +132,8 @@ pub fn extract_artifact_facts(
 
     collect_reachability_mode(
         tcx,
-        &extraction_roots(tcx, &required_owners),
+        &mut reachability,
+        &roots.unwrap_or_else(|| extraction_roots(tcx, &required_owners)),
         extraction_options(),
         &mut sources,
         &mut bodies,
@@ -127,6 +150,34 @@ pub fn extract_artifact_facts(
         .collect::<Result<Vec<_>, _>>()?;
     ArtifactFacts::new(functions, sources.into_files())
         .map_err(|error| ExtractError::new(format!("extracted artifact facts is invalid: {error}")))
+}
+
+fn reachable_local_fn_defs<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    reachability: &mut ReachabilityIndex<'tcx>,
+    roots: &[Instance<'tcx>],
+) -> Result<Vec<LocalDefId>, ExtractError> {
+    let hooks = NoopReachabilityHooks;
+    let Some(snapshot) = reachability.query_many(
+        roots.iter().copied().map(ReachabilityRoot::from),
+        &hooks,
+        extraction_options(),
+    ) else {
+        return Ok(Vec::new());
+    };
+    let view = reachability.graph().view(&snapshot);
+    if let Some(halt) = view.halt() {
+        return Err(ExtractError::new(reachability_halt_description(halt)));
+    }
+    let reached = view
+        .nodes()
+        .filter(|node| node.expansion() == Some(ReachabilityNodeExpansion::Expanded))
+        .filter_map(reachability::ReachedNode::instance)
+        .filter_map(|instance| instance.def_id().as_local())
+        .collect::<HashSet<_>>();
+    Ok(analyzable_local_fn_defs(tcx)
+        .filter(|owner| reached.contains(owner))
+        .collect())
 }
 
 fn analyzable_local_fn_defs(tcx: TyCtxt<'_>) -> impl Iterator<Item = LocalDefId> + '_ {
@@ -231,6 +282,7 @@ const fn reachability_edge_description(kind: ReachabilityEdgeKind) -> &'static s
 )]
 fn collect_reachability_mode<'tcx>(
     tcx: TyCtxt<'tcx>,
+    reachability: &mut ReachabilityIndex<'tcx>,
     roots: &[Instance<'tcx>],
     options: ReachabilityOptions,
     sources: &mut SourceTable,
@@ -239,7 +291,6 @@ fn collect_reachability_mode<'tcx>(
     pass_registry: &mut EffectPassRegistry,
     effects: &[EffectMetadata],
 ) -> Result<(), ExtractError> {
-    let mut reachability = ReachabilityIndex::new(tcx);
     let hooks = NoopReachabilityHooks;
     let Some(snapshot) = reachability.query_many(
         roots.iter().copied().map(ReachabilityRoot::from),

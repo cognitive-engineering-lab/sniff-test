@@ -31,12 +31,20 @@ pub(crate) fn analyze_crate(
 ) {
     let rustc_version = rustc_version();
     let effects = selected_effect_objects(&args.effects, config);
+    // Cacheable units must extract before root selection so their cached
+    // compiler facts retain the same session-visible policy aliases.
+    let early_selection = (output_scope == CrateOutputScope::Workspace
+        && !sniff_test_core::analysis::has_loadable_crate_output(tcx.crate_types()))
+    .then(|| select_report_roots(tcx, &config.analysis));
     let analysis = match sniff_test_core::analysis::analyze_artifact(
         tcx,
         &args.cache_dir(),
         output_scope.artifact_scope(),
         &rustc_version,
         &effects,
+        early_selection
+            .as_ref()
+            .map_or(&[], |selection| selection.roots.as_slice()),
     ) {
         Ok(Some(analysis)) => analysis,
         Ok(None) => return,
@@ -45,8 +53,8 @@ pub(crate) fn analyze_crate(
             return;
         }
     };
+    let selection = early_selection.unwrap_or_else(|| select_report_roots(tcx, &config.analysis));
     let crate_name = analysis.crate_name.clone();
-    let selection = select_report_roots(tcx, &config.analysis);
     let emit_diagnostics = args.under_cargo || args.message_format == MessageFormat::Human;
     let mut trace_config = config.clone();
     if args.explain.is_some() {

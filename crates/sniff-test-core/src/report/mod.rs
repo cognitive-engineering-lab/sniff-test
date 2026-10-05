@@ -128,8 +128,6 @@ pub fn trace_selected_workspace(
 ) -> Result<Vec<RootInterpretation>, EffectReportError> {
     let artifact = compose_workspace_artifact(local, dependencies)?;
     let artifact = &artifact;
-    let mut graph = InvocationGraph::from_artifact(artifact)
-        .map_err(|error| EffectReportError::new(error.to_string()))?;
     let mut crate_dependencies = dependencies
         .artifacts()
         .map(|artifact| {
@@ -155,7 +153,6 @@ pub fn trace_selected_workspace(
             .iter()
             .map(|(&owner, children)| (owner, children.clone())),
     );
-    graph.set_dependencies(&crate_dependencies);
     let namespaces = artifact.definition_namespace_index();
     let selected_metadata = effects
         .iter()
@@ -165,75 +162,19 @@ pub fn trace_selected_workspace(
     for effect in effects {
         effect.register_passes(&mut pass_registry);
     }
-    let annotations = AnnotationIndex::from_artifact_with_overrides(
-        artifact,
-        &graph,
-        &namespaces,
-        &config.contracts.overrides,
-        config.analysis.marker_probing,
-        &selected_metadata,
-    )
-    .map_err(|error| EffectReportError::new(error.to_string()))?;
-    let concrete_effects = effects
-        .iter()
-        .map(|effect| {
-            let concrete =
-                probe_concrete_effect(artifact, &graph, &annotations, &namespaces, effect.as_ref())
-                    .map_err(|error| EffectReportError::new(error.to_string()))?;
-            Ok((effect.key().clone(), concrete))
-        })
-        .collect::<Result<BTreeMap<_, _>, EffectReportError>>()?;
-    let obligation_policies = concrete_effects.iter().map(|(effect, concrete)| {
-        ObligationEffectPolicy::new(
-            effect.clone(),
-            concrete.trusted_functions(),
-            concrete.ignored_invocations(),
-        )
-    });
-    let obligations = ObligationTracker::probe(
-        &graph,
-        &annotations,
-        config.analysis.effect_doc_matching,
-        obligation_policies,
-    );
     let trace_options = TraceOptions {
         max_depth: config.analysis.max_trace_depth,
         state_budget: config.analysis.trace_state_budget,
     };
-    // Tracing is entirely effect-independent. Keep runs keyed by their stable
-    // effect identity so registering another effect does not require another
-    // typed local, trace alias, or engine invocation here.
-    let tracked_effects = concrete_effects
-        .iter()
-        .map(|(effect, concrete)| {
-            (
-                effect.clone(),
-                TrackedEffect::new(concrete, &obligations, effect.clone()),
-            )
-        })
-        .collect::<BTreeMap<_, _>>();
-    let effect_traces = tracked_effects
-        .iter()
-        .map(|(effect, tracked)| {
-            (
-                effect.clone(),
-                crate::trace::trace_effect(&graph, tracked, effect, trace_options),
-            )
-        })
-        .collect::<BTreeMap<_, ConcreteTrace>>();
-    let marker_claims = collect_marker_claims(
-        artifact,
-        &graph,
-        &concrete_effects,
-        &effect_traces,
-        &tracked_effects,
-    );
     let marker_probing = annotation_probing_fact(config.analysis.marker_probing);
 
     roots
         .iter()
         .cloned()
         .map(|root| {
+            let mut graph = InvocationGraph::from_artifact_roots(artifact, &[root.function])
+                .map_err(|error| EffectReportError::new(error.to_string()))?;
+            graph.set_dependencies(&crate_dependencies);
             let root_functions = graph.function_aliases(root.function).collect::<Vec<_>>();
             if root_functions.is_empty() {
                 return Err(EffectReportError::new(format!(
@@ -241,6 +182,73 @@ pub fn trace_selected_workspace(
                     root.path
                 )));
             }
+            let annotations = AnnotationIndex::from_artifact_with_overrides(
+                artifact,
+                &graph,
+                &namespaces,
+                &config.contracts.overrides,
+                config.analysis.marker_probing,
+                &selected_metadata,
+            )
+            .map_err(|error| EffectReportError::new(error.to_string()))?;
+            let concrete_effects = effects
+                .iter()
+                .map(|effect| {
+                    let concrete = probe_concrete_effect(
+                        artifact,
+                        &graph,
+                        &annotations,
+                        &namespaces,
+                        effect.as_ref(),
+                    )
+                    .map_err(|error| EffectReportError::new(error.to_string()))?;
+                    Ok((effect.key().clone(), concrete))
+                })
+                .collect::<Result<BTreeMap<_, _>, EffectReportError>>()?;
+            let obligation_policies = concrete_effects.iter().map(|(effect, concrete)| {
+                ObligationEffectPolicy::new(
+                    effect.clone(),
+                    concrete.trusted_functions(),
+                    concrete.ignored_invocations(),
+                )
+            });
+            let obligations = ObligationTracker::probe(
+                &graph,
+                &annotations,
+                config.analysis.effect_doc_matching,
+                obligation_policies,
+            );
+            let tracked_effects = concrete_effects
+                .iter()
+                .map(|(effect, concrete)| {
+                    (
+                        effect.clone(),
+                        TrackedEffect::new(concrete, &obligations, effect.clone()),
+                    )
+                })
+                .collect::<BTreeMap<_, _>>();
+            let effect_traces = tracked_effects
+                .iter()
+                .map(|(effect, tracked)| {
+                    (
+                        effect.clone(),
+                        crate::trace::trace_effect_from_roots(
+                            &graph,
+                            tracked,
+                            effect,
+                            trace_options,
+                            &root_functions,
+                        ),
+                    )
+                })
+                .collect::<BTreeMap<_, ConcreteTrace>>();
+            let marker_claims = collect_marker_claims(
+                artifact,
+                &graph,
+                &concrete_effects,
+                &effect_traces,
+                &tracked_effects,
+            );
             let mut findings = Vec::new();
             for root_function in root_functions.iter().copied() {
                 for (effect, concrete) in &concrete_effects {

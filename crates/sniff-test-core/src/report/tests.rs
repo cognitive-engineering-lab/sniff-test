@@ -77,6 +77,17 @@ fn stable_function(index: u64) -> FunctionId {
     FunctionId::generic(hash)
 }
 
+fn graph_for_all_bodies(
+    artifact: &ArtifactFacts,
+) -> Result<InvocationGraph, crate::compiler::invocations::InvocationGraphError> {
+    let roots = artifact
+        .functions
+        .iter()
+        .map(|body| body.function)
+        .collect::<Vec<_>>();
+    InvocationGraph::from_artifact_roots(artifact, &roots)
+}
+
 #[derive(Clone, Copy)]
 enum ContractBoundaryScenario {
     Operation,
@@ -199,7 +210,7 @@ fn contract_boundary_trace(
         ));
     }
     let artifact = ArtifactFacts::new(functions, Vec::new()).expect("valid contract artifact");
-    let graph = InvocationGraph::from_artifact(&artifact).expect("invocation graph");
+    let graph = graph_for_all_bodies(&artifact).expect("invocation graph");
     let annotations = AnnotationIndex::from_artifact(&artifact, &graph).expect("annotations");
     let namespaces = artifact.definition_namespace_index();
     let config = crate::config::test_config();
@@ -224,7 +235,7 @@ fn contract_boundary_trace(
     );
     let tracked = super::TrackedEffect::new(&concrete, &obligations, ReportEffect::Safety.key());
     (
-        crate::trace::trace_effect(
+        crate::trace::trace_effect_from_roots(
             &graph,
             &tracked,
             &ReportEffect::Safety.key(),
@@ -236,6 +247,7 @@ fn contract_boundary_trace(
                     100
                 },
             },
+            &[graph.function(root).expect("root function")],
         ),
         artifact,
     )
@@ -453,7 +465,7 @@ fn registered_effect_gets_default_concrete_reporting_without_an_adapter() {
         Vec::new(),
     )
     .expect("custom effect artifact");
-    let graph = InvocationGraph::from_artifact(&artifact).expect("invocation graph");
+    let graph = graph_for_all_bodies(&artifact).expect("invocation graph");
     let annotations = AnnotationIndex::from_artifact(&artifact, &graph).expect("annotations");
     let namespaces = artifact.definition_namespace_index();
     let allocation_config = crate::config::test_config().effect("panic").clone();
@@ -482,11 +494,12 @@ fn registered_effect_gets_default_concrete_reporting_without_an_adapter() {
         &obligations,
         EffectKey::new(Allocation::EFFECT_NAME),
     );
-    let trace = crate::trace::trace_effect(
+    let trace = crate::trace::trace_effect_from_roots(
         &graph,
         &tracked,
         &EffectKey::new(Allocation::EFFECT_NAME),
         crate::trace::TraceOptions::default(),
+        &[graph.function(root).expect("root function")],
     );
     let findings = super::concrete_findings(
         &artifact,
@@ -551,7 +564,7 @@ fn invocation_fact_controls_documentation_policy_for_a_registered_effect() {
             Vec::new(),
         )
         .expect("custom invocation artifact");
-        let graph = InvocationGraph::from_artifact(&artifact).expect("invocation graph");
+        let graph = graph_for_all_bodies(&artifact).expect("invocation graph");
         let annotations = AnnotationIndex::from_artifact(&artifact, &graph).expect("annotations");
         let namespaces = artifact.definition_namespace_index();
         let allocation_config = crate::config::test_config().effect("panic").clone();
@@ -580,11 +593,12 @@ fn invocation_fact_controls_documentation_policy_for_a_registered_effect() {
             &obligations,
             EffectKey::new(Allocation::EFFECT_NAME),
         );
-        let trace = crate::trace::trace_effect(
+        let trace = crate::trace::trace_effect_from_roots(
             &graph,
             &tracked,
             &EffectKey::new(Allocation::EFFECT_NAME),
             crate::trace::TraceOptions::default(),
+            &[graph.function(root).expect("root function")],
         );
         super::concrete_findings(
             &artifact,
@@ -1170,7 +1184,7 @@ fn marker_evidence_fixture() -> (ArtifactFacts, InvocationGraph, FunctionId) {
         Vec::new(),
     )
     .expect("valid marker evidence fixture");
-    let graph = InvocationGraph::from_artifact(&artifact).expect("invocation graph");
+    let graph = graph_for_all_bodies(&artifact).expect("invocation graph");
     (artifact, graph, owner)
 }
 
@@ -1431,7 +1445,7 @@ fn one_exact_projection_contract_does_not_suppress_its_sibling() {
         }],
     )
     .expect("valid exact projection fixture");
-    let graph = InvocationGraph::from_artifact(&artifact).expect("invocation graph");
+    let graph = graph_for_all_bodies(&artifact).expect("invocation graph");
     let annotations = AnnotationIndex::from_artifact(&artifact, &graph).expect("annotations");
     let first = graph
         .invocation_for_raw_call(first_caller, CallId::new(0))
@@ -1880,7 +1894,7 @@ fn grouped_comment_marker_claims_each_relevant_contract_branch() {
     let root = stable_function(47);
     let artifact = grouped_comment_claim_artifact(root, stable_function(48));
 
-    let graph = InvocationGraph::from_artifact(&artifact).expect("invocation graph");
+    let graph = graph_for_all_bodies(&artifact).expect("invocation graph");
     let annotations = AnnotationIndex::from_artifact(&artifact, &graph).expect("annotations");
     let config = crate::config::test_config();
     let namespaces = artifact.definition_namespace_index();
@@ -1937,11 +1951,12 @@ fn grouped_comment_marker_claims_each_relevant_contract_branch() {
         .map(|(effect, tracked)| {
             (
                 effect.clone(),
-                crate::trace::trace_effect(
+                crate::trace::trace_effect_from_roots(
                     &graph,
                     tracked,
                     effect,
                     crate::trace::TraceOptions::default(),
+                    &[graph.function(root).expect("root function")],
                 ),
             )
         })
@@ -2551,7 +2566,7 @@ fn report_root_does_not_owe_or_duplicate_effective_trait_contracts() {
         Vec::new(),
     )
     .expect("effective trait contract artifact");
-    let graph = InvocationGraph::from_artifact(&artifact).expect("invocation graph");
+    let graph = graph_for_all_bodies(&artifact).expect("invocation graph");
     let annotations = AnnotationIndex::from_artifact(&artifact, &graph).expect("annotations");
     let implementation_graph = graph.function(implementation).expect("implementation");
     assert_eq!(
@@ -2999,7 +3014,7 @@ fn ignored_macro_invocation_is_local_to_the_caller_report_root() {
     )
     .expect("path-local ignored-macro fixture");
     let config = crate::config::test_config();
-    let graph = InvocationGraph::from_artifact(&artifact).expect("invocation graph");
+    let graph = graph_for_all_bodies(&artifact).expect("invocation graph");
     let namespaces = artifact.definition_namespace_index();
     let annotations = AnnotationIndex::from_artifact(&artifact, &graph).expect("annotations");
     let panic = probe_concrete_effect_for::<Panic>(
@@ -3021,11 +3036,12 @@ fn ignored_macro_invocation_is_local_to_the_caller_report_root() {
         )],
     );
     let tracked = super::TrackedEffect::new(&panic, &obligations, ReportEffect::Panic.key());
-    let trace = crate::trace::trace_effect(
+    let trace = crate::trace::trace_effect_from_roots(
         &graph,
         &tracked,
         &ReportEffect::Panic.key(),
         crate::trace::TraceOptions::default(),
+        &[graph.function(boundary_root).expect("root function")],
     );
 
     assert_eq!(trace.handled().count(), 1);

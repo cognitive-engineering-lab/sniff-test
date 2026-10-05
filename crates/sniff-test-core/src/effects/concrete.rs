@@ -216,6 +216,9 @@ pub fn probe_concrete_effect<'annotations>(
 ) -> Result<ConcreteEffect<'annotations>, ProbeError> {
     let mut seeds = ConcreteSeedCollector::new(graph, domain.config());
     for body in &artifact.functions {
+        if !graph.includes_body(body.function) {
+            continue;
+        }
         let Some(owner) = seeds.filter_owner(
             body.function,
             namespaces.candidates(body.function),

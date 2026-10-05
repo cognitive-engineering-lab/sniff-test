@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::fmt;
 
 use crate::trace::{FunctionId, InvocationId, TransparentBodyEdgeId};
@@ -13,7 +13,7 @@ use crate::namespace::StableDefPathHash;
 
 /// A source-level invocation target.
 ///
-/// Concrete targets participate in Panic/Safety reverse propagation.
+/// Concrete targets carry effects along reachable runtime calls.
 /// `Unknown` records the unresolved implementation without inventing a callee.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum CallTarget {
@@ -152,10 +152,12 @@ impl Invocation {
     }
 }
 
-/// Reverse invocation view used by the concrete and obligation worklists.
+/// Invocation view used by the concrete and obligation worklists.
 pub struct InvocationGraph {
     stable_functions: Vec<StableFunctionId>,
     body_functions: BTreeSet<StableFunctionId>,
+    included_bodies: BTreeSet<StableFunctionId>,
+    contract_definitions: BTreeSet<StableDefPathHash>,
     functions: BTreeMap<StableFunctionId, FunctionId>,
     functions_by_definition: BTreeMap<StableDefPathHash, Vec<FunctionId>>,
     invocations: Vec<Invocation>,
@@ -171,7 +173,13 @@ pub struct InvocationGraph {
 }
 
 impl InvocationGraph {
-    pub fn from_artifact(artifact: &ArtifactFacts) -> Result<Self, InvocationGraphError> {
+    /// Index only bodies transitively invoked by the selected report roots.
+    /// Function identities remain global so generic aliases and declaration
+    /// contracts can still be resolved without indexing unrelated bodies.
+    pub fn from_artifact_roots(
+        artifact: &ArtifactFacts,
+        roots: &[StableFunctionId],
+    ) -> Result<Self, InvocationGraphError> {
         let transparent_owners = collect_transparent_owners(artifact);
         let stable_functions = collect_functions(artifact);
         let functions = stable_functions
@@ -198,6 +206,8 @@ impl InvocationGraph {
                 .iter()
                 .map(|body| body.function)
                 .collect(),
+            included_bodies: BTreeSet::new(),
+            contract_definitions: BTreeSet::new(),
             functions,
             functions_by_definition,
             invocations: Vec::new(),
@@ -208,8 +218,15 @@ impl InvocationGraph {
             dependency_crates: BTreeMap::new(),
         };
 
+        let included = graph.reachable_bodies(artifact, roots, &transparent_owners);
         for body in &artifact.functions {
+            if !included.contains(&body.function) {
+                continue;
+            }
             if let Some(declaration) = &body.contract_declaration {
+                graph
+                    .contract_definitions
+                    .insert(declaration.function.def_path_hash);
                 let implementations = graph.function_aliases(body.function).collect::<Vec<_>>();
                 for implementation in implementations {
                     graph.set_declaration_fallback(implementation, declaration.function)?;
@@ -217,6 +234,13 @@ impl InvocationGraph {
             }
         }
         for body in &artifact.functions {
+            if !included.contains(&body.function) {
+                continue;
+            }
+            graph.included_bodies.insert(body.function);
+            graph
+                .contract_definitions
+                .insert(body.function.def_path_hash);
             let calls = body
                 .calls
                 .iter()
@@ -225,6 +249,74 @@ impl InvocationGraph {
             graph.collect_body(body.function, &calls)?;
         }
         Ok(graph)
+    }
+
+    fn reachable_bodies(
+        &self,
+        artifact: &ArtifactFacts,
+        roots: &[StableFunctionId],
+        transparent_owners: &BTreeMap<StableFunctionId, StableFunctionId>,
+    ) -> BTreeSet<StableFunctionId> {
+        let bodies = artifact
+            .functions
+            .iter()
+            .map(|body| (body.function, body))
+            .collect::<BTreeMap<_, _>>();
+        let mut pending = VecDeque::new();
+        for root in roots {
+            pending.extend(self.function_aliases(*root));
+        }
+        let mut seen = BTreeSet::new();
+        let mut reached = BTreeSet::new();
+        while let Some(function) = pending.pop_front() {
+            if !seen.insert(function) {
+                continue;
+            }
+            let stable = self.stable_function(function);
+            // A concrete consumer instance can use effects and marker evidence
+            // recorded in its defining artifact's generic body.
+            if stable.instance_hash.is_some() {
+                let definition = StableFunctionId::generic(stable.def_path_hash);
+                if let Some(generic) = self.functions.get(&definition) {
+                    pending.push_back(*generic);
+                }
+            }
+            let Some(body) = bodies.get(&stable) else {
+                continue;
+            };
+            reached.insert(stable);
+            for call in &body.calls {
+                if !is_invocation(call.kind) && !is_transparent(call.kind) {
+                    continue;
+                }
+                let normalized = normalize_transparent_target(call, artifact, transparent_owners);
+                let target = if is_transparent(call.kind) {
+                    concrete_target(&normalized).and_then(|target| self.function(target))
+                } else {
+                    concrete_target(&normalized).and_then(|target| self.invocation_target(target))
+                };
+                if let Some(target) = target {
+                    pending.push_back(target);
+                }
+            }
+        }
+        reached
+    }
+
+    #[must_use]
+    pub fn includes_body(&self, function: StableFunctionId) -> bool {
+        self.included_bodies.contains(&function)
+    }
+
+    #[must_use]
+    pub fn includes_contract_definition(&self, function: StableFunctionId) -> bool {
+        self.contract_definitions.contains(&function.def_path_hash)
+    }
+
+    #[must_use]
+    pub fn includes_contract_target(&self, function: FunctionId) -> bool {
+        self.includes_body(self.stable_function(function))
+            || !self.contract_visible_incoming[function.index()].is_empty()
     }
 
     /// Attach policy-neutral artifact dependency relationships. Compute the
@@ -269,6 +361,11 @@ impl InvocationGraph {
     #[must_use]
     pub fn stable_function(&self, function: FunctionId) -> StableFunctionId {
         self.stable_functions[function.index()]
+    }
+
+    #[must_use]
+    pub fn function_count(&self) -> usize {
+        self.stable_functions.len()
     }
 
     /// Returns every exact or generic graph identity for one source definition.
@@ -582,6 +679,8 @@ impl InvocationGraph {
             }
         }
         for declaration in &invocation.declarations {
+            let definition = self.stable_function(*declaration).def_path_hash;
+            self.contract_definitions.insert(definition);
             if !self.contract_visible_incoming[declaration.index()].contains(&id) {
                 self.contract_visible_incoming[declaration.index()].push(id);
             }
@@ -948,6 +1047,17 @@ mod tests {
         ArtifactFacts::new(bodies, Vec::new()).expect("valid direct artifact facts")
     }
 
+    fn graph_for_all_bodies(
+        artifact: &ArtifactFacts,
+    ) -> Result<InvocationGraph, super::InvocationGraphError> {
+        let roots = artifact
+            .functions
+            .iter()
+            .map(|body| body.function)
+            .collect::<Vec<_>>();
+        InvocationGraph::from_artifact_roots(artifact, &roots)
+    }
+
     fn source_file() -> SourceFileFact {
         SourceFileFact {
             id: SourceFileId::new("source-1"),
@@ -966,7 +1076,125 @@ mod tests {
     }
 
     #[test]
-    fn direct_and_tail_calls_are_indexed_in_reverse() {
+    fn report_root_graph_descends_only_into_invoked_bodies() {
+        let root = stable_function(0);
+        let callee = stable_function(1);
+        let unrelated = stable_function(2);
+        let hidden = stable_function(3);
+        let mut hidden_body = body(hidden, Vec::new());
+        hidden_body.effects.push(EffectFact {
+            id: EffectId::new(0),
+            effect: EffectKey::new("panic"),
+            effect_group: None,
+            source_range: None,
+            expanded_range: None,
+            macro_expansions: Vec::new(),
+            kind: EffectKind::new("bounds-check"),
+        });
+        let facts = artifact(vec![
+            body(
+                root,
+                vec![call(0, 0, CallKindFact::DirectCall, target(callee))],
+            ),
+            body(callee, Vec::new()),
+            body(
+                unrelated,
+                vec![call(0, 0, CallKindFact::DirectCall, target(hidden))],
+            ),
+            hidden_body,
+        ]);
+
+        let graph = InvocationGraph::from_artifact_roots(&facts, &[root]).expect("valid graph");
+        assert!(graph.includes_body(root));
+        assert!(graph.includes_body(callee));
+        assert!(!graph.includes_body(unrelated));
+        assert!(!graph.includes_body(hidden));
+        assert_eq!(graph.invocations().len(), 1);
+        let annotations = AnnotationIndex::from_artifact(&facts, &graph).expect("annotations");
+        let namespaces = facts.definition_namespace_index();
+        let config = crate::config::test_config();
+        let panic = probe_concrete_effect_for::<Panic>(
+            &facts,
+            &graph,
+            &annotations,
+            &namespaces,
+            config.effect("panic"),
+        )
+        .expect("panic effect");
+        assert_eq!(panic.source_count(), 0);
+    }
+
+    #[test]
+    fn root_routes_do_not_propagate_into_an_unrelated_caller() {
+        let root = stable_function(0);
+        let other = stable_function(1);
+        let callee = stable_function(2);
+        let mut callee_body = body(callee, Vec::new());
+        callee_body.effects.push(EffectFact {
+            id: EffectId::new(0),
+            effect: EffectKey::new("panic"),
+            effect_group: None,
+            source_range: None,
+            expanded_range: None,
+            macro_expansions: Vec::new(),
+            kind: EffectKind::new("bounds-check"),
+        });
+        let facts = artifact(vec![
+            body(
+                root,
+                vec![call(0, 0, CallKindFact::DirectCall, target(callee))],
+            ),
+            body(
+                other,
+                vec![call(0, 0, CallKindFact::DirectCall, target(callee))],
+            ),
+            callee_body,
+        ]);
+        let graph = graph_for_all_bodies(&facts).expect("graph");
+        let annotations = AnnotationIndex::from_artifact(&facts, &graph).expect("annotations");
+        let config = crate::config::test_config();
+        let panic = probe_concrete_effect_for::<Panic>(
+            &facts,
+            &graph,
+            &annotations,
+            &facts.definition_namespace_index(),
+            config.effect("panic"),
+        )
+        .expect("panic effect");
+        let key = EffectKey::new("panic");
+        let obligations = crate::effects::obligation::ObligationTracker::probe(
+            &graph,
+            &annotations,
+            config.analysis.effect_doc_matching,
+            [crate::effects::obligation::ObligationEffectPolicy::new(
+                key.clone(),
+                panic.trusted_functions(),
+                panic.ignored_invocations(),
+            )],
+        );
+        let tracked =
+            crate::effects::obligation::TrackedEffect::new(&panic, &obligations, key.clone());
+        let trace = crate::trace::trace_effect_from_roots(
+            &graph,
+            &tracked,
+            &key,
+            crate::trace::TraceOptions::default(),
+            &[graph.function(root).expect("root")],
+        );
+        assert!(
+            trace
+                .nodes()
+                .any(|node| node.function() == graph.function(root).expect("root"))
+        );
+        assert!(
+            !trace
+                .nodes()
+                .any(|node| node.function() == graph.function(other).expect("other"))
+        );
+    }
+
+    #[test]
+    fn direct_and_tail_calls_record_runtime_incoming_edges() {
         let root = stable_function(0);
         let middle = stable_function(1);
         let leaf = stable_function(2);
@@ -982,7 +1210,7 @@ mod tests {
             body(leaf, Vec::new()),
         ]);
 
-        let graph = InvocationGraph::from_artifact(&facts).expect("invocation graph");
+        let graph = graph_for_all_bodies(&facts).expect("invocation graph");
         let leaf_id = graph.function(leaf).expect("leaf function");
         let middle_id = graph.function(middle).expect("middle function");
         let leaf_call = graph.incoming_invocations(leaf_id)[0];
@@ -1038,7 +1266,7 @@ mod tests {
             body(unrelated_callees[1], Vec::new()),
         ]);
 
-        let graph = InvocationGraph::from_artifact(&facts).expect("invocation graph");
+        let graph = graph_for_all_bodies(&facts).expect("invocation graph");
         let pointer_call = graph
             .invocation_for_raw_call(caller, CallId::new(0))
             .unwrap();
@@ -1116,7 +1344,7 @@ mod tests {
         unresolved_call.declaration_target = Some(declaration_target);
         let facts = artifact(vec![body(caller, vec![unresolved_call])]);
 
-        let graph = InvocationGraph::from_artifact(&facts).expect("invocation graph");
+        let graph = graph_for_all_bodies(&facts).expect("invocation graph");
         let invocation = graph
             .invocation_for_raw_call(caller, CallId::new(0))
             .expect("unresolved invocation");
@@ -1159,7 +1387,7 @@ mod tests {
             body(coroutine, Vec::new()),
         ]);
 
-        let graph = InvocationGraph::from_artifact(&facts).expect("invocation graph");
+        let graph = graph_for_all_bodies(&facts).expect("invocation graph");
         for child in [inline_const, coroutine] {
             let child = graph.function(child).unwrap();
             let [edge] = graph.transparent_parents(child) else {
@@ -1189,7 +1417,7 @@ mod tests {
             body(invoked_function, Vec::new()),
         ]);
 
-        let graph = InvocationGraph::from_artifact(&facts).expect("invocation graph");
+        let graph = graph_for_all_bodies(&facts).expect("invocation graph");
         let invocation = graph.incoming_invocations(graph.function(invoked_function).unwrap())[0];
 
         assert_eq!(graph.invocation(invocation).macro_provenance().len(), 1);
@@ -1219,7 +1447,7 @@ mod tests {
             body(second, Vec::new()),
         ]);
 
-        let graph = InvocationGraph::from_artifact(&facts)
+        let graph = graph_for_all_bodies(&facts)
             .expect("presentation-only macro path differences must not split an invocation");
         let invocation = graph
             .invocation_for_raw_call(caller, CallId::new(0))
@@ -1271,7 +1499,7 @@ mod tests {
             panicking_body,
             body(sibling, Vec::new()),
         ]);
-        let graph = InvocationGraph::from_artifact(&facts).expect("invocation graph");
+        let graph = graph_for_all_bodies(&facts).expect("invocation graph");
         let annotations = AnnotationIndex::from_artifact(&facts, &graph).expect("annotation index");
         let namespaces = facts.definition_namespace_index();
         let panic = probe_concrete_effect_for::<Panic>(
@@ -1298,11 +1526,12 @@ mod tests {
             &obligations,
             EffectKey::new("panic"),
         );
-        let trace = crate::trace::trace_effect(
+        let trace = crate::trace::trace_effect_from_roots(
             &graph,
             &tracked,
             &EffectKey::new("panic"),
             crate::trace::TraceOptions::default(),
+            &[graph.function(caller).expect("caller")],
         );
 
         trace
@@ -1348,7 +1577,7 @@ mod tests {
             body(second, Vec::new()),
         ]);
 
-        let graph = InvocationGraph::from_artifact(&facts).expect("invocation graph");
+        let graph = graph_for_all_bodies(&facts).expect("invocation graph");
         let first_incoming = graph.incoming_invocations(graph.function(first).unwrap());
         let second_incoming = graph.incoming_invocations(graph.function(second).unwrap());
 
@@ -1377,7 +1606,7 @@ mod tests {
             body(generic_callee, Vec::new()),
         ]);
 
-        let graph = InvocationGraph::from_artifact(&facts).expect("invocation graph");
+        let graph = graph_for_all_bodies(&facts).expect("invocation graph");
         let generic_incoming = graph.incoming_invocations(graph.function(generic_callee).unwrap());
 
         assert_eq!(generic_incoming.len(), 1);
@@ -1405,7 +1634,7 @@ mod tests {
             body(callee, Vec::new()),
         ]);
 
-        let graph = InvocationGraph::from_artifact(&facts).expect("invocation graph");
+        let graph = graph_for_all_bodies(&facts).expect("invocation graph");
         let unresolved = graph
             .invocation_for_raw_call(unresolved_caller, CallId::new(0))
             .expect("unresolved invocation");
@@ -1428,7 +1657,7 @@ mod tests {
             body(destination, Vec::new()),
         ]);
 
-        let graph = InvocationGraph::from_artifact(&facts).expect("invocation graph");
+        let graph = graph_for_all_bodies(&facts).expect("invocation graph");
         let resolved = graph
             .invocation_for_raw_call(source_owner, CallId::new(0))
             .expect("resolved invocation");
@@ -1465,7 +1694,7 @@ mod tests {
         )
         .expect("valid direct artifact facts");
 
-        let graph = InvocationGraph::from_artifact(&facts).expect("invocation graph");
+        let graph = graph_for_all_bodies(&facts).expect("invocation graph");
         let defining = graph
             .invocation_for_raw_call(generic_caller, CallId::new(0))
             .expect("defining invocation");
@@ -1502,7 +1731,7 @@ mod tests {
             body_with_contract_declaration(generic_implementation, declaration),
         ]);
 
-        let graph = InvocationGraph::from_artifact(&facts).expect("invocation graph");
+        let graph = graph_for_all_bodies(&facts).expect("invocation graph");
 
         for implementation in [generic_implementation, exact_implementation] {
             let implementation = graph
@@ -1532,7 +1761,7 @@ mod tests {
             body_with_contract_declaration(conflicting_implementation, declaration),
         ]);
 
-        let Err(error) = InvocationGraph::from_artifact(&conflicting_facts) else {
+        let Err(error) = graph_for_all_bodies(&conflicting_facts) else {
             panic!("one implementation cannot have two contract declarations");
         };
 
@@ -1577,7 +1806,7 @@ mod tests {
             body(second_declaration, Vec::new()),
         ]);
 
-        let graph = InvocationGraph::from_artifact(&facts)
+        let graph = graph_for_all_bodies(&facts)
             .expect("one desugared source site may contain several declaration calls");
         let invocation = graph
             .invocation_for_raw_call(caller, CallId::new(0))

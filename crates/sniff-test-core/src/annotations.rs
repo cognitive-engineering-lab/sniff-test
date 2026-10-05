@@ -152,6 +152,9 @@ impl AnnotationIndex {
         let mut site_comments = Vec::new();
         let override_markdown_by_definition = namespaces
             .iter()
+            .filter(|(definition, _)| {
+                graph.includes_contract_definition(FunctionId::generic(**definition))
+            })
             .filter_map(|(definition, candidates)| {
                 overrides
                     .markdown_for_candidates(candidates)
@@ -160,7 +163,15 @@ impl AnnotationIndex {
             .collect::<BTreeMap<_, _>>();
 
         for body in &artifact.functions {
+            if !graph.includes_contract_definition(body.function) {
+                continue;
+            }
             for marker in &body.markers {
+                if !graph.includes_body(body.function)
+                    && marker.kind.role != AnnotationRole::Contract
+                {
+                    continue;
+                }
                 let active = match marker_probing {
                     MarkerProbing::SourceCallsite => AnnotationProbingFact::SourceCallsite,
                     MarkerProbing::MacroDefinitionFirst => {
@@ -228,6 +239,12 @@ impl AnnotationIndex {
             if let Some(declaration) = &body.contract_declaration {
                 push_target_contracts(&mut ids, &mut contracts, declaration);
             }
+        }
+
+        // A declaration's contract can be serialized on a different call
+        // projection from the one reached by this root. Index only this
+        // surface metadata globally; site comments stay root scoped.
+        for body in &artifact.functions {
             for call in &body.calls {
                 let mut indexed_targets = BTreeSet::new();
                 for target in [

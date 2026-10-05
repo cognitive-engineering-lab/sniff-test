@@ -207,6 +207,7 @@ impl<'annotations> ObligationTracker<'annotations> {
             let functions = graph
                 .contract_targets(annotation.owner())
                 .into_iter()
+                .filter(|function| graph.includes_contract_target(*function))
                 .filter(|function| {
                     annotations
                         .effective_contract(graph, *function, annotation.effect())

@@ -15,7 +15,7 @@ use crate::effects::obligation::{
 use super::{
     EffectTrace, FunctionId, HandledTrace, InvocationId, Propagation, PropagationEdge,
     TerminationSite, TraceEdge, TraceEdgeId, TraceNode, TraceNodeId, TraceOutcome, TraceSite,
-    UnknownBoundary, UnknownBoundaryKind, UnknownTrace,
+    TransparentBodyEdgeId, UnknownBoundary, UnknownBoundaryKind, UnknownTrace,
 };
 
 pub type DomainTrace = EffectTrace<
@@ -39,16 +39,90 @@ impl Default for TraceOptions {
     }
 }
 
+/// The edges admitted by a walk that starts at the selected report root.
+/// Contract declarations are visible at reached invocations, but are not
+/// descended into as runtime bodies.
+struct RootRoutes {
+    concrete_reachable: BTreeSet<FunctionId>,
+    contract_reachable: BTreeSet<FunctionId>,
+    concrete_incoming: Vec<Vec<InvocationId>>,
+    contract_incoming: Vec<Vec<InvocationId>>,
+    transparent_parents: Vec<Vec<TransparentBodyEdgeId>>,
+}
+
+impl RootRoutes {
+    fn from_roots(graph: &InvocationGraph, roots: &[FunctionId]) -> Self {
+        let count = graph.function_count();
+        let mut outgoing = vec![Vec::new(); count];
+        for invocation in graph.invocations() {
+            outgoing[invocation.caller().index()].push(invocation.id());
+        }
+        let mut transparent_children = vec![Vec::new(); count];
+        for index in 0..count {
+            let child = FunctionId::from_index(index);
+            for &edge in graph.transparent_parents(child) {
+                transparent_children[graph.transparent_parent(edge).index()].push((edge, child));
+            }
+        }
+        let mut routes = Self {
+            concrete_reachable: BTreeSet::new(),
+            contract_reachable: BTreeSet::new(),
+            concrete_incoming: vec![Vec::new(); count],
+            contract_incoming: vec![Vec::new(); count],
+            transparent_parents: vec![Vec::new(); count],
+        };
+        let mut queue = VecDeque::from(roots.to_vec());
+        let mut visited = BTreeSet::new();
+        while let Some(function) = queue.pop_front() {
+            if !visited.insert(function) {
+                continue;
+            }
+            routes.concrete_reachable.insert(function);
+            routes.contract_reachable.insert(function);
+            for &invocation_id in &outgoing[function.index()] {
+                let invocation = graph.invocation(invocation_id);
+                for target in invocation.function_targets() {
+                    routes.concrete_incoming[target.index()].push(invocation_id);
+                    routes.contract_incoming[target.index()].push(invocation_id);
+                    queue.push_back(target);
+                }
+                for declaration in invocation.declaration_targets() {
+                    routes.contract_incoming[declaration.index()].push(invocation_id);
+                    routes.contract_reachable.insert(declaration);
+                }
+            }
+            for &(edge, child) in &transparent_children[function.index()] {
+                routes.transparent_parents[child.index()].push(edge);
+                queue.push_back(child);
+            }
+        }
+        routes
+    }
+}
+
+/// Trace only routes discovered by a forward walk from the report root.
 #[must_use]
-#[allow(
-    clippy::too_many_lines,
-    reason = "both direct worklists and their shared budget are visible in one traversal"
-)]
-pub fn trace_effect(
+pub fn trace_effect_from_roots(
     graph: &InvocationGraph,
     tracked: &TrackedEffect<'_, '_, ConcreteEffect<'_>>,
     effect: &EffectKey,
     options: TraceOptions,
+    roots: &[FunctionId],
+) -> DomainTrace {
+    let routes = RootRoutes::from_roots(graph, roots);
+    trace_effect_with_routes(graph, tracked, effect, options, &routes)
+}
+
+#[allow(
+    clippy::too_many_lines,
+    reason = "both direct worklists and their shared budget are visible in one traversal"
+)]
+fn trace_effect_with_routes(
+    graph: &InvocationGraph,
+    tracked: &TrackedEffect<'_, '_, ConcreteEffect<'_>>,
+    effect: &EffectKey,
+    options: TraceOptions,
+    routes: &RootRoutes,
 ) -> DomainTrace {
     let mut trace = DomainTrace::default();
     let mut concrete_queue = VecDeque::new();
@@ -57,6 +131,9 @@ pub fn trace_effect(
     let mut concrete_seen = HashSet::new();
 
     for seed in tracked.concrete().sources() {
+        if !routes.concrete_reachable.contains(&seed.owner) {
+            continue;
+        }
         if let Some(termination) = tracked
             .concrete()
             .terminate(&seed.state, TraceSite::Source(&seed.origin))
@@ -121,8 +198,8 @@ pub fn trace_effect(
             );
             continue;
         }
-        let incoming = graph.incoming_invocations(function);
-        let transparent = graph.transparent_parents(function);
+        let incoming = &routes.concrete_incoming[function.index()];
+        let transparent = &routes.transparent_parents[function.index()];
         if incoming.is_empty() && transparent.is_empty() {
             escaped(&mut trace, origin, node);
             continue;
@@ -131,7 +208,7 @@ pub fn trace_effect(
             unknown_at(&mut trace, origin, node, UnknownBoundaryKind::TraceDepth);
             continue;
         }
-        for (edge, parent) in parent_edges(graph, function, incoming) {
+        for (edge, parent) in parent_edges(graph, incoming, transparent) {
             if let PropagationEdge::Invocation(invocation) = edge
                 && !graph
                     .invocation(invocation)
@@ -194,6 +271,7 @@ pub fn trace_effect(
         &mut trace,
         &mut obligation_queue,
         &mut reached,
+        routes,
     );
 
     let mut independent = tracked.obligations().seeds_for_effect(effect);
@@ -204,6 +282,9 @@ pub fn trace_effect(
     independent
         .sort_by_key(|seed| std::cmp::Reverse(upstream_count(graph, seed.owner, &candidates)));
     for seed in independent {
+        if !routes.contract_reachable.contains(&seed.owner) {
+            continue;
+        }
         if reached.contains(&(seed.origin, seed.owner)) {
             continue;
         }
@@ -225,6 +306,7 @@ pub fn trace_effect(
                 &mut trace,
                 &mut obligation_queue,
                 &mut reached,
+                routes,
             );
         }
     }
@@ -243,6 +325,7 @@ fn drain_obligations(
     trace: &mut DomainTrace,
     queue: &mut VecDeque<TraceNodeId>,
     reached: &mut BTreeSet<(ContractId, FunctionId)>,
+    routes: &RootRoutes,
 ) {
     while let Some(node) = queue.pop_front() {
         let (origin, function, state, depth) = node_data(trace, node);
@@ -281,8 +364,8 @@ fn drain_obligations(
             );
             continue;
         }
-        let incoming = graph.incoming_contract_visible_invocations(function);
-        let transparent = graph.transparent_parents(function);
+        let incoming = &routes.contract_incoming[function.index()];
+        let transparent = &routes.transparent_parents[function.index()];
         if incoming.is_empty() && transparent.is_empty() {
             escaped(trace, origin, node);
             continue;
@@ -291,7 +374,7 @@ fn drain_obligations(
             unknown_at(trace, origin, node, UnknownBoundaryKind::TraceDepth);
             continue;
         }
-        for (edge, parent) in parent_edges(graph, function, incoming) {
+        for (edge, parent) in parent_edges(graph, incoming, transparent) {
             match tracked.obligations().propagate(obligation, edge) {
                 Propagation::Follow(next) => {
                     let termination = match edge {
@@ -333,8 +416,8 @@ fn drain_obligations(
 
 fn parent_edges<'a>(
     graph: &'a InvocationGraph,
-    function: FunctionId,
     incoming: &'a [InvocationId],
+    transparent: &'a [TransparentBodyEdgeId],
 ) -> impl Iterator<Item = (PropagationEdge, FunctionId)> + 'a {
     incoming
         .iter()
@@ -345,18 +428,12 @@ fn parent_edges<'a>(
                 graph.caller(invocation),
             )
         })
-        .chain(
-            graph
-                .transparent_parents(function)
-                .iter()
-                .copied()
-                .map(|transparent_edge| {
-                    (
-                        PropagationEdge::TransparentBody(transparent_edge),
-                        graph.transparent_parent(transparent_edge),
-                    )
-                }),
-        )
+        .chain(transparent.iter().copied().map(|transparent_edge| {
+            (
+                PropagationEdge::TransparentBody(transparent_edge),
+                graph.transparent_parent(transparent_edge),
+            )
+        }))
 }
 
 #[allow(

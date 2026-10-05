@@ -16,4 +16,4 @@ pub use model::{
     EffectTrace, HandledTrace, TerminationSite, TraceEdge, TraceEdgeId, TraceNode, TraceNodeId,
     TraceOutcome, UnknownTrace,
 };
-pub use worklist::{DomainTrace, TraceOptions, trace_effect};
+pub use worklist::{DomainTrace, TraceOptions, trace_effect_from_roots};
