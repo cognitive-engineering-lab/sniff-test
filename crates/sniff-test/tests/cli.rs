@@ -22,6 +22,171 @@ struct Case {
 }
 
 #[test]
+fn item_expect_lint_suppresses_only_matching_unmet_effects() {
+    let repo = repo_root();
+    let binary = PathBuf::from(env!("CARGO_BIN_EXE_cargo-sniff-test"));
+    let (output, root, _temp) = run_case(
+        &repo,
+        &binary,
+        "item_expect_lint_suppresses_only_matching_unmet_effects",
+        "item_expect_lint",
+        &Case::new().args(&["-e", "panic", "-e", "safety"]),
+    );
+    assert_eq!(output.status.code(), Some(0), "{}", output.stderr);
+    assert!(
+        !output.stderr.contains("may have panic effect"),
+        "{}",
+        output.stderr
+    );
+    assert!(
+        !output.stderr.contains("may have safety effect"),
+        "{}",
+        output.stderr
+    );
+    assert_eq!(
+        output
+            .stderr
+            .matches("this lint expectation is unfulfilled")
+            .count(),
+        3,
+        "{}",
+        output.stderr,
+    );
+    let normal = Command::new("cargo")
+        .args(["check", "--offline"])
+        .current_dir(root)
+        .output()
+        .expect("normal cargo check");
+    assert!(
+        normal.status.success(),
+        "{}",
+        String::from_utf8_lossy(&normal.stderr)
+    );
+}
+
+#[test]
+fn item_expect_lint_requires_effect_selection() {
+    let repo = repo_root();
+    let binary = PathBuf::from(env!("CARGO_BIN_EXE_cargo-sniff-test"));
+    let (output, _, _temp) = run_case(
+        &repo,
+        &binary,
+        "item_expect_lint_requires_effect_selection",
+        "item_expect_lint",
+        &Case::new().args(&["-e", "panic"]),
+    );
+    assert_eq!(output.status.code(), Some(0), "{}", output.stderr);
+    assert_eq!(
+        output
+            .stderr
+            .matches("this lint expectation is unfulfilled")
+            .count(),
+        4,
+        "{}",
+        output.stderr,
+    );
+}
+
+#[test]
+fn item_panic_lint_respects_justification_and_contracts() {
+    let repo = repo_root();
+    let binary = PathBuf::from(env!("CARGO_BIN_EXE_cargo-sniff-test"));
+    let (output, root, _temp) = run_case(
+        &repo,
+        &binary,
+        "item_panic_lint_respects_justification_and_contracts",
+        "item_panic_lint",
+        &Case::new().args(&["-e", "panic"]),
+    );
+    assert_eq!(output.status.code(), Some(101), "{}", output.stderr);
+    for name in ["denied", "method"] {
+        assert!(
+            output
+                .stderr
+                .contains(&format!("function `{name}` may have panic effect")),
+            "{}",
+            output.stderr
+        );
+    }
+    assert!(output.stderr.contains("warning: ["));
+    assert!(
+        output
+            .stderr
+            .contains("function `warned` may have panic effect")
+    );
+    for name in ["allowed", "justified", "documented"] {
+        assert!(
+            !output
+                .stderr
+                .contains(&format!("function `{name}` may have panic effect")),
+            "{}",
+            output.stderr
+        );
+    }
+
+    let normal = Command::new("cargo")
+        .args(["check", "--offline"])
+        .current_dir(root)
+        .output()
+        .expect("normal cargo check");
+    assert!(
+        normal.status.success(),
+        "{}",
+        String::from_utf8_lossy(&normal.stderr)
+    );
+}
+
+#[test]
+fn item_lints_cover_every_registered_effect() {
+    const CASES: [(&str, &str, &str, &[&str]); 3] = [
+        (
+            "safety",
+            "unsafe_unhandled",
+            "unsafe_justified",
+            &["-e", "safety"],
+        ),
+        (
+            "allocation",
+            "allocation_unhandled",
+            "allocation_justified",
+            &["-e", "allocation"],
+        ),
+        ("file", "file_unhandled", "file_justified", &["-e", "file"]),
+    ];
+    let repo = repo_root();
+    let binary = PathBuf::from(env!("CARGO_BIN_EXE_cargo-sniff-test"));
+    for (effect, unchecked, justified, args) in CASES {
+        let (output, _, _temp) = run_case(
+            &repo,
+            &binary,
+            "item_lints_cover_every_registered_effect",
+            "item_panic_lint",
+            &Case::new().args(args),
+        );
+        assert_eq!(
+            output.status.code(),
+            Some(101),
+            "{effect}: {}",
+            output.stderr
+        );
+        assert!(
+            output
+                .stderr
+                .contains(&format!("function `{unchecked}` may have")),
+            "{effect}: {}",
+            output.stderr
+        );
+        assert!(
+            !output
+                .stderr
+                .contains(&format!("function `{justified}` may have")),
+            "{effect}: {}",
+            output.stderr
+        );
+    }
+}
+
+#[test]
 fn full_stack_trace_footer_uses_rustc_note_color_without_a_trailing_blank_line() {
     const HINT: &str = "set `show-full-stack-trace = true` under `[analysis]` in sniff-test.toml to show every reachability step";
     const EXPLAIN: &str = "run `cargo sniff-test --explain <trace-id>` to see more details";

@@ -263,6 +263,39 @@ that callable is invoked.
 whose configured lint level is `deny`. `allow` suppresses a finding from human
 diagnostics and JSON output; `warn` reports it without failing the run.
 
+### Item-level effect lints
+
+Use `sniff_test::panic`, `sniff_test::safety`, `sniff_test::allocation`, or
+`sniff_test::file` to set the severity of unmet obligations for that effect on
+a function or method. Future registered effects use their effect key with `-`
+replaced by `_`. An attribute also selects a private function as a report root.
+Local justification comments and the function's own effect contract still
+discharge or propagate obligations as usual. Documentation and analysis-coverage
+findings keep their `sniff-test.toml` levels.
+
+Only crates that use sniff-test lint attributes need to register the tool:
+
+```rust
+#![cfg_attr(sniff_test, feature(register_tool), register_tool(sniff_test))]
+
+#[cfg_attr(sniff_test, deny(sniff_test::panic))]
+fn foo() {
+    panic!("unhandled panic");
+}
+```
+
+`warn`, `allow`, and `expect` work in place of `deny`. `expect` suppresses a
+matching unmet effect finding and counts as fulfilled only when that finding
+exists. If the effect is justified, covered by the function's own contract, or
+not selected for analysis, rustc reports an unfulfilled lint expectation. The
+conditional attributes are inactive in ordinary builds. If ordinary Cargo
+checks warn about the custom configuration name, declare it in `Cargo.toml`:
+
+```toml
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(sniff_test)'] }
+```
+
 Use `[panic].trusted-boundary-namespaces` for APIs whose caller-visible panic
 contract is authoritative. Matching implementations are trusted, as are their
 transitive dependencies on paths through the trusted API. Dependency trust is

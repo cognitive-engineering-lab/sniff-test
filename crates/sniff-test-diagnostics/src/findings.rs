@@ -69,6 +69,25 @@ pub struct Finding {
 }
 
 impl Finding {
+    /// The obligation represented by a finding that item lint levels may control.
+    #[must_use]
+    pub fn unmet_item_effect(&self) -> Option<(&str, &str)> {
+        match (&self.kind, self.root.as_deref()) {
+            (
+                FindingKind::Effect {
+                    effect,
+                    finding:
+                        EffectFindingClass::ConcreteOperation
+                        | EffectFindingClass::ConcreteInvocation
+                        | EffectFindingClass::DocumentedObligation,
+                    ..
+                },
+                Some(root),
+            ) => Some((root, effect)),
+            _ => None,
+        }
+    }
+
     #[must_use]
     pub fn new(kind: FindingKind, reason: String, diagnostic: FindingDiagnostic) -> Self {
         Self {
@@ -212,6 +231,16 @@ pub fn resolve_findings(
     config: &SniffTestConfig,
     effects: &[Box<dyn Effect + '_>],
 ) -> Vec<ResolvedFinding> {
+    resolve_findings_with_item_lints(findings, config, effects, &BTreeMap::new())
+}
+
+#[must_use]
+pub fn resolve_findings_with_item_lints(
+    findings: Vec<Finding>,
+    config: &SniffTestConfig,
+    effects: &[Box<dyn Effect + '_>],
+    item_lints: &BTreeMap<(String, String), LintLevel>,
+) -> Vec<ResolvedFinding> {
     let effect_index = effects
         .iter()
         .map(|effect| (effect.key().as_str(), effect.as_ref()))
@@ -219,7 +248,13 @@ pub fn resolve_findings(
     let mut resolved = findings
         .into_iter()
         .filter_map(|finding| {
-            let level = finding.lint_level(config, &effect_index);
+            let level = match finding.unmet_item_effect() {
+                Some((root, effect)) => item_lints
+                    .get(&(root.to_owned(), effect.to_owned()))
+                    .copied()
+                    .unwrap_or_else(|| finding.lint_level(config, &effect_index)),
+                _ => finding.lint_level(config, &effect_index),
+            };
             (!level.is_allow()).then_some(ResolvedFinding { level, finding })
         })
         .collect::<Vec<_>>();

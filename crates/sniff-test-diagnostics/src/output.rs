@@ -1,14 +1,16 @@
 //! Render and emit one analyzed artifact's results.
 
+use std::collections::BTreeMap;
+
 use rustc_middle::ty::TyCtxt;
 use sniff_test_core::artifact::EffectKey;
-use sniff_test_core::config::SniffTestConfig;
+use sniff_test_core::config::{LintLevel, SniffTestConfig};
 use sniff_test_core::effects::Effect;
 
 use crate::diagnostics::{emit_finding_diagnostic, emit_footer_note};
 use crate::findings::{
     FULL_STACK_TRACE_HINT, Finding, aggregate_human_findings, is_effect_source_finding,
-    resolve_findings, take_full_stack_trace_hint,
+    resolve_findings_with_item_lints, take_full_stack_trace_hint,
 };
 use crate::report::{AnalysisArtifactReport, REPORT_FORMAT_VERSION, ReportArtifact};
 
@@ -25,13 +27,32 @@ pub fn build_report(
     effects: &[Box<dyn Effect + '_>],
     findings: Vec<Finding>,
 ) -> AnalysisArtifactReport {
+    build_report_with_item_lints(
+        crate_name,
+        rustc_version,
+        config,
+        effects,
+        findings,
+        &BTreeMap::new(),
+    )
+}
+
+#[must_use]
+pub fn build_report_with_item_lints(
+    crate_name: String,
+    rustc_version: String,
+    config: &SniffTestConfig,
+    effects: &[Box<dyn Effect + '_>],
+    findings: Vec<Finding>,
+    item_lints: &BTreeMap<(String, String), LintLevel>,
+) -> AnalysisArtifactReport {
     AnalysisArtifactReport {
         reason: String::from("sniff-test-artifact"),
         format_version: REPORT_FORMAT_VERSION,
         tool_version: env!("CARGO_PKG_VERSION").to_owned(),
         rustc_version,
         artifact: ReportArtifact { crate_name },
-        findings: resolve_findings(findings, config, effects),
+        findings: resolve_findings_with_item_lints(findings, config, effects, item_lints),
     }
 }
 

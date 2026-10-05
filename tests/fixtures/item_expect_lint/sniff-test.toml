@@ -1,0 +1,10 @@
+[analysis]
+report-roots = []
+
+[panic.lints]
+operation = "deny"
+invocation = "deny"
+
+[safety.lints]
+operation = "deny"
+invocation = "deny"

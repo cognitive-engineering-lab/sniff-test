@@ -3,6 +3,7 @@
 mod args;
 mod cargo;
 mod driver;
+mod lints;
 mod plugin;
 
 pub use self::plugin::driver_main;

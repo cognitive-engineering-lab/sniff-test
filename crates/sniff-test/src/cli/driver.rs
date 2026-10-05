@@ -7,15 +7,17 @@ use rustc_middle::ty::TyCtxt;
 use rustc_session::config::CrateType;
 use sniff_test_core::artifact_cache::ArtifactScope;
 use sniff_test_core::config::SniffTestConfig;
-use sniff_test_core::report_roots::select_report_roots;
+use sniff_test_core::report_roots::select_report_roots_with_items;
 use sniff_test_effects::selected_effect_objects;
 
 use super::args::{CrateOutputScope, MessageFormat, SniffTestArgs};
+use super::lints::{collect_item_lints, fulfill_item_expectations};
 use super::plugin::rustc_version;
 use sniff_test_diagnostics::findings::collect_report_root_findings;
 use sniff_test_diagnostics::interpretation::interpret_workspace;
 use sniff_test_diagnostics::output::{
-    build_report, emit_explanation, emit_human_diagnostics, emit_json_report, emit_tool_error,
+    build_report_with_item_lints, emit_explanation, emit_human_diagnostics, emit_json_report,
+    emit_tool_error,
 };
 
 #[allow(
@@ -31,11 +33,12 @@ pub(crate) fn analyze_crate(
 ) {
     let rustc_version = rustc_version();
     let effects = selected_effect_objects(&args.effects, config);
+    let item_lints = collect_item_lints(tcx);
     // Cacheable units must extract before root selection so their cached
     // compiler facts retain the same session-visible policy aliases.
     let early_selection = (output_scope == CrateOutputScope::Workspace
         && !sniff_test_core::analysis::has_loadable_crate_output(tcx.crate_types()))
-    .then(|| select_report_roots(tcx, &config.analysis));
+    .then(|| select_report_roots_with_items(tcx, &config.analysis, &item_lints.roots));
     let analysis = match sniff_test_core::analysis::analyze_artifact(
         tcx,
         &args.cache_dir(),
@@ -53,7 +56,9 @@ pub(crate) fn analyze_crate(
             return;
         }
     };
-    let selection = early_selection.unwrap_or_else(|| select_report_roots(tcx, &config.analysis));
+    let selection = early_selection.unwrap_or_else(|| {
+        select_report_roots_with_items(tcx, &config.analysis, &item_lints.roots)
+    });
     let crate_name = analysis.crate_name.clone();
     let emit_diagnostics = args.under_cargo || args.message_format == MessageFormat::Human;
     let mut trace_config = config.clone();
@@ -86,7 +91,15 @@ pub(crate) fn analyze_crate(
         &crate_name,
     );
     findings.extend(interpreted_findings);
-    let report = build_report(crate_name, rustc_version, config, &effects, findings);
+    fulfill_item_expectations(tcx, &item_lints.expectations, &findings);
+    let report = build_report_with_item_lints(
+        crate_name,
+        rustc_version,
+        config,
+        &effects,
+        findings,
+        &item_lints.levels,
+    );
     if let Some(trace_id) = &args.explain {
         if emit_explanation(tcx, &report, trace_id) {
             if let Some(marker) = &args.explain_match_marker {

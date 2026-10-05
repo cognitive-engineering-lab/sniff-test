@@ -69,7 +69,17 @@ pub fn select_report_roots<'tcx>(
     tcx: TyCtxt<'tcx>,
     analysis_config: &AnalysisConfig,
 ) -> ReportRootSelection<'tcx> {
+    select_report_roots_with_items(tcx, analysis_config, &[])
+}
+
+#[must_use]
+pub fn select_report_roots_with_items<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    analysis_config: &AnalysisConfig,
+    item_roots: &[LocalDefId],
+) -> ReportRootSelection<'tcx> {
     let mut roots = HashSet::new();
+    roots.extend(item_roots.iter().copied());
 
     match analysis_config.report_roots.get_ref() {
         ReportRootSet::Public => {

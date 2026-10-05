@@ -1,0 +1,9 @@
+[package]
+name = "item-expect-lint"
+version = "0.1.0"
+edition = "2024"
+
+[workspace]
+
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(sniff_test)'] }

@@ -2,6 +2,7 @@ use std::ffi::OsStr;
 use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitCode};
+use std::sync::OnceLock;
 
 use anyhow::{Context, Result, bail};
 use clap::Parser as _;
@@ -16,10 +17,28 @@ use super::args::{
     ColorChoice, CrateOutputScope, DriverCli, MANIFEST_PATH_ENV, MessageFormat, SniffTestArgs,
 };
 use super::driver::{analyze_crate, is_proc_macro, load_config};
+use super::lints::registered_effect_lints;
 
 pub(crate) const DRIVER_NAME: &str = "sniff-test-driver";
 pub(crate) const SNIFF_TEST_ARGS_ENV: &str = "SNIFF_TEST_ARGS";
 pub(crate) const SNIFF_TEST_RUN_ID_ENV: &str = "SNIFF_TEST_RUN_ID";
+
+type CheckExpectations = for<'tcx> fn(TyCtxt<'tcx>, Option<Symbol>);
+static ORIGINAL_CHECK_EXPECTATIONS: OnceLock<CheckExpectations> = OnceLock::new();
+
+fn defer_expectation_check(
+    _session: &rustc_session::Session,
+    providers: &mut rustc_middle::util::Providers,
+) {
+    ORIGINAL_CHECK_EXPECTATIONS.get_or_init(|| providers.queries.check_expectations);
+    providers.queries.check_expectations = |_, _| {};
+}
+
+fn check_deferred_expectations(tcx: TyCtxt<'_>) {
+    ORIGINAL_CHECK_EXPECTATIONS
+        .get()
+        .expect("rustc expectation provider was saved")(tcx, None);
+}
 
 pub(super) fn render_error_chain(error: &anyhow::Error) -> String {
     let mut rendered = error.to_string();
@@ -196,6 +215,13 @@ fn run_driver(compiler_args: &[String], args: SniffTestArgs) -> Result<ExitCode>
         bail!("--explain requires human diagnostic output");
     }
     let mut compiler_args = compiler_args.to_owned();
+    if !compiler_args
+        .windows(2)
+        .any(|pair| pair == ["--cfg", "sniff_test"])
+        && !compiler_args.iter().any(|arg| arg == "--cfg=sniff_test")
+    {
+        compiler_args.extend([String::from("--cfg"), String::from("sniff_test")]);
+    }
     // Safety extraction and source-marker association read THIR in
     // `after_analysis`, after MIR building would normally have stolen it.
     // Appending here covers cargo mode, direct mode, and user-RUSTFLAGS
@@ -261,6 +287,8 @@ fn analysis_rustflags(args: &SniffTestArgs, config: &SniffTestConfig) -> Vec<Str
         .overflow_checks
         .unwrap_or(config.compiler.overflow_checks);
     let mut rustflags = vec![
+        "--cfg".to_owned(),
+        "sniff_test".to_owned(),
         "--cfg".to_owned(),
         format!("sniff_test_cache_{cache_location_hash:016x}"),
         "--cfg".to_owned(),
@@ -373,6 +401,14 @@ struct SniffTestCallbacks {
 
 impl Callbacks for SniffTestCallbacks {
     fn config(&mut self, config: &mut interface::Config) {
+        config.override_queries = Some(defer_expectation_check);
+        config.register_lints = Some(Box::new(|_, lint_store| {
+            let lints = registered_effect_lints()
+                .iter()
+                .map(|entry| entry.lint)
+                .collect::<Vec<_>>();
+            lint_store.register_lints(&lints);
+        }));
         // Direct driver invocations do not pass through `modify_cargo`, but
         // their artifacts must still expose MIR to downstream consumers.
         config.opts.unstable_opts.always_encode_mir = true;
@@ -419,18 +455,17 @@ impl Callbacks for SniffTestCallbacks {
     }
 
     fn after_analysis(&mut self, compiler: &interface::Compiler, tcx: TyCtxt<'_>) -> Compilation {
-        if self.is_build_script || is_proc_macro(tcx) {
-            return Compilation::Continue;
+        if !self.is_build_script && !is_proc_macro(tcx) {
+            let metadata_loader = compiler.codegen_backend.metadata_loader();
+            analyze_crate(
+                tcx,
+                &self.args,
+                &self.config,
+                self.output_scope,
+                &*metadata_loader,
+            );
         }
-
-        let metadata_loader = compiler.codegen_backend.metadata_loader();
-        analyze_crate(
-            tcx,
-            &self.args,
-            &self.config,
-            self.output_scope,
-            &*metadata_loader,
-        );
+        check_deferred_expectations(tcx);
         Compilation::Continue
     }
 }
