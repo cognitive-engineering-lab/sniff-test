@@ -22,6 +22,92 @@ struct Case {
 }
 
 #[test]
+fn enclosing_item_lints_select_descendants_and_follow_rust_levels() {
+    let repo = repo_root();
+    let binary = PathBuf::from(env!("CARGO_BIN_EXE_cargo-sniff-test"));
+    let (output, root, _temp) = run_case(
+        &repo,
+        &binary,
+        "enclosing_item_lints_select_descendants_and_follow_rust_levels",
+        "scoped_item_lint",
+        &Case::new().args(&["-e", "panic"]),
+    );
+    assert_eq!(output.status.code(), Some(101), "{}", output.stderr);
+    for name in [
+        "private_function",
+        "method",
+        "default_method",
+        "impl_scoped",
+        "trait_scoped",
+        "forbidden_function",
+    ] {
+        assert!(
+            output
+                .stderr
+                .contains(&format!("function `{name}` may have panic effect")),
+            "{name}: {}",
+            output.stderr
+        );
+    }
+    for name in ["crate_warned", "nested_function"] {
+        assert!(
+            output
+                .stderr
+                .contains(&format!("function `{name}` may have panic effect")),
+            "{name}: {}",
+            output.stderr
+        );
+    }
+    for name in ["function_allowed", "locally_allowed"] {
+        assert!(
+            !output
+                .stderr
+                .contains(&format!("function `{name}` may have panic effect")),
+            "{name}: {}",
+            output.stderr
+        );
+    }
+    let normal = Command::new("cargo")
+        .args(["check", "--offline"])
+        .current_dir(root)
+        .output()
+        .expect("normal cargo check");
+    assert!(
+        normal.status.success(),
+        "{}",
+        String::from_utf8_lossy(&normal.stderr)
+    );
+}
+
+#[test]
+fn enclosing_expectations_are_fulfilled_once_per_scope() {
+    let repo = repo_root();
+    let binary = PathBuf::from(env!("CARGO_BIN_EXE_cargo-sniff-test"));
+    let (output, _, _temp) = run_case(
+        &repo,
+        &binary,
+        "enclosing_expectations_are_fulfilled_once_per_scope",
+        "scoped_expect_lint",
+        &Case::new().args(&["-e", "panic", "-e", "safety"]),
+    );
+    assert_eq!(output.status.code(), Some(0), "{}", output.stderr);
+    assert_eq!(
+        output
+            .stderr
+            .matches("this lint expectation is unfulfilled")
+            .count(),
+        3,
+        "{}",
+        output.stderr,
+    );
+    assert!(
+        !output.stderr.contains("may have panic effect"),
+        "{}",
+        output.stderr
+    );
+}
+
+#[test]
 fn item_expect_lint_suppresses_only_matching_unmet_effects() {
     let repo = repo_root();
     let binary = PathBuf::from(env!("CARGO_BIN_EXE_cargo-sniff-test"));

@@ -267,8 +267,11 @@ diagnostics and JSON output; `warn` reports it without failing the run.
 
 Use `sniff_test::panic`, `sniff_test::safety`, `sniff_test::allocation`, or
 `sniff_test::file` to set the severity of unmet obligations for that effect on
-a function or method. Future registered effects use their effect key with `-`
-replaced by `_`. An attribute also selects a private function as a report root.
+a crate, module, impl block, trait block, function, or method. Future registered
+effects use their effect key with `-` replaced by `_`. Attributes on enclosing
+items apply to descendant functions and methods and select them as report roots,
+including private ones. A nearer attribute overrides an inherited level where
+Rust's lint rules allow it; `forbid` cannot be overridden.
 Local justification comments and the function's own effect contract still
 discharge or propagate obligations as usual. Documentation and analysis-coverage
 findings keep their `sniff-test.toml` levels.
@@ -279,15 +282,18 @@ Only crates that use sniff-test lint attributes need to register the tool:
 #![cfg_attr(sniff_test, feature(register_tool), register_tool(sniff_test))]
 
 #[cfg_attr(sniff_test, deny(sniff_test::panic))]
-fn foo() {
-    panic!("unhandled panic");
+mod parser {
+    fn parse() {
+        panic!("unhandled panic");
+    }
 }
 ```
 
-`warn`, `allow`, and `expect` work in place of `deny`. `expect` suppresses a
-matching unmet effect finding and counts as fulfilled only when that finding
-exists. If the effect is justified, covered by the function's own contract, or
-not selected for analysis, rustc reports an unfulfilled lint expectation. The
+`warn`, `allow`, `forbid`, and `expect` work in place of `deny`. `expect` suppresses
+matching unmet effect findings and counts as fulfilled when at least one finding
+exists in its scope. If the effect is justified, covered by functions' own
+contracts, overridden on all descendants, or not selected for analysis, rustc
+reports an unfulfilled lint expectation. The
 conditional attributes are inactive in ordinary builds. If ordinary Cargo
 checks warn about the custom configuration name, declare it in `Cargo.toml`:
 

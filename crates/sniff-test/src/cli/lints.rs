@@ -1,4 +1,4 @@
-//! Item-scoped lint levels for effect obligations.
+//! Rust-scoped lint levels for effect obligations.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::OnceLock;
@@ -71,37 +71,48 @@ pub(super) fn collect_item_lints(tcx: TyCtxt<'_>) -> ItemLintSelection {
         if !matches!(tcx.def_kind(local), DefKind::Fn | DefKind::AssocFn) {
             continue;
         }
-        let hir_id = tcx.local_def_id_to_hir_id(local);
-        let attributes = tcx.hir_attrs(hir_id).iter().filter(|attr| {
-            attr.name()
-                .is_some_and(|name| matches!(name.as_str(), "allow" | "warn" | "deny" | "expect"))
-        });
         let mut selected = BTreeSet::new();
-        for attr in attributes {
-            let Some(items) = attr.meta_item_list() else {
-                continue;
+        let mut ancestor = Some(local.to_def_id());
+        while let Some(def_id) = ancestor {
+            let Some(owner) = def_id.as_local() else {
+                break;
             };
-            for item in &items {
-                let Some(meta) = item.meta_item() else {
+            let owner_hir_id = tcx.local_def_id_to_hir_id(owner);
+            for attr in tcx.hir_attrs(owner_hir_id).iter().filter(|attr| {
+                attr.name().is_some_and(|name| {
+                    matches!(
+                        name.as_str(),
+                        "allow" | "warn" | "deny" | "forbid" | "expect"
+                    )
+                })
+            }) {
+                let Some(items) = attr.meta_item_list() else {
                     continue;
                 };
-                let segments = &meta.path.segments;
-                if segments.len() != 2 || segments[0].ident.name.as_str() != "sniff_test" {
-                    continue;
-                }
-                if let Some(effect_lint) = registered
-                    .iter()
-                    .find(|entry| entry.attribute_name == segments[1].ident.name.as_str())
-                {
-                    selected.insert(effect_lint.effect.as_str());
+                for item in &items {
+                    let Some(meta) = item.meta_item() else {
+                        continue;
+                    };
+                    let segments = &meta.path.segments;
+                    if segments.len() != 2 || segments[0].ident.name.as_str() != "sniff_test" {
+                        continue;
+                    }
+                    if let Some(effect_lint) = registered
+                        .iter()
+                        .find(|entry| entry.attribute_name == segments[1].ident.name.as_str())
+                    {
+                        selected.insert(effect_lint.effect.as_str());
+                    }
                 }
             }
+            ancestor = tcx.opt_parent(def_id);
         }
         if selected.is_empty() {
             continue;
         }
         selection.roots.push(local);
         let path = canonical_namespace(tcx, local.to_def_id());
+        let hir_id = tcx.local_def_id_to_hir_id(local);
         for effect in selected {
             let lint = registered
                 .iter()
@@ -136,7 +147,11 @@ pub(super) fn fulfill_item_expectations(
     expectations: &[ItemExpectation],
     findings: &[sniff_test_diagnostics::findings::Finding],
 ) {
+    let mut fulfilled = Vec::new();
     for expectation in expectations {
+        if fulfilled.contains(&expectation.id) {
+            continue;
+        }
         if findings.iter().any(|finding| {
             finding.unmet_item_effect().is_some_and(|(root, effect)| {
                 root == expectation.root && effect == expectation.effect
@@ -145,6 +160,7 @@ pub(super) fn fulfill_item_expectations(
             tcx.dcx()
                 .struct_expect("fulfilled sniff-test effect expectation", expectation.id)
                 .emit();
+            fulfilled.push(expectation.id);
         }
     }
 }
