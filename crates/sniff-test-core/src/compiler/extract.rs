@@ -37,8 +37,8 @@ use crate::config::MarkerProbing;
 use crate::contracts::{ContractDocSummary, contract_doc_summary_from_attrs};
 use crate::effects::EffectMetadata;
 use crate::effects::visit::{
-    CallSeed, EffectGroupSeed, EffectPassRegistry, EffectSeed, MirEffectSource,
-    RegisteredEffectPassOutput, RegisteredEffectSeed, RegisteredMirEffectPassOutput,
+    EffectPassRegistry, HirCallSeed, HirEffectGroupSeed, HirEffectSeed, MirEffectSource,
+    RegisteredHirEffectPassOutput, RegisteredHirEffectSeed, RegisteredMirEffectPassOutput,
 };
 use crate::namespace::{canonical_namespace, namespace_candidates};
 use crate::report_roots::ReportRoot;
@@ -1183,43 +1183,43 @@ struct RawEffectGroupResolver {
     next_call_site: Option<usize>,
 }
 
-trait EffectSeedInput {
-    fn effect_groups(&self) -> impl Iterator<Item = &EffectGroupSeed>;
-    fn call_seeds(&self) -> impl Iterator<Item = &CallSeed>;
-    fn operations(&self) -> impl Iterator<Item = &EffectSeed>;
+trait HirEffectSeedInput {
+    fn effect_groups(&self) -> impl Iterator<Item = &HirEffectGroupSeed>;
+    fn call_seeds(&self) -> impl Iterator<Item = &HirCallSeed>;
+    fn operations(&self) -> impl Iterator<Item = &HirEffectSeed>;
 }
 
-impl EffectSeedInput for RegisteredEffectPassOutput {
-    fn effect_groups(&self) -> impl Iterator<Item = &EffectGroupSeed> {
+impl HirEffectSeedInput for RegisteredHirEffectPassOutput {
+    fn effect_groups(&self) -> impl Iterator<Item = &HirEffectGroupSeed> {
         self.auxiliary.groups.iter()
     }
 
-    fn call_seeds(&self) -> impl Iterator<Item = &CallSeed> {
+    fn call_seeds(&self) -> impl Iterator<Item = &HirCallSeed> {
         self.auxiliary.calls.iter()
     }
 
-    fn operations(&self) -> impl Iterator<Item = &EffectSeed> {
+    fn operations(&self) -> impl Iterator<Item = &HirEffectSeed> {
         self.seeds.iter().map(|seed| &seed.seed)
     }
 }
 
 #[cfg(test)]
-impl EffectSeedInput for crate::effects::visit::EffectPassOutput {
-    fn effect_groups(&self) -> impl Iterator<Item = &EffectGroupSeed> {
+impl HirEffectSeedInput for crate::effects::visit::HirEffectPassOutput {
+    fn effect_groups(&self) -> impl Iterator<Item = &HirEffectGroupSeed> {
         self.auxiliary.groups.iter()
     }
 
-    fn call_seeds(&self) -> impl Iterator<Item = &CallSeed> {
+    fn call_seeds(&self) -> impl Iterator<Item = &HirCallSeed> {
         self.auxiliary.calls.iter()
     }
 
-    fn operations(&self) -> impl Iterator<Item = &EffectSeed> {
+    fn operations(&self) -> impl Iterator<Item = &HirEffectSeed> {
         self.seeds.iter()
     }
 }
 
 impl RawEffectGroupResolver {
-    fn new(output: &impl EffectSeedInput) -> Self {
+    fn new(output: &impl HirEffectSeedInput) -> Self {
         let mut calls_by_span = HashMap::<(DefId, Span), Vec<RawCallSite>>::new();
         for fact in output.call_seeds() {
             calls_by_span
@@ -1522,7 +1522,7 @@ fn raw_effect_group_id(group: usize) -> Result<EffectGroupId, ExtractError> {
 
 fn attach_source_operations(
     tcx: TyCtxt<'_>,
-    facts: Vec<RegisteredEffectSeed>,
+    facts: Vec<RegisteredHirEffectSeed>,
     sources: &mut SourceTable,
     bodies: &mut BTreeMap<FunctionId, PendingBody>,
     effects: &[EffectMetadata],
@@ -2022,7 +2022,8 @@ mod tests {
     use crate::artifact::{AnnotationProbingFact, CallSiteId, EffectGroupId, EffectKind};
     use crate::effects::safety::visit::compiler_call_requires_explicit_context;
     use crate::effects::visit::{
-        CallSeed, EffectGroup, EffectGroupSeed, EffectPassAuxiliary, EffectPassOutput, EffectSeed,
+        HirCallSeed, HirEffectGroup, HirEffectGroupSeed, HirEffectPassAuxiliary,
+        HirEffectPassOutput, HirEffectSeed,
     };
     use crate::source_markers::MarkerProbe;
 
@@ -2131,29 +2132,29 @@ mod tests {
     #[test]
     fn call_grouping_prefers_the_innermost_thir_scope_and_reuses_standalone_sites() {
         let owner = CRATE_DEF_ID.to_def_id();
-        let outer = EffectGroup {
+        let outer = HirEffectGroup {
             id: 0,
             span: span(10, 50),
         };
-        let inner = EffectGroup {
+        let inner = HirEffectGroup {
             id: 1,
             span: span(20, 40),
         };
-        let facts = EffectPassOutput {
-            auxiliary: EffectPassAuxiliary {
+        let facts = HirEffectPassOutput {
+            auxiliary: HirEffectPassAuxiliary {
                 groups: vec![
-                    EffectGroupSeed {
+                    HirEffectGroupSeed {
                         owner,
                         effect_group: outer,
                     },
-                    EffectGroupSeed {
+                    HirEffectGroupSeed {
                         owner,
                         effect_group: inner,
                     },
                 ],
                 calls: Vec::new(),
             },
-            seeds: vec![EffectSeed {
+            seeds: vec![HirEffectSeed {
                 owner,
                 kind: EffectKind::new("raw-pointer-dereference"),
                 span: span(30, 31),
@@ -2204,30 +2205,30 @@ mod tests {
         let unmatched_callee = DefId::local(DefIndex::from_u32(3));
         let second_declaration_callee = DefId::local(DefIndex::from_u32(4));
         let shared_span = span(10, 40);
-        let facts = EffectPassOutput {
-            auxiliary: EffectPassAuxiliary {
+        let facts = HirEffectPassOutput {
+            auxiliary: HirEffectPassAuxiliary {
                 groups: Vec::new(),
                 calls: vec![
-                    CallSeed {
+                    HirCallSeed {
                         owner,
                         callee: Some(first_callee),
                         declaration_callee: Some(first_callee),
                         suppressed_by_compiler_context: false,
                         call_site: 0,
                         span: shared_span,
-                        effect_group: EffectGroup {
+                        effect_group: HirEffectGroup {
                             id: 0,
                             span: shared_span,
                         },
                     },
-                    CallSeed {
+                    HirCallSeed {
                         owner,
                         callee: Some(second_callee),
                         declaration_callee: Some(second_declaration_callee),
                         suppressed_by_compiler_context: true,
                         call_site: 1,
                         span: shared_span,
-                        effect_group: EffectGroup {
+                        effect_group: HirEffectGroup {
                             id: 1,
                             span: shared_span,
                         },
@@ -2272,15 +2273,15 @@ mod tests {
         let first_callee = DefId::local(DefIndex::from_u32(1));
         let second_callee = DefId::local(DefIndex::from_u32(2));
         let shared_span = span(10, 40);
-        let shared_group = EffectGroup {
+        let shared_group = HirEffectGroup {
             id: 0,
             span: shared_span,
         };
-        let facts = EffectPassOutput {
-            auxiliary: EffectPassAuxiliary {
+        let facts = HirEffectPassOutput {
+            auxiliary: HirEffectPassAuxiliary {
                 groups: Vec::new(),
                 calls: vec![
-                    CallSeed {
+                    HirCallSeed {
                         owner,
                         callee: Some(first_callee),
                         declaration_callee: Some(first_callee),
@@ -2289,7 +2290,7 @@ mod tests {
                         span: shared_span,
                         effect_group: shared_group,
                     },
-                    CallSeed {
+                    HirCallSeed {
                         owner,
                         callee: Some(second_callee),
                         declaration_callee: Some(second_callee),
@@ -2322,17 +2323,17 @@ mod tests {
         let declaration_callee = DefId::local(DefIndex::from_u32(1));
         let requested_callee = DefId::local(DefIndex::from_u32(2));
         let shared_span = span(10, 40);
-        let facts = EffectPassOutput {
-            auxiliary: EffectPassAuxiliary {
+        let facts = HirEffectPassOutput {
+            auxiliary: HirEffectPassAuxiliary {
                 groups: Vec::new(),
-                calls: vec![CallSeed {
+                calls: vec![HirCallSeed {
                     owner,
                     callee: Some(declaration_callee),
                     declaration_callee: Some(declaration_callee),
                     suppressed_by_compiler_context: true,
                     call_site: 0,
                     span: shared_span,
-                    effect_group: EffectGroup {
+                    effect_group: HirEffectGroup {
                         id: 0,
                         span: shared_span,
                     },
@@ -2363,30 +2364,30 @@ mod tests {
         let first_callee = DefId::local(DefIndex::from_u32(1));
         let second_callee = DefId::local(DefIndex::from_u32(2));
         let shared_span = span(10, 40);
-        let facts = EffectPassOutput {
-            auxiliary: EffectPassAuxiliary {
+        let facts = HirEffectPassOutput {
+            auxiliary: HirEffectPassAuxiliary {
                 groups: Vec::new(),
                 calls: vec![
-                    CallSeed {
+                    HirCallSeed {
                         owner,
                         callee: Some(first_callee),
                         declaration_callee: Some(first_callee),
                         suppressed_by_compiler_context: false,
                         call_site: 0,
                         span: shared_span,
-                        effect_group: EffectGroup {
+                        effect_group: HirEffectGroup {
                             id: 0,
                             span: shared_span,
                         },
                     },
-                    CallSeed {
+                    HirCallSeed {
                         owner,
                         callee: Some(second_callee),
                         declaration_callee: Some(second_callee),
                         suppressed_by_compiler_context: false,
                         call_site: 1,
                         span: shared_span,
-                        effect_group: EffectGroup {
+                        effect_group: HirEffectGroup {
                             id: 1,
                             span: shared_span,
                         },
@@ -2415,17 +2416,17 @@ mod tests {
     #[test]
     fn standalone_operation_anchors_leave_structural_edges_independent() {
         let owner = CRATE_DEF_ID.to_def_id();
-        let facts = EffectPassOutput {
-            auxiliary: EffectPassAuxiliary {
+        let facts = HirEffectPassOutput {
+            auxiliary: HirEffectPassAuxiliary {
                 groups: Vec::new(),
                 calls: Vec::new(),
             },
-            seeds: vec![EffectSeed {
+            seeds: vec![HirEffectSeed {
                 owner,
                 kind: EffectKind::new("raw-pointer-dereference"),
                 span: span(10, 40),
                 marker_anchor_spans: vec![span(10, 40)],
-                effect_group: Some(EffectGroup {
+                effect_group: Some(HirEffectGroup {
                     id: 0,
                     span: span(10, 40),
                 }),
@@ -2453,19 +2454,19 @@ mod tests {
     fn ambiguous_containing_unsafe_scopes_use_a_fresh_group() {
         let owner = CRATE_DEF_ID.to_def_id();
         let shared_scope = span(10, 40);
-        let facts = EffectPassOutput {
-            auxiliary: EffectPassAuxiliary {
+        let facts = HirEffectPassOutput {
+            auxiliary: HirEffectPassAuxiliary {
                 groups: vec![
-                    EffectGroupSeed {
+                    HirEffectGroupSeed {
                         owner,
-                        effect_group: EffectGroup {
+                        effect_group: HirEffectGroup {
                             id: 0,
                             span: shared_scope,
                         },
                     },
-                    EffectGroupSeed {
+                    HirEffectGroupSeed {
                         owner,
-                        effect_group: EffectGroup {
+                        effect_group: HirEffectGroup {
                             id: 1,
                             span: shared_scope,
                         },

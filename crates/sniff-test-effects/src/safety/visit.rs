@@ -33,13 +33,13 @@ use rustc_middle::ty::{self, Instance, Ty, TyCtxt, TyKind};
 use rustc_span::Span;
 
 use sniff_test_core::effects::visit::{
-    CallSeed, EffectGroup, EffectGroupSeed, EffectPassOutput, EffectSeed, MirEffectCx,
-    MirEffectPass, MirEffectSeed, MirEffectSource, ThirEffectPass,
+    HirCallSeed, HirEffectGroup, HirEffectGroupSeed, HirEffectPassOutput, HirEffectSeed,
+    MirEffectCx, MirEffectPass, MirEffectSeed, MirEffectSource, ThirEffectPass,
 };
 
 use super::SafetyOperation;
 
-pub type SafetyEffectGroup = EffectGroup;
+pub type SafetyEffectGroup = HirEffectGroup;
 
 pub struct SafetyInvocationPass;
 
@@ -145,7 +145,7 @@ impl ThirEffectPass for SafetyThirPass {
         collect_body(tcx, owner, thir, root, &mut self.sink);
     }
 
-    fn take_output(&mut self, output: &mut EffectPassOutput) {
+    fn take_output(&mut self, output: &mut HirEffectPassOutput) {
         let collected = std::mem::take(&mut self.sink).into_output();
         output.seeds.extend(collected.seeds);
         output.auxiliary.groups.extend(collected.auxiliary.groups);
@@ -187,7 +187,7 @@ fn collect_body<'tcx>(
 
 #[derive(Default)]
 struct SafetySeedSink {
-    output: EffectPassOutput,
+    output: HirEffectPassOutput,
     call_identities: HashSet<RawCallIdentity>,
     group_identities: HashSet<(DefId, SafetyEffectGroup)>,
     next_effect_group: usize,
@@ -214,14 +214,14 @@ impl SafetySeedSink {
         group
     }
 
-    fn into_output(self) -> EffectPassOutput {
+    fn into_output(self) -> HirEffectPassOutput {
         self.output
     }
 
     fn new_safety_scope(&mut self, owner: DefId, span: Span) -> SafetyEffectGroup {
         let effect_group = self.new_effect_group(span);
         self.group_identities.insert((owner, effect_group));
-        self.output.auxiliary.groups.push(EffectGroupSeed {
+        self.output.auxiliary.groups.push(HirEffectGroupSeed {
             owner,
             effect_group,
         });
@@ -231,7 +231,7 @@ impl SafetySeedSink {
     fn inherit_effect_scopes(&mut self, owner: DefId, inherited: &[SafetyEffectGroup]) {
         for effect_group in inherited {
             if self.group_identities.insert((owner, *effect_group)) {
-                self.output.auxiliary.groups.push(EffectGroupSeed {
+                self.output.auxiliary.groups.push(HirEffectGroupSeed {
                     owner,
                     effect_group: *effect_group,
                 });
@@ -264,7 +264,7 @@ impl SafetySeedSink {
             return;
         }
         let effect_group = active_group.unwrap_or_else(|| self.new_effect_group(span));
-        self.output.auxiliary.calls.push(CallSeed {
+        self.output.auxiliary.calls.push(HirCallSeed {
             owner,
             callee,
             declaration_callee,
@@ -285,7 +285,7 @@ impl SafetySeedSink {
         active_group: Option<SafetyEffectGroup>,
     ) {
         let effect_group = active_group.unwrap_or_else(|| self.new_effect_group(span));
-        self.output.seeds.push(EffectSeed {
+        self.output.seeds.push(HirEffectSeed {
             owner,
             kind: op.into(),
             span,
@@ -879,7 +879,7 @@ mod tests {
     use rustc_span::{BytePos, Span};
 
     use super::{SafetyOperation, SafetySeedSink, SafetyThirPass};
-    use sniff_test_core::effects::visit::{EffectPassOutput, ThirEffectPass};
+    use sniff_test_core::effects::visit::{HirEffectPassOutput, ThirEffectPass};
 
     fn span(start: u32, end: u32) -> Span {
         Span::with_root_ctxt(BytePos(start), BytePos(end))
@@ -936,7 +936,7 @@ mod tests {
         let mut sink = SafetySeedSink::default();
         sink.record_call(owner, Some(owner), Some(owner), span(30, 31), None, false);
         let mut pass = SafetyThirPass { sink };
-        let mut output = EffectPassOutput::default();
+        let mut output = HirEffectPassOutput::default();
 
         pass.take_output(&mut output);
 

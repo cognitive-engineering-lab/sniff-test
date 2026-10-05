@@ -17,20 +17,20 @@ use super::EffectSpec;
 
 /// Pass-local identity shared by concrete sources that use one justification.
 #[derive(Debug, Clone, Copy)]
-pub struct EffectGroup {
+pub struct HirEffectGroup {
     pub id: usize,
     pub span: Span,
 }
 
-impl PartialEq for EffectGroup {
+impl PartialEq for HirEffectGroup {
     fn eq(&self, other: &Self) -> bool {
         self.id == other.id
     }
 }
 
-impl Eq for EffectGroup {}
+impl Eq for HirEffectGroup {}
 
-impl std::hash::Hash for EffectGroup {
+impl std::hash::Hash for HirEffectGroup {
     fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
         self.id.hash(state);
     }
@@ -38,25 +38,25 @@ impl std::hash::Hash for EffectGroup {
 
 /// One compiler-local operation reported by an effect pass.
 #[derive(Debug, Clone)]
-pub struct EffectSeed {
+pub struct HirEffectSeed {
     pub owner: DefId,
     pub kind: EffectKind,
     pub span: Span,
     pub marker_anchor_spans: Vec<Span>,
-    pub effect_group: Option<EffectGroup>,
+    pub effect_group: Option<HirEffectGroup>,
 }
 
 /// A detected operation stamped with the effect that registered its pass.
 #[derive(Debug, Clone)]
-pub struct RegisteredEffectSeed {
+pub struct RegisteredHirEffectSeed {
     pub effect: EffectKey,
-    pub seed: EffectSeed,
+    pub seed: HirEffectSeed,
 }
 
 /// One source call reported by an effect pass, before it is joined with the
 /// corresponding normalized reachability edge.
 #[derive(Debug, Clone)]
-pub struct CallSeed {
+pub struct HirCallSeed {
     pub owner: DefId,
     pub callee: Option<DefId>,
     pub declaration_callee: Option<DefId>,
@@ -65,21 +65,21 @@ pub struct CallSeed {
     pub suppressed_by_compiler_context: bool,
     pub call_site: usize,
     pub span: Span,
-    pub effect_group: EffectGroup,
+    pub effect_group: HirEffectGroup,
 }
 
 /// Facts required to resolve source-level seeds but which are not themselves
 /// potential effect sources.
 #[derive(Debug, Default)]
-pub struct EffectPassAuxiliary {
-    pub groups: Vec<EffectGroupSeed>,
-    pub calls: Vec<CallSeed>,
+pub struct HirEffectPassAuxiliary {
+    pub groups: Vec<HirEffectGroupSeed>,
+    pub calls: Vec<HirCallSeed>,
 }
 
 #[derive(Debug, Clone)]
-pub struct EffectGroupSeed {
+pub struct HirEffectGroupSeed {
     pub owner: DefId,
-    pub effect_group: EffectGroup,
+    pub effect_group: HirEffectGroup,
 }
 
 /// A source classification emitted while visiting a MIR body.
@@ -134,7 +134,7 @@ impl<'tcx> RegisteredMirEffectPassOutput<'tcx> {
 pub trait HirEffectPass {
     fn check_body(&mut self, _tcx: TyCtxt<'_>, _owner: LocalDefId) {}
 
-    fn take_output(&mut self, _output: &mut EffectPassOutput) {}
+    fn take_output(&mut self, _output: &mut HirEffectPassOutput) {}
 }
 
 /// THIR seed pass. Typed expression visitors can retain state across callback
@@ -148,7 +148,7 @@ pub trait ThirEffectPass {
         root: ExprId,
     );
 
-    fn take_output(&mut self, _output: &mut EffectPassOutput) {}
+    fn take_output(&mut self, _output: &mut HirEffectPassOutput) {}
 }
 
 /// Context for inspecting one exact MIR instance without exposing extraction's
@@ -242,9 +242,9 @@ pub trait MirEffectPass {
 }
 
 #[derive(Default)]
-pub struct EffectPassOutput {
-    pub seeds: Vec<EffectSeed>,
-    pub auxiliary: EffectPassAuxiliary,
+pub struct HirEffectPassOutput {
+    pub seeds: Vec<HirEffectSeed>,
+    pub auxiliary: HirEffectPassAuxiliary,
 }
 
 struct RegisteredThirPass {
@@ -263,9 +263,9 @@ struct RegisteredMirPass {
 }
 
 #[derive(Default)]
-pub struct RegisteredEffectPassOutput {
-    pub seeds: Vec<RegisteredEffectSeed>,
-    pub auxiliary: EffectPassAuxiliary,
+pub struct RegisteredHirEffectPassOutput {
+    pub seeds: Vec<RegisteredHirEffectSeed>,
+    pub auxiliary: HirEffectPassAuxiliary,
 }
 
 #[derive(Default)]
@@ -321,7 +321,7 @@ impl EffectPassRegistry {
         &mut self,
         tcx: TyCtxt<'_>,
         owners: &[LocalDefId],
-    ) -> RegisteredEffectPassOutput {
+    ) -> RegisteredHirEffectPassOutput {
         for &owner in owners {
             for pass in &mut self.hir {
                 pass.pass.check_body(tcx, owner);
@@ -337,14 +337,14 @@ impl EffectPassRegistry {
                 pass.pass.check_body(tcx, owner, &thir, root);
             }
         }
-        let mut output = RegisteredEffectPassOutput::default();
+        let mut output = RegisteredHirEffectPassOutput::default();
         for pass in &mut self.hir {
-            let mut local = EffectPassOutput::default();
+            let mut local = HirEffectPassOutput::default();
             pass.pass.take_output(&mut local);
             append_registered_output(&pass.effect, local, &mut output);
         }
         for pass in &mut self.thir {
-            let mut local = EffectPassOutput::default();
+            let mut local = HirEffectPassOutput::default();
             pass.pass.take_output(&mut local);
             append_registered_output(&pass.effect, local, &mut output);
         }
@@ -439,8 +439,8 @@ fn register_mir_seeds<'tcx>(
 
 fn append_registered_output(
     effect: &EffectKey,
-    mut local: EffectPassOutput,
-    output: &mut RegisteredEffectPassOutput,
+    mut local: HirEffectPassOutput,
+    output: &mut RegisteredHirEffectPassOutput,
 ) {
     // Pass-local group and call identities commonly start at zero. Remap them
     // into one artifact-wide namespace before combining independently written
@@ -502,7 +502,7 @@ fn append_registered_output(
     }
     output
         .seeds
-        .extend(local.seeds.into_iter().map(|seed| RegisteredEffectSeed {
+        .extend(local.seeds.into_iter().map(|seed| RegisteredHirEffectSeed {
             effect: effect.clone(),
             seed,
         }));
@@ -516,24 +516,24 @@ mod tests {
     use rustc_span::DUMMY_SP;
 
     use super::{
-        CallSeed, EffectGroup, EffectGroupSeed, EffectPassAuxiliary, EffectPassOutput,
-        RegisteredEffectPassOutput, append_registered_output,
+        HirCallSeed, HirEffectGroup, HirEffectGroupSeed, HirEffectPassAuxiliary,
+        HirEffectPassOutput, RegisteredHirEffectPassOutput, append_registered_output,
     };
     use crate::artifact::EffectKey;
 
-    fn output(owner: DefId) -> EffectPassOutput {
-        let effect_group = EffectGroup {
+    fn output(owner: DefId) -> HirEffectPassOutput {
+        let effect_group = HirEffectGroup {
             id: 0,
             span: DUMMY_SP,
         };
-        EffectPassOutput {
+        HirEffectPassOutput {
             seeds: Vec::new(),
-            auxiliary: EffectPassAuxiliary {
-                groups: vec![EffectGroupSeed {
+            auxiliary: HirEffectPassAuxiliary {
+                groups: vec![HirEffectGroupSeed {
                     owner,
                     effect_group,
                 }],
-                calls: vec![CallSeed {
+                calls: vec![HirCallSeed {
                     owner,
                     callee: None,
                     declaration_callee: None,
@@ -549,7 +549,7 @@ mod tests {
     #[test]
     fn registered_pass_outputs_receive_disjoint_local_id_namespaces() {
         let owner = CRATE_DEF_ID.to_def_id();
-        let mut combined = RegisteredEffectPassOutput::default();
+        let mut combined = RegisteredHirEffectPassOutput::default();
         append_registered_output(&EffectKey::new("first"), output(owner), &mut combined);
         append_registered_output(&EffectKey::new("second"), output(owner), &mut combined);
 
