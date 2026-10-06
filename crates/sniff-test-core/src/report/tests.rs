@@ -2409,6 +2409,7 @@ fn registered_passes_determine_missing_body_completeness_for_new_effects() {
         effect::<Allocation>(config.effect("panic")),
         effect::<SourceAllocation>(config.effect("panic")),
     ];
+    let cli_effects = effects.iter().map(|effect| effect.key().clone()).collect();
     let reports = super::trace_selected_workspace(
         &local,
         1,
@@ -2421,6 +2422,8 @@ fn registered_passes_determine_missing_body_completeness_for_new_effects() {
         }],
         &config,
         &effects,
+        &cli_effects,
+        &std::collections::BTreeMap::new(),
     )
     .expect("effect report");
 

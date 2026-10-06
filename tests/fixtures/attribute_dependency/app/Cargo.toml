@@ -1,0 +1,9 @@
+[package]
+name = "attribute-dependency-app"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+attribute-dependency = { path = "../dep" }
+
+[workspace]

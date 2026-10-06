@@ -183,13 +183,13 @@ fn item_expect_lint_suppresses_only_matching_unmet_effects() {
 }
 
 #[test]
-fn item_expect_lint_requires_effect_selection() {
+fn item_expect_lint_selects_effect_without_cli_flag() {
     let repo = repo_root();
     let binary = PathBuf::from(env!("CARGO_BIN_EXE_cargo-sniff-test"));
     let (output, _, _temp) = run_case(
         &repo,
         &binary,
-        "item_expect_lint_requires_effect_selection",
+        "item_expect_lint_selects_effect_without_cli_flag",
         "item_expect_lint",
         &Case::new().args(&["-e", "panic"]),
     );
@@ -199,7 +199,7 @@ fn item_expect_lint_requires_effect_selection() {
             .stderr
             .matches("this lint expectation is unfulfilled")
             .count(),
-        4,
+        3,
         "{}",
         output.stderr,
     );
@@ -261,15 +261,15 @@ fn item_lints_cover_every_registered_effect() {
             "safety",
             "unsafe_unhandled",
             "unsafe_justified",
-            &["-e", "safety"],
+            &["-e", "file"],
         ),
         (
             "allocation",
             "allocation_unhandled",
             "allocation_justified",
-            &["-e", "allocation"],
+            &["-e", "panic"],
         ),
-        ("file", "file_unhandled", "file_justified", &["-e", "file"]),
+        ("file", "file_unhandled", "file_justified", &["-e", "panic"]),
     ];
     let repo = repo_root();
     let binary = PathBuf::from(env!("CARGO_BIN_EXE_cargo-sniff-test"));
@@ -302,6 +302,48 @@ fn item_lints_cover_every_registered_effect() {
             output.stderr
         );
     }
+}
+
+#[test]
+fn item_panic_lint_runs_when_cli_selects_file() {
+    let repo = repo_root();
+    let binary = PathBuf::from(env!("CARGO_BIN_EXE_cargo-sniff-test"));
+    let (output, _, _temp) = run_case(
+        &repo,
+        &binary,
+        "item_panic_lint_runs_when_cli_selects_file",
+        "item_panic_lint",
+        &Case::new().args(&["-e", "file"]),
+    );
+    assert_eq!(output.status.code(), Some(101), "{}", output.stderr);
+    assert!(
+        output
+            .stderr
+            .contains("function `denied` may have panic effect"),
+        "{}",
+        output.stderr
+    );
+}
+
+#[test]
+fn item_lint_traces_unselected_effect_through_dependency() {
+    let repo = repo_root();
+    let binary = PathBuf::from(env!("CARGO_BIN_EXE_cargo-sniff-test"));
+    let (output, _, _temp) = run_case(
+        &repo,
+        &binary,
+        "item_lint_traces_unselected_effect_through_dependency",
+        "attribute_dependency",
+        &Case::new().in_app().args(&["-e", "panic"]),
+    );
+    assert_eq!(output.status.code(), Some(101), "{}", output.stderr);
+    assert!(
+        output
+            .stderr
+            .contains("function `write_through_dependency` may have file effect"),
+        "{}",
+        output.stderr
+    );
 }
 
 #[test]

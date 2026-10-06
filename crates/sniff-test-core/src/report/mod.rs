@@ -102,6 +102,10 @@ pub fn trace_workspace(
 ) -> Result<Vec<RootInterpretation>, EffectReportError> {
     let effects = EffectSelection::default();
     let selected_effects = selected_effect_objects(&effects, config);
+    let cli_effects = selected_effects
+        .iter()
+        .map(|effect| effect.key().clone())
+        .collect();
     trace_selected_workspace(
         local,
         local_stable_crate_id,
@@ -110,6 +114,8 @@ pub fn trace_workspace(
         roots,
         config,
         &selected_effects,
+        &cli_effects,
+        &BTreeMap::new(),
     )
 }
 
@@ -125,6 +131,8 @@ pub fn trace_selected_workspace(
     roots: &[InterpretationRoot],
     config: &SniffTestConfig,
     effects: &[Box<dyn Effect + '_>],
+    cli_effects: &BTreeSet<EffectKey>,
+    item_effects: &BTreeMap<String, BTreeSet<EffectKey>>,
 ) -> Result<Vec<RootInterpretation>, EffectReportError> {
     let artifact = compose_workspace_artifact(local, dependencies)?;
     let artifact = &artifact;
@@ -154,10 +162,6 @@ pub fn trace_selected_workspace(
             .map(|(&owner, children)| (owner, children.clone())),
     );
     let namespaces = artifact.definition_namespace_index();
-    let selected_metadata = effects
-        .iter()
-        .map(|effect| effect.metadata().clone())
-        .collect::<Vec<_>>();
     let mut pass_registry = EffectPassRegistry::default();
     for effect in effects {
         effect.register_passes(&mut pass_registry);
@@ -172,6 +176,19 @@ pub fn trace_selected_workspace(
         .iter()
         .cloned()
         .map(|root| {
+            let effects = effects
+                .iter()
+                .filter(|effect| {
+                    cli_effects.contains(effect.key())
+                        || item_effects
+                            .get(&root.path)
+                            .is_some_and(|items| items.contains(effect.key()))
+                })
+                .collect::<Vec<_>>();
+            let selected_metadata = effects
+                .iter()
+                .map(|effect| effect.metadata().clone())
+                .collect::<Vec<_>>();
             let mut graph = InvocationGraph::from_artifact_roots(artifact, &[root.function])
                 .map_err(|error| EffectReportError::new(error.to_string()))?;
             graph.set_dependencies(&crate_dependencies);
@@ -278,7 +295,7 @@ pub fn trace_selected_workspace(
                         ));
                     }
                 }
-                for domain in effects {
+                for domain in &effects {
                     let effect = domain.key();
                     let concrete = concrete_effects
                         .get(effect)

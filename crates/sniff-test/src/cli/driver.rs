@@ -1,12 +1,15 @@
 //! Per-rustc-unit analysis orchestration.
 
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
 use anyhow::Context;
 use rustc_middle::ty::TyCtxt;
 use rustc_session::config::CrateType;
+use sniff_test_core::artifact::EffectKey;
 use sniff_test_core::artifact_cache::ArtifactScope;
 use sniff_test_core::config::SniffTestConfig;
+use sniff_test_core::effects::EffectSelection;
 use sniff_test_core::report_roots::select_report_roots_with_items;
 use sniff_test_effects::selected_effect_objects;
 
@@ -32,8 +35,28 @@ pub(crate) fn analyze_crate(
     metadata_loader: &dyn rustc_metadata::creader::MetadataLoader,
 ) {
     let rustc_version = rustc_version();
-    let effects = selected_effect_objects(&args.effects, config);
     let item_lints = collect_item_lints(tcx);
+    let effects = selected_effect_objects(&EffectSelection::all(), config);
+    let cli_effects = sniff_test_effects::registered_keys()
+        .into_iter()
+        .filter(|key| args.effects.selects(key))
+        .collect::<BTreeSet<_>>();
+    let mut item_effects: BTreeMap<String, BTreeSet<EffectKey>> = BTreeMap::new();
+    for (root, effect) in item_lints.levels.keys() {
+        item_effects
+            .entry(root.clone())
+            .or_default()
+            .insert(EffectKey::new(effect));
+    }
+    let extraction_effects = if output_scope == CrateOutputScope::Dependency {
+        selected_effect_objects(&EffectSelection::all(), config)
+    } else {
+        let keys = cli_effects
+            .iter()
+            .cloned()
+            .chain(item_effects.values().flatten().cloned());
+        selected_effect_objects(&EffectSelection::only(keys), config)
+    };
     // Cacheable units must extract before root selection so their cached
     // compiler facts retain the same session-visible policy aliases.
     let early_selection = (output_scope == CrateOutputScope::Workspace
@@ -44,7 +67,7 @@ pub(crate) fn analyze_crate(
         &args.cache_dir(),
         output_scope.artifact_scope(),
         &rustc_version,
-        &effects,
+        &extraction_effects,
         early_selection
             .as_ref()
             .map_or(&[], |selection| selection.roots.as_slice()),
@@ -74,6 +97,8 @@ pub(crate) fn analyze_crate(
         &selection.roots,
         &trace_config,
         &effects,
+        &cli_effects,
+        &item_effects,
     ) {
         Ok(findings) => findings,
         Err(error) => {

@@ -7,8 +7,9 @@ use rustc_hir::def_id::LOCAL_CRATE;
 use rustc_middle::ty::TyCtxt;
 use rustc_span::{BytePos, Span};
 use sniff_test_core::artifact::{
-    ArtifactFacts, CallFact, CallId, CallKindFact, ContractRequirementFact, FunctionFact,
-    FunctionId, SourceFileFact, SourceRangeFact, StableDefPathHash, StableInstanceHash,
+    ArtifactFacts, CallFact, CallId, CallKindFact, ContractRequirementFact, EffectKey,
+    FunctionFact, FunctionId, SourceFileFact, SourceRangeFact, StableDefPathHash,
+    StableInstanceHash,
 };
 use sniff_test_core::artifact_cache::ArtifactScope;
 use sniff_test_core::compiler::source::CachedSourceMap;
@@ -50,6 +51,8 @@ pub fn interpret_workspace<'tcx>(
     report_roots: &[ReportRoot<'tcx>],
     config: &SniffTestConfig,
     effects: &[Box<dyn Effect + '_>],
+    cli_effects: &BTreeSet<EffectKey>,
+    item_effects: &BTreeMap<String, BTreeSet<EffectKey>>,
 ) -> Result<Vec<Finding>, EffectReportError> {
     let roots = report_roots
         .iter()
@@ -71,6 +74,8 @@ pub fn interpret_workspace<'tcx>(
         &roots,
         config,
         effects,
+        cli_effects,
+        item_effects,
     )?;
     let sources = SourceResolver {
         tcx,
@@ -593,10 +598,9 @@ impl EffectDiagnosticWriter<'_, '_, '_> {
             } else {
                 "this is a report root"
             };
-            self.diagnostic.messages.push(DiagnosticMessage::SpanLabel(
-                span,
-                String::from(label),
-            ));
+            self.diagnostic
+                .messages
+                .push(DiagnosticMessage::SpanLabel(span, String::from(label)));
         }
         if let Some(span) = self
             .finding

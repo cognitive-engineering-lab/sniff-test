@@ -292,10 +292,11 @@ mod parser {
 `warn`, `allow`, `forbid`, and `expect` work in place of `deny`. `expect` suppresses
 matching unmet effect findings and counts as fulfilled when at least one finding
 exists in its scope. If the effect is justified, covered by functions' own
-contracts, overridden on all descendants, or not selected for analysis, rustc
-reports an unfulfilled lint expectation. The
-conditional attributes are inactive in ordinary builds. If ordinary Cargo
-checks warn about the custom configuration name, declare it in `Cargo.toml`:
+contracts, or overridden on all descendants, rustc reports an unfulfilled lint
+expectation. The attribute selects its effect for analysis even when that effect
+is not selected by default or with `-e`. Conditional attributes are inactive in
+ordinary builds. If ordinary Cargo checks warn about the custom configuration
+name, declare it in `Cargo.toml`:
 
 ```toml
 [lints.rust]
