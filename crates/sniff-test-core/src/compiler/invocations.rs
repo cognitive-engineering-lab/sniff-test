@@ -165,6 +165,7 @@ pub struct InvocationGraph {
     incoming: Vec<Vec<InvocationId>>,
     contract_visible_incoming: Vec<Vec<InvocationId>>,
     declaration_fallbacks: Vec<Option<StableFunctionId>>,
+    fallback_targets_by_declaration: BTreeMap<StableDefPathHash, Vec<FunctionId>>,
     transparent_parents: Vec<Vec<TransparentBodyEdgeId>>,
     transparent_parent: Vec<FunctionId>,
     transparent_source: Vec<CallFact>,
@@ -199,6 +200,7 @@ impl InvocationGraph {
             incoming: vec![Vec::new(); stable_functions.len()],
             contract_visible_incoming: vec![Vec::new(); stable_functions.len()],
             declaration_fallbacks: vec![None; stable_functions.len()],
+            fallback_targets_by_declaration: BTreeMap::new(),
             transparent_parents: vec![Vec::new(); stable_functions.len()],
             stable_functions,
             body_functions: artifact
@@ -384,20 +386,15 @@ impl InvocationGraph {
     /// invocation targets without changing invocation identity.
     #[must_use]
     pub fn contract_targets(&self, contract_owner: StableFunctionId) -> BTreeSet<FunctionId> {
-        let owner_aliases = self
+        let mut targets = self
             .function_aliases(contract_owner)
             .collect::<BTreeSet<_>>();
-        let mut targets = owner_aliases.clone();
         targets.extend(
-            self.declaration_fallbacks
-                .iter()
-                .enumerate()
-                .filter(|(_, declaration)| {
-                    declaration.is_some_and(|declaration| {
-                        declaration.def_path_hash == contract_owner.def_path_hash
-                    })
-                })
-                .map(|(index, _)| FunctionId::from_index(index)),
+            self.fallback_targets_by_declaration
+                .get(&contract_owner.def_path_hash)
+                .into_iter()
+                .flatten()
+                .copied(),
         );
         targets
     }
@@ -414,9 +411,14 @@ impl InvocationGraph {
         function: FunctionId,
         declaration: StableFunctionId,
     ) -> Result<(), InvocationGraphError> {
-        let fallback = &mut self.declaration_fallbacks[function.index()];
-        match *fallback {
-            None => *fallback = Some(declaration),
+        match self.declaration_fallbacks[function.index()] {
+            None => {
+                self.declaration_fallbacks[function.index()] = Some(declaration);
+                self.fallback_targets_by_declaration
+                    .entry(declaration.def_path_hash)
+                    .or_default()
+                    .push(function);
+            }
             Some(existing) if existing.def_path_hash == declaration.def_path_hash => {}
             Some(existing) => {
                 return Err(InvocationGraphError::new(format!(
@@ -1718,6 +1720,8 @@ mod tests {
         let exact_implementation = exact_function(generic_implementation, 1);
         let declaration = stable_function(2);
         let exact_caller = stable_function(3);
+        let unrelated_implementation = stable_function(4);
+        let other_declaration = stable_function(5);
         let facts = artifact(vec![
             body(
                 exact_caller,
@@ -1729,9 +1733,10 @@ mod tests {
                 )],
             ),
             body_with_contract_declaration(generic_implementation, declaration),
+            body_with_contract_declaration(unrelated_implementation, other_declaration),
         ]);
 
-        let graph = graph_for_all_bodies(&facts).expect("invocation graph");
+        let mut graph = graph_for_all_bodies(&facts).expect("invocation graph");
 
         for implementation in [generic_implementation, exact_implementation] {
             let implementation = graph
@@ -1743,9 +1748,27 @@ mod tests {
             );
         }
         assert!(graph.function(declaration).is_some());
+        let expected_targets = [declaration, generic_implementation, exact_implementation]
+            .into_iter()
+            .map(|function| graph.function(function).expect("graph identity"))
+            .collect();
+        assert_eq!(graph.contract_targets(declaration), expected_targets);
+        let unrelated_targets = [other_declaration, unrelated_implementation]
+            .into_iter()
+            .map(|function| graph.function(function).expect("graph identity"))
+            .collect();
+        assert_eq!(graph.contract_targets(other_declaration), unrelated_targets);
+        graph
+            .set_declaration_fallback(
+                graph
+                    .function(generic_implementation)
+                    .expect("graph identity"),
+                declaration,
+            )
+            .expect("repeated fallback");
+        assert_eq!(graph.contract_targets(declaration), expected_targets);
 
         let conflicting_implementation = stable_function(4);
-        let other_declaration = stable_function(5);
         let mut implementation_call = call(
             0,
             7,
