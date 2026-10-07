@@ -416,7 +416,7 @@ fn trace_id_explains_only_one_warning_with_full_trace() {
         .split_once(']')
         .expect("trace ID delimiter")
         .0;
-    assert_eq!(id.len(), 8);
+    assert_eq!(id.len(), 10);
     assert!(id.bytes().all(|byte| byte.is_ascii_hexdigit()));
     let explain_note =
         "note: run `cargo sniff-test -e panic --explain <trace-id>` to see more details";
@@ -452,9 +452,38 @@ fn trace_id_explains_only_one_warning_with_full_trace() {
     );
     assert!(!explained.stderr.contains("--explain <trace-id>"));
 
-    let unknown = run("deadbeef");
+    let unknown = run("deadbeef00");
     assert!(!unknown.status.success());
-    assert!(unknown.stderr.contains("trace ID `deadbeef` was not found"));
+    assert!(
+        unknown
+            .stderr
+            .contains("trace ID `deadbeef00` was not found")
+    );
+
+    let stale_finding = format!(
+        "{}{}",
+        &id[..4],
+        if &id[4..] == "ffffff" {
+            "000000"
+        } else {
+            "ffffff"
+        }
+    );
+    let missing = run(&stale_finding);
+    assert!(!missing.status.success());
+    assert!(
+        missing
+            .stderr
+            .contains(&format!("trace ID `{stale_finding}` was not found"))
+    );
+
+    let old_id = run(&id[..8]);
+    assert!(!old_id.status.success());
+    assert!(
+        old_id
+            .stderr
+            .contains("trace ID must be exactly 10 hexadecimal characters")
+    );
 
     let second = run_cargo_sniff_test(&binary, &root, "repeat trace IDs", &case);
     assert!(second.stderr.contains(&format!("warning: [{id}]")));
@@ -2866,11 +2895,30 @@ fn snapshot_section(text: &str, fixture_root: &Path, sysroot: &str) -> String {
 }
 
 fn normalize_output(text: &str, fixture_root: &Path, sysroot: &str) -> String {
-    text.lines()
+    let mut lines = text
+        .lines()
         .map(|line| normalize_line(line, fixture_root, sysroot))
         .filter(|line| !is_volatile_cargo_status(line))
-        .collect::<Vec<_>>()
-        .join("\n")
+        .collect::<Vec<_>>();
+    let mut root_codes = std::collections::BTreeMap::<String, String>::new();
+    for line in &mut lines {
+        let Some(start) = line.find(": [").map(|index| index + 3) else {
+            continue;
+        };
+        let Some(end) = line[start..].find(']').map(|offset| start + offset) else {
+            continue;
+        };
+        let id = &line[start..end];
+        if id.len() != 10 || !id.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+            continue;
+        }
+        let next = root_codes.len();
+        let code = root_codes
+            .entry(id[..4].to_owned())
+            .or_insert_with(|| format!("{next:04x}"));
+        line.replace_range(start..start + 4, code);
+    }
+    lines.join("\n")
 }
 
 fn normalize_line(line: &str, fixture_root: &Path, sysroot: &str) -> String {

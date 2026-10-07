@@ -79,14 +79,11 @@ fn parse_effect(value: &str) -> Result<EffectKey, String> {
 }
 
 fn parse_trace_id(value: &str) -> Result<String, String> {
-    if (8..=32).contains(&value.len())
-        && value.len().is_multiple_of(2)
-        && value.bytes().all(|byte| byte.is_ascii_hexdigit())
-    {
+    if value.len() == 10 && value.bytes().all(|byte| byte.is_ascii_hexdigit()) {
         Ok(value.to_ascii_lowercase())
     } else {
         Err(String::from(
-            "trace ID must be 8 to 32 hexadecimal characters",
+            "trace ID must be exactly 10 hexadecimal characters",
         ))
     }
 }

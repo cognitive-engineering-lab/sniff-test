@@ -28,7 +28,7 @@ expression: "report[\"findings\"]"
       "src/lib.rs:20:9: 20:28: macro macro_expansion::justified_const_assert --macro-expansion-> macro core::macros::builtin::assert",
       "src/lib.rs:20:9: 20:28: macro core::macros::builtin::assert --direct-call-> core::panicking::panic"
     ],
-    "trace-id": "7a5d81a5"
+    "trace-id": "00007a5d81"
   },
   {
     "effect": "panic",
@@ -56,6 +56,6 @@ expression: "report[\"findings\"]"
       "src/lib.rs:3:9: 3:28: macro macro_expansion::const_assert --macro-expansion-> macro core::macros::builtin::assert",
       "src/lib.rs:3:9: 3:28: macro core::macros::builtin::assert --direct-call-> core::panicking::panic"
     ],
-    "trace-id": "315416e0"
+    "trace-id": "0001315416"
   }
 ]

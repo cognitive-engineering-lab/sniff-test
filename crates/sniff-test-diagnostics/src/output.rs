@@ -10,31 +10,13 @@ use sniff_test_core::effects::Effect;
 use crate::diagnostics::{emit_finding_diagnostic, emit_footer_note};
 use crate::findings::{
     FULL_STACK_TRACE_HINT, Finding, aggregate_human_findings, is_effect_source_finding,
-    resolve_findings_with_item_lints, take_full_stack_trace_hint,
+    resolve_findings_with_root_codes, take_full_stack_trace_hint,
 };
 use crate::report::{AnalysisArtifactReport, REPORT_FORMAT_VERSION, ReportArtifact};
 
 pub fn emit_tool_error(tcx: TyCtxt<'_>, message: impl Into<String>) {
     let diagnostic = tcx.dcx().struct_err(message.into());
     let _ = diagnostic.emit();
-}
-
-#[must_use]
-pub fn build_report(
-    crate_name: String,
-    rustc_version: String,
-    config: &SniffTestConfig,
-    effects: &[Box<dyn Effect + '_>],
-    findings: Vec<Finding>,
-) -> AnalysisArtifactReport {
-    build_report_with_item_lints(
-        crate_name,
-        rustc_version,
-        config,
-        effects,
-        findings,
-        &BTreeMap::new(),
-    )
 }
 
 #[must_use]
@@ -45,6 +27,7 @@ pub fn build_report_with_item_lints(
     effects: &[Box<dyn Effect + '_>],
     findings: Vec<Finding>,
     item_lints: &BTreeMap<(String, String), LintLevel>,
+    root_codes: &BTreeMap<String, String>,
 ) -> AnalysisArtifactReport {
     AnalysisArtifactReport {
         reason: String::from("sniff-test-artifact"),
@@ -52,7 +35,9 @@ pub fn build_report_with_item_lints(
         tool_version: env!("CARGO_PKG_VERSION").to_owned(),
         rustc_version,
         artifact: ReportArtifact { crate_name },
-        findings: resolve_findings_with_item_lints(findings, config, effects, item_lints),
+        findings: resolve_findings_with_root_codes(
+            findings, config, effects, item_lints, root_codes,
+        ),
     }
 }
 

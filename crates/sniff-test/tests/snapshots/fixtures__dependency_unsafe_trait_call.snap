@@ -22,7 +22,7 @@ expression: "report[\"findings\"]"
     "trace": [
       "src/lib.rs:18:5: 18:61: dependency_unsafe_trait_call_app::ambiguous_dependency_contract --direct-call-> dependency_unsafe_trait_call_dep::ambiguous_obligation"
     ],
-    "trace-id": "c7e24e89"
+    "trace-id": "0000c7e24e"
   },
   {
     "effect": "safety",
@@ -47,6 +47,6 @@ expression: "report[\"findings\"]"
       "src/lib.rs:14:5: 14:68: dependency_unsafe_trait_call_app::unjustified_caller --direct-call-> dependency_unsafe_trait_call_dep::invoke_unjustified",
       "[FIXTURE]/dep/src/lib.rs:28:9: 28:19: dependency_unsafe_trait_call_dep::invoke_unjustified --direct-call-> <dependency_unsafe_trait_call_app::Local as dependency_unsafe_trait_call_dep::Action>::apply"
     ],
-    "trace-id": "93e6092a"
+    "trace-id": "000193e609"
   }
 ]

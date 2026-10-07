@@ -25,6 +25,6 @@ expression: "report[\"findings\"]"
     "trace": [
       "src/lib.rs:31:9: 31:32: target_feature_call_safety::ordinary_caller --direct-call-> target_feature_call_safety::target_feature_callee"
     ],
-    "trace-id": "cc413d4e"
+    "trace-id": "0000cc413d"
   }
 ]

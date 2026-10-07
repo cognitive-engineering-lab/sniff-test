@@ -31,7 +31,7 @@ expression: "report[\"findings\"]"
     "trace": [
       "src/lib.rs:8:5: 8:25: contract_overrides::panic_override_missing_marker --direct-call-> contract_overrides::panic_contract"
     ],
-    "trace-id": "877b3d74"
+    "trace-id": "0000877b3d"
   },
   {
     "effect": "safety",
@@ -62,6 +62,6 @@ expression: "report[\"findings\"]"
     "trace": [
       "src/lib.rs:24:14: 24:42: contract_overrides::safety_override_missing_requirement --direct-call-> contract_overrides::synthetic_read"
     ],
-    "trace-id": "3fc6d23d"
+    "trace-id": "00013fc6d2"
   }
 ]

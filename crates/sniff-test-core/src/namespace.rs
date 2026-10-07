@@ -72,6 +72,13 @@ impl StableDefPathHash {
         self.0.first
     }
 
+    /// The crate-local half of the definition hash. Rustc seeds it from the
+    /// stable crate identity, so it can change when that identity changes.
+    #[must_use]
+    pub const fn local_hash(self) -> u64 {
+        self.0.second
+    }
+
     const fn from_parts(stable_crate_id: u64, local_hash: u64) -> Self {
         Self(StableHash::from_parts(stable_crate_id, local_hash))
     }
@@ -287,6 +294,7 @@ mod tests {
         let instance = StableInstanceHash::from_parts(0x10, 0x00fe_dcba);
 
         assert_eq!(definition.to_string(), "00000000000000010000000000abcdef");
+        assert_eq!(definition.local_hash(), 0x00ab_cdef);
         assert_eq!(instance.to_string(), "00000000000000100000000000fedcba");
 
         let definition_json = serde_json::to_string(&definition).expect("serialize definition");

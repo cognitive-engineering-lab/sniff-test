@@ -31,7 +31,7 @@ expression: "report[\"findings\"]"
       "src/lib.rs:14:36: 14:66: macro std::macros::panic --macro-expansion-> macro core::panic::panic_2021",
       "[SYSROOT]/lib/rustlib/src/rust/library/core/src/panic.rs:62:9: 62:73: macro core::panic::panic_2021 --direct-call-> core::panicking::panic_fmt"
     ],
-    "trace-id": "ed64d3eb"
+    "trace-id": "0000ed64d3"
   },
   {
     "effect": "safety",
@@ -58,7 +58,7 @@ expression: "report[\"findings\"]"
       "[FIXTURE]/dep_b/src/lib.rs:6:5: 6:15: dep_b::consume --direct-call-> path_scoped_app::app_safety_callback_is_untrusted::{closure#0}",
       "src/lib.rs:32:31: 32:39: path_scoped_app::app_safety_callback_is_untrusted::{closure#0} --effect-operation-> raw pointer dereference"
     ],
-    "trace-id": "31579440"
+    "trace-id": "0001315794"
   },
   {
     "effect": "panic",
@@ -89,7 +89,7 @@ expression: "report[\"findings\"]"
       "[FIXTURE]/dep_c/src/lib.rs:2:5: 2:42: macro std::macros::panic --macro-expansion-> macro core::panic::panic_2021",
       "[SYSROOT]/lib/rustlib/src/rust/library/core/src/panic.rs:62:9: 62:73: macro core::panic::panic_2021 --direct-call-> core::panicking::panic_fmt"
     ],
-    "trace-id": "3cd1b297"
+    "trace-id": "00023cd1b2"
   },
   {
     "effect": "panic",
@@ -118,7 +118,7 @@ expression: "report[\"findings\"]"
       "[FIXTURE]/dep_c/src/lib.rs:2:5: 2:42: macro std::macros::panic --macro-expansion-> macro core::panic::panic_2021",
       "[SYSROOT]/lib/rustlib/src/rust/library/core/src/panic.rs:62:9: 62:73: macro core::panic::panic_2021 --direct-call-> core::panicking::panic_fmt"
     ],
-    "trace-id": "8791515d"
+    "trace-id": "0003879151"
   },
   {
     "effect": "safety",
@@ -144,6 +144,6 @@ expression: "report[\"findings\"]"
       "[FIXTURE]/dep_b/src/lib.rs:10:5: 10:27: dep_b::safety_effect --direct-call-> dep_c::safety_effect",
       "[FIXTURE]/dep_c/src/lib.rs:7:27: 7:35: dep_c::safety_effect --effect-operation-> raw pointer dereference"
     ],
-    "trace-id": "519e8d34"
+    "trace-id": "0004519e8d"
   }
 ]

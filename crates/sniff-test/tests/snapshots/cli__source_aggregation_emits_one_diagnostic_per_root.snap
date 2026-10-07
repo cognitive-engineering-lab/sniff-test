@@ -7,7 +7,7 @@ stdout:
 <empty>
 stderr:
     Checking source-aggregation v0.1.0 ([FIXTURE])
-error: [fe2d497b] function `first_api` may have panic effect
+error: [0000fe2d49] function `first_api` may have panic effect
  --> src/lib.rs:5:1
   |
 5 | pub fn first_api() {
@@ -23,7 +23,7 @@ note: `first_api` reaches `panic_fmt` here
   = help: if this call cannot have panic effect, explain why with a `// PANIC:` comment
   = help: if `first_api` can have panic effect, add a `# Panics` section
 
-error: [92322aa9] function `second_api` may have panic effect
+error: [000192322a] function `second_api` may have panic effect
   --> src/lib.rs:9:1
    |
  9 | pub fn second_api() {

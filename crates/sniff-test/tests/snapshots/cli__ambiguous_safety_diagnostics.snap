@@ -7,7 +7,7 @@ stdout:
 <empty>
 stderr:
     Checking ambiguous-safety v0.1.0 ([FIXTURE])
-error: [ac953e27] [sniff-test::safety::ambiguous-requirement] `read_duplicate` has an ambiguous `# Safety` requirement name
+error: [0000ac953e] [sniff-test::safety::ambiguous-requirement] `read_duplicate` has an ambiguous `# Safety` requirement name
  --> src/lib.rs:7:1
   |
 7 | /// - valid_ptr: pointer must be non-null.

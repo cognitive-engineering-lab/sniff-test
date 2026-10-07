@@ -23,7 +23,7 @@ expression: "report[\"findings\"]"
       "src/lib.rs:6:9: 6:27: unsafe_closure_inherit::justified_closure --direct-call-> unsafe_closure_inherit::justified_closure::{closure#0}",
       "src/lib.rs:6:13: 6:24: unsafe_closure_inherit::justified_closure::{closure#0} --direct-call-> unsafe_closure_inherit::dangerous"
     ],
-    "trace-id": "408cd3aa"
+    "trace-id": "0000408cd3"
   },
   {
     "effect": "safety",
@@ -45,6 +45,6 @@ expression: "report[\"findings\"]"
       "src/lib.rs:12:9: 12:27: unsafe_closure_inherit::unjustified_closure --direct-call-> unsafe_closure_inherit::unjustified_closure::{closure#0}",
       "src/lib.rs:12:13: 12:24: unsafe_closure_inherit::unjustified_closure::{closure#0} --direct-call-> unsafe_closure_inherit::dangerous"
     ],
-    "trace-id": "f4e27af3"
+    "trace-id": "0001f4e27a"
   }
 ]

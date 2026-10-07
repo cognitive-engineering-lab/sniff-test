@@ -30,7 +30,7 @@ expression: "report[\"findings\"]"
       "[FIXTURE]/dep/src/lib.rs:5:9: 5:55: macro core::macros::builtin::assert --macro-expansion-> macro core::panic::panic_2021",
       "[SYSROOT]/lib/rustlib/src/rust/library/core/src/panic.rs:62:9: 62:73: macro core::panic::panic_2021 --direct-call-> core::panicking::panic_fmt"
     ],
-    "trace-id": "75c3640a"
+    "trace-id": "000075c364"
   },
   {
     "effect": "safety",
@@ -56,6 +56,6 @@ expression: "report[\"findings\"]"
       "[FIXTURE]/dep/src/lib.rs:24:5: 24:14: dependency_closure_dep::read_pointer --direct-call-> dependency_closure_dep::read_pointer::{closure#0}",
       "[FIXTURE]/dep/src/lib.rs:22:18: 22:26: dependency_closure_dep::read_pointer::{closure#0} --effect-operation-> raw pointer dereference"
     ],
-    "trace-id": "5d45901e"
+    "trace-id": "00015d4590"
   }
 ]

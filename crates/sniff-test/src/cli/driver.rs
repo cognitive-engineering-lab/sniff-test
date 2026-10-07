@@ -6,17 +6,18 @@ use std::path::{Path, PathBuf};
 use anyhow::Context;
 use rustc_middle::ty::TyCtxt;
 use rustc_session::config::CrateType;
-use sniff_test_core::artifact::EffectKey;
+use sniff_test_core::artifact::{EffectKey, StableDefPathHash};
 use sniff_test_core::artifact_cache::ArtifactScope;
 use sniff_test_core::config::SniffTestConfig;
 use sniff_test_core::effects::EffectSelection;
+use sniff_test_core::namespace::canonical_namespace;
 use sniff_test_core::report_roots::select_report_roots_with_items;
 use sniff_test_effects::selected_effect_objects;
 
 use super::args::{CrateOutputScope, MessageFormat, SniffTestArgs};
 use super::lints::{collect_item_lints, fulfill_item_expectations};
 use super::plugin::rustc_version;
-use sniff_test_diagnostics::findings::collect_report_root_findings;
+use sniff_test_diagnostics::findings::{collect_report_root_findings, trace_root_codes};
 use sniff_test_diagnostics::interpretation::interpret_workspace;
 use sniff_test_diagnostics::output::{
     build_report_with_item_lints, emit_explanation, emit_human_diagnostics, emit_json_report,
@@ -79,9 +80,32 @@ pub(crate) fn analyze_crate(
             return;
         }
     };
-    let selection = early_selection.unwrap_or_else(|| {
+    let mut selection = early_selection.unwrap_or_else(|| {
         select_report_roots_with_items(tcx, &config.analysis, &item_lints.roots)
     });
+    let root_codes = match trace_root_codes(selection.roots.iter().map(|root| {
+        (
+            canonical_namespace(tcx, root.def_id()),
+            StableDefPathHash::from_def_id(tcx, root.def_id()).local_hash(),
+        )
+    })) {
+        Ok(codes) => codes,
+        Err(error) => {
+            emit_tool_error(tcx, error);
+            return;
+        }
+    };
+    if let Some(trace_id) = &args.explain {
+        let prefix = &trace_id[..4];
+        selection.roots.retain(|root| {
+            root_codes
+                .get(&canonical_namespace(tcx, root.def_id()))
+                .is_some_and(|code| code == prefix)
+        });
+        if selection.roots.is_empty() {
+            return;
+        }
+    }
     let crate_name = analysis.crate_name.clone();
     let emit_diagnostics = args.under_cargo || args.message_format == MessageFormat::Human;
     let mut trace_config = config.clone();
@@ -116,7 +140,9 @@ pub(crate) fn analyze_crate(
         &crate_name,
     );
     findings.extend(interpreted_findings);
-    fulfill_item_expectations(tcx, &item_lints.expectations, &findings);
+    if args.explain.is_none() {
+        fulfill_item_expectations(tcx, &item_lints.expectations, &findings);
+    }
     let report = build_report_with_item_lints(
         crate_name,
         rustc_version,
@@ -124,6 +150,7 @@ pub(crate) fn analyze_crate(
         &effects,
         findings,
         &item_lints.levels,
+        &root_codes,
     );
     if let Some(trace_id) = &args.explain {
         if emit_explanation(tcx, &report, trace_id) {

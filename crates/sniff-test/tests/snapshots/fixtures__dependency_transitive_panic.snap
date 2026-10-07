@@ -25,6 +25,6 @@ expression: "report[\"findings\"]"
     "trace": [
       "src/lib.rs:2:5: 2:53: dependency_transitive_panic_app::app --direct-call-> dependency_transitive_panic_middle::middle"
     ],
-    "trace-id": "b9f1f2cf"
+    "trace-id": "0000b9f1f2"
   }
 ]

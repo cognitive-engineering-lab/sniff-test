@@ -9,7 +9,7 @@ stderr:
     Checking dependency-transitive-panic-leaf v0.1.0 ([FIXTURE]/leaf)
     Checking dependency-transitive-panic-middle v0.1.0 ([FIXTURE]/middle)
     Checking dependency-transitive-panic-app v0.1.0 ([FIXTURE]/app)
-warning: [b9f1f2cf] function `app` may have panic effect
+warning: [0000b9f1f2] function `app` may have panic effect
  --> src/lib.rs:1:1
   |
 1 | pub fn app(flag: bool) {

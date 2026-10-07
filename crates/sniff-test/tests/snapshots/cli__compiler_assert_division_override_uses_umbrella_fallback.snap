@@ -7,7 +7,7 @@ stdout:
 <empty>
 stderr:
     Checking panic-axioms v0.1.0 ([FIXTURE])
-error: [8edbbf5d] function `division` may have panic effect
+error: [00008edbbf] function `division` may have panic effect
  --> src/lib.rs:1:1
   |
 1 | pub fn division(total_size: usize, block_count: usize) -> usize {

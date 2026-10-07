@@ -7,7 +7,7 @@ stdout:
 <empty>
 stderr:
     Checking included-contract v0.1.0 ([FIXTURE])
-warning: [74e7957b] function `run` may have panic effect
+warning: [000074e795] function `run` may have panic effect
   --> src/lib.rs:14:1
    |
 14 | pub fn run(valid: bool) {

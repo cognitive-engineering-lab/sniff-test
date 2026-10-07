@@ -21,7 +21,7 @@ expression: "report[\"findings\"]"
     "trace": [
       "src/lib.rs:24:5: 24:17: trusted_boundaries::trusted_through_fn_pointer --indirect-call-> indirect call through a function pointer"
     ],
-    "trace-id": "355a46e9",
+    "trace-id": "0000355a46",
     "unresolved-call": {
       "coverage": "none",
       "mechanism": "function-pointer"
@@ -45,7 +45,7 @@ expression: "report[\"findings\"]"
     "trace": [
       "src/lib.rs:24:5: 24:17: trusted_boundaries::trusted_through_fn_pointer --indirect-call-> indirect call through a function pointer"
     ],
-    "trace-id": "f62b64e5",
+    "trace-id": "0000f62b64",
     "unresolved-call": {
       "coverage": "none",
       "mechanism": "function-pointer"
@@ -69,7 +69,7 @@ expression: "report[\"findings\"]"
     "trace": [
       "src/lib.rs:77:5: 77:15: trusted_boundaries::trusted_unresolved_wrapper --indirect-call-> indirect call through a function pointer"
     ],
-    "trace-id": "c84da002",
+    "trace-id": "0001c84da0",
     "unresolved-call": {
       "coverage": "none",
       "mechanism": "function-pointer"
@@ -93,7 +93,7 @@ expression: "report[\"findings\"]"
     "trace": [
       "src/lib.rs:77:5: 77:15: trusted_boundaries::trusted_unresolved_wrapper --indirect-call-> indirect call through a function pointer"
     ],
-    "trace-id": "aad118dc",
+    "trace-id": "0001aad118",
     "unresolved-call": {
       "coverage": "none",
       "mechanism": "function-pointer"
@@ -117,7 +117,7 @@ expression: "report[\"findings\"]"
     "trace": [
       "src/lib.rs:33:14: 33:22: trusted_boundaries::trusted_unsafe_through_fn_pointer --indirect-call-> indirect call through a function pointer"
     ],
-    "trace-id": "62b696a8",
+    "trace-id": "000262b696",
     "unresolved-call": {
       "coverage": "none",
       "mechanism": "function-pointer"
@@ -146,7 +146,7 @@ expression: "report[\"findings\"]"
     "trace": [
       "src/lib.rs:33:14: 33:22: trusted_boundaries::trusted_unsafe_through_fn_pointer --indirect-call-> indirect call through a function pointer"
     ],
-    "trace-id": "2a0e1673"
+    "trace-id": "00022a0e16"
   },
   {
     "effect": "safety",
@@ -166,7 +166,7 @@ expression: "report[\"findings\"]"
     "trace": [
       "src/lib.rs:33:14: 33:22: trusted_boundaries::trusted_unsafe_through_fn_pointer --indirect-call-> indirect call through a function pointer"
     ],
-    "trace-id": "e11a5c18",
+    "trace-id": "0002e11a5c",
     "unresolved-call": {
       "coverage": "none",
       "mechanism": "function-pointer"
@@ -191,7 +191,7 @@ expression: "report[\"findings\"]"
     "trace": [
       "src/lib.rs:28:14: 28:29: trusted_boundaries::trusted_unsafe_without_docs --direct-call-> trusted_boundaries::unsafe_helper"
     ],
-    "trace-id": "24f73151"
+    "trace-id": "000324f731"
   },
   {
     "effect": "panic",
@@ -215,7 +215,7 @@ expression: "report[\"findings\"]"
     "trace": [
       "src/lib.rs:6:5: 6:29: trusted_boundaries::trusted_with_docs --direct-call-> trusted_boundaries::trusted_doc_helper"
     ],
-    "trace-id": "88e7e18e"
+    "trace-id": "000488e7e1"
   },
   {
     "effect": "panic",
@@ -235,7 +235,7 @@ expression: "report[\"findings\"]"
     "trace": [
       "src/lib.rs:81:5: 81:15: trusted_boundaries::untrusted_unresolved_wrapper --indirect-call-> indirect call through a function pointer"
     ],
-    "trace-id": "73b23ca4",
+    "trace-id": "000573b23c",
     "unresolved-call": {
       "coverage": "none",
       "mechanism": "function-pointer"
@@ -259,7 +259,7 @@ expression: "report[\"findings\"]"
     "trace": [
       "src/lib.rs:81:5: 81:15: trusted_boundaries::untrusted_unresolved_wrapper --indirect-call-> indirect call through a function pointer"
     ],
-    "trace-id": "0e9e21f2",
+    "trace-id": "00050e9e21",
     "unresolved-call": {
       "coverage": "none",
       "mechanism": "function-pointer"

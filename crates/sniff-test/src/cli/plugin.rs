@@ -465,7 +465,9 @@ impl Callbacks for SniffTestCallbacks {
                 &*metadata_loader,
             );
         }
-        check_deferred_expectations(tcx);
+        if self.args.explain.is_none() {
+            check_deferred_expectations(tcx);
+        }
         Compilation::Continue
     }
 }

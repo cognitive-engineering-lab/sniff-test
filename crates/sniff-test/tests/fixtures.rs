@@ -1,5 +1,6 @@
 mod common;
 
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -583,6 +584,7 @@ fn parse_messages(
             });
             normalize_json(&mut value, root, sysroot);
             assert_finding_discriminators(&value);
+            normalize_trace_ids_for_snapshot(&mut value);
             value
         })
         .collect::<Vec<_>>();
@@ -594,6 +596,50 @@ fn parse_messages(
     // Ordering is not the contract here; Cargo/rustc can interleave reports.
     messages.sort_by_key(message_sort_key);
     messages
+}
+
+fn normalize_trace_ids_for_snapshot(report: &mut Value) {
+    let Some(findings) = report.get_mut("findings").and_then(Value::as_array_mut) else {
+        return;
+    };
+    let roots = findings
+        .iter()
+        .filter_map(|finding| {
+            finding["trace-id"]
+                .as_str()
+                .and_then(|_| finding["root"].as_str())
+        })
+        .collect::<BTreeSet<_>>();
+    let labels = roots
+        .into_iter()
+        .enumerate()
+        .map(|(index, root)| (root.to_owned(), format!("{index:04x}")))
+        .collect::<BTreeMap<_, _>>();
+    let mut actual_prefixes = BTreeMap::<String, String>::new();
+    for finding in findings {
+        let Some(id) = finding["trace-id"].as_str() else {
+            continue;
+        };
+        assert_eq!(
+            id.len(),
+            10,
+            "trace ID should have 10 hexadecimal characters"
+        );
+        assert!(id.bytes().all(|byte| byte.is_ascii_hexdigit()));
+        let root = finding["root"]
+            .as_str()
+            .expect("trace ID should name a report root");
+        let prefix = &id[..4];
+        if let Some(previous) = actual_prefixes.insert(root.to_owned(), prefix.to_owned()) {
+            assert_eq!(previous, prefix, "one root must keep one ID prefix");
+        }
+        finding["trace-id"] = Value::String(format!("{}{}", labels[root], &id[4..]));
+    }
+    assert_eq!(
+        actual_prefixes.values().collect::<BTreeSet<_>>().len(),
+        actual_prefixes.len(),
+        "different report roots must have distinct ID prefixes"
+    );
 }
 
 fn assert_finding_discriminators(report: &Value) {

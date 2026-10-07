@@ -21,6 +21,6 @@ expression: "report[\"findings\"]"
       "src/lib.rs:15:5: 15:20: trace_depth_limit::step_three --direct-call-> trace_depth_limit::step_four",
       "src/lib.rs:19:5: 19:20: trace_depth_limit::step_four --direct-call-> trace_depth_limit::step_five"
     ],
-    "trace-id": "5a1e8a87"
+    "trace-id": "00005a1e8a"
   }
 ]

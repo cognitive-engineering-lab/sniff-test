@@ -226,20 +226,41 @@ pub struct ResolvedFinding {
 }
 
 #[must_use]
-pub fn resolve_findings(
-    findings: Vec<Finding>,
-    config: &SniffTestConfig,
-    effects: &[Box<dyn Effect + '_>],
-) -> Vec<ResolvedFinding> {
-    resolve_findings_with_item_lints(findings, config, effects, &BTreeMap::new())
+pub fn trace_root_codes(
+    roots: impl IntoIterator<Item = (String, u64)>,
+) -> Result<BTreeMap<String, String>, String> {
+    let hashes = roots
+        .into_iter()
+        .map(|(root, local_hash)| (root, format!("{local_hash:016x}")))
+        .collect();
+    assign_root_codes(hashes)
+}
+
+fn assign_root_codes(hashes: BTreeMap<String, String>) -> Result<BTreeMap<String, String>, String> {
+    let mut codes = BTreeMap::new();
+    let mut used = BTreeSet::new();
+    for (root, hash) in hashes {
+        let start = u16::from_str_radix(&hash[..4], 16).expect("stable root hash is hexadecimal");
+        let Some(code) = (0..=u16::MAX)
+            .map(|offset| start.wrapping_add(offset))
+            .find(|candidate| used.insert(*candidate))
+        else {
+            return Err(String::from(
+                "more than 65,536 report roots in one analysis unit; trace IDs cannot be assigned",
+            ));
+        };
+        codes.insert(root, format!("{code:04x}"));
+    }
+    Ok(codes)
 }
 
 #[must_use]
-pub fn resolve_findings_with_item_lints(
+pub fn resolve_findings_with_root_codes(
     findings: Vec<Finding>,
     config: &SniffTestConfig,
     effects: &[Box<dyn Effect + '_>],
     item_lints: &BTreeMap<(String, String), LintLevel>,
+    root_codes: &BTreeMap<String, String>,
 ) -> Vec<ResolvedFinding> {
     let effect_index = effects
         .iter()
@@ -259,11 +280,11 @@ pub fn resolve_findings_with_item_lints(
         })
         .collect::<Vec<_>>();
     resolved.sort_by(|left, right| compare_findings(&left.finding, &right.finding));
-    assign_trace_ids(&mut resolved);
+    assign_trace_ids(&mut resolved, root_codes);
     resolved
 }
 
-fn assign_trace_ids(findings: &mut [ResolvedFinding]) {
+fn assign_trace_ids(findings: &mut [ResolvedFinding], root_codes: &BTreeMap<String, String>) {
     // Hash semantic report data, not the compact/full diagnostic presentation.
     let namespace = Uuid::new_v5(&Uuid::NAMESPACE_DNS, b"sniff-test.trace");
     let hashes = findings
@@ -310,25 +331,44 @@ fn assign_trace_ids(findings: &mut [ResolvedFinding]) {
             )
         })
         .collect::<Vec<_>>();
+    let mut suffixes = BTreeMap::<String, BTreeMap<String, String>>::new();
+    for (index, finding) in findings.iter().enumerate() {
+        if let (Some(root), Some(hash)) = (&finding.finding.root, &hashes[index]) {
+            suffixes
+                .entry(root.clone())
+                .or_default()
+                .entry(hash.clone())
+                .or_default();
+        }
+    }
+    for hashes in suffixes.values_mut() {
+        assign_finding_suffixes(hashes);
+    }
     for (index, finding) in findings.iter_mut().enumerate() {
-        let Some(hash) = &hashes[index] else { continue };
-        finding.finding.trace_id = Some(short_trace_id(hash, &hashes, index));
+        let (Some(root), Some(hash)) = (&finding.finding.root, &hashes[index]) else {
+            continue;
+        };
+        if let (Some(prefix), Some(suffix)) = (
+            root_codes.get(root.as_str()),
+            suffixes
+                .get(root.as_str())
+                .and_then(|suffixes| suffixes.get(hash)),
+        ) {
+            finding.finding.trace_id = Some(format!("{prefix}{suffix}"));
+        }
     }
 }
 
-fn short_trace_id(hash: &str, hashes: &[Option<String>], index: usize) -> String {
-    let mut len = 8;
-    while len < hash.len()
-        && hashes.iter().enumerate().any(|(other_index, other)| {
-            other_index != index
-                && other
-                    .as_ref()
-                    .is_some_and(|other| other != hash && other.starts_with(&hash[..len]))
-        })
-    {
-        len += 2;
+fn assign_finding_suffixes(hashes: &mut BTreeMap<String, String>) {
+    let mut used = BTreeSet::new();
+    for (hash, suffix) in hashes {
+        let start = u32::from_str_radix(&hash[..6], 16).expect("UUID hash is hexadecimal");
+        let code = (0..=0x00ff_ffff)
+            .map(|offset| (start + offset) & 0x00ff_ffff)
+            .find(|candidate| used.insert(*candidate))
+            .expect("more than 16,777,216 distinct findings for one report root");
+        *suffix = format!("{code:06x}");
     }
-    hash[..len].to_owned()
 }
 
 /// Normalizes source findings for human diagnostic emission. Repeated paths
@@ -832,8 +872,9 @@ mod tests {
     use super::{
         DiagnosticMessage, FULL_STACK_TRACE_HINT, Finding, FindingDiagnostic, FindingKind,
         FindingOwner, FindingTraceStepOrder, OwnerScope, ResolvedFinding, SourceEvidence,
-        aggregate_human_findings, compact_human_diagnostic_paths, short_trace_id,
-        shortest_distinguishing_root_labels, take_full_stack_trace_hint,
+        aggregate_human_findings, assign_finding_suffixes, assign_root_codes,
+        compact_human_diagnostic_paths, shortest_distinguishing_root_labels,
+        take_full_stack_trace_hint, trace_root_codes,
     };
     use rustc_span::{BytePos, Span};
     use sniff_test_core::artifact::{SourceFileFact, SourceFileId, SourceRangeFact};
@@ -843,24 +884,39 @@ mod tests {
     };
 
     #[test]
-    fn colliding_short_trace_ids_extend_only_as_needed() {
+    fn colliding_finding_codes_probe_the_next_free_code() {
+        let mut hashes = ["123456aaaa", "123456bbbb", "876543cccc"]
+            .into_iter()
+            .map(|hash| (hash.to_owned(), String::new()))
+            .collect();
+        assign_finding_suffixes(&mut hashes);
+        assert_eq!(hashes["123456aaaa"], "123456");
+        assert_eq!(hashes["123456bbbb"], "123457");
+        assert_eq!(hashes["876543cccc"], "876543");
+    }
+
+    #[test]
+    fn colliding_root_codes_remain_unique() {
         let hashes = [
-            Some(String::from("12345678aaaabbbb")),
-            Some(String::from("12345678ccccdddd")),
-            Some(String::from("87654321aaaabbbb")),
-        ];
-        assert_eq!(
-            short_trace_id(hashes[0].as_deref().unwrap(), &hashes, 0),
-            "12345678aa"
-        );
-        assert_eq!(
-            short_trace_id(hashes[1].as_deref().unwrap(), &hashes, 1),
-            "12345678cc"
-        );
-        assert_eq!(
-            short_trace_id(hashes[2].as_deref().unwrap(), &hashes, 2),
-            "87654321"
-        );
+            ("example::first".to_owned(), "12340000".to_owned()),
+            ("example::second".to_owned(), "1234ffff".to_owned()),
+        ]
+        .into_iter()
+        .collect();
+        let codes = assign_root_codes(hashes).unwrap();
+        assert_eq!(codes["example::first"], "1234");
+        assert_eq!(codes["example::second"], "1235");
+    }
+
+    #[test]
+    fn root_code_uses_the_item_local_hash() {
+        let codes = trace_root_codes([
+            ("example::first".to_owned(), 0x1234_0000_0000_0001),
+            ("example::second".to_owned(), 0x5678_0000_0000_0002),
+        ])
+        .unwrap();
+        assert_eq!(codes["example::first"], "1234");
+        assert_eq!(codes["example::second"], "5678");
     }
     use std::collections::BTreeSet;
 
@@ -876,7 +932,13 @@ mod tests {
             &sniff_test_core::effects::EffectSelection::all(),
             config,
         );
-        super::resolve_findings(findings, config, &effects)
+        super::resolve_findings_with_root_codes(
+            findings,
+            config,
+            &effects,
+            &std::collections::BTreeMap::new(),
+            &std::collections::BTreeMap::new(),
+        )
     }
 
     fn finding(kind: FindingKind) -> Finding {

@@ -7,7 +7,7 @@ stdout:
 <empty>
 stderr:
     Checking panic-axioms v0.1.0 ([FIXTURE])
-error: [5c13c1d0] function `indexed` may have panic effect
+error: [00005c13c1] function `indexed` may have panic effect
   --> src/lib.rs:9:1
    |
  9 | pub fn indexed(values: &[usize], index: usize) -> usize {
@@ -23,7 +23,7 @@ note: `indexed` reaches panic effect operation here
    = help: if this operation cannot have panic effect, explain why with a `// PANIC:` comment
    = help: if `indexed` can have panic effect, add a `# Panics` section
 
-warning: [d8384e8e] function `remainder` may have panic effect
+warning: [0001d8384e] function `remainder` may have panic effect
  --> src/lib.rs:5:1
   |
 5 | pub fn remainder(total_size: usize, block_size: usize) -> usize {

@@ -7,7 +7,7 @@ stdout:
 <empty>
 stderr:
     Checking unsafe-ops v0.1.0 ([FIXTURE])
-error: [60d3628d] function `asm_unjustified` may have safety effect
+error: [000060d362] function `asm_unjustified` may have safety effect
   --> src/lib.rs:32:1
    |
 32 | pub fn asm_unjustified() {
@@ -24,7 +24,7 @@ note: `asm_unjustified` reaches safety effect operation here
    = help: if this operation cannot have safety effect, explain why with a `// SAFETY:` comment
    = help: if `asm_unjustified` can have safety effect, add a `# Safety` section
 
-warning: [80758cf2] function `deref_unjustified` may have safety effect
+warning: [000180758c] function `deref_unjustified` may have safety effect
   --> src/lib.rs:16:1
    |
 16 | pub fn deref_unjustified(ptr: *const u32) -> u32 {
