@@ -2211,6 +2211,8 @@ fn managed_missing_bodies_are_report_root_scoped() {
     let root = function_in_crate(local_stable_crate_id, 1);
     let unrelated_root = function_in_crate(local_stable_crate_id, 2);
     let local_missing = function_in_crate(local_stable_crate_id, 3);
+    let unreachable_caller = function_in_crate(local_stable_crate_id, 4);
+    let unreachable_missing = function_in_crate(local_stable_crate_id, 5);
     let dependency_missing = function_in_crate(dependency_stable_crate_id, 1);
     let unmanaged_missing = function_in_crate(3, 1);
     let mut local_call = call(0, target(local_missing, "app::local_missing"));
@@ -2233,6 +2235,17 @@ fn managed_missing_bodies_are_report_root_scoped() {
                 unrelated_root,
                 "app::unrelated_root",
                 Vec::new(),
+                Vec::new(),
+                Vec::new(),
+                Vec::new(),
+            ),
+            body(
+                unreachable_caller,
+                "app::unreachable_caller",
+                vec![call(
+                    0,
+                    target(unreachable_missing, "app::unreachable_missing"),
+                )],
                 Vec::new(),
                 Vec::new(),
                 Vec::new(),

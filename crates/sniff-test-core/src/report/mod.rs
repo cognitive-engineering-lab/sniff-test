@@ -1303,6 +1303,9 @@ fn missing_body_reasons(
     };
     let mut boundaries = BTreeMap::<StableFunctionId, MissingBodyBoundary>::new();
     for body in &artifact.functions {
+        if !graph.includes_body(body.function) {
+            continue;
+        }
         let Some(caller) = graph.function(body.function) else {
             continue;
         };
@@ -1316,7 +1319,6 @@ fn missing_body_reasons(
             if target.attributes.is_foreign
                 || !target.attributes.has_rust_body
                 || !is_managed_function(target.function, local_stable_crate_id, dependencies)
-                || trusted_boundary(target.function, namespaces, effect_config)
             {
                 continue;
             }
@@ -1326,6 +1328,9 @@ fn missing_body_reasons(
                 artifact.function_body(target.function).is_some()
             };
             if body_is_available {
+                continue;
+            }
+            if trusted_boundary(target.function, namespaces, effect_config) {
                 continue;
             }
             let Some(mut trace) = roots
