@@ -676,8 +676,7 @@ struct MacroExpansionFrame {
 }
 
 fn macro_expansion_frames(span: Span) -> Vec<MacroExpansionFrame> {
-    let mut frames = span
-        .macro_backtrace()
+    let mut frames = crate::expansion_ancestry(span)
         .filter_map(|expansion| {
             expansion.macro_def_id.map(|def_id| MacroExpansionFrame {
                 def_id,
@@ -686,8 +685,5 @@ fn macro_expansion_frames(span: Span) -> Vec<MacroExpansionFrame> {
         })
         .collect::<Vec<_>>();
     frames.reverse();
-    frames.dedup_by(|left, right| {
-        left.def_id == right.def_id && left.call_site.source_equal(right.call_site)
-    });
     frames
 }

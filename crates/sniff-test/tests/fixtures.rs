@@ -288,6 +288,132 @@ fixture_cases! {
 }
 
 #[test]
+fn recursive_macro_provenance_preserves_repeated_expansions() {
+    let fixture = "recursive_macro_provenance";
+    let temp = tempfile::tempdir().expect("recursive macro fixture directory");
+    let root = temp.path().join(fixture);
+    copy_fixture_dir(&repo_root().join("tests/fixtures").join(fixture), &root)
+        .expect("copy recursive macro fixture");
+    let output = {
+        let _cargo_guard = lock_nested_cargo();
+        let mut command = Command::new(env!("CARGO_BIN_EXE_cargo-sniff-test"));
+        clean_cargo_package_env(&mut command);
+        CommandOutput::from_output(
+            command
+                .args([
+                    "--cache-dir",
+                    "fixture-cache",
+                    "--message-format",
+                    "json",
+                    "--color",
+                    "never",
+                ])
+                .env("CARGO_TARGET_DIR", root.join("target"))
+                .current_dir(&root)
+                .output()
+                .expect("analyze recursive macro fixture"),
+        )
+    };
+    assert!(
+        output.status.success(),
+        "recursive macro extraction must succeed:\nstdout:\n{}\nstderr:\n{}",
+        output.stdout,
+        output.stderr
+    );
+    let messages = parse_messages(
+        &output,
+        &root,
+        &rustc_sysroot(),
+        "recursive_macro_provenance_preserves_repeated_expansions",
+        fixture,
+    );
+    assert_eq!(messages.len(), 1, "expected one workspace report");
+    assert_recursive_expansion_ancestry(&root);
+}
+
+fn assert_recursive_expansion_ancestry(root: &Path) {
+    let artifacts = root.join("fixture-cache/artifacts");
+    let artifact_paths = fs::read_dir(&artifacts)
+        .expect("read recursive macro artifact cache")
+        .map(|entry| entry.expect("artifact cache entry").path())
+        .collect::<Vec<_>>();
+    let [artifact_path] = artifact_paths.as_slice() else {
+        panic!("expected one dependency-free artifact, got {artifact_paths:?}");
+    };
+    let artifact: Value =
+        serde_json::from_slice(&fs::read(artifact_path).expect("read recursive macro artifact"))
+            .expect("artifact facts JSON");
+    let functions = artifact["facts"]["functions"]
+        .as_array()
+        .expect("artifact functions");
+    let complete_ancestry = functions
+        .iter()
+        .flat_map(|function| function["calls"].as_array().expect("function calls"))
+        .filter_map(|call| call["macro-expansions"].as_array())
+        .find(|frames| {
+            frames
+                .iter()
+                .map(|frame| frame["display-path"].as_str().expect("macro display path"))
+                .eq([
+                    "recursive_macro_provenance::alt_trait_impl",
+                    "recursive_macro_provenance::alt_trait_inner",
+                    "recursive_macro_provenance::succ",
+                    "recursive_macro_provenance::alt_trait_inner",
+                    "recursive_macro_provenance::succ",
+                    "recursive_macro_provenance::alt_trait_inner",
+                ])
+        })
+        .expect("recursive expansion ancestry must retain both succ invocations");
+    assert!(complete_ancestry[2]["source-range"].is_object());
+    assert_eq!(
+        complete_ancestry[2]["source-range"], complete_ancestry[4]["source-range"],
+        "recursive invocations sharing a source range must remain separate frames"
+    );
+
+    let direct_recursion = functions
+        .iter()
+        .find(|function| {
+            function["display-path"] == "recursive_macro_provenance::directly_recursive_call"
+        })
+        .expect("directly recursive call function")["calls"]
+        .as_array()
+        .expect("directly recursive call calls")
+        .iter()
+        .filter_map(|call| call["macro-expansions"].as_array())
+        .find(|frames| {
+            frames.len() == 4
+                && frames.iter().all(|frame| {
+                    frame["display-path"] == "recursive_macro_provenance::self_recursive_call"
+                })
+        })
+        .expect("direct recursion must retain every adjacent expansion of the same macro");
+    assert!(direct_recursion[1]["source-range"].is_object());
+    assert_eq!(direct_recursion[1], direct_recursion[2]);
+    assert_eq!(direct_recursion[2], direct_recursion[3]);
+
+    let direct_operation = functions
+        .iter()
+        .find(|function| {
+            function["display-path"] == "recursive_macro_provenance::directly_recursive_operation"
+        })
+        .expect("directly recursive operation function")["effects"]
+        .as_array()
+        .expect("directly recursive operation effects")
+        .iter()
+        .find(|effect| effect["kind"] == "raw-pointer-dereference")
+        .expect("raw-pointer dereference effect")["macro-expansions"]
+        .as_array()
+        .expect("raw-pointer dereference macro expansions");
+    assert_eq!(direct_operation.len(), 4);
+    assert!(direct_operation.iter().all(|frame| {
+        frame["display-path"] == "recursive_macro_provenance::self_recursive_operation"
+    }));
+    assert!(direct_operation[1]["source-range"].is_object());
+    assert_eq!(direct_operation[1], direct_operation[2]);
+    assert_eq!(direct_operation[2], direct_operation[3]);
+}
+
+#[test]
 fn binary_report_roots_include_entry_point() {
     let repo = repo_root();
     let cargo = PathBuf::from(env!("CARGO_BIN_EXE_cargo-sniff-test"));
