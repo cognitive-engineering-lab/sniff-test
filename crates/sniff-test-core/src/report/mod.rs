@@ -8,6 +8,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
+use std::sync::Arc;
 
 use crate::trace::{EffectTrace, FunctionId, PropagationEdge, TerminationSite, TraceOptions};
 
@@ -19,7 +20,7 @@ use crate::artifact::{
     UnverifiedMarkerProbeReason,
 };
 use crate::compiler::invocations::{
-    InvocationGraph, InvocationResolution, UnresolvedCallTargetReason,
+    InvocationGraph, InvocationGraphIndex, InvocationResolution, UnresolvedCallTargetReason,
 };
 use crate::config::EffectConfig;
 use crate::config::{MarkerProbing, SniffTestConfig};
@@ -171,6 +172,7 @@ pub fn trace_selected_workspace(
         state_budget: config.analysis.trace_state_budget,
     };
     let marker_probing = annotation_probing_fact(config.analysis.marker_probing);
+    let graph_index = Arc::new(InvocationGraphIndex::new(artifact));
 
     roots
         .iter()
@@ -189,8 +191,9 @@ pub fn trace_selected_workspace(
                 .iter()
                 .map(|effect| effect.metadata().clone())
                 .collect::<Vec<_>>();
-            let mut graph = InvocationGraph::from_artifact_roots(artifact, &[root.function])
-                .map_err(|error| EffectReportError::new(error.to_string()))?;
+            let mut graph =
+                InvocationGraph::from_index_roots(artifact, &graph_index, &[root.function])
+                    .map_err(|error| EffectReportError::new(error.to_string()))?;
             graph.set_dependencies(&crate_dependencies);
             let root_functions = graph.function_aliases(root.function).collect::<Vec<_>>();
             if root_functions.is_empty() {

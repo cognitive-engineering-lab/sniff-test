@@ -1,5 +1,6 @@
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::fmt;
+use std::sync::Arc;
 
 use crate::trace::{FunctionId, InvocationId, TransparentBodyEdgeId};
 
@@ -152,14 +153,40 @@ impl Invocation {
     }
 }
 
+/// Workspace-wide identities shared by root-scoped invocation graphs.
+pub(crate) struct InvocationGraphIndex {
+    stable_functions: Vec<StableFunctionId>,
+    body_positions: BTreeMap<StableFunctionId, usize>,
+    transparent_owners: BTreeMap<StableFunctionId, StableFunctionId>,
+}
+
+impl InvocationGraphIndex {
+    pub(crate) fn new(artifact: &ArtifactFacts) -> Self {
+        Self {
+            stable_functions: collect_functions(artifact),
+            body_positions: artifact
+                .functions
+                .iter()
+                .enumerate()
+                .map(|(index, body)| (body.function, index))
+                .collect(),
+            transparent_owners: collect_transparent_owners(artifact),
+        }
+    }
+
+    fn exact_function(&self, stable: StableFunctionId) -> Option<FunctionId> {
+        self.stable_functions
+            .binary_search(&stable)
+            .ok()
+            .map(FunctionId::from_index)
+    }
+}
+
 /// Invocation view used by the concrete and obligation worklists.
 pub struct InvocationGraph {
-    stable_functions: Vec<StableFunctionId>,
-    body_functions: BTreeSet<StableFunctionId>,
+    index: Arc<InvocationGraphIndex>,
     included_bodies: BTreeSet<StableFunctionId>,
     contract_definitions: BTreeSet<StableDefPathHash>,
-    functions: BTreeMap<StableFunctionId, FunctionId>,
-    functions_by_definition: BTreeMap<StableDefPathHash, Vec<FunctionId>>,
     invocations: Vec<Invocation>,
     invocations_by_caller_definition: BTreeMap<StableDefPathHash, Vec<InvocationId>>,
     incoming: Vec<Vec<InvocationId>>,
@@ -181,37 +208,25 @@ impl InvocationGraph {
         artifact: &ArtifactFacts,
         roots: &[StableFunctionId],
     ) -> Result<Self, InvocationGraphError> {
-        let transparent_owners = collect_transparent_owners(artifact);
-        let stable_functions = collect_functions(artifact);
-        let functions = stable_functions
-            .iter()
-            .copied()
-            .enumerate()
-            .map(|(index, function)| (function, FunctionId::from_index(index)))
-            .collect::<BTreeMap<_, _>>();
-        let mut functions_by_definition = BTreeMap::<StableDefPathHash, Vec<FunctionId>>::new();
-        for (function, id) in &functions {
-            functions_by_definition
-                .entry(function.def_path_hash)
-                .or_default()
-                .push(*id);
-        }
+        let index = Arc::new(InvocationGraphIndex::new(artifact));
+        Self::from_index_roots(artifact, &index, roots)
+    }
+
+    pub(crate) fn from_index_roots(
+        artifact: &ArtifactFacts,
+        index: &Arc<InvocationGraphIndex>,
+        roots: &[StableFunctionId],
+    ) -> Result<Self, InvocationGraphError> {
+        let function_count = index.stable_functions.len();
         let mut graph = Self {
-            incoming: vec![Vec::new(); stable_functions.len()],
-            contract_visible_incoming: vec![Vec::new(); stable_functions.len()],
-            declaration_fallbacks: vec![None; stable_functions.len()],
+            incoming: vec![Vec::new(); function_count],
+            contract_visible_incoming: vec![Vec::new(); function_count],
+            declaration_fallbacks: vec![None; function_count],
             fallback_targets_by_declaration: BTreeMap::new(),
-            transparent_parents: vec![Vec::new(); stable_functions.len()],
-            stable_functions,
-            body_functions: artifact
-                .functions
-                .iter()
-                .map(|body| body.function)
-                .collect(),
+            transparent_parents: vec![Vec::new(); function_count],
+            index: Arc::clone(index),
             included_bodies: BTreeSet::new(),
             contract_definitions: BTreeSet::new(),
-            functions,
-            functions_by_definition,
             invocations: Vec::new(),
             invocations_by_caller_definition: BTreeMap::new(),
             transparent_parent: Vec::new(),
@@ -220,7 +235,7 @@ impl InvocationGraph {
             dependency_crates: BTreeMap::new(),
         };
 
-        let included = graph.reachable_bodies(artifact, roots, &transparent_owners);
+        let included = graph.reachable_bodies(artifact, roots);
         for body in &artifact.functions {
             if !included.contains(&body.function) {
                 continue;
@@ -246,7 +261,7 @@ impl InvocationGraph {
             let calls = body
                 .calls
                 .iter()
-                .map(|call| normalize_transparent_target(call, artifact, &transparent_owners))
+                .map(|call| normalize_transparent_target(call, artifact, &index.transparent_owners))
                 .collect::<Vec<_>>();
             graph.collect_body(body.function, &calls)?;
         }
@@ -257,13 +272,7 @@ impl InvocationGraph {
         &self,
         artifact: &ArtifactFacts,
         roots: &[StableFunctionId],
-        transparent_owners: &BTreeMap<StableFunctionId, StableFunctionId>,
     ) -> BTreeSet<StableFunctionId> {
-        let bodies = artifact
-            .functions
-            .iter()
-            .map(|body| (body.function, body))
-            .collect::<BTreeMap<_, _>>();
         let mut pending = VecDeque::new();
         for root in roots {
             pending.extend(self.function_aliases(*root));
@@ -279,11 +288,16 @@ impl InvocationGraph {
             // recorded in its defining artifact's generic body.
             if stable.instance_hash.is_some() {
                 let definition = StableFunctionId::generic(stable.def_path_hash);
-                if let Some(generic) = self.functions.get(&definition) {
-                    pending.push_back(*generic);
+                if let Some(generic) = self.index.exact_function(definition) {
+                    pending.push_back(generic);
                 }
             }
-            let Some(body) = bodies.get(&stable) else {
+            let Some(body) = self
+                .index
+                .body_positions
+                .get(&stable)
+                .map(|&position| &artifact.functions[position])
+            else {
                 continue;
             };
             reached.insert(stable);
@@ -291,7 +305,8 @@ impl InvocationGraph {
                 if !is_invocation(call.kind) && !is_transparent(call.kind) {
                     continue;
                 }
-                let normalized = normalize_transparent_target(call, artifact, transparent_owners);
+                let normalized =
+                    normalize_transparent_target(call, artifact, &self.index.transparent_owners);
                 let target = if is_transparent(call.kind) {
                     concrete_target(&normalized).and_then(|target| self.function(target))
                 } else {
@@ -349,25 +364,25 @@ impl InvocationGraph {
     pub fn function(&self, stable: StableFunctionId) -> Option<FunctionId> {
         stable
             .resolution_candidates()
-            .find_map(|candidate| self.functions.get(&candidate).copied())
+            .find_map(|candidate| self.index.exact_function(candidate))
     }
 
     fn invocation_target(&self, stable: StableFunctionId) -> Option<FunctionId> {
         stable
             .resolution_candidates()
-            .find(|candidate| self.body_functions.contains(candidate))
-            .and_then(|candidate| self.functions.get(&candidate).copied())
+            .find(|candidate| self.index.body_positions.contains_key(candidate))
+            .and_then(|candidate| self.index.exact_function(candidate))
             .or_else(|| self.function(stable))
     }
 
     #[must_use]
     pub fn stable_function(&self, function: FunctionId) -> StableFunctionId {
-        self.stable_functions[function.index()]
+        self.index.stable_functions[function.index()]
     }
 
     #[must_use]
     pub fn function_count(&self) -> usize {
-        self.stable_functions.len()
+        self.index.stable_functions.len()
     }
 
     /// Returns every exact or generic graph identity for one source definition.
@@ -375,11 +390,12 @@ impl InvocationGraph {
         &self,
         stable: StableFunctionId,
     ) -> impl Iterator<Item = FunctionId> + '_ {
-        self.functions_by_definition
-            .get(&stable.def_path_hash)
-            .into_iter()
-            .flatten()
-            .copied()
+        let functions = &self.index.stable_functions;
+        let start =
+            functions.partition_point(|function| function.def_path_hash < stable.def_path_hash);
+        let end =
+            functions.partition_point(|function| function.def_path_hash <= stable.def_path_hash);
+        (start..end).map(FunctionId::from_index)
     }
 
     /// Resolves source-level trait/function contracts onto their concrete
@@ -423,7 +439,7 @@ impl InvocationGraph {
             Some(existing) => {
                 return Err(InvocationGraphError::new(format!(
                     "implementation {:?} has conflicting contract declarations {existing:?} and {declaration:?}",
-                    self.stable_functions[function.index()],
+                    self.stable_function(function),
                 )));
             }
         }
@@ -646,7 +662,7 @@ impl InvocationGraph {
                 && !target
                     .function
                     .resolution_candidates()
-                    .any(|candidate| self.body_functions.contains(&candidate))
+                    .any(|candidate| self.index.body_positions.contains_key(&candidate))
         }) {
             invocation.targets.insert(CallTarget::Unknown);
         }
@@ -795,7 +811,7 @@ fn collect_functions(artifact: &ArtifactFacts) -> Vec<StableFunctionId> {
         .functions
         .iter()
         .map(|body| body.function)
-        .collect::<BTreeSet<_>>();
+        .collect::<Vec<_>>();
     functions.extend(
         artifact
             .functions
@@ -805,10 +821,12 @@ fn collect_functions(artifact: &ArtifactFacts) -> Vec<StableFunctionId> {
     );
     for call in artifact.functions.iter().flat_map(|body| &body.calls) {
         if let Some(target) = graph_target(call) {
-            functions.insert(target);
+            functions.push(target);
         }
     }
-    functions.into_iter().collect()
+    functions.sort_unstable();
+    functions.dedup();
+    functions
 }
 
 fn collect_transparent_owners(
@@ -929,6 +947,7 @@ impl std::error::Error for InvocationGraphError {}
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
 
     use crate::annotations::AnnotationIndex;
     use crate::artifact::{
@@ -943,7 +962,10 @@ mod tests {
     use crate::effects::panic::{Panic, PanicTermination};
     use crate::namespace::StableDefPathHash;
 
-    use super::{CallTarget, InvocationGraph, InvocationResolution, UnresolvedCallTargetReason};
+    use super::{
+        CallTarget, InvocationGraph, InvocationGraphIndex, InvocationResolution,
+        UnresolvedCallTargetReason,
+    };
 
     fn stable_function(index: u64) -> StableFunctionId {
         let value = format!("{index:016x}{:016x}", index + 100);
@@ -1124,6 +1146,59 @@ mod tests {
         )
         .expect("panic effect");
         assert_eq!(panic.source_count(), 0);
+    }
+
+    #[test]
+    fn shared_identity_index_preserves_separate_root_graphs() {
+        let first = stable_function(0);
+        let second = stable_function(1);
+        let shared = stable_function(2);
+        let first_only = stable_function(3);
+        let second_only = stable_function(4);
+        let facts = artifact(vec![
+            body(
+                first,
+                vec![
+                    call(0, 0, CallKindFact::DirectCall, target(shared)),
+                    call(1, 1, CallKindFact::DirectCall, target(first_only)),
+                ],
+            ),
+            body(
+                second,
+                vec![
+                    call(0, 0, CallKindFact::DirectCall, target(shared)),
+                    call(1, 1, CallKindFact::DirectCall, target(second_only)),
+                ],
+            ),
+            body(shared, Vec::new()),
+            body(first_only, Vec::new()),
+            body(second_only, Vec::new()),
+        ]);
+        let index = Arc::new(InvocationGraphIndex::new(&facts));
+        for (root, included, excluded) in [
+            (first, first_only, second_only),
+            (second, second_only, first_only),
+        ] {
+            let shared_index_graph =
+                InvocationGraph::from_index_roots(&facts, &index, &[root]).expect("valid graph");
+            let standalone = InvocationGraph::from_artifact_roots(&facts, &[root])
+                .expect("valid standalone graph");
+            assert!(Arc::ptr_eq(&shared_index_graph.index, &index));
+            assert_eq!(
+                shared_index_graph.index.stable_functions,
+                standalone.index.stable_functions
+            );
+            assert_eq!(
+                shared_index_graph.included_bodies,
+                standalone.included_bodies
+            );
+            assert_eq!(shared_index_graph.invocations, standalone.invocations);
+            assert_eq!(shared_index_graph.incoming, standalone.incoming);
+            assert!(shared_index_graph.includes_body(included));
+            assert!(shared_index_graph.includes_body(shared));
+            assert!(!shared_index_graph.includes_body(excluded));
+            assert_eq!(shared_index_graph.function_count(), 5);
+        }
     }
 
     #[test]
