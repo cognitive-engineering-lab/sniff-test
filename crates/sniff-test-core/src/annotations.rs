@@ -118,6 +118,119 @@ pub struct AnnotationIndex {
     site_comments: Vec<SiteCommentAnnotation>,
 }
 
+/// Call-surface contracts are global even when report bodies are root scoped.
+pub(crate) struct AnnotationWorkspaceIndex {
+    call_contracts: Vec<SurfaceContractTemplate>,
+}
+
+struct SurfaceContractTemplate {
+    identity: String,
+    owner: FunctionId,
+    effect: EffectKey,
+    source_range: Option<SourceRangeFact>,
+    requirements: Vec<ContractRequirementFact>,
+}
+
+impl AnnotationWorkspaceIndex {
+    pub(crate) fn new(artifact: &ArtifactFacts) -> Self {
+        let mut call_contracts = Vec::<SurfaceContractTemplate>::new();
+        let mut by_identity = BTreeMap::<String, Vec<usize>>::new();
+        for body in &artifact.functions {
+            for call in &body.calls {
+                let mut indexed_targets = BTreeSet::new();
+                for target in [
+                    call.target.function_target(),
+                    call.declaration_target.as_ref(),
+                ]
+                .into_iter()
+                .flatten()
+                {
+                    if !indexed_targets.insert(target.function) {
+                        continue;
+                    }
+                    for effect_contract in &target.contracts.effects {
+                        let contract = &effect_contract.contract;
+                        let identity = format!(
+                            "call-contract:{:?}:{:?}:{:?}",
+                            effect_contract.effect, target.function, contract.source_range
+                        );
+                        let duplicate = by_identity.get(&identity).is_some_and(|positions| {
+                            positions.iter().any(|&position| {
+                                let existing = &call_contracts[position];
+                                existing.owner == target.function
+                                    && existing.effect == effect_contract.effect
+                                    && existing.source_range == contract.source_range
+                                    && existing.requirements == contract.requirements
+                            })
+                        });
+                        if duplicate {
+                            continue;
+                        }
+                        by_identity
+                            .entry(identity.clone())
+                            .or_default()
+                            .push(call_contracts.len());
+                        call_contracts.push(SurfaceContractTemplate {
+                            identity,
+                            owner: target.function,
+                            effect: effect_contract.effect.clone(),
+                            source_range: contract.source_range.clone(),
+                            requirements: contract.requirements.clone(),
+                        });
+                    }
+                }
+            }
+        }
+        Self { call_contracts }
+    }
+}
+
+#[derive(Default)]
+struct ContractAccumulator {
+    contracts: Vec<FunctionContractAnnotation>,
+    by_id: BTreeMap<AnnotationId, Vec<usize>>,
+}
+
+impl ContractAccumulator {
+    fn push(
+        &mut self,
+        id: AnnotationId,
+        owner: FunctionId,
+        effect: &EffectKey,
+        source_range: Option<&SourceRangeFact>,
+        requirements: &[ContractRequirementFact],
+    ) {
+        if self.by_id.get(&id).is_some_and(|positions| {
+            positions.iter().any(|&position| {
+                let existing = &self.contracts[position];
+                existing.owner == owner
+                    && &existing.effect == effect
+                    && existing.source_range.as_ref() == source_range
+                    && existing.requirements == requirements
+            })
+        }) {
+            return;
+        }
+        self.by_id.entry(id).or_default().push(self.contracts.len());
+        self.contracts.push(FunctionContractAnnotation {
+            id,
+            owner,
+            effect: effect.clone(),
+            source_range: source_range.cloned(),
+            requirements: requirements.to_vec(),
+        });
+    }
+
+    fn remove_definition(&mut self, definition: crate::namespace::StableDefPathHash) {
+        self.contracts
+            .retain(|contract| contract.owner.def_path_hash != definition);
+        self.by_id.clear();
+        for (position, contract) in self.contracts.iter().enumerate() {
+            self.by_id.entry(contract.id).or_default().push(position);
+        }
+    }
+}
+
 impl AnnotationIndex {
     #[cfg(test)]
     pub fn from_artifact(
@@ -135,10 +248,6 @@ impl AnnotationIndex {
         )
     }
 
-    #[allow(
-        clippy::too_many_lines,
-        reason = "one syntax pass keeps annotation identities and ownership deterministic"
-    )]
     pub fn from_artifact_with_overrides(
         artifact: &ArtifactFacts,
         graph: &InvocationGraph,
@@ -147,8 +256,33 @@ impl AnnotationIndex {
         marker_probing: MarkerProbing,
         effects: &[EffectMetadata],
     ) -> Result<Self, AnnotationIndexError> {
+        let workspace = AnnotationWorkspaceIndex::new(artifact);
+        Self::from_workspace_index_with_overrides(
+            artifact,
+            graph,
+            &workspace,
+            namespaces,
+            overrides,
+            marker_probing,
+            effects,
+        )
+    }
+
+    #[allow(
+        clippy::too_many_lines,
+        reason = "one syntax pass keeps annotation identities and ownership deterministic"
+    )]
+    pub(crate) fn from_workspace_index_with_overrides(
+        artifact: &ArtifactFacts,
+        graph: &InvocationGraph,
+        workspace: &AnnotationWorkspaceIndex,
+        namespaces: &DefinitionNamespaceIndex,
+        overrides: &ContractDocOverrides,
+        marker_probing: MarkerProbing,
+        effects: &[EffectMetadata],
+    ) -> Result<Self, AnnotationIndexError> {
         let mut ids = BTreeMap::<String, AnnotationId>::new();
-        let mut contracts = Vec::new();
+        let mut contracts = ContractAccumulator::default();
         let mut site_comments = Vec::new();
         let override_markdown_by_definition = namespaces
             .iter()
@@ -190,16 +324,13 @@ impl AnnotationIndex {
                                 "function contract annotation has a non-function target",
                             ));
                         };
-                        let annotation = FunctionContractAnnotation {
+                        contracts.push(
                             id,
                             owner,
-                            effect: marker.kind.effect.clone(),
-                            source_range: marker.source_range.clone(),
-                            requirements: marker.requirements.clone(),
-                        };
-                        if !contracts.contains(&annotation) {
-                            contracts.push(annotation);
-                        }
+                            &marker.kind.effect,
+                            marker.source_range.as_ref(),
+                            &marker.requirements,
+                        );
                     }
                     AnnotationRole::Justification => {
                         let target = match marker.target {
@@ -244,26 +375,20 @@ impl AnnotationIndex {
         // A declaration's contract can be serialized on a different call
         // projection from the one reached by this root. Index only this
         // surface metadata globally; site comments stay root scoped.
-        for body in &artifact.functions {
-            for call in &body.calls {
-                let mut indexed_targets = BTreeSet::new();
-                for target in [
-                    call.target.function_target(),
-                    call.declaration_target.as_ref(),
-                ]
-                .into_iter()
-                .flatten()
-                {
-                    if !indexed_targets.insert(target.function) {
-                        continue;
-                    }
-                    push_target_contracts(&mut ids, &mut contracts, target);
-                }
-            }
+        for template in &workspace.call_contracts {
+            let next_id = AnnotationId(ids.len());
+            let id = *ids.entry(template.identity.clone()).or_insert(next_id);
+            contracts.push(
+                id,
+                template.owner,
+                &template.effect,
+                template.source_range.as_ref(),
+                &template.requirements,
+            );
         }
 
         for (definition, markdown) in override_markdown_by_definition {
-            contracts.retain(|contract| contract.owner.def_path_hash != definition);
+            contracts.remove_definition(definition);
             let source_range = artifact
                 .functions
                 .iter()
@@ -304,7 +429,7 @@ impl AnnotationIndex {
         }
 
         Ok(Self {
-            contracts,
+            contracts: contracts.contracts,
             site_comments,
         })
     }
@@ -382,7 +507,7 @@ impl AnnotationIndex {
 
 fn push_override_contract_for_owner(
     ids: &mut BTreeMap<String, AnnotationId>,
-    contracts: &mut Vec<FunctionContractAnnotation>,
+    contracts: &mut ContractAccumulator,
     owner: FunctionId,
     source_range: Option<SourceRangeFact>,
     summary: ContractDocSummary,
@@ -394,30 +519,22 @@ fn push_override_contract_for_owner(
     let identity = format!("override-contract:{effect:?}:{owner:?}");
     let next_id = AnnotationId(ids.len());
     let id = *ids.entry(identity).or_insert(next_id);
-    let annotation = FunctionContractAnnotation {
-        id,
-        owner,
-        effect: effect.clone(),
-        source_range,
-        requirements: summary
-            .requirements
-            .into_iter()
-            .map(|requirement| ContractRequirementFact {
-                name: requirement.name,
-                condition: requirement.condition,
-                structural_path: requirement.path,
-                source_range: None,
-            })
-            .collect(),
-    };
-    if !contracts.contains(&annotation) {
-        contracts.push(annotation);
-    }
+    let requirements = summary
+        .requirements
+        .into_iter()
+        .map(|requirement| ContractRequirementFact {
+            name: requirement.name,
+            condition: requirement.condition,
+            structural_path: requirement.path,
+            source_range: None,
+        })
+        .collect::<Vec<_>>();
+    contracts.push(id, owner, effect, source_range.as_ref(), &requirements);
 }
 
 fn push_call_contract(
     ids: &mut BTreeMap<String, AnnotationId>,
-    contracts: &mut Vec<FunctionContractAnnotation>,
+    contracts: &mut ContractAccumulator,
     target: &FunctionTargetFact,
     contract: &ContractFact,
     effect: &EffectKey,
@@ -428,21 +545,18 @@ fn push_call_contract(
     );
     let next_id = AnnotationId(ids.len());
     let id = *ids.entry(identity).or_insert(next_id);
-    let annotation = FunctionContractAnnotation {
+    contracts.push(
         id,
-        owner: target.function,
-        effect: effect.clone(),
-        source_range: contract.source_range.clone(),
-        requirements: contract.requirements.clone(),
-    };
-    if !contracts.contains(&annotation) {
-        contracts.push(annotation);
-    }
+        target.function,
+        effect,
+        contract.source_range.as_ref(),
+        &contract.requirements,
+    );
 }
 
 fn push_target_contracts(
     ids: &mut BTreeMap<String, AnnotationId>,
-    contracts: &mut Vec<FunctionContractAnnotation>,
+    contracts: &mut ContractAccumulator,
     target: &FunctionTargetFact,
 ) {
     for effect_contract in &target.contracts.effects {
@@ -476,3 +590,165 @@ impl fmt::Display for AnnotationIndexError {
 }
 
 impl std::error::Error for AnnotationIndexError {}
+
+#[cfg(test)]
+mod tests {
+    use crate::artifact::{
+        ArtifactFacts, CallFact, CallId, CallKindFact, CallSiteId, CallTargetFact, ContractFact,
+        ContractRequirementFact, EffectContractFact, EffectKey, FunctionAttributesFact,
+        FunctionContractsFact, FunctionFact, FunctionFactProvenance, FunctionId,
+        FunctionTargetFact,
+    };
+    use crate::namespace::StableDefPathHash;
+
+    use super::{AnnotationId, AnnotationWorkspaceIndex, ContractAccumulator};
+
+    fn function(index: u64) -> FunctionId {
+        let hash = format!("{index:016x}{:016x}", index + 100);
+        FunctionId::generic(
+            serde_json::from_str::<StableDefPathHash>(&format!("\"{hash}\""))
+                .expect("valid stable hash"),
+        )
+    }
+
+    fn requirement(name: &str) -> ContractRequirementFact {
+        ContractRequirementFact {
+            name: name.to_owned(),
+            condition: String::new(),
+            structural_path: Vec::new(),
+            source_range: None,
+        }
+    }
+
+    fn target(function: FunctionId, requirement_name: &str) -> FunctionTargetFact {
+        FunctionTargetFact {
+            function,
+            display_path: String::from("sample::target"),
+            attributes: FunctionAttributesFact {
+                is_unsafe: false,
+                is_exported: true,
+                has_rust_body: false,
+                is_foreign: false,
+                namespace_candidates: vec![String::from("sample::target")],
+            },
+            contracts: FunctionContractsFact {
+                effects: vec![EffectContractFact {
+                    effect: EffectKey::new("panic"),
+                    contract: ContractFact {
+                        source_range: None,
+                        requirements: vec![requirement(requirement_name)],
+                    },
+                }],
+            },
+        }
+    }
+
+    fn call(id: u32, target: FunctionTargetFact) -> CallFact {
+        CallFact {
+            id: CallId::new(id),
+            call_site: CallSiteId::new(id),
+            kind: CallKindFact::DirectCall,
+            effect_group: None,
+            invocation_effects: Vec::new(),
+            suppressed_by_compiler_context: false,
+            source_range: None,
+            expanded_range: None,
+            macro_expansions: Vec::new(),
+            callee_range: None,
+            indirect_kind: None,
+            declaration_target: None,
+            target: CallTargetFact::Function(target),
+        }
+    }
+
+    #[test]
+    fn workspace_contracts_keep_first_occurrence_and_distinct_requirements() {
+        let owner = function(0);
+        let callee = function(1);
+        let first = target(callee, "first");
+        let second = target(callee, "second");
+        let mut duplicate_at_one_call = call(0, first.clone());
+        duplicate_at_one_call.declaration_target = Some(second.clone());
+        let artifact = ArtifactFacts {
+            functions: vec![FunctionFact {
+                function: owner,
+                provenance: FunctionFactProvenance::DefiningArtifact,
+                display_path: String::from("sample::owner"),
+                attributes: target(owner, "unused").attributes,
+                contract_declaration: None,
+                source_range: None,
+                calls: vec![duplicate_at_one_call, call(1, first), call(2, second)],
+                effects: Vec::new(),
+                markers: Vec::new(),
+                unverified_marker_probes: Vec::new(),
+            }],
+            source_files: Vec::new(),
+        };
+        let index = AnnotationWorkspaceIndex::new(&artifact);
+        assert_eq!(index.call_contracts.len(), 2);
+        assert_eq!(index.call_contracts[0].requirements[0].name, "first");
+        assert_eq!(index.call_contracts[1].requirements[0].name, "second");
+        assert_eq!(
+            index.call_contracts[0].identity,
+            index.call_contracts[1].identity
+        );
+    }
+
+    #[test]
+    fn contract_accumulator_preserves_variants_and_updates_after_removal() {
+        let first_owner = function(0);
+        let second_owner = function(1);
+        let effect = EffectKey::new("panic");
+        let mut contracts = ContractAccumulator::default();
+        contracts.push(
+            AnnotationId(0),
+            first_owner,
+            &effect,
+            None,
+            &[requirement("first")],
+        );
+        contracts.push(
+            AnnotationId(0),
+            first_owner,
+            &effect,
+            None,
+            &[requirement("first")],
+        );
+        contracts.push(
+            AnnotationId(0),
+            first_owner,
+            &effect,
+            None,
+            &[requirement("second")],
+        );
+        contracts.push(
+            AnnotationId(1),
+            second_owner,
+            &effect,
+            None,
+            &[requirement("third")],
+        );
+        assert_eq!(contracts.contracts.len(), 3);
+        assert_eq!(contracts.contracts[0].requirements[0].name, "first");
+        assert_eq!(contracts.contracts[1].requirements[0].name, "second");
+
+        contracts.remove_definition(first_owner.def_path_hash);
+        contracts.push(
+            AnnotationId(1),
+            second_owner,
+            &effect,
+            None,
+            &[requirement("third")],
+        );
+        contracts.push(
+            AnnotationId(1),
+            second_owner,
+            &effect,
+            None,
+            &[requirement("fourth")],
+        );
+        assert_eq!(contracts.contracts.len(), 2);
+        assert_eq!(contracts.contracts[0].requirements[0].name, "third");
+        assert_eq!(contracts.contracts[1].requirements[0].name, "fourth");
+    }
+}

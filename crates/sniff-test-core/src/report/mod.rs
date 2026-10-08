@@ -12,7 +12,7 @@ use std::sync::Arc;
 
 use crate::trace::{EffectTrace, FunctionId, PropagationEdge, TerminationSite, TraceOptions};
 
-use crate::annotations::AnnotationIndex;
+use crate::annotations::{AnnotationIndex, AnnotationWorkspaceIndex};
 use crate::artifact::{
     AnnotationFactKind, AnnotationProbingFact, AnnotationRole, AnnotationTargetFact, ArtifactFacts,
     CallTargetFact, DefinitionNamespaceIndex, EffectFact, EffectId, EffectKey, FunctionFact,
@@ -173,6 +173,7 @@ pub fn trace_selected_workspace(
     };
     let marker_probing = annotation_probing_fact(config.analysis.marker_probing);
     let graph_index = Arc::new(InvocationGraphIndex::new(artifact));
+    let annotation_index = AnnotationWorkspaceIndex::new(artifact);
 
     roots
         .iter()
@@ -202,9 +203,10 @@ pub fn trace_selected_workspace(
                     root.path
                 )));
             }
-            let annotations = AnnotationIndex::from_artifact_with_overrides(
+            let annotations = AnnotationIndex::from_workspace_index_with_overrides(
                 artifact,
                 &graph,
+                &annotation_index,
                 &namespaces,
                 &config.contracts.overrides,
                 config.analysis.marker_probing,
