@@ -186,6 +186,18 @@ impl<O, S, T> Default for EffectTrace<O, S, T> {
     }
 }
 
+impl<O, S, T> EffectTrace<O, S, T> {
+    #[must_use]
+    pub fn node(&self, id: TraceNodeId) -> Option<&TraceNode<O, S>> {
+        self.nodes.get(id.index())
+    }
+
+    #[must_use]
+    pub fn edge(&self, id: TraceEdgeId) -> Option<&TraceEdge> {
+        self.edges.get(id.index())
+    }
+}
+
 impl<O: Clone, S, T> EffectTrace<O, S, T> {
     #[must_use]
     pub fn nodes(&self) -> impl ExactSizeIterator<Item = &TraceNode<O, S>> {

@@ -1,6 +1,6 @@
 //! Marker claim grouping and ambiguity projection.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use crate::trace::{EffectTrace, FunctionId, TerminationSite, TraceNodeId};
 
@@ -149,9 +149,13 @@ pub(super) fn collect_marker_claims(
         EffectKey,
         TrackedEffect<'_, '_, crate::effects::concrete::ConcreteEffect<'_>>,
     >,
+    enabled_effects: &BTreeSet<EffectKey>,
 ) -> MarkerClaims {
     let mut uses = Vec::new();
     for (effect, trace) in traces {
+        if !enabled_effects.contains(effect) {
+            continue;
+        }
         let Some(concrete) = concrete_effects.get(effect) else {
             continue;
         };
@@ -188,6 +192,9 @@ pub(super) fn collect_marker_claims(
         }
     }
     for (effect, tracked) in tracked_effects {
+        if !enabled_effects.contains(effect) {
+            continue;
+        }
         let Some(trace) = traces.get(effect) else {
             continue;
         };
@@ -287,7 +294,7 @@ fn marker_projection(
                     *invocation,
                     *node,
                     MarkerTraversalPolicy {
-                        trust_path: match effect_trace.nodes().nth(node.index())?.state() {
+                        trust_path: match effect_trace.node(*node)?.state() {
                             TrackedState::Concrete(state) => state.trust_path().clone(),
                             TrackedState::Obligation(_) => return None,
                         },
@@ -359,13 +366,7 @@ fn obligation_marker_projection<O: Clone, S, T>(
     node: TraceNodeId,
     effect: &EffectKey,
 ) -> Option<(StableFunctionId, InterpretedTrace)> {
-    let trust_path = trace
-        .nodes()
-        .nth(node.index())?
-        .state()
-        .obligation()?
-        .trust_path()
-        .clone();
+    let trust_path = trace.node(node)?.state().obligation()?.trust_path().clone();
     marker_invocation_projection(
         artifact,
         graph,
@@ -406,14 +407,14 @@ fn marker_invocation_projection<O: Clone, S, T>(
         policy.is_opaque,
         policy.is_ignored_invocation,
     )?;
-    let target = effect_trace.nodes().nth(node.index())?.function();
+    let target = effect_trace.node(node)?.function();
     let edge = graph.source_edge(invocation, target)?;
     append_call_trace(artifact, graph.stable_function(function), edge, &mut trace);
     if let Some(last) = trace.steps.last_mut() {
         last.target = Some(graph.stable_function(target));
         last.target_path = Some(display_path(artifact, graph.stable_function(target)));
     }
-    let mut suffix = trace_path(artifact, graph, effect_trace, node.index());
+    let mut suffix = trace_path(artifact, graph, effect_trace, node);
     trace.steps.append(&mut suffix.steps);
     Some((graph.stable_function(function), trace))
 }

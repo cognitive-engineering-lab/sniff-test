@@ -157,6 +157,7 @@ pub struct ObligationTracker<'annotations> {
     annotations: &'annotations AnnotationIndex,
     graph: &'annotations InvocationGraph,
     contracts: Vec<ObligationContract>,
+    boundary_contracts: BTreeMap<EffectKey, Vec<Option<ContractId>>>,
     obligations: BTreeMap<ObligationId, Obligation>,
     effect_doc_matching: EffectDocMatching,
     policies: BTreeMap<EffectKey, ObligationEffectPolicy>,
@@ -198,30 +199,40 @@ impl<'annotations> ObligationTracker<'annotations> {
             .into_iter()
             .map(|policy| (policy.effect.clone(), policy))
             .collect::<BTreeMap<_, _>>();
+        // Resolve each visible function once per effect, rather than expanding
+        // every instance-specific annotation back to all definition aliases.
+        let mut functions_by_annotation = BTreeMap::<_, BTreeSet<_>>::new();
+        let mut boundary_contracts = policies
+            .keys()
+            .map(|effect| (effect.clone(), vec![None; graph.function_count()]))
+            .collect::<BTreeMap<_, _>>();
+        for function in graph.contract_visible_functions() {
+            for (effect, boundaries) in &mut boundary_contracts {
+                if let Some(annotation) = annotations.effective_contract(graph, function, effect) {
+                    boundaries[function.index()] = Some(ContractId(annotation.id()));
+                    functions_by_annotation
+                        .entry(annotation.id())
+                        .or_default()
+                        .insert(function);
+                }
+            }
+        }
         let mut contracts = Vec::new();
         let mut obligations = BTreeMap::new();
+        // Preserve annotation order and distinct requirement variants sharing
+        // an ID; selecting targets must not change obligation construction.
         for annotation in annotations.contracts() {
             if !policies.contains_key(annotation.effect()) {
                 continue;
             }
-            let functions = graph
-                .contract_targets(annotation.owner())
-                .into_iter()
-                .filter(|function| graph.includes_contract_target(*function))
-                .filter(|function| {
-                    annotations
-                        .effective_contract(graph, *function, annotation.effect())
-                        .is_some_and(|selected| selected.id() == annotation.id())
-                })
-                .collect::<BTreeSet<_>>();
-            if functions.is_empty() {
+            let Some(functions) = functions_by_annotation.get(&annotation.id()) else {
                 continue;
-            }
+            };
             let id = ContractId(annotation.id());
             let contract_obligations = collect_obligations(annotation, id, &mut obligations);
             contracts.push(ObligationContract {
                 id,
-                functions,
+                functions: functions.clone(),
                 effect: annotation.effect().clone(),
                 obligations: contract_obligations,
             });
@@ -230,6 +241,7 @@ impl<'annotations> ObligationTracker<'annotations> {
             annotations,
             graph,
             contracts,
+            boundary_contracts,
             obligations,
             effect_doc_matching,
             policies,
@@ -262,15 +274,11 @@ impl<'annotations> ObligationTracker<'annotations> {
         effect: &EffectKey,
         current: Option<&ObligationState>,
     ) -> bool {
-        let contract = self
-            .contracts
-            .iter()
-            .find(|contract| &contract.effect == effect && contract.applies_to(function));
-        let Some(contract) = contract else {
+        let Some(contract) = self.boundary_contract(function, effect) else {
             return false;
         };
         if current
-            .is_some_and(|state| state.contract == contract.id && state.source_invocation.is_none())
+            .is_some_and(|state| state.contract == contract && state.source_invocation.is_none())
         {
             return false;
         }
@@ -283,10 +291,9 @@ impl<'annotations> ObligationTracker<'annotations> {
         function: FunctionId,
         effect: &EffectKey,
     ) -> Option<ContractId> {
-        self.contracts
-            .iter()
-            .find(|contract| &contract.effect == effect && contract.applies_to(function))
-            .map(|contract| contract.id)
+        self.boundary_contracts
+            .get(effect)
+            .and_then(|boundaries| boundaries[function.index()])
     }
 
     #[must_use]

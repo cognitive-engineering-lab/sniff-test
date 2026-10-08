@@ -279,8 +279,9 @@ fn trace_effect_with_routes(
         .iter()
         .map(|seed| seed.owner)
         .collect::<BTreeSet<_>>();
-    independent
-        .sort_by_key(|seed| std::cmp::Reverse(upstream_count(graph, seed.owner, &candidates)));
+    independent.sort_by_cached_key(|seed| {
+        std::cmp::Reverse(upstream_count(graph, seed.owner, &candidates))
+    });
     for seed in independent {
         if !routes.contract_reachable.contains(&seed.owner) {
             continue;

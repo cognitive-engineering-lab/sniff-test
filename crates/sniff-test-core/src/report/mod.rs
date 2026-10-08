@@ -10,7 +10,9 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::sync::Arc;
 
-use crate::trace::{EffectTrace, FunctionId, PropagationEdge, TerminationSite, TraceOptions};
+use crate::trace::{
+    EffectTrace, FunctionId, PropagationEdge, TerminationSite, TraceNodeId, TraceOptions,
+};
 
 use crate::annotations::{AnnotationIndex, AnnotationWorkspaceIndex};
 use crate::artifact::{
@@ -20,7 +22,7 @@ use crate::artifact::{
     UnverifiedMarkerProbeReason,
 };
 use crate::compiler::invocations::{
-    InvocationGraph, InvocationGraphIndex, InvocationResolution, UnresolvedCallTargetReason,
+    FunctionLookup, InvocationGraph, InvocationResolution, UnresolvedCallTargetReason,
 };
 use crate::config::EffectConfig;
 use crate::config::{MarkerProbing, SniffTestConfig};
@@ -172,7 +174,7 @@ pub fn trace_selected_workspace(
         state_budget: config.analysis.trace_state_budget,
     };
     let marker_probing = annotation_probing_fact(config.analysis.marker_probing);
-    let graph_index = Arc::new(InvocationGraphIndex::new(artifact));
+    let function_lookup = Arc::new(FunctionLookup::new(artifact));
     let annotation_index = AnnotationWorkspaceIndex::new(artifact);
 
     roots
@@ -192,9 +194,12 @@ pub fn trace_selected_workspace(
                 .iter()
                 .map(|effect| effect.metadata().clone())
                 .collect::<Vec<_>>();
-            let mut graph =
-                InvocationGraph::from_index_roots(artifact, &graph_index, &[root.function])
-                    .map_err(|error| EffectReportError::new(error.to_string()))?;
+            let mut graph = InvocationGraph::from_function_lookup_roots(
+                artifact,
+                &function_lookup,
+                &[root.function],
+            )
+            .map_err(|error| EffectReportError::new(error.to_string()))?;
             graph.set_dependencies(&crate_dependencies);
             let root_functions = graph.function_aliases(root.function).collect::<Vec<_>>();
             if root_functions.is_empty() {
@@ -264,13 +269,23 @@ pub fn trace_selected_workspace(
                     )
                 })
                 .collect::<BTreeMap<_, ConcreteTrace>>();
-            let marker_claims = collect_marker_claims(
-                artifact,
-                &graph,
-                &concrete_effects,
-                &effect_traces,
-                &tracked_effects,
-            );
+            let ambiguity_effects = effects
+                .iter()
+                .filter(|effect| !effect.config().finding_lints().ambiguous_marker.is_allow())
+                .map(|effect| effect.key().clone())
+                .collect::<BTreeSet<_>>();
+            let marker_claims = if ambiguity_effects.is_empty() {
+                BTreeMap::new()
+            } else {
+                collect_marker_claims(
+                    artifact,
+                    &graph,
+                    &concrete_effects,
+                    &effect_traces,
+                    &tracked_effects,
+                    &ambiguity_effects,
+                )
+            };
             let mut findings = Vec::new();
             for root_function in root_functions.iter().copied() {
                 for (effect, concrete) in &concrete_effects {
@@ -329,17 +344,19 @@ pub fn trace_selected_workspace(
                         |invocation| concrete.is_ignored_invocation(invocation),
                     ));
                 }
-                findings.extend(marker_ambiguities(
-                    artifact,
-                    &graph,
-                    &annotations,
-                    &concrete_effects,
-                    &effect_traces,
-                    &tracked_effects,
-                    &marker_claims,
-                    &selected_metadata,
-                    root_function,
-                ));
+                if !marker_claims.is_empty() {
+                    findings.extend(marker_ambiguities(
+                        artifact,
+                        &graph,
+                        &annotations,
+                        &concrete_effects,
+                        &effect_traces,
+                        &tracked_effects,
+                        &marker_claims,
+                        &selected_metadata,
+                        root_function,
+                    ));
+                }
                 for (effect, tracked) in &tracked_effects {
                     if let Some(trace) = effect_traces.get(effect) {
                         findings.extend(obligation_findings(
@@ -701,8 +718,8 @@ fn concrete_findings(
     let effect_key = &metadata.key;
     active_root_nodes(trace, root_function)
         .filter_map(|node| {
-            let mut trace_path = trace_path(artifact, graph, trace, node);
-            let trace_node = trace.nodes().nth(node)?;
+            let mut trace_path = trace_path(artifact, graph, trace, TraceNodeId(node));
+            let trace_node = trace.node(TraceNodeId(node))?;
             let TrackedState::Concrete(_) = trace_node.state() else {
                 return None;
             };
@@ -1085,14 +1102,14 @@ fn obligation_findings<C, O: Clone, S, T>(
 ) -> Vec<InterpretedFinding> {
     active_root_nodes(trace, root_function)
         .filter_map(|node| {
-            let trace_node = trace.nodes().nth(node)?;
+            let trace_node = trace.node(TraceNodeId(node))?;
             let state = trace_node.state().obligation()?;
             let contract = tracked.obligations().contract(state.contract())?;
             let annotation = annotations.contract(contract.id().annotation())?;
             if contract.applies_to(root_function) {
                 return None;
             }
-            let path = trace_path(artifact, graph, trace, node);
+            let path = trace_path(artifact, graph, trace, TraceNodeId(node));
             let missing_requirements = trace_node
                 .state()
                 .obligation()?
@@ -1525,7 +1542,7 @@ fn trace_frontier<O: Clone, S, T>(
         .filter_map(|root| path_from_root(artifact, graph, root, function))
         .min_by_key(|path| path.steps.len())?;
     if let Some(node) = node {
-        let mut traced = trace_path(artifact, graph, trace, node.index());
+        let mut traced = trace_path(artifact, graph, trace, node);
         path.steps.append(&mut traced.steps);
     }
     let function = graph.stable_function(function);
@@ -1543,23 +1560,34 @@ fn trace_path<O: Clone, S, T>(
     artifact: &ArtifactFacts,
     graph: &InvocationGraph,
     trace: &EffectTrace<O, S, T>,
-    mut node: usize,
+    mut node: TraceNodeId,
 ) -> InterpretedTrace {
-    let nodes = trace.nodes().collect::<Vec<_>>();
-    let edges = trace.edges().collect::<Vec<_>>();
     let mut steps = Vec::new();
     let mut seen = BTreeSet::new();
     while seen.insert(node) {
-        let Some(edge) = nodes[node].predecessor().map(|edge| edges[edge.index()]) else {
+        let Some(predecessor) = trace
+            .node(node)
+            .expect("trace node is indexed")
+            .predecessor()
+        else {
             break;
         };
+        let edge = trace.edge(predecessor).expect("trace edge is indexed");
         if edge.propagation() == PropagationEdge::Handoff {
             break;
         }
         if let PropagationEdge::Invocation(invocation) = edge.propagation() {
-            let target = nodes[edge.from().index()].function();
+            let target = trace
+                .node(edge.from())
+                .expect("trace source is indexed")
+                .function();
             if let Some(source) = graph.source_edge(invocation, target) {
-                let caller = graph.stable_function(nodes[edge.to().index()].function());
+                let caller = graph.stable_function(
+                    trace
+                        .node(edge.to())
+                        .expect("trace destination is indexed")
+                        .function(),
+                );
                 let target = graph.stable_function(target);
                 let mut call_trace = InterpretedTrace { steps: Vec::new() };
                 append_call_trace(artifact, caller, source, &mut call_trace);
@@ -1569,8 +1597,18 @@ fn trace_path<O: Clone, S, T>(
                 steps.extend(call_trace.steps);
             }
         } else if let PropagationEdge::TransparentBody(transparent) = edge.propagation() {
-            let parent = graph.stable_function(nodes[edge.to().index()].function());
-            let child = graph.stable_function(nodes[edge.from().index()].function());
+            let parent = graph.stable_function(
+                trace
+                    .node(edge.to())
+                    .expect("trace destination is indexed")
+                    .function(),
+            );
+            let child = graph.stable_function(
+                trace
+                    .node(edge.from())
+                    .expect("trace source is indexed")
+                    .function(),
+            );
             let source = graph.transparent_source(transparent);
             steps.push(InterpretedTraceStep {
                 caller: parent,
@@ -1583,7 +1621,7 @@ fn trace_path<O: Clone, S, T>(
                 target_path: Some(display_path(artifact, child)),
             });
         }
-        node = edge.from().index();
+        node = edge.from();
     }
     InterpretedTrace { steps }
 }

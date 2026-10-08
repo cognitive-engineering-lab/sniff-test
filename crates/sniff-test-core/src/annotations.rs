@@ -115,6 +115,8 @@ pub enum AnnotationTarget {
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct AnnotationIndex {
     contracts: Vec<FunctionContractAnnotation>,
+    contracts_by_definition:
+        BTreeMap<crate::namespace::StableDefPathHash, BTreeMap<EffectKey, Vec<usize>>>,
     site_comments: Vec<SiteCommentAnnotation>,
 }
 
@@ -428,8 +430,19 @@ impl AnnotationIndex {
             }
         }
 
+        let contracts = contracts.contracts;
+        let mut contracts_by_definition = BTreeMap::<_, BTreeMap<_, Vec<_>>>::new();
+        for (position, contract) in contracts.iter().enumerate() {
+            contracts_by_definition
+                .entry(contract.owner.def_path_hash)
+                .or_default()
+                .entry(contract.effect.clone())
+                .or_default()
+                .push(position);
+        }
         Ok(Self {
-            contracts: contracts.contracts,
+            contracts,
+            contracts_by_definition,
             site_comments,
         })
     }
@@ -454,9 +467,12 @@ impl AnnotationIndex {
         function: FunctionId,
         effect: &EffectKey,
     ) -> impl Iterator<Item = &FunctionContractAnnotation> {
-        self.contracts.iter().filter(move |contract| {
-            contract.owner.def_path_hash == function.def_path_hash && &contract.effect == effect
-        })
+        self.contracts_by_definition
+            .get(&function.def_path_hash)
+            .and_then(|effects| effects.get(effect))
+            .into_iter()
+            .flatten()
+            .map(|&position| &self.contracts[position])
     }
 
     /// Selects the surface contract for a compiler-resolved implementation.
@@ -659,6 +675,128 @@ mod tests {
             declaration_target: None,
             target: CallTargetFact::Function(target),
         }
+    }
+
+    fn body(owner: FunctionId, calls: Vec<CallFact>) -> FunctionFact {
+        FunctionFact {
+            function: owner,
+            provenance: FunctionFactProvenance::DefiningArtifact,
+            display_path: format!("sample::{owner:?}"),
+            attributes: target(owner, "unused").attributes,
+            contract_declaration: None,
+            source_range: None,
+            calls,
+            effects: Vec::new(),
+            markers: Vec::new(),
+            unverified_marker_probes: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn contract_probe_preserves_variants_and_only_selects_visible_instances() {
+        use super::AnnotationIndex;
+        use crate::compiler::invocations::InvocationGraph;
+        use crate::config::EffectDocMatching;
+        use crate::effects::obligation::{ObligationEffectPolicy, ObligationTracker};
+
+        let root = function(0);
+        let unrelated = function(1);
+        let generic = function(2);
+        let instances = (0..64)
+            .map(|index| {
+                FunctionId::exact(
+                    generic.def_path_hash,
+                    serde_json::from_str(&format!("\"{index:032x}\"")).unwrap(),
+                )
+            })
+            .collect::<Vec<_>>();
+        let make_target = |instance, name| {
+            let mut value = target(instance, name);
+            let mut safety = value.contracts.effects[0].clone();
+            safety.effect = EffectKey::new("safety");
+            value.contracts.effects.push(safety);
+            value
+        };
+        let artifact = ArtifactFacts {
+            functions: vec![
+                body(
+                    root,
+                    vec![
+                        call(0, make_target(instances[0], "first")),
+                        call(1, make_target(instances[1], "first")),
+                        call(2, make_target(instances[0], "second")),
+                    ],
+                ),
+                body(
+                    unrelated,
+                    instances
+                        .iter()
+                        .enumerate()
+                        .map(|(index, &instance)| {
+                            call(
+                                u32::try_from(index).unwrap(),
+                                make_target(instance, "first"),
+                            )
+                        })
+                        .collect(),
+                ),
+            ],
+            source_files: Vec::new(),
+        };
+        let graph = InvocationGraph::from_artifact_roots(&artifact, &[root]).unwrap();
+        let annotations = AnnotationIndex::from_artifact(&artifact, &graph).unwrap();
+        let effects = [EffectKey::new("panic"), EffectKey::new("safety")];
+        let tracker = ObligationTracker::probe(
+            &graph,
+            &annotations,
+            EffectDocMatching::Exact,
+            effects
+                .iter()
+                .map(|effect| ObligationEffectPolicy::new(effect.clone(), [], [])),
+        );
+        for effect in &effects {
+            let variants = annotations
+                .function_contracts(generic, effect)
+                .collect::<Vec<_>>();
+            assert_eq!(variants.len(), 65);
+            assert_eq!(variants[0].requirements()[0].name, "first");
+            assert_eq!(variants[2].requirements()[0].name, "second");
+            assert_eq!(variants[0].id(), variants[2].id());
+            // Both requirement variants of the selected ID survive in their
+            // original order, while all other instance IDs remain unselected.
+            assert_eq!(tracker.contract_count(effect), 2);
+            let visible = graph.function(instances[0]).unwrap();
+            assert_eq!(
+                tracker
+                    .boundary_contract(visible, effect)
+                    .unwrap()
+                    .annotation(),
+                variants[0].id()
+            );
+            for (index, instance) in instances.iter().enumerate() {
+                let function = graph.function(*instance).unwrap();
+                let selected = tracker.boundary_contract(function, effect);
+                assert_eq!(selected.is_some(), index < 2);
+                for contract in tracker
+                    .contracts()
+                    .iter()
+                    .filter(|contract| contract.id().annotation() == variants[0].id())
+                {
+                    assert_eq!(contract.applies_to(function), index < 2);
+                }
+            }
+        }
+        let ids = tracker
+            .contracts()
+            .iter()
+            .map(|contract| contract.id().annotation())
+            .collect::<Vec<_>>();
+        let expected = annotations
+            .contracts()
+            .filter(|annotation| ids.contains(&annotation.id()))
+            .map(super::FunctionContractAnnotation::id)
+            .collect::<Vec<_>>();
+        assert_eq!(ids, expected);
     }
 
     #[test]

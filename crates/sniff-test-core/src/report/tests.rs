@@ -1992,6 +1992,7 @@ fn grouped_comment_marker_claims_each_relevant_contract_branch() {
         &concrete_effects,
         &traces,
         &tracked_effects,
+        &tracked_effects.keys().cloned().collect(),
     );
     assert_eq!(
         claims.values().next().map(std::collections::BTreeMap::len),
@@ -3237,4 +3238,189 @@ fn ignored_macro_invocation_hides_nested_unresolved_panic_gap_from_the_caller_ro
 
     assert_eq!(unresolved_panic_count(&reports, boundary_root), 0);
     assert_eq!(unresolved_panic_count(&reports, helper_root), 1);
+}
+
+#[test]
+fn allowed_marker_ambiguity_preserves_other_effects_and_obligations() {
+    use crate::config::LintLevel;
+
+    let root = stable_function(47);
+    let mut artifact = grouped_comment_claim_artifact(root, stable_function(48));
+    for body in &mut artifact.functions {
+        let offset = u32::try_from(body.markers.len()).unwrap();
+        let panic_markers = body
+            .markers
+            .iter()
+            .enumerate()
+            .map(|(index, marker)| {
+                let mut marker = marker.clone();
+                marker.id = MarkerId::new(offset + u32::try_from(index).unwrap());
+                marker.identity = format!("panic:{}", marker.identity);
+                marker.kind.effect = EffectKey::new("panic");
+                marker
+            })
+            .collect::<Vec<_>>();
+        body.markers.extend(panic_markers);
+    }
+    let report = |panic_level, safety_level| {
+        let mut config = crate::config::test_config();
+        config.analysis.marker_probing = MarkerProbing::SourceCallsite;
+        config.analysis.effect_doc_matching = crate::config::EffectDocMatching::Exact;
+        config.effect_mut("panic").lints.ambiguous_marker = panic_level;
+        config.effect_mut("safety").lints.ambiguous_marker = safety_level;
+        trace_workspace(
+            &artifact,
+            root.def_path_hash.stable_crate_id(),
+            &ArtifactAnalysisGraph::default(),
+            &[InterpretationRoot {
+                function: root,
+                path: String::from("sample::root"),
+                kind: ReportRootKind::Concrete,
+            }],
+            &config,
+        )
+        .unwrap()
+        .remove(0)
+        .findings
+    };
+    let baseline = report(LintLevel::Deny, LintLevel::Deny);
+    assert_eq!(
+        baseline
+            .iter()
+            .filter(|finding| matches!(
+                finding.kind,
+                InterpretedFindingKind::AmbiguousMarker { effect_count: 2 }
+            ))
+            .count(),
+        2
+    );
+    assert!(
+        baseline
+            .iter()
+            .any(|finding| !finding.missing_requirements.is_empty())
+    );
+    for (panic_level, safety_level) in [
+        (LintLevel::Warn, LintLevel::Warn),
+        (LintLevel::Deny, LintLevel::Allow),
+        (LintLevel::Allow, LintLevel::Warn),
+        (LintLevel::Allow, LintLevel::Allow),
+    ] {
+        let expected = baseline
+            .iter()
+            .filter(|finding| {
+                !matches!(finding.kind, InterpretedFindingKind::AmbiguousMarker { .. })
+                    || !match finding.effect.key.as_str() {
+                        "panic" => panic_level,
+                        "safety" => safety_level,
+                        _ => unreachable!(),
+                    }
+                    .is_allow()
+            })
+            .cloned()
+            .collect::<Vec<_>>();
+        assert_eq!(report(panic_level, safety_level), expected);
+    }
+}
+
+#[test]
+fn trace_projection_walks_selected_path_and_stops_at_handoff() {
+    use crate::trace::{
+        EffectTrace, PropagationEdge, TraceEdge, TraceEdgeId, TraceNode, TraceNodeId,
+    };
+
+    let root = stable_function(0);
+    let child = stable_function(1);
+    let sink = stable_function(2);
+    let mut transparent = call(0, target(child, "sample::child"));
+    transparent.kind = CallKindFact::ConstBody;
+    let artifact = ArtifactFacts::new(
+        vec![
+            body(
+                root,
+                "sample::root",
+                vec![transparent],
+                vec![],
+                vec![],
+                vec![],
+            ),
+            body(
+                child,
+                "sample::child",
+                vec![call(0, target(sink, "sample::sink"))],
+                vec![],
+                vec![],
+                vec![],
+            ),
+            body(sink, "sample::sink", vec![], vec![], vec![], vec![]),
+        ],
+        vec![],
+    )
+    .unwrap();
+    let graph = graph_for_all_bodies(&artifact).unwrap();
+    let root_id = graph.function(root).unwrap();
+    let child_id = graph.function(child).unwrap();
+    let sink_id = graph.function(sink).unwrap();
+    let invocation = graph
+        .invocation_for_raw_call(child, CallId::new(0))
+        .unwrap();
+    let transparent = graph.transparent_parents(child_id)[0];
+    // Unrelated nodes must not affect this three-node diagnostic path.
+    let nodes = vec![
+        TraceNode {
+            origin: (),
+            function: sink_id,
+            state: (),
+            depth: 0,
+            predecessor: None,
+        };
+        10_000
+    ];
+    let edges = vec![
+        TraceEdge {
+            from: TraceNodeId(3),
+            to: TraceNodeId(0),
+            propagation: PropagationEdge::Handoff,
+        },
+        TraceEdge {
+            from: TraceNodeId(0),
+            to: TraceNodeId(1),
+            propagation: PropagationEdge::Invocation(invocation),
+        },
+        TraceEdge {
+            from: TraceNodeId(1),
+            to: TraceNodeId(2),
+            propagation: PropagationEdge::TransparentBody(transparent),
+        },
+    ];
+    let mut trace = EffectTrace::<(), (), ()> {
+        nodes,
+        edges,
+        ..EffectTrace::default()
+    };
+    for (index, function) in [sink_id, child_id, root_id].into_iter().enumerate() {
+        trace.nodes[index].function = function;
+        trace.nodes[index].predecessor = Some(TraceEdgeId(index));
+    }
+    let projected = super::trace_path(&artifact, &graph, &trace, TraceNodeId(2));
+    assert_eq!(projected.steps.len(), 2);
+    assert_eq!(projected.steps[0].caller, root);
+    assert_eq!(projected.steps[0].target, Some(child));
+    assert_eq!(
+        projected.steps[0].kind,
+        InterpretedTraceStepKind::Reachability(CallKindFact::ConstBody)
+    );
+    assert_eq!(projected.steps[1].caller, child);
+    assert_eq!(projected.steps[1].target, Some(sink));
+    // A malformed cyclic predecessor still terminates after visiting each node once.
+    trace.edges[0] = TraceEdge {
+        from: TraceNodeId(2),
+        to: TraceNodeId(0),
+        propagation: PropagationEdge::TransparentBody(transparent),
+    };
+    assert_eq!(
+        super::trace_path(&artifact, &graph, &trace, TraceNodeId(2))
+            .steps
+            .len(),
+        3
+    );
 }

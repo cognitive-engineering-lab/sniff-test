@@ -153,14 +153,16 @@ impl Invocation {
     }
 }
 
-/// Workspace-wide identities shared by root-scoped invocation graphs.
-pub(crate) struct InvocationGraphIndex {
+/// Function identity, body location, and transparent-body ownership lookups.
+/// Built from the supplied artifact facts, including dependencies, and shared
+/// by root-scoped invocation graphs.
+pub(crate) struct FunctionLookup {
     stable_functions: Vec<StableFunctionId>,
     body_positions: BTreeMap<StableFunctionId, usize>,
     transparent_owners: BTreeMap<StableFunctionId, StableFunctionId>,
 }
 
-impl InvocationGraphIndex {
+impl FunctionLookup {
     pub(crate) fn new(artifact: &ArtifactFacts) -> Self {
         Self {
             stable_functions: collect_functions(artifact),
@@ -184,7 +186,7 @@ impl InvocationGraphIndex {
 
 /// Invocation view used by the concrete and obligation worklists.
 pub struct InvocationGraph {
-    index: Arc<InvocationGraphIndex>,
+    function_lookup: Arc<FunctionLookup>,
     included_bodies: BTreeSet<StableFunctionId>,
     contract_definitions: BTreeSet<StableDefPathHash>,
     invocations: Vec<Invocation>,
@@ -192,7 +194,6 @@ pub struct InvocationGraph {
     incoming: Vec<Vec<InvocationId>>,
     contract_visible_incoming: Vec<Vec<InvocationId>>,
     declaration_fallbacks: Vec<Option<StableFunctionId>>,
-    fallback_targets_by_declaration: BTreeMap<StableDefPathHash, Vec<FunctionId>>,
     transparent_parents: Vec<Vec<TransparentBodyEdgeId>>,
     transparent_parent: Vec<FunctionId>,
     transparent_source: Vec<CallFact>,
@@ -208,23 +209,22 @@ impl InvocationGraph {
         artifact: &ArtifactFacts,
         roots: &[StableFunctionId],
     ) -> Result<Self, InvocationGraphError> {
-        let index = Arc::new(InvocationGraphIndex::new(artifact));
-        Self::from_index_roots(artifact, &index, roots)
+        let function_lookup = Arc::new(FunctionLookup::new(artifact));
+        Self::from_function_lookup_roots(artifact, &function_lookup, roots)
     }
 
-    pub(crate) fn from_index_roots(
+    pub(crate) fn from_function_lookup_roots(
         artifact: &ArtifactFacts,
-        index: &Arc<InvocationGraphIndex>,
+        function_lookup: &Arc<FunctionLookup>,
         roots: &[StableFunctionId],
     ) -> Result<Self, InvocationGraphError> {
-        let function_count = index.stable_functions.len();
+        let function_count = function_lookup.stable_functions.len();
         let mut graph = Self {
             incoming: vec![Vec::new(); function_count],
             contract_visible_incoming: vec![Vec::new(); function_count],
             declaration_fallbacks: vec![None; function_count],
-            fallback_targets_by_declaration: BTreeMap::new(),
             transparent_parents: vec![Vec::new(); function_count],
-            index: Arc::clone(index),
+            function_lookup: Arc::clone(function_lookup),
             included_bodies: BTreeSet::new(),
             contract_definitions: BTreeSet::new(),
             invocations: Vec::new(),
@@ -261,7 +261,13 @@ impl InvocationGraph {
             let calls = body
                 .calls
                 .iter()
-                .map(|call| normalize_transparent_target(call, artifact, &index.transparent_owners))
+                .map(|call| {
+                    normalize_transparent_target(
+                        call,
+                        artifact,
+                        &function_lookup.transparent_owners,
+                    )
+                })
                 .collect::<Vec<_>>();
             graph.collect_body(body.function, &calls)?;
         }
@@ -288,12 +294,12 @@ impl InvocationGraph {
             // recorded in its defining artifact's generic body.
             if stable.instance_hash.is_some() {
                 let definition = StableFunctionId::generic(stable.def_path_hash);
-                if let Some(generic) = self.index.exact_function(definition) {
+                if let Some(generic) = self.function_lookup.exact_function(definition) {
                     pending.push_back(generic);
                 }
             }
             let Some(body) = self
-                .index
+                .function_lookup
                 .body_positions
                 .get(&stable)
                 .map(|&position| &artifact.functions[position])
@@ -305,8 +311,11 @@ impl InvocationGraph {
                 if !is_invocation(call.kind) && !is_transparent(call.kind) {
                     continue;
                 }
-                let normalized =
-                    normalize_transparent_target(call, artifact, &self.index.transparent_owners);
+                let normalized = normalize_transparent_target(
+                    call,
+                    artifact,
+                    &self.function_lookup.transparent_owners,
+                );
                 let target = if is_transparent(call.kind) {
                     concrete_target(&normalized).and_then(|target| self.function(target))
                 } else {
@@ -330,10 +339,23 @@ impl InvocationGraph {
         self.contract_definitions.contains(&function.def_path_hash)
     }
 
+    /// Bodies and callable surfaces visible from this root, without scanning
+    /// the workspace-wide table of unrelated generic instances.
     #[must_use]
-    pub fn includes_contract_target(&self, function: FunctionId) -> bool {
-        self.includes_body(self.stable_function(function))
-            || !self.contract_visible_incoming[function.index()].is_empty()
+    pub fn contract_visible_functions(&self) -> BTreeSet<FunctionId> {
+        self.included_bodies
+            .iter()
+            .map(|&body| {
+                self.function_lookup
+                    .exact_function(body)
+                    .expect("included body is indexed")
+            })
+            .chain(self.invocations.iter().flat_map(|invocation| {
+                invocation
+                    .function_targets()
+                    .chain(invocation.declaration_targets())
+            }))
+            .collect()
     }
 
     /// Attach policy-neutral artifact dependency relationships. Compute the
@@ -364,25 +386,25 @@ impl InvocationGraph {
     pub fn function(&self, stable: StableFunctionId) -> Option<FunctionId> {
         stable
             .resolution_candidates()
-            .find_map(|candidate| self.index.exact_function(candidate))
+            .find_map(|candidate| self.function_lookup.exact_function(candidate))
     }
 
     fn invocation_target(&self, stable: StableFunctionId) -> Option<FunctionId> {
         stable
             .resolution_candidates()
-            .find(|candidate| self.index.body_positions.contains_key(candidate))
-            .and_then(|candidate| self.index.exact_function(candidate))
+            .find(|candidate| self.function_lookup.body_positions.contains_key(candidate))
+            .and_then(|candidate| self.function_lookup.exact_function(candidate))
             .or_else(|| self.function(stable))
     }
 
     #[must_use]
     pub fn stable_function(&self, function: FunctionId) -> StableFunctionId {
-        self.index.stable_functions[function.index()]
+        self.function_lookup.stable_functions[function.index()]
     }
 
     #[must_use]
     pub fn function_count(&self) -> usize {
-        self.index.stable_functions.len()
+        self.function_lookup.stable_functions.len()
     }
 
     /// Returns every exact or generic graph identity for one source definition.
@@ -390,29 +412,12 @@ impl InvocationGraph {
         &self,
         stable: StableFunctionId,
     ) -> impl Iterator<Item = FunctionId> + '_ {
-        let functions = &self.index.stable_functions;
+        let functions = &self.function_lookup.stable_functions;
         let start =
             functions.partition_point(|function| function.def_path_hash < stable.def_path_hash);
         let end =
             functions.partition_point(|function| function.def_path_hash <= stable.def_path_hash);
         (start..end).map(FunctionId::from_index)
-    }
-
-    /// Resolves source-level trait/function contracts onto their concrete
-    /// invocation targets without changing invocation identity.
-    #[must_use]
-    pub fn contract_targets(&self, contract_owner: StableFunctionId) -> BTreeSet<FunctionId> {
-        let mut targets = self
-            .function_aliases(contract_owner)
-            .collect::<BTreeSet<_>>();
-        targets.extend(
-            self.fallback_targets_by_declaration
-                .get(&contract_owner.def_path_hash)
-                .into_iter()
-                .flatten()
-                .copied(),
-        );
-        targets
     }
 
     /// Trait/interface declarations whose contract is the fallback for one
@@ -430,10 +435,6 @@ impl InvocationGraph {
         match self.declaration_fallbacks[function.index()] {
             None => {
                 self.declaration_fallbacks[function.index()] = Some(declaration);
-                self.fallback_targets_by_declaration
-                    .entry(declaration.def_path_hash)
-                    .or_default()
-                    .push(function);
             }
             Some(existing) if existing.def_path_hash == declaration.def_path_hash => {}
             Some(existing) => {
@@ -662,7 +663,7 @@ impl InvocationGraph {
                 && !target
                     .function
                     .resolution_candidates()
-                    .any(|candidate| self.index.body_positions.contains_key(&candidate))
+                    .any(|candidate| self.function_lookup.body_positions.contains_key(&candidate))
         }) {
             invocation.targets.insert(CallTarget::Unknown);
         }
@@ -963,7 +964,7 @@ mod tests {
     use crate::namespace::StableDefPathHash;
 
     use super::{
-        CallTarget, InvocationGraph, InvocationGraphIndex, InvocationResolution,
+        CallTarget, FunctionLookup, InvocationGraph, InvocationResolution,
         UnresolvedCallTargetReason,
     };
 
@@ -1149,7 +1150,7 @@ mod tests {
     }
 
     #[test]
-    fn shared_identity_index_preserves_separate_root_graphs() {
+    fn shared_function_lookup_preserves_separate_root_graphs() {
         let first = stable_function(0);
         let second = stable_function(1);
         let shared = stable_function(2);
@@ -1174,30 +1175,34 @@ mod tests {
             body(first_only, Vec::new()),
             body(second_only, Vec::new()),
         ]);
-        let index = Arc::new(InvocationGraphIndex::new(&facts));
+        let function_lookup = Arc::new(FunctionLookup::new(&facts));
         for (root, included, excluded) in [
             (first, first_only, second_only),
             (second, second_only, first_only),
         ] {
-            let shared_index_graph =
-                InvocationGraph::from_index_roots(&facts, &index, &[root]).expect("valid graph");
+            let shared_lookup_graph =
+                InvocationGraph::from_function_lookup_roots(&facts, &function_lookup, &[root])
+                    .expect("valid graph");
             let standalone = InvocationGraph::from_artifact_roots(&facts, &[root])
                 .expect("valid standalone graph");
-            assert!(Arc::ptr_eq(&shared_index_graph.index, &index));
+            assert!(Arc::ptr_eq(
+                &shared_lookup_graph.function_lookup,
+                &function_lookup
+            ));
             assert_eq!(
-                shared_index_graph.index.stable_functions,
-                standalone.index.stable_functions
+                shared_lookup_graph.function_lookup.stable_functions,
+                standalone.function_lookup.stable_functions
             );
             assert_eq!(
-                shared_index_graph.included_bodies,
+                shared_lookup_graph.included_bodies,
                 standalone.included_bodies
             );
-            assert_eq!(shared_index_graph.invocations, standalone.invocations);
-            assert_eq!(shared_index_graph.incoming, standalone.incoming);
-            assert!(shared_index_graph.includes_body(included));
-            assert!(shared_index_graph.includes_body(shared));
-            assert!(!shared_index_graph.includes_body(excluded));
-            assert_eq!(shared_index_graph.function_count(), 5);
+            assert_eq!(shared_lookup_graph.invocations, standalone.invocations);
+            assert_eq!(shared_lookup_graph.incoming, standalone.incoming);
+            assert!(shared_lookup_graph.includes_body(included));
+            assert!(shared_lookup_graph.includes_body(shared));
+            assert!(!shared_lookup_graph.includes_body(excluded));
+            assert_eq!(shared_lookup_graph.function_count(), 5);
         }
     }
 
@@ -1823,16 +1828,10 @@ mod tests {
             );
         }
         assert!(graph.function(declaration).is_some());
-        let expected_targets = [declaration, generic_implementation, exact_implementation]
-            .into_iter()
-            .map(|function| graph.function(function).expect("graph identity"))
-            .collect();
-        assert_eq!(graph.contract_targets(declaration), expected_targets);
-        let unrelated_targets = [other_declaration, unrelated_implementation]
-            .into_iter()
-            .map(|function| graph.function(function).expect("graph identity"))
-            .collect();
-        assert_eq!(graph.contract_targets(other_declaration), unrelated_targets);
+        assert_eq!(
+            graph.contract_declaration(graph.function(unrelated_implementation).unwrap()),
+            Some(other_declaration),
+        );
         graph
             .set_declaration_fallback(
                 graph
@@ -1841,7 +1840,10 @@ mod tests {
                 declaration,
             )
             .expect("repeated fallback");
-        assert_eq!(graph.contract_targets(declaration), expected_targets);
+        assert_eq!(
+            graph.contract_declaration(graph.function(generic_implementation).unwrap()),
+            Some(declaration),
+        );
 
         let conflicting_implementation = stable_function(4);
         let mut implementation_call = call(
