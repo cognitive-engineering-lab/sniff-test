@@ -7,6 +7,9 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
+use std::sync::Arc;
+
+use crate::namespace::StableDefPathHash;
 
 use crate::trace::InvocationId;
 
@@ -112,87 +115,167 @@ pub enum AnnotationTarget {
     },
 }
 
+/// A root view of workspace-owned contracts and root-owned site comments.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct AnnotationIndex {
-    contracts: Vec<FunctionContractAnnotation>,
-    contracts_by_definition:
-        BTreeMap<crate::namespace::StableDefPathHash, BTreeMap<EffectKey, Vec<usize>>>,
+    store: Arc<ContractStore>,
+    body_contracts: ContractSelection,
+    override_contracts: ContractSelection,
+    excluded_global: BTreeSet<usize>,
     site_comments: Vec<SiteCommentAnnotation>,
     comments_by_target: BTreeMap<AnnotationTarget, BTreeMap<EffectKey, Vec<usize>>>,
 }
 
-/// Call-surface contracts are global even when report bodies are root scoped.
-pub(crate) struct AnnotationWorkspaceIndex {
-    call_contracts: Vec<SurfaceContractTemplate>,
-    bodies_by_definition: BTreeMap<crate::namespace::StableDefPathHash, Vec<usize>>,
+/// Ordered record references, indexed without duplicating contract payloads.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+struct ContractSelection {
+    order: Vec<usize>,
+    members: BTreeSet<usize>,
+    by_definition: BTreeMap<StableDefPathHash, BTreeMap<EffectKey, Vec<usize>>>,
+    by_id: BTreeMap<AnnotationId, Vec<usize>>,
 }
 
-struct SurfaceContractTemplate {
-    identity: String,
-    owner: FunctionId,
-    effect: EffectKey,
-    source_range: Option<SourceRangeFact>,
-    requirements: Vec<ContractRequirementFact>,
+impl ContractSelection {
+    fn insert(&mut self, position: usize, records: &[FunctionContractAnnotation]) {
+        if !self.members.insert(position) {
+            return;
+        }
+        let record = &records[position];
+        self.order.push(position);
+        self.by_definition
+            .entry(record.owner.def_path_hash)
+            .or_default()
+            .entry(record.effect.clone())
+            .or_default()
+            .push(position);
+        self.by_id.entry(record.id).or_default().push(position);
+    }
+
+    fn function(&self, function: FunctionId, effect: &EffectKey) -> &[usize] {
+        self.by_definition
+            .get(&function.def_path_hash)
+            .and_then(|effects| effects.get(effect))
+            .map_or(&[], Vec::as_slice)
+    }
+
+    fn annotation(&self, id: AnnotationId) -> &[usize] {
+        self.by_id.get(&id).map_or(&[], Vec::as_slice)
+    }
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+struct ContractStore {
+    records: Vec<FunctionContractAnnotation>,
+    global: ContractSelection,
+}
+
+/// Call-surface contracts are global even when report bodies are root scoped.
+pub(crate) struct AnnotationWorkspaceIndex {
+    store: Arc<ContractStore>,
+    body_contracts: Vec<Result<Vec<usize>, AnnotationIndexError>>,
+    marker_ids: Vec<Vec<AnnotationId>>,
+    bodies_by_definition: BTreeMap<StableDefPathHash, Vec<usize>>,
+    overrides: BTreeMap<StableDefPathHash, BTreeMap<EffectKey, usize>>,
+    probing: AnnotationProbingFact,
 }
 
 impl AnnotationWorkspaceIndex {
-    pub(crate) fn new(artifact: &ArtifactFacts) -> Self {
-        let mut call_contracts = Vec::<SurfaceContractTemplate>::new();
-        let mut by_identity = BTreeMap::<String, Vec<usize>>::new();
+    pub(crate) fn new(
+        artifact: &ArtifactFacts,
+        namespaces: &DefinitionNamespaceIndex,
+        overrides: &ContractDocOverrides,
+        marker_probing: MarkerProbing,
+        effects: &[EffectMetadata],
+    ) -> Self {
+        let probing = match marker_probing {
+            MarkerProbing::SourceCallsite => AnnotationProbingFact::SourceCallsite,
+            MarkerProbing::MacroDefinitionFirst => AnnotationProbingFact::MacroDefinitionFirst,
+        };
+        let mut ids = BTreeMap::new();
+        let mut contracts = ContractAccumulator::default();
         let mut bodies_by_definition = BTreeMap::<_, Vec<_>>::new();
+        let mut body_contracts = Vec::new();
+        let mut marker_ids = Vec::new();
         for (position, body) in artifact.functions.iter().enumerate() {
             bodies_by_definition
                 .entry(body.function.def_path_hash)
                 .or_default()
                 .push(position);
-            for call in &body.calls {
-                let mut indexed_targets = BTreeSet::new();
-                for target in [
-                    call.target.function_target(),
-                    call.declaration_target.as_ref(),
-                ]
+            let mut positions = Vec::new();
+            let mut invalid = false;
+            let mut body_ids = Vec::new();
+            for marker in &body.markers {
+                let id = intern_identity(&mut ids, &marker.identity);
+                body_ids.push(id);
+                if marker.kind.role != AnnotationRole::Contract
+                    || !marker.applicable_probing.contains(&probing)
+                {
+                    continue;
+                }
+                let AnnotationTargetFact::Function(owner) = marker.target else {
+                    invalid = true;
+                    continue;
+                };
+                positions.push(contracts.push(
+                    id,
+                    owner,
+                    &marker.kind.effect,
+                    marker.source_range.as_ref(),
+                    &marker.requirements,
+                ));
+            }
+            if let Some(declaration) = &body.contract_declaration {
+                positions.extend(push_target_contracts(&mut ids, &mut contracts, declaration));
+            }
+            // Invalid annotations retain their former root-visible error boundary.
+            body_contracts.push(if invalid {
+                Err(AnnotationIndexError::new(
+                    "function contract annotation has a non-function target",
+                ))
+            } else {
+                Ok(positions)
+            });
+            marker_ids.push(body_ids);
+        }
+        let global = index_global_contracts(artifact, &mut ids, &mut contracts);
+        let mut override_records = BTreeMap::new();
+        for (definition, candidates) in namespaces.iter() {
+            let Some(markdown) = overrides.markdown_for_candidates(candidates) else {
+                continue;
+            };
+            let source_range = bodies_by_definition
+                .get(definition)
                 .into_iter()
                 .flatten()
-                {
-                    if !indexed_targets.insert(target.function) {
-                        continue;
-                    }
-                    for effect_contract in &target.contracts.effects {
-                        let contract = &effect_contract.contract;
-                        let identity = format!(
-                            "call-contract:{:?}:{:?}:{:?}",
-                            effect_contract.effect, target.function, contract.source_range
-                        );
-                        let duplicate = by_identity.get(&identity).is_some_and(|positions| {
-                            positions.iter().any(|&position| {
-                                let existing = &call_contracts[position];
-                                existing.owner == target.function
-                                    && existing.effect == effect_contract.effect
-                                    && existing.source_range == contract.source_range
-                                    && existing.requirements == contract.requirements
-                            })
-                        });
-                        if duplicate {
-                            continue;
-                        }
-                        by_identity
-                            .entry(identity.clone())
-                            .or_default()
-                            .push(call_contracts.len());
-                        call_contracts.push(SurfaceContractTemplate {
-                            identity,
-                            owner: target.function,
-                            effect: effect_contract.effect.clone(),
-                            source_range: contract.source_range.clone(),
-                            requirements: contract.requirements.clone(),
-                        });
-                    }
+                .map(|&position| &artifact.functions[position])
+                .min_by_key(|body| body.function)
+                .and_then(|body| body.source_range.clone());
+            let mut selected = BTreeMap::new();
+            for effect in effects {
+                if let Some(position) = push_override_contract_for_owner(
+                    &mut ids,
+                    &mut contracts,
+                    FunctionId::generic(*definition),
+                    source_range.as_ref(),
+                    contract_doc_summary_from_markdown(markdown, effect.obligation),
+                    &effect.key,
+                ) {
+                    selected.insert(effect.key.clone(), position);
                 }
             }
+            // An empty replacement still masks all original effects for this definition.
+            override_records.insert(*definition, selected);
         }
         Self {
-            call_contracts,
+            store: Arc::new(ContractStore {
+                records: contracts.contracts,
+                global,
+            }),
+            body_contracts,
+            marker_ids,
             bodies_by_definition,
+            overrides: override_records,
+            probing,
         }
     }
 
@@ -203,12 +286,46 @@ impl AnnotationWorkspaceIndex {
             .flatten()
             .copied()
             .collect::<Vec<_>>();
-        // Annotation IDs and first-occurrence precedence follow artifact
-        // order, not definition order. Include every instance of a visible
-        // definition; only its site comments are restricted to reached bodies.
+        // Precedence follows artifact order, independently of workspace identity numbering.
         positions.sort_unstable();
         positions
     }
+}
+
+fn index_global_contracts(
+    artifact: &ArtifactFacts,
+    ids: &mut BTreeMap<String, AnnotationId>,
+    contracts: &mut ContractAccumulator,
+) -> ContractSelection {
+    let mut global = ContractSelection::default();
+    for body in &artifact.functions {
+        for call in &body.calls {
+            let mut indexed_targets = BTreeSet::new();
+            for target in [
+                call.target.function_target(),
+                call.declaration_target.as_ref(),
+            ]
+            .into_iter()
+            .flatten()
+            {
+                if indexed_targets.insert(target.function) {
+                    for position in push_target_contracts(ids, contracts, target) {
+                        global.insert(position, &contracts.contracts);
+                    }
+                }
+            }
+        }
+    }
+    global
+}
+
+fn intern_identity(ids: &mut BTreeMap<String, AnnotationId>, identity: &str) -> AnnotationId {
+    if let Some(&id) = ids.get(identity) {
+        return id;
+    }
+    let id = AnnotationId(ids.len());
+    ids.insert(identity.to_owned(), id);
+    id
 }
 
 #[derive(Default)]
@@ -248,9 +365,9 @@ impl ContractAccumulator {
         effect: &EffectKey,
         source_range: Option<&SourceRangeFact>,
         requirements: &[ContractRequirementFact],
-    ) {
-        if self.by_id.get(&id).is_some_and(|positions| {
-            positions.iter().any(|&position| {
+    ) -> usize {
+        if let Some(position) = self.by_id.get(&id).and_then(|positions| {
+            positions.iter().copied().find(|&position| {
                 let existing = &self.contracts[position];
                 existing.owner == owner
                     && &existing.effect == effect
@@ -258,9 +375,10 @@ impl ContractAccumulator {
                     && existing.requirements == requirements
             })
         }) {
-            return;
+            return position;
         }
-        self.by_id.entry(id).or_default().push(self.contracts.len());
+        let position = self.contracts.len();
+        self.by_id.entry(id).or_default().push(position);
         self.contracts.push(FunctionContractAnnotation {
             id,
             owner,
@@ -268,15 +386,7 @@ impl ContractAccumulator {
             source_range: source_range.cloned(),
             requirements: requirements.to_vec(),
         });
-    }
-
-    fn remove_definition(&mut self, definition: crate::namespace::StableDefPathHash) {
-        self.contracts
-            .retain(|contract| contract.owner.def_path_hash != definition);
-        self.by_id.clear();
-        for (position, contract) in self.contracts.iter().enumerate() {
-            self.by_id.entry(contract.id).or_default().push(position);
-        }
+        position
     }
 }
 
@@ -305,151 +415,83 @@ impl AnnotationIndex {
         marker_probing: MarkerProbing,
         effects: &[EffectMetadata],
     ) -> Result<Self, AnnotationIndexError> {
-        let workspace = AnnotationWorkspaceIndex::new(artifact);
-        Self::from_workspace_index_with_overrides(
-            artifact,
-            graph,
-            &workspace,
-            namespaces,
-            overrides,
-            marker_probing,
-            effects,
-        )
+        let workspace =
+            AnnotationWorkspaceIndex::new(artifact, namespaces, overrides, marker_probing, effects);
+        Self::from_workspace_index(artifact, graph, &workspace, effects)
     }
 
-    #[allow(
-        clippy::too_many_lines,
-        reason = "one syntax pass keeps annotation identities and ownership deterministic"
-    )]
-    pub(crate) fn from_workspace_index_with_overrides(
+    pub(crate) fn from_workspace_index(
         artifact: &ArtifactFacts,
         graph: &InvocationGraph,
         workspace: &AnnotationWorkspaceIndex,
-        namespaces: &DefinitionNamespaceIndex,
-        overrides: &ContractDocOverrides,
-        marker_probing: MarkerProbing,
         effects: &[EffectMetadata],
     ) -> Result<Self, AnnotationIndexError> {
-        let mut ids = BTreeMap::<String, AnnotationId>::new();
-        let mut contracts = ContractAccumulator::default();
+        let store = &workspace.store;
+        let mut body_contracts = ContractSelection::default();
+        let mut override_contracts = ContractSelection::default();
+        let mut excluded_global = BTreeSet::new();
         let mut site_comments = SiteCommentAccumulator::default();
-        let override_markdown_by_definition = graph
+        let overridden = graph
             .contract_definitions()
-            .filter_map(|definition| {
-                overrides
-                    .markdown_for_candidates(
-                        namespaces.candidates(FunctionId::generic(*definition)),
-                    )
-                    .map(|markdown| (*definition, markdown))
-            })
-            .collect::<BTreeMap<_, _>>();
-
+            .filter(|definition| workspace.overrides.contains_key(definition))
+            .copied()
+            .collect::<BTreeSet<_>>();
         for position in workspace.visible_body_positions(graph) {
+            for &record in workspace.body_contracts[position]
+                .as_ref()
+                .map_err(Clone::clone)?
+            {
+                if !overridden.contains(&store.records[record].owner.def_path_hash) {
+                    body_contracts.insert(record, &store.records);
+                    if store.global.members.contains(&record) {
+                        excluded_global.insert(record);
+                    }
+                }
+            }
             let body = &artifact.functions[position];
-            let includes_body = graph.includes_body(body.function);
-            for marker in &body.markers {
-                if !includes_body && marker.kind.role != AnnotationRole::Contract {
+            if !graph.includes_body(body.function) {
+                continue;
+            }
+            for (marker, &id) in body.markers.iter().zip(&workspace.marker_ids[position]) {
+                if marker.kind.role != AnnotationRole::Justification
+                    || !marker.applicable_probing.contains(&workspace.probing)
+                {
                     continue;
                 }
-                let active = match marker_probing {
-                    MarkerProbing::SourceCallsite => AnnotationProbingFact::SourceCallsite,
-                    MarkerProbing::MacroDefinitionFirst => {
-                        AnnotationProbingFact::MacroDefinitionFirst
+                let target = match marker.target {
+                    AnnotationTargetFact::Function(function) => {
+                        AnnotationTarget::Function(function)
                     }
+                    AnnotationTargetFact::Call(call) => {
+                        let Some(invocation) = graph.invocation_for_raw_call(body.function, call)
+                        else {
+                            // Structural raw edges cannot consume invocation annotations.
+                            continue;
+                        };
+                        AnnotationTarget::Invocation { invocation, call }
+                    }
+                    AnnotationTargetFact::Effect(effect) => AnnotationTarget::Effect {
+                        owner: body.function,
+                        effect,
+                    },
                 };
-                if !marker.applicable_probing.contains(&active) {
-                    continue;
-                }
-                let next_id = AnnotationId(ids.len());
-                let id = *ids.entry(marker.identity.clone()).or_insert(next_id);
-                match marker.kind.role {
-                    AnnotationRole::Contract => {
-                        let AnnotationTargetFact::Function(owner) = marker.target else {
-                            return Err(AnnotationIndexError::new(
-                                "function contract annotation has a non-function target",
-                            ));
-                        };
-                        contracts.push(
-                            id,
-                            owner,
-                            &marker.kind.effect,
-                            marker.source_range.as_ref(),
-                            &marker.requirements,
-                        );
-                    }
-                    AnnotationRole::Justification => {
-                        let target = match marker.target {
-                            AnnotationTargetFact::Function(function) => {
-                                AnnotationTarget::Function(function)
-                            }
-                            AnnotationTargetFact::Call(call) => {
-                                let Some(invocation) =
-                                    graph.invocation_for_raw_call(body.function, call)
-                                else {
-                                    // Syntax probing also sees structural raw edges such as
-                                    // compiler assertions inside a marked statement. They remain
-                                    // useful policy-neutral artifact evidence, but no concrete
-                                    // effect can consume them as an invocation annotation.
-                                    continue;
-                                };
-                                AnnotationTarget::Invocation { invocation, call }
-                            }
-                            AnnotationTargetFact::Effect(effect) => AnnotationTarget::Effect {
-                                owner: body.function,
-                                effect,
-                            },
-                        };
-                        let annotation = SiteCommentAnnotation {
-                            id,
-                            effect: marker.kind.effect.clone(),
-                            target,
-                            source_range: marker.source_range.clone(),
-                            satisfactions: marker.satisfactions.clone(),
-                        };
-                        site_comments.push(annotation);
-                    }
-                }
-            }
-            if let Some(declaration) = &body.contract_declaration {
-                push_target_contracts(&mut ids, &mut contracts, declaration);
+                site_comments.push(SiteCommentAnnotation {
+                    id,
+                    effect: marker.kind.effect.clone(),
+                    target,
+                    source_range: marker.source_range.clone(),
+                    satisfactions: marker.satisfactions.clone(),
+                });
             }
         }
-
-        // A declaration's contract can be serialized on a different call
-        // projection from the one reached by this root. Index only this
-        // surface metadata globally; site comments stay root scoped.
-        for template in &workspace.call_contracts {
-            let next_id = AnnotationId(ids.len());
-            let id = *ids.entry(template.identity.clone()).or_insert(next_id);
-            contracts.push(
-                id,
-                template.owner,
-                &template.effect,
-                template.source_range.as_ref(),
-                &template.requirements,
-            );
-        }
-
-        for (definition, markdown) in override_markdown_by_definition {
-            contracts.remove_definition(definition);
-            let source_range = workspace
-                .bodies_by_definition
-                .get(&definition)
-                .into_iter()
-                .flatten()
-                .map(|&position| &artifact.functions[position])
-                .min_by_key(|body| body.function)
-                .and_then(|body| body.source_range.clone());
-            let owner = FunctionId::generic(definition);
+        for definition in overridden {
+            if let Some(buckets) = store.global.by_definition.get(&definition) {
+                excluded_global.extend(buckets.values().flatten().copied());
+            }
             for effect in effects {
-                push_override_contract_for_owner(
-                    &mut ids,
-                    &mut contracts,
-                    owner,
-                    source_range.clone(),
-                    contract_doc_summary_from_markdown(markdown, effect.obligation),
-                    &effect.key,
-                );
+                if let Some(&record) = workspace.overrides[&definition].get(&effect.key) {
+                    override_contracts.insert(record, &store.records);
+                }
             }
         }
 
@@ -474,19 +516,11 @@ impl AnnotationIndex {
 
         let site_comments = site_comments.comments;
         let comments_by_target = index_site_comments(&site_comments);
-        let contracts = contracts.contracts;
-        let mut contracts_by_definition = BTreeMap::<_, BTreeMap<_, Vec<_>>>::new();
-        for (position, contract) in contracts.iter().enumerate() {
-            contracts_by_definition
-                .entry(contract.owner.def_path_hash)
-                .or_default()
-                .entry(contract.effect.clone())
-                .or_default()
-                .push(position);
-        }
         Ok(Self {
-            contracts,
-            contracts_by_definition,
+            store: Arc::clone(store),
+            body_contracts,
+            override_contracts,
+            excluded_global,
             site_comments,
             comments_by_target,
         })
@@ -494,12 +528,43 @@ impl AnnotationIndex {
 
     #[must_use]
     pub fn contracts(&self) -> impl ExactSizeIterator<Item = &FunctionContractAnnotation> {
-        self.contracts.iter()
+        let remaining = self.body_contracts.order.len() + self.store.global.order.len()
+            - self.excluded_global.len()
+            + self.override_contracts.order.len();
+        ExactContractIter {
+            inner: self.active_records(
+                &self.body_contracts.order,
+                &self.store.global.order,
+                &self.override_contracts.order,
+            ),
+            remaining,
+        }
+    }
+
+    fn active_records<'a>(
+        &'a self,
+        body: &'a [usize],
+        global: &'a [usize],
+        overrides: &'a [usize],
+    ) -> impl Iterator<Item = &'a FunctionContractAnnotation> {
+        body.iter()
+            .chain(
+                global
+                    .iter()
+                    .filter(|position| !self.excluded_global.contains(position)),
+            )
+            .chain(overrides)
+            .map(|&position| &self.store.records[position])
     }
 
     #[must_use]
     pub fn contract(&self, id: AnnotationId) -> Option<&FunctionContractAnnotation> {
-        self.contracts.iter().find(|contract| contract.id == id)
+        self.active_records(
+            self.body_contracts.annotation(id),
+            self.store.global.annotation(id),
+            self.override_contracts.annotation(id),
+        )
+        .next()
     }
 
     #[must_use]
@@ -512,12 +577,11 @@ impl AnnotationIndex {
         function: FunctionId,
         effect: &EffectKey,
     ) -> impl Iterator<Item = &FunctionContractAnnotation> {
-        self.contracts_by_definition
-            .get(&function.def_path_hash)
-            .and_then(|effects| effects.get(effect))
-            .into_iter()
-            .flatten()
-            .map(|&position| &self.contracts[position])
+        self.active_records(
+            self.body_contracts.function(function, effect),
+            self.store.global.function(function, effect),
+            self.override_contracts.function(function, effect),
+        )
     }
 
     /// Selects the surface contract for a compiler-resolved implementation.
@@ -588,20 +652,43 @@ fn index_site_comments(
     index
 }
 
+/// Filtering shared records must not require materializing a per-root vector.
+struct ExactContractIter<I> {
+    inner: I,
+    remaining: usize,
+}
+
+impl<I: Iterator> Iterator for ExactContractIter<I> {
+    type Item = I::Item;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        let next = self.inner.next();
+        if next.is_some() {
+            self.remaining -= 1;
+        }
+        next
+    }
+
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        (self.remaining, Some(self.remaining))
+    }
+}
+
+impl<I: Iterator> ExactSizeIterator for ExactContractIter<I> {}
+
 fn push_override_contract_for_owner(
     ids: &mut BTreeMap<String, AnnotationId>,
     contracts: &mut ContractAccumulator,
     owner: FunctionId,
-    source_range: Option<SourceRangeFact>,
+    source_range: Option<&SourceRangeFact>,
     summary: ContractDocSummary,
     effect: &EffectKey,
-) {
+) -> Option<usize> {
     if !summary.has_docs {
-        return;
+        return None;
     }
     let identity = format!("override-contract:{effect:?}:{owner:?}");
-    let next_id = AnnotationId(ids.len());
-    let id = *ids.entry(identity).or_insert(next_id);
+    let id = intern_identity(ids, &identity);
     let requirements = summary
         .requirements
         .into_iter()
@@ -612,7 +699,7 @@ fn push_override_contract_for_owner(
             source_range: None,
         })
         .collect::<Vec<_>>();
-    contracts.push(id, owner, effect, source_range.as_ref(), &requirements);
+    Some(contracts.push(id, owner, effect, source_range, &requirements))
 }
 
 fn push_call_contract(
@@ -621,36 +708,40 @@ fn push_call_contract(
     target: &FunctionTargetFact,
     contract: &ContractFact,
     effect: &EffectKey,
-) {
+) -> usize {
     let identity = format!(
         "call-contract:{effect:?}:{:?}:{:?}",
         target.function, contract.source_range
     );
-    let next_id = AnnotationId(ids.len());
-    let id = *ids.entry(identity).or_insert(next_id);
+    let id = intern_identity(ids, &identity);
     contracts.push(
         id,
         target.function,
         effect,
         contract.source_range.as_ref(),
         &contract.requirements,
-    );
+    )
 }
 
 fn push_target_contracts(
     ids: &mut BTreeMap<String, AnnotationId>,
     contracts: &mut ContractAccumulator,
     target: &FunctionTargetFact,
-) {
-    for effect_contract in &target.contracts.effects {
-        push_call_contract(
-            ids,
-            contracts,
-            target,
-            &effect_contract.contract,
-            &effect_contract.effect,
-        );
-    }
+) -> Vec<usize> {
+    target
+        .contracts
+        .effects
+        .iter()
+        .map(|effect_contract| {
+            push_call_contract(
+                ids,
+                contracts,
+                target,
+                &effect_contract.contract,
+                &effect_contract.effect,
+            )
+        })
+        .collect()
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -684,7 +775,7 @@ mod tests {
     };
     use crate::namespace::StableDefPathHash;
 
-    use super::{AnnotationId, AnnotationWorkspaceIndex, ContractAccumulator};
+    use super::{AnnotationId, AnnotationWorkspaceIndex};
 
     #[test]
     fn comment_indexes_preserve_variants_and_isolate_calls_and_effects() {
@@ -786,7 +877,7 @@ mod tests {
     }
 
     #[test]
-    fn visible_annotations_keep_artifact_order_and_root_local_ids_in_both_probing_modes() {
+    fn visible_annotations_keep_artifact_order_and_shared_ids_in_both_probing_modes() {
         use super::AnnotationIndex;
         use crate::artifact::{
             AnnotationFact, AnnotationFactKind, AnnotationProbingFact, AnnotationRole,
@@ -828,7 +919,6 @@ mod tests {
             functions: bodies,
             source_files: Vec::new(),
         };
-        let workspace = AnnotationWorkspaceIndex::new(&artifact);
         let namespaces = artifact.definition_namespace_index();
         for (mode_index, mode) in [
             MarkerProbing::SourceCallsite,
@@ -837,18 +927,21 @@ mod tests {
         .into_iter()
         .enumerate()
         {
+            let workspace = AnnotationWorkspaceIndex::new(
+                &artifact,
+                &namespaces,
+                &ContractDocOverrides::default(),
+                mode,
+                &[],
+            );
+            let all_graph = InvocationGraph::from_artifact_roots(&artifact, &owners).unwrap();
+            let all = AnnotationIndex::from_workspace_index(&artifact, &all_graph, &workspace, &[])
+                .unwrap();
             for roots in [vec![owners[0], owners[1]], vec![owners[2]]] {
                 let graph = InvocationGraph::from_artifact_roots(&artifact, &roots).unwrap();
-                let annotations = AnnotationIndex::from_workspace_index_with_overrides(
-                    &artifact,
-                    &graph,
-                    &workspace,
-                    &namespaces,
-                    &ContractDocOverrides::default(),
-                    mode,
-                    &[],
-                )
-                .unwrap();
+                let annotations =
+                    AnnotationIndex::from_workspace_index(&artifact, &graph, &workspace, &[])
+                        .unwrap();
                 assert_eq!(
                     annotations
                         .contracts()
@@ -856,8 +949,10 @@ mod tests {
                         .collect::<Vec<_>>(),
                     roots
                 );
-                for (id, contract) in annotations.contracts().enumerate() {
-                    assert_eq!(contract.id(), AnnotationId(id));
+                assert!(std::sync::Arc::ptr_eq(&all.store, &annotations.store));
+                for contract in annotations.contracts() {
+                    let shared = all.contract(contract.id()).unwrap();
+                    assert!(std::ptr::eq(shared, contract));
                     let position = owners
                         .iter()
                         .position(|&owner| owner == contract.owner())
@@ -1145,71 +1240,239 @@ mod tests {
             }],
             source_files: Vec::new(),
         };
-        let index = AnnotationWorkspaceIndex::new(&artifact);
-        assert_eq!(index.call_contracts.len(), 2);
-        assert_eq!(index.call_contracts[0].requirements[0].name, "first");
-        assert_eq!(index.call_contracts[1].requirements[0].name, "second");
-        assert_eq!(
-            index.call_contracts[0].identity,
-            index.call_contracts[1].identity
+        let index = AnnotationWorkspaceIndex::new(
+            &artifact,
+            &artifact.definition_namespace_index(),
+            &crate::contracts::ContractDocOverrides::default(),
+            crate::config::MarkerProbing::SourceCallsite,
+            &[],
         );
+        let contracts = index
+            .store
+            .global
+            .order
+            .iter()
+            .map(|&position| &index.store.records[position])
+            .collect::<Vec<_>>();
+        assert_eq!(contracts.len(), 2);
+        assert_eq!(contracts[0].requirements[0].name, "first");
+        assert_eq!(contracts[1].requirements[0].name, "second");
+        assert_eq!(contracts[0].id, contracts[1].id);
     }
 
     #[test]
-    fn contract_accumulator_preserves_variants_and_updates_after_removal() {
-        let first_owner = function(0);
-        let second_owner = function(1);
-        let effect = EffectKey::new("panic");
-        let mut contracts = ContractAccumulator::default();
-        contracts.push(
-            AnnotationId(0),
-            first_owner,
-            &effect,
-            None,
-            &[requirement("first")],
-        );
-        contracts.push(
-            AnnotationId(0),
-            first_owner,
-            &effect,
-            None,
-            &[requirement("first")],
-        );
-        contracts.push(
-            AnnotationId(0),
-            first_owner,
-            &effect,
-            None,
-            &[requirement("second")],
-        );
-        contracts.push(
-            AnnotationId(1),
-            second_owner,
-            &effect,
-            None,
-            &[requirement("third")],
-        );
-        assert_eq!(contracts.contracts.len(), 3);
-        assert_eq!(contracts.contracts[0].requirements[0].name, "first");
-        assert_eq!(contracts.contracts[1].requirements[0].name, "second");
+    fn root_views_share_global_variants_and_keep_body_precedence_and_comments_local() {
+        use super::AnnotationIndex;
+        use crate::artifact::{
+            AnnotationFact, AnnotationFactKind, AnnotationProbingFact, AnnotationRole,
+            AnnotationTargetFact, MarkerId,
+        };
+        use crate::compiler::invocations::InvocationGraph;
+        use crate::config::MarkerProbing;
+        use crate::contracts::ContractDocOverrides;
 
-        contracts.remove_definition(first_owner.def_path_hash);
-        contracts.push(
-            AnnotationId(1),
-            second_owner,
-            &effect,
-            None,
-            &[requirement("third")],
+        let first = function(0);
+        let second = function(1);
+        let callee = function(2);
+        let mut first_body = body(
+            first,
+            vec![
+                call(0, target(callee, "global-first")),
+                call(1, target(callee, "body-first")),
+            ],
         );
-        contracts.push(
-            AnnotationId(1),
-            second_owner,
-            &effect,
-            None,
-            &[requirement("fourth")],
+        first_body.contract_declaration = Some(target(callee, "body-first"));
+        first_body.markers.push(AnnotationFact {
+            id: MarkerId::new(0),
+            identity: "local-comment".to_owned(),
+            kind: AnnotationFactKind::new(EffectKey::new("panic"), AnnotationRole::Justification),
+            source_range: None,
+            target: AnnotationTargetFact::Function(first),
+            applicable_probing: vec![AnnotationProbingFact::SourceCallsite],
+            satisfactions: Vec::new(),
+            requirements: Vec::new(),
+        });
+        let artifact = ArtifactFacts {
+            functions: vec![first_body, body(second, Vec::new())],
+            source_files: Vec::new(),
+        };
+        let workspace = AnnotationWorkspaceIndex::new(
+            &artifact,
+            &artifact.definition_namespace_index(),
+            &ContractDocOverrides::default(),
+            MarkerProbing::SourceCallsite,
+            &[],
         );
-        assert_eq!(contracts.contracts.len(), 2);
-        assert_eq!(contracts.contracts[0].requirements[0].name, "third");
-        assert_eq!(contracts.contracts[1].requirements[0].name, "fourth");
+        let first_graph = InvocationGraph::from_artifact_roots(&artifact, &[first]).unwrap();
+        let second_graph = InvocationGraph::from_artifact_roots(&artifact, &[second]).unwrap();
+        let first_index =
+            AnnotationIndex::from_workspace_index(&artifact, &first_graph, &workspace, &[])
+                .unwrap();
+        let second_index =
+            AnnotationIndex::from_workspace_index(&artifact, &second_graph, &workspace, &[])
+                .unwrap();
+        assert!(std::sync::Arc::ptr_eq(
+            &first_index.store,
+            &second_index.store
+        ));
+        assert_eq!(first_index.site_comments.len(), 1);
+        assert!(second_index.site_comments.is_empty());
+        let effect = EffectKey::new("panic");
+        for (index, expected) in [
+            (&first_index, ["body-first", "global-first"]),
+            (&second_index, ["global-first", "body-first"]),
+        ] {
+            let contracts = index
+                .function_contracts(callee, &effect)
+                .collect::<Vec<_>>();
+            assert_eq!(
+                contracts
+                    .iter()
+                    .map(|c| c.requirements()[0].name.as_str())
+                    .collect::<Vec<_>>(),
+                expected
+            );
+            assert_eq!(contracts[0].id(), contracts[1].id());
+            assert!(std::ptr::eq(
+                index.contract(contracts[0].id()).unwrap(),
+                contracts[0]
+            ));
+            let mut iter = index.contracts();
+            assert_eq!(iter.len(), 2);
+            iter.next();
+            assert_eq!(iter.len(), 1);
+            iter.next();
+            assert_eq!(iter.len(), 0);
+            assert!(iter.next().is_none());
+        }
+        assert!(std::ptr::eq(
+            first_index.contracts().next().unwrap(),
+            second_index.contracts().nth(1).unwrap()
+        ));
+    }
+
+    #[test]
+    fn shared_overrides_mask_all_original_effects_only_in_visible_roots() {
+        use super::AnnotationIndex;
+        use crate::compiler::invocations::InvocationGraph;
+        use crate::config::MarkerProbing;
+        use crate::contracts::ContractDocOverrides;
+        use crate::effects::{EffectSelection, selected_effects};
+
+        let first = function(0);
+        let second = function(1);
+        let callee = function(2);
+        let mut original = target(callee, "original");
+        let mut safety = original.contracts.effects[0].clone();
+        safety.effect = EffectKey::new("safety");
+        original.contracts.effects.push(safety);
+        let mut invocation = call(0, original.clone());
+        invocation.target = CallTargetFact::OpaqueBoundary {
+            description: "external declaration".to_owned(),
+            target: Some(crate::artifact::OpaqueTargetFact::Function(original)),
+        };
+        let artifact = ArtifactFacts {
+            functions: vec![body(first, vec![invocation]), body(second, Vec::new())],
+            source_files: Vec::new(),
+        };
+        let effects = selected_effects(&EffectSelection::all());
+        let graph = InvocationGraph::from_artifact_roots(&artifact, &[first]).unwrap();
+        let other_graph = InvocationGraph::from_artifact_roots(&artifact, &[second]).unwrap();
+        for markdown in ["# Safety\nReplacement obligation", "No contract sections"] {
+            let overrides =
+                ContractDocOverrides::new(vec![("sample::target".to_owned(), markdown.to_owned())])
+                    .unwrap();
+            let workspace = AnnotationWorkspaceIndex::new(
+                &artifact,
+                &artifact.definition_namespace_index(),
+                &overrides,
+                MarkerProbing::SourceCallsite,
+                &effects,
+            );
+            for selected in [&effects[..], &effects[..0]] {
+                let view =
+                    AnnotationIndex::from_workspace_index(&artifact, &graph, &workspace, selected)
+                        .unwrap();
+                assert!(
+                    view.function_contracts(callee, &EffectKey::new("panic"))
+                        .next()
+                        .is_none()
+                );
+                assert_eq!(
+                    view.function_contracts(callee, &EffectKey::new("safety"))
+                        .count(),
+                    usize::from(!selected.is_empty() && markdown.starts_with("# Safety"))
+                );
+                assert_eq!(view.contracts().len(), view.contracts().count());
+                let other = AnnotationIndex::from_workspace_index(
+                    &artifact,
+                    &other_graph,
+                    &workspace,
+                    selected,
+                )
+                .unwrap();
+                assert_eq!(
+                    other
+                        .function_contracts(callee, &EffectKey::new("panic"))
+                        .next()
+                        .unwrap()
+                        .requirements()[0]
+                        .name,
+                    "original"
+                );
+                assert_eq!(
+                    other
+                        .function_contracts(callee, &EffectKey::new("safety"))
+                        .next()
+                        .unwrap()
+                        .requirements()[0]
+                        .name,
+                    "original"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn invalid_contract_is_reported_only_when_its_body_is_visible() {
+        use super::AnnotationIndex;
+        use crate::artifact::{
+            AnnotationFact, AnnotationFactKind, AnnotationProbingFact, AnnotationRole,
+            AnnotationTargetFact, MarkerId,
+        };
+        use crate::compiler::invocations::InvocationGraph;
+        use crate::config::MarkerProbing;
+        use crate::contracts::ContractDocOverrides;
+        let invalid = function(0);
+        let valid = function(1);
+        let mut invalid_body = body(invalid, Vec::new());
+        invalid_body.markers.push(AnnotationFact {
+            id: MarkerId::new(0),
+            identity: "invalid".to_owned(),
+            kind: AnnotationFactKind::new(EffectKey::new("panic"), AnnotationRole::Contract),
+            source_range: None,
+            target: AnnotationTargetFact::Call(CallId::new(0)),
+            applicable_probing: vec![AnnotationProbingFact::SourceCallsite],
+            satisfactions: Vec::new(),
+            requirements: Vec::new(),
+        });
+        let artifact = ArtifactFacts {
+            functions: vec![invalid_body, body(valid, Vec::new())],
+            source_files: Vec::new(),
+        };
+        let workspace = AnnotationWorkspaceIndex::new(
+            &artifact,
+            &artifact.definition_namespace_index(),
+            &ContractDocOverrides::default(),
+            MarkerProbing::SourceCallsite,
+            &[],
+        );
+        for (root, succeeds) in [(valid, true), (invalid, false)] {
+            let graph = InvocationGraph::from_artifact_roots(&artifact, &[root]).unwrap();
+            assert_eq!(
+                AnnotationIndex::from_workspace_index(&artifact, &graph, &workspace, &[]).is_ok(),
+                succeeds
+            );
+        }
     }
 }

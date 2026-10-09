@@ -176,7 +176,17 @@ pub fn trace_selected_workspace(
     };
     let marker_probing = annotation_probing_fact(config.analysis.marker_probing);
     let function_lookup = Arc::new(FunctionLookup::new(artifact));
-    let annotation_index = AnnotationWorkspaceIndex::new(artifact);
+    let all_metadata = effects
+        .iter()
+        .map(|effect| effect.metadata().clone())
+        .collect::<Vec<_>>();
+    let annotation_index = AnnotationWorkspaceIndex::new(
+        artifact,
+        &namespaces,
+        &config.contracts.overrides,
+        config.analysis.marker_probing,
+        &all_metadata,
+    );
 
     roots
         .iter()
@@ -209,13 +219,10 @@ pub fn trace_selected_workspace(
                     root.path
                 )));
             }
-            let annotations = AnnotationIndex::from_workspace_index_with_overrides(
+            let annotations = AnnotationIndex::from_workspace_index(
                 artifact,
                 &graph,
                 &annotation_index,
-                &namespaces,
-                &config.contracts.overrides,
-                config.analysis.marker_probing,
                 &selected_metadata,
             )
             .map_err(|error| EffectReportError::new(error.to_string()))?;
