@@ -1,6 +1,7 @@
 //! Canonical findings and the single lint-policy resolution boundary.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, hash_map::RandomState};
+use std::hash::{BuildHasher, Hash, Hasher};
 use std::path::Path;
 
 use rustc_middle::ty::TyCtxt;
@@ -133,7 +134,7 @@ impl Finding {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize)]
 #[serde(rename_all = "kebab-case")]
 pub struct FindingOwner {
     pub scope: OwnerScope,
@@ -142,7 +143,7 @@ pub struct FindingOwner {
     pub crate_name: Option<String>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum OwnerScope {
     Workspace,
@@ -151,7 +152,7 @@ pub enum OwnerScope {
     Unknown,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize)]
 #[serde(rename_all = "kebab-case", tag = "status")]
 pub enum SourceEvidence {
     Present,
@@ -169,7 +170,7 @@ impl From<MarkerEvidenceState> for SourceEvidence {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct FindingSourceOrder {
     filename: String,
     source_file: String,
@@ -191,7 +192,7 @@ impl FindingSourceOrder {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct FindingTraceStepOrder {
     source: Option<FindingSourceOrder>,
     call: u32,
@@ -383,11 +384,31 @@ fn assign_finding_suffixes(hashes: &mut BTreeMap<String, String>) {
 /// merging them could hide distinct analysis gaps.
 #[must_use]
 pub fn aggregate_human_findings(findings: &[ResolvedFinding]) -> Vec<ResolvedFinding> {
+    let hashes = RandomState::new();
+    aggregate_human_findings_with(
+        findings,
+        |finding| hashes.hash_one(HumanSourceFingerprint(finding)),
+        same_human_source,
+    )
+}
+
+fn aggregate_human_findings_with(
+    findings: &[ResolvedFinding],
+    mut fingerprint: impl FnMut(&ResolvedFinding) -> u64,
+    mut matches: impl FnMut(&ResolvedFinding, &ResolvedFinding) -> bool,
+) -> Vec<ResolvedFinding> {
     let mut groups = Vec::<(ResolvedFinding, BTreeSet<String>, BTreeSet<String>)>::new();
+    let mut buckets: HashMap<u64, Vec<usize>> = HashMap::new();
     for finding in findings {
-        let matching = groups
-            .iter_mut()
-            .find(|(representative, _, _)| same_human_source(representative, finding));
+        let candidates = (is_source_finding(&finding.finding.kind)
+            && finding.finding.source_order.is_some())
+        .then(|| buckets.entry(fingerprint(finding)).or_default());
+        let matching = candidates.as_ref().and_then(|indices| {
+            indices
+                .iter()
+                .copied()
+                .find(|&index| matches(&groups[index].0, finding))
+        });
         let roots = finding.finding.root.iter().cloned().collect();
         let roots_without_trace = finding
             .finding
@@ -396,7 +417,8 @@ pub fn aggregate_human_findings(findings: &[ResolvedFinding]) -> Vec<ResolvedFin
             .filter(|_| finding.finding.trace.is_empty())
             .cloned()
             .collect();
-        if let Some((representative, group_roots, group_roots_without_trace)) = matching {
+        if let Some(index) = matching {
+            let (representative, group_roots, group_roots_without_trace) = &mut groups[index];
             group_roots.extend(roots);
             group_roots_without_trace.extend(roots_without_trace);
             let mut messages = representative.finding.diagnostic.messages.clone();
@@ -411,6 +433,9 @@ pub fn aggregate_human_findings(findings: &[ResolvedFinding]) -> Vec<ResolvedFin
             }
             representative.finding.diagnostic.messages = messages;
         } else {
+            if let Some(candidates) = candidates {
+                candidates.push(groups.len());
+            }
             groups.push((finding.clone(), roots, roots_without_trace));
         }
     }
@@ -519,6 +544,29 @@ pub fn take_full_stack_trace_hint(findings: &mut [ResolvedFinding]) -> bool {
         });
     }
     removed
+}
+
+/// Fields compared by `same_human_source`, all invariant when a group's
+/// representative is replaced. Collisions still undergo the full comparison.
+struct HumanSourceFingerprint<'a>(&'a ResolvedFinding);
+
+impl Hash for HumanSourceFingerprint<'_> {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.0.level.hash(state);
+        let finding = &self.0.finding;
+        finding.kind.hash(state);
+        finding.source_order.hash(state);
+        finding.root.hash(state);
+        finding.function.hash(state);
+        finding.target.hash(state);
+        finding.span.hash(state);
+        finding.owner.hash(state);
+        finding.source_evidence.hash(state);
+        finding.reason.hash(state);
+        finding.trace_order.hash(state);
+        finding.missing_requirements.hash(state);
+        finding.requirements.hash(state);
+    }
 }
 
 fn same_human_source(left: &ResolvedFinding, right: &ResolvedFinding) -> bool {
@@ -738,7 +786,7 @@ pub enum DiagnosticMessage {
     SpanAlternativeHelp(Span, String),
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize)]
 #[serde(
     rename_all = "kebab-case",
     rename_all_fields = "kebab-case",
@@ -959,6 +1007,100 @@ mod tests {
             effect: effect.to_owned(),
             finding,
             operation: None,
+        }
+    }
+
+    fn indexed_human_finding(index: u64) -> ResolvedFinding {
+        let range = SourceRangeFact {
+            file: SourceFileId::new("source"),
+            byte_start: index,
+            byte_end: index + 1,
+        };
+        ResolvedFinding {
+            level: LintLevel::Warn,
+            finding: finding(effect("panic", EffectFindingClass::ConcreteInvocation))
+                .with_source_order(None, Some(&range)),
+        }
+    }
+
+    #[test]
+    fn indexed_human_groups_preserve_collisions_replacement_and_messages() {
+        let mut long = indexed_human_finding(0);
+        long.finding.trace = vec!["first".into(), "second".into()];
+        long.finding.diagnostic.messages = vec![DiagnosticMessage::Note("long".into())];
+        let mut short = long.clone();
+        short.finding.trace.clear();
+        short.finding.diagnostic.message = "short representative".into();
+        short.finding.diagnostic.messages = vec![DiagnosticMessage::Note("short".into())];
+        let distinct = indexed_human_finding(1);
+        let input = [long.clone(), distinct.clone(), short, long];
+        let normal = aggregate_human_findings(&input);
+        let collided =
+            super::aggregate_human_findings_with(&input, |_| 0, super::same_human_source);
+        assert_eq!(normal, collided);
+        assert_eq!(normal.len(), 2);
+        assert_eq!(normal[0].finding.diagnostic.message, "short representative");
+        assert!(normal[0].finding.trace.is_empty());
+        assert_eq!(
+            normal[0].finding.diagnostic.messages,
+            vec![
+                DiagnosticMessage::Note("long".into()),
+                DiagnosticMessage::Note("short".into()),
+            ]
+        );
+        assert_eq!(normal[1], distinct);
+    }
+
+    #[test]
+    fn indexed_human_groups_keep_excluded_findings_out_of_candidate_buckets() {
+        let mut no_source = indexed_human_finding(0);
+        no_source.finding.source_order = None;
+        let mut incomplete = indexed_human_finding(0);
+        incomplete.finding.kind = effect("panic", EffectFindingClass::AnalysisIncomplete);
+        let mut root = indexed_human_finding(0);
+        root.finding.kind = FindingKind::EmptyReportRoots;
+        let input = [
+            no_source.clone(),
+            no_source,
+            incomplete.clone(),
+            incomplete,
+            root.clone(),
+            root,
+        ];
+        let output = super::aggregate_human_findings_with(
+            &input,
+            |_| panic!("excluded finding was indexed"),
+            |_, _| panic!("excluded finding was compared"),
+        );
+        assert_eq!(output, input);
+    }
+
+    #[test]
+    fn indexed_human_group_comparisons_scale_with_duplicates_not_all_findings() {
+        use std::collections::hash_map::RandomState;
+        use std::hash::BuildHasher;
+        for count in [1000, 2000, 4000] {
+            let input = (0..count)
+                .flat_map(|index| {
+                    let finding = indexed_human_finding(index as u64);
+                    [finding.clone(), finding]
+                })
+                .collect::<Vec<_>>();
+            let hashes = RandomState::new();
+            let mut comparisons = 0;
+            let output = super::aggregate_human_findings_with(
+                &input,
+                |finding| hashes.hash_one(super::HumanSourceFingerprint(finding)),
+                |left, right| {
+                    comparisons += 1;
+                    super::same_human_source(left, right)
+                },
+            );
+            assert_eq!(output.len(), count);
+            assert!(
+                comparisons <= count * 2,
+                "{comparisons} comparisons for {count} distinct findings"
+            );
         }
     }
 

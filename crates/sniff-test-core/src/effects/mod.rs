@@ -227,7 +227,7 @@ pub fn effect<E: EffectSpec>(config: &EffectConfig) -> Box<dyn Effect + '_> {
     Box::new(EffectAdapter::<E>::new(config))
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct EffectMetadata {
     pub key: EffectKey,
     pub obligation: &'static str,

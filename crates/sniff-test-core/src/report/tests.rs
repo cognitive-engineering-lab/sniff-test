@@ -769,6 +769,117 @@ fn source_finding_identity_distinguishes_calls_but_merges_instance_aliases() {
     );
 }
 
+#[test]
+fn source_deduplication_preserves_non_transitive_first_seen_matching() {
+    let caller = stable_function(91);
+    let a = source_finding_with_trace_call(caller, 1);
+    let b = source_finding_with_trace_call(exact_function(caller, 92), 3);
+    let c = source_finding_with_trace_call(caller, 2);
+    assert!(same_source_finding(&a, &b));
+    assert!(same_source_finding(&b, &c));
+    assert!(!same_source_finding(&a, &c));
+    assert_eq!(
+        super::deduplicate_source_findings(vec![a.clone(), b.clone(), c.clone()]),
+        vec![a.clone(), c.clone()]
+    );
+    assert_eq!(
+        super::deduplicate_source_findings(vec![b.clone(), a, c]),
+        vec![b]
+    );
+}
+
+#[test]
+fn source_deduplication_retains_distinct_states_even_with_hash_collisions() {
+    let base = source_finding_with_trace_call(stable_function(91), 1);
+    let mut variants = vec![base.clone()];
+    let mutations: &[fn(&mut InterpretedFinding)] = &[
+        |f| f.effect = EffectMetadata::of::<Safety>(),
+        |f| f.kind = InterpretedFindingKind::DocumentedObligation,
+        |f| f.marker_evidence = Some(MarkerEvidenceState::VerifiedAbsent),
+        |f| f.function_path.push_str("::other"),
+        |f| f.trace.steps[0].source_range.as_mut().unwrap().byte_end += 1,
+        |f| f.trace.steps[0].target_path = None,
+        |f| f.trace.steps[0].call = CallId::new(2),
+        |f| f.trace.steps.clear(),
+        |f| {
+            f.requirements
+                .push(crate::artifact::ContractRequirementFact {
+                    name: "valid".into(),
+                    condition: "input is valid".into(),
+                    structural_path: vec![0],
+                    source_range: None,
+                });
+        },
+        |f| {
+            f.missing_requirements
+                .push(crate::artifact::ContractRequirementFact {
+                    name: "valid".into(),
+                    condition: "input is valid".into(),
+                    structural_path: vec![0],
+                    source_range: None,
+                });
+        },
+    ];
+    for mutate in mutations {
+        let mut finding = base.clone();
+        mutate(&mut finding);
+        variants.push(finding);
+    }
+    let input = variants
+        .iter()
+        .flat_map(|f| [f.clone(), f.clone()])
+        .collect::<Vec<_>>();
+    assert_eq!(super::deduplicate_source_findings(input.clone()), variants);
+    assert_eq!(
+        super::deduplicate_source_findings_with(input, |_| 0, same_source_finding),
+        variants
+    );
+}
+
+#[test]
+fn source_deduplication_ignores_non_identity_fields() {
+    let first = source_finding_with_trace_call(stable_function(91), 1);
+    let mut alias = first.clone();
+    alias.function = stable_function(100);
+    alias.contract_source_range = first.trace.steps[0].source_range.clone();
+    alias.trace.steps[0].marker_call = Some(CallId::new(55));
+    alias.trace.steps[0].target = None;
+    assert_eq!(
+        super::deduplicate_source_findings(vec![first.clone(), alias]),
+        vec![first]
+    );
+}
+
+#[test]
+fn source_deduplication_comparisons_scale_with_duplicates_not_all_findings() {
+    use std::collections::hash_map::RandomState;
+    use std::hash::BuildHasher;
+    for count in [1000, 2000, 4000] {
+        let input = (0..count)
+            .flat_map(|index| {
+                let mut finding = source_finding_with_trace_call(stable_function(91), 1);
+                finding.function_path = format!("sample::source_{index}");
+                [finding.clone(), finding]
+            })
+            .collect();
+        let hashes = RandomState::new();
+        let mut comparisons = 0;
+        let output = super::deduplicate_source_findings_with(
+            input,
+            |finding| hashes.hash_one(super::SourceFindingFingerprint(finding)),
+            |left, right| {
+                comparisons += 1;
+                same_source_finding(left, right)
+            },
+        );
+        assert_eq!(output.len(), count);
+        assert!(
+            comparisons <= count * 2,
+            "{comparisons} comparisons for {count} distinct findings"
+        );
+    }
+}
+
 fn attributes(path: &str) -> FunctionAttributesFact {
     FunctionAttributesFact {
         is_unsafe: false,

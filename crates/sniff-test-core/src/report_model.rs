@@ -103,20 +103,20 @@ pub struct InterpretedTraceStep {
     pub target_path: Option<String>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum InterpretedTraceStepKind {
     Reachability(CallKindFact),
     EffectOperation,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum UnresolvedCallCoverage {
     None,
     Partial,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum UnresolvedCallMechanism {
     FunctionPointer,
@@ -125,14 +125,14 @@ pub enum UnresolvedCallMechanism {
     Opaque,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize)]
 #[serde(rename_all = "kebab-case")]
 pub struct UnresolvedCallSite {
     pub coverage: UnresolvedCallCoverage,
     pub mechanism: UnresolvedCallMechanism,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum EffectFindingClass {
     ConcreteOperation,
@@ -145,7 +145,7 @@ pub enum EffectFindingClass {
     AnalysisIncomplete,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum InterpretedFindingKind {
     Operation { operation: EffectKind },
     Invocation { operation: EffectKind },

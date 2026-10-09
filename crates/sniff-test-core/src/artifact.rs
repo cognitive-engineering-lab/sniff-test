@@ -521,7 +521,7 @@ pub struct SourceFileFact {
     pub byte_len: u64,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub struct SourceRangeFact {
     pub file: SourceFileId,
@@ -745,7 +745,7 @@ pub struct ContractFact {
     pub requirements: Vec<ContractRequirementFact>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub struct ContractRequirementFact {
     pub name: String,
@@ -864,7 +864,7 @@ pub enum AnnotationProbingFact {
 }
 
 /// Normalized three-state source evidence exposed to policy consumers.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum MarkerEvidenceState {
     Present,
     VerifiedAbsent,

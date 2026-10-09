@@ -6,8 +6,9 @@
 //! with audited roots; effect propagation itself is exclusively performed by
 //! the shared engine.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, hash_map::RandomState};
 use std::fmt;
+use std::hash::{BuildHasher, Hash, Hasher};
 use std::sync::Arc;
 
 use crate::trace::{
@@ -377,15 +378,7 @@ pub fn trace_selected_workspace(
             // identities. They are deliberately traced independently, but they
             // still describe one source-level finding when their projected path
             // and state are identical.
-            let mut unique = Vec::with_capacity(findings.len());
-            for finding in findings {
-                if !unique
-                    .iter()
-                    .any(|existing| same_source_finding(existing, &finding))
-                {
-                    unique.push(finding);
-                }
-            }
+            let unique = deduplicate_source_findings(findings);
             let completeness_by_effect = effects
                 .iter()
                 .map(|effect| {
@@ -558,6 +551,66 @@ fn project_reverse_path(
         }
     }
     trace
+}
+
+fn deduplicate_source_findings(findings: Vec<InterpretedFinding>) -> Vec<InterpretedFinding> {
+    let hashes = RandomState::new();
+    deduplicate_source_findings_with(
+        findings,
+        |finding| hashes.hash_one(SourceFindingFingerprint(finding)),
+        same_source_finding,
+    )
+}
+
+fn deduplicate_source_findings_with(
+    findings: Vec<InterpretedFinding>,
+    mut fingerprint: impl FnMut(&InterpretedFinding) -> u64,
+    mut matches: impl FnMut(&InterpretedFinding, &InterpretedFinding) -> bool,
+) -> Vec<InterpretedFinding> {
+    let mut unique = Vec::with_capacity(findings.len());
+    let mut buckets: HashMap<u64, Vec<usize>> = HashMap::new();
+    for finding in findings {
+        let candidates = buckets.entry(fingerprint(&finding)).or_default();
+        if !candidates
+            .iter()
+            .any(|&index| matches(&unique[index], &finding))
+        {
+            candidates.push(unique.len());
+            unique.push(finding);
+        }
+    }
+    unique
+}
+
+/// Hash only unconditional equality fields from `same_source_finding`.
+/// Instance/call matching is non-transitive, so fingerprints only select
+/// candidates; the predicate and retained insertion order remain authoritative.
+struct SourceFindingFingerprint<'a>(&'a InterpretedFinding);
+
+impl Hash for SourceFindingFingerprint<'_> {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        let finding = self.0;
+        finding.effect.hash(state);
+        finding.kind.hash(state);
+        finding.function_path.hash(state);
+        finding
+            .callee
+            .as_ref()
+            .map(|callee| &callee.path)
+            .hash(state);
+        finding.source_range.hash(state);
+        finding.marker_evidence.hash(state);
+        finding.missing_requirements.hash(state);
+        finding.requirements.hash(state);
+        finding.trace.steps.len().hash(state);
+        for step in &finding.trace.steps {
+            step.caller.def_path_hash.hash(state);
+            step.caller_path.hash(state);
+            step.kind.hash(state);
+            step.source_range.hash(state);
+            step.target_path.hash(state);
+        }
+    }
 }
 
 fn same_source_finding(left: &InterpretedFinding, right: &InterpretedFinding) -> bool {
