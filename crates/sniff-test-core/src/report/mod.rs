@@ -269,6 +269,15 @@ pub fn trace_selected_workspace(
                     )
                 })
                 .collect::<BTreeMap<_, ConcreteTrace>>();
+            let active_nodes = effect_traces
+                .iter()
+                .map(|(effect, trace)| {
+                    (
+                        effect.clone(),
+                        ActiveRootNodeIndex::new(trace, graph.function_count()),
+                    )
+                })
+                .collect::<BTreeMap<_, _>>();
             let ambiguity_effects = effects
                 .iter()
                 .filter(|effect| !effect.config().finding_lints().ambiguous_marker.is_allow())
@@ -288,22 +297,27 @@ pub fn trace_selected_workspace(
             };
             let mut findings = Vec::new();
             for root_function in root_functions.iter().copied() {
+                let mut obligation_findings = Vec::new();
                 for (effect, concrete) in &concrete_effects {
                     if let Some(trace) = effect_traces.get(effect) {
                         let metadata = selected_metadata
                             .iter()
                             .find(|metadata| &metadata.key == effect)
                             .expect("every probed effect has selected metadata");
-                        findings.extend(concrete_findings(
+                        let projected = active_node_findings(
                             artifact,
                             &graph,
                             &annotations,
                             metadata,
-                            concrete,
+                            &tracked_effects[effect],
                             trace,
                             root_function,
+                            active_nodes[effect].nodes(root_function),
+                            &root,
                             marker_probing,
-                        ));
+                        );
+                        findings.extend(projected.concrete);
+                        obligation_findings.extend(projected.obligations);
                         findings.extend(justified_undocumented_invocation_findings(
                             artifact,
                             &graph,
@@ -357,24 +371,7 @@ pub fn trace_selected_workspace(
                         root_function,
                     ));
                 }
-                for (effect, tracked) in &tracked_effects {
-                    if let Some(trace) = effect_traces.get(effect) {
-                        findings.extend(obligation_findings(
-                            artifact,
-                            &graph,
-                            &annotations,
-                            tracked,
-                            selected_metadata
-                                .iter()
-                                .find(|metadata| &metadata.key == effect)
-                                .expect("every tracked effect has selected metadata"),
-                            trace,
-                            root_function,
-                            &root,
-                            marker_probing,
-                        ));
-                    }
-                }
+                findings.extend(obligation_findings);
             }
             // A source definition can have both generic and monomorphized graph
             // identities. They are deliberately traced independently, but they
@@ -702,119 +699,168 @@ fn obligation_marker_evidence(
     )
 }
 
+struct ActiveNodeFindings {
+    concrete: Vec<InterpretedFinding>,
+    obligations: Vec<InterpretedFinding>,
+}
+
+/// Visit each active node once. Keep obligation findings separate so callers can
+/// retain their position after coverage and marker findings in the report.
+#[allow(clippy::too_many_arguments, reason = "report inputs remain explicit")]
+fn active_node_findings(
+    artifact: &ArtifactFacts,
+    graph: &InvocationGraph,
+    annotations: &AnnotationIndex,
+    metadata: &EffectMetadata,
+    tracked: &TrackedEffect<'_, '_, crate::effects::concrete::ConcreteEffect<'_>>,
+    trace: &ConcreteTrace,
+    root_function: crate::trace::FunctionId,
+    active_nodes: &[TraceNodeId],
+    root: &InterpretationRoot,
+    marker_probing: AnnotationProbingFact,
+) -> ActiveNodeFindings {
+    let mut findings = ActiveNodeFindings {
+        concrete: Vec::new(),
+        obligations: Vec::new(),
+    };
+    for &node in active_nodes {
+        let Some(trace_node) = trace.node(node) else {
+            continue;
+        };
+        match trace_node.state() {
+            TrackedState::Concrete(_) => findings.concrete.extend(concrete_node_finding(
+                artifact,
+                graph,
+                annotations,
+                metadata,
+                tracked.concrete(),
+                trace,
+                node,
+                marker_probing,
+            )),
+            TrackedState::Obligation(_) => findings.obligations.extend(
+                obligation_node_findings(
+                    artifact,
+                    graph,
+                    annotations,
+                    tracked,
+                    metadata,
+                    trace,
+                    root_function,
+                    node,
+                    root,
+                    marker_probing,
+                )
+                .into_iter()
+                .flatten(),
+            ),
+        }
+    }
+    findings
+}
+
 /// Projects every registered effect from the common fact vocabulary emitted
 /// by its compiler passes; presentation compatibility is applied later.
 #[allow(clippy::too_many_arguments, reason = "report inputs remain explicit")]
-fn concrete_findings(
+fn concrete_node_finding(
     artifact: &ArtifactFacts,
     graph: &InvocationGraph,
     annotations: &AnnotationIndex,
     metadata: &EffectMetadata,
     concrete: &crate::effects::concrete::ConcreteEffect<'_>,
     trace: &ConcreteTrace,
-    root_function: crate::trace::FunctionId,
+    node: TraceNodeId,
     marker_probing: AnnotationProbingFact,
-) -> Vec<InterpretedFinding> {
+) -> Option<InterpretedFinding> {
     let effect_key = &metadata.key;
-    active_root_nodes(trace, root_function)
-        .filter_map(|node| {
-            let mut trace_path = trace_path(artifact, graph, trace, TraceNodeId(node));
-            let trace_node = trace.node(TraceNodeId(node))?;
-            let TrackedState::Concrete(_) = trace_node.state() else {
+    let trace_node = trace.node(node)?;
+    let TrackedState::Concrete(_) = trace_node.state() else {
+        return None;
+    };
+    let TrackedOrigin::Concrete(origin) = *trace_node.origin() else {
+        return None;
+    };
+    let mut trace_path = trace_path(artifact, graph, trace, node);
+    match origin {
+        ConcreteSource::Effect { owner, effect } => {
+            let (body, fact) = effect_fact(artifact, owner, effect)?;
+            if &fact.effect != effect_key {
                 return None;
-            };
-            let TrackedOrigin::Concrete(origin) = *trace_node.origin() else {
-                return None;
-            };
-            match origin {
-                ConcreteSource::Effect { owner, effect } => {
-                    let (body, fact) = effect_fact(artifact, owner, effect)?;
-                    if &fact.effect != effect_key {
-                        return None;
-                    }
-                    append_effect_provenance(body, fact, &mut trace_path);
-                    append_effect_operation(body, fact, &mut trace_path);
-                    Some(InterpretedFinding {
-                        effect: metadata.clone(),
-                        kind: InterpretedFindingKind::Operation {
-                            operation: fact.kind.clone(),
-                        },
-                        function: owner,
-                        function_path: body.display_path.clone(),
-                        callee: None,
-                        source_range: fact.source_range.clone(),
-                        contract_source_range: None,
-                        marker_evidence: Some(effect_marker_evidence(
-                            artifact,
-                            owner,
-                            effect,
-                            AnnotationFactKind::new(
-                                effect_key.clone(),
-                                AnnotationRole::Justification,
-                            ),
-                            marker_probing,
-                        )),
-                        trace: trace_path,
-                        missing_requirements: Vec::new(),
-                        requirements: Vec::new(),
-                    })
-                }
-                ConcreteSource::Invocation { invocation, call } => {
-                    let source = concrete.invocation_source(invocation, call)?;
-                    if invocation_source_has_contract(graph, annotations, source, effect_key) {
-                        return None;
-                    }
-                    let edge = source.edge();
-                    let invocation_effect = edge
-                        .invocation_effects
-                        .iter()
-                        .find(|fact| &fact.effect == effect_key)?;
-                    let operation = invocation_effect.kind.clone();
-                    let missing_required_documentation = invocation_effect
-                        .requires_documented_obligation
-                        && source.target().is_some();
-                    let owner = graph.stable_function(graph.invocation(invocation).caller());
-                    let body = artifact.function_body(owner)?;
-                    append_call_trace(artifact, owner, edge, &mut trace_path);
-                    if missing_required_documentation {
-                        return undocumented_invocation_finding(
-                            artifact, graph, metadata, source, invocation, trace_path,
-                        );
-                    }
-                    Some(InterpretedFinding {
-                        effect: metadata.clone(),
-                        kind: InterpretedFindingKind::Invocation { operation },
-                        function: owner,
-                        function_path: body.display_path.clone(),
-                        callee: source.target().map(interpreted_callee).or_else(|| {
-                            (edge.indirect_kind
-                                == Some(crate::artifact::IndirectCallKindFact::FunctionPointer))
-                            .then(|| InterpretedCallee {
-                                function: None,
-                                path: String::from("opaque function pointer"),
-                            })
-                        }),
-                        source_range: edge.source_range.clone(),
-                        contract_source_range: None,
-                        marker_evidence: Some(raw_call_marker_evidence(
-                            artifact,
-                            graph,
-                            invocation,
-                            call,
-                            AnnotationFactKind::new(
-                                effect_key.clone(),
-                                AnnotationRole::Justification,
-                            ),
-                            marker_probing,
-                        )),
-                        trace: trace_path,
-                        missing_requirements: Vec::new(),
-                        requirements: Vec::new(),
-                    })
-                }
             }
-        })
-        .collect()
+            append_effect_provenance(body, fact, &mut trace_path);
+            append_effect_operation(body, fact, &mut trace_path);
+            Some(InterpretedFinding {
+                effect: metadata.clone(),
+                kind: InterpretedFindingKind::Operation {
+                    operation: fact.kind.clone(),
+                },
+                function: owner,
+                function_path: body.display_path.clone(),
+                callee: None,
+                source_range: fact.source_range.clone(),
+                contract_source_range: None,
+                marker_evidence: Some(effect_marker_evidence(
+                    artifact,
+                    owner,
+                    effect,
+                    AnnotationFactKind::new(effect_key.clone(), AnnotationRole::Justification),
+                    marker_probing,
+                )),
+                trace: trace_path,
+                missing_requirements: Vec::new(),
+                requirements: Vec::new(),
+            })
+        }
+        ConcreteSource::Invocation { invocation, call } => {
+            let source = concrete.invocation_source(invocation, call)?;
+            if invocation_source_has_contract(graph, annotations, source, effect_key) {
+                return None;
+            }
+            let edge = source.edge();
+            let invocation_effect = edge
+                .invocation_effects
+                .iter()
+                .find(|fact| &fact.effect == effect_key)?;
+            let operation = invocation_effect.kind.clone();
+            let missing_required_documentation =
+                invocation_effect.requires_documented_obligation && source.target().is_some();
+            let owner = graph.stable_function(graph.invocation(invocation).caller());
+            let body = artifact.function_body(owner)?;
+            append_call_trace(artifact, owner, edge, &mut trace_path);
+            if missing_required_documentation {
+                return undocumented_invocation_finding(
+                    artifact, graph, metadata, source, invocation, trace_path,
+                );
+            }
+            Some(InterpretedFinding {
+                effect: metadata.clone(),
+                kind: InterpretedFindingKind::Invocation { operation },
+                function: owner,
+                function_path: body.display_path.clone(),
+                callee: source.target().map(interpreted_callee).or_else(|| {
+                    (edge.indirect_kind
+                        == Some(crate::artifact::IndirectCallKindFact::FunctionPointer))
+                    .then(|| InterpretedCallee {
+                        function: None,
+                        path: String::from("opaque function pointer"),
+                    })
+                }),
+                source_range: edge.source_range.clone(),
+                contract_source_range: None,
+                marker_evidence: Some(raw_call_marker_evidence(
+                    artifact,
+                    graph,
+                    invocation,
+                    call,
+                    AnnotationFactKind::new(effect_key.clone(), AnnotationRole::Justification),
+                    marker_probing,
+                )),
+                trace: trace_path,
+                missing_requirements: Vec::new(),
+                requirements: Vec::new(),
+            })
+        }
+    }
 }
 
 fn justified_undocumented_invocation_findings(
@@ -1089,7 +1135,7 @@ fn unresolved_call_site(
     clippy::too_many_lines,
     reason = "obligation findings project one stateful domain from the unified effect trace"
 )]
-fn obligation_findings<C, O: Clone, S, T>(
+fn obligation_node_findings<C, O: Clone, S, T>(
     artifact: &ArtifactFacts,
     graph: &InvocationGraph,
     annotations: &AnnotationIndex,
@@ -1097,113 +1143,106 @@ fn obligation_findings<C, O: Clone, S, T>(
     metadata: &EffectMetadata,
     trace: &EffectTrace<TrackedOrigin<O>, TrackedState<S>, TrackedTermination<T>>,
     root_function: crate::trace::FunctionId,
+    node: TraceNodeId,
     root: &InterpretationRoot,
     marker_probing: AnnotationProbingFact,
-) -> Vec<InterpretedFinding> {
-    active_root_nodes(trace, root_function)
-        .filter_map(|node| {
-            let trace_node = trace.node(TraceNodeId(node))?;
-            let state = trace_node.state().obligation()?;
-            let contract = tracked.obligations().contract(state.contract())?;
-            let annotation = annotations.contract(contract.id().annotation())?;
-            if contract.applies_to(root_function) {
-                return None;
-            }
-            let path = trace_path(artifact, graph, trace, TraceNodeId(node));
-            let missing_requirements = trace_node
-                .state()
-                .obligation()?
-                .remaining()
-                .filter_map(|index| annotation.requirements().get(index).cloned())
-                .collect::<Vec<_>>();
-            let requirements = annotation.requirements().to_vec();
-            let target_function = path
-                .steps
-                .last()
-                .and_then(|step| step.target)
-                .unwrap_or(annotation.owner());
-            let target_path = path
-                .steps
-                .last()
-                .and_then(|step| step.target_path.clone())
-                .or_else(|| {
-                    function_presentation(artifact, annotation.owner())
-                        .map(|presentation| presentation.path.to_owned())
-                })
-                .unwrap_or_else(|| format!("{:?}", annotation.owner()));
-            let marker_evidence = obligation_marker_evidence(
-                artifact,
-                graph,
-                state.source_invocation(),
-                state.source_calls(),
-                AnnotationFactKind::new(state.effect().clone(), AnnotationRole::Justification),
-                marker_probing,
-            );
-            let (function, function_path, source_range) =
-                path.steps
-                    .last()
-                    .map_or((root.function, root.path.clone(), None), |step| {
-                        (
-                            step.caller,
-                            step.caller_path.clone(),
-                            step.source_range.clone(),
-                        )
-                    });
-            let finding = InterpretedFinding {
-                effect: metadata.clone(),
-                kind: InterpretedFindingKind::DocumentedObligation,
-                function,
-                function_path,
-                callee: Some(InterpretedCallee {
-                    function: Some(target_function),
-                    path: target_path,
-                }),
-                source_range,
-                contract_source_range: annotation.source_range().cloned(),
-                marker_evidence,
-                trace: path,
-                missing_requirements,
-                requirements,
-            };
-            let mut requirement_groups = std::collections::BTreeMap::<
-                String,
-                Vec<crate::artifact::ContractRequirementFact>,
-            >::new();
-            for requirement in annotation.requirements() {
-                requirement_groups
-                    .entry(normalize_requirement_name(&requirement.name))
-                    .or_default()
-                    .push(requirement.clone());
-            }
-            let ambiguous = requirement_groups
-                .into_iter()
-                .filter(|(name, requirements)| !name.is_empty() && requirements.len() > 1)
-                .collect::<Vec<_>>();
-            if ambiguous.is_empty() {
-                return Some(vec![finding]);
-            }
-            Some(
-                ambiguous
-                    .into_iter()
-                    .map(|(normalized_name, requirements)| InterpretedFinding {
-                        kind: InterpretedFindingKind::AmbiguousRequirement { normalized_name },
-                        function: annotation.owner(),
-                        function_path: function_presentation(artifact, annotation.owner())
-                            .map_or_else(
-                                || format!("{:?}", annotation.owner()),
-                                |presentation| presentation.path.to_owned(),
-                            ),
-                        source_range: annotation.source_range().cloned(),
-                        marker_evidence: None,
-                        missing_requirements: Vec::new(),
-                        requirements,
-                        ..finding.clone()
-                    })
-                    .collect(),
-            )
+) -> Option<Vec<InterpretedFinding>> {
+    let trace_node = trace.node(node)?;
+    let state = trace_node.state().obligation()?;
+    let contract = tracked.obligations().contract(state.contract())?;
+    let annotation = annotations.contract(contract.id().annotation())?;
+    if contract.applies_to(root_function) {
+        return None;
+    }
+    let path = trace_path(artifact, graph, trace, node);
+    let missing_requirements = trace_node
+        .state()
+        .obligation()?
+        .remaining()
+        .filter_map(|index| annotation.requirements().get(index).cloned())
+        .collect::<Vec<_>>();
+    let requirements = annotation.requirements().to_vec();
+    let target_function = path
+        .steps
+        .last()
+        .and_then(|step| step.target)
+        .unwrap_or(annotation.owner());
+    let target_path = path
+        .steps
+        .last()
+        .and_then(|step| step.target_path.clone())
+        .or_else(|| {
+            function_presentation(artifact, annotation.owner())
+                .map(|presentation| presentation.path.to_owned())
         })
-        .flatten()
-        .collect()
+        .unwrap_or_else(|| format!("{:?}", annotation.owner()));
+    let marker_evidence = obligation_marker_evidence(
+        artifact,
+        graph,
+        state.source_invocation(),
+        state.source_calls(),
+        AnnotationFactKind::new(state.effect().clone(), AnnotationRole::Justification),
+        marker_probing,
+    );
+    let (function, function_path, source_range) =
+        path.steps
+            .last()
+            .map_or((root.function, root.path.clone(), None), |step| {
+                (
+                    step.caller,
+                    step.caller_path.clone(),
+                    step.source_range.clone(),
+                )
+            });
+    let finding = InterpretedFinding {
+        effect: metadata.clone(),
+        kind: InterpretedFindingKind::DocumentedObligation,
+        function,
+        function_path,
+        callee: Some(InterpretedCallee {
+            function: Some(target_function),
+            path: target_path,
+        }),
+        source_range,
+        contract_source_range: annotation.source_range().cloned(),
+        marker_evidence,
+        trace: path,
+        missing_requirements,
+        requirements,
+    };
+    let mut requirement_groups =
+        std::collections::BTreeMap::<String, Vec<crate::artifact::ContractRequirementFact>>::new();
+    for requirement in annotation.requirements() {
+        requirement_groups
+            .entry(normalize_requirement_name(&requirement.name))
+            .or_default()
+            .push(requirement.clone());
+    }
+    let ambiguous = requirement_groups
+        .into_iter()
+        .filter(|(name, requirements)| !name.is_empty() && requirements.len() > 1)
+        .collect::<Vec<_>>();
+    if ambiguous.is_empty() {
+        return Some(vec![finding]);
+    }
+    Some(
+        ambiguous
+            .into_iter()
+            .map(|(normalized_name, requirements)| InterpretedFinding {
+                kind: InterpretedFindingKind::AmbiguousRequirement { normalized_name },
+                function: annotation.owner(),
+                function_path: function_presentation(artifact, annotation.owner()).map_or_else(
+                    || format!("{:?}", annotation.owner()),
+                    |presentation| presentation.path.to_owned(),
+                ),
+                source_range: annotation.source_range().cloned(),
+                marker_evidence: None,
+                missing_requirements: Vec::new(),
+                requirements,
+                ..finding.clone()
+            })
+            .collect(),
+    )
 }
 
 struct FunctionPresentation<'artifact> {
@@ -1263,24 +1302,37 @@ fn invocation_source_has_contract(
     })
 }
 
-fn active_root_nodes<O: Clone, S, T>(
-    trace: &EffectTrace<O, S, T>,
-    root: crate::trace::FunctionId,
-) -> impl Iterator<Item = usize> + '_ {
-    let handled_at_root = trace
-        .handled()
-        .filter_map(|handled| match (handled.site(), handled.node()) {
-            (TerminationSite::Function(function), Some(node)) if *function == root => {
-                Some(node.index())
+/// Report-only projection of a completed trace, shared by all root aliases and
+/// finding collectors. Buckets preserve trace insertion order.
+struct ActiveRootNodeIndex {
+    by_function: Vec<Vec<TraceNodeId>>,
+}
+
+impl ActiveRootNodeIndex {
+    fn new<O: Clone, S, T>(trace: &EffectTrace<O, S, T>, function_count: usize) -> Self {
+        let mut suppressed = vec![false; trace.nodes().len()];
+        for handled in trace.handled() {
+            if let (TerminationSite::Function(function), Some(node)) =
+                (handled.site(), handled.node())
+                && trace
+                    .node(node)
+                    .is_some_and(|node| node.function() == *function)
+            {
+                suppressed[node.index()] = true;
             }
-            _ => None,
-        })
-        .collect::<BTreeSet<_>>();
-    trace
-        .nodes()
-        .enumerate()
-        .filter(move |(index, node)| node.function() == root && !handled_at_root.contains(index))
-        .map(|(index, _)| index)
+        }
+        let mut by_function = vec![Vec::new(); function_count];
+        for (index, node) in trace.nodes().enumerate() {
+            if !suppressed[index] {
+                by_function[node.function().index()].push(TraceNodeId(index));
+            }
+        }
+        Self { by_function }
+    }
+
+    fn nodes(&self, function: crate::trace::FunctionId) -> &[TraceNodeId] {
+        &self.by_function[function.index()]
+    }
 }
 
 struct AdditionalCompleteness {

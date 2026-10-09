@@ -501,16 +501,24 @@ fn registered_effect_gets_default_concrete_reporting_without_an_adapter() {
         crate::trace::TraceOptions::default(),
         &[graph.function(root).expect("root function")],
     );
-    let findings = super::concrete_findings(
+    let findings = super::active_node_findings(
         &artifact,
         &graph,
         &annotations,
         &EffectMetadata::of::<Allocation>(),
-        &concrete,
+        &tracked,
         &trace,
         graph.function(root).expect("root function"),
+        super::ActiveRootNodeIndex::new(&trace, graph.function_count())
+            .nodes(graph.function(root).expect("root function")),
+        &InterpretationRoot {
+            function: root,
+            path: String::from("sample::root"),
+            kind: ReportRootKind::Concrete,
+        },
         AnnotationProbingFact::SourceCallsite,
-    );
+    )
+    .concrete;
 
     assert!(matches!(
         findings.as_slice(),
@@ -600,16 +608,24 @@ fn invocation_fact_controls_documentation_policy_for_a_registered_effect() {
             crate::trace::TraceOptions::default(),
             &[graph.function(root).expect("root function")],
         );
-        super::concrete_findings(
+        super::active_node_findings(
             &artifact,
             &graph,
             &annotations,
             &EffectMetadata::of::<Allocation>(),
-            &concrete,
+            &tracked,
             &trace,
             graph.function(root).expect("root function"),
+            super::ActiveRootNodeIndex::new(&trace, graph.function_count())
+                .nodes(graph.function(root).expect("root function")),
+            &InterpretationRoot {
+                function: root,
+                path: String::from("sample::root"),
+                kind: ReportRootKind::Concrete,
+            },
             AnnotationProbingFact::SourceCallsite,
         )
+        .concrete
     }
 
     assert!(matches!(
@@ -3422,5 +3438,144 @@ fn trace_projection_walks_selected_path_and_stops_at_handoff() {
             .steps
             .len(),
         3
+    );
+}
+
+#[test]
+fn active_node_index_preserves_function_order_and_termination_semantics() {
+    use crate::trace::{
+        EffectTrace, FunctionId, HandledTrace, InvocationId, TerminationSite, TraceNode,
+        TraceNodeId,
+    };
+
+    let first = FunctionId::from_index(0);
+    let second = FunctionId::from_index(1);
+    let empty = FunctionId::from_index(2);
+    let nodes = [first, second, first, second, first, second, first]
+        .into_iter()
+        .map(|function| TraceNode {
+            origin: (),
+            function,
+            state: (),
+            depth: 0,
+            predecessor: None,
+        })
+        .collect();
+    let handled = [
+        (Some(0), TerminationSite::Function(first)),
+        (Some(0), TerminationSite::Function(first)),
+        (Some(1), TerminationSite::Function(first)),
+        (Some(2), TerminationSite::Source(())),
+        (
+            Some(3),
+            TerminationSite::Invocation(InvocationId::from_index(0)),
+        ),
+        (None, TerminationSite::Function(first)),
+        (Some(4), TerminationSite::Function(first)),
+    ]
+    .into_iter()
+    .map(|(node, site)| HandledTrace {
+        origin: (),
+        node: node.map(TraceNodeId),
+        site,
+        termination: (),
+    })
+    .collect();
+    let trace = EffectTrace {
+        nodes,
+        handled,
+        ..EffectTrace::default()
+    };
+    let index = super::ActiveRootNodeIndex::new(&trace, 3);
+    assert_eq!(index.nodes(first), &[TraceNodeId(2), TraceNodeId(6)]);
+    assert_eq!(
+        index.nodes(second),
+        &[TraceNodeId(1), TraceNodeId(3), TraceNodeId(5)]
+    );
+    assert!(index.nodes(empty).is_empty());
+}
+
+#[test]
+fn active_node_index_accepts_empty_and_fully_handled_traces() {
+    use crate::trace::{
+        EffectTrace, FunctionId, HandledTrace, TerminationSite, TraceNode, TraceNodeId,
+    };
+
+    let root = FunctionId::from_index(0);
+    let mut trace = EffectTrace::<(), (), ()>::default();
+    assert!(
+        super::ActiveRootNodeIndex::new(&trace, 1)
+            .nodes(root)
+            .is_empty()
+    );
+    trace.nodes.push(TraceNode {
+        origin: (),
+        function: root,
+        state: (),
+        depth: 0,
+        predecessor: None,
+    });
+    trace.handled.push(HandledTrace {
+        origin: (),
+        node: Some(TraceNodeId(0)),
+        site: TerminationSite::Function(root),
+        termination: (),
+    });
+    assert!(
+        super::ActiveRootNodeIndex::new(&trace, 1)
+            .nodes(root)
+            .is_empty()
+    );
+}
+
+#[test]
+fn mixed_active_states_preserve_concrete_then_obligation_finding_order() {
+    let (_, mut artifact) = contract_boundary_trace(ContractBoundaryScenario::Operation);
+    let root = stable_function(9_970);
+    let root_body = artifact
+        .functions
+        .iter_mut()
+        .find(|body| body.function == root)
+        .unwrap();
+    root_body.effects.push(EffectFact {
+        id: EffectId::new(0),
+        effect: ReportEffect::Safety.key(),
+        effect_group: None,
+        source_range: None,
+        expanded_range: None,
+        macro_expansions: Vec::new(),
+        kind: EffectKind::new("raw-pointer-dereference"),
+    });
+    let mut config = crate::config::test_config();
+    config.analysis.marker_probing = MarkerProbing::SourceCallsite;
+    let reports = trace_workspace(
+        &artifact,
+        root.def_path_hash.stable_crate_id(),
+        &ArtifactAnalysisGraph::default(),
+        &[InterpretationRoot {
+            function: root,
+            path: String::from("sample::root"),
+            kind: ReportRootKind::Concrete,
+        }],
+        &config,
+    )
+    .expect("mixed-state report");
+    // The local operation and the callee's contract both reach this root.
+    assert!(
+        matches!(
+            reports[0].findings.as_slice(),
+            [
+                InterpretedFinding {
+                    kind: InterpretedFindingKind::Operation { .. },
+                    ..
+                },
+                InterpretedFinding {
+                    kind: InterpretedFindingKind::DocumentedObligation,
+                    ..
+                },
+            ]
+        ),
+        "findings: {:#?}",
+        reports[0].findings
     );
 }
