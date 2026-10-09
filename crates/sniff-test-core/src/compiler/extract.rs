@@ -13,7 +13,7 @@ use reachability::{
     ArtifactScope, CallableEdgeInfo, DynDispatchVTableEdges, FnPointerEdges, NoopReachabilityHooks,
     ReachabilityEdge, ReachabilityEdgeKind, ReachabilityGraph, ReachabilityHalt, ReachabilityIndex,
     ReachabilityNodeExpansion, ReachabilityNodeKind, ReachabilityOptions, ReachabilityRoot,
-    ReachedEdge,
+    ReachedEdge, expansion_ancestry,
 };
 use rustc_hir::def::DefKind;
 use rustc_hir::def_id::{DefId, LOCAL_CRATE, LocalDefId};
@@ -552,9 +552,9 @@ fn insert_or_merge_call(
         || existing.declaration_target != call.declaration_target
         || existing.target != call.target
     {
-        return Err(ExtractError::new(
-            "one call edge resolved to inconsistent raw call facts",
-        ));
+        return Err(ExtractError::new(format!(
+            "one call edge resolved to inconsistent raw call facts: existing={existing:?}; incoming={call:?}"
+        )));
     }
     Ok(index)
 }
@@ -625,8 +625,7 @@ fn span_macro_expansions(
     span: Span,
     sources: &mut SourceTable,
 ) -> Result<Vec<MacroExpansionFact>, ExtractError> {
-    let mut raw_frames = span
-        .macro_backtrace()
+    let mut raw_frames = expansion_ancestry(span)
         .filter_map(|expansion| {
             expansion
                 .macro_def_id
@@ -634,7 +633,6 @@ fn span_macro_expansions(
         })
         .collect::<Vec<_>>();
     raw_frames.reverse();
-    raw_frames.dedup_by(|left, right| left.0 == right.0 && left.1.source_equal(right.1));
     raw_frames
         .into_iter()
         .map(|(def_id, call_site)| {

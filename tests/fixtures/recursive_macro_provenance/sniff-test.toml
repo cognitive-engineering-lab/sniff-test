@@ -1,0 +1,11 @@
+[compiler]
+inline-mir = "off"
+
+[analysis]
+report-roots = "public"
+
+[panic]
+trusted-boundary-namespaces = ["core", "alloc", "std"]
+
+[safety.lints]
+operation = "warn"

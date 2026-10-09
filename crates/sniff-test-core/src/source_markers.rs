@@ -1,6 +1,6 @@
 //! Source-local analysis markers.
 
-use reachability::{ReachabilityEdge, ReachabilityGraph, ReachabilityNodeKind};
+use reachability::{ReachabilityEdge, ReachabilityGraph, ReachabilityNodeKind, expansion_ancestry};
 use rustc_hir::def_id::LocalDefId;
 use rustc_middle::thir::visit::{self, Visitor};
 use rustc_middle::thir::{Block, Stmt, StmtKind, Thir};
@@ -430,7 +430,7 @@ fn marker_probe_spans(span: Span, probing: MarkerProbing) -> Vec<Span> {
             // produced the operation, then walk callsites outward before the
             // usual fallback.
             push_unique_probe_span(&mut spans, span);
-            for expansion in span.macro_backtrace() {
+            for expansion in expansion_ancestry(span) {
                 push_unique_probe_span(&mut spans, expansion.call_site);
             }
             push_unique_probe_span(&mut spans, span.source_callsite());
