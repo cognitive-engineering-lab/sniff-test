@@ -552,9 +552,9 @@ fn insert_or_merge_call(
         || existing.declaration_target != call.declaration_target
         || existing.target != call.target
     {
-        return Err(ExtractError::new(
-            "one call edge resolved to inconsistent raw call facts",
-        ));
+        return Err(ExtractError::new(format!(
+            "one call edge resolved to inconsistent raw call facts: existing={existing:?}; incoming={call:?}"
+        )));
     }
     Ok(index)
 }
