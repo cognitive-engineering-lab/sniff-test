@@ -118,11 +118,13 @@ pub struct AnnotationIndex {
     contracts_by_definition:
         BTreeMap<crate::namespace::StableDefPathHash, BTreeMap<EffectKey, Vec<usize>>>,
     site_comments: Vec<SiteCommentAnnotation>,
+    comments_by_target: BTreeMap<AnnotationTarget, BTreeMap<EffectKey, Vec<usize>>>,
 }
 
 /// Call-surface contracts are global even when report bodies are root scoped.
 pub(crate) struct AnnotationWorkspaceIndex {
     call_contracts: Vec<SurfaceContractTemplate>,
+    bodies_by_definition: BTreeMap<crate::namespace::StableDefPathHash, Vec<usize>>,
 }
 
 struct SurfaceContractTemplate {
@@ -137,7 +139,12 @@ impl AnnotationWorkspaceIndex {
     pub(crate) fn new(artifact: &ArtifactFacts) -> Self {
         let mut call_contracts = Vec::<SurfaceContractTemplate>::new();
         let mut by_identity = BTreeMap::<String, Vec<usize>>::new();
-        for body in &artifact.functions {
+        let mut bodies_by_definition = BTreeMap::<_, Vec<_>>::new();
+        for (position, body) in artifact.functions.iter().enumerate() {
+            bodies_by_definition
+                .entry(body.function.def_path_hash)
+                .or_default()
+                .push(position);
             for call in &body.calls {
                 let mut indexed_targets = BTreeSet::new();
                 for target in [
@@ -183,7 +190,47 @@ impl AnnotationWorkspaceIndex {
                 }
             }
         }
-        Self { call_contracts }
+        Self {
+            call_contracts,
+            bodies_by_definition,
+        }
+    }
+
+    fn visible_body_positions(&self, graph: &InvocationGraph) -> Vec<usize> {
+        let mut positions = graph
+            .contract_definitions()
+            .filter_map(|definition| self.bodies_by_definition.get(definition))
+            .flatten()
+            .copied()
+            .collect::<Vec<_>>();
+        // Annotation IDs and first-occurrence precedence follow artifact
+        // order, not definition order. Include every instance of a visible
+        // definition; only its site comments are restricted to reached bodies.
+        positions.sort_unstable();
+        positions
+    }
+}
+
+#[derive(Default)]
+struct SiteCommentAccumulator {
+    comments: Vec<SiteCommentAnnotation>,
+    by_identity_and_target: BTreeMap<(AnnotationId, AnnotationTarget), Vec<usize>>,
+}
+
+impl SiteCommentAccumulator {
+    fn push(&mut self, comment: SiteCommentAnnotation) {
+        let positions = self
+            .by_identity_and_target
+            .entry((comment.id, comment.target.clone()))
+            .or_default();
+        if positions
+            .iter()
+            .any(|&position| self.comments[position] == comment)
+        {
+            return;
+        }
+        positions.push(self.comments.len());
+        self.comments.push(comment);
     }
 }
 
@@ -285,27 +332,23 @@ impl AnnotationIndex {
     ) -> Result<Self, AnnotationIndexError> {
         let mut ids = BTreeMap::<String, AnnotationId>::new();
         let mut contracts = ContractAccumulator::default();
-        let mut site_comments = Vec::new();
-        let override_markdown_by_definition = namespaces
-            .iter()
-            .filter(|(definition, _)| {
-                graph.includes_contract_definition(FunctionId::generic(**definition))
-            })
-            .filter_map(|(definition, candidates)| {
+        let mut site_comments = SiteCommentAccumulator::default();
+        let override_markdown_by_definition = graph
+            .contract_definitions()
+            .filter_map(|definition| {
                 overrides
-                    .markdown_for_candidates(candidates)
+                    .markdown_for_candidates(
+                        namespaces.candidates(FunctionId::generic(*definition)),
+                    )
                     .map(|markdown| (*definition, markdown))
             })
             .collect::<BTreeMap<_, _>>();
 
-        for body in &artifact.functions {
-            if !graph.includes_contract_definition(body.function) {
-                continue;
-            }
+        for position in workspace.visible_body_positions(graph) {
+            let body = &artifact.functions[position];
+            let includes_body = graph.includes_body(body.function);
             for marker in &body.markers {
-                if !graph.includes_body(body.function)
-                    && marker.kind.role != AnnotationRole::Contract
-                {
+                if !includes_body && marker.kind.role != AnnotationRole::Contract {
                     continue;
                 }
                 let active = match marker_probing {
@@ -363,9 +406,7 @@ impl AnnotationIndex {
                             source_range: marker.source_range.clone(),
                             satisfactions: marker.satisfactions.clone(),
                         };
-                        if !site_comments.contains(&annotation) {
-                            site_comments.push(annotation);
-                        }
+                        site_comments.push(annotation);
                     }
                 }
             }
@@ -391,10 +432,12 @@ impl AnnotationIndex {
 
         for (definition, markdown) in override_markdown_by_definition {
             contracts.remove_definition(definition);
-            let source_range = artifact
-                .functions
-                .iter()
-                .filter(|body| body.function.def_path_hash == definition)
+            let source_range = workspace
+                .bodies_by_definition
+                .get(&definition)
+                .into_iter()
+                .flatten()
+                .map(|&position| &artifact.functions[position])
                 .min_by_key(|body| body.function)
                 .and_then(|body| body.source_range.clone());
             let owner = FunctionId::generic(definition);
@@ -410,8 +453,9 @@ impl AnnotationIndex {
             }
         }
 
-        let original_comments = site_comments.clone();
-        for comment in original_comments {
+        let original_count = site_comments.comments.len();
+        for position in 0..original_count {
+            let comment = site_comments.comments[position].clone();
             let AnnotationTarget::Invocation { invocation, call } = comment.target else {
                 continue;
             };
@@ -424,12 +468,12 @@ impl AnnotationIndex {
                     invocation: alias,
                     call: projected_call,
                 };
-                if !site_comments.contains(&projected) {
-                    site_comments.push(projected);
-                }
+                site_comments.push(projected);
             }
         }
 
+        let site_comments = site_comments.comments;
+        let comments_by_target = index_site_comments(&site_comments);
         let contracts = contracts.contracts;
         let mut contracts_by_definition = BTreeMap::<_, BTreeMap<_, Vec<_>>>::new();
         for (position, contract) in contracts.iter().enumerate() {
@@ -444,6 +488,7 @@ impl AnnotationIndex {
             contracts,
             contracts_by_definition,
             site_comments,
+            comments_by_target,
         })
     }
 
@@ -502,10 +547,7 @@ impl AnnotationIndex {
         call: CallId,
         effect: &EffectKey,
     ) -> impl Iterator<Item = &SiteCommentAnnotation> {
-        self.site_comments.iter().filter(move |comment| {
-            &comment.effect == effect
-                && comment.target == AnnotationTarget::Invocation { invocation, call }
-        })
+        self.comments_at_target(&AnnotationTarget::Invocation { invocation, call }, effect)
     }
 
     pub fn comments_at_effect(
@@ -514,11 +556,36 @@ impl AnnotationIndex {
         effect: EffectId,
         effect_key: &EffectKey,
     ) -> impl Iterator<Item = &SiteCommentAnnotation> {
-        self.site_comments.iter().filter(move |comment| {
-            &comment.effect == effect_key
-                && comment.target == AnnotationTarget::Effect { owner, effect }
-        })
+        self.comments_at_target(&AnnotationTarget::Effect { owner, effect }, effect_key)
     }
+
+    fn comments_at_target<'a>(
+        &'a self,
+        target: &AnnotationTarget,
+        effect: &EffectKey,
+    ) -> impl Iterator<Item = &'a SiteCommentAnnotation> + use<'a> {
+        self.comments_by_target
+            .get(target)
+            .and_then(|effects| effects.get(effect))
+            .into_iter()
+            .flatten()
+            .map(|&position| &self.site_comments[position])
+    }
+}
+
+fn index_site_comments(
+    comments: &[SiteCommentAnnotation],
+) -> BTreeMap<AnnotationTarget, BTreeMap<EffectKey, Vec<usize>>> {
+    let mut index = BTreeMap::<_, BTreeMap<_, Vec<_>>>::new();
+    for (position, comment) in comments.iter().enumerate() {
+        index
+            .entry(comment.target.clone())
+            .or_default()
+            .entry(comment.effect.clone())
+            .or_default()
+            .push(position);
+    }
+    index
 }
 
 fn push_override_contract_for_owner(
@@ -618,6 +685,262 @@ mod tests {
     use crate::namespace::StableDefPathHash;
 
     use super::{AnnotationId, AnnotationWorkspaceIndex, ContractAccumulator};
+
+    #[test]
+    fn comment_indexes_preserve_variants_and_isolate_calls_and_effects() {
+        use super::{
+            AnnotationIndex, AnnotationTarget, SiteCommentAccumulator, SiteCommentAnnotation,
+            index_site_comments,
+        };
+        use crate::artifact::{AnnotationSatisfactionFact, EffectId};
+        use crate::trace::InvocationId;
+
+        let invocation = InvocationId::from_index(0);
+        let target = AnnotationTarget::Invocation {
+            invocation,
+            call: CallId::new(0),
+        };
+        let first = SiteCommentAnnotation {
+            id: AnnotationId(7),
+            effect: EffectKey::new("safety"),
+            target: target.clone(),
+            source_range: None,
+            satisfactions: vec![AnnotationSatisfactionFact {
+                requirement: None,
+                reason: "first".to_owned(),
+                structural_path: None,
+            }],
+        };
+        let mut comments = SiteCommentAccumulator::default();
+        comments.push(first.clone());
+        comments.push(first.clone());
+        let mut second = first.clone();
+        second.satisfactions[0].reason = "second".to_owned();
+        comments.push(second.clone());
+        let mut sibling = first.clone();
+        sibling.target = AnnotationTarget::Invocation {
+            invocation,
+            call: CallId::new(1),
+        };
+        comments.push(sibling.clone());
+        let mut panic = first.clone();
+        panic.effect = EffectKey::new("panic");
+        comments.push(panic.clone());
+        let mut operation = first.clone();
+        operation.target = AnnotationTarget::Effect {
+            owner: function(0),
+            effect: EffectId::new(0),
+        };
+        comments.push(operation.clone());
+        let site_comments = comments.comments;
+        let index = AnnotationIndex {
+            comments_by_target: index_site_comments(&site_comments),
+            site_comments,
+            ..AnnotationIndex::default()
+        };
+        let safety = EffectKey::new("safety");
+        assert_eq!(index.site_comments.len(), 5);
+        assert_eq!(
+            index
+                .comments_at_raw_call(invocation, CallId::new(0), &safety)
+                .collect::<Vec<_>>(),
+            vec![&first, &second]
+        );
+        assert_eq!(
+            index
+                .comments_at_raw_call(invocation, CallId::new(1), &safety)
+                .collect::<Vec<_>>(),
+            vec![&sibling]
+        );
+        assert_eq!(
+            index
+                .comments_at_raw_call(invocation, CallId::new(0), &panic.effect)
+                .collect::<Vec<_>>(),
+            vec![&panic]
+        );
+        assert_eq!(
+            index
+                .comments_at_effect(function(0), EffectId::new(0), &safety)
+                .collect::<Vec<_>>(),
+            vec![&operation]
+        );
+        assert_eq!(index.site_comment(AnnotationId(7)), Some(&first));
+        assert!(
+            index
+                .comments_at_raw_call(InvocationId::from_index(1), CallId::new(0), &safety)
+                .next()
+                .is_none()
+        );
+        assert!(
+            index
+                .comments_at_effect(function(1), EffectId::new(0), &safety)
+                .next()
+                .is_none()
+        );
+        assert!(
+            index
+                .comments_at_raw_call(invocation, CallId::new(0), &EffectKey::new("allocation"))
+                .next()
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn visible_annotations_keep_artifact_order_and_root_local_ids_in_both_probing_modes() {
+        use super::AnnotationIndex;
+        use crate::artifact::{
+            AnnotationFact, AnnotationFactKind, AnnotationProbingFact, AnnotationRole,
+            AnnotationTargetFact, MarkerId,
+        };
+        use crate::compiler::invocations::InvocationGraph;
+        use crate::config::MarkerProbing;
+        use crate::contracts::ContractDocOverrides;
+
+        let owners = [function(9), function(1), function(5)];
+        let mut bodies = owners
+            .iter()
+            .map(|&owner| body(owner, Vec::new()))
+            .collect::<Vec<_>>();
+        for (position, body) in bodies.iter_mut().enumerate() {
+            for (index, probing) in [
+                AnnotationProbingFact::SourceCallsite,
+                AnnotationProbingFact::MacroDefinitionFirst,
+            ]
+            .into_iter()
+            .enumerate()
+            {
+                body.markers.push(AnnotationFact {
+                    id: MarkerId::new(u32::try_from(index).unwrap()),
+                    identity: format!("{position}-{index}"),
+                    kind: AnnotationFactKind::new(
+                        EffectKey::new("safety"),
+                        AnnotationRole::Contract,
+                    ),
+                    source_range: None,
+                    target: AnnotationTargetFact::Function(body.function),
+                    applicable_probing: vec![probing],
+                    satisfactions: Vec::new(),
+                    requirements: vec![requirement(&format!("{position}-{index}"))],
+                });
+            }
+        }
+        let artifact = ArtifactFacts {
+            functions: bodies,
+            source_files: Vec::new(),
+        };
+        let workspace = AnnotationWorkspaceIndex::new(&artifact);
+        let namespaces = artifact.definition_namespace_index();
+        for (mode_index, mode) in [
+            MarkerProbing::SourceCallsite,
+            MarkerProbing::MacroDefinitionFirst,
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            for roots in [vec![owners[0], owners[1]], vec![owners[2]]] {
+                let graph = InvocationGraph::from_artifact_roots(&artifact, &roots).unwrap();
+                let annotations = AnnotationIndex::from_workspace_index_with_overrides(
+                    &artifact,
+                    &graph,
+                    &workspace,
+                    &namespaces,
+                    &ContractDocOverrides::default(),
+                    mode,
+                    &[],
+                )
+                .unwrap();
+                assert_eq!(
+                    annotations
+                        .contracts()
+                        .map(super::FunctionContractAnnotation::owner)
+                        .collect::<Vec<_>>(),
+                    roots
+                );
+                for (id, contract) in annotations.contracts().enumerate() {
+                    assert_eq!(contract.id(), AnnotationId(id));
+                    let position = owners
+                        .iter()
+                        .position(|&owner| owner == contract.owner())
+                        .unwrap();
+                    assert_eq!(
+                        contract.requirements()[0].name,
+                        format!("{position}-{mode_index}")
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn comment_lookup_includes_projected_alias_with_different_raw_call_id() {
+        use super::AnnotationIndex;
+        use crate::artifact::{
+            AnnotationFact, AnnotationFactKind, AnnotationProbingFact, AnnotationRole,
+            AnnotationTargetFact, MarkerId, SourceFileId, SourceRangeFact,
+        };
+        use crate::compiler::invocations::InvocationGraph;
+
+        let generic = function(0);
+        let exact = FunctionId::exact(
+            generic.def_path_hash,
+            serde_json::from_str(&format!("\"{:032x}\"", 1)).unwrap(),
+        );
+        let callee = function(1);
+        let mut defining = call(0, target(callee, "contract"));
+        defining.source_range = Some(SourceRangeFact {
+            file: SourceFileId::new("source"),
+            byte_start: 10,
+            byte_end: 20,
+        });
+        let mut projected = defining.clone();
+        projected.id = CallId::new(1);
+        projected.call_site = CallSiteId::new(99);
+        let mut defining_body = body(generic, vec![defining]);
+        defining_body.markers.push(AnnotationFact {
+            id: MarkerId::new(0),
+            identity: "shared".to_owned(),
+            kind: AnnotationFactKind::new(EffectKey::new("safety"), AnnotationRole::Justification),
+            source_range: None,
+            target: AnnotationTargetFact::Call(CallId::new(0)),
+            applicable_probing: vec![AnnotationProbingFact::SourceCallsite],
+            satisfactions: Vec::new(),
+            requirements: Vec::new(),
+        });
+        let artifact = ArtifactFacts {
+            functions: vec![
+                defining_body,
+                body(exact, vec![call(0, target(callee, "contract")), projected]),
+            ],
+            source_files: Vec::new(),
+        };
+        let graph = InvocationGraph::from_artifact_roots(&artifact, &[generic, exact]).unwrap();
+        let annotations = AnnotationIndex::from_artifact(&artifact, &graph).unwrap();
+        let effect = EffectKey::new("safety");
+        let source = graph
+            .invocation_for_raw_call(generic, CallId::new(0))
+            .unwrap();
+        let alias = graph
+            .invocation_for_raw_call(exact, CallId::new(1))
+            .unwrap();
+        let sibling = graph
+            .invocation_for_raw_call(exact, CallId::new(0))
+            .unwrap();
+        let original = annotations
+            .comments_at_raw_call(source, CallId::new(0), &effect)
+            .next()
+            .unwrap();
+        let projected = annotations
+            .comments_at_raw_call(alias, CallId::new(1), &effect)
+            .collect::<Vec<_>>();
+        assert_eq!(projected.len(), 1);
+        assert_eq!(projected[0].id(), original.id());
+        assert!(
+            annotations
+                .comments_at_raw_call(sibling, CallId::new(0), &effect)
+                .next()
+                .is_none()
+        );
+    }
 
     fn function(index: u64) -> FunctionId {
         let hash = format!("{index:016x}{:016x}", index + 100);

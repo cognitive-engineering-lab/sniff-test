@@ -339,6 +339,10 @@ impl InvocationGraph {
         self.contract_definitions.contains(&function.def_path_hash)
     }
 
+    pub(crate) fn contract_definitions(&self) -> impl Iterator<Item = &StableDefPathHash> {
+        self.contract_definitions.iter()
+    }
+
     /// Bodies and callable surfaces visible from this root, without scanning
     /// the workspace-wide table of unrelated generic instances.
     #[must_use]

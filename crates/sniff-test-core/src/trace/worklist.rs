@@ -275,13 +275,13 @@ fn trace_effect_with_routes(
     );
 
     let mut independent = tracked.obligations().seeds_for_effect(effect);
-    let candidates = independent
-        .iter()
-        .map(|seed| seed.owner)
-        .collect::<BTreeSet<_>>();
-    independent.sort_by_cached_key(|seed| {
-        std::cmp::Reverse(upstream_count(graph, seed.owner, &candidates))
-    });
+    if independent.len() > 1 {
+        let mut upstream = UpstreamCounts::new(
+            graph.function_count(),
+            independent.iter().map(|seed| seed.owner),
+        );
+        independent.sort_by_cached_key(|seed| std::cmp::Reverse(upstream.count(graph, seed.owner)));
+    }
     for seed in independent {
         if !routes.contract_reachable.contains(&seed.owner) {
             continue;
@@ -621,28 +621,64 @@ fn contract_in_ancestry(trace: &DomainTrace, mut node: TraceNodeId, contract: Co
     }
 }
 
-fn upstream_count(
-    graph: &InvocationGraph,
-    start: FunctionId,
-    candidates: &BTreeSet<FunctionId>,
-) -> usize {
-    let mut seen = BTreeSet::from([start]);
-    let mut pending = vec![start];
-    while let Some(function) = pending.pop() {
-        for &invocation in graph.incoming_contract_visible_invocations(function) {
-            let parent = graph.caller(invocation);
-            if seen.insert(parent) {
-                pending.push(parent);
-            }
+/// Scratch storage and owner counts for one effect's independent-seed ordering.
+/// Candidate membership is fixed for the entire sort, including unreachable
+/// seeds. Changing that set or tie order can change trace-budget outcomes.
+struct UpstreamCounts {
+    candidates: Vec<bool>,
+    counts: Vec<Option<usize>>,
+    visited: Vec<usize>,
+    generation: usize,
+    pending: Vec<FunctionId>,
+}
+
+impl UpstreamCounts {
+    fn new(function_count: usize, candidates: impl Iterator<Item = FunctionId>) -> Self {
+        let mut membership = vec![false; function_count];
+        for candidate in candidates {
+            membership[candidate.index()] = true;
         }
-        for &edge in graph.transparent_parents(function) {
-            let parent = graph.transparent_parent(edge);
-            if seen.insert(parent) {
-                pending.push(parent);
-            }
+        Self {
+            candidates: membership,
+            counts: vec![None; function_count],
+            visited: vec![0; function_count],
+            generation: 0,
+            pending: Vec::new(),
         }
     }
-    seen.intersection(candidates).count()
+
+    fn count(&mut self, graph: &InvocationGraph, start: FunctionId) -> usize {
+        if let Some(count) = self.counts[start.index()] {
+            return count;
+        }
+        self.generation = self.generation.wrapping_add(1);
+        if self.generation == 0 {
+            self.visited.fill(0);
+            self.generation = 1;
+        }
+        self.visited[start.index()] = self.generation;
+        self.pending.push(start);
+        let mut count = 0;
+        while let Some(function) = self.pending.pop() {
+            count += usize::from(self.candidates[function.index()]);
+            for &invocation in graph.incoming_contract_visible_invocations(function) {
+                self.visit(graph.caller(invocation));
+            }
+            for &edge in graph.transparent_parents(function) {
+                self.visit(graph.transparent_parent(edge));
+            }
+        }
+        self.counts[start.index()] = Some(count);
+        count
+    }
+
+    fn visit(&mut self, function: FunctionId) {
+        let stamp = &mut self.visited[function.index()];
+        if *stamp != self.generation {
+            *stamp = self.generation;
+            self.pending.push(function);
+        }
+    }
 }
 
 fn handled(
