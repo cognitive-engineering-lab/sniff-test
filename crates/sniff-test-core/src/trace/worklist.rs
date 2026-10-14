@@ -160,7 +160,8 @@ fn trace_effect_with_routes(
         }
     }
     while let Some(node) = concrete_queue.pop_front() {
-        let (origin, function, state, depth) = node_data(&trace, node);
+        let current = &trace.nodes[node.index()];
+        let (origin, function, depth) = (*current.origin(), current.function(), current.depth());
         if let Some(contract) = tracked.obligations().boundary_contract(function, effect) {
             handled(
                 &mut trace,
@@ -182,7 +183,7 @@ fn trace_effect_with_routes(
             );
             continue;
         }
-        let TrackedState::Concrete(ref concrete_state) = state else {
+        let TrackedState::Concrete(concrete_state) = current.state() else {
             unreachable!()
         };
         if let Some(termination) = tracked
@@ -217,7 +218,14 @@ fn trace_effect_with_routes(
             {
                 continue;
             }
-            match tracked.concrete().propagate(concrete_state, edge) {
+            let propagation = {
+                let TrackedState::Concrete(concrete_state) = trace.nodes[node.index()].state()
+                else {
+                    unreachable!()
+                };
+                tracked.concrete().propagate(concrete_state, edge)
+            };
+            match propagation {
                 Propagation::Follow(next) => {
                     let termination = match edge {
                         PropagationEdge::Invocation(invocation) => tracked
@@ -329,8 +337,9 @@ fn drain_obligations(
     routes: &RootRoutes,
 ) {
     while let Some(node) = queue.pop_front() {
-        let (origin, function, state, depth) = node_data(trace, node);
-        let TrackedState::Obligation(ref obligation) = state else {
+        let current = &trace.nodes[node.index()];
+        let (origin, function, depth) = (*current.origin(), current.function(), current.depth());
+        let TrackedState::Obligation(obligation) = current.state() else {
             unreachable!()
         };
         if let Some(contract) = tracked.obligations().boundary_contract(function, effect)
@@ -376,7 +385,15 @@ fn drain_obligations(
             continue;
         }
         for (edge, parent) in parent_edges(graph, incoming, transparent) {
-            match tracked.obligations().propagate(obligation, edge) {
+            // Borrow the queued state only while computing the transition;
+            // the owned successor can then be appended to the trace.
+            let propagation = {
+                let TrackedState::Obligation(obligation) = trace.nodes[node.index()].state() else {
+                    unreachable!()
+                };
+                tracked.obligations().propagate(obligation, edge)
+            };
+            match propagation {
                 Propagation::Follow(next) => {
                     let termination = match edge {
                         PropagationEdge::Invocation(invocation) => tracked
@@ -473,24 +490,6 @@ fn handoff(
             queue.push_back(node);
         }
     }
-}
-
-fn node_data(
-    trace: &DomainTrace,
-    node: TraceNodeId,
-) -> (
-    TrackedOrigin<ConcreteSource>,
-    FunctionId,
-    TrackedState<ConcreteEffectState>,
-    usize,
-) {
-    let node = &trace.nodes[node.index()];
-    (
-        *node.origin(),
-        node.function(),
-        node.state().clone(),
-        node.depth(),
-    )
 }
 
 fn add_node(
