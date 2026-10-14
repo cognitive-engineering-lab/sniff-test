@@ -3690,3 +3690,99 @@ fn mixed_active_states_preserve_concrete_then_obligation_finding_order() {
         reports[0].findings
     );
 }
+
+#[test]
+fn trace_limit_selection_preserves_rendered_frontier_order() {
+    use crate::trace::{TraceOptions, UnknownBoundary, UnknownBoundaryKind};
+    for scenario in [
+        ContractBoundaryScenario::NestedOperation,
+        ContractBoundaryScenario::ContractCycle,
+        ContractBoundaryScenario::BudgetAcrossHandoff,
+    ] {
+        let (mut trace, mut artifact) = contract_boundary_trace(scenario);
+        for body in &mut artifact.functions {
+            for call in &mut body.calls {
+                call.macro_expansions.push(MacroExpansionFact {
+                    macro_def: stable_function(99_000).def_path_hash,
+                    display_path: String::from("sample::macro"),
+                    source_range: None,
+                });
+            }
+        }
+        let graph = graph_for_all_bodies(&artifact).expect("graph");
+        // Include competing frontiers, repeated functions, absent nodes, and
+        // both limit kinds. The reference orders fully rendered diagnostics.
+        trace.unknown.clear();
+        for (index, node) in trace.nodes.iter().enumerate() {
+            for kind in [
+                UnknownBoundaryKind::TraceDepth,
+                UnknownBoundaryKind::TraceStateBudget,
+            ] {
+                for id in [Some(crate::trace::TraceNodeId(index)), None] {
+                    trace.unknown.push(crate::trace::UnknownTrace {
+                        origin: node.origin().clone(),
+                        node: id,
+                        function: node.function(),
+                        state: node.state().clone(),
+                        boundary: UnknownBoundary::new(kind),
+                    });
+                }
+            }
+        }
+        assert!(!trace.unknown.is_empty());
+        let options = TraceOptions {
+            max_depth: 1,
+            state_budget: 1,
+        };
+        for root in (0..graph.function_count()).map(crate::trace::FunctionId::from_index) {
+            let actual =
+                super::trace_limit_reasons(&artifact, &trace, &graph, &[root], options, |_| true);
+            let expected = [
+                UnknownBoundaryKind::TraceDepth,
+                UnknownBoundaryKind::TraceStateBudget,
+            ]
+            .into_iter()
+            .filter_map(|kind| {
+                trace
+                    .unknown()
+                    .filter(|unknown| unknown.boundary().kind() == kind)
+                    .filter_map(|unknown| {
+                        let mut path =
+                            super::path_from_root(&artifact, &graph, root, unknown.function())?;
+                        if let Some(node) = unknown.node() {
+                            path.steps
+                                .extend(super::trace_path(&artifact, &graph, &trace, node).steps);
+                        }
+                        let function = graph.stable_function(unknown.function());
+                        Some(crate::report_model::TraceFrontier {
+                            function,
+                            path: super::display_path(&artifact, function),
+                            source_range: artifact
+                                .function_body(function)
+                                .and_then(|body| body.source_range.clone()),
+                            trace: path,
+                        })
+                    })
+                    .min_by(|left, right| {
+                        left.trace
+                            .steps
+                            .len()
+                            .cmp(&right.trace.steps.len())
+                            .then_with(|| left.path.cmp(&right.path))
+                    })
+                    .map(|frontier| match kind {
+                        UnknownBoundaryKind::TraceDepth => IncompleteReason::TraceDepth {
+                            max_depth: 1,
+                            frontier,
+                        },
+                        _ => IncompleteReason::TraceStateBudget {
+                            budget: 1,
+                            frontier,
+                        },
+                    })
+            })
+            .collect::<Vec<_>>();
+            assert_eq!(actual, expected);
+        }
+    }
+}
