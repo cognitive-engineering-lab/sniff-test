@@ -1587,6 +1587,7 @@ fn trace_limit_reasons<O: Clone, S, T>(
     options: TraceOptions,
     includes_state: impl Fn(&S) -> bool,
 ) -> Vec<IncompleteReason> {
+    let mut root_paths = HashMap::new();
     [
         (
             crate::trace::UnknownBoundaryKind::TraceDepth,
@@ -1605,21 +1606,54 @@ fn trace_limit_reasons<O: Clone, S, T>(
                 unknown.boundary().kind() == boundary_kind && includes_state(unknown.state())
             })
             .filter_map(|unknown| {
+                let path = root_paths.entry(unknown.function()).or_insert_with(|| {
+                    roots
+                        .iter()
+                        .copied()
+                        .filter_map(|root| {
+                            path_from_root(artifact, graph, root, unknown.function())
+                        })
+                        .min_by_key(|path| path.steps.len())
+                });
+                let length = path.as_ref()?.steps.len()
+                    + unknown.node().map_or(0, |node| {
+                        trace_predecessors(trace, node)
+                            .map(|edge| match edge.propagation() {
+                                PropagationEdge::Invocation(invocation) => graph
+                                    .source_edge(
+                                        invocation,
+                                        trace
+                                            .node(edge.from())
+                                            .expect("trace source is indexed")
+                                            .function(),
+                                    )
+                                    .map_or(0, |source| source.macro_expansions.len() + 1),
+                                PropagationEdge::TransparentBody(_) => 1,
+                                PropagationEdge::Handoff => unreachable!("handoffs end the path"),
+                            })
+                            .sum::<usize>()
+                    });
+                Some((unknown, length))
+            })
+            .min_by(|(left, left_length), (right, right_length)| {
+                left_length.cmp(right_length).then_with(|| {
+                    display_path(artifact, graph.stable_function(left.function())).cmp(
+                        &display_path(artifact, graph.stable_function(right.function())),
+                    )
+                })
+            })
+            .map(|(unknown, _)| {
                 trace_frontier(
                     artifact,
                     graph,
                     trace,
-                    roots,
+                    root_paths[&unknown.function()]
+                        .as_ref()
+                        .expect("reachable frontier")
+                        .clone(),
                     unknown.node(),
                     unknown.function(),
                 )
-            })
-            .min_by(|left, right| {
-                left.trace
-                    .steps
-                    .len()
-                    .cmp(&right.trace.steps.len())
-                    .then_with(|| left.path.cmp(&right.path))
             })
             .map(|frontier| match limit {
                 TraceLimitValue::Depth(max_depth) => IncompleteReason::TraceDepth {
@@ -1644,27 +1678,44 @@ fn trace_frontier<O: Clone, S, T>(
     artifact: &ArtifactFacts,
     graph: &InvocationGraph,
     trace: &EffectTrace<O, S, T>,
-    roots: &[FunctionId],
+    mut path: InterpretedTrace,
     node: Option<crate::trace::TraceNodeId>,
     function: FunctionId,
-) -> Option<TraceFrontier> {
-    let mut path = roots
-        .iter()
-        .copied()
-        .filter_map(|root| path_from_root(artifact, graph, root, function))
-        .min_by_key(|path| path.steps.len())?;
+) -> TraceFrontier {
     if let Some(node) = node {
         let mut traced = trace_path(artifact, graph, trace, node);
         path.steps.append(&mut traced.steps);
     }
     let function = graph.stable_function(function);
-    Some(TraceFrontier {
+    TraceFrontier {
         function,
         path: display_path(artifact, function),
         source_range: artifact
             .function_body(function)
             .and_then(|body| body.source_range.clone()),
         trace: path,
+    }
+}
+
+fn trace_predecessors<O, S, T>(
+    trace: &EffectTrace<O, S, T>,
+    mut node: TraceNodeId,
+) -> impl Iterator<Item = crate::trace::TraceEdge> + '_ {
+    let mut seen = BTreeSet::new();
+    std::iter::from_fn(move || {
+        if !seen.insert(node) {
+            return None;
+        }
+        let predecessor = trace
+            .node(node)
+            .expect("trace node is indexed")
+            .predecessor()?;
+        let edge = *trace.edge(predecessor).expect("trace edge is indexed");
+        if edge.propagation() == PropagationEdge::Handoff {
+            return None;
+        }
+        node = edge.from();
+        Some(edge)
     })
 }
 
@@ -1672,22 +1723,10 @@ fn trace_path<O: Clone, S, T>(
     artifact: &ArtifactFacts,
     graph: &InvocationGraph,
     trace: &EffectTrace<O, S, T>,
-    mut node: TraceNodeId,
+    node: TraceNodeId,
 ) -> InterpretedTrace {
     let mut steps = Vec::new();
-    let mut seen = BTreeSet::new();
-    while seen.insert(node) {
-        let Some(predecessor) = trace
-            .node(node)
-            .expect("trace node is indexed")
-            .predecessor()
-        else {
-            break;
-        };
-        let edge = trace.edge(predecessor).expect("trace edge is indexed");
-        if edge.propagation() == PropagationEdge::Handoff {
-            break;
-        }
+    for edge in trace_predecessors(trace, node) {
         if let PropagationEdge::Invocation(invocation) = edge.propagation() {
             let target = trace
                 .node(edge.from())
@@ -1733,7 +1772,6 @@ fn trace_path<O: Clone, S, T>(
                 target_path: Some(display_path(artifact, child)),
             });
         }
-        node = edge.from();
     }
     InterpretedTrace { steps }
 }
