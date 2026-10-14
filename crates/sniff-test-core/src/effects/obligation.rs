@@ -539,16 +539,14 @@ impl ObligationTracker<'_> {
         state: &ObligationState,
         edge: PropagationEdge,
     ) -> Propagation<ObligationState> {
-        let mut next = state.clone();
-        next.termination = None;
-        if let PropagationEdge::Invocation(invocation) = edge {
+        let mut next = if let PropagationEdge::Invocation(invocation) = edge {
             if self.crosses_non_applicable_declaration(state, invocation) {
                 return Propagation::Ignore;
             }
             let Some(transition) = self.invocation_transition(state, invocation, None) else {
                 return Propagation::Ignore;
             };
-            next = transition.state;
+            let next = transition.state;
             // The callsite belongs to the trusted implementation, so its
             // explicit evidence is interpreted before opacity stops any
             // remaining obligations at the parent function boundary.
@@ -558,7 +556,12 @@ impl ObligationTracker<'_> {
             ) {
                 return Propagation::Follow(next);
             }
-        }
+            next
+        } else {
+            let mut next = state.clone();
+            next.termination = None;
+            next
+        };
         let parent = match edge {
             PropagationEdge::Invocation(invocation) => self.graph.invocation(invocation).caller(),
             PropagationEdge::TransparentBody(edge) => self.graph.transparent_parent(edge),
