@@ -799,6 +799,7 @@ fn source_deduplication_retains_distinct_states_even_with_hash_collisions() {
         |f| f.function_path.push_str("::other"),
         |f| f.trace.steps[0].source_range.as_mut().unwrap().byte_end += 1,
         |f| f.trace.steps[0].target_path = None,
+        |f| f.trace.steps[0].caller_path.push_str("::alias"),
         |f| f.trace.steps[0].call = CallId::new(2),
         |f| f.trace.steps.clear(),
         |f| {

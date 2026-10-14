@@ -610,12 +610,13 @@ impl Hash for SourceFindingFingerprint<'_> {
         finding.missing_requirements.hash(state);
         finding.requirements.hash(state);
         finding.trace.steps.len().hash(state);
+        // Stable identities and source locations discriminate trace topology
+        // without rehashing long rendered aliases at every step. The full
+        // predicate below still compares aliases and resolves hash collisions.
         for step in &finding.trace.steps {
             step.caller.def_path_hash.hash(state);
-            step.caller_path.hash(state);
             step.kind.hash(state);
             step.source_range.hash(state);
-            step.target_path.hash(state);
         }
     }
 }
