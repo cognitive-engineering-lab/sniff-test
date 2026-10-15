@@ -188,6 +188,7 @@ pub fn trace_selected_workspace(
         &all_metadata,
     );
 
+    let mut trace_steps = TraceStepCache::default();
     roots
         .iter()
         .cloned()
@@ -323,6 +324,7 @@ pub fn trace_selected_workspace(
                             active_nodes[effect].nodes(root_function),
                             &root,
                             marker_probing,
+                            &mut trace_steps,
                         );
                         findings.extend(projected.concrete);
                         obligation_findings.extend(projected.obligations);
@@ -543,7 +545,7 @@ fn project_reverse_path(
             PropagationEdge::TransparentBody(transparent) => {
                 let parent = graph.transparent_parent(transparent);
                 let source = graph.transparent_source(transparent);
-                trace.steps.push(InterpretedTraceStep {
+                trace.steps.push(std::sync::Arc::new(InterpretedTraceStep {
                     caller: graph.stable_function(parent),
                     caller_path: display_path(artifact, graph.stable_function(parent)),
                     call: source.id,
@@ -552,7 +554,7 @@ fn project_reverse_path(
                     source_range: source.source_range.clone(),
                     target: Some(graph.stable_function(child)),
                     target_path: Some(display_path(artifact, graph.stable_function(child))),
-                });
+                }));
             }
             PropagationEdge::Handoff => unreachable!("handoff edges are not graph paths"),
         }
@@ -638,12 +640,13 @@ fn same_source_finding(left: &InterpretedFinding, right: &InterpretedFinding) ->
             .iter()
             .zip(&right.trace.steps)
             .all(|(left, right)| {
-                left.caller.def_path_hash == right.caller.def_path_hash
-                    && (left.caller != right.caller || left.call == right.call)
-                    && left.caller_path == right.caller_path
-                    && left.kind == right.kind
-                    && left.source_range == right.source_range
-                    && left.target_path == right.target_path
+                Arc::ptr_eq(left, right)
+                    || (left.caller.def_path_hash == right.caller.def_path_hash
+                        && (left.caller != right.caller || left.call == right.call)
+                        && left.caller_path == right.caller_path
+                        && left.kind == right.kind
+                        && left.source_range == right.source_range
+                        && left.target_path == right.target_path)
             })
 }
 
@@ -779,6 +782,7 @@ fn active_node_findings(
     active_nodes: &[TraceNodeId],
     root: &InterpretationRoot,
     marker_probing: AnnotationProbingFact,
+    trace_steps: &mut TraceStepCache,
 ) -> ActiveNodeFindings {
     let mut findings = ActiveNodeFindings {
         concrete: Vec::new(),
@@ -798,6 +802,7 @@ fn active_node_findings(
                 trace,
                 node,
                 marker_probing,
+                trace_steps,
             )),
             TrackedState::Obligation(_) => findings.obligations.extend(
                 obligation_node_findings(
@@ -811,6 +816,7 @@ fn active_node_findings(
                     node,
                     root,
                     marker_probing,
+                    trace_steps,
                 )
                 .into_iter()
                 .flatten(),
@@ -832,6 +838,7 @@ fn concrete_node_finding(
     trace: &ConcreteTrace,
     node: TraceNodeId,
     marker_probing: AnnotationProbingFact,
+    trace_steps: &mut TraceStepCache,
 ) -> Option<InterpretedFinding> {
     let effect_key = &metadata.key;
     let trace_node = trace.node(node)?;
@@ -841,7 +848,7 @@ fn concrete_node_finding(
     let TrackedOrigin::Concrete(origin) = *trace_node.origin() else {
         return None;
     };
-    let mut trace_path = trace_path(artifact, graph, trace, node);
+    let mut trace_path = trace_path_cached(artifact, graph, trace, node, trace_steps);
     match origin {
         ConcreteSource::Effect { owner, effect } => {
             let (body, fact) = effect_fact(artifact, owner, effect)?;
@@ -1207,6 +1214,7 @@ fn obligation_node_findings<C, O: Clone, S, T>(
     node: TraceNodeId,
     root: &InterpretationRoot,
     marker_probing: AnnotationProbingFact,
+    trace_steps: &mut TraceStepCache,
 ) -> Option<Vec<InterpretedFinding>> {
     let trace_node = trace.node(node)?;
     let state = trace_node.state().obligation()?;
@@ -1215,7 +1223,7 @@ fn obligation_node_findings<C, O: Clone, S, T>(
     if contract.applies_to(root_function) {
         return None;
     }
-    let path = trace_path(artifact, graph, trace, node);
+    let path = trace_path_cached(artifact, graph, trace, node, trace_steps);
     let missing_requirements = trace_node
         .state()
         .obligation()?
@@ -1720,58 +1728,88 @@ fn trace_predecessors<O, S, T>(
     })
 }
 
+/// Rendered edges are immutable for one composed artifact. Stable caller,
+/// body-local call, concrete target and kind identify the source projection;
+/// graph-local invocation IDs deliberately do not appear in this key.
+#[derive(Default)]
+struct TraceStepCache {
+    edges: HashMap<
+        (
+            StableFunctionId,
+            crate::artifact::CallId,
+            StableFunctionId,
+            crate::artifact::CallKindFact,
+        ),
+        Vec<Arc<InterpretedTraceStep>>,
+    >,
+}
+
 fn trace_path<O: Clone, S, T>(
     artifact: &ArtifactFacts,
     graph: &InvocationGraph,
     trace: &EffectTrace<O, S, T>,
     node: TraceNodeId,
 ) -> InterpretedTrace {
+    trace_path_cached(artifact, graph, trace, node, &mut TraceStepCache::default())
+}
+
+fn trace_path_cached<O: Clone, S, T>(
+    artifact: &ArtifactFacts,
+    graph: &InvocationGraph,
+    trace: &EffectTrace<O, S, T>,
+    node: TraceNodeId,
+    cache: &mut TraceStepCache,
+) -> InterpretedTrace {
     let mut steps = Vec::new();
     for edge in trace_predecessors(trace, node) {
-        if let PropagationEdge::Invocation(invocation) = edge.propagation() {
-            let target = trace
-                .node(edge.from())
-                .expect("trace source is indexed")
-                .function();
-            if let Some(source) = graph.source_edge(invocation, target) {
-                let caller = graph.stable_function(
-                    trace
-                        .node(edge.to())
-                        .expect("trace destination is indexed")
-                        .function(),
-                );
-                let target = graph.stable_function(target);
-                let mut call_trace = InterpretedTrace { steps: Vec::new() };
-                append_call_trace(artifact, caller, source, &mut call_trace);
-                if let Some(last) = call_trace.steps.last_mut() {
-                    last.target = Some(target);
+        let target = trace
+            .node(edge.from())
+            .expect("trace source is indexed")
+            .function();
+        let caller = graph.stable_function(
+            trace
+                .node(edge.to())
+                .expect("trace destination is indexed")
+                .function(),
+        );
+        let stable_target = graph.stable_function(target);
+        match edge.propagation() {
+            PropagationEdge::Invocation(invocation) => {
+                if let Some(source) = graph.source_edge(invocation, target) {
+                    let rendered = cache
+                        .edges
+                        .entry((caller, source.id, stable_target, source.kind))
+                        .or_insert_with(|| {
+                            let mut path = InterpretedTrace { steps: Vec::new() };
+                            append_call_trace(artifact, caller, source, &mut path);
+                            if let Some(last) = path.steps.last_mut() {
+                                Arc::make_mut(last).target = Some(stable_target);
+                            }
+                            path.steps
+                        });
+                    steps.extend(rendered.iter().cloned());
                 }
-                steps.extend(call_trace.steps);
             }
-        } else if let PropagationEdge::TransparentBody(transparent) = edge.propagation() {
-            let parent = graph.stable_function(
-                trace
-                    .node(edge.to())
-                    .expect("trace destination is indexed")
-                    .function(),
-            );
-            let child = graph.stable_function(
-                trace
-                    .node(edge.from())
-                    .expect("trace source is indexed")
-                    .function(),
-            );
-            let source = graph.transparent_source(transparent);
-            steps.push(InterpretedTraceStep {
-                caller: parent,
-                caller_path: display_path(artifact, parent),
-                call: source.id,
-                marker_call: None,
-                kind: InterpretedTraceStepKind::Reachability(source.kind),
-                source_range: source.source_range.clone(),
-                target: Some(child),
-                target_path: Some(display_path(artifact, child)),
-            });
+            PropagationEdge::TransparentBody(transparent) => {
+                let source = graph.transparent_source(transparent);
+                let rendered = cache
+                    .edges
+                    .entry((caller, source.id, stable_target, source.kind))
+                    .or_insert_with(|| {
+                        vec![Arc::new(InterpretedTraceStep {
+                            caller,
+                            caller_path: display_path(artifact, caller),
+                            call: source.id,
+                            marker_call: None,
+                            kind: InterpretedTraceStepKind::Reachability(source.kind),
+                            source_range: source.source_range.clone(),
+                            target: Some(stable_target),
+                            target_path: Some(display_path(artifact, stable_target)),
+                        })]
+                    });
+                steps.extend(rendered.iter().cloned());
+            }
+            PropagationEdge::Handoff => unreachable!("handoffs end the path"),
         }
     }
     InterpretedTrace { steps }
@@ -1786,7 +1824,7 @@ fn append_call_trace(
     let mut caller_path = display_path(artifact, caller);
     for frame in &edge.macro_expansions {
         let target_path = format!("macro {}", frame.display_path);
-        trace.steps.push(InterpretedTraceStep {
+        trace.steps.push(std::sync::Arc::new(InterpretedTraceStep {
             caller,
             caller_path,
             call: edge.id,
@@ -1800,10 +1838,10 @@ fn append_call_trace(
                 .or_else(|| edge.source_range.clone()),
             target: None,
             target_path: Some(target_path.clone()),
-        });
+        }));
         caller_path = target_path;
     }
-    trace.steps.push(InterpretedTraceStep {
+    trace.steps.push(std::sync::Arc::new(InterpretedTraceStep {
         caller,
         caller_path,
         call: edge.id,
@@ -1822,14 +1860,14 @@ fn append_call_trace(
             .function_target()
             .map(|target| target.display_path.clone())
             .or_else(|| Some(boundary_description(edge))),
-    });
+    }));
 }
 
 fn append_effect_provenance(body: &FunctionFact, fact: &EffectFact, trace: &mut InterpretedTrace) {
     let mut caller_path = body.display_path.clone();
     for frame in &fact.macro_expansions {
         let target_path = format!("macro {}", frame.display_path);
-        trace.steps.push(InterpretedTraceStep {
+        trace.steps.push(std::sync::Arc::new(InterpretedTraceStep {
             caller: body.function,
             caller_path,
             call: crate::artifact::CallId::new(fact.id.index()),
@@ -1843,7 +1881,7 @@ fn append_effect_provenance(body: &FunctionFact, fact: &EffectFact, trace: &mut 
                 .or_else(|| fact.source_range.clone()),
             target: None,
             target_path: Some(target_path.clone()),
-        });
+        }));
         caller_path = target_path;
     }
 }
@@ -1856,7 +1894,7 @@ fn effect_caller_path(body: &FunctionFact, fact: &EffectFact) -> String {
 }
 
 fn append_effect_operation(body: &FunctionFact, fact: &EffectFact, trace: &mut InterpretedTrace) {
-    trace.steps.push(InterpretedTraceStep {
+    trace.steps.push(std::sync::Arc::new(InterpretedTraceStep {
         caller: body.function,
         caller_path: effect_caller_path(body, fact),
         call: crate::artifact::CallId::new(fact.id.index()),
@@ -1868,7 +1906,7 @@ fn append_effect_operation(body: &FunctionFact, fact: &EffectFact, trace: &mut I
             .or_else(|| fact.source_range.clone()),
         target: None,
         target_path: Some(fact.kind.as_str().replace('-', " ")),
-    });
+    }));
 }
 
 fn display_path(artifact: &ArtifactFacts, function: StableFunctionId) -> String {

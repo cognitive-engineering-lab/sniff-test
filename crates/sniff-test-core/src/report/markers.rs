@@ -411,6 +411,7 @@ fn marker_invocation_projection<O: Clone, S, T>(
     let edge = graph.source_edge(invocation, target)?;
     append_call_trace(artifact, graph.stable_function(function), edge, &mut trace);
     if let Some(last) = trace.steps.last_mut() {
+        let last = std::sync::Arc::make_mut(last);
         last.target = Some(graph.stable_function(target));
         last.target_path = Some(display_path(artifact, graph.stable_function(target)));
     }
@@ -539,6 +540,7 @@ fn append_invocation_source(
         trace,
     );
     if let Some((step, target)) = trace.steps.last_mut().zip(source.target()) {
+        let step = std::sync::Arc::make_mut(step);
         step.target = Some(target.function);
         step.target_path = Some(target.display_path.clone());
     }
