@@ -502,11 +502,25 @@ fn add_node(
     options: TraceOptions,
 ) -> Option<TraceNodeId> {
     if let Some((parent, _)) = predecessor
-        && same_ancestor(trace, parent, origin, function, &state)
+        && same_ancestor(trace, parent, origin, function, |candidate| {
+            candidate == &state
+        })
     {
         unknown_at(trace, origin, parent, UnknownBoundaryKind::Cycle);
         return None;
     }
+    append_node(trace, origin, function, state, depth, predecessor, options)
+}
+
+fn append_node(
+    trace: &mut DomainTrace,
+    origin: TrackedOrigin<ConcreteSource>,
+    function: FunctionId,
+    state: TrackedState<ConcreteEffectState>,
+    depth: usize,
+    predecessor: Option<(TraceNodeId, PropagationEdge)>,
+    options: TraceOptions,
+) -> Option<TraceNodeId> {
     if trace.nodes.len() >= options.state_budget {
         match predecessor {
             Some((parent, _)) => {
@@ -562,7 +576,7 @@ fn add_concrete_node(
             parent,
             TrackedOrigin::Concrete(origin),
             function,
-            &TrackedState::Concrete(state.clone()),
+            |candidate| matches!(candidate, TrackedState::Concrete(candidate) if candidate == &state),
         )
     {
         unknown_at(
@@ -576,7 +590,7 @@ fn add_concrete_node(
     if !at_contract && !seen.insert((origin, function, state.clone(), depth)) {
         return None;
     }
-    add_node(
+    append_node(
         trace,
         TrackedOrigin::Concrete(origin),
         function,
@@ -592,11 +606,13 @@ fn same_ancestor(
     mut node: TraceNodeId,
     origin: TrackedOrigin<ConcreteSource>,
     function: FunctionId,
-    state: &TrackedState<ConcreteEffectState>,
+    matches_state: impl Fn(&TrackedState<ConcreteEffectState>) -> bool,
 ) -> bool {
     loop {
         let current = &trace.nodes[node.index()];
-        if *current.origin() == origin && current.function() == function && current.state() == state
+        if *current.origin() == origin
+            && current.function() == function
+            && matches_state(current.state())
         {
             return true;
         }
