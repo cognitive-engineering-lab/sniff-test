@@ -1,11 +1,12 @@
 //! Canonical findings and the single lint-policy resolution boundary.
 
 use std::borrow::Cow;
-use std::collections::{BTreeMap, BTreeSet, HashMap, hash_map::RandomState};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::fmt::Write;
-use std::hash::{BuildHasher, Hash, Hasher};
+use std::hash::{BuildHasher, BuildHasherDefault, Hash, Hasher};
 use std::path::Path;
 
+use rustc_data_structures::fx::FxHasher;
 use rustc_middle::ty::TyCtxt;
 use rustc_span::Span;
 use serde::Serialize;
@@ -393,7 +394,7 @@ fn assign_finding_suffixes(hashes: &mut BTreeMap<String, String>) {
 /// merging them could hide distinct analysis gaps.
 #[must_use]
 pub fn aggregate_human_findings(findings: &[ResolvedFinding]) -> Vec<ResolvedFinding> {
-    let hashes = RandomState::new();
+    let hashes = BuildHasherDefault::<FxHasher>::default();
     aggregate_human_findings_with(
         findings,
         |finding| hashes.hash_one(HumanSourceFingerprint(finding)),
@@ -404,7 +405,7 @@ pub fn aggregate_human_findings(findings: &[ResolvedFinding]) -> Vec<ResolvedFin
 /// Consume canonical findings when human output is the only remaining use.
 #[must_use]
 pub fn aggregate_human_findings_owned(findings: Vec<ResolvedFinding>) -> Vec<ResolvedFinding> {
-    let hashes = RandomState::new();
+    let hashes = BuildHasherDefault::<FxHasher>::default();
     aggregate_human_findings_iter_with(
         findings.into_iter().map(Cow::Owned),
         |finding| hashes.hash_one(HumanSourceFingerprint(finding)),
