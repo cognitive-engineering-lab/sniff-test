@@ -517,7 +517,8 @@ pub fn take_full_stack_trace_hint(findings: &mut [ResolvedFinding]) -> bool {
     for finding in findings {
         finding.finding.diagnostic.messages.retain(|message| {
             let is_hint =
-                matches!(message, DiagnosticMessage::Note(note) if note == FULL_STACK_TRACE_HINT);
+                matches!(message, DiagnosticMessage::FullStackTraceHint)
+                    || matches!(message, DiagnosticMessage::Note(note) if note == FULL_STACK_TRACE_HINT);
             removed |= is_hint;
             !is_hint
         });
@@ -603,6 +604,7 @@ fn compact_human_diagnostic_paths(finding: &mut Finding) {
     compact_quoted_paths(&mut finding.diagnostic.message, &paths);
     for message in &mut finding.diagnostic.messages {
         let text = match message {
+            DiagnosticMessage::FullStackTraceHint => continue,
             DiagnosticMessage::Note(text)
             | DiagnosticMessage::SpanNote(_, text)
             | DiagnosticMessage::SpanLabel(_, text)
@@ -729,6 +731,8 @@ pub struct FindingDiagnostic {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DiagnosticMessage {
+    /// Request one shared footer without copying its text into every finding.
+    FullStackTraceHint,
     Note(String),
     SpanNote(Span, String),
     SpanLabel(Span, String),
@@ -1795,8 +1799,12 @@ mod tests {
             },
         };
         let mut findings = [
-            resolved(vec![hint.clone(), other.clone()]),
-            resolved(vec![hint]),
+            resolved(vec![
+                hint,
+                DiagnosticMessage::FullStackTraceHint,
+                other.clone(),
+            ]),
+            resolved(vec![DiagnosticMessage::FullStackTraceHint]),
         ];
 
         assert!(take_full_stack_trace_hint(&mut findings));
