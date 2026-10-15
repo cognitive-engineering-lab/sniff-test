@@ -436,15 +436,49 @@ fn path_from_root(
     root: FunctionId,
     target: FunctionId,
 ) -> Option<InterpretedTrace> {
-    path_from_root_until(
-        artifact,
-        graph,
-        root,
-        target,
-        TrustPath::default(),
-        |_, _| false,
-        |_| false,
-    )
+    if root == target {
+        return Some(InterpretedTrace { steps: Vec::new() });
+    }
+    // Unrestricted lookup needs one visit per function. Parent links avoid
+    // copying every queued path and tracking unused path-dependent policy.
+    let mut parents = FxHashMap::default();
+    parents.insert(target, None);
+    let mut queue = std::collections::VecDeque::from([target]);
+    while let Some(function) = queue.pop_front() {
+        let incoming = graph
+            .incoming_invocations(function)
+            .iter()
+            .map(|&invocation| {
+                (
+                    graph.caller(invocation),
+                    PropagationEdge::Invocation(invocation),
+                )
+            });
+        let transparent = graph.transparent_parents(function).iter().map(|&edge| {
+            (
+                graph.transparent_parent(edge),
+                PropagationEdge::TransparentBody(edge),
+            )
+        });
+        for (parent, edge) in incoming.chain(transparent) {
+            let std::collections::hash_map::Entry::Vacant(entry) = parents.entry(parent) else {
+                continue;
+            };
+            entry.insert(Some((edge, function)));
+            if parent == root {
+                let mut path = Vec::new();
+                let mut cursor = root;
+                while let Some((edge, child)) = parents[&cursor] {
+                    path.push((edge, child));
+                    cursor = child;
+                }
+                path.reverse();
+                return Some(project_reverse_path(artifact, graph, path));
+            }
+            queue.push_back(parent);
+        }
+    }
+    None
 }
 
 fn audited_path_from_root(
