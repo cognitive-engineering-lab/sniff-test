@@ -420,7 +420,7 @@ fn aggregate_human_findings_iter_with<'a>(
     mut fingerprint: impl FnMut(&ResolvedFinding) -> u64,
     mut matches: impl FnMut(&ResolvedFinding, &ResolvedFinding) -> bool,
 ) -> Vec<ResolvedFinding> {
-    let mut groups = Vec::<(ResolvedFinding, BTreeSet<String>, BTreeSet<String>)>::new();
+    let mut groups = Vec::<(ResolvedFinding, bool)>::new();
     let mut buckets: HashMap<u64, Vec<usize>> = HashMap::new();
     for finding in findings.into_iter() {
         let candidates = (is_source_finding(&finding.finding.kind)
@@ -432,18 +432,12 @@ fn aggregate_human_findings_iter_with<'a>(
                 .copied()
                 .find(|&index| matches(&groups[index].0, &finding))
         });
-        let roots = finding.finding.root.iter().cloned().collect();
-        let roots_without_trace = finding
-            .finding
-            .root
-            .iter()
-            .filter(|_| finding.finding.trace.is_empty())
-            .cloned()
-            .collect();
+        // Equality keeps report roots separate, so every group has at most
+        // its representative's root. Retain only the extra trace-absence bit.
+        let root_without_trace = finding.finding.root.is_some() && finding.finding.trace.is_empty();
         if let Some(index) = matching {
-            let (representative, group_roots, group_roots_without_trace) = &mut groups[index];
-            group_roots.extend(roots);
-            group_roots_without_trace.extend(roots_without_trace);
+            let (representative, group_root_without_trace) = &mut groups[index];
+            *group_root_without_trace |= root_without_trace;
             let mut messages = representative.finding.diagnostic.messages.clone();
             extend_unique_messages(&mut messages, &finding.finding.diagnostic.messages);
             let candidate_trace_length = finding.finding.trace.len();
@@ -459,29 +453,31 @@ fn aggregate_human_findings_iter_with<'a>(
             if let Some(candidates) = candidates {
                 candidates.push(groups.len());
             }
-            groups.push((finding.into_owned(), roots, roots_without_trace));
+            groups.push((finding.into_owned(), root_without_trace));
         }
     }
 
     groups
         .into_iter()
-        .map(|(mut finding, roots, roots_without_trace)| {
+        .map(|(mut finding, root_without_trace)| {
             if is_source_finding(&finding.finding.kind) {
                 let has_local_primary = place_source_diagnostic(&mut finding.finding);
-                let has_reachability_note =
-                    combine_root_reachability_note(&mut finding.finding, &roots);
-                compact_human_diagnostic_paths(&mut finding.finding, &roots);
-                let root_labels = shortest_distinguishing_root_labels(&roots);
-                for (_, root) in roots.iter().zip(root_labels).filter(|(root, _)| {
-                    !has_local_primary
-                        && !has_reachability_note
-                        && roots_without_trace.contains(*root)
-                }) {
-                    let note = DiagnosticMessage::Note(format!(
-                        "reachable from local report root: `{root}`"
-                    ));
-                    if !finding.finding.diagnostic.messages.contains(&note) {
-                        finding.finding.diagnostic.messages.push(note);
+                let has_reachability_note = finding
+                    .finding
+                    .diagnostic
+                    .messages
+                    .iter()
+                    .any(is_compact_reachability_note);
+                compact_human_diagnostic_paths(&mut finding.finding);
+                if !has_local_primary && !has_reachability_note && root_without_trace {
+                    if let Some(root) = &finding.finding.root {
+                        let note = DiagnosticMessage::Note(format!(
+                            "reachable from local report root: `{}`",
+                            compact_function_name(root)
+                        ));
+                        if !finding.finding.diagnostic.messages.contains(&note) {
+                            finding.finding.diagnostic.messages.push(note);
+                        }
                     }
                 }
             }
@@ -506,48 +502,6 @@ fn extend_unique_messages(messages: &mut Vec<DiagnosticMessage>, additional: &[D
             messages.push(message.clone());
         }
     }
-}
-
-fn combine_root_reachability_note(finding: &mut Finding, roots: &BTreeSet<String>) -> bool {
-    if roots.len() < 2 {
-        return finding
-            .diagnostic
-            .messages
-            .iter()
-            .any(is_compact_reachability_note);
-    }
-    let mut insertion = None;
-    let mut destination = None;
-    let mut retained = Vec::with_capacity(finding.diagnostic.messages.len());
-    for message in finding.diagnostic.messages.drain(..) {
-        if is_compact_reachability_note(&message) {
-            insertion.get_or_insert(retained.len());
-            if let DiagnosticMessage::Note(note) = &message {
-                destination = destination.or_else(|| {
-                    note.split_once(" to ")
-                        .map(|(_, destination)| destination.to_owned())
-                });
-            }
-        } else {
-            retained.push(message);
-        }
-    }
-    let Some(insertion) = insertion else {
-        finding.diagnostic.messages = retained;
-        return false;
-    };
-    let roots = shortest_distinguishing_root_labels(roots)
-        .into_iter()
-        .map(|root| format!("`{root}`"))
-        .collect::<Vec<_>>()
-        .join(", ");
-    let destination = destination.unwrap_or_else(|| String::from("the effect source"));
-    retained.insert(
-        insertion,
-        DiagnosticMessage::Note(format!("reachable from {roots} to {destination}")),
-    );
-    finding.diagnostic.messages = retained;
-    true
 }
 
 fn is_compact_reachability_note(message: &DiagnosticMessage) -> bool {
@@ -604,9 +558,6 @@ fn same_human_source(left: &ResolvedFinding, right: &ResolvedFinding) -> bool {
         && left.finding.target == right.finding.target
         && left.finding.span == right.finding.span
         && left.finding.owner == right.finding.owner
-        && (left.finding.owner.as_ref().is_none_or(|owner| {
-            !matches!(owner.scope, OwnerScope::Workspace | OwnerScope::Dependency)
-        }) || left.finding.root == right.finding.root)
         && left.finding.source_evidence == right.finding.source_evidence
         && left.finding.reason == right.finding.reason
         && left.finding.trace_order == right.finding.trace_order
@@ -628,20 +579,21 @@ fn place_source_diagnostic(finding: &mut Finding) -> bool {
     false
 }
 
-fn compact_human_diagnostic_paths(finding: &mut Finding, roots: &BTreeSet<String>) {
-    let root_labels = shortest_distinguishing_root_labels(roots);
-    let mut paths = roots
+fn compact_human_diagnostic_paths(finding: &mut Finding) {
+    let mut paths = finding
+        .root
         .iter()
-        .zip(root_labels)
-        .filter(|(path, compact)| path.as_str() != compact)
-        .map(|(path, compact)| (path.clone(), compact))
+        .filter_map(|path| {
+            let compact = compact_function_name(path);
+            (path.as_str() != compact).then(|| (path.clone(), compact.to_owned()))
+        })
         .collect::<Vec<_>>();
     paths.extend(
         finding
             .target
             .iter()
             .chain(finding.function.iter())
-            .filter(|path| !roots.contains(*path))
+            .filter(|path| finding.root.as_ref() != Some(*path))
             .map(|path| (path.clone(), compact_function_name(path).to_owned()))
             .filter(|(path, compact)| path != compact),
     );
@@ -725,32 +677,6 @@ pub(crate) fn is_effect_source_finding(kind: &FindingKind) -> bool {
             ..
         }
     )
-}
-
-pub(crate) fn shortest_distinguishing_root_labels(roots: &BTreeSet<String>) -> Vec<String> {
-    let split = roots
-        .iter()
-        .map(|root| top_level_path_segments(root))
-        .collect::<Vec<_>>();
-    split
-        .iter()
-        .enumerate()
-        .map(|(index, segments)| {
-            for suffix_len in 1..=segments.len() {
-                let start = segments.len() - suffix_len;
-                let candidate = segments[start..].join("::");
-                let unique = split.iter().enumerate().all(|(other_index, other)| {
-                    other_index == index
-                        || other.len() < suffix_len
-                        || other[other.len() - suffix_len..].join("::") != candidate
-                });
-                if unique {
-                    return candidate;
-                }
-            }
-            segments.join("::")
-        })
-        .collect()
 }
 
 fn compare_findings(left: &Finding, right: &Finding) -> std::cmp::Ordering {
@@ -944,7 +870,6 @@ mod tests {
         DiagnosticMessage, FULL_STACK_TRACE_HINT, Finding, FindingDiagnostic, FindingKind,
         FindingOwner, FindingTraceStepOrder, OwnerScope, ResolvedFinding, SourceEvidence,
         aggregate_human_findings, assign_finding_suffixes, assign_root_codes,
-        compact_human_diagnostic_paths, shortest_distinguishing_root_labels,
         take_full_stack_trace_hint, trace_root_codes,
     };
     use rustc_span::{BytePos, Span};
@@ -989,7 +914,6 @@ mod tests {
         assert_eq!(codes["example::first"], "1234");
         assert_eq!(codes["example::second"], "5678");
     }
-    use std::collections::BTreeSet;
 
     fn test_config() -> SniffTestConfig {
         SniffTestConfig {
@@ -1044,6 +968,16 @@ mod tests {
             finding: finding(effect("panic", EffectFindingClass::ConcreteInvocation))
                 .with_source_order(None, Some(&range)),
         }
+    }
+
+    #[test]
+    fn owned_human_aggregation_moves_trace_storage() {
+        let mut finding = indexed_human_finding(0);
+        finding.finding.trace = vec!["first".into(), "second".into()];
+        let storage = finding.finding.trace.as_ptr();
+        let output = super::aggregate_human_findings_owned(vec![finding]);
+        assert_eq!(output[0].finding.trace.as_ptr(), storage);
+        assert_eq!(output[0].finding.trace.len(), 2);
     }
 
     #[test]
@@ -1774,38 +1708,6 @@ mod tests {
         assert_eq!(
             serde_json::to_value(&aggregated[0]).expect("serialize human finding"),
             serialized
-        );
-    }
-
-    #[test]
-    fn colliding_root_names_use_the_shortest_distinguishing_suffix() {
-        let roots = BTreeSet::from([
-            String::from("sample::left::run"),
-            String::from("sample::right::run"),
-            String::from("sample::right::stop"),
-        ]);
-
-        assert_eq!(
-            shortest_distinguishing_root_labels(&roots),
-            ["left::run", "right::run", "stop"]
-        );
-
-        let mut finding = finding(effect("panic", EffectFindingClass::ConcreteInvocation));
-        finding.diagnostic.messages = vec![
-            DiagnosticMessage::Note(String::from(
-                "reachable from `sample::left::run` to `panic_fmt`",
-            )),
-            DiagnosticMessage::Note(String::from(
-                "reachable from `sample::right::run` to `panic_fmt`",
-            )),
-        ];
-        compact_human_diagnostic_paths(&mut finding, &roots);
-        assert_eq!(
-            finding.diagnostic.messages,
-            [
-                DiagnosticMessage::Note(String::from("reachable from `left::run` to `panic_fmt`")),
-                DiagnosticMessage::Note(String::from("reachable from `right::run` to `panic_fmt`")),
-            ]
         );
     }
 
