@@ -517,6 +517,7 @@ fn registered_effect_gets_default_concrete_reporting_without_an_adapter() {
             kind: ReportRootKind::Concrete,
         },
         AnnotationProbingFact::SourceCallsite,
+        &mut super::TraceStepCache::default(),
     )
     .concrete;
 
@@ -529,7 +530,7 @@ fn registered_effect_gets_default_concrete_reporting_without_an_adapter() {
         }] if effect.key.as_str() == "allocation" && operation.as_str() == "heap-allocation"
     ));
     assert!(matches!(
-        findings[0].trace.steps.last(),
+        findings[0].trace.steps.last().map(AsRef::as_ref),
         Some(InterpretedTraceStep {
             kind: InterpretedTraceStepKind::EffectOperation,
             target_path: Some(target),
@@ -624,6 +625,7 @@ fn invocation_fact_controls_documentation_policy_for_a_registered_effect() {
                 kind: ReportRootKind::Concrete,
             },
             AnnotationProbingFact::SourceCallsite,
+            &mut super::TraceStepCache::default(),
         )
         .concrete
     }
@@ -729,7 +731,7 @@ fn source_finding_with_trace_call(caller: FunctionId, call: u32) -> InterpretedF
         contract_source_range: None,
         marker_evidence: None,
         trace: InterpretedTrace {
-            steps: vec![InterpretedTraceStep {
+            steps: vec![std::sync::Arc::new(InterpretedTraceStep {
                 caller,
                 caller_path: String::from("sample::caller"),
                 call: CallId::new(call),
@@ -742,7 +744,7 @@ fn source_finding_with_trace_call(caller: FunctionId, call: u32) -> InterpretedF
                 }),
                 target: Some(stable_function(90)),
                 target_path: Some(String::from("sample::panic_source")),
-            }],
+            })],
         },
         missing_requirements: Vec::new(),
         requirements: Vec::new(),
@@ -797,10 +799,20 @@ fn source_deduplication_retains_distinct_states_even_with_hash_collisions() {
         |f| f.kind = InterpretedFindingKind::DocumentedObligation,
         |f| f.marker_evidence = Some(MarkerEvidenceState::VerifiedAbsent),
         |f| f.function_path.push_str("::other"),
-        |f| f.trace.steps[0].source_range.as_mut().unwrap().byte_end += 1,
-        |f| f.trace.steps[0].target_path = None,
-        |f| f.trace.steps[0].caller_path.push_str("::alias"),
-        |f| f.trace.steps[0].call = CallId::new(2),
+        |f| {
+            std::sync::Arc::make_mut(&mut f.trace.steps[0])
+                .source_range
+                .as_mut()
+                .unwrap()
+                .byte_end += 1
+        },
+        |f| std::sync::Arc::make_mut(&mut f.trace.steps[0]).target_path = None,
+        |f| {
+            std::sync::Arc::make_mut(&mut f.trace.steps[0])
+                .caller_path
+                .push_str("::alias")
+        },
+        |f| std::sync::Arc::make_mut(&mut f.trace.steps[0]).call = CallId::new(2),
         |f| f.trace.steps.clear(),
         |f| {
             f.requirements
@@ -843,8 +855,8 @@ fn source_deduplication_ignores_non_identity_fields() {
     let mut alias = first.clone();
     alias.function = stable_function(100);
     alias.contract_source_range = first.trace.steps[0].source_range.clone();
-    alias.trace.steps[0].marker_call = Some(CallId::new(55));
-    alias.trace.steps[0].target = None;
+    std::sync::Arc::make_mut(&mut alias.trace.steps[0]).marker_call = Some(CallId::new(55));
+    std::sync::Arc::make_mut(&mut alias.trace.steps[0]).target = None;
     assert_eq!(
         super::deduplicate_source_findings(vec![first.clone(), alias]),
         vec![first]
@@ -3466,7 +3478,7 @@ fn trace_projection_walks_selected_path_and_stops_at_handoff() {
             body(
                 root,
                 "sample::root",
-                vec![transparent],
+                vec![transparent, call(1, target(sink, "sample::sink"))],
                 vec![],
                 vec![],
                 vec![],
@@ -3539,6 +3551,38 @@ fn trace_projection_walks_selected_path_and_stops_at_handoff() {
     );
     assert_eq!(projected.steps[1].caller, child);
     assert_eq!(projected.steps[1].target, Some(sink));
+    let mut cache = super::TraceStepCache::default();
+    let first = super::trace_path_cached(&artifact, &graph, &trace, TraceNodeId(2), &mut cache);
+    let second = super::trace_path_cached(&artifact, &graph, &trace, TraceNodeId(2), &mut cache);
+    assert_eq!(first, projected);
+    assert_eq!(second, projected);
+    assert_eq!(cache.edges.len(), 2);
+    assert!(
+        first
+            .steps
+            .iter()
+            .zip(&second.steps)
+            .all(|(a, b)| std::sync::Arc::ptr_eq(a, b))
+    );
+    let mut adjusted = first.clone();
+    std::sync::Arc::make_mut(&mut adjusted.steps[1]).target_path = Some(String::from("adjusted"));
+    assert_eq!(
+        second, projected,
+        "a presentation override must not alter cached paths"
+    );
+    // Graph-local invocation IDs differ between roots; the stable source
+    // projection must still reuse the same rendered edge.
+    let subgraph = InvocationGraph::from_artifact_roots(&artifact, &[child]).unwrap();
+    let subinvocation = subgraph
+        .invocation_for_raw_call(child, CallId::new(0))
+        .unwrap();
+    assert_ne!(invocation, subinvocation);
+    let mut subtrace = trace.clone();
+    subtrace.edges[1].propagation = PropagationEdge::Invocation(subinvocation);
+    let subpath =
+        super::trace_path_cached(&artifact, &subgraph, &subtrace, TraceNodeId(1), &mut cache);
+    assert_eq!(subpath.steps.as_slice(), &first.steps[1..]);
+    assert!(std::sync::Arc::ptr_eq(&subpath.steps[0], &first.steps[1]));
     // A malformed cyclic predecessor still terminates after visiting each node once.
     trace.edges[0] = TraceEdge {
         from: TraceNodeId(2),

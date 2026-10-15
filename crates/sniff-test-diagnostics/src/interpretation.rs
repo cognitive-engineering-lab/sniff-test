@@ -1778,7 +1778,7 @@ fn full_trace_steps(
         .steps
         .iter()
         .enumerate()
-        .map(move |(index, step)| (index + 1, total, step))
+        .map(move |(index, step)| (index + 1, total, step.as_ref()))
 }
 
 fn trace_path_labels(trace: &InterpretedTrace) -> BTreeMap<String, String> {
@@ -2629,7 +2629,7 @@ mod tests {
         let source = function(3);
         let trace = InterpretedTrace {
             steps: vec![
-                InterpretedTraceStep {
+                std::sync::Arc::new(InterpretedTraceStep {
                     caller: root,
                     caller_path: String::from("app::root"),
                     call: CallId::new(0),
@@ -2638,8 +2638,8 @@ mod tests {
                     source_range: None,
                     target: Some(helper),
                     target_path: Some(String::from("app::helper")),
-                },
-                InterpretedTraceStep {
+                }),
+                std::sync::Arc::new(InterpretedTraceStep {
                     caller: helper,
                     caller_path: String::from("app::helper"),
                     call: CallId::new(1),
@@ -2648,7 +2648,7 @@ mod tests {
                     source_range: None,
                     target: Some(source),
                     target_path: Some(String::from("core::panicking::panic")),
-                },
+                }),
             ],
         };
 
@@ -2668,7 +2668,7 @@ mod tests {
         };
         let trace = InterpretedTrace {
             steps: vec![
-                InterpretedTraceStep {
+                std::sync::Arc::new(InterpretedTraceStep {
                     caller: function(1),
                     caller_path: String::from("indexical::domain::IndexedDomain::<T>::insert"),
                     call: CallId::new(0),
@@ -2677,8 +2677,8 @@ mod tests {
                     source_range: None,
                     target: Some(function(2)),
                     target_path: Some(String::from("index_vec::IndexVec::<I, T>::push")),
-                },
-                InterpretedTraceStep {
+                }),
+                std::sync::Arc::new(InterpretedTraceStep {
                     caller: function(2),
                     caller_path: String::from("index_vec::IndexVec::<I, T>::push"),
                     call: CallId::new(1),
@@ -2687,7 +2687,7 @@ mod tests {
                     source_range: None,
                     target: Some(function(3)),
                     target_path: Some(String::from("alloc::vec::Vec::<T, A>::push")),
-                },
+                }),
             ],
         };
         let labels = trace_path_labels(&trace);
@@ -2721,15 +2721,17 @@ mod tests {
             steps: paths
                 .iter()
                 .enumerate()
-                .map(|(index, path)| InterpretedTraceStep {
-                    caller: function(index as u128 + 1),
-                    caller_path: (*path).to_owned(),
-                    call: CallId::new(index as u32),
-                    marker_call: None,
-                    kind: InterpretedTraceStepKind::Reachability(CallKindFact::DirectCall),
-                    source_range: None,
-                    target: Some(function(index as u128 + 2)),
-                    target_path: paths.get(index + 1).map(|path| (*path).to_owned()),
+                .map(|(index, path)| {
+                    std::sync::Arc::new(InterpretedTraceStep {
+                        caller: function(index as u128 + 1),
+                        caller_path: (*path).to_owned(),
+                        call: CallId::new(index as u32),
+                        marker_call: None,
+                        kind: InterpretedTraceStepKind::Reachability(CallKindFact::DirectCall),
+                        source_range: None,
+                        target: Some(function(index as u128 + 2)),
+                        target_path: paths.get(index + 1).map(|path| (*path).to_owned()),
+                    })
                 })
                 .collect(),
         };
@@ -2744,15 +2746,17 @@ mod tests {
             steps: [first, second]
                 .into_iter()
                 .enumerate()
-                .map(|(index, path)| InterpretedTraceStep {
-                    caller: function(index as u128 + 1),
-                    caller_path: path.to_owned(),
-                    call: CallId::new(index as u32),
-                    marker_call: None,
-                    kind: InterpretedTraceStepKind::Reachability(CallKindFact::DirectCall),
-                    source_range: None,
-                    target: None,
-                    target_path: None,
+                .map(|(index, path)| {
+                    std::sync::Arc::new(InterpretedTraceStep {
+                        caller: function(index as u128 + 1),
+                        caller_path: path.to_owned(),
+                        call: CallId::new(index as u32),
+                        marker_call: None,
+                        kind: InterpretedTraceStepKind::Reachability(CallKindFact::DirectCall),
+                        source_range: None,
+                        target: None,
+                        target_path: None,
+                    })
                 })
                 .collect(),
         };

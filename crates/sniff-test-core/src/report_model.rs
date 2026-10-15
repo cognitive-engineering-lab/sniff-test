@@ -85,7 +85,9 @@ pub struct InterpretedCallee {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct InterpretedTrace {
-    pub steps: Vec<InterpretedTraceStep>,
+    /// A rendered call can appear in many paths and report roots. Sharing its
+    /// immutable presentation keeps findings from copying paths and source IDs.
+    pub steps: Vec<std::sync::Arc<InterpretedTraceStep>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
