@@ -6,7 +6,7 @@ use crate::trace::{FunctionId, InvocationId, TransparentBodyEdgeId};
 
 use crate::artifact::same_call_source_site;
 use crate::artifact::{
-    ArtifactFacts, CallFact, CallId, CallKindFact, CallSiteId, CallTargetFact,
+    ArtifactFacts, CallFact, CallId, CallKindFact, CallSiteId, CallTargetFact, FunctionFact,
     FunctionId as StableFunctionId, FunctionTargetFact, IndirectCallKindFact, MacroExpansionFact,
     same_macro_provenance,
 };
@@ -188,6 +188,7 @@ impl FunctionLookup {
 pub struct InvocationGraph {
     function_lookup: Arc<FunctionLookup>,
     included_bodies: BTreeSet<StableFunctionId>,
+    included_body_positions: Vec<usize>,
     contract_definitions: BTreeSet<StableDefPathHash>,
     invocations: Vec<Invocation>,
     invocations_by_caller_definition: BTreeMap<StableDefPathHash, Vec<InvocationId>>,
@@ -226,6 +227,7 @@ impl InvocationGraph {
             transparent_parents: vec![Vec::new(); function_count],
             function_lookup: Arc::clone(function_lookup),
             included_bodies: BTreeSet::new(),
+            included_body_positions: Vec::new(),
             contract_definitions: BTreeSet::new(),
             invocations: Vec::new(),
             invocations_by_caller_definition: BTreeMap::new(),
@@ -236,10 +238,14 @@ impl InvocationGraph {
         };
 
         let included = graph.reachable_bodies(artifact, roots);
-        for body in &artifact.functions {
-            if !included.contains(&body.function) {
-                continue;
-            }
+        let mut included_positions = included
+            .iter()
+            .map(|function| function_lookup.body_positions[function])
+            .collect::<Vec<_>>();
+        // Preserve artifact order: invocation IDs are assigned in this order.
+        included_positions.sort_unstable();
+        for &position in &included_positions {
+            let body = &artifact.functions[position];
             if let Some(declaration) = &body.contract_declaration {
                 graph
                     .contract_definitions
@@ -250,10 +256,8 @@ impl InvocationGraph {
                 }
             }
         }
-        for body in &artifact.functions {
-            if !included.contains(&body.function) {
-                continue;
-            }
+        for &position in &included_positions {
+            let body = &artifact.functions[position];
             graph.included_bodies.insert(body.function);
             graph
                 .contract_definitions
@@ -271,6 +275,7 @@ impl InvocationGraph {
                 .collect::<Vec<_>>();
             graph.collect_body(body.function, &calls)?;
         }
+        graph.included_body_positions = included_positions;
         Ok(graph)
     }
 
@@ -327,6 +332,17 @@ impl InvocationGraph {
             }
         }
         reached
+    }
+
+    /// Reachable bodies in their original artifact order, without scanning
+    /// unrelated workspace functions for each report root and effect.
+    pub(crate) fn included_body_facts<'a>(
+        &'a self,
+        artifact: &'a ArtifactFacts,
+    ) -> impl Iterator<Item = &'a FunctionFact> + 'a {
+        self.included_body_positions
+            .iter()
+            .map(|&position| &artifact.functions[position])
     }
 
     #[must_use]
@@ -1120,7 +1136,7 @@ mod tests {
             macro_expansions: Vec::new(),
             kind: EffectKind::new("bounds-check"),
         });
-        let facts = artifact(vec![
+        let mut facts = artifact(vec![
             body(
                 root,
                 vec![call(0, 0, CallKindFact::DirectCall, target(callee))],
@@ -1133,7 +1149,15 @@ mod tests {
             hidden_body,
         ]);
 
+        facts.functions.swap(0, 1);
         let graph = InvocationGraph::from_artifact_roots(&facts, &[root]).expect("valid graph");
+        assert_eq!(
+            graph
+                .included_body_facts(&facts)
+                .map(|body| body.function)
+                .collect::<Vec<_>>(),
+            [callee, root],
+        );
         assert!(graph.includes_body(root));
         assert!(graph.includes_body(callee));
         assert!(!graph.includes_body(unrelated));
