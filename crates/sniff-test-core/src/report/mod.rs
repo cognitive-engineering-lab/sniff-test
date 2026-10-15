@@ -1445,10 +1445,7 @@ fn missing_body_reasons(
             && path.allows_boundary(graph, function)
     };
     let mut boundaries = BTreeMap::<StableFunctionId, MissingBodyBoundary>::new();
-    for body in &artifact.functions {
-        if !graph.includes_body(body.function) {
-            continue;
-        }
+    for body in graph.included_body_facts(artifact) {
         let Some(caller) = graph.function(body.function) else {
             continue;
         };
