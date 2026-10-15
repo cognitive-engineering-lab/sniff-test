@@ -1,5 +1,6 @@
 //! Canonical findings and the single lint-policy resolution boundary.
 
+use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet, HashMap, hash_map::RandomState};
 use std::hash::{BuildHasher, Hash, Hasher};
 use std::path::Path;
@@ -395,22 +396,41 @@ pub fn aggregate_human_findings(findings: &[ResolvedFinding]) -> Vec<ResolvedFin
     )
 }
 
+/// Consume canonical findings when human output is the only remaining use.
+#[must_use]
+pub fn aggregate_human_findings_owned(findings: Vec<ResolvedFinding>) -> Vec<ResolvedFinding> {
+    let hashes = RandomState::new();
+    aggregate_human_findings_iter_with(
+        findings.into_iter().map(Cow::Owned),
+        |finding| hashes.hash_one(HumanSourceFingerprint(finding)),
+        same_human_source,
+    )
+}
+
 fn aggregate_human_findings_with(
     findings: &[ResolvedFinding],
+    fingerprint: impl FnMut(&ResolvedFinding) -> u64,
+    matches: impl FnMut(&ResolvedFinding, &ResolvedFinding) -> bool,
+) -> Vec<ResolvedFinding> {
+    aggregate_human_findings_iter_with(findings.iter().map(Cow::Borrowed), fingerprint, matches)
+}
+
+fn aggregate_human_findings_iter_with<'a>(
+    findings: impl IntoIterator<Item = Cow<'a, ResolvedFinding>>,
     mut fingerprint: impl FnMut(&ResolvedFinding) -> u64,
     mut matches: impl FnMut(&ResolvedFinding, &ResolvedFinding) -> bool,
 ) -> Vec<ResolvedFinding> {
     let mut groups = Vec::<(ResolvedFinding, BTreeSet<String>, BTreeSet<String>)>::new();
     let mut buckets: HashMap<u64, Vec<usize>> = HashMap::new();
-    for finding in findings {
+    for finding in findings.into_iter() {
         let candidates = (is_source_finding(&finding.finding.kind)
             && finding.finding.source_order.is_some())
-        .then(|| buckets.entry(fingerprint(finding)).or_default());
+        .then(|| buckets.entry(fingerprint(&finding)).or_default());
         let matching = candidates.as_ref().and_then(|indices| {
             indices
                 .iter()
                 .copied()
-                .find(|&index| matches(&groups[index].0, finding))
+                .find(|&index| matches(&groups[index].0, &finding))
         });
         let roots = finding.finding.root.iter().cloned().collect();
         let roots_without_trace = finding
@@ -432,14 +452,14 @@ fn aggregate_human_findings_with(
                 || candidate_trace_length == representative_trace_length
                     && compare_findings(&finding.finding, &representative.finding).is_lt()
             {
-                *representative = finding.clone();
+                *representative = finding.into_owned();
             }
             representative.finding.diagnostic.messages = messages;
         } else {
             if let Some(candidates) = candidates {
                 candidates.push(groups.len());
             }
-            groups.push((finding.clone(), roots, roots_without_trace));
+            groups.push((finding.into_owned(), roots, roots_without_trace));
         }
     }
 
@@ -1038,6 +1058,10 @@ mod tests {
         let distinct = indexed_human_finding(1);
         let input = [long.clone(), distinct.clone(), short, long];
         let normal = aggregate_human_findings(&input);
+        assert_eq!(
+            normal,
+            super::aggregate_human_findings_owned(input.to_vec())
+        );
         let collided =
             super::aggregate_human_findings_with(&input, |_| 0, super::same_human_source);
         assert_eq!(normal, collided);

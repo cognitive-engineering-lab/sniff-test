@@ -9,8 +9,9 @@ use sniff_test_core::effects::Effect;
 
 use crate::diagnostics::{emit_finding_diagnostic, emit_footer_note};
 use crate::findings::{
-    FULL_STACK_TRACE_HINT, Finding, aggregate_human_findings, is_effect_source_finding,
-    resolve_findings_with_root_codes, take_full_stack_trace_hint,
+    FULL_STACK_TRACE_HINT, Finding, ResolvedFinding, aggregate_human_findings,
+    aggregate_human_findings_owned, is_effect_source_finding, resolve_findings_with_root_codes,
+    take_full_stack_trace_hint,
 };
 use crate::report::{AnalysisArtifactReport, REPORT_FORMAT_VERSION, ReportArtifact};
 
@@ -46,7 +47,30 @@ pub fn emit_human_diagnostics(
     report: &AnalysisArtifactReport,
     explicit_effects: &[EffectKey],
 ) {
-    let mut human_findings = aggregate_human_findings(&report.findings);
+    emit_human_findings(
+        tcx,
+        aggregate_human_findings(&report.findings),
+        explicit_effects,
+    );
+}
+
+pub fn emit_human_diagnostics_owned(
+    tcx: TyCtxt<'_>,
+    report: AnalysisArtifactReport,
+    explicit_effects: &[EffectKey],
+) {
+    emit_human_findings(
+        tcx,
+        aggregate_human_findings_owned(report.findings),
+        explicit_effects,
+    );
+}
+
+fn emit_human_findings(
+    tcx: TyCtxt<'_>,
+    mut human_findings: Vec<ResolvedFinding>,
+    explicit_effects: &[EffectKey],
+) {
     let has_trace_id = human_findings
         .iter()
         .any(|finding| finding.finding.trace_id.is_some());
@@ -88,7 +112,7 @@ pub fn emit_explanation(tcx: TyCtxt<'_>, report: &AnalysisArtifactReport, trace_
     if selected.is_empty() {
         return false;
     }
-    for finding in aggregate_human_findings(&selected) {
+    for finding in aggregate_human_findings_owned(selected) {
         emit_finding_diagnostic(
             tcx,
             finding.level,
