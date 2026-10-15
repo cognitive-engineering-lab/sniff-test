@@ -2,6 +2,7 @@
 
 use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet, HashMap, hash_map::RandomState};
+use std::fmt::Write;
 use std::hash::{BuildHasher, Hash, Hasher};
 use std::path::Path;
 
@@ -294,6 +295,8 @@ pub fn resolve_findings_with_root_codes(
 fn assign_trace_ids(findings: &mut [ResolvedFinding], root_codes: &BTreeMap<String, String>) {
     // Hash semantic report data, not the compact/full diagnostic presentation.
     let namespace = Uuid::new_v5(&Uuid::NAMESPACE_DNS, b"sniff-test.trace");
+    let mut identity = String::new();
+    let mut edges = Vec::new();
     let hashes = findings
         .iter()
         .map(|resolved| {
@@ -301,21 +304,20 @@ fn assign_trace_ids(findings: &mut [ResolvedFinding], root_codes: &BTreeMap<Stri
             if finding.trace_order.is_empty() {
                 return None;
             }
-            let edges = finding
-                .trace
-                .iter()
-                .map(|step| {
-                    step.as_bytes()
-                        .windows(2)
-                        .position(|pair| pair[0] == b':' && pair[1].is_ascii_digit())
-                        .map_or(step.as_str(), |index| &step[index..])
-                })
-                .collect::<Vec<_>>();
+            edges.clear();
+            edges.extend(finding.trace.iter().map(|step| {
+                step.as_bytes()
+                    .windows(2)
+                    .position(|pair| pair[0] == b':' && pair[1].is_ascii_digit())
+                    .map_or(step.as_str(), |index| &step[index..])
+            }));
             let source_bytes = finding
                 .source_order
                 .as_ref()
                 .map(|source| (source.byte_start, source.byte_end));
-            let identity = format!(
+            identity.clear();
+            write!(
+                identity,
                 "{}|{:?}|{:?}|{:?}|{:?}|{:?}|{:?}|{:?}|{:?}|{:?}|{:?}|{:?}|{:?}",
                 finding.root.as_deref().unwrap_or_default(),
                 finding.root_kind,
@@ -330,7 +332,8 @@ fn assign_trace_ids(findings: &mut [ResolvedFinding], root_codes: &BTreeMap<Stri
                 finding.unresolved_call,
                 finding.source_evidence,
                 finding.reason,
-            );
+            )
+            .expect("writing a trace identity to a string cannot fail");
             Some(
                 Uuid::new_v5(&namespace, identity.as_bytes())
                     .simple()
