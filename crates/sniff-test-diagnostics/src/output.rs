@@ -80,7 +80,7 @@ fn emit_human_findings(
             tcx,
             finding.level,
             &finding.finding.kind.lint_code(),
-            &finding.finding.diagnostic,
+            finding.finding.diagnostic,
             !is_effect_source_finding(&finding.finding.kind),
             finding.finding.trace_id.as_deref(),
         );
@@ -117,7 +117,7 @@ pub fn emit_explanation(tcx: TyCtxt<'_>, report: &AnalysisArtifactReport, trace_
             tcx,
             finding.level,
             &finding.finding.kind.lint_code(),
-            &finding.finding.diagnostic,
+            finding.finding.diagnostic,
             !is_effect_source_finding(&finding.finding.kind),
             finding.finding.trace_id.as_deref(),
         );

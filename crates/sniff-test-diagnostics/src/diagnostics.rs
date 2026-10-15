@@ -15,16 +15,18 @@ pub fn emit_finding_diagnostic(
     tcx: TyCtxt<'_>,
     level: LintLevel,
     lint_code: &str,
-    diagnostic: &FindingDiagnostic,
+    diagnostic: FindingDiagnostic,
     show_lint_code: bool,
     trace_id: Option<&str>,
 ) {
-    let message = if show_lint_code {
+    let mut message = if show_lint_code {
         lint_coded_message(lint_code, &diagnostic.message)
     } else {
-        diagnostic.message.clone()
+        diagnostic.message
     };
-    let message = trace_id.map_or(message.clone(), |id| format!("[{id}] {message}"));
+    if let Some(id) = trace_id {
+        message = format!("[{id}] {message}");
+    }
     let spans = diagnostic.span.map(|primary| {
         let mut spans = MultiSpan::from_span(primary);
         if let Some(second) = diagnostic.second_primary_span {
@@ -35,23 +37,23 @@ pub fn emit_finding_diagnostic(
     match (level, spans) {
         (LintLevel::Allow, _) => {}
         (LintLevel::Warn, Some(span)) => {
-            let mut emitted = tcx.dcx().struct_span_warn(span, message.clone());
-            decorate(&mut emitted, lint_code, &diagnostic.messages);
+            let mut emitted = tcx.dcx().struct_span_warn(span, message);
+            decorate(&mut emitted, lint_code, diagnostic.messages);
             emitted.emit();
         }
         (LintLevel::Warn, None) => {
-            let mut emitted = tcx.dcx().struct_warn(message.clone());
-            decorate(&mut emitted, lint_code, &diagnostic.messages);
+            let mut emitted = tcx.dcx().struct_warn(message);
+            decorate(&mut emitted, lint_code, diagnostic.messages);
             emitted.emit();
         }
         (LintLevel::Deny, Some(span)) => {
-            let mut emitted = tcx.dcx().struct_span_err(span, message.clone());
-            decorate(&mut emitted, lint_code, &diagnostic.messages);
+            let mut emitted = tcx.dcx().struct_span_err(span, message);
+            decorate(&mut emitted, lint_code, diagnostic.messages);
             let _ = emitted.emit();
         }
         (LintLevel::Deny, None) => {
             let mut emitted = tcx.dcx().struct_err(message);
-            decorate(&mut emitted, lint_code, &diagnostic.messages);
+            decorate(&mut emitted, lint_code, diagnostic.messages);
             let _ = emitted.emit();
         }
     }
@@ -77,7 +79,7 @@ fn lint_coded_message(lint_code: &str, message: &str) -> String {
 fn decorate<G: EmissionGuarantee>(
     diagnostic: &mut Diag<'_, G>,
     lint_code: &str,
-    messages: &[DiagnosticMessage],
+    messages: Vec<DiagnosticMessage>,
 ) {
     diagnostic.is_lint(lint_code.to_owned(), false);
     let alternative_count = messages
@@ -97,16 +99,16 @@ fn decorate<G: EmissionGuarantee>(
                 diagnostic.note(FULL_STACK_TRACE_HINT);
             }
             DiagnosticMessage::Note(note) => {
-                diagnostic.note(note.clone());
+                diagnostic.note(note);
             }
             DiagnosticMessage::SpanNote(span, note) => {
-                diagnostic.span_note(*span, note.clone());
+                diagnostic.span_note(span, note);
             }
             DiagnosticMessage::SpanLabel(span, label) => {
-                diagnostic.span_label(*span, label.clone());
+                diagnostic.span_label(span, label);
             }
             DiagnosticMessage::Help(help) => {
-                diagnostic.help(help.clone());
+                diagnostic.help(help);
             }
             DiagnosticMessage::AlternativeHelp(help) => {
                 alternative_index += 1;
@@ -115,7 +117,7 @@ fn decorate<G: EmissionGuarantee>(
             DiagnosticMessage::SpanAlternativeHelp(span, help) => {
                 alternative_index += 1;
                 diagnostic.span_help(
-                    *span,
+                    span,
                     alternative_help(help, alternative_count, alternative_index),
                 );
             }
@@ -123,11 +125,11 @@ fn decorate<G: EmissionGuarantee>(
     }
 }
 
-fn alternative_help(help: &str, alternative_count: usize, alternative_index: usize) -> String {
+fn alternative_help(help: String, alternative_count: usize, alternative_index: usize) -> String {
     if alternative_count > 1 {
         format!("[option {alternative_index}] {help}")
     } else {
-        help.to_owned()
+        help
     }
 }
 
@@ -267,15 +269,15 @@ mod tests {
     #[test]
     fn multiple_alternative_fixes_receive_bracketed_option_labels() {
         assert_eq!(
-            alternative_help("add a local justification", 3, 1),
+            alternative_help("add a local justification".to_owned(), 3, 1),
             "[option 1] add a local justification"
         );
         assert_eq!(
-            alternative_help("audit the dependency", 3, 3),
+            alternative_help("audit the dependency".to_owned(), 3, 3),
             "[option 3] audit the dependency"
         );
         assert_eq!(
-            alternative_help("add the only available justification", 1, 1),
+            alternative_help("add the only available justification".to_owned(), 1, 1),
             "add the only available justification"
         );
     }
