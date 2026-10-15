@@ -6,10 +6,12 @@
 //! with audited roots; effect propagation itself is exclusively performed by
 //! the shared engine.
 
-use std::collections::{BTreeMap, BTreeSet, HashMap, hash_map::RandomState};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::fmt;
-use std::hash::{BuildHasher, Hash, Hasher};
+use std::hash::{BuildHasher, BuildHasherDefault, Hash, Hasher};
 use std::sync::Arc;
+
+use rustc_data_structures::fx::{FxHashMap, FxHasher};
 
 use crate::trace::{
     EffectTrace, FunctionId, PropagationEdge, TerminationSite, TraceNodeId, TraceOptions,
@@ -563,7 +565,7 @@ fn project_reverse_path(
 }
 
 fn deduplicate_source_findings(findings: Vec<InterpretedFinding>) -> Vec<InterpretedFinding> {
-    let hashes = RandomState::new();
+    let hashes = BuildHasherDefault::<FxHasher>::default();
     deduplicate_source_findings_with(
         findings,
         |finding| hashes.hash_one(SourceFindingFingerprint(finding)),
@@ -1730,7 +1732,7 @@ fn trace_predecessors<O, S, T>(
 /// graph-local invocation IDs deliberately do not appear in this key.
 #[derive(Default)]
 struct TraceStepCache {
-    edges: HashMap<
+    edges: FxHashMap<
         (
             StableFunctionId,
             crate::artifact::CallId,
