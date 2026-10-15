@@ -49,7 +49,9 @@ pub struct Finding {
     pub unresolved_call: Option<UnresolvedCallSite>,
     pub reason: String,
     #[serde(skip_serializing_if = "Vec::is_empty")]
-    pub trace: Vec<std::sync::Arc<str>>,
+    // A sized pointee keeps each entry one word instead of Arc<str>'s two;
+    // large reports contain hundreds of millions of these shared references.
+    pub trace: Vec<std::sync::Arc<String>>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub missing_requirements: Vec<String>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
@@ -306,7 +308,7 @@ fn assign_trace_ids(findings: &mut [ResolvedFinding], root_codes: &BTreeMap<Stri
                     step.as_bytes()
                         .windows(2)
                         .position(|pair| pair[0] == b':' && pair[1].is_ascii_digit())
-                        .map_or(step.as_ref(), |index| &step[index..])
+                        .map_or(step.as_str(), |index| &step[index..])
                 })
                 .collect::<Vec<_>>();
             let source_bytes = finding
@@ -973,7 +975,7 @@ mod tests {
     #[test]
     fn owned_human_aggregation_moves_trace_storage() {
         let mut finding = indexed_human_finding(0);
-        finding.finding.trace = vec!["first".into(), "second".into()];
+        finding.finding.trace = vec!["first".to_owned().into(), "second".to_owned().into()];
         let storage = finding.finding.trace.as_ptr();
         let output = super::aggregate_human_findings_owned(vec![finding]);
         assert_eq!(output[0].finding.trace.as_ptr(), storage);
@@ -983,7 +985,7 @@ mod tests {
     #[test]
     fn indexed_human_groups_preserve_collisions_replacement_and_messages() {
         let mut long = indexed_human_finding(0);
-        long.finding.trace = vec!["first".into(), "second".into()];
+        long.finding.trace = vec!["first".to_owned().into(), "second".to_owned().into()];
         long.finding.diagnostic.messages = vec![DiagnosticMessage::Note("long".into())];
         let mut short = long.clone();
         short.finding.trace.clear();
@@ -1227,7 +1229,7 @@ mod tests {
             finding.root = Some(root.to_owned());
             finding.trace = trace
                 .iter()
-                .map(|step| std::sync::Arc::from(*step))
+                .map(|step| std::sync::Arc::new((*step).to_owned()))
                 .collect();
             finding.diagnostic.message = format!("representative for {root}");
             finding.diagnostic.span = Some(root_span);
@@ -1396,7 +1398,7 @@ mod tests {
             finding.justification_marker = Some(String::from("PANIC"));
             finding.trace = trace
                 .iter()
-                .map(|step| std::sync::Arc::from(*step))
+                .map(|step| std::sync::Arc::new((*step).to_owned()))
                 .collect();
             finding.diagnostic.messages = vec![
                 DiagnosticMessage::Note(format!("reachable from `{root}` to `push`")),
@@ -1537,7 +1539,11 @@ mod tests {
         finding.diagnostic.message =
             String::from("function `sample::api` has an undocumented panic path");
         finding.diagnostic.span = Some(root_span);
-        finding.trace = vec!["sample::api --direct-call-> core::panicking::panic_fmt".into()];
+        finding.trace = vec![
+            "sample::api --direct-call-> core::panicking::panic_fmt"
+                .to_owned()
+                .into(),
+        ];
         finding
             .diagnostic
             .messages
@@ -1669,7 +1675,7 @@ mod tests {
             "indexical::bitset::bitvec::<impl indexical::bitset::BitSet for bitvec::vec::BitVec>::intersect",
         ));
         finding.target = Some(target.clone());
-        finding.trace = vec!["canonical trace".into()];
+        finding.trace = vec!["canonical trace".to_owned().into()];
         finding.reason = format!(
             "dependency crate `bitvec` has no recorded `// PANIC:` justification for call to `{target}` with a `# Panics` obligation"
         );
@@ -1716,7 +1722,7 @@ mod tests {
         let mut finding = finding(effect("panic", EffectFindingClass::ConcreteInvocation));
         finding.root = Some(String::from("sample::api"));
         finding.target = Some(String::from("core::panicking::panic_fmt"));
-        finding.trace = vec!["canonical trace".into()];
+        finding.trace = vec!["canonical trace".to_owned().into()];
         finding.reason = String::from(
             "panic invocation to `core::panicking::panic_fmt` has no recorded evidence",
         );

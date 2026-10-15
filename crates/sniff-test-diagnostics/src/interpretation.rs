@@ -1633,7 +1633,7 @@ fn missing_body_diagnostic_message(root: &str, target: &str, domain: &str) -> St
 /// be reused for a different step while this cache is alive.
 struct RenderedTraceStep {
     _source: Arc<InterpretedTraceStep>,
-    text: Arc<str>,
+    text: Arc<String>,
     order: Arc<FindingTraceStepOrder>,
 }
 
@@ -1645,7 +1645,7 @@ impl RenderedTraceCache {
         &self,
         source: &Arc<InterpretedTraceStep>,
         render: impl FnOnce() -> (String, FindingTraceStepOrder),
-    ) -> (Arc<str>, Arc<FindingTraceStepOrder>) {
+    ) -> (Arc<String>, Arc<FindingTraceStepOrder>) {
         let mut steps = self.0.borrow_mut();
         let step = steps
             .entry(Arc::as_ptr(source) as usize)
@@ -1664,7 +1664,7 @@ impl RenderedTraceCache {
 fn rendered_trace_step(
     sources: &SourceResolver<'_, '_>,
     step: &Arc<InterpretedTraceStep>,
-) -> (Arc<str>, Arc<FindingTraceStepOrder>) {
+) -> (Arc<String>, Arc<FindingTraceStepOrder>) {
     sources.rendered_steps.get_or_insert_with(step, || {
         let target = step.target_path.as_deref().unwrap_or("opaque boundary");
         let edge = format!(
@@ -1689,7 +1689,7 @@ fn rendered_trace_step(
     })
 }
 
-fn render_trace(sources: &SourceResolver<'_, '_>, trace: &InterpretedTrace) -> Vec<Arc<str>> {
+fn render_trace(sources: &SourceResolver<'_, '_>, trace: &InterpretedTrace) -> Vec<Arc<String>> {
     trace
         .steps
         .iter()
