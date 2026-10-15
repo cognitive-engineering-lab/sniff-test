@@ -1,7 +1,9 @@
 //! Adapts effect-trace results to diagnostics and JSON findings.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::cell::RefCell;
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use rustc_hir::def_id::LOCAL_CRATE;
 use rustc_middle::ty::TyCtxt;
@@ -80,6 +82,7 @@ pub fn interpret_workspace<'tcx>(
     let sources = SourceResolver {
         tcx,
         cache: CachedSourceMap::new(tcx.sess.source_map()),
+        rendered_steps: RenderedTraceCache::default(),
         local,
         local_stable_crate_id,
         dependencies,
@@ -1626,45 +1629,82 @@ fn missing_body_diagnostic_message(root: &str, target: &str, domain: &str) -> St
     )
 }
 
-fn render_trace(sources: &SourceResolver<'_, '_>, trace: &InterpretedTrace) -> Vec<String> {
+/// Hold the source Arc alongside its cached presentation so an address cannot
+/// be reused for a different step while this cache is alive.
+struct RenderedTraceStep {
+    _source: Arc<InterpretedTraceStep>,
+    text: Arc<str>,
+    order: Arc<FindingTraceStepOrder>,
+}
+
+#[derive(Default)]
+struct RenderedTraceCache(RefCell<HashMap<usize, RenderedTraceStep>>);
+
+impl RenderedTraceCache {
+    fn get_or_insert_with(
+        &self,
+        source: &Arc<InterpretedTraceStep>,
+        render: impl FnOnce() -> (String, FindingTraceStepOrder),
+    ) -> (Arc<str>, Arc<FindingTraceStepOrder>) {
+        let mut steps = self.0.borrow_mut();
+        let step = steps
+            .entry(Arc::as_ptr(source) as usize)
+            .or_insert_with(|| {
+                let (text, order) = render();
+                RenderedTraceStep {
+                    _source: Arc::clone(source),
+                    text: text.into(),
+                    order: Arc::new(order),
+                }
+            });
+        (Arc::clone(&step.text), Arc::clone(&step.order))
+    }
+}
+
+fn rendered_trace_step(
+    sources: &SourceResolver<'_, '_>,
+    step: &Arc<InterpretedTraceStep>,
+) -> (Arc<str>, Arc<FindingTraceStepOrder>) {
+    sources.rendered_steps.get_or_insert_with(step, || {
+        let target = step.target_path.as_deref().unwrap_or("opaque boundary");
+        let edge = format!(
+            "{} --{}-> {target}",
+            step.caller_path,
+            trace_step_kind_label(step.kind)
+        );
+        let text = match sources.resolve(step.source_range.as_ref()).0 {
+            Some(span) => format!("{}: {edge}", render_span(sources.tcx, span)),
+            None => edge,
+        };
+        let order = FindingTraceStepOrder::new(
+            step.source_range
+                .as_ref()
+                .and_then(|range| sources.source_file(range)),
+            step.source_range.as_ref(),
+            step.call.index(),
+            trace_step_kind_order(step.kind),
+            &step.caller_path,
+        );
+        (text, order)
+    })
+}
+
+fn render_trace(sources: &SourceResolver<'_, '_>, trace: &InterpretedTrace) -> Vec<Arc<str>> {
     trace
         .steps
         .iter()
-        .map(|step| {
-            let target = step.target_path.as_deref().unwrap_or("opaque boundary");
-            let edge = format!(
-                "{} --{}-> {target}",
-                step.caller_path,
-                trace_step_kind_label(step.kind)
-            );
-            sources
-                .resolve(step.source_range.as_ref())
-                .0
-                .map_or(edge.clone(), |span| {
-                    format!("{}: {edge}", render_span(sources.tcx, span))
-                })
-        })
+        .map(|step| rendered_trace_step(sources, step).0)
         .collect()
 }
 
 fn finding_trace_order(
     sources: &SourceResolver<'_, '_>,
     trace: &InterpretedTrace,
-) -> Vec<FindingTraceStepOrder> {
+) -> Vec<Arc<FindingTraceStepOrder>> {
     trace
         .steps
         .iter()
-        .map(|step| {
-            FindingTraceStepOrder::new(
-                step.source_range
-                    .as_ref()
-                    .and_then(|range| sources.source_file(range)),
-                step.source_range.as_ref(),
-                step.call.index(),
-                trace_step_kind_order(step.kind),
-                &step.caller_path,
-            )
-        })
+        .map(|step| rendered_trace_step(sources, step).1)
         .collect()
 }
 
@@ -1997,6 +2037,7 @@ fn render_requirement(requirement: &ContractRequirementFact) -> String {
 struct SourceResolver<'tcx, 'analysis> {
     tcx: TyCtxt<'tcx>,
     cache: CachedSourceMap<'tcx>,
+    rendered_steps: RenderedTraceCache,
     local: &'analysis ArtifactFacts,
     local_stable_crate_id: u64,
     dependencies: &'analysis ArtifactAnalysisGraph,
@@ -2801,5 +2842,49 @@ mod tests {
             unresolved_action(&EffectMetadata::of::<Safety>(), dynamic.mechanism),
             "document caller-visible `# Safety` obligations on the trait method declaration"
         );
+    }
+
+    #[test]
+    fn rendered_trace_cache_shares_presentations_and_keeps_source_identity_alive() {
+        use std::sync::Arc;
+        let function = |value: u128| {
+            FunctionId::generic(
+                serde_json::from_str::<StableDefPathHash>(&format!("\"{value:032x}\"")).unwrap(),
+            )
+        };
+        let cache = super::RenderedTraceCache::default();
+        let source = Arc::new(InterpretedTraceStep {
+            caller: function(1),
+            caller_path: String::from("app::caller"),
+            call: CallId::new(0),
+            marker_call: Some(CallId::new(0)),
+            kind: InterpretedTraceStepKind::Reachability(CallKindFact::DirectCall),
+            source_range: None,
+            target: Some(function(2)),
+            target_path: Some(String::from("app::callee")),
+        });
+        let weak_source = Arc::downgrade(&source);
+        let render_order =
+            || super::FindingTraceStepOrder::new(None, None, 0, (0, 0), "app::caller");
+        let (text, order) =
+            cache.get_or_insert_with(&source, || (String::from("call"), render_order()));
+        let (again, same_order) =
+            cache.get_or_insert_with(&source, || panic!("shared steps must only render once"));
+        assert!(Arc::ptr_eq(&text, &again));
+        assert!(Arc::ptr_eq(&order, &same_order));
+        assert_eq!(serde_json::to_string(&vec![text]).unwrap(), r#"["call"]"#);
+        let mut different = (*source).clone();
+        different.target_path = Some(String::from("app::other"));
+        let (other, _) = cache.get_or_insert_with(&Arc::new(different), || {
+            (String::from("other call"), render_order())
+        });
+        assert_eq!(&*other, "other call");
+        drop(source);
+        assert!(
+            weak_source.upgrade().is_some(),
+            "cache keys must keep their source allocation alive"
+        );
+        drop(cache);
+        assert!(weak_source.upgrade().is_none());
     }
 }
