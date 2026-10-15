@@ -3831,3 +3831,87 @@ fn trace_limit_selection_preserves_rendered_frontier_order() {
         }
     }
 }
+
+#[test]
+fn unrestricted_paths_preserve_policy_search_ties_across_crates_and_cycles() {
+    let functions = [
+        function_in_crate(1, 0),
+        function_in_crate(2, 0),
+        function_in_crate(3, 0),
+        function_in_crate(1, 1),
+        function_in_crate(4, 0),
+        function_in_crate(5, 0),
+        function_in_crate(1, 2),
+    ];
+    let mut calls = vec![Vec::new(); functions.len()];
+    for (from, to, kind) in [
+        (0, 1, CallKindFact::DirectCall),
+        (0, 2, CallKindFact::DirectCall),
+        (0, 6, CallKindFact::ConstBody),
+        (1, 3, CallKindFact::DirectCall),
+        (2, 3, CallKindFact::DirectCall),
+        (3, 1, CallKindFact::DirectCall),
+        (3, 4, CallKindFact::DirectCall),
+        (6, 3, CallKindFact::DirectCall),
+    ] {
+        let id = u32::try_from(calls[from].len()).unwrap();
+        let mut edge = call(id, target(functions[to], &format!("fixture::f{to}")));
+        edge.call_site = CallSiteId::new(id);
+        edge.kind = kind;
+        calls[from].push(edge);
+    }
+    let bodies = functions
+        .iter()
+        .zip(calls)
+        .enumerate()
+        .map(|(index, (&function, calls))| {
+            body(
+                function,
+                &format!("fixture::f{index}"),
+                calls,
+                Vec::new(),
+                Vec::new(),
+                Vec::new(),
+            )
+        })
+        .collect();
+    let artifact = ArtifactFacts::new(bodies, Vec::new()).unwrap();
+    let graph = graph_for_all_bodies(&artifact).unwrap();
+    for root in functions {
+        for target in functions {
+            let root = graph.function(root).unwrap();
+            let target = graph.function(target).unwrap();
+            let expected = super::path_from_root_until(
+                &artifact,
+                &graph,
+                root,
+                target,
+                crate::effects::trust::TrustPath::default(),
+                |_, _| false,
+                |_| false,
+            );
+            assert_eq!(
+                super::path_from_root(&artifact, &graph, root, target),
+                expected
+            );
+        }
+    }
+    let path = super::path_from_root(
+        &artifact,
+        &graph,
+        graph.function(functions[0]).unwrap(),
+        graph.function(functions[4]).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(
+        path.steps
+            .iter()
+            .map(|step| (step.caller, step.call))
+            .collect::<Vec<_>>(),
+        [
+            (functions[0], CallId::new(2)),
+            (functions[6], CallId::new(0)),
+            (functions[3], CallId::new(1))
+        ]
+    );
+}
