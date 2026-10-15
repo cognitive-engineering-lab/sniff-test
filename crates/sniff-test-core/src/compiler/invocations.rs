@@ -1,6 +1,6 @@
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::fmt;
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 use crate::trace::{FunctionId, InvocationId, TransparentBodyEdgeId};
 
@@ -184,6 +184,12 @@ impl FunctionLookup {
     }
 }
 
+struct ResolvedRawCall {
+    call: CallId,
+    concrete: Option<FunctionId>,
+    declaration: Option<FunctionId>,
+}
+
 /// Invocation view used by the concrete and obligation worklists.
 pub struct InvocationGraph {
     function_lookup: Arc<FunctionLookup>,
@@ -191,6 +197,7 @@ pub struct InvocationGraph {
     included_body_positions: Vec<usize>,
     contract_definitions: BTreeSet<StableDefPathHash>,
     invocations: Vec<Invocation>,
+    resolved_raw_calls: Vec<OnceLock<Vec<ResolvedRawCall>>>,
     invocations_by_caller_definition: BTreeMap<StableDefPathHash, Vec<InvocationId>>,
     incoming: Vec<Vec<InvocationId>>,
     contract_visible_incoming: Vec<Vec<InvocationId>>,
@@ -230,6 +237,7 @@ impl InvocationGraph {
             included_body_positions: Vec::new(),
             contract_definitions: BTreeSet::new(),
             invocations: Vec::new(),
+            resolved_raw_calls: Vec::new(),
             invocations_by_caller_definition: BTreeMap::new(),
             transparent_parent: Vec::new(),
             transparent_source: Vec::new(),
@@ -566,19 +574,24 @@ impl InvocationGraph {
         invocation: InvocationId,
         target: FunctionId,
     ) -> impl Iterator<Item = CallId> + '_ {
-        self.source_edges(invocation)
+        // Target resolution is fixed for this graph. Obligation states can
+        // revisit the same invocation many times, so resolve its raw edges once.
+        self.resolved_raw_calls[invocation.index()]
+            .get_or_init(|| {
+                self.source_edges(invocation)
+                    .iter()
+                    .map(|edge| ResolvedRawCall {
+                        call: edge.id,
+                        concrete: concrete_target(edge)
+                            .and_then(|function| self.invocation_target(function)),
+                        declaration: declaration_target(edge)
+                            .and_then(|function| self.function(function)),
+                    })
+                    .collect()
+            })
             .iter()
-            .filter(move |edge| self.raw_edge_reaches(edge, target))
-            .map(|edge| edge.id)
-    }
-
-    fn raw_edge_reaches(&self, edge: &CallFact, target: FunctionId) -> bool {
-        concrete_target(edge)
-            .and_then(|function| self.invocation_target(function))
-            .is_some_and(|function| function == target)
-            || declaration_target(edge)
-                .and_then(|function| self.function(function))
-                .is_some_and(|function| function == target)
+            .filter(move |call| call.concrete == Some(target) || call.declaration == Some(target))
+            .map(|call| call.call)
     }
 
     #[must_use]
@@ -731,6 +744,7 @@ impl InvocationGraph {
             .entry(stable_caller.def_path_hash)
             .or_default()
             .push(id);
+        self.resolved_raw_calls.push(OnceLock::new());
         self.invocations.push(invocation);
     }
 
@@ -1721,6 +1735,18 @@ mod tests {
 
         assert_eq!(generic_incoming.len(), 1);
         assert_eq!(
+            graph
+                .raw_calls_reaching(generic_incoming[0], graph.function(generic_callee).unwrap())
+                .collect::<Vec<_>>(),
+            [CallId::new(0)],
+        );
+        assert!(
+            graph
+                .raw_calls_reaching(generic_incoming[0], graph.function(exact_callee).unwrap())
+                .next()
+                .is_none()
+        );
+        assert_eq!(
             graph.stable_function(graph.caller(generic_incoming[0])),
             caller
         );
@@ -1949,6 +1975,19 @@ mod tests {
             Some(invocation),
             "distinct desugared declarations share the source invocation"
         );
+        for (declaration, calls) in [
+            (first_declaration, vec![CallId::new(0), CallId::new(1)]),
+            (second_declaration, vec![CallId::new(2)]),
+            (caller, Vec::new()),
+            (first_declaration, vec![CallId::new(0), CallId::new(1)]),
+        ] {
+            assert_eq!(
+                graph
+                    .raw_calls_reaching(invocation, graph.function(declaration).unwrap())
+                    .collect::<Vec<_>>(),
+                calls,
+            );
+        }
         let mut expected = vec![
             graph.function(first_declaration).unwrap(),
             graph.function(second_declaration).unwrap(),
