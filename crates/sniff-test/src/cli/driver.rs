@@ -20,8 +20,8 @@ use super::plugin::rustc_version;
 use sniff_test_diagnostics::findings::{collect_report_root_findings, trace_root_codes};
 use sniff_test_diagnostics::interpretation::interpret_workspace;
 use sniff_test_diagnostics::output::{
-    build_report_with_item_lints, emit_explanation, emit_human_diagnostics, emit_json_report,
-    emit_tool_error,
+    build_report_with_item_lints, emit_explanation, emit_human_diagnostics,
+    emit_human_diagnostics_owned, emit_json_report, emit_tool_error,
 };
 
 #[allow(
@@ -162,11 +162,13 @@ pub(crate) fn analyze_crate(
         }
         return;
     }
-    if emit_diagnostics {
-        emit_human_diagnostics(tcx, &report, &args.explicit_effects);
-    }
     if args.message_format == MessageFormat::Json {
+        if emit_diagnostics {
+            emit_human_diagnostics(tcx, &report, &args.explicit_effects);
+        }
         emit_json_report(&report);
+    } else if emit_diagnostics {
+        emit_human_diagnostics_owned(tcx, report, &args.explicit_effects);
     }
 }
 
