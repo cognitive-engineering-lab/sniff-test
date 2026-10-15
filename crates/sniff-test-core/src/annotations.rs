@@ -567,6 +567,11 @@ impl AnnotationIndex {
         .next()
     }
 
+    /// Whether marker-usage collection can find any justification in this graph.
+    pub(crate) fn has_site_comments(&self) -> bool {
+        !self.site_comments.is_empty()
+    }
+
     #[must_use]
     pub fn site_comment(&self, id: AnnotationId) -> Option<&SiteCommentAnnotation> {
         self.site_comments.iter().find(|comment| comment.id == id)

@@ -704,6 +704,9 @@ impl<'effect, 'annotations, C> TrackedEffect<'effect, 'annotations, C> {
         &self,
         trace: &EffectTrace<TrackedOrigin<O>, TrackedState<S>, TrackedTermination<T>>,
     ) -> Vec<ObligationMarkerUse> {
+        if !self.obligations.annotations.has_site_comments() {
+            return Vec::new();
+        }
         let nodes = trace.nodes().collect::<Vec<_>>();
         let mut uses = Vec::new();
         for edge in trace.edges() {
