@@ -29,8 +29,8 @@ use sniff_test_core::report_roots::ReportRoot;
 use sniff_test_core::workspace::ArtifactAnalysisGraph;
 
 use super::findings::{
-    DiagnosticMessage, FULL_STACK_TRACE_HINT, Finding, FindingDiagnostic, FindingKind,
-    FindingOwner, FindingTraceStepOrder, OwnerScope, SourceEvidence, compact_function_name,
+    DiagnosticMessage, Finding, FindingDiagnostic, FindingKind, FindingOwner,
+    FindingTraceStepOrder, OwnerScope, SourceEvidence, compact_function_name,
     top_level_path_segments,
 };
 use super::report::render_span;
@@ -789,7 +789,7 @@ impl EffectDiagnosticWriter<'_, '_, '_> {
         } else if !self.finding.trace.steps.is_empty() {
             self.diagnostic
                 .messages
-                .push(DiagnosticMessage::Note(String::from(FULL_STACK_TRACE_HINT)));
+                .push(DiagnosticMessage::FullStackTraceHint);
         }
     }
 
@@ -1788,7 +1788,7 @@ fn add_trace_notes(
         )));
         diagnostic
             .messages
-            .push(DiagnosticMessage::Note(String::from(FULL_STACK_TRACE_HINT)));
+            .push(DiagnosticMessage::FullStackTraceHint);
     }
 }
 

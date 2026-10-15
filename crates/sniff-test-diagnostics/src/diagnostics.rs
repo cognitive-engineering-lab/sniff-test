@@ -9,7 +9,7 @@ use sniff_test_core::config::{LintLevel, ReportRootSet};
 use sniff_test_core::report_roots::MissingReportRoot;
 use toml::Spanned;
 
-use super::findings::{DiagnosticMessage, FindingDiagnostic};
+use super::findings::{DiagnosticMessage, FULL_STACK_TRACE_HINT, FindingDiagnostic};
 
 pub fn emit_finding_diagnostic(
     tcx: TyCtxt<'_>,
@@ -93,6 +93,9 @@ fn decorate<G: EmissionGuarantee>(
     let mut alternative_index = 0;
     for message in messages {
         match message {
+            DiagnosticMessage::FullStackTraceHint => {
+                diagnostic.note(FULL_STACK_TRACE_HINT);
+            }
             DiagnosticMessage::Note(note) => {
                 diagnostic.note(note.clone());
             }
