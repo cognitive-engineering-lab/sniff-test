@@ -573,7 +573,7 @@ impl InvocationGraph {
         &self,
         invocation: InvocationId,
         target: FunctionId,
-    ) -> impl Iterator<Item = CallId> + '_ {
+    ) -> impl Iterator<Item = CallId> + Clone + '_ {
         // Target resolution is fixed for this graph. Obligation states can
         // revisit the same invocation many times, so resolve its raw edges once.
         self.resolved_raw_calls[invocation.index()]

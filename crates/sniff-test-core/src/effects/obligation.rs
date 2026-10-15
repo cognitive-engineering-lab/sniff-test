@@ -406,11 +406,10 @@ impl<'annotations> ObligationTracker<'annotations> {
         next.termination = None;
         let relevant_calls = self
             .graph
-            .raw_calls_reaching(invocation, state.current_function)
-            .collect::<Vec<_>>();
+            .raw_calls_reaching(invocation, state.current_function);
         if next.source_invocation.is_none() {
             next.source_invocation = Some(invocation);
-            next.source_calls.extend(relevant_calls.iter().copied());
+            next.source_calls.extend(relevant_calls.clone());
         }
         let source_invocation = next
             .source_invocation
