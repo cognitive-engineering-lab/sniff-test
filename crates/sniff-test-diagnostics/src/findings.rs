@@ -601,6 +601,10 @@ fn compact_human_diagnostic_paths(finding: &mut Finding) {
             .filter(|(path, compact)| path != compact),
     );
 
+    for (path, compact) in &mut paths {
+        *path = format!("`{path}`");
+        *compact = format!("`{compact}`");
+    }
     compact_quoted_paths(&mut finding.diagnostic.message, &paths);
     for message in &mut finding.diagnostic.messages {
         let text = match message {
@@ -621,7 +625,9 @@ fn compact_human_diagnostic_paths(finding: &mut Finding) {
 
 fn compact_quoted_paths(text: &mut String, paths: &[(String, String)]) {
     for (path, compact) in paths {
-        *text = text.replace(&format!("`{path}`"), &format!("`{compact}`"));
+        if text.contains(path.as_str()) {
+            *text = text.replace(path.as_str(), compact);
+        }
     }
 }
 
