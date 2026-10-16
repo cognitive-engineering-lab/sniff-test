@@ -235,7 +235,7 @@ fn contract_boundary_trace(
     );
     let tracked = super::TrackedEffect::new(&concrete, &obligations, ReportEffect::Safety.key());
     (
-        crate::trace::trace_effect_from_roots(
+        crate::trace::trace_effect(
             &graph,
             &tracked,
             &ReportEffect::Safety.key(),
@@ -247,7 +247,7 @@ fn contract_boundary_trace(
                     100
                 },
             },
-            &[graph.function(root).expect("root function")],
+            &crate::trace::RootRoutes::new(&graph, &[graph.function(root).expect("root function")]),
         ),
         artifact,
     )
@@ -494,12 +494,12 @@ fn registered_effect_gets_default_concrete_reporting_without_an_adapter() {
         &obligations,
         EffectKey::new(Allocation::EFFECT_NAME),
     );
-    let trace = crate::trace::trace_effect_from_roots(
+    let trace = crate::trace::trace_effect(
         &graph,
         &tracked,
         &EffectKey::new(Allocation::EFFECT_NAME),
         crate::trace::TraceOptions::default(),
-        &[graph.function(root).expect("root function")],
+        &crate::trace::RootRoutes::new(&graph, &[graph.function(root).expect("root function")]),
     );
     let findings = super::active_node_findings(
         &artifact,
@@ -602,12 +602,12 @@ fn invocation_fact_controls_documentation_policy_for_a_registered_effect() {
             &obligations,
             EffectKey::new(Allocation::EFFECT_NAME),
         );
-        let trace = crate::trace::trace_effect_from_roots(
+        let trace = crate::trace::trace_effect(
             &graph,
             &tracked,
             &EffectKey::new(Allocation::EFFECT_NAME),
             crate::trace::TraceOptions::default(),
-            &[graph.function(root).expect("root function")],
+            &crate::trace::RootRoutes::new(&graph, &[graph.function(root).expect("root function")]),
         );
         super::active_node_findings(
             &artifact,
@@ -2091,12 +2091,15 @@ fn grouped_comment_marker_claims_each_relevant_contract_branch() {
         .map(|(effect, tracked)| {
             (
                 effect.clone(),
-                crate::trace::trace_effect_from_roots(
+                crate::trace::trace_effect(
                     &graph,
                     tracked,
                     effect,
                     crate::trace::TraceOptions::default(),
-                    &[graph.function(root).expect("root function")],
+                    &crate::trace::RootRoutes::new(
+                        &graph,
+                        &[graph.function(root).expect("root function")],
+                    ),
                 ),
             )
         })
@@ -3193,12 +3196,15 @@ fn ignored_macro_invocation_is_local_to_the_caller_report_root() {
         )],
     );
     let tracked = super::TrackedEffect::new(&panic, &obligations, ReportEffect::Panic.key());
-    let trace = crate::trace::trace_effect_from_roots(
+    let trace = crate::trace::trace_effect(
         &graph,
         &tracked,
         &ReportEffect::Panic.key(),
         crate::trace::TraceOptions::default(),
-        &[graph.function(boundary_root).expect("root function")],
+        &crate::trace::RootRoutes::new(
+            &graph,
+            &[graph.function(boundary_root).expect("root function")],
+        ),
     );
 
     assert_eq!(trace.handled().count(), 1);

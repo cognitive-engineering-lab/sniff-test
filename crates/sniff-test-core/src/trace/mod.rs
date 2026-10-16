@@ -1,11 +1,14 @@
 //! Concrete and documentation-obligation propagation over the invocation graph.
 //!
-//! Each pass owns a worklist of path nodes. Handoffs retain depth and trust
-//! context, and both passes share one state budget per effect.
+//! A forward walk from the report roots ([`RootRoutes`]) bounds the search.
+//! Tracing then runs a concrete pass and a documentation pass over those
+//! routes. Handoffs retain depth and trust context, and both passes share one
+//! state budget per effect.
 
 mod effect;
 mod graph;
 mod model;
+mod routes;
 mod worklist;
 
 pub use effect::{EffectSeed, Propagation, PropagationEdge, TraceSite};
@@ -16,4 +19,5 @@ pub use model::{
     EffectTrace, HandledTrace, TerminationSite, TraceEdge, TraceEdgeId, TraceNode, TraceNodeId,
     TraceOutcome, UnknownTrace,
 };
-pub use worklist::{DomainTrace, TraceOptions, trace_effect_from_roots};
+pub use routes::{EdgeScope, RootRoutes};
+pub use worklist::{DomainTrace, TraceOptions, trace_effect};

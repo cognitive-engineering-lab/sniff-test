@@ -38,3 +38,14 @@ pub enum Propagation<S> {
     Ignore,
     Unknown(UnknownBoundary),
 }
+
+impl<S> Propagation<S> {
+    #[must_use]
+    pub fn map<T>(self, f: impl FnOnce(S) -> T) -> Propagation<T> {
+        match self {
+            Self::Follow(state) => Propagation::Follow(f(state)),
+            Self::Ignore => Propagation::Ignore,
+            Self::Unknown(boundary) => Propagation::Unknown(boundary),
+        }
+    }
+}

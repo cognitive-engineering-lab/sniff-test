@@ -1,4 +1,11 @@
-//! Direct, path-specific propagation over the invocation graph.
+//! Direct, path-specific propagation over the root-reachable invocation graph.
+//!
+//! Tracing runs in two passes. The concrete pass walks compiler-discovered
+//! sources backward along body edges until each is handled, escapes, or
+//! reaches a function with a documented contract, where it hands off to that
+//! contract. The documentation pass then walks contract obligations backward
+//! along signature edges. Handed-off and independently documented contracts
+//! are seeded through the same entry point, [`Tracer::seed_documentation`].
 
 use std::collections::{BTreeSet, HashSet, VecDeque};
 
@@ -12,10 +19,11 @@ use crate::effects::obligation::{
     TrackedTermination,
 };
 
+use super::routes::{EdgeScope, RootRoutes};
 use super::{
     EffectTrace, FunctionId, HandledTrace, InvocationId, Propagation, PropagationEdge,
     TerminationSite, TraceEdge, TraceEdgeId, TraceNode, TraceNodeId, TraceOutcome, TraceSite,
-    TransparentBodyEdgeId, UnknownBoundary, UnknownBoundaryKind, UnknownTrace,
+    UnknownBoundary, UnknownBoundaryKind, UnknownTrace,
 };
 
 pub type DomainTrace = EffectTrace<
@@ -23,6 +31,10 @@ pub type DomainTrace = EffectTrace<
     TrackedState<ConcreteEffectState>,
     TrackedTermination<ConcreteTermination>,
 >;
+
+type Origin = TrackedOrigin<ConcreteSource>;
+type State = TrackedState<ConcreteEffectState>;
+type Termination = TrackedTermination<ConcreteTermination>;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct TraceOptions {
@@ -39,600 +51,466 @@ impl Default for TraceOptions {
     }
 }
 
-/// The edges admitted by a walk that starts at the selected report root.
-/// Contract declarations are visible at reached invocations, but are not
-/// descended into as runtime bodies.
-struct RootRoutes {
-    concrete_reachable: BTreeSet<FunctionId>,
-    contract_reachable: BTreeSet<FunctionId>,
-    concrete_incoming: Vec<Vec<InvocationId>>,
-    contract_incoming: Vec<Vec<InvocationId>>,
-    transparent_parents: Vec<Vec<TransparentBodyEdgeId>>,
-}
-
-impl RootRoutes {
-    fn from_roots(graph: &InvocationGraph, roots: &[FunctionId]) -> Self {
-        let count = graph.function_count();
-        let mut outgoing = vec![Vec::new(); count];
-        for invocation in graph.invocations() {
-            outgoing[invocation.caller().index()].push(invocation.id());
-        }
-        let mut transparent_children = vec![Vec::new(); count];
-        for index in 0..count {
-            let child = FunctionId::from_index(index);
-            for &edge in graph.transparent_parents(child) {
-                transparent_children[graph.transparent_parent(edge).index()].push((edge, child));
-            }
-        }
-        let mut routes = Self {
-            concrete_reachable: BTreeSet::new(),
-            contract_reachable: BTreeSet::new(),
-            concrete_incoming: vec![Vec::new(); count],
-            contract_incoming: vec![Vec::new(); count],
-            transparent_parents: vec![Vec::new(); count],
-        };
-        let mut queue = VecDeque::from(roots.to_vec());
-        let mut visited = BTreeSet::new();
-        while let Some(function) = queue.pop_front() {
-            if !visited.insert(function) {
-                continue;
-            }
-            routes.concrete_reachable.insert(function);
-            routes.contract_reachable.insert(function);
-            for &invocation_id in &outgoing[function.index()] {
-                let invocation = graph.invocation(invocation_id);
-                for target in invocation.function_targets() {
-                    routes.concrete_incoming[target.index()].push(invocation_id);
-                    routes.contract_incoming[target.index()].push(invocation_id);
-                    queue.push_back(target);
-                }
-                for declaration in invocation.declaration_targets() {
-                    routes.contract_incoming[declaration.index()].push(invocation_id);
-                    routes.contract_reachable.insert(declaration);
-                }
-            }
-            for &(edge, child) in &transparent_children[function.index()] {
-                routes.transparent_parents[child.index()].push(edge);
-                queue.push_back(child);
-            }
-        }
-        routes
-    }
-}
-
-/// Trace only routes discovered by a forward walk from the report root.
+/// Trace one effect along the routes discovered from the report roots.
 #[must_use]
-pub fn trace_effect_from_roots(
-    graph: &InvocationGraph,
-    tracked: &TrackedEffect<'_, '_, ConcreteEffect<'_>>,
-    effect: &EffectKey,
-    options: TraceOptions,
-    roots: &[FunctionId],
-) -> DomainTrace {
-    let routes = RootRoutes::from_roots(graph, roots);
-    trace_effect_with_routes(graph, tracked, effect, options, &routes)
-}
-
-#[allow(
-    clippy::too_many_lines,
-    reason = "both direct worklists and their shared budget are visible in one traversal"
-)]
-fn trace_effect_with_routes(
+pub fn trace_effect(
     graph: &InvocationGraph,
     tracked: &TrackedEffect<'_, '_, ConcreteEffect<'_>>,
     effect: &EffectKey,
     options: TraceOptions,
     routes: &RootRoutes,
 ) -> DomainTrace {
-    let mut trace = DomainTrace::default();
-    let mut concrete_queue = VecDeque::new();
-    let mut obligation_queue = VecDeque::new();
-    let mut reached = BTreeSet::new();
-    let mut concrete_seen = HashSet::new();
-
-    for seed in tracked.concrete().sources() {
-        if !routes.concrete_reachable.contains(&seed.owner) {
-            continue;
-        }
-        if let Some(termination) = tracked
-            .concrete()
-            .terminate(&seed.state, TraceSite::Source(&seed.origin))
-        {
-            handled(
-                &mut trace,
-                TrackedOrigin::Concrete(seed.origin),
-                None,
-                TerminationSite::Source(TrackedOrigin::Concrete(seed.origin)),
-                TrackedTermination::Concrete(termination),
-            );
-        } else if let Some(node) = add_concrete_node(
-            &mut trace,
-            &mut concrete_seen,
-            seed.origin,
-            seed.owner,
-            seed.state,
-            0,
-            None,
-            options,
-            false,
-        ) {
-            concrete_queue.push_back(node);
-        }
-    }
-    while let Some(node) = concrete_queue.pop_front() {
-        let current = &trace.nodes[node.index()];
-        let (origin, function, depth) = (*current.origin(), current.function(), current.depth());
-        if let Some(contract) = tracked.obligations().boundary_contract(function, effect) {
-            handled(
-                &mut trace,
-                origin,
-                Some(node),
-                TerminationSite::Function(function),
-                TrackedTermination::ContractBoundary,
-            );
-            handoff(
-                &mut trace,
-                tracked,
-                contract,
-                function,
-                node,
-                depth,
-                options,
-                &mut obligation_queue,
-                &mut reached,
-            );
-            continue;
-        }
-        let TrackedState::Concrete(concrete_state) = current.state() else {
-            unreachable!()
-        };
-        if let Some(termination) = tracked
-            .concrete()
-            .terminate(concrete_state, TraceSite::Function(function))
-        {
-            handled(
-                &mut trace,
-                origin,
-                Some(node),
-                TerminationSite::Function(function),
-                TrackedTermination::Concrete(termination),
-            );
-            continue;
-        }
-        let incoming = &routes.concrete_incoming[function.index()];
-        let transparent = &routes.transparent_parents[function.index()];
-        if incoming.is_empty() && transparent.is_empty() {
-            escaped(&mut trace, origin, node);
-            continue;
-        }
-        if depth >= options.max_depth && (!incoming.is_empty() || !transparent.is_empty()) {
-            unknown_at(&mut trace, origin, node, UnknownBoundaryKind::TraceDepth);
-            continue;
-        }
-        for (edge, parent) in parent_edges(graph, incoming, transparent) {
-            if let PropagationEdge::Invocation(invocation) = edge
-                && !graph
-                    .invocation(invocation)
-                    .function_targets()
-                    .any(|target| target == function)
-            {
-                continue;
-            }
-            let propagation = {
-                let TrackedState::Concrete(concrete_state) = trace.nodes[node.index()].state()
-                else {
-                    unreachable!()
-                };
-                tracked.concrete().propagate(concrete_state, edge)
-            };
-            match propagation {
-                Propagation::Follow(next) => {
-                    let termination = match edge {
-                        PropagationEdge::Invocation(invocation) => tracked
-                            .concrete()
-                            .terminate(&next, TraceSite::Invocation(invocation))
-                            .map(|termination| (invocation, termination)),
-                        PropagationEdge::TransparentBody(_) => None,
-                        PropagationEdge::Handoff => unreachable!(),
-                    };
-                    if let Some((invocation, termination)) = termination {
-                        handled(
-                            &mut trace,
-                            origin,
-                            Some(node),
-                            TerminationSite::Invocation(invocation),
-                            TrackedTermination::Concrete(termination),
-                        );
-                    } else if let Some(child) = add_concrete_node(
-                        &mut trace,
-                        &mut concrete_seen,
-                        match origin {
-                            TrackedOrigin::Concrete(source) => source,
-                            TrackedOrigin::Contract(_) => unreachable!(),
-                        },
-                        parent,
-                        next,
-                        depth + 1,
-                        Some((node, edge)),
-                        options,
-                        tracked
-                            .obligations()
-                            .boundary_contract(parent, effect)
-                            .is_some(),
-                    ) {
-                        concrete_queue.push_back(child);
-                    }
-                }
-                Propagation::Ignore => {}
-                Propagation::Unknown(boundary) => {
-                    unknown_boundary(&mut trace, origin, node, boundary);
-                }
-            }
-        }
-    }
-
-    drain_obligations(
+    let mut tracer = Tracer {
         graph,
         tracked,
         effect,
         options,
-        &mut trace,
-        &mut obligation_queue,
-        &mut reached,
         routes,
-    );
-
-    let mut independent = tracked.obligations().seeds_for_effect(effect);
-    if independent.len() > 1 {
-        let mut upstream = UpstreamCounts::new(
-            graph.function_count(),
-            independent.iter().map(|seed| seed.owner),
-        );
-        independent.sort_by_cached_key(|seed| std::cmp::Reverse(upstream.count(graph, seed.owner)));
-    }
-    for seed in independent {
-        if !routes.contract_reachable.contains(&seed.owner) {
-            continue;
-        }
-        if reached.contains(&(seed.origin, seed.owner)) {
-            continue;
-        }
-        if let Some(node) = add_node(
-            &mut trace,
-            TrackedOrigin::Contract(seed.origin),
-            seed.owner,
-            TrackedState::Obligation(seed.state),
-            0,
-            None,
-            options,
-        ) {
-            obligation_queue.push_back(node);
-            drain_obligations(
-                graph,
-                tracked,
-                effect,
-                options,
-                &mut trace,
-                &mut obligation_queue,
-                &mut reached,
-                routes,
-            );
-        }
-    }
-    trace
+        trace: DomainTrace::default(),
+        concrete_queue: VecDeque::new(),
+        documentation_queue: VecDeque::new(),
+        seen: HashSet::new(),
+        reached: BTreeSet::new(),
+    };
+    tracer.concrete_pass();
+    tracer.documentation_pass();
+    tracer.trace
 }
 
-#[allow(
-    clippy::too_many_lines,
-    reason = "obligation transitions and handoffs share one queue loop"
-)]
-fn drain_obligations(
-    graph: &InvocationGraph,
-    tracked: &TrackedEffect<'_, '_, ConcreteEffect<'_>>,
-    effect: &EffectKey,
-    options: TraceOptions,
-    trace: &mut DomainTrace,
-    queue: &mut VecDeque<TraceNodeId>,
-    reached: &mut BTreeSet<(ContractId, FunctionId)>,
-    routes: &RootRoutes,
-) {
-    while let Some(node) = queue.pop_front() {
-        let current = &trace.nodes[node.index()];
-        let (origin, function, depth) = (*current.origin(), current.function(), current.depth());
-        let TrackedState::Obligation(obligation) = current.state() else {
-            unreachable!()
-        };
-        if let Some(contract) = tracked.obligations().boundary_contract(function, effect)
-            && (obligation.contract() != contract || obligation.source_invocation().is_some())
-        {
-            handled(
-                trace,
-                origin,
-                Some(node),
-                TerminationSite::Function(function),
-                TrackedTermination::Obligation(ObligationTermination::ContractBoundary),
-            );
-            if contract_in_ancestry(trace, node, contract) {
-                unknown_at(trace, origin, node, UnknownBoundaryKind::Cycle);
-            } else {
-                handoff(
-                    trace, tracked, contract, function, node, depth, options, queue, reached,
-                );
-            }
-            continue;
-        }
-        if let Some(termination) = tracked
-            .obligations()
-            .terminate(obligation, TraceSite::Function(function))
-        {
-            handled(
-                trace,
-                origin,
-                Some(node),
-                TerminationSite::Function(function),
-                TrackedTermination::Obligation(termination),
-            );
-            continue;
-        }
-        let incoming = &routes.contract_incoming[function.index()];
-        let transparent = &routes.transparent_parents[function.index()];
-        if incoming.is_empty() && transparent.is_empty() {
-            escaped(trace, origin, node);
-            continue;
-        }
-        if depth >= options.max_depth && (!incoming.is_empty() || !transparent.is_empty()) {
-            unknown_at(trace, origin, node, UnknownBoundaryKind::TraceDepth);
-            continue;
-        }
-        for (edge, parent) in parent_edges(graph, incoming, transparent) {
-            // Borrow the queued state only while computing the transition;
-            // the owned successor can then be appended to the trace.
-            let propagation = {
-                let TrackedState::Obligation(obligation) = trace.nodes[node.index()].state() else {
-                    unreachable!()
-                };
-                tracked.obligations().propagate(obligation, edge)
-            };
-            match propagation {
-                Propagation::Follow(next) => {
-                    let termination = match edge {
-                        PropagationEdge::Invocation(invocation) => tracked
-                            .obligations()
-                            .terminate(&next, TraceSite::Invocation(invocation))
-                            .map(|termination| (invocation, termination)),
-                        PropagationEdge::TransparentBody(_) => None,
-                        PropagationEdge::Handoff => unreachable!(),
-                    };
-                    if let Some((invocation, termination)) = termination {
-                        handled(
-                            trace,
-                            origin,
-                            Some(node),
-                            TerminationSite::Invocation(invocation),
-                            TrackedTermination::Obligation(termination),
-                        );
-                    } else if let Some(child) = add_node(
-                        trace,
-                        origin,
-                        parent,
-                        TrackedState::Obligation(next),
-                        depth + 1,
-                        Some((node, edge)),
-                        options,
-                    ) {
-                        queue.push_back(child);
-                    }
-                }
-                Propagation::Ignore => {}
-                Propagation::Unknown(boundary) => {
-                    unknown_boundary(trace, origin, node, boundary);
-                }
-            }
-        }
-    }
-}
-
-fn parent_edges<'a>(
-    graph: &'a InvocationGraph,
-    incoming: &'a [InvocationId],
-    transparent: &'a [TransparentBodyEdgeId],
-) -> impl Iterator<Item = (PropagationEdge, FunctionId)> + 'a {
-    incoming
-        .iter()
-        .copied()
-        .map(|invocation| {
-            (
-                PropagationEdge::Invocation(invocation),
-                graph.caller(invocation),
-            )
-        })
-        .chain(transparent.iter().copied().map(|transparent_edge| {
-            (
-                PropagationEdge::TransparentBody(transparent_edge),
-                graph.transparent_parent(transparent_edge),
-            )
-        }))
-}
-
-#[allow(
-    clippy::too_many_arguments,
-    reason = "handoffs retain all path and budget context explicitly"
-)]
-fn handoff(
-    trace: &mut DomainTrace,
-    tracked: &TrackedEffect<'_, '_, ConcreteEffect<'_>>,
+/// A documented contract obligation entering the documentation pass.
+#[derive(Clone, Copy)]
+struct DocumentationSeed {
     contract: ContractId,
     function: FunctionId,
-    parent: TraceNodeId,
-    depth: usize,
+    /// The node whose path reached `function`'s contract. Its trust context
+    /// and depth carry over; an independent seed starts a fresh path.
+    handoff_from: Option<TraceNodeId>,
+}
+
+struct Tracer<'t, 'e, 'a, 'c> {
+    graph: &'t InvocationGraph,
+    tracked: &'t TrackedEffect<'e, 'a, ConcreteEffect<'c>>,
+    effect: &'t EffectKey,
     options: TraceOptions,
-    queue: &mut VecDeque<TraceNodeId>,
-    reached: &mut BTreeSet<(ContractId, FunctionId)>,
-) {
-    let trust = match trace.nodes[parent.index()].state() {
-        TrackedState::Concrete(state) => state.trust_path().clone(),
-        TrackedState::Obligation(state) => state.trust_path().clone(),
-    };
-    if let Some(seed) = tracked
-        .obligations()
-        .seed_at(contract, function, Some(trust))
-    {
-        reached.insert((contract, function));
-        if let Some(node) = add_node(
-            trace,
+    routes: &'t RootRoutes,
+    trace: DomainTrace,
+    concrete_queue: VecDeque<TraceNodeId>,
+    documentation_queue: VecDeque<TraceNodeId>,
+    seen: HashSet<(Origin, FunctionId, State, usize)>,
+    reached: BTreeSet<(ContractId, FunctionId)>,
+}
+
+impl Tracer<'_, '_, '_, '_> {
+    fn concrete_pass(&mut self) {
+        let concrete = self.tracked.concrete();
+        for seed in concrete.sources() {
+            if !self.routes.admits(seed.owner, EdgeScope::Body) {
+                continue;
+            }
+            let origin = TrackedOrigin::Concrete(seed.origin);
+            if let Some(termination) =
+                concrete.terminate(&seed.state, TraceSite::Source(&seed.origin))
+            {
+                self.handled(
+                    origin,
+                    None,
+                    TerminationSite::Source(origin),
+                    TrackedTermination::Concrete(termination),
+                );
+            } else if let Some(node) = self.add_node(
+                origin,
+                seed.owner,
+                TrackedState::Concrete(seed.state),
+                0,
+                None,
+                true,
+            ) {
+                self.concrete_queue.push_back(node);
+            }
+        }
+        while let Some(node) = self.concrete_queue.pop_front() {
+            self.visit(node);
+        }
+    }
+
+    /// Drains contracts handed off by the concrete pass, then seeds each
+    /// independently documented contract that no handoff reached.
+    fn documentation_pass(&mut self) {
+        self.drain_documentation();
+        for (contract, function) in self.independent_sites() {
+            if !self.routes.admits(function, EdgeScope::Signature)
+                || self.reached.contains(&(contract, function))
+            {
+                continue;
+            }
+            self.seed_documentation(DocumentationSeed {
+                contract,
+                function,
+                handoff_from: None,
+            });
+            self.drain_documentation();
+        }
+    }
+
+    fn drain_documentation(&mut self) {
+        while let Some(node) = self.documentation_queue.pop_front() {
+            self.visit(node);
+        }
+    }
+
+    /// Contract sites ordered by how many other contract sites are upstream.
+    fn independent_sites(&self) -> Vec<(ContractId, FunctionId)> {
+        let mut sites = self
+            .tracked
+            .obligations()
+            .contract_sites(self.effect)
+            .collect::<Vec<_>>();
+        if sites.len() > 1 {
+            let mut upstream = UpstreamCounts::new(
+                self.graph.function_count(),
+                sites.iter().map(|&(_, function)| function),
+            );
+            sites.sort_by_cached_key(|&(_, function)| {
+                std::cmp::Reverse(upstream.count(self.graph, function))
+            });
+        }
+        sites
+    }
+
+    /// The only constructor of obligation nodes.
+    fn seed_documentation(&mut self, seed: DocumentationSeed) {
+        let DocumentationSeed {
+            contract,
+            function,
+            handoff_from,
+        } = seed;
+        let (trust, depth, predecessor) = match handoff_from {
+            Some(parent) => {
+                if self.contract_in_ancestry(parent, contract) {
+                    let origin = *self.trace.nodes[parent.index()].origin();
+                    self.unknown_at(origin, parent, UnknownBoundaryKind::Cycle);
+                    return;
+                }
+                let node = &self.trace.nodes[parent.index()];
+                let trust = match node.state() {
+                    TrackedState::Concrete(state) => state.trust_path().clone(),
+                    TrackedState::Obligation(state) => state.trust_path().clone(),
+                };
+                (
+                    Some(trust),
+                    node.depth(),
+                    Some((parent, PropagationEdge::Handoff)),
+                )
+            }
+            None => (None, 0, None),
+        };
+        let Some(seed) = self
+            .tracked
+            .obligations()
+            .seed_at(contract, function, trust)
+        else {
+            return;
+        };
+        self.reached.insert((contract, function));
+        if let Some(node) = self.add_node(
             TrackedOrigin::Contract(contract),
             function,
             TrackedState::Obligation(seed.state),
             depth,
-            Some((parent, PropagationEdge::Handoff)),
-            options,
+            predecessor,
+            false,
         ) {
-            queue.push_back(node);
+            self.documentation_queue.push_back(node);
         }
     }
-}
 
-fn add_node(
-    trace: &mut DomainTrace,
-    origin: TrackedOrigin<ConcreteSource>,
-    function: FunctionId,
-    state: TrackedState<ConcreteEffectState>,
-    depth: usize,
-    predecessor: Option<(TraceNodeId, PropagationEdge)>,
-    options: TraceOptions,
-) -> Option<TraceNodeId> {
-    if let Some((parent, _)) = predecessor
-        && same_ancestor(trace, parent, origin, function, |candidate| {
-            candidate == &state
-        })
-    {
-        unknown_at(trace, origin, parent, UnknownBoundaryKind::Cycle);
-        return None;
-    }
-    append_node(trace, origin, function, state, depth, predecessor, options)
-}
-
-fn append_node(
-    trace: &mut DomainTrace,
-    origin: TrackedOrigin<ConcreteSource>,
-    function: FunctionId,
-    state: TrackedState<ConcreteEffectState>,
-    depth: usize,
-    predecessor: Option<(TraceNodeId, PropagationEdge)>,
-    options: TraceOptions,
-) -> Option<TraceNodeId> {
-    if trace.nodes.len() >= options.state_budget {
-        match predecessor {
-            Some((parent, _)) => {
-                unknown_at(trace, origin, parent, UnknownBoundaryKind::TraceStateBudget);
-            }
-            None => {
-                detached_unknown(
-                    trace,
-                    origin,
+    fn visit(&mut self, node: TraceNodeId) {
+        let current = &self.trace.nodes[node.index()];
+        let (origin, function) = (*current.origin(), current.function());
+        if let Some((termination, handoff)) = self.function_stop(node) {
+            self.handled(
+                origin,
+                Some(node),
+                TerminationSite::Function(function),
+                termination,
+            );
+            if let Some(contract) = handoff {
+                self.seed_documentation(DocumentationSeed {
+                    contract,
                     function,
-                    state,
-                    UnknownBoundaryKind::TraceStateBudget,
-                );
+                    handoff_from: Some(node),
+                });
+            }
+            return;
+        }
+        self.step_to_callers(node);
+    }
+
+    /// Whether `node` stops at its function, and the contract it hands off
+    /// to there. A contract boundary takes any path except an obligation
+    /// still at its own contract's function.
+    fn function_stop(&self, node: TraceNodeId) -> Option<(Termination, Option<ContractId>)> {
+        let current = &self.trace.nodes[node.index()];
+        let function = current.function();
+        let boundary = self
+            .tracked
+            .obligations()
+            .boundary_contract(function, self.effect);
+        match current.state() {
+            TrackedState::Concrete(state) => {
+                if let Some(contract) = boundary {
+                    return Some((TrackedTermination::ContractBoundary, Some(contract)));
+                }
+                self.tracked
+                    .concrete()
+                    .terminate(state, TraceSite::Function(function))
+                    .map(|termination| (TrackedTermination::Concrete(termination), None))
+            }
+            TrackedState::Obligation(state) => {
+                if let Some(contract) = boundary
+                    && (state.contract() != contract || state.source_invocation().is_some())
+                {
+                    return Some((
+                        TrackedTermination::Obligation(ObligationTermination::ContractBoundary),
+                        Some(contract),
+                    ));
+                }
+                self.tracked
+                    .obligations()
+                    .terminate(state, TraceSite::Function(function))
+                    .map(|termination| (TrackedTermination::Obligation(termination), None))
             }
         }
-        return None;
     }
-    let id = TraceNodeId(trace.nodes.len());
-    trace.nodes.push(TraceNode {
-        origin,
-        function,
-        state,
-        depth,
-        predecessor: None,
-    });
-    if let Some((from, propagation)) = predecessor {
-        let edge_id = TraceEdgeId(trace.edges.len());
-        trace.edges.push(TraceEdge {
-            from,
-            to: id,
-            propagation,
-        });
-        trace.nodes[id.index()].predecessor = Some(edge_id);
-    }
-    Some(id)
-}
 
-#[allow(clippy::too_many_arguments)]
-fn add_concrete_node(
-    trace: &mut DomainTrace,
-    seen: &mut HashSet<(ConcreteSource, FunctionId, ConcreteEffectState, usize)>,
-    origin: ConcreteSource,
-    function: FunctionId,
-    state: ConcreteEffectState,
-    depth: usize,
-    predecessor: Option<(TraceNodeId, PropagationEdge)>,
-    options: TraceOptions,
-    at_contract: bool,
-) -> Option<TraceNodeId> {
-    if let Some((parent, _)) = predecessor
-        && same_ancestor(
-            trace,
-            parent,
-            TrackedOrigin::Concrete(origin),
-            function,
-            |candidate| matches!(candidate, TrackedState::Concrete(candidate) if candidate == &state),
-        )
-    {
-        unknown_at(
-            trace,
-            TrackedOrigin::Concrete(origin),
-            parent,
-            UnknownBoundaryKind::Cycle,
-        );
-        return None;
+    fn step_to_callers(&mut self, node: TraceNodeId) {
+        let routes = self.routes;
+        let current = &self.trace.nodes[node.index()];
+        let (origin, function, depth) = (*current.origin(), current.function(), current.depth());
+        let scope = match current.state() {
+            TrackedState::Concrete(_) => EdgeScope::Body,
+            TrackedState::Obligation(_) => EdgeScope::Signature,
+        };
+        if routes.parents(function, scope).next().is_none() {
+            self.escaped(origin, node);
+            return;
+        }
+        if depth >= self.options.max_depth {
+            self.unknown_at(origin, node, UnknownBoundaryKind::TraceDepth);
+            return;
+        }
+        for (edge, parent) in routes.parents(function, scope) {
+            match self.propagate(node, edge) {
+                Propagation::Follow(next) => {
+                    if let Some((invocation, termination)) =
+                        self.invocation_termination(&next, edge)
+                    {
+                        self.handled(
+                            origin,
+                            Some(node),
+                            TerminationSite::Invocation(invocation),
+                            termination,
+                        );
+                        continue;
+                    }
+                    // Concrete paths entering a contract stay distinct, since
+                    // each one hands off with its own trust context.
+                    let dedup = matches!(next, TrackedState::Concrete(_))
+                        && self
+                            .tracked
+                            .obligations()
+                            .boundary_contract(parent, self.effect)
+                            .is_none();
+                    if let Some(child) =
+                        self.add_node(origin, parent, next, depth + 1, Some((node, edge)), dedup)
+                    {
+                        match self.trace.nodes[child.index()].state() {
+                            TrackedState::Concrete(_) => self.concrete_queue.push_back(child),
+                            TrackedState::Obligation(_) => {
+                                self.documentation_queue.push_back(child);
+                            }
+                        }
+                    }
+                }
+                Propagation::Ignore => {}
+                Propagation::Unknown(boundary) => {
+                    self.unknown_boundary(origin, node, boundary);
+                }
+            }
+        }
     }
-    if !at_contract && !seen.insert((origin, function, state.clone(), depth)) {
-        return None;
-    }
-    append_node(
-        trace,
-        TrackedOrigin::Concrete(origin),
-        function,
-        TrackedState::Concrete(state),
-        depth,
-        predecessor,
-        options,
-    )
-}
 
-fn same_ancestor(
-    trace: &DomainTrace,
-    mut node: TraceNodeId,
-    origin: TrackedOrigin<ConcreteSource>,
-    function: FunctionId,
-    matches_state: impl Fn(&TrackedState<ConcreteEffectState>) -> bool,
-) -> bool {
-    loop {
-        let current = &trace.nodes[node.index()];
-        if *current.origin() == origin
-            && current.function() == function
-            && matches_state(current.state())
+    fn propagate(&self, node: TraceNodeId, edge: PropagationEdge) -> Propagation<State> {
+        match self.trace.nodes[node.index()].state() {
+            TrackedState::Concrete(state) => self
+                .tracked
+                .concrete()
+                .propagate(state, edge)
+                .map(TrackedState::Concrete),
+            TrackedState::Obligation(state) => self
+                .tracked
+                .obligations()
+                .propagate(state, edge)
+                .map(TrackedState::Obligation),
+        }
+    }
+
+    fn invocation_termination(
+        &self,
+        state: &State,
+        edge: PropagationEdge,
+    ) -> Option<(InvocationId, Termination)> {
+        let PropagationEdge::Invocation(invocation) = edge else {
+            return None;
+        };
+        let termination = match state {
+            TrackedState::Concrete(state) => self
+                .tracked
+                .concrete()
+                .terminate(state, TraceSite::Invocation(invocation))
+                .map(TrackedTermination::Concrete),
+            TrackedState::Obligation(state) => self
+                .tracked
+                .obligations()
+                .terminate(state, TraceSite::Invocation(invocation))
+                .map(TrackedTermination::Obligation),
+        }?;
+        Some((invocation, termination))
+    }
+
+    /// Appends a node unless it would repeat an ancestor, or, with `dedup`,
+    /// repeat an already explored position.
+    fn add_node(
+        &mut self,
+        origin: Origin,
+        function: FunctionId,
+        state: State,
+        depth: usize,
+        predecessor: Option<(TraceNodeId, PropagationEdge)>,
+        dedup: bool,
+    ) -> Option<TraceNodeId> {
+        if let Some((parent, _)) = predecessor
+            && self.same_ancestor(parent, origin, function, &state)
         {
-            return true;
+            self.unknown_at(origin, parent, UnknownBoundaryKind::Cycle);
+            return None;
         }
-        let Some(edge) = current.predecessor() else {
-            return false;
-        };
-        node = trace.edges[edge.index()].from;
+        if dedup && !self.seen.insert((origin, function, state.clone(), depth)) {
+            return None;
+        }
+        if self.trace.nodes.len() >= self.options.state_budget {
+            let kind = UnknownBoundaryKind::TraceStateBudget;
+            match predecessor {
+                Some((parent, _)) => self.unknown_at(origin, parent, kind),
+                None => self.detached_unknown(origin, function, state, kind),
+            }
+            return None;
+        }
+        let id = TraceNodeId(self.trace.nodes.len());
+        self.trace.nodes.push(TraceNode {
+            origin,
+            function,
+            state,
+            depth,
+            predecessor: None,
+        });
+        if let Some((from, propagation)) = predecessor {
+            let edge_id = TraceEdgeId(self.trace.edges.len());
+            self.trace.edges.push(TraceEdge {
+                from,
+                to: id,
+                propagation,
+            });
+            self.trace.nodes[id.index()].predecessor = Some(edge_id);
+        }
+        Some(id)
     }
-}
 
-fn contract_in_ancestry(trace: &DomainTrace, mut node: TraceNodeId, contract: ContractId) -> bool {
-    loop {
-        let current = &trace.nodes[node.index()];
-        if matches!(current.origin(), TrackedOrigin::Contract(id) if *id == contract) {
-            return true;
-        }
-        let Some(edge) = current.predecessor() else {
-            return false;
-        };
-        node = trace.edges[edge.index()].from;
+    fn ancestry(&self, node: TraceNodeId) -> impl Iterator<Item = &TraceNode<Origin, State>> {
+        std::iter::successors(Some(&self.trace.nodes[node.index()]), |current| {
+            current
+                .predecessor()
+                .map(|edge| &self.trace.nodes[self.trace.edges[edge.index()].from.index()])
+        })
+    }
+
+    fn same_ancestor(
+        &self,
+        node: TraceNodeId,
+        origin: Origin,
+        function: FunctionId,
+        state: &State,
+    ) -> bool {
+        self.ancestry(node).any(|current| {
+            *current.origin() == origin
+                && current.function() == function
+                && current.state() == state
+        })
+    }
+
+    fn contract_in_ancestry(&self, node: TraceNodeId, contract: ContractId) -> bool {
+        self.ancestry(node).any(
+            |current| matches!(current.origin(), TrackedOrigin::Contract(id) if *id == contract),
+        )
+    }
+
+    fn handled(
+        &mut self,
+        origin: Origin,
+        node: Option<TraceNodeId>,
+        site: TerminationSite<Origin>,
+        termination: Termination,
+    ) {
+        self.trace.handled.push(HandledTrace {
+            origin,
+            node,
+            site,
+            termination,
+        });
+        self.trace.outcomes.push(TraceOutcome::Handled(origin));
+    }
+
+    fn escaped(&mut self, origin: Origin, node: TraceNodeId) {
+        self.trace.escaped.push((origin, node));
+        self.trace.outcomes.push(TraceOutcome::Escaped(origin));
+    }
+
+    fn unknown_at(&mut self, origin: Origin, node: TraceNodeId, kind: UnknownBoundaryKind) {
+        self.unknown_boundary(origin, node, UnknownBoundary::new(kind));
+    }
+
+    fn unknown_boundary(&mut self, origin: Origin, node: TraceNodeId, boundary: UnknownBoundary) {
+        let current = &self.trace.nodes[node.index()];
+        self.trace.unknown.push(UnknownTrace {
+            origin,
+            node: Some(node),
+            function: current.function(),
+            state: current.state().clone(),
+            boundary: boundary.clone(),
+        });
+        self.trace
+            .outcomes
+            .push(TraceOutcome::Unknown { origin, boundary });
+    }
+
+    fn detached_unknown(
+        &mut self,
+        origin: Origin,
+        function: FunctionId,
+        state: State,
+        kind: UnknownBoundaryKind,
+    ) {
+        let boundary = UnknownBoundary::new(kind);
+        self.trace.unknown.push(UnknownTrace {
+            origin,
+            node: None,
+            function,
+            state,
+            boundary: boundary.clone(),
+        });
+        self.trace
+            .outcomes
+            .push(TraceOutcome::Unknown { origin, boundary });
     }
 }
 
@@ -694,73 +572,4 @@ impl UpstreamCounts {
             self.pending.push(function);
         }
     }
-}
-
-fn handled(
-    trace: &mut DomainTrace,
-    origin: TrackedOrigin<ConcreteSource>,
-    node: Option<TraceNodeId>,
-    site: TerminationSite<TrackedOrigin<ConcreteSource>>,
-    termination: TrackedTermination<ConcreteTermination>,
-) {
-    trace.handled.push(HandledTrace {
-        origin,
-        node,
-        site,
-        termination,
-    });
-    trace.outcomes.push(TraceOutcome::Handled(origin));
-}
-
-fn escaped(trace: &mut DomainTrace, origin: TrackedOrigin<ConcreteSource>, node: TraceNodeId) {
-    trace.escaped.push((origin, node));
-    trace.outcomes.push(TraceOutcome::Escaped(origin));
-}
-
-fn unknown_at(
-    trace: &mut DomainTrace,
-    origin: TrackedOrigin<ConcreteSource>,
-    node: TraceNodeId,
-    kind: UnknownBoundaryKind,
-) {
-    unknown_boundary(trace, origin, node, UnknownBoundary::new(kind));
-}
-
-fn unknown_boundary(
-    trace: &mut DomainTrace,
-    origin: TrackedOrigin<ConcreteSource>,
-    node: TraceNodeId,
-    boundary: UnknownBoundary,
-) {
-    let current = &trace.nodes[node.index()];
-    trace.unknown.push(UnknownTrace {
-        origin,
-        node: Some(node),
-        function: current.function(),
-        state: current.state().clone(),
-        boundary: boundary.clone(),
-    });
-    trace
-        .outcomes
-        .push(TraceOutcome::Unknown { origin, boundary });
-}
-
-fn detached_unknown(
-    trace: &mut DomainTrace,
-    origin: TrackedOrigin<ConcreteSource>,
-    function: FunctionId,
-    state: TrackedState<ConcreteEffectState>,
-    kind: UnknownBoundaryKind,
-) {
-    let boundary = UnknownBoundary::new(kind);
-    trace.unknown.push(UnknownTrace {
-        origin,
-        node: None,
-        function,
-        state,
-        boundary: boundary.clone(),
-    });
-    trace
-        .outcomes
-        .push(TraceOutcome::Unknown { origin, boundary });
 }

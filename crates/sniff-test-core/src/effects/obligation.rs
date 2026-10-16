@@ -253,14 +253,21 @@ impl<'annotations> ObligationTracker<'annotations> {
         &self.contracts
     }
 
-    #[must_use]
-    pub fn seeds_for_effect(
-        &self,
-        effect: &EffectKey,
-    ) -> Vec<EffectSeed<ContractId, ObligationState>> {
-        self.sources()
-            .filter(|seed| seed.state.effect() == effect)
-            .collect()
+    /// Every function carrying one of this effect's contracts, in contract
+    /// order. Seed states are built by [`Self::seed_at`].
+    pub fn contract_sites<'a>(
+        &'a self,
+        effect: &'a EffectKey,
+    ) -> impl Iterator<Item = (ContractId, FunctionId)> + 'a {
+        self.contracts
+            .iter()
+            .filter(move |contract| &contract.effect == effect)
+            .flat_map(|contract| {
+                contract
+                    .functions
+                    .iter()
+                    .map(move |&function| (contract.id, function))
+            })
     }
 
     #[must_use]
@@ -507,31 +514,6 @@ impl<'annotations> ObligationTracker<'annotations> {
 }
 
 impl ObligationTracker<'_> {
-    pub fn sources(&self) -> impl Iterator<Item = EffectSeed<ContractId, ObligationState>> + '_ {
-        self.contracts.iter().flat_map(move |contract| {
-            contract.functions.iter().copied().map(move |function| {
-                EffectSeed::new(
-                    contract.id,
-                    function,
-                    ObligationState {
-                        effect: contract.effect.clone(),
-                        contract: contract.id,
-                        current_function: function,
-                        source_invocation: None,
-                        source_calls: BTreeSet::new(),
-                        remaining: contract.obligations.clone(),
-                        termination: None,
-                        trust_path: if self.trusts_function(&contract.effect, function) {
-                            TrustPath::default()
-                        } else {
-                            TrustPath::new(self.graph, function)
-                        },
-                    },
-                )
-            })
-        })
-    }
-
     #[must_use]
     pub fn propagate(
         &self,

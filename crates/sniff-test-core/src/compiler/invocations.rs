@@ -1298,12 +1298,12 @@ mod tests {
         );
         let tracked =
             crate::effects::obligation::TrackedEffect::new(&panic, &obligations, key.clone());
-        let trace = crate::trace::trace_effect_from_roots(
+        let trace = crate::trace::trace_effect(
             &graph,
             &tracked,
             &key,
             crate::trace::TraceOptions::default(),
-            &[graph.function(root).expect("root")],
+            &crate::trace::RootRoutes::new(&graph, &[graph.function(root).expect("root")]),
         );
         assert!(
             trace
@@ -1650,12 +1650,12 @@ mod tests {
             &obligations,
             EffectKey::new("panic"),
         );
-        let trace = crate::trace::trace_effect_from_roots(
+        let trace = crate::trace::trace_effect(
             &graph,
             &tracked,
             &EffectKey::new("panic"),
             crate::trace::TraceOptions::default(),
-            &[graph.function(caller).expect("caller")],
+            &crate::trace::RootRoutes::new(&graph, &[graph.function(caller).expect("caller")]),
         );
 
         trace

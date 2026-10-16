@@ -14,7 +14,8 @@ use std::sync::Arc;
 use rustc_data_structures::fx::{FxHashMap, FxHasher};
 
 use crate::trace::{
-    EffectTrace, FunctionId, PropagationEdge, TerminationSite, TraceNodeId, TraceOptions,
+    EffectTrace, FunctionId, PropagationEdge, RootRoutes, TerminationSite, TraceNodeId,
+    TraceOptions,
 };
 
 use crate::annotations::{AnnotationIndex, AnnotationWorkspaceIndex};
@@ -265,18 +266,13 @@ pub fn trace_selected_workspace(
                     )
                 })
                 .collect::<BTreeMap<_, _>>();
+            let routes = RootRoutes::new(&graph, &root_functions);
             let effect_traces = tracked_effects
                 .iter()
                 .map(|(effect, tracked)| {
                     (
                         effect.clone(),
-                        crate::trace::trace_effect_from_roots(
-                            &graph,
-                            tracked,
-                            effect,
-                            trace_options,
-                            &root_functions,
-                        ),
+                        crate::trace::trace_effect(&graph, tracked, effect, trace_options, &routes),
                     )
                 })
                 .collect::<BTreeMap<_, ConcreteTrace>>();
