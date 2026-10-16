@@ -97,6 +97,7 @@ enum ContractBoundaryScenario {
     CallerContract,
     DocumentationChain,
     DistinctOperations,
+    BudgetDistinctOperations,
     ContractCycle,
     BudgetAcrossHandoff,
 }
@@ -179,7 +180,11 @@ fn contract_boundary_trace(
         },
         if source_in_callee || !include_operation {
             Vec::new()
-        } else if matches!(scenario, ContractBoundaryScenario::DistinctOperations) {
+        } else if matches!(
+            scenario,
+            ContractBoundaryScenario::DistinctOperations
+                | ContractBoundaryScenario::BudgetDistinctOperations
+        ) {
             let mut second = operation.clone();
             second.id = EffectId::new(1);
             vec![operation.clone(), second]
@@ -241,7 +246,11 @@ fn contract_boundary_trace(
             &ReportEffect::Safety.key(),
             crate::trace::TraceOptions {
                 max_depth,
-                state_budget: if matches!(scenario, ContractBoundaryScenario::BudgetAcrossHandoff) {
+                state_budget: if matches!(
+                    scenario,
+                    ContractBoundaryScenario::BudgetAcrossHandoff
+                        | ContractBoundaryScenario::BudgetDistinctOperations
+                ) {
                     1
                 } else {
                     100
@@ -343,12 +352,55 @@ fn handoff_inherits_depth_when_operation_is_nested() {
 }
 
 #[test]
-fn state_budget_is_shared_by_concrete_and_obligation_passes() {
+fn handoff_keeps_its_seed_budget_and_failed_handoff_leaves_independent_contract() {
     let (trace, _) = contract_boundary_trace(ContractBoundaryScenario::BudgetAcrossHandoff);
-    assert_eq!(trace.nodes().count(), 1);
+    assert_eq!(
+        trace
+            .nodes()
+            .filter(|node| matches!(node.origin(), super::TrackedOrigin::Concrete(_)))
+            .count(),
+        1
+    );
+    assert_eq!(
+        trace
+            .nodes()
+            .filter(|node| matches!(node.origin(), super::TrackedOrigin::Contract(_)))
+            .count(),
+        1
+    );
     assert!(
         trace.unknown().any(|unknown| unknown.boundary().kind()
             == crate::trace::UnknownBoundaryKind::TraceStateBudget)
+    );
+}
+
+#[test]
+fn one_seed_exhausting_its_budget_does_not_block_another_seed() {
+    let (trace, _) = contract_boundary_trace(ContractBoundaryScenario::BudgetDistinctOperations);
+    assert_eq!(
+        trace
+            .nodes()
+            .filter(|node| matches!(node.origin(), super::TrackedOrigin::Concrete(_)))
+            .count(),
+        2
+    );
+    assert_eq!(
+        trace
+            .handled()
+            .filter(|handled| matches!(
+                handled.termination(),
+                super::TrackedTermination::ContractBoundary
+            ))
+            .count(),
+        2
+    );
+    assert_eq!(
+        trace
+            .unknown()
+            .filter(|unknown| unknown.boundary().kind()
+                == crate::trace::UnknownBoundaryKind::TraceStateBudget)
+            .count(),
+        3
     );
 }
 

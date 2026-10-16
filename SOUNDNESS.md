@@ -103,13 +103,14 @@ undocumented effects.
 
 ### Depth and state budgets bound workspace interpretation
 
-Each effect is traced once across the composed workspace and then projected
-onto the selected report roots. Each source path follows at most
+Each selected report root and effect is traced across the composed workspace.
+Each source path follows at most
 `[analysis] max-trace-depth`
 propagation edges from one source (default 256). A separate
-`trace-state-budget` bounds distinct `(origin, function, effect state)` values
-(default 1000000); one function can consume more than one state when, for
-example, different comment obligations remain. Dependency extraction is
+`trace-state-budget` bounds accepted trace states per concrete effect seed or
+independently documented contract (default 10,000). A concrete seed retains
+its budget through contract handoffs; one function can consume more than one
+state when, for example, different comment obligations remain. Dependency extraction is
 root-independent and has neither workspace-policy limit. Reaching either
 limit emits the corresponding
 `panic-analysis-incomplete` or `safety-analysis-incomplete` finding, denied by

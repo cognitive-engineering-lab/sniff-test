@@ -1571,13 +1571,13 @@ fn incomplete_limit_presentation(
         ),
         TraceLimit::StateBudget(budget) => (
             format!(
-                "{subject} exhausted `[analysis].trace-state-budget` ({budget}) at frontier `{frontier}`"
+                "{subject} exhausted the per-seed `[analysis].trace-state-budget` ({budget}) at frontier `{frontier}`"
             ),
             format!(
-                "{subject} for function `{root}` exhausted the configured state budget ({budget}) at `{frontier}`"
+                "{subject} for function `{root}` exhausted the per-seed state budget ({budget}) at `{frontier}`"
             ),
             String::from(
-                "raise `[analysis].trace-state-budget` in sniff-test.toml, or reduce the number of distinct effect states",
+                "raise the per-seed `[analysis].trace-state-budget` in sniff-test.toml, or reduce the number of distinct effect states for this seed",
             ),
         ),
     };
@@ -2633,15 +2633,15 @@ mod tests {
 
         assert_eq!(
             presentation.reason,
-            "safety effect tracing exhausted `[analysis].trace-state-budget` (32) at frontier `app::helper`"
+            "safety effect tracing exhausted the per-seed `[analysis].trace-state-budget` (32) at frontier `app::helper`"
         );
         assert_eq!(
             presentation.message,
-            "safety effect tracing for function `app::root` exhausted the configured state budget (32) at `app::helper`"
+            "safety effect tracing for function `app::root` exhausted the per-seed state budget (32) at `app::helper`"
         );
         assert_eq!(
             presentation.help,
-            "raise `[analysis].trace-state-budget` in sniff-test.toml, or reduce the number of distinct effect states"
+            "raise the per-seed `[analysis].trace-state-budget` in sniff-test.toml, or reduce the number of distinct effect states for this seed"
         );
         assert!(!presentation.help.contains("max-trace-depth"));
     }

@@ -37,12 +37,13 @@ effect-doc-matching = "any-justification"
 
 # Ambiguous requirement names and shared proof markers default to failing closed.
 #
-# Maximum propagation depth from one effect source, plus a separate budget for
-# distinct `(origin, function, effect state)` trace nodes. Dependency facts are
+# Maximum propagation depth from one effect source, plus a separate state budget
+# for each concrete source or independently documented contract. A contract
+# handoff keeps its originating source's budget. Dependency facts are
 # extracted independently of these limits. Traversals that halt are reported
 # through the corresponding analysis-incomplete lint instead of passing.
 max-trace-depth = 256
-trace-state-budget = 1000000
+trace-state-budget = 10000
 
 [contracts]
 # Synthetic rustdoc markdown by namespace glob, loaded from TOML files relative

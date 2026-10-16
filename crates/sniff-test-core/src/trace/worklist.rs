@@ -46,7 +46,7 @@ impl Default for TraceOptions {
     fn default() -> Self {
         Self {
             max_depth: 256,
-            state_budget: 1_000_000,
+            state_budget: 10_000,
         }
     }
 }
@@ -67,6 +67,8 @@ pub fn trace_effect(
         options,
         routes,
         trace: DomainTrace::default(),
+        node_seeds: Vec::new(),
+        seed_states: Vec::new(),
         concrete_queue: VecDeque::new(),
         documentation_queue: VecDeque::new(),
         seen: HashSet::new(),
@@ -94,6 +96,10 @@ struct Tracer<'t, 'e, 'a, 'c> {
     options: TraceOptions,
     routes: &'t RootRoutes,
     trace: DomainTrace,
+    /// Seed lineage for each trace node. Contract handoffs keep their parent's seed.
+    node_seeds: Vec<usize>,
+    /// Accepted node count for each independently started seed.
+    seed_states: Vec<usize>,
     concrete_queue: VecDeque<TraceNodeId>,
     documentation_queue: VecDeque<TraceNodeId>,
     seen: HashSet<(Origin, FunctionId, State, usize)>,
@@ -211,7 +217,6 @@ impl Tracer<'_, '_, '_, '_> {
         else {
             return;
         };
-        self.reached.insert((contract, function));
         if let Some(node) = self.add_node(
             TrackedOrigin::Contract(contract),
             function,
@@ -220,6 +225,7 @@ impl Tracer<'_, '_, '_, '_> {
             predecessor,
             false,
         ) {
+            self.reached.insert((contract, function));
             self.documentation_queue.push_back(node);
         }
     }
@@ -398,7 +404,14 @@ impl Tracer<'_, '_, '_, '_> {
         if dedup && !self.seen.insert((origin, function, state.clone(), depth)) {
             return None;
         }
-        if self.trace.nodes.len() >= self.options.state_budget {
+        let seed = if let Some((parent, _)) = predecessor {
+            self.node_seeds[parent.index()]
+        } else {
+            let seed = self.seed_states.len();
+            self.seed_states.push(0);
+            seed
+        };
+        if self.seed_states[seed] >= self.options.state_budget {
             let kind = UnknownBoundaryKind::TraceStateBudget;
             match predecessor {
                 Some((parent, _)) => self.unknown_at(origin, parent, kind),
@@ -407,6 +420,8 @@ impl Tracer<'_, '_, '_, '_> {
             return None;
         }
         let id = TraceNodeId(self.trace.nodes.len());
+        self.seed_states[seed] += 1;
+        self.node_seeds.push(seed);
         self.trace.nodes.push(TraceNode {
             origin,
             function,

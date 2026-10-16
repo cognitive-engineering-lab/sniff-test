@@ -43,8 +43,10 @@ effect-doc-matching = "any-justification"
 # distinct `(origin, function, effect state)` trace nodes. Dependency facts are
 # extracted independently of these limits. Traversals that halt are reported
 # through the corresponding analysis-incomplete lint instead of passing.
+# The state budget applies to each concrete source or independent contract;
+# contract handoffs keep the originating source's budget.
 max-trace-depth = 256
-trace-state-budget = 1000000
+trace-state-budget = 10000
 
 [analysis.lints]
 # Invocations whose effect writer requires caller-obligation documentation.

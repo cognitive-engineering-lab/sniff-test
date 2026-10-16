@@ -2,8 +2,8 @@
 //!
 //! A forward walk from the report roots ([`RootRoutes`]) bounds the search.
 //! Tracing then runs a concrete pass and a documentation pass over those
-//! routes. Handoffs retain depth and trust context, and both passes share one
-//! state budget per effect.
+//! routes. Handoffs retain depth and trust context, including the originating
+//! seed's state budget. Independently documented contracts start new budgets.
 
 mod effect;
 mod graph;

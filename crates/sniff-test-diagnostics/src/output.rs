@@ -1,15 +1,16 @@
 //! Render and emit one analyzed artifact's results.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use rustc_middle::ty::TyCtxt;
 use sniff_test_core::artifact::EffectKey;
 use sniff_test_core::config::{LintLevel, SniffTestConfig};
 use sniff_test_core::effects::Effect;
+use sniff_test_core::report_model::EffectFindingClass;
 
 use crate::diagnostics::{emit_finding_diagnostic, emit_footer_note};
 use crate::findings::{
-    FULL_STACK_TRACE_HINT, Finding, ResolvedFinding, aggregate_human_findings,
+    FULL_STACK_TRACE_HINT, Finding, FindingKind, ResolvedFinding, aggregate_human_findings,
     aggregate_human_findings_owned, is_effect_source_finding, resolve_findings_with_root_codes,
     take_full_stack_trace_hint,
 };
@@ -74,6 +75,7 @@ fn emit_human_findings(
     let has_trace_id = human_findings
         .iter()
         .any(|finding| finding.finding.trace_id.is_some());
+    let incomplete_notice = incomplete_notice(&human_findings);
     let show_full_stack_trace_hint = take_full_stack_trace_hint(&mut human_findings);
     for finding in human_findings {
         emit_finding_diagnostic(
@@ -85,12 +87,49 @@ fn emit_human_findings(
             finding.finding.trace_id.as_deref(),
         );
     }
+    if let Some(notice) = incomplete_notice {
+        emit_footer_note(tcx, &notice);
+    }
     if has_trace_id {
         emit_footer_note(tcx, &explain_hint(explicit_effects));
     }
     if show_full_stack_trace_hint {
         emit_footer_note(tcx, FULL_STACK_TRACE_HINT);
     }
+}
+
+fn incomplete_notice(findings: &[ResolvedFinding]) -> Option<String> {
+    let incomplete = findings
+        .iter()
+        .filter_map(|resolved| match &resolved.finding.kind {
+            FindingKind::Effect {
+                effect,
+                finding: EffectFindingClass::AnalysisIncomplete,
+                ..
+            } => Some((
+                resolved.finding.root.as_deref().unwrap_or("unknown root"),
+                effect.as_str(),
+                resolved.finding.reason.as_str(),
+            )),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    let [(root, effect, reason)] = incomplete.as_slice() else {
+        let affected = incomplete
+            .iter()
+            .map(|(root, effect, _)| (*root, *effect))
+            .collect::<BTreeSet<_>>();
+        if affected.is_empty() {
+            return None;
+        }
+        return Some(format!(
+            "sniff-test analysis is incomplete for {} root/effect pairs; findings may be partial (see analysis-incomplete diagnostics above)",
+            affected.len()
+        ));
+    };
+    Some(format!(
+        "sniff-test analysis is incomplete for `{root}` ({effect}): {reason}; findings may be partial"
+    ))
 }
 
 fn explain_hint(explicit_effects: &[EffectKey]) -> String {

@@ -8,7 +8,7 @@ expression: "report[\"findings\"]"
     "finding": "analysis-incomplete",
     "kind": "effect",
     "level": "deny",
-    "reason": "panic effect tracing exhausted `[analysis].trace-state-budget` (2) at frontier `state_budget::step_one`",
+    "reason": "panic effect tracing exhausted the per-seed `[analysis].trace-state-budget` (2) at frontier `state_budget::step_one`",
     "root": "state_budget::deep_chain",
     "root-kind": "concrete",
     "root-span": "src/lib.rs:12:1: 12:30",
@@ -18,6 +18,6 @@ expression: "report[\"findings\"]"
       "src/lib.rs:13:5: 13:19: state_budget::deep_chain --direct-call-> state_budget::step_one",
       "src/lib.rs:5:5: 5:19: state_budget::step_one --direct-call-> state_budget::step_two"
     ],
-    "trace-id": "0000166083"
+    "trace-id": "00002ff231"
   }
 ]

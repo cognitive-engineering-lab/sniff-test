@@ -22,6 +22,50 @@ struct Case {
 }
 
 #[test]
+fn state_budget_diagnostic_has_a_visible_final_notice() {
+    let repo = repo_root();
+    let binary = PathBuf::from(env!("CARGO_BIN_EXE_cargo-sniff-test"));
+    for (level, expected_exit) in [("warn", 0), ("deny", 101), ("allow", 0)] {
+        let case = Case::new().config_replace(
+            "analysis-incomplete = \"deny\"",
+            match level {
+                "warn" => "analysis-incomplete = \"warn\"",
+                "deny" => "analysis-incomplete = \"deny\"",
+                _ => "analysis-incomplete = \"allow\"",
+            },
+        );
+        let (output, _, _temp) = run_case(
+            &repo,
+            &binary,
+            &format!("state_budget_notice_{level}"),
+            "state_budget",
+            &case,
+        );
+        assert_eq!(
+            output.status.code(),
+            Some(expected_exit),
+            "{}",
+            output.stderr
+        );
+        let notice = "sniff-test analysis is incomplete for `state_budget::deep_chain` (panic)";
+        assert_eq!(
+            output.stderr.contains(notice),
+            level != "allow",
+            "{}",
+            output.stderr
+        );
+        assert_eq!(
+            output
+                .stderr
+                .contains("exhausted the per-seed state budget (2)"),
+            level != "allow",
+            "{}",
+            output.stderr
+        );
+    }
+}
+
+#[test]
 fn report_root_span_labels_reflect_visibility() {
     let repo = repo_root();
     let binary = PathBuf::from(env!("CARGO_BIN_EXE_cargo-sniff-test"));

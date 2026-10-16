@@ -76,7 +76,7 @@ report-roots = "public"     # public | all | ["crate::path"]
 marker-probing = "macro-definition-first" # macro-definition-first | source-callsite
 effect-doc-matching = "any-justification" # any-justification | exact
 max-trace-depth = 256
-trace-state-budget = 1000000
+trace-state-budget = 10000 # states per concrete source or independent contract
 
 [contracts]
 override-files = [] # TOML files relative to sniff-test.toml
@@ -215,8 +215,8 @@ that happen to share an erased type.
 
 The `analysis-incomplete` key under each effect's `.coverage` section controls
 incomplete traversals and defaults to `allow`.
-These findings distinguish paths truncated by `max-trace-depth`, effect traces that
-exhaust `trace-state-budget`, and reachable managed bodies that are absent from
+These findings distinguish paths truncated by `max-trace-depth`, individual effect
+seeds that exhaust `trace-state-budget`, and reachable managed bodies that are absent from
 the linked artifact graph.
 
 Exact keys under `[panic.lints.operations]` override `[panic.lints].operation`

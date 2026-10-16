@@ -219,7 +219,7 @@ pub struct AnalysisConfig {
     /// Maximum number of invocation or transparent-body edges followed from
     /// one effect source.
     pub max_trace_depth: usize,
-    /// Distinct `(origin, function, state)` budget for one effect trace.
+    /// Accepted trace nodes per concrete source or independent contract seed.
     pub trace_state_budget: usize,
 }
 
@@ -323,7 +323,7 @@ impl Default for AnalysisConfig {
             effect_doc_matching: EffectDocMatching::AnyJustification,
             lints: AnalysisLintConfig::default(),
             max_trace_depth: 256,
-            trace_state_budget: 1_000_000,
+            trace_state_budget: 10_000,
         }
     }
 }
