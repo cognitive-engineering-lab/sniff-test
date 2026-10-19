@@ -68,6 +68,21 @@ pub fn interpret_workspace<'tcx>(
         metadata_loader,
     )
     .map_err(EffectReportError::new)?;
+    let mut crate_names = BTreeMap::from([(
+        local_stable_crate_id,
+        tcx.crate_name(LOCAL_CRATE).to_string(),
+    )]);
+    for crate_num in tcx.crates(()) {
+        crate_names.insert(
+            tcx.stable_crate_id(*crate_num).as_u64(),
+            tcx.crate_name(*crate_num).to_string(),
+        );
+    }
+    for artifact in dependencies.artifacts() {
+        crate_names
+            .entry(artifact.artifact.id.stable_crate_id)
+            .or_insert_with(|| artifact.artifact.crate_name.clone());
+    }
     let result = trace_selected_workspace(
         local,
         local_stable_crate_id,
@@ -78,6 +93,7 @@ pub fn interpret_workspace<'tcx>(
         effects,
         cli_effects,
         item_effects,
+        &crate_names,
     )?;
     let sources = SourceResolver {
         tcx,

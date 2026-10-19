@@ -32,11 +32,12 @@ use crate::config::EffectConfig;
 use crate::config::{MarkerProbing, SniffTestConfig};
 use crate::contracts::normalize_requirement_name;
 use crate::effects::InvocationSourceBranch;
-use crate::effects::concrete::{ConcreteSource, probe_concrete_effect};
+use crate::effects::concrete::{ConcreteSource, probe_concrete_effect_with_filter};
 use crate::effects::obligation::{
     ObligationEffectPolicy, ObligationTracker, TrackedEffect, TrackedOrigin, TrackedState,
     TrackedTermination,
 };
+use crate::effects::source_filter::{EffectSourceFilter, SourceFilterContext};
 use crate::effects::visit::EffectPassRegistry;
 use crate::effects::{Effect, EffectMetadata};
 #[cfg(test)]
@@ -123,6 +124,7 @@ pub fn trace_workspace(
         &selected_effects,
         &cli_effects,
         &BTreeMap::new(),
+        &BTreeMap::new(),
     )
 }
 
@@ -140,7 +142,13 @@ pub fn trace_selected_workspace(
     effects: &[Box<dyn Effect + '_>],
     cli_effects: &BTreeSet<EffectKey>,
     item_effects: &BTreeMap<String, BTreeSet<EffectKey>>,
+    crate_names: &BTreeMap<u64, String>,
 ) -> Result<Vec<RootInterpretation>, EffectReportError> {
+    let source_filter = EffectSourceFilter::from_config(&config.analysis);
+    let source_context = SourceFilterContext {
+        reporting_crate_id: local_stable_crate_id,
+        crate_names,
+    };
     let artifact = compose_workspace_artifact(local, dependencies)?;
     let artifact = &artifact;
     let mut crate_dependencies = dependencies
@@ -233,12 +241,13 @@ pub fn trace_selected_workspace(
             let concrete_effects = effects
                 .iter()
                 .map(|effect| {
-                    let concrete = probe_concrete_effect(
+                    let concrete = probe_concrete_effect_with_filter(
                         artifact,
                         &graph,
                         &annotations,
                         &namespaces,
                         effect.as_ref(),
+                        Some((&source_filter, &source_context)),
                     )
                     .map_err(|error| EffectReportError::new(error.to_string()))?;
                     Ok((effect.key().clone(), concrete))
@@ -251,11 +260,12 @@ pub fn trace_selected_workspace(
                     concrete.ignored_invocations(),
                 )
             });
-            let obligations = ObligationTracker::probe(
+            let obligations = ObligationTracker::probe_with_filter(
                 &graph,
                 &annotations,
                 config.analysis.effect_doc_matching,
                 obligation_policies,
+                Some((&source_filter, &source_context)),
             );
             let tracked_effects = concrete_effects
                 .iter()
@@ -364,6 +374,8 @@ pub fn trace_selected_workspace(
                         &namespaces,
                         |function, path: &TrustPath| concrete.is_opaque_on_path(function, path),
                         |invocation| concrete.is_ignored_invocation(invocation),
+                        &source_filter,
+                        &source_context,
                     ));
                 }
                 if !marker_claims.is_empty() {
@@ -1062,6 +1074,8 @@ fn unresolved_call_target_findings(
     namespaces: &DefinitionNamespaceIndex,
     is_opaque: impl Fn(FunctionId, &TrustPath) -> bool + Copy,
     is_ignored_invocation: impl Fn(crate::trace::InvocationId) -> bool + Copy,
+    source_filter: &EffectSourceFilter<'_>,
+    source_context: &SourceFilterContext<'_>,
 ) -> Vec<InterpretedFinding> {
     graph
         .invocations()
@@ -1075,6 +1089,9 @@ fn unresolved_call_target_findings(
                 InvocationResolution::Unresolved { .. } => false,
             };
             let owner = graph.stable_function(invocation.caller());
+            if !source_filter.allows(owner, source_context) {
+                return Vec::new();
+            }
             let Some(body) = artifact.function_body(owner) else {
                 return Vec::new();
             };

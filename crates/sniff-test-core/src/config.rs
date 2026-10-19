@@ -74,6 +74,17 @@ impl SniffTestConfig {
         config.compiler = raw.compiler;
         config.analysis = raw.analysis;
         config.contracts = raw.contracts;
+        if config
+            .analysis
+            .source_crates
+            .as_ref()
+            .is_some_and(Vec::is_empty)
+        {
+            config.warnings.push(ConfigWarning {
+                field: String::from("analysis.source-crates"),
+                message: String::from("no source crate is selected"),
+            });
+        }
         for (name, effect) in raw.effects {
             let Some(default) = config.effects.get_mut(&name) else {
                 return Err(format!("unknown effect section `{name}`"));
@@ -208,6 +219,9 @@ pub struct AnalysisConfig {
     pub show_full_stack_trace: bool,
     /// Current-crate functions selected as report roots.
     pub report_roots: Spanned<ReportRootSet>,
+    /// Crates whose effect sources may start report traces. `crate` means the
+    /// current reporting crate; omission selects every crate.
+    pub source_crates: Option<Vec<String>>,
     /// How `// PANIC:` and `// SAFETY:` comments are found for spans produced
     /// by macro expansion.
     pub marker_probing: MarkerProbing,
@@ -319,6 +333,7 @@ impl Default for AnalysisConfig {
         Self {
             show_full_stack_trace: false,
             report_roots: Spanned::new(0..0, ReportRootSet::Public),
+            source_crates: None,
             marker_probing: MarkerProbing::MacroDefinitionFirst,
             effect_doc_matching: EffectDocMatching::AnyJustification,
             lints: AnalysisLintConfig::default(),
@@ -1847,5 +1862,27 @@ mod tests {
                 .map(str::trim),
             Some("# Panics\n\n- nonzero: layout size must be representable.")
         );
+    }
+
+    #[test]
+    fn source_crates_omission_and_empty_selection_are_distinct() {
+        let default = crate::config::test_from_manifest_str("").expect("default config");
+        assert_eq!(default.analysis.source_crates, None);
+        assert!(default.warnings.is_empty());
+
+        let selected = crate::config::test_from_manifest_str(
+            "[analysis]\nsource-crates = [\"crate\", \"dep_crate\"]\n",
+        )
+        .expect("selected source crates");
+        assert_eq!(
+            selected.analysis.source_crates,
+            Some(vec![String::from("crate"), String::from("dep_crate")])
+        );
+
+        let empty = crate::config::test_from_manifest_str("[analysis]\nsource-crates = []\n")
+            .expect("empty source selection");
+        assert_eq!(empty.analysis.source_crates, Some(Vec::new()));
+        assert_eq!(empty.warnings[0].field, "analysis.source-crates");
+        assert!(empty.warnings[0].message.contains("no source crate"));
     }
 }

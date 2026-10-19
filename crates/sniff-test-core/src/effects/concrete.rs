@@ -4,6 +4,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use crate::trace::{EffectSeed, FunctionId, InvocationId, Propagation, PropagationEdge, TraceSite};
 
+use super::source_filter::{EffectSourceFilter, SourceFilterContext};
 use crate::annotations::{AnnotationId, AnnotationIndex, SiteCommentAnnotation};
 use crate::artifact::{
     ArtifactFacts, CallId, DefinitionNamespaceIndex, EffectFact, EffectId, EffectKey,
@@ -214,6 +215,17 @@ pub fn probe_concrete_effect<'annotations>(
     namespaces: &DefinitionNamespaceIndex,
     domain: &dyn Effect,
 ) -> Result<ConcreteEffect<'annotations>, ProbeError> {
+    probe_concrete_effect_with_filter(artifact, graph, annotations, namespaces, domain, None)
+}
+
+pub fn probe_concrete_effect_with_filter<'annotations>(
+    artifact: &ArtifactFacts,
+    graph: &'annotations InvocationGraph,
+    annotations: &'annotations AnnotationIndex,
+    namespaces: &DefinitionNamespaceIndex,
+    domain: &dyn Effect,
+    source_filter: Option<(&EffectSourceFilter<'_>, &SourceFilterContext<'_>)>,
+) -> Result<ConcreteEffect<'annotations>, ProbeError> {
     let mut seeds = ConcreteSeedCollector::new(graph, domain.config());
     for body in graph.included_body_facts(artifact) {
         let Some(owner) = seeds.filter_owner(
@@ -224,6 +236,11 @@ pub fn probe_concrete_effect<'annotations>(
         else {
             continue;
         };
+        // Preserve ignored and trusted body policy above even when this body
+        // contributes no selected source seeds.
+        if source_filter.is_some_and(|(filter, context)| !filter.allows(body.function, context)) {
+            continue;
+        }
 
         for effect in &body.effects {
             if effect.effect != *domain.key() {

@@ -21,6 +21,11 @@ struct CommonCliArgs {
     )]
     effects: Vec<EffectKey>,
 
+    /// Include effect sources from this Rust crate. May be repeated; overrides
+    /// `[analysis].source-crates` in sniff-test.toml. Use `crate` for this crate.
+    #[arg(long = "source-crate", value_name = "CRATE")]
+    source_crates: Vec<String>,
+
     /// Path to sniff-test.toml.
     #[arg(long, value_name = "PATH")]
     manifest: Option<PathBuf>,
@@ -52,6 +57,7 @@ impl CommonCliArgs {
         SniffTestArgs {
             effects,
             explicit_effects: self.effects,
+            source_crates: self.source_crates,
             manifest_path: self.manifest,
             cache_dir: self.cache_dir,
             color: self.color,
@@ -228,6 +234,9 @@ pub struct SniffTestArgs {
     pub(crate) effects: EffectSelection,
     /// Effect flags supplied by the user, retained for the explanation hint.
     pub(crate) explicit_effects: Vec<EffectKey>,
+    /// CLI source-crate selection; an empty list leaves the manifest in force.
+    #[serde(default)]
+    pub(crate) source_crates: Vec<String>,
     pub(crate) explain: Option<String>,
     pub(crate) explain_match_marker: Option<PathBuf>,
     pub(crate) manifest_path: Option<PathBuf>,
@@ -370,6 +379,37 @@ mod tests {
             );
             assert_eq!(args.effects.selects(&EffectKey::new("file")), tracks_file);
         }
+    }
+
+    #[test]
+    fn source_crates_are_repeatable_and_survive_driver_transport() {
+        let cli = FrontendCli::try_parse_from([
+            "cargo-sniff-test",
+            "--source-crate",
+            "crate",
+            "--source-crate=dep_crate",
+        ])
+        .expect("source crate flags should parse");
+        let FrontendAction::Run(args) = cli.into_action() else {
+            panic!("expected frontend run action");
+        };
+        assert_eq!(args.source_crates, ["crate", "dep_crate"]);
+        let encoded = serde_json::to_string(&args).expect("frontend args should serialize");
+        let decoded: super::SniffTestArgs =
+            serde_json::from_str(&encoded).expect("driver args should deserialize");
+        assert_eq!(decoded.source_crates, ["crate", "dep_crate"]);
+
+        let driver = DriverCli::try_parse_from([
+            "sniff-test-driver",
+            "--source-crate",
+            "dep_crate",
+            "--",
+            "--crate-name",
+            "demo",
+        ])
+        .expect("direct driver flag should parse");
+        let (_, args) = driver.into_parts(String::from("sniff-test-driver"));
+        assert_eq!(args.source_crates, ["dep_crate"]);
     }
 
     #[test]

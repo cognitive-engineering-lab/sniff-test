@@ -234,7 +234,7 @@ pub(crate) fn load_config(
     args: &SniffTestArgs,
 ) -> Result<SniffTestConfig, Box<sniff_test_core::config::ConfigError>> {
     let path = args.manifest_path();
-    if path.exists() {
+    let mut config = if path.exists() {
         SniffTestConfig::from_manifest_path_with_effects(
             path,
             sniff_test_effects::registered_effect_configs(),
@@ -245,7 +245,14 @@ pub(crate) fn load_config(
             effects: sniff_test_effects::registered_effect_configs(),
             ..SniffTestConfig::default()
         })
+    }?;
+    if !args.source_crates.is_empty() {
+        config.analysis.source_crates = Some(args.source_crates.clone());
+        config
+            .warnings
+            .retain(|warning| warning.field != "analysis.source-crates");
     }
+    Ok(config)
 }
 
 #[cfg(test)]

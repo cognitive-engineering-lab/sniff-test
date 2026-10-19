@@ -33,6 +33,7 @@ Commands and common options:
 - `init`: write a sample `sniff-test.toml`
 - `--manifest PATH`: path to `sniff-test.toml`
 - `-e EFFECT`, `--effect EFFECT`: track `panic`, `safety`, or `allocation`; repeat to select several
+- `--source-crate CRATE`: include sources from a Rust crate; repeat to select several and override `[analysis].source-crates`
 - `--cache-dir DIR`: analysis cache directory
 - `--color auto|always|never`
 - `--message-format human|json`
@@ -253,6 +254,23 @@ also receive its own finding.
 Explicit root lists select only the named functions and do not implicitly add
 the entry point.
 Selecting no functions or naming a missing explicit root always produces a warning.
+
+`[analysis].source-crates` selects which crates may introduce reported effect
+sources. Omit it to include every crate. For example,
+`source-crates = ["crate", "serde_json"]` includes the current reporting crate and
+the dependency whose Rust crate name is `serde_json`. In a workspace run,
+`"crate"` resolves separately for each reporting crate; name a sibling workspace
+crate explicitly to include its sources when reached as a dependency. The filter
+applies before tracing concrete operations and documented obligations, while
+dependency facts and contract boundaries remain available. A documented
+obligation is attributed to the crate that directly invokes its function,
+including when the contract is defined in another crate. Propagation through
+later callers does not change that source. A contract with no invocation in the
+analyzed paths uses its defining crate. An explicit
+`source-crates = []` selects no source crates and produces a warning. Source
+independent analysis completeness and report root findings remain visible.
+Use `--source-crate crate --source-crate serde_json` for a one-off selection;
+these CLI values replace the manifest list for that invocation.
 Safety probing covers runtime function, method, closure, and coroutine bodies;
 const, static, and inline-const initializers are intentionally outside this
 runtime effect graph. Coroutine construction conservatively makes its stored

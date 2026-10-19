@@ -749,6 +749,169 @@ fn closure_expression_call_has_verified_marker_evidence() {
 }
 
 #[test]
+fn source_crates_attribute_documented_calls_to_the_direct_caller() {
+    let repo = repo_root();
+    let binary = PathBuf::from(env!("CARGO_BIN_EXE_cargo-sniff-test"));
+    let selected = Case::new()
+        .in_app()
+        .config_append("\n[analysis]\nsource-crates = [\"dependency_transitive_panic_middle\"]\n")
+        .args(&["-e", "panic", "--message-format", "json"]);
+    let (output, _, _temp) = run_case(
+        &repo,
+        &binary,
+        "source_crates_selected_dependency",
+        "dependency_transitive_panic",
+        &selected,
+    );
+    assert!(output.status.success(), "{}", output.stderr);
+    let report: serde_json::Value = serde_json::from_str(&output.stdout).expect("JSON report");
+    assert!(
+        !report["findings"]
+            .as_array()
+            .is_some_and(|findings| findings
+                .iter()
+                .any(|finding| { finding["finding"] == "documented-obligation" })),
+        "{}",
+        output.stdout
+    );
+
+    let local = Case::new()
+        .in_app()
+        .config_append("\n[analysis]\nsource-crates = [\"crate\"]\n")
+        .args(&["-e", "panic", "--message-format", "json"]);
+    let (output, _, _temp) = run_case(
+        &repo,
+        &binary,
+        "source_crates_local_only",
+        "dependency_transitive_panic",
+        &local,
+    );
+    assert!(output.status.success(), "{}", output.stderr);
+    let report: serde_json::Value = serde_json::from_str(&output.stdout).expect("JSON report");
+    assert!(
+        report["findings"]
+            .as_array()
+            .is_some_and(|findings| findings.iter().any(|finding| {
+                finding["finding"] == "documented-obligation"
+                    && finding["owner"]["crate"] == "dependency_transitive_panic_app"
+            })),
+        "{}",
+        output.stdout
+    );
+}
+
+#[test]
+fn source_crates_filters_concrete_sources_and_warns_for_empty_selection() {
+    let repo = repo_root();
+    let binary = PathBuf::from(env!("CARGO_BIN_EXE_cargo-sniff-test"));
+    let selected = Case::new()
+        .in_app()
+        .config_append("\n[analysis]\nsource-crates = [\"dependency_safety\"]\n")
+        .args(&["-e", "safety", "--message-format", "json"]);
+    let (output, _, _temp) = run_case(
+        &repo,
+        &binary,
+        "source_crates_concrete_dependency",
+        "dependency_safety",
+        &selected,
+    );
+    let report: serde_json::Value = serde_json::from_str(&output.stdout).expect("JSON report");
+    assert!(
+        report["findings"]
+            .as_array()
+            .is_some_and(|findings| findings.iter().any(|finding| {
+                finding["finding"] == "concrete-operation"
+                    && finding["owner"]["crate"] == "dependency_safety"
+            })),
+        "{}",
+        output.stdout
+    );
+
+    let empty = Case::new()
+        .in_app()
+        .config_append("\n[analysis]\nsource-crates = []\n")
+        .args(&["-e", "safety", "--message-format", "json"]);
+    let (output, _, _temp) = run_case(
+        &repo,
+        &binary,
+        "source_crates_empty",
+        "dependency_safety",
+        &empty,
+    );
+    assert!(output.status.success(), "{}", output.stderr);
+    assert!(
+        output.stderr.contains("no source crate is selected"),
+        "{}",
+        output.stderr
+    );
+    let report: serde_json::Value = serde_json::from_str(&output.stdout).expect("JSON report");
+    assert_eq!(report["findings"], serde_json::json!([]));
+}
+
+#[test]
+fn source_crates_filter_unresolved_call_coverage_at_its_owner() {
+    let repo = repo_root();
+    let binary = PathBuf::from(env!("CARGO_BIN_EXE_cargo-sniff-test"));
+    let case = Case::new()
+        .config_append("\n[analysis]\nsource-crates = []\n")
+        .args(&["-e", "panic", "--message-format", "json"]);
+    let (output, _, _temp) = run_case(
+        &repo,
+        &binary,
+        "source_crates_unresolved_coverage",
+        "indirect_calls",
+        &case,
+    );
+    assert!(output.status.success(), "{}", output.stderr);
+    let report: serde_json::Value = serde_json::from_str(&output.stdout).expect("JSON report");
+    assert!(
+        !report["findings"]
+            .as_array()
+            .is_some_and(|findings| findings
+                .iter()
+                .any(|finding| { finding["finding"] == "unresolved-call-target" })),
+        "{}",
+        output.stdout
+    );
+}
+
+#[test]
+fn cli_source_crates_replace_manifest_selection() {
+    let repo = repo_root();
+    let binary = PathBuf::from(env!("CARGO_BIN_EXE_cargo-sniff-test"));
+    let case = Case::new()
+        .in_app()
+        .config_append("\n[analysis]\nsource-crates = []\n")
+        .args(&[
+            "--source-crate",
+            "dependency_safety",
+            "-e",
+            "safety",
+            "--message-format",
+            "json",
+        ]);
+    let (output, _, _temp) = run_case(
+        &repo,
+        &binary,
+        "cli_source_crates_override",
+        "dependency_safety",
+        &case,
+    );
+    assert!(!output.stderr.contains("no source crate is selected"));
+    let report: serde_json::Value = serde_json::from_str(&output.stdout).expect("JSON report");
+    assert!(
+        report["findings"]
+            .as_array()
+            .is_some_and(|findings| findings.iter().any(|finding| {
+                finding["finding"] == "concrete-operation"
+                    && finding["owner"]["crate"] == "dependency_safety"
+            })),
+        "{}",
+        output.stdout
+    );
+}
+
+#[test]
 fn effect_flag_tracks_only_selected_domain() {
     let repo = repo_root();
     let binary = PathBuf::from(env!("CARGO_BIN_EXE_cargo-sniff-test"));

@@ -3,8 +3,8 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use crate::trace::{
-    EffectSeed, EffectTrace, FunctionId, InvocationId, Propagation, PropagationEdge,
-    TerminationSite, TraceNodeId, TraceSite,
+    EdgeScope, EffectSeed, EffectTrace, FunctionId, InvocationId, Propagation, PropagationEdge,
+    RootRoutes, TerminationSite, TraceNodeId, TraceSite,
 };
 
 use crate::annotations::{AnnotationId, AnnotationIndex, FunctionContractAnnotation};
@@ -13,6 +13,7 @@ use crate::compiler::invocations::InvocationGraph;
 use crate::config::EffectDocMatching;
 use crate::contracts::normalize_requirement_name;
 
+use super::source_filter::{EffectSourceFilter, SourceFilterContext};
 use super::trust::TrustPath;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -157,6 +158,8 @@ pub struct ObligationTracker<'annotations> {
     annotations: &'annotations AnnotationIndex,
     graph: &'annotations InvocationGraph,
     contracts: Vec<ObligationContract>,
+    selected_callers: Option<Vec<bool>>,
+    selected_definition_contracts: Option<BTreeSet<ContractId>>,
     boundary_contracts: BTreeMap<EffectKey, Vec<Option<ContractId>>>,
     obligations: BTreeMap<ObligationId, Obligation>,
     effect_doc_matching: EffectDocMatching,
@@ -195,6 +198,17 @@ impl<'annotations> ObligationTracker<'annotations> {
         effect_doc_matching: EffectDocMatching,
         policies: impl IntoIterator<Item = ObligationEffectPolicy>,
     ) -> Self {
+        Self::probe_with_filter(graph, annotations, effect_doc_matching, policies, None)
+    }
+
+    pub fn probe_with_filter(
+        graph: &'annotations InvocationGraph,
+        annotations: &'annotations AnnotationIndex,
+        effect_doc_matching: EffectDocMatching,
+        policies: impl IntoIterator<Item = ObligationEffectPolicy>,
+        source_filter: Option<(&EffectSourceFilter<'_>, &SourceFilterContext<'_>)>,
+    ) -> Self {
+        let source_filter = source_filter.filter(|(filter, _)| filter.is_restricted());
         let policies = policies
             .into_iter()
             .map(|policy| (policy.effect.clone(), policy))
@@ -218,6 +232,17 @@ impl<'annotations> ObligationTracker<'annotations> {
             }
         }
         let mut contracts = Vec::new();
+        let selected_callers = source_filter.map(|(filter, context)| {
+            (0..graph.function_count())
+                .map(|index| {
+                    filter.allows(
+                        graph.stable_function(FunctionId::from_index(index)),
+                        context,
+                    )
+                })
+                .collect()
+        });
+        let mut selected_definition_contracts = source_filter.map(|_| BTreeSet::new());
         let mut obligations = BTreeMap::new();
         // Preserve annotation order and distinct requirement variants sharing
         // an ID; selecting targets must not change obligation construction.
@@ -229,6 +254,14 @@ impl<'annotations> ObligationTracker<'annotations> {
                 continue;
             };
             let id = ContractId(annotation.id());
+            if source_filter
+                .is_some_and(|(filter, context)| filter.allows(annotation.owner(), context))
+            {
+                selected_definition_contracts
+                    .as_mut()
+                    .expect("filtered contract set")
+                    .insert(id);
+            }
             let contract_obligations = collect_obligations(annotation, id, &mut obligations);
             contracts.push(ObligationContract {
                 id,
@@ -241,6 +274,8 @@ impl<'annotations> ObligationTracker<'annotations> {
             annotations,
             graph,
             contracts,
+            selected_callers,
+            selected_definition_contracts,
             boundary_contracts,
             obligations,
             effect_doc_matching,
@@ -258,6 +293,7 @@ impl<'annotations> ObligationTracker<'annotations> {
     pub fn contract_sites<'a>(
         &'a self,
         effect: &'a EffectKey,
+        routes: &'a RootRoutes,
     ) -> impl Iterator<Item = (ContractId, FunctionId)> + 'a {
         self.contracts
             .iter()
@@ -268,6 +304,48 @@ impl<'annotations> ObligationTracker<'annotations> {
                     .iter()
                     .map(move |&function| (contract.id, function))
             })
+            .filter(move |&(contract, function)| {
+                self.source_site_allowed(contract, function, routes)
+            })
+    }
+
+    /// A contract site is useful only if its first invocation can enter a
+    /// selected caller. A contract without an invocation keeps its defining
+    /// crate as its source.
+    pub fn source_site_allowed(
+        &self,
+        contract: ContractId,
+        function: FunctionId,
+        routes: &RootRoutes,
+    ) -> bool {
+        let Some(selected_callers) = &self.selected_callers else {
+            return true;
+        };
+        let mut pending = vec![function];
+        let mut visited = BTreeSet::new();
+        let mut has_invocation = false;
+        while let Some(current) = pending.pop() {
+            if !visited.insert(current) {
+                continue;
+            }
+            for (edge, caller) in routes.parents(current, EdgeScope::Signature) {
+                match edge {
+                    PropagationEdge::Invocation(_) => {
+                        has_invocation = true;
+                        if selected_callers[caller.index()] {
+                            return true;
+                        }
+                    }
+                    PropagationEdge::TransparentBody(_) => pending.push(caller),
+                    PropagationEdge::Handoff => unreachable!("routes contain no handoff edges"),
+                }
+            }
+        }
+        !has_invocation
+            && self
+                .selected_definition_contracts
+                .as_ref()
+                .is_some_and(|selected| selected.contains(&contract))
     }
 
     #[must_use]
@@ -521,6 +599,13 @@ impl ObligationTracker<'_> {
         edge: PropagationEdge,
     ) -> Propagation<ObligationState> {
         let mut next = if let PropagationEdge::Invocation(invocation) = edge {
+            if state.source_invocation.is_none()
+                && self.selected_callers.as_ref().is_some_and(|selected| {
+                    !selected[self.graph.invocation(invocation).caller().index()]
+                })
+            {
+                return Propagation::Ignore;
+            }
             if self.crosses_non_applicable_declaration(state, invocation) {
                 return Propagation::Ignore;
             }

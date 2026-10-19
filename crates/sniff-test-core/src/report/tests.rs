@@ -263,6 +263,159 @@ fn contract_boundary_trace(
 }
 
 #[test]
+fn documented_obligation_source_is_its_first_invocation_caller() {
+    use std::collections::{BTreeMap, BTreeSet};
+
+    use crate::effects::source_filter::{EffectSourceFilter, SourceFilterContext};
+
+    let app = stable_function(7_001);
+    let middle = stable_function(7_002);
+    let other = stable_function(7_003);
+    let documented = stable_function(7_004);
+    let artifact = ArtifactFacts::new(
+        vec![
+            body(
+                app,
+                "app::root",
+                vec![
+                    call(0, target(middle, "middle::wrapper")),
+                    call(1, target(documented, "leaf::documented")),
+                ],
+                Vec::new(),
+                Vec::new(),
+                Vec::new(),
+            ),
+            body(
+                middle,
+                "middle::wrapper",
+                vec![call(2, target(documented, "leaf::documented"))],
+                Vec::new(),
+                Vec::new(),
+                Vec::new(),
+            ),
+            body(
+                other,
+                "other::root",
+                vec![call(3, target(documented, "leaf::documented"))],
+                Vec::new(),
+                Vec::new(),
+                Vec::new(),
+            ),
+            body(
+                documented,
+                "leaf::documented",
+                Vec::new(),
+                Vec::new(),
+                vec![marker(
+                    0,
+                    annotation_kind::<Safety>(AnnotationRole::Contract),
+                    AnnotationTargetFact::Function(documented),
+                )],
+                Vec::new(),
+            ),
+        ],
+        Vec::new(),
+    )
+    .expect("valid cross-crate contract artifact");
+    let graph = graph_for_all_bodies(&artifact).expect("invocation graph");
+    let annotations = AnnotationIndex::from_artifact(&artifact, &graph).expect("annotations");
+    let namespaces = artifact.definition_namespace_index();
+    let names = BTreeMap::from([
+        (7_001, String::from("app")),
+        (7_002, String::from("middle")),
+        (7_003, String::from("other")),
+        (7_004, String::from("leaf")),
+    ]);
+    let context = SourceFilterContext {
+        reporting_crate_id: 7_001,
+        crate_names: &names,
+    };
+    let routes = crate::trace::RootRoutes::new(
+        &graph,
+        &[
+            graph.function(app).expect("app root"),
+            graph.function(other).expect("other root"),
+        ],
+    );
+    let trace_sources = |selection: Option<Vec<String>>, routes: &crate::trace::RootRoutes| {
+        let mut config = crate::config::test_config();
+        config.analysis.source_crates = selection;
+        let filter = EffectSourceFilter::from_config(&config.analysis);
+        let safety = effect::<Safety>(config.effect("safety"));
+        let concrete = probe_concrete_effect(
+            &artifact,
+            &graph,
+            &annotations,
+            &namespaces,
+            safety.as_ref(),
+        )
+        .expect("safety sources");
+        let obligations = super::ObligationTracker::probe_with_filter(
+            &graph,
+            &annotations,
+            config.analysis.effect_doc_matching,
+            [super::ObligationEffectPolicy::new(
+                ReportEffect::Safety.key(),
+                concrete.trusted_functions(),
+                concrete.ignored_invocations(),
+            )],
+            Some((&filter, &context)),
+        );
+        let tracked =
+            super::TrackedEffect::new(&concrete, &obligations, ReportEffect::Safety.key());
+        let trace = crate::trace::trace_effect(
+            &graph,
+            &tracked,
+            &ReportEffect::Safety.key(),
+            crate::trace::TraceOptions::default(),
+            routes,
+        );
+        let callers = trace
+            .nodes()
+            .filter_map(|node| node.state().obligation()?.source_invocation())
+            .map(|invocation| graph.stable_function(graph.invocation(invocation).caller()))
+            .collect::<BTreeSet<_>>();
+        let contract_seeds = trace
+            .nodes()
+            .filter(|node| matches!(node.origin(), super::TrackedOrigin::Contract(_)))
+            .count();
+        (callers, contract_seeds)
+    };
+
+    assert_eq!(
+        trace_sources(Some(vec![String::from("middle")]), &routes).0,
+        BTreeSet::from([middle])
+    );
+    assert_eq!(
+        trace_sources(Some(vec![String::from("crate")]), &routes).0,
+        BTreeSet::from([app])
+    );
+    assert_eq!(
+        trace_sources(Some(vec![String::from("other")]), &routes).0,
+        BTreeSet::from([other])
+    );
+    assert_eq!(
+        trace_sources(Some(vec![String::from("leaf")]), &routes).1,
+        0
+    );
+    assert_eq!(trace_sources(Some(Vec::new()), &routes).1, 0);
+    assert_eq!(
+        trace_sources(None, &routes).0,
+        BTreeSet::from([app, middle, other])
+    );
+
+    let uncalled = crate::trace::RootRoutes::new(
+        &graph,
+        &[graph.function(documented).expect("contract root")],
+    );
+    assert!(trace_sources(Some(vec![String::from("leaf")]), &uncalled).1 > 0);
+    assert_eq!(
+        trace_sources(Some(vec![String::from("app")]), &uncalled).1,
+        0
+    );
+}
+
+#[test]
 fn documented_operation_stops_at_contract_and_only_obligation_reaches_caller() {
     let (trace, artifact) = contract_boundary_trace(ContractBoundaryScenario::Operation);
     assert!(trace.handled().any(|handled| matches!(
@@ -2632,6 +2785,7 @@ fn registered_passes_determine_missing_body_completeness_for_new_effects() {
         &config,
         &effects,
         &cli_effects,
+        &std::collections::BTreeMap::new(),
         &std::collections::BTreeMap::new(),
     )
     .expect("effect report");

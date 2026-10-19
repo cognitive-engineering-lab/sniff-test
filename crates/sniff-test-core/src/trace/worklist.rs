@@ -169,7 +169,7 @@ impl Tracer<'_, '_, '_, '_> {
         let mut sites = self
             .tracked
             .obligations()
-            .contract_sites(self.effect)
+            .contract_sites(self.effect, self.routes)
             .collect::<Vec<_>>();
         if sites.len() > 1 {
             let mut upstream = UpstreamCounts::new(
@@ -190,6 +190,13 @@ impl Tracer<'_, '_, '_, '_> {
             function,
             handoff_from,
         } = seed;
+        if !self
+            .tracked
+            .obligations()
+            .source_site_allowed(contract, function, self.routes)
+        {
+            return;
+        }
         let (trust, depth, predecessor) = match handoff_from {
             Some(parent) => {
                 if self.contract_in_ancestry(parent, contract) {
