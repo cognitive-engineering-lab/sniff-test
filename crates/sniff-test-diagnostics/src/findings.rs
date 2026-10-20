@@ -699,6 +699,71 @@ pub(crate) fn is_effect_source_finding(kind: &FindingKind) -> bool {
     )
 }
 
+/// A direct source and its complete outstanding obligation. Caller paths are
+/// deliberately absent: a justification at this source covers every such path.
+/// Different requirement sets stay separate rather than counting partial fixes.
+#[derive(PartialEq, Eq, PartialOrd, Ord)]
+struct DirectJustificationSite<'a> {
+    source: &'a FindingSourceOrder,
+    kind: &'a FindingKind,
+    function: &'a Option<String>,
+    target: &'a Option<String>,
+    owner: &'a Option<FindingOwner>,
+    missing_requirements: &'a [String],
+    requirements: &'a [String],
+}
+
+fn direct_justification_site(finding: &Finding) -> Option<DirectJustificationSite<'_>> {
+    is_effect_source_finding(&finding.kind).then_some(())?;
+    Some(DirectJustificationSite {
+        source: finding.source_order.as_ref()?,
+        kind: &finding.kind,
+        function: &finding.function,
+        target: &finding.target,
+        owner: &finding.owner,
+        missing_requirements: &finding.missing_requirements,
+        requirements: &finding.requirements,
+    })
+}
+
+/// Run after lint filtering and human aggregation, so impact counts visible
+/// diagnostics. This only changes presentation; trace identities and reports
+/// retain their canonical order. Never inspect intermediate propagation calls.
+pub(crate) fn sort_by_justification_impact(findings: &mut Vec<ResolvedFinding>) {
+    use std::cmp::Reverse;
+
+    let mut sites = BTreeMap::new();
+    for resolved in findings.iter() {
+        if let Some(site) = direct_justification_site(&resolved.finding) {
+            let (count, roots, _) = sites.entry(site).or_insert((0usize, BTreeSet::new(), 0));
+            *count += 1;
+            if let Some(root) = resolved.finding.root.as_deref() {
+                roots.insert(root);
+            }
+        }
+    }
+    // BTreeMap order supplies a deterministic source-location tie break and
+    // keeps equally scored groups contiguous.
+    for (index, (_, _, order)) in sites.values_mut().enumerate() {
+        *order = index;
+    }
+    let ranks = findings
+        .iter()
+        .map(|resolved| {
+            direct_justification_site(&resolved.finding)
+                .and_then(|site| sites.get(&site))
+                .map_or(
+                    (true, Reverse(0), Reverse(0), 0),
+                    |(count, roots, order)| (false, Reverse(*count), Reverse(roots.len()), *order),
+                )
+        })
+        .collect::<Vec<_>>();
+    drop(sites);
+    let mut ranked = findings.drain(..).zip(ranks).collect::<Vec<_>>();
+    ranked.sort_by_key(|(_, rank)| *rank);
+    findings.extend(ranked.into_iter().map(|(finding, _)| finding));
+}
+
 fn compare_findings(left: &Finding, right: &Finding) -> std::cmp::Ordering {
     left.root
         .cmp(&right.root)
@@ -990,6 +1055,75 @@ mod tests {
             finding: finding(effect("panic", EffectFindingClass::ConcreteInvocation))
                 .with_source_order(None, Some(&range)),
         }
+    }
+
+    #[test]
+    fn justification_impact_counts_visible_paths_then_distinct_roots() {
+        let make = |source, root: &str, path: &str| {
+            let mut value = indexed_human_finding(source);
+            value.finding.root = Some(root.into());
+            value.finding.reason = path.into();
+            value
+        };
+        // Site 30 wins on paths, site 20 beats 10 on distinct roots.
+        // Input order within each site must survive the sort.
+        let mut values = vec![
+            make(10, "a", "a1"),
+            make(20, "b", "b1"),
+            make(30, "c", "c1"),
+            make(10, "a", "a2"),
+            make(20, "d", "d1"),
+            make(30, "c", "c2"),
+            make(30, "c", "c3"),
+        ];
+        super::sort_by_justification_impact(&mut values);
+        assert_eq!(
+            values
+                .iter()
+                .map(|v| v.finding.reason.as_str())
+                .collect::<Vec<_>>(),
+            ["c1", "c2", "c3", "b1", "d1", "a1", "a2"]
+        );
+    }
+
+    #[test]
+    fn justification_impact_keeps_obligations_separate_and_unknown_sites_last() {
+        let mut incomplete = indexed_human_finding(0);
+        incomplete.finding.kind = effect("panic", EffectFindingClass::AnalysisIncomplete);
+        let mut missing_site = indexed_human_finding(0);
+        missing_site.finding.source_order = None;
+        let mut values = vec![incomplete.clone(), missing_site.clone()];
+        let first = indexed_human_finding(10);
+        values.push(first.clone());
+        for (domain, requirement) in [
+            ("panic", "bounds"),
+            ("panic", "nonzero"),
+            ("safety", "bounds"),
+        ] {
+            let mut value = indexed_human_finding(20);
+            value.finding.kind = effect(domain, EffectFindingClass::DocumentedObligation);
+            value.finding.missing_requirements = vec![requirement.into()];
+            values.push(value);
+        }
+        // If any of the different obligations at site 20 were merged, their
+        // inflated count would place them before site 10.
+        super::sort_by_justification_impact(&mut values);
+        assert_eq!(values[0], first);
+        assert_eq!(values[4..], [incomplete, missing_site]);
+    }
+
+    #[test]
+    fn justification_impact_counts_after_human_deduplication() {
+        let duplicate = indexed_human_finding(20);
+        let first = indexed_human_finding(10);
+        let mut values = super::aggregate_human_findings_owned(vec![
+            duplicate.clone(),
+            duplicate,
+            first.clone(),
+        ]);
+        super::sort_by_justification_impact(&mut values);
+        assert_eq!(values.len(), 2);
+        assert_eq!(values[0].finding.source_order, first.finding.source_order);
     }
 
     #[test]

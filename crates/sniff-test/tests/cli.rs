@@ -26,6 +26,62 @@ struct Case {
 }
 
 #[test]
+fn sort_prioritizes_shared_direct_sources_without_changing_json() {
+    let repo = repo_root();
+    let binary = PathBuf::from(env!("CARGO_BIN_EXE_cargo-sniff-test"));
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path().join("source_aggregation");
+    copy_fixture_dir(&repo.join("tests/fixtures/source_aggregation"), &root).unwrap();
+    fs::write(
+        root.join("src/lib.rs"),
+        r#"
+pub fn aaa_isolated() { panic!("isolated"); }
+fn shared() { panic!("shared"); }
+pub fn bbb_shared() { shared(); }
+pub fn ccc_shared() { shared(); }
+"#,
+    )
+    .unwrap();
+    let _cargo_guard = lock_nested_cargo();
+    let run = |args| {
+        run_cargo_sniff_test(
+            &binary,
+            &root,
+            "sort_direct_sources",
+            &Case::new().args(args),
+        )
+    };
+    let normal = run(&["-e", "panic"]);
+    let sorted = run(&["-e", "panic", "--sort"]);
+    assert_eq!(normal.status.code(), Some(101), "{}", normal.stderr);
+    assert_eq!(sorted.status.code(), Some(101), "{}", sorted.stderr);
+    let headlines = |output: &str| {
+        output
+            .lines()
+            .filter(|line| line.starts_with("error: ["))
+            .map(str::to_owned)
+            .collect::<Vec<_>>()
+    };
+    let before = headlines(&normal.stderr);
+    let after = headlines(&sorted.stderr);
+    assert_eq!(before.len(), 3, "{}", normal.stderr);
+    assert_eq!(after.len(), 3, "{}", sorted.stderr);
+    assert!(before[0].contains("aaa_isolated"), "{before:?}");
+    assert!(after[0].contains("bbb_shared"), "{after:?}");
+    assert!(after[1].contains("ccc_shared"), "{after:?}");
+    assert!(after[2].contains("aaa_isolated"), "{after:?}");
+    let mut before_set = before;
+    let mut after_set = after;
+    before_set.sort();
+    after_set.sort();
+    assert_eq!(before_set, after_set, "sorting must retain trace IDs");
+
+    let json = run(&["-e", "panic", "--message-format", "json"]);
+    let sorted_json = run(&["-e", "panic", "--message-format", "json", "--sort"]);
+    assert_eq!(json.stdout, sorted_json.stdout);
+}
+
+#[test]
 fn state_budget_diagnostic_has_a_visible_final_notice() {
     let repo = repo_root();
     let binary = PathBuf::from(env!("CARGO_BIN_EXE_cargo-sniff-test"));

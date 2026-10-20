@@ -27,6 +27,12 @@ cargo sniff-test -e panic
 cargo sniff-test -e allocation
 ```
 
+Use `cargo sniff-test --sort` to put diagnostics with the greatest direct
+justification impact first. Within each analyzed crate, warnings sharing a direct
+effect operation or invocation and obligation are grouped by their count, then
+by the number of affected report roots. Intermediate propagation calls are not
+justification candidates. This changes human output ordering only.
+
 Pass Cargo arguments after `--`:
 
 ```sh

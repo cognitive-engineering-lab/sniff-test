@@ -175,11 +175,11 @@ pub(crate) fn analyze_crate(
     }
     if args.message_format == MessageFormat::Json {
         if emit_diagnostics {
-            emit_human_diagnostics(tcx, &report, &args.explicit_effects);
+            emit_human_diagnostics(tcx, &report, &args.explicit_effects, args.sort);
         }
         emit_json_report(&report);
     } else if emit_diagnostics {
-        emit_human_diagnostics_owned(tcx, report, &args.explicit_effects);
+        emit_human_diagnostics_owned(tcx, report, &args.explicit_effects, args.sort);
     }
 }
 

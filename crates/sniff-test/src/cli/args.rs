@@ -42,6 +42,10 @@ struct CommonCliArgs {
     #[arg(long, value_enum, default_value = "human")]
     message_format: MessageFormat,
 
+    /// Prioritize diagnostics by the impact of a direct justification.
+    #[arg(long)]
+    sort: bool,
+
     /// Show the full trace identified by a diagnostic's trace ID.
     #[arg(long, value_name = "TRACE-ID", value_parser = parse_trace_id)]
     explain: Option<String>,
@@ -63,6 +67,7 @@ impl CommonCliArgs {
             color: self.color,
             message_format: self.message_format,
             explain: self.explain,
+            sort: self.sort,
             ..SniffTestArgs::default()
         }
     }
@@ -237,6 +242,8 @@ pub struct SniffTestArgs {
     /// CLI source-crate selection; an empty list leaves the manifest in force.
     #[serde(default)]
     pub(crate) source_crates: Vec<String>,
+    #[serde(default)]
+    pub(crate) sort: bool,
     pub(crate) explain: Option<String>,
     pub(crate) explain_match_marker: Option<PathBuf>,
     pub(crate) manifest_path: Option<PathBuf>,
@@ -313,6 +320,29 @@ mod tests {
 
     use super::{CrateOutputScope, DriverCli, FrontendAction, FrontendCli, MessageFormat};
     use sniff_test_core::artifact::EffectKey;
+
+    #[test]
+    fn sort_flag_survives_driver_transport_and_defaults_off() {
+        for enabled in [false, true] {
+            let mut argv = vec!["cargo-sniff-test"];
+            if enabled {
+                argv.push("--sort");
+            }
+            let cli = FrontendCli::try_parse_from(argv).unwrap();
+            let FrontendAction::Run(args) = cli.into_action() else {
+                panic!("expected run action");
+            };
+            assert_eq!(args.sort, enabled);
+            let encoded = serde_json::to_string(&args).unwrap();
+            let decoded: super::SniffTestArgs = serde_json::from_str(&encoded).unwrap();
+            assert_eq!(decoded.sort, enabled);
+        }
+        let cli =
+            DriverCli::try_parse_from(["sniff-test-driver", "--sort", "--", "lib.rs"]).unwrap();
+        let (_, args) = cli.into_parts("sniff-test-driver".into());
+        assert!(args.sort);
+        assert!(FrontendCli::try_parse_from(["cargo-sniff-test", "--sort=source"]).is_err());
+    }
 
     #[test]
     fn frontend_parses_equals_options_and_cargo_args_after_separator() {

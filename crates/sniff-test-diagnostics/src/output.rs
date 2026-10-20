@@ -13,7 +13,7 @@ use crate::diagnostics::{emit_finding_diagnostic, emit_footer_note};
 use crate::findings::{
     FULL_STACK_TRACE_HINT, Finding, FindingKind, ResolvedFinding, aggregate_human_findings,
     aggregate_human_findings_owned, is_effect_source_finding, resolve_findings_with_root_codes,
-    take_full_stack_trace_hint,
+    sort_by_justification_impact, take_full_stack_trace_hint,
 };
 use crate::report::{AnalysisArtifactReport, REPORT_FORMAT_VERSION, ReportArtifact};
 
@@ -48,11 +48,13 @@ pub fn emit_human_diagnostics(
     tcx: TyCtxt<'_>,
     report: &AnalysisArtifactReport,
     explicit_effects: &[EffectKey],
+    sort: bool,
 ) {
     emit_human_findings(
         tcx,
         aggregate_human_findings(&report.findings),
         explicit_effects,
+        sort,
     );
 }
 
@@ -60,11 +62,13 @@ pub fn emit_human_diagnostics_owned(
     tcx: TyCtxt<'_>,
     report: AnalysisArtifactReport,
     explicit_effects: &[EffectKey],
+    sort: bool,
 ) {
     emit_human_findings(
         tcx,
         aggregate_human_findings_owned(report.findings),
         explicit_effects,
+        sort,
     );
 }
 
@@ -72,7 +76,11 @@ fn emit_human_findings(
     tcx: TyCtxt<'_>,
     mut human_findings: Vec<ResolvedFinding>,
     explicit_effects: &[EffectKey],
+    sort: bool,
 ) {
+    if sort {
+        sort_by_justification_impact(&mut human_findings);
+    }
     let has_trace_id = human_findings
         .iter()
         .any(|finding| finding.finding.trace_id.is_some());
