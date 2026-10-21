@@ -42,6 +42,11 @@ main { overflow: hidden; }
   .effect-summary, .details-scroll { padding: 10px; }
 }
 
-.inline-prompt { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; padding: 6px 10px; margin: 4px 0; background: #eef5ef; border-left: 3px solid #7ca486; font: 11px/1.5 ui-sans-serif, sans-serif; white-space: normal; }
+/* Block-widget spacing must stay inside the box CodeMirror measures. */
+.inline-prompt { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; padding: 6px 10px; margin: 0; background: #eef5ef; border-left: 3px solid #7ca486; font: 11px/1.5 ui-sans-serif, sans-serif; white-space: normal; }
 .inline-prompt button { font-size: 11px; padding: 4px 7px; color: #245c3f; }
 .inline-prompt span { color: #617665; }
+
+.navigation-status{float:right;margin-left:12px}
+
+.cm-definition-link, .cm-definition-link span { color: #245c3f !important; text-decoration: underline; text-decoration-color: #245c3f; text-underline-offset: 3px; cursor: pointer; }

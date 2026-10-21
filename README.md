@@ -78,6 +78,20 @@ justification with **✓ Justify here** above the operation, or propagate an
 obligation with **↑ Propagate to callers** at its enclosing function. These
 inline prompts insert a blank template and focus the explanation; fill it in
 before saving. You can also edit source directly.
+
+Trace entries jump to the call site and show its verified file and line. In the
+source editor, Cmd-click (macOS), Ctrl-click (other platforms), or F12 jumps to a
+symbol's definition; **Back** returns to the previous location. Holding Cmd/Ctrl
+while hovering over a resolvable identifier underlines it in green and shows a
+pointer cursor. This uses
+`rust-analyzer` from PATH, running in the audited workspace. Install it for that
+workspace's toolchain with `rustup component add rust-analyzer` if navigation
+reports that it is unavailable. Effect-source and trace navigation still work
+without the language server. Definition lookup includes editor changes and
+saved drafts without applying them to disk; dependency destinations remain
+read-only. Source changed since analysis must be reanalyzed before its recorded
+call-site positions can be trusted.
+
 **Save draft** buffers an edit without changing source. **Review diff** shows the
 changes; **Apply file & reanalyze** writes that file and runs the analyzer again.
 Other files' drafts stay buffered. Existing source changes cause a conflict

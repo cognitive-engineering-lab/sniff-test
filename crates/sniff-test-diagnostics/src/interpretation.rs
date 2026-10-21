@@ -2322,10 +2322,15 @@ impl SourceResolver<'_, '_> {
                     .strip_prefix('\u{feff}')
                     .unwrap_or(raw)
                     .replace("\r\n", "\n");
-                loaded
-                    .src
-                    .as_ref()
-                    .is_some_and(|text| text.as_str() == normalized)
+                if let Some(text) = &loaded.src {
+                    text.as_str() == normalized
+                } else {
+                    loaded
+                        .external_src
+                        .borrow()
+                        .get_source()
+                        .is_some_and(|text| text == normalized)
+                }
             })
         });
         let offsets = cached.raw.as_ref().and_then(|raw| {

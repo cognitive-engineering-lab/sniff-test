@@ -1,4 +1,6 @@
 //! Local HTTP adapter for the UI-independent audit bridge.
+mod lsp;
+
 use axum::{
     Json, Router,
     extract::{Query, Request, State},
@@ -25,6 +27,7 @@ use tokio_stream::wrappers::ReceiverStream;
 struct Assets;
 #[derive(Clone)]
 struct App {
+    lsp: lsp::Connections,
     session: Arc<Mutex<Session>>,
     token: String,
     origin: String,
@@ -51,6 +54,7 @@ pub fn serve(session: Session) -> anyhow::Result<()> {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
         let origin = format!("http://{}", listener.local_addr()?);
         let app = App {
+            lsp: Default::default(),
             session: Arc::new(Mutex::new(session)),
             token: uuid::Uuid::new_v4().to_string(),
             origin,
@@ -78,6 +82,8 @@ pub fn serve(session: Session) -> anyhow::Result<()> {
 fn router(app: App) -> Router {
     let api = Router::new()
         .route("/workspace", get(workspace))
+        .route("/lsp/events", get(lsp::events))
+        .route("/lsp/messages", post(lsp::messages))
         .route("/analysis", get(analysis).post(analyze))
         .route("/events", get(events))
         .route("/findings", get(findings))
@@ -256,7 +262,51 @@ async fn finding(State(app): State<App>, Query(id): Query<Id>) -> ApiResult {
         .iter()
         .find(|f| f.id == id.id)
         .ok_or_else(|| anyhow::anyhow!("finding no longer exists"))?;
-    Ok(Json(serde_json::to_value(f).map_err(anyhow::Error::from)?))
+    let mut value = serde_json::to_value(f).map_err(anyhow::Error::from)?;
+    drop(session);
+    annotate_source_lines(&mut value, &mut std::collections::HashMap::new());
+    Ok(Json(value))
+}
+// Presentation-only line numbers; reports retain their exact original-byte ranges.
+fn annotate_source_lines(
+    value: &mut Value,
+    files: &mut std::collections::HashMap<String, Option<(String, String)>>,
+) {
+    match value {
+        Value::Array(values) => {
+            for value in values {
+                annotate_source_lines(value, files);
+            }
+        }
+        Value::Object(object) => {
+            if object.get("available").and_then(Value::as_bool) == Some(true)
+                && let (Some(path), Some(hash), Some(start)) = (
+                    object.get("path").and_then(Value::as_str),
+                    object.get("hash").and_then(Value::as_str),
+                    object.get("start").and_then(Value::as_u64),
+                )
+            {
+                let source = files.entry(path.to_owned()).or_insert_with(|| {
+                    let text = std::fs::read_to_string(path).ok()?;
+                    let hash = sniff_test_report::content_hash(text.as_bytes());
+                    Some((text, hash))
+                });
+                if let Some((text, actual_hash)) = source
+                    && actual_hash == hash
+                    && let Some(prefix) = text.get(..start as usize)
+                {
+                    object.insert(
+                        "line".into(),
+                        json!(prefix.bytes().filter(|byte| *byte == b'\n').count() + 1),
+                    );
+                }
+            }
+            for child in object.values_mut() {
+                annotate_source_lines(child, files);
+            }
+        }
+        _ => {}
+    }
 }
 #[derive(Deserialize)]
 struct File {
@@ -338,6 +388,21 @@ async fn propose(State(app): State<App>, Json(edit): Json<Proposal>) -> ApiResul
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn source_lines_require_matching_content_and_utf8_boundaries() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("source.rs");
+        let text = "\u{feff}// λ\r\nfn target() {}\r\n";
+        std::fs::write(&path, text).unwrap();
+        let mut location = serde_json::json!({"path":path,"available":true,"hash":sniff_test_report::content_hash(text.as_bytes()),"start":text.find("fn target").unwrap()});
+        super::annotate_source_lines(&mut location, &mut Default::default());
+        assert_eq!(location["line"], 2);
+        location.as_object_mut().unwrap().remove("line");
+        std::fs::write(path, "changed").unwrap();
+        super::annotate_source_lines(&mut location, &mut Default::default());
+        assert!(location.get("line").is_none());
+    }
+
     use super::*;
     use tower::ServiceExt;
     #[tokio::test]
@@ -350,6 +415,7 @@ mod tests {
         };
         let session = Session::open(dir.path().into(), dir.path().join("target"), config).unwrap();
         let app = App {
+            lsp: Default::default(),
             session: Arc::new(Mutex::new(session)),
             token: "secret".into(),
             origin: "http://127.0.0.1:1234".into(),

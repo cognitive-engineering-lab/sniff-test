@@ -5,8 +5,9 @@ import {EditorState, StateField, StateEffect} from '@codemirror/state';
 import {Decoration, WidgetType} from '@codemirror/view';
 import {rust} from '@codemirror/lang-rust';
 import './style.css';
+import {Navigation, filePath} from './navigation';
 
-type Location = {path:string; start:number; end:number; available:boolean};
+type Location = {path:string; start:number; end:number; available:boolean; hash?:string; line?:number; live?:boolean};
 type Buffer = {path:string; content:string; original:string; revision:number; writable:boolean; conflict:boolean};
 type Target = {action:string; location:Location};
 type TemplateEdit = {path:string; revision:number; start:number; end:number; text:string; cursor:number};
@@ -36,12 +37,14 @@ class DocumentationPrompt extends WidgetType {
   }
   ignoreEvent() { return true; }
 }
-function bytePosition(text:string, offset:number) { return new TextDecoder().decode(new TextEncoder().encode(text).slice(0,offset)).length; }
-function Editor({buffer, location:target, onChange, finding, enabled, prepare, onError}:{buffer:Buffer; location?:Location; onChange:(text:string)=>void; finding?:Finding; enabled:boolean; prepare:(target:Target)=>Promise<TemplateEdit>; onError:(error:string)=>void}) {
+function bytePosition(text:string, offset:number) { return new TextDecoder('utf-8',{ignoreBOM:true}).decode(new TextEncoder().encode(text).slice(0,offset)).length; }
+function editorPosition(text:string, offset:number) { return text.slice(0,bytePosition(text,offset)).replace(/\r\n/g,'\n').length; }
+function Editor({buffer, location:target, onChange, finding, enabled, prepare, onError, navigation, onReady}:{buffer:Buffer; location?:Location; onChange:(text:string)=>void; finding?:Finding; enabled:boolean; prepare:(target:Target)=>Promise<TemplateEdit>; onError:(error:string)=>void; navigation?:Navigation; onReady:(view:EditorView|undefined)=>void}) {
   const holder = useRef<HTMLDivElement>(null), editorRef=useRef<EditorView | undefined>(undefined);
   const callback = useRef(onChange); callback.current = onChange;
   const prepareRef=useRef(prepare);prepareRef.current=prepare;
   const errorRef=useRef(onError);errorRef.current=onError;
+  const readyRef=useRef(onReady);readyRef.current=onReady;
   useEffect(()=>{
     if (!holder.current) return;
     let active=true;
@@ -51,18 +54,18 @@ function Editor({buffer, location:target, onChange, finding, enabled, prepare, o
       const lineStart=buffer.content.lastIndexOf('\n',position-1)+1;
       if(buffer.content.slice(lineStart,position).trim())return [];
       const widget=new DocumentationPrompt(t.action,()=>{
-        const snapshot=view.state.doc.toString();
+        const snapshot=view.state.sliceDoc();
         prepareRef.current(t).then(edit=>{
           if(!active)return;
-          if(view.state.doc.toString()!==snapshot || edit.path!==buffer.path || edit.revision!==buffer.revision)throw Error('Source changed while preparing the template. Reanalyze before retrying.');
+          if(view.state.sliceDoc()!==snapshot || edit.path!==buffer.path || edit.revision!==buffer.revision)throw Error('Source changed while preparing the template. Reanalyze before retrying.');
           const from=bytePosition(snapshot,edit.start),to=bytePosition(snapshot,edit.end);
           const updated=snapshot.slice(0,from)+edit.text+snapshot.slice(to);
-          const cursor=bytePosition(updated,edit.cursor);
-          view.dispatch({changes:edit.text?{from,to,insert:edit.text}:undefined,selection:{anchor:cursor},effects:EditorView.scrollIntoView(cursor,{y:'center'}),userEvent:'input'});
+          const cursor=editorPosition(updated,edit.cursor);
+          view.dispatch({changes:edit.text?{from:editorPosition(snapshot,edit.start),to:editorPosition(snapshot,edit.end),insert:edit.text}:undefined,selection:{anchor:cursor},effects:EditorView.scrollIntoView(cursor,{y:'center'}),userEvent:'input'});
           view.focus();
         }).catch(e=>{if(active)errorRef.current(String(e));});
       });
-      return [Decoration.widget({widget,block:true,side:-1}).range(lineStart)];
+      return [Decoration.widget({widget,block:true,side:-1}).range(buffer.content.slice(0,lineStart).replace(/\r\n/g,'\n').length)];
     });
     const originalPrompts=Decoration.set(widgets,true);
     const prompts=StateField.define({
@@ -71,18 +74,23 @@ function Editor({buffer, location:target, onChange, finding, enabled, prepare, o
         let allowed=value.enabled;
         for(const effect of tr.effects)if(effect.is(setPromptsEnabled))allowed=effect.value;
         if(!tr.docChanged && allowed===value.enabled)return value;
-        return {enabled:allowed,decorations:allowed && tr.newDoc.toString()===buffer.original?originalPrompts:Decoration.none};
+        return {enabled:allowed,decorations:allowed && tr.newDoc.toString()===buffer.original.replace(/\r\n/g,'\n')?originalPrompts:Decoration.none};
       },
       provide:field=>EditorView.decorations.from(field,value=>value.decorations),
     });
-    view = new EditorView({parent:holder.current, state:EditorState.create({doc:buffer.content, extensions:[basicSetup,rust(),prompts, EditorView.lineWrapping, EditorState.readOnly.of(!buffer.writable), EditorView.updateListener.of(u=>{if(u.docChanged) callback.current(u.state.doc.toString());})]})});
+    view = new EditorView({parent:holder.current, state:EditorState.create({doc:buffer.content, extensions:[basicSetup,EditorState.lineSeparator.of(buffer.original.includes('\r\n')?'\r\n':'\n'),rust(),prompts,navigation?.extension(buffer.path) || [], EditorView.lineWrapping, EditorState.readOnly.of(!buffer.writable), EditorView.updateListener.of(u=>{if(u.docChanged) callback.current(u.state.sliceDoc());})]})});
     editorRef.current=view;
-    if(target?.available && target.path === buffer.path && buffer.content === buffer.original) {
-      const from = bytePosition(buffer.content,target.start),to=bytePosition(buffer.content,target.end);
-      if (to <= view.state.doc.length) view.dispatch({selection:{anchor:from,head:to},effects:EditorView.scrollIntoView(from,{y:'center'})});
-    }
-    return ()=>{active=false;editorRef.current=undefined;view.destroy();};
-  },[buffer.path,buffer.revision,target?.start,finding?.id]);
+    readyRef.current(view);
+    return ()=>{active=false;readyRef.current(undefined);editorRef.current=undefined;view.destroy();};
+  },[buffer.path,buffer.revision,finding?.id,navigation]);
+  useEffect(()=>{
+    const view=editorRef.current;
+    if(!view || !target?.available || target.path!==buffer.path)return;
+    if(!target.live && buffer.content!==buffer.original)return;
+    const source=view.state.sliceDoc();
+    const from=editorPosition(source,target.start),to=editorPosition(source,target.end);
+    if(from<=to && to<=view.state.doc.length){view.dispatch({selection:{anchor:from,head:to},effects:EditorView.scrollIntoView(from,{y:'center'})});view.focus();}
+  },[target,buffer.path,buffer.revision,navigation,finding?.id]);
   useEffect(()=>{editorRef.current?.dispatch({effects:setPromptsEnabled.of(enabled)});},[enabled]);
   return <div className="editor" ref={holder} aria-label="Rust source editor"/>;
 }
@@ -94,6 +102,39 @@ function App() {
   const [drafts,setDrafts]=useState<Buffer[]>([]),[diff,setDiff]=useState(''),[view,setView]=useState<'source'|'changes'>('source');
   const [error,setError]=useState(''),[busy,setBusy]=useState(false),[logs,setLogs]=useState(false);
   const [nav,setNav]=useState<Location[]>([]);
+  const [navigation,setNavigation]=useState<Navigation>(),[navigationStatus,setNavigationStatus]=useState('');
+  const editor=useRef<EditorView|undefined>(undefined);
+  const waitingEditor=useRef<{path:string;resolve:(view:EditorView|null)=>void}|undefined>(undefined);
+  function editorReady(view:EditorView|undefined){editor.current=view;if(view && waitingEditor.current && waitingEditor.current.path===buffer?.path){waitingEditor.current.resolve(view);waitingEditor.current=undefined;}}
+  const rememberDefinition=useRef<(view:EditorView)=>void>(()=>{});
+  rememberDefinition.current=view=>rememberPosition(view);
+  const displayDefinition=useRef<(uri:string)=>Promise<EditorView|null>>(async()=>null);
+  displayDefinition.current=async(uri)=>{
+    const path=filePath(uri);
+    if(buffer?.path===path)return editor.current || null;
+    waitingEditor.current?.resolve(null);
+    const ready=new Promise<EditorView|null>(resolve=>{waitingEditor.current={path,resolve};});
+    try{await open({path,start:0,end:0,available:false},false);}catch(e){setError(String(e));waitingEditor.current?.resolve(null);waitingEditor.current=undefined;}
+    return ready;
+  };
+  useEffect(()=>{
+    if(!root)return;
+    const service=new Navigation(token,root,uri=>displayDefinition.current(uri),setNavigationStatus,view=>rememberDefinition.current(view));
+    setNavigation(service);void service.start();
+    return ()=>{service.stop();waitingEditor.current?.resolve(null);};
+  },[root]);
+  useEffect(()=>{for(const draft of drafts)navigation?.document(draft.path,draft.content);},[drafts,navigation]);
+  useEffect(()=>{
+    if(!navigation || status.running)return;
+    let cancelled=false;
+    // Closed editors retain draft overlays; refresh them after source is reanalyzed.
+    for(const file of navigation.client.workspace.files){
+      if(file.getView())continue;
+      const path=filePath(file.uri);
+      api('buffer?'+new URLSearchParams({path})).then((next:Buffer)=>{if(!cancelled)navigation.document(next.path,next.content);}).catch(()=>{});
+    }
+    return ()=>{cancelled=true;};
+  },[navigation,status.generation,status.running]);
   const detailsScroll = useRef<HTMLDivElement>(null);
   useLayoutEffect(()=>{detailsScroll.current?.scrollTo({top:0});},[selected?.id]);
   const unsaved = !!buffer && text !== buffer.content;
@@ -101,12 +142,29 @@ function App() {
   async function loadFindings(){const value=await api('findings?'+new URLSearchParams({q:query,effect,level,class:kind,offset:String(page*100)}));setItems(value.items);setTotal(value.total);setEffects(value.effects);}
   async function refreshDrafts(){setDrafts(await api('drafts'));}
   async function save(){if(!buffer)return; const updated=await api('buffer',{path:buffer.path,revision:buffer.revision,content:text});setBuffer(updated);await refreshDrafts();return updated as Buffer;}
+  function rememberPosition(view:EditorView|undefined){
+    if(!buffer || !view)return;
+    const state=view.state,selection=state.selection.main;
+    setNav(n=>[...n,{path:buffer.path,start:new TextEncoder().encode(state.sliceDoc(0,selection.from)).length,end:new TextEncoder().encode(state.sliceDoc(0,selection.to)).length,available:true,live:true}]);
+  }
   async function open(loc:Location, remember=true){
     if(unsaved)await save();
-    if(remember && target) setNav(n=>[...n,target]);
-    const next=await api('buffer?'+new URLSearchParams({path:loc.path}));setBuffer(next);setText(next.content);setTarget(loc);setView('source');setDiff('');
+    if(remember)rememberPosition(editor.current);
+    const next=await api('buffer?'+new URLSearchParams({path:loc.path}));let destination=loc;
+    if(loc.available && loc.hash){
+      const digest=await crypto.subtle.digest('SHA-256',new TextEncoder().encode(next.original));
+      const hash=Array.from(new Uint8Array(digest),b=>b.toString(16).padStart(2,'0')).join('');
+      if(hash!==loc.hash){destination={...loc,available:false};setError('Source changed since analysis. Reanalyze to restore precise navigation.');}
+    }
+    if(loc.available && !loc.live && next.content!==next.original){destination={...loc,available:false};setError('This draft differs from analyzed source. Apply or discard it to restore call-site positioning.');}
+    if(!loc.available && loc.hash)setError('The recorded source range could not be verified. Reanalyze or restore the original source.');
+    if(waitingEditor.current?.path===loc.path){
+      waitingEditor.current.path=next.path;
+      if(buffer && buffer.path===next.path && editor.current && buffer.revision===next.revision){waitingEditor.current.resolve(editor.current);waitingEditor.current=undefined;}
+    }
+    setBuffer(next);setText(next.content);setTarget({...destination,path:next.path});setView('source');setDiff('');
   }
-  async function choose(item:Summary){const f:Finding=await api('finding?'+new URLSearchParams({id:item.id}));setSelected(f);const loc=f.audit?.source || f.audit?.root;if(loc)await open(loc);}
+  async function choose(item:Summary){const f:Finding=await api('finding?'+new URLSearchParams({id:item.id}));setSelected(f);const loc=[f.audit?.source,f.audit?.root].find(l=>l?.available);if(loc)await open(loc);}
   useEffect(()=>{api('workspace').then(v=>setRoot(v.root)).catch(e=>setError(String(e)));refreshDrafts().catch(e=>setError(String(e)));
     const controller=new AbortController();
     (async()=>{try{
@@ -135,20 +193,20 @@ function App() {
       <div className="section-title">SAVED DRAFTS <span>{drafts.length}</span></div>{drafts.map(d=><button className="draft" key={d.path} onClick={()=>act(()=>review(d))}>{d.path.replace(root+'/','')}{d.conflict?' · conflict':' · modified'}</button>)}
     </aside>
     <main><div className="toolbar"><button disabled={!nav.length||busy} onClick={()=>act(async()=>{const previous=nav[nav.length-1];setNav(n=>n.slice(0,-1));await open(previous,false);})}>← Back</button><span className="filename">{buffer?.path.replace(root+'/','')||'Source workspace'}</span>{buffer&&<><button onClick={()=>setView('source')}>Source</button><button onClick={()=>act(()=>review())}>Review diff</button></>}</div>
-      {buffer?<><div className="buffer-state">{buffer.writable?'Workspace source':'Read-only dependency'}{unsaved?' · unsaved editor changes':buffer.content!==buffer.original?' · draft saved':''}{buffer.conflict&&<strong> · External file changed. Copy your draft, discard it, then reapply your changes to the current source.</strong>}</div>
-      {view==='source'?<Editor buffer={buffer} location={target} onChange={setText} finding={selected} enabled={!status.running&&!status.stale&&!unsaved} onError={setError} prepare={async t=>{
+      {buffer?<><div className="buffer-state"><span className="navigation-status">{navigationStatus}</span>{buffer.writable?'Workspace source':'Read-only dependency'}{unsaved?' · unsaved editor changes':buffer.content!==buffer.original?' · draft saved':''}{buffer.conflict&&<strong> · External file changed. Copy your draft, discard it, then reapply your changes to the current source.</strong>}</div>
+      {view==='source'?<Editor navigation={navigation} onReady={editorReady} buffer={buffer} location={target} onChange={setText} finding={selected} enabled={!status.running&&!status.stale&&!unsaved} onError={setError} prepare={async t=>{
         if(!selected||!buffer||unsaved)throw Error('Save or discard editor changes before inserting a template.');
         return api('template',{id:selected.id,action:t.action,revision:buffer.revision});
       }}/>:<pre className="diff">{diff||'No changes to review.'}</pre>}
       <footer>{view==='source'?<button className="primary" disabled={!buffer.writable||!unsaved||busy||status.running} onClick={()=>act(async()=>{await save();})}>Save draft</button>:<button className="primary" disabled={buffer.conflict||!diff||busy||status.running} onClick={()=>act(async()=>{await api('apply',{path:buffer.path,revision:buffer.revision});await open({path:buffer.path,start:0,end:0,available:true});await refreshDrafts();})}>Apply file & reanalyze</button>}<button disabled={busy||status.running||buffer.content===buffer.original} onClick={()=>act(async()=>{await api('discard',{path:buffer.path,revision:buffer.revision});await open({path:buffer.path,start:0,end:0,available:true});await refreshDrafts();})}>Discard draft</button><small>Drafts stay separate from source until applied.</small></footer></>:null}
     </main>
     <aside className="details" aria-label="Effect details">{selected?<><section className="effect-summary" aria-label="Selected effect"><div className="section-title">FINDING DETAILS</div><p>{selected.reason}</p><small>{selected.crate_name} · trace {selected.trace_id||'unavailable'}</small></section>
-      <div className="details-scroll" ref={detailsScroll} tabIndex={0} aria-label="Navigation and call trace"><h3>Navigate</h3>{[['Report root',selected.audit?.root],['Effect source',selected.audit?.source],['Contract',selected.audit?.contract]].map(([label,l])=><button className="link" key={label as string} disabled={!l} onClick={()=>act(()=>open(l as Location))}>{label as string}{!(l as Location)?.available?' · unavailable':''}</button>)}
+      <div className="details-scroll" ref={detailsScroll} tabIndex={0} aria-label="Navigation and call trace"><h3>Navigate</h3>{[['Report root',selected.audit?.root],['Effect source',selected.audit?.source],['Contract',selected.audit?.contract]].map(([label,l])=><button className="link" key={label as string} disabled={!l || !(l as Location).available} onClick={()=>act(()=>open(l as Location))}>{label as string}{!(l as Location)?.available?' · unavailable':''}</button>)}
       {selected.audit?.targets.map(t=><button className="link" key={t.action} onClick={()=>act(()=>open(t.location))}>{t.action==='justification'?'Justification location':'Obligation location'}</button>)}
       {buffer&&!buffer.writable&&<p className="hint">Dependency source is read-only. Contract documentation can be supplied through an override file.</p>}
       {selected.audit&&!selected.audit.targets.length&&<p className="hint">No verified documentation attachment location is available. Inspect the source and edit manually where appropriate.</p>}
       {unsaved||buffer?.content!==buffer?.original?<p className="hint">Revert to the original source to restore inline prompts, or apply edits and reanalyze.</p>:null}
-      <h3>Call trace</h3><ol className="trace">{selected.audit?.trace.map((step,i)=><li key={i}><button disabled={!step.location} onClick={()=>act(()=>open(step.location!))}>{step.caller}<span>{step.kind} → {step.target||'effect operation'}</span></button></li>)}</ol></div>
+      <h3>Call trace</h3><ol className="trace">{selected.audit?.trace.map((step,i)=><li key={i}><button disabled={!step.location?.available} onClick={()=>act(()=>open(step.location!))}>{step.caller}<span>{step.kind} → {step.target||'effect operation'}</span><small title={step.location?.path}>{!step.location?'':step.location.path.startsWith(root+'/')?step.location.path.slice(root.length+1):'…/'+step.location.path.split('/').slice(-3).join('/')}{step.location?.line?':'+step.location.line:''}{!step.location?.available?' · source unavailable':''}</small></button></li>)}</ol></div>
     </>:<div className="empty">Select a finding to inspect its contract and call trace.</div>}</aside></div>
     <div className="analysis-log"><button onClick={()=>setLogs(!logs)}>{logs?'▾':'▸'} Analysis output</button><span>{status.count} findings · {drafts.length} saved drafts</span>{logs&&<pre>{status.log||'Waiting for analysis output…'}</pre>}</div>
   </div>;

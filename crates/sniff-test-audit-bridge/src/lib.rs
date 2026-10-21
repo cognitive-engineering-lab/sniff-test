@@ -228,6 +228,7 @@ pub struct Session {
     buffers: BTreeMap<String, Buffer>,
     draft_file: PathBuf,
     allowed_external: BTreeSet<PathBuf>,
+    definition_sources: BTreeSet<PathBuf>,
     _lock: fs::File,
 }
 impl Session {
@@ -266,6 +267,7 @@ impl Session {
             buffers,
             draft_file,
             allowed_external: BTreeSet::new(),
+            definition_sources: BTreeSet::new(),
             _lock: lock,
         })
     }
@@ -284,11 +286,24 @@ impl Session {
         .context("source unavailable")?;
         ensure!(path.is_file(), "not a source file");
         ensure!(
-            path.starts_with(&self.root) || (!write && self.allowed_external.contains(&path)),
+            path.starts_with(&self.root)
+                || (!write
+                    && (self.allowed_external.contains(&path)
+                        || self.definition_sources.contains(&path))),
             "source is outside this workspace"
         );
         Ok(path)
     }
+    /// Admit a definition destination returned by the workspace language server.
+    /// This grants read access only; normal workspace write checks still apply.
+    pub fn allow_definition_source(&mut self, path: &Path) {
+        if let Ok(path) = path.canonicalize()
+            && path.is_file()
+        {
+            self.definition_sources.insert(path);
+        }
+    }
+
     pub fn buffer(&mut self, path: &str) -> Result<Buffer> {
         let resolved = self.checked_path(path, false)?;
         let key = resolved.to_string_lossy().into_owned();
@@ -970,6 +985,25 @@ mod tests {
             std::os::unix::fs::symlink(outside.path(), &link).unwrap();
             assert!(s.buffer(link.to_str().unwrap()).is_err());
         }
+    }
+    #[test]
+    fn language_server_destinations_grant_read_access_only() {
+        let dir = tempfile::tempdir().unwrap();
+        let outside = tempfile::NamedTempFile::new().unwrap();
+        fs::write(outside.path(), "pub fn external() {}\n").unwrap();
+        let mut s = session(dir.path());
+        let path = outside.path().to_str().unwrap();
+        assert!(s.buffer(path).is_err());
+        s.allow_definition_source(outside.path());
+        let buffer = s.buffer(path).unwrap();
+        assert!(!buffer.writable);
+        assert!(s.update(path, buffer.revision, "changed".into()).is_err());
+        assert!(s.apply(path, buffer.revision).is_err());
+        s.allowed_external.clear();
+        assert!(
+            s.buffer(path).is_ok(),
+            "report refresh must retain definition destinations"
+        );
     }
     #[test]
     fn guided_docs_extend_sections_preserve_crlf_and_refuse_ambiguous_layout() {

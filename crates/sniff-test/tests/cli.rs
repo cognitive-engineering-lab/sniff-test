@@ -3893,3 +3893,79 @@ fn semantic_ranges_use_original_utf8_bytes_with_bom_and_crlf() {
     assert_eq!(&source[location.start..location.end], "panic!(\"λ\")");
     assert_eq!(facts.root.unwrap().start, source.find("pub fn").unwrap());
 }
+
+#[test]
+fn dependency_semantics_have_verified_source_and_call_sites() {
+    let repo = repo_root();
+    let binary = PathBuf::from(env!("CARGO_BIN_EXE_cargo-sniff-test"));
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path().join("dependency");
+    copy_fixture_dir(
+        &repo.join("tests/fixtures/dependency_generic_private_panic"),
+        &root,
+    )
+    .unwrap();
+    let _guard = lock_nested_cargo();
+    for _ in 0..2 {
+        let output = run_cargo_sniff_test(
+            &binary,
+            &root.join("app"),
+            "dependency_navigation",
+            &Case::new().args(&["-e", "panic", "--message-format", "json"]),
+        );
+        let mut dependency_sources = 0;
+        let mut dependency_calls = 0;
+        for report in output
+            .stdout
+            .lines()
+            .filter_map(|line| serde_json::from_str::<serde_json::Value>(line).ok())
+        {
+            for finding in report["findings"].as_array().into_iter().flatten() {
+                let Ok(facts) = serde_json::from_value::<sniff_test_report::SemanticFacts>(
+                    finding["semantics"].clone(),
+                ) else {
+                    continue;
+                };
+                let verify = |location: &sniff_test_report::Location| {
+                    assert!(
+                        location.available,
+                        "dependency location must be usable: {location:?}"
+                    );
+                    let text = fs::read_to_string(&location.path).unwrap();
+                    assert_eq!(
+                        location.hash,
+                        sniff_test_report::content_hash(text.as_bytes())
+                    );
+                    let snippet = text
+                        .get(location.start..location.end)
+                        .expect("exact UTF-8 source range");
+                    assert!(!snippet.is_empty());
+                    snippet.to_owned()
+                };
+                if let Some(source) = facts
+                    .source
+                    .filter(|location| location.path.contains("/dep/src/"))
+                {
+                    let snippet = verify(&source);
+                    assert!(snippet.contains("flag"), "effect operation: {snippet}");
+                    dependency_sources += 1;
+                }
+                for step in facts.trace {
+                    if let Some(location) = step
+                        .location
+                        .filter(|location| location.path.contains("/dep/src/"))
+                    {
+                        verify(&location);
+                        dependency_calls += 1;
+                    }
+                }
+            }
+        }
+        assert!(
+            dependency_sources > 0 && dependency_calls > 0,
+            "{}\n{}",
+            output.stdout,
+            output.stderr
+        );
+    }
+}
