@@ -7,8 +7,7 @@ import './style.css';
 
 type Location = {path:string; start:number; end:number; available:boolean};
 type Buffer = {path:string; content:string; original:string; revision:number; writable:boolean; conflict:boolean};
-type Target = {action:string; location:Location};
-type Finding = {id:string; crate_name:string; effect?:string;kind:string;class?:string;level:string;root?:string;trace_id?:string;reason:string;requirements:string[];missing_requirements:string[];display_trace:string[]; audit?:{obligation:string; justification:string; source?:Location; root?:Location; contract?:Location; targets:Target[]; trace:{caller:string; target?:string; kind:string; location?:Location}[]}};
+type Finding = {id:string; crate_name:string; effect?:string;kind:string;class?:string;level:string;root?:string;trace_id?:string;reason:string;requirements:string[];missing_requirements:string[];display_trace:string[]; audit?:{obligation:string; justification:string; source?:Location; root?:Location; contract?:Location; trace:{caller:string; target?:string; kind:string; location?:Location}[]}};
 type Summary = {id:string; crate_name:string; root:string; reason:string; level:string; effect:string; class:string; path?:string};
 type Status = {generation:number; running:boolean; stale:boolean; status:string; count:number; log:string};
 const token = location.hash.slice(1) || sessionStorage.getItem('audit-token') || '';
@@ -40,7 +39,7 @@ function App() {
   const [query,setQuery]=useState(''),[effect,setEffect]=useState(''),[level,setLevel]=useState(''),[kind,setKind]=useState(''),[page,setPage]=useState(0);
   const [selected,setSelected]=useState<Finding>(),[buffer,setBuffer]=useState<Buffer>(),[text,setText]=useState(''),[target,setTarget]=useState<Location>();
   const [drafts,setDrafts]=useState<Buffer[]>([]),[diff,setDiff]=useState(''),[view,setView]=useState<'source'|'changes'>('source');
-  const [explanation,setExplanation]=useState(''),[error,setError]=useState(''),[busy,setBusy]=useState(false),[logs,setLogs]=useState(false);
+  const [error,setError]=useState(''),[busy,setBusy]=useState(false),[logs,setLogs]=useState(false);
   const [nav,setNav]=useState<Location[]>([]);
   const detailsScroll = useRef<HTMLDivElement>(null);
   useLayoutEffect(()=>{detailsScroll.current?.scrollTo({top:0});},[selected?.id]);
@@ -54,7 +53,7 @@ function App() {
     if(remember && target) setNav(n=>[...n,target]);
     const next=await api('buffer?'+new URLSearchParams({path:loc.path}));setBuffer(next);setText(next.content);setTarget(loc);setView('source');setDiff('');
   }
-  async function choose(item:Summary){const f:Finding=await api('finding?'+new URLSearchParams({id:item.id}));setSelected(f);setExplanation('');const loc=f.audit?.source || f.audit?.root;if(loc)await open(loc);}
+  async function choose(item:Summary){const f:Finding=await api('finding?'+new URLSearchParams({id:item.id}));setSelected(f);const loc=f.audit?.source || f.audit?.root;if(loc)await open(loc);}
   useEffect(()=>{api('workspace').then(v=>setRoot(v.root)).catch(e=>setError(String(e)));refreshDrafts().catch(e=>setError(String(e)));
     const controller=new AbortController();
     (async()=>{try{
@@ -70,7 +69,6 @@ function App() {
   useEffect(()=>{setSelected(undefined)},[status.generation]);
   useEffect(()=>{const warn=(e:BeforeUnloadEvent)=>{if(unsaved){e.preventDefault();}};window.addEventListener('beforeunload',warn);return()=>window.removeEventListener('beforeunload',warn)},[unsaved]);
   async function review(draft?:Buffer){if(unsaved&&draft&&draft.path!==buffer?.path)await save();let b=draft||buffer;if(!b)return;if(unsaved&&buffer?.path===b.path)b=await save()||b;setBuffer(b);setText(b.content);setDiff((await api('diff?'+new URLSearchParams({path:b.path}))).diff);setView('changes');}
-  async function propose(t:Target){if(unsaved)await save();const b=await api('buffer?'+new URLSearchParams({path:t.location.path}));const next=await api('propose',{id:selected!.id,action:t.action,explanation,revision:b.revision});setBuffer(next);setText(next.content);setTarget(t.location);await refreshDrafts();setDiff((await api('diff?'+new URLSearchParams({path:next.path}))).diff);setView('changes');}
   const groups = new Map<string,Summary[]>();for(const item of items){const key=item.path||item.root||item.crate_name;groups.set(key,[...(groups.get(key)||[]),item]);}
   return <div className="app">
     <header><div className="brand"><b>sniff-test</b><span> / audit</span></div><span className="workspace" title={root}>{root}</span><span className={'status '+status.status}>{status.status}{status.stale?' · stale':''}</span><button disabled={status.running||busy} onClick={()=>act(async()=>{await api('analysis',{});})}>↻ Reanalyze</button></header>
@@ -88,12 +86,9 @@ function App() {
       {view==='source'?<Editor buffer={buffer} location={target} onChange={setText}/>:<pre className="diff">{diff||'No changes to review.'}</pre>}
       <footer>{view==='source'?<button className="primary" disabled={!buffer.writable||!unsaved||busy||status.running} onClick={()=>act(async()=>{await save();})}>Save draft</button>:<button className="primary" disabled={buffer.conflict||!diff||busy||status.running} onClick={()=>act(async()=>{await api('apply',{path:buffer.path,revision:buffer.revision});await open({path:buffer.path,start:0,end:0,available:true});await refreshDrafts();})}>Apply file & reanalyze</button>}<button disabled={busy||status.running||buffer.content===buffer.original} onClick={()=>act(async()=>{await api('discard',{path:buffer.path,revision:buffer.revision});await open({path:buffer.path,start:0,end:0,available:true});await refreshDrafts();})}>Discard draft</button><small>Drafts stay separate from source until applied.</small></footer></>:<div className="welcome"><span className="eyebrow">WORKSPACE AUDIT</span><h1>Follow the effect.<br/>Document the reasoning.</h1><p>Select a finding to explore its source, trace the calls, and draft a justification or obligation.</p><div className="steps">01 Inspect &nbsp; → &nbsp; 02 Draft &nbsp; → &nbsp; 03 Review</div></div>}
     </main>
-    <aside className="details" aria-label="Effect details">{selected?<><section className="effect-summary" aria-label="Selected effect"><div className="section-title">FINDING DETAILS</div><h2>{selected.effect||selected.kind}</h2><p>{selected.reason}</p><small>{selected.crate_name} · trace {selected.trace_id||'unavailable'}</small></section>
-      <div className="details-scroll" ref={detailsScroll} tabIndex={0} aria-label="Requirements and call trace"><h3>Navigate</h3>{[['Report root',selected.audit?.root],['Effect source',selected.audit?.source],['Contract',selected.audit?.contract]].map(([label,l])=><button className="link" key={label as string} disabled={!l} onClick={()=>act(()=>open(l as Location))}>{label as string}{!(l as Location)?.available?' · unavailable':''}</button>)}
-      <h3>Requirements</h3>{(selected.missing_requirements.length ? selected.missing_requirements : selected.requirements).map((r:string)=><p className="requirement" key={r}>{r}</p>)}<p className="hint">Inspect the contract for its full conditions. Use named requirement bullets when exact matching is enabled.</p>
+    <aside className="details" aria-label="Effect details">{selected?<><section className="effect-summary" aria-label="Selected effect"><div className="section-title">FINDING DETAILS</div><p>{selected.reason}</p><small>{selected.crate_name} · trace {selected.trace_id||'unavailable'}</small></section>
+      <div className="details-scroll" ref={detailsScroll} tabIndex={0} aria-label="Navigation and call trace"><h3>Navigate</h3>{[['Report root',selected.audit?.root],['Effect source',selected.audit?.source],['Contract',selected.audit?.contract]].map(([label,l])=><button className="link" key={label as string} disabled={!l} onClick={()=>act(()=>open(l as Location))}>{label as string}{!(l as Location)?.available?' · unavailable':''}</button>)}
       <h3>Call trace</h3><ol className="trace">{selected.audit?.trace.map((step,i)=><li key={i}><button disabled={!step.location} onClick={()=>act(()=>open(step.location!))}>{step.caller}<span>{step.kind} → {step.target||'effect operation'}</span></button></li>)}</ol></div>
-      <section className="documentation" aria-label="Draft documentation"><h3>Draft documentation</h3><textarea aria-label="Documentation explanation" value={explanation} onChange={e=>setExplanation(e.target.value)} placeholder="Explain the invariant or caller obligation. For named requirements, include Requirements: and matching bullets."/>
-      <div className="actions">{selected.audit?.targets.map(t=><button key={t.action} disabled={!explanation.trim()||busy||status.running||status.stale} onClick={()=>act(()=>propose(t))}>{t.action==='justification'?'Add justification':'Document obligation'}</button>)}</div><p className="hint">Guided edits require unchanged analyzed source. For unsupported placement, use the source editor.</p></section>
     </>:<div className="empty">Select a finding to inspect its contract and call trace.</div>}</aside></div>
     <div className="analysis-log"><button onClick={()=>setLogs(!logs)}>{logs?'▾':'▸'} Analysis output</button><span>{status.count} findings · {drafts.length} saved drafts</span>{logs&&<pre>{status.log||'Waiting for analysis output…'}</pre>}</div>
   </div>;

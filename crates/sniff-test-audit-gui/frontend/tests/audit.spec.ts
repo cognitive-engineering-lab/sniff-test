@@ -19,12 +19,28 @@ test.beforeEach(async()=>{
 });
 test.afterEach(async()=>{await stop();if(dir)await rm(dir,{recursive:true,force:true,maxRetries:5,retryDelay:100});});
 async function selectFinding(page:any){await page.goto(url);await expect(page.locator('.finding').first()).toBeVisible();await expect(page.locator('.status')).not.toContainText('running');await page.locator('.finding').first().click();await expect(page.locator('.cm-editor')).toBeVisible();}
+async function draftDocumentation(page:any,heading:string,explanation:string){
+  await page.getByRole('button',{name:'Report root',exact:true}).click();
+  await page.locator('.cm-content').click();
+  await page.keyboard.press('ControlOrMeta+Home');
+  await page.keyboard.insertText(`/// # ${heading}\n/// ${explanation}\n`);
+  await page.getByRole('button',{name:'Save draft',exact:true}).click();
+  await page.getByRole('button',{name:'Review diff',exact:true}).click();
+}
+async function expectSimpleDetails(page:any){
+  const details=page.getByLabel('Effect details',{exact:true});
+  await expect(details.locator('h2')).toHaveCount(0);
+  await expect(details.getByRole('heading',{name:'Requirements',exact:true})).toHaveCount(0);
+  await expect(page.getByLabel('Draft documentation',{exact:true})).toHaveCount(0);
+  await expect(details.getByRole('heading',{name:'Navigate',exact:true})).toBeVisible();
+  await expect(details.getByRole('heading',{name:'Call trace',exact:true})).toBeVisible();
+}
 test('navigate, draft an obligation, review, apply, and reanalyze',async({page})=>{
   await selectFinding(page);
   await page.getByRole('button',{name:'Report root',exact:true}).click();
   await expect(page.locator('.filename')).toContainText('src/lib.rs');
-  await page.getByLabel('Documentation explanation').fill('Panics when this demonstration function is called.');
-  await page.getByRole('button',{name:'Document obligation',exact:true}).click();
+  await expectSimpleDetails(page);
+  await draftDocumentation(page,'Panics','Panics when this demonstration function is called.');
   await expect(page.locator('.diff')).toContainText('/// # Panics');
   expect(await readFile(join(dir,'src/lib.rs'),'utf8')).not.toContain('///');
   await page.screenshot({path:join(repo,'target/audit-review.png'),fullPage:true});
@@ -49,11 +65,11 @@ for(const [effect,heading,source] of [
   ['allocation','Allocations','pub fn boxed() -> Box<u32> {\n    Box::new(7)\n}\n'],
   ['safety','Safety','pub unsafe fn read(p: *const u8) -> u8 {\n    unsafe { *p }\n}\n'],
 ]) {
-  test(`${effect} uses the same guided obligation workflow`,async({page})=>{
+  test(`${effect} uses the same source editing workflow`,async({page})=>{
     await stop();await writeFile(join(dir,'src/lib.rs'),source);await launch(effect);
     await selectFinding(page);
-    await page.getByLabel('Documentation explanation').fill('The caller must uphold the documented preconditions.');
-    await page.getByRole('button',{name:'Document obligation',exact:true}).click();
+    await expectSimpleDetails(page);
+    await draftDocumentation(page,heading,'The caller must uphold the documented preconditions.');
     await expect(page.locator('.diff')).toContainText(`/// # ${heading}`);
     const response=page.waitForResponse(r=>r.url().endsWith('/api/v1/apply'));
     await page.getByRole('button',{name:'Apply file & reanalyze'}).click();
@@ -74,25 +90,18 @@ for (const viewport of [{width:1440,height:900},{width:900,height:700},{width:14
     const second=page.locator('.finding').filter({has:page.locator('strong',{hasText:'::second'})});
     await expect(first).toBeVisible();await expect(page.locator('.status')).not.toContainText('running');await first.click();
     await expect(page.locator('.cm-editor')).toBeVisible();
-    const middle=page.getByLabel('Requirements and call trace');
-    const input=page.getByLabel('Documentation explanation');
+    await expectSimpleDetails(page);
+    const middle=page.getByLabel('Navigation and call trace');
     await expect(page.getByLabel('Selected effect')).toBeInViewport({ratio:1});
-    await expect(input).toBeInViewport({ratio:1});
-    await expect(page.getByRole('button',{name:'Document obligation',exact:true})).toBeInViewport({ratio:1});
     await expect.poll(()=>page.locator('.cm-scroller').evaluate(e=>e.scrollTop)).toBeGreaterThan(1000);
-    await input.fill('Keep this explanation while navigating the trace.');
     await middle.evaluate(e=>e.scrollTop=e.scrollHeight);
     const scroll=await middle.evaluate(e=>e.scrollTop);
     expect(scroll).toBeGreaterThan(0);
     await middle.locator('.trace button').last().click();
-    await expect(input).toHaveValue('Keep this explanation while navigating the trace.');
     await expect.poll(()=>middle.evaluate(e=>e.scrollTop)).toBe(scroll);
-    await expect(input).toBeInViewport({ratio:1});
     await second.click();
     await expect(page.locator('.finding.selected strong')).toContainText('::second');
     await expect.poll(()=>middle.evaluate(e=>e.scrollTop)).toBe(0);
-    await expect(input).toBeInViewport({ratio:1});
-    await expect(page.getByRole('button',{name:'Document obligation',exact:true})).toBeInViewport({ratio:1});
     expect(await page.evaluate(()=>({top:window.scrollY,height:document.documentElement.scrollHeight,viewport:innerHeight}))).toEqual({top:0,height:viewport.height,viewport:viewport.height});
     await page.screenshot({path:join(repo,`target/audit-layout-${viewport.width}x${viewport.height}.png`),fullPage:true});
   });
