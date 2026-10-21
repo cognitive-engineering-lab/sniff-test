@@ -74,7 +74,10 @@ cargo sniff-test --audit gui -e panic -- --all-features
 ```
 
 Select a finding to navigate its source, contract, and call trace. Write a
-justification or obligation through the guided actions, or edit source directly.
+justification with **✓ Justify here** above the operation, or propagate an
+obligation with **↑ Propagate to callers** at its enclosing function. These
+inline prompts insert a blank template and focus the explanation; fill it in
+before saving. You can also edit source directly.
 **Save draft** buffers an edit without changing source. **Review diff** shows the
 changes; **Apply file & reanalyze** writes that file and runs the analyzer again.
 Other files' drafts stay buffered. Existing source changes cause a conflict
@@ -95,9 +98,9 @@ with Ctrl-C. One server at a time can use a workspace's draft directory.
 The GUI is backed by `sniff-test-audit-bridge`, a Rust library shared with future
 frontends. `sniff-test-audit-gui` supplies HTTP and browser presentation. Neither
 crate depends on rustc internals. `sniff-test-report` defines the shared report
-envelope and frontend-neutral semantic facts. Report format 23 includes these
+envelope and frontend-neutral semantic facts. Report format 24 includes these
 facts in ordinary JSON output: typed trace kinds and marker associations,
-source/root/contract locations, effect metadata, original UTF-8 file offsets,
+source/root/contract and annotation attachment locations, effect metadata, original UTF-8 file offsets,
 and SHA-256 content hashes. Human output avoids constructing this extra source
 metadata. The bridge derives supported editing actions from these facts and the
 workspace boundaries; diagnostics has no audit mode or editing-action model.

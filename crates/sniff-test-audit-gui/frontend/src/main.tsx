@@ -1,13 +1,16 @@
 import React, {useEffect, useLayoutEffect, useRef, useState} from 'react';
 import {createRoot} from 'react-dom/client';
 import {EditorView, basicSetup} from 'codemirror';
-import {EditorState} from '@codemirror/state';
+import {EditorState, StateField, StateEffect} from '@codemirror/state';
+import {Decoration, WidgetType} from '@codemirror/view';
 import {rust} from '@codemirror/lang-rust';
 import './style.css';
 
 type Location = {path:string; start:number; end:number; available:boolean};
 type Buffer = {path:string; content:string; original:string; revision:number; writable:boolean; conflict:boolean};
-type Finding = {id:string; crate_name:string; effect?:string;kind:string;class?:string;level:string;root?:string;trace_id?:string;reason:string;requirements:string[];missing_requirements:string[];display_trace:string[]; audit?:{obligation:string; justification:string; source?:Location; root?:Location; contract?:Location; trace:{caller:string; target?:string; kind:string; location?:Location}[]}};
+type Target = {action:string; location:Location};
+type TemplateEdit = {path:string; revision:number; start:number; end:number; text:string; cursor:number};
+type Finding = {id:string; crate_name:string; effect?:string;kind:string;class?:string;level:string;root?:string;trace_id?:string;reason:string;requirements:string[];missing_requirements:string[];display_trace:string[]; audit?:{obligation:string; justification:string; source?:Location; root?:Location; contract?:Location; targets:Target[]; trace:{caller:string; target?:string; kind:string; location?:Location}[]}};
 type Summary = {id:string; crate_name:string; root:string; reason:string; level:string; effect:string; class:string; path?:string};
 type Status = {generation:number; running:boolean; stale:boolean; status:string; count:number; log:string};
 const token = location.hash.slice(1) || sessionStorage.getItem('audit-token') || '';
@@ -17,20 +20,70 @@ async function api(path:string, body?:unknown) {
   if (!response.ok) { const text = await response.text(); let error; try { error = JSON.parse(text).error; } catch {} throw Error(error || `Request failed (${response.status})`); }
   return response.json();
 }
-function Editor({buffer, location:target, onChange}:{buffer:Buffer; location?:Location; onChange:(text:string)=>void}) {
-  const holder = useRef<HTMLDivElement>(null);
+const setPromptsEnabled = StateEffect.define<boolean>();
+class DocumentationPrompt extends WidgetType {
+  constructor(readonly action:string, readonly run:()=>void) { super(); }
+  toDOM() {
+    const element=document.createElement('div');element.className='inline-prompt';
+    const button=document.createElement('button');button.type='button';
+    const justify=this.action==='justification';
+    button.textContent=justify?'✓ Justify here':'↑ Propagate to callers';
+    button.setAttribute('aria-label',justify?'Justify here':'Propagate to callers');
+    button.addEventListener('click',this.run);
+    const hint=document.createElement('span');
+    hint.textContent=justify?"Explain why this is valid":"Document the caller's obligation";
+    element.append(button,hint);return element;
+  }
+  ignoreEvent() { return true; }
+}
+function bytePosition(text:string, offset:number) { return new TextDecoder().decode(new TextEncoder().encode(text).slice(0,offset)).length; }
+function Editor({buffer, location:target, onChange, finding, enabled, prepare, onError}:{buffer:Buffer; location?:Location; onChange:(text:string)=>void; finding?:Finding; enabled:boolean; prepare:(target:Target)=>Promise<TemplateEdit>; onError:(error:string)=>void}) {
+  const holder = useRef<HTMLDivElement>(null), editorRef=useRef<EditorView | undefined>(undefined);
   const callback = useRef(onChange); callback.current = onChange;
+  const prepareRef=useRef(prepare);prepareRef.current=prepare;
+  const errorRef=useRef(onError);errorRef.current=onError;
   useEffect(()=>{
     if (!holder.current) return;
-    const view = new EditorView({parent:holder.current, state:EditorState.create({doc:buffer.content, extensions:[basicSetup,rust(), EditorView.lineWrapping, EditorState.readOnly.of(!buffer.writable), EditorView.updateListener.of(u=>{if(u.docChanged) callback.current(u.state.doc.toString());})]})});
+    let active=true;
+    let view:EditorView;
+    const widgets=(buffer.writable && !buffer.conflict && buffer.content===buffer.original ? finding?.audit?.targets || [] : []).filter(t=>t.location.path===buffer.path && t.location.available).flatMap(t=>{
+      const position=bytePosition(buffer.content,t.location.start);
+      const lineStart=buffer.content.lastIndexOf('\n',position-1)+1;
+      if(buffer.content.slice(lineStart,position).trim())return [];
+      const widget=new DocumentationPrompt(t.action,()=>{
+        const snapshot=view.state.doc.toString();
+        prepareRef.current(t).then(edit=>{
+          if(!active)return;
+          if(view.state.doc.toString()!==snapshot || edit.path!==buffer.path || edit.revision!==buffer.revision)throw Error('Source changed while preparing the template. Reanalyze before retrying.');
+          const from=bytePosition(snapshot,edit.start),to=bytePosition(snapshot,edit.end);
+          const updated=snapshot.slice(0,from)+edit.text+snapshot.slice(to);
+          const cursor=bytePosition(updated,edit.cursor);
+          view.dispatch({changes:edit.text?{from,to,insert:edit.text}:undefined,selection:{anchor:cursor},effects:EditorView.scrollIntoView(cursor,{y:'center'}),userEvent:'input'});
+          view.focus();
+        }).catch(e=>{if(active)errorRef.current(String(e));});
+      });
+      return [Decoration.widget({widget,block:true,side:-1}).range(lineStart)];
+    });
+    const originalPrompts=Decoration.set(widgets,true);
+    const prompts=StateField.define({
+      create:()=>({enabled,decorations:enabled?originalPrompts:Decoration.none}),
+      update:(value,tr)=>{
+        let allowed=value.enabled;
+        for(const effect of tr.effects)if(effect.is(setPromptsEnabled))allowed=effect.value;
+        if(!tr.docChanged && allowed===value.enabled)return value;
+        return {enabled:allowed,decorations:allowed && tr.newDoc.toString()===buffer.original?originalPrompts:Decoration.none};
+      },
+      provide:field=>EditorView.decorations.from(field,value=>value.decorations),
+    });
+    view = new EditorView({parent:holder.current, state:EditorState.create({doc:buffer.content, extensions:[basicSetup,rust(),prompts, EditorView.lineWrapping, EditorState.readOnly.of(!buffer.writable), EditorView.updateListener.of(u=>{if(u.docChanged) callback.current(u.state.doc.toString());})]})});
+    editorRef.current=view;
     if(target?.available && target.path === buffer.path && buffer.content === buffer.original) {
-      const bytes = new TextEncoder().encode(buffer.content);
-      const from = new TextDecoder().decode(bytes.slice(0,target.start)).length;
-      const to = new TextDecoder().decode(bytes.slice(0,target.end)).length;
+      const from = bytePosition(buffer.content,target.start),to=bytePosition(buffer.content,target.end);
       if (to <= view.state.doc.length) view.dispatch({selection:{anchor:from,head:to},effects:EditorView.scrollIntoView(from,{y:'center'})});
     }
-    return ()=>view.destroy();
-  },[buffer.path,buffer.revision,target?.start]);
+    return ()=>{active=false;editorRef.current=undefined;view.destroy();};
+  },[buffer.path,buffer.revision,target?.start,finding?.id]);
+  useEffect(()=>{editorRef.current?.dispatch({effects:setPromptsEnabled.of(enabled)});},[enabled]);
   return <div className="editor" ref={holder} aria-label="Rust source editor"/>;
 }
 function App() {
@@ -83,11 +136,18 @@ function App() {
     </aside>
     <main><div className="toolbar"><button disabled={!nav.length||busy} onClick={()=>act(async()=>{const previous=nav[nav.length-1];setNav(n=>n.slice(0,-1));await open(previous,false);})}>← Back</button><span className="filename">{buffer?.path.replace(root+'/','')||'Source workspace'}</span>{buffer&&<><button onClick={()=>setView('source')}>Source</button><button onClick={()=>act(()=>review())}>Review diff</button></>}</div>
       {buffer?<><div className="buffer-state">{buffer.writable?'Workspace source':'Read-only dependency'}{unsaved?' · unsaved editor changes':buffer.content!==buffer.original?' · draft saved':''}{buffer.conflict&&<strong> · External file changed. Copy your draft, discard it, then reapply your changes to the current source.</strong>}</div>
-      {view==='source'?<Editor buffer={buffer} location={target} onChange={setText}/>:<pre className="diff">{diff||'No changes to review.'}</pre>}
+      {view==='source'?<Editor buffer={buffer} location={target} onChange={setText} finding={selected} enabled={!status.running&&!status.stale&&!unsaved} onError={setError} prepare={async t=>{
+        if(!selected||!buffer||unsaved)throw Error('Save or discard editor changes before inserting a template.');
+        return api('template',{id:selected.id,action:t.action,revision:buffer.revision});
+      }}/>:<pre className="diff">{diff||'No changes to review.'}</pre>}
       <footer>{view==='source'?<button className="primary" disabled={!buffer.writable||!unsaved||busy||status.running} onClick={()=>act(async()=>{await save();})}>Save draft</button>:<button className="primary" disabled={buffer.conflict||!diff||busy||status.running} onClick={()=>act(async()=>{await api('apply',{path:buffer.path,revision:buffer.revision});await open({path:buffer.path,start:0,end:0,available:true});await refreshDrafts();})}>Apply file & reanalyze</button>}<button disabled={busy||status.running||buffer.content===buffer.original} onClick={()=>act(async()=>{await api('discard',{path:buffer.path,revision:buffer.revision});await open({path:buffer.path,start:0,end:0,available:true});await refreshDrafts();})}>Discard draft</button><small>Drafts stay separate from source until applied.</small></footer></>:<div className="welcome"><span className="eyebrow">WORKSPACE AUDIT</span><h1>Follow the effect.<br/>Document the reasoning.</h1><p>Select a finding to explore its source, trace the calls, and draft a justification or obligation.</p><div className="steps">01 Inspect &nbsp; → &nbsp; 02 Draft &nbsp; → &nbsp; 03 Review</div></div>}
     </main>
     <aside className="details" aria-label="Effect details">{selected?<><section className="effect-summary" aria-label="Selected effect"><div className="section-title">FINDING DETAILS</div><p>{selected.reason}</p><small>{selected.crate_name} · trace {selected.trace_id||'unavailable'}</small></section>
       <div className="details-scroll" ref={detailsScroll} tabIndex={0} aria-label="Navigation and call trace"><h3>Navigate</h3>{[['Report root',selected.audit?.root],['Effect source',selected.audit?.source],['Contract',selected.audit?.contract]].map(([label,l])=><button className="link" key={label as string} disabled={!l} onClick={()=>act(()=>open(l as Location))}>{label as string}{!(l as Location)?.available?' · unavailable':''}</button>)}
+      {selected.audit?.targets.map(t=><button className="link" key={t.action} onClick={()=>act(()=>open(t.location))}>{t.action==='justification'?'Justification location':'Obligation location'}</button>)}
+      {buffer&&!buffer.writable&&<p className="hint">Dependency source is read-only. Contract documentation can be supplied through an override file.</p>}
+      {selected.audit&&!selected.audit.targets.length&&<p className="hint">No verified documentation attachment location is available. Inspect the source and edit manually where appropriate.</p>}
+      {unsaved||buffer?.content!==buffer?.original?<p className="hint">Revert to the original source to restore inline prompts, or apply edits and reanalyze.</p>:null}
       <h3>Call trace</h3><ol className="trace">{selected.audit?.trace.map((step,i)=><li key={i}><button disabled={!step.location} onClick={()=>act(()=>open(step.location!))}>{step.caller}<span>{step.kind} → {step.target||'effect operation'}</span></button></li>)}</ol></div>
     </>:<div className="empty">Select a finding to inspect its contract and call trace.</div>}</aside></div>
     <div className="analysis-log"><button onClick={()=>setLogs(!logs)}>{logs?'▾':'▸'} Analysis output</button><span>{status.count} findings · {drafts.length} saved drafts</span>{logs&&<pre>{status.log||'Waiting for analysis output…'}</pre>}</div>

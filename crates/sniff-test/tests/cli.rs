@@ -3826,7 +3826,7 @@ fn json_semantics_preserve_source_facts_without_audit_mode() {
         assert!(!reports.is_empty(), "{}", output.stderr);
         let mut count = 0;
         for report in reports {
-            assert_eq!(report["format-version"], 23);
+            assert_eq!(report["format-version"], 24);
             for finding in report["findings"].as_array().unwrap() {
                 assert!(finding.get("audit").is_none());
                 if finding["kind"] != "effect" {

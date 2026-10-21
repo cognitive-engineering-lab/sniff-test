@@ -86,6 +86,7 @@ fn router(app: App) -> Router {
         .route("/drafts", get(drafts))
         .route("/diff", get(diff))
         .route("/propose", post(propose))
+        .route("/template", post(template))
         .route("/apply", post(apply))
         .route("/discard", post(discard))
         .layer(middleware::from_fn_with_state(app.clone(), authorize));
@@ -305,6 +306,20 @@ async fn discard(State(app): State<App>, Json(edit): Json<Revision>) -> ApiResul
         .discard(&edit.path, edit.revision)?;
     Ok(Json(json!({"discarded":true})))
 }
+#[derive(Deserialize)]
+struct TemplateRequest {
+    id: String,
+    action: String,
+    revision: u64,
+}
+async fn template(State(app): State<App>, Json(edit): Json<TemplateRequest>) -> ApiResult {
+    Ok(Json(json!(app.session.lock().unwrap().prepare_template(
+        &edit.id,
+        &edit.action,
+        edit.revision
+    )?)))
+}
+
 #[derive(Deserialize)]
 struct Proposal {
     id: String,

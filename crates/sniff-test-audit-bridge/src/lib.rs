@@ -41,7 +41,7 @@ fn adapt_semantics(facts: SemanticFacts, finding: &Value) -> AuditMetadata {
     );
     if source_kind {
         if facts.obligation.is_some() {
-            if let Some(location) = facts.root.as_ref().filter(|l| l.available) {
+            if let Some(location) = facts.enclosing_function.as_ref().filter(|l| l.available) {
                 targets.push(EditTarget {
                     action: "obligation".into(),
                     location: location.clone(),
@@ -56,7 +56,7 @@ fn adapt_semantics(facts: SemanticFacts, finding: &Value) -> AuditMetadata {
             && finding["owner"]["scope"] == "workspace"
             && (invocation || class == "concrete-operation")
         {
-            if let Some(location) = facts.source.as_ref().filter(|l| l.available) {
+            if let Some(location) = facts.justification_site.as_ref().filter(|l| l.available) {
                 targets.push(EditTarget {
                     action: "justification".into(),
                     location: location.clone(),
@@ -467,6 +467,42 @@ impl Session {
             }
         }
     }
+    /// Prepare an editor transaction without changing buffers or source files.
+    pub fn prepare_template(
+        &mut self,
+        id: &str,
+        action: &str,
+        revision: u64,
+    ) -> Result<TemplateEdit> {
+        ensure!(
+            !self.analysis.running && !self.analysis.stale,
+            "reanalyze saved source before inserting documentation"
+        );
+        let audit = self
+            .analysis
+            .findings
+            .iter()
+            .find(|f| f.id == id)
+            .and_then(|f| f.audit.clone())
+            .context("finding no longer has source metadata")?;
+        let target = audit
+            .targets
+            .iter()
+            .find(|t| t.action == action)
+            .context("no verified attachment location; edit source manually")?;
+        self.checked_path(&target.location.path, true)?;
+        let buffer = self.buffer(&target.location.path)?;
+        ensure!(
+            buffer.revision == revision && !buffer.dirty() && !buffer.conflict,
+            "apply or discard edits and reanalyze before inserting a template"
+        );
+        ensure!(
+            content_hash(buffer.content.as_bytes()) == target.location.hash,
+            "source changed since analysis; reanalyze"
+        );
+        template_edit(&buffer, target, &audit)
+    }
+
     pub fn propose(
         &mut self,
         id: &str,
@@ -512,6 +548,88 @@ impl Session {
         )?;
         self.update(&buffer.path, revision, content)
     }
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct TemplateEdit {
+    pub path: String,
+    pub revision: u64,
+    pub start: usize,
+    pub end: usize,
+    pub text: String,
+    pub cursor: usize,
+}
+
+fn template_edit(
+    buffer: &Buffer,
+    target: &EditTarget,
+    audit: &AuditMetadata,
+) -> Result<TemplateEdit> {
+    let source = &buffer.content;
+    let start = target.location.start;
+    ensure!(
+        start <= source.len() && source.is_char_boundary(start),
+        "source position unavailable"
+    );
+    let line_start = source[..start].rfind('\n').map_or(0, |i| i + 1);
+    // Existing contiguous documentation is an editing destination, not another insertion.
+    let needle = if target.action == "justification" {
+        format!("// {}:", audit.justification.trim_end_matches(':'))
+    } else {
+        format!("/// # {}", audit.obligation.trim_start_matches('#').trim())
+    };
+    let mut offset = line_start;
+    for line in source[..line_start].split_inclusive('\n').rev() {
+        offset -= line.len();
+        let trimmed = line.trim();
+        if !(trimmed.starts_with("//") || (trimmed.starts_with("#[") && trimmed.ends_with(']'))) {
+            break;
+        }
+        if trimmed.starts_with(&needle) && (target.action == "justification" || trimmed == needle) {
+            let cursor = offset + line.trim_end_matches(['\r', '\n']).len();
+            return Ok(TemplateEdit {
+                path: buffer.path.clone(),
+                revision: buffer.revision,
+                start: cursor,
+                end: cursor,
+                text: String::new(),
+                cursor,
+            });
+        }
+    }
+    let changed = documentation_edit(source, &target.location, &target.action, audit, "")?;
+    // The documentation helper inserts a contiguous block without modifying existing source.
+    let mut insertion = source
+        .bytes()
+        .zip(changed.bytes())
+        .take_while(|(a, b)| a == b)
+        .count();
+    while !source.is_char_boundary(insertion) || !changed.is_char_boundary(insertion) {
+        insertion -= 1;
+    }
+    let added = changed.len() - source.len();
+    let text = changed[insertion..insertion + added].to_owned();
+    ensure!(
+        format!("{}{}{}", &source[..insertion], text, &source[insertion..]) == changed,
+        "template cannot be inserted safely"
+    );
+    // Common-prefix insertion can leave the original indentation after the inserted newline.
+    let line_end = changed[..insertion + added]
+        .rfind('\n')
+        .context("template has no line ending")?;
+    let cursor = if changed.as_bytes().get(line_end.wrapping_sub(1)) == Some(&b'\r') {
+        line_end - 1
+    } else {
+        line_end
+    };
+    Ok(TemplateEdit {
+        path: buffer.path.clone(),
+        revision: buffer.revision,
+        start: insertion,
+        end: insertion,
+        text,
+        cursor,
+    })
 }
 
 fn atomic_write(path: &Path, bytes: &[u8]) -> Result<()> {
@@ -563,14 +681,21 @@ pub fn documentation_edit(
                 .is_some_and(|l| l.trim_start().starts_with("//")),
             "existing comment block: update its justification in the source editor"
         );
-        comment = format!(
-            "{prefix}// {}:{newline}{}",
-            audit.justification.trim_end_matches(':'),
-            explanation
-                .lines()
-                .map(|l| format!("{prefix}// {l}{newline}"))
-                .collect::<String>()
-        );
+        comment = if explanation.is_empty() {
+            format!(
+                "{prefix}// {}: {newline}",
+                audit.justification.trim_end_matches(':')
+            )
+        } else {
+            format!(
+                "{prefix}// {}:{newline}{}",
+                audit.justification.trim_end_matches(':'),
+                explanation
+                    .lines()
+                    .map(|l| format!("{prefix}// {l}{newline}"))
+                    .collect::<String>()
+            )
+        };
     } else if action == "obligation" {
         // Walk contiguous outer docs and single-line attributes. Complex attributes require manual editing.
         let mut docs_start = line_start;
@@ -616,10 +741,14 @@ pub fn documentation_edit(
             }
             offset += line.len();
         }
-        let body = explanation
-            .lines()
-            .map(|l| format!("{prefix}/// {l}{newline}"))
-            .collect::<String>();
+        let body = if explanation.is_empty() {
+            format!("{prefix}/// {newline}")
+        } else {
+            explanation
+                .lines()
+                .map(|l| format!("{prefix}/// {l}{newline}"))
+                .collect::<String>()
+        };
         comment = if found {
             format!("{prefix}///{newline}{body}")
         } else {
@@ -675,6 +804,8 @@ mod tests {
             justification: Some("CUSTOM".into()),
             source: Some(location.clone()),
             root: Some(location.clone()),
+            enclosing_function: Some(location.clone()),
+            justification_site: Some(location.clone()),
             contract: None,
             trace: vec![TraceStep {
                 caller: "caller".into(),
@@ -722,8 +853,8 @@ mod tests {
             assert_eq!(adapt_semantics(facts, &finding).targets.len(), expected);
         }
         let mut unavailable = facts;
-        unavailable.source.as_mut().unwrap().available = false;
-        unavailable.root.as_mut().unwrap().available = false;
+        unavailable.justification_site.as_mut().unwrap().available = false;
+        unavailable.enclosing_function.as_mut().unwrap().available = false;
         assert!(
             adapt_semantics(
                 unavailable,
@@ -874,6 +1005,95 @@ mod tests {
             )
             .unwrap(),
             "    // ALLOC:\r\n    // Requirements:\r\n    // - capacity: checked λ\r\n    allocate();\r\n"
+        );
+    }
+    #[test]
+    fn templates_preserve_unicode_crlf_and_navigate_existing_sections() {
+        for source in [
+            "// λ\r\n#[inline]\r\npub fn allocate() {}\r\n",
+            "/// # Allocations\r\n/// Existing λ.\r\n#[inline]\r\npub fn allocate() {}\r\n",
+        ] {
+            let location = Location {
+                path: "lib.rs".into(),
+                source_id: "id".into(),
+                hash: content_hash(source.as_bytes()),
+                start: source.find("pub fn").unwrap(),
+                end: source.len(),
+                available: true,
+            };
+            let audit = metadata(location.clone());
+            let buffer = Buffer {
+                path: "lib.rs".into(),
+                original: source.into(),
+                content: source.into(),
+                revision: 1,
+                writable: true,
+                conflict: false,
+            };
+            let edit = template_edit(
+                &buffer,
+                &EditTarget {
+                    action: "obligation".into(),
+                    location,
+                },
+                &audit,
+            )
+            .unwrap();
+            let updated = format!(
+                "{}{}{}",
+                &source[..edit.start],
+                edit.text,
+                &source[edit.end..]
+            );
+            assert_eq!(updated.matches("# Allocations").count(), 1);
+            assert!(updated.is_char_boundary(edit.cursor));
+            assert_eq!(buffer.content, source);
+            if source.contains("# Allocations") {
+                assert!(edit.text.is_empty());
+            } else {
+                assert!(updated.contains("/// # Allocations\r\n///\r\n/// \r\n"));
+            }
+        }
+    }
+    #[test]
+    fn indented_template_cursor_is_after_marker_not_on_source_line() {
+        let source = "fn f() {\r\n    allocate();\r\n}\r\n";
+        let location = Location {
+            path: "lib.rs".into(),
+            source_id: "id".into(),
+            hash: content_hash(source.as_bytes()),
+            start: source.find("allocate").unwrap(),
+            end: source.len(),
+            available: true,
+        };
+        let audit = metadata(location.clone());
+        let buffer = Buffer {
+            path: "lib.rs".into(),
+            original: source.into(),
+            content: source.into(),
+            revision: 1,
+            writable: true,
+            conflict: false,
+        };
+        let edit = template_edit(
+            &buffer,
+            &EditTarget {
+                action: "justification".into(),
+                location,
+            },
+            &audit,
+        )
+        .unwrap();
+        let mut updated = format!(
+            "{}{}{}",
+            &source[..edit.start],
+            edit.text,
+            &source[edit.end..]
+        );
+        updated.insert_str(edit.cursor, "Capacity checked λ.");
+        assert_eq!(
+            updated,
+            "fn f() {\r\n    // ALLOC: Capacity checked λ.\r\n    allocate();\r\n}\r\n"
         );
     }
 }

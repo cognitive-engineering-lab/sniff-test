@@ -2,7 +2,7 @@
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
-pub const REPORT_FORMAT_VERSION: u32 = 23;
+pub const REPORT_FORMAT_VERSION: u32 = 24;
 
 pub fn content_hash(bytes: &[u8]) -> String {
     format!("{:x}", Sha256::digest(bytes))
@@ -72,6 +72,8 @@ pub struct SemanticFacts {
     pub justification: Option<String>,
     pub source: Option<Location>,
     pub root: Option<Location>,
+    pub enclosing_function: Option<Location>,
+    pub justification_site: Option<Location>,
     pub contract: Option<Location>,
     pub trace: Vec<TraceStep>,
 }

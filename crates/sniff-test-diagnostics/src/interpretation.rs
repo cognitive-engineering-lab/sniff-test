@@ -7,7 +7,7 @@ use std::sync::Arc;
 
 use rustc_hir::def_id::LOCAL_CRATE;
 use rustc_middle::ty::TyCtxt;
-use rustc_span::{BytePos, Span};
+use rustc_span::{BytePos, Pos, Span};
 use sniff_test_core::artifact::{
     ArtifactFacts, CallFact, CallId, CallKindFact, ContractRequirementFact, EffectKey,
     FunctionFact, FunctionId, SourceFileFact, SourceRangeFact, StableDefPathHash,
@@ -268,6 +268,9 @@ fn adapt_finding(
         .then(|| report_root_containment_span(sources, &finding.trace))
         .flatten();
 
+    let annotation_locations = sources
+        .structured_output
+        .then(|| sources.local_annotation_locations(finding));
     let semantics = sources
         .structured_output
         .then(|| sniff_test_report::SemanticFacts {
@@ -280,6 +283,12 @@ fn adapt_finding(
                     .function_body(root.function)
                     .and_then(|f| f.source_range.as_ref()),
             ),
+            enclosing_function: annotation_locations
+                .as_ref()
+                .and_then(|locations| locations.0.clone()),
+            justification_site: annotation_locations
+                .as_ref()
+                .and_then(|locations| locations.1.clone()),
             contract: sources.semantic_location(finding.contract_source_range.as_ref()),
             trace: sources.semantic_trace(&finding.trace),
         });
@@ -1559,6 +1568,8 @@ fn adapt_incomplete(
                     .function_body(root.function)
                     .and_then(|f| f.source_range.as_ref()),
             ),
+            enclosing_function: None,
+            justification_site: None,
             contract: None,
             trace: sources.semantic_trace(&trace),
         });
@@ -2203,6 +2214,51 @@ impl SourceResolver<'_, '_> {
                 .artifacts()
                 .find_map(|artifact| artifact.facts.defining_function_body(function))
         })
+    }
+
+    fn local_annotation_locations(
+        &self,
+        finding: &InterpretedFinding,
+    ) -> (
+        Option<sniff_test_report::Location>,
+        Option<sniff_test_report::Location>,
+    ) {
+        use sniff_test_core::source_markers::{MarkerProbe, immediate_statement_span};
+        let Some(owner) = self.tcx.hir_body_owners().find(|id| {
+            StableDefPathHash::from_def_id(self.tcx, id.to_def_id())
+                == finding.function.def_path_hash
+        }) else {
+            return (None, None);
+        };
+        let enclosing = if matches!(
+            self.tcx.def_kind(owner),
+            rustc_hir::def::DefKind::Fn | rustc_hir::def::DefKind::AssocFn
+        ) {
+            self.semantic_location(
+                self.function_body(finding.function)
+                    .and_then(|body| body.source_range.as_ref()),
+            )
+        } else {
+            None
+        };
+        let Some(range) = finding.source_range.as_ref() else {
+            return (enclosing, None);
+        };
+        let Some(span) = self.resolve(Some(range)).0 else {
+            return (enclosing, None);
+        };
+        let statement = match immediate_statement_span(self.tcx, owner, span) {
+            MarkerProbe::Present(statement) => statement,
+            _ => span,
+        };
+        let file = self.tcx.sess.source_map().lookup_source_file(span.lo());
+        if statement.lo() < file.start_pos || statement.hi() > file.end_position() {
+            return (enclosing, None);
+        }
+        let mut site = range.clone();
+        site.byte_start = u64::from((statement.lo() - file.start_pos).to_u32());
+        site.byte_end = u64::from((statement.hi() - file.start_pos).to_u32());
+        (enclosing, self.semantic_location(Some(&site)))
     }
 
     fn semantic_trace(&self, trace: &InterpretedTrace) -> Vec<sniff_test_report::TraceStep> {

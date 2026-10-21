@@ -308,7 +308,11 @@ pub(crate) fn source_override_anchor_spans(
     anchors
 }
 
-fn immediate_statement_span(tcx: TyCtxt<'_>, owner: LocalDefId, target: Span) -> MarkerProbe<Span> {
+pub fn immediate_statement_span(
+    tcx: TyCtxt<'_>,
+    owner: LocalDefId,
+    target: Span,
+) -> MarkerProbe<Span> {
     // Reachability can use a required trait method as the origin of a
     // synthetic edge even though the method has no source body. Asking for
     // THIR in that case ICEs in `hir_body_owned_by` before `thir_body` can
