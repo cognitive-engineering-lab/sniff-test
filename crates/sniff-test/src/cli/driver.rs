@@ -135,6 +135,7 @@ pub(crate) fn analyze_crate(
         &effects,
         &cli_effects,
         &item_effects,
+        args.message_format == MessageFormat::Json,
     ) {
         Ok(findings) => findings,
         Err(error) => {

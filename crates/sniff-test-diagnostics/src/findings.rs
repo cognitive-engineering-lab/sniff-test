@@ -27,6 +27,8 @@ pub const FULL_STACK_TRACE_HINT: &str = "set `show-full-stack-trace = true` unde
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "kebab-case")]
 pub struct Finding {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub semantics: Option<sniff_test_report::SemanticFacts>,
     #[serde(flatten)]
     pub kind: FindingKind,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -97,6 +99,7 @@ impl Finding {
     #[must_use]
     pub fn new(kind: FindingKind, reason: String, diagnostic: FindingDiagnostic) -> Self {
         Self {
+            semantics: None,
             kind,
             trace_id: None,
             root: None,

@@ -38,6 +38,7 @@ fn try_cargo_frontend() -> Result<ExitCode> {
     let mut parsed_args = match cli.into_action() {
         FrontendAction::Run(args) => *args,
         FrontendAction::Init(args) => return run_init(&args),
+        FrontendAction::Audit(args) => return run_audit(&args),
     };
     if parsed_args.explain.is_some() && parsed_args.message_format == MessageFormat::Json {
         bail!("--explain requires human diagnostic output");
@@ -116,6 +117,29 @@ fn try_cargo_frontend() -> Result<ExitCode> {
         return Ok(ExitCode::FAILURE);
     };
     Ok(ExitCode::from(u8::try_from(code).unwrap_or(1)))
+}
+
+fn run_audit(args: &SniffTestArgs) -> Result<ExitCode> {
+    let mut metadata = cargo_metadata::MetadataCommand::new();
+    metadata.other_options(metadata_cargo_args(&args.cargo_args));
+    let metadata = metadata
+        .exec()
+        .context("failed to read Cargo workspace for audit")?;
+    let config = sniff_test_audit_bridge::AnalysisConfig {
+        executable: std::env::current_exe()?,
+        directory: std::env::current_dir()?,
+        arguments: sniff_test_audit_bridge::analysis_arguments(std::env::args().skip(1)),
+    };
+    let session = sniff_test_audit_bridge::Session::open(
+        metadata.workspace_root.into_std_path_buf(),
+        metadata
+            .target_directory
+            .join("sniff-test-audit")
+            .into_std_path_buf(),
+        config,
+    )?;
+    sniff_test_audit_gui::serve(session)?;
+    Ok(ExitCode::SUCCESS)
 }
 
 fn workspace_run_id() -> String {

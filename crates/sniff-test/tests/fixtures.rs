@@ -743,6 +743,9 @@ fn normalize_json(value: &mut Value, fixture_root: &Path, sysroot: &str) {
     // Keep snapshots about report content, not run-local paths or fingerprints.
     match value {
         Value::Object(map) => {
+            // Semantic transport is tested against actual source bytes in cli.rs.
+            // These snapshots retain their existing diagnostic-content projection.
+            map.remove("semantics");
             for (key, value) in map {
                 if key == "rustc-version" {
                     *value = Value::String(String::from("[RUSTC_VERSION]"));

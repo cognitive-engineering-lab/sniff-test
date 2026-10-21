@@ -57,6 +57,7 @@ pub fn interpret_workspace<'tcx>(
     effects: &[Box<dyn Effect + '_>],
     cli_effects: &BTreeSet<EffectKey>,
     item_effects: &BTreeMap<String, BTreeSet<EffectKey>>,
+    structured_output: bool,
 ) -> Result<Vec<Finding>, EffectReportError> {
     let roots = report_roots
         .iter()
@@ -119,7 +120,9 @@ pub fn interpret_workspace<'tcx>(
     let sources = SourceResolver {
         tcx,
         cache: CachedSourceMap::new(tcx.sess.source_map()),
+        structured_output,
         rendered_steps: RenderedTraceCache::default(),
+        semantic_sources: RefCell::new(HashMap::new()),
         local,
         local_stable_crate_id,
         dependencies,
@@ -265,7 +268,23 @@ fn adapt_finding(
         .then(|| report_root_containment_span(sources, &finding.trace))
         .flatten();
 
+    let semantics = sources
+        .structured_output
+        .then(|| sniff_test_report::SemanticFacts {
+            effect: finding.effect.key.as_str().to_owned(),
+            obligation: Some(finding.effect.obligation.to_owned()),
+            justification: Some(finding.effect.justification.to_owned()),
+            source: sources.semantic_location(finding.source_range.as_ref()),
+            root: sources.semantic_location(
+                sources
+                    .function_body(root.function)
+                    .and_then(|f| f.source_range.as_ref()),
+            ),
+            contract: sources.semantic_location(finding.contract_source_range.as_ref()),
+            trace: sources.semantic_trace(&finding.trace),
+        });
     Finding {
+        semantics,
         root: Some(root.path.clone()),
         root_kind: Some(root.kind),
         root_span: root_span.map(|span| render_span(sources.tcx, span)),
@@ -1528,7 +1547,23 @@ fn adapt_incomplete(
         TracePresentation::CompletenessFinding,
     );
     add_root_trace_summary(&mut diagnostic, root, root_span, &trace_destination);
+    let semantics = sources
+        .structured_output
+        .then(|| sniff_test_report::SemanticFacts {
+            effect: domain.to_owned(),
+            obligation: None,
+            justification: None,
+            source: sources.semantic_location(range.as_ref()),
+            root: sources.semantic_location(
+                sources
+                    .function_body(root.function)
+                    .and_then(|f| f.source_range.as_ref()),
+            ),
+            contract: None,
+            trace: sources.semantic_trace(&trace),
+        });
     Finding {
+        semantics,
         root: Some(root.path.clone()),
         root_kind: Some(root.kind),
         root_span: root_span.map(|span| render_span(sources.tcx, span)),
@@ -2098,10 +2133,18 @@ fn render_requirement(requirement: &ContractRequirementFact) -> String {
     }
 }
 
+struct SemanticSource {
+    path: String,
+    raw: Option<String>,
+    hash: String,
+}
+
 struct SourceResolver<'tcx, 'analysis> {
     tcx: TyCtxt<'tcx>,
     cache: CachedSourceMap<'tcx>,
     rendered_steps: RenderedTraceCache,
+    structured_output: bool,
+    semantic_sources: RefCell<HashMap<String, SemanticSource>>,
     local: &'analysis ArtifactFacts,
     local_stable_crate_id: u64,
     dependencies: &'analysis ArtifactAnalysisGraph,
@@ -2159,6 +2202,89 @@ impl SourceResolver<'_, '_> {
             self.dependencies
                 .artifacts()
                 .find_map(|artifact| artifact.facts.defining_function_body(function))
+        })
+    }
+
+    fn semantic_trace(&self, trace: &InterpretedTrace) -> Vec<sniff_test_report::TraceStep> {
+        use sniff_test_report::{MarkerAssociation, TraceKind, TraceStep};
+        trace
+            .steps
+            .iter()
+            .map(|step| TraceStep {
+                caller: step.caller_path.clone(),
+                target: step.target_path.clone(),
+                kind: match step.kind {
+                    InterpretedTraceStepKind::EffectOperation => TraceKind::EffectOperation,
+                    InterpretedTraceStepKind::Reachability(kind) => match kind {
+                        CallKindFact::DirectCall => TraceKind::DirectCall,
+                        CallKindFact::TailCall => TraceKind::TailCall,
+                        CallKindFact::MacroExpansion => TraceKind::MacroExpansion,
+                        CallKindFact::ConstBody => TraceKind::ConstBody,
+                        CallKindFact::ModeledCall => TraceKind::ModeledCall,
+                        CallKindFact::Assert => TraceKind::Assert,
+                        CallKindFact::IndirectCall => TraceKind::IndirectCall,
+                    },
+                },
+                marker_association: if step.marker_call.is_some() {
+                    MarkerAssociation::SourceInvocation
+                } else {
+                    MarkerAssociation::None
+                },
+                location: self.semantic_location(step.source_range.as_ref()),
+            })
+            .collect()
+    }
+
+    fn semantic_location(
+        &self,
+        range: Option<&SourceRangeFact>,
+    ) -> Option<sniff_test_report::Location> {
+        let range = range?;
+        let source = self.source_file(range)?;
+        let mut semantic_sources = self.semantic_sources.borrow_mut();
+        let cached = semantic_sources
+            .entry(source.filename.clone())
+            .or_insert_with(|| {
+                let path = Path::new(&source.filename)
+                    .canonicalize()
+                    .unwrap_or_else(|_| PathBuf::from(&source.filename));
+                let raw = std::fs::read_to_string(&path).ok();
+                let hash = raw
+                    .as_ref()
+                    .map(|s| sniff_test_report::content_hash(s.as_bytes()))
+                    .unwrap_or_default();
+                SemanticSource {
+                    path: path.to_string_lossy().into_owned(),
+                    raw,
+                    hash,
+                }
+            });
+        let verified = self.resolve(Some(range)).0.is_some_and(|span| {
+            let loaded = self.tcx.sess.source_map().lookup_source_file(span.lo());
+            cached.raw.as_ref().is_some_and(|raw| {
+                let normalized = raw
+                    .strip_prefix('\u{feff}')
+                    .unwrap_or(raw)
+                    .replace("\r\n", "\n");
+                loaded
+                    .src
+                    .as_ref()
+                    .is_some_and(|text| text.as_str() == normalized)
+            })
+        });
+        let offsets = cached.raw.as_ref().and_then(|raw| {
+            Some((
+                sniff_test_report::original_offset(raw, range.byte_start as usize)?,
+                sniff_test_report::original_offset(raw, range.byte_end as usize)?,
+            ))
+        });
+        Some(sniff_test_report::Location {
+            path: cached.path.clone(),
+            source_id: source.id.as_str().to_owned(),
+            hash: cached.hash.clone(),
+            start: offsets.map_or(0, |o| o.0),
+            end: offsets.map_or(0, |o| o.1),
+            available: verified && offsets.is_some(),
         })
     }
 

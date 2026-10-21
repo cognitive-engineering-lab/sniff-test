@@ -109,6 +109,9 @@ fn parse_trace_id(value: &str) -> Result<String, String> {
     after_help = "Cargo arguments after `--` are passed to `cargo check`."
 )]
 pub(super) struct FrontendCli {
+    /// Open the local interactive auditing interface.
+    #[arg(long, value_enum, conflicts_with = "explain")]
+    audit: Option<AuditMode>,
     #[command(flatten)]
     common: CommonCliArgs,
 
@@ -132,6 +135,11 @@ pub(super) struct FrontendCli {
     cargo_args: Vec<String>,
 }
 
+#[derive(Debug, Clone, Copy, ValueEnum)]
+enum AuditMode {
+    Gui,
+}
+
 #[derive(Debug, Subcommand)]
 enum FrontendCommand {
     /// Write a sample sniff-test.toml.
@@ -150,6 +158,7 @@ pub(super) struct InitCliArgs {
 }
 
 pub(super) enum FrontendAction {
+    Audit(Box<SniffTestArgs>),
     Run(Box<SniffTestArgs>),
     Init(InitCliArgs),
 }
@@ -177,7 +186,11 @@ impl FrontendCli {
             .any(|arg| arg == "--profile" || arg.starts_with("--profile="));
         args.release = !self.debug && !cargo_profile_is_explicit;
         args.cargo_args = self.cargo_args;
-        FrontendAction::Run(Box::new(args))
+        if self.audit.is_some() {
+            FrontendAction::Audit(Box::new(args))
+        } else {
+            FrontendAction::Run(Box::new(args))
+        }
     }
 }
 
@@ -320,6 +333,36 @@ mod tests {
 
     use super::{CrateOutputScope, DriverCli, FrontendAction, FrontendCli, MessageFormat};
     use sniff_test_core::artifact::EffectKey;
+
+    #[test]
+    fn audit_dispatch_retains_analysis_options_and_rejects_unknown_modes() {
+        let cli = FrontendCli::try_parse_from([
+            "cargo-sniff-test",
+            "--audit",
+            "gui",
+            "-e",
+            "allocation",
+            "--",
+            "--all-features",
+        ])
+        .unwrap();
+        let FrontendAction::Audit(args) = cli.into_action() else {
+            panic!("expected audit action")
+        };
+        assert_eq!(args.explicit_effects, [EffectKey::new("allocation")]);
+        assert_eq!(args.cargo_args, ["--all-features"]);
+        assert!(FrontendCli::try_parse_from(["cargo-sniff-test", "--audit", "tui"]).is_err());
+        assert!(
+            FrontendCli::try_parse_from([
+                "cargo-sniff-test",
+                "--audit",
+                "gui",
+                "--explain",
+                "0123456789"
+            ])
+            .is_err()
+        );
+    }
 
     #[test]
     fn sort_flag_survives_driver_transport_and_defaults_off() {

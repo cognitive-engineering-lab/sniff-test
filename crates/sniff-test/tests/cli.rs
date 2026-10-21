@@ -3810,3 +3810,86 @@ fn source_justification_overrides_isolate_crates_and_versions_sharing_source_fil
     assert!(mismatched.contains("source_justification_overrides::mirrored_control"));
     assert!(!mismatched.contains("source_justification_overrides::local_selected"));
 }
+
+#[test]
+fn json_semantics_preserve_source_facts_without_audit_mode() {
+    let repo = repo_root();
+    let binary = PathBuf::from(env!("CARGO_BIN_EXE_cargo-sniff-test"));
+    for fixture in ["direct_panic", "macro_expansion", "trace_depth_limit"] {
+        let case = Case::new().args(&["-e", "panic", "--message-format", "json"]);
+        let (output, _, _temp) = run_case(&repo, &binary, "semantic_transport", fixture, &case);
+        let reports: Vec<serde_json::Value> = output
+            .stdout
+            .lines()
+            .filter_map(|line| serde_json::from_str(line).ok())
+            .collect();
+        assert!(!reports.is_empty(), "{}", output.stderr);
+        let mut count = 0;
+        for report in reports {
+            assert_eq!(report["format-version"], 23);
+            for finding in report["findings"].as_array().unwrap() {
+                assert!(finding.get("audit").is_none());
+                if finding["kind"] != "effect" {
+                    continue;
+                }
+                let facts: sniff_test_report::SemanticFacts =
+                    serde_json::from_value(finding["semantics"].clone()).unwrap();
+                assert!(finding["semantics"].get("targets").is_none());
+                for location in facts
+                    .source
+                    .iter()
+                    .chain(facts.root.iter())
+                    .chain(facts.contract.iter())
+                    .chain(facts.trace.iter().filter_map(|step| step.location.as_ref()))
+                {
+                    if !location.available {
+                        continue;
+                    }
+                    let source = fs::read_to_string(&location.path).unwrap();
+                    assert_eq!(
+                        location.hash,
+                        sniff_test_report::content_hash(source.as_bytes())
+                    );
+                    assert!(source.get(location.start..location.end).is_some());
+                }
+                if finding["finding"] == "analysis-incomplete" {
+                    assert!(facts.root.is_some());
+                    assert!(facts.obligation.is_none());
+                } else {
+                    assert_eq!(facts.obligation.as_deref(), Some("Panics"));
+                }
+                count += 1;
+            }
+        }
+        assert!(count > 0, "{fixture}: {}", output.stderr);
+    }
+}
+
+#[test]
+fn semantic_ranges_use_original_utf8_bytes_with_bom_and_crlf() {
+    let repo = repo_root();
+    let binary = PathBuf::from(env!("CARGO_BIN_EXE_cargo-sniff-test"));
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path().join("direct_panic");
+    copy_fixture_dir(&repo.join("tests/fixtures/direct_panic"), &root).unwrap();
+    let source = "\u{feff}// λ before the function\r\npub fn direct_panic() {\r\n    panic!(\"λ\");\r\n}\r\n";
+    fs::write(root.join("src/lib.rs"), source).unwrap();
+    let _guard = lock_nested_cargo();
+    let output = run_cargo_sniff_test(
+        &binary,
+        &root,
+        "semantic_original_offsets",
+        &Case::new().args(&["-e", "panic", "--message-format", "json"]),
+    );
+    let report: serde_json::Value = serde_json::from_str(&output.stdout).unwrap();
+    let facts: sniff_test_report::SemanticFacts =
+        serde_json::from_value(report["findings"][0]["semantics"].clone()).unwrap();
+    let location = facts.source.unwrap();
+    assert!(location.available);
+    assert_eq!(
+        location.hash,
+        sniff_test_report::content_hash(source.as_bytes())
+    );
+    assert_eq!(&source[location.start..location.end], "panic!(\"λ\")");
+    assert_eq!(facts.root.unwrap().start, source.find("pub fn").unwrap());
+}

@@ -63,3 +63,63 @@ let value = unsafe { pointer.read() };
 ## Acknowledgments
 
 See [ACKNOWLEDGMENTS.md](ACKNOWLEDGMENTS.md).
+
+## Interactive audit
+
+Start the local browser interface from the workspace you want to audit:
+
+```sh
+cargo sniff-test --audit gui
+cargo sniff-test --audit gui -e panic -- --all-features
+```
+
+Select a finding to navigate its source, contract, and call trace. Write a
+justification or obligation through the guided actions, or edit source directly.
+**Save draft** buffers an edit without changing source. **Review diff** shows the
+changes; **Apply file & reanalyze** writes that file and runs the analyzer again.
+Other files' drafts stay buffered. Existing source changes cause a conflict
+instead of being overwritten. To resolve a conflict, copy your draft, discard
+it, and reapply your changes against the current source.
+
+Saved drafts survive server restarts in the Cargo target directory under
+`sniff-test-audit/`. Unsaved editor changes do not. Dependency and toolchain
+sources are read-only. Guided insertion falls back to manual editing for
+unsupported comment layouts, attributes, or ambiguous source positions.
+A nonzero analysis exit is shown with its output; valid findings remain
+available for auditing. Reanalysis checks saved source, not buffered drafts.
+
+The server listens on loopback and prints a session URL before opening the
+browser. Set `SNIFF_TEST_AUDIT_NO_OPEN=1` to open that URL yourself. Stop the server
+with Ctrl-C. One server at a time can use a workspace's draft directory.
+
+The GUI is backed by `sniff-test-audit-bridge`, a Rust library shared with future
+frontends. `sniff-test-audit-gui` supplies HTTP and browser presentation. Neither
+crate depends on rustc internals. `sniff-test-report` defines the shared report
+envelope and frontend-neutral semantic facts. Report format 23 includes these
+facts in ordinary JSON output: typed trace kinds and marker associations,
+source/root/contract locations, effect metadata, original UTF-8 file offsets,
+and SHA-256 content hashes. Human output avoids constructing this extra source
+metadata. The bridge derives supported editing actions from these facts and the
+workspace boundaries; diagnostics has no audit mode or editing-action model.
+
+To develop the frontend, install Node.js 22 or newer, then run:
+
+```sh
+cd crates/sniff-test-audit-gui/frontend
+npm ci
+npm run build
+```
+
+Production assets in `frontend/dist/` are checked in so a normal Cargo build or
+installation needs no Node.js. Rebuild those assets after frontend edits. The
+server embeds them in release builds; debug builds read them from that directory.
+Run `cargo build -p sniff-test` before the real-browser integration tests:
+
+```sh
+cd crates/sniff-test-audit-gui/frontend
+npx playwright install chromium
+npm test
+```
+
+The browser tests create temporary Rust projects and verify applying an
+obligation, reanalysis, draft recovery, and external-edit conflict handling.

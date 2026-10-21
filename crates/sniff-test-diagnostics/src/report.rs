@@ -1,28 +1,9 @@
 //! Workspace-only JSON analysis report types.
 
 use rustc_middle::ty::TyCtxt;
-use serde::Serialize;
-
-use super::findings::ResolvedFinding;
-
-pub const REPORT_FORMAT_VERSION: u32 = 22;
-
-#[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "kebab-case")]
-pub struct AnalysisArtifactReport {
-    pub reason: String,
-    pub format_version: u32,
-    pub tool_version: String,
-    pub rustc_version: String,
-    pub artifact: ReportArtifact,
-    pub findings: Vec<ResolvedFinding>,
-}
-
-#[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "kebab-case")]
-pub struct ReportArtifact {
-    pub crate_name: String,
-}
+pub use sniff_test_report::{REPORT_FORMAT_VERSION, ReportArtifact};
+pub type AnalysisArtifactReport =
+    sniff_test_report::AnalysisArtifactReport<super::findings::ResolvedFinding>;
 
 #[must_use]
 pub fn render_span(tcx: TyCtxt<'_>, span: rustc_span::Span) -> String {
@@ -35,7 +16,7 @@ mod tests {
 
     #[test]
     fn workspace_report_serializes_its_public_fields() {
-        assert_eq!(REPORT_FORMAT_VERSION, 22);
+        assert_eq!(REPORT_FORMAT_VERSION, 23);
 
         let report = AnalysisArtifactReport {
             reason: String::from("sniff-test-artifact"),
@@ -52,7 +33,7 @@ mod tests {
             serde_json::to_value(report).expect("report should serialize"),
             serde_json::json!({
                 "reason": "sniff-test-artifact",
-                "format-version": 22,
+                "format-version": 23,
                 "tool-version": "0.1.0",
                 "rustc-version": "rustc test",
                 "artifact": {
