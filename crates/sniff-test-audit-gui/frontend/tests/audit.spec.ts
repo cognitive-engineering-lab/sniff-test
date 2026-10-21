@@ -33,6 +33,9 @@ async function expectSimpleDetails(page:any){
   await expect(details.getByRole('heading',{name:'Requirements',exact:true})).toHaveCount(0);
   await expect(page.getByLabel('Draft documentation',{exact:true})).toHaveCount(0);
   await expect(details.getByRole('heading',{name:'Navigate',exact:true})).toBeVisible();
+  await expect(details.locator('.details-scroll > button.link')).toHaveCount(3);
+  for(const name of ['Report root','Effect source','Contract'])
+    await expect(details.getByRole('button',{name:new RegExp('^'+name)})).toBeVisible();
   await expect(details.getByRole('heading',{name:'Call trace',exact:true})).toBeVisible();
 }
 test('navigate, draft an obligation, review, apply, and reanalyze',async({page})=>{
@@ -122,13 +125,13 @@ for (const viewport of [{width:1440,height:900},{width:900,height:700},{width:14
  test('inline obligation belongs to the origin helper and is undoable',async({page})=>{
   await stop();await writeFile(join(dir,'src/lib.rs'),'pub fn entry() { helper(); }\nfn helper() {\n    panic!("test");\n}\n');await launch();
   await selectFinding(page);
-  await page.getByRole('button',{name:'Obligation location',exact:true}).click();
+  await page.getByRole('button',{name:'Effect source',exact:true}).click();
   await page.getByRole('button',{name:'Propagate to callers',exact:true}).click();
   await expect(page.locator('.cm-content')).toContainText('/// # Panics');
   await page.keyboard.press('ControlOrMeta+z');
   await expect(page.locator('.cm-content')).not.toContainText('/// # Panics');
   await page.reload();await selectFinding(page);
-  await page.getByRole('button',{name:'Obligation location',exact:true}).click();
+  await page.getByRole('button',{name:'Effect source',exact:true}).click();
   await page.getByRole('button',{name:'Propagate to callers',exact:true}).click();
   await expect(page.locator('.cm-content')).toContainText('/// # Panics');
   await page.keyboard.insertText('Always panics.');

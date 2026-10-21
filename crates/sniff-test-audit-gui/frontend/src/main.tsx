@@ -202,7 +202,6 @@ function App() {
     </main>
     <aside className="details" aria-label="Effect details">{selected?<><section className="effect-summary" aria-label="Selected effect"><div className="section-title">FINDING DETAILS</div><p>{selected.reason}</p><small>{selected.crate_name} · trace {selected.trace_id||'unavailable'}</small></section>
       <div className="details-scroll" ref={detailsScroll} tabIndex={0} aria-label="Navigation and call trace"><h3>Navigate</h3>{[['Report root',selected.audit?.root],['Effect source',selected.audit?.source],['Contract',selected.audit?.contract]].map(([label,l])=><button className="link" key={label as string} disabled={!l || !(l as Location).available} onClick={()=>act(()=>open(l as Location))}>{label as string}{!(l as Location)?.available?' · unavailable':''}</button>)}
-      {selected.audit?.targets.map(t=><button className="link" key={t.action} onClick={()=>act(()=>open(t.location))}>{t.action==='justification'?'Justification location':'Obligation location'}</button>)}
       {buffer&&!buffer.writable&&<p className="hint">Dependency source is read-only. Contract documentation can be supplied through an override file.</p>}
       {selected.audit&&!selected.audit.targets.length&&<p className="hint">No verified documentation attachment location is available. Inspect the source and edit manually where appropriate.</p>}
       {unsaved||buffer?.content!==buffer?.original?<p className="hint">Revert to the original source to restore inline prompts, or apply edits and reanalyze.</p>:null}
