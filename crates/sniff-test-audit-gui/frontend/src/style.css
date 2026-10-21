@@ -50,3 +50,6 @@ main { overflow: hidden; }
 .navigation-status{float:right;margin-left:12px}
 
 .cm-definition-link, .cm-definition-link span { color: #245c3f !important; text-decoration: underline; text-decoration-color: #245c3f; text-underline-offset: 3px; cursor: pointer; }
+
+.trace button.active { background: #e8f1e9; box-shadow: inset 3px 0 #25825c; color: #245c3f; font-weight: 700; }
+.trace button.active span { color: #50735b; }

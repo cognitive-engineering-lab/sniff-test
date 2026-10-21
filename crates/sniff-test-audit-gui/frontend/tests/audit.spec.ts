@@ -225,6 +225,35 @@ async function clickIdentifier(page:any,line:string,identifier:string,modifier=f
     if(modifier)await page.keyboard.up(key);
 }
 
+test('call trace highlights the editor location across files and navigation',async({page})=>{
+  await stop();
+  await writeFile(join(dir,'src/lib.rs'),'\ufeff// λ before the call\r\npub fn entry() {\r\n    helper::danger();\r\n}\r\nmod helper;\r\n');
+  await writeFile(join(dir,'src/helper.rs'),'pub fn danger() {\n    panic!("trace location");\n}\n');
+  await launch();await selectFinding(page);
+  const rows=page.locator('.trace button');
+  await expect.poll(()=>rows.count()).toBeGreaterThanOrEqual(2);
+  const entry=rows.filter({hasText:'entry'}).first();
+  const origin=rows.filter({has:page.locator('small[title$="/src/helper.rs"]')}).first();
+  await entry.click();
+  await expect(page.locator('.filename')).toContainText('src/lib.rs');
+  await expect(entry).toHaveAttribute('aria-current','location');
+  await expect(page.locator('.trace button[aria-current="location"]')).toHaveCount(1);
+  await origin.click();
+  await expect(page.locator('.filename')).toContainText('src/helper.rs');
+  await expect(origin).toHaveAttribute('aria-current','location');
+  await expect(entry).not.toHaveAttribute('aria-current','location');
+  await page.getByRole('button',{name:'← Back',exact:true}).click();
+  await expect(page.locator('.filename')).toContainText('src/lib.rs');
+  await expect(entry).toHaveAttribute('aria-current','location');
+  await page.locator('.cm-content').focus();
+  await page.keyboard.press('ControlOrMeta+Home');
+  await expect(page.locator('.trace button[aria-current="location"]')).toHaveCount(0);
+  await clickIdentifier(page,'helper::danger()', 'danger');
+  await expect(entry).toHaveAttribute('aria-current','location');
+  await page.getByRole('button',{name:'Review diff',exact:true}).click();
+  await expect(page.locator('.trace button[aria-current="location"]')).toHaveCount(0);
+});
+
 test('call sites select exact ranges and editor definition navigation crosses files',async({page})=>{
   await stop();
   await writeFile(join(dir,'src/lib.rs'),'\ufeff// λ before call sites\r\nmod helper;\r\npub fn risky() {\r\n    helper::danger();\r\n}\r\n');
@@ -241,8 +270,10 @@ test('call sites select exact ranges and editor definition navigation crosses fi
   const clickDanger=(modifier=false)=>clickIdentifier(page,'helper::danger()', 'danger',modifier);
   await clickDanger(true);
   await expect(page.locator('.filename')).toContainText('src/helper.rs',{timeout:30000});
+  await expect(page.locator('.trace button[aria-current="location"]')).toHaveCount(0);
   await page.getByRole('button',{name:'← Back',exact:true}).click();
   await expect(page.locator('.filename')).toContainText('src/lib.rs');
+  await expect(trace).toHaveAttribute('aria-current','location');
   await clickDanger();await page.keyboard.press('F12');
   await expect(page.locator('.filename')).toContainText('src/helper.rs');
   await page.getByRole('button',{name:'← Back',exact:true}).click();

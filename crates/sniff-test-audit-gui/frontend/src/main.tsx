@@ -11,6 +11,7 @@ type Location = {path:string; start:number; end:number; available:boolean; hash?
 type Buffer = {path:string; content:string; original:string; revision:number; writable:boolean; conflict:boolean};
 type Target = {action:string; location:Location};
 type TemplateEdit = {path:string; revision:number; start:number; end:number; text:string; cursor:number};
+type EditorSelection = {path:string; from:number; to:number};
 type Finding = {id:string; crate_name:string; effect?:string;kind:string;class?:string;level:string;root?:string;trace_id?:string;reason:string;requirements:string[];missing_requirements:string[];display_trace:string[]; audit?:{obligation:string; justification:string; source?:Location; root?:Location; contract?:Location; targets:Target[]; trace:{caller:string; target?:string; kind:string; location?:Location}[]}};
 type Summary = {id:string; crate_name:string; root:string; reason:string; level:string; effect:string; class:string; path?:string};
 type Status = {generation:number; running:boolean; stale:boolean; status:string; count:number; log:string};
@@ -39,9 +40,10 @@ class DocumentationPrompt extends WidgetType {
 }
 function bytePosition(text:string, offset:number) { return new TextDecoder('utf-8',{ignoreBOM:true}).decode(new TextEncoder().encode(text).slice(0,offset)).length; }
 function editorPosition(text:string, offset:number) { return text.slice(0,bytePosition(text,offset)).replace(/\r\n/g,'\n').length; }
-function Editor({buffer, location:target, onChange, finding, enabled, prepare, onError, navigation, onReady}:{buffer:Buffer; location?:Location; onChange:(text:string)=>void; finding?:Finding; enabled:boolean; prepare:(target:Target)=>Promise<TemplateEdit>; onError:(error:string)=>void; navigation?:Navigation; onReady:(view:EditorView|undefined)=>void}) {
+function Editor({buffer, location:target, onChange, onSelectionChange, finding, enabled, prepare, onError, navigation, onReady}:{buffer:Buffer; location?:Location; onChange:(text:string)=>void; onSelectionChange:(selection?:EditorSelection)=>void; finding?:Finding; enabled:boolean; prepare:(target:Target)=>Promise<TemplateEdit>; onError:(error:string)=>void; navigation?:Navigation; onReady:(view:EditorView|undefined)=>void}) {
   const holder = useRef<HTMLDivElement>(null), editorRef=useRef<EditorView | undefined>(undefined);
   const callback = useRef(onChange); callback.current = onChange;
+  const selectionRef=useRef(onSelectionChange);selectionRef.current=onSelectionChange;
   const prepareRef=useRef(prepare);prepareRef.current=prepare;
   const errorRef=useRef(onError);errorRef.current=onError;
   const readyRef=useRef(onReady);readyRef.current=onReady;
@@ -78,10 +80,14 @@ function Editor({buffer, location:target, onChange, finding, enabled, prepare, o
       },
       provide:field=>EditorView.decorations.from(field,value=>value.decorations),
     });
-    view = new EditorView({parent:holder.current, state:EditorState.create({doc:buffer.content, extensions:[basicSetup,EditorState.lineSeparator.of(buffer.original.includes('\r\n')?'\r\n':'\n'),rust(),prompts,navigation?.extension(buffer.path) || [], EditorView.lineWrapping, EditorState.readOnly.of(!buffer.writable), EditorView.updateListener.of(u=>{if(u.docChanged) callback.current(u.state.sliceDoc());})]})});
+    view = new EditorView({parent:holder.current, state:EditorState.create({doc:buffer.content, extensions:[basicSetup,EditorState.lineSeparator.of(buffer.original.includes('\r\n')?'\r\n':'\n'),rust(),prompts,navigation?.extension(buffer.path) || [], EditorView.lineWrapping, EditorState.readOnly.of(!buffer.writable), EditorView.updateListener.of(u=>{
+      if(u.docChanged)callback.current(u.state.sliceDoc());
+      if(u.selectionSet || u.docChanged){const {from,to}=u.state.selection.main;selectionRef.current({path:buffer.path,from,to});}
+    })]})});
     editorRef.current=view;
+    selectionRef.current({path:buffer.path,from:view.state.selection.main.from,to:view.state.selection.main.to});
     readyRef.current(view);
-    return ()=>{active=false;readyRef.current(undefined);editorRef.current=undefined;view.destroy();};
+    return ()=>{active=false;readyRef.current(undefined);selectionRef.current(undefined);editorRef.current=undefined;view.destroy();};
   },[buffer.path,buffer.revision,finding?.id,navigation]);
   useEffect(()=>{
     const view=editorRef.current;
@@ -102,6 +108,7 @@ function App() {
   const [drafts,setDrafts]=useState<Buffer[]>([]),[diff,setDiff]=useState(''),[view,setView]=useState<'source'|'changes'>('source');
   const [error,setError]=useState(''),[busy,setBusy]=useState(false),[logs,setLogs]=useState(false);
   const [nav,setNav]=useState<Location[]>([]);
+  const [editorSelection,setEditorSelection]=useState<EditorSelection>();
   const [navigation,setNavigation]=useState<Navigation>(),[navigationStatus,setNavigationStatus]=useState('');
   const editor=useRef<EditorView|undefined>(undefined);
   const waitingEditor=useRef<{path:string;resolve:(view:EditorView|null)=>void}|undefined>(undefined);
@@ -181,6 +188,22 @@ function App() {
   useEffect(()=>{const warn=(e:BeforeUnloadEvent)=>{if(unsaved){e.preventDefault();}};window.addEventListener('beforeunload',warn);return()=>window.removeEventListener('beforeunload',warn)},[unsaved]);
   async function review(draft?:Buffer){if(unsaved&&draft&&draft.path!==buffer?.path)await save();let b=draft||buffer;if(!b)return;if(unsaved&&buffer?.path===b.path)b=await save()||b;setBuffer(b);setText(b.content);setDiff((await api('diff?'+new URLSearchParams({path:b.path}))).diff);setView('changes');}
   const groups = new Map<string,Summary[]>();for(const item of items){const key=item.path||item.root||item.crate_name;groups.set(key,[...(groups.get(key)||[]),item]);}
+  const trace=selected?.audit?.trace||[];
+  const activeTraceIndex=view==='source' && buffer && !unsaved && buffer.content===buffer.original && editorSelection?.path===buffer.path
+    ? trace.findIndex(step=>{
+      const loc=step.location;
+      if(!loc?.available || loc.path!==buffer.path)return false;
+      const from=editorPosition(buffer.original,loc.start),to=editorPosition(buffer.original,loc.end);
+      return editorSelection.from===from && editorSelection.to===to;
+    }) : -1;
+  const activeTraceCaretIndex=activeTraceIndex<0 && view==='source' && buffer && !unsaved && buffer.content===buffer.original && editorSelection?.path===buffer.path && editorSelection.from===editorSelection.to
+    ? trace.findIndex(step=>{
+      const loc=step.location;
+      if(!loc?.available || loc.path!==buffer.path)return false;
+      const from=editorPosition(buffer.original,loc.start),to=editorPosition(buffer.original,loc.end);
+      return from<=editorSelection.from && editorSelection.from<(to===from?to+1:to);
+    }) : -1;
+  const highlightedTraceIndex=activeTraceIndex>=0?activeTraceIndex:activeTraceCaretIndex;
   return <div className="app">
     <header><div className="brand"><b>sniff-test</b><span> / audit</span></div><span className="workspace" title={root}>{root}</span><span className={'status '+status.status}>{status.status}{status.stale?' · stale':''}</span><button disabled={status.running||busy} onClick={()=>act(async()=>{await api('analysis',{});})}>↻ Reanalyze</button></header>
     {error&&<div className="error" role="alert">{error}<button onClick={()=>setError('')}>Dismiss</button></div>}
@@ -194,7 +217,7 @@ function App() {
     </aside>
     <main><div className="toolbar"><button disabled={!nav.length||busy} onClick={()=>act(async()=>{const previous=nav[nav.length-1];setNav(n=>n.slice(0,-1));await open(previous,false);})}>← Back</button><span className="filename">{buffer?.path.replace(root+'/','')||'Source workspace'}</span>{buffer&&<><button onClick={()=>setView('source')}>Source</button><button onClick={()=>act(()=>review())}>Review diff</button></>}</div>
       {buffer?<><div className="buffer-state"><span className="navigation-status">{navigationStatus}</span>{buffer.writable?'Workspace source':'Read-only dependency'}{unsaved?' · unsaved editor changes':buffer.content!==buffer.original?' · draft saved':''}{buffer.conflict&&<strong> · External file changed. Copy your draft, discard it, then reapply your changes to the current source.</strong>}</div>
-      {view==='source'?<Editor navigation={navigation} onReady={editorReady} buffer={buffer} location={target} onChange={setText} finding={selected} enabled={!status.running&&!status.stale&&!unsaved} onError={setError} prepare={async t=>{
+      {view==='source'?<Editor navigation={navigation} onReady={editorReady} buffer={buffer} location={target} onChange={setText} onSelectionChange={setEditorSelection} finding={selected} enabled={!status.running&&!status.stale&&!unsaved} onError={setError} prepare={async t=>{
         if(!selected||!buffer||unsaved)throw Error('Save or discard editor changes before inserting a template.');
         return api('template',{id:selected.id,action:t.action,revision:buffer.revision});
       }}/>:<pre className="diff">{diff||'No changes to review.'}</pre>}
@@ -205,7 +228,7 @@ function App() {
       {buffer&&!buffer.writable&&<p className="hint">Dependency source is read-only. Contract documentation can be supplied through an override file.</p>}
       {selected.audit&&!selected.audit.targets.length&&<p className="hint">No verified documentation attachment location is available. Inspect the source and edit manually where appropriate.</p>}
       {unsaved||buffer?.content!==buffer?.original?<p className="hint">Revert to the original source to restore inline prompts, or apply edits and reanalyze.</p>:null}
-      <h3>Call trace</h3><ol className="trace">{selected.audit?.trace.map((step,i)=><li key={i}><button disabled={!step.location?.available} onClick={()=>act(()=>open(step.location!))}>{step.caller}<span>{step.kind} → {step.target||'effect operation'}</span><small title={step.location?.path}>{!step.location?'':step.location.path.startsWith(root+'/')?step.location.path.slice(root.length+1):'…/'+step.location.path.split('/').slice(-3).join('/')}{step.location?.line?':'+step.location.line:''}{!step.location?.available?' · source unavailable':''}</small></button></li>)}</ol></div>
+      <h3>Call trace</h3><ol className="trace">{trace.map((step,i)=><li key={i}><button className={highlightedTraceIndex===i?'active':''} aria-current={highlightedTraceIndex===i?'location':undefined} disabled={!step.location?.available} onClick={()=>act(()=>open(step.location!))}>{step.caller}<span>{step.kind} → {step.target||'effect operation'}</span><small title={step.location?.path}>{!step.location?'':step.location.path.startsWith(root+'/')?step.location.path.slice(root.length+1):'…/'+step.location.path.split('/').slice(-3).join('/')}{step.location?.line?':'+step.location.line:''}{!step.location?.available?' · source unavailable':''}</small></button></li>)}</ol></div>
     </>:<div className="empty">Select a finding to inspect its contract and call trace.</div>}</aside></div>
     <div className="analysis-log"><button onClick={()=>setLogs(!logs)}>{logs?'▾':'▸'} Analysis output</button><span>{status.count} findings · {drafts.length} saved drafts</span>{logs&&<pre>{status.log||'Waiting for analysis output…'}</pre>}</div>
   </div>;
