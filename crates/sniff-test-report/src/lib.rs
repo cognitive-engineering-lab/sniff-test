@@ -2,7 +2,7 @@
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
-pub const REPORT_FORMAT_VERSION: u32 = 24;
+pub const REPORT_FORMAT_VERSION: u32 = 25;
 
 pub fn content_hash(bytes: &[u8]) -> String {
     format!("{:x}", Sha256::digest(bytes))
@@ -76,6 +76,8 @@ pub struct SemanticFacts {
     pub justification_site: Option<Location>,
     pub contract: Option<Location>,
     pub trace: Vec<TraceStep>,
+    #[serde(default)]
+    pub override_targets: Vec<OverrideTarget>,
 }
 
 /// Translate rustc-normalized positions to original file offsets.
@@ -101,4 +103,49 @@ mod tests {
         assert_eq!(super::original_offset("λ", 1), None);
         assert_eq!(super::original_offset("λ", 2), Some(2));
     }
+}
+
+/// Exact compiler-fact identity. Offsets here are normalized rustc bytes;
+/// the separate display location uses original on-disk UTF-8 bytes.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case", deny_unknown_fields)]
+pub struct OverrideSelector {
+    pub definition: String,
+    pub namespace: String,
+    pub source_id: String,
+    pub source_hash: String,
+    pub package: String,
+    pub source_path: String,
+    pub start: u64,
+    pub end: u64,
+    pub kind: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub site: Option<String>,
+}
+impl OverrideSelector {
+    /// Compare the portable target, excluding compiler identities tied to a checkout.
+    pub fn same_target(&self, other: &Self) -> bool {
+        self.namespace == other.namespace
+            && self.package == other.package
+            && self.source_path == other.source_path
+            && self.source_hash == other.source_hash
+            && self.start == other.start
+            && self.end == other.end
+            && self.kind == other.kind
+            && self.site == other.site
+    }
+}
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct OverrideTarget {
+    pub action: String,
+    pub location: Location,
+    pub selector: OverrideSelector,
+}
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case", deny_unknown_fields)]
+pub struct OverrideAnnotation {
+    pub effect: String,
+    pub action: String,
+    pub document: String,
+    pub selector: OverrideSelector,
 }

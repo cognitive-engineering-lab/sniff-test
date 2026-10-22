@@ -520,3 +520,93 @@ for(const width of [1440,320]) {
     await expect(page.locator('.cm-activeLine')).toContainText('domain.index(&2)');
   });
 }
+
+for(const action of ['Justify via override','Propagate obligations via override']) {
+  test(`dependency ${action} saves a virtual diff and confirms existing override edits`,async({page})=>{
+    const dependency=await mkdtemp(join(tmpdir(),'sniff-override-dep-'));
+    const source='// λ dependency\r\n#[inline]\r\n#[allow(\r\n    unused\r\n)]\r\npub fn danger(flag: bool) {\r\n    #[allow(unused)]\r\n    assert!(flag, "dependency");\r\n}\r\n';
+    try {
+      await stop();await mkdir(join(dependency,'src'));
+      await writeFile(join(dependency,'Cargo.toml'),'[package]\nname="override-dep"\nversion="0.1.0"\nedition="2024"\n');
+      await writeFile(join(dependency,'src/lib.rs'),source);
+      await writeFile(join(dir,'Cargo.toml'),`[package]\nname="audit-browser-fixture"\nversion="0.1.0"\nedition="2024"\n[workspace]\n[dependencies]\noverride-dep={path=${JSON.stringify(dependency)}}\n`);
+      await writeFile(join(dir,'src/lib.rs'),'pub fn entry(flag: bool) { override_dep::danger(flag); }\n');
+      await writeFile(join(dir,'sniff-test.toml'),'[contracts]\noverride-files=["existing.toml"]\n');
+      await writeFile(join(dir,'existing.toml'),'# Preserve this comment\n[overrides]\n"unrelated::api" = "# Safety\\nExisting contract"\n');
+      await launch();await selectFinding(page);
+      await expect(page.locator('.buffer-state')).toContainText('Read-only dependency');
+      const attribute=page.locator('.cm-line').filter({hasText:action.startsWith('Justify')?'#[allow(unused)]':'#[inline]'});
+      async function expectAboveAttribute(label:string){
+        const button=await page.getByRole('button',{name:label,exact:true}).boundingBox();
+        const line=await attribute.boundingBox();
+        expect(button).not.toBeNull();expect(line).not.toBeNull();
+        expect(button!.y+button!.height).toBeLessThanOrEqual(line!.y);
+      }
+      await expectAboveAttribute(action);
+      await page.getByRole('button',{name:action,exact:true}).click();
+      const dialog=page.getByRole('dialog');
+      const template=action.startsWith('Justify')?'// PANIC: ':'/// # Panics\n///\n/// ';
+      await expect(dialog.getByLabel('Override documentation')).toHaveValue(template);
+      await expect(dialog.getByLabel('Override documentation')).toBeFocused();
+      await page.keyboard.insertText('Typed at the end.');
+      await expect(dialog.getByLabel('Override documentation')).toHaveValue(template+'Typed at the end.');
+      await dialog.getByRole('button',{name:'Cancel',exact:true}).click();
+      await expect(page.locator('.draft')).toHaveCount(0);
+      await page.getByRole('button',{name:action,exact:true}).click();
+      await dialog.getByLabel('Override documentation').fill(template+'The flag is checked by the caller.');
+      await dialog.getByRole('button',{name:'Save draft',exact:true}).click();
+      await expect(dialog).not.toBeVisible();
+      const completed=action.startsWith('Justify')?'Justified!':'Obligation propagated!';
+      const alternative=action.startsWith('Justify')?'Propagate obligations via override':'Justify via override';
+      await expect(page.getByRole('button',{name:completed,exact:true})).toBeVisible();
+      await expectAboveAttribute(completed);
+      await expect(page.getByRole('button',{name:alternative,exact:true})).toHaveCount(0);
+      await expect(page.locator('.buffer-state button')).toHaveCount(0);
+      await page.reload();
+      await expect(page.locator('.status')).toHaveText('complete');
+      await page.locator('.draft').click();
+      await page.getByRole('button',{name:'Source',exact:true}).click();
+      await page.getByRole('button',{name:completed,exact:true}).click();
+      await expect(dialog.getByLabel('Override documentation')).toHaveValue(template+'The flag is checked by the caller.');
+      await dialog.getByRole('button',{name:'Delete draft',exact:true}).click();
+      await expect(page.locator('.draft')).toHaveCount(0);
+      await expect(page.getByRole('button',{name:action,exact:true})).toBeVisible();
+      await expect(page.getByRole('button',{name:alternative,exact:true})).toBeVisible();
+      await page.getByRole('button',{name:action,exact:true}).click();
+      await dialog.getByLabel('Override documentation').fill(template+'The flag is checked by the caller.');
+      await dialog.getByRole('button',{name:'Save draft',exact:true}).click();
+      await page.locator('.draft').click();
+      await expect(page.locator('main .diff')).toContainText('Override preview');
+      await expect(page.locator('main .diff')).toContainText('+');
+      await expect(page.locator('main .diff')).toContainText('The flag is checked by the caller.');
+      expect((await page.locator('main .diff').innerText()).replaceAll('\r','')).toMatch(/\+[^\n]*The flag is checked by the caller\.\n [ \t]*#\[/);
+      expect(await readFile(join(dependency,'src/lib.rs'),'utf8')).toBe(source);
+      await page.getByRole('button',{name:'Apply overrides & reanalyze',exact:true}).click();
+      await expect(dialog).toHaveAccessibleName('Confirm editing override file');
+      await expect(dialog.locator('.diff')).toContainText('annotations');
+      await dialog.getByRole('button',{name:'Cancel',exact:true}).click();
+      expect(await readFile(join(dir,'existing.toml'),'utf8')).not.toContain('annotations');
+      await page.getByRole('button',{name:'Apply overrides & reanalyze',exact:true}).click();
+      const applied=page.waitForResponse(r=>r.url().endsWith('/api/v1/override/apply'));
+      await dialog.getByRole('button',{name:'Confirm edit & reanalyze',exact:true}).click();
+      expect((await applied).ok()).toBe(true);
+      await expect(page.locator('.draft')).toHaveCount(0);
+      await page.getByRole('button',{name:'Source',exact:true}).click();
+      await expect(page.getByRole('button',{name:completed,exact:true})).toBeVisible();
+      await expectAboveAttribute(completed);
+      await page.getByRole('button',{name:completed,exact:true}).click();
+      await expect(dialog.getByRole('button',{name:'Delete draft',exact:true})).toHaveCount(0);
+      await dialog.getByLabel('Override documentation').fill(template+'A revised explanation.');
+      await dialog.getByRole('button',{name:'Save draft',exact:true}).click();
+      await page.getByRole('button',{name:completed,exact:true}).click();
+      await dialog.getByRole('button',{name:'Discard changes',exact:true}).click();
+      await expect(page.locator('.draft')).toHaveCount(0);
+      await page.getByRole('button',{name:completed,exact:true}).click();
+      await expect(dialog.getByLabel('Override documentation')).toHaveValue(template+'The flag is checked by the caller.');
+      await dialog.getByRole('button',{name:'Cancel',exact:true}).click();
+      const file=await readFile(join(dir,'existing.toml'),'utf8');
+      expect(file).toContain('# Preserve this comment');expect(file).toContain('unrelated::api');expect(file).toContain('The flag is checked by the caller.');
+      expect(await readFile(join(dependency,'src/lib.rs'),'utf8')).toBe(source);
+    } finally {await stop();await rm(dependency,{recursive:true,force:true});}
+  });
+}

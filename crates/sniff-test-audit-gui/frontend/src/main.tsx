@@ -3,13 +3,20 @@ import {createRoot} from 'react-dom/client';
 import {EditorView, basicSetup} from 'codemirror';
 import {EditorState, StateField, StateEffect} from '@codemirror/state';
 import {Decoration, WidgetType} from '@codemirror/view';
-import {rust} from '@codemirror/lang-rust';
+import {rust, rustLanguage} from '@codemirror/lang-rust';
 import './style.css';
 import {Navigation, filePath} from './navigation';
 
 type Location = {path:string; start:number; end:number; available:boolean; hash?:string; line?:number; live?:boolean};
-type Buffer = {path:string; content:string; original:string; revision:number; writable:boolean; conflict:boolean};
-type Target = {action:string; location:Location};
+type Buffer = {path:string; content:string; original:string; revision:number; writable:boolean; conflict:boolean; annotations?:OverrideDraft[]};
+type OverrideDraft = {annotation:{effect:string; action:string; document:string; selector:unknown}; location:Location; applied:boolean; previous_document?:string|null};
+type Target = {action:string; location:Location; selector?:unknown; annotationIndex?:number};
+function sameSelector(a:unknown,b:unknown) {
+  if(!a||!b)return false;
+  const left=a as Record<string,unknown>,right=b as Record<string,unknown>;
+  return ['namespace','package','source_path','source_hash','start','end','kind','site'].every(key=>left[key]===right[key]);
+}
+type OverridePlan = {token:string; destination:string; destinations:string[]; existing:boolean; diff:string};
 type TemplateEdit = {path:string; revision:number; start:number; end:number; text:string; cursor:number};
 type EditorSelection = {path:string; from:number; to:number};
 type Finding = {id:string; crate_name:string; effect?:string;kind:string;class?:string;level:string;root?:string;trace_id?:string;reason:string;requirements:string[];missing_requirements:string[];display_trace:string[]; audit?:{obligation:string; justification:string; source?:Location; root?:Location; contract?:Location; targets:Target[]; trace:{caller:string; target?:string; kind:string; location?:Location}[]}};
@@ -24,38 +31,56 @@ async function api(path:string, body?:unknown) {
 }
 const setPromptsEnabled = StateEffect.define<boolean>();
 class DocumentationPrompt extends WidgetType {
-  constructor(readonly action:string, readonly run:()=>void) { super(); }
+  constructor(readonly action:string, readonly run:()=>void, readonly override=false, readonly added="") { super(); }
   toDOM() {
     const element=document.createElement('div');element.className='inline-prompt';
     const button=document.createElement('button');button.type='button';
     const justify=this.action==='justification';
-    button.textContent=justify?'✓ Justify here':'↑ Propagate to callers';
-    button.setAttribute('aria-label',justify?'Justify here':'Propagate to callers');
+    const label=this.added?(justify?'Justified!':'Obligation propagated!'):this.override?(justify?'Justify via override':'Propagate obligations via override'):(justify?'Justify here':'Propagate to callers');
+    button.textContent=(justify?'✓ ':'↑ ')+label;
+    if(this.added)button.classList.add('completed');
+    button.setAttribute('aria-label',label);
     button.addEventListener('click',this.run);
     const hint=document.createElement('span');
-    hint.textContent=justify?"Explain why this is valid":"Document the caller's obligation";
+    hint.textContent=this.added || (justify?"Explain why this is valid":"Document the caller's obligation");
     element.append(button,hint);return element;
   }
   ignoreEvent() { return true; }
 }
 function bytePosition(text:string, offset:number) { return new TextDecoder('utf-8',{ignoreBOM:true}).decode(new TextEncoder().encode(text).slice(0,offset)).length; }
 function editorPosition(text:string, offset:number) { return text.slice(0,bytePosition(text,offset)).replace(/\r\n/g,'\n').length; }
-function Editor({buffer, location:target, onChange, onSelectionChange, finding, enabled, prepare, onError, navigation, onReady}:{buffer:Buffer; location?:Location; onChange:(text:string)=>void; onSelectionChange:(selection?:EditorSelection)=>void; finding?:Finding; enabled:boolean; prepare:(target:Target)=>Promise<TemplateEdit>; onError:(error:string)=>void; navigation?:Navigation; onReady:(view:EditorView|undefined)=>void}) {
+function Editor({buffer, location:target, onChange, onSelectionChange, finding, enabled, prepare, onOverride, onError, navigation, onReady}:{buffer:Buffer; location?:Location; onChange:(text:string)=>void; onSelectionChange:(selection?:EditorSelection)=>void; finding?:Finding; enabled:boolean; prepare:(target:Target)=>Promise<TemplateEdit>; onOverride:(target:Target)=>void; onError:(error:string)=>void; navigation?:Navigation; onReady:(view:EditorView|undefined)=>void}) {
   const holder = useRef<HTMLDivElement>(null), editorRef=useRef<EditorView | undefined>(undefined);
   const callback = useRef(onChange); callback.current = onChange;
   const selectionRef=useRef(onSelectionChange);selectionRef.current=onSelectionChange;
   const prepareRef=useRef(prepare);prepareRef.current=prepare;
+  const overrideRef=useRef(onOverride);overrideRef.current=onOverride;
   const errorRef=useRef(onError);errorRef.current=onError;
   const readyRef=useRef(onReady);readyRef.current=onReady;
   useEffect(()=>{
     if (!holder.current) return;
     let active=true;
     let view:EditorView;
-    const widgets=(buffer.writable && !buffer.conflict && buffer.content===buffer.original ? finding?.audit?.targets || [] : []).filter(t=>t.location.path===buffer.path && t.location.available).flatMap(t=>{
+    const syntax=rustLanguage.parser.parse(buffer.content);
+    const annotations=buffer.annotations || [];
+    const targets=finding?.audit?.targets || [];
+    const resolved=targets.some(t=>annotations.some(a=>a.annotation.effect===finding?.effect && a.annotation.action===t.action && sameSelector(a.annotation.selector,t.selector)));
+    const pendingTargets=targets.filter(t=>!t.selector || !resolved);
+    const completedTargets:Target[]=annotations.map((a,annotationIndex)=>({action:a.annotation.action,location:a.location,selector:a.annotation.selector,annotationIndex}));
+    const widgets=(!buffer.conflict && buffer.content===buffer.original ? [...pendingTargets,...completedTargets] : []).filter(t=>(buffer.writable || t.selector) && t.location.path===buffer.path && t.location.available).flatMap(t=>{
       const position=bytePosition(buffer.content,t.location.start);
-      const lineStart=buffer.content.lastIndexOf('\n',position-1)+1;
-      if(buffer.content.slice(lineStart,position).trim())return [];
+      // Attributes wrap their item in the Rust syntax tree. Only move the
+      // item's own prompt, never a prompt for an operation inside its body.
+      let anchor=position;
+      let node:ReturnType<typeof syntax.resolveInner>|null=syntax.resolveInner(position,1);
+      for(;node;node=node.parent){
+        if(node.from===position && node.parent?.name==='AttributeItem')anchor=node.parent.from;
+      }
+      const lineStart=buffer.content.lastIndexOf('\n',anchor-1)+1;
+      if(!t.selector && buffer.content.slice(buffer.content.lastIndexOf('\n',position-1)+1,position).trim())return [];
+      const added=t.annotationIndex===undefined?undefined:annotations[t.annotationIndex];
       const widget=new DocumentationPrompt(t.action,()=>{
+        if(t.selector){overrideRef.current(t);return;}
         const snapshot=view.state.sliceDoc();
         prepareRef.current(t).then(edit=>{
           if(!active)return;
@@ -66,7 +91,7 @@ function Editor({buffer, location:target, onChange, onSelectionChange, finding, 
           view.dispatch({changes:edit.text?{from:editorPosition(snapshot,edit.start),to:editorPosition(snapshot,edit.end),insert:edit.text}:undefined,selection:{anchor:cursor},effects:EditorView.scrollIntoView(cursor,{y:'center'}),userEvent:'input'});
           view.focus();
         }).catch(e=>{if(active)errorRef.current(String(e));});
-      });
+      },!!t.selector,added?(added.applied?'Override applied':'Draft saved'):'');
       return [Decoration.widget({widget,block:true,side:-1}).range(buffer.content.slice(0,lineStart).replace(/\r\n/g,'\n').length)];
     });
     const originalPrompts=Decoration.set(widgets,true);
@@ -100,6 +125,14 @@ function Editor({buffer, location:target, onChange, onSelectionChange, finding, 
   useEffect(()=>{editorRef.current?.dispatch({effects:setPromptsEnabled.of(enabled)});},[enabled]);
   return <div className="editor" ref={holder} aria-label="Rust source editor"/>;
 }
+function placeCaretAtEnd(element:HTMLTextAreaElement|null) {
+  if(element)element.setSelectionRange(element.value.length,element.value.length);
+}
+function Modal({title,children,onClose}:{title:string;children:React.ReactNode;onClose:()=>void}) {
+  const ref=useRef<HTMLDialogElement>(null);
+  useEffect(()=>{const prior=document.activeElement as HTMLElement|null;ref.current?.showModal();return()=>{ref.current?.close();prior?.focus();};},[]);
+  return <dialog ref={ref} aria-label={title} onCancel={e=>{e.preventDefault();onClose();}}><h2>{title}</h2>{children}</dialog>;
+}
 function App() {
   const [root,setRoot]=useState(''); const [status,setStatus]=useState<Status>({generation:0,running:false,stale:true,status:'connecting',count:0,log:''});
   const [items,setItems]=useState<Summary[]>([]),[total,setTotal]=useState(0),[effects,setEffects]=useState<string[]>([]);
@@ -108,6 +141,8 @@ function App() {
   const [drafts,setDrafts]=useState<Buffer[]>([]),[diff,setDiff]=useState(''),[view,setView]=useState<'source'|'changes'>('source');
   const [error,setError]=useState(''),[busy,setBusy]=useState(false),[logs,setLogs]=useState(false);
   const [nav,setNav]=useState<Location[]>([]);
+  const [overrideEditor,setOverrideEditor]=useState<{id?:string;path?:string;index?:number;generation?:number;action:string;revision:number;document:string;applied?:boolean;previous_document?:string|null}>();
+  const [overridePlan,setOverridePlan]=useState<OverridePlan>();
   const [editorSelection,setEditorSelection]=useState<EditorSelection>();
   const [navigation,setNavigation]=useState<Navigation>(),[navigationStatus,setNavigationStatus]=useState('');
   const editor=useRef<EditorView|undefined>(undefined);
@@ -185,7 +220,7 @@ function App() {
   useEffect(()=>{loadFindings().catch(e=>setError(String(e)));if(!status.running)refreshDrafts().catch(e=>setError(String(e)));},[query,effect,level,kind,page,status.generation,status.running]);
   useEffect(()=>{setPage(0)},[query,effect,level,kind]);
   useEffect(()=>{setSelected(undefined)},[status.generation]);
-  useEffect(()=>{const warn=(e:BeforeUnloadEvent)=>{if(unsaved){e.preventDefault();}};window.addEventListener('beforeunload',warn);return()=>window.removeEventListener('beforeunload',warn)},[unsaved]);
+  useEffect(()=>{const warn=(e:BeforeUnloadEvent)=>{if(unsaved||overrideEditor){e.preventDefault();}};window.addEventListener('beforeunload',warn);return()=>window.removeEventListener('beforeunload',warn)},[unsaved,overrideEditor]);
   async function review(draft?:Buffer){if(unsaved&&draft&&draft.path!==buffer?.path)await save();let b=draft||buffer;if(!b)return;if(unsaved&&buffer?.path===b.path)b=await save()||b;setBuffer(b);setText(b.content);setDiff((await api('diff?'+new URLSearchParams({path:b.path}))).diff);setView('changes');}
   const groups = new Map<string,Summary[]>();for(const item of items){const key=item.path||item.root||item.crate_name;groups.set(key,[...(groups.get(key)||[]),item]);}
   const trace=selected?.audit?.trace||[];
@@ -213,15 +248,15 @@ function App() {
       <select aria-label="Finding class" value={kind} onChange={e=>setKind(e.target.value)}><option value="">All finding classes</option>{['concrete-operation','concrete-invocation','documented-obligation','undocumented-invocation','unresolved-call-target','analysis-incomplete','ambiguous-marker','ambiguous-requirement'].map(k=><option key={k}>{k}</option>)}</select>
       <div className="finding-list">{[...groups].map(([path,rows])=><section key={path}><div className="group" title={path}>{path.replace(root+'/','')} <span>{rows.length}</span></div>{rows.map(item=><button className={'finding '+(selected?.id===item.id?'selected':'')} key={item.id} onClick={()=>act(()=>choose(item))}><span className="badge">{item.effect||item.class}</span><strong>{item.root||item.crate_name}</strong><small>{item.reason}</small></button>)}</section>)}{!items.length&&<div className="empty">{status.running?'Analyzing the workspace…':status.status==='complete'?'No matching findings.':'No findings available. Check analysis output.'}</div>}</div>
       <div className="pagination"><button disabled={page===0} onClick={()=>setPage(p=>p-1)}>←</button><span>{page+1} / {Math.max(1,Math.ceil(total/100))}</span><button disabled={(page+1)*100>=total} onClick={()=>setPage(p=>p+1)}>→</button></div>
-      <div className="section-title">SAVED DRAFTS <span>{drafts.length}</span></div>{drafts.map(d=><button className="draft" key={d.path} onClick={()=>act(()=>review(d))}>{d.path.replace(root+'/','')}{d.conflict?' · conflict':' · modified'}</button>)}
+      <div className="section-title">SAVED DRAFTS <span>{drafts.length}</span></div>{drafts.map(d=><button className="draft" key={d.path} onClick={()=>act(()=>review(d))}>{d.path.replace(root+'/','')}{d.conflict?' · conflict':d.writable?' · modified':' · override draft'}</button>)}
     </aside>
     <main><div className="toolbar"><button disabled={!nav.length||busy} onClick={()=>act(async()=>{const previous=nav[nav.length-1];setNav(n=>n.slice(0,-1));await open(previous,false);})}>← Back</button><span className="filename">{buffer?.path.replace(root+'/','')||'Source workspace'}</span>{buffer&&<><button onClick={()=>setView('source')}>Source</button><button onClick={()=>act(()=>review())}>Review diff</button></>}</div>
       {buffer?<><div className="buffer-state"><span className="navigation-status">{navigationStatus}</span>{buffer.writable?'Workspace source':'Read-only dependency'}{unsaved?' · unsaved editor changes':buffer.content!==buffer.original?' · draft saved':''}{buffer.conflict&&<strong> · External file changed. Copy your draft, discard it, then reapply your changes to the current source.</strong>}</div>
-      {view==='source'?<Editor navigation={navigation} onReady={editorReady} buffer={buffer} location={target} onChange={setText} onSelectionChange={setEditorSelection} finding={selected} enabled={!status.running&&!status.stale&&!unsaved} onError={setError} prepare={async t=>{
+      {view==='source'?<Editor navigation={navigation} onReady={editorReady} buffer={buffer} location={target} onChange={setText} onSelectionChange={setEditorSelection} finding={selected} enabled={!status.running&&!status.stale&&!unsaved} onError={setError} onOverride={t=>act(async()=>{if(!buffer)return;if(t.annotationIndex!==undefined){const a=buffer.annotations![t.annotationIndex];setOverrideEditor({path:buffer.path,index:t.annotationIndex,action:a.annotation.action,revision:buffer.revision,document:a.annotation.document,applied:a.applied,previous_document:a.previous_document});return;}if(!selected)return;const result=await api('override/template',{id:selected.id,action:t.action,revision:buffer.revision});setOverrideEditor({id:selected.id,action:t.action,revision:buffer.revision,generation:result.generation,document:result.document});})} prepare={async t=>{
         if(!selected||!buffer||unsaved)throw Error('Save or discard editor changes before inserting a template.');
         return api('template',{id:selected.id,action:t.action,revision:buffer.revision});
-      }}/>:<pre className="diff">{diff||'No changes to review.'}</pre>}
-      <footer>{view==='source'?<button className="primary" disabled={!buffer.writable||!unsaved||busy||status.running} onClick={()=>act(async()=>{await save();})}>Save draft</button>:<button className="primary" disabled={buffer.conflict||!diff||busy||status.running} onClick={()=>act(async()=>{await api('apply',{path:buffer.path,revision:buffer.revision});await open({path:buffer.path,start:0,end:0,available:true});await refreshDrafts();})}>Apply file & reanalyze</button>}<button disabled={busy||status.running||buffer.content===buffer.original} onClick={()=>act(async()=>{await api('discard',{path:buffer.path,revision:buffer.revision});await open({path:buffer.path,start:0,end:0,available:true});await refreshDrafts();})}>Discard draft</button><small>Drafts stay separate from source until applied.</small></footer></>:null}
+      }}/>:<pre className="diff">{(!buffer.writable?'Override preview — dependency source stays unchanged\n\n':'')+(diff||'No changes to review.')}</pre>}
+      <footer>{view==='source'?<button className="primary" disabled={!buffer.writable||!unsaved||busy||status.running} onClick={()=>act(async()=>{await save();})}>Save draft</button>:<button className="primary" disabled={buffer.conflict||!diff||busy||status.running} onClick={()=>act(async()=>{if(!buffer.writable){setOverridePlan(await api('override/prepare',{path:buffer.path,revision:buffer.revision}));return;}await api('apply',{path:buffer.path,revision:buffer.revision});await open({path:buffer.path,start:0,end:0,available:true});await refreshDrafts();})}>{buffer.writable?'Apply file & reanalyze':'Apply overrides & reanalyze'}</button>}<button disabled={busy||status.running||(buffer.content===buffer.original&&!buffer.annotations?.some(a=>!a.applied))} onClick={()=>act(async()=>{await api('discard',{path:buffer.path,revision:buffer.revision});await open({path:buffer.path,start:0,end:0,available:true});await refreshDrafts();})}>Discard draft</button><small>{buffer.writable?'Drafts stay separate from source until applied.':'Apply writes override documentation; dependency source stays read-only.'}</small></footer></>:null}
     </main>
     <aside className="details" aria-label="Effect details">{selected?<><section className="effect-summary" aria-label="Selected effect"><div className="section-title">FINDING DETAILS</div><p>{selected.reason}</p><small>{selected.crate_name} · trace {selected.trace_id||'unavailable'}</small></section>
       <div className="details-scroll" ref={detailsScroll} tabIndex={0} aria-label="Navigation and call trace"><h3>Navigate</h3>{[['Report root',selected.audit?.root],['Effect source',selected.audit?.source],['Contract',selected.audit?.contract]].map(([label,l])=><button className="link" key={label as string} disabled={!l || !(l as Location).available} onClick={()=>act(()=>open(l as Location))}>{label as string}{!(l as Location)?.available?' · unavailable':''}</button>)}
@@ -230,6 +265,16 @@ function App() {
       {unsaved||buffer?.content!==buffer?.original?<p className="hint">Revert to the original source to restore inline prompts, or apply edits and reanalyze.</p>:null}
       <h3>Call trace</h3><ol className="trace">{trace.map((step,i)=><li key={i}><button className={highlightedTraceIndex===i?'active':''} aria-current={highlightedTraceIndex===i?'location':undefined} disabled={!step.location?.available} onClick={()=>act(()=>open(step.location!))}>{step.caller}<span>{step.kind} → {step.target||'effect operation'}</span><small title={step.location?.path}>{!step.location?'':step.location.path.startsWith(root+'/')?step.location.path.slice(root.length+1):'…/'+step.location.path.split('/').slice(-3).join('/')}{step.location?.line?':'+step.location.line:''}{!step.location?.available?' · source unavailable':''}</small></button></li>)}</ol></div>
     </>:<div className="empty">Select a finding to inspect its contract and call trace.</div>}</aside></div>
+    {overrideEditor&&<Modal title={overrideEditor.action==='justification'?'Justify via override':'Propagate obligations via override'} onClose={()=>setOverrideEditor(undefined)}>
+      {error&&<p role="alert">{error}</p>}<p>This documentation will be saved as an override draft. Dependency source stays read-only.</p>
+      <textarea ref={placeCaretAtEnd} autoFocus aria-label="Override documentation" value={overrideEditor.document} onChange={e=>setOverrideEditor({...overrideEditor,document:e.target.value})}/>
+      <div className="modal-actions">{overrideEditor.index!==undefined&&!overrideEditor.applied&&<button disabled={busy||status.running} onClick={()=>act(async()=>{const result=await api('override/discard',overrideEditor);setBuffer(result.buffer);setText(result.buffer.content);if(result.finding)setSelected(result.finding);setOverrideEditor(undefined);await refreshDrafts();})}>{overrideEditor.previous_document?'Discard changes':'Delete draft'}</button>}<button onClick={()=>setOverrideEditor(undefined)}>Cancel</button><button className="primary" disabled={busy||status.running} onClick={()=>act(async()=>{const next=await api(overrideEditor.id?'override/save':'override/edit',overrideEditor);setBuffer(next);setText(next.content);setOverrideEditor(undefined);if(view==='changes')setDiff((await api('diff?'+new URLSearchParams({path:next.path}))).diff);await refreshDrafts();})}>Save draft</button></div>
+    </Modal>}
+    {overridePlan&&buffer&&<Modal title={overridePlan.existing?'Confirm editing override file':'Apply override drafts'} onClose={()=>setOverridePlan(undefined)}>
+      {error&&<p role="alert">{error}</p>}<p>{overridePlan.existing?'Applying these drafts will edit the existing override file.':'Applying these drafts will create and register an override file.'}</p>
+      <label>Override file<select aria-label="Override file" value={overridePlan.destination} disabled={busy} onChange={e=>{const destination=e.target.value;act(async()=>setOverridePlan(await api('override/prepare',{path:buffer.path,revision:buffer.revision,destination})));}}>{overridePlan.destinations.map(p=><option key={p}>{p}</option>)}</select></label>
+      <pre className="diff">{overridePlan.diff}</pre><div className="modal-actions"><button onClick={()=>setOverridePlan(undefined)}>Cancel</button><button className="primary" disabled={busy||status.running} onClick={()=>act(async()=>{await api('override/apply',{token:overridePlan.token,confirmed:overridePlan.existing});setOverridePlan(undefined);await open({path:buffer.path,start:0,end:0,available:true});await refreshDrafts();})}>{overridePlan.existing?'Confirm edit & reanalyze':'Create override & reanalyze'}</button></div>
+    </Modal>}
     <div className="analysis-log"><button onClick={()=>setLogs(!logs)}>{logs?'▾':'▸'} Analysis output</button><span>{status.count} findings · {drafts.length} saved drafts</span>{logs&&<pre>{status.log||'Waiting for analysis output…'}</pre>}</div>
   </div>;
 }

@@ -533,6 +533,24 @@ Injections apply with either `marker-probing` strategy, do not modify source fil
 artifact caches. Keep contract replacements and justification blocks in separate
 selector entries.
 
+Audit also writes additive `[[annotations]]` entries in these files. Each entry
+contains an `effect`, an `action` (`justification` or `obligation`), the full
+comment `document`, and a `selector`. Selectors identify the Cargo package and
+version, package-relative source path, function namespace and compiler identity,
+source content hash, normalized byte range, and operation or invocation identity.
+Generate these selectors with the audit GUI rather than copying line numbers.
+Justifications use the same marker parser as source comments, including named
+requirements and lists; obligations use the existing contract parser. Additive
+annotations preserve original contracts and legacy `[overrides]` replacements.
+
+Dependency files remain unchanged. Saved drafts present virtual source diffs;
+applying them merges annotations into the selected override TOML while preserving
+unrelated entries and comments. Existing-file edits require confirmation. New
+files are registered in the active configuration. A changed dependency or an
+ambiguous target causes an analysis error and requires re-auditing that annotation;
+overrides never shift automatically to a nearby site. Package-relative matching
+allows unchanged dependency sources to be audited from another checkout.
+
 ## JSON Output
 
 Human output is written to stderr by default. For machine-readable output:
@@ -546,7 +564,7 @@ diagnostics stay on stderr. Only workspace rustc units emit sniff-test messages;
 dependency units cache facts silently. Each workspace unit emits at most one
 message with `"reason":"sniff-test-artifact"`. Reports have no dependency
 `scope`, cache identity, or dependency list because every public report is a
-workspace report. Reports use format version 17. A finding includes
+workspace report. Reports use format version 25. A finding includes
 `root-span` alongside `root` when the selected function's source location is
 available and verified; `span` is the finding's effect location, and every
 `trace` entry is a call or effect edge. Source findings also include an `owner`

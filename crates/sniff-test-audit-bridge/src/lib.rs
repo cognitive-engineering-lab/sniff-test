@@ -1,5 +1,7 @@
 //! Shared auditing workflow. No HTTP, terminal, browser, or rustc dependencies.
+mod overrides;
 use anyhow::{Context, Result, bail, ensure};
+pub use overrides::{OverrideApplyPlan, OverrideDraft};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sniff_test_report::{
@@ -28,6 +30,8 @@ pub struct AuditMetadata {
 }
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EditTarget {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub selector: Option<sniff_test_report::OverrideSelector>,
     pub action: String,
     pub location: Location,
 }
@@ -43,6 +47,7 @@ fn adapt_semantics(facts: SemanticFacts, finding: &Value) -> AuditMetadata {
         if facts.obligation.is_some() {
             if let Some(location) = facts.enclosing_function.as_ref().filter(|l| l.available) {
                 targets.push(EditTarget {
+                    selector: None,
                     action: "obligation".into(),
                     location: location.clone(),
                 });
@@ -58,12 +63,18 @@ fn adapt_semantics(facts: SemanticFacts, finding: &Value) -> AuditMetadata {
         {
             if let Some(location) = facts.justification_site.as_ref().filter(|l| l.available) {
                 targets.push(EditTarget {
+                    selector: None,
                     action: "justification".into(),
                     location: location.clone(),
                 });
             }
         }
     }
+    targets.extend(facts.override_targets.into_iter().map(|t| EditTarget {
+        action: t.action,
+        location: t.location,
+        selector: Some(t.selector),
+    }));
     AuditMetadata {
         effect: facts.effect,
         obligation: facts.obligation.unwrap_or_default(),
@@ -136,6 +147,8 @@ pub struct Finding {
     pub missing_requirements: Vec<String>,
     pub display_trace: Vec<String>,
     pub audit: Option<AuditMetadata>,
+    #[serde(default)]
+    pub dependency: bool,
 }
 #[derive(Debug, Clone, Default, Serialize)]
 pub struct Analysis {
@@ -186,6 +199,7 @@ pub fn parse_reports(stdout: &[u8]) -> Result<Vec<Finding>> {
                 missing_requirements: string_list(&data["missing-requirements"]),
                 display_trace: string_list(&data["trace"]),
                 audit,
+                dependency: data["owner"]["scope"] == "dependency",
             });
         }
     }
@@ -214,10 +228,12 @@ pub struct Buffer {
     pub revision: u64,
     pub writable: bool,
     pub conflict: bool,
+    #[serde(default)]
+    pub annotations: Vec<OverrideDraft>,
 }
 impl Buffer {
     pub fn dirty(&self) -> bool {
-        self.original != self.content
+        self.original != self.content || self.annotations.iter().any(|a| !a.applied)
     }
 }
 
@@ -229,7 +245,9 @@ pub struct Session {
     draft_file: PathBuf,
     allowed_external: BTreeSet<PathBuf>,
     definition_sources: BTreeSet<PathBuf>,
+    dependency_sources: BTreeSet<PathBuf>,
     _lock: fs::File,
+    pending_override: Option<OverrideApplyPlan>,
 }
 impl Session {
     pub fn open(root: PathBuf, target: PathBuf, config: AnalysisConfig) -> Result<Self> {
@@ -252,9 +270,10 @@ impl Session {
         for buffer in buffers.values_mut() {
             buffer.conflict =
                 fs::read_to_string(&buffer.path).ok().as_ref() != Some(&buffer.original);
-            buffer.writable = Path::new(&buffer.path)
-                .canonicalize()
-                .is_ok_and(|p| p.starts_with(&root));
+            buffer.writable = buffer.writable
+                && Path::new(&buffer.path)
+                    .canonicalize()
+                    .is_ok_and(|p| p.starts_with(&root));
         }
         Ok(Self {
             root,
@@ -268,11 +287,17 @@ impl Session {
             draft_file,
             allowed_external: BTreeSet::new(),
             definition_sources: BTreeSet::new(),
+            dependency_sources: BTreeSet::new(),
             _lock: lock,
+            pending_override: None,
         })
     }
     fn persist(&self) -> Result<()> {
-        let dirty: BTreeMap<_, _> = self.buffers.iter().filter(|(_, b)| b.dirty()).collect();
+        let dirty: BTreeMap<_, _> = self
+            .buffers
+            .iter()
+            .filter(|(_, b)| b.dirty() || !b.annotations.is_empty())
+            .collect();
         atomic_write(&self.draft_file, &serde_json::to_vec(&dirty)?)
     }
     fn checked_path(&self, path: &str, write: bool) -> Result<PathBuf> {
@@ -286,10 +311,23 @@ impl Session {
         .context("source unavailable")?;
         ensure!(path.is_file(), "not a source file");
         ensure!(
+            !write
+                || !self.dependency_sources.contains(&path)
+                    && self
+                        .buffers
+                        .get(path.to_string_lossy().as_ref())
+                        .is_none_or(|b| b.writable),
+            "dependency source is read-only"
+        );
+        ensure!(
             path.starts_with(&self.root)
                 || (!write
                     && (self.allowed_external.contains(&path)
-                        || self.definition_sources.contains(&path))),
+                        || self.definition_sources.contains(&path)
+                        || self
+                            .buffers
+                            .get(path.to_string_lossy().as_ref())
+                            .is_some_and(|b| !b.annotations.is_empty()))),
             "source is outside this workspace"
         );
         Ok(path)
@@ -313,15 +351,23 @@ impl Session {
             original: disk.clone(),
             content: disk.clone(),
             revision: 0,
-            writable: resolved.starts_with(&self.root),
+            writable: resolved.starts_with(&self.root)
+                && !self.dependency_sources.contains(&resolved),
             conflict: false,
+            annotations: Vec::new(),
         });
+        if self.dependency_sources.contains(&resolved) {
+            buffer.writable = false;
+        }
         if !buffer.dirty() && buffer.original != disk {
             buffer.original = disk.clone();
             buffer.content = disk.clone();
             buffer.revision += 1;
             self.analysis.stale = true;
         }
+        buffer
+            .annotations
+            .retain(|a| !a.applied || a.location.hash == content_hash(disk.as_bytes()));
         buffer.conflict = buffer.original != disk;
         Ok(buffer.clone())
     }
@@ -360,7 +406,9 @@ impl Session {
     }
     pub fn diff(&mut self, path: &str) -> Result<String> {
         let b = self.buffer(path)?;
-        Ok(similar::TextDiff::from_lines(&b.original, &b.content)
+        let preview = self.override_preview(&b)?;
+        let original = self.override_original_preview(&b)?;
+        Ok(similar::TextDiff::from_lines(&original, &preview)
             .unified_diff()
             .header(&b.path, &b.path)
             .to_string())
@@ -377,6 +425,23 @@ impl Session {
         let path = key.as_str();
         let b = self.buffers.get(path).context("unknown draft")?;
         ensure!(b.revision == revision, "draft revision conflict");
+        if !b.writable {
+            let previous = b.clone();
+            let b = self.buffers.get_mut(path).unwrap();
+            for annotation in &mut b.annotations {
+                if let Some(document) = annotation.previous_document.clone() {
+                    annotation.annotation.document = document;
+                    annotation.applied = true;
+                }
+            }
+            b.annotations.retain(|a| a.applied);
+            b.revision += 1;
+            if let Err(error) = self.persist() {
+                self.buffers.insert(path.into(), previous);
+                return Err(error);
+            }
+            return Ok(());
+        }
         let removed = self.buffers.remove(path);
         if let Err(error) = self.persist() {
             if let Some(b) = removed {
@@ -440,19 +505,33 @@ impl Session {
                 for finding in &mut findings {
                     if let Some(audit) = &mut finding.audit {
                         audit.targets.retain(|target| {
-                            Path::new(&target.location.path)
-                                .canonicalize()
-                                .is_ok_and(|path| path.starts_with(&self.root))
+                            target.selector.is_some()
+                                || Path::new(&target.location.path)
+                                    .canonicalize()
+                                    .is_ok_and(|path| path.starts_with(&self.root))
                         });
                     }
                 }
                 for finding in &findings {
                     if let Some(a) = &finding.audit {
+                        if finding.dependency {
+                            for location in a.source.iter().chain(
+                                a.targets
+                                    .iter()
+                                    .filter(|t| t.selector.is_some())
+                                    .map(|t| &t.location),
+                            ) {
+                                if let Ok(path) = Path::new(&location.path).canonicalize() {
+                                    self.dependency_sources.insert(path);
+                                }
+                            }
+                        }
                         for location in a
                             .source
                             .iter()
                             .chain(a.root.iter())
                             .chain(a.contract.iter())
+                            .chain(a.targets.iter().map(|t| &t.location))
                             .chain(a.trace.iter().filter_map(|s| s.location.as_ref()))
                         {
                             if let Ok(path) = Path::new(&location.path).canonicalize() {
@@ -575,6 +654,25 @@ pub struct TemplateEdit {
     pub cursor: usize,
 }
 
+/// Find attached outer attributes without mistaking brackets in strings or
+/// comments for attribute boundaries. Offsets remain in original source bytes.
+fn outer_attribute_start(source: &str, line_start: usize) -> usize {
+    use syn::parse::Parser;
+    let mut start = line_start;
+    let mut offset = line_start;
+    for line in source[..line_start].split_inclusive('\n').rev() {
+        offset -= line.len();
+        if line.trim_start().starts_with("#[")
+            && syn::Attribute::parse_outer
+                .parse_str(&source[offset..line_start])
+                .is_ok()
+        {
+            start = offset;
+        }
+    }
+    start
+}
+
 fn template_edit(
     buffer: &Buffer,
     target: &EditTarget,
@@ -587,6 +685,7 @@ fn template_edit(
         "source position unavailable"
     );
     let line_start = source[..start].rfind('\n').map_or(0, |i| i + 1);
+    let line_start = outer_attribute_start(source, line_start);
     // Existing contiguous documentation is an editing destination, not another insertion.
     let needle = if target.action == "justification" {
         format!("// {}:", audit.justification.trim_end_matches(':'))
@@ -684,11 +783,12 @@ pub fn documentation_edit(
     } else {
         "\n"
     };
-    let mut at = line_start;
+    let attribute_start = outer_attribute_start(source, line_start);
+    let mut at = attribute_start;
     let comment;
     if action == "justification" {
         // Existing comments may be extending a marker. Do not silently create a second marker.
-        let preceding = source[..line_start].trim_end();
+        let preceding = source[..attribute_start].trim_end();
         ensure!(
             !preceding
                 .lines()
@@ -712,9 +812,9 @@ pub fn documentation_edit(
             )
         };
     } else if action == "obligation" {
-        // Walk contiguous outer docs and single-line attributes. Complex attributes require manual editing.
-        let mut docs_start = line_start;
-        for line in source[..line_start].split_inclusive('\n').rev() {
+        // Include existing outer documentation before the attributes.
+        let mut docs_start = attribute_start;
+        for line in source[..attribute_start].split_inclusive('\n').rev() {
             let trimmed = line.trim();
             if trimmed.starts_with("///") || (trimmed.starts_with("#[") && trimmed.ends_with(']')) {
                 docs_start -= line.len();
@@ -821,6 +921,7 @@ mod tests {
             root: Some(location.clone()),
             enclosing_function: Some(location.clone()),
             justification_site: Some(location.clone()),
+            override_targets: Vec::new(),
             contract: None,
             trace: vec![TraceStep {
                 caller: "caller".into(),
@@ -1006,6 +1107,28 @@ mod tests {
         );
     }
     #[test]
+    fn documentation_precedes_attached_multiline_attributes() {
+        let attributes = "    #[cfg_attr(\r\n        feature = \"test\", allow(unused)\r\n    )]\r\n    #[custom(text = r#\"[λ]\"#)]\r\n";
+        let source = format!("fn earlier() {{}}\r\n{attributes}    fn sample() {{}}\r\n");
+        let location = Location {
+            path: "lib.rs".into(),
+            source_id: "id".into(),
+            hash: content_hash(source.as_bytes()),
+            start: source.find("fn sample").unwrap(),
+            end: source.len(),
+            available: true,
+        };
+        let audit = metadata(location.clone());
+        for action in ["justification", "obligation"] {
+            let edited =
+                documentation_edit(&source, &location, action, &audit, "Checked λ.").unwrap();
+            assert!(edited.starts_with("fn earlier() {}\r\n    //"));
+            assert!(edited.contains(&format!("Checked λ.\r\n{attributes}")));
+            assert!(edited.ends_with("    fn sample() {}\r\n"));
+        }
+    }
+
+    #[test]
     fn guided_docs_extend_sections_preserve_crlf_and_refuse_ambiguous_layout() {
         let source = "/// Existing.\r\n/// # Allocations\r\n/// Old condition.\r\n#[inline]\r\npub fn allocate() {}\r\n";
         let location = Location {
@@ -1063,10 +1186,12 @@ mod tests {
                 revision: 1,
                 writable: true,
                 conflict: false,
+                annotations: Vec::new(),
             };
             let edit = template_edit(
                 &buffer,
                 &EditTarget {
+                    selector: None,
                     action: "obligation".into(),
                     location,
                 },
@@ -1108,10 +1233,12 @@ mod tests {
             revision: 1,
             writable: true,
             conflict: false,
+            annotations: Vec::new(),
         };
         let edit = template_edit(
             &buffer,
             &EditTarget {
+                selector: None,
                 action: "justification".into(),
                 location,
             },

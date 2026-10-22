@@ -246,6 +246,8 @@ pub struct ContractsConfig {
     #[serde(skip)]
     pub overrides: ContractDocOverrides,
     #[serde(skip)]
+    pub annotations: Vec<sniff_test_report::OverrideAnnotation>,
+    #[serde(skip)]
     resolved_override_files: Vec<PathBuf>,
 }
 
@@ -258,6 +260,7 @@ impl ContractsConfig {
     fn load_overrides(&mut self, base_dir: &Path) -> Result<(), ConfigError> {
         let mut entries = Vec::new();
         let mut source_entries = BTreeMap::new();
+        self.annotations.clear();
         let mut resolved_files = Vec::new();
         for path in &self.override_files {
             let path = if path.is_absolute() {
@@ -277,6 +280,7 @@ impl ContractsConfig {
                         source,
                     }
                 })?;
+            self.annotations.extend(override_file.annotations);
             let file_entries = override_file
                 .overrides
                 .namespaces
@@ -343,10 +347,13 @@ impl ContractsConfig {
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct ContractDocOverrideFile {
+    #[serde(default)]
     overrides: ContractDocOverrideEntries,
+    #[serde(default)]
+    annotations: Vec<sniff_test_report::OverrideAnnotation>,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Default, Deserialize)]
 struct ContractDocOverrideEntries {
     #[serde(default)]
     crates: BTreeMap<String, BTreeMap<String, BTreeMap<String, String>>>,

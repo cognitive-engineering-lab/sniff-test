@@ -93,6 +93,12 @@ fn router(app: App) -> Router {
         .route("/diff", get(diff))
         .route("/propose", post(propose))
         .route("/template", post(template))
+        .route("/override/template", post(override_template))
+        .route("/override/save", post(override_save))
+        .route("/override/edit", post(override_edit))
+        .route("/override/discard", post(override_discard))
+        .route("/override/prepare", post(override_prepare))
+        .route("/override/apply", post(override_apply))
         .route("/apply", post(apply))
         .route("/discard", post(discard))
         .layer(middleware::from_fn_with_state(app.clone(), authorize));
@@ -384,6 +390,112 @@ async fn propose(State(app): State<App>, Json(edit): Json<Proposal>) -> ApiResul
         &edit.explanation,
         edit.revision
     )?)))
+}
+
+async fn override_template(State(app): State<App>, Json(edit): Json<TemplateRequest>) -> ApiResult {
+    let mut session = app.session.lock().unwrap();
+    let document = session.override_template(&edit.id, &edit.action, edit.revision)?;
+    Ok(Json(
+        json!({"document":document,"generation":session.analysis.generation}),
+    ))
+}
+#[derive(Deserialize)]
+struct OverrideSave {
+    id: String,
+    action: String,
+    revision: u64,
+    generation: u64,
+    document: String,
+}
+async fn override_save(State(app): State<App>, Json(edit): Json<OverrideSave>) -> ApiResult {
+    let mut session = app.session.lock().unwrap();
+    if edit.generation != session.analysis.generation {
+        return Err(
+            anyhow::anyhow!("Analysis changed; reopen the override editor before saving.").into(),
+        );
+    }
+    Ok(Json(json!(session.save_override(
+        &edit.id,
+        &edit.action,
+        edit.revision,
+        edit.document
+    )?)))
+}
+#[derive(Deserialize)]
+struct OverrideEdit {
+    path: String,
+    revision: u64,
+    index: usize,
+    document: String,
+}
+async fn override_edit(State(app): State<App>, Json(edit): Json<OverrideEdit>) -> ApiResult {
+    Ok(Json(json!(app.session.lock().unwrap().edit_override(
+        &edit.path,
+        edit.revision,
+        edit.index,
+        edit.document
+    )?)))
+}
+
+#[derive(Deserialize)]
+struct OverrideDiscard {
+    path: String,
+    revision: u64,
+    index: usize,
+}
+async fn override_discard(State(app): State<App>, Json(edit): Json<OverrideDiscard>) -> ApiResult {
+    let mut session = app.session.lock().unwrap();
+    let before = session.buffer(&edit.path)?;
+    let finding = before.annotations.get(edit.index).and_then(|draft| {
+        session
+            .analysis
+            .findings
+            .iter()
+            .find(|finding| {
+                finding.effect.as_deref() == Some(draft.annotation.effect.as_str())
+                    && finding.audit.as_ref().is_some_and(|audit| {
+                        audit.targets.iter().any(|target| {
+                            target.action == draft.annotation.action
+                                && target.selector.as_ref().is_some_and(|selector| {
+                                    selector.same_target(&draft.annotation.selector)
+                                })
+                        })
+                    })
+            })
+            .cloned()
+    });
+    let buffer = session.discard_override(&edit.path, edit.revision, edit.index)?;
+    Ok(Json(json!({"buffer": buffer, "finding": finding})))
+}
+
+#[derive(Deserialize)]
+struct OverridePrepare {
+    path: String,
+    revision: u64,
+    destination: Option<String>,
+}
+async fn override_prepare(State(app): State<App>, Json(edit): Json<OverridePrepare>) -> ApiResult {
+    Ok(Json(json!(
+        app.session.lock().unwrap().prepare_override_apply(
+            &edit.path,
+            edit.revision,
+            edit.destination.as_deref()
+        )?
+    )))
+}
+#[derive(Deserialize)]
+struct OverrideApply {
+    token: String,
+    #[serde(default)]
+    confirmed: bool,
+}
+async fn override_apply(State(app): State<App>, Json(edit): Json<OverrideApply>) -> ApiResult {
+    app.session
+        .lock()
+        .unwrap()
+        .apply_overrides(&edit.token, edit.confirmed)?;
+    start_analysis(&app)?;
+    Ok(Json(json!({"applied":true})))
 }
 
 #[cfg(test)]

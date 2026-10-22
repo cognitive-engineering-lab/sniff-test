@@ -16,7 +16,7 @@ mod tests {
 
     #[test]
     fn workspace_report_serializes_its_public_fields() {
-        assert_eq!(REPORT_FORMAT_VERSION, 24);
+        assert_eq!(REPORT_FORMAT_VERSION, 25);
 
         let report = AnalysisArtifactReport {
             reason: String::from("sniff-test-artifact"),
@@ -33,7 +33,7 @@ mod tests {
             serde_json::to_value(report).expect("report should serialize"),
             serde_json::json!({
                 "reason": "sniff-test-artifact",
-                "format-version": 24,
+                "format-version": 25,
                 "tool-version": "0.1.0",
                 "rustc-version": "rustc test",
                 "artifact": {

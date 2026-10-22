@@ -3826,7 +3826,10 @@ fn json_semantics_preserve_source_facts_without_audit_mode() {
         assert!(!reports.is_empty(), "{}", output.stderr);
         let mut count = 0;
         for report in reports {
-            assert_eq!(report["format-version"], 24);
+            assert_eq!(
+                report["format-version"],
+                sniff_test_report::REPORT_FORMAT_VERSION
+            );
             for finding in report["findings"].as_array().unwrap() {
                 assert!(finding.get("audit").is_none());
                 if finding["kind"] != "effect" {
@@ -3968,4 +3971,247 @@ fn dependency_semantics_have_verified_source_and_call_sites() {
             output.stderr
         );
     }
+}
+
+#[test]
+fn dependency_override_drafts_discharge_exact_sites_and_propagate_contracts() {
+    use sniff_test_audit_bridge::{AnalysisConfig, Session};
+    let repo = repo_root();
+    let binary = PathBuf::from(env!("CARGO_BIN_EXE_cargo-sniff-test"));
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path().join("dependency");
+    copy_fixture_dir(
+        &repo.join("tests/fixtures/dependency_generic_private_panic"),
+        &root,
+    )
+    .unwrap();
+    let dependency = root.join("dep/src/lib.rs");
+    let source = "pub fn api<T>(flag: bool) {\n    let _ = std::marker::PhantomData::<T>;\n    assert!(flag, \"first\");\n    assert!(!flag, \"second\");\n}\n";
+    fs::write(&dependency, source).unwrap();
+    let app = root.join("app");
+    let _guard = lock_nested_cargo();
+    let run = || {
+        run_cargo_sniff_test(
+            &binary,
+            &app,
+            "dependency_override_audit",
+            &Case::new().args(&["-e", "panic", "--message-format", "json"]),
+        )
+    };
+    let mut session = Session::open(
+        app.clone(),
+        root.join("drafts"),
+        AnalysisConfig {
+            executable: binary.clone(),
+            directory: app.clone(),
+            arguments: vec![],
+        },
+    )
+    .unwrap();
+    let finish = |session: &mut Session, output: CommandOutput| {
+        session.finish_analysis(Ok(Output {
+            status: output.status,
+            stdout: output.stdout.into_bytes(),
+            stderr: output.stderr.into_bytes(),
+        }));
+        assert!(!session.analysis.stale, "{}", session.analysis.log);
+    };
+    finish(&mut session, run());
+    let findings = session
+        .analysis
+        .findings
+        .iter()
+        .filter(|f| {
+            f.audit
+                .as_ref()
+                .is_some_and(|a| a.targets.iter().any(|t| t.selector.is_some()))
+        })
+        .cloned()
+        .collect::<Vec<_>>();
+    assert_eq!(findings.len(), 2, "{}", session.analysis.log);
+    let finding = &findings[0];
+    let target = finding
+        .audit
+        .as_ref()
+        .unwrap()
+        .targets
+        .iter()
+        .find(|t| t.action == "justification")
+        .unwrap();
+    let original = session.buffer(&target.location.path).unwrap();
+    assert_eq!(
+        session
+            .override_template(&finding.id, "justification", original.revision)
+            .unwrap(),
+        "// PANIC: "
+    );
+    let draft = session
+        .save_override(
+            &finding.id,
+            "justification",
+            original.revision,
+            "// PANIC: This exact assertion is intentional.".into(),
+        )
+        .unwrap();
+    assert_eq!(draft.content, source);
+    assert!(
+        session
+            .diff(&draft.path)
+            .unwrap()
+            .contains("+    // PANIC:")
+    );
+    let plan = session
+        .prepare_override_apply(&draft.path, draft.revision, None)
+        .unwrap();
+    assert!(!plan.existing);
+    session.apply_overrides(&plan.token, false).unwrap();
+    assert_eq!(fs::read_to_string(&dependency).unwrap(), source);
+    finish(&mut session, run());
+    assert_eq!(
+        session.analysis.findings.len(),
+        1,
+        "{}",
+        session.analysis.log
+    );
+    // Selectors remain valid when an unchanged dependency moves to another checkout.
+    let moved = temp.path().join("relocated");
+    copy_fixture_dir(&root.join("dep"), &moved.join("dep")).unwrap();
+    copy_fixture_dir(&app, &moved.join("app")).unwrap();
+    let relocated = run_cargo_sniff_test(
+        &binary,
+        &moved.join("app"),
+        "relocated_overrides",
+        &Case::new().args(&["-e", "panic", "--message-format", "json"]),
+    );
+    let relocated_findings = sniff_test_audit_bridge::parse_reports(relocated.stdout.as_bytes())
+        .unwrap_or_else(|e| panic!("{e}: {}", relocated.stderr));
+    assert_eq!(relocated_findings.len(), 1, "{}", relocated.stderr);
+    let remaining = session.analysis.findings[0].clone();
+    let buffer = session.buffer(&draft.path).unwrap();
+    let draft = session
+        .save_override(
+            &remaining.id,
+            "obligation",
+            buffer.revision,
+            "/// # Panics\n///\n/// - flag: The caller must supply an appropriate flag.".into(),
+        )
+        .unwrap();
+    let plan = session
+        .prepare_override_apply(&draft.path, draft.revision, None)
+        .unwrap();
+    assert!(plan.existing);
+    assert!(session.apply_overrides(&plan.token, false).is_err());
+    session.apply_overrides(&plan.token, true).unwrap();
+    finish(&mut session, run());
+    assert!(
+        session
+            .analysis
+            .findings
+            .iter()
+            .any(|f| f.class.as_deref() == Some("documented-obligation")),
+        "{}",
+        session.analysis.log
+    );
+    assert_eq!(fs::read_to_string(&dependency).unwrap(), source);
+    // A dependency edit must not silently reuse the justification.
+    fs::write(&dependency, source.replace("first", "changed")).unwrap();
+    let changed = run();
+    assert!(
+        changed.stderr.contains("stale") && changed.stderr.contains("override"),
+        "{}\n{}",
+        changed.stdout,
+        changed.stderr
+    );
+}
+
+#[test]
+fn dependency_safety_override_uses_the_shared_annotation_framework() {
+    use sniff_test_audit_bridge::{AnalysisConfig, Session};
+    let binary = PathBuf::from(env!("CARGO_BIN_EXE_cargo-sniff-test"));
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path().join("dependency");
+    copy_fixture_dir(&repo_root().join("tests/fixtures/dependency_safety"), &root).unwrap();
+    let app = root.join("app");
+    let _guard = lock_nested_cargo();
+    let run = || {
+        run_cargo_sniff_test(
+            &binary,
+            &app,
+            "dependency_safety_override",
+            &Case::new().args(&["-e", "safety", "--message-format", "json"]),
+        )
+    };
+    let mut session = Session::open(
+        app.clone(),
+        root.join("drafts"),
+        AnalysisConfig {
+            executable: binary.clone(),
+            directory: app.clone(),
+            arguments: vec![],
+        },
+    )
+    .unwrap();
+    let output = run();
+    session.finish_analysis(Ok(Output {
+        status: output.status,
+        stdout: output.stdout.into_bytes(),
+        stderr: output.stderr.into_bytes(),
+    }));
+    let finding = session
+        .analysis
+        .findings
+        .iter()
+        .find(|f| {
+            f.audit.as_ref().is_some_and(|a| {
+                a.targets.iter().any(|t| {
+                    t.action == "justification"
+                        && t.selector
+                            .as_ref()
+                            .is_some_and(|s| s.namespace.ends_with("::read_byte"))
+                })
+            })
+        })
+        .cloned()
+        .expect("verified dependency dereference target");
+    let target = finding
+        .audit
+        .as_ref()
+        .unwrap()
+        .targets
+        .iter()
+        .find(|t| t.action == "justification")
+        .unwrap();
+    let buffer = session.buffer(&target.location.path).unwrap();
+    assert_eq!(
+        session
+            .override_template(&finding.id, "justification", buffer.revision)
+            .unwrap(),
+        "// SAFETY: "
+    );
+    let draft = session
+        .save_override(
+            &finding.id,
+            "justification",
+            buffer.revision,
+            "// SAFETY: the caller provides a valid pointer".into(),
+        )
+        .unwrap();
+    let plan = session
+        .prepare_override_apply(&draft.path, draft.revision, None)
+        .unwrap();
+    session.apply_overrides(&plan.token, false).unwrap();
+    let output = run();
+    let findings = sniff_test_audit_bridge::parse_reports(output.stdout.as_bytes())
+        .unwrap_or_else(|e| panic!("{e}: {}", output.stderr));
+    assert!(
+        findings.iter().all(|f| !f.root.as_ref().is_some_and(
+            |r| r.ends_with("::read_dependency") || r.ends_with("::read_dependency_again")
+        )),
+        "{findings:#?}"
+    );
+    assert!(
+        !findings.is_empty(),
+        "unrelated dependency obligations must remain"
+    );
+    assert_eq!(fs::read_to_string(&draft.path).unwrap(), buffer.original);
 }

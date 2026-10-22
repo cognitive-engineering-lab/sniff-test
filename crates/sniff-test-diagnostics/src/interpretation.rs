@@ -291,6 +291,11 @@ fn adapt_finding(
                 .and_then(|locations| locations.1.clone()),
             contract: sources.semantic_location(finding.contract_source_range.as_ref()),
             trace: sources.semantic_trace(&finding.trace),
+            override_targets: if owner.scope == OwnerScope::Dependency {
+                sources.override_targets(finding)
+            } else {
+                Vec::new()
+            },
         });
     Finding {
         semantics,
@@ -1570,6 +1575,7 @@ fn adapt_incomplete(
             ),
             enclosing_function: None,
             justification_site: None,
+            override_targets: Vec::new(),
             contract: None,
             trace: sources.semantic_trace(&trace),
         });
@@ -2214,6 +2220,103 @@ impl SourceResolver<'_, '_> {
                 .artifacts()
                 .find_map(|artifact| artifact.facts.defining_function_body(function))
         })
+    }
+
+    fn override_targets(
+        &self,
+        finding: &InterpretedFinding,
+    ) -> Vec<sniff_test_report::OverrideTarget> {
+        use sniff_test_report::{OverrideSelector, OverrideTarget};
+        let Some(body) = self.function_body(finding.function) else {
+            return vec![];
+        };
+        let mut targets = Vec::new();
+        let mut add = |action: &str,
+                       kind: String,
+                       range: Option<&SourceRangeFact>,
+                       site: Option<String>| {
+            let Some(range) = range else {
+                return;
+            };
+            let Some(location) = self.semantic_location(Some(range)).filter(|l| l.available) else {
+                return;
+            };
+            let Some(source) = self.source_file(range) else {
+                return;
+            };
+            let Some((package, source_path)) =
+                sniff_test_core::override_annotations::package_source(&source.filename)
+            else {
+                return;
+            };
+            let selector = OverrideSelector {
+                definition: body.function.def_path_hash.to_string(),
+                namespace: body.display_path.clone(),
+                source_id: source.id.as_str().to_owned(),
+                source_hash: source.content_hash.clone(),
+                package,
+                source_path,
+                start: range.byte_start,
+                end: range.byte_end,
+                kind,
+                site,
+            };
+            let matches = sniff_test_core::override_annotations::matching_targets(
+                body,
+                &selector,
+                finding.effect.key.as_str(),
+            );
+            if matches.is_empty() || selector.kind.starts_with("operation:") && matches.len() != 1 {
+                return;
+            }
+            targets.push(OverrideTarget {
+                action: action.into(),
+                location,
+                selector,
+            });
+        };
+        if matches!(
+            finding.kind,
+            InterpretedFindingKind::Operation { .. }
+                | InterpretedFindingKind::Invocation { .. }
+                | InterpretedFindingKind::DocumentedObligation
+        ) {
+            add(
+                "obligation",
+                "function".into(),
+                body.source_range.as_ref(),
+                None,
+            );
+            match &finding.kind {
+                InterpretedFindingKind::Operation { operation } => add(
+                    "justification",
+                    format!("operation:{}", operation.as_str()),
+                    finding.source_range.as_ref(),
+                    None,
+                ),
+                _ if finding
+                    .trace
+                    .steps
+                    .last()
+                    .is_some_and(|s| s.marker_call.is_some()) =>
+                {
+                    add(
+                        "justification",
+                        "call".into(),
+                        finding.source_range.as_ref(),
+                        finding
+                            .trace
+                            .steps
+                            .last()
+                            .and_then(|s| s.marker_call)
+                            .and_then(|id| body.calls.iter().find(|c| c.id == id))
+                            .map(sniff_test_core::override_annotations::call_site_key),
+                    )
+                }
+                _ => {}
+            }
+        }
+        targets
     }
 
     fn local_annotation_locations(

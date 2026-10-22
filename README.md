@@ -100,7 +100,19 @@ it, and reapply your changes against the current source.
 
 Saved drafts survive server restarts in the Cargo target directory under
 `sniff-test-audit/`. Unsaved editor changes do not. Dependency and toolchain
-sources are read-only. Guided insertion falls back to manual editing for
+sources are read-only. For verified dependency sites, **Justify via override**
+and **Propagate obligations via override** open a documentation editor using
+the same comment templates. Saving changes the inline button to **Justified!** or
+**Obligation propagated!** and hides the alternative action. Click the completed
+button to edit the document or delete a new draft, restoring both actions. Applied
+overrides remain editable; **Discard changes** restores their applied text.
+Drafts show a source-style diff; **Apply overrides & reanalyze** writes the
+annotations to an override file instead of editing dependency source. Editing an
+existing override file requires confirmation; with multiple configured files,
+select the destination in the review dialog. If none is configured, audit creates
+`sniff-test-overrides.toml` beside the active configuration and registers it.
+
+Guided insertion falls back to manual editing for
 unsupported comment layouts, attributes, or ambiguous source positions.
 A nonzero analysis exit is shown with its output; valid findings remain
 available for auditing. Reanalysis checks saved source, not buffered drafts.

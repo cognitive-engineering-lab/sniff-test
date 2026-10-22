@@ -45,3 +45,5 @@ pub mod source_markers;
 pub mod source_overrides;
 pub mod trace;
 pub mod workspace;
+
+pub mod override_annotations;

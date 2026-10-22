@@ -184,6 +184,7 @@ pub(crate) struct AnnotationWorkspaceIndex {
     bodies_by_definition: BTreeMap<StableDefPathHash, Vec<usize>>,
     overrides: BTreeMap<StableDefPathHash, BTreeMap<EffectKey, usize>>,
     probing: AnnotationProbingFact,
+    additive: BTreeSet<usize>,
 }
 
 impl AnnotationWorkspaceIndex {
@@ -208,6 +209,7 @@ impl AnnotationWorkspaceIndex {
         let mut bodies_by_definition = BTreeMap::<_, Vec<_>>::new();
         let mut body_contracts = Vec::new();
         let mut marker_ids = Vec::new();
+        let mut additive = BTreeSet::new();
         for (position, body) in artifact.functions.iter().enumerate() {
             bodies_by_definition
                 .entry(body.function.def_path_hash)
@@ -228,13 +230,17 @@ impl AnnotationWorkspaceIndex {
                     invalid = true;
                     continue;
                 };
-                positions.push(contracts.push(
+                let position = contracts.push(
                     id,
                     owner,
                     &marker.kind.effect,
                     marker.source_range.as_ref(),
                     &marker.requirements,
-                ));
+                );
+                if marker.identity.starts_with("audit-override:") {
+                    additive.insert(position);
+                }
+                positions.push(position);
             }
             if let Some(declaration) = &body.contract_declaration {
                 positions.extend(push_target_contracts(&mut ids, &mut contracts, declaration));
@@ -303,6 +309,7 @@ impl AnnotationWorkspaceIndex {
             marker_ids,
             bodies_by_definition,
             overrides: override_records,
+            additive,
             probing,
         }
     }
@@ -477,7 +484,9 @@ impl AnnotationIndex {
                 .as_ref()
                 .map_err(Clone::clone)?
             {
-                if !overridden.contains(&store.records[record].owner.def_path_hash) {
+                if workspace.additive.contains(&record)
+                    || !overridden.contains(&store.records[record].owner.def_path_hash)
+                {
                     body_contracts.insert(record, &store.records);
                     if store.global.members.contains(&record) {
                         excluded_global.insert(record);

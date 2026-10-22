@@ -1086,7 +1086,10 @@ dependencies = [
  "serde_json",
  "similar",
  "sniff-test-report",
+ "syn 2.0.117",
  "tempfile",
+ "toml",
+ "toml_edit",
 ]
 
 [[package]]
@@ -1121,6 +1124,7 @@ dependencies = [
  "semver",
  "serde",
  "serde_json",
+ "sniff-test-report",
  "tempfile",
  "toml",
 ]
