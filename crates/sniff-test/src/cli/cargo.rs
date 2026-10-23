@@ -105,11 +105,12 @@ fn try_cargo_frontend() -> Result<ExitCode> {
     let status = cargo.status().context("failed to run Cargo")?;
     let found_explanation = match_marker.exists();
     let _ = std::fs::remove_file(match_marker.as_std_path());
-    if let Some(trace_id) = &args.explain {
-        if status.success() && !found_explanation {
-            eprintln!("error: trace ID `{trace_id}` was not found in this analysis");
-            return Ok(ExitCode::FAILURE);
-        }
+    if let Some(trace_id) = &args.explain
+        && status.success()
+        && !found_explanation
+    {
+        eprintln!("error: trace ID `{trace_id}` was not found in this analysis");
+        return Ok(ExitCode::FAILURE);
     }
     let Some(code) = status.code() else {
         return Ok(ExitCode::FAILURE);

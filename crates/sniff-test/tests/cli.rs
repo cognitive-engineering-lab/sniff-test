@@ -913,10 +913,10 @@ fn assert_consumer_definition_paths(consumer_facts: &str, consumer_document: &se
         );
     }
     assert!(
-        consumer_facts.contains(
+        !consumer_facts.contains(
             "core::definition_path_reexport::macros::internal::core::panicking::panic_nounwind_fmt"
         ),
-        "the old session-visible path should remain available only as a policy alias"
+        "session-visible re-export aliases must not remain in the definition-backed facts"
     );
     assert_definition_backed_display_paths(
         consumer_document,

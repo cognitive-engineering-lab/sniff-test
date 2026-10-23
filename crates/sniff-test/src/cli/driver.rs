@@ -80,12 +80,11 @@ pub(crate) fn analyze_crate(
     findings.extend(interpreted_findings);
     let report = build_report(crate_name, rustc_version, config, &effects, findings);
     if let Some(trace_id) = &args.explain {
-        if emit_explanation(tcx, &report, trace_id) {
-            if let Some(marker) = &args.explain_match_marker {
-                if let Err(error) = std::fs::write(marker, "matched") {
-                    emit_tool_error(tcx, format!("failed to record explained trace: {error}"));
-                }
-            }
+        if emit_explanation(tcx, &report, trace_id)
+            && let Some(marker) = &args.explain_match_marker
+            && let Err(error) = std::fs::write(marker, "matched")
+        {
+            emit_tool_error(tcx, format!("failed to record explained trace: {error}"));
         }
         return;
     }

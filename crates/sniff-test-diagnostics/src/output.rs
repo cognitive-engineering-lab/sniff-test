@@ -1,5 +1,7 @@
 //! Render and emit one analyzed artifact's results.
 
+use std::fmt::Write as _;
+
 use rustc_middle::ty::TyCtxt;
 use sniff_test_core::artifact::EffectKey;
 use sniff_test_core::config::SniffTestConfig;
@@ -64,10 +66,10 @@ pub fn emit_human_diagnostics(
 }
 
 fn explain_hint(explicit_effects: &[EffectKey]) -> String {
-    let flags = explicit_effects
-        .iter()
-        .map(|effect| format!(" -e {}", effect.as_str()))
-        .collect::<String>();
+    let mut flags = String::new();
+    for effect in explicit_effects {
+        write!(flags, " -e {}", effect.as_str()).expect("writing to a String cannot fail");
+    }
     format!("run `cargo sniff-test{flags} --explain <trace-id>` to see more details")
 }
 

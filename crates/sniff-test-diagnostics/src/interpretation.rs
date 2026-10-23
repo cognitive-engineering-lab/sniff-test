@@ -581,6 +581,10 @@ struct EffectDiagnosticWriter<'a, 'tcx, 'analysis> {
 }
 
 impl EffectDiagnosticWriter<'_, '_, '_> {
+    #[allow(
+        clippy::too_many_lines,
+        reason = "source classification renders operation and invocation evidence together"
+    )]
     fn source(&mut self, effect: &EffectMetadata, contract: bool) {
         self.justification_marker = Some(effect.justification.to_owned());
         if let Some(span) = self.sources.function_span(self.root.function) {
@@ -692,10 +696,10 @@ impl EffectDiagnosticWriter<'_, '_, '_> {
     }
 
     fn source_endpoint_note(&mut self, effect: &EffectMetadata) {
-        let caller = compact_function_name(&self.finding.function_path);
+        let function = compact_function_name(&self.finding.function_path);
         let note = if matches!(self.finding.kind, InterpretedFindingKind::Operation { .. }) {
             format!(
-                "`{caller}` reaches {} effect operation here",
+                "`{function}` reaches {} effect operation here",
                 effect.key.as_str()
             )
         } else {
@@ -1184,15 +1188,15 @@ fn obligation_doc_source(
     let docs = before.get(docs_start..)?;
     for (offset, line) in lines_with_offsets(docs) {
         let trimmed = line.trim_start();
-        if let Some(comment) = trimmed.strip_prefix("///") {
-            if let Some(heading_offset) = markdown_heading_offset(comment, heading) {
-                let prefix_len = line.len() - trimmed.len() + 3;
-                let heading_start = docs_start + offset + prefix_len + heading_offset;
-                return Some(ObligationDocSource::Inline(Span::with_root_ctxt(
-                    file.start_pos + BytePos(u32::try_from(heading_start).ok()?),
-                    function_span.hi(),
-                )));
-            }
+        if let Some(comment) = trimmed.strip_prefix("///")
+            && let Some(heading_offset) = markdown_heading_offset(comment, heading)
+        {
+            let prefix_len = line.len() - trimmed.len() + 3;
+            let heading_start = docs_start + offset + prefix_len + heading_offset;
+            return Some(ObligationDocSource::Inline(Span::with_root_ctxt(
+                file.start_pos + BytePos(u32::try_from(heading_start).ok()?),
+                function_span.hi(),
+            )));
         }
     }
     let declaration_file = declaration_file?;
@@ -1797,9 +1801,9 @@ fn trace_path_labels(trace: &InterpretedTrace) -> BTreeMap<String, String> {
         }
         let mut changed = false;
         for (path, options) in &candidates {
-            let index = &mut selected.get_mut(path).expect("every path has a selection");
-            if counts[options[**index].as_str()] > 1 && **index + 1 < options.len() {
-                **index += 1;
+            let index = selected.get_mut(path).expect("every path has a selection");
+            if counts[options[*index].as_str()] > 1 && *index + 1 < options.len() {
+                *index += 1;
                 changed = true;
             }
         }
@@ -2711,7 +2715,7 @@ mod tests {
                 .map(|(index, path)| InterpretedTraceStep {
                     caller: function(index as u128 + 1),
                     caller_path: (*path).to_owned(),
-                    call: CallId::new(index as u32),
+                    call: CallId::new(u32::try_from(index).expect("fixture call index fits u32")),
                     marker_call: None,
                     kind: InterpretedTraceStepKind::Reachability(CallKindFact::DirectCall),
                     source_range: None,
@@ -2734,7 +2738,7 @@ mod tests {
                 .map(|(index, path)| InterpretedTraceStep {
                     caller: function(index as u128 + 1),
                     caller_path: path.to_owned(),
-                    call: CallId::new(index as u32),
+                    call: CallId::new(u32::try_from(index).expect("fixture call index fits u32")),
                     marker_call: None,
                     kind: InterpretedTraceStepKind::Reachability(CallKindFact::DirectCall),
                     source_range: None,
