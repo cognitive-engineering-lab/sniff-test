@@ -1,0 +1,9 @@
+[analysis]
+effect-doc-matching = "exact"
+report-roots = [
+    "source_contract_overrides::justified",
+    "source_contract_overrides::trait_api::justified",
+]
+
+[contracts]
+override-files = ["override.toml"]

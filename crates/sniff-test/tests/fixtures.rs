@@ -119,6 +119,15 @@ fixture_cases! {
         supertrait_dyn_dispatch => Case::new()
             .denied();
     }
+    "source_contract_overrides" => {
+        source_contract_overrides_match_only_the_selected_definition => Case::new();
+        source_contract_overrides_accept_complete_justifications => Case::new()
+            .args(&["--manifest", "justified.toml"]);
+        source_contract_overrides_ignore_inactive_selectors => Case::new()
+            .args(&["--manifest", "inactive.toml"]);
+        source_contract_overrides_apply_to_registered_effects => Case::new()
+            .args(&["--manifest", "generic-effects.toml", "--effect", "allocation", "--effect", "file", "--effect", "safety"]);
+    }
     "contract_overrides" => {
         contract_overrides => Case::new();
     }

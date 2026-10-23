@@ -950,6 +950,7 @@ mod tests {
 
     fn source_file() -> SourceFileFact {
         SourceFileFact {
+            logical_path: None,
             id: SourceFileId::new("source-1"),
             filename: String::from("src/lib.rs"),
             content_hash: String::from("sha256:0123456789abcdef"),

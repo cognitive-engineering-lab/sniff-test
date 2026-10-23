@@ -995,6 +995,7 @@ fn loaded_dependency(stable_crate_id: u64, facts: ArtifactFacts) -> ArtifactAnal
         TOOL_VERSION,
         RUSTC_VERSION,
         ArtifactInfo {
+            package_version: None,
             id: artifact_id.clone(),
             crate_name: format!("dependency-{stable_crate_id}"),
             scope: ArtifactScope::Dependency,
@@ -1424,6 +1425,7 @@ fn one_exact_projection_contract_does_not_suppress_its_sibling() {
             ),
         ],
         vec![SourceFileFact {
+            logical_path: None,
             id: SourceFileId::new("source-1"),
             filename: String::from("src/lib.rs"),
             content_hash: String::from("sha256:0123456789abcdef"),
@@ -2405,6 +2407,7 @@ fn registered_passes_determine_missing_body_completeness_for_new_effects() {
             kind: ReportRootKind::Concrete,
         }],
         &config,
+        &std::collections::BTreeMap::new(),
         &effects,
     )
     .expect("effect report");

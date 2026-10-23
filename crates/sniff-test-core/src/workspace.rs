@@ -804,6 +804,7 @@ mod tests {
         functions: Vec<FunctionFact>,
     ) -> ArtifactAnalysisCache {
         let source_files = vec![SourceFileFact {
+            logical_path: None,
             id: SourceFileId::new(format!("source-{crate_name}")),
             filename: format!("src/{crate_name}.rs"),
             content_hash: String::from("hash"),
@@ -813,6 +814,7 @@ mod tests {
             EXPECTED.tool_version,
             EXPECTED.rustc_version,
             ArtifactInfo {
+                package_version: None,
                 id: artifact_id,
                 crate_name: crate_name.to_owned(),
                 scope,

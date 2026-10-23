@@ -1,7 +1,7 @@
 //! Per-rustc-unit fact extraction, dependency binding, and cache preparation.
 
 use std::collections::BTreeSet;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use rustc_hir::def_id::{CrateNum, LOCAL_CRATE};
 use rustc_middle::ty::TyCtxt;
@@ -16,6 +16,12 @@ use crate::compiler::extract::extract_artifact_facts;
 use crate::compiler::source::verify_cached_marker_sources;
 use crate::effects::Effect;
 use crate::workspace::{ArtifactAnalysisGraph, ExternArtifactInput};
+
+#[derive(Debug, Default)]
+pub struct PackageProvenance {
+    pub manifest_dir: Option<PathBuf>,
+    pub version: Option<String>,
+}
 
 pub struct AnalyzedArtifact {
     pub crate_name: String,
@@ -32,6 +38,7 @@ pub fn analyze_artifact(
     output_scope: ArtifactScope,
     rustc_version: &str,
     effects: &[Box<dyn Effect + '_>],
+    package: &PackageProvenance,
 ) -> Result<Option<AnalyzedArtifact>, String> {
     let externs = dependency_inputs(tcx)?;
     let dependencies = ArtifactAnalysisGraph::load(
@@ -53,9 +60,11 @@ pub fn analyze_artifact(
         ));
     }
     verify_dependency_marker_sources(tcx, &dependencies)?;
-    let facts = extract_artifact_facts(tcx, effects)
+    let facts = extract_artifact_facts(tcx, package.manifest_dir.as_deref(), effects)
         .map_err(|error| format!("failed to extract artifact facts: {error}"))?;
-    let facts = if let Some(artifact) = local_cache_artifact_info(tcx, output_scope) {
+    let facts = if let Some(artifact) =
+        local_cache_artifact_info(tcx, output_scope, package.version.as_deref())
+    {
         let cache = ArtifactAnalysisCache::new(
             env!("CARGO_PKG_VERSION"),
             rustc_version.to_owned(),
@@ -102,7 +111,11 @@ fn verify_dependency_marker_sources(
     Ok(())
 }
 
-fn local_cache_artifact_info(tcx: TyCtxt<'_>, output_scope: ArtifactScope) -> Option<ArtifactInfo> {
+fn local_cache_artifact_info(
+    tcx: TyCtxt<'_>,
+    output_scope: ArtifactScope,
+    package_version: Option<&str>,
+) -> Option<ArtifactInfo> {
     // Only outputs rustc can later load as crates need sidecars. In particular,
     // `cargo check` asks executable units to emit metadata, but their crate
     // type still is not loadable and rustc may omit the HIR hash required by
@@ -110,6 +123,7 @@ fn local_cache_artifact_info(tcx: TyCtxt<'_>, output_scope: ArtifactScope) -> Op
     has_loadable_crate_output(tcx.crate_types()).then(|| ArtifactInfo {
         id: rustc_artifact_id(tcx, LOCAL_CRATE),
         crate_name: tcx.crate_name(LOCAL_CRATE).to_string(),
+        package_version: package_version.map(str::to_owned),
         scope: output_scope,
     })
 }

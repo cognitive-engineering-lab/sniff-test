@@ -69,7 +69,14 @@ sniff-test init` explicitly configures `core` and `std` as trusted boundaries
 in both domains; users can remove either entry or set the list to `[]` to audit
 those internals. Direct calls to their APIs still expose documented panic and
 safety obligations as described above. Use narrow audited patterns and contract
-override files when source documentation is missing.
+override files when source documentation is missing. Source-located overrides
+match extraction-time crate/version, package-relative path, source hash, and
+definition-start metadata. They take precedence over namespace overrides.
+Inactive crate/version/path selectors have no effect; once a selected source
+path is present, missing or ambiguous definitions and overlapping selectors
+fail closed. Available dependency sources must match their cached source hash
+before their definition locations are used. Source paths follow physical
+package containment, including when a source path uses symlinks.
 
 ### Build scripts and proc macros are skipped
 

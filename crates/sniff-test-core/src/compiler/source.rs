@@ -397,7 +397,7 @@ impl fmt::Display for CachedSourceError {
 impl std::error::Error for CachedSourceError {}
 
 impl CachedSourceError {
-    fn is_absent_from_disk(&self) -> bool {
+    pub(crate) fn is_absent_from_disk(&self) -> bool {
         match self {
             Self::SourceUnavailable { filename, .. } => {
                 matches!(Path::new(filename).try_exists(), Ok(false))
@@ -444,6 +444,7 @@ mod tests {
         SourceFileFact {
             id: stable_source_file_id(&file),
             filename: path.to_string_lossy().into_owned(),
+            logical_path: None,
             content_hash: file.src_hash.to_string(),
             byte_len: u64::from(file.normalized_source_len.to_u32()),
         }
@@ -519,6 +520,7 @@ mod tests {
             let source = SourceFileFact {
                 id: crate::artifact::SourceFileId::new("rustc:missing"),
                 filename: path.to_string_lossy().into_owned(),
+                logical_path: None,
                 content_hash: String::from("md5=00000000000000000000000000000000"),
                 byte_len: 1,
             };

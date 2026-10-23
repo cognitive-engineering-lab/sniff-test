@@ -162,10 +162,11 @@ traces closer to the source call structure. Compiler settings are applied
 literally and independently from lint policy. For example, disabling overflow
 checks does not change or reject `[panic.lints.operations].overflow`.
 
-The analysis cache uses format version 23 and stores one direct,
+The analysis cache uses format version 32 and stores one direct,
 policy-neutral fact schema: function identities, source-level invocations,
 compiler-assert kinds, unsafe operations, annotations, contracts, and verified
-file-relative source ranges, plus workspace/dependency artifact ownership. It
+file-relative source ranges, extraction-time definition starts, package-relative
+source paths, and exact Cargo package versions, plus workspace/dependency artifact ownership. It
 does not persist traversal state, selected
 report roots, lint levels, interpreted findings, or rendered traces.
 Target-code dependency rustc units extract every analyzable body and silently
@@ -349,7 +350,31 @@ setext headings, inline code, and formatted list text work as expected.
 
 - representable: layout size must fit in `usize`.
 """
+
+[overrides.crates."zerocopy"."0.8.27"]
+"src/layout.rs:123:130" = """
+# Panics
+
+- representable: layout size must fit in `usize`.
+"""
 ```
+
+Source selectors use the Rust crate name, an exact Cargo package version, and a
+package-relative `path:start:end`. Lines are one-based and inclusive; a selector
+matches a function or associated function whose definition starts in that range,
+including a trait method without a body. Paths use `/` and cannot contain `.` or
+`..` components. Source selectors take precedence over namespace globs and
+replace the selected definition's documentation for every selected effect.
+
+A crate, version, or source path absent from the analyzed artifacts leaves that
+selector inactive. When the source path is present, no matching definition,
+multiple distinct definitions, overlapping selectors, or differing source
+contents cause an error. Missing Cargo version provenance also causes an error
+for a selected crate. Byte-identical source mirrors are accepted as equivalent.
+Available dependency sources are checked against cached source hashes before
+applying source overrides; genuinely unavailable sources retain their exact
+artifact facts. Direct driver invocations do not inherit ambient Cargo package
+metadata.
 
 ## JSON Output
 

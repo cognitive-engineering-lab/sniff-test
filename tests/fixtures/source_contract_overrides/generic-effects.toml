@@ -1,0 +1,13 @@
+[analysis]
+effect-doc-matching = "exact"
+report-roots = [
+    "source_contract_overrides::generic_effects::allocation_missing",
+    "source_contract_overrides::generic_effects::allocation_justified",
+    "source_contract_overrides::generic_effects::file_missing",
+    "source_contract_overrides::generic_effects::file_justified",
+    "source_contract_overrides::generic_effects::safety_missing",
+    "source_contract_overrides::generic_effects::safety_justified",
+]
+
+[contracts]
+override-files = ["effects-overrides.toml"]

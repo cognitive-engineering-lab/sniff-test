@@ -15,9 +15,9 @@ use serde::{Deserialize, Deserializer as _, Serialize};
 
 use crate::artifact::{ArtifactFacts, FunctionFactProvenance};
 
-pub const CACHE_FORMAT_VERSION: u32 = 31;
+pub const CACHE_FORMAT_VERSION: u32 = 32;
 pub const CACHE_DIR_NAME: &str = "sniff-test-cache";
-pub const CACHE_VERSION_DIR: &str = "v30";
+pub const CACHE_VERSION_DIR: &str = "v32";
 
 /// Cached policy-neutral analysis for one exact rustc output artifact.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -172,11 +172,30 @@ impl ArtifactAnalysisCache {
                 )));
             }
         }
+        if self
+            .artifact
+            .package_version
+            .as_deref()
+            .is_some_and(|version| semver::Version::parse(version).is_err())
+        {
+            return Err(CacheValidationError::new(
+                "artifact package version must be an exact Cargo version when present",
+            ));
+        }
         self.artifact.id.validate()?;
         validate_dependencies(&self.artifact, &self.dependencies)?;
         self.facts
             .validate()
             .map_err(|error| CacheValidationError::new(error.to_string()))?;
+        for (index, definition) in self.facts.definitions.iter().enumerate() {
+            if definition.definition.stable_crate_id() != self.artifact.id.stable_crate_id {
+                return Err(CacheValidationError::new(format!(
+                    "definition source {index} does not belong to artifact stable crate id \
+                     {:016x}",
+                    self.artifact.id.stable_crate_id
+                )));
+            }
+        }
         for (index, body) in self.facts.functions.iter().enumerate() {
             let definition_stable_crate_id = body.function.def_path_hash.stable_crate_id();
             match body.provenance {
@@ -261,6 +280,9 @@ impl Display for RustcArtifactId {
 pub struct ArtifactInfo {
     pub id: RustcArtifactId,
     pub crate_name: String,
+    /// Exact Cargo package version when rustc was invoked by Cargo.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub package_version: Option<String>,
     pub scope: ArtifactScope,
 }
 
@@ -468,7 +490,8 @@ mod tests {
         CacheExpectations, RustcArtifactId, artifact_cache_path, default_cache_dir,
     };
     use crate::artifact::{
-        ArtifactFacts, FunctionAttributesFact, FunctionFact, FunctionFactProvenance, FunctionId,
+        ArtifactFacts, DefinitionSourceFact, FunctionAttributesFact, FunctionFact,
+        FunctionFactProvenance, FunctionId, SourceFileFact, SourceFileId, SourceRangeFact,
     };
     use crate::namespace::{StableDefPathHash, StableInstanceHash};
 
@@ -483,9 +506,17 @@ mod tests {
     }
 
     fn facts() -> ArtifactFacts {
-        ArtifactFacts::new(
+        let source = SourceFileFact {
+            id: SourceFileId::new("source-1"),
+            filename: String::from("src/lib.rs"),
+            logical_path: Some(String::from("src/lib.rs")),
+            content_hash: String::from("sha256:0123456789abcdef"),
+            byte_len: 100,
+        };
+        let definition = def_hash("00000000000000010000000000000002");
+        ArtifactFacts::with_definitions(
             vec![FunctionFact {
-                function: FunctionId::generic(def_hash("00000000000000010000000000000002")),
+                function: FunctionId::generic(definition),
                 provenance: FunctionFactProvenance::DefiningArtifact,
                 display_path: String::from("sample::root"),
                 attributes: FunctionAttributesFact {
@@ -502,7 +533,17 @@ mod tests {
                 markers: Vec::new(),
                 unverified_marker_probes: Vec::new(),
             }],
-            Vec::new(),
+            vec![source],
+            vec![DefinitionSourceFact {
+                definition,
+                display_path: String::from("sample::root"),
+                source_range: SourceRangeFact {
+                    file: SourceFileId::new("source-1"),
+                    byte_start: 0,
+                    byte_end: 20,
+                },
+                start_line: 1,
+            }],
         )
         .expect("valid artifact facts")
     }
@@ -511,6 +552,7 @@ mod tests {
         ArtifactInfo {
             id: rustc_id(LOCAL_STABLE_CRATE_ID, "0123456789abcdef0123456789abcdef"),
             crate_name: String::from("sample"),
+            package_version: Some(String::from("1.2.3")),
             scope: ArtifactScope::Workspace,
         }
     }
@@ -563,8 +605,8 @@ mod tests {
         let json: serde_json::Value = serde_json::from_str(&source).expect("valid JSON");
         let object = json.as_object().expect("cache object");
 
-        assert_eq!(CACHE_FORMAT_VERSION, 31);
-        assert_eq!(json["format-version"], 31);
+        assert_eq!(CACHE_FORMAT_VERSION, 32);
+        assert_eq!(json["format-version"], 32);
         let mut fields = object.keys().map(String::as_str).collect::<Vec<_>>();
         fields.sort_unstable();
         assert_eq!(
@@ -589,8 +631,17 @@ mod tests {
         let artifact = json["artifact"].as_object().expect("artifact object");
         let mut artifact_fields = artifact.keys().map(String::as_str).collect::<Vec<_>>();
         artifact_fields.sort_unstable();
-        assert_eq!(artifact_fields, ["crate-name", "id", "scope"]);
+        assert_eq!(
+            artifact_fields,
+            ["crate-name", "id", "package-version", "scope"]
+        );
+        assert_eq!(json["artifact"]["package-version"], "1.2.3");
         assert_eq!(json["artifact"]["scope"], "workspace");
+        assert_eq!(
+            json["facts"]["source-files"][0]["logical-path"],
+            "src/lib.rs"
+        );
+        assert_eq!(json["facts"]["definitions"][0]["start-line"], 1);
 
         let decoded = ArtifactAnalysisCache::read(&path, &expectations()).expect("read cache");
         assert_eq!(decoded, expected);
@@ -696,6 +747,48 @@ mod tests {
     }
 
     #[test]
+    fn new_rejects_an_empty_package_version_when_present() {
+        for version in ["  ", "latest", "1.2"] {
+            let mut invalid_artifact = artifact();
+            invalid_artifact.package_version = Some(version.to_owned());
+
+            let error =
+                ArtifactAnalysisCache::new("0.1.0", "rustc", invalid_artifact, Vec::new(), facts())
+                    .expect_err("present package provenance must be an exact Cargo version");
+
+            assert!(error.to_string().contains("artifact package version"));
+        }
+    }
+
+    #[test]
+    fn cache_rejects_definition_sources_owned_by_another_stable_crate() {
+        let mut foreign = facts();
+        foreign.definitions[0].definition = def_hash("00000000000000090000000000000002");
+
+        let error = ArtifactAnalysisCache::new("0.1.0", "rustc", artifact(), Vec::new(), foreign)
+            .expect_err("definition provenance must belong to the cached artifact");
+
+        assert!(
+            error
+                .to_string()
+                .contains("definition source 0 does not belong to artifact")
+        );
+    }
+
+    #[test]
+    fn rustc_artifact_identity_does_not_include_package_version() {
+        let mut first = artifact();
+        let mut second = artifact();
+        first.package_version = Some(String::from("1.0.0"));
+        second.package_version = Some(String::from("2.0.0"));
+
+        assert_eq!(
+            artifact_cache_path(Path::new("/cache"), &first.id),
+            artifact_cache_path(Path::new("/cache"), &second.id)
+        );
+    }
+
+    #[test]
     fn accepts_exact_foreign_body_owned_as_a_consumer_instantiation() {
         let mut overlay = facts().functions.remove(0);
         overlay.function = FunctionId::exact(
@@ -739,11 +832,11 @@ mod tests {
 
         assert_eq!(
             root.to_string_lossy(),
-            "/target/plugin-nightly/sniff-test-cache/v30"
+            "/target/plugin-nightly/sniff-test-cache/v32"
         );
         assert_eq!(
             artifact_cache_path(&root, &identity).to_string_lossy(),
-            "/target/plugin-nightly/sniff-test-cache/v30/artifacts/0000000000000001-0123456789abcdef0123456789abcdef.json"
+            "/target/plugin-nightly/sniff-test-cache/v32/artifacts/0000000000000001-0123456789abcdef0123456789abcdef.json"
         );
     }
 }

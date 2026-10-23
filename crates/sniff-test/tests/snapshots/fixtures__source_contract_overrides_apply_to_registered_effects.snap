@@ -1,0 +1,96 @@
+---
+source: crates/sniff-test/tests/fixtures.rs
+expression: "report[\"findings\"]"
+---
+[
+  {
+    "effect": "allocation",
+    "finding": "documented-obligation",
+    "function": "source_contract_overrides::generic_effects::allocation_missing",
+    "kind": "effect",
+    "level": "warn",
+    "missing-requirements": [
+      "audited: the caller must accept the allocation."
+    ],
+    "owner": {
+      "crate": "source_contract_overrides",
+      "scope": "workspace"
+    },
+    "reason": "call to `source_contract_overrides::generic_effects::allocation_contract` with a documented `# Allocations` obligation has no recorded `// ALLOCATION:` justification",
+    "requirements": [
+      "audited: the caller must accept the allocation."
+    ],
+    "root": "source_contract_overrides::generic_effects::allocation_missing",
+    "root-kind": "concrete",
+    "root-span": "src/generic_effects.rs:10:1: 10:28",
+    "source-evidence": {
+      "status": "verified-absent"
+    },
+    "span": "src/generic_effects.rs:11:5: 11:26",
+    "target": "source_contract_overrides::generic_effects::allocation_contract",
+    "trace": [
+      "src/generic_effects.rs:11:5: 11:26: source_contract_overrides::generic_effects::allocation_missing --direct-call-> source_contract_overrides::generic_effects::allocation_contract"
+    ],
+    "trace-id": "6bcf826c"
+  },
+  {
+    "effect": "file",
+    "finding": "documented-obligation",
+    "function": "source_contract_overrides::generic_effects::file_missing",
+    "kind": "effect",
+    "level": "warn",
+    "missing-requirements": [
+      "audited: the caller must accept the file change."
+    ],
+    "owner": {
+      "crate": "source_contract_overrides",
+      "scope": "workspace"
+    },
+    "reason": "call to `source_contract_overrides::generic_effects::file_contract` with a documented `# File` obligation has no recorded `// FILE:` justification",
+    "requirements": [
+      "audited: the caller must accept the file change."
+    ],
+    "root": "source_contract_overrides::generic_effects::file_missing",
+    "root-kind": "concrete",
+    "root-span": "src/generic_effects.rs:20:1: 20:22",
+    "source-evidence": {
+      "status": "verified-absent"
+    },
+    "span": "src/generic_effects.rs:21:5: 21:20",
+    "target": "source_contract_overrides::generic_effects::file_contract",
+    "trace": [
+      "src/generic_effects.rs:21:5: 21:20: source_contract_overrides::generic_effects::file_missing --direct-call-> source_contract_overrides::generic_effects::file_contract"
+    ],
+    "trace-id": "37a30912"
+  },
+  {
+    "effect": "safety",
+    "finding": "documented-obligation",
+    "function": "source_contract_overrides::generic_effects::safety_missing",
+    "kind": "effect",
+    "level": "warn",
+    "missing-requirements": [
+      "valid: the pointer must reference initialized memory."
+    ],
+    "owner": {
+      "crate": "source_contract_overrides",
+      "scope": "workspace"
+    },
+    "reason": "recorded `// SAFETY:` justification for call to `source_contract_overrides::generic_effects::safety_contract` with a documented `# Safety` obligation does not satisfy the remaining `# Safety` requirements",
+    "requirements": [
+      "valid: the pointer must reference initialized memory."
+    ],
+    "root": "source_contract_overrides::generic_effects::safety_missing",
+    "root-kind": "concrete",
+    "root-span": "src/generic_effects.rs:30:1: 30:30",
+    "source-evidence": {
+      "status": "present"
+    },
+    "span": "src/generic_effects.rs:33:14: 33:36",
+    "target": "source_contract_overrides::generic_effects::safety_contract",
+    "trace": [
+      "src/generic_effects.rs:33:14: 33:36: source_contract_overrides::generic_effects::safety_missing --direct-call-> source_contract_overrides::generic_effects::safety_contract"
+    ],
+    "trace-id": "f05831cc"
+  }
+]

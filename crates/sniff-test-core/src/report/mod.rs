@@ -62,6 +62,7 @@ use crate::report_model::{
     InterpretedTraceStep, InterpretedTraceStepKind, RootInterpretation, TraceFrontier,
     UnresolvedCallCoverage, UnresolvedCallMechanism, UnresolvedCallSite,
 };
+use crate::source_overrides::ResolvedSourceContractOverride;
 use crate::workspace::ArtifactAnalysisGraph;
 
 mod markers;
@@ -109,12 +110,14 @@ pub fn trace_workspace(
         &BTreeMap::new(),
         roots,
         config,
+        &BTreeMap::new(),
         &selected_effects,
     )
 }
 
 #[allow(
     clippy::too_many_lines,
+    clippy::too_many_arguments,
     reason = "the selected effect probes and traces stay visible in one production entry point"
 )]
 pub fn trace_selected_workspace(
@@ -124,6 +127,7 @@ pub fn trace_selected_workspace(
     rustc_dependencies: &BTreeMap<u64, BTreeSet<u64>>,
     roots: &[InterpretationRoot],
     config: &SniffTestConfig,
+    source_overrides: &BTreeMap<crate::artifact::StableDefPathHash, ResolvedSourceContractOverride>,
     effects: &[Box<dyn Effect + '_>],
 ) -> Result<Vec<RootInterpretation>, EffectReportError> {
     let artifact = compose_workspace_artifact(local, dependencies)?;
@@ -170,6 +174,7 @@ pub fn trace_selected_workspace(
         &graph,
         &namespaces,
         &config.contracts.overrides,
+        source_overrides,
         config.analysis.marker_probing,
         &selected_metadata,
     )
@@ -547,8 +552,14 @@ fn compose_workspace_artifact(
     dependencies: &ArtifactAnalysisGraph,
 ) -> Result<ArtifactFacts, EffectReportError> {
     let mut functions = std::collections::BTreeMap::new();
+    let mut definitions = BTreeMap::new();
     let mut sources = std::collections::BTreeMap::new();
     for dependency in dependencies.artifacts() {
+        for definition in &dependency.facts.definitions {
+            definitions
+                .entry(definition.definition)
+                .or_insert_with(|| definition.clone());
+        }
         for body in &dependency.facts.functions {
             functions
                 .entry(body.function)
@@ -560,15 +571,19 @@ fn compose_workspace_artifact(
                 .or_insert_with(|| source.clone());
         }
     }
+    for definition in &local.definitions {
+        definitions.insert(definition.definition, definition.clone());
+    }
     for body in &local.functions {
         functions.insert(body.function, body.clone());
     }
     for source in &local.source_files {
         sources.insert(source.id.clone(), source.clone());
     }
-    ArtifactFacts::new(
+    ArtifactFacts::with_definitions(
         functions.into_values().collect(),
         sources.into_values().collect(),
+        definitions.into_values().collect(),
     )
     .map_err(|error| EffectReportError::new(format!("invalid linked workspace facts: {error}")))
 }

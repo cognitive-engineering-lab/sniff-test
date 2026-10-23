@@ -8,6 +8,7 @@
 
 use std::collections::{BTreeMap, HashMap};
 use std::fmt;
+use std::path::{Component, Path, PathBuf};
 
 use reachability::{
     ArtifactScope, CallableEdgeInfo, DynDispatchVTableEdges, FnPointerEdges, NoopReachabilityHooks,
@@ -18,18 +19,19 @@ use reachability::{
 use rustc_hir::def::DefKind;
 use rustc_hir::def_id::{DefId, LOCAL_CRATE, LocalDefId};
 use rustc_middle::ty::{AssocContainer, GenericArgs, Instance, InstanceKind, TyCtxt, TyKind};
-use rustc_span::{Pos, Span, StableSourceFileId};
+use rustc_span::{FileName, Pos, SourceFile, Span, StableSourceFileId};
 
 use super::source::{source_filename, stable_source_file_id};
 use crate::artifact::{
     AnnotationFact, AnnotationFactKind, AnnotationProbingFact, AnnotationRole,
     AnnotationSatisfactionFact, AnnotationTargetFact, ArtifactFacts, CallFact, CallId,
     CallKindFact, CallSiteId, CallTargetFact, ContractFact, ContractRequirementFact,
-    EffectContractFact, EffectFact, EffectGroupId, EffectId, EffectKey, EffectKind,
-    FunctionAttributesFact, FunctionContractsFact, FunctionFact, FunctionFactProvenance,
-    FunctionId, FunctionTargetFact, IndirectCallKindFact, InvocationEffectFact, MacroExpansionFact,
-    MarkerId, OpaqueTargetFact, SourceFileFact, SourceFileId, SourceRangeFact, StableDefPathHash,
-    StableInstanceHash, UnverifiedMarkerProbeFact, UnverifiedMarkerProbeReason,
+    DefinitionSourceFact, EffectContractFact, EffectFact, EffectGroupId, EffectId, EffectKey,
+    EffectKind, FunctionAttributesFact, FunctionContractsFact, FunctionFact,
+    FunctionFactProvenance, FunctionId, FunctionTargetFact, IndirectCallKindFact,
+    InvocationEffectFact, MacroExpansionFact, MarkerId, OpaqueTargetFact, SourceFileFact,
+    SourceFileId, SourceRangeFact, StableDefPathHash, StableInstanceHash,
+    UnverifiedMarkerProbeFact, UnverifiedMarkerProbeReason, is_portable_source_path,
     same_macro_provenance,
 };
 use crate::config::MarkerProbing;
@@ -75,6 +77,7 @@ impl std::error::Error for ExtractError {}
 /// static effect definition and does not read the bound reporting config.
 pub fn extract_artifact_facts(
     tcx: TyCtxt<'_>,
+    package_manifest_dir: Option<&Path>,
     selected_effects: &[Box<dyn crate::effects::Effect + '_>],
 ) -> Result<ArtifactFacts, ExtractError> {
     let required_owners = analyzable_local_fn_defs(tcx).collect::<Vec<_>>();
@@ -91,7 +94,7 @@ pub fn extract_artifact_facts(
     }
     let pass_output = pass_registry.collect_bodies(tcx, &required_owners);
 
-    let mut sources = SourceTable::default();
+    let mut sources = SourceTable::new(package_manifest_dir.map(Path::to_path_buf));
     let mut bodies = BTreeMap::<FunctionId, PendingBody>::new();
     let mut effect_groups = RawEffectGroupResolver::new(&pass_output);
 
@@ -121,12 +124,30 @@ pub fn extract_artifact_facts(
 
     attach_source_operations(tcx, pass_output.seeds, &mut sources, &mut bodies, &effects)?;
 
+    collect_local_definition_sources(tcx, &mut sources)?;
+    sources.record_loaded_package_sources(tcx);
+
     let functions = bodies
         .into_values()
         .map(PendingBody::finish)
         .collect::<Result<Vec<_>, _>>()?;
-    ArtifactFacts::new(functions, sources.into_files())
+    let (source_files, definitions) = sources.into_facts();
+    ArtifactFacts::with_definitions(functions, source_files, definitions)
         .map_err(|error| ExtractError::new(format!("extracted artifact facts is invalid: {error}")))
+}
+
+fn collect_local_definition_sources(
+    tcx: TyCtxt<'_>,
+    sources: &mut SourceTable,
+) -> Result<(), ExtractError> {
+    for local in tcx
+        .hir_crate_items(())
+        .definitions()
+        .filter(|local| matches!(tcx.def_kind(*local), DefKind::Fn | DefKind::AssocFn))
+    {
+        sources.record_definition(tcx, local.to_def_id())?;
+    }
+    Ok(())
 }
 
 fn analyzable_local_fn_defs(tcx: TyCtxt<'_>) -> impl Iterator<Item = LocalDefId> + '_ {
@@ -1904,13 +1925,61 @@ struct PendingUnverifiedMarkerProbe {
     reason: UnverifiedMarkerProbeReason,
 }
 
-#[derive(Default)]
 struct SourceTable {
+    manifest_dir: Option<PathBuf>,
     source_ids: BTreeMap<StableSourceFileId, SourceFileId>,
     files: BTreeMap<SourceFileId, SourceFileFact>,
+    definitions: BTreeMap<StableDefPathHash, DefinitionSourceFact>,
 }
 
 impl SourceTable {
+    fn new(manifest_dir: Option<PathBuf>) -> Self {
+        Self {
+            manifest_dir,
+            source_ids: BTreeMap::new(),
+            files: BTreeMap::new(),
+            definitions: BTreeMap::new(),
+        }
+    }
+
+    fn record_loaded_package_sources(&mut self, tcx: TyCtxt<'_>) {
+        for file in tcx.sess.source_map().files().iter() {
+            if self.logical_path(file).is_some() {
+                self.record_file(file);
+            }
+        }
+    }
+
+    fn record_definition(&mut self, tcx: TyCtxt<'_>, def_id: DefId) -> Result<(), ExtractError> {
+        let span = tcx.def_span(def_id);
+        let Some(source_range) = self.range(tcx, span)? else {
+            return Ok(());
+        };
+        let start_line = u32::try_from(tcx.sess.source_map().lookup_char_pos(span.lo()).line)
+            .map_err(|_| {
+                ExtractError::new(format!(
+                    "definition `{}` starts beyond the supported source line range",
+                    canonical_namespace(tcx, def_id)
+                ))
+            })?;
+        let definition = StableDefPathHash::from_def_id(tcx, def_id);
+        let fact = DefinitionSourceFact {
+            definition,
+            display_path: canonical_namespace(tcx, def_id),
+            source_range,
+            start_line,
+        };
+        if let Some(previous) = self.definitions.insert(definition, fact.clone())
+            && previous != fact
+        {
+            return Err(ExtractError::new(format!(
+                "definition `{}` has conflicting source provenance",
+                fact.display_path
+            )));
+        }
+        Ok(())
+    }
+
     fn range(
         &mut self,
         tcx: TyCtxt<'_>,
@@ -1928,21 +1997,7 @@ impl SourceTable {
                 file.name.prefer_local_unconditionally()
             )));
         }
-        let id = if let Some(id) = self.source_ids.get(&file.stable_id) {
-            id.clone()
-        } else {
-            let id = stable_source_file_id(&file);
-            self.files
-                .entry(id.clone())
-                .or_insert_with(|| SourceFileFact {
-                    id: id.clone(),
-                    filename: source_filename(&file),
-                    content_hash: file.src_hash.to_string(),
-                    byte_len: u64::from(file.normalized_source_len.to_u32()),
-                });
-            self.source_ids.insert(file.stable_id, id.clone());
-            id
-        };
+        let id = self.record_file(&file);
         Ok(Some(SourceRangeFact {
             file: id,
             byte_start: u64::from(span.lo().0 - file.start_pos.0),
@@ -1950,18 +2005,93 @@ impl SourceTable {
         }))
     }
 
-    fn into_files(self) -> Vec<SourceFileFact> {
-        self.files.into_values().collect()
+    fn record_file(&mut self, file: &SourceFile) -> SourceFileId {
+        if let Some(id) = self.source_ids.get(&file.stable_id) {
+            return id.clone();
+        }
+        let id = stable_source_file_id(file);
+        let logical_path = self.logical_path(file);
+        self.files
+            .entry(id.clone())
+            .or_insert_with(|| SourceFileFact {
+                id: id.clone(),
+                filename: source_filename(file),
+                logical_path,
+                content_hash: file.src_hash.to_string(),
+                byte_len: u64::from(file.normalized_source_len.to_u32()),
+            });
+        self.source_ids.insert(file.stable_id, id.clone());
+        id
     }
+
+    fn logical_path(&self, file: &SourceFile) -> Option<String> {
+        let manifest_dir = self.manifest_dir.as_deref()?;
+        let FileName::Real(filename) = &file.name else {
+            return None;
+        };
+        filename
+            .local_path()
+            .and_then(|source_path| package_relative_logical_path(manifest_dir, source_path))
+    }
+
+    fn into_facts(self) -> (Vec<SourceFileFact>, Vec<DefinitionSourceFact>) {
+        (
+            self.files.into_values().collect(),
+            self.definitions.into_values().collect(),
+        )
+    }
+}
+
+fn package_relative_logical_path(manifest_dir: &Path, source_path: &Path) -> Option<String> {
+    let source_path = if source_path.is_relative() {
+        std::path::absolute(source_path).ok()?
+    } else {
+        source_path.to_owned()
+    };
+    let relative = match (
+        std::fs::canonicalize(manifest_dir),
+        std::fs::canonicalize(&source_path),
+    ) {
+        (Ok(manifest_dir), Ok(source_path)) => source_path
+            .strip_prefix(manifest_dir)
+            .ok()
+            .map(Path::to_path_buf)?,
+        _ => source_path
+            .strip_prefix(manifest_dir)
+            .ok()
+            .map(Path::to_path_buf)
+            .or_else(|| {
+                let canonical_manifest = std::fs::canonicalize(manifest_dir).ok()?;
+                source_path
+                    .strip_prefix(canonical_manifest)
+                    .ok()
+                    .map(Path::to_path_buf)
+            })?,
+    };
+    let segments = relative
+        .components()
+        .map(|component| match component {
+            Component::Normal(segment) => segment.to_str(),
+            Component::Prefix(_)
+            | Component::RootDir
+            | Component::CurDir
+            | Component::ParentDir => None,
+        })
+        .collect::<Option<Vec<_>>>()?;
+    let logical_path = segments.join("/");
+    is_portable_source_path(&logical_path).then_some(logical_path)
 }
 
 #[cfg(test)]
 mod tests {
+    use super::package_relative_logical_path;
     use reachability::{
         DynDispatchVTableEdges, FnPointerEdges, ReachabilityEdgeKind, ReachabilityHalt,
     };
     use rustc_hir::def_id::{CRATE_DEF_ID, DefId, DefIndex};
     use rustc_span::{BytePos, Span};
+    use std::fs;
+    use tempfile::tempdir;
 
     use super::{
         PendingMarkerTarget, RawEffectGroupResolver, extraction_options, probing_modes,
@@ -2446,5 +2576,72 @@ mod tests {
         assert!(compiler_call_requires_explicit_context(true, false, true));
         assert!(!compiler_call_requires_explicit_context(true, true, true));
         assert!(compiler_call_requires_explicit_context(true, true, false));
+    }
+
+    #[test]
+    fn logical_source_paths_are_real_portable_and_package_relative() {
+        let temporary = tempdir().expect("temporary directory");
+        let package = temporary.path().join("package");
+        let source = package.join("src").join("nested").join("lib.rs");
+        let outside = temporary.path().join("outside.rs");
+        fs::create_dir_all(source.parent().expect("source parent"))
+            .expect("create package source directory");
+        fs::write(&source, "pub fn sample() {}\n").expect("write package source");
+        fs::write(&outside, "pub fn outside() {}\n").expect("write outside source");
+
+        assert_eq!(
+            package_relative_logical_path(&package, &source),
+            Some(String::from("src/nested/lib.rs"))
+        );
+        assert_eq!(package_relative_logical_path(&package, &outside), None);
+        assert_eq!(
+            package_relative_logical_path(&package, &package.join("src/missing.rs")),
+            Some(String::from("src/missing.rs")),
+            "rustc may have loaded a source that disappeared before extraction"
+        );
+
+        #[cfg(unix)]
+        for filename in ["odd:name.rs", r"odd\name.rs"] {
+            let unrepresentable = package.join("src").join(filename);
+            fs::write(&unrepresentable, "pub fn odd() {}\n")
+                .expect("write source with a nonportable Unix filename");
+            assert_eq!(
+                package_relative_logical_path(&package, &unrepresentable),
+                None,
+                "source selectors cannot represent {filename:?}"
+            );
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn logical_source_paths_use_physical_package_containment_for_symlinks() {
+        use std::os::unix::fs::symlink;
+
+        let temporary = tempdir().expect("temporary directory");
+        let package = temporary.path().join("package");
+        let source = package.join("src/lib.rs");
+        fs::create_dir_all(source.parent().expect("source parent"))
+            .expect("create package source directory");
+        fs::write(&source, "pub fn sample() {}\n").expect("write package source");
+
+        let package_alias = temporary.path().join("package-alias");
+        symlink(&package, &package_alias).expect("create package alias");
+        assert_eq!(
+            package_relative_logical_path(&package, &package_alias.join("src/lib.rs")),
+            Some(String::from("src/lib.rs")),
+            "a source spelling that resolves into the package should retain its logical path"
+        );
+
+        let outside = temporary.path().join("outside");
+        fs::create_dir_all(&outside).expect("create outside directory");
+        fs::write(outside.join("external.rs"), "pub fn external() {}\n")
+            .expect("write outside source");
+        symlink(&outside, package.join("src/linked")).expect("create escaping source alias");
+        assert_eq!(
+            package_relative_logical_path(&package, &package.join("src/linked/external.rs")),
+            None,
+            "a package-local symlink must not attribute an external source to the package"
+        );
     }
 }

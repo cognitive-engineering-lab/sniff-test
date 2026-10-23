@@ -23,6 +23,9 @@ use sniff_test_core::report_model::{
     UnresolvedCallSite,
 };
 use sniff_test_core::report_roots::ReportRoot;
+use sniff_test_core::source_overrides::{
+    ContractSourceArtifact, resolve_source_contract_overrides,
+};
 use sniff_test_core::workspace::ArtifactAnalysisGraph;
 
 use super::findings::{
@@ -49,6 +52,7 @@ pub fn interpret_workspace<'tcx>(
     metadata_loader: &dyn rustc_metadata::creader::MetadataLoader,
     report_roots: &[ReportRoot<'tcx>],
     config: &SniffTestConfig,
+    package_version: Option<&str>,
     effects: &[Box<dyn Effect + '_>],
 ) -> Result<Vec<Finding>, EffectReportError> {
     let roots = report_roots
@@ -63,6 +67,20 @@ pub fn interpret_workspace<'tcx>(
         metadata_loader,
     )
     .map_err(EffectReportError::new)?;
+    let crate_name = tcx.crate_name(LOCAL_CRATE);
+    let local_source = ContractSourceArtifact::new(
+        local_stable_crate_id,
+        crate_name.as_str(),
+        package_version,
+        local,
+    );
+    let source_overrides = resolve_source_contract_overrides(
+        tcx,
+        &config.contracts.overrides,
+        local_source,
+        dependencies,
+    )
+    .map_err(|error| EffectReportError::new(error.to_string()))?;
     let result = trace_selected_workspace(
         local,
         local_stable_crate_id,
@@ -70,6 +88,7 @@ pub fn interpret_workspace<'tcx>(
         &crate_dependencies,
         &roots,
         config,
+        &source_overrides,
         effects,
     )?;
     let sources = SourceResolver {
@@ -2249,6 +2268,7 @@ mod tests {
         let generic = FunctionId::generic(def_path);
         let exact = FunctionId::exact(def_path, instance);
         let definition = ArtifactFacts {
+            definitions: Vec::new(),
             functions: vec![marker_call_body(
                 generic,
                 FunctionFactProvenance::DefiningArtifact,
@@ -2257,6 +2277,7 @@ mod tests {
             source_files: Vec::new(),
         };
         let overlay = ArtifactFacts {
+            definitions: Vec::new(),
             functions: vec![marker_call_body(
                 exact,
                 FunctionFactProvenance::ConsumerInstantiation {

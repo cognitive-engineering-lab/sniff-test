@@ -970,6 +970,7 @@ mod tests {
     fn resolved_findings_have_stable_order_regardless_of_discovery_order() {
         let config = test_config();
         let source = SourceFileFact {
+            logical_path: None,
             id: SourceFileId::new("source-id"),
             filename: String::from("dependency/src/lib.rs"),
             content_hash: String::from("content"),
@@ -1008,6 +1009,7 @@ mod tests {
     #[test]
     fn human_findings_keep_a_diagnostic_for_each_report_root() {
         let source = SourceFileFact {
+            logical_path: None,
             id: SourceFileId::new("source-id"),
             filename: String::from("dependency/src/lib.rs"),
             content_hash: String::from("content"),
@@ -1095,6 +1097,7 @@ mod tests {
     #[test]
     fn workspace_effect_emits_one_diagnostic_per_report_root() {
         let source = SourceFileFact {
+            logical_path: None,
             id: SourceFileId::new("source-id"),
             filename: String::from("src/lib.rs"),
             content_hash: String::from("content"),
@@ -1165,6 +1168,7 @@ mod tests {
     #[test]
     fn dependency_effect_keeps_each_root_and_collapses_repeated_paths() {
         let source = SourceFileFact {
+            logical_path: None,
             id: SourceFileId::new("dependency-source"),
             filename: String::from("dependency/src/lib.rs"),
             content_hash: String::from("content"),
@@ -1249,6 +1253,7 @@ mod tests {
     #[test]
     fn dependency_effect_keeps_distinct_paths_from_the_same_root() {
         let source = SourceFileFact {
+            logical_path: None,
             id: SourceFileId::new("dependency-source"),
             filename: String::from("dependency/src/lib.rs"),
             content_hash: String::from("content"),
@@ -1313,6 +1318,7 @@ mod tests {
     #[test]
     fn human_single_root_source_finding_is_root_centric_without_changing_json() {
         let source = SourceFileFact {
+            logical_path: None,
             id: SourceFileId::new("source-id"),
             filename: String::from("src/lib.rs"),
             content_hash: String::from("content"),
@@ -1379,6 +1385,7 @@ mod tests {
     #[test]
     fn local_source_diagnostic_puts_all_help_after_notes() {
         let source = SourceFileFact {
+            logical_path: None,
             id: SourceFileId::new("source-id"),
             filename: String::from("src/lib.rs"),
             content_hash: String::from("content"),
@@ -1428,6 +1435,7 @@ mod tests {
     #[test]
     fn human_source_finding_without_displayable_source_keeps_root_span() {
         let source = SourceFileFact {
+            logical_path: None,
             id: SourceFileId::new("source-id"),
             filename: String::from("dependency/src/lib.rs"),
             content_hash: String::from("content"),
@@ -1630,6 +1638,7 @@ mod tests {
     #[test]
     fn human_findings_keep_distinct_unresolved_target_coverage() {
         let source = SourceFileFact {
+            logical_path: None,
             id: SourceFileId::new("source-id"),
             filename: String::from("src/lib.rs"),
             content_hash: String::from("content"),
@@ -1672,6 +1681,7 @@ mod tests {
     #[test]
     fn human_findings_do_not_merge_distinct_obligation_states_or_limit_reports() {
         let source = SourceFileFact {
+            logical_path: None,
             id: SourceFileId::new("source-id"),
             filename: String::from("src/lib.rs"),
             content_hash: String::from("content"),
@@ -1709,6 +1719,7 @@ mod tests {
     #[test]
     fn human_findings_do_not_merge_distinct_owner_or_source_evidence() {
         let source = SourceFileFact {
+            logical_path: None,
             id: SourceFileId::new("source-id"),
             filename: String::from("dependency/src/lib.rs"),
             content_hash: String::from("content"),
