@@ -145,7 +145,7 @@ pub(super) struct InitCliArgs {
 }
 
 pub(super) enum FrontendAction {
-    Run(SniffTestArgs),
+    Run(Box<SniffTestArgs>),
     Init(InitCliArgs),
 }
 
@@ -172,7 +172,7 @@ impl FrontendCli {
             .any(|arg| arg == "--profile" || arg.starts_with("--profile="));
         args.release = !self.debug && !cargo_profile_is_explicit;
         args.cargo_args = self.cargo_args;
-        FrontendAction::Run(args)
+        FrontendAction::Run(Box::new(args))
     }
 }
 

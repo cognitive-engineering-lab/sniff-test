@@ -312,6 +312,7 @@ impl<'annotations> ObligationTracker<'annotations> {
     /// A contract site is useful only if its first invocation can enter a
     /// selected caller. A contract without an invocation keeps its defining
     /// crate as its source.
+    #[must_use]
     pub fn source_site_allowed(
         &self,
         contract: ContractId,

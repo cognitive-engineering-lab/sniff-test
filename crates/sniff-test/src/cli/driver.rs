@@ -35,6 +35,16 @@ pub(crate) fn analyze_crate(
     output_scope: CrateOutputScope,
     metadata_loader: &dyn rustc_metadata::creader::MetadataLoader,
 ) {
+    let package = if args.under_cargo {
+        sniff_test_core::analysis::PackageProvenance {
+            manifest_dir: std::env::var_os("CARGO_MANIFEST_DIR").map(PathBuf::from),
+            version: std::env::var("CARGO_PKG_VERSION")
+                .ok()
+                .filter(|version| !version.trim().is_empty()),
+        }
+    } else {
+        sniff_test_core::analysis::PackageProvenance::default()
+    };
     let rustc_version = rustc_version();
     let item_lints = collect_item_lints(tcx);
     let effects = selected_effect_objects(&EffectSelection::all(), config);
@@ -72,6 +82,7 @@ pub(crate) fn analyze_crate(
         early_selection
             .as_ref()
             .map_or(&[], |selection| selection.roots.as_slice()),
+        &package,
     ) {
         Ok(Some(analysis)) => analysis,
         Ok(None) => return,
@@ -120,6 +131,7 @@ pub(crate) fn analyze_crate(
         metadata_loader,
         &selection.roots,
         &trace_config,
+        package.version.as_deref(),
         &effects,
         &cli_effects,
         &item_effects,
@@ -153,12 +165,11 @@ pub(crate) fn analyze_crate(
         &root_codes,
     );
     if let Some(trace_id) = &args.explain {
-        if emit_explanation(tcx, &report, trace_id) {
-            if let Some(marker) = &args.explain_match_marker {
-                if let Err(error) = std::fs::write(marker, "matched") {
-                    emit_tool_error(tcx, format!("failed to record explained trace: {error}"));
-                }
-            }
+        if emit_explanation(tcx, &report, trace_id)
+            && let Some(marker) = &args.explain_match_marker
+            && let Err(error) = std::fs::write(marker, "matched")
+        {
+            emit_tool_error(tcx, format!("failed to record explained trace: {error}"));
         }
         return;
     }

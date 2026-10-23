@@ -1,0 +1,16 @@
+[overrides.crates."source_contract_overrides"."0.1.0"]
+"src/generic_effects.rs:1:1" = """
+# Allocations
+
+- audited: the caller must accept the allocation.
+"""
+"src/generic_effects.rs:3:3" = """
+# File
+
+- audited: the caller must accept the file change.
+"""
+"src/generic_effects.rs:5:5" = """
+# Safety
+
+- valid: the pointer must reference initialized memory.
+"""

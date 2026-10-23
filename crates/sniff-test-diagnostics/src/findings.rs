@@ -234,7 +234,11 @@ pub struct ResolvedFinding {
     pub finding: Finding,
 }
 
-#[must_use]
+/// Assign distinct trace prefixes to report roots using their stable local hashes.
+///
+/// # Errors
+///
+/// Returns an error if the analysis unit contains more than 65,536 report roots.
 pub fn trace_root_codes(
     roots: impl IntoIterator<Item = (String, u64)>,
 ) -> Result<BTreeMap<String, String>, String> {
@@ -428,7 +432,7 @@ fn aggregate_human_findings_iter_with<'a>(
 ) -> Vec<ResolvedFinding> {
     let mut groups = Vec::<(ResolvedFinding, bool)>::new();
     let mut buckets: HashMap<u64, Vec<usize>> = HashMap::new();
-    for finding in findings.into_iter() {
+    for finding in findings {
         let candidates = (is_source_finding(&finding.finding.kind)
             && finding.finding.source_order.is_some())
         .then(|| buckets.entry(fingerprint(&finding)).or_default());
@@ -475,15 +479,17 @@ fn aggregate_human_findings_iter_with<'a>(
                     .iter()
                     .any(is_compact_reachability_note);
                 compact_human_diagnostic_paths(&mut finding.finding);
-                if !has_local_primary && !has_reachability_note && root_without_trace {
-                    if let Some(root) = &finding.finding.root {
-                        let note = DiagnosticMessage::Note(format!(
-                            "reachable from local report root: `{}`",
-                            compact_function_name(root)
-                        ));
-                        if !finding.finding.diagnostic.messages.contains(&note) {
-                            finding.finding.diagnostic.messages.push(note);
-                        }
+                if !has_local_primary
+                    && !has_reachability_note
+                    && root_without_trace
+                    && let Some(root) = &finding.finding.root
+                {
+                    let note = DiagnosticMessage::Note(format!(
+                        "reachable from local report root: `{}`",
+                        compact_function_name(root)
+                    ));
+                    if !finding.finding.diagnostic.messages.contains(&note) {
+                        finding.finding.diagnostic.messages.push(note);
                     }
                 }
             }
@@ -1186,6 +1192,7 @@ mod tests {
     fn resolved_findings_have_stable_order_regardless_of_discovery_order() {
         let config = test_config();
         let source = SourceFileFact {
+            logical_path: None,
             id: SourceFileId::new("source-id"),
             filename: String::from("dependency/src/lib.rs"),
             content_hash: String::from("content"),
@@ -1224,6 +1231,7 @@ mod tests {
     #[test]
     fn human_findings_keep_a_diagnostic_for_each_report_root() {
         let source = SourceFileFact {
+            logical_path: None,
             id: SourceFileId::new("source-id"),
             filename: String::from("dependency/src/lib.rs"),
             content_hash: String::from("content"),
@@ -1314,6 +1322,7 @@ mod tests {
     #[test]
     fn workspace_effect_emits_one_diagnostic_per_report_root() {
         let source = SourceFileFact {
+            logical_path: None,
             id: SourceFileId::new("source-id"),
             filename: String::from("src/lib.rs"),
             content_hash: String::from("content"),
@@ -1384,6 +1393,7 @@ mod tests {
     #[test]
     fn dependency_effect_keeps_each_root_and_collapses_repeated_paths() {
         let source = SourceFileFact {
+            logical_path: None,
             id: SourceFileId::new("dependency-source"),
             filename: String::from("dependency/src/lib.rs"),
             content_hash: String::from("content"),
@@ -1471,6 +1481,7 @@ mod tests {
     #[test]
     fn dependency_effect_keeps_distinct_paths_from_the_same_root() {
         let source = SourceFileFact {
+            logical_path: None,
             id: SourceFileId::new("dependency-source"),
             filename: String::from("dependency/src/lib.rs"),
             content_hash: String::from("content"),
@@ -1535,6 +1546,7 @@ mod tests {
     #[test]
     fn human_single_root_source_finding_is_root_centric_without_changing_json() {
         let source = SourceFileFact {
+            logical_path: None,
             id: SourceFileId::new("source-id"),
             filename: String::from("src/lib.rs"),
             content_hash: String::from("content"),
@@ -1603,6 +1615,7 @@ mod tests {
     #[test]
     fn local_source_diagnostic_puts_all_help_after_notes() {
         let source = SourceFileFact {
+            logical_path: None,
             id: SourceFileId::new("source-id"),
             filename: String::from("src/lib.rs"),
             content_hash: String::from("content"),
@@ -1652,6 +1665,7 @@ mod tests {
     #[test]
     fn human_source_finding_without_displayable_source_keeps_root_span() {
         let source = SourceFileFact {
+            logical_path: None,
             id: SourceFileId::new("source-id"),
             filename: String::from("dependency/src/lib.rs"),
             content_hash: String::from("content"),
@@ -1826,6 +1840,7 @@ mod tests {
     #[test]
     fn human_findings_keep_distinct_unresolved_target_coverage() {
         let source = SourceFileFact {
+            logical_path: None,
             id: SourceFileId::new("source-id"),
             filename: String::from("src/lib.rs"),
             content_hash: String::from("content"),
@@ -1868,6 +1883,7 @@ mod tests {
     #[test]
     fn human_findings_do_not_merge_distinct_obligation_states_or_limit_reports() {
         let source = SourceFileFact {
+            logical_path: None,
             id: SourceFileId::new("source-id"),
             filename: String::from("src/lib.rs"),
             content_hash: String::from("content"),
@@ -1905,6 +1921,7 @@ mod tests {
     #[test]
     fn human_findings_do_not_merge_distinct_owner_or_source_evidence() {
         let source = SourceFileFact {
+            logical_path: None,
             id: SourceFileId::new("source-id"),
             filename: String::from("dependency/src/lib.rs"),
             content_hash: String::from("content"),

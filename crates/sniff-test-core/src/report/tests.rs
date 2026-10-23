@@ -263,6 +263,10 @@ fn contract_boundary_trace(
 }
 
 #[test]
+#[allow(
+    clippy::too_many_lines,
+    reason = "exercise source filters against the complete invocation path"
+)]
 fn documented_obligation_source_is_its_first_invocation_caller() {
     use std::collections::{BTreeMap, BTreeSet};
 
@@ -745,6 +749,10 @@ fn registered_effect_gets_default_concrete_reporting_without_an_adapter() {
 }
 
 #[test]
+#[allow(
+    clippy::too_many_lines,
+    reason = "compare documentation policies with the same registered effect"
+)]
 fn invocation_fact_controls_documentation_policy_for_a_registered_effect() {
     fn findings(requires_documented_obligation: bool) -> Vec<InterpretedFinding> {
         let root = stable_function(9_910);
@@ -1009,13 +1017,13 @@ fn source_deduplication_retains_distinct_states_even_with_hash_collisions() {
                 .source_range
                 .as_mut()
                 .unwrap()
-                .byte_end += 1
+                .byte_end += 1;
         },
         |f| std::sync::Arc::make_mut(&mut f.trace.steps[0]).target_path = None,
         |f| {
             std::sync::Arc::make_mut(&mut f.trace.steps[0])
                 .caller_path
-                .push_str("::alias")
+                .push_str("::alias");
         },
         |f| std::sync::Arc::make_mut(&mut f.trace.steps[0]).call = CallId::new(2),
         |f| f.trace.steps.clear(),
@@ -1354,6 +1362,7 @@ fn loaded_dependency(stable_crate_id: u64, facts: ArtifactFacts) -> ArtifactAnal
         TOOL_VERSION,
         RUSTC_VERSION,
         ArtifactInfo {
+            package_version: None,
             id: artifact_id.clone(),
             crate_name: format!("dependency-{stable_crate_id}"),
             scope: ArtifactScope::Dependency,
@@ -1783,6 +1792,7 @@ fn one_exact_projection_contract_does_not_suppress_its_sibling() {
             ),
         ],
         vec![SourceFileFact {
+            logical_path: None,
             id: SourceFileId::new("source-1"),
             filename: String::from("src/lib.rs"),
             content_hash: String::from("sha256:0123456789abcdef"),
@@ -2783,6 +2793,7 @@ fn registered_passes_determine_missing_body_completeness_for_new_effects() {
             kind: ReportRootKind::Concrete,
         }],
         &config,
+        &std::collections::BTreeMap::new(),
         &effects,
         &cli_effects,
         &std::collections::BTreeMap::new(),
@@ -3675,6 +3686,10 @@ fn allowed_marker_ambiguity_preserves_other_effects_and_obligations() {
 }
 
 #[test]
+#[allow(
+    clippy::too_many_lines,
+    reason = "verify the selected path and handoff projection together"
+)]
 fn trace_projection_walks_selected_path_and_stops_at_handoff() {
     use crate::trace::{
         EffectTrace, PropagationEdge, TraceEdge, TraceEdgeId, TraceNode, TraceNodeId,
@@ -3977,7 +3992,7 @@ fn trace_limit_selection_preserves_rendered_frontier_order() {
             ] {
                 for id in [Some(crate::trace::TraceNodeId(index)), None] {
                     trace.unknown.push(crate::trace::UnknownTrace {
-                        origin: node.origin().clone(),
+                        origin: *node.origin(),
                         node: id,
                         function: node.function(),
                         state: node.state().clone(),

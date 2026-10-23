@@ -14,7 +14,7 @@ pub enum AllocationOperation {
 }
 
 impl AllocationOperation {
-    const fn as_str(self) -> &'static str {
+    const fn as_str(&self) -> &'static str {
         match self {
             Self::HeapAllocation => "heap-allocation",
         }

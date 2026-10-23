@@ -1368,7 +1368,7 @@ impl Probe {
         .unwrap_or_else(|error| panic!("failed to read {}: {error}", cache_path.display()));
     let cache: serde_json::Value =
         serde_json::from_str(&serialized).expect("cache should contain JSON");
-    assert_eq!(cache["format-version"], 31);
+    assert_eq!(cache["format-version"], 32);
     assert_eq!(cache["artifact"]["crate-name"], "artifact_facts_dependency");
     assert_eq!(cache["artifact"]["scope"], "dependency");
     assert!(cache["artifact"]["id"]["stable-crate-id"].is_u64());
@@ -1474,10 +1474,10 @@ fn assert_consumer_definition_paths(consumer_facts: &str, consumer_document: &se
         );
     }
     assert!(
-        consumer_facts.contains(
+        !consumer_facts.contains(
             "core::definition_path_reexport::macros::internal::core::panicking::panic_nounwind_fmt"
         ),
-        "the old session-visible path should remain available only as a policy alias"
+        "session-visible re-export aliases must not remain in the definition-backed facts"
     );
     assert_definition_backed_display_paths(
         consumer_document,
@@ -1612,7 +1612,7 @@ fn workspace_lint_policy_reinterprets_unchanged_dependency_facts() {
         .unwrap_or_else(|error| panic!("failed to read {}: {error}", dependency_cache.display()));
     let initial_document: serde_json::Value =
         serde_json::from_slice(&initial_bytes).expect("dependency cache should contain JSON");
-    assert_eq!(initial_document["format-version"], 31);
+    assert_eq!(initial_document["format-version"], 32);
     assert_eq!(initial_document["artifact"]["scope"], "dependency");
     assert!(initial_document["facts"].get("tables").is_none());
     assert!(initial_document.get("analysis-id").is_none());
@@ -3179,4 +3179,109 @@ fn artifact_marker_count(cache: &serde_json::Value) -> usize {
         .filter_map(|function| function["markers"].as_array())
         .map(Vec::len)
         .sum()
+}
+
+#[test]
+fn stale_source_override_for_loaded_file_without_definitions_fails_closed() {
+    let temp = tempfile::tempdir().expect("temp dir");
+    fs::create_dir(temp.path().join("src")).expect("create source directory");
+    fs::write(
+        temp.path().join("Cargo.toml"),
+        "[package]\nname = \"stale-source-override\"\nversion = \"1.2.3\"\nedition = \"2024\"\n\n[workspace]\n",
+    )
+    .expect("write Cargo manifest");
+    fs::write(temp.path().join("src/lib.rs"), "mod retired;\n").expect("write library source");
+    fs::write(
+        temp.path().join("src/retired.rs"),
+        "pub struct FormerFunction;\n",
+    )
+    .expect("write loaded source without definitions");
+    fs::write(
+        temp.path().join("sniff-test.toml"),
+        "[contracts]\noverride-files = [\"override.toml\"]\n",
+    )
+    .expect("write sniff-test manifest");
+    fs::write(
+        temp.path().join("override.toml"),
+        "[overrides.crates.\"stale_source_override\".\"1.2.3\"]\n\"src/retired.rs:1:1\" = \"# Panics\\n\\n- retired: this definition must still exist.\"\n",
+    )
+    .expect("write stale source override");
+
+    let binary = PathBuf::from(env!("CARGO_BIN_EXE_cargo-sniff-test"));
+    let mut command = Command::new(binary);
+    clean_cargo_package_env(&mut command);
+    let _cargo_guard = lock_nested_cargo();
+    let output = command
+        .args(["--color", "never"])
+        .current_dir(temp.path())
+        .output()
+        .expect("run cargo frontend");
+
+    assert!(
+        !output.status.success(),
+        "a stale source override must fail closed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains(
+            "source override `stale_source_override:1.2.3/src/retired.rs:1:1` matched no definition"
+        ),
+        "stderr:\n{stderr}"
+    );
+}
+
+#[test]
+fn source_overrides_reject_stale_dependency_source_facts() {
+    let temp = tempfile::tempdir().expect("temporary fixture directory");
+    let root = temp.path().join("source_contract_overrides");
+    copy_fixture_dir(
+        &repo_root().join("tests/fixtures/source_contract_overrides"),
+        &root,
+    )
+    .expect("copy source override fixture");
+    let cache_dir = temp.path().join("cache");
+    let binary = PathBuf::from(env!("CARGO_BIN_EXE_cargo-sniff-test"));
+    let analyze = || {
+        let mut command = Command::new(&binary);
+        clean_cargo_package_env(&mut command);
+        command
+            .args(["--color", "never", "--cache-dir"])
+            .arg(&cache_dir)
+            .current_dir(&root)
+            .output()
+            .expect("analyze source override fixture")
+    };
+    let _cargo_guard = lock_nested_cargo();
+    assert_success(&analyze(), "initial source override analysis");
+    let cache = artifact_cache_for_crate(&cache_dir, "source_contract_dependency");
+    let mut document: serde_json::Value =
+        serde_json::from_slice(&fs::read(&cache).expect("read dependency facts"))
+            .expect("dependency cache JSON");
+    assert_eq!(
+        artifact_marker_count(&document),
+        0,
+        "exercise a source without markers"
+    );
+    let source = document["facts"]["source-files"]
+        .as_array_mut()
+        .expect("source facts")
+        .iter_mut()
+        .find(|source| source["logical-path"] == "src/lib.rs")
+        .expect("package source");
+    source["content-hash"] = serde_json::Value::String(String::from("stale-source-hash"));
+    fs::write(
+        &cache,
+        serde_json::to_vec(&document).expect("serialize stale facts"),
+    )
+    .expect("replace cached source hash");
+    let output = analyze();
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        !output.status.success(),
+        "stale source override facts were accepted:\n{stderr}"
+    );
+    assert!(stderr.contains("source override"), "stderr:\n{stderr}");
+    assert!(stderr.contains("content hash"), "stderr:\n{stderr}");
 }

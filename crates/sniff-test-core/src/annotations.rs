@@ -24,6 +24,7 @@ use crate::contracts::{
     ContractDocOverrides, ContractDocSummary, contract_doc_summary_from_markdown,
 };
 use crate::effects::EffectMetadata;
+use crate::source_overrides::ResolvedSourceContractOverride;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct AnnotationId(usize);
@@ -180,10 +181,15 @@ pub(crate) struct AnnotationWorkspaceIndex {
 }
 
 impl AnnotationWorkspaceIndex {
+    #[allow(
+        clippy::too_many_lines,
+        reason = "build the shared contract and marker indexes together"
+    )]
     pub(crate) fn new(
         artifact: &ArtifactFacts,
         namespaces: &DefinitionNamespaceIndex,
         overrides: &ContractDocOverrides,
+        source_overrides: &BTreeMap<StableDefPathHash, ResolvedSourceContractOverride>,
         marker_probing: MarkerProbing,
         effects: &[EffectMetadata],
     ) -> Self {
@@ -238,24 +244,40 @@ impl AnnotationWorkspaceIndex {
             marker_ids.push(body_ids);
         }
         let global = index_global_contracts(artifact, &mut ids, &mut contracts);
+        let mut override_markdown_by_definition = namespaces
+            .iter()
+            .filter_map(|(definition, candidates)| {
+                overrides
+                    .markdown_for_candidates(candidates)
+                    .map(|markdown| (*definition, (markdown, None)))
+            })
+            .collect::<BTreeMap<_, _>>();
+        for (definition, source_override) in source_overrides {
+            override_markdown_by_definition.insert(
+                *definition,
+                (
+                    source_override.markdown(),
+                    Some(source_override.source_range().clone()),
+                ),
+            );
+        }
         let mut override_records = BTreeMap::new();
-        for (definition, candidates) in namespaces.iter() {
-            let Some(markdown) = overrides.markdown_for_candidates(candidates) else {
-                continue;
-            };
-            let source_range = bodies_by_definition
-                .get(definition)
-                .into_iter()
-                .flatten()
-                .map(|&position| &artifact.functions[position])
-                .min_by_key(|body| body.function)
-                .and_then(|body| body.source_range.clone());
+        for (definition, (markdown, source_range)) in override_markdown_by_definition {
+            let source_range = source_range.or_else(|| {
+                bodies_by_definition
+                    .get(&definition)
+                    .into_iter()
+                    .flatten()
+                    .map(|&position| &artifact.functions[position])
+                    .min_by_key(|body| body.function)
+                    .and_then(|body| body.source_range.clone())
+            });
             let mut selected = BTreeMap::new();
             for effect in effects {
                 if let Some(position) = push_override_contract_for_owner(
                     &mut ids,
                     &mut contracts,
-                    FunctionId::generic(*definition),
+                    FunctionId::generic(definition),
                     source_range.as_ref(),
                     contract_doc_summary_from_markdown(markdown, effect.obligation),
                     &effect.key,
@@ -264,7 +286,7 @@ impl AnnotationWorkspaceIndex {
                 }
             }
             // An empty replacement still masks all original effects for this definition.
-            override_records.insert(*definition, selected);
+            override_records.insert(definition, selected);
         }
         Self {
             store: Arc::new(ContractStore {
@@ -402,6 +424,7 @@ impl AnnotationIndex {
             graph,
             &namespaces,
             &ContractDocOverrides::default(),
+            &BTreeMap::new(),
             MarkerProbing::SourceCallsite,
             &crate::effects::selected_effects(&crate::effects::EffectSelection::default()),
         )
@@ -412,11 +435,18 @@ impl AnnotationIndex {
         graph: &InvocationGraph,
         namespaces: &DefinitionNamespaceIndex,
         overrides: &ContractDocOverrides,
+        source_overrides: &BTreeMap<StableDefPathHash, ResolvedSourceContractOverride>,
         marker_probing: MarkerProbing,
         effects: &[EffectMetadata],
     ) -> Result<Self, AnnotationIndexError> {
-        let workspace =
-            AnnotationWorkspaceIndex::new(artifact, namespaces, overrides, marker_probing, effects);
+        let workspace = AnnotationWorkspaceIndex::new(
+            artifact,
+            namespaces,
+            overrides,
+            source_overrides,
+            marker_probing,
+            effects,
+        );
         Self::from_workspace_index(artifact, graph, &workspace, effects)
     }
 
@@ -779,6 +809,7 @@ mod tests {
         FunctionTargetFact,
     };
     use crate::namespace::StableDefPathHash;
+    use std::collections::BTreeMap;
 
     use super::{AnnotationId, AnnotationWorkspaceIndex};
 
@@ -923,6 +954,7 @@ mod tests {
         let artifact = ArtifactFacts {
             functions: bodies,
             source_files: Vec::new(),
+            definitions: Vec::new(),
         };
         let namespaces = artifact.definition_namespace_index();
         for (mode_index, mode) in [
@@ -936,6 +968,7 @@ mod tests {
                 &artifact,
                 &namespaces,
                 &ContractDocOverrides::default(),
+                &BTreeMap::new(),
                 mode,
                 &[],
             );
@@ -1012,6 +1045,7 @@ mod tests {
                 body(exact, vec![call(0, target(callee, "contract")), projected]),
             ],
             source_files: Vec::new(),
+            definitions: Vec::new(),
         };
         let graph = InvocationGraph::from_artifact_roots(&artifact, &[generic, exact]).unwrap();
         let annotations = AnnotationIndex::from_artifact(&artifact, &graph).unwrap();
@@ -1116,6 +1150,10 @@ mod tests {
     }
 
     #[test]
+    #[allow(
+        clippy::too_many_lines,
+        reason = "compare generic and exact contract visibility in one scenario"
+    )]
     fn contract_probe_preserves_variants_and_only_selects_visible_instances() {
         use super::AnnotationIndex;
         use crate::compiler::invocations::InvocationGraph;
@@ -1165,6 +1203,7 @@ mod tests {
                 ),
             ],
             source_files: Vec::new(),
+            definitions: Vec::new(),
         };
         let graph = InvocationGraph::from_artifact_roots(&artifact, &[root]).unwrap();
         let annotations = AnnotationIndex::from_artifact(&artifact, &graph).unwrap();
@@ -1244,11 +1283,13 @@ mod tests {
                 unverified_marker_probes: Vec::new(),
             }],
             source_files: Vec::new(),
+            definitions: Vec::new(),
         };
         let index = AnnotationWorkspaceIndex::new(
             &artifact,
             &artifact.definition_namespace_index(),
             &crate::contracts::ContractDocOverrides::default(),
+            &BTreeMap::new(),
             crate::config::MarkerProbing::SourceCallsite,
             &[],
         );
@@ -1300,11 +1341,13 @@ mod tests {
         let artifact = ArtifactFacts {
             functions: vec![first_body, body(second, Vec::new())],
             source_files: Vec::new(),
+            definitions: Vec::new(),
         };
         let workspace = AnnotationWorkspaceIndex::new(
             &artifact,
             &artifact.definition_namespace_index(),
             &ContractDocOverrides::default(),
+            &BTreeMap::new(),
             MarkerProbing::SourceCallsite,
             &[],
         );
@@ -1358,11 +1401,31 @@ mod tests {
 
     #[test]
     fn shared_overrides_mask_all_original_effects_only_in_visible_roots() {
+        check_override_visibility(false);
+    }
+
+    #[test]
+    fn shared_source_overrides_mask_all_original_effects_only_in_visible_roots() {
+        check_override_visibility(true);
+    }
+
+    #[allow(
+        clippy::too_many_lines,
+        reason = "compare source and namespace replacements in both root views"
+    )]
+    fn check_override_visibility(source_selected: bool) {
         use super::AnnotationIndex;
+        use crate::artifact::{
+            DefinitionSourceFact, SourceFileFact, SourceFileId, SourceRangeFact,
+        };
         use crate::compiler::invocations::InvocationGraph;
         use crate::config::MarkerProbing;
         use crate::contracts::ContractDocOverrides;
+        use crate::contracts::SourceContractSelector;
         use crate::effects::{EffectSelection, selected_effects};
+        use crate::source_overrides::{
+            ContractSourceArtifact, resolve_source_contract_overrides_for_artifacts,
+        };
 
         let first = function(0);
         let second = function(1);
@@ -1378,19 +1441,61 @@ mod tests {
         };
         let artifact = ArtifactFacts {
             functions: vec![body(first, vec![invocation]), body(second, Vec::new())],
-            source_files: Vec::new(),
+            source_files: vec![SourceFileFact {
+                id: SourceFileId::new("source"),
+                filename: "src/lib.rs".to_owned(),
+                logical_path: Some("src/lib.rs".to_owned()),
+                content_hash: "hash".to_owned(),
+                byte_len: 20,
+            }],
+            definitions: vec![DefinitionSourceFact {
+                definition: callee.def_path_hash,
+                display_path: "sample::target".to_owned(),
+                source_range: SourceRangeFact {
+                    file: SourceFileId::new("source"),
+                    byte_start: 0,
+                    byte_end: 10,
+                },
+                start_line: 1,
+            }],
         };
         let effects = selected_effects(&EffectSelection::all());
         let graph = InvocationGraph::from_artifact_roots(&artifact, &[first]).unwrap();
         let other_graph = InvocationGraph::from_artifact_roots(&artifact, &[second]).unwrap();
         for markdown in ["# Safety\nReplacement obligation", "No contract sections"] {
-            let overrides =
-                ContractDocOverrides::new(vec![("sample::target".to_owned(), markdown.to_owned())])
-                    .unwrap();
+            let namespace_markdown = if source_selected {
+                "# Panics\nNamespace fallback"
+            } else {
+                markdown
+            };
+            let source_entries = if source_selected {
+                BTreeMap::from([(
+                    SourceContractSelector::parse("sample", "1.0.0", "src/lib.rs:1:1").unwrap(),
+                    markdown.to_owned(),
+                )])
+            } else {
+                BTreeMap::new()
+            };
+            let overrides = ContractDocOverrides::with_source_entries(
+                vec![("sample::target".to_owned(), namespace_markdown.to_owned())],
+                source_entries,
+            )
+            .unwrap();
+            let source_overrides = resolve_source_contract_overrides_for_artifacts(
+                &overrides,
+                &[ContractSourceArtifact::new(
+                    callee.def_path_hash.stable_crate_id(),
+                    "sample",
+                    Some("1.0.0"),
+                    &artifact,
+                )],
+            )
+            .unwrap();
             let workspace = AnnotationWorkspaceIndex::new(
                 &artifact,
                 &artifact.definition_namespace_index(),
                 &overrides,
+                &source_overrides,
                 MarkerProbing::SourceCallsite,
                 &effects,
             );
@@ -1464,11 +1569,13 @@ mod tests {
         let artifact = ArtifactFacts {
             functions: vec![invalid_body, body(valid, Vec::new())],
             source_files: Vec::new(),
+            definitions: Vec::new(),
         };
         let workspace = AnnotationWorkspaceIndex::new(
             &artifact,
             &artifact.definition_namespace_index(),
             &ContractDocOverrides::default(),
+            &BTreeMap::new(),
             MarkerProbing::SourceCallsite,
             &[],
         );

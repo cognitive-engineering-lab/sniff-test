@@ -14,6 +14,9 @@ pub use crate::namespace::{StableDefPathHash, StableInstanceHash};
 pub struct ArtifactFacts {
     pub functions: Vec<FunctionFact>,
     pub source_files: Vec<SourceFileFact>,
+    /// Definition-site locations for locally declared functions, including
+    /// declarations that intentionally have no Rust body.
+    pub definitions: Vec<DefinitionSourceFact>,
 }
 
 impl ArtifactFacts {
@@ -22,9 +25,19 @@ impl ArtifactFacts {
         functions: Vec<FunctionFact>,
         source_files: Vec<SourceFileFact>,
     ) -> Result<Self, ArtifactValidationError> {
+        Self::with_definitions(functions, source_files, Vec::new())
+    }
+
+    /// Builds validated facts with definition-site source provenance.
+    pub fn with_definitions(
+        functions: Vec<FunctionFact>,
+        source_files: Vec<SourceFileFact>,
+        definitions: Vec<DefinitionSourceFact>,
+    ) -> Result<Self, ArtifactValidationError> {
         let mut artifact = Self {
             functions,
             source_files,
+            definitions,
         };
         artifact.canonicalize();
         artifact.validate()?;
@@ -37,6 +50,8 @@ impl ArtifactFacts {
     pub fn canonicalize(&mut self) {
         self.source_files
             .sort_by(|left, right| left.id.cmp(&right.id));
+        self.definitions
+            .sort_by_key(|definition| definition.definition);
         self.functions.sort_by_key(|body| body.function);
         for body in &mut self.functions {
             canonicalize_attributes(&mut body.attributes);
@@ -72,8 +87,26 @@ impl ArtifactFacts {
         for source in &self.source_files {
             require_nonempty(source.id.as_str(), "source file ID")?;
             require_nonempty(&source.filename, "source filename")?;
+            if let Some(logical_path) = &source.logical_path {
+                validate_source_logical_path(logical_path)?;
+            }
             require_nonempty(&source.content_hash, "source content hash")?;
             source_lengths.insert(&source.id, source.byte_len);
+        }
+
+        validate_sorted_unique(
+            &self.definitions,
+            |definition| definition.definition,
+            "definition source identity",
+        )?;
+        for definition in &self.definitions {
+            require_nonempty(&definition.display_path, "definition source display path")?;
+            validate_optional_range(Some(&definition.source_range), &source_lengths)?;
+            if definition.start_line == 0 {
+                return Err(ArtifactValidationError::new(
+                    "definition source start line must be one-based",
+                ));
+            }
         }
 
         validate_sorted_unique(&self.functions, |body| body.function, "function identity")?;
@@ -517,6 +550,10 @@ impl SourceFileId {
 pub struct SourceFileFact {
     pub id: SourceFileId,
     pub filename: String,
+    /// Canonical `/`-separated path relative to this Cargo package root.
+    /// Virtual, imported, out-of-package, and non-UTF-8 files have no path.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub logical_path: Option<String>,
     pub content_hash: String,
     pub byte_len: u64,
 }
@@ -527,6 +564,18 @@ pub struct SourceRangeFact {
     pub file: SourceFileId,
     pub byte_start: u64,
     pub byte_end: u64,
+}
+
+/// Extraction-time definition location independent of source availability at
+/// report time.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub struct DefinitionSourceFact {
+    pub definition: StableDefPathHash,
+    pub display_path: String,
+    pub source_range: SourceRangeFact,
+    /// One-based physical source line containing the definition start.
+    pub start_line: u32,
 }
 
 macro_rules! local_id {
@@ -1277,6 +1326,25 @@ fn validate_optional_range(
     Ok(())
 }
 
+fn validate_source_logical_path(path: &str) -> Result<(), ArtifactValidationError> {
+    if !is_portable_source_path(path) {
+        return Err(ArtifactValidationError::new(
+            "source logical path must be a non-empty portable relative path without `.` or `..`",
+        ));
+    }
+    Ok(())
+}
+
+#[must_use]
+pub fn is_portable_source_path(path: &str) -> bool {
+    !path.is_empty()
+        && !path.starts_with('/')
+        && !path.contains(['\\', ':'])
+        && path
+            .split('/')
+            .all(|segment| !segment.is_empty() && !matches!(segment, "." | ".."))
+}
+
 fn validate_nonempty_sorted_set<T: Ord>(
     values: &[T],
     label: &str,
@@ -1356,6 +1424,7 @@ mod tests {
         SourceFileFact {
             id: SourceFileId::new("source-1"),
             filename: String::from("src/lib.rs"),
+            logical_path: Some(String::from("src/lib.rs")),
             content_hash: String::from("sha256:0123456789abcdef"),
             byte_len: 256,
         }
@@ -2446,5 +2515,113 @@ mod tests {
         .expect_err("duplicate function identities must be rejected");
 
         assert!(error.to_string().contains("duplicate function identity"));
+    }
+
+    #[test]
+    fn definition_sources_are_canonicalized_and_round_trip() {
+        let first = def_hash("00000000000000010000000000000002");
+        let second = def_hash("00000000000000010000000000000003");
+        let artifact = ArtifactFacts::with_definitions(
+            Vec::new(),
+            vec![source_file()],
+            vec![
+                DefinitionSourceFact {
+                    definition: second,
+                    display_path: String::from("sample::second"),
+                    source_range: range(80, 120),
+                    start_line: 8,
+                },
+                DefinitionSourceFact {
+                    definition: first,
+                    display_path: String::from("sample::first"),
+                    source_range: range(10, 30),
+                    start_line: 2,
+                },
+            ],
+        )
+        .expect("valid definition sources");
+
+        assert_eq!(
+            artifact
+                .definitions
+                .iter()
+                .map(|source| source.definition)
+                .collect::<Vec<_>>(),
+            [first, second]
+        );
+        let encoded = serde_json::to_string(&artifact).expect("serialize definition sources");
+        let decoded: ArtifactFacts =
+            serde_json::from_str(&encoded).expect("deserialize definition sources");
+        assert_eq!(decoded, artifact);
+        decoded
+            .validate()
+            .expect("round-tripped definition sources remain valid");
+    }
+
+    #[test]
+    fn definition_sources_reject_duplicates_and_zero_based_lines() {
+        let definition = def_hash("00000000000000010000000000000002");
+        let definition_source = DefinitionSourceFact {
+            definition,
+            display_path: String::from("sample::root"),
+            source_range: range(10, 30),
+            start_line: 1,
+        };
+        let duplicate_error = ArtifactFacts::with_definitions(
+            Vec::new(),
+            vec![source_file()],
+            vec![definition_source.clone(), definition_source.clone()],
+        )
+        .expect_err("one stable definition must have one source fact");
+        assert!(
+            duplicate_error
+                .to_string()
+                .contains("duplicate definition source identity")
+        );
+
+        let mut zero_based = definition_source;
+        zero_based.start_line = 0;
+        let line_error =
+            ArtifactFacts::with_definitions(Vec::new(), vec![source_file()], vec![zero_based])
+                .expect_err("definition line numbers are one-based");
+        assert!(
+            line_error
+                .to_string()
+                .contains("start line must be one-based")
+        );
+    }
+
+    #[test]
+    fn source_logical_paths_are_portable_package_relative_paths() {
+        for invalid in [
+            "",
+            "/src/lib.rs",
+            "C:/src/lib.rs",
+            "./src/lib.rs",
+            "src/../lib.rs",
+            "src\\lib.rs",
+            "src//lib.rs",
+            "src/generated:copy.rs",
+        ] {
+            let mut source = source_file();
+            source.logical_path = Some(invalid.to_owned());
+            let error = ArtifactFacts::new(Vec::new(), vec![source])
+                .expect_err("non-portable logical paths must be rejected");
+            assert!(
+                error.to_string().contains("source logical path"),
+                "unexpected error for {invalid:?}: {error}"
+            );
+        }
+
+        let mut source = source_file();
+        source.logical_path = None;
+        ArtifactFacts::new(Vec::new(), vec![source])
+            .expect("virtual and out-of-package files have no logical path");
+    }
+
+    #[test]
+    fn current_artifact_facts_require_definition_sources() {
+        serde_json::from_str::<ArtifactFacts>(r#"{"functions":[],"source-files":[]}"#)
+            .expect_err("current cache requires explicit definition provenance");
     }
 }

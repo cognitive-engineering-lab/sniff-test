@@ -41,5 +41,6 @@ pub mod report;
 pub mod report_model;
 pub mod report_roots;
 pub mod source_markers;
+pub mod source_overrides;
 pub mod trace;
 pub mod workspace;

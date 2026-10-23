@@ -119,14 +119,14 @@ pub(super) fn collect_item_lints(tcx: TyCtxt<'_>) -> ItemLintSelection {
                 .find(|entry| entry.effect == effect)
                 .expect("selected effect lint was registered");
             let lint_level = tcx.lint_level_at_node(lint.lint, hir_id);
-            if lint_level.level == Level::Expect {
-                if let Some(id) = lint_level.lint_id {
-                    selection.expectations.push(ItemExpectation {
-                        root: path.clone(),
-                        effect: effect.to_owned(),
-                        id,
-                    });
-                }
+            if lint_level.level == Level::Expect
+                && let Some(id) = lint_level.lint_id
+            {
+                selection.expectations.push(ItemExpectation {
+                    root: path.clone(),
+                    effect: effect.to_owned(),
+                    id,
+                });
             }
             let level = match lint_level.level {
                 Level::Allow | Level::Expect => LintLevel::Allow,

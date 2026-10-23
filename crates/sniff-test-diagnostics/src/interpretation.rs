@@ -26,6 +26,9 @@ use sniff_test_core::report_model::{
     UnresolvedCallSite,
 };
 use sniff_test_core::report_roots::ReportRoot;
+use sniff_test_core::source_overrides::{
+    ContractSourceArtifact, resolve_source_contract_overrides,
+};
 use sniff_test_core::workspace::ArtifactAnalysisGraph;
 
 use super::findings::{
@@ -52,6 +55,7 @@ pub fn interpret_workspace<'tcx>(
     metadata_loader: &dyn rustc_metadata::creader::MetadataLoader,
     report_roots: &[ReportRoot<'tcx>],
     config: &SniffTestConfig,
+    package_version: Option<&str>,
     effects: &[Box<dyn Effect + '_>],
     cli_effects: &BTreeSet<EffectKey>,
     item_effects: &BTreeMap<String, BTreeSet<EffectKey>>,
@@ -83,6 +87,20 @@ pub fn interpret_workspace<'tcx>(
             .entry(artifact.artifact.id.stable_crate_id)
             .or_insert_with(|| artifact.artifact.crate_name.clone());
     }
+    let crate_name = tcx.crate_name(LOCAL_CRATE);
+    let local_source = ContractSourceArtifact::new(
+        local_stable_crate_id,
+        crate_name.as_str(),
+        package_version,
+        local,
+    );
+    let source_overrides = resolve_source_contract_overrides(
+        tcx,
+        &config.contracts.overrides,
+        local_source,
+        dependencies,
+    )
+    .map_err(|error| EffectReportError::new(error.to_string()))?;
     let result = trace_selected_workspace(
         local,
         local_stable_crate_id,
@@ -90,6 +108,7 @@ pub fn interpret_workspace<'tcx>(
         &crate_dependencies,
         &roots,
         config,
+        &source_overrides,
         effects,
         cli_effects,
         item_effects,
@@ -605,6 +624,10 @@ struct EffectDiagnosticWriter<'a, 'tcx, 'analysis> {
 }
 
 impl EffectDiagnosticWriter<'_, '_, '_> {
+    #[allow(
+        clippy::too_many_lines,
+        reason = "source classification renders operation and invocation evidence together"
+    )]
     fn source(&mut self, effect: &EffectMetadata, contract: bool) {
         self.justification_marker = Some(effect.justification.to_owned());
         if let Some(span) = self.sources.function_span(self.root.function) {
@@ -724,10 +747,10 @@ impl EffectDiagnosticWriter<'_, '_, '_> {
     }
 
     fn source_endpoint_note(&mut self, effect: &EffectMetadata) {
-        let caller = compact_function_name(&self.finding.function_path);
+        let function = compact_function_name(&self.finding.function_path);
         let note = if matches!(self.finding.kind, InterpretedFindingKind::Operation { .. }) {
             format!(
-                "`{caller}` reaches {} effect operation here",
+                "`{function}` reaches {} effect operation here",
                 effect.key.as_str()
             )
         } else {
@@ -1216,15 +1239,15 @@ fn obligation_doc_source(
     let docs = before.get(docs_start..)?;
     for (offset, line) in lines_with_offsets(docs) {
         let trimmed = line.trim_start();
-        if let Some(comment) = trimmed.strip_prefix("///") {
-            if let Some(heading_offset) = markdown_heading_offset(comment, heading) {
-                let prefix_len = line.len() - trimmed.len() + 3;
-                let heading_start = docs_start + offset + prefix_len + heading_offset;
-                return Some(ObligationDocSource::Inline(Span::with_root_ctxt(
-                    file.start_pos + BytePos(u32::try_from(heading_start).ok()?),
-                    function_span.hi(),
-                )));
-            }
+        if let Some(comment) = trimmed.strip_prefix("///")
+            && let Some(heading_offset) = markdown_heading_offset(comment, heading)
+        {
+            let prefix_len = line.len() - trimmed.len() + 3;
+            let heading_start = docs_start + offset + prefix_len + heading_offset;
+            return Some(ObligationDocSource::Inline(Span::with_root_ctxt(
+                file.start_pos + BytePos(u32::try_from(heading_start).ok()?),
+                function_span.hi(),
+            )));
         }
     }
     let declaration_file = declaration_file?;
@@ -1866,9 +1889,9 @@ fn trace_path_labels(trace: &InterpretedTrace) -> BTreeMap<String, String> {
         }
         let mut changed = false;
         for (path, options) in &candidates {
-            let index = &mut selected.get_mut(path).expect("every path has a selection");
-            if counts[options[**index].as_str()] > 1 && **index + 1 < options.len() {
-                **index += 1;
+            let index = selected.get_mut(path).expect("every path has a selection");
+            if counts[options[*index].as_str()] > 1 && *index + 1 < options.len() {
+                *index += 1;
                 changed = true;
             }
         }
@@ -2315,6 +2338,7 @@ mod tests {
         let generic = FunctionId::generic(def_path);
         let exact = FunctionId::exact(def_path, instance);
         let definition = ArtifactFacts {
+            definitions: Vec::new(),
             functions: vec![marker_call_body(
                 generic,
                 FunctionFactProvenance::DefiningArtifact,
@@ -2323,6 +2347,7 @@ mod tests {
             source_files: Vec::new(),
         };
         let overlay = ArtifactFacts {
+            definitions: Vec::new(),
             functions: vec![marker_call_body(
                 exact,
                 FunctionFactProvenance::ConsumerInstantiation {
@@ -2782,7 +2807,9 @@ mod tests {
                     std::sync::Arc::new(InterpretedTraceStep {
                         caller: function(index as u128 + 1),
                         caller_path: (*path).to_owned(),
-                        call: CallId::new(index as u32),
+                        call: CallId::new(
+                            u32::try_from(index).expect("fixture call index fits u32"),
+                        ),
                         marker_call: None,
                         kind: InterpretedTraceStepKind::Reachability(CallKindFact::DirectCall),
                         source_range: None,
@@ -2807,7 +2834,9 @@ mod tests {
                     std::sync::Arc::new(InterpretedTraceStep {
                         caller: function(index as u128 + 1),
                         caller_path: path.to_owned(),
-                        call: CallId::new(index as u32),
+                        call: CallId::new(
+                            u32::try_from(index).expect("fixture call index fits u32"),
+                        ),
                         marker_call: None,
                         kind: InterpretedTraceStepKind::Reachability(CallKindFact::DirectCall),
                         source_range: None,

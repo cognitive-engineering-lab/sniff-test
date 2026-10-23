@@ -53,7 +53,8 @@ trace-state-budget = 10000
 undocumented-effect-invocation = "warn"
 
 [contracts]
-# Synthetic rustdoc markdown by namespace glob, loaded from TOML files relative
+# Synthetic rustdoc markdown by namespace glob or crate/version/source location,
+# loaded from TOML files relative
 # to this manifest. Useful while auditing external or generated APIs whose
 # documented behavior is known but not written in source yet.
 #
@@ -63,6 +64,10 @@ undocumented-effect-invocation = "warn"
 # # Panics
 # - requirement: condition
 # """
+#
+# [overrides.crates."dependency_crate"."1.2.3"]
+# "src/lib.rs:10:20" = "# Panics\n\n- condition: input must be valid."
+# The selected definition must start within the inclusive line range.
 override-files = []
 
 [panic]

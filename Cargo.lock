@@ -474,6 +474,7 @@ dependencies = [
  "insta",
  "pulldown-cmark",
  "reachability",
+ "semver",
  "serde",
  "serde_json",
  "tempfile",

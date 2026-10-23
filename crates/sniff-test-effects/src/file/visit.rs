@@ -18,9 +18,7 @@ impl MirEffectPass for FileMutationPass {
         _callable_ty: rustc_middle::ty::Ty<'tcx>,
         location: Location,
     ) -> Option<MirEffectSeed> {
-        let Some(operation) = callee.and_then(|callee| file_operation(cx.tcx(), callee)) else {
-            return None;
-        };
+        let operation = callee.and_then(|callee| file_operation(cx.tcx(), callee))?;
         Some(MirEffectSeed {
             location,
             kind: operation.into(),
