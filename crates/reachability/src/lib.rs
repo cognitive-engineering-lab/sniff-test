@@ -46,6 +46,7 @@ extern crate rustc_span;
 
 mod analysis;
 mod body;
+mod expansion;
 mod graph;
 mod hooks;
 
@@ -53,6 +54,7 @@ pub use analysis::{
     ArtifactScope, DynDispatchVTableEdges, FnPointerEdges, IntoInstance, ReachabilityIndex,
     ReachabilityOptions, ReachabilityRoot,
 };
+pub use expansion::expansion_ancestry;
 pub use graph::{
     CallableEdgeInfo, CompilerAssertLocal, CompilerAssertLocalRole, MirBodyLocation,
     ReachabilityEdge, ReachabilityEdgeId, ReachabilityEdgeKind, ReachabilityGraph,
