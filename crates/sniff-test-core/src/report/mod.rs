@@ -522,6 +522,7 @@ fn path_from_root_until(
     is_opaque: impl Fn(FunctionId, &TrustPath) -> bool,
     is_ignored_invocation: impl Fn(crate::trace::InvocationId) -> bool,
 ) -> Option<InterpretedTrace> {
+    trust_path.enter_behavioral_provenance(graph, target);
     if !is_opaque(target, &TrustPath::default()) {
         trust_path.enter(graph, target);
     }
@@ -540,6 +541,7 @@ fn path_from_root_until(
             }
             let parent = graph.caller(*invocation);
             let mut next_trust = trust_path.clone();
+            next_trust.enter_behavioral_provenance(graph, parent);
             if !is_opaque(parent, &TrustPath::default()) {
                 next_trust.enter(graph, parent);
             }
@@ -556,6 +558,7 @@ fn path_from_root_until(
         for transparent in graph.transparent_parents(function) {
             let parent = graph.transparent_parent(*transparent);
             let mut next_trust = trust_path.clone();
+            next_trust.enter_behavioral_provenance(graph, parent);
             if !is_opaque(parent, &TrustPath::default()) {
                 next_trust.enter(graph, parent);
             }

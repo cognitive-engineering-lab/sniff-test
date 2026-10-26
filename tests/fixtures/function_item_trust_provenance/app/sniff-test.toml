@@ -1,0 +1,12 @@
+[analysis]
+show-full-stack-trace = true
+report-roots = "public"
+
+[panic]
+trusted-boundary-namespaces = ["core", "alloc", "std", "function_item_trust_dep"]
+
+[panic.lints]
+invocation = "deny"
+
+[safety]
+trusted-boundary-namespaces = ["core", "alloc", "std"]

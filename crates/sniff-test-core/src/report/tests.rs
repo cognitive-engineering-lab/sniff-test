@@ -1342,6 +1342,7 @@ fn body(
     FunctionFact {
         function,
         provenance: FunctionFactProvenance::DefiningArtifact,
+        behavioral_provenance_crates: Vec::new(),
         display_path: path.to_owned(),
         attributes: attributes(path),
         contract_declaration: None,
@@ -4141,4 +4142,150 @@ fn unrestricted_paths_preserve_policy_search_ties_across_crates_and_cycles() {
             (functions[3], CallId::new(1))
         ]
     );
+}
+
+#[test]
+fn callable_shim_consumer_provenance_crosses_trusted_boundaries() {
+    for effect in [ReportEffect::Panic, ReportEffect::Safety] {
+        for documented in [false, true] {
+            for consumer_selected in [false, true] {
+                let root = stable_function(10_100);
+                let wrapper = stable_function(10_101);
+                let shim = stable_function(10_102);
+                let leaf = stable_function(10_103);
+                let mut shim_body = body(
+                    shim,
+                    "trusted::shim",
+                    vec![call(
+                        0,
+                        target(
+                            leaf,
+                            if documented {
+                                "trusted::leaf"
+                            } else {
+                                "dependency::leaf"
+                            },
+                        ),
+                    )],
+                    Vec::new(),
+                    Vec::new(),
+                    Vec::new(),
+                );
+                if consumer_selected {
+                    shim_body.behavioral_provenance_crates =
+                        vec![root.def_path_hash.stable_crate_id()];
+                }
+                let mut leaf_body = body(
+                    leaf,
+                    "trusted::leaf",
+                    Vec::new(),
+                    Vec::new(),
+                    Vec::new(),
+                    Vec::new(),
+                );
+                if documented {
+                    leaf_body.markers.push(marker(
+                        0,
+                        AnnotationFactKind::new(effect.key(), AnnotationRole::Contract),
+                        AnnotationTargetFact::Function(leaf),
+                    ));
+                } else {
+                    leaf_body.effects.push(EffectFact {
+                        id: EffectId::new(0),
+                        effect: effect.key(),
+                        effect_group: Some(EffectGroupId::new(0)),
+                        source_range: None,
+                        expanded_range: None,
+                        macro_expansions: Vec::new(),
+                        kind: EffectKind::new(if effect == ReportEffect::Panic {
+                            "bounds-check"
+                        } else {
+                            "raw-pointer-dereference"
+                        }),
+                    });
+                    // Leave the concrete source untrusted; the shim and wrapper
+                    // can normally cover it through their dependency tree.
+                    leaf_body.display_path = "dependency::leaf".into();
+                    leaf_body.attributes = attributes("dependency::leaf");
+                }
+                let artifact = ArtifactFacts::new(
+                    vec![
+                        body(
+                            root,
+                            "app::root",
+                            vec![call(0, target(wrapper, "trusted::wrapper"))],
+                            Vec::new(),
+                            Vec::new(),
+                            Vec::new(),
+                        ),
+                        body(
+                            wrapper,
+                            "trusted::wrapper",
+                            vec![call(0, target(shim, "trusted::shim"))],
+                            Vec::new(),
+                            Vec::new(),
+                            Vec::new(),
+                        ),
+                        shim_body,
+                        leaf_body,
+                    ],
+                    Vec::new(),
+                )
+                .expect("shim artifact");
+                let mut graph = graph_for_all_bodies(&artifact).expect("shim graph");
+                graph.set_dependencies(&std::collections::BTreeMap::from([
+                    (
+                        wrapper.def_path_hash.stable_crate_id(),
+                        std::collections::BTreeSet::from([shim.def_path_hash.stable_crate_id()]),
+                    ),
+                    (
+                        shim.def_path_hash.stable_crate_id(),
+                        std::collections::BTreeSet::from([leaf.def_path_hash.stable_crate_id()]),
+                    ),
+                ]));
+                let annotations =
+                    AnnotationIndex::from_artifact(&artifact, &graph).expect("shim annotations");
+                let namespaces = artifact.definition_namespace_index();
+                let config = trusted_declaration_config();
+                let domain = match effect {
+                    ReportEffect::Panic => crate::effects::effect::<Panic>(config.effect("panic")),
+                    ReportEffect::Safety => {
+                        crate::effects::effect::<Safety>(config.effect("safety"))
+                    }
+                };
+                let concrete = probe_concrete_effect(
+                    &artifact,
+                    &graph,
+                    &annotations,
+                    &namespaces,
+                    domain.as_ref(),
+                )
+                .expect("concrete shim effect");
+                let obligations = super::ObligationTracker::probe(
+                    &graph,
+                    &annotations,
+                    config.analysis.effect_doc_matching,
+                    [super::ObligationEffectPolicy::new(
+                        effect.key(),
+                        concrete.trusted_functions(),
+                        concrete.ignored_invocations(),
+                    )],
+                );
+                let tracked = super::TrackedEffect::new(&concrete, &obligations, effect.key());
+                let root_id = graph.function(root).expect("root");
+                let trace = crate::trace::trace_effect(
+                    &graph,
+                    &tracked,
+                    &effect.key(),
+                    crate::trace::TraceOptions::default(),
+                    &crate::trace::RootRoutes::new(&graph, &[root_id]),
+                );
+                assert_eq!(
+                    trace.nodes().any(|node| node.function() == root_id),
+                    consumer_selected,
+                    "effect={effect:?}, documented={documented}, consumer_selected={consumer_selected}"
+                );
+            }
+        }
+    }
 }

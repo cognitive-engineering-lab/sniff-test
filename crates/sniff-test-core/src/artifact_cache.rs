@@ -198,6 +198,16 @@ impl ArtifactAnalysisCache {
         }
         for (index, body) in self.facts.functions.iter().enumerate() {
             let definition_stable_crate_id = body.function.def_path_hash.stable_crate_id();
+            if body
+                .behavioral_provenance_crates
+                .iter()
+                .any(|crate_id| *crate_id != self.artifact.id.stable_crate_id)
+            {
+                return Err(CacheValidationError::new(format!(
+                    "function {index} has behavioral provenance outside artifact stable crate id {:016x}",
+                    self.artifact.id.stable_crate_id
+                )));
+            }
             match body.provenance {
                 FunctionFactProvenance::DefiningArtifact
                     if definition_stable_crate_id != self.artifact.id.stable_crate_id =>
@@ -518,6 +528,7 @@ mod tests {
             vec![FunctionFact {
                 function: FunctionId::generic(definition),
                 provenance: FunctionFactProvenance::DefiningArtifact,
+                behavioral_provenance_crates: Vec::new(),
                 display_path: String::from("sample::root"),
                 attributes: FunctionAttributesFact {
                     is_unsafe: false,
@@ -650,6 +661,23 @@ mod tests {
             decoded.dependencies,
             [rustc_id(2, "22222222222222222222222222222222")]
         );
+    }
+
+    #[test]
+    fn behavioral_provenance_round_trips_and_rejects_other_artifacts() {
+        let directory = tempdir().expect("cache root");
+        let mut expected = analysis();
+        expected.facts.functions[0].behavioral_provenance_crates = vec![LOCAL_STABLE_CRATE_ID];
+        expected
+            .write(directory.path())
+            .expect("write provenance cache");
+        let path = artifact_cache_path(directory.path(), &expected.artifact.id);
+        assert_eq!(
+            ArtifactAnalysisCache::read(&path, &expectations()).expect("read cache"),
+            expected
+        );
+        expected.facts.functions[0].behavioral_provenance_crates = vec![LOCAL_STABLE_CRATE_ID + 1];
+        assert!(expected.validate().is_err());
     }
 
     #[test]

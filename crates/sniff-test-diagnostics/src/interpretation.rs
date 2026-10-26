@@ -2381,6 +2381,7 @@ mod tests {
         FunctionFact {
             function,
             provenance,
+            behavioral_provenance_crates: Vec::new(),
             display_path: String::from("sample::callable"),
             attributes: FunctionAttributesFact {
                 is_unsafe: false,

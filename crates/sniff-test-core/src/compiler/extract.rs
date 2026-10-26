@@ -129,6 +129,7 @@ pub fn extract_artifact_facts<'tcx>(
             function,
             owner.to_def_id(),
             FunctionFactProvenance::DefiningArtifact,
+            Vec::new(),
             &effects,
         )?;
     }
@@ -357,6 +358,7 @@ fn collect_reachability_mode<'tcx>(
             function,
             def_id,
             body_provenance(tcx, def_id),
+            body_behavioral_provenance(tcx, instance),
             effects,
         )?;
     }
@@ -410,6 +412,16 @@ fn body_id_for_instance<'tcx>(tcx: TyCtxt<'tcx>, instance: Instance<'tcx>) -> Fu
     }
 }
 
+fn body_behavioral_provenance(tcx: TyCtxt<'_>, instance: Instance<'_>) -> Vec<u64> {
+    // The consumer selects the callable executed by this foreign shim. Trust
+    // in the shim's defining crate must not hide consumer-selected behavior.
+    if !instance.def_id().is_local() && matches!(instance.def, InstanceKind::FnPtrShim(..)) {
+        vec![tcx.stable_crate_id(LOCAL_CRATE).as_u64()]
+    } else {
+        Vec::new()
+    }
+}
+
 fn body_provenance(tcx: TyCtxt<'_>, def_id: DefId) -> FunctionFactProvenance {
     if def_id.is_local() {
         FunctionFactProvenance::DefiningArtifact
@@ -456,6 +468,7 @@ fn collect_edge<'tcx>(
         body_id,
         origin_def_id,
         body_provenance(tcx, origin_def_id),
+        body_behavioral_provenance(tcx, origin),
         effects,
     )?;
 
@@ -1104,6 +1117,10 @@ fn contract_requirements(
         .collect()
 }
 
+#[allow(
+    clippy::too_many_arguments,
+    reason = "body identity, ownership, behavioral provenance, and effects are independent inputs"
+)]
 fn ensure_body(
     tcx: TyCtxt<'_>,
     sources: &mut SourceTable,
@@ -1111,10 +1128,13 @@ fn ensure_body(
     function: FunctionId,
     def_id: DefId,
     provenance: FunctionFactProvenance,
+    behavioral_provenance_crates: Vec<u64>,
     effects: &[EffectMetadata],
 ) -> Result<(), ExtractError> {
     if let Some(body) = bodies.get(&function) {
-        return if body.provenance == provenance {
+        return if body.provenance == provenance
+            && body.behavioral_provenance_crates == behavioral_provenance_crates
+        {
             Ok(())
         } else {
             Err(ExtractError::new(format!(
@@ -1134,6 +1154,7 @@ fn ensure_body(
     let mut body = PendingBody {
         function,
         provenance,
+        behavioral_provenance_crates,
         display_path: canonical_namespace(tcx, def_id),
         attributes,
         contract_declaration,
@@ -1570,6 +1591,7 @@ fn attach_source_operations(
                 function,
                 local.to_def_id(),
                 FunctionFactProvenance::DefiningArtifact,
+                Vec::new(),
                 effects,
             )?;
             body_ids.push(function);
@@ -1790,6 +1812,7 @@ fn push_unique<T: PartialEq>(values: &mut Vec<T>, value: T) {
 struct PendingBody {
     function: FunctionId,
     provenance: FunctionFactProvenance,
+    behavioral_provenance_crates: Vec<u64>,
     display_path: String,
     attributes: FunctionAttributesFact,
     contract_declaration: Option<FunctionTargetFact>,
@@ -1882,6 +1905,7 @@ impl PendingBody {
         Ok(FunctionFact {
             function: self.function,
             provenance: self.provenance,
+            behavioral_provenance_crates: self.behavioral_provenance_crates,
             display_path: self.display_path,
             attributes: self.attributes,
             contract_declaration: self.contract_declaration,

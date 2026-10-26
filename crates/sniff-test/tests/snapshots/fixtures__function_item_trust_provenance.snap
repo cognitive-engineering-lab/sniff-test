@@ -1,0 +1,34 @@
+---
+source: crates/sniff-test/tests/fixtures.rs
+assertion_line: 508
+expression: "report[\"findings\"]"
+---
+[
+  {
+    "effect": "panic",
+    "finding": "documented-obligation",
+    "function": "core::ops::function::Fn::call",
+    "kind": "effect",
+    "level": "deny",
+    "owner": {
+      "crate": "core",
+      "scope": "toolchain"
+    },
+    "reason": "could not verify `// PANIC:` justification for call to `function_item_trust_dep::panic_transform` with a documented `# Panics` obligation in toolchain crate `core`: no usable span was available for marker association",
+    "root": "function_item_trust_app::direct_function_item_from_untrusted_consumer",
+    "root-kind": "concrete",
+    "root-span": "src/lib.rs:3:1: 3:54",
+    "source-evidence": {
+      "reason": "no-usable-source-span",
+      "status": "unverified"
+    },
+    "span": "[SYSROOT]/lib/rustlib/src/rust/library/core/src/ops/function.rs:79:5: 79:67",
+    "target": "function_item_trust_dep::panic_transform",
+    "trace": [
+      "src/lib.rs:4:5: 4:28: function_item_trust_app::direct_function_item_from_untrusted_consumer --direct-call-> function_item_trust_dep::invoke",
+      "[FIXTURE]/trusted/src/lib.rs:2:5: 2:15: function_item_trust_dep::invoke --direct-call-> core::ops::function::Fn::call",
+      "[SYSROOT]/lib/rustlib/src/rust/library/core/src/ops/function.rs:79:5: 79:67: core::ops::function::Fn::call --direct-call-> function_item_trust_dep::panic_transform"
+    ],
+    "trace-id": "0000eb0987"
+  }
+]

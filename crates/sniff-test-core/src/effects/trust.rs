@@ -13,11 +13,19 @@ pub struct TrustPath(BTreeSet<u64>);
 impl TrustPath {
     #[must_use]
     pub fn new(graph: &InvocationGraph, source: FunctionId) -> Self {
-        Self(BTreeSet::from([Self::crate_id(graph, source)]))
+        let mut path = Self::default();
+        path.enter(graph, source);
+        path
     }
 
     pub fn enter(&mut self, graph: &InvocationGraph, function: FunctionId) {
         self.0.insert(Self::crate_id(graph, function));
+        self.enter_behavioral_provenance(graph, function);
+    }
+
+    /// Record consumer-selected behavior even when definition ownership is trusted.
+    pub fn enter_behavioral_provenance(&mut self, graph: &InvocationGraph, function: FunctionId) {
+        self.0.extend(graph.behavioral_provenance_crates(function));
     }
 
     #[must_use]

@@ -836,6 +836,7 @@ mod tests {
         FunctionFact {
             function,
             provenance: FunctionFactProvenance::DefiningArtifact,
+            behavioral_provenance_crates: Vec::new(),
             display_path: display_path.clone(),
             attributes: FunctionAttributesFact {
                 is_unsafe: false,

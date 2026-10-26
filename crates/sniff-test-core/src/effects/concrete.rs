@@ -560,6 +560,8 @@ impl ConcreteEffect<'_> {
             PropagationEdge::TransparentBody(edge) => self.graph.transparent_parent(edge),
             PropagationEdge::Handoff => unreachable!("handoff edges are not propagated"),
         };
+        next.trust_path
+            .enter_behavioral_provenance(self.graph, next.current_function);
         if !self.is_trusted_function(next.current_function) {
             next.trust_path.enter(self.graph, next.current_function);
         }

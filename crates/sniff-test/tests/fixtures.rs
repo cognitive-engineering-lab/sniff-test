@@ -67,6 +67,9 @@ fixture_cases! {
     "untrusted_higher_order" => {
         untrusted_higher_order => Case::new().in_app().denied();
     }
+    "function_item_trust_provenance" => {
+        function_item_trust_provenance => Case::new().in_app().denied();
+    }
     "path_scoped_trust" => {
         path_scoped_trust => Case::new().in_app().denied();
         trusted_crate_covers_implicit_dependencies => Case::new().in_app()

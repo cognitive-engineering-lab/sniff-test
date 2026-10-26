@@ -207,9 +207,16 @@ pub struct InvocationGraph {
     transparent_source: Vec<CallFact>,
     raw_call_invocations: BTreeMap<(StableFunctionId, CallId), InvocationId>,
     dependency_crates: BTreeMap<u64, BTreeSet<u64>>,
+    behavioral_provenance_crates: Vec<Vec<u64>>,
 }
 
 impl InvocationGraph {
+    /// Crates whose concrete callable selection controls this generated body.
+    #[must_use]
+    pub fn behavioral_provenance_crates(&self, function: FunctionId) -> &[u64] {
+        &self.behavioral_provenance_crates[function.index()]
+    }
+
     /// Index only bodies transitively invoked by the selected report roots.
     /// Function identities remain global so generic aliases and declaration
     /// contracts can still be resolved without indexing unrelated bodies.
@@ -243,6 +250,7 @@ impl InvocationGraph {
             transparent_source: Vec::new(),
             raw_call_invocations: BTreeMap::new(),
             dependency_crates: BTreeMap::new(),
+            behavioral_provenance_crates: vec![Vec::new(); function_count],
         };
 
         let included = graph.reachable_bodies(artifact, roots);
@@ -254,6 +262,10 @@ impl InvocationGraph {
         included_positions.sort_unstable();
         for &position in &included_positions {
             let body = &artifact.functions[position];
+            if let Some(function) = graph.function_lookup.exact_function(body.function) {
+                graph.behavioral_provenance_crates[function.index()]
+                    .clone_from(&body.behavioral_provenance_crates);
+            }
             if let Some(declaration) = &body.contract_declaration {
                 graph
                     .contract_definitions
@@ -1079,6 +1091,7 @@ mod tests {
         FunctionFact {
             function,
             provenance: FunctionFactProvenance::DefiningArtifact,
+            behavioral_provenance_crates: Vec::new(),
             display_path: format!("function-{}", function.def_path_hash),
             attributes: attributes(),
             contract_declaration: None,

@@ -1138,6 +1138,7 @@ mod tests {
         FunctionFact {
             function: owner,
             provenance: FunctionFactProvenance::DefiningArtifact,
+            behavioral_provenance_crates: Vec::new(),
             display_path: format!("sample::{owner:?}"),
             attributes: target(owner, "unused").attributes,
             contract_declaration: None,
@@ -1273,6 +1274,7 @@ mod tests {
             functions: vec![FunctionFact {
                 function: owner,
                 provenance: FunctionFactProvenance::DefiningArtifact,
+                behavioral_provenance_crates: Vec::new(),
                 display_path: String::from("sample::owner"),
                 attributes: target(owner, "unused").attributes,
                 contract_declaration: None,

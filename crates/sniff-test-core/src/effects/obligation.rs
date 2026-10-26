@@ -635,6 +635,8 @@ impl ObligationTracker<'_> {
             PropagationEdge::Handoff => unreachable!("handoff edges are not propagated"),
         };
         next.current_function = parent;
+        next.trust_path
+            .enter_behavioral_provenance(self.graph, parent);
         if !self.trusts_function(&state.effect, parent) {
             next.trust_path.enter(self.graph, parent);
         }

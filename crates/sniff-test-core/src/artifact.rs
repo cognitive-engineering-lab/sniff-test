@@ -54,6 +54,7 @@ impl ArtifactFacts {
             .sort_by_key(|definition| definition.definition);
         self.functions.sort_by_key(|body| body.function);
         for body in &mut self.functions {
+            sort_and_deduplicate(&mut body.behavioral_provenance_crates);
             canonicalize_attributes(&mut body.attributes);
             if let Some(declaration) = &mut body.contract_declaration {
                 canonicalize_function_target(declaration);
@@ -424,6 +425,10 @@ pub struct FunctionFact {
     pub function: FunctionId,
     /// Why this artifact owns the serialized body facts.
     pub provenance: FunctionFactProvenance,
+    /// Crates whose concrete callable selection controls this generated body,
+    /// independently of the crate defining its shim.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub behavioral_provenance_crates: Vec<u64>,
     pub display_path: String,
     pub attributes: FunctionAttributesFact,
     /// Trait/interface declaration whose contract is the fallback for this
@@ -1018,6 +1023,11 @@ fn validate_body(
             "consumer-instantiation overlay must have an exact function identity",
         ));
     }
+    validate_sorted_unique(
+        &body.behavioral_provenance_crates,
+        |crate_id| *crate_id,
+        "behavioral provenance crate",
+    )?;
     validate_attributes(&body.attributes)?;
     if let Some(declaration) = &body.contract_declaration {
         validate_function_target(declaration, source_lengths)?;
@@ -1466,10 +1476,27 @@ mod tests {
         }
     }
 
+    #[test]
+    fn behavioral_provenance_is_canonical_and_validated() {
+        let mut body = empty_body(
+            FunctionId::generic(def_hash("00000000000000010000000000000002")),
+            "sample::shim",
+        );
+        body.behavioral_provenance_crates = vec![3, 1, 3];
+        let mut artifact =
+            ArtifactFacts::new(vec![body], Vec::new()).expect("canonical provenance");
+        assert_eq!(artifact.functions[0].behavioral_provenance_crates, [1, 3]);
+        artifact.functions[0].behavioral_provenance_crates = vec![3, 1];
+        assert!(artifact.validate().is_err());
+        artifact.functions[0].behavioral_provenance_crates = vec![1, 1];
+        assert!(artifact.validate().is_err());
+    }
+
     fn empty_body(function: FunctionId, display_path: &str) -> FunctionFact {
         FunctionFact {
             function,
             provenance: FunctionFactProvenance::DefiningArtifact,
+            behavioral_provenance_crates: Vec::new(),
             display_path: display_path.to_owned(),
             attributes: attributes(),
             contract_declaration: None,
@@ -2300,6 +2327,7 @@ mod tests {
         let body = FunctionFact {
             function: root,
             provenance: FunctionFactProvenance::DefiningArtifact,
+            behavioral_provenance_crates: Vec::new(),
             display_path: String::from("sample::root"),
             attributes: attributes(),
             contract_declaration: Some(declaration_target.clone()),
