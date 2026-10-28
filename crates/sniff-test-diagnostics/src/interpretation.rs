@@ -132,13 +132,14 @@ pub fn interpret_workspace<'tcx>(
 }
 
 fn interpretation_root<'tcx>(tcx: TyCtxt<'tcx>, root: ReportRoot<'tcx>) -> InterpretationRoot {
-    let definition = StableDefPathHash::from_def_id(tcx, root.def_id());
-    let function = match root {
-        ReportRoot::Concrete { instance } => {
+    let instance = root.execution_instance(tcx);
+    let definition = StableDefPathHash::from_def_id(tcx, instance.def_id());
+    let function =
+        if instance.def_id() != root.def_id() || matches!(root, ReportRoot::Concrete { .. }) {
             FunctionId::exact(definition, StableInstanceHash::from_instance(tcx, instance))
-        }
-        ReportRoot::Generic { .. } => FunctionId::generic(definition),
-    };
+        } else {
+            FunctionId::generic(definition)
+        };
     InterpretationRoot {
         function,
         path: canonical_namespace(tcx, root.def_id()),
@@ -1760,7 +1761,6 @@ const fn edge_kind_order(kind: CallKindFact) -> u8 {
         CallKindFact::TailCall => 1,
         CallKindFact::MacroExpansion => 2,
         CallKindFact::ConstBody => 3,
-        CallKindFact::CoroutineBody => 4,
         CallKindFact::Assert => 5,
         CallKindFact::IndirectCall => 6,
     }
@@ -2057,7 +2057,6 @@ const fn edge_kind_label(kind: CallKindFact) -> &'static str {
         CallKindFact::TailCall => "tail-call",
         CallKindFact::MacroExpansion => "macro-expansion",
         CallKindFact::ConstBody => "const-body",
-        CallKindFact::CoroutineBody => "coroutine-body",
         CallKindFact::Assert => "assert",
         CallKindFact::IndirectCall => "indirect-call",
     }

@@ -3,6 +3,15 @@ inline-mir = "off"
 
 [analysis]
 report-roots = [
+    "async_runtime_bodies::unpolled",
+    "async_runtime_bodies::poll_generic",
+    "async_runtime_bodies::poll_erased",
+    "async_runtime_bodies::unpolled_documented",
+    "async_runtime_bodies::await_documented",
+    "async_runtime_bodies::documented",
+    "async_runtime_bodies::generic_root",
+    "async_runtime_bodies::unpolled_safety",
+    "async_runtime_bodies::polled_safety",
     "async_runtime_bodies::async_root",
     "async_runtime_bodies::invoked_async_closure",
 ]

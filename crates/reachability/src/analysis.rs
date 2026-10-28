@@ -632,7 +632,6 @@ where
             | crate::graph::ReachabilityEdgeKind::TailCall
             | crate::graph::ReachabilityEdgeKind::DynObjectCast
             | crate::graph::ReachabilityEdgeKind::ConstBody
-            | crate::graph::ReachabilityEdgeKind::CoroutineBody
             | crate::graph::ReachabilityEdgeKind::MacroExpansion
             | crate::graph::ReachabilityEdgeKind::Assert
             | crate::graph::ReachabilityEdgeKind::IndirectCall => true,

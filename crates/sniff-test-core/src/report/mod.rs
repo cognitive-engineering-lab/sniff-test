@@ -1632,7 +1632,6 @@ const fn call_reaches_function_body(kind: crate::artifact::CallKindFact) -> bool
             | crate::artifact::CallKindFact::TailCall
             | crate::artifact::CallKindFact::IndirectCall
             | crate::artifact::CallKindFact::ConstBody
-            | crate::artifact::CallKindFact::CoroutineBody
     )
 }
 

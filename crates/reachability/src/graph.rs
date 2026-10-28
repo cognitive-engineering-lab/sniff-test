@@ -786,8 +786,6 @@ pub enum ReachabilityEdgeKind {
     MacroExpansion,
     /// Anonymous or inline const body referenced by the current body.
     ConstBody,
-    /// Runtime body stored in a constructed coroutine.
-    CoroutineBody,
     /// Compiler-generated MIR assertion.
     Assert,
     /// Call-like operation whose concrete callee could not be resolved.
@@ -807,7 +805,6 @@ impl fmt::Display for ReachabilityEdgeKind {
             Self::DynDispatchVTableEntry => "dyn-dispatch-vtable-entry",
             Self::MacroExpansion => "macro-expansion",
             Self::ConstBody => "const-body",
-            Self::CoroutineBody => "coroutine-body",
             Self::Assert => "assert",
             Self::IndirectCall => "indirect-call",
         })

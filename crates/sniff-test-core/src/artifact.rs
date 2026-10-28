@@ -706,7 +706,6 @@ pub enum CallKindFact {
     TailCall,
     MacroExpansion,
     ConstBody,
-    CoroutineBody,
     Assert,
     IndirectCall,
 }
@@ -2518,7 +2517,6 @@ mod tests {
             CallKindFact::TailCall,
             CallKindFact::MacroExpansion,
             CallKindFact::ConstBody,
-            CallKindFact::CoroutineBody,
             CallKindFact::Assert,
             CallKindFact::IndirectCall,
         ];

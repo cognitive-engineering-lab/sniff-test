@@ -88,13 +88,7 @@ pub fn extract_artifact_facts<'tcx>(
         roots
             .iter()
             .copied()
-            .map(|root| match root {
-                ReportRoot::Concrete { instance } => instance,
-                ReportRoot::Generic { local } => Instance::new_raw(
-                    local.to_def_id(),
-                    GenericArgs::identity_for_item(tcx, local),
-                ),
-            })
+            .map(|root| root.execution_instance(tcx))
             .collect::<Vec<_>>()
     });
     let mut reachability = ReachabilityIndex::new(tcx);
@@ -221,7 +215,11 @@ fn extraction_roots<'tcx>(tcx: TyCtxt<'tcx>, owners: &[LocalDefId]) -> Vec<Insta
         defining_closure_args(tcx, owner.to_def_id())
             .map(|args| Instance::new_raw(owner.to_def_id(), args))
     });
-    functions.chain(closures).collect()
+    let async_bodies = owners
+        .iter()
+        .filter(|owner| tcx.asyncness(**owner).is_async())
+        .map(|owner| ReportRoot::Generic { local: *owner }.execution_instance(tcx));
+    functions.chain(closures).chain(async_bodies).collect()
 }
 
 fn defining_closure_args(
@@ -292,7 +290,6 @@ const fn reachability_edge_description(kind: ReachabilityEdgeKind) -> &'static s
         ReachabilityEdgeKind::DynDispatchVTableEntry => "dynamic call target",
         ReachabilityEdgeKind::MacroExpansion => "macro expansion",
         ReachabilityEdgeKind::ConstBody => "constant body",
-        ReachabilityEdgeKind::CoroutineBody => "async or coroutine body",
         ReachabilityEdgeKind::Assert => "compiler check",
         ReachabilityEdgeKind::IndirectCall => "indirect call",
     }
@@ -871,7 +868,6 @@ fn call_edge_kind(reached: ReachedEdge<'_, '_>) -> Option<CallKindFact> {
         ReachabilityEdgeKind::DirectCall => Some(CallKindFact::DirectCall),
         ReachabilityEdgeKind::TailCall => Some(CallKindFact::TailCall),
         ReachabilityEdgeKind::ConstBody => Some(CallKindFact::ConstBody),
-        ReachabilityEdgeKind::CoroutineBody => Some(CallKindFact::CoroutineBody),
         ReachabilityEdgeKind::Assert => Some(CallKindFact::Assert),
         ReachabilityEdgeKind::IndirectCall => Some(CallKindFact::IndirectCall),
         ReachabilityEdgeKind::FnPointerReify
@@ -1064,9 +1060,31 @@ fn function_contracts(
     sources: &mut SourceTable,
     effects: &[EffectMetadata],
 ) -> Result<FunctionContractsFact, ExtractError> {
-    if !matches!(tcx.def_kind(def_id), DefKind::Fn | DefKind::AssocFn) {
-        return Ok(FunctionContractsFact::default());
-    }
+    // Async function contracts describe execution of the future, not its
+    // construction. Attach them to the generated polling body.
+    let def_id = if matches!(tcx.def_kind(def_id), DefKind::Closure)
+        && matches!(
+            tcx.type_of(def_id)
+                .instantiate_identity()
+                .skip_normalization()
+                .kind(),
+            TyKind::Coroutine(..)
+        )
+        && matches!(
+            tcx.def_kind(tcx.parent(def_id)),
+            DefKind::Fn | DefKind::AssocFn
+        )
+        && tcx.asyncness(tcx.parent(def_id)).is_async()
+    {
+        tcx.parent(def_id)
+    } else {
+        if !matches!(tcx.def_kind(def_id), DefKind::Fn | DefKind::AssocFn)
+            || tcx.asyncness(def_id).is_async()
+        {
+            return Ok(FunctionContractsFact::default());
+        }
+        def_id
+    };
     let mut contracts = Vec::new();
     for effect in effects {
         if let Some(contract) = raw_contract(
@@ -1349,8 +1367,7 @@ impl RawEffectGroupResolver {
                 self.marker_scope_span(owner, site.effect_group),
             );
         }
-        // Coroutine lowering can add a direct runtime-body edge at the same
-        // span as several desugared `.await` calls without a corresponding
+        // Desugared calls can share a span without a corresponding unique
         // THIR call expression. When no candidate identity is unique, keep a
         // conservative standalone site instead of borrowing an unrelated
         // user or compiler-provided unsafe context.

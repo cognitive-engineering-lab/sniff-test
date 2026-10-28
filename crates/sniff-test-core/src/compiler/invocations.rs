@@ -968,7 +968,7 @@ const fn is_invocation(kind: CallKindFact) -> bool {
 }
 
 const fn is_transparent(kind: CallKindFact) -> bool {
-    matches!(kind, CallKindFact::ConstBody | CallKindFact::CoroutineBody)
+    matches!(kind, CallKindFact::ConstBody)
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -1509,24 +1509,19 @@ mod tests {
     }
 
     #[test]
-    fn const_and_coroutine_bodies_are_transparent_not_invocations() {
+    fn const_bodies_are_transparent_not_invocations() {
         let owner = stable_function(0);
         let inline_const = stable_function(1);
-        let coroutine = stable_function(2);
         let facts = artifact(vec![
             body(
                 owner,
-                vec![
-                    call(0, 0, CallKindFact::ConstBody, target(inline_const)),
-                    call(1, 1, CallKindFact::CoroutineBody, target(coroutine)),
-                ],
+                vec![call(0, 0, CallKindFact::ConstBody, target(inline_const))],
             ),
             body(inline_const, Vec::new()),
-            body(coroutine, Vec::new()),
         ]);
 
         let graph = graph_for_all_bodies(&facts).expect("invocation graph");
-        for child in [inline_const, coroutine] {
+        for child in [inline_const] {
             let child = graph.function(child).unwrap();
             let [edge] = graph.transparent_parents(child) else {
                 panic!("expected one transparent parent")

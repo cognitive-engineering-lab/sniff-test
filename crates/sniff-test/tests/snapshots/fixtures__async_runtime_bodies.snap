@@ -17,19 +17,70 @@ expression: "report[\"findings\"]"
     "reason": "panic invocation to `core::panicking::panic_fmt` has no recorded `// PANIC:` justification",
     "root": "async_runtime_bodies::async_root",
     "root-kind": "concrete",
-    "root-span": "src/lib.rs:1:1: 1:26",
+    "root-span": "src/lib.rs:1:27: 3:2",
     "source-evidence": {
       "status": "verified-absent"
     },
     "span": "src/lib.rs:2:5: 2:46",
     "target": "core::panicking::panic_fmt",
     "trace": [
-      "src/lib.rs:1:27: 3:2: async_runtime_bodies::async_root --coroutine-body-> async_runtime_bodies::async_root::{closure#0}",
       "src/lib.rs:2:5: 2:46: async_runtime_bodies::async_root::{closure#0} --macro-expansion-> macro std::macros::panic",
       "src/lib.rs:2:5: 2:46: macro std::macros::panic --macro-expansion-> macro core::panic::panic_2021",
       "[SYSROOT]/lib/rustlib/src/rust/library/core/src/panic.rs:62:9: 62:73: macro core::panic::panic_2021 --direct-call-> core::panicking::panic_fmt"
     ],
-    "trace-id": "0000f63e9f"
+    "trace-id": "0000b75707"
+  },
+  {
+    "effect": "panic",
+    "finding": "documented-obligation",
+    "function": "async_runtime_bodies::await_documented::{closure#0}",
+    "kind": "effect",
+    "level": "deny",
+    "owner": {
+      "crate": "async_runtime_bodies",
+      "scope": "workspace"
+    },
+    "reason": "call to `async_runtime_bodies::documented::{closure#0}` with a documented `# Panics` obligation has no recorded `// PANIC:` justification",
+    "root": "async_runtime_bodies::await_documented",
+    "root-kind": "concrete",
+    "root-span": "src/lib.rs:46:33: 48:2",
+    "source-evidence": {
+      "status": "verified-absent"
+    },
+    "span": "src/lib.rs:47:18: 47:23",
+    "target": "async_runtime_bodies::documented::{closure#0}",
+    "trace": [
+      "src/lib.rs:47:18: 47:23: async_runtime_bodies::await_documented::{closure#0} --direct-call-> async_runtime_bodies::documented::{closure#0}"
+    ],
+    "trace-id": "0001578d5e"
+  },
+  {
+    "effect": "panic",
+    "finding": "concrete-invocation",
+    "function": "async_runtime_bodies::async_root::{closure#0}",
+    "kind": "effect",
+    "level": "deny",
+    "operation": "configured-invocation",
+    "owner": {
+      "crate": "async_runtime_bodies",
+      "scope": "workspace"
+    },
+    "reason": "panic invocation to `core::panicking::panic_fmt` has no recorded `// PANIC:` justification",
+    "root": "async_runtime_bodies::generic_root",
+    "root-kind": "generic",
+    "root-span": "src/lib.rs:50:32: 53:2",
+    "source-evidence": {
+      "status": "verified-absent"
+    },
+    "span": "src/lib.rs:2:5: 2:46",
+    "target": "core::panicking::panic_fmt",
+    "trace": [
+      "src/lib.rs:52:18: 52:23: async_runtime_bodies::generic_root::{closure#0} --direct-call-> async_runtime_bodies::async_root::{closure#0}",
+      "src/lib.rs:2:5: 2:46: async_runtime_bodies::async_root::{closure#0} --macro-expansion-> macro std::macros::panic",
+      "src/lib.rs:2:5: 2:46: macro std::macros::panic --macro-expansion-> macro core::panic::panic_2021",
+      "[SYSROOT]/lib/rustlib/src/rust/library/core/src/panic.rs:62:9: 62:73: macro core::panic::panic_2021 --direct-call-> core::panicking::panic_fmt"
+    ],
+    "trace-id": "0002049215"
   },
   {
     "effect": "panic",
@@ -45,20 +96,93 @@ expression: "report[\"findings\"]"
     "reason": "panic invocation to `core::panicking::panic_fmt` has no recorded `// PANIC:` justification",
     "root": "async_runtime_bodies::invoked_async_closure",
     "root-kind": "concrete",
-    "root-span": "src/lib.rs:5:1: 5:37",
+    "root-span": "src/lib.rs:5:38: 12:2",
     "source-evidence": {
       "status": "verified-absent"
     },
     "span": "src/lib.rs:9:9: 9:52",
     "target": "core::panicking::panic_fmt",
     "trace": [
-      "src/lib.rs:5:38: 12:2: async_runtime_bodies::invoked_async_closure --coroutine-body-> async_runtime_bodies::invoked_async_closure::{closure#0}",
-      "src/lib.rs:11:5: 11:14: async_runtime_bodies::invoked_async_closure::{closure#0} --direct-call-> async_runtime_bodies::invoked_async_closure::{closure#0}::{closure#0}",
-      "src/lib.rs:7:33: 10:6: async_runtime_bodies::invoked_async_closure::{closure#0}::{closure#0} --coroutine-body-> async_runtime_bodies::invoked_async_closure::{closure#0}::{closure#0}::{closure#0}",
+      "src/lib.rs:11:15: 11:20: async_runtime_bodies::invoked_async_closure::{closure#0} --direct-call-> async_runtime_bodies::invoked_async_closure::{closure#0}::{closure#0}::{closure#0}",
       "src/lib.rs:9:9: 9:52: async_runtime_bodies::invoked_async_closure::{closure#0}::{closure#0}::{closure#0} --macro-expansion-> macro std::macros::panic",
       "src/lib.rs:9:9: 9:52: macro std::macros::panic --macro-expansion-> macro core::panic::panic_2021",
       "[SYSROOT]/lib/rustlib/src/rust/library/core/src/panic.rs:62:9: 62:73: macro core::panic::panic_2021 --direct-call-> core::panicking::panic_fmt"
     ],
-    "trace-id": "000167bf18"
+    "trace-id": "0003ea6441"
+  },
+  {
+    "effect": "panic",
+    "finding": "documented-obligation",
+    "function": "async_runtime_bodies::poll_erased",
+    "kind": "effect",
+    "level": "deny",
+    "owner": {
+      "crate": "async_runtime_bodies",
+      "scope": "workspace"
+    },
+    "reason": "call to `core::future::future::Future::poll` with a documented `# Panics` obligation has no recorded `// PANIC:` justification",
+    "root": "async_runtime_bodies::poll_erased",
+    "root-kind": "concrete",
+    "root-span": "src/lib.rs:30:1: 30:52",
+    "source-evidence": {
+      "status": "verified-absent"
+    },
+    "span": "src/lib.rs:33:13: 33:28",
+    "target": "core::future::future::Future::poll",
+    "trace": [
+      "src/lib.rs:33:13: 33:28: async_runtime_bodies::poll_erased --indirect-call-> core::future::future::Future::poll"
+    ],
+    "trace-id": "000454cc49"
+  },
+  {
+    "effect": "panic",
+    "finding": "concrete-invocation",
+    "function": "async_runtime_bodies::async_root::{closure#0}",
+    "kind": "effect",
+    "level": "deny",
+    "operation": "configured-invocation",
+    "owner": {
+      "crate": "async_runtime_bodies",
+      "scope": "workspace"
+    },
+    "reason": "panic invocation to `core::panicking::panic_fmt` has no recorded `// PANIC:` justification",
+    "root": "async_runtime_bodies::poll_generic",
+    "root-kind": "concrete",
+    "root-span": "src/lib.rs:22:1: 22:53",
+    "source-evidence": {
+      "status": "verified-absent"
+    },
+    "span": "src/lib.rs:2:5: 2:46",
+    "target": "core::panicking::panic_fmt",
+    "trace": [
+      "src/lib.rs:27:5: 27:31: async_runtime_bodies::poll_generic --direct-call-> async_runtime_bodies::poll_generic::drive",
+      "src/lib.rs:24:17: 24:32: async_runtime_bodies::poll_generic::drive --direct-call-> async_runtime_bodies::async_root::{closure#0}",
+      "src/lib.rs:2:5: 2:46: async_runtime_bodies::async_root::{closure#0} --macro-expansion-> macro std::macros::panic",
+      "src/lib.rs:2:5: 2:46: macro std::macros::panic --macro-expansion-> macro core::panic::panic_2021",
+      "[SYSROOT]/lib/rustlib/src/rust/library/core/src/panic.rs:62:9: 62:73: macro core::panic::panic_2021 --direct-call-> core::panicking::panic_fmt"
+    ],
+    "trace-id": "0005bddee4"
+  },
+  {
+    "effect": "safety",
+    "finding": "undocumented-invocation",
+    "function": "async_runtime_bodies::polled_safety::{closure#0}::{closure#0}",
+    "kind": "effect",
+    "level": "warn",
+    "owner": {
+      "crate": "async_runtime_bodies",
+      "scope": "workspace"
+    },
+    "reason": "call to `async_runtime_bodies::unsafe_operation` may produce the safety effect, but `async_runtime_bodies::unsafe_operation` has no documented `# Safety` obligation",
+    "root": "async_runtime_bodies::polled_safety",
+    "root-kind": "concrete",
+    "root-span": "src/lib.rs:61:30: 63:2",
+    "span": "src/lib.rs:62:22: 62:40",
+    "target": "async_runtime_bodies::unsafe_operation",
+    "trace": [
+      "src/lib.rs:62:46: 62:51: async_runtime_bodies::polled_safety::{closure#0} --direct-call-> async_runtime_bodies::polled_safety::{closure#0}::{closure#0}",
+      "src/lib.rs:62:22: 62:40: async_runtime_bodies::polled_safety::{closure#0}::{closure#0} --direct-call-> async_runtime_bodies::unsafe_operation"
+    ],
+    "trace-id": "0006021b54"
   }
 ]

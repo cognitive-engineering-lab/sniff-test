@@ -39,13 +39,39 @@ pub enum ReportRoot<'tcx> {
     Generic { local: LocalDefId },
 }
 
-impl ReportRoot<'_> {
+impl<'tcx> ReportRoot<'tcx> {
     #[must_use]
     pub fn def_id(self) -> DefId {
         match self {
             Self::Concrete { instance } => instance.def_id(),
             Self::Generic { local } => local.to_def_id(),
         }
+    }
+
+    /// Execution entry for a selected root. Async roots request polling, whereas
+    /// ordinary calls to async functions only construct their returned future.
+    pub fn execution_instance(self, tcx: TyCtxt<'tcx>) -> Instance<'tcx> {
+        let instance = match self {
+            Self::Concrete { instance } => instance,
+            Self::Generic { local } => Instance::new_raw(
+                local.to_def_id(),
+                rustc_middle::ty::GenericArgs::identity_for_item(tcx, local),
+            ),
+        };
+        if tcx.asyncness(self.def_id()).is_async() {
+            for block in tcx.instance_mir(instance.def).basic_blocks.iter() {
+                for statement in &block.statements {
+                    if let rustc_middle::mir::StatementKind::Assign(assignment) = &statement.kind {
+                        if let rustc_middle::mir::Rvalue::Aggregate(kind, _) = &assignment.1 {
+                            if let rustc_middle::mir::AggregateKind::Coroutine(def, args) = **kind {
+                                return Instance::new_raw(def, args);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        instance
     }
 
     #[must_use]

@@ -11,8 +11,7 @@ use rustc_hir::{def_id::DefId, intravisit};
 use rustc_middle::hir::nested_filter;
 use rustc_middle::mir::AssertMessage;
 use rustc_middle::mir::{
-    AggregateKind, Body, CastKind, LocalKind, Operand, Rvalue, StatementKind, TerminatorKind,
-    VarDebugInfoContents,
+    Body, CastKind, LocalKind, Operand, Rvalue, StatementKind, TerminatorKind, VarDebugInfoContents,
 };
 use rustc_middle::ty::adjustment::PointerCoercion;
 use rustc_middle::ty::vtable::VtblEntry;
@@ -321,23 +320,6 @@ impl<'tcx> BodyEdgeCollector<'tcx> {
                 let target_ty = self.monomorphize(*target_ty);
                 self.emit_dyn_object_cast(source_ty, target_ty, span);
                 self.emit_vtable_entries(source_ty, target_ty, span);
-            }
-            // A coroutine aggregate stores the runtime body that may execute
-            // when the value is polled. This is deliberately structural:
-            // construction makes that body reachable even if local dataflow
-            // could prove a particular value is never polled. In contrast, a
-            // CoroutineClosure aggregate only creates a callable; its actual
-            // invocation reaches the returned Coroutine through its call shim.
-            Rvalue::Aggregate(kind, _) if matches!(kind.as_ref(), AggregateKind::Coroutine(..)) => {
-                let AggregateKind::Coroutine(def_id, args) = kind.as_ref() else {
-                    unreachable!("guarded by the coroutine aggregate match")
-                };
-                let args = self.monomorphize(*args);
-                self.emit_instance(
-                    Instance::new_raw(*def_id, args),
-                    ReachabilityEdgeKind::CoroutineBody,
-                    span,
-                );
             }
             _ => {}
         }
