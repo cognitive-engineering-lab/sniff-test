@@ -5,7 +5,7 @@ use serde::Serialize;
 
 use super::findings::ResolvedFinding;
 
-pub const REPORT_FORMAT_VERSION: u32 = 21;
+pub const REPORT_FORMAT_VERSION: u32 = 22;
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "kebab-case")]
@@ -35,7 +35,7 @@ mod tests {
 
     #[test]
     fn workspace_report_serializes_its_public_fields() {
-        assert_eq!(REPORT_FORMAT_VERSION, 21);
+        assert_eq!(REPORT_FORMAT_VERSION, 22);
 
         let report = AnalysisArtifactReport {
             reason: String::from("sniff-test-artifact"),
@@ -52,7 +52,7 @@ mod tests {
             serde_json::to_value(report).expect("report should serialize"),
             serde_json::json!({
                 "reason": "sniff-test-artifact",
-                "format-version": 21,
+                "format-version": 22,
                 "tool-version": "0.1.0",
                 "rustc-version": "rustc test",
                 "artifact": {

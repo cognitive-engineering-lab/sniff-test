@@ -759,3 +759,174 @@ fn fixture_copy_excludes_cargo_target_directories() {
     assert!(!destination.join("target").exists());
     assert!(!destination.join("nested/target").exists());
 }
+
+#[test]
+fn runtime_spawn_models_preserve_payloads_contracts_and_receiver_coverage() {
+    let repo = repo_root();
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path().join("runtime_spawn_models");
+    copy_fixture_dir(&repo.join("tests/fixtures/runtime_spawn_models"), &root).unwrap();
+    let binary = PathBuf::from(env!("CARGO_BIN_EXE_cargo-sniff-test"));
+    let sysroot = rustc_sysroot();
+    let _guard = lock_nested_cargo();
+    let mut runs = Vec::new();
+    for _ in 0..2 {
+        let mut command = Command::new(&binary);
+        clean_cargo_package_env(&mut command);
+        let output = CommandOutput::from_output(
+            command
+                .current_dir(&root)
+                .env("RUSTFLAGS", "--cfg tokio_unstable")
+                .args([
+                    "-e",
+                    "panic",
+                    "-e",
+                    "safety",
+                    "--message-format",
+                    "json",
+                    "--",
+                    "--locked",
+                ])
+                .output()
+                .unwrap(),
+        );
+        assert!(output.status.success(), "{}", output.stderr);
+        runs.push(parse_messages(
+            &output,
+            &root,
+            &sysroot,
+            "runtime_spawn_models",
+            "runtime_spawn_models",
+        ));
+    }
+    assert_eq!(runs[0], runs[1], "cold and warm reports differ");
+    let findings = runs[0]
+        .iter()
+        .flat_map(|m| m["findings"].as_array().into_iter().flatten())
+        .collect::<Vec<_>>();
+    let at = |name: &str| {
+        findings
+            .iter()
+            .copied()
+            .filter(|f| f["root"] == format!("runtime_spawn_models::{name}"))
+            .collect::<Vec<_>>()
+    };
+    for root in [
+        "tokio_free",
+        "tokio_task",
+        "tokio_local",
+        "tokio_runtime",
+        "tokio_handle",
+        "tokio_local_set",
+        "tokio_join_set",
+        "tokio_builder_spawn",
+        "tokio_builder_spawn_on",
+        "tokio_builder_spawn_local",
+        "tokio_builder_spawn_local_on",
+        "tokio_join_builder_spawn",
+        "tokio_join_builder_spawn_on",
+        "tokio_join_builder_spawn_local",
+        "tokio_join_builder_spawn_local_on",
+        "tokio_join_set_on",
+        "tokio_join_set_local",
+        "tokio_join_set_local_on",
+        "tokio_local_runtime",
+        "smol_free",
+        "smol_executor",
+        "smol_local_executor",
+        "smol_static",
+        "smol_static_local",
+        "nested",
+        "generic_wrapper",
+    ] {
+        assert!(
+            at(root)
+                .iter()
+                .any(|f| f["finding"] == "concrete-invocation"
+                    && f["effect"] == "panic"
+                    && f["trace"].to_string().contains("modeled-poll")),
+            "missing payload panic for {root}: {:?}",
+            at(root)
+        );
+    }
+    for root in ["unpolled", "unpolled_documented", "unrelated", "justified"] {
+        assert!(
+            at(root).is_empty(),
+            "unexpected findings for {root}: {:?}",
+            at(root)
+        );
+    }
+    for root in ["safety", "smol_safety"] {
+        assert!(
+            at(root).iter().any(|f| f["effect"] == "safety"
+                && f["target"] == "runtime_spawn_models::dangerous"
+                && f["trace"].to_string().contains("modeled-poll")),
+            "missing modeled safety effect for {root}: {:?}",
+            at(root)
+        );
+    }
+    let source = include_str!("../../../tests/fixtures/runtime_spawn_models/src/lib.rs");
+    for (payload, statement) in [
+        ("payload", "let first = tokio::spawn(payload());"),
+        (
+            "other_payload",
+            "let second = tokio::spawn(other_payload());",
+        ),
+    ] {
+        let line = source
+            .lines()
+            .position(|line| line.trim() == statement)
+            .unwrap()
+            + 1;
+        let location = format!("src/lib.rs:{line}:");
+        for root in ["two_tasks"] {
+            let matching = at(root)
+                .into_iter()
+                .filter(|f| {
+                    f["finding"] == "concrete-invocation"
+                        && f["effect"] == "panic"
+                        && f["function"]
+                            == format!("runtime_spawn_models::{payload}::{{closure#0}}")
+                })
+                .collect::<Vec<_>>();
+            assert!(
+                !matching.is_empty(),
+                "missing {payload} panic for {root}: {:?}",
+                at(root)
+            );
+            for finding in matching {
+                assert!(
+                    finding["trace"].as_array().unwrap().iter().any(|step| {
+                        let step = step.as_str().unwrap();
+                        step.contains("modeled-poll")
+                            && (root != "two_tasks" || step.contains(&location))
+                    }),
+                    "incorrect spawn edge for {payload} in {root}: {finding:#?}"
+                );
+            }
+        }
+    }
+    assert!(
+        at("tokio_free")
+            .iter()
+            .any(|f| f["finding"] == "documented-obligation"),
+        "spawn's own contract disappeared"
+    );
+    assert!(
+        at("own_contract")
+            .iter()
+            .any(|f| f["finding"] == "documented-obligation"
+                && f["trace"].to_string().contains("modeled-poll"))
+    );
+    assert!(
+        !at("own_contract")
+            .iter()
+            .any(|f| f["finding"] == "concrete-invocation")
+    );
+    assert!(
+        findings.iter().all(|f| !f["trace"]
+            .to_string()
+            .contains("runtime::task::raw::RawTask")),
+        "modeled spawn traversed scheduler internals"
+    );
+}

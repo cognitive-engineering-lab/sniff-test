@@ -274,13 +274,49 @@ Use `--source-crate crate --source-crate serde_json` for a one-off selection;
 these CLI values replace the manifest list for that invocation.
 Safety probing covers runtime function, method, closure, and coroutine bodies;
 const, static, and inline-const initializers are intentionally outside this
-runtime effect graph. Coroutine construction conservatively makes its stored
-runtime body reachable; merely constructing an async closure does not, until
-that callable is invoked.
+runtime effect graph. Constructing an async future does not execute its polling
+body. Polling, awaiting, or a supported task-spawning model makes that body
+reachable.
 
 `cargo sniff-test` exits unsuccessfully when a workspace crate has a finding
 whose configured lint level is `deny`. `allow` suppresses a finding from human
 diagnostics and JSON output; `warn` reports it without failing the run.
+
+### Async task spawning
+
+Built-in models treat a future submitted to a supported spawn API as possibly
+polled later. Traces show a `modeled-poll` edge at the spawn call site. The model
+replaces traversal of that API's runtime implementation, retains the API's own
+documented obligations, and traces the submitted future independently. Contracts
+on the submitted future still apply; the synthetic invocation does not introduce
+the generic `Future::poll` declaration contract as a boundary.
+
+Supported single-future APIs are:
+
+- Tokio `spawn`/`task::spawn`, `task::spawn_local`, `Runtime::spawn`,
+  `Handle::spawn`, `LocalSet::spawn_local`, and `LocalRuntime::spawn_local`.
+- Tokio `JoinSet`, `task::Builder`, and `task::join_set::Builder`: `spawn`,
+  `spawn_on`, `spawn_local`, and `spawn_local_on`, where provided. Feature-gated
+  APIs are supported when enabled by the analyzed crate.
+- smol `spawn`, and async-executor `Executor`, `LocalExecutor`, `StaticExecutor`,
+  and `StaticLocalExecutor` single-future `spawn` methods, including smol's
+  re-exports.
+
+Matching uses resolved definitions and checked signatures, so renamed imports
+and dependencies work. `spawn_many`, blocking tasks, process spawning, and other
+runtimes are not modeled. `block_on` keeps ordinary call-graph analysis.
+
+Boxed dyn futures currently retain conservative dynamic-dispatch coverage gaps.
+For custom futures and concrete pointer wrappers, inherited `Future::poll`
+contracts can stop payload tracing at the polling boundary.
+Enable `[panic.coverage].unresolved-call-target = "warn"` to display panic coverage gaps.
+
+This is possible execution, not a scheduling or completion guarantee. Dropping a
+handle or cancelling a task does not prove the body cannot run. A task panic can
+be reported even when the runtime catches it; the trace does not claim it unwinds
+through the synchronous spawn caller. Ordinary upstream contract boundaries and
+source filters still apply. Source markers follow the existing rules for
+justifying multiple distinct effects.
 
 ### Item-level effect lints
 

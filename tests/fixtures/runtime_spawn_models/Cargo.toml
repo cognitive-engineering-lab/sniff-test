@@ -1,0 +1,9 @@
+[package]
+name = "runtime-spawn-models"
+version = "0.1.0"
+edition = "2024"
+[workspace]
+[dependencies]
+tokio_alias = { package = "tokio", version = "=1.54.1", features = ["rt", "rt-multi-thread", "tracing"] }
+smol = "=2.0.2"
+async-executor = { version = "=1.14.0", features = ["static"] }

@@ -1,0 +1,13 @@
+[compiler]
+inline-mir = "off"
+[analysis]
+report-roots = "public"
+source-crates = ["crate"]
+show-full-stack-trace = true
+[panic.coverage]
+unresolved-call-target = "warn"
+
+# Exercise marker association independently of the existing policy for a marker
+# discharging several distinct source effects (runtime contract + task body).
+[panic.lints]
+ambiguous-marker = "allow"

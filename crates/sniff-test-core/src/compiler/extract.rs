@@ -12,10 +12,10 @@ use std::fmt;
 use std::path::{Component, Path, PathBuf};
 
 use reachability::{
-    ArtifactScope, CallableEdgeInfo, DynDispatchVTableEdges, FnPointerEdges, NoopReachabilityHooks,
-    ReachabilityEdge, ReachabilityEdgeKind, ReachabilityGraph, ReachabilityHalt, ReachabilityIndex,
-    ReachabilityNodeExpansion, ReachabilityNodeKind, ReachabilityOptions, ReachabilityRoot,
-    ReachedEdge,
+    ArtifactScope, CallableEdgeInfo, DynDispatchVTableEdges, FnPointerEdges, ReachabilityEdge,
+    ReachabilityEdgeKind, ReachabilityGraph, ReachabilityHalt, ReachabilityHooks,
+    ReachabilityIndex, ReachabilityNodeExpansion, ReachabilityNodeKind, ReachabilityOptions,
+    ReachabilityRoot, ReachedEdge,
 };
 use rustc_hir::def::DefKind;
 use rustc_hir::def_id::{DefId, LOCAL_CRATE, LocalDefId};
@@ -92,11 +92,18 @@ pub fn extract_artifact_facts<'tcx>(
             .collect::<Vec<_>>()
     });
     let mut reachability = ReachabilityIndex::new(tcx);
-    let required_owners = if let Some(roots) = roots.as_deref() {
+    let mut required_owners = if let Some(roots) = roots.as_deref() {
         reachable_local_fn_defs(tcx, &mut reachability, roots)?
     } else {
         analyzable_local_fn_defs(tcx).collect::<Vec<_>>()
     };
+    required_owners.retain(|owner| {
+        let def = owner.to_def_id();
+        let instance = Instance::new_raw(def, GenericArgs::identity_for_item(tcx, def));
+        super::runtime_models::RuntimeModels
+            .model_call(tcx, instance)
+            .is_none()
+    });
     let effects = selected_effects
         .iter()
         .map(|effect| effect.metadata().clone())
@@ -159,7 +166,7 @@ fn reachable_local_fn_defs<'tcx>(
     reachability: &mut ReachabilityIndex<'tcx>,
     roots: &[Instance<'tcx>],
 ) -> Result<Vec<LocalDefId>, ExtractError> {
-    let hooks = NoopReachabilityHooks;
+    let hooks = super::runtime_models::RuntimeModels;
     let Some(snapshot) = reachability.query_many(
         roots.iter().copied().map(ReachabilityRoot::from),
         &hooks,
@@ -280,6 +287,7 @@ fn reachability_halt_description(halt: &ReachabilityHalt) -> String {
 
 const fn reachability_edge_description(kind: ReachabilityEdgeKind) -> &'static str {
     match kind {
+        ReachabilityEdgeKind::ModeledCall => "modeled poll",
         ReachabilityEdgeKind::DirectCall => "direct call",
         ReachabilityEdgeKind::TailCall => "tail call",
         ReachabilityEdgeKind::FnPointerReify => "function-to-pointer conversion",
@@ -310,7 +318,7 @@ fn collect_reachability_mode<'tcx>(
     pass_registry: &mut EffectPassRegistry,
     effects: &[EffectMetadata],
 ) -> Result<(), ExtractError> {
-    let hooks = NoopReachabilityHooks;
+    let hooks = super::runtime_models::RuntimeModels;
     let Some(snapshot) = reachability.query_many(
         roots.iter().copied().map(ReachabilityRoot::from),
         &hooks,
@@ -321,7 +329,9 @@ fn collect_reachability_mode<'tcx>(
     let view = reachability.graph().view(&snapshot);
 
     for (root, reached_root) in roots.iter().zip(view.roots()) {
-        if reached_root.expansion() != Some(ReachabilityNodeExpansion::Expanded) {
+        if reached_root.expansion() != Some(ReachabilityNodeExpansion::Expanded)
+            && hooks.model_call(tcx, *root).is_none()
+        {
             return Err(ExtractError::new(format!(
                 "required body `{}` could not be expanded",
                 canonical_namespace(tcx, root.def_id())
@@ -343,7 +353,10 @@ fn collect_reachability_mode<'tcx>(
         let Some(instance) = node.instance() else {
             continue;
         };
-        if node.expansion() != Some(ReachabilityNodeExpansion::Expanded) {
+        let modeled = super::runtime_models::RuntimeModels
+            .model_call(tcx, instance)
+            .is_some();
+        if node.expansion() != Some(ReachabilityNodeExpansion::Expanded) && !modeled {
             continue;
         }
         let function = body_id_for_instance(tcx, instance);
@@ -479,8 +492,26 @@ fn collect_edge<'tcx>(
         .map(|span| sources.range(tcx, span))
         .transpose()?
         .flatten();
-    let target = call_target(tcx, graph, edge, sources, effects)?;
-    let groups = if is_reachability_call(edge.kind) {
+    let mut target = call_target(tcx, graph, edge, sources, effects)?;
+    if edge.kind == ReachabilityEdgeKind::ModeledCall
+        && let CallTargetFact::OpaqueBoundary {
+            target,
+            description,
+        } = &mut target
+    {
+        // No synthetic interface obligation: unresolved execution remains coverage evidence.
+        *target = None;
+        *description = String::from("unresolved modeled poll of submitted future");
+    }
+    let groups = if edge.kind == ReachabilityEdgeKind::ModeledCall {
+        // Separate invocation identity, shared source justification group.
+        let api = effect_groups.group_for_call(origin.def_id(), edge.span, None)?;
+        let mut modeled = effect_groups.group_for_structural_edge(origin.def_id(), edge.span)?;
+        modeled.effect_group = api.effect_group;
+        modeled.marker_scope_span = api.marker_scope_span;
+        modeled.suppressed_by_compiler_context = api.suppressed_by_compiler_context;
+        Ok(modeled)
+    } else if is_reachability_call(edge.kind) {
         effect_groups.group_for_call(
             origin.def_id(),
             edge.span,
@@ -490,8 +521,7 @@ fn collect_edge<'tcx>(
         effect_groups.group_for_structural_edge(origin.def_id(), edge.span)
     }
     .map_err(|error| edge_grouping_error(tcx, origin.def_id(), edge, &error))?;
-    let declaration_target =
-        declaration_call_target(tcx, groups.declaration_callee, sources, effects)?;
+    let declaration_target = declaration_call_target(tcx, groups.declaration_callee, sources, effects)?;
     let key = edge_key(
         tcx,
         graph,
@@ -844,7 +874,10 @@ fn indirect_call_kind<'view, 'tcx>(
     reached: ReachedEdge<'view, 'tcx>,
     call_kind: CallKindFact,
 ) -> Option<IndirectCallKindFact> {
-    if call_kind != CallKindFact::IndirectCall {
+    if !matches!(
+        call_kind,
+        CallKindFact::IndirectCall | CallKindFact::ModeledCall
+    ) {
         return None;
     }
     match graph.edge_callable(reached.id()) {
@@ -855,6 +888,9 @@ fn indirect_call_kind<'view, 'tcx>(
 }
 
 fn call_edge_kind(reached: ReachedEdge<'_, '_>) -> Option<CallKindFact> {
+    if reached.kind() == ReachabilityEdgeKind::ModeledCall {
+        return Some(CallKindFact::ModeledCall);
+    }
     if matches!(
         reached.target().kind(),
         ReachabilityNodeKind::Instance(Instance {
@@ -865,6 +901,7 @@ fn call_edge_kind(reached: ReachedEdge<'_, '_>) -> Option<CallKindFact> {
         return Some(CallKindFact::IndirectCall);
     }
     match reached.kind() {
+        ReachabilityEdgeKind::ModeledCall => Some(CallKindFact::ModeledCall),
         ReachabilityEdgeKind::DirectCall => Some(CallKindFact::DirectCall),
         ReachabilityEdgeKind::TailCall => Some(CallKindFact::TailCall),
         ReachabilityEdgeKind::ConstBody => Some(CallKindFact::ConstBody),

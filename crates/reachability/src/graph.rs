@@ -759,6 +759,8 @@ impl ReachabilityEdge {
 /// Reason a reachability edge was emitted.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ReachabilityEdgeKind {
+    /// Invocation supplied by a library behavior model at the original call site.
+    ModeledCall,
     /// MIR call terminator to a resolved callee.
     DirectCall,
     /// MIR tail-call terminator to a resolved callee.
@@ -796,6 +798,7 @@ impl fmt::Display for ReachabilityEdgeKind {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter.write_str(match self {
             Self::DirectCall => "direct-call",
+            Self::ModeledCall => "modeled-call",
             Self::TailCall => "tail-call",
             Self::FnPointerReify => "fn-pointer-reify",
             Self::ClosureFnPointerReify => "closure-fn-pointer-reify",

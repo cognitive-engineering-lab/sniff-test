@@ -1757,6 +1757,7 @@ const fn trace_step_kind_order(kind: InterpretedTraceStepKind) -> (u8, u8) {
 
 const fn edge_kind_order(kind: CallKindFact) -> u8 {
     match kind {
+        CallKindFact::ModeledCall => 7,
         CallKindFact::DirectCall => 0,
         CallKindFact::TailCall => 1,
         CallKindFact::MacroExpansion => 2,
@@ -2053,6 +2054,7 @@ const fn trace_step_kind_label(kind: InterpretedTraceStepKind) -> &'static str {
 
 const fn edge_kind_label(kind: CallKindFact) -> &'static str {
     match kind {
+        CallKindFact::ModeledCall => "modeled-poll",
         CallKindFact::DirectCall => "direct-call",
         CallKindFact::TailCall => "tail-call",
         CallKindFact::MacroExpansion => "macro-expansion",

@@ -702,6 +702,8 @@ pub fn same_macro_provenance(left: &[MacroExpansionFact], right: &[MacroExpansio
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum CallKindFact {
+    /// Argument execution described by a library behavior model.
+    ModeledCall,
     DirectCall,
     TailCall,
     MacroExpansion,
@@ -1060,7 +1062,12 @@ fn validate_body(
         validate_optional_range(call.expanded_range.as_ref(), source_lengths)?;
         validate_macro_expansions(&call.macro_expansions, source_lengths)?;
         validate_optional_range(call.callee_range.as_ref(), source_lengths)?;
-        if call.indirect_kind.is_some() && call.kind != CallKindFact::IndirectCall {
+        if call.indirect_kind.is_some()
+            && !matches!(
+                call.kind,
+                CallKindFact::IndirectCall | CallKindFact::ModeledCall
+            )
+        {
             return Err(ArtifactValidationError::new(format!(
                 "non-indirect call {} has an indirect-call classification",
                 call.id.index()

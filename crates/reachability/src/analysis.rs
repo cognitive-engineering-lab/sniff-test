@@ -1,7 +1,7 @@
 use std::collections::{HashMap, HashSet, VecDeque};
 
 use rustc_hir::def_id::{CrateNum, DefId, LocalDefId};
-use rustc_middle::ty::{GenericArgs, Instance, InstanceKind, TyCtxt};
+use rustc_middle::ty::{self, GenericArgs, Instance, InstanceKind, TyCtxt, TypeVisitableExt};
 use rustc_span::Span;
 
 use crate::body::BodyEdge;
@@ -373,6 +373,70 @@ where
         self.snapshot
     }
 
+    fn add_modeled_call(&mut self, original: ReachabilityEdgeId) -> Option<ReachabilityEdgeId> {
+        let edge = self.index.graph.edge(original).clone();
+        if !matches!(
+            edge.kind,
+            ReachabilityEdgeKind::DirectCall | ReachabilityEdgeKind::TailCall
+        ) {
+            return None;
+        }
+        let Some(api) = self.index.graph.node_instance(edge.target) else {
+            return None;
+        };
+        let Some(model) = self.hooks.model_call(self.index.tcx, api) else {
+            return None;
+        };
+        let tcx = self.index.tcx;
+        let args = tcx.mk_args(&[model.receiver_ty.into()]);
+        let instance = if args.has_param() {
+            None
+        } else {
+            Instance::try_resolve(
+                tcx,
+                ty::TypingEnv::fully_monomorphized(),
+                model.method,
+                args,
+            )
+            .ok()
+            .flatten()
+        };
+        let dynamic = instance.is_some_and(|i| matches!(i.def, InstanceKind::Virtual(..)));
+        let target = match instance {
+            Some(instance) => ReachabilityNodeKind::Instance(instance),
+            None => ReachabilityNodeKind::IndirectCall {
+                callee_ty: ty::Ty::new_fn_def(tcx, model.method, args),
+            },
+        };
+        let target = self.index.graph.node_for_kind(target);
+        if self.index.graph.outgoing_edges(edge.source).iter().any(|&id| {
+            let existing = self.index.graph.edge(id);
+            existing.kind == ReachabilityEdgeKind::ModeledCall
+                && existing.origin == edge.origin
+                && existing.target == target
+                && existing.mir_location == edge.mir_location
+                && existing.span == edge.span
+        }) {
+            return None;
+        }
+        let callable = dynamic.then_some(CallableEdgeInfo::DynDispatch {
+            trait_def_id: tcx.parent(model.method),
+        });
+        let id = self.index.graph.push_edge_with_callable(
+            ReachabilityEdge::new(
+                edge.source,
+                target,
+                edge.origin,
+                ReachabilityEdgeKind::ModeledCall,
+                edge.span,
+                edge.mir_location,
+                edge.callee_span,
+            ),
+            callable,
+        );
+        Some(id)
+    }
+
     fn traverse(&mut self) {
         while let Some(item) = self.queue.pop_front() {
             if let Some(instance) = self.index.graph.node_instance(item.node_id) {
@@ -400,6 +464,11 @@ where
                     continue;
                 }
 
+                if self.hooks.model_call(self.index.tcx, instance).is_some() {
+                    self.snapshot
+                        .record_expansion(item.node_id, ReachabilityNodeExpansion::PolicyBoundary);
+                    continue;
+                }
                 self.index.ensure_expanded(instance);
                 self.snapshot
                     .record_expansion(item.node_id, ReachabilityNodeExpansion::Expanded);
@@ -412,7 +481,9 @@ where
     }
 
     fn visit_outgoing_edges(&mut self, item: QueueItem) {
-        let outgoing = self.index.graph.outgoing_edges(item.node_id).to_vec();
+        let mut outgoing = self.index.graph.outgoing_edges(item.node_id).to_vec();
+        let modeled = outgoing.iter().filter_map(|&id| self.add_modeled_call(id)).collect::<Vec<_>>();
+        outgoing.extend(modeled);
 
         for edge_id in outgoing {
             if self.index.graph.edge_parent(edge_id).is_some() {
@@ -435,7 +506,8 @@ where
             .snapshot
             .record_edge(edge_id, edge.target, item.depth + 1);
         if let Some(target) = self.index.graph.node_instance(edge.target) {
-            let should_descend = self.hooks.should_descend(self.index.tcx, target);
+            let should_descend = self.hooks.model_call(self.index.tcx, target).is_none()
+                && self.hooks.should_descend(self.index.tcx, target);
             if !should_descend {
                 self.snapshot
                     .record_expansion(edge.target, ReachabilityNodeExpansion::PolicyBoundary);
@@ -501,6 +573,7 @@ where
             ReachabilityEdgeKind::DirectCall
                 | ReachabilityEdgeKind::TailCall
                 | ReachabilityEdgeKind::IndirectCall
+                | ReachabilityEdgeKind::ModeledCall
         ) {
             return;
         }
@@ -578,7 +651,11 @@ where
         target: ReachabilityNodeId,
         callable: CallableEdgeInfo<'tcx>,
     ) -> ReachabilityEdgeId {
-        let kind = callable_target_edge_kind(callable);
+        let kind = if call_edge.kind == ReachabilityEdgeKind::ModeledCall {
+            ReachabilityEdgeKind::ModeledCall
+        } else {
+            callable_target_edge_kind(callable)
+        };
         if let Some(edge_id) = self
             .index
             .graph
@@ -634,7 +711,8 @@ where
             | crate::graph::ReachabilityEdgeKind::ConstBody
             | crate::graph::ReachabilityEdgeKind::MacroExpansion
             | crate::graph::ReachabilityEdgeKind::Assert
-            | crate::graph::ReachabilityEdgeKind::IndirectCall => true,
+            | crate::graph::ReachabilityEdgeKind::IndirectCall
+            | crate::graph::ReachabilityEdgeKind::ModeledCall => true,
         }
     }
 }

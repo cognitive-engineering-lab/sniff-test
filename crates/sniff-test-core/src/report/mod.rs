@@ -1628,7 +1628,8 @@ fn is_managed_function(
 const fn call_reaches_function_body(kind: crate::artifact::CallKindFact) -> bool {
     matches!(
         kind,
-        crate::artifact::CallKindFact::DirectCall
+        crate::artifact::CallKindFact::ModeledCall
+            | crate::artifact::CallKindFact::DirectCall
             | crate::artifact::CallKindFact::TailCall
             | crate::artifact::CallKindFact::IndirectCall
             | crate::artifact::CallKindFact::ConstBody

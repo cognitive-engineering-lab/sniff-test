@@ -963,7 +963,10 @@ fn graph_target(call: &CallFact) -> Option<StableFunctionId> {
 const fn is_invocation(kind: CallKindFact) -> bool {
     matches!(
         kind,
-        CallKindFact::DirectCall | CallKindFact::TailCall | CallKindFact::IndirectCall
+        CallKindFact::ModeledCall
+            | CallKindFact::DirectCall
+            | CallKindFact::TailCall
+            | CallKindFact::IndirectCall
     )
 }
 
