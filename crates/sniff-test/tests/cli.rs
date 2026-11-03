@@ -1,9 +1,13 @@
+#![feature(rustc_private)]
+
 mod common;
 
 use std::fmt::Write as _;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
+
+use sniff_test_core::artifact_cache::CACHE_FORMAT_VERSION;
 
 use common::{
     COMPILER_DEBUG_FRAGMENTS, CommandOutput, clean_cargo_package_env, copy_fixture_dir,
@@ -1368,7 +1372,7 @@ impl Probe {
         .unwrap_or_else(|error| panic!("failed to read {}: {error}", cache_path.display()));
     let cache: serde_json::Value =
         serde_json::from_str(&serialized).expect("cache should contain JSON");
-    assert_eq!(cache["format-version"], 32);
+    assert_eq!(cache["format-version"], CACHE_FORMAT_VERSION);
     assert_eq!(cache["artifact"]["crate-name"], "artifact_facts_dependency");
     assert_eq!(cache["artifact"]["scope"], "dependency");
     assert!(cache["artifact"]["id"]["stable-crate-id"].is_u64());
@@ -1612,7 +1616,7 @@ fn workspace_lint_policy_reinterprets_unchanged_dependency_facts() {
         .unwrap_or_else(|error| panic!("failed to read {}: {error}", dependency_cache.display()));
     let initial_document: serde_json::Value =
         serde_json::from_slice(&initial_bytes).expect("dependency cache should contain JSON");
-    assert_eq!(initial_document["format-version"], 32);
+    assert_eq!(initial_document["format-version"], CACHE_FORMAT_VERSION);
     assert_eq!(initial_document["artifact"]["scope"], "dependency");
     assert!(initial_document["facts"].get("tables").is_none());
     assert!(initial_document.get("analysis-id").is_none());
