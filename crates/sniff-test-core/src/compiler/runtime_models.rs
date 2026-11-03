@@ -1,4 +1,4 @@
-//! Built-in summaries of APIs that submit one future for later execution.
+//! Built-in summaries of APIs that submit a future or closure for execution.
 //! Matching uses defining crates and inherent self types, never import spelling.
 use reachability::{ModeledInvocation, ReachabilityHooks};
 use rustc_hir::def::DefKind;
@@ -14,7 +14,7 @@ impl<'tcx> ReachabilityHooks<'tcx> for RuntimeModels {
     ) -> Option<ModeledInvocation<'tcx>> {
         let def = target.def_id();
         let krate = tcx.crate_name(def.krate);
-        if !matches!(krate.as_str(), "tokio" | "smol" | "async_executor") {
+        if !matches!(krate.as_str(), "tokio" | "smol" | "async_executor" | "std") {
             return None;
         }
         if !matches!(tcx.def_kind(def), DefKind::Fn | DefKind::AssocFn) {
@@ -59,18 +59,30 @@ impl<'tcx> ReachabilityHooks<'tcx> for RuntimeModels {
                             | "async_executor::static_executors::StaticLocalExecutor"
                     ) && name.as_str() == "spawn"
                 }
+                "std" => match owner.as_str() {
+                    "std::thread::builder::Builder" => {
+                        matches!(name.as_str(), "spawn" | "spawn_scoped")
+                    }
+                    "std::thread::scoped::Scope" => name.as_str() == "spawn",
+                    _ => false,
+                },
                 _ => false,
             };
             if !valid {
                 return None;
             }
-            1
+            if name.as_str() == "spawn_scoped" {
+                2
+            } else {
+                1
+            }
         } else {
             if !matches!(
                 crate::namespace::canonical_namespace(tcx, def).as_str(),
                 "tokio::task::spawn::spawn"
                     | "tokio::task::local::spawn_local"
                     | "smol::spawn::spawn"
+                    | "std::thread::functions::spawn"
             ) {
                 return None;
             }
@@ -82,24 +94,45 @@ impl<'tcx> ReachabilityHooks<'tcx> for RuntimeModels {
             return None;
         }
         let parameter = *declaration.inputs().get(argument)?;
-        let future_trait = tcx.lang_items().future_trait()?;
-        let has_future_bound = tcx.predicates_of(def).predicates.iter().any(|(clause, _)| {
+        let thread = krate.as_str() == "std";
+        let invocation_trait = if thread {
+            tcx.lang_items().fn_once_trait()?
+        } else {
+            tcx.lang_items().future_trait()?
+        };
+        let has_invocation_bound = tcx.predicates_of(def).predicates.iter().any(|(clause, _)| {
             clause.as_trait_clause().is_some_and(|bound| {
                 let bound = bound.skip_binder();
-                bound.trait_ref.def_id == future_trait && bound.self_ty() == parameter
+                bound.trait_ref.def_id == invocation_trait
+                    && bound.self_ty() == parameter
+                    && (!thread || bound.trait_ref.args.type_at(1).is_unit())
             })
         });
-        if !has_future_bound {
+        if !has_invocation_bound {
             return None;
         }
         let signature = tcx.fn_sig(def).instantiate(tcx, target.args).skip_binder();
-        let future = *signature.inputs().get(argument)?;
-        let method = tcx.lang_items().future_poll_fn()?;
-        let receiver_ty = future;
+        let receiver = *signature.inputs().get(argument)?;
+        let (method, args) = if thread {
+            let method = tcx
+                .associated_items(invocation_trait)
+                .in_definition_order()
+                .find(|item| item.is_fn())?
+                .def_id;
+            (
+                method,
+                tcx.mk_args(&[receiver.into(), tcx.types.unit.into()]),
+            )
+        } else {
+            (
+                tcx.lang_items().future_poll_fn()?,
+                tcx.mk_args(&[receiver.into()]),
+            )
+        };
         Some(ModeledInvocation {
             argument,
             method,
-            receiver_ty,
+            args,
         })
     }
 }

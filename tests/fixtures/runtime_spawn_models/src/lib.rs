@@ -104,3 +104,52 @@ pub fn boxed_alternatives(choose: bool) {
 pub fn smol_safety() {
     drop(smol::spawn(async { unsafe { dangerous(); } }));
 }
+
+fn thread_payload() { panic!("thread payload"); }
+fn other_thread_payload() { panic!("other thread payload"); }
+/// # Panics
+/// The thread payload fails.
+fn documented_thread() { panic!("documented thread payload"); }
+
+pub fn thread_free() { drop(std::thread::spawn(|| thread_payload())); }
+pub fn thread_builder() { let _ = std::thread::Builder::new().spawn(|| thread_payload()); }
+pub fn thread_scoped<'scope, 'env>(
+    scope: &'scope std::thread::Scope<'scope, 'env>,
+    borrowed: &'scope str,
+) {
+    scope.spawn(move || { let _ = borrowed.len(); thread_payload(); });
+}
+pub fn thread_builder_scoped<'scope, 'env>(
+    scope: &'scope std::thread::Scope<'scope, 'env>,
+    borrowed: &'scope str,
+) {
+    let _ = std::thread::Builder::new().spawn_scoped(scope, move || {
+        let _ = borrowed.len();
+        thread_payload();
+    });
+}
+fn submit_thread<F: FnOnce() + Send + 'static>(f: F) { drop(std::thread::spawn(f)); }
+pub fn thread_generic_wrapper() { submit_thread(|| thread_payload()); }
+pub fn thread_unknown<F: FnOnce() + Send + 'static>(f: F) { drop(std::thread::spawn(f)); }
+pub fn thread_function_item() { drop(std::thread::spawn(thread_payload)); }
+pub fn thread_safety() { drop(std::thread::spawn(|| unsafe { dangerous(); })); }
+pub fn thread_contract() { drop(std::thread::spawn(documented_thread)); }
+pub fn thread_nested() {
+    drop(std::thread::spawn(|| { drop(std::thread::spawn(thread_payload)); }));
+}
+pub fn thread_justified() {
+    // PANIC: Thread creation and the payload's failure are intentional.
+    let handle = std::thread::spawn(thread_payload);
+    drop(handle);
+}
+fn ignore_closure<F: FnOnce()>(_: F) {}
+pub fn thread_unsubmitted() { ignore_closure(|| thread_payload()); }
+mod unrelated_thread_api {
+    pub fn spawn<F: FnOnce()>(_: F) {}
+}
+pub fn thread_unrelated() { unrelated_thread_api::spawn(|| thread_payload()); }
+pub fn two_threads() {
+    let first = std::thread::spawn(thread_payload);
+    let second = std::thread::spawn(other_thread_payload);
+    drop((first, second));
+}

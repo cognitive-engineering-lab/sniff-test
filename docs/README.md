@@ -282,14 +282,15 @@ reachable.
 whose configured lint level is `deny`. `allow` suppresses a finding from human
 diagnostics and JSON output; `warn` reports it without failing the run.
 
-### Async task spawning
+### Task and thread spawning
 
-Built-in models treat a future submitted to a supported spawn API as possibly
-polled later. Traces show a `modeled-poll` edge at the spawn call site. The model
-replaces traversal of that API's runtime implementation, retains the API's own
-documented obligations, and traces the submitted future independently. Contracts
-on the submitted future still apply; the synthetic invocation does not introduce
-the generic `Future::poll` declaration contract as a boundary.
+Built-in models treat a future submitted to a supported async spawn API as
+possibly polled later, and a closure submitted to a supported OS thread spawn
+API as invoked. Traces show a `modeled-invocation` edge at the spawn call site.
+The model replaces traversal of that API's runtime implementation, retains the
+API's own documented obligations, and traces the submitted payload independently.
+Contracts on the submitted payload still apply; the synthetic invocation does
+not introduce the generic callable trait declaration contract as a boundary.
 
 Supported single-future APIs are:
 
@@ -302,9 +303,16 @@ Supported single-future APIs are:
   and `StaticLocalExecutor` single-future `spawn` methods, including smol's
   re-exports.
 
+Supported OS thread APIs are `std::thread::spawn`, `std::thread::Builder::spawn`,
+`std::thread::Scope::spawn`, and `std::thread::Builder::spawn_scoped`. Their
+payloads are modeled as `FnOnce::call_once` invocations, including scoped
+closures borrowing data. The enclosing `std::thread::scope` call retains its
+ordinary documented contract boundary.
+
 Matching uses resolved definitions and checked signatures, so renamed imports
-and dependencies work. `spawn_many`, blocking tasks, process spawning, and other
-runtimes are not modeled. `block_on` keeps ordinary call-graph analysis.
+and dependencies work. `spawn_many`, async blocking tasks, `spawn_unchecked`,
+third-party thread APIs, process spawning, and other runtimes are not modeled.
+`block_on` keeps ordinary call-graph analysis.
 
 Boxed dyn futures currently retain conservative dynamic-dispatch coverage gaps.
 For custom futures and concrete pointer wrappers, inherited `Future::poll`

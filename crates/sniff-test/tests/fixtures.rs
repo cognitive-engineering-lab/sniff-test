@@ -812,6 +812,13 @@ fn runtime_spawn_models_preserve_payloads_contracts_and_receiver_coverage() {
             .collect::<Vec<_>>()
     };
     for root in [
+        "thread_free",
+        "thread_builder",
+        "thread_scoped",
+        "thread_builder_scoped",
+        "thread_generic_wrapper",
+        "thread_function_item",
+        "thread_nested",
         "tokio_free",
         "tokio_task",
         "tokio_local",
@@ -844,23 +851,31 @@ fn runtime_spawn_models_preserve_payloads_contracts_and_receiver_coverage() {
                 .iter()
                 .any(|f| f["finding"] == "concrete-invocation"
                     && f["effect"] == "panic"
-                    && f["trace"].to_string().contains("modeled-poll")),
+                    && f["trace"].to_string().contains("modeled-invocation")),
             "missing payload panic for {root}: {:?}",
             at(root)
         );
     }
-    for root in ["unpolled", "unpolled_documented", "unrelated", "justified"] {
+    for root in [
+        "unpolled",
+        "unpolled_documented",
+        "unrelated",
+        "justified",
+        "thread_justified",
+        "thread_unsubmitted",
+        "thread_unrelated",
+    ] {
         assert!(
             at(root).is_empty(),
             "unexpected findings for {root}: {:?}",
             at(root)
         );
     }
-    for root in ["safety", "smol_safety"] {
+    for root in ["safety", "smol_safety", "thread_safety"] {
         assert!(
             at(root).iter().any(|f| f["effect"] == "safety"
                 && f["target"] == "runtime_spawn_models::dangerous"
-                && f["trace"].to_string().contains("modeled-poll")),
+                && f["trace"].to_string().contains("modeled-invocation")),
             "missing modeled safety effect for {root}: {:?}",
             at(root)
         );
@@ -898,7 +913,7 @@ fn runtime_spawn_models_preserve_payloads_contracts_and_receiver_coverage() {
                 assert!(
                     finding["trace"].as_array().unwrap().iter().any(|step| {
                         let step = step.as_str().unwrap();
-                        step.contains("modeled-poll")
+                        step.contains("modeled-invocation")
                             && (root != "two_tasks" || step.contains(&location))
                     }),
                     "incorrect spawn edge for {payload} in {root}: {finding:#?}"
@@ -912,21 +927,78 @@ fn runtime_spawn_models_preserve_payloads_contracts_and_receiver_coverage() {
             .any(|f| f["finding"] == "documented-obligation"),
         "spawn's own contract disappeared"
     );
+    for root in ["own_contract", "thread_contract"] {
+        assert!(
+            at(root)
+                .iter()
+                .any(|f| f["finding"] == "documented-obligation"
+                    && f["trace"].to_string().contains("modeled-invocation")),
+            "missing payload contract for {root}: {:?}",
+            at(root)
+        );
+        assert!(
+            !at(root)
+                .iter()
+                .any(|f| f["finding"] == "concrete-invocation")
+        );
+    }
     assert!(
-        at("own_contract")
+        at("thread_free")
             .iter()
-            .any(|f| f["finding"] == "documented-obligation"
-                && f["trace"].to_string().contains("modeled-poll"))
+            .any(|f| f["finding"] == "documented-obligation"),
+        "thread spawn's own contract disappeared"
     );
     assert!(
-        !at("own_contract")
-            .iter()
-            .any(|f| f["finding"] == "concrete-invocation")
+        at("thread_unknown").iter().any(|f| f
+            .to_string()
+            .contains("unresolved modeled invocation of submitted payload")),
+        "missing unresolved thread payload coverage: {:?}",
+        at("thread_unknown")
     );
+    for (payload, statement) in [
+        (
+            "thread_payload",
+            "let first = std::thread::spawn(thread_payload);",
+        ),
+        (
+            "other_thread_payload",
+            "let second = std::thread::spawn(other_thread_payload);",
+        ),
+    ] {
+        let line = source
+            .lines()
+            .position(|line| line.trim() == statement)
+            .unwrap()
+            + 1;
+        let location = format!("src/lib.rs:{line}:");
+        let matching = at("two_threads")
+            .into_iter()
+            .filter(|f| {
+                f["finding"] == "concrete-invocation"
+                    && f["function"] == format!("runtime_spawn_models::{payload}")
+            })
+            .collect::<Vec<_>>();
+        assert!(!matching.is_empty(), "missing {payload} in two_threads");
+        for finding in matching {
+            assert!(
+                finding["trace"].as_array().unwrap().iter().any(|step| {
+                    let step = step.as_str().unwrap();
+                    step.contains("modeled-invocation") && step.contains(&location)
+                }),
+                "incorrect thread spawn attribution: {finding:#?}"
+            );
+        }
+    }
     assert!(
         findings.iter().all(|f| !f["trace"]
             .to_string()
             .contains("runtime::task::raw::RawTask")),
         "modeled spawn traversed scheduler internals"
+    );
+    assert!(
+        findings
+            .iter()
+            .all(|f| !f["trace"].to_string().contains("thread::lifecycle")),
+        "modeled spawn traversed thread implementation internals"
     );
 }

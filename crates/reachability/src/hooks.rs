@@ -1,15 +1,15 @@
 use rustc_hir::def_id::DefId;
-use rustc_middle::ty::{Instance, Ty, TyCtxt};
+use rustc_middle::ty::{GenericArgsRef, Instance, TyCtxt};
 
 /// A library summary invoking a trait method on one of its arguments.
 #[derive(Clone, Copy)]
 pub struct ModeledInvocation<'tcx> {
     /// MIR argument index, including `self` for methods.
     pub argument: usize,
-    /// Trait method with `Self` as its sole generic argument.
+    /// Trait method invoked by this summary.
     pub method: DefId,
-    /// Instantiated receiver type; receiver provenance comes from `argument`.
-    pub receiver_ty: Ty<'tcx>,
+    /// Complete instantiated method arguments, including `Self`.
+    pub args: GenericArgsRef<'tcx>,
 }
 
 /// Reason reachability analysis stopped before exhausting the work queue.

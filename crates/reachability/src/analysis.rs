@@ -388,7 +388,7 @@ where
             return None;
         };
         let tcx = self.index.tcx;
-        let args = tcx.mk_args(&[model.receiver_ty.into()]);
+        let args = model.args;
         let instance = if args.has_param() {
             None
         } else {
@@ -401,6 +401,20 @@ where
             .ok()
             .flatten()
         };
+        // A function item has an exact invocation target. Bypass its callable
+        // shim so the modeled edge retains that function's interface contracts.
+        let instance = instance.map(|instance| {
+            if let InstanceKind::FnPtrShim(_, receiver) = instance.def
+                && let ty::FnDef(def, args) = *receiver.kind()
+            {
+                Instance::try_resolve(tcx, ty::TypingEnv::fully_monomorphized(), def, args)
+                    .ok()
+                    .flatten()
+                    .unwrap_or(instance)
+            } else {
+                instance
+            }
+        });
         let dynamic = instance.is_some_and(|i| matches!(i.def, InstanceKind::Virtual(..)));
         let target = match instance {
             Some(instance) => ReachabilityNodeKind::Instance(instance),

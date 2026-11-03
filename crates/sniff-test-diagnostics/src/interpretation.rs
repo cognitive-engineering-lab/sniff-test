@@ -2054,7 +2054,7 @@ const fn trace_step_kind_label(kind: InterpretedTraceStepKind) -> &'static str {
 
 const fn edge_kind_label(kind: CallKindFact) -> &'static str {
     match kind {
-        CallKindFact::ModeledCall => "modeled-poll",
+        CallKindFact::ModeledCall => "modeled-invocation",
         CallKindFact::DirectCall => "direct-call",
         CallKindFact::TailCall => "tail-call",
         CallKindFact::MacroExpansion => "macro-expansion",

@@ -287,7 +287,7 @@ fn reachability_halt_description(halt: &ReachabilityHalt) -> String {
 
 const fn reachability_edge_description(kind: ReachabilityEdgeKind) -> &'static str {
     match kind {
-        ReachabilityEdgeKind::ModeledCall => "modeled poll",
+        ReachabilityEdgeKind::ModeledCall => "modeled invocation",
         ReachabilityEdgeKind::DirectCall => "direct call",
         ReachabilityEdgeKind::TailCall => "tail call",
         ReachabilityEdgeKind::FnPointerReify => "function-to-pointer conversion",
@@ -501,7 +501,7 @@ fn collect_edge<'tcx>(
     {
         // No synthetic interface obligation: unresolved execution remains coverage evidence.
         *target = None;
-        *description = String::from("unresolved modeled poll of submitted future");
+        *description = String::from("unresolved modeled invocation of submitted payload");
     }
     let groups = if edge.kind == ReachabilityEdgeKind::ModeledCall {
         // Separate invocation identity, shared source justification group.
