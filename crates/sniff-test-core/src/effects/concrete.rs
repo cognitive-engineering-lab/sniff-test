@@ -192,10 +192,16 @@ impl<'a, 'policy> ConcreteSeedCollector<'a, 'policy> {
         self.seeds.push(ConcreteEffectSeed::new(source, owner));
     }
 
-    fn finish(self, annotations: &'a AnnotationIndex, effect: EffectKey) -> ConcreteEffect<'a> {
+    fn finish(
+        self,
+        annotations: &'a AnnotationIndex,
+        effect: EffectKey,
+        policy: super::ConstBoundaryPolicy,
+    ) -> ConcreteEffect<'a> {
         ConcreteEffect::new(
             annotations,
             self.graph,
+            policy,
             effect,
             self.seeds,
             self.trusted_functions,
@@ -275,7 +281,11 @@ pub fn probe_concrete_effect_with_filter<'annotations>(
             }
         }
     }
-    Ok(seeds.finish(annotations, domain.key().clone()))
+    Ok(seeds.finish(
+        annotations,
+        domain.key().clone(),
+        domain.metadata().const_boundary_policy,
+    ))
 }
 
 #[cfg(test)]
@@ -400,6 +410,7 @@ pub enum ConcreteTermination {
 /// Effect definitions construct seeds and boundary sets. This type provides
 /// the common graph propagation and justification termination semantics.
 pub struct ConcreteEffect<'annotations> {
+    pub(crate) const_boundary_policy: super::ConstBoundaryPolicy,
     annotations: &'annotations AnnotationIndex,
     graph: &'annotations InvocationGraph,
     effect: EffectKey,
@@ -417,6 +428,7 @@ impl<'annotations> ConcreteEffect<'annotations> {
     pub fn new(
         annotations: &'annotations AnnotationIndex,
         graph: &'annotations InvocationGraph,
+        const_boundary_policy: super::ConstBoundaryPolicy,
         effect: EffectKey,
         seeds: Vec<ConcreteEffectSeed>,
         trusted_functions: BTreeSet<FunctionId>,
@@ -436,6 +448,7 @@ impl<'annotations> ConcreteEffect<'annotations> {
             })
             .collect();
         Self {
+            const_boundary_policy,
             annotations,
             graph,
             effect,
@@ -549,6 +562,9 @@ impl ConcreteEffect<'_> {
         state: &ConcreteEffectState,
         edge: PropagationEdge,
     ) -> Propagation<ConcreteEffectState> {
+        if !self.const_boundary_policy.allows(edge, self.graph) {
+            return Propagation::Ignore;
+        }
         let mut next = state.clone();
         next.invocation_justification = None;
         next.current_function = match edge {

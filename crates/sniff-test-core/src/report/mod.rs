@@ -264,6 +264,7 @@ pub fn trace_selected_workspace(
                     concrete.trusted_functions(),
                     concrete.ignored_invocations(),
                 )
+                .with_const_boundary_policy(concrete.const_boundary_policy)
             });
             let obligations = ObligationTracker::probe_with_filter(
                 &graph,

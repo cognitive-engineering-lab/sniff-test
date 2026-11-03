@@ -1,0 +1,57 @@
+---
+source: crates/sniff-test/tests/fixtures.rs
+assertion_line: 520
+expression: "report[\"findings\"]"
+---
+[
+  {
+    "effect": "panic",
+    "finding": "documented-obligation",
+    "function": "const_evaluation::transitive",
+    "kind": "effect",
+    "level": "warn",
+    "owner": {
+      "crate": "const_evaluation",
+      "scope": "workspace"
+    },
+    "reason": "call to `const_evaluation::documented` with a documented `# Panics` obligation has no recorded `// PANIC:` justification",
+    "root": "const_evaluation::mixed",
+    "root-kind": "concrete",
+    "root-span": "src/lib.rs:21:1: 21:36",
+    "source-evidence": {
+      "status": "verified-absent"
+    },
+    "span": "src/lib.rs:9:5: 9:22",
+    "target": "const_evaluation::documented",
+    "trace": [
+      "src/lib.rs:23:15: 23:32: const_evaluation::mixed --direct-call-> const_evaluation::transitive",
+      "src/lib.rs:9:5: 9:22: const_evaluation::transitive --direct-call-> const_evaluation::documented"
+    ],
+    "trace-id": "0000521779"
+  },
+  {
+    "effect": "panic",
+    "finding": "documented-obligation",
+    "function": "const_evaluation::transitive",
+    "kind": "effect",
+    "level": "warn",
+    "owner": {
+      "crate": "const_evaluation",
+      "scope": "workspace"
+    },
+    "reason": "call to `const_evaluation::documented` with a documented `# Panics` obligation has no recorded `// PANIC:` justification",
+    "root": "const_evaluation::runtime",
+    "root-kind": "concrete",
+    "root-span": "src/lib.rs:17:1: 17:38",
+    "source-evidence": {
+      "status": "verified-absent"
+    },
+    "span": "src/lib.rs:9:5: 9:22",
+    "target": "const_evaluation::documented",
+    "trace": [
+      "src/lib.rs:18:5: 18:22: const_evaluation::runtime --direct-call-> const_evaluation::transitive",
+      "src/lib.rs:9:5: 9:22: const_evaluation::transitive --direct-call-> const_evaluation::documented"
+    ],
+    "trace-id": "0001b68c5e"
+  }
+]

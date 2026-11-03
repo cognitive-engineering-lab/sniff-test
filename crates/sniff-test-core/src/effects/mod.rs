@@ -24,6 +24,7 @@ pub mod panic {
 
     pub struct Panic;
     impl super::EffectSpec for Panic {
+        const CONST_BOUNDARY_POLICY: super::ConstBoundaryPolicy = super::ConstBoundaryPolicy::Stop;
         const EFFECT_NAME: &'static str = "panic";
         const OBLIGATION: &'static str = "Panics";
         const JUSTIFICATION: &'static str = "PANIC";
@@ -166,6 +167,25 @@ pub fn selected_effects(selection: &EffectSelection) -> Vec<EffectMetadata> {
         .collect()
 }
 
+/// Whether effects inside constant evaluation can reach the enclosing body.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub enum ConstBoundaryPolicy {
+    #[default]
+    Propagate,
+    Stop,
+}
+
+impl ConstBoundaryPolicy {
+    pub(crate) fn allows(
+        self,
+        edge: crate::trace::PropagationEdge,
+        graph: &crate::compiler::invocations::InvocationGraph,
+    ) -> bool {
+        !matches!((self, edge), (Self::Stop, crate::trace::PropagationEdge::TransparentBody(id))
+            if graph.transparent_source(id).kind == crate::artifact::CallKindFact::ConstBody)
+    }
+}
+
 /// Built-in effect definition. Compiler passes only discover concrete seeds;
 /// obligation and justification semantics are supplied by shared tracking.
 pub trait EffectSpec: 'static {
@@ -173,6 +193,7 @@ pub trait EffectSpec: 'static {
     const OBLIGATION: &'static str;
     const JUSTIFICATION: &'static str;
     const USES_ENCLOSING_SCOPE_MARKER: bool = false;
+    const CONST_BOUNDARY_POLICY: ConstBoundaryPolicy = ConstBoundaryPolicy::Propagate;
 
     fn default_config() -> EffectConfig;
     fn register_passes(registry: &mut EffectPassRegistry);
@@ -234,6 +255,7 @@ pub struct EffectMetadata {
     pub obligation: &'static str,
     pub justification: &'static str,
     pub uses_enclosing_scope_marker: bool,
+    pub const_boundary_policy: ConstBoundaryPolicy,
 }
 
 impl EffectMetadata {
@@ -249,6 +271,7 @@ impl EffectMetadata {
             "justification marker must not be empty"
         );
         Self {
+            const_boundary_policy: E::CONST_BOUNDARY_POLICY,
             key: EffectKey::new(E::EFFECT_NAME),
             obligation: E::OBLIGATION,
             justification: E::JUSTIFICATION,

@@ -60,6 +60,8 @@ impl From<PanicOperation> for EffectKind {
 }
 
 impl sniff_test_core::effects::EffectSpec for Panic {
+    const CONST_BOUNDARY_POLICY: sniff_test_core::effects::ConstBoundaryPolicy =
+        sniff_test_core::effects::ConstBoundaryPolicy::Stop;
     const EFFECT_NAME: &'static str = "panic";
     const OBLIGATION: &'static str = "Panics";
     const JUSTIFICATION: &'static str = "PANIC";

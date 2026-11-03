@@ -142,6 +142,9 @@ fixture_cases! {
     "release_pruning" => {
         release_pruning => Case::new().denied();
     }
+    "const_evaluation" => {
+        const_evaluation => Case::new();
+    }
     "optimizer_pruning" => {
         optimizer_pruning => Case::new();
     }

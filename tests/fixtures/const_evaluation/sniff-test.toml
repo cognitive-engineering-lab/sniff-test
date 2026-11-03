@@ -1,0 +1,9 @@
+[compiler]
+inline-mir = "off"
+
+[analysis]
+report-roots = ["const_evaluation::compile_time", "const_evaluation::runtime", "const_evaluation::mixed"]
+
+[panic.lints]
+invocation = "warn"
+operation = "warn"

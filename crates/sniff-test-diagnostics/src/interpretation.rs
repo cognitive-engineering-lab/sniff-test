@@ -2564,6 +2564,7 @@ mod tests {
             obligation: "Allocations",
             justification: "ALLOCATION",
             uses_enclosing_scope_marker: false,
+            const_boundary_policy: Default::default(),
         };
         let owner = FindingOwner {
             scope: OwnerScope::Workspace,

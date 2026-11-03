@@ -172,18 +172,25 @@ pub struct ObligationTracker<'annotations> {
 /// Obligation tracking reuses those identities and remains independent of the
 /// concrete effect kind and its user-facing configuration.
 pub struct ObligationEffectPolicy {
+    const_boundary_policy: super::ConstBoundaryPolicy,
     effect: EffectKey,
     trusted_functions: BTreeSet<FunctionId>,
     ignored_invocations: BTreeSet<InvocationId>,
 }
 
 impl ObligationEffectPolicy {
+    pub fn with_const_boundary_policy(mut self, policy: super::ConstBoundaryPolicy) -> Self {
+        self.const_boundary_policy = policy;
+        self
+    }
+
     pub fn new(
         effect: EffectKey,
         trusted_functions: impl IntoIterator<Item = FunctionId>,
         ignored_invocations: impl IntoIterator<Item = InvocationId>,
     ) -> Self {
         Self {
+            const_boundary_policy: super::ConstBoundaryPolicy::default(),
             effect,
             trusted_functions: trusted_functions.into_iter().collect(),
             ignored_invocations: ignored_invocations.into_iter().collect(),
@@ -599,6 +606,13 @@ impl ObligationTracker<'_> {
         state: &ObligationState,
         edge: PropagationEdge,
     ) -> Propagation<ObligationState> {
+        if self
+            .policies
+            .get(&state.effect)
+            .is_some_and(|policy| !policy.const_boundary_policy.allows(edge, self.graph))
+        {
+            return Propagation::Ignore;
+        }
         let mut next = if let PropagationEdge::Invocation(invocation) = edge {
             if state.source_invocation.is_none()
                 && self.selected_callers.as_ref().is_some_and(|selected| {

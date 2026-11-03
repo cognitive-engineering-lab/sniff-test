@@ -4289,3 +4289,101 @@ fn callable_shim_consumer_provenance_crosses_trusted_boundaries() {
         }
     }
 }
+
+#[test]
+fn const_boundary_policy_preserves_runtime_paths_and_safety() {
+    for effect in [ReportEffect::Panic, ReportEffect::Safety] {
+        for documented in [false, true] {
+            for runtime_call in [false, true] {
+                let root = stable_function(11000);
+                let constant = stable_function(11001);
+                let helper = stable_function(11002);
+                let mut boundary = call(0, target(constant, "sample::constant"));
+                boundary.kind = CallKindFact::ConstBody;
+                let mut calls = vec![boundary];
+                if runtime_call {
+                    let mut runtime = call(1, target(helper, "sample::helper"));
+                    runtime.call_site = CallSiteId::new(1);
+                    calls.push(runtime);
+                }
+                let mut helper_body =
+                    body(helper, "sample::helper", vec![], vec![], vec![], vec![]);
+                if documented {
+                    helper_body.markers.push(marker(
+                        0,
+                        AnnotationFactKind::new(effect.key(), AnnotationRole::Contract),
+                        AnnotationTargetFact::Function(helper),
+                    ));
+                } else {
+                    helper_body.effects.push(EffectFact {
+                        id: EffectId::new(0),
+                        effect: effect.key(),
+                        effect_group: Some(EffectGroupId::new(0)),
+                        source_range: None,
+                        expanded_range: None,
+                        macro_expansions: vec![],
+                        kind: EffectKind::new("test-operation"),
+                    });
+                }
+                let artifact = ArtifactFacts::new(
+                    vec![
+                        body(root, "sample::root", calls, vec![], vec![], vec![]),
+                        body(
+                            constant,
+                            "sample::constant",
+                            vec![call(0, target(helper, "sample::helper"))],
+                            vec![],
+                            vec![],
+                            vec![],
+                        ),
+                        helper_body,
+                    ],
+                    vec![],
+                )
+                .unwrap();
+                let graph = graph_for_all_bodies(&artifact).unwrap();
+                let annotations = AnnotationIndex::from_artifact(&artifact, &graph).unwrap();
+                let config = crate::config::test_config();
+                let domain = match effect {
+                    ReportEffect::Panic => crate::effects::effect::<Panic>(config.effect("panic")),
+                    ReportEffect::Safety => {
+                        crate::effects::effect::<Safety>(config.effect("safety"))
+                    }
+                };
+                let concrete = probe_concrete_effect(
+                    &artifact,
+                    &graph,
+                    &annotations,
+                    &artifact.definition_namespace_index(),
+                    domain.as_ref(),
+                )
+                .unwrap();
+                let obligations = super::ObligationTracker::probe(
+                    &graph,
+                    &annotations,
+                    config.analysis.effect_doc_matching,
+                    [super::ObligationEffectPolicy::new(
+                        effect.key(),
+                        concrete.trusted_functions(),
+                        concrete.ignored_invocations(),
+                    )
+                    .with_const_boundary_policy(concrete.const_boundary_policy)],
+                );
+                let tracked = super::TrackedEffect::new(&concrete, &obligations, effect.key());
+                let root_id = graph.function(root).unwrap();
+                let trace = crate::trace::trace_effect(
+                    &graph,
+                    &tracked,
+                    &effect.key(),
+                    crate::trace::TraceOptions::default(),
+                    &crate::trace::RootRoutes::new(&graph, &[root_id]),
+                );
+                assert_eq!(
+                    trace.nodes().any(|node| node.function() == root_id),
+                    runtime_call || effect == ReportEffect::Safety,
+                    "effect={effect:?}, documented={documented}, runtime_call={runtime_call}"
+                );
+            }
+        }
+    }
+}
