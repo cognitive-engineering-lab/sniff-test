@@ -581,6 +581,31 @@ impl InvocationGraph {
         &self.invocation(invocation).raw_edges
     }
 
+    /// A grouped invocation guarantees a protocol only when every raw route
+    /// to this concrete body supplies it. Declarations and unresolved calls
+    /// alone cannot establish a guarantee.
+    #[must_use]
+    pub fn invocation_guarantees(
+        &self,
+        invocation: InvocationId,
+        target: FunctionId,
+        guarantee: crate::artifact::InvocationGuarantee,
+    ) -> bool {
+        let mut calls = self
+            .source_edges(invocation)
+            .iter()
+            .filter(|call| {
+                concrete_target(call).and_then(|function| self.invocation_target(function))
+                    == Some(target)
+            })
+            .peekable();
+        calls.peek().is_some()
+            && calls.all(|call| {
+                call.kind == CallKindFact::ModeledCall
+                    && call.invocation_guarantee == Some(guarantee)
+            })
+    }
+
     pub fn raw_calls_reaching(
         &self,
         invocation: InvocationId,
@@ -1074,6 +1099,7 @@ mod tests {
 
     fn call(id: u32, site: u32, kind: CallKindFact, target: CallTargetFact) -> CallFact {
         CallFact {
+            invocation_guarantee: None,
             id: CallId::new(id),
             call_site: CallSiteId::new(site),
             kind,

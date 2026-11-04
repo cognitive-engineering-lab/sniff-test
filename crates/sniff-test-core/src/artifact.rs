@@ -626,6 +626,9 @@ local_index!(MarkerId);
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub struct CallFact {
+    /// Protocol upheld by the modeled caller for its immediate payload only.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub invocation_guarantee: Option<InvocationGuarantee>,
     pub id: CallId,
     /// Artifact-local identity of one source call occurrence. Multiple raw
     /// edges for the same invocation share this value.
@@ -696,6 +699,13 @@ pub fn same_macro_provenance(left: &[MacroExpansionFact], right: &[MacroExpansio
         && left.iter().zip(right).all(|(left, right)| {
             left.macro_def == right.macro_def && left.source_range == right.source_range
         })
+}
+
+/// Library execution guarantees consumed by effect-specific policies.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum InvocationGuarantee {
+    ExecutorPolling,
 }
 
 /// Minimal edge classes retained by effect interpretation.
@@ -1578,6 +1588,7 @@ mod tests {
         let mut root_body = empty_body(root, "sample::root");
         root_body.contract_declaration = Some(target("contract::alias"));
         root_body.calls.push(CallFact {
+            invocation_guarantee: None,
             id: CallId::new(0),
             call_site: CallSiteId::new(0),
             kind: CallKindFact::DirectCall,
@@ -1620,6 +1631,7 @@ mod tests {
 
     fn direct_call(id: u32, group: u32, source_range: SourceRangeFact) -> CallFact {
         CallFact {
+            invocation_guarantee: None,
             id: CallId::new(id),
             call_site: CallSiteId::new(id),
             kind: CallKindFact::DirectCall,
@@ -2339,6 +2351,7 @@ mod tests {
             contract_declaration: Some(declaration_target.clone()),
             source_range: Some(range(0, 220)),
             calls: vec![CallFact {
+                invocation_guarantee: None,
                 id: CallId::new(4),
                 call_site: CallSiteId::new(4),
                 kind: CallKindFact::DirectCall,

@@ -538,6 +538,12 @@ fn collect_edge<'tcx>(
         body,
         key.clone(),
         CallFact {
+            invocation_guarantee: match edge.modeled_invocation {
+                Some(reachability::ModeledInvocationKind::AsyncSpawn) => {
+                    Some(crate::artifact::InvocationGuarantee::ExecutorPolling)
+                }
+                _ => None,
+            },
             id: CallId::new(0),
             call_site: groups.call_site,
             kind: call_kind,
@@ -652,7 +658,8 @@ fn insert_or_merge_call(
         return Ok(body.calls.len() - 1);
     };
     let existing = &mut body.calls[index].call;
-    if existing.effect_group != call.effect_group
+    if existing.invocation_guarantee != call.invocation_guarantee
+        || existing.effect_group != call.effect_group
         || existing.call_site != call.call_site
         || existing.source_range != call.source_range
         || existing.expanded_range != call.expanded_range

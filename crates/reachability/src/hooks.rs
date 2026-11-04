@@ -1,9 +1,19 @@
 use rustc_hir::def_id::DefId;
 use rustc_middle::ty::{GenericArgsRef, Instance, TyCtxt};
 
+/// Kind of spawning API summarized by a library invocation model.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ModeledInvocationKind {
+    /// Executes a submitted closure through `FnOnce::call_once`.
+    OSThreadSpawn,
+    /// Executes a submitted future through `Future::poll`.
+    AsyncSpawn,
+}
+
 /// A library summary invoking a trait method on one of its arguments.
 #[derive(Clone, Copy)]
 pub struct ModeledInvocation<'tcx> {
+    pub kind: ModeledInvocationKind,
     /// MIR argument index, including `self` for methods.
     pub argument: usize,
     /// Trait method invoked by this summary.

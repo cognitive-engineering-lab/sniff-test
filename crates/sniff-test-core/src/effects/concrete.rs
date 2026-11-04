@@ -38,12 +38,17 @@ pub enum ConcreteSource {
 pub struct ConcreteEffectSeed {
     source: ConcreteSource,
     owner: FunctionId,
+    invocation_guarantee: Option<crate::artifact::InvocationGuarantee>,
 }
 
 impl ConcreteEffectSeed {
     #[must_use]
     pub const fn new(source: ConcreteSource, owner: FunctionId) -> Self {
-        Self { source, owner }
+        Self {
+            source,
+            owner,
+            invocation_guarantee: None,
+        }
     }
 }
 
@@ -153,12 +158,17 @@ impl<'a, 'policy> ConcreteSeedCollector<'a, 'policy> {
         effect: EffectId,
         owner: FunctionId,
         macro_expansions: &[MacroExpansionFact],
+        invocation_guarantee: Option<crate::artifact::InvocationGuarantee>,
     ) {
         let source = ConcreteSource::Effect {
             owner: function,
             effect,
         };
         self.push_source(source, owner, macro_expansions);
+        self.seeds
+            .last_mut()
+            .expect("source was just inserted")
+            .invocation_guarantee = invocation_guarantee;
     }
 
     fn push_invocation(&mut self, invocation: InvocationId, branch: InvocationSourceBranch) {
@@ -258,6 +268,13 @@ pub fn probe_concrete_effect_with_filter<'annotations>(
                     effect.id,
                     projected_owner,
                     &effect.macro_expansions,
+                    domain
+                        .metadata()
+                        .invocation_guarantees
+                        .iter()
+                        .find_map(|(kind, guarantee)| {
+                            (*kind == effect.kind.as_str()).then_some(*guarantee)
+                        }),
                 );
             }
         }
@@ -373,6 +390,8 @@ mod probe_policy_tests {
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct ConcreteEffectState {
+    source_owner: FunctionId,
+    invocation_guarantee: Option<crate::artifact::InvocationGuarantee>,
     current_function: FunctionId,
     invocation_justification: Option<AnnotationId>,
     trust_path: TrustPath,
@@ -382,6 +401,8 @@ impl ConcreteEffectState {
     #[must_use]
     pub fn new(owner: FunctionId, graph: &InvocationGraph) -> Self {
         Self {
+            source_owner: owner,
+            invocation_guarantee: None,
             current_function: owner,
             invocation_justification: None,
             trust_path: TrustPath::new(graph, owner),
@@ -441,6 +462,7 @@ impl<'annotations> ConcreteEffect<'annotations> {
             .into_iter()
             .map(|seed| {
                 let mut state = ConcreteEffectState::new(seed.owner, graph);
+                state.invocation_guarantee = seed.invocation_guarantee;
                 if trusted_functions.contains(&seed.owner) {
                     state.trust_from_boundary();
                 }
@@ -569,6 +591,20 @@ impl ConcreteEffect<'_> {
         next.invocation_justification = None;
         next.current_function = match edge {
             PropagationEdge::Invocation(invocation) => {
+                if state.current_function == state.source_owner
+                    && state.invocation_guarantee.is_some_and(|guarantee| {
+                        self.graph.invocation_guarantees(
+                            invocation,
+                            state.current_function,
+                            guarantee,
+                        )
+                    })
+                {
+                    return Propagation::Ignore;
+                }
+                // A caller's protocol applies only to its own immediate payload,
+                // never to a different future manually polled inside that payload.
+                next.invocation_guarantee = None;
                 next.invocation_justification =
                     self.invocation_justification(invocation, state.current_function);
                 self.graph.invocation(invocation).caller()

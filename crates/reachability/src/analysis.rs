@@ -445,7 +445,8 @@ where
                 edge.span,
                 edge.mir_location,
                 edge.callee_span,
-            ),
+            )
+            .with_modeled_invocation(Some(model.kind)),
             callable,
         );
         Some(id)
@@ -696,7 +697,8 @@ where
                 call_edge.span,
                 call_edge.mir_location,
                 call_edge.callee_span,
-            ),
+            )
+            .with_modeled_invocation(call_edge.modeled_invocation),
             Some(callable),
             call_edge_id,
         )

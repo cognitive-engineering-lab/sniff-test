@@ -716,6 +716,8 @@ pub enum CallableEdgeInfo<'tcx> {
 /// Directed edge between two reachability nodes.
 #[derive(Clone)]
 pub struct ReachabilityEdge {
+    /// Execution protocol, present only on modeled invocation edges.
+    pub modeled_invocation: Option<crate::ModeledInvocationKind>,
     /// Source node that emitted the edge.
     pub source: ReachabilityNodeId,
     /// Target node reached by the edge.
@@ -735,6 +737,14 @@ pub struct ReachabilityEdge {
 }
 
 impl ReachabilityEdge {
+    pub(crate) fn with_modeled_invocation(
+        mut self,
+        kind: Option<crate::ModeledInvocationKind>,
+    ) -> Self {
+        self.modeled_invocation = kind;
+        self
+    }
+
     pub(crate) fn new(
         source: ReachabilityNodeId,
         target: ReachabilityNodeId,
@@ -745,6 +755,7 @@ impl ReachabilityEdge {
         callee_span: Option<Span>,
     ) -> Self {
         Self {
+            modeled_invocation: None,
             source,
             target,
             origin,

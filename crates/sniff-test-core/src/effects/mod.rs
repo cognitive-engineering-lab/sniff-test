@@ -193,6 +193,9 @@ pub trait EffectSpec: 'static {
     const OBLIGATION: &'static str;
     const JUSTIFICATION: &'static str;
     const USES_ENCLOSING_SCOPE_MARKER: bool = false;
+    /// Operations discharged by a protocol guarantee on an immediate caller.
+    const INVOCATION_GUARANTEES: &'static [(&'static str, crate::artifact::InvocationGuarantee)] =
+        &[];
     const CONST_BOUNDARY_POLICY: ConstBoundaryPolicy = ConstBoundaryPolicy::Propagate;
 
     fn default_config() -> EffectConfig;
@@ -251,6 +254,7 @@ pub fn effect<E: EffectSpec>(config: &EffectConfig) -> Box<dyn Effect + '_> {
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct EffectMetadata {
+    pub invocation_guarantees: &'static [(&'static str, crate::artifact::InvocationGuarantee)],
     pub key: EffectKey,
     pub obligation: &'static str,
     pub justification: &'static str,
@@ -271,6 +275,7 @@ impl EffectMetadata {
             "justification marker must not be empty"
         );
         Self {
+            invocation_guarantees: E::INVOCATION_GUARANTEES,
             const_boundary_policy: E::CONST_BOUNDARY_POLICY,
             key: EffectKey::new(E::EFFECT_NAME),
             obligation: E::OBLIGATION,

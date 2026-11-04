@@ -814,6 +814,52 @@ fn runtime_spawn_models_preserve_payloads_contracts_and_receiver_coverage() {
             .filter(|f| f["root"] == format!("runtime_spawn_models::{name}"))
             .collect::<Vec<_>>()
     };
+    let resume_checks = |name: &str| {
+        at(name)
+            .into_iter()
+            .filter(|finding| {
+                finding["operation"]
+                    .as_str()
+                    .is_some_and(|operation| operation.starts_with("resumed-after-"))
+            })
+            .collect::<Vec<_>>()
+    };
+    for root in ["tokio_protocol", "smol_protocol", "spawned_completes"] {
+        assert!(
+            resume_checks(root).is_empty(),
+            "executor-owned checks for {root}: {:?}",
+            at(root)
+        );
+    }
+    for root in [
+        "manual_protocol",
+        "spawned_manual_protocol",
+        "thread_manual_protocol",
+        "mixed_protocol",
+    ] {
+        assert!(
+            !resume_checks(root).is_empty(),
+            "missing manual-poll checks for {root}: {:?}",
+            at(root)
+        );
+    }
+    for (root, target_fragment) in [
+        ("tokio_protocol", "::unwrap"),
+        ("tokio_protocol", "panicking::panic"),
+        ("smol_protocol", "panicking::panic"),
+    ] {
+        assert!(
+            at(root).iter().any(|finding| {
+                finding["effect"] == "panic"
+                    && finding["target"]
+                        .as_str()
+                        .is_some_and(|target| target.contains(target_fragment))
+                    && finding["trace"].to_string().contains("modeled-invocation")
+            }),
+            "missing payload effect {target_fragment} for {root}: {:?}",
+            at(root)
+        );
+    }
     for root in [
         "thread_free",
         "thread_builder",

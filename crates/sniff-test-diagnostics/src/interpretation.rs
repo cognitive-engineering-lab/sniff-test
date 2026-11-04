@@ -2396,6 +2396,7 @@ mod tests {
             calls: calls
                 .iter()
                 .map(|&(id, byte_start)| CallFact {
+                    invocation_guarantee: None,
                     id: CallId::new(id),
                     call_site: CallSiteId::new(id),
                     kind: CallKindFact::DirectCall,
@@ -2560,6 +2561,7 @@ mod tests {
     #[test]
     fn arbitrary_effect_metadata_drives_report_wording() {
         let effect = EffectMetadata {
+            invocation_guarantees: &[],
             key: EffectKey::new("allocation"),
             obligation: "Allocations",
             justification: "ALLOCATION",

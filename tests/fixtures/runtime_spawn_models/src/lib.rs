@@ -153,3 +153,46 @@ pub fn two_threads() {
     let second = std::thread::spawn(other_thread_payload);
     drop((first, second));
 }
+
+// Protocol checks belong to the executor; ordinary task effects remain visible.
+pub fn tokio_protocol() {
+    drop(tokio::spawn(async {
+        tokio::task::yield_now().await;
+        let result: Result<(), &str> = Err("payload");
+        result.unwrap();
+        assert!(std::hint::black_box(false));
+    }));
+}
+pub fn smol_protocol() {
+    drop(smol::spawn(async {
+        std::future::pending::<()>().await;
+        panic!("payload");
+    }));
+}
+async fn completes() {
+    std::future::ready(()).await;
+}
+fn manual_poll() {
+    let mut future = std::pin::pin!(completes());
+    let mut cx = Context::from_waker(std::task::Waker::noop());
+    let _ = future.as_mut().poll(&mut cx);
+    let _ = future.as_mut().poll(&mut cx);
+}
+pub fn manual_protocol() {
+    manual_poll();
+}
+pub fn spawned_manual_protocol() {
+    drop(tokio::spawn(async {
+        manual_poll();
+    }));
+}
+pub fn thread_manual_protocol() {
+    drop(std::thread::spawn(manual_poll));
+}
+pub fn spawned_completes() {
+    drop(tokio::spawn(completes()));
+}
+pub fn mixed_protocol() {
+    drop(tokio::spawn(completes()));
+    manual_poll();
+}

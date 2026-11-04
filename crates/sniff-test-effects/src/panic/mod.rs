@@ -62,6 +62,23 @@ impl From<PanicOperation> for EffectKind {
 impl sniff_test_core::effects::EffectSpec for Panic {
     const CONST_BOUNDARY_POLICY: sniff_test_core::effects::ConstBoundaryPolicy =
         sniff_test_core::effects::ConstBoundaryPolicy::Stop;
+    const INVOCATION_GUARANTEES: &'static [(
+        &'static str,
+        sniff_test_core::artifact::InvocationGuarantee,
+    )] = &[
+        (
+            "resumed-after-return",
+            sniff_test_core::artifact::InvocationGuarantee::ExecutorPolling,
+        ),
+        (
+            "resumed-after-panic",
+            sniff_test_core::artifact::InvocationGuarantee::ExecutorPolling,
+        ),
+        (
+            "resumed-after-drop",
+            sniff_test_core::artifact::InvocationGuarantee::ExecutorPolling,
+        ),
+    ];
     const EFFECT_NAME: &'static str = "panic";
     const OBLIGATION: &'static str = "Panics";
     const JUSTIFICATION: &'static str = "PANIC";

@@ -130,6 +130,11 @@ impl<'tcx> ReachabilityHooks<'tcx> for RuntimeModels {
             )
         };
         Some(ModeledInvocation {
+            kind: if thread {
+                reachability::ModeledInvocationKind::OSThreadSpawn
+            } else {
+                reachability::ModeledInvocationKind::AsyncSpawn
+            },
             argument,
             method,
             args,

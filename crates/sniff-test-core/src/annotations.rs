@@ -1118,6 +1118,7 @@ mod tests {
 
     fn call(id: u32, target: FunctionTargetFact) -> CallFact {
         CallFact {
+            invocation_guarantee: None,
             id: CallId::new(id),
             call_site: CallSiteId::new(id),
             kind: CallKindFact::DirectCall,

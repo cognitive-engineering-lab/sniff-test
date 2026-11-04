@@ -292,6 +292,15 @@ API's own documented obligations, and traces the submitted payload independently
 Contracts on the submitted payload still apply; the synthetic invocation does
 not introduce the generic callable trait declaration contract as a boundary.
 
+Async executor models assume the executor upholds the submitted future's polling
+protocol. Compiler-generated `resumed-after-return`, `resumed-after-panic`, and
+`resumed-after-drop` checks in that future's own resolved body do not propagate
+across the modeled invocation. Other body effects, including explicit panics and
+`unwrap` calls, still propagate. This guarantee does not cover manual polling of
+another future inside the task, ordinary polling paths, or thread-spawn models.
+It does not remove effect facts or suppress checks in unresolved targets or
+deeper wrapper bodies.
+
 Supported single-future APIs are:
 
 - Tokio `spawn`/`task::spawn`, `task::spawn_local`, `Runtime::spawn`,

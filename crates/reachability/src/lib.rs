@@ -59,4 +59,7 @@ pub use graph::{
     ReachabilityNode, ReachabilityNodeExpansion, ReachabilityNodeId, ReachabilityNodeKind,
     ReachabilitySnapshot, ReachabilityView, ReachedEdge, ReachedNode,
 };
-pub use hooks::{ModeledInvocation, NoopReachabilityHooks, ReachabilityHalt, ReachabilityHooks};
+pub use hooks::{
+    ModeledInvocation, ModeledInvocationKind, NoopReachabilityHooks, ReachabilityHalt,
+    ReachabilityHooks,
+};

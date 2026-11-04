@@ -37,6 +37,11 @@ struct AllocationPass;
 impl crate::effects::visit::MirEffectPass for AllocationPass {}
 
 impl EffectSpec for Allocation {
+    const INVOCATION_GUARANTEES: &'static [(&'static str, crate::artifact::InvocationGuarantee)] =
+        &[(
+            "protocol-operation",
+            crate::artifact::InvocationGuarantee::ExecutorPolling,
+        )];
     const EFFECT_NAME: &'static str = "allocation";
     const OBLIGATION: &'static str = "Allocations";
     const JUSTIFICATION: &'static str = "ALLOCATION";
@@ -1172,6 +1177,7 @@ fn effect_contracts(
 
 fn call(id: u32, target: CallTargetFact) -> CallFact {
     CallFact {
+        invocation_guarantee: None,
         id: CallId::new(id),
         call_site: CallSiteId::new(0),
         kind: CallKindFact::DirectCall,
@@ -4384,6 +4390,104 @@ fn const_boundary_policy_preserves_runtime_paths_and_safety() {
                     "effect={effect:?}, documented={documented}, runtime_call={runtime_call}"
                 );
             }
+        }
+    }
+}
+
+#[test]
+fn invocation_guarantees_only_discharge_immediate_matching_operations_on_all_routes() {
+    use crate::artifact::InvocationGuarantee;
+    use crate::trace::{Propagation, PropagationEdge};
+
+    for mixed_routes in [false, true] {
+        let payload = stable_function(20_001);
+        let manual = stable_function(20_002);
+        let executor = stable_function(20_003);
+        let outer_executor = stable_function(20_004);
+        let modeled = |id, target_id, path| {
+            let mut edge = call(id, target(target_id, path));
+            edge.kind = CallKindFact::ModeledCall;
+            edge.invocation_guarantee = Some(InvocationGuarantee::ExecutorPolling);
+            edge
+        };
+        let mut executor_calls = vec![modeled(0, payload, "sample::payload")];
+        if mixed_routes {
+            let mut unguarded = modeled(1, payload, "sample::payload");
+            unguarded.invocation_guarantee = None;
+            executor_calls.push(unguarded);
+        }
+        let operations = ["protocol-operation", "ordinary-operation"]
+            .into_iter()
+            .zip(0_u32..)
+            .map(|(kind, id)| EffectFact {
+                id: EffectId::new(id),
+                effect: EffectKey::new(Allocation::EFFECT_NAME),
+                effect_group: None,
+                source_range: None,
+                expanded_range: None,
+                macro_expansions: Vec::new(),
+                kind: EffectKind::new(kind),
+            })
+            .collect();
+        let make_body = |id, path, calls, effects| body(id, path, calls, effects, vec![], vec![]);
+        let artifact = ArtifactFacts::new(
+            vec![
+                make_body(payload, "sample::payload", vec![], operations),
+                make_body(
+                    manual,
+                    "sample::manual",
+                    vec![call(0, target(payload, "sample::payload"))],
+                    vec![],
+                ),
+                make_body(executor, "sample::executor", executor_calls, vec![]),
+                make_body(
+                    outer_executor,
+                    "sample::outer_executor",
+                    vec![modeled(0, manual, "sample::manual")],
+                    vec![],
+                ),
+            ],
+            vec![],
+        )
+        .unwrap();
+        let graph = graph_for_all_bodies(&artifact).unwrap();
+        let annotations = AnnotationIndex::from_artifact(&artifact, &graph).unwrap();
+        let config = Allocation::default_config();
+        let domain = effect::<Allocation>(&config);
+        let concrete = probe_concrete_effect(
+            &artifact,
+            &graph,
+            &annotations,
+            &artifact.definition_namespace_index(),
+            domain.as_ref(),
+        )
+        .unwrap();
+        let edge = |caller| {
+            PropagationEdge::Invocation(
+                graph
+                    .invocation_for_raw_call(caller, CallId::new(0))
+                    .unwrap(),
+            )
+        };
+        let seeds = concrete.sources().collect::<Vec<_>>();
+        assert_eq!(seeds.len(), 2, "guarantees must not delete source facts");
+        for (index, seed) in seeds.iter().enumerate() {
+            let result = concrete.propagate(&seed.state, edge(executor));
+            assert_eq!(
+                matches!(result, Propagation::Ignore),
+                index == 0 && !mixed_routes
+            );
+            let Propagation::Follow(manual_state) = concrete.propagate(&seed.state, edge(manual))
+            else {
+                panic!("manual polling must preserve every operation");
+            };
+            assert!(
+                matches!(
+                    concrete.propagate(&manual_state, edge(outer_executor)),
+                    Propagation::Follow(_)
+                ),
+                "executor guarantee must not hide nested manual polling"
+            );
         }
     }
 }
