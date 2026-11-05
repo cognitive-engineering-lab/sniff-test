@@ -40,6 +40,7 @@ pub mod path_patterns;
 pub mod report;
 pub mod report_model;
 pub mod report_roots;
+mod source_justifications;
 pub mod source_markers;
 pub mod source_overrides;
 pub mod trace;

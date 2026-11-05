@@ -70,7 +70,7 @@ use crate::report_model::{
     InterpretedTraceStep, InterpretedTraceStepKind, RootInterpretation, TraceFrontier,
     UnresolvedCallCoverage, UnresolvedCallMechanism, UnresolvedCallSite,
 };
-use crate::source_overrides::ResolvedSourceContractOverride;
+use crate::source_overrides::ResolvedSourceOverrides;
 use crate::workspace::ArtifactAnalysisGraph;
 
 mod markers;
@@ -122,7 +122,7 @@ pub fn trace_workspace(
         &BTreeMap::new(),
         roots,
         config,
-        &BTreeMap::new(),
+        &ResolvedSourceOverrides::default(),
         &selected_effects,
         &cli_effects,
         &BTreeMap::new(),
@@ -142,7 +142,7 @@ pub fn trace_selected_workspace(
     rustc_dependencies: &BTreeMap<u64, BTreeSet<u64>>,
     roots: &[InterpretationRoot],
     config: &SniffTestConfig,
-    source_overrides: &BTreeMap<crate::artifact::StableDefPathHash, ResolvedSourceContractOverride>,
+    source_overrides: &ResolvedSourceOverrides,
     effects: &[Box<dyn Effect + '_>],
     cli_effects: &BTreeSet<EffectKey>,
     item_effects: &BTreeMap<String, BTreeSet<EffectKey>>,
@@ -153,7 +153,11 @@ pub fn trace_selected_workspace(
         reporting_crate_id: local_stable_crate_id,
         crate_names,
     };
-    let artifact = compose_workspace_artifact(local, dependencies)?;
+    let mut artifact = compose_workspace_artifact(local, dependencies)?;
+    source_overrides
+        .justifications
+        .apply(&mut artifact)
+        .map_err(|error| EffectReportError::new(error.to_string()))?;
     let artifact = &artifact;
     let mut crate_dependencies = dependencies
         .artifacts()
@@ -199,7 +203,7 @@ pub fn trace_selected_workspace(
         artifact,
         &namespaces,
         &config.contracts.overrides,
-        source_overrides,
+        &source_overrides.contracts,
         config.analysis.marker_probing,
         &all_metadata,
     );

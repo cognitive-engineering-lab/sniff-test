@@ -10,15 +10,76 @@ use crate::artifact::{
 };
 use crate::compiler::source::CachedSourceMap;
 use crate::contracts::{ContractDocOverrides, SourceContractSelector};
+use crate::effects::EffectMetadata;
+use crate::source_justifications::SourceJustificationOverrides;
 use crate::workspace::ArtifactAnalysisGraph;
 
 /// Crate/version provenance paired with the policy-neutral facts it owns.
 #[derive(Clone, Copy)]
 pub struct ContractSourceArtifact<'a> {
-    stable_crate_id: u64,
-    crate_name: &'a str,
-    package_version: Option<&'a str>,
-    facts: &'a ArtifactFacts,
+    pub(crate) stable_crate_id: u64,
+    pub(crate) crate_name: &'a str,
+    pub(crate) package_version: Option<&'a str>,
+    pub(crate) facts: &'a ArtifactFacts,
+}
+
+/// Interpretation-time policy overlays. Dependency caches remain unchanged.
+#[derive(Default)]
+pub struct ResolvedSourceOverrides {
+    pub contracts: BTreeMap<StableDefPathHash, ResolvedSourceContractOverride>,
+    pub(crate) justifications: SourceJustificationOverrides,
+}
+
+/// Resolves rustdoc replacements and source-local justification injections.
+pub fn resolve_source_overrides(
+    tcx: TyCtxt<'_>,
+    overrides: &ContractDocOverrides,
+    local: ContractSourceArtifact<'_>,
+    dependencies: &ArtifactAnalysisGraph,
+    effects: &[EffectMetadata],
+) -> Result<ResolvedSourceOverrides, SourceOverrideError> {
+    let mut contracts = BTreeMap::new();
+    let mut markers = Vec::new();
+    for (selector, text) in overrides.source_entries() {
+        let parsed =
+            crate::source_markers::override_justifications(text, effects).map_err(|message| {
+                SourceOverrideError::new(format!(
+                    "source override {}: {message}",
+                    describe_selector(selector)
+                ))
+            })?;
+        if let Some(parsed) = parsed {
+            markers.push((selector.clone(), parsed));
+        } else {
+            contracts.insert(selector.clone(), text.to_owned());
+        }
+    }
+    let contracts = ContractDocOverrides::with_source_entries(Vec::new(), contracts)
+        .expect("no namespace globs");
+    let contracts = resolve_source_contract_overrides(tcx, &contracts, local, dependencies)?;
+    let artifacts = source_artifacts(local, dependencies);
+    let justifications =
+        SourceJustificationOverrides::resolve(tcx.sess.source_map(), markers, &artifacts)?;
+    Ok(ResolvedSourceOverrides {
+        contracts,
+        justifications,
+    })
+}
+
+fn source_artifacts<'a>(
+    local: ContractSourceArtifact<'a>,
+    dependencies: &'a ArtifactAnalysisGraph,
+) -> Vec<ContractSourceArtifact<'a>> {
+    let mut artifacts = vec![local];
+    artifacts.extend(dependencies.artifacts().map(|dependency| {
+        ContractSourceArtifact::new(
+            dependency.artifact.id.stable_crate_id,
+            &dependency.artifact.crate_name,
+            dependency.artifact.package_version.as_deref(),
+            &dependency.facts,
+        )
+    }));
+    artifacts
 }
 
 impl<'a> ContractSourceArtifact<'a> {
@@ -278,7 +339,7 @@ struct DefinitionEquivalenceKey<'a> {
     byte_len: u64,
 }
 
-fn describe_selector(selector: &SourceContractSelector) -> String {
+pub(crate) fn describe_selector(selector: &SourceContractSelector) -> String {
     format!(
         "`{}:{}/{}:{}:{}`",
         selector.crate_name(),
@@ -316,7 +377,7 @@ pub struct SourceOverrideError {
 }
 
 impl SourceOverrideError {
-    fn new(message: impl Into<String>) -> Self {
+    pub(crate) fn new(message: impl Into<String>) -> Self {
         Self {
             message: message.into(),
         }

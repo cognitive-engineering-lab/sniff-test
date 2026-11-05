@@ -792,6 +792,65 @@ fn comment_block_satisfactions(
     satisfactions
 }
 
+pub(crate) type OverrideJustifications = Vec<(crate::artifact::EffectKey, Vec<MarkerSatisfaction>)>;
+
+/// Parses a configured marker block with the same syntax as source comments.
+/// A leading registered justification header distinguishes markers from rustdoc.
+pub(crate) fn override_justifications(
+    text: &str,
+    effects: &[crate::effects::EffectMetadata],
+) -> Result<Option<OverrideJustifications>, String> {
+    let Some(first) = text.lines().find(|line| !line.trim().is_empty()) else {
+        return Ok(None);
+    };
+    let first = first.trim().strip_prefix("//").unwrap_or(first).trim();
+    if !effects.iter().any(|effect| {
+        first
+            .strip_prefix(effect.justification)
+            .is_some_and(|rest| rest.starts_with(':'))
+    }) {
+        return Ok(None);
+    }
+    if text.lines().any(|line| line.trim_start().starts_with('#')) {
+        return Err(String::from(
+            "a justification override cannot also replace contract documentation",
+        ));
+    }
+    let lines = text
+        .lines()
+        .map(|line| {
+            if line.trim_start().starts_with("//") {
+                line.to_owned()
+            } else {
+                format!("// {line}")
+            }
+        })
+        .collect::<Vec<_>>();
+    let prefixes = effects
+        .iter()
+        .map(|effect| effect.justification)
+        .collect::<Vec<_>>();
+    let mut parsed = Vec::new();
+    for effect in effects {
+        let syntax = MarkerSyntax::new(effect.justification, &prefixes);
+        if lines
+            .iter()
+            .filter_map(|line| comment_body(line))
+            .any(|line| syntax.strip_prefix(line).is_some())
+        {
+            let satisfactions = comment_block_satisfactions(&lines, syntax);
+            if satisfactions.is_empty() {
+                return Err(format!(
+                    "{}: override requires a nonempty justification",
+                    effect.justification
+                ));
+            }
+            parsed.push((effect.key.clone(), satisfactions));
+        }
+    }
+    Ok(Some(parsed))
+}
+
 fn flush_pending_header(
     satisfactions: &mut Vec<MarkerSatisfaction>,
     pending_header_reason: &mut Option<String>,
@@ -866,6 +925,39 @@ mod tests {
 
     fn line_has_safety_marker(line: &str) -> bool {
         super::line_satisfaction(line, safety_syntax()).is_some()
+    }
+
+    #[test]
+    fn override_markers_share_named_nested_and_multiple_effect_syntax() {
+        let effects = crate::effects::selected_effects(&crate::effects::EffectSelection::default());
+        let parsed = super::override_justifications(
+            "// PANIC:\n// - valid: checked.\n//   - nested: also checked.\n// SAFETY: pointer is valid.",
+            &effects,
+        ).unwrap().unwrap();
+        assert_eq!(parsed.len(), 2);
+        assert_eq!(parsed[0].0.as_str(), "panic");
+        assert_eq!(parsed[0].1[0].requirement.as_deref(), Some("valid"));
+        assert_eq!(parsed[0].1[1].path, Some(vec![0, 0]));
+        assert_eq!(parsed[1].0.as_str(), "safety");
+        assert_eq!(parsed[1].1[0].reason, "pointer is valid.");
+    }
+
+    #[test]
+    fn override_markers_reject_empty_reasons_and_mixed_contracts() {
+        let effects = crate::effects::selected_effects(&crate::effects::EffectSelection::default());
+        for text in ["PANIC:", "PANIC:\n- valid:", "PANIC: checked\n# Panics"] {
+            assert!(
+                super::override_justifications(text, &effects).is_err(),
+                "{text}"
+            );
+        }
+        for text in ["# Panics\n- valid: condition.", "No contract sections", ""] {
+            assert!(
+                super::override_justifications(text, &effects)
+                    .unwrap()
+                    .is_none()
+            );
+        }
     }
 
     #[test]

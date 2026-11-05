@@ -2800,7 +2800,7 @@ fn registered_passes_determine_missing_body_completeness_for_new_effects() {
             kind: ReportRootKind::Concrete,
         }],
         &config,
-        &std::collections::BTreeMap::new(),
+        &crate::source_overrides::ResolvedSourceOverrides::default(),
         &effects,
         &cli_effects,
         &std::collections::BTreeMap::new(),

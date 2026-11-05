@@ -26,9 +26,7 @@ use sniff_test_core::report_model::{
     UnresolvedCallSite,
 };
 use sniff_test_core::report_roots::ReportRoot;
-use sniff_test_core::source_overrides::{
-    ContractSourceArtifact, resolve_source_contract_overrides,
-};
+use sniff_test_core::source_overrides::{ContractSourceArtifact, resolve_source_overrides};
 use sniff_test_core::workspace::ArtifactAnalysisGraph;
 
 use super::findings::{
@@ -94,11 +92,15 @@ pub fn interpret_workspace<'tcx>(
         package_version,
         local,
     );
-    let source_overrides = resolve_source_contract_overrides(
+    let source_overrides = resolve_source_overrides(
         tcx,
         &config.contracts.overrides,
         local_source,
         dependencies,
+        &effects
+            .iter()
+            .map(|effect| effect.metadata().clone())
+            .collect::<Vec<_>>(),
     )
     .map_err(|error| EffectReportError::new(error.to_string()))?;
     let result = trace_selected_workspace(
