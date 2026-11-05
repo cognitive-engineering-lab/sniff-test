@@ -179,6 +179,7 @@ pub struct ObligationEffectPolicy {
 }
 
 impl ObligationEffectPolicy {
+    #[must_use]
     pub fn with_const_boundary_policy(mut self, policy: super::ConstBoundaryPolicy) -> Self {
         self.const_boundary_policy = policy;
         self

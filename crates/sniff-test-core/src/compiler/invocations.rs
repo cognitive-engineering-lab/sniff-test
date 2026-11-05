@@ -1550,8 +1550,8 @@ mod tests {
         ]);
 
         let graph = graph_for_all_bodies(&facts).expect("invocation graph");
-        for child in [inline_const] {
-            let child = graph.function(child).unwrap();
+        {
+            let child = graph.function(inline_const).unwrap();
             let [edge] = graph.transparent_parents(child) else {
                 panic!("expected one transparent parent")
             };

@@ -50,6 +50,7 @@ impl<'tcx> ReportRoot<'tcx> {
 
     /// Execution entry for a selected root. Async roots request polling, whereas
     /// ordinary calls to async functions only construct their returned future.
+    #[must_use]
     pub fn execution_instance(self, tcx: TyCtxt<'tcx>) -> Instance<'tcx> {
         let instance = match self {
             Self::Concrete { instance } => instance,
@@ -61,12 +62,11 @@ impl<'tcx> ReportRoot<'tcx> {
         if tcx.asyncness(self.def_id()).is_async() {
             for block in tcx.instance_mir(instance.def).basic_blocks.iter() {
                 for statement in &block.statements {
-                    if let rustc_middle::mir::StatementKind::Assign(assignment) = &statement.kind {
-                        if let rustc_middle::mir::Rvalue::Aggregate(kind, _) = &assignment.1 {
-                            if let rustc_middle::mir::AggregateKind::Coroutine(def, args) = **kind {
-                                return Instance::new_raw(def, args);
-                            }
-                        }
+                    if let rustc_middle::mir::StatementKind::Assign(assignment) = &statement.kind
+                        && let rustc_middle::mir::Rvalue::Aggregate(kind, _) = &assignment.1
+                        && let rustc_middle::mir::AggregateKind::Coroutine(def, args) = **kind
+                    {
+                        return Instance::new_raw(def, args);
                     }
                 }
             }

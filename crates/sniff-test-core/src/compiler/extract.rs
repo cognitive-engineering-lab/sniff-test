@@ -521,7 +521,8 @@ fn collect_edge<'tcx>(
         effect_groups.group_for_structural_edge(origin.def_id(), edge.span)
     }
     .map_err(|error| edge_grouping_error(tcx, origin.def_id(), edge, &error))?;
-    let declaration_target = declaration_call_target(tcx, groups.declaration_callee, sources, effects)?;
+    let declaration_target =
+        declaration_call_target(tcx, groups.declaration_callee, sources, effects)?;
     let key = edge_key(
         tcx,
         graph,

@@ -7,6 +7,10 @@ use rustc_middle::ty::{Instance, TyCtxt, TyKind};
 pub(super) struct RuntimeModels;
 
 impl<'tcx> ReachabilityHooks<'tcx> for RuntimeModels {
+    #[allow(
+        clippy::too_many_lines,
+        reason = "keep runtime API matching and invocation validation together"
+    )]
     fn model_call(
         &self,
         tcx: TyCtxt<'tcx>,

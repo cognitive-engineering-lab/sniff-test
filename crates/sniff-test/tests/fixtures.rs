@@ -764,6 +764,10 @@ fn fixture_copy_excludes_cargo_target_directories() {
 }
 
 #[test]
+#[allow(
+    clippy::too_many_lines,
+    reason = "verify runtime payload models and their control cases together"
+)]
 fn runtime_spawn_models_preserve_payloads_contracts_and_receiver_coverage() {
     let repo = repo_root();
     let temp = tempfile::tempdir().unwrap();

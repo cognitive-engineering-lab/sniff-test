@@ -4151,6 +4151,10 @@ fn unrestricted_paths_preserve_policy_search_ties_across_crates_and_cycles() {
 }
 
 #[test]
+#[allow(
+    clippy::too_many_lines,
+    reason = "compare callable provenance across the same trusted boundaries"
+)]
 fn callable_shim_consumer_provenance_crosses_trusted_boundaries() {
     for effect in [ReportEffect::Panic, ReportEffect::Safety] {
         for documented in [false, true] {

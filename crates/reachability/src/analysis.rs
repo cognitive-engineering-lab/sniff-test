@@ -381,12 +381,8 @@ where
         ) {
             return None;
         }
-        let Some(api) = self.index.graph.node_instance(edge.target) else {
-            return None;
-        };
-        let Some(model) = self.hooks.model_call(self.index.tcx, api) else {
-            return None;
-        };
+        let api = self.index.graph.node_instance(edge.target)?;
+        let model = self.hooks.model_call(self.index.tcx, api)?;
         let tcx = self.index.tcx;
         let args = model.args;
         let instance = if args.has_param() {
@@ -423,14 +419,20 @@ where
             },
         };
         let target = self.index.graph.node_for_kind(target);
-        if self.index.graph.outgoing_edges(edge.source).iter().any(|&id| {
-            let existing = self.index.graph.edge(id);
-            existing.kind == ReachabilityEdgeKind::ModeledCall
-                && existing.origin == edge.origin
-                && existing.target == target
-                && existing.mir_location == edge.mir_location
-                && existing.span == edge.span
-        }) {
+        if self
+            .index
+            .graph
+            .outgoing_edges(edge.source)
+            .iter()
+            .any(|&id| {
+                let existing = self.index.graph.edge(id);
+                existing.kind == ReachabilityEdgeKind::ModeledCall
+                    && existing.origin == edge.origin
+                    && existing.target == target
+                    && existing.mir_location == edge.mir_location
+                    && existing.span == edge.span
+            })
+        {
             return None;
         }
         let callable = dynamic.then_some(CallableEdgeInfo::DynDispatch {
@@ -497,7 +499,10 @@ where
 
     fn visit_outgoing_edges(&mut self, item: QueueItem) {
         let mut outgoing = self.index.graph.outgoing_edges(item.node_id).to_vec();
-        let modeled = outgoing.iter().filter_map(|&id| self.add_modeled_call(id)).collect::<Vec<_>>();
+        let modeled = outgoing
+            .iter()
+            .filter_map(|&id| self.add_modeled_call(id))
+            .collect::<Vec<_>>();
         outgoing.extend(modeled);
 
         for edge_id in outgoing {
