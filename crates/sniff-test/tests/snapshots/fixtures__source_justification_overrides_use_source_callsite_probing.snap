@@ -1,0 +1,90 @@
+---
+source: crates/sniff-test/tests/fixtures.rs
+expression: "report[\"findings\"]"
+---
+[
+  {
+    "effect": "panic",
+    "finding": "concrete-invocation",
+    "function": "justification_dependency::control",
+    "kind": "effect",
+    "level": "deny",
+    "operation": "configured-invocation",
+    "owner": {
+      "crate": "justification_dependency",
+      "scope": "dependency"
+    },
+    "reason": "dependency crate `justification_dependency` has no recorded `// PANIC:` justification for panic invocation to `core::panicking::panic_fmt`",
+    "root": "source_justification_overrides::dependency_control",
+    "root-kind": "concrete",
+    "root-span": "src/lib.rs:21:1: 21:28",
+    "source-evidence": {
+      "status": "verified-absent"
+    },
+    "span": "dependency/src/lib.rs:6:5: 6:68",
+    "target": "core::panicking::panic_fmt",
+    "trace": [
+      "src/lib.rs:22:5: 22:40: source_justification_overrides::dependency_control --direct-call-> justification_dependency::control",
+      "dependency/src/lib.rs:6:5: 6:68: justification_dependency::control --macro-expansion-> macro core::macros::builtin::assert",
+      "dependency/src/lib.rs:6:5: 6:68: macro core::macros::builtin::assert --macro-expansion-> macro core::panic::panic_2021",
+      "[SYSROOT]/lib/rustlib/src/rust/library/core/src/panic.rs:62:9: 62:73: macro core::panic::panic_2021 --direct-call-> core::panicking::panic_fmt"
+    ],
+    "trace-id": "0000c40163"
+  },
+  {
+    "effect": "panic",
+    "finding": "concrete-operation",
+    "function": "source_justification_overrides::local_control",
+    "kind": "effect",
+    "level": "deny",
+    "operation": "division-by-zero",
+    "owner": {
+      "crate": "source_justification_overrides",
+      "scope": "workspace"
+    },
+    "reason": "division by zero has no recorded `// PANIC:` justification",
+    "root": "source_justification_overrides::local_control",
+    "root-kind": "concrete",
+    "root-span": "src/lib.rs:5:1: 5:50",
+    "source-evidence": {
+      "status": "verified-absent"
+    },
+    "span": "src/lib.rs:6:5: 6:21",
+    "trace": [
+      "src/lib.rs:6:5: 6:21: source_justification_overrides::local_control --effect-operation-> division by zero"
+    ],
+    "trace-id": "0001c5b8f4"
+  },
+  {
+    "effect": "panic",
+    "finding": "documented-obligation",
+    "function": "source_justification_overrides::named_control",
+    "kind": "effect",
+    "level": "deny",
+    "missing-requirements": [
+      "valid: the input must be validated.",
+      "bounded: the input must be bounded."
+    ],
+    "owner": {
+      "crate": "source_justification_overrides",
+      "scope": "workspace"
+    },
+    "reason": "call to `justification_dependency::contract` with a documented `# Panics` obligation has no recorded `// PANIC:` justification",
+    "requirements": [
+      "valid: the input must be validated.",
+      "bounded: the input must be bounded."
+    ],
+    "root": "source_justification_overrides::named_control",
+    "root-kind": "concrete",
+    "root-span": "src/lib.rs:13:1: 13:23",
+    "source-evidence": {
+      "status": "verified-absent"
+    },
+    "span": "src/lib.rs:14:5: 14:41",
+    "target": "justification_dependency::contract",
+    "trace": [
+      "src/lib.rs:14:5: 14:41: source_justification_overrides::named_control --direct-call-> justification_dependency::contract"
+    ],
+    "trace-id": "0002c2bbe7"
+  }
+]

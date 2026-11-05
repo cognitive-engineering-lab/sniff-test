@@ -1,0 +1,2 @@
+[overrides.crates."source_justification_overrides"."0.1.0"]
+"src/lib.rs:10:10" = "PANIC: valid: the caller validated the input."

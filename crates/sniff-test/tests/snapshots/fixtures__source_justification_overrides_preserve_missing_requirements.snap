@@ -1,0 +1,37 @@
+---
+source: crates/sniff-test/tests/fixtures.rs
+expression: "report[\"findings\"]"
+---
+[
+  {
+    "effect": "panic",
+    "finding": "documented-obligation",
+    "function": "source_justification_overrides::named_selected",
+    "kind": "effect",
+    "level": "deny",
+    "missing-requirements": [
+      "bounded: the input must be bounded."
+    ],
+    "owner": {
+      "crate": "source_justification_overrides",
+      "scope": "workspace"
+    },
+    "reason": "recorded `// PANIC:` justification for call to `justification_dependency::contract` with a documented `# Panics` obligation does not satisfy the remaining `# Panics` requirements",
+    "requirements": [
+      "valid: the input must be validated.",
+      "bounded: the input must be bounded."
+    ],
+    "root": "source_justification_overrides::named_selected",
+    "root-kind": "concrete",
+    "root-span": "src/lib.rs:9:1: 9:24",
+    "source-evidence": {
+      "status": "present"
+    },
+    "span": "src/lib.rs:10:5: 10:41",
+    "target": "justification_dependency::contract",
+    "trace": [
+      "src/lib.rs:10:5: 10:41: source_justification_overrides::named_selected --direct-call-> justification_dependency::contract"
+    ],
+    "trace-id": "000026cad3"
+  }
+]

@@ -1,0 +1,2 @@
+[overrides.crates."source_justification_binary"."0.1.0"]
+"src/main.rs:5:5" = "PANIC: the denominator was checked."

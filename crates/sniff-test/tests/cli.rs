@@ -3289,3 +3289,78 @@ fn source_overrides_reject_stale_dependency_source_facts() {
     assert!(stderr.contains("source override"), "stderr:\n{stderr}");
     assert!(stderr.contains("content hash"), "stderr:\n{stderr}");
 }
+
+#[test]
+fn source_justification_overrides_are_reapplied_without_contaminating_dependency_caches() {
+    let temp = tempfile::tempdir().expect("temporary fixture directory");
+    let root = temp.path().join("source_justification_overrides");
+    copy_fixture_dir(
+        &repo_root().join("tests/fixtures/source_justification_overrides"),
+        &root,
+    )
+    .expect("copy source justification fixture");
+    let cache_dir = temp.path().join("cache");
+    let binary = PathBuf::from(env!("CARGO_BIN_EXE_cargo-sniff-test"));
+    let analyze = || {
+        let mut command = Command::new(&binary);
+        clean_cargo_package_env(&mut command);
+        let output = command
+            .args([
+                "--message-format",
+                "json",
+                "--color",
+                "never",
+                "--cache-dir",
+            ])
+            .arg(&cache_dir)
+            .current_dir(&root)
+            .output()
+            .expect("analyze fixture");
+        assert_eq!(
+            output.status.code(),
+            Some(101),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let reports = String::from_utf8(output.stdout)
+            .unwrap()
+            .lines()
+            .map(|line| serde_json::from_str::<serde_json::Value>(line).unwrap())
+            .collect::<Vec<_>>();
+        reports[0]["findings"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|finding| finding["root"].as_str().unwrap().to_owned())
+            .collect::<std::collections::BTreeSet<_>>()
+    };
+    let _cargo_guard = lock_nested_cargo();
+    let overridden = analyze();
+    assert_eq!(overridden.len(), 3);
+    assert!(overridden.iter().all(|root| root.ends_with("_control")));
+    let cache = artifact_cache_for_crate(&cache_dir, "justification_dependency");
+    let original_cache = fs::read(&cache).unwrap();
+    let document: serde_json::Value = serde_json::from_slice(&original_cache).unwrap();
+    assert!(
+        document["facts"]["functions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|body| {
+                body["markers"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .all(|marker| marker["kind"]["role"] != "justification")
+            }),
+        "injected justifications must not be persisted"
+    );
+    let path = root.join("override.toml");
+    let configured = fs::read_to_string(&path).unwrap();
+    fs::write(&path, "[overrides]\n").unwrap();
+    let without_overrides = analyze();
+    assert_eq!(without_overrides.len(), 6);
+    assert_eq!(fs::read(&cache).unwrap(), original_cache);
+    fs::write(&path, configured).unwrap();
+    assert_eq!(analyze(), overridden);
+}

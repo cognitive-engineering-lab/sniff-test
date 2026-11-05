@@ -68,6 +68,9 @@ undocumented-effect-invocation = "warn"
 # [overrides.crates."dependency_crate"."1.2.3"]
 # "src/lib.rs:10:20" = "# Panics\n\n- condition: input must be valid."
 # The selected definition must start within the inclusive line range.
+# A leading marker header instead injects a justification at call/effect starts:
+# "src/lib.rs:25:25" = "PANIC: condition: the caller checked this invariant."
+# Marker injections do not change contracts or persist in dependency caches.
 override-files = []
 
 [panic]

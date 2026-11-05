@@ -1,0 +1,4 @@
+[package]
+name = "source-justification-binary"
+version = "0.1.0"
+edition = "2024"

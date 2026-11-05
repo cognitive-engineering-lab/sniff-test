@@ -1,0 +1,10 @@
+[overrides.crates."source_justification_overrides"."0.1.0"]
+"src/lib.rs:2:2" = "PANIC: denominator is checked by the caller."
+"src/lib.rs:10:10" = """
+PANIC:
+- valid: the caller validated the input.
+- bounded: the caller checked the bound.
+"""
+
+[overrides.crates."justification_dependency"."1.2.3"]
+"src/lib.rs:2:2" = "PANIC: the dependency invariant has been audited."

@@ -487,6 +487,38 @@ applying source overrides; genuinely unavailable sources retain their exact
 artifact facts. Direct driver invocations do not inherit ambient Cargo package
 metadata.
 
+The same source-selector table can inject a local justification into a dependency
+without editing its source. A value whose first nonblank line is a registered
+marker header, such as `PANIC:`, is a justification rather than replacement
+rustdoc:
+
+```toml
+[overrides.crates."zerocopy"."0.8.27"]
+"src/layout.rs:127:127" = """
+PANIC: representable: the caller checked that the layout fits in `usize`.
+"""
+```
+
+For these entries, the inclusive range selects the **start line of the call or
+effect**, using its final source-callsite location, rather than a function
+definition. Only bodies belonging to the selected crate/version can consume the
+injection, even when another crate compiles the same physical source file. The
+selected file must be available and match the cached source hash; out-of-file
+line ranges and overlapping justification ranges for the same effect are errors.
+Entries with no matching extracted call/effect remain unused, including bodies
+outside binary report roots and disabled effects.
+
+Marker bodies use the source-comment parser: optional `//` prefixes, named and
+nested requirement lists, and registered headers such as `SAFETY:` are accepted.
+Empty explanations are rejected. An injection adds justification evidence and
+does not replace the function's contract. Existing `effect-doc-matching` rules
+still apply, so an incomplete named list leaves requirements unsatisfied in
+`exact` mode. A single injected `PANIC:` block reused across distinct effect
+groups still produces marker ambiguity. Injections apply with either
+`marker-probing` strategy, do not modify source files, and are never persisted in
+artifact caches. Keep contract replacements and justification blocks in separate
+selector entries.
+
 ## JSON Output
 
 Human output is written to stderr by default. For machine-readable output:

@@ -1,0 +1,10 @@
+[analysis]
+effect-doc-matching = "exact"
+marker-probing = "source-callsite"
+
+[contracts]
+override-files = ["override.toml"]
+
+[panic.lints]
+invocation = "deny"
+operation = "deny"

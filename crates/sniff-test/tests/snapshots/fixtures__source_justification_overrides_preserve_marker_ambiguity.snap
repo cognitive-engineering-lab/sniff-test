@@ -1,0 +1,22 @@
+---
+source: crates/sniff-test/tests/fixtures.rs
+expression: "report[\"findings\"]"
+---
+[
+  {
+    "effect": "panic",
+    "finding": "ambiguous-marker",
+    "function": "source_justification_overrides::ambiguous",
+    "kind": "effect",
+    "level": "deny",
+    "owner": {
+      "crate": "source_justification_overrides",
+      "scope": "workspace"
+    },
+    "reason": "one `// PANIC:` marker applies to 2 panic effect groups",
+    "root": "source_justification_overrides::ambiguous",
+    "root-kind": "concrete",
+    "root-span": "src/lib.rs:26:1: 26:42",
+    "span": "src/lib.rs:27:1: 29:1"
+  }
+]

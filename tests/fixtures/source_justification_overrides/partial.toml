@@ -1,0 +1,9 @@
+[analysis]
+effect-doc-matching = "exact"
+report-roots = ["source_justification_overrides::named_selected"]
+
+[contracts]
+override-files = ["partial-override.toml"]
+
+[panic.lints]
+invocation = "deny"

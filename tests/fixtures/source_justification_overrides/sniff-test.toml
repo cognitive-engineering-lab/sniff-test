@@ -1,0 +1,9 @@
+[analysis]
+effect-doc-matching = "exact"
+
+[contracts]
+override-files = ["override.toml"]
+
+[panic.lints]
+invocation = "deny"
+operation = "deny"

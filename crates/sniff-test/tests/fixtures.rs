@@ -132,6 +132,20 @@ fixture_cases! {
         source_contract_overrides_apply_to_registered_effects => Case::new()
             .args(&["--manifest", "generic-effects.toml", "--effect", "allocation", "--effect", "file", "--effect", "safety"]);
     }
+    "source_justification_overrides" => {
+        source_justification_overrides_match_only_selected_sites => Case::new().denied();
+        source_justification_overrides_preserve_missing_requirements => Case::new()
+            .args(&["--manifest", "partial.toml"]).denied();
+        source_justification_overrides_use_source_callsite_probing => Case::new()
+            .args(&["--manifest", "source-callsite.toml"]).denied();
+        source_justification_overrides_ignore_disabled_effects => Case::new()
+            .args(&["--effect", "safety"]);
+        source_justification_overrides_preserve_marker_ambiguity => Case::new()
+            .args(&["--manifest", "ambiguous.toml"]).denied();
+    }
+    "source_justification_binary" => {
+        source_justification_overrides_ignore_unselected_binary_bodies => Case::new();
+    }
     "contract_overrides" => {
         contract_overrides => Case::new();
     }

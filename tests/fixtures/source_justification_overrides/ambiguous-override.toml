@@ -1,0 +1,2 @@
+[overrides.crates."source_justification_overrides"."0.1.0"]
+"src/lib.rs:27:28" = "PANIC: the denominator was checked."

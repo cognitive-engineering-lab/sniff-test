@@ -78,6 +78,16 @@ fail closed. Available dependency sources must match their cached source hash
 before their definition locations are used. Source paths follow physical
 package containment, including when a source path uses symlinks.
 
+Source-selector entries starting with a registered justification header inject
+explicit audit claims at matching call/effect start lines. They use the same
+requirement matching and marker-ambiguity checks as source comments. Their
+crate/version ownership is preserved independently of source-file identity;
+consumer instantiations use the definition's owning crate. Selected sources must
+be available and content-verified before line ranges are interpreted. Unused
+markers do not force extraction of unselected bodies or effects. These claims
+are trusted user policy and can hide real effects when incorrect. They modify
+only the composed interpretation facts, never reusable artifact caches.
+
 ### Build scripts and proc macros are skipped
 
 Units whose crate name is Cargo's `build_script_build` and units whose crate

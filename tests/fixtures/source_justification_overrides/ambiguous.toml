@@ -1,0 +1,8 @@
+[analysis]
+report-roots = ["source_justification_overrides::ambiguous"]
+
+[contracts]
+override-files = ["ambiguous-override.toml"]
+
+[panic.lints]
+operation = "deny"
