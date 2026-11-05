@@ -47,6 +47,7 @@ extern crate rustc_span;
 mod analysis;
 mod body;
 mod graph;
+mod dyn_dispatch;
 mod hooks;
 
 pub use analysis::{

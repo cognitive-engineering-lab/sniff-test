@@ -1,0 +1,4 @@
+[analysis]
+report-roots = ["dyn_dispatch_app::unresolved"]
+[panic.coverage]
+unresolved-call-target = "deny"

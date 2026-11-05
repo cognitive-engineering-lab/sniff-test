@@ -1,9 +1,9 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fmt;
 
 use rustc_hir::def_id::DefId;
 use rustc_middle::mir::{AssertMessage, Location};
-use rustc_middle::ty::{Instance, Ty};
+use rustc_middle::ty::{GenericArgsRef, Instance, Ty};
 use rustc_span::Span;
 
 use crate::hooks::ReachabilityHalt;
@@ -465,9 +465,20 @@ pub struct ReachabilitySnapshot {
     predecessor_edges: Vec<Option<ReachabilityEdgeId>>,
     expansions: Vec<Option<ReachabilityNodeExpansion>>,
     halt: Option<ReachabilityHalt>,
+    incomplete_dyn_calls: HashSet<ReachabilityEdgeId>,
 }
 
 impl ReachabilitySnapshot {
+    /// Whether a compatible dyn receiver candidate failed to resolve in this query.
+    #[must_use]
+    pub fn dyn_resolution_incomplete(&self, edge: ReachabilityEdgeId) -> bool {
+        self.incomplete_dyn_calls.contains(&edge)
+    }
+
+    pub(crate) fn mark_dyn_resolution_incomplete(&mut self, edge: ReachabilityEdgeId) {
+        self.incomplete_dyn_calls.insert(edge);
+    }
+
     fn new(roots: &[ReachabilityNodeId], graph_node_count: usize, graph_edge_count: usize) -> Self {
         // PANIC: single-root queries always supply one root, and multi-root queries return before
         // an empty root set reaches this constructor.
@@ -482,6 +493,7 @@ impl ReachabilitySnapshot {
             predecessor_edges: vec![None; graph_node_count],
             expansions: vec![None; graph_node_count],
             halt: None,
+            incomplete_dyn_calls: HashSet::new(),
         };
         for root in roots {
             snapshot.record_node(*root, 0, None);
@@ -709,8 +721,11 @@ pub enum CompilerAssertLocalRole {
 pub enum CallableEdgeInfo<'tcx> {
     /// Function item or closure coerced to, or called through, a function pointer.
     FnPointer { fn_ptr_ty: Ty<'tcx> },
-    /// Concrete vtable target introduced by, or call through, a dyn trait.
-    DynDispatch { trait_def_id: DefId },
+    /// Virtual method and instantiated arguments at a dyn call site.
+    DynDispatch {
+        method: DefId,
+        args: GenericArgsRef<'tcx>,
+    },
 }
 
 /// Directed edge between two reachability nodes.
@@ -793,7 +808,7 @@ pub enum ReachabilityEdgeKind {
     /// Method entry reachable through a dynamic object vtable.
     VTableEntry,
     /// Method entry reachable through a dynamic dispatch call after a dynamic
-    /// object vtable was introduced in the same body.
+    /// object cast was discovered in the same root-set query.
     DynDispatchVTableEntry,
     /// Macro expansion frame responsible for the next graph edge.
     MacroExpansion,
@@ -852,7 +867,8 @@ mod tests {
         let root_node = graph.node_for_instance(root);
         let child = graph.node_for_instance(root);
         let callable = CallableEdgeInfo::DynDispatch {
-            trait_def_id: CRATE_DEF_ID.to_def_id(),
+            method: CRATE_DEF_ID.to_def_id(),
+            args: root.args,
         };
         let edge = graph.push_edge_with_callable(
             ReachabilityEdge::new(

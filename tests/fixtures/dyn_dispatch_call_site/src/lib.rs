@@ -24,7 +24,7 @@ pub fn locally_constructed_implementation_uses_trait_contract() {
     runner.run();
 }
 
-pub fn unrelated_vtable_creation_does_not_select_an_implementation() {
+pub fn observed_casts_select_all_compatible_implementations() {
     let panicker = Panicker;
     let _panicking_runner: &dyn Runner = &panicker;
 

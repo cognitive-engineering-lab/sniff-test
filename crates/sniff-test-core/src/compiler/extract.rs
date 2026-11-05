@@ -3,9 +3,8 @@
 //! Reusable artifact extraction enumerates all local bodies for the selected
 //! domains. Executable-only extraction starts at report roots. Neither mode
 //! consults namespace policy, lint levels, or documentation overrides.
-//! Indirect calls retain only invocation-local
-//! dispatch classification; compatible callables observed elsewhere are never
-//! persisted as target evidence.
+//! Dyn calls use query-local cast evidence. Foreign resolved bodies are stored
+//! as consumer overlays, never as replacements in the dependency artifact.
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fmt;
@@ -272,7 +271,7 @@ fn extraction_options() -> ReachabilityOptions {
     ReachabilityOptions {
         node_limit: None,
         artifact_scope: ArtifactScope::AllArtifacts,
-        dyn_dispatch_vtable_edges: DynDispatchVTableEdges::CastSites,
+        dyn_dispatch_vtable_edges: DynDispatchVTableEdges::CallSites,
         fn_pointer_edges: FnPointerEdges::ReifySites,
     }
 }
@@ -373,7 +372,22 @@ fn collect_reachability_mode<'tcx>(
         )?;
     }
 
+    let resolved_dyn_calls = view
+        .edges()
+        .filter(|edge| {
+            matches!(
+                view.graph().edge_callable(edge.id()),
+                Some(CallableEdgeInfo::DynDispatch { .. })
+            )
+        })
+        .filter_map(|edge| edge.parent_edge().map(ReachedEdge::id))
+        .collect::<HashSet<_>>();
     for reached in view.edges() {
+        if resolved_dyn_calls.contains(&reached.id())
+            && !snapshot.dyn_resolution_incomplete(reached.id())
+        {
+            continue;
+        }
         if reached.kind() == ReachabilityEdgeKind::MacroExpansion {
             continue;
         }
@@ -943,13 +957,14 @@ fn call_edge_kind(reached: ReachedEdge<'_, '_>) -> Option<CallKindFact> {
         ReachabilityEdgeKind::TailCall => Some(CallKindFact::TailCall),
         ReachabilityEdgeKind::ConstBody => Some(CallKindFact::ConstBody),
         ReachabilityEdgeKind::Assert => Some(CallKindFact::Assert),
-        ReachabilityEdgeKind::IndirectCall => Some(CallKindFact::IndirectCall),
+        ReachabilityEdgeKind::IndirectCall | ReachabilityEdgeKind::DynDispatchVTableEntry => {
+            Some(CallKindFact::IndirectCall)
+        }
         ReachabilityEdgeKind::FnPointerReify
         | ReachabilityEdgeKind::ClosureFnPointerReify
         | ReachabilityEdgeKind::FnPointerCallTarget
         | ReachabilityEdgeKind::DynObjectCast
         | ReachabilityEdgeKind::VTableEntry
-        | ReachabilityEdgeKind::DynDispatchVTableEntry
         | ReachabilityEdgeKind::MacroExpansion => None,
     }
 }
@@ -2299,7 +2314,7 @@ mod tests {
         let options = extraction_options();
         assert_eq!(
             options.dyn_dispatch_vtable_edges,
-            DynDispatchVTableEdges::CastSites
+            DynDispatchVTableEdges::CallSites
         );
         assert_eq!(options.fn_pointer_edges, FnPointerEdges::ReifySites);
     }

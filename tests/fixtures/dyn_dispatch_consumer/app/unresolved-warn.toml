@@ -1,0 +1,6 @@
+[analysis]
+report-roots = ["dyn_dispatch_app::unresolved"]
+[panic.coverage]
+unresolved-call-target = "warn"
+[safety.coverage]
+unresolved-call-target = "warn"

@@ -7,7 +7,7 @@
 
 use std::collections::HashMap;
 
-use rustc_hir::{def_id::DefId, intravisit};
+use rustc_hir::intravisit;
 use rustc_middle::hir::nested_filter;
 use rustc_middle::mir::AssertMessage;
 use rustc_middle::mir::{
@@ -151,10 +151,19 @@ impl<'tcx> BodyEdgeCollector<'tcx> {
 
     fn emit_call_operand(&mut self, func: &Operand<'tcx>, kind: ReachabilityEdgeKind, span: Span) {
         let callee_ty = self.monomorphize(func.ty(&self.body.local_decls, self.tcx));
-        let callable = self.callable_call_info(callee_ty);
+        let callable = self.indirect_call_info(callee_ty);
 
         if let TyKind::FnDef(def_id, args) = *callee_ty.kind() {
             if let Some(instance) = self.resolve_callable_instance(def_id, args) {
+                // A blanket impl instantiated with dyn Self is still a static call.
+                let callable = match callable {
+                    Some(CallableEdgeInfo::DynDispatch { .. })
+                        if !matches!(instance.def, ty::InstanceKind::Virtual(..)) =>
+                    {
+                        None
+                    }
+                    other => other,
+                };
                 self.emit_instance_with_callable(instance, kind, span, callable);
             } else {
                 self.emit_indirect_with_callable(
@@ -337,18 +346,21 @@ impl<'tcx> BodyEdgeCollector<'tcx> {
         );
     }
 
-    fn callable_call_info(&self, callee_ty: Ty<'tcx>) -> Option<CallableEdgeInfo<'tcx>> {
+    fn indirect_call_info(&self, callee_ty: Ty<'tcx>) -> Option<CallableEdgeInfo<'tcx>> {
         match *callee_ty.kind() {
             TyKind::FnPtr(..) => Some(CallableEdgeInfo::FnPointer {
                 fn_ptr_ty: callee_ty,
             }),
             TyKind::FnDef(def_id, args) => {
-                let trait_def_id = self.tcx.trait_of_assoc(def_id)?;
+                self.tcx.trait_of_assoc(def_id)?;
                 let self_ty = self_arg_ty(args)?;
                 if matches!(self_ty.kind(), TyKind::FnPtr(..)) {
                     Some(CallableEdgeInfo::FnPointer { fn_ptr_ty: self_ty })
-                } else if ty_contains_dyn(self_ty) {
-                    Some(CallableEdgeInfo::DynDispatch { trait_def_id })
+                } else if self_ty.is_trait() {
+                    Some(CallableEdgeInfo::DynDispatch {
+                        method: def_id,
+                        args,
+                    })
                 } else {
                     None
                 }
@@ -359,25 +371,15 @@ impl<'tcx> BodyEdgeCollector<'tcx> {
 
     fn emit_vtable_entries(&mut self, source_ty: Ty<'tcx>, target_ty: Ty<'tcx>, span: Span) {
         let tcx = self.tcx;
-        for_each_dyn_vtable_method(tcx, source_ty, target_ty, |trait_def_id, instance| {
+        for_each_dyn_vtable_method(tcx, source_ty, target_ty, |instance| {
             self.emit_instance_with_callable(
                 instance,
                 ReachabilityEdgeKind::VTableEntry,
                 span,
-                Some(CallableEdgeInfo::DynDispatch { trait_def_id }),
+                None,
             );
         });
     }
-}
-
-fn generic_args_contain_dyn(args: GenericArgsRef<'_>) -> bool {
-    args.iter().any(|arg| {
-        if let ty::GenericArgKind::Type(ty) = arg.kind() {
-            ty_contains_dyn(ty)
-        } else {
-            false
-        }
-    })
 }
 
 fn self_arg_ty(args: GenericArgsRef<'_>) -> Option<Ty<'_>> {
@@ -390,34 +392,14 @@ fn self_arg_ty(args: GenericArgsRef<'_>) -> Option<Ty<'_>> {
     })
 }
 
-fn ty_contains_dyn(ty: Ty<'_>) -> bool {
-    match ty.kind() {
-        TyKind::Dynamic(..) => true,
-        TyKind::Ref(_, inner, _)
-        | TyKind::RawPtr(inner, _)
-        | TyKind::Array(inner, _)
-        | TyKind::Slice(inner) => ty_contains_dyn(*inner),
-        TyKind::Tuple(types) => types.iter().any(ty_contains_dyn),
-        TyKind::Adt(_, args)
-        | TyKind::FnDef(_, args)
-        | TyKind::Closure(_, args)
-        | TyKind::CoroutineClosure(_, args)
-        | TyKind::Coroutine(_, args)
-        | TyKind::CoroutineWitness(_, args)
-        | TyKind::Alias(ty::AliasTy { args, .. }) => generic_args_contain_dyn(args),
-        _ => false,
-    }
-}
-
 /// Visits the resolved vtable methods a `source_ty` to `target_ty` unsizing
-/// introduces, with the principal trait's def id. This single pipeline backs
-/// both dyn-dispatch attribution modes, so cast-site and call-site edges
-/// cannot drift apart.
+/// introduces. Cast-site graph mode exposes every vtable method; call-site
+/// resolution instead uses concrete receiver evidence from `dyn_dispatch`.
 fn for_each_dyn_vtable_method<'tcx>(
     tcx: TyCtxt<'tcx>,
     source_ty: Ty<'tcx>,
     target_ty: Ty<'tcx>,
-    mut visit: impl FnMut(DefId, Instance<'tcx>),
+    mut visit: impl FnMut(Instance<'tcx>),
 ) {
     for (impl_ty, trait_ty) in dyn_trait_tails(source_ty, target_ty) {
         let TyKind::Dynamic(predicates, _) = trait_ty.kind() else {
@@ -427,7 +409,6 @@ fn for_each_dyn_vtable_method<'tcx>(
             continue;
         };
 
-        let trait_def_id = principal.def_id();
         let trait_ref =
             tcx.instantiate_bound_regions_with_erased(principal.with_self_ty(tcx, impl_ty));
         if trait_ref.has_param() {
@@ -436,13 +417,16 @@ fn for_each_dyn_vtable_method<'tcx>(
 
         for entry in tcx.vtable_entries(trait_ref) {
             if let VtblEntry::Method(instance) = entry {
-                visit(trait_def_id, *instance);
+                visit(*instance);
             }
         }
     }
 }
 
-fn dyn_trait_tails<'tcx>(source_ty: Ty<'tcx>, target_ty: Ty<'tcx>) -> Vec<(Ty<'tcx>, Ty<'tcx>)> {
+pub(crate) fn dyn_trait_tails<'tcx>(
+    source_ty: Ty<'tcx>,
+    target_ty: Ty<'tcx>,
+) -> Vec<(Ty<'tcx>, Ty<'tcx>)> {
     let mut tails = Vec::new();
     collect_dyn_trait_tails(source_ty, target_ty, &mut tails);
     tails

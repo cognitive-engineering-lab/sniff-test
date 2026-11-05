@@ -13,7 +13,7 @@ expression: "report[\"findings\"]"
       "crate": "supertrait_dyn_dispatch",
       "scope": "workspace"
     },
-    "reason": "call to `supertrait_dyn_dispatch::Super::risky` with a documented `# Panics` obligation has no recorded `// PANIC:` justification",
+    "reason": "call to `<supertrait_dyn_dispatch::Widget as supertrait_dyn_dispatch::Super>::risky` with a documented `# Panics` obligation has no recorded `// PANIC:` justification",
     "root": "supertrait_dyn_dispatch::call_supertrait_method",
     "root-kind": "concrete",
     "root-span": "src/lib.rs:22:1: 22:42",
@@ -21,35 +21,10 @@ expression: "report[\"findings\"]"
       "status": "verified-absent"
     },
     "span": "src/lib.rs:24:5: 24:23",
-    "target": "supertrait_dyn_dispatch::Super::risky",
+    "target": "<supertrait_dyn_dispatch::Widget as supertrait_dyn_dispatch::Super>::risky",
     "trace": [
-      "src/lib.rs:24:5: 24:23: supertrait_dyn_dispatch::call_supertrait_method --indirect-call-> supertrait_dyn_dispatch::Super::risky"
+      "src/lib.rs:24:5: 24:23: supertrait_dyn_dispatch::call_supertrait_method --indirect-call-> <supertrait_dyn_dispatch::Widget as supertrait_dyn_dispatch::Super>::risky"
     ],
-    "trace-id": "0000cec6ae"
-  },
-  {
-    "effect": "safety",
-    "finding": "unresolved-call-target",
-    "function": "supertrait_dyn_dispatch::call_supertrait_method",
-    "kind": "effect",
-    "level": "warn",
-    "owner": {
-      "crate": "supertrait_dyn_dispatch",
-      "scope": "workspace"
-    },
-    "reason": "safety effect coverage is incomplete for unresolved dynamic-dispatch call target (supertrait_dyn_dispatch::Super::risky)",
-    "root": "supertrait_dyn_dispatch::call_supertrait_method",
-    "root-kind": "concrete",
-    "root-span": "src/lib.rs:22:1: 22:42",
-    "span": "src/lib.rs:24:5: 24:23",
-    "target": "supertrait_dyn_dispatch::Super::risky",
-    "trace": [
-      "src/lib.rs:24:5: 24:23: supertrait_dyn_dispatch::call_supertrait_method --indirect-call-> supertrait_dyn_dispatch::Super::risky"
-    ],
-    "trace-id": "0000fffd0b",
-    "unresolved-call": {
-      "coverage": "none",
-      "mechanism": "dynamic-dispatch"
-    }
+    "trace-id": "000036a309"
   }
 ]

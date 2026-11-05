@@ -1,0 +1,6 @@
+[analysis]
+report-roots = ["dyn_dispatch_app::main", "dyn_dispatch_app::justified", "dyn_dispatch_app::propagated"]
+[panic]
+trusted-boundary-namespaces = ["core", "std", "alloc"]
+[safety]
+trusted-boundary-namespaces = ["core", "std", "alloc"]

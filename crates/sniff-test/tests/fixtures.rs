@@ -1193,3 +1193,101 @@ fn marker_header_counts_match_groups_for_comments_and_overrides() {
         }
     }
 }
+
+#[test]
+fn dyn_dispatch_consumer_resolves_library_calls_and_preserves_coverage() {
+    let repo = repo_root();
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path().join("dyn_dispatch_consumer");
+    copy_fixture_dir(&repo.join("tests/fixtures/dyn_dispatch_consumer"), &root).unwrap();
+    let binary = PathBuf::from(env!("CARGO_BIN_EXE_cargo-sniff-test"));
+    let sysroot = rustc_sysroot();
+    let _guard = lock_nested_cargo();
+    let run = |manifest: &str, success: bool| {
+        let mut command = Command::new(&binary);
+        clean_cargo_package_env(&mut command);
+        let output = CommandOutput::from_output(
+            command
+                .current_dir(root.join("app"))
+                .args([
+                    "-e",
+                    "panic",
+                    "-e",
+                    "safety",
+                    "--message-format",
+                    "json",
+                    "--manifest",
+                    manifest,
+                ])
+                .output()
+                .unwrap(),
+        );
+        assert_eq!(output.status.success(), success, "{}", output.stderr);
+        parse_messages(
+            &output,
+            &root,
+            &sysroot,
+            "dyn_dispatch_consumer",
+            "dyn_dispatch_consumer",
+        )
+    };
+    let cold = run("sniff-test.toml", true);
+    let warm = run("sniff-test.toml", true);
+    assert_eq!(
+        cold, warm,
+        "consumer dyn targets must survive a warm dependency cache"
+    );
+    let findings = cold
+        .iter()
+        .flat_map(|r| r["findings"].as_array().unwrap())
+        .collect::<Vec<_>>();
+    for effect in ["panic", "safety"] {
+        assert!(
+            findings
+                .iter()
+                .any(|f| f["root"] == "dyn_dispatch_app::main" && f["effect"] == effect),
+            "{findings:#?}"
+        );
+    }
+    assert!(
+        !findings
+            .iter()
+            .any(|f| f["root"] == "dyn_dispatch_app::justified"),
+        "{findings:#?}"
+    );
+    assert!(
+        findings
+            .iter()
+            .any(|f| f["root"] == "dyn_dispatch_app::propagated"
+                && f["target"] == "dyn_dispatch_dep::propagated"),
+        "{findings:#?}"
+    );
+    assert!(!format!("{findings:?}").contains("unused"));
+    assert!(
+        findings
+            .iter()
+            .any(|f| format!("{}", f["trace"]).contains("dyn_dispatch_dep::drive")),
+        "{findings:#?}"
+    );
+    let silent = run("unresolved.toml", true);
+    assert!(
+        silent
+            .iter()
+            .all(|r| r["findings"].as_array().unwrap().is_empty()),
+        "{silent:#?}"
+    );
+    let warned = run("unresolved-warn.toml", true);
+    let warned = warned
+        .iter()
+        .flat_map(|r| r["findings"].as_array().unwrap())
+        .collect::<Vec<_>>();
+    assert_eq!(warned.len(), 2, "{warned:#?}");
+    assert!(
+        warned.iter().all(|f| f["reason"]
+            .as_str()
+            .unwrap()
+            .contains("unresolved dynamic-dispatch")),
+        "{warned:#?}"
+    );
+    run("unresolved-deny.toml", false);
+}

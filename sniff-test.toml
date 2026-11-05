@@ -121,6 +121,8 @@ invocation = "warn"
 # invalid-enum-construction = "deny"
 
 [panic.coverage]
+# Dyn parameters without compatible reachable casts retain unknown coverage.
+# Allow by default for standalone libraries; use warn or deny to report it.
 unresolved-call-target = "allow"
 # A halted traversal leaves the effect unknown.
 analysis-incomplete = "deny"
@@ -172,5 +174,6 @@ operation = "warn"
 # unsafe-binder-cast = "warn"
 
 [safety.coverage]
+# Also controls dyn calls whose concrete receiver types are not observed.
 unresolved-call-target = "allow"
 analysis-incomplete = "deny"

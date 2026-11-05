@@ -114,10 +114,8 @@ pub enum DynDispatchVTableEdges {
     CastSites,
     /// Record concrete vtable methods at dynamic dispatch call sites.
     ///
-    /// This is a shared-index, trait-keyed approximation. Concrete targets
-    /// observed by one query become graph edges that later queries against the
-    /// same index can reuse. Each matching dyn call may therefore be connected
-    /// to every concrete impl observed so far.
+    /// A query-local RTA approximation: reachable casts supply concrete receiver
+    /// types, and only the invoked method is resolved for compatible types.
     CallSites,
 }
 
@@ -238,7 +236,9 @@ impl<'tcx> ReachabilityIndex<'tcx> {
             options,
             visited_instances: HashSet::new(),
             visited_bridge_nodes: HashSet::new(),
-            pending_callable_calls: HashMap::new(),
+            pending_indirect_calls: HashMap::new(),
+            dyn_casts: HashMap::new(),
+            pending_dyn_calls: HashMap::new(),
             queue: root_node_ids
                 .into_iter()
                 .map(|node_id| QueueItem { node_id, depth: 0 })
@@ -353,13 +353,15 @@ struct ReachabilityQuery<'a, 'tcx, H> {
     options: ReachabilityOptions,
     visited_instances: HashSet<Instance<'tcx>>,
     visited_bridge_nodes: HashSet<ReachabilityNodeId>,
-    pending_callable_calls: HashMap<CallableEdgeInfo<'tcx>, Vec<PendingCallableCallSite>>,
+    pending_indirect_calls: HashMap<CallableEdgeInfo<'tcx>, Vec<PendingIndirectCallSite>>,
+    dyn_casts: HashMap<DefId, Vec<crate::dyn_dispatch::DynCast<'tcx>>>,
+    pending_dyn_calls: HashMap<DefId, Vec<PendingIndirectCallSite>>,
     queue: VecDeque<QueueItem>,
     snapshot: ReachabilitySnapshot,
 }
 
 #[derive(Debug, Clone, Copy)]
-struct PendingCallableCallSite {
+struct PendingIndirectCallSite {
     item: QueueItem,
     edge_id: ReachabilityEdgeId,
 }
@@ -436,7 +438,8 @@ where
             return None;
         }
         let callable = dynamic.then_some(CallableEdgeInfo::DynDispatch {
-            trait_def_id: tcx.parent(model.method),
+            method: model.method,
+            args,
         });
         let id = self.index.graph.push_edge_with_callable(
             ReachabilityEdge::new(
@@ -509,6 +512,7 @@ where
             if self.index.graph.edge_parent(edge_id).is_some() {
                 continue;
             }
+            self.register_dyn_cast(edge_id);
             self.register_erased_callable_target(edge_id);
             let edge = self.index.graph.edge(edge_id);
             if !self.edge_matches_options(edge) {
@@ -516,7 +520,7 @@ where
             }
 
             self.accept_edge(item, edge_id);
-            self.register_callable_call_site(item, edge_id);
+            self.register_indirect_call_site(item, edge_id);
         }
     }
 
@@ -568,26 +572,24 @@ where
             return;
         };
 
-        for key in self.callable_target_keys(callable) {
-            if !insert_unique(self.index.callable_targets.entry(key).or_default(), target) {
-                continue;
-            }
-            if !self.call_site_attribution_enabled(key) {
-                continue;
-            }
-
-            let pending = self
-                .pending_callable_calls
-                .get(&key)
-                .cloned()
-                .unwrap_or_default();
-            for call_site in pending {
-                self.accept_callable_target_edge(call_site.item, call_site.edge_id, target);
-            }
+        if !insert_unique(
+            self.index.callable_targets.entry(callable).or_default(),
+            target,
+        ) || !self.call_site_attribution_enabled(callable)
+        {
+            return;
+        }
+        let pending = self
+            .pending_indirect_calls
+            .get(&callable)
+            .cloned()
+            .unwrap_or_default();
+        for call_site in pending {
+            self.accept_callable_target_edge(call_site.item, call_site.edge_id, target);
         }
     }
 
-    fn register_callable_call_site(&mut self, item: QueueItem, edge_id: ReachabilityEdgeId) {
+    fn register_indirect_call_site(&mut self, item: QueueItem, edge_id: ReachabilityEdgeId) {
         if !matches!(
             self.index.graph.edge(edge_id).kind,
             ReachabilityEdgeKind::DirectCall
@@ -605,8 +607,20 @@ where
             return;
         }
 
-        let call_site = PendingCallableCallSite { item, edge_id };
-        self.pending_callable_calls
+        let call_site = PendingIndirectCallSite { item, edge_id };
+        if let CallableEdgeInfo::DynDispatch { method, .. } = callable {
+            if let Some(trait_id) = self.index.tcx.trait_of_assoc(method) {
+                self.pending_dyn_calls
+                    .entry(trait_id)
+                    .or_default()
+                    .push(call_site);
+                for cast in self.dyn_casts.get(&trait_id).cloned().unwrap_or_default() {
+                    self.resolve_dyn_cast(call_site, cast);
+                }
+            }
+            return;
+        }
+        self.pending_indirect_calls
             .entry(callable)
             .or_default()
             .push(call_site);
@@ -633,17 +647,48 @@ where
         }
     }
 
-    fn callable_target_keys(
-        &self,
-        callable: CallableEdgeInfo<'tcx>,
-    ) -> Vec<CallableEdgeInfo<'tcx>> {
-        match callable {
-            CallableEdgeInfo::FnPointer { .. } => vec![callable],
-            CallableEdgeInfo::DynDispatch { trait_def_id } => {
-                rustc_middle::ty::elaborate::supertrait_def_ids(self.index.tcx, trait_def_id)
-                    .map(|trait_def_id| CallableEdgeInfo::DynDispatch { trait_def_id })
-                    .collect()
+    fn register_dyn_cast(&mut self, edge_id: ReachabilityEdgeId) {
+        if self.options.dyn_dispatch_vtable_edges != DynDispatchVTableEdges::CallSites {
+            return;
+        }
+        let edge = self.index.graph.edge(edge_id);
+        let ReachabilityNodeKind::DynObjectCast {
+            source_ty,
+            target_ty,
+        } = self.index.graph.node(edge.target).kind
+        else {
+            return;
+        };
+        for cast in crate::dyn_dispatch::casts(self.index.tcx, source_ty, target_ty) {
+            let key = cast.trait_ref.def_id;
+            if !insert_unique(self.dyn_casts.entry(key).or_default(), cast) {
+                continue;
             }
+            let pending = self
+                .pending_dyn_calls
+                .get(&key)
+                .cloned()
+                .unwrap_or_default();
+            for site in pending {
+                self.resolve_dyn_cast(site, cast);
+            }
+        }
+    }
+
+    fn resolve_dyn_cast(
+        &mut self,
+        site: PendingIndirectCallSite,
+        cast: crate::dyn_dispatch::DynCast<'tcx>,
+    ) {
+        let Some(CallableEdgeInfo::DynDispatch { method, args }) =
+            self.index.graph.edge_callable(site.edge_id)
+        else {
+            return;
+        };
+        match crate::dyn_dispatch::resolve(self.index.tcx, cast, method, args) {
+            Ok(Some(target)) => self.accept_callable_target_edge(site.item, site.edge_id, target),
+            Ok(None) => {}
+            Err(()) => self.snapshot.mark_dyn_resolution_incomplete(site.edge_id),
         }
     }
 
@@ -754,7 +799,7 @@ fn is_callable_target_edge(
             edge_kind,
             ReachabilityEdgeKind::FnPointerReify | ReachabilityEdgeKind::ClosureFnPointerReify
         ),
-        CallableEdgeInfo::DynDispatch { .. } => edge_kind == ReachabilityEdgeKind::VTableEntry,
+        CallableEdgeInfo::DynDispatch { .. } => false,
     }
 }
 

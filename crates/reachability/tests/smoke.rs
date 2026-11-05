@@ -194,6 +194,129 @@ pub fn call_dyn_target(target: &dyn Worker) {
 }
 ";
 
+const RTA_SOURCE: &str = r#"
+pub trait Worker {
+    fn work(&self);
+    fn unused(&self) { panic!("unused"); }
+}
+pub struct First;
+pub struct Second;
+pub struct Dead;
+impl Worker for First {
+    fn work(&self) { consume(&Second); }
+}
+impl Worker for Second { fn work(&self) {} }
+impl Worker for Dead { fn work(&self) {} }
+pub fn consume(value: &dyn Worker) { value.work(); }
+pub fn expose() -> Box<dyn Worker> { Box::new(First) }
+pub fn fixed_point() { let value = expose(); consume(&*value); }
+pub fn unreachable() { consume(&Dead); }
+
+pub trait Generic<T> { fn run(&self); }
+impl Generic<u8> for First { fn run(&self) {} }
+impl Generic<u16> for Second { fn run(&self) {} }
+pub fn generic_entry() {
+    let _other: &dyn Generic<u16> = &Second;
+    let value: &dyn Generic<u8> = &First;
+    value.run();
+}
+
+pub trait Associated { type Item; fn run(&self); }
+impl Associated for First { type Item = u8; fn run(&self) {} }
+impl Associated for Second { type Item = u16; fn run(&self) {} }
+pub fn assoc_call(value: &dyn Associated<Item = u8>) { value.run(); }
+pub fn associated_entry() {
+    let _other: &dyn Associated<Item = u16> = &Second;
+    assoc_call(&First);
+}
+
+pub trait Parent<T> { fn run(&self) {} }
+pub trait Child: Parent<u8> {}
+impl Parent<u8> for First {}
+impl Child for First {}
+pub fn parent_call(value: &dyn Parent<u8>) { value.run(); }
+pub fn upcast_entry() {
+    let child: &dyn Child = &First;
+    parent_call(child);
+}
+
+pub fn generic_cast<T: Worker>(value: &T) { consume(value); }
+pub fn generic_cast_entry() { generic_cast(&Second); }
+pub fn raw_entry() {
+    let value: *const dyn Worker = &Second;
+    unsafe { (*value).work(); }
+}
+
+pub trait Static { fn static_call(&self); }
+impl<T: ?Sized> Static for T { fn static_call(&self) {} }
+pub fn blanket_entry() {
+    let value: &dyn Worker = &Second;
+    value.static_call();
+}
+
+"#;
+
+fn rta_graph(root: &str) -> String {
+    let project = TempProject::new(RTA_SOURCE);
+    let mut callbacks = DumpCallbacks {
+        root_suffix: root.to_owned(),
+        dyn_dispatch_vtable_edges: DynDispatchVTableEdges::CallSites,
+        ..DumpCallbacks::default()
+    };
+    run_test_compiler(&project, &mut callbacks);
+    callbacks.output.expect("RTA graph")
+}
+
+#[test]
+fn rta_reaches_a_fixed_point_without_unused_methods_or_unreachable_casts() {
+    let output = rta_graph("fixed_point");
+    assert!(
+        output.contains("DynDispatchVTableEntry -> <First as Worker>::work"),
+        "{output}"
+    );
+    assert!(
+        output.contains("DynDispatchVTableEntry -> <Second as Worker>::work"),
+        "{output}"
+    );
+    assert!(!output.contains("<Dead as Worker>::work"), "{output}");
+    assert!(!output.contains("Worker::unused"), "{output}");
+}
+
+#[test]
+fn rta_distinguishes_trait_arguments_and_associated_types() {
+    for root in ["generic_entry", "associated_entry"] {
+        let output = rta_graph(root);
+        let targets = output
+            .lines()
+            .filter(|line| line.contains("DynDispatchVTableEntry"))
+            .collect::<Vec<_>>();
+        assert_eq!(targets.len(), 1, "{output}");
+        assert!(targets[0].contains("First"), "{output}");
+    }
+}
+
+#[test]
+fn rta_does_not_treat_blanket_impls_on_dyn_self_as_virtual_calls() {
+    let output = rta_graph("blanket_entry");
+    assert!(!output.contains("DynDispatchVTableEntry"), "{output}");
+}
+
+#[test]
+fn rta_handles_upcasts_default_methods_and_concrete_generic_casts() {
+    let output = rta_graph("upcast_entry");
+    assert!(
+        output.contains("DynDispatchVTableEntry -> Parent::run"),
+        "{output}"
+    );
+    for root in ["generic_cast_entry", "raw_entry"] {
+        let output = rta_graph(root);
+        assert!(
+            output.contains("DynDispatchVTableEntry -> <Second as Worker>::work"),
+            "{output}"
+        );
+    }
+}
+
 const EXPANDED_LEAF_SOURCE: &str = r"
 pub fn entry() {
     leaf();
@@ -387,7 +510,7 @@ fn call_site_vtable_edges_are_filtered_to_the_called_trait() {
 }
 
 #[test]
-fn call_site_vtable_edges_are_trait_wide_within_a_body() {
+fn call_site_targets_include_all_observed_implementations() {
     let project = TempProject::new(DEMO_SOURCE);
     let mut callbacks = DumpCallbacks {
         root_suffix: String::from("mixed_same_dyn_trait"),
@@ -433,7 +556,7 @@ fn function_pointer_targets_are_reused_across_queries() {
 }
 
 #[test]
-fn dyn_dispatch_targets_are_reused_across_queries() {
+fn dyn_dispatch_targets_do_not_leak_across_queries() {
     let project = TempProject::new(SHARED_CALLABLE_SOURCE);
     let mut callbacks = SharedCallableCallbacks {
         scenario: SharedCallableScenario::DynDispatchReuse,
@@ -441,7 +564,7 @@ fn dyn_dispatch_targets_are_reused_across_queries() {
     };
     run_test_compiler(&project, &mut callbacks);
 
-    assert_eq!(callbacks.result, Some(1));
+    assert_eq!(callbacks.result, Some(0));
 }
 
 #[test]
@@ -810,10 +933,24 @@ impl Callbacks for SharedCallableCallbacks {
             SharedCallableScenario::DynDispatchReuse => {
                 let mut index = ReachabilityIndex::new(tcx);
                 let hooks = NoopReachabilityHooks;
-                index.query(
-                    ReachabilityRoot::LocalBody(find_local_body(tcx, "expose_dyn_target")),
-                    &hooks,
-                    call_site_options(),
+                let first = index
+                    .query_many(
+                        [
+                            ReachabilityRoot::LocalBody(find_local_body(tcx, "expose_dyn_target")),
+                            ReachabilityRoot::LocalBody(find_local_body(tcx, "call_dyn_target")),
+                        ],
+                        &hooks,
+                        call_site_options(),
+                    )
+                    .unwrap();
+                assert_eq!(
+                    index
+                        .graph()
+                        .view(&first)
+                        .edges()
+                        .filter(|edge| edge.kind() == ReachabilityEdgeKind::DynDispatchVTableEntry)
+                        .count(),
+                    1
                 );
                 let snapshot = index.query(
                     ReachabilityRoot::LocalBody(find_local_body(tcx, "call_dyn_target")),

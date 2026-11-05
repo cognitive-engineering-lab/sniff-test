@@ -208,8 +208,27 @@ contract is the only caller-visible summary for that domain; the unknown
 implementation is not attributed or traced. Without such a contract,
 `unresolved-call-target` controls the remaining coverage gap. Unresolved
 function-pointer calls have no declaration fallback and remain coverage gaps.
-Sniff-test does not guess either kind of target by joining unrelated call sites
-that happen to share an erased type.
+Dyn calls additionally use a flow-insensitive, cast-based rapid type analysis:
+reachable casts from concrete types to trait objects supply candidate receiver
+types, and each virtual call resolves only its invoked method for compatible
+candidates. Reaching those methods may expose further casts, until a fixed point
+is reached. Generic trait arguments, associated types, and supertraits participate
+in matching. Different objects of the same trait share candidate types; this is
+an approximation, not a points-to analysis.
+
+Consumer analysis can use its casts to resolve calls inside dependency MIR.
+Consumer-specific results are stored as overlays in the consumer artifact, not
+in the dependency's reusable facts. Candidate sets are local to each extraction
+root-set query; reusable library extraction uses all analyzable local bodies as
+roots, while executable extraction uses the selected report roots.
+
+When no compatible cast is found, such as a standalone library accepting a dyn
+parameter from an unknown caller, the call retains unresolved coverage. The
+`[effect.coverage].unresolved-call-target` default is `"allow"`; set it to `"warn"`
+or `"deny"` to expose these gaps. Explicit trait contracts still apply. Observed
+candidates are treated as the complete approximation, so unobserved externally
+supplied types remain a limitation. Function-pointer calls retain their existing
+invocation-local resolution behavior.
 
 `[panic.lints]` and `[safety.lints]` set `ambiguous-marker` and
 `ambiguous-requirement` independently. `warn` reports the ambiguity;
@@ -323,7 +342,8 @@ and dependencies work. `spawn_many`, async blocking tasks, `spawn_unchecked`,
 third-party thread APIs, process spawning, and other runtimes are not modeled.
 `block_on` keeps ordinary call-graph analysis.
 
-Boxed dyn futures currently retain conservative dynamic-dispatch coverage gaps.
+Boxed dyn futures use cast-derived targets when compatible reachable casts are
+available; otherwise they retain dynamic-dispatch coverage gaps.
 For custom futures and concrete pointer wrappers, inherited `Future::poll`
 contracts can stop payload tracing at the polling boundary.
 Enable `[panic.coverage].unresolved-call-target = "warn"` to display panic coverage gaps.

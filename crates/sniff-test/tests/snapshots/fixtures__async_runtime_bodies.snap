@@ -112,27 +112,31 @@ expression: "report[\"findings\"]"
   },
   {
     "effect": "panic",
-    "finding": "documented-obligation",
-    "function": "async_runtime_bodies::poll_erased",
+    "finding": "concrete-invocation",
+    "function": "async_runtime_bodies::async_root::{closure#0}",
     "kind": "effect",
     "level": "deny",
+    "operation": "configured-invocation",
     "owner": {
       "crate": "async_runtime_bodies",
       "scope": "workspace"
     },
-    "reason": "call to `core::future::future::Future::poll` with a documented `# Panics` obligation has no recorded `// PANIC:` justification",
+    "reason": "panic invocation to `core::panicking::panic_fmt` has no recorded `// PANIC:` justification",
     "root": "async_runtime_bodies::poll_erased",
     "root-kind": "concrete",
     "root-span": "src/lib.rs:30:1: 30:52",
     "source-evidence": {
       "status": "verified-absent"
     },
-    "span": "src/lib.rs:33:13: 33:28",
-    "target": "core::future::future::Future::poll",
+    "span": "src/lib.rs:2:5: 2:46",
+    "target": "core::panicking::panic_fmt",
     "trace": [
-      "src/lib.rs:33:13: 33:28: async_runtime_bodies::poll_erased --indirect-call-> core::future::future::Future::poll"
+      "src/lib.rs:33:13: 33:28: async_runtime_bodies::poll_erased --indirect-call-> async_runtime_bodies::async_root::{closure#0}",
+      "src/lib.rs:2:5: 2:46: async_runtime_bodies::async_root::{closure#0} --macro-expansion-> macro std::macros::panic",
+      "src/lib.rs:2:5: 2:46: macro std::macros::panic --macro-expansion-> macro core::panic::panic_2021",
+      "[SYSROOT]/lib/rustlib/src/rust/library/core/src/panic.rs:62:9: 62:73: macro core::panic::panic_2021 --direct-call-> core::panicking::panic_fmt"
     ],
-    "trace-id": "000454cc49"
+    "trace-id": "0004207e59"
   },
   {
     "effect": "panic",
