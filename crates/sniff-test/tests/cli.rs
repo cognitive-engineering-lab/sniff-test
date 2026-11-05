@@ -3364,3 +3364,117 @@ fn source_justification_overrides_are_reapplied_without_contaminating_dependency
     fs::write(&path, configured).unwrap();
     assert_eq!(analyze(), overridden);
 }
+
+#[test]
+#[allow(
+    clippy::too_many_lines,
+    reason = "verify shared physical source and version isolation in the same compiled fixture"
+)]
+fn source_justification_overrides_isolate_crates_and_versions_sharing_source_files() {
+    let temp = tempfile::tempdir().expect("temporary shared-source fixture");
+    let root = temp.path().join("source_justification_overrides");
+    copy_fixture_dir(
+        &repo_root().join("tests/fixtures/source_justification_overrides"),
+        &root,
+    )
+    .expect("copy source justification fixture");
+    let source_path = root.join("dependency/src/lib.rs").canonicalize().unwrap();
+    let local_source = root.join("src/lib.rs");
+    let mut code = fs::read_to_string(&local_source).unwrap();
+    writeln!(code, "\n#[path = {source_path:?}]\nmod mirrored;").unwrap();
+    writeln!(
+        code,
+        "pub fn mirrored_control() {{ mirrored::selected(); }}"
+    )
+    .unwrap();
+    fs::write(&local_source, code).unwrap();
+    let roots = [
+        "local_selected",
+        "local_control",
+        "named_selected",
+        "named_control",
+        "dependency_selected",
+        "dependency_control",
+        "mirrored_control",
+    ]
+    .map(|name| format!("source_justification_overrides::{name}"));
+    let config_path = root.join("sniff-test.toml");
+    let config = fs::read_to_string(&config_path).unwrap();
+    fs::write(
+        &config_path,
+        config.replacen(
+            "[analysis]",
+            &format!(
+                "[analysis]\nreport-roots = {}",
+                serde_json::to_string(&roots).unwrap()
+            ),
+            1,
+        ),
+    )
+    .unwrap();
+    let cache_dir = temp.path().join("cache");
+    let binary = PathBuf::from(env!("CARGO_BIN_EXE_cargo-sniff-test"));
+    let analyze = || {
+        let mut command = Command::new(&binary);
+        clean_cargo_package_env(&mut command);
+        let output = command
+            .args([
+                "--message-format",
+                "json",
+                "--color",
+                "never",
+                "--cache-dir",
+            ])
+            .arg(&cache_dir)
+            .current_dir(&root)
+            .output()
+            .unwrap();
+        assert_eq!(
+            output.status.code(),
+            Some(101),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let report: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+        report["findings"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|finding| finding["root"].as_str().unwrap().to_owned())
+            .collect::<std::collections::BTreeSet<_>>()
+    };
+    let _cargo_guard = lock_nested_cargo();
+    let overridden = analyze();
+    assert_eq!(overridden.len(), 4);
+    assert!(overridden.contains("source_justification_overrides::mirrored_control"));
+    assert!(!overridden.contains("source_justification_overrides::dependency_selected"));
+    let shared_source_id = |crate_name| {
+        let cache = artifact_cache_for_crate(&cache_dir, crate_name);
+        let document: serde_json::Value =
+            serde_json::from_slice(&fs::read(cache).unwrap()).unwrap();
+        document["facts"]["source-files"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|source| source["filename"].as_str() == source_path.to_str())
+            .expect("both crates compiled the exact same source file")["id"]
+            .clone()
+    };
+    assert_eq!(
+        shared_source_id("source_justification_overrides"),
+        shared_source_id("justification_dependency")
+    );
+    let override_path = root.join("override.toml");
+    let configured = fs::read_to_string(&override_path).unwrap();
+    let mismatched = configured.replace(
+        "[overrides.crates.\"justification_dependency\".\"1.2.3\"]",
+        "[overrides.crates.\"justification_dependency\".\"1.2.4\"]",
+    );
+    assert_ne!(configured, mismatched);
+    fs::write(&override_path, mismatched).unwrap();
+    let mismatched = analyze();
+    assert_eq!(mismatched.len(), 5);
+    assert!(mismatched.contains("source_justification_overrides::dependency_selected"));
+    assert!(mismatched.contains("source_justification_overrides::mirrored_control"));
+    assert!(!mismatched.contains("source_justification_overrides::local_selected"));
+}

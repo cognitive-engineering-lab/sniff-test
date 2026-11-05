@@ -14,3 +14,5 @@ numbers in sync with the corresponding source statements.
 The related `source_justification_binary` fixture keeps a marker in an unselected
 binary function. CLI coverage toggles the override file against the same cached
 dependency and checks that injections are reapplied without persisting markers.
+Another CLI regression compiles the dependency source as a local module too,
+verifies both crates share a source ID, and checks crate and version isolation.
