@@ -534,6 +534,46 @@ fn run_named_case(name: &'static str, fixture_name: &'static str, case: &Case) {
     }
 }
 
+#[test]
+fn marker_resolution_preserves_line_and_statement_levels() {
+    let reports = run_case(
+        &repo_root(),
+        &PathBuf::from(env!("CARGO_BIN_EXE_cargo-sniff-test")),
+        &rustc_sysroot(),
+        "marker_resolution_preserves_line_and_statement_levels",
+        "chain_markers",
+        &Case::new().args(&["--effect", "panic"]),
+    );
+    let [report] = reports.as_slice() else {
+        panic!("expected one workspace report")
+    };
+    let findings = report["findings"].as_array().expect("findings");
+    // The marked line, multiline let/let-else statements, and block tails must
+    // all discharge their obligations. Two separate markers in one tuple
+    // must not become ambiguous through statement fallback.
+    let actual = findings
+        .iter()
+        .map(|finding| {
+            (
+                finding["root"].as_str().expect("root"),
+                finding["finding"].as_str().expect("finding"),
+            )
+        })
+        .collect::<BTreeSet<_>>();
+    let expected = BTreeSet::from([
+        (
+            "chain_markers::marked_and_unmarked_chain_links",
+            "documented-obligation",
+        ),
+        (
+            "chain_markers::whole_statement_marker_is_ambiguous",
+            "ambiguous-marker",
+        ),
+    ]);
+    assert_eq!(actual, expected, "{findings:#?}");
+    assert_eq!(findings.len(), 2, "{findings:#?}");
+}
+
 fn run_case(
     repo: &Path,
     cargo: &Path,

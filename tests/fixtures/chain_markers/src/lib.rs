@@ -54,3 +54,40 @@ pub fn tail_expression_marker_with_semicolon(widget: &Widget) {
         true,
     );
 }
+
+pub fn line_level_marker(widget: &Widget) -> bool {
+    // PANIC: the constructor guarantees the flag is set.
+    widget.risky()
+}
+
+#[rustfmt::skip]
+pub fn multiline_let_statement_marker(widget: &Widget) -> bool {
+    // PANIC: this statement's risky call satisfies its precondition.
+    let result = (
+        widget.risky(),
+        true,
+    );
+    result.0
+}
+
+#[rustfmt::skip]
+pub fn multiline_let_else_statement_marker(widget: &Widget) -> bool {
+    // PANIC: this statement's risky call satisfies its precondition.
+    let Some(result) = Some(
+        widget.risky(),
+    ) else {
+        return false;
+    };
+    result
+}
+
+#[rustfmt::skip]
+pub fn line_marker_takes_precedence_over_statement_marker(widget: &Widget) -> bool {
+    // PANIC: statement proof for the first call.
+    let results = (
+        widget.risky(),
+        // PANIC: a separate proof for the second call.
+        widget.risky(),
+    );
+    results.0 && results.1
+}
