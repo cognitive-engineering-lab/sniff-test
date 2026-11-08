@@ -508,6 +508,13 @@ line ranges and overlapping justification ranges for the same effect are errors.
 Entries with no matching extracted call/effect remain unused, including bodies
 outside binary report roots and disabled effects.
 
+These selectors do not use source comments' statement fallback or method-segment
+lookup. In `value.first().second()`, both call spans can start at `value`, even
+when the methods occupy separate lines. Selecting that receiver line can justify
+both calls and produce marker ambiguity; selecting only a method-name line may
+match neither. A multiline `let` header also does not select nested calls whose
+source ranges start on later lines. See `tests/fixtures/source_justification_chains`.
+
 Marker bodies use the source-comment parser: optional `//` prefixes, named and
 nested requirement lists, and registered headers such as `SAFETY:` are accepted.
 Empty explanations are rejected. An injection adds justification evidence and

@@ -1,0 +1,15 @@
+[analysis]
+report-roots = [
+    "source_justification_chains::chain",
+    "source_justification_chains::statement",
+    "source_justification_chains::source_link",
+    "source_justification_chains::source_statement",
+    "source_justification_chains::source_each_link",
+]
+
+[contracts]
+override-files = ["override.toml"]
+
+[panic.lints]
+invocation = "warn"
+ambiguous-marker = "warn"

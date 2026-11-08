@@ -3291,6 +3291,124 @@ fn source_overrides_reject_stale_dependency_source_facts() {
 }
 
 #[test]
+fn source_justification_overrides_select_call_starts_in_method_chains() {
+    let temp = tempfile::tempdir().expect("override chain fixture");
+    let root = temp.path().join("source_justification_chains");
+    copy_fixture_dir(
+        &repo_root().join("tests/fixtures/source_justification_chains"),
+        &root,
+    )
+    .unwrap();
+    let source = fs::read_to_string(root.join("src/lib.rs")).unwrap();
+    let line = |text: &str| {
+        source
+            .lines()
+            .position(|value| value.trim() == text)
+            .unwrap()
+            + 1
+    };
+    let baseline = vec![
+        "chain:documented-obligation:first",
+        "chain:documented-obligation:second",
+        "statement:documented-obligation:first",
+    ];
+    let cases = [
+        (None, baseline.clone()),
+        (Some(line(".first()")), baseline.clone()),
+        (Some(line(".second();")), baseline.clone()),
+        (
+            Some(line("widget")),
+            vec![
+                "chain:ambiguous-marker:-",
+                "statement:documented-obligation:first",
+            ],
+        ),
+        (Some(line("let _result = (")), baseline),
+        (
+            Some(line("widget.first(),")),
+            vec![
+                "chain:documented-obligation:first",
+                "chain:documented-obligation:second",
+            ],
+        ),
+    ];
+    let binary = PathBuf::from(env!("CARGO_BIN_EXE_cargo-sniff-test"));
+    let cache = temp.path().join("cache");
+    let _cargo_guard = lock_nested_cargo();
+    for (selected_line, expected) in cases {
+        let mut configured =
+            String::from("[overrides.crates.\"source_justification_chains\".\"0.1.0\"]\n");
+        if let Some(line) = selected_line {
+            writeln!(
+                configured,
+                "\"src/lib.rs:{line}:{line}\" = \"PANIC: checked\""
+            )
+            .unwrap();
+        }
+        fs::write(root.join("override.toml"), configured).unwrap();
+        let actual = override_chain_findings(&root, &binary, &cache);
+        let expected = expected
+            .into_iter()
+            .chain([
+                "source_link:documented-obligation:second",
+                "source_statement:ambiguous-marker:-",
+            ])
+            .map(str::to_owned)
+            .collect::<std::collections::BTreeSet<_>>();
+        assert_eq!(actual, expected, "selector line {selected_line:?}");
+    }
+}
+
+fn override_chain_findings(
+    root: &Path,
+    binary: &Path,
+    cache: &Path,
+) -> std::collections::BTreeSet<String> {
+    let mut command = Command::new(binary);
+    clean_cargo_package_env(&mut command);
+    let output = command
+        .args([
+            "--effect",
+            "panic",
+            "--message-format",
+            "json",
+            "--color",
+            "never",
+            "--cache-dir",
+        ])
+        .arg(cache)
+        .current_dir(root)
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let reports = String::from_utf8(output.stdout).unwrap();
+    reports
+        .lines()
+        .flat_map(|line| {
+            let report: serde_json::Value = serde_json::from_str(line).unwrap();
+            report["findings"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|finding| {
+                    let last = |path: &str| path.rsplit("::").next().unwrap().to_owned();
+                    format!(
+                        "{}:{}:{}",
+                        last(finding["root"].as_str().unwrap()),
+                        finding["finding"].as_str().unwrap(),
+                        last(finding["target"].as_str().unwrap_or("-")),
+                    )
+                })
+                .collect::<Vec<_>>()
+        })
+        .collect()
+}
+
+#[test]
 fn source_justification_overrides_are_reapplied_without_contaminating_dependency_caches() {
     let temp = tempfile::tempdir().expect("temporary fixture directory");
     let root = temp.path().join("source_justification_overrides");
