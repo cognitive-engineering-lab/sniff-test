@@ -15,12 +15,28 @@ jobs:
         runs-on: macos-latest
         steps:
           - uses: actions/checkout@v4
+          - uses: actions/setup-node@v4
+            with:
+              node-version: 22
+              cache: npm
+              cache-dependency-path: crates/sniff-test-audit-gui/frontend/package-lock.json
+          - name: Build frontend assets
+            working-directory: crates/sniff-test-audit-gui/frontend
+            run: npm ci && npm run build
           - run: cargo check
 
     build:
         runs-on: macos-latest
         steps:
           - uses: actions/checkout@v4
+          - uses: actions/setup-node@v4
+            with:
+              node-version: 22
+              cache: npm
+              cache-dependency-path: crates/sniff-test-audit-gui/frontend/package-lock.json
+          - name: Build frontend assets
+            working-directory: crates/sniff-test-audit-gui/frontend
+            run: npm ci && npm run build
           - name: build in debug mode
             run: cargo build
           - name: build in release mode
@@ -30,6 +46,14 @@ jobs:
         runs-on: macos-latest
         steps:
           - uses: actions/checkout@v4
+          - uses: actions/setup-node@v4
+            with:
+              node-version: 22
+              cache: npm
+              cache-dependency-path: crates/sniff-test-audit-gui/frontend/package-lock.json
+          - name: Build frontend assets
+            working-directory: crates/sniff-test-audit-gui/frontend
+            run: npm ci && npm run build
           - name: build the binaries first
             run: cargo build
           - name: run actual tests
@@ -50,6 +74,14 @@ jobs:
         runs-on: macos-latest
         steps:
           - uses: actions/checkout@v4
+          - uses: actions/setup-node@v4
+            with:
+              node-version: 22
+              cache: npm
+              cache-dependency-path: crates/sniff-test-audit-gui/frontend/package-lock.json
+          - name: Build frontend assets
+            working-directory: crates/sniff-test-audit-gui/frontend
+            run: npm ci && npm run build
           - uses: actions-rust-lang/setup-rust-toolchain@v1
             with:
               components: clippy

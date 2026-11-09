@@ -135,7 +135,8 @@ and SHA-256 content hashes. Human output avoids constructing this extra source
 metadata. The bridge derives supported editing actions from these facts and the
 workspace boundaries; diagnostics has no audit mode or editing-action model.
 
-To develop the frontend, install Node.js 22 or newer, then run:
+Before building from a fresh checkout, install Node.js 22 or newer and build the
+frontend assets:
 
 ```sh
 cd crates/sniff-test-audit-gui/frontend
@@ -143,9 +144,9 @@ npm ci
 npm run build
 ```
 
-Production assets in `frontend/dist/` are checked in so a normal Cargo build or
-installation needs no Node.js. Rebuild those assets after frontend edits. The
-server embeds them in release builds; debug builds read them from that directory.
+Production assets in `frontend/dist/` are generated and ignored by Git. Build
+them before running Cargo builds, checks, or tests, and rebuild after frontend
+edits. The server embeds them in release builds; debug builds read them from that directory.
 Run `cargo build -p sniff-test` before the real-browser integration tests:
 
 ```sh

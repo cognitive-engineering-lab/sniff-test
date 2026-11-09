@@ -10,3 +10,20 @@ review.sh
 
 # Ignore our log files
 sniff-test.log
+
+# Generated dependencies, build output, and caches
+node_modules/
+dist/
+build/
+.vite/
+coverage/
+test-results/
+playwright-report/
+*.tsbuildinfo
+*.log
+
+# Profiling output
+*.profraw
+*.profdata
+perf.data
+perf.data.old
