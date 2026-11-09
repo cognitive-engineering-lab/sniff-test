@@ -570,6 +570,7 @@ for(const action of ['Justify via override','Propagate obligations via override'
       await page.getByRole('button',{name:action,exact:true}).click();
       const dialog=page.getByRole('dialog');
       const template=action.startsWith('Justify')?'// PANIC: ':'/// # Panics\n///\n/// ';
+      await expect(dialog.getByRole('region',{name:'Obligation',exact:true})).toHaveCount(0);
       await expect(dialog.getByLabel('Override documentation')).toHaveValue(template);
       await expect(dialog.getByLabel('Override documentation')).toBeFocused();
       await page.keyboard.insertText('Typed at the end.');
@@ -763,5 +764,71 @@ for(const width of [1440,900]) {
       expect(vertical?resized.height:resized.width).toBeCloseTo((vertical?after.height:after.width)+20,0);
     }
     await expect(page.locator('.cm-editor')).toBeVisible();
+  });
+}
+
+for (const mode of ['native','namespace override','source override','trait declaration','standard library','safety','allocation','long contract']) {
+  test(`override justification shows the effective obligation from ${mode}`,async({page})=>{
+    const dependency=await mkdtemp(join(tmpdir(),'sniff-obligation-dep-'));
+    try {
+      await stop();await mkdir(join(dependency,'src'));
+      await writeFile(join(dependency,'Cargo.toml'),'[package]\nname="obligation-dep"\nversion="0.1.0"\nedition="2024"\n');
+      const effect=mode==='safety'?'safety':mode==='allocation'?'allocation':'panic';
+      const heading=effect==='safety'?'Safety':effect==='allocation'?'Allocations':'Panics';
+      const marker=effect==='safety'?'SAFETY':effect==='allocation'?'ALLOCATION':'PANIC';
+      const section=`# ${heading}\nThe flag must be true. λ\n\n- **valid**: supply a valid flag.\n\n## Details\n`+(mode==='long contract'?'A long caller obligation.\n\n'.repeat(80):'')+'```rust\n# Examples inside code\n```';
+      const docs='Overview text.\n\n'+section+'\n\n# Examples\nUnrelated example text.';
+      const comments=docs.split('\n').map(line=>'/// '+line).join('\n');
+      const native=effect==='safety'
+        ?`pub fn relay(flag: bool) { unsafe { danger(flag); } }\n${comments}\nunsafe fn danger(_flag: bool) {}\n`
+        :`pub fn relay(flag: bool) { danger(flag); }\n${comments}\nfn danger(_flag: bool) {}\n`;
+      const source=mode==='trait declaration'
+        ?`pub trait Contract {\n${comments}\nfn danger(flag: bool);\n}\nstruct Implementation;\nimpl Contract for Implementation { fn danger(_flag: bool) {} }\npub fn relay(flag: bool) { Implementation::danger(flag); }\n`
+        :mode==='standard library'
+        ?'pub fn relay(flag: bool) { let _ = [0].get(usize::from(flag)).unwrap(); }\n'
+        :native;
+      await writeFile(join(dependency,'src/lib.rs'),source);
+      await writeFile(join(dir,'Cargo.toml'),`[package]\nname="audit-browser-fixture"\nversion="0.1.0"\nedition="2024"\n[workspace]\n[dependencies]\nobligation-dep={path=${JSON.stringify(dependency)}}\n`);
+      await writeFile(join(dir,'src/lib.rs'),'pub fn entry(flag: bool) { obligation_dep::relay(flag); }\n');
+      if(mode.includes('override')) {
+        const replacement='# Panics\nEffective override condition.\n\n## Details\nUse the replacement contract.\n\n# Examples\nUnrelated override example.';
+        const line=native.split('\n').findIndex(line=>line.startsWith('fn danger'))+1;
+        const entry=mode==='namespace override'
+          ?`[overrides]\n"obligation_dep::danger" = ${JSON.stringify(replacement)}\n`
+          :`[overrides]\n"obligation_dep::danger" = "# Panics\\nSuperseded namespace condition."\n[overrides.crates."obligation_dep"."0.1.0"]\n"src/lib.rs:${line}:${line}" = ${JSON.stringify(replacement)}\n`;
+        await writeFile(join(dir,'sniff-test.toml'),'[contracts]\noverride-files=["contracts.toml"]\n');
+        await writeFile(join(dir,'contracts.toml'),entry);
+      }
+      await launch(effect);
+      if(mode==='long contract')await page.setViewportSize({width:900,height:700});
+      await page.goto(url);
+      await page.getByLabel('Finding class',{exact:true}).selectOption('documented-obligation');
+      await page.locator('.group').first().click();await page.locator('.finding').first().click();
+      await page.getByRole('button',{name:'Justify via override',exact:true}).click();
+      const dialog=page.getByRole('dialog'),context=dialog.getByRole('region',{name:'Obligation',exact:true});
+      await expect(context).toBeVisible();
+      if(mode==='standard library') {
+        await expect(context).toContainText('unwrap');
+        await expect(context).toContainText('# Panics');
+        await expect(context).toContainText('None');
+      } else {
+        await expect(context).toContainText(mode==='trait declaration'?'Contract::danger':'obligation_dep::danger');
+        await expect(context.locator('pre')).toHaveText(mode.includes('override')?'# Panics\nEffective override condition.\n\n## Details\nUse the replacement contract.':section);
+        await expect(context).not.toContainText('Unrelated');
+        await expect(context).not.toContainText('Superseded');
+      }
+      await expect(dialog.getByLabel('Override documentation')).toBeFocused();
+      if(mode==='long contract')expect(await context.locator('pre').evaluate(el=>el.scrollHeight>el.clientHeight)).toBe(true);
+      if(mode==='native')await page.screenshot({path:join(repo,'target/audit-obligation-editor.png'),fullPage:true});
+      await page.keyboard.insertText('The caller upholds this condition.');
+      await dialog.getByRole('button',{name:'Save draft',exact:true}).click();
+      await page.reload();await expect(page.locator('.status')).toHaveText('complete');
+      await page.locator('.draft').click();
+      await page.getByRole('button',{name:'Source',exact:true}).click();
+      await page.getByRole('button',{name:'Justified!',exact:true}).click();
+      await expect(context).toBeVisible();
+      await expect(dialog.getByLabel('Override documentation')).toHaveValue(`// ${marker}: The caller upholds this condition.`);
+      await dialog.getByRole('button',{name:'Cancel',exact:true}).click();
+    } finally { await stop();await rm(dependency,{recursive:true,force:true}); }
   });
 }

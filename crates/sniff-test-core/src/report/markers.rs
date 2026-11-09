@@ -151,6 +151,7 @@ pub(super) fn marker_ambiguities(
                 callee: None,
                 source_range: comment.source_range().cloned(),
                 contract_source_range: None,
+                contract_owner: None,
                 marker_evidence: None,
                 trace: representative.trace,
                 missing_requirements: Vec::new(),

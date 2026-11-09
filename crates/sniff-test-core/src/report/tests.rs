@@ -949,6 +949,7 @@ fn source_finding_with_trace_call(caller: FunctionId, call: u32) -> InterpretedF
         callee: None,
         source_range: None,
         contract_source_range: None,
+        contract_owner: None,
         marker_evidence: None,
         trace: InterpretedTrace {
             steps: vec![std::sync::Arc::new(InterpretedTraceStep {

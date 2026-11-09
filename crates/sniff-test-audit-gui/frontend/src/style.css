@@ -83,3 +83,5 @@ dialog{border:1px solid #c0d5c5;border-radius:10px;padding:24px;width:min(760px,
   .panel-divider.right { left: 0; right: 0; top: -4px; bottom: auto; width: auto; height: 8px; cursor: row-resize; }
   header { flex-wrap: wrap; height: auto; min-height: 65px; padding-block: 8px; }
 }
+
+.obligation-context{margin:16px 0;padding:12px;background:#f4f7f1;border:1px solid #d8e1d9;border-radius:6px}.obligation-context h3{margin:0}.obligation-context p{overflow-wrap:anywhere;margin:8px 0}.obligation-context pre{max-height:22vh;overflow:auto;white-space:pre-wrap;overflow-wrap:anywhere;font:12px/1.6 ui-monospace,monospace;margin:0}

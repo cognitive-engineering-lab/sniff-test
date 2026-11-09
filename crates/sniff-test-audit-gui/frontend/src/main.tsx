@@ -9,7 +9,8 @@ import {Navigation, filePath} from './navigation';
 
 type Location = {path:string; start:number; end:number; available:boolean; hash?:string; line?:number; live?:boolean};
 type Buffer = {path:string; content:string; original:string; revision:number; writable:boolean; conflict:boolean; annotations?:OverrideDraft[]};
-type OverrideDraft = {annotation:{effect:string; action:string; document:string; selector:unknown}; location:Location; applied:boolean; previous_document?:string|null};
+type ObligationDocumentation = {function:string; markdown:string};
+type OverrideDraft = {annotation:{effect:string; action:string; document:string; obligation_documentation?:ObligationDocumentation; selector:unknown}; location:Location; applied:boolean; previous_document?:string|null};
 type Target = {action:string; location:Location; selector?:unknown; annotationIndex?:number};
 function sameSelector(a:unknown,b:unknown) {
   if(!a||!b)return false;
@@ -131,7 +132,7 @@ function placeCaretAtEnd(element:HTMLTextAreaElement|null) {
 }
 function Modal({title,children,onClose}:{title:string;children:React.ReactNode;onClose:()=>void}) {
   const ref=useRef<HTMLDialogElement>(null);
-  useEffect(()=>{const prior=document.activeElement as HTMLElement|null;ref.current?.showModal();return()=>{ref.current?.close();prior?.focus();};},[]);
+  useEffect(()=>{const prior=document.activeElement as HTMLElement|null;ref.current?.showModal();ref.current?.querySelector<HTMLTextAreaElement>('textarea')?.focus();return()=>{ref.current?.close();prior?.focus();};},[]);
   return <dialog ref={ref} aria-label={title} onCancel={e=>{e.preventDefault();onClose();}}><h2>{title}</h2>{children}</dialog>;
 }
 function PanelDivider({side,size,onResize}:{side:'left'|'right';size:number;onResize:(size:number)=>void}) {
@@ -158,7 +159,7 @@ function App() {
   const [drafts,setDrafts]=useState<Buffer[]>([]),[diff,setDiff]=useState(''),[view,setView]=useState<'source'|'changes'>('source');
   const [error,setError]=useState(''),[busy,setBusy]=useState(false),[logs,setLogs]=useState(false);
   const [nav,setNav]=useState<Location[]>([]);
-  const [overrideEditor,setOverrideEditor]=useState<{id?:string;path?:string;index?:number;generation?:number;action:string;revision:number;document:string;applied?:boolean;previous_document?:string|null}>();
+  const [overrideEditor,setOverrideEditor]=useState<{id?:string;path?:string;index?:number;generation?:number;action:string;revision:number;document:string;obligation_documentation?:ObligationDocumentation;applied?:boolean;previous_document?:string|null}>();
   const [overridePlan,setOverridePlan]=useState<OverridePlan>();
   const [editorSelection,setEditorSelection]=useState<EditorSelection>();
   const [navigation,setNavigation]=useState<Navigation>(),[navigationStatus,setNavigationStatus]=useState('');
@@ -285,7 +286,7 @@ function App() {
     </aside><PanelDivider side="left" size={leftWidth} onResize={setLeftWidth}/></div>
     <main><div className="toolbar"><button disabled={!nav.length||busy} onClick={()=>act(async()=>{const previous=nav[nav.length-1];setNav(n=>n.slice(0,-1));await open(previous,false);})}>← Back</button><span className="filename">{buffer?.path.replace(root+'/','')||'Source workspace'}</span>{buffer&&<><button onClick={()=>setView('source')}>Source</button><button onClick={()=>act(()=>review())}>Review diff</button></>}</div>
       {buffer?<><div className="buffer-state"><span className="navigation-status">{navigationStatus}</span>{buffer.writable?'Workspace source':'Read-only dependency'}{unsaved?' · unsaved editor changes':buffer.content!==buffer.original?' · draft saved':''}{buffer.conflict&&<strong> · External file changed. Copy your draft, discard it, then reapply your changes to the current source.</strong>}</div>
-      {view==='source'?<Editor navigation={navigation} onReady={editorReady} buffer={buffer} location={target} onChange={setText} onSelectionChange={setEditorSelection} finding={selected} enabled={!status.running&&!status.stale&&!unsaved} onError={setError} onOverride={t=>act(async()=>{if(!buffer)return;if(t.annotationIndex!==undefined){const a=buffer.annotations![t.annotationIndex];setOverrideEditor({path:buffer.path,index:t.annotationIndex,action:a.annotation.action,revision:buffer.revision,document:a.annotation.document,applied:a.applied,previous_document:a.previous_document});return;}if(!selected)return;const result=await api('override/template',{id:selected.id,action:t.action,revision:buffer.revision});setOverrideEditor({id:selected.id,action:t.action,revision:buffer.revision,generation:result.generation,document:result.document});})} prepare={async t=>{
+      {view==='source'?<Editor navigation={navigation} onReady={editorReady} buffer={buffer} location={target} onChange={setText} onSelectionChange={setEditorSelection} finding={selected} enabled={!status.running&&!status.stale&&!unsaved} onError={setError} onOverride={t=>act(async()=>{if(!buffer)return;if(t.annotationIndex!==undefined){const a=buffer.annotations![t.annotationIndex];setOverrideEditor({path:buffer.path,index:t.annotationIndex,action:a.annotation.action,revision:buffer.revision,document:a.annotation.document,obligation_documentation:a.annotation.obligation_documentation,applied:a.applied,previous_document:a.previous_document});return;}if(!selected)return;const result=await api('override/template',{id:selected.id,action:t.action,revision:buffer.revision});setOverrideEditor({id:selected.id,action:t.action,revision:buffer.revision,generation:result.generation,document:result.document,obligation_documentation:result.obligation_documentation});})} prepare={async t=>{
         if(!selected||!buffer||unsaved)throw Error('Save or discard editor changes before inserting a template.');
         return api('template',{id:selected.id,action:t.action,revision:buffer.revision});
       }}/>:<pre className="diff">{(!buffer.writable?'Override preview — dependency source stays unchanged\n\n':'')+(diff||'No changes to review.')}</pre>}
@@ -300,6 +301,10 @@ function App() {
     </>:<div className="empty">Select a finding to inspect its contract and call trace.</div>}</aside></div></div>
     {overrideEditor&&<Modal title={overrideEditor.action==='justification'?'Justify via override':'Propagate obligations via override'} onClose={()=>setOverrideEditor(undefined)}>
       {error&&<p role="alert">{error}</p>}<p>Justifications save marker text at the callsite line. Obligations save replacement rustdoc at the definition line, preserving other contracts.</p>
+      {overrideEditor.action==='justification'&&overrideEditor.obligation_documentation&&<section className="obligation-context" aria-label="Obligation">
+        <h3>Obligation</h3><p>{overrideEditor.obligation_documentation.function}</p>
+        <pre tabIndex={0}>{overrideEditor.obligation_documentation.markdown}</pre>
+      </section>}
       <textarea ref={placeCaretAtEnd} autoFocus aria-label="Override documentation" value={overrideEditor.document} onChange={e=>setOverrideEditor({...overrideEditor,document:e.target.value})}/>
       <div className="modal-actions">{overrideEditor.index!==undefined&&!overrideEditor.applied&&<button disabled={busy||status.running} onClick={()=>act(async()=>{const result=await api('override/discard',overrideEditor);setBuffer(result.buffer);setText(result.buffer.content);if(result.finding)setSelected(result.finding);setOverrideEditor(undefined);await refreshDrafts();})}>{overrideEditor.previous_document?'Discard changes':'Delete draft'}</button>}<button onClick={()=>setOverrideEditor(undefined)}>Cancel</button><button className="primary" disabled={busy||status.running} onClick={()=>act(async()=>{const next=await api(overrideEditor.id?'override/save':'override/edit',overrideEditor);setBuffer(next);setText(next.content);setOverrideEditor(undefined);if(view==='changes')setDiff((await api('diff?'+new URLSearchParams({path:next.path}))).diff);await refreshDrafts();})}>Save draft</button></div>
     </Modal>}

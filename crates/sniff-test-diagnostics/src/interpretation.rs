@@ -26,7 +26,9 @@ use sniff_test_core::report_model::{
     UnresolvedCallSite,
 };
 use sniff_test_core::report_roots::ReportRoot;
-use sniff_test_core::source_overrides::{ContractSourceArtifact, resolve_source_overrides};
+use sniff_test_core::source_overrides::{
+    ContractSourceArtifact, ResolvedSourceContractOverride, resolve_source_overrides,
+};
 use sniff_test_core::workspace::ArtifactAnalysisGraph;
 
 use super::findings::{
@@ -117,12 +119,29 @@ pub fn interpret_workspace<'tcx>(
         item_effects,
         &crate_names,
     )?;
+    let mut documentation_namespaces = BTreeMap::<StableDefPathHash, Vec<String>>::new();
+    if structured_output {
+        for artifact in std::iter::once(local).chain(dependencies.artifacts().map(|a| &a.facts)) {
+            for (definition, candidates) in artifact.definition_namespace_index().iter() {
+                documentation_namespaces
+                    .entry(*definition)
+                    .or_default()
+                    .extend_from_slice(candidates);
+            }
+        }
+        for candidates in documentation_namespaces.values_mut() {
+            candidates.sort();
+            candidates.dedup();
+        }
+    }
     let sources = SourceResolver {
         tcx,
         cache: CachedSourceMap::new(tcx.sess.source_map()),
         structured_output,
         rendered_steps: RenderedTraceCache::default(),
         semantic_sources: RefCell::new(HashMap::new()),
+        documentation_namespaces,
+        obligation_documents: RefCell::new(BTreeMap::new()),
         local,
         local_stable_crate_id,
         dependencies,
@@ -297,6 +316,7 @@ fn adapt_finding(
                 .as_ref()
                 .and_then(|locations| locations.1.clone()),
             contract: sources.semantic_location(finding.contract_source_range.as_ref()),
+            obligation_documentation: sources.obligation_documentation(finding),
             trace: sources.semantic_trace(&finding.trace),
             override_targets: if owner.scope == OwnerScope::Dependency {
                 sources.override_targets(finding)
@@ -1585,6 +1605,7 @@ fn adapt_incomplete(
             justification_site: None,
             override_targets: Vec::new(),
             contract: None,
+            obligation_documentation: None,
             trace: sources.semantic_trace(&trace),
         });
     Finding {
@@ -2170,6 +2191,10 @@ struct SourceResolver<'tcx, 'analysis> {
     rendered_steps: RenderedTraceCache,
     structured_output: bool,
     semantic_sources: RefCell<HashMap<String, SemanticSource>>,
+    documentation_namespaces: BTreeMap<StableDefPathHash, Vec<String>>,
+    obligation_documents: RefCell<
+        BTreeMap<(StableDefPathHash, String), Option<sniff_test_report::ObligationDocumentation>>,
+    >,
     local: &'analysis ArtifactFacts,
     local_stable_crate_id: u64,
     dependencies: &'analysis ArtifactAnalysisGraph,
@@ -2179,6 +2204,79 @@ struct SourceResolver<'tcx, 'analysis> {
 }
 
 impl SourceResolver<'_, '_> {
+    fn obligation_documentation(
+        &self,
+        finding: &InterpretedFinding,
+    ) -> Option<sniff_test_report::ObligationDocumentation> {
+        let owner = finding.contract_owner?;
+        let key = (owner.def_path_hash, finding.effect.obligation.to_owned());
+        let mut documents = self.obligation_documents.borrow_mut();
+        documents
+            .entry(key)
+            .or_insert_with(|| {
+                let definition = std::iter::once(self.local)
+                    .chain(self.dependencies.artifacts().map(|a| &a.facts))
+                    .flat_map(|a| &a.definitions)
+                    .find(|d| d.definition == owner.def_path_hash);
+                // Some toolchain contracts have no defining artifact. Read their
+                // doc attributes from loaded rustc metadata without changing the
+                // defining-artifact ownership invariant of cached source facts.
+                let metadata_definition = definition
+                    .is_none()
+                    .then(|| {
+                        let hash = owner.def_path_hash;
+                        let loaded = hash.stable_crate_id() == self.local_stable_crate_id
+                            || self.tcx.crates(()).iter().any(|c| {
+                                self.tcx.stable_crate_id(*c).as_u64() == hash.stable_crate_id()
+                            });
+                        loaded
+                            .then(|| {
+                                self.tcx
+                                    .def_path_hash_to_def_id(rustc_span::def_id::DefPathHash(
+                                        rustc_data_structures::fingerprint::Fingerprint::new(
+                                            hash.stable_crate_id(),
+                                            hash.local_hash(),
+                                        ),
+                                    ))
+                            })
+                            .flatten()
+                    })
+                    .flatten();
+                let metadata_documentation = metadata_definition
+                    .map(|id| sniff_test_core::contracts::documentation_from_attrs(self.tcx, id));
+                let markdown = self
+                    .source_overrides
+                    .contracts
+                    .get(&owner.def_path_hash)
+                    .map(ResolvedSourceContractOverride::markdown)
+                    .or_else(|| {
+                        self.overrides.markdown_for_candidates(
+                            self.documentation_namespaces
+                                .get(&owner.def_path_hash)
+                                .map_or(&[], Vec::as_slice),
+                        )
+                    })
+                    .or_else(|| definition.map(|d| d.documentation.as_str()))
+                    .or(metadata_documentation.as_deref())?;
+                let markdown = sniff_test_core::contracts::obligation_documentation_section(
+                    markdown,
+                    finding.effect.obligation,
+                )?;
+                Some(sniff_test_report::ObligationDocumentation {
+                    function: definition
+                        .map(|d| d.display_path.clone())
+                        .or_else(|| metadata_definition.map(|id| canonical_namespace(self.tcx, id)))
+                        .or_else(|| {
+                            self.documentation_namespaces
+                                .get(&owner.def_path_hash)
+                                .and_then(|c| c.first().cloned())
+                        })?,
+                    markdown,
+                })
+            })
+            .clone()
+    }
+
     fn owner(&self, function: FunctionId) -> FindingOwner {
         let stable_crate_id = function.def_path_hash.stable_crate_id();
         if stable_crate_id == self.local_stable_crate_id {
@@ -2988,6 +3086,7 @@ mod tests {
             callee: None,
             source_range: None,
             contract_source_range: None,
+            contract_owner: None,
             marker_evidence: None,
             trace: InterpretedTrace { steps: Vec::new() },
             missing_requirements: Vec::new(),

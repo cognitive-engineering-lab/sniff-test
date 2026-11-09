@@ -25,6 +25,8 @@ pub struct AuditMetadata {
     pub source: Option<Location>,
     pub root: Option<Location>,
     pub contract: Option<Location>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub obligation_documentation: Option<sniff_test_report::ObligationDocumentation>,
     pub trace: Vec<TraceStep>,
     pub targets: Vec<EditTarget>,
 }
@@ -82,6 +84,7 @@ fn adapt_semantics(facts: SemanticFacts, finding: &Value) -> AuditMetadata {
         source: facts.source,
         root: facts.root,
         contract: facts.contract,
+        obligation_documentation: facts.obligation_documentation,
         trace: facts.trace,
         targets,
     }
@@ -902,6 +905,7 @@ mod tests {
             source: Some(location.clone()),
             root: Some(location),
             contract: None,
+            obligation_documentation: None,
             trace: vec![],
             targets: vec![],
         }
@@ -928,6 +932,7 @@ mod tests {
             justification_site: Some(location.clone()),
             override_targets: Vec::new(),
             contract: None,
+            obligation_documentation: None,
             trace: vec![TraceStep {
                 caller: "caller".into(),
                 target: None,

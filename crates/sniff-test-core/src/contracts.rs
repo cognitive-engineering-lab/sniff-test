@@ -244,6 +244,48 @@ pub fn contract_doc_summary_from_markdown(markdown: &str, obligation: &str) -> C
     })
 }
 
+/// Extract complete effect sections without interpreting headings inside code blocks.
+/// Nested headings remain part of their enclosing contract section.
+#[must_use]
+pub fn obligation_documentation_section(markdown: &str, obligation: &str) -> Option<String> {
+    use pulldown_cmark::{Event, Parser, Tag, TagEnd};
+
+    let mut heading = None;
+    let mut active = None;
+    let mut sections = Vec::new();
+    for (event, range) in Parser::new(markdown).into_offset_iter() {
+        match event {
+            Event::Start(Tag::Heading { level, .. }) => {
+                if let Some((start, depth)) = active
+                    && level <= depth
+                {
+                    sections.push(markdown[start..range.start].trim_end());
+                    active = None;
+                }
+                heading = Some((level, range.start, String::new()));
+            }
+            Event::Text(text) | Event::Code(text) => {
+                if let Some((_, _, title)) = &mut heading {
+                    title.push_str(&text);
+                }
+            }
+            Event::End(TagEnd::Heading(_)) => {
+                if let Some((level, start, title)) = heading.take()
+                    && active.is_none()
+                    && title.trim().eq_ignore_ascii_case(obligation)
+                {
+                    active = Some((start, level));
+                }
+            }
+            _ => {}
+        }
+    }
+    if let Some((start, _)) = active {
+        sections.push(markdown[start..].trim_end());
+    }
+    (!sections.is_empty()).then(|| sections.join("\n\n"))
+}
+
 fn parse_contract_doc_markdown_with_spans(
     markdown: &str,
     line_spans: &[(std::ops::Range<usize>, Span)],
@@ -569,6 +611,41 @@ mod tests {
     use super::{
         SourceContractSelector, parse_panic_contract_doc_lines, parse_safety_contract_doc_lines,
     };
+
+    #[test]
+    fn obligation_sections_preserve_markdown_and_nested_headings() {
+        for heading in ["Panics", "Safety", "Custom Effect"] {
+            let section = format!(
+                "## {heading}\n\nThe caller must uphold λ.\n\n- **valid**: a requirement\n\n### Details\n\n```rust\n# Examples\n```\n"
+            );
+            let docs = format!("# Overview\nIntroduction.\n\n{section}\n## Examples\nUnrelated.\n");
+            assert_eq!(
+                super::obligation_documentation_section(&docs, &heading.to_lowercase()),
+                Some(section.trim_end().into())
+            );
+        }
+    }
+
+    #[test]
+    fn obligation_sections_handle_setext_repetition_and_code_only_headings() {
+        let docs = "```\n# Safety\n```\n\nSafety\n======\nOnly prose.\n\n# Examples\nOther docs.\n\n# Safety\nSecond condition.\n";
+        assert_eq!(
+            super::obligation_documentation_section(docs, "Safety"),
+            Some("Safety\n======\nOnly prose.\n\n# Safety\nSecond condition.".into())
+        );
+        assert_eq!(
+            super::obligation_documentation_section("```\n# Safety\n```", "Safety"),
+            None
+        );
+        assert_eq!(
+            super::obligation_documentation_section("# Safety notes\nDifferent heading.", "Safety"),
+            None
+        );
+        assert_eq!(
+            super::obligation_documentation_section("# Panics", "Panics"),
+            Some("# Panics".into())
+        );
+    }
 
     #[test]
     fn source_contract_selector_parses_typed_identity_and_inclusive_lines() {

@@ -80,9 +80,18 @@ pub struct SemanticFacts {
     pub enclosing_function: Option<Location>,
     pub justification_site: Option<Location>,
     pub contract: Option<Location>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub obligation_documentation: Option<ObligationDocumentation>,
     pub trace: Vec<TraceStep>,
     #[serde(default)]
     pub override_targets: Vec<OverrideTarget>,
+}
+
+/// Effective contract section presented while auditing a documented effect.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ObligationDocumentation {
+    pub function: String,
+    pub markdown: String,
 }
 
 /// Translate rustc-normalized positions to original file offsets.
@@ -111,6 +120,7 @@ mod tests {
         });
         let facts: super::SemanticFacts = serde_json::from_value(value).unwrap();
         assert!(facts.direct_source.is_none());
+        assert!(facts.obligation_documentation.is_none());
         assert!(
             serde_json::to_value(facts)
                 .unwrap()

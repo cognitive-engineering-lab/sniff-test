@@ -5,6 +5,8 @@ pub struct OverrideDocument {
     pub effect: String,
     pub action: String,
     pub document: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub obligation_documentation: Option<sniff_test_report::ObligationDocumentation>,
     pub selector: sniff_test_report::OverrideSelector,
 }
 
@@ -135,7 +137,11 @@ impl Session {
                 .any(|l| !l.trim().trim_start_matches('/').trim().is_empty()),
             "write an explanation first"
         );
+        let obligation_documentation = (action == "justification")
+            .then_some(audit.obligation_documentation)
+            .flatten();
         let annotation = OverrideDocument {
+            obligation_documentation,
             effect: audit.effect,
             action: action.into(),
             document,
@@ -841,6 +847,7 @@ mod tests {
             enclosing_function: None,
             justification_site: None,
             contract: None,
+            obligation_documentation: None,
             trace: vec![],
             override_targets: vec![sniff_test_report::OverrideTarget {
                 action: "justification".into(),
@@ -990,6 +997,15 @@ mod tests {
     fn override_drafts_restart_edit_discard_and_preserve_dependency_bytes() {
         let (root, _dep, mut session, path) = setup();
         let original = fs::read(&path).unwrap();
+        let context = sniff_test_report::ObligationDocumentation {
+            function: "dep::contract".into(),
+            markdown: "# Safety\nThe pointer must be valid.".into(),
+        };
+        session.analysis.findings[0]
+            .audit
+            .as_mut()
+            .unwrap()
+            .obligation_documentation = Some(context.clone());
         assert!(
             session
                 .save_override("finding", "justification", 0, "// SAFETY: ".into())
@@ -1004,6 +1020,10 @@ mod tests {
             )
             .unwrap();
         assert_eq!(draft.content.as_bytes(), original);
+        assert_eq!(
+            draft.annotations[0].annotation.obligation_documentation,
+            Some(context.clone())
+        );
         assert!(
             session
                 .diff(&path)
@@ -1032,6 +1052,10 @@ mod tests {
             )
             .unwrap();
         assert_eq!(updated.annotations.len(), 1);
+        assert_eq!(
+            updated.annotations[0].annotation.obligation_documentation,
+            Some(context)
+        );
         assert!(session.discard_override(&path, 0, 0).is_err());
         session
             .discard_override(&path, updated.revision, 0)

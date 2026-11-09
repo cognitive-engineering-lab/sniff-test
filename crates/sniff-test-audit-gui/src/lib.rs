@@ -539,8 +539,19 @@ async fn propose(State(app): State<App>, Json(edit): Json<Proposal>) -> ApiResul
 async fn override_template(State(app): State<App>, Json(edit): Json<TemplateRequest>) -> ApiResult {
     let mut session = app.session.lock().unwrap();
     let document = session.override_template(&edit.id, &edit.action, edit.revision)?;
+    let obligation_documentation = (edit.action == "justification")
+        .then(|| {
+            session
+                .analysis
+                .findings
+                .iter()
+                .find(|f| f.id == edit.id)
+                .and_then(|f| f.audit.as_ref())
+                .and_then(|a| a.obligation_documentation.as_ref())
+        })
+        .flatten();
     Ok(Json(
-        json!({"document":document,"generation":session.analysis.generation}),
+        json!({"document":document,"generation":session.analysis.generation,"obligation_documentation":obligation_documentation}),
     ))
 }
 #[derive(Deserialize)]

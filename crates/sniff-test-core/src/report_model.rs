@@ -71,6 +71,8 @@ pub struct InterpretedFinding {
     pub callee: Option<InterpretedCallee>,
     pub source_range: Option<SourceRangeFact>,
     pub contract_source_range: Option<SourceRangeFact>,
+    /// Definition that introduced the documented obligation, including trait declarations.
+    pub contract_owner: Option<FunctionId>,
     pub marker_evidence: Option<MarkerEvidenceState>,
     pub trace: InterpretedTrace,
     pub missing_requirements: Vec<ContractRequirementFact>,
