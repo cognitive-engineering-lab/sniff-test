@@ -79,6 +79,10 @@ obligation with **↑ Propagate to callers** at its enclosing function. These
 inline prompts insert a blank template and focus the explanation; fill it in
 before saving. You can also edit source directly.
 
+Drag the dividers beside the findings and details panels to resize them. Focus
+a divider and use the arrow keys for smaller adjustments, or Home/End for the
+minimum/maximum size. On narrower windows, drag the details divider vertically.
+
 Trace entries jump to the call site and show its verified file and line. In the
 source editor, Cmd-click (macOS), Ctrl-click (other platforms), or F12 jumps to a
 symbol's definition; **Back** returns to the previous location. Holding Cmd/Ctrl

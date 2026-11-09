@@ -741,3 +741,27 @@ for(const length of [0,1]) {
     await expect(entries).toHaveText(forward);
   });
 }
+
+for(const width of [1440,900]) {
+  test(`panels resize at ${width}px`,async({page})=>{
+    await page.setViewportSize({width,height:900});
+    await selectFinding(page);
+    for(const side of ['findings','details']) {
+      const panel=page.locator(`#${side}-panel`);
+      const divider=page.getByRole('separator',{name:`Resize ${side} panel`});
+      const before=(await panel.boundingBox())!;
+      const handle=(await divider.boundingBox())!;
+      const vertical=side==='details'&&width===900;
+      await page.mouse.move(handle.x+handle.width/2,handle.y+handle.height/2);
+      await page.mouse.down();
+      await page.mouse.move(handle.x+handle.width/2+(vertical?0:side==='findings'?40:-40),handle.y+handle.height/2+(vertical?-40:0));
+      await page.mouse.up();
+      const after=(await panel.boundingBox())!;
+      expect(vertical?after.height:after.width).toBeCloseTo((vertical?before.height:before.width)+40,0);
+      await divider.focus();await page.keyboard.press(vertical?'ArrowUp':side==='findings'?'ArrowRight':'ArrowLeft');
+      const resized=(await panel.boundingBox())!;
+      expect(vertical?resized.height:resized.width).toBeCloseTo((vertical?after.height:after.width)+20,0);
+    }
+    await expect(page.locator('.cm-editor')).toBeVisible();
+  });
+}

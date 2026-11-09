@@ -65,3 +65,21 @@ dialog{border:1px solid #c0d5c5;border-radius:10px;padding:24px;width:min(760px,
 
 .invert-effect { text-align:left; font-size:12px; }
 .invert-effect[aria-pressed="true"] { background:#e8f1e9; border-color:#91ad9b; color:#245c3f; }
+
+/* Resizable workspace panels. */
+.layout { grid-template-columns: min(var(--left-size), 40vw) minmax(0,1fr) min(var(--right-size), 40vw); }
+.side-pane { position: relative; min-width: 0; min-height: 0; }
+.left-pane { grid-column: 1; grid-row: 1; }
+.layout > main { grid-column: 2; grid-row: 1; }
+.right-pane { grid-column: 3; grid-row: 1; }
+.side-pane > aside { height: 100%; }
+.panel-divider { position: absolute; top: 0; bottom: 0; width: 8px; z-index: 2; cursor: col-resize; touch-action: none; }
+.panel-divider.left { right: -4px; }
+.panel-divider.right { left: -4px; }
+.panel-divider:hover, .panel-divider:focus-visible { background: #25825c55; outline: none; }
+@media(max-width:1050px) {
+  .layout { grid-template-columns: min(var(--left-size), 40vw) minmax(0,1fr); grid-template-rows: minmax(0,1fr) min(var(--right-size), 60%); }
+  .right-pane { grid-column: 1 / -1; grid-row: 2; }
+  .panel-divider.right { left: 0; right: 0; top: -4px; bottom: auto; width: auto; height: 8px; cursor: row-resize; }
+  header { flex-wrap: wrap; height: auto; min-height: 65px; padding-block: 8px; }
+}
