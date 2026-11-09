@@ -1,0 +1,6 @@
+[overrides.crates."marker_counts"."0.1.0"]
+"src/lib.rs:20:20" = """
+PANIC: denominator checked.
+PANIC: denominator checked.
+PANIC: denominator checked.
+"""

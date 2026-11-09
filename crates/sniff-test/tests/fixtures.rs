@@ -273,10 +273,9 @@ fixture_cases! {
             Case::new()
                 .args(&["--manifest", "macro-shared.toml"])
                 .denied();
-        ambiguous_safety_generic_instances =>
+        safety_marker_counts_are_shared_across_generic_instances =>
             Case::new()
-                .args(&["--manifest", "generic-instances.toml"])
-                .denied();
+                .args(&["--manifest", "generic-instances.toml"]);
     }
     "safety_contract_requirements" => {
         safety_contracts_preserve_call_and_obligation_requirements => Case::new();
@@ -1068,4 +1067,89 @@ fn runtime_spawn_models_preserve_payloads_contracts_and_receiver_coverage() {
             .all(|f| !f["trace"].to_string().contains("thread::lifecycle")),
         "modeled spawn traversed thread implementation internals"
     );
+}
+
+#[test]
+fn marker_header_counts_match_groups_for_comments_and_overrides() {
+    let repo = repo_root();
+    let cargo = PathBuf::from(env!("CARGO_BIN_EXE_cargo-sniff-test"));
+    let sysroot = rustc_sysroot();
+    for (manifest, expected) in [
+        (
+            None,
+            vec![
+                ("named_missing", "documented-obligation"),
+                ("named_missing", "documented-obligation"),
+                ("override_sites", "concrete-operation"),
+                ("override_sites", "concrete-operation"),
+                ("safety_over", "ambiguous-marker"),
+                ("source_over", "ambiguous-marker"),
+                ("source_under", "ambiguous-marker"),
+            ],
+        ),
+        (Some("1.toml"), vec![("override_sites", "ambiguous-marker")]),
+        (Some("2.toml"), vec![]),
+        (Some("3.toml"), vec![("override_sites", "ambiguous-marker")]),
+    ] {
+        let mut case = Case::new();
+        if !expected.is_empty() {
+            case = case.denied();
+        }
+        case = match manifest {
+            Some("1.toml") => case.args(&["--manifest", "1.toml"]),
+            Some("2.toml") => case.args(&["--manifest", "2.toml"]),
+            Some("3.toml") => case.args(&["--manifest", "3.toml"]),
+            _ => case,
+        };
+        let messages = run_case(
+            &repo,
+            &cargo,
+            &sysroot,
+            "marker_header_counts",
+            "marker_counts",
+            &case,
+        );
+        assert_eq!(messages.len(), 1, "{messages:?}");
+        let findings = messages[0]["findings"].as_array().unwrap();
+        let mut actual = findings
+            .iter()
+            .map(|finding| {
+                (
+                    finding["root"]
+                        .as_str()
+                        .unwrap()
+                        .strip_prefix("marker_counts::")
+                        .unwrap(),
+                    finding["finding"].as_str().unwrap(),
+                )
+            })
+            .collect::<Vec<_>>();
+        actual.sort_unstable();
+        assert_eq!(actual, expected, "{manifest:?}: {findings:#?}");
+        for finding in findings {
+            let root = finding["root"].as_str().unwrap();
+            let reason = finding["reason"].as_str().unwrap();
+            if finding["finding"] == "ambiguous-marker" {
+                let (headers, groups) =
+                    if root.ends_with("source_under") || manifest == Some("1.toml") {
+                        (1, 2)
+                    } else if root.ends_with("safety_over") {
+                        (2, 1)
+                    } else {
+                        (3, 2)
+                    };
+                assert!(reason.contains(&format!("{headers} `//")), "{reason}");
+                assert!(reason.contains(&format!("for {groups} ")), "{reason}");
+            } else if root.ends_with("named_missing") {
+                assert!(
+                    finding["missing-requirements"]
+                        .as_array()
+                        .unwrap()
+                        .iter()
+                        .any(|requirement| requirement.as_str().unwrap().starts_with("second:")),
+                    "{finding}"
+                );
+            }
+        }
+    }
 }

@@ -513,9 +513,11 @@ nested requirement lists, and registered headers such as `SAFETY:` are accepted.
 Empty explanations are rejected. An injection adds justification evidence and
 does not replace the function's contract. Existing `effect-doc-matching` rules
 still apply, so an incomplete named list leaves requirements unsatisfied in
-`exact` mode. A single injected `PANIC:` block reused across distinct effect
-groups still produces marker ambiguity. Injections apply with either
-`marker-probing` strategy, do not modify source files, and are never persisted in
+`exact` mode. A justification block must have as many nonempty headers for an
+effect as the distinct effect groups it covers. Repeated `PANIC:` headers can therefore
+justify multiple panic sites on the same source line; one header covering
+multiple groups, or extra headers for fewer groups, produces marker ambiguity.
+Injections apply with either `marker-probing` strategy, do not modify source files, and are never persisted in
 artifact caches. Keep contract replacements and justification blocks in separate
 selector entries.
 
@@ -613,11 +615,29 @@ following a requirement bullet in the same contiguous block are kept as
 explanation context. Use `/// # Panics` to document public API panic behavior;
 `// PANIC:` is only for local call-site justifications.
 
-`// PANIC:` can also sit immediately above an enclosing block. A marker reused
-by multiple panic sites is ambiguous. For safety, one explicit unsafe block is
-one effect group, so a single `// SAFETY:` marker can justify all operations in
-that block; reuse across distinct groups is ambiguous. Each callee still checks
-its own named requirements.
+`// PANIC:` can also sit immediately above an enclosing block. For each effect
+kind, a logical marker must contain one nonempty justification header per
+distinct effect group it covers. Both too few and too many headers are ambiguous.
+Multiple bullets or continuation lines beneath one header still count as one
+justification; empty sections do not count. Identical repeated explanations count
+separately. This rule applies equally to source comments and override TOML:
+
+```rust
+// PANIC: the caller checked the first denominator is nonzero.
+// PANIC: the caller checked the second denominator is nonzero.
+let results = (12 / first, 24 / second);
+```
+
+For safety, one explicit unsafe block is one effect group, so one `// SAFETY:`
+header can justify all operations in that block. Two headers for that single
+group are ambiguous. Counts are independent for each effect kind and each
+logical macro expansion, and duplicate traces or generic instances do not add
+groups for the same source occurrence.
+
+Matching counts only resolves marker ambiguity. Each callee still checks its
+own named requirements against the marker's collective explanations; headers
+are not paired with effects by source order. Unused markers and inactive override
+selectors do not produce a count mismatch on their own.
 
 ## Direct Driver
 

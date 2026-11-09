@@ -407,9 +407,14 @@ fn finding_description(
                 ),
             )
         }
-        InterpretedFindingKind::AmbiguousMarker { effect_count } => {
+        InterpretedFindingKind::AmbiguousMarker {
+            justification_count,
+            effect_count,
+        } => {
+            let justification_suffix = if *justification_count == 1 { "" } else { "s" };
+            let group_suffix = if *effect_count == 1 { "" } else { "s" };
             let subject = format!(
-                "one `// {}:` marker applies to {effect_count} {} effect groups",
+                "marker has {justification_count} `// {}:` justification{justification_suffix} for {effect_count} {} effect group{group_suffix}",
                 effect.justification, effect_name
             );
             (
@@ -904,11 +909,16 @@ impl EffectDiagnosticWriter<'_, '_, '_> {
             )));
     }
 
-    fn ambiguous_marker(&mut self, effect: &EffectMetadata, effect_count: usize) {
+    fn ambiguous_marker(
+        &mut self,
+        effect: &EffectMetadata,
+        justification_count: usize,
+        effect_count: usize,
+    ) {
         self.diagnostic
             .messages
             .push(DiagnosticMessage::Note(format!(
-                "this marker applies to {effect_count} {} effect groups",
+                "this marker has {justification_count} justification for {effect_count} {} effect",
                 effect.key.as_str()
             )));
         add_finding_trace_notes(
@@ -920,7 +930,7 @@ impl EffectDiagnosticWriter<'_, '_, '_> {
         self.diagnostic
             .messages
             .push(DiagnosticMessage::Help(String::from(
-                "move the marker directly above one obligation or split it into separate markers",
+                "match the number of nonempty justification headers to the effect-group count, or narrow the marker coverage",
             )));
     }
 
@@ -984,8 +994,11 @@ fn decorate_finding(
         InterpretedFindingKind::AmbiguousRequirement { normalized_name } => {
             writer.ambiguous_requirement(effect, normalized_name);
         }
-        InterpretedFindingKind::AmbiguousMarker { effect_count } => {
-            writer.ambiguous_marker(effect, *effect_count);
+        InterpretedFindingKind::AmbiguousMarker {
+            justification_count,
+            effect_count,
+        } => {
+            writer.ambiguous_marker(effect, *justification_count, *effect_count);
         }
     }
     writer.justification_marker

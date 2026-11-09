@@ -13,7 +13,7 @@ expression: "report[\"findings\"]"
       "crate": "source_justification_overrides",
       "scope": "workspace"
     },
-    "reason": "one `// PANIC:` marker applies to 2 panic effect groups",
+    "reason": "marker has 1 `// PANIC:` justification for 2 panic effect groups",
     "root": "source_justification_overrides::ambiguous",
     "root-kind": "concrete",
     "root-span": "src/lib.rs:26:1: 26:42",

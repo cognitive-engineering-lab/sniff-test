@@ -149,13 +149,26 @@ pub enum EffectFindingClass {
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum InterpretedFindingKind {
-    Operation { operation: EffectKind },
-    Invocation { operation: EffectKind },
-    UndocumentedInvocation { operation: EffectKind },
+    Operation {
+        operation: EffectKind,
+    },
+    Invocation {
+        operation: EffectKind,
+    },
+    UndocumentedInvocation {
+        operation: EffectKind,
+    },
     DocumentedObligation,
-    UnresolvedCallTarget { site: UnresolvedCallSite },
-    AmbiguousRequirement { normalized_name: String },
-    AmbiguousMarker { effect_count: usize },
+    UnresolvedCallTarget {
+        site: UnresolvedCallSite,
+    },
+    AmbiguousRequirement {
+        normalized_name: String,
+    },
+    AmbiguousMarker {
+        justification_count: usize,
+        effect_count: usize,
+    },
 }
 
 impl InterpretedFindingKind {

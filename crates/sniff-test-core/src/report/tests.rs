@@ -1287,6 +1287,7 @@ fn assert_trusted_surface_findings(reports: &[RootInterpretation]) {
 
 fn marker(id: u32, kind: AnnotationFactKind, target: AnnotationTargetFact) -> AnnotationFact {
     AnnotationFact {
+        justification_count: 1,
         id: MarkerId::new(id),
         identity: format!("marker-{id}"),
         kind,
@@ -2088,7 +2089,10 @@ fn grouped_panic_marker_ambiguity_uses_the_actual_sink_branch() {
         .unwrap_or_else(|| panic!("ambiguous panic marker: {:#?}", reports[0].findings));
     assert!(matches!(
         ambiguity.kind,
-        InterpretedFindingKind::AmbiguousMarker { effect_count: 2 }
+        InterpretedFindingKind::AmbiguousMarker {
+            justification_count: 1,
+            effect_count: 2
+        }
     ));
     let source = ambiguity.trace.steps.last().expect("source trace step");
 
@@ -2177,7 +2181,10 @@ fn grouped_safety_marker_uses_actual_branch_group_and_source_trace() {
         .unwrap_or_else(|| panic!("ambiguous safety marker: {:#?}", reports[0].findings));
     assert!(matches!(
         ambiguity.kind,
-        InterpretedFindingKind::AmbiguousMarker { effect_count: 2 }
+        InterpretedFindingKind::AmbiguousMarker {
+            justification_count: 1,
+            effect_count: 2
+        }
     ));
     let source = ambiguity.trace.steps.last().expect("source trace step");
 
@@ -2380,7 +2387,10 @@ fn grouped_comment_marker_claims_each_relevant_contract_branch() {
     assert!(matches!(
         ambiguities.as_slice(),
         [InterpretedFinding {
-            kind: InterpretedFindingKind::AmbiguousMarker { effect_count: 2 },
+            kind: InterpretedFindingKind::AmbiguousMarker {
+                justification_count: 1,
+                effect_count: 2
+            },
             ..
         }]
     ));
@@ -2461,7 +2471,10 @@ fn trusted_safety_boundary_hides_internal_marker_ambiguity_but_exports_its_contr
     assert!(untrusted_reports[0].findings.iter().any(|finding| {
         matches!(
             finding.kind,
-            InterpretedFindingKind::AmbiguousMarker { effect_count: 2 }
+            InterpretedFindingKind::AmbiguousMarker {
+                justification_count: 1,
+                effect_count: 2
+            }
         )
     }));
 
@@ -3659,7 +3672,10 @@ fn allowed_marker_ambiguity_preserves_other_effects_and_obligations() {
             .iter()
             .filter(|finding| matches!(
                 finding.kind,
-                InterpretedFindingKind::AmbiguousMarker { effect_count: 2 }
+                InterpretedFindingKind::AmbiguousMarker {
+                    justification_count: 1,
+                    effect_count: 2
+                }
             ))
             .count(),
         2
@@ -4491,6 +4507,75 @@ fn invocation_guarantees_only_discharge_immediate_matching_operations_on_all_rou
                     Propagation::Follow(_)
                 ),
                 "executor guarantee must not hide nested manual polling"
+            );
+        }
+    }
+}
+
+#[test]
+fn marker_ambiguity_compares_header_count_with_distinct_groups() {
+    let root = stable_function(500);
+    for group_count in [1, 2] {
+        for justification_count in [1, 2, 3] {
+            let effects = vec![
+                unsafe_operation_with_provenance(0, 0, 501),
+                unsafe_operation_with_provenance(1, group_count - 1, 503),
+            ];
+            let markers = (0..2)
+                .map(|id| {
+                    let mut marker = shared_justification_marker(
+                        id,
+                        "shared-counted-marker",
+                        annotation_kind::<Safety>(AnnotationRole::Justification),
+                        AnnotationTargetFact::Effect(EffectId::new(id)),
+                    );
+                    marker.justification_count = justification_count;
+                    marker
+                })
+                .collect();
+            let artifact = ArtifactFacts::new(
+                vec![body(
+                    root,
+                    "sample::root",
+                    Vec::new(),
+                    effects,
+                    markers,
+                    Vec::new(),
+                )],
+                Vec::new(),
+            )
+            .unwrap();
+            let reports = trace_workspace(
+                &artifact,
+                root.def_path_hash.stable_crate_id(),
+                &ArtifactAnalysisGraph::default(),
+                &[InterpretationRoot {
+                    function: root,
+                    path: "sample::root".into(),
+                    kind: ReportRootKind::Concrete,
+                }],
+                &crate::config::test_config(),
+            )
+            .unwrap();
+            let ambiguities = reports[0]
+                .findings
+                .iter()
+                .filter_map(|finding| match finding.kind {
+                    InterpretedFindingKind::AmbiguousMarker {
+                        justification_count,
+                        effect_count,
+                    } => Some((justification_count, effect_count)),
+                    _ => None,
+                })
+                .collect::<Vec<_>>();
+            let expected = if justification_count == group_count as usize {
+                vec![]
+            } else {
+                vec![(justification_count, group_count as usize)]
+            };
+            assert_eq!(
+                ambiguities, expected,
+                "groups={group_count}, headers={justification_count}"
             );
         }
     }

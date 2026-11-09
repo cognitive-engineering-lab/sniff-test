@@ -65,6 +65,8 @@ pub struct MarkerInstanceKey {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct EffectMarkerBlock {
+    /// Number of nonempty headers for this effect in the logical marker.
+    pub justification_count: usize,
     pub key: MarkerInstanceKey,
     pub span: Span,
     /// Complete physical source-ordered claim inventory.
@@ -152,6 +154,7 @@ fn marker_probe_from_source<T>(source_available: bool, marker: Option<T>) -> Mar
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct ParsedMarkerBlock {
+    justification_count: usize,
     key: MarkerBlockKey,
     span: Span,
     satisfactions: Vec<MarkerSatisfaction>,
@@ -161,6 +164,7 @@ impl ParsedMarkerBlock {
     fn instantiate(self, origin: MarkerOrigin) -> EffectMarkerBlock {
         let applicable_satisfactions = (0..self.satisfactions.len()).collect();
         EffectMarkerBlock {
+            justification_count: self.justification_count,
             key: MarkerInstanceKey {
                 physical_block: self.key,
                 origin,
@@ -555,11 +559,13 @@ fn marker_block_at(
     }
 
     if let Some(block) = &mut block {
+        block.justification_count += 1;
         block.satisfactions.extend(line_satisfactions);
         return Some(block.clone());
     }
 
     Some(ParsedMarkerBlock {
+        justification_count: 1,
         key: MarkerBlockKey {
             file_start: file.start_pos.0,
             start_line: line_index,
@@ -576,8 +582,8 @@ fn preceding_marker_block(
     syntax: MarkerSyntax<'_>,
 ) -> Option<ParsedMarkerBlock> {
     let block = preceding_comment_block(file, line_index)?;
-    let satisfactions = comment_block_satisfactions(&block.lines, syntax);
-    if satisfactions.is_empty() {
+    let parsed = comment_block_justifications(&block.lines, syntax);
+    if parsed.satisfactions.is_empty() {
         return None;
     }
 
@@ -588,7 +594,8 @@ fn preceding_marker_block(
             end_line: block.end_line,
         },
         span: comment_block_span(file, block.start_line, block.end_line),
-        satisfactions,
+        justification_count: parsed.justification_count,
+        satisfactions: parsed.satisfactions,
     })
 }
 
@@ -746,10 +753,12 @@ fn comment_body_preserving_indentation(line: &str) -> Option<&str> {
         .then(|| comment.strip_prefix(' ').unwrap_or(comment))
 }
 
-fn comment_block_satisfactions(
+fn comment_block_justifications(
     lines: &[String],
     syntax: MarkerSyntax<'_>,
-) -> Vec<MarkerSatisfaction> {
+) -> ParsedJustifications {
+    let mut justification_count = 0;
+    let mut section_start = 0;
     let mut satisfactions: Vec<MarkerSatisfaction> = Vec::new();
     let mut pending_header_reason: Option<String> = None;
     let mut in_marker_block = false;
@@ -762,6 +771,12 @@ fn comment_block_satisfactions(
         let marker_line = body.trim_start();
         if let Some(marker_body) = syntax.strip_prefix(marker_line) {
             flush_pending_header(&mut satisfactions, &mut pending_header_reason);
+            justification_count += usize::from(
+                satisfactions[section_start..]
+                    .iter()
+                    .any(MarkerSatisfaction::has_justification),
+            );
+            section_start = satisfactions.len();
             in_marker_block = true;
             list_levels.clear();
             let parsed = parse_marker(marker_body);
@@ -772,6 +787,12 @@ fn comment_block_satisfactions(
             }
         } else if syntax.starts_competing_marker(marker_line) {
             flush_pending_header(&mut satisfactions, &mut pending_header_reason);
+            justification_count += usize::from(
+                satisfactions[section_start..]
+                    .iter()
+                    .any(MarkerSatisfaction::has_justification),
+            );
+            section_start = satisfactions.len();
             in_marker_block = false;
             list_levels.clear();
         } else if in_marker_block {
@@ -787,12 +808,26 @@ fn comment_block_satisfactions(
         }
     }
     flush_pending_header(&mut satisfactions, &mut pending_header_reason);
+    justification_count += usize::from(
+        satisfactions[section_start..]
+            .iter()
+            .any(MarkerSatisfaction::has_justification),
+    );
     satisfactions.retain(MarkerSatisfaction::has_justification);
 
-    satisfactions
+    ParsedJustifications {
+        justification_count,
+        satisfactions,
+    }
 }
 
-pub(crate) type OverrideJustifications = Vec<(crate::artifact::EffectKey, Vec<MarkerSatisfaction>)>;
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ParsedJustifications {
+    pub justification_count: usize,
+    pub satisfactions: Vec<MarkerSatisfaction>,
+}
+
+pub(crate) type OverrideJustifications = Vec<(crate::artifact::EffectKey, ParsedJustifications)>;
 
 /// Parses a configured marker block with the same syntax as source comments.
 /// A leading registered justification header distinguishes markers from rustdoc.
@@ -838,14 +873,14 @@ pub(crate) fn override_justifications(
             .filter_map(|line| comment_body(line))
             .any(|line| syntax.strip_prefix(line).is_some())
         {
-            let satisfactions = comment_block_satisfactions(&lines, syntax);
-            if satisfactions.is_empty() {
+            let parsed_marker = comment_block_justifications(&lines, syntax);
+            if parsed_marker.satisfactions.is_empty() {
                 return Err(format!(
                     "{}: override requires a nonempty justification",
                     effect.justification
                 ));
             }
-            parsed.push((effect.key.clone(), satisfactions));
+            parsed.push((effect.key.clone(), parsed_marker));
         }
     }
     Ok(Some(parsed))
@@ -928,6 +963,49 @@ mod tests {
     }
 
     #[test]
+    fn justification_counts_headers_instead_of_bullets_or_lines() {
+        let effects = crate::effects::selected_effects(&crate::effects::EffectSelection::default());
+        for (text, headers, entries) in [
+            ("PANIC: checked.\nPANIC: checked.", 2, 2),
+            ("PANIC:\nchecked across\nmultiple lines.", 1, 1),
+            ("PANIC:\n- first: checked.\n- second: checked.", 1, 2),
+            (
+                "PANIC:\n- first: checked.\n  - nested: checked.\nPANIC: another check.",
+                2,
+                3,
+            ),
+            ("PANIC:\nPANIC: checked.\nPANIC:", 1, 1),
+            (
+                "PANIC: checked.\nSAFETY: valid.\nPANIC: checked again.",
+                2,
+                2,
+            ),
+        ] {
+            let parsed = super::override_justifications(text, &effects)
+                .unwrap()
+                .unwrap();
+            let (_, panic) = parsed
+                .iter()
+                .find(|(key, _)| key.as_str() == "panic")
+                .unwrap();
+            assert_eq!(panic.justification_count, headers, "{text}");
+            assert_eq!(panic.satisfactions.len(), entries, "{text}");
+            // Source comments and overrides use the same header-count parser.
+            let lines = text
+                .lines()
+                .map(|line| format!("// {line}"))
+                .collect::<Vec<_>>();
+            assert_eq!(
+                &super::comment_block_justifications(&lines, panic_syntax()),
+                panic
+            );
+            if let Some((_, safety)) = parsed.iter().find(|(key, _)| key.as_str() == "safety") {
+                assert_eq!(safety.justification_count, 1);
+            }
+        }
+    }
+
+    #[test]
     fn override_markers_share_named_nested_and_multiple_effect_syntax() {
         let effects = crate::effects::selected_effects(&crate::effects::EffectSelection::default());
         let parsed = super::override_justifications(
@@ -936,10 +1014,13 @@ mod tests {
         ).unwrap().unwrap();
         assert_eq!(parsed.len(), 2);
         assert_eq!(parsed[0].0.as_str(), "panic");
-        assert_eq!(parsed[0].1[0].requirement.as_deref(), Some("valid"));
-        assert_eq!(parsed[0].1[1].path, Some(vec![0, 0]));
+        assert_eq!(
+            parsed[0].1.satisfactions[0].requirement.as_deref(),
+            Some("valid")
+        );
+        assert_eq!(parsed[0].1.satisfactions[1].path, Some(vec![0, 0]));
         assert_eq!(parsed[1].0.as_str(), "safety");
-        assert_eq!(parsed[1].1[0].reason, "pointer is valid.");
+        assert_eq!(parsed[1].1.satisfactions[0].reason, "pointer is valid.");
     }
 
     #[test]
@@ -985,7 +1066,7 @@ mod tests {
         ];
 
         assert_eq!(
-            comment_block_satisfactions_for_panic(&lines),
+            panic_satisfactions(&lines),
             [
                 MarkerSatisfaction {
                     requirement: Some(String::from("nonzero")),
@@ -1018,7 +1099,7 @@ mod tests {
         ];
 
         assert_eq!(
-            comment_block_satisfactions_for_panic(&lines),
+            panic_satisfactions(&lines),
             [
                 MarkerSatisfaction {
                     requirement: Some(String::from("something[var_1]")),
@@ -1052,7 +1133,7 @@ mod tests {
         ];
 
         assert_eq!(
-            comment_block_satisfactions_for_panic(&lines)
+            panic_satisfactions(&lines)
                 .into_iter()
                 .map(|satisfaction| satisfaction.requirement.unwrap())
                 .collect::<Vec<_>>(),
@@ -1071,7 +1152,8 @@ mod tests {
         ];
 
         assert_eq!(
-            super::comment_block_satisfactions(&lines, safety_syntax())
+            super::comment_block_justifications(&lines, safety_syntax())
+                .satisfactions
                 .into_iter()
                 .map(|satisfaction| (satisfaction.requirement, satisfaction.path))
                 .collect::<Vec<_>>(),
@@ -1092,7 +1174,7 @@ mod tests {
         ];
 
         assert_eq!(
-            comment_block_satisfactions_for_panic(&lines),
+            panic_satisfactions(&lines),
             [MarkerSatisfaction {
                 requirement: None,
                 reason: String::from("caller checked the local invariant."),
@@ -1105,7 +1187,7 @@ mod tests {
     fn comment_blocks_without_a_justified_marker_produce_no_satisfactions() {
         let lines = [String::from("    // PANIC:")];
 
-        assert_eq!(comment_block_satisfactions_for_panic(&lines), []);
+        assert_eq!(panic_satisfactions(&lines), []);
     }
 
     #[test]
@@ -1226,9 +1308,9 @@ mod tests {
             String::from("    // This should not become panic evidence."),
         ];
 
-        assert_eq!(comment_block_satisfactions_for_panic(&lines), []);
+        assert_eq!(panic_satisfactions(&lines), []);
         assert_eq!(
-            super::comment_block_satisfactions(&lines, safety_syntax()),
+            super::comment_block_justifications(&lines, safety_syntax()).satisfactions,
             [super::MarkerSatisfaction {
                 requirement: None,
                 reason: String::from(
@@ -1322,7 +1404,7 @@ mod tests {
         );
     }
 
-    fn comment_block_satisfactions_for_panic(lines: &[String]) -> Vec<MarkerSatisfaction> {
-        super::comment_block_satisfactions(lines, panic_syntax())
+    fn panic_satisfactions(lines: &[String]) -> Vec<MarkerSatisfaction> {
+        super::comment_block_justifications(lines, panic_syntax()).satisfactions
     }
 }

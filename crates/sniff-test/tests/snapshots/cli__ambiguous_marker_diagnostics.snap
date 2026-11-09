@@ -19,27 +19,27 @@ error: [00003ea7ba] [sniff-test::panic::ambiguous-requirement] `duplicate_name_r
    = note: reachable from `duplicate_name_marker` to `duplicate_name_ratio`
    = help: give each requirement a unique name
 
-error: [000130f0f7] [sniff-test::panic::ambiguous-marker] function `marked_path_to_shared_sources` has an ambiguous `// PANIC:` marker
+error: [000168238f] [sniff-test::panic::ambiguous-marker] function `marked_path_to_shared_sources` has an ambiguous `// PANIC:` marker
   --> src/lib.rs:72:1
    |
 72 | /     // PANIC: this path accepts both documented effects.
 73 | |     shared_documented_sources();
    | |_^
    |
-   = note: this marker applies to 2 panic effect groups
+   = note: this marker has 1 justification for 2 panic effect
    = note: reachable from `marked_path_to_shared_sources` to `first_documented_source`
-   = help: move the marker directly above one obligation or split it into separate markers
+   = help: match the number of nonempty justification headers to the effect-group count, or narrow the marker coverage
 
-error: [00022a0e08] [sniff-test::panic::ambiguous-marker] function `marker_covers_documented_call_and_sink` has an ambiguous `// PANIC:` marker
+error: [0002844798] [sniff-test::panic::ambiguous-marker] function `marker_covers_documented_call_and_sink` has an ambiguous `// PANIC:` marker
   --> src/lib.rs:47:1
    |
 47 | /         // PANIC: this fixture guards both operations.
 48 | |         call_documented_and_sink!()
    | |_^
    |
-   = note: this marker applies to 2 panic effect groups
+   = note: this marker has 1 justification for 2 panic effect
    = note: reachable from `marker_covers_documented_call_and_sink` to `ratio`
-   = help: move the marker directly above one obligation or split it into separate markers
+   = help: match the number of nonempty justification headers to the effect-group count, or narrow the marker coverage
 
 error: [0003f0ea14] function `shared_block_marker` may have panic effect
   --> src/lib.rs:8:1

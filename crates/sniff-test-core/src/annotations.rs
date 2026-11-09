@@ -67,6 +67,7 @@ impl FunctionContractAnnotation {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SiteCommentAnnotation {
+    justification_count: usize,
     id: AnnotationId,
     effect: EffectKey,
     target: AnnotationTarget,
@@ -75,6 +76,11 @@ pub struct SiteCommentAnnotation {
 }
 
 impl SiteCommentAnnotation {
+    #[must_use]
+    pub const fn justification_count(&self) -> usize {
+        self.justification_count
+    }
+
     #[must_use]
     pub const fn id(&self) -> AnnotationId {
         self.id
@@ -506,6 +512,7 @@ impl AnnotationIndex {
                     },
                 };
                 site_comments.push(SiteCommentAnnotation {
+                    justification_count: marker.justification_count,
                     id,
                     effect: marker.kind.effect.clone(),
                     target,
@@ -828,6 +835,7 @@ mod tests {
             call: CallId::new(0),
         };
         let first = SiteCommentAnnotation {
+            justification_count: 1,
             id: AnnotationId(7),
             effect: EffectKey::new("safety"),
             target: target.clone(),
@@ -937,6 +945,7 @@ mod tests {
             .enumerate()
             {
                 body.markers.push(AnnotationFact {
+                    justification_count: 1,
                     id: MarkerId::new(u32::try_from(index).unwrap()),
                     identity: format!("{position}-{index}"),
                     kind: AnnotationFactKind::new(
@@ -1030,6 +1039,7 @@ mod tests {
         projected.call_site = CallSiteId::new(99);
         let mut defining_body = body(generic, vec![defining]);
         defining_body.markers.push(AnnotationFact {
+            justification_count: 1,
             id: MarkerId::new(0),
             identity: "shared".to_owned(),
             kind: AnnotationFactKind::new(EffectKey::new("safety"), AnnotationRole::Justification),
@@ -1332,6 +1342,7 @@ mod tests {
         );
         first_body.contract_declaration = Some(target(callee, "body-first"));
         first_body.markers.push(AnnotationFact {
+            justification_count: 1,
             id: MarkerId::new(0),
             identity: "local-comment".to_owned(),
             kind: AnnotationFactKind::new(EffectKey::new("panic"), AnnotationRole::Justification),
@@ -1560,6 +1571,7 @@ mod tests {
         let valid = function(1);
         let mut invalid_body = body(invalid, Vec::new());
         invalid_body.markers.push(AnnotationFact {
+            justification_count: 1,
             id: MarkerId::new(0),
             identity: "invalid".to_owned(),
             kind: AnnotationFactKind::new(EffectKey::new("panic"), AnnotationRole::Contract),

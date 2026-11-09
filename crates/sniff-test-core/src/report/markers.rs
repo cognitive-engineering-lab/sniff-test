@@ -21,11 +21,24 @@ use super::{
     display_path, effect_fact, path_from_root_until, trace_path,
 };
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub(super) enum SourceEffectGroup {
     Invocation(crate::trace::InvocationId, crate::artifact::CallId),
+    /// One source call across concrete instantiations of its caller.
+    SourceInvocation(
+        crate::namespace::StableDefPathHash,
+        crate::artifact::CallSiteId,
+    ),
     Operation(StableFunctionId, crate::artifact::EffectGroupId),
     StandaloneOperation(StableFunctionId, EffectId),
+    SourceOperation {
+        definition: crate::namespace::StableDefPathHash,
+        file: crate::artifact::SourceFileId,
+        start: u64,
+        end: u64,
+        kind: crate::artifact::EffectKind,
+        ordinal: usize,
+    },
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
@@ -91,7 +104,7 @@ pub(super) fn marker_ambiguities(
     claims
         .iter()
         .filter_map(|(annotation, groups)| {
-            if groups.len() < 2 {
+            if groups.is_empty() {
                 return None;
             }
             let projections = groups
@@ -114,18 +127,25 @@ pub(super) fn marker_ambiguities(
                         .min_by(marker_projection_order)
                 })
                 .collect::<Vec<_>>();
-            if projections.len() < 2 {
+            if projections.is_empty() {
                 return None;
             }
             let effect_count = projections.len();
             let comment = annotations.site_comment(*annotation)?;
+            let justification_count = comment.justification_count();
+            if justification_count == effect_count {
+                return None;
+            }
             let representative = projections.into_iter().min_by(marker_projection_order)?;
             Some(InterpretedFinding {
                 effect: metadata
                     .iter()
                     .find(|metadata| metadata.key == *comment.effect())?
                     .clone(),
-                kind: InterpretedFindingKind::AmbiguousMarker { effect_count },
+                kind: InterpretedFindingKind::AmbiguousMarker {
+                    justification_count,
+                    effect_count,
+                },
                 function: representative.function,
                 function_path: representative.function_path,
                 callee: None,
@@ -446,17 +466,28 @@ fn effect_groups(
                         .find(|fact| &fact.effect == effect_key)
                         .and_then(|fact| fact.effect_group)
                 })
-                .map_or(SourceEffectGroup::Invocation(invocation, call), |group| {
-                    SourceEffectGroup::Operation(owner, group)
-                });
+                .map_or_else(
+                    || invocation_group(graph, invocation, call),
+                    |group| {
+                        SourceEffectGroup::Operation(
+                            StableFunctionId::generic(owner.def_path_hash),
+                            group,
+                        )
+                    },
+                );
             vec![group]
         }
         ConcreteSource::Effect { owner, effect } => vec![
             effect_fact(artifact, owner, effect)
                 .and_then(|(_, fact)| fact.effect_group)
                 .map_or(
-                    SourceEffectGroup::StandaloneOperation(owner, effect),
-                    |group| SourceEffectGroup::Operation(owner, group),
+                    standalone_operation_group(artifact, owner, effect),
+                    |group| {
+                        SourceEffectGroup::Operation(
+                            StableFunctionId::generic(owner.def_path_hash),
+                            group,
+                        )
+                    },
                 ),
         ],
     }
@@ -482,18 +513,69 @@ pub(super) fn obligation_effect_groups(
             let is_concrete = concrete
                 .is_some_and(|concrete| concrete.invocation_source(invocation, edge.id).is_some());
             if !is_concrete {
-                return SourceEffectGroup::Invocation(invocation, edge.id);
+                return invocation_group(graph, invocation, edge.id);
             }
             edge.invocation_effects
                 .iter()
                 .find(|fact| &fact.effect == effect_key)
                 .and_then(|fact| fact.effect_group)
-                .map_or(
-                    SourceEffectGroup::Invocation(invocation, edge.id),
-                    |group| SourceEffectGroup::Operation(owner, group),
-                )
+                .map_or(invocation_group(graph, invocation, edge.id), |group| {
+                    SourceEffectGroup::Operation(
+                        StableFunctionId::generic(owner.def_path_hash),
+                        group,
+                    )
+                })
         })
         .collect()
+}
+
+fn standalone_operation_group(
+    artifact: &ArtifactFacts,
+    owner: StableFunctionId,
+    effect: EffectId,
+) -> SourceEffectGroup {
+    let Some((body, fact)) = effect_fact(artifact, owner, effect) else {
+        return SourceEffectGroup::StandaloneOperation(owner, effect);
+    };
+    let Some(range) = &fact.source_range else {
+        return SourceEffectGroup::StandaloneOperation(owner, effect);
+    };
+    // Raw effect IDs are local to each body and may shift between instances.
+    // Keep distinct operations sharing a span, while merging their replicas.
+    let ordinal = body
+        .effects
+        .iter()
+        .take_while(|candidate| candidate.id != effect)
+        .filter(|candidate| {
+            candidate.effect == fact.effect
+                && candidate.kind == fact.kind
+                && candidate.source_range == fact.source_range
+        })
+        .count();
+    SourceEffectGroup::SourceOperation {
+        definition: owner.def_path_hash,
+        file: range.file.clone(),
+        start: range.byte_start,
+        end: range.byte_end,
+        kind: fact.kind.clone(),
+        ordinal,
+    }
+}
+
+fn invocation_group(
+    graph: &InvocationGraph,
+    invocation: crate::trace::InvocationId,
+    call: crate::artifact::CallId,
+) -> SourceEffectGroup {
+    let owner = graph.stable_function(graph.invocation(invocation).caller());
+    graph
+        .source_edges(invocation)
+        .iter()
+        .find(|edge| edge.id == call)
+        .filter(|edge| edge.source_range.is_some())
+        .map_or(SourceEffectGroup::Invocation(invocation, call), |edge| {
+            SourceEffectGroup::SourceInvocation(owner.def_path_hash, edge.call_site)
+        })
 }
 
 fn concrete_source_owner(graph: &InvocationGraph, origin: ConcreteSource) -> Option<FunctionId> {

@@ -1,0 +1,13 @@
+[analysis]
+effect-doc-matching = "exact"
+report-roots = "public"
+
+[panic.lints]
+operation = "deny"
+invocation = "deny"
+ambiguous-marker = "deny"
+
+[safety.lints]
+operation = "deny"
+invocation = "deny"
+ambiguous-marker = "deny"

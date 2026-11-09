@@ -20,6 +20,7 @@ pub(crate) struct SourceJustificationOverrides {
 }
 
 struct SourceJustification {
+    justification_count: usize,
     identity: String,
     range: SourceRangeFact,
     effect: EffectKey,
@@ -43,7 +44,7 @@ impl SourceJustificationOverrides {
                     .or_default()
                     .entry(source.id.clone())
                     .or_default();
-                for (effect, satisfactions) in &markers {
+                for (effect, parsed) in &markers {
                     if entries.iter().any(|entry| {
                         entry.effect == *effect
                             && entry.range.byte_start < range.byte_end
@@ -56,6 +57,7 @@ impl SourceJustificationOverrides {
                         )));
                     }
                     entries.push(SourceJustification {
+                        justification_count: parsed.justification_count,
                         identity: format!(
                             "source-justification|{owner:016x}|{}|{}",
                             describe_selector(&selector),
@@ -63,7 +65,8 @@ impl SourceJustificationOverrides {
                         ),
                         range: range.clone(),
                         effect: effect.clone(),
-                        satisfactions: satisfactions
+                        satisfactions: parsed
+                            .satisfactions
                             .iter()
                             .map(|satisfaction| AnnotationSatisfactionFact {
                                 requirement: satisfaction.requirement.clone(),
@@ -119,6 +122,7 @@ impl SourceJustificationOverrides {
                 body.unverified_marker_probes
                     .retain(|probe| probe.kind != kind || probe.target != target);
                 body.markers.push(AnnotationFact {
+                    justification_count: entry.justification_count,
                     id: MarkerId::new(id),
                     identity: entry.identity.clone(),
                     kind,

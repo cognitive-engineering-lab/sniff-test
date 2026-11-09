@@ -1,0 +1,16 @@
+[analysis]
+effect-doc-matching = "exact"
+report-roots = ["marker_counts::override_sites"]
+
+[panic.lints]
+operation = "deny"
+invocation = "deny"
+ambiguous-marker = "deny"
+
+[safety.lints]
+operation = "deny"
+invocation = "deny"
+ambiguous-marker = "deny"
+
+[contracts]
+override-files = ["override-1.toml"]

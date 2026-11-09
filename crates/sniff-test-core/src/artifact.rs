@@ -878,6 +878,8 @@ impl EffectKind {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub struct AnnotationFact {
+    /// Number of nonempty justification headers for this effect.
+    pub justification_count: usize,
     pub id: MarkerId,
     /// Identity of one logical marker occurrence. A marker in a macro
     /// definition has a distinct identity for each expansion, while the same
@@ -1538,6 +1540,7 @@ mod tests {
             kind: EffectKind::new("blocking-read"),
         });
         body.markers.push(AnnotationFact {
+            justification_count: 1,
             id: MarkerId::new(0),
             identity: String::from("network-marker"),
             kind: AnnotationFactKind::new(
@@ -1690,6 +1693,7 @@ mod tests {
         let mut body = empty_body(function, display_path);
         body.effects = vec![compiler_assert_effect(0), compiler_assert_effect(1)];
         body.markers.push(AnnotationFact {
+            justification_count: 1,
             id: MarkerId::new(0),
             identity: String::from("panic-marker"),
             kind: crate::effects::annotation_kind::<crate::effects::panic::Panic>(
@@ -1914,6 +1918,7 @@ mod tests {
             direct_call(3, 3, range(30, 40)),
         ];
         defining.markers.push(AnnotationFact {
+            justification_count: 1,
             id: MarkerId::new(0),
             identity: String::from("panic-call-marker"),
             kind: crate::effects::annotation_kind::<crate::effects::panic::Panic>(
@@ -1988,6 +1993,7 @@ mod tests {
         let mut defining = empty_body(generic, "dependency::generic");
         defining.calls = vec![source_less_call(0, 0), source_less_call(1, 1)];
         defining.markers.push(AnnotationFact {
+            justification_count: 1,
             id: MarkerId::new(0),
             identity: String::from("unmappable-panic-call-marker"),
             kind: crate::effects::annotation_kind::<crate::effects::panic::Panic>(
@@ -2046,6 +2052,7 @@ mod tests {
             call.macro_expansions.push(source_less_macro_expansion());
         }
         defining.markers.push(AnnotationFact {
+            justification_count: 1,
             id: MarkerId::new(0),
             identity: String::from("unmappable-macro-call-marker"),
             kind: crate::effects::annotation_kind::<crate::effects::panic::Panic>(
@@ -2108,6 +2115,7 @@ mod tests {
             unsafe_effect(1, 1, range(70, 80)),
         ];
         defining.markers.push(AnnotationFact {
+            justification_count: 1,
             id: MarkerId::new(0),
             identity: String::from("safety-effect-marker"),
             kind: crate::effects::annotation_kind::<crate::effects::safety::Safety>(
@@ -2155,6 +2163,7 @@ mod tests {
             .push(source_less_macro_expansion());
         defining.effects.push(defining_effect);
         defining.markers.push(AnnotationFact {
+            justification_count: 1,
             id: MarkerId::new(0),
             identity: String::from("unmappable-macro-effect-marker"),
             kind: crate::effects::annotation_kind::<crate::effects::safety::Safety>(
@@ -2403,6 +2412,7 @@ mod tests {
             ],
             markers: vec![
                 AnnotationFact {
+                    justification_count: 1,
                     id: MarkerId::new(8),
                     identity: String::from("safety-marker"),
                     kind: crate::effects::annotation_kind::<crate::effects::safety::Safety>(
@@ -2422,6 +2432,7 @@ mod tests {
                     requirements: Vec::new(),
                 },
                 AnnotationFact {
+                    justification_count: 1,
                     id: MarkerId::new(1),
                     identity: String::from("panic-contract"),
                     kind: crate::effects::annotation_kind::<crate::effects::panic::Panic>(
@@ -2438,6 +2449,7 @@ mod tests {
                     requirements: vec![root_contract_requirement],
                 },
                 AnnotationFact {
+                    justification_count: 1,
                     id: MarkerId::new(3),
                     identity: String::from("panic-marker"),
                     kind: crate::effects::annotation_kind::<crate::effects::panic::Panic>(

@@ -1824,6 +1824,7 @@ fn push_effect_marker(
     body.unverified_marker_probes.retain(|probe| {
         probe.kind != kind || probe.target != target || probe.probing != applicable_probing
     });
+    let justification_count = marker.justification_count;
     let source_range = sources.range(tcx, marker.span)?;
     let satisfactions = marker
         .satisfactions
@@ -1835,11 +1836,14 @@ fn push_effect_marker(
         })
         .collect::<Vec<_>>();
     let identity = format!("{kind:?}|{:?}", marker.key);
-    let key = format!("{identity}|{target:?}|{source_range:?}|{satisfactions:?}|{requirements:?}");
+    let key = format!(
+        "{identity}|{target:?}|{source_range:?}|{satisfactions:?}|{requirements:?}|{justification_count}"
+    );
     if let Some(existing) = body.markers.iter_mut().find(|pending| pending.key == key) {
         push_unique(&mut existing.applicable_probing, applicable_probing);
     } else {
         body.markers.push(PendingMarker {
+            justification_count,
             key,
             identity,
             kind,
@@ -1888,6 +1892,7 @@ struct PendingBody {
 impl PendingBody {
     fn push_contract_marker(&mut self, kind: AnnotationFactKind, contract: ContractFact) {
         self.markers.push(PendingMarker {
+            justification_count: 0,
             key: format!("{kind:?}|function|{:?}", contract.source_range),
             identity: format!("{kind:?}|function|{:?}", contract.source_range),
             kind,
@@ -1950,6 +1955,7 @@ impl PendingBody {
                     }
                 };
                 Ok(AnnotationFact {
+                    justification_count: pending.justification_count,
                     id: MarkerId::new(local_id(index, "marker")?),
                     identity: pending.identity,
                     kind: pending.kind,
@@ -2038,6 +2044,7 @@ struct PendingEffect {
 }
 
 struct PendingMarker {
+    justification_count: usize,
     key: String,
     identity: String,
     kind: AnnotationFactKind,
