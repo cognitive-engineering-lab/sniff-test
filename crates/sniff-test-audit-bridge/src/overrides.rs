@@ -1,9 +1,16 @@
 use super::*;
-use sniff_test_report::OverrideAnnotation;
+/// Documentation and verified source-selector metadata retained for GUI drafts.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct OverrideDocument {
+    pub effect: String,
+    pub action: String,
+    pub document: String,
+    pub selector: sniff_test_report::OverrideSelector,
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct OverrideDraft {
-    pub annotation: OverrideAnnotation,
+    pub annotation: OverrideDocument,
     pub location: Location,
     #[serde(default)]
     pub applied: bool,
@@ -128,7 +135,7 @@ impl Session {
                 .any(|l| !l.trim().trim_start_matches('/').trim().is_empty()),
             "write an explanation first"
         );
-        let annotation = OverrideAnnotation {
+        let annotation = OverrideDocument {
             effect: audit.effect,
             action: action.into(),
             document,
@@ -449,45 +456,31 @@ impl Session {
             .parse::<toml_edit::Document>()?;
         // Validate known schema before touching an existing file.
         validate_override_file(original.as_deref().unwrap_or(""))?;
-        if document.get("annotations").is_none() {
-            document["annotations"] =
-                toml_edit::Item::ArrayOfTables(toml_edit::ArrayOfTables::new());
-        }
-        let entries = document["annotations"]
-            .as_array_of_tables_mut()
-            .context("annotations must be an array of tables")?;
-        for draft in buffer.annotations.iter().filter(|a| !a.applied) {
-            let annotation = &draft.annotation;
-            let encoded = toml::to_string(annotation)?.parse::<toml_edit::Document>()?;
-            let mut replacement = None;
-            for (index, entry) in entries.iter().enumerate() {
-                let mut existing = toml_edit::Document::new();
-                *existing.as_table_mut() = entry.clone();
-                let parsed: OverrideAnnotation = toml::from_str(&existing.to_string())?;
-                if parsed.effect == annotation.effect
-                    && parsed.action == annotation.action
-                    && parsed.selector.same_target(&annotation.selector)
+        for other in destinations.iter().filter(|p| **p != destination) {
+            let text = read_optional(Path::new(other))?.unwrap_or_default();
+            validate_override_file(&text)?;
+            let parsed: OverrideFile = toml::from_str(&text)?;
+            for draft in buffer.annotations.iter().filter(|d| !d.applied) {
+                let selector = &draft.annotation.selector;
+                if let Some(entries) = parsed
+                    .overrides
+                    .crates
+                    .get(&selector.crate_name)
+                    .and_then(|v| v.get(&selector.version))
                 {
-                    replacement = Some(index);
-                    break;
+                    for key in entries.keys() {
+                        let (path, start, end) = parse_lines(key)?;
+                        ensure!(
+                            path != selector.source_path
+                                || selector.line < start
+                                || selector.line > end,
+                            "overlapping source override in {other}: {key}"
+                        );
+                    }
                 }
             }
-            let mut table = toml_edit::Table::new();
-            for (key, item) in encoded.iter() {
-                table[key] = if let Some(nested) = item.as_table() {
-                    toml_edit::Item::Value(toml_edit::Value::InlineTable(
-                        nested.clone().into_inline_table(),
-                    ))
-                } else {
-                    item.clone()
-                };
-            }
-            if let Some(index) = replacement {
-                *entries.get_mut(index).unwrap() = table;
-            } else {
-                entries.push(table);
-            }
         }
+        merge_source_drafts(&mut document, &buffer)?;
         let content = document.to_string();
         validate_override_file(&content)?;
         let relative = Path::new(&destination)
@@ -600,17 +593,194 @@ fn unified(original: &str, content: &str, path: &str) -> String {
         .header(path, path)
         .to_string()
 }
+use sniff_test_report::source_overrides::{OverrideFile, SourceContractSelector};
+
+fn source_key(selector: &sniff_test_report::OverrideSelector) -> String {
+    format!(
+        "{}:{}:{}",
+        selector.source_path, selector.line, selector.line
+    )
+}
+fn parse_lines(key: &str) -> Result<(&str, u32, u32)> {
+    let selector = SourceContractSelector::parse("validation", "0.0.0", key)?;
+    let (path, _) = key.rsplit_once(':').unwrap().0.rsplit_once(':').unwrap();
+    Ok((path, selector.start_line(), selector.end_line()))
+}
+
 fn validate_override_file(source: &str) -> Result<()> {
-    #[derive(Deserialize)]
-    #[serde(deny_unknown_fields)]
-    struct File {
-        #[serde(default)]
-        overrides: BTreeMap<String, String>,
-        #[serde(default)]
-        annotations: Vec<OverrideAnnotation>,
+    let file: OverrideFile = toml::from_str(source)?;
+    for (name, versions) in file.overrides.crates {
+        SourceContractSelector::validate_crate_name(&name)?;
+        for (version, entries) in versions {
+            SourceContractSelector::validate_version(&version)?;
+            for key in entries.keys() {
+                parse_lines(key)?;
+            }
+        }
     }
-    let file: File = toml::from_str(source)?;
-    let _ = (file.overrides, file.annotations);
+    for pattern in file.overrides.namespaces.keys() {
+        globset::Glob::new(pattern)?;
+    }
+    Ok(())
+}
+
+fn markdown(document: &str, action: &str) -> String {
+    let prefix = if action == "justification" {
+        "//"
+    } else {
+        "///"
+    };
+    document
+        .lines()
+        .map(|line| {
+            let line = line.trim_start().strip_prefix(prefix).unwrap_or(line);
+            line.strip_prefix(' ').unwrap_or(line)
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+        .trim()
+        .to_owned()
+}
+
+// Replace just this contract section; keep prose and every other effect's contract.
+fn replace_section(base: &str, replacement: &str) -> String {
+    let heading = replacement.lines().next().unwrap_or_default().trim();
+    let lines = base.lines().collect::<Vec<_>>();
+    if let Some(start) = lines
+        .iter()
+        .position(|l| l.trim().eq_ignore_ascii_case(heading))
+    {
+        let level = heading.chars().take_while(|c| *c == '#').count();
+        let end = (start + 1..lines.len())
+            .find(|&i| {
+                let l = lines[i].trim_start();
+                let n = l.chars().take_while(|c| *c == '#').count();
+                n > 0 && n <= level && l.as_bytes().get(n) == Some(&b' ')
+            })
+            .unwrap_or(lines.len());
+        [
+            lines[..start].join("\n"),
+            replacement.to_owned(),
+            lines[end..].join("\n"),
+        ]
+        .into_iter()
+        .filter(|s| !s.trim().is_empty())
+        .collect::<Vec<_>>()
+        .join("\n\n")
+    } else {
+        [base.trim(), replacement.trim()]
+            .into_iter()
+            .filter(|s| !s.is_empty())
+            .collect::<Vec<_>>()
+            .join("\n\n")
+    }
+}
+
+fn merge_source_drafts(document: &mut toml_edit::Document, buffer: &Buffer) -> Result<()> {
+    let mut groups = BTreeMap::<(String, String, String), Vec<&OverrideDraft>>::new();
+    for draft in &buffer.annotations {
+        let selector = &draft.annotation.selector;
+        groups
+            .entry((
+                selector.crate_name.clone(),
+                selector.version.clone(),
+                source_key(selector),
+            ))
+            .or_default()
+            .push(draft);
+    }
+    for ((name, version, key), drafts) in groups {
+        if drafts.iter().all(|d| d.applied) {
+            continue;
+        }
+        let action = &drafts[0].annotation.action;
+        ensure!(
+            drafts.iter().all(|d| &d.annotation.action == action),
+            "obligation and justification source-selector collision at {key}"
+        );
+        if action == "obligation" {
+            ensure!(
+                drafts.iter().all(|d| d.annotation.selector.definition
+                    == drafts[0].annotation.selector.definition),
+                "source selector matches multiple definitions at {key}"
+            );
+        }
+        let (path, start, end) = parse_lines(&key)?;
+        let parsed: OverrideFile = toml::from_str(&document.to_string())?;
+        let entries = parsed
+            .overrides
+            .crates
+            .get(&name)
+            .and_then(|v| v.get(&version));
+        if let Some(entries) = entries {
+            for existing in entries.keys().filter(|k| *k != &key) {
+                let (other_path, other_start, other_end) = parse_lines(existing)?;
+                ensure!(
+                    path != other_path || start > other_end || other_start > end,
+                    "overlapping source overrides: {existing} and {key}"
+                );
+            }
+        }
+        let existing = entries.and_then(|e| e.get(&key)).map(String::as_str);
+        let mut value = existing
+            .unwrap_or(if action == "obligation" {
+                &drafts[0].annotation.selector.documentation
+            } else {
+                ""
+            })
+            .to_owned();
+        if let Some(existing) = existing {
+            let headers = &drafts[0].annotation.selector.justification_headers;
+            let is_marker = existing
+                .lines()
+                .find(|l| !l.trim().is_empty())
+                .is_some_and(|l| {
+                    let l = l.trim().strip_prefix("//").unwrap_or(l).trim();
+                    headers
+                        .iter()
+                        .any(|h| l.strip_prefix(h).is_some_and(|r| r.starts_with(':')))
+                });
+            ensure!(
+                is_marker == (action == "justification"),
+                "obligation and justification source-selector collision at {key}"
+            );
+        }
+        for draft in drafts.iter().filter(|d| !d.applied) {
+            let new = markdown(&draft.annotation.document, action);
+            if action == "obligation" {
+                value = replace_section(&value, &new);
+            } else {
+                if let Some(previous) = &draft.previous_document {
+                    let previous = markdown(previous, action);
+                    ensure!(
+                        value.contains(&previous),
+                        "saved override contribution changed at {key}"
+                    );
+                    value = value.replacen(&previous, &new, 1);
+                } else {
+                    if !value.trim().is_empty() {
+                        value.push_str("\n\n");
+                    }
+                    value.push_str(&new);
+                }
+            }
+        }
+        let mut table: &mut dyn toml_edit::TableLike = document.as_table_mut();
+        for key in ["overrides", "crates", &name, &version] {
+            let entry = table
+                .entry(key)
+                .or_insert(toml_edit::Item::Table(toml_edit::Table::new()));
+            table = entry
+                .as_table_like_mut()
+                .context("override entries must be tables")?;
+        }
+        let item = &mut document["overrides"]["crates"][&name][&version][&key];
+        let decor = item.as_value().map(|v| v.decor().clone());
+        *item = toml_edit::value(value);
+        if let Some(decor) = decor {
+            *item.as_value_mut().unwrap().decor_mut() = decor;
+        }
+    }
     Ok(())
 }
 
@@ -650,7 +820,11 @@ mod tests {
             namespace: "dep::sample".into(),
             source_id: "source".into(),
             source_hash: "hash".into(),
-            package: "dep@0.1.0".into(),
+            crate_name: "dep".into(),
+            version: "0.1.0".into(),
+            line: 7,
+            documentation: String::new(),
+            justification_headers: vec!["SAFETY".into(), "PANIC".into(), "ALLOC".into()],
             source_path: "src/lib.rs".into(),
             start: 27,
             end: 38,
@@ -696,6 +870,120 @@ mod tests {
         }];
         (root, dep, session, buffer.path)
     }
+    fn draft_buffer() -> Buffer {
+        let (_root, _dep, mut session, path) = setup();
+        session
+            .save_override("finding", "justification", 0, "// SAFETY: first".into())
+            .unwrap();
+        session.buffer(&path).unwrap()
+    }
+    fn value(document: &toml_edit::Document, key: &str) -> String {
+        let parsed: OverrideFile = toml::from_str(&document.to_string()).unwrap();
+        parsed.overrides.crates["dep"]["0.1.0"][key].clone()
+    }
+    #[test]
+    fn same_line_contributions_preserve_counts_other_effects_and_replace_edits() {
+        let mut buffer = draft_buffer();
+        let mut second = buffer.annotations[0].clone();
+        second.annotation.selector.site = Some("second site".into());
+        second.annotation.document = "// SAFETY: second".into();
+        buffer.annotations.push(second);
+        let mut other = buffer.annotations[0].clone();
+        other.annotation.effect = "panic".into();
+        other.annotation.document = "// PANIC: checked".into();
+        buffer.annotations.push(other);
+        let mut document = "# file comment\n[overrides.crates.dep.\"0.1.0\"]\n# nearby comment\n\"src/lib.rs:20:20\" = \"# Safety\\nKeep this contract\" # inline\n".parse().unwrap();
+        merge_source_drafts(&mut document, &buffer).unwrap();
+        let text = value(&document, "src/lib.rs:7:7");
+        assert_eq!(text.matches("SAFETY:").count(), 2);
+        assert_eq!(text.matches("PANIC:").count(), 1);
+        for draft in &mut buffer.annotations {
+            draft.applied = true;
+            draft.previous_document = Some(draft.annotation.document.clone());
+        }
+        buffer.annotations[0].applied = false;
+        buffer.annotations[0].annotation.document = "// SAFETY: revised\n// continued".into();
+        merge_source_drafts(&mut document, &buffer).unwrap();
+        merge_source_drafts(
+            &mut document,
+            &Buffer {
+                annotations: buffer
+                    .annotations
+                    .iter()
+                    .cloned()
+                    .map(|mut d| {
+                        d.applied = true;
+                        d
+                    })
+                    .collect(),
+                ..buffer.clone()
+            },
+        )
+        .unwrap();
+        let text = value(&document, "src/lib.rs:7:7");
+        assert!(!text.contains("first"));
+        assert!(text.contains("SAFETY: revised\ncontinued"));
+        assert!(text.contains("SAFETY: second"));
+        assert!(text.contains("PANIC: checked"));
+        let saved = document.to_string();
+        assert!(saved.contains("# nearby comment"));
+        assert!(saved.contains("# inline"));
+        validate_override_file(&saved).unwrap();
+    }
+    #[test]
+    fn obligations_preserve_effective_rustdoc_and_other_contracts() {
+        let mut buffer = draft_buffer();
+        let draft = &mut buffer.annotations[0];
+        draft.annotation.action = "obligation".into();
+        draft.annotation.document = "/// # Panics\n/// Checked by caller.".into();
+        draft.annotation.selector.documentation = "Summary.\n\n# Safety\nPointer must be valid.\n\n# Panics\nOld.\n\n# Examples\nExample.".into();
+        let mut document = toml_edit::Document::new();
+        merge_source_drafts(&mut document, &buffer).unwrap();
+        let text = value(&document, "src/lib.rs:7:7");
+        assert!(text.contains("# Safety\nPointer must be valid."));
+        assert!(text.contains("# Examples\nExample."));
+        assert!(text.contains("# Panics\nChecked by caller."));
+        assert!(!text.contains("Old."));
+        assert!(text.starts_with("Summary."));
+        buffer.annotations[0].annotation.effect = "safety".into();
+        buffer.annotations[0].annotation.document = "/// # Safety\n/// New safety contract.".into();
+        merge_source_drafts(&mut document, &buffer).unwrap();
+        let text = value(&document, "src/lib.rs:7:7");
+        assert!(text.contains("# Panics\nChecked by caller."));
+        assert_eq!(text.matches("# Safety").count(), 1);
+    }
+    #[test]
+    fn writer_supports_inline_tables_and_preserves_entry_comments() {
+        let buffer = draft_buffer();
+        let text = "# top\n[overrides.crates.dep]\n\"0.1.0\" = { \"src/lib.rs:7:7\" = \"SAFETY: existing\" } # keep\n";
+        let mut document = text.parse().unwrap();
+        merge_source_drafts(&mut document, &buffer).unwrap();
+        assert!(document.to_string().contains("# keep"));
+        assert_eq!(
+            value(&document, "src/lib.rs:7:7"),
+            "SAFETY: existing\n\nSAFETY: first"
+        );
+        validate_override_file(&document.to_string()).unwrap();
+    }
+
+    #[test]
+    fn writer_rejects_collisions_ranges_and_removed_schema_before_writing() {
+        assert!(validate_override_file("[[annotations]]\neffect=\"panic\"\n").is_err());
+        let buffer = draft_buffer();
+        for text in [
+            "[overrides.crates.dep.\"0.1.0\"]\n\"src/lib.rs:6:8\"=\"SAFETY: existing\"",
+            "[overrides.crates.dep.\"0.1.0\"]\n\"src/lib.rs:7:7\"=\"# Safety\\nExisting\"",
+        ] {
+            assert!(merge_source_drafts(&mut text.parse().unwrap(), &buffer).is_err());
+        }
+        let mut buffer = buffer;
+        let mut obligation = buffer.annotations[0].clone();
+        obligation.annotation.action = "obligation".into();
+        obligation.annotation.document = "/// # Safety\n/// Required.".into();
+        buffer.annotations.push(obligation);
+        assert!(merge_source_drafts(&mut toml_edit::Document::new(), &buffer).is_err());
+    }
+
     #[test]
     fn override_drafts_restart_edit_discard_and_preserve_dependency_bytes() {
         let (root, _dep, mut session, path) = setup();

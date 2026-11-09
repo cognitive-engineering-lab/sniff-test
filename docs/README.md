@@ -533,23 +533,21 @@ Injections apply with either `marker-probing` strategy, do not modify source fil
 artifact caches. Keep contract replacements and justification blocks in separate
 selector entries.
 
-Audit also writes additive `[[annotations]]` entries in these files. Each entry
-contains an `effect`, an `action` (`justification` or `obligation`), the full
-comment `document`, and a `selector`. Selectors identify the Cargo package and
-version, package-relative source path, function namespace and compiler identity,
-source content hash, normalized byte range, and operation or invocation identity.
-Generate these selectors with the audit GUI rather than copying line numbers.
-Justifications use the same marker parser as source comments, including named
-requirements and lists; obligations use the existing contract parser. Additive
-annotations preserve original contracts and legacy `[overrides]` replacements.
+Audit saves dependency edits using the same crate/version/source-line selectors.
+Justifications contain registered marker headers such as `PANIC:` or `SAFETY:`
+and select the final source callsite's start line. Obligations contain replacement
+rustdoc and select the definition's start line; Audit preserves the existing
+effective documentation and other contracts in that replacement. Distinct
+justifications on one line share a value with one header per effect group.
 
 Dependency files remain unchanged. Saved drafts present virtual source diffs;
-applying them merges annotations into the selected override TOML while preserving
-unrelated entries and comments. Existing-file edits require confirmation. New
-files are registered in the active configuration. A changed dependency or an
-ambiguous target causes an analysis error and requires re-auditing that annotation;
-overrides never shift automatically to a nearby site. Package-relative matching
-allows unchanged dependency sources to be audited from another checkout.
+applying them merges source-selector entries into the selected override TOML
+while preserving unrelated entries and comments. Existing-file edits require
+confirmation. New files are registered in the active configuration. Source hashes
+protect the editing session; saved overrides follow the line-selector matching
+rules described above. Overlapping ranges and obligation/justification key
+collisions are rejected before writing.
+
 
 ## JSON Output
 

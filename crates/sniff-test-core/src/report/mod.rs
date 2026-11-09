@@ -159,15 +159,6 @@ pub fn trace_selected_workspace(
         .apply(&mut artifact)
         .map_err(|error| EffectReportError::new(error.to_string()))?;
 
-    crate::override_annotations::apply(
-        &mut artifact,
-        &config.contracts.annotations,
-        &effects
-            .iter()
-            .map(|e| e.metadata().clone())
-            .collect::<Vec<_>>(),
-    )
-    .map_err(EffectReportError::new)?;
     let artifact = &artifact;
     let mut crate_dependencies = dependencies
         .artifacts()

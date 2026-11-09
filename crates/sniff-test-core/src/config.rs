@@ -246,8 +246,6 @@ pub struct ContractsConfig {
     #[serde(skip)]
     pub overrides: ContractDocOverrides,
     #[serde(skip)]
-    pub annotations: Vec<sniff_test_report::OverrideAnnotation>,
-    #[serde(skip)]
     resolved_override_files: Vec<PathBuf>,
 }
 
@@ -260,7 +258,6 @@ impl ContractsConfig {
     fn load_overrides(&mut self, base_dir: &Path) -> Result<(), ConfigError> {
         let mut entries = Vec::new();
         let mut source_entries = BTreeMap::new();
-        self.annotations.clear();
         let mut resolved_files = Vec::new();
         for path in &self.override_files {
             let path = if path.is_absolute() {
@@ -280,7 +277,6 @@ impl ContractsConfig {
                         source,
                     }
                 })?;
-            self.annotations.extend(override_file.annotations);
             let file_entries = override_file
                 .overrides
                 .namespaces
@@ -344,22 +340,7 @@ impl ContractsConfig {
     }
 }
 
-#[derive(Debug, Clone, Deserialize)]
-#[serde(deny_unknown_fields)]
-struct ContractDocOverrideFile {
-    #[serde(default)]
-    overrides: ContractDocOverrideEntries,
-    #[serde(default)]
-    annotations: Vec<sniff_test_report::OverrideAnnotation>,
-}
-
-#[derive(Debug, Clone, Default, Deserialize)]
-struct ContractDocOverrideEntries {
-    #[serde(default)]
-    crates: BTreeMap<String, BTreeMap<String, BTreeMap<String, String>>>,
-    #[serde(flatten)]
-    namespaces: BTreeMap<String, String>,
-}
+use sniff_test_report::source_overrides::OverrideFile as ContractDocOverrideFile;
 
 fn normalize_override_markdown(markdown: &str) -> String {
     let lines = markdown.lines().collect::<Vec<_>>();
@@ -2009,6 +1990,13 @@ mod tests {
         assert_eq!(empty.analysis.source_crates, Some(Vec::new()));
         assert_eq!(empty.warnings[0].field, "analysis.source-crates");
         assert!(empty.warnings[0].message.contains("no source crate"));
+    }
+
+    #[test]
+    fn manifest_rejects_annotation_tables() {
+        let error = load_contract_override_files(&["[[annotations]]\neffect = \"panic\"\n"])
+            .expect_err("only the source-selector and namespace override schema is accepted");
+        assert!(format!("{error:?}").contains("annotations"));
     }
 
     #[test]

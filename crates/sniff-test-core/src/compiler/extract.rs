@@ -2140,6 +2140,7 @@ impl SourceTable {
             })?;
         let definition = StableDefPathHash::from_def_id(tcx, def_id);
         let fact = DefinitionSourceFact {
+            documentation: crate::contracts::documentation_from_attrs(tcx, def_id),
             definition,
             display_path: canonical_namespace(tcx, def_id),
             source_range,

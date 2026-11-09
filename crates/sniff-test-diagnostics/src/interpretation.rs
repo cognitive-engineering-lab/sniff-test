@@ -126,6 +126,12 @@ pub fn interpret_workspace<'tcx>(
         local,
         local_stable_crate_id,
         dependencies,
+        justification_headers: effects
+            .iter()
+            .map(|e| e.metadata().justification.to_owned())
+            .collect(),
+        overrides: &config.contracts.overrides,
+        source_overrides: &source_overrides,
     };
 
     Ok(adapt_result(
@@ -2165,6 +2171,9 @@ struct SourceResolver<'tcx, 'analysis> {
     local: &'analysis ArtifactFacts,
     local_stable_crate_id: u64,
     dependencies: &'analysis ArtifactAnalysisGraph,
+    justification_headers: Vec<String>,
+    overrides: &'analysis sniff_test_core::contracts::ContractDocOverrides,
+    source_overrides: &'analysis sniff_test_core::source_overrides::ResolvedSourceOverrides,
 }
 
 impl SourceResolver<'_, '_> {
@@ -2226,55 +2235,16 @@ impl SourceResolver<'_, '_> {
         &self,
         finding: &InterpretedFinding,
     ) -> Vec<sniff_test_report::OverrideTarget> {
-        use sniff_test_report::{OverrideSelector, OverrideTarget};
         let Some(body) = self.function_body(finding.function) else {
             return vec![];
         };
         let mut targets = Vec::new();
-        let mut add = |action: &str,
-                       kind: String,
-                       range: Option<&SourceRangeFact>,
-                       site: Option<String>| {
-            let Some(range) = range else {
-                return;
+        let mut add =
+            |action: &str, kind: String, range: Option<&SourceRangeFact>, site: Option<String>| {
+                if let Some(target) = self.source_override_target(body, action, kind, range, site) {
+                    targets.push(target);
+                }
             };
-            let Some(location) = self.semantic_location(Some(range)).filter(|l| l.available) else {
-                return;
-            };
-            let Some(source) = self.source_file(range) else {
-                return;
-            };
-            let Some((package, source_path)) =
-                sniff_test_core::override_annotations::package_source(&source.filename)
-            else {
-                return;
-            };
-            let selector = OverrideSelector {
-                definition: body.function.def_path_hash.to_string(),
-                namespace: body.display_path.clone(),
-                source_id: source.id.as_str().to_owned(),
-                source_hash: source.content_hash.clone(),
-                package,
-                source_path,
-                start: range.byte_start,
-                end: range.byte_end,
-                kind,
-                site,
-            };
-            let matches = sniff_test_core::override_annotations::matching_targets(
-                body,
-                &selector,
-                finding.effect.key.as_str(),
-            );
-            if matches.is_empty() || selector.kind.starts_with("operation:") && matches.len() != 1 {
-                return;
-            }
-            targets.push(OverrideTarget {
-                action: action.into(),
-                location,
-                selector,
-            });
-        };
         if matches!(
             finding.kind,
             InterpretedFindingKind::Operation { .. }
@@ -2310,13 +2280,102 @@ impl SourceResolver<'_, '_> {
                             .last()
                             .and_then(|s| s.marker_call)
                             .and_then(|id| body.calls.iter().find(|c| c.id == id))
-                            .map(sniff_test_core::override_annotations::call_site_key),
-                    )
+                            .map(|call| {
+                                serde_json::to_string(&(
+                                    call.expanded_range
+                                        .as_ref()
+                                        .map(|r| (r.byte_start, r.byte_end)),
+                                    call.target
+                                        .function_target()
+                                        .map(|t| t.function.def_path_hash),
+                                    call.kind,
+                                ))
+                                .expect("serializable call identity")
+                            }),
+                    );
                 }
                 _ => {}
             }
         }
         targets
+    }
+
+    fn source_override_target(
+        &self,
+        body: &FunctionFact,
+        action: &str,
+        kind: String,
+        range: Option<&SourceRangeFact>,
+        site: Option<String>,
+    ) -> Option<sniff_test_report::OverrideTarget> {
+        let range = range?;
+        let location = self
+            .semantic_location(Some(range))
+            .filter(|l| l.available)?;
+        let hash = body.function.def_path_hash;
+        let artifact = self
+            .dependencies
+            .artifacts()
+            .find(|a| a.artifact.id.stable_crate_id == hash.stable_crate_id())?;
+        let definition = artifact
+            .facts
+            .definitions
+            .iter()
+            .find(|d| d.definition == hash)?;
+        let version = artifact.artifact.package_version.as_ref()?;
+        // The reporting crate can also contain a mirror of this file with no
+        // logical path. Only the owning artifact supplies package provenance.
+        let source = artifact
+            .facts
+            .source_files
+            .iter()
+            .find(|s| s.id == range.file)?;
+        let source_path = source.logical_path.clone()?;
+        let raw = self.semantic_sources.borrow();
+        let text = raw.get(&source.filename)?.raw.as_ref()?;
+        let line = if action == "obligation" {
+            definition.start_line
+        } else {
+            u32::try_from(
+                text[..location.start]
+                    .bytes()
+                    .filter(|b| *b == b'\n')
+                    .count()
+                    + 1,
+            )
+            .ok()?
+        };
+        let documentation = self
+            .source_overrides
+            .contracts
+            .get(&hash)
+            .map(|o| o.markdown().to_owned())
+            .or_else(|| {
+                self.overrides
+                    .markdown_for_candidates(&body.attributes.namespace_candidates)
+                    .map(str::to_owned)
+            })
+            .unwrap_or_else(|| definition.documentation.clone());
+        Some(sniff_test_report::OverrideTarget {
+            action: action.into(),
+            location,
+            selector: sniff_test_report::OverrideSelector {
+                definition: hash.to_string(),
+                namespace: body.display_path.clone(),
+                source_id: source.id.as_str().to_owned(),
+                source_hash: source.content_hash.clone(),
+                crate_name: artifact.artifact.crate_name.clone(),
+                version: version.clone(),
+                source_path,
+                line,
+                documentation,
+                justification_headers: self.justification_headers.clone(),
+                start: range.byte_start,
+                end: range.byte_end,
+                kind,
+                site,
+            },
+        })
     }
 
     fn local_annotation_locations(

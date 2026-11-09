@@ -14,7 +14,7 @@ type Target = {action:string; location:Location; selector?:unknown; annotationIn
 function sameSelector(a:unknown,b:unknown) {
   if(!a||!b)return false;
   const left=a as Record<string,unknown>,right=b as Record<string,unknown>;
-  return ['namespace','package','source_path','source_hash','start','end','kind','site'].every(key=>left[key]===right[key]);
+  return ['namespace','crate-name','version','source-path','source-hash','start','end','kind','site'].every(key=>left[key]===right[key]);
 }
 type OverridePlan = {token:string; destination:string; destinations:string[]; existing:boolean; diff:string};
 type TemplateEdit = {path:string; revision:number; start:number; end:number; text:string; cursor:number};
@@ -266,7 +266,7 @@ function App() {
       <h3>Call trace</h3><ol className="trace">{trace.map((step,i)=><li key={i}><button className={highlightedTraceIndex===i?'active':''} aria-current={highlightedTraceIndex===i?'location':undefined} disabled={!step.location?.available} onClick={()=>act(()=>open(step.location!))}>{step.caller}<span>{step.kind} → {step.target||'effect operation'}</span><small title={step.location?.path}>{!step.location?'':step.location.path.startsWith(root+'/')?step.location.path.slice(root.length+1):'…/'+step.location.path.split('/').slice(-3).join('/')}{step.location?.line?':'+step.location.line:''}{!step.location?.available?' · source unavailable':''}</small></button></li>)}</ol></div>
     </>:<div className="empty">Select a finding to inspect its contract and call trace.</div>}</aside></div>
     {overrideEditor&&<Modal title={overrideEditor.action==='justification'?'Justify via override':'Propagate obligations via override'} onClose={()=>setOverrideEditor(undefined)}>
-      {error&&<p role="alert">{error}</p>}<p>This documentation will be saved as an override draft. Dependency source stays read-only.</p>
+      {error&&<p role="alert">{error}</p>}<p>Justifications save marker text at the callsite line. Obligations save replacement rustdoc at the definition line, preserving other contracts.</p>
       <textarea ref={placeCaretAtEnd} autoFocus aria-label="Override documentation" value={overrideEditor.document} onChange={e=>setOverrideEditor({...overrideEditor,document:e.target.value})}/>
       <div className="modal-actions">{overrideEditor.index!==undefined&&!overrideEditor.applied&&<button disabled={busy||status.running} onClick={()=>act(async()=>{const result=await api('override/discard',overrideEditor);setBuffer(result.buffer);setText(result.buffer.content);if(result.finding)setSelected(result.finding);setOverrideEditor(undefined);await refreshDrafts();})}>{overrideEditor.previous_document?'Discard changes':'Delete draft'}</button>}<button onClick={()=>setOverrideEditor(undefined)}>Cancel</button><button className="primary" disabled={busy||status.running} onClick={()=>act(async()=>{const next=await api(overrideEditor.id?'override/save':'override/edit',overrideEditor);setBuffer(next);setText(next.content);setOverrideEditor(undefined);if(view==='changes')setDiff((await api('diff?'+new URLSearchParams({path:next.path}))).diff);await refreshDrafts();})}>Save draft</button></div>
     </Modal>}

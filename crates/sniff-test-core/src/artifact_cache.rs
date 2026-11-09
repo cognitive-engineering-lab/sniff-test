@@ -546,6 +546,7 @@ mod tests {
             }],
             vec![source],
             vec![DefinitionSourceFact {
+                documentation: String::new(),
                 definition,
                 display_path: String::from("sample::root"),
                 source_range: SourceRangeFact {

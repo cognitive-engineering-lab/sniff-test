@@ -1,4 +1,6 @@
 //! Compiler-independent report envelope and structured semantic facts.
+pub mod source_overrides;
+
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
@@ -114,7 +116,12 @@ pub struct OverrideSelector {
     pub namespace: String,
     pub source_id: String,
     pub source_hash: String,
-    pub package: String,
+    pub crate_name: String,
+    pub version: String,
+    pub line: u32,
+    /// Effective rustdoc before editing, including configured replacements.
+    pub documentation: String,
+    pub justification_headers: Vec<String>,
     pub source_path: String,
     pub start: u64,
     pub end: u64,
@@ -126,7 +133,8 @@ impl OverrideSelector {
     /// Compare the portable target, excluding compiler identities tied to a checkout.
     pub fn same_target(&self, other: &Self) -> bool {
         self.namespace == other.namespace
-            && self.package == other.package
+            && self.crate_name == other.crate_name
+            && self.version == other.version
             && self.source_path == other.source_path
             && self.source_hash == other.source_hash
             && self.start == other.start
@@ -139,13 +147,5 @@ impl OverrideSelector {
 pub struct OverrideTarget {
     pub action: String,
     pub location: Location,
-    pub selector: OverrideSelector,
-}
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "kebab-case", deny_unknown_fields)]
-pub struct OverrideAnnotation {
-    pub effect: String,
-    pub action: String,
-    pub document: String,
     pub selector: OverrideSelector,
 }

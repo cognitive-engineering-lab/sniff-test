@@ -576,6 +576,8 @@ pub struct SourceRangeFact {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub struct DefinitionSourceFact {
+    /// Complete effective doc attributes before interpretation-time overrides.
+    pub documentation: String,
     pub definition: StableDefPathHash,
     pub display_path: String,
     pub source_range: SourceRangeFact,
@@ -1385,15 +1387,7 @@ fn validate_source_logical_path(path: &str) -> Result<(), ArtifactValidationErro
     Ok(())
 }
 
-#[must_use]
-pub fn is_portable_source_path(path: &str) -> bool {
-    !path.is_empty()
-        && !path.starts_with('/')
-        && !path.contains(['\\', ':'])
-        && path
-            .split('/')
-            .all(|segment| !segment.is_empty() && !matches!(segment, "." | ".."))
-}
+pub use sniff_test_report::source_overrides::is_portable_source_path;
 
 fn validate_nonempty_sorted_set<T: Ord>(
     values: &[T],
@@ -2614,12 +2608,14 @@ mod tests {
             vec![source_file()],
             vec![
                 DefinitionSourceFact {
+                    documentation: String::new(),
                     definition: second,
                     display_path: String::from("sample::second"),
                     source_range: range(80, 120),
                     start_line: 8,
                 },
                 DefinitionSourceFact {
+                    documentation: String::new(),
                     definition: first,
                     display_path: String::from("sample::first"),
                     source_range: range(10, 30),
@@ -2650,6 +2646,7 @@ mod tests {
     fn definition_sources_reject_duplicates_and_zero_based_lines() {
         let definition = def_hash("00000000000000010000000000000002");
         let definition_source = DefinitionSourceFact {
+            documentation: String::new(),
             definition,
             display_path: String::from("sample::root"),
             source_range: range(10, 30),

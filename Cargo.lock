@@ -441,6 +441,7 @@ checksum = "52dfc19153a48bde0cbd630453615c8151bce3a5adfac7a0aebfbf0a1e1f57e3"
 dependencies = [
  "aho-corasick",
  "bstr",
+ "log",
  "regex-automata",
  "regex-syntax",
 ]
@@ -1082,6 +1083,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "fs2",
+ "globset",
  "serde",
  "serde_json",
  "similar",
@@ -1155,6 +1157,7 @@ dependencies = [
 name = "sniff-test-report"
 version = "0.1.0"
 dependencies = [
+ "semver",
  "serde",
  "serde_json",
  "sha2 0.10.9",

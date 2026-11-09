@@ -583,7 +583,7 @@ for(const action of ['Justify via override','Propagate obligations via override'
       expect(await readFile(join(dependency,'src/lib.rs'),'utf8')).toBe(source);
       await page.getByRole('button',{name:'Apply overrides & reanalyze',exact:true}).click();
       await expect(dialog).toHaveAccessibleName('Confirm editing override file');
-      await expect(dialog.locator('.diff')).toContainText('annotations');
+      await expect(dialog.locator('.diff')).toContainText('overrides.crates');
       await dialog.getByRole('button',{name:'Cancel',exact:true}).click();
       expect(await readFile(join(dir,'existing.toml'),'utf8')).not.toContain('annotations');
       await page.getByRole('button',{name:'Apply overrides & reanalyze',exact:true}).click();
