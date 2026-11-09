@@ -69,6 +69,9 @@ pub enum MarkerAssociation {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SemanticFacts {
+    /// Optional presentation metadata; absent in older reports.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub direct_source: Option<DirectSourceKey>,
     pub effect: String,
     pub obligation: Option<String>,
     pub justification: Option<String>,
@@ -99,6 +102,23 @@ pub fn original_offset(source: &str, normalized: usize) -> Option<usize> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn older_semantic_facts_without_direct_source_remain_readable() {
+        let value = serde_json::json!({
+            "effect": "custom", "obligation": null, "justification": null,
+            "source": null, "root": null, "enclosing_function": null,
+            "justification_site": null, "contract": null, "trace": []
+        });
+        let facts: super::SemanticFacts = serde_json::from_value(value).unwrap();
+        assert!(facts.direct_source.is_none());
+        assert!(
+            serde_json::to_value(facts)
+                .unwrap()
+                .get("direct_source")
+                .is_none()
+        );
+    }
+
     #[test]
     fn offsets_preserve_crlf_bom_and_unicode() {
         assert_eq!(super::original_offset("\u{feff}a\r\nλ", 2), Some(6));
@@ -148,4 +168,27 @@ pub struct OverrideTarget {
     pub action: String,
     pub location: Location,
     pub selector: OverrideSelector,
+}
+
+/// Complete direct justification identity, ordered exactly as CLI source ties.
+/// Class and owner numbers preserve the analyzer enum ordering, not spelling order.
+/// Caller paths and report roots deliberately do not participate.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+pub struct DirectSourceKey {
+    pub source: (String, String, u64, u64),
+    pub kind: (String, u8, Option<String>),
+    pub function: Option<String>,
+    pub target: Option<String>,
+    pub owner: Option<(u8, Option<String>)>,
+    pub missing_requirements: Vec<String>,
+    pub requirements: Vec<String>,
+}
+
+/// Presentation rank shared by CLI diagnostics and the audit source groups.
+pub fn justification_impact_rank<T: Ord>(
+    reports: usize,
+    roots: usize,
+    source: T,
+) -> (std::cmp::Reverse<usize>, std::cmp::Reverse<usize>, T) {
+    (std::cmp::Reverse(reports), std::cmp::Reverse(roots), source)
 }

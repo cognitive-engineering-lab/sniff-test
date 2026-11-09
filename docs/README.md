@@ -562,7 +562,14 @@ diagnostics stay on stderr. Only workspace rustc units emit sniff-test messages;
 dependency units cache facts silently. Each workspace unit emits at most one
 message with `"reason":"sniff-test-artifact"`. Reports have no dependency
 `scope`, cache identity, or dependency list because every public report is a
-workspace report. Reports use format version 25. A finding includes
+workspace report. Reports use format version 25. Structured semantic facts may include
+optional `direct_source` metadata identifying a complete direct justification site;
+older format-25 reports without it remain readable. The audit GUI uses this identity
+for its **Invert effect** source groups, ranked by report count, distinct-root count,
+and source order, matching `--sort`. In inverted mode, search hides whole sources
+without changing their report-count badges or filtering their child report roots.
+The toggle also reverses the displayed call trace while preserving step numbers.
+A finding includes
 `root-span` alongside `root` when the selected function's source location is
 available and verified; `span` is the finding's effect location, and every
 `trace` entry is a call or effect edge. Source findings also include an `owner`

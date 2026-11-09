@@ -134,6 +134,8 @@ pub fn analysis_arguments(input: impl IntoIterator<Item = String>) -> Vec<String
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Finding {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub direct_source: Option<sniff_test_report::DirectSourceKey>,
     pub id: String,
     pub crate_name: String,
     pub effect: Option<String>,
@@ -180,12 +182,14 @@ pub fn parse_reports(stdout: &[u8]) -> Result<Vec<Finding>> {
         );
         artifacts += 1;
         for data in report.findings {
-            let audit = data
+            let facts = data
                 .get("semantics")
                 .map(|v| serde_json::from_value::<SemanticFacts>(v.clone()))
-                .transpose()?
-                .map(|facts| adapt_semantics(facts, &data));
+                .transpose()?;
+            let direct_source = facts.as_ref().and_then(|facts| facts.direct_source.clone());
+            let audit = facts.map(|facts| adapt_semantics(facts, &data));
             findings.push(Finding {
+                direct_source,
                 id: format!("{artifacts}:{}", findings.len()),
                 crate_name: report.artifact.crate_name.clone(),
                 effect: data["effect"].as_str().map(str::to_owned),
@@ -914,6 +918,7 @@ mod tests {
             available: true,
         };
         let facts = SemanticFacts {
+            direct_source: None,
             effect: "custom".into(),
             obligation: Some("Custom".into()),
             justification: Some("CUSTOM".into()),

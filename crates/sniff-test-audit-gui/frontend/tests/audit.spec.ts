@@ -18,7 +18,7 @@ test.beforeEach(async()=>{
   await launch();
 });
 test.afterEach(async()=>{await stop();if(dir)await rm(dir,{recursive:true,force:true,maxRetries:5,retryDelay:100});});
-async function selectFinding(page:any){await page.goto(url);await expect(page.locator('.finding').first()).toBeVisible();await expect(page.locator('.status')).not.toContainText('running');await page.locator('.finding').first().click();await expect(page.locator('.cm-editor')).toBeVisible();}
+async function selectFinding(page:any){await page.goto(url);await page.locator('.group').first().click();await expect(page.locator('.finding').first()).toBeVisible();await expect(page.locator('.status')).not.toContainText('running');await page.locator('.finding').first().click();await expect(page.locator('.cm-editor')).toBeVisible();}
 async function draftDocumentation(page:any,heading:string,explanation:string){
   await page.getByRole('button',{name:'Report root',exact:true}).click();
   await page.locator('.cm-content').click();
@@ -89,6 +89,7 @@ for (const viewport of [{width:1440,height:900},{width:900,height:700},{width:14
     const calls=Array.from({length:24},(_,i)=>`fn hop${i}() { hop${i+1}(); }`).join('\n');
     await writeFile(join(dir,'src/lib.rs'),`pub fn first() { hop0(); }\npub fn second() { hop0(); }\n${calls}\n${'// source padding\n'.repeat(300)}fn hop24() {\n    panic!("origin far down the file");\n}\n`);
     await launch();await page.setViewportSize(viewport);await page.goto(url);
+    await page.locator('.group').first().click();
     const first=page.locator('.finding').filter({has:page.locator('strong',{hasText:'::first'})});
     const second=page.locator('.finding').filter({has:page.locator('strong',{hasText:'::second'})});
     await expect(first).toBeVisible();await expect(page.locator('.status')).not.toContainText('running');await first.click();
@@ -238,9 +239,31 @@ test('call trace highlights the editor location across files and navigation',asy
   await expect(page.locator('.filename')).toContainText('src/lib.rs');
   await expect(entry).toHaveAttribute('aria-current','location');
   await expect(page.locator('.trace button[aria-current="location"]')).toHaveCount(1);
-  await origin.click();
+  const forward=await rows.allTextContents();
+  const numbers=Array.from({length:forward.length},(_,i)=>i+1);
+  const entries=page.locator('.trace li');
+  await expect.poll(()=>entries.evaluateAll(elements=>elements.map(element=>(element as HTMLLIElement).value))).toEqual(numbers);
+  const originNumber=await origin.evaluate(element=>(element.parentElement as HTMLLIElement).value);
+  const originRow=page.locator(`.trace li[value="${originNumber}"] button`);
+  const toggle=page.getByRole('button',{name:'Invert effect'});
+  const middle=page.getByLabel('Navigation and call trace');
+  await middle.evaluate(element=>element.scrollTop=element.scrollHeight);
+  await toggle.click();
+  await expect(page.locator('.trace')).toHaveAttribute('reversed','');
+  await expect(rows).toHaveText([...forward].reverse());
+  await expect.poll(()=>entries.evaluateAll(elements=>elements.map(element=>(element as HTMLLIElement).value))).toEqual([...numbers].reverse());
+  await expect.poll(()=>middle.evaluate(element=>element.scrollTop)).toBe(0);
+  await expect(entry).toHaveAttribute('aria-current','location');
+  await expect(page.locator('.filename')).toContainText('src/lib.rs');
+  await originRow.click();
   await expect(page.locator('.filename')).toContainText('src/helper.rs');
-  await expect(origin).toHaveAttribute('aria-current','location');
+  await expect(originRow).toHaveAttribute('aria-current','location');
+  await expect.poll(()=>page.evaluate(()=>window.getSelection()?.toString())).toContain('panic!');
+  await toggle.click();
+  await expect(page.locator('.trace')).not.toHaveAttribute('reversed');
+  await expect(rows).toHaveText(forward);
+  await expect.poll(()=>entries.evaluateAll(elements=>elements.map(element=>(element as HTMLLIElement).value))).toEqual(numbers);
+  await expect(originRow).toHaveAttribute('aria-current','location');
   await expect(entry).not.toHaveAttribute('aria-current','location');
   await page.getByRole('button',{name:'← Back',exact:true}).click();
   await expect(page.locator('.filename')).toContainText('src/lib.rs');
@@ -485,6 +508,7 @@ for(const width of [1440,320]) {
     const source='pub struct Domain<T>(T);\nimpl<T> Domain<T> {\n    /// # Panics\n    /// Always panics.\n    pub fn index(&self, _value: &T) { panic!("test"); }\n}\nfn nearby(domain: &Domain<u32>) {\n    domain.index(&1);\n}\npub fn selected(domain: &Domain<u32>) {\n    domain.index(&2);\n}\n';
     await writeFile(join(dir,'src/lib.rs'),source);await launch();
     await page.setViewportSize({width,height:960});await page.goto(url);
+    await page.locator('.group').first().click();
     const finding=page.locator('.finding').filter({has:page.locator('strong',{hasText:'::selected'})});
     await expect(finding).toBeVisible();await expect(page.locator('.status')).not.toContainText('running');await finding.click();
     await page.getByRole('button',{name:'Report root',exact:true}).click();
@@ -608,5 +632,112 @@ for(const action of ['Justify via override','Propagate obligations via override'
       expect(file).toContain('# Preserve this comment');expect(file).toContain('unrelated::api');expect(file).toContain('The flag is checked by the caller.');
       expect(await readFile(join(dependency,'src/lib.rs'),'utf8')).toBe(source);
     } finally {await stop();await rm(dependency,{recursive:true,force:true});}
+  });
+}
+
+test('file groups start collapsed and retain independent expansion and selection',async({page})=>{
+  await stop();
+  await writeFile(join(dir,'src/lib.rs'),'pub mod other;\npub fn first() { panic!("first"); }\n');
+  await writeFile(join(dir,'src/other.rs'),'pub fn second() { panic!("second"); }\n');
+  await launch();await page.goto(url);
+  const groups=page.locator('.group');
+  await expect(groups).toHaveCount(2);
+  await expect(groups.first()).toHaveAttribute('aria-expanded','false');
+  await expect(page.locator('.finding')).toHaveCount(0);
+  await groups.first().focus();await page.keyboard.press('Enter');
+  await expect(groups.first()).toHaveAttribute('aria-expanded','true');
+  await page.locator('.finding').first().click();
+  await expect(page.locator('.cm-editor')).toBeVisible();
+  const filename=await page.locator('.filename').textContent();
+  await groups.nth(1).click();
+  await expect(groups.first()).toHaveAttribute('aria-expanded','true');
+  await expect(groups.nth(1)).toHaveAttribute('aria-expanded','true');
+  await groups.first().click();
+  await page.screenshot({path:join(repo,'target/audit-file-groups.png'),fullPage:true});
+  await expect(page.locator('.filename')).toHaveText(filename!);
+  await expect(page.getByLabel('Selected effect',{exact:true})).toBeVisible();
+  await page.getByLabel('Search findings',{exact:true}).fill('other.rs');
+  await expect(groups).toHaveCount(1);
+  await expect(groups.first()).toHaveAttribute('aria-expanded','true');
+  await expect(groups.first().locator('.group-count')).toHaveText('1');
+  await page.getByLabel('Search findings',{exact:true}).fill('no-such-file');
+  await expect(page.getByText('No matching findings.',{exact:true})).toBeVisible();
+});
+
+
+test('inverted sources retain complete report counts during source-only search',async({page})=>{
+  await stop();
+  await writeFile(join(dir,'src/lib.rs'),`pub fn isolated_caller() { panic!("isolated"); }
+fn shared_source() { panic!("shared"); }
+pub fn first_caller() { shared_source(); }
+pub fn second_caller() { shared_source(); }
+`);
+  await launch();await page.goto(url);
+  await expect(page.locator('.status')).toHaveText('complete');
+  await expect(page.locator('.group')).toHaveCount(1);
+  await page.locator('.group').click();
+  const first=page.locator('.finding').filter({has:page.locator('strong',{hasText:'::first_caller'})});
+  await first.click();
+  await expect(page.locator('.cm-editor')).toBeVisible();
+  await page.locator('.cm-content').click();await page.keyboard.press('ControlOrMeta+Home');
+  await page.keyboard.insertText('// audit draft retained across grouping changes\n');
+  await page.getByRole('button',{name:'Save draft',exact:true}).click();
+  const toggle=page.getByRole('button',{name:'Invert effect'});
+  await toggle.click();await expect(toggle).toHaveAttribute('aria-pressed','true');
+  await expect(page.locator('.group')).toHaveCount(2);
+  const groups=page.locator('.finding-list > section');
+  await expect(groups.first().locator('.group-count')).toHaveText('2');
+  await expect(groups.last().locator('.group-count')).toHaveText('1');
+  await groups.first().locator('.group').click();
+  await expect(groups.first().locator('.finding')).toHaveCount(2);
+  await expect(page.locator('.finding.selected strong')).toContainText('::first_caller');
+  const search=page.getByRole('textbox',{name:'Search effect sources'});
+  await search.fill('shared_source');
+  await expect(page.locator('.group')).toHaveCount(1);
+  await expect(page.locator('.group-count')).toHaveText('2');
+  await expect(page.locator('.finding')).toHaveCount(2);
+  await search.fill('first_caller');await expect(page.locator('.group')).toHaveCount(0);
+  await search.fill('shared_source');
+  await expect(page.locator('.group-count')).toHaveText('2');
+  await page.locator('.finding').filter({has:page.locator('strong',{hasText:'::second_caller'})}).click();
+  await expect(page.locator('.finding.selected strong')).toContainText('::second_caller');
+  await expect(page.locator('.cm-content')).toContainText('// audit draft retained');
+  const traceLength=await page.locator('.trace li').count();
+  await expect(page.locator('.trace')).toHaveAttribute('reversed','');
+  expect(await page.locator('.trace li').evaluateAll(elements=>elements.map(element=>(element as HTMLLIElement).value)))
+    .toEqual(Array.from({length:traceLength},(_,i)=>traceLength-i));
+  await expect(page.locator('.trace button').last()).toContainText('::second_caller');
+  await search.fill('');await toggle.click();
+  await expect(toggle).toHaveAttribute('aria-pressed','false');
+  await expect(page.locator('.group')).toHaveCount(1);
+  await expect(page.locator('.finding')).toHaveCount(3);
+  await expect(page.locator('.finding.selected strong')).toContainText('::second_caller');
+  await expect(page.locator('.draft')).toHaveCount(1);
+  await toggle.click();await expect(page.locator('.group')).toHaveCount(2);
+  await expect(page.locator('.finding')).toHaveCount(2);
+  await page.screenshot({path:join(repo,'target/audit-inverted-sources.png'),fullPage:true});
+});
+
+
+for(const length of [0,1]) {
+  test(`trace inversion handles ${length} entries`,async({page})=>{
+    await page.route('**/api/v1/finding?*',async route=>{
+      const response=await route.fetch(),finding=await response.json();
+      finding.audit.trace=finding.audit.trace.slice(0,length);
+      await route.fulfill({response,json:finding});
+    });
+    await selectFinding(page);
+    const trace=page.locator('.trace'),entries=trace.locator('li');
+    await expect(entries).toHaveCount(length);
+    const forward=await entries.allTextContents();
+    const toggle=page.getByRole('button',{name:'Invert effect'});
+    await toggle.click();
+    await expect(trace).toHaveAttribute('reversed','');
+    await expect(entries).toHaveCount(length);
+    await expect(entries).toHaveText(forward);
+    if(length)await expect(entries).toHaveAttribute('value','1');
+    await toggle.click();
+    await expect(trace).not.toHaveAttribute('reversed');
+    await expect(entries).toHaveText(forward);
   });
 }

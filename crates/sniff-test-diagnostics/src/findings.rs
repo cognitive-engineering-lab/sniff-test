@@ -284,7 +284,11 @@ pub fn resolve_findings_with_root_codes(
         .collect::<BTreeMap<_, _>>();
     let mut resolved = findings
         .into_iter()
-        .filter_map(|finding| {
+        .filter_map(|mut finding| {
+            if finding.semantics.is_some() {
+                let source = direct_justification_site(&finding).map(|site| site.to_report_key());
+                finding.semantics.as_mut().unwrap().direct_source = source;
+            }
             let level = match finding.unmet_item_effect() {
                 Some((root, effect)) => item_lints
                     .get(&(root.to_owned(), effect.to_owned()))
@@ -716,6 +720,36 @@ struct DirectJustificationSite<'a> {
     requirements: &'a [String],
 }
 
+impl DirectJustificationSite<'_> {
+    fn to_report_key(&self) -> sniff_test_report::DirectSourceKey {
+        let FindingKind::Effect {
+            effect,
+            finding,
+            operation,
+        } = self.kind
+        else {
+            unreachable!("direct justification sites are effects");
+        };
+        sniff_test_report::DirectSourceKey {
+            source: (
+                self.source.filename.clone(),
+                self.source.source_file.clone(),
+                self.source.byte_start,
+                self.source.byte_end,
+            ),
+            kind: (effect.clone(), *finding as u8, operation.clone()),
+            function: self.function.clone(),
+            target: self.target.clone(),
+            owner: self
+                .owner
+                .as_ref()
+                .map(|owner| (owner.scope as u8, owner.crate_name.clone())),
+            missing_requirements: self.missing_requirements.to_vec(),
+            requirements: self.requirements.to_vec(),
+        }
+    }
+}
+
 fn direct_justification_site(finding: &Finding) -> Option<DirectJustificationSite<'_>> {
     is_effect_source_finding(&finding.kind).then_some(())?;
     Some(DirectJustificationSite {
@@ -733,7 +767,7 @@ fn direct_justification_site(finding: &Finding) -> Option<DirectJustificationSit
 /// diagnostics. This only changes presentation; trace identities and reports
 /// retain their canonical order. Never inspect intermediate propagation calls.
 pub(crate) fn sort_by_justification_impact(findings: &mut Vec<ResolvedFinding>) {
-    use std::cmp::Reverse;
+    use sniff_test_report::justification_impact_rank;
 
     let mut sites = BTreeMap::new();
     for resolved in findings.iter() {
@@ -756,8 +790,13 @@ pub(crate) fn sort_by_justification_impact(findings: &mut Vec<ResolvedFinding>) 
             direct_justification_site(&resolved.finding)
                 .and_then(|site| sites.get(&site))
                 .map_or(
-                    (true, Reverse(0), Reverse(0), 0),
-                    |(count, roots, order)| (false, Reverse(*count), Reverse(roots.len()), *order),
+                    (true, justification_impact_rank(0, 0, 0)),
+                    |(count, roots, order)| {
+                        (
+                            false,
+                            justification_impact_rank(*count, roots.len(), *order),
+                        )
+                    },
                 )
         })
         .collect::<Vec<_>>();
@@ -1057,6 +1096,48 @@ mod tests {
             level: LintLevel::Warn,
             finding: finding(effect("panic", EffectFindingClass::ConcreteInvocation))
                 .with_source_order(None, Some(&range)),
+        }
+    }
+
+    #[test]
+    fn transported_direct_source_identity_preserves_cli_order_and_obligations() {
+        let mut values = vec![indexed_human_finding(20), indexed_human_finding(10)];
+        for kind in [
+            EffectFindingClass::ConcreteOperation,
+            EffectFindingClass::ConcreteInvocation,
+            EffectFindingClass::DocumentedObligation,
+        ] {
+            for scope in [
+                OwnerScope::Workspace,
+                OwnerScope::Dependency,
+                OwnerScope::Toolchain,
+                OwnerScope::Unknown,
+            ] {
+                let mut value = indexed_human_finding(10);
+                value.finding.kind = effect("custom", kind);
+                value.finding.owner = Some(FindingOwner {
+                    scope,
+                    crate_name: Some("crate".into()),
+                });
+                value.finding.missing_requirements = vec!["bounds".into()];
+                values.push(value);
+            }
+        }
+        let sites = values
+            .iter()
+            .map(|v| super::direct_justification_site(&v.finding).unwrap())
+            .collect::<Vec<_>>();
+        for left in &sites {
+            for right in &sites {
+                assert_eq!(
+                    left.cmp(right),
+                    left.to_report_key().cmp(&right.to_report_key())
+                );
+            }
+            let key = left.to_report_key();
+            let transported: sniff_test_report::DirectSourceKey =
+                serde_json::from_value(serde_json::to_value(&key).unwrap()).unwrap();
+            assert_eq!(key, transported);
         }
     }
 

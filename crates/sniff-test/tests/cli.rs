@@ -79,6 +79,27 @@ pub fn ccc_shared() { shared(); }
     let json = run(&["-e", "panic", "--message-format", "json"]);
     let sorted_json = run(&["-e", "panic", "--message-format", "json", "--sort"]);
     assert_eq!(json.stdout, sorted_json.stdout);
+    let findings = sniff_test_audit_bridge::parse_reports(json.stdout.as_bytes()).unwrap();
+    let shared: Vec<_> = findings
+        .iter()
+        .filter(|f| {
+            f.root
+                .as_deref()
+                .is_some_and(|r| r.ends_with("bbb_shared") || r.ends_with("ccc_shared"))
+        })
+        .collect();
+    assert_eq!(shared.len(), 2);
+    assert!(shared[0].direct_source.is_some());
+    assert_eq!(shared[0].direct_source, shared[1].direct_source);
+    let isolated = findings
+        .iter()
+        .find(|f| {
+            f.root
+                .as_deref()
+                .is_some_and(|r| r.ends_with("aaa_isolated"))
+        })
+        .unwrap();
+    assert_ne!(isolated.direct_source, shared[0].direct_source);
 }
 
 #[test]

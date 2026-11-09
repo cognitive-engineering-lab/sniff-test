@@ -57,3 +57,11 @@ main { overflow: hidden; }
 dialog{border:1px solid #c0d5c5;border-radius:10px;padding:24px;width:min(760px,90vw);max-height:85vh;color:#24312f;box-shadow:0 12px 60px #0003}dialog::backdrop{background:#18332566}dialog h2{font-size:18px;margin-top:0}dialog p{font-size:13px}dialog textarea{display:block;width:100%;min-height:200px;font:13px/1.7 ui-monospace,monospace;box-sizing:border-box}dialog select{display:block;width:100%;margin:8px 0}dialog .diff{max-height:45vh}.modal-actions{display:flex;justify-content:flex-end;gap:10px;margin-top:18px}
 
 .inline-prompt button.completed { background: #18583f; border-color: #4eaa80; color: #effff5; }
+
+.group { width:100%; align-items:center; text-align:left; background:transparent; border:1px solid transparent; font-size:11px; }
+.group-path { flex:1; min-width:0; overflow-wrap:anywhere; }
+.group-chevron { flex:none; font-size:14px; }
+.group-count { flex:none; border-radius:10px; background:#e8eee7; padding:2px 6px; font:10px ui-sans-serif,sans-serif; }
+
+.invert-effect { text-align:left; font-size:12px; }
+.invert-effect[aria-pressed="true"] { background:#e8f1e9; border-color:#91ad9b; color:#245c3f; }

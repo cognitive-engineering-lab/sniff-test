@@ -832,6 +832,7 @@ mod tests {
             site: Some("site".into()),
         };
         let facts = SemanticFacts {
+            direct_source: None,
             effect: "safety".into(),
             obligation: Some("Safety".into()),
             justification: Some("SAFETY".into()),
@@ -853,6 +854,7 @@ mod tests {
         );
         session.analysis.stale = false;
         session.analysis.findings = vec![Finding {
+            direct_source: None,
             id: "finding".into(),
             crate_name: "app".into(),
             effect: Some("safety".into()),

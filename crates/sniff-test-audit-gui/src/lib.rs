@@ -202,39 +202,52 @@ async fn events(State(app): State<App>) -> impl IntoResponse {
     });
     Sse::new(ReceiverStream::new(rx)).keep_alive(KeepAlive::default())
 }
+#[derive(Default, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+enum GroupBy {
+    #[default]
+    File,
+    EffectSource,
+}
 #[derive(Default, Deserialize)]
 struct Filter {
+    #[serde(default)]
+    group_by: GroupBy,
     q: Option<String>,
     effect: Option<String>,
     level: Option<String>,
     class: Option<String>,
+    grouped: Option<bool>,
     offset: Option<usize>,
     limit: Option<usize>,
 }
 async fn findings(State(app): State<App>, Query(filter): Query<Filter>) -> ApiResult {
     let session = app.session.lock().unwrap();
+    let inverted = filter.group_by == GroupBy::EffectSource;
     let matches: Vec<_> = session
         .analysis
         .findings
         .iter()
         .filter(|f| {
-            filter.q.as_ref().is_none_or(|q| {
-                format!(
-                    "{} {} {} {:?}",
-                    f.crate_name,
-                    f.root.as_deref().unwrap_or_default(),
-                    f.reason,
-                    f.audit
-                        .as_ref()
-                        .and_then(|a| a.source.as_ref())
-                        .map(|l| &l.path)
-                )
-                .to_lowercase()
-                .contains(&q.to_lowercase())
-            }) && filter
-                .effect
-                .as_ref()
-                .is_none_or(|v| v.is_empty() || f.effect.as_deref() == Some(v.as_str()))
+            (inverted
+                || filter.q.as_ref().is_none_or(|q| {
+                    format!(
+                        "{} {} {} {:?}",
+                        f.crate_name,
+                        f.root.as_deref().unwrap_or_default(),
+                        f.reason,
+                        f.audit
+                            .as_ref()
+                            .and_then(|a| a.source.as_ref())
+                            .map(|l| &l.path)
+                    )
+                    .to_lowercase()
+                    .contains(&q.to_lowercase())
+                }))
+                && filter
+                    .effect
+                    .as_ref()
+                    .is_none_or(|v| v.is_empty() || f.effect.as_deref() == Some(v.as_str()))
                 && filter
                     .level
                     .as_ref()
@@ -245,16 +258,147 @@ async fn findings(State(app): State<App>, Query(filter): Query<Filter>) -> ApiRe
                     .is_none_or(|v| v.is_empty() || f.class.as_deref() == Some(v.as_str()))
         })
         .collect();
-    let values: Vec<_> = matches.iter().skip(filter.offset.unwrap_or(0)).take(filter.limit.unwrap_or(100).min(500)).map(|f| json!({"id":f.id,"crate_name":f.crate_name,"root":f.root,"reason":f.reason,"level":f.level,"effect":f.effect,"class":f.class,"path":f.audit.as_ref().and_then(|a| a.source.as_ref()).map(|l| &l.path)})).collect();
+    let values: Vec<_> = if inverted {
+        Vec::new()
+    } else {
+        matches.iter().map(|f| finding_summary(f)).collect()
+    };
     let effects: std::collections::BTreeSet<_> = session
         .analysis
         .findings
         .iter()
         .filter_map(|f| f.effect.as_deref())
         .collect();
-    Ok(Json(
-        json!({"total":matches.len(),"items":values,"effects":effects}),
-    ))
+    let offset = filter.offset.unwrap_or(0);
+    let limit = filter.limit.unwrap_or(100).min(500);
+    if filter.grouped == Some(true) || inverted {
+        let groups = if inverted {
+            group_effect_sources(&matches, filter.q.as_deref().unwrap_or_default())
+        } else {
+            group_findings(values)
+        };
+        let total: usize = groups
+            .iter()
+            .map(|g| g["count"].as_u64().unwrap() as usize)
+            .sum();
+        return Ok(Json(json!({
+            "total": total, "total_groups": groups.len(), "effects": effects,
+            "groups": groups.into_iter().skip(offset).take(limit).collect::<Vec<_>>()
+        })));
+    }
+    Ok(Json(json!({"total":matches.len(),
+        "items":values.into_iter().skip(offset).take(limit).collect::<Vec<_>>(),"effects":effects})))
+}
+fn finding_summary(f: &sniff_test_audit_bridge::Finding) -> serde_json::Value {
+    json!({"id":f.id,"crate_name":f.crate_name,"root":f.root,"reason":f.reason,"level":f.level,"effect":f.effect,"class":f.class,"path":f.audit.as_ref().and_then(|a| a.source.as_ref()).map(|l| &l.path)})
+}
+
+fn group_effect_sources(
+    findings: &[&sniff_test_audit_bridge::Finding],
+    query: &str,
+) -> Vec<serde_json::Value> {
+    use sniff_test_report::{DirectSourceKey, justification_impact_rank};
+    use std::collections::{BTreeMap, BTreeSet};
+    let mut sites: BTreeMap<&DirectSourceKey, Vec<&sniff_test_audit_bridge::Finding>> =
+        BTreeMap::new();
+    let mut fallback = Vec::new();
+    for &finding in findings {
+        if let Some(source) = &finding.direct_source {
+            sites.entry(source).or_default().push(finding);
+        } else {
+            fallback.push(finding);
+        }
+    }
+    let mut sites: Vec<_> = sites.into_iter().collect();
+    sites.sort_by_cached_key(|(source, reports)| {
+        let roots: BTreeSet<_> = reports.iter().filter_map(|f| f.root.as_deref()).collect();
+        justification_impact_rank(reports.len(), roots.len(), *source)
+    });
+    let query = query.to_lowercase();
+    let mut files = std::collections::HashMap::new();
+    let query = query.as_str();
+    let sources = sites.into_iter().filter_map(|(source, reports)| {
+        let first = reports[0];
+        let mut location =
+            serde_json::to_value(first.audit.as_ref().and_then(|a| a.source.as_ref())).unwrap();
+        annotate_source_lines(&mut location, &mut files);
+        let path = location["path"].as_str().unwrap_or(&source.source.0);
+        let position = location["line"]
+            .as_u64()
+            .map(|line| line.to_string())
+            .unwrap_or_else(|| format!("byte {}", source.source.2));
+        let description = source
+            .function
+            .as_deref()
+            .or(source.target.as_deref())
+            .or(source.kind.2.as_deref())
+            .or(first.class.as_deref())
+            .unwrap_or("effect source");
+        let requirements = if source.missing_requirements.is_empty() {
+            &source.requirements
+        } else {
+            &source.missing_requirements
+        };
+        let mut label = format!("{} · {path}:{position} · {description}", source.kind.0);
+        if !requirements.is_empty() {
+            label.push_str(&format!(" · {}", requirements.join(", ")));
+        }
+        let search = format!(
+            "{label} {} {}",
+            source.kind.2.as_deref().unwrap_or_default(),
+            source.target.as_deref().unwrap_or_default()
+        );
+        if !search.to_lowercase().contains(query) {
+            return None;
+        }
+        Some(json!({
+            "key":serde_json::to_string(source).unwrap(),"label":label,
+            "count":reports.len(),
+            "items":reports.iter().map(|f| finding_summary(f)).collect::<Vec<_>>()
+        }))
+    });
+    let fallback = fallback.into_iter().filter_map(|finding| {
+        // Findings without direct-source identity must never inflate a source's impact.
+        let path = finding
+            .audit
+            .as_ref()
+            .and_then(|a| a.source.as_ref())
+            .map(|l| l.path.as_str())
+            .unwrap_or("Unknown source");
+        let label = format!(
+            "{} · {path} · {}",
+            finding.effect.as_deref().unwrap_or("Diagnostic"),
+            finding.class.as_deref().unwrap_or(&finding.kind)
+        );
+        label.to_lowercase().contains(query).then(|| {
+            json!({
+                "key":format!("finding:{}",finding.id),"label":label,
+                "count":1,"items":[finding_summary(finding)]
+            })
+        })
+    });
+    sources.chain(fallback).collect()
+}
+
+// Preserve first-occurrence order while keeping each file complete.
+fn group_findings(values: Vec<serde_json::Value>) -> Vec<serde_json::Value> {
+    let mut indices = std::collections::HashMap::new();
+    let mut groups: Vec<serde_json::Value> = Vec::new();
+    for value in values {
+        let key = ["path", "root", "crate_name"]
+            .iter()
+            .find_map(|field| value[*field].as_str().filter(|v| !v.is_empty()))
+            .unwrap_or("Unknown source")
+            .to_owned();
+        let index = *indices.entry(key.clone()).or_insert_with(|| {
+            groups.push(json!({"key":key,"items":[],"count":0}));
+            groups.len() - 1
+        });
+        let group = &mut groups[index];
+        group["items"].as_array_mut().unwrap().push(value);
+        group["count"] = json!(group["items"].as_array().unwrap().len());
+    }
+    groups
 }
 #[derive(Deserialize)]
 struct Id {
@@ -501,6 +645,105 @@ async fn override_apply(State(app): State<App>, Json(edit): Json<OverrideApply>)
 #[cfg(test)]
 mod tests {
     #[test]
+    fn file_groups_keep_all_findings_in_order_and_support_missing_paths() {
+        let mut values = vec![json!({"path":"first.rs","id":"first"})];
+        values.extend((0..101).map(|i| json!({"path":format!("file{i}.rs"),"id":i})));
+        values.extend((0..150).map(|i| json!({"path":"first.rs","id":i})));
+        values.push(json!({"root":"root-only","crate_name":"crate"}));
+        values.push(json!({"crate_name":"crate"}));
+        let groups = group_findings(values);
+        assert_eq!(groups.len(), 104);
+        assert_eq!(groups[0]["key"], "first.rs");
+        assert_eq!(groups[0]["count"], 151);
+        assert_eq!(groups[0]["items"][0]["id"], "first");
+        assert_eq!(groups[100]["key"], "file99.rs");
+        assert_eq!(groups[102]["key"], "root-only");
+        assert_eq!(groups[103]["key"], "crate");
+    }
+
+    fn source_finding(id: &str, source: u64, root: &str) -> sniff_test_audit_bridge::Finding {
+        let mut finding: sniff_test_audit_bridge::Finding = serde_json::from_value(json!({
+            "id":id,"crate_name":"crate","root":root,"effect":"custom","kind":"effect",
+            "class":"concrete-operation","level":"warn","reason":format!("reachable from {root}"),
+            "requirements":[],"missing_requirements":[],"display_trace":[]
+        }))
+        .unwrap();
+        finding.direct_source = Some(sniff_test_report::DirectSourceKey {
+            source: ("shared.rs".into(), "source".into(), source, source + 1),
+            kind: ("custom".into(), 0, Some("request".into())),
+            function: Some("origin".into()),
+            target: None,
+            owner: None,
+            missing_requirements: vec![],
+            requirements: vec![],
+        });
+        finding
+    }
+
+    #[test]
+    fn source_groups_rank_by_reports_then_roots_then_source_and_keep_all_reports() {
+        let values = vec![
+            source_finding("a1", 10, "caller_a"),
+            source_finding("b1", 20, "caller_b"),
+            source_finding("c1", 30, "caller_c"),
+            source_finding("a2", 10, "caller_a"),
+            source_finding("b2", 20, "caller_d"),
+            source_finding("c2", 30, "caller_c"),
+            source_finding("c3", 30, "caller_c"),
+            source_finding("d1", 40, "caller_e"),
+            source_finding("d2", 40, "caller_e"),
+        ];
+        let refs = values.iter().collect::<Vec<_>>();
+        let groups = group_effect_sources(&refs, "");
+        assert_eq!(
+            groups
+                .iter()
+                .map(|g| g["items"][0]["id"].as_str().unwrap())
+                .collect::<Vec<_>>(),
+            ["c1", "b1", "a1", "d1"]
+        );
+        assert_eq!(groups[0]["count"], 3);
+        assert_eq!(groups[0]["items"][2]["id"], "c3");
+        assert_eq!(group_effect_sources(&refs, "SHARED.RS"), groups);
+        assert_eq!(group_effect_sources(&refs, "origin"), groups);
+        assert_eq!(group_effect_sources(&refs, "request"), groups);
+        assert!(group_effect_sources(&refs, "caller_c").is_empty());
+        assert!(group_effect_sources(&refs, "reachable from").is_empty());
+        assert_eq!(
+            group_effect_sources(&refs, "byte 30"),
+            vec![groups[0].clone()]
+        );
+    }
+
+    #[test]
+    fn source_groups_separate_obligations_effects_and_missing_identity() {
+        let first = source_finding("a", 10, "root");
+        let mut obligation = first.clone();
+        obligation.id = "b".into();
+        obligation
+            .direct_source
+            .as_mut()
+            .unwrap()
+            .missing_requirements
+            .push("bounds".into());
+        let mut effect = first.clone();
+        effect.id = "c".into();
+        effect.direct_source.as_mut().unwrap().kind.0 = "other".into();
+        let mut fallback = first.clone();
+        fallback.id = "d".into();
+        fallback.direct_source = None;
+        let values = [fallback.clone(), first, obligation, effect, fallback];
+        let refs = values.iter().collect::<Vec<_>>();
+        let groups = group_effect_sources(&refs, "");
+        assert_eq!(groups.len(), 5);
+        assert!(groups.iter().all(|g| g["count"] == 1));
+        assert_eq!(groups[3]["items"][0]["id"], "d");
+        let filtered = group_effect_sources(&refs, "bounds");
+        assert_eq!(filtered.len(), 1);
+        assert_eq!(filtered[0]["items"][0]["id"], "b");
+    }
+
+    #[test]
     fn source_lines_require_matching_content_and_utf8_boundaries() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("source.rs");
@@ -517,6 +760,112 @@ mod tests {
 
     use super::*;
     use tower::ServiceExt;
+    #[tokio::test]
+    async fn grouped_api_paginates_whole_groups_after_filtering() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = sniff_test_audit_bridge::AnalysisConfig {
+            executable: "false".into(),
+            directory: dir.path().into(),
+            arguments: vec![],
+        };
+        let mut session =
+            Session::open(dir.path().into(), dir.path().join("target"), config).unwrap();
+        for i in 0..252 {
+            session.analysis.findings.push(serde_json::from_value(json!({
+                "id":i.to_string(), "crate_name":"crate", "root":if i<151 {"large".to_owned()} else {format!("root{i}")},
+                "effect":if i<151 {"panic"} else {"safety"}, "kind":"operation",
+                "class":"concrete-operation", "level":"warn", "reason":"test",
+                "requirements":[], "missing_requirements":[], "display_trace":[]
+            })).unwrap());
+        }
+        let app = App {
+            lsp: Default::default(),
+            session: Arc::new(Mutex::new(session)),
+            token: "secret".into(),
+            origin: "http://127.0.0.1:1234".into(),
+        };
+        let query = |s: &str| {
+            Query::<Filter>::try_from_uri(&format!("/findings?{s}").parse().unwrap()).unwrap()
+        };
+        let first = findings(State(app.clone()), query("grouped=true"))
+            .await
+            .ok()
+            .unwrap()
+            .0;
+        assert_eq!(first["total"], 252);
+        assert_eq!(first["total_groups"], 102);
+        assert_eq!(first["groups"].as_array().unwrap().len(), 100);
+        assert_eq!(first["groups"][0]["count"], 151);
+        let second = findings(State(app.clone()), query("grouped=true&offset=100"))
+            .await
+            .ok()
+            .unwrap()
+            .0;
+        assert_eq!(second["groups"].as_array().unwrap().len(), 2);
+        assert_eq!(second["groups"][0]["key"], "root250");
+        let filtered = findings(
+            State(app.clone()),
+            query("grouped=true&effect=panic&level=warn&class=concrete-operation&q=large"),
+        )
+        .await
+        .ok()
+        .unwrap()
+        .0;
+        assert_eq!(filtered["total"], 151);
+        assert_eq!(filtered["total_groups"], 1);
+        assert_eq!(
+            filtered["groups"][0]["items"].as_array().unwrap().len(),
+            151
+        );
+        {
+            let mut session = app.session.lock().unwrap();
+            for (index, finding) in session.analysis.findings.iter_mut().enumerate() {
+                let source = if index < 151 { 0 } else { index as u64 };
+                finding.direct_source = source_finding("", source, "").direct_source;
+            }
+        }
+        let inverted = findings(
+            State(app.clone()),
+            query("group_by=effect-source&q=shared.rs"),
+        )
+        .await
+        .ok()
+        .unwrap()
+        .0;
+        assert_eq!(inverted["total"], 252);
+        assert_eq!(inverted["total_groups"], 102);
+        assert_eq!(inverted["groups"].as_array().unwrap().len(), 100);
+        assert_eq!(inverted["groups"][0]["count"], 151);
+        let second = findings(
+            State(app.clone()),
+            query("group_by=effect-source&offset=100&q=shared.rs"),
+        )
+        .await
+        .ok()
+        .unwrap()
+        .0;
+        assert_eq!(second["groups"].as_array().unwrap().len(), 2);
+        let narrowed = findings(
+            State(app.clone()),
+            query("group_by=effect-source&q=shared.rs&effect=panic"),
+        )
+        .await
+        .ok()
+        .unwrap()
+        .0;
+        assert_eq!(narrowed["total_groups"], 1);
+        assert_eq!(narrowed["groups"][0]["count"], 151);
+        let root_search = findings(State(app.clone()), query("group_by=effect-source&q=large"))
+            .await
+            .ok()
+            .unwrap()
+            .0;
+        assert_eq!(root_search["total_groups"], 0);
+        let flat = findings(State(app), query("")).await.ok().unwrap().0;
+        assert_eq!(flat["items"].as_array().unwrap().len(), 100);
+        assert!(flat.get("groups").is_none());
+    }
+
     #[tokio::test]
     async fn api_requires_token_origin_and_local_host() {
         let dir = tempfile::tempdir().unwrap();

@@ -280,6 +280,7 @@ fn adapt_finding(
     let semantics = sources
         .structured_output
         .then(|| sniff_test_report::SemanticFacts {
+            direct_source: None,
             effect: finding.effect.key.as_str().to_owned(),
             obligation: Some(finding.effect.obligation.to_owned()),
             justification: Some(finding.effect.justification.to_owned()),
@@ -1570,6 +1571,7 @@ fn adapt_incomplete(
     let semantics = sources
         .structured_output
         .then(|| sniff_test_report::SemanticFacts {
+            direct_source: None,
             effect: domain.to_owned(),
             obligation: None,
             justification: None,

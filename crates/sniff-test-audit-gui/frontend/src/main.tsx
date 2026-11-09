@@ -21,6 +21,7 @@ type TemplateEdit = {path:string; revision:number; start:number; end:number; tex
 type EditorSelection = {path:string; from:number; to:number};
 type Finding = {id:string; crate_name:string; effect?:string;kind:string;class?:string;level:string;root?:string;trace_id?:string;reason:string;requirements:string[];missing_requirements:string[];display_trace:string[]; audit?:{obligation:string; justification:string; source?:Location; root?:Location; contract?:Location; targets:Target[]; trace:{caller:string; target?:string; kind:string; location?:Location}[]}};
 type Summary = {id:string; crate_name:string; root:string; reason:string; level:string; effect:string; class:string; path?:string};
+type FindingGroup = {key:string; label?:string; count:number; items:Summary[]};
 type Status = {generation:number; running:boolean; stale:boolean; status:string; count:number; log:string};
 const token = location.hash.slice(1) || sessionStorage.getItem('audit-token') || '';
 if (token) { sessionStorage.setItem('audit-token', token); history.replaceState(null, '', location.pathname); }
@@ -135,7 +136,10 @@ function Modal({title,children,onClose}:{title:string;children:React.ReactNode;o
 }
 function App() {
   const [root,setRoot]=useState(''); const [status,setStatus]=useState<Status>({generation:0,running:false,stale:true,status:'connecting',count:0,log:''});
-  const [items,setItems]=useState<Summary[]>([]),[total,setTotal]=useState(0),[effects,setEffects]=useState<string[]>([]);
+  const [groups,setGroups]=useState<FindingGroup[]>([]),[total,setTotal]=useState(0),[totalGroups,setTotalGroups]=useState(0),[effects,setEffects]=useState<string[]>([]);
+  const [inverted,setInverted]=useState(false);
+  const [expanded,setExpanded]=useState<Set<string>>(()=>new Set());
+  const [sourceExpanded,setSourceExpanded]=useState<Set<string>>(()=>new Set());
   const [query,setQuery]=useState(''),[effect,setEffect]=useState(''),[level,setLevel]=useState(''),[kind,setKind]=useState(''),[page,setPage]=useState(0);
   const [selected,setSelected]=useState<Finding>(),[buffer,setBuffer]=useState<Buffer>(),[text,setText]=useState(''),[target,setTarget]=useState<Location>();
   const [drafts,setDrafts]=useState<Buffer[]>([]),[diff,setDiff]=useState(''),[view,setView]=useState<'source'|'changes'>('source');
@@ -178,10 +182,10 @@ function App() {
     return ()=>{cancelled=true;};
   },[navigation,status.generation,status.running]);
   const detailsScroll = useRef<HTMLDivElement>(null);
-  useLayoutEffect(()=>{detailsScroll.current?.scrollTo({top:0});},[selected?.id]);
+  useLayoutEffect(()=>{detailsScroll.current?.scrollTo({top:0});},[selected?.id,inverted]);
   const unsaved = !!buffer && text !== buffer.content;
   async function act(work:()=>Promise<void>) {setBusy(true);setError('');try{await work();}catch(e){setError(String(e));}finally{setBusy(false);}}
-  async function loadFindings(){const value=await api('findings?'+new URLSearchParams({q:query,effect,level,class:kind,offset:String(page*100)}));setItems(value.items);setTotal(value.total);setEffects(value.effects);}
+
   async function refreshDrafts(){setDrafts(await api('drafts'));}
   async function save(){if(!buffer)return; const updated=await api('buffer',{path:buffer.path,revision:buffer.revision,content:text});setBuffer(updated);await refreshDrafts();return updated as Buffer;}
   function rememberPosition(view:EditorView|undefined){
@@ -217,13 +221,24 @@ function App() {
         while((boundary=pending.indexOf('\n\n'))>=0){const event=pending.slice(0,boundary);pending=pending.slice(boundary+2);const data=event.split('\n').find(l=>l.startsWith('data:'));if(data)setStatus(JSON.parse(data.slice(5)));}}
     }catch(e){if(!controller.signal.aborted)setError(String(e));}})();return()=>controller.abort();
   },[]);
-  useEffect(()=>{loadFindings().catch(e=>setError(String(e)));if(!status.running)refreshDrafts().catch(e=>setError(String(e)));},[query,effect,level,kind,page,status.generation,status.running]);
-  useEffect(()=>{setPage(0)},[query,effect,level,kind]);
+  useEffect(()=>{
+    let cancelled=false;
+    api('findings?'+new URLSearchParams({q:query,effect,level,class:kind,grouped:'true',group_by:inverted?'effect-source':'file',offset:String(page*100)})).then(value=>{
+      if(cancelled)return;
+      const lastPage=Math.max(0,Math.ceil(value.total_groups/100)-1);
+      if(page>lastPage){setPage(lastPage);return;}
+      setGroups(value.groups);setTotal(value.total);setTotalGroups(value.total_groups);setEffects(value.effects);
+    }).catch(e=>{if(!cancelled)setError(String(e));});
+    return ()=>{cancelled=true;};
+  },[query,effect,level,kind,inverted,page,status.generation,status.running]);
+  useEffect(()=>{if(!status.running)refreshDrafts().catch(e=>setError(String(e)));},[status.generation,status.running]);
   useEffect(()=>{setSelected(undefined)},[status.generation]);
   useEffect(()=>{const warn=(e:BeforeUnloadEvent)=>{if(unsaved||overrideEditor){e.preventDefault();}};window.addEventListener('beforeunload',warn);return()=>window.removeEventListener('beforeunload',warn)},[unsaved,overrideEditor]);
   async function review(draft?:Buffer){if(unsaved&&draft&&draft.path!==buffer?.path)await save();let b=draft||buffer;if(!b)return;if(unsaved&&buffer?.path===b.path)b=await save()||b;setBuffer(b);setText(b.content);setDiff((await api('diff?'+new URLSearchParams({path:b.path}))).diff);setView('changes');}
-  const groups = new Map<string,Summary[]>();for(const item of items){const key=item.path||item.root||item.crate_name;groups.set(key,[...(groups.get(key)||[]),item]);}
+
   const trace=selected?.audit?.trace||[];
+  const traceEntries=trace.map((step,i)=>({step,i}));
+  if(inverted)traceEntries.reverse();
   const activeTraceIndex=view==='source' && buffer && !unsaved && buffer.content===buffer.original && editorSelection?.path===buffer.path
     ? trace.findIndex(step=>{
       const loc=step.location;
@@ -243,11 +258,16 @@ function App() {
     <header><div className="brand"><b>sniff-test</b><span> / audit</span></div><span className="workspace" title={root}>{root}</span><span className={'status '+status.status}>{status.status}{status.stale?' · stale':''}</span><button disabled={status.running||busy} onClick={()=>act(async()=>{await api('analysis',{});})}>↻ Reanalyze</button></header>
     {error&&<div className="error" role="alert">{error}<button onClick={()=>setError('')}>Dismiss</button></div>}
     <div className="layout"><aside className="findings"><div className="section-title">FINDINGS <span>{total}</span></div>
-      <input aria-label="Search findings" placeholder="Search files, roots, crates…" value={query} onChange={e=>setQuery(e.target.value)}/>
-      <div className="filters"><select aria-label="Effect" value={effect} onChange={e=>setEffect(e.target.value)}><option value="">All effects</option>{effects.map(e=><option key={e}>{e}</option>)}</select><select aria-label="Severity" value={level} onChange={e=>setLevel(e.target.value)}><option value="">All levels</option><option>warn</option><option>deny</option></select></div>
-      <select aria-label="Finding class" value={kind} onChange={e=>setKind(e.target.value)}><option value="">All finding classes</option>{['concrete-operation','concrete-invocation','documented-obligation','undocumented-invocation','unresolved-call-target','analysis-incomplete','ambiguous-marker','ambiguous-requirement'].map(k=><option key={k}>{k}</option>)}</select>
-      <div className="finding-list">{[...groups].map(([path,rows])=><section key={path}><div className="group" title={path}>{path.replace(root+'/','')} <span>{rows.length}</span></div>{rows.map(item=><button className={'finding '+(selected?.id===item.id?'selected':'')} key={item.id} onClick={()=>act(()=>choose(item))}><span className="badge">{item.effect||item.class}</span><strong>{item.root||item.crate_name}</strong><small>{item.reason}</small></button>)}</section>)}{!items.length&&<div className="empty">{status.running?'Analyzing the workspace…':status.status==='complete'?'No matching findings.':'No findings available. Check analysis output.'}</div>}</div>
-      <div className="pagination"><button disabled={page===0} onClick={()=>setPage(p=>p-1)}>←</button><span>{page+1} / {Math.max(1,Math.ceil(total/100))}</span><button disabled={(page+1)*100>=total} onClick={()=>setPage(p=>p+1)}>→</button></div>
+      <button type="button" className="invert-effect" aria-pressed={inverted} onClick={()=>{setInverted(value=>!value);setPage(0);}}>⇄ Invert effect</button>
+      <input aria-label={inverted?'Search effect sources':'Search findings'} placeholder={inverted?'Search effect sources…':'Search files, roots, crates…'} value={query} onChange={e=>{setQuery(e.target.value);setPage(0);}}/>
+      <div className="filters"><select aria-label="Effect" value={effect} onChange={e=>{setEffect(e.target.value);setPage(0);}}><option value="">All effects</option>{effects.map(e=><option key={e}>{e}</option>)}</select><select aria-label="Severity" value={level} onChange={e=>{setLevel(e.target.value);setPage(0);}}><option value="">All levels</option><option>warn</option><option>deny</option></select></div>
+      <select aria-label="Finding class" value={kind} onChange={e=>{setKind(e.target.value);setPage(0);}}><option value="">All finding classes</option>{['concrete-operation','concrete-invocation','documented-obligation','undocumented-invocation','unresolved-call-target','analysis-incomplete','ambiguous-marker','ambiguous-requirement'].map(k=><option key={k}>{k}</option>)}</select>
+      <div className="finding-list">{groups.map(({key, label,items:rows,count},index)=>{
+        const path=label||key;
+        const isOpen=(inverted?sourceExpanded:expanded).has(key),listId=`${inverted?'source':'file'}-findings-${index}`;
+        return <section key={key}><button type="button" className="group" title={path} aria-expanded={isOpen} aria-controls={listId} onClick={()=>(inverted?setSourceExpanded:setExpanded)(previous=>{const next=new Set(previous);if(next.has(key))next.delete(key);else next.add(key);return next;})}><span className="group-chevron" aria-hidden="true">{isOpen?'▾':'▸'}</span><span className="group-path">{inverted?path.replace(root+'/',''):path.startsWith(root+'/')?path.slice(root.length+1):path}</span><span className="group-count" aria-label={`${count} ${inverted?'reports':'effects'}`} >{count}</span></button><div id={listId} hidden={!isOpen}>{isOpen&&rows.map(item=><button className={'finding '+(selected?.id===item.id?'selected':'')} key={item.id} onClick={()=>act(()=>choose(item))}><span className="badge">{item.effect||item.class}</span><strong>{item.root||item.crate_name}</strong><small>{item.reason}</small></button>)}</div></section>;
+      })}{!groups.length&&<div className="empty">{status.running?'Analyzing the workspace…':status.status==='complete'?'No matching findings.':'No findings available. Check analysis output.'}</div>}</div>
+      <div className="pagination"><button aria-label={inverted?'Previous effect sources':'Previous files'} disabled={page===0} onClick={()=>setPage(p=>p-1)}>←</button><span>{inverted?'Effect sources':'Files'} · {page+1} / {Math.max(1,Math.ceil(totalGroups/100))}</span><button aria-label={inverted?'Next effect sources':'Next files'} disabled={(page+1)*100>=totalGroups} onClick={()=>setPage(p=>p+1)}>→</button></div>
       <div className="section-title">SAVED DRAFTS <span>{drafts.length}</span></div>{drafts.map(d=><button className="draft" key={d.path} onClick={()=>act(()=>review(d))}>{d.path.replace(root+'/','')}{d.conflict?' · conflict':d.writable?' · modified':' · override draft'}</button>)}
     </aside>
     <main><div className="toolbar"><button disabled={!nav.length||busy} onClick={()=>act(async()=>{const previous=nav[nav.length-1];setNav(n=>n.slice(0,-1));await open(previous,false);})}>← Back</button><span className="filename">{buffer?.path.replace(root+'/','')||'Source workspace'}</span>{buffer&&<><button onClick={()=>setView('source')}>Source</button><button onClick={()=>act(()=>review())}>Review diff</button></>}</div>
@@ -263,7 +283,7 @@ function App() {
       {buffer&&!buffer.writable&&<p className="hint">Dependency source is read-only. Contract documentation can be supplied through an override file.</p>}
       {selected.audit&&!selected.audit.targets.length&&<p className="hint">No verified documentation attachment location is available. Inspect the source and edit manually where appropriate.</p>}
       {unsaved||buffer?.content!==buffer?.original?<p className="hint">Revert to the original source to restore inline prompts, or apply edits and reanalyze.</p>:null}
-      <h3>Call trace</h3><ol className="trace">{trace.map((step,i)=><li key={i}><button className={highlightedTraceIndex===i?'active':''} aria-current={highlightedTraceIndex===i?'location':undefined} disabled={!step.location?.available} onClick={()=>act(()=>open(step.location!))}>{step.caller}<span>{step.kind} → {step.target||'effect operation'}</span><small title={step.location?.path}>{!step.location?'':step.location.path.startsWith(root+'/')?step.location.path.slice(root.length+1):'…/'+step.location.path.split('/').slice(-3).join('/')}{step.location?.line?':'+step.location.line:''}{!step.location?.available?' · source unavailable':''}</small></button></li>)}</ol></div>
+      <h3>Call trace</h3><ol className="trace" reversed={inverted}>{traceEntries.map(({step,i})=><li key={i} value={i+1}><button className={highlightedTraceIndex===i?'active':''} aria-current={highlightedTraceIndex===i?'location':undefined} disabled={!step.location?.available} onClick={()=>act(()=>open(step.location!))}>{step.caller}<span>{step.kind} → {step.target||'effect operation'}</span><small title={step.location?.path}>{!step.location?'':step.location.path.startsWith(root+'/')?step.location.path.slice(root.length+1):'…/'+step.location.path.split('/').slice(-3).join('/')}{step.location?.line?':'+step.location.line:''}{!step.location?.available?' · source unavailable':''}</small></button></li>)}</ol></div>
     </>:<div className="empty">Select a finding to inspect its contract and call trace.</div>}</aside></div>
     {overrideEditor&&<Modal title={overrideEditor.action==='justification'?'Justify via override':'Propagate obligations via override'} onClose={()=>setOverrideEditor(undefined)}>
       {error&&<p role="alert">{error}</p>}<p>Justifications save marker text at the callsite line. Obligations save replacement rustdoc at the definition line, preserving other contracts.</p>
