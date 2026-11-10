@@ -767,7 +767,7 @@ for(const width of [1440,900]) {
   });
 }
 
-for (const mode of ['native','namespace override','source override','trait declaration','standard library','safety','allocation','long contract']) {
+for (const mode of ['native','namespace override','source override','trait declaration','standard library','safety','allocation','long contract','narrow layout','markdown links','generic prototype','legacy draft']) {
   test(`override justification shows the effective obligation from ${mode}`,async({page})=>{
     const dependency=await mkdtemp(join(tmpdir(),'sniff-obligation-dep-'));
     try {
@@ -776,13 +776,16 @@ for (const mode of ['native','namespace override','source override','trait decla
       const effect=mode==='safety'?'safety':mode==='allocation'?'allocation':'panic';
       const heading=effect==='safety'?'Safety':effect==='allocation'?'Allocations':'Panics';
       const marker=effect==='safety'?'SAFETY':effect==='allocation'?'ALLOCATION':'PANIC';
-      const section=`# ${heading}\nThe flag must be true. λ\n\n- **valid**: supply a valid flag.\n\n## Details\n`+(mode==='long contract'?'A long caller obligation.\n\n'.repeat(80):'')+'```rust\n# Examples inside code\n```';
+      const section=`# ${heading}\nThe flag must be true. λ\n\n- **valid**: supply a valid flag with \`true\`.\n- Preserve *caller invariants*.\n\n> Check the condition before calling.\n\n## Details\n`+(mode==='long contract'?'A long caller obligation.\n\n'.repeat(80):'')+(mode==='markdown links'?'[External reference](https://example.com/contract) · [Relative reference](../other.html) · [Rustdoc reference](struct.Widget.html) · [Unresolved item][Widget] · [Unsafe link](javascript:alert(1))\n\n![Diagram description](https://example.com/diagram.png)\n\n<span data-obligation-html="true">Inline HTML text.</span>\n\n<script>window.obligationScriptRan=true;</script>\n\n':'')+'```rust\n# Examples inside code\n```';
       const docs='Overview text.\n\n'+section+'\n\n# Examples\nUnrelated example text.';
       const comments=docs.split('\n').map(line=>'/// '+line).join('\n');
       const native=effect==='safety'
         ?`pub fn relay(flag: bool) { unsafe { danger(flag); } }\n${comments}\nunsafe fn danger(_flag: bool) {}\n`
         :`pub fn relay(flag: bool) { danger(flag); }\n${comments}\nfn danger(_flag: bool) {}\n`;
-      const source=mode==='trait declaration'
+      const genericPrototype="pub(crate) fn danger<'a, T, const N: usize>(values: &'a [T; { N }]) -> &'a [T; { N }]\nwhere\n    T: Copy,\n    [(); { N }]: Copy,";
+      const source=mode==='generic prototype'
+        ?`pub fn relay(flag: bool) { let _ = danger(&[u8::from(flag); 2]); }\n${comments}\n${genericPrototype}\n{ values }\n`
+        :mode==='trait declaration'
         ?`pub trait Contract {\n${comments}\nfn danger(flag: bool);\n}\nstruct Implementation;\nimpl Contract for Implementation { fn danger(_flag: bool) {} }\npub fn relay(flag: bool) { Implementation::danger(flag); }\n`
         :mode==='standard library'
         ?'pub fn relay(flag: bool) { let _ = [0].get(usize::from(flag)).unwrap(); }\n'
@@ -801,24 +804,100 @@ for (const mode of ['native','namespace override','source override','trait decla
       }
       await launch(effect);
       if(mode==='long contract')await page.setViewportSize({width:900,height:700});
+      if(mode==='narrow layout')await page.setViewportSize({width:320,height:700});
+      if(mode==='legacy draft')await page.route(/\/api\/v1\/(override\/(template|save)|buffer|drafts)(\?|$)/,async route=>{
+        const response=await route.fetch();
+        const data=await response.json();
+        function removePrototype(value:any) {
+          if(!value||typeof value!=='object')return;
+          delete value.prototype;
+          for(const child of Object.values(value))removePrototype(child);
+        }
+        removePrototype(data);
+        await route.fulfill({response,json:data});
+      });
       await page.goto(url);
       await page.getByLabel('Finding class',{exact:true}).selectOption('documented-obligation');
       await page.locator('.group').first().click();await page.locator('.finding').first().click();
       await page.getByRole('button',{name:'Justify via override',exact:true}).click();
       const dialog=page.getByRole('dialog'),context=dialog.getByRole('region',{name:'Obligation',exact:true});
       await expect(context).toBeVisible();
+      await expect(context.getByRole('heading',{name:'Obligation',exact:true})).toHaveCount(0);
+      await expect(context.locator('.obligation-header')).toHaveCount(0);
+      const prototype=context.getByLabel('Function prototype',{exact:true});
+      if(mode==='legacy draft') {
+        await expect(prototype).toHaveCount(0);
+      } else {
+        if(mode==='standard library')await expect(prototype).toContainText(/fn unwrap\(self\)\s*->\s*T/);
+        else await expect(prototype).toHaveText(mode==='generic prototype'?genericPrototype:mode==='trait declaration'?'fn danger(flag: bool);':mode==='safety'?'unsafe fn danger(_flag: bool)':'fn danger(_flag: bool)');
+        // Verify stock CodeMirror colors without depending on generated CSS class names.
+        await expect(prototype.locator('span').filter({hasText:/^fn$/})).toHaveCSS('color','rgb(119, 0, 136)');
+        if(mode!=='standard library') {
+          await expect(prototype.locator('span').filter({hasText:/^danger$/})).toHaveCSS('color','rgb(0, 0, 255)');
+          if(mode==='generic prototype') {
+            await expect(prototype.locator('span').filter({hasText:/^where$/})).toHaveCSS('color','rgb(119, 0, 136)');
+            await expect(prototype.locator('span').filter({hasText:/^T$/}).first()).toHaveCSS('color','rgb(0, 136, 85)');
+            await expect(prototype.locator('span').filter({hasText:/^'a$/}).first()).toHaveCSS('color','rgb(34, 85, 102)');
+          } else {
+            await expect(prototype.locator('span').filter({hasText:/^bool$/})).toHaveCSS('color','rgb(0, 136, 85)');
+          }
+          if(mode==='safety')await expect(prototype.locator('span').filter({hasText:/^unsafe$/})).toHaveCSS('color','rgb(119, 0, 136)');
+        }
+        const body=await context.getByRole('region',{name:'Obligation documentation',exact:true}).boundingBox();
+        const declaration=await prototype.boundingBox();
+        expect(declaration!.y).toBeGreaterThanOrEqual(body!.y+body!.height);
+        if(mode==='generic prototype') {
+          const selected=await prototype.evaluate(el=>{
+            const selection=window.getSelection()!;
+            const range=document.createRange();range.selectNodeContents(el);
+            selection.removeAllRanges();selection.addRange(range);
+            const text=selection.toString();selection.removeAllRanges();
+            return text;
+          });
+          expect(selected).toBe(genericPrototype);
+        }
+      }
       if(mode==='standard library') {
         await expect(context).toContainText('unwrap');
-        await expect(context).toContainText('# Panics');
+        await expect(context.getByRole('heading',{name:'Panics',exact:true})).toBeVisible();
         await expect(context).toContainText('None');
       } else {
-        await expect(context).toContainText(mode==='trait declaration'?'Contract::danger':'obligation_dep::danger');
-        await expect(context.locator('pre')).toHaveText(mode.includes('override')?'# Panics\nEffective override condition.\n\n## Details\nUse the replacement contract.':section);
+        await expect(context).not.toContainText('obligation_dep::');
+        await expect(context.getByRole('heading',{name:heading,exact:true,level:4})).toBeVisible();
+        await expect(context.getByRole('heading',{name:'Details',exact:true})).toBeVisible();
+        if(mode.includes('override')) {
+          await expect(context).toContainText('Effective override condition.');
+          await expect(context).toContainText('Use the replacement contract.');
+        } else {
+          await expect(context.locator('li strong')).toHaveText('valid');
+          await expect(context.locator('li em')).toHaveText('caller invariants');
+          await expect(context.locator('li code')).toHaveText('true');
+          await expect(context.locator('blockquote')).toHaveText('Check the condition before calling.');
+          await expect(context.locator('pre code.language-rust')).toHaveText('# Examples inside code\n');
+        }
         await expect(context).not.toContainText('Unrelated');
         await expect(context).not.toContainText('Superseded');
       }
       await expect(dialog.getByLabel('Override documentation')).toBeFocused();
-      if(mode==='long contract')expect(await context.locator('pre').evaluate(el=>el.scrollHeight>el.clientHeight)).toBe(true);
+      if(mode==='long contract')expect(await context.getByRole('region',{name:'Obligation documentation',exact:true}).evaluate(el=>el.scrollHeight>el.clientHeight)).toBe(true);
+      if(mode==='markdown links') {
+        const external=context.getByRole('link',{name:'External reference',exact:true});
+        await expect(external).toHaveAttribute('href','https://example.com/contract');
+        await expect(external).toHaveAttribute('target','_blank');
+        await expect(external).toHaveAttribute('rel','noopener noreferrer');
+        await expect(context.getByRole('link')).toHaveCount(1);
+        await expect(context).toContainText('Relative reference');
+        await expect(context).toContainText('Rustdoc reference');
+        await expect(context).toContainText('[Unresolved item][Widget]');
+        await expect(context).toContainText('Diagram description');
+        await expect(context.locator('img,script,[data-obligation-html]')).toHaveCount(0);
+        expect(await page.evaluate(()=>Object.hasOwn(window,'obligationScriptRan'))).toBe(false);
+      }
+      if(mode==='narrow layout') {
+        await expect(dialog.getByRole('button',{name:'Save draft',exact:true})).toBeVisible();
+        expect(await dialog.evaluate(el=>el.scrollWidth<=el.clientWidth)).toBe(true);
+        await page.screenshot({path:join(repo,'target/audit-obligation-markdown-narrow.png'),fullPage:true});
+      }
       if(mode==='native')await page.screenshot({path:join(repo,'target/audit-obligation-editor.png'),fullPage:true});
       await page.keyboard.insertText('The caller upholds this condition.');
       await dialog.getByRole('button',{name:'Save draft',exact:true}).click();
@@ -827,6 +906,8 @@ for (const mode of ['native','namespace override','source override','trait decla
       await page.getByRole('button',{name:'Source',exact:true}).click();
       await page.getByRole('button',{name:'Justified!',exact:true}).click();
       await expect(context).toBeVisible();
+      await expect(prototype).toHaveCount(mode==='legacy draft'?0:1);
+      await expect(context.getByRole('heading',{name:heading,exact:true,level:4})).toBeVisible();
       await expect(dialog.getByLabel('Override documentation')).toHaveValue(`// ${marker}: The caller upholds this condition.`);
       await dialog.getByRole('button',{name:'Cancel',exact:true}).click();
     } finally { await stop();await rm(dependency,{recursive:true,force:true}); }

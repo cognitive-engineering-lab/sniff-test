@@ -576,6 +576,9 @@ pub struct SourceRangeFact {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub struct DefinitionSourceFact {
+    /// Original function declaration, without attributes, rustdoc, or body.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub prototype: Option<String>,
     /// Complete effective doc attributes before interpretation-time overrides.
     pub documentation: String,
     pub definition: StableDefPathHash,
@@ -2608,6 +2611,7 @@ mod tests {
             vec![source_file()],
             vec![
                 DefinitionSourceFact {
+                    prototype: None,
                     documentation: String::new(),
                     definition: second,
                     display_path: String::from("sample::second"),
@@ -2615,6 +2619,7 @@ mod tests {
                     start_line: 8,
                 },
                 DefinitionSourceFact {
+                    prototype: Some("pub fn first()".into()),
                     documentation: String::new(),
                     definition: first,
                     display_path: String::from("sample::first"),
@@ -2646,6 +2651,7 @@ mod tests {
     fn definition_sources_reject_duplicates_and_zero_based_lines() {
         let definition = def_hash("00000000000000010000000000000002");
         let definition_source = DefinitionSourceFact {
+            prototype: None,
             documentation: String::new(),
             definition,
             display_path: String::from("sample::root"),

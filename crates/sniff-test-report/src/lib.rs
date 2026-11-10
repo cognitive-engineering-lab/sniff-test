@@ -90,6 +90,8 @@ pub struct SemanticFacts {
 /// Effective contract section presented while auditing a documented effect.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ObligationDocumentation {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub prototype: Option<String>,
     pub function: String,
     pub markdown: String,
 }
@@ -111,6 +113,14 @@ pub fn original_offset(source: &str, normalized: usize) -> Option<usize> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn obligation_documentation_without_prototype_remains_readable() {
+        let value = serde_json::json!({"function":"example::api","markdown":"# Safety\nValid pointer required."});
+        let docs: super::ObligationDocumentation = serde_json::from_value(value.clone()).unwrap();
+        assert!(docs.prototype.is_none());
+        assert_eq!(serde_json::to_value(docs).unwrap(), value);
+    }
+
     #[test]
     fn older_semantic_facts_without_direct_source_remain_readable() {
         let value = serde_json::json!({

@@ -19,6 +19,25 @@ use rustc_span::{BytePos, Pos, SourceFile, Span};
 
 use crate::artifact::{ArtifactFacts, SourceFileFact, SourceFileId, SourceRangeFact};
 
+/// Read the compiler's declaration span, which ends before the function body
+/// and includes generic constraints and a trait declaration's trailing semicolon.
+/// Expanded declarations may refer to macro input rather than a real signature.
+#[must_use]
+pub fn function_prototype(tcx: TyCtxt<'_>, def_id: rustc_hir::def_id::DefId) -> Option<String> {
+    use rustc_hir::def::DefKind;
+
+    if !matches!(tcx.def_kind(def_id), DefKind::Fn | DefKind::AssocFn) {
+        return None;
+    }
+    let span = tcx.def_span(def_id);
+    if span.is_dummy() || span.from_expansion() {
+        return None;
+    }
+    let source = tcx.sess.source_map().span_to_snippet(span).ok()?;
+    let prototype = source.trim();
+    (!prototype.is_empty()).then(|| prototype.to_owned())
+}
+
 /// Verifies every available source file that contributed ordinary comment
 /// markers to cached facts.
 ///

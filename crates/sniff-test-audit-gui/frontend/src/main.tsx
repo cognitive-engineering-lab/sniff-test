@@ -6,10 +6,10 @@ import {Decoration, WidgetType} from '@codemirror/view';
 import {rust, rustLanguage} from '@codemirror/lang-rust';
 import './style.css';
 import {Navigation, filePath} from './navigation';
+import {ObligationDocumentationPanel, type ObligationDocumentation} from './obligation-documentation';
 
 type Location = {path:string; start:number; end:number; available:boolean; hash?:string; line?:number; live?:boolean};
 type Buffer = {path:string; content:string; original:string; revision:number; writable:boolean; conflict:boolean; annotations?:OverrideDraft[]};
-type ObligationDocumentation = {function:string; markdown:string};
 type OverrideDraft = {annotation:{effect:string; action:string; document:string; obligation_documentation?:ObligationDocumentation; selector:unknown}; location:Location; applied:boolean; previous_document?:string|null};
 type Target = {action:string; location:Location; selector?:unknown; annotationIndex?:number};
 function sameSelector(a:unknown,b:unknown) {
@@ -130,10 +130,10 @@ function Editor({buffer, location:target, onChange, onSelectionChange, finding, 
 function placeCaretAtEnd(element:HTMLTextAreaElement|null) {
   if(element)element.setSelectionRange(element.value.length,element.value.length);
 }
-function Modal({title,children,onClose}:{title:string;children:React.ReactNode;onClose:()=>void}) {
+function Modal({title,children,onClose,showTitle=true}:{title:string;children:React.ReactNode;onClose:()=>void;showTitle?:boolean}) {
   const ref=useRef<HTMLDialogElement>(null);
   useEffect(()=>{const prior=document.activeElement as HTMLElement|null;ref.current?.showModal();ref.current?.querySelector<HTMLTextAreaElement>('textarea')?.focus();return()=>{ref.current?.close();prior?.focus();};},[]);
-  return <dialog ref={ref} aria-label={title} onCancel={e=>{e.preventDefault();onClose();}}><h2>{title}</h2>{children}</dialog>;
+  return <dialog ref={ref} aria-label={title} onCancel={e=>{e.preventDefault();onClose();}}>{showTitle&&<h2>{title}</h2>}{children}</dialog>;
 }
 function PanelDivider({side,size,onResize}:{side:'left'|'right';size:number;onResize:(size:number)=>void}) {
   const [stacked,setStacked]=useState(()=>matchMedia('(max-width:1050px)').matches);
@@ -299,12 +299,9 @@ function App() {
       {unsaved||buffer?.content!==buffer?.original?<p className="hint">Revert to the original source to restore inline prompts, or apply edits and reanalyze.</p>:null}
       <h3>Call trace</h3><ol className="trace" reversed={inverted}>{traceEntries.map(({step,i})=><li key={i} value={i+1}><button className={highlightedTraceIndex===i?'active':''} aria-current={highlightedTraceIndex===i?'location':undefined} disabled={!step.location?.available} onClick={()=>act(()=>open(step.location!))}>{step.caller}<span>{step.kind} → {step.target||'effect operation'}</span><small title={step.location?.path}>{!step.location?'':step.location.path.startsWith(root+'/')?step.location.path.slice(root.length+1):'…/'+step.location.path.split('/').slice(-3).join('/')}{step.location?.line?':'+step.location.line:''}{!step.location?.available?' · source unavailable':''}</small></button></li>)}</ol></div>
     </>:<div className="empty">Select a finding to inspect its contract and call trace.</div>}</aside></div></div>
-    {overrideEditor&&<Modal title={overrideEditor.action==='justification'?'Justify via override':'Propagate obligations via override'} onClose={()=>setOverrideEditor(undefined)}>
-      {error&&<p role="alert">{error}</p>}<p>Justifications save marker text at the callsite line. Obligations save replacement rustdoc at the definition line, preserving other contracts.</p>
-      {overrideEditor.action==='justification'&&overrideEditor.obligation_documentation&&<section className="obligation-context" aria-label="Obligation">
-        <h3>Obligation</h3><p>{overrideEditor.obligation_documentation.function}</p>
-        <pre tabIndex={0}>{overrideEditor.obligation_documentation.markdown}</pre>
-      </section>}
+    {overrideEditor&&<Modal title={overrideEditor.action==='justification'?'Justify via override':'Propagate obligations via override'} showTitle={false} onClose={()=>setOverrideEditor(undefined)}>
+      {error&&<p role="alert">{error}</p>}
+      {overrideEditor.action==='justification'&&overrideEditor.obligation_documentation&&<ObligationDocumentationPanel documentation={overrideEditor.obligation_documentation}/>}
       <textarea ref={placeCaretAtEnd} autoFocus aria-label="Override documentation" value={overrideEditor.document} onChange={e=>setOverrideEditor({...overrideEditor,document:e.target.value})}/>
       <div className="modal-actions">{overrideEditor.index!==undefined&&!overrideEditor.applied&&<button disabled={busy||status.running} onClick={()=>act(async()=>{const result=await api('override/discard',overrideEditor);setBuffer(result.buffer);setText(result.buffer.content);if(result.finding)setSelected(result.finding);setOverrideEditor(undefined);await refreshDrafts();})}>{overrideEditor.previous_document?'Discard changes':'Delete draft'}</button>}<button onClick={()=>setOverrideEditor(undefined)}>Cancel</button><button className="primary" disabled={busy||status.running} onClick={()=>act(async()=>{const next=await api(overrideEditor.id?'override/save':'override/edit',overrideEditor);setBuffer(next);setText(next.content);setOverrideEditor(undefined);if(view==='changes')setDiff((await api('diff?'+new URLSearchParams({path:next.path}))).diff);await refreshDrafts();})}>Save draft</button></div>
     </Modal>}

@@ -2263,6 +2263,11 @@ impl SourceResolver<'_, '_> {
                     finding.effect.obligation,
                 )?;
                 Some(sniff_test_report::ObligationDocumentation {
+                    prototype: definition.and_then(|d| d.prototype.clone()).or_else(|| {
+                        metadata_definition.and_then(|id| {
+                            sniff_test_core::compiler::source::function_prototype(self.tcx, id)
+                        })
+                    }),
                     function: definition
                         .map(|d| d.display_path.clone())
                         .or_else(|| metadata_definition.map(|id| canonical_namespace(self.tcx, id)))

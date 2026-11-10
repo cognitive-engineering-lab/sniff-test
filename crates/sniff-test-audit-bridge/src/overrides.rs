@@ -998,6 +998,7 @@ mod tests {
         let (root, _dep, mut session, path) = setup();
         let original = fs::read(&path).unwrap();
         let context = sniff_test_report::ObligationDocumentation {
+            prototype: Some("unsafe fn contract(pointer: *const u8) -> u8".into()),
             function: "dep::contract".into(),
             markdown: "# Safety\nThe pointer must be valid.".into(),
         };

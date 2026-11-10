@@ -26,6 +26,97 @@ struct Case {
 }
 
 #[test]
+fn definition_prototypes_preserve_declarations_without_attributes_or_bodies() {
+    let temp = tempfile::tempdir().unwrap();
+    let source = temp.path().join("prototypes.rs");
+    fs::write(
+        &source,
+        r#"#![allow(dead_code, unused_braces)]
+/// Some documentation.
+#[inline]
+pub fn ordinary(value: u8) -> u8 { value }
+pub(crate) unsafe extern "C" fn foreign(pointer: *const u8) -> u8 { unsafe { *pointer } }
+pub const fn constant(value: u8) -> u8 { value }
+pub async fn asynchronous(value: u8) -> u8 { value }
+pub fn generic<'a, T, const N: usize>(values: &'a [T; N]) -> &'a [T]
+where
+    T: Copy,
+{ values }
+pub fn braced<const N: usize>(values: [u8; { N }]) -> [u8; { N }]
+where
+    [(); { N }]: Copy,
+{ values }
+pub trait Contract {
+    fn required<T>(&self, value: T) -> T
+    where T: Copy;
+    fn provided(&self) -> u8 { 7 }
+}
+macro_rules! define { () => { pub fn expanded() {} }; }
+define!();
+"#,
+    )
+    .unwrap();
+    let cache_dir = temp.path().join("cache");
+    let output = run_dependency_unit(
+        temp.path(),
+        &cache_dir,
+        "prototypes",
+        &source,
+        None,
+        "json",
+        &["-Zno-codegen"],
+    );
+    assert_silent_success(&output, "prototype extraction");
+    let facts: serde_json::Value = serde_json::from_slice(
+        &fs::read(artifact_cache_for_crate(&cache_dir, "prototypes")).unwrap(),
+    )
+    .unwrap();
+    let definitions = facts["facts"]["definitions"].as_array().unwrap();
+    for (path, prototype) in [
+        ("prototypes::ordinary", "pub fn ordinary(value: u8) -> u8"),
+        (
+            "prototypes::foreign",
+            "pub(crate) unsafe extern \"C\" fn foreign(pointer: *const u8) -> u8",
+        ),
+        (
+            "prototypes::constant",
+            "pub const fn constant(value: u8) -> u8",
+        ),
+        (
+            "prototypes::asynchronous",
+            "pub async fn asynchronous(value: u8) -> u8",
+        ),
+        (
+            "prototypes::generic",
+            "pub fn generic<'a, T, const N: usize>(values: &'a [T; N]) -> &'a [T]\nwhere\n    T: Copy,",
+        ),
+        (
+            "prototypes::braced",
+            "pub fn braced<const N: usize>(values: [u8; { N }]) -> [u8; { N }]\nwhere\n    [(); { N }]: Copy,",
+        ),
+        (
+            "prototypes::Contract::required",
+            "fn required<T>(&self, value: T) -> T\n    where T: Copy;",
+        ),
+        ("prototypes::Contract::provided", "fn provided(&self) -> u8"),
+    ] {
+        let definition = definitions
+            .iter()
+            .find(|d| d["display-path"] == path)
+            .unwrap_or_else(|| panic!("missing {path}: {definitions:?}"));
+        assert_eq!(definition["prototype"], prototype, "{path}");
+    }
+    let expanded = definitions
+        .iter()
+        .find(|d| d["display-path"] == "prototypes::expanded")
+        .unwrap();
+    assert!(
+        expanded["prototype"].is_null(),
+        "macro input must not be shown as a declaration"
+    );
+}
+
+#[test]
 fn sort_prioritizes_shared_direct_sources_without_changing_json() {
     let repo = repo_root();
     let binary = PathBuf::from(env!("CARGO_BIN_EXE_cargo-sniff-test"));

@@ -436,6 +436,7 @@ mod tests {
                 .iter()
                 .map(
                     |(display_path, local_hash, line, start, end)| DefinitionSourceFact {
+                        prototype: None,
                         documentation: String::new(),
                         definition: definition(stable_crate_id, *local_hash),
                         display_path: (*display_path).to_owned(),

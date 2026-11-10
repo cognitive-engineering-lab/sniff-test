@@ -1465,6 +1465,7 @@ mod tests {
                 byte_len: 20,
             }],
             definitions: vec![DefinitionSourceFact {
+                prototype: None,
                 documentation: String::new(),
                 definition: callee.def_path_hash,
                 display_path: "sample::target".to_owned(),

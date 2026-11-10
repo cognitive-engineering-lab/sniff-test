@@ -14,9 +14,12 @@
     "@codemirror/lsp-client": "^6.3.0",
     "@codemirror/state": "^6.5.0",
     "@codemirror/view": "^6.36.0",
+    "@lezer/highlight": "^1.2.5",
     "codemirror": "^6.0.1",
     "react": "^19.0.0",
-    "react-dom": "^19.0.0"
+    "react-dom": "^19.0.0",
+    "react-markdown": "^10.1.0",
+    "style-mod": "^4.1.4"
   },
   "devDependencies": {
     "@playwright/test": "^1.51.0",
