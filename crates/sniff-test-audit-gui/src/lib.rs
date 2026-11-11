@@ -96,7 +96,9 @@ fn router(app: App) -> Router {
         .route("/group-items", get(group_items))
         .route("/buffer", get(buffer))
         .route("/source/save", post(save_source))
-        .route("/template", post(template))
+        .route("/source/editor", post(source_editor))
+        .route("/source/commit", post(source_commit))
+        .route("/source/remove", post(source_remove))
         .route("/override/editor", post(override_editor))
         .route("/override/commit", post(override_commit))
         .route("/override/remove", post(override_remove))
@@ -711,18 +713,56 @@ async fn save_source(State(app): State<App>, Json(edit): Json<Update>) -> ApiRes
     annotate_source_lines(&mut response, &mut std::collections::HashMap::new());
     Ok(Json(response))
 }
-#[derive(Deserialize)]
-struct TemplateRequest {
-    id: String,
-    action: String,
-    revision: u64,
+async fn source_editor(
+    State(app): State<App>,
+    Json(edit): Json<sniff_test_audit_bridge::SourceEditorTarget>,
+) -> ApiResult {
+    Ok(Json(json!(
+        app.session.lock().unwrap().open_source_editor(edit)?
+    )))
 }
-async fn template(State(app): State<App>, Json(edit): Json<TemplateRequest>) -> ApiResult {
-    Ok(Json(json!(app.session.lock().unwrap().prepare_template(
-        &edit.id,
-        &edit.action,
-        edit.revision
-    )?)))
+#[derive(Deserialize)]
+struct SourceCommit {
+    token: String,
+    document: String,
+    finding: String,
+}
+#[derive(Deserialize)]
+struct SourceRemove {
+    token: String,
+    finding: String,
+}
+fn source_result(
+    session: &mut Session,
+    token: &str,
+    document: Option<String>,
+    finding: &str,
+) -> ApiResult {
+    let result = session.commit_source_editor(token, document)?;
+    session.refresh_audit_progress();
+    let targets = session
+        .finding(finding)
+        .and_then(|f| f.audit.as_ref())
+        .map(|a| &a.targets);
+    let mut response = json!({"buffer":result.buffer,"edit":result.edit,"status":status(session),"finding":finding,"targets":targets,"navigation":session.finding_navigation(finding)});
+    annotate_source_lines(&mut response, &mut std::collections::HashMap::new());
+    Ok(Json(response))
+}
+async fn source_commit(State(app): State<App>, Json(edit): Json<SourceCommit>) -> ApiResult {
+    source_result(
+        &mut app.session.lock().unwrap(),
+        &edit.token,
+        Some(edit.document),
+        &edit.finding,
+    )
+}
+async fn source_remove(State(app): State<App>, Json(edit): Json<SourceRemove>) -> ApiResult {
+    source_result(
+        &mut app.session.lock().unwrap(),
+        &edit.token,
+        None,
+        &edit.finding,
+    )
 }
 
 async fn override_editor(

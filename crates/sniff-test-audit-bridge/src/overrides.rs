@@ -181,6 +181,7 @@ impl Session {
         }
     }
     pub fn open_override_editor(&mut self, target: OverrideEditorTarget) -> Result<OverrideEditor> {
+        self.pending_source_editor = None;
         self.reconcile_overrides();
         ensure!(
             !self.analysis.running,

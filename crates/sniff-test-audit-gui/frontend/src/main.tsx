@@ -1,7 +1,7 @@
 import React, {useEffect, useLayoutEffect, useRef, useState} from 'react';
 import {createRoot} from 'react-dom/client';
 import {EditorView, basicSetup} from 'codemirror';
-import {EditorState, StateField, Compartment, type ChangeDesc} from '@codemirror/state';
+import {Annotation, EditorState, StateField, Compartment, Text, type ChangeDesc} from '@codemirror/state';
 import {Decoration, WidgetType} from '@codemirror/view';
 import {rust} from '@codemirror/lang-rust';
 import {sourcePromptAttachments, continueRustComments, commentEditing, configureCommentEditing} from './source-prompts';
@@ -20,8 +20,15 @@ function sameSelector(a:unknown,b:unknown) {
   const left=a as Record<string,unknown>,right=b as Record<string,unknown>;
   return ['namespace','crate-name','version','source-path','source-hash','start','end','kind','site'].every(key=>left[key]===right[key]);
 }
-type OverrideEditor = {token:string; can_remove:boolean; saved_destination:string; document:string; obligation_documentation?:ObligationDocumentation; destination:string; destinations:{path:string;exists:boolean}[]; action:string};
-type TemplateEdit = {path:string; revision:number; start:number; end:number; text:string; cursor:number};
+type DocumentationEditor = {mode:'source'|'override'; finding?:string; line?:number; token:string; can_remove:boolean; saved_destination:string; document:string; obligation_documentation?:ObligationDocumentation; destination:string; destinations:{path:string;exists:boolean}[]; action:string};
+type SavedSource = {buffer:Buffer; edit:{start:number;end:number;text:string}};
+const acknowledgedSource=Annotation.define<boolean>();
+function savedSourceChanges(state:EditorState,saved:SavedSource) {
+  const source=state.sliceDoc();
+  const changes=state.changes({from:editorPosition(source,saved.edit.start),to:editorPosition(source,saved.edit.end),insert:Text.of(saved.edit.text.replace(/\r\n/g,'\n').split('\n'))});
+  if(changes.apply(state.doc).toString()!==saved.buffer.content.replace(/\r\n/g,'\n'))throw Error('Saved source no longer matches the editor. Reload the file.');
+  return changes;
+}
 type EditorSelection = {path:string; from:number; to:number};
 type FindingNavigation = {source?:Location;root?:Location;contract?:Location;trace:(Location|null)[]};
 type Finding = {navigation?:FindingNavigation;id:string; crate_name:string; effect?:string;kind:string;class?:string;level:string;root?:string;trace_id?:string;reason:string;requirements:string[];missing_requirements:string[];display_trace:string[]; audit?:{obligation:string; justification:string; source?:Location; root?:Location; contract?:Location; targets:Target[]; trace:{caller:string; target?:string; kind:string; location?:Location}[]}};
@@ -64,17 +71,14 @@ function sourceBytePosition(source:string,position:number) {
 function destination(finding:Finding|undefined,kind:'source'|'root'|'contract') {
   return finding?.navigation?finding.navigation[kind]:finding?.audit?.[kind];
 }
-function Editor({buffer, locked, reloadKey, onFlush, location:target, onChange, onSelectionChange, finding, enabled, prepare, onOverride, onError, navigation, onReady}:{buffer:Buffer; locked:boolean; reloadKey:number; onFlush:()=>void; location?:Location; onChange:(text:string,changes:ChangeDesc,previous:string)=>void; onSelectionChange:(selection?:EditorSelection)=>void; finding?:Finding; enabled:boolean; prepare:(target:Target)=>Promise<TemplateEdit>; onOverride:(target:Target)=>void; onError:(error:string)=>void; navigation?:Navigation; onReady:(view:EditorView|undefined)=>void}) {
+function Editor({buffer, locked, reloadKey, onFlush, location:target, onChange, onSelectionChange, finding, enabled, onDocumentation, navigation, onReady}:{buffer:Buffer; locked:boolean; reloadKey:number; onFlush:()=>void; location?:Location; onChange:(text:string,changes:ChangeDesc,previous:string,acknowledged?:boolean,path?:string)=>void; onSelectionChange:(selection?:EditorSelection)=>void; finding?:Finding; enabled:boolean; onDocumentation:(target:Target)=>void; navigation?:Navigation; onReady:(view:EditorView|undefined,acknowledge?:(saved:SavedSource)=>void)=>void}) {
   const documents=useRef(new Map<string,{state:EditorState;content:string;scroll:ReturnType<EditorView['scrollSnapshot']>}>());
   const bufferRef=useRef(buffer);bufferRef.current=buffer;
   const holder = useRef<HTMLDivElement>(null), editorRef=useRef<EditorView | undefined>(undefined);
   const callback = useRef(onChange); callback.current = onChange;
   const selectionRef=useRef(onSelectionChange);selectionRef.current=onSelectionChange;
-  const prepareRef=useRef(prepare);prepareRef.current=prepare;
-  const overrideRef=useRef(onOverride);overrideRef.current=onOverride;
-  const errorRef=useRef(onError);errorRef.current=onError;
+  const documentationRef=useRef(onDocumentation);documentationRef.current=onDocumentation;
   const readyRef=useRef(onReady);readyRef.current=onReady;
-  const findingRef=useRef(finding);findingRef.current=finding;
   const flushRef=useRef(onFlush);flushRef.current=onFlush;
   const readOnly=useRef(new Compartment()),promptsConfig=useRef(new Compartment()),navigationConfig=useRef(new Compartment());
   useEffect(()=>{
@@ -94,13 +98,27 @@ function Editor({buffer, locked, reloadKey, onFlush, location:target, onChange, 
         return false;
       }}),
       EditorView.updateListener.of(update=>{
-        if(update.docChanged)callback.current(update.state.sliceDoc(),update.changes,update.startState.sliceDoc());
+        if(update.docChanged)callback.current(update.state.sliceDoc(),update.changes,update.startState.sliceDoc(),update.transactions.some(tr=>tr.annotation(acknowledgedSource)));
         if(update.selectionSet||update.docChanged){const {from,to}=update.state.selection.main;selectionRef.current({path:bufferRef.current.path,from,to});}
       }),
     ]});
     const view=new EditorView({parent:holder.current,state});
     if(cached?.content===buffer.content)view.dispatch({effects:cached.scroll});
-    editorRef.current=view;readyRef.current(view);
+    editorRef.current=view;readyRef.current(view,saved=>{
+      if(saved.buffer.path===bufferRef.current.path){
+        if(view.state.sliceDoc()===saved.buffer.content)return;
+        const changes=savedSourceChanges(view.state,saved),scroll=view.scrollSnapshot().map(changes);
+        view.dispatch({changes,selection:view.state.selection.map(changes,1),effects:scroll?[scroll]:[],annotations:acknowledgedSource.of(true),userEvent:'documentation'});
+      }else{
+        const cached=documents.current.get(saved.buffer.path);
+        if(!cached || cached.content===saved.buffer.content)return;
+        try{
+          const changes=savedSourceChanges(cached.state,saved);
+          documents.current.set(saved.buffer.path,{content:saved.buffer.content,state:cached.state.update({changes,selection:cached.state.selection.map(changes,1),annotations:acknowledgedSource.of(true),userEvent:'documentation'}).state,scroll:cached.scroll.map(changes)!});
+          callback.current(saved.buffer.content,changes,cached.content,true,saved.buffer.path);
+        }catch{documents.current.delete(saved.buffer.path);}
+      }
+    });
     return()=>{
       documents.current.set(buffer.path,{state:view.state,content:view.state.sliceDoc(),scroll:view.scrollSnapshot()});
       if(documents.current.size>8)documents.current.delete(documents.current.keys().next().value!);
@@ -121,17 +139,7 @@ function Editor({buffer, locked, reloadKey, onFlush, location:target, onChange, 
       const position=editorPosition(buffer.content,t.location.start);
       const added=t.overrideIndex===undefined?undefined:overrides[t.overrideIndex];
       const widget=new DocumentationPrompt(t.action,()=>{
-        if(t.selector){overrideRef.current(t);return;}
-        const snapshot=view.state.sliceDoc();
-        prepareRef.current(t).then(edit=>{
-          if(editorRef.current!==view||findingRef.current?.id!==finding?.id)return;
-          if(view.state.readOnly || view.state.sliceDoc()!==snapshot || edit.path!==buffer.path)throw Error('Source changed while preparing the template. Reanalyze before retrying.');
-          const from=bytePosition(snapshot,edit.start),to=bytePosition(snapshot,edit.end);
-          const updated=snapshot.slice(0,from)+edit.text+snapshot.slice(to);
-          const cursor=editorPosition(updated,edit.cursor);
-          view.dispatch({changes:edit.text?{from:editorPosition(snapshot,edit.start),to:editorPosition(snapshot,edit.end),insert:edit.text}:undefined,selection:{anchor:cursor},effects:EditorView.scrollIntoView(cursor,{y:'center'}),userEvent:'input'});
-          view.focus();
-        }).catch(e=>{if(editorRef.current===view)errorRef.current(String(e));});
+        documentationRef.current(t);
       },!!t.selector,added?'Override saved':'');
       return {position,action:t.action,external:!!t.selector,widget};
     });
@@ -139,11 +147,14 @@ function Editor({buffer, locked, reloadKey, onFlush, location:target, onChange, 
     function decorate(state:EditorState, candidates:Candidate[]) {
       if(!enabled)return Decoration.none;
       const attachments=sourcePromptAttachments(state.doc.toString(),candidates,finding?.audit);
-      const resolved=attachments.some(a=>a.attached)||state.field(commentEditing).regions.length>0;
+      const resolved=attachments.some(a=>a.attached);
       return Decoration.set(candidates.flatMap((candidate,index)=>{
         const attachment=attachments[index];
-        if(!candidate.external && (resolved || !attachment.insertable))return [];
-        return [Decoration.widget({widget:candidate.widget,block:true,side:-1}).range(attachment.lineStart)];
+        if(!candidate.external && ((!attachment.attached&&resolved) || !attachment.insertable))return [];
+        const widget=!candidate.external&&attachment.attached
+          ?new DocumentationPrompt(candidate.action,candidate.widget.run,false,'Saved in source')
+          :candidate.widget;
+        return [Decoration.widget({widget,block:true,side:-1}).range(attachment.markerStart??attachment.lineStart)];
       }),true);
     }
     // Keep hidden candidates too: undo/deletion must be able to restore them.
@@ -170,7 +181,7 @@ function Editor({buffer, locked, reloadKey, onFlush, location:target, onChange, 
 function placeCaretAtEnd(element:HTMLTextAreaElement|null) {
   if(element)element.setSelectionRange(element.value.length,element.value.length);
 }
-function OverridePanel({title,children,onClose,step}:{title:string;children:React.ReactNode;onClose:()=>void;step:string}) {
+function DocumentationPanel({title,children,onClose,step,source=false}:{title:string;children:React.ReactNode;onClose:()=>void;step:string;source?:boolean}) {
   const ref=useRef<HTMLDialogElement>(null);
   const drag=useRef<{x:number;y:number;left:number;top:number}|undefined>(undefined);
   const position=useRef<{left:number;top:number}|undefined>(undefined);
@@ -194,14 +205,14 @@ function OverridePanel({title,children,onClose,step}:{title:string;children:Reac
   useEffect(()=>{ref.current?.querySelector<HTMLTextAreaElement|HTMLInputElement>('textarea,input')?.focus();},[step]);
   return <dialog ref={ref} className="override-panel" aria-label={title} onKeyDown={e=>{if(e.key==='Escape'&&!e.defaultPrevented){e.preventDefault();onClose();}}}>
     <div className="override-titlebar">
-      <div className="override-drag-handle" role="button" tabIndex={0} aria-label="Move override popup" title="Drag to move; use arrow keys when focused"
+      <div className="override-drag-handle" role="button" tabIndex={0} aria-label={source?'Move documentation popup':'Move override popup'} title="Drag to move; use arrow keys when focused"
         onPointerDown={e=>{if(e.button!==0)return;e.preventDefault();e.currentTarget.focus();e.currentTarget.setPointerCapture(e.pointerId);const bounds=ref.current!.getBoundingClientRect();drag.current={x:e.clientX,y:e.clientY,left:bounds.left,top:bounds.top};}}
         onPointerMove={e=>{if(drag.current)place(drag.current.left+e.clientX-drag.current.x,drag.current.top+e.clientY-drag.current.y);}}
         onPointerUp={e=>{drag.current=undefined;e.currentTarget.releasePointerCapture(e.pointerId);}}
         onPointerCancel={()=>{drag.current=undefined;}} onLostPointerCapture={()=>{drag.current=undefined;}}
         onKeyDown={e=>{const dx=e.key==='ArrowLeft'?-20:e.key==='ArrowRight'?20:0,dy=e.key==='ArrowUp'?-20:e.key==='ArrowDown'?20:0;if((dx||dy)&&position.current){e.preventDefault();place(position.current.left+dx,position.current.top+dy);}}}
       ><h2>{title}</h2><span aria-hidden="true">⠿</span></div>
-      <button type="button" aria-label="Close override popup" onClick={onClose}>×</button>
+      <button type="button" aria-label={source?'Close documentation popup':'Close override popup'} onClick={onClose}>×</button>
     </div>
     <div className="override-panel-content">{children}</div>
   </dialog>;
@@ -259,7 +270,7 @@ function App() {
   const [saveState,setSaveState]=useState<SaveState>({status:'saved'}),[reloadKey,setReloadKey]=useState(0),[startingAnalysis,setStartingAnalysis]=useState(false),[opening,setOpening]=useState(false);
   const [error,setError]=useState(''),[busy,setBusy]=useState(false),[logs,setLogs]=useState(false);
   const [nav,setNav]=useState<Location[]>([]);
-  const [overrideEditor,setOverrideEditor]=useState<OverrideEditor>();
+  const [documentationEditor,setDocumentationEditor]=useState<DocumentationEditor>();
   const [confirmRemoval,setConfirmRemoval]=useState(false);
   const [createFile,setCreateFile]=useState(false),[overrideFilename,setOverrideFilename]=useState('sniff-test-overrides.toml');
   const [savedOverride,setSavedOverride]=useState('');
@@ -282,15 +293,14 @@ function App() {
   const openSequence=useRef(0),navigationRead=useRef<AbortController|undefined>(undefined);
   function startNavigation(){navigationRead.current?.abort();navigationRead.current=new AbortController();setOpening(true);return ++openSequence.current;}
   const activeWork=useRef(0);
-  function changeSource(content:string,changes:ChangeDesc,previous:string){
-    const path=saver.current!.snapshot?.path;
+  function changeSource(content:string,changes:ChangeDesc,previous:string,acknowledged=false,path=saver.current!.snapshot?.path){
     setNav(history=>history.map(loc=>{
       if(loc.path!==path || !loc.live)return loc;
       const from=changes.mapPos(editorPosition(previous,loc.start),1);
       const to=Math.max(from,changes.mapPos(editorPosition(previous,loc.end),-1));
       return {...loc,start:sourceBytePosition(content,from),end:sourceBytePosition(content,to)};
     }));
-    setText(content);saver.current!.change(content);
+    if(path===saver.current!.snapshot?.path){setText(content);if(!acknowledged)saver.current!.change(content);}
   }
   function flushSource(){void saver.current!.flush().catch(()=>{});}
   async function reanalyze(){
@@ -324,8 +334,17 @@ function App() {
     return()=>{cancelled=true;};
   },[status.override_revision,buffer?.path]);
   const editor=useRef<EditorView|undefined>(undefined);
+  const acknowledgeSource=useRef<((saved:SavedSource)=>void)|undefined>(undefined);
+  const documentationOrigin=useRef<{view:EditorView;sequence:number}|undefined>(undefined);
+  const restoreDocumentationFocus=useRef(false);
+  useLayoutEffect(()=>{
+    if(documentationEditor || !restoreDocumentationFocus.current)return;
+    restoreDocumentationFocus.current=false;
+    const origin=documentationOrigin.current;
+    if(origin && origin.view===editor.current && origin.sequence===openSequence.current)origin.view.focus();
+  },[documentationEditor]);
   const waitingEditor=useRef<{path:string;resolve:(view:EditorView|null)=>void}|undefined>(undefined);
-  function editorReady(view:EditorView|undefined){editor.current=view;if(view && waitingEditor.current && waitingEditor.current.path===buffer?.path){waitingEditor.current.resolve(view);waitingEditor.current=undefined;}}
+  function editorReady(view:EditorView|undefined,acknowledge?: (saved:SavedSource)=>void){editor.current=view;acknowledgeSource.current=acknowledge;if(view && waitingEditor.current && waitingEditor.current.path===buffer?.path){waitingEditor.current.resolve(view);waitingEditor.current=undefined;}}
   const rememberDefinition=useRef<(view:EditorView)=>void>(()=>{});
   rememberDefinition.current=view=>rememberPosition(view);
   const displayDefinition=useRef<(uri:string)=>Promise<EditorView|null>>(async()=>null);
@@ -474,30 +493,57 @@ function App() {
     for(const group of groups)if(open.has(group.key)&&!group.items&&!group.loading&&!group.loadError)void loadRows(group.key);
   },[groups,expanded,sourceExpanded,listResult,listKey]);
   useEffect(()=>{openSequence.current++;navigationRead.current?.abort();setOpening(false);setSelected(undefined);setSavedOverride('');},[status.generation,status.results_revision]);
-  useEffect(()=>{const warn=(e:BeforeUnloadEvent)=>{if(saver.current?.pending||overrideEditor){e.preventDefault();}};window.addEventListener('beforeunload',warn);return()=>window.removeEventListener('beforeunload',warn)},[unsaved,overrideEditor]);
-  async function openOverride(t:Target) {
-    if(overrideEditor){document.querySelector<HTMLElement>('.override-drag-handle')?.focus();return;}
+  useEffect(()=>{const warn=(e:BeforeUnloadEvent)=>{if(saver.current?.pending||documentationEditor){e.preventDefault();}};window.addEventListener('beforeunload',warn);return()=>window.removeEventListener('beforeunload',warn)},[unsaved,documentationEditor]);
+  async function openDocumentation(t:Target) {
+    if(documentationEditor){document.querySelector<HTMLElement>('.override-drag-handle')?.focus();return;}
     if(!buffer)return;
+    documentationOrigin.current=editor.current?{view:editor.current,sequence:openSequence.current}:undefined;
+    if(!t.selector){
+      const finding=selectedRef.current;if(!finding)throw Error('Select a finding before editing documentation.');
+      await saver.current!.flush();
+      if(selectedRef.current?.id!==finding.id)throw Error('The selected finding changed. Try again.');
+      const snapshot=saver.current!.snapshot!;
+      const context=await api('source/editor',{id:finding.id,action:t.action,revision:snapshot.revision,generation:status.generation});
+      setCreateFile(false);setConfirmRemoval(false);
+      setDocumentationEditor({...context,mode:'source',finding:finding.id,action:t.action,saved_destination:context.destination,destinations:[]});
+      return;
+    }
     const annotation=t.overrideIndex===undefined?undefined:buffer.saved_overrides[t.overrideIndex];
     if(!annotation&&!selected)throw Error('Select a finding before adding an override.');
     const request=annotation?{path:buffer.path,index:t.overrideIndex,revision:buffer.revision}:{id:selected?.id,action:t.action,revision:buffer.revision,generation:status.generation};
     const context=await api('override/editor',request);
     setCreateFile(false);setOverrideFilename('sniff-test-overrides.toml');
     setConfirmRemoval(false);
-    setOverrideEditor({...context,saved_destination:context.destination,action:t.action});
+    setDocumentationEditor({...context,mode:'override',saved_destination:context.destination,action:t.action});
   }
-  async function commitOverride(filename?:string) {
-    if(!overrideEditor)return;
-    const result=await api('override/commit',{token:overrideEditor.token,destination:overrideEditor.destination,document:overrideEditor.document,filename});
-    saver.current!.load(result.buffer);setBuffer(result.buffer);setText(result.buffer.content);acceptStatus(result.status);
-    setSavedOverride(result.destination);setCreateFile(false);setOverrideEditor(undefined);
+  async function commitDocumentation(filename?:string) {
+    if(!documentationEditor)return;
+    if(documentationEditor.mode==='source'){await saveSourceAnnotation(false);return;}
+    const result=await api('override/commit',{token:documentationEditor.token,destination:documentationEditor.destination,document:documentationEditor.document,filename});
+    if(saver.current!.snapshot?.path===result.buffer.path){saver.current!.load(result.buffer);setBuffer(result.buffer);setText(result.buffer.content);}
+    acceptStatus(result.status);restoreDocumentationFocus.current=true;
+    setSavedOverride(result.destination);setCreateFile(false);setDocumentationEditor(undefined);
   }
 
-  async function removeOverride() {
-    if(!overrideEditor)return;
-    const result=await api('override/remove',{token:overrideEditor.token});
-    saver.current!.load(result.buffer);setBuffer(result.buffer);setText(result.buffer.content);acceptStatus(result.status);
-    setSavedOverride('');setConfirmRemoval(false);setOverrideEditor(undefined);
+  async function removeDocumentation() {
+    if(!documentationEditor)return;
+    if(documentationEditor.mode==='source'){await saveSourceAnnotation(true);return;}
+    const result=await api('override/remove',{token:documentationEditor.token});
+    if(saver.current!.snapshot?.path===result.buffer.path){saver.current!.load(result.buffer);setBuffer(result.buffer);setText(result.buffer.content);}
+    acceptStatus(result.status);restoreDocumentationFocus.current=true;
+    setSavedOverride('');setConfirmRemoval(false);setDocumentationEditor(undefined);
+  }
+
+  async function saveSourceAnnotation(remove:boolean) {
+    if(!documentationEditor)return;
+    await saver.current!.flush();
+    const result=await api(remove?'source/remove':'source/commit',{token:documentationEditor.token,document:documentationEditor.document,finding:documentationEditor.finding});
+    if(saver.current!.snapshot?.path===result.buffer.path){saver.current!.load(result.buffer);setBuffer(result.buffer);setText(result.buffer.content);}
+    acknowledgeSource.current?.(result);
+    navigation?.document(result.buffer.path,result.buffer.content);acceptStatus(result.status);
+    restoreDocumentationFocus.current=true;
+    setSelected(current=>current&&current.id===result.finding?{...current,navigation:result.navigation,audit:current.audit?{...current.audit,targets:result.targets}:undefined}:current);
+    setConfirmRemoval(false);setDocumentationEditor(undefined);
   }
 
   const trace=(selected?.audit?.trace||[]).map((step,i)=>({...step,location:selected?.navigation?selected.navigation.trace[i]??undefined:step.location}));
@@ -536,15 +582,7 @@ function App() {
     <main aria-busy={opening}><div className="toolbar"><button disabled={!nav.length||busy} onClick={()=>act(async()=>{const previous=nav[nav.length-1];if(await open(previous,false))setNav(n=>n.slice(0,-1));})}>← Back</button><span className="filename" title={buffer?.path}>{buffer?displaySourcePath(buffer.path,root):'Source workspace'}</span>{opening&&<span className="navigation-loading" role="status">Opening source…</span>}{buffer?.writable&&<span className="save-status" role="status" aria-label="Source save status">{saveState.status==='failed'?'Save failed':saveState.status==='saving'?'Saving…':saveState.status==='pending'?'Unsaved changes':'Saved'}</span>}</div>
       {saveState.status==='failed'&&<div className="error source-save-error" role="alert"><span>{saveState.error}</span><button disabled={busy} onClick={()=>act(()=>saver.current!.retry())}>Retry</button><button disabled={busy} onClick={()=>act(()=>navigator.clipboard.writeText(saver.current!.text))}>Copy edits</button><button disabled={busy} onClick={()=>act(reloadSource)}>Reload file</button></div>}
       {buffer?<><div className="buffer-state"><span className="navigation-status">{navigationStatus}</span>{buffer.writable?'Workspace source':'Read-only dependency'}{(status.running||startingAnalysis)&&buffer.writable?' · Editing paused during analysis':''}</div>
-      <Editor locked={status.running||startingAnalysis} reloadKey={reloadKey} onFlush={flushSource} navigation={navigation} onReady={editorReady} buffer={buffer} location={target} onChange={changeSource} onSelectionChange={setEditorSelection} finding={selected} enabled={!status.running&&!startingAnalysis} onError={setError} onOverride={t=>act(()=>openOverride(t))} prepare={async t=>{
-        const finding=selectedRef.current;
-        if(!finding)throw Error('Select a finding before inserting documentation.');
-        await saver.current!.flush();
-        if(selectedRef.current?.id!==finding.id)throw Error('The selected finding changed. Try again.');
-        const snapshot=saver.current!.snapshot;
-        if(!snapshot)throw Error('Open the source file before inserting documentation.');
-        return api('template',{id:finding.id,action:t.action,revision:snapshot.revision});
-      }}/>
+      <Editor locked={status.running||startingAnalysis||documentationEditor?.mode==='source'} reloadKey={reloadKey} onFlush={flushSource} navigation={navigation} onReady={editorReady} buffer={buffer} location={target} onChange={changeSource} onSelectionChange={setEditorSelection} finding={selected} enabled={!status.running&&!startingAnalysis} onDocumentation={t=>act(()=>openDocumentation(t))}/>
       <footer><small>{buffer.writable?'Changes save automatically after a short pause. Reanalyze to update findings.':savedOverride?`Saved to ${savedOverride} · Reanalyze to update findings`:'Save in the documentation popup writes directly to an override file.'}</small></footer></>:null}
 
     </main>
@@ -557,26 +595,26 @@ function App() {
       {unsaved||status.stale?<p className="hint">Findings are outdated. Reanalyze to refresh them.</p>:null}
       <h3>Call trace</h3><ol className="trace" reversed={inverted}>{traceEntries.map(({step,i})=><li key={i} value={i+1}><button className={highlightedTraceIndex===i?'active':''} aria-current={highlightedTraceIndex===i?'location':undefined} disabled={!step.location?.available} onClick={()=>act(()=>navigateFinding(i))}>{step.caller}<span>{step.kind} → {step.target||'effect operation'}</span><small title={step.location?.path}>{!step.location?'':displaySourcePath(step.location.path,root)}{step.location?.line?':'+step.location.line:''}{!step.location?.available?' · source unavailable':step.location.approximate?' · approximate':''}</small></button></li>)}</ol></div>
     </>:<div className="empty">Select a finding to inspect its contract and call trace.</div>}</aside></div></div>
-    {overrideEditor&&<OverridePanel title={createFile?'Create override file':overrideEditor.action==='justification'?'Justify via override':'Propagate obligations via override'} step={createFile?'create':confirmRemoval?'remove':'edit'} onClose={()=>{if(!busy){if(createFile)setCreateFile(false);else setOverrideEditor(undefined);}}}>
+    {documentationEditor&&<DocumentationPanel source={documentationEditor.mode==='source'} title={createFile?'Create override file':documentationEditor.mode==='source'?(documentationEditor.action==='justification'?'Justify here':'Propagate to callers'):documentationEditor.action==='justification'?'Justify via override':'Propagate obligations via override'} step={createFile?'create':confirmRemoval?'remove':'edit'} onClose={()=>{if(!busy){if(createFile)setCreateFile(false);else setDocumentationEditor(undefined);}}}>
       {!createFile?<>
       {error&&<p role="alert">{error}</p>}
       {confirmRemoval?<>
-        <p className="override-removal">Remove this saved override from <strong>{overrideEditor.saved_destination}</strong>?</p>
+        <p className="override-removal">Remove this saved {documentationEditor.mode==='source'?(documentationEditor.action==='justification'?'justification':'obligation'):'override'} from <strong>{documentationEditor.saved_destination}</strong>?</p>
         <p>Only this annotation will be removed. Reanalyze to update findings.</p>
-        <div className="modal-actions"><button disabled={busy} onClick={()=>setConfirmRemoval(false)}>Cancel</button><button disabled={busy||status.running} onClick={()=>act(removeOverride)}>Confirm removal</button></div>
+        <div className="modal-actions"><button disabled={busy} onClick={()=>setConfirmRemoval(false)}>Cancel</button><button disabled={busy||status.running} onClick={()=>act(removeDocumentation)}>Confirm removal</button></div>
       </>:<>
-      {overrideEditor.action==='justification'&&overrideEditor.obligation_documentation&&<ObligationDocumentationPanel documentation={overrideEditor.obligation_documentation}/>}
-      <textarea ref={placeCaretAtEnd} autoFocus disabled={busy} aria-label="Override documentation" value={overrideEditor.document} onChange={e=>setOverrideEditor({...overrideEditor,document:e.target.value})}/>
-      <label className="override-destination">Override file{overrideEditor.destinations.length>1?<select aria-label="Override file" value={overrideEditor.destination} disabled={busy} onChange={e=>setOverrideEditor({...overrideEditor,destination:e.target.value})}>{overrideEditor.destinations.map(d=><option key={d.path} value={d.path}>{d.path}</option>)}</select>:<small>{overrideEditor.destination}</small>}</label>
-      <div className="modal-actions">{overrideEditor.can_remove&&<button disabled={busy||status.running} onClick={()=>setConfirmRemoval(true)}>Remove override</button>}<button disabled={busy} onClick={()=>setOverrideEditor(undefined)}>Cancel</button><button className="primary" disabled={busy||status.running} onClick={()=>act(async()=>{if(!overrideEditor.destinations.find(d=>d.path===overrideEditor.destination)?.exists){setCreateFile(true);return;}await commitOverride();})}>Save</button></div>
+      {documentationEditor.action==='justification'&&documentationEditor.obligation_documentation&&<ObligationDocumentationPanel documentation={documentationEditor.obligation_documentation}/>}
+      <textarea ref={placeCaretAtEnd} autoFocus disabled={busy} aria-label={documentationEditor.mode==='source'?'Source documentation':'Override documentation'} value={documentationEditor.document} onChange={e=>setDocumentationEditor({...documentationEditor,document:e.target.value})}/>
+      {documentationEditor.mode==='source'?<label className="override-destination">Source file<small>{displaySourcePath(documentationEditor.destination,root)}:{documentationEditor.line}</small></label>:<label className="override-destination">Override file{documentationEditor.destinations.length>1?<select aria-label="Override file" value={documentationEditor.destination} disabled={busy} onChange={e=>setDocumentationEditor({...documentationEditor,destination:e.target.value})}>{documentationEditor.destinations.map(d=><option key={d.path} value={d.path}>{d.path}</option>)}</select>:<small>{documentationEditor.destination}</small>}</label>}
+      <div className="modal-actions">{documentationEditor.can_remove&&<button disabled={busy||status.running} onClick={()=>setConfirmRemoval(true)}>{documentationEditor.mode==='source'?(documentationEditor.action==='justification'?'Remove justification':'Remove obligation'):'Remove override'}</button>}<button disabled={busy} onClick={()=>setDocumentationEditor(undefined)}>Cancel</button><button className="primary" disabled={busy||status.running} onClick={()=>act(async()=>{if(documentationEditor.mode==='override'&&!documentationEditor.destinations.find(d=>d.path===documentationEditor.destination)?.exists){setCreateFile(true);return;}await commitDocumentation();})}>Save</button></div>
       </>}
       </>:<>
       {error&&<p role="alert">{error}</p>}
       <p>Choose a name for the override file. It will be saved beside the active configuration.</p>
       <label className="override-destination">Filename<input autoFocus aria-label="Override filename" value={overrideFilename} disabled={busy} onChange={e=>setOverrideFilename(e.target.value)}/></label>
-      <div className="modal-actions"><button disabled={busy} onClick={()=>setCreateFile(false)}>Cancel</button><button className="primary" disabled={busy||status.running||!overrideFilename.trim()} onClick={()=>act(()=>commitOverride(overrideFilename))}>Create &amp; save</button></div>
+      <div className="modal-actions"><button disabled={busy} onClick={()=>setCreateFile(false)}>Cancel</button><button className="primary" disabled={busy||status.running||!overrideFilename.trim()} onClick={()=>act(()=>commitDocumentation(overrideFilename))}>Create &amp; save</button></div>
       </>}
-    </OverridePanel>}
+    </DocumentationPanel>}
     <div className="analysis-log"><button onClick={()=>setLogs(!logs)}>{logs?'▾':'▸'} Analysis output</button><span>{status.count} findings</span>{logs&&<pre>{status.log||'Waiting for analysis output…'}</pre>}</div>
   </div>;
 }

@@ -108,7 +108,7 @@ export function sourcePromptAttachments(source:string, candidates:Candidate[], d
     const prefix=source.slice(source.lastIndexOf('\n',position-1)+1,position).trim();
     // Markers attach by source line, including an operation directly inside unsafe { ... }.
     const insertable=!prefix || (candidate.action==='justification' && /^unsafe\s*\{\s*$/.test(prefix));
-    let attached=false,commentStart:number|undefined;
+    let attached=false,commentStart:number|undefined,markerStart:number|undefined;
     if(!candidate.external && documentation){
       let end=lineStart;
       while(end>0){
@@ -123,7 +123,9 @@ export function sourcePromptAttachments(source:string, candidates:Candidate[], d
           const marker=documentation.justification.trim().replace(/:$/, '');
           const text=line.slice(2).trimStart();
           const suffix=text.slice(marker.length).trimStart();
-          attached ||= !!marker && text.startsWith(marker) && (!suffix || suffix.startsWith(':'));
+          const matches=!!marker && text.startsWith(marker) && (!suffix || suffix.startsWith(':'));
+          if(matches)markerStart=start;
+          attached ||= matches;
         }else if(candidate.action==='obligation'){
           const heading=documentation.obligation.replace(/^#\s*/, '').trim();
           attached ||= !!heading && line.startsWith('///') && line.slice(3).trim()===`# ${heading}`;
@@ -131,6 +133,6 @@ export function sourcePromptAttachments(source:string, candidates:Candidate[], d
         end=start;
       }
     }
-    return {lineStart,insertable,attached,commentStart};
+    return {lineStart,insertable,attached,commentStart,markerStart};
   });
 }

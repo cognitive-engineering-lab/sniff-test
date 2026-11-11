@@ -158,7 +158,9 @@ test('left panel tracks partial mixed and filtered audit progress',async({page})
   await writeFile(join(dir,'src/lib.rs'),'pub fn first() {\n    panic!("first");\n}\npub fn second() {\n    panic!("second");\n}\n');
   await launch();await selectFinding(page);
   await expect(page.locator('.finding')).toHaveCount(2);
-  await page.getByRole('button',{name:'Justify here',exact:true}).click();
+  await page.locator('.cm-content').focus();
+  await page.keyboard.press('ControlOrMeta+Home');await page.keyboard.press('ArrowDown');await page.keyboard.press('Home');
+  await page.keyboard.insertText('    // PANIC: \n');await page.keyboard.press('ArrowUp');await page.keyboard.press('End');
   await expect(page.locator('.cm-content')).toContainText('// PANIC:');
   await page.keyboard.press('ControlOrMeta+s');
   await expect(page.getByLabel('Source save status')).toHaveText('Saved');
@@ -177,9 +179,8 @@ test('left panel tracks partial mixed and filtered audit progress',async({page})
   await page.locator('.group').click();
   await page.locator('.finding').last().click();
   await page.getByRole('button',{name:'Propagate to callers',exact:true}).click();
-  await expect(page.locator('.cm-content')).toContainText('/// # Panics');
-  await page.keyboard.insertText('The caller handles this panic.');
-  await page.keyboard.press('ControlOrMeta+s');
+  await page.getByLabel('Source documentation',{exact:true}).fill('/// # Panics\n/// The caller handles this panic.');
+  await page.getByRole('dialog').getByRole('button',{name:'Save',exact:true}).click();
   await expect(page.getByLabel('Source save status')).toHaveText('Saved');
   for(const mark of ['Justification saved','Propagation saved'])await expect(page.locator('.group').getByLabel(mark,{exact:true})).toBeVisible();
   await expect(page.locator('.finding').last().getByLabel('Propagation saved',{exact:true})).toBeVisible();
@@ -289,31 +290,24 @@ test('reanalyzed external source changes refresh the same open editor before aut
 });
 
 for(const waitForSave of [false,true])for(const action of ['Justify here','Propagate to callers']) {
- test(`${action} hides prompts ${waitForSave?'after':'before'} autosave while analysis is stale`,async({page})=>{
+ test(`${action} flushes pending edits and reopens completed source comments (autosaved: ${waitForSave})`,async({page})=>{
   await selectFinding(page);
   await page.locator('.cm-content').focus();await page.keyboard.press('ControlOrMeta+Home');
   await page.keyboard.insertText('// λ before the verified sites\n');
-  for(const label of ['Justify here','Propagate to callers'])await expect(page.getByRole('button',{name:label,exact:true})).toBeVisible();
   if(waitForSave)await expect(page.getByLabel('Source save status')).toHaveText('Saved');
   await page.getByRole('button',{name:action,exact:true}).click();
-  await expect(page.locator('.cm-content')).toContainText(action==='Justify here'?'// PANIC:':'/// # Panics');
-  await expect(page.locator('.inline-prompt')).toHaveCount(0);
-  await page.keyboard.insertText('This panic is intentional.');
-  await page.keyboard.press('ControlOrMeta+s');
-  await expect(page.getByLabel('Source save status')).toHaveText('Saved');
-  await expect(page.locator('.inline-prompt')).toHaveCount(0);
-  const mark=action==='Justify here'?'Justification saved':'Propagation saved';
-  await expect(page.locator('.finding.selected').getByLabel(mark,{exact:true})).toBeVisible();
-  await expect(page.locator('.group').getByLabel(mark,{exact:true})).toBeVisible();
-  const source=await readFile(join(dir,'src/lib.rs'),'utf8');
-  expect(source).toContain('This panic is intentional.');
-  expect(source).toContain('// λ before the verified sites');
+  const dialog=page.getByRole('dialog');
+  const document=action==='Justify here'?'// PANIC: This panic is intentional.':'/// # Panics\n/// This panic is intentional.';
+  await dialog.getByLabel('Source documentation',{exact:true}).fill(document);
+  await dialog.getByRole('button',{name:'Save',exact:true}).click();
+  const completed=action==='Justify here'?'Justified!':'Obligation propagated!';
+  await expect(page.getByRole('button',{name:completed,exact:true})).toBeVisible();
   await expect(page.locator('.status')).toContainText('stale');
-  await page.reload();
-  await page.locator('.group').first().click();
-  await page.locator('.finding').first().click();
-  await expect(page.locator('.cm-editor')).toBeVisible();
-  await expect(page.locator('.inline-prompt')).toHaveCount(0);
+  const source=await readFile(join(dir,'src/lib.rs'),'utf8');
+  expect(source).toContain('This panic is intentional.');expect(source).toContain('// λ before the verified sites');
+  await page.reload();await page.locator('.group').first().click();await page.locator('.finding').first().click();
+  await page.getByRole('button',{name:completed,exact:true}).click();
+  await expect(page.getByLabel('Source documentation',{exact:true})).toHaveValue(document);
  });
 }
 
@@ -339,7 +333,8 @@ for(const [effect,heading,source] of [
     await selectFinding(page);
     await expectSimpleDetails(page);
     await editDocumentation(page,heading,'The caller must uphold the documented preconditions.');
-    await expect(page.locator('.inline-prompt')).toHaveCount(0);
+    if(effect==='allocation')await expect(page.locator('.inline-prompt')).toHaveCount(0);
+    else await expect(page.getByRole('button',{name:'Obligation propagated!',exact:true})).toBeVisible();
     await page.getByRole('button',{name:'↻ Reanalyze',exact:true}).click();
     await expect.poll(()=>readFile(join(dir,'src/lib.rs'),'utf8')).toContain(`/// # ${heading}`);
     const origin=new URL(url).origin, token=new URL(url).hash.slice(1);
@@ -347,29 +342,18 @@ for(const [effect,heading,source] of [
   });
 }
 
-test('single-line unsafe block supports justification, undo, save and reanalysis',async({page})=>{
-  await stop();
-  const source='pub fn read(p: *const u8) -> u8 {\n    unsafe { *p }\n}\n';
+test('single-line unsafe block saves justification through the shared popup',async({page})=>{
+  await stop();const source='pub fn read(p: *const u8) -> u8 {\n    unsafe { *p }\n}\n';
   await writeFile(join(dir,'src/lib.rs'),source);await launch('safety');await selectFinding(page);
-  const justify=page.getByRole('button',{name:'Justify here',exact:true});
-  await expect(justify).toBeVisible();
-  await justify.click();
-  await expect(page.locator('.cm-content')).toContainText('// SAFETY:');
-  await expect(page.locator('.inline-prompt')).toHaveCount(0);
-  await page.keyboard.press('ControlOrMeta+z');
-  await expect(page.locator('.cm-content')).not.toContainText('// SAFETY:');
-  await expect(justify).toBeVisible();
-  await justify.click();
-  await expect(page.locator('.cm-content')).toContainText('// SAFETY:');
-  await expect(page.locator('.cm-content')).toBeFocused();
-  await page.keyboard.insertText('The pointer refers to a live initialized value.');
-  await page.keyboard.press('ControlOrMeta+s');
-  await expect(page.getByLabel('Source save status')).toHaveText('Saved');
-  expect(await readFile(join(dir,'src/lib.rs'),'utf8')).toBe(source.replace('    unsafe', '    // SAFETY: The pointer refers to a live initialized value.\n    unsafe'));
+  await page.getByRole('button',{name:'Justify here',exact:true}).click();
+  await page.getByLabel('Source documentation',{exact:true}).fill('// SAFETY: The pointer refers to a live initialized value.');
+  expect(await readFile(join(dir,'src/lib.rs'),'utf8')).toBe(source);
+  await page.getByRole('dialog').getByRole('button',{name:'Save',exact:true}).click();
+  await expect(page.getByRole('button',{name:'Justified!',exact:true})).toBeVisible();
+  expect(await readFile(join(dir,'src/lib.rs'),'utf8')).toBe(source.replace('    unsafe','    // SAFETY: The pointer refers to a live initialized value.\n    unsafe'));
   await page.getByRole('button',{name:'↻ Reanalyze',exact:true}).click();
   await expect(page.locator('.status')).toHaveText('complete');
   await expect(page.locator('.finding-list')).toContainText('No matching findings.');
-  await expect(page.locator('.error')).toHaveCount(0);
 });
 
 for (const viewport of [{width:1440,height:900},{width:900,height:700},{width:1440,height:480}]) {
@@ -400,249 +384,202 @@ for (const viewport of [{width:1440,height:900},{width:900,height:700},{width:14
   });
 }
 
- test('inline justification inserts a blank template at the explanation cursor',async({page})=>{
+for(const action of ['Justify here','Propagate to callers']) {
+ test(`${action} popup creates, updates and removes source documentation`,async({page})=>{
   await selectFinding(page);
-  await page.getByRole('button',{name:'Justify here',exact:true}).click();
-  await expect(page.locator('.cm-line').filter({hasText:'// PANIC:'})).toHaveCount(1);
+  const source=await readFile(join(dir,'src/lib.rs'),'utf8');
+  const completed=action==='Justify here'?'Justified!':'Obligation propagated!';
+  const document=action==='Justify here'?'// PANIC: Intentional λ.\n// Multiline detail.':'/// # Panics\n///\n/// Intentional λ.';
+  await page.getByRole('button',{name:action,exact:true}).click();
+  const dialog=page.getByRole('dialog');
+  await expect(dialog).toHaveAccessibleName(action);
+  await expect(dialog.getByLabel('Override file',{exact:true})).toHaveCount(0);
+  await expect(dialog.locator('.override-destination')).toContainText('src/lib.rs:');
+  await dialog.getByLabel('Source documentation',{exact:true}).fill(document);
+  expect(await readFile(join(dir,'src/lib.rs'),'utf8')).toBe(source);
+  await dialog.getByRole('button',{name:'Cancel',exact:true}).click();
+  expect(await readFile(join(dir,'src/lib.rs'),'utf8')).toBe(source);
+  await page.getByRole('button',{name:action,exact:true}).click();
+  await dialog.getByLabel('Source documentation',{exact:true}).fill(document);
+  await page.route('**/api/v1/source/commit',route=>route.abort(),{times:1});
+  await dialog.getByRole('button',{name:'Save',exact:true}).click();
+  await expect(dialog.getByRole('alert')).toBeVisible();
+  await expect(dialog.getByLabel('Source documentation',{exact:true})).toHaveValue(document);
+  expect(await readFile(join(dir,'src/lib.rs'),'utf8')).toBe(source);
+  await dialog.getByRole('button',{name:'Save',exact:true}).click();
+  await expect(dialog).toHaveCount(0);
+  await expect(page.getByRole('button',{name:completed,exact:true})).toBeVisible();
+  await expect(page.locator('.cm-content')).toContainText('Intentional λ.');
+  await expect(readFile(join(dir,'sniff-test-overrides.toml'),'utf8')).rejects.toThrow();
+  await page.getByRole('button',{name:completed,exact:true}).click();
+  await expect(dialog.getByLabel('Source documentation',{exact:true})).toHaveValue(document);
+  await dialog.getByLabel('Source documentation',{exact:true}).fill(document.replace('Intentional λ.','Revised λ.'));
+  await dialog.getByRole('button',{name:'Save',exact:true}).click();
+  await expect(dialog).toHaveCount(0);
+  const revised=await readFile(join(dir,'src/lib.rs'),'utf8');
+  expect(revised.match(/Revised λ\./g)).toHaveLength(1);expect(revised).not.toContain('Intentional λ.');
+  await page.getByRole('button',{name:completed,exact:true}).click();
+  await dialog.getByRole('button',{name:action==='Justify here'?'Remove justification':'Remove obligation',exact:true}).click();
+  await dialog.getByRole('button',{name:'Cancel',exact:true}).click();
+  expect(await readFile(join(dir,'src/lib.rs'),'utf8')).toBe(revised);
+  await dialog.getByRole('button',{name:action==='Justify here'?'Remove justification':'Remove obligation',exact:true}).click();
+  await page.evaluate(()=>(window as any).beforeRemovalEditor=document.querySelector('.cm-content'));
+  await dialog.getByRole('button',{name:'Confirm removal',exact:true}).click();
+  await expect(dialog).toHaveCount(0);
   await expect(page.locator('.cm-content')).toBeFocused();
-  await page.keyboard.insertText('This panic is intentional.');
-  await expect(page.locator('.cm-content')).toContainText('// PANIC: This panic is intentional.');
-  expect(await readFile(join(dir,'src/lib.rs'),'utf8')).not.toContain('// PANIC:');
-  await expect.poll(()=>readFile(join(dir,'src/lib.rs'),'utf8')).toContain('// PANIC: This panic is intentional.');
+  expect(await page.evaluate(()=>(window as any).beforeRemovalEditor===document.querySelector('.cm-content'))).toBe(true);
+  expect(await readFile(join(dir,'src/lib.rs'),'utf8')).toBe(source);
+  await expect(page.locator('.inline-prompt')).toHaveCount(2);
  });
- test('inline obligation belongs to the origin helper and is undoable',async({page})=>{
-  await stop();await writeFile(join(dir,'src/lib.rs'),'pub fn entry() { helper(); }\nfn helper() {\n    panic!("test");\n}\n');await launch();
-  await selectFinding(page);
-  await page.getByRole('button',{name:'Effect source',exact:true}).click();
-  await page.getByRole('button',{name:'Propagate to callers',exact:true}).click();
-  await expect(page.locator('.cm-content')).toContainText('/// # Panics');
-  await page.keyboard.press('ControlOrMeta+z');
-  await expect(page.locator('.cm-content')).not.toContainText('/// # Panics');
-  await page.reload();await selectFinding(page);
-  await page.getByRole('button',{name:'Effect source',exact:true}).click();
-  await page.getByRole('button',{name:'Propagate to callers',exact:true}).click();
-  await expect(page.locator('.cm-content')).toContainText('/// # Panics');
-  await page.keyboard.insertText('Always panics.');
-  await page.keyboard.press('ControlOrMeta+s');
-  await expect.poll(()=>readFile(join(dir,'src/lib.rs'),'utf8')).toContain('pub fn entry() { helper(); }\n/// # Panics\n///\n/// Always panics.\nfn helper()');
+ test(`${action} preserves CRLF, Unicode and multiline attributes`,async({page})=>{
+  await stop();const source='// λ\r\n#[allow(\r\n    clippy::all\r\n)]\r\npub fn risky() {\r\n    panic!("test");\r\n}\r\n';
+  await writeFile(join(dir,'src/lib.rs'),source);await launch();await selectFinding(page);
+  await page.setViewportSize({width:900,height:700});
+  await page.getByRole('button',{name:action,exact:true}).click();
+  const dialog=page.getByRole('dialog');
+  await expect(dialog.getByRole('button',{name:'Save',exact:true})).toBeInViewport();
+  const handle=dialog.getByRole('button',{name:'Move documentation popup'});await handle.focus();await page.keyboard.press('ArrowRight');
+  const document=action==='Justify here'?'// PANIC: Intentional λ.':'/// # Panics\n/// Intentional λ.';
+  await dialog.getByLabel('Source documentation',{exact:true}).fill(document);
+  await page.screenshot({path:join(repo,`target/audit-source-popup-${action==='Justify here'?'justification':'obligation'}.png`),fullPage:true});
+  await dialog.getByRole('button',{name:'Save',exact:true}).click();await expect(dialog).toHaveCount(0);
+  const saved=await readFile(join(dir,'src/lib.rs'),'utf8');expect(saved.replaceAll('\r\n','')).not.toContain('\n');
+  expect(saved).toContain('#[allow(\r\n    clippy::all\r\n)]\r\npub fn');
  });
+}
 
-test('inline obligation appends after existing docs and before attributes',async({page})=>{
-  const source='/// Existing summary λ.\n///\n/// # Examples\n/// An existing example.\n#[inline]\npub fn risky() {\n    panic!("test");\n}\n';
-  await stop();await writeFile(join(dir,'src/lib.rs'),source);await launch();
-  await selectFinding(page);
+test('source propagation attaches to the origin helper and preserves existing documentation',async({page})=>{
+  await stop();const source='pub fn entry() { helper(); }\n/// Existing summary λ.\n/// # Examples\n/// An existing example.\n#[inline]\nfn helper() {\n    panic!("test");\n}\n';
+  await writeFile(join(dir,'src/lib.rs'),source);await launch();await selectFinding(page);
+  await page.getByRole('button',{name:'Effect source',exact:true}).click();
   await page.getByRole('button',{name:'Propagate to callers',exact:true}).click();
-  await expect(page.locator('.cm-content')).toBeFocused();
-  await page.keyboard.insertText('Always panics.');
-  const expected=source.replace('#[inline]','/// # Panics\n///\n/// Always panics.\n#[inline]');
-  await expect.poll(()=>readFile(join(dir,'src/lib.rs'),'utf8')).toBe(expected);
-  await page.keyboard.press('ControlOrMeta+z');
-  await page.keyboard.press('ControlOrMeta+z');
-  await expect(page.locator('.cm-content')).not.toContainText('/// # Panics');
-  await expect.poll(()=>readFile(join(dir,'src/lib.rs'),'utf8')).toBe(source);
+  await page.getByLabel('Source documentation',{exact:true}).fill('/// # Panics\n/// Always panics.');
+  await page.getByRole('dialog').getByRole('button',{name:'Save',exact:true}).click();
+  await expect(page.getByRole('dialog')).toHaveCount(0);
+  expect(await readFile(join(dir,'src/lib.rs'),'utf8')).toBe(source.replace('#[inline]','///\n/// # Panics\n/// Always panics.\n#[inline]'));
 });
 
-for (const action of ['Justify here','Propagate to callers']) {
-  test(`${action} hides both prompts and restores them on undo and deletion`,async({page})=>{
-    await selectFinding(page);
-    const prompts=page.locator('.inline-prompt');
-    await expect(prompts).toHaveCount(2);
-    await expect(prompts).toContainText(["Document the caller's obligation",'Explain why this is valid']);
-    await expect(prompts).not.toContainText(['Panics','PANIC']);
-    await page.getByRole('button',{name:action,exact:true}).click();
-    await expect(prompts).toHaveCount(0);
-    await expect(page.locator('.cm-content')).toBeFocused();
-    await page.keyboard.press('ControlOrMeta+z');
-    await expect(prompts).toHaveCount(2);
-    await expect(page.locator('.cm-content')).toBeFocused();
-    await page.keyboard.press('ControlOrMeta+Shift+z');
-    await expect(prompts).toHaveCount(0);
-    await page.keyboard.press('ControlOrMeta+z');
-    await expect(prompts).toHaveCount(2);
-    await page.getByRole('button',{name:action,exact:true}).click();
-    await expect(prompts).toHaveCount(0);
-    await expect(page.locator('.cm-content')).toBeFocused();
-    await page.keyboard.insertText('Reason');
-    await page.keyboard.press('Backspace');
-    await expect(prompts).toHaveCount(0);
-    await page.keyboard.press('ControlOrMeta+s');
-    await expect(page.getByLabel('Source save status')).toHaveText('Saved');
-    await expect(prompts).toHaveCount(0);
-    // Delete the whole inserted documentation, leaving the analyzed source intact.
-    await page.keyboard.press('ControlOrMeta+a');
-    await page.keyboard.press('ArrowLeft');
-    const inserted=action==='Justify here'?'    // PANIC: Reaso\n':'/// # Panics\n///\n/// Reaso\n';
-    if(action==='Justify here')for(let i=0;i<'pub fn risky() {\n'.length;i++)await page.keyboard.press('ArrowRight');
-    for(let i=0;i<inserted.length;i++)await page.keyboard.press('Shift+ArrowRight');
-    await page.keyboard.press('Backspace');
-    await expect(prompts).toHaveCount(2);
-    await expect(page.locator('.cm-content')).toBeFocused();
-    await page.getByRole('button',{name:action,exact:true}).click();
-    await expect(prompts).toHaveCount(0);
-    await expect(page.locator('.cm-content')).toBeFocused();
-    await page.keyboard.insertText('A fresh explanation.');
-    await expect(page.locator('.cm-content')).toContainText('A fresh explanation.');
-    expect(await readFile(join(dir,'src/lib.rs'),'utf8')).not.toContain('A fresh explanation.');
-  });
-}
-
-for(const action of ['Justify here','Propagate to callers']) {
- test(`${action} removes empty comment lines and restores prompts immediately`,async({page})=>{
-  await selectFinding(page);
-  await page.getByRole('button',{name:action,exact:true}).click();
-  await expect(page.locator('.inline-prompt')).toHaveCount(0);
-  await page.keyboard.insertText('Explanation.');
-  let release!:()=>void,seen!:()=>void;
-  const held=new Promise<void>(resolve=>release=resolve),requested=new Promise<void>(resolve=>seen=resolve);
-  await page.route('**/api/v1/source/save',async route=>{
-    const response=await route.fetch();seen();await held;await route.fulfill({response});
-  },{times:1});
-  await page.keyboard.press('ControlOrMeta+s');await requested;
-  await page.keyboard.press('ControlOrMeta+Home');
-  if(action==='Justify here')for(let i=0;i<'pub fn risky() {\n'.length;i++)await page.keyboard.press('ArrowRight');
-  const inserted=action==='Justify here'?'    // PANIC: Explanation.':'/// # Panics\n///\n/// Explanation.';
-  for(let i=0;i<inserted.length;i++)await page.keyboard.press('Shift+ArrowRight');
-  // Clearing the comment also removes leftover whitespace and newlines.
-  await page.keyboard.insertText('\n    ');
-  await expect(page.locator('.inline-prompt')).toHaveCount(2);
-  await expect(page.locator('.cm-content')).toBeFocused();
-  release();
-  await page.keyboard.press('ControlOrMeta+s');
-  await expect(page.getByLabel('Source save status')).toHaveText('Saved');
-  await expect.poll(()=>readFile(join(dir,'src/lib.rs'),'utf8')).toBe('pub fn risky() {\n    panic!("intentional test panic");\n}\n');
-  await expect(page.locator('.inline-prompt')).toHaveCount(2);
-  await page.keyboard.press('ControlOrMeta+z');
-  await expect(page.locator('.inline-prompt')).toHaveCount(0);
-  await page.keyboard.press('ControlOrMeta+Shift+z');
-  await expect(page.locator('.inline-prompt')).toHaveCount(2);
- });
-
- test(`${action} continues comments and keeps prompts hidden while editing blank lines`,async({page})=>{
-  await selectFinding(page);
-  await page.getByRole('button',{name:action,exact:true}).click();
-  await expect(page.locator('.inline-prompt')).toHaveCount(0);
-  const prefix=action==='Justify here'?'    // ':'/// ';
-  await page.keyboard.insertText('First explanation.');
-  await page.keyboard.press('Enter');
-  await page.keyboard.insertText('Second explanation.');
-  await expect(page.locator('.cm-content')).toContainText(prefix+'Second explanation.');
-  await expect(page.locator('.inline-prompt')).toHaveCount(0);
-  // Clear the new line, including its prefix, but keep its newline.
-  await page.keyboard.press('Home');
-  await page.keyboard.press('Shift+End');
-  await page.keyboard.press('Backspace');
-  await expect(page.locator('.inline-prompt')).toHaveCount(0);
-  await page.keyboard.press('ControlOrMeta+s');
-  await expect(page.getByLabel('Source save status')).toHaveText('Saved');
-  await expect(page.locator('.inline-prompt')).toHaveCount(0);
-  // Blur flushes saves, but does not end the comment editing session.
-  await page.getByLabel('Search findings',{exact:true}).focus();
-  await expect(page.locator('.inline-prompt')).toHaveCount(0);
-  await page.locator('.cm-content').focus();
-  await page.keyboard.press('ControlOrMeta+End');
-  await expect(page.locator('.inline-prompt')).toHaveCount(2);
-  await page.keyboard.press('ControlOrMeta+z');
-  await expect(page.locator('.inline-prompt')).toHaveCount(0);
- });
-
- test(`${action} always continues empty comments through delayed saves`,async({page})=>{
-  await selectFinding(page);
-  await page.getByRole('button',{name:action,exact:true}).click();
-  await expect(page.locator('.inline-prompt')).toHaveCount(0);
-  let release!:()=>void,seen!:()=>void;
-  const held=new Promise<void>(resolve=>release=resolve),requested=new Promise<void>(resolve=>seen=resolve);
-  await page.route('**/api/v1/source/save',async route=>{
-    const response=await route.fetch();seen();await held;await route.fulfill({response});
-  },{times:1});
-  await page.keyboard.insertText('Explanation.');
-  await page.keyboard.press('ControlOrMeta+s');await requested;
-  await page.keyboard.press('Enter');
-  await page.keyboard.press('Enter');
-  await page.keyboard.insertText('Still commenting.');
-  const prefix=action==='Justify here'?'    // ':'/// ';
-  await expect(page.locator('.cm-content')).toContainText(prefix+'Still commenting.');
-  await expect(page.locator('.inline-prompt')).toHaveCount(0);
-  release();
-  await page.keyboard.press('ControlOrMeta+s');
-  await expect(page.getByLabel('Source save status')).toHaveText('Saved');
-  await expect.poll(()=>readFile(join(dir,'src/lib.rs'),'utf8')).toContain(`Explanation.\n${prefix}\n${prefix}Still commenting.`);
-  await expect(page.locator('.inline-prompt')).toHaveCount(0);
-  await page.keyboard.press('ControlOrMeta+End');
-  await expect(page.locator('.inline-prompt')).toHaveCount(0);
- });
-}
-
-for(const [name,note,atCall,hidden] of [
-  ['attached marker','    // PANIC: ',true,true],
-  ['bare attached marker','    // PANIC',true,true],
-  ['other effect marker','    // SAFETY: unrelated',true,false],
-  ['marker with a longer name','    // PANICKING: unrelated',true,false],
-  ['detached marker','    // PANIC: unrelated\n',true,false],
-  ['marker inside a raw string','const NOTE: &str = r#"\n// PANIC: unrelated\n"#;',false,false],
-  ['attached heading','/// # Panics\n///',false,true],
-] as const) {
- test(`manual ${name} updates source prompt visibility`,async({page})=>{
-  await selectFinding(page);
-  await page.locator('.cm-content').focus();await page.keyboard.press('ControlOrMeta+Home');
-  if(atCall)await page.keyboard.press('ArrowDown');
-  await page.keyboard.press('Home');
-  await page.keyboard.insertText(note+'\n');
-  await expect(page.locator('.inline-prompt')).toHaveCount(hidden?0:2);
-  await page.keyboard.press('ControlOrMeta+s');
-  await expect(page.getByLabel('Source save status')).toHaveText('Saved');
-  await expect(page.locator('.inline-prompt')).toHaveCount(hidden?0:2);
-  await page.keyboard.press('ControlOrMeta+z');
-  await expect(page.locator('.inline-prompt')).toHaveCount(2);
- });
-}
-
-for(const action of ['Justify here','Propagate to callers'])for(const remove of [false,true]) {
- test(`${action} preserves ${remove?'restored':'hidden'} prompts through delayed save acknowledgments`,async({page})=>{
-  await selectFinding(page);
-  await page.getByRole('button',{name:action,exact:true}).click();
-  await expect(page.locator('.inline-prompt')).toHaveCount(0);
-  let release!:()=>void,seen!:()=>void;
-  const held=new Promise<void>(resolve=>release=resolve),requested=new Promise<void>(resolve=>seen=resolve);
-  await page.route('**/api/v1/source/save',async route=>{
-    const response=await route.fetch();seen();await held;await route.fulfill({response});
-  },{times:1});
-  await page.keyboard.insertText('First explanation.');
-  await page.keyboard.press('ControlOrMeta+s');await requested;
-  if(remove){
-    await page.keyboard.press('ControlOrMeta+Home');
-    if(action==='Justify here')await page.keyboard.press('ArrowDown');
-    await page.keyboard.press('Home');
-    const inserted=action==='Justify here'?'    // PANIC: First explanation.\n':'/// # Panics\n///\n/// First explanation.\n';
-    for(let i=0;i<inserted.length;i++)await page.keyboard.press('Shift+ArrowRight');
-    await page.keyboard.press('Backspace');
-  }else await page.keyboard.insertText(' A newer explanation.');
-  await expect(page.locator('.inline-prompt')).toHaveCount(remove?2:0);
-  release();
-  await expect(page.getByLabel('Source save status')).toHaveText('Saved');
-  await expect(page.locator('.inline-prompt')).toHaveCount(remove?2:0);
-  const source=await readFile(join(dir,'src/lib.rs'),'utf8');
-  if(remove)expect(source).toBe('pub fn risky() {\n    panic!("intentional test panic");\n}\n');
-  else expect(source).toContain('First explanation. A newer explanation.');
- });
-}
-
-for(const action of ['Justify here','Propagate to callers']) {
- test(`${action} tracks CRLF, Unicode and multiline attributes`,async({page})=>{
+for(const [effect,heading,marker] of [['panic','Panics','PANIC'],['safety','Safety','SAFETY'],['allocation','Allocations','ALLOCATION']]) {
+ test(`${effect} source popup shows the contract and preserves drafts on file conflicts`,async({page})=>{
   await stop();
-  await writeFile(join(dir,'src/lib.rs'),'// λ\r\n#[allow(\r\n    clippy::all\r\n)]\r\npub fn risky() {\r\n    panic!("test");\r\n}\r\n');await launch();
-  await selectFinding(page);
-  await expect(page.locator('.inline-prompt')).toHaveCount(2);
-  await page.getByRole('button',{name:action,exact:true}).click();
-  await expect(page.locator('.inline-prompt')).toHaveCount(0);
-  await page.keyboard.press('ControlOrMeta+s');
-  await expect(page.getByLabel('Source save status')).toHaveText('Saved');
-  await expect(page.locator('.inline-prompt')).toHaveCount(0);
-  await page.keyboard.press('ControlOrMeta+z');
-  await expect(page.locator('.inline-prompt')).toHaveCount(2);
-  const source=await readFile(join(dir,'src/lib.rs'),'utf8');
-  expect(source.replaceAll('\r\n','')).not.toContain('\n');
+  const source=`/// # ${heading}\n/// The caller must validate the flag. λ\n${effect==='safety'?'unsafe ':''}fn danger(_flag: bool) {}\npub fn entry(flag: bool) {\n    ${effect==='safety'?'unsafe { danger(flag); }':'danger(flag);'}\n}\n`;
+  await writeFile(join(dir,'src/lib.rs'),source);await launch(effect);await selectFinding(page);
+  await page.getByRole('button',{name:'Justify here',exact:true}).click();
+  const dialog=page.getByRole('dialog');
+  await expect(dialog.getByLabel('Obligation documentation',{exact:true})).toContainText('The caller must validate the flag. λ');
+  const document=`// ${marker}: The flag was validated.`;
+  await dialog.getByLabel('Source documentation',{exact:true}).fill(document);
+  await writeFile(join(dir,'src/lib.rs'),'// externally modified\n'+source);
+  await dialog.getByRole('button',{name:'Save',exact:true}).click();
+  await expect(dialog.getByRole('alert')).toContainText('source changed');
+  await expect(dialog.getByLabel('Source documentation',{exact:true})).toHaveValue(document);
+  expect(await readFile(join(dir,'src/lib.rs'),'utf8')).toBe('// externally modified\n'+source);
  });
 }
+
+for(const newline of ['\n','\r\n'])for(const action of ['Justify here','Propagate to callers']) {
+ test(`${action} preserves source focus, selection, viewport and undo (${JSON.stringify(newline)})`,async({page})=>{
+  await stop();
+  const source=[...Array.from({length:180},(_,i)=>`// top padding ${i}`),'pub fn risky() {',...Array.from({length:100},(_,i)=>`    // body padding ${i}`),'    let _ready = true;','    panic!("intentional λ");','}',...Array.from({length:160},(_,i)=>`// tail padding ${i}`),''].join(newline);
+  await writeFile(join(dir,'src/lib.rs'),source);await launch();await selectFinding(page);
+  if(action==='Propagate to callers'){
+    await page.getByRole('button',{name:'Report root',exact:true}).click();
+    await expect.poll(()=>page.evaluate(()=>window.getSelection()?.toString())).toContain('pub fn risky');
+  }
+  const content=page.locator('.cm-content');
+  await content.focus();await page.keyboard.press('ArrowLeft');await page.keyboard.press('Home');await page.keyboard.press('Shift+End');
+  const selected=await page.evaluate(()=>window.getSelection()?.toString());
+  expect(selected).toContain(action==='Justify here'?'panic!':'pub fn risky');
+  await page.evaluate(()=>(window as any).savedSourceEditor=document.querySelector('.cm-content'));
+  let extraSaves=0;page.on('request',request=>{if(request.url().endsWith('/api/v1/source/save'))extraSaves++;});
+  await page.getByRole('button',{name:action,exact:true}).click();
+  const dialog=page.getByRole('dialog');
+  const document=action==='Justify here'?'// PANIC: Expected λ.\n// Detail.':'/// # Panics\n/// Expected λ.';
+  await dialog.getByLabel('Source documentation',{exact:true}).fill(document);
+  const scroller=page.locator('.cm-scroller');
+  // Keep the source cursor offscreen for propagation: focus restoration must not reveal it.
+  if(action==='Propagate to callers')await scroller.evaluate(e=>{e.scrollTop+=1000;});
+  const before=await scroller.evaluate(e=>{
+    const top=e.getBoundingClientRect().top;
+    const line=[...e.querySelectorAll('.cm-line')].find(line=>line.getBoundingClientRect().top>=top);
+    return {scroll:e.scrollTop,line:line?.textContent,y:line?.getBoundingClientRect().top,windowY:window.scrollY};
+  });
+  expect(before.scroll).toBeGreaterThan(1000);
+  await dialog.getByRole('button',{name:'Save',exact:true}).click();await expect(dialog).toHaveCount(0);
+  await expect(content).toBeFocused();
+  expect(await page.evaluate(()=>(window as any).savedSourceEditor===document.querySelector('.cm-content'))).toBe(true);
+  const anchor=page.locator('.cm-line').filter({hasText:before.line!}).first();
+  await expect(anchor).toBeVisible();
+  await expect.poll(async()=>Math.abs((await anchor.boundingBox())!.y-before.y!)).toBeLessThan(3);
+  expect(await page.evaluate(()=>window.scrollY)).toBe(before.windowY);
+  expect(extraSaves).toBe(0);
+  if(action==='Justify here') {
+    expect(await page.evaluate(()=>window.getSelection()?.toString())).toBe(selected);
+    const prompt=page.locator('.inline-prompt').filter({has:page.getByRole('button',{name:'Justified!',exact:true})});
+    await expect(prompt.locator('xpath=following-sibling::*[1]')).toContainText('// PANIC: Expected λ.');
+  }
+  // One undo removes the saved annotation and leaves the analyzed code intact.
+  await page.keyboard.press('ControlOrMeta+z');await page.keyboard.press('ControlOrMeta+s');
+  await expect.poll(()=>readFile(join(dir,'src/lib.rs'),'utf8')).toBe(source);
+  await page.keyboard.press('ControlOrMeta+Shift+z');await page.keyboard.press('ControlOrMeta+s');
+  await expect.poll(()=>readFile(join(dir,'src/lib.rs'),'utf8')).toContain('Expected λ.');
+  const completed=action==='Justify here'?'Justified!':'Obligation propagated!';
+  // Editing and removal must preserve the viewport too, even if the source cursor is elsewhere.
+  for(const remove of [false,true]) {
+    await page.getByRole('button',{name:completed,exact:true}).click();
+    if(remove){
+      await dialog.getByRole('button',{name:action==='Justify here'?'Remove justification':'Remove obligation',exact:true}).click();
+    }else await dialog.getByLabel('Source documentation',{exact:true}).fill(document.replace('Expected λ.','Revised λ.'));
+    await scroller.evaluate(e=>{e.scrollTop+=800;});
+    const anchor=await scroller.evaluate(e=>{
+      const top=e.getBoundingClientRect().top;
+      const line=[...e.querySelectorAll('.cm-line')].find(line=>line.getBoundingClientRect().top>=top)!;
+      return {text:line.textContent!,y:line.getBoundingClientRect().top};
+    });
+    await dialog.getByRole('button',{name:remove?'Confirm removal':'Save',exact:true}).click();
+    await expect(dialog).toHaveCount(0);await expect(content).toBeFocused();
+    const line=page.locator('.cm-line').filter({hasText:anchor.text}).first();
+    await expect.poll(async()=>Math.abs((await line.boundingBox())!.y-anchor.y)).toBeLessThan(3);
+    expect(await page.evaluate(()=>(window as any).savedSourceEditor===document.querySelector('.cm-content'))).toBe(true);
+  }
+  expect(await readFile(join(dir,'src/lib.rs'),'utf8')).toBe(source);
+ });
+}
+
+test('completed justification stays directly above its own block among sibling comments',async({page})=>{
+  await selectFinding(page);
+  await page.locator('.cm-content').focus();await page.keyboard.press('Home');
+  await page.keyboard.insertText('    // Unrelated note.\n    // SAFETY: Separate effect.\n    // PANIC: Expected.\n    // Multiline detail.\n');
+  await page.keyboard.press('ControlOrMeta+s');await expect(page.getByLabel('Source save status')).toHaveText('Saved');
+  const prompt=page.locator('.inline-prompt').filter({has:page.getByRole('button',{name:'Justified!',exact:true})});
+  await expect(prompt.locator('xpath=preceding-sibling::*[1]')).toContainText('// SAFETY: Separate effect.');
+  await expect(prompt.locator('xpath=following-sibling::*[1]')).toContainText('// PANIC: Expected.');
+});
+
+test('saving a popup after navigation preserves the current file and cached source undo',async({page})=>{
+  await stop();
+  const firstSource='pub mod other;\npub fn first() {\n    panic!("first");\n}\n';
+  const secondSource='pub fn second() {\n    panic!("second");\n}\n';
+  await writeFile(join(dir,'src/lib.rs'),firstSource);await writeFile(join(dir,'src/other.rs'),secondSource);
+  await launch();await page.goto(url);await expect(page.locator('.status')).not.toContainText('running');
+  for(const group of await page.locator('.group').all())await group.click();
+  const first=page.locator('.finding').filter({has:page.locator('strong',{hasText:'::first'})});
+  const second=page.locator('.finding').filter({has:page.locator('strong',{hasText:'::second'})});
+  await first.click();await page.getByRole('button',{name:'Justify here',exact:true}).click();
+  const dialog=page.getByRole('dialog');await dialog.getByLabel('Source documentation',{exact:true}).fill('// PANIC: Expected first.');
+  let release!:()=>void,entered!:()=>void;
+  const gate=new Promise<void>(resolve=>release=resolve),started=new Promise<void>(resolve=>entered=resolve);
+  await page.route('**/api/v1/source/commit',async route=>{const response=await route.fetch();entered();await gate;await route.fulfill({response});});
+  await dialog.getByRole('button',{name:'Save',exact:true}).click();await started;
+  await second.click();await expect(page.locator('.filename')).toHaveText('src/other.rs');
+  const search=page.getByLabel('Search findings',{exact:true});await search.focus();
+  release();await expect(dialog).toHaveCount(0);
+  await expect(page.locator('.filename')).toHaveText('src/other.rs');await expect(search).toBeFocused();
+  expect(await readFile(join(dir,'src/other.rs'),'utf8')).toBe(secondSource);
+  await first.click();await expect(page.getByRole('button',{name:'Justified!',exact:true})).toBeVisible();
+  await page.locator('.cm-content').focus();await page.keyboard.press('ControlOrMeta+z');await page.keyboard.press('ControlOrMeta+s');
+  await expect.poll(()=>readFile(join(dir,'src/lib.rs'),'utf8')).toBe(firstSource);
+});
 
 test('multiline selection stays visible on the active line and deletes only selected text',async({page})=>{
   await stop();
@@ -1177,6 +1114,7 @@ for(const action of ['Justify via override','Propagate obligations via override'
         await dialog.getByLabel('Override documentation').fill(template+'A revised explanation.');
         await dialog.getByRole('button',{name:'Save',exact:true}).click();
         await expect(dialog).not.toBeVisible();
+        await expect(page.locator('.cm-content')).toBeFocused();
         const saved=await readFile(destination,'utf8');
         expect(saved).toContain('A revised explanation.');
         expect(saved).not.toContain('The flag is checked by the caller.');

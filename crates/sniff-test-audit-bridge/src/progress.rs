@@ -14,9 +14,9 @@ pub(super) struct SourceSnapshot {
     content: String,
     lexical: Option<LexicalSource>,
 }
-struct LexicalSource {
-    comments: BTreeMap<usize, String>,
-    attributes: BTreeMap<usize, usize>,
+pub(super) struct LexicalSource {
+    pub(super) comments: BTreeMap<usize, String>,
+    pub(super) attributes: BTreeMap<usize, usize>,
 }
 
 /// Disk work can run without holding the shared audit session lock.
@@ -210,7 +210,7 @@ impl Session {
 
 /// Token spans exclude raw strings and other literals. Then skip nested block
 /// comments so only real, standalone line comments can attach to a target.
-fn inspect_source(source: &str) -> Option<LexicalSource> {
+pub(super) fn inspect_source(source: &str) -> Option<LexicalSource> {
     fn literals(tokens: TokenStream, source: &str, ranges: &mut Vec<Range<usize>>) {
         for token in tokens {
             match token {
@@ -368,7 +368,7 @@ fn attached_explanation(
     }
 }
 
-fn marker_header(line: &str) -> bool {
+pub(super) fn marker_header(line: &str) -> bool {
     line.trim_start_matches('/')
         .trim()
         .split_once(':')

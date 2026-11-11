@@ -138,3 +138,13 @@ test('immediate cleanup shares one Undo/Redo step with the deletion',()=>{
   expect(redo(commandTarget())).toBe(true);
   expect(state.doc.toString()).toBe(after);
 });
+
+test('completed justifications anchor at their marker without swallowing preceding comments',()=>{
+  for(const newline of ['\n','\r\n']) {
+    const source=['fn f() {','    // Unrelated note λ.','    // SAFETY: A separate effect.','    // PANIC: Expected failure.','    // More detail.','    danger();','}'].join(newline);
+    const [attachment]=sourcePromptAttachments(source,[{position:source.indexOf('danger();'),action:'justification',external:false}],{justification:'PANIC',obligation:'# Panics'});
+    expect(attachment.attached).toBe(true);
+    expect(attachment.markerStart).toBe(source.indexOf('    // PANIC:'));
+    expect(attachment.commentStart).toBe(source.indexOf('    // Unrelated'));
+  }
+});

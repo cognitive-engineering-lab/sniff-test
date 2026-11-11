@@ -88,7 +88,12 @@ fn successful_source_saves_update_shared_traces_and_remove_deleted_progress() {
     let revision = session.analysis.audit_revision;
     let buffer = session.buffer(&path).unwrap();
     session
-        .prepare_template("one", "justification", buffer.revision)
+        .open_source_editor(SourceEditorTarget {
+            id: "one".into(),
+            action: "justification".into(),
+            revision: buffer.revision,
+            generation: session.analysis.generation,
+        })
         .unwrap();
     session.refresh_audit_progress();
     assert_eq!(session.analysis.audit_revision, revision);

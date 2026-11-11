@@ -2,6 +2,7 @@
 mod navigation;
 mod overrides;
 mod progress;
+mod source_editor;
 use anyhow::{Context, Result, bail, ensure};
 pub use navigation::{FindingNavigation, NavigationLocation};
 pub use overrides::{OverrideEditor, OverrideEditorTarget, SavedOverride};
@@ -13,6 +14,7 @@ use sniff_test_report::{
     AnalysisArtifactReport, Location, MarkerAssociation, REPORT_FORMAT_VERSION, SemanticFacts,
     TraceStep, content_hash,
 };
+pub use source_editor::{SourceCommitResult, SourceEdit, SourceEditor, SourceEditorTarget};
 use std::{
     collections::{BTreeMap, BTreeSet},
     fs,
@@ -260,6 +262,7 @@ pub struct Session {
     dependency_sources: BTreeSet<PathBuf>,
     _lock: fs::File,
     pending_editor: Option<OverrideEditor>,
+    pending_source_editor: Option<SourceEditor>,
     analysis_override_revision: u64,
     override_snapshot: Option<BTreeMap<String, Result<Option<String>, String>>>,
     navigation: BTreeMap<String, FindingNavigation>,
@@ -333,6 +336,7 @@ impl Session {
             dependency_sources: BTreeSet::new(),
             _lock: lock,
             pending_editor: None,
+            pending_source_editor: None,
             override_snapshot: None,
             analysis_override_revision: 0,
             navigation: BTreeMap::new(),
@@ -583,55 +587,6 @@ impl Session {
             }
         }
     }
-    /// Prepare an editor transaction without changing buffers or source files.
-    pub fn prepare_template(
-        &mut self,
-        id: &str,
-        action: &str,
-        revision: u64,
-    ) -> Result<TemplateEdit> {
-        ensure!(
-            !self.analysis.running,
-            "wait for analysis to finish before inserting documentation"
-        );
-        let audit = self
-            .analysis
-            .findings
-            .iter()
-            .find(|f| f.id == id)
-            .and_then(|f| f.audit.clone())
-            .context("finding no longer has source metadata")?;
-        let target = audit
-            .targets
-            .iter()
-            .find(|t| t.action == action)
-            .context("no verified attachment location; edit source manually")?;
-        ensure!(
-            target.location.available,
-            "documentation attachment changed; reanalyze before inserting a template"
-        );
-        self.checked_path(&target.location.path, true)?;
-        let buffer = self.buffer(&target.location.path)?;
-        ensure!(
-            buffer.revision == revision,
-            "source revision changed; reanalyze before inserting a template"
-        );
-        ensure!(
-            content_hash(buffer.content.as_bytes()) == target.location.hash,
-            "source changed since analysis; reanalyze"
-        );
-        template_edit(&buffer, target, &audit)
-    }
-}
-
-#[derive(Debug, Clone, Serialize)]
-pub struct TemplateEdit {
-    pub path: String,
-    pub revision: u64,
-    pub start: usize,
-    pub end: usize,
-    pub text: String,
-    pub cursor: usize,
 }
 
 /// Find attached outer attributes without mistaking brackets in strings or
@@ -698,79 +653,6 @@ fn outer_attribute_start(source: &str, line_start: usize) -> usize {
         }
     }
     start
-}
-
-fn template_edit(
-    buffer: &Buffer,
-    target: &EditTarget,
-    audit: &AuditMetadata,
-) -> Result<TemplateEdit> {
-    let source = &buffer.content;
-    let start = target.location.start;
-    ensure!(
-        start <= source.len() && source.is_char_boundary(start),
-        "source position unavailable"
-    );
-    let line_start = source[..start].rfind('\n').map_or(0, |i| i + 1);
-    let line_start = outer_attribute_start(source, line_start);
-    // Existing contiguous documentation is an editing destination, not another insertion.
-    let needle = if target.action == "justification" {
-        format!("// {}:", audit.justification.trim_end_matches(':'))
-    } else {
-        format!("/// # {}", audit.obligation.trim_start_matches('#').trim())
-    };
-    let mut offset = line_start;
-    for line in source[..line_start].split_inclusive('\n').rev() {
-        offset -= line.len();
-        let trimmed = line.trim();
-        if !(trimmed.starts_with("//") || (trimmed.starts_with("#[") && trimmed.ends_with(']'))) {
-            break;
-        }
-        if trimmed.starts_with(&needle) && (target.action == "justification" || trimmed == needle) {
-            let cursor = offset + line.trim_end_matches(['\r', '\n']).len();
-            return Ok(TemplateEdit {
-                path: buffer.path.clone(),
-                revision: buffer.revision,
-                start: cursor,
-                end: cursor,
-                text: String::new(),
-                cursor,
-            });
-        }
-    }
-    let changed = documentation_edit(source, &target.location, &target.action, audit, "")?;
-    // The documentation helper inserts a contiguous block without modifying existing source.
-    let mut insertion = source
-        .bytes()
-        .zip(changed.bytes())
-        .take_while(|(a, b)| a == b)
-        .count();
-    while !source.is_char_boundary(insertion) || !changed.is_char_boundary(insertion) {
-        insertion -= 1;
-    }
-    let added = changed.len() - source.len();
-    let text = changed[insertion..insertion + added].to_owned();
-    ensure!(
-        format!("{}{}{}", &source[..insertion], text, &source[insertion..]) == changed,
-        "template cannot be inserted safely"
-    );
-    // Common-prefix insertion can leave the original indentation after the inserted newline.
-    let line_end = changed[..insertion + added]
-        .rfind('\n')
-        .context("template has no line ending")?;
-    let cursor = if changed.as_bytes().get(line_end.wrapping_sub(1)) == Some(&b'\r') {
-        line_end - 1
-    } else {
-        line_end
-    };
-    Ok(TemplateEdit {
-        path: buffer.path.clone(),
-        revision: buffer.revision,
-        start: insertion,
-        end: insertion,
-        text,
-        cursor,
-    })
 }
 
 fn atomic_write(path: &Path, bytes: &[u8]) -> Result<()> {
@@ -915,7 +797,7 @@ pub fn documentation_edit(
 #[cfg(test)]
 mod tests {
     use super::*;
-    fn session(dir: &Path) -> Session {
+    pub(super) fn session(dir: &Path) -> Session {
         Session::open(
             dir.to_owned(),
             dir.join("target/audit"),
@@ -927,7 +809,7 @@ mod tests {
         )
         .unwrap()
     }
-    fn metadata(location: Location) -> AuditMetadata {
+    pub(super) fn metadata(location: Location) -> AuditMetadata {
         AuditMetadata {
             effect: "allocation".into(),
             obligation: "Allocations".into(),
@@ -1070,7 +952,7 @@ mod tests {
         assert!(parse_reports(report("a", 0).as_bytes()).is_err());
         assert!(parse_reports(b"error: compilation failed").is_err());
     }
-    fn json_report(name: &str, version: u32) -> String {
+    pub(super) fn json_report(name: &str, version: u32) -> String {
         serde_json::json!({"reason":"sniff-test-artifact","format-version":version,"tool-version":"test","rustc-version":"test","artifact":{"crate-name":name},"findings":[{"reason":"effect"}]}).to_string()
     }
     #[test]
@@ -1154,7 +1036,13 @@ mod tests {
             .unwrap();
         assert!(s.analysis.stale);
         for action in ["justification", "obligation"] {
-            s.prepare_template(&id, action, saved.revision).unwrap();
+            s.open_source_editor(SourceEditorTarget {
+                id: id.clone(),
+                action: action.into(),
+                revision: saved.revision,
+                generation: s.analysis.generation,
+            })
+            .unwrap();
         }
         let targets = &s.analysis.findings[0].audit.as_ref().unwrap().targets;
         assert_eq!(
@@ -1194,18 +1082,34 @@ mod tests {
             .save_source(&buffer.path, saved.revision, separated.clone())
             .unwrap();
         for action in ["justification", "obligation"] {
-            s.prepare_template(&id, action, saved.revision).unwrap();
+            s.open_source_editor(SourceEditorTarget {
+                id: id.clone(),
+                action: action.into(),
+                revision: saved.revision,
+                generation: s.analysis.generation,
+            })
+            .unwrap();
         }
         let changed = separated.replace("    allocate();", "    changed();");
         let saved = s
             .save_source(&buffer.path, saved.revision, changed)
             .unwrap();
         assert!(
-            s.prepare_template(&id, "justification", saved.revision)
-                .is_err()
+            s.open_source_editor(SourceEditorTarget {
+                id: id.clone(),
+                action: "justification".into(),
+                revision: saved.revision,
+                generation: s.analysis.generation
+            })
+            .is_err()
         );
-        s.prepare_template(&id, "obligation", saved.revision)
-            .unwrap();
+        s.open_source_editor(SourceEditorTarget {
+            id: id.clone(),
+            action: "obligation".into(),
+            revision: saved.revision,
+            generation: s.analysis.generation,
+        })
+        .unwrap();
         let navigation = s.finding_navigation(&id).unwrap();
         assert!(navigation.source.unwrap().approximate);
         assert!(navigation.trace[0].as_ref().unwrap().approximate);
@@ -1433,27 +1337,6 @@ mod tests {
                             available: true,
                         };
                         let audit = metadata(location.clone());
-                        let buffer = Buffer {
-                            path: "lib.rs".into(),
-                            content: source.clone(),
-                            hash: content_hash(source.as_bytes()),
-                            revision: 1,
-                            writable: true,
-                            saved_overrides: Vec::new(),
-                        };
-                        let edit = template_edit(
-                            &buffer,
-                            &EditTarget {
-                                selector: None,
-                                action: "obligation".into(),
-                                location: location.clone(),
-                            },
-                            &audit,
-                        )
-                        .unwrap();
-                        let mut updated = source.clone();
-                        updated.replace_range(edit.start..edit.end, &edit.text);
-                        updated.insert_str(edit.cursor, "New condition λ.");
                         let at = source.find("#[").map_or_else(
                             || source.find("pub fn").unwrap() - prefix.len(),
                             |start| start - prefix.len(),
@@ -1463,7 +1346,6 @@ mod tests {
                             &source[..at],
                             &source[at..]
                         );
-                        assert_eq!(updated, expected);
                         assert_eq!(
                             documentation_edit(
                                 &source,
@@ -1479,99 +1361,5 @@ mod tests {
                 }
             }
         }
-    }
-
-    #[test]
-    fn templates_preserve_unicode_crlf_and_navigate_existing_sections() {
-        for source in [
-            "// λ\r\n#[inline]\r\npub fn allocate() {}\r\n",
-            "/// # Allocations\r\n/// Existing λ.\r\n#[inline]\r\npub fn allocate() {}\r\n",
-        ] {
-            let location = Location {
-                path: "lib.rs".into(),
-                source_id: "id".into(),
-                hash: content_hash(source.as_bytes()),
-                start: source.find("pub fn").unwrap(),
-                end: source.len(),
-                available: true,
-            };
-            let audit = metadata(location.clone());
-            let buffer = Buffer {
-                path: "lib.rs".into(),
-
-                content: source.into(),
-                hash: content_hash(source.as_bytes()),
-                revision: 1,
-                writable: true,
-                saved_overrides: Vec::new(),
-            };
-            let edit = template_edit(
-                &buffer,
-                &EditTarget {
-                    selector: None,
-                    action: "obligation".into(),
-                    location,
-                },
-                &audit,
-            )
-            .unwrap();
-            let updated = format!(
-                "{}{}{}",
-                &source[..edit.start],
-                edit.text,
-                &source[edit.end..]
-            );
-            assert_eq!(updated.matches("# Allocations").count(), 1);
-            assert!(updated.is_char_boundary(edit.cursor));
-            assert_eq!(buffer.content, source);
-            if source.contains("# Allocations") {
-                assert!(edit.text.is_empty());
-            } else {
-                assert!(updated.contains("/// # Allocations\r\n///\r\n/// \r\n"));
-            }
-        }
-    }
-    #[test]
-    fn indented_template_cursor_is_after_marker_not_on_source_line() {
-        let source = "fn f() {\r\n    allocate();\r\n}\r\n";
-        let location = Location {
-            path: "lib.rs".into(),
-            source_id: "id".into(),
-            hash: content_hash(source.as_bytes()),
-            start: source.find("allocate").unwrap(),
-            end: source.len(),
-            available: true,
-        };
-        let audit = metadata(location.clone());
-        let buffer = Buffer {
-            path: "lib.rs".into(),
-
-            content: source.into(),
-            hash: content_hash(source.as_bytes()),
-            revision: 1,
-            writable: true,
-            saved_overrides: Vec::new(),
-        };
-        let edit = template_edit(
-            &buffer,
-            &EditTarget {
-                selector: None,
-                action: "justification".into(),
-                location,
-            },
-            &audit,
-        )
-        .unwrap();
-        let mut updated = format!(
-            "{}{}{}",
-            &source[..edit.start],
-            edit.text,
-            &source[edit.end..]
-        );
-        updated.insert_str(edit.cursor, "Capacity checked λ.");
-        assert_eq!(
-            updated,
-            "fn f() {\r\n    // ALLOC: Capacity checked λ.\r\n    allocate();\r\n}\r\n"
-        );
     }
 }
