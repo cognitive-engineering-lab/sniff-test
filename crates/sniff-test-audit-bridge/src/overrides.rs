@@ -71,7 +71,116 @@ pub struct OverrideEditor {
 }
 
 impl Session {
+    /// Reconcile UI metadata with configured files, which are authoritative.
+    /// The event stream calls this periodically; unchanged files are not reparsed.
+    pub fn reconcile_overrides(&mut self) {
+        let manifest = self.override_manifest().to_string_lossy().into_owned();
+        let original = read_optional(Path::new(&manifest)).map_err(|e| e.to_string());
+        let mut snapshot = BTreeMap::from([(manifest.clone(), original.clone())]);
+        let paths = (|| -> Result<Vec<String>> {
+            if let Some(previous) = &self.override_snapshot
+                && previous.get(&manifest) == Some(&original)
+                && self.analysis.override_error.is_none()
+            {
+                return Ok(previous
+                    .keys()
+                    .filter(|p| **p != manifest)
+                    .cloned()
+                    .collect());
+            }
+            let source = original.as_ref().map_err(|e| anyhow::anyhow!("{e}"))?;
+            let config = source
+                .as_deref()
+                .unwrap_or("")
+                .parse::<toml_edit::Document>()?;
+            let Some(item) = config
+                .get("contracts")
+                .and_then(|c| c.get("override-files"))
+            else {
+                return Ok(Vec::new());
+            };
+            item.as_array()
+                .context("override-files must be an array")?
+                .iter()
+                .map(|value| {
+                    let path =
+                        PathBuf::from(value.as_str().context("invalid override-files entry")?);
+                    let path = if path.is_absolute() {
+                        path
+                    } else {
+                        Path::new(&manifest).parent().unwrap().join(path)
+                    };
+                    Ok(self
+                        .checked_override_destination(&path)?
+                        .to_string_lossy()
+                        .into_owned())
+                })
+                .collect()
+        })();
+        let mut errors = Vec::new();
+        match paths {
+            Ok(paths) => {
+                for path in paths {
+                    snapshot.insert(
+                        path.clone(),
+                        read_optional(Path::new(&path)).map_err(|e| e.to_string()),
+                    );
+                }
+            }
+            Err(error) => errors.push(format!("{manifest}: {error}")),
+        }
+        if self.override_snapshot.as_ref() == Some(&snapshot) {
+            return;
+        }
+        let mut files = BTreeMap::new();
+        for (path, source) in snapshot.iter().filter(|(path, _)| **path != manifest) {
+            let parsed = (|| -> Result<OverrideFile> {
+                let source = source
+                    .as_ref()
+                    .map_err(|e| anyhow::anyhow!("{e}"))?
+                    .as_deref()
+                    .context("override file is missing")?;
+                validate_override_file(source)?;
+                Ok(toml::from_str(source)?)
+            })();
+            match parsed {
+                Ok(file) => {
+                    files.insert(path.clone(), file);
+                }
+                Err(error) => errors.push(format!("{path}: {error}")),
+            }
+        }
+        let mut removed = false;
+        for buffer in self.buffers.values_mut() {
+            let count = buffer.saved_overrides.len();
+            buffer.saved_overrides.retain(|saved| {
+                saved.location.hash == buffer.hash
+                    && files
+                        .get(&saved.destination)
+                        .is_some_and(|file| saved_contribution_exists(file, &saved.annotation))
+            });
+            if count != buffer.saved_overrides.len() {
+                buffer.revision += 1;
+                removed = true;
+            }
+        }
+        if self.override_snapshot.is_some() || removed {
+            self.analysis.stale = true;
+            self.analysis.overrides_changed = true;
+        }
+        self.analysis.override_revision += 1;
+        self.analysis.override_error = (!errors.is_empty()).then(|| errors.join("\n"));
+        if self.analysis.override_error.is_some() {
+            self.analysis.stale = true;
+        }
+        self.override_snapshot = Some(snapshot);
+        if removed && let Err(error) = self.persist() {
+            self.analysis.override_error =
+                Some(format!("cannot update saved override metadata: {error}"));
+        }
+    }
     pub fn open_override_editor(&mut self, target: OverrideEditorTarget) -> Result<OverrideEditor> {
+        self.reconcile_overrides();
         ensure!(
             !self.analysis.running,
             "wait for analysis to finish before editing overrides"
@@ -317,9 +426,12 @@ impl Session {
             restore_optional(&plan.manifest, &plan.manifest_original)?;
             return Err(error);
         }
+        // Internal saves already checked the file snapshots and keep precise targets usable.
+        self.override_snapshot = None;
+        self.reconcile_overrides();
         self.analysis.overrides_changed = true;
         self.pending_editor = None;
-        Ok((buffer, destination))
+        Ok((self.buffers[&buffer.path].clone(), destination))
     }
 
     fn override_target(
@@ -563,6 +675,40 @@ impl Session {
         Ok(())
     }
 }
+
+fn saved_contribution_exists(file: &OverrideFile, annotation: &OverrideDocument) -> bool {
+    let selector = &annotation.selector;
+    let Some(entries) = file
+        .overrides
+        .crates
+        .get(&selector.crate_name)
+        .and_then(|v| v.get(&selector.version))
+    else {
+        return false;
+    };
+    let matches = entries
+        .iter()
+        .filter(|(key, _)| {
+            parse_lines(key).is_ok_and(|(path, start, end)| {
+                path == selector.source_path && start <= selector.line && selector.line <= end
+            })
+        })
+        .collect::<Vec<_>>();
+    let [(_, value)] = matches.as_slice() else {
+        return false;
+    };
+    let expected = markdown(&annotation.document, &annotation.action);
+    if expected.is_empty() {
+        return false;
+    }
+    if annotation.action == "obligation" {
+        replace_section(value, &expected) == value.trim()
+    } else {
+        // Match complete lines, never a prefix of a changed explanation.
+        format!("\n{}\n", value.trim()).contains(&format!("\n{expected}\n"))
+    }
+}
+
 fn restore_optional(path: &Path, original: &Option<String>) -> Result<()> {
     if let Some(original) = original {
         atomic_write(path, original.as_bytes())?;
@@ -1229,39 +1375,193 @@ mod tests {
     }
 
     #[test]
-    fn missing_saved_override_file_can_be_recreated_under_a_new_name() {
+    fn external_override_changes_invalidate_cached_badges_and_survive_restart() {
+        for change in [
+            "empty",
+            "missing",
+            "unconfigured",
+            "changed",
+            "invalid",
+            "invalid-config",
+        ] {
+            let (root, _dep, mut session, path) = setup();
+            let context = editor(&mut session, &path);
+            let (buffer, destination) = session
+                .commit_override(
+                    &context.token,
+                    &context.destination,
+                    Some("saved.toml"),
+                    "// SAFETY: original explanation".into(),
+                )
+                .unwrap();
+            let revision = session.analysis.override_revision;
+            match change {
+                "empty" => fs::write(&destination, "").unwrap(),
+                "missing" => fs::remove_file(&destination).unwrap(),
+                "unconfigured" => fs::write(
+                    root.path().join("sniff-test.toml"),
+                    "[contracts]\noverride-files=[]\n",
+                )
+                .unwrap(),
+                "changed" => {
+                    let text = fs::read_to_string(&destination).unwrap();
+                    fs::write(
+                        &destination,
+                        text.replace("original explanation", "new explanation"),
+                    )
+                    .unwrap();
+                }
+                "invalid" => fs::write(&destination, "[invalid").unwrap(),
+                _ => fs::write(root.path().join("sniff-test.toml"), "[invalid").unwrap(),
+            }
+            session.reconcile_overrides();
+            assert!(session.analysis.stale, "{change}");
+            assert!(session.analysis.override_revision > revision);
+            assert!(session.buffer(&path).unwrap().saved_overrides.is_empty());
+            assert!(
+                session
+                    .open_override_editor(OverrideEditorTarget::Saved {
+                        path: path.clone(),
+                        revision: buffer.revision,
+                        index: 0,
+                    })
+                    .is_err()
+            );
+            assert_eq!(
+                session.analysis.override_error.is_some(),
+                matches!(change, "missing" | "invalid" | "invalid-config")
+            );
+            let revision = session.analysis.override_revision;
+            session.reconcile_overrides();
+            assert_eq!(session.analysis.override_revision, revision);
+            let config = session.config.clone();
+            drop(session);
+            let restored =
+                Session::open(root.path().into(), root.path().join("target"), config).unwrap();
+            assert!(
+                restored
+                    .buffers
+                    .values()
+                    .all(|b| b.saved_overrides.is_empty())
+            );
+        }
+    }
+
+    #[test]
+    fn startup_reconciles_metadata_even_without_live_polling() {
         let (root, _dep, mut session, path) = setup();
         let context = editor(&mut session, &path);
-        let (buffer, destination) = session
+        let (_, destination) = session
             .commit_override(
                 &context.token,
                 &context.destination,
-                Some("original.toml"),
-                "// SAFETY: original explanation".into(),
+                Some("saved.toml"),
+                "// SAFETY: checked".into(),
             )
             .unwrap();
-        fs::remove_file(destination).unwrap();
-        let context = session
-            .open_override_editor(OverrideEditorTarget::Saved {
-                path,
-                revision: buffer.revision,
-                index: 0,
-            })
-            .unwrap();
-        assert!(!context.destinations[0].exists);
-        let (buffer, destination) = session
+        let config = session.config.clone();
+        drop(session);
+        fs::write(destination, "").unwrap();
+        let restored =
+            Session::open(root.path().into(), root.path().join("target"), config).unwrap();
+        assert!(
+            restored
+                .buffers
+                .values()
+                .all(|b| b.saved_overrides.is_empty())
+        );
+        assert!(
+            !fs::read_to_string(root.path().join("target/saved-overrides.json"))
+                .unwrap()
+                .contains("checked")
+        );
+    }
+
+    #[test]
+    fn reconciliation_checks_each_effect_contribution_independently() {
+        let (_root, _dep, mut session, path) = setup();
+        let context = editor(&mut session, &path);
+        let (_, destination) = session
             .commit_override(
                 &context.token,
                 &context.destination,
-                Some("replacement.toml"),
-                "// SAFETY: new explanation".into(),
+                Some("saved.toml"),
+                "// SAFETY: checked".into(),
             )
             .unwrap();
-        assert_eq!(buffer.saved_overrides[0].destination, destination);
-        let saved = fs::read_to_string(destination).unwrap();
-        assert!(saved.contains("new explanation") && !saved.contains("original explanation"));
-        let config = fs::read_to_string(root.path().join("sniff-test.toml")).unwrap();
-        assert!(config.contains("replacement.toml") && !config.contains("original.toml"));
+        let mut other = session.buffers[&path].saved_overrides[0].clone();
+        other.annotation.effect = "panic".into();
+        other.annotation.document = "// PANIC: cannot fail".into();
+        let mut file = fs::read_to_string(&destination).unwrap().parse().unwrap();
+        merge_source_override(&mut file, &other.annotation, None).unwrap();
+        session
+            .buffers
+            .get_mut(&path)
+            .unwrap()
+            .saved_overrides
+            .push(other);
+        fs::write(&destination, file.to_string()).unwrap();
+        session.reconcile_overrides();
+        assert_eq!(session.buffer(&path).unwrap().saved_overrides.len(), 2);
+        fs::write(
+            &destination,
+            file.to_string()
+                .replace("SAFETY: checked", "SAFETY: checked differently"),
+        )
+        .unwrap();
+        session.reconcile_overrides();
+        let saved = session.buffer(&path).unwrap().saved_overrides;
+        assert_eq!(saved.len(), 1);
+        assert_eq!(saved[0].annotation.effect, "panic");
+    }
+
+    #[test]
+    fn reanalysis_does_not_acknowledge_overrides_changed_during_the_run() {
+        let (_root, _dep, mut session, path) = setup();
+        let context = editor(&mut session, &path);
+        let (_, destination) = session
+            .commit_override(
+                &context.token,
+                &context.destination,
+                Some("saved.toml"),
+                "// SAFETY: checked".into(),
+            )
+            .unwrap();
+        session.begin_analysis().unwrap();
+        fs::write(destination, "").unwrap();
+        session.reconcile_overrides();
+        let output = || {
+            std::process::Output {
+            status: std::process::Command::new("true").status().unwrap(),
+            stdout: serde_json::json!({"reason":"sniff-test-artifact", "format-version":REPORT_FORMAT_VERSION, "tool-version":"test", "rustc-version":"test", "artifact":{"crate-name":"app"}, "findings":[]}).to_string().into_bytes(),
+            stderr: vec![],
+        }
+        };
+        session.finish_analysis(Ok(output()));
+        assert!(session.analysis.stale);
+        assert!(session.buffers[&path].saved_overrides.is_empty());
+        session.begin_analysis().unwrap();
+        session.finish_analysis(Ok(output()));
+        assert!(!session.analysis.stale);
+    }
+
+    #[test]
+    fn unrelated_override_edits_keep_verified_contributions() {
+        let (_root, _dep, mut session, path) = setup();
+        let context = editor(&mut session, &path);
+        let (_, destination) = session
+            .commit_override(
+                &context.token,
+                &context.destination,
+                Some("saved.toml"),
+                "// SAFETY: checked".into(),
+            )
+            .unwrap();
+        let text = fs::read_to_string(&destination).unwrap();
+        fs::write(destination, format!("# external comment\n{text}")).unwrap();
+        session.reconcile_overrides();
+        assert_eq!(session.buffer(&path).unwrap().saved_overrides.len(), 1);
+        assert!(session.analysis.stale);
     }
 
     #[test]

@@ -165,7 +165,7 @@ async fn workspace(State(app): State<App>) -> ApiResult {
 }
 fn status(session: &Session) -> Value {
     let a = &session.analysis;
-    json!({"generation":a.generation,"running":a.running,"stale":a.stale,"overrides_changed":a.overrides_changed,"status":a.status,"exit_code":a.exit_code,"log":a.log,"count":a.findings.len()})
+    json!({"generation":a.generation,"running":a.running,"stale":a.stale,"overrides_changed":a.overrides_changed,"override_revision":a.override_revision,"override_error":a.override_error,"status":a.status,"exit_code":a.exit_code,"log":a.log,"count":a.findings.len()})
 }
 async fn analysis(State(app): State<App>) -> ApiResult {
     Ok(Json(status(&app.session.lock().unwrap())))
@@ -179,7 +179,11 @@ async fn events(State(app): State<App>) -> impl IntoResponse {
     tokio::spawn(async move {
         let mut last = String::new();
         loop {
-            let current = status(&app.session.lock().unwrap()).to_string();
+            let current = {
+                let mut session = app.session.lock().unwrap();
+                session.reconcile_overrides();
+                status(&session).to_string()
+            };
             if last != current {
                 last = current.clone();
                 if tx.send(Ok(Event::default().data(current))).await.is_err() {

@@ -986,9 +986,21 @@ for(const action of ['Justify via override','Propagate obligations via override'
         await page.getByRole('button',{name:completed,exact:true}).click();
         await expect(dialog.getByLabel('Override documentation')).toHaveValue(template+'A revised explanation.');
         await dialog.getByRole('button',{name:'Cancel',exact:true}).click();
+        expect(await readFile(join(dependency,'src/lib.rs'),'utf8')).toBe(source);
+        // External deletion must remove completion metadata without a page reload.
+        await page.reload();await selectFinding(page);
+        await expect(page.getByRole('button',{name:completed,exact:true})).toBeVisible();
+        const displayedSource=await page.locator('.cm-line').allTextContents();
+        await writeFile(destination,'');
+        await expect(page.getByRole('button',{name:completed,exact:true})).toHaveCount(0);
+        await expect(page.getByRole('button',{name:action,exact:true})).toBeVisible();
+        await expect(page.locator('.status')).toContainText('stale');
+        expect(await page.locator('.cm-line').allTextContents()).toEqual(displayedSource);
         await page.getByRole('button',{name:'↻ Reanalyze',exact:true}).click();
         await expect(page.locator('.status')).toHaveText('complete');
-        expect(await readFile(join(dependency,'src/lib.rs'),'utf8')).toBe(source);
+        if(!await page.locator('.finding').count())await page.locator('.group').first().click();
+        await page.locator('.finding').first().click();
+        await expect(page.getByRole('button',{name:completed,exact:true})).toHaveCount(0);
       } finally {await stop();await rm(dependency,{recursive:true,force:true});}
     });
   }

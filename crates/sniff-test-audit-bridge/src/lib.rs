@@ -161,6 +161,8 @@ pub struct Analysis {
     pub running: bool,
     pub stale: bool,
     pub overrides_changed: bool,
+    pub override_revision: u64,
+    pub override_error: Option<String>,
     pub status: String,
     pub exit_code: Option<i32>,
     pub log: String,
@@ -250,6 +252,8 @@ pub struct Session {
     dependency_sources: BTreeSet<PathBuf>,
     _lock: fs::File,
     pending_editor: Option<OverrideEditor>,
+    analysis_override_revision: u64,
+    override_snapshot: Option<BTreeMap<String, Result<Option<String>, String>>>,
 }
 impl Session {
     pub fn open(root: PathBuf, target: PathBuf, config: AnalysisConfig) -> Result<Self> {
@@ -291,7 +295,7 @@ impl Session {
                 },
             );
         }
-        Ok(Self {
+        let mut session = Self {
             root,
             config,
             analysis: Analysis {
@@ -306,7 +310,11 @@ impl Session {
             dependency_sources: BTreeSet::new(),
             _lock: lock,
             pending_editor: None,
-        })
+            override_snapshot: None,
+            analysis_override_revision: 0,
+        };
+        session.reconcile_overrides();
+        Ok(session)
     }
     fn persist(&self) -> Result<()> {
         let saved: BTreeMap<_, _> = self
@@ -361,6 +369,7 @@ impl Session {
     }
 
     pub fn buffer(&mut self, path: &str) -> Result<Buffer> {
+        self.reconcile_overrides();
         let resolved = self.checked_path(path, false)?;
         let key = resolved.to_string_lossy().into_owned();
         let disk = fs::read_to_string(&resolved).context("source is not readable UTF-8")?;
@@ -486,6 +495,8 @@ impl Session {
     }
     pub fn begin_analysis(&mut self) -> Result<AnalysisConfig> {
         ensure!(!self.analysis.running, "analysis already running");
+        self.reconcile_overrides();
+        self.analysis_override_revision = self.analysis.override_revision;
         self.analysis.running = true;
         self.analysis.status = "running".into();
         self.analysis.generation += 1;
@@ -580,8 +591,10 @@ impl Session {
                             .retain(|saved| saved.location.hash == hash);
                     }
                 }
-                self.analysis.stale = false;
-                if output.status.success() {
+                self.reconcile_overrides();
+                self.analysis.stale = self.analysis.override_error.is_some()
+                    || self.analysis.override_revision != self.analysis_override_revision;
+                if output.status.success() && !self.analysis.stale {
                     self.analysis.overrides_changed = false;
                 }
             }

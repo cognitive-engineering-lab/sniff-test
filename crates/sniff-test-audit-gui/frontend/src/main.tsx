@@ -26,7 +26,7 @@ type EditorSelection = {path:string; from:number; to:number};
 type Finding = {id:string; crate_name:string; effect?:string;kind:string;class?:string;level:string;root?:string;trace_id?:string;reason:string;requirements:string[];missing_requirements:string[];display_trace:string[]; audit?:{obligation:string; justification:string; source?:Location; root?:Location; contract?:Location; targets:Target[]; trace:{caller:string; target?:string; kind:string; location?:Location}[]}};
 type Summary = {id:string; crate_name:string; root:string; reason:string; level:string; effect:string; class:string; path?:string};
 type FindingGroup = {key:string; label?:string; path?:string; count:number; items:Summary[]};
-type Status = {generation:number; running:boolean; stale:boolean; overrides_changed?:boolean; status:string; count:number; log:string};
+type Status = {override_revision?:number; override_error?:string; generation:number; running:boolean; stale:boolean; overrides_changed?:boolean; status:string; count:number; log:string};
 const token = location.hash.slice(1) || sessionStorage.getItem('audit-token') || '';
 if (token) { sessionStorage.setItem('audit-token', token); history.replaceState(null, '', location.pathname); }
 async function api(path:string, body?:unknown) {
@@ -180,7 +180,7 @@ function App() {
   const [editorSelection,setEditorSelection]=useState<EditorSelection>();
   const [navigation,setNavigation]=useState<Navigation>(),[navigationStatus,setNavigationStatus]=useState('');
   function acceptStatus(next:Status){setStatus(previous=>{
-    if(next.generation<previous.generation)return previous;
+    if(next.generation<previous.generation || (next.override_revision??0)<(previous.override_revision??0))return previous;
     if(next.generation===previous.generation&&!previous.running&&!next.running)return {...next,stale:previous.stale||next.stale,overrides_changed:previous.overrides_changed||next.overrides_changed};
     return next;
   });}
@@ -214,6 +214,18 @@ function App() {
     const flush=()=>{flushSource();};window.addEventListener('blur',flush);
     return()=>{window.removeEventListener('blur',flush);saver.current?.dispose();};
   },[]);
+  useEffect(()=>{
+    if(!buffer || buffer.writable)return;
+    let cancelled=false;
+    const path=buffer.path;
+    api('buffer?'+new URLSearchParams({path})).then((next:Buffer)=>{
+      if(cancelled)return;
+      // Refresh metadata only; never replace editor content or pending source edits.
+      setBuffer(current=>current?.path===path && current.hash===next.hash
+        ?{...current,saved_overrides:next.saved_overrides,revision:next.revision}:current);
+    }).catch(e=>{if(!cancelled)setError(String(e));});
+    return()=>{cancelled=true;};
+  },[status.override_revision,buffer?.path]);
   const editor=useRef<EditorView|undefined>(undefined);
   const waitingEditor=useRef<{path:string;resolve:(view:EditorView|null)=>void}|undefined>(undefined);
   function editorReady(view:EditorView|undefined){editor.current=view;if(view && waitingEditor.current && waitingEditor.current.path===buffer?.path){waitingEditor.current.resolve(view);waitingEditor.current=undefined;}}
@@ -384,6 +396,7 @@ function App() {
       <div className="details-scroll" ref={detailsScroll} tabIndex={0} aria-label="Navigation and call trace"><h3>Navigate</h3>{[['Report root',selected.audit?.root],['Effect source',selected.audit?.source],['Contract',selected.audit?.contract]].map(([label,l])=><button className="link" key={label as string} disabled={!l || !(l as Location).available} onClick={()=>act(()=>open(l as Location))}>{label as string}{!(l as Location)?.available?' · unavailable':''}</button>)}
       {buffer&&!buffer.writable&&<p className="hint">Dependency source is read-only. Contract documentation can be supplied through an override file.</p>}
       {selected.audit&&!selected.audit.targets.length&&<p className="hint">No verified documentation attachment location is available. Inspect the source and edit manually where appropriate.</p>}
+      {status.override_error?<p className="hint" role="alert">{status.override_error}</p>:null}
       {unsaved||status.stale?<p className="hint">Findings and recorded call-trace locations are outdated. Reanalyze to refresh them.</p>:null}
       <h3>Call trace</h3><ol className="trace" reversed={inverted}>{traceEntries.map(({step,i})=><li key={i} value={i+1}><button className={highlightedTraceIndex===i?'active':''} aria-current={highlightedTraceIndex===i?'location':undefined} disabled={!step.location?.available} onClick={()=>act(()=>open(step.location!))}>{step.caller}<span>{step.kind} → {step.target||'effect operation'}</span><small title={step.location?.path}>{!step.location?'':displaySourcePath(step.location.path,root)}{step.location?.line?':'+step.location.line:''}{!step.location?.available?' · source unavailable':''}</small></button></li>)}</ol></div>
     </>:<div className="empty">Select a finding to inspect its contract and call trace.</div>}</aside></div></div>
