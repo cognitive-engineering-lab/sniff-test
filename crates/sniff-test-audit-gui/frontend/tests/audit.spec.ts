@@ -402,6 +402,21 @@ for (const viewport of [{width:1440,height:900},{width:900,height:700},{width:14
   await expect.poll(()=>readFile(join(dir,'src/lib.rs'),'utf8')).toContain('pub fn entry() { helper(); }\n/// # Panics\n///\n/// Always panics.\nfn helper()');
  });
 
+test('inline obligation appends after existing docs and before attributes',async({page})=>{
+  const source='/// Existing summary λ.\n///\n/// # Examples\n/// An existing example.\n#[inline]\npub fn risky() {\n    panic!("test");\n}\n';
+  await stop();await writeFile(join(dir,'src/lib.rs'),source);await launch();
+  await selectFinding(page);
+  await page.getByRole('button',{name:'Propagate to callers',exact:true}).click();
+  await expect(page.locator('.cm-content')).toBeFocused();
+  await page.keyboard.insertText('Always panics.');
+  const expected=source.replace('#[inline]','/// # Panics\n///\n/// Always panics.\n#[inline]');
+  await expect.poll(()=>readFile(join(dir,'src/lib.rs'),'utf8')).toBe(expected);
+  await page.keyboard.press('ControlOrMeta+z');
+  await page.keyboard.press('ControlOrMeta+z');
+  await expect(page.locator('.cm-content')).not.toContainText('/// # Panics');
+  await expect.poll(()=>readFile(join(dir,'src/lib.rs'),'utf8')).toBe(source);
+});
+
 for (const action of ['Justify here','Propagate to callers']) {
   test(`${action} hides both prompts and restores them on undo and deletion`,async({page})=>{
     await selectFinding(page);

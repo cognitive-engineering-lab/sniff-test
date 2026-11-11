@@ -862,7 +862,8 @@ pub fn documentation_edit(
         let mut offset = docs_start;
         let mut section = false;
         let mut found = false;
-        at = docs_start;
+        // New sections follow existing documentation, before the attached attributes.
+        at = attribute_start;
         for line in existing.split_inclusive('\n') {
             let doc = line.trim().strip_prefix("///").map(str::trim);
             if let Some(doc) = doc {
@@ -1324,6 +1325,81 @@ mod tests {
             "    // ALLOC:\r\n    // Requirements:\r\n    // - capacity: checked λ\r\n    allocate();\r\n"
         );
     }
+    #[test]
+    fn new_obligation_sections_follow_existing_docs() {
+        for newline in ["\n", "\r\n"] {
+            for prefix in ["", "    "] {
+                for docs in [
+                    "/// Existing λ.",
+                    "/// Existing λ.\n///\n/// # Examples\n/// An example.",
+                ] {
+                    for attributes in [
+                        "",
+                        "#[inline]\n",
+                        "#[cfg_attr(\n    test, allow(unused)\n)]\n",
+                    ] {
+                        let attached = format!("{docs}\n{attributes}")
+                            .lines()
+                            .map(|line| format!("{prefix}{line}{newline}"))
+                            .collect::<String>();
+                        let source = format!("{attached}{prefix}pub fn allocate() {{}}{newline}");
+                        let location = Location {
+                            path: "lib.rs".into(),
+                            source_id: "id".into(),
+                            hash: content_hash(source.as_bytes()),
+                            start: source.find("pub fn").unwrap(),
+                            end: source.len(),
+                            available: true,
+                        };
+                        let audit = metadata(location.clone());
+                        let buffer = Buffer {
+                            path: "lib.rs".into(),
+                            content: source.clone(),
+                            hash: content_hash(source.as_bytes()),
+                            revision: 1,
+                            writable: true,
+                            saved_overrides: Vec::new(),
+                        };
+                        let edit = template_edit(
+                            &buffer,
+                            &EditTarget {
+                                selector: None,
+                                action: "obligation".into(),
+                                location: location.clone(),
+                            },
+                            &audit,
+                        )
+                        .unwrap();
+                        let mut updated = source.clone();
+                        updated.replace_range(edit.start..edit.end, &edit.text);
+                        updated.insert_str(edit.cursor, "New condition λ.");
+                        let at = source.find("#[").map_or_else(
+                            || source.find("pub fn").unwrap() - prefix.len(),
+                            |start| start - prefix.len(),
+                        );
+                        let expected = format!(
+                            "{}{prefix}/// # Allocations{newline}{prefix}///{newline}{prefix}/// New condition λ.{newline}{}",
+                            &source[..at],
+                            &source[at..]
+                        );
+                        assert_eq!(updated, expected);
+                        assert_eq!(
+                            documentation_edit(
+                                &source,
+                                &location,
+                                "obligation",
+                                &audit,
+                                "New condition λ."
+                            )
+                            .unwrap(),
+                            expected
+                        );
+                    }
+                }
+            }
+        }
+    }
+
     #[test]
     fn templates_preserve_unicode_crlf_and_navigate_existing_sections() {
         for source in [
