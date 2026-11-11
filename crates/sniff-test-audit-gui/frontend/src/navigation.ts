@@ -11,8 +11,8 @@ export function filePath(uri:string) {
   return decodeURIComponent(url.pathname);
 }
 type OpenFile = WorkspaceFile & {view:EditorView|null; pending?:Text};
-// Retain documents after leaving their editor: saved audit drafts are overlays,
-// and must remain visible to rust-analyzer without changing files on disk.
+// Retain documents after leaving their editor so rust-analyzer can keep its
+// workspace synchronized with saved files and the active editor.
 class AuditWorkspace extends Workspace {
   files:OpenFile[]=[];
   constructor(client:LSPClient, readonly display:(uri:string)=>Promise<EditorView|null>, readonly changed:()=>void){super(client);}
@@ -40,7 +40,7 @@ class AuditWorkspace extends Workspace {
   openFile(uri:string,languageId:string,view:EditorView){
     let file=this.getFile(uri) as OpenFile|null;
     if(file){
-      // Reopening a buffer after apply/discard may replace its whole contents.
+      // Reloading a file from disk may replace its whole contents.
       if(!file.doc.eq(view.state.doc)){this.changed();this.client.didClose(uri);file.doc=view.state.doc;file.version++;this.client.didOpen(file);}
       file.view=view;file.pending=undefined;
     }else{

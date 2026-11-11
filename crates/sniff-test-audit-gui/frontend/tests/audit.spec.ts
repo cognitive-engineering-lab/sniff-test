@@ -19,13 +19,11 @@ test.beforeEach(async()=>{
 });
 test.afterEach(async()=>{await stop();if(dir)await rm(dir,{recursive:true,force:true,maxRetries:5,retryDelay:100});});
 async function selectFinding(page:any){await page.goto(url);await page.locator('.group').first().click();await expect(page.locator('.finding').first()).toBeVisible();await expect(page.locator('.status')).not.toContainText('running');await page.locator('.finding').first().click();await expect(page.locator('.cm-editor')).toBeVisible();}
-async function draftDocumentation(page:any,heading:string,explanation:string){
+async function editDocumentation(page:any,heading:string,explanation:string){
   await page.getByRole('button',{name:'Report root',exact:true}).click();
   await page.locator('.cm-content').click();
   await page.keyboard.press('ControlOrMeta+Home');
   await page.keyboard.insertText(`/// # ${heading}\n/// ${explanation}\n`);
-  await page.getByRole('button',{name:'Save draft',exact:true}).click();
-  await page.getByRole('button',{name:'Review diff',exact:true}).click();
 }
 async function expectSimpleDetails(page:any){
   const details=page.getByLabel('Effect details',{exact:true});
@@ -38,30 +36,134 @@ async function expectSimpleDetails(page:any){
     await expect(details.getByRole('button',{name:new RegExp('^'+name)})).toBeVisible();
   await expect(details.getByRole('heading',{name:'Call trace',exact:true})).toBeVisible();
 }
-test('navigate, draft an obligation, review, apply, and reanalyze',async({page})=>{
-  await selectFinding(page);
-  await page.getByRole('button',{name:'Report root',exact:true}).click();
-  await expect(page.locator('.filename')).toContainText('src/lib.rs');
-  await expectSimpleDetails(page);
-  await draftDocumentation(page,'Panics','Panics when this demonstration function is called.');
-  await expect(page.locator('.diff')).toContainText('/// # Panics');
-  expect(await readFile(join(dir,'src/lib.rs'),'utf8')).not.toContain('///');
-  await page.screenshot({path:join(repo,'target/audit-review.png'),fullPage:true});
-  await page.getByRole('button',{name:'Apply file & reanalyze'}).click();
+test('source documentation autosaves and manual analysis waits for writes and pauses editing',async({page})=>{
+  await selectFinding(page);await expectSimpleDetails(page);
+  await expect(page.getByText('SAVED DRAFTS',{exact:false})).toHaveCount(0);
+  await editDocumentation(page,'Panics','Panics when this demonstration function is called.');
+  let release!:()=>void;
+  const held=new Promise<void>(resolve=>release=resolve);
+  await page.route('**/api/v1/analysis',async route=>{if(route.request().method()==='POST')await held;await route.continue();});
+  await page.getByRole('button',{name:'↻ Reanalyze',exact:true}).click();
+  await expect(page.locator('.cm-content')).toHaveAttribute('aria-readonly','true');
+  await expect.poll(()=>readFile(join(dir,'src/lib.rs'),'utf8')).toContain('/// # Panics');
+  release();
   await expect(page.locator('.status')).toHaveText('complete');
+  await expect(page.locator('.cm-content')).not.toHaveAttribute('aria-readonly','true');
   await expect(page.locator('.finding')).toHaveCount(0);
-  expect(await readFile(join(dir,'src/lib.rs'),'utf8')).toContain('/// # Panics');
 });
-test('manual drafts persist and external changes prevent application',async({page})=>{
+
+test('autosave resets its idle timer and preserves editor identity and undo',async({page})=>{
   await selectFinding(page);
-  await page.locator('.cm-content').click();await page.keyboard.press('ControlOrMeta+Home');await page.keyboard.insertText('// manual audit note\n');
-  await page.getByRole('button',{name:'Save draft',exact:true}).click();await expect(page.locator('.draft')).toHaveCount(1);
-  await stop();await launch();await page.goto(url);await expect(page.locator('.draft')).toHaveCount(1);
-  await expect(page.locator('.status')).not.toContainText('running');
-  await page.locator('.draft').click();await expect(page.locator('.diff')).toContainText('manual audit note');
-  await writeFile(join(dir,'src/lib.rs'),'// external edit\npub fn risky() {}\n');
-  await page.getByRole('button',{name:'Apply file & reanalyze'}).click();await expect(page.getByRole('alert')).toContainText('source changed');
-  expect(await readFile(join(dir,'src/lib.rs'),'utf8')).toContain('external edit');
+  const original=await readFile(join(dir,'src/lib.rs'),'utf8');
+  await page.evaluate(()=>(window as any).originalEditor=document.querySelector('.cm-content'));
+  await page.locator('.cm-content').focus();await page.keyboard.press('ControlOrMeta+Home');
+  await page.keyboard.insertText('// first edit\n');
+  await expect(page.getByLabel('Source save status')).toHaveText('Unsaved changes');
+  await page.waitForTimeout(450);expect(await readFile(join(dir,'src/lib.rs'),'utf8')).toBe(original);
+  await page.keyboard.insertText('// second edit\n');
+  await page.waitForTimeout(650);expect(await readFile(join(dir,'src/lib.rs'),'utf8')).toBe(original);
+  await expect(page.getByLabel('Source save status')).toHaveText('Saved');
+  expect(await readFile(join(dir,'src/lib.rs'),'utf8')).toContain('// first edit\n// second edit');
+  expect(await page.evaluate(()=>(window as any).originalEditor===document.querySelector('.cm-content'))).toBe(true);
+  await expect(page.locator('.cm-content')).toBeFocused();
+  await page.screenshot({path:join(repo,'target/audit-autosave.png'),fullPage:true});
+  await page.keyboard.press('ControlOrMeta+z');
+  await page.keyboard.press('ControlOrMeta+s');
+  await expect(page.getByLabel('Source save status')).toHaveText('Saved');
+  expect(await readFile(join(dir,'src/lib.rs'),'utf8')).not.toContain('// second edit');
+  await page.keyboard.press('ControlOrMeta+Shift+z');await page.keyboard.press('ControlOrMeta+s');
+  await expect.poll(()=>readFile(join(dir,'src/lib.rs'),'utf8')).toContain('// second edit');
+});
+
+test('autosave retains local text on external conflicts and reloads explicitly',async({page})=>{
+  await selectFinding(page);
+  const original=await readFile(join(dir,'src/lib.rs'),'utf8');
+  await page.locator('.cm-content').focus();await page.keyboard.press('ControlOrMeta+Home');await page.keyboard.insertText('// local edit\n');
+  await writeFile(join(dir,'src/lib.rs'),'// external edit\n'+original);
+  await expect(page.getByLabel('Source save status')).toHaveText('Save failed');
+  await expect(page.getByRole('alert')).toContainText('Source changed outside audit');
+  await expect(page.locator('.cm-content')).toContainText('// local edit');
+  expect(await readFile(join(dir,'src/lib.rs'),'utf8')).not.toContain('// local edit');
+  await expect(page.getByRole('button',{name:'Copy edits',exact:true})).toBeVisible();
+  await page.getByRole('button',{name:'Reload file',exact:true}).click();
+  await expect(page.locator('.cm-content')).toContainText('// external edit');
+  await expect(page.locator('.cm-content')).not.toContainText('// local edit');
+  await expect(page.getByLabel('Source save status')).toHaveText('Saved');
+});
+
+test('autosave serializes delayed acknowledgments without replacing newer typing',async({page})=>{
+  await selectFinding(page);
+  let release!:()=>void,seen!:()=>void;
+  const held=new Promise<void>(resolve=>release=resolve),requested=new Promise<void>(resolve=>seen=resolve);
+  const revisions:number[]=[];
+  await page.route('**/api/v1/source/save',async route=>{
+    revisions.push(route.request().postDataJSON().revision);
+    if(revisions.length===1){seen();await held;}
+    await route.continue();
+  });
+  await page.locator('.cm-content').focus();await page.keyboard.press('ControlOrMeta+Home');await page.keyboard.insertText('// first\n');
+  await page.keyboard.press('ControlOrMeta+s');await requested;
+  await page.keyboard.insertText('// newer\n');release();
+  await expect(page.getByLabel('Source save status')).toHaveText('Saved');
+  await expect(page.locator('.cm-content')).toContainText('// newer');
+  expect(await readFile(join(dir,'src/lib.rs'),'utf8')).toContain('// first\n// newer');
+  expect(revisions).toEqual([0,1]);
+});
+
+test('reanalyzed external source changes refresh the same open editor before autosaving',async({page})=>{
+  await selectFinding(page);
+  const original=await readFile(join(dir,'src/lib.rs'),'utf8');
+  await writeFile(join(dir,'src/lib.rs'),'// externally updated\n'+original);
+  const analysis=page.waitForResponse(response=>response.url().endsWith('/api/v1/analysis')&&response.request().method()==='POST');
+  await page.getByRole('button',{name:'↻ Reanalyze',exact:true}).click();await analysis;
+  await expect(page.locator('.status')).toHaveText('complete');
+  await page.locator('.finding').first().click();
+  await expect(page.locator('.cm-content')).toContainText('// externally updated');
+  await expect(page.getByRole('button',{name:'Justify here',exact:true})).toBeVisible();
+  await expect(page.locator('.status')).toHaveText('complete');
+  await page.locator('.cm-content').focus();await page.keyboard.press('ControlOrMeta+Home');
+  await page.keyboard.insertText('// own edit\n');await page.keyboard.press('ControlOrMeta+s');
+  await expect(page.getByLabel('Source save status')).toHaveText('Saved');
+  expect(await readFile(join(dir,'src/lib.rs'),'utf8')).toContain('// own edit\n// externally updated');
+});
+
+for(const waitForSave of [false,true])for(const action of ['Justify here','Propagate to callers']) {
+ test(`${action} hides prompts ${waitForSave?'after':'before'} autosave while analysis is stale`,async({page})=>{
+  await selectFinding(page);
+  await page.locator('.cm-content').focus();await page.keyboard.press('ControlOrMeta+Home');
+  await page.keyboard.insertText('// λ before the verified sites\n');
+  for(const label of ['Justify here','Propagate to callers'])await expect(page.getByRole('button',{name:label,exact:true})).toBeVisible();
+  if(waitForSave)await expect(page.getByLabel('Source save status')).toHaveText('Saved');
+  await page.getByRole('button',{name:action,exact:true}).click();
+  await expect(page.locator('.cm-content')).toContainText(action==='Justify here'?'// PANIC:':'/// # Panics');
+  await expect(page.locator('.inline-prompt')).toHaveCount(0);
+  await page.keyboard.insertText('This panic is intentional.');
+  await page.keyboard.press('ControlOrMeta+s');
+  await expect(page.getByLabel('Source save status')).toHaveText('Saved');
+  await expect(page.locator('.inline-prompt')).toHaveCount(0);
+  const source=await readFile(join(dir,'src/lib.rs'),'utf8');
+  expect(source).toContain('This panic is intentional.');
+  expect(source).toContain('// λ before the verified sites');
+  await expect(page.locator('.status')).toContainText('stale');
+  await page.reload();
+  await page.locator('.group').first().click();
+  await page.locator('.finding').first().click();
+  await expect(page.locator('.cm-editor')).toBeVisible();
+  await expect(page.locator('.inline-prompt')).toHaveCount(0);
+ });
+}
+
+test('autosave retries transient failures and persists source across server restarts',async({page})=>{
+  await selectFinding(page);
+  await page.route('**/api/v1/source/save',route=>route.abort(),{times:1});
+  await page.locator('.cm-content').focus();await page.keyboard.press('ControlOrMeta+Home');await page.keyboard.insertText('// saved audit note\n');
+  await page.keyboard.press('ControlOrMeta+s');
+  await expect(page.getByLabel('Source save status')).toHaveText('Save failed');
+  await page.getByRole('button',{name:'Retry',exact:true}).click();
+  await expect(page.getByLabel('Source save status')).toHaveText('Saved');
+  await stop();await launch();await selectFinding(page);
+  await expect(page.locator('.cm-content')).toContainText('// saved audit note');
+  await expect(page.getByText('SAVED DRAFTS',{exact:false})).toHaveCount(0);
 });
 
 for(const [effect,heading,source] of [
@@ -72,11 +174,9 @@ for(const [effect,heading,source] of [
     await stop();await writeFile(join(dir,'src/lib.rs'),source);await launch(effect);
     await selectFinding(page);
     await expectSimpleDetails(page);
-    await draftDocumentation(page,heading,'The caller must uphold the documented preconditions.');
-    await expect(page.locator('.diff')).toContainText(`/// # ${heading}`);
-    const response=page.waitForResponse(r=>r.url().endsWith('/api/v1/apply'));
-    await page.getByRole('button',{name:'Apply file & reanalyze'}).click();
-    expect((await response).ok()).toBe(true);
+    await editDocumentation(page,heading,'The caller must uphold the documented preconditions.');
+    await expect(page.locator('.inline-prompt')).toHaveCount(0);
+    await page.getByRole('button',{name:'↻ Reanalyze',exact:true}).click();
     await expect.poll(()=>readFile(join(dir,'src/lib.rs'),'utf8')).toContain(`/// # ${heading}`);
     const origin=new URL(url).origin, token=new URL(url).hash.slice(1);
     await expect.poll(async()=>{const r=await fetch(origin+'/api/v1/analysis',{headers:{'x-audit-token':token}});return (await r.json()).running;}).toBe(false);
@@ -119,9 +219,7 @@ for (const viewport of [{width:1440,height:900},{width:900,height:700},{width:14
   await page.keyboard.insertText('This panic is intentional.');
   await expect(page.locator('.cm-content')).toContainText('// PANIC: This panic is intentional.');
   expect(await readFile(join(dir,'src/lib.rs'),'utf8')).not.toContain('// PANIC:');
-  await page.getByRole('button',{name:'Save draft',exact:true}).click();
-  await page.getByRole('button',{name:'Review diff',exact:true}).click();
-  await expect(page.locator('.diff')).toContainText('// PANIC: This panic is intentional.');
+  await expect.poll(()=>readFile(join(dir,'src/lib.rs'),'utf8')).toContain('// PANIC: This panic is intentional.');
  });
  test('inline obligation belongs to the origin helper and is undoable',async({page})=>{
   await stop();await writeFile(join(dir,'src/lib.rs'),'pub fn entry() { helper(); }\nfn helper() {\n    panic!("test");\n}\n');await launch();
@@ -136,15 +234,12 @@ for (const viewport of [{width:1440,height:900},{width:900,height:700},{width:14
   await page.getByRole('button',{name:'Propagate to callers',exact:true}).click();
   await expect(page.locator('.cm-content')).toContainText('/// # Panics');
   await page.keyboard.insertText('Always panics.');
-  await page.getByRole('button',{name:'Save draft',exact:true}).click();
-  await page.getByRole('button',{name:'Review diff',exact:true}).click();
-  await expect(page.locator('.diff')).toContainText('/// Always panics.');
-  await page.getByRole('button',{name:'Apply file & reanalyze'}).click();
+  await page.keyboard.press('ControlOrMeta+s');
   await expect.poll(()=>readFile(join(dir,'src/lib.rs'),'utf8')).toContain('pub fn entry() { helper(); }\n/// # Panics\n///\n/// Always panics.\nfn helper()');
  });
 
 for (const action of ['Justify here','Propagate to callers']) {
-  test(`${action} returns after undo and deleting the inserted documentation`,async({page})=>{
+  test(`${action} hides both prompts and restores them on undo and deletion`,async({page})=>{
     await selectFinding(page);
     const prompts=page.locator('.inline-prompt');
     await expect(prompts).toHaveCount(2);
@@ -166,6 +261,9 @@ for (const action of ['Justify here','Propagate to callers']) {
     await page.keyboard.insertText('Reason');
     await page.keyboard.press('Backspace');
     await expect(prompts).toHaveCount(0);
+    await page.keyboard.press('ControlOrMeta+s');
+    await expect(page.getByLabel('Source save status')).toHaveText('Saved');
+    await expect(prompts).toHaveCount(0);
     // Delete the whole inserted documentation, leaving the analyzed source intact.
     await page.keyboard.press('ControlOrMeta+a');
     await page.keyboard.press('ArrowLeft');
@@ -182,6 +280,164 @@ for (const action of ['Justify here','Propagate to callers']) {
     await expect(page.locator('.cm-content')).toContainText('A fresh explanation.');
     expect(await readFile(join(dir,'src/lib.rs'),'utf8')).not.toContain('A fresh explanation.');
   });
+}
+
+for(const action of ['Justify here','Propagate to callers']) {
+ test(`${action} removes empty comment lines and restores prompts immediately`,async({page})=>{
+  await selectFinding(page);
+  await page.getByRole('button',{name:action,exact:true}).click();
+  await expect(page.locator('.inline-prompt')).toHaveCount(0);
+  await page.keyboard.insertText('Explanation.');
+  let release!:()=>void,seen!:()=>void;
+  const held=new Promise<void>(resolve=>release=resolve),requested=new Promise<void>(resolve=>seen=resolve);
+  await page.route('**/api/v1/source/save',async route=>{
+    const response=await route.fetch();seen();await held;await route.fulfill({response});
+  },{times:1});
+  await page.keyboard.press('ControlOrMeta+s');await requested;
+  await page.keyboard.press('ControlOrMeta+Home');
+  if(action==='Justify here')for(let i=0;i<'pub fn risky() {\n'.length;i++)await page.keyboard.press('ArrowRight');
+  const inserted=action==='Justify here'?'    // PANIC: Explanation.':'/// # Panics\n///\n/// Explanation.';
+  for(let i=0;i<inserted.length;i++)await page.keyboard.press('Shift+ArrowRight');
+  // Clearing the comment also removes leftover whitespace and newlines.
+  await page.keyboard.insertText('\n    ');
+  await expect(page.locator('.inline-prompt')).toHaveCount(2);
+  await expect(page.locator('.cm-content')).toBeFocused();
+  release();
+  await page.keyboard.press('ControlOrMeta+s');
+  await expect(page.getByLabel('Source save status')).toHaveText('Saved');
+  await expect.poll(()=>readFile(join(dir,'src/lib.rs'),'utf8')).toBe('pub fn risky() {\n    panic!("intentional test panic");\n}\n');
+  await expect(page.locator('.inline-prompt')).toHaveCount(2);
+  await page.keyboard.press('ControlOrMeta+z');
+  await expect(page.locator('.inline-prompt')).toHaveCount(0);
+  await page.keyboard.press('ControlOrMeta+Shift+z');
+  await expect(page.locator('.inline-prompt')).toHaveCount(2);
+ });
+
+ test(`${action} continues comments and keeps prompts hidden while editing blank lines`,async({page})=>{
+  await selectFinding(page);
+  await page.getByRole('button',{name:action,exact:true}).click();
+  await expect(page.locator('.inline-prompt')).toHaveCount(0);
+  const prefix=action==='Justify here'?'    // ':'/// ';
+  await page.keyboard.insertText('First explanation.');
+  await page.keyboard.press('Enter');
+  await page.keyboard.insertText('Second explanation.');
+  await expect(page.locator('.cm-content')).toContainText(prefix+'Second explanation.');
+  await expect(page.locator('.inline-prompt')).toHaveCount(0);
+  // Clear the new line, including its prefix, but keep its newline.
+  await page.keyboard.press('Home');
+  await page.keyboard.press('Shift+End');
+  await page.keyboard.press('Backspace');
+  await expect(page.locator('.inline-prompt')).toHaveCount(0);
+  await page.keyboard.press('ControlOrMeta+s');
+  await expect(page.getByLabel('Source save status')).toHaveText('Saved');
+  await expect(page.locator('.inline-prompt')).toHaveCount(0);
+  // Blur flushes saves, but does not end the comment editing session.
+  await page.getByLabel('Search findings',{exact:true}).focus();
+  await expect(page.locator('.inline-prompt')).toHaveCount(0);
+  await page.locator('.cm-content').focus();
+  await page.keyboard.press('ControlOrMeta+End');
+  await expect(page.locator('.inline-prompt')).toHaveCount(2);
+  await page.keyboard.press('ControlOrMeta+z');
+  await expect(page.locator('.inline-prompt')).toHaveCount(0);
+ });
+
+ test(`${action} always continues empty comments through delayed saves`,async({page})=>{
+  await selectFinding(page);
+  await page.getByRole('button',{name:action,exact:true}).click();
+  await expect(page.locator('.inline-prompt')).toHaveCount(0);
+  let release!:()=>void,seen!:()=>void;
+  const held=new Promise<void>(resolve=>release=resolve),requested=new Promise<void>(resolve=>seen=resolve);
+  await page.route('**/api/v1/source/save',async route=>{
+    const response=await route.fetch();seen();await held;await route.fulfill({response});
+  },{times:1});
+  await page.keyboard.insertText('Explanation.');
+  await page.keyboard.press('ControlOrMeta+s');await requested;
+  await page.keyboard.press('Enter');
+  await page.keyboard.press('Enter');
+  await page.keyboard.insertText('Still commenting.');
+  const prefix=action==='Justify here'?'    // ':'/// ';
+  await expect(page.locator('.cm-content')).toContainText(prefix+'Still commenting.');
+  await expect(page.locator('.inline-prompt')).toHaveCount(0);
+  release();
+  await page.keyboard.press('ControlOrMeta+s');
+  await expect(page.getByLabel('Source save status')).toHaveText('Saved');
+  await expect.poll(()=>readFile(join(dir,'src/lib.rs'),'utf8')).toContain(`Explanation.\n${prefix}\n${prefix}Still commenting.`);
+  await expect(page.locator('.inline-prompt')).toHaveCount(0);
+  await page.keyboard.press('ControlOrMeta+End');
+  await expect(page.locator('.inline-prompt')).toHaveCount(0);
+ });
+}
+
+for(const [name,note,atCall,hidden] of [
+  ['attached marker','    // PANIC: ',true,true],
+  ['bare attached marker','    // PANIC',true,true],
+  ['other effect marker','    // SAFETY: unrelated',true,false],
+  ['marker with a longer name','    // PANICKING: unrelated',true,false],
+  ['detached marker','    // PANIC: unrelated\n',true,false],
+  ['marker inside a raw string','const NOTE: &str = r#"\n// PANIC: unrelated\n"#;',false,false],
+  ['attached heading','/// # Panics\n///',false,true],
+] as const) {
+ test(`manual ${name} updates source prompt visibility`,async({page})=>{
+  await selectFinding(page);
+  await page.locator('.cm-content').focus();await page.keyboard.press('ControlOrMeta+Home');
+  if(atCall)await page.keyboard.press('ArrowDown');
+  await page.keyboard.press('Home');
+  await page.keyboard.insertText(note+'\n');
+  await expect(page.locator('.inline-prompt')).toHaveCount(hidden?0:2);
+  await page.keyboard.press('ControlOrMeta+s');
+  await expect(page.getByLabel('Source save status')).toHaveText('Saved');
+  await expect(page.locator('.inline-prompt')).toHaveCount(hidden?0:2);
+  await page.keyboard.press('ControlOrMeta+z');
+  await expect(page.locator('.inline-prompt')).toHaveCount(2);
+ });
+}
+
+for(const action of ['Justify here','Propagate to callers'])for(const remove of [false,true]) {
+ test(`${action} preserves ${remove?'restored':'hidden'} prompts through delayed save acknowledgments`,async({page})=>{
+  await selectFinding(page);
+  await page.getByRole('button',{name:action,exact:true}).click();
+  await expect(page.locator('.inline-prompt')).toHaveCount(0);
+  let release!:()=>void,seen!:()=>void;
+  const held=new Promise<void>(resolve=>release=resolve),requested=new Promise<void>(resolve=>seen=resolve);
+  await page.route('**/api/v1/source/save',async route=>{
+    const response=await route.fetch();seen();await held;await route.fulfill({response});
+  },{times:1});
+  await page.keyboard.insertText('First explanation.');
+  await page.keyboard.press('ControlOrMeta+s');await requested;
+  if(remove){
+    await page.keyboard.press('ControlOrMeta+Home');
+    if(action==='Justify here')await page.keyboard.press('ArrowDown');
+    await page.keyboard.press('Home');
+    const inserted=action==='Justify here'?'    // PANIC: First explanation.\n':'/// # Panics\n///\n/// First explanation.\n';
+    for(let i=0;i<inserted.length;i++)await page.keyboard.press('Shift+ArrowRight');
+    await page.keyboard.press('Backspace');
+  }else await page.keyboard.insertText(' A newer explanation.');
+  await expect(page.locator('.inline-prompt')).toHaveCount(remove?2:0);
+  release();
+  await expect(page.getByLabel('Source save status')).toHaveText('Saved');
+  await expect(page.locator('.inline-prompt')).toHaveCount(remove?2:0);
+  const source=await readFile(join(dir,'src/lib.rs'),'utf8');
+  if(remove)expect(source).toBe('pub fn risky() {\n    panic!("intentional test panic");\n}\n');
+  else expect(source).toContain('First explanation. A newer explanation.');
+ });
+}
+
+for(const action of ['Justify here','Propagate to callers']) {
+ test(`${action} tracks CRLF, Unicode and multiline attributes`,async({page})=>{
+  await stop();
+  await writeFile(join(dir,'src/lib.rs'),'// λ\r\n#[allow(\r\n    clippy::all\r\n)]\r\npub fn risky() {\r\n    panic!("test");\r\n}\r\n');await launch();
+  await selectFinding(page);
+  await expect(page.locator('.inline-prompt')).toHaveCount(2);
+  await page.getByRole('button',{name:action,exact:true}).click();
+  await expect(page.locator('.inline-prompt')).toHaveCount(0);
+  await page.keyboard.press('ControlOrMeta+s');
+  await expect(page.getByLabel('Source save status')).toHaveText('Saved');
+  await expect(page.locator('.inline-prompt')).toHaveCount(0);
+  await page.keyboard.press('ControlOrMeta+z');
+  await expect(page.locator('.inline-prompt')).toHaveCount(2);
+  const source=await readFile(join(dir,'src/lib.rs'),'utf8');
+  expect(source.replaceAll('\r\n','')).not.toContain('\n');
+ });
 }
 
 test('multiline selection stays visible on the active line and deletes only selected text',async({page})=>{
@@ -226,11 +482,22 @@ async function clickIdentifier(page:any,line:string,identifier:string,modifier=f
     if(modifier)await page.keyboard.up(key);
 }
 
-test('call trace highlights the editor location across files and navigation',async({page})=>{
+for(const stale of [false,true])test(`${stale?'stale ':''}call trace highlights the editor location across files and navigation`,async({page})=>{
   await stop();
   await writeFile(join(dir,'src/lib.rs'),'\ufeff// λ before the call\r\npub fn entry() {\r\n    helper::danger();\r\n}\r\nmod helper;\r\n');
   await writeFile(join(dir,'src/helper.rs'),'pub fn danger() {\n    panic!("trace location");\n}\n');
+  await writeFile(join(dir,'src/note.rs'),'// unrelated source\n');
   await launch();await selectFinding(page);
+  if(stale){
+    // Saving another source file makes analysis stale without moving these calls.
+    const origin=new URL(url).origin,headers={'x-audit-token':new URL(url).hash.slice(1)};
+    const response=await page.request.get(origin+'/api/v1/buffer',{headers,params:{path:join(dir,'src/note.rs')}});
+    expect(response.ok()).toBe(true);
+    const buffer=await response.json();
+    const saved=await page.request.post(origin+'/api/v1/source/save',{headers,data:{path:buffer.path,revision:buffer.revision,content:'// updated unrelated source\n'}});
+    expect(saved.ok()).toBe(true);
+    await expect(page.locator('.status')).toContainText('stale');
+  }
   const rows=page.locator('.trace button');
   await expect.poll(()=>rows.count()).toBeGreaterThanOrEqual(2);
   const entry=rows.filter({hasText:'entry'}).first();
@@ -273,8 +540,6 @@ test('call trace highlights the editor location across files and navigation',asy
   await expect(page.locator('.trace button[aria-current="location"]')).toHaveCount(0);
   await clickIdentifier(page,'helper::danger()', 'danger');
   await expect(entry).toHaveAttribute('aria-current','location');
-  await page.getByRole('button',{name:'Review diff',exact:true}).click();
-  await expect(page.locator('.trace button[aria-current="location"]')).toHaveCount(0);
 });
 
 test('call sites select exact ranges and editor definition navigation crosses files',async({page})=>{
@@ -304,11 +569,10 @@ test('call sites select exact ranges and editor definition navigation crosses fi
   await page.locator('.cm-content').focus();await page.keyboard.press('ControlOrMeta+Home');
   await page.keyboard.press('ArrowRight'); // Keep the BOM at the start of the file.
   await page.keyboard.insertText('// draft navigation\n');
-  await expect(page.getByRole('button',{name:'Save draft',exact:true})).toBeEnabled();
+  await expect(page.getByLabel('Source save status')).toHaveText('Unsaved changes');
   await clickDanger(true);
   await expect(page.locator('.filename')).toContainText('src/helper.rs');
-  await expect(page.locator('.draft')).toHaveCount(1);
-  expect(await readFile(join(dir,'src/lib.rs'),'utf8')).not.toContain('draft navigation');
+  expect(await readFile(join(dir,'src/lib.rs'),'utf8')).toContain('draft navigation');
 });
 
 
@@ -349,7 +613,8 @@ test('dependency source and definition destinations are readable but not writabl
     await page.keyboard.press('F12');
     await expect(page.locator('.filename')).toContainText(dependency,{timeout:30000});
     await expect(page.locator('.buffer-state')).toContainText('Read-only dependency');
-    await expect(page.getByRole('button',{name:'Save draft',exact:true})).toBeDisabled();
+    await expect(page.getByRole('button',{name:'Save draft',exact:true})).toHaveCount(0);
+    await expect(page.locator('.cm-content')).toHaveAttribute('aria-readonly','true');
   }finally{await stop();await rm(dependency,{recursive:true,force:true});}
 });
 
@@ -499,7 +764,8 @@ test('editing invalidates a pending definition and retries against the new docum
   await clickIdentifier(page,'pub fn risky()', 'danger');await page.keyboard.press('F12');
   await expect.poll(()=>page.locator('.cm-activeLine').textContent()).toContain('fn danger');
   await expect.poll(()=>page.evaluate(()=>(window as any).navigationTest.requests)).toBe(2);
-  expect(await readFile(join(dir,'src/lib.rs'),'utf8')).not.toContain('// draft');
+  await page.keyboard.press('ControlOrMeta+s');
+  await expect.poll(()=>readFile(join(dir,'src/lib.rs'),'utf8')).toContain('// draft');
 });
 
 for(const width of [1440,320]) {
@@ -545,95 +811,136 @@ for(const width of [1440,320]) {
   });
 }
 
+test('override prompts remain usable after source autosaves make the analysis stale',async({page})=>{
+  const dependency=await mkdtemp(join(tmpdir(),'sniff-stale-override-'));
+  try {
+    await stop();await mkdir(join(dependency,'src'));
+    await writeFile(join(dependency,'Cargo.toml'),'[package]\nname="stale-dep"\nversion="0.1.0"\nedition="2024"\n');
+    const source='pub fn danger(flag: bool) {\n    assert!(flag);\n}\n';
+    await writeFile(join(dependency,'src/lib.rs'),source);
+    await writeFile(join(dir,'Cargo.toml'),`[package]\nname="audit-browser-fixture"\nversion="0.1.0"\nedition="2024"\n[workspace]\n[dependencies]\nstale-dep={path=${JSON.stringify(dependency)}}\n`);
+    await writeFile(join(dir,'src/lib.rs'),'pub fn entry(flag: bool) { stale_dep::danger(flag); }\n');
+    await launch();await selectFinding(page);
+    await page.getByRole('button',{name:'Report root',exact:true}).click();
+    await expect(page.locator('.filename')).toHaveText('src/lib.rs');
+    await expect(page.locator('.cm-content')).not.toHaveAttribute('aria-readonly','true');
+    await page.locator('.cm-content').focus();await page.keyboard.press('ControlOrMeta+Home');await page.keyboard.insertText('// root edit\n');
+    await page.keyboard.press('ControlOrMeta+s');await expect(page.getByLabel('Source save status')).toHaveText('Saved');
+    await expect(page.locator('.status')).toContainText('stale');
+    await page.getByRole('button',{name:'Effect source',exact:true}).click();
+    for(const label of ['Justify via override','Propagate obligations via override'])await expect(page.getByRole('button',{name:label,exact:true})).toBeVisible();
+    await page.getByRole('button',{name:'Justify via override',exact:true}).click();
+    await page.getByLabel('Override documentation').fill('// PANIC: The caller validates the flag.');
+    await page.getByRole('dialog').getByRole('button',{name:'Save',exact:true}).click();
+    await page.getByRole('button',{name:'Create & save',exact:true}).click();
+    await expect(page.getByRole('button',{name:'Justified!',exact:true})).toBeVisible();
+    expect(await readFile(join(dir,'sniff-test-overrides.toml'),'utf8')).toContain('The caller validates the flag.');
+    expect(await readFile(join(dependency,'src/lib.rs'),'utf8')).toBe(source);
+  } finally {await stop();await rm(dependency,{recursive:true,force:true});}
+});
+
 for(const action of ['Justify via override','Propagate obligations via override']) {
-  test(`dependency ${action} saves a virtual diff and confirms existing override edits`,async({page})=>{
-    const dependency=await mkdtemp(join(tmpdir(),'sniff-override-dep-'));
-    const source='// λ dependency\r\n#[inline]\r\n#[allow(\r\n    unused\r\n)]\r\npub fn danger(flag: bool) {\r\n    #[allow(unused)]\r\n    assert!(flag, "dependency");\r\n}\r\n';
-    try {
-      await stop();await mkdir(join(dependency,'src'));
-      await writeFile(join(dependency,'Cargo.toml'),'[package]\nname="override-dep"\nversion="0.1.0"\nedition="2024"\n');
-      await writeFile(join(dependency,'src/lib.rs'),source);
-      await writeFile(join(dir,'Cargo.toml'),`[package]\nname="audit-browser-fixture"\nversion="0.1.0"\nedition="2024"\n[workspace]\n[dependencies]\noverride-dep={path=${JSON.stringify(dependency)}}\n`);
-      await writeFile(join(dir,'src/lib.rs'),'pub fn entry(flag: bool) { override_dep::danger(flag); }\n');
-      await writeFile(join(dir,'sniff-test.toml'),'[contracts]\noverride-files=["existing.toml"]\n');
-      await writeFile(join(dir,'existing.toml'),'# Preserve this comment\n[overrides]\n"unrelated::api" = "# Safety\\nExisting contract"\n');
-      await launch();await selectFinding(page);
-      await expect(page.locator('.buffer-state')).toContainText('Read-only dependency');
-      const attribute=page.locator('.cm-line').filter({hasText:action.startsWith('Justify')?'#[allow(unused)]':'#[inline]'});
-      async function expectAboveAttribute(label:string){
-        const button=await page.getByRole('button',{name:label,exact:true}).boundingBox();
-        const line=await attribute.boundingBox();
-        expect(button).not.toBeNull();expect(line).not.toBeNull();
-        expect(button!.y+button!.height).toBeLessThanOrEqual(line!.y);
-      }
-      await expectAboveAttribute(action);
-      await page.getByRole('button',{name:action,exact:true}).click();
-      const dialog=page.getByRole('dialog');
-      const template=action.startsWith('Justify')?'// PANIC: ':'/// # Panics\n///\n/// ';
-      await expect(dialog.getByRole('region',{name:'Obligation',exact:true})).toHaveCount(0);
-      await expect(dialog.getByLabel('Override documentation')).toHaveValue(template);
-      await expect(dialog.getByLabel('Override documentation')).toBeFocused();
-      await page.keyboard.insertText('Typed at the end.');
-      await expect(dialog.getByLabel('Override documentation')).toHaveValue(template+'Typed at the end.');
-      await dialog.getByRole('button',{name:'Cancel',exact:true}).click();
-      await expect(page.locator('.draft')).toHaveCount(0);
-      await page.getByRole('button',{name:action,exact:true}).click();
-      await dialog.getByLabel('Override documentation').fill(template+'The flag is checked by the caller.');
-      await dialog.getByRole('button',{name:'Save draft',exact:true}).click();
-      await expect(dialog).not.toBeVisible();
-      const completed=action.startsWith('Justify')?'Justified!':'Obligation propagated!';
-      const alternative=action.startsWith('Justify')?'Propagate obligations via override':'Justify via override';
-      await expect(page.getByRole('button',{name:completed,exact:true})).toBeVisible();
-      await expectAboveAttribute(completed);
-      await expect(page.getByRole('button',{name:alternative,exact:true})).toHaveCount(0);
-      await expect(page.locator('.buffer-state button')).toHaveCount(0);
-      await page.reload();
-      await expect(page.locator('.status')).toHaveText('complete');
-      await page.locator('.draft').click();
-      await page.getByRole('button',{name:'Source',exact:true}).click();
-      await page.getByRole('button',{name:completed,exact:true}).click();
-      await expect(dialog.getByLabel('Override documentation')).toHaveValue(template+'The flag is checked by the caller.');
-      await dialog.getByRole('button',{name:'Delete draft',exact:true}).click();
-      await expect(page.locator('.draft')).toHaveCount(0);
-      await expect(page.getByRole('button',{name:action,exact:true})).toBeVisible();
-      await expect(page.getByRole('button',{name:alternative,exact:true})).toBeVisible();
-      await page.getByRole('button',{name:action,exact:true}).click();
-      await dialog.getByLabel('Override documentation').fill(template+'The flag is checked by the caller.');
-      await dialog.getByRole('button',{name:'Save draft',exact:true}).click();
-      await page.locator('.draft').click();
-      await expect(page.locator('main .diff')).toContainText('Override preview');
-      await expect(page.locator('main .diff')).toContainText('+');
-      await expect(page.locator('main .diff')).toContainText('The flag is checked by the caller.');
-      expect((await page.locator('main .diff').innerText()).replaceAll('\r','')).toMatch(/\+[^\n]*The flag is checked by the caller\.\n [ \t]*#\[/);
-      expect(await readFile(join(dependency,'src/lib.rs'),'utf8')).toBe(source);
-      await page.getByRole('button',{name:'Apply overrides & reanalyze',exact:true}).click();
-      await expect(dialog).toHaveAccessibleName('Confirm editing override file');
-      await expect(dialog.locator('.diff')).toContainText('overrides.crates');
-      await dialog.getByRole('button',{name:'Cancel',exact:true}).click();
-      expect(await readFile(join(dir,'existing.toml'),'utf8')).not.toContain('annotations');
-      await page.getByRole('button',{name:'Apply overrides & reanalyze',exact:true}).click();
-      const applied=page.waitForResponse(r=>r.url().endsWith('/api/v1/override/apply'));
-      await dialog.getByRole('button',{name:'Confirm edit & reanalyze',exact:true}).click();
-      expect((await applied).ok()).toBe(true);
-      await expect(page.locator('.draft')).toHaveCount(0);
-      await page.getByRole('button',{name:'Source',exact:true}).click();
-      await expect(page.getByRole('button',{name:completed,exact:true})).toBeVisible();
-      await expectAboveAttribute(completed);
-      await page.getByRole('button',{name:completed,exact:true}).click();
-      await expect(dialog.getByRole('button',{name:'Delete draft',exact:true})).toHaveCount(0);
-      await dialog.getByLabel('Override documentation').fill(template+'A revised explanation.');
-      await dialog.getByRole('button',{name:'Save draft',exact:true}).click();
-      await page.getByRole('button',{name:completed,exact:true}).click();
-      await dialog.getByRole('button',{name:'Discard changes',exact:true}).click();
-      await expect(page.locator('.draft')).toHaveCount(0);
-      await page.getByRole('button',{name:completed,exact:true}).click();
-      await expect(dialog.getByLabel('Override documentation')).toHaveValue(template+'The flag is checked by the caller.');
-      await dialog.getByRole('button',{name:'Cancel',exact:true}).click();
-      const file=await readFile(join(dir,'existing.toml'),'utf8');
-      expect(file).toContain('# Preserve this comment');expect(file).toContain('unrelated::api');expect(file).toContain('The flag is checked by the caller.');
-      expect(await readFile(join(dependency,'src/lib.rs'),'utf8')).toBe(source);
-    } finally {await stop();await rm(dependency,{recursive:true,force:true});}
-  });
+  for(const existing of [true,false]) {
+    test(`dependency ${action} saves directly to ${existing?'existing':'new named'} override file`,async({page})=>{
+      const dependency=await mkdtemp(join(tmpdir(),'sniff-override-dep-'));
+      const source='// λ dependency\r\n#[inline]\r\n#[allow(\r\n    unused\r\n)]\r\npub fn danger(flag: bool) {\r\n    #[allow(unused)]\r\n    assert!(flag, "dependency");\r\n}\r\n';
+      try {
+        await stop();await mkdir(join(dependency,'src'));
+        await writeFile(join(dependency,'Cargo.toml'),'[package]\nname="override-dep"\nversion="0.1.0"\nedition="2024"\n');
+        await writeFile(join(dependency,'src/lib.rs'),source);
+        await writeFile(join(dir,'Cargo.toml'),`[package]\nname="audit-browser-fixture"\nversion="0.1.0"\nedition="2024"\n[workspace]\n[dependencies]\noverride-dep={path=${JSON.stringify(dependency)}}\n`);
+        await writeFile(join(dir,'src/lib.rs'),'pub fn entry(flag: bool) { override_dep::danger(flag); }\n');
+        const original='# Preserve this comment\n[overrides]\n"unrelated::api" = "# Safety\\nExisting contract"\n';
+        if(existing){
+          await writeFile(join(dir,'sniff-test.toml'),'[contracts]\noverride-files=["one.toml","two.toml"]\n');
+          for(const file of ['one.toml','two.toml'])await writeFile(join(dir,file),original);
+        }
+        await launch();await selectFinding(page);
+        await expect(page.locator('.buffer-state')).toContainText('Read-only dependency');
+        await expect(page.getByRole('button',{name:'Review diff',exact:true})).toHaveCount(0);
+        await expect(page.getByRole('button',{name:'Discard draft',exact:true})).toHaveCount(0);
+        const template=action.startsWith('Justify')?'// PANIC: ':'/// # Panics\n///\n/// ';
+        const explanation=template+'The flag is checked by the caller.';
+        const completed=action.startsWith('Justify')?'Justified!':'Obligation propagated!';
+        const alternative=action.startsWith('Justify')?'Propagate obligations via override':'Justify via override';
+        const dialog=page.getByRole('dialog');
+        await page.getByRole('button',{name:action,exact:true}).click();
+        await expect(dialog.getByLabel('Override documentation')).toHaveValue(template);
+        await expect(dialog.getByLabel('Override documentation')).toBeFocused();
+        await page.keyboard.insertText('Typed at the end.');
+        await expect(dialog.getByLabel('Override documentation')).toHaveValue(template+'Typed at the end.');
+        await dialog.getByRole('button',{name:'Cancel',exact:true}).click();
+        await expect(page.locator('.draft')).toHaveCount(0);
+        await page.getByRole('button',{name:action,exact:true}).click();
+        await dialog.getByLabel('Override documentation').fill(explanation);
+        if(existing)await dialog.getByLabel('Override file',{exact:true}).selectOption({index:1});
+        await dialog.getByRole('button',{name:'Save',exact:true}).click();
+        let destination=join(dir,'two.toml');
+        if(!existing){
+          await expect(dialog).toHaveAccessibleName('Create override file');
+          await expect(dialog.getByLabel('Override filename')).toHaveValue('sniff-test-overrides.toml');
+          if(action.startsWith('Justify')){
+            await page.setViewportSize({width:320,height:700});
+            await expect(dialog.getByLabel('Override filename')).toBeInViewport();
+            await expect(dialog.getByRole('button',{name:'Create & save',exact:true})).toBeInViewport();
+            await page.screenshot({path:join(repo,'target/audit-override-filename.png'),fullPage:true});
+            await page.setViewportSize({width:1440,height:960});
+          }
+          await dialog.getByRole('button',{name:'Cancel',exact:true}).click();
+          await expect(dialog.getByLabel('Override documentation')).toHaveValue(explanation);
+          await dialog.getByRole('button',{name:'Save',exact:true}).click();
+          await dialog.getByLabel('Override filename').fill('');
+          await expect(dialog.getByRole('button',{name:'Create & save',exact:true})).toBeDisabled();
+          await writeFile(join(dir,'taken.toml'),'# keep existing file\n');
+          await dialog.getByLabel('Override filename').fill('taken.toml');
+          await dialog.getByRole('button',{name:'Create & save',exact:true}).click();
+          await expect(dialog.getByRole('alert')).toContainText('already exists');
+          expect(await readFile(join(dir,'taken.toml'),'utf8')).toBe('# keep existing file\n');
+          await dialog.getByLabel('Override filename').fill('custom-overrides.toml');
+          await dialog.getByRole('button',{name:'Create & save',exact:true}).click();
+          destination=join(dir,'custom-overrides.toml');
+        }
+        await expect(dialog).not.toBeVisible();
+        await expect(page.locator('.status')).toHaveText('complete · reanalysis needed');
+        await expect(page.locator('.draft')).toHaveCount(0);
+        await expect(page.getByRole('button',{name:completed,exact:true})).toBeVisible();
+        await expect(page.getByRole('button',{name:alternative,exact:true})).toHaveCount(0);
+        await expect(page.locator('footer')).toContainText(existing?'two.toml':'custom-overrides.toml');
+        expect(await readFile(destination,'utf8')).toContain('The flag is checked by the caller.');
+        expect(await readFile(join(dependency,'src/lib.rs'),'utf8')).toBe(source);
+        if(existing)expect(await readFile(join(dir,'one.toml'),'utf8')).toBe(original);
+        else expect(await readFile(join(dir,'sniff-test.toml'),'utf8')).toContain('custom-overrides.toml');
+        // Reopen and edit immediately, before any reanalysis.
+        await page.getByRole('button',{name:completed,exact:true}).click();
+        if(existing)await expect(dialog.getByLabel('Override file',{exact:true})).toHaveValue(/\/two\.toml$/);
+        await expect(dialog.getByRole('button',{name:'Save draft',exact:true})).toHaveCount(0);
+        await dialog.getByLabel('Override documentation').fill(template+'A revised explanation.');
+        await dialog.getByRole('button',{name:'Save',exact:true}).click();
+        await expect(dialog).not.toBeVisible();
+        const saved=await readFile(destination,'utf8');
+        expect(saved).toContain('A revised explanation.');
+        expect(saved).not.toContain('The flag is checked by the caller.');
+        if(existing){expect(saved).toContain('# Preserve this comment');expect(saved).toContain('unrelated::api');}
+        // Concurrent edits reject the save and preserve the user's text.
+        await page.getByRole('button',{name:completed,exact:true}).click();
+        await dialog.getByLabel('Override documentation').fill(template+'Unsaved conflicting explanation.');
+        await writeFile(destination,saved+'# concurrent edit\n');
+        await dialog.getByRole('button',{name:'Save',exact:true}).click();
+        await expect(dialog.getByRole('alert')).toContainText('Override file changed');
+        await expect(dialog.getByLabel('Override documentation')).toHaveValue(template+'Unsaved conflicting explanation.');
+        expect(await readFile(destination,'utf8')).toBe(saved+'# concurrent edit\n');
+        await dialog.getByRole('button',{name:'Cancel',exact:true}).click();
+        await page.reload();await selectFinding(page);
+        await expect(page.getByRole('button',{name:completed,exact:true})).toBeVisible();
+        await page.getByRole('button',{name:completed,exact:true}).click();
+        await expect(dialog.getByLabel('Override documentation')).toHaveValue(template+'A revised explanation.');
+        await dialog.getByRole('button',{name:'Cancel',exact:true}).click();
+        await page.getByRole('button',{name:'↻ Reanalyze',exact:true}).click();
+        await expect(page.locator('.status')).toHaveText('complete');
+        expect(await readFile(join(dependency,'src/lib.rs'),'utf8')).toBe(source);
+      } finally {await stop();await rm(dependency,{recursive:true,force:true});}
+    });
+  }
 }
 
 test('file groups start collapsed and retain independent expansion and selection',async({page})=>{
@@ -682,7 +989,7 @@ pub fn second_caller() { shared_source(); }
   await expect(page.locator('.cm-editor')).toBeVisible();
   await page.locator('.cm-content').click();await page.keyboard.press('ControlOrMeta+Home');
   await page.keyboard.insertText('// audit draft retained across grouping changes\n');
-  await page.getByRole('button',{name:'Save draft',exact:true}).click();
+  await page.keyboard.press('ControlOrMeta+s');
   const toggle=page.getByRole('button',{name:'Invert effect'});
   await toggle.click();await expect(toggle).toHaveAttribute('aria-pressed','true');
   await expect(page.locator('.group')).toHaveCount(2);
@@ -713,7 +1020,7 @@ pub fn second_caller() { shared_source(); }
   await expect(page.locator('.group')).toHaveCount(1);
   await expect(page.locator('.finding')).toHaveCount(3);
   await expect(page.locator('.finding.selected strong')).toContainText('::second_caller');
-  await expect(page.locator('.draft')).toHaveCount(1);
+  await expect(page.locator('.draft')).toHaveCount(0);
   await toggle.click();await expect(page.locator('.group')).toHaveCount(2);
   await expect(page.locator('.finding')).toHaveCount(2);
   await page.screenshot({path:join(repo,'target/audit-inverted-sources.png'),fullPage:true});
@@ -767,7 +1074,7 @@ for(const width of [1440,900]) {
   });
 }
 
-for (const mode of ['native','namespace override','source override','trait declaration','standard library','safety','allocation','long contract','narrow layout','markdown links','generic prototype','legacy draft']) {
+for (const mode of ['native','namespace override','source override','trait declaration','standard library','safety','allocation','long contract','narrow layout','markdown links','generic prototype']) {
   test(`override justification shows the effective obligation from ${mode}`,async({page})=>{
     const dependency=await mkdtemp(join(tmpdir(),'sniff-obligation-dep-'));
     try {
@@ -805,17 +1112,6 @@ for (const mode of ['native','namespace override','source override','trait decla
       await launch(effect);
       if(mode==='long contract')await page.setViewportSize({width:900,height:700});
       if(mode==='narrow layout')await page.setViewportSize({width:320,height:700});
-      if(mode==='legacy draft')await page.route(/\/api\/v1\/(override\/(template|save)|buffer|drafts)(\?|$)/,async route=>{
-        const response=await route.fetch();
-        const data=await response.json();
-        function removePrototype(value:any) {
-          if(!value||typeof value!=='object')return;
-          delete value.prototype;
-          for(const child of Object.values(value))removePrototype(child);
-        }
-        removePrototype(data);
-        await route.fulfill({response,json:data});
-      });
       await page.goto(url);
       await page.getByLabel('Finding class',{exact:true}).selectOption('documented-obligation');
       await page.locator('.group').first().click();await page.locator('.finding').first().click();
@@ -825,37 +1121,33 @@ for (const mode of ['native','namespace override','source override','trait decla
       await expect(context.getByRole('heading',{name:'Obligation',exact:true})).toHaveCount(0);
       await expect(context.locator('.obligation-header')).toHaveCount(0);
       const prototype=context.getByLabel('Function prototype',{exact:true});
-      if(mode==='legacy draft') {
-        await expect(prototype).toHaveCount(0);
-      } else {
-        if(mode==='standard library')await expect(prototype).toContainText(/fn unwrap\(self\)\s*->\s*T/);
-        else await expect(prototype).toHaveText(mode==='generic prototype'?genericPrototype:mode==='trait declaration'?'fn danger(flag: bool);':mode==='safety'?'unsafe fn danger(_flag: bool)':'fn danger(_flag: bool)');
-        // Verify stock CodeMirror colors without depending on generated CSS class names.
-        await expect(prototype.locator('span').filter({hasText:/^fn$/})).toHaveCSS('color','rgb(119, 0, 136)');
-        if(mode!=='standard library') {
-          await expect(prototype.locator('span').filter({hasText:/^danger$/})).toHaveCSS('color','rgb(0, 0, 255)');
-          if(mode==='generic prototype') {
-            await expect(prototype.locator('span').filter({hasText:/^where$/})).toHaveCSS('color','rgb(119, 0, 136)');
-            await expect(prototype.locator('span').filter({hasText:/^T$/}).first()).toHaveCSS('color','rgb(0, 136, 85)');
-            await expect(prototype.locator('span').filter({hasText:/^'a$/}).first()).toHaveCSS('color','rgb(34, 85, 102)');
-          } else {
-            await expect(prototype.locator('span').filter({hasText:/^bool$/})).toHaveCSS('color','rgb(0, 136, 85)');
-          }
-          if(mode==='safety')await expect(prototype.locator('span').filter({hasText:/^unsafe$/})).toHaveCSS('color','rgb(119, 0, 136)');
-        }
-        const body=await context.getByRole('region',{name:'Obligation documentation',exact:true}).boundingBox();
-        const declaration=await prototype.boundingBox();
-        expect(declaration!.y).toBeGreaterThanOrEqual(body!.y+body!.height);
+      if(mode==='standard library')await expect(prototype).toContainText(/fn unwrap\(self\)\s*->\s*T/);
+      else await expect(prototype).toHaveText(mode==='generic prototype'?genericPrototype:mode==='trait declaration'?'fn danger(flag: bool);':mode==='safety'?'unsafe fn danger(_flag: bool)':'fn danger(_flag: bool)');
+      // Verify stock CodeMirror colors without depending on generated CSS class names.
+      await expect(prototype.locator('span').filter({hasText:/^fn$/})).toHaveCSS('color','rgb(119, 0, 136)');
+      if(mode!=='standard library') {
+        await expect(prototype.locator('span').filter({hasText:/^danger$/})).toHaveCSS('color','rgb(0, 0, 255)');
         if(mode==='generic prototype') {
-          const selected=await prototype.evaluate(el=>{
-            const selection=window.getSelection()!;
-            const range=document.createRange();range.selectNodeContents(el);
-            selection.removeAllRanges();selection.addRange(range);
-            const text=selection.toString();selection.removeAllRanges();
-            return text;
-          });
-          expect(selected).toBe(genericPrototype);
+          await expect(prototype.locator('span').filter({hasText:/^where$/})).toHaveCSS('color','rgb(119, 0, 136)');
+          await expect(prototype.locator('span').filter({hasText:/^T$/}).first()).toHaveCSS('color','rgb(0, 136, 85)');
+          await expect(prototype.locator('span').filter({hasText:/^'a$/}).first()).toHaveCSS('color','rgb(34, 85, 102)');
+        } else {
+          await expect(prototype.locator('span').filter({hasText:/^bool$/})).toHaveCSS('color','rgb(0, 136, 85)');
         }
+        if(mode==='safety')await expect(prototype.locator('span').filter({hasText:/^unsafe$/})).toHaveCSS('color','rgb(119, 0, 136)');
+      }
+      const body=await context.getByRole('region',{name:'Obligation documentation',exact:true}).boundingBox();
+      const declaration=await prototype.boundingBox();
+      expect(declaration!.y).toBeGreaterThanOrEqual(body!.y+body!.height);
+      if(mode==='generic prototype') {
+        const selected=await prototype.evaluate(el=>{
+          const selection=window.getSelection()!;
+          const range=document.createRange();range.selectNodeContents(el);
+          selection.removeAllRanges();selection.addRange(range);
+          const text=selection.toString();selection.removeAllRanges();
+          return text;
+        });
+        expect(selected).toBe(genericPrototype);
       }
       if(mode==='standard library') {
         await expect(context).toContainText('unwrap');
@@ -894,19 +1186,25 @@ for (const mode of ['native','namespace override','source override','trait decla
         expect(await page.evaluate(()=>Object.hasOwn(window,'obligationScriptRan'))).toBe(false);
       }
       if(mode==='narrow layout') {
-        await expect(dialog.getByRole('button',{name:'Save draft',exact:true})).toBeVisible();
+        await expect(dialog.getByRole('button',{name:'Save',exact:true})).toBeVisible();
         expect(await dialog.evaluate(el=>el.scrollWidth<=el.clientWidth)).toBe(true);
         await page.screenshot({path:join(repo,'target/audit-obligation-markdown-narrow.png'),fullPage:true});
       }
       if(mode==='native')await page.screenshot({path:join(repo,'target/audit-obligation-editor.png'),fullPage:true});
       await page.keyboard.insertText('The caller upholds this condition.');
-      await dialog.getByRole('button',{name:'Save draft',exact:true}).click();
-      await page.reload();await expect(page.locator('.status')).toHaveText('complete');
-      await page.locator('.draft').click();
-      await page.getByRole('button',{name:'Source',exact:true}).click();
+      await dialog.getByRole('button',{name:'Save',exact:true}).click();
+      if(!mode.includes('override')){
+        await expect(dialog).toHaveAccessibleName('Create override file');
+        await page.getByRole('button',{name:'Create & save',exact:true}).click();
+      }
+      await expect(dialog).not.toBeVisible();
+      await expect(page.locator('.draft')).toHaveCount(0);
+      await page.reload();await expect(page.locator('.status')).toHaveText('complete · reanalysis needed');
+      await page.getByLabel('Finding class',{exact:true}).selectOption('documented-obligation');
+      await page.locator('.group').first().click();await page.locator('.finding').first().click();
       await page.getByRole('button',{name:'Justified!',exact:true}).click();
       await expect(context).toBeVisible();
-      await expect(prototype).toHaveCount(mode==='legacy draft'?0:1);
+      await expect(prototype).toHaveCount(1);
       await expect(context.getByRole('heading',{name:heading,exact:true,level:4})).toBeVisible();
       await expect(dialog.getByLabel('Override documentation')).toHaveValue(`// ${marker}: The caller upholds this condition.`);
       await dialog.getByRole('button',{name:'Cancel',exact:true}).click();

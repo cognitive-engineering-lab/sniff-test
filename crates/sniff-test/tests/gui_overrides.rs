@@ -6,6 +6,30 @@ use sniff_test_audit_bridge::{AnalysisConfig, Session};
 use std::fs;
 use std::process::Command;
 
+fn commit_audit_override(
+    session: &mut sniff_test_audit_bridge::Session,
+    target: sniff_test_audit_bridge::OverrideEditorTarget,
+    document: &str,
+) -> sniff_test_audit_bridge::Buffer {
+    let editor = session.open_override_editor(target).unwrap();
+    let filename = (!editor
+        .destinations
+        .iter()
+        .find(|d| d.path == editor.destination)
+        .unwrap()
+        .exists)
+        .then_some("sniff-test-overrides.toml");
+    session
+        .commit_override(
+            &editor.token,
+            &editor.destination,
+            filename,
+            document.into(),
+        )
+        .unwrap()
+        .0
+}
+
 fn analyze(session: &mut Session) {
     let config = session.begin_analysis().unwrap();
     let mut command = Command::new(&config.executable);
@@ -125,25 +149,30 @@ fn gui_source_selectors_survive_fresh_analysis() {
             } else {
                 "// PANIC: caller checked the flag."
             };
-            session
-                .save_override(id, action, buffer.revision, document.into())
-                .unwrap();
+            let generation = session.analysis.generation;
+            commit_audit_override(
+                &mut session,
+                sniff_test_audit_bridge::OverrideEditorTarget::Finding {
+                    id: id.clone(),
+                    action: action.into(),
+                    revision: buffer.revision,
+                    generation,
+                },
+                document,
+            );
         }
-        let buffer = session.buffer(&path).unwrap();
-        let plan = session
-            .prepare_override_apply(&path, buffer.revision, None)
-            .unwrap();
-        session.apply_overrides(&plan.token, true).unwrap();
         if action == "justification" {
             for reason in ["revised", "revised again"] {
                 let buffer = session.buffer(&path).unwrap();
-                let buffer = session
-                    .edit_override(&path, buffer.revision, 0, format!("// PANIC: {reason}"))
-                    .unwrap();
-                let plan = session
-                    .prepare_override_apply(&path, buffer.revision, None)
-                    .unwrap();
-                session.apply_overrides(&plan.token, true).unwrap();
+                commit_audit_override(
+                    &mut session,
+                    sniff_test_audit_bridge::OverrideEditorTarget::Saved {
+                        path: path.clone(),
+                        revision: buffer.revision,
+                        index: 0,
+                    },
+                    &format!("// PANIC: {reason}"),
+                );
             }
         }
         let saved = fs::read_to_string(root.path().join("existing.toml")).unwrap();

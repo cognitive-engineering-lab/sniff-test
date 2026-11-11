@@ -1,5 +1,5 @@
 use super::*;
-/// Documentation and verified source-selector metadata retained for GUI drafts.
+/// Documentation and verified source-selector metadata retained by the audit session.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct OverrideDocument {
     pub effect: String,
@@ -11,36 +11,317 @@ pub struct OverrideDocument {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct OverrideDraft {
+pub struct SavedOverride {
     pub annotation: OverrideDocument,
     pub location: Location,
-    #[serde(default)]
-    pub applied: bool,
-    #[serde(default)]
-    pub previous_document: Option<String>,
-}
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct OverrideApplyPlan {
-    pub token: String,
-    pub path: String,
-    pub revision: u64,
-    pub destinations: Vec<String>,
     pub destination: String,
-    pub existing: bool,
-    pub diff: String,
-    #[serde(skip)]
+}
+struct OverrideFileWrite {
+    destination: String,
     original: Option<String>,
-    #[serde(skip)]
     content: String,
-    #[serde(skip)]
     manifest: PathBuf,
-    #[serde(skip)]
     manifest_original: Option<String>,
-    #[serde(skip)]
     manifest_content: String,
 }
 
+/// A verified attachment point for the direct-save editor.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum OverrideEditorTarget {
+    Finding {
+        id: String,
+        action: String,
+        revision: u64,
+        generation: u64,
+    },
+    Saved {
+        path: String,
+        index: usize,
+        revision: u64,
+    },
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct OverrideDestination {
+    pub path: String,
+    pub exists: bool,
+}
+
+/// File snapshots stay on the server and expire when another editor is opened.
+#[derive(Debug, Clone, Serialize)]
+pub struct OverrideEditor {
+    pub token: String,
+    pub document: String,
+    pub obligation_documentation: Option<sniff_test_report::ObligationDocumentation>,
+    pub destinations: Vec<OverrideDestination>,
+    pub destination: String,
+    #[serde(skip)]
+    target: OverrideEditorTarget,
+    #[serde(skip)]
+    saved: SavedOverride,
+    #[serde(skip)]
+    index: Option<usize>,
+    #[serde(skip)]
+    generation: u64,
+    #[serde(skip)]
+    manifest_original: Option<String>,
+    #[serde(skip)]
+    originals: BTreeMap<String, Option<String>>,
+}
+
 impl Session {
+    pub fn open_override_editor(&mut self, target: OverrideEditorTarget) -> Result<OverrideEditor> {
+        ensure!(
+            !self.analysis.running,
+            "wait for analysis to finish before editing overrides"
+        );
+        let (saved, index) = match &target {
+            OverrideEditorTarget::Finding {
+                id,
+                action,
+                revision,
+                generation,
+            } => {
+                ensure!(
+                    *generation == self.analysis.generation,
+                    "Analysis changed; reopen the override editor."
+                );
+                let (audit, attachment, buffer) = self.override_target(id, action, *revision)?;
+                let selector = attachment.selector.as_ref().unwrap();
+                if let Some(index) = buffer.saved_overrides.iter().position(|saved| {
+                    saved.annotation.effect == audit.effect
+                        && saved.annotation.action == *action
+                        && saved.annotation.selector.same_target(selector)
+                }) {
+                    (buffer.saved_overrides[index].clone(), Some(index))
+                } else {
+                    let source = "fn target() {}\n";
+                    let mut location = attachment.location.clone();
+                    location.start = 0;
+                    let template = documentation_edit(source, &location, action, &audit, "")?;
+                    let document = template
+                        .strip_suffix(source)
+                        .context("invalid documentation template")?
+                        .trim_end_matches('\n')
+                        .to_owned();
+                    (
+                        SavedOverride {
+                            annotation: OverrideDocument {
+                                effect: audit.effect,
+                                action: action.clone(),
+                                document,
+                                obligation_documentation: (action == "justification")
+                                    .then_some(audit.obligation_documentation)
+                                    .flatten(),
+                                selector: attachment.selector.unwrap(),
+                            },
+                            location: attachment.location,
+                            destination: String::new(),
+                        },
+                        None,
+                    )
+                }
+            }
+            OverrideEditorTarget::Saved {
+                path,
+                index,
+                revision,
+            } => {
+                let buffer = self.buffer(path)?;
+                ensure!(
+                    !buffer.writable && buffer.revision == *revision,
+                    "override revision conflict"
+                );
+                let saved = buffer
+                    .saved_overrides
+                    .get(*index)
+                    .context("override no longer exists")?
+                    .clone();
+                ensure!(
+                    saved.location.hash == content_hash(buffer.content.as_bytes()),
+                    "dependency source changed; reanalyze"
+                );
+                (saved, Some(*index))
+            }
+        };
+        let (_, manifest_original, paths) = self.override_destinations()?;
+        let mut originals = BTreeMap::new();
+        let mut destinations = Vec::new();
+        let destination = if index.is_some() {
+            ensure!(
+                paths.contains(&saved.destination),
+                "saved override destination is no longer configured"
+            );
+            saved.destination.clone()
+        } else {
+            paths[0].clone()
+        };
+        for path in paths {
+            let original = read_optional(Path::new(&path))?;
+            destinations.push(OverrideDestination {
+                path: path.clone(),
+                exists: original.is_some(),
+            });
+            originals.insert(path, original);
+        }
+        let token = content_hash(
+            format!(
+                "{target:?}:{}:{manifest_original:?}:{originals:?}",
+                self.analysis.generation
+            )
+            .as_bytes(),
+        );
+        let editor = OverrideEditor {
+            token,
+            document: saved.annotation.document.clone(),
+            obligation_documentation: saved.annotation.obligation_documentation.clone(),
+            destinations,
+            destination,
+            target,
+            saved,
+            index,
+            generation: self.analysis.generation,
+            manifest_original,
+            originals,
+        };
+        self.pending_editor = Some(editor.clone());
+        Ok(editor)
+    }
+
+    /// Save just the edited annotation, without persisting a temporary draft or starting analysis.
+    pub fn commit_override(
+        &mut self,
+        token: &str,
+        destination: &str,
+        filename: Option<&str>,
+        document: String,
+    ) -> Result<(Buffer, String)> {
+        ensure!(
+            !self.analysis.running,
+            "wait for analysis to finish before editing overrides"
+        );
+        let editor = self
+            .pending_editor
+            .clone()
+            .context("reopen the override editor before saving")?;
+        ensure!(
+            editor.token == token && editor.generation == self.analysis.generation,
+            "Analysis or editor changed; reopen the override editor."
+        );
+        let (_, manifest_original, _) = self.override_destinations()?;
+        ensure!(
+            manifest_original == editor.manifest_original,
+            "Configuration changed; reopen the override editor before saving."
+        );
+        for (path, original) in &editor.originals {
+            ensure!(
+                read_optional(Path::new(path))? == *original,
+                "Override file changed; reopen the override editor before saving."
+            );
+        }
+        let original = editor
+            .originals
+            .get(destination)
+            .context("select a configured override destination")?;
+        let selected_destination = destination;
+        let create = original.is_none();
+        let destination = if create {
+            let filename = filename
+                .context("provide a name for the override file")?
+                .trim();
+            ensure!(
+                !filename.is_empty()
+                    && Path::new(filename).file_name().and_then(|s| s.to_str()) == Some(filename)
+                    && !filename.contains(['/', '\\']),
+                "Enter a filename without directories."
+            );
+            let manifest = self.override_manifest();
+            self.checked_override_destination(&manifest.parent().unwrap().join(filename))?
+                .to_string_lossy()
+                .into_owned()
+        } else {
+            ensure!(
+                filename.is_none(),
+                "an existing override does not need a new filename"
+            );
+            destination.to_owned()
+        };
+        let revision = match &editor.target {
+            OverrideEditorTarget::Finding { revision, .. }
+            | OverrideEditorTarget::Saved { revision, .. } => *revision,
+        };
+        let mut buffer = self.buffer(&editor.saved.location.path)?;
+        ensure!(
+            !buffer.writable && buffer.revision == revision,
+            "override revision conflict"
+        );
+        ensure!(
+            editor.saved.location.hash == content_hash(buffer.content.as_bytes()),
+            "dependency source changed; reanalyze"
+        );
+        validate_override_document(&document, &editor.saved.annotation)?;
+        let mut saved = editor.saved.clone();
+        saved.annotation.document = document;
+        saved.destination = destination.clone();
+        for other in &buffer.saved_overrides {
+            let left = &saved.annotation.selector;
+            let right = &other.annotation.selector;
+            if saved.annotation.action == "obligation"
+                && saved.destination == other.destination
+                && left.crate_name == right.crate_name
+                && left.version == right.version
+                && source_key(left) == source_key(right)
+            {
+                ensure!(
+                    left.definition == right.definition,
+                    "source selector matches multiple definitions"
+                );
+            }
+        }
+        let original_document = editor
+            .index
+            .filter(|_| !create)
+            .map(|_| editor.saved.annotation.document.as_str());
+        let mut plan = self.prepare_override_write(
+            &saved.annotation,
+            original_document,
+            &destination,
+            create,
+        )?;
+        if create && destination != selected_destination {
+            let base = plan.manifest.parent().unwrap();
+            let mut config = plan.manifest_content.parse::<toml_edit::Document>()?;
+            if let Some(paths) = config["contracts"]["override-files"].as_array_mut() {
+                paths.retain(|value| {
+                    value
+                        .as_str()
+                        .is_none_or(|path| base.join(path) != Path::new(selected_destination))
+                });
+            }
+            plan.manifest_content = config.to_string();
+        }
+        self.write_override_files(&plan)?;
+        if let Some(index) = editor.index {
+            buffer.saved_overrides[index] = saved;
+        } else {
+            buffer.saved_overrides.push(saved);
+        }
+        buffer.revision += 1;
+        let previous = self.buffers.insert(buffer.path.clone(), buffer.clone());
+        if let Err(error) = self.persist() {
+            if let Some(previous) = previous {
+                self.buffers.insert(buffer.path.clone(), previous);
+            }
+            restore_optional(Path::new(&plan.destination), &plan.original)?;
+            restore_optional(&plan.manifest, &plan.manifest_original)?;
+            return Err(error);
+        }
+        self.analysis.overrides_changed = true;
+        self.pending_editor = None;
+        Ok((buffer, destination))
+    }
+
     fn override_target(
         &mut self,
         id: &str,
@@ -48,8 +329,8 @@ impl Session {
         revision: u64,
     ) -> Result<(AuditMetadata, EditTarget, Buffer)> {
         ensure!(
-            !self.analysis.running && !self.analysis.stale,
-            "reanalyze before editing overrides"
+            !self.analysis.running,
+            "wait for analysis to finish before editing overrides"
         );
         let audit = self
             .analysis
@@ -64,295 +345,20 @@ impl Session {
             .find(|t| t.action == action && t.selector.is_some())
             .cloned()
             .context("no verified override target")?;
+        ensure!(
+            target.location.available,
+            "override attachment changed; reanalyze"
+        );
         let buffer = self.buffer(&target.location.path)?;
         ensure!(
-            !buffer.writable && !buffer.conflict && buffer.revision == revision,
-            "override draft revision conflict"
+            !buffer.writable && buffer.revision == revision,
+            "override revision conflict"
         );
         ensure!(
-            content_hash(buffer.original.as_bytes()) == target.location.hash,
+            content_hash(buffer.content.as_bytes()) == target.location.hash,
             "dependency source changed; reanalyze"
         );
         Ok((audit, target, buffer))
-    }
-
-    pub fn override_template(&mut self, id: &str, action: &str, revision: u64) -> Result<String> {
-        let (audit, target, buffer) = self.override_target(id, action, revision)?;
-        if let Some(draft) = buffer.annotations.iter().find(|a| {
-            a.annotation
-                .selector
-                .same_target(target.selector.as_ref().unwrap())
-                && a.annotation.action == action
-                && a.annotation.effect == audit.effect
-        }) {
-            return Ok(draft.annotation.document.clone());
-        }
-        // Use the workspace template generator on a standalone attachment point.
-        let source = "fn target() {}\n";
-        let mut location = target.location;
-        location.start = 0;
-        let text = documentation_edit(source, &location, action, &audit, "")?;
-        Ok(text
-            .strip_suffix(source)
-            .context("invalid documentation template")?
-            .trim_end_matches('\n')
-            .to_owned())
-    }
-
-    pub fn save_override(
-        &mut self,
-        id: &str,
-        action: &str,
-        revision: u64,
-        document: String,
-    ) -> Result<Buffer> {
-        let (audit, target, mut buffer) = self.override_target(id, action, revision)?;
-        let marker = if action == "justification" {
-            format!("// {}:", audit.justification.trim_end_matches(':'))
-        } else {
-            format!("/// # {}", audit.obligation.trim_start_matches('#').trim())
-        };
-        ensure!(
-            document
-                .lines()
-                .next()
-                .is_some_and(|l| l.trim_start().starts_with(&marker)),
-            "keep the documentation template heading"
-        );
-        ensure!(
-            document.lines().all(|l| l.trim().is_empty()
-                || l.trim_start().starts_with(if action == "justification" {
-                    "//"
-                } else {
-                    "///"
-                })),
-            "only documentation comments are allowed"
-        );
-        let body = document
-            .trim_start()
-            .strip_prefix(&marker)
-            .unwrap_or_default();
-        ensure!(
-            body.lines()
-                .any(|l| !l.trim().trim_start_matches('/').trim().is_empty()),
-            "write an explanation first"
-        );
-        let obligation_documentation = (action == "justification")
-            .then_some(audit.obligation_documentation)
-            .flatten();
-        let annotation = OverrideDocument {
-            obligation_documentation,
-            effect: audit.effect,
-            action: action.into(),
-            document,
-            selector: target.selector.unwrap(),
-        };
-        let previous_document = buffer
-            .annotations
-            .iter()
-            .find(|a| {
-                a.annotation.effect == annotation.effect
-                    && a.annotation.action == annotation.action
-                    && a.annotation.selector.same_target(&annotation.selector)
-            })
-            .and_then(|a| {
-                a.previous_document
-                    .clone()
-                    .or_else(|| a.applied.then(|| a.annotation.document.clone()))
-            });
-        buffer.annotations.retain(|a| {
-            !(a.annotation.effect == annotation.effect
-                && a.annotation.action == annotation.action
-                && a.annotation.selector.same_target(&annotation.selector))
-        });
-        buffer.annotations.push(OverrideDraft {
-            annotation,
-            location: target.location,
-            applied: false,
-            previous_document,
-        });
-        buffer.revision += 1;
-        let previous = self.buffers.insert(buffer.path.clone(), buffer.clone());
-        if let Err(error) = self.persist() {
-            if let Some(previous) = previous {
-                self.buffers.insert(buffer.path.clone(), previous);
-            }
-            return Err(error);
-        }
-        Ok(buffer)
-    }
-
-    /// Remove a new draft, or discard edits to an applied annotation.
-    pub fn discard_override(&mut self, path: &str, revision: u64, index: usize) -> Result<Buffer> {
-        ensure!(!self.analysis.running, "wait for analysis to finish");
-        let mut buffer = self.buffer(path)?;
-        ensure!(
-            !buffer.writable && !buffer.conflict && buffer.revision == revision,
-            "override draft revision conflict"
-        );
-        let draft = buffer
-            .annotations
-            .get_mut(index)
-            .context("override draft no longer exists")?;
-        ensure!(
-            !draft.applied,
-            "applied override documentation cannot be deleted"
-        );
-        ensure!(
-            draft.location.hash == content_hash(buffer.original.as_bytes()),
-            "dependency source changed; reanalyze"
-        );
-        if let Some(document) = draft.previous_document.clone() {
-            draft.annotation.document = document;
-            draft.applied = true;
-        } else {
-            buffer.annotations.remove(index);
-        }
-        buffer.revision += 1;
-        let previous = self.buffers.insert(path.into(), buffer.clone());
-        if let Err(error) = self.persist() {
-            if let Some(previous) = previous {
-                self.buffers.insert(path.into(), previous);
-            }
-            return Err(error);
-        }
-        self.pending_override = None;
-        Ok(buffer)
-    }
-
-    pub fn edit_override(
-        &mut self,
-        path: &str,
-        revision: u64,
-        index: usize,
-        document: String,
-    ) -> Result<Buffer> {
-        ensure!(!self.analysis.running, "wait for analysis to finish");
-        let mut buffer = self.buffer(path)?;
-        ensure!(
-            !buffer.writable && !buffer.conflict && buffer.revision == revision,
-            "override draft revision conflict"
-        );
-        let draft = buffer
-            .annotations
-            .get_mut(index)
-            .context("override draft no longer exists")?;
-        ensure!(
-            draft.location.hash == content_hash(buffer.original.as_bytes()),
-            "dependency source changed; reanalyze"
-        );
-        let heading = draft
-            .annotation
-            .document
-            .lines()
-            .next()
-            .context("invalid stored documentation")?;
-        let marker = if draft.annotation.action == "justification" {
-            heading
-                .split_once(':')
-                .map(|(prefix, _)| format!("{prefix}:"))
-                .context("invalid marker")?
-        } else {
-            heading.to_owned()
-        };
-        ensure!(
-            document.trim_start().starts_with(&marker),
-            "keep the documentation template heading"
-        );
-        ensure!(
-            document.lines().all(|l| l.trim().is_empty()
-                || l.trim_start()
-                    .starts_with(if draft.annotation.action == "justification" {
-                        "//"
-                    } else {
-                        "///"
-                    })),
-            "only documentation comments are allowed"
-        );
-        ensure!(
-            document.trim_start()[marker.len()..].lines().any(|l| !l
-                .trim()
-                .trim_start_matches('/')
-                .trim()
-                .is_empty()),
-            "write an explanation first"
-        );
-        if draft.applied {
-            draft.previous_document = Some(draft.annotation.document.clone());
-        }
-        draft.annotation.document = document;
-        draft.applied = false;
-        buffer.revision += 1;
-        let previous = self.buffers.insert(path.into(), buffer.clone());
-        if let Err(error) = self.persist() {
-            if let Some(previous) = previous {
-                self.buffers.insert(path.into(), previous);
-            }
-            return Err(error);
-        }
-        Ok(buffer)
-    }
-
-    pub(super) fn override_preview(&self, buffer: &Buffer) -> Result<String> {
-        self.annotation_preview(buffer, false)
-    }
-    pub(super) fn override_original_preview(&self, buffer: &Buffer) -> Result<String> {
-        self.annotation_preview(buffer, true)
-    }
-    fn annotation_preview(&self, buffer: &Buffer, baseline: bool) -> Result<String> {
-        if buffer.writable {
-            return Ok(if baseline {
-                buffer.original.clone()
-            } else {
-                buffer.content.clone()
-            });
-        }
-        let mut content = buffer.original.clone();
-        let mut drafts = buffer
-            .annotations
-            .iter()
-            .filter(|a| !baseline || a.applied || a.previous_document.is_some())
-            .collect::<Vec<_>>();
-        drafts.sort_by_key(|a| {
-            (
-                std::cmp::Reverse(a.location.start),
-                a.annotation.action.clone(),
-                a.annotation.effect.clone(),
-            )
-        });
-        for draft in drafts {
-            ensure!(
-                draft.location.hash == content_hash(buffer.original.as_bytes()),
-                "dependency changed; cannot render override preview"
-            );
-            let at = draft.location.start;
-            ensure!(
-                at <= buffer.original.len() && buffer.original.is_char_boundary(at),
-                "invalid override location"
-            );
-            let start = buffer.original[..at].rfind('\n').map_or(0, |i| i + 1);
-            let indent = buffer.original[start..at]
-                .chars()
-                .take_while(|c| c.is_whitespace())
-                .collect::<String>();
-            let newline = if buffer.original.contains("\r\n") {
-                "\r\n"
-            } else {
-                "\n"
-            };
-            let document = if baseline && !draft.applied {
-                draft.previous_document.as_deref().unwrap_or_default()
-            } else {
-                &draft.annotation.document
-            };
-            let doc = document
-                .lines()
-                .map(|l| format!("{indent}{}{newline}", l.trim_start()))
-                .collect::<String>();
-            let start = outer_attribute_start(&buffer.original, start);
-            content.insert_str(start, &doc);
-        }
-        Ok(content)
     }
 
     fn override_manifest(&self) -> PathBuf {
@@ -397,26 +403,10 @@ impl Session {
         Ok(path)
     }
 
-    pub fn prepare_override_apply(
-        &mut self,
-        path: &str,
-        revision: u64,
-        destination: Option<&str>,
-    ) -> Result<OverrideApplyPlan> {
-        ensure!(!self.analysis.running, "wait for analysis to finish");
-        let buffer = self.buffer(path)?;
-        ensure!(
-            !buffer.writable && !buffer.conflict && buffer.revision == revision,
-            "override draft revision conflict"
-        );
-        ensure!(
-            buffer.annotations.iter().any(|a| !a.applied),
-            "no override drafts"
-        );
-        self.override_preview(&buffer)?;
+    fn override_destinations(&self) -> Result<(PathBuf, Option<String>, Vec<String>)> {
         let manifest = self.checked_override_destination(&self.override_manifest())?;
         let manifest_original = read_optional(&manifest)?;
-        let mut config = manifest_original
+        let config = manifest_original
             .as_deref()
             .unwrap_or("")
             .parse::<toml_edit::Document>()?;
@@ -446,16 +436,40 @@ impl Session {
                     .map(|p| p.to_string_lossy().into_owned())
             })
             .collect::<Result<Vec<_>>>()?;
-        let destination = destination.unwrap_or(&destinations[0]).to_owned();
+        Ok((manifest, manifest_original, destinations))
+    }
+
+    fn prepare_override_write(
+        &self,
+        annotation: &OverrideDocument,
+        original_document: Option<&str>,
+        destination: &str,
+        create: bool,
+    ) -> Result<OverrideFileWrite> {
+        let (manifest, manifest_original, destinations) = self.override_destinations()?;
+        let base = manifest.parent().unwrap();
+        let mut config = manifest_original
+            .as_deref()
+            .unwrap_or("")
+            .parse::<toml_edit::Document>()?;
+        let destination = destination.to_owned();
         ensure!(
-            destinations.contains(&destination),
+            create || destinations.contains(&destination),
             "select a configured override destination"
         );
         ensure!(
             Path::new(&destination) != manifest,
             "override file cannot be the configuration file"
         );
+        let destination = self
+            .checked_override_destination(Path::new(&destination))?
+            .to_string_lossy()
+            .into_owned();
         let original = read_optional(Path::new(&destination))?;
+        ensure!(
+            !create || original.is_none(),
+            "That override file already exists. Choose another name."
+        );
         let mut document = original
             .as_deref()
             .unwrap_or("")
@@ -466,27 +480,25 @@ impl Session {
             let text = read_optional(Path::new(other))?.unwrap_or_default();
             validate_override_file(&text)?;
             let parsed: OverrideFile = toml::from_str(&text)?;
-            for draft in buffer.annotations.iter().filter(|d| !d.applied) {
-                let selector = &draft.annotation.selector;
-                if let Some(entries) = parsed
-                    .overrides
-                    .crates
-                    .get(&selector.crate_name)
-                    .and_then(|v| v.get(&selector.version))
-                {
-                    for key in entries.keys() {
-                        let (path, start, end) = parse_lines(key)?;
-                        ensure!(
-                            path != selector.source_path
-                                || selector.line < start
-                                || selector.line > end,
-                            "overlapping source override in {other}: {key}"
-                        );
-                    }
+            let selector = &annotation.selector;
+            if let Some(entries) = parsed
+                .overrides
+                .crates
+                .get(&selector.crate_name)
+                .and_then(|v| v.get(&selector.version))
+            {
+                for key in entries.keys() {
+                    let (path, start, end) = parse_lines(key)?;
+                    ensure!(
+                        path != selector.source_path
+                            || selector.line < start
+                            || selector.line > end,
+                        "overlapping source override in {other}: {key}"
+                    );
                 }
             }
         }
-        merge_source_drafts(&mut document, &buffer)?;
+        merge_source_override(&mut document, annotation, original_document)?;
         let content = document.to_string();
         validate_override_file(&content)?;
         let relative = Path::new(&destination)
@@ -510,49 +522,17 @@ impl Session {
             paths.push(relative.as_ref());
         }
         let manifest_content = config.to_string();
-        let mut diff = unified(original.as_deref().unwrap_or(""), &content, &destination);
-        if manifest_original.as_deref().unwrap_or("") != manifest_content {
-            diff.push_str(&unified(
-                manifest_original.as_deref().unwrap_or(""),
-                &manifest_content,
-                &manifest.to_string_lossy(),
-            ));
-        }
-        let token = content_hash(format!("{path}:{revision}:{destination}:{original:?}:{manifest_original:?}:{content}:{manifest_content}").as_bytes());
-        let plan = OverrideApplyPlan {
-            token,
-            path: path.into(),
-            revision,
-            destinations,
+        Ok(OverrideFileWrite {
             destination,
-            existing: original.is_some(),
-            diff,
             original,
             content,
             manifest,
             manifest_original,
             manifest_content,
-        };
-        self.pending_override = Some(plan.clone());
-        Ok(plan)
+        })
     }
 
-    pub fn apply_overrides(&mut self, token: &str, confirmed: bool) -> Result<()> {
-        ensure!(!self.analysis.running, "wait for analysis to finish");
-        let plan = self
-            .pending_override
-            .clone()
-            .context("review overrides before applying")?;
-        ensure!(plan.token == token, "override preview expired");
-        ensure!(
-            !plan.existing || confirmed,
-            "confirm editing the existing override file"
-        );
-        let buffer = self.buffer(&plan.path)?;
-        ensure!(
-            buffer.revision == plan.revision && !buffer.conflict,
-            "override draft changed; review again"
-        );
+    fn write_override_files(&self, plan: &OverrideFileWrite) -> Result<()> {
         self.checked_override_destination(Path::new(&plan.destination))?;
         self.checked_override_destination(&plan.manifest)?;
         ensure!(
@@ -560,7 +540,16 @@ impl Session {
                 && read_optional(&plan.manifest)? == plan.manifest_original,
             "override file or configuration changed; review again"
         );
-        atomic_write(Path::new(&plan.destination), plan.content.as_bytes())?;
+        if plan.original.is_none() {
+            let mut file =
+                tempfile::NamedTempFile::new_in(Path::new(&plan.destination).parent().unwrap())?;
+            file.write_all(plan.content.as_bytes())?;
+            file.as_file().sync_all()?;
+            file.persist_noclobber(&plan.destination)
+                .map_err(|e| e.error)?;
+        } else {
+            atomic_write(Path::new(&plan.destination), plan.content.as_bytes())?;
+        }
         if plan.manifest_original.as_deref().unwrap_or("") != plan.manifest_content {
             if let Err(error) = atomic_write(&plan.manifest, plan.manifest_content.as_bytes()) {
                 if let Some(original) = &plan.original {
@@ -571,20 +560,16 @@ impl Session {
                 return Err(error);
             }
         }
-        let saved = self.buffers.get_mut(&plan.path).unwrap();
-        for draft in &mut saved.annotations {
-            draft.applied = true;
-            draft.previous_document = Some(draft.annotation.document.clone());
-        }
-        saved.revision += 1;
-        self.analysis.stale = true;
-        if let Err(error) = self.persist() {
-            self.buffers.insert(plan.path.clone(), buffer);
-            return Err(error);
-        }
-        self.pending_override = None;
         Ok(())
     }
+}
+fn restore_optional(path: &Path, original: &Option<String>) -> Result<()> {
+    if let Some(original) = original {
+        atomic_write(path, original.as_bytes())?;
+    } else if path.exists() {
+        fs::remove_file(path)?;
+    }
+    Ok(())
 }
 fn read_optional(path: &Path) -> Result<Option<String>> {
     match fs::read_to_string(path) {
@@ -592,12 +577,6 @@ fn read_optional(path: &Path) -> Result<Option<String>> {
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
         Err(e) => Err(e.into()),
     }
-}
-fn unified(original: &str, content: &str, path: &str) -> String {
-    similar::TextDiff::from_lines(original, content)
-        .unified_diff()
-        .header(path, path)
-        .to_string()
 }
 use sniff_test_report::source_overrides::{OverrideFile, SourceContractSelector};
 
@@ -682,110 +661,125 @@ fn replace_section(base: &str, replacement: &str) -> String {
     }
 }
 
-fn merge_source_drafts(document: &mut toml_edit::Document, buffer: &Buffer) -> Result<()> {
-    let mut groups = BTreeMap::<(String, String, String), Vec<&OverrideDraft>>::new();
-    for draft in &buffer.annotations {
-        let selector = &draft.annotation.selector;
-        groups
-            .entry((
-                selector.crate_name.clone(),
-                selector.version.clone(),
-                source_key(selector),
-            ))
-            .or_default()
-            .push(draft);
-    }
-    for ((name, version, key), drafts) in groups {
-        if drafts.iter().all(|d| d.applied) {
-            continue;
+fn validate_override_document(document: &str, annotation: &OverrideDocument) -> Result<()> {
+    let heading = annotation
+        .document
+        .lines()
+        .next()
+        .context("invalid stored documentation")?;
+    let marker = if annotation.action == "justification" {
+        heading
+            .split_once(':')
+            .map(|(prefix, _)| format!("{prefix}:"))
+            .context("invalid marker")?
+    } else {
+        heading.to_owned()
+    };
+    let body = document
+        .trim_start()
+        .strip_prefix(&marker)
+        .context("keep the documentation template heading")?;
+    ensure!(
+        document.lines().all(|line| line.trim().is_empty()
+            || line
+                .trim_start()
+                .starts_with(if annotation.action == "justification" {
+                    "//"
+                } else {
+                    "///"
+                })),
+        "only documentation comments are allowed"
+    );
+    ensure!(
+        body.lines()
+            .any(|line| !line.trim().trim_start_matches('/').trim().is_empty()),
+        "write an explanation first"
+    );
+    Ok(())
+}
+
+fn merge_source_override(
+    document: &mut toml_edit::Document,
+    annotation: &OverrideDocument,
+    original_document: Option<&str>,
+) -> Result<()> {
+    let selector = &annotation.selector;
+    let name = &selector.crate_name;
+    let version = &selector.version;
+    let key = source_key(selector);
+    let action = &annotation.action;
+    let (path, start, end) = parse_lines(&key)?;
+    let parsed: OverrideFile = toml::from_str(&document.to_string())?;
+    let entries = parsed
+        .overrides
+        .crates
+        .get(name)
+        .and_then(|v| v.get(version));
+    if let Some(entries) = entries {
+        for existing in entries.keys().filter(|existing| *existing != &key) {
+            let (other_path, other_start, other_end) = parse_lines(existing)?;
+            ensure!(
+                path != other_path || start > other_end || other_start > end,
+                "overlapping source overrides: {existing} and {key}"
+            );
         }
-        let action = &drafts[0].annotation.action;
+    }
+    let existing = entries
+        .and_then(|entries| entries.get(&key))
+        .map(String::as_str);
+    let mut value = existing
+        .unwrap_or(if action == "obligation" {
+            &selector.documentation
+        } else {
+            ""
+        })
+        .to_owned();
+    if let Some(existing) = existing {
+        let is_marker = existing
+            .lines()
+            .find(|line| !line.trim().is_empty())
+            .is_some_and(|line| {
+                let line = line.trim().strip_prefix("//").unwrap_or(line).trim();
+                selector.justification_headers.iter().any(|header| {
+                    line.strip_prefix(header)
+                        .is_some_and(|rest| rest.starts_with(':'))
+                })
+            });
         ensure!(
-            drafts.iter().all(|d| &d.annotation.action == action),
+            is_marker == (action == "justification"),
             "obligation and justification source-selector collision at {key}"
         );
-        if action == "obligation" {
-            ensure!(
-                drafts.iter().all(|d| d.annotation.selector.definition
-                    == drafts[0].annotation.selector.definition),
-                "source selector matches multiple definitions at {key}"
-            );
+    }
+    let new = markdown(&annotation.document, action);
+    if action == "obligation" {
+        value = replace_section(&value, &new);
+    } else if let Some(original) = original_document {
+        let original = markdown(original, action);
+        ensure!(
+            value.contains(&original),
+            "saved override contribution changed at {key}"
+        );
+        value = value.replacen(&original, &new, 1);
+    } else {
+        if !value.trim().is_empty() {
+            value.push_str("\n\n");
         }
-        let (path, start, end) = parse_lines(&key)?;
-        let parsed: OverrideFile = toml::from_str(&document.to_string())?;
-        let entries = parsed
-            .overrides
-            .crates
-            .get(&name)
-            .and_then(|v| v.get(&version));
-        if let Some(entries) = entries {
-            for existing in entries.keys().filter(|k| *k != &key) {
-                let (other_path, other_start, other_end) = parse_lines(existing)?;
-                ensure!(
-                    path != other_path || start > other_end || other_start > end,
-                    "overlapping source overrides: {existing} and {key}"
-                );
-            }
-        }
-        let existing = entries.and_then(|e| e.get(&key)).map(String::as_str);
-        let mut value = existing
-            .unwrap_or(if action == "obligation" {
-                &drafts[0].annotation.selector.documentation
-            } else {
-                ""
-            })
-            .to_owned();
-        if let Some(existing) = existing {
-            let headers = &drafts[0].annotation.selector.justification_headers;
-            let is_marker = existing
-                .lines()
-                .find(|l| !l.trim().is_empty())
-                .is_some_and(|l| {
-                    let l = l.trim().strip_prefix("//").unwrap_or(l).trim();
-                    headers
-                        .iter()
-                        .any(|h| l.strip_prefix(h).is_some_and(|r| r.starts_with(':')))
-                });
-            ensure!(
-                is_marker == (action == "justification"),
-                "obligation and justification source-selector collision at {key}"
-            );
-        }
-        for draft in drafts.iter().filter(|d| !d.applied) {
-            let new = markdown(&draft.annotation.document, action);
-            if action == "obligation" {
-                value = replace_section(&value, &new);
-            } else {
-                if let Some(previous) = &draft.previous_document {
-                    let previous = markdown(previous, action);
-                    ensure!(
-                        value.contains(&previous),
-                        "saved override contribution changed at {key}"
-                    );
-                    value = value.replacen(&previous, &new, 1);
-                } else {
-                    if !value.trim().is_empty() {
-                        value.push_str("\n\n");
-                    }
-                    value.push_str(&new);
-                }
-            }
-        }
-        let mut table: &mut dyn toml_edit::TableLike = document.as_table_mut();
-        for key in ["overrides", "crates", &name, &version] {
-            let entry = table
-                .entry(key)
-                .or_insert(toml_edit::Item::Table(toml_edit::Table::new()));
-            table = entry
-                .as_table_like_mut()
-                .context("override entries must be tables")?;
-        }
-        let item = &mut document["overrides"]["crates"][&name][&version][&key];
-        let decor = item.as_value().map(|v| v.decor().clone());
-        *item = toml_edit::value(value);
-        if let Some(decor) = decor {
-            *item.as_value_mut().unwrap().decor_mut() = decor;
-        }
+        value.push_str(&new);
+    }
+    let mut table: &mut dyn toml_edit::TableLike = document.as_table_mut();
+    for key in ["overrides", "crates", name, version] {
+        let entry = table
+            .entry(key)
+            .or_insert(toml_edit::Item::Table(toml_edit::Table::new()));
+        table = entry
+            .as_table_like_mut()
+            .context("override entries must be tables")?;
+    }
+    let item = &mut document["overrides"]["crates"][name][version][&key];
+    let decor = item.as_value().map(|value| value.decor().clone());
+    *item = toml_edit::value(value);
+    if let Some(decor) = decor {
+        *item.as_value_mut().unwrap().decor_mut() = decor;
     }
     Ok(())
 }
@@ -879,94 +873,71 @@ mod tests {
         }];
         (root, dep, session, buffer.path)
     }
-    fn draft_buffer() -> Buffer {
+    fn annotation() -> OverrideDocument {
         let (_root, _dep, mut session, path) = setup();
-        session
-            .save_override("finding", "justification", 0, "// SAFETY: first".into())
-            .unwrap();
-        session.buffer(&path).unwrap()
+        let mut annotation = editor(&mut session, &path).saved.annotation;
+        annotation.document = "// SAFETY: first".into();
+        annotation
     }
     fn value(document: &toml_edit::Document, key: &str) -> String {
         let parsed: OverrideFile = toml::from_str(&document.to_string()).unwrap();
         parsed.overrides.crates["dep"]["0.1.0"][key].clone()
     }
     #[test]
-    fn same_line_contributions_preserve_counts_other_effects_and_replace_edits() {
-        let mut buffer = draft_buffer();
-        let mut second = buffer.annotations[0].clone();
-        second.annotation.selector.site = Some("second site".into());
-        second.annotation.document = "// SAFETY: second".into();
-        buffer.annotations.push(second);
-        let mut other = buffer.annotations[0].clone();
-        other.annotation.effect = "panic".into();
-        other.annotation.document = "// PANIC: checked".into();
-        buffer.annotations.push(other);
+    fn single_annotation_edits_preserve_same_line_contributions_and_comments() {
+        let mut first = annotation();
+        let mut second = first.clone();
+        second.selector.site = Some("second site".into());
+        second.document = "// SAFETY: second".into();
+        let mut other = first.clone();
+        other.effect = "panic".into();
+        other.document = "// PANIC: checked".into();
         let mut document = "# file comment\n[overrides.crates.dep.\"0.1.0\"]\n# nearby comment\n\"src/lib.rs:20:20\" = \"# Safety\\nKeep this contract\" # inline\n".parse().unwrap();
-        merge_source_drafts(&mut document, &buffer).unwrap();
+        for annotation in [&first, &second, &other] {
+            merge_source_override(&mut document, annotation, None).unwrap();
+        }
         let text = value(&document, "src/lib.rs:7:7");
         assert_eq!(text.matches("SAFETY:").count(), 2);
         assert_eq!(text.matches("PANIC:").count(), 1);
-        for draft in &mut buffer.annotations {
-            draft.applied = true;
-            draft.previous_document = Some(draft.annotation.document.clone());
-        }
-        buffer.annotations[0].applied = false;
-        buffer.annotations[0].annotation.document = "// SAFETY: revised\n// continued".into();
-        merge_source_drafts(&mut document, &buffer).unwrap();
-        merge_source_drafts(
-            &mut document,
-            &Buffer {
-                annotations: buffer
-                    .annotations
-                    .iter()
-                    .cloned()
-                    .map(|mut d| {
-                        d.applied = true;
-                        d
-                    })
-                    .collect(),
-                ..buffer.clone()
-            },
-        )
-        .unwrap();
+        let original = first.document.clone();
+        first.document = "// SAFETY: revised\n// continued".into();
+        merge_source_override(&mut document, &first, Some(&original)).unwrap();
         let text = value(&document, "src/lib.rs:7:7");
         assert!(!text.contains("first"));
         assert!(text.contains("SAFETY: revised\ncontinued"));
-        assert!(text.contains("SAFETY: second"));
-        assert!(text.contains("PANIC: checked"));
+        assert!(text.contains("SAFETY: second") && text.contains("PANIC: checked"));
         let saved = document.to_string();
-        assert!(saved.contains("# nearby comment"));
-        assert!(saved.contains("# inline"));
+        assert!(saved.contains("# nearby comment") && saved.contains("# inline"));
         validate_override_file(&saved).unwrap();
     }
     #[test]
     fn obligations_preserve_effective_rustdoc_and_other_contracts() {
-        let mut buffer = draft_buffer();
-        let draft = &mut buffer.annotations[0];
-        draft.annotation.action = "obligation".into();
-        draft.annotation.document = "/// # Panics\n/// Checked by caller.".into();
-        draft.annotation.selector.documentation = "Summary.\n\n# Safety\nPointer must be valid.\n\n# Panics\nOld.\n\n# Examples\nExample.".into();
+        let mut annotation = annotation();
+        annotation.action = "obligation".into();
+        annotation.document = "/// # Panics\n/// Checked by caller.".into();
+        annotation.selector.documentation = "Summary.\n\n# Safety\nPointer must be valid.\n\n# Panics\nOld.\n\n# Examples\nExample.".into();
         let mut document = toml_edit::Document::new();
-        merge_source_drafts(&mut document, &buffer).unwrap();
+        merge_source_override(&mut document, &annotation, None).unwrap();
         let text = value(&document, "src/lib.rs:7:7");
-        assert!(text.contains("# Safety\nPointer must be valid."));
-        assert!(text.contains("# Examples\nExample."));
-        assert!(text.contains("# Panics\nChecked by caller."));
-        assert!(!text.contains("Old."));
+        assert!(
+            text.contains("# Safety\nPointer must be valid.")
+                && text.contains("# Examples\nExample.")
+        );
+        assert!(text.contains("# Panics\nChecked by caller.") && !text.contains("Old."));
         assert!(text.starts_with("Summary."));
-        buffer.annotations[0].annotation.effect = "safety".into();
-        buffer.annotations[0].annotation.document = "/// # Safety\n/// New safety contract.".into();
-        merge_source_drafts(&mut document, &buffer).unwrap();
+        annotation.effect = "safety".into();
+        annotation.document = "/// # Safety\n/// New safety contract.".into();
+        merge_source_override(&mut document, &annotation, None).unwrap();
         let text = value(&document, "src/lib.rs:7:7");
         assert!(text.contains("# Panics\nChecked by caller."));
         assert_eq!(text.matches("# Safety").count(), 1);
     }
     #[test]
     fn writer_supports_inline_tables_and_preserves_entry_comments() {
-        let buffer = draft_buffer();
+        let annotation = annotation();
         let text = "# top\n[overrides.crates.dep]\n\"0.1.0\" = { \"src/lib.rs:7:7\" = \"SAFETY: existing\" } # keep\n";
         let mut document = text.parse().unwrap();
-        merge_source_drafts(&mut document, &buffer).unwrap();
+        merge_source_override(&mut document, &annotation, None).unwrap();
         assert!(document.to_string().contains("# keep"));
         assert_eq!(
             value(&document, "src/lib.rs:7:7"),
@@ -974,30 +945,28 @@ mod tests {
         );
         validate_override_file(&document.to_string()).unwrap();
     }
-
     #[test]
-    fn writer_rejects_collisions_ranges_and_removed_schema_before_writing() {
+    fn writer_rejects_collisions_ranges_and_unknown_schema_before_writing() {
         assert!(validate_override_file("[[annotations]]\neffect=\"panic\"\n").is_err());
-        let buffer = draft_buffer();
+        let mut annotation = annotation();
         for text in [
             "[overrides.crates.dep.\"0.1.0\"]\n\"src/lib.rs:6:8\"=\"SAFETY: existing\"",
             "[overrides.crates.dep.\"0.1.0\"]\n\"src/lib.rs:7:7\"=\"# Safety\\nExisting\"",
         ] {
-            assert!(merge_source_drafts(&mut text.parse().unwrap(), &buffer).is_err());
+            assert!(merge_source_override(&mut text.parse().unwrap(), &annotation, None).is_err());
         }
-        let mut buffer = buffer;
-        let mut obligation = buffer.annotations[0].clone();
-        obligation.annotation.action = "obligation".into();
-        obligation.annotation.document = "/// # Safety\n/// Required.".into();
-        buffer.annotations.push(obligation);
-        assert!(merge_source_drafts(&mut toml_edit::Document::new(), &buffer).is_err());
+        let mut document = toml_edit::Document::new();
+        merge_source_override(&mut document, &annotation, None).unwrap();
+        annotation.action = "obligation".into();
+        annotation.document = "/// # Safety\n/// Required.".into();
+        assert!(merge_source_override(&mut document, &annotation, None).is_err());
     }
 
     #[test]
-    fn override_drafts_restart_edit_discard_and_preserve_dependency_bytes() {
+    fn saved_overrides_restart_and_edit_without_source_changes_or_draft_state() {
         let (root, _dep, mut session, path) = setup();
-        let original = fs::read(&path).unwrap();
-        let context = sniff_test_report::ObligationDocumentation {
+        let source = fs::read(&path).unwrap();
+        let documentation = sniff_test_report::ObligationDocumentation {
             prototype: Some("unsafe fn contract(pointer: *const u8) -> u8".into()),
             function: "dep::contract".into(),
             markdown: "# Safety\nThe pointer must be valid.".into(),
@@ -1006,150 +975,461 @@ mod tests {
             .audit
             .as_mut()
             .unwrap()
-            .obligation_documentation = Some(context.clone());
-        assert!(
-            session
-                .save_override("finding", "justification", 0, "// SAFETY: ".into())
-                .is_err()
-        );
-        let draft = session
-            .save_override(
-                "finding",
-                "justification",
-                0,
+            .obligation_documentation = Some(documentation.clone());
+        let context = editor(&mut session, &path);
+        session
+            .commit_override(
+                &context.token,
+                &context.destination,
+                Some("saved.toml"),
                 "// SAFETY: pointer is valid".into(),
             )
             .unwrap();
-        assert_eq!(draft.content.as_bytes(), original);
-        assert_eq!(
-            draft.annotations[0].annotation.obligation_documentation,
-            Some(context.clone())
-        );
-        assert!(
-            session
-                .diff(&path)
-                .unwrap()
-                .contains("+    // SAFETY: pointer is valid")
-        );
-        let preview = session.override_preview(&draft).unwrap();
-        assert!(preview.contains("// SAFETY: pointer is valid\r\n    #[allow("));
         let config = session.config.clone();
+        let analysis = session.analysis.clone();
+        let serialized = fs::read_to_string(&session.metadata_file).unwrap();
+        assert!(serialized.contains("pointer is valid"));
+        assert!(!serialized.contains("dangerous()"));
+        for legacy in ["\"annotations\"", "previous_document", "applied"] {
+            assert!(!serialized.contains(legacy));
+        }
         drop(session);
         let mut session =
             Session::open(root.path().into(), root.path().join("target"), config).unwrap();
-        session.allowed_external.insert(PathBuf::from(&path));
-        assert_eq!(session.drafts().len(), 1);
-        assert!(
-            session
-                .edit_override(&path, 0, 0, "// SAFETY: changed".into())
-                .is_err()
-        );
-        let updated = session
-            .edit_override(
-                &path,
-                draft.revision,
-                0,
-                "// SAFETY: checked the pointer".into(),
+        session.analysis = analysis;
+        let buffer = session.buffer(&path).unwrap();
+        assert_eq!(buffer.saved_overrides.len(), 1);
+
+        let context = session
+            .open_override_editor(OverrideEditorTarget::Saved {
+                path: path.clone(),
+                revision: buffer.revision,
+                index: 0,
+            })
+            .unwrap();
+        assert_eq!(context.obligation_documentation, Some(documentation));
+        assert_eq!(context.document, "// SAFETY: pointer is valid");
+        session
+            .commit_override(
+                &context.token,
+                &context.destination,
+                None,
+                "// SAFETY: pointer was checked".into(),
             )
             .unwrap();
-        assert_eq!(updated.annotations.len(), 1);
-        assert_eq!(
-            updated.annotations[0].annotation.obligation_documentation,
-            Some(context)
-        );
-        assert!(session.discard_override(&path, 0, 0).is_err());
-        session
-            .discard_override(&path, updated.revision, 0)
-            .unwrap();
-        assert!(session.drafts().is_empty());
-        assert!(session.diff(&path).unwrap().is_empty());
+        let saved = fs::read_to_string(context.destination).unwrap();
+        assert!(saved.contains("pointer was checked") && !saved.contains("pointer is valid"));
+        assert_eq!(fs::read(path).unwrap(), source);
+    }
+
+    #[test]
+    fn legacy_drafts_file_is_not_read_or_migrated() {
+        let (root, _dep, session, _path) = setup();
+        fs::write(
+            root.path().join("target/drafts.json"),
+            "invalid old draft data",
+        )
+        .unwrap();
         let config = session.config.clone();
         drop(session);
-        let mut session =
+        let session =
             Session::open(root.path().into(), root.path().join("target"), config).unwrap();
-        assert!(session.drafts().is_empty());
+        assert!(session.buffers.is_empty());
+        assert!(!session.metadata_file.exists());
+    }
+
+    fn editor(session: &mut Session, path: &str) -> OverrideEditor {
+        let revision = session.buffer(path).unwrap().revision;
+        session
+            .open_override_editor(OverrideEditorTarget::Finding {
+                id: "finding".into(),
+                action: "justification".into(),
+                revision,
+                generation: session.analysis.generation,
+            })
+            .unwrap()
+    }
+
+    #[test]
+    fn stale_analysis_does_not_block_overrides_for_unchanged_dependency_source() {
+        let (root, _dep, mut session, path) = setup();
+        let local = root.path().join("workspace.rs");
+        fs::write(&local, "fn workspace() {}\n").unwrap();
+        let buffer = session.buffer(local.to_str().unwrap()).unwrap();
+        session
+            .save_source(
+                &buffer.path,
+                buffer.revision,
+                "// changed\nfn workspace() {}\n".into(),
+            )
+            .unwrap();
+        assert!(session.analysis.stale);
+        let context = editor(&mut session, &path);
+        session
+            .commit_override(
+                &context.token,
+                &context.destination,
+                Some("saved.toml"),
+                "// SAFETY: unchanged dependency is valid".into(),
+            )
+            .unwrap();
+        assert!(session.analysis.stale);
+        assert!(
+            fs::read_to_string(root.path().join("saved.toml"))
+                .unwrap()
+                .contains("unchanged dependency is valid")
+        );
+    }
+
+    #[test]
+    fn direct_save_creates_named_file_and_allows_edits_without_reanalysis() {
+        let (root, _dep, mut session, path) = setup();
+        let original = fs::read(&path).unwrap();
+        let context = editor(&mut session, &path);
+        assert!(!context.destinations[0].exists);
+        for filename in [
+            None,
+            Some(""),
+            Some("../outside.toml"),
+            Some("sniff-test.toml"),
+        ] {
+            assert!(
+                session
+                    .commit_override(
+                        &context.token,
+                        &context.destination,
+                        filename,
+                        "// SAFETY: valid".into()
+                    )
+                    .is_err()
+            );
+        }
+
+        let (buffer, destination) = session
+            .commit_override(
+                &context.token,
+                &context.destination,
+                Some("custom.toml"),
+                "// SAFETY: checked".into(),
+            )
+            .unwrap();
+        assert_eq!(
+            destination,
+            root.path()
+                .canonicalize()
+                .unwrap()
+                .join("custom.toml")
+                .to_string_lossy()
+        );
+        assert!(session.analysis.overrides_changed);
+        assert!(!session.analysis.stale);
+        assert!(!session.analysis.running);
+        assert!(!buffer.saved_overrides.is_empty());
+
+        assert!(
+            fs::read_to_string(root.path().join("sniff-test.toml"))
+                .unwrap()
+                .contains("custom.toml")
+        );
+        let context = session
+            .open_override_editor(OverrideEditorTarget::Saved {
+                path: path.clone(),
+                revision: buffer.revision,
+                index: 0,
+            })
+            .unwrap();
+        assert!(context.destinations[0].exists);
+        session
+            .commit_override(
+                &context.token,
+                &context.destination,
+                None,
+                "// SAFETY: revised".into(),
+            )
+            .unwrap();
+        let saved = fs::read_to_string(destination).unwrap();
+        assert!(saved.contains("SAFETY: revised"));
+        assert!(!saved.contains("SAFETY: checked"));
         assert_eq!(fs::read(path).unwrap(), original);
     }
+
     #[test]
-    fn existing_override_confirmation_and_concurrent_edits_are_enforced() {
+    fn direct_save_preserves_other_saved_contributions_and_uses_existing_destination() {
         let (root, _dep, mut session, path) = setup();
         fs::write(
             root.path().join("sniff-test.toml"),
-            "# config\n[contracts]\noverride-files=[\"one.toml\",\"two.toml\"]\n",
+            "[contracts]\noverride-files=[\"one.toml\",\"two.toml\"]\n",
         )
         .unwrap();
-        let original = "# preserve\n[overrides]\n\"other::api\" = \"# Safety\\nOld contract\"\n";
+        let original = "# keep\n[overrides]\n\"other::api\"=\"# Safety\\nExisting\"\n";
         for file in ["one.toml", "two.toml"] {
             fs::write(root.path().join(file), original).unwrap();
         }
-        let draft = session
-            .save_override(
-                "finding",
-                "justification",
-                0,
-                "// SAFETY: the pointer is valid".into(),
+        let context = editor(&mut session, &path);
+        let destination = context.destinations[1].path.clone();
+        let (buffer, _) = session
+            .commit_override(
+                &context.token,
+                &destination,
+                None,
+                "// SAFETY: first contribution".into(),
             )
             .unwrap();
-        let plan = session
-            .prepare_override_apply(&path, draft.revision, None)
+        let mut other = session.analysis.findings[0].clone();
+        other.id = "other".into();
+        other.effect = Some("panic".into());
+        other.audit.as_mut().unwrap().effect = "panic".into();
+        other.audit.as_mut().unwrap().justification = "PANIC".into();
+        session.analysis.findings.push(other);
+        let context = session
+            .open_override_editor(OverrideEditorTarget::Finding {
+                id: "other".into(),
+                action: "justification".into(),
+                revision: buffer.revision,
+                generation: session.analysis.generation,
+            })
             .unwrap();
-        assert_eq!(plan.destinations.len(), 2);
-        assert!(session.apply_overrides(&plan.token, false).is_err());
-        fs::write(&plan.destination, format!("{original}# external edit\n")).unwrap();
-        assert!(session.apply_overrides(&plan.token, true).is_err());
-        assert_eq!(session.drafts().len(), 1);
-        let plan = session
-            .prepare_override_apply(&path, draft.revision, Some(&plan.destinations[1]))
-            .unwrap();
-        session.apply_overrides(&plan.token, true).unwrap();
-        let applied = fs::read_to_string(&plan.destination).unwrap();
-        assert!(applied.contains("# preserve"));
-        assert!(applied.contains("other::api"));
-        assert!(applied.contains("the pointer is valid"));
-        assert!(session.drafts().is_empty());
-        assert!(session.buffer(&path).unwrap().annotations[0].applied);
-    }
-    #[test]
-    fn editing_then_discarding_an_applied_override_restores_its_document() {
-        let (_root, _dep, mut session, path) = setup();
-        let draft = session
-            .save_override(
-                "finding",
-                "justification",
-                0,
-                "// SAFETY: original reason".into(),
+        let (buffer, _) = session
+            .commit_override(
+                &context.token,
+                &destination,
+                None,
+                "// PANIC: second contribution".into(),
             )
             .unwrap();
-        let plan = session
-            .prepare_override_apply(&path, draft.revision, None)
+        assert_eq!(buffer.saved_overrides.len(), 2);
+        let context = session
+            .open_override_editor(OverrideEditorTarget::Saved {
+                path,
+                revision: buffer.revision,
+                index: 0,
+            })
             .unwrap();
-        session.apply_overrides(&plan.token, false).unwrap();
-        let buffer = session.buffer(&path).unwrap();
-        let edited = session
-            .edit_override(
-                &path,
-                buffer.revision,
-                0,
-                "// SAFETY: revised reason".into(),
+        assert_eq!(context.destination, destination);
+        session
+            .commit_override(
+                &context.token,
+                &context.destination,
+                None,
+                "// SAFETY: revised contribution".into(),
             )
             .unwrap();
-        let diff = session.diff(&path).unwrap();
-        assert!(diff.contains("-    // SAFETY: original reason"));
-        assert!(diff.contains("+    // SAFETY: revised reason"));
-        session.discard_override(&path, edited.revision, 0).unwrap();
-        let restored = session.buffer(&path).unwrap();
-        assert_eq!(
-            restored.annotations[0].annotation.document,
-            "// SAFETY: original reason"
+        let saved = fs::read_to_string(destination).unwrap();
+        assert!(
+            saved.contains("# keep")
+                && saved.contains("other::api")
+                && saved.contains("revised contribution")
+                && saved.contains("second contribution")
         );
-        assert!(restored.annotations[0].applied);
+        assert!(!saved.contains("first contribution"));
+        assert_eq!(
+            fs::read_to_string(root.path().join("one.toml")).unwrap(),
+            original
+        );
+    }
+
+    #[test]
+    fn missing_saved_override_file_can_be_recreated_under_a_new_name() {
+        let (root, _dep, mut session, path) = setup();
+        let context = editor(&mut session, &path);
+        let (buffer, destination) = session
+            .commit_override(
+                &context.token,
+                &context.destination,
+                Some("original.toml"),
+                "// SAFETY: original explanation".into(),
+            )
+            .unwrap();
+        fs::remove_file(destination).unwrap();
+        let context = session
+            .open_override_editor(OverrideEditorTarget::Saved {
+                path,
+                revision: buffer.revision,
+                index: 0,
+            })
+            .unwrap();
+        assert!(!context.destinations[0].exists);
+        let (buffer, destination) = session
+            .commit_override(
+                &context.token,
+                &context.destination,
+                Some("replacement.toml"),
+                "// SAFETY: new explanation".into(),
+            )
+            .unwrap();
+        assert_eq!(buffer.saved_overrides[0].destination, destination);
+        let saved = fs::read_to_string(destination).unwrap();
+        assert!(saved.contains("new explanation") && !saved.contains("original explanation"));
+        let config = fs::read_to_string(root.path().join("sniff-test.toml")).unwrap();
+        assert!(config.contains("replacement.toml") && !config.contains("original.toml"));
+    }
+
+    #[test]
+    fn direct_save_rejects_conflicts_and_invalid_documents_without_drafts() {
+        let (root, _dep, mut session, path) = setup();
+        let context = editor(&mut session, &path);
+        for document in [
+            "// SAFETY: ",
+            "// PANIC: wrong heading",
+            "// SAFETY: reason\nfn injected() {}",
+        ] {
+            assert!(
+                session
+                    .commit_override(
+                        &context.token,
+                        &context.destination,
+                        Some("custom.toml"),
+                        document.into()
+                    )
+                    .is_err()
+            );
+        }
+        fs::write(root.path().join("custom.toml"), "# created concurrently\n").unwrap();
         assert!(
             session
-                .discard_override(&path, restored.revision, 0)
+                .commit_override(
+                    &context.token,
+                    &context.destination,
+                    Some("custom.toml"),
+                    "// SAFETY: checked".into()
+                )
                 .is_err()
         );
-        assert!(session.diff(&path).unwrap().is_empty());
+        assert_eq!(
+            fs::read_to_string(root.path().join("custom.toml")).unwrap(),
+            "# created concurrently\n"
+        );
+        fs::write(
+            root.path().join("sniff-test.toml"),
+            "# external configuration change\n",
+        )
+        .unwrap();
+        assert!(
+            session
+                .commit_override(
+                    &context.token,
+                    &context.destination,
+                    Some("other.toml"),
+                    "// SAFETY: checked".into()
+                )
+                .is_err()
+        );
+        assert!(!root.path().join("other.toml").exists());
     }
+
+    #[test]
+    fn named_file_is_relative_to_active_configuration_and_replaces_missing_entry() {
+        let (root, _dep, mut session, path) = setup();
+        let settings = root.path().join("settings");
+        fs::create_dir(&settings).unwrap();
+        session.config.arguments = vec!["--manifest".into(), "settings/audit.toml".into()];
+        fs::write(
+            settings.join("audit.toml"),
+            "# config comment\n[contracts]\noverride-files=[\"missing.toml\"]\n",
+        )
+        .unwrap();
+        let context = editor(&mut session, &path);
+        let (_, destination) = session
+            .commit_override(
+                &context.token,
+                &context.destination,
+                Some("chosen.toml"),
+                "// SAFETY: checked".into(),
+            )
+            .unwrap();
+        assert_eq!(
+            Path::new(&destination),
+            settings.canonicalize().unwrap().join("chosen.toml")
+        );
+        let config = fs::read_to_string(settings.join("audit.toml")).unwrap();
+        assert!(config.contains("# config comment") && config.contains("chosen.toml"));
+        assert!(!config.contains("missing.toml"));
+        assert!(!root.path().join("chosen.toml").exists());
+    }
+
+    #[test]
+    fn failed_session_persistence_rolls_back_override_and_configuration() {
+        let (root, _dep, mut session, path) = setup();
+        let context = editor(&mut session, &path);
+        session.metadata_file = root.path().join("target"); // Renaming a file over a directory must fail.
+        assert!(
+            session
+                .commit_override(
+                    &context.token,
+                    &context.destination,
+                    Some("custom.toml"),
+                    "// SAFETY: checked".into()
+                )
+                .is_err()
+        );
+        assert!(!root.path().join("custom.toml").exists());
+        assert!(!root.path().join("sniff-test.toml").exists());
+        assert!(session.buffer(&path).unwrap().saved_overrides.is_empty());
+        assert!(!session.analysis.overrides_changed);
+    }
+
+    #[test]
+    fn direct_save_checks_file_source_generation_and_revision_snapshots() {
+        let (root, _dep, mut session, path) = setup();
+        fs::write(
+            root.path().join("sniff-test-overrides.toml"),
+            "# existing\n",
+        )
+        .unwrap();
+        let context = editor(&mut session, &path);
+        fs::write(&context.destination, "# external edit\n").unwrap();
+        assert!(
+            session
+                .commit_override(
+                    &context.token,
+                    &context.destination,
+                    None,
+                    "// SAFETY: checked".into()
+                )
+                .is_err()
+        );
+        let context = editor(&mut session, &path);
+        session.analysis.generation += 1;
+        assert!(
+            session
+                .commit_override(
+                    &context.token,
+                    &context.destination,
+                    None,
+                    "// SAFETY: checked".into()
+                )
+                .is_err()
+        );
+        let context = editor(&mut session, &path);
+        session.buffers.get_mut(&path).unwrap().revision += 1;
+        assert!(
+            session
+                .commit_override(
+                    &context.token,
+                    &context.destination,
+                    None,
+                    "// SAFETY: checked".into()
+                )
+                .is_err()
+        );
+        let context = editor(&mut session, &path);
+        fs::write(&path, "changed dependency").unwrap();
+        assert!(
+            session
+                .commit_override(
+                    &context.token,
+                    &context.destination,
+                    None,
+                    "// SAFETY: checked".into()
+                )
+                .is_err()
+        );
+        assert_eq!(
+            fs::read_to_string(context.destination).unwrap(),
+            "# external edit\n"
+        );
+    }
+
     #[test]
     fn vendored_dependency_sources_are_read_only_inside_workspace() {
         let (root, _dep, mut session, _) = setup();
@@ -1161,35 +1441,9 @@ mod tests {
         assert!(!buffer.writable);
         assert!(
             session
-                .update(&buffer.path, buffer.revision, "changed".into())
+                .save_source(&buffer.path, buffer.revision, "changed".into())
                 .is_err()
         );
-        assert!(session.apply(&buffer.path, buffer.revision).is_err());
         assert_eq!(fs::read_to_string(source).unwrap(), "fn dependency() {}\n");
-    }
-    #[test]
-    fn source_conflicts_and_invalid_destinations_preserve_drafts() {
-        let (root, _dep, mut session, path) = setup();
-        let draft = session
-            .save_override(
-                "finding",
-                "justification",
-                0,
-                "// SAFETY: pointer is valid".into(),
-            )
-            .unwrap();
-        assert!(
-            session
-                .prepare_override_apply(&path, draft.revision, Some("/outside.toml"))
-                .is_err()
-        );
-        fs::write(&path, "changed dependency").unwrap();
-        assert!(
-            session
-                .prepare_override_apply(&path, draft.revision, None)
-                .is_err()
-        );
-        assert!(session.drafts()[0].conflict);
-        assert!(!root.path().join("sniff-test-overrides.toml").exists());
     }
 }

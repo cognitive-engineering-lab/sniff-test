@@ -4086,7 +4086,7 @@ fn dependency_semantics_have_verified_source_and_call_sites() {
 }
 
 #[test]
-fn dependency_override_drafts_discharge_exact_sites_and_propagate_contracts() {
+fn dependency_override_saves_discharge_exact_sites_and_propagate_contracts() {
     use sniff_test_audit_bridge::{AnalysisConfig, Session};
     let repo = repo_root();
     let binary = PathBuf::from(env!("CARGO_BIN_EXE_cargo-sniff-test"));
@@ -4153,30 +4153,29 @@ fn dependency_override_drafts_discharge_exact_sites_and_propagate_contracts() {
     let original = session.buffer(&target.location.path).unwrap();
     assert_eq!(
         session
-            .override_template(&finding.id, "justification", original.revision)
-            .unwrap(),
+            .open_override_editor(sniff_test_audit_bridge::OverrideEditorTarget::Finding {
+                id: finding.id.clone(),
+                action: "justification".into(),
+                revision: original.revision,
+                generation: session.analysis.generation
+            })
+            .unwrap()
+            .document,
         "// PANIC: "
     );
-    let draft = session
-        .save_override(
-            &finding.id,
-            "justification",
-            original.revision,
-            "// PANIC: This exact assertion is intentional.".into(),
-        )
-        .unwrap();
-    assert_eq!(draft.content, source);
-    assert!(
-        session
-            .diff(&draft.path)
-            .unwrap()
-            .contains("+    // PANIC:")
+    let generation = session.analysis.generation;
+    let draft = commit_audit_override(
+        &mut session,
+        sniff_test_audit_bridge::OverrideEditorTarget::Finding {
+            id: finding.id.clone(),
+            action: "justification".into(),
+            revision: original.revision,
+            generation,
+        },
+        "// PANIC: This exact assertion is intentional.",
     );
-    let plan = session
-        .prepare_override_apply(&draft.path, draft.revision, None)
-        .unwrap();
-    assert!(!plan.existing);
-    session.apply_overrides(&plan.token, false).unwrap();
+    assert_eq!(draft.content, source);
+    assert_eq!(draft.saved_overrides.len(), 1);
     assert_eq!(fs::read_to_string(&dependency).unwrap(), source);
     finish(&mut session, run());
     assert_eq!(
@@ -4200,20 +4199,17 @@ fn dependency_override_drafts_discharge_exact_sites_and_propagate_contracts() {
     assert_eq!(relocated_findings.len(), 1, "{}", relocated.stderr);
     let remaining = session.analysis.findings[0].clone();
     let buffer = session.buffer(&draft.path).unwrap();
-    let draft = session
-        .save_override(
-            &remaining.id,
-            "obligation",
-            buffer.revision,
-            "/// # Panics\n///\n/// - flag: The caller must supply an appropriate flag.".into(),
-        )
-        .unwrap();
-    let plan = session
-        .prepare_override_apply(&draft.path, draft.revision, None)
-        .unwrap();
-    assert!(plan.existing);
-    assert!(session.apply_overrides(&plan.token, false).is_err());
-    session.apply_overrides(&plan.token, true).unwrap();
+    let generation = session.analysis.generation;
+    commit_audit_override(
+        &mut session,
+        sniff_test_audit_bridge::OverrideEditorTarget::Finding {
+            id: remaining.id.clone(),
+            action: "obligation".into(),
+            revision: buffer.revision,
+            generation,
+        },
+        "/// # Panics\n///\n/// - flag: The caller must supply an appropriate flag.",
+    );
     finish(&mut session, run());
     assert!(
         session
@@ -4225,15 +4221,52 @@ fn dependency_override_drafts_discharge_exact_sites_and_propagate_contracts() {
         session.analysis.log
     );
     assert_eq!(fs::read_to_string(&dependency).unwrap(), source);
-    // A dependency edit must not silently reuse the justification.
+    // Source hashes protect the editing session; persisted overrides use line selectors.
+    let buffer = session.buffer(&draft.path).unwrap();
+    let editor = session
+        .open_override_editor(sniff_test_audit_bridge::OverrideEditorTarget::Saved {
+            path: buffer.path,
+            revision: buffer.revision,
+            index: 0,
+        })
+        .unwrap();
+    let overrides = fs::read_to_string(&editor.destination).unwrap();
     fs::write(&dependency, source.replace("first", "changed")).unwrap();
-    let changed = run();
     assert!(
-        changed.stderr.contains("stale") && changed.stderr.contains("override"),
-        "{}\n{}",
-        changed.stdout,
-        changed.stderr
+        session
+            .commit_override(
+                &editor.token,
+                &editor.destination,
+                None,
+                "// PANIC: A new explanation.".into()
+            )
+            .is_err()
     );
+    assert_eq!(fs::read_to_string(&editor.destination).unwrap(), overrides);
+}
+
+fn commit_audit_override(
+    session: &mut sniff_test_audit_bridge::Session,
+    target: sniff_test_audit_bridge::OverrideEditorTarget,
+    document: &str,
+) -> sniff_test_audit_bridge::Buffer {
+    let editor = session.open_override_editor(target).unwrap();
+    let filename = (!editor
+        .destinations
+        .iter()
+        .find(|d| d.path == editor.destination)
+        .unwrap()
+        .exists)
+        .then_some("sniff-test-overrides.toml");
+    session
+        .commit_override(
+            &editor.token,
+            &editor.destination,
+            filename,
+            document.into(),
+        )
+        .unwrap()
+        .0
 }
 
 #[test]
@@ -4296,22 +4329,27 @@ fn dependency_safety_override_uses_the_shared_annotation_framework() {
     let buffer = session.buffer(&target.location.path).unwrap();
     assert_eq!(
         session
-            .override_template(&finding.id, "justification", buffer.revision)
-            .unwrap(),
+            .open_override_editor(sniff_test_audit_bridge::OverrideEditorTarget::Finding {
+                id: finding.id.clone(),
+                action: "justification".into(),
+                revision: buffer.revision,
+                generation: session.analysis.generation
+            })
+            .unwrap()
+            .document,
         "// SAFETY: "
     );
-    let draft = session
-        .save_override(
-            &finding.id,
-            "justification",
-            buffer.revision,
-            "// SAFETY: the caller provides a valid pointer".into(),
-        )
-        .unwrap();
-    let plan = session
-        .prepare_override_apply(&draft.path, draft.revision, None)
-        .unwrap();
-    session.apply_overrides(&plan.token, false).unwrap();
+    let generation = session.analysis.generation;
+    let draft = commit_audit_override(
+        &mut session,
+        sniff_test_audit_bridge::OverrideEditorTarget::Finding {
+            id: finding.id.clone(),
+            action: "justification".into(),
+            revision: buffer.revision,
+            generation,
+        },
+        "// SAFETY: the caller provides a valid pointer",
+    );
     let output = run();
     let findings = sniff_test_audit_bridge::parse_reports(output.stdout.as_bytes())
         .unwrap_or_else(|e| panic!("{e}: {}", output.stderr));
@@ -4325,5 +4363,5 @@ fn dependency_safety_override_uses_the_shared_annotation_framework() {
         !findings.is_empty(),
         "unrelated dependency obligations must remain"
     );
-    assert_eq!(fs::read_to_string(&draft.path).unwrap(), buffer.original);
+    assert_eq!(fs::read_to_string(&draft.path).unwrap(), buffer.content);
 }

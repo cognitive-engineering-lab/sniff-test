@@ -540,13 +540,18 @@ rustdoc and select the definition's start line; Audit preserves the existing
 effective documentation and other contracts in that replacement. Distinct
 justifications on one line share a value with one header per effect group.
 
-Dependency files remain unchanged. Saved drafts present virtual source diffs;
-applying them merges source-selector entries into the selected override TOML
-while preserving unrelated entries and comments. Existing-file edits require
-confirmation. New files are registered in the active configuration. Source hashes
-protect the editing session; saved overrides follow the line-selector matching
-rules described above. Overlapping ranges and obligation/justification key
-collisions are rejected before writing.
+Dependency files remain unchanged. **Save** in the documentation popup merges
+the edited annotation into the selected override TOML, preserving unrelated entries
+and comments. Existing-file edits need no additional confirmation. When creating a
+file, Audit asks for a filename, prefilled with `sniff-test-overrides.toml`, and
+registers it beside the active configuration. Saving does not run analysis; users
+can continue saving overrides before clicking **Reanalyze**. Saved overrides remain
+editable after restarting the server; older draft state is not restored or migrated. Source edits autosave after a
+one-second pause, with pending writes flushed before navigation and manual
+reanalysis; editing pauses while analysis runs. Source hashes and file snapshots protect the editing session; saved
+overrides follow the line-selector matching rules described above.
+Overlapping ranges and obligation/justification key collisions are rejected before
+writing.
 
 
 ## JSON Output

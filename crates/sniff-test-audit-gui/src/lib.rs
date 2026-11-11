@@ -14,7 +14,7 @@ use axum::{
 };
 use serde::Deserialize;
 use serde_json::{Value, json};
-use sniff_test_audit_bridge::Session;
+use sniff_test_audit_bridge::{OverrideEditorTarget, Session};
 use std::{
     convert::Infallible,
     sync::{Arc, Mutex},
@@ -88,19 +88,11 @@ fn router(app: App) -> Router {
         .route("/events", get(events))
         .route("/findings", get(findings))
         .route("/finding", get(finding))
-        .route("/buffer", get(buffer).post(update))
-        .route("/drafts", get(drafts))
-        .route("/diff", get(diff))
-        .route("/propose", post(propose))
+        .route("/buffer", get(buffer))
+        .route("/source/save", post(save_source))
         .route("/template", post(template))
-        .route("/override/template", post(override_template))
-        .route("/override/save", post(override_save))
-        .route("/override/edit", post(override_edit))
-        .route("/override/discard", post(override_discard))
-        .route("/override/prepare", post(override_prepare))
-        .route("/override/apply", post(override_apply))
-        .route("/apply", post(apply))
-        .route("/discard", post(discard))
+        .route("/override/editor", post(override_editor))
+        .route("/override/commit", post(override_commit))
         .layer(middleware::from_fn_with_state(app.clone(), authorize));
     Router::new()
         .nest("/api/v1", api)
@@ -173,14 +165,14 @@ async fn workspace(State(app): State<App>) -> ApiResult {
 }
 fn status(session: &Session) -> Value {
     let a = &session.analysis;
-    json!({"generation":a.generation,"running":a.running,"stale":a.stale,"status":a.status,"exit_code":a.exit_code,"log":a.log,"count":a.findings.len()})
+    json!({"generation":a.generation,"running":a.running,"stale":a.stale,"overrides_changed":a.overrides_changed,"status":a.status,"exit_code":a.exit_code,"log":a.log,"count":a.findings.len()})
 }
 async fn analysis(State(app): State<App>) -> ApiResult {
     Ok(Json(status(&app.session.lock().unwrap())))
 }
 async fn analyze(State(app): State<App>) -> ApiResult {
     start_analysis(&app)?;
-    Ok(Json(json!({"started":true})))
+    Ok(Json(json!({"status":status(&app.session.lock().unwrap())})))
 }
 async fn events(State(app): State<App>) -> impl IntoResponse {
     let (tx, rx) = tokio::sync::mpsc::channel::<Result<Event, Infallible>>(4);
@@ -465,46 +457,31 @@ struct File {
 async fn buffer(State(app): State<App>, Query(file): Query<File>) -> ApiResult {
     Ok(Json(json!(app.session.lock().unwrap().buffer(&file.path)?)))
 }
-async fn diff(State(app): State<App>, Query(file): Query<File>) -> ApiResult {
-    Ok(Json(
-        json!({"diff":app.session.lock().unwrap().diff(&file.path)?}),
-    ))
-}
-async fn drafts(State(app): State<App>) -> ApiResult {
-    Ok(Json(json!(app.session.lock().unwrap().drafts())))
-}
 #[derive(Deserialize)]
 struct Update {
+    finding: Option<String>,
     path: String,
     revision: u64,
     content: String,
 }
-async fn update(State(app): State<App>, Json(edit): Json<Update>) -> ApiResult {
-    Ok(Json(json!(app.session.lock().unwrap().update(
-        &edit.path,
-        edit.revision,
-        edit.content
-    )?)))
-}
-#[derive(Deserialize)]
-struct Revision {
-    path: String,
-    revision: u64,
-}
-async fn apply(State(app): State<App>, Json(edit): Json<Revision>) -> ApiResult {
-    app.session
-        .lock()
-        .unwrap()
-        .apply(&edit.path, edit.revision)?;
-    start_analysis(&app)?;
-    Ok(Json(json!({"applied":true})))
-}
-async fn discard(State(app): State<App>, Json(edit): Json<Revision>) -> ApiResult {
-    app.session
-        .lock()
-        .unwrap()
-        .discard(&edit.path, edit.revision)?;
-    Ok(Json(json!({"discarded":true})))
+async fn save_source(State(app): State<App>, Json(edit): Json<Update>) -> ApiResult {
+    let mut session = app.session.lock().unwrap();
+    let buffer = session.save_source(&edit.path, edit.revision, edit.content)?;
+    let targets = edit
+        .finding
+        .as_ref()
+        .and_then(|id| {
+            session
+                .analysis
+                .findings
+                .iter()
+                .find(|finding| &finding.id == id)
+        })
+        .and_then(|finding| finding.audit.as_ref())
+        .map(|audit| &audit.targets);
+    Ok(Json(
+        json!({"buffer":buffer,"status":status(&session),"finding":edit.finding,"targets":targets}),
+    ))
 }
 #[derive(Deserialize)]
 struct TemplateRequest {
@@ -520,137 +497,33 @@ async fn template(State(app): State<App>, Json(edit): Json<TemplateRequest>) -> 
     )?)))
 }
 
-#[derive(Deserialize)]
-struct Proposal {
-    id: String,
-    action: String,
-    explanation: String,
-    revision: u64,
-}
-async fn propose(State(app): State<App>, Json(edit): Json<Proposal>) -> ApiResult {
-    Ok(Json(json!(app.session.lock().unwrap().propose(
-        &edit.id,
-        &edit.action,
-        &edit.explanation,
-        edit.revision
-    )?)))
-}
-
-async fn override_template(State(app): State<App>, Json(edit): Json<TemplateRequest>) -> ApiResult {
-    let mut session = app.session.lock().unwrap();
-    let document = session.override_template(&edit.id, &edit.action, edit.revision)?;
-    let obligation_documentation = (edit.action == "justification")
-        .then(|| {
-            session
-                .analysis
-                .findings
-                .iter()
-                .find(|f| f.id == edit.id)
-                .and_then(|f| f.audit.as_ref())
-                .and_then(|a| a.obligation_documentation.as_ref())
-        })
-        .flatten();
-    Ok(Json(
-        json!({"document":document,"generation":session.analysis.generation,"obligation_documentation":obligation_documentation}),
-    ))
-}
-#[derive(Deserialize)]
-struct OverrideSave {
-    id: String,
-    action: String,
-    revision: u64,
-    generation: u64,
-    document: String,
-}
-async fn override_save(State(app): State<App>, Json(edit): Json<OverrideSave>) -> ApiResult {
-    let mut session = app.session.lock().unwrap();
-    if edit.generation != session.analysis.generation {
-        return Err(
-            anyhow::anyhow!("Analysis changed; reopen the override editor before saving.").into(),
-        );
-    }
-    Ok(Json(json!(session.save_override(
-        &edit.id,
-        &edit.action,
-        edit.revision,
-        edit.document
-    )?)))
-}
-#[derive(Deserialize)]
-struct OverrideEdit {
-    path: String,
-    revision: u64,
-    index: usize,
-    document: String,
-}
-async fn override_edit(State(app): State<App>, Json(edit): Json<OverrideEdit>) -> ApiResult {
-    Ok(Json(json!(app.session.lock().unwrap().edit_override(
-        &edit.path,
-        edit.revision,
-        edit.index,
-        edit.document
-    )?)))
-}
-
-#[derive(Deserialize)]
-struct OverrideDiscard {
-    path: String,
-    revision: u64,
-    index: usize,
-}
-async fn override_discard(State(app): State<App>, Json(edit): Json<OverrideDiscard>) -> ApiResult {
-    let mut session = app.session.lock().unwrap();
-    let before = session.buffer(&edit.path)?;
-    let finding = before.annotations.get(edit.index).and_then(|draft| {
-        session
-            .analysis
-            .findings
-            .iter()
-            .find(|finding| {
-                finding.effect.as_deref() == Some(draft.annotation.effect.as_str())
-                    && finding.audit.as_ref().is_some_and(|audit| {
-                        audit.targets.iter().any(|target| {
-                            target.action == draft.annotation.action
-                                && target.selector.as_ref().is_some_and(|selector| {
-                                    selector.same_target(&draft.annotation.selector)
-                                })
-                        })
-                    })
-            })
-            .cloned()
-    });
-    let buffer = session.discard_override(&edit.path, edit.revision, edit.index)?;
-    Ok(Json(json!({"buffer": buffer, "finding": finding})))
-}
-
-#[derive(Deserialize)]
-struct OverridePrepare {
-    path: String,
-    revision: u64,
-    destination: Option<String>,
-}
-async fn override_prepare(State(app): State<App>, Json(edit): Json<OverridePrepare>) -> ApiResult {
+async fn override_editor(
+    State(app): State<App>,
+    Json(target): Json<OverrideEditorTarget>,
+) -> ApiResult {
     Ok(Json(json!(
-        app.session.lock().unwrap().prepare_override_apply(
-            &edit.path,
-            edit.revision,
-            edit.destination.as_deref()
-        )?
+        app.session.lock().unwrap().open_override_editor(target)?
     )))
 }
+
 #[derive(Deserialize)]
-struct OverrideApply {
+struct OverrideCommit {
     token: String,
-    #[serde(default)]
-    confirmed: bool,
+    destination: String,
+    filename: Option<String>,
+    document: String,
 }
-async fn override_apply(State(app): State<App>, Json(edit): Json<OverrideApply>) -> ApiResult {
-    app.session
-        .lock()
-        .unwrap()
-        .apply_overrides(&edit.token, edit.confirmed)?;
-    start_analysis(&app)?;
-    Ok(Json(json!({"applied":true})))
+async fn override_commit(State(app): State<App>, Json(edit): Json<OverrideCommit>) -> ApiResult {
+    let mut session = app.session.lock().unwrap();
+    let (buffer, destination) = session.commit_override(
+        &edit.token,
+        &edit.destination,
+        edit.filename.as_deref(),
+        edit.document,
+    )?;
+    Ok(Json(
+        json!({"buffer": buffer, "destination": destination, "status": status(&session)}),
+    ))
 }
 
 #[cfg(test)]

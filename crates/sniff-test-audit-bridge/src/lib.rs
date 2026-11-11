@@ -1,7 +1,7 @@
 //! Shared auditing workflow. No HTTP, terminal, browser, or rustc dependencies.
 mod overrides;
 use anyhow::{Context, Result, bail, ensure};
-pub use overrides::{OverrideApplyPlan, OverrideDraft};
+pub use overrides::{OverrideEditor, OverrideEditorTarget, SavedOverride};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sniff_test_report::{
@@ -160,6 +160,7 @@ pub struct Analysis {
     pub generation: u64,
     pub running: bool,
     pub stale: bool,
+    pub overrides_changed: bool,
     pub status: String,
     pub exit_code: Option<i32>,
     pub log: String,
@@ -230,18 +231,12 @@ fn string_list(value: &Value) -> Vec<String> {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Buffer {
     pub path: String,
-    pub original: String,
     pub content: String,
+    pub hash: String,
     pub revision: u64,
     pub writable: bool,
-    pub conflict: bool,
     #[serde(default)]
-    pub annotations: Vec<OverrideDraft>,
-}
-impl Buffer {
-    pub fn dirty(&self) -> bool {
-        self.original != self.content || self.annotations.iter().any(|a| !a.applied)
-    }
+    pub saved_overrides: Vec<SavedOverride>,
 }
 
 pub struct Session {
@@ -249,12 +244,12 @@ pub struct Session {
     pub config: AnalysisConfig,
     pub analysis: Analysis,
     buffers: BTreeMap<String, Buffer>,
-    draft_file: PathBuf,
+    metadata_file: PathBuf,
     allowed_external: BTreeSet<PathBuf>,
     definition_sources: BTreeSet<PathBuf>,
     dependency_sources: BTreeSet<PathBuf>,
     _lock: fs::File,
-    pending_override: Option<OverrideApplyPlan>,
+    pending_editor: Option<OverrideEditor>,
 }
 impl Session {
     pub fn open(root: PathBuf, target: PathBuf, config: AnalysisConfig) -> Result<Self> {
@@ -266,21 +261,35 @@ impl Session {
             .write(true)
             .open(target.join("session.lock"))?;
         fs2::FileExt::try_lock_exclusive(&lock)
-            .context("another audit session is using these drafts")?;
-        let draft_file = target.join("drafts.json");
-        let mut buffers: BTreeMap<String, Buffer> = if draft_file.exists() {
-            serde_json::from_slice(&fs::read(&draft_file)?)
-                .context("cannot restore audit drafts")?
+            .context("another audit session is using this workspace")?;
+        let metadata_file = target.join("saved-overrides.json");
+        let saved: BTreeMap<String, Vec<SavedOverride>> = if metadata_file.exists() {
+            serde_json::from_slice(&fs::read(&metadata_file)?)
+                .context("cannot restore saved override metadata")?
         } else {
             BTreeMap::new()
         };
-        for buffer in buffers.values_mut() {
-            buffer.conflict =
-                fs::read_to_string(&buffer.path).ok().as_ref() != Some(&buffer.original);
-            buffer.writable = buffer.writable
-                && Path::new(&buffer.path)
-                    .canonicalize()
-                    .is_ok_and(|p| p.starts_with(&root));
+        let mut buffers = BTreeMap::new();
+        for (path, mut saved_overrides) in saved {
+            let Ok(content) = fs::read_to_string(&path) else {
+                continue;
+            };
+            let hash = content_hash(content.as_bytes());
+            saved_overrides.retain(|saved| saved.location.hash == hash);
+            if saved_overrides.is_empty() {
+                continue;
+            }
+            buffers.insert(
+                path.clone(),
+                Buffer {
+                    path,
+                    content,
+                    hash,
+                    revision: 0,
+                    writable: false,
+                    saved_overrides,
+                },
+            );
         }
         Ok(Self {
             root,
@@ -291,22 +300,24 @@ impl Session {
                 ..Default::default()
             },
             buffers,
-            draft_file,
+            metadata_file,
             allowed_external: BTreeSet::new(),
             definition_sources: BTreeSet::new(),
             dependency_sources: BTreeSet::new(),
             _lock: lock,
-            pending_override: None,
+            pending_editor: None,
         })
     }
     fn persist(&self) -> Result<()> {
-        let dirty: BTreeMap<_, _> = self
+        let saved: BTreeMap<_, _> = self
             .buffers
             .iter()
-            .filter(|(_, b)| b.dirty() || !b.annotations.is_empty())
+            .filter(|(_, buffer)| !buffer.saved_overrides.is_empty())
+            .map(|(path, buffer)| (path, &buffer.saved_overrides))
             .collect();
-        atomic_write(&self.draft_file, &serde_json::to_vec(&dirty)?)
+        atomic_write(&self.metadata_file, &serde_json::to_vec(&saved)?)
     }
+
     fn checked_path(&self, path: &str, write: bool) -> Result<PathBuf> {
         let candidate = Path::new(path);
         let path = if candidate.is_absolute() {
@@ -334,7 +345,7 @@ impl Session {
                         || self
                             .buffers
                             .get(path.to_string_lossy().as_ref())
-                            .is_some_and(|b| !b.annotations.is_empty()))),
+                            .is_some_and(|b| !b.saved_overrides.is_empty()))),
             "source is outside this workspace"
         );
         Ok(path)
@@ -355,128 +366,123 @@ impl Session {
         let disk = fs::read_to_string(&resolved).context("source is not readable UTF-8")?;
         let buffer = self.buffers.entry(key.clone()).or_insert_with(|| Buffer {
             path: key,
-            original: disk.clone(),
             content: disk.clone(),
+            hash: content_hash(disk.as_bytes()),
             revision: 0,
             writable: resolved.starts_with(&self.root)
                 && !self.dependency_sources.contains(&resolved),
-            conflict: false,
-            annotations: Vec::new(),
+            saved_overrides: Vec::new(),
         });
         if self.dependency_sources.contains(&resolved) {
             buffer.writable = false;
         }
-        if !buffer.dirty() && buffer.original != disk {
-            buffer.original = disk.clone();
+        if buffer.content != disk {
             buffer.content = disk.clone();
+            buffer.hash = content_hash(disk.as_bytes());
             buffer.revision += 1;
             self.analysis.stale = true;
         }
         buffer
-            .annotations
-            .retain(|a| !a.applied || a.location.hash == content_hash(disk.as_bytes()));
-        buffer.conflict = buffer.original != disk;
+            .saved_overrides
+            .retain(|saved| saved.location.hash == content_hash(disk.as_bytes()));
         Ok(buffer.clone())
     }
-    pub fn update(&mut self, path: &str, revision: u64, content: String) -> Result<Buffer> {
+    /// Atomically save the editor snapshot without starting analysis.
+    pub fn save_source(&mut self, path: &str, revision: u64, content: String) -> Result<Buffer> {
         ensure!(
             !self.analysis.running,
             "wait for analysis to finish before editing"
         );
-        self.checked_path(path, true)?;
-        let mut buffer = self.buffer(path)?;
+        let resolved = self.checked_path(path, true)?;
+        let key = resolved.to_string_lossy().into_owned();
+        let buffer = self
+            .buffers
+            .get(&key)
+            .context("open the source file before saving")?;
         ensure!(
             buffer.revision == revision,
-            "draft revision conflict; reload the buffer"
+            "source revision conflict; reload the file"
         );
+        let disk = fs::read_to_string(&resolved)?;
+        if disk != buffer.content {
+            self.analysis.stale = true;
+            bail!("Source changed outside audit. Copy your edits before reloading the file.");
+        }
+        if content == buffer.content {
+            return Ok(buffer.clone());
+        }
+        let previous = buffer.content.clone();
+        atomic_write(&resolved, content.as_bytes())?;
+        self.rebase_edit_targets(&key, &previous, &content);
+        let buffer = self.buffers.get_mut(&key).unwrap();
+        buffer.hash = content_hash(content.as_bytes());
         buffer.content = content;
         buffer.revision += 1;
-        let previous = self.buffers.insert(buffer.path.clone(), buffer.clone());
-        if let Err(error) = self.persist() {
-            if let Some(previous) = previous {
-                self.buffers.insert(previous.path.clone(), previous);
-            }
-            return Err(error);
-        }
-        Ok(buffer)
+        self.analysis.stale = true;
+        Ok(buffer.clone())
     }
-    pub fn drafts(&mut self) -> Vec<Buffer> {
-        for buffer in self.buffers.values_mut() {
-            buffer.conflict =
-                fs::read_to_string(&buffer.path).ok().as_ref() != Some(&buffer.original);
-        }
-        self.buffers
-            .values()
-            .filter(|b| b.dirty())
-            .cloned()
-            .collect()
-    }
-    pub fn diff(&mut self, path: &str) -> Result<String> {
-        let b = self.buffer(path)?;
-        let preview = self.override_preview(&b)?;
-        let original = self.override_original_preview(&b)?;
-        Ok(similar::TextDiff::from_lines(&original, &preview)
-            .unified_diff()
-            .header(&b.path, &b.path)
-            .to_string())
-    }
-    pub fn discard(&mut self, path: &str, revision: u64) -> Result<()> {
-        ensure!(!self.analysis.running, "wait for analysis to finish");
-        let key = if self.buffers.contains_key(path) {
-            path.to_owned()
-        } else {
-            self.checked_path(path, true)?
-                .to_string_lossy()
-                .into_owned()
-        };
-        let path = key.as_str();
-        let b = self.buffers.get(path).context("unknown draft")?;
-        ensure!(b.revision == revision, "draft revision conflict");
-        if !b.writable {
-            let previous = b.clone();
-            let b = self.buffers.get_mut(path).unwrap();
-            for annotation in &mut b.annotations {
-                if let Some(document) = annotation.previous_document.clone() {
-                    annotation.annotation.document = document;
-                    annotation.applied = true;
+    /// Keep verified attachment spans usable through observed edits. Effect
+    /// inference and recorded trace locations remain stale until reanalysis.
+    fn rebase_edit_targets(&mut self, path: &str, previous: &str, content: &str) {
+        let diff = similar::TextDiff::configure()
+            .timeout(std::time::Duration::from_millis(100))
+            .diff_chars(previous, content);
+        let (mut old_offset, mut new_offset) = (0, 0);
+        let mut pending = None;
+        let mut edits = Vec::new();
+        for change in diff.iter_all_changes() {
+            let bytes = change.value().len();
+            match change.tag() {
+                similar::ChangeTag::Equal => {
+                    if let Some((start, inserted_at)) = pending.take() {
+                        edits.push((start, old_offset, new_offset - inserted_at));
+                    }
+                    old_offset += bytes;
+                    new_offset += bytes;
+                }
+                similar::ChangeTag::Delete => {
+                    pending.get_or_insert((old_offset, new_offset));
+                    old_offset += bytes;
+                }
+                similar::ChangeTag::Insert => {
+                    pending.get_or_insert((old_offset, new_offset));
+                    new_offset += bytes;
                 }
             }
-            b.annotations.retain(|a| a.applied);
-            b.revision += 1;
-            if let Err(error) = self.persist() {
-                self.buffers.insert(path.into(), previous);
-                return Err(error);
-            }
-            return Ok(());
         }
-        let removed = self.buffers.remove(path);
-        if let Err(error) = self.persist() {
-            if let Some(b) = removed {
-                self.buffers.insert(path.into(), b);
-            }
-            return Err(error);
+        if let Some((start, inserted_at)) = pending {
+            edits.push((start, old_offset, new_offset - inserted_at));
         }
-        Ok(())
-    }
-    pub fn apply(&mut self, path: &str, revision: u64) -> Result<()> {
-        ensure!(!self.analysis.running, "wait for analysis to finish");
-        let resolved = self.checked_path(path, true)?;
-        let b = self.buffer(path)?;
-        ensure!(b.revision == revision, "draft revision conflict");
-        ensure!(
-            !b.conflict,
-            "source changed outside audit; preserve your draft and resolve the conflict first"
-        );
-        ensure!(
-            fs::read_to_string(&resolved)? == b.original,
-            "source changed before apply"
-        );
-        atomic_write(&resolved, b.content.as_bytes())?;
-        let saved = self.buffers.get_mut(&b.path).unwrap();
-        saved.original = saved.content.clone();
-        saved.revision += 1;
-        self.analysis.stale = true;
-        self.persist()
+        let old_hash = content_hash(previous.as_bytes());
+        let new_hash = content_hash(content.as_bytes());
+        for finding in &mut self.analysis.findings {
+            let Some(audit) = &mut finding.audit else {
+                continue;
+            };
+            for target in &mut audit.targets {
+                let location = &mut target.location;
+                if location.path != path || !location.available || location.hash != old_hash {
+                    continue;
+                }
+                if location.start > location.end || location.end > previous.len() {
+                    location.available = false;
+                    continue;
+                }
+                for &(start, end, inserted) in edits.iter().rev() {
+                    if location.start >= end {
+                        location.start = start + inserted + (location.start - end);
+                        location.end = start + inserted + (location.end - end);
+                    } else if location.end > start {
+                        location.available = false;
+                        break;
+                    }
+                }
+                if !location.available {
+                    continue;
+                }
+                location.hash = new_hash.clone();
+            }
+        }
     }
     pub fn begin_analysis(&mut self) -> Result<AnalysisConfig> {
         ensure!(!self.analysis.running, "analysis already running");
@@ -559,7 +565,25 @@ impl Session {
                 }
                 .into();
                 self.analysis.findings = findings;
+                // Reanalysis consumed disk source. Refresh acknowledged snapshots so
+                // opening an externally changed file does not invalidate that analysis.
+                for buffer in self.buffers.values_mut() {
+                    if let Ok(content) = fs::read_to_string(&buffer.path) {
+                        if buffer.content != content {
+                            buffer.hash = content_hash(content.as_bytes());
+                            buffer.content = content;
+                            buffer.revision += 1;
+                        }
+                        let hash = content_hash(buffer.content.as_bytes());
+                        buffer
+                            .saved_overrides
+                            .retain(|saved| saved.location.hash == hash);
+                    }
+                }
                 self.analysis.stale = false;
+                if output.status.success() {
+                    self.analysis.overrides_changed = false;
+                }
             }
             Err(error) => {
                 self.analysis.status = "failed".into();
@@ -576,8 +600,8 @@ impl Session {
         revision: u64,
     ) -> Result<TemplateEdit> {
         ensure!(
-            !self.analysis.running && !self.analysis.stale,
-            "reanalyze saved source before inserting documentation"
+            !self.analysis.running,
+            "wait for analysis to finish before inserting documentation"
         );
         let audit = self
             .analysis
@@ -591,63 +615,21 @@ impl Session {
             .iter()
             .find(|t| t.action == action)
             .context("no verified attachment location; edit source manually")?;
+        ensure!(
+            target.location.available,
+            "documentation attachment changed; reanalyze before inserting a template"
+        );
         self.checked_path(&target.location.path, true)?;
         let buffer = self.buffer(&target.location.path)?;
         ensure!(
-            buffer.revision == revision && !buffer.dirty() && !buffer.conflict,
-            "apply or discard edits and reanalyze before inserting a template"
+            buffer.revision == revision,
+            "source revision changed; reanalyze before inserting a template"
         );
         ensure!(
             content_hash(buffer.content.as_bytes()) == target.location.hash,
             "source changed since analysis; reanalyze"
         );
         template_edit(&buffer, target, &audit)
-    }
-
-    pub fn propose(
-        &mut self,
-        id: &str,
-        action: &str,
-        explanation: &str,
-        revision: u64,
-    ) -> Result<Buffer> {
-        ensure!(
-            !self.analysis.running && !self.analysis.stale,
-            "reanalyze saved source before generating documentation"
-        );
-        ensure!(!explanation.trim().is_empty(), "write an explanation first");
-        let finding = self
-            .analysis
-            .findings
-            .iter()
-            .find(|f| f.id == id)
-            .context("finding no longer exists")?;
-        let audit = finding
-            .audit
-            .clone()
-            .context("this finding has no editable source metadata")?;
-        let target = audit
-            .targets
-            .iter()
-            .find(|t| t.action == action)
-            .context("this action requires manual source editing")?;
-        let buffer = self.buffer(&target.location.path)?;
-        ensure!(
-            !buffer.dirty() && !buffer.conflict && buffer.revision == revision,
-            "apply or discard this file's draft and reanalyze before generating another proposal"
-        );
-        ensure!(
-            content_hash(buffer.original.as_bytes()) == target.location.hash,
-            "source changed since analysis; reanalyze"
-        );
-        let content = documentation_edit(
-            &buffer.content,
-            &target.location,
-            action,
-            &audit,
-            explanation,
-        )?;
-        self.update(&buffer.path, revision, content)
     }
 }
 
@@ -1044,45 +1026,125 @@ mod tests {
         serde_json::json!({"reason":"sniff-test-artifact","format-version":version,"tool-version":"test","rustc-version":"test","artifact":{"crate-name":name},"findings":[{"reason":"effect"}]}).to_string()
     }
     #[test]
-    fn drafts_survive_restart_and_never_overwrite_external_changes() {
+    fn source_saves_write_disk_and_reject_stale_or_external_changes() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("lib.rs");
         fs::write(&path, "old\r\nλ").unwrap();
         let path = path.to_str().unwrap();
-        {
-            let mut s = session(dir.path());
-            let b = s.buffer(path).unwrap();
-            s.update(path, b.revision, "new\r\nλ".into()).unwrap();
-            assert_eq!(fs::read_to_string(path).unwrap(), "old\r\nλ");
-            assert!(s.update(path, b.revision, "stale".into()).is_err());
-        }
         let mut s = session(dir.path());
         let b = s.buffer(path).unwrap();
-        assert_eq!(b.content, "new\r\nλ");
+        let saved = s.save_source(path, b.revision, "new\r\nλ".into()).unwrap();
+        assert_eq!(fs::read_to_string(path).unwrap(), saved.content);
+        assert!(s.analysis.stale);
+        assert!(!s.metadata_file.exists());
+        assert!(s.save_source(path, b.revision, "outdated".into()).is_err());
         fs::write(path, "external").unwrap();
-        assert!(s.apply(path, b.revision).is_err());
+        assert!(
+            s.save_source(path, saved.revision, "overwrite".into())
+                .is_err()
+        );
         assert_eq!(fs::read_to_string(path).unwrap(), "external");
-        assert!(s.drafts()[0].conflict);
-        s.discard(path, b.revision).unwrap();
+        assert_eq!(s.buffers[&saved.path].content, saved.content);
+        let reloaded = s.buffer(path).unwrap();
+        assert_eq!(reloaded.content, "external");
+        assert!(reloaded.revision > saved.revision);
+        drop(s);
+        let mut s = session(dir.path());
         assert_eq!(s.buffer(path).unwrap().content, "external");
     }
     #[test]
-    fn apply_is_per_file_and_analysis_blocks_mutation() {
+    fn observed_edits_rebase_verified_targets_without_requiring_fresh_analysis() {
         let dir = tempfile::tempdir().unwrap();
+        let source = "pub fn allocate() {\n    allocate();\n}\n";
         let path = dir.path().join("lib.rs");
-        fs::write(&path, "old").unwrap();
-        let path = path.to_str().unwrap();
+        fs::write(&path, source).unwrap();
         let mut s = session(dir.path());
-        let b = s.buffer(path).unwrap();
-        let draft = s.update(path, b.revision, "new".into()).unwrap();
-        s.begin_analysis().unwrap();
-        assert!(s.apply(path, draft.revision).is_err());
-        assert!(s.begin_analysis().is_err());
-        s.finish_analysis(Err(anyhow::anyhow!("compiler failed")));
-        s.apply(path, draft.revision).unwrap();
-        assert_eq!(fs::read_to_string(path).unwrap(), "new");
-        assert!(s.drafts().is_empty());
+        let buffer = s.buffer(path.to_str().unwrap()).unwrap();
+        let start = source.rfind("allocate()").unwrap();
+        let call = Location {
+            path: buffer.path.clone(),
+            source_id: "source".into(),
+            hash: buffer.hash.clone(),
+            start,
+            end: start + "allocate();".len(),
+            available: true,
+        };
+        let mut function = call.clone();
+        function.start = 0;
+        function.end = source.find('{').unwrap() + 1;
+        let mut audit = metadata(call.clone());
+        audit.targets = vec![
+            EditTarget {
+                action: "justification".into(),
+                location: call,
+                selector: None,
+            },
+            EditTarget {
+                action: "obligation".into(),
+                location: function,
+                selector: None,
+            },
+        ];
+        let mut finding = parse_reports(json_report("local", REPORT_FORMAT_VERSION).as_bytes())
+            .unwrap()
+            .remove(0);
+        finding.audit = Some(audit);
+        let id = finding.id.clone();
+        s.analysis.findings = vec![finding];
+        s.analysis.stale = false;
+        let content = format!("// λ\n{source}");
+        let saved = s
+            .save_source(&buffer.path, buffer.revision, content.clone())
+            .unwrap();
         assert!(s.analysis.stale);
+        for action in ["justification", "obligation"] {
+            s.prepare_template(&id, action, saved.revision).unwrap();
+        }
+        let targets = &s.analysis.findings[0].audit.as_ref().unwrap().targets;
+        assert_eq!(
+            targets[0].location.start,
+            content.rfind("allocate()").unwrap()
+        );
+        assert_eq!(targets[0].location.hash, saved.hash);
+        let separated = format!("// another λ\n{content}// trailing note\n");
+        let saved = s
+            .save_source(&buffer.path, saved.revision, separated.clone())
+            .unwrap();
+        for action in ["justification", "obligation"] {
+            s.prepare_template(&id, action, saved.revision).unwrap();
+        }
+        let changed = separated.replace("    allocate();", "    changed();");
+        let saved = s
+            .save_source(&buffer.path, saved.revision, changed)
+            .unwrap();
+        assert!(
+            s.prepare_template(&id, "justification", saved.revision)
+                .is_err()
+        );
+        s.prepare_template(&id, "obligation", saved.revision)
+            .unwrap();
+    }
+
+    #[test]
+    fn source_saves_are_per_file_and_blocked_during_analysis() {
+        let dir = tempfile::tempdir().unwrap();
+        let first = dir.path().join("one.rs");
+        let second = dir.path().join("two.rs");
+        fs::write(&first, "one").unwrap();
+        fs::write(&second, "two").unwrap();
+        let mut s = session(dir.path());
+        let buffer = s.buffer(first.to_str().unwrap()).unwrap();
+        s.begin_analysis().unwrap();
+        assert!(
+            s.save_source(&buffer.path, buffer.revision, "edited".into())
+                .is_err()
+        );
+        assert_eq!(fs::read_to_string(&first).unwrap(), "one");
+        s.analysis.running = false;
+        s.save_source(&buffer.path, buffer.revision, "edited".into())
+            .unwrap();
+        assert_eq!(fs::read_to_string(first).unwrap(), "edited");
+        assert_eq!(fs::read_to_string(second).unwrap(), "two");
     }
     #[test]
     fn outside_files_and_symlinks_are_not_writable() {
@@ -1108,8 +1170,10 @@ mod tests {
         s.allow_definition_source(outside.path());
         let buffer = s.buffer(path).unwrap();
         assert!(!buffer.writable);
-        assert!(s.update(path, buffer.revision, "changed".into()).is_err());
-        assert!(s.apply(path, buffer.revision).is_err());
+        assert!(
+            s.save_source(path, buffer.revision, "changed".into())
+                .is_err()
+        );
         s.allowed_external.clear();
         assert!(
             s.buffer(path).is_ok(),
@@ -1191,12 +1255,12 @@ mod tests {
             let audit = metadata(location.clone());
             let buffer = Buffer {
                 path: "lib.rs".into(),
-                original: source.into(),
+
                 content: source.into(),
+                hash: content_hash(source.as_bytes()),
                 revision: 1,
                 writable: true,
-                conflict: false,
-                annotations: Vec::new(),
+                saved_overrides: Vec::new(),
             };
             let edit = template_edit(
                 &buffer,
@@ -1238,12 +1302,12 @@ mod tests {
         let audit = metadata(location.clone());
         let buffer = Buffer {
             path: "lib.rs".into(),
-            original: source.into(),
+
             content: source.into(),
+            hash: content_hash(source.as_bytes()),
             revision: 1,
             writable: true,
-            conflict: false,
-            annotations: Vec::new(),
+            saved_overrides: Vec::new(),
         };
         let edit = template_edit(
             &buffer,
