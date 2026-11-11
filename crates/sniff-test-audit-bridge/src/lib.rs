@@ -1,7 +1,11 @@
 //! Shared auditing workflow. No HTTP, terminal, browser, or rustc dependencies.
+mod navigation;
 mod overrides;
+mod progress;
 use anyhow::{Context, Result, bail, ensure};
+pub use navigation::{FindingNavigation, NavigationLocation};
 pub use overrides::{OverrideEditor, OverrideEditorTarget, SavedOverride};
+pub use progress::AuditProgress;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sniff_test_report::{
@@ -162,6 +166,7 @@ pub struct Analysis {
     pub stale: bool,
     pub overrides_changed: bool,
     pub override_revision: u64,
+    pub audit_revision: u64,
     pub override_error: Option<String>,
     pub status: String,
     pub exit_code: Option<i32>,
@@ -254,6 +259,9 @@ pub struct Session {
     pending_editor: Option<OverrideEditor>,
     analysis_override_revision: u64,
     override_snapshot: Option<BTreeMap<String, Result<Option<String>, String>>>,
+    navigation: BTreeMap<String, FindingNavigation>,
+    progress: BTreeMap<String, AuditProgress>,
+    progress_sources: BTreeMap<String, progress::SourceSnapshot>,
 }
 impl Session {
     pub fn open(root: PathBuf, target: PathBuf, config: AnalysisConfig) -> Result<Self> {
@@ -312,6 +320,9 @@ impl Session {
             pending_editor: None,
             override_snapshot: None,
             analysis_override_revision: 0,
+            navigation: BTreeMap::new(),
+            progress: BTreeMap::new(),
+            progress_sources: BTreeMap::new(),
         };
         session.reconcile_overrides();
         Ok(session)
@@ -422,76 +433,13 @@ impl Session {
         }
         let previous = buffer.content.clone();
         atomic_write(&resolved, content.as_bytes())?;
-        self.rebase_edit_targets(&key, &previous, &content);
+        self.map_saved_locations(&key, &previous, &content);
         let buffer = self.buffers.get_mut(&key).unwrap();
         buffer.hash = content_hash(content.as_bytes());
         buffer.content = content;
         buffer.revision += 1;
         self.analysis.stale = true;
         Ok(buffer.clone())
-    }
-    /// Keep verified attachment spans usable through observed edits. Effect
-    /// inference and recorded trace locations remain stale until reanalysis.
-    fn rebase_edit_targets(&mut self, path: &str, previous: &str, content: &str) {
-        let diff = similar::TextDiff::configure()
-            .timeout(std::time::Duration::from_millis(100))
-            .diff_chars(previous, content);
-        let (mut old_offset, mut new_offset) = (0, 0);
-        let mut pending = None;
-        let mut edits = Vec::new();
-        for change in diff.iter_all_changes() {
-            let bytes = change.value().len();
-            match change.tag() {
-                similar::ChangeTag::Equal => {
-                    if let Some((start, inserted_at)) = pending.take() {
-                        edits.push((start, old_offset, new_offset - inserted_at));
-                    }
-                    old_offset += bytes;
-                    new_offset += bytes;
-                }
-                similar::ChangeTag::Delete => {
-                    pending.get_or_insert((old_offset, new_offset));
-                    old_offset += bytes;
-                }
-                similar::ChangeTag::Insert => {
-                    pending.get_or_insert((old_offset, new_offset));
-                    new_offset += bytes;
-                }
-            }
-        }
-        if let Some((start, inserted_at)) = pending {
-            edits.push((start, old_offset, new_offset - inserted_at));
-        }
-        let old_hash = content_hash(previous.as_bytes());
-        let new_hash = content_hash(content.as_bytes());
-        for finding in &mut self.analysis.findings {
-            let Some(audit) = &mut finding.audit else {
-                continue;
-            };
-            for target in &mut audit.targets {
-                let location = &mut target.location;
-                if location.path != path || !location.available || location.hash != old_hash {
-                    continue;
-                }
-                if location.start > location.end || location.end > previous.len() {
-                    location.available = false;
-                    continue;
-                }
-                for &(start, end, inserted) in edits.iter().rev() {
-                    if location.start >= end {
-                        location.start = start + inserted + (location.start - end);
-                        location.end = start + inserted + (location.end - end);
-                    } else if location.end > start {
-                        location.available = false;
-                        break;
-                    }
-                }
-                if !location.available {
-                    continue;
-                }
-                location.hash = new_hash.clone();
-            }
-        }
     }
     pub fn begin_analysis(&mut self) -> Result<AnalysisConfig> {
         ensure!(!self.analysis.running, "analysis already running");
@@ -575,6 +523,7 @@ impl Session {
                     "complete"
                 }
                 .into();
+                self.navigation.clear();
                 self.analysis.findings = findings;
                 // Reanalysis consumed disk source. Refresh acknowledged snapshots so
                 // opening an externally changed file does not invalidate that analysis.
@@ -1086,6 +1035,14 @@ mod tests {
         function.start = 0;
         function.end = source.find('{').unwrap() + 1;
         let mut audit = metadata(call.clone());
+        audit.contract = Some(call.clone());
+        audit.trace.push(TraceStep {
+            caller: "work".into(),
+            target: Some("allocate".into()),
+            kind: sniff_test_report::TraceKind::DirectCall,
+            marker_association: MarkerAssociation::SourceInvocation,
+            location: Some(call.clone()),
+        });
         audit.targets = vec![
             EditTarget {
                 action: "justification".into(),
@@ -1119,6 +1076,33 @@ mod tests {
             content.rfind("allocate()").unwrap()
         );
         assert_eq!(targets[0].location.hash, saved.hash);
+        let navigation = s.finding_navigation(&id).unwrap();
+        for location in navigation
+            .source
+            .iter()
+            .chain(navigation.root.iter())
+            .chain(navigation.contract.iter())
+            .chain(navigation.trace.iter().flatten())
+        {
+            assert_eq!(
+                location.location.start,
+                content.rfind("allocate()").unwrap()
+            );
+            assert_eq!(location.location.hash, saved.hash);
+            assert!(!location.approximate);
+        }
+        assert_eq!(
+            s.analysis.findings[0]
+                .audit
+                .as_ref()
+                .unwrap()
+                .source
+                .as_ref()
+                .unwrap()
+                .start,
+            start
+        );
+
         let separated = format!("// another λ\n{content}// trailing note\n");
         let saved = s
             .save_source(&buffer.path, saved.revision, separated.clone())
@@ -1136,6 +1120,19 @@ mod tests {
         );
         s.prepare_template(&id, "obligation", saved.revision)
             .unwrap();
+        let navigation = s.finding_navigation(&id).unwrap();
+        assert!(navigation.source.unwrap().approximate);
+        assert!(navigation.trace[0].as_ref().unwrap().approximate);
+        assert_eq!(navigation.contract.unwrap().location.hash, saved.hash);
+        // Fresh analysis discards approximate destinations rather than mapping old reports again.
+        s.begin_analysis().unwrap();
+        let output = std::process::Output {
+            status: std::process::Command::new("true").status().unwrap(),
+            stdout: json_report("local", REPORT_FORMAT_VERSION).into_bytes(),
+            stderr: vec![],
+        };
+        s.finish_analysis(Ok(output));
+        assert!(s.navigation.is_empty());
     }
 
     #[test]

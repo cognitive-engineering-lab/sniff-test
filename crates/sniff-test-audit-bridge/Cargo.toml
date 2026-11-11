@@ -13,5 +13,6 @@ sniff-test-report = { path = "../sniff-test-report" }
 tempfile = "3"
 similar = "2"
 syn = { version = "2", features = ["full"] }
+proc-macro2 = { version = "1", features = ["span-locations"] }
 fs2 = "0.4"
 globset = "0.4"

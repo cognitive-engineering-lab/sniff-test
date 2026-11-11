@@ -165,7 +165,7 @@ async fn workspace(State(app): State<App>) -> ApiResult {
 }
 fn status(session: &Session) -> Value {
     let a = &session.analysis;
-    json!({"generation":a.generation,"running":a.running,"stale":a.stale,"overrides_changed":a.overrides_changed,"override_revision":a.override_revision,"override_error":a.override_error,"status":a.status,"exit_code":a.exit_code,"log":a.log,"count":a.findings.len()})
+    json!({"generation":a.generation,"running":a.running,"stale":a.stale,"overrides_changed":a.overrides_changed,"override_revision":a.override_revision,"audit_revision":a.audit_revision,"override_error":a.override_error,"status":a.status,"exit_code":a.exit_code,"log":a.log,"count":a.findings.len()})
 }
 async fn analysis(State(app): State<App>) -> ApiResult {
     Ok(Json(status(&app.session.lock().unwrap())))
@@ -181,7 +181,7 @@ async fn events(State(app): State<App>) -> impl IntoResponse {
         loop {
             let current = {
                 let mut session = app.session.lock().unwrap();
-                session.reconcile_overrides();
+                session.refresh_audit_progress();
                 status(&session).to_string()
             };
             if last != current {
@@ -218,7 +218,8 @@ struct Filter {
     limit: Option<usize>,
 }
 async fn findings(State(app): State<App>, Query(filter): Query<Filter>) -> ApiResult {
-    let session = app.session.lock().unwrap();
+    let mut session = app.session.lock().unwrap();
+    session.refresh_audit_progress();
     let inverted = filter.group_by == GroupBy::EffectSource;
     let matches: Vec<_> = session
         .analysis
@@ -268,11 +269,14 @@ async fn findings(State(app): State<App>, Query(filter): Query<Filter>) -> ApiRe
     let offset = filter.offset.unwrap_or(0);
     let limit = filter.limit.unwrap_or(100).min(500);
     if filter.grouped == Some(true) || inverted {
-        let groups = if inverted {
+        let mut groups = if inverted {
             group_effect_sources(&matches, filter.q.as_deref().unwrap_or_default())
         } else {
             group_findings(values)
         };
+        for group in &mut groups {
+            annotate_group_progress(group, &session);
+        }
         let total: usize = groups
             .iter()
             .map(|g| g["count"].as_u64().unwrap() as usize)
@@ -282,9 +286,34 @@ async fn findings(State(app): State<App>, Query(filter): Query<Filter>) -> ApiRe
             "groups": groups.into_iter().skip(offset).take(limit).collect::<Vec<_>>()
         })));
     }
+    let mut values = values;
+    for value in &mut values {
+        annotate_progress(value, &session);
+    }
     Ok(Json(json!({"total":matches.len(),
         "items":values.into_iter().skip(offset).take(limit).collect::<Vec<_>>(),"effects":effects})))
 }
+fn annotate_progress(value: &mut Value, session: &Session) {
+    let progress = session.audit_progress(value["id"].as_str().unwrap_or_default());
+    value["progress"] = serde_json::to_value(progress).unwrap();
+}
+
+fn annotate_group_progress(group: &mut Value, session: &Session) {
+    let mut handled = 0;
+    let mut justified = 0;
+    let mut propagated = 0;
+    let items = group["items"].as_array_mut().unwrap();
+    for item in items.iter_mut() {
+        annotate_progress(item, session);
+        let j = item["progress"]["justified"].as_bool().unwrap_or(false);
+        let p = item["progress"]["propagated"].as_bool().unwrap_or(false);
+        handled += usize::from(j || p);
+        justified += usize::from(j);
+        propagated += usize::from(p);
+    }
+    group["progress"] = json!({"handled":handled,"total":items.len(),"justified":justified,"propagated":propagated});
+}
+
 fn finding_summary(f: &sniff_test_audit_bridge::Finding) -> serde_json::Value {
     json!({"id":f.id,"crate_name":f.crate_name,"root":f.root,"reason":f.reason,"level":f.level,"effect":f.effect,"class":f.class,"path":f.audit.as_ref().and_then(|a| a.source.as_ref()).map(|l| &l.path)})
 }
@@ -409,6 +438,8 @@ async fn finding(State(app): State<App>, Query(id): Query<Id>) -> ApiResult {
         .find(|f| f.id == id.id)
         .ok_or_else(|| anyhow::anyhow!("finding no longer exists"))?;
     let mut value = serde_json::to_value(f).map_err(anyhow::Error::from)?;
+    value["navigation"] =
+        serde_json::to_value(session.finding_navigation(&id.id)).map_err(anyhow::Error::from)?;
     drop(session);
     annotate_source_lines(&mut value, &mut std::collections::HashMap::new());
     Ok(Json(value))
@@ -471,6 +502,7 @@ struct Update {
 async fn save_source(State(app): State<App>, Json(edit): Json<Update>) -> ApiResult {
     let mut session = app.session.lock().unwrap();
     let buffer = session.save_source(&edit.path, edit.revision, edit.content)?;
+    session.refresh_audit_progress();
     let targets = edit
         .finding
         .as_ref()
@@ -483,9 +515,13 @@ async fn save_source(State(app): State<App>, Json(edit): Json<Update>) -> ApiRes
         })
         .and_then(|finding| finding.audit.as_ref())
         .map(|audit| &audit.targets);
-    Ok(Json(
-        json!({"buffer":buffer,"status":status(&session),"finding":edit.finding,"targets":targets}),
-    ))
+    let navigation = edit
+        .finding
+        .as_deref()
+        .and_then(|id| session.finding_navigation(id));
+    let mut response = json!({"buffer":buffer,"status":status(&session),"finding":edit.finding,"targets":targets,"navigation":navigation});
+    annotate_source_lines(&mut response, &mut std::collections::HashMap::new());
+    Ok(Json(response))
 }
 #[derive(Deserialize)]
 struct TemplateRequest {
@@ -525,6 +561,7 @@ async fn override_commit(State(app): State<App>, Json(edit): Json<OverrideCommit
         edit.filename.as_deref(),
         edit.document,
     )?;
+    session.refresh_audit_progress();
     Ok(Json(
         json!({"buffer": buffer, "destination": destination, "status": status(&session)}),
     ))
@@ -532,6 +569,97 @@ async fn override_commit(State(app): State<App>, Json(edit): Json<OverrideCommit
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn group_progress_counts_filtered_reports_once_and_combines_actions() {
+        use sniff_test_audit_bridge::{AuditMetadata, EditTarget};
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("lib.rs");
+        let source = "/// # Resources\n/// Callers must provide capacity.\npub fn first() {}\npub fn second() {\n // RESOURCE: capacity checked\n allocate();\n}\npub fn pending() {\n allocate();\n}\n";
+        std::fs::write(&path, source).unwrap();
+        let mut session = Session::open(
+            dir.path().into(),
+            dir.path().join("target"),
+            sniff_test_audit_bridge::AnalysisConfig {
+                executable: "false".into(),
+                directory: dir.path().into(),
+                arguments: vec![],
+            },
+        )
+        .unwrap();
+        let buffer = session.buffer(path.to_str().unwrap()).unwrap();
+        let location = |start: usize| sniff_test_report::Location {
+            path: buffer.path.clone(),
+            source_id: "source".into(),
+            hash: buffer.hash.clone(),
+            start,
+            end: start + 1,
+            available: true,
+        };
+        let mut reports = vec![];
+        for (id, start, action) in [
+            (
+                "propagated",
+                source.find("pub fn first").unwrap(),
+                "obligation",
+            ),
+            (
+                "justified",
+                source.find("allocate();").unwrap(),
+                "justification",
+            ),
+            (
+                "pending",
+                source.rfind("allocate();").unwrap(),
+                "justification",
+            ),
+        ] {
+            let mut finding = source_finding(id, 10, id);
+            finding.audit = Some(AuditMetadata {
+                effect: "custom".into(),
+                obligation: "Resources".into(),
+                justification: "RESOURCE".into(),
+                source: Some(location(start)),
+                root: None,
+                contract: None,
+                obligation_documentation: None,
+                trace: vec![],
+                targets: vec![EditTarget {
+                    selector: None,
+                    action: action.into(),
+                    location: location(start),
+                }],
+            });
+            reports.push(finding);
+        }
+        // A trace with both actions still contributes only one handled report.
+        let justification = reports[1].audit.as_ref().unwrap().targets[0].clone();
+        reports[0]
+            .audit
+            .as_mut()
+            .unwrap()
+            .targets
+            .push(justification);
+        session.analysis.findings = reports;
+        session.refresh_audit_progress();
+        let all: Vec<_> = session.analysis.findings.iter().collect();
+        let mut files = group_findings(all.iter().map(|f| finding_summary(f)).collect());
+        let mut origins = group_effect_sources(&all, "");
+        for group in files.iter_mut().chain(origins.iter_mut()) {
+            annotate_group_progress(group, &session);
+            assert_eq!(
+                group["progress"],
+                json!({"handled":2,"total":3,"justified":2,"propagated":1})
+            );
+        }
+        let filtered: Vec<_> = all.into_iter().filter(|f| f.id != "pending").collect();
+        let mut groups = group_effect_sources(&filtered, "");
+        annotate_group_progress(&mut groups[0], &session);
+        assert_eq!(
+            groups[0]["progress"],
+            json!({"handled":2,"total":2,"justified":2,"propagated":1})
+        );
+    }
+
     #[test]
     fn file_groups_keep_all_findings_in_order_and_support_missing_paths() {
         let mut values = vec![json!({"path":"first.rs","id":"first"})];

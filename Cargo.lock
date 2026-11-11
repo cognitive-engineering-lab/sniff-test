@@ -1084,6 +1084,7 @@ dependencies = [
  "anyhow",
  "fs2",
  "globset",
+ "proc-macro2",
  "serde",
  "serde_json",
  "similar",

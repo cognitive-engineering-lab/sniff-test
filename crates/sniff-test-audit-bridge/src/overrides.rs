@@ -1145,6 +1145,8 @@ mod tests {
         session.analysis = analysis;
         let buffer = session.buffer(&path).unwrap();
         assert_eq!(buffer.saved_overrides.len(), 1);
+        session.refresh_audit_progress();
+        assert!(session.audit_progress("finding").justified);
 
         let context = session
             .open_override_editor(OverrideEditorTarget::Saved {
@@ -1414,7 +1416,8 @@ mod tests {
                 "invalid" => fs::write(&destination, "[invalid").unwrap(),
                 _ => fs::write(root.path().join("sniff-test.toml"), "[invalid").unwrap(),
             }
-            session.reconcile_overrides();
+            session.refresh_audit_progress();
+            assert!(!session.audit_progress("finding").justified);
             assert!(session.analysis.stale, "{change}");
             assert!(session.analysis.override_revision > revision);
             assert!(session.buffer(&path).unwrap().saved_overrides.is_empty());

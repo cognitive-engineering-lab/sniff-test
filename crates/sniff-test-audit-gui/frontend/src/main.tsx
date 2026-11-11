@@ -1,7 +1,7 @@
 import React, {useEffect, useLayoutEffect, useRef, useState} from 'react';
 import {createRoot} from 'react-dom/client';
 import {EditorView, basicSetup} from 'codemirror';
-import {EditorState, StateField, Compartment} from '@codemirror/state';
+import {EditorState, StateField, Compartment, type ChangeDesc} from '@codemirror/state';
 import {Decoration, WidgetType} from '@codemirror/view';
 import {rust} from '@codemirror/lang-rust';
 import {sourcePromptAttachments, continueRustComments, commentEditing, configureCommentEditing} from './source-prompts';
@@ -11,7 +11,7 @@ import {Autosave, type SaveState} from './autosave';
 import {displaySourcePath} from './source-path';
 import {ObligationDocumentationPanel, type ObligationDocumentation} from './obligation-documentation';
 
-type Location = {path:string; start:number; end:number; available:boolean; hash?:string; line?:number; live?:boolean};
+type Location = {approximate?:boolean;path:string; start:number; end:number; available:boolean; hash?:string; line?:number; live?:boolean};
 type Buffer = {path:string; content:string; hash:string; revision:number; writable:boolean; saved_overrides:SavedOverride[]};
 type SavedOverride = {annotation:{effect:string; action:string; document:string; obligation_documentation?:ObligationDocumentation; selector:unknown}; location:Location; destination:string};
 type Target = {action:string; location:Location; selector?:unknown; overrideIndex?:number};
@@ -23,10 +23,13 @@ function sameSelector(a:unknown,b:unknown) {
 type OverrideEditor = {token:string; document:string; obligation_documentation?:ObligationDocumentation; destination:string; destinations:{path:string;exists:boolean}[]; action:string};
 type TemplateEdit = {path:string; revision:number; start:number; end:number; text:string; cursor:number};
 type EditorSelection = {path:string; from:number; to:number};
-type Finding = {id:string; crate_name:string; effect?:string;kind:string;class?:string;level:string;root?:string;trace_id?:string;reason:string;requirements:string[];missing_requirements:string[];display_trace:string[]; audit?:{obligation:string; justification:string; source?:Location; root?:Location; contract?:Location; targets:Target[]; trace:{caller:string; target?:string; kind:string; location?:Location}[]}};
-type Summary = {id:string; crate_name:string; root:string; reason:string; level:string; effect:string; class:string; path?:string};
-type FindingGroup = {key:string; label?:string; path?:string; count:number; items:Summary[]};
-type Status = {override_revision?:number; override_error?:string; generation:number; running:boolean; stale:boolean; overrides_changed?:boolean; status:string; count:number; log:string};
+type FindingNavigation = {source?:Location;root?:Location;contract?:Location;trace:(Location|null)[]};
+type Finding = {navigation?:FindingNavigation;id:string; crate_name:string; effect?:string;kind:string;class?:string;level:string;root?:string;trace_id?:string;reason:string;requirements:string[];missing_requirements:string[];display_trace:string[]; audit?:{obligation:string; justification:string; source?:Location; root?:Location; contract?:Location; targets:Target[]; trace:{caller:string; target?:string; kind:string; location?:Location}[]}};
+type AuditProgress = {justified:boolean;propagated:boolean};
+type GroupProgress = {handled:number;total:number;justified:number;propagated:number};
+type Summary = {progress?:AuditProgress;id:string; crate_name:string; root:string; reason:string; level:string; effect:string; class:string; path?:string};
+type FindingGroup = {progress?:GroupProgress;key:string; label?:string; path?:string; count:number; items:Summary[]};
+type Status = {audit_revision?:number;override_revision?:number; override_error?:string; generation:number; running:boolean; stale:boolean; overrides_changed?:boolean; status:string; count:number; log:string};
 const token = location.hash.slice(1) || sessionStorage.getItem('audit-token') || '';
 if (token) { sessionStorage.setItem('audit-token', token); history.replaceState(null, '', location.pathname); }
 async function api(path:string, body?:unknown) {
@@ -53,7 +56,15 @@ class DocumentationPrompt extends WidgetType {
 }
 function bytePosition(text:string, offset:number) { return new TextDecoder('utf-8',{ignoreBOM:true}).decode(new TextEncoder().encode(text).slice(0,offset)).length; }
 function editorPosition(text:string, offset:number) { return text.slice(0,bytePosition(text,offset)).replace(/\r\n/g,'\n').length; }
-function Editor({buffer, locked, reloadKey, onFlush, location:target, onChange, onSelectionChange, finding, enabled, prepare, onOverride, onError, navigation, onReady}:{buffer:Buffer; locked:boolean; reloadKey:number; onFlush:()=>void; location?:Location; onChange:(text:string)=>void; onSelectionChange:(selection?:EditorSelection)=>void; finding?:Finding; enabled:boolean; prepare:(target:Target)=>Promise<TemplateEdit>; onOverride:(target:Target)=>void; onError:(error:string)=>void; navigation?:Navigation; onReady:(view:EditorView|undefined)=>void}) {
+function sourceBytePosition(source:string,position:number) {
+  let at=0;
+  for(let n=0;n<position&&at<source.length;n++,at++)if(source[at]==='\r'&&source[at+1]==='\n')at++;
+  return new TextEncoder().encode(source.slice(0,at)).length;
+}
+function destination(finding:Finding|undefined,kind:'source'|'root'|'contract') {
+  return finding?.navigation?finding.navigation[kind]:finding?.audit?.[kind];
+}
+function Editor({buffer, locked, reloadKey, onFlush, location:target, onChange, onSelectionChange, finding, enabled, prepare, onOverride, onError, navigation, onReady}:{buffer:Buffer; locked:boolean; reloadKey:number; onFlush:()=>void; location?:Location; onChange:(text:string,changes:ChangeDesc,previous:string)=>void; onSelectionChange:(selection?:EditorSelection)=>void; finding?:Finding; enabled:boolean; prepare:(target:Target)=>Promise<TemplateEdit>; onOverride:(target:Target)=>void; onError:(error:string)=>void; navigation?:Navigation; onReady:(view:EditorView|undefined)=>void}) {
   const holder = useRef<HTMLDivElement>(null), editorRef=useRef<EditorView | undefined>(undefined);
   const callback = useRef(onChange); callback.current = onChange;
   const selectionRef=useRef(onSelectionChange);selectionRef.current=onSelectionChange;
@@ -75,7 +86,7 @@ function Editor({buffer, locked, reloadKey, onFlush, location:target, onChange, 
         return false;
       }}),
       EditorView.updateListener.of(update=>{
-        if(update.docChanged)callback.current(update.state.sliceDoc());
+        if(update.docChanged)callback.current(update.state.sliceDoc(),update.changes,update.startState.sliceDoc());
         if(update.selectionSet||update.docChanged){const {from,to}=update.state.selection.main;selectionRef.current({path:buffer.path,from,to});}
       }),
     ]})});
@@ -162,6 +173,18 @@ function PanelDivider({side,size,onResize}:{side:'left'|'right';size:number;onRe
     onPointerUp={e=>{drag.current=undefined;e.currentTarget.releasePointerCapture(e.pointerId);}} onLostPointerCapture={()=>{drag.current=undefined;}} onPointerCancel={()=>{drag.current=undefined;}}
     onKeyDown={e=>{const delta=horizontal?(e.key==='ArrowUp'?20:e.key==='ArrowDown'?-20:0):(e.key==='ArrowRight'?20:e.key==='ArrowLeft'?-20:0)*(side==='left'?1:-1);if(delta||e.key==='Home'||e.key==='End'){e.preventDefault();resize(e.key==='Home'?120:e.key==='End'?600:size+delta);}}}/>;
 }
+function AuditMarks({progress,group=false}:{progress?:AuditProgress|GroupProgress;group?:boolean}) {
+  if(!progress || (!progress.justified&&!progress.propagated))return null;
+  const aggregate=group?progress as GroupProgress:undefined;
+  if(aggregate && aggregate.handled<aggregate.total){
+    return aggregate.handled>0?<span className="audit-progress partial" aria-label={`${aggregate.handled} of ${aggregate.total} matching traces handled`} title={`${aggregate.handled} of ${aggregate.total} matching traces have saved explanations; reanalyze to verify`}>{aggregate.handled}/{aggregate.total}</span>:null;
+  }
+  return <span className="audit-progress">
+    {!!progress.justified&&<span role="img" aria-label="Justification saved" title="Justification saved; reanalyze to verify">✓</span>}
+    {!!progress.propagated&&<span role="img" aria-label="Propagation saved" title="Propagation documentation saved; reanalyze to verify">↑</span>}
+  </span>;
+}
+
 function App() {
   const [leftWidth,setLeftWidth]=useState(285),[rightWidth,setRightWidth]=useState(315);
   const [root,setRoot]=useState(''); const [status,setStatus]=useState<Status>({generation:0,running:false,stale:true,status:'connecting',count:0,log:''});
@@ -180,7 +203,7 @@ function App() {
   const [editorSelection,setEditorSelection]=useState<EditorSelection>();
   const [navigation,setNavigation]=useState<Navigation>(),[navigationStatus,setNavigationStatus]=useState('');
   function acceptStatus(next:Status){setStatus(previous=>{
-    if(next.generation<previous.generation || (next.override_revision??0)<(previous.override_revision??0))return previous;
+    if((next.audit_revision??0)<(previous.audit_revision??0) || next.generation<previous.generation || (next.override_revision??0)<(previous.override_revision??0))return previous;
     if(next.generation===previous.generation&&!previous.running&&!next.running)return {...next,stale:previous.stale||next.stale,overrides_changed:previous.overrides_changed||next.overrides_changed};
     return next;
   });}
@@ -190,11 +213,20 @@ function App() {
     const finding=selectedRef.current?.id;
     const result=await api('source/save',{path:snapshot.path,revision:snapshot.revision,content,finding});
     acceptStatus(result.status);
-    if(result.finding===finding&&result.targets)setSelected(current=>current&&current.id===finding&&current.audit?{...current,audit:{...current.audit,targets:result.targets}}:current);
+    if(result.finding===finding&&result.targets)setSelected(current=>current&&current.id===finding&&current.audit?{...current,navigation:result.navigation,audit:{...current.audit,targets:result.targets}}:current);
     return result.buffer;
   },setBuffer,setSaveState);
   const openSequence=useRef(0);
-  function changeSource(content:string){setText(content);saver.current!.change(content);}
+  function changeSource(content:string,changes:ChangeDesc,previous:string){
+    const path=saver.current!.snapshot?.path;
+    setNav(history=>history.map(loc=>{
+      if(loc.path!==path || !loc.live)return loc;
+      const from=changes.mapPos(editorPosition(previous,loc.start),1);
+      const to=Math.max(from,changes.mapPos(editorPosition(previous,loc.end),-1));
+      return {...loc,start:sourceBytePosition(content,from),end:sourceBytePosition(content,to)};
+    }));
+    setText(content);saver.current!.change(content);
+  }
   function flushSource(){void saver.current!.flush().catch(()=>{});}
   async function reanalyze(){
     setStartingAnalysis(true);
@@ -303,8 +335,20 @@ function App() {
   async function choose(item:Summary){
     await saver.current!.flush();
     const finding:Finding=await api('finding?'+new URLSearchParams({id:item.id}));
-    const location=[finding.audit?.source,finding.audit?.root].find(value=>value?.available);
+    const location=[destination(finding,'source'),destination(finding,'root')].find(value=>value?.available);
     if(!location||await open(location))setSelected(finding);
+  }
+  async function navigateFinding(kind:'source'|'root'|'contract'|number) {
+    const id=selectedRef.current?.id;
+    if(!id)return;
+    await saver.current!.flush();
+    const finding:Finding=await api('finding?'+new URLSearchParams({id}));
+    if(selectedRef.current?.id!==id)return;
+    setSelected(finding);
+    const loc=typeof kind==='number'
+      ?(finding.navigation?finding.navigation.trace[kind]:finding.audit?.trace[kind]?.location)
+      :destination(finding,kind);
+    if(loc)await open(loc);
   }
   useEffect(()=>{api('workspace').then(v=>setRoot(v.root)).catch(e=>setError(String(e)));
     const controller=new AbortController();
@@ -325,7 +369,7 @@ function App() {
       setGroups(value.groups);setTotal(value.total);setTotalGroups(value.total_groups);setEffects(value.effects);
     }).catch(e=>{if(!cancelled)setError(String(e));});
     return ()=>{cancelled=true;};
-  },[query,effect,level,kind,inverted,page,status.generation,status.running]);
+  },[query,effect,level,kind,inverted,page,status.generation,status.running,status.audit_revision]);
   useEffect(()=>{setSelected(undefined);setSavedOverride('');},[status.generation]);
   useEffect(()=>{const warn=(e:BeforeUnloadEvent)=>{if(saver.current?.pending||overrideEditor){e.preventDefault();}};window.addEventListener('beforeunload',warn);return()=>window.removeEventListener('beforeunload',warn)},[unsaved,overrideEditor]);
   async function openOverride(t:Target) {
@@ -344,7 +388,7 @@ function App() {
     setSavedOverride(result.destination);setCreateFile(false);setOverrideEditor(undefined);
   }
 
-  const trace=selected?.audit?.trace||[];
+  const trace=(selected?.audit?.trace||[]).map((step,i)=>({...step,location:selected?.navigation?selected.navigation.trace[i]??undefined:step.location}));
   const traceEntries=trace.map((step,i)=>({step,i}));
   if(inverted)traceEntries.reverse();
   const activeTraceIndex=buffer && !unsaved && editorSelection?.path===buffer.path
@@ -370,10 +414,10 @@ function App() {
       <input aria-label={inverted?'Search effect sources':'Search findings'} placeholder={inverted?'Search effect sources…':'Search files, roots, crates…'} value={query} onChange={e=>{setQuery(e.target.value);setPage(0);}}/>
       <div className="filters"><select aria-label="Effect" value={effect} onChange={e=>{setEffect(e.target.value);setPage(0);}}><option value="">All effects</option>{effects.map(e=><option key={e}>{e}</option>)}</select><select aria-label="Severity" value={level} onChange={e=>{setLevel(e.target.value);setPage(0);}}><option value="">All levels</option><option>warn</option><option>deny</option></select></div>
       <select aria-label="Finding class" value={kind} onChange={e=>{setKind(e.target.value);setPage(0);}}><option value="">All finding classes</option>{['concrete-operation','concrete-invocation','documented-obligation','undocumented-invocation','unresolved-call-target','analysis-incomplete','ambiguous-marker','ambiguous-requirement'].map(k=><option key={k}>{k}</option>)}</select>
-      <div className="finding-list">{groups.map(({key, label,path:sourcePath,items:rows,count},index)=>{
+      <div className="finding-list">{groups.map(({key, label,path:sourcePath,items:rows,count,progress},index)=>{
         const path=label||key;
         const isOpen=(inverted?sourceExpanded:expanded).has(key),listId=`${inverted?'source':'file'}-findings-${index}`;
-        return <section key={key}><button type="button" className="group" title={path} aria-expanded={isOpen} aria-controls={listId} onClick={()=>(inverted?setSourceExpanded:setExpanded)(previous=>{const next=new Set(previous);if(next.has(key))next.delete(key);else next.add(key);return next;})}><span className="group-chevron" aria-hidden="true">{isOpen?'▾':'▸'}</span><span className="group-path">{sourcePath?path.replace(sourcePath,()=>displaySourcePath(sourcePath,root)):displaySourcePath(path,root)}</span><span className="group-count" aria-label={`${count} ${inverted?'reports':'effects'}`} >{count}</span></button><div id={listId} hidden={!isOpen}>{isOpen&&rows.map(item=><button className={'finding '+(selected?.id===item.id?'selected':'')} key={item.id} onClick={()=>act(()=>choose(item))}><span className="badge">{item.effect||item.class}</span><strong>{item.root||item.crate_name}</strong><small>{item.reason}</small></button>)}</div></section>;
+        return <section key={key}><button type="button" className="group" title={path} aria-expanded={isOpen} aria-controls={listId} onClick={()=>(inverted?setSourceExpanded:setExpanded)(previous=>{const next=new Set(previous);if(next.has(key))next.delete(key);else next.add(key);return next;})}><span className="group-chevron" aria-hidden="true">{isOpen?'▾':'▸'}</span><span className="group-path">{sourcePath?path.replace(sourcePath,()=>displaySourcePath(sourcePath,root)):displaySourcePath(path,root)}</span><AuditMarks progress={progress} group/><span className="group-count" aria-label={`${count} ${inverted?'reports':'effects'}`} >{count}</span></button><div id={listId} hidden={!isOpen}>{isOpen&&rows.map(item=><button className={'finding '+(selected?.id===item.id?'selected':'')} key={item.id} onClick={()=>act(()=>choose(item))}><span className="finding-label"><span className="badge">{item.effect||item.class}</span><AuditMarks progress={item.progress}/></span><strong>{item.root||item.crate_name}</strong><small>{item.reason}</small></button>)}</div></section>;
       })}{!groups.length&&<div className="empty">{status.running?'Analyzing the workspace…':status.status==='complete'?'No matching findings.':'No findings available. Check analysis output.'}</div>}</div>
       <div className="pagination"><button aria-label={inverted?'Previous effect sources':'Previous files'} disabled={page===0} onClick={()=>setPage(p=>p-1)}>←</button><span>{inverted?'Effect sources':'Files'} · {page+1} / {Math.max(1,Math.ceil(totalGroups/100))}</span><button aria-label={inverted?'Next effect sources':'Next files'} disabled={(page+1)*100>=totalGroups} onClick={()=>setPage(p=>p+1)}>→</button></div>
     </aside><PanelDivider side="left" size={leftWidth} onResize={setLeftWidth}/></div>
@@ -393,12 +437,13 @@ function App() {
 
     </main>
     <div className="side-pane right-pane" id="details-panel"><PanelDivider side="right" size={rightWidth} onResize={setRightWidth}/><aside className="details" aria-label="Effect details">{selected?<><section className="effect-summary" aria-label="Selected effect"><div className="section-title">FINDING DETAILS</div><p>{selected.reason}</p><small>{selected.crate_name} · trace {selected.trace_id||'unavailable'}</small></section>
-      <div className="details-scroll" ref={detailsScroll} tabIndex={0} aria-label="Navigation and call trace"><h3>Navigate</h3>{[['Report root',selected.audit?.root],['Effect source',selected.audit?.source],['Contract',selected.audit?.contract]].map(([label,l])=><button className="link" key={label as string} disabled={!l || !(l as Location).available} onClick={()=>act(()=>open(l as Location))}>{label as string}{!(l as Location)?.available?' · unavailable':''}</button>)}
+      <div className="details-scroll" ref={detailsScroll} tabIndex={0} aria-label="Navigation and call trace"><h3>Navigate</h3>{[['Report root','root'],['Effect source','source'],['Contract','contract']].map(([label,kind])=><button className="link" key={label} disabled={!destination(selected,kind as 'source'|'root'|'contract')?.available} onClick={()=>act(()=>navigateFinding(kind as 'source'|'root'|'contract'))}>{label}{!destination(selected,kind as 'source'|'root'|'contract')?.available?' · unavailable':''}</button>)}
       {buffer&&!buffer.writable&&<p className="hint">Dependency source is read-only. Contract documentation can be supplied through an override file.</p>}
       {selected.audit&&!selected.audit.targets.length&&<p className="hint">No verified documentation attachment location is available. Inspect the source and edit manually where appropriate.</p>}
       {status.override_error?<p className="hint" role="alert">{status.override_error}</p>:null}
-      {unsaved||status.stale?<p className="hint">Findings and recorded call-trace locations are outdated. Reanalyze to refresh them.</p>:null}
-      <h3>Call trace</h3><ol className="trace" reversed={inverted}>{traceEntries.map(({step,i})=><li key={i} value={i+1}><button className={highlightedTraceIndex===i?'active':''} aria-current={highlightedTraceIndex===i?'location':undefined} disabled={!step.location?.available} onClick={()=>act(()=>open(step.location!))}>{step.caller}<span>{step.kind} → {step.target||'effect operation'}</span><small title={step.location?.path}>{!step.location?'':displaySourcePath(step.location.path,root)}{step.location?.line?':'+step.location.line:''}{!step.location?.available?' · source unavailable':''}</small></button></li>)}</ol></div>
+      {target?.approximate?<p className="hint" role="status">Approximate location; reanalyze to refresh.</p>:null}
+      {unsaved||status.stale?<p className="hint">Findings are outdated. Reanalyze to refresh them.</p>:null}
+      <h3>Call trace</h3><ol className="trace" reversed={inverted}>{traceEntries.map(({step,i})=><li key={i} value={i+1}><button className={highlightedTraceIndex===i?'active':''} aria-current={highlightedTraceIndex===i?'location':undefined} disabled={!step.location?.available} onClick={()=>act(()=>navigateFinding(i))}>{step.caller}<span>{step.kind} → {step.target||'effect operation'}</span><small title={step.location?.path}>{!step.location?'':displaySourcePath(step.location.path,root)}{step.location?.line?':'+step.location.line:''}{!step.location?.available?' · source unavailable':step.location.approximate?' · approximate':''}</small></button></li>)}</ol></div>
     </>:<div className="empty">Select a finding to inspect its contract and call trace.</div>}</aside></div></div>
     {overrideEditor&&!createFile&&<Modal title={overrideEditor.action==='justification'?'Justify via override':'Propagate obligations via override'} showTitle={false} onClose={()=>{if(!busy)setOverrideEditor(undefined);}}>
       {error&&<p role="alert">{error}</p>}

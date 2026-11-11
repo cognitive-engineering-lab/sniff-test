@@ -136,3 +136,8 @@ dialog{border:1px solid #c0d5c5;border-radius:10px;padding:24px;width:min(760px,
 .override-destination{display:block;margin-top:12px;font-size:12px;overflow-wrap:anywhere}.override-destination small{display:block;margin-top:6px}.override-destination input{display:block;width:100%;margin-top:8px}
 
 .save-status{font-size:11px;white-space:nowrap;color:#647969}.source-save-error{flex-wrap:wrap}.source-save-error>span{flex:1 0 100%;overflow-wrap:anywhere}
+
+.finding-label { display:flex; align-items:center; gap:7px; width:100%; }
+.audit-progress { display:inline-flex; align-items:center; gap:4px; flex:none; color:#bd3838; font-size:13px; font-weight:700; line-height:1; }
+.finding-label .audit-progress { margin-left:auto; }
+.audit-progress.partial { font:10px ui-sans-serif,sans-serif; font-weight:600; }

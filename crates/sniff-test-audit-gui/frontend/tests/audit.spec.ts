@@ -39,6 +39,8 @@ for(const [kind,dependency,display] of [
     const response=await route.fetch(),finding=await response.json();
     finding.audit.source.path=dependency;
     for(const step of finding.audit.trace)if(step.location)step.location.path=dependency;
+    finding.navigation.source.path=dependency;
+    for(const location of finding.navigation.trace)if(location)location.path=dependency;
     await route.fulfill({response,json:finding});
   });
   let requestedPath:string|null=null;
@@ -87,6 +89,107 @@ async function expectSimpleDetails(page:any){
     await expect(details.getByRole('button',{name:new RegExp('^'+name)})).toBeVisible();
   await expect(details.getByRole('heading',{name:'Call trace',exact:true})).toBeVisible();
 }
+test('finding jumps follow saved edits and retain approximate deleted sites',async({page})=>{
+  await selectFinding(page);
+  const finding=page.locator('.finding').first();
+  const selection=()=>page.evaluate(()=>window.getSelection()?.toString());
+  await page.locator('.cm-content').focus();await page.keyboard.press('ControlOrMeta+Home');
+  await page.keyboard.insertText('// λ 🦀 before the effect\n');
+  // Clicking a finding must await the pending save before choosing its destination.
+  await expect(page.getByLabel('Source save status')).toHaveText('Unsaved changes');
+  await finding.click();
+  await expect.poll(selection).toContain('panic!');
+  await expect(page.locator('.error')).toHaveCount(0);
+  await page.getByRole('button',{name:'Report root',exact:true}).click();
+  await expect.poll(selection).toContain('pub fn risky');
+  await page.getByRole('button',{name:'Effect source',exact:true}).click();
+  await expect.poll(selection).toContain('panic!');
+  await page.locator('.trace button').first().click();
+  await expect.poll(selection).toContain('panic!');
+  await expect(page.locator('.error')).toHaveCount(0);
+  await page.locator('.cm-content').focus();await page.keyboard.press('ControlOrMeta+z');
+  await finding.click();
+  await expect.poll(selection).toContain('panic!');
+  await page.locator('.cm-content').focus();await page.keyboard.press('ControlOrMeta+Shift+z');
+  await finding.click();
+  await expect.poll(selection).toContain('panic!');
+  await expect(page.locator('.error')).toHaveCount(0);
+  await page.locator('.cm-content').focus();await page.keyboard.press('ControlOrMeta+a');
+  await page.keyboard.insertText('pub fn risky() {\n    something_else();\n}\n');
+  await finding.click();
+  await expect(page.getByText('Approximate location; reanalyze to refresh.',{exact:true})).toBeVisible();
+  await expect(page.locator('.error')).toHaveCount(0);
+  await page.locator('.cm-content').focus();await page.keyboard.press('ControlOrMeta+a');await page.keyboard.press('Backspace');
+  await finding.click();
+  await expect(page.getByText('Approximate location; reanalyze to refresh.',{exact:true})).toBeVisible();
+  await expect.poll(selection).toBe('');
+  await expect(page.locator('.error')).toHaveCount(0);
+  await page.getByRole('button',{name:'↻ Reanalyze',exact:true}).click();
+  await expect(page.locator('.status')).toHaveText('complete');
+  await expect(page.locator('.finding')).toHaveCount(0);
+});
+
+test('Back history follows Unicode CRLF edits in the same file',async({page})=>{
+  await stop();
+  await writeFile(join(dir,'src/lib.rs'),'pub fn first() {\r\n    panic!("first");\r\n}\r\npub fn second() {\r\n    panic!("second");\r\n}\r\n');
+  await launch();await selectFinding(page);
+  await page.locator('.finding').last().click();
+  await expect.poll(()=>page.evaluate(()=>window.getSelection()?.toString())).toContain('panic!("second")');
+  await page.locator('.finding').first().click();
+  await expect.poll(()=>page.evaluate(()=>window.getSelection()?.toString())).toContain('panic!("first")');
+  await page.locator('.cm-content').focus();await page.keyboard.press('ControlOrMeta+Home');
+  await page.keyboard.insertText('// λ 🦀 before both sites\n');
+  await page.getByRole('button',{name:'← Back',exact:true}).click();
+  await expect.poll(()=>page.evaluate(()=>window.getSelection()?.toString())).toContain('panic!("second")');
+  await page.getByRole('button',{name:'← Back',exact:true}).click();
+  await expect.poll(()=>page.evaluate(()=>window.getSelection()?.toString())).toContain('panic!("first")');
+  await expect(page.locator('.error')).toHaveCount(0);
+});
+
+test('left panel tracks partial mixed and filtered audit progress',async({page})=>{
+  await stop();
+  await writeFile(join(dir,'src/lib.rs'),'pub fn first() {\n    panic!("first");\n}\npub fn second() {\n    panic!("second");\n}\n');
+  await launch();await selectFinding(page);
+  await expect(page.locator('.finding')).toHaveCount(2);
+  await page.getByRole('button',{name:'Justify here',exact:true}).click();
+  await expect(page.locator('.cm-content')).toContainText('// PANIC:');
+  await page.keyboard.press('ControlOrMeta+s');
+  await expect(page.getByLabel('Source save status')).toHaveText('Saved');
+  await expect(page.locator('.finding-list .audit-progress')).toHaveCount(0);
+  await page.route('**/api/v1/source/save',route=>route.abort(),{times:1});
+  await page.keyboard.insertText('The invariant holds.');
+  await page.keyboard.press('ControlOrMeta+s');
+  await expect(page.getByLabel('Source save status')).toHaveText('Save failed');
+  await expect(page.locator('.finding-list .audit-progress')).toHaveCount(0);
+  await page.getByRole('button',{name:'Retry',exact:true}).click();
+  await expect(page.getByLabel('Source save status')).toHaveText('Saved');
+  await expect(page.locator('.group .audit-progress')).toHaveText('1/2');
+  await expect(page.locator('.finding').first().getByLabel('Justification saved',{exact:true})).toBeVisible();
+  await page.locator('.group').click();
+  await expect(page.locator('.group .audit-progress')).toHaveText('1/2');
+  await page.locator('.group').click();
+  await page.locator('.finding').last().click();
+  await page.getByRole('button',{name:'Propagate to callers',exact:true}).click();
+  await expect(page.locator('.cm-content')).toContainText('/// # Panics');
+  await page.keyboard.insertText('The caller handles this panic.');
+  await page.keyboard.press('ControlOrMeta+s');
+  await expect(page.getByLabel('Source save status')).toHaveText('Saved');
+  for(const mark of ['Justification saved','Propagation saved'])await expect(page.locator('.group').getByLabel(mark,{exact:true})).toBeVisible();
+  await expect(page.locator('.finding').last().getByLabel('Propagation saved',{exact:true})).toBeVisible();
+  await page.getByLabel('Search findings',{exact:true}).fill('first');
+  await expect(page.locator('.finding')).toHaveCount(1);
+  await expect(page.locator('.group').getByLabel('Justification saved',{exact:true})).toBeVisible();
+  await expect(page.locator('.group').getByLabel('Propagation saved',{exact:true})).toHaveCount(0);
+  await page.getByLabel('Search findings',{exact:true}).fill('');
+  await page.getByRole('button',{name:'⇄ Invert effect',exact:true}).click();
+  await expect(page.locator('.group')).toHaveCount(2);
+  for(const mark of ['Justification saved','Propagation saved'])await expect(page.locator('.group').getByLabel(mark,{exact:true})).toBeVisible();
+  await page.screenshot({path:join(repo,'target/audit-left-progress.png'),fullPage:true});
+  await page.getByRole('button',{name:'↻ Reanalyze',exact:true}).click();
+  await expect(page.locator('.status')).toHaveText('complete');
+  await expect(page.locator('.group')).toHaveCount(0);
+});
+
 test('source documentation autosaves and manual analysis waits for writes and pauses editing',async({page})=>{
   await selectFinding(page);await expectSimpleDetails(page);
   await expect(page.getByText('SAVED DRAFTS',{exact:false})).toHaveCount(0);
@@ -192,6 +295,9 @@ for(const waitForSave of [false,true])for(const action of ['Justify here','Propa
   await page.keyboard.press('ControlOrMeta+s');
   await expect(page.getByLabel('Source save status')).toHaveText('Saved');
   await expect(page.locator('.inline-prompt')).toHaveCount(0);
+  const mark=action==='Justify here'?'Justification saved':'Propagation saved';
+  await expect(page.locator('.finding.selected').getByLabel(mark,{exact:true})).toBeVisible();
+  await expect(page.locator('.group').getByLabel(mark,{exact:true})).toBeVisible();
   const source=await readFile(join(dir,'src/lib.rs'),'utf8');
   expect(source).toContain('This panic is intentional.');
   expect(source).toContain('// λ before the verified sites');
@@ -955,6 +1061,12 @@ for(const action of ['Justify via override','Propagate obligations via override'
         await expect(page.locator('.status')).toHaveText('complete · reanalysis needed');
         await expect(page.locator('.draft')).toHaveCount(0);
         await expect(page.getByRole('button',{name:completed,exact:true})).toBeVisible();
+        const mark=action.startsWith('Justify')?'Justification saved':'Propagation saved';
+        await expect(page.locator('.finding.selected').getByLabel(mark,{exact:true})).toBeVisible();
+        await expect(page.locator('.group').getByLabel(mark,{exact:true})).toBeVisible();
+        await page.getByRole('button',{name:'⇄ Invert effect',exact:true}).click();
+        await expect(page.locator('.group').getByLabel(mark,{exact:true})).toBeVisible();
+        await page.getByRole('button',{name:'⇄ Invert effect',exact:true}).click();
         await expect(page.getByRole('button',{name:alternative,exact:true})).toHaveCount(0);
         await expect(page.locator('footer')).toContainText(existing?'two.toml':'custom-overrides.toml');
         expect(await readFile(destination,'utf8')).toContain('The flag is checked by the caller.');
@@ -995,6 +1107,7 @@ for(const action of ['Justify via override','Propagate obligations via override'
         await expect(page.getByRole('button',{name:completed,exact:true})).toHaveCount(0);
         await expect(page.getByRole('button',{name:action,exact:true})).toBeVisible();
         await expect(page.locator('.status')).toContainText('stale');
+        await expect(page.locator('.finding-list').getByLabel(mark,{exact:true})).toHaveCount(0);
         expect(await page.locator('.cm-line').allTextContents()).toEqual(displayedSource);
         await page.getByRole('button',{name:'↻ Reanalyze',exact:true}).click();
         await expect(page.locator('.status')).toHaveText('complete');
