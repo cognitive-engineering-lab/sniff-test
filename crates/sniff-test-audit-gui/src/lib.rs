@@ -344,7 +344,7 @@ fn group_effect_sources(
             return None;
         }
         Some(json!({
-            "key":serde_json::to_string(source).unwrap(),"label":label,
+            "key":serde_json::to_string(source).unwrap(),"label":label,"path":path,
             "count":reports.len(),
             "items":reports.iter().map(|f| finding_summary(f)).collect::<Vec<_>>()
         }))
@@ -364,7 +364,7 @@ fn group_effect_sources(
         );
         label.to_lowercase().contains(query).then(|| {
             json!({
-                "key":format!("finding:{}",finding.id),"label":label,
+                "key":format!("finding:{}",finding.id),"label":label,"path":path,
                 "count":1,"items":[finding_summary(finding)]
             })
         })

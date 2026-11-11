@@ -19,6 +19,57 @@ test.beforeEach(async()=>{
 });
 test.afterEach(async()=>{await stop();if(dir)await rm(dir,{recursive:true,force:true,maxRetries:5,retryDelay:100});});
 async function selectFinding(page:any){await page.goto(url);await page.locator('.group').first().click();await expect(page.locator('.finding').first()).toBeVisible();await expect(page.locator('.status')).not.toContainText('running');await page.locator('.finding').first().click();await expect(page.locator('.cm-editor')).toBeVisible();}
+
+for(const [kind,dependency,display] of [
+  ['registry','/home/example/.cargo/registry/src/index.crates.io-123/wyz-0.5.1/src/lib.rs','wyz-0.5.1/src/lib.rs'],
+  ['toolchain','/home/example/.rustup/toolchains/nightly-2026-05-01-aarch64-apple-darwin/lib/rustlib/src/rust/library/core/src/option.rs','nightly-2026-05-01-aarch64-apple-darwin/lib/rustlib/src/rust/library/core/src/option.rs'],
+])test(`${kind} paths are shortened consistently while navigation retains the full path`,async({page})=>{
+  const original=join(dir,'src/lib.rs');
+  await page.route('**/api/v1/findings?*',async route=>{
+    const response=await route.fetch(),result=await response.json();
+    for(const group of result.groups){
+      if(group.label){
+        group.label=group.label.replace(group.path,dependency);
+        group.path=dependency;
+      }else group.key=dependency;
+    }
+    await route.fulfill({response,json:result});
+  });
+  await page.route('**/api/v1/finding?*',async route=>{
+    const response=await route.fetch(),finding=await response.json();
+    finding.audit.source.path=dependency;
+    for(const step of finding.audit.trace)if(step.location)step.location.path=dependency;
+    await route.fulfill({response,json:finding});
+  });
+  let requestedPath:string|null=null;
+  await page.route('**/api/v1/buffer?*',async route=>{
+    const request=new URL(route.request().url());
+    if(request.searchParams.get('path')!==dependency){await route.continue();return;}
+    requestedPath=request.searchParams.get('path');
+    request.searchParams.set('path',original);
+    const response=await route.fetch({url:request.href}),buffer=await response.json();
+    await route.fulfill({response,json:{...buffer,path:dependency,writable:false}});
+  });
+  await selectFinding(page);
+  await expect(page.locator('.group-path')).toHaveText(display);
+  await expect(page.locator('.group')).toHaveAttribute('title',dependency);
+  await expect(page.locator('.filename')).toHaveText(display);
+  await expect(page.locator('.filename')).toHaveAttribute('title',dependency);
+  await expect(page.locator('.trace small').first()).toContainText(`${display}:`);
+  await expect(page.locator('.trace small').first()).toHaveAttribute('title',dependency);
+  expect(requestedPath).toBe(dependency);
+  await page.getByRole('button',{name:'Report root',exact:true}).click();
+  await expect(page.locator('.filename')).toHaveText('src/lib.rs');
+  requestedPath=null;
+  await page.locator('.trace button').first().click();
+  await expect(page.locator('.filename')).toHaveText(display);
+  expect(requestedPath).toBe(dependency);
+  await page.getByRole('button',{name:'Invert effect'}).click();
+  await expect(page.locator('.group-path')).toContainText(`${display}:`);
+  await expect(page.locator('.group-path')).not.toContainText('/home/example');
+  await expect(page.locator('.group')).toHaveAttribute('title',new RegExp(dependency.replaceAll('.','\\.')));
+});
+
 async function editDocumentation(page:any,heading:string,explanation:string){
   await page.getByRole('button',{name:'Report root',exact:true}).click();
   await page.locator('.cm-content').click();
