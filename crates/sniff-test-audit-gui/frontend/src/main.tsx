@@ -142,7 +142,7 @@ function Editor({buffer, locked, reloadKey, onFlush, location:target, onChange, 
       const resolved=attachments.some(a=>a.attached)||state.field(commentEditing).regions.length>0;
       return Decoration.set(candidates.flatMap((candidate,index)=>{
         const attachment=attachments[index];
-        if(!candidate.external && (resolved || !attachment.ownLine))return [];
+        if(!candidate.external && (resolved || !attachment.insertable))return [];
         return [Decoration.widget({widget:candidate.widget,block:true,side:-1}).range(attachment.lineStart)];
       }),true);
     }

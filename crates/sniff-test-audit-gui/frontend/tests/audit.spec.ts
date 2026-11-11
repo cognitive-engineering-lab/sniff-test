@@ -347,6 +347,31 @@ for(const [effect,heading,source] of [
   });
 }
 
+test('single-line unsafe block supports justification, undo, save and reanalysis',async({page})=>{
+  await stop();
+  const source='pub fn read(p: *const u8) -> u8 {\n    unsafe { *p }\n}\n';
+  await writeFile(join(dir,'src/lib.rs'),source);await launch('safety');await selectFinding(page);
+  const justify=page.getByRole('button',{name:'Justify here',exact:true});
+  await expect(justify).toBeVisible();
+  await justify.click();
+  await expect(page.locator('.cm-content')).toContainText('// SAFETY:');
+  await expect(page.locator('.inline-prompt')).toHaveCount(0);
+  await page.keyboard.press('ControlOrMeta+z');
+  await expect(page.locator('.cm-content')).not.toContainText('// SAFETY:');
+  await expect(justify).toBeVisible();
+  await justify.click();
+  await expect(page.locator('.cm-content')).toContainText('// SAFETY:');
+  await expect(page.locator('.cm-content')).toBeFocused();
+  await page.keyboard.insertText('The pointer refers to a live initialized value.');
+  await page.keyboard.press('ControlOrMeta+s');
+  await expect(page.getByLabel('Source save status')).toHaveText('Saved');
+  expect(await readFile(join(dir,'src/lib.rs'),'utf8')).toBe(source.replace('    unsafe', '    // SAFETY: The pointer refers to a live initialized value.\n    unsafe'));
+  await page.getByRole('button',{name:'↻ Reanalyze',exact:true}).click();
+  await expect(page.locator('.status')).toHaveText('complete');
+  await expect(page.locator('.finding-list')).toContainText('No matching findings.');
+  await expect(page.locator('.error')).toHaveCount(0);
+});
+
 for (const viewport of [{width:1440,height:900},{width:900,height:700},{width:1440,height:480}]) {
   test(`details stay anchored while navigating at ${viewport.width}x${viewport.height}`,async({page})=>{
     await stop();

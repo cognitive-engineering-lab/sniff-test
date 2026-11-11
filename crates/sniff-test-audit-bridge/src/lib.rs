@@ -801,10 +801,19 @@ pub fn documentation_edit(
     );
     let line_start = source[..location.start].rfind('\n').map_or(0, |i| i + 1);
     let prefix = &source[line_start..location.start];
+    // Source markers attach by line, so an operation directly inside an unsafe
+    // block can be justified above that block without rewriting the expression.
+    let unsafe_block = action == "justification"
+        && prefix
+            .trim()
+            .strip_prefix("unsafe")
+            .and_then(|rest| rest.trim_start().strip_prefix('{'))
+            .is_some_and(|rest| rest.trim().is_empty());
     ensure!(
-        prefix.trim().is_empty(),
+        prefix.trim().is_empty() || unsafe_block,
         "target shares a line with other syntax; edit source manually"
     );
+    let prefix = &prefix[..prefix.len() - prefix.trim_start().len()];
     let newline = if source.contains("\r\n") {
         "\r\n"
     } else {
@@ -1286,6 +1295,78 @@ mod tests {
             assert!(edited.starts_with("fn earlier() {}\r\n    //"));
             assert!(edited.contains(&format!("Checked λ.\r\n{attributes}")));
             assert!(edited.ends_with("    fn sample() {}\r\n"));
+        }
+    }
+
+    #[test]
+    fn justification_precedes_standalone_inline_unsafe_block() {
+        for newline in ["\n", "\r\n"] {
+            for indent in ["", "    ", "\t"] {
+                for wrapper in ["unsafe { ", "unsafe{", "unsafe  {  "] {
+                    let source = format!(
+                        "fn sample() {{{newline}{indent}{wrapper}allocate() }}{newline}}}{newline}"
+                    );
+                    let start = source.find("allocate()").unwrap();
+                    let location = Location {
+                        path: "lib.rs".into(),
+                        source_id: "id".into(),
+                        hash: content_hash(source.as_bytes()),
+                        start,
+                        end: start + "allocate()".len(),
+                        available: true,
+                    };
+                    let audit = metadata(location.clone());
+                    let edited = documentation_edit(
+                        &source,
+                        &location,
+                        "justification",
+                        &audit,
+                        "Checked λ.",
+                    )
+                    .unwrap();
+                    assert_eq!(
+                        edited,
+                        format!(
+                            "fn sample() {{{newline}{indent}// ALLOC:{newline}{indent}// Checked λ.{newline}{indent}{wrapper}allocate() }}{newline}}}{newline}"
+                        )
+                    );
+                    assert!(
+                        documentation_edit(&source, &location, "obligation", &audit, "Reason.")
+                            .is_err()
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn justification_refuses_other_inline_prefixes() {
+        for prefix in [
+            "let value = unsafe { ",
+            "if ready { unsafe { ",
+            "unsafe { earlier(); ",
+            "unsafe { /* note */ ",
+        ] {
+            let source = format!("fn sample() {{\n    {prefix}allocate() }}\n}}\n");
+            let start = source.find("allocate()").unwrap();
+            let location = Location {
+                path: "lib.rs".into(),
+                source_id: "id".into(),
+                hash: content_hash(source.as_bytes()),
+                start,
+                end: start + "allocate()".len(),
+                available: true,
+            };
+            assert!(
+                documentation_edit(
+                    &source,
+                    &location,
+                    "justification",
+                    &metadata(location.clone()),
+                    "Reason."
+                )
+                .is_err()
+            );
         }
     }
 

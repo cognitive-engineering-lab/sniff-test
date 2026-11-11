@@ -105,7 +105,9 @@ export function sourcePromptAttachments(source:string, candidates:Candidate[], d
       if(node.from===position && node.parent.name==='AttributeItem')anchor=node.parent.from;
     }
     const lineStart=source.lastIndexOf('\n',anchor-1)+1;
-    const ownLine=!source.slice(source.lastIndexOf('\n',position-1)+1,position).trim();
+    const prefix=source.slice(source.lastIndexOf('\n',position-1)+1,position).trim();
+    // Markers attach by source line, including an operation directly inside unsafe { ... }.
+    const insertable=!prefix || (candidate.action==='justification' && /^unsafe\s*\{\s*$/.test(prefix));
     let attached=false,commentStart:number|undefined;
     if(!candidate.external && documentation){
       let end=lineStart;
@@ -129,6 +131,6 @@ export function sourcePromptAttachments(source:string, candidates:Candidate[], d
         end=start;
       }
     }
-    return {lineStart,ownLine,attached,commentStart};
+    return {lineStart,insertable,attached,commentStart};
   });
 }
