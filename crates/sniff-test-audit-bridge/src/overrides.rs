@@ -52,6 +52,7 @@ pub struct OverrideDestination {
 #[derive(Debug, Clone, Serialize)]
 pub struct OverrideEditor {
     pub token: String,
+    pub can_remove: bool,
     pub document: String,
     pub obligation_documentation: Option<sniff_test_report::ObligationDocumentation>,
     pub destinations: Vec<OverrideDestination>,
@@ -283,6 +284,7 @@ impl Session {
         );
         let editor = OverrideEditor {
             token,
+            can_remove: index.is_some(),
             document: saved.annotation.document.clone(),
             obligation_documentation: saved.annotation.obligation_documentation.clone(),
             destinations,
@@ -306,29 +308,7 @@ impl Session {
         filename: Option<&str>,
         document: String,
     ) -> Result<(Buffer, String)> {
-        ensure!(
-            !self.analysis.running,
-            "wait for analysis to finish before editing overrides"
-        );
-        let editor = self
-            .pending_editor
-            .clone()
-            .context("reopen the override editor before saving")?;
-        ensure!(
-            editor.token == token && editor.generation == self.analysis.generation,
-            "Analysis or editor changed; reopen the override editor."
-        );
-        let (_, manifest_original, _) = self.override_destinations()?;
-        ensure!(
-            manifest_original == editor.manifest_original,
-            "Configuration changed; reopen the override editor before saving."
-        );
-        for (path, original) in &editor.originals {
-            ensure!(
-                read_optional(Path::new(path))? == *original,
-                "Override file changed; reopen the override editor before saving."
-            );
-        }
+        let (editor, mut buffer) = self.verified_override_editor(token)?;
         let original = editor
             .originals
             .get(destination)
@@ -356,19 +336,6 @@ impl Session {
             );
             destination.to_owned()
         };
-        let revision = match &editor.target {
-            OverrideEditorTarget::Finding { revision, .. }
-            | OverrideEditorTarget::Saved { revision, .. } => *revision,
-        };
-        let mut buffer = self.buffer(&editor.saved.location.path)?;
-        ensure!(
-            !buffer.writable && buffer.revision == revision,
-            "override revision conflict"
-        );
-        ensure!(
-            editor.saved.location.hash == content_hash(buffer.content.as_bytes()),
-            "dependency source changed; reanalyze"
-        );
         validate_override_document(&document, &editor.saved.annotation)?;
         let mut saved = editor.saved.clone();
         saved.annotation.document = document;
@@ -432,6 +399,99 @@ impl Session {
         self.analysis.overrides_changed = true;
         self.pending_editor = None;
         Ok((self.buffers[&buffer.path].clone(), destination))
+    }
+
+    /// Remove only the saved contribution represented by the editor snapshot.
+    pub fn remove_override(&mut self, token: &str) -> Result<(Buffer, String)> {
+        let (editor, mut buffer) = self.verified_override_editor(token)?;
+        let index = editor.index.context("this override has not been saved")?;
+        let destination = editor.saved.destination.clone();
+        ensure!(
+            buffer.saved_overrides.get(index).is_some_and(|saved| {
+                saved.destination == destination
+                    && saved.annotation.document == editor.saved.annotation.document
+                    && saved
+                        .annotation
+                        .selector
+                        .same_target(&editor.saved.annotation.selector)
+            }),
+            "saved override changed; reopen the override editor"
+        );
+        let original = editor
+            .originals
+            .get(&destination)
+            .and_then(Option::as_deref)
+            .context("saved override file no longer exists")?;
+        validate_override_file(original)?;
+        let mut document = original.parse::<toml_edit::Document>()?;
+        remove_source_override(&mut document, &editor.saved.annotation)?;
+        let content = document.to_string();
+        validate_override_file(&content)?;
+        let manifest = self.override_manifest();
+        let plan = OverrideFileWrite {
+            destination: destination.clone(),
+            original: Some(original.to_owned()),
+            content,
+            manifest,
+            manifest_original: editor.manifest_original.clone(),
+            manifest_content: editor.manifest_original.clone().unwrap_or_default(),
+        };
+        self.write_override_files(&plan)?;
+        buffer.saved_overrides.remove(index);
+        buffer.revision += 1;
+        let previous = self.buffers.insert(buffer.path.clone(), buffer.clone());
+        if let Err(error) = self.persist() {
+            if let Some(previous) = previous {
+                self.buffers.insert(buffer.path.clone(), previous);
+            }
+            restore_optional(Path::new(&destination), &plan.original)?;
+            return Err(error);
+        }
+        self.override_snapshot = None;
+        self.reconcile_overrides();
+        self.analysis.overrides_changed = true;
+        self.pending_editor = None;
+        Ok((self.buffers[&buffer.path].clone(), destination))
+    }
+
+    fn verified_override_editor(&mut self, token: &str) -> Result<(OverrideEditor, Buffer)> {
+        ensure!(
+            !self.analysis.running,
+            "wait for analysis to finish before editing overrides"
+        );
+        let editor = self
+            .pending_editor
+            .clone()
+            .context("reopen the override editor before saving")?;
+        ensure!(
+            editor.token == token && editor.generation == self.analysis.generation,
+            "Analysis or editor changed; reopen the override editor."
+        );
+        let (_, manifest_original, _) = self.override_destinations()?;
+        ensure!(
+            manifest_original == editor.manifest_original,
+            "Configuration changed; reopen the override editor before saving."
+        );
+        for (path, original) in &editor.originals {
+            ensure!(
+                read_optional(Path::new(path))? == *original,
+                "Override file changed; reopen the override editor before saving."
+            );
+        }
+        let revision = match &editor.target {
+            OverrideEditorTarget::Finding { revision, .. }
+            | OverrideEditorTarget::Saved { revision, .. } => *revision,
+        };
+        let buffer = self.buffer(&editor.saved.location.path)?;
+        ensure!(
+            !buffer.writable && buffer.revision == revision,
+            "override revision conflict"
+        );
+        ensure!(
+            editor.saved.location.hash == content_hash(buffer.content.as_bytes()),
+            "dependency source changed; reanalyze"
+        );
+        Ok((editor, buffer))
     }
 
     fn override_target(
@@ -702,7 +762,9 @@ fn saved_contribution_exists(file: &OverrideFile, annotation: &OverrideDocument)
         return false;
     }
     if annotation.action == "obligation" {
-        replace_section(value, &expected) == value.trim()
+        let lines = value.lines().collect::<Vec<_>>();
+        section_range(&lines, expected.lines().next().unwrap_or_default().trim())
+            .is_some_and(|range| lines[range].join("\n").trim() == expected)
     } else {
         // Match complete lines, never a prefix of a changed explanation.
         format!("\n{}\n", value.trim()).contains(&format!("\n{expected}\n"))
@@ -773,22 +835,28 @@ fn markdown(document: &str, action: &str) -> String {
         .to_owned()
 }
 
+fn section_range(lines: &[&str], heading: &str) -> Option<std::ops::Range<usize>> {
+    let start = lines
+        .iter()
+        .position(|line| line.trim().eq_ignore_ascii_case(heading))?;
+    let level = heading.chars().take_while(|c| *c == '#').count();
+    let end = (start + 1..lines.len())
+        .find(|&i| {
+            let line = lines[i].trim_start();
+            let depth = line.chars().take_while(|c| *c == '#').count();
+            depth > 0 && depth <= level && line.as_bytes().get(depth) == Some(&b' ')
+        })
+        .unwrap_or(lines.len());
+    Some(start..end)
+}
+
 // Replace just this contract section; keep prose and every other effect's contract.
 fn replace_section(base: &str, replacement: &str) -> String {
     let heading = replacement.lines().next().unwrap_or_default().trim();
     let lines = base.lines().collect::<Vec<_>>();
-    if let Some(start) = lines
-        .iter()
-        .position(|l| l.trim().eq_ignore_ascii_case(heading))
-    {
-        let level = heading.chars().take_while(|c| *c == '#').count();
-        let end = (start + 1..lines.len())
-            .find(|&i| {
-                let l = lines[i].trim_start();
-                let n = l.chars().take_while(|c| *c == '#').count();
-                n > 0 && n <= level && l.as_bytes().get(n) == Some(&b' ')
-            })
-            .unwrap_or(lines.len());
+    if let Some(range) = section_range(&lines, heading) {
+        let start = range.start;
+        let end = range.end;
         [
             lines[..start].join("\n"),
             replacement.to_owned(),
@@ -926,6 +994,68 @@ fn merge_source_override(
     *item = toml_edit::value(value);
     if let Some(decor) = decor {
         *item.as_value_mut().unwrap().decor_mut() = decor;
+    }
+    Ok(())
+}
+
+/// Delete one verified contribution, retaining sibling annotations at the same selector.
+fn remove_source_override(
+    document: &mut toml_edit::Document,
+    annotation: &OverrideDocument,
+) -> Result<()> {
+    let parsed: OverrideFile = toml::from_str(&document.to_string())?;
+    ensure!(
+        saved_contribution_exists(&parsed, annotation),
+        "saved override contribution changed"
+    );
+    let selector = &annotation.selector;
+    let entries = parsed
+        .overrides
+        .crates
+        .get(&selector.crate_name)
+        .and_then(|versions| versions.get(&selector.version))
+        .context("override no longer exists")?;
+    let (key, existing) = entries
+        .iter()
+        .find(|(key, _)| {
+            parse_lines(key).is_ok_and(|(path, start, end)| {
+                path == selector.source_path && start <= selector.line && selector.line <= end
+            })
+        })
+        .context("override no longer exists")?;
+    let expected = markdown(&annotation.document, &annotation.action);
+    let value = if annotation.action == "obligation" {
+        // The saved section is verified above; remove through its next peer heading.
+        let heading = expected.lines().next().unwrap_or_default().trim();
+        let lines = existing.lines().collect::<Vec<_>>();
+        let range =
+            section_range(&lines, heading).context("saved contract section no longer exists")?;
+        let start = range.start;
+        let end = range.end;
+        [lines[..start].join("\n"), lines[end..].join("\n")]
+            .into_iter()
+            .filter(|part| !part.trim().is_empty())
+            .collect::<Vec<_>>()
+            .join("\n\n")
+    } else {
+        let wrapped = format!("\n{}\n", existing.trim());
+        wrapped
+            .replacen(&format!("\n{expected}\n"), "\n", 1)
+            .trim()
+            .to_owned()
+    };
+    let table = document["overrides"]["crates"][&selector.crate_name][&selector.version]
+        .as_table_like_mut()
+        .context("override entries must be tables")?;
+    if value.trim().is_empty() {
+        table.remove(key);
+    } else {
+        let item = table.get_mut(key).context("override no longer exists")?;
+        let decor = item.as_value().map(|value| value.decor().clone());
+        *item = toml_edit::value(value);
+        if let Some(decor) = decor {
+            *item.as_value_mut().unwrap().decor_mut() = decor;
+        }
     }
     Ok(())
 }
@@ -1168,6 +1298,163 @@ mod tests {
         let saved = fs::read_to_string(context.destination).unwrap();
         assert!(saved.contains("pointer was checked") && !saved.contains("pointer is valid"));
         assert_eq!(fs::read(path).unwrap(), source);
+    }
+
+    fn saved_editor(session: &mut Session, path: &str) -> OverrideEditor {
+        let revision = session.buffer(path).unwrap().revision;
+        session
+            .open_override_editor(OverrideEditorTarget::Saved {
+                path: path.into(),
+                index: 0,
+                revision,
+            })
+            .unwrap()
+    }
+
+    #[test]
+    fn removal_preserves_sibling_contributions_and_toml_comments() {
+        let first = annotation();
+        let mut other = first.clone();
+        other.effect = "panic".into();
+        other.document = "// PANIC: first extended\n// continuation".into();
+        for inline in [false, true] {
+            let source = if inline {
+                "# file comment\n[overrides.crates.dep]\n\"0.1.0\" = { \"src/lib.rs:7:7\" = \"SAFETY: first extra\" } # inline\n"
+            } else {
+                "# file comment\n[overrides.crates.dep.\"0.1.0\"]\n# nearby comment\n\"src/lib.rs:7:7\" = \"SAFETY: first extra\" # inline\n"
+            };
+            let mut document: toml_edit::Document = source.parse().unwrap();
+            merge_source_override(&mut document, &first, None).unwrap();
+            merge_source_override(&mut document, &other, None).unwrap();
+            remove_source_override(&mut document, &first).unwrap();
+            let text = value(&document, "src/lib.rs:7:7");
+            assert!(text.contains("SAFETY: first extra"));
+            assert!(text.contains("PANIC: first extended\ncontinuation"));
+            assert!(!text.lines().any(|line| line == "SAFETY: first"));
+            assert!(document.to_string().contains("# file comment"));
+            assert!(document.to_string().contains("# inline"));
+            remove_source_override(&mut document, &other).unwrap();
+            assert_eq!(
+                value(&document, "src/lib.rs:7:7").trim(),
+                "SAFETY: first extra"
+            );
+            assert!(remove_source_override(&mut document, &first).is_err());
+        }
+    }
+
+    #[test]
+    fn removal_deletes_only_selected_contract_section_and_empty_entries() {
+        let mut annotation = annotation();
+        annotation.action = "obligation".into();
+        annotation.document =
+            "/// # Panics\n/// New condition.\n/// ## Details\n/// Nested.".into();
+        annotation.selector.documentation = "Summary.\n\n# Panics\nOld condition.\n\n# Safety\nKeep this contract.\n\n# Examples\nExample.".into();
+        let mut document = toml_edit::Document::new();
+        merge_source_override(&mut document, &annotation, None).unwrap();
+        remove_source_override(&mut document, &annotation).unwrap();
+        let text = value(&document, "src/lib.rs:7:7");
+        assert!(
+            !text.contains("Panics") && !text.contains("condition.") && !text.contains("Nested")
+        );
+        assert!(
+            text.contains("Summary.")
+                && text.contains("# Safety\nKeep this contract.")
+                && text.contains("# Examples\nExample.")
+        );
+        annotation.selector.documentation.clear();
+        let mut document = toml_edit::Document::new();
+        merge_source_override(&mut document, &annotation, None).unwrap();
+        remove_source_override(&mut document, &annotation).unwrap();
+        let parsed: OverrideFile = toml::from_str(&document.to_string()).unwrap();
+        assert!(parsed.overrides.crates["dep"]["0.1.0"].is_empty());
+    }
+
+    #[test]
+    fn saved_removal_persists_without_changing_source_or_configuration() {
+        let (root, _dep, mut session, path) = setup();
+        let source = fs::read(&path).unwrap();
+        let context = editor(&mut session, &path);
+        assert!(!context.can_remove);
+        assert!(session.remove_override(&context.token).is_err());
+        let (buffer, destination) = session
+            .commit_override(
+                &context.token,
+                &context.destination,
+                Some("saved.toml"),
+                "// SAFETY: checked\n// continued".into(),
+            )
+            .unwrap();
+        let manifest = fs::read(root.path().join("sniff-test.toml")).unwrap();
+        let context = saved_editor(&mut session, &path);
+        assert!(context.can_remove);
+        let (removed, actual_destination) = session.remove_override(&context.token).unwrap();
+        assert_eq!(actual_destination, destination);
+        assert!(removed.saved_overrides.is_empty());
+        assert_eq!(removed.revision, buffer.revision + 1);
+        assert!(session.analysis.overrides_changed && !session.analysis.stale);
+        assert!(session.remove_override(&context.token).is_err());
+        assert!(Path::new(&destination).is_file());
+        assert!(!fs::read_to_string(destination).unwrap().contains("SAFETY:"));
+        assert_eq!(
+            fs::read(root.path().join("sniff-test.toml")).unwrap(),
+            manifest
+        );
+        assert_eq!(fs::read(&path).unwrap(), source);
+        let config = session.config.clone();
+        drop(session);
+        let mut reopened =
+            Session::open(root.path().into(), root.path().join("target"), config).unwrap();
+        reopened
+            .allowed_external
+            .insert(Path::new(&path).canonicalize().unwrap());
+        assert!(reopened.buffer(&path).unwrap().saved_overrides.is_empty());
+    }
+
+    #[test]
+    fn removal_rejects_conflicts_without_writing_and_rolls_back_persistence_failure() {
+        for conflict in [
+            "token",
+            "generation",
+            "revision",
+            "source",
+            "configuration",
+            "file",
+            "running",
+            "persistence",
+        ] {
+            let (root, _dep, mut session, path) = setup();
+            let context = editor(&mut session, &path);
+            let (_, destination) = session
+                .commit_override(
+                    &context.token,
+                    &context.destination,
+                    Some("saved.toml"),
+                    "// SAFETY: checked".into(),
+                )
+                .unwrap();
+            let context = saved_editor(&mut session, &path);
+            let mut token = context.token;
+            match conflict {
+                "token" => token.push('x'),
+                "generation" => session.analysis.generation += 1,
+                "revision" => session.buffers.get_mut(&path).unwrap().revision += 1,
+                "source" => fs::write(&path, "// changed dependency\n").unwrap(),
+                "configuration" => {
+                    fs::write(root.path().join("sniff-test.toml"), "# changed\n").unwrap()
+                }
+                "file" => fs::write(&destination, "# changed\n").unwrap(),
+                "running" => session.analysis.running = true,
+                "persistence" => session.metadata_file = root.path().join("target"),
+                _ => unreachable!(),
+            }
+            let before = fs::read(&destination).unwrap();
+            assert!(session.remove_override(&token).is_err(), "{conflict}");
+            assert_eq!(fs::read(&destination).unwrap(), before, "{conflict}");
+            if conflict == "persistence" {
+                assert_eq!(session.buffers[&path].saved_overrides.len(), 1);
+                assert!(session.pending_editor.is_some());
+            }
+        }
     }
 
     #[test]

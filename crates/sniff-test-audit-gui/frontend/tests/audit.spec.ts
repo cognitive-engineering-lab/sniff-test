@@ -1119,6 +1119,72 @@ for(const action of ['Justify via override','Propagate obligations via override'
   }
 }
 
+for(const action of ['Justify via override','Propagate obligations via override']) {
+  test(`dependency ${action} can be removed with confirmation`,async({page})=>{
+    const dependency=await mkdtemp(join(tmpdir(),'sniff-remove-override-'));
+    const source='pub fn danger(flag: bool) { assert!(flag); }\n';
+    try {
+      await stop();await mkdir(join(dependency,'src'));
+      await writeFile(join(dependency,'Cargo.toml'),'[package]\nname="remove-dep"\nversion="0.1.0"\nedition="2024"\n');
+      await writeFile(join(dependency,'src/lib.rs'),source);
+      await writeFile(join(dir,'Cargo.toml'),`[package]\nname="audit-browser-fixture"\nversion="0.1.0"\nedition="2024"\n[workspace]\n[dependencies]\nremove-dep={path=${JSON.stringify(dependency)}}\n`);
+      await writeFile(join(dir,'src/lib.rs'),'pub fn entry(flag: bool) { remove_dep::danger(flag); }\n');
+      const original='# Keep comment\n[overrides]\n"unrelated::api" = "# Safety\\nExisting contract"\n';
+      await writeFile(join(dir,'sniff-test.toml'),'[contracts]\noverride-files=["saved.toml","other.toml"]\n');
+      for(const file of ['saved.toml','other.toml'])await writeFile(join(dir,file),original);
+      await launch();await selectFinding(page);
+      const completed=action.startsWith('Justify')?'Justified!':'Obligation propagated!';
+      const mark=action.startsWith('Justify')?'Justification saved':'Propagation saved';
+      const text=action.startsWith('Justify')?'// PANIC: Checked by caller.':'/// # Panics\n/// Checked by caller.';
+      const dialog=page.getByRole('dialog');
+      await page.getByRole('button',{name:action,exact:true}).click();
+      await expect(dialog.getByRole('button',{name:'Remove override',exact:true})).toHaveCount(0);
+      await dialog.getByLabel('Override documentation').fill(text);
+      await dialog.getByRole('button',{name:'Save',exact:true}).click();
+      await page.getByRole('button',{name:completed,exact:true}).click();
+      await dialog.getByLabel('Override documentation').fill(text+' Unsaved change.');
+      await dialog.getByLabel('Override file',{exact:true}).selectOption({index:1});
+      await page.setViewportSize({width:320,height:700});
+      await expect(dialog.getByRole('button',{name:'Remove override',exact:true})).toBeInViewport();
+      await dialog.getByRole('button',{name:'Remove override',exact:true}).click();
+      await expect(dialog).toContainText('saved.toml');
+      await expect(dialog.getByRole('button',{name:'Confirm removal',exact:true})).toBeInViewport();
+      expect(await dialog.evaluate(element=>element.scrollWidth<=element.clientWidth)).toBe(true);
+
+      await dialog.getByRole('button',{name:'Cancel',exact:true}).click();
+      await page.setViewportSize({width:1440,height:960});
+      await expect(dialog.getByLabel('Override documentation')).toHaveValue(text+' Unsaved change.');
+      expect(await readFile(join(dir,'saved.toml'),'utf8')).toContain('Checked by caller.');
+      // Conflicting writes must leave the popup and saved contribution intact.
+      const saved=await readFile(join(dir,'saved.toml'),'utf8');
+      await writeFile(join(dir,'saved.toml'),saved+'# concurrent edit\n');
+      await dialog.getByRole('button',{name:'Remove override',exact:true}).click();
+      await dialog.getByRole('button',{name:'Confirm removal',exact:true}).click();
+      await expect(dialog.getByRole('alert')).toContainText('Override file changed');
+      expect(await readFile(join(dir,'saved.toml'),'utf8')).toBe(saved+'# concurrent edit\n');
+      await dialog.getByRole('button',{name:'Cancel',exact:true}).click();
+      await dialog.getByRole('button',{name:'Cancel',exact:true}).click();
+      await page.getByRole('button',{name:completed,exact:true}).click();
+      await dialog.getByLabel('Override documentation').fill(text+' Unsaved final explanation.');
+      await dialog.getByLabel('Override file',{exact:true}).selectOption({index:1});
+      await dialog.getByRole('button',{name:'Remove override',exact:true}).click();
+      await dialog.getByRole('button',{name:'Confirm removal',exact:true}).click();
+      await expect(dialog).not.toBeVisible();
+      await expect(page.getByRole('button',{name:completed,exact:true})).toHaveCount(0);
+      await expect(page.getByRole('button',{name:action,exact:true})).toBeVisible();
+      await expect(page.locator('.finding-list').getByLabel(mark,{exact:true})).toHaveCount(0);
+      await expect(page.locator('.group').getByLabel(mark,{exact:true})).toHaveCount(0);
+      const remaining=await readFile(join(dir,'saved.toml'),'utf8');
+      expect(remaining).not.toContain('Checked by caller.');
+      expect(remaining).toContain('# Keep comment');expect(remaining).toContain('unrelated::api');
+      expect(await readFile(join(dir,'other.toml'),'utf8')).toBe(original);
+      expect(await readFile(join(dependency,'src/lib.rs'),'utf8')).toBe(source);
+      await page.reload();await selectFinding(page);
+      await expect(page.getByRole('button',{name:completed,exact:true})).toHaveCount(0);
+    } finally {await stop();await rm(dependency,{recursive:true,force:true});}
+  });
+}
+
 test('file groups start collapsed and retain independent expansion and selection',async({page})=>{
   await stop();
   await writeFile(join(dir,'src/lib.rs'),'pub mod other;\npub fn first() { panic!("first"); }\n');

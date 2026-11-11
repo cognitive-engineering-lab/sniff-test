@@ -20,7 +20,7 @@ function sameSelector(a:unknown,b:unknown) {
   const left=a as Record<string,unknown>,right=b as Record<string,unknown>;
   return ['namespace','crate-name','version','source-path','source-hash','start','end','kind','site'].every(key=>left[key]===right[key]);
 }
-type OverrideEditor = {token:string; document:string; obligation_documentation?:ObligationDocumentation; destination:string; destinations:{path:string;exists:boolean}[]; action:string};
+type OverrideEditor = {token:string; can_remove:boolean; saved_destination:string; document:string; obligation_documentation?:ObligationDocumentation; destination:string; destinations:{path:string;exists:boolean}[]; action:string};
 type TemplateEdit = {path:string; revision:number; start:number; end:number; text:string; cursor:number};
 type EditorSelection = {path:string; from:number; to:number};
 type FindingNavigation = {source?:Location;root?:Location;contract?:Location;trace:(Location|null)[]};
@@ -198,6 +198,7 @@ function App() {
   const [error,setError]=useState(''),[busy,setBusy]=useState(false),[logs,setLogs]=useState(false);
   const [nav,setNav]=useState<Location[]>([]);
   const [overrideEditor,setOverrideEditor]=useState<OverrideEditor>();
+  const [confirmRemoval,setConfirmRemoval]=useState(false);
   const [createFile,setCreateFile]=useState(false),[overrideFilename,setOverrideFilename]=useState('sniff-test-overrides.toml');
   const [savedOverride,setSavedOverride]=useState('');
   const [editorSelection,setEditorSelection]=useState<EditorSelection>();
@@ -379,13 +380,21 @@ function App() {
     const request=annotation?{path:buffer.path,index:t.overrideIndex,revision:buffer.revision}:{id:selected?.id,action:t.action,revision:buffer.revision,generation:status.generation};
     const context=await api('override/editor',request);
     setCreateFile(false);setOverrideFilename('sniff-test-overrides.toml');
-    setOverrideEditor({...context,action:t.action});
+    setConfirmRemoval(false);
+    setOverrideEditor({...context,saved_destination:context.destination,action:t.action});
   }
   async function commitOverride(filename?:string) {
     if(!overrideEditor)return;
     const result=await api('override/commit',{token:overrideEditor.token,destination:overrideEditor.destination,document:overrideEditor.document,filename});
     saver.current!.load(result.buffer);setBuffer(result.buffer);setText(result.buffer.content);acceptStatus(result.status);
     setSavedOverride(result.destination);setCreateFile(false);setOverrideEditor(undefined);
+  }
+
+  async function removeOverride() {
+    if(!overrideEditor)return;
+    const result=await api('override/remove',{token:overrideEditor.token});
+    saver.current!.load(result.buffer);setBuffer(result.buffer);setText(result.buffer.content);acceptStatus(result.status);
+    setSavedOverride('');setConfirmRemoval(false);setOverrideEditor(undefined);
   }
 
   const trace=(selected?.audit?.trace||[]).map((step,i)=>({...step,location:selected?.navigation?selected.navigation.trace[i]??undefined:step.location}));
@@ -447,10 +456,16 @@ function App() {
     </>:<div className="empty">Select a finding to inspect its contract and call trace.</div>}</aside></div></div>
     {overrideEditor&&!createFile&&<Modal title={overrideEditor.action==='justification'?'Justify via override':'Propagate obligations via override'} showTitle={false} onClose={()=>{if(!busy)setOverrideEditor(undefined);}}>
       {error&&<p role="alert">{error}</p>}
+      {confirmRemoval?<>
+        <p className="override-removal">Remove this saved override from <strong>{overrideEditor.saved_destination}</strong>?</p>
+        <p>Only this annotation will be removed. Reanalyze to update findings.</p>
+        <div className="modal-actions"><button disabled={busy} onClick={()=>setConfirmRemoval(false)}>Cancel</button><button disabled={busy||status.running} onClick={()=>act(removeOverride)}>Confirm removal</button></div>
+      </>:<>
       {overrideEditor.action==='justification'&&overrideEditor.obligation_documentation&&<ObligationDocumentationPanel documentation={overrideEditor.obligation_documentation}/>}
       <textarea ref={placeCaretAtEnd} autoFocus disabled={busy} aria-label="Override documentation" value={overrideEditor.document} onChange={e=>setOverrideEditor({...overrideEditor,document:e.target.value})}/>
       <label className="override-destination">Override file{overrideEditor.destinations.length>1?<select aria-label="Override file" value={overrideEditor.destination} disabled={busy} onChange={e=>setOverrideEditor({...overrideEditor,destination:e.target.value})}>{overrideEditor.destinations.map(d=><option key={d.path} value={d.path}>{d.path}</option>)}</select>:<small>{overrideEditor.destination}</small>}</label>
-      <div className="modal-actions"><button disabled={busy} onClick={()=>setOverrideEditor(undefined)}>Cancel</button><button className="primary" disabled={busy||status.running} onClick={()=>act(async()=>{if(!overrideEditor.destinations.find(d=>d.path===overrideEditor.destination)?.exists){setCreateFile(true);return;}await commitOverride();})}>Save</button></div>
+      <div className="modal-actions">{overrideEditor.can_remove&&<button disabled={busy||status.running} onClick={()=>setConfirmRemoval(true)}>Remove override</button>}<button disabled={busy} onClick={()=>setOverrideEditor(undefined)}>Cancel</button><button className="primary" disabled={busy||status.running} onClick={()=>act(async()=>{if(!overrideEditor.destinations.find(d=>d.path===overrideEditor.destination)?.exists){setCreateFile(true);return;}await commitOverride();})}>Save</button></div>
+      </>}
     </Modal>}
     {overrideEditor&&createFile&&<Modal title="Create override file" onClose={()=>{if(!busy)setCreateFile(false);}}>
       {error&&<p role="alert">{error}</p>}

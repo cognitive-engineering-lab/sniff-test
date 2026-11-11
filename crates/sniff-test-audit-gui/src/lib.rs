@@ -93,6 +93,7 @@ fn router(app: App) -> Router {
         .route("/template", post(template))
         .route("/override/editor", post(override_editor))
         .route("/override/commit", post(override_commit))
+        .route("/override/remove", post(override_remove))
         .layer(middleware::from_fn_with_state(app.clone(), authorize));
     Router::new()
         .nest("/api/v1", api)
@@ -561,6 +562,19 @@ async fn override_commit(State(app): State<App>, Json(edit): Json<OverrideCommit
         edit.filename.as_deref(),
         edit.document,
     )?;
+    session.refresh_audit_progress();
+    Ok(Json(
+        json!({"buffer": buffer, "destination": destination, "status": status(&session)}),
+    ))
+}
+
+#[derive(Deserialize)]
+struct OverrideRemove {
+    token: String,
+}
+async fn override_remove(State(app): State<App>, Json(edit): Json<OverrideRemove>) -> ApiResult {
+    let mut session = app.session.lock().unwrap();
+    let (buffer, destination) = session.remove_override(&edit.token)?;
     session.refresh_audit_progress();
     Ok(Json(
         json!({"buffer": buffer, "destination": destination, "status": status(&session)}),
