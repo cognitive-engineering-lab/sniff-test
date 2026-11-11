@@ -1024,6 +1024,52 @@ for(const action of ['Justify via override','Propagate obligations via override'
         await page.getByRole('button',{name:action,exact:true}).click();
         await expect(dialog.getByLabel('Override documentation')).toHaveValue(template);
         await expect(dialog.getByLabel('Override documentation')).toBeFocused();
+        if(existing&&action.startsWith('Justify')) {
+          const handle=dialog.getByRole('button',{name:'Move override popup'});
+          const initial=(await dialog.boundingBox())!;
+          expect(initial.x+initial.width/2).toBeGreaterThan(1440/2);
+          expect(await dialog.evaluate(el=>el.matches(':modal'))).toBe(false);
+          const grip=(await handle.boundingBox())!;
+          await page.mouse.move(grip.x+20,grip.y+10);await page.mouse.down();
+          await page.mouse.move(grip.x-100,grip.y+90);await page.mouse.up();
+          const moved=(await dialog.boundingBox())!;
+          expect(moved.x).toBeCloseTo(initial.x-120,0);
+          expect(moved.y).toBeCloseTo(initial.y+80,0);
+          await handle.press('ArrowRight');
+          expect((await dialog.boundingBox())!.x).toBeCloseTo(moved.x+20,0);
+          const grip2=(await handle.boundingBox())!;
+          await page.mouse.move(grip2.x+20,grip2.y+10);await page.mouse.down();
+          await page.mouse.move(-1000,-1000);await page.mouse.up();
+          expect((await dialog.boundingBox())!.x).toBe(16);
+          expect((await dialog.boundingBox())!.y).toBe(16);
+          const grip3=(await handle.boundingBox())!;
+          await page.mouse.move(grip3.x+20,grip3.y+10);await page.mouse.down();
+          await page.mouse.move(2000,2000);await page.mouse.up();
+          const corner=(await dialog.boundingBox())!;
+          expect(corner.x+corner.width).toBeLessThanOrEqual(1424);
+          expect(corner.y+corner.height).toBeLessThanOrEqual(944);
+          const draft=template+'Keep this unsaved explanation.';
+          await dialog.getByLabel('Override documentation').fill(draft);
+          await page.locator('.cm-content').focus();
+          await page.keyboard.press('Escape');
+          await expect(dialog).toBeVisible();
+          await page.getByRole('button',{name:'Report root',exact:true}).click();
+          await expect(page.locator('.filename')).toHaveText('src/lib.rs');
+          await expect(dialog.getByLabel('Override documentation')).toHaveValue(draft);
+          await page.getByRole('button',{name:'Effect source',exact:true}).click();
+          await page.getByRole('button',{name:alternative,exact:true}).click();
+          await expect(dialog).toHaveAccessibleName(action);
+          await expect(dialog.getByLabel('Override documentation')).toHaveValue(draft);
+          await expect(handle).toBeFocused();
+          await page.setViewportSize({width:480,height:700});
+          await expect(dialog).toBeInViewport();
+          const narrow=(await dialog.boundingBox())!;
+          expect(narrow.x).toBeGreaterThanOrEqual(16);
+          expect(narrow.x+narrow.width).toBeLessThanOrEqual(464);
+          await page.setViewportSize({width:1440,height:960});
+          await dialog.getByLabel('Override documentation').fill(template);
+          await dialog.getByLabel('Override documentation').focus();
+        }
         await page.keyboard.insertText('Typed at the end.');
         await expect(dialog.getByLabel('Override documentation')).toHaveValue(template+'Typed at the end.');
         await dialog.getByRole('button',{name:'Cancel',exact:true}).click();
@@ -1031,10 +1077,14 @@ for(const action of ['Justify via override','Propagate obligations via override'
         await page.getByRole('button',{name:action,exact:true}).click();
         await dialog.getByLabel('Override documentation').fill(explanation);
         if(existing)await dialog.getByLabel('Override file',{exact:true}).selectOption({index:1});
+        const editorPosition=(await dialog.boundingBox())!;
         await dialog.getByRole('button',{name:'Save',exact:true}).click();
         let destination=join(dir,'two.toml');
         if(!existing){
           await expect(dialog).toHaveAccessibleName('Create override file');
+          const filePosition=(await dialog.boundingBox())!;
+          expect(filePosition.x).toBeCloseTo(editorPosition.x,0);
+          expect(filePosition.y).toBeCloseTo(editorPosition.y,0);
           await expect(dialog.getByLabel('Override filename')).toHaveValue('sniff-test-overrides.toml');
           if(action.startsWith('Justify')){
             await page.setViewportSize({width:320,height:700});

@@ -54,7 +54,19 @@ main { overflow: hidden; }
 .trace button.active { background: #e8f1e9; box-shadow: inset 3px 0 #25825c; color: #245c3f; font-weight: 700; }
 .trace button.active span { color: #50735b; }
 
-dialog{border:1px solid #c0d5c5;border-radius:10px;padding:24px;width:min(760px,90vw);max-height:85vh;color:#24312f;box-shadow:0 12px 60px #0003}dialog::backdrop{background:#18332566}dialog h2{font-size:18px;margin-top:0}dialog p{font-size:13px}dialog textarea{display:block;width:100%;min-height:200px;font:13px/1.7 ui-monospace,monospace;box-sizing:border-box}dialog select{display:block;width:100%;margin:8px 0}.modal-actions{display:flex;flex-wrap:wrap;justify-content:flex-end;gap:10px;margin-top:18px}
+.override-panel { position:fixed; inset:auto; margin:0; padding:0; width:min(640px,calc(100vw - 32px)); max-width:calc(100vw - 32px); max-height:calc(100dvh - 32px); color:#24312f; background:#fff; border:1px solid #c0d5c5; border-radius:10px; box-shadow:0 12px 40px #0003; z-index:100; overflow:hidden; }
+.override-panel[open] { display:flex; flex-direction:column; }
+.override-titlebar { display:flex; align-items:center; gap:8px; padding:8px 12px; border-bottom:1px solid #d6ded8; background:#f4f6f3; flex:none; }
+.override-drag-handle { display:flex; align-items:center; justify-content:space-between; gap:12px; flex:1; min-width:0; cursor:grab; touch-action:none; user-select:none; }
+.override-drag-handle:active { cursor:grabbing; }
+.override-drag-handle:focus-visible { outline:2px solid #25825c; outline-offset:2px; }
+.override-titlebar h2 { font-size:14px; margin:0; }
+.override-panel-content { padding:20px; overflow:auto; min-height:0; }
+.override-panel p { font-size:13px; }
+.override-panel textarea { display:block; width:100%; min-height:200px; font:13px/1.7 ui-monospace,monospace; box-sizing:border-box; }
+.override-panel select { display:block; width:100%; margin:8px 0; }
+.modal-actions { display:flex; flex-wrap:wrap; justify-content:flex-end; gap:10px; margin-top:18px; }
+
 
 .inline-prompt button.completed { background: #18583f; border-color: #4eaa80; color: #effff5; }
 

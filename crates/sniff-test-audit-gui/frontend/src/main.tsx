@@ -156,10 +156,41 @@ function Editor({buffer, locked, reloadKey, onFlush, location:target, onChange, 
 function placeCaretAtEnd(element:HTMLTextAreaElement|null) {
   if(element)element.setSelectionRange(element.value.length,element.value.length);
 }
-function Modal({title,children,onClose,showTitle=true}:{title:string;children:React.ReactNode;onClose:()=>void;showTitle?:boolean}) {
+function OverridePanel({title,children,onClose,step}:{title:string;children:React.ReactNode;onClose:()=>void;step:string}) {
   const ref=useRef<HTMLDialogElement>(null);
-  useEffect(()=>{const prior=document.activeElement as HTMLElement|null;ref.current?.showModal();ref.current?.querySelector<HTMLTextAreaElement|HTMLInputElement>('textarea,input')?.focus();return()=>{ref.current?.close();prior?.focus();};},[]);
-  return <dialog ref={ref} aria-label={title} onCancel={e=>{e.preventDefault();onClose();}}>{showTitle&&<h2>{title}</h2>}{children}</dialog>;
+  const drag=useRef<{x:number;y:number;left:number;top:number}|undefined>(undefined);
+  const position=useRef<{left:number;top:number}|undefined>(undefined);
+  function place(left:number,top:number) {
+    const panel=ref.current;
+    if(!panel)return;
+    const bounds=panel.getBoundingClientRect();
+    position.current={left:Math.max(16,Math.min(left,window.innerWidth-bounds.width-16)),top:Math.max(16,Math.min(top,window.innerHeight-bounds.height-16))};
+    panel.style.left=`${position.current.left}px`;panel.style.top=`${position.current.top}px`;
+  }
+  useLayoutEffect(()=>{
+    const panel=ref.current!;
+    panel.show();
+    const bounds=panel.getBoundingClientRect();
+    place(window.innerWidth*.62-bounds.width/2,(window.innerHeight-bounds.height)/2);
+    const clamp=()=>{if(position.current)place(position.current.left,position.current.top);};
+    const observer=new ResizeObserver(clamp);observer.observe(panel);
+    window.addEventListener('resize',clamp);
+    return()=>{observer.disconnect();window.removeEventListener('resize',clamp);panel.close();};
+  },[]);
+  useEffect(()=>{ref.current?.querySelector<HTMLTextAreaElement|HTMLInputElement>('textarea,input')?.focus();},[step]);
+  return <dialog ref={ref} className="override-panel" aria-label={title} onKeyDown={e=>{if(e.key==='Escape'&&!e.defaultPrevented){e.preventDefault();onClose();}}}>
+    <div className="override-titlebar">
+      <div className="override-drag-handle" role="button" tabIndex={0} aria-label="Move override popup" title="Drag to move; use arrow keys when focused"
+        onPointerDown={e=>{if(e.button!==0)return;e.preventDefault();e.currentTarget.focus();e.currentTarget.setPointerCapture(e.pointerId);const bounds=ref.current!.getBoundingClientRect();drag.current={x:e.clientX,y:e.clientY,left:bounds.left,top:bounds.top};}}
+        onPointerMove={e=>{if(drag.current)place(drag.current.left+e.clientX-drag.current.x,drag.current.top+e.clientY-drag.current.y);}}
+        onPointerUp={e=>{drag.current=undefined;e.currentTarget.releasePointerCapture(e.pointerId);}}
+        onPointerCancel={()=>{drag.current=undefined;}} onLostPointerCapture={()=>{drag.current=undefined;}}
+        onKeyDown={e=>{const dx=e.key==='ArrowLeft'?-20:e.key==='ArrowRight'?20:0,dy=e.key==='ArrowUp'?-20:e.key==='ArrowDown'?20:0;if((dx||dy)&&position.current){e.preventDefault();place(position.current.left+dx,position.current.top+dy);}}}
+      ><h2>{title}</h2><span aria-hidden="true">⠿</span></div>
+      <button type="button" aria-label="Close override popup" onClick={onClose}>×</button>
+    </div>
+    <div className="override-panel-content">{children}</div>
+  </dialog>;
 }
 function PanelDivider({side,size,onResize}:{side:'left'|'right';size:number;onResize:(size:number)=>void}) {
   const [stacked,setStacked]=useState(()=>matchMedia('(max-width:1050px)').matches);
@@ -374,6 +405,7 @@ function App() {
   useEffect(()=>{setSelected(undefined);setSavedOverride('');},[status.generation]);
   useEffect(()=>{const warn=(e:BeforeUnloadEvent)=>{if(saver.current?.pending||overrideEditor){e.preventDefault();}};window.addEventListener('beforeunload',warn);return()=>window.removeEventListener('beforeunload',warn)},[unsaved,overrideEditor]);
   async function openOverride(t:Target) {
+    if(overrideEditor){document.querySelector<HTMLElement>('.override-drag-handle')?.focus();return;}
     if(!buffer)return;
     const annotation=t.overrideIndex===undefined?undefined:buffer.saved_overrides[t.overrideIndex];
     if(!annotation&&!selected)throw Error('Select a finding before adding an override.');
@@ -454,7 +486,8 @@ function App() {
       {unsaved||status.stale?<p className="hint">Findings are outdated. Reanalyze to refresh them.</p>:null}
       <h3>Call trace</h3><ol className="trace" reversed={inverted}>{traceEntries.map(({step,i})=><li key={i} value={i+1}><button className={highlightedTraceIndex===i?'active':''} aria-current={highlightedTraceIndex===i?'location':undefined} disabled={!step.location?.available} onClick={()=>act(()=>navigateFinding(i))}>{step.caller}<span>{step.kind} → {step.target||'effect operation'}</span><small title={step.location?.path}>{!step.location?'':displaySourcePath(step.location.path,root)}{step.location?.line?':'+step.location.line:''}{!step.location?.available?' · source unavailable':step.location.approximate?' · approximate':''}</small></button></li>)}</ol></div>
     </>:<div className="empty">Select a finding to inspect its contract and call trace.</div>}</aside></div></div>
-    {overrideEditor&&!createFile&&<Modal title={overrideEditor.action==='justification'?'Justify via override':'Propagate obligations via override'} showTitle={false} onClose={()=>{if(!busy)setOverrideEditor(undefined);}}>
+    {overrideEditor&&<OverridePanel title={createFile?'Create override file':overrideEditor.action==='justification'?'Justify via override':'Propagate obligations via override'} step={createFile?'create':confirmRemoval?'remove':'edit'} onClose={()=>{if(!busy){if(createFile)setCreateFile(false);else setOverrideEditor(undefined);}}}>
+      {!createFile?<>
       {error&&<p role="alert">{error}</p>}
       {confirmRemoval?<>
         <p className="override-removal">Remove this saved override from <strong>{overrideEditor.saved_destination}</strong>?</p>
@@ -466,13 +499,13 @@ function App() {
       <label className="override-destination">Override file{overrideEditor.destinations.length>1?<select aria-label="Override file" value={overrideEditor.destination} disabled={busy} onChange={e=>setOverrideEditor({...overrideEditor,destination:e.target.value})}>{overrideEditor.destinations.map(d=><option key={d.path} value={d.path}>{d.path}</option>)}</select>:<small>{overrideEditor.destination}</small>}</label>
       <div className="modal-actions">{overrideEditor.can_remove&&<button disabled={busy||status.running} onClick={()=>setConfirmRemoval(true)}>Remove override</button>}<button disabled={busy} onClick={()=>setOverrideEditor(undefined)}>Cancel</button><button className="primary" disabled={busy||status.running} onClick={()=>act(async()=>{if(!overrideEditor.destinations.find(d=>d.path===overrideEditor.destination)?.exists){setCreateFile(true);return;}await commitOverride();})}>Save</button></div>
       </>}
-    </Modal>}
-    {overrideEditor&&createFile&&<Modal title="Create override file" onClose={()=>{if(!busy)setCreateFile(false);}}>
+      </>:<>
       {error&&<p role="alert">{error}</p>}
       <p>Choose a name for the override file. It will be saved beside the active configuration.</p>
       <label className="override-destination">Filename<input autoFocus aria-label="Override filename" value={overrideFilename} disabled={busy} onChange={e=>setOverrideFilename(e.target.value)}/></label>
       <div className="modal-actions"><button disabled={busy} onClick={()=>setCreateFile(false)}>Cancel</button><button className="primary" disabled={busy||status.running||!overrideFilename.trim()} onClick={()=>act(()=>commitOverride(overrideFilename))}>Create &amp; save</button></div>
-    </Modal>}
+      </>}
+    </OverridePanel>}
     <div className="analysis-log"><button onClick={()=>setLogs(!logs)}>{logs?'▾':'▸'} Analysis output</button><span>{status.count} findings</span>{logs&&<pre>{status.log||'Waiting for analysis output…'}</pre>}</div>
   </div>;
 }
