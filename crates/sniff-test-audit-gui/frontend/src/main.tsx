@@ -28,12 +28,12 @@ type Finding = {navigation?:FindingNavigation;id:string; crate_name:string; effe
 type AuditProgress = {justified:boolean;propagated:boolean};
 type GroupProgress = {handled:number;total:number;justified:number;propagated:number};
 type Summary = {progress?:AuditProgress;id:string; crate_name:string; root:string; reason:string; level:string; effect:string; class:string; path?:string};
-type FindingGroup = {progress?:GroupProgress;key:string; label?:string; path?:string; count:number; items:Summary[]};
-type Status = {audit_revision?:number;override_revision?:number; override_error?:string; generation:number; running:boolean; stale:boolean; overrides_changed?:boolean; status:string; count:number; log:string};
+type FindingGroup = {progress?:GroupProgress;key:string; label?:string; path?:string; count:number; items?:Summary[]; loading?:boolean; loadError?:string};
+type Status = {results_revision?:number;audit_revision?:number;override_revision?:number; override_error?:string; generation:number; running:boolean; stale:boolean; overrides_changed?:boolean; status:string; count:number; log:string};
 const token = location.hash.slice(1) || sessionStorage.getItem('audit-token') || '';
 if (token) { sessionStorage.setItem('audit-token', token); history.replaceState(null, '', location.pathname); }
-async function api(path:string, body?:unknown) {
-  const response = await fetch('/api/v1/'+path, {method:body === undefined ? 'GET' : 'POST', headers:{'x-audit-token':token, 'Content-Type':'application/json'}, body:body === undefined ? undefined : JSON.stringify(body)});
+async function api(path:string, body?:unknown, signal?:AbortSignal) {
+  const response = await fetch('/api/v1/'+path, {signal, method:body === undefined ? 'GET' : 'POST', headers:{'x-audit-token':token, 'Content-Type':'application/json'}, body:body === undefined ? undefined : JSON.stringify(body)});
   if (!response.ok) { const text = await response.text(); let error; try { error = JSON.parse(text).error; } catch {} throw Error(error || `Request failed (${response.status})`); }
   return response.json();
 }
@@ -65,6 +65,8 @@ function destination(finding:Finding|undefined,kind:'source'|'root'|'contract') 
   return finding?.navigation?finding.navigation[kind]:finding?.audit?.[kind];
 }
 function Editor({buffer, locked, reloadKey, onFlush, location:target, onChange, onSelectionChange, finding, enabled, prepare, onOverride, onError, navigation, onReady}:{buffer:Buffer; locked:boolean; reloadKey:number; onFlush:()=>void; location?:Location; onChange:(text:string,changes:ChangeDesc,previous:string)=>void; onSelectionChange:(selection?:EditorSelection)=>void; finding?:Finding; enabled:boolean; prepare:(target:Target)=>Promise<TemplateEdit>; onOverride:(target:Target)=>void; onError:(error:string)=>void; navigation?:Navigation; onReady:(view:EditorView|undefined)=>void}) {
+  const documents=useRef(new Map<string,{state:EditorState;content:string;scroll:ReturnType<EditorView['scrollSnapshot']>}>());
+  const bufferRef=useRef(buffer);bufferRef.current=buffer;
   const holder = useRef<HTMLDivElement>(null), editorRef=useRef<EditorView | undefined>(undefined);
   const callback = useRef(onChange); callback.current = onChange;
   const selectionRef=useRef(onSelectionChange);selectionRef.current=onSelectionChange;
@@ -77,7 +79,13 @@ function Editor({buffer, locked, reloadKey, onFlush, location:target, onChange, 
   const readOnly=useRef(new Compartment()),promptsConfig=useRef(new Compartment()),navigationConfig=useRef(new Compartment());
   useEffect(()=>{
     if(!holder.current)return;
-    const view=new EditorView({parent:holder.current,state:EditorState.create({doc:buffer.content,extensions:[
+    const cached=documents.current.get(buffer.path);
+    documents.current.delete(buffer.path);
+    const state=cached?.content===buffer.content?cached.state.update({effects:[
+      readOnly.current.reconfigure(EditorState.readOnly.of(!buffer.writable||locked)),
+      navigationConfig.current.reconfigure(navigation?.extension(buffer.path)||[]),
+      promptsConfig.current.reconfigure([]),
+    ]}).state:EditorState.create({doc:buffer.content,extensions:[
       basicSetup,EditorState.lineSeparator.of(buffer.content.includes('\r\n')?'\r\n':'\n'),rust(),EditorView.lineWrapping,
       continueRustComments,commentEditing,
       readOnly.current.of(EditorState.readOnly.of(!buffer.writable||locked)),promptsConfig.current.of([]),navigationConfig.current.of([]),
@@ -87,11 +95,17 @@ function Editor({buffer, locked, reloadKey, onFlush, location:target, onChange, 
       }}),
       EditorView.updateListener.of(update=>{
         if(update.docChanged)callback.current(update.state.sliceDoc(),update.changes,update.startState.sliceDoc());
-        if(update.selectionSet||update.docChanged){const {from,to}=update.state.selection.main;selectionRef.current({path:buffer.path,from,to});}
+        if(update.selectionSet||update.docChanged){const {from,to}=update.state.selection.main;selectionRef.current({path:bufferRef.current.path,from,to});}
       }),
-    ]})});
+    ]});
+    const view=new EditorView({parent:holder.current,state});
+    if(cached?.content===buffer.content)view.dispatch({effects:cached.scroll});
     editorRef.current=view;readyRef.current(view);
-    return()=>{readyRef.current(undefined);selectionRef.current(undefined);editorRef.current=undefined;view.destroy();};
+    return()=>{
+      documents.current.set(buffer.path,{state:view.state,content:view.state.sliceDoc(),scroll:view.scrollSnapshot()});
+      if(documents.current.size>8)documents.current.delete(documents.current.keys().next().value!);
+      readyRef.current(undefined);selectionRef.current(undefined);editorRef.current=undefined;view.destroy();
+    };
   },[buffer.path,reloadKey]);
   useEffect(()=>{editorRef.current?.dispatch({effects:readOnly.current.reconfigure(EditorState.readOnly.of(!buffer.writable||locked))});},[buffer.writable,locked,buffer.path,reloadKey]);
   useEffect(()=>{editorRef.current?.dispatch({effects:navigationConfig.current.reconfigure(navigation?.extension(buffer.path)||[])});},[navigation,buffer.path,reloadKey]);
@@ -223,7 +237,24 @@ function App() {
   const [inverted,setInverted]=useState(false);
   const [expanded,setExpanded]=useState<Set<string>>(()=>new Set());
   const [sourceExpanded,setSourceExpanded]=useState<Set<string>>(()=>new Set());
-  const [query,setQuery]=useState(''),[effect,setEffect]=useState(''),[level,setLevel]=useState(''),[kind,setKind]=useState(''),[page,setPage]=useState(0);
+  const [query,setQuery]=useState(''),[effect,setEffect]=useState(''),[level,setLevel]=useState(''),[kind,setKind]=useState('');
+  const [pages,setPages]=useState([0,0]);
+  const page=pages[Number(inverted)];
+  function setPage(value:number|((page:number)=>number)){listScroll.current[Number(inverted)]=0;setPages(previous=>previous.map((p,i)=>i===Number(inverted)?typeof value==='function'?value(p):value:p));}
+  function resetPages(){setPages([0,0]);listScroll.current=[0,0];}
+  const listElement=useRef<HTMLDivElement>(null),listScroll=useRef([0,0]);
+  const listCache=useRef(new Map<string,{groups:FindingGroup[];total:number;total_groups:number;effects:string[]}>());
+  const rowCache=useRef(new Map<string,Summary[]>());
+  const rowReads=useRef(new Map<string,AbortController>());
+  const [listLoading,setListLoading]=useState(false),[listFailure,setListFailure]=useState(''),[listRetry,setListRetry]=useState(0);
+  const [listResult,setListResult]=useState('');
+  const listRevision=JSON.stringify([status.results_revision,status.generation,status.running,status.audit_revision,status.override_revision]);
+  const listFilter=JSON.stringify([query,effect,level,kind,inverted]);
+  const listKey=JSON.stringify([listRevision,listFilter,page]);
+  const activeList=useRef(listKey);activeList.current=listKey;
+  const filters=()=>({q:query,effect,level,class:kind,grouped:'true',group_by:inverted?'effect-source':'file'});
+  function cacheRows(key:string,rows:Summary[]){rowCache.current.delete(key);rowCache.current.set(key,rows);if(rowCache.current.size>32)rowCache.current.delete(rowCache.current.keys().next().value!);}
+  function rowsKey(key:string){return JSON.stringify([listRevision,listFilter,key]);}
   const [selected,setSelected]=useState<Finding>(),[buffer,setBuffer]=useState<Buffer>(),[text,setText]=useState(''),[target,setTarget]=useState<Location>();
   const [saveState,setSaveState]=useState<SaveState>({status:'saved'}),[reloadKey,setReloadKey]=useState(0),[startingAnalysis,setStartingAnalysis]=useState(false),[opening,setOpening]=useState(false);
   const [error,setError]=useState(''),[busy,setBusy]=useState(false),[logs,setLogs]=useState(false);
@@ -235,7 +266,7 @@ function App() {
   const [editorSelection,setEditorSelection]=useState<EditorSelection>();
   const [navigation,setNavigation]=useState<Navigation>(),[navigationStatus,setNavigationStatus]=useState('');
   function acceptStatus(next:Status){setStatus(previous=>{
-    if((next.audit_revision??0)<(previous.audit_revision??0) || next.generation<previous.generation || (next.override_revision??0)<(previous.override_revision??0))return previous;
+    if((next.results_revision??0)<(previous.results_revision??0) || (next.audit_revision??0)<(previous.audit_revision??0) || next.generation<previous.generation || (next.override_revision??0)<(previous.override_revision??0))return previous;
     if(next.generation===previous.generation&&!previous.running&&!next.running)return {...next,stale:previous.stale||next.stale,overrides_changed:previous.overrides_changed||next.overrides_changed};
     return next;
   });}
@@ -248,7 +279,9 @@ function App() {
     if(result.finding===finding&&result.targets)setSelected(current=>current&&current.id===finding&&current.audit?{...current,navigation:result.navigation,audit:{...current.audit,targets:result.targets}}:current);
     return result.buffer;
   },setBuffer,setSaveState);
-  const openSequence=useRef(0);
+  const openSequence=useRef(0),navigationRead=useRef<AbortController|undefined>(undefined);
+  function startNavigation(){navigationRead.current?.abort();navigationRead.current=new AbortController();setOpening(true);return ++openSequence.current;}
+  const activeWork=useRef(0);
   function changeSource(content:string,changes:ChangeDesc,previous:string){
     const path=saver.current!.snapshot?.path;
     setNav(history=>history.map(loc=>{
@@ -325,31 +358,25 @@ function App() {
   const detailsScroll = useRef<HTMLDivElement>(null);
   useLayoutEffect(()=>{detailsScroll.current?.scrollTo({top:0});},[selected?.id,inverted]);
   const unsaved = !!buffer && text !== buffer.content;
-  async function act(work:()=>Promise<unknown>) {setBusy(true);setError('');try{await work();}catch(e){setError(String(e));}finally{setBusy(false);}}
+  async function act(work:()=>Promise<unknown>) {activeWork.current++;setBusy(true);setError('');try{await work();}catch(e){setError(String(e));}finally{if(--activeWork.current===0)setBusy(false);}}
 
   function rememberPosition(view:EditorView|undefined){
     if(!buffer || !view)return;
     const state=view.state,selection=state.selection.main;
     setNav(n=>[...n,{path:buffer.path,start:new TextEncoder().encode(state.sliceDoc(0,selection.from)).length,end:new TextEncoder().encode(state.sliceDoc(0,selection.to)).length,available:true,live:true}]);
   }
-  async function open(loc:Location, remember=true){
-    const sequence=++openSequence.current;
+  async function open(loc:Location, remember=true, sequence=startNavigation()){
+    try {
     await saver.current!.flush();
+    if(sequence!==openSequence.current)return false;
     if(remember)rememberPosition(editor.current);
     const current=saver.current!.snapshot;
     let sameFile=current?.path===loc.path&&!!editor.current;
-    if(sameFile&&loc.hash){
-      const digest=await crypto.subtle.digest('SHA-256',new TextEncoder().encode(current!.content));
-      const hash=Array.from(new Uint8Array(digest),byte=>byte.toString(16).padStart(2,'0')).join('');
-      if(hash!==loc.hash)sameFile=false;
-    }
+    if(sameFile&&loc.hash&&current!.hash!==loc.hash)sameFile=false;
     if(!sameFile)setOpening(true);
-    try {
-    const next:Buffer=sameFile?current!:await api('buffer?'+new URLSearchParams({path:loc.path}));if(sequence!==openSequence.current)return false;let destination=loc;
+    const next:Buffer=sameFile?current!:await api('buffer?'+new URLSearchParams({path:loc.path}),undefined,navigationRead.current?.signal);if(sequence!==openSequence.current)return false;let destination=loc;
     if(loc.available && loc.hash){
-      const digest=await crypto.subtle.digest('SHA-256',new TextEncoder().encode(next.content));
-      const hash=Array.from(new Uint8Array(digest),b=>b.toString(16).padStart(2,'0')).join('');
-      if(hash!==loc.hash){destination={...loc,available:false};setError('Source changed since analysis. Reanalyze to restore precise navigation.');}
+      if(next.hash!==loc.hash){destination={...loc,available:false};setError('Source changed since analysis. Reanalyze to restore precise navigation.');}
     }
     if(!loc.available && loc.hash)setError('The recorded source range could not be verified. Reanalyze or restore the original source.');
     if(waitingEditor.current?.path===loc.path){
@@ -362,25 +389,34 @@ function App() {
       if(current?.path===next.path&&current.content!==next.content)setReloadKey(key=>key+1);
     }
     setTarget({...destination,path:next.path});return true;
-    } finally {if(sequence===openSequence.current)setOpening(false);}
+    } catch(e){if(sequence===openSequence.current)throw e;return false;}
+    finally {if(sequence===openSequence.current)setOpening(false);}
   }
   async function choose(item:Summary){
-    await saver.current!.flush();
-    const finding:Finding=await api('finding?'+new URLSearchParams({id:item.id}));
-    const location=[destination(finding,'source'),destination(finding,'root')].find(value=>value?.available);
-    if(!location||await open(location))setSelected(finding);
+    const sequence=startNavigation();
+    try {
+      await saver.current!.flush();if(sequence!==openSequence.current)return;
+      const finding:Finding=await api('finding?'+new URLSearchParams({id:item.id}),undefined,navigationRead.current?.signal);
+      if(sequence!==openSequence.current)return;
+      const location=[destination(finding,'source'),destination(finding,'root')].find(value=>value?.available);
+      if(!location||await open(location,true,sequence))setSelected(finding);
+    }catch(e){if(sequence===openSequence.current)throw e;}
+    finally{if(sequence===openSequence.current)setOpening(false);}
   }
   async function navigateFinding(kind:'source'|'root'|'contract'|number) {
     const id=selectedRef.current?.id;
     if(!id)return;
-    await saver.current!.flush();
-    const finding:Finding=await api('finding?'+new URLSearchParams({id}));
-    if(selectedRef.current?.id!==id)return;
-    setSelected(finding);
-    const loc=typeof kind==='number'
-      ?(finding.navigation?finding.navigation.trace[kind]:finding.audit?.trace[kind]?.location)
-      :destination(finding,kind);
-    if(loc)await open(loc);
+    const sequence=startNavigation();
+    try {
+      await saver.current!.flush();if(sequence!==openSequence.current)return;
+      const finding:Finding=await api('finding?'+new URLSearchParams({id}),undefined,navigationRead.current?.signal);
+      if(sequence!==openSequence.current||selectedRef.current?.id!==id)return;
+      const loc=typeof kind==='number'
+        ?(finding.navigation?finding.navigation.trace[kind]:finding.audit?.trace[kind]?.location)
+        :destination(finding,kind);
+      if(!loc||await open(loc,true,sequence))setSelected(finding);
+    }catch(e){if(sequence===openSequence.current)throw e;}
+    finally{if(sequence===openSequence.current)setOpening(false);}
   }
   useEffect(()=>{api('workspace').then(v=>setRoot(v.root)).catch(e=>setError(String(e)));
     const controller=new AbortController();
@@ -393,16 +429,51 @@ function App() {
     }catch(e){if(!controller.signal.aborted)setError(String(e));}})();return()=>controller.abort();
   },[]);
   useEffect(()=>{
-    let cancelled=false;
-    api('findings?'+new URLSearchParams({q:query,effect,level,class:kind,grouped:'true',group_by:inverted?'effect-source':'file',offset:String(page*100)})).then(value=>{
-      if(cancelled)return;
+    const controller=new AbortController();
+    setListFailure('');
+    const cached=listCache.current.get(listKey);
+    function display(value:{groups:FindingGroup[];total:number;total_groups:number;effects:string[]}){
+      if(activeList.current!==listKey)return;
       const lastPage=Math.max(0,Math.ceil(value.total_groups/100)-1);
       if(page>lastPage){setPage(lastPage);return;}
-      setGroups(value.groups);setTotal(value.total);setTotalGroups(value.total_groups);setEffects(value.effects);
-    }).catch(e=>{if(!cancelled)setError(String(e));});
-    return ()=>{cancelled=true;};
-  },[query,effect,level,kind,inverted,page,status.generation,status.running,status.audit_revision]);
-  useEffect(()=>{setSelected(undefined);setSavedOverride('');},[status.generation]);
+      setGroups(value.groups.map(group=>({...group,items:rowCache.current.get(rowsKey(group.key))||group.items})));
+      setTotal(value.total);setTotalGroups(value.total_groups);setEffects(value.effects);setListResult(listKey);setListLoading(false);
+    }
+    if(cached){display(cached);return;}
+    setListLoading(true);
+    api('findings?'+new URLSearchParams({...filters(),headers_only:'true',offset:String(page*100)}),undefined,controller.signal).then(value=>{
+      if(controller.signal.aborted)return;
+      listCache.current.set(listKey,value);
+      if(listCache.current.size>16)listCache.current.delete(listCache.current.keys().next().value!);
+      display(value);
+    }).catch(e=>{if(!controller.signal.aborted&&activeList.current===listKey){setGroups([]);setTotal(0);setTotalGroups(0);setListResult(listKey);setListFailure(String(e));setListLoading(false);}});
+    return ()=>controller.abort();
+  },[listKey,listRetry]);
+  useLayoutEffect(()=>{
+    if(listResult===listKey&&listElement.current)listElement.current.scrollTop=listScroll.current[Number(inverted)];
+  },[listKey,listResult,groups]);
+  useEffect(()=>()=>{for(const controller of rowReads.current.values())controller.abort();rowReads.current.clear();},[listKey]);
+  async function loadRows(key:string,more=false){
+    const requestKey=listKey,cacheKey=rowsKey(key);
+    const current=groups.find(g=>g.key===key);
+    if(!current||current.loading||rowReads.current.has(key))return;
+    const controller=new AbortController();rowReads.current.set(key,controller);
+    const existing=more?(current.items||[]):[];
+    setGroups(previous=>previous.map(g=>g.key===key?{...g,loading:true,loadError:undefined}:g));
+    try{
+      const value=await api('group-items?'+new URLSearchParams({...filters(),group_key:key,offset:String(existing.length),limit:'100'}),undefined,controller.signal);
+      if(activeList.current!==requestKey)return;
+      const items=[...existing,...value.items];cacheRows(cacheKey,items);
+      setGroups(previous=>previous.map(g=>g.key===key?{...g,items,loading:false}:g));
+    }catch(e){if(!controller.signal.aborted&&activeList.current===requestKey)setGroups(previous=>previous.map(g=>g.key===key?{...g,loading:false,loadError:String(e)}:g));}
+    finally{if(rowReads.current.get(key)===controller)rowReads.current.delete(key);}
+  }
+  useEffect(()=>{
+    if(listResult!==listKey)return;
+    const open=inverted?sourceExpanded:expanded;
+    for(const group of groups)if(open.has(group.key)&&!group.items&&!group.loading&&!group.loadError)void loadRows(group.key);
+  },[groups,expanded,sourceExpanded,listResult,listKey]);
+  useEffect(()=>{openSequence.current++;navigationRead.current?.abort();setOpening(false);setSelected(undefined);setSavedOverride('');},[status.generation,status.results_revision]);
   useEffect(()=>{const warn=(e:BeforeUnloadEvent)=>{if(saver.current?.pending||overrideEditor){e.preventDefault();}};window.addEventListener('beforeunload',warn);return()=>window.removeEventListener('beforeunload',warn)},[unsaved,overrideEditor]);
   async function openOverride(t:Target) {
     if(overrideEditor){document.querySelector<HTMLElement>('.override-drag-handle')?.focus();return;}
@@ -451,21 +522,21 @@ function App() {
     <header><div className="brand"><b>sniff-test</b><span> / audit</span></div><span className="workspace" title={root}>{root}</span><span className={'status '+status.status}>{status.status}{status.stale?' · stale':status.overrides_changed?' · reanalysis needed':''}</span><button disabled={status.running||startingAnalysis||busy} onClick={()=>act(reanalyze)}>↻ Reanalyze</button></header>
     {error&&<div className="error" role="alert">{error}<button onClick={()=>setError('')}>Dismiss</button></div>}
     <div className="layout" style={{'--left-size':`${leftWidth}px`,'--right-size':`${rightWidth}px`} as React.CSSProperties}><div className="side-pane left-pane" id="findings-panel"><aside className="findings"><div className="section-title">FINDINGS <span>{total}</span></div>
-      <button type="button" className="invert-effect" aria-pressed={inverted} onClick={()=>{setInverted(value=>!value);setPage(0);}}>⇄ Invert effect</button>
-      <input aria-label={inverted?'Search effect sources':'Search findings'} placeholder={inverted?'Search effect sources…':'Search files, roots, crates…'} value={query} onChange={e=>{setQuery(e.target.value);setPage(0);}}/>
-      <div className="filters"><select aria-label="Effect" value={effect} onChange={e=>{setEffect(e.target.value);setPage(0);}}><option value="">All effects</option>{effects.map(e=><option key={e}>{e}</option>)}</select><select aria-label="Severity" value={level} onChange={e=>{setLevel(e.target.value);setPage(0);}}><option value="">All levels</option><option>warn</option><option>deny</option></select></div>
-      <select aria-label="Finding class" value={kind} onChange={e=>{setKind(e.target.value);setPage(0);}}><option value="">All finding classes</option>{['concrete-operation','concrete-invocation','documented-obligation','undocumented-invocation','unresolved-call-target','analysis-incomplete','ambiguous-marker','ambiguous-requirement'].map(k=><option key={k}>{k}</option>)}</select>
-      <div className="finding-list">{groups.map(({key, label,path:sourcePath,items:rows,count,progress},index)=>{
+      <button type="button" className="invert-effect" aria-pressed={inverted} onClick={()=>{if(listElement.current)listScroll.current[Number(inverted)]=listElement.current.scrollTop;setInverted(value=>!value);}}>⇄ Invert effect</button>
+      <input aria-label={inverted?'Search effect sources':'Search findings'} placeholder={inverted?'Search effect sources…':'Search files, roots, crates…'} value={query} onChange={e=>{setQuery(e.target.value);resetPages();}}/>
+      <div className="filters"><select aria-label="Effect" value={effect} onChange={e=>{setEffect(e.target.value);resetPages();}}><option value="">All effects</option>{effects.map(e=><option key={e}>{e}</option>)}</select><select aria-label="Severity" value={level} onChange={e=>{setLevel(e.target.value);resetPages();}}><option value="">All levels</option><option>warn</option><option>deny</option></select></div>
+      <select aria-label="Finding class" value={kind} onChange={e=>{setKind(e.target.value);resetPages();}}><option value="">All finding classes</option>{['concrete-operation','concrete-invocation','documented-obligation','undocumented-invocation','unresolved-call-target','analysis-incomplete','ambiguous-marker','ambiguous-requirement'].map(k=><option key={k}>{k}</option>)}</select>
+      <div className="finding-list" ref={listElement} aria-busy={listLoading||listResult!==listKey} onScroll={e=>{if(listResult===listKey)listScroll.current[Number(inverted)]=e.currentTarget.scrollTop;}}>{(listLoading||listResult!==listKey)&&<div className="loading" role="status">Loading {inverted?'effect sources':'files'}…</div>}{(listResult===listKey?groups:[]).map(({key, label,path:sourcePath,items:rows,count,progress,loading,loadError},index)=>{
         const path=label||key;
         const isOpen=(inverted?sourceExpanded:expanded).has(key),listId=`${inverted?'source':'file'}-findings-${index}`;
-        return <section key={key}><button type="button" className="group" title={path} aria-expanded={isOpen} aria-controls={listId} onClick={()=>(inverted?setSourceExpanded:setExpanded)(previous=>{const next=new Set(previous);if(next.has(key))next.delete(key);else next.add(key);return next;})}><span className="group-chevron" aria-hidden="true">{isOpen?'▾':'▸'}</span><span className="group-path">{sourcePath?path.replace(sourcePath,()=>displaySourcePath(sourcePath,root)):displaySourcePath(path,root)}</span><AuditMarks progress={progress} group/><span className="group-count" aria-label={`${count} ${inverted?'reports':'effects'}`} >{count}</span></button><div id={listId} hidden={!isOpen}>{isOpen&&rows.map(item=><button className={'finding '+(selected?.id===item.id?'selected':'')} key={item.id} onClick={()=>act(()=>choose(item))}><span className="finding-label"><span className="badge">{item.effect||item.class}</span><AuditMarks progress={item.progress}/></span><strong>{item.root||item.crate_name}</strong><small>{item.reason}</small></button>)}</div></section>;
-      })}{!groups.length&&<div className="empty">{status.running?'Analyzing the workspace…':status.status==='complete'?'No matching findings.':'No findings available. Check analysis output.'}</div>}</div>
+        return <section key={key}><button type="button" className="group" title={path} aria-expanded={isOpen} aria-controls={listId} onClick={()=>(inverted?setSourceExpanded:setExpanded)(previous=>{const next=new Set(previous);if(next.has(key))next.delete(key);else next.add(key);return next;})}><span className="group-chevron" aria-hidden="true">{isOpen?'▾':'▸'}</span><span className="group-path">{sourcePath?path.replace(sourcePath,()=>displaySourcePath(sourcePath,root)):displaySourcePath(path,root)}</span><AuditMarks progress={progress} group/><span className="group-count" aria-label={`${count} ${inverted?'reports':'effects'}`} >{count}</span></button><div id={listId} hidden={!isOpen}>{isOpen&&(rows||[]).map(item=><button className={'finding '+(selected?.id===item.id?'selected':'')} key={item.id} onClick={()=>act(()=>choose(item))}><span className="finding-label"><span className="badge">{item.effect||item.class}</span><AuditMarks progress={item.progress}/></span><strong>{item.root||item.crate_name}</strong><small>{item.reason}</small></button>)}{isOpen&&loading&&<div className="loading" role="status">Loading findings…</div>}{isOpen&&loadError&&<div role="alert">{loadError}<button onClick={()=>void loadRows(key)}>Retry</button></div>}{isOpen&&rows&&rows.length<count&&<button className="load-more" disabled={loading} onClick={()=>void loadRows(key,true)}>Load more ({rows.length} of {count})</button>}</div></section>;
+      })}{listResult===listKey&&listFailure&&<div role="alert">{listFailure}<button onClick={()=>setListRetry(value=>value+1)}>Retry findings</button></div>}{listResult===listKey&&!listLoading&&!listFailure&&!groups.length&&<div className="empty">{status.running?'Analyzing the workspace…':status.status==='complete'?'No matching findings.':'No findings available. Check analysis output.'}</div>}</div>
       <div className="pagination"><button aria-label={inverted?'Previous effect sources':'Previous files'} disabled={page===0} onClick={()=>setPage(p=>p-1)}>←</button><span>{inverted?'Effect sources':'Files'} · {page+1} / {Math.max(1,Math.ceil(totalGroups/100))}</span><button aria-label={inverted?'Next effect sources':'Next files'} disabled={(page+1)*100>=totalGroups} onClick={()=>setPage(p=>p+1)}>→</button></div>
     </aside><PanelDivider side="left" size={leftWidth} onResize={setLeftWidth}/></div>
-    <main><div className="toolbar"><button disabled={!nav.length||busy} onClick={()=>act(async()=>{const previous=nav[nav.length-1];if(await open(previous,false))setNav(n=>n.slice(0,-1));})}>← Back</button><span className="filename" title={buffer?.path}>{buffer?displaySourcePath(buffer.path,root):'Source workspace'}</span>{buffer?.writable&&<span className="save-status" role="status" aria-label="Source save status">{saveState.status==='failed'?'Save failed':saveState.status==='saving'?'Saving…':saveState.status==='pending'?'Unsaved changes':'Saved'}</span>}</div>
+    <main aria-busy={opening}><div className="toolbar"><button disabled={!nav.length||busy} onClick={()=>act(async()=>{const previous=nav[nav.length-1];if(await open(previous,false))setNav(n=>n.slice(0,-1));})}>← Back</button><span className="filename" title={buffer?.path}>{buffer?displaySourcePath(buffer.path,root):'Source workspace'}</span>{opening&&<span className="navigation-loading" role="status">Opening source…</span>}{buffer?.writable&&<span className="save-status" role="status" aria-label="Source save status">{saveState.status==='failed'?'Save failed':saveState.status==='saving'?'Saving…':saveState.status==='pending'?'Unsaved changes':'Saved'}</span>}</div>
       {saveState.status==='failed'&&<div className="error source-save-error" role="alert"><span>{saveState.error}</span><button disabled={busy} onClick={()=>act(()=>saver.current!.retry())}>Retry</button><button disabled={busy} onClick={()=>act(()=>navigator.clipboard.writeText(saver.current!.text))}>Copy edits</button><button disabled={busy} onClick={()=>act(reloadSource)}>Reload file</button></div>}
       {buffer?<><div className="buffer-state"><span className="navigation-status">{navigationStatus}</span>{buffer.writable?'Workspace source':'Read-only dependency'}{(status.running||startingAnalysis)&&buffer.writable?' · Editing paused during analysis':''}</div>
-      <Editor locked={status.running||startingAnalysis||opening} reloadKey={reloadKey} onFlush={flushSource} navigation={navigation} onReady={editorReady} buffer={buffer} location={target} onChange={changeSource} onSelectionChange={setEditorSelection} finding={selected} enabled={!status.running&&!startingAnalysis&&!opening} onError={setError} onOverride={t=>act(()=>openOverride(t))} prepare={async t=>{
+      <Editor locked={status.running||startingAnalysis} reloadKey={reloadKey} onFlush={flushSource} navigation={navigation} onReady={editorReady} buffer={buffer} location={target} onChange={changeSource} onSelectionChange={setEditorSelection} finding={selected} enabled={!status.running&&!startingAnalysis} onError={setError} onOverride={t=>act(()=>openOverride(t))} prepare={async t=>{
         const finding=selectedRef.current;
         if(!finding)throw Error('Select a finding before inserting documentation.');
         await saver.current!.flush();

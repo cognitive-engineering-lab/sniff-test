@@ -28,6 +28,8 @@ struct Assets;
 #[derive(Clone)]
 struct App {
     lsp: lsp::Connections,
+    lists: Arc<Mutex<ListCache>>,
+    source_lines: Arc<Mutex<SourceFiles>>,
     session: Arc<Mutex<Session>>,
     token: String,
     origin: String,
@@ -55,6 +57,8 @@ pub fn serve(session: Session) -> anyhow::Result<()> {
         let origin = format!("http://{}", listener.local_addr()?);
         let app = App {
             lsp: Default::default(),
+            lists: Default::default(),
+            source_lines: Default::default(),
             session: Arc::new(Mutex::new(session)),
             token: uuid::Uuid::new_v4().to_string(),
             origin,
@@ -64,6 +68,7 @@ pub fn serve(session: Session) -> anyhow::Result<()> {
             "Audit GUI: {url}\nPress Ctrl-C to stop. Drafts are saved separately from source files."
         );
         start_analysis(&app)?;
+        start_progress_refresh(&app);
         let router = router(app);
         let opener = if cfg!(target_os = "macos") {
             "open"
@@ -88,6 +93,7 @@ fn router(app: App) -> Router {
         .route("/events", get(events))
         .route("/findings", get(findings))
         .route("/finding", get(finding))
+        .route("/group-items", get(group_items))
         .route("/buffer", get(buffer))
         .route("/source/save", post(save_source))
         .route("/template", post(template))
@@ -156,7 +162,9 @@ fn start_analysis(app: &App) -> anyhow::Result<()> {
     let session = app.session.clone();
     tokio::task::spawn_blocking(move || {
         let result = config.run();
-        session.lock().unwrap().finish_analysis(result);
+        let mut session = session.lock().unwrap();
+        session.finish_analysis(result);
+        session.refresh_audit_progress();
     });
     Ok(())
 }
@@ -166,7 +174,7 @@ async fn workspace(State(app): State<App>) -> ApiResult {
 }
 fn status(session: &Session) -> Value {
     let a = &session.analysis;
-    json!({"generation":a.generation,"running":a.running,"stale":a.stale,"overrides_changed":a.overrides_changed,"override_revision":a.override_revision,"audit_revision":a.audit_revision,"override_error":a.override_error,"status":a.status,"exit_code":a.exit_code,"log":a.log,"count":a.findings.len()})
+    json!({"results_revision":a.results_revision,"generation":a.generation,"running":a.running,"stale":a.stale,"overrides_changed":a.overrides_changed,"override_revision":a.override_revision,"audit_revision":a.audit_revision,"override_error":a.override_error,"status":a.status,"exit_code":a.exit_code,"log":a.log,"count":a.findings.len()})
 }
 async fn analysis(State(app): State<App>) -> ApiResult {
     Ok(Json(status(&app.session.lock().unwrap())))
@@ -175,14 +183,48 @@ async fn analyze(State(app): State<App>) -> ApiResult {
     start_analysis(&app)?;
     Ok(Json(json!({"status":status(&app.session.lock().unwrap())})))
 }
+// One worker per server, shared by all event-stream subscribers.
+fn start_progress_refresh(app: &App) {
+    let session = Arc::downgrade(&app.session);
+    tokio::spawn(async move {
+        loop {
+            let Some(session) = session.upgrade() else {
+                break;
+            };
+            let result = tokio::task::spawn_blocking(move || {
+                let prepared = session.lock().unwrap().prepare_progress_refresh();
+                let read = prepared.read();
+                session.lock().unwrap().apply_progress_refresh(read, false);
+            })
+            .await;
+            if result.is_err() {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(500)).await;
+        }
+    });
+}
+
+#[derive(Default)]
+struct ListCache {
+    revision: Option<(u64, usize)>,
+    entries: std::collections::VecDeque<(String, Arc<CachedList>)>,
+}
+#[derive(Clone)]
+struct CachedList {
+    progress_revision: (u64, u64),
+    groups: Vec<Value>,
+    by_key: std::collections::HashMap<String, usize>,
+    total: usize,
+}
+
 async fn events(State(app): State<App>) -> impl IntoResponse {
     let (tx, rx) = tokio::sync::mpsc::channel::<Result<Event, Infallible>>(4);
     tokio::spawn(async move {
         let mut last = String::new();
         loop {
             let current = {
-                let mut session = app.session.lock().unwrap();
-                session.refresh_audit_progress();
+                let session = app.session.lock().unwrap();
                 status(&session).to_string()
             };
             if last != current {
@@ -210,6 +252,8 @@ enum GroupBy {
 struct Filter {
     #[serde(default)]
     group_by: GroupBy,
+    headers_only: Option<bool>,
+    group_key: Option<String>,
     q: Option<String>,
     effect: Option<String>,
     level: Option<String>,
@@ -219,9 +263,51 @@ struct Filter {
     limit: Option<usize>,
 }
 async fn findings(State(app): State<App>, Query(filter): Query<Filter>) -> ApiResult {
-    let mut session = app.session.lock().unwrap();
-    session.refresh_audit_progress();
+    let session = app.session.lock().unwrap();
     let inverted = filter.group_by == GroupBy::EffectSource;
+    let grouped = filter.grouped == Some(true) || inverted || filter.group_key.is_some();
+    let cache_key = json!([
+        inverted,
+        filter.q.as_deref().unwrap_or_default(),
+        filter.effect.as_deref().unwrap_or_default(),
+        filter.level.as_deref().unwrap_or_default(),
+        filter.class.as_deref().unwrap_or_default()
+    ])
+    .to_string();
+    let revision = (
+        session.analysis.results_revision,
+        session.analysis.audit_revision,
+        session.analysis.override_revision,
+        session.analysis.findings.len(),
+    );
+    let mut cache = app.lists.lock().unwrap();
+    let membership_revision = (revision.0, revision.3);
+    if cache.revision != Some(membership_revision) {
+        cache.revision = Some(membership_revision);
+        cache.entries.clear();
+    }
+    let effects: std::collections::BTreeSet<_> = session
+        .analysis
+        .findings
+        .iter()
+        .filter_map(|f| f.effect.clone())
+        .collect();
+    if grouped && let Some(index) = cache.entries.iter().position(|(key, _)| key == &cache_key) {
+        let mut entry = cache.entries.remove(index).unwrap();
+        if entry.1.progress_revision != (revision.1, revision.2) {
+            // Saved audit contributions change badges, not membership or ranking.
+            let list = Arc::make_mut(&mut entry.1);
+            for group in &mut list.groups {
+                annotate_group_progress(group, &session);
+            }
+            list.progress_revision = (revision.1, revision.2);
+        }
+        let list = entry.1.clone();
+        cache.entries.push_back(entry);
+        drop(cache);
+        drop(session);
+        return list_response(&list, &filter, &effects, revision.0);
+    }
     let matches: Vec<_> = session
         .analysis
         .findings
@@ -261,15 +347,9 @@ async fn findings(State(app): State<App>, Query(filter): Query<Filter>) -> ApiRe
     } else {
         matches.iter().map(|f| finding_summary(f)).collect()
     };
-    let effects: std::collections::BTreeSet<_> = session
-        .analysis
-        .findings
-        .iter()
-        .filter_map(|f| f.effect.as_deref())
-        .collect();
     let offset = filter.offset.unwrap_or(0);
     let limit = filter.limit.unwrap_or(100).min(500);
-    if filter.grouped == Some(true) || inverted {
+    if grouped {
         let mut groups = if inverted {
             group_effect_sources(&matches, filter.q.as_deref().unwrap_or_default())
         } else {
@@ -278,14 +358,28 @@ async fn findings(State(app): State<App>, Query(filter): Query<Filter>) -> ApiRe
         for group in &mut groups {
             annotate_group_progress(group, &session);
         }
-        let total: usize = groups
+        let total = groups
             .iter()
             .map(|g| g["count"].as_u64().unwrap() as usize)
             .sum();
-        return Ok(Json(json!({
-            "total": total, "total_groups": groups.len(), "effects": effects,
-            "groups": groups.into_iter().skip(offset).take(limit).collect::<Vec<_>>()
-        })));
+        let by_key = groups
+            .iter()
+            .enumerate()
+            .map(|(i, g)| (g["key"].as_str().unwrap().to_owned(), i))
+            .collect();
+        let list = Arc::new(CachedList {
+            progress_revision: (revision.1, revision.2),
+            groups,
+            by_key,
+            total,
+        });
+        if cache.entries.len() == 8 {
+            cache.entries.pop_front();
+        }
+        cache.entries.push_back((cache_key, list.clone()));
+        drop(cache);
+        drop(session);
+        return list_response(&list, &filter, &effects, revision.0);
     }
     let mut values = values;
     for value in &mut values {
@@ -294,6 +388,65 @@ async fn findings(State(app): State<App>, Query(filter): Query<Filter>) -> ApiRe
     Ok(Json(json!({"total":matches.len(),
         "items":values.into_iter().skip(offset).take(limit).collect::<Vec<_>>(),"effects":effects})))
 }
+async fn group_items(state: State<App>, query: Query<Filter>) -> ApiResult {
+    if query.group_key.is_none() {
+        return Err(anyhow::anyhow!("group_key is required").into());
+    }
+    findings(state, query).await
+}
+fn list_response(
+    list: &CachedList,
+    filter: &Filter,
+    effects: &std::collections::BTreeSet<String>,
+    revision: u64,
+) -> ApiResult {
+    let offset = filter.offset.unwrap_or(0);
+    let limit = filter.limit.unwrap_or(100).min(500);
+    if let Some(key) = &filter.group_key {
+        let group = list
+            .by_key
+            .get(key)
+            .map(|&i| &list.groups[i])
+            .ok_or_else(|| anyhow::anyhow!("finding group no longer exists"))?;
+        let items: Vec<_> = group["items"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .skip(offset)
+            .take(limit)
+            .cloned()
+            .collect();
+        return Ok(Json(
+            json!({"items":items,"total":group["count"],"results_revision":revision}),
+        ));
+    }
+    let groups: Vec<_> = list
+        .groups
+        .iter()
+        .skip(offset)
+        .take(limit)
+        .map(|group| {
+            if filter.headers_only == Some(true) {
+                // Do not clone the potentially enormous items array for a collapsed group.
+                Value::Object(
+                    group
+                        .as_object()
+                        .unwrap()
+                        .iter()
+                        .filter(|(key, _)| key.as_str() != "items")
+                        .map(|(k, v)| (k.clone(), v.clone()))
+                        .collect(),
+                )
+            } else {
+                group.clone()
+            }
+        })
+        .collect();
+    Ok(Json(
+        json!({"total":list.total,"total_groups":list.groups.len(),"effects":effects,"groups":groups,"results_revision":revision}),
+    ))
+}
+
 fn annotate_progress(value: &mut Value, session: &Session) {
     let progress = session.audit_progress(value["id"].as_str().unwrap_or_default());
     value["progress"] = serde_json::to_value(progress).unwrap();
@@ -433,23 +586,40 @@ struct Id {
 async fn finding(State(app): State<App>, Query(id): Query<Id>) -> ApiResult {
     let session = app.session.lock().unwrap();
     let f = session
-        .analysis
-        .findings
-        .iter()
-        .find(|f| f.id == id.id)
+        .finding(&id.id)
         .ok_or_else(|| anyhow::anyhow!("finding no longer exists"))?;
     let mut value = serde_json::to_value(f).map_err(anyhow::Error::from)?;
     value["navigation"] =
         serde_json::to_value(session.finding_navigation(&id.id)).map_err(anyhow::Error::from)?;
     drop(session);
-    annotate_source_lines(&mut value, &mut std::collections::HashMap::new());
+    let mut files = app.source_lines.lock().unwrap();
+    if files.len() > 32 {
+        files.clear();
+    }
+    files.retain(|path, source| {
+        source.as_ref().is_some_and(|s| {
+            std::fs::metadata(path).is_ok_and(|m| {
+                m.len() == s.len
+                    && m.modified()
+                        .ok()
+                        .is_some_and(|modified| Some(modified) == s.modified)
+            })
+        })
+    });
+    annotate_source_lines(&mut value, &mut files);
     Ok(Json(value))
 }
+type SourceFiles = std::collections::HashMap<String, Option<LineSource>>;
+struct LineSource {
+    text: String,
+    hash: String,
+    newlines: Vec<usize>,
+    modified: Option<std::time::SystemTime>,
+    len: u64,
+}
+
 // Presentation-only line numbers; reports retain their exact original-byte ranges.
-fn annotate_source_lines(
-    value: &mut Value,
-    files: &mut std::collections::HashMap<String, Option<(String, String)>>,
-) {
+fn annotate_source_lines(value: &mut Value, files: &mut SourceFiles) {
     match value {
         Value::Array(values) => {
             for value in values {
@@ -467,15 +637,32 @@ fn annotate_source_lines(
                 let source = files.entry(path.to_owned()).or_insert_with(|| {
                     let text = std::fs::read_to_string(path).ok()?;
                     let hash = sniff_test_report::content_hash(text.as_bytes());
-                    Some((text, hash))
+                    let metadata = std::fs::metadata(path).ok()?;
+                    let newlines = text
+                        .bytes()
+                        .enumerate()
+                        .filter_map(|(i, b)| (b == b'\n').then_some(i))
+                        .collect();
+                    Some(LineSource {
+                        text,
+                        hash,
+                        newlines,
+                        modified: metadata.modified().ok(),
+                        len: metadata.len(),
+                    })
                 });
-                if let Some((text, actual_hash)) = source
-                    && actual_hash == hash
-                    && let Some(prefix) = text.get(..start as usize)
+                if let Some(source) = source
+                    && source.hash == hash
+                    && source.text.get(..start as usize).is_some()
                 {
                     object.insert(
                         "line".into(),
-                        json!(prefix.bytes().filter(|byte| *byte == b'\n').count() + 1),
+                        json!(
+                            source
+                                .newlines
+                                .partition_point(|&offset| offset < start as usize)
+                                + 1
+                        ),
                     );
                 }
             }
@@ -810,6 +997,8 @@ mod tests {
         }
         let app = App {
             lsp: Default::default(),
+            lists: Default::default(),
+            source_lines: Default::default(),
             session: Arc::new(Mutex::new(session)),
             token: "secret".into(),
             origin: "http://127.0.0.1:1234".into(),
@@ -847,8 +1036,36 @@ mod tests {
             filtered["groups"][0]["items"].as_array().unwrap().len(),
             151
         );
+        let cached = app.lists.lock().unwrap().entries.back().unwrap().1.clone();
+        let headers = findings(State(app.clone()), query("grouped=true&headers_only=true&effect=panic&level=warn&class=concrete-operation&q=large")).await.ok().unwrap().0;
+        assert_eq!(headers["groups"][0]["count"], 151);
+        assert!(headers["groups"][0].get("items").is_none());
+        assert!(Arc::ptr_eq(
+            &cached,
+            &app.lists.lock().unwrap().entries.back().unwrap().1
+        ));
+        let rows = findings(State(app.clone()), query("grouped=true&group_key=large&offset=100&effect=panic&level=warn&class=concrete-operation&q=large")).await.ok().unwrap().0;
+        assert_eq!(rows["total"], 151);
+        assert_eq!(rows["items"].as_array().unwrap().len(), 51);
+        assert_eq!(rows["items"][0]["id"], "100");
+        assert!(
+            findings(
+                State(app.clone()),
+                query("grouped=true&group_key=large&effect=safety")
+            )
+            .await
+            .is_err()
+        );
+        // A revision change must invalidate even if the finding count is unchanged.
+        app.session.lock().unwrap().analysis.audit_revision += 1;
+        let _ = findings(State(app.clone()), query("grouped=true&headers_only=true&effect=panic&level=warn&class=concrete-operation&q=large")).await.ok().unwrap();
+        assert!(!Arc::ptr_eq(
+            &cached,
+            &app.lists.lock().unwrap().entries.back().unwrap().1
+        ));
         {
             let mut session = app.session.lock().unwrap();
+            session.analysis.results_revision += 1;
             for (index, finding) in session.analysis.findings.iter_mut().enumerate() {
                 let source = if index < 151 { 0 } else { index as u64 };
                 finding.direct_source = source_finding("", source, "").direct_source;
@@ -907,6 +1124,8 @@ mod tests {
         let session = Session::open(dir.path().into(), dir.path().join("target"), config).unwrap();
         let app = App {
             lsp: Default::default(),
+            lists: Default::default(),
+            source_lines: Default::default(),
             session: Arc::new(Mutex::new(session)),
             token: "secret".into(),
             origin: "http://127.0.0.1:1234".into(),

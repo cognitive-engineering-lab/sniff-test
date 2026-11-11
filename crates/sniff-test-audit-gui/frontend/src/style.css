@@ -155,3 +155,7 @@ main { overflow: hidden; }
 .audit-progress.partial { font:10px ui-sans-serif,sans-serif; font-weight:600; }
 
 .override-removal{overflow-wrap:anywhere}
+
+.loading { padding:10px; color:#62796b; font-size:12px; }
+.navigation-loading { color:#62796b; font-size:12px; white-space:nowrap; }
+.load-more { margin:8px; font-size:12px; }

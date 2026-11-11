@@ -25,15 +25,22 @@ for(const [kind,dependency,display] of [
   ['toolchain','/home/example/.rustup/toolchains/nightly-2026-05-01-aarch64-apple-darwin/lib/rustlib/src/rust/library/core/src/option.rs','nightly-2026-05-01-aarch64-apple-darwin/lib/rustlib/src/rust/library/core/src/option.rs'],
 ])test(`${kind} paths are shortened consistently while navigation retains the full path`,async({page})=>{
   const original=join(dir,'src/lib.rs');
+  let originalGroupKey=original;
   await page.route('**/api/v1/findings?*',async route=>{
     const response=await route.fetch(),result=await response.json();
     for(const group of result.groups){
       if(group.label){
         group.label=group.label.replace(group.path,dependency);
         group.path=dependency;
-      }else group.key=dependency;
+      }else {originalGroupKey=group.key;group.key=dependency;}
     }
     await route.fulfill({response,json:result});
+  });
+  await page.route('**/api/v1/group-items?*',async route=>{
+    const request=new URL(route.request().url());
+    if(request.searchParams.get('group_key')===dependency)request.searchParams.set('group_key',originalGroupKey);
+    const response=await route.fetch({url:request.href});
+    await route.fulfill({response});
   });
   await page.route('**/api/v1/finding?*',async route=>{
     const response=await route.fetch(),finding=await response.json();
@@ -1503,3 +1510,119 @@ for (const mode of ['native','namespace override','source override','trait decla
     } finally { await stop();await rm(dependency,{recursive:true,force:true}); }
   });
 }
+
+test('ordering views cache headers and remember pages expansion and scroll with lazy rows',async({page})=>{
+  await selectFinding(page);
+  let lists=0,rows=0;
+  await page.route('**/api/v1/findings?*',async route=>{
+    lists++;
+    const params=new URL(route.request().url()).searchParams;
+    expect(params.get('headers_only')).toBe('true');
+    const mode=params.get('group_by'),offset=Number(params.get('offset'));
+    await route.fulfill({json:{total:205*151,total_groups:205,effects:['panic'],groups:Array.from({length:Math.min(100,205-offset)},(_,i)=>({key:`${mode}-${offset+i}`,count:151,progress:{handled:0,total:151,justified:0,propagated:0}}))}});
+  });
+  await page.route('**/api/v1/group-items?*',async route=>{
+    rows++;
+    const offset=Number(new URL(route.request().url()).searchParams.get('offset'));
+    await route.fulfill({json:{total:151,items:Array.from({length:Math.min(100,151-offset)},(_,i)=>({id:`row-${offset+i}`,crate_name:'fixture',root:`report ${offset+i}`,effect:'panic',reason:'test',level:'warn',class:'concrete-operation'}))}});
+  });
+  await page.getByLabel('Search findings',{exact:true}).fill('cached');
+  await expect(page.locator('.group')).toHaveCount(100);
+  expect(rows).toBe(0);
+  await page.getByLabel('Next files',{exact:true}).click();
+  await expect(page.locator('.group-path').first()).toHaveText('file-100');
+  await page.locator('.group').first().click();
+  await expect(page.locator('.finding')).toHaveCount(100);
+  await page.getByRole('button',{name:'Load more (100 of 151)',exact:true}).click();
+  await expect(page.locator('.finding')).toHaveCount(151);
+  expect(rows).toBe(2);
+  await page.locator('.finding-list').evaluate(element=>{element.scrollTop=400;element.dispatchEvent(new Event('scroll'));});
+  const toggle=page.getByRole('button',{name:'⇄ Invert effect',exact:true});
+  await toggle.click();
+  await expect(page.locator('.group-path').first()).toHaveText('effect-source-0');
+  await page.locator('.group').first().click();
+  await expect(page.locator('.finding')).toHaveCount(100);
+  const requests=lists;
+  await toggle.click();
+  await expect(page.locator('.group-path').first()).toHaveText('file-100');
+  await expect(page.locator('.finding')).toHaveCount(151);
+  await expect.poll(()=>page.locator('.finding-list').evaluate(element=>element.scrollTop)).toBe(400);
+  expect(lists).toBe(requests);
+  expect(rows).toBe(3);
+  await expect(page.locator('.effect-summary')).toBeVisible();
+  await toggle.click();
+  await expect(page.locator('.group-path').first()).toHaveText('effect-source-0');
+  await expect(page.locator('.finding')).toHaveCount(100);
+  expect(lists).toBe(requests);
+});
+
+test('mode changes hide obsolete rows while loading and ignore delayed list responses',async({page})=>{
+  await selectFinding(page);
+  let release!:()=>void;
+  const gate=new Promise<void>(resolve=>release=resolve);
+  await page.route('**/api/v1/findings?*',async route=>{
+    const params=new URL(route.request().url()).searchParams;
+    if(params.get('group_by')==='effect-source')await gate;
+    await route.fulfill({json:{total:1,total_groups:1,effects:['panic'],groups:[{key:params.get('group_by')==='effect-source'?'late-origin':'current-file',count:1}]}}).catch(()=>{});
+  });
+  const toggle=page.getByRole('button',{name:'⇄ Invert effect',exact:true});
+  await toggle.click();
+  await expect(page.getByRole('status').filter({hasText:'Loading effect sources'})).toBeVisible();
+  await expect(page.locator('.group')).toHaveCount(0);
+  await toggle.click();
+  release();
+  await expect(toggle).toHaveAttribute('aria-pressed','false');
+  await expect(page.locator('.group-path')).not.toHaveText('late-origin');
+  await expect(page.locator('.cm-editor')).toBeVisible();
+});
+
+test('latest finding click wins across files and returning retains editor undo',async({page})=>{
+  await stop();
+  await writeFile(join(dir,'src/lib.rs'),'pub mod helper;\npub fn risky() { panic!("first"); }\n');
+  await writeFile(join(dir,'src/helper.rs'),'pub fn second() { panic!("second"); }\n');
+  await launch();await page.goto(url);
+  await expect(page.locator('.group')).toHaveCount(2);
+  await expect(page.locator('.status')).not.toContainText('running');
+  for(const group of await page.locator('.group').all())await group.click();
+  await expect(page.locator('.finding')).toHaveCount(2);
+  const first=page.locator('.finding').filter({hasText:'::risky'}),second=page.locator('.finding').filter({hasText:'::second'});
+  await second.click();await expect(page.locator('.filename')).toContainText('helper.rs');
+  let entered!:()=>void,release!:()=>void;
+  const started=new Promise<void>(resolve=>entered=resolve),gate=new Promise<void>(resolve=>release=resolve);
+  await page.route('**/api/v1/finding?*',async route=>{
+    const response=await route.fetch(),finding=await response.json();
+    if(finding.root?.endsWith('::risky')){entered();await gate;}
+    await route.fulfill({response,json:finding}).catch(()=>{});
+  });
+  await first.click();await started;
+  await expect(page.getByRole('status').filter({hasText:'Opening source'})).toBeVisible();
+  await second.click();
+  release();
+  await expect(second).toHaveClass(/selected/);
+  await expect(page.locator('.filename')).toContainText('helper.rs');
+  await page.unroute('**/api/v1/finding?*');
+  await expect(page.getByRole('status').filter({hasText:'Opening source'})).toHaveCount(0);
+  await page.locator('.cm-content').focus();await page.keyboard.press('ControlOrMeta+Home');await page.keyboard.insertText('// retained undo\n');
+  await first.click();await expect(page.locator('.filename')).toContainText('lib.rs');
+  await second.click();await expect(page.locator('.filename')).toContainText('helper.rs');
+  await expect(page.locator('.cm-content')).toContainText('retained undo');
+  await page.locator('.cm-content').focus();await page.keyboard.press('ControlOrMeta+z');
+  await expect(page.locator('.cm-content')).not.toContainText('retained undo');
+});
+
+
+test('failed mode requests leave the editor usable and can be retried',async({page})=>{
+  await selectFinding(page);
+  let failures=1;
+  await page.route('**/api/v1/findings?*',async route=>{
+    if(failures-- > 0){await route.fulfill({status:503,json:{error:'Temporary list failure'}});return;}
+    await route.continue();
+  });
+  await page.getByRole('button',{name:'⇄ Invert effect',exact:true}).click();
+  await expect(page.getByRole('alert')).toContainText('Temporary list failure');
+  await expect(page.locator('.finding-list')).toHaveAttribute('aria-busy','false');
+  await expect(page.locator('.cm-editor')).toBeVisible();
+  await page.getByRole('button',{name:'Retry findings',exact:true}).click();
+  await expect(page.locator('.group')).toHaveCount(1);
+  await expect(page.getByRole('alert')).toHaveCount(0);
+});

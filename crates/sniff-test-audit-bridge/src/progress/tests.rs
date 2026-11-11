@@ -159,3 +159,78 @@ fn lexical_attachment_handles_unicode_crlf_and_multiline_explanations() {
     session.refresh_audit_progress();
     assert_eq!(session.audit_progress("one"), AuditProgress::default());
 }
+
+#[test]
+fn background_reads_do_not_overwrite_newer_saves_or_results() {
+    let original = "pub fn work() {\n    danger();\n}\n";
+    let (_root, mut session, path) = setup(original);
+    session.refresh_audit_progress();
+    let old = session.prepare_progress_refresh().read();
+    let buffer = session.buffer(&path).unwrap();
+    let saved = original.replace("    danger();", "    // PANIC: checked\n    danger();");
+    session.save_source(&path, buffer.revision, saved).unwrap();
+    session.refresh_audit_progress();
+    assert!(session.audit_progress("one").justified);
+    let revision = session.analysis.audit_revision;
+    session.apply_progress_refresh(old, false);
+    assert!(session.audit_progress("one").justified);
+    assert_eq!(session.analysis.audit_revision, revision);
+    let old = session.prepare_progress_refresh().read();
+    session.analysis.results_revision += 1;
+    session.analysis.findings.clear();
+    session.apply_progress_refresh(old, false);
+    assert!(session.audit_progress("one").justified);
+    let read = session.prepare_progress_refresh().read();
+    session.apply_progress_refresh(read, false);
+    assert_eq!(session.audit_progress("one"), AuditProgress::default());
+}
+
+#[test]
+fn unchanged_background_refresh_reuses_lexical_snapshot_and_progress_revision() {
+    let (_root, mut session, _path) =
+        setup("pub fn work() {\n    // PANIC: checked\n    danger();\n}\n");
+    session.refresh_audit_progress();
+    let revision = session.analysis.audit_revision;
+    let content = session
+        .progress_sources
+        .values()
+        .next()
+        .unwrap()
+        .content
+        .as_ptr();
+    let read = session.prepare_progress_refresh().read();
+    session.apply_progress_refresh(read, false);
+    assert_eq!(session.analysis.audit_revision, revision);
+    assert_eq!(
+        session
+            .progress_sources
+            .values()
+            .next()
+            .unwrap()
+            .content
+            .as_ptr(),
+        content
+    );
+}
+
+#[test]
+fn indexed_attributes_keep_documentation_anchors_local_in_large_sources() {
+    let mut source = String::new();
+    for i in 0..1000 {
+        source.push_str(&format!("#[allow(dead_code)]\nfn earlier_{i}() {{}}\n"));
+    }
+    source.push_str("/// # Panics\r\n/// Caller handles λ.\r\n#[cfg_attr(\r\n    feature = \"test\", allow(unused)\r\n)]\r\n#[custom(text = r#\"[λ]\"#)]\r\npub fn work() {\r\n    // PANIC: checked\r\n    danger();\r\n}\r\n");
+    let (_root, mut session, _path) = setup(&source);
+    session.refresh_audit_progress();
+    let progress = session.audit_progress("one");
+    assert!(progress.justified && progress.propagated);
+    assert!(session.audit_progress("shared").propagated);
+    assert_eq!(
+        session.audit_progress("other-effect"),
+        AuditProgress::default()
+    );
+    let snapshot = session.progress_sources.values().next().unwrap();
+    let start = source.find("pub fn work").unwrap();
+    let anchor = snapshot.lexical.as_ref().unwrap().attributes[&start];
+    assert_eq!(anchor, source.find("#[cfg_attr").unwrap());
+}

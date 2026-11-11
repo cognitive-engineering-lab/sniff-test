@@ -6,6 +6,7 @@ use anyhow::{Context, Result, bail, ensure};
 pub use navigation::{FindingNavigation, NavigationLocation};
 pub use overrides::{OverrideEditor, OverrideEditorTarget, SavedOverride};
 pub use progress::AuditProgress;
+pub use progress::{ProgressRead, ProgressRefresh};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sniff_test_report::{
@@ -162,6 +163,8 @@ pub struct Finding {
 #[derive(Debug, Clone, Default, Serialize)]
 pub struct Analysis {
     pub generation: u64,
+    /// Changes when the finding set is replaced, rather than when a run starts.
+    pub results_revision: u64,
     pub running: bool,
     pub stale: bool,
     pub overrides_changed: bool,
@@ -262,8 +265,20 @@ pub struct Session {
     navigation: BTreeMap<String, FindingNavigation>,
     progress: BTreeMap<String, AuditProgress>,
     progress_sources: BTreeMap<String, progress::SourceSnapshot>,
+    progress_paths: Option<(u64, usize, Vec<String>)>,
+    progress_revision: Option<(u64, u64, usize)>,
+    progress_epoch: u64,
+    finding_index: BTreeMap<String, usize>,
 }
 impl Session {
+    pub fn finding(&self, id: &str) -> Option<&Finding> {
+        self.finding_index
+            .get(id)
+            .and_then(|&i| self.analysis.findings.get(i))
+            .filter(|f| f.id == id)
+            .or_else(|| self.analysis.findings.iter().find(|f| f.id == id))
+    }
+
     pub fn open(root: PathBuf, target: PathBuf, config: AnalysisConfig) -> Result<Self> {
         let root = root.canonicalize()?;
         fs::create_dir_all(&target)?;
@@ -323,6 +338,10 @@ impl Session {
             navigation: BTreeMap::new(),
             progress: BTreeMap::new(),
             progress_sources: BTreeMap::new(),
+            progress_paths: None,
+            progress_revision: None,
+            progress_epoch: 0,
+            finding_index: BTreeMap::new(),
         };
         session.reconcile_overrides();
         Ok(session)
@@ -404,7 +423,7 @@ impl Session {
         }
         buffer
             .saved_overrides
-            .retain(|saved| saved.location.hash == content_hash(disk.as_bytes()));
+            .retain(|saved| saved.location.hash == buffer.hash);
         Ok(buffer.clone())
     }
     /// Atomically save the editor snapshot without starting analysis.
@@ -524,6 +543,16 @@ impl Session {
                 }
                 .into();
                 self.navigation.clear();
+                // The new reports consumed disk source. Old lexical snapshots
+                // must not make the freshly completed analysis appear stale.
+                self.progress_sources.clear();
+                self.progress_revision = None;
+                self.analysis.results_revision += 1;
+                self.finding_index = findings
+                    .iter()
+                    .enumerate()
+                    .map(|(i, f)| (f.id.clone(), i))
+                    .collect();
                 self.analysis.findings = findings;
                 // Reanalysis consumed disk source. Refresh acknowledged snapshots so
                 // opening an externally changed file does not invalidate that analysis.
@@ -607,7 +636,54 @@ pub struct TemplateEdit {
 
 /// Find attached outer attributes without mistaking brackets in strings or
 /// comments for attribute boundaries. Offsets remain in original source bytes.
+/// Index attached outer attributes in one token walk, including nested items.
+/// Synthetic doc-comment attributes do not move the documentation anchor.
+fn outer_attribute_starts(
+    tokens: proc_macro2::TokenStream,
+    source: &str,
+) -> BTreeMap<usize, usize> {
+    use proc_macro2::{Delimiter, TokenTree};
+    fn visit(tokens: proc_macro2::TokenStream, source: &str, starts: &mut BTreeMap<usize, usize>) {
+        let mut tokens = tokens.into_iter().peekable();
+        let mut pending = None;
+        while let Some(token) = tokens.next() {
+            if matches!(&token, TokenTree::Punct(p) if p.as_char() == '#')
+                && matches!(tokens.peek(), Some(TokenTree::Group(g)) if g.delimiter() == Delimiter::Bracket)
+            {
+                let start = token.span().byte_range().start;
+                tokens.next();
+                if source.get(start..).is_some_and(|s| s.starts_with('#')) {
+                    pending.get_or_insert(start);
+                }
+                continue;
+            }
+            if let Some(attribute) = pending.take() {
+                let start = token.span().byte_range().start.min(source.len());
+                let line = source[..start].rfind('\n').map_or(0, |i| i + 1);
+                let attribute_line = source[..attribute].rfind('\n').map_or(0, |i| i + 1);
+                if attribute_line < line && source[attribute_line..attribute].trim().is_empty() {
+                    starts.insert(line, attribute_line);
+                }
+            }
+            if let TokenTree::Group(group) = token {
+                visit(group.stream(), source, starts);
+            }
+        }
+    }
+    let mut starts = BTreeMap::new();
+    visit(tokens, source, &mut starts);
+    starts
+}
+
 fn outer_attribute_start(source: &str, line_start: usize) -> usize {
+    if let Ok(tokens) = source.parse() {
+        return outer_attribute_starts(tokens, source)
+            .get(&line_start)
+            .copied()
+            .unwrap_or(line_start);
+    }
+    // Incomplete editor documents may not tokenize as a whole. Only template
+    // editing uses this fallback; progress uses the cached lexical index.
     use syn::parse::Parser;
     let mut start = line_start;
     let mut offset = line_start;

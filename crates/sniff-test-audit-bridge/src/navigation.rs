@@ -48,13 +48,10 @@ impl FindingNavigation {
 
 impl Session {
     pub fn finding_navigation(&self, id: &str) -> Option<FindingNavigation> {
-        self.navigation.get(id).cloned().or_else(|| {
-            self.analysis
-                .findings
-                .iter()
-                .find(|finding| finding.id == id)
-                .map(FindingNavigation::from_finding)
-        })
+        self.navigation
+            .get(id)
+            .cloned()
+            .or_else(|| self.finding(id).map(FindingNavigation::from_finding))
     }
 
     pub(super) fn map_saved_locations(&mut self, path: &str, previous: &str, content: &str) {

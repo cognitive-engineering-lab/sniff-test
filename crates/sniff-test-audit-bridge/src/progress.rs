@@ -12,33 +12,118 @@ pub struct AuditProgress {
 pub(super) struct SourceSnapshot {
     hash: String,
     content: String,
-    comments: Option<BTreeMap<usize, String>>,
+    lexical: Option<LexicalSource>,
+}
+struct LexicalSource {
+    comments: BTreeMap<usize, String>,
+    attributes: BTreeMap<usize, usize>,
+}
+
+/// Disk work can run without holding the shared audit session lock.
+pub struct ProgressRefresh {
+    revision: (u64, u64, usize),
+    epoch: u64,
+    paths: Vec<(String, PathBuf)>,
+}
+pub struct ProgressRead {
+    revision: (u64, u64, usize),
+    epoch: u64,
+    sources: BTreeMap<String, Option<(String, String)>>,
+}
+impl ProgressRefresh {
+    pub fn read(self) -> ProgressRead {
+        let sources = self
+            .paths
+            .into_iter()
+            .map(|(key, path)| {
+                let source = fs::read_to_string(path).ok().map(|content| {
+                    let hash = content_hash(content.as_bytes());
+                    (content, hash)
+                });
+                (key, source)
+            })
+            .collect();
+        ProgressRead {
+            revision: self.revision,
+            epoch: self.epoch,
+            sources,
+        }
+    }
 }
 
 impl Session {
-    /// Refresh all reports, including collapsed groups and shared attachment sites.
-    /// Only saved disk content counts. Cache lexical inspection by source hash.
-    pub fn refresh_audit_progress(&mut self) {
+    pub fn prepare_progress_refresh(&mut self) -> ProgressRefresh {
         self.reconcile_overrides();
-        let paths: BTreeSet<_> = self
-            .analysis
-            .findings
-            .iter()
-            .filter_map(|f| f.audit.as_ref())
-            .flat_map(|a| &a.targets)
-            .map(|t| t.location.path.clone())
-            .collect();
-        self.progress_sources.retain(|path, _| paths.contains(path));
-        for path in paths {
-            let content = self
-                .checked_path(&path, false)
-                .ok()
-                .and_then(|path| fs::read_to_string(path).ok());
-            let Some(content) = content else {
-                self.progress_sources.remove(&path);
+        let revision = (
+            self.analysis.results_revision,
+            self.analysis.override_revision,
+            self.analysis.findings.len(),
+        );
+        if self
+            .progress_paths
+            .as_ref()
+            .is_none_or(|(r, n, _)| (*r, *n) != (revision.0, revision.2))
+        {
+            let paths: BTreeSet<_> = self
+                .analysis
+                .findings
+                .iter()
+                .filter_map(|f| f.audit.as_ref())
+                .flat_map(|a| &a.targets)
+                .map(|t| t.location.path.clone())
+                .collect();
+            self.progress_paths = Some((revision.0, revision.2, paths.into_iter().collect()));
+        }
+        ProgressRefresh {
+            revision,
+            epoch: self.progress_epoch,
+            paths: self
+                .progress_paths
+                .as_ref()
+                .unwrap()
+                .2
+                .iter()
+                .filter_map(|key| {
+                    self.checked_path(key, false)
+                        .ok()
+                        .map(|path| (key.clone(), path))
+                })
+                .collect(),
+        }
+    }
+
+    /// Explicit mutations refresh synchronously before returning their new status.
+    pub fn refresh_audit_progress(&mut self) {
+        self.progress_epoch += 1;
+        let read = self.prepare_progress_refresh().read();
+        self.apply_progress_refresh(read, true);
+    }
+
+    /// Ignore obsolete background reads; only changed sources need lexical inspection.
+    pub fn apply_progress_refresh(&mut self, read: ProgressRead, force: bool) {
+        let revision = (
+            self.analysis.results_revision,
+            self.analysis.override_revision,
+            self.analysis.findings.len(),
+        );
+        if revision != read.revision || self.progress_epoch != read.epoch {
+            return;
+        }
+        let mut changed = BTreeSet::new();
+        self.progress_sources.retain(|path, _| {
+            let keep = read.sources.contains_key(path);
+            if !keep {
+                changed.insert(path.clone());
+            }
+            keep
+        });
+        for (path, source) in read.sources {
+            let Some((content, hash)) = source else {
+                if self.progress_sources.remove(&path).is_some() {
+                    changed.insert(path);
+                }
                 continue;
             };
-            let hash = content_hash(content.as_bytes());
             if self
                 .progress_sources
                 .get(&path)
@@ -49,21 +134,34 @@ impl Session {
             if self.progress_sources.contains_key(&path) {
                 self.analysis.stale = true;
             }
-            let comments = line_comments(&content);
+            changed.insert(path.clone());
+            let lexical = inspect_source(&content);
             self.progress_sources.insert(
                 path,
                 SourceSnapshot {
                     hash,
                     content,
-                    comments,
+                    lexical,
                 },
             );
         }
+        let rebuild = force || self.progress_revision != Some(revision);
+        if !rebuild && changed.is_empty() {
+            return;
+        }
+        self.progress_revision = Some(revision);
         let progress = self
             .analysis
             .findings
             .iter()
             .map(|finding| {
+                if !rebuild
+                    && finding.audit.as_ref().is_none_or(|a| {
+                        !a.targets.iter().any(|t| changed.contains(&t.location.path))
+                    })
+                {
+                    return (finding.id.clone(), self.audit_progress(&finding.id));
+                }
                 let mut progress = AuditProgress::default();
                 if let Some(audit) = &finding.audit {
                     for target in &audit.targets {
@@ -112,7 +210,7 @@ impl Session {
 
 /// Token spans exclude raw strings and other literals. Then skip nested block
 /// comments so only real, standalone line comments can attach to a target.
-fn line_comments(source: &str) -> Option<BTreeMap<usize, String>> {
+fn inspect_source(source: &str) -> Option<LexicalSource> {
     fn literals(tokens: TokenStream, source: &str, ranges: &mut Vec<Range<usize>>) {
         for token in tokens {
             match token {
@@ -132,6 +230,7 @@ fn line_comments(source: &str) -> Option<BTreeMap<usize, String>> {
         }
     }
     let tokens = source.parse::<TokenStream>().ok()?;
+    let attributes = outer_attribute_starts(tokens.clone(), source);
     let mut ranges = Vec::new();
     literals(tokens, source, &mut ranges);
     ranges.sort_by_key(|r| r.start);
@@ -167,7 +266,10 @@ fn line_comments(source: &str) -> Option<BTreeMap<usize, String>> {
             at += 1;
         }
     }
-    Some(comments)
+    Some(LexicalSource {
+        comments,
+        attributes,
+    })
 }
 
 fn attached_explanation(
@@ -175,7 +277,7 @@ fn attached_explanation(
     target: &EditTarget,
     audit: &AuditMetadata,
 ) -> bool {
-    let Some(comments) = &source.comments else {
+    let Some(lexical) = &source.lexical else {
         return false;
     };
     let Some(prefix) = source.content.get(..target.location.start) else {
@@ -188,7 +290,12 @@ fn attached_explanation(
     {
         return false;
     }
-    let anchor = outer_attribute_start(&source.content, line_start);
+    let anchor = lexical
+        .attributes
+        .get(&line_start)
+        .copied()
+        .unwrap_or(line_start);
+    let comments = &lexical.comments;
     let mut lines = Vec::new();
     let mut offset = anchor;
     for line in source.content[..anchor].split_inclusive('\n').rev() {
