@@ -534,7 +534,7 @@ impl Session {
         Ok((audit, target, buffer))
     }
 
-    fn override_manifest(&self) -> PathBuf {
+    pub(super) fn override_manifest(&self) -> PathBuf {
         let args = &self.config.arguments;
         let path = args
             .iter()
@@ -557,7 +557,7 @@ impl Session {
         }
     }
 
-    fn checked_override_destination(&self, path: &Path) -> Result<PathBuf> {
+    pub(super) fn checked_override_destination(&self, path: &Path) -> Result<PathBuf> {
         let parent = path
             .parent()
             .context("missing override directory")?

@@ -17,6 +17,11 @@ pub struct PathPatterns {
 }
 
 impl PathPatterns {
+    #[must_use]
+    pub fn patterns(&self) -> &[String] {
+        &self.patterns
+    }
+
     /// Compiles path patterns.
     ///
     /// A recursive pattern `x::**` also matches the namespace root `x` itself,

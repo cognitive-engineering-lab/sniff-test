@@ -347,6 +347,12 @@ impl<'annotations> ObligationTracker<'annotations> {
         function: FunctionId,
         routes: &RootRoutes,
     ) -> bool {
+        if self
+            .contract(contract)
+            .is_some_and(|c| self.ignores_function(&c.effect, function))
+        {
+            return false;
+        }
         let Some(selected_callers) = &self.selected_callers else {
             return true;
         };
@@ -418,7 +424,7 @@ impl<'annotations> ObligationTracker<'annotations> {
         trust_path: Option<TrustPath>,
     ) -> Option<EffectSeed<ContractId, ObligationState>> {
         let contract = self.contract(contract_id)?;
-        if !contract.applies_to(function) {
+        if !contract.applies_to(function) || self.ignores_function(&contract.effect, function) {
             return None;
         }
         Some(EffectSeed::new(
@@ -498,6 +504,12 @@ impl<'annotations> ObligationTracker<'annotations> {
         self.policies
             .get(effect)
             .is_some_and(|policy| policy.trusted_functions.contains(&function))
+    }
+
+    fn ignores_function(&self, effect: &EffectKey, function: FunctionId) -> bool {
+        self.policies
+            .get(effect)
+            .is_some_and(|p| p.ignored_functions.contains(&function))
     }
 
     #[must_use]

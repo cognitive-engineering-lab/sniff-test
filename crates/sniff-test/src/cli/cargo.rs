@@ -130,7 +130,7 @@ fn run_audit(args: &SniffTestArgs) -> Result<ExitCode> {
         directory: std::env::current_dir()?,
         arguments: sniff_test_audit_bridge::analysis_arguments(std::env::args().skip(1)),
     };
-    let session = sniff_test_audit_bridge::Session::open(
+    let mut session = sniff_test_audit_bridge::Session::open(
         metadata.workspace_root.into_std_path_buf(),
         metadata
             .target_directory
@@ -138,6 +138,12 @@ fn run_audit(args: &SniffTestArgs) -> Result<ExitCode> {
             .into_std_path_buf(),
         config,
     )?;
+    session.set_default_ignored_namespaces(
+        sniff_test_effects::registered_effect_configs()
+            .into_iter()
+            .map(|(effect, config)| (effect, config.ignored_namespaces().patterns().to_vec()))
+            .collect(),
+    );
     sniff_test_audit_gui::serve(session)?;
     Ok(ExitCode::SUCCESS)
 }

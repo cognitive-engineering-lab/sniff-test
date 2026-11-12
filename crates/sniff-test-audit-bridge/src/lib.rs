@@ -1,5 +1,7 @@
 //! Shared auditing workflow. No HTTP, terminal, browser, or rustc dependencies.
 mod navigation;
+mod obligations;
+pub use obligations::{ObligationDetail, ObligationSummary, group_obligations};
 mod overrides;
 mod progress;
 mod source_editor;
@@ -255,6 +257,7 @@ pub struct Session {
     pub root: PathBuf,
     pub config: AnalysisConfig,
     pub analysis: Analysis,
+    default_ignored_namespaces: BTreeMap<String, Vec<String>>,
     buffers: BTreeMap<String, Buffer>,
     metadata_file: PathBuf,
     allowed_external: BTreeSet<PathBuf>,
@@ -274,6 +277,11 @@ pub struct Session {
     finding_index: BTreeMap<String, usize>,
 }
 impl Session {
+    /// Supply registered effect defaults without coupling the auditor to rustc or effect policy.
+    pub fn set_default_ignored_namespaces(&mut self, defaults: BTreeMap<String, Vec<String>>) {
+        self.default_ignored_namespaces = defaults;
+    }
+
     pub fn finding(&self, id: &str) -> Option<&Finding> {
         self.finding_index
             .get(id)
@@ -330,6 +338,7 @@ impl Session {
                 ..Default::default()
             },
             buffers,
+            default_ignored_namespaces: BTreeMap::new(),
             metadata_file,
             allowed_external: BTreeSet::new(),
             definition_sources: BTreeSet::new(),

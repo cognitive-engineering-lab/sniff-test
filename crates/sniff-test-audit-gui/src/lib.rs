@@ -93,6 +93,8 @@ fn router(app: App) -> Router {
         .route("/events", get(events))
         .route("/findings", get(findings))
         .route("/finding", get(finding))
+        .route("/obligation", get(obligation))
+        .route("/obligation/trust", post(trust_obligation))
         .route("/group-items", get(group_items))
         .route("/buffer", get(buffer))
         .route("/source/save", post(save_source))
@@ -243,12 +245,13 @@ async fn events(State(app): State<App>) -> impl IntoResponse {
     });
     Sse::new(ReceiverStream::new(rx)).keep_alive(KeepAlive::default())
 }
-#[derive(Default, Deserialize, PartialEq, Eq)]
+#[derive(Default, Deserialize, serde::Serialize, PartialEq, Eq)]
 #[serde(rename_all = "kebab-case")]
 enum GroupBy {
     #[default]
     File,
     EffectSource,
+    Obligation,
 }
 #[derive(Default, Deserialize)]
 struct Filter {
@@ -266,10 +269,10 @@ struct Filter {
 }
 async fn findings(State(app): State<App>, Query(filter): Query<Filter>) -> ApiResult {
     let session = app.session.lock().unwrap();
-    let inverted = filter.group_by == GroupBy::EffectSource;
+    let inverted = filter.group_by != GroupBy::File;
     let grouped = filter.grouped == Some(true) || inverted || filter.group_key.is_some();
     let cache_key = json!([
-        inverted,
+        filter.group_by,
         filter.q.as_deref().unwrap_or_default(),
         filter.effect.as_deref().unwrap_or_default(),
         filter.level.as_deref().unwrap_or_default(),
@@ -338,10 +341,11 @@ async fn findings(State(app): State<App>, Query(filter): Query<Filter>) -> ApiRe
                     .level
                     .as_ref()
                     .is_none_or(|v| v.is_empty() || f.level == *v)
-                && filter
-                    .class
-                    .as_ref()
-                    .is_none_or(|v| v.is_empty() || f.class.as_deref() == Some(v.as_str()))
+                && (filter.group_by == GroupBy::Obligation
+                    || filter
+                        .class
+                        .as_ref()
+                        .is_none_or(|v| v.is_empty() || f.class.as_deref() == Some(v.as_str())))
         })
         .collect();
     let values: Vec<_> = if inverted {
@@ -352,7 +356,15 @@ async fn findings(State(app): State<App>, Query(filter): Query<Filter>) -> ApiRe
     let offset = filter.offset.unwrap_or(0);
     let limit = filter.limit.unwrap_or(100).min(500);
     if grouped {
-        let mut groups = if inverted {
+        let mut groups = if filter.group_by == GroupBy::Obligation {
+            sniff_test_audit_bridge::group_obligations(
+                &matches,
+                filter.q.as_deref().unwrap_or_default(),
+            )
+            .into_iter()
+            .map(|g| serde_json::to_value(g).unwrap())
+            .collect()
+        } else if inverted {
             group_effect_sources(&matches, filter.q.as_deref().unwrap_or_default())
         } else {
             group_findings(values)
@@ -584,6 +596,34 @@ fn group_findings(values: Vec<serde_json::Value>) -> Vec<serde_json::Value> {
 #[derive(Deserialize)]
 struct Id {
     id: String,
+}
+#[derive(Deserialize)]
+struct ObligationId {
+    key: String,
+}
+async fn obligation(State(app): State<App>, Query(id): Query<ObligationId>) -> ApiResult {
+    let detail = app.session.lock().unwrap().obligation_detail(&id.key)?;
+    Ok(Json(
+        serde_json::to_value(detail).map_err(anyhow::Error::from)?,
+    ))
+}
+#[derive(Deserialize)]
+struct TrustObligation {
+    key: String,
+    results_revision: u64,
+    config_hash: Option<String>,
+}
+async fn trust_obligation(
+    State(app): State<App>,
+    Json(request): Json<TrustObligation>,
+) -> ApiResult {
+    let mut session = app.session.lock().unwrap();
+    let detail = session.trust_obligation(
+        &request.key,
+        request.results_revision,
+        request.config_hash.as_deref(),
+    )?;
+    Ok(Json(json!({"obligation":detail,"status":status(&session)})))
 }
 async fn finding(State(app): State<App>, Query(id): Query<Id>) -> ApiResult {
     let session = app.session.lock().unwrap();
@@ -1151,6 +1191,107 @@ mod tests {
         let flat = findings(State(app), query("")).await.ok().unwrap().0;
         assert_eq!(flat["items"].as_array().unwrap().len(), 100);
         assert!(flat.get("groups").is_none());
+    }
+
+    #[tokio::test]
+    async fn obligation_api_filters_ranks_paginates_and_keeps_mode_caches_separate() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = sniff_test_audit_bridge::AnalysisConfig {
+            executable: "false".into(),
+            directory: dir.path().into(),
+            arguments: vec![],
+        };
+        let mut session =
+            Session::open(dir.path().into(), dir.path().join("target"), config).unwrap();
+        for i in 0..103 {
+            let function = if i < 3 {
+                "dep::popular".to_owned()
+            } else {
+                format!("dep::other{i:03}")
+            };
+            session.analysis.findings.push(serde_json::from_value(json!({
+                "id":i.to_string(), "crate_name":"test", "root":format!("root{i}"),
+                "effect":"custom", "kind":"effect", "class":"documented-obligation", "level":"warn",
+                "reason":"contract", "requirements":[], "missing_requirements":[], "display_trace":[],
+                "audit":{"effect":"custom", "obligation":"Resources", "justification":"RESOURCE",
+                    "obligation_documentation":{"function":function,"markdown":"# Resources\nAvailable capacity."},
+                    "trace":[],"targets":[]}
+            })).unwrap());
+        }
+        let app = App {
+            lsp: Default::default(),
+            lists: Default::default(),
+            source_lines: Default::default(),
+            session: Arc::new(Mutex::new(session)),
+            token: "secret".into(),
+            origin: "http://127.0.0.1:1234".into(),
+        };
+        let query = |s: &str| {
+            Query::<Filter>::try_from_uri(&format!("/findings?{s}").parse().unwrap()).unwrap()
+        };
+        let first = findings(
+            State(app.clone()),
+            query("group_by=obligation&headers_only=true"),
+        )
+        .await
+        .ok()
+        .unwrap()
+        .0;
+        assert_eq!(first["total"], 103);
+        assert_eq!(first["total_groups"], 101);
+        assert_eq!(first["groups"].as_array().unwrap().len(), 100);
+        assert_eq!(first["groups"][0]["count"], 3);
+        assert!(first["groups"][0].get("items").is_none());
+        let second = findings(State(app.clone()), query("group_by=obligation&offset=100"))
+            .await
+            .ok()
+            .unwrap()
+            .0;
+        assert_eq!(second["groups"].as_array().unwrap().len(), 1);
+        let searched = findings(
+            State(app.clone()),
+            query(
+                "group_by=obligation&q=popular&class=concrete-operation&effect=custom&level=warn",
+            ),
+        )
+        .await
+        .ok()
+        .unwrap()
+        .0;
+        assert_eq!(searched["total"], 3);
+        assert_eq!(searched["total_groups"], 1);
+        let detail = obligation(
+            State(app.clone()),
+            Query(ObligationId {
+                key: searched["groups"][0]["key"].as_str().unwrap().into(),
+            }),
+        )
+        .await
+        .ok()
+        .unwrap()
+        .0;
+        assert_eq!(detail["namespace"], "dep::popular");
+        let filtered = findings(
+            State(app.clone()),
+            query("group_by=obligation&effect=other"),
+        )
+        .await
+        .ok()
+        .unwrap()
+        .0;
+        assert_eq!(filtered["total"], 0);
+        let sources = findings(State(app.clone()), query("group_by=effect-source"))
+            .await
+            .ok()
+            .unwrap()
+            .0;
+        assert_eq!(sources["total_groups"], 103);
+        let cached = findings(State(app), query("group_by=obligation&headers_only=true"))
+            .await
+            .ok()
+            .unwrap()
+            .0;
+        assert_eq!(cached, first);
     }
 
     #[tokio::test]

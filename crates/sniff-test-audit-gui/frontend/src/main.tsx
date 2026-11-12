@@ -11,6 +11,9 @@ import {Autosave, type SaveState} from './autosave';
 import {displaySourcePath} from './source-path';
 import {ObligationDocumentationPanel, type ObligationDocumentation} from './obligation-documentation';
 
+type DisplayMode = 'file'|'effect-source'|'obligation';
+type Obligation = {key:string;effect:string;namespace:string;count:number;documentation?:ObligationDocumentation;declaration?:Location;trusted:boolean;config_path:string;config_hash?:string;results_revision:number};
+type TrustPrompt = {location:Location;trusted:boolean;run:()=>void};
 type Location = {approximate?:boolean;path:string; start:number; end:number; available:boolean; hash?:string; line?:number; live?:boolean};
 type Buffer = {path:string; content:string; hash:string; revision:number; writable:boolean; saved_overrides:SavedOverride[]};
 type SavedOverride = {annotation:{effect:string; action:string; document:string; obligation_documentation?:ObligationDocumentation; selector:unknown}; location:Location; destination:string};
@@ -50,13 +53,15 @@ class DocumentationPrompt extends WidgetType {
     const element=document.createElement('div');element.className='inline-prompt';
     const button=document.createElement('button');button.type='button';
     const justify=this.action==='justification';
-    const label=this.added?(justify?'Justified!':'Obligation propagated!'):this.override?(justify?'Justify via override':'Propagate obligations via override'):(justify?'Justify here':'Propagate to callers');
-    button.textContent=(justify?'✓ ':'↑ ')+label;
+    const trust=this.action==='trust';
+    const label=trust?(this.added?'Trusted':'Trust this function'):this.added?(justify?'Justified!':'Obligation propagated!'):this.override?(justify?'Justify via override':'Propagate obligations via override'):(justify?'Justify here':'Propagate to callers');
+    button.textContent=(trust?'✓ ':justify?'✓ ':'↑ ')+label;
+    if(trust&&this.added)button.disabled=true;
     if(this.added)button.classList.add('completed');
     button.setAttribute('aria-label',label);
     button.addEventListener('click',this.run);
     const hint=document.createElement('span');
-    hint.textContent=this.added || (justify?"Explain why this is valid":"Document the caller's obligation");
+    hint.textContent=trust?'Suppress this function’s obligation for this effect':this.added || (justify?"Explain why this is valid":"Document the caller's obligation");
     element.append(button,hint);return element;
   }
   ignoreEvent() { return true; }
@@ -71,7 +76,7 @@ function sourceBytePosition(source:string,position:number) {
 function destination(finding:Finding|undefined,kind:'source'|'root'|'contract') {
   return finding?.navigation?finding.navigation[kind]:finding?.audit?.[kind];
 }
-function Editor({buffer, locked, reloadKey, onFlush, location:target, onChange, onSelectionChange, finding, enabled, onDocumentation, navigation, onReady}:{buffer:Buffer; locked:boolean; reloadKey:number; onFlush:()=>void; location?:Location; onChange:(text:string,changes:ChangeDesc,previous:string,acknowledged?:boolean,path?:string)=>void; onSelectionChange:(selection?:EditorSelection)=>void; finding?:Finding; enabled:boolean; onDocumentation:(target:Target)=>void; navigation?:Navigation; onReady:(view:EditorView|undefined,acknowledge?:(saved:SavedSource)=>void)=>void}) {
+function Editor({trustPrompt, hideDocumentation=false, buffer, locked, reloadKey, onFlush, location:target, onChange, onSelectionChange, finding, enabled, onDocumentation, navigation, onReady}: {trustPrompt?:TrustPrompt;hideDocumentation?:boolean;buffer:Buffer; locked:boolean; reloadKey:number; onFlush:()=>void; location?:Location; onChange:(text:string,changes:ChangeDesc,previous:string,acknowledged?:boolean,path?:string)=>void; onSelectionChange:(selection?:EditorSelection)=>void; finding?:Finding; enabled:boolean; onDocumentation:(target:Target)=>void; navigation?:Navigation; onReady:(view:EditorView|undefined,acknowledge?:(saved:SavedSource)=>void)=>void}) {
   const documents=useRef(new Map<string,{state:EditorState;content:string;scroll:ReturnType<EditorView['scrollSnapshot']>}>());
   const bufferRef=useRef(buffer);bufferRef.current=buffer;
   const holder = useRef<HTMLDivElement>(null), editorRef=useRef<EditorView | undefined>(undefined);
@@ -130,6 +135,15 @@ function Editor({buffer, locked, reloadKey, onFlush, location:target, onChange, 
   useEffect(()=>{
     const view=editorRef.current;if(!view)return;
     if(enabled&&view.state.sliceDoc()!==buffer.content)return;
+    if(hideDocumentation){
+      const loc=trustPrompt?.location;
+      const valid=enabled&&loc?.available&&loc.path===buffer.path&&loc.hash===buffer.hash;
+      const decorations=valid?Decoration.set([Decoration.widget({
+        widget:new DocumentationPrompt('trust',trustPrompt!.run,false,trustPrompt!.trusted?'Trusted':''),block:true,side:-1,
+      }).range(view.state.doc.lineAt(editorPosition(buffer.content,loc!.start)).from)]):Decoration.none;
+      view.dispatch({effects:[configureCommentEditing.of({scope:'obligation',candidates:[]}),promptsConfig.current.reconfigure(EditorView.decorations.of(decorations))]});
+      return;
+    }
     const overrides=buffer.saved_overrides;
     const targets=finding?.audit?.targets || [];
     const resolved=targets.some(t=>overrides.some(a=>a.annotation.effect===finding?.effect && a.annotation.action===t.action && sameSelector(a.annotation.selector,t.selector)));
@@ -168,7 +182,7 @@ function Editor({buffer, locked, reloadKey, onFlush, location:target, onChange, 
       provide:field=>EditorView.decorations.from(field,value=>value.decorations),
     });
     view.dispatch({effects:[configureCommentEditing.of({scope:`${finding?.id}:${enabled}`,candidates:enabled?candidates:[],documentation:finding?.audit}),promptsConfig.current.reconfigure(prompts)]});
-  },[buffer.path,buffer.revision,finding?.id,finding?.audit?.targets,enabled,reloadKey]);
+  },[buffer.path,buffer.revision,finding?.id,finding?.audit?.targets,enabled,reloadKey,hideDocumentation,trustPrompt]);
   useEffect(()=>{
     const view=editorRef.current;
     if(!view || !target?.available || target.path!==buffer.path)return;
@@ -245,25 +259,29 @@ function App() {
   const [leftWidth,setLeftWidth]=useState(285),[rightWidth,setRightWidth]=useState(315);
   const [root,setRoot]=useState(''); const [status,setStatus]=useState<Status>({generation:0,running:false,stale:true,status:'connecting',count:0,log:''});
   const [groups,setGroups]=useState<FindingGroup[]>([]),[total,setTotal]=useState(0),[totalGroups,setTotalGroups]=useState(0),[effects,setEffects]=useState<string[]>([]);
-  const [inverted,setInverted]=useState(false);
+  const [mode,setMode]=useState<DisplayMode>('file');
+  const inverted=mode==='effect-source',obligationMode=mode==='obligation';
+  const modeIndex=mode==='file'?0:inverted?1:2;
+  const [obligation,setObligation]=useState<Obligation>();
+  const [obligationSource,setObligationSource]=useState(false);
   const [expanded,setExpanded]=useState<Set<string>>(()=>new Set());
   const [sourceExpanded,setSourceExpanded]=useState<Set<string>>(()=>new Set());
   const [query,setQuery]=useState(''),[effect,setEffect]=useState(''),[level,setLevel]=useState(''),[kind,setKind]=useState('');
-  const [pages,setPages]=useState([0,0]);
-  const page=pages[Number(inverted)];
-  function setPage(value:number|((page:number)=>number)){listScroll.current[Number(inverted)]=0;setPages(previous=>previous.map((p,i)=>i===Number(inverted)?typeof value==='function'?value(p):value:p));}
-  function resetPages(){setPages([0,0]);listScroll.current=[0,0];}
-  const listElement=useRef<HTMLDivElement>(null),listScroll=useRef([0,0]);
+  const [pages,setPages]=useState([0,0,0]);
+  const page=pages[modeIndex];
+  function setPage(value:number|((page:number)=>number)){listScroll.current[modeIndex]=0;setPages(previous=>previous.map((p,i)=>i===modeIndex?typeof value==='function'?value(p):value:p));}
+  function resetPages(){setPages([0,0,0]);listScroll.current=[0,0,0];}
+  const listElement=useRef<HTMLDivElement>(null),listScroll=useRef([0,0,0]);
   const listCache=useRef(new Map<string,{groups:FindingGroup[];total:number;total_groups:number;effects:string[]}>());
   const rowCache=useRef(new Map<string,Summary[]>());
   const rowReads=useRef(new Map<string,AbortController>());
   const [listLoading,setListLoading]=useState(false),[listFailure,setListFailure]=useState(''),[listRetry,setListRetry]=useState(0);
   const [listResult,setListResult]=useState('');
   const listRevision=JSON.stringify([status.results_revision,status.generation,status.running,status.audit_revision,status.override_revision]);
-  const listFilter=JSON.stringify([query,effect,level,kind,inverted]);
+  const listFilter=JSON.stringify([query,effect,level,obligationMode?'':kind,mode]);
   const listKey=JSON.stringify([listRevision,listFilter,page]);
   const activeList=useRef(listKey);activeList.current=listKey;
-  const filters=()=>({q:query,effect,level,class:kind,grouped:'true',group_by:inverted?'effect-source':'file'});
+  const filters=()=>({q:query,effect,level,class:obligationMode?'':kind,grouped:'true',group_by:mode});
   function cacheRows(key:string,rows:Summary[]){rowCache.current.delete(key);rowCache.current.set(key,rows);if(rowCache.current.size>32)rowCache.current.delete(rowCache.current.keys().next().value!);}
   function rowsKey(key:string){return JSON.stringify([listRevision,listFilter,key]);}
   const [selected,setSelected]=useState<Finding>(),[buffer,setBuffer]=useState<Buffer>(),[text,setText]=useState(''),[target,setTarget]=useState<Location>();
@@ -375,7 +393,7 @@ function App() {
     return ()=>{cancelled=true;};
   },[navigation,status.generation,status.running]);
   const detailsScroll = useRef<HTMLDivElement>(null);
-  useLayoutEffect(()=>{detailsScroll.current?.scrollTo({top:0});},[selected?.id,inverted]);
+  useLayoutEffect(()=>{detailsScroll.current?.scrollTo({top:0});},[selected?.id,obligation?.key,mode]);
   const unsaved = !!buffer && text !== buffer.content;
   async function act(work:()=>Promise<unknown>) {activeWork.current++;setBusy(true);setError('');try{await work();}catch(e){setError(String(e));}finally{if(--activeWork.current===0)setBusy(false);}}
 
@@ -410,6 +428,37 @@ function App() {
     setTarget({...destination,path:next.path});return true;
     } catch(e){if(sequence===openSequence.current)throw e;return false;}
     finally {if(sequence===openSequence.current)setOpening(false);}
+  }
+  async function changeMode(next:DisplayMode){
+    await saver.current!.flush();
+    if(listElement.current)listScroll.current[modeIndex]=listElement.current.scrollTop;
+    if(next==='obligation'||obligationMode){startNavigation();setOpening(false);setSelected(undefined);setObligation(undefined);setDocumentationEditor(undefined);}
+    setMode(next);
+  }
+  async function chooseObligation(group:FindingGroup){
+    const sequence=startNavigation();
+    try{
+      await saver.current!.flush();if(sequence!==openSequence.current)return;
+      const detail:Obligation=await api('obligation?'+new URLSearchParams({key:group.key}),undefined,navigationRead.current?.signal);
+      if(sequence!==openSequence.current)return;
+      setSelected(undefined);setObligationSource(false);
+      if(detail.declaration?.available){
+        try{
+          const opened=await open(detail.declaration,true,sequence);
+          if(sequence!==openSequence.current)return;
+          setObligationSource(opened&&!!detail.declaration.hash&&saver.current!.snapshot?.hash===detail.declaration.hash);
+        }catch(e){if(sequence!==openSequence.current)return;setError(String(e));}
+      }
+      setObligation({...detail,count:group.count});
+    }catch(e){if(sequence===openSequence.current)throw e;}
+    finally{if(sequence===openSequence.current)setOpening(false);}
+  }
+  async function trustObligation(){
+    if(!obligation||obligation.trusted)return;
+    await saver.current!.flush();
+    const result=await api('obligation/trust',{key:obligation.key,results_revision:obligation.results_revision,config_hash:obligation.config_hash??null});
+    setObligation(current=>current&&current.key===result.obligation.key?{...result.obligation,count:current.count}:current);
+    acceptStatus(result.status);
   }
   async function choose(item:Summary){
     const sequence=startNavigation();
@@ -469,7 +518,7 @@ function App() {
     return ()=>controller.abort();
   },[listKey,listRetry]);
   useLayoutEffect(()=>{
-    if(listResult===listKey&&listElement.current)listElement.current.scrollTop=listScroll.current[Number(inverted)];
+    if(listResult===listKey&&listElement.current)listElement.current.scrollTop=listScroll.current[modeIndex];
   },[listKey,listResult,groups]);
   useEffect(()=>()=>{for(const controller of rowReads.current.values())controller.abort();rowReads.current.clear();},[listKey]);
   async function loadRows(key:string,more=false){
@@ -489,10 +538,11 @@ function App() {
   }
   useEffect(()=>{
     if(listResult!==listKey)return;
+    if(obligationMode)return;
     const open=inverted?sourceExpanded:expanded;
     for(const group of groups)if(open.has(group.key)&&!group.items&&!group.loading&&!group.loadError)void loadRows(group.key);
   },[groups,expanded,sourceExpanded,listResult,listKey]);
-  useEffect(()=>{openSequence.current++;navigationRead.current?.abort();setOpening(false);setSelected(undefined);setSavedOverride('');},[status.generation,status.results_revision]);
+  useEffect(()=>{openSequence.current++;navigationRead.current?.abort();setOpening(false);setSelected(undefined);setObligation(undefined);setSavedOverride('');},[status.generation,status.results_revision]);
   useEffect(()=>{const warn=(e:BeforeUnloadEvent)=>{if(saver.current?.pending||documentationEditor){e.preventDefault();}};window.addEventListener('beforeunload',warn);return()=>window.removeEventListener('beforeunload',warn)},[unsaved,documentationEditor]);
   async function openDocumentation(t:Target) {
     if(documentationEditor){document.querySelector<HTMLElement>('.override-drag-handle')?.focus();return;}
@@ -568,25 +618,30 @@ function App() {
     <header><div className="brand"><b>sniff-test</b><span> / audit</span></div><span className="workspace" title={root}>{root}</span><span className={'status '+status.status}>{status.status}{status.stale?' · stale':status.overrides_changed?' · reanalysis needed':''}</span><button disabled={status.running||startingAnalysis||busy} onClick={()=>act(reanalyze)}>↻ Reanalyze</button></header>
     {error&&<div className="error" role="alert">{error}<button onClick={()=>setError('')}>Dismiss</button></div>}
     <div className="layout" style={{'--left-size':`${leftWidth}px`,'--right-size':`${rightWidth}px`} as React.CSSProperties}><div className="side-pane left-pane" id="findings-panel"><aside className="findings"><div className="section-title">FINDINGS <span>{total}</span></div>
-      <button type="button" className="invert-effect" aria-pressed={inverted} onClick={()=>{if(listElement.current)listScroll.current[Number(inverted)]=listElement.current.scrollTop;setInverted(value=>!value);}}>⇄ Invert effect</button>
-      <input aria-label={inverted?'Search effect sources':'Search findings'} placeholder={inverted?'Search effect sources…':'Search files, roots, crates…'} value={query} onChange={e=>{setQuery(e.target.value);resetPages();}}/>
+      <div className="display-modes" role="group" aria-label="Display mode">
+        <button type="button" className="invert-effect" disabled={!!documentationEditor} aria-pressed={mode==='file'} onClick={()=>act(()=>changeMode('file'))}>Files</button>
+        <button type="button" className="invert-effect" disabled={!!documentationEditor} aria-pressed={inverted} onClick={()=>act(()=>changeMode(inverted?'file':'effect-source'))}>⇄ Invert effect</button>
+        <button type="button" className="invert-effect" disabled={!!documentationEditor} aria-pressed={obligationMode} onClick={()=>act(()=>changeMode('obligation'))}>⇄ Invert obligation</button>
+      </div>
+      <input aria-label={obligationMode?'Search obligations':inverted?'Search effect sources':'Search findings'} placeholder={obligationMode?'Search functions, obligations…':inverted?'Search effect sources…':'Search files, roots, crates…'} value={query} onChange={e=>{setQuery(e.target.value);resetPages();}}/>
       <div className="filters"><select aria-label="Effect" value={effect} onChange={e=>{setEffect(e.target.value);resetPages();}}><option value="">All effects</option>{effects.map(e=><option key={e}>{e}</option>)}</select><select aria-label="Severity" value={level} onChange={e=>{setLevel(e.target.value);resetPages();}}><option value="">All levels</option><option>warn</option><option>deny</option></select></div>
-      <select aria-label="Finding class" value={kind} onChange={e=>{setKind(e.target.value);resetPages();}}><option value="">All finding classes</option>{['concrete-operation','concrete-invocation','documented-obligation','undocumented-invocation','unresolved-call-target','analysis-incomplete','ambiguous-marker','ambiguous-requirement'].map(k=><option key={k}>{k}</option>)}</select>
-      <div className="finding-list" ref={listElement} aria-busy={listLoading||listResult!==listKey} onScroll={e=>{if(listResult===listKey)listScroll.current[Number(inverted)]=e.currentTarget.scrollTop;}}>{(listLoading||listResult!==listKey)&&<div className="loading" role="status">Loading {inverted?'effect sources':'files'}…</div>}{(listResult===listKey?groups:[]).map(({key, label,path:sourcePath,items:rows,count,progress,loading,loadError},index)=>{
+      {!obligationMode&&<select aria-label="Finding class" value={kind} onChange={e=>{setKind(e.target.value);resetPages();}}><option value="">All finding classes</option>{['concrete-operation','concrete-invocation','documented-obligation','undocumented-invocation','unresolved-call-target','analysis-incomplete','ambiguous-marker','ambiguous-requirement'].map(k=><option key={k}>{k}</option>)}</select>}
+      <div className="finding-list" ref={listElement} aria-busy={listLoading||listResult!==listKey} onScroll={e=>{if(listResult===listKey)listScroll.current[modeIndex]=e.currentTarget.scrollTop;}}>{(listLoading||listResult!==listKey)&&<div className="loading" role="status">Loading {obligationMode?'obligations':inverted?'effect sources':'files'}…</div>}{(listResult===listKey?groups:[]).map(({key, label,path:sourcePath,items:rows,count,progress,loading,loadError},index)=>{
         const path=label||key;
+        if(obligationMode)return <button type="button" className={'group obligation-row '+(obligation?.key===key?'selected':'')} key={key} onClick={()=>act(()=>chooseObligation({key,label,count}))}><span className="group-path">{label}</span><span className="group-count" aria-label={`${count} reports`}>{count}</span></button>;
         const isOpen=(inverted?sourceExpanded:expanded).has(key),listId=`${inverted?'source':'file'}-findings-${index}`;
         return <section key={key}><button type="button" className="group" title={path} aria-expanded={isOpen} aria-controls={listId} onClick={()=>(inverted?setSourceExpanded:setExpanded)(previous=>{const next=new Set(previous);if(next.has(key))next.delete(key);else next.add(key);return next;})}><span className="group-chevron" aria-hidden="true">{isOpen?'▾':'▸'}</span><span className="group-path">{sourcePath?path.replace(sourcePath,()=>displaySourcePath(sourcePath,root)):displaySourcePath(path,root)}</span><AuditMarks progress={progress} group/><span className="group-count" aria-label={`${count} ${inverted?'reports':'effects'}`} >{count}</span></button><div id={listId} hidden={!isOpen}>{isOpen&&(rows||[]).map(item=><button className={'finding '+(selected?.id===item.id?'selected':'')} key={item.id} onClick={()=>act(()=>choose(item))}><span className="finding-label"><span className="badge">{item.effect||item.class}</span><AuditMarks progress={item.progress}/></span><strong>{item.root||item.crate_name}</strong><small>{item.reason}</small></button>)}{isOpen&&loading&&<div className="loading" role="status">Loading findings…</div>}{isOpen&&loadError&&<div role="alert">{loadError}<button onClick={()=>void loadRows(key)}>Retry</button></div>}{isOpen&&rows&&rows.length<count&&<button className="load-more" disabled={loading} onClick={()=>void loadRows(key,true)}>Load more ({rows.length} of {count})</button>}</div></section>;
       })}{listResult===listKey&&listFailure&&<div role="alert">{listFailure}<button onClick={()=>setListRetry(value=>value+1)}>Retry findings</button></div>}{listResult===listKey&&!listLoading&&!listFailure&&!groups.length&&<div className="empty">{status.running?'Analyzing the workspace…':status.status==='complete'?'No matching findings.':'No findings available. Check analysis output.'}</div>}</div>
-      <div className="pagination"><button aria-label={inverted?'Previous effect sources':'Previous files'} disabled={page===0} onClick={()=>setPage(p=>p-1)}>←</button><span>{inverted?'Effect sources':'Files'} · {page+1} / {Math.max(1,Math.ceil(totalGroups/100))}</span><button aria-label={inverted?'Next effect sources':'Next files'} disabled={(page+1)*100>=totalGroups} onClick={()=>setPage(p=>p+1)}>→</button></div>
+      <div className="pagination"><button aria-label={obligationMode?'Previous obligations':inverted?'Previous effect sources':'Previous files'} disabled={page===0} onClick={()=>setPage(p=>p-1)}>←</button><span>{obligationMode?'Obligations':inverted?'Effect sources':'Files'} · {page+1} / {Math.max(1,Math.ceil(totalGroups/100))}</span><button aria-label={obligationMode?'Next obligations':inverted?'Next effect sources':'Next files'} disabled={(page+1)*100>=totalGroups} onClick={()=>setPage(p=>p+1)}>→</button></div>
     </aside><PanelDivider side="left" size={leftWidth} onResize={setLeftWidth}/></div>
     <main aria-busy={opening}><div className="toolbar"><button disabled={!nav.length||busy} onClick={()=>act(async()=>{const previous=nav[nav.length-1];if(await open(previous,false))setNav(n=>n.slice(0,-1));})}>← Back</button><span className="filename" title={buffer?.path}>{buffer?displaySourcePath(buffer.path,root):'Source workspace'}</span>{opening&&<span className="navigation-loading" role="status">Opening source…</span>}{buffer?.writable&&<span className="save-status" role="status" aria-label="Source save status">{saveState.status==='failed'?'Save failed':saveState.status==='saving'?'Saving…':saveState.status==='pending'?'Unsaved changes':'Saved'}</span>}</div>
       {saveState.status==='failed'&&<div className="error source-save-error" role="alert"><span>{saveState.error}</span><button disabled={busy} onClick={()=>act(()=>saver.current!.retry())}>Retry</button><button disabled={busy} onClick={()=>act(()=>navigator.clipboard.writeText(saver.current!.text))}>Copy edits</button><button disabled={busy} onClick={()=>act(reloadSource)}>Reload file</button></div>}
-      {buffer?<><div className="buffer-state"><span className="navigation-status">{navigationStatus}</span>{buffer.writable?'Workspace source':'Read-only dependency'}{(status.running||startingAnalysis)&&buffer.writable?' · Editing paused during analysis':''}</div>
-      <Editor locked={status.running||startingAnalysis||documentationEditor?.mode==='source'} reloadKey={reloadKey} onFlush={flushSource} navigation={navigation} onReady={editorReady} buffer={buffer} location={target} onChange={changeSource} onSelectionChange={setEditorSelection} finding={selected} enabled={!status.running&&!startingAnalysis} onDocumentation={t=>act(()=>openDocumentation(t))}/>
-      <footer><small>{buffer.writable?'Changes save automatically after a short pause. Reanalyze to update findings.':savedOverride?`Saved to ${savedOverride} · Reanalyze to update findings`:'Save in the documentation popup writes directly to an override file.'}</small></footer></>:null}
+      {obligationMode&&!obligationSource?<div className="obligation-fallback">{obligation?<><h2>{obligation.namespace}</h2>{obligation.documentation?<ObligationDocumentationPanel documentation={obligation.documentation}/>:<p>Obligation documentation is unavailable.</p>}<p>Verified function source is unavailable.</p><div className="inline-prompt"><button className={obligation.trusted?'completed':''} aria-label={obligation.trusted?'Trusted':'Trust this function'} disabled={busy||status.running||startingAnalysis||obligation.trusted} onClick={()=>act(trustObligation)}>✓ {obligation.trusted?'Trusted':'Trust this function'}</button><span>Suppress this function’s obligation for {obligation.effect}.</span></div></>:<p>Select a documented obligation.</p>}</div>:buffer?<><div className="buffer-state"><span className="navigation-status">{navigationStatus}</span>{buffer.writable?'Workspace source':'Read-only dependency'}{(status.running||startingAnalysis)&&buffer.writable?' · Editing paused during analysis':''}</div>
+      <Editor hideDocumentation={obligationMode} trustPrompt={obligationMode&&obligation?.declaration?{location:obligation.declaration,trusted:obligation.trusted,run:()=>{void act(trustObligation);}}:undefined} locked={obligationMode||status.running||startingAnalysis||documentationEditor?.mode==='source'} reloadKey={reloadKey} onFlush={flushSource} navigation={navigation} onReady={editorReady} buffer={buffer} location={target} onChange={changeSource} onSelectionChange={setEditorSelection} finding={selected} enabled={!status.running&&!startingAnalysis&&(!obligationMode||!busy)} onDocumentation={t=>act(()=>openDocumentation(t))}/>
+      <footer><small>{obligationMode?'Trust saves to the effect’s ignored namespaces. Reanalyze to update findings.':buffer.writable?'Changes save automatically after a short pause. Reanalyze to update findings.':savedOverride?`Saved to ${savedOverride} · Reanalyze to update findings`:'Save in the documentation popup writes directly to an override file.'}</small></footer></>:null}
 
     </main>
-    <div className="side-pane right-pane" id="details-panel"><PanelDivider side="right" size={rightWidth} onResize={setRightWidth}/><aside className="details" aria-label="Effect details">{selected?<><section className="effect-summary" aria-label="Selected effect"><div className="section-title">FINDING DETAILS</div><p>{selected.reason}</p><small>{selected.crate_name} · trace {selected.trace_id||'unavailable'}</small></section>
+    <div className="side-pane right-pane" id="details-panel"><PanelDivider side="right" size={rightWidth} onResize={setRightWidth}/><aside className="details" aria-label="Effect details">{obligationMode?obligation?<section className="effect-summary" aria-label="Selected obligation"><div className="section-title">OBLIGATION DETAILS</div><p>{obligation.namespace}</p><p>{obligation.effect} · {obligation.count} reports</p><p>{obligation.trusted?'Trusted · reanalyze to update findings':'Trust suppresses this function’s obligation for this effect.'}</p><small>{obligation.config_path}</small></section>:<div className="empty">Select an obligation to inspect its documentation.</div>:selected?<><section className="effect-summary" aria-label="Selected effect"><div className="section-title">FINDING DETAILS</div><p>{selected.reason}</p><small>{selected.crate_name} · trace {selected.trace_id||'unavailable'}</small></section>
       <div className="details-scroll" ref={detailsScroll} tabIndex={0} aria-label="Navigation and call trace"><h3>Navigate</h3>{[['Report root','root'],['Effect source','source'],['Contract','contract']].map(([label,kind])=><button className="link" key={label} disabled={!destination(selected,kind as 'source'|'root'|'contract')?.available} onClick={()=>act(()=>navigateFinding(kind as 'source'|'root'|'contract'))}>{label}{!destination(selected,kind as 'source'|'root'|'contract')?.available?' · unavailable':''}</button>)}
       {buffer&&!buffer.writable&&<p className="hint">Dependency source is read-only. Contract documentation can be supplied through an override file.</p>}
       {selected.audit&&!selected.audit.targets.length&&<p className="hint">No verified documentation attachment location is available. Inspect the source and edit manually where appropriate.</p>}

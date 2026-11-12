@@ -4120,7 +4120,9 @@ fn dependency_override_saves_discharge_exact_sites_and_propagate_contracts() {
         },
     )
     .unwrap();
-    let finish = |session: &mut Session, output: CommandOutput| {
+    let analyze = |session: &mut Session| {
+        session.begin_analysis().unwrap();
+        let output = run();
         session.finish_analysis(Ok(Output {
             status: output.status,
             stdout: output.stdout.into_bytes(),
@@ -4128,7 +4130,7 @@ fn dependency_override_saves_discharge_exact_sites_and_propagate_contracts() {
         }));
         assert!(!session.analysis.stale, "{}", session.analysis.log);
     };
-    finish(&mut session, run());
+    analyze(&mut session);
     let findings = session
         .analysis
         .findings
@@ -4177,7 +4179,7 @@ fn dependency_override_saves_discharge_exact_sites_and_propagate_contracts() {
     assert_eq!(draft.content, source);
     assert_eq!(draft.saved_overrides.len(), 1);
     assert_eq!(fs::read_to_string(&dependency).unwrap(), source);
-    finish(&mut session, run());
+    analyze(&mut session);
     assert_eq!(
         session.analysis.findings.len(),
         1,
@@ -4210,7 +4212,7 @@ fn dependency_override_saves_discharge_exact_sites_and_propagate_contracts() {
         },
         "/// # Panics\n///\n/// - flag: The caller must supply an appropriate flag.",
     );
-    finish(&mut session, run());
+    analyze(&mut session);
     assert!(
         session
             .analysis

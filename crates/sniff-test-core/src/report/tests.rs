@@ -4677,3 +4677,84 @@ fn marker_ambiguity_compares_header_count_with_distinct_groups() {
         }
     }
 }
+
+#[test]
+fn ignored_function_contracts_are_suppressed_only_in_the_selected_effect() {
+    for bodyless in [false, true] {
+        for ignored_effect in ["panic", "safety"] {
+            let root = stable_function(100);
+            let ignored = stable_function(101);
+            let other = stable_function(102);
+            let contracts = || effect_contracts(Some(whole_contract()), Some(whole_contract()));
+            let target_with_contract = |function, path| {
+                if bodyless {
+                    bodyless_declaration(function, path, contracts())
+                } else {
+                    let CallTargetFact::Function(mut target) = target(function, path) else {
+                        unreachable!()
+                    };
+                    target.contracts = contracts();
+                    CallTargetFact::Function(target)
+                }
+            };
+            let calls = vec![
+                call(0, target_with_contract(ignored, "sample::ignored")),
+                call(1, target_with_contract(other, "sample::other")),
+            ];
+            let mut bodies = vec![body(root, "sample::root", calls, vec![], vec![], vec![])];
+            if !bodyless {
+                bodies.push(body(
+                    ignored,
+                    "sample::ignored",
+                    vec![],
+                    vec![],
+                    vec![],
+                    vec![],
+                ));
+                bodies.push(body(other, "sample::other", vec![], vec![], vec![], vec![]));
+            }
+            let artifact = ArtifactFacts::new(bodies, vec![]).expect("documented APIs");
+            let mut config = crate::config::test_config();
+            config.effect_mut(ignored_effect).ignored_namespaces =
+                crate::path_patterns::PathPatterns::new(vec!["sample::ignored".into()]).unwrap();
+            let reports = trace_workspace(
+                &artifact,
+                root.def_path_hash.stable_crate_id(),
+                &ArtifactAnalysisGraph::default(),
+                &[InterpretationRoot {
+                    function: root,
+                    path: "sample::root".into(),
+                    kind: ReportRootKind::Concrete,
+                }],
+                &config,
+            )
+            .expect("effect report");
+            let documented: Vec<_> = reports[0]
+                .findings
+                .iter()
+                .filter(|f| matches!(f.kind, InterpretedFindingKind::DocumentedObligation))
+                .collect();
+            assert_eq!(
+                documented.len(),
+                3,
+                "bodyless={bodyless}, effect={ignored_effect}: {documented:#?}"
+            );
+            assert!(!documented.iter().any(|f| {
+                f.effect.key.as_str() == ignored_effect
+                    && f.callee
+                        .as_ref()
+                        .is_some_and(|callee| callee.path == "sample::ignored")
+            }));
+            assert_eq!(
+                documented
+                    .iter()
+                    .filter(|f| f
+                        .callee
+                        .as_ref()
+                        .is_some_and(|callee| callee.path == "sample::other"))
+                    .count(),
+                2
+            );
+        }
+    }
+}
