@@ -175,10 +175,20 @@ pub struct ObligationEffectPolicy {
     const_boundary_policy: super::ConstBoundaryPolicy,
     effect: EffectKey,
     trusted_functions: BTreeSet<FunctionId>,
+    ignored_functions: BTreeSet<FunctionId>,
     ignored_invocations: BTreeSet<InvocationId>,
 }
 
 impl ObligationEffectPolicy {
+    #[must_use]
+    pub fn with_ignored_functions(
+        mut self,
+        functions: impl IntoIterator<Item = FunctionId>,
+    ) -> Self {
+        self.ignored_functions = functions.into_iter().collect();
+        self
+    }
+
     #[must_use]
     pub fn with_const_boundary_policy(mut self, policy: super::ConstBoundaryPolicy) -> Self {
         self.const_boundary_policy = policy;
@@ -194,6 +204,7 @@ impl ObligationEffectPolicy {
             const_boundary_policy: super::ConstBoundaryPolicy::default(),
             effect,
             trusted_functions: trusted_functions.into_iter().collect(),
+            ignored_functions: BTreeSet::new(),
             ignored_invocations: ignored_invocations.into_iter().collect(),
         }
     }
@@ -230,7 +241,16 @@ impl<'annotations> ObligationTracker<'annotations> {
             .collect::<BTreeMap<_, _>>();
         for function in graph.contract_visible_functions() {
             for (effect, boundaries) in &mut boundary_contracts {
+                if policies[effect].ignored_functions.contains(&function) {
+                    continue;
+                }
                 if let Some(annotation) = annotations.effective_contract(graph, function, effect) {
+                    if graph
+                        .function_aliases(annotation.owner())
+                        .any(|owner| policies[effect].ignored_functions.contains(&owner))
+                    {
+                        continue;
+                    }
                     boundaries[function.index()] = Some(ContractId(annotation.id()));
                     functions_by_annotation
                         .entry(annotation.id())
@@ -649,6 +669,12 @@ impl ObligationTracker<'_> {
             PropagationEdge::TransparentBody(edge) => self.graph.transparent_parent(edge),
             PropagationEdge::Handoff => unreachable!("handoff edges are not propagated"),
         };
+        if self.policies[&state.effect]
+            .ignored_functions
+            .contains(&parent)
+        {
+            return Propagation::Ignore;
+        }
         next.current_function = parent;
         next.trust_path
             .enter_behavioral_provenance(self.graph, parent);

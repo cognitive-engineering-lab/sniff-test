@@ -243,6 +243,23 @@ pub fn probe_concrete_effect_with_filter<'annotations>(
     source_filter: Option<(&EffectSourceFilter<'_>, &SourceFilterContext<'_>)>,
 ) -> Result<ConcreteEffect<'annotations>, ProbeError> {
     let mut seeds = ConcreteSeedCollector::new(graph, domain.config());
+    // Callable declarations may expose contracts without an included body.
+    // Resolve ignore policy for those surfaces as well as concrete bodies.
+    for function in graph.contract_visible_functions() {
+        for definition in [
+            Some(graph.stable_function(function)),
+            graph.contract_declaration(function),
+        ]
+        .into_iter()
+        .flatten()
+        {
+            if seeds.policy.body_policy(namespaces.candidates(definition)) == BodyPolicy::Ignore {
+                seeds
+                    .ignored_functions
+                    .extend(graph.function_aliases(definition));
+            }
+        }
+    }
     for body in graph.included_body_facts(artifact) {
         let Some(owner) = seeds.filter_owner(
             body.function,
@@ -502,6 +519,10 @@ impl<'annotations> ConcreteEffect<'annotations> {
 
     pub fn trusted_functions(&self) -> impl Iterator<Item = FunctionId> + '_ {
         self.trusted_functions.iter().copied()
+    }
+
+    pub fn ignored_functions(&self) -> impl Iterator<Item = FunctionId> + '_ {
+        self.ignored_functions.iter().copied()
     }
 
     #[must_use]

@@ -79,6 +79,9 @@ override-files = []
 # Crates, fully-qualified functions, or macro expansion paths whose internals
 # should be treated as opaque analysis boundaries. Patterns use Rust crate/path
 # names: write `proc_macro2`, not the package name `proc-macro2`.
+# Ignoring a function also suppresses its documented obligations in this effect,
+# including trait contracts inherited by implementations. Use trusted boundaries
+# below to hide internals while keeping an API's documented obligations visible.
 #
 # Patterns match both owning definition paths and macro definition paths in a
 # panic's expansion provenance. Ignoring a macro is path-local: it does not

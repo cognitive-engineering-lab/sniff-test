@@ -3281,6 +3281,88 @@ fn independent_declaration_surface_propagates_contracts_and_covers_targetless_ca
 }
 
 #[test]
+fn ignored_namespaces_suppress_contracts_in_only_the_selected_effect() {
+    for inherited in [false, true] {
+        let root = stable_function(10);
+        let declaration = stable_function(11);
+        let implementation = stable_function(12);
+        let path = "core::ops::index::Index::index";
+        let surface = FunctionTargetFact {
+            function: declaration,
+            display_path: path.to_owned(),
+            attributes: FunctionAttributesFact {
+                has_rust_body: false,
+                ..attributes(path)
+            },
+            contracts: effect_contracts(Some(whole_contract()), Some(whole_contract())),
+        };
+        let mut invocation = call(
+            0,
+            bodyless_declaration(declaration, path, surface.contracts.clone()),
+        );
+        let mut bodies = Vec::new();
+        if inherited {
+            invocation.target = target(implementation, "core::slice::Slice::index");
+            invocation.declaration_target = Some(surface.clone());
+            let mut implementation_body = body(
+                implementation,
+                "core::slice::Slice::index",
+                Vec::new(),
+                Vec::new(),
+                Vec::new(),
+                Vec::new(),
+            );
+            implementation_body.contract_declaration = Some(surface);
+            bodies.push(implementation_body);
+        }
+        bodies.push(body(
+            root,
+            "sample::root",
+            vec![invocation],
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+        ));
+        let artifact = ArtifactFacts::new(bodies, Vec::new()).expect("contract artifact");
+        for ignored in [false, true] {
+            let manifest = if ignored {
+                "[panic]\nignored-namespaces = [\"core::ops::index::Index::index\"]\n"
+            } else {
+                "[panic]\nignored-namespaces = []\n"
+            };
+            let config = crate::config::test_from_manifest_str(manifest).expect("config");
+            let reports = trace_workspace(
+                &artifact,
+                root.def_path_hash.stable_crate_id(),
+                &ArtifactAnalysisGraph::default(),
+                &[InterpretationRoot {
+                    function: root,
+                    path: String::from("sample::root"),
+                    kind: ReportRootKind::Concrete,
+                }],
+                &config,
+            )
+            .expect("report");
+            for (effect, expected) in [
+                (ReportEffect::Panic, usize::from(!ignored)),
+                (ReportEffect::Safety, 1),
+            ] {
+                assert_eq!(
+                    reports[0]
+                        .findings
+                        .iter()
+                        .filter(|finding| finding.effect.key == effect.key())
+                        .count(),
+                    expected,
+                    "inherited={inherited}, ignored={ignored}, effect={effect:?}: {:#?}",
+                    reports[0].findings,
+                );
+            }
+        }
+    }
+}
+
+#[test]
 fn trusted_bodyless_declarations_suppress_only_coverage_not_surface_contracts() {
     let unrelated = stable_function(0);
     let root = stable_function(10);
