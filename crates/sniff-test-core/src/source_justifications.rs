@@ -93,13 +93,25 @@ impl SourceJustificationOverrides {
             }
             let mut selected = Vec::new();
             for call in &body.calls {
-                for entry in self.at(owner, call.source_range.as_ref()) {
+                for entry in self.for_anchors(
+                    owner,
+                    call.marker_anchor_ranges
+                        .iter()
+                        .chain(call.source_range.iter()),
+                ) {
                     selected.push((AnnotationTargetFact::Call(call.id), entry));
                 }
             }
             for effect in &body.effects {
                 for entry in self
-                    .at(owner, effect.source_range.as_ref())
+                    .for_anchors(
+                        owner,
+                        effect
+                            .marker_anchor_ranges
+                            .iter()
+                            .chain(effect.source_range.iter()),
+                    )
+                    .into_iter()
                     .filter(|entry| entry.effect == effect.effect)
                 {
                     selected.push((AnnotationTargetFact::Effect(effect.id), entry));
@@ -155,6 +167,22 @@ impl SourceJustificationOverrides {
                     (entry.range.byte_start..entry.range.byte_end).contains(&range.byte_start)
                 })
         })
+    }
+
+    /// Keep only the first matching anchor for each effect. A method-specific
+    /// override therefore shadows a broader call/statement override locally.
+    fn for_anchors<'a>(
+        &'a self,
+        owner: u64,
+        anchors: impl IntoIterator<Item = &'a SourceRangeFact>,
+    ) -> Vec<&'a SourceJustification> {
+        let mut selected = BTreeMap::new();
+        for anchor in anchors {
+            for entry in self.at(owner, Some(anchor)) {
+                selected.entry(&entry.effect).or_insert(entry);
+            }
+        }
+        selected.into_values().collect()
     }
 }
 
@@ -296,6 +324,7 @@ mod tests {
             source_range: None,
             calls: Vec::new(),
             effects: vec![EffectFact {
+                marker_anchor_ranges: Vec::new(),
                 id: EffectId::new(0),
                 effect: EffectKey::new("panic"),
                 effect_group: None,
@@ -311,6 +340,44 @@ mod tests {
             markers: Vec::new(),
             unverified_marker_probes: Vec::new(),
         }
+    }
+
+    #[test]
+    fn injected_effects_use_the_first_matching_anchor_after_cache_round_trip() {
+        with_source(|map, source| {
+            let mut body = effect_body(source, 1);
+            body.effects[0].marker_anchor_ranges = vec![
+                SourceRangeFact {
+                    file: source.id.clone(),
+                    byte_start: 15,
+                    byte_end: 24,
+                },
+                body.effects[0].source_range.clone().unwrap(),
+            ];
+            let facts = ArtifactFacts::new(vec![body], vec![source.clone()]).unwrap();
+            let serialized = serde_json::to_string(&facts).unwrap();
+            let mut facts: ArtifactFacts = serde_json::from_str(&serialized).unwrap();
+            facts.validate().unwrap();
+            let index = SourceJustificationOverrides::resolve(
+                map,
+                vec![
+                    configured("src/lib.rs:2:2", "PANIC: broad"),
+                    configured("src/lib.rs:3:3", "PANIC: specific"),
+                ],
+                &[ContractSourceArtifact::new(
+                    1,
+                    "sample",
+                    Some("1.2.3"),
+                    &facts,
+                )],
+            )
+            .unwrap();
+            index.apply(&mut facts).unwrap();
+            let markers = &facts.functions[0].markers;
+            assert_eq!(markers.len(), 1);
+            assert_eq!(markers[0].satisfactions[0].reason, "specific");
+            facts.validate().unwrap();
+        });
     }
 
     #[test]

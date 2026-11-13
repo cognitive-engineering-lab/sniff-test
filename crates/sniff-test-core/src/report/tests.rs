@@ -137,6 +137,7 @@ fn contract_boundary_trace(
         documented
     };
     let operation = EffectFact {
+        marker_anchor_ranges: Vec::new(),
         id: EffectId::new(0),
         effect: ReportEffect::Safety.key(),
         effect_group: None,
@@ -665,6 +666,7 @@ fn registered_effect_gets_default_concrete_reporting_without_an_adapter() {
             "sample::allocates",
             Vec::new(),
             vec![EffectFact {
+                marker_anchor_ranges: Vec::new(),
                 id: EffectId::new(0),
                 effect: EffectKey::new(Allocation::EFFECT_NAME),
                 effect_group: None,
@@ -1177,6 +1179,7 @@ fn effect_contracts(
 
 fn call(id: u32, target: CallTargetFact) -> CallFact {
     CallFact {
+        marker_anchor_ranges: Vec::new(),
         invocation_guarantee: None,
         id: CallId::new(id),
         call_site: CallSiteId::new(0),
@@ -1320,6 +1323,7 @@ fn shared_justification_marker(
 
 fn unsafe_operation_with_provenance(id: u32, group: u32, macro_index: u64) -> EffectFact {
     EffectFact {
+        marker_anchor_ranges: Vec::new(),
         id: EffectId::new(id),
         effect: EffectKey::new("safety"),
         effect_group: Some(EffectGroupId::new(group)),
@@ -1484,6 +1488,7 @@ fn marker_evidence_fixture() -> (ArtifactFacts, InvocationGraph, FunctionId) {
                 ],
                 vec![
                     EffectFact {
+                        marker_anchor_ranges: Vec::new(),
                         id: EffectId::new(0),
                         effect: EffectKey::new("panic"),
                         effect_group: None,
@@ -1493,6 +1498,7 @@ fn marker_evidence_fixture() -> (ArtifactFacts, InvocationGraph, FunctionId) {
                         kind: EffectKind::new("bounds-check"),
                     },
                     EffectFact {
+                        marker_anchor_ranges: Vec::new(),
                         id: EffectId::new(1),
                         effect: EffectKey::new("safety"),
                         effect_group: Some(EffectGroupId::new(1)),
@@ -2014,6 +2020,7 @@ fn grouped_panic_marker_ambiguity_uses_the_actual_sink_branch() {
     mark_panic_invocation(&mut sink_call);
     sink_call.call_site = CallSiteId::new(0);
     let compiler_assert = EffectFact {
+        marker_anchor_ranges: Vec::new(),
         id: EffectId::new(0),
         effect: EffectKey::new("panic"),
         effect_group: None,
@@ -2919,6 +2926,7 @@ fn report_root_does_not_owe_or_duplicate_effective_trait_contracts() {
         "sample::Impl::run",
         Vec::new(),
         vec![EffectFact {
+            marker_anchor_ranges: Vec::new(),
             id: EffectId::new(0),
             effect: EffectKey::new("panic"),
             effect_group: None,
@@ -3380,6 +3388,7 @@ fn ignored_macro_invocation_is_local_to_the_caller_report_root() {
     let helper_root = stable_function(101);
     let helper_call = ignored_macro_call(helper_root, stable_function(102));
     let compiler_assert = EffectFact {
+        marker_anchor_ranges: Vec::new(),
         id: EffectId::new(0),
         effect: EffectKey::new("panic"),
         effect_group: None,
@@ -3484,6 +3493,7 @@ fn ignored_macro_invocation_hides_nested_panic_marker_ambiguity_from_the_caller_
     let helper_root = stable_function(111);
     let helper_call = ignored_macro_call(helper_root, stable_function(112));
     let compiler_assert = |id| EffectFact {
+        marker_anchor_ranges: Vec::new(),
         id: EffectId::new(id),
         effect: EffectKey::new("panic"),
         effect_group: None,
@@ -3944,6 +3954,7 @@ fn mixed_active_states_preserve_concrete_then_obligation_finding_order() {
         .find(|body| body.function == root)
         .unwrap();
     root_body.effects.push(EffectFact {
+        marker_anchor_ranges: Vec::new(),
         id: EffectId::new(0),
         effect: ReportEffect::Safety.key(),
         effect_group: None,
@@ -4217,6 +4228,7 @@ fn callable_shim_consumer_provenance_crosses_trusted_boundaries() {
                     ));
                 } else {
                     leaf_body.effects.push(EffectFact {
+                        marker_anchor_ranges: Vec::new(),
                         id: EffectId::new(0),
                         effect: effect.key(),
                         effect_group: Some(EffectGroupId::new(0)),
@@ -4342,6 +4354,7 @@ fn const_boundary_policy_preserves_runtime_paths_and_safety() {
                     ));
                 } else {
                     helper_body.effects.push(EffectFact {
+                        marker_anchor_ranges: Vec::new(),
                         id: EffectId::new(0),
                         effect: effect.key(),
                         effect_group: Some(EffectGroupId::new(0)),
@@ -4440,6 +4453,7 @@ fn invocation_guarantees_only_discharge_immediate_matching_operations_on_all_rou
             .into_iter()
             .zip(0_u32..)
             .map(|(kind, id)| EffectFact {
+                marker_anchor_ranges: Vec::new(),
                 id: EffectId::new(id),
                 effect: EffectKey::new(Allocation::EFFECT_NAME),
                 effect_group: None,

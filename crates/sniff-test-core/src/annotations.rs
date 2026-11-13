@@ -1128,6 +1128,7 @@ mod tests {
 
     fn call(id: u32, target: FunctionTargetFact) -> CallFact {
         CallFact {
+            marker_anchor_ranges: Vec::new(),
             invocation_guarantee: None,
             id: CallId::new(id),
             call_site: CallSiteId::new(id),

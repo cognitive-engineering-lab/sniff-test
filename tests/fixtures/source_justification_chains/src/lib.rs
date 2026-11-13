@@ -52,3 +52,18 @@ pub fn source_each_link(widget: &Widget) {
         // PANIC: the second condition has been checked.
         .second();
 }
+
+#[rustfmt::skip]
+pub fn operation(denominator: usize) -> usize {
+    let value = (
+        12 / denominator,
+    );
+    value.0
+}
+
+pub fn ordinary_block(widget: &Widget) {
+    {
+        let _unrelated = 0;
+        widget.first();
+    }
+}

@@ -288,6 +288,26 @@ fn immediate_statement_marker_block(
     }
 }
 
+/// Policy-neutral final-callsite locations usable by source-local overrides.
+/// Does not ascend through arbitrary enclosing blocks or inspect comments.
+pub(crate) fn source_override_anchor_spans(
+    tcx: TyCtxt<'_>,
+    owner: Option<LocalDefId>,
+    target: Span,
+    callee: Option<Span>,
+) -> Vec<Span> {
+    let mut anchors = Vec::new();
+    for span in callee.into_iter().chain(std::iter::once(target)) {
+        push_unique_probe_span(&mut anchors, span.source_callsite());
+    }
+    if let Some(owner) = owner
+        && let MarkerProbe::Present(statement) = immediate_statement_span(tcx, owner, target)
+    {
+        push_unique_probe_span(&mut anchors, statement.source_callsite());
+    }
+    anchors
+}
+
 fn immediate_statement_span(tcx: TyCtxt<'_>, owner: LocalDefId, target: Span) -> MarkerProbe<Span> {
     // Reachability can use a required trait method as the origin of a
     // synthetic edge even though the method has no source body. Asking for

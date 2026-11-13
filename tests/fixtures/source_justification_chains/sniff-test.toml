@@ -5,6 +5,8 @@ report-roots = [
     "source_justification_chains::source_link",
     "source_justification_chains::source_statement",
     "source_justification_chains::source_each_link",
+    "source_justification_chains::operation",
+    "source_justification_chains::ordinary_block",
 ]
 
 [contracts]

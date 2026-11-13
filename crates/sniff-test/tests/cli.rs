@@ -3291,7 +3291,7 @@ fn source_overrides_reject_stale_dependency_source_facts() {
 }
 
 #[test]
-fn source_justification_overrides_select_call_starts_in_method_chains() {
+fn source_justification_overrides_resolve_method_lines_and_statements() {
     let temp = tempfile::tempdir().expect("override chain fixture");
     let root = temp.path().join("source_justification_chains");
     copy_fixture_dir(
@@ -3313,32 +3313,58 @@ fn source_justification_overrides_select_call_starts_in_method_chains() {
         "statement:documented-obligation:first",
     ];
     let cases = [
-        (None, baseline.clone()),
-        (Some(line(".first()")), baseline.clone()),
-        (Some(line(".second();")), baseline.clone()),
+        (vec![], baseline),
         (
-            Some(line("widget")),
+            vec![line(".first()")],
+            vec![
+                "chain:documented-obligation:second",
+                "statement:documented-obligation:first",
+            ],
+        ),
+        (
+            vec![line(".second();")],
+            vec![
+                "chain:documented-obligation:first",
+                "statement:documented-obligation:first",
+            ],
+        ),
+        (
+            vec![line("widget")],
             vec![
                 "chain:ambiguous-marker:-",
                 "statement:documented-obligation:first",
             ],
         ),
-        (Some(line("let _result = (")), baseline),
         (
-            Some(line("widget.first(),")),
+            vec![line("let _result = (")],
             vec![
                 "chain:documented-obligation:first",
                 "chain:documented-obligation:second",
             ],
         ),
+        (
+            vec![line("widget.first(),")],
+            vec![
+                "chain:documented-obligation:first",
+                "chain:documented-obligation:second",
+            ],
+        ),
+        (
+            vec![line(".first()"), line(".second();")],
+            vec!["statement:documented-obligation:first"],
+        ),
+        (
+            vec![line("widget"), line(".first()")],
+            vec!["statement:documented-obligation:first"],
+        ),
     ];
     let binary = PathBuf::from(env!("CARGO_BIN_EXE_cargo-sniff-test"));
     let cache = temp.path().join("cache");
     let _cargo_guard = lock_nested_cargo();
-    for (selected_line, expected) in cases {
+    for (selected_lines, expected) in cases {
         let mut configured =
             String::from("[overrides.crates.\"source_justification_chains\".\"0.1.0\"]\n");
-        if let Some(line) = selected_line {
+        for line in &selected_lines {
             writeln!(
                 configured,
                 "\"src/lib.rs:{line}:{line}\" = \"PANIC: checked\""
@@ -3352,11 +3378,143 @@ fn source_justification_overrides_select_call_starts_in_method_chains() {
             .chain([
                 "source_link:documented-obligation:second",
                 "source_statement:ambiguous-marker:-",
+                "operation:concrete-operation:-",
+                "ordinary_block:documented-obligation:first",
             ])
             .map(str::to_owned)
             .collect::<std::collections::BTreeSet<_>>();
-        assert_eq!(actual, expected, "selector line {selected_line:?}");
+        assert_eq!(actual, expected, "selector lines {selected_lines:?}");
     }
+}
+
+#[test]
+fn source_justification_override_header_counts_follow_anchor_selection() {
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path().join("source_justification_chains");
+    copy_fixture_dir(
+        &repo_root().join("tests/fixtures/source_justification_chains"),
+        &root,
+    )
+    .unwrap();
+    let source = fs::read_to_string(root.join("src/lib.rs")).unwrap();
+    let line = source
+        .lines()
+        .position(|value| value.trim() == "widget")
+        .unwrap()
+        + 1;
+    let binary = PathBuf::from(env!("CARGO_BIN_EXE_cargo-sniff-test"));
+    let cache = temp.path().join("cache");
+    let _cargo_guard = lock_nested_cargo();
+    for count in 1..=3 {
+        let headers = "PANIC: this chain's conditions were checked.\n".repeat(count);
+        fs::write(root.join("override.toml"), format!(
+            "[overrides.crates.\"source_justification_chains\".\"0.1.0\"]\n\"src/lib.rs:{line}:{line}\" = '''\n{headers}'''\n"
+        )).unwrap();
+        let findings = override_chain_findings(&root, &binary, &cache);
+        assert_eq!(
+            findings.contains("chain:ambiguous-marker:-"),
+            count != 2,
+            "header count {count}: {findings:?}"
+        );
+        assert!(
+            !findings.contains("chain:documented-obligation:first"),
+            "{findings:?}"
+        );
+        assert!(
+            !findings.contains("chain:documented-obligation:second"),
+            "{findings:?}"
+        );
+    }
+}
+
+#[test]
+fn source_justification_overrides_support_operations_and_stop_at_statements() {
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path().join("source_justification_chains");
+    copy_fixture_dir(
+        &repo_root().join("tests/fixtures/source_justification_chains"),
+        &root,
+    )
+    .unwrap();
+    let source = fs::read_to_string(root.join("src/lib.rs")).unwrap();
+    let line = |text| {
+        source
+            .lines()
+            .position(|value| value.trim() == text)
+            .unwrap()
+            + 1
+    };
+    let binary = PathBuf::from(env!("CARGO_BIN_EXE_cargo-sniff-test"));
+    let cache = temp.path().join("cache");
+    let _cargo_guard = lock_nested_cargo();
+    for (selected, operation_covered) in [
+        ("let value = (", true),
+        ("12 / denominator,", true),
+        ("{", false),
+    ] {
+        let selected = line(selected);
+        fs::write(root.join("override.toml"), format!(
+            "[overrides.crates.\"source_justification_chains\".\"0.1.0\"]\n\"src/lib.rs:{selected}:{selected}\" = \"PANIC: checked\"\n"
+        )).unwrap();
+        let findings = override_chain_findings(&root, &binary, &cache);
+        assert_eq!(
+            findings.contains("operation:concrete-operation:-"),
+            !operation_covered,
+            "{findings:?}"
+        );
+        assert!(
+            findings.contains("ordinary_block:documented-obligation:first"),
+            "{findings:?}"
+        );
+    }
+}
+
+#[test]
+fn source_justification_overrides_reuse_dependency_statement_anchors() {
+    let temp = tempfile::tempdir().unwrap();
+    let dependency = temp.path().join("dependency");
+    copy_fixture_dir(
+        &repo_root().join("tests/fixtures/source_justification_chains"),
+        &dependency,
+    )
+    .unwrap();
+    let source = fs::read_to_string(dependency.join("src/lib.rs")).unwrap();
+    let line = |text| {
+        source
+            .lines()
+            .position(|value| value.trim() == text)
+            .unwrap()
+            + 1
+    };
+    let root = temp.path().join("app");
+    fs::create_dir_all(root.join("src")).unwrap();
+    fs::write(root.join("Cargo.toml"), "[package]\nname = \"override-anchor-app\"\nversion = \"0.1.0\"\nedition = \"2024\"\n[workspace]\n[dependencies]\nsource-justification-chains = { path = \"../dependency\" }\n").unwrap();
+    fs::write(root.join("src/lib.rs"), "pub fn chain(value: &source_justification_chains::Widget) { source_justification_chains::chain(value); }\npub fn statement(value: &source_justification_chains::Widget) { source_justification_chains::statement(value); }\n").unwrap();
+    fs::write(
+        root.join("sniff-test.toml"),
+        "[contracts]\noverride-files = [\"override.toml\"]\n[panic.lints]\ninvocation = \"warn\"\n",
+    )
+    .unwrap();
+    let first = line(".first()");
+    let statement = line("let _result = (");
+    let configured = format!(
+        "[overrides.crates.\"source_justification_chains\".\"0.1.0\"]\n\"src/lib.rs:{first}:{first}\" = \"PANIC: first checked\"\n\"src/lib.rs:{statement}:{statement}\" = \"PANIC: statement checked\"\n"
+    );
+    fs::write(root.join("override.toml"), &configured).unwrap();
+    let binary = PathBuf::from(env!("CARGO_BIN_EXE_cargo-sniff-test"));
+    let cache = temp.path().join("cache");
+    let _cargo_guard = lock_nested_cargo();
+    let expected =
+        std::collections::BTreeSet::from([String::from("chain:documented-obligation:second")]);
+    assert_eq!(override_chain_findings(&root, &binary, &cache), expected);
+    let cached = artifact_cache_for_crate(&cache, "source_justification_chains");
+    let original = fs::read(&cached).unwrap();
+    fs::write(root.join("override.toml"), "[overrides]\n").unwrap();
+    assert_eq!(override_chain_findings(&root, &binary, &cache).len(), 3);
+    assert_eq!(fs::read(&cached).unwrap(), original);
+    fs::write(root.join("override.toml"), configured).unwrap();
+    assert_eq!(override_chain_findings(&root, &binary, &cache), expected);
+    assert_eq!(fs::read(&cached).unwrap(), original);
 }
 
 fn override_chain_findings(

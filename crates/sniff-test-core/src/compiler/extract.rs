@@ -492,6 +492,13 @@ fn collect_edge<'tcx>(
         .map(|span| sources.range(tcx, span))
         .transpose()?
         .flatten();
+    let marker_anchor_ranges = source_override_anchor_ranges(
+        tcx,
+        origin_def_id.as_local(),
+        edge.span,
+        edge.callee_span,
+        sources,
+    )?;
     let mut target = call_target(tcx, graph, edge, sources, effects)?;
     if edge.kind == ReachabilityEdgeKind::ModeledCall
         && let CallTargetFact::OpaqueBoundary {
@@ -539,6 +546,7 @@ fn collect_edge<'tcx>(
         body,
         key.clone(),
         CallFact {
+            marker_anchor_ranges: marker_anchor_ranges.clone(),
             invocation_guarantee: match edge.modeled_invocation {
                 Some(reachability::ModeledInvocationKind::AsyncSpawn) => {
                     Some(crate::artifact::InvocationGuarantee::ExecutorPolling)
@@ -578,6 +586,7 @@ fn collect_edge<'tcx>(
                     source_range.as_ref(),
                     expanded_range.as_ref(),
                     &macro_expansions,
+                    &marker_anchor_ranges,
                 ) {
                     detected_effects.push((effect_key, seed.effect));
                 }
@@ -667,6 +676,7 @@ fn insert_or_merge_call(
         || !same_macro_provenance(&existing.macro_expansions, &call.macro_expansions)
         || existing.suppressed_by_compiler_context != call.suppressed_by_compiler_context
         || existing.callee_range != call.callee_range
+        || existing.marker_anchor_ranges != call.marker_anchor_ranges
         || existing.indirect_kind != call.indirect_kind
         || existing.kind != call.kind
         || existing.declaration_target != call.declaration_target
@@ -681,6 +691,7 @@ fn insert_or_merge_call(
 
 #[allow(
     clippy::unnecessary_wraps,
+    clippy::too_many_arguments,
     reason = "the optional effect key preserves the shared collector interface"
 )]
 fn collect_mir_effect(
@@ -691,12 +702,14 @@ fn collect_mir_effect(
     source_range: Option<&SourceRangeFact>,
     expanded_range: Option<&SourceRangeFact>,
     macro_expansions: &[MacroExpansionFact],
+    marker_anchor_ranges: &[SourceRangeFact],
 ) -> Option<String> {
     let effect_key = format!("effect:{}:{}:{call_key}", effect.as_str(), kind.as_str());
     if !body.effects.iter().any(|effect| effect.key == effect_key) {
         body.effects.push(PendingEffect {
             key: effect_key.clone(),
             effect: EffectFact {
+                marker_anchor_ranges: marker_anchor_ranges.to_vec(),
                 id: EffectId::new(0),
                 effect,
                 effect_group: None,
@@ -708,6 +721,22 @@ fn collect_mir_effect(
         });
     }
     Some(effect_key)
+}
+
+fn source_override_anchor_ranges(
+    tcx: TyCtxt<'_>,
+    owner: Option<LocalDefId>,
+    target: Span,
+    callee: Option<Span>,
+    sources: &mut SourceTable,
+) -> Result<Vec<SourceRangeFact>, ExtractError> {
+    let mut ranges = Vec::new();
+    for span in crate::source_markers::source_override_anchor_spans(tcx, owner, target, callee) {
+        if let Some(range) = sources.range(tcx, span)? {
+            push_unique(&mut ranges, range);
+        }
+    }
+    Ok(ranges)
 }
 
 fn edge_macro_expansions(
@@ -1664,6 +1693,8 @@ fn attach_source_operations(
         let source_range = sources
             .range(tcx, fact.span.source_callsite())?
             .or_else(|| expanded_range.clone());
+        let marker_anchor_ranges =
+            source_override_anchor_ranges(tcx, Some(local), fact.span, None, sources)?;
         for body_id in body_ids {
             let key = format!(
                 "effect:{}:{ordinal}:{}:{source_range:?}:{:?}",
@@ -1677,6 +1708,7 @@ fn attach_source_operations(
             body.effects.push(PendingEffect {
                 key: key.clone(),
                 effect: EffectFact {
+                    marker_anchor_ranges: marker_anchor_ranges.clone(),
                     id: EffectId::new(0),
                     effect: registered.effect.clone(),
                     effect_group: fact

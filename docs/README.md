@@ -163,7 +163,7 @@ traces closer to the source call structure. Compiler settings are applied
 literally and independently from lint policy. For example, disabling overflow
 checks does not change or reject `[panic.lints.operations].overflow`.
 
-The analysis cache uses format version 32 and stores one direct,
+The analysis cache uses format version 38 and stores one direct,
 policy-neutral fact schema: function identities, source-level invocations,
 compiler-assert kinds, unsafe operations, annotations, contracts, and verified
 file-relative source ranges, extraction-time definition starts, package-relative
@@ -499,21 +499,26 @@ PANIC: representable: the caller checked that the layout fits in `usize`.
 """
 ```
 
-For these entries, the inclusive range selects the **start line of the call or
-effect**, using its final source-callsite location, rather than a function
-definition. Only bodies belonging to the selected crate/version can consume the
+For these entries, the inclusive range selects a **code anchor's start line**,
+using its final source-callsite location, rather than a function definition.
+Lookup prefers the method/callee segment, then the call or effect itself, then
+its nearest statement-like unit (including multiline `let` and tail expressions).
+The first match for each effect wins, so a method-line entry shadows a separate
+statement-line entry for that call. Lookup does not climb ordinary blocks.
+Only bodies belonging to the selected crate/version can consume the
 injection, even when another crate compiles the same physical source file. The
 selected file must be available and match the cached source hash; out-of-file
 line ranges and overlapping justification ranges for the same effect are errors.
 Entries with no matching extracted call/effect remain unused, including bodies
 outside binary report roots and disabled effects.
 
-These selectors do not use source comments' statement fallback or method-segment
-lookup. In `value.first().second()`, both call spans can start at `value`, even
-when the methods occupy separate lines. Selecting that receiver line can justify
-both calls and produce marker ambiguity; selecting only a method-name line may
-match neither. A multiline `let` header also does not select nested calls whose
-source ranges start on later lines. See `tests/fixtures/source_justification_chains`.
+In a multiline `value.first().second()` chain, select each method's line to
+justify that link independently. Selecting only the receiver line can still
+cover both calls and produce marker ambiguity. Methods sharing one physical
+line cannot be distinguished by line selectors. A multiline `let` header can
+justify its nested calls through statement fallback. Ordered anchor ranges are
+stored in the policy-neutral cache, so this also works for dependency bodies.
+See `tests/fixtures/source_justification_chains`.
 
 Marker bodies use the source-comment parser: optional `//` prefixes, named and
 nested requirement lists, and registered headers such as `SAFETY:` are accepted.
@@ -622,8 +627,9 @@ following a requirement bullet in the same contiguous block are kept as
 explanation context. Use `/// # Panics` to document public API panic behavior;
 `// PANIC:` is only for local call-site justifications.
 
-`// PANIC:` can also sit immediately above an enclosing block. For each effect
-kind, a logical marker must contain one nonempty justification header per
+Lookup prefers the call or method segment, then its nearest statement-like unit;
+it does not climb ordinary enclosing blocks. For each effect kind, a logical
+marker must contain one nonempty justification header per
 distinct effect group it covers. Both too few and too many headers are ambiguous.
 Multiple bullets or continuation lines beneath one header still count as one
 justification; empty sections do not count. Identical repeated explanations count

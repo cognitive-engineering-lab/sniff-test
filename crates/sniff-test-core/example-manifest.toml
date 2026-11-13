@@ -70,6 +70,8 @@ undocumented-effect-invocation = "warn"
 # The selected definition must start within the inclusive line range.
 # A leading marker header instead injects a justification at call/effect starts:
 # "src/lib.rs:25:25" = "PANIC: condition: the caller checked this invariant."
+# Marker selectors prefer method/callee lines, then call/effect starts, then
+# the nearest statement start. They do not climb ordinary enclosing blocks.
 # Marker injections do not change contracts or persist in dependency caches.
 override-files = []
 

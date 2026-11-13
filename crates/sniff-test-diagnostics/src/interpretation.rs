@@ -411,12 +411,7 @@ fn finding_description(
             justification_count,
             effect_count,
         } => {
-            let justification_suffix = if *justification_count == 1 { "" } else { "s" };
-            let group_suffix = if *effect_count == 1 { "" } else { "s" };
-            let subject = format!(
-                "marker has {justification_count} `// {}:` justification{justification_suffix} for {effect_count} {} effect group{group_suffix}",
-                effect.justification, effect_name
-            );
+            let subject = marker_count_description(effect, *justification_count, *effect_count);
             (
                 class(None),
                 subject.clone(),
@@ -427,6 +422,20 @@ fn finding_description(
             )
         }
     }
+}
+
+fn marker_count_description(
+    effect: &EffectMetadata,
+    justification_count: usize,
+    effect_count: usize,
+) -> String {
+    let justification_suffix = if justification_count == 1 { "" } else { "s" };
+    let group_suffix = if effect_count == 1 { "" } else { "s" };
+    format!(
+        "marker has {justification_count} `// {}:` justification{justification_suffix} for {effect_count} {} effect group{group_suffix}",
+        effect.justification,
+        effect.key.as_str()
+    )
 }
 
 fn source_marker_description(
@@ -2411,6 +2420,7 @@ mod tests {
             calls: calls
                 .iter()
                 .map(|&(id, byte_start)| CallFact {
+                    marker_anchor_ranges: Vec::new(),
                     invocation_guarantee: None,
                     id: CallId::new(id),
                     call_site: CallSiteId::new(id),

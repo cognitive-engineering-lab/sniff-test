@@ -626,6 +626,10 @@ local_index!(MarkerId);
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub struct CallFact {
+    /// Final-callsite anchors in priority order: callee, call, immediate statement.
+    /// These preserve source-local override lookup across cached dependencies.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub marker_anchor_ranges: Vec<SourceRangeFact>,
     /// Protocol upheld by the modeled caller for its immediate payload only.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub invocation_guarantee: Option<InvocationGuarantee>,
@@ -823,6 +827,9 @@ pub struct ContractRequirementFact {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub struct EffectFact {
+    /// Final-callsite effect and immediate-statement anchors, in priority order.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub marker_anchor_ranges: Vec<SourceRangeFact>,
     pub id: EffectId,
     /// Stable identity of the registered effect which emitted this fact.
     pub effect: EffectKey,
@@ -1071,6 +1078,7 @@ fn validate_body(
             require_nonempty(source.kind.as_str(), "invocation effect kind")?;
         }
         validate_optional_range(call.source_range.as_ref(), source_lengths)?;
+        validate_marker_anchors(&call.marker_anchor_ranges, source_lengths)?;
         validate_optional_range(call.expanded_range.as_ref(), source_lengths)?;
         validate_macro_expansions(&call.macro_expansions, source_lengths)?;
         validate_optional_range(call.callee_range.as_ref(), source_lengths)?;
@@ -1096,6 +1104,7 @@ fn validate_body(
         require_nonempty(effect.effect.as_str(), "effect name")?;
         require_nonempty(effect.kind.as_str(), "effect kind")?;
         validate_optional_range(effect.source_range.as_ref(), source_lengths)?;
+        validate_marker_anchors(&effect.marker_anchor_ranges, source_lengths)?;
         validate_optional_range(effect.expanded_range.as_ref(), source_lengths)?;
         validate_macro_expansions(&effect.macro_expansions, source_lengths)?;
     }
@@ -1127,6 +1136,19 @@ fn validate_body(
 
     validate_unverified_marker_probes(body)?;
 
+    Ok(())
+}
+
+fn validate_marker_anchors(
+    anchors: &[SourceRangeFact],
+    sources: &BTreeMap<&SourceFileId, u64>,
+) -> Result<(), ArtifactValidationError> {
+    for (position, anchor) in anchors.iter().enumerate() {
+        validate_optional_range(Some(anchor), sources)?;
+        if anchors[..position].contains(anchor) {
+            return Err(ArtifactValidationError::new("duplicate marker anchor"));
+        }
+    }
     Ok(())
 }
 
@@ -1531,6 +1553,7 @@ mod tests {
         let function = FunctionId::generic(def_hash("00000000000000010000000000000002"));
         let mut body = empty_body(function, "sample::plugin_effect");
         body.effects.push(EffectFact {
+            marker_anchor_ranges: Vec::new(),
             id: EffectId::new(0),
             effect: EffectKey::new("example.com/network"),
             effect_group: None,
@@ -1591,6 +1614,7 @@ mod tests {
         let mut root_body = empty_body(root, "sample::root");
         root_body.contract_declaration = Some(target("contract::alias"));
         root_body.calls.push(CallFact {
+            marker_anchor_ranges: Vec::new(),
             invocation_guarantee: None,
             id: CallId::new(0),
             call_site: CallSiteId::new(0),
@@ -1622,6 +1646,7 @@ mod tests {
 
     fn compiler_assert_effect(id: u32) -> EffectFact {
         EffectFact {
+            marker_anchor_ranges: Vec::new(),
             id: EffectId::new(id),
             effect: EffectKey::new("panic"),
             effect_group: None,
@@ -1634,6 +1659,7 @@ mod tests {
 
     fn direct_call(id: u32, group: u32, source_range: SourceRangeFact) -> CallFact {
         CallFact {
+            marker_anchor_ranges: Vec::new(),
             invocation_guarantee: None,
             id: CallId::new(id),
             call_site: CallSiteId::new(id),
@@ -1672,6 +1698,7 @@ mod tests {
 
     fn unsafe_effect(id: u32, group: u32, source_range: SourceRangeFact) -> EffectFact {
         EffectFact {
+            marker_anchor_ranges: Vec::new(),
             id: EffectId::new(id),
             effect: EffectKey::new("safety"),
             effect_group: Some(EffectGroupId::new(group)),
@@ -2360,6 +2387,7 @@ mod tests {
             contract_declaration: Some(declaration_target.clone()),
             source_range: Some(range(0, 220)),
             calls: vec![CallFact {
+                marker_anchor_ranges: Vec::new(),
                 invocation_guarantee: None,
                 id: CallId::new(4),
                 call_site: CallSiteId::new(4),
@@ -2388,6 +2416,7 @@ mod tests {
             }],
             effects: vec![
                 EffectFact {
+                    marker_anchor_ranges: Vec::new(),
                     id: EffectId::new(9),
                     effect: EffectKey::new("safety"),
                     effect_group: Some(EffectGroupId::new(6)),
@@ -2401,6 +2430,7 @@ mod tests {
                     kind: EffectKind::new("raw-pointer-dereference"),
                 },
                 EffectFact {
+                    marker_anchor_ranges: Vec::new(),
                     id: EffectId::new(2),
                     effect: EffectKey::new("panic"),
                     effect_group: None,

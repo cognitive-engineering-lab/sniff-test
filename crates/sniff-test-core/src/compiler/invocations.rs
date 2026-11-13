@@ -1099,6 +1099,7 @@ mod tests {
 
     fn call(id: u32, site: u32, kind: CallKindFact, target: CallTargetFact) -> CallFact {
         CallFact {
+            marker_anchor_ranges: Vec::new(),
             invocation_guarantee: None,
             id: CallId::new(id),
             call_site: CallSiteId::new(site),
@@ -1185,6 +1186,7 @@ mod tests {
         let hidden = stable_function(3);
         let mut hidden_body = body(hidden, Vec::new());
         hidden_body.effects.push(EffectFact {
+            marker_anchor_ranges: Vec::new(),
             id: EffectId::new(0),
             effect: EffectKey::new("panic"),
             effect_group: None,
@@ -1298,6 +1300,7 @@ mod tests {
         let callee = stable_function(2);
         let mut callee_body = body(callee, Vec::new());
         callee_body.effects.push(EffectFact {
+            marker_anchor_ranges: Vec::new(),
             id: EffectId::new(0),
             effect: EffectKey::new("panic"),
             effect_group: None,
@@ -1648,6 +1651,7 @@ mod tests {
         });
         let mut panicking_body = body(panicking, Vec::new());
         panicking_body.effects.push(EffectFact {
+            marker_anchor_ranges: Vec::new(),
             id: EffectId::new(0),
             effect: EffectKey::new("panic"),
             effect_group: None,
