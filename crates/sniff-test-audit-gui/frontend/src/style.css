@@ -76,9 +76,6 @@ main { overflow: hidden; }
 .group-chevron { flex:none; font-size:14px; }
 .group-count { flex:none; border-radius:10px; background:#e8eee7; padding:2px 6px; font:10px ui-sans-serif,sans-serif; }
 
-.invert-effect { text-align:left; font-size:12px; }
-.invert-effect[aria-pressed="true"] { background:#e8f1e9; border-color:#91ad9b; color:#245c3f; }
-
 /* Resizable workspace panels. */
 .layout { grid-template-columns: min(var(--left-size), 40vw) minmax(0,1fr) min(var(--right-size), 40vw); }
 .side-pane { position: relative; min-width: 0; min-height: 0; }
@@ -161,6 +158,10 @@ main { overflow: hidden; }
 .navigation-loading { color:#62796b; font-size:12px; white-space:nowrap; }
 .load-more { margin:8px; font-size:12px; }
 
-.display-modes { display:grid; gap:4px; }
+.display-mode { display:flex; align-items:center; flex-wrap:wrap; gap:6px; padding:6px 10px; border:1px solid #c0d5c5; border-radius:6px; background:#e8f1e9; color:#245c3f; }
+.display-mode strong { font-size:10px; font-weight:600; letter-spacing:.5px; text-transform:uppercase; }
+.display-mode select { flex:1; padding:6px 2px; border-color:transparent; background:transparent; color:#245c3f; font-weight:600; cursor:pointer; }
+.display-mode:focus-within { border-color:#25825c; }
+.display-mode select:disabled { opacity:.45; cursor:default; }
 .obligation-fallback { padding:24px; overflow:auto; }
 .obligation-fallback h2 { font-size:16px; overflow-wrap:anywhere; }

@@ -628,11 +628,13 @@ function App() {
     <header><div className="brand"><b>sniff-test</b><span> / audit</span></div><span className="workspace" title={root}>{root}</span><span className={'status '+status.status}>{status.status}{status.stale?' · stale':status.overrides_changed?' · reanalysis needed':''}</span><button disabled={status.running||startingAnalysis||busy} onClick={()=>act(reanalyze)}>↻ Reanalyze</button></header>
     {error&&<div className="error" role="alert">{error}<button onClick={()=>setError('')}>Dismiss</button></div>}
     <div className="layout" style={{'--left-size':`${leftWidth}px`,'--right-size':`${rightWidth}px`} as React.CSSProperties}><div className="side-pane left-pane" id="findings-panel"><aside className="findings"><div className="section-title">FINDINGS <span>{total}</span></div>
-      <div className="display-modes" role="group" aria-label="Display mode">
-        <button type="button" className="invert-effect" disabled={!!documentationEditor} aria-pressed={mode==='file'} onClick={()=>act(()=>changeMode('file'))}>Files</button>
-        <button type="button" className="invert-effect" disabled={!!documentationEditor} aria-pressed={inverted} onClick={()=>act(()=>changeMode(inverted?'file':'effect-source'))}>⇄ Invert effect</button>
-        <button type="button" className="invert-effect" disabled={!!documentationEditor} aria-pressed={obligationMode} onClick={()=>act(()=>changeMode('obligation'))}>⇄ Invert obligation</button>
-      </div>
+      <label className="display-mode"><strong>Display mode:</strong>
+        <select aria-label="Display mode" value={mode} disabled={!!documentationEditor} onChange={e=>{const next=e.target.value as DisplayMode;act(()=>changeMode(next));}}>
+          <option value="file">File</option>
+          <option value="effect-source">Invert effect</option>
+          <option value="obligation">Invert obligation</option>
+        </select>
+      </label>
       <input aria-label={obligationMode?'Search obligations':inverted?'Search effect sources':'Search findings'} placeholder={obligationMode?'Search functions, obligations…':inverted?'Search effect sources…':'Search files, roots, crates…'} value={query} onChange={e=>{setQuery(e.target.value);resetPages();}}/>
       <div className="filters"><select aria-label="Effect" value={effect} onChange={e=>{setEffect(e.target.value);resetPages();}}><option value="">All effects</option>{effects.map(e=><option key={e}>{e}</option>)}</select><select aria-label="Severity" value={level} onChange={e=>{setLevel(e.target.value);resetPages();}}><option value="">All levels</option><option>warn</option><option>deny</option></select></div>
       {!obligationMode&&<select aria-label="Finding class" value={kind} onChange={e=>{setKind(e.target.value);resetPages();}}><option value="">All finding classes</option>{['concrete-operation','concrete-invocation','documented-obligation','undocumented-invocation','unresolved-call-target','analysis-incomplete','ambiguous-marker','ambiguous-requirement'].map(k=><option key={k}>{k}</option>)}</select>}
