@@ -63,6 +63,7 @@ main { overflow: hidden; }
 .override-titlebar h2 { font-size:14px; margin:0; }
 .override-panel-content { padding:20px; overflow:auto; min-height:0; }
 .override-panel p { font-size:13px; }
+.override-panel .effect-class-label { margin:0 0 16px; padding:10px 14px; border-left:3px solid #25825c; border-radius:6px; background:#e8f1e9; color:#18583f; font-size:14px; font-weight:700; line-height:1.5; overflow-wrap:anywhere; }
 .override-panel textarea { display:block; width:100%; min-height:200px; font:13px/1.7 ui-monospace,monospace; box-sizing:border-box; }
 .override-panel select { display:block; width:100%; margin:8px 0; }
 .modal-actions { display:flex; flex-wrap:wrap; justify-content:flex-end; gap:10px; margin-top:18px; }

@@ -7,6 +7,8 @@ pub struct OverrideDocument {
     pub document: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub obligation_documentation: Option<sniff_test_report::ObligationDocumentation>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub effect_context: Option<EffectContext>,
     pub selector: sniff_test_report::OverrideSelector,
 }
 
@@ -55,6 +57,8 @@ pub struct OverrideEditor {
     pub can_remove: bool,
     pub document: String,
     pub obligation_documentation: Option<sniff_test_report::ObligationDocumentation>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub effect_context: Option<EffectContext>,
     pub destinations: Vec<OverrideDestination>,
     pub destination: String,
     #[serde(skip)]
@@ -219,6 +223,7 @@ impl Session {
                     (
                         SavedOverride {
                             annotation: OverrideDocument {
+                                effect_context: audit.effect_context,
                                 effect: audit.effect,
                                 action: action.clone(),
                                 document,
@@ -287,6 +292,7 @@ impl Session {
             token,
             can_remove: index.is_some(),
             document: saved.annotation.document.clone(),
+            effect_context: saved.annotation.effect_context.clone(),
             obligation_documentation: saved.annotation.obligation_documentation.clone(),
             destinations,
             destination,
@@ -1242,6 +1248,16 @@ mod tests {
     #[test]
     fn saved_overrides_restart_and_edit_without_source_changes_or_draft_state() {
         let (root, _dep, mut session, path) = setup();
+        let effect_context = EffectContext {
+            effect: "safety".into(),
+            operation: Some("raw-pointer-dereference".into()),
+            class: Some("concrete-operation".into()),
+        };
+        session.analysis.findings[0]
+            .audit
+            .as_mut()
+            .unwrap()
+            .effect_context = Some(effect_context.clone());
         let source = fs::read(&path).unwrap();
         let documentation = sniff_test_report::ObligationDocumentation {
             prototype: Some("unsafe fn contract(pointer: *const u8) -> u8".into()),
@@ -1286,6 +1302,7 @@ mod tests {
                 index: 0,
             })
             .unwrap();
+        assert_eq!(context.effect_context, Some(effect_context));
         assert_eq!(context.obligation_documentation, Some(documentation));
         assert_eq!(context.document, "// SAFETY: pointer is valid");
         session

@@ -18,6 +18,8 @@ pub struct SourceEditor {
     pub destination: String,
     pub line: usize,
     pub obligation_documentation: Option<sniff_test_report::ObligationDocumentation>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub effect_context: Option<EffectContext>,
     #[serde(skip)]
     target: SourceEditorTarget,
     #[serde(skip)]
@@ -116,6 +118,7 @@ impl Session {
                 .filter(|b| *b == b'\n')
                 .count()
                 + 1,
+            effect_context: audit.effect_context,
             obligation_documentation: (request.action == "justification")
                 .then_some(audit.obligation_documentation)
                 .flatten(),
@@ -364,6 +367,28 @@ mod tests {
         };
         session.analysis.findings = vec![finding];
         (dir, session, request)
+    }
+
+    #[test]
+    fn source_editor_exposes_report_classification() {
+        let (_dir, mut session, request) = setup(
+            "fn f() {\n    allocate();\n}\n",
+            "justification",
+            "allocate();",
+        );
+        let context = EffectContext {
+            effect: "allocation".into(),
+            operation: Some("heap-allocation".into()),
+            class: Some("concrete-operation".into()),
+        };
+        session.analysis.findings[0]
+            .audit
+            .as_mut()
+            .unwrap()
+            .effect_context = Some(context.clone());
+        let editor = session.open_source_editor(request).unwrap();
+        assert_eq!(editor.effect_context, Some(context));
+        assert!(editor.obligation_documentation.is_none());
     }
 
     #[test]

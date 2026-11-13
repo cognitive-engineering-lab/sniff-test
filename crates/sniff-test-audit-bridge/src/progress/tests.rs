@@ -28,6 +28,7 @@ fn setup(source: &str) -> (tempfile::TempDir, Session, String) {
     let site = location(source.rfind("danger();").unwrap(), 9);
     let function = location(source.find("pub fn work").unwrap(), 11);
     let audit = AuditMetadata {
+        effect_context: None,
         effect: "panic".into(),
         obligation: "Panics".into(),
         justification: "PANIC".into(),

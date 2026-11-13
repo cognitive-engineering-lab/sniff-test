@@ -921,6 +921,7 @@ mod tests {
         ] {
             let mut finding = source_finding(id, 10, id);
             finding.audit = Some(AuditMetadata {
+                effect_context: None,
                 effect: "custom".into(),
                 obligation: "Resources".into(),
                 justification: "RESOURCE".into(),

@@ -23,7 +23,12 @@ function sameSelector(a:unknown,b:unknown) {
   const left=a as Record<string,unknown>,right=b as Record<string,unknown>;
   return ['namespace','crate-name','version','source-path','source-hash','start','end','kind','site'].every(key=>left[key]===right[key]);
 }
-type DocumentationEditor = {mode:'source'|'override'; finding?:string; line?:number; token:string; can_remove:boolean; saved_destination:string; document:string; obligation_documentation?:ObligationDocumentation; destination:string; destinations:{path:string;exists:boolean}[]; action:string};
+type EffectContext = {effect:string;operation?:string;class?:string};
+function effectContextLabel(context:EffectContext) {
+  const readable=(value:string)=>value.replace(/[-_]+/g,' ').replace(/^./,letter=>letter.toUpperCase());
+  return [context.effect,context.operation||context.class].filter(Boolean).map(value=>readable(value!)).join(' · ');
+}
+type DocumentationEditor = {effect_context?:EffectContext;mode:'source'|'override'; finding?:string; line?:number; token:string; can_remove:boolean; saved_destination:string; document:string; obligation_documentation?:ObligationDocumentation; destination:string; destinations:{path:string;exists:boolean}[]; action:string};
 type SavedSource = {buffer:Buffer; edit:{start:number;end:number;text:string}};
 const acknowledgedSource=Annotation.define<boolean>();
 function savedSourceChanges(state:EditorState,saved:SavedSource) {
@@ -675,6 +680,7 @@ function App() {
         <div className="modal-actions"><button disabled={busy} onClick={()=>setConfirmRemoval(false)}>Cancel</button><button disabled={busy||status.running} onClick={()=>act(removeDocumentation)}>Confirm removal</button></div>
       </>:<>
       {documentationEditor.action==='justification'&&documentationEditor.obligation_documentation&&<ObligationDocumentationPanel documentation={documentationEditor.obligation_documentation}/>}
+      {documentationEditor.action==='justification'&&!documentationEditor.obligation_documentation&&documentationEditor.effect_context&&<p className="effect-class-label" aria-label="Effect class">{effectContextLabel(documentationEditor.effect_context)}</p>}
       <textarea ref={placeCaretAtEnd} autoFocus disabled={busy} aria-label={documentationEditor.mode==='source'?'Source documentation':'Override documentation'} value={documentationEditor.document} onChange={e=>setDocumentationEditor({...documentationEditor,document:e.target.value})}/>
       {documentationEditor.mode==='source'?<label className="override-destination">Source file<small>{displaySourcePath(documentationEditor.destination,root)}:{documentationEditor.line}</small></label>:<label className="override-destination">Override file{documentationEditor.destinations.length>1?<select aria-label="Override file" value={documentationEditor.destination} disabled={busy} onChange={e=>setDocumentationEditor({...documentationEditor,destination:e.target.value})}>{documentationEditor.destinations.map(d=><option key={d.path} value={d.path}>{d.path}</option>)}</select>:<small>{documentationEditor.destination}</small>}</label>}
       <div className="modal-actions">{documentationEditor.can_remove&&<button disabled={busy||status.running} onClick={()=>setConfirmRemoval(true)}>{documentationEditor.mode==='source'?(documentationEditor.action==='justification'?'Remove justification':'Remove obligation'):'Remove override'}</button>}<button disabled={busy} onClick={()=>setDocumentationEditor(undefined)}>Cancel</button><button className="primary" disabled={busy||status.running} onClick={()=>act(async()=>{if(documentationEditor.mode==='override'&&!documentationEditor.destinations.find(d=>d.path===documentationEditor.destination)?.exists){setCreateFile(true);return;}await commitDocumentation();})}>Save</button></div>

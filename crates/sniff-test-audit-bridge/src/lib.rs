@@ -25,9 +25,19 @@ use std::{
     process::{Command, Output},
 };
 
+/// Effect classification displayed when a justification has no obligation documentation.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct EffectContext {
+    pub effect: String,
+    pub operation: Option<String>,
+    pub class: Option<String>,
+}
+
 /// Presentation and action model owned by the auditing workflow, not the analyzer.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AuditMetadata {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub effect_context: Option<EffectContext>,
     pub effect: String,
     pub obligation: String,
     pub justification: String,
@@ -87,6 +97,11 @@ fn adapt_semantics(facts: SemanticFacts, finding: &Value) -> AuditMetadata {
         selector: Some(t.selector),
     }));
     AuditMetadata {
+        effect_context: Some(EffectContext {
+            effect: facts.effect.clone(),
+            operation: finding["operation"].as_str().map(str::to_owned),
+            class: finding["finding"].as_str().map(str::to_owned),
+        }),
         effect: facts.effect,
         obligation: facts.obligation.unwrap_or_default(),
         justification: facts.justification.unwrap_or_default(),
@@ -820,6 +835,7 @@ mod tests {
     }
     pub(super) fn metadata(location: Location) -> AuditMetadata {
         AuditMetadata {
+            effect_context: None,
             effect: "allocation".into(),
             obligation: "Allocations".into(),
             justification: "ALLOC".into(),
