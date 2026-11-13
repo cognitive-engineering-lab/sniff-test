@@ -402,6 +402,18 @@ mod tests {
                     "// ALLOC: Valid λ.\n// Details.",
                 ),
                 (
+                    "justification",
+                    "allocate();",
+                    "fn f() {\n    // Existing explanation λ.\n    // Preserve this too.\n    #[allow(unused)]\n    allocate();\n}\n",
+                    "// ALLOC: Valid λ.\n// Details.",
+                ),
+                (
+                    "justification",
+                    "allocate();",
+                    "fn f() {\n    // SAFETY: Keep.\n    // More safety detail.\n    allocate();\n}\n",
+                    "// ALLOC: Valid λ.\n// Details.",
+                ),
+                (
                     "obligation",
                     "pub fn",
                     "/// Summary λ.\n/// # Safety\n/// Preserve this.\n#[allow(\n    unused\n)]\npub fn f() {}\n",

@@ -729,15 +729,36 @@ pub fn documentation_edit(
     let mut at = attribute_start;
     let comment;
     if action == "justification" {
-        // Existing comments may be extending a marker. Do not silently create a second marker.
+        // Ordinary prose and other effects' markers can precede a new marker.
+        // A matching marker must instead be updated through the source editor.
         let preceding = source[..attribute_start].trim_end();
-        ensure!(
-            !preceding
-                .lines()
-                .last()
-                .is_some_and(|l| l.trim_start().starts_with("//")),
-            "existing comment block: update its justification in the source editor"
-        );
+        if preceding
+            .lines()
+            .last()
+            .is_some_and(|l| l.trim_start().starts_with("//"))
+        {
+            let lexical = progress::inspect_source(source)
+                .context("cannot safely parse source; edit source manually")?;
+            let marker = audit.justification.trim().trim_end_matches(':');
+            let mut offset = attribute_start;
+            for line in source[..attribute_start].split_inclusive('\n').rev() {
+                offset -= line.len();
+                let Some(comment) = lexical.comments.get(&offset) else {
+                    break;
+                };
+                let body = comment
+                    .strip_prefix("//")
+                    .filter(|body| !body.starts_with('/') && !body.starts_with('!'))
+                    .map(str::trim_start);
+                ensure!(
+                    !body.is_some_and(|body| {
+                        body.strip_prefix(marker)
+                            .is_some_and(|rest| rest.starts_with(':') || rest.trim().is_empty())
+                    }),
+                    "existing justification: update it in the source editor"
+                );
+            }
+        }
         comment = if explanation.is_empty() {
             format!(
                 "{prefix}// {}: {newline}",
@@ -1224,6 +1245,50 @@ mod tests {
             assert!(edited.starts_with("fn earlier() {}\r\n    //"));
             assert!(edited.contains(&format!("Checked λ.\r\n{attributes}")));
             assert!(edited.ends_with("    fn sample() {}\r\n"));
+        }
+    }
+
+    #[test]
+    fn justification_appends_to_prose_but_never_duplicates_its_marker() {
+        for newline in ["\n", "\r\n"] {
+            for comments in [
+                "// Alignment is non-zero.\n// Therefore the remainder cannot panic.",
+                "// SAFETY: Existing explanation.",
+                "// ALLOCATED: A different marker.",
+                "// ALLOC: Existing explanation.",
+                "// ALLOC\n// Existing explanation.",
+                "// ALLOC: One.\n// ALLOC: Two.",
+            ] {
+                let source = format!("fn f() {{\n{comments}\n#[allow(unused)]\nallocate();\n}}\n")
+                    .replace('\n', newline);
+                let start = source.find("allocate();").unwrap();
+                let location = Location {
+                    path: "lib.rs".into(),
+                    source_id: "id".into(),
+                    hash: content_hash(source.as_bytes()),
+                    start,
+                    end: start + "allocate();".len(),
+                    available: true,
+                };
+                let result = documentation_edit(
+                    &source,
+                    &location,
+                    "justification",
+                    &metadata(location.clone()),
+                    "Checked λ.\nDetails.",
+                );
+                if comments.contains("// ALLOC:") || comments.contains("// ALLOC\n") {
+                    assert!(result.is_err());
+                } else {
+                    assert_eq!(
+                        result.unwrap(),
+                        source.replace(
+                            "#[allow(unused)]",
+                            &format!("// ALLOC:{newline}// Checked λ.{newline}// Details.{newline}#[allow(unused)]")
+                        )
+                    );
+                }
+            }
         }
     }
 

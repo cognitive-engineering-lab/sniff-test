@@ -132,6 +132,37 @@ fn successful_source_saves_update_shared_traces_and_remove_deleted_progress() {
 }
 
 #[test]
+fn appended_justification_is_recognized_and_removable() {
+    for newline in ["\n", "\r\n"] {
+        let source = "pub fn work() {\n    // Alignment is non-zero.\n    // Existing explanation λ.\n    #[allow(unused)]\n    danger();\n}\n".replace('\n', newline);
+        let (_root, mut session, path) = setup(&source);
+        let buffer = session.buffer(&path).unwrap();
+        let mut request = SourceEditorTarget {
+            id: "one".into(),
+            action: "justification".into(),
+            revision: buffer.revision,
+            generation: session.analysis.generation,
+        };
+        let editor = session.open_source_editor(request.clone()).unwrap();
+        let saved = session
+            .commit_source_editor(
+                &editor.token,
+                Some("// PANIC:\n// The divisor is non-zero.".into()),
+            )
+            .unwrap();
+        session.refresh_audit_progress();
+        assert!(session.audit_progress("one").justified);
+        assert!(!session.audit_progress("other-effect").justified);
+        request.revision = saved.buffer.revision;
+        let editor = session.open_source_editor(request).unwrap();
+        let removed = session.commit_source_editor(&editor.token, None).unwrap();
+        assert_eq!(removed.buffer.content, source);
+        session.refresh_audit_progress();
+        assert!(!session.audit_progress("one").justified);
+    }
+}
+
+#[test]
 fn blank_sections_other_effects_and_comment_like_literals_do_not_count() {
     for source in [
         "/// # Panics\n///\npub fn work() {\n // PANIC:\n danger();\n}\n",
