@@ -179,6 +179,25 @@ impl Session {
         results_revision: u64,
         expected_hash: Option<&str>,
     ) -> Result<ObligationDetail> {
+        self.set_obligation_trust(selected, results_revision, expected_hash, true)
+    }
+
+    pub fn untrust_obligation(
+        &mut self,
+        selected: &str,
+        results_revision: u64,
+        expected_hash: Option<&str>,
+    ) -> Result<ObligationDetail> {
+        self.set_obligation_trust(selected, results_revision, expected_hash, false)
+    }
+
+    fn set_obligation_trust(
+        &mut self,
+        selected: &str,
+        results_revision: u64,
+        expected_hash: Option<&str>,
+        trusted: bool,
+    ) -> Result<ObligationDetail> {
         ensure!(!self.analysis.running, "analysis is running");
         ensure!(
             results_revision == self.analysis.results_revision,
@@ -186,7 +205,7 @@ impl Session {
         );
         let detail = self.obligation_detail(selected)?;
         // A retry after a successful write is harmless, including when a broader pattern covers it.
-        if detail.trusted {
+        if trusted && detail.trusted {
             return Ok(detail);
         }
         ensure!(
@@ -231,8 +250,20 @@ impl Session {
             .context("ignored-namespaces must be an array")?;
         // Namespace display paths can contain glob metacharacters, e.g. array types.
         let pattern = globset::escape(&detail.namespace);
-        if !patterns.iter().any(|p| p.as_str() == Some(&pattern)) {
-            patterns.push(pattern);
+        if trusted {
+            if !patterns.iter().any(|p| p.as_str() == Some(&pattern)) {
+                patterns.push(pattern);
+            }
+        } else {
+            ensure!(
+                patterns.iter().any(|p| p.as_str() == Some(&pattern)),
+                "no exact trust entry exists for this function; refresh the obligation"
+            );
+            for index in (0..patterns.len()).rev() {
+                if patterns.get(index).and_then(toml_edit::Value::as_str) == Some(&pattern) {
+                    patterns.remove(index);
+                }
+            }
         }
         let content = config.to_string();
         // Validate before writing; reject malformed effect tables without disturbing the file.
@@ -362,6 +393,82 @@ mod tests {
             )
             .unwrap();
         assert_eq!(fs::read_to_string(&path).unwrap(), saved);
+        assert!(
+            session
+                .untrust_obligation(
+                    &detail.key,
+                    detail.results_revision,
+                    detail.config_hash.as_deref()
+                )
+                .is_err()
+        );
+        let removed = session
+            .untrust_obligation(
+                &trusted.key,
+                trusted.results_revision,
+                trusted.config_hash.as_deref(),
+            )
+            .unwrap();
+        assert!(!removed.trusted);
+        let after = fs::read_to_string(&path).unwrap();
+        assert!(after.contains("# keep me") && after.contains("# keep too"));
+        assert!(!after.contains("dep::push"));
+        assert!(after.contains("core::ub_checks::assert_unsafe_precondition"));
+    }
+
+    #[test]
+    fn untrust_preserves_explicit_empty_array_and_escaped_paths() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut session = super::super::tests::session(dir.path());
+        session.analysis.findings = vec![finding("a", "custom", "dep::[u8]::work", "dep/lib.rs")];
+        let group = group_obligations(&[&session.analysis.findings[0]], "").remove(0);
+        let detail = session.obligation_detail(&group.key).unwrap();
+        let trusted = session
+            .trust_obligation(
+                &detail.key,
+                detail.results_revision,
+                detail.config_hash.as_deref(),
+            )
+            .unwrap();
+        assert!(trusted.trusted);
+        assert!(
+            session
+                .untrust_obligation(
+                    &trusted.key,
+                    trusted.results_revision + 1,
+                    trusted.config_hash.as_deref()
+                )
+                .is_err()
+        );
+        session.analysis.running = true;
+        assert!(
+            session
+                .untrust_obligation(
+                    &trusted.key,
+                    trusted.results_revision,
+                    trusted.config_hash.as_deref()
+                )
+                .is_err()
+        );
+        session.analysis.running = false;
+        let removed = session
+            .untrust_obligation(
+                &trusted.key,
+                trusted.results_revision,
+                trusted.config_hash.as_deref(),
+            )
+            .unwrap();
+        assert!(!removed.trusted);
+        let config: toml::Value = fs::read_to_string(dir.path().join("sniff-test.toml"))
+            .unwrap()
+            .parse()
+            .unwrap();
+        assert!(
+            config["custom"]["ignored-namespaces"]
+                .as_array()
+                .unwrap()
+                .is_empty()
+        );
     }
 
     #[test]

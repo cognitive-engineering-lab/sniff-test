@@ -38,7 +38,7 @@ type Finding = {navigation?:FindingNavigation;id:string; crate_name:string; effe
 type AuditProgress = {justified:boolean;propagated:boolean};
 type GroupProgress = {handled:number;total:number;justified:number;propagated:number};
 type Summary = {progress?:AuditProgress;id:string; crate_name:string; root:string; reason:string; level:string; effect:string; class:string; path?:string};
-type FindingGroup = {progress?:GroupProgress;key:string; label?:string; path?:string; count:number; items?:Summary[]; loading?:boolean; loadError?:string};
+type FindingGroup = {trusted?:boolean;progress?:GroupProgress;key:string; label?:string; path?:string; count:number; items?:Summary[]; loading?:boolean; loadError?:string};
 type Status = {results_revision?:number;audit_revision?:number;override_revision?:number; override_error?:string; generation:number; running:boolean; stale:boolean; overrides_changed?:boolean; status:string; count:number; log:string};
 const token = location.hash.slice(1) || sessionStorage.getItem('audit-token') || '';
 if (token) { sessionStorage.setItem('audit-token', token); history.replaceState(null, '', location.pathname); }
@@ -56,7 +56,6 @@ class DocumentationPrompt extends WidgetType {
     const trust=this.action==='trust';
     const label=trust?(this.added?'Trusted':'Trust this function'):this.added?(justify?'Justified!':'Obligation propagated!'):this.override?(justify?'Justify via override':'Propagate obligations via override'):(justify?'Justify here':'Propagate to callers');
     button.textContent=(trust?'✓ ':justify?'✓ ':'↑ ')+label;
-    if(trust&&this.added)button.disabled=true;
     if(this.added)button.classList.add('completed');
     button.setAttribute('aria-label',label);
     button.addEventListener('click',this.run);
@@ -256,6 +255,8 @@ function AuditMarks({progress,group=false}:{progress?:AuditProgress|GroupProgres
 }
 
 function App() {
+  const [trustReview,setTrustReview]=useState<Obligation>();
+  const [confirmUntrust,setConfirmUntrust]=useState(false);
   const [leftWidth,setLeftWidth]=useState(285),[rightWidth,setRightWidth]=useState(315);
   const [root,setRoot]=useState(''); const [status,setStatus]=useState<Status>({generation:0,running:false,stale:true,status:'connecting',count:0,log:''});
   const [groups,setGroups]=useState<FindingGroup[]>([]),[total,setTotal]=useState(0),[totalGroups,setTotalGroups]=useState(0),[effects,setEffects]=useState<string[]>([]);
@@ -453,11 +454,15 @@ function App() {
     }catch(e){if(sequence===openSequence.current)throw e;}
     finally{if(sequence===openSequence.current)setOpening(false);}
   }
-  async function trustObligation(){
-    if(!obligation||obligation.trusted)return;
+  async function trustObligation(remove=false){
+    const obligation=trustReview;
+    if(!obligation)return;
     await saver.current!.flush();
-    const result=await api('obligation/trust',{key:obligation.key,results_revision:obligation.results_revision,config_hash:obligation.config_hash??null});
+    const result=await api(remove?'obligation/untrust':'obligation/trust',{key:obligation.key,results_revision:obligation.results_revision,config_hash:obligation.config_hash??null});
     setObligation(current=>current&&current.key===result.obligation.key?{...result.obligation,count:current.count}:current);
+    setGroups(groups=>groups.map(group=>group.key===result.obligation.key?{...group,trusted:result.obligation.trusted}:group));
+    setTrustReview(undefined);
+    setConfirmUntrust(false);
     acceptStatus(result.status);
   }
   async function choose(item:Summary){
@@ -626,9 +631,9 @@ function App() {
       <input aria-label={obligationMode?'Search obligations':inverted?'Search effect sources':'Search findings'} placeholder={obligationMode?'Search functions, obligations…':inverted?'Search effect sources…':'Search files, roots, crates…'} value={query} onChange={e=>{setQuery(e.target.value);resetPages();}}/>
       <div className="filters"><select aria-label="Effect" value={effect} onChange={e=>{setEffect(e.target.value);resetPages();}}><option value="">All effects</option>{effects.map(e=><option key={e}>{e}</option>)}</select><select aria-label="Severity" value={level} onChange={e=>{setLevel(e.target.value);resetPages();}}><option value="">All levels</option><option>warn</option><option>deny</option></select></div>
       {!obligationMode&&<select aria-label="Finding class" value={kind} onChange={e=>{setKind(e.target.value);resetPages();}}><option value="">All finding classes</option>{['concrete-operation','concrete-invocation','documented-obligation','undocumented-invocation','unresolved-call-target','analysis-incomplete','ambiguous-marker','ambiguous-requirement'].map(k=><option key={k}>{k}</option>)}</select>}
-      <div className="finding-list" ref={listElement} aria-busy={listLoading||listResult!==listKey} onScroll={e=>{if(listResult===listKey)listScroll.current[modeIndex]=e.currentTarget.scrollTop;}}>{(listLoading||listResult!==listKey)&&<div className="loading" role="status">Loading {obligationMode?'obligations':inverted?'effect sources':'files'}…</div>}{(listResult===listKey?groups:[]).map(({key, label,path:sourcePath,items:rows,count,progress,loading,loadError},index)=>{
+      <div className="finding-list" ref={listElement} aria-busy={listLoading||listResult!==listKey} onScroll={e=>{if(listResult===listKey)listScroll.current[modeIndex]=e.currentTarget.scrollTop;}}>{(listLoading||listResult!==listKey)&&<div className="loading" role="status">Loading {obligationMode?'obligations':inverted?'effect sources':'files'}…</div>}{(listResult===listKey?groups:[]).map(({key, label,path:sourcePath,items:rows,count,progress,trusted,loading,loadError},index)=>{
         const path=label||key;
-        if(obligationMode)return <button type="button" className={'group obligation-row '+(obligation?.key===key?'selected':'')} key={key} onClick={()=>act(()=>chooseObligation({key,label,count}))}><span className="group-path">{label}</span><span className="group-count" aria-label={`${count} reports`}>{count}</span></button>;
+        if(obligationMode)return <button type="button" className={'group obligation-row '+(obligation?.key===key?'selected':'')} key={key} onClick={()=>act(()=>chooseObligation({key,label,count}))}><span className="group-path">{label}</span>{trusted&&<span className="audit-progress"><span role="img" aria-label="Function trusted" title="Trust saved; reanalyze to update findings">✓</span></span>}<span className="group-count" aria-label={`${count} reports`}>{count}</span></button>;
         const isOpen=(inverted?sourceExpanded:expanded).has(key),listId=`${inverted?'source':'file'}-findings-${index}`;
         return <section key={key}><button type="button" className="group" title={path} aria-expanded={isOpen} aria-controls={listId} onClick={()=>(inverted?setSourceExpanded:setExpanded)(previous=>{const next=new Set(previous);if(next.has(key))next.delete(key);else next.add(key);return next;})}><span className="group-chevron" aria-hidden="true">{isOpen?'▾':'▸'}</span><span className="group-path">{sourcePath?path.replace(sourcePath,()=>displaySourcePath(sourcePath,root)):displaySourcePath(path,root)}</span><AuditMarks progress={progress} group/><span className="group-count" aria-label={`${count} ${inverted?'reports':'effects'}`} >{count}</span></button><div id={listId} hidden={!isOpen}>{isOpen&&(rows||[]).map(item=><button className={'finding '+(selected?.id===item.id?'selected':'')} key={item.id} onClick={()=>act(()=>choose(item))}><span className="finding-label"><span className="badge">{item.effect||item.class}</span><AuditMarks progress={item.progress}/></span><strong>{item.root||item.crate_name}</strong><small>{item.reason}</small></button>)}{isOpen&&loading&&<div className="loading" role="status">Loading findings…</div>}{isOpen&&loadError&&<div role="alert">{loadError}<button onClick={()=>void loadRows(key)}>Retry</button></div>}{isOpen&&rows&&rows.length<count&&<button className="load-more" disabled={loading} onClick={()=>void loadRows(key,true)}>Load more ({rows.length} of {count})</button>}</div></section>;
       })}{listResult===listKey&&listFailure&&<div role="alert">{listFailure}<button onClick={()=>setListRetry(value=>value+1)}>Retry findings</button></div>}{listResult===listKey&&!listLoading&&!listFailure&&!groups.length&&<div className="empty">{status.running?'Analyzing the workspace…':status.status==='complete'?'No matching findings.':'No findings available. Check analysis output.'}</div>}</div>
@@ -636,8 +641,8 @@ function App() {
     </aside><PanelDivider side="left" size={leftWidth} onResize={setLeftWidth}/></div>
     <main aria-busy={opening}><div className="toolbar"><button disabled={!nav.length||busy} onClick={()=>act(async()=>{const previous=nav[nav.length-1];if(await open(previous,false))setNav(n=>n.slice(0,-1));})}>← Back</button><span className="filename" title={buffer?.path}>{buffer?displaySourcePath(buffer.path,root):'Source workspace'}</span>{opening&&<span className="navigation-loading" role="status">Opening source…</span>}{buffer?.writable&&<span className="save-status" role="status" aria-label="Source save status">{saveState.status==='failed'?'Save failed':saveState.status==='saving'?'Saving…':saveState.status==='pending'?'Unsaved changes':'Saved'}</span>}</div>
       {saveState.status==='failed'&&<div className="error source-save-error" role="alert"><span>{saveState.error}</span><button disabled={busy} onClick={()=>act(()=>saver.current!.retry())}>Retry</button><button disabled={busy} onClick={()=>act(()=>navigator.clipboard.writeText(saver.current!.text))}>Copy edits</button><button disabled={busy} onClick={()=>act(reloadSource)}>Reload file</button></div>}
-      {obligationMode&&!obligationSource?<div className="obligation-fallback">{obligation?<><h2>{obligation.namespace}</h2>{obligation.documentation?<ObligationDocumentationPanel documentation={obligation.documentation}/>:<p>Obligation documentation is unavailable.</p>}<p>Verified function source is unavailable.</p><div className="inline-prompt"><button className={obligation.trusted?'completed':''} aria-label={obligation.trusted?'Trusted':'Trust this function'} disabled={busy||status.running||startingAnalysis||obligation.trusted} onClick={()=>act(trustObligation)}>✓ {obligation.trusted?'Trusted':'Trust this function'}</button><span>Suppress this function’s obligation for {obligation.effect}.</span></div></>:<p>Select a documented obligation.</p>}</div>:buffer?<><div className="buffer-state"><span className="navigation-status">{navigationStatus}</span>{buffer.writable?'Workspace source':'Read-only dependency'}{(status.running||startingAnalysis)&&buffer.writable?' · Editing paused during analysis':''}</div>
-      <Editor hideDocumentation={obligationMode} trustPrompt={obligationMode&&obligation?.declaration?{location:obligation.declaration,trusted:obligation.trusted,run:()=>{void act(trustObligation);}}:undefined} locked={obligationMode||status.running||startingAnalysis||documentationEditor?.mode==='source'} reloadKey={reloadKey} onFlush={flushSource} navigation={navigation} onReady={editorReady} buffer={buffer} location={target} onChange={changeSource} onSelectionChange={setEditorSelection} finding={selected} enabled={!status.running&&!startingAnalysis&&(!obligationMode||!busy)} onDocumentation={t=>act(()=>openDocumentation(t))}/>
+      {obligationMode&&!obligationSource?<div className="obligation-fallback">{obligation?<><h2>{obligation.namespace}</h2>{obligation.documentation?<ObligationDocumentationPanel documentation={obligation.documentation}/>:<p>Obligation documentation is unavailable.</p>}<p>Verified function source is unavailable.</p><div className="inline-prompt"><button className={obligation.trusted?'completed':''} aria-label={obligation.trusted?'Trusted':'Trust this function'} disabled={busy||status.running||startingAnalysis} onClick={()=>{setError('');setConfirmUntrust(false);setTrustReview(obligation);}}>✓ {obligation.trusted?'Trusted':'Trust this function'}</button><span>Suppress this function’s obligation for {obligation.effect}.</span></div></>:<p>Select a documented obligation.</p>}</div>:buffer?<><div className="buffer-state"><span className="navigation-status">{navigationStatus}</span>{buffer.writable?'Workspace source':'Read-only dependency'}{(status.running||startingAnalysis)&&buffer.writable?' · Editing paused during analysis':''}</div>
+      <Editor hideDocumentation={obligationMode} trustPrompt={obligationMode&&obligation?.declaration?{location:obligation.declaration,trusted:obligation.trusted,run:()=>{setError('');setConfirmUntrust(false);setTrustReview(obligation);}}:undefined} locked={obligationMode||status.running||startingAnalysis||documentationEditor?.mode==='source'} reloadKey={reloadKey} onFlush={flushSource} navigation={navigation} onReady={editorReady} buffer={buffer} location={target} onChange={changeSource} onSelectionChange={setEditorSelection} finding={selected} enabled={!status.running&&!startingAnalysis&&(!obligationMode||!busy)} onDocumentation={t=>act(()=>openDocumentation(t))}/>
       <footer><small>{obligationMode?'Trust saves to the effect’s ignored namespaces. Reanalyze to update findings.':buffer.writable?'Changes save automatically after a short pause. Reanalyze to update findings.':savedOverride?`Saved to ${savedOverride} · Reanalyze to update findings`:'Save in the documentation popup writes directly to an override file.'}</small></footer></>:null}
 
     </main>
@@ -650,6 +655,17 @@ function App() {
       {unsaved||status.stale?<p className="hint">Findings are outdated. Reanalyze to refresh them.</p>:null}
       <h3>Call trace</h3><ol className="trace" reversed={inverted}>{traceEntries.map(({step,i})=><li key={i} value={i+1}><button className={highlightedTraceIndex===i?'active':''} aria-current={highlightedTraceIndex===i?'location':undefined} disabled={!step.location?.available} onClick={()=>act(()=>navigateFinding(i))}>{step.caller}<span>{step.kind} → {step.target||'effect operation'}</span><small title={step.location?.path}>{!step.location?'':displaySourcePath(step.location.path,root)}{step.location?.line?':'+step.location.line:''}{!step.location?.available?' · source unavailable':step.location.approximate?' · approximate':''}</small></button></li>)}</ol></div>
     </>:<div className="empty">Select a finding to inspect its contract and call trace.</div>}</aside></div></div>
+    {trustReview&&<DocumentationPanel source title="Function trust" step={confirmUntrust?'remove':'review'} onClose={()=>{if(!busy)setTrustReview(undefined);}}>
+      {error&&<p role="alert">{error}</p>}
+      {trustReview.documentation?<ObligationDocumentationPanel documentation={trustReview.documentation}/>:<p>Obligation documentation is unavailable.</p>}
+      {!trustReview.documentation?.prototype&&<p>Function prototype is unavailable.</p>}
+      {confirmUntrust?<>
+        <p>Remove trust for <strong>{trustReview.namespace}</strong> for {trustReview.effect} from ignored-namespaces? Reanalyze to update findings.</p>
+        <div className="modal-actions"><button disabled={busy} onClick={()=>setConfirmUntrust(false)}>Cancel</button><button disabled={busy||status.running||startingAnalysis} onClick={()=>act(()=>trustObligation(true))}>Confirm removal</button></div>
+      </>:<>
+        <div className="modal-actions"><button disabled={busy} onClick={()=>setTrustReview(undefined)}>Close</button><button className={trustReview.trusted?undefined:'primary'} disabled={busy||status.running||startingAnalysis} onClick={()=>trustReview.trusted?setConfirmUntrust(true):void act(()=>trustObligation())}>{trustReview.trusted?'Cancel trust':'Trust this function'}</button></div>
+      </>}
+    </DocumentationPanel>}
     {documentationEditor&&<DocumentationPanel source={documentationEditor.mode==='source'} title={createFile?'Create override file':documentationEditor.mode==='source'?(documentationEditor.action==='justification'?'Justify here':'Propagate to callers'):documentationEditor.action==='justification'?'Justify via override':'Propagate obligations via override'} step={createFile?'create':confirmRemoval?'remove':'edit'} onClose={()=>{if(!busy){if(createFile)setCreateFile(false);else setDocumentationEditor(undefined);}}}>
       {!createFile?<>
       {error&&<p role="alert">{error}</p>}

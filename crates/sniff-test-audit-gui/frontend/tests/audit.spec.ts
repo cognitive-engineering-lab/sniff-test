@@ -1636,6 +1636,9 @@ test('invert obligation aggregates callsites and records effect-specific trust',
   await expect(page.locator('.trace')).toHaveCount(0);
   await page.screenshot({path:join(repo,'target/audit-invert-obligation.png'),fullPage:true});
   await page.getByRole('button',{name:'Trust this function',exact:true}).click();
+  expect(await readFile(join(dir,'sniff-test.toml'),'utf8')).not.toContain('audit_browser_fixture::contracted');
+  await page.getByRole('dialog',{name:'Function trust',exact:true}).getByRole('button',{name:'Trust this function',exact:true}).click();
+  await expect(page.getByRole('dialog',{name:'Function trust',exact:true})).toHaveCount(0);
   await expect(page.getByRole('button',{name:'Trusted',exact:true})).toBeVisible();
   const config=await readFile(join(dir,'sniff-test.toml'),'utf8');
   expect(config).toContain('# preserve config comment');
@@ -1669,7 +1672,26 @@ test('invert obligation keeps trust available without verified source',async({pa
   await expect(page.getByLabel('Function prototype',{exact:true})).toContainText('contracted');
   await expect(page.getByRole('button',{name:'Trust this function',exact:true})).toBeVisible();
   await page.getByRole('button',{name:'Trust this function',exact:true}).click();
-  await expect(page.getByRole('button',{name:'Trusted',exact:true})).toBeDisabled();
+  await page.getByRole('dialog',{name:'Function trust',exact:true}).getByRole('button',{name:'Trust this function',exact:true}).click();
+  await expect(page.getByRole('dialog',{name:'Function trust',exact:true})).toHaveCount(0);
+  await expect(page.locator('.obligation-row').getByRole('img',{name:'Function trusted'})).toBeVisible();
+  await page.reload();
+  await page.getByRole('button',{name:'Invert obligation',exact:false}).click();
+  await expect(page.locator('.obligation-row').getByRole('img',{name:'Function trusted'})).toBeVisible();
+  await page.locator('.obligation-row').click();
+  await expect(page.getByRole('button',{name:'Trusted',exact:true})).toBeEnabled();
+  await page.getByRole('button',{name:'Trusted',exact:true}).click();
+  const dialog=page.getByRole('dialog',{name:'Function trust',exact:true});
+  await expect(dialog.getByLabel('Function prototype',{exact:true})).toContainText('contracted');
+  await dialog.getByRole('button',{name:'Cancel trust',exact:true}).click();
+  await dialog.getByRole('button',{name:'Cancel',exact:true}).click();
+  expect(await readFile(join(dir,'sniff-test.toml'),'utf8')).toContain('audit_browser_fixture::contracted');
+  await dialog.getByRole('button',{name:'Cancel trust',exact:true}).click();
+  await dialog.getByRole('button',{name:'Confirm removal',exact:true}).click();
+  await expect(dialog).toHaveCount(0);
+  await expect(page.getByRole('button',{name:'Trust this function',exact:true})).toBeVisible();
+  expect(await readFile(join(dir,'sniff-test.toml'),'utf8')).not.toContain('audit_browser_fixture::contracted');
+  await expect(page.locator('.obligation-row').getByRole('img',{name:'Function trusted'})).toHaveCount(0);
 });
 
 test('invert obligation combines Vec push instances and trusts its documented panic obligation',async({page})=>{
@@ -1685,6 +1707,8 @@ test('invert obligation combines Vec push instances and trusts its documented pa
   await push.click();
   await expect(page.getByRole('button',{name:'Trust this function',exact:true})).toBeVisible();
   await page.getByRole('button',{name:'Trust this function',exact:true}).click();
+  await page.getByRole('dialog',{name:'Function trust',exact:true}).getByRole('button',{name:'Trust this function',exact:true}).click();
+  await expect(page.getByRole('dialog',{name:'Function trust',exact:true})).toHaveCount(0);
   await expect(page.getByRole('button',{name:'Trusted',exact:true})).toBeVisible();
   expect(await readFile(join(dir,'sniff-test.toml'),'utf8')).toContain('::push');
   await page.getByRole('button',{name:'Reanalyze',exact:false}).click();

@@ -95,6 +95,7 @@ fn router(app: App) -> Router {
         .route("/finding", get(finding))
         .route("/obligation", get(obligation))
         .route("/obligation/trust", post(trust_obligation))
+        .route("/obligation/untrust", post(untrust_obligation))
         .route("/group-items", get(group_items))
         .route("/buffer", get(buffer))
         .route("/source/save", post(save_source))
@@ -303,6 +304,13 @@ async fn findings(State(app): State<App>, Query(filter): Query<Filter>) -> ApiRe
             // Saved audit contributions change badges, not membership or ranking.
             let list = Arc::make_mut(&mut entry.1);
             for group in &mut list.groups {
+                if filter.group_by == GroupBy::Obligation {
+                    group["trusted"] = json!(
+                        session
+                            .obligation_detail(group["key"].as_str().unwrap())?
+                            .trusted
+                    );
+                }
                 annotate_group_progress(group, &session);
             }
             list.progress_revision = (revision.1, revision.2);
@@ -362,8 +370,13 @@ async fn findings(State(app): State<App>, Query(filter): Query<Filter>) -> ApiRe
                 filter.q.as_deref().unwrap_or_default(),
             )
             .into_iter()
-            .map(|g| serde_json::to_value(g).unwrap())
-            .collect()
+            .map(|g| {
+                let trusted = session.obligation_detail(&g.key)?.trusted;
+                let mut value = serde_json::to_value(g)?;
+                value["trusted"] = json!(trusted);
+                Ok(value)
+            })
+            .collect::<anyhow::Result<Vec<_>>>()?
         } else if inverted {
             group_effect_sources(&matches, filter.q.as_deref().unwrap_or_default())
         } else {
@@ -619,6 +632,18 @@ async fn trust_obligation(
 ) -> ApiResult {
     let mut session = app.session.lock().unwrap();
     let detail = session.trust_obligation(
+        &request.key,
+        request.results_revision,
+        request.config_hash.as_deref(),
+    )?;
+    Ok(Json(json!({"obligation":detail,"status":status(&session)})))
+}
+async fn untrust_obligation(
+    State(app): State<App>,
+    Json(request): Json<TrustObligation>,
+) -> ApiResult {
+    let mut session = app.session.lock().unwrap();
+    let detail = session.untrust_obligation(
         &request.key,
         request.results_revision,
         request.config_hash.as_deref(),
