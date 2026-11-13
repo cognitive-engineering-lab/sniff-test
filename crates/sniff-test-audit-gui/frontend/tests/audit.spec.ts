@@ -952,6 +952,45 @@ for(const width of [1440,320]) {
   });
 }
 
+for(const dependency of [false,true])for(const invocation of [false,true])for(const nested of [false,true]) {
+  test(`${dependency?'dependency':'local'} ${nested?'nested ':''}closure offers only justification for ${invocation?'documented call':'direct effect'}`,async({page})=>{
+    await stop();
+    const dependencyDir=dependency?await mkdtemp(join(tmpdir(),'sniff-closure-dep-')):undefined;
+    const operation=invocation?'danger(flag);':'assert!(flag);';
+    const body=nested?`    let outer = || {\n        let inner = || {\n            ${operation}\n        };\n        inner();\n    };\n    outer();`:`    let run = || {\n        ${operation}\n    };\n    run();`;
+    const source=(invocation?'/// # Panics\n/// The flag must be true.\nfn danger(flag: bool) { assert!(flag); }\n':'')+`pub fn entry(flag: bool) {\n${body}\n}\n`;
+    const sourcePath=join(dependencyDir??dir,'src/lib.rs');
+    try {
+      if(dependencyDir){
+        await mkdir(join(dependencyDir,'src'));
+        await writeFile(join(dependencyDir,'Cargo.toml'),'[package]\nname="closure-dep"\nversion="0.1.0"\nedition="2024"\n');
+        await writeFile(join(dir,'Cargo.toml'),`[package]\nname="audit-browser-fixture"\nversion="0.1.0"\nedition="2024"\n[workspace]\n[dependencies]\nclosure-dep={path=${JSON.stringify(dependencyDir)}}\n`);
+        await writeFile(join(dir,'src/lib.rs'),'pub fn entry(flag: bool) { closure_dep::entry(flag); }\n');
+      }
+      await writeFile(sourcePath,source);await launch();await selectFinding(page);
+      await expect(page.locator('.cm-activeLine')).toContainText(operation);
+      for(const label of ['Propagate to callers','Propagate obligations via override'])await expect(page.getByRole('button',{name:label,exact:true})).toHaveCount(0);
+      const prompt=page.getByRole('button',{name:dependency?'Justify via override':'Justify here',exact:true});
+      await expect(prompt).toBeVisible();await prompt.click();
+      const dialog=page.getByRole('dialog');
+      await dialog.getByLabel(dependency?'Override documentation':'Source documentation',{exact:true}).fill('// PANIC: The caller validates the flag.');
+      await dialog.getByRole('button',{name:'Save',exact:true}).click();
+      if(dependency)await dialog.getByRole('button',{name:'Create & save',exact:true}).click();
+      await expect(page.getByRole('button',{name:'Justified!',exact:true})).toBeVisible();
+      if(dependency){
+        expect(await readFile(sourcePath,'utf8')).toBe(source);
+        expect(await readFile(join(dir,'sniff-test-overrides.toml'),'utf8')).toContain('The caller validates the flag.');
+      }else {
+        const indent=nested?'            ':'        ';
+        expect(await readFile(sourcePath,'utf8')).toBe(source.replace(indent+operation,indent+'// PANIC: The caller validates the flag.\n'+indent+operation));
+      }
+      await page.getByRole('button',{name:'↻ Reanalyze',exact:true}).click();
+      await expect(page.locator('.status')).toHaveText('complete');
+      await expect(page.locator('.finding-list')).toContainText('No matching findings.');
+    } finally {await stop();if(dependencyDir)await rm(dependencyDir,{recursive:true,force:true});}
+  });
+}
+
 test('override prompts remain usable after source autosaves make the analysis stale',async({page})=>{
   const dependency=await mkdtemp(join(tmpdir(),'sniff-stale-override-'));
   try {

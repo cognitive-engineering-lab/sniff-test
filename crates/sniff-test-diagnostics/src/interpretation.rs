@@ -2426,7 +2426,7 @@ impl SourceResolver<'_, '_> {
             .facts
             .definitions
             .iter()
-            .find(|d| d.definition == hash)?;
+            .find(|d| d.definition == hash);
         let version = artifact.artifact.package_version.as_ref()?;
         // The reporting crate can also contain a mirror of this file with no
         // logical path. Only the owning artifact supplies package provenance.
@@ -2439,7 +2439,9 @@ impl SourceResolver<'_, '_> {
         let raw = self.semantic_sources.borrow();
         let text = raw.get(&source.filename)?.raw.as_ref()?;
         let line = if action == "obligation" {
-            definition.start_line
+            // Closures have no declaration to attach a contract to. Their
+            // operations and calls can still be justified at the source site.
+            definition?.start_line
         } else {
             u32::try_from(
                 text[..location.start]
@@ -2460,7 +2462,11 @@ impl SourceResolver<'_, '_> {
                     .markdown_for_candidates(&body.attributes.namespace_candidates)
                     .map(str::to_owned)
             })
-            .unwrap_or_else(|| definition.documentation.clone());
+            .unwrap_or_else(|| {
+                definition
+                    .map(|d| d.documentation.clone())
+                    .unwrap_or_default()
+            });
         Some(sniff_test_report::OverrideTarget {
             action: action.into(),
             location,
