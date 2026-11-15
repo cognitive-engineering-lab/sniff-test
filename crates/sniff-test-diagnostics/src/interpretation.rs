@@ -2496,7 +2496,7 @@ impl SourceResolver<'_, '_> {
         Option<sniff_test_report::Location>,
         Option<sniff_test_report::Location>,
     ) {
-        use sniff_test_core::source_markers::{MarkerProbe, immediate_statement_span};
+        use sniff_test_core::source_markers::justification_attachment_span;
         let Some(owner) = self.tcx.hir_body_owners().find(|id| {
             StableDefPathHash::from_def_id(self.tcx, id.to_def_id())
                 == finding.function.def_path_hash
@@ -2520,10 +2520,18 @@ impl SourceResolver<'_, '_> {
         let Some(span) = self.resolve(Some(range)).0 else {
             return (enclosing, None);
         };
-        let statement = match immediate_statement_span(self.tcx, owner, span) {
-            MarkerProbe::Present(statement) => statement,
-            _ => span,
-        };
+        let headers = self
+            .justification_headers
+            .iter()
+            .map(String::as_str)
+            .collect::<Vec<_>>();
+        let statement = justification_attachment_span(
+            self.tcx,
+            owner,
+            span,
+            finding.effect.justification,
+            &headers,
+        );
         let file = self.tcx.sess.source_map().lookup_source_file(span.lo());
         if statement.lo() < file.start_pos || statement.hi() > file.end_position() {
             return (enclosing, None);

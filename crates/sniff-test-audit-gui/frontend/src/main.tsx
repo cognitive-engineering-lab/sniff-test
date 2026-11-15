@@ -168,7 +168,7 @@ function Editor({trustPrompt, hideDocumentation=false, buffer, locked, reloadKey
         documentationRef.current(t);
       },!!t.selector,added?'Override saved':'');
       const candidate={position,action:t.action,external:!!t.selector,widget};
-      if(!candidate.external&&candidate.action==='justification'&&!sourcePromptAttachments(buffer.content,[candidate])[0].insertable)manualTargets.current.actions.add(candidate.action);
+      if(!candidate.external&&candidate.action==='justification'&&!sourcePromptAttachments(view.state.doc.toString(),[candidate])[0].insertable)manualTargets.current.actions.add(candidate.action);
       return {...candidate,manual:manualTargets.current.actions.has(candidate.action)};
     });
     type Candidate = typeof candidates[number];

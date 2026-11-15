@@ -3,7 +3,7 @@
 use reachability::{ReachabilityEdge, ReachabilityGraph, ReachabilityNodeKind};
 use rustc_hir::def_id::LocalDefId;
 use rustc_middle::thir::visit::{self, Visitor};
-use rustc_middle::thir::{Block, Stmt, StmtKind, Thir};
+use rustc_middle::thir::{Block, Expr, ExprKind, Stmt, StmtKind, Thir};
 use rustc_middle::ty::TyCtxt;
 use rustc_span::{ExpnId, SourceFile, Span};
 
@@ -281,10 +281,63 @@ fn immediate_statement_marker_block(
     syntax: MarkerSyntax<'_>,
     probing: MarkerProbing,
 ) -> MarkerProbe<EffectMarkerBlock> {
-    match immediate_statement_span(tcx, owner, target) {
+    match statement_marker_span(tcx, owner, target) {
         MarkerProbe::Present(span) => span_marker_block_with(tcx, span, syntax, probing),
         MarkerProbe::VerifiedAbsent => MarkerProbe::VerifiedAbsent,
         MarkerProbe::Unverified(reason) => MarkerProbe::Unverified(reason),
+    }
+}
+
+/// A statement marker may cover an aggregate header on its own line. When
+/// the first member shares that header's line, its marker belongs to that
+/// member, rather than to later siblings.
+fn statement_marker_span(tcx: TyCtxt<'_>, owner: LocalDefId, target: Span) -> MarkerProbe<Span> {
+    immediate_statement_span_with(tcx, owner, target, true)
+}
+
+/// Source editor attachment, using the same statement fallback as analysis.
+pub fn justification_attachment_span(
+    tcx: TyCtxt<'_>,
+    owner: LocalDefId,
+    target: Span,
+    justification: &'static str,
+    competing_justifications: &[&str],
+) -> Span {
+    let statement = match statement_marker_span(tcx, owner, target) {
+        MarkerProbe::Present(span) => span,
+        _ => return target,
+    };
+    // Attachment verification must not include later siblings: inserting their
+    // comments would otherwise invalidate this source's editing target.
+    let statement = if tcx.sess.source_map().lookup_char_pos(statement.lo()).line
+        == tcx.sess.source_map().lookup_char_pos(target.lo()).line
+    {
+        statement.with_hi(target.hi())
+    } else {
+        statement
+    };
+    let syntax = MarkerSyntax::new(justification, competing_justifications);
+    // Preserve existing explicit statement documentation, but prefer the
+    // individual source when creating a new explanation on its own line.
+    if !matches!(
+        span_marker_block_at(tcx, target, syntax),
+        MarkerProbe::Present(_)
+    ) && matches!(
+        span_marker_block_at(tcx, statement, syntax),
+        MarkerProbe::Present(_)
+    ) {
+        return statement;
+    }
+    let source_map = tcx.sess.source_map();
+    let location = source_map.lookup_char_pos(target.lo());
+    if location
+        .file
+        .get_line(location.line.saturating_sub(1))
+        .is_some_and(|line| line.chars().take(location.col.0).all(char::is_whitespace))
+    {
+        target
+    } else {
+        statement
     }
 }
 
@@ -313,6 +366,15 @@ pub fn immediate_statement_span(
     owner: LocalDefId,
     target: Span,
 ) -> MarkerProbe<Span> {
+    immediate_statement_span_with(tcx, owner, target, false)
+}
+
+fn immediate_statement_span_with(
+    tcx: TyCtxt<'_>,
+    owner: LocalDefId,
+    target: Span,
+    marker_attachment: bool,
+) -> MarkerProbe<Span> {
     // Reachability can use a required trait method as the origin of a
     // synthetic edge even though the method has no source body. Asking for
     // THIR in that case ICEs in `hir_body_owned_by` before `thir_body` can
@@ -331,6 +393,7 @@ pub fn immediate_statement_span(
         thir: &thir,
         target,
         spans: Vec::new(),
+        sibling_headers: Vec::new(),
     };
     visitor.visit_expr(&thir[root]);
     if visitor.spans.is_empty() {
@@ -338,7 +401,19 @@ pub fn immediate_statement_span(
         // no enclosing statement where another marker could be recorded.
         return MarkerProbe::VerifiedAbsent;
     }
-    select_unique_innermost_statement(visitor.spans, target).map_or(
+    let statement = select_unique_innermost_statement(visitor.spans, target);
+    if marker_attachment
+        && statement.is_some_and(|statement| {
+            visitor.sibling_headers.iter().any(|&(aggregate, first)| {
+                aggregate.source_equal(statement)
+                    && tcx.sess.source_map().lookup_char_pos(first.lo()).line
+                        == tcx.sess.source_map().lookup_char_pos(statement.lo()).line
+            })
+        })
+    {
+        return MarkerProbe::VerifiedAbsent;
+    }
+    statement.map_or(
         MarkerProbe::Unverified(UnverifiedMarkerProbeReason::NoUsableSourceSpan),
         MarkerProbe::Present,
     )
@@ -348,11 +423,25 @@ struct ContainingStatementVisitor<'a, 'tcx> {
     thir: &'a Thir<'tcx>,
     target: Span,
     spans: Vec<Span>,
+    sibling_headers: Vec<(Span, Span)>,
 }
 
 impl<'a, 'tcx> Visitor<'a, 'tcx> for ContainingStatementVisitor<'a, 'tcx> {
     fn thir(&self) -> &'a Thir<'tcx> {
         self.thir
+    }
+
+    fn visit_expr(&mut self, expression: &'a Expr<'tcx>) {
+        if let ExprKind::Array { fields } | ExprKind::Tuple { fields } = &expression.kind
+            && let Some((first, rest)) = fields.split_first()
+            && rest
+                .iter()
+                .any(|&field| span_contains(self.thir[field].span, self.target))
+        {
+            self.sibling_headers
+                .push((expression.span, self.thir[*first].span));
+        }
+        visit::walk_expr(self, expression);
     }
 
     fn visit_stmt(&mut self, statement: &'a Stmt<'tcx>) {

@@ -4367,3 +4367,87 @@ fn dependency_safety_override_uses_the_shared_annotation_framework() {
     );
     assert_eq!(fs::read_to_string(&draft.path).unwrap(), buffer.content);
 }
+
+#[test]
+fn adjacent_aggregate_sources_have_independent_justification_sites() {
+    let repo = repo_root();
+    let binary = PathBuf::from(env!("CARGO_BIN_EXE_cargo-sniff-test"));
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path().join("direct_panic");
+    copy_fixture_dir(&repo.join("tests/fixtures/direct_panic"), &root).unwrap();
+    fs::write(
+        root.join("sniff-test.toml"),
+        "[panic]\n[panic.lints]\ninvocation = \"warn\"\n",
+    )
+    .unwrap();
+    let _guard = lock_nested_cargo();
+    for newline in ["\n", "\r\n"] {
+        for marked in 0..=2 {
+            let mut source = String::new();
+            for closure in [false, true] {
+                for tuple in [false, true] {
+                    let (open, close, result) = if tuple {
+                        ("(", ")", "(u8,u8)")
+                    } else {
+                        ("[", "]", "[u8;2]")
+                    };
+                    writeln!(
+                        source,
+                        "pub fn case_{closure}_{tuple}(chars: &[u8;16], b:u8) -> {result} {{"
+                    )
+                    .unwrap();
+                    if closure {
+                        writeln!(source, "    (|| {{").unwrap();
+                    }
+                    if marked > 0 {
+                        writeln!(source, "        // PANIC: First index is in bounds.").unwrap();
+                    }
+                    writeln!(source, "        {open}chars[usize::from(b >> 4)],").unwrap();
+                    if marked > 1 {
+                        writeln!(source, "         // PANIC: Second index is in bounds.").unwrap();
+                    }
+                    writeln!(source, "         chars[usize::from(b & 0xf)]{close}").unwrap();
+                    if closure {
+                        writeln!(source, "    }})()").unwrap();
+                    }
+                    writeln!(source, "}}").unwrap();
+                }
+            }
+            let source = source.replace('\n', newline);
+            fs::write(root.join("src/lib.rs"), &source).unwrap();
+            let output = run_cargo_sniff_test(
+                &binary,
+                &root,
+                "adjacent_sources",
+                &Case::new().args(&["-e", "panic", "--message-format", "json"]),
+            );
+            assert!(output.status.success(), "{}", output.stderr);
+            let report: serde_json::Value = serde_json::from_str(&output.stdout).unwrap();
+            let findings = report["findings"].as_array().unwrap();
+            assert_eq!(findings.len(), (2 - marked) * 4, "{}", output.stderr);
+            for finding in findings {
+                assert_eq!(finding["finding"], "concrete-operation");
+                let facts: sniff_test_report::SemanticFacts =
+                    serde_json::from_value(finding["semantics"].clone()).unwrap();
+                let effect = facts.source.unwrap();
+                let site = facts.justification_site.unwrap();
+                assert!(site.available);
+                assert_eq!(
+                    site.hash,
+                    sniff_test_report::content_hash(source.as_bytes())
+                );
+                let snippet = &source[effect.start..effect.end];
+                let anchor_line = source[..site.start].bytes().filter(|&b| b == b'\n').count();
+                let effect_line = source[..effect.start]
+                    .bytes()
+                    .filter(|&b| b == b'\n')
+                    .count();
+                assert_eq!(anchor_line, effect_line, "{snippet}");
+                assert_eq!(site.end, effect.end, "target must exclude later siblings");
+                if marked == 1 {
+                    assert!(snippet.contains("b & 0xf"), "{snippet}");
+                }
+            }
+        }
+    }
+}

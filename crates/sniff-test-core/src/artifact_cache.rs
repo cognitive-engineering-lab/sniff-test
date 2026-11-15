@@ -15,9 +15,9 @@ use serde::{Deserialize, Deserializer as _, Serialize};
 
 use crate::artifact::{ArtifactFacts, FunctionFactProvenance};
 
-pub const CACHE_FORMAT_VERSION: u32 = 40;
+pub const CACHE_FORMAT_VERSION: u32 = 41;
 pub const CACHE_DIR_NAME: &str = "sniff-test-cache";
-pub const CACHE_VERSION_DIR: &str = "v40";
+pub const CACHE_VERSION_DIR: &str = "v41";
 
 /// Cached policy-neutral analysis for one exact rustc output artifact.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -618,8 +618,8 @@ mod tests {
         let json: serde_json::Value = serde_json::from_str(&source).expect("valid JSON");
         let object = json.as_object().expect("cache object");
 
-        assert_eq!(CACHE_FORMAT_VERSION, 40);
-        assert_eq!(json["format-version"], 40);
+        assert_eq!(CACHE_FORMAT_VERSION, 41);
+        assert_eq!(json["format-version"], 41);
         let mut fields = object.keys().map(String::as_str).collect::<Vec<_>>();
         fields.sort_unstable();
         assert_eq!(
@@ -862,11 +862,11 @@ mod tests {
 
         assert_eq!(
             root.to_string_lossy(),
-            "/target/plugin-nightly/sniff-test-cache/v40"
+            "/target/plugin-nightly/sniff-test-cache/v41"
         );
         assert_eq!(
             artifact_cache_path(&root, &identity).to_string_lossy(),
-            "/target/plugin-nightly/sniff-test-cache/v40/artifacts/0000000000000001-0123456789abcdef0123456789abcdef.json"
+            "/target/plugin-nightly/sniff-test-cache/v41/artifacts/0000000000000001-0123456789abcdef0123456789abcdef.json"
         );
     }
 }

@@ -2042,3 +2042,40 @@ test('crate granularity preselects the filtered effect and supports multi-effect
   expect(config.match(/audit_browser_fixture::\*\*/g)).toHaveLength(2);
   await expect(page.locator('.crate-header').getByLabel('Crate trusted',{exact:true})).toBeVisible();
 });
+
+for(const closure of [false,true])for(const [effect,heading,marker] of [['panic','Panics','PANIC'],['allocation','Allocations','ALLOCATION']]) {
+ test(`adjacent ${effect} sources keep independent prompts in ${closure?'closures':'functions'}`,async({page})=>{
+  await stop();
+  const source=`/// # ${heading}\n/// The caller must validate this operation.\nfn danger() -> u8 { 0 }\npub fn risky() -> [u8;2] {\n${closure?'    (|| {\n':''}        [danger(),\n         danger()]\n${closure?'    })()\n':''}}\n`;
+  await writeFile(join(dir,'src/lib.rs'),source);await launch(effect);await selectFinding(page);
+  const findings=page.locator('.finding');await expect(findings).toHaveCount(2);
+  const dialog=page.getByRole('dialog');
+  async function save(document:string){
+    await dialog.getByLabel('Source documentation',{exact:true}).fill(document);
+    await dialog.getByRole('button',{name:'Save',exact:true}).click();await expect(dialog).toHaveCount(0);
+  }
+  await page.getByRole('button',{name:'Justify here',exact:true}).click();
+  await save(`// ${marker}: First source only.`);
+  await findings.nth(1).click();
+  await expect(page.getByRole('button',{name:'Justified!',exact:true})).toHaveCount(0);
+  const prompt=page.locator('.inline-prompt').filter({has:page.getByRole('button',{name:'Justify here',exact:true})});
+  await expect(prompt.locator('xpath=following-sibling::*[1]')).toContainText('danger()]');
+  await page.getByRole('button',{name:'Justify here',exact:true}).click();
+  await expect(dialog.getByLabel('Source documentation',{exact:true})).toHaveValue(`// ${marker}: `);
+  await save(`// ${marker}: Second source only.`);
+  for(const [index,explanation] of [[0,'First source only.'],[1,'Second source only.']] as const){
+    await findings.nth(index).click();await page.getByRole('button',{name:'Justified!',exact:true}).click();
+    await expect(dialog.getByLabel('Source documentation',{exact:true})).toHaveValue(`// ${marker}: ${explanation}`);
+    await dialog.getByRole('button',{name:'Cancel',exact:true}).click();
+  }
+  await page.getByRole('button',{name:'Justified!',exact:true}).click();
+  await dialog.getByRole('button',{name:'Remove justification',exact:true}).click();
+  await dialog.getByRole('button',{name:'Confirm removal',exact:true}).click();await expect(dialog).toHaveCount(0);
+  expect(await readFile(join(dir,'src/lib.rs'),'utf8')).toContain(`// ${marker}: First source only.`);
+  expect(await readFile(join(dir,'src/lib.rs'),'utf8')).not.toContain('Second source only.');
+  await page.getByRole('button',{name:'↻ Reanalyze',exact:true}).click();
+  await expect(page.locator('.status')).not.toContainText('running');
+  await expect(findings).toHaveCount(1);await findings.first().click();
+  await expect(page.getByRole('button',{name:'Justify here',exact:true})).toBeVisible();
+ });
+}
