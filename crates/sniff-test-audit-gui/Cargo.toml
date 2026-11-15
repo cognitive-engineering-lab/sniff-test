@@ -2,6 +2,7 @@
 name = "sniff-test-audit-gui"
 version.workspace = true
 edition.workspace = true
+include = ["src/**", "build.rs", "frontend/package*.json", "frontend/index.html", "frontend/tsconfig.json", "frontend/src/**"]
 
 [dependencies]
 anyhow = "1"
@@ -13,7 +14,7 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 sniff-test-report = { path = "../sniff-test-report" }
 sniff-test-audit-bridge = { path = "../sniff-test-audit-bridge" }
-rust-embed = "8"
+rust-embed = { version = "8", features = ["interpolate-folder-path", "debug-embed"] }
 mime_guess = "2"
 uuid = { version = "1", features = ["v4"] }
 

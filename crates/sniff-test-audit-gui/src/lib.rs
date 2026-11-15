@@ -23,7 +23,7 @@ use std::{
 use tokio_stream::wrappers::ReceiverStream;
 
 #[derive(rust_embed::RustEmbed)]
-#[folder = "frontend/dist/"]
+#[folder = "$SNIFF_TEST_AUDIT_ASSETS/"]
 struct Assets;
 #[derive(Clone)]
 struct App {

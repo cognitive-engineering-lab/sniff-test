@@ -147,18 +147,20 @@ and SHA-256 content hashes. Human output avoids constructing this extra source
 metadata. The bridge derives supported editing actions from these facts and the
 workspace boundaries; diagnostics has no audit mode or editing-action model.
 
-Before building from a fresh checkout, install Node.js 22 or newer and build the
-frontend assets:
+Install Node.js 22 or newer, with `node` and `npm` on `PATH`, before building.
+Cargo automatically installs the locked frontend dependencies and builds the GUI:
 
 ```sh
-cd crates/sniff-test-audit-gui/frontend
-npm ci
-npm run build
+cargo build
+# Or install the CLI with its embedded GUI:
+cargo install --path crates/sniff-test
 ```
 
-Production assets in `frontend/dist/` are generated and ignored by Git. Build
-them before running Cargo builds, checks, or tests, and rebuild after frontend
-edits. The server embeds them in release builds; debug builds read them from that directory.
+The GUI build script runs `npm ci --include=dev` and `npm run build` inside Cargo's
+output directory. It rebuilds when frontend inputs change and reinstalls npm
+dependencies only when the package manifests change or dependencies are missing.
+The first build needs access to the npm registry. Both debug and release binaries
+embed the assets, so the installed CLI needs no Node.js or frontend files at runtime.
 Run `cargo build -p sniff-test` before the real-browser integration tests:
 
 ```sh
