@@ -47,6 +47,18 @@ test('Enter continues multiple cursors and preserves CRLF serialization',()=>{
 });
 
 const documentation={justification:'PANIC',obligation:'# Panics'};
+test('inline effect attachment follows layout and only recognizes the configured lexical marker',()=>{
+  for(const marker of ['PANIC','SAFETY','ALLOCATION']){
+    const source='let read = || bytes[i];';
+    const candidate={position:source.indexOf('bytes'),action:'justification',external:false};
+    expect(sourcePromptAttachments(source,[candidate],{...documentation,justification:marker})[0]).toMatchObject({insertable:false,attached:false});
+    for(const comment of [`// ${marker}: Checked.`, '// Unrelated explanation.', '// OTHER: Checked.', `/// ${marker}: Checked.`, `let text = r#"\n// ${marker}: Checked.\n"#;`]){
+      const edited=`let read = ||\n${comment}\n    bytes[i];`;
+      const attachment=sourcePromptAttachments(edited,[{...candidate,position:edited.indexOf('bytes')}],{...documentation,justification:marker})[0];
+      expect(attachment).toMatchObject({insertable:true,attached:comment===`// ${marker}: Checked.`});
+    }
+  }
+});
 function workingComment(){
   const doc='fn target() {\n    // PANIC: explanation\n    risky();\n}\n';
   let state=EditorState.create({doc,selection:{anchor:doc.indexOf('explanation')},extensions:[rust(),commentEditing]});

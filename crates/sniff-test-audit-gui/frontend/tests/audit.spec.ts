@@ -953,6 +953,63 @@ for(const width of [1440,320]) {
   });
 }
 
+test('inline closure manual justification guidance disappears during editing and returns on undo',async({page})=>{
+  await stop();
+  const source='pub fn entry(bytes: &[u8], i: usize) -> u8 {\n    let read = || bytes[i];\n    read()\n}\n';
+  await writeFile(join(dir,'src/lib.rs'),source);await launch();await selectFinding(page);
+  const manual=page.getByRole('button',{name:'Needs manual justification',exact:true});
+  await expect(manual).toBeVisible();
+  await expect(page.getByRole('button',{name:'Justify here',exact:true})).toHaveCount(0);
+  for(const name of ['Propagate to callers','Propagate obligations via override'])await expect(page.getByRole('button',{name,exact:true})).toHaveCount(0);
+  await manual.click();
+  const dialog=page.getByRole('dialog',{name:'Needs manual justification',exact:true});
+  await expect(dialog.getByLabel('Effect class',{exact:true})).toHaveText('Panic · Bounds check');
+  await expect(dialog.locator('.override-panel-content > p:not(.effect-class-label)')).toHaveText('Add a // PANIC: justification comment manually above this effect.');
+  await expect(dialog.getByLabel('Obligation documentation',{exact:true})).toHaveCount(0);
+  await page.screenshot({path:join(repo,'target/audit-manual-effect-popup.png'),fullPage:true});
+  await dialog.getByRole('button',{name:'Close',exact:true}).click();
+  await expect(page.locator('.cm-content')).toBeFocused();
+  expect(await readFile(join(dir,'src/lib.rs'),'utf8')).toBe(source);
+  await page.keyboard.insertText('\n        // SAFETY: This is the wrong effect marker.\n        ');
+  await expect(page.getByRole('button',{name:'Justify here',exact:true})).toBeVisible();
+  await page.keyboard.press('ControlOrMeta+z');
+  await expect(manual).toBeVisible();
+  // The guidance focuses the selected effect. Split the expression without replacing its anchor.
+  await page.keyboard.insertText('\n        // PANIC: The caller validates i.\n        ');
+  await expect(manual).toHaveCount(0);
+  await expect(page.getByRole('button',{name:'Justified!',exact:true})).toHaveCount(0);
+  await expect.poll(()=>readFile(join(dir,'src/lib.rs'),'utf8')).toContain('// PANIC: The caller validates i.');
+  await expect(manual).toHaveCount(0);
+  await page.keyboard.press('ControlOrMeta+z');
+  await expect(manual).toBeVisible();
+  await page.keyboard.press('ControlOrMeta+Shift+z');
+  await expect(manual).toHaveCount(0);
+  await page.getByRole('button',{name:'↻ Reanalyze',exact:true}).click();
+  await expect(page.locator('.status')).toHaveText('complete');
+  await expect(page.locator('.finding-list')).toContainText('No matching findings.');
+});
+
+test('manual justification popup reuses styled obligation documentation and highlighted prototype',async({page})=>{
+  await stop();
+  const source='/// # Panics\n/// The `flag` must be **true**.\nfn danger(flag: bool) { assert!(flag); }\npub fn entry(flag: bool) {\n    let run = || danger(flag);\n    run();\n}\n';
+  await writeFile(join(dir,'src/lib.rs'),source);await launch();await selectFinding(page);
+  await page.getByRole('button',{name:'Needs manual justification',exact:true}).click();
+  const dialog=page.getByRole('dialog',{name:'Needs manual justification',exact:true});
+  const documentation=dialog.getByLabel('Obligation documentation',{exact:true});
+  await expect(documentation).toContainText('The flag must be true.');
+  await expect(documentation.locator('code')).toHaveText('flag');
+  await expect(documentation.locator('strong')).toHaveText('true');
+  const prototype=dialog.getByLabel('Function prototype',{exact:true});
+  await expect(prototype).toContainText('fn danger(flag: bool)');
+  await expect(prototype.locator('code span').first()).toHaveAttribute('class',/\S+/);
+  await expect(dialog.getByLabel('Effect class',{exact:true})).toHaveCount(0);
+  await expect(dialog.locator('.override-panel-content > p')).toHaveText('Add a // PANIC: justification comment manually above this effect.');
+  await page.screenshot({path:join(repo,'target/audit-manual-obligation-popup.png'),fullPage:true});
+  await dialog.getByRole('button',{name:'Close',exact:true}).click();
+  await expect(page.locator('.cm-content')).toBeFocused();
+  expect(await readFile(join(dir,'src/lib.rs'),'utf8')).toBe(source);
+});
+
 for(const dependency of [false,true])for(const invocation of [false,true])for(const nested of [false,true]) {
   test(`${dependency?'dependency':'local'} ${nested?'nested ':''}closure offers only justification for ${invocation?'documented call':'direct effect'}`,async({page})=>{
     await stop();

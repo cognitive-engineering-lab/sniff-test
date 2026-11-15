@@ -41,7 +41,7 @@ function savedSourceChanges(state:EditorState,saved:SavedSource) {
 }
 type EditorSelection = {path:string; from:number; to:number};
 type FindingNavigation = {source?:Location;root?:Location;contract?:Location;trace:(Location|null)[]};
-type Finding = {navigation?:FindingNavigation;id:string; crate_name:string; effect?:string;kind:string;class?:string;level:string;root?:string;trace_id?:string;reason:string;requirements:string[];missing_requirements:string[];display_trace:string[]; audit?:{obligation:string; justification:string; source?:Location; root?:Location; contract?:Location; targets:Target[]; trace:{caller:string; target?:string; kind:string; location?:Location}[]}};
+type Finding = {navigation?:FindingNavigation;id:string; crate_name:string; effect?:string;kind:string;class?:string;level:string;root?:string;trace_id?:string;reason:string;requirements:string[];missing_requirements:string[];display_trace:string[]; audit?:{obligation_documentation?:ObligationDocumentation;effect_context?:EffectContext;obligation:string; justification:string; source?:Location; root?:Location; contract?:Location; targets:Target[]; trace:{caller:string; target?:string; kind:string; location?:Location}[]}};
 type AuditProgress = {justified:boolean;propagated:boolean};
 type GroupProgress = {handled:number;total:number;justified:number;propagated:number};
 type Summary = {description?:string;location_label?:string;label?:string;count?:number;progress?:AuditProgress;id:string; crate_name:string; root:string; reason:string; level:string; effect:string; class:string; path?:string};
@@ -55,19 +55,19 @@ async function api(path:string, body?:unknown, signal?:AbortSignal) {
   return response.json();
 }
 class DocumentationPrompt extends WidgetType {
-  constructor(readonly action:string, readonly run:()=>void, readonly override=false, readonly added="") { super(); }
+  constructor(readonly action:string, readonly run:()=>void, readonly override=false, readonly added="", readonly manual=false) { super(); }
   toDOM() {
     const element=document.createElement('div');element.className='inline-prompt';
     const button=document.createElement('button');button.type='button';
     const justify=this.action==='justification';
     const trust=this.action==='trust';
-    const label=trust?(this.added?'Trusted':'Trust this function'):this.added?(justify?'Justified!':'Obligation propagated!'):this.override?(justify?'Justify via override':'Propagate obligations via override'):(justify?'Justify here':'Propagate to callers');
+    const label=this.manual?'Needs manual justification':trust?(this.added?'Trusted':'Trust this function'):this.added?(justify?'Justified!':'Obligation propagated!'):this.override?(justify?'Justify via override':'Propagate obligations via override'):(justify?'Justify here':'Propagate to callers');
     button.textContent=(trust?'✓ ':justify?'✓ ':'↑ ')+label;
     if(this.added)button.classList.add('completed');
     button.setAttribute('aria-label',label);
     button.addEventListener('click',this.run);
     const hint=document.createElement('span');
-    hint.textContent=trust?'Suppress this function’s obligation for this effect':this.added || (justify?"Explain why this is valid":"Document the caller's obligation");
+    hint.textContent=this.manual?'This layout requires a manual comment':trust?'Suppress this function’s obligation for this effect':this.added || (justify?"Explain why this is valid":"Document the caller's obligation");
     element.append(button,hint);return element;
   }
   ignoreEvent() { return true; }
@@ -91,6 +91,10 @@ function Editor({trustPrompt, hideDocumentation=false, buffer, locked, reloadKey
   const documentationRef=useRef(onDocumentation);documentationRef.current=onDocumentation;
   const readyRef=useRef(onReady);readyRef.current=onReady;
   const flushRef=useRef(onFlush);flushRef.current=onFlush;
+  // Keep manual prompts dismissible after reformatting and autosave reconfigure the candidates.
+  const manualTargets=useRef({scope:'',actions:new Set<string>()});
+  const [manualMarker,setManualMarker]=useState<string>();
+  function closeManualGuidance(){setManualMarker(undefined);editorRef.current?.focus();}
   const readOnly=useRef(new Compartment()),promptsConfig=useRef(new Compartment()),navigationConfig=useRef(new Compartment());
   useEffect(()=>{
     if(!holder.current)return;
@@ -151,6 +155,8 @@ function Editor({trustPrompt, hideDocumentation=false, buffer, locked, reloadKey
       return;
     }
     const overrides=buffer.saved_overrides;
+    const scope=JSON.stringify([buffer.path,finding?.id]);
+    if(manualTargets.current.scope!==scope)manualTargets.current={scope,actions:new Set()};
     const targets=finding?.audit?.targets || [];
     const resolved=targets.some(t=>overrides.some(a=>a.annotation.effect===finding?.effect && a.annotation.action===t.action && sameSelector(a.annotation.selector,t.selector)));
     const pendingTargets=targets.filter(t=>!t.selector || !resolved);
@@ -161,7 +167,9 @@ function Editor({trustPrompt, hideDocumentation=false, buffer, locked, reloadKey
       const widget=new DocumentationPrompt(t.action,()=>{
         documentationRef.current(t);
       },!!t.selector,added?'Override saved':'');
-      return {position,action:t.action,external:!!t.selector,widget};
+      const candidate={position,action:t.action,external:!!t.selector,widget};
+      if(!candidate.external&&candidate.action==='justification'&&!sourcePromptAttachments(buffer.content,[candidate])[0].insertable)manualTargets.current.actions.add(candidate.action);
+      return {...candidate,manual:manualTargets.current.actions.has(candidate.action)};
     });
     type Candidate = typeof candidates[number];
     function decorate(state:EditorState, candidates:Candidate[]) {
@@ -170,10 +178,15 @@ function Editor({trustPrompt, hideDocumentation=false, buffer, locked, reloadKey
       const resolved=attachments.some(a=>a.attached);
       return Decoration.set(candidates.flatMap((candidate,index)=>{
         const attachment=attachments[index];
-        if(!candidate.external && ((!attachment.attached&&resolved) || !attachment.insertable))return [];
+        if(!candidate.external && ((!attachment.attached&&resolved) || (candidate.manual&&attachment.attached)))return [];
+        const manual=!candidate.external&&candidate.action==='justification'&&!attachment.insertable;
+        if(!candidate.external&&!attachment.insertable&&!manual)return [];
         const widget=!candidate.external&&attachment.attached
           ?new DocumentationPrompt(candidate.action,candidate.widget.run,false,'Saved in source')
-          :candidate.widget;
+          :manual?new DocumentationPrompt(candidate.action,()=>{
+            view?.dispatch({selection:{anchor:candidate.position},effects:EditorView.scrollIntoView(candidate.position)});
+            setManualMarker(finding?.audit?.justification.trim().replace(/:$/, '')||'');
+          },false,'',true):candidate.widget;
         return [Decoration.widget({widget,block:true,side:-1}).range(attachment.markerStart??attachment.lineStart)];
       }),true);
     }
@@ -196,7 +209,14 @@ function Editor({trustPrompt, hideDocumentation=false, buffer, locked, reloadKey
     const from=editorPosition(source,target.start),to=editorPosition(source,target.end);
     if(from<=to && to<=view.state.doc.length){view.dispatch({selection:{anchor:from,head:to},effects:EditorView.scrollIntoView(from,{y:'center'})});view.focus();}
   },[target,buffer.path,reloadKey]);
-  return <div className="editor" ref={holder} aria-label="Rust source editor"/>;
+  return <><div className="editor" ref={holder} aria-label="Rust source editor"/>
+    {manualMarker!==undefined&&<DocumentationPanel source title="Needs manual justification" step="manual" onClose={closeManualGuidance}>
+      {finding?.audit?.obligation_documentation&&<ObligationDocumentationPanel documentation={finding.audit.obligation_documentation}/>}
+      {!finding?.audit?.obligation_documentation&&finding?.audit?.effect_context&&<p className="effect-class-label" aria-label="Effect class">{effectContextLabel(finding.audit.effect_context)}</p>}
+      <p>Add a <code>// {manualMarker}:</code> justification comment manually above this effect.</p>
+      <div className="modal-actions"><button autoFocus onClick={closeManualGuidance}>Close</button></div>
+    </DocumentationPanel>}
+  </>;
 }
 function placeCaretAtEnd(element:HTMLTextAreaElement|null) {
   if(element)element.setSelectionRange(element.value.length,element.value.length);
