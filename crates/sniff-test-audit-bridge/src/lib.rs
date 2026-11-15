@@ -28,7 +28,7 @@ use std::{
     process::{Command, Output},
 };
 
-/// Effect classification displayed when a justification has no obligation documentation.
+/// Effect classification displayed when a documentation editor has no obligation documentation.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct EffectContext {
     pub effect: String,

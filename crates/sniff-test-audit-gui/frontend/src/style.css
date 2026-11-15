@@ -173,3 +173,9 @@ main { overflow: hidden; }
 
 .crate-header .group { min-width:0; }
 .crate-header .group-path { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+
+.effect-source-context { margin: 0 0 14px; border: 1px solid #d7e2d8; border-radius: 8px; background: #f7faf6; overflow: hidden; }
+.effect-source-context h4 { margin: 0; padding: 12px 16px 8px; color: #294d37; font-size: 14px; }
+.effect-source-context pre { margin: 0; padding: 0 16px 14px; max-height: min(20vh, 180px); overflow: auto; white-space: pre; font: 12px/1.6 ui-monospace, monospace; }
+.effect-source-context p { margin: 0; padding: 0 16px 14px; font-size: 12px; }
+.effect-source-context pre:focus-visible { outline: 2px solid #25825c; outline-offset: -3px; }

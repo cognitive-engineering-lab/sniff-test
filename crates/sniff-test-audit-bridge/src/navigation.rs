@@ -47,6 +47,22 @@ impl FindingNavigation {
 }
 
 impl Session {
+    /// Read only a verified, current origin span; stale locations must not show unrelated code.
+    pub(super) fn effect_source(&self, id: &str) -> Option<String> {
+        let source = self.finding_navigation(id)?.source?;
+        let location = source.location;
+        if source.approximate || !location.available {
+            return None;
+        }
+        let path = self.checked_path(&location.path, false).ok()?;
+        let content = fs::read_to_string(path).ok()?;
+        if content_hash(content.as_bytes()) != location.hash {
+            return None;
+        }
+        let snippet = content.get(location.start..location.end)?.trim();
+        (!snippet.is_empty()).then(|| snippet.to_owned())
+    }
+
     pub fn finding_navigation(&self, id: &str) -> Option<FindingNavigation> {
         self.navigation
             .get(id)

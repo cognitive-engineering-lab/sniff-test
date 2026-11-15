@@ -394,7 +394,8 @@ for(const action of ['Justify here','Propagate to callers']) {
   const dialog=page.getByRole('dialog');
   await expect(dialog).toHaveAccessibleName(action);
   await expect(dialog.getByLabel('Override file',{exact:true})).toHaveCount(0);
-  await expect(dialog.locator('.override-destination')).toContainText('src/lib.rs:');
+  await expect(dialog.locator('.override-destination')).toHaveCount(0);
+  await expect(dialog.getByRole('region',{name:'Effect Source',exact:true})).toContainText('panic!');
   await dialog.getByLabel('Source documentation',{exact:true}).fill(document);
   expect(await readFile(join(dir,'src/lib.rs'),'utf8')).toBe(source);
   await dialog.getByRole('button',{name:'Cancel',exact:true}).click();
@@ -1045,8 +1046,7 @@ for(const action of ['Justify via override','Propagate obligations via override'
         const alternative=action.startsWith('Justify')?'Propagate obligations via override':'Justify via override';
         const dialog=page.getByRole('dialog');
         await page.getByRole('button',{name:action,exact:true}).click();
-        if(action.startsWith('Justify'))await expect(dialog.getByLabel('Effect class')).toContainText('Panic · ');
-        else await expect(dialog.getByLabel('Effect class')).toHaveCount(0);
+        await expect(dialog.getByLabel('Effect class')).toContainText('Panic · ');
         await expect(dialog.getByLabel('Override documentation')).toHaveValue(template);
         await expect(dialog.getByLabel('Override documentation')).toBeFocused();
         if(existing&&action.startsWith('Justify')) {
@@ -1151,7 +1151,7 @@ for(const action of ['Justify via override','Propagate obligations via override'
         else expect(await readFile(join(dir,'sniff-test.toml'),'utf8')).toContain('custom-overrides.toml');
         // Reopen and edit immediately, before any reanalysis.
         await page.getByRole('button',{name:completed,exact:true}).click();
-        if(action.startsWith('Justify'))await expect(dialog.getByLabel('Effect class')).toContainText('Panic · ');
+        await expect(dialog.getByLabel('Effect class')).toContainText('Panic · ');
         if(existing)await expect(dialog.getByLabel('Override file',{exact:true})).toHaveValue(/\/two\.toml$/);
         await expect(dialog.locator('.override-destination')).toHaveText(existing?'Override fileone.tomltwo.toml':'Override filecustom-overrides.toml');
         await expect(dialog.getByRole('button',{name:'Save draft',exact:true})).toHaveCount(0);
@@ -1762,19 +1762,49 @@ test('invert obligation combines Vec push instances and trusts its documented pa
   expect(await readFile(join(dir,'src/lib.rs'),'utf8')).toBe(source);
 });
 
-for(const scenario of [
+for(const dependency of [false,true])test(`${dependency?'override':'source'} propagation shows origin documentation before and after saving`,async({page})=>{
+  await stop();
+  const dependencyDir=dependency?await mkdtemp(join(tmpdir(),'sniff-propagation-doc-')):undefined;
+  const source='/// # Panics\n/// Requires a valid index.\nfn danger() {}\npub fn entry() { danger(); }\n';
+  try {
+    if(dependencyDir){
+      await mkdir(join(dependencyDir,'src'));
+      await writeFile(join(dependencyDir,'Cargo.toml'),'[package]\nname="propagation-dep"\nversion="0.1.0"\nedition="2024"\n');
+      await writeFile(join(dir,'Cargo.toml'),`[package]\nname="audit-browser-fixture"\nversion="0.1.0"\nedition="2024"\n[workspace]\n[dependencies]\npropagation-dep={path=${JSON.stringify(dependencyDir)}}\n`);
+      await writeFile(join(dir,'src/lib.rs'),'pub fn entry() { propagation_dep::entry(); }\n');
+    }
+    await writeFile(join(dependencyDir??dir,'src/lib.rs'),source);
+    await launch();await selectFinding(page);
+    await page.getByRole('button',{name:dependency?'Propagate obligations via override':'Propagate to callers',exact:true}).click();
+    const dialog=page.getByRole('dialog');
+    await expect(dialog.getByRole('region',{name:'Effect Source',exact:true})).toContainText('danger()');
+    await expect(dialog.getByLabel('Obligation documentation',{exact:true})).toContainText('Requires a valid index.');
+    await expect(dialog.getByLabel('Effect class')).toHaveCount(0);
+    await page.screenshot({path:join(repo,`target/audit-effect-source-${dependency?'override':'source'}.png`),fullPage:true});
+    await dialog.getByLabel(dependency?'Override documentation':'Source documentation',{exact:true}).fill('/// # Panics\n/// The caller must supply a valid index.');
+    await dialog.getByRole('button',{name:'Save',exact:true}).click();
+    if(dependency)await dialog.getByRole('button',{name:'Create & save',exact:true}).click();
+    await expect(dialog).not.toBeVisible();
+    await page.getByRole('button',{name:'Obligation propagated!',exact:true}).click();
+    await expect(dialog.getByRole('region',{name:'Effect Source',exact:true})).toContainText('danger()');
+    await expect(dialog.getByLabel('Obligation documentation',{exact:true})).toContainText('Requires a valid index.');
+    await expect(dialog.getByLabel('Effect class')).toHaveCount(0);
+  } finally {await stop();if(dependencyDir)await rm(dependencyDir,{recursive:true,force:true});}
+});
+
+for(const action of ['Justify here','Propagate to callers'])for(const scenario of [
   {context:{effect:'panic',operation:'bounds-check',class:'concrete-operation'},label:'Panic · Bounds check'},
   {context:{effect:'safety',operation:'raw-pointer-dereference'},label:'Safety · Raw pointer dereference'},
   {context:{effect:'panic',class:'unresolved-call-target'},label:'Panic · Unresolved call target'},
   {context:{effect:'allocation'},label:'Allocation'},
   {context:{effect:'panic',operation:'bounds-check'},label:null,documentation:{function:'test::callee',markdown:'# Panics\nRequires a valid index.'}},
-])test(`Justify effect class: ${JSON.stringify(scenario.context)} documented=${!!scenario.documentation}`,async({page})=>{
+])test(`${action} effect class: ${JSON.stringify(scenario.context)} documented=${!!scenario.documentation}`,async({page})=>{
   await page.route('**/api/v1/source/editor',async route=>{
     const response=await route.fetch(),context=await response.json();
     await route.fulfill({response,json:{...context,effect_context:scenario.context,obligation_documentation:scenario.documentation}});
   });
   await selectFinding(page);
-  await page.getByRole('button',{name:'Justify here',exact:true}).click();
+  await page.getByRole('button',{name:action,exact:true}).click();
   const dialog=page.getByRole('dialog');
   if(scenario.label)await expect(dialog.getByLabel('Effect class')).toHaveText(scenario.label);
   else {await expect(dialog.getByLabel('Effect class')).toHaveCount(0);await expect(dialog).toContainText('Requires a valid index.');}
@@ -1786,10 +1816,12 @@ test('Justify effect class uses the analyzed bounds check',async({page})=>{
   await launch();
   await selectFinding(page);
   await page.getByRole('button',{name:'Justify here',exact:true}).click();
+  await expect(page.getByRole('dialog').getByRole('region',{name:'Effect Source',exact:true})).toContainText('values[index]');
   await expect(page.getByRole('dialog').getByLabel('Effect class')).toHaveText('Panic · Bounds check');
   await page.getByRole('dialog').getByRole('button',{name:'Cancel',exact:true}).click();
   await page.getByRole('button',{name:'Propagate to callers',exact:true}).click();
-  await expect(page.getByRole('dialog').getByLabel('Effect class')).toHaveCount(0);
+  await expect(page.getByRole('dialog').getByRole('region',{name:'Effect Source',exact:true})).toContainText('values[index]');
+  await expect(page.getByRole('dialog').getByLabel('Effect class')).toHaveText('Panic · Bounds check');
 });
 
 test('crate granularity shows count-only origins and saves boundary trust before reanalysis',async({page})=>{

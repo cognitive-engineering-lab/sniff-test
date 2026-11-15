@@ -53,6 +53,7 @@ pub struct OverrideDestination {
 /// File snapshots stay on the server and expire when another editor is opened.
 #[derive(Debug, Clone, Serialize)]
 pub struct OverrideEditor {
+    pub effect_source: Option<String>,
     pub token: String,
     pub can_remove: bool,
     pub document: String,
@@ -227,9 +228,7 @@ impl Session {
                                 effect: audit.effect,
                                 action: action.clone(),
                                 document,
-                                obligation_documentation: (action == "justification")
-                                    .then_some(audit.obligation_documentation)
-                                    .flatten(),
+                                obligation_documentation: audit.obligation_documentation,
                                 selector: attachment.selector.unwrap(),
                             },
                             location: attachment.location,
@@ -288,7 +287,28 @@ impl Session {
             )
             .as_bytes(),
         );
+        let finding_id = match &target {
+            OverrideEditorTarget::Finding { id, .. } => Some(id.clone()),
+            OverrideEditorTarget::Saved { .. } => self
+                .analysis
+                .findings
+                .iter()
+                .find(|finding| {
+                    finding.audit.as_ref().is_some_and(|audit| {
+                        audit.effect == saved.annotation.effect
+                            && audit.targets.iter().any(|target| {
+                                target.action == saved.annotation.action
+                                    && target.selector.as_ref().is_some_and(|selector| {
+                                        selector.same_target(&saved.annotation.selector)
+                                    })
+                            })
+                    })
+                })
+                .map(|finding| finding.id.clone()),
+        };
+        let effect_source = finding_id.and_then(|id| self.effect_source(&id));
         let editor = OverrideEditor {
+            effect_source,
             token,
             can_remove: index.is_some(),
             document: saved.annotation.document.clone(),
@@ -1243,6 +1263,63 @@ mod tests {
         annotation.action = "obligation".into();
         annotation.document = "/// # Safety\n/// Required.".into();
         assert!(merge_source_override(&mut document, &annotation, None).is_err());
+    }
+
+    #[test]
+    fn propagation_override_retains_origin_context_after_restart() {
+        let (root, _dep, mut session, path) = setup();
+        let documentation = sniff_test_report::ObligationDocumentation {
+            prototype: Some("unsafe fn dangerous()".into()),
+            function: "dep::dangerous".into(),
+            markdown: "# Safety\nThe pointer must be valid.".into(),
+        };
+        let audit = session.analysis.findings[0].audit.as_mut().unwrap();
+        audit.obligation_documentation = Some(documentation.clone());
+        let effect_context = audit.effect_context.clone();
+        let target = &mut audit.targets[0];
+        target.action = "obligation".into();
+        let source = fs::read_to_string(&path).unwrap();
+        target.location.start = source.find("pub fn sample").unwrap();
+        target.location.end = target.location.start + "pub fn sample()".len();
+        let selector = target.selector.as_mut().unwrap();
+        selector.kind = "function".into();
+        selector.site = None;
+        selector.line = 3;
+        let revision = session.buffer(&path).unwrap().revision;
+        let editor = session
+            .open_override_editor(OverrideEditorTarget::Finding {
+                id: "finding".into(),
+                action: "obligation".into(),
+                revision,
+                generation: session.analysis.generation,
+            })
+            .unwrap();
+        assert_eq!(editor.obligation_documentation, Some(documentation.clone()));
+        session
+            .commit_override(
+                &editor.token,
+                &editor.destination,
+                Some("saved.toml"),
+                "/// # Safety\n/// The caller must validate the pointer.".into(),
+            )
+            .unwrap();
+        let config = session.config.clone();
+        let analysis = session.analysis.clone();
+        drop(session);
+        let mut session =
+            Session::open(root.path().into(), root.path().join("target"), config).unwrap();
+        session.analysis = analysis;
+        let buffer = session.buffer(&path).unwrap();
+        let editor = session
+            .open_override_editor(OverrideEditorTarget::Saved {
+                path: path.clone(),
+                revision: buffer.revision,
+                index: 0,
+            })
+            .unwrap();
+        assert_eq!(editor.obligation_documentation, Some(documentation));
+        assert_eq!(editor.effect_context, effect_context);
+        assert_eq!(fs::read_to_string(path).unwrap(), source);
     }
 
     #[test]

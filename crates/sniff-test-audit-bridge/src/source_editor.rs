@@ -14,6 +14,7 @@ pub struct SourceEditorTarget {
 pub struct SourceEditor {
     pub token: String,
     pub document: String,
+    pub effect_source: Option<String>,
     pub can_remove: bool,
     pub destination: String,
     pub line: usize,
@@ -103,7 +104,9 @@ impl Session {
         } else {
             document
         };
+        let effect_source = self.effect_source(&request.id);
         let editor = SourceEditor {
+            effect_source,
             token: format!(
                 "{:x}",
                 std::time::SystemTime::now()
@@ -119,9 +122,7 @@ impl Session {
                 .count()
                 + 1,
             effect_context: audit.effect_context,
-            obligation_documentation: (request.action == "justification")
-                .then_some(audit.obligation_documentation)
-                .flatten(),
+            obligation_documentation: audit.obligation_documentation,
             target: request,
             range,
             original: buffer.content,
@@ -389,6 +390,68 @@ mod tests {
         let editor = session.open_source_editor(request).unwrap();
         assert_eq!(editor.effect_context, Some(context));
         assert!(editor.obligation_documentation.is_none());
+    }
+
+    #[test]
+    fn effect_source_tracks_edits_and_rejects_stale_or_invalid_spans() {
+        let original = "fn f() {\r\n    g(\"λ\");\r\n}\r\n";
+        let (_dir, mut session, request) = setup(original, "justification", "g(\"λ\")");
+        assert_eq!(
+            session.effect_source(&request.id).as_deref(),
+            Some("g(\"λ\")")
+        );
+        let location = session.analysis.findings[0]
+            .audit
+            .as_ref()
+            .unwrap()
+            .source
+            .clone()
+            .unwrap();
+        let edited = format!("// 🦀\r\n{original}");
+        session
+            .save_source(&location.path, request.revision, edited.clone())
+            .unwrap();
+        assert_eq!(
+            session.effect_source(&request.id).as_deref(),
+            Some("g(\"λ\")")
+        );
+        fs::write(&location.path, "unrelated source").unwrap();
+        assert!(session.effect_source(&request.id).is_none());
+        fs::write(&location.path, edited.replace("g(\"λ\")", "changed()")).unwrap();
+        session.map_saved_locations(
+            &location.path,
+            &edited,
+            &edited.replace("g(\"λ\")", "changed()"),
+        );
+        assert!(session.effect_source(&request.id).is_none());
+        session.navigation.clear();
+        fs::write(&location.path, original).unwrap();
+        let source = session.analysis.findings[0]
+            .audit
+            .as_mut()
+            .unwrap()
+            .source
+            .as_mut()
+            .unwrap();
+        source.start = usize::MAX;
+        assert!(session.effect_source(&request.id).is_none());
+    }
+
+    #[test]
+    fn propagation_editor_exposes_origin_documentation() {
+        let (_dir, mut session, request) = setup("fn f() {\n    g();\n}\n", "obligation", "fn f()");
+        let documentation = sniff_test_report::ObligationDocumentation {
+            prototype: Some("fn g()".into()),
+            function: "g".into(),
+            markdown: "# Panics\nRequires a valid index.".into(),
+        };
+        session.analysis.findings[0]
+            .audit
+            .as_mut()
+            .unwrap()
+            .obligation_documentation = Some(documentation.clone());
+        let editor = session.open_source_editor(request).unwrap();
+        assert_eq!(editor.obligation_documentation, Some(documentation));
     }
 
     #[test]
